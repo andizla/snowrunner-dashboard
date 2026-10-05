@@ -1,0 +1,22 @@
+# build outputs
+out/
+*.exe
+*.obj
+*.asi
+*.dll
+
+# game files never go into the repo: the fonts are read from the game folder at run time, and the exe's image is
+# game code
+*.ttf
+*.pak
+image_snap.bin
+sr_image/
+
+# working notes and the plan with its mockups: local only
+HANDOFF.md
+MODULES.md
+docs/plan/
+.claude/
+
+# test harnesses that drive one machine's game install: local only
+test/*.ps1
