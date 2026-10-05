@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#define GAUGES_VERSION "0.1.0"
+#define GAUGES_VERSION "0.2.0"
 
 // The exe the addresses in this mod are from (SnowRunner on Steam, the build of 22 July 2026). On any other the mod
 // stands down.
@@ -23,15 +23,16 @@ struct GaugeState
     float speedMax;                 // the speedometer's top in km/h (trucks 100, scouts 120, heavy 80)
     float rpm;                      // engine speed (the mod's own model)
     float rpmRedline, rpmMax;       // the tachometer's scale: red zone from rpmRedline to rpmMax
-    int gear;                       // -1 reverse, 0 neutral, 1.. forward
-    const char *gearMode;           // "A" automatic, "H" high, "L", "L+", "L-", "" (a numbered gear). String literals only: the pointer crosses threads
+    int gear;                       // below 0 reverse, 0 neutral, 1.. forward
+    const char *gearMode;           // "A" automatic (drawn beside the gear's number); "H" high, "L", "L+", "L-" (drawn in the number's place);
+                                    // "" a numbered gear. String literals only: the pointer crosses threads
     float fuelFrac;                 // 0..1
     float rangeKm;                  // < 0 = not known yet
     float tempC;                    // coolant temperature (the mod's own model)
     float boostBar;                 // 0..2 (the mod's own model)
     float airBar;                   // brake air, cosmetic (0..10)
     bool handbrake, diffLock, awd, lowGear, headlights, damage, cold;
-    int tilt;                       // 0 level, 1 warning, 2 danger
+    int tilt;                       // 0 level, 1 warning, 2 danger, below 0 not known (the lamp stays dark)
     float rollDeg;                  // the truck's roll, signed (the tilt lamp leans with it)
     bool mph, psi, fahrenheit;      // units
 };
@@ -55,8 +56,8 @@ struct GaugeSettings
     float idleRpm, redlineRpm, maxRpm, speedMax;  // IdleRpm, RedlineRpm, MaxRpm, SpeedMax: 0 = the class's own
     int toggleKey;           // ToggleKey: virtual key code of the key that hides and shows the cluster, 0 = none
     char padToggle[32];      // PadToggle: pad buttons that do the same ("LB+DPadUp"), "None"
-    bool demo;               // Demo: demo values are drawn while no truck is driven
-    int probe;               // Probe: the values read from the game go into Gauges.log (0 = off)
+    bool demo;               // Demo: for work on the mod: demo values are drawn whenever no truck is driven, menus and loading screens included
+    int probe;               // Probe: for work on the mod: the values read from the game go into Gauges.log (0 = off)
 };
 
 inline void SettingsDefaults(GaugeSettings &s)
@@ -71,7 +72,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.showAir = false;
     s.tachClass = kClassTruck;
     strcpy_s(s.padToggle, "None");
-    s.demo = true; // nothing is read from the game yet: the demo values are all there is to draw
+    s.demo = false;
     s.probe = 0;
 }
 
@@ -156,8 +157,10 @@ inline void GaugeDemo(GaugeState &st, const GaugeSettings &s)
     st.rollDeg = 5.0f;
 }
 
-// What the render thread draws: show = the cluster is on screen, demo = st holds the demo values.
-struct GaugeView { bool show, demo; GaugeState st; };
+// What the render thread draws: show = the cluster is on screen, demo = st holds the demo values, hidden = why it is
+// not on screen.
+enum { kShown, kHiddenByToggle, kHiddenNoTruck };
+struct GaugeView { bool show, demo; int hidden; GaugeState st; };
 
 void SettingsGet(GaugeSettings &out);       // the settings in force (any thread)
 void SettingsPut(const GaugeSettings &in);  // edited settings: the mod takes them at once and saves the ini a second later

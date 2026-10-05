@@ -1,7 +1,7 @@
-// gauge_draw.h: draws the gauge cluster: analogue dials in the style of a Euro Truck Simulator 2 truck cluster (dark
-// faces, white ticks and needles, red zones, simple icons), drawn crisp at the screen's resolution with Dear ImGui
-// primitives only (own point arrays with AddPolyline / AddConvexPolyFilled: no path helpers, as in the SnowRunner Tire Inflation System, so
-// the same code runs through ReShade's function table). Text is the game's font (gauge_font.h).
+// gauge_draw.h: draws the gauge cluster: analogue dials in the style of a truck's dashboard (dark faces, white ticks
+// and needles, red zones, simple icons), drawn crisp at the screen's resolution with Dear ImGui primitives only (own
+// point arrays with AddPolyline / AddConvexPolyFilled: no path helpers, as in the SnowRunner Tire Inflation System,
+// so the same code runs through ReShade's function table). Text is the game's font (gauge_font.h).
 // Sizes are reference pixels at 1080p; u converts them to the screen (u = screen height / 1080 x the ini's scale).
 // Shared by the mod (gauge_overlay.cpp, where Dear ImGui comes through ReShade's function table) and the offline
 // preview (test\gauge_preview.cpp, Dear ImGui compiled in), so the preview shows the mod's pixels. Include after
@@ -27,7 +27,7 @@ struct GaugeLayout
     int variant;                    // 0 = strip (bottom centre), 1 = block (bottom right)
     bool showTemp, showBoost, showAir, showLamps;
     float faceAlpha;                // 1 = solid dial faces; lower = see-through (the game shows through, drop shadows under the marks)
-    bool openArc;                   // no face or bezel at all: only the scale arc with its ticks, as the ETS2 reference
+    bool openArc;                   // no face or bezel at all: only the scale arc with its ticks
 };
 
 // The face opacity of the cluster being drawn (set by GaugeDraw): below 0.9 the marks, text and lamps get drop
@@ -310,9 +310,11 @@ static void GTacho(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float
         GText(dl, f, kGsBig, GPolar(c, r - 21.0f * u, GDeg(s, v)), GCol(kText, a), buf, 0, u);
     }
     GText(dl, f, kGsTiny, ImVec2(c.x, c.y - r * 0.36f), GCol(kMuted, a), "x100 rpm", 0, u);
-    // the gear: "4" with "A" beside it, "R", "N"
-    const char *gear = st.gear < 0 ? "R" : st.gear == 0 ? "N" : (sprintf_s(buf, "%d", st.gear), buf);
-    const bool mode = st.gearMode && st.gearMode[0] && st.gear > 0;
+    // the gear: "4" with "A" beside it in automatic; the gearbox's own positions by their names ("H", "L", "L+", "L-");
+    // "R", "N"
+    const bool named = st.gear > 0 && st.gearMode && st.gearMode[0] && st.gearMode[0] != 'A';
+    const char *gear = st.gear < 0 ? "R" : st.gear == 0 ? "N" : named ? st.gearMode : (sprintf_s(buf, "%d", st.gear), buf);
+    const bool mode = st.gear > 0 && !named && st.gearMode && st.gearMode[0];
     const float gw = TextWidth(f, kGsGear, gear, u), mw = mode ? TextWidth(f, kGsGearMode, st.gearMode, u) + 3.0f * u : 0.0f;
     const float gx = c.x - (gw + mw) * 0.5f;
     GText(dl, f, kGsGear, ImVec2(gx, c.y + r * 0.5f), GCol(kText, a), gear, -1, u);

@@ -10,6 +10,7 @@
 //   strip_2160p.png    the default settings on a 3840 x 2160 screen
 //   strip_states.png   the strip at twice its size: a cold start, the demo values, overheating on a slope
 //   block_states.png   the block, the same three states
+//   live_states.png    the strip with what this version reads from a truck: parked, automatic, the low range
 //   options.png        other settings: scout scales, mph, psi and Fahrenheit, the air dial on, the lamps off, larger, moved
 //   fallback.png       the strip with the ImGui font standing in (no game font files)
 //   settings.png       the Gauges tab of ReShade's overlay at ReShade FontScale 2 (ReShade's own style differs)
@@ -312,6 +313,45 @@ int wmain(int argc, wchar_t **argv)
         RenderPng(path, 3 * 700, 580, [&](ImDrawList *, ImDrawList *bg) {
             Backdrop(bg, 3 * 700, 580);
             for (int i = 0; i < 3; i++) GaugeDraw(bg, fonts, ImVec2(700.0f * (i + 1) - 24.0f, 580.0f - 24.0f), 2.0f, 1.0f, states[i], GaugeLayoutOf(s));
+        });
+        g_shot = keep;
+    }
+
+    // what this version shows of a real truck, at twice the size: parked with the engine off, third gear in
+    // automatic, and the low range with the differential locked. The dials without a source rest.
+    {
+        ID3D11ShaderResourceView *keep = g_shot;
+        g_shot = nullptr;
+        if (gameFont) UseFonts(fonts, 2.0f);
+        const GaugeScale k = GaugeScaleOf(def);
+        GaugeState parked = {};
+        GaugeStateSettings(parked, def);
+        parked.gearMode = "";
+        parked.fuelFrac = 0.97f;
+        parked.rangeKm = -1.0f;
+        parked.tilt = -1;
+        parked.handbrake = true;
+        GaugeState automatic = parked;
+        automatic.engineOn = true;
+        automatic.rpm = k.idle;
+        automatic.speedKmh = 24.0f;
+        automatic.gear = 3;
+        automatic.gearMode = "A";
+        automatic.fuelFrac = 0.88f;
+        automatic.handbrake = false;
+        automatic.headlights = automatic.awd = true;
+        GaugeState low = automatic;
+        low.speedKmh = 6.0f;
+        low.gear = 1;
+        low.gearMode = "L+";
+        low.lowGear = low.diffLock = low.damage = true;
+        low.fuelFrac = 0.31f;
+        const GaugeState live[3] = { parked, automatic, low };
+        wchar_t path[MAX_PATH];
+        swprintf_s(path, L"%s\\live_states.png", out);
+        RenderPng(path, 1560, 3 * 420, [&](ImDrawList *, ImDrawList *bg) {
+            Backdrop(bg, 1560, 3 * 420);
+            for (int i = 0; i < 3; i++) GaugeDraw(bg, fonts, ImVec2(780.0f, 420.0f * (i + 1) - 24.0f), 2.0f, 1.0f, live[i], GaugeLayoutOf(def));
         });
         g_shot = keep;
     }

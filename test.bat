@@ -1,6 +1,7 @@
 @echo off
 rem Runs the offline tests build.bat made: the settings (the ini round trip, the scales, the names of keys and pad
-rem buttons) and the preview, which draws the cluster and the Gauges tab into out\preview\*.png.
+rem buttons), the truck reader against a made up game, and the preview, which draws the cluster and the Gauges tab
+rem into out\preview\*.png.
 rem   test.bat [game Bin folder] [game screenshot.png]
 rem The game's font files are read from its Bin folder (the Steam default when none is given; without them the
 rem preview draws with the ImGui font). With a screenshot the cluster is drawn over it.
@@ -9,6 +10,7 @@ set FONTS=%~1
 if "%FONTS%"=="" set FONTS=C:\Program Files (x86)\Steam\steamapps\common\Snowrunner\Sources\Bin
 set failed=0
 out\test\settings_test.exe || set failed=1
+out\test\truck_test.exe || set failed=1
 if not exist out\test\gauge_preview.exe goto nopreview
 out\test\gauge_preview.exe out\preview "%FONTS%" %2 || set failed=1
 goto done

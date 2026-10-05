@@ -80,8 +80,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
 
     ImGui::SeparatorText("Cluster");
     if (view.show) ImGui::TextUnformatted(view.demo ? "On screen, with demo values." : "On screen.");
-    else if (!s.demo) ImGui::TextDisabled("Nothing to show: this version reads no values from the game yet. Switch the demo values on.");
-    else ImGui::TextDisabled("Hidden. The toggle key or the pad buttons show it again.");
+    else if (view.hidden == kHiddenByToggle) ImGui::TextDisabled("Hidden. The toggle key or the pad buttons show it again.");
+    else ImGui::TextDisabled("No truck is being driven. The cluster shows while you drive.");
     static const char *layouts[kLayoutCount] = { "Strip, bottom centre", "Block, bottom right" };
     PageLabel("Layout", labelX);
     ImGui::SetNextItemWidth(w);
@@ -256,16 +256,16 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     }
     InterlockedExchange(&g_pageCapturing, st.capture >= 1 ? (LONG)GetTickCount() : 0);
 
-    ImGui::SeparatorText("Other");
+    ImGui::SeparatorText("For work on the mod");
     changed(ImGui::Checkbox("Demo values", &s.demo));
-    PageTip("Draws the cluster with made up values while no truck is driven.");
+    PageTip("Draws the cluster with made up values whenever no truck is driven, in menus and on loading screens too.");
     bool probe = s.probe != 0;
     if (ImGui::Checkbox("Probe log", &probe))
     {
         s.probe = probe ? 1 : 0;
         act |= kPageChanged;
     }
-    PageTip("Writes the values read from the game into Gauges.log. This version reads none yet.");
+    PageTip("Writes the values read from the game into Gauges.log, every two seconds and whenever one changes.");
 
     ImGui::Separator();
     if (ImGui::Button("Defaults"))

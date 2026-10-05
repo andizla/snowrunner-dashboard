@@ -4,7 +4,7 @@ A gauge cluster for the truck you drive in SnowRunner: analogue dials in the sty
 
 The cluster has a speedometer, a tachometer with the gear, fuel with the range, coolant temperature, boost pressure, brake air pressure and eight lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage, cold engine and tilt.
 
-This is version 0.1.0, the foundation. The cluster is drawn, placed and set up in the game, but it shows demo values. Reading the truck's own values comes with the next versions.
+This is version 0.2.0. It reads the truck's own values for the speedometer, the gear, the fuel gauge and six of the lamps: handbrake, headlights, all wheel drive, differential lock, low gear and engine damage. The tachometer rests at idle while the engine runs. The range, the coolant temperature, boost and brake air pressure and the cold and tilt lamps come with later versions and rest until then.
 
 ## What you need
 
@@ -19,6 +19,15 @@ This is version 0.1.0, the foundation. The cluster is drawn, placed and set up i
 3. Start the game. The Home key opens ReShade's overlay, which has a Gauges tab.
 
 To update, copy the new file over the old one. Keep only one `.asi` file of this mod in the folder: a second copy under another name stands down and says so in the log.
+
+## What it shows
+
+- Speed, forwards and backwards.
+- The gear: its number with an A in automatic, H for the high gear, L, L+ and L- for the low range, R and N.
+- Fuel as a share of the tank.
+- Lamps for the handbrake, the headlights, all wheel drive, the differential lock and the low range. The engine damage lamp lights when the game's engine damage is above half of what the engine takes.
+
+The cluster is on screen while you drive a truck in the world, and it fades in and out. It is hidden on loading screens, in the pause menu, on the map and in the garage.
 
 ## Settings
 
@@ -38,8 +47,8 @@ The Gauges tab in ReShade's overlay edits every setting while you play. Changes 
 | Own numbers for idle, the start of the red zone, the tachometer's top and the speedometer's top | `IdleRpm`, `RedlineRpm`, `MaxRpm`, `SpeedMax` | 0: the class's own |
 | A key that hides and shows the cluster | `ToggleKey`, a virtual key code | none |
 | Pad buttons that do the same | `PadToggle`, as `LB+DPadUp` | None |
-| Demo values while no truck is driven | `Demo` | on |
-| A log of the values read from the game | `Probe` | off |
+| For work on the mod: demo values whenever no truck is driven, in menus and on loading screens too | `Demo` | off |
+| For work on the mod: a log of the values read from the game | `Probe` | off |
 
 The scales by class:
 
@@ -64,7 +73,7 @@ Delete `Gauges.asi`, `Gauges.ini` and `Gauges.log` from `Sources\Bin`.
 
 ## Notes
 
-- The mod changes no game file.
+- The mod changes no game file and writes nothing into the game's memory.
 - If something does not work, `Gauges.log` in `Sources\Bin` says what the mod found and did.
 - The game's own HUD stays as it is. Its "Immersive Mode" option hides it while it is not in use.
 
@@ -77,16 +86,18 @@ build.bat
 test.bat
 ```
 
-`build.bat` makes `out\Gauges.asi`, the two offline test programs in `out\test`, and `out\version.dll`, the loader, from the sources in `tools`. `test.bat` runs the tests: every setting through the ini and back, and a preview that draws the cluster and the settings tab into PNG files in `out\preview` without the game. The preview needs the Dear ImGui sources, see `test\build_preview.bat`. Without them the rest is still built.
+`build.bat` makes `out\Gauges.asi`, the three offline test programs in `out\test`, and `out\version.dll`, the loader, from the sources in `tools`. `test.bat` runs the tests: every setting through the ini and back, the reader of the game's memory against a made up game, and a preview that draws the cluster and the settings tab into PNG files in `out\preview` without the game. The preview needs the full Dear ImGui sources in `deps\imgui_src`, see `test\build_preview.bat`. Without them the rest is still built.
 
 The headers the mod is built with are in `deps`, each with its licence: the ReShade add-on API, Dear ImGui, and stb_truetype with stb_rect_pack.
 
 ## How it works
 
-A thread in the game process keeps the settings and the values to show. ReShade calls the mod on every frame, and the mod draws the cluster with Dear ImGui's drawing calls, which ReShade hands to its add-ons. The text is baked from the game's own font files when the game starts, at the size the cluster has on your screen.
+A thread in the game process reads the driven truck's values from the game's memory 20 times a second and keeps the settings. ReShade calls the mod on every frame, and the mod draws the cluster with Dear ImGui's drawing calls, which ReShade hands to its add-ons. The text is baked from the game's own font files when the game starts, at the size the cluster has on your screen.
 
-## Credits
+## Licence and credits
 
-The cluster is drawn through ReShade by Patrick Mours (crosire) with Dear ImGui by Omar Cornut, and its text is baked with stb_truetype by Sean Barrett. The loader in `tools` is the one of the SnowRunner Tire Inflation System.
+GNU General Public License v3.0 (GPL-3.0-only), see `LICENSE`.
+
+The cluster is drawn through ReShade by Patrick Mours (crosire) with Dear ImGui by Omar Cornut, and its text is baked with stb_truetype by Sean Barrett. Their notices are in `THIRD_PARTY_NOTICES.md`. The loader in `tools` is the one of the SnowRunner Tire Inflation System.
 
 SnowRunner is a game by Saber Interactive. This project is not affiliated with Saber Interactive or Focus Entertainment and contains no game files.

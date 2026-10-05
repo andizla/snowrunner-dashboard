@@ -3,8 +3,9 @@
 // with the defaults on the first start), the log (Gauges.log, rewritten at each game start), the toggle key and pad
 // buttons, and the state the cluster shows, which it leaves for the render thread 20 times a second.
 //
-// This version reads nothing from the game yet: the cluster shows demo values (ini Demo=1). The mod stands down on
-// any exe but the one its addresses are from (kGaugesExeStamp), so the versions that read the game start from here.
+// The state comes from the truck being driven, read out of the game's memory (truck.h): speed, gear, fuel and the
+// lamps. The cluster is on screen only while a truck is driven in the world. The mod stands down on any exe but the
+// one its addresses are from (kGaugesExeStamp).
 #include <windows.h>
 #include <xinput.h>
 #include <stdio.h>
@@ -12,6 +13,7 @@
 #include <math.h>
 #include <string>
 #include "gauges.h"
+#include "truck.h"
 
 static HMODULE g_self = nullptr;
 static std::wstring g_dir; // the game's folder, with the last backslash
@@ -146,7 +148,8 @@ static void ReadIni(GaugeSettings &s)
                         L"; ToggleKey is the virtual key code of a key that hides and shows the cluster (0 = none; 120 = F9).\n"
                         L"; PadToggle does the same with pad buttons (XInput): DPadUp, DPadDown, DPadLeft, DPadRight, A, B, X, Y,\n"
                         L"; LB, RB, LS, RS, Start, Back, joined with + (LB+DPadUp), or None. The game sees these buttons too.\n"
-                        L"; Demo=1 draws demo values while no truck is driven. Probe=1 logs the values read from the game.\n");
+                        L"; The cluster is on screen while a truck is driven in the world: not on loading screens, in menus, the garage or the map.\n"
+                        L"; For work on the mod: Demo=1 draws demo values whenever no truck is driven, Probe=1 logs the values read from the game.\n");
             fclose(f);
             WriteIni(s);
         }
@@ -273,6 +276,89 @@ static bool GameInFront()
     return pid == GetCurrentProcessId();
 }
 
+// Game memory is read through this, so an object the game freed under the mod is a failed read, not a fault.
+static bool PeekGame(uint64_t addr, void *out, size_t size) { return ReadProcessMemory(GetCurrentProcess(), (const void *)addr, out, size, nullptr) != 0; }
+
+// The driven truck as the mod's thread follows it from pass to pass.
+struct TruckWatch
+{
+    TruckRefs refs;
+    bool found;                 // refs are a truck's
+    ULONGLONG findAt;           // when to look the objects up again
+    ULONGLONG drivingSince;     // since when a truck is driven in the world without a break, 0 = it is not
+    TruckRaw probed;            // what the probe wrote last
+    World probedWorld;
+    ULONGLONG probeAt;          // when the probe writes next
+    bool probedAny;
+    float way[3];               // where the chassis was half a second ago, for the speed by the way gone
+    ULONGLONG wayAt;
+    float byWay;
+};
+
+// One pass over the truck: finds its objects twice a second and when a read fails, reads its values and what the
+// game is showing, writes the probe log. True when a truck is driven in the world and its values hold up: raw and
+// world are then what to draw from.
+static bool TruckPass(TruckWatch &w, const TruckMemory &m, int probe, TruckRaw &raw, World &world)
+{
+    const ULONGLONG now = GetTickCount64();
+    const bool was = w.found;
+    bool read = w.found && TruckRead(m, w.refs, raw);
+    if (!read && (w.found || now >= w.findAt))
+    {
+        // lost, or time to look again
+        w.found = TruckFind(m, w.refs);
+        w.findAt = now + 500;
+        read = w.found && TruckRead(m, w.refs, raw);
+    }
+    else if (now >= w.findAt)
+    {
+        // the wheels and the gearbox can be rebuilt under a truck that stays: the objects are looked up anew
+        TruckRefs again;
+        if (TruckFind(m, again)) w.refs = again;
+        w.findAt = now + 500;
+    }
+    if (!read) w.found = false;
+    if (w.found != was)
+    {
+        if (w.found) Log(L"truck: found, %d wheels, %d gears and a high gear, a %.0f l tank", raw.wheels, TruckTopGear(raw), raw.tank);
+        else Log(L"truck: none is driven now");
+    }
+    WorldRead(m, w.found ? w.refs.control : 0, world);
+    const bool driving = read && TruckSane(raw) && WorldDriving(world);
+    if (!driving) w.drivingSince = 0;
+    else if (!w.drivingSince) w.drivingSince = now;
+    if (!read)
+    {
+        w.wayAt = 0;
+        w.probedAny = false;
+        return false;
+    }
+    // the speed by the way the chassis went in the last half second, for the probe to hold the speed against
+    if (!w.wayAt || now - w.wayAt >= 500)
+    {
+        if (w.wayAt)
+        {
+            const float dx = raw.position[0] - w.way[0], dy = raw.position[1] - w.way[1], dz = raw.position[2] - w.way[2];
+            w.byWay = sqrtf(dx * dx + dy * dy + dz * dz) / ((now - w.wayAt) / 1000.0f);
+        }
+        memcpy(w.way, raw.position, sizeof w.way);
+        w.wayAt = now;
+    }
+    if (probe && (!w.probedAny || now >= w.probeAt || TruckProbeEvent(raw, world, w.probed, w.probedWorld)))
+    {
+        char first[640], second[1024];
+        TruckProbeText(raw, world, w.byWay, first, sizeof first, second, sizeof second);
+        Log(L"probe: %S", first);
+        Log(L"probe: %S", second);
+        w.probed = raw;
+        w.probedWorld = world;
+        w.probedAny = true;
+        w.probeAt = now + 2000;
+    }
+    // on screen once the truck has been driven for half a second: a state that only flickers by does not show it
+    return driving && now - w.drivingSince >= 500;
+}
+
 // ---- the mod's thread ----
 
 static DWORD WINAPI Run(void *)
@@ -313,6 +399,8 @@ static DWORD WINAPI Run(void *)
     bool visible = true, keyDown = false;
     uint32_t padMask = PadParse(s.padToggle), padPrev = 0;
     ULONGLONG saveAt = 0;
+    TruckWatch watch = {};
+    const TruckMemory memory = { PeekGame, g_base };
     for (;;)
     {
         Sleep(50);
@@ -364,11 +452,16 @@ static DWORD WINAPI Run(void *)
             visible = !visible;
             Log(L"cluster %s", visible ? L"shown" : L"hidden");
         }
-        // what the cluster shows: nothing is read from the game yet, so the demo values or nothing
+        // what the cluster shows: the truck being driven; with the ini's Demo, demo values while none is
+        TruckRaw raw;
+        World world;
+        const bool driving = TruckPass(watch, memory, s.probe, raw, world);
         GaugeView v = {};
-        v.demo = s.demo;
-        v.show = visible && s.demo;
-        if (v.show) GaugeDemo(v.st, s);
+        v.demo = !driving && s.demo;
+        v.hidden = !visible ? kHiddenByToggle : driving || s.demo ? kShown : kHiddenNoTruck;
+        v.show = v.hidden == kShown;
+        if (driving) TruckToState(raw, world, s, v.st);
+        else if (v.demo) GaugeDemo(v.st, s);
         AcquireSRWLockExclusive(&g_viewLock);
         g_view = v;
         ReleaseSRWLockExclusive(&g_viewLock);
@@ -430,8 +523,8 @@ int wmain(int argc, wchar_t **argv)
     const bool written = GetFileAttributesW(ini.c_str()) != INVALID_FILE_ATTRIBUTES;
     ReadIni(b);
     Check(gone && written && SameSettings(a, d) && SameSettings(b, d), "ini: a missing ini is written with the defaults and reads back as them");
-    Check(d.layout == kLayoutStrip && d.style == kFaceOpen && !d.showAir && d.demo && d.probe == 0 && !d.mph && !d.psi && !d.fahrenheit && d.toggleKey == 0 &&
-          !strcmp(d.padToggle, "None"), "defaults: strip, open style, metric, the air dial off, no toggle, demo on, probe off");
+    Check(d.layout == kLayoutStrip && d.style == kFaceOpen && !d.showAir && !d.demo && d.probe == 0 && !d.mph && !d.psi && !d.fahrenheit && d.toggleKey == 0 &&
+          !strcmp(d.padToggle, "None"), "defaults: strip, open style, metric, the air dial off, no toggle, demo off, probe off");
 
     // keys the mod does not know, in its own section and in another one
     WritePrivateProfileStringW(kIniSection, L"FromALaterVersion", L"7", ini.c_str());
@@ -454,7 +547,7 @@ int wmain(int argc, wchar_t **argv)
     c.speedMax = 90.0f;
     c.toggleKey = VK_F9;
     strcpy_s(c.padToggle, "RB+DPadUp");
-    c.demo = false;
+    c.demo = true;
     c.probe = 1;
     const bool allChanged = c.layout != d.layout && c.style != d.style && c.faceOpacity != d.faceOpacity && c.offsetX != d.offsetX && c.offsetY != d.offsetY &&
                             c.scale != d.scale && c.opacity != d.opacity && c.mph != d.mph && c.psi != d.psi && c.fahrenheit != d.fahrenheit &&
@@ -481,7 +574,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 16, "ini: the help text survives a write (16 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 17, "ini: the help text survives a write (17 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());
