@@ -20,3 +20,6 @@ docs/plan/
 
 # test harnesses that drive one machine's game install: local only
 test/*.ps1
+
+# the full Dear ImGui sources for the preview build (test/build_preview.bat): each machine brings its own
+deps/imgui_src/
