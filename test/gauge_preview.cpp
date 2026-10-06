@@ -318,7 +318,8 @@ int wmain(int argc, wchar_t **argv)
     }
 
     // what this version shows of a real truck, at twice the size: parked with the engine off, third gear in
-    // automatic, and the low range with the differential locked. The dials without a source rest.
+    // automatic with the gear half run out, and the low range run out with the differential locked. The range has
+    // no number before half a kilometre is driven. The dials without a source rest.
     {
         ID3D11ShaderResourceView *keep = g_shot;
         g_shot = nullptr;
@@ -333,7 +334,8 @@ int wmain(int argc, wchar_t **argv)
         parked.handbrake = true;
         GaugeState automatic = parked;
         automatic.engineOn = true;
-        automatic.rpm = k.idle;
+        automatic.rpm = k.idle + (k.redline - k.idle) * 0.6f;
+        automatic.rangeKm = 31.0f;
         automatic.speedKmh = 24.0f;
         automatic.gear = 3;
         automatic.gearMode = "A";
@@ -346,6 +348,8 @@ int wmain(int argc, wchar_t **argv)
         low.gearMode = "L+";
         low.lowGear = low.diffLock = low.damage = true;
         low.fuelFrac = 0.31f;
+        low.rpm = k.redline;
+        low.rangeKm = 6.4f;
         const GaugeState live[3] = { parked, automatic, low };
         wchar_t path[MAX_PATH];
         swprintf_s(path, L"%s\\live_states.png", out);

@@ -4,8 +4,9 @@
 // buttons, and the state the cluster shows, which it leaves for the render thread 20 times a second.
 //
 // The state comes from the truck being driven, read out of the game's memory (truck.h): speed, gear, fuel and the
-// lamps. The cluster is on screen only while a truck is driven in the world. The mod stands down on any exe but the
-// one its addresses are from (kGaugesExeStamp).
+// lamps. The engine speed and the range are worked out from those values (models.h). The cluster is on screen only
+// while a truck is driven in the world. The mod stands down on any exe but the one its addresses are from
+// (kGaugesExeStamp).
 #include <windows.h>
 #include <xinput.h>
 #include <stdio.h>
@@ -14,6 +15,7 @@
 #include <string>
 #include "gauges.h"
 #include "truck.h"
+#include "models.h"
 
 static HMODULE g_self = nullptr;
 static std::wstring g_dir; // the game's folder, with the last backslash
@@ -293,13 +295,18 @@ struct TruckWatch
     float way[3];               // where the chassis was half a second ago, for the speed by the way gone
     ULONGLONG wayAt;
     float byWay;
+    TachModel tach;             // the engine speed of the truck at modelVehicle
+    uint64_t modelVehicle;
+    RangeModel range;           // the range of the truck with the tank it holds
+    ULONGLONG modelAt;          // when the models last ran
 };
 
 // One pass over the truck: finds its objects twice a second and when a read fails, reads its values and what the
-// game is showing, writes the probe log. True when a truck is driven in the world and its values hold up: raw and
-// world are then what to draw from.
-static bool TruckPass(TruckWatch &w, const TruckMemory &m, int probe, TruckRaw &raw, World &world)
+// game is showing, runs the models, writes the probe log. True when a truck is driven in the world and its values
+// hold up: raw, world and the models in w are then what to draw from.
+static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s, TruckRaw &raw, World &world)
 {
+    const int probe = s.probe;
     const ULONGLONG now = GetTickCount64();
     const bool was = w.found;
     bool read = w.found && TruckRead(m, w.refs, raw);
@@ -344,12 +351,32 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, int probe, TruckRaw &
         memcpy(w.way, raw.position, sizeof w.way);
         w.wayAt = now;
     }
+    // the models run while the truck is driven: a game held by a menu stands still with its values as they were. They
+    // stay with a truck through the menus, the map and the garage. On another truck the engine speed starts over; the
+    // range starts over when the tank is another one (RangeStep), so a truck put back into the world keeps its
+    // litres a kilometre.
+    const GaugeScale scale = GaugeScaleOf(s);
+    if (driving)
+    {
+        if (w.refs.vehicle != w.modelVehicle)
+        {
+            w.tach = TachModel{};
+            w.modelVehicle = w.refs.vehicle;
+            w.modelAt = 0;
+        }
+        const float dt = w.modelAt && now - w.modelAt < 1000 ? SettingsRange((now - w.modelAt) / 1000.0f, 0.001f, 0.2f) : 0.05f;
+        TachStep(w.tach, raw, scale, dt);
+        RangeStep(w.range, raw, dt);
+        w.modelAt = now;
+    }
     if (probe && (!w.probedAny || now >= w.probeAt || TruckProbeEvent(raw, world, w.probed, w.probedWorld)))
     {
-        char first[640], second[1024];
+        char first[640], second[1024], third[512];
         TruckProbeText(raw, world, w.byWay, first, sizeof first, second, sizeof second);
+        ModelProbeText(raw, w.tach, w.range, scale, third, sizeof third);
         Log(L"probe: %S", first);
         Log(L"probe: %S", second);
+        Log(L"probe: %S", third);
         w.probed = raw;
         w.probedWorld = world;
         w.probedAny = true;
@@ -455,12 +482,17 @@ static DWORD WINAPI Run(void *)
         // what the cluster shows: the truck being driven; with the ini's Demo, demo values while none is
         TruckRaw raw;
         World world;
-        const bool driving = TruckPass(watch, memory, s.probe, raw, world);
+        const bool driving = TruckPass(watch, memory, s, raw, world);
         GaugeView v = {};
         v.demo = !driving && s.demo;
         v.hidden = !visible ? kHiddenByToggle : driving || s.demo ? kShown : kHiddenNoTruck;
         v.show = v.hidden == kShown;
-        if (driving) TruckToState(raw, world, s, v.st);
+        if (driving)
+        {
+            TruckToState(raw, world, s, v.st);
+            v.st.rpm = watch.tach.rpm;
+            v.st.rangeKm = watch.range.rangeKm;
+        }
         else if (v.demo) GaugeDemo(v.st, s);
         AcquireSRWLockExclusive(&g_viewLock);
         g_view = v;

@@ -86,6 +86,7 @@ static void MakeGame()
     Put(kAction + 0x48, (uint8_t)0);
     Put(kAction + 0x49, (uint8_t)1);
     Put(kAction + 0x4A, (uint8_t)0);
+    Put(kAction + 0x70, 3);
     Put(kAction + 0x74, 3);
     Put(kAction + 0xB4, 0.25f);
     Put(kAction + 0xCC, 1.0f);
@@ -99,6 +100,13 @@ static void MakeGame()
     Put(kDamage + 0x10, (uint16_t)1);
     const int damage[2] = { 30, 150 };
     Put(kDamage + 0x38, damage);
+    // the fuel burn's numbers, with each gear's factor behind the gear speeds
+    const float burn[5] = { 2.0f, 2.2f, 1.8f, 1.5f, 1.5f }, idleAndLeak[2] = { 0.2f, 40.0f }, gearBurn[7] = { 1.0f, 1.0f, 1.2f, 1.1f, 1.0f, 0.9f, 1.3f };
+    Put(kVehicle + 0xE38, burn);
+    Put(kVehicle + 0xE68, idleAndLeak);
+    Put(kSpeeds + 0x20, gearBurn);
+    Put(kVehicle + 0xE50, kSpeeds + 0x20);
+    Put(kVehicle + 0xE58, kSpeeds + 0x20 + sizeof gearBurn);
     const float forward[3] = { 0.6f, 0.0f, 0.8f }, velocity[3] = { 3.0f, 0.0f, 4.0f }, position[3] = { 100.0f, 20.0f, 300.0f };
     Put(kChassis + 0x170, forward);
     Put(kChassis + 0x1A0, position);
@@ -153,12 +161,19 @@ int main()
     Check(t.wheels == 4 && t.drive[0] == 2 && t.drive[3] == 1 && Near(t.spin[2], 13.5f), "read: each wheel's drive and turning speed");
     Check(Near(t.fuel, 60.0f) && Near(t.tank, 75.0f) && t.damageKnown && t.damage == 30 && t.damageCapacity == 150, "read: fuel, and the engine damage behind its handle");
     Check(Near(t.speed, 5.0f) && Near(t.position[2], 300.0f) && TruckSane(t), "read: 5 m/s along the forward axis, and the values make sense");
+    Check(t.gearEngaged == 3 && t.burnKnown && Near(t.burnShare[0], 2.0f) && Near(t.burnShare[1], 2.2f) && Near(t.burnAwd, 1.8f) && Near(t.burnEngine, 1.5f) &&
+          Near(t.burnGearbox, 1.5f) && Near(t.burnIdle, 0.2f) && Near(t.burnLeak, 40.0f) && t.gearBurns == 7 && Near(t.gearBurn[2], 1.2f) && Near(t.gearBurn[6], 1.3f) &&
+          t.gearboxEffect == 0.0f && t.tankEffect == 0.0f, "read: the gear engaged, and the numbers the game burns fuel by");
+    Put(kVehicle + 0xE58, (uint64_t)0);
+    TruckRaw bare;
+    Check(TruckRead(kMemory, r, bare) && !bare.burnKnown && TruckSane(bare), "read: a truck without burn numbers is still read");
+    Put(kVehicle + 0xE58, kSpeeds + 0x20 + 7 * sizeof(float));
 
     WorldRead(kMemory, r.control, w);
     TruckToState(t, w, s, st);
     Check(st.engineOn && Near(st.speedKmh, 18.0f) && st.gear == 3 && !strcmp(st.gearMode, "A") && Near(st.fuelFrac, 0.8f) && st.headlights && st.awd && !st.handbrake &&
           !st.diffLock && !st.lowGear && !st.damage, "state: 18 km/h, third gear in automatic, the tank four fifths full, the lamps as the truck has them");
-    Check(Near(st.rpm, 650.0f) && st.rangeKm < 0.0f && st.tilt < 0 && !st.cold && st.boostBar == 0.0f, "state: the tachometer at idle, no range, the dials without a source at rest");
+    Check(Near(st.rpm, 650.0f) && st.rangeKm < 0.0f && st.tilt < 0 && !st.cold && st.boostBar == 0.0f, "state: the tachometer at idle and no range before the models, the dials without a source at rest");
 
     // each gearbox position
     Check(Letters(-1, 1, 1.0f, false, "", false) && Letters(0, 1, 1.0f, false, "", false) && Letters(-1, 0, 1.0f, false, "", false), "gear: reverse and neutral carry no letters");
@@ -276,7 +291,7 @@ int main()
     WorldRead(kMemory, r.control, w);
     char first[640], second[1024];
     TruckProbeText(t, w, 4.9f, first, sizeof first, second, sizeof second);
-    Check(strstr(first, "gear 3 automatic 1 power 1.000 = A") && strstr(first, "speed 5.00 m/s = 18.0 km/h (4.90 m/s by the way gone)") && strstr(first, "fuel 60.00 of 75.00 l") &&
+    Check(strstr(first, "gear 3 (engaged 3) automatic 1 power 1.000 = A") && strstr(first, "speed 5.00 m/s = 18.0 km/h (4.90 m/s by the way gone)") && strstr(first, "fuel 60.00 of 75.00 l") &&
           strstr(first, "engine damage 30 of 150") && strstr(second, " 2:11.50 2:12.50 1:13.50 1:14.50") && strstr(second, "gear speeds 1.500 3.000 6.000 12.000 16.000 8.000") &&
           strstr(second, "menu 0 loading 0"), "probe: the two lines carry the values as read");
     TruckRaw t2 = t;

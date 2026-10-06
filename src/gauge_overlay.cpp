@@ -118,7 +118,19 @@ static void OnOverlay(reshade::api::effect_runtime *runtime)
     UpdateFontTexture(runtime, u);
     const float dt = fminf(fmaxf(io.DeltaTime, 0.0f), 0.1f);
     alpha = fminf(fmaxf(alpha + (view.show ? dt : -dt) / 0.15f, 0.0f), 1.0f);
-    if (view.show) shown = view.st;
+    // the mod's thread leaves a new state 20 times a second: the two big needles glide from one to the next
+    const float speedWas = shown.speedKmh, rpmWas = shown.rpm;
+    const bool wasShown = alpha > 0.0f;
+    if (view.show)
+    {
+        shown = view.st;
+        if (wasShown)
+        {
+            const float follow = 1.0f - expf(-dt / 0.05f);
+            shown.speedKmh = speedWas + (view.st.speedKmh - speedWas) * follow;
+            shown.rpm = rpmWas + (view.st.rpm - rpmWas) * follow;
+        }
+    }
     if (alpha <= 0.0f) return;
     // the background list: under ReShade's own windows, so the cluster never covers the settings tab
     GaugeDraw(ImGui::GetBackgroundDrawList(), g_fonts, GaugeOrigin(s, io.DisplaySize.x, io.DisplaySize.y), u, alpha * s.opacity, shown, GaugeLayoutOf(s));

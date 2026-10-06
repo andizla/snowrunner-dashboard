@@ -319,8 +319,8 @@ static void GTacho(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float
     const float gx = c.x - (gw + mw) * 0.5f;
     GText(dl, f, kGsGear, ImVec2(gx, c.y + r * 0.5f), GCol(kText, a), gear, -1, u);
     if (mode) GText(dl, f, kGsGearMode, ImVec2(gx + gw + 3.0f * u, c.y + r * 0.5f + 4.0f * u), GCol(kMuted, a), st.gearMode, -1, u);
-    const float v = st.engineOn ? st.rpm / 100.0f : 0.0f;
-    GNeedle(dl, c, GDeg(s, v), r * 0.74f, 3.2f, 1.0f, u, a, GCol(kNeedle, a));
+    // the engine speed as it is, with the engine off too: the needle runs down with a stopping engine
+    GNeedle(dl, c, GDeg(s, st.rpm / 100.0f), r * 0.74f, 3.2f, 1.0f, u, a, GCol(kNeedle, a));
     GHub(dl, c, 7.0f * u, u, a);
 }
 
@@ -396,12 +396,17 @@ static void GAir(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float u
     GSmallNeedle(dl, c, r, GDeg(s, st.airBar), u, a);
 }
 
-// The fuel range readout: a pump and "412 km" (or "---" until the mod has measured the consumption).
+// The fuel range readout: a pump and "412 km", with a tenth below ten ("6.4 km"), or "---" until the mod has measured
+// the consumption.
 static void GRange(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float u, float a, const GaugeState &st)
 {
     char buf[32];
     if (st.rangeKm < 0.0f) sprintf_s(buf, "--- %s", st.mph ? "mi" : "km");
-    else sprintf_s(buf, "%.0f %s", st.mph ? st.rangeKm / 1.609f : st.rangeKm, st.mph ? "mi" : "km");
+    else
+    {
+        const float range = st.mph ? st.rangeKm / 1.609f : st.rangeKm;
+        sprintf_s(buf, range < 9.95f ? "%.1f %s" : "%.0f %s", range, st.mph ? "mi" : "km");
+    }
     const float w = TextWidth(f, kGsReadout, buf, u), ih = 10.0f * u;
     const float x0 = c.x - (w + ih + 4.0f * u) * 0.5f;
     GIconFuel(dl, ImVec2(x0 + ih * 0.4f, c.y), ih, GCol(kMuted, a), 0.0f);

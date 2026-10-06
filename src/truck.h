@@ -1,7 +1,8 @@
 // truck.h: reads the truck being driven out of the game's memory. Nothing is written, and nothing in the game is
 // called. Every read goes through one function (TruckMemory::peek), so the offline test can put a made up game in its
 // place (test\truck_test.cpp). gauges.cpp finds the truck's objects twice a second and when a read fails (TruckFind),
-// reads their values on every pass (TruckRead) and asks what the game is showing (WorldRead).
+// reads their values on every pass (TruckRead) and asks what the game is showing (WorldRead). The engine speed and
+// the range are worked out from these values in models.h.
 //
 // Where the values are, in the Steam build of 22 July 2026 (kGaugesExeStamp):
 //   control = [exe + 0x2a8eb78]      the game's object for the truck being driven (it exists while a level is loaded);
@@ -10,15 +11,21 @@
 //                                    bit 3: high beam, bit 4: reversing lights, bit 5: brake lights
 //   vehicle + 0x11C                  seconds the engine has been stalling (it dies at 1.4)
 //   vehicle + 0x730                  seconds until a starting engine runs (1.8 at the start, then down to 0)
+//   vehicle + 0xE38 .. + 0xE6C       what the game burns fuel by (floats): + 0xE38 and + 0xE3C the engine's two shares,
+//                                    + 0xE40 the factor for all wheel drive, + 0xE44 for a damaged engine, + 0xE48 for
+//                                    a damaged gearbox, + 0xE50 .. + 0xE58 each gear's factor (reverse, neutral, 1 .. N,
+//                                    high), + 0xE68 the idle share, + 0xE6C litres a minute out of a holed tank
 //   action = [vehicle + 0x68]        the drive train: + 0x38 power factor (float), + 0x3C automatic (byte),
 //                                    + 0x44 throttle (float, below 0 = forwards), + 0x48 handbrake, + 0x49 all wheel
-//                                    drive, + 0x4A differential lock (bytes), + 0x74 gear (int), + 0xB4 and + 0xCC
-//                                    floats, + 0x58 .. + 0x60 the wheel speed of each gear (floats: reverse, 1 .. N, high)
+//                                    drive, + 0x4A differential lock (bytes), + 0x70 the gear engaged, + 0x74 the gear
+//                                    picked (ints), + 0xB4 how hard the engine pulls (0 to 1) and + 0xCC (floats),
+//                                    + 0x58 .. + 0x60 the wheel speed of each gear (floats: reverse, 1 .. N, high)
 //   model = [vehicle + 0x60]         + 0x5E8 fuel in litres, + 0x5F0 the tank's size
 //   chassis = [model + 0x230]        the rigid body: + 0x170 forward axis, + 0x1A0 position, + 0x230 velocity
 //   [vehicle + 0x200] .. [+ 0x208]   the wheel models; wheel = [wheel model + 0x2C8] (its class at exe + 0x2258918):
 //                                    + 0xE8 how it is driven (int), + 0x16C its turning speed in rad/s
-//   vehicle + 0x150                  the handle of the engine's damage: { int damage, int capacity, float effect }
+//   vehicle + 0x150                  the handle of the engine's damage: { int damage, int capacity, float effect };
+//                                    + 0x148 the gearbox's and + 0x158 the fuel tank's, the same way
 //   game = [exe + 0x2a8eb90]         the game's main object: + 0x30 (int) above 0 while a menu holds the game,
 //                                    + 0x4A (byte) set while a level loads
 //   [exe + 0x2a8eb30]                the map, when there is one: + 0x148 (byte) set while it is open
@@ -61,6 +68,7 @@ struct TruckRaw
     float throttle;                // action + 0x44
     uint8_t handbrake, awd, diffLock;
     int gear;                      // action + 0x74: below 0 reverse, 0 neutral, 1 .. N the gears, N + 1 the high gear
+    int gearEngaged;               // action + 0x70: the gear the drive train is in; it follows gear after a shift
     float actionB4, torqueFactor;  // action + 0xB4, + 0xCC
     int gearSpeeds;                // how many entries the gearbox has: reverse, the gears, high
     float gearSpeed[kMaxGears];
@@ -71,6 +79,12 @@ struct TruckRaw
     bool damageKnown;
     int damage, damageCapacity;
     float damageEffect;
+    float gearboxEffect, tankEffect; // what the gearbox's and the fuel tank's damage does, 0 when sound
+    bool burnKnown;                // the numbers of the game's fuel burn were read
+    float burnShare[2];            // vehicle + 0xE38, + 0xE3C
+    float burnAwd, burnEngine, burnGearbox, burnIdle, burnLeak; // + 0xE40, + 0xE44, + 0xE48, + 0xE68, + 0xE6C
+    int gearBurns;                 // entries of gearBurn: reverse, neutral, the gears, high
+    float gearBurn[kMaxGears + 1];
     float forward[3], position[3], velocity[3];
     float speed;                   // metres a second along the forward axis, below 0 backwards
 };
@@ -143,6 +157,7 @@ inline bool TruckRead(const TruckMemory &m, const TruckRefs &r, TruckRaw &t)
     t.diffLock = a[0x12];
     memcpy(&speedsBegin, a + 0x20, 8);
     memcpy(&speedsEnd, a + 0x28, 8);
+    memcpy(&t.gearEngaged, a + 0x38, 4);
     memcpy(&t.gear, a + 0x3C, 4);
     memcpy(&t.actionB4, a + 0x7C, 4);
     memcpy(&t.torqueFactor, a + 0x94, 4);
@@ -174,6 +189,32 @@ inline bool TruckRead(const TruckMemory &m, const TruckRefs &r, TruckRaw &t)
         t.damageCapacity = block[1];
         memcpy(&t.damageEffect, &block[2], 4);
     }
+    // the fuel burn's numbers; a truck without them is still a truck
+    const uint64_t gearbox = TruckBlock(m, r.vehicle + 0x148), tank = TruckBlock(m, r.vehicle + 0x158);
+    if (gearbox) m.get(gearbox + 8, t.gearboxEffect);
+    if (tank) m.get(tank + 8, t.tankEffect);
+    uint8_t b[0x38]; // vehicle + 0xE38 .. + 0xE70
+    if (m.get(r.vehicle + 0xE38, b))
+    {
+        uint64_t burnsBegin = 0, burnsEnd = 0;
+        memcpy(t.burnShare, b, 8);
+        memcpy(&t.burnAwd, b + 0x08, 4);
+        memcpy(&t.burnEngine, b + 0x0C, 4);
+        memcpy(&t.burnGearbox, b + 0x10, 4);
+        memcpy(&burnsBegin, b + 0x18, 8);
+        memcpy(&burnsEnd, b + 0x20, 8);
+        memcpy(&t.burnIdle, b + 0x30, 4);
+        memcpy(&t.burnLeak, b + 0x34, 4);
+        if (burnsEnd > burnsBegin && (burnsEnd - burnsBegin) % 4 == 0 && burnsEnd - burnsBegin <= (kMaxGears + 1) * 4)
+        {
+            const int count = (int)((burnsEnd - burnsBegin) / 4);
+            if (m.peek(burnsBegin, t.gearBurn, (size_t)count * 4))
+            {
+                t.gearBurns = count;
+                t.burnKnown = true;
+            }
+        }
+    }
     float frame[16]; // + 0x170 forward, + 0x180 up, + 0x190 right, + 0x1A0 position, four floats each
     if (!m.get(r.chassis + 0x170, frame) || !m.get(r.chassis + 0x230, t.velocity)) return false;
     memcpy(t.forward, frame, sizeof t.forward);
@@ -186,7 +227,8 @@ inline bool TruckRead(const TruckMemory &m, const TruckRefs &r, TruckRaw &t)
 inline bool TruckSane(const TruckRaw &t)
 {
     return t.wheels > 0 && isfinite(t.speed) && fabsf(t.speed) < 200.0f && isfinite(t.fuel) && isfinite(t.tank) && t.tank > 0.0f && t.tank < 100000.0f &&
-           t.fuel >= 0.0f && t.fuel <= t.tank * 1.01f && t.gear >= -1 && t.gear <= kMaxGears && isfinite(t.throttle) && fabsf(t.throttle) <= 2.0f;
+           t.fuel >= 0.0f && t.fuel <= t.tank * 1.01f && t.gear >= -1 && t.gear <= kMaxGears && t.gearEngaged >= -1 &&
+           t.gearEngaged <= kMaxGears && isfinite(t.throttle) && fabsf(t.throttle) <= 2.0f && isfinite(t.stall) && isfinite(t.startTimer);
 }
 
 // What the game is showing. control: the driven truck's control object, 0 when there is none.
@@ -223,9 +265,10 @@ inline const char *TruckGearMode(const TruckRaw &t, bool shifter)
     return "";
 }
 
-// The state the cluster draws, from the truck's values. The engine speed, the range, the temperature, the boost and
-// the tilt have no source in this version: the tachometer rests at idle while the engine is on, the other needles
-// rest at the low end of their dials, and their lamps stay dark.
+// The state the cluster draws, from the truck's values. The engine speed and the range are not among them: gauges.cpp
+// puts in what models.h works out, and here the tachometer rests at idle and the range is not known. The temperature,
+// the boost and the tilt have no source in this version: their needles rest at the low end of their dials, and their
+// lamps stay dark.
 inline void TruckToState(const TruckRaw &t, const World &w, const GaugeSettings &s, GaugeState &st)
 {
     st = GaugeState{};
@@ -253,9 +296,9 @@ inline void TruckToState(const TruckRaw &t, const World &w, const GaugeSettings 
 inline void TruckProbeText(const TruckRaw &t, const World &w, float byPosition, char *first, size_t firstSize, char *second, size_t secondSize)
 {
     sprintf_s(first, firstSize,
-              "flags %02X (engine %d, running %d, lights %d) stall %.3f start %.2f | handbrake %d awd %d diff %d | gear %d automatic %d power %.3f = %s%s | "
+              "flags %02X (engine %d, running %d, lights %d) stall %.3f start %.2f | handbrake %d awd %d diff %d | gear %d (engaged %d) automatic %d power %.3f = %s%s | "
               "throttle %.3f | speed %.2f m/s = %.1f km/h (%.2f m/s by the way gone) | fuel %.2f of %.2f l | engine damage %d of %d, effect %.3f, torque x%.3f%s | B4 %.3f",
-              t.flags, t.flags & 1, (t.flags >> 1) & 1, (t.flags >> 2) & 1, t.stall, t.startTimer, t.handbrake, t.awd, t.diffLock, t.gear, t.automatic, t.powerFactor,
+              t.flags, t.flags & 1, (t.flags >> 1) & 1, (t.flags >> 2) & 1, t.stall, t.startTimer, t.handbrake, t.awd, t.diffLock, t.gear, t.gearEngaged, t.automatic, t.powerFactor,
               t.gear < 0 ? "R" : t.gear == 0 ? "N" : "", t.gear > 0 ? (TruckGearMode(t, w.shifter != 0)[0] ? TruckGearMode(t, w.shifter != 0) : "a numbered gear") : "",
               t.throttle, t.speed, t.speed * 3.6f, byPosition, t.fuel, t.tank, t.damage, t.damageCapacity, t.damageEffect, t.torqueFactor,
               t.damageKnown ? "" : " (no damage data)", t.actionB4);
@@ -271,7 +314,8 @@ inline void TruckProbeText(const TruckRaw &t, const World &w, float byPosition, 
 // going down or up, the game's state.
 inline bool TruckProbeEvent(const TruckRaw &a, const World &wa, const TruckRaw &b, const World &wb)
 {
-    return a.flags != b.flags || a.handbrake != b.handbrake || a.awd != b.awd || a.diffLock != b.diffLock || a.gear != b.gear || a.automatic != b.automatic ||
+    return a.flags != b.flags || a.handbrake != b.handbrake || a.awd != b.awd || a.diffLock != b.diffLock || a.gear != b.gear || a.gearEngaged != b.gearEngaged ||
+           a.automatic != b.automatic ||
            a.powerFactor != b.powerFactor || a.damage != b.damage || a.damageCapacity != b.damageCapacity || a.torqueFactor != b.torqueFactor ||
            a.gearSpeeds != b.gearSpeeds || a.wheels != b.wheels || (a.throttle != 0.0f) != (b.throttle != 0.0f) || (a.stall > 0.0f) != (b.stall > 0.0f) ||
            (a.startTimer > 0.0f) != (b.startTimer > 0.0f) || wa.menu != wb.menu || wa.loading != wb.loading || wa.mapThere != wb.mapThere ||

@@ -4,7 +4,7 @@ A gauge cluster for the truck you drive in SnowRunner: analogue dials in the sty
 
 The cluster has a speedometer, a tachometer with the gear, fuel with the range, coolant temperature, boost pressure, brake air pressure and eight lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage, cold engine and tilt.
 
-This is version 0.2.0. It reads the truck's own values for the speedometer, the gear, the fuel gauge and six of the lamps: handbrake, headlights, all wheel drive, differential lock, low gear and engine damage. The tachometer rests at idle while the engine runs. The range, the coolant temperature, boost and brake air pressure and the cold and tilt lamps come with later versions and rest until then.
+This is version 0.3.0. It reads the truck's own values for the speedometer, the gear, the fuel gauge and six of the lamps: handbrake, headlights, all wheel drive, differential lock, low gear and engine damage. The game has no engine speed and no range, so the mod works both out from what the truck does. The coolant temperature, boost and brake air pressure and the cold and tilt lamps come with later versions and rest until then.
 
 ## What you need
 
@@ -24,7 +24,9 @@ To update, copy the new file over the old one. Keep only one `.asi` file of this
 
 - Speed, forwards and backwards.
 - The gear: its number with an A in automatic, H for the high gear, L, L+ and L- for the low range, R and N.
+- The engine speed. The game has none, so the mod works it out from the driven wheels, the gear and the pedal. The needle climbs through each gear to the red zone and falls at the shift. It rises under the pedal when the truck is stuck and revs freely in neutral, and spinning wheels take it into the red zone. It rises from 0 while the engine starts and runs down when the engine stalls or stops.
 - Fuel as a share of the tank.
+- The range: how far the fuel in the tank goes at the litres per kilometre the truck burned on the last three kilometres it drove. It shows `---` until the truck has driven half a kilometre. Fuel burned while standing comes off the range and leaves the litres per kilometre alone. The numbers are small, as SnowRunner's trucks are thirsty: a scout that burns 10 litres a kilometre off road gets about 7 km out of its 75 litre tank.
 - Lamps for the handbrake, the headlights, all wheel drive, the differential lock and the low range. The engine damage lamp lights when the game's engine damage is above half of what the engine takes.
 
 The cluster is on screen while you drive a truck in the world, and it fades in and out. It is hidden on loading screens, in the pause menu, on the map and in the garage.
@@ -86,13 +88,13 @@ build.bat
 test.bat
 ```
 
-`build.bat` makes `out\Gauges.asi`, the three offline test programs in `out\test`, and `out\version.dll`, the loader, from the sources in `tools`. `test.bat` runs the tests: every setting through the ini and back, the reader of the game's memory against a made up game, and a preview that draws the cluster and the settings tab into PNG files in `out\preview` without the game. The preview needs the full Dear ImGui sources in `deps\imgui_src`, see `test\build_preview.bat`. Without them the rest is still built.
+`build.bat` makes `out\Gauges.asi`, the four offline test programs in `out\test`, and `out\version.dll`, the loader, from the sources in `tools`. `test.bat` runs the tests: every setting through the ini and back, the reader of the game's memory against a made up game, the engine speed and the range on made up drives, and a preview that draws the cluster and the settings tab into PNG files in `out\preview` without the game. The preview needs the full Dear ImGui sources in `deps\imgui_src`, see `test\build_preview.bat`. Without them the rest is still built.
 
 The headers the mod is built with are in `deps`, each with its licence: the ReShade add-on API, Dear ImGui, and stb_truetype with stb_rect_pack.
 
 ## How it works
 
-A thread in the game process reads the driven truck's values from the game's memory 20 times a second and keeps the settings. ReShade calls the mod on every frame, and the mod draws the cluster with Dear ImGui's drawing calls, which ReShade hands to its add-ons. The text is baked from the game's own font files when the game starts, at the size the cluster has on your screen.
+A thread in the game process reads the driven truck's values from the game's memory 20 times a second, works out the engine speed and the range from them, and keeps the settings. ReShade calls the mod on every frame, and the mod draws the cluster with Dear ImGui's drawing calls, which ReShade hands to its add-ons. The text is baked from the game's own font files when the game starts, at the size the cluster has on your screen.
 
 ## Licence and credits
 
