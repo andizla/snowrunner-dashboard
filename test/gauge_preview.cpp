@@ -10,7 +10,7 @@
 //   strip_2160p.png    the default settings on a 3840 x 2160 screen
 //   strip_states.png   the strip at twice its size: a cold start, the demo values, overheating on a slope
 //   block_states.png   the block, the same three states
-//   live_states.png    the strip with what this version reads from a truck: parked, automatic, the low range
+//   live_states.png    the strip with what this version shows of a truck: parked and cold, automatic, the low range and hot
 //   options.png        other settings: scout scales, mph, psi and Fahrenheit, the air dial on, the lamps off, larger, moved
 //   fallback.png       the strip with the ImGui font standing in (no game font files)
 //   settings.png       the Gauges tab of ReShade's overlay at ReShade FontScale 2 (ReShade's own style differs)
@@ -317,10 +317,11 @@ int wmain(int argc, wchar_t **argv)
         g_shot = keep;
     }
 
-    // what this version shows of a real truck, at twice the size: parked on level ground with the engine off, third
-    // gear in automatic with the gear half run out, leaning 18 degrees to the left, and the low range run out with
-    // the differential locked on a side slope of 31 degrees to the right. The range has no number before half a
-    // kilometre is driven. The dials without a source rest.
+    // what this version shows of a real truck, at twice the size: parked on level ground with the engine off and
+    // cold (the cold lamp lit, the temperature needle below its scale), third gear in automatic with the gear half
+    // run out at 88 C, leaning 18 degrees to the left, and the low range run out with the differential locked on a
+    // side slope of 31 degrees to the right, the coolant in the red zone at 121 C. The range has no number before
+    // half a kilometre is driven. The boost dial has no source yet and rests.
     {
         ID3D11ShaderResourceView *keep = g_shot;
         g_shot = nullptr;
@@ -333,8 +334,12 @@ int wmain(int argc, wchar_t **argv)
         parked.rangeKm = -1.0f;
         parked.tilt = 0;
         parked.handbrake = true;
+        parked.tempC = def.ambientC;
+        parked.cold = true;
         GaugeState automatic = parked;
         automatic.engineOn = true;
+        automatic.tempC = 88.0f;
+        automatic.cold = false;
         automatic.rpm = k.idle + (k.redline - k.idle) * 0.6f;
         automatic.rangeKm = 31.0f;
         automatic.speedKmh = 24.0f;
@@ -355,6 +360,7 @@ int wmain(int argc, wchar_t **argv)
         low.rangeKm = 6.4f;
         low.tilt = 2;
         low.rollDeg = 31.0f;
+        low.tempC = 121.0f;
         const GaugeState live[3] = { parked, automatic, low };
         wchar_t path[MAX_PATH];
         swprintf_s(path, L"%s\\live_states.png", out);
@@ -394,7 +400,7 @@ int wmain(int argc, wchar_t **argv)
         int act = 0;
         wchar_t path[MAX_PATH];
         swprintf_s(path, L"%s\\settings.png", out);
-        RenderPng(path, 1100, 1500, [&](ImDrawList *, ImDrawList *) {
+        RenderPng(path, 1100, 1560, [&](ImDrawList *, ImDrawList *) {
             ImGui::SetNextWindowPos(ImVec2(10, 10));
             ImGui::SetNextWindowSize(ImVec2(1080, 0));
             ImGui::Begin("Gauges", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);

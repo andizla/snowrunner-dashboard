@@ -4,7 +4,7 @@ A gauge cluster for the truck you drive in SnowRunner: analogue dials in the sty
 
 The cluster has a speedometer, a tachometer with the gear, fuel with the range, coolant temperature, boost pressure, brake air pressure and eight lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage, cold engine and tilt.
 
-This is version 0.4.0. It reads the truck's own values for the speedometer, the gear, the fuel gauge and seven of the lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage and tilt. The game has no engine speed and no range, so the mod works both out from what the truck does. The coolant temperature, boost and brake air pressure and the cold lamp come with later versions and rest until then.
+This is version 0.5.0. It reads the truck's own values for the speedometer, the gear, the fuel gauge and seven of the lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage and tilt. The game has no engine speed, no range and no coolant temperature, so the mod works those out from what the truck does, and lights the cold lamp by the temperature. Boost and brake air pressure come with later versions and rest until then.
 
 ## What you need
 
@@ -29,6 +29,8 @@ To update, copy the new file over the old one. Keep only one `.asi` file of this
 - The range: how far the fuel in the tank goes at the litres per kilometre the truck burned on the last three kilometres it drove. It shows `---` until the truck has driven half a kilometre. Fuel burned while standing comes off the range and leaves the litres per kilometre alone. The numbers are small, as SnowRunner's trucks are thirsty: a scout that burns 10 litres a kilometre off road gets about 7 km out of its 75 litre tank.
 - Lamps for the handbrake, the headlights, all wheel drive, the differential lock and the low range. The engine damage lamp lights when the game's engine damage is above half of what the engine takes.
 - The tilt lamp: a small truck seen from behind that leans as yours does. It is green while the truck stands level, amber from 15 degrees of lean to a side and red from 25, or from 35 degrees up or down a slope. A bump does not light it.
+- The coolant temperature. The game has none, so the mod works it out from how hard the engine works and how fast the truck drives. A cold engine starts at the outside temperature and is at 85 C after about three minutes of driving. The thermostat then holds it: about 86 C at idle, near 100 C when the truck works hard at speed. The needle goes into the red zone from 118 C only when the pedal stays floored at a crawl. At a standstill with the engine revving out that takes a minute and a half from 90 C, and longer when the engine pulls at lower revs or the truck still moves. From about 15 km/h up the needle stays out of the red zone. Off the pedal the engine is back at 100 C within a minute. A stopped engine cools from 90 C to 40 C in a quarter of an hour. Each truck keeps its own temperature while the game runs. The temperature is only shown and does nothing to the truck.
+- The cold lamp is lit while the coolant is below 60 C.
 
 The cluster is on screen while you drive a truck in the world, and it fades in and out. It is hidden on loading screens, in the pause menu, on the map and in the garage.
 
@@ -49,6 +51,8 @@ The Gauges tab in ReShade's overlay edits every setting while you play. Changes 
 | Truck class, which sets the scales | `TachClass` 0 truck, 1 scout, 2 heavy | truck |
 | Own numbers for idle, the start of the red zone, the tachometer's top and the speedometer's top | `IdleRpm`, `RedlineRpm`, `MaxRpm`, `SpeedMax` | 0: the class's own |
 | The tilt lamp: amber and red from this many degrees of lean to a side, red from this many up or down a slope | `RollWarnDeg`, `RollDangerDeg`, `PitchDangerDeg` | 15, 25, 35 |
+| The coolant: minutes a cold engine takes from 15 C to 85 C when it is driven as usual, minutes from 90 C into the red zone with the pedal floored and the wheels spinning at a standstill, minutes a stopped engine takes from 90 C to 40 C | `WarmUpMinutes`, `OverheatMinutes`, `CoolDownMinutes` | 3, 1.5, 15 |
+| The outside temperature in degrees C, from 40 below to 50 | `AmbientC` | 15 |
 | A key that hides and shows the cluster | `ToggleKey`, a virtual key code | none |
 | Pad buttons that do the same | `PadToggle`, as `LB+DPadUp` | None |
 | For work on the mod: demo values whenever no truck is driven, in menus and on loading screens too | `Demo` | off |
@@ -62,6 +66,8 @@ The scales by class:
 | Red zone from | 2200 rpm | 5500 rpm | 1900 rpm |
 | Tachometer top | 3000 rpm | 7000 rpm | 2500 rpm |
 | Speedometer top | 100 km/h | 120 km/h | 80 km/h |
+
+Each of the three coolant times changes one thing: how fast a cold engine warms up, how fast a hot one overheats, how fast a stopped one cools. The temperatures the engine settles at stay as they are. The outside temperature moves those: in frost the engine takes longer to warm up and cannot be overheated, and on a hot day it overheats sooner.
 
 The cluster keeps its share of the screen: it is twice as large in pixels on a 2160p screen as on a 1080p one.
 
@@ -90,13 +96,13 @@ build.bat
 test.bat
 ```
 
-`build.bat` makes `out\Gauges.asi`, the four offline test programs in `out\test`, and `out\version.dll`, the loader, from the sources in `tools`. `test.bat` runs the tests: every setting through the ini and back, the reader of the game's memory against a made up game, the engine speed, the range and the tilt on made up drives, and a preview that draws the cluster and the settings tab into PNG files in `out\preview` without the game. The preview needs the full Dear ImGui sources in `deps\imgui_src`, see `test\build_preview.bat`. Without them the rest is still built.
+`build.bat` makes `out\Gauges.asi`, the four offline test programs in `out\test`, and `out\version.dll`, the loader, from the sources in `tools`. `test.bat` runs the tests: every setting through the ini and back, the reader of the game's memory against a made up game, the engine speed, the range, the tilt and the coolant temperature on made up drives, and a preview that draws the cluster and the settings tab into PNG files in `out\preview` without the game. The preview needs the full Dear ImGui sources in `deps\imgui_src`, see `test\build_preview.bat`. Without them the rest is still built.
 
 The headers the mod is built with are in `deps`, each with its licence: the ReShade add-on API, Dear ImGui, and stb_truetype with stb_rect_pack.
 
 ## How it works
 
-A thread in the game process reads the driven truck's values from the game's memory 20 times a second, works out the engine speed, the range and the tilt from them, and keeps the settings. ReShade calls the mod on every frame, and the mod draws the cluster with Dear ImGui's drawing calls, which ReShade hands to its add-ons. The text is baked from the game's own font files when the game starts, at the size the cluster has on your screen.
+A thread in the game process reads the driven truck's values from the game's memory 20 times a second, works out the engine speed, the range, the tilt and the coolant temperature from them, and keeps the settings. ReShade calls the mod on every frame, and the mod draws the cluster with Dear ImGui's drawing calls, which ReShade hands to its add-ons. The text is baked from the game's own font files when the game starts, at the size the cluster has on your screen.
 
 ## Licence and credits
 

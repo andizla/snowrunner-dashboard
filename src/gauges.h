@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#define GAUGES_VERSION "0.4.0"
+#define GAUGES_VERSION "0.5.0"
 
 // The exe the addresses in this mod are from (SnowRunner on Steam, the build of 22 July 2026). On any other the mod
 // stands down.
@@ -56,6 +56,10 @@ struct GaugeSettings
     float idleRpm, redlineRpm, maxRpm, speedMax;  // IdleRpm, RedlineRpm, MaxRpm, SpeedMax: 0 = the class's own
     float rollWarnDeg, rollDangerDeg; // RollWarnDeg, RollDangerDeg: degrees of lean to the side from which the tilt lamp is amber, and red
     float pitchDangerDeg;    // PitchDangerDeg: degrees up or down a slope from which the tilt lamp is red
+    float warmUpMinutes;     // WarmUpMinutes: minutes a cold engine takes from 15 C to 85 C when it is driven as usual
+    float overheatMinutes;   // OverheatMinutes: minutes from 90 C into the red zone at 118 C with the pedal floored and the wheels spinning at a standstill
+    float coolDownMinutes;   // CoolDownMinutes: minutes a stopped engine takes from 90 C down to 40 C
+    float ambientC;          // AmbientC: the outside temperature in degrees C; an engine that has stood for long is this cold
     int toggleKey;           // ToggleKey: virtual key code of the key that hides and shows the cluster, 0 = none
     char padToggle[32];      // PadToggle: pad buttons that do the same ("LB+DPadUp"), "None"
     bool demo;               // Demo: for work on the mod: demo values are drawn whenever no truck is driven, menus and loading screens included
@@ -76,16 +80,28 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.rollWarnDeg = 15.0f;
     s.rollDangerDeg = 25.0f;
     s.pitchDangerDeg = 35.0f;
+    s.warmUpMinutes = 3.0f;
+    s.overheatMinutes = 1.5f;
+    s.coolDownMinutes = 15.0f;
+    s.ambientC = 15.0f;
     strcpy_s(s.padToggle, "None");
     s.demo = false;
     s.probe = 0;
 }
 
 // The range of each number: what the ini and the tab hold the settings to. A tinted face stops at 0.85, as a darker
-// one is the solid style. The tilt lamp's angles are degrees.
+// one is the solid style. The tilt lamp's angles are degrees, the coolant's three times minutes, the outside
+// temperature degrees C.
 static const float kFaceOpacityMax = 0.85f, kScaleMin = 0.4f, kScaleMax = 3.0f, kOpacityMin = 0.1f, kOffsetMax = 4000.0f;
 static const float kIdleRange[2] = { 300.0f, 3000.0f }, kRedlineRange[2] = { 1000.0f, 12000.0f }, kMaxRpmRange[2] = { 1500.0f, 15000.0f },
                    kSpeedMaxRange[2] = { 40.0f, 300.0f }, kTiltRange[2] = { 1.0f, 89.0f };
+static const float kWarmUpRange[2] = { 0.5f, 60.0f }, kOverheatRange[2] = { 0.25f, 60.0f }, kCoolDownRange[2] = { 1.0f, 240.0f },
+                   kAmbientRange[2] = { -40.0f, 50.0f };
+
+// The temperatures in C the coolant's three times are measured between: WarmUpMinutes from kTempOutside outside up
+// to kTempWarm, OverheatMinutes from kTempHot into the red zone at kTempRed, CoolDownMinutes from kTempHot down to
+// kTempCooled. The cold lamp is lit below kTempCold. The model, the dial's zones and the tab's texts all use these.
+static const float kTempOutside = 15.0f, kTempWarm = 85.0f, kTempHot = 90.0f, kTempRed = 118.0f, kTempCooled = 40.0f, kTempCold = 60.0f;
 
 inline float SettingsRange(float v, float lo, float hi) { return v < lo ? lo : v > hi ? hi : v; }
 // 0 (the class's own) stays 0; anything else is held to the range.
@@ -108,6 +124,10 @@ inline void SettingsClamp(GaugeSettings &s)
     s.rollWarnDeg = SettingsRange(s.rollWarnDeg, kTiltRange[0], kTiltRange[1]);
     s.rollDangerDeg = SettingsRange(s.rollDangerDeg, s.rollWarnDeg, kTiltRange[1]); // red never comes before amber
     s.pitchDangerDeg = SettingsRange(s.pitchDangerDeg, kTiltRange[0], kTiltRange[1]);
+    s.warmUpMinutes = SettingsRange(s.warmUpMinutes, kWarmUpRange[0], kWarmUpRange[1]);
+    s.overheatMinutes = SettingsRange(s.overheatMinutes, kOverheatRange[0], kOverheatRange[1]);
+    s.coolDownMinutes = SettingsRange(s.coolDownMinutes, kCoolDownRange[0], kCoolDownRange[1]);
+    s.ambientC = SettingsRange(s.ambientC, kAmbientRange[0], kAmbientRange[1]);
     s.toggleKey = s.toggleKey < 0 || s.toggleKey > 255 ? 0 : s.toggleKey;
     s.probe = s.probe < 0 ? 0 : s.probe;
 }

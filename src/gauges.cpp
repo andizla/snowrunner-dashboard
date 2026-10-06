@@ -4,9 +4,9 @@
 // buttons, and the state the cluster shows, which it leaves for the render thread 20 times a second.
 //
 // The state comes from the truck being driven, read out of the game's memory (truck.h): speed, gear, fuel and the
-// lamps. The engine speed, the range and the tilt are worked out from those values (models.h). The cluster is on screen only
-// while a truck is driven in the world. The mod stands down on any exe but the one its addresses are from
-// (kGaugesExeStamp).
+// lamps. The engine speed, the range, the tilt and the coolant temperature are worked out from those values
+// (models.h). The cluster is on screen only while a truck is driven in the world. The mod stands down on any exe but
+// the one its addresses are from (kGaugesExeStamp).
 #include <windows.h>
 #include <xinput.h>
 #include <stdio.h>
@@ -121,6 +121,10 @@ static void WriteIni(const GaugeSettings &s)
     num(L"RollWarnDeg", s.rollWarnDeg);
     num(L"RollDangerDeg", s.rollDangerDeg);
     num(L"PitchDangerDeg", s.pitchDangerDeg);
+    num(L"WarmUpMinutes", s.warmUpMinutes);
+    num(L"OverheatMinutes", s.overheatMinutes);
+    num(L"CoolDownMinutes", s.coolDownMinutes);
+    num(L"AmbientC", s.ambientC);
     whole(L"ToggleKey", s.toggleKey);
     WritePrivateProfileStringW(kIniSection, L"PadToggle", Wide(s.padToggle).c_str(), ini.c_str());
     whole(L"Demo", s.demo ? 1 : 0);
@@ -152,6 +156,11 @@ static void ReadIni(GaugeSettings &s)
                         L"; IdleRpm, RedlineRpm, MaxRpm and SpeedMax (km/h) replace the class's numbers; 0 = the class's own.\n"
                         L"; The tilt lamp is green while the truck stands level. It turns amber when the truck leans to a side by\n"
                         L"; RollWarnDeg degrees and red from RollDangerDeg, or when it points up or down a slope by PitchDangerDeg.\n"
+                        L"; The coolant temperature is worked out from how hard the engine works and how fast the truck drives.\n"
+                        L"; WarmUpMinutes is the time a cold engine takes from 15 C to 85 C when it is driven as usual, OverheatMinutes\n"
+                        L"; the time from 90 C into the red zone at 118 C with the pedal floored and the wheels spinning at a standstill,\n"
+                        L"; CoolDownMinutes the time a stopped engine takes from 90 C down to 40 C. AmbientC is the outside temperature\n"
+                        L"; in degrees C: a truck that has stood for long is that cold. The cold lamp is lit below 60 C.\n"
                         L"; ToggleKey is the virtual key code of a key that hides and shows the cluster (0 = none; 120 = F9).\n"
                         L"; PadToggle does the same with pad buttons (XInput): DPadUp, DPadDown, DPadLeft, DPadRight, A, B, X, Y,\n"
                         L"; LB, RB, LS, RS, Start, Back, joined with + (LB+DPadUp), or None. The game sees these buttons too.\n"
@@ -184,6 +193,10 @@ static void ReadIni(GaugeSettings &s)
     s.rollWarnDeg = IniFloat(L"RollWarnDeg", s.rollWarnDeg, ini);
     s.rollDangerDeg = IniFloat(L"RollDangerDeg", s.rollDangerDeg, ini);
     s.pitchDangerDeg = IniFloat(L"PitchDangerDeg", s.pitchDangerDeg, ini);
+    s.warmUpMinutes = IniFloat(L"WarmUpMinutes", s.warmUpMinutes, ini);
+    s.overheatMinutes = IniFloat(L"OverheatMinutes", s.overheatMinutes, ini);
+    s.coolDownMinutes = IniFloat(L"CoolDownMinutes", s.coolDownMinutes, ini);
+    s.ambientC = IniFloat(L"AmbientC", s.ambientC, ini);
     s.toggleKey = IniInt(L"ToggleKey", s.toggleKey, ini);
     wchar_t buf[64] = {};
     GetPrivateProfileStringW(kIniSection, L"PadToggle", Wide(s.padToggle).c_str(), buf, 64, ini.c_str());
@@ -277,6 +290,8 @@ static void LogSettings(const GaugeSettings &s)
     Log(L"settings: %s scales: idle %.0f rpm, red zone from %.0f of %.0f, speedometer to %.0f km/h; units %s, %s, %s", classes[s.tachClass], k.idle, k.redline, k.max,
         k.speedMax, s.mph ? L"mph" : L"km/h", s.psi ? L"psi" : L"bar", s.fahrenheit ? L"F" : L"C");
     Log(L"settings: tilt lamp amber from %g degrees to a side, red from %g, red from %g up or down a slope", s.rollWarnDeg, s.rollDangerDeg, s.pitchDangerDeg);
+    Log(L"settings: coolant warm after %g minutes of driving, in the red zone after %g minutes floored with the wheels spinning at a standstill, cool %g minutes after the engine stops, %g C outside",
+        s.warmUpMinutes, s.overheatMinutes, s.coolDownMinutes, s.ambientC);
     Log(L"settings: toggle key %S, pad %S, demo values %s, probe %d", key, s.padToggle, s.demo ? L"on" : L"off", s.probe);
 }
 
@@ -309,6 +324,8 @@ struct TruckWatch
     RangeModel range;           // the range of the truck with the tank it holds
     TiltModel tilt;             // how the truck stands, and the tilt lamp
     int probedLamp;             // the tilt lamp the probe wrote last
+    TempModel temp;             // the coolant temperature of every truck driven since the game started
+    int probedZone;             // where the coolant stood when the probe wrote last (TempZone)
     ULONGLONG modelAt;          // when the models last ran
 };
 
@@ -366,7 +383,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     // stay with a truck through the menus, the map and the garage. On another truck the engine speed starts over; the
     // range starts over when the tank is another one (RangeStep), so a truck put back into the world keeps its
     // litres a kilometre. The tilt starts over on another truck and after a second without a step, as the truck may
-    // stand elsewhere by then.
+    // stand elsewhere by then. The coolant temperature stays with each truck (TempStep).
     const GaugeScale scale = GaugeScaleOf(s);
     if (driving)
     {
@@ -382,19 +399,24 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         TachStep(w.tach, raw, scale, dt);
         RangeStep(w.range, raw, dt);
         TiltStep(w.tilt, raw, s, dt);
+        TempStep(w.temp, w.refs.vehicle, raw, TachShare(w.tach, scale), s, dt);
         w.modelAt = now;
     }
-    if (probe && (!w.probedAny || now >= w.probeAt || TruckProbeEvent(raw, world, w.probed, w.probedWorld) || w.tilt.lamp != w.probedLamp))
+    if (probe && (!w.probedAny || now >= w.probeAt || TruckProbeEvent(raw, world, w.probed, w.probedWorld) || w.tilt.lamp != w.probedLamp ||
+                  TempZone(w.temp) != w.probedZone))
     {
-        char first[640], second[1024], third[512], fourth[256];
+        char first[640], second[1024], third[512], fourth[256], fifth[320];
         TruckProbeText(raw, world, w.byWay, first, sizeof first, second, sizeof second);
         ModelProbeText(raw, w.tach, w.range, scale, third, sizeof third);
         Log(L"probe: %S", first);
         Log(L"probe: %S", second);
         TiltProbeText(raw, w.tilt, fourth, sizeof fourth);
+        TempProbeText(raw, w.temp, s, fifth, sizeof fifth);
         Log(L"probe: %S", third);
         Log(L"probe: %S", fourth);
+        Log(L"probe: %S", fifth);
         w.probedLamp = w.tilt.lamp;
+        w.probedZone = TempZone(w.temp);
         w.probed = raw;
         w.probedWorld = world;
         w.probedAny = true;
@@ -512,6 +534,8 @@ static DWORD WINAPI Run(void *)
             v.st.rangeKm = watch.range.rangeKm;
             v.st.tilt = watch.tilt.running ? watch.tilt.lamp : -1;
             v.st.rollDeg = watch.tilt.rollDeg;
+            v.st.tempC = watch.temp.temp;
+            v.st.cold = TempCold(watch.temp);
         }
         else if (v.demo) GaugeDemo(v.st, s);
         AcquireSRWLockExclusive(&g_viewLock);
@@ -552,6 +576,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.showBoost == b.showBoost && a.showAir == b.showAir && a.showLamps == b.showLamps && a.tachClass == b.tachClass && a.idleRpm == b.idleRpm &&
            a.redlineRpm == b.redlineRpm && a.maxRpm == b.maxRpm && a.speedMax == b.speedMax && a.toggleKey == b.toggleKey &&
            a.rollWarnDeg == b.rollWarnDeg && a.rollDangerDeg == b.rollDangerDeg && a.pitchDangerDeg == b.pitchDangerDeg &&
+           a.warmUpMinutes == b.warmUpMinutes && a.overheatMinutes == b.overheatMinutes && a.coolDownMinutes == b.coolDownMinutes && a.ambientC == b.ambientC &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe;
 }
 
@@ -579,6 +604,8 @@ int wmain(int argc, wchar_t **argv)
     Check(d.layout == kLayoutStrip && d.style == kFaceOpen && !d.showAir && !d.demo && d.probe == 0 && !d.mph && !d.psi && !d.fahrenheit && d.toggleKey == 0 &&
           !strcmp(d.padToggle, "None") && d.rollWarnDeg == 15.0f && d.rollDangerDeg == 25.0f && d.pitchDangerDeg == 35.0f,
           "defaults: strip, open style, metric, the air dial off, no toggle, demo off, probe off, the tilt lamp at 15, 25 and 35 degrees");
+    Check(d.warmUpMinutes == 3.0f && d.overheatMinutes == 1.5f && d.coolDownMinutes == 15.0f && d.ambientC == 15.0f,
+          "defaults: the coolant warm after 3 minutes, in the red zone after 1.5, cool after 15, with 15 C outside");
 
     // keys the mod does not know, in its own section and in another one
     WritePrivateProfileStringW(kIniSection, L"FromALaterVersion", L"7", ini.c_str());
@@ -602,6 +629,10 @@ int wmain(int argc, wchar_t **argv)
     c.rollWarnDeg = 12.5f;
     c.rollDangerDeg = 22.0f;
     c.pitchDangerDeg = 30.0f;
+    c.warmUpMinutes = 4.5f;
+    c.overheatMinutes = 2.3f;
+    c.coolDownMinutes = 20.0f;
+    c.ambientC = -12.5f;
     c.toggleKey = VK_F9;
     strcpy_s(c.padToggle, "RB+DPadUp");
     c.demo = true;
@@ -611,7 +642,9 @@ int wmain(int argc, wchar_t **argv)
                             c.showTemp != d.showTemp && c.showBoost != d.showBoost && c.showAir != d.showAir && c.showLamps != d.showLamps &&
                             c.tachClass != d.tachClass && c.idleRpm != d.idleRpm && c.redlineRpm != d.redlineRpm && c.maxRpm != d.maxRpm &&
                             c.speedMax != d.speedMax && c.rollWarnDeg != d.rollWarnDeg && c.rollDangerDeg != d.rollDangerDeg &&
-                            c.pitchDangerDeg != d.pitchDangerDeg && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) && c.demo != d.demo && c.probe != d.probe;
+                            c.pitchDangerDeg != d.pitchDangerDeg && c.warmUpMinutes != d.warmUpMinutes && c.overheatMinutes != d.overheatMinutes &&
+                            c.coolDownMinutes != d.coolDownMinutes && c.ambientC != d.ambientC && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
+                            c.demo != d.demo && c.probe != d.probe;
     WriteIni(c);
     ReadIni(b);
     Check(allChanged, "ini: the test changes every setting from its default");
@@ -632,7 +665,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 19, "ini: the help text survives a write (19 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 24, "ini: the help text survives a write (24 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());
@@ -648,11 +681,23 @@ int wmain(int argc, wchar_t **argv)
     WritePrivateProfileStringW(kIniSection, L"RollWarnDeg", L"40", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"RollDangerDeg", L"10", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"PitchDangerDeg", L"400", ini.c_str());
+    WritePrivateProfileStringW(kIniSection, L"WarmUpMinutes", L"0", ini.c_str());
+    WritePrivateProfileStringW(kIniSection, L"OverheatMinutes", L"1000", ini.c_str());
+    WritePrivateProfileStringW(kIniSection, L"CoolDownMinutes", L"-5", ini.c_str());
+    WritePrivateProfileStringW(kIniSection, L"AmbientC", L"nan", ini.c_str());
     ReadIni(b);
     Check(b.scale == d.scale && b.opacity == d.opacity, "ini: \"nan\" and \"inf\" give the defaults");
     Check(b.offsetX == 0.0f && b.faceOpacity == kFaceOpacityMax && b.layout == kLayoutStrip && b.style == kFaceOpen && b.tachClass == kClassTruck &&
           b.idleRpm == kIdleRange[0] && b.maxRpm == 0.0f && b.toggleKey == 0, "ini: values out of range are held to it");
     Check(b.rollWarnDeg == 40.0f && b.rollDangerDeg == 40.0f && b.pitchDangerDeg == kTiltRange[1], "ini: the tilt lamp's red never comes before its amber, and no angle passes 89 degrees");
+    Check(b.warmUpMinutes == kWarmUpRange[0] && b.overheatMinutes == kOverheatRange[1] && b.coolDownMinutes == kCoolDownRange[0] && b.ambientC == d.ambientC,
+          "ini: the coolant's three times are held to their ranges, and an outside temperature that is no number gives the default");
+    WritePrivateProfileStringW(kIniSection, L"AmbientC", L"-90", ini.c_str());
+    ReadIni(b);
+    const float coldest = b.ambientC;
+    WritePrivateProfileStringW(kIniSection, L"AmbientC", L"70", ini.c_str());
+    ReadIni(b);
+    Check(coldest == kAmbientRange[0] && b.ambientC == kAmbientRange[1], "ini: the outside temperature stays between 40 below and 50 C");
 
     // the scales in force
     GaugeScale k = GaugeScaleOf(d);

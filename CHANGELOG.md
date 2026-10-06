@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.0] 2026-10-06
+
+- The coolant temperature dial works. The mod works the temperature out from how hard the engine works and how fast the truck drives. A cold engine starts at the outside temperature and is at 85 C after about three minutes of driving. The thermostat then holds it: about 86 C at idle, near 100 C when the truck works hard at speed.
+- The needle goes into the red zone from 118 C only when the pedal stays floored at a crawl. At a standstill with the engine revving out that takes a minute and a half from 90 C. From about 15 km/h up the needle stays out of the red zone, and off the pedal the engine is back at 100 C within a minute. The temperature is only shown and does nothing to the truck.
+- The cold lamp is lit while the coolant is below 60 C.
+- A stopped engine cools from 90 C to 40 C in a quarter of an hour. Each truck keeps its own temperature while the game runs, and a truck left standing cools while you drive another.
+- Four new settings on the Gauges tab and in `Gauges.ini`: `WarmUpMinutes`, `OverheatMinutes` and `CoolDownMinutes` set the three times, and `AmbientC` is the outside temperature.
+- With `Probe=1` the log has a fifth line with the coolant temperature, the engine's load and the air through the radiator.
+
 ## [0.4.0] 2026-10-06
 
 - The tilt lamp works. It is green while the truck stands level, amber when the truck leans 15 degrees to a side and red from 25 degrees, or when the truck points 35 degrees up or down a slope. A truck on its side or its roof is in the red.

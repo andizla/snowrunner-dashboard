@@ -349,8 +349,8 @@ static void GTemp(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float 
 {
     const GScale s = GSweep(50.0f, 130.0f);
     GSmallDial(dl, c, r, u, a);
-    GZone(dl, c, r - 2.5f * u, s, 50.0f, 60.0f, 4.0f, u, GCol(kBlue, a));
-    GZone(dl, c, r - 2.5f * u, s, 118.0f, 130.0f, 4.0f, u, GCol(kRed, a));
+    GZone(dl, c, r - 2.5f * u, s, 50.0f, kTempCold, 4.0f, u, GCol(kBlue, a));
+    GZone(dl, c, r - 2.5f * u, s, kTempRed, 130.0f, 4.0f, u, GCol(kRed, a));
     GTicks(dl, c, r - 2.5f * u, s, 40.0f, 2, 7.0f, 4.0f, u, a);
     char buf[16];
     for (float v = 50.0f; v <= 130.5f; v += 40.0f)

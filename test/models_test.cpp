@@ -1,19 +1,23 @@
-// models_test.cpp: the engine speed, the range and the tilt (src\models.h) on drives made up here: a truck with the gearbox of
-// a scout (wheel speeds 1.5 in reverse, 3, 6, 12 and 16 in its four gears, 8 in the high gear), stepped 20 times a
-// second as the mod steps it. It checks each gear's top speed, where the needle stands at idle, under load, in
-// neutral and with the wheels spinning, that it never jumps, the start, the stall and the stop of the engine, and the
-// range: when it shows, what standing, filling up and a change of the burn do to it, and the game's own burn rule.
-// For the tilt it stands the truck on slopes and leans it to either side, over a bump and onto its roof.
+// models_test.cpp: the engine speed, the range, the tilt and the coolant temperature (src\models.h) on drives made up
+// here: a truck with the gearbox of a scout (wheel speeds 1.5 in reverse, 3, 6, 12 and 16 in its four gears, 8 in the
+// high gear), stepped 20 times a second as the mod steps it. It checks each gear's top speed, where the needle stands
+// at idle, under load, in neutral and with the wheels spinning, that it never jumps, the start, the stall and the stop
+// of the engine, and the range: when it shows, what standing, filling up and a change of the burn do to it, and the
+// game's own burn rule. For the tilt it stands the truck on slopes and leans it to either side, over a bump and onto
+// its roof. For the coolant it warms a cold engine up, floors it at a crawl and at speed, lets it idle, stops it,
+// changes the settings and the outside temperature, and drives one truck after another.
 // build.bat makes out\test\models_test.exe; test.bat runs it.
 //
 // With a file as its argument it runs the models over a recorded drive instead and prints what they make of it. One
 // sample a line, numbers with spaces between: seconds, flags, stall, start timer, all wheel drive, gear, gear engaged,
 // automatic, power factor, throttle, the action's + 0xB4, speed in m/s, fuel, tank, engine damage and its capacity,
-// the number of gear speeds and each, the number of wheels and each one's drive and turning speed.
+// the number of gear speeds and each, the number of wheels and each one's drive and turning speed, and after those
+// the game's object for the truck as a hex number, where the table has it.
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <string>
 #include <vector>
 #include "gauges.h"
 #include "truck.h"
@@ -96,6 +100,34 @@ static float Run(TachModel &m, const TruckRaw &t, const GaugeScale &k, float sec
     return most;
 }
 
+// The truck with a gear in, the pedal down by pedal and the speedometer at kmh, and its coolant stepped for a while
+// with the tachometer's needle at revs of the way from idle to the red zone. Returns the temperature it ends at.
+static float Heat(TempModel &m, TruckRaw &t, uint64_t id, const GaugeSettings &s, float seconds, float pedal, float revs, float kmh)
+{
+    t.throttle = -pedal;
+    t.speed = kmh / 3.6f;
+    for (float at = 0.0f; at < seconds; at += kDt) TempStep(m, id, t, revs, s, kDt);
+    return m.temp;
+}
+
+// The same until the coolant passes a temperature, from below or from above. Returns the seconds it took, below 0
+// when it did not get there within an hour.
+static float Until(TempModel &m, TruckRaw &t, uint64_t id, const GaugeSettings &s, float temp, float pedal, float revs, float kmh)
+{
+    t.throttle = -pedal;
+    t.speed = kmh / 3.6f;
+    const bool up = !m.known || m.temp < temp;
+    for (float at = kDt; at <= 3600.0f; at += kDt)
+    {
+        TempStep(m, id, t, revs, s, kDt);
+        if (up ? m.temp >= temp : m.temp <= temp) return at;
+    }
+    return -1.0f;
+}
+
+// Sets the driven truck's coolant to a temperature.
+static void Coolant(TempModel &m, float temp) { m.truck[m.at].temp = m.temp = temp; }
+
 static int Replay(const char *path)
 {
     FILE *f = nullptr;
@@ -110,8 +142,16 @@ static int Replay(const char *path)
     const GaugeScale k = GaugeScaleOf(s);
     TachModel tach = {};
     RangeModel range = {};
+    TempModel temp = {};
     float last = -1.0f, tank = 0.0f, mostStep = 0.0f, mostRpm = 0.0f;
     int samples = 0, steps = 0, redSteps = 0;
+    // the coolant: each truck's way to the cold lamp's 60 C and to 85 C, in seconds with the truck and in seconds of
+    // driving (the engine on and the pedal down or the truck rolling), and the hottest it gets
+    std::vector<std::string> notes;
+    std::vector<unsigned long long> trucks;
+    unsigned long long truckNow = 0;
+    float tankNow = 0.0f, withTruck = 0.0f, driving = 0.0f, hottest = -1000.0f, inRed = 0.0f, loadSum = 0.0f, kmhSum = 0.0f, drivingAll = 0.0f;
+    bool past60 = false, past85 = false;
     char line[2048];
     while (fgets(line, sizeof line, f))
     {
@@ -126,6 +166,9 @@ static int Replay(const char *path)
         at += used;
         if (t.wheels > kMaxWheels) continue;
         for (int i = 0; i < t.wheels; i++) { sscanf_s(line + at, "%d %f%n", &t.drive[i], &t.spin[i], &used); at += used; }
+        // the game's object for the truck; a table without it is one truck throughout
+        unsigned long long truck = 1;
+        if (sscanf_s(line + at, "%llx", &truck) != 1 || !truck) truck = 1;
         t.flags = (uint8_t)flags;
         t.awd = (uint8_t)awd;
         t.automatic = (uint8_t)automatic;
@@ -149,16 +192,58 @@ static int Replay(const char *path)
             mostRpm = fmaxf(mostRpm, tach.rpm);
             steps++;
             if (tach.rpm > k.redline) redSteps++;
+            TempStep(temp, truck, t, TachShare(tach, k), s, dt);
+            char note[200];
+            if (truck != truckNow)
+            {
+                // a new object with the tank of the truck driven until now is that truck, put back into the world
+                // (TempStep): its way to 85 C goes on
+                bool seen = false;
+                for (unsigned long long id : trucks) if (id == truck) seen = true;
+                const bool same = truckNow && !seen && fabsf(t.tank - tankNow) <= 0.01f;
+                if (!seen) trucks.push_back(truck);
+                sprintf_s(note, "%8.2f s: truck %llX, coolant %.1f C%s", seconds, truck, temp.temp, same ? " (the truck driven until now, put back into the world)" : "");
+                notes.push_back(note);
+                truckNow = truck;
+                tankNow = t.tank;
+                if (!same) { withTruck = driving = 0.0f; past60 = temp.temp >= kTempCold; past85 = temp.temp >= kTempWarm; }
+            }
+            withTruck += dt;
+            if (TruckEngineOn(t) && (TruckPedal(t) > 0.05f || fabsf(t.speed) > 0.28f))
+            {
+                driving += dt;
+                drivingAll += dt;
+                loadSum += temp.load * dt;
+                kmhSum += fabsf(t.speed) * 3.6f * dt;
+            }
+            if (!past60 && temp.temp >= kTempCold)
+            {
+                past60 = true;
+                sprintf_s(note, "%8.2f s: 60 C, the cold lamp goes out, after %.0f s of driving (%.0f s with the truck)", seconds, driving, withTruck);
+                notes.push_back(note);
+            }
+            if (!past85 && temp.temp >= kTempWarm)
+            {
+                past85 = true;
+                sprintf_s(note, "%8.2f s: 85 C after %.0f s of driving (%.0f s with the truck)", seconds, driving, withTruck);
+                notes.push_back(note);
+            }
+            hottest = fmaxf(hottest, temp.temp);
+            if (temp.temp >= kTempRed) inRed += dt;
         }
         last = seconds;
         samples++;
-        printf("%8.2f gear %2d %s pedal %.2f wheels %5.2f of %5.2f | %4.0f rpm | %5.1f km/h | fuel %6.2f | range %6.1f km at %.3f l/km over %4.0f m, standing %.2f l/min\n", seconds,
+        printf("%8.2f gear %2d %s pedal %.2f wheels %5.2f of %5.2f | %4.0f rpm | %5.1f km/h | fuel %6.2f | range %6.1f km at %.3f l/km over %4.0f m, standing %.2f l/min | "
+               "coolant %5.1f C, load %.2f, heat %.2f, %.2f taken away\n", seconds,
                t.gearEngaged, t.automatic ? "A" : " ", TruckPedal(t), TruckDrivenSpin(t), TruckGearTop(t, t.gearEngaged), tach.rpm, t.speed * 3.6f, t.fuel, range.rangeKm,
-               range.perKm, range.way - range.mark[0].way, range.standing);
+               range.perKm, range.way - range.mark[0].way, range.standing, temp.temp, temp.load, temp.heat, temp.cooling);
     }
     fclose(f);
     printf("%d samples, %d steps: the largest change of the engine speed in one step %.0f rpm, the highest engine speed %.0f rpm, %d steps in the red zone (from %.0f rpm)\n",
            samples, steps, mostStep, mostRpm, redSteps, k.redline);
+    for (const std::string &n : notes) printf("coolant: %s\n", n.c_str());
+    printf("coolant: the hottest %.1f C, %.0f s in the red zone (from %.0f C); while driving (%.0f s) the mean load was %.2f and the mean speed %.1f km/h\n", hottest, inRed, kTempRed,
+           drivingAll, drivingAll > 0.0f ? loadSum / drivingAll : 0.0f, drivingAll > 0.0f ? kmhSum / drivingAll : 0.0f);
     return 0;
 }
 
@@ -449,6 +534,203 @@ int main(int argc, char **argv)
         c.left[1] = nanf("");
         TiltStep(tilt, c, set, kDt);
         Check(tilt.lamp < 0 && !tilt.running, "tilt: axes that are no numbers leave the lamp dark");
+    }
+
+    // the coolant temperature
+    {
+        GaugeSettings set;
+        SettingsDefaults(set);
+        // a truck in gear with its engine running; each step is given the pedal, the needle and the speed
+        TruckRaw c = Truck();
+        c.gear = c.gearEngaged = 1;
+        c.automatic = 1;
+        TempModel temp = {};
+        TempStep(temp, 1, c, 0.0f, set, kDt);
+        Check(temp.known && Near(temp.temp, 15.0f, 0.05f) && TempCold(temp) && TempZone(temp) == 0,
+              "coolant: a truck driven for the first time is as cold as the air outside, and the cold lamp is lit");
+        // driven as usual: the pedal down and the needle half way, a load of 0.7, at 15 km/h
+        const float usualRevs = (kUsualLoad - (1.0f - kLoadRevs)) / kLoadRevs;
+        const float lampOut = Until(temp, c, 1, set, kTempCold, 1.0f, usualRevs, kUsualKmh);
+        const bool lampIsOut = !TempCold(temp) && TempZone(temp) == 1;
+        const float warm = lampOut + Until(temp, c, 1, set, kTempWarm, 1.0f, usualRevs, kUsualKmh);
+        Check(Near(warm, 180.0f, 3.0f) && lampOut > 60.0f && lampOut < warm - 30.0f && lampIsOut,
+              "coolant: driven as usual a cold engine is at 85 C after the three minutes of WarmUpMinutes, and the cold lamp goes out at 60 C on the way");
+
+        // where the engine settles
+        const float idling = Heat(temp, c, 1, set, 1800.0f, 0.0f, 0.0f, 0.0f);
+        const float rolling = Heat(temp, c, 1, set, 1800.0f, 0.0f, 0.0f, 60.0f);
+        Check(idling > 84.0f && idling < 90.0f && rolling > kThermostatShut - 0.5f && rolling < idling,
+              "coolant: the thermostat holds an idling engine at about 86 C, and a little lower with the truck rolling");
+        Check(Near(Heat(temp, c, 1, set, 1800.0f, 1.0f, 1.0f, 60.0f), kTempCruise, 1.0f), "coolant: at full load with all the air the radiator can get the engine settles at 97 C");
+        bool outOfRed = true;
+        float at15 = 0.0f, slower = 200.0f;
+        for (float kmh : { 45.0f, 30.0f, 20.0f, 15.0f })
+        {
+            at15 = Heat(temp, c, 1, set, 1800.0f, 1.0f, 1.0f, kmh);
+            if (at15 >= kTempRed - 3.0f || at15 < kTempCruise - 1.0f) outOfRed = false;
+            if (slower < 200.0f && at15 <= slower) outOfRed = false;
+            slower = at15;
+        }
+        Check(outOfRed && at15 > 105.0f, "coolant: floored from 15 km/h up the engine runs hotter the slower the truck is, and stays out of the red zone");
+
+        // floored at a crawl
+        Coolant(temp, kTempHot);
+        const float boil = Until(temp, c, 1, set, kTempRed, 1.0f, 1.0f, 0.0f);
+        const bool red = TempZone(temp) == 2;
+        const float stopsAt = Heat(temp, c, 1, set, 1800.0f, 1.0f, 1.0f, 0.0f);
+        Check(Near(boil, 90.0f, 2.0f) && red && stopsAt == kTempMost,
+              "coolant: floored at a standstill the engine goes from 90 C into the red zone in the minute and a half of OverheatMinutes, and the model stops at 140 C");
+        Coolant(temp, kTempHot);
+        const float crawl = Until(temp, c, 1, set, kTempRed, 1.0f, 1.0f, 5.0f);
+        Check(crawl > boil + 10.0f && crawl < 240.0f, "coolant: floored at walking pace it takes longer and still gets there");
+        Coolant(temp, kTempRed);
+        const float back = Until(temp, c, 1, set, 100.0f, 0.0f, 0.0f, 0.0f);
+        Check(back > 10.0f && back < 60.0f, "coolant: off the pedal a standing engine comes back from the red zone to 100 C within a minute");
+
+        // each of the three settings moves its own time and leaves the other two, and none of them the way back from
+        // the red zone with the engine running
+        auto times = [&](const GaugeSettings &g, float &warmUp, float &overheat, float &coolDown, float &wayBack) {
+            TempModel m = {};
+            TruckRaw e = c;
+            warmUp = Until(m, e, 1, g, kTempWarm, 1.0f, usualRevs, kUsualKmh);
+            Coolant(m, kTempHot);
+            overheat = Until(m, e, 1, g, kTempRed, 1.0f, 1.0f, 0.0f);
+            wayBack = Until(m, e, 1, g, 100.0f, 0.0f, 0.0f, 0.0f);
+            Coolant(m, kTempHot);
+            e.flags = 0;
+            coolDown = Until(m, e, 1, g, kTempCooled, 0.0f, 0.0f, 0.0f);
+        };
+        float w0, o0, c0, b0, w1, o1, c1, b1;
+        times(set, w0, o0, c0, b0);
+        GaugeSettings other = set;
+        other.warmUpMinutes = 6.0f;
+        times(other, w1, o1, c1, b1);
+        const bool warmOnly = Near(w1, 360.0f, 6.0f) && Near(o1, o0, 0.11f) && Near(c1, c0, 0.11f) && Near(b1, b0, 0.11f);
+        other = set;
+        other.overheatMinutes = 3.0f;
+        times(other, w1, o1, c1, b1);
+        const bool hotOnly = Near(o1, 180.0f, 4.0f) && Near(w1, w0, 0.11f) && Near(c1, c0, 0.11f) && Near(b1, b0, 0.11f);
+        other = set;
+        other.coolDownMinutes = 30.0f;
+        times(other, w1, o1, c1, b1);
+        Check(Near(c0, 900.0f, 2.0f) && warmOnly && hotOnly && Near(c1, 1800.0f, 4.0f) && Near(w1, w0, 0.11f) && Near(o1, o0, 0.11f) && Near(b1, b0, 0.11f),
+              "coolant: a stopped engine cools from 90 C to 40 C in the 15 minutes of CoolDownMinutes, and each of the three settings moves its own time only");
+
+        // the outside temperature
+        {
+            GaugeSettings frost = set, heatwave = set;
+            frost.ambientC = -20.0f;
+            heatwave.ambientC = 35.0f;
+            TempModel cold = {}, hot = {};
+            TruckRaw e = c;
+            TempStep(cold, 1, e, 0.0f, frost, kDt);
+            const float frostStart = cold.temp;
+            const float frostWarm = Until(cold, e, 1, frost, kTempWarm, 1.0f, usualRevs, kUsualKmh);
+            Coolant(cold, kTempHot);
+            const float frostBoil = Until(cold, e, 1, frost, kTempRed, 1.0f, 1.0f, 0.0f);
+            TempStep(hot, 1, e, 0.0f, heatwave, kDt);
+            Coolant(hot, kTempHot);
+            const float heatBoil = Until(hot, e, 1, heatwave, kTempRed, 1.0f, 1.0f, 0.0f);
+            Check(Near(frostStart, -20.0f, 0.05f) && frostWarm > warm * 1.3f && frostBoil < 0.0f && heatBoil > 0.0f && heatBoil < boil - 5.0f,
+                  "coolant: in frost the engine starts colder, takes longer to warm up and cannot be overheated, and on a hot day it overheats sooner");
+        }
+
+        // in neutral nothing pulls against the engine
+        {
+            TruckRaw n = c;
+            n.gear = n.gearEngaged = 0;
+            TempModel freely = {};
+            const float revved = Heat(freely, n, 1, set, 1800.0f, 1.0f, kTachFree, 0.0f);
+            c.throttle = -1.0f;
+            Check(revved > 90.0f && revved < 105.0f && Near(TruckLoad(n, 1.0f), kLoadNeutral, 0.001f) && Near(TruckLoad(c, 1.0f), 1.0f, 0.001f) &&
+                  Near(TruckLoad(c, 0.0f), 1.0f - kLoadRevs, 0.001f), "coolant: the pedal floored in neutral warms the engine and does not overheat it");
+        }
+
+        // a stopped engine
+        {
+            TruckRaw halted = c;
+            halted.flags = 0;
+            TempModel stopped = {};
+            TempStep(stopped, 1, halted, 0.0f, set, kDt);
+            Coolant(stopped, kTempHot);
+            const float later = Heat(stopped, halted, 1, set, 3.0f * 3600.0f, 1.0f, 1.0f, 0.0f);
+            Check(later >= set.ambientC && later < set.ambientC + 0.1f, "coolant: a stopped engine cools to the outside temperature and no further, whatever the pedal does");
+        }
+
+        // one truck after another
+        {
+            TempModel fleet = {};
+            TruckRaw scout = c, hauler = c;
+            hauler.tank = 200.0f;
+            hauler.fuel = 150.0f;
+            const float left = Heat(fleet, scout, 0x1000, set, 900.0f, 1.0f, usualRevs, kUsualKmh);
+            TempStep(fleet, 0x2000, hauler, 0.0f, set, 0.0f);
+            const bool startsCold = Near(fleet.temp, 15.0f, 0.01f);
+            const float leftHauler = Heat(fleet, hauler, 0x2000, set, 600.0f, 1.0f, usualRevs, kUsualKmh);
+            // back in the first truck: ten minutes went by with its engine stopped
+            TempStep(fleet, 0x1000, scout, 0.0f, set, 0.0f);
+            const bool cooled = Near(fleet.temp, 15.0f + (left - 15.0f) * expf(-TempRatesOf(set).off * 600.0f), 0.3f) && fleet.temp < left - 20.0f;
+            // and straight back into the second: nothing was driven in between
+            TempStep(fleet, 0x2000, hauler, 0.0f, set, 0.0f);
+            Check(left > kTempWarm && startsCold && cooled && Near(fleet.temp, leftHauler, 0.01f),
+                  "coolant: each truck keeps its own temperature, and one left standing cools for as long as others are driven");
+            // a new object with the tank of the truck driven until now; then a truck with another tank
+            TempStep(fleet, 0x3000, hauler, 0.0f, set, 0.0f);
+            const bool putBack = Near(fleet.temp, leftHauler, 0.01f);
+            TruckRaw d = c;
+            d.tank = 120.0f;
+            d.fuel = 100.0f;
+            TempStep(fleet, 0x4000, d, 0.0f, set, 0.0f);
+            Check(putBack && Near(fleet.temp, 15.0f, 0.01f), "coolant: a truck put back into the world as a new object stays as warm as it was, and a truck with another tank starts cold");
+            // the game makes another truck where the driven one was: the same object, another tank
+            Heat(fleet, d, 0x4000, set, 300.0f, 1.0f, usualRevs, kUsualKmh);
+            const bool warmed = fleet.temp > kTempWarm;
+            d.tank = 300.0f;
+            TempStep(fleet, 0x4000, d, 0.0f, set, 0.0f);
+            const bool another = Near(fleet.temp, 15.0f, 0.01f);
+            d.tank = 120.0f;
+            TempStep(fleet, 0x4000, d, 0.0f, set, 0.0f);
+            Check(warmed && another && fleet.temp > kTempWarm, "coolant: the same object with another tank is another truck and starts cold, and the first one is not forgotten");
+            // more trucks than the model remembers, four minutes floored in each
+            TempModel many = {};
+            TruckRaw x = c;
+            for (int i = 0; i < kTempTrucks + 3; i++)
+            {
+                x.tank = 100.0f + 10.0f * (float)i;
+                Heat(many, x, 0x100 + (uint64_t)i, set, 240.0f, 1.0f, 1.0f, 30.0f);
+            }
+            x.tank = 100.0f;
+            TempStep(many, 0x100, x, 0.0f, set, 0.0f);
+            const bool forgotten = Near(many.temp, 15.0f, 0.01f);
+            x.tank = 100.0f + 10.0f * (float)(kTempTrucks + 1);
+            TempStep(many, 0x100 + (uint64_t)(kTempTrucks + 1), x, 0.0f, set, 0.0f);
+            Check(forgotten && many.temp > kTempCold && many.temp < kTempWarm, "coolant: of more trucks than the model remembers, the one left longest ago starts cold again and the others are still warm");
+        }
+
+        // the probe's line, and a needle that is no number
+        {
+            TempModel p = {};
+            TruckRaw q = c;
+            char line[320];
+            TempProbeText(q, p, set, line, sizeof line);
+            const bool notYet = strstr(line, "not known yet") != nullptr;
+            Heat(p, q, 1, set, 10.0f, 1.0f, 1.0f, 18.0f);
+            TempProbeText(q, p, set, line, sizeof line);
+            Check(notYet && strstr(line, "coolant ") && strstr(line, "cold lamp on") && strstr(line, "(load 1.00)") && strstr(line, "at 18.0 km/h") && strstr(line, "15 C outside"),
+                  "coolant: the probe's line carries the temperature, the lamp, the load and the air, and says so before a truck was driven");
+            // a needle that is no number counts as one at idle, and a step that gives no number changes nothing
+            Heat(p, q, 1, set, 300.0f, 1.0f, 1.0f, 18.0f);
+            const float held = p.temp;
+            Heat(p, q, 1, set, 1.0f, 1.0f, nanf(""), 18.0f);
+            const bool needle = isfinite(p.temp) && Near(p.temp, held, 1.0f) && TruckLoad(q, nanf("")) == 1.0f - kLoadRevs;
+            q.speed = nanf("");
+            TempStep(p, 1, q, 1.0f, set, kDt);
+            TachModel broken = {};
+            broken.running = true;
+            broken.rpm = nanf("");
+            Check(needle && isfinite(p.temp) && Near(p.temp, held, 1.0f) && TachShare(broken, k) == 0.0f,
+                  "coolant: a needle or a speed that is no number leaves a warm engine as warm as it was");
+        }
     }
 
     // the probe's line

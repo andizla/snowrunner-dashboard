@@ -157,6 +157,61 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         PageTip("Red once the truck points up or down a slope by this much.");
     }
 
+    ImGui::SeparatorText("Coolant temperature");
+    {
+        // the tips name temperatures in the unit the dial shows
+        auto degrees = [&](float c, char *out, size_t size) { sprintf_s(out, size, s.fahrenheit ? "%.0f F" : "%.0f C", s.fahrenheit ? c * 1.8f + 32.0f : c); };
+        char from[16], to[16], tip[256];
+        PageLabel("Warm after", labelX);
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::SliderFloat("##warmup", &s.warmUpMinutes, 1.0f, 15.0f, "%.1f minutes of driving", ImGuiSliderFlags_AlwaysClamp))
+        {
+            s.warmUpMinutes = floorf(s.warmUpMinutes * 10.0f + 0.5f) / 10.0f;
+            act |= kPageChanged;
+        }
+        degrees(kTempOutside, from, sizeof from);
+        degrees(kTempWarm, to, sizeof to);
+        sprintf_s(tip, "The time a cold engine takes from %s to %s when it is driven as usual. Idling takes much longer.", from, to);
+        PageTip(tip);
+        PageLabel("Overheats after", labelX);
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::SliderFloat("##overheat", &s.overheatMinutes, 0.5f, 10.0f, "%.1f minutes floored", ImGuiSliderFlags_AlwaysClamp))
+        {
+            s.overheatMinutes = floorf(s.overheatMinutes * 10.0f + 0.5f) / 10.0f;
+            act |= kPageChanged;
+        }
+        degrees(kTempHot, from, sizeof from);
+        degrees(kTempRed, to, sizeof to);
+        sprintf_s(tip, "The time from %s into the red zone at %s with the pedal floored and the wheels spinning at a standstill. "
+                       "Driving cools the engine: the faster the truck goes, the more air the radiator gets.", from, to);
+        PageTip(tip);
+        PageLabel("Cool after", labelX);
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::SliderFloat("##cooldown", &s.coolDownMinutes, 2.0f, 60.0f, "%.0f minutes stopped", ImGuiSliderFlags_AlwaysClamp))
+        {
+            s.coolDownMinutes = floorf(s.coolDownMinutes + 0.5f);
+            act |= kPageChanged;
+        }
+        degrees(kTempCooled, to, sizeof to);
+        sprintf_s(tip, "The time a stopped engine takes from %s down to %s.", from, to);
+        PageTip(tip);
+        // the ini holds the outside temperature in C; the slider shows it in the unit the dial shows
+        float outside = s.fahrenheit ? s.ambientC * 1.8f + 32.0f : s.ambientC;
+        PageLabel("Outside temperature", labelX);
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::SliderFloat("##ambient", &outside, s.fahrenheit ? kAmbientRange[0] * 1.8f + 32.0f : kAmbientRange[0],
+                               s.fahrenheit ? kAmbientRange[1] * 1.8f + 32.0f : kAmbientRange[1], s.fahrenheit ? "%.0f F" : "%.0f C", ImGuiSliderFlags_AlwaysClamp))
+        {
+            outside = floorf(outside + 0.5f);
+            s.ambientC = s.fahrenheit ? (outside - 32.0f) / 1.8f : outside;
+            act |= kPageChanged;
+        }
+        degrees(kTempCold, to, sizeof to);
+        sprintf_s(tip, "A truck that has stood for long is this cold. In colder air the engine takes longer to warm up and is harder to overheat. "
+                       "The cold lamp is lit below %s.", to);
+        PageTip(tip);
+    }
+
     ImGui::SeparatorText("Units");
     changed(ImGui::Checkbox("Miles per hour", &s.mph));
     PageTip("Speed in mph and the range in miles. Off: km/h and kilometres.");

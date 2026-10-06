@@ -2,7 +2,7 @@
 // called. Every read goes through one function (TruckMemory::peek), so the offline test can put a made up game in its
 // place (test\truck_test.cpp). gauges.cpp finds the truck's objects twice a second and when a read fails (TruckFind),
 // reads their values on every pass (TruckRead) and asks what the game is showing (WorldRead). The engine speed,
-// the range and the tilt are worked out from these values in models.h.
+// the range, the tilt and the coolant temperature are worked out from these values in models.h.
 //
 // Where the values are, in the Steam build of 22 July 2026 (kGaugesExeStamp):
 //   control = [exe + 0x2a8eb78]      the game's object for the truck being driven (it exists while a level is loaded);
@@ -268,10 +268,10 @@ inline const char *TruckGearMode(const TruckRaw &t, bool shifter)
     return "";
 }
 
-// The state the cluster draws, from the truck's values. The engine speed, the range and the tilt are not among them:
-// gauges.cpp puts in what models.h works out, and here the tachometer rests at idle, the range is not known and the
-// tilt lamp is dark. The temperature and the boost have no source in this version: their needles rest at the low end
-// of their dials, and the cold lamp stays dark.
+// The state the cluster draws, from the truck's values. The engine speed, the range, the tilt and the coolant
+// temperature are not among them: gauges.cpp puts in what models.h works out, and here the tachometer rests at idle,
+// the range is not known, the tilt lamp and the cold lamp are dark and the temperature needle rests at the low end
+// of its dial. The boost has no source in this version: its needle rests there too.
 inline void TruckToState(const TruckRaw &t, const World &w, const GaugeSettings &s, GaugeState &st)
 {
     st = GaugeState{};
