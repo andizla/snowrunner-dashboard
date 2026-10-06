@@ -1,6 +1,7 @@
 // models.h: what the cluster shows that the game does not hold: the engine speed, the fuel range, the tilt and the
-// coolant temperature, worked out from the truck's values (truck.h) on every pass of the mod's thread. No game memory
-// is touched here, so the offline test (test\models_test.cpp) runs the models on drives it makes up.
+// coolant temperature, worked out from the truck's values (truck.h) on every pass of the mod's thread, and what the
+// temperature costs the engine. No game memory is touched here, so the offline test (test\models_test.cpp) runs the
+// models on drives it makes up.
 //
 // The engine speed. The game has no engine speed, only wheels, gears and a pedal. Each gear has a wheel speed it is
 // governed to, which the game works out from the gearbox's number for the gear (TruckGearTop). The share of it the
@@ -25,7 +26,13 @@
 // goes through it: more the faster the truck drives, and a fan helps from about 100 C. So a warm engine holds about
 // 86 C at idle, stands near 100 C when it works hard at speed, and climbs into the red zone from 118 C only when the
 // pedal is floored at a crawl. A stopped engine cools slowly towards the air outside. Three of the settings are the
-// times all of this takes, and a fourth is the outside temperature. Each truck keeps its own temperature.
+// times all of this takes, a fourth is the outside temperature, and a fifth the speed from which the radiator gets
+// all its air. Each truck keeps its own temperature.
+//
+// The engine's wear. The game has engine damage and nothing that makes heat cost any. Here an engine in the red zone
+// loses a share of what it can take every minute, more the hotter it runs, and so does a cold engine under a heavy
+// pedal, more the colder it is. The model counts that in points of the game's own engine damage, and gauges.cpp
+// writes the whole points into the game. So a garage repairs them, and the game's rules for a damaged engine apply.
 #pragma once
 #include "truck.h"
 
@@ -304,7 +311,6 @@ static const float kTempCruise = 97.0f;      // where an engine at full load set
 static const float kThermostatShut = 82.0f, kThermostatOpen = 92.0f; // the thermostat opens between these
 static const float kThermostatLeak = 0.15f;  // the share of the radiator a shut thermostat still lets the coolant through
 static const float kAirStill = 0.35f;        // the air through the radiator of a standing truck, as a share of all it can get from driving
-static const float kAirFullKmh = 50.0f;      // the speed from which it gets all of it
 static const float kFan = 0.3f, kFanFrom = 98.0f, kFanFull = 102.0f; // the fan adds this share on top; it comes in between these temperatures
 static const float kHeatIdle = 0.15f;        // the heat of an idling engine as a share of its heat at full load
 static const float kLoadRevs = 0.6f;         // how much of the load goes with the engine speed: load = pedal x (1 - kLoadRevs + kLoadRevs x revs)
@@ -323,10 +329,10 @@ inline float TempThermostat(float temp)
 inline float TempFan(float temp) { return SettingsRange((temp - kFanFrom) / (kFanFull - kFanFrom), 0.0f, 1.0f); }
 
 // The air through the radiator at a speed in km/h, as a share of all it can get from driving, with the fan's share
-// on top.
-inline float TempAirflow(float temp, float kmh)
+// on top. It gets all of it from fullKmh on (the settings' AirFullKmh).
+inline float TempAirflow(float temp, float kmh, float fullKmh)
 {
-    return kAirStill + (1.0f - kAirStill) * SettingsRange(kmh / kAirFullKmh, 0.0f, 1.0f) + kFan * TempFan(temp);
+    return kAirStill + (1.0f - kAirStill) * SettingsRange(kmh / fmaxf(fullKmh, kAirFullRange[0]), 0.0f, 1.0f) + kFan * TempFan(temp);
 }
 
 // How hard the engine works, 0 to 1: the pedal, and more of it the higher the tachometer's needle stands between
@@ -343,9 +349,9 @@ inline float TempHeat(float load) { return kHeatIdle + (1.0f - kHeatIdle) * Sett
 
 // The heat the radiator takes away, in the same measure: 1 is all of a full load's heat, which it takes from coolant
 // at kTempCruise with the thermostat open, all the air and kTempOutside outside.
-inline float TempCooling(float temp, float outside, float kmh)
+inline float TempCooling(float temp, float outside, float kmh, float fullKmh)
 {
-    return (temp - outside) / (kTempCruise - kTempOutside) * TempThermostat(temp) * TempAirflow(temp, kmh);
+    return (temp - outside) / (kTempCruise - kTempOutside) * TempThermostat(temp) * TempAirflow(temp, kmh, fullKmh);
 }
 
 // How fast the temperature rises, and how fast a stopped engine cools. warm and hot: degrees a second for each share
@@ -356,22 +362,31 @@ inline float TempCooling(float temp, float outside, float kmh)
 struct TempRates { float warm, hot, off; };
 
 // The seconds the coolant takes from one temperature up to another at a rate of 1, at a load and a speed with
-// kTempOutside outside: each quarter of a degree over the heat that is left over at it.
-inline float TempPath(float from, float to, float load, float kmh)
+// kTempOutside outside and the radiator's full airflow from fullKmh: each quarter of a degree over the heat that is
+// left over at it.
+inline float TempPath(float from, float to, float load, float kmh, float fullKmh)
 {
     const float step = 0.25f;
     float seconds = 0.0f;
     for (float temp = from + step * 0.5f; temp < to; temp += step)
-        seconds += step / fmaxf(TempHeat(load) - TempCooling(temp, kTempOutside, kmh), 0.001f);
+        seconds += step / fmaxf(TempHeat(load) - TempCooling(temp, kTempOutside, kmh, fullKmh), 0.001f);
     return seconds;
 }
 
 // The rates that make the settings' three times come true. The warm-up and the overheating each have a rate of
 // their own, so each setting moves its own time and leaves the other two alone. None of them moves the
-// temperatures the engine settles at: those come from the constants above and the outside temperature.
+// temperatures the engine settles at: those come from the constants above, the outside temperature and AirFullKmh.
+// The overheating is measured at a standstill, where the truck's speed brings no air. The warm-up is measured at
+// kUsualKmh, so its way is worked out again when AirFullKmh changes, and WarmUpMinutes stays true with any of it.
 inline TempRates TempRatesOf(const GaugeSettings &s)
 {
-    static const float warmPath = TempPath(kTempOutside, kTempWarm, kUsualLoad, kUsualKmh), hotPath = TempPath(kTempHot, kTempRed, 1.0f, 0.0f);
+    static const float hotPath = TempPath(kTempHot, kTempRed, 1.0f, 0.0f, kAirFullRange[0]);
+    static float warmFull = 0.0f, warmPath = 0.0f; // the warm-up's way, and the AirFullKmh it was worked out for
+    if (s.airFullKmh != warmFull)
+    {
+        warmPath = TempPath(kTempOutside, kTempWarm, kUsualLoad, kUsualKmh, s.airFullKmh);
+        warmFull = s.airFullKmh;
+    }
     TempRates r;
     r.warm = warmPath / (fmaxf(s.warmUpMinutes, kWarmUpRange[0]) * 60.0f);
     r.hot = hotPath / (fmaxf(s.overheatMinutes, kOverheatRange[0]) * 60.0f);
@@ -443,7 +458,7 @@ inline void TempStep(TempModel &m, uint64_t id, const TruckRaw &t, float revs, c
     {
         m.load = TruckLoad(t, revs);
         m.heat = TempHeat(m.load);
-        m.cooling = TempCooling(k.temp, s.ambientC, fabsf(t.speed) * 3.6f);
+        m.cooling = TempCooling(k.temp, s.ambientC, fabsf(t.speed) * 3.6f, s.airFullKmh);
         const float rate = m.heat < m.cooling ? kTempFall : r.warm + (r.hot - r.warm) * SettingsRange((k.temp - kTempWarm) / (kTempHot - kTempWarm), 0.0f, 1.0f);
         k.temp += rate * (m.heat - m.cooling) * dt;
     }
@@ -476,7 +491,90 @@ inline void TempProbeText(const TruckRaw &t, const TempModel &m, const GaugeSett
     const float kmh = fabsf(t.speed) * 3.6f;
     sprintf_s(out, size, "coolant %.1f C, %+.2f C/s, cold lamp %s%s | heat %.2f of a full load's (load %.2f), %.2f taken away (thermostat %.2f, air %.2f at %.1f km/h, fan %.2f) | %.0f C outside",
               m.temp, m.perSecond, TempCold(m) ? "on" : "off", TempZone(m) == 2 ? ", in the red zone" : "", m.heat, m.load, m.cooling, TempThermostat(m.temp),
-              TempAirflow(m.temp, kmh) - kFan * TempFan(m.temp), kmh, TempFan(m.temp), s.ambientC);
+              TempAirflow(m.temp, kmh, s.airFullKmh) - kFan * TempFan(m.temp), kmh, TempFan(m.temp), s.ambientC);
+}
+
+// ---- what the temperature costs the engine ----
+
+static const float kDamagePedal = 0.5f; // how far down the pedal has to be before a cold engine suffers from it
+static const int kDamageBlinkMs = 250;  // the damage lamp's blink: this long lit, then this long dark
+
+struct DamageModel
+{
+    uint64_t id;      // the game's object for the truck the owed share belongs to
+    float owed;       // the share of a point of engine damage that has come together and is not handed over yet
+    float hot, cold;  // percent of the engine a minute on the last step: from the heat, and from the pedal on a cold engine
+};
+
+// Percent of what the engine takes that it loses a minute in the red zone: nothing at kTempRed, the settings'
+// HotDamagePercentPerMinute at kTempHotDamage, and more in the same measure above that.
+inline float DamageHot(float temp, const GaugeSettings &s)
+{
+    return temp > kTempRed ? s.hotDamage * (temp - kTempRed) / (kTempHotDamage - kTempRed) : 0.0f;
+}
+
+// The same for a cold engine under the pedal: the settings' ColdDamagePercentPerMinute with the pedal floored at
+// 0 C, less the warmer the engine and the lighter the foot. Nothing from kTempCold up, and nothing with the pedal
+// no further down than kDamagePedal.
+inline float DamageCold(float temp, float pedal, const GaugeSettings &s)
+{
+    if (!(temp < kTempCold) || !(pedal > kDamagePedal)) return 0.0f;
+    const float foot = (pedal - kDamagePedal) / (1.0f - kDamagePedal);
+    return s.coldDamage * (kTempCold - temp) / kTempCold * foot * foot;
+}
+
+// One step of dt seconds for the truck the game holds in the object id. Returns the whole points of the game's
+// engine damage that have come together since the last step; the rest of a point is kept for the next one. Only a
+// running engine wears. With the settings' Damage off nothing comes together, and the two rates are still worked
+// out, so the probe shows what the temperature would cost.
+inline int DamageStep(DamageModel &m, uint64_t id, const TruckRaw &t, const TempModel &temp, const GaugeSettings &s, float dt)
+{
+    if (m.id != id)
+    {
+        m = DamageModel{};
+        m.id = id;
+    }
+    m.hot = m.cold = 0.0f;
+    if (!s.damage) m.owed = 0.0f;
+    if (!temp.known || !TruckEngineOn(t) || !t.damageKnown) return 0;
+    m.hot = DamageHot(temp.temp, s);
+    m.cold = DamageCold(temp.temp, TruckPedal(t), s);
+    if (!s.damage) return 0;
+    const float points = (m.hot + m.cold) / 100.0f * (float)t.damageCapacity * dt / 60.0f;
+    if (points > 0.0f && points < 100000.0f) m.owed += points; // nothing for a rate that is no number
+    const int whole = (int)m.owed;
+    m.owed -= (float)whole;
+    return whole;
+}
+
+// Whether the model is adding to the engine's damage now.
+inline bool DamageAdding(const DamageModel &m, const GaugeSettings &s) { return s.damage && m.hot + m.cold > 0.0f; }
+
+// The damage lamp at a time in milliseconds: lit while the engine's damage is above half of what it takes (steady),
+// and blinking while damage is being added.
+inline bool DamageLamp(bool steady, bool adding, unsigned long long ms) { return adding ? (ms / kDamageBlinkMs) % 2 == 0 : steady; }
+
+// The engine's damage in a line of text for the probe log: what the game holds, what its own rule makes of that
+// with the engine's record (truck.h), and what the model is adding.
+inline void DamageProbeText(const TruckRaw &t, const EngineRecord &e, const DamageModel &m, const GaugeSettings &s, char *out, size_t size)
+{
+    if (!t.damageKnown)
+    {
+        sprintf_s(out, size, "engine damage: nothing behind the engine's handle");
+        return;
+    }
+    float effect = 0.0f, torque = 1.0f;
+    TruckEngineEffect(t.damage, t.damageCapacity, e, effect, torque);
+    const bool same = fabsf(effect - t.damageEffect) < 0.0005f && fabsf(torque - t.torqueFactor) < 0.0005f;
+    char record[256];
+    if (e.found) sprintf_s(record, "record %.80s: takes %d, the torque falls past %.2f of it, from x%.2f to x%.2f", e.name, e.capacity, e.threshold, e.torqueMin, e.torqueMax);
+    else if (!e.name[0]) sprintf_s(record, "the engine's record is looked up once the truck is driven: %.2f and x%.2f to x%.2f stand in", kEngineThreshold, kEngineTorqueMin, kEngineTorqueMax);
+    else sprintf_s(record, "no record of the engine \"%.80s\": %.2f and x%.2f to x%.2f stand in", e.name, kEngineThreshold, kEngineTorqueMin, kEngineTorqueMax);
+    sprintf_s(out, size,
+              "engine damage %d of %d, effect %.3f, torque x%.3f; by the game's rule effect %.3f and torque x%.3f (%s) | all parts %d of %d | %s | "
+              "the model: %.2f %% a minute from the heat, %.2f from the cold, %.2f of a point owed, Damage %s",
+              t.damage, t.damageCapacity, t.damageEffect, t.torqueFactor, effect, torque, same ? "as read" : "NOT as read", t.damageSum, t.damageSumCapacity, record, m.hot,
+              m.cold, m.owed, s.damage ? "on" : "off");
 }
 
 // The models' numbers in a line of text for the probe log.

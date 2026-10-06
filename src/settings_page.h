@@ -157,10 +157,11 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         PageTip("Red once the truck points up or down a slope by this much.");
     }
 
+    // the tips name temperatures in the unit the dial shows
+    auto degrees = [&](float c, char *out, size_t size) { sprintf_s(out, size, s.fahrenheit ? "%.0f F" : "%.0f C", s.fahrenheit ? c * 1.8f + 32.0f : c); };
+
     ImGui::SeparatorText("Coolant temperature");
     {
-        // the tips name temperatures in the unit the dial shows
-        auto degrees = [&](float c, char *out, size_t size) { sprintf_s(out, size, s.fahrenheit ? "%.0f F" : "%.0f C", s.fahrenheit ? c * 1.8f + 32.0f : c); };
         char from[16], to[16], tip[256];
         PageLabel("Warm after", labelX);
         ImGui::SetNextItemWidth(w);
@@ -210,6 +211,54 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         sprintf_s(tip, "A truck that has stood for long is this cold. In colder air the engine takes longer to warm up and is harder to overheat. "
                        "The cold lamp is lit below %s.", to);
         PageTip(tip);
+        // the ini holds the speed in km/h; the slider shows it in the unit the speedometer shows
+        float full = s.mph ? s.airFullKmh / 1.609f : s.airFullKmh;
+        PageLabel("Full airflow from", labelX);
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::SliderFloat("##airfull", &full, s.mph ? kAirFullRange[0] / 1.609f : kAirFullRange[0], s.mph ? kAirFullRange[1] / 1.609f : kAirFullRange[1],
+                               s.mph ? "%.0f mph" : "%.0f km/h", ImGuiSliderFlags_AlwaysClamp))
+        {
+            full = floorf(full + 0.5f);
+            s.airFullKmh = SettingsRange(s.mph ? full * 1.609f : full, kAirFullRange[0], kAirFullRange[1]);
+            act |= kPageChanged;
+        }
+        PageTip("The radiator gets more air the faster the truck drives, and all of it from this speed. Lower keeps a slow, hard pulling engine cooler. "
+                "Higher makes it run hotter at a crawl.");
+    }
+
+    ImGui::SeparatorText("Engine damage");
+    {
+        char at[16], from[16], tip[320];
+        changed(ImGui::Checkbox("The temperature costs the engine", &s.damage));
+        PageTip("On: an engine in the red zone, and a cold engine under a heavy pedal, take the game's own engine damage. A garage repairs it. "
+                "Off: the temperature is only shown.");
+        ImGui::BeginDisabled(!s.damage);
+        PageLabel("Overheating", labelX);
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::SliderFloat("##hotdamage", &s.hotDamage, 0.0f, 50.0f, "%.0f percent a minute", ImGuiSliderFlags_AlwaysClamp))
+        {
+            s.hotDamage = floorf(s.hotDamage + 0.5f);
+            act |= kPageChanged;
+        }
+        degrees(kTempHotDamage, at, sizeof at);
+        degrees(kTempRed, from, sizeof from);
+        sprintf_s(tip, "The share of what the engine can take that it loses each minute at %s. It loses nothing below the red zone at %s, "
+                       "less than this between the two and more above. 0 = none.", at, from);
+        PageTip(tip);
+        PageLabel("Cold engine", labelX);
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::SliderFloat("##colddamage", &s.coldDamage, 0.0f, 30.0f, "%.0f percent a minute", ImGuiSliderFlags_AlwaysClamp))
+        {
+            s.coldDamage = floorf(s.coldDamage + 0.5f);
+            act |= kPageChanged;
+        }
+        degrees(0.0f, at, sizeof at);
+        degrees(kTempCold, from, sizeof from);
+        sprintf_s(tip, "The share it loses each minute with the pedal floored at %s. Less the warmer the engine and the lighter the foot: "
+                       "nothing from %s up, and nothing with the pedal half down or less. 0 = none.", at, from);
+        PageTip(tip);
+        ImGui::EndDisabled();
+        if (view.engineCapacity > 0) ImGui::TextDisabled("This truck's engine has %d of %d left.", view.engineCapacity - view.engineDamage, view.engineCapacity);
     }
 
     ImGui::SeparatorText("Units");
@@ -352,6 +401,17 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         act |= kPageChanged;
     }
     PageTip("Writes the values read from the game into Gauges.log, every two seconds and whenever one changes.");
+    if (s.probe)
+    {
+        // a test of the write into the game's memory: the points go to the driven truck's engine on the mod's next pass
+        static const char *testTip = "A test of the write into the game. Adds to the driven truck's engine damage at once, whatever the switch under "
+                                     "Engine damage says. Gauges.log has the numbers.";
+        if (ImGui::Button("Add 1 engine damage###test1")) DamageTestAsk(1);
+        PageTip(testTip);
+        ImGui::SameLine();
+        if (ImGui::Button("Add 10###test10")) DamageTestAsk(10);
+        PageTip(testTip);
+    }
 
     ImGui::Separator();
     if (ImGui::Button("Defaults"))

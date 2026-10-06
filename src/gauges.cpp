@@ -5,8 +5,9 @@
 //
 // The state comes from the truck being driven, read out of the game's memory (truck.h): speed, gear, fuel and the
 // lamps. The engine speed, the range, the tilt and the coolant temperature are worked out from those values
-// (models.h). The cluster is on screen only while a truck is driven in the world. The mod stands down on any exe but
-// the one its addresses are from (kGaugesExeStamp).
+// (models.h). With the ini's Damage on, what the temperature costs the engine goes into the game's own engine
+// damage, and that is all the mod writes into the game's memory. The cluster is on screen only while a truck is
+// driven in the world. The mod stands down on any exe but the one its addresses are from (kGaugesExeStamp).
 #include <windows.h>
 #include <xinput.h>
 #include <stdio.h>
@@ -125,6 +126,10 @@ static void WriteIni(const GaugeSettings &s)
     num(L"OverheatMinutes", s.overheatMinutes);
     num(L"CoolDownMinutes", s.coolDownMinutes);
     num(L"AmbientC", s.ambientC);
+    num(L"AirFullKmh", s.airFullKmh);
+    whole(L"Damage", s.damage ? 1 : 0);
+    num(L"HotDamagePercentPerMinute", s.hotDamage);
+    num(L"ColdDamagePercentPerMinute", s.coldDamage);
     whole(L"ToggleKey", s.toggleKey);
     WritePrivateProfileStringW(kIniSection, L"PadToggle", Wide(s.padToggle).c_str(), ini.c_str());
     whole(L"Demo", s.demo ? 1 : 0);
@@ -161,6 +166,13 @@ static void ReadIni(GaugeSettings &s)
                         L"; the time from 90 C into the red zone at 118 C with the pedal floored and the wheels spinning at a standstill,\n"
                         L"; CoolDownMinutes the time a stopped engine takes from 90 C down to 40 C. AmbientC is the outside temperature\n"
                         L"; in degrees C: a truck that has stood for long is that cold. The cold lamp is lit below 60 C.\n"
+                        L"; AirFullKmh is the speed from which the radiator gets all the air that driving gives it (10 to 80 km/h).\n"
+                        L"; Lower keeps a slow, hard pulling engine cooler.\n"
+                        L"; Damage=1: the temperature costs the engine. An engine in the red zone takes the game's own engine damage:\n"
+                        L"; HotDamagePercentPerMinute percent of what it can take a minute at 125 C, less below that and more above.\n"
+                        L"; A cold engine (below 60 C) with the pedal more than half down takes ColdDamagePercentPerMinute percent a\n"
+                        L"; minute when it is floored at 0 C, and less the warmer it is. A garage repairs this like any engine damage.\n"
+                        L"; Damage=0: the temperature is only shown.\n"
                         L"; ToggleKey is the virtual key code of a key that hides and shows the cluster (0 = none; 120 = F9).\n"
                         L"; PadToggle does the same with pad buttons (XInput): DPadUp, DPadDown, DPadLeft, DPadRight, A, B, X, Y,\n"
                         L"; LB, RB, LS, RS, Start, Back, joined with + (LB+DPadUp), or None. The game sees these buttons too.\n"
@@ -197,6 +209,10 @@ static void ReadIni(GaugeSettings &s)
     s.overheatMinutes = IniFloat(L"OverheatMinutes", s.overheatMinutes, ini);
     s.coolDownMinutes = IniFloat(L"CoolDownMinutes", s.coolDownMinutes, ini);
     s.ambientC = IniFloat(L"AmbientC", s.ambientC, ini);
+    s.airFullKmh = IniFloat(L"AirFullKmh", s.airFullKmh, ini);
+    s.damage = IniBool(L"Damage", s.damage, ini);
+    s.hotDamage = IniFloat(L"HotDamagePercentPerMinute", s.hotDamage, ini);
+    s.coldDamage = IniFloat(L"ColdDamagePercentPerMinute", s.coldDamage, ini);
     s.toggleKey = IniInt(L"ToggleKey", s.toggleKey, ini);
     wchar_t buf[64] = {};
     GetPrivateProfileStringW(kIniSection, L"PadToggle", Wide(s.padToggle).c_str(), buf, 64, ini.c_str());
@@ -224,6 +240,10 @@ void SettingsPut(const GaugeSettings &in)
 }
 
 void SettingsReload() { InterlockedExchange(&g_reloadAsked, 1); }
+
+// The tab's test buttons (render thread): the points wait here until the mod's thread writes them on its next pass.
+static volatile LONG g_damageTest = 0;
+void DamageTestAsk(int points) { InterlockedExchangeAdd(&g_damageTest, points); }
 
 void ViewGet(GaugeView &out)
 {
@@ -292,6 +312,8 @@ static void LogSettings(const GaugeSettings &s)
     Log(L"settings: tilt lamp amber from %g degrees to a side, red from %g, red from %g up or down a slope", s.rollWarnDeg, s.rollDangerDeg, s.pitchDangerDeg);
     Log(L"settings: coolant warm after %g minutes of driving, in the red zone after %g minutes floored with the wheels spinning at a standstill, cool %g minutes after the engine stops, %g C outside",
         s.warmUpMinutes, s.overheatMinutes, s.coolDownMinutes, s.ambientC);
+    Log(L"settings: the radiator has all its air from %g km/h; engine damage %s: %g percent a minute at 125 C, %g percent a minute for a cold engine floored at 0 C",
+        s.airFullKmh, s.damage ? L"on" : L"off", s.hotDamage, s.coldDamage);
     Log(L"settings: toggle key %S, pad %S, demo values %s, probe %d", key, s.padToggle, s.demo ? L"on" : L"off", s.probe);
 }
 
@@ -304,6 +326,9 @@ static bool GameInFront()
 
 // Game memory is read through this, so an object the game freed under the mod is a failed read, not a fault.
 static bool PeekGame(uint64_t addr, void *out, size_t size) { return ReadProcessMemory(GetCurrentProcess(), (const void *)addr, out, size, nullptr) != 0; }
+
+// And written through this, for the same reason. The engine's damage is all the mod writes (TruckDamageAdd).
+static bool PokeGame(uint64_t addr, const void *in, size_t size) { return WriteProcessMemory(GetCurrentProcess(), (void *)addr, in, size, nullptr) != 0; }
 
 // The driven truck as the mod's thread follows it from pass to pass.
 struct TruckWatch
@@ -326,13 +351,24 @@ struct TruckWatch
     int probedLamp;             // the tilt lamp the probe wrote last
     TempModel temp;             // the coolant temperature of every truck driven since the game started
     int probedZone;             // where the coolant stood when the probe wrote last (TempZone)
+    DamageModel damage;         // what the temperature costs the engine of the truck at modelVehicle
+    EngineRecord engine;        // the record of the engine of the truck at engineVehicle
+    uint64_t engineVehicle;
+    ULONGLONG engineAt;         // when a record that was not found is looked for again
+    int owed, asked;            // whole points of engine damage that wait to be written: the model's, and the tab's test buttons'
+    int cause;                  // what the model's points came from: 1 the heat, 2 the pedal on a cold engine
+    ULONGLONG writeAt;          // when the next write may go out
+    ULONGLONG addedAt;          // when damage was last written, 0 = never: the damage lamp blinks for two seconds after
+    const char *refused;        // why the last write did not go out, a string literal; a reason is logged once
+    bool probedAdding;          // whether the model was adding damage when the probe wrote last
     ULONGLONG modelAt;          // when the models last ran
 };
 
 // One pass over the truck: finds its objects twice a second and when a read fails, reads its values and what the
-// game is showing, runs the models, writes the probe log. True when a truck is driven in the world and its values
-// hold up: raw, world and the models in w are then what to draw from.
-static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s, TruckRaw &raw, World &world)
+// game is showing, runs the models, writes the engine's damage into the game when there is some to write, and
+// writes the probe log. front: the game's window is in front. True when a truck is driven in the world and its
+// values hold up: raw, world and the models in w are then what to draw from.
+static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s, bool front, TruckRaw &raw, World &world)
 {
     const int probe = s.probe;
     const ULONGLONG now = GetTickCount64();
@@ -362,6 +398,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     const bool driving = read && TruckSane(raw) && WorldDriving(world);
     if (!driving) w.drivingSince = 0;
     else if (!w.drivingSince) w.drivingSince = now;
+    // what the tab's test buttons asked for goes to a truck that is being driven, further down
+    const int asked = (int)InterlockedExchange(&g_damageTest, 0);
+    if (asked > 0 && !driving) Log(L"engine damage: the test's %d points were not written, as no truck is being driven", asked);
     if (!read)
     {
         w.wayAt = 0;
@@ -383,7 +422,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     // stay with a truck through the menus, the map and the garage. On another truck the engine speed starts over; the
     // range starts over when the tank is another one (RangeStep), so a truck put back into the world keeps its
     // litres a kilometre. The tilt starts over on another truck and after a second without a step, as the truck may
-    // stand elsewhere by then. The coolant temperature stays with each truck (TempStep).
+    // stand elsewhere by then. The coolant temperature stays with each truck (TempStep). Engine damage that waits to
+    // be written belongs to the truck it came from and goes with it.
     const GaugeScale scale = GaugeScaleOf(s);
     if (driving)
     {
@@ -391,6 +431,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         {
             w.tach = TachModel{};
             w.tilt = TiltModel{};
+            w.owed = w.asked = 0;
             w.modelVehicle = w.refs.vehicle;
             w.modelAt = 0;
         }
@@ -400,21 +441,76 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         RangeStep(w.range, raw, dt);
         TiltStep(w.tilt, raw, s, dt);
         TempStep(w.temp, w.refs.vehicle, raw, TachShare(w.tach, scale), s, dt);
+        // the engine's record, once for each truck; one that was not found is looked for again every five seconds
+        if (w.refs.vehicle != w.engineVehicle || (!w.engine.found && now >= w.engineAt))
+        {
+            const bool first = w.refs.vehicle != w.engineVehicle;
+            if (TruckEngineRecord(m, w.refs.vehicle, w.engine))
+                Log(L"engine: %S takes %d damage; past %.2f of it the torque falls, from x%.2f to x%.2f", w.engine.name, w.engine.capacity, w.engine.threshold,
+                    w.engine.torqueMin, w.engine.torqueMax);
+            else if (first)
+                Log(L"engine: no record of \"%S\" was found; %.2f and x%.2f to x%.2f stand in", w.engine.name, kEngineThreshold, kEngineTorqueMin, kEngineTorqueMax);
+            w.engineVehicle = w.refs.vehicle;
+            w.engineAt = now + 5000;
+        }
+        // what the temperature costs the engine: the whole points wait in owed until they are written. Nothing comes
+        // together while the game's window is not in front, as the game may stand still then with its last values.
+        const int points = DamageStep(w.damage, w.refs.vehicle, raw, w.temp, s, front ? dt : 0.0f);
+        if (points > 0)
+        {
+            w.owed = w.owed + points < 1000000 ? w.owed + points : 1000000; // more than any engine takes
+            w.cause = w.damage.hot > 0.0f ? 1 : 2;
+        }
+        if (!s.damage) w.owed = 0;
+        if (asked > 0) w.asked = w.asked + asked < 1000000 ? w.asked + asked : 1000000;
+        // the write into the game: only once the truck has been driven for half a second without a break, with the
+        // game in front and none of its menus up, and at most once a second
+        if (w.owed + w.asked > 0 && front && !world.functionMenu && !world.menuInput && now - w.drivingSince >= 500 && now >= w.writeAt)
+        {
+            DamageWrite d;
+            const bool test = w.asked > 0;
+            if (TruckDamageAdd(m, w.refs, w.owed + w.asked, w.engine, d))
+            {
+                char cause[128], effect[256], after[64] = ""; // the effect and the torque factor are the game's: room for numbers of any size
+                if (test) strcpy_s(cause, "the tab's test");
+                else
+                    sprintf_s(cause, w.cause == 2 ? "the pedal on a cold engine at %.1f C (%.1f percent a minute)" : "the heat at %.1f C (%.1f percent a minute)", w.temp.temp,
+                              w.damage.hot + w.damage.cold);
+                if (d.effectAfter != d.effectBefore || d.torqueAfter != d.torqueBefore)
+                    sprintf_s(effect, "effect %.3f to %.3f, torque x%.3f to x%.3f", d.effectBefore, d.effectAfter, d.torqueBefore, d.torqueAfter);
+                else sprintf_s(effect, "effect %.3f, torque x%.3f", d.effectAfter, d.torqueAfter);
+                if (d.after != d.wrote) sprintf_s(after, "; the game held %d right after", d.after);
+                Log(L"engine damage: %d to %d of %d, from %S; %S%S", d.before, d.wrote, d.capacity, cause, effect, after);
+                w.addedAt = now;
+                w.refused = "";
+            }
+            else if (test || !w.refused || strcmp(w.refused, d.why))
+            {
+                Log(L"engine damage: %d of %d, not written: %S", d.before, d.capacity, d.why);
+                w.refused = d.why;
+            }
+            w.owed = w.asked = 0;
+            w.writeAt = now + 1000;
+        }
         w.modelAt = now;
     }
     if (probe && (!w.probedAny || now >= w.probeAt || TruckProbeEvent(raw, world, w.probed, w.probedWorld) || w.tilt.lamp != w.probedLamp ||
-                  TempZone(w.temp) != w.probedZone))
+                  TempZone(w.temp) != w.probedZone || DamageAdding(w.damage, s) != w.probedAdding))
     {
-        char first[640], second[1024], third[512], fourth[256], fifth[320];
+        char first[640], second[1024], third[512], fourth[256], fifth[320], sixth[1024];
         TruckProbeText(raw, world, w.byWay, first, sizeof first, second, sizeof second);
         ModelProbeText(raw, w.tach, w.range, scale, third, sizeof third);
         Log(L"probe: %S", first);
         Log(L"probe: %S", second);
         TiltProbeText(raw, w.tilt, fourth, sizeof fourth);
         TempProbeText(raw, w.temp, s, fifth, sizeof fifth);
+        // the record is the last driven truck's: a truck that is read and not driven yet has none
+        DamageProbeText(raw, w.engineVehicle == w.refs.vehicle ? w.engine : EngineRecord{}, w.damage, s, sixth, sizeof sixth);
         Log(L"probe: %S", third);
         Log(L"probe: %S", fourth);
         Log(L"probe: %S", fifth);
+        Log(L"probe: %S", sixth);
+        w.probedAdding = DamageAdding(w.damage, s);
         w.probedLamp = w.tilt.lamp;
         w.probedZone = TempZone(w.temp);
         w.probed = raw;
@@ -467,7 +563,7 @@ static DWORD WINAPI Run(void *)
     uint32_t padMask = PadParse(s.padToggle), padPrev = 0;
     ULONGLONG saveAt = 0;
     TruckWatch watch = {};
-    const TruckMemory memory = { PeekGame, g_base };
+    const TruckMemory memory = { PeekGame, g_base, PokeGame };
     for (;;)
     {
         Sleep(50);
@@ -522,7 +618,7 @@ static DWORD WINAPI Run(void *)
         // what the cluster shows: the truck being driven; with the ini's Demo, demo values while none is
         TruckRaw raw;
         World world;
-        const bool driving = TruckPass(watch, memory, s, raw, world);
+        const bool driving = TruckPass(watch, memory, s, front, raw, world);
         GaugeView v = {};
         v.demo = !driving && s.demo;
         v.hidden = !visible ? kHiddenByToggle : driving || s.demo ? kShown : kHiddenNoTruck;
@@ -536,6 +632,11 @@ static DWORD WINAPI Run(void *)
             v.st.rollDeg = watch.tilt.rollDeg;
             v.st.tempC = watch.temp.temp;
             v.st.cold = TempCold(watch.temp);
+            // the damage lamp blinks while the model adds damage, and for two seconds after a write
+            const ULONGLONG ms = GetTickCount64();
+            v.st.damage = DamageLamp(v.st.damage, DamageAdding(watch.damage, s) || (watch.addedAt && ms - watch.addedAt < 2000), ms);
+            v.engineDamage = raw.damage;
+            v.engineCapacity = raw.damageKnown ? raw.damageCapacity : 0;
         }
         else if (v.demo) GaugeDemo(v.st, s);
         AcquireSRWLockExclusive(&g_viewLock);
@@ -577,6 +678,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.redlineRpm == b.redlineRpm && a.maxRpm == b.maxRpm && a.speedMax == b.speedMax && a.toggleKey == b.toggleKey &&
            a.rollWarnDeg == b.rollWarnDeg && a.rollDangerDeg == b.rollDangerDeg && a.pitchDangerDeg == b.pitchDangerDeg &&
            a.warmUpMinutes == b.warmUpMinutes && a.overheatMinutes == b.overheatMinutes && a.coolDownMinutes == b.coolDownMinutes && a.ambientC == b.ambientC &&
+           a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.coldDamage == b.coldDamage &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe;
 }
 
@@ -606,6 +708,8 @@ int wmain(int argc, wchar_t **argv)
           "defaults: strip, open style, metric, the air dial off, no toggle, demo off, probe off, the tilt lamp at 15, 25 and 35 degrees");
     Check(d.warmUpMinutes == 3.0f && d.overheatMinutes == 1.5f && d.coolDownMinutes == 15.0f && d.ambientC == 15.0f,
           "defaults: the coolant warm after 3 minutes, in the red zone after 1.5, cool after 15, with 15 C outside");
+    Check(d.airFullKmh == 30.0f && !d.damage && d.hotDamage == 10.0f && d.coldDamage == 5.0f,
+          "defaults: the radiator's full airflow from 30 km/h, engine damage off, 10 percent a minute for the heat and 5 for the cold");
 
     // keys the mod does not know, in its own section and in another one
     WritePrivateProfileStringW(kIniSection, L"FromALaterVersion", L"7", ini.c_str());
@@ -633,6 +737,10 @@ int wmain(int argc, wchar_t **argv)
     c.overheatMinutes = 2.3f;
     c.coolDownMinutes = 20.0f;
     c.ambientC = -12.5f;
+    c.airFullKmh = 45.5f;
+    c.damage = true;
+    c.hotDamage = 22.5f;
+    c.coldDamage = 7.5f;
     c.toggleKey = VK_F9;
     strcpy_s(c.padToggle, "RB+DPadUp");
     c.demo = true;
@@ -643,7 +751,8 @@ int wmain(int argc, wchar_t **argv)
                             c.tachClass != d.tachClass && c.idleRpm != d.idleRpm && c.redlineRpm != d.redlineRpm && c.maxRpm != d.maxRpm &&
                             c.speedMax != d.speedMax && c.rollWarnDeg != d.rollWarnDeg && c.rollDangerDeg != d.rollDangerDeg &&
                             c.pitchDangerDeg != d.pitchDangerDeg && c.warmUpMinutes != d.warmUpMinutes && c.overheatMinutes != d.overheatMinutes &&
-                            c.coolDownMinutes != d.coolDownMinutes && c.ambientC != d.ambientC && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
+                            c.coolDownMinutes != d.coolDownMinutes && c.ambientC != d.ambientC && c.airFullKmh != d.airFullKmh && c.damage != d.damage &&
+                            c.hotDamage != d.hotDamage && c.coldDamage != d.coldDamage && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
                             c.demo != d.demo && c.probe != d.probe;
     WriteIni(c);
     ReadIni(b);
@@ -665,7 +774,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 24, "ini: the help text survives a write (24 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 31, "ini: the help text survives a write (31 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());
@@ -698,6 +807,18 @@ int wmain(int argc, wchar_t **argv)
     WritePrivateProfileStringW(kIniSection, L"AmbientC", L"70", ini.c_str());
     ReadIni(b);
     Check(coldest == kAmbientRange[0] && b.ambientC == kAmbientRange[1], "ini: the outside temperature stays between 40 below and 50 C");
+    WritePrivateProfileStringW(kIniSection, L"AirFullKmh", L"5", ini.c_str());
+    WritePrivateProfileStringW(kIniSection, L"HotDamagePercentPerMinute", L"500", ini.c_str());
+    WritePrivateProfileStringW(kIniSection, L"ColdDamagePercentPerMinute", L"-3", ini.c_str());
+    WritePrivateProfileStringW(kIniSection, L"Damage", L"7", ini.c_str());
+    ReadIni(b);
+    const bool held = b.airFullKmh == kAirFullRange[0] && b.hotDamage == kDamageRange[1] && b.coldDamage == 0.0f && b.damage;
+    WritePrivateProfileStringW(kIniSection, L"AirFullKmh", L"200", ini.c_str());
+    WritePrivateProfileStringW(kIniSection, L"HotDamagePercentPerMinute", L"nan", ini.c_str());
+    WritePrivateProfileStringW(kIniSection, L"Damage", L"0", ini.c_str());
+    ReadIni(b);
+    Check(held && b.airFullKmh == kAirFullRange[1] && b.hotDamage == d.hotDamage && !b.damage,
+          "ini: the radiator's speed stays between 10 and 80 km/h, the damage rates between 0 and 100, and a rate that is no number gives the default");
 
     // the scales in force
     GaugeScale k = GaugeScaleOf(d);

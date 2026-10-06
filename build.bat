@@ -1,7 +1,8 @@
 @echo off
 rem Builds out\Gauges.asi (the mod), out\test\settings_test.exe (the ini round trip and the scales, offline),
-rem out\test\truck_test.exe (the reader of the game's memory against a made up game, offline),
-rem out\test\models_test.exe (the engine speed, the range, the tilt and the coolant temperature on made up drives, offline),
+rem out\test\truck_test.exe (the reader of the game's memory and the write of engine damage against a made up game, offline),
+rem out\test\models_test.exe (the engine speed, the range, the tilt, the coolant temperature and what it costs the engine
+rem on made up drives, offline),
 rem out\test\gauge_preview.exe (the cluster and the Gauges tab drawn into PNG files, offline; test\build_preview.bat)
 rem and out\version.dll (the .asi loader, from the sources in tools; the game keeps the loader it has).
 rem x64, static CRT, Visual Studio 2022 Community. test.bat runs the tests.
@@ -16,9 +17,10 @@ cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I deps\imgui /I deps\reshade\
 cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /LD /Fo:out\obj\gauges.obj /Fe:out\Gauges.asi src\gauges.cpp out\obj\gauge_overlay.obj /link user32.lib || goto fail
 rem the settings test: the same source with a main in place of the mod's thread
 cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /D GAUGES_SETTINGS_TEST /Fo:out\obj\settings_test.obj /Fe:out\test\settings_test.exe src\gauges.cpp /link user32.lib || goto fail
-rem the truck test: the reader of the game's memory (src\truck.h) against a made up game
+rem the truck test: the reader of the game's memory and the write of engine damage (src\truck.h) against a made up game
 cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I src /Fo:out\obj\truck_test.obj /Fe:out\test\truck_test.exe test\truck_test.cpp || goto fail
-rem the models test: the engine speed, the range, the tilt and the coolant temperature (src\models.h) on made up drives
+rem the models test: the engine speed, the range, the tilt, the coolant temperature and what it costs the engine
+rem (src\models.h) on made up drives
 cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I src /Fo:out\obj\models_test.obj /Fe:out\test\models_test.exe test\models_test.cpp || goto fail
 rem the loader
 ml64 /nologo /c /Fo out\obj\version_stubs.obj tools\version_stubs.asm || goto fail

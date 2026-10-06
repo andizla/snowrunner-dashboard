@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.6.0] 2026-10-07
+
+- The temperature can cost the engine. With `Damage` on, an engine in the red zone takes the game's own engine damage: 10 percent of what it can take every minute at 125 C, nothing at 118 C, less between the two and more above. Floored at a standstill with the wheels spinning, an engine is used up about five minutes after it enters the red zone.
+- A cold engine suffers under a heavy pedal. Below 60 C, with the pedal more than half down, it loses up to 5 percent a minute (floored at 0 C), and less the warmer it is. A cold start driven with the pedal floored costs 2 to 3 percent of the engine. Half pedal or less costs nothing.
+- The damage is the game's own: a garage repairs it, and past the engine's threshold the game takes torque away and burns more fuel. The mod stops one point short of what the engine takes, so it never stops the engine itself.
+- The engine damage lamp blinks while the mod adds damage.
+- `Damage` is off by default, and the temperature is then only shown, as before. The Gauges tab has a new Engine damage section with the switch and the two rates, `HotDamagePercentPerMinute` and `ColdDamagePercentPerMinute`.
+- The radiator gets all its air from 30 km/h, where it took 50 km/h before. A truck in the low range at its own top speed now runs hot and settles just under the red zone, and the needle stays out of the red zone from about 7 km/h up. Slower crawls and a truck that spins its wheels without moving still overheat. The new setting `AirFullKmh` moves that speed: lower keeps a slow, hard pulling engine cooler.
+- With `Probe=1` the log has a sixth line with the engine's damage, the engine's record and what the mod adds.
+
 ## [0.5.1] 2026-10-07
 
 - A truck you take out of the garage again is as warm as you left it, less what it cooled while you drove another truck. In 0.5.0 it came back cold, as the game makes a new truck of it. The mod now knows a truck by its tank, its wheels and its gearbox.

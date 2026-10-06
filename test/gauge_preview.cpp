@@ -27,6 +27,7 @@
 #include "settings_page.h"
 
 volatile LONG g_pageCapturing = 0; // gauge_overlay.cpp's, which is not part of this program
+void DamageTestAsk(int) {}         // gauges.cpp's: the tab's test buttons write nothing here
 
 static ID3D11Device *g_dev = nullptr;
 static ID3D11DeviceContext *g_ctx = nullptr;
@@ -392,15 +393,19 @@ int wmain(int argc, wchar_t **argv)
         s.redlineRpm = 2400.0f;
         s.toggleKey = VK_F9;
         strcpy_s(s.padToggle, "RB+DPadUp");
+        s.damage = true;
+        s.probe = 1; // the test buttons show with the probe log on
         GaugeView view = {};
         view.show = view.demo = true;
         view.st = drive;
+        view.engineDamage = 14;
+        view.engineCapacity = 150;
         PageState st;
         ImGui::GetStyle().FontScaleMain = 2.0f;
         int act = 0;
         wchar_t path[MAX_PATH];
         swprintf_s(path, L"%s\\settings.png", out);
-        RenderPng(path, 1100, 1560, [&](ImDrawList *, ImDrawList *) {
+        RenderPng(path, 1100, 1800, [&](ImDrawList *, ImDrawList *) {
             ImGui::SetNextWindowPos(ImVec2(10, 10));
             ImGui::SetNextWindowSize(ImVec2(1080, 0));
             ImGui::Begin("Gauges", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);

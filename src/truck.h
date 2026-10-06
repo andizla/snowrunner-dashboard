@@ -1,8 +1,10 @@
-// truck.h: reads the truck being driven out of the game's memory. Nothing is written, and nothing in the game is
-// called. Every read goes through one function (TruckMemory::peek), so the offline test can put a made up game in its
-// place (test\truck_test.cpp). gauges.cpp finds the truck's objects twice a second and when a read fails (TruckFind),
-// reads their values on every pass (TruckRead) and asks what the game is showing (WorldRead). The engine speed,
-// the range, the tilt and the coolant temperature are worked out from these values in models.h.
+// truck.h: reads the truck being driven out of the game's memory, and writes one thing into it: the damage of the
+// truck's engine (TruckDamageAdd). Nothing in the game is called. Every read goes through one function
+// (TruckMemory::peek) and every write through another (TruckMemory::poke), so the offline test can put a made up
+// game in their place (test\truck_test.cpp). gauges.cpp finds the truck's objects twice a second and when a read
+// fails (TruckFind), reads their values on every pass (TruckRead) and asks what the game is showing (WorldRead). The
+// engine speed, the range, the tilt, the coolant temperature and what it costs the engine are worked out from these
+// values in models.h.
 //
 // Where the values are, in the Steam build of 22 July 2026 (kGaugesExeStamp):
 //   control = [exe + 0x2a8eb78]      the game's object for the truck being driven (it exists while a level is loaded);
@@ -18,8 +20,9 @@
 //   action = [vehicle + 0x68]        the drive train: + 0x38 power factor (float), + 0x3C automatic (byte),
 //                                    + 0x44 throttle (float, below 0 = forwards), + 0x48 handbrake, + 0x49 all wheel
 //                                    drive, + 0x4A differential lock (bytes), + 0x70 the gear engaged, + 0x74 the gear
-//                                    picked (ints), + 0xB4 how hard the engine pulls (0 to 1) and + 0xCC (floats),
-//                                    + 0x58 .. + 0x60 the wheel speed of each gear (floats: reverse, 1 .. N, high)
+//                                    picked (ints), + 0xB4 how hard the engine pulls (0 to 1) and + 0xCC the share
+//                                    of its torque a damaged engine keeps (floats), + 0x58 .. + 0x60 the wheel speed
+//                                    of each gear (floats: reverse, 1 .. N, high)
 //   model = [vehicle + 0x60]         + 0x5E8 fuel in litres, + 0x5F0 the tank's size
 //   chassis = [model + 0x230]        the rigid body: + 0x170 its forward axis, + 0x180 up, + 0x190 left (four floats
 //                                    each, y is the world's up), + 0x1A0 position, + 0x230 velocity
@@ -27,6 +30,15 @@
 //                                    + 0xE8 how it is driven (int), + 0x16C its turning speed in rad/s
 //   vehicle + 0x150                  the handle of the engine's damage: { int damage, int capacity, float effect };
 //                                    + 0x148 the gearbox's and + 0x158 the fuel tank's, the same way
+//   vehicle + 0x108, + 0x10C         the damage of all the truck's parts together and what they take (ints), as the
+//                                    game's damage update last summed them
+//   vehicle + 0x930 .. + 0x938       the names of the engine sets the truck picks its engine from (0x20 bytes each);
+//                                    vehicle + 0x968 the name of the engine fitted
+//   [exe + 0x2a9e8e0 + 8]            the game's engine sets, a list: an entry holds the next one at + 0, the set's
+//                                    name at + 0x10 and its engines at + 0x30, a tree by name. An engine's record is
+//                                    0x40 into its node: + 0x74 the share of its damage from which the torque falls,
+//                                    + 0x78 the torque factor there and + 0x7C with the engine worn out (floats),
+//                                    + 0x84 the damage it takes (int)
 //   game = [exe + 0x2a8eb90]         the game's main object: + 0x30 (int) above 0 while a menu holds the game,
 //                                    + 0x4A (byte) set while a level loads
 //   [exe + 0x2a8eb30]                the map, when there is one: + 0x148 (byte) set while it is open
@@ -38,16 +50,20 @@
 #include "gauges.h"
 
 static const uint64_t kRvaControl = 0x2a8eb78, kRvaWheelClass = 0x2258918, kRvaGame = 0x2a8eb90, kRvaMap = 0x2a8eb30, kRvaViewer = 0x2a8eb38,
-                      kRvaGarage = 0x2a90728, kRvaInput = 0x2a8ebe0;
+                      kRvaGarage = 0x2a90728, kRvaInput = 0x2a8ebe0, kRvaEngineSets = 0x2a9e8e0;
 enum { kMaxWheels = 32, kMaxGears = 16 };
 
-// Game memory: peek copies size bytes from addr and says whether it could. In the game that is ReadProcessMemory on
-// the game's own process, so an object the game freed under the mod is a failed read and not a fault.
+// Game memory: peek copies size bytes from addr and says whether it could, and poke copies size bytes to addr the
+// same way (it is left out where nothing is to be written). In the game they are ReadProcessMemory and
+// WriteProcessMemory on the game's own process, so an object the game freed under the mod is a failed call and not
+// a fault.
 struct TruckMemory
 {
     bool (*peek)(uint64_t addr, void *out, size_t size);
     uint64_t base; // where the exe is loaded
+    bool (*poke)(uint64_t addr, const void *in, size_t size);
     template <typename T> bool get(uint64_t addr, T &out) const { return addr >= 0x10000 && peek(addr, &out, sizeof out); }
+    template <typename T> bool put(uint64_t addr, const T &in) const { return poke && addr >= 0x10000 && poke(addr, &in, sizeof in); }
 };
 
 // Where the driven truck's objects are. TruckFind fills it; TruckRead uses it until a read fails or the game drives
@@ -80,6 +96,7 @@ struct TruckRaw
     bool damageKnown;
     int damage, damageCapacity;
     float damageEffect;
+    int damageSum, damageSumCapacity; // vehicle + 0x108, + 0x10C: all the parts' damage and what they take, as the game last summed them
     float gearboxEffect, tankEffect; // what the gearbox's and the fuel tank's damage does, 0 when sound
     bool burnKnown;                // the numbers of the game's fuel burn were read
     float burnShare[2];            // vehicle + 0xE38, + 0xE3C
@@ -190,6 +207,12 @@ inline bool TruckRead(const TruckMemory &m, const TruckRefs &r, TruckRaw &t)
         t.damageCapacity = block[1];
         memcpy(&t.damageEffect, &block[2], 4);
     }
+    int sums[2];
+    if (m.get(r.vehicle + 0x108, sums))
+    {
+        t.damageSum = sums[0];
+        t.damageSumCapacity = sums[1];
+    }
     // the fuel burn's numbers; a truck without them is still a truck
     const uint64_t gearbox = TruckBlock(m, r.vehicle + 0x148), tank = TruckBlock(m, r.vehicle + 0x158);
     if (gearbox) m.get(gearbox + 8, t.gearboxEffect);
@@ -232,6 +255,204 @@ inline bool TruckSane(const TruckRaw &t)
     return t.wheels > 0 && isfinite(t.speed) && fabsf(t.speed) < 200.0f && isfinite(t.fuel) && isfinite(t.tank) && t.tank > 0.0f && t.tank < 100000.0f &&
            t.fuel >= 0.0f && t.fuel <= t.tank * 1.01f && t.gear >= -1 && t.gear <= kMaxGears && t.gearEngaged >= -1 &&
            t.gearEngaged <= kMaxGears && isfinite(t.throttle) && fabsf(t.throttle) <= 2.0f && isfinite(t.stall) && isfinite(t.startTimer);
+}
+
+// ---- the engine's record, and the write of its damage ----
+
+enum { kMaxText = 96, kMaxEngineSets = 32, kMaxSetEntries = 1024, kMaxTreeSteps = 64 };
+// What stands in for an engine whose record is not found: the share of its damage from which the torque falls, the
+// torque factor there and the torque factor with the engine worn out.
+static const float kEngineThreshold = 0.7f, kEngineTorqueMin = 1.0f, kEngineTorqueMax = 0.6f;
+
+// A text as the game keeps it, 0x20 bytes: the characters themselves while it has room for fewer than 16, else a
+// pointer to them; the length at + 0x10 and the room at + 0x18. False for one that cannot be read or has kMaxText
+// characters or more.
+inline bool TruckText(const TruckMemory &m, uint64_t at, char *out, size_t &length)
+{
+    uint8_t text[0x20];
+    uint64_t chars = 0, size = 0, room = 0;
+    out[0] = 0;
+    length = 0;
+    if (!m.get(at, text)) return false;
+    memcpy(&chars, text, 8);
+    memcpy(&size, text + 0x10, 8);
+    memcpy(&room, text + 0x18, 8);
+    if (size >= kMaxText || room < size) return false;
+    if (room < 16) memcpy(out, text, (size_t)size);
+    else if (size && (chars < 0x10000 || !m.peek(chars, out, (size_t)size))) return false;
+    out[size] = 0;
+    length = (size_t)size;
+    return true;
+}
+
+// The order of two texts as the game's own compare has it (RVA 0x4d8230): by their bytes, and the shorter one first
+// when the longer begins with it. Below 0: a comes first; 0: the same text.
+inline int TruckTextOrder(const char *a, size_t aLength, const char *b, size_t bLength)
+{
+    const int order = memcmp(a, b, aLength < bLength ? aLength : bLength);
+    return order ? order : aLength < bLength ? -1 : aLength > bLength ? 1 : 0;
+}
+
+// An engine's numbers for its damage, from the game's record of the engine. found is false when the record was not
+// reached; kEngineThreshold, kEngineTorqueMin and kEngineTorqueMax then stand in.
+struct EngineRecord
+{
+    bool found;
+    char name[kMaxText];                    // the engine fitted, by its name in the game's files
+    float threshold, torqueMin, torqueMax;  // record + 0x74, + 0x78, + 0x7C
+    int capacity;                           // record + 0x84: the damage the engine takes
+};
+
+// The engines of a set, by the set's name: the tree at + 0x30 of the set's entry in the game's list of sets. 0 when
+// no set has the name. The game finds the entry through a hash; here the list is read from end to end.
+inline uint64_t TruckEngineSet(const TruckMemory &m, const char *name, size_t length)
+{
+    uint64_t head = 0, entry = 0, tree = 0;
+    if (!m.get(m.base + kRvaEngineSets + 8, head) || !m.get(head, entry)) return 0;
+    for (int i = 0; i < kMaxSetEntries && entry && entry != head; i++)
+    {
+        char key[kMaxText];
+        size_t keyLength = 0;
+        if (TruckText(m, entry + 0x10, key, keyLength) && keyLength == length && !memcmp(key, name, length)) return m.get(entry + 0x30, tree) ? tree : 0;
+        if (!m.get(entry, entry)) return 0;
+    }
+    return 0;
+}
+
+// An engine's record in a set's tree, by the engine's name. The tree's head holds the root at + 8. A node holds its
+// left child at + 0, its right child at + 0x10, a byte at + 0x19 that is set on the head alone, the engine's name
+// at + 0x20 and the record at + 0x40. The way down is the game's own (RVA 0xc3c010): right while the node's name
+// comes before the engine's, else left, keeping the node. 0 when the engine is not in the tree.
+inline uint64_t TruckEngineInSet(const TruckMemory &m, uint64_t tree, const char *name, size_t length)
+{
+    uint64_t at = 0, kept = tree;
+    char key[kMaxText];
+    size_t keyLength = 0;
+    if (!m.get(tree + 8, at)) return 0;
+    for (int i = 0; i < kMaxTreeSteps; i++)
+    {
+        uint8_t head = 1;
+        if (!m.get(at + 0x19, head)) return 0;
+        if (head)
+        {
+            // the node kept last is the first whose name does not come before the engine's: it is the engine's, or the engine is not here
+            if (kept == tree || !TruckText(m, kept + 0x20, key, keyLength) || TruckTextOrder(key, keyLength, name, length)) return 0;
+            return kept + 0x40;
+        }
+        if (!TruckText(m, at + 0x20, key, keyLength)) return 0;
+        const bool before = TruckTextOrder(key, keyLength, name, length) < 0;
+        if (!before) kept = at;
+        if (!m.get(at + (before ? 0x10 : 0), at)) return 0;
+    }
+    return 0;
+}
+
+// The record of the engine fitted to a vehicle, found as the game's damage update finds it (RVA 0xd7bb90) and by
+// reading only: the engine's name is looked up in each of the truck's engine sets in turn. Every walk ends after a
+// set number of steps, so memory that is not what it is taken for gives "not found". e.name is the engine's name
+// whenever that could be read.
+inline bool TruckEngineRecord(const TruckMemory &m, uint64_t vehicle, EngineRecord &e)
+{
+    e = EngineRecord{};
+    size_t length = 0;
+    uint64_t begin = 0, end = 0;
+    if (!TruckText(m, vehicle + 0x968, e.name, length) || !length) return false;
+    if (!m.get(vehicle + 0x930, begin) || !m.get(vehicle + 0x938, end) || end <= begin || (end - begin) % 0x20 || end - begin > kMaxEngineSets * 0x20) return false;
+    for (uint64_t set = begin; set < end; set += 0x20)
+    {
+        char setName[kMaxText];
+        size_t setLength = 0;
+        if (!TruckText(m, set, setName, setLength)) continue;
+        const uint64_t tree = TruckEngineSet(m, setName, setLength);
+        const uint64_t record = tree ? TruckEngineInSet(m, tree, e.name, length) : 0;
+        float numbers[3]; // + 0x74 the threshold, + 0x78 and + 0x7C the two torque factors
+        int capacity = 0;
+        if (!record || !m.get(record + 0x74, numbers) || !m.get(record + 0x84, capacity)) continue;
+        // numbers that no engine has: the record is not what it was taken for
+        if (!(numbers[0] >= 0.0f && numbers[0] <= 1.0f) || !(numbers[1] >= 0.0f && numbers[1] <= 10.0f) || !(numbers[2] >= 0.0f && numbers[2] <= 10.0f) || capacity <= 0)
+            return false;
+        e.threshold = numbers[0];
+        e.torqueMin = numbers[1];
+        e.torqueMax = numbers[2];
+        e.capacity = capacity;
+        e.found = true;
+        return true;
+    }
+    return false;
+}
+
+// What the game's damage update makes of an engine's damage (RVA 0xd6f690). While the damage's share of what the
+// engine takes is no more than the record's threshold there is no effect, and the engine keeps all its torque. Past
+// the threshold the effect is how far the share has come on the way from there to 1, and the torque factor goes
+// from the record's first to its second with it.
+inline void TruckEngineEffect(int damage, int capacity, const EngineRecord &e, float &effect, float &torque)
+{
+    const float threshold = e.found ? e.threshold : kEngineThreshold, first = e.found ? e.torqueMin : kEngineTorqueMin,
+                second = e.found ? e.torqueMax : kEngineTorqueMax;
+    float share = capacity > 0 ? (float)damage / (float)capacity : 0.0f;
+    effect = 0.0f;
+    torque = 1.0f;
+    if (share > threshold)
+    {
+        share = (share - threshold) / (1.0f - threshold);
+        effect = share;
+        torque = (1.0f - share) * first + share * second;
+    }
+}
+
+// What a write of engine damage did. written: the damage went into the game; why: what stood in the way when it
+// did not. before, wrote and capacity are the engine's damage as read, as written and what the engine takes; after
+// is what the game held right after the write. The effect and the torque factor are as read and as left.
+struct DamageWrite
+{
+    bool written;
+    const char *why; // a string literal
+    int before, wrote, after, capacity;
+    float effectBefore, effectAfter, torqueBefore, torqueAfter;
+};
+
+// Adds points to the damage of the driven truck's engine, in the game's memory. The damage only goes up, and it
+// stops one short of what the engine takes: the last point stops the engine, and that stays the game's to do. Once
+// the damage is past the record's threshold, the effect and the torque factor are written as the game's own damage
+// update would leave them (TruckEngineEffect), and never to less of an effect than the game holds. Nothing is
+// written unless the truck is still the one in r, the engine's damage reads as an engine's does, and the engine
+// takes what its record says it takes.
+inline bool TruckDamageAdd(const TruckMemory &m, const TruckRefs &r, int points, const EngineRecord &e, DamageWrite &w)
+{
+    w = DamageWrite{};
+    w.why = "";
+    uint64_t vehicle = 0, action = 0;
+    int block[3] = {}, after = 0;
+    float torque = 0.0f, effect = 0.0f;
+    if (!m.poke || points <= 0) { w.why = "there is nothing to write"; return false; }
+    if (!m.get(r.control + 8, vehicle) || vehicle != r.vehicle || !m.get(r.vehicle + 0x68, action) || action != r.action)
+    {
+        w.why = "the truck is no longer the one being driven";
+        return false;
+    }
+    const uint64_t data = TruckBlock(m, r.vehicle + 0x150);
+    if (!data || !m.get(data, block) || !m.get(r.action + 0xCC, torque)) { w.why = "the engine's damage could not be read"; return false; }
+    w.before = w.wrote = w.after = block[0];
+    w.capacity = block[1];
+    memcpy(&w.effectBefore, &block[2], 4);
+    w.effectAfter = w.effectBefore;
+    w.torqueBefore = w.torqueAfter = torque;
+    if (block[1] < 2 || block[1] >= 1000000 || block[0] < 0 || block[0] > block[1]) { w.why = "the engine's damage does not read as an engine's"; return false; }
+    if (e.found && e.capacity != block[1]) { w.why = "the engine does not take what its record says"; return false; }
+    const int room = block[1] - 1 - block[0];
+    if (room <= 0) { w.why = "the engine is at its last point"; return false; }
+    const int to = block[0] + (points < room ? points : room);
+    if (!m.put(data, to)) { w.why = "the game's memory did not take the write"; return false; }
+    w.written = true;
+    w.wrote = w.after = to;
+    if (m.get(data, after)) w.after = after;
+    TruckEngineEffect(to, block[1], e, effect, torque);
+    if (effect > w.effectBefore)
+    {
+        if (m.put(data + 8, effect)) w.effectAfter = effect;
+        if (m.put(r.action + 0xCC, torque)) w.torqueAfter = torque;
+    }
+    return true;
 }
 
 // What the game is showing. control: the driven truck's control object, 0 when there is none.
@@ -320,6 +541,7 @@ inline bool TruckProbeEvent(const TruckRaw &a, const World &wa, const TruckRaw &
     return a.flags != b.flags || a.handbrake != b.handbrake || a.awd != b.awd || a.diffLock != b.diffLock || a.gear != b.gear || a.gearEngaged != b.gearEngaged ||
            a.automatic != b.automatic ||
            a.powerFactor != b.powerFactor || a.damage != b.damage || a.damageCapacity != b.damageCapacity || a.torqueFactor != b.torqueFactor ||
+           a.damageEffect != b.damageEffect || a.damageSum != b.damageSum ||
            a.gearSpeeds != b.gearSpeeds || a.wheels != b.wheels || (a.throttle != 0.0f) != (b.throttle != 0.0f) || (a.stall > 0.0f) != (b.stall > 0.0f) ||
            (a.startTimer > 0.0f) != (b.startTimer > 0.0f) || wa.menu != wb.menu || wa.loading != wb.loading || wa.mapThere != wb.mapThere ||
            wa.mapOpen != wb.mapOpen || wa.viewer != wb.viewer || wa.garage != wb.garage || wa.menuInput != wb.menuInput || wa.shifter != wb.shifter ||

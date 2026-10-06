@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#define GAUGES_VERSION "0.5.1"
+#define GAUGES_VERSION "0.6.0"
 
 // The exe the addresses in this mod are from (SnowRunner on Steam, the build of 22 July 2026). On any other the mod
 // stands down.
@@ -60,6 +60,10 @@ struct GaugeSettings
     float overheatMinutes;   // OverheatMinutes: minutes from 90 C into the red zone at 118 C with the pedal floored and the wheels spinning at a standstill
     float coolDownMinutes;   // CoolDownMinutes: minutes a stopped engine takes from 90 C down to 40 C
     float ambientC;          // AmbientC: the outside temperature in degrees C; an engine that has stood for long is this cold
+    float airFullKmh;        // AirFullKmh: the speed in km/h from which the radiator gets all the air that driving gives it
+    bool damage;             // Damage: an engine in the red zone and a cold engine under a heavy pedal take the game's engine damage
+    float hotDamage;         // HotDamagePercentPerMinute: percent of what the engine takes that it loses a minute at 125 C
+    float coldDamage;        // ColdDamagePercentPerMinute: the same for a cold engine with the pedal floored at 0 C
     int toggleKey;           // ToggleKey: virtual key code of the key that hides and shows the cluster, 0 = none
     char padToggle[32];      // PadToggle: pad buttons that do the same ("LB+DPadUp"), "None"
     bool demo;               // Demo: for work on the mod: demo values are drawn whenever no truck is driven, menus and loading screens included
@@ -84,6 +88,10 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.overheatMinutes = 1.5f;
     s.coolDownMinutes = 15.0f;
     s.ambientC = 15.0f;
+    s.airFullKmh = 30.0f;
+    s.damage = false;
+    s.hotDamage = 10.0f;
+    s.coldDamage = 5.0f;
     strcpy_s(s.padToggle, "None");
     s.demo = false;
     s.probe = 0;
@@ -91,17 +99,19 @@ inline void SettingsDefaults(GaugeSettings &s)
 
 // The range of each number: what the ini and the tab hold the settings to. A tinted face stops at 0.85, as a darker
 // one is the solid style. The tilt lamp's angles are degrees, the coolant's three times minutes, the outside
-// temperature degrees C.
+// temperature degrees C, the speed of the radiator's full airflow km/h, the two damage rates percent a minute.
 static const float kFaceOpacityMax = 0.85f, kScaleMin = 0.4f, kScaleMax = 3.0f, kOpacityMin = 0.1f, kOffsetMax = 4000.0f;
 static const float kIdleRange[2] = { 300.0f, 3000.0f }, kRedlineRange[2] = { 1000.0f, 12000.0f }, kMaxRpmRange[2] = { 1500.0f, 15000.0f },
                    kSpeedMaxRange[2] = { 40.0f, 300.0f }, kTiltRange[2] = { 1.0f, 89.0f };
 static const float kWarmUpRange[2] = { 0.5f, 60.0f }, kOverheatRange[2] = { 0.25f, 60.0f }, kCoolDownRange[2] = { 1.0f, 240.0f },
-                   kAmbientRange[2] = { -40.0f, 50.0f };
+                   kAmbientRange[2] = { -40.0f, 50.0f }, kAirFullRange[2] = { 10.0f, 80.0f }, kDamageRange[2] = { 0.0f, 100.0f };
 
 // The temperatures in C the coolant's three times are measured between: WarmUpMinutes from kTempOutside outside up
 // to kTempWarm, OverheatMinutes from kTempHot into the red zone at kTempRed, CoolDownMinutes from kTempHot down to
-// kTempCooled. The cold lamp is lit below kTempCold. The model, the dial's zones and the tab's texts all use these.
-static const float kTempOutside = 15.0f, kTempWarm = 85.0f, kTempHot = 90.0f, kTempRed = 118.0f, kTempCooled = 40.0f, kTempCold = 60.0f;
+// kTempCooled. The cold lamp is lit below kTempCold. HotDamagePercentPerMinute is what an engine at kTempHotDamage
+// loses. The model, the dial's zones and the tab's texts all use these.
+static const float kTempOutside = 15.0f, kTempWarm = 85.0f, kTempHot = 90.0f, kTempRed = 118.0f, kTempCooled = 40.0f, kTempCold = 60.0f,
+                   kTempHotDamage = 125.0f;
 
 inline float SettingsRange(float v, float lo, float hi) { return v < lo ? lo : v > hi ? hi : v; }
 // 0 (the class's own) stays 0; anything else is held to the range.
@@ -128,6 +138,9 @@ inline void SettingsClamp(GaugeSettings &s)
     s.overheatMinutes = SettingsRange(s.overheatMinutes, kOverheatRange[0], kOverheatRange[1]);
     s.coolDownMinutes = SettingsRange(s.coolDownMinutes, kCoolDownRange[0], kCoolDownRange[1]);
     s.ambientC = SettingsRange(s.ambientC, kAmbientRange[0], kAmbientRange[1]);
+    s.airFullKmh = SettingsRange(s.airFullKmh, kAirFullRange[0], kAirFullRange[1]);
+    s.hotDamage = SettingsRange(s.hotDamage, kDamageRange[0], kDamageRange[1]);
+    s.coldDamage = SettingsRange(s.coldDamage, kDamageRange[0], kDamageRange[1]);
     s.toggleKey = s.toggleKey < 0 || s.toggleKey > 255 ? 0 : s.toggleKey;
     s.probe = s.probe < 0 ? 0 : s.probe;
 }
@@ -186,13 +199,15 @@ inline void GaugeDemo(GaugeState &st, const GaugeSettings &s)
 }
 
 // What the render thread draws: show = the cluster is on screen, demo = st holds the demo values, hidden = why it is
-// not on screen.
+// not on screen. engineDamage of engineCapacity is the driven truck's engine damage as the game holds it, for the
+// tab; engineCapacity is 0 while it is not known.
 enum { kShown, kHiddenByToggle, kHiddenNoTruck };
-struct GaugeView { bool show, demo; int hidden; GaugeState st; };
+struct GaugeView { bool show, demo; int hidden; GaugeState st; int engineDamage, engineCapacity; };
 
 void SettingsGet(GaugeSettings &out);       // the settings in force (any thread)
 void SettingsPut(const GaugeSettings &in);  // edited settings: the mod takes them at once and saves the ini a second later
 void SettingsReload();                      // read the ini again (the tab's button)
+void DamageTestAsk(int points);             // the tab's test buttons: the mod adds this much to the driven truck's engine damage on its next pass
 void ViewGet(GaugeView &out);               // what to draw (any thread)
 void GaugeLog(const wchar_t *fmt, ...);     // a line in Gauges.log (any thread)
 bool OverlayInit(HMODULE self);             // registers with ReShade (the cluster and the Gauges tab); false = no ReShade
