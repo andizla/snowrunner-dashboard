@@ -38,7 +38,7 @@ static void Stand(TruckRaw &t, float pitch, float roll)
     t.forward[0] = cosf(p);
     t.forward[1] = sinf(p);
     t.up[1] = cosf(p) * cosf(r);
-    t.right[1] = -cosf(p) * sinf(r);
+    t.left[1] = cosf(p) * sinf(r);
 }
 
 // A scout standing with its engine running in neutral: four wheels, the front two driven with all wheel drive only,
@@ -409,7 +409,7 @@ int main(int argc, char **argv)
         const bool gentle = lamp(34.0f, 0.0f) == 0 && lamp(-34.0f, 0.0f) == 0;
         const bool up = lamp(36.0f, 0.0f) == 2 && Near(tilt.pitchDeg, 36.0f, 0.1f);
         Check(gentle && up && lamp(-36.0f, 0.0f) == 2 && Near(tilt.pitchDeg, -36.0f, 0.1f), "tilt: red from 35 degrees up or down a slope, no amber before it");
-        // 20 degrees about the truck's own length on a slope of 20 put its right side 18.7 degrees below the horizon
+        // 20 degrees about the truck's own length on a slope of 20 put its left side 18.7 degrees above the horizon
         Check(lamp(20.0f, 20.0f) == 1 && Near(tilt.rollDeg, 18.75f, 0.1f) && Near(tilt.pitchDeg, 20.0f, 0.1f), "tilt: on a slope the lean is how far the truck's side hangs below the horizon");
         // a bump throws the truck to 40 degrees for one pass: the lamp stays green; held there, it goes amber, then red
         lamp(0.0f, 0.0f);
@@ -446,7 +446,7 @@ int main(int argc, char **argv)
         lamp(-12.0f, -10.0f);
         TiltProbeText(c, tilt, line, sizeof line);
         Check(strstr(line, "nose down 12.0 deg, leaning left 9.8 deg, lamp amber") && strstr(line, "forward -0.208"), "tilt: the probe's line carries the angles, the lamp and the axes");
-        c.right[1] = nanf("");
+        c.left[1] = nanf("");
         TiltStep(tilt, c, set, kDt);
         Check(tilt.lamp < 0 && !tilt.running, "tilt: axes that are no numbers leave the lamp dark");
     }

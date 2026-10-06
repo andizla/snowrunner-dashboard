@@ -107,10 +107,10 @@ static void MakeGame()
     Put(kSpeeds + 0x20, gearBurn);
     Put(kVehicle + 0xE50, kSpeeds + 0x20);
     Put(kVehicle + 0xE58, kSpeeds + 0x20 + sizeof gearBurn);
-    const float forward[3] = { 0.6f, 0.0f, 0.8f }, up[3] = { 0.0f, 1.0f, 0.0f }, right[3] = { -0.8f, 0.0f, 0.6f }, velocity[3] = { 3.0f, 0.0f, 4.0f }, position[3] = { 100.0f, 20.0f, 300.0f };
+    const float forward[3] = { 0.6f, 0.0f, 0.8f }, up[3] = { 0.0f, 1.0f, 0.0f }, left[3] = { -0.8f, 0.0f, 0.6f }, velocity[3] = { 3.0f, 0.0f, 4.0f }, position[3] = { 100.0f, 20.0f, 300.0f };
     Put(kChassis + 0x170, forward);
     Put(kChassis + 0x180, up);
-    Put(kChassis + 0x190, right);
+    Put(kChassis + 0x190, left);
     Put(kChassis + 0x1A0, position);
     Put(kChassis + 0x230, velocity);
 }
@@ -215,18 +215,18 @@ int main()
     TruckToState(t, w, s, st);
     Check(Near(t.speed, -5.0f) && Near(st.speedKmh, 18.0f), "state: the speedometer shows the speed backwards too");
 
-    // a tilted chassis: the nose 30 degrees up a slope, the truck leaning 20 degrees to its right
+    // a tilted chassis: the nose 30 degrees up a slope, the truck leaning 20 degrees to its left
     MakeGame();
     TruckFind(kMemory, r);
     TruckRead(kMemory, r, t);
-    const bool level = Near(t.forward[1], 0.0f) && Near(t.up[1], 1.0f) && Near(t.right[1], 0.0f) && Near(t.right[2], 0.6f);
-    const float tiltedForward[3] = { 0.866f, 0.5f, 0.0f }, tiltedUp[3] = { -0.4698f, 0.8138f, 0.342f }, tiltedRight[3] = { 0.171f, -0.2962f, 0.9397f };
+    const bool level = Near(t.forward[1], 0.0f) && Near(t.up[1], 1.0f) && Near(t.left[1], 0.0f) && Near(t.left[2], 0.6f);
+    const float tiltedForward[3] = { 0.866f, 0.5f, 0.0f }, tiltedUp[3] = { -0.4698f, 0.8138f, 0.342f }, tiltedLeft[3] = { 0.171f, -0.2962f, 0.9397f };
     Put(kChassis + 0x170, tiltedForward);
     Put(kChassis + 0x180, tiltedUp);
-    Put(kChassis + 0x190, tiltedRight);
+    Put(kChassis + 0x190, tiltedLeft);
     const float uphill[3] = { 4.33f, 2.5f, 0.0f };
     Put(kChassis + 0x230, uphill);
-    Check(level && TruckRead(kMemory, r, t) && Near(t.forward[1], 0.5f) && Near(t.up[1], 0.8138f) && Near(t.right[1], -0.2962f) && Near(t.up[2], 0.342f) && Near(t.speed, 5.0f) &&
+    Check(level && TruckRead(kMemory, r, t) && Near(t.forward[1], 0.5f) && Near(t.up[1], 0.8138f) && Near(t.left[1], -0.2962f) && Near(t.up[2], 0.342f) && Near(t.speed, 5.0f) &&
           TruckSane(t), "read: the chassis axes of a truck on level ground and of one tilted on a slope, which drives along its nose");
 
     // what the game is showing

@@ -21,7 +21,7 @@
 //                                    picked (ints), + 0xB4 how hard the engine pulls (0 to 1) and + 0xCC (floats),
 //                                    + 0x58 .. + 0x60 the wheel speed of each gear (floats: reverse, 1 .. N, high)
 //   model = [vehicle + 0x60]         + 0x5E8 fuel in litres, + 0x5F0 the tank's size
-//   chassis = [model + 0x230]        the rigid body: + 0x170 its forward axis, + 0x180 up, + 0x190 right (four floats
+//   chassis = [model + 0x230]        the rigid body: + 0x170 its forward axis, + 0x180 up, + 0x190 left (four floats
 //                                    each, y is the world's up), + 0x1A0 position, + 0x230 velocity
 //   [vehicle + 0x200] .. [+ 0x208]   the wheel models; wheel = [wheel model + 0x2C8] (its class at exe + 0x2258918):
 //                                    + 0xE8 how it is driven (int), + 0x16C its turning speed in rad/s
@@ -86,7 +86,7 @@ struct TruckRaw
     float burnAwd, burnEngine, burnGearbox, burnIdle, burnLeak; // + 0xE40, + 0xE44, + 0xE48, + 0xE68, + 0xE6C
     int gearBurns;                 // entries of gearBurn: reverse, neutral, the gears, high
     float gearBurn[kMaxGears + 1];
-    float forward[3], up[3], right[3], position[3], velocity[3]; // the chassis: its three axes in the world, where it is, how it moves
+    float forward[3], up[3], left[3], position[3], velocity[3]; // the chassis: its three axes in the world, where it is, how it moves
     float speed;                   // metres a second along the forward axis, below 0 backwards
 };
 
@@ -216,11 +216,11 @@ inline bool TruckRead(const TruckMemory &m, const TruckRefs &r, TruckRaw &t)
             }
         }
     }
-    float frame[16]; // + 0x170 forward, + 0x180 up, + 0x190 right, + 0x1A0 position, four floats each
+    float frame[16]; // + 0x170 forward, + 0x180 up, + 0x190 left, + 0x1A0 position, four floats each
     if (!m.get(r.chassis + 0x170, frame) || !m.get(r.chassis + 0x230, t.velocity)) return false;
     memcpy(t.forward, frame, sizeof t.forward);
     memcpy(t.up, frame + 4, sizeof t.up);
-    memcpy(t.right, frame + 8, sizeof t.right);
+    memcpy(t.left, frame + 8, sizeof t.left);
     memcpy(t.position, frame + 12, sizeof t.position);
     t.speed = t.velocity[0] * t.forward[0] + t.velocity[1] * t.forward[1] + t.velocity[2] * t.forward[2];
     return true;

@@ -15,8 +15,8 @@
 // The readout shows no number until the truck has driven half a kilometre: the figure of a shorter way is mostly
 // the pulling away.
 //
-// The tilt. The chassis has three axes in the world: forward, up and right. How far the forward axis points up is the
-// slope the truck stands on, and how far the right axis points up or down is its lean to the side. Both are smoothed
+// The tilt. The chassis has three axes in the world: forward, up and left. How far the forward axis points up is the
+// slope the truck stands on, and how far the left axis points up or down is its lean to the side. Both are smoothed
 // over a third of a second and held against the settings' angles for the lamp.
 #pragma once
 #include "truck.h"
@@ -234,7 +234,7 @@ inline float TiltAngle(float y, bool over)
 struct TiltModel
 {
     bool running;         // the model has a truck: the next step smooths from the axes it holds
-    float forward, up, right; // how far each chassis axis points up (its y), smoothed
+    float forward, up, left;  // how far each chassis axis points up (its y), smoothed
     float pitchDeg;       // above 0: the nose points up the slope
     float rollDeg;        // above 0: the truck leans to its right; beyond 90 either way it lies on its roof
     int lamp;             // 0 level, 1 warning, 2 danger, below 0 not known
@@ -251,7 +251,7 @@ inline int TiltLamp(float roll, float pitch, const GaugeSettings &s, float back)
 // angles and back down kTiltBack degrees below them.
 inline void TiltStep(TiltModel &m, const TruckRaw &t, const GaugeSettings &s, float dt)
 {
-    if (!isfinite(t.forward[1]) || !isfinite(t.up[1]) || !isfinite(t.right[1]))
+    if (!isfinite(t.forward[1]) || !isfinite(t.up[1]) || !isfinite(t.left[1]))
     {
         m = TiltModel{};
         m.lamp = -1;
@@ -260,10 +260,10 @@ inline void TiltStep(TiltModel &m, const TruckRaw &t, const GaugeSettings &s, fl
     const float follow = m.running ? 1.0f - expf(-dt / kTiltSmooth) : 1.0f;
     m.forward += (t.forward[1] - m.forward) * follow;
     m.up += (t.up[1] - m.up) * follow;
-    m.right += (t.right[1] - m.right) * follow;
+    m.left += (t.left[1] - m.left) * follow;
     m.running = true;
     m.pitchDeg = TiltAngle(m.forward, false);
-    m.rollDeg = -TiltAngle(m.right, m.up < 0.0f); // the right side lower than the left: leaning right
+    m.rollDeg = TiltAngle(m.left, m.up < 0.0f); // the left side higher than the right: leaning right
     const float roll = fabsf(m.rollDeg), pitch = fabsf(m.pitchDeg);
     const int now = TiltLamp(roll, pitch, s, 0.0f), held = TiltLamp(roll, pitch, s, kTiltBack);
     if (m.lamp == 2 && held == 2) m.lamp = 2;                               // red stays until the truck is well out of it
@@ -275,9 +275,9 @@ inline void TiltStep(TiltModel &m, const TruckRaw &t, const GaugeSettings &s, fl
 inline void TiltProbeText(const TruckRaw &t, const TiltModel &m, char *out, size_t size)
 {
     static const char *lamps[4] = { "dark", "green", "amber", "red" };
-    sprintf_s(out, size, "tilt: nose %s %.1f deg, leaning %s %.1f deg, lamp %s | y of the chassis axes as read: forward %.3f, up %.3f, right %.3f",
+    sprintf_s(out, size, "tilt: nose %s %.1f deg, leaning %s %.1f deg, lamp %s | y of the chassis axes as read: forward %.3f, up %.3f, left %.3f",
               m.pitchDeg < 0.0f ? "down" : "up", fabsf(m.pitchDeg), m.rollDeg < 0.0f ? "left" : "right", fabsf(m.rollDeg), lamps[m.lamp < 0 || m.lamp > 2 ? 0 : m.lamp + 1],
-              t.forward[1], t.up[1], t.right[1]);
+              t.forward[1], t.up[1], t.left[1]);
 }
 
 // The models' numbers in a line of text for the probe log.
