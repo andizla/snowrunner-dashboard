@@ -669,6 +669,7 @@ int main(int argc, char **argv)
             const float leftHauler = Heat(fleet, hauler, 0x2000, set, 600.0f, 1.0f, usualRevs, kUsualKmh);
             // back in the first truck: ten minutes went by with its engine stopped
             TempStep(fleet, 0x1000, scout, 0.0f, set, 0.0f);
+            const float scoutBack = fleet.temp;
             const bool cooled = Near(fleet.temp, 15.0f + (left - 15.0f) * expf(-TempRatesOf(set).off * 600.0f), 0.3f) && fleet.temp < left - 20.0f;
             // and straight back into the second: nothing was driven in between
             TempStep(fleet, 0x2000, hauler, 0.0f, set, 0.0f);
@@ -691,6 +692,15 @@ int main(int argc, char **argv)
             d.tank = 120.0f;
             TempStep(fleet, 0x4000, d, 0.0f, set, 0.0f);
             Check(warmed && another && fleet.temp > kTempWarm, "coolant: the same object with another tank is another truck and starts cold, and the first one is not forgotten");
+            // the first truck taken out of the garage again: a new object with its build. Five minutes were driven in
+            // another truck since it was left. A truck with its tank and six wheels is not it.
+            TempStep(fleet, 0x5000, scout, 0.0f, set, 0.0f);
+            const bool remembered = Near(fleet.temp, 15.0f + (scoutBack - 15.0f) * expf(-TempRatesOf(set).off * 300.0f), 0.3f) && fleet.temp > 30.0f;
+            TruckRaw sixWheeler = scout;
+            sixWheeler.wheels = 6;
+            TempStep(fleet, 0x6000, sixWheeler, 0.0f, set, 0.0f);
+            Check(remembered && Near(fleet.temp, 15.0f, 0.01f),
+                  "coolant: a truck taken out again as a new object is as warm as it was left, less the cooling, and a truck of another build with its tank starts cold");
             // more trucks than the model remembers, four minutes floored in each
             TempModel many = {};
             TruckRaw x = c;

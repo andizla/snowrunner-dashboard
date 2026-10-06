@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.1] 2026-10-07
+
+- A truck you take out of the garage again is as warm as you left it, less what it cooled while you drove another truck. In 0.5.0 it came back cold, as the game makes a new truck of it. The mod now knows a truck by its tank, its wheels and its gearbox.
+
 ## [0.5.0] 2026-10-06
 
 - The coolant temperature dial works. The mod works the temperature out from how hard the engine works and how fast the truck drives. A cold engine starts at the outside temperature and is at 85 C after about three minutes of driving. The thermostat then holds it: about 86 C at idle, near 100 C when the truck works hard at speed.

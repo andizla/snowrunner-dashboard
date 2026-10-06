@@ -381,9 +381,10 @@ inline TempRates TempRatesOf(const GaugeSettings &s)
 
 struct TempModel
 {
-    // A truck the model has driven: the game's object for it, its tank's size, its coolant temperature, and the
-    // model's clock when it was last driven. id 0 is a free place.
-    struct Truck { uint64_t id; float tank, temp; double left; } truck[kTempTrucks];
+    // A truck the model has driven: the game's object for it, its build (the tank's size, the number of wheels and
+    // of the gearbox's entries), its coolant temperature, and the model's clock when it was last driven. id 0 is a
+    // free place.
+    struct Truck { uint64_t id; float tank; int wheels, gears; float temp; double left; } truck[kTempTrucks];
     bool known;      // truck[at] is the truck being driven
     int at;
     double clock;    // seconds the model has been stepped for, whichever truck was driven
@@ -391,34 +392,43 @@ struct TempModel
     float load, heat, cooling, perSecond; // the last step, for the probe: the load, the heat made and taken away, degrees a second
 };
 
+// Whether a remembered truck has the build of the truck being read: the same tank and wheels, and the same gearbox
+// where both were read.
+inline bool TempSameBuild(const TempModel::Truck &k, const TruckRaw &t)
+{
+    return k.id && fabsf(k.tank - t.tank) <= 0.01f && k.wheels == t.wheels && (k.gears == t.gearSpeeds || !k.gears || !t.gearSpeeds);
+}
+
 // One step of dt seconds for the truck the game holds in the object id; revs is TachShare. A truck driven for the
 // first time is as cold as the air outside. One driven before has cooled as a stopped engine does for as long as
-// other trucks were driven; the time the game spends in its menus does not count. A new object with the same tank
-// as the truck driven until now is that truck put back into the world, and stays as warm as it was. The same object
-// with another tank is another truck that the game made in the old one's place.
+// other trucks were driven; the time the game spends in its menus does not count. The game makes a new object for
+// a truck it puts back into the world or takes out of the garage: a new object with the build of a truck driven
+// before is that truck (the one left last, when there are several), and is as warm as it was left, less the
+// cooling. The same object with another tank is another truck that the game made in the old one's place.
 inline void TempStep(TempModel &m, uint64_t id, const TruckRaw &t, float revs, const GaugeSettings &s, float dt)
 {
     const TempRates r = TempRatesOf(s);
     if (!m.known || m.truck[m.at].id != id || fabsf(m.truck[m.at].tank - t.tank) > 0.01f)
     {
-        int to = -1, room = -1;
+        int to = -1, like = -1, room = -1;
         for (int i = 0; i < kTempTrucks; i++)
         {
             const TempModel::Truck &k = m.truck[i];
             if (k.id == id && fabsf(k.tank - t.tank) <= 0.01f) to = i;
+            if (TempSameBuild(k, t) && (like < 0 || k.left > m.truck[like].left)) like = i;
             if (m.known && i == m.at) continue;
             if (room < 0 || (m.truck[room].id && (!k.id || k.left < m.truck[room].left))) room = i;
         }
-        if (to >= 0) m.truck[to].temp = s.ambientC + (m.truck[to].temp - s.ambientC) * expf(-r.off * (float)(m.clock - m.truck[to].left));
-        else if (m.known && fabsf(m.truck[m.at].tank - t.tank) <= 0.01f)
+        if (to < 0 && like >= 0)
         {
-            to = m.at;
+            to = like;
             m.truck[to].id = id;
         }
+        if (to >= 0) m.truck[to].temp = s.ambientC + (m.truck[to].temp - s.ambientC) * expf(-r.off * (float)(m.clock - m.truck[to].left));
         else
         {
             to = room;
-            m.truck[to] = { id, t.tank, s.ambientC, m.clock };
+            m.truck[to] = { id, t.tank, t.wheels, t.gearSpeeds, s.ambientC, m.clock };
         }
         m.at = to;
         m.known = true;
@@ -426,6 +436,8 @@ inline void TempStep(TempModel &m, uint64_t id, const TruckRaw &t, float revs, c
     TempModel::Truck &k = m.truck[m.at];
     m.clock += dt;
     k.left = m.clock;
+    k.wheels = t.wheels;
+    if (t.gearSpeeds) k.gears = t.gearSpeeds;
     const float was = k.temp;
     if (TruckEngineOn(t))
     {
