@@ -1,8 +1,8 @@
 // truck.h: reads the truck being driven out of the game's memory. Nothing is written, and nothing in the game is
 // called. Every read goes through one function (TruckMemory::peek), so the offline test can put a made up game in its
 // place (test\truck_test.cpp). gauges.cpp finds the truck's objects twice a second and when a read fails (TruckFind),
-// reads their values on every pass (TruckRead) and asks what the game is showing (WorldRead). The engine speed and
-// the range are worked out from these values in models.h.
+// reads their values on every pass (TruckRead) and asks what the game is showing (WorldRead). The engine speed,
+// the range and the tilt are worked out from these values in models.h.
 //
 // Where the values are, in the Steam build of 22 July 2026 (kGaugesExeStamp):
 //   control = [exe + 0x2a8eb78]      the game's object for the truck being driven (it exists while a level is loaded);
@@ -21,7 +21,8 @@
 //                                    picked (ints), + 0xB4 how hard the engine pulls (0 to 1) and + 0xCC (floats),
 //                                    + 0x58 .. + 0x60 the wheel speed of each gear (floats: reverse, 1 .. N, high)
 //   model = [vehicle + 0x60]         + 0x5E8 fuel in litres, + 0x5F0 the tank's size
-//   chassis = [model + 0x230]        the rigid body: + 0x170 forward axis, + 0x1A0 position, + 0x230 velocity
+//   chassis = [model + 0x230]        the rigid body: + 0x170 its forward axis, + 0x180 up, + 0x190 right (four floats
+//                                    each, y is the world's up), + 0x1A0 position, + 0x230 velocity
 //   [vehicle + 0x200] .. [+ 0x208]   the wheel models; wheel = [wheel model + 0x2C8] (its class at exe + 0x2258918):
 //                                    + 0xE8 how it is driven (int), + 0x16C its turning speed in rad/s
 //   vehicle + 0x150                  the handle of the engine's damage: { int damage, int capacity, float effect };
@@ -85,7 +86,7 @@ struct TruckRaw
     float burnAwd, burnEngine, burnGearbox, burnIdle, burnLeak; // + 0xE40, + 0xE44, + 0xE48, + 0xE68, + 0xE6C
     int gearBurns;                 // entries of gearBurn: reverse, neutral, the gears, high
     float gearBurn[kMaxGears + 1];
-    float forward[3], position[3], velocity[3];
+    float forward[3], up[3], right[3], position[3], velocity[3]; // the chassis: its three axes in the world, where it is, how it moves
     float speed;                   // metres a second along the forward axis, below 0 backwards
 };
 
@@ -218,6 +219,8 @@ inline bool TruckRead(const TruckMemory &m, const TruckRefs &r, TruckRaw &t)
     float frame[16]; // + 0x170 forward, + 0x180 up, + 0x190 right, + 0x1A0 position, four floats each
     if (!m.get(r.chassis + 0x170, frame) || !m.get(r.chassis + 0x230, t.velocity)) return false;
     memcpy(t.forward, frame, sizeof t.forward);
+    memcpy(t.up, frame + 4, sizeof t.up);
+    memcpy(t.right, frame + 8, sizeof t.right);
     memcpy(t.position, frame + 12, sizeof t.position);
     t.speed = t.velocity[0] * t.forward[0] + t.velocity[1] * t.forward[1] + t.velocity[2] * t.forward[2];
     return true;
@@ -265,10 +268,10 @@ inline const char *TruckGearMode(const TruckRaw &t, bool shifter)
     return "";
 }
 
-// The state the cluster draws, from the truck's values. The engine speed and the range are not among them: gauges.cpp
-// puts in what models.h works out, and here the tachometer rests at idle and the range is not known. The temperature,
-// the boost and the tilt have no source in this version: their needles rest at the low end of their dials, and their
-// lamps stay dark.
+// The state the cluster draws, from the truck's values. The engine speed, the range and the tilt are not among them:
+// gauges.cpp puts in what models.h works out, and here the tachometer rests at idle, the range is not known and the
+// tilt lamp is dark. The temperature and the boost have no source in this version: their needles rest at the low end
+// of their dials, and the cold lamp stays dark.
 inline void TruckToState(const TruckRaw &t, const World &w, const GaugeSettings &s, GaugeState &st)
 {
     st = GaugeState{};

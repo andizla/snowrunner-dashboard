@@ -126,6 +126,37 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     changed(ImGui::Checkbox("Lamps", &s.showLamps));
     PageTip("Handbrake, headlights, all wheel drive, differential lock, low gear, engine damage, cold engine and tilt.");
 
+    ImGui::SeparatorText("Tilt lamp");
+    {
+        // red never comes before amber: the one being dragged takes the other along
+        PageLabel("Amber from", labelX);
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::SliderFloat("##rollwarn", &s.rollWarnDeg, 5.0f, 45.0f, "%.0f degrees to a side", ImGuiSliderFlags_AlwaysClamp))
+        {
+            s.rollWarnDeg = floorf(s.rollWarnDeg + 0.5f);
+            if (s.rollDangerDeg < s.rollWarnDeg) s.rollDangerDeg = s.rollWarnDeg;
+            act |= kPageChanged;
+        }
+        PageTip("The lamp is green while the truck stands level and amber once it leans to a side by this much.");
+        PageLabel("Red from", labelX);
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::SliderFloat("##rolldanger", &s.rollDangerDeg, 5.0f, 60.0f, "%.0f degrees to a side", ImGuiSliderFlags_AlwaysClamp))
+        {
+            s.rollDangerDeg = floorf(s.rollDangerDeg + 0.5f);
+            if (s.rollWarnDeg > s.rollDangerDeg) s.rollWarnDeg = s.rollDangerDeg;
+            act |= kPageChanged;
+        }
+        PageTip("Red once the truck leans to a side by this much. The truck in the lamp leans as yours does.");
+        PageLabel("Red on a slope from", labelX);
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::SliderFloat("##pitchdanger", &s.pitchDangerDeg, 10.0f, 60.0f, "%.0f degrees up or down", ImGuiSliderFlags_AlwaysClamp))
+        {
+            s.pitchDangerDeg = floorf(s.pitchDangerDeg + 0.5f);
+            act |= kPageChanged;
+        }
+        PageTip("Red once the truck points up or down a slope by this much.");
+    }
+
     ImGui::SeparatorText("Units");
     changed(ImGui::Checkbox("Miles per hour", &s.mph));
     PageTip("Speed in mph and the range in miles. Off: km/h and kilometres.");

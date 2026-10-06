@@ -1,6 +1,6 @@
-// models.h: what the cluster shows that the game does not hold: the engine speed and the fuel range, worked out from
-// the truck's values (truck.h) on every pass of the mod's thread. No game memory is touched here, so the offline test
-// (test\models_test.cpp) runs the models on drives it makes up.
+// models.h: what the cluster shows that the game does not hold: the engine speed, the fuel range and the tilt, worked
+// out from the truck's values (truck.h) on every pass of the mod's thread. No game memory is touched here, so the
+// offline test (test\models_test.cpp) runs the models on drives it makes up.
 //
 // The engine speed. The game has no engine speed, only wheels, gears and a pedal. Each gear has a wheel speed it is
 // governed to, which the game works out from the gearbox's number for the gear (TruckGearTop). The share of it the
@@ -14,6 +14,10 @@
 // Fuel burned while standing counts against no distance and is left out, as is fuel that leaves the tank in one go.
 // The readout shows no number until the truck has driven half a kilometre: the figure of a shorter way is mostly
 // the pulling away.
+//
+// The tilt. The chassis has three axes in the world: forward, up and right. How far the forward axis points up is the
+// slope the truck stands on, and how far the right axis points up or down is its lean to the side. Both are smoothed
+// over a third of a second and held against the settings' angles for the lamp.
 #pragma once
 #include "truck.h"
 
@@ -211,6 +215,69 @@ inline void RangeStep(RangeModel &m, const TruckRaw &t, float dt)
     }
     if (m.perKm > 0.0f) m.rangeKm = fminf(t.fuel / m.perKm, kRangeMax);
     else if (span >= kRangeFirst) m.rangeKm = kRangeMax; // driven that far without burning anything
+}
+
+// ---- the tilt ----
+
+static const float kTiltSmooth = 0.3f; // seconds the chassis axes are smoothed over, so a bump does not light the lamp
+static const float kTiltBack = 2.0f;   // degrees below an angle of the settings at which the lamp goes back, so it does not flicker at the angle
+static const float kDegrees = 57.29578f;
+
+// The angle in degrees whose sine is the share y of an axis that points up, and beyond 90 for a truck lying on its
+// roof (over: its up axis points down).
+inline float TiltAngle(float y, bool over)
+{
+    const float a = asinf(SettingsRange(y, -1.0f, 1.0f)) * kDegrees;
+    return !over ? a : a < 0.0f ? -180.0f - a : 180.0f - a;
+}
+
+struct TiltModel
+{
+    bool running;         // the model has a truck: the next step smooths from the axes it holds
+    float forward, up, right; // how far each chassis axis points up (its y), smoothed
+    float pitchDeg;       // above 0: the nose points up the slope
+    float rollDeg;        // above 0: the truck leans to its right; beyond 90 either way it lies on its roof
+    int lamp;             // 0 level, 1 warning, 2 danger, below 0 not known
+};
+
+// The lamp for a lean to the side of roll degrees and a slope of pitch degrees, with back degrees taken off the
+// settings' angles: amber from RollWarnDeg, red from RollDangerDeg, and red from PitchDangerDeg up or down a slope.
+inline int TiltLamp(float roll, float pitch, const GaugeSettings &s, float back)
+{
+    return roll >= s.rollDangerDeg - back || pitch >= s.pitchDangerDeg - back ? 2 : roll >= s.rollWarnDeg - back ? 1 : 0;
+}
+
+// One step of dt seconds. The first step on a truck takes the axes as they are. The lamp goes up at the settings'
+// angles and back down kTiltBack degrees below them.
+inline void TiltStep(TiltModel &m, const TruckRaw &t, const GaugeSettings &s, float dt)
+{
+    if (!isfinite(t.forward[1]) || !isfinite(t.up[1]) || !isfinite(t.right[1]))
+    {
+        m = TiltModel{};
+        m.lamp = -1;
+        return;
+    }
+    const float follow = m.running ? 1.0f - expf(-dt / kTiltSmooth) : 1.0f;
+    m.forward += (t.forward[1] - m.forward) * follow;
+    m.up += (t.up[1] - m.up) * follow;
+    m.right += (t.right[1] - m.right) * follow;
+    m.running = true;
+    m.pitchDeg = TiltAngle(m.forward, false);
+    m.rollDeg = -TiltAngle(m.right, m.up < 0.0f); // the right side lower than the left: leaning right
+    const float roll = fabsf(m.rollDeg), pitch = fabsf(m.pitchDeg);
+    const int now = TiltLamp(roll, pitch, s, 0.0f), held = TiltLamp(roll, pitch, s, kTiltBack);
+    if (m.lamp == 2 && held == 2) m.lamp = 2;                               // red stays until the truck is well out of it
+    else if (m.lamp >= 1 && now == 0 && roll >= s.rollWarnDeg - kTiltBack) m.lamp = 1; // and amber likewise
+    else m.lamp = now;
+}
+
+// The tilt in a line of text for the probe log, with the axes as read.
+inline void TiltProbeText(const TruckRaw &t, const TiltModel &m, char *out, size_t size)
+{
+    static const char *lamps[4] = { "dark", "green", "amber", "red" };
+    sprintf_s(out, size, "tilt: nose %s %.1f deg, leaning %s %.1f deg, lamp %s | y of the chassis axes as read: forward %.3f, up %.3f, right %.3f",
+              m.pitchDeg < 0.0f ? "down" : "up", fabsf(m.pitchDeg), m.rollDeg < 0.0f ? "left" : "right", fabsf(m.rollDeg), lamps[m.lamp < 0 || m.lamp > 2 ? 0 : m.lamp + 1],
+              t.forward[1], t.up[1], t.right[1]);
 }
 
 // The models' numbers in a line of text for the probe log.

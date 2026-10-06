@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0] 2026-10-06
+
+- The tilt lamp works. It is green while the truck stands level, amber when the truck leans 15 degrees to a side and red from 25 degrees, or when the truck points 35 degrees up or down a slope. A truck on its side or its roof is in the red.
+- The small truck in the lamp leans the way your truck does, by the same angle.
+- The lean is smoothed over a third of a second, so a bump does not light the lamp, and the lamp goes back two degrees below the angle it came on at, so it does not flicker on the edge.
+- Three new settings on the Gauges tab and in `Gauges.ini` set the angles: `RollWarnDeg`, `RollDangerDeg` and `PitchDangerDeg`.
+- With `Probe=1` the log has a fourth line with the slope, the lean and the lamp.
+
 ## [0.3.0] 2026-10-06
 
 - The tachometer shows an engine speed, worked out from the driven wheels, the gear and the pedal. It climbs through each gear to the red zone and falls at the shift, it rises under the pedal when the truck is stuck, and the pedal revs the engine freely in neutral. Wheels that spin faster than the gear allows take the needle into the red zone.

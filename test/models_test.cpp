@@ -1,8 +1,9 @@
-// models_test.cpp: the engine speed and the range (src\models.h) on drives made up here: a truck with the gearbox of
+// models_test.cpp: the engine speed, the range and the tilt (src\models.h) on drives made up here: a truck with the gearbox of
 // a scout (wheel speeds 1.5 in reverse, 3, 6, 12 and 16 in its four gears, 8 in the high gear), stepped 20 times a
 // second as the mod steps it. It checks each gear's top speed, where the needle stands at idle, under load, in
 // neutral and with the wheels spinning, that it never jumps, the start, the stall and the stop of the engine, and the
 // range: when it shows, what standing, filling up and a change of the burn do to it, and the game's own burn rule.
+// For the tilt it stands the truck on slopes and leans it to either side, over a bump and onto its roof.
 // build.bat makes out\test\models_test.exe; test.bat runs it.
 //
 // With a file as its argument it runs the models over a recorded drive instead and prints what they make of it. One
@@ -28,6 +29,17 @@ static void Check(bool ok, const char *what)
 static bool Near(float a, float b, float by) { return fabsf(a - b) <= by; }
 
 static const float kDt = 0.05f;
+
+// Stands the truck's chassis nose up by pitch degrees and leaning to its right by roll degrees (below 0: nose down,
+// to its left).
+static void Stand(TruckRaw &t, float pitch, float roll)
+{
+    const float p = pitch / kDegrees, r = roll / kDegrees;
+    t.forward[0] = cosf(p);
+    t.forward[1] = sinf(p);
+    t.up[1] = cosf(p) * cosf(r);
+    t.right[1] = -cosf(p) * sinf(r);
+}
 
 // A scout standing with its engine running in neutral: four wheels, the front two driven with all wheel drive only,
 // 60 of 75 litres, and the burn numbers the game gives such a truck.
@@ -374,6 +386,70 @@ int main(int argc, char **argv)
     Check(r.rangeKm < 0.0f && r.way < 1.0, "range: a truck with another tank starts over");
     drive(1100.0f, 10.0f, 0.01f);
     Check(r.rangeKm == kRangeMax, "range: the readout stops at 999");
+
+    // the tilt
+    {
+        GaugeSettings set;
+        SettingsDefaults(set);
+        TruckRaw c = Truck();
+        TiltModel tilt = {};
+        // the lamp of a truck that has stood like this for four seconds
+        auto lamp = [&](float pitch, float roll) {
+            Stand(c, pitch, roll);
+            for (int i = 0; i < 80; i++) TiltStep(tilt, c, set, kDt);
+            return tilt.lamp;
+        };
+        Stand(c, 0.0f, 20.0f);
+        TiltStep(tilt, c, set, kDt);
+        Check(tilt.lamp == 1 && Near(tilt.rollDeg, 20.0f, 0.01f) && Near(tilt.pitchDeg, 0.0f, 0.01f), "tilt: the first step takes the truck as it stands");
+        Check(lamp(0.0f, 0.0f) == 0 && lamp(0.0f, 14.0f) == 0 && lamp(0.0f, 16.0f) == 1 && lamp(0.0f, 24.0f) == 1 && lamp(0.0f, 26.0f) == 2,
+              "tilt: green on level ground, amber from 15 degrees to a side, red from 25");
+        const bool left = lamp(0.0f, -16.0f) == 1 && Near(tilt.rollDeg, -16.0f, 0.1f) && lamp(0.0f, -26.0f) == 2;
+        Check(left && lamp(0.0f, 18.0f) == 1 && Near(tilt.rollDeg, 18.0f, 0.1f), "tilt: to the left as to the right, and the lean carries its side");
+        const bool gentle = lamp(34.0f, 0.0f) == 0 && lamp(-34.0f, 0.0f) == 0;
+        const bool up = lamp(36.0f, 0.0f) == 2 && Near(tilt.pitchDeg, 36.0f, 0.1f);
+        Check(gentle && up && lamp(-36.0f, 0.0f) == 2 && Near(tilt.pitchDeg, -36.0f, 0.1f), "tilt: red from 35 degrees up or down a slope, no amber before it");
+        // 20 degrees about the truck's own length on a slope of 20 put its right side 18.7 degrees below the horizon
+        Check(lamp(20.0f, 20.0f) == 1 && Near(tilt.rollDeg, 18.75f, 0.1f) && Near(tilt.pitchDeg, 20.0f, 0.1f), "tilt: on a slope the lean is how far the truck's side hangs below the horizon");
+        // a bump throws the truck to 40 degrees for one pass: the lamp stays green; held there, it goes amber, then red
+        lamp(0.0f, 0.0f);
+        Stand(c, 0.0f, 40.0f);
+        TiltStep(tilt, c, set, kDt);
+        const bool bump = tilt.lamp == 0;
+        lamp(0.0f, 0.0f);
+        bool amberFirst = true, wasAmber = false;
+        Stand(c, 0.0f, 40.0f);
+        float mostStep = 0.0f;
+        for (int i = 0; i < 40; i++)
+        {
+            const float was = tilt.rollDeg;
+            TiltStep(tilt, c, set, kDt);
+            mostStep = fmaxf(mostStep, fabsf(tilt.rollDeg - was));
+            if (tilt.lamp == 1) wasAmber = true;
+            if (tilt.lamp == 2 && !wasAmber) amberFirst = false;
+        }
+        Check(bump && amberFirst && wasAmber && tilt.lamp == 2 && Near(tilt.rollDeg, 40.0f, 0.1f) && mostStep < 7.0f,
+              "tilt: a bump of one pass does not light the lamp, and a lean that stays goes through amber to red");
+        // rocking about an angle: amber from 15 stays until 13, red from 25 until 23
+        const bool amberHeld = lamp(0.0f, 0.0f) == 0 && lamp(0.0f, 14.0f) == 0 && lamp(0.0f, 16.0f) == 1 && lamp(0.0f, 14.0f) == 1 && lamp(0.0f, 12.5f) == 0;
+        const bool redHeld = lamp(0.0f, 26.0f) == 2 && lamp(0.0f, 24.0f) == 2 && lamp(0.0f, 22.5f) == 1 && lamp(36.0f, 0.0f) == 2 && lamp(34.0f, 0.0f) == 2 && lamp(32.5f, 0.0f) == 0;
+        Check(amberHeld && redHeld, "tilt: the lamp goes back two degrees below the angle it came on at");
+        const bool side = lamp(0.0f, 90.0f) == 2 && Near(tilt.rollDeg, 90.0f, 0.5f);
+        const bool past = lamp(0.0f, 120.0f) == 2 && Near(tilt.rollDeg, 120.0f, 0.5f) && lamp(0.0f, -120.0f) == 2 && Near(tilt.rollDeg, -120.0f, 0.5f);
+        Check(side && past && lamp(0.0f, 180.0f) == 2 && Near(fabsf(tilt.rollDeg), 180.0f, 0.5f),
+              "tilt: on its side and on its roof the truck is in the red, and the lean goes on past 90 degrees");
+        set.rollWarnDeg = 8.0f;
+        set.rollDangerDeg = 12.0f;
+        set.pitchDangerDeg = 20.0f;
+        Check(lamp(0.0f, 5.0f) == 0 && lamp(0.0f, 10.0f) == 1 && lamp(0.0f, 14.0f) == 2 && lamp(22.0f, 0.0f) == 2 && lamp(16.0f, 0.0f) == 0, "tilt: the angles are the settings'");
+        char line[256];
+        lamp(-12.0f, -10.0f);
+        TiltProbeText(c, tilt, line, sizeof line);
+        Check(strstr(line, "nose down 12.0 deg, leaning left 9.8 deg, lamp amber") && strstr(line, "forward -0.208"), "tilt: the probe's line carries the angles, the lamp and the axes");
+        c.right[1] = nanf("");
+        TiltStep(tilt, c, set, kDt);
+        Check(tilt.lamp < 0 && !tilt.running, "tilt: axes that are no numbers leave the lamp dark");
+    }
 
     // the probe's line
     t = Truck();

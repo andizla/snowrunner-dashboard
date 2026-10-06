@@ -317,9 +317,10 @@ int wmain(int argc, wchar_t **argv)
         g_shot = keep;
     }
 
-    // what this version shows of a real truck, at twice the size: parked with the engine off, third gear in
-    // automatic with the gear half run out, and the low range run out with the differential locked. The range has
-    // no number before half a kilometre is driven. The dials without a source rest.
+    // what this version shows of a real truck, at twice the size: parked on level ground with the engine off, third
+    // gear in automatic with the gear half run out, leaning 18 degrees to the left, and the low range run out with
+    // the differential locked on a side slope of 31 degrees to the right. The range has no number before half a
+    // kilometre is driven. The dials without a source rest.
     {
         ID3D11ShaderResourceView *keep = g_shot;
         g_shot = nullptr;
@@ -330,7 +331,7 @@ int wmain(int argc, wchar_t **argv)
         parked.gearMode = "";
         parked.fuelFrac = 0.97f;
         parked.rangeKm = -1.0f;
-        parked.tilt = -1;
+        parked.tilt = 0;
         parked.handbrake = true;
         GaugeState automatic = parked;
         automatic.engineOn = true;
@@ -342,6 +343,8 @@ int wmain(int argc, wchar_t **argv)
         automatic.fuelFrac = 0.88f;
         automatic.handbrake = false;
         automatic.headlights = automatic.awd = true;
+        automatic.tilt = 1;
+        automatic.rollDeg = -18.0f;
         GaugeState low = automatic;
         low.speedKmh = 6.0f;
         low.gear = 1;
@@ -350,6 +353,8 @@ int wmain(int argc, wchar_t **argv)
         low.fuelFrac = 0.31f;
         low.rpm = k.redline;
         low.rangeKm = 6.4f;
+        low.tilt = 2;
+        low.rollDeg = 31.0f;
         const GaugeState live[3] = { parked, automatic, low };
         wchar_t path[MAX_PATH];
         swprintf_s(path, L"%s\\live_states.png", out);
