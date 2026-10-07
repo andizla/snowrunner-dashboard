@@ -4,7 +4,7 @@ A gauge cluster for the truck you drive in SnowRunner: analogue dials in the sty
 
 The cluster has a speedometer, a tachometer with the gear, fuel with the range, coolant temperature, boost pressure, brake air pressure and eight lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage, cold engine and tilt.
 
-This is version 0.9.0. It reads the truck's own values for the speedometer, the gear, the fuel gauge and seven of the lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage and tilt. The game has no engine speed, no range, no coolant temperature and no boost pressure, so the mod works those out from what the truck does, and lights the cold lamp by the temperature. The temperature also costs the engine: overheating it, or flooring it cold, adds to the game's own engine damage. `Damage=0` switches that off. The scales of the tachometer and the speedometer and the turbo's boost can be set for each kind of truck. Brake air pressure comes with a later version and rests until then.
+This is version 0.10.0. It reads the truck's own values for the speedometer, the gear, the fuel gauge and seven of the lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage and tilt. The game has no engine speed, no range, no coolant temperature and no boost pressure, so the mod works those out from what the truck does, and lights the cold lamp by the temperature. The temperature also costs the engine: overheating it, or flooring it cold, adds to the game's own engine damage. `Damage=0` switches that off. The scales of the tachometer and the speedometer and the turbo's boost can be set for each kind of truck. Brake air pressure comes with a later version and rests until then.
 
 ## What you need
 
@@ -32,6 +32,7 @@ To update, copy the new file over the old one. Keep only one `.asi` file of this
 - The coolant temperature. The game has none, so the mod works it out from how hard the engine works and how fast the truck drives. A cold engine starts at the outside temperature and is at 85 C after about three minutes of driving. The thermostat then holds it: about 86 C at idle, near 100 C when the truck works hard at speed. The needle goes into the red zone from 118 C only when the pedal stays floored at a crawl. At a standstill with the engine revving out that takes a minute and a half from 90 C, and longer when the engine pulls at lower revs or the truck still moves. From about 7 km/h up the needle stays out of the red zone: a truck in the low range at its own top speed runs hot and settles just under it. Off the pedal the engine is back at 100 C within a minute. Water cools it too: from about half a metre of water at the truck's front, and with the engine standing in it (1.2 m and more) a hot engine is back at 100 C within half a minute, pedal floored or not. A stopped engine cools from 90 C to 40 C in a quarter of an hour, and five times as fast in deep water. Each kind of truck keeps its own temperature while the game runs: one you left cools while you drive another, and is as warm as that when you take it again, out of the garage too. The mod knows a truck by its kind, so two trucks of the same kind share one temperature.
 - The cold lamp is lit while the coolant is below 60 C.
 - Boost pressure. The game has none, so the mod works it out from the pedal and the engine speed. The turbo makes nothing near idle and all it can from about two thirds of the way to the red zone, with the pedal floored. The needle lags behind the pedal: floored at the red zone the boost is there in under a second, and pulling away from a standstill it takes a second or more. It falls away within half a second when the foot comes off, and in neutral the turbo makes a quarter of its boost at most. How much a truck's turbo reaches is the setting `BoostMax`: trucks 1.8 bar, scouts 1, heavy trucks 2.
+- The turbo's sounds. Take your foot off a floored pedal under boost and the blow-off valve lets the air go. A smaller lift gives a flutter. The more boost there was, the louder. At most one sounds every 0.8 seconds.
 - Engine damage from the temperature. An engine in the red zone loses 10 percent of what it can take every minute at 125 C. It loses nothing at 118 C, less than that between the two and more above: floored at a standstill with the wheels spinning, an engine is used up about five minutes after it enters the red zone. A cold engine suffers under a heavy pedal: below 60 C, with the pedal more than half down, it loses up to 5 percent a minute (floored at 0 C), and less the warmer it is. A cold start driven with the pedal floored costs 2 to 3 percent of the engine, and one driven at half pedal costs nothing. On a keyboard the pedal is either up or floored, so every cold start counts as floored there, and `ColdDamagePercentPerMinute` set to 0 switches that part off. All of it goes into the game's own engine damage, so a garage repairs it, and past the engine's own threshold the game takes torque away and burns more fuel, as with any engine damage. The mod stops one point short of what the engine takes and never stops the engine itself. With `Damage` off the temperature is only shown.
 
 The cluster is on screen while you drive a truck in the world, and it fades in and out. It is hidden on loading screens, in the pause menu, on the map and in the garage.
@@ -59,6 +60,8 @@ The Gauges tab in ReShade's overlay edits every setting while you play. Changes 
 | The speed in km/h from which the radiator gets all the air that driving gives it, from 10 to 80 | `AirFullKmh` | 30 |
 | The temperature costs the engine | `Damage` 0 or 1 | on |
 | Percent of the engine lost a minute at 125 C, and with the pedal floored on a cold engine at 0 C, each from 0 to 100 | `HotDamagePercentPerMinute`, `ColdDamagePercentPerMinute` | 10, 5 |
+| How loud the turbo's blow-off and flutter are, from 0 to 100. 0 = no sound | `SoundVolume` | 50 |
+| The sounds without the cluster | `SoundsOnly` 0 or 1 | off |
 | A key that hides and shows the cluster | `ToggleKey`, a virtual key code | none |
 | Pad buttons that do the same | `PadToggle`, as `LB+DPadUp` | None |
 | For work on the mod: demo values whenever no truck is driven, in menus and on loading screens too | `Demo` | off |
@@ -92,6 +95,8 @@ SpeedMax=0
 Each of the three coolant times changes one thing: how fast a cold engine warms up, how fast a hot one overheats, how fast a stopped one cools. The temperatures the engine settles at stay as they are. The outside temperature moves those: in frost the engine takes longer to warm up and cannot be overheated, and on a hot day it overheats sooner. `AirFullKmh` moves them at a crawl: lower keeps a slow, hard pulling engine cooler, and higher makes it overheat at speeds where it now stays out of the red zone.
 
 The cluster keeps its share of the screen: it is twice as large in pixels on a 2160p screen as on a 1080p one.
+
+The two sounds are made by the mod's own code. To hear a recording of your own instead, put it next to `Gauges.asi` as `sounds\blowoff.wav` or `sounds\flutter.wav`: a WAV file, PCM or float, up to four seconds. The mod brings every sound to the same loudness, and `Gauges.log` says which one it plays. The Gauges tab has a button for each sound.
 
 The pad is only read. The game sees the toggle buttons too, so pick buttons it does not use while driving.
 
@@ -127,10 +132,14 @@ The headers the mod is built with are in `deps`, each with its licence: the ReSh
 
 A thread in the game process reads the driven truck's values from the game's memory 20 times a second, works out the engine speed, the range, the tilt and the coolant temperature from them, and keeps the settings. With `Damage` on, the same thread writes the engine damage that the temperature caused into the game, at most once a second and only while a truck is driven. ReShade calls the mod on every frame, and the mod draws the cluster with Dear ImGui's drawing calls, which ReShade hands to its add-ons. The text is baked from the game's own font files when the game starts, at the size the cluster has on your screen.
 
+The sounds are played through XAudio2 2.9, the copy the game brings or Windows' own, on a thread of their own. The mod takes the audio device when a sound is due and lets go of it a few seconds after the last one.
+
 ## Licence and credits
 
 GNU General Public License v3.0 (GPL-3.0-only), see `LICENSE`.
 
 The cluster is drawn through ReShade by Patrick Mours (crosire) with Dear ImGui by Omar Cornut, and its text is baked with stb_truetype by Sean Barrett. Their notices are in `THIRD_PARTY_NOTICES.md`. The loader in `tools` is the one of the SnowRunner Tire Inflation System.
+
+`SOUND_CREDITS.md` says where each sound comes from.
 
 SnowRunner is a game by Saber Interactive. This project is not affiliated with Saber Interactive or Focus Entertainment and contains no game files.

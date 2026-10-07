@@ -17,6 +17,9 @@
 #include "gauges.h"
 #include "truck.h"
 #include "models.h"
+#ifndef GAUGES_SETTINGS_TEST
+#include "sound.h"
+#endif
 
 static HMODULE g_self = nullptr;
 static std::wstring g_dir; // the game's folder, with the last backslash
@@ -143,6 +146,8 @@ static void WriteIni(const GaugeSettings &s)
     num(L"ColdDamagePercentPerMinute", s.coldDamage);
     whole(L"ToggleKey", s.toggleKey);
     WritePrivateProfileStringW(kIniSection, L"PadToggle", Wide(s.padToggle).c_str(), ini.c_str());
+    whole(L"SoundVolume", s.soundVolume);
+    whole(L"SoundsOnly", s.soundsOnly ? 1 : 0);
     whole(L"Demo", s.demo ? 1 : 0);
     whole(L"Probe", s.probe);
 }
@@ -193,6 +198,10 @@ static void ReadIni(GaugeSettings &s)
                         L"; Damage=0: the temperature is only shown.\n"
                         L"; On a keyboard the pedal is either up or floored, so every cold start counts as floored there.\n"
                         L"; ColdDamagePercentPerMinute=0 switches that part off. Damage has not been tried in co-op: leave it at 0 there.\n"
+                        L"; SoundVolume (0 to 100) is how loud the turbo is heard when the pedal comes up quickly under boost: a blow-off\n"
+                        L"; after a full lift, a flutter after a smaller one, louder the more boost there was. 0 = no sound.\n"
+                        L"; SoundsOnly=1 plays the sounds and draws no cluster. A file sounds\\blowoff.wav or sounds\\flutter.wav next\n"
+                        L"; to Gauges.asi is played in place of the mod's own sound (a WAV file, PCM or float).\n"
                         L"; ToggleKey is the virtual key code of a key that hides and shows the cluster (0 = none; 120 = F9).\n"
                         L"; PadToggle does the same with pad buttons (XInput): DPadUp, DPadDown, DPadLeft, DPadRight, A, B, X, Y,\n"
                         L"; LB, RB, LS, RS, Start, Back, joined with + (LB+DPadUp), or None. The game sees these buttons too.\n"
@@ -240,6 +249,8 @@ static void ReadIni(GaugeSettings &s)
     size_t n = 0;
     for (const wchar_t *p = buf; *p && n + 1 < sizeof s.padToggle; p++) s.padToggle[n++] = *p < 128 ? (char)*p : '?';
     s.padToggle[n] = 0;
+    s.soundVolume = IniInt(L"SoundVolume", s.soundVolume, ini);
+    s.soundsOnly = IniBool(L"SoundsOnly", s.soundsOnly, ini);
     s.demo = IniBool(L"Demo", s.demo, ini);
     s.probe = IniInt(L"Probe", s.probe, ini);
     SettingsClamp(s);
@@ -474,6 +485,7 @@ static void LogSettings(const GaugeSettings &s)
         s.warmUpMinutes, s.overheatMinutes, s.coolDownMinutes, s.ambientC);
     Log(L"settings: the radiator has all its air from %g km/h; engine damage %s: %g percent a minute at 125 C, %g percent a minute for a cold engine floored at 0 C",
         s.airFullKmh, s.damage ? L"on" : L"off", s.hotDamage, s.coldDamage);
+    Log(L"settings: sound volume %d of 100%s", s.soundVolume, s.soundsOnly ? L", sounds only: the cluster is not drawn" : L"");
     Log(L"settings: toggle key %S, pad %S, demo values %s, probe %d", key, s.padToggle, s.demo ? L"on" : L"off", s.probe);
 }
 
@@ -516,6 +528,7 @@ struct TruckWatch
     TachModel tach;             // the engine speed of the truck at modelVehicle
     BoostModel boost;           // and its boost
     int probedLifts;            // the lifts of the pedal the boost had told when the probe wrote last
+    uint32_t chance;            // what the pitch of the next lift's sound is drawn from
     uint64_t modelVehicle;
     RangeModel range;           // the range of the truck with the tank it holds
     TiltModel tilt;             // how the truck stands, and the tilt lamp
@@ -657,10 +670,12 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         if (!w.modelAt || now - w.modelAt >= 1000) w.tilt = TiltModel{};
         const float dt = w.modelAt && now - w.modelAt < 1000 ? SettingsRange((now - w.modelAt) / 1000.0f, 0.001f, 0.2f) : 0.05f;
         TachStep(w.tach, raw, scale, dt);
-        // the boost, and a lift of the pedal under it: the sounds take it from here. With the probe on it is logged
+        // the boost, and a lift of the pedal under it, which is heard (sound.h). With the probe on it is logged
         const int lift = BoostStep(w.boost, raw, TachShare(w.tach, scale), scale.boost, dt);
         if (lift != kLiftNone && probe)
             Log(L"boost: a %s at %.2f bar of the turbo's %.2f, %.2f of its full sound", lift == kLiftBlowOff ? L"blow-off" : L"flutter", w.boost.lastBar, scale.boost, w.boost.lastVolume);
+        LiftSound sound;
+        if (LiftSoundOf(lift, w.boost.lastVolume, s.soundVolume, LiftChance(w.chance), sound)) SoundPlay(lift == kLiftBlowOff ? kSoundBlowOff : kSoundFlutter, sound.gain, sound.pitch);
         RangeStep(w.range, kind, raw, dt);
         TiltStep(w.tilt, raw, s, dt);
         TempStep(w.temp, kind, raw, TachShare(w.tach, scale), s, dt);
@@ -744,6 +759,15 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     return driving && now - w.drivingSince >= 500;
 }
 
+// The tab's two buttons: the blow-off or the flutter at full boost, as loud as the settings in force have it.
+void SoundHear(bool blowOff)
+{
+    GaugeSettings s;
+    SettingsGet(s);
+    LiftSound sound;
+    if (LiftSoundOf(blowOff ? kLiftBlowOff : kLiftFlutter, 1.0f, s.soundVolume, 0.0f, sound)) SoundPlay(blowOff ? kSoundBlowOff : kSoundFlutter, sound.gain, sound.pitch);
+}
+
 // ---- the mod's thread ----
 
 static DWORD WINAPI Run(void *)
@@ -783,6 +807,7 @@ static DWORD WINAPI Run(void *)
     LogSettings(s);
     Log(g_reshadeOk ? L"overlay: the cluster and the Gauges tab are drawn through ReShade's overlay"
                     : L"overlay: ReShade with add-on support was not found, so nothing is drawn");
+    SoundStart(g_dir); // the sounds are read or made now; the audio device is only taken while one plays
     bool visible = true, keyDown = false;
     uint32_t padMask = PadParse(s.padToggle), padPrev = 0;
     ULONGLONG saveAt = 0;
@@ -888,7 +913,7 @@ static DWORD WINAPI Run(void *)
         strcpy_s(v.truck, truck.key);
         v.truckOwn = set.own;
         v.demo = !driving && s.demo;
-        v.hidden = !visible ? kHiddenByToggle : driving || s.demo ? kShown : kHiddenNoTruck;
+        v.hidden = !visible ? kHiddenByToggle : s.soundsOnly ? kHiddenSoundsOnly : driving || s.demo ? kShown : kHiddenNoTruck;
         v.show = v.hidden == kShown;
         if (driving)
         {
@@ -947,7 +972,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.rollWarnDeg == b.rollWarnDeg && a.rollDangerDeg == b.rollDangerDeg && a.pitchDangerDeg == b.pitchDangerDeg &&
            a.warmUpMinutes == b.warmUpMinutes && a.overheatMinutes == b.overheatMinutes && a.coolDownMinutes == b.coolDownMinutes && a.ambientC == b.ambientC &&
            a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.coldDamage == b.coldDamage &&
-           !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe;
+           !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly;
 }
 
 static int g_failed = 0;
@@ -1014,6 +1039,8 @@ int wmain(int argc, wchar_t **argv)
     strcpy_s(c.padToggle, "RB+DPadUp");
     c.demo = true;
     c.probe = 1;
+    c.soundVolume = 80;
+    c.soundsOnly = true;
     const bool allChanged = c.layout != d.layout && c.style != d.style && c.faceOpacity != d.faceOpacity && c.offsetX != d.offsetX && c.offsetY != d.offsetY &&
                             c.scale != d.scale && c.opacity != d.opacity && c.mph != d.mph && c.psi != d.psi && c.fahrenheit != d.fahrenheit &&
                             c.showTemp != d.showTemp && c.showBoost != d.showBoost && c.showAir != d.showAir && c.showLamps != d.showLamps &&
@@ -1022,7 +1049,7 @@ int wmain(int argc, wchar_t **argv)
                             c.pitchDangerDeg != d.pitchDangerDeg && c.warmUpMinutes != d.warmUpMinutes && c.overheatMinutes != d.overheatMinutes &&
                             c.coolDownMinutes != d.coolDownMinutes && c.ambientC != d.ambientC && c.airFullKmh != d.airFullKmh && c.damage != d.damage &&
                             c.hotDamage != d.hotDamage && c.coldDamage != d.coldDamage && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
-                            c.demo != d.demo && c.probe != d.probe;
+                            c.demo != d.demo && c.probe != d.probe && c.soundVolume != d.soundVolume && c.soundsOnly != d.soundsOnly;
     WriteIni(c);
     ReadIni(b);
     Check(allChanged, "ini: the test changes every setting from its default");
@@ -1043,7 +1070,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 40, "ini: the help text survives a write (40 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 44, "ini: the help text survives a write (44 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());

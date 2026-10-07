@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#define GAUGES_VERSION "0.9.0"
+#define GAUGES_VERSION "0.10.0"
 
 // The exe the addresses in this mod are from (SnowRunner on Steam, the build of 22 July 2026). On any other the mod
 // stands down.
@@ -65,6 +65,8 @@ struct GaugeSettings
     bool damage;             // Damage: an engine in the red zone and a cold engine under a heavy pedal take the game's engine damage
     float hotDamage;         // HotDamagePercentPerMinute: percent of what the engine takes that it loses a minute at 125 C
     float coldDamage;        // ColdDamagePercentPerMinute: the same for a cold engine with the pedal floored at 0 C
+    int soundVolume;         // SoundVolume: how loud the turbo's blow-off and flutter are, 0 to 100; 0 = no sound
+    bool soundsOnly;         // SoundsOnly: the sounds are played and the cluster is not drawn
     int toggleKey;           // ToggleKey: virtual key code of the key that hides and shows the cluster, 0 = none
     char padToggle[32];      // PadToggle: pad buttons that do the same ("LB+DPadUp"), "None"
     bool demo;               // Demo: for work on the mod: demo values are drawn whenever no truck is driven, menus and loading screens included
@@ -93,6 +95,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.damage = true;
     s.hotDamage = 10.0f;
     s.coldDamage = 5.0f;
+    s.soundVolume = 50;
     strcpy_s(s.padToggle, "None");
     s.demo = false;
     s.probe = 0;
@@ -145,6 +148,7 @@ inline void SettingsClamp(GaugeSettings &s)
     s.hotDamage = SettingsRange(s.hotDamage, kDamageRange[0], kDamageRange[1]);
     s.coldDamage = SettingsRange(s.coldDamage, kDamageRange[0], kDamageRange[1]);
     s.toggleKey = s.toggleKey < 0 || s.toggleKey > 255 ? 0 : s.toggleKey;
+    s.soundVolume = s.soundVolume < 0 ? 0 : s.soundVolume > 100 ? 100 : s.soundVolume;
     s.probe = s.probe < 0 ? 0 : s.probe;
 }
 
@@ -205,7 +209,7 @@ inline void GaugeDemo(GaugeState &st, const GaugeSettings &s)
 // What the render thread draws: show = the cluster is on screen, demo = st holds the demo values, hidden = why it is
 // not on screen. engineDamage of engineCapacity is the driven truck's engine damage as the game holds it, for the
 // tab; engineCapacity is 0 while it is not known.
-enum { kShown, kHiddenByToggle, kHiddenNoTruck };
+enum { kShown, kHiddenByToggle, kHiddenNoTruck, kHiddenSoundsOnly };
 // truck: the kind of truck being driven, as the game's files name it ("" while none is driven): the scales in force
 // are that kind's. truckOwn: it has scales of its own in Gauges.ini, and those are the ones in force.
 struct GaugeView { bool show, demo; int hidden; GaugeState st; int engineDamage, engineCapacity; char truck[96]; bool truckOwn; };
@@ -218,6 +222,7 @@ void SettingsTruckDrop();                   // the tab's button: the driven truc
 void SettingsReset();                       // the tab's button: every setting back to its default, the driven truck's own scales too
 void DamageTestAsk(int points);             // the tab's test buttons: the mod adds this much to the driven truck's engine damage on its next pass
 void ViewGet(GaugeView &out);               // what to draw (any thread)
+void SoundHear(bool blowOff);               // plays the blow-off or the flutter as loud as the settings have it at full boost (the tab's buttons)
 void GaugeLog(const wchar_t *fmt, ...);     // a line in Gauges.log (any thread)
 bool OverlayInit(HMODULE self);             // registers with ReShade (the cluster and the Gauges tab); false = no ReShade
 uint32_t PadButtons();                      // the buttons of all connected pads together, 0 without a pad

@@ -39,7 +39,7 @@
 // engine turns: nothing near idle, all it can from about two thirds of the way to the red zone. The pressure lags
 // behind, longer at low engine speed, and falls away quickly when the foot comes off. How much a truck's turbo
 // reaches is a setting, by truck class or the truck's own. A quick lift of the pedal under boost is told to the
-// caller as a flutter or a blow-off, for the sounds.
+// caller as a flutter or a blow-off, for the sounds (LiftSoundOf: how loud and how fast each is played).
 #pragma once
 #include "truck.h"
 
@@ -613,6 +613,36 @@ inline int BoostStep(BoostModel &m, const TruckRaw &t, float revs, float most, f
     m.bar += (m.target - m.bar) * (1.0f - expf(-dt / tau));
     if (!(m.bar >= 0.0f)) m.bar = 0.0f; // 0 too for a boost that is no number
     return sound;
+}
+
+// ---- the sound of a lift ----
+
+static const float kLiftQuietest = 0.2f;     // how loud of 1 a lift with next to no boost is; one at full boost is 1
+static const float kLiftPitchSpread = 0.06f; // no two lifts sound quite alike: each plays up to this share faster or slower
+
+// How a lift of the pedal is played: how loud of 1 and how fast (1 = as recorded).
+struct LiftSound { float gain, pitch; };
+
+// The sound of a lift BoostStep told (kLiftBlowOff, kLiftFlutter). loud: how loud of 1 the boost makes it (the
+// model's lastVolume); soundVolume: the setting, 0 to 100; chance: -1 to 1, for the pitch. False when nothing is to
+// be played: no lift, or the sound switched off.
+inline bool LiftSoundOf(int lift, float loud, int soundVolume, float chance, LiftSound &out)
+{
+    out = LiftSound{};
+    if ((lift != kLiftBlowOff && lift != kLiftFlutter) || soundVolume <= 0) return false;
+    out.gain = (float)(soundVolume > 100 ? 100 : soundVolume) / 100.0f * (kLiftQuietest + (1.0f - kLiftQuietest) * SettingsRange(loud, 0.0f, 1.0f));
+    out.pitch = 1.0f + kLiftPitchSpread * SettingsRange(chance, -1.0f, 1.0f);
+    return true;
+}
+
+// A number from -1 to 1 that differs from call to call.
+inline float LiftChance(uint32_t &seed)
+{
+    if (!seed) seed = 0x9e3779b9;
+    seed ^= seed << 13;
+    seed ^= seed >> 17;
+    seed ^= seed << 5;
+    return (float)((double)seed / 4294967296.0 * 2.0 - 1.0);
 }
 
 // The boost in a line of text for the probe log.

@@ -14,7 +14,7 @@ struct PageState
     unsigned long long last = 0;  // GetTickCount64 of the last frame the tab was drawn
 };
 static const unsigned long long kPageCaptureMs = 8000;
-enum { kPageChanged = 1, kPageReload = 2, kPageTruckDrop = 4, kPageDefaults = 8 };
+enum { kPageChanged = 1, kPageReload = 2, kPageTruckDrop = 4, kPageDefaults = 8, kPageHearBlowOff = 16, kPageHearFlutter = 32 };
 
 // The Dear ImGui key as a virtual key, for the keys the toggle key can be; 0 for others.
 static int PageVirtualKey(int k)
@@ -82,6 +82,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     ImGui::SeparatorText("Cluster");
     if (view.show) ImGui::TextUnformatted(view.demo ? "On screen, with demo values." : "On screen.");
     else if (view.hidden == kHiddenByToggle) ImGui::TextDisabled("Hidden. The toggle key or the pad buttons show it again.");
+    else if (view.hidden == kHiddenSoundsOnly) ImGui::TextDisabled("Not drawn: \"Sounds only\" is ticked under Sounds.");
     else ImGui::TextDisabled("No truck is being driven. The cluster shows while you drive.");
     static const char *layouts[kLayoutCount] = { "Strip, bottom centre", "Block, bottom right" };
     PageLabel("Layout", labelX);
@@ -418,6 +419,22 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         }
     }
     InterlockedExchange(&g_pageCapturing, st.capture >= 1 ? (LONG)GetTickCount() : 0);
+
+    ImGui::SeparatorText("Sounds");
+    PageLabel("Volume", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::SliderInt("##soundvolume", &s.soundVolume, 0, 100, s.soundVolume > 0 ? "%d" : "off", ImGuiSliderFlags_AlwaysClamp));
+    PageTip("How loud the turbo is heard when the pedal comes up quickly under boost: a blow-off after a full lift, a flutter after a smaller one. "
+            "The more boost there was, the louder. 0 = no sound.");
+    ImGui::BeginDisabled(s.soundVolume <= 0);
+    PageLabel("Hear it", labelX);
+    if (ImGui::Button("Blow-off")) act |= kPageHearBlowOff;
+    ImGui::SameLine();
+    if (ImGui::Button("Flutter")) act |= kPageHearFlutter;
+    PageTip("Plays the sound as loud as it is at full boost.");
+    ImGui::EndDisabled();
+    changed(ImGui::Checkbox("Sounds only", &s.soundsOnly));
+    PageTip("Plays the sounds and draws no cluster.");
 
     ImGui::SeparatorText("For work on the mod");
     changed(ImGui::Checkbox("Demo values", &s.demo));

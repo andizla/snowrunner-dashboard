@@ -24,6 +24,16 @@
 #include "gauges.h"
 #include "truck.h"
 #include "models.h"
+#include "sound.h"
+
+void GaugeLog(const wchar_t *, ...) {} // the sounds say in the mod's log where each comes from; here that goes nowhere
+
+static float SoundRms(const std::vector<float> &x)
+{
+    double sum = 0.0;
+    for (const float v : x) sum += (double)v * v;
+    return x.empty() ? 0.0f : (float)sqrt(sum / (double)x.size());
+}
 
 static int g_failed = 0;
 static void Check(bool ok, const char *what)
@@ -283,8 +293,59 @@ static int Replay(const char *path)
     return 0;
 }
 
+// "sounds <folder>": the two sounds as the mod plays them (a file sounds\blowoff.wav or sounds\flutter.wav in the
+// folder, else made by code), written into the folder as blowoff_heard.wav and flutter_heard.wav and played once
+// each on this machine's default device, as loud as SoundVolume=50 at full boost.
+static int Sounds(const char *folder)
+{
+    std::wstring dir;
+    for (const char *p = folder; *p; p++) dir += (wchar_t)(unsigned char)*p;
+    if (!dir.empty() && dir.back() != L'\\') dir += L'\\';
+    static const wchar_t *names[kSoundCount] = { L"blowoff_heard.wav", L"flutter_heard.wav" };
+    for (int k = 0; k < kSoundCount; k++)
+    {
+        SoundClip c;
+        SoundLoad(k, dir, c);
+        std::vector<uint8_t> wav(44 + c.x.size() * 2);
+        auto put = [&](size_t at, uint32_t v, int bytes) { for (int i = 0; i < bytes; i++) wav[at + i] = (uint8_t)(v >> (8 * i)); };
+        memcpy(&wav[0], "RIFF", 4);
+        put(4, (uint32_t)wav.size() - 8, 4);
+        memcpy(&wav[8], "WAVEfmt ", 8);
+        put(16, 16, 4);
+        put(20, 1, 2);
+        put(22, 1, 2);
+        put(24, c.rate, 4);
+        put(28, c.rate * 2, 4);
+        put(32, 2, 2);
+        put(34, 16, 2);
+        memcpy(&wav[36], "data", 4);
+        put(40, (uint32_t)c.x.size() * 2, 4);
+        for (size_t i = 0; i < c.x.size(); i++) put(44 + i * 2, (uint32_t)(uint16_t)(int16_t)(SettingsRange(c.x[i], -1.0f, 1.0f) * 32767.0f), 2);
+        FILE *f = nullptr;
+        if (_wfopen_s(&f, (dir + names[k]).c_str(), L"wb") == 0 && f)
+        {
+            fwrite(wav.data(), 1, wav.size(), f);
+            fclose(f);
+            printf("wrote %ls (%.2f s)\n", (dir + names[k]).c_str(), (double)c.x.size() / c.rate);
+        }
+    }
+    if (!SoundStart(dir)) { printf("FAIL the sound thread did not start\n"); return 1; }
+    for (int k = 0; k < kSoundCount; k++)
+    {
+        LiftSound ls;
+        LiftSoundOf(k == kSoundBlowOff ? kLiftBlowOff : kLiftFlutter, 1.0f, 50, 0.0f, ls);
+        SoundPlay(k, ls.gain, ls.pitch);
+        Sleep(1200);
+    }
+    const bool played = g_soundOpens == 1 && g_soundStarts[kSoundBlowOff] == 1 && g_soundStarts[kSoundFlutter] == 1;
+    printf("%s sounds: XAudio2 opened %ld time(s), the blow-off started %ld time(s), the flutter %ld\n", played ? "ok  " : "FAIL", g_soundOpens, g_soundStarts[kSoundBlowOff],
+           g_soundStarts[kSoundFlutter]);
+    return played ? 0 : 1;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc > 2 && !strcmp(argv[1], "sounds")) return Sounds(argv[2]);
     if (argc > 1) return Replay(argv[1]);
     GaugeSettings s;
     SettingsDefaults(s);
@@ -1086,6 +1147,116 @@ int main(int argc, char **argv)
     char text[512];
     ModelProbeText(t, m, r, k, text, sizeof text);
     Check(strstr(text, "wheels 8.50 rad/s of the gear's 17.00") && strstr(text, "pedal 1.00") && strstr(text, "l/min by the game's rule"), "probe: the models' line carries their numbers");
+
+    // the sound of a lift: how loud and how fast
+    {
+        LiftSound ls;
+        const bool none = !LiftSoundOf(kLiftNone, 1.0f, 50, 0.0f, ls) && !LiftSoundOf(kLiftBlowOff, 1.0f, 0, 0.0f, ls) && ls.gain == 0.0f;
+        const bool full = LiftSoundOf(kLiftBlowOff, 1.0f, 100, 0.0f, ls) && Near(ls.gain, 1.0f, 0.001f) && Near(ls.pitch, 1.0f, 0.001f);
+        const bool half = LiftSoundOf(kLiftFlutter, 1.0f, 50, 0.0f, ls) && Near(ls.gain, 0.5f, 0.001f);
+        const bool faint = LiftSoundOf(kLiftFlutter, 0.0f, 100, 0.0f, ls) && Near(ls.gain, 0.2f, 0.001f);
+        const bool between = LiftSoundOf(kLiftBlowOff, 0.5f, 100, 0.0f, ls) && Near(ls.gain, 0.6f, 0.001f) && LiftSoundOf(kLiftBlowOff, 7.0f, 400, 0.0f, ls) && Near(ls.gain, 1.0f, 0.001f);
+        Check(none && full && half && faint && between, "sound: none without a lift or with the volume at 0; as loud as the setting at full boost, a fifth of that with next to none");
+        const bool fast = LiftSoundOf(kLiftBlowOff, 1.0f, 50, 1.0f, ls) && Near(ls.pitch, 1.06f, 0.001f), slow = LiftSoundOf(kLiftBlowOff, 1.0f, 50, -9.0f, ls) && Near(ls.pitch, 0.94f, 0.001f);
+        uint32_t seed = 0;
+        float least = 1.0f, widest = -1.0f, sum = 0.0f;
+        bool same = false;
+        for (int i = 0; i < 2000; i++)
+        {
+            const float sumWas = sum, c = LiftChance(seed);
+            least = fminf(least, c);
+            widest = fmaxf(widest, c);
+            sum += c;
+            same = same || (i > 0 && sum == sumWas);
+        }
+        Check(fast && slow && least >= -1.0f && least < -0.9f && widest <= 1.0f && widest > 0.9f && fabsf(sum) < 100.0f && !same,
+              "sound: each lift plays up to six percent faster or slower, by a number that differs from lift to lift");
+        // the model's own lifts, as the mod plays them: a full lift at full boost is the blow-off at the setting's
+        // loudness, and nothing is played again within 0.8 s
+        TruckRaw bt = Truck();
+        bt.gear = bt.gearEngaged = 2;
+        BoostModel bm = {};
+        const float reach = 1.8f;
+        int played = 0, first = kLiftNone;
+        float firstGain = 0.0f, lastAt = -10.0f, closest = 10.0f;
+        for (int i = 0; i < 400; i++)
+        {
+            // floored for three seconds, then up and down every 0.3 s: more lifts than may sound
+            const float at = (float)i * kDt;
+            bt.throttle = at < 3.0f || fmodf(at, 0.6f) < 0.3f ? -1.0f : 0.0f;
+            const int lift = BoostStep(bm, bt, 1.0f, reach, kDt);
+            if (LiftSoundOf(lift, bm.lastVolume, 50, 0.0f, ls))
+            {
+                if (!played) { first = lift; firstGain = ls.gain; }
+                else closest = fminf(closest, at - lastAt);
+                lastAt = at;
+                played++;
+            }
+        }
+        Check(first == kLiftBlowOff && Near(firstGain, 0.5f, 0.02f) && played >= 2 && closest >= 0.8f - 0.001f,
+              "sound: a full lift at full boost plays the blow-off at the setting's loudness, and no two sounds come within 0.8 s");
+    }
+
+    // the sounds themselves: a WAV file read, the two made by code, and every sound brought to one loudness
+    {
+        // half a second of a 440 Hz tone in 16 bits on two channels, the left one silent
+        std::vector<uint8_t> wav(44 + 22050 * 4);
+        auto put = [&](size_t at, uint32_t v, int bytes) { for (int i = 0; i < bytes; i++) wav[at + i] = (uint8_t)(v >> (8 * i)); };
+        memcpy(&wav[0], "RIFF", 4);
+        put(4, (uint32_t)wav.size() - 8, 4);
+        memcpy(&wav[8], "WAVEfmt ", 8);
+        put(16, 16, 4);
+        put(20, 1, 2);
+        put(22, 2, 2);
+        put(24, 44100, 4);
+        put(28, 44100 * 4, 4);
+        put(32, 4, 2);
+        put(34, 16, 2);
+        memcpy(&wav[36], "data", 4);
+        put(40, 22050 * 4, 4);
+        for (int i = 0; i < 22050; i++) put(44 + (size_t)i * 4 + 2, (uint32_t)(uint16_t)(int16_t)(16000.0 * sin(6.2831853 * 440.0 * i / 44100.0)), 2);
+        SoundClip clip;
+        std::wstring why;
+        const bool read = SoundDecode(wav, clip, why) && clip.rate == 44100 && clip.x.size() == 22050 && Near(SoundRms(clip.x), 16000.0f / 32768.0f / 2.0f * 0.7071f, 0.002f);
+        std::vector<uint8_t> bad = wav;
+        put(20, 2, 2); // Microsoft ADPCM: not read
+        SoundClip none;
+        const bool adpcm = !SoundDecode(wav, none, why) && !why.empty();
+        bad.resize(30);
+        const bool cut = !SoundDecode(bad, none, why);
+        memcpy(&bad[0], "OggS", 4);
+        Check(read && adpcm && cut && !SoundDecode(bad, none, why), "sound: a WAV file is read as one channel, and what is no such file or of another format is refused with a reason");
+        SoundClip blow, flutter;
+        SoundMakeBlowOff(blow);
+        SoundMakeFlutter(flutter);
+        const bool lengths = Near((float)blow.x.size() / blow.rate, 0.7f, 0.01f) && Near((float)flutter.x.size() / flutter.rate, 0.6f, 0.01f);
+        // the blow-off is over quickly: nine tenths of it in its first 0.3 s; the flutter comes in puffs: its loudness
+        // over 5 ms goes up and down at least eight times in its first 0.4 s
+        double early = 0.0, all = 0.0;
+        for (size_t i = 0; i < blow.x.size(); i++) { all += (double)blow.x[i] * blow.x[i]; if (i < 13230) early += (double)blow.x[i] * blow.x[i]; }
+        int puffs = 0;
+        bool up = false;
+        double mean = 0.0;
+        for (size_t i = 0; i < 17640; i++) mean += fabs(flutter.x[i]) / 17640.0;
+        for (size_t i = 0; i + 220 <= 17640; i += 220)
+        {
+            double level = 0.0;
+            for (size_t j = 0; j < 220; j++) level += fabs(flutter.x[i + j]) / 220.0;
+            if (!up && level > mean * 1.3) { up = true; puffs++; }
+            else if (up && level < mean * 0.8) up = false;
+        }
+        Check(lengths && early > 0.9 * all && puffs >= 8, "sound: the blow-off made by code is a burst that is over in a third of a second, the flutter a row of puffs");
+        SoundClip loud = clip, quiet = clip;
+        for (float &v : quiet.x) v *= 0.01f;
+        SoundLevel(loud);
+        SoundLevel(quiet);
+        SoundLevel(blow);
+        SoundLevel(flutter);
+        auto peak = [](const SoundClip &c) { float p = 0.0f; for (const float v : c.x) p = fmaxf(p, fabsf(v)); return p; };
+        Check(Near(SoundRms(loud.x), SoundRms(quiet.x), 0.001f) && peak(loud) <= kSoundPeak + 0.001f && peak(blow) <= kSoundPeak + 0.001f && peak(flutter) <= kSoundPeak + 0.001f &&
+              peak(blow) > 0.2f && peak(flutter) > 0.2f && fabsf(loud.x.back()) < 0.001f,
+              "sound: every sound is brought to one loudness with its peaks held, and its end fades out");
+    }
 
     printf(g_failed ? "MODELS TEST FAILED (%d)\n" : "MODELS TEST OK\n", g_failed);
     return g_failed ? 1 : 0;

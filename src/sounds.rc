@@ -1,0 +1,5 @@
+// The recordings the mod's file carries (sound.h, SoundCarried). Paths are from the project's folder, where build.bat
+// runs. SOUND_CREDITS.md says whose each recording is and under which licence.
+// BLOWOFF: a turbo's blow-off valve. FLUTTER: a turbo's flutter.
+BLOWOFF RCDATA "assets\\blowoff.wav"
+FLUTTER RCDATA "assets\\flutter.wav"

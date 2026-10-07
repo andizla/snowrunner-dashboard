@@ -14,14 +14,18 @@ if not exist out\test mkdir out\test
 rem the mod: gauge_overlay.cpp draws through ReShade's add-on overlay (headers only, deps\reshade and deps\imgui), its
 rem text in the game's font through stb_truetype (deps\stb); gauges.cpp is the mod's thread
 cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I deps\imgui /I deps\reshade\include /I deps\stb /Fo:out\obj\gauge_overlay.obj src\gauge_overlay.cpp || goto fail
-cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /LD /Fo:out\obj\gauges.obj /Fe:out\Gauges.asi src\gauges.cpp out\obj\gauge_overlay.obj /link user32.lib || goto fail
+rem the recordings the mod's file carries (src\sounds.rc: assets\blowoff.wav and assets\flutter.wav). Without them the
+rem mod is built all the same and makes both sounds by code (src\sound.h)
+set SOUNDS=
+if exist assets\blowoff.wav if exist assets\flutter.wav (rc /nologo /fo out\obj\sounds.res src\sounds.rc || goto fail) & set SOUNDS=out\obj\sounds.res
+cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /LD /Fo:out\obj\gauges.obj /Fe:out\Gauges.asi src\gauges.cpp out\obj\gauge_overlay.obj %SOUNDS% /link user32.lib ole32.lib || goto fail
 rem the settings test: the same source with a main in place of the mod's thread
 cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /D GAUGES_SETTINGS_TEST /Fo:out\obj\settings_test.obj /Fe:out\test\settings_test.exe src\gauges.cpp /link user32.lib || goto fail
 rem the truck test: the reader of the game's memory and the write of engine damage (src\truck.h) against a made up game
 cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I src /Fo:out\obj\truck_test.obj /Fe:out\test\truck_test.exe test\truck_test.cpp || goto fail
 rem the models test: the engine speed, the range, the tilt, the coolant temperature and what it costs the engine
-rem (src\models.h) on made up drives
-cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I src /Fo:out\obj\models_test.obj /Fe:out\test\models_test.exe test\models_test.cpp || goto fail
+rem (src\models.h) on made up drives, and the sounds of a lifted pedal (src\sound.h)
+cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I src /Fo:out\obj\models_test.obj /Fe:out\test\models_test.exe test\models_test.cpp /link ole32.lib || goto fail
 rem the loader
 ml64 /nologo /c /Fo out\obj\version_stubs.obj tools\version_stubs.asm || goto fail
 cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /Fo:out\obj\loader.obj tools\loader.cpp || goto fail

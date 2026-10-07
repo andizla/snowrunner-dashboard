@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.0] 2026-10-07
+
+- The turbo is heard. Take your foot off a floored pedal under boost and the blow-off valve lets the air go. A smaller lift gives a flutter. The more boost there was, the louder, and no two sound quite alike.
+- `SoundVolume` (0 to 100, 50 at first) sets how loud, and 0 switches the sounds off. The Gauges tab has the slider and a button for each sound to hear it.
+- `SoundsOnly` plays the sounds and draws no cluster.
+- Both sounds are made by the mod's own code. A file `sounds\blowoff.wav` or `sounds\flutter.wav` next to `Gauges.asi` is played in its place.
+- The sounds go through XAudio2, the game's own copy or Windows'. The mod holds the audio device only while a sound plays.
+
 ## [0.9.0] 2026-10-07
 
 - The cluster is drawn anew. Solid and tinted dials sit in a bevelled metal ring with a soft shadow, and the solid face is a little lighter towards its middle. In the open style the scale arcs have a soft and a sharp shadow.

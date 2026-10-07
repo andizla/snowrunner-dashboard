@@ -196,6 +196,8 @@ static void OnSettingsTab(reshade::api::effect_runtime *)
     if (act & kPageTruckDrop) SettingsTruckDrop();
     if (act & kPageDefaults) SettingsReset();
     if (act & kPageReload) SettingsReload();
+    if (act & kPageHearBlowOff) SoundHear(true);
+    if (act & kPageHearFlutter) SoundHear(false);
 }
 
 bool OverlayInit(HMODULE self)
