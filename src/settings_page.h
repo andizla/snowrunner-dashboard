@@ -231,7 +231,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         char at[16], from[16], tip[320];
         changed(ImGui::Checkbox("The temperature costs the engine", &s.damage));
         PageTip("On: an engine in the red zone, and a cold engine under a heavy pedal, take the game's own engine damage. A garage repairs it. "
-                "Off: the temperature is only shown.");
+                "Off: the temperature is only shown. It has not been tried in co-op: leave it off there.");
         ImGui::BeginDisabled(!s.damage);
         PageLabel("Overheating", labelX);
         ImGui::SetNextItemWidth(w);
@@ -255,7 +255,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         degrees(0.0f, at, sizeof at);
         degrees(kTempCold, from, sizeof from);
         sprintf_s(tip, "The share it loses each minute with the pedal floored at %s. Less the warmer the engine and the lighter the foot: "
-                       "nothing from %s up, and nothing with the pedal half down or less. 0 = none.", at, from);
+                       "nothing from %s up, and nothing with the pedal half down or less. On a keyboard the pedal is always floored. 0 = none.", at, from);
         PageTip(tip);
         ImGui::EndDisabled();
         if (view.engineCapacity > 0) ImGui::TextDisabled("This truck's engine has %d of %d left.", view.engineCapacity - view.engineDamage, view.engineCapacity);

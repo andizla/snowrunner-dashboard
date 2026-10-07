@@ -381,7 +381,7 @@ inline float TempPath(float from, float to, float load, float kmh, float fullKmh
 inline TempRates TempRatesOf(const GaugeSettings &s)
 {
     static const float hotPath = TempPath(kTempHot, kTempRed, 1.0f, 0.0f, kAirFullRange[0]);
-    static float warmFull = 0.0f, warmPath = 0.0f; // the warm-up's way, and the AirFullKmh it was worked out for
+    static float warmFull = -1.0f, warmPath = 0.0f; // the warm-up's way, and the AirFullKmh it was worked out for (none yet)
     if (s.airFullKmh != warmFull)
     {
         warmPath = TempPath(kTempOutside, kTempWarm, kUsualLoad, kUsualKmh, s.airFullKmh);
@@ -555,7 +555,8 @@ inline bool DamageAdding(const DamageModel &m, const GaugeSettings &s) { return 
 inline bool DamageLamp(bool steady, bool adding, unsigned long long ms) { return adding ? (ms / kDamageBlinkMs) % 2 == 0 : steady; }
 
 // The engine's damage in a line of text for the probe log: what the game holds, what its own rule makes of that
-// with the engine's record (truck.h), and what the model is adding.
+// with the engine's record (truck.h), and what the model is adding. Without a record the rule's numbers are a
+// guess and are marked as one.
 inline void DamageProbeText(const TruckRaw &t, const EngineRecord &e, const DamageModel &m, const GaugeSettings &s, char *out, size_t size)
 {
     if (!t.damageKnown)
@@ -568,13 +569,13 @@ inline void DamageProbeText(const TruckRaw &t, const EngineRecord &e, const Dama
     const bool same = fabsf(effect - t.damageEffect) < 0.0005f && fabsf(torque - t.torqueFactor) < 0.0005f;
     char record[256];
     if (e.found) sprintf_s(record, "record %.80s: takes %d, the torque falls past %.2f of it, from x%.2f to x%.2f", e.name, e.capacity, e.threshold, e.torqueMin, e.torqueMax);
-    else if (!e.name[0]) sprintf_s(record, "the engine's record is looked up once the truck is driven: %.2f and x%.2f to x%.2f stand in", kEngineThreshold, kEngineTorqueMin, kEngineTorqueMax);
-    else sprintf_s(record, "no record of the engine \"%.80s\": %.2f and x%.2f to x%.2f stand in", e.name, kEngineThreshold, kEngineTorqueMin, kEngineTorqueMax);
+    else if (!e.name[0]) sprintf_s(record, "the engine's record is looked up once the truck is driven");
+    else sprintf_s(record, "no record of the engine \"%.80s\"", e.name);
     sprintf_s(out, size,
               "engine damage %d of %d, effect %.3f, torque x%.3f; by the game's rule effect %.3f and torque x%.3f (%s) | all parts %d of %d | %s | "
               "the model: %.2f %% a minute from the heat, %.2f from the cold, %.2f of a point owed, Damage %s",
-              t.damage, t.damageCapacity, t.damageEffect, t.torqueFactor, effect, torque, same ? "as read" : "NOT as read", t.damageSum, t.damageSumCapacity, record, m.hot,
-              m.cold, m.owed, s.damage ? "on" : "off");
+              t.damage, t.damageCapacity, t.damageEffect, t.torqueFactor, effect, torque, !e.found ? "a guess without the record" : same ? "as read" : "NOT as read",
+              t.damageSum, t.damageSumCapacity, record, m.hot, m.cold, m.owed, s.damage ? "on" : "off");
 }
 
 // The models' numbers in a line of text for the probe log.

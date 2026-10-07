@@ -173,6 +173,8 @@ static void ReadIni(GaugeSettings &s)
                         L"; A cold engine (below 60 C) with the pedal more than half down takes ColdDamagePercentPerMinute percent a\n"
                         L"; minute when it is floored at 0 C, and less the warmer it is. A garage repairs this like any engine damage.\n"
                         L"; Damage=0: the temperature is only shown.\n"
+                        L"; On a keyboard the pedal is either up or floored, so every cold start counts as floored there.\n"
+                        L"; ColdDamagePercentPerMinute=0 switches that part off. Damage has not been tried in co-op: leave it at 0 there.\n"
                         L"; ToggleKey is the virtual key code of a key that hides and shows the cluster (0 = none; 120 = F9).\n"
                         L"; PadToggle does the same with pad buttons (XInput): DPadUp, DPadDown, DPadLeft, DPadRight, A, B, X, Y,\n"
                         L"; LB, RB, LS, RS, Start, Back, joined with + (LB+DPadUp), or None. The game sees these buttons too.\n"
@@ -364,6 +366,22 @@ struct TruckWatch
     ULONGLONG modelAt;          // when the models last ran
 };
 
+// Looks up the record of the driven truck's engine, and says so in the log when it is another one than before.
+static void EngineLook(TruckWatch &w, const TruckMemory &m, ULONGLONG now)
+{
+    EngineRecord e;
+    TruckEngineRecord(m, w.refs.vehicle, e);
+    if (w.refs.vehicle != w.engineVehicle || e.found != w.engine.found || strcmp(e.name, w.engine.name) || e.capacity != w.engine.capacity ||
+        e.threshold != w.engine.threshold || e.torqueMin != w.engine.torqueMin || e.torqueMax != w.engine.torqueMax)
+    {
+        if (e.found) Log(L"engine: %S takes %d damage; past %.2f of it the torque falls, from x%.2f to x%.2f", e.name, e.capacity, e.threshold, e.torqueMin, e.torqueMax);
+        else Log(L"engine: no record of \"%S\" was found; its damage is written without the effect, which the game sets at its next damage event", e.name);
+    }
+    w.engine = e;
+    w.engineVehicle = w.refs.vehicle;
+    w.engineAt = now + 5000;
+}
+
 // One pass over the truck: finds its objects twice a second and when a read fails, reads its values and what the
 // game is showing, runs the models, writes the engine's damage into the game when there is some to write, and
 // writes the probe log. front: the game's window is in front. True when a truck is driven in the world and its
@@ -383,10 +401,20 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     }
     else if (now >= w.findAt)
     {
-        // the wheels and the gearbox can be rebuilt under a truck that stays: the objects are looked up anew
+        // the wheels and the gearbox can be rebuilt under a truck that stays: the objects are looked up anew. When the
+        // game drives another truck by now, the values read above are the old truck's: this pass has no truck, and the
+        // next one finds the new truck.
         TruckRefs again;
-        if (TruckFind(m, again)) w.refs = again;
         w.findAt = now + 500;
+        if (TruckFind(m, again))
+        {
+            if (again.vehicle != w.refs.vehicle)
+            {
+                read = false;
+                w.findAt = 0;
+            }
+            w.refs = again;
+        }
     }
     if (!read) w.found = false;
     if (w.found != was)
@@ -441,18 +469,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         RangeStep(w.range, raw, dt);
         TiltStep(w.tilt, raw, s, dt);
         TempStep(w.temp, w.refs.vehicle, raw, TachShare(w.tach, scale), s, dt);
-        // the engine's record, once for each truck; one that was not found is looked for again every five seconds
-        if (w.refs.vehicle != w.engineVehicle || (!w.engine.found && now >= w.engineAt))
-        {
-            const bool first = w.refs.vehicle != w.engineVehicle;
-            if (TruckEngineRecord(m, w.refs.vehicle, w.engine))
-                Log(L"engine: %S takes %d damage; past %.2f of it the torque falls, from x%.2f to x%.2f", w.engine.name, w.engine.capacity, w.engine.threshold,
-                    w.engine.torqueMin, w.engine.torqueMax);
-            else if (first)
-                Log(L"engine: no record of \"%S\" was found; %.2f and x%.2f to x%.2f stand in", w.engine.name, kEngineThreshold, kEngineTorqueMin, kEngineTorqueMax);
-            w.engineVehicle = w.refs.vehicle;
-            w.engineAt = now + 5000;
-        }
+        // the engine's record, for each truck as it is first driven; one that was not found is looked for again every
+        // five seconds
+        if (w.refs.vehicle != w.engineVehicle || (!w.engine.found && now >= w.engineAt)) EngineLook(w, m, now);
         // what the temperature costs the engine: the whole points wait in owed until they are written. Nothing comes
         // together while the game's window is not in front, as the game may stand still then with its last values.
         const int points = DamageStep(w.damage, w.refs.vehicle, raw, w.temp, s, front ? dt : 0.0f);
@@ -464,11 +483,15 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         if (!s.damage) w.owed = 0;
         if (asked > 0) w.asked = w.asked + asked < 1000000 ? w.asked + asked : 1000000;
         // the write into the game: only once the truck has been driven for half a second without a break, with the
-        // game in front and none of its menus up, and at most once a second
-        if (w.owed + w.asked > 0 && front && !world.functionMenu && !world.menuInput && now - w.drivingSince >= 500 && now >= w.writeAt)
+        // game in front and none of its menus up (and the two menu flags read, so that a 0 in them means that), and at
+        // most once a second. The engine's record is looked up again for each write: an engine can change under a
+        // truck that stays.
+        if (w.owed + w.asked > 0 && front && world.menusKnown && world.menu == 0 && !world.functionMenu && !world.menuInput && now - w.drivingSince >= 500 &&
+            now >= w.writeAt)
         {
             DamageWrite d;
             const bool test = w.asked > 0;
+            EngineLook(w, m, now);
             if (TruckDamageAdd(m, w.refs, w.owed + w.asked, w.engine, d))
             {
                 char cause[128], effect[256], after[64] = ""; // the effect and the torque factor are the game's: room for numbers of any size
@@ -774,7 +797,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 31, "ini: the help text survives a write (31 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 33, "ini: the help text survives a write (33 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());

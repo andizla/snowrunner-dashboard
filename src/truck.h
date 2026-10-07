@@ -119,6 +119,7 @@ struct World
     uint8_t menuInput;   // input + 0x1D8
     uint8_t shifter;     // input + 0x1DA and + 0x1DC are both set
     uint8_t functionMenu; // control + 0xD8
+    bool menusKnown;     // menuInput and functionMenu were both read: a 0 in them then means that no menu is up
 };
 
 inline bool TruckEngineOn(const TruckRaw &t) { return (t.flags & 1) != 0; }
@@ -259,15 +260,18 @@ inline bool TruckSane(const TruckRaw &t)
 
 // ---- the engine's record, and the write of its damage ----
 
-enum { kMaxText = 96, kMaxEngineSets = 32, kMaxSetEntries = 1024, kMaxTreeSteps = 64 };
-// What stands in for an engine whose record is not found: the share of its damage from which the torque falls, the
-// torque factor there and the torque factor with the engine worn out.
+enum { kMaxText = 96, kMaxEngineSets = 16, kMaxSetEntries = 256, kMaxTreeSteps = 64 };
+// The numbers the probe log reckons with for an engine whose record is not found: the share of its damage from
+// which the torque falls, the torque factor there and the torque factor with the engine worn out. Nothing is
+// written by them.
 static const float kEngineThreshold = 0.7f, kEngineTorqueMin = 1.0f, kEngineTorqueMax = 0.6f;
+// How far the exe reaches from where it is loaded. The game's objects are never inside it, and nothing is written there.
+static const uint64_t kExeSize = 0x2e02000;
 
 // A text as the game keeps it, 0x20 bytes: the characters themselves while it has room for fewer than 16, else a
 // pointer to them; the length at + 0x10 and the room at + 0x18. False for one that cannot be read or has kMaxText
 // characters or more.
-inline bool TruckText(const TruckMemory &m, uint64_t at, char *out, size_t &length)
+inline bool TruckText(const TruckMemory &m, uint64_t at, char (&out)[kMaxText], size_t &length)
 {
     uint8_t text[0x20];
     uint64_t chars = 0, size = 0, room = 0;
@@ -294,7 +298,7 @@ inline int TruckTextOrder(const char *a, size_t aLength, const char *b, size_t b
 }
 
 // An engine's numbers for its damage, from the game's record of the engine. found is false when the record was not
-// reached; kEngineThreshold, kEngineTorqueMin and kEngineTorqueMax then stand in.
+// reached.
 struct EngineRecord
 {
     bool found;
@@ -369,7 +373,7 @@ inline bool TruckEngineRecord(const TruckMemory &m, uint64_t vehicle, EngineReco
         int capacity = 0;
         if (!record || !m.get(record + 0x74, numbers) || !m.get(record + 0x84, capacity)) continue;
         // numbers that no engine has: the record is not what it was taken for
-        if (!(numbers[0] >= 0.0f && numbers[0] <= 1.0f) || !(numbers[1] >= 0.0f && numbers[1] <= 10.0f) || !(numbers[2] >= 0.0f && numbers[2] <= 10.0f) || capacity <= 0)
+        if (!(numbers[0] >= 0.0f && numbers[0] <= 1.0f) || !(numbers[1] >= 0.0f && numbers[1] <= 2.0f) || !(numbers[2] >= 0.0f && numbers[2] <= 2.0f) || capacity <= 0)
             return false;
         e.threshold = numbers[0];
         e.torqueMin = numbers[1];
@@ -384,7 +388,8 @@ inline bool TruckEngineRecord(const TruckMemory &m, uint64_t vehicle, EngineReco
 // What the game's damage update makes of an engine's damage (RVA 0xd6f690). While the damage's share of what the
 // engine takes is no more than the record's threshold there is no effect, and the engine keeps all its torque. Past
 // the threshold the effect is how far the share has come on the way from there to 1, and the torque factor goes
-// from the record's first to its second with it.
+// from the record's first to its second with it. Without a record the result is a guess from kEngineThreshold,
+// kEngineTorqueMin and kEngineTorqueMax, for the probe log to show.
 inline void TruckEngineEffect(int damage, int capacity, const EngineRecord &e, float &effect, float &torque)
 {
     const float threshold = e.found ? e.threshold : kEngineThreshold, first = e.found ? e.torqueMin : kEngineTorqueMin,
@@ -411,27 +416,36 @@ struct DamageWrite
     float effectBefore, effectAfter, torqueBefore, torqueAfter;
 };
 
-// Adds points to the damage of the driven truck's engine, in the game's memory. The damage only goes up, and it
-// stops one short of what the engine takes: the last point stops the engine, and that stays the game's to do. Once
-// the damage is past the record's threshold, the effect and the torque factor are written as the game's own damage
-// update would leave them (TruckEngineEffect), and never to less of an effect than the game holds. Nothing is
-// written unless the truck is still the one in r, the engine's damage reads as an engine's does, and the engine
-// takes what its record says it takes.
+// Adds points to the damage of the driven truck's engine, in the game's memory. The damage only goes up from what
+// was read, and it stops one short of what the engine takes: the last point stops the engine, and that stays the
+// game's to do. Once the damage is past the record's threshold, the effect and the torque factor are written as the
+// game's own damage update would leave them (TruckEngineEffect), and never to less of an effect than the game
+// holds. Without a record only the damage is written, and the effect follows at the game's next damage event.
+// Nothing is written unless the game still drives the truck in r through the same objects, the engine's damage and
+// the drive train lie outside the exe, the damage reads as an engine's does, and the engine takes what its record
+// says it takes. The game changes the damage too, on its own thread: the damage is read last, right before the
+// write, and a change of the game's that falls into the instant between the two is lost.
 inline bool TruckDamageAdd(const TruckMemory &m, const TruckRefs &r, int points, const EngineRecord &e, DamageWrite &w)
 {
     w = DamageWrite{};
     w.why = "";
-    uint64_t vehicle = 0, action = 0;
+    uint64_t control = 0, vehicle = 0, action = 0;
     int block[3] = {}, after = 0;
     float torque = 0.0f, effect = 0.0f;
     if (!m.poke || points <= 0) { w.why = "there is nothing to write"; return false; }
-    if (!m.get(r.control + 8, vehicle) || vehicle != r.vehicle || !m.get(r.vehicle + 0x68, action) || action != r.action)
+    if (!m.get(m.base + kRvaControl, control) || control != r.control || !m.get(r.control + 8, vehicle) || vehicle != r.vehicle ||
+        !m.get(r.vehicle + 0x68, action) || action != r.action)
     {
         w.why = "the truck is no longer the one being driven";
         return false;
     }
     const uint64_t data = TruckBlock(m, r.vehicle + 0x150);
-    if (!data || !m.get(data, block) || !m.get(r.action + 0xCC, torque)) { w.why = "the engine's damage could not be read"; return false; }
+    if ((data >= m.base && data < m.base + kExeSize) || (r.action >= m.base && r.action < m.base + kExeSize))
+    {
+        w.why = "the engine's damage is not where the game keeps its objects";
+        return false;
+    }
+    if (!data || !m.get(r.action + 0xCC, torque) || !m.get(data, block)) { w.why = "the engine's damage could not be read"; return false; }
     w.before = w.wrote = w.after = block[0];
     w.capacity = block[1];
     memcpy(&w.effectBefore, &block[2], 4);
@@ -446,6 +460,7 @@ inline bool TruckDamageAdd(const TruckMemory &m, const TruckRefs &r, int points,
     w.written = true;
     w.wrote = w.after = to;
     if (m.get(data, after)) w.after = after;
+    if (!e.found) return true;
     TruckEngineEffect(to, block[1], e, effect, torque);
     if (effect > w.effectBefore)
     {
@@ -465,12 +480,13 @@ inline void WorldRead(const TruckMemory &m, uint64_t control, World &w)
     if (m.get(m.base + kRvaMap, map) && map) w.mapThere = m.get(map + 0x148, w.mapOpen);
     w.viewer = m.get(m.base + kRvaViewer, viewer) && viewer;
     w.garage = m.get(m.base + kRvaGarage, garage) && garage;
-    if (m.get(m.base + kRvaInput, input) && m.get(input + 0x1D8, wheel))
+    const bool inputRead = m.get(m.base + kRvaInput, input) && m.get(input + 0x1D8, wheel);
+    if (inputRead)
     {
         w.menuInput = wheel[0];
         w.shifter = wheel[2] && wheel[4];
     }
-    if (control) m.get(control + 0xD8, w.functionMenu);
+    w.menusKnown = control && m.get(control + 0xD8, w.functionMenu) && inputRead;
 }
 
 // A truck is being driven in the world: no level is loading, no menu holds the game, the map is shut, and the truck
@@ -534,14 +550,18 @@ inline void TruckProbeText(const TruckRaw &t, const World &w, float byPosition, 
               w.menu, w.loading, w.mapThere, w.mapOpen, w.viewer, w.garage, w.menuInput, w.shifter, w.functionMenu);
 }
 
+// Whether two numbers hold the same bits. A value that is no number is then the same as itself, where != would
+// call it changed on every pass.
+inline bool TruckSameBits(float a, float b) { return !memcmp(&a, &b, sizeof a); }
+
 // What makes the probe write between its two second lines: a switch, the gear, the engine, the damage, the pedal
 // going down or up, the game's state.
 inline bool TruckProbeEvent(const TruckRaw &a, const World &wa, const TruckRaw &b, const World &wb)
 {
     return a.flags != b.flags || a.handbrake != b.handbrake || a.awd != b.awd || a.diffLock != b.diffLock || a.gear != b.gear || a.gearEngaged != b.gearEngaged ||
            a.automatic != b.automatic ||
-           a.powerFactor != b.powerFactor || a.damage != b.damage || a.damageCapacity != b.damageCapacity || a.torqueFactor != b.torqueFactor ||
-           a.damageEffect != b.damageEffect || a.damageSum != b.damageSum ||
+           !TruckSameBits(a.powerFactor, b.powerFactor) || a.damage != b.damage || a.damageCapacity != b.damageCapacity || !TruckSameBits(a.torqueFactor, b.torqueFactor) ||
+           !TruckSameBits(a.damageEffect, b.damageEffect) || a.damageSum != b.damageSum ||
            a.gearSpeeds != b.gearSpeeds || a.wheels != b.wheels || (a.throttle != 0.0f) != (b.throttle != 0.0f) || (a.stall > 0.0f) != (b.stall > 0.0f) ||
            (a.startTimer > 0.0f) != (b.startTimer > 0.0f) || wa.menu != wb.menu || wa.loading != wb.loading || wa.mapThere != wb.mapThere ||
            wa.mapOpen != wb.mapOpen || wa.viewer != wb.viewer || wa.garage != wb.garage || wa.menuInput != wb.menuInput || wa.shifter != wb.shifter ||

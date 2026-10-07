@@ -345,9 +345,16 @@ int main()
     WorldRead(kMemory, r.control, w);
     Check(viewer && w.garage && !WorldDriving(w), "world: not with the truck viewer or the garage");
     Put(kExe + kRvaGarage, (uint64_t)0);
+    const bool menusRead = w.menusKnown;
     Put(kControl + 0xD8, (uint8_t)1);
     WorldRead(kMemory, r.control, w);
     Check(w.functionMenu && WorldDriving(w), "world: the function menu leaves the cluster on screen");
+    Put(kExe + kRvaInput, (uint64_t)0);
+    WorldRead(kMemory, r.control, w);
+    const bool inputGone = !w.menusKnown;
+    Put(kExe + kRvaInput, kInput);
+    WorldRead(kMemory, 0, w);
+    Check(menusRead && inputGone && !w.menusKnown, "world: the two menu flags count as read only when both were, so a flag that could not be read is not taken for no menu");
     Put(kExe + kRvaGame, (uint64_t)0);
     WorldRead(kMemory, r.control, w);
     Check(!w.known && !WorldDriving(w), "world: not when the game's state cannot be read");
@@ -408,9 +415,11 @@ int main()
     Put(kNodeC, kNodeC); // the engine's node is its own left child: the tree never ends
     const bool looped = !TruckEngineRecord(kMemory, kVehicle, e);
     MakeGame();
-    const float wrong[3] = { 7.0f, 1.0f, 0.6f };
+    const float wrong[3] = { 7.0f, 1.0f, 0.6f }, strong[3] = { 0.7f, 1.0f, 3.0f };
     Put(kNodeC + 0x40 + 0x74, wrong);
-    const bool nonsense = !TruckEngineRecord(kMemory, kVehicle, e) && !e.found;
+    const bool noThreshold = !TruckEngineRecord(kMemory, kVehicle, e) && !e.found;
+    Put(kNodeC + 0x40 + 0x74, strong);
+    const bool nonsense = noThreshold && !TruckEngineRecord(kMemory, kVehicle, e) && !e.found;
     MakeGame();
     Put(kVehicle + 0x968 + 0x10, (uint64_t)5000); // a name of 5000 characters
     const bool tooLong = !TruckEngineRecord(kMemory, kVehicle, e) && !e.name[0];
@@ -472,20 +481,29 @@ int main()
     readEngine();
     Check(leftAlone && engine[0] == 150, "write: an engine at its end is left alone");
 
-    // without a record: 100 of 150 is past a threshold of 0.6 and not past the 0.7 that stands in
+    // the effect the game holds is never lowered: 100 of 150 with an effect of 0.25 from a rule the record does not give
     MakeGame();
     TruckFind(kMemory, r);
+    TruckEngineRecord(kMemory, kVehicle, e);
     const int worn[2] = { 100, 150 };
     Put(kDamage + 0x38, worn);
     Put(kDamage + 0x40, 0.25f);
     Put(kAction + 0xCC, 0.9f);
-    const bool written = TruckDamageAdd(kMemory, r, 1, EngineRecord{}, d) && d.wrote == 101;
+    const bool lower = TruckDamageAdd(kMemory, r, 10, e, d) && d.wrote == 110;
     readEngine();
-    const bool held = engine[0] == 101 && engineEffect == 0.25f && engineTorque == 0.9f;
-    const bool further = TruckDamageAdd(kMemory, r, 19, EngineRecord{}, d) && d.wrote == 120;
+    const bool held = engine[0] == 110 && engineEffect == 0.25f && engineTorque == 0.9f && d.effectAfter == 0.25f && d.torqueAfter == 0.9f;
+    const bool higher = TruckDamageAdd(kMemory, r, 10, e, d) && d.wrote == 120;
     readEngine();
-    Check(written && held && further && Near(engineEffect, 1.0f / 3.0f) && Near(engineTorque, 1.0f - 0.4f / 3.0f),
-          "write: without a record the damage is still written, the effect the game holds is never lowered, and 0.7, 1 and 0.6 stand in past it");
+    Check(lower && held && higher && Near(engineEffect, 1.0f / 3.0f) && Near(engineTorque, 1.0f - 0.4f / 3.0f),
+          "write: the effect the game holds is never written lower, and it is written once the rule gives more");
+    // without a record only the damage is written, however far past any threshold it is
+    Put(kDamage + 0x38, worn);
+    Put(kDamage + 0x40, 0.25f);
+    Put(kAction + 0xCC, 0.9f);
+    const bool alone = TruckDamageAdd(kMemory, r, 45, EngineRecord{}, d) && d.wrote == 145;
+    readEngine();
+    Check(alone && engine[0] == 145 && engineEffect == 0.25f && engineTorque == 0.9f,
+          "write: without a record the damage is written alone, and the effect and the torque factor stay as the game left them");
 
     // what stands in the way of a write
     MakeGame();
@@ -506,14 +524,27 @@ int main()
     Put(kControl + 8, kOtherVehicle);
     const bool otherTruck = !TruckDamageAdd(kMemory, r, 1, e, d);
     Put(kControl + 8, kVehicle);
+    // the game's own pointer to the control object has moved on: the objects in r are no longer the game's
+    Put(kExe + kRvaControl, kOtherVehicle);
+    const bool otherControl = !TruckDamageAdd(kMemory, r, 1, e, d);
+    Put(kExe + kRvaControl, kControl);
+    // a handle that leads into the exe itself, with what reads as an engine's damage there
+    Put(kVehicle + 0x150, kExe + 0x2a8e400);
+    Put(kExe + 0x2a8e400 + 0x10, (uint16_t)1);
+    const int inExe[2] = { 30, 150 };
+    Put(kExe + 0x2a8e400 + 0x38, inExe);
+    const bool exeLeftAlone = !TruckDamageAdd(kMemory, r, 1, e, d) && !d.written;
+    int exeDamage = 0;
+    Peek(kExe + 0x2a8e400 + 0x38, &exeDamage, sizeof exeDamage);
+    Put(kVehicle + 0x150, kDamage | 0x00AB000000000000ull);
     readEngine();
-    const bool untouched = engine[0] == 30 && engineEffect == 0.0f && engineTorque == 1.0f;
+    const bool untouched = engine[0] == 30 && engineEffect == 0.0f && engineTorque == 1.0f && exeDamage == 30;
     const int odd[2] = { 200, 150 };
     Put(kDamage + 0x38, odd);
     const bool oddDamage = !TruckDamageAdd(kMemory, r, 1, e, d);
     readEngine();
-    Check(mismatch && nothing && noWay && noData && otherDriveTrain && otherTruck && untouched && oddDamage && engine[0] == 200,
-          "write: nothing goes to an engine that does not take what its record says, to a handle without data, to another truck, or to damage that reads as no engine's");
+    Check(mismatch && nothing && noWay && noData && otherDriveTrain && otherTruck && otherControl && exeLeftAlone && untouched && oddDamage && engine[0] == 200,
+          "write: nothing goes to an engine that does not take what its record says, to a handle without data, to another truck, into the exe, or to damage that reads as no engine's");
 
     // the probe's text and what makes it write
     MakeGame();
