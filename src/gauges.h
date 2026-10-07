@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#define GAUGES_VERSION "0.6.1"
+#define GAUGES_VERSION "0.7.0"
 
 // The exe the addresses in this mod are from (SnowRunner on Steam, the build of 22 July 2026). On any other the mod
 // stands down.
@@ -202,11 +202,16 @@ inline void GaugeDemo(GaugeState &st, const GaugeSettings &s)
 // not on screen. engineDamage of engineCapacity is the driven truck's engine damage as the game holds it, for the
 // tab; engineCapacity is 0 while it is not known.
 enum { kShown, kHiddenByToggle, kHiddenNoTruck };
-struct GaugeView { bool show, demo; int hidden; GaugeState st; int engineDamage, engineCapacity; };
+// truck: the kind of truck being driven, as the game's files name it ("" while none is driven): the scales in force
+// are that kind's. truckOwn: it has scales of its own in Gauges.ini, and those are the ones in force.
+struct GaugeView { bool show, demo; int hidden; GaugeState st; int engineDamage, engineCapacity; char truck[96]; bool truckOwn; };
 
-void SettingsGet(GaugeSettings &out);       // the settings in force (any thread)
-void SettingsPut(const GaugeSettings &in);  // edited settings: the mod takes them at once and saves the ini a second later
+LONG SettingsGet(GaugeSettings &out);       // the settings in force (any thread); returns their turn, for SettingsPut
+void SettingsPut(const GaugeSettings &in, LONG turn); // settings edited from those of a turn: the mod takes them at once and saves the ini a
+                                            // second later. They are dropped when the mod has put others in force since that turn
 void SettingsReload();                      // read the ini again (the tab's button)
+void SettingsTruckDrop();                   // the tab's button: the driven truck gives up its own scales and takes the plain ones
+void SettingsReset();                       // the tab's button: every setting back to its default, the driven truck's own scales too
 void DamageTestAsk(int points);             // the tab's test buttons: the mod adds this much to the driven truck's engine damage on its next pass
 void ViewGet(GaugeView &out);               // what to draw (any thread)
 void GaugeLog(const wchar_t *fmt, ...);     // a line in Gauges.log (any thread)

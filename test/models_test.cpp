@@ -152,9 +152,9 @@ static int Replay(const char *path)
     // the coolant: each truck's way to the cold lamp's 60 C and to 85 C, in seconds with the truck and in seconds of
     // driving (the engine on and the pedal down or the truck rolling), and the hottest it gets
     std::vector<std::string> notes;
-    std::vector<unsigned long long> trucks;
     unsigned long long truckNow = 0;
-    float tankNow = 0.0f, withTruck = 0.0f, driving = 0.0f, hottest = -1000.0f, inRed = 0.0f, loadSum = 0.0f, kmhSum = 0.0f, drivingAll = 0.0f;
+    uint64_t kindNow = 0;
+    float withTruck = 0.0f, driving = 0.0f, hottest = -1000.0f, inRed = 0.0f, loadSum = 0.0f, kmhSum = 0.0f, drivingAll = 0.0f;
     bool past60 = false, past85 = false;
     char line[2048];
     while (fgets(line, sizeof line, f))
@@ -177,6 +177,10 @@ static int Replay(const char *path)
         t.awd = (uint8_t)awd;
         t.automatic = (uint8_t)automatic;
         t.damageKnown = true;
+        // the table has no name for the truck's kind: it goes by its build, as in the mod where the name is not read
+        char key[kMaxText];
+        TruckBuildKey(t, key);
+        const uint64_t kind = TruckKeyNumber(key);
         // another truck (a recovery, the garage) or a break in the drive: the models start over, as in the mod
         if (last < 0.0f || seconds - last > 5.0f || seconds < last || fabsf(t.tank - tank) > 0.01f)
         {
@@ -191,27 +195,24 @@ static int Replay(const char *path)
             const float dt = fminf(left, kDt), before = tach.rpm;
             const bool was = tach.running;
             TachStep(tach, t, k, dt);
-            RangeStep(range, t, dt);
+            RangeStep(range, kind, t, dt);
             if (was) mostStep = fmaxf(mostStep, fabsf(tach.rpm - before));
             mostRpm = fmaxf(mostRpm, tach.rpm);
             steps++;
             if (tach.rpm > k.redline) redSteps++;
-            TempStep(temp, truck, t, TachShare(tach, k), s, dt);
+            TempStep(temp, kind, t, TachShare(tach, k), s, dt);
             const int cost = DamageStep(wear, truck, t, temp, s, dt);
             (wear.hot > 0.0f ? hotPoints : coldPoints) += (float)cost;
             char note[200];
             if (truck != truckNow)
             {
-                // a new object with the tank of the truck driven until now is that truck, put back into the world
-                // (TempStep): its way to 85 C goes on
-                bool seen = false;
-                for (unsigned long long id : trucks) if (id == truck) seen = true;
-                const bool same = truckNow && !seen && fabsf(t.tank - tankNow) <= 0.01f;
-                if (!seen) trucks.push_back(truck);
-                sprintf_s(note, "%8.2f s: truck %llX, coolant %.1f C%s", seconds, truck, temp.temp, same ? " (the truck driven until now, put back into the world)" : "");
+                // a new object of the kind driven until now is that truck put back into the world, or another of
+                // its kind (TempStep): its way to 85 C goes on
+                const bool same = truckNow && kind == kindNow;
+                sprintf_s(note, "%8.2f s: truck %llX (%s), coolant %.1f C%s", seconds, truck, key, temp.temp, same ? " (of the kind driven until now)" : "");
                 notes.push_back(note);
                 truckNow = truck;
-                tankNow = t.tank;
+                kindNow = kind;
                 if (!same) { withTruck = driving = 0.0f; past60 = temp.temp >= kTempCold; past85 = temp.temp >= kTempWarm; }
             }
             withTruck += dt;
@@ -428,12 +429,13 @@ int main(int argc, char **argv)
     // the range: 2 litres a kilometre at 10 m/s
     t = Truck();
     RangeModel r = {};
+    uint64_t kind = 1;
     auto drive = [&](float metres, float speed, float litresPerKm) {
         t.speed = speed;
         for (float way = 0.0f; way < metres; way += speed * kDt)
         {
             t.fuel -= litresPerKm * speed * kDt / 1000.0f;
-            RangeStep(r, t, kDt);
+            RangeStep(r, kind, t, kDt);
         }
     };
     auto stand = [&](float seconds, float litresPerMinute) {
@@ -441,10 +443,10 @@ int main(int argc, char **argv)
         for (float at = 0.0f; at < seconds; at += kDt)
         {
             t.fuel -= litresPerMinute * kDt / 60.0f;
-            RangeStep(r, t, kDt);
+            RangeStep(r, kind, t, kDt);
         }
     };
-    RangeStep(r, t, kDt);
+    RangeStep(r, kind, t, kDt);
     const bool noneAtFirst = r.rangeKm < 0.0f;
     drive(450.0f, 10.0f, 2.0f);
     const bool noneYet = r.rangeKm < 0.0f;
@@ -455,11 +457,11 @@ int main(int argc, char **argv)
     Check(Near(r.perKm, perKm, 0.001f) && Near(r.rangeKm, before - (fuelBefore - t.fuel) / perKm, 0.05f) && Near(r.standing, 0.84f, 0.01f),
           "range: standing with the engine running takes its litres off the range and leaves the litres a kilometre alone");
     t.fuel = 75.0f;
-    RangeStep(r, t, kDt);
+    RangeStep(r, kind, t, kDt);
     Check(Near(r.perKm, perKm, 0.001f) && Near(r.rangeKm, 75.0f / perKm, 0.05f), "range: a filled tank goes further at the same litres a kilometre");
     t.fuel -= 20.0f;
     t.speed = 10.0f;
-    RangeStep(r, t, kDt);
+    RangeStep(r, kind, t, kDt);
     Check(Near(r.perKm, perKm, 0.01f), "range: fuel that leaves the tank in one go was not burned on the way");
     // the burn doubles: the window takes it in over its three kilometres, never by more than a tenth of the first
     // figure on 50 metres
@@ -474,10 +476,19 @@ int main(int argc, char **argv)
     Check(r.marks <= kRangeMarks && r.way - r.mark[0].way >= kRangeWindow - 1.0f && r.way - r.mark[0].way < kRangeWindow + 2.0f * kRangeMark, "range: the window is the last three kilometres");
     t.tank = 200.0f;
     t.fuel = 150.0f;
-    RangeStep(r, t, kDt);
+    RangeStep(r, kind, t, kDt);
     Check(r.rangeKm < 0.0f && r.way < 1.0, "range: a truck with another tank starts over");
     drive(1100.0f, 10.0f, 0.01f);
     Check(r.rangeKm == kRangeMax, "range: the readout stops at 999");
+    // the same tank under another kind of truck, and back
+    const double wayBefore = r.way;
+    kind = 2;
+    RangeStep(r, kind, t, kDt);
+    const bool another = wayBefore > 1000.0 && r.rangeKm < 0.0f && r.way < 1.0;
+    drive(600.0f, 10.0f, 2.0f);
+    const float secondKind = r.rangeKm;
+    RangeStep(r, kind, t, kDt);
+    Check(another && secondKind > 0.0f && Near(r.rangeKm, secondKind, 0.05f), "range: a truck of another kind starts over, with the same tank too, and a truck of the same kind goes on");
 
     // the tilt
     {
@@ -681,7 +692,7 @@ int main(int argc, char **argv)
             Check(later >= set.ambientC && later < set.ambientC + 0.1f, "coolant: a stopped engine cools to the outside temperature and no further, whatever the pedal does");
         }
 
-        // one truck after another
+        // one truck after another: the model knows a truck by its kind
         {
             TempModel fleet = {};
             TruckRaw scout = c, hauler = c;
@@ -691,54 +702,37 @@ int main(int argc, char **argv)
             TempStep(fleet, 0x2000, hauler, 0.0f, set, 0.0f);
             const bool startsCold = Near(fleet.temp, 15.0f, 0.01f);
             const float leftHauler = Heat(fleet, hauler, 0x2000, set, 600.0f, 1.0f, usualRevs, kUsualKmh);
-            // back in the first truck: ten minutes went by with its engine stopped
+            // back in the first kind: ten minutes went by with its engine stopped
             TempStep(fleet, 0x1000, scout, 0.0f, set, 0.0f);
             const float scoutBack = fleet.temp;
             const bool cooled = Near(fleet.temp, 15.0f + (left - 15.0f) * expf(-TempRatesOf(set).off * 600.0f), 0.3f) && fleet.temp < left - 20.0f;
             // and straight back into the second: nothing was driven in between
             TempStep(fleet, 0x2000, hauler, 0.0f, set, 0.0f);
             Check(left > kTempWarm && startsCold && cooled && Near(fleet.temp, leftHauler, 0.01f),
-                  "coolant: each truck keeps its own temperature, and one left standing cools for as long as others are driven");
-            // a new object with the tank of the truck driven until now; then a truck with another tank
-            TempStep(fleet, 0x3000, hauler, 0.0f, set, 0.0f);
-            const bool putBack = Near(fleet.temp, leftHauler, 0.01f);
-            TruckRaw d = c;
-            d.tank = 120.0f;
-            d.fuel = 100.0f;
-            TempStep(fleet, 0x4000, d, 0.0f, set, 0.0f);
-            Check(putBack && Near(fleet.temp, 15.0f, 0.01f), "coolant: a truck put back into the world as a new object stays as warm as it was, and a truck with another tank starts cold");
-            // the game makes another truck where the driven one was: the same object, another tank
-            Heat(fleet, d, 0x4000, set, 300.0f, 1.0f, usualRevs, kUsualKmh);
-            const bool warmed = fleet.temp > kTempWarm;
-            d.tank = 300.0f;
-            TempStep(fleet, 0x4000, d, 0.0f, set, 0.0f);
-            const bool another = Near(fleet.temp, 15.0f, 0.01f);
-            d.tank = 120.0f;
-            TempStep(fleet, 0x4000, d, 0.0f, set, 0.0f);
-            Check(warmed && another && fleet.temp > kTempWarm, "coolant: the same object with another tank is another truck and starts cold, and the first one is not forgotten");
-            // the first truck taken out of the garage again: a new object with its build. Five minutes were driven in
-            // another truck since it was left. A truck with its tank and six wheels is not it.
-            TempStep(fleet, 0x5000, scout, 0.0f, set, 0.0f);
-            const bool remembered = Near(fleet.temp, 15.0f + (scoutBack - 15.0f) * expf(-TempRatesOf(set).off * 300.0f), 0.3f) && fleet.temp > 30.0f;
-            TruckRaw sixWheeler = scout;
-            sixWheeler.wheels = 6;
-            TempStep(fleet, 0x6000, sixWheeler, 0.0f, set, 0.0f);
-            Check(remembered && Near(fleet.temp, 15.0f, 0.01f),
-                  "coolant: a truck taken out again as a new object is as warm as it was left, less the cooling, and a truck of another build with its tank starts cold");
-            // more trucks than the model remembers, four minutes floored in each
+                  "coolant: each kind of truck keeps its own temperature, and one left standing cools for as long as others are driven");
+            // the kind is all that counts: a truck with the first one's build under a third kind starts cold, and a
+            // truck of the second kind with another tank and two more wheels is as warm as that kind was left
+            TempStep(fleet, 0x3000, scout, 0.0f, set, 0.0f);
+            const bool newKind = Near(fleet.temp, 15.0f, 0.01f);
+            TruckRaw rebuilt = hauler;
+            rebuilt.tank = 300.0f;
+            rebuilt.wheels = 6;
+            TempStep(fleet, 0x2000, rebuilt, 0.0f, set, 0.0f);
+            Check(newKind && Near(fleet.temp, leftHauler, 0.01f),
+                  "coolant: a kind not driven before starts cold, and a truck of a kind driven before is as warm as the kind was left, whatever its build");
+            // the first kind taken out of the garage again, after five minutes in the third
+            Heat(fleet, scout, 0x3000, set, 300.0f, 1.0f, usualRevs, kUsualKmh);
+            TempStep(fleet, 0x1000, scout, 0.0f, set, 0.0f);
+            Check(Near(fleet.temp, 15.0f + (scoutBack - 15.0f) * expf(-TempRatesOf(set).off * 300.0f), 0.3f) && fleet.temp > 30.0f,
+                  "coolant: a truck taken out of the garage again is as warm as it was left, less the cooling");
+            // more kinds than the model remembers, four minutes floored in each
             TempModel many = {};
             TruckRaw x = c;
-            for (int i = 0; i < kTempTrucks + 3; i++)
-            {
-                x.tank = 100.0f + 10.0f * (float)i;
-                Heat(many, x, 0x100 + (uint64_t)i, set, 240.0f, 1.0f, 1.0f, 30.0f);
-            }
-            x.tank = 100.0f;
+            for (int i = 0; i < kTempTrucks + 3; i++) Heat(many, x, 0x100 + (uint64_t)i, set, 240.0f, 1.0f, 1.0f, 30.0f);
             TempStep(many, 0x100, x, 0.0f, set, 0.0f);
             const bool forgotten = Near(many.temp, 15.0f, 0.01f);
-            x.tank = 100.0f + 10.0f * (float)(kTempTrucks + 1);
             TempStep(many, 0x100 + (uint64_t)(kTempTrucks + 1), x, 0.0f, set, 0.0f);
-            Check(forgotten && many.temp > kTempCold && many.temp < kTempWarm, "coolant: of more trucks than the model remembers, the one left longest ago starts cold again and the others are still warm");
+            Check(forgotten && many.temp > kTempCold && many.temp < kTempWarm, "coolant: of more kinds than the model remembers, the one left longest ago starts cold again and the others are still warm");
         }
 
         // the probe's line, and a needle that is no number

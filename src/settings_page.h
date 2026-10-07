@@ -14,7 +14,7 @@ struct PageState
     unsigned long long last = 0;  // GetTickCount64 of the last frame the tab was drawn
 };
 static const unsigned long long kPageCaptureMs = 8000;
-enum { kPageChanged = 1, kPageReload = 2 };
+enum { kPageChanged = 1, kPageReload = 2, kPageTruckDrop = 4, kPageDefaults = 8 };
 
 // The Dear ImGui key as a virtual key, for the keys the toggle key can be; 0 for others.
 static int PageVirtualKey(int k)
@@ -67,7 +67,8 @@ static bool PageCaptureStep(PageState &st, uint32_t padNow, bool beganNow, bool 
 }
 
 // Draws the tab on s (the settings in force) and returns kPageChanged when s was edited, kPageReload for the ini
-// button. view: what the cluster shows now; padNow: the pad's buttons this frame, for pad buttons being set.
+// button, kPageTruckDrop for the button that gives the driven truck the plain scales back, kPageDefaults for the
+// defaults button. view: what the cluster shows now; padNow: the pad's buttons this frame, for pad buttons being set.
 static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, uint32_t padNow)
 {
     int act = 0;
@@ -270,6 +271,16 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     PageTip("Coolant temperature in degrees Fahrenheit. Off: Celsius.");
 
     ImGui::SeparatorText("Scales");
+    // whose scales these are: the driven truck's own, or the plain ones
+    if (!view.truck[0]) ImGui::TextWrapped("No truck is driven. These are the plain scales, which every truck without scales of its own shows.");
+    else if (!view.truckOwn)
+        ImGui::TextWrapped("Scales for %s. It shows the plain ones. Change one here and this kind of truck keeps all five as its own.", view.truck);
+    else
+    {
+        ImGui::TextWrapped("Scales for %s. They are its own, kept in Gauges.ini for this kind of truck.", view.truck);
+        if (ImGui::SmallButton("Back to the plain scales")) act |= kPageTruckDrop;
+        PageTip("This kind of truck gives up its own scales and shows the plain ones again, as every truck without its own does.");
+    }
     static const char *classes[kClassCount] = { "Truck", "Scout", "Heavy" };
     PageLabel("Truck class", labelX);
     ImGui::SetNextItemWidth(w);
@@ -416,10 +427,10 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     ImGui::Separator();
     if (ImGui::Button("Defaults"))
     {
-        SettingsDefaults(s);
         st.capture = -1;
-        act |= kPageChanged;
+        act |= kPageDefaults;
     }
+    PageTip("Every setting back to its default. The truck you drive gives up its own scales; other kinds of truck keep theirs.");
     ImGui::SameLine();
     if (ImGui::Button("Read the ini again")) act |= kPageReload;
     ImGui::TextDisabled("Changes count at once and go into Gauges.ini. Version " GAUGES_VERSION ".");

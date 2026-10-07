@@ -13,7 +13,9 @@
 //   live_states.png    the strip with what this version shows of a truck: parked and cold, automatic, the low range and hot
 //   options.png        other settings: scout scales, mph, psi and Fahrenheit, the air dial on, the lamps off, larger, moved
 //   fallback.png       the strip with the ImGui font standing in (no game font files)
-//   settings.png       the Gauges tab of ReShade's overlay at ReShade FontScale 2 (ReShade's own style differs)
+//   settings.png       the Gauges tab of ReShade's overlay at ReShade FontScale 2 (ReShade's own style differs), with a
+//                      truck driven that has scales of its own
+//   settings_plain.png, settings_none.png   the same with a truck that shows the plain scales, and with no truck driven
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include <windows.h>
 #include <d3d11.h>
@@ -400,20 +402,28 @@ int wmain(int argc, wchar_t **argv)
         view.st = drive;
         view.engineDamage = 14;
         view.engineCapacity = 150;
-        PageState st;
         ImGui::GetStyle().FontScaleMain = 2.0f;
-        int act = 0;
-        wchar_t path[MAX_PATH];
-        swprintf_s(path, L"%s\\settings.png", out);
-        RenderPng(path, 1100, 1800, [&](ImDrawList *, ImDrawList *) {
-            ImGui::SetNextWindowPos(ImVec2(10, 10));
-            ImGui::SetNextWindowSize(ImVec2(1080, 0));
-            ImGui::Begin("Gauges", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
-            act |= SettingsPage(s, view, st, 0);
-            ImGui::End();
-        }, 3);
-        printf("%s settings tab: three frames untouched report no change\n", act ? "FAIL" : "ok  ");
-        if (act) g_failed++;
+        // a truck with scales of its own, a truck that shows the plain ones, and no truck
+        static const struct { const wchar_t *file; const char *truck; bool own; } tabs[3] = {
+            { L"settings.png", "lrd_110/1914924", true }, { L"settings_plain.png", "chevrolet_ck1500", false }, { L"settings_none.png", "", false } };
+        for (const auto &tab : tabs)
+        {
+            strcpy_s(view.truck, tab.truck);
+            view.truckOwn = tab.own;
+            PageState st;
+            int act = 0;
+            wchar_t path[MAX_PATH];
+            swprintf_s(path, L"%s\\%s", out, tab.file);
+            RenderPng(path, 1100, 1900, [&](ImDrawList *, ImDrawList *) {
+                ImGui::SetNextWindowPos(ImVec2(10, 10));
+                ImGui::SetNextWindowSize(ImVec2(1080, 0));
+                ImGui::Begin("Gauges", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+                act |= SettingsPage(s, view, st, 0);
+                ImGui::End();
+            }, 3);
+            printf("%s settings tab (%ls): three frames untouched report no change\n", act ? "FAIL" : "ok  ", tab.file);
+            if (act) g_failed++;
+        }
     }
 
     ImGui_ImplDX11_Shutdown();

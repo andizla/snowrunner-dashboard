@@ -3,7 +3,8 @@
 // and read, that each gearbox position gets its letters, when the cluster is on screen, and that a truck that is
 // changed, freed or makes no sense is not drawn. It also checks that the engine's record is found by its name as the
 // game finds it, and that engine damage is written only where it belongs: up, one short of what the engine takes at
-// most, with the effect and the torque factor the game's own rule gives.
+// most, with the effect and the torque factor the game's own rule gives. And it checks which truck the mod takes a
+// truck for: by its kind's name where the game has one, by its build where it has none.
 // build.bat makes out\test\truck_test.exe; test.bat runs it.
 #include <windows.h>
 #include <stdio.h>
@@ -65,6 +66,17 @@ static const uint64_t kExe = 0x140000000ull, kControl = 0x10000000, kVehicle = 0
                       kWheelList = 0x10050000, kWheelModel = 0x10060000, kWheel = 0x10070000, kSpeeds = 0x10080000, kDamage = 0x10090000, kGameObject = 0x100A0000,
                       kInput = 0x100B0000, kMap = 0x100C0000, kOtherVehicle = 0x100D0000, kTexts = 0x100E0000, kSets = 0x100F0000, kTree = 0x10100000;
 static const TruckMemory kMemory = { Peek, kExe, Poke };
+// The made up truck's kind and the game's id for it, as the game holds them: the kind a text at model + 0x588, the
+// id behind a pointer at vehicle + 0x48 with its length before the pointer and its room after it.
+static const char *const kKind = "lrd_110/1914924", *const kId = "{8E42BF0A-F7C6-40f9-B0F2-225DE74CE031}";
+static const uint64_t kIdChars = kTexts + 0x300;
+static void PutId(const char *id)
+{
+    for (uint64_t i = 0; i <= strlen(id); i++) Put(kIdChars + i, id[i]);
+    Put(kVehicle + 0x40, (uint64_t)strlen(id));
+    Put(kVehicle + 0x48, kIdChars);
+    Put(kVehicle + 0x50, (uint64_t)strlen(id) + 1);
+}
 // The made up game's engine sets: the list's head and its three entries, and the nodes of the two trees. The truck's
 // engine is the last node of the second tree.
 static const uint64_t kSetEntry[3] = { kSets + 0x40, kSets + 0x80, kSets + 0xC0 }, kOldHead = kTree, kOldNode = kTree + 0x100, kNewHead = kTree + 0x200,
@@ -73,7 +85,7 @@ static const uint64_t kSetEntry[3] = { kSets + 0x40, kSets + 0x80, kSets + 0xC0 
 // A truck in third gear of four in automatic at 18 km/h: four wheels, the engine running, headlights and all wheel
 // drive on, 60 of 75 litres, 30 of 150 engine damage. Its engine is "us_scout_modern_engine", which takes 150 and
 // loses torque past 0.7 of that, down to x0.6. The truck takes engines from two sets: the first holds another engine
-// only, the second holds three, the truck's among them.
+// only, the second holds three, the truck's among them. It is a "lrd_110/1914924" with an id of the game's.
 static void MakeGame()
 {
     g_game.clear();
@@ -161,6 +173,8 @@ static void MakeGame()
     Block(kSets, 0x400);
     Block(kTree, 0x800);
     PutText(kVehicle + 0x968, "us_scout_modern_engine", kTexts);
+    PutText(kModel + 0x588, kKind, 0);
+    PutId(kId);
     PutText(kTexts + 0x100, "e_us_scout_old", 0);
     PutText(kTexts + 0x120, "e_us_scout_modern", kTexts + 0x40);
     Put(kVehicle + 0x930, kTexts + 0x100);
@@ -567,6 +581,103 @@ int main()
     readEngine();
     Check(mismatch && nothing && noWay && noData && otherDriveTrain && otherTruck && otherControl && exeLeftAlone && untouched && oddDamage && engine[0] == 200,
           "write: nothing goes to an engine that does not take what its record says, to a handle without data, to another truck, into the exe, or to damage that reads as no engine's");
+
+    // which truck this is
+    {
+        MakeGame();
+        TruckIdentity id, now;
+        TruckFind(kMemory, r);
+        TruckRead(kMemory, r, t);
+        TruckKey(kMemory, r, t, id);
+        Check(id.named && !strcmp(id.key, kKind) && !strcmp(id.id, kId), "identity: a truck goes by the name of its kind, and the game's id for it is read");
+        // a longer name, which the game keeps outside the text itself; and one with characters an ini section's name cannot hold
+        PutText(kModel + 0x588, "scania_nextgen_8x8v2/6169632", kTexts + 0x280);
+        TruckKey(kMemory, r, t, now);
+        const bool longName = now.named && !strcmp(now.key, "scania_nextgen_8x8v2/6169632");
+        PutText(kModel + 0x588, "my [new] truck!", 0);
+        Put(kModel + 0x588 + 13, (uint8_t)0x01);
+        Put(kModel + 0x588 + 14, (uint8_t)0xE9);
+        TruckKey(kMemory, r, t, now);
+        Check(longName && now.named && !strcmp(now.key, "my__new__truc__"), "identity: a long name is read whole, and what a section's name cannot hold is replaced in the key");
+        // the same kind under another id, an id that is none, and no id at all
+        PutText(kModel + 0x588, kKind, 0);
+        PutId("{00000000-1111-2222-3333-444444444444}");
+        TruckKey(kMemory, r, t, now);
+        const bool sameKind = !strcmp(now.key, id.key) && !strcmp(now.id, "{00000000-1111-2222-3333-444444444444}");
+        PutId("{00000000-1111-2222-3333-44444444444}}");
+        TruckKey(kMemory, r, t, now);
+        const bool noShape = !now.id[0] && !strcmp(now.key, id.key);
+        Put(kVehicle + 0x48, (uint64_t)0);
+        TruckKey(kMemory, r, t, now);
+        Check(sameKind && noShape && !now.id[0] && now.named && TruckIdText(kId, 38) && !TruckIdText(kId, 37) && !TruckIdText("{8E42BF0A_F7C6-40f9-B0F2-225DE74CE031}", 38),
+              "identity: two trucks of one kind have one key whatever the game's ids for them, and an id that has not the shape of one is not taken");
+        // no name: the truck goes by its build, which two trucks of one build share and a truck of another build does not
+        PutText(kModel + 0x588, "", 0);
+        TruckKey(kMemory, r, t, id);
+        const bool byBuild = !id.named && !strcmp(id.key, "tank75_wheels4_gearbox6_engine150");
+        TruckRaw twin = t, bigger = t, noEngine = t;
+        twin.fuel = 10.0f;
+        twin.speed = 0.0f;
+        bigger.tank = 200.5f;
+        noEngine.damageKnown = false;
+        TruckIdentity twinId, biggerId, bareId;
+        TruckKey(kMemory, r, twin, twinId);
+        TruckKey(kMemory, r, bigger, biggerId);
+        TruckKey(kMemory, r, noEngine, bareId);
+        Drop(kModel);
+        TruckKey(kMemory, r, t, now);
+        Check(byBuild && !strcmp(twinId.key, id.key) && !strcmp(biggerId.key, "tank200.5_wheels4_gearbox6_engine150") && !strcmp(bareId.key, "tank75_wheels4_gearbox6_engine0") &&
+              !now.named && !strcmp(now.key, id.key),
+              "identity: a truck whose kind has no name, or whose name cannot be read, goes by its build, which two trucks of one build share");
+        Check(TruckKeyNumber(kKind) != 0 && TruckKeyNumber(kKind) == TruckKeyNumber("lrd_110/1914924") && TruckKeyNumber(kKind) != TruckKeyNumber("lrd_110/1914925") &&
+              TruckKeyNumber("") != 0, "identity: a key's number is the same for the same key, another for another, and never 0");
+        // a name whose first character is the end of a text is no name
+        MakeGame();
+        TruckFind(kMemory, r);
+        TruckRead(kMemory, r, t);
+        Put(kModel + 0x588, (uint8_t)0);
+        TruckKey(kMemory, r, t, now);
+        Check(!now.named && !strcmp(now.key, "tank75_wheels4_gearbox6_engine150"), "identity: a name that begins with the end of a text is none, and the truck goes by its build");
+
+        // from pass to pass: another truck counts from the second pass that reads it, one that goes by its build from the twentieth
+        TruckIdentity lrd = {}, ck = {}, built = {};
+        strcpy_s(lrd.key, "lrd_110/1914924");
+        strcpy_s(lrd.id, kId);
+        strcpy_s(ck.key, "chevrolet_ck1500");
+        strcpy_s(built.key, "tank75_wheels4_gearbox6_engine150");
+        lrd.named = ck.named = true;
+        TruckWho who = {};
+        bool taking = false;
+        const bool onFirst = !TruckWhoStep(who, lrd, taking) && !taking && !who.taken.key[0];
+        const bool onSecond = !TruckWhoStep(who, lrd, taking) && taking && !strcmp(who.taken.key, lrd.key);
+        const bool onThird = TruckWhoStep(who, lrd, taking) && !taking;
+        Check(onFirst && onSecond && onThird, "identity: a truck is taken on the second pass that reads it, and the models wait until the pass after");
+        // one pass reads another name: nothing changes; then the other truck for good
+        const bool once = !TruckWhoStep(who, ck, taking) && !taking;
+        const bool backAgain = TruckWhoStep(who, lrd, taking) && !strcmp(who.taken.key, lrd.key);
+        const bool onceMore = !TruckWhoStep(who, ck, taking) && !taking;
+        const bool swapped = !TruckWhoStep(who, ck, taking) && taking && !strcmp(who.taken.key, ck.key) && !who.taken.id[0];
+        Check(once && backAgain && onceMore && swapped, "identity: a name read on one pass alone changes nothing, and each run of passes counts from its own start");
+        // the game's id: one that is not read leaves the last, another one replaces it
+        TruckWho ids = {};
+        TruckWhoStep(ids, lrd, taking);
+        TruckWhoStep(ids, lrd, taking);
+        TruckIdentity noId = lrd, otherId = lrd;
+        noId.id[0] = 0;
+        strcpy_s(otherId.id, "{00000000-1111-2222-3333-444444444444}");
+        const bool idKept = TruckWhoStep(ids, noId, taking) && !strcmp(ids.taken.id, kId);
+        Check(idKept && TruckWhoStep(ids, otherId, taking) && !taking && !strcmp(ids.taken.id, otherId.id),
+              "identity: under one key the game's id follows the truck, and an id that is not read leaves the last one");
+        // a truck that goes by its build: nineteen passes are not enough, and a pass that reads the old truck starts the count over
+        bool early = false;
+        for (int i = 0; i < kTruckPassesUnnamed - 1; i++) early = early || TruckWhoStep(who, built, taking) || taking;
+        const bool notYet = !early && !strcmp(who.taken.key, ck.key);
+        const bool interrupted = TruckWhoStep(who, ck, taking);
+        for (int i = 0; i < kTruckPassesUnnamed - 1; i++) early = early || TruckWhoStep(who, built, taking) || taking;
+        const bool stillNot = !early && !strcmp(who.taken.key, ck.key);
+        const bool atLast = !TruckWhoStep(who, built, taking) && taking && !strcmp(who.taken.key, built.key);
+        Check(notYet && interrupted && stillNot && atLast, "identity: a truck that goes by its build is taken only after twenty passes in a row read that build");
+    }
 
     // the probe's text and what makes it write
     MakeGame();

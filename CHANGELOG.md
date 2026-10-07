@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.7.0] 2026-10-07
+
+- Each kind of truck can have its own scales. Change the truck class, idle, the start of the red zone, the tachometer's top or the speedometer's top on the Gauges tab while you drive a truck, and all five are kept for that kind of truck. They are back whenever you drive one: after a recovery, out of the garage, after a change of trucks and after a new start of the game.
+- A truck that was never set up shows the scales of `[Gauges]`, as before, and an ini from an earlier version works as it is. On the tab those plain scales are the ones shown while no truck is driven: in the game's main menu and in the garage.
+- The Scales section of the tab names the truck it sets, says whether the scales are its own, and has a button that gives the truck the plain scales back.
+- A truck's scales are saved in `Gauges.ini` in a section named after the truck as the game's files name it, such as `[Truck:chevrolet_ck1500]`. `Gauges.log` names the truck each time you take another one.
+- The coolant temperature and the range go by the kind of truck as well. They went by the tank, the wheels and the gearbox before, so two different trucks with the same three shared a temperature. Two trucks of one kind still do.
+- The Defaults button takes the scales of the truck you drive back to the defaults too. Other kinds of truck keep theirs.
+
 ## [0.6.1] 2026-10-07
 
 - Water cools the engine. From about half a metre of water at the truck's front the coolant loses heat to it, and with the engine standing in the water (1.2 m and more) a hot engine is back at 100 C within half a minute, even with the pedal floored. A stopped engine cools five times as fast in deep water. Nothing cools below the outside temperature, and an idling engine in a ford stays warm enough to keep the cold lamp dark.

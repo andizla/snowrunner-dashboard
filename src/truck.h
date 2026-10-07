@@ -322,6 +322,95 @@ inline int TruckTextOrder(const char *a, size_t aLength, const char *b, size_t b
     return order ? order : aLength < bLength ? -1 : aLength > bLength ? 1 : 0;
 }
 
+// Which truck is driven, for what the mod keeps per truck: the scales in Gauges.ini and the models' memory.
+// key: the truck's kind as the game's files name it, a text the game holds at model + 0x588 ("chevrolet_ck1500";
+// for a truck from a mod with the mod's number behind a stroke, "lrd_110/1914924"). It is what the game's save
+// calls the truck's type, so every truck of the kind has it, in every game. Where the text cannot be read the key
+// is made from the truck's build (named is false then), which trucks of one kind share as well.
+// id: the text in braces the game holds for the one truck while it is in the world, behind the pointer at
+// vehicle + 0x48 ("{8E42BF0A-F7C6-40f9-B0F2-225DE74CE031}"); "" when it is not read. It is here for the log
+// alone: the save holds none for a truck in storage, so it is nothing to keep settings by.
+struct TruckIdentity
+{
+    char key[kMaxText];
+    char id[40];
+    bool named;      // key is the kind's name, not the build
+};
+
+// The shape of the game's id of a truck: 38 characters, braces around hex digits in groups of 8, 4, 4, 4 and 12.
+inline bool TruckIdText(const char *text, size_t length)
+{
+    if (length != 38 || text[0] != '{' || text[37] != '}') return false;
+    for (size_t i = 1; i < 37; i++)
+    {
+        const char c = text[i];
+        const bool dash = i == 9 || i == 14 || i == 19 || i == 24;
+        if (dash ? c != '-' : !((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f'))) return false;
+    }
+    return true;
+}
+
+// The key of a truck whose kind's name is not read: its build, which is the tank's size, the number of wheels and
+// of the gearbox's entries, and the damage the engine takes.
+inline void TruckBuildKey(const TruckRaw &t, char (&key)[kMaxText])
+{
+    sprintf_s(key, "tank%g_wheels%d_gearbox%d_engine%d", t.tank, t.wheels, t.gearSpeeds, t.damageKnown ? t.damageCapacity : 0);
+}
+
+// The identity of the truck in r, whose values are t.
+inline void TruckKey(const TruckMemory &m, const TruckRefs &r, const TruckRaw &t, TruckIdentity &id)
+{
+    id = TruckIdentity{};
+    size_t length = 0;
+    if (TruckText(m, r.model + 0x588, id.key, length) && length && id.key[0])
+    {
+        // the key names a section of the ini: what would end the name there, or does not print, is replaced
+        for (char *c = id.key; *c; c++)
+            if ((unsigned char)*c <= 0x20 || (unsigned char)*c > 0x7E || *c == '[' || *c == ']') *c = '_';
+        id.named = true;
+    }
+    else TruckBuildKey(t, id.key);
+    uint64_t chars = 0;
+    char text[39];
+    if (m.get(r.vehicle + 0x48, chars) && chars >= 0x10000 && m.peek(chars, text, sizeof text) && !text[38] && TruckIdText(text, 38)) memcpy(id.id, text, sizeof text);
+}
+
+// The driven truck from pass to pass. taken is the truck the mod goes by, its key "" while none is read. Another
+// key than taken's counts once it was read on kTruckPasses passes in a row, and on kTruckPassesUnnamed for a key
+// made from the build: a text caught while the game writes it, or a build of which a part was not read for a
+// moment, is no other truck. last and passes: the key the last pass read, and for how many passes running.
+enum { kTruckPasses = 2, kTruckPassesUnnamed = 20 };
+struct TruckWho { TruckIdentity taken, last; int passes; };
+
+// One pass that read id. True when the truck read is the one taken. False while another key waits to be taken and
+// on the pass that takes it; taking is true on that pass alone, when what goes with one truck is to start over.
+inline bool TruckWhoStep(TruckWho &w, const TruckIdentity &id, bool &taking)
+{
+    taking = false;
+    const bool again = !strcmp(id.key, w.last.key);
+    w.last = id;
+    if (!strcmp(id.key, w.taken.key))
+    {
+        if (id.id[0]) memcpy(w.taken.id, id.id, sizeof w.taken.id); // an id that is not read leaves the last one
+        w.passes = 0;
+        return true;
+    }
+    w.passes = again ? w.passes + 1 : 1;
+    if (w.passes < (id.named ? kTruckPasses : kTruckPassesUnnamed)) return false;
+    w.taken = id;
+    w.passes = 0;
+    taking = true;
+    return false;
+}
+
+// A number for a key, never 0, for the models to tell trucks apart by.
+inline uint64_t TruckKeyNumber(const char *key)
+{
+    uint64_t n = 1469598103934665603ull;
+    for (; *key; key++) n = (n ^ (uint8_t)*key) * 1099511628211ull;
+    return n ? n : 1;
+}
+
 // An engine's numbers for its damage, from the game's record of the engine. found is false when the record was not
 // reached.
 struct EngineRecord

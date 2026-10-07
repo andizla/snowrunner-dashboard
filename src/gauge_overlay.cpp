@@ -161,12 +161,14 @@ static void OnSettingsTab(reshade::api::effect_runtime *)
     }
     GaugeSettings s;
     GaugeView view;
-    SettingsGet(s);
+    const LONG turn = SettingsGet(s);
     ViewGet(view);
     // the pad is read on every frame of the tab: the frame the binding's button is pressed on has to know that the
     // pad's A, which pressed it, is still down
     const int act = SettingsPage(s, view, st, PadButtons());
-    if (act & kPageChanged) SettingsPut(s);
+    if (act & kPageChanged) SettingsPut(s, turn);
+    if (act & kPageTruckDrop) SettingsTruckDrop();
+    if (act & kPageDefaults) SettingsReset();
     if (act & kPageReload) SettingsReload();
 }
 
