@@ -320,6 +320,72 @@ int wmain(int argc, wchar_t **argv)
         g_shot = keep;
     }
 
+    // close looks at four times the size, for judging the drawing: the tachometer, the lamps and three small dials in
+    // each style, with half of the lamps lit
+    {
+        ID3D11ShaderResourceView *keep = g_shot;
+        g_shot = nullptr;
+        if (gameFont) UseFonts(fonts, 4.0f);
+        GaugeState look = drive;
+        look.rpm = 1650.0f;
+        look.handbrake = look.lowGear = look.cold = true;
+        look.diffLock = false;
+        look.tilt = 1;
+        look.rollDeg = 17.0f;
+        look.tempC = 104.0f;
+        look.rangeKm = 6.4f;
+        static const struct { const wchar_t *name; int style; } closeups[3] = { { L"closeup_open.png", kFaceOpen }, { L"closeup_tinted.png", kFaceTinted }, { L"closeup_solid.png", kFaceSolid } };
+        for (const auto &l : closeups)
+        {
+            GaugeSettings s = def;
+            s.style = l.style;
+            wchar_t path[MAX_PATH];
+            swprintf_s(path, L"%s\\%s", out, l.name);
+            RenderPng(path, 2400, 760, [&](ImDrawList *, ImDrawList *bg) {
+                Backdrop(bg, 2400, 760);
+                // the dials are drawn one by one here, so the style is set as GaugeDraw sets it
+                const GaugeLayout lay = GaugeLayoutOf(s);
+                const float u = 4.0f;
+                const ImVec2 c(1200.0f, 380.0f);
+                s_open = lay.openArc;
+                s_faceAlpha = s_open ? 0.0f : lay.faceAlpha;
+                GTacho(bg, fonts, ImVec2(c.x - 196.0f * u, c.y), 72.0f * u, u, 1.0f, look);
+                GLamps(bg, fonts, ImVec2(c.x - 76.0f * u, c.y), 2, 21.0f * u, 4.0f * u, u, 1.0f, look);
+                GTemp(bg, fonts, ImVec2(c.x + 12.0f * u, c.y + 14.0f * u), 42.0f * u, u, 1.0f, look);
+                GFuel(bg, fonts, ImVec2(c.x + 104.0f * u, c.y + 14.0f * u), 42.0f * u, u, 1.0f, look);
+                GBoost(bg, fonts, ImVec2(c.x + 196.0f * u, c.y + 14.0f * u), 42.0f * u, u, 1.0f, look);
+                GRange(bg, fonts, ImVec2(c.x + 104.0f * u, c.y - 46.0f * u), u, 1.0f, look);
+            });
+        }
+        // what the drawing costs at 2160p, in the solid style with every dial, which draws the most: the strip once
+        // on the picture and 200 times beside it, timed
+        if (gameFont) UseFonts(fonts, 2.0f);
+        GaugeSettings s = def;
+        s.style = kFaceSolid;
+        s.showAir = true;
+        wchar_t path[MAX_PATH];
+        swprintf_s(path, L"%s\\solid_2160p_size.png", out);
+        RenderPng(path, 1560, 420, [&](ImDrawList *, ImDrawList *bg) {
+            Backdrop(bg, 1560, 420);
+            GaugeDraw(bg, fonts, ImVec2(780.0f, 396.0f), 2.0f, 1.0f, look, GaugeLayoutOf(s));
+            LARGE_INTEGER rate, t0, t1;
+            QueryPerformanceFrequency(&rate);
+            QueryPerformanceCounter(&t0);
+            for (int i = 0; i < 200; i++) GaugeDraw(bg, fonts, ImVec2(780.0f, 396.0f + 5000.0f), 2.0f, 1.0f, look, GaugeLayoutOf(s));
+            QueryPerformanceCounter(&t1);
+            const double solidMs = (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)rate.QuadPart / 200.0;
+            GaugeSettings open = s;
+            open.style = kFaceOpen;
+            QueryPerformanceCounter(&t0);
+            for (int i = 0; i < 200; i++) GaugeDraw(bg, fonts, ImVec2(780.0f, 396.0f + 5000.0f), 2.0f, 1.0f, look, GaugeLayoutOf(open));
+            QueryPerformanceCounter(&t1);
+            wprintf(L"drawing the cluster at the size of a 2160p screen takes %.3f ms in the solid style and %.3f ms in the open style (the mean of 200)\n", solidMs,
+                    (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)rate.QuadPart / 200.0);
+        });
+        if (gameFont) UseFonts(fonts, 1.0f);
+        g_shot = keep;
+    }
+
     // what this version shows of a real truck, at twice the size: parked on level ground with the engine off and
     // cold (the cold lamp lit, the temperature needle below its scale), third gear in automatic with the gear half
     // run out at 88 C, leaning 18 degrees to the left, and the low range run out with the differential locked on a

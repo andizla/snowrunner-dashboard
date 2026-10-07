@@ -1,7 +1,10 @@
-// gauge_draw.h: draws the gauge cluster: analogue dials in the style of a truck's dashboard (dark faces, white ticks
-// and needles, red zones, simple icons), drawn crisp at the screen's resolution with Dear ImGui primitives only (own
-// point arrays with AddPolyline / AddConvexPolyFilled: no path helpers, as in the SnowRunner Tire Inflation System,
-// so the same code runs through ReShade's function table). Text is the game's font (gauge_font.h).
+// gauge_draw.h: draws the gauge cluster: analogue dials in the style of a truck's dashboard (dark faces behind a
+// bevelled ring, white ticks and needles, red zones, lamps with the symbols a dashboard uses), drawn crisp at the
+// screen's resolution with Dear ImGui's drawing calls only: own point arrays into AddPolyline, AddConvexPolyFilled and
+// AddConcavePolyFilled, circles and rectangles, all of which ReShade's function table carries. No textures but the
+// font's: the depth comes from layers (soft shadows as fading rings, a ring that is brighter where the light falls,
+// a needle with a bright and a shaded half). Curves are cubic Beziers flattened at the size they are drawn at.
+// Text is the game's font (gauge_font.h).
 // Sizes are reference pixels at 1080p; u converts them to the screen (u = screen height / 1080 x the ini's scale).
 // Shared by the mod (gauge_overlay.cpp, where Dear ImGui comes through ReShade's function table) and the offline
 // preview (test\gauge_preview.cpp, Dear ImGui compiled in), so the preview shows the mod's pixels. Include after
@@ -18,7 +21,7 @@ static const FontStyle kGaugeStyles[kGsStyleCount] = {
     { 13.0f, 1 }, // kGsReadout: digital speed, range
     { 20.0f, 1 }, // kGsGear: the gear in the tachometer
     { 8.0f, 1 },  // kGsGearMode: "A", "H", "L+"
-    { 6.5f, 1 },  // kGsLamp: text badges in the lamps
+    { 6.5f, 1 },  // kGsLamp: the letters inside lamp symbols
     { 7.0f, 0 },  // kGsUnit: small labels next to readouts
 };
 
@@ -41,14 +44,29 @@ static const float kGPi = 3.14159265f;
 static ImU32 GCol(int r, int g, int b, float a) { return IM_COL32(r, g, b, (int)(fminf(fmaxf(a, 0.0f), 1.0f) * 255.0f + 0.5f)); }
 struct GRgb { int r, g, b; };
 static ImU32 GCol(GRgb c, float a) { return GCol(c.r, c.g, c.b, a); }
-static const GRgb kFace = { 13, 14, 16 }, kBezel = { 150, 150, 152 }, kTick = { 232, 232, 232 }, kRed = { 214, 58, 58 }, kBlue = { 70, 135, 225 },
-                  kNeedle = { 240, 240, 240 }, kHub = { 36, 37, 40 }, kDim = { 68, 70, 74 }, kAmber = { 245, 170, 40 }, kGreen = { 80, 210, 100 },
-                  kText = { 225, 225, 225 }, kMuted = { 150, 152, 156 };
+static GRgb GMix(GRgb a, GRgb b, float k) { return GRgb{ a.r + (int)((b.r - a.r) * k), a.g + (int)((b.g - a.g) * k), a.b + (int)((b.b - a.b) * k) }; }
+static float GAlpha(ImU32 col) { return (float)((col >> 24) & 0xff) / 255.0f; }
+static const GRgb kFace = { 11, 12, 14 }, kFaceMid = { 24, 25, 29 }, kTick = { 236, 236, 236 }, kRed = { 222, 52, 48 }, kBlue = { 66, 138, 232 },
+                  kNeedle = { 250, 250, 250 }, kNeedleShade = { 196, 198, 204 }, kDim = { 62, 64, 68 }, kAmber = { 250, 172, 36 }, kGreen = { 72, 214, 98 },
+                  kText = { 228, 228, 228 }, kMuted = { 150, 152, 156 }, kMetalDark = { 52, 54, 58 }, kMetalBright = { 226, 228, 232 };
 
 // Screen degrees: 0 = right, growing clockwise (y points down).
 static ImVec2 GPolar(ImVec2 c, float r, float deg) { const float a = deg * kGPi / 180.0f; return ImVec2(c.x + cosf(a) * r, c.y + sinf(a) * r); }
 
+// A line with round ends.
 static void GLine(ImDrawList *dl, ImVec2 a, ImVec2 b, ImU32 col, float thick)
+{
+    ImVec2 p[2] = { a, b };
+    dl->AddPolyline(p, 2, col, 0, thick);
+    if (thick >= 2.5f) // thinner than this the ends cannot be told from square ones
+    {
+        dl->AddCircleFilled(a, thick * 0.5f, col, 8);
+        dl->AddCircleFilled(b, thick * 0.5f, col, 8);
+    }
+}
+
+// A line with square ends, for ticks that stand on an arc.
+static void GBar(ImDrawList *dl, ImVec2 a, ImVec2 b, ImU32 col, float thick)
 {
     ImVec2 p[2] = { a, b };
     dl->AddPolyline(p, 2, col, 0, thick);
@@ -58,10 +76,88 @@ static void GArc(ImDrawList *dl, ImVec2 c, float r, float d0, float d1, float th
 {
     ImVec2 pts[128];
     const float sweep = d1 - d0;
-    int n = (int)(fabsf(sweep) / 3.0f) + 2;
+    int n = (int)(fabsf(sweep) / 4.5f) + 2; // at 4.5 degrees a piece the arc is within a tenth of a pixel of round on a 2160p screen
     if (n > 127) n = 127;
     for (int i = 0; i <= n; i++) pts[i] = GPolar(c, r, d0 + sweep * i / n);
     dl->AddPolyline(pts, n + 1, col, 0, thick);
+}
+
+// ---- shapes from curves ----
+
+// A contour being built, in screen pixels: straight lines, arcs and cubic Beziers, flattened as they are added.
+enum { kGPathMax = 200 };
+struct GPath { ImVec2 p[kGPathMax]; int n = 0; };
+static void GTo(GPath &g, ImVec2 q) { if (g.n < kGPathMax) g.p[g.n++] = q; }
+
+// A cubic Bezier from the contour's last point by the control points c1 and c2 to q, in steps of about three pixels.
+static void GCurve(GPath &g, ImVec2 c1, ImVec2 c2, ImVec2 q)
+{
+    if (!g.n) return;
+    const ImVec2 from = g.p[g.n - 1];
+    const float length = fabsf(c1.x - from.x) + fabsf(c1.y - from.y) + fabsf(c2.x - c1.x) + fabsf(c2.y - c1.y) + fabsf(q.x - c2.x) + fabsf(q.y - c2.y);
+    int steps = (int)(length / 3.0f) + 3;
+    if (steps > 20) steps = 20;
+    for (int i = 1; i <= steps; i++)
+    {
+        const float t = (float)i / (float)steps, s = 1.0f - t;
+        GTo(g, from * (s * s * s) + c1 * (3.0f * s * s * t) + c2 * (3.0f * s * t * t) + q * (t * t * t));
+    }
+}
+
+static void GArcTo(GPath &g, ImVec2 c, float r, float d0, float d1)
+{
+    int steps = (int)(fabsf(d1 - d0) * r / 170.0f) + 3; // about three pixels a step
+    if (steps > 40) steps = 40;
+    for (int i = 0; i <= steps; i++) GTo(g, GPolar(c, r, d0 + (d1 - d0) * (float)i / (float)steps));
+}
+
+static void GFill(ImDrawList *dl, const GPath &g, ImU32 col) { if (g.n >= 3) dl->AddConcavePolyFilled(g.p, g.n, col); }
+
+// The contour as a line; an open one gets round ends.
+static void GStroke(ImDrawList *dl, const GPath &g, ImU32 col, float thick, bool closed)
+{
+    if (g.n < 2) return;
+    dl->AddPolyline(g.p, g.n, col, closed ? ImDrawFlags_Closed : 0, thick);
+    if (!closed && thick >= 2.5f)
+    {
+        dl->AddCircleFilled(g.p[0], thick * 0.5f, col, 8);
+        dl->AddCircleFilled(g.p[g.n - 1], thick * 0.5f, col, 8);
+    }
+}
+
+// A rectangle with round corners as a contour.
+static void GRound(GPath &g, ImVec2 a, ImVec2 b, float r)
+{
+    GArcTo(g, ImVec2(b.x - r, a.y + r), r, -90.0f, 0.0f);
+    GArcTo(g, ImVec2(b.x - r, b.y - r), r, 0.0f, 90.0f);
+    GArcTo(g, ImVec2(a.x + r, b.y - r), r, 90.0f, 180.0f);
+    GArcTo(g, ImVec2(a.x + r, a.y + r), r, 180.0f, 270.0f);
+}
+
+// A ring that looks turned from metal: brighter where the light from the upper left falls on it, dark opposite.
+static void GRingLit(ImDrawList *dl, ImVec2 c, float r, float thick, GRgb dark, GRgb bright, float a)
+{
+    const int segments = r < 24.0f ? 16 : r < 120.0f ? 28 : 40; // each is an arc of three points
+    for (int i = 0; i < segments; i++)
+    {
+        const float d0 = 360.0f * (float)i / (float)segments, d1 = 360.0f * (float)(i + 1) / (float)segments, mid = (d0 + d1) * 0.5f;
+        float k = 0.5f + 0.5f * cosf((mid - 235.0f) * kGPi / 180.0f);
+        k = k * k * (3.0f - 2.0f * k);
+        ImVec2 p[3] = { GPolar(c, r, d0), GPolar(c, r, mid), GPolar(c, r, d1) };
+        dl->AddPolyline(p, 3, GCol(GMix(dark, bright, k), a), 0, thick);
+    }
+}
+
+// A soft shadow or glow around a circle: rings that fade outwards from radius r over spread.
+static void GSoftRing(ImDrawList *dl, ImVec2 c, float r, float spread, GRgb col, float a)
+{
+    enum { kRings = 3 };
+    const float step = spread / kRings;
+    for (int i = 0; i < kRings; i++)
+    {
+        const float k = 1.0f - (float)i / kRings;
+        dl->AddCircle(c, r + step * ((float)i + 0.5f), GCol(col, a * k * k), r < 60.0f ? 32 : 56, step * 1.15f);
+    }
 }
 
 // A dial's value range and the screen angles it spans (the needle sweeps clockwise from d0 to d1).
@@ -75,201 +171,342 @@ static float GDeg(const GScale &s, float v)
 // The usual 240 degree sweep: from the lower left round the top to the lower right.
 static GScale GSweep(float v0, float v1) { return GScale{ v0, v1, 150.0f, 390.0f }; }
 
+// The dial's ground: in the open style the scale's arc alone, shadowed; else a dark face inside a bevelled ring.
 static void GDialFace(ImDrawList *dl, ImVec2 c, float r, float u, float a)
 {
     if (s_open)
     {
-        // the reference's look: just the scale arc (the ticks start at it), shadowed, nothing behind it
-        GArc(dl, ImVec2(c.x + 1.0f * u, c.y + 1.2f * u), r - 2.5f * u, 150.0f, 390.0f, 2.0f * u, GCol(0, 0, 0, 0.55f * a));
-        GArc(dl, c, r - 2.5f * u, 150.0f, 390.0f, 1.8f * u, GCol(kTick, a));
+        // just the scale arc (the ticks start at it), over a soft and a sharp shadow, nothing behind it
+        const ImVec2 low(c.x + 1.0f * u, c.y + 1.3f * u);
+        GArc(dl, low, r - 2.5f * u, 150.0f, 390.0f, 4.6f * u, GCol(0, 0, 0, 0.16f * a));
+        GArc(dl, low, r - 2.5f * u, 150.0f, 390.0f, 2.4f * u, GCol(0, 0, 0, 0.5f * a));
+        GArc(dl, c, r - 2.5f * u, 150.0f, 390.0f, 1.9f * u, GCol(kTick, a));
         return;
     }
+    const float ring = GGlass() ? 2.2f * u : 3.4f * u; // the bezel's width
+    GSoftRing(dl, ImVec2(c.x, c.y + 1.2f * u), r + ring, 5.0f * u, GRgb{ 0, 0, 0 }, 0.34f * a);
     if (GGlass())
     {
-        // see-through: a shadowed bezel ring and a tinted face the game shows through
-        dl->AddCircle(c, r + 2.4f * u, GCol(0, 0, 0, 0.45f * a), 72, 3.0f * u);
-        if (s_faceAlpha > 0.0f) dl->AddCircleFilled(c, r, GCol(kFace, s_faceAlpha * a), 72);
-        dl->AddCircle(c, r + 0.8f * u, GCol(kBezel, a), 72, 1.6f * u);
-        return;
+        // see-through: a tinted face the game shows through
+        if (s_faceAlpha > 0.0f) dl->AddCircleFilled(c, r + 0.5f * u, GCol(kFace, s_faceAlpha * a), 64);
     }
-    dl->AddCircleFilled(c, r + 3.5f * u, GCol(0, 0, 0, 0.40f * a), 72);   // soft edge against the game image
-    dl->AddCircleFilled(c, r + 1.6f * u, GCol(kBezel, a), 72);            // bezel
-    dl->AddCircleFilled(c, r, GCol(kFace, 0.97f * a), 72);                 // face
-    dl->AddCircle(c, r * 0.96f, GCol(34, 35, 38, a), 72, 1.0f * u);        // a faint inner ring
+    else
+    {
+        // the face: darkest at the rim, a little lighter towards the middle
+        dl->AddCircleFilled(c, r + 0.5f * u, GCol(kFace, a), 64);
+        for (int i = 1; i <= 3; i++) dl->AddCircleFilled(c, r * (1.0f - 0.22f * (float)i), GCol(kFaceMid, 0.14f * a), 40);
+        // the rim's shadow on the face
+        for (int i = 0; i < 3; i++) dl->AddCircle(c, r - (1.0f + 2.0f * (float)i) * u, GCol(0, 0, 0, (0.4f - 0.13f * (float)i) * a), 64, 2.1f * u);
+    }
+    // the bezel: a metal ring between two dark edges
+    GRingLit(dl, c, r + ring * 0.5f, ring, kMetalDark, kMetalBright, a);
+    dl->AddCircle(c, r + ring, GCol(0, 0, 0, 0.75f * a), 64, 1.0f * u);
+    dl->AddCircle(c, r, GCol(0, 0, 0, 0.8f * a), 64, 1.0f * u);
 }
 
 // Dial text: with a drop shadow when the faces are see-through.
 static void GText(ImDrawList *dl, const GaugeFonts &f, int style, ImVec2 at, ImU32 col, const char *s, int align, float u)
 {
-    if (GGlass()) TextDraw(dl, f, style, ImVec2(at.x + 1.2f * u, at.y + 1.4f * u), GCol(0, 0, 0, 0.7f * ((col >> 24) & 0xff) / 255.0f), s, align, u);
+    if (GGlass()) TextDraw(dl, f, style, ImVec2(at.x + 1.2f * u, at.y + 1.4f * u), GCol(0, 0, 0, 0.7f * GAlpha(col)), s, align, u);
     TextDraw(dl, f, style, at, col, s, align, u);
 }
 
-// Major ticks every majorStep with minorPer - 1 minor ticks between them.
+// Major ticks every majorStep with minorPer - 1 minor ticks between them. A major tick is wider at the rim than at
+// its inner end.
 static void GTicks(ImDrawList *dl, ImVec2 c, float r, const GScale &s, float majorStep, int minorPer, float lenMaj, float lenMin, float u, float a)
 {
     const int majors = (int)((s.v1 - s.v0) / majorStep + 0.5f);
-    const ImVec2 sh(1.0f * u, 1.2f * u);
+    const ImVec2 sh(1.0f * u, 1.3f * u);
     for (int pass = GGlass() ? 0 : 1; pass < 2; pass++)
     {
         // pass 0: the shadows under see-through faces, pass 1: the ticks
         const ImVec2 o = pass ? ImVec2(0, 0) : sh;
-        const ImU32 major = pass ? GCol(kTick, a) : GCol(0, 0, 0, 0.6f * a), minor = pass ? GCol(kTick, 0.75f * a) : GCol(0, 0, 0, 0.5f * a);
+        const ImU32 major = pass ? GCol(kTick, a) : GCol(0, 0, 0, 0.55f * a), minor = pass ? GCol(kTick, 0.8f * a) : GCol(0, 0, 0, 0.45f * a);
         for (int i = 0; i <= majors; i++)
         {
             const float v = s.v0 + i * majorStep;
-            const float d = GDeg(s, v);
-            GLine(dl, GPolar(c, r, d) + o, GPolar(c, r - lenMaj * u, d) + o, major, 2.2f * u);
+            const float d = GDeg(s, v), rad = d * kGPi / 180.0f;
+            const ImVec2 side(-sinf(rad), cosf(rad)), outer = GPolar(c, r, d) + o, inner = GPolar(c, r - lenMaj * u, d) + o;
+            ImVec2 q[4] = { outer + side * (1.25f * u), inner + side * (0.75f * u), inner - side * (0.75f * u), outer - side * (1.25f * u) };
+            dl->AddConvexPolyFilled(q, 4, major);
             if (i < majors)
                 for (int j = 1; j < minorPer; j++)
                 {
                     const float dm = GDeg(s, v + majorStep * j / minorPer);
-                    GLine(dl, GPolar(c, r, dm) + o, GPolar(c, r - lenMin * u, dm) + o, minor, 1.3f * u);
+                    GBar(dl, GPolar(c, r, dm) + o, GPolar(c, r - lenMin * u, dm) + o, minor, 1.2f * u);
                 }
         }
     }
 }
 
-// A zone (red, blue) as a thick arc just inside the rim.
+// A zone (red, blue) as a band just inside the rim, with a fainter edge towards the middle.
 static void GZone(ImDrawList *dl, ImVec2 c, float r, const GScale &s, float v0, float v1, float thick, float u, ImU32 col)
 {
-    GArc(dl, c, r - thick * u * 0.5f - 0.5f * u, GDeg(s, v0), GDeg(s, v1), thick * u, col);
+    const float d0 = GDeg(s, v0), d1 = GDeg(s, v1);
+    if (GGlass()) GArc(dl, ImVec2(c.x + 1.0f * u, c.y + 1.3f * u), r - thick * u * 0.5f - 0.5f * u, d0, d1, thick * u, GCol(0, 0, 0, 0.4f * GAlpha(col)));
+    GArc(dl, c, r - thick * u * 0.5f - 0.5f * u, d0, d1, thick * u, col);
+    GArc(dl, c, r - thick * u - 1.3f * u, d0, d1, 1.4f * u, (col & 0x00ffffff) | ((ImU32)(GAlpha(col) * 0.38f * 255.0f) << 24));
 }
 
-// A tapered white needle with a dark counterweight tail and a drop shadow, then the hub.
+// A needle: a blade that tapers to a point, its upper half bright and its lower half shaded as if it had a ridge,
+// a dark counterweight behind the hub, and a soft shadow under all of it.
 static void GNeedle(ImDrawList *dl, ImVec2 c, float deg, float len, float wBase, float wTip, float u, float a, ImU32 col)
 {
     const float rad = deg * kGPi / 180.0f;
     const ImVec2 dir(cosf(rad), sinf(rad)), side(-dir.y, dir.x);
-    const ImVec2 tip = c + dir * len, tail = c - dir * (len * 0.2f), sh(1.0f * u, 1.5f * u);
-    ImVec2 q[4] = { c + side * (wBase * u) + sh, tip + side * (wTip * u) + sh, tip - side * (wTip * u) + sh, c - side * (wBase * u) + sh };
-    dl->AddConvexPolyFilled(q, 4, GCol(0, 0, 0, 0.45f * a));
-    ImVec2 t[4] = { c + side * (wBase * 1.1f * u), tail + side * (wBase * 0.9f * u), tail - side * (wBase * 0.9f * u), c - side * (wBase * 1.1f * u) };
-    dl->AddConvexPolyFilled(t, 4, GCol(88, 88, 90, a));
-    ImVec2 p[4] = { c + side * (wBase * u), tip + side * (wTip * u), tip - side * (wTip * u), c - side * (wBase * u) };
-    dl->AddConvexPolyFilled(p, 4, col);
+    const ImVec2 neck = c + dir * (len * 0.95f), tip = c + dir * len, tail = c - dir * (len * 0.24f);
+    const ImVec2 b0 = c + side * (wBase * u), b1 = c - side * (wBase * u), n0 = neck + side * (wTip * u), n1 = neck - side * (wTip * u);
+    // the shadow: a wide faint one and a closer darker one
+    for (int i = 0; i < 2; i++)
+    {
+        const ImVec2 sh = i ? ImVec2(1.0f * u, 1.6f * u) : ImVec2(1.8f * u, 3.0f * u);
+        ImVec2 q[5] = { b0 + sh, n0 + sh, tip + sh, n1 + sh, b1 + sh };
+        dl->AddConvexPolyFilled(q, 5, GCol(0, 0, 0, (i ? 0.36f : 0.14f) * a));
+    }
+    // the counterweight
+    const ImVec2 t0 = tail + side * (wBase * 1.25f * u), t1 = tail - side * (wBase * 1.25f * u);
+    ImVec2 w[4] = { c + side * (wBase * 1.25f * u), t0, t1, c - side * (wBase * 1.25f * u) };
+    dl->AddConvexPolyFilled(w, 4, GCol(54, 55, 59, a));
+    dl->AddCircleFilled(tail, wBase * 1.25f * u, GCol(54, 55, 59, a), 16);
+    // the blade's two halves; which is the bright one depends on where the light from the upper left falls
+    const bool upper = side.x * -0.57f + side.y * -0.82f > 0.0f;
+    const ImU32 lit = col, shade = GCol(kNeedleShade, GAlpha(col));
+    ImVec2 h0[4] = { c, b0, n0, tip }, h1[4] = { c, tip, n1, b1 };
+    dl->AddConvexPolyFilled(h0, 4, upper ? lit : shade);
+    dl->AddConvexPolyFilled(h1, 4, upper ? shade : lit);
 }
 
+// The hub over the needle's foot: a dark cap with a lighter top, a metal ring and a centre dot.
 static void GHub(ImDrawList *dl, ImVec2 c, float r, float u, float a)
 {
-    dl->AddCircleFilled(c, r, GCol(kHub, a), 32);
-    dl->AddCircle(c, r, GCol(160, 160, 162, a), 32, 1.2f * u);
-    dl->AddCircleFilled(c, r * 0.32f, GCol(125, 125, 128, a), 16);
+    dl->AddCircleFilled(ImVec2(c.x + 0.8f * u, c.y + 1.5f * u), r * 1.32f, GCol(0, 0, 0, 0.13f * a), 20);
+    dl->AddCircleFilled(ImVec2(c.x + 0.6f * u, c.y + 1.1f * u), r * 1.08f, GCol(0, 0, 0, 0.3f * a), 20);
+    dl->AddCircleFilled(c, r, GCol(22, 23, 26, a), 28);
+    dl->AddCircleFilled(ImVec2(c.x - r * 0.12f, c.y - r * 0.14f), r * 0.74f, GCol(44, 45, 50, a), 20);
+    dl->AddCircleFilled(ImVec2(c.x - r * 0.2f, c.y - r * 0.24f), r * 0.42f, GCol(64, 66, 72, a), 14);
+    GRingLit(dl, c, r, 1.3f * u, GRgb{ 40, 41, 45 }, GRgb{ 205, 207, 212 }, a);
+    dl->AddCircleFilled(c, r * 0.22f, GCol(168, 170, 175, a), 10);
 }
 
-// ---- icons, each centred on p with height h (screen pixels) ----
+// ---- icons, each centred on p with height h (screen pixels), after the symbols a dashboard uses ----
 
-static void GIconFuel(ImDrawList *dl, ImVec2 p, float h, ImU32 col, float faceA)
+// The fuel pump: a body with a window, a foot, and a hose up its right side to the nozzle.
+static void GIconFuel(ImDrawList *dl, ImVec2 p, float h, ImU32 col)
 {
-    const float w = h * 0.62f;
-    dl->AddRectFilled(ImVec2(p.x - w * 0.5f, p.y - h * 0.5f), ImVec2(p.x + w * 0.5f, p.y + h * 0.5f), col, h * 0.1f);
-    dl->AddRectFilled(ImVec2(p.x - w * 0.32f, p.y - h * 0.36f), ImVec2(p.x + w * 0.32f, p.y - h * 0.1f), GCol(kFace, faceA), h * 0.04f);
-    ImVec2 hose[4] = { ImVec2(p.x + w * 0.5f, p.y - h * 0.12f), ImVec2(p.x + w * 0.82f, p.y - h * 0.12f), ImVec2(p.x + w * 0.82f, p.y - h * 0.42f), ImVec2(p.x + w * 0.62f, p.y - h * 0.5f) };
-    dl->AddPolyline(hose, 4, col, 0, h * 0.09f);
-    dl->AddRectFilled(ImVec2(p.x - w * 0.64f, p.y + h * 0.42f), ImVec2(p.x + w * 0.64f, p.y + h * 0.5f), col);
+    auto P = [&](float x, float y) { return ImVec2(p.x + x * h, p.y + y * h); };
+    const float line = h * 0.085f;
+    GPath body;
+    GRound(body, P(-0.33f, -0.46f), P(0.11f, 0.38f), h * 0.05f);
+    GStroke(dl, body, col, line, true);
+    dl->AddRectFilled(P(-0.33f, -0.06f), P(0.11f, 0.38f), col);
+    dl->AddRectFilled(P(-0.41f, 0.38f), P(0.19f, 0.47f), col, h * 0.02f);
+    GPath hose;
+    GTo(hose, P(0.11f, 0.12f));
+    GTo(hose, P(0.2f, 0.12f));
+    GCurve(hose, P(0.3f, 0.12f), P(0.3f, 0.12f), P(0.3f, 0.02f));
+    GTo(hose, P(0.3f, -0.2f));
+    GTo(hose, P(0.19f, -0.34f));
+    GStroke(dl, hose, col, line * 0.9f, false);
 }
 
+// Coolant temperature: a thermometer standing in waves.
 static void GIconTemp(ImDrawList *dl, ImVec2 p, float h, ImU32 col)
 {
-    const float x = p.x - h * 0.08f;
-    GLine(dl, ImVec2(x, p.y - h * 0.5f), ImVec2(x, p.y + h * 0.04f), col, h * 0.16f);
-    dl->AddCircleFilled(ImVec2(x, p.y + h * 0.14f), h * 0.16f, col, 12);
-    GLine(dl, ImVec2(x + h * 0.12f, p.y - h * 0.36f), ImVec2(x + h * 0.26f, p.y - h * 0.36f), col, h * 0.06f);
-    GLine(dl, ImVec2(x + h * 0.12f, p.y - h * 0.2f), ImVec2(x + h * 0.26f, p.y - h * 0.2f), col, h * 0.06f);
+    auto P = [&](float x, float y) { return ImVec2(p.x + x * h, p.y + y * h); };
+    GLine(dl, P(0.0f, -0.44f), P(0.0f, 0.1f), col, h * 0.11f);
+    dl->AddCircleFilled(P(0.0f, 0.15f), h * 0.135f, col, 16);
+    GLine(dl, P(0.1f, -0.36f), P(0.25f, -0.36f), col, h * 0.06f);
+    GLine(dl, P(0.1f, -0.2f), P(0.25f, -0.2f), col, h * 0.06f);
     for (int k = 0; k < 2; k++)
     {
-        const float y = p.y + h * (0.36f + 0.15f * k);
-        ImVec2 w[7];
-        for (int i = 0; i < 7; i++) w[i] = ImVec2(p.x - h * 0.46f + h * 0.92f * i / 6.0f, y + ((i & 1) ? -1.0f : 1.0f) * h * 0.045f);
-        dl->AddPolyline(w, 7, col, 0, h * 0.08f);
+        GPath wave;
+        for (int i = 0; i <= 12; i++)
+        {
+            const float x = -0.46f + 0.92f * (float)i / 12.0f;
+            GTo(wave, P(x, 0.3f + 0.15f * (float)k + 0.04f * sinf((x + 0.46f) / 0.92f * 3.0f * 2.0f * kGPi)));
+        }
+        GStroke(dl, wave, col, h * 0.065f, false);
     }
 }
 
+// The turbocharger: a snail housing with its wheel and the outlet at the top.
 static void GIconTurbo(ImDrawList *dl, ImVec2 p, float h, ImU32 col)
 {
-    const ImVec2 c(p.x - h * 0.1f, p.y + h * 0.08f);
-    dl->AddCircle(c, h * 0.3f, col, 24, h * 0.1f);
-    dl->AddCircleFilled(c, h * 0.1f, col, 12);
-    ImVec2 out[3] = { ImVec2(c.x, c.y - h * 0.3f), ImVec2(p.x + h * 0.46f, c.y - h * 0.3f), ImVec2(p.x + h * 0.46f, c.y - h * 0.05f) };
-    dl->AddPolyline(out, 3, col, 0, h * 0.1f);
+    auto P = [&](float x, float y) { return ImVec2(p.x + x * h, p.y + y * h); };
+    const ImVec2 c = P(-0.08f, 0.08f);
+    const float line = h * 0.085f;
+    GPath snail;
+    GTo(snail, P(0.44f, -0.24f));
+    GTo(snail, P(-0.08f, -0.24f));
+    GArcTo(snail, c, h * 0.32f, 270.0f, 20.0f);
+    GStroke(dl, snail, col, line, false);
+    GLine(dl, P(0.44f, -0.36f), P(0.44f, -0.12f), col, line);
+    dl->AddCircle(c, h * 0.13f, col, 20, line * 0.9f);
+    for (int i = 0; i < 3; i++) GLine(dl, GPolar(c, h * 0.13f, 120.0f * (float)i + 20.0f), GPolar(c, h * 0.3f, 120.0f * (float)i + 62.0f), col, line * 0.55f);
 }
 
+// A circle between two brackets, as the brake symbols have it.
+static void GIconBrake(ImDrawList *dl, ImVec2 p, float h, ImU32 col)
+{
+    const float line = h * 0.075f;
+    dl->AddCircle(p, h * 0.31f, col, 20, line);
+    GPath left, right;
+    GArcTo(left, p, h * 0.46f, 138.0f, 222.0f);
+    GArcTo(right, p, h * 0.46f, -42.0f, 42.0f);
+    GStroke(dl, left, col, line, false);
+    GStroke(dl, right, col, line, false);
+}
+
+// Brake air pressure: the brake symbol with an exclamation mark.
 static void GIconAir(ImDrawList *dl, ImVec2 p, float h, ImU32 col)
 {
-    GArc(dl, p, h * 0.44f, 125.0f, 235.0f, h * 0.08f, col);
-    GArc(dl, p, h * 0.44f, -55.0f, 55.0f, h * 0.08f, col);
-    GLine(dl, ImVec2(p.x, p.y - h * 0.3f), ImVec2(p.x, p.y + h * 0.08f), col, h * 0.12f);
-    dl->AddCircleFilled(ImVec2(p.x, p.y + h * 0.27f), h * 0.075f, col, 8);
+    GIconBrake(dl, p, h, col);
+    GBar(dl, ImVec2(p.x, p.y - h * 0.19f), ImVec2(p.x, p.y + h * 0.05f), col, h * 0.075f);
+    dl->AddCircleFilled(ImVec2(p.x, p.y + h * 0.17f), h * 0.045f, col, 10);
 }
 
+// The parking brake: the brake symbol with a P.
 static void GIconHandbrake(ImDrawList *dl, const GaugeFonts &f, ImVec2 p, float h, ImU32 col, float u)
 {
-    GArc(dl, p, h * 0.5f, 120.0f, 240.0f, h * 0.08f, col);
-    GArc(dl, p, h * 0.5f, -60.0f, 60.0f, h * 0.08f, col);
-    TextDraw(dl, f, kGsLamp, ImVec2(p.x, p.y), col, "P", 0, u);
+    GIconBrake(dl, p, h, col);
+    TextDraw(dl, f, kGsLamp, ImVec2(p.x + 0.2f * u, p.y), col, "P", 0, u);
 }
 
+// Headlights: a lamp with its rays falling forwards.
 static void GIconBeam(ImDrawList *dl, ImVec2 p, float h, ImU32 col)
 {
-    ImVec2 pts[18];
-    int n = 0;
-    const ImVec2 lc(p.x - h * 0.16f, p.y);
-    for (int i = 0; i <= 16; i++) pts[n++] = GPolar(lc, h * 0.3f, 90.0f + 180.0f * i / 16.0f);
-    dl->AddConvexPolyFilled(pts, n, col);
-    for (int i = -1; i <= 1; i++)
-        GLine(dl, ImVec2(p.x + h * 0.02f, p.y + i * h * 0.21f), ImVec2(p.x + h * 0.46f, p.y + i * h * 0.21f - h * 0.07f), col, h * 0.08f);
+    auto P = [&](float x, float y) { return ImVec2(p.x + x * h, p.y + y * h); };
+    GPath lamp;
+    GTo(lamp, P(-0.04f, -0.31f));
+    GCurve(lamp, P(-0.5f, -0.31f), P(-0.5f, 0.31f), P(-0.04f, 0.31f));
+    GFill(dl, lamp, col);
+    for (int i = 0; i < 4; i++)
+    {
+        const float y = -0.27f + 0.18f * (float)i;
+        GLine(dl, P(0.09f, y), P(0.46f, y + 0.09f), col, h * 0.07f);
+    }
 }
 
+// A wheel seen from above, for the two drive train symbols.
+static void GWheel(ImDrawList *dl, ImVec2 c, float w, float h, ImU32 col) { dl->AddRectFilled(ImVec2(c.x - w * 0.5f, c.y - h * 0.5f), ImVec2(c.x + w * 0.5f, c.y + h * 0.5f), col, w * 0.3f); }
+
+// All wheel drive: the drive train from above, four wheels on two axles and the shaft between them.
+static void GIconAwd(ImDrawList *dl, ImVec2 p, float h, ImU32 col)
+{
+    auto P = [&](float x, float y) { return ImVec2(p.x + x * h, p.y + y * h); };
+    const float line = h * 0.075f;
+    for (int i = 0; i < 4; i++) GWheel(dl, P(i & 1 ? 0.37f : -0.37f, i & 2 ? 0.28f : -0.28f), h * 0.17f, h * 0.3f, col);
+    GBar(dl, P(-0.3f, -0.28f), P(0.3f, -0.28f), col, line);
+    GBar(dl, P(-0.3f, 0.28f), P(0.3f, 0.28f), col, line);
+    GBar(dl, P(0.0f, -0.28f), P(0.0f, 0.28f), col, line);
+    dl->AddCircleFilled(P(0.0f, -0.28f), h * 0.085f, col, 12);
+    dl->AddCircleFilled(P(0.0f, 0.28f), h * 0.085f, col, 12);
+}
+
+// The differential lock: one axle with its two wheels and a cross in the differential's case.
+static void GIconDiff(ImDrawList *dl, ImVec2 p, float h, ImU32 col)
+{
+    auto P = [&](float x, float y) { return ImVec2(p.x + x * h, p.y + y * h); };
+    const float line = h * 0.075f;
+    GWheel(dl, P(-0.39f, 0.0f), h * 0.17f, h * 0.5f, col);
+    GWheel(dl, P(0.39f, 0.0f), h * 0.17f, h * 0.5f, col);
+    GBar(dl, P(-0.32f, 0.0f), P(-0.19f, 0.0f), col, line);
+    GBar(dl, P(0.19f, 0.0f), P(0.32f, 0.0f), col, line);
+    GPath box;
+    GRound(box, P(-0.19f, -0.19f), P(0.19f, 0.19f), h * 0.04f);
+    GStroke(dl, box, col, line, true);
+    GLine(dl, P(-0.1f, -0.1f), P(0.1f, 0.1f), col, line);
+    GLine(dl, P(-0.1f, 0.1f), P(0.1f, -0.1f), col, line);
+}
+
+// The low range: a gear wheel with an L.
+static void GIconLow(ImDrawList *dl, const GaugeFonts &f, ImVec2 p, float h, ImU32 col, float u)
+{
+    GPath cog;
+    for (int i = 0; i < 8; i++)
+    {
+        const float d = 45.0f * (float)i;
+        GTo(cog, GPolar(p, h * 0.37f, d - 14.0f));
+        GTo(cog, GPolar(p, h * 0.47f, d - 8.0f));
+        GTo(cog, GPolar(p, h * 0.47f, d + 8.0f));
+        GTo(cog, GPolar(p, h * 0.37f, d + 14.0f));
+    }
+    GStroke(dl, cog, col, h * 0.07f, true);
+    TextDraw(dl, f, kGsLamp, ImVec2(p.x + 0.3f * u, p.y), col, "L", 0, u);
+}
+
+// The engine: its block with the intake on top, the fan's stub on the left and the gearbox flange on the right.
 static void GIconEngine(ImDrawList *dl, ImVec2 p, float h, ImU32 col)
 {
-    const float r = h * 0.05f;
-    dl->AddRectFilled(ImVec2(p.x - h * 0.3f, p.y - h * 0.16f), ImVec2(p.x + h * 0.34f, p.y + h * 0.24f), col, r);
-    dl->AddRectFilled(ImVec2(p.x - h * 0.18f, p.y - h * 0.36f), ImVec2(p.x + h * 0.08f, p.y - h * 0.12f), col, r);
-    dl->AddRectFilled(ImVec2(p.x - h * 0.46f, p.y - h * 0.02f), ImVec2(p.x - h * 0.28f, p.y + h * 0.16f), col);
-    dl->AddRectFilled(ImVec2(p.x - h * 0.06f, p.y + h * 0.22f), ImVec2(p.x + h * 0.14f, p.y + h * 0.38f), col);
-    dl->AddRectFilled(ImVec2(p.x + h * 0.32f, p.y - h * 0.06f), ImVec2(p.x + h * 0.46f, p.y + h * 0.08f), col);
+    static const float k[][2] = { { -0.14f, -0.36f }, { 0.14f, -0.36f }, { 0.14f, -0.28f }, { 0.05f, -0.28f }, { 0.05f, -0.19f }, { 0.2f, -0.19f }, { 0.28f, -0.08f },
+                                  { 0.36f, -0.08f }, { 0.36f, -0.16f }, { 0.46f, -0.16f }, { 0.46f, 0.22f }, { 0.36f, 0.22f }, { 0.36f, 0.12f }, { 0.28f, 0.12f },
+                                  { 0.28f, 0.3f }, { -0.12f, 0.3f }, { -0.22f, 0.18f }, { -0.32f, 0.18f }, { -0.32f, 0.04f }, { -0.4f, 0.04f }, { -0.4f, 0.16f },
+                                  { -0.47f, 0.16f }, { -0.47f, -0.16f }, { -0.4f, -0.16f }, { -0.4f, -0.04f }, { -0.32f, -0.04f }, { -0.32f, -0.19f }, { -0.05f, -0.19f },
+                                  { -0.05f, -0.28f }, { -0.14f, -0.28f } };
+    GPath block;
+    for (const auto &q : k) GTo(block, ImVec2(p.x + q[0] * h, p.y + (q[1] + 0.03f) * h));
+    GFill(dl, block, col);
 }
 
+// Frost: a snow crystal.
 static void GIconSnow(ImDrawList *dl, ImVec2 p, float h, ImU32 col)
 {
     for (int i = 0; i < 3; i++)
     {
         const float d = 90.0f + 60.0f * i;
-        GLine(dl, GPolar(p, h * 0.44f, d), GPolar(p, h * 0.44f, d + 180.0f), col, h * 0.08f);
+        GLine(dl, GPolar(p, h * 0.45f, d), GPolar(p, h * 0.45f, d + 180.0f), col, h * 0.075f);
         for (int s = 0; s < 2; s++)
         {
             const float arm = d + 180.0f * s;
-            const ImVec2 m = GPolar(p, h * 0.27f, arm);
-            GLine(dl, m, GPolar(m, h * 0.15f, arm + 40.0f), col, h * 0.07f);
-            GLine(dl, m, GPolar(m, h * 0.15f, arm - 40.0f), col, h * 0.07f);
+            const ImVec2 m = GPolar(p, h * 0.26f, arm);
+            GLine(dl, m, GPolar(m, h * 0.15f, arm + 45.0f), col, h * 0.065f);
+            GLine(dl, m, GPolar(m, h * 0.15f, arm - 45.0f), col, h * 0.065f);
         }
     }
 }
 
-// A truck seen from behind, leaning with the roll, over a horizon line.
+// The tilt: a truck seen from behind, leaning as the driven one does, over level ground. rollDeg above 0: the truck
+// leans to its right.
 static void GIconTilt(ImDrawList *dl, ImVec2 p, float h, float rollDeg, ImU32 col)
 {
     const float rad = rollDeg * kGPi / 180.0f, cs = cosf(rad), sn = sinf(rad);
-    const ImVec2 o(p.x, p.y + h * 0.06f);
-    auto R = [&](float x, float y) { return ImVec2(o.x + x * cs - y * sn, o.y + x * sn + y * cs); };
-    const float w = h * 0.36f, t = h * 0.2f;
-    ImVec2 body[4] = { R(-w, -t * 1.4f), R(w, -t * 1.4f), R(w, t * 0.5f), R(-w, t * 0.5f) };
-    dl->AddConvexPolyFilled(body, 4, col);
-    dl->AddCircleFilled(R(-w * 0.62f, t * 0.8f), h * 0.1f, col, 10);
-    dl->AddCircleFilled(R(w * 0.62f, t * 0.8f), h * 0.1f, col, 10);
-    GLine(dl, ImVec2(p.x - h * 0.5f, p.y + h * 0.47f), ImVec2(p.x + h * 0.5f, p.y + h * 0.47f), col, h * 0.06f);
+    const ImVec2 o(p.x, p.y + h * 0.1f);
+    auto R = [&](float x, float y) { return ImVec2(o.x + (x * cs - y * sn) * h, o.y + (x * sn + y * cs) * h); };
+    auto box = [&](float x0, float y0, float x1, float y1) {
+        ImVec2 q[4] = { R(x0, y0), R(x1, y0), R(x1, y1), R(x0, y1) };
+        dl->AddConvexPolyFilled(q, 4, col);
+    };
+    // the cab as a frame with its window open, the body under it, the axle and the two wheels
+    ImVec2 cab[4] = { R(-0.24f, -0.44f), R(0.24f, -0.44f), R(0.24f, -0.2f), R(-0.24f, -0.2f) };
+    dl->AddPolyline(cab, 4, col, ImDrawFlags_Closed, h * 0.075f);
+    box(-0.32f, -0.2f, 0.32f, 0.06f);
+    box(-0.26f, 0.06f, 0.26f, 0.12f);
+    box(-0.4f, 0.02f, -0.24f, 0.3f);
+    box(0.24f, 0.02f, 0.4f, 0.3f);
+    GLine(dl, ImVec2(p.x - h * 0.48f, p.y + h * 0.47f), ImVec2(p.x + h * 0.48f, p.y + h * 0.47f), col, h * 0.055f);
 }
 
-// A lamp cell: dark when off, a coloured glow behind the icon when on. Returns the colour to draw the icon in.
-// See-through: no cell, the icon floats with a shadow (drawn by GLamps), faint when off like the game's own icons.
+// A lamp's ground. With solid faces: a dark cell with a light upper edge, and the lamp's colour in it when lit. With
+// see-through faces and in the open style there is no cell: a lit lamp glows behind its symbol, and one that is off
+// is faint, like the game's own icons. Returns the colour to draw the symbol in.
 static ImU32 GLampCell(ImDrawList *dl, ImVec2 p, float s, bool on, GRgb colOn, float u, float a)
 {
-    if (GGlass()) return on ? GCol(colOn, a) : GCol(kText, 0.4f * a);
-    const ImVec2 a0(p.x - s * 0.5f, p.y - s * 0.5f), a1(p.x + s * 0.5f, p.y + s * 0.5f);
-    dl->AddRectFilled(a0, a1, GCol(16, 17, 19, 0.92f * a), 3.0f * u);
-    if (on) dl->AddRectFilled(a0, a1, GCol(colOn, 0.2f * a), 3.0f * u);
-    dl->AddRect(a0, a1, GCol(56, 58, 62, a), 3.0f * u, 0, 1.0f * u);
-    return on ? GCol(colOn, a) : GCol(kDim, a);
+    if (!GGlass())
+    {
+        const ImVec2 a0(p.x - s * 0.5f, p.y - s * 0.5f), a1(p.x + s * 0.5f, p.y + s * 0.5f);
+        dl->AddRectFilled(ImVec2(a0.x, a0.y + 1.0f * u), ImVec2(a1.x, a1.y + 1.4f * u), GCol(0, 0, 0, 0.35f * a), 3.4f * u);
+        dl->AddRectFilled(a0, a1, GCol(15, 16, 18, 0.96f * a), 3.0f * u);
+        dl->AddRect(a0, a1, GCol(70, 72, 77, a), 3.0f * u, 0, 1.0f * u);
+        dl->AddRect(ImVec2(a0.x + 1.0f * u, a0.y + 1.0f * u), ImVec2(a1.x - 1.0f * u, a1.y - 1.0f * u), GCol(0, 0, 0, 0.6f * a), 2.2f * u, 0, 1.0f * u);
+        if (on) dl->AddRectFilled(ImVec2(a0.x + 1.5f * u, a0.y + 1.5f * u), ImVec2(a1.x - 1.5f * u, a1.y - 1.5f * u), GCol(colOn, 0.13f * a), 2.0f * u);
+    }
+    if (on)
+    {
+        // the glow: the lamp's colour fading outwards
+        const float most = GGlass() ? s * 0.62f : s * 0.42f;
+        for (int i = 0; i < 3; i++) dl->AddCircleFilled(p, most * (1.0f - 0.26f * (float)i), GCol(colOn, (GGlass() ? 0.07f : 0.09f) * a), 20);
+    }
+    return on ? GCol(GMix(colOn, GRgb{ 255, 255, 255 }, 0.12f), a) : GGlass() ? GCol(kText, 0.38f * a) : GCol(kDim, a);
 }
 
 // ---- dials ----
@@ -292,8 +529,8 @@ static void GSpeedo(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, floa
     sprintf_s(buf, "%.0f", v);
     GText(dl, f, kGsReadout, ImVec2(c.x, c.y + r * 0.46f), GCol(kText, a), buf, 0, u);
     GText(dl, f, kGsTiny, ImVec2(c.x, c.y + r * 0.66f), GCol(kMuted, a), st.mph ? "mph" : "km/h", 0, u);
-    GNeedle(dl, c, GDeg(s, v), r * 0.74f, 3.2f, 1.0f, u, a, GCol(kNeedle, a));
-    GHub(dl, c, 7.0f * u, u, a);
+    GNeedle(dl, c, GDeg(s, v), r * 0.76f, 3.0f, 0.9f, u, a, GCol(kNeedle, a));
+    GHub(dl, c, 7.5f * u, u, a);
 }
 
 static void GTacho(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float u, float a, const GaugeState &st)
@@ -320,16 +557,24 @@ static void GTacho(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float
     GText(dl, f, kGsGear, ImVec2(gx, c.y + r * 0.5f), GCol(kText, a), gear, -1, u);
     if (mode) GText(dl, f, kGsGearMode, ImVec2(gx + gw + 3.0f * u, c.y + r * 0.5f + 4.0f * u), GCol(kMuted, a), st.gearMode, -1, u);
     // the engine speed as it is, with the engine off too: the needle runs down with a stopping engine
-    GNeedle(dl, c, GDeg(s, st.rpm / 100.0f), r * 0.74f, 3.2f, 1.0f, u, a, GCol(kNeedle, a));
-    GHub(dl, c, 7.0f * u, u, a);
+    GNeedle(dl, c, GDeg(s, st.rpm / 100.0f), r * 0.76f, 3.0f, 0.9f, u, a, GCol(kNeedle, a));
+    GHub(dl, c, 7.5f * u, u, a);
 }
 
 static void GSmallDial(ImDrawList *dl, ImVec2 c, float r, float u, float a) { GDialFace(dl, c, r, u, a); }
 
 static void GSmallNeedle(ImDrawList *dl, ImVec2 c, float r, float deg, float u, float a)
 {
-    GNeedle(dl, c, deg, r * 0.56f, 2.4f, 0.8f, u, a, GCol(kNeedle, a));
-    GHub(dl, c, 5.0f * u, u, a);
+    GNeedle(dl, c, deg, r * 0.58f, 2.2f, 0.7f, u, a, GCol(kNeedle, a));
+    GHub(dl, c, 5.2f * u, u, a);
+}
+
+// A symbol that stands on a dial or beside a readout, in the colour col: with a shadow when the faces are
+// see-through. draw(at, colour) draws it.
+template <typename Draw> static void GDialIcon(ImVec2 at, float u, ImU32 col, Draw draw)
+{
+    if (GGlass()) draw(ImVec2(at.x + 1.0f * u, at.y + 1.2f * u), GCol(0, 0, 0, 0.6f * GAlpha(col)));
+    draw(at, col);
 }
 
 static void GFuel(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float u, float a, const GaugeState &st)
@@ -341,7 +586,7 @@ static void GFuel(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float 
     GText(dl, f, kGsSmall, GPolar(c, r - 15.0f * u, GDeg(s, 0.0f)), GCol(kText, a), "E", 0, u);
     GText(dl, f, kGsSmall, GPolar(c, r - 15.0f * u, GDeg(s, 0.5f)), GCol(kText, a), "1/2", 0, u);
     GText(dl, f, kGsSmall, GPolar(c, r - 15.0f * u, GDeg(s, 1.0f)), GCol(kText, a), "F", 0, u);
-    GIconFuel(dl, ImVec2(c.x, c.y + r * 0.4f), 9.5f * u, GCol(kText, a), 0.97f * a);
+    GDialIcon(ImVec2(c.x, c.y + r * 0.42f), u, GCol(kText, a), [&](ImVec2 q, ImU32 col) { GIconFuel(dl, q, 10.5f * u, col); });
     GSmallNeedle(dl, c, r, GDeg(s, st.fuelFrac), u, a);
 }
 
@@ -358,7 +603,7 @@ static void GTemp(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float 
         sprintf_s(buf, "%.0f", st.fahrenheit ? v * 1.8f + 32.0f : v);
         GText(dl, f, kGsSmall, GPolar(c, r - 15.0f * u, GDeg(s, v)), GCol(kText, a), buf, 0, u);
     }
-    GIconTemp(dl, ImVec2(c.x, c.y + r * 0.4f), 9.5f * u, GCol(kText, a));
+    GDialIcon(ImVec2(c.x, c.y + r * 0.42f), u, GCol(kText, a), [&](ImVec2 q, ImU32 col) { GIconTemp(dl, q, 10.5f * u, col); });
     GSmallNeedle(dl, c, r, GDeg(s, st.tempC), u, a);
 }
 
@@ -374,7 +619,7 @@ static void GBoost(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float
         sprintf_s(buf, "%.0f", v);
         GText(dl, f, kGsSmall, GPolar(c, r - 15.0f * u, GDeg(s, v)), GCol(kText, a), buf, 0, u);
     }
-    GIconTurbo(dl, ImVec2(c.x, c.y + r * 0.4f), 9.5f * u, GCol(kText, a));
+    GDialIcon(ImVec2(c.x, c.y + r * 0.42f), u, GCol(kText, a), [&](ImVec2 q, ImU32 col) { GIconTurbo(dl, q, 10.5f * u, col); });
     GText(dl, f, kGsTiny, ImVec2(c.x, c.y - r * 0.36f), GCol(kMuted, a), st.psi ? "psi" : "bar", 0, u);
     GSmallNeedle(dl, c, r, GDeg(s, st.psi ? st.boostBar * 14.5f : st.boostBar), u, a);
 }
@@ -391,7 +636,7 @@ static void GAir(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float u
         sprintf_s(buf, "%.0f", v);
         GText(dl, f, kGsSmall, GPolar(c, r - 15.0f * u, GDeg(s, v)), GCol(kText, a), buf, 0, u);
     }
-    GIconAir(dl, ImVec2(c.x, c.y + r * 0.4f), 9.5f * u, GCol(kText, a));
+    GDialIcon(ImVec2(c.x, c.y + r * 0.42f), u, GCol(kText, a), [&](ImVec2 q, ImU32 col) { GIconAir(dl, q, 10.5f * u, col); });
     GText(dl, f, kGsTiny, ImVec2(c.x, c.y - r * 0.36f), GCol(kMuted, a), "bar", 0, u);
     GSmallNeedle(dl, c, r, GDeg(s, st.airBar), u, a);
 }
@@ -407,14 +652,14 @@ static void GRange(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float u, float
         const float range = st.mph ? st.rangeKm / 1.609f : st.rangeKm;
         sprintf_s(buf, range < 9.95f ? "%.1f %s" : "%.0f %s", range, st.mph ? "mi" : "km");
     }
-    const float w = TextWidth(f, kGsReadout, buf, u), ih = 10.0f * u;
+    const float w = TextWidth(f, kGsReadout, buf, u), ih = 11.0f * u;
     const float x0 = c.x - (w + ih + 4.0f * u) * 0.5f;
-    GIconFuel(dl, ImVec2(x0 + ih * 0.4f, c.y), ih, GCol(kMuted, a), 0.0f);
+    GDialIcon(ImVec2(x0 + ih * 0.42f, c.y), u, GCol(kMuted, a), [&](ImVec2 q, ImU32 col) { GIconFuel(dl, q, ih, col); });
     GText(dl, f, kGsReadout, ImVec2(x0 + ih + 4.0f * u, c.y), GCol(kText, a), buf, -1, u);
 }
 
-// The lamps as a block of columns x rows cells of size s, centred on c: handbrake, headlights, AWD, diff lock,
-// low gear, damage, cold, tilt.
+// The lamps as a block of columns x rows cells of size s, centred on c: handbrake, headlights, all wheel drive,
+// differential lock, low range, engine damage, cold engine, tilt.
 static void GLamps(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, int columns, float s, float gap, float u, float a, const GaugeState &st)
 {
     const int count = 8, rows = (count + columns - 1) / columns;
@@ -423,20 +668,20 @@ static void GLamps(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, int columns, f
     for (int i = 0; i < count; i++)
     {
         const ImVec2 p(o.x + (i % columns) * pitch, o.y + (i / columns) * pitch);
-        const float h = s * 0.7f;
+        const float h = s * 0.74f;
         ImU32 col;
-        // the icon at q in colour c (drawn twice when see-through: a shadow, then the icon)
-        auto icon = [&](ImVec2 q, ImU32 c) {
+        // the symbol at q in the colour k (drawn twice when see-through: a shadow, then the symbol)
+        auto icon = [&](ImVec2 q, ImU32 k) {
             switch (i)
             {
-            case 0: GIconHandbrake(dl, f, q, h, c, u); break;
-            case 1: GIconBeam(dl, q, h, c); break;
-            case 2: TextDraw(dl, f, kGsLamp, q, c, "AWD", 0, u); break;
-            case 3: TextDraw(dl, f, kGsLamp, q, c, "DIFF", 0, u); break;
-            case 4: TextDraw(dl, f, kGsLamp, q, c, "LOW", 0, u); break;
-            case 5: GIconEngine(dl, q, h, c); break;
-            case 6: GIconSnow(dl, q, h, c); break;
-            default: GIconTilt(dl, q, h, st.rollDeg, c); break;
+            case 0: GIconHandbrake(dl, f, q, h, k, u); break;
+            case 1: GIconBeam(dl, q, h, k); break;
+            case 2: GIconAwd(dl, q, h, k); break;
+            case 3: GIconDiff(dl, q, h, k); break;
+            case 4: GIconLow(dl, f, q, h, k, u); break;
+            case 5: GIconEngine(dl, q, h, k); break;
+            case 6: GIconSnow(dl, q, h, k); break;
+            default: GIconTilt(dl, q, h, st.rollDeg, k); break;
             }
         };
         switch (i)
@@ -449,10 +694,10 @@ static void GLamps(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, int columns, f
         case 5: col = GLampCell(dl, p, s, st.damage, kAmber, u, a); break;
         case 6: col = GLampCell(dl, p, s, st.cold, kBlue, u, a); break;
         default: col = GLampCell(dl, p, s, st.tilt > 0, st.tilt >= 2 ? kRed : kAmber, u, a);
-            if (st.tilt == 0) col = GCol(kGreen, a);
+            if (st.tilt == 0) col = GCol(kGreen, a); // level: the truck is green, without a glow
             break;
         }
-        if (GGlass()) icon(ImVec2(p.x + 1.2f * u, p.y + 1.4f * u), GCol(0, 0, 0, 0.6f * a));
+        if (GGlass()) icon(ImVec2(p.x + 1.0f * u, p.y + 1.3f * u), GCol(0, 0, 0, 0.55f * a));
         icon(p, col);
     }
 }

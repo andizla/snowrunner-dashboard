@@ -133,7 +133,33 @@ static void OnOverlay(reshade::api::effect_runtime *runtime)
     }
     if (alpha <= 0.0f) return;
     // the background list: under ReShade's own windows, so the cluster never covers the settings tab
+    LARGE_INTEGER before, after;
+    QueryPerformanceCounter(&before);
     GaugeDraw(ImGui::GetBackgroundDrawList(), g_fonts, GaugeOrigin(s, io.DisplaySize.x, io.DisplaySize.y), u, alpha * s.opacity, shown, GaugeLayoutOf(s));
+    QueryPerformanceCounter(&after);
+    if (s.probe)
+    {
+        // what the drawing costs, once a minute: the time GaugeDraw takes to put the cluster into ReShade's draw list
+        static LARGE_INTEGER rate = {};
+        static double sum = 0.0, longest = 0.0;
+        static int frames = 0;
+        static ULONGLONG since = 0;
+        if (!rate.QuadPart) QueryPerformanceFrequency(&rate);
+        const double ms = (double)(after.QuadPart - before.QuadPart) * 1000.0 / (double)rate.QuadPart;
+        const ULONGLONG now = GetTickCount64();
+        if (!since) since = now;
+        sum += ms;
+        longest = ms > longest ? ms : longest;
+        frames++;
+        if (now - since >= 60000)
+        {
+            GaugeLog(L"probe: the cluster took %.3f ms a frame to draw over the last minute (%d frames, the longest %.3f ms) on a %.0f x %.0f picture", sum / frames, frames,
+                     longest, io.DisplaySize.x, io.DisplaySize.y);
+            sum = longest = 0.0;
+            frames = 0;
+            since = now;
+        }
+    }
     if (loggedW != io.DisplaySize.x || loggedH != io.DisplaySize.y)
     {
         loggedW = io.DisplaySize.x;
