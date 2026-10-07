@@ -2,11 +2,11 @@
 
 Where each sound of SnowRunner Gauges comes from.
 
-| Sound | Source | Author | Licence |
-|---|---|---|---|
-| Blow-off | Made by the mod's code (`SoundMakeBlowOff` in `src\sound.h`): filtered noise, no recording | the mod's author | GPL-3.0-only, as the mod |
-| Flutter | Made by the mod's code (`SoundMakeFlutter` in `src\sound.h`): filtered noise, no recording | the mod's author | GPL-3.0-only, as the mod |
+| Sound | Files | Source | Author | Licence |
+|---|---|---|---|---|
+| The turbo's flutter at full boost, at half and at little, three recordings each | `assets\turbo_high_1.wav` to `_3.wav`, `turbo_mid_1.wav` to `_3.wav`, `turbo_low_1.wav` to `_3.wav` | Nine pieces cut from the sound of one video clip on TikTok: a turbocharged engine pulling, then the flutter as the pedal comes up. The engine's rumble below 450 Hz is filtered out and each piece fades out | to be named here before any release (asked of the mod's author, who has the clip) | Used with the clip author's permission, given to the mod's author in the clip's comments on 2026-10-07. No open licence: the permission is for this mod |
+| The same three sounds where the mod is built without the recordings | none | Made by the mod's code (`SoundMakeBlowOff`, `SoundMakeFlutter` in `src\sound.h`): filtered noise | the mod's author | GPL-3.0-only, as the mod |
 
-This version carries no recording of anyone else's. When one is added (`assets\blowoff.wav`, `assets\flutter.wav`), its row here names the author, the page it comes from and its licence.
+The recordings are not under the mod's GPL. Anyone who passes the mod on with them needs the clip author's leave as well, or builds it without the `assets` folder.
 
 A file you put into `sounds\` next to `Gauges.asi` yourself is yours to answer for: the mod plays it and does not pass it on.

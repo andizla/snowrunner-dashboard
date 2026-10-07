@@ -293,53 +293,65 @@ static int Replay(const char *path)
     return 0;
 }
 
-// "sounds <folder>": the two sounds as the mod plays them (a file sounds\blowoff.wav or sounds\flutter.wav in the
-// folder, else made by code), written into the folder as blowoff_heard.wav and flutter_heard.wav and played once
-// each on this machine's default device, as loud as SoundVolume=50 at full boost.
+// "sounds <folder>": the turbo's sounds as the mod plays them (files in the folder's sounds\, else what this test's
+// file carries, which is nothing, so made by code), written into the folder as turbo_high_1_heard.wav and so on, and
+// played on this machine's default device, as loud as SoundVolume=50: each strength once, then the strong one again,
+// cut short after 0.3 s as by the pedal going down.
 static int Sounds(const char *folder)
 {
     std::wstring dir;
     for (const char *p = folder; *p; p++) dir += (wchar_t)(unsigned char)*p;
     if (!dir.empty() && dir.back() != L'\\') dir += L'\\';
-    static const wchar_t *names[kSoundCount] = { L"blowoff_heard.wav", L"flutter_heard.wav" };
-    for (int k = 0; k < kSoundCount; k++)
+    for (int t = 0; t < kTurboTiers; t++)
     {
-        SoundClip c;
-        SoundLoad(k, dir, c);
-        std::vector<uint8_t> wav(44 + c.x.size() * 2);
-        auto put = [&](size_t at, uint32_t v, int bytes) { for (int i = 0; i < bytes; i++) wav[at + i] = (uint8_t)(v >> (8 * i)); };
-        memcpy(&wav[0], "RIFF", 4);
-        put(4, (uint32_t)wav.size() - 8, 4);
-        memcpy(&wav[8], "WAVEfmt ", 8);
-        put(16, 16, 4);
-        put(20, 1, 2);
-        put(22, 1, 2);
-        put(24, c.rate, 4);
-        put(28, c.rate * 2, 4);
-        put(32, 2, 2);
-        put(34, 16, 2);
-        memcpy(&wav[36], "data", 4);
-        put(40, (uint32_t)c.x.size() * 2, 4);
-        for (size_t i = 0; i < c.x.size(); i++) put(44 + i * 2, (uint32_t)(uint16_t)(int16_t)(SettingsRange(c.x[i], -1.0f, 1.0f) * 32767.0f), 2);
-        FILE *f = nullptr;
-        if (_wfopen_s(&f, (dir + names[k]).c_str(), L"wb") == 0 && f)
+        SoundSet set;
+        SoundLoad(t, dir, set);
+        for (int v = 0; v < set.count; v++)
         {
-            fwrite(wav.data(), 1, wav.size(), f);
-            fclose(f);
-            printf("wrote %ls (%.2f s)\n", (dir + names[k]).c_str(), (double)c.x.size() / c.rate);
+            const SoundClip &c = set.clip[v];
+            std::vector<uint8_t> wav(44 + c.x.size() * 2);
+            auto put = [&](size_t at, uint32_t value, int bytes) { for (int i = 0; i < bytes; i++) wav[at + i] = (uint8_t)(value >> (8 * i)); };
+            memcpy(&wav[0], "RIFF", 4);
+            put(4, (uint32_t)wav.size() - 8, 4);
+            memcpy(&wav[8], "WAVEfmt ", 8);
+            put(16, 16, 4);
+            put(20, 1, 2);
+            put(22, 1, 2);
+            put(24, c.rate, 4);
+            put(28, c.rate * 2, 4);
+            put(32, 2, 2);
+            put(34, 16, 2);
+            memcpy(&wav[36], "data", 4);
+            put(40, (uint32_t)c.x.size() * 2, 4);
+            for (size_t i = 0; i < c.x.size(); i++) put(44 + i * 2, (uint32_t)(uint16_t)(int16_t)(SettingsRange(c.x[i], -1.0f, 1.0f) * 32767.0f), 2);
+            wchar_t name[64];
+            swprintf_s(name, L"%s_%d_heard.wav", kSoundTiers[t].file, v + 1);
+            FILE *f = nullptr;
+            if (_wfopen_s(&f, (dir + name).c_str(), L"wb") == 0 && f)
+            {
+                fwrite(wav.data(), 1, wav.size(), f);
+                fclose(f);
+                printf("wrote %ls (%.2f s)\n", (dir + name).c_str(), (double)c.x.size() / c.rate);
+            }
         }
     }
     if (!SoundStart(dir)) { printf("FAIL the sound thread did not start\n"); return 1; }
-    for (int k = 0; k < kSoundCount; k++)
+    static const float loud[kTurboTiers] = { 1.0f, 0.55f, 0.25f };
+    LiftSound ls;
+    for (int t = 0; t < kTurboTiers; t++)
     {
-        LiftSound ls;
-        LiftSoundOf(k == kSoundBlowOff ? kLiftBlowOff : kLiftFlutter, 1.0f, 50, 0.0f, ls);
-        SoundPlay(k, ls.gain, ls.pitch);
-        Sleep(1200);
+        LiftSoundOf(kLiftBlowOff, loud[t], 50, 0.0f, ls);
+        SoundPlay(t, ls.gain, ls.pitch);
+        Sleep(4500);
     }
-    const bool played = g_soundOpens == 1 && g_soundStarts[kSoundBlowOff] == 1 && g_soundStarts[kSoundFlutter] == 1;
-    printf("%s sounds: XAudio2 opened %ld time(s), the blow-off started %ld time(s), the flutter %ld\n", played ? "ok  " : "FAIL", g_soundOpens, g_soundStarts[kSoundBlowOff],
-           g_soundStarts[kSoundFlutter]);
+    LiftSoundOf(kLiftBlowOff, 1.0f, 50, 0.0f, ls);
+    SoundPlay(kTurboHigh, ls.gain, ls.pitch);
+    Sleep(300);
+    SoundQuiet();
+    Sleep(500);
+    const bool played = g_soundOpens == 1 && g_soundStarts[kTurboHigh] == 2 && g_soundStarts[kTurboMid] == 1 && g_soundStarts[kTurboLow] == 1 && g_soundHushed == 1;
+    printf("%s sounds: XAudio2 opened %ld time(s); started: full boost %ld, half %ld, little %ld; cut short by the pedal %ld\n", played ? "ok  " : "FAIL", g_soundOpens,
+           g_soundStarts[kTurboHigh], g_soundStarts[kTurboMid], g_soundStarts[kTurboLow], g_soundHushed);
     return played ? 0 : 1;
 }
 
@@ -1157,6 +1169,10 @@ int main(int argc, char **argv)
         const bool faint = LiftSoundOf(kLiftFlutter, 0.0f, 100, 0.0f, ls) && Near(ls.gain, 0.2f, 0.001f);
         const bool between = LiftSoundOf(kLiftBlowOff, 0.5f, 100, 0.0f, ls) && Near(ls.gain, 0.6f, 0.001f) && LiftSoundOf(kLiftBlowOff, 7.0f, 400, 0.0f, ls) && Near(ls.gain, 1.0f, 0.001f);
         Check(none && full && half && faint && between, "sound: none without a lift or with the volume at 0; as loud as the setting at full boost, a fifth of that with next to none");
+        const bool fullLift = LiftSoundOf(kLiftBlowOff, 1.0f, 50, 0.0f, ls) && ls.tier == kTurboHigh && LiftSoundOf(kLiftBlowOff, 0.5f, 50, 0.0f, ls) && ls.tier == kTurboHigh &&
+                              LiftSoundOf(kLiftBlowOff, 0.3f, 50, 0.0f, ls) && ls.tier == kTurboMid;
+        const bool smallLift = LiftSoundOf(kLiftFlutter, 0.8f, 50, 0.0f, ls) && ls.tier == kTurboMid && LiftSoundOf(kLiftFlutter, 0.2f, 50, 0.0f, ls) && ls.tier == kTurboLow;
+        Check(fullLift && smallLift, "sound: a full lift with much boost is the strong sound and with less the middle one, a small lift the middle and the weak one");
         const bool fast = LiftSoundOf(kLiftBlowOff, 1.0f, 50, 1.0f, ls) && Near(ls.pitch, 1.06f, 0.001f), slow = LiftSoundOf(kLiftBlowOff, 1.0f, 50, -9.0f, ls) && Near(ls.pitch, 0.94f, 0.001f);
         uint32_t seed = 0;
         float least = 1.0f, widest = -1.0f, sum = 0.0f;
@@ -1171,7 +1187,7 @@ int main(int argc, char **argv)
         }
         Check(fast && slow && least >= -1.0f && least < -0.9f && widest <= 1.0f && widest > 0.9f && fabsf(sum) < 100.0f && !same,
               "sound: each lift plays up to six percent faster or slower, by a number that differs from lift to lift");
-        // the model's own lifts, as the mod plays them: a full lift at full boost is the blow-off at the setting's
+        // the model's own lifts, as the mod plays them: a full lift at full boost is the strong sound at the setting's
         // loudness, and nothing is played again within 0.8 s
         TruckRaw bt = Truck();
         bt.gear = bt.gearEngaged = 2;
@@ -1194,7 +1210,7 @@ int main(int argc, char **argv)
             }
         }
         Check(first == kLiftBlowOff && Near(firstGain, 0.5f, 0.02f) && played >= 2 && closest >= 0.8f - 0.001f,
-              "sound: a full lift at full boost plays the blow-off at the setting's loudness, and no two sounds come within 0.8 s");
+              "sound: a full lift at full boost plays at the setting's loudness, and no two sounds come within 0.8 s");
     }
 
     // the sounds themselves: a WAV file read, the two made by code, and every sound brought to one loudness

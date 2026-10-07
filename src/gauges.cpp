@@ -198,10 +198,10 @@ static void ReadIni(GaugeSettings &s)
                         L"; Damage=0: the temperature is only shown.\n"
                         L"; On a keyboard the pedal is either up or floored, so every cold start counts as floored there.\n"
                         L"; ColdDamagePercentPerMinute=0 switches that part off. Damage has not been tried in co-op: leave it at 0 there.\n"
-                        L"; SoundVolume (0 to 100) is how loud the turbo is heard when the pedal comes up quickly under boost: a blow-off\n"
-                        L"; after a full lift, a flutter after a smaller one, louder the more boost there was. 0 = no sound.\n"
-                        L"; SoundsOnly=1 plays the sounds and draws no cluster. A file sounds\\blowoff.wav or sounds\\flutter.wav next\n"
-                        L"; to Gauges.asi is played in place of the mod's own sound (a WAV file, PCM or float).\n"
+                        L"; SoundVolume (0 to 100) is how loud the turbo is heard when the pedal comes up quickly under boost: it flutters,\n"
+                        L"; longer and louder the more boost there was, until the pedal goes down again. 0 = no sound.\n"
+                        L"; SoundsOnly=1 plays the sounds and draws no cluster. WAV files sounds\\turbo_high_1.wav to _4.wav next to Gauges.asi\n"
+                        L"; (and turbo_mid_, turbo_low_ for less boost) are played in place of the mod's own recordings of that strength.\n"
                         L"; ToggleKey is the virtual key code of a key that hides and shows the cluster (0 = none; 120 = F9).\n"
                         L"; PadToggle does the same with pad buttons (XInput): DPadUp, DPadDown, DPadLeft, DPadRight, A, B, X, Y,\n"
                         L"; LB, RB, LS, RS, Start, Back, joined with + (LB+DPadUp), or None. The game sees these buttons too.\n"
@@ -529,6 +529,7 @@ struct TruckWatch
     BoostModel boost;           // and its boost
     int probedLifts;            // the lifts of the pedal the boost had told when the probe wrote last
     uint32_t chance;            // what the pitch of the next lift's sound is drawn from
+    bool pedalDown;             // the pedal was more than half down on the last step
     uint64_t modelVehicle;
     RangeModel range;           // the range of the truck with the tank it holds
     TiltModel tilt;             // how the truck stands, and the tilt lamp
@@ -675,7 +676,11 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         if (lift != kLiftNone && probe)
             Log(L"boost: a %s at %.2f bar of the turbo's %.2f, %.2f of its full sound", lift == kLiftBlowOff ? L"blow-off" : L"flutter", w.boost.lastBar, scale.boost, w.boost.lastVolume);
         LiftSound sound;
-        if (LiftSoundOf(lift, w.boost.lastVolume, s.soundVolume, LiftChance(w.chance), sound)) SoundPlay(lift == kLiftBlowOff ? kSoundBlowOff : kSoundFlutter, sound.gain, sound.pitch);
+        if (LiftSoundOf(lift, w.boost.lastVolume, s.soundVolume, LiftChance(w.chance), sound)) SoundPlay(sound.tier, sound.gain, sound.pitch);
+        // the pedal going down again ends a flutter that still rings
+        const bool pedalDown = TruckPedal(raw) > 0.5f;
+        if (pedalDown && !w.pedalDown) SoundQuiet();
+        w.pedalDown = pedalDown;
         RangeStep(w.range, kind, raw, dt);
         TiltStep(w.tilt, raw, s, dt);
         TempStep(w.temp, kind, raw, TachShare(w.tach, scale), s, dt);
@@ -759,13 +764,15 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     return driving && now - w.drivingSince >= 500;
 }
 
-// The tab's two buttons: the blow-off or the flutter at full boost, as loud as the settings in force have it.
-void SoundHear(bool blowOff)
+// The tab's three buttons: the turbo's sound of one strength, as loud as the settings in force have it at the boost
+// that strength stands for.
+void SoundHear(int tier)
 {
     GaugeSettings s;
     SettingsGet(s);
+    static const float loud[kTurboTiers] = { 1.0f, 0.55f, 0.25f };
     LiftSound sound;
-    if (LiftSoundOf(blowOff ? kLiftBlowOff : kLiftFlutter, 1.0f, s.soundVolume, 0.0f, sound)) SoundPlay(blowOff ? kSoundBlowOff : kSoundFlutter, sound.gain, sound.pitch);
+    if (tier >= 0 && tier < kTurboTiers && LiftSoundOf(kLiftBlowOff, loud[tier], s.soundVolume, 0.0f, sound)) SoundPlay(tier, sound.gain, sound.pitch);
 }
 
 // ---- the mod's thread ----

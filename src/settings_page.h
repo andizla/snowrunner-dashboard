@@ -14,7 +14,7 @@ struct PageState
     unsigned long long last = 0;  // GetTickCount64 of the last frame the tab was drawn
 };
 static const unsigned long long kPageCaptureMs = 8000;
-enum { kPageChanged = 1, kPageReload = 2, kPageTruckDrop = 4, kPageDefaults = 8, kPageHearBlowOff = 16, kPageHearFlutter = 32 };
+enum { kPageChanged = 1, kPageReload = 2, kPageTruckDrop = 4, kPageDefaults = 8, kPageHearHigh = 16, kPageHearMid = 32, kPageHearLow = 64 };
 
 // The Dear ImGui key as a virtual key, for the keys the toggle key can be; 0 for others.
 static int PageVirtualKey(int k)
@@ -424,14 +424,16 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     PageLabel("Volume", labelX);
     ImGui::SetNextItemWidth(w);
     changed(ImGui::SliderInt("##soundvolume", &s.soundVolume, 0, 100, s.soundVolume > 0 ? "%d" : "off", ImGuiSliderFlags_AlwaysClamp));
-    PageTip("How loud the turbo is heard when the pedal comes up quickly under boost: a blow-off after a full lift, a flutter after a smaller one. "
-            "The more boost there was, the louder. 0 = no sound.");
+    PageTip("How loud the turbo is heard when the pedal comes up quickly under boost: it flutters, longer and louder the more boost there was, "
+            "until the pedal goes down again. 0 = no sound.");
     ImGui::BeginDisabled(s.soundVolume <= 0);
     PageLabel("Hear it", labelX);
-    if (ImGui::Button("Blow-off")) act |= kPageHearBlowOff;
+    if (ImGui::Button("Full boost")) act |= kPageHearHigh;
     ImGui::SameLine();
-    if (ImGui::Button("Flutter")) act |= kPageHearFlutter;
-    PageTip("Plays the sound as loud as it is at full boost.");
+    if (ImGui::Button("Half")) act |= kPageHearMid;
+    ImGui::SameLine();
+    if (ImGui::Button("Little")) act |= kPageHearLow;
+    PageTip("Plays one of the turbo's sounds for a lift of the pedal at that much boost. Each has a few, so press again for another.");
     ImGui::EndDisabled();
     changed(ImGui::Checkbox("Sounds only", &s.soundsOnly));
     PageTip("Plays the sounds and draws no cluster.");

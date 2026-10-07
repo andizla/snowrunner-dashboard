@@ -2,10 +2,12 @@
 
 ## [0.10.0] 2026-10-07
 
-- The turbo is heard. Take your foot off a floored pedal under boost and the blow-off valve lets the air go. A smaller lift gives a flutter. The more boost there was, the louder, and no two sound quite alike.
-- `SoundVolume` (0 to 100, 50 at first) sets how loud, and 0 switches the sounds off. The Gauges tab has the slider and a button for each sound to hear it.
+- The turbo is heard. Take your foot off the pedal under boost and the turbo flutters: the air beats back through the compressor wheel, slower and fainter until it is gone.
+- The more boost the lift had, the longer and louder the flutter: there is one for a lift at full boost, one at half and one at little, each in three recordings, of which one is played and never the same twice running. Each also plays a little faster or slower than the last.
+- Put the pedal down again and a flutter that still sounds stops.
+- `SoundVolume` (0 to 100, 50 at first) sets how loud, and 0 switches the sounds off. The Gauges tab has the slider and three buttons to hear the sounds.
 - `SoundsOnly` plays the sounds and draws no cluster.
-- Both sounds are made by the mod's own code. A file `sounds\blowoff.wav` or `sounds\flutter.wav` next to `Gauges.asi` is played in its place.
+- WAV files `sounds\turbo_high_1.wav` to `_4.wav` next to `Gauges.asi` (and `turbo_mid_`, `turbo_low_`) are played in place of the mod's own recordings of that strength.
 - The sounds go through XAudio2, the game's own copy or Windows'. The mod holds the audio device only while a sound plays.
 
 ## [0.9.0] 2026-10-07

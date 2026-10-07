@@ -65,7 +65,7 @@ struct GaugeSettings
     bool damage;             // Damage: an engine in the red zone and a cold engine under a heavy pedal take the game's engine damage
     float hotDamage;         // HotDamagePercentPerMinute: percent of what the engine takes that it loses a minute at 125 C
     float coldDamage;        // ColdDamagePercentPerMinute: the same for a cold engine with the pedal floored at 0 C
-    int soundVolume;         // SoundVolume: how loud the turbo's blow-off and flutter are, 0 to 100; 0 = no sound
+    int soundVolume;         // SoundVolume: how loud the turbo's flutter is after a lift of the pedal, 0 to 100; 0 = no sound
     bool soundsOnly;         // SoundsOnly: the sounds are played and the cluster is not drawn
     int toggleKey;           // ToggleKey: virtual key code of the key that hides and shows the cluster, 0 = none
     char padToggle[32];      // PadToggle: pad buttons that do the same ("LB+DPadUp"), "None"
@@ -210,6 +210,8 @@ inline void GaugeDemo(GaugeState &st, const GaugeSettings &s)
 // not on screen. engineDamage of engineCapacity is the driven truck's engine damage as the game holds it, for the
 // tab; engineCapacity is 0 while it is not known.
 enum { kShown, kHiddenByToggle, kHiddenNoTruck, kHiddenSoundsOnly };
+// How strong the turbo's flutter is after a lift of the pedal, by the boost the lift had: the sounds come in these three.
+enum { kTurboHigh, kTurboMid, kTurboLow, kTurboTiers };
 // truck: the kind of truck being driven, as the game's files name it ("" while none is driven): the scales in force
 // are that kind's. truckOwn: it has scales of its own in Gauges.ini, and those are the ones in force.
 struct GaugeView { bool show, demo; int hidden; GaugeState st; int engineDamage, engineCapacity; char truck[96]; bool truckOwn; };
@@ -222,7 +224,7 @@ void SettingsTruckDrop();                   // the tab's button: the driven truc
 void SettingsReset();                       // the tab's button: every setting back to its default, the driven truck's own scales too
 void DamageTestAsk(int points);             // the tab's test buttons: the mod adds this much to the driven truck's engine damage on its next pass
 void ViewGet(GaugeView &out);               // what to draw (any thread)
-void SoundHear(bool blowOff);               // plays the blow-off or the flutter as loud as the settings have it at full boost (the tab's buttons)
+void SoundHear(int tier);                   // plays the turbo's sound of that strength (kTurboHigh ..) as loud as the settings have it (the tab's buttons)
 void GaugeLog(const wchar_t *fmt, ...);     // a line in Gauges.log (any thread)
 bool OverlayInit(HMODULE self);             // registers with ReShade (the cluster and the Gauges tab); false = no ReShade
 uint32_t PadButtons();                      // the buttons of all connected pads together, 0 without a pad

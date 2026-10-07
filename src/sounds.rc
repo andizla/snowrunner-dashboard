@@ -1,5 +1,12 @@
 // The recordings the mod's file carries (sound.h, SoundCarried). Paths are from the project's folder, where build.bat
-// runs. SOUND_CREDITS.md says whose each recording is and under which licence.
-// BLOWOFF: a turbo's blow-off valve. FLUTTER: a turbo's flutter.
-BLOWOFF RCDATA "assets\\blowoff.wav"
-FLUTTER RCDATA "assets\\flutter.wav"
+// runs. SOUND_CREDITS.md says whose they are and by what leave the mod carries them.
+// A turbo's flutter after the pedal comes up, three recordings each for a lift at full boost, at half and at little.
+TURBO_HIGH_1 RCDATA "assets\\turbo_high_1.wav"
+TURBO_HIGH_2 RCDATA "assets\\turbo_high_2.wav"
+TURBO_HIGH_3 RCDATA "assets\\turbo_high_3.wav"
+TURBO_MID_1 RCDATA "assets\\turbo_mid_1.wav"
+TURBO_MID_2 RCDATA "assets\\turbo_mid_2.wav"
+TURBO_MID_3 RCDATA "assets\\turbo_mid_3.wav"
+TURBO_LOW_1 RCDATA "assets\\turbo_low_1.wav"
+TURBO_LOW_2 RCDATA "assets\\turbo_low_2.wav"
+TURBO_LOW_3 RCDATA "assets\\turbo_low_3.wav"

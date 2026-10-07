@@ -1,13 +1,14 @@
-// sound.h: what the turbo sounds like when the pedal comes up quickly under boost.
-//   A blow-off: the valve letting the charge air go, after a full lift.
-//   A flutter: the air beating back through the compressor wheel, after a smaller lift.
-// gauges.cpp asks for one when models.h tells a lift (SoundPlay); a thread here plays it.
+// sound.h: what the turbo sounds like when the pedal comes up quickly under boost: the air beating back through the
+// compressor wheel, a flutter. It comes in three strengths, by how much boost the lift had (kTurboHigh, kTurboMid,
+// kTurboLow), and in up to kSoundVariants recordings of each, of which one is played and never the same twice
+// running. gauges.cpp asks for one when models.h tells a lift (SoundPlay) and for silence when the pedal goes down
+// again (SoundQuiet); a thread here plays it.
 //
-// Where each sound comes from, in this order:
-//   a WAV file sounds\blowoff.wav or sounds\flutter.wav next to the mod (PCM of 8 to 32 bits or 32-bit float, any
-//     number of channels, played as one)
-//   the recording the mod's file carries, where it carries one (src\sounds.rc)
-//   a sound made by code (SoundMakeBlowOff, SoundMakeFlutter)
+// Where the sounds of a strength come from:
+//   WAV files sounds\turbo_high_1.wav to _4.wav (turbo_mid_, turbo_low_) next to the mod, where there is at least
+//     one (PCM of 8 to 32 bits or 32-bit float, any number of channels, played as one)
+//   else the recordings the mod's file carries (src\sounds.rc; SOUND_CREDITS.md says whose they are)
+//   else a sound made by code (SoundMakeBlowOff for the strong one, SoundMakeFlutter for the others)
 // Every sound is brought to the same loudness, so a file of the player's is as loud as the mod's own.
 //
 // Played through XAudio2 2.9: the xaudio2_9redist.dll the game brings and uses itself, or Windows' own xaudio2_9.dll.
@@ -23,10 +24,7 @@
 #include <string.h>
 #include <string>
 #include <vector>
-
-void GaugeLog(const wchar_t *fmt, ...); // a line in Gauges.log (gauges.cpp)
-
-enum { kSoundBlowOff, kSoundFlutter, kSoundCount };
+#include "gauges.h"
 
 struct SoundClip
 {
@@ -38,14 +36,16 @@ static const float kSoundRms = 0.1f;       // every sound's loudest tenth of a s
 static const float kSoundPeak = 0.6f;      // ...and down again where its peaks would pass this
 static const float kSoundMostPitch = 2.0f; // the fastest a voice can be asked to play
 static const uint64_t kSoundMostBytes = 16ull << 20;
-static const float kSoundMostSeconds = 4.0f; // a longer file is cut here: these are short sounds
-enum { kSoundVoicesEach = 2, kSoundShots = 8 }; // voices per sound, so one that still rings is not cut by the next; shots that can wait
+static const float kSoundMostSeconds = 6.0f; // a longer file is cut here
+enum { kSoundVariants = 4, kSoundShots = 8 }; // recordings of one strength at most; shots that can wait
 
-// What each sound is: its name in the log, the file that replaces it, its name in src\sounds.rc, and how loud it is
-// at SoundVolume=100 with the turbo at its full boost (against kSoundRms). Both can ring together: their levels
-// times kSoundPeak, twice each, stay below 1.
-struct SoundKind { const wchar_t *what, *file, *carried; float level; };
-static const SoundKind kSoundKinds[kSoundCount] = { { L"blow-off", L"sounds\\blowoff.wav", L"BLOWOFF", 0.45f }, { L"flutter", L"sounds\\flutter.wav", L"FLUTTER", 0.36f } };
+// The three strengths: the name in the log, and what the files next to the mod and the recordings in src\sounds.rc
+// are called (with _1 to _4 after it).
+struct SoundTier { const wchar_t *what, *file, *carried; };
+static const SoundTier kSoundTiers[kTurboTiers] = { { L"the turbo at full boost", L"turbo_high", L"TURBO_HIGH" }, { L"the turbo at half boost", L"turbo_mid", L"TURBO_MID" },
+                                                    { L"the turbo at little boost", L"turbo_low", L"TURBO_LOW" } };
+static const float kSoundLevel = 0.45f; // how loud a sound is at SoundVolume=100 with the turbo at its full boost (against kSoundRms): two that ring together stay below 1
+static const float kSoundHush = 0.08f;  // seconds a sound that still rings takes to go when the pedal goes down again
 
 // A WAV file (PCM of 8 to 32 bits or 32-bit float) as one channel of floats. why: what was wrong with it.
 inline bool SoundDecode(const std::vector<uint8_t> &file, SoundClip &out, std::wstring &why)
@@ -231,46 +231,63 @@ inline bool SoundCarried(const wchar_t *name, std::vector<uint8_t> &out)
     return true;
 }
 
-// One sound: the player's file, else the mod's own recording, else made by code (the top of this file has the rules).
-// dir: the folder the mod is in, with its last backslash.
-inline void SoundLoad(int kind, const std::wstring &dir, SoundClip &clip)
+// The recordings of one strength, count of them.
+struct SoundSet
 {
-    const SoundKind &k = kSoundKinds[kind];
-    clip = SoundClip{};
+    SoundClip clip[kSoundVariants];
+    int count = 0;
+};
+
+// The sounds of one strength (the top of this file has the rules). dir: the folder the mod is in, with its last
+// backslash.
+inline void SoundLoad(int tier, const std::wstring &dir, SoundSet &set)
+{
+    const SoundTier &k = kSoundTiers[tier];
+    set = SoundSet{};
     std::vector<uint8_t> file;
     std::wstring why;
-    const std::wstring path = dir + k.file;
-    bool got = false;
-    if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES)
+    // the player's files; where there is none, the mod's own recordings
+    for (int own = 0; own < 2 && !set.count; own++)
     {
-        got = SoundFile(path, file, why) && SoundDecode(file, clip, why);
-        if (got) GaugeLog(L"sound: %s = %s (%.2f s, %u Hz)", k.what, k.file, (double)clip.x.size() / clip.rate, clip.rate);
-        else GaugeLog(L"sound: %s: %s is not used (%s)", k.what, k.file, why.c_str());
+        for (int v = 1; v <= kSoundVariants; v++)
+        {
+            wchar_t name[64];
+            SoundClip clip;
+            if (!own)
+            {
+                swprintf_s(name, L"sounds\\%s_%d.wav", k.file, v);
+                if (GetFileAttributesW((dir + name).c_str()) == INVALID_FILE_ATTRIBUTES) continue;
+                if (!SoundFile(dir + name, file, why) || !SoundDecode(file, clip, why)) { GaugeLog(L"sound: %s is not used (%s)", name, why.c_str()); continue; }
+                GaugeLog(L"sound: %s = %s (%.2f s, %u Hz)", k.what, name, (double)clip.x.size() / clip.rate, clip.rate);
+            }
+            else
+            {
+                swprintf_s(name, L"%s_%d", k.carried, v);
+                if (!SoundCarried(name, file)) continue;
+                if (!SoundDecode(file, clip, why)) { GaugeLog(L"sound: the mod's own recording %s could not be read (%s)", name, why.c_str()); continue; }
+            }
+            SoundLevel(clip);
+            set.clip[set.count++] = std::move(clip);
+        }
+        if (own && set.count) GaugeLog(L"sound: %s = %d of the mod's own recordings", k.what, set.count);
     }
-    if (!got && SoundCarried(k.carried, file))
-    {
-        got = SoundDecode(file, clip, why);
-        if (got) GaugeLog(L"sound: %s = the mod's own recording (%.2f s, %u Hz)", k.what, (double)clip.x.size() / clip.rate, clip.rate);
-        else GaugeLog(L"sound: %s: the mod's own recording could not be read (%s)", k.what, why.c_str());
-    }
-    if (!got)
-    {
-        clip = SoundClip{};
-        if (kind == kSoundBlowOff) SoundMakeBlowOff(clip);
-        else SoundMakeFlutter(clip);
-        GaugeLog(L"sound: %s = made by the mod's code (%.2f s)", k.what, (double)clip.x.size() / clip.rate);
-    }
-    SoundLevel(clip);
+    if (set.count) return;
+    if (tier == kTurboHigh) SoundMakeBlowOff(set.clip[0]);
+    else SoundMakeFlutter(set.clip[0]);
+    SoundLevel(set.clip[0]);
+    set.count = 1;
+    GaugeLog(L"sound: %s = made by the mod's code (%.2f s)", k.what, (double)set.clip[0].x.size() / set.clip[0].rate);
 }
 
-// A sound asked for: which, how loud of 1 (the setting and the boost together, before the sound's own level) and
+// A sound asked for: of which strength, how loud of 1 (the setting and the boost together, before kSoundLevel) and
 // how fast (1 = as recorded).
-struct SoundShot { int kind; float gain, pitch; };
+struct SoundShot { int tier; float gain, pitch; };
 static SoundShot g_soundShots[kSoundShots];
 static int g_soundWaiting = 0;
+static volatile LONG g_soundQuietAsked = 0;
 static std::wstring g_soundDir;
 static HANDLE g_soundWake = nullptr;
-static volatile LONG g_soundOpens = 0, g_soundStarts[kSoundCount] = {}; // for the test
+static volatile LONG g_soundOpens = 0, g_soundStarts[kTurboTiers] = {}, g_soundHushed = 0; // for the test
 
 // XAudio2 says through this when its device is gone for good; the sound thread then lets go of the engine.
 struct SoundEvents : IXAudio2EngineCallback
@@ -286,17 +303,18 @@ struct SoundEngine
 {
     IXAudio2 *xaudio = nullptr;
     IXAudio2MasteringVoice *master = nullptr;
-    IXAudio2SourceVoice *voices[kSoundCount][kSoundVoicesEach] = {};
-    int next[kSoundCount] = {}; // the voice a sound's next shot takes
+    // one voice per recording. ringing: it was started and has not played out; volume: what it was started at;
+    // hush: 1 while it plays as started, on its way to 0 once the pedal went down again
+    struct Voice { IXAudio2SourceVoice *voice; bool ringing, hushing; float volume, hush; } voices[kTurboTiers][kSoundVariants] = {};
 };
 
 inline void SoundClose(SoundEngine &e)
 {
-    for (auto &kind : e.voices)
-        for (IXAudio2SourceVoice *&v : kind)
+    for (auto &tier : e.voices)
+        for (SoundEngine::Voice &v : tier)
         {
-            if (v) v->DestroyVoice();
-            v = nullptr;
+            if (v.voice) v.voice->DestroyVoice();
+            v = {};
         }
     if (e.master) e.master->DestroyVoice();
     if (e.xaudio)
@@ -308,8 +326,8 @@ inline void SoundClose(SoundEngine &e)
     e.xaudio = nullptr;
 }
 
-// An engine on the default device with the voices of each sound.
-inline bool SoundOpen(SoundEngine &e, const SoundClip *clips, HRESULT &hr, const wchar_t *&from)
+// An engine on the default device with a voice for each recording.
+inline bool SoundOpen(SoundEngine &e, const SoundSet *sets, HRESULT &hr, const wchar_t *&from)
 {
     typedef HRESULT(__stdcall *Create)(IXAudio2 **, UINT32, XAUDIO2_PROCESSOR);
     from = L"the game's xaudio2_9redist.dll";
@@ -327,18 +345,18 @@ inline bool SoundOpen(SoundEngine &e, const SoundClip *clips, HRESULT &hr, const
     InterlockedExchange(&g_soundEvents.failed, 0);
     e.xaudio->RegisterForCallbacks(&g_soundEvents);
     hr = e.xaudio->CreateMasteringVoice(&e.master, XAUDIO2_DEFAULT_CHANNELS, XAUDIO2_DEFAULT_SAMPLERATE, 0, nullptr, nullptr, AudioCategory_GameEffects);
-    for (int k = 0; SUCCEEDED(hr) && k < kSoundCount; k++)
-    {
-        if (clips[k].x.empty()) continue;
-        WAVEFORMATEX format = {};
-        format.wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
-        format.nChannels = 1;
-        format.nSamplesPerSec = clips[k].rate;
-        format.wBitsPerSample = 32;
-        format.nBlockAlign = 4;
-        format.nAvgBytesPerSec = clips[k].rate * 4;
-        for (int i = 0; SUCCEEDED(hr) && i < kSoundVoicesEach; i++) hr = e.xaudio->CreateSourceVoice(&e.voices[k][i], &format, 0, kSoundMostPitch);
-    }
+    for (int t = 0; SUCCEEDED(hr) && t < kTurboTiers; t++)
+        for (int v = 0; SUCCEEDED(hr) && v < sets[t].count; v++)
+        {
+            WAVEFORMATEX format = {};
+            format.wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
+            format.nChannels = 1;
+            format.nSamplesPerSec = sets[t].clip[v].rate;
+            format.wBitsPerSample = 32;
+            format.nBlockAlign = 4;
+            format.nAvgBytesPerSec = sets[t].clip[v].rate * 4;
+            hr = e.xaudio->CreateSourceVoice(&e.voices[t][v].voice, &format, 0, kSoundMostPitch);
+        }
     if (FAILED(hr)) { SoundClose(e); return false; }
     return true;
 }
@@ -346,30 +364,35 @@ inline bool SoundOpen(SoundEngine &e, const SoundClip *clips, HRESULT &hr, const
 static DWORD WINAPI SoundThread(void *)
 {
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    SoundClip clips[kSoundCount];
-    for (int k = 0; k < kSoundCount; k++) SoundLoad(k, g_soundDir, clips[k]);
+    SoundSet sets[kTurboTiers];
+    for (int t = 0; t < kTurboTiers; t++) SoundLoad(t, g_soundDir, sets[t]);
     SoundEngine e;
-    ULONGLONG quietSince = 0, againAt = 0;
+    ULONGLONG quietSince = 0, againAt = 0, last = GetTickCount64();
     HRESULT lastError = S_OK;
     bool said = false;
+    int played[kTurboTiers] = { -1, -1, -1 }; // the recording each strength played last
+    SoundNoise chance = { (uint32_t)GetTickCount() | 1 };
     for (;;)
     {
         // with no engine there is nothing to do until a sound is asked for
-        WaitForSingleObject(g_soundWake, e.xaudio ? 50 : INFINITE);
+        WaitForSingleObject(g_soundWake, e.xaudio ? 10 : INFINITE);
         SoundShot shots[kSoundShots];
         AcquireSRWLockExclusive(&g_soundLock);
         const int waiting = g_soundWaiting;
         for (int i = 0; i < waiting; i++) shots[i] = g_soundShots[i];
         g_soundWaiting = 0;
         ReleaseSRWLockExclusive(&g_soundLock);
+        const bool quiet = InterlockedExchange(&g_soundQuietAsked, 0) != 0;
         const ULONGLONG ms = GetTickCount64();
+        const float dt = min(0.1f, (float)(ms - last) / 1000.0f);
+        last = ms;
         if (!e.xaudio)
         {
             // a sound that finds no engine is played now or never: one that waited would come seconds after its lift
             if (!waiting || ms < againAt) continue;
             HRESULT hr = S_OK;
             const wchar_t *from = L"";
-            if (!SoundOpen(e, clips, hr, from))
+            if (!SoundOpen(e, sets, hr, from))
             {
                 againAt = ms + 5000;
                 if (hr != lastError) GaugeLog(L"sound: none, as XAudio2 did not start (%08lx from %s); tried again at a later sound", (unsigned long)hr, from);
@@ -389,29 +412,54 @@ static DWORD WINAPI SoundThread(void *)
             againAt = ms + 2000;
             continue;
         }
+        // the pedal went down again: what rings fades out. A sound asked for on this same pass comes after that.
+        if (quiet)
+            for (auto &tier : e.voices)
+                for (SoundEngine::Voice &v : tier)
+                    if (v.ringing && !v.hushing) { v.hushing = true; InterlockedIncrement(&g_soundHushed); }
         for (int i = 0; i < waiting; i++)
         {
             const SoundShot &s = shots[i];
-            IXAudio2SourceVoice *const v = e.voices[s.kind][e.next[s.kind]];
-            if (!v) continue;
-            e.next[s.kind] = (e.next[s.kind] + 1) % kSoundVoicesEach;
+            const int count = sets[s.tier].count;
+            if (!count) continue;
+            // one of the strength's recordings, and not the one it played last
+            int pick = (int)((chance() * 0.5f + 0.5f) * (float)count) % count;
+            if (count > 1 && pick == played[s.tier]) pick = (pick + 1) % count;
+            played[s.tier] = pick;
+            SoundEngine::Voice &v = e.voices[s.tier][pick];
+            if (!v.voice) continue;
+            const SoundClip &clip = sets[s.tier].clip[pick];
             XAUDIO2_BUFFER b = {};
             b.Flags = XAUDIO2_END_OF_STREAM;
-            b.AudioBytes = (UINT32)(clips[s.kind].x.size() * sizeof(float));
-            b.pAudioData = (const BYTE *)clips[s.kind].x.data();
-            v->Stop(0);
-            v->FlushSourceBuffers();
-            v->SetVolume(min(1.0f, max(0.0f, s.gain)) * kSoundKinds[s.kind].level);
-            v->SetFrequencyRatio(min(kSoundMostPitch, max(0.25f, s.pitch)));
-            if (SUCCEEDED(v->SubmitSourceBuffer(&b)) && SUCCEEDED(v->Start(0))) InterlockedIncrement(&g_soundStarts[s.kind]);
+            b.AudioBytes = (UINT32)(clip.x.size() * sizeof(float));
+            b.pAudioData = (const BYTE *)clip.x.data();
+            v.volume = min(1.0f, max(0.0f, s.gain)) * kSoundLevel;
+            v.hush = 1.0f;
+            v.hushing = false;
+            v.voice->Stop(0);
+            v.voice->FlushSourceBuffers();
+            v.voice->SetVolume(v.volume);
+            v.voice->SetFrequencyRatio(min(kSoundMostPitch, max(0.25f, s.pitch)));
+            v.ringing = SUCCEEDED(v.voice->SubmitSourceBuffer(&b)) && SUCCEEDED(v.voice->Start(0));
+            if (v.ringing) InterlockedIncrement(&g_soundStarts[s.tier]);
         }
         bool any = false;
-        for (auto &kind : e.voices)
-            for (IXAudio2SourceVoice *v : kind)
+        for (auto &tier : e.voices)
+            for (SoundEngine::Voice &v : tier)
             {
+                if (!v.ringing) continue;
                 XAUDIO2_VOICE_STATE state = {};
-                if (v) v->GetState(&state, XAUDIO2_VOICE_NOSAMPLESPLAYED);
-                any = any || state.BuffersQueued != 0;
+                v.voice->GetState(&state, XAUDIO2_VOICE_NOSAMPLESPLAYED);
+                if (v.hushing) v.hush -= dt / kSoundHush;
+                if (!state.BuffersQueued || v.hush <= 0.0f)
+                {
+                    v.voice->Stop(0);
+                    v.voice->FlushSourceBuffers();
+                    v.ringing = v.hushing = false;
+                    continue;
+                }
+                if (v.hushing) v.voice->SetVolume(v.volume * v.hush);
+                any = true;
             }
         if (any) quietSince = 0;
         else if (!quietSince) quietSince = ms;
@@ -437,12 +485,21 @@ inline bool SoundStart(const std::wstring &dir)
     return true;
 }
 
-// Asks for a sound, from any thread: which, how loud of 1 and how fast. One that finds kSoundShots waiting is dropped.
-inline void SoundPlay(int kind, float gain, float pitch)
+// Asks for a sound, from any thread: of which strength (kTurboHigh ..), how loud of 1 and how fast. One that finds
+// kSoundShots waiting is dropped.
+inline void SoundPlay(int tier, float gain, float pitch)
 {
-    if (!g_soundWake || kind < 0 || kind >= kSoundCount || !(gain > 0.0f)) return;
+    if (!g_soundWake || tier < 0 || tier >= kTurboTiers || !(gain > 0.0f)) return;
     AcquireSRWLockExclusive(&g_soundLock);
-    if (g_soundWaiting < kSoundShots) g_soundShots[g_soundWaiting++] = { kind, gain, pitch };
+    if (g_soundWaiting < kSoundShots) g_soundShots[g_soundWaiting++] = { tier, gain, pitch };
     ReleaseSRWLockExclusive(&g_soundLock);
+    SetEvent(g_soundWake);
+}
+
+// Lets what still rings fade out, from any thread: the pedal went down again.
+inline void SoundQuiet()
+{
+    if (!g_soundWake) return;
+    InterlockedExchange(&g_soundQuietAsked, 1);
     SetEvent(g_soundWake);
 }
