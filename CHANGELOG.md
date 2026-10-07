@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0] 2026-10-07
+
+- The boost dial shows a boost pressure, worked out from the pedal and the engine speed. The turbo makes nothing near idle and all it can from about two thirds of the way to the red zone with the pedal floored. In neutral it makes a quarter of that at most.
+- The needle lags behind the pedal, longer at low engine speed: floored at the red zone the boost is there in under a second, pulling away from a standstill it takes a second or more. It is gone within half a second after the foot comes off.
+- New setting `BoostMax`: the boost in bar the turbo reaches, from 0.3 to 2. At 0 it is the truck class's own: trucks 1.8 bar, scouts 1, heavy trucks 2. It is on the tab under Scales, and each kind of truck can have its own, kept with its other scales in its section of `Gauges.ini`.
+- With `Probe=1` the log has a line for the boost, and one for each quick lift of the pedal under boost: a blow-off or a flutter, with the boost it came at.
+
 ## [0.7.0] 2026-10-07
 
 - Each kind of truck can have its own scales. Change the truck class, idle, the start of the red zone, the tachometer's top or the speedometer's top on the Gauges tab while you drive a truck, and all five are kept for that kind of truck. They are back whenever you drive one: after a recovery, out of the garage, after a change of trucks and after a new start of the game.

@@ -1,4 +1,4 @@
-// models_test.cpp: the engine speed, the range, the tilt and the coolant temperature (src\models.h) on drives made up
+// models_test.cpp: the engine speed, the range, the tilt, the coolant temperature and the boost (src\models.h) on drives made up
 // here: a truck with the gearbox of a scout (wheel speeds 1.5 in reverse, 3, 6, 12 and 16 in its four gears, 8 in the
 // high gear), stepped 20 times a second as the mod steps it. It checks each gear's top speed, where the needle stands
 // at idle, under load, in neutral and with the wheels spinning, that it never jumps, the start, the stall and the stop
@@ -6,7 +6,8 @@
 // game's own burn rule. For the tilt it stands the truck on slopes and leans it to either side, over a bump and onto
 // its roof. For the coolant it warms a cold engine up, floors it at a crawl and at speed, lets it idle, stops it,
 // changes the settings and the outside temperature, and drives one truck after another. For what the temperature
-// costs the engine it holds an engine in the red zone, floors a cold one, and counts the points of damage.
+// costs the engine it holds an engine in the red zone, floors a cold one, and counts the points of damage. For the
+// boost it floors the pedal at high and at low engine speed and lifts it fast, a little and slowly.
 // build.bat makes out\test\models_test.exe; test.bat runs it.
 //
 // With a file as its argument it runs the models over a recorded drive instead and prints what they make of it. One
@@ -146,6 +147,11 @@ static int Replay(const char *path)
     RangeModel range = {};
     TempModel temp = {};
     DamageModel wear = {};
+    // the boost: the highest, the time above half of what the turbo reaches, the lifts told, and how long it takes
+    // from a floored pedal at next to no boost to nine tenths of it
+    BoostModel boost = {};
+    float mostBoost = 0.0f, boosted = 0.0f, climb = -1.0f, climbSum = 0.0f, climbLongest = 0.0f;
+    int climbs = 0, flutters = 0, blowOffs = 0;
     float hotPoints = 0.0f, coldPoints = 0.0f;
     float last = -1.0f, tank = 0.0f, mostStep = 0.0f, mostRpm = 0.0f;
     int samples = 0, steps = 0, redSteps = 0;
@@ -185,6 +191,8 @@ static int Replay(const char *path)
         if (last < 0.0f || seconds - last > 5.0f || seconds < last || fabsf(t.tank - tank) > 0.01f)
         {
             tach = TachModel{};
+            boost = BoostModel{};
+            climb = -1.0f;
             range = RangeModel{};
             last = seconds - kDt;
         }
@@ -195,6 +203,24 @@ static int Replay(const char *path)
             const float dt = fminf(left, kDt), before = tach.rpm;
             const bool was = tach.running;
             TachStep(tach, t, k, dt);
+            const int lift = BoostStep(boost, t, TachShare(tach, k), k.boost, dt);
+            if (lift == kLiftBlowOff) blowOffs++;
+            if (lift == kLiftFlutter) flutters++;
+            mostBoost = fmaxf(mostBoost, boost.bar);
+            if (boost.bar >= 0.5f * k.boost) boosted += dt;
+            if (climb < 0.0f && TruckPedal(t) >= 0.95f && boost.bar < 0.1f * k.boost) climb = 0.0f;
+            else if (climb >= 0.0f)
+            {
+                climb += dt;
+                if (TruckPedal(t) < 0.95f) climb = -1.0f;
+                else if (boost.bar >= 0.9f * k.boost)
+                {
+                    climbSum += climb;
+                    climbLongest = fmaxf(climbLongest, climb);
+                    climbs++;
+                    climb = -1.0f;
+                }
+            }
             RangeStep(range, kind, t, dt);
             if (was) mostStep = fmaxf(mostStep, fabsf(tach.rpm - before));
             mostRpm = fmaxf(mostRpm, tach.rpm);
@@ -241,9 +267,9 @@ static int Replay(const char *path)
         last = seconds;
         samples++;
         printf("%8.2f gear %2d %s pedal %.2f wheels %5.2f of %5.2f | %4.0f rpm | %5.1f km/h | fuel %6.2f | range %6.1f km at %.3f l/km over %4.0f m, standing %.2f l/min | "
-               "coolant %5.1f C, load %.2f, heat %.2f, %.2f taken away\n", seconds,
+               "coolant %5.1f C, load %.2f, heat %.2f, %.2f taken away | boost %.2f bar\n", seconds,
                t.gearEngaged, t.automatic ? "A" : " ", TruckPedal(t), TruckDrivenSpin(t), TruckGearTop(t, t.gearEngaged), tach.rpm, t.speed * 3.6f, t.fuel, range.rangeKm,
-               range.perKm, range.way - range.mark[0].way, range.standing, temp.temp, temp.load, temp.heat, temp.cooling);
+               range.perKm, range.way - range.mark[0].way, range.standing, temp.temp, temp.load, temp.heat, temp.cooling, boost.bar);
     }
     fclose(f);
     printf("%d samples, %d steps: the largest change of the engine speed in one step %.0f rpm, the highest engine speed %.0f rpm, %d steps in the red zone (from %.0f rpm)\n",
@@ -251,6 +277,8 @@ static int Replay(const char *path)
     for (const std::string &n : notes) printf("coolant: %s\n", n.c_str());
     printf("coolant: the hottest %.1f C, %.0f s in the red zone (from %.0f C); while driving (%.0f s) the mean load was %.2f and the mean speed %.1f km/h\n", hottest, inRed, kTempRed,
            drivingAll, drivingAll > 0.0f ? loadSum / drivingAll : 0.0f, drivingAll > 0.0f ? kmhSum / drivingAll : 0.0f);
+    printf("boost: the highest %.2f bar of the turbo's %.2f, %.0f s above half of it; %d blow-offs and %d flutters; from a floored pedal to nine tenths of it %d times, %.1f s on average, %.1f s the longest\n",
+           mostBoost, k.boost, boosted, blowOffs, flutters, climbs, climbs ? climbSum / (float)climbs : 0.0f, climbLongest);
     printf("damage: with Damage on the heat would have cost the engine %.0f points on this drive, and the pedal on a cold engine %.0f\n", hotPoints, coldPoints);
     return 0;
 }
@@ -928,6 +956,126 @@ int main(int argc, char **argv)
         DamageProbeText(p, EngineRecord{}, wear, shown, line, sizeof line);
         Check(asRead && notAsRead && strstr(line, "looked up once the truck is driven") && strstr(line, "Damage off"),
               "damage: the probe's line carries the engine's damage, what the game's rule makes of it, the record and the model's rates");
+    }
+
+    // the boost
+    {
+        GaugeSettings bs;
+        SettingsDefaults(bs);
+        const float truckMost = GaugeScaleOf(bs).boost;
+        bs.tachClass = kClassScout;
+        const float scoutMost = GaugeScaleOf(bs).boost;
+        bs.tachClass = kClassHeavy;
+        const float heavyMost = GaugeScaleOf(bs).boost;
+        bs.boostMax = 1.35f;
+        Check(truckMost == 1.8f && scoutMost == 1.0f && heavyMost == 2.0f && GaugeScaleOf(bs).boost == 1.35f,
+              "boost: trucks reach 1.8 bar, scouts 1, heavy trucks 2, and a number of the settings takes the class's place");
+        const float reach = 1.8f;
+        // steps the boost for a while with the needle at revs; returns the largest change in one step
+        BoostModel bm = {};
+        int sounds = 0;
+        auto blow = [&](TruckRaw &truck, float revs, float seconds) {
+            float largest = 0.0f;
+            for (float at = 0.0f; at < seconds - 0.001f; at += kDt)
+            {
+                const float before = bm.bar;
+                if (BoostStep(bm, truck, revs, reach, kDt) != kLiftNone) sounds++;
+                largest = fmaxf(largest, fabsf(bm.bar - before));
+            }
+            return largest;
+        };
+        TruckRaw bt = Truck();
+        Drive(bt, 3, true, 0.0f, 0.0f);
+        blow(bt, 0.0f, 1.0f);
+        const float idling = bm.bar;
+        Drive(bt, 3, true, 0.9f, 1.0f);
+        const float step = blow(bt, 1.0f, 0.8f);
+        const float soon = bm.bar;
+        blow(bt, 1.0f, 3.0f);
+        Check(idling == 0.0f && soon > 0.85f * reach && soon < reach && Near(bm.bar, reach, 0.01f) && step < 0.2f * reach,
+              "boost: none at idle; floored at the red zone it is nearly all there after 0.8 s, without a jump");
+        bm = BoostModel{};
+        blow(bt, 0.3f, 0.8f);
+        const float slow = bm.bar;
+        blow(bt, 0.3f, 6.0f);
+        const float lowEnd = bm.bar;
+        blow(bt, 0.1f, 3.0f);
+        Check(slow < 0.6f * lowEnd && Near(lowEnd, reach * (0.3f - kBoostRevsFrom) / (kBoostRevsFull - kBoostRevsFrom), 0.01f) && bm.bar < 0.01f,
+              "boost: at low engine speed there is less of it and it comes slower, and near idle there is none");
+        bm = BoostModel{};
+        Drive(bt, 3, true, 0.9f, 0.5f);
+        blow(bt, 1.0f, 4.0f);
+        const float half = bm.bar;
+        Drive(bt, 0, false, 0.0f, 1.0f);
+        blow(bt, 1.0f, 4.0f);
+        const float neutral = bm.bar;
+        bt.flags = 0;
+        blow(bt, 1.0f, 2.0f);
+        Check(Near(half, reach * powf(0.5f, kBoostPedal), 0.01f) && Near(neutral, reach * kLoadNeutral, 0.01f) && bm.bar < 0.01f && sounds == 0,
+              "boost: less than half of it at half pedal, a quarter in neutral, none with the engine off, and no sound without a lift");
+        // lifts of the pedal
+        auto full = [&]() {
+            bt = Truck();
+            bm = BoostModel{};
+            sounds = 0;
+            Drive(bt, 3, true, 0.9f, 1.0f);
+            blow(bt, 1.0f, 4.0f);
+        };
+        full();
+        Drive(bt, 3, true, 0.9f, 0.0f);
+        const int first = BoostStep(bm, bt, 1.0f, reach, kDt);
+        const float loud = bm.lastVolume, at = bm.lastBar;
+        blow(bt, 1.0f, 0.4f);
+        const float fallen = bm.bar;
+        Drive(bt, 3, true, 0.9f, 1.0f);
+        blow(bt, 1.0f, 0.1f);
+        Drive(bt, 3, true, 0.9f, 0.0f);
+        blow(bt, 1.0f, 0.2f);
+        Check(first == kLiftBlowOff && Near(loud, 1.0f, 0.01f) && Near(at, reach, 0.01f) && fallen < 0.05f * reach && sounds == 0 && bm.blowOffs == 1,
+              "lift: the foot off a floored pedal at full boost is a blow-off at full sound, the boost is gone in 0.4 s, and a second lift right after is silent");
+        full();
+        Drive(bt, 3, true, 0.9f, 0.7f);
+        blow(bt, 1.0f, 0.2f);
+        const bool smallLift = sounds == 1 && bm.flutters == 1 && bm.blowOffs == 0;
+        full();
+        for (int i = 1; i <= 4; i++)
+        {
+            Drive(bt, 3, true, 0.9f, 1.0f - 0.15f * (float)i);
+            blow(bt, 1.0f, kDt);
+        }
+        const bool quick = sounds == 1 && bm.blowOffs == 1 && bm.flutters == 0;
+        full();
+        for (int i = 1; i <= 40; i++)
+        {
+            Drive(bt, 3, true, 0.9f, 1.0f - 0.025f * (float)i);
+            blow(bt, 1.0f, kDt);
+        }
+        blow(bt, 1.0f, 1.0f);
+        Check(smallLift && quick && sounds == 0, "lift: a small lift flutters, the pedal let up over 0.2 s is a blow-off, and one let up over two seconds makes no sound");
+        bm = BoostModel{};
+        bm.running = true;
+        bm.bar = 0.15f * reach;
+        bt = Truck();
+        Drive(bt, 3, true, 0.9f, 1.0f);
+        BoostStep(bm, bt, 0.0f, reach, kDt);
+        bm.bar = 0.15f * reach;
+        Drive(bt, 3, true, 0.9f, 0.0f);
+        const int coming = BoostStep(bm, bt, 0.0f, reach, kDt), weak = BoostStep(bm, bt, 0.0f, reach, kDt);
+        const float quiet = bm.lastVolume;
+        bm = BoostModel{};
+        bm.running = true;
+        Drive(bt, 3, true, 0.9f, 1.0f);
+        BoostStep(bm, bt, 0.0f, reach, kDt);
+        bm.bar = 0.05f * reach;
+        Drive(bt, 3, true, 0.9f, 0.0f);
+        Check(coming == kLiftNone && weak == kLiftFlutter && quiet > 0.0f && quiet < 0.1f && BoostStep(bm, bt, 0.0f, reach, kDt) == kLiftNone &&
+              BoostStep(bm, bt, 0.0f, reach, kDt) == kLiftNone, "lift: with little boost a full lift only flutters, quietly, and with next to none it is silent");
+        full();
+        Drive(bt, 3, true, 0.9f, 0.0f);
+        BoostStep(bm, bt, 1.0f, reach, kDt);
+        char line[400];
+        BoostProbeText(bt, bm, 1.0f, reach, line, sizeof line);
+        Check(strstr(line, "of the turbo's 1.80") && strstr(line, "1 blow-offs, 0 flutters, the last a blow-off at 1.80 bar, 1.00 of its full sound"), "boost: the probe's line carries the boost and the lifts");
     }
 
     // the probe's line

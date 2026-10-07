@@ -129,6 +129,7 @@ static void WriteIni(const GaugeSettings &s)
     num(L"RedlineRpm", s.redlineRpm);
     num(L"MaxRpm", s.maxRpm);
     num(L"SpeedMax", s.speedMax);
+    num(L"BoostMax", s.boostMax);
     num(L"RollWarnDeg", s.rollWarnDeg);
     num(L"RollDangerDeg", s.rollDangerDeg);
     num(L"PitchDangerDeg", s.pitchDangerDeg);
@@ -169,9 +170,12 @@ static void ReadIni(GaugeSettings &s)
                         L"; TachClass sets the scales: 0 = truck (idle 650 rpm, red zone from 2200 of 3000, speedometer to 100 km/h),\n"
                         L"; 1 = scout (800, 5500 of 7000, 120 km/h), 2 = heavy (600, 1900 of 2500, 80 km/h).\n"
                         L"; IdleRpm, RedlineRpm, MaxRpm and SpeedMax (km/h) replace the class's numbers; 0 = the class's own.\n"
-                        L"; A kind of truck can have these five of its own. They stand in a section named after the truck, such as\n"
-                        L"; [Truck:chevrolet_ck1500], which the mod writes when one of the five is changed on the tab while such a truck\n"
-                        L"; is driven. The tab and Gauges.log name the truck. A truck without a section takes the five from [Gauges],\n"
+                        L"; The boost dial shows a turbo that blows by how far the pedal is down and how fast the engine turns.\n"
+                        L"; BoostMax is the boost in bar it reaches with the pedal floored at high engine speed (0.3 to 2);\n"
+                        L"; 0 = the class's own: trucks 1.8 bar, scouts 1, heavy trucks 2.\n"
+                        L"; A kind of truck can have these six of its own. They stand in a section named after the truck, such as\n"
+                        L"; [Truck:chevrolet_ck1500], which the mod writes when one of the six is changed on the tab while such a truck\n"
+                        L"; is driven. The tab and Gauges.log name the truck. A truck without a section takes the six from [Gauges],\n"
                         L"; and so does a truck's section for each of them it leaves out.\n"
                         L"; The tilt lamp is green while the truck stands level. It turns amber when the truck leans to a side by\n"
                         L"; RollWarnDeg degrees and red from RollDangerDeg, or when it points up or down a slope by PitchDangerDeg.\n"
@@ -218,6 +222,7 @@ static void ReadIni(GaugeSettings &s)
     s.redlineRpm = IniFloat(L"RedlineRpm", s.redlineRpm, ini);
     s.maxRpm = IniFloat(L"MaxRpm", s.maxRpm, ini);
     s.speedMax = IniFloat(L"SpeedMax", s.speedMax, ini);
+    s.boostMax = IniFloat(L"BoostMax", s.boostMax, ini);
     s.rollWarnDeg = IniFloat(L"RollWarnDeg", s.rollWarnDeg, ini);
     s.rollDangerDeg = IniFloat(L"RollDangerDeg", s.rollDangerDeg, ini);
     s.pitchDangerDeg = IniFloat(L"PitchDangerDeg", s.pitchDangerDeg, ini);
@@ -278,13 +283,13 @@ void SettingsTruckDrop() { InterlockedExchange(&g_truckDropAsked, 1); }
 void SettingsReset() { InterlockedExchange(&g_resetAsked, 1); }
 
 // ---- a truck's own scales: the section [Truck:<key>] of Gauges.ini ----
-// A truck can have five settings of its own: TachClass, IdleRpm, RedlineRpm, MaxRpm and SpeedMax. They are written
+// A truck can have six settings of its own: TachClass, IdleRpm, RedlineRpm, MaxRpm, SpeedMax and BoostMax. They are written
 // when one of them is changed on the tab while that truck is driven, and take the place of the plain ones of
 // [Gauges] whenever that truck is driven again. The key is the truck's as truck.h makes it (TruckKey).
 
 static std::wstring TruckSection(const char *key) { return L"Truck:" + Wide(key); }
 
-// Lays the truck's own scales over s: each of the five its section holds. One the section does not hold stays as
+// Lays the truck's own scales over s: each of the six its section holds. One the section does not hold stays as
 // it is in s. False when the section holds none of them, or is not there.
 static bool ReadTruckIni(const char *key, GaugeSettings &s)
 {
@@ -301,11 +306,12 @@ static bool ReadTruckIni(const char *key, GaugeSettings &s)
     if (has(L"RedlineRpm")) s.redlineRpm = IniFloatIn(section.c_str(), L"RedlineRpm", s.redlineRpm, ini);
     if (has(L"MaxRpm")) s.maxRpm = IniFloatIn(section.c_str(), L"MaxRpm", s.maxRpm, ini);
     if (has(L"SpeedMax")) s.speedMax = IniFloatIn(section.c_str(), L"SpeedMax", s.speedMax, ini);
+    if (has(L"BoostMax")) s.boostMax = IniFloatIn(section.c_str(), L"BoostMax", s.boostMax, ini);
     if (any) SettingsClamp(s);
     return any;
 }
 
-// Writes the truck's section: the five scales of s.
+// Writes the truck's section: the six scales of s.
 static void WriteTruckIni(const char *key, const GaugeSettings &s)
 {
     const std::wstring ini = IniPath(), section = TruckSection(key);
@@ -314,18 +320,19 @@ static void WriteTruckIni(const char *key, const GaugeSettings &s)
     IniPutFloat(section.c_str(), L"RedlineRpm", s.redlineRpm, ini);
     IniPutFloat(section.c_str(), L"MaxRpm", s.maxRpm, ini);
     IniPutFloat(section.c_str(), L"SpeedMax", s.speedMax, ini);
+    IniPutFloat(section.c_str(), L"BoostMax", s.boostMax, ini);
 }
 
-// Takes the truck's five scales out of the ini, and its section with them when nothing else is in it.
+// Takes the truck's six scales out of the ini, and its section with them when nothing else is in it.
 static void DropTruckIni(const char *key)
 {
     const std::wstring ini = IniPath(), section = TruckSection(key);
-    for (const wchar_t *name : { L"TachClass", L"IdleRpm", L"RedlineRpm", L"MaxRpm", L"SpeedMax" }) WritePrivateProfileStringW(section.c_str(), name, nullptr, ini.c_str());
+    for (const wchar_t *name : { L"TachClass", L"IdleRpm", L"RedlineRpm", L"MaxRpm", L"SpeedMax", L"BoostMax" }) WritePrivateProfileStringW(section.c_str(), name, nullptr, ini.c_str());
     wchar_t rest[8] = {};
     if (!GetPrivateProfileSectionW(section.c_str(), rest, 8, ini.c_str())) WritePrivateProfileStringW(section.c_str(), nullptr, nullptr, ini.c_str());
 }
 
-// The five scales a truck can have of its own: copied from one set of settings into another, and compared.
+// The six scales a truck can have of its own: copied from one set of settings into another, and compared.
 static void ScalesCopy(GaugeSettings &to, const GaugeSettings &from)
 {
     to.tachClass = from.tachClass;
@@ -333,11 +340,13 @@ static void ScalesCopy(GaugeSettings &to, const GaugeSettings &from)
     to.redlineRpm = from.redlineRpm;
     to.maxRpm = from.maxRpm;
     to.speedMax = from.speedMax;
+    to.boostMax = from.boostMax;
 }
 
 static bool ScalesSame(const GaugeSettings &a, const GaugeSettings &b)
 {
-    return a.tachClass == b.tachClass && a.idleRpm == b.idleRpm && a.redlineRpm == b.redlineRpm && a.maxRpm == b.maxRpm && a.speedMax == b.speedMax;
+    return a.tachClass == b.tachClass && a.idleRpm == b.idleRpm && a.redlineRpm == b.redlineRpm && a.maxRpm == b.maxRpm && a.speedMax == b.speedMax &&
+           a.boostMax == b.boostMax;
 }
 
 // The settings as the mod's thread keeps them. plain is what [Gauges] holds. s is what is in force: plain, with the
@@ -355,7 +364,7 @@ static void SettingsFor(SettingsState &st, const char *key)
     st.changed = false;
 }
 
-// An edit from the tab, in. A scale changed while a truck is driven makes the five scales that truck's own, and
+// An edit from the tab, in. A scale changed while a truck is driven makes the six scales that truck's own, and
 // they stay out of the plain ones from then on. Everything else on the tab is every truck's.
 static void SettingsTake(SettingsState &st, const GaugeSettings &in)
 {
@@ -458,8 +467,8 @@ static void LogSettings(const GaugeSettings &s)
     KeyName(s.toggleKey, key, sizeof key);
     Log(L"settings: %s layout, %s style, size x%g, opacity %g, offset %g / %g, dials:%s%s%s%s", layouts[s.layout], styles[s.style], s.scale, s.opacity, s.offsetX,
         s.offsetY, s.showTemp ? L" temperature" : L"", s.showBoost ? L" boost" : L"", s.showAir ? L" air" : L"", s.showLamps ? L" lamps" : L"");
-    Log(L"settings: %s scales: idle %.0f rpm, red zone from %.0f of %.0f, speedometer to %.0f km/h; units %s, %s, %s", classes[s.tachClass], k.idle, k.redline, k.max,
-        k.speedMax, s.mph ? L"mph" : L"km/h", s.psi ? L"psi" : L"bar", s.fahrenheit ? L"F" : L"C");
+    Log(L"settings: %s scales: idle %.0f rpm, red zone from %.0f of %.0f, speedometer to %.0f km/h, boost to %g bar; units %s, %s, %s", classes[s.tachClass], k.idle, k.redline, k.max,
+        k.speedMax, k.boost, s.mph ? L"mph" : L"km/h", s.psi ? L"psi" : L"bar", s.fahrenheit ? L"F" : L"C");
     Log(L"settings: tilt lamp amber from %g degrees to a side, red from %g, red from %g up or down a slope", s.rollWarnDeg, s.rollDangerDeg, s.pitchDangerDeg);
     Log(L"settings: coolant warm after %g minutes of driving, in the red zone after %g minutes floored with the wheels spinning at a standstill, cool %g minutes after the engine stops, %g C outside",
         s.warmUpMinutes, s.overheatMinutes, s.coolDownMinutes, s.ambientC);
@@ -505,6 +514,8 @@ struct TruckWatch
     ULONGLONG wayAt;
     float byWay;
     TachModel tach;             // the engine speed of the truck at modelVehicle
+    BoostModel boost;           // and its boost
+    int probedLifts;            // the lifts of the pedal the boost had told when the probe wrote last
     uint64_t modelVehicle;
     RangeModel range;           // the range of the truck with the tank it holds
     TiltModel tilt;             // how the truck stands, and the tilt lamp
@@ -637,6 +648,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         if (w.refs.vehicle != w.modelVehicle)
         {
             w.tach = TachModel{};
+            w.boost = BoostModel{};
             w.tilt = TiltModel{};
             w.owed = w.asked = 0;
             w.modelVehicle = w.refs.vehicle;
@@ -645,6 +657,10 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         if (!w.modelAt || now - w.modelAt >= 1000) w.tilt = TiltModel{};
         const float dt = w.modelAt && now - w.modelAt < 1000 ? SettingsRange((now - w.modelAt) / 1000.0f, 0.001f, 0.2f) : 0.05f;
         TachStep(w.tach, raw, scale, dt);
+        // the boost, and a lift of the pedal under it: the sounds take it from here. With the probe on it is logged
+        const int lift = BoostStep(w.boost, raw, TachShare(w.tach, scale), scale.boost, dt);
+        if (lift != kLiftNone && probe)
+            Log(L"boost: a %s at %.2f bar of the turbo's %.2f, %.2f of its full sound", lift == kLiftBlowOff ? L"blow-off" : L"flutter", w.boost.lastBar, scale.boost, w.boost.lastVolume);
         RangeStep(w.range, kind, raw, dt);
         TiltStep(w.tilt, raw, s, dt);
         TempStep(w.temp, kind, raw, TachShare(w.tach, scale), s, dt);
@@ -697,9 +713,10 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         w.modelAt = now;
     }
     if (probe && (!w.probedAny || now >= w.probeAt || TruckProbeEvent(raw, world, w.probed, w.probedWorld) || w.tilt.lamp != w.probedLamp ||
-                  TempZone(w.temp) != w.probedZone || DamageAdding(w.damage, s) != w.probedAdding))
+                  TempZone(w.temp) != w.probedZone || DamageAdding(w.damage, s) != w.probedAdding ||
+                  w.boost.flutters + w.boost.blowOffs != w.probedLifts))
     {
-        char first[640], second[1024], third[512], fourth[256], fifth[400], sixth[1024];
+        char first[640], second[1024], third[512], fourth[256], fifth[400], sixth[1024], seventh[400];
         TruckProbeText(raw, world, w.byWay, first, sizeof first, second, sizeof second);
         ModelProbeText(raw, w.tach, w.range, scale, third, sizeof third);
         Log(L"probe: %S", first);
@@ -711,7 +728,10 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         Log(L"probe: %S", third);
         Log(L"probe: %S", fourth);
         Log(L"probe: %S", fifth);
+        BoostProbeText(raw, w.boost, TachShare(w.tach, scale), scale.boost, seventh, sizeof seventh);
         Log(L"probe: %S", sixth);
+        Log(L"probe: %S", seventh);
+        w.probedLifts = w.boost.flutters + w.boost.blowOffs;
         w.probedAdding = DamageAdding(w.damage, s);
         w.probedLamp = w.tilt.lamp;
         w.probedZone = TempZone(w.temp);
@@ -874,6 +894,7 @@ static DWORD WINAPI Run(void *)
         {
             TruckToState(raw, world, s, v.st);
             v.st.rpm = watch.tach.rpm;
+            v.st.boostBar = watch.boost.bar;
             v.st.rangeKm = watch.range.rangeKm;
             v.st.tilt = watch.tilt.running ? watch.tilt.lamp : -1;
             v.st.rollDeg = watch.tilt.rollDeg;
@@ -922,7 +943,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
     return a.layout == b.layout && a.style == b.style && a.faceOpacity == b.faceOpacity && a.offsetX == b.offsetX && a.offsetY == b.offsetY &&
            a.scale == b.scale && a.opacity == b.opacity && a.mph == b.mph && a.psi == b.psi && a.fahrenheit == b.fahrenheit && a.showTemp == b.showTemp &&
            a.showBoost == b.showBoost && a.showAir == b.showAir && a.showLamps == b.showLamps && a.tachClass == b.tachClass && a.idleRpm == b.idleRpm &&
-           a.redlineRpm == b.redlineRpm && a.maxRpm == b.maxRpm && a.speedMax == b.speedMax && a.toggleKey == b.toggleKey &&
+           a.redlineRpm == b.redlineRpm && a.maxRpm == b.maxRpm && a.speedMax == b.speedMax && a.boostMax == b.boostMax && a.toggleKey == b.toggleKey &&
            a.rollWarnDeg == b.rollWarnDeg && a.rollDangerDeg == b.rollDangerDeg && a.pitchDangerDeg == b.pitchDangerDeg &&
            a.warmUpMinutes == b.warmUpMinutes && a.overheatMinutes == b.overheatMinutes && a.coolDownMinutes == b.coolDownMinutes && a.ambientC == b.ambientC &&
            a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.coldDamage == b.coldDamage &&
@@ -977,6 +998,7 @@ int wmain(int argc, wchar_t **argv)
     c.redlineRpm = 2100.0f;
     c.maxRpm = 3500.0f;
     c.speedMax = 90.0f;
+    c.boostMax = 1.25f;
     c.rollWarnDeg = 12.5f;
     c.rollDangerDeg = 22.0f;
     c.pitchDangerDeg = 30.0f;
@@ -996,7 +1018,7 @@ int wmain(int argc, wchar_t **argv)
                             c.scale != d.scale && c.opacity != d.opacity && c.mph != d.mph && c.psi != d.psi && c.fahrenheit != d.fahrenheit &&
                             c.showTemp != d.showTemp && c.showBoost != d.showBoost && c.showAir != d.showAir && c.showLamps != d.showLamps &&
                             c.tachClass != d.tachClass && c.idleRpm != d.idleRpm && c.redlineRpm != d.redlineRpm && c.maxRpm != d.maxRpm &&
-                            c.speedMax != d.speedMax && c.rollWarnDeg != d.rollWarnDeg && c.rollDangerDeg != d.rollDangerDeg &&
+                            c.speedMax != d.speedMax && c.boostMax != d.boostMax && c.rollWarnDeg != d.rollWarnDeg && c.rollDangerDeg != d.rollDangerDeg &&
                             c.pitchDangerDeg != d.pitchDangerDeg && c.warmUpMinutes != d.warmUpMinutes && c.overheatMinutes != d.overheatMinutes &&
                             c.coolDownMinutes != d.coolDownMinutes && c.ambientC != d.ambientC && c.airFullKmh != d.airFullKmh && c.damage != d.damage &&
                             c.hotDamage != d.hotDamage && c.coldDamage != d.coldDamage && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
@@ -1021,7 +1043,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 37, "ini: the help text survives a write (37 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 40, "ini: the help text survives a write (40 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());
@@ -1124,26 +1146,29 @@ int wmain(int argc, wchar_t **argv)
         in = state.s;
         in.tachClass = kClassHeavy;
         in.speedMax = 70.0f;
+        in.boostMax = 1.45f;
         SettingsTake(state, in);
         in = state.s;
         in.scale = 1.5f;
         SettingsTake(state, in);
         SettingsWrite(state);
-        Check(ckPlain && state.own && state.plain.scale == 1.5f && state.plain.tachClass == kClassScout && state.plain.speedMax == 0.0f && state.plain.redlineRpm == 5000.0f,
+        Check(ckPlain && state.own && state.plain.scale == 1.5f && state.plain.tachClass == kClassScout && state.plain.speedMax == 0.0f && state.plain.boostMax == 0.0f &&
+              state.plain.redlineRpm == 5000.0f,
               "trucks: a second truck starts from the plain scales, and what is changed beside its scales still goes to every truck");
         // the game is started again: [Gauges] holds the plain settings, each truck its own scales
         SettingsState next = {};
         ReadIni(next.plain);
         SettingsFor(next, "lrd_110/1914924");
-        const bool lrdBack = next.own && next.s.redlineRpm == 4500.0f && next.s.tachClass == kClassScout && next.s.maxRpm == 6000.0f && next.s.speedMax == 0.0f && next.s.scale == 1.5f;
+        const bool lrdBack = next.own && next.s.redlineRpm == 4500.0f && next.s.tachClass == kClassScout && next.s.maxRpm == 6000.0f && next.s.speedMax == 0.0f && next.s.boostMax == 0.0f && next.s.scale == 1.5f;
         SettingsFor(next, "chevrolet_ck1500");
-        Check(SameSettings(next.plain, state.plain) && lrdBack && next.own && next.s.tachClass == kClassHeavy && next.s.speedMax == 70.0f && next.s.redlineRpm == 5000.0f,
+        Check(SameSettings(next.plain, state.plain) && lrdBack && next.own && next.s.tachClass == kClassHeavy && next.s.speedMax == 70.0f && next.s.boostMax == 1.45f &&
+              GaugeScaleOf(next.s).boost == 1.45f && next.s.redlineRpm == 5000.0f,
               "trucks: after a new start [Gauges] reads back as the plain settings and each truck has its own scales again");
         wchar_t kept[16] = {}, later2[16] = {};
         GetPrivateProfileStringW(L"Truck:someone_elses", L"RedlineRpm", L"", kept, 16, ini.c_str());
         GetPrivateProfileStringW(L"Truck:lrd_110/1914924", L"FromALaterVersion", L"", later2, 16, ini.c_str());
         Check(!wcscmp(kept, L"1800") && !wcscmp(later2, L"7"), "trucks: the section of a truck that was not driven, and a key the mod does not know in a truck's section, survive the writes");
-        // a section that holds one of the five takes the others from [Gauges]; what is out of range is held to it
+        // a section that holds one of the six takes the others from [Gauges]; what is out of range is held to it
         WritePrivateProfileStringW(L"Truck:half", L"MaxRpm", L"4000", ini.c_str());
         WritePrivateProfileStringW(L"Truck:wild", L"RedlineRpm", L"50", ini.c_str());
         WritePrivateProfileStringW(L"Truck:wild", L"TachClass", L"9", ini.c_str());
@@ -1153,7 +1178,7 @@ int wmain(int argc, wchar_t **argv)
         SettingsFor(next, "half");
         Check(wild && next.own && !next.changed && next.s.maxRpm == 4000.0f && next.s.redlineRpm == 5000.0f && next.s.tachClass == kClassScout,
               "trucks: a section takes from [Gauges] what it leaves out, and its values are held to their ranges as those of [Gauges] are");
-        // a save after a change of something else leaves such a section as it is; after a change of a scale it has all five
+        // a save after a change of something else leaves such a section as it is; after a change of a scale it has all six
         wchar_t halfRed[16] = {};
         in = next.s;
         in.opacity = 0.75f;
@@ -1166,7 +1191,7 @@ int wmain(int argc, wchar_t **argv)
         SettingsTake(next, in);
         SettingsWrite(next);
         GetPrivateProfileStringW(L"Truck:half", L"RedlineRpm", L"", halfRed, 16, ini.c_str());
-        Check(leftAlone && !wcscmp(halfRed, L"5000") && !next.changed, "trucks: a save leaves a truck's section as it is until one of its scales is changed on the tab, and then writes all five");
+        Check(leftAlone && !wcscmp(halfRed, L"5000") && !next.changed, "trucks: a save leaves a truck's section as it is until one of its scales is changed on the tab, and then writes all six");
         // the truck gives its scales up: they go out of the ini, what else its section holds stays, and a section left empty goes
         SettingsFor(next, "lrd_110/1914924");
         SettingsDrop(next);

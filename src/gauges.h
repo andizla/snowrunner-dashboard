@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#define GAUGES_VERSION "0.7.0"
+#define GAUGES_VERSION "0.8.0"
 
 // The exe the addresses in this mod are from (SnowRunner on Steam, the build of 22 July 2026). On any other the mod
 // stands down.
@@ -29,7 +29,7 @@ struct GaugeState
     float fuelFrac;                 // 0..1
     float rangeKm;                  // < 0 = not known yet
     float tempC;                    // coolant temperature (the mod's own model)
-    float boostBar;                 // 0..2 (the mod's own model)
+    float boostBar;                 // boost pressure in bar, 0..2 (the mod's own model)
     float airBar;                   // brake air, cosmetic (0..10)
     bool handbrake, diffLock, awd, lowGear, headlights, damage, cold;
     int tilt;                       // 0 level, 1 warning, 2 danger, below 0 not known (the lamp stays dark)
@@ -54,6 +54,7 @@ struct GaugeSettings
     bool showTemp, showBoost, showAir, showLamps; // ShowTemp, ShowBoost, ShowAir, ShowLamps
     int tachClass;           // TachClass: 0 truck, 1 scout, 2 heavy: the scales of the tachometer and the speedometer
     float idleRpm, redlineRpm, maxRpm, speedMax;  // IdleRpm, RedlineRpm, MaxRpm, SpeedMax: 0 = the class's own
+    float boostMax;          // BoostMax: the boost in bar the turbo reaches with the pedal floored at high engine speed; 0 = the class's own
     float rollWarnDeg, rollDangerDeg; // RollWarnDeg, RollDangerDeg: degrees of lean to the side from which the tilt lamp is amber, and red
     float pitchDangerDeg;    // PitchDangerDeg: degrees up or down a slope from which the tilt lamp is red
     float warmUpMinutes;     // WarmUpMinutes: minutes a cold engine takes from 15 C to 85 C when it is driven as usual
@@ -99,10 +100,11 @@ inline void SettingsDefaults(GaugeSettings &s)
 
 // The range of each number: what the ini and the tab hold the settings to. A tinted face stops at 0.85, as a darker
 // one is the solid style. The tilt lamp's angles are degrees, the coolant's three times minutes, the outside
-// temperature degrees C, the speed of the radiator's full airflow km/h, the two damage rates percent a minute.
+// temperature degrees C, the speed of the radiator's full airflow km/h, the two damage rates percent a minute, the
+// boost bar (the dial ends at 2).
 static const float kFaceOpacityMax = 0.85f, kScaleMin = 0.4f, kScaleMax = 3.0f, kOpacityMin = 0.1f, kOffsetMax = 4000.0f;
 static const float kIdleRange[2] = { 300.0f, 3000.0f }, kRedlineRange[2] = { 1000.0f, 12000.0f }, kMaxRpmRange[2] = { 1500.0f, 15000.0f },
-                   kSpeedMaxRange[2] = { 40.0f, 300.0f }, kTiltRange[2] = { 1.0f, 89.0f };
+                   kSpeedMaxRange[2] = { 40.0f, 300.0f }, kTiltRange[2] = { 1.0f, 89.0f }, kBoostRange[2] = { 0.3f, 2.0f };
 static const float kWarmUpRange[2] = { 0.5f, 60.0f }, kOverheatRange[2] = { 0.25f, 60.0f }, kCoolDownRange[2] = { 1.0f, 240.0f },
                    kAmbientRange[2] = { -40.0f, 50.0f }, kAirFullRange[2] = { 10.0f, 80.0f }, kDamageRange[2] = { 0.0f, 100.0f };
 
@@ -131,6 +133,7 @@ inline void SettingsClamp(GaugeSettings &s)
     s.redlineRpm = SettingsOverride(s.redlineRpm, kRedlineRange);
     s.maxRpm = SettingsOverride(s.maxRpm, kMaxRpmRange);
     s.speedMax = SettingsOverride(s.speedMax, kSpeedMaxRange);
+    s.boostMax = SettingsOverride(s.boostMax, kBoostRange);
     s.rollWarnDeg = SettingsRange(s.rollWarnDeg, kTiltRange[0], kTiltRange[1]);
     s.rollDangerDeg = SettingsRange(s.rollDangerDeg, s.rollWarnDeg, kTiltRange[1]); // red never comes before amber
     s.pitchDangerDeg = SettingsRange(s.pitchDangerDeg, kTiltRange[0], kTiltRange[1]);
@@ -145,10 +148,10 @@ inline void SettingsClamp(GaugeSettings &s)
     s.probe = s.probe < 0 ? 0 : s.probe;
 }
 
-// The scales of a truck class: idle, where the red zone starts, the tachometer's top (rpm) and the speedometer's top
-// (km/h).
-struct GaugeScale { float idle, redline, max, speedMax; };
-static const GaugeScale kClassScales[kClassCount] = { { 650.0f, 2200.0f, 3000.0f, 100.0f }, { 800.0f, 5500.0f, 7000.0f, 120.0f }, { 600.0f, 1900.0f, 2500.0f, 80.0f } };
+// The scales of a truck class: idle, where the red zone starts, the tachometer's top (rpm), the speedometer's top
+// (km/h) and the boost its turbo reaches (bar).
+struct GaugeScale { float idle, redline, max, speedMax, boost; };
+static const GaugeScale kClassScales[kClassCount] = { { 650.0f, 2200.0f, 3000.0f, 100.0f, 1.8f }, { 800.0f, 5500.0f, 7000.0f, 120.0f, 1.0f }, { 600.0f, 1900.0f, 2500.0f, 80.0f, 2.0f } };
 
 // The scales in force: the class's, with the settings' own numbers in their place where given, made to fit each other
 // (the tachometer's top a whole step of its numbers, the red zone inside it, idle well below the red zone).
@@ -159,6 +162,7 @@ inline GaugeScale GaugeScaleOf(const GaugeSettings &s)
     if (s.redlineRpm > 0.0f) k.redline = s.redlineRpm;
     if (s.maxRpm > 0.0f) k.max = s.maxRpm;
     if (s.speedMax > 0.0f) k.speedMax = s.speedMax;
+    if (s.boostMax > 0.0f) k.boost = s.boostMax;
     const float step = k.max >= 5000.0f ? 1000.0f : 500.0f;
     k.max = ceilf(k.max / step - 0.001f) * step;
     if (k.redline > k.max) k.redline = k.max;

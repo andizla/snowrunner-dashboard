@@ -345,6 +345,7 @@ int wmain(int argc, wchar_t **argv)
         automatic.cold = false;
         automatic.rpm = k.idle + (k.redline - k.idle) * 0.6f;
         automatic.rangeKm = 31.0f;
+        automatic.boostBar = 0.9f;
         automatic.speedKmh = 24.0f;
         automatic.gear = 3;
         automatic.gearMode = "A";

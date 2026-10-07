@@ -1,5 +1,5 @@
-// models.h: what the cluster shows that the game does not hold: the engine speed, the fuel range, the tilt and the
-// coolant temperature, worked out from the truck's values (truck.h) on every pass of the mod's thread, and what the
+// models.h: what the cluster shows that the game does not hold: the engine speed, the fuel range, the tilt, the
+// coolant temperature and the boost, worked out from the truck's values (truck.h) on every pass of the mod's thread, and what the
 // temperature costs the engine. No game memory is touched here, so the offline test (test\models_test.cpp) runs the
 // models on drives it makes up.
 //
@@ -34,6 +34,12 @@
 // loses a share of what it can take every minute, more the hotter it runs, and so does a cold engine under a heavy
 // pedal, more the colder it is. The model counts that in points of the game's own engine damage, and gauges.cpp
 // writes the whole points into the game. So a garage repairs them, and the game's rules for a damaged engine apply.
+//
+// The boost. The game has no boost pressure. Here the turbo blows by how far the pedal is down and how fast the
+// engine turns: nothing near idle, all it can from about two thirds of the way to the red zone. The pressure lags
+// behind, longer at low engine speed, and falls away quickly when the foot comes off. How much a truck's turbo
+// reaches is a setting, by truck class or the truck's own. A quick lift of the pedal under boost is told to the
+// caller as a flutter or a blow-off, for the sounds.
 #pragma once
 #include "truck.h"
 
@@ -510,6 +516,112 @@ inline void TempProbeText(const TruckRaw &t, const TempModel &m, const GaugeSett
     sprintf_s(out, size, "coolant %.1f C, %+.2f C/s, cold lamp %s%s | heat %.2f of a full load's (load %.2f), %.2f taken away (thermostat %.2f, air %.2f at %.1f km/h, fan %.2f, water %.2f at %.2f m%s) | %.0f C outside",
               m.temp, m.perSecond, TempCold(m) ? "on" : "off", TempZone(m) == 2 ? ", in the red zone" : "", m.heat, m.load, m.cooling, TempThermostat(m.temp),
               TempAirflow(m.temp, kmh, s.airFullKmh) - kFan * TempFan(m.temp), kmh, TempFan(m.temp), m.water, m.depth, t.waterKnown ? "" : " (not read)", s.ambientC);
+}
+
+// ---- the boost ----
+
+static const float kBoostRevsFrom = 0.2f, kBoostRevsFull = 0.65f; // the turbo starts to blow with the needle this far from idle to the red zone, and blows all it can from here
+static const float kBoostPedal = 1.3f;       // the boost goes with the pedal to this power: little of it at a light foot
+static const float kBoostSpool = 0.35f, kBoostSpoolLow = 0.9f; // seconds the boost lags by on the way up at the red zone, and this much more at idle
+static const float kBoostFall = 0.18f, kBoostLift = 0.1f; // seconds on the way down, and with the foot off the pedal
+static const float kLiftWindow = 0.25f;      // seconds: a lift is the pedal coming up within this time
+static const float kLiftForBlowOff = 0.5f, kLiftForFlutter = 0.25f; // how far the pedal has to come up for a blow-off, and for a flutter
+static const float kBlowOffFrom = 0.22f, kFlutterFrom = 0.11f; // the boost it takes, as a share of the most the turbo reaches
+static const float kLiftPause = 0.8f;        // seconds from one lift's sound to the next
+enum { kLiftNone, kLiftFlutter, kLiftBlowOff }; // BoostStep's answer: nothing, a flutter, a blow-off
+enum { kLiftMarks = 8 };                     // pedal positions kept for kLiftWindow: a few more than the mod's steps in it
+
+struct BoostModel
+{
+    bool running;        // the model has a truck
+    float bar;           // the boost in bar
+    float target;        // where it heads, for the probe
+    struct { float pedal, age; } mark[kLiftMarks]; // the pedal on the last steps, newest last, and how long ago
+    int marks;
+    bool lifting;        // the pedal came up on the last step
+    float liftBar;       // the boost when it began to come up: a lift sounds by this, as the boost is falling while the pedal comes up
+    float pause;         // seconds until a lift may sound again
+    int flutters, blowOffs;  // how many of each since the model began
+    int last;            // the last lift's sound (kLiftNone: none yet), the boost it came at, and how loud of 1
+    float lastBar, lastVolume;
+};
+
+// The boost the turbo heads for, in bar: most (the truck's BoostMax) with the pedal floored and the tachometer's
+// needle from kBoostRevsFull of the way to the red zone (revs, TachShare). Nothing below kBoostRevsFrom, with the
+// engine off or while it starts, and little in neutral, where nothing pulls against the engine.
+inline float BoostTarget(const TruckRaw &t, float revs, float most)
+{
+    if (!TruckEngineOn(t) || (t.startTimer > 0.0f && !(t.flags & 2))) return 0.0f;
+    const float needle = revs > 0.0f ? fminf(revs, 1.0f) : 0.0f; // 0 too for revs that are no number
+    const float target = most * powf(TruckPedal(t), kBoostPedal) * SettingsRange((needle - kBoostRevsFrom) / (kBoostRevsFull - kBoostRevsFrom), 0.0f, 1.0f);
+    return t.gearEngaged == 0 ? target * kLoadNeutral : target;
+}
+
+// One step of dt seconds. Returns what a lift of the pedal on this step sounds like: kLiftBlowOff as soon as the
+// pedal has come up by kLiftForBlowOff within kLiftWindow with the boost at kBlowOffFrom of most or above when it
+// began to; kLiftFlutter once the pedal has stopped after a smaller lift, or after one with less boost; kLiftNone
+// otherwise and for kLiftPause after a sound. The model keeps the boost the sound came at and how loud it is
+// (lastBar, lastVolume).
+inline int BoostStep(BoostModel &m, const TruckRaw &t, float revs, float most, float dt)
+{
+    const float pedal = TruckPedal(t);
+    if (!m.running)
+    {
+        m = BoostModel{};
+        m.running = true;
+    }
+    // is the pedal coming up, and with how much boost did it begin to
+    const bool lifting = m.marks > 0 && pedal < m.mark[m.marks - 1].pedal - 0.01f;
+    if (lifting && !m.lifting) m.liftBar = m.bar;
+    m.lifting = lifting;
+    // how far the pedal came up within the window
+    int kept = 0;
+    float highest = pedal;
+    for (int i = 0; i < m.marks; i++)
+    {
+        m.mark[i].age += dt;
+        if (m.mark[i].age > kLiftWindow) continue;
+        if (m.mark[i].pedal > highest) highest = m.mark[i].pedal;
+        m.mark[kept++] = m.mark[i];
+    }
+    if (kept == kLiftMarks) { memmove(m.mark, m.mark + 1, sizeof m.mark[0] * (kLiftMarks - 1)); kept--; }
+    m.mark[kept].pedal = pedal;
+    m.mark[kept].age = 0.0f;
+    m.marks = kept + 1;
+    const float lift = highest - pedal;
+    int sound = kLiftNone;
+    if (m.pause > 0.0f) m.pause -= dt;
+    else if (most > 0.0f && TruckEngineOn(t))
+    {
+        if (lift >= kLiftForBlowOff && m.liftBar >= kBlowOffFrom * most) sound = kLiftBlowOff;
+        else if (!lifting && lift >= kLiftForFlutter && m.liftBar >= kFlutterFrom * most) sound = kLiftFlutter;
+    }
+    if (sound != kLiftNone)
+    {
+        m.last = sound;
+        m.lastBar = m.liftBar;
+        m.lastVolume = powf(SettingsRange(m.liftBar / most, 0.0f, 1.0f), 1.5f);
+        (sound == kLiftBlowOff ? m.blowOffs : m.flutters)++;
+        m.pause = kLiftPause;
+        // the lift is told: the pedal's way up to here does not count again
+        m.mark[0] = m.mark[m.marks - 1];
+        m.marks = 1;
+    }
+    m.target = BoostTarget(t, revs, most);
+    const float needle = revs > 0.0f ? fminf(revs, 1.0f) : 0.0f;
+    const float tau = m.target > m.bar ? kBoostSpool + kBoostSpoolLow * (1.0f - needle) : pedal < 0.05f ? kBoostLift : kBoostFall;
+    m.bar += (m.target - m.bar) * (1.0f - expf(-dt / tau));
+    if (!(m.bar >= 0.0f)) m.bar = 0.0f; // 0 too for a boost that is no number
+    return sound;
+}
+
+// The boost in a line of text for the probe log.
+inline void BoostProbeText(const TruckRaw &t, const BoostModel &m, float revs, float most, char *out, size_t size)
+{
+    char last[96] = "none yet";
+    if (m.last != kLiftNone) sprintf_s(last, "the last a %s at %.2f bar, %.2f of its full sound", m.last == kLiftBlowOff ? "blow-off" : "flutter", m.lastBar, m.lastVolume);
+    sprintf_s(out, size, "boost %.2f bar of the turbo's %.2f, heading for %.2f (pedal %.2f, the needle %.2f of the way to the red zone) | lifts: %d blow-offs, %d flutters, %s",
+              m.bar, most, m.target, TruckPedal(t), revs, m.blowOffs, m.flutters, last);
 }
 
 // ---- the game's own clock ----

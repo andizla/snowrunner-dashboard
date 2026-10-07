@@ -622,7 +622,7 @@ inline const char *TruckGearMode(const TruckRaw &t, bool shifter)
 // The state the cluster draws, from the truck's values. The engine speed, the range, the tilt and the coolant
 // temperature are not among them: gauges.cpp puts in what models.h works out, and here the tachometer rests at idle,
 // the range is not known, the tilt lamp and the cold lamp are dark and the temperature needle rests at the low end
-// of its dial. The boost has no source in this version: its needle rests there too.
+// of its dial, as does the boost's.
 inline void TruckToState(const TruckRaw &t, const World &w, const GaugeSettings &s, GaugeState &st)
 {
     st = GaugeState{};

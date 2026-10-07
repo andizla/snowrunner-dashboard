@@ -274,7 +274,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     // whose scales these are: the driven truck's own, or the plain ones
     if (!view.truck[0]) ImGui::TextWrapped("No truck is driven. These are the plain scales, which every truck without scales of its own shows.");
     else if (!view.truckOwn)
-        ImGui::TextWrapped("Scales for %s. It shows the plain ones. Change one here and this kind of truck keeps all five as its own.", view.truck);
+        ImGui::TextWrapped("Scales for %s. It shows the plain ones. Change one here and this kind of truck keeps all six as its own.", view.truck);
     else
     {
         ImGui::TextWrapped("Scales for %s. They are its own, kept in Gauges.ini for this kind of truck.", view.truck);
@@ -285,8 +285,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     PageLabel("Truck class", labelX);
     ImGui::SetNextItemWidth(w);
     changed(ImGui::Combo("##class", &s.tachClass, classes, kClassCount));
-    PageTip("Sets the four numbers below: trucks idle at 650 rpm with the red zone from 2200 of 3000 and a speedometer to 100 km/h, "
-            "scouts 800, 5500 of 7000 and 120 km/h, heavy trucks 600, 1900 of 2500 and 80 km/h.");
+    PageTip("Sets the five numbers below: trucks idle at 650 rpm with the red zone from 2200 of 3000, a speedometer to 100 km/h and 1.8 bar of boost, "
+            "scouts 800, 5500 of 7000, 120 km/h and 1 bar, heavy trucks 600, 1900 of 2500, 80 km/h and 2 bar.");
     {
         const GaugeScale own = kClassScales[s.tachClass < 0 || s.tachClass >= kClassCount ? kClassTruck : s.tachClass];
         // each number is the class's own until it is changed here; "Class" gives it back to the class
@@ -317,6 +317,23 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 act |= kPageChanged;
             }
             ImGui::PopID();
+        }
+        // the turbo's boost: in bar with two decimals, so it has a row of its own
+        float shown = s.boostMax > 0.0f ? s.boostMax : own.boost;
+        PageLabel("Boost at full load", labelX);
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::DragFloat("##boost", &shown, 0.01f, kBoostRange[0], kBoostRange[1], s.boostMax > 0.0f ? "%.2f bar" : "%.2f bar (class)", ImGuiSliderFlags_AlwaysClamp))
+        {
+            s.boostMax = floorf(shown * 100.0f + 0.5f) / 100.0f;
+            act |= kPageChanged;
+        }
+        PageTip("The boost the turbo reaches with the pedal floored at high engine speed, in bar whatever the unit shown. "
+                "The classes' own: trucks 1.8, scouts 1, heavy trucks 2.");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Class###ownboost"))
+        {
+            s.boostMax = 0.0f;
+            act |= kPageChanged;
         }
     }
 
