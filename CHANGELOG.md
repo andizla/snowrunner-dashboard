@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.0] 2026-10-07
+
+- The cluster is drawn anew. Solid and tinted dials sit in a bevelled metal ring with a soft shadow, and the solid face is a little lighter towards its middle. In the open style the scale arcs have a soft and a sharp shadow.
+- The needles are blades with a point, one half bright and one shaded, over a hub with a lit ring. Major ticks taper towards the middle, and the red and blue zones have a soft inner edge.
+- Every lamp has a new symbol, drawn from curves: parking brake, headlights, engine, frost, the truck of the tilt lamp, and on the dials the fuel pump, the thermometer, the turbo and brake air. All wheel drive, the differential lock and the low range are symbols now, in place of the texts AWD, DIFF and LOW. A lit lamp glows.
+- Still drawn at the screen's own resolution at any size, with no image files.
+- With `Probe=1` the log says once a minute what the cluster takes to draw.
+
 ## [0.8.0] 2026-10-07
 
 - The boost dial shows a boost pressure, worked out from the pedal and the engine speed. The turbo makes nothing near idle and all it can from about two thirds of the way to the red zone with the pedal floored. In neutral it makes a quarter of that at most.
