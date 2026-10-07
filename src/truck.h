@@ -11,6 +11,8 @@
 //                                    vehicle = [control + 8]
 //   vehicle + 0x768                  bit 0: the engine is on, bit 1: it has finished starting, bit 2: headlights,
 //                                    bit 3: high beam, bit 4: reversing lights, bit 5: brake lights
+//   vehicle + 0x114                  seconds the game has simulated the truck for (a float, in steps of a thirtieth;
+//                                    it stands still while a level loads and whenever the game does not simulate)
 //   vehicle + 0x11C                  seconds the engine has been stalling (it dies at 1.4)
 //   vehicle + 0x730                  seconds until a starting engine runs (1.8 at the start, then down to 0)
 //   vehicle + 0xE38 .. + 0xE6C       what the game burns fuel by (floats): + 0xE38 and + 0xE3C the engine's two shares,
@@ -27,7 +29,9 @@
 //   chassis = [model + 0x230]        the rigid body: + 0x170 its forward axis, + 0x180 up, + 0x190 left (four floats
 //                                    each, y is the world's up), + 0x1A0 position, + 0x230 velocity
 //   [vehicle + 0x200] .. [+ 0x208]   the wheel models; wheel = [wheel model + 0x2C8] (its class at exe + 0x2258918):
-//                                    + 0xE8 how it is driven (int), + 0x16C its turning speed in rad/s
+//                                    + 0xE8 how it is driven (int), + 0x13C where its centre is in the world
+//                                    (three floats), + 0x16C its turning speed in rad/s, + 0x17C metres of water it
+//                                    stands in (0 on dry ground)
 //   vehicle + 0x150                  the handle of the engine's damage: { int damage, int capacity, float effect };
 //                                    + 0x148 the gearbox's and + 0x158 the fuel tank's, the same way
 //   vehicle + 0x108, + 0x10C         the damage of all the truck's parts together and what they take (ints), as the
@@ -92,6 +96,11 @@ struct TruckRaw
     int wheels;
     int drive[kMaxWheels];         // 0 not driven, 1 driven, 2 driven with all wheel drive
     float spin[kMaxWheels];
+    bool waterKnown;               // each wheel's place and the water at it were read
+    float wheelAt[kMaxWheels][3];  // wheel + 0x13C: where the wheel's centre is in the world
+    float wheelWater[kMaxWheels];  // wheel + 0x17C: metres of water the wheel stands in, 0 on dry ground
+    bool clockKnown;
+    float clock;                   // vehicle + 0x114: the seconds the game has simulated this truck for
     float fuel, tank;
     bool damageKnown;
     int damage, damageCapacity;
@@ -190,11 +199,27 @@ inline bool TruckRead(const TruckMemory &m, const TruckRefs &r, TruckRaw &t)
             memcpy(t.gearSpeed, speeds, (size_t)count * 4);
         }
     }
+    t.waterKnown = r.wheels > 0;
     for (int i = 0; i < r.wheels; i++)
     {
-        if (!m.get(r.wheel[i] + 0xE8, t.drive[i]) || !m.get(r.wheel[i] + 0x16C, t.spin[i])) return false;
+        // the wheel from + 0x13C to + 0x180 in one read: its place, its turning speed at + 0x16C, the water at + 0x17C.
+        // A wheel that gives only its turning speed is still a wheel: the water is then not known.
+        float w[17];
+        if (!m.get(r.wheel[i] + 0xE8, t.drive[i])) return false;
+        if (m.get(r.wheel[i] + 0x13C, w))
+        {
+            memcpy(t.wheelAt[i], w, sizeof t.wheelAt[i]);
+            t.spin[i] = w[12];
+            t.wheelWater[i] = w[16] >= 0.0f && w[16] < 100.0f ? w[16] : 0.0f; // 0 too for a depth that is no number
+        }
+        else
+        {
+            if (!m.get(r.wheel[i] + 0x16C, t.spin[i])) return false;
+            t.waterKnown = false;
+        }
         t.wheels++;
     }
+    t.clockKnown = m.get(r.vehicle + 0x114, t.clock);
     float fuel[3]; // + 0x5E8 litres, + 0x5F0 the tank
     if (!m.get(r.model + 0x5E8, fuel)) return false;
     t.fuel = fuel[0];

@@ -108,7 +108,14 @@ static void MakeGame()
         Put(wheel, kExe + kRvaWheelClass);
         Put(wheel + 0xE8, drive[i]);
         Put(wheel + 0x16C, 11.5f + (float)i);
+        // the front pair 1.5 m ahead of the chassis and the rear pair 1.5 m behind it, 0.8 m to either side; the
+        // front wheels stand in a metre of water, the rear ones in a third of that
+        const float side = (i % 2) ? -0.8f : 0.8f, ahead = i < 2 ? 1.5f : -1.5f;
+        const float at[3] = { 100.0f + ahead * 0.6f - side * 0.8f, 20.0f, 300.0f + ahead * 0.8f + side * 0.6f };
+        Put(wheel + 0x13C, at);
+        Put(wheel + 0x17C, i < 2 ? 1.0f - 0.1f * (float)i : 0.3f - 0.1f * (float)(i - 2));
     }
+    Put(kVehicle + 0x114, 12.5f);
     Put(kVehicle + 0x768, (uint8_t)0x07);
     Put(kVehicle + 0x11C, 0.0f);
     Put(kVehicle + 0x730, 0.0f);
@@ -248,6 +255,9 @@ int main()
     Check(t.wheels == 4 && t.drive[0] == 2 && t.drive[3] == 1 && Near(t.spin[2], 13.5f), "read: each wheel's drive and turning speed");
     Check(Near(t.fuel, 60.0f) && Near(t.tank, 75.0f) && t.damageKnown && t.damage == 30 && t.damageCapacity == 150, "read: fuel, and the engine damage behind its handle");
     Check(t.damageSum == 48 && t.damageSumCapacity == 840, "read: the damage of all the truck's parts, as the game last summed it");
+    Check(t.waterKnown && Near(t.wheelWater[0], 1.0f) && Near(t.wheelWater[1], 0.9f) && Near(t.wheelWater[3], 0.2f) && Near(t.wheelAt[0][0], 100.26f) &&
+          Near(t.wheelAt[0][2], 301.68f) && t.clockKnown && Near(t.clock, 12.5f),
+          "read: each wheel's place and the water it stands in, and the game's count of the seconds it has simulated the truck for");
     Check(Near(t.speed, 5.0f) && Near(t.position[2], 300.0f) && TruckSane(t), "read: 5 m/s along the forward axis, and the values make sense");
     Check(t.gearEngaged == 3 && t.burnKnown && Near(t.burnShare[0], 2.0f) && Near(t.burnShare[1], 2.2f) && Near(t.burnAwd, 1.8f) && Near(t.burnEngine, 1.5f) &&
           Near(t.burnGearbox, 1.5f) && Near(t.burnIdle, 0.2f) && Near(t.burnLeak, 40.0f) && t.gearBurns == 7 && Near(t.gearBurn[2], 1.2f) && Near(t.gearBurn[6], 1.3f) &&
@@ -290,6 +300,18 @@ int main()
     Check(!atHalf && st.damage, "state: the damage lamp lights above half the engine's capacity");
     Put(kDamage + 0x10, (uint16_t)4);
     Check(TruckRead(kMemory, r, t) && !t.damageKnown && (TruckToState(t, w, s, st), !st.damage), "read: a handle without data gives no damage and a dark lamp");
+
+    // a wheel whose memory ends before the water's depth
+    MakeGame();
+    TruckFind(kMemory, r);
+    Drop(kWheel + 0x3000);
+    Block(kWheel + 0x3000, 0x170);
+    Put(kWheel + 0x3000, kExe + kRvaWheelClass);
+    Put(kWheel + 0x3000 + 0xE8, 1);
+    Put(kWheel + 0x3000 + 0x16C, 14.5f);
+    TruckRaw dry;
+    Check(TruckRead(kMemory, r, dry) && dry.wheels == 4 && !dry.waterKnown && Near(dry.spin[3], 14.5f) && Near(dry.spin[0], 11.5f),
+          "read: a wheel that gives its turning speed alone is still a wheel, and the water is then not known");
 
     // backwards
     MakeGame();

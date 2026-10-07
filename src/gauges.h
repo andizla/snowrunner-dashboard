@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#define GAUGES_VERSION "0.6.0"
+#define GAUGES_VERSION "0.6.1"
 
 // The exe the addresses in this mod are from (SnowRunner on Steam, the build of 22 July 2026). On any other the mod
 // stands down.
@@ -89,7 +89,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.coolDownMinutes = 15.0f;
     s.ambientC = 15.0f;
     s.airFullKmh = 30.0f;
-    s.damage = false;
+    s.damage = true;
     s.hotDamage = 10.0f;
     s.coldDamage = 5.0f;
     strcpy_s(s.padToggle, "None");

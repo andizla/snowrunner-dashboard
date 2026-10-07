@@ -363,6 +363,7 @@ struct TruckWatch
     ULONGLONG addedAt;          // when damage was last written, 0 = never: the damage lamp blinks for two seconds after
     const char *refused;        // why the last write did not go out, a string literal; a reason is logged once
     bool probedAdding;          // whether the model was adding damage when the probe wrote last
+    ClockWatch clock;           // the game's own count of the seconds it has simulated the truck for, and when it last moved
     ULONGLONG modelAt;          // when the models last ran
 };
 
@@ -426,13 +427,20 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     const bool driving = read && TruckSane(raw) && WorldDriving(world);
     if (!driving) w.drivingSince = 0;
     else if (!w.drivingSince) w.drivingSince = now;
+    // the game's own clock for the truck: while it stands, the game is not simulating and the models wait
+    const bool held = read && ClockStands(w.clock, raw, now);
     // what the tab's test buttons asked for goes to a truck that is being driven, further down
     const int asked = (int)InterlockedExchange(&g_damageTest, 0);
-    if (asked > 0 && !driving) Log(L"engine damage: the test's %d points were not written, as no truck is being driven", asked);
+    if (asked > 0 && (!driving || held)) Log(L"engine damage: the test's %d points were not written, as no truck is being driven", asked);
     if (!read)
     {
+        // the truck is gone: what waited to be written goes with it, and the next truck is looked at anew, also when
+        // the game puts it where the old one was
         w.wayAt = 0;
         w.probedAny = false;
+        w.owed = w.asked = 0;
+        w.engineVehicle = 0;
+        w.clock = ClockWatch{};
         return false;
     }
     // the speed by the way the chassis went in the last half second, for the probe to hold the speed against
@@ -451,9 +459,10 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     // range starts over when the tank is another one (RangeStep), so a truck put back into the world keeps its
     // litres a kilometre. The tilt starts over on another truck and after a second without a step, as the truck may
     // stand elsewhere by then. The coolant temperature stays with each truck (TempStep). Engine damage that waits to
-    // be written belongs to the truck it came from and goes with it.
+    // be written belongs to the truck it came from and goes with it. While the game's clock for the truck stands
+    // (held), nothing is stepped: the game is not simulating, whatever its window shows.
     const GaugeScale scale = GaugeScaleOf(s);
-    if (driving)
+    if (driving && !held)
     {
         if (w.refs.vehicle != w.modelVehicle)
         {
@@ -520,7 +529,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     if (probe && (!w.probedAny || now >= w.probeAt || TruckProbeEvent(raw, world, w.probed, w.probedWorld) || w.tilt.lamp != w.probedLamp ||
                   TempZone(w.temp) != w.probedZone || DamageAdding(w.damage, s) != w.probedAdding))
     {
-        char first[640], second[1024], third[512], fourth[256], fifth[320], sixth[1024];
+        char first[640], second[1024], third[512], fourth[256], fifth[400], sixth[1024];
         TruckProbeText(raw, world, w.byWay, first, sizeof first, second, sizeof second);
         ModelProbeText(raw, w.tach, w.range, scale, third, sizeof third);
         Log(L"probe: %S", first);
@@ -731,8 +740,8 @@ int wmain(int argc, wchar_t **argv)
           "defaults: strip, open style, metric, the air dial off, no toggle, demo off, probe off, the tilt lamp at 15, 25 and 35 degrees");
     Check(d.warmUpMinutes == 3.0f && d.overheatMinutes == 1.5f && d.coolDownMinutes == 15.0f && d.ambientC == 15.0f,
           "defaults: the coolant warm after 3 minutes, in the red zone after 1.5, cool after 15, with 15 C outside");
-    Check(d.airFullKmh == 30.0f && !d.damage && d.hotDamage == 10.0f && d.coldDamage == 5.0f,
-          "defaults: the radiator's full airflow from 30 km/h, engine damage off, 10 percent a minute for the heat and 5 for the cold");
+    Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.coldDamage == 5.0f,
+          "defaults: the radiator's full airflow from 30 km/h, engine damage on, 10 percent a minute for the heat and 5 for the cold");
 
     // keys the mod does not know, in its own section and in another one
     WritePrivateProfileStringW(kIniSection, L"FromALaterVersion", L"7", ini.c_str());
@@ -761,7 +770,7 @@ int wmain(int argc, wchar_t **argv)
     c.coolDownMinutes = 20.0f;
     c.ambientC = -12.5f;
     c.airFullKmh = 45.5f;
-    c.damage = true;
+    c.damage = false;
     c.hotDamage = 22.5f;
     c.coldDamage = 7.5f;
     c.toggleKey = VK_F9;
@@ -833,14 +842,14 @@ int wmain(int argc, wchar_t **argv)
     WritePrivateProfileStringW(kIniSection, L"AirFullKmh", L"5", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"HotDamagePercentPerMinute", L"500", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"ColdDamagePercentPerMinute", L"-3", ini.c_str());
-    WritePrivateProfileStringW(kIniSection, L"Damage", L"7", ini.c_str());
-    ReadIni(b);
-    const bool held = b.airFullKmh == kAirFullRange[0] && b.hotDamage == kDamageRange[1] && b.coldDamage == 0.0f && b.damage;
-    WritePrivateProfileStringW(kIniSection, L"AirFullKmh", L"200", ini.c_str());
-    WritePrivateProfileStringW(kIniSection, L"HotDamagePercentPerMinute", L"nan", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"Damage", L"0", ini.c_str());
     ReadIni(b);
-    Check(held && b.airFullKmh == kAirFullRange[1] && b.hotDamage == d.hotDamage && !b.damage,
+    const bool held = b.airFullKmh == kAirFullRange[0] && b.hotDamage == kDamageRange[1] && b.coldDamage == 0.0f && !b.damage;
+    WritePrivateProfileStringW(kIniSection, L"AirFullKmh", L"200", ini.c_str());
+    WritePrivateProfileStringW(kIniSection, L"HotDamagePercentPerMinute", L"nan", ini.c_str());
+    WritePrivateProfileStringW(kIniSection, L"Damage", L"7", ini.c_str());
+    ReadIni(b);
+    Check(held && b.airFullKmh == kAirFullRange[1] && b.hotDamage == d.hotDamage && b.damage,
           "ini: the radiator's speed stays between 10 and 80 km/h, the damage rates between 0 and 100, and a rate that is no number gives the default");
 
     // the scales in force

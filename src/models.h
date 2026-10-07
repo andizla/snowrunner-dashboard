@@ -23,7 +23,8 @@
 // The coolant temperature. The game has no engine heat. Here the engine makes heat by how far the pedal is down and
 // how fast it turns, and a small share of that at idle. The radiator takes heat away by how much warmer the coolant
 // is than the air outside, by how far the thermostat is open (shut below 82 C, open from 92 C) and by the air that
-// goes through it: more the faster the truck drives, and a fan helps from about 100 C. So a warm engine holds about
+// goes through it: more the faster the truck drives, and a fan helps from about 100 C. Water around the truck's
+// front cools as well, from about axle height and most with the engine standing in it. So a warm engine holds about
 // 86 C at idle, stands near 100 C when it works hard at speed, and climbs into the red zone from 118 C only when the
 // pedal is floored at a crawl. A stopped engine cools slowly towards the air outside. Three of the settings are the
 // times all of this takes, a fourth is the outside temperature, and a fifth the speed from which the radiator gets
@@ -317,6 +318,9 @@ static const float kLoadRevs = 0.6f;         // how much of the load goes with t
 static const float kLoadNeutral = 0.25f;     // in neutral nothing pulls against the engine: the load is this share of that
 static const float kUsualLoad = 0.7f, kUsualKmh = 15.0f; // "driven as usual", for WarmUpMinutes: about the mean load and speed of two recorded drives
 static const float kTempFall = 1.0f;         // degrees a second a running engine's coolant falls for each share of a full load's heat taken away beyond what the engine makes
+static const float kWaterFrom = 0.5f, kWaterFull = 1.2f; // metres of water at the truck's front: from about axle height it cools the engine, and with the engine in it it does all it can
+static const float kWater = 1.0f;            // what deep water adds to the air through the radiator, as a share of all the air that driving gives
+static const float kWaterStopped = 4.0f;     // a stopped engine in deep water loses its warmth this many times faster on top
 enum { kTempTrucks = 16 };                   // the trucks the model remembers; the one left longest ago makes room for a new one
 
 // How far the thermostat is open: kThermostatLeak while it is shut, 1 when it is open.
@@ -335,6 +339,27 @@ inline float TempAirflow(float temp, float kmh, float fullKmh)
     return kAirStill + (1.0f - kAirStill) * SettingsRange(kmh / fmaxf(fullKmh, kAirFullRange[0]), 0.0f, 1.0f) + kFan * TempFan(temp);
 }
 
+// The depth of the water at the truck's front in metres, where nearly every truck has its engine: the mean over the
+// wheels that stand furthest forward (within half a metre of the foremost). 0 on dry ground, and when the wheels'
+// places and depths were not read.
+inline float TruckWaterDepth(const TruckRaw &t)
+{
+    if (!t.waterKnown || t.wheels <= 0) return 0.0f;
+    float along[kMaxWheels], foremost = -1.0e9f, sum = 0.0f;
+    int n = 0;
+    for (int i = 0; i < t.wheels; i++)
+    {
+        along[i] = (t.wheelAt[i][0] - t.position[0]) * t.forward[0] + (t.wheelAt[i][1] - t.position[1]) * t.forward[1] + (t.wheelAt[i][2] - t.position[2]) * t.forward[2];
+        if (along[i] > foremost) foremost = along[i];
+    }
+    for (int i = 0; i < t.wheels; i++)
+        if (along[i] >= foremost - 0.5f) { sum += t.wheelWater[i]; n++; }
+    return n ? sum / (float)n : 0.0f; // 0 too for places that are no numbers
+}
+
+// How much of its cooling the water does at a depth: none up to kWaterFrom, all of it from kWaterFull.
+inline float TempWater(float depth) { return SettingsRange((depth - kWaterFrom) / (kWaterFull - kWaterFrom), 0.0f, 1.0f); }
+
 // How hard the engine works, 0 to 1: the pedal, and more of it the higher the tachometer's needle stands between
 // idle and the red zone (revs, 0 to 1).
 inline float TruckLoad(const TruckRaw &t, float revs)
@@ -349,9 +374,11 @@ inline float TempHeat(float load) { return kHeatIdle + (1.0f - kHeatIdle) * Sett
 
 // The heat the radiator takes away, in the same measure: 1 is all of a full load's heat, which it takes from coolant
 // at kTempCruise with the thermostat open, all the air and kTempOutside outside.
-inline float TempCooling(float temp, float outside, float kmh, float fullKmh)
+// water: how much of its cooling the water around the truck does, 0 to 1 (TempWater). It counts like air through
+// the radiator, kWater times as much as all the air that driving gives.
+inline float TempCooling(float temp, float outside, float kmh, float fullKmh, float water)
 {
-    return (temp - outside) / (kTempCruise - kTempOutside) * TempThermostat(temp) * TempAirflow(temp, kmh, fullKmh);
+    return (temp - outside) / (kTempCruise - kTempOutside) * TempThermostat(temp) * (TempAirflow(temp, kmh, fullKmh) + kWater * water);
 }
 
 // How fast the temperature rises, and how fast a stopped engine cools. warm and hot: degrees a second for each share
@@ -369,7 +396,7 @@ inline float TempPath(float from, float to, float load, float kmh, float fullKmh
     const float step = 0.25f;
     float seconds = 0.0f;
     for (float temp = from + step * 0.5f; temp < to; temp += step)
-        seconds += step / fmaxf(TempHeat(load) - TempCooling(temp, kTempOutside, kmh, fullKmh), 0.001f);
+        seconds += step / fmaxf(TempHeat(load) - TempCooling(temp, kTempOutside, kmh, fullKmh, 0.0f), 0.001f);
     return seconds;
 }
 
@@ -405,6 +432,7 @@ struct TempModel
     double clock;    // seconds the model has been stepped for, whichever truck was driven
     float temp;      // the driven truck's coolant temperature in C
     float load, heat, cooling, perSecond; // the last step, for the probe: the load, the heat made and taken away, degrees a second
+    float depth, water;                   // and the metres of water at the truck's front, and how much of its cooling the water did (0 to 1)
 };
 
 // Whether a remembered truck has the build of the truck being read: the same tank and wheels, and the same gearbox
@@ -454,18 +482,21 @@ inline void TempStep(TempModel &m, uint64_t id, const TruckRaw &t, float revs, c
     k.wheels = t.wheels;
     if (t.gearSpeeds) k.gears = t.gearSpeeds;
     const float was = k.temp;
+    m.depth = TruckWaterDepth(t);
+    m.water = TempWater(m.depth);
     if (TruckEngineOn(t))
     {
         m.load = TruckLoad(t, revs);
         m.heat = TempHeat(m.load);
-        m.cooling = TempCooling(k.temp, s.ambientC, fabsf(t.speed) * 3.6f, s.airFullKmh);
+        m.cooling = TempCooling(k.temp, s.ambientC, fabsf(t.speed) * 3.6f, s.airFullKmh, m.water);
         const float rate = m.heat < m.cooling ? kTempFall : r.warm + (r.hot - r.warm) * SettingsRange((k.temp - kTempWarm) / (kTempHot - kTempWarm), 0.0f, 1.0f);
         k.temp += rate * (m.heat - m.cooling) * dt;
     }
     else
     {
+        // a stopped engine: slowly towards the air outside, and faster the deeper it stands in water
         m.load = m.heat = m.cooling = 0.0f;
-        k.temp = s.ambientC + (k.temp - s.ambientC) * expf(-r.off * dt);
+        k.temp = s.ambientC + (k.temp - s.ambientC) * expf(-r.off * (1.0f + kWaterStopped * m.water) * dt);
     }
     if (!isfinite(k.temp)) k.temp = isfinite(was) ? was : s.ambientC; // a step that gave no number leaves the temperature as it was
     if (k.temp > kTempMost) k.temp = kTempMost;
@@ -489,9 +520,36 @@ inline void TempProbeText(const TruckRaw &t, const TempModel &m, const GaugeSett
         return;
     }
     const float kmh = fabsf(t.speed) * 3.6f;
-    sprintf_s(out, size, "coolant %.1f C, %+.2f C/s, cold lamp %s%s | heat %.2f of a full load's (load %.2f), %.2f taken away (thermostat %.2f, air %.2f at %.1f km/h, fan %.2f) | %.0f C outside",
+    sprintf_s(out, size, "coolant %.1f C, %+.2f C/s, cold lamp %s%s | heat %.2f of a full load's (load %.2f), %.2f taken away (thermostat %.2f, air %.2f at %.1f km/h, fan %.2f, water %.2f at %.2f m%s) | %.0f C outside",
               m.temp, m.perSecond, TempCold(m) ? "on" : "off", TempZone(m) == 2 ? ", in the red zone" : "", m.heat, m.load, m.cooling, TempThermostat(m.temp),
-              TempAirflow(m.temp, kmh, s.airFullKmh) - kFan * TempFan(m.temp), kmh, TempFan(m.temp), s.ambientC);
+              TempAirflow(m.temp, kmh, s.airFullKmh) - kFan * TempFan(m.temp), kmh, TempFan(m.temp), m.water, m.depth, t.waterKnown ? "" : " (not read)", s.ambientC);
+}
+
+// ---- the game's own clock ----
+
+static const unsigned long long kClockHoldMs = 1000; // the game's count of simulated seconds standing still for this long: the game is not simulating
+
+// The game counts the seconds it has simulated a truck for (TruckRaw::clock). While that count stands still the
+// game's values are the last ones it left, and the models wait for it. running: the watch has seen a count; seen
+// and movedAt: the count last read and when it last moved.
+struct ClockWatch { bool running; float seen; unsigned long long movedAt; };
+
+// True when the game has not simulated the truck for kClockHoldMs: the count has stood still that long. A truck
+// whose count was not read is taken as simulated.
+inline bool ClockStands(ClockWatch &c, const TruckRaw &t, unsigned long long ms)
+{
+    if (!t.clockKnown)
+    {
+        c = ClockWatch{};
+        return false;
+    }
+    if (!c.running || !TruckSameBits(t.clock, c.seen))
+    {
+        c.running = true;
+        c.seen = t.clock;
+        c.movedAt = ms;
+    }
+    return ms - c.movedAt >= kClockHoldMs;
 }
 
 // ---- what the temperature costs the engine ----

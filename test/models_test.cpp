@@ -767,6 +767,74 @@ int main(int argc, char **argv)
         }
     }
 
+    // water around the truck, and the game's own clock
+    {
+        GaugeSettings set;
+        SettingsDefaults(set);
+        // a truck in gear with its engine running, its nose along x: the front pair of wheels 1.5 m ahead of the
+        // chassis, the rear pair 1.5 m behind it
+        TruckRaw wet = Truck();
+        wet.gear = wet.gearEngaged = 1;
+        wet.automatic = 1;
+        wet.forward[0] = 1.0f;
+        wet.waterKnown = true;
+        for (int i = 0; i < 4; i++)
+        {
+            wet.wheelAt[i][0] = i < 2 ? 1.5f : -1.5f;
+            wet.wheelAt[i][2] = (i % 2) ? -0.8f : 0.8f;
+        }
+        auto depths = [&](float front, float rear) {
+            wet.wheelWater[0] = wet.wheelWater[1] = front;
+            wet.wheelWater[2] = wet.wheelWater[3] = rear;
+        };
+        depths(1.6f, 0.2f);
+        const float noseIn = TruckWaterDepth(wet);
+        depths(0.2f, 1.6f);
+        const float tailIn = TruckWaterDepth(wet);
+        wet.waterKnown = false;
+        const float notRead = TruckWaterDepth(wet);
+        wet.waterKnown = true;
+        Check(Near(noseIn, 1.6f, 0.001f) && Near(tailIn, 0.2f, 0.001f) && notRead == 0.0f && TempWater(0.5f) == 0.0f && Near(TempWater(0.85f), 0.5f, 0.001f) &&
+              TempWater(1.2f) == 1.0f && TempWater(3.0f) == 1.0f,
+              "water: the depth that counts is the one at the truck's front; it cools from half a metre and does all it can from 1.2 m");
+        depths(1.6f, 1.6f);
+        TempModel ford = {};
+        TempStep(ford, 1, wet, 1.0f, set, kDt);
+        Coolant(ford, kTempRed);
+        const float back = Until(ford, wet, 1, set, 100.0f, 1.0f, 1.0f, 0.0f);
+        const float settles = Heat(ford, wet, 1, set, 1800.0f, 1.0f, 1.0f, 0.0f);
+        const float idles = Heat(ford, wet, 1, set, 1800.0f, 0.0f, 0.0f, 0.0f);
+        Check(back > 5.0f && back < 30.0f && settles > kThermostatShut && settles < kThermostatOpen + 2.0f && idles > kTempCold + 5.0f && idles < settles,
+              "water: floored in deep water an engine in the red zone is back at 100 C within half a minute and settles at the thermostat, and an idling one stays well above the cold lamp");
+        depths(0.85f, 0.85f);
+        Coolant(ford, kTempRed);
+        const float half = Until(ford, wet, 1, set, 105.0f, 1.0f, 1.0f, 0.0f);
+        depths(1.6f, 1.6f);
+        TruckRaw stopped = wet;
+        stopped.flags = 0;
+        Coolant(ford, kTempHot);
+        const float cools = Until(ford, stopped, 1, set, kTempCooled, 0.0f, 0.0f, 0.0f);
+        const float coldest = Heat(ford, stopped, 1, set, 3.0f * 3600.0f, 0.0f, 0.0f, 0.0f);
+        Check(half > 20.0f && half < 90.0f && Near(cools, 180.0f, 3.0f) && coldest >= set.ambientC && coldest < set.ambientC + 0.1f,
+              "water: at axle height it does half as much, a stopped engine in deep water cools five times as fast, and nothing cools below the air outside");
+        char line[400];
+        depths(0.85f, 0.85f);
+        TempStep(ford, 1, wet, 1.0f, set, kDt);
+        TempProbeText(wet, ford, set, line, sizeof line);
+        Check(strstr(line, "water 0.50 at 0.85 m)") != nullptr, "water: the probe's line carries the depth and what the water does");
+
+        ClockWatch watch = {};
+        TruckRaw counted = Truck();
+        counted.clockKnown = true;
+        counted.clock = 1.0f;
+        const bool starts = !ClockStands(watch, counted, 1000), soon = !ClockStands(watch, counted, 1900), stands = ClockStands(watch, counted, 2000);
+        counted.clock = 1.0333f;
+        const bool moves = !ClockStands(watch, counted, 2050);
+        counted.clockKnown = false;
+        Check(starts && soon && stands && moves && !ClockStands(watch, counted, 9000),
+              "clock: the models wait once the game's count of the truck's seconds has stood still for a second, go on when it moves, and never wait for a truck without the count");
+    }
+
     // what the temperature costs the engine
     {
         GaugeSettings set;

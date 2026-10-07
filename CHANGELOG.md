@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.1] 2026-10-07
+
+- Water cools the engine. From about half a metre of water at the truck's front the coolant loses heat to it, and with the engine standing in the water (1.2 m and more) a hot engine is back at 100 C within half a minute, even with the pedal floored. A stopped engine cools five times as fast in deep water. Nothing cools below the outside temperature, and an idling engine in a ford stays warm enough to keep the cold lamp dark.
+- `Damage` is on by default: an ini without the key now has the engine damage from the temperature. `Damage=0` switches it off.
+- The dials wait while the game does not simulate the truck, so nothing heats, cools or wears on values the game has left standing.
+- The write of engine damage checks more before it writes, and for an engine whose record it cannot find it writes the damage alone and leaves the loss of torque to the game.
+- The tab, the ini help and the readme say that a keyboard's pedal counts as floored, so a cold start always costs there unless `ColdDamagePercentPerMinute` is 0, and that `Damage` has not been tried in co-op.
+
 ## [0.6.0] 2026-10-07
 
 - The temperature can cost the engine. With `Damage` on, an engine in the red zone takes the game's own engine damage: 10 percent of what it can take every minute at 125 C, nothing at 118 C, less between the two and more above. Floored at a standstill with the wheels spinning, an engine is used up about five minutes after it enters the red zone.
