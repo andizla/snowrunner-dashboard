@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.11.2] 2026-10-08
+
+- `WarmUpMinutes` is measured on driving as it really is: the mean load and speed of a 25 minute drive (half of what the engine burns floored at the red zone, at 13 km/h), where it was a heavier foot before. On that drive the coolant was at 85 C after 4 minutes of driving with the setting at 3, where it took nearly 5 with 0.11.1.
+
 ## [0.11.1] 2026-10-08
 
 - The heat comes from the fuel the engine burns: the pedal and the engine speed together, as in a real engine. Floored at the red zone makes the most heat, floored at low revs little, and coasting or rolling downhill with the foot off next to none. In 0.11.0 a truck coasting at high revs heated as if floored.

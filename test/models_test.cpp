@@ -717,7 +717,7 @@ int main(int argc, char **argv)
         TempStep(temp, 1, c, 0.0f, set, kDt);
         Check(temp.known && Near(temp.temp, 15.0f, 0.05f) && TempCold(temp) && TempZone(temp) == 0,
               "coolant: a truck driven for the first time is as cold as the air outside, and the cold lamp is lit");
-        // driven as usual: the needle at 0.7 of the way to the red zone, a load of 0.7, at 15 km/h
+        // driven as usual: floored at half the red zone's engine speed, a load of 0.5, at 13 km/h
         const float usualRevs = kUsualLoad;
         const float lampOut = Until(temp, c, 1, set, kTempCold, 1.0f, usualRevs, kUsualKmh);
         const bool lampIsOut = !TempCold(temp) && TempZone(temp) == 1;

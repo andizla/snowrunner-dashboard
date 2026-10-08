@@ -343,7 +343,7 @@ static const float kAirStill = 0.35f;        // the air through the radiator of 
 static const float kFan = 0.3f, kFanFrom = 98.0f, kFanFull = 102.0f; // the fan adds this share on top; it comes in between these temperatures
 static const float kHeatIdle = 0.15f;        // the heat of an idling engine as a share of its heat at full load
 static const float kLoadNeutral = 0.25f;     // in neutral nothing pulls against the engine: the load is this share of what it would be in gear
-static const float kUsualLoad = 0.7f, kUsualKmh = 15.0f; // "driven as usual", for WarmUpMinutes: the load and the speed (the pedal floored at 0.7 of the red zone's engine speed, 15 km/h)
+static const float kUsualLoad = 0.5f, kUsualKmh = 13.0f; // "driven as usual", for WarmUpMinutes: the mean load and speed while driving on the user's drive of 2026-10-08 (0.49 at 13.1 km/h)
 static const float kTempFall = 1.0f;         // degrees a second a running engine's coolant falls for each share of a full load's heat taken away beyond what the engine makes
 static const float kWaterFrom = 0.5f, kWaterFull = 1.2f; // metres of water at the truck's front: from about axle height it cools the engine, and with the engine in it it does all it can
 static const float kWater = 1.0f;            // what deep water adds to the air through the radiator, as a share of all the air that driving gives
