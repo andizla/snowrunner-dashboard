@@ -68,6 +68,12 @@
 // and lets a second pass between two shifts. A lifted foot is no call to shift up at once, and wheelspin shifts
 // nothing. On the user's 20 minute drive it shifts as often as the game's own automatic, which hunts the same. Like the
 // powertrain it is worked out and logged, not handed to the game.
+//
+// The clutch. With a manual gearbox and a clutch pedal (a wheel's, through the manual transmission mod) the engine
+// runs behind the clutch: pressed, the engine is free and its governor holds the speed the pedal asks for; let up, it
+// turns with the gearbox; in the bite it slips, the engine pulled towards the gearbox's speed by what the clutch
+// holds. Let up too fast with the truck standing, or in too high a gear at a crawl, it drags the engine under half its
+// idle speed and the engine stalls. Worked out and logged the same way, while the manual transmission mod drives.
 #pragma once
 #include "truck.h"
 
@@ -1052,6 +1058,130 @@ inline void GearboxProbeText(const TruckRaw &t, const GearboxModel &m, char *out
 {
     sprintf_s(out, size, "automatic (not handed to the game yet): gear %d of %d (the game's %d), %s, input %.0f rpm, engine %.0f rpm, torque x%.2f, to the wheels %.2f | %d shifts",
               m.gear, TruckTopGear(t), t.gearEngaged, m.locked ? "locked up" : "converter slipping", m.input, m.rpm, m.ratio, m.drive, m.shifts);
+}
+
+// ---- the clutch ----
+
+static const float kClutchFree = 0.85f;      // a pedal pressed past this share of its travel holds nothing
+static const float kClutchBite = 0.35f;      // and one let up past this holds all it can; the bite lies between
+static const float kClutchHold = 1.5f;       // what a clutch fully let up holds, as a share of the engine's most torque
+static const float kEngineRevTime = 0.8f;    // seconds an engine takes from idle to the red zone floored with nothing to drive
+static const float kGovernorBand = 0.1f;     // the governor gives full torque this far under the speed it holds, as a share of idle to red zone
+static const float kEngineDrag = 0.4f;       // what the engine's friction and pumping take at the red zone, as a share of its most torque; it grows with the speed
+static const float kClutchStall = 0.5f;      // an engine dragged under this share of its idle speed dies
+static const float kStallRest = 2.0f;        // seconds a stalled engine stays dead in the model before it starts over at idle
+
+// The clutch pedal's grip, 0 to 1, from its travel, 0 let up to 1 pressed: nothing past kClutchFree, all of it short
+// of kClutchBite, and between them the bite, eased in.
+inline float ClutchGrip(float travel)
+{
+    const float g = SettingsRange((kClutchFree - travel) / (kClutchFree - kClutchBite), 0.0f, 1.0f);
+    return g * g * (3.0f - 2.0f * g);
+}
+
+struct ClutchModel
+{
+    bool running;      // the model has a truck
+    float rpm;         // the engine speed
+    float input;       // the gearbox's input speed, from the driven wheels and the gear; 0 in neutral
+    float grip;        // the clutch's grip, 0 to 1 (ClutchGrip)
+    bool locked;       // the engine turns with the gearbox
+    bool connected;    // a gear is in
+    float torque;      // what the fuel gives, as a share of the engine's most: by its governor, at most its curve's
+    float carried;     // what the clutch passes on, the same way: below 0 the engine brakes the truck
+    float stalled;     // seconds left of a stall, 0 while the engine runs
+    int stalls;        // stalls since the model began
+};
+
+// One step of dt seconds of the engine behind a clutch, for a manual gearbox with a clutch pedal (a wheel's, through
+// the manual transmission mod; smt.h). c: the engine's torque curve; travel: the clutch pedal, 0 let up to 1 pressed;
+// pedal: the shaped pedal and factor: the cold and the boost's share of the torque, both from the powertrain
+// (PowertrainModel::pedal, and ::cold times ::boost). The engine's governor holds the speed the pedal asks for (idle at
+// rest), with up to full torque; the clutch passes on up to its grip times kClutchHold. Let up, it turns the engine
+// with the gearbox where it can hold what the engine gives; slipping, it pulls the engine towards the gearbox's
+// speed. An engine dragged under kClutchStall of its idle speed stalls: a clutch let up too fast with the truck
+// standing, or in too high a gear at a crawl. The wheels are the game's, so the model only follows them. Returns
+// true on the step the engine stalls.
+inline bool ClutchStep(ClutchModel &m, const TruckRaw &t, const GaugeScale &k, const TorqueCurve &c, float travel, float pedal, float factor, float dt)
+{
+    if (!m.running)
+    {
+        m = ClutchModel{ true };
+        m.rpm = TruckEngineOn(t) ? k.idle : 0.0f;
+    }
+    const float range = k.redline - k.idle;
+    const int gear = t.gearEngaged;
+    const float top = gear ? TruckGearTop(t, gear) : 0.0f, spin = TruckDrivenSpin(t);
+    m.connected = top > 0.0f && isfinite(spin);
+    m.input = m.connected ? spin / top * k.redline : 0.0f;
+    m.grip = m.connected ? ClutchGrip(SettingsRange(travel, 0.0f, 1.0f)) : 0.0f;
+    if (!TruckEngineOn(t) || !(range > 0.0f))
+    {
+        m.rpm = 0.0f;
+        m.torque = m.carried = 0.0f;
+        m.locked = false;
+        m.stalled = 0.0f;
+        return false;
+    }
+    if (m.stalled > 0.0f)
+    {
+        m.stalled -= dt;
+        m.rpm = 0.0f;
+        m.torque = m.carried = 0.0f;
+        m.locked = false;
+        if (m.stalled <= 0.0f) m.rpm = k.idle; // the model's engine starts over
+        return false;
+    }
+    // the governor: the speed the pedal asks for, and the torque to hold it, up to the curve's
+    const float want = k.idle + range * kTachFree * SettingsRange(pedal, 0.0f, 1.0f);
+    const float speed = m.rpm / k.redline;
+    const float full = TorqueAt(c, speed, k.max / k.redline) * (factor > 0.0f ? factor : 1.0f);
+    const float drag = kEngineDrag * speed;
+    m.torque = SettingsRange((want - m.rpm) / (range * kGovernorBand), 0.0f, full);
+    const float hold = m.grip * kClutchHold;
+    const float rate = range / kEngineRevTime; // rpm each second for each share of the most torque
+    // locked: the engine turns with the gearbox while the clutch holds what the engine gives, or brakes with
+    if (m.locked && (hold < fabsf(m.torque - drag) || m.grip <= 0.0f)) m.locked = false;
+    if (m.locked)
+    {
+        m.rpm = m.input;
+        m.carried = m.torque - drag;
+    }
+    else
+    {
+        const float slip = m.rpm - m.input;
+        m.carried = slip > 0.0f ? hold : slip < 0.0f ? -hold : 0.0f;
+        float next = m.rpm + (m.torque - drag - m.carried) * rate * dt;
+        // the clutch closes the slip: past the gearbox's speed it holds there, locked if it can
+        if (hold > 0.0f && (slip > 0.0f) != (next - m.input > 0.0f))
+        {
+            next = m.input;
+            m.locked = hold >= fabsf(m.torque - drag);
+        }
+        m.rpm = next;
+    }
+    if (m.rpm < k.idle * kClutchStall)
+    {
+        m.stalled = kStallRest;
+        m.stalls++;
+        m.rpm = 0.0f;
+        m.locked = false;
+        m.torque = m.carried = 0.0f;
+        return true;
+    }
+    return false;
+}
+
+// The clutch in a line of text for the probe log.
+inline void ClutchProbeText(const ClutchModel &m, float travel, char *out, size_t size)
+{
+    if (m.stalled > 0.0f)
+    {
+        sprintf_s(out, size, "clutch (not handed to the game yet): the engine stalled, %d stalls", m.stalls);
+        return;
+    }
+    sprintf_s(out, size, "clutch (not handed to the game yet): pedal %.2f, grip %.2f, %s | engine %.0f rpm, gearbox %.0f rpm | torque %.2f, through the clutch %.2f | %d stalls",
+              travel, m.grip, !m.connected ? "no gear in" : m.locked ? "locked" : m.grip > 0.0f ? "slipping" : "free", m.rpm, m.input, m.torque, m.carried, m.stalls);
 }
 
 // ---- the game's own clock ----

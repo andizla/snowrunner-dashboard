@@ -593,6 +593,7 @@ struct TruckWatch
     BoostModel boost;           // and its boost
     PowertrainModel power;      // and what its engine would deliver, for the probe log until the hooks hand it to the game
     GearboxModel gearbox;       // and the gear an automatic with a torque converter would be in, the same way
+    ClutchModel clutch;         // and, while the manual transmission mod drives it, the engine behind its clutch pedal
     SmtReader smtReader;        // the manual transmission mod's published state (smt.h)
     SmtView smt;                // as read on this pass
     bool smtSeen;               // it was published on the last pass
@@ -746,6 +747,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             w.boost = BoostModel{};
             w.power = PowertrainModel{};
             w.gearbox = GearboxModel{};
+            w.clutch = ClutchModel{};
             w.tilt = TiltModel{};
             w.owed = w.asked = 0;
             w.modelVehicle = w.refs.vehicle;
@@ -776,8 +778,20 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         // the automatic: the gear it would be in, the same way. With the probe on each of its shifts is logged beside
         // the game's gear while the game's automatic drives a numbered gear
         const int boxGear = w.gearbox.gear;
-        if (w.smt.driving && w.smt.vehicle == w.refs.vehicle) w.gearbox = GearboxModel{}; // the manual transmission mod drives the gears
-        else GearboxStep(w.gearbox, raw, scale, w.power.pedal, w.power.power, dt);
+        const bool smtDrives = w.smt.driving && w.smt.vehicle == w.refs.vehicle;
+        if (smtDrives)
+        {
+            // the manual transmission mod drives the gears: the automatic stands down, and the engine runs behind the
+            // clutch pedal, the same way
+            w.gearbox = GearboxModel{};
+            if (ClutchStep(w.clutch, raw, scale, kClassCurves[s.tachClass], w.smt.clutch, w.power.pedal, w.power.cold * w.power.boost, dt) && probe)
+                Log(L"clutch: the engine would have stalled, the clutch let up at %.0f rpm on the gearbox's input in gear %d", w.clutch.input, raw.gearEngaged);
+        }
+        else
+        {
+            GearboxStep(w.gearbox, raw, scale, w.power.pedal, w.power.power, dt);
+            w.clutch = ClutchModel{};
+        }
         if (probe && boxGear >= 1 && w.gearbox.gear >= 1 && w.gearbox.gear != boxGear && raw.automatic && raw.gearEngaged >= 1 && raw.gearEngaged <= TruckTopGear(raw))
             Log(L"automatic: the model would shift %d to %d at %.0f rpm on the gearbox's input, the pedal at %.2f (the game's gear %d)", boxGear, w.gearbox.gear,
                 w.gearbox.input, w.power.pedal, raw.gearEngaged);
@@ -835,7 +849,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                   TempZone(w.temp) != w.probedZone || DamageAdding(w.damage, s) != w.probedAdding ||
                   w.boost.flutters + w.boost.blowOffs != w.probedLifts))
     {
-        char first[640], second[1024], third[512], fourth[256], fifth[640], sixth[1024], seventh[400], eighth[400], ninth[320], tenth[400];
+        char first[640], second[1024], third[512], fourth[256], fifth[640], sixth[1024], seventh[400], eighth[400], ninth[320], tenth[400], eleventh[320];
         TruckProbeText(raw, world, w.byWay, first, sizeof first, second, sizeof second);
         ModelProbeText(raw, w.tach, w.range, scale, third, sizeof third);
         Log(L"probe: %S", first);
@@ -860,6 +874,11 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         {
             SmtProbeText(w.smt, smtDrives, tenth, sizeof tenth);
             Log(L"probe: %S", tenth);
+        }
+        if (smtDrives)
+        {
+            ClutchProbeText(w.clutch, w.smt.clutch, eleventh, sizeof eleventh);
+            Log(L"probe: %S", eleventh);
         }
         w.probedLifts = w.boost.flutters + w.boost.blowOffs;
         w.probedAdding = DamageAdding(w.damage, s);
