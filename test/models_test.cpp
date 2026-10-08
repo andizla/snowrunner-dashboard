@@ -6,7 +6,7 @@
 // game's own burn rule. For the tilt it stands the truck on slopes and leans it to either side, over a bump and onto
 // its roof. For the coolant it warms a cold engine up, floors it at a crawl and at speed, lets it idle, stops it,
 // changes the settings and the outside temperature, and drives one truck after another. For what the temperature
-// costs the engine it holds an engine in the red zone, floors a cold one, and counts the points of damage. For the
+// costs the engine it holds an engine in the red zone, revs a cold one high, and counts the points of damage. For the
 // boost it floors the pedal at high and at low engine speed and lifts it fast, a little and slowly.
 // build.bat makes out\test\models_test.exe; test.bat runs it.
 //
@@ -237,7 +237,7 @@ static int Replay(const char *path)
             steps++;
             if (tach.rpm > k.redline) redSteps++;
             TempStep(temp, kind, t, TachShare(tach, k), s, dt);
-            const int cost = DamageStep(wear, truck, t, temp, s, dt);
+            const int cost = DamageStep(wear, truck, t, temp, TachShare(tach, k), s, dt);
             (wear.hot > 0.0f ? hotPoints : coldPoints) += (float)cost;
             char note[200];
             if (truck != truckNow)
@@ -289,7 +289,7 @@ static int Replay(const char *path)
            drivingAll, drivingAll > 0.0f ? loadSum / drivingAll : 0.0f, drivingAll > 0.0f ? kmhSum / drivingAll : 0.0f);
     printf("boost: the highest %.2f bar of the turbo's %.2f, %.0f s above half of it; %d blow-offs and %d flutters; from a floored pedal to nine tenths of it %d times, %.1f s on average, %.1f s the longest\n",
            mostBoost, k.boost, boosted, blowOffs, flutters, climbs, climbs ? climbSum / (float)climbs : 0.0f, climbLongest);
-    printf("damage: with Damage on the heat would have cost the engine %.0f points on this drive, and the pedal on a cold engine %.0f\n", hotPoints, coldPoints);
+    printf("damage: with Damage on the heat would have cost the engine %.0f points on this drive, and high revs on a cold engine %.0f\n", hotPoints, coldPoints);
     return 0;
 }
 
@@ -667,8 +667,8 @@ int main(int argc, char **argv)
         TempStep(temp, 1, c, 0.0f, set, kDt);
         Check(temp.known && Near(temp.temp, 15.0f, 0.05f) && TempCold(temp) && TempZone(temp) == 0,
               "coolant: a truck driven for the first time is as cold as the air outside, and the cold lamp is lit");
-        // driven as usual: the pedal down and the needle half way, a load of 0.7, at 15 km/h
-        const float usualRevs = (kUsualLoad - (1.0f - kLoadRevs)) / kLoadRevs;
+        // driven as usual: the needle at 0.7 of the way to the red zone, a load of 0.7, at 15 km/h
+        const float usualRevs = kUsualLoad;
         const float lampOut = Until(temp, c, 1, set, kTempCold, 1.0f, usualRevs, kUsualKmh);
         const bool lampIsOut = !TempCold(temp) && TempZone(temp) == 1;
         const float warm = lampOut + Until(temp, c, 1, set, kTempWarm, 1.0f, usualRevs, kUsualKmh);
@@ -681,6 +681,9 @@ int main(int argc, char **argv)
         Check(idling > 84.0f && idling < 90.0f && rolling > kThermostatShut - 0.5f && rolling < idling,
               "coolant: the thermostat holds an idling engine at about 86 C, and a little lower with the truck rolling");
         Check(Near(Heat(temp, c, 1, set, 1800.0f, 1.0f, 1.0f, 60.0f), kTempCruise, 1.0f), "coolant: at full load with all the air the radiator can get the engine settles at 97 C");
+        const float coasting = Heat(temp, c, 1, set, 1800.0f, 0.0f, 1.0f, 60.0f), lugging = Heat(temp, c, 1, set, 1800.0f, 1.0f, 0.0f, 0.0f);
+        Check(Near(coasting, kTempCruise, 1.0f) && Near(lugging, idling, 0.5f),
+              "coolant: the heat goes by the engine speed: at the red zone with the pedal up the engine settles as it does floored, and floored at idle revs as it does idling");
         bool outOfRed = true;
         float at10 = 0.0f, slower = 200.0f;
         for (float kmh : { 30.0f, 20.0f, 15.0f, 10.0f })
@@ -779,7 +782,7 @@ int main(int argc, char **argv)
             const float revved = Heat(freely, n, 1, set, 1800.0f, 1.0f, kTachFree, 0.0f);
             c.throttle = -1.0f;
             Check(revved > 90.0f && revved < 105.0f && Near(TruckLoad(n, 1.0f), kLoadNeutral, 0.001f) && Near(TruckLoad(c, 1.0f), 1.0f, 0.001f) &&
-                  Near(TruckLoad(c, 0.0f), 1.0f - kLoadRevs, 0.001f), "coolant: the pedal floored in neutral warms the engine and does not overheat it");
+                  TruckLoad(c, 0.0f) == 0.0f, "coolant: revved out in neutral the engine warms and does not overheat");
         }
 
         // a stopped engine
@@ -851,7 +854,7 @@ int main(int argc, char **argv)
             Heat(p, q, 1, set, 300.0f, 1.0f, 1.0f, 18.0f);
             const float held = p.temp;
             Heat(p, q, 1, set, 1.0f, 1.0f, nanf(""), 18.0f);
-            const bool needle = isfinite(p.temp) && Near(p.temp, held, 1.0f) && TruckLoad(q, nanf("")) == 1.0f - kLoadRevs;
+            const bool needle = isfinite(p.temp) && Near(p.temp, held, 1.0f) && TruckLoad(q, nanf("")) == 0.0f;
             q.speed = nanf("");
             TempStep(p, 1, q, 1.0f, set, kDt);
             TachModel broken = {};
@@ -939,8 +942,9 @@ int main(int argc, char **argv)
               Near(DamageHot(kTempHotDamage, set), 10.0f, 0.001f) && Near(DamageHot(132.0f, set), 20.0f, 0.001f),
               "damage: nothing up to the red zone at 118 C, 10 percent a minute at 125 C, half of that half way there and more above");
         Check(Near(DamageCold(0.0f, 1.0f, set), 5.0f, 0.001f) && Near(DamageCold(15.0f, 1.0f, set), 3.75f, 0.001f) && Near(DamageCold(15.0f, 0.75f, set), 0.9375f, 0.001f) &&
-              DamageCold(15.0f, 0.5f, set) == 0.0f && DamageCold(kTempCold, 1.0f, set) == 0.0f && Near(DamageCold(-20.0f, 1.0f, set), 6.667f, 0.01f),
-              "damage: a cold engine floored at 0 C loses 5 percent a minute, less the warmer it is and the lighter the foot, nothing at half pedal or from 60 C");
+              DamageCold(15.0f, 0.5f, set) == 0.0f && DamageCold(kTempCold, 1.0f, set) == 0.0f && Near(DamageCold(-20.0f, 1.0f, set), 6.667f, 0.01f) &&
+              Near(DamageCold(0.0f, 1.1f, set), 5.0f, 0.001f) && DamageCold(0.0f, nanf(""), set) == 0.0f,
+              "damage: a cold engine at the red zone at 0 C loses 5 percent a minute, less the warmer it is and the lower it revs, nothing at half way or from 60 C");
 
         // a minute in the red zone at 125 C, the engine running in gear with the pedal down
         TruckRaw c = Truck();
@@ -954,7 +958,7 @@ int main(int argc, char **argv)
         int points = 0, atOnce = 0;
         for (float at = 0.0f; at < 60.0f; at += kDt)
         {
-            const int got = DamageStep(wear, 1, c, temp, set, kDt);
+            const int got = DamageStep(wear, 1, c, temp, 1.0f, set, kDt);
             points += got;
             if (got > atOnce) atOnce = got;
         }
@@ -967,41 +971,41 @@ int main(int argc, char **argv)
         unread.damageKnown = false;
         DamageModel none = {};
         int stoppedPoints = 0;
-        for (float at = 0.0f; at < 60.0f; at += kDt) stoppedPoints += DamageStep(none, 1, stopped, temp, set, kDt);
+        for (float at = 0.0f; at < 60.0f; at += kDt) stoppedPoints += DamageStep(none, 1, stopped, temp, 1.0f, set, kDt);
         const bool stoppedCostsNothing = stoppedPoints == 0 && none.hot == 0.0f && !DamageAdding(none, set);
         GaugeSettings shown = set;
         shown.damage = false;
         DamageModel only = {};
         only.id = 1;
         only.owed = 0.9f;
-        const int shownPoints = DamageStep(only, 1, c, temp, shown, 60.0f);
-        Check(stoppedCostsNothing && DamageStep(none, 1, unread, temp, set, 60.0f) == 0 && shownPoints == 0 && only.owed == 0.0f && Near(only.hot, 10.0f, 0.001f) &&
+        const int shownPoints = DamageStep(only, 1, c, temp, 1.0f, shown, 60.0f);
+        Check(stoppedCostsNothing && DamageStep(none, 1, unread, temp, 1.0f, set, 60.0f) == 0 && shownPoints == 0 && only.owed == 0.0f && Near(only.hot, 10.0f, 0.001f) &&
               !DamageAdding(only, shown), "damage: none for a stopped engine or a truck whose damage is not read; with Damage off nothing comes together and the rate is still worked out");
         wear.owed = 0.7f;
-        DamageStep(wear, 2, c, temp, set, 0.0f);
+        DamageStep(wear, 2, c, temp, 1.0f, set, 0.0f);
         Check(wear.id == 2 && wear.owed == 0.0f, "damage: the share of a point that is owed stays with its truck");
 
-        // a cold start at 15 km/h with the needle at the red zone: floored, and at half pedal
-        auto coldStart = [&](float pedal, float &coldFor) {
+        // a cold start at 15 km/h: the needle at the red zone, and half way to it; the pedal floored in both, as on a keyboard
+        auto coldStart = [&](float revs, float &coldFor) {
             TempModel coolant = {};
             DamageModel cost = {};
             TruckRaw e = c;
-            e.throttle = -pedal;
+            e.throttle = -1.0f;
             e.speed = 15.0f / 3.6f;
             float total = 0.0f;
             coldFor = 0.0f;
             for (float at = 0.0f; at < 900.0f; at += kDt)
             {
-                TempStep(coolant, 1, e, 1.0f, set, kDt);
-                total += (float)DamageStep(cost, 1, e, coolant, set, kDt);
+                TempStep(coolant, 1, e, revs, set, kDt);
+                total += (float)DamageStep(cost, 1, e, coolant, revs, set, kDt);
                 if (TempCold(coolant)) coldFor = at;
             }
             return total + cost.owed;
         };
-        float flooredFor = 0.0f, gentleFor = 0.0f;
-        const float floored = coldStart(1.0f, flooredFor), gentle = coldStart(0.5f, gentleFor);
-        Check(floored > 1.5f && floored < 6.0f && flooredFor > 40.0f && flooredFor < 150.0f && gentle == 0.0f && gentleFor > flooredFor,
-              "damage: a cold start with the pedal floored costs a few points until the cold lamp goes out, and none at half pedal");
+        float revvedFor = 0.0f, gentleFor = 0.0f;
+        const float revved = coldStart(1.0f, revvedFor), gentle = coldStart(0.5f, gentleFor);
+        Check(revved > 1.5f && revved < 6.0f && revvedFor > 40.0f && revvedFor < 150.0f && gentle == 0.0f && gentleFor > revvedFor,
+              "damage: a cold start revved to the red zone costs a few points until the cold lamp goes out, and none held to half way with the pedal floored");
 
         Check(DamageLamp(true, false, 0) && !DamageLamp(false, false, 0) && DamageLamp(false, true, 0) && !DamageLamp(true, true, kDamageBlinkMs) &&
               DamageLamp(true, true, 2 * kDamageBlinkMs), "damage: the lamp is lit above half the engine's damage, and blinks while damage is added");

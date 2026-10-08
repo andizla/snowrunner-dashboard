@@ -184,20 +184,20 @@ static void ReadIni(GaugeSettings &s)
                         L"; and so does a truck's section for each of them it leaves out.\n"
                         L"; The tilt lamp is green while the truck stands level. It turns amber when the truck leans to a side by\n"
                         L"; RollWarnDeg degrees and red from RollDangerDeg, or when it points up or down a slope by PitchDangerDeg.\n"
-                        L"; The coolant temperature is worked out from how hard the engine works and how fast the truck drives.\n"
+                        L"; The coolant temperature is worked out from the engine speed and how fast the truck drives, not the pedal.\n"
                         L"; WarmUpMinutes is the time a cold engine takes from 15 C to 85 C when it is driven as usual, OverheatMinutes\n"
-                        L"; the time from 90 C into the red zone at 118 C with the pedal floored and the wheels spinning at a standstill,\n"
-                        L"; CoolDownMinutes the time a stopped engine takes from 90 C down to 40 C. AmbientC is the outside temperature\n"
-                        L"; in degrees C: a truck that has stood for long is that cold. The cold lamp is lit below 60 C.\n"
+                        L"; the time from 90 C into the red zone at 118 C with the engine revved out and the wheels spinning at a\n"
+                        L"; standstill, CoolDownMinutes the time a stopped engine takes from 90 C down to 40 C. AmbientC is the outside\n"
+                        L"; temperature in degrees C: a truck that has stood for long is that cold. The cold lamp is lit below 60 C.\n"
                         L"; AirFullKmh is the speed from which the radiator gets all the air that driving gives it (10 to 80 km/h).\n"
                         L"; Lower keeps a slow, hard pulling engine cooler.\n"
                         L"; Damage=1: the temperature costs the engine. An engine in the red zone takes the game's own engine damage:\n"
                         L"; HotDamagePercentPerMinute percent of what it can take a minute at 125 C, less below that and more above.\n"
-                        L"; A cold engine (below 60 C) with the pedal more than half down takes ColdDamagePercentPerMinute percent a\n"
-                        L"; minute when it is floored at 0 C, and less the warmer it is. A garage repairs this like any engine damage.\n"
+                        L"; A cold engine (below 60 C) revved more than half way from idle to the red zone takes ColdDamagePercentPerMinute\n"
+                        L"; percent a minute at the red zone at 0 C, and less the warmer it is and the lower it revs. A garage repairs\n"
+                        L"; this like any engine damage.\n"
                         L"; Damage=0: the temperature is only shown.\n"
-                        L"; On a keyboard the pedal is either up or floored, so every cold start counts as floored there.\n"
-                        L"; ColdDamagePercentPerMinute=0 switches that part off. Damage has not been tried in co-op: leave it at 0 there.\n"
+                        L"; ColdDamagePercentPerMinute=0 switches the cold part off. Damage has not been tried in co-op: leave it at 0 there.\n"
                         L"; SoundVolume (0 to 100) is how loud the turbo is heard when the pedal comes up quickly under boost: it flutters,\n"
                         L"; longer and louder the more boost there was, until the pedal goes down again. 0 = no sound.\n"
                         L"; SoundsOnly=1 plays the sounds and draws no cluster. WAV files sounds\\turbo_high_1.wav to _4.wav next to Gauges.asi\n"
@@ -483,7 +483,7 @@ static void LogSettings(const GaugeSettings &s)
     Log(L"settings: tilt lamp amber from %g degrees to a side, red from %g, red from %g up or down a slope", s.rollWarnDeg, s.rollDangerDeg, s.pitchDangerDeg);
     Log(L"settings: coolant warm after %g minutes of driving, in the red zone after %g minutes floored with the wheels spinning at a standstill, cool %g minutes after the engine stops, %g C outside",
         s.warmUpMinutes, s.overheatMinutes, s.coolDownMinutes, s.ambientC);
-    Log(L"settings: the radiator has all its air from %g km/h; engine damage %s: %g percent a minute at 125 C, %g percent a minute for a cold engine floored at 0 C",
+    Log(L"settings: the radiator has all its air from %g km/h; engine damage %s: %g percent a minute at 125 C, %g percent a minute for a cold engine at the red zone at 0 C",
         s.airFullKmh, s.damage ? L"on" : L"off", s.hotDamage, s.coldDamage);
     Log(L"settings: sound volume %d of 100%s", s.soundVolume, s.soundsOnly ? L", sounds only: the cluster is not drawn" : L"");
     Log(L"settings: toggle key %S, pad %S, demo values %s, probe %d", key, s.padToggle, s.demo ? L"on" : L"off", s.probe);
@@ -541,7 +541,7 @@ struct TruckWatch
     uint64_t engineVehicle;
     ULONGLONG engineAt;         // when a record that was not found is looked for again
     int owed, asked;            // whole points of engine damage that wait to be written: the model's, and the tab's test buttons'
-    int cause;                  // what the model's points came from: 1 the heat, 2 the pedal on a cold engine
+    int cause;                  // what the model's points came from: 1 the heat, 2 high revs on a cold engine
     ULONGLONG writeAt;          // when the next write may go out
     ULONGLONG addedAt;          // when damage was last written, 0 = never: the damage lamp blinks for two seconds after
     const char *refused;        // why the last write did not go out, a string literal; a reason is logged once
@@ -689,7 +689,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         if (w.refs.vehicle != w.engineVehicle || (!w.engine.found && now >= w.engineAt)) EngineLook(w, m, now);
         // what the temperature costs the engine: the whole points wait in owed until they are written. Nothing comes
         // together while the game's window is not in front, as the game may stand still then with its last values.
-        const int points = DamageStep(w.damage, w.refs.vehicle, raw, w.temp, s, front ? dt : 0.0f);
+        const int points = DamageStep(w.damage, w.refs.vehicle, raw, w.temp, TachShare(w.tach, scale), s, front ? dt : 0.0f);
         if (points > 0)
         {
             w.owed = w.owed + points < 1000000 ? w.owed + points : 1000000; // more than any engine takes
@@ -712,7 +712,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 char cause[128], effect[256], after[64] = ""; // the effect and the torque factor are the game's: room for numbers of any size
                 if (test) strcpy_s(cause, "the tab's test");
                 else
-                    sprintf_s(cause, w.cause == 2 ? "the pedal on a cold engine at %.1f C (%.1f percent a minute)" : "the heat at %.1f C (%.1f percent a minute)", w.temp.temp,
+                    sprintf_s(cause, w.cause == 2 ? "high revs on a cold engine at %.1f C (%.1f percent a minute)" : "the heat at %.1f C (%.1f percent a minute)", w.temp.temp,
                               w.damage.hot + w.damage.cold);
                 if (d.effectAfter != d.effectBefore || d.torqueAfter != d.torqueBefore)
                     sprintf_s(effect, "effect %.3f to %.3f, torque x%.3f to x%.3f", d.effectBefore, d.effectAfter, d.torqueBefore, d.torqueAfter);

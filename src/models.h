@@ -20,19 +20,19 @@
 // slope the truck stands on, and how far the left axis points up or down is its lean to the side. Both are smoothed
 // over a third of a second and held against the settings' angles for the lamp.
 //
-// The coolant temperature. The game has no engine heat. Here the engine makes heat by how far the pedal is down and
-// how fast it turns, and a small share of that at idle. The radiator takes heat away by how much warmer the coolant
-// is than the air outside, by how far the thermostat is open (shut below 82 C, open from 92 C) and by the air that
-// goes through it: more the faster the truck drives, and a fan helps from about 100 C. Water around the truck's
-// front cools as well, from about axle height and most with the engine standing in it. So a warm engine holds about
-// 86 C at idle, stands near 100 C when it works hard at speed, and climbs into the red zone from 118 C only when the
-// pedal is floored at a crawl. A stopped engine cools slowly towards the air outside. Three of the settings are the
-// times all of this takes, a fourth is the outside temperature, and a fifth the speed from which the radiator gets
-// all its air. Each truck keeps its own temperature.
+// The coolant temperature. The game has no engine heat. Here the engine makes heat by how fast it turns, whatever
+// the pedal does, a small share of that at idle and less in neutral, where nothing pulls against it. The radiator
+// takes heat away by how much warmer the coolant is than the air outside, by how far the thermostat is open (shut
+// below 82 C, open from 92 C) and by the air that goes through it: more the faster the truck drives, and a fan helps
+// from about 100 C. Water around the truck's front cools as well, from about axle height and most with the engine
+// standing in it. So a warm engine holds about 86 C at idle, stands near 100 C when it revs high at speed, and climbs
+// into the red zone from 118 C only when it revs out at a crawl. A stopped engine cools slowly towards the air
+// outside. Three of the settings are the times all of this takes, a fourth is the outside temperature, and a fifth
+// the speed from which the radiator gets all its air. Each truck keeps its own temperature.
 //
 // The engine's wear. The game has engine damage and nothing that makes heat cost any. Here an engine in the red zone
-// loses a share of what it can take every minute, more the hotter it runs, and so does a cold engine under a heavy
-// pedal, more the colder it is. The model counts that in points of the game's own engine damage, and gauges.cpp
+// loses a share of what it can take every minute, more the hotter it runs, and so does a cold engine revved high,
+// more the colder it is. The model counts that in points of the game's own engine damage, and gauges.cpp
 // writes the whole points into the game. So a garage repairs them, and the game's rules for a damaged engine apply.
 //
 // The boost. The game has no boost pressure. Here the turbo blows by how far the pedal is down and how fast the
@@ -324,8 +324,7 @@ static const float kThermostatLeak = 0.15f;  // the share of the radiator a shut
 static const float kAirStill = 0.35f;        // the air through the radiator of a standing truck, as a share of all it can get from driving
 static const float kFan = 0.3f, kFanFrom = 98.0f, kFanFull = 102.0f; // the fan adds this share on top; it comes in between these temperatures
 static const float kHeatIdle = 0.15f;        // the heat of an idling engine as a share of its heat at full load
-static const float kLoadRevs = 0.6f;         // how much of the load goes with the engine speed: load = pedal x (1 - kLoadRevs + kLoadRevs x revs)
-static const float kLoadNeutral = 0.25f;     // in neutral nothing pulls against the engine: the load is this share of that
+static const float kLoadNeutral = 0.25f;     // in neutral nothing pulls against the engine: the load is this share of the engine speed's
 static const float kUsualLoad = 0.7f, kUsualKmh = 15.0f; // "driven as usual", for WarmUpMinutes: about the mean load and speed of two recorded drives
 static const float kTempFall = 1.0f;         // degrees a second a running engine's coolant falls for each share of a full load's heat taken away beyond what the engine makes
 static const float kWaterFrom = 0.5f, kWaterFull = 1.2f; // metres of water at the truck's front: from about axle height it cools the engine, and with the engine in it it does all it can
@@ -370,13 +369,12 @@ inline float TruckWaterDepth(const TruckRaw &t)
 // How much of its cooling the water does at a depth: none up to kWaterFrom, all of it from kWaterFull.
 inline float TempWater(float depth) { return SettingsRange((depth - kWaterFrom) / (kWaterFull - kWaterFrom), 0.0f, 1.0f); }
 
-// How hard the engine works, 0 to 1: the pedal, and more of it the higher the tachometer's needle stands between
-// idle and the red zone (revs, 0 to 1).
+// How hard the engine works, 0 to 1: how far the tachometer's needle stands between idle and the red zone (revs, 0
+// to 1), whatever the pedal does, and kLoadNeutral of that in neutral.
 inline float TruckLoad(const TruckRaw &t, float revs)
 {
     const float needle = revs > 0.0f ? fminf(revs, 1.0f) : 0.0f; // 0 too for revs that are no number
-    const float load = TruckPedal(t) * (1.0f - kLoadRevs + kLoadRevs * needle);
-    return t.gearEngaged == 0 ? load * kLoadNeutral : load;
+    return t.gearEngaged == 0 ? needle * kLoadNeutral : needle;
 }
 
 // The heat the engine makes at a load, as a share of its heat at full load.
@@ -687,14 +685,14 @@ inline bool ClockStands(ClockWatch &c, const TruckRaw &t, unsigned long long ms)
 
 // ---- what the temperature costs the engine ----
 
-static const float kDamagePedal = 0.5f; // how far down the pedal has to be before a cold engine suffers from it
+static const float kDamageRevs = 0.5f;  // how far from idle to the red zone the needle has to stand before a cold engine suffers from it
 static const int kDamageBlinkMs = 250;  // the damage lamp's blink: this long lit, then this long dark
 
 struct DamageModel
 {
     uint64_t id;      // the game's object for the truck the owed share belongs to
     float owed;       // the share of a point of engine damage that has come together and is not handed over yet
-    float hot, cold;  // percent of the engine a minute on the last step: from the heat, and from the pedal on a cold engine
+    float hot, cold;  // percent of the engine a minute on the last step: from the heat, and from high revs on a cold engine
 };
 
 // Percent of what the engine takes that it loses a minute in the red zone: nothing at kTempRed, the settings'
@@ -704,21 +702,21 @@ inline float DamageHot(float temp, const GaugeSettings &s)
     return temp > kTempRed ? s.hotDamage * (temp - kTempRed) / (kTempHotDamage - kTempRed) : 0.0f;
 }
 
-// The same for a cold engine under the pedal: the settings' ColdDamagePercentPerMinute with the pedal floored at
-// 0 C, less the warmer the engine and the lighter the foot. Nothing from kTempCold up, and nothing with the pedal
-// no further down than kDamagePedal.
-inline float DamageCold(float temp, float pedal, const GaugeSettings &s)
+// The same for a cold engine revved high: the settings' ColdDamagePercentPerMinute with the needle at the red zone at
+// 0 C, less the warmer the engine and the lower the revs (revs, TachShare). Nothing from kTempCold up, and nothing
+// with the needle no further than kDamageRevs of the way to the red zone.
+inline float DamageCold(float temp, float revs, const GaugeSettings &s)
 {
-    if (!(temp < kTempCold) || !(pedal > kDamagePedal)) return 0.0f;
-    const float foot = (pedal - kDamagePedal) / (1.0f - kDamagePedal);
-    return s.coldDamage * (kTempCold - temp) / kTempCold * foot * foot;
+    if (!(temp < kTempCold) || !(revs > kDamageRevs)) return 0.0f;
+    const float high = (fminf(revs, 1.0f) - kDamageRevs) / (1.0f - kDamageRevs);
+    return s.coldDamage * (kTempCold - temp) / kTempCold * high * high;
 }
 
-// One step of dt seconds for the truck the game holds in the object id. Returns the whole points of the game's
-// engine damage that have come together since the last step; the rest of a point is kept for the next one. Only a
-// running engine wears. With the settings' Damage off nothing comes together, and the two rates are still worked
-// out, so the probe shows what the temperature would cost.
-inline int DamageStep(DamageModel &m, uint64_t id, const TruckRaw &t, const TempModel &temp, const GaugeSettings &s, float dt)
+// One step of dt seconds for the truck the game holds in the object id; revs is TachShare. Returns the whole points
+// of the game's engine damage that have come together since the last step; the rest of a point is kept for the next
+// one. Only a running engine wears. With the settings' Damage off nothing comes together, and the two rates are
+// still worked out, so the probe shows what the temperature would cost.
+inline int DamageStep(DamageModel &m, uint64_t id, const TruckRaw &t, const TempModel &temp, float revs, const GaugeSettings &s, float dt)
 {
     if (m.id != id)
     {
@@ -729,7 +727,7 @@ inline int DamageStep(DamageModel &m, uint64_t id, const TruckRaw &t, const Temp
     if (!s.damage) m.owed = 0.0f;
     if (!temp.known || !TruckEngineOn(t) || !t.damageKnown) return 0;
     m.hot = DamageHot(temp.temp, s);
-    m.cold = DamageCold(temp.temp, TruckPedal(t), s);
+    m.cold = DamageCold(temp.temp, revs, s);
     if (!s.damage) return 0;
     const float points = (m.hot + m.cold) / 100.0f * (float)t.damageCapacity * dt / 60.0f;
     if (points > 0.0f && points < 100000.0f) m.owed += points; // nothing for a rate that is no number

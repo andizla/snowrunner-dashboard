@@ -164,7 +164,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
 
     ImGui::SeparatorText("Coolant temperature");
     {
-        char from[16], to[16], tip[256];
+        char from[16], to[16], tip[384];
         PageLabel("Warm after", labelX);
         ImGui::SetNextItemWidth(w);
         if (ImGui::SliderFloat("##warmup", &s.warmUpMinutes, 1.0f, 15.0f, "%.1f minutes of driving", ImGuiSliderFlags_AlwaysClamp))
@@ -178,15 +178,16 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         PageTip(tip);
         PageLabel("Overheats after", labelX);
         ImGui::SetNextItemWidth(w);
-        if (ImGui::SliderFloat("##overheat", &s.overheatMinutes, 0.5f, 10.0f, "%.1f minutes floored", ImGuiSliderFlags_AlwaysClamp))
+        if (ImGui::SliderFloat("##overheat", &s.overheatMinutes, 0.5f, 10.0f, "%.1f minutes revved out", ImGuiSliderFlags_AlwaysClamp))
         {
             s.overheatMinutes = floorf(s.overheatMinutes * 10.0f + 0.5f) / 10.0f;
             act |= kPageChanged;
         }
         degrees(kTempHot, from, sizeof from);
         degrees(kTempRed, to, sizeof to);
-        sprintf_s(tip, "The time from %s into the red zone at %s with the pedal floored and the wheels spinning at a standstill. "
-                       "Driving cools the engine: the faster the truck goes, the more air the radiator gets.", from, to);
+        sprintf_s(tip, "The time from %s into the red zone at %s with the engine revved out and the wheels spinning at a standstill. "
+                       "The heat follows the engine speed, not the pedal. Driving cools the engine: the faster the truck goes, the more air "
+                       "the radiator gets.", from, to);
         PageTip(tip);
         PageLabel("Cool after", labelX);
         ImGui::SetNextItemWidth(w);
@@ -232,7 +233,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     {
         char at[16], from[16], tip[320];
         changed(ImGui::Checkbox("The temperature costs the engine", &s.damage));
-        PageTip("On: an engine in the red zone, and a cold engine under a heavy pedal, take the game's own engine damage. A garage repairs it. "
+        PageTip("On: an engine in the red zone, and a cold engine revved high, take the game's own engine damage. A garage repairs it. "
                 "Off: the temperature is only shown. It has not been tried in co-op: leave it off there.");
         ImGui::BeginDisabled(!s.damage);
         PageLabel("Overheating", labelX);
@@ -256,8 +257,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         }
         degrees(0.0f, at, sizeof at);
         degrees(kTempCold, from, sizeof from);
-        sprintf_s(tip, "The share it loses each minute with the pedal floored at %s. Less the warmer the engine and the lighter the foot: "
-                       "nothing from %s up, and nothing with the pedal half down or less. On a keyboard the pedal is always floored. 0 = none.", at, from);
+        sprintf_s(tip, "The share it loses each minute at the red zone at %s. Less the warmer the engine and the lower it revs: "
+                       "nothing from %s up, and nothing with the needle half way from idle to the red zone or lower. 0 = none.", at, from);
         PageTip(tip);
         ImGui::EndDisabled();
         if (view.engineCapacity > 0) ImGui::TextDisabled("This truck's engine has %d of %d left.", view.engineCapacity - view.engineDamage, view.engineCapacity);
