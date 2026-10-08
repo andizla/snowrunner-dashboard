@@ -5,14 +5,18 @@
 // game finds it, and that engine damage is written only where it belongs: up, one short of what the engine takes at
 // most, with the effect and the torque factor the game's own rule gives. And it checks which truck the mod takes a
 // truck for: by its kind's name where the game has one, by its build where it has none.
+// And it checks the reading of the manual transmission mod's published state (smt.h), through a block of shared
+// memory written as that mod writes it.
 // build.bat makes out\test\truck_test.exe; test.bat runs it.
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <string>
 #include <vector>
 #include "gauges.h"
 #include "truck.h"
+#include "smt.h"
 
 struct Region { uint64_t at; std::vector<uint8_t> bytes; };
 static std::vector<Region> g_game;
@@ -699,6 +703,77 @@ int main()
     t2 = t;
     w2.mapOpen = 1;
     Check(quiet && lever && TruckProbeEvent(t2, w2, t, w), "probe: a switch or the game's state writes at once, a changing speed does not");
+
+    // the manual transmission mod's state: a block copied only while it is not being written, a stale one is the mod
+    // gone, the gears by its names, and the whole way through a mapping named as the mod names it
+    {
+        SmtBlock b = {};
+        b.magic = kSmtMagic;
+        b.version = kSmtVersion;
+        b.size = sizeof b;
+        b.tick = 10000;
+        b.vehicle = kVehicle;
+        b.gear = 3;
+        b.maxGear = 6;
+        b.flags = kSmtVehicle | kSmtAutoRange | kSmtClutch | kSmtClutchAxis | kSmtRequireClutch;
+        b.clutch = 0.7f;
+        b.powerCoef = 1.05f;
+        b.stalls = 2;
+        SmtBlock copy;
+        const bool copied = SmtCopy(&b, copy) && copy.gear == 3 && copy.vehicle == kVehicle;
+        b.sequence = 5;
+        const bool writing = !SmtCopy(&b, copy);
+        b.sequence = 6;
+        b.magic = 0;
+        const bool foreign = !SmtCopy(&b, copy);
+        b.magic = kSmtMagic;
+        Check(copied && writing && foreign, "manual transmission mod: its block is copied while the sequence is even, not while it is written, and not with another magic");
+        const SmtView fresh = SmtViewOf(b, 10500), stale = SmtViewOf(b, 10000 + kSmtStaleMs + 1);
+        Check(fresh.present && fresh.driving && fresh.vehicle == kVehicle && fresh.gear == 3 && fresh.clutchHeld && fresh.clutchAxis && Near(fresh.clutch, 0.7f) &&
+                  fresh.requireClutch && fresh.stalls == 2 && !stale.present && !stale.driving,
+              "manual transmission mod: a fresh block gives its truck, gear and clutch; one not written for a second is the mod gone");
+        auto name = [&](int gear, bool autoRange, float coef) {
+            static char out[8];
+            SmtView v = fresh;
+            v.gear = gear;
+            v.autoRange = autoRange;
+            v.powerCoef = coef;
+            return std::string(SmtGearName(v, out, sizeof out));
+        };
+        Check(name(-1, true, 1.05f) == "R" && name(0, true, 1.05f) == "N" && name(4, true, 1.05f) == "4" && name(7, true, 1.0f) == "H" && name(1, false, 0.2f) == "L-" &&
+                  name(1, false, 0.45f) == "L" && name(1, false, 1.0f) == "L+" && name(1, true, 1.05f) == "1",
+              "manual transmission mod: its gears by its own names, the low ones by the power it gave them");
+        // the whole way: nothing before the mod's mapping is there, then looked for again only after kSmtLookMs
+        SmtReader reader = {};
+        const SmtView none = SmtRead(reader, 20000);
+        wchar_t mapName[64];
+        swprintf(mapName, 64, L"Local\\SnowRunnerMT.State.%lu", GetCurrentProcessId());
+        HANDLE mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(SmtBlock), mapName);
+        SmtBlock *shared = mapping ? (SmtBlock *)MapViewOfFile(mapping, FILE_MAP_WRITE, 0, 0, sizeof(SmtBlock)) : nullptr;
+        bool through = false;
+        if (shared)
+        {
+            // written as the mod writes it: the sequence odd while the fields go in
+            b.sequence = 0;
+            b.tick = 20000 + kSmtLookMs;
+            shared->magic = b.magic;
+            shared->version = b.version;
+            shared->size = b.size;
+            InterlockedIncrement(&shared->sequence);
+            memcpy((char *)shared + offsetof(SmtBlock, tick), (const char *)&b + offsetof(SmtBlock, tick), sizeof b - offsetof(SmtBlock, tick));
+            InterlockedIncrement(&shared->sequence);
+            const SmtView early = SmtRead(reader, 20000 + kSmtLookMs - 1), found = SmtRead(reader, 20000 + kSmtLookMs);
+            const SmtView later = SmtRead(reader, 20000 + kSmtLookMs + kSmtStaleMs + 1);
+            through = !none.present && !early.present && found.present && found.gear == 3 && found.vehicle == kVehicle && !later.present;
+            SmtClose(reader);
+            UnmapViewOfFile(shared);
+        }
+        if (mapping) CloseHandle(mapping);
+        Check(through, "manual transmission mod: its state read through the shared memory it names, looked for every five seconds until it is there");
+        char line[400];
+        SmtProbeText(fresh, true, line, sizeof line);
+        Check(strstr(line, "drives this truck | gear 3 of 6") && strstr(line, "clutch held, 0.70 (an axis)") && strstr(line, "2 stalls"), "manual transmission mod: its probe line");
+    }
 
     printf(g_failed ? "TRUCK TEST FAILED (%d)\n" : "TRUCK TEST OK\n", g_failed);
     return g_failed ? 1 : 0;

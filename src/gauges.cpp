@@ -17,6 +17,7 @@
 #include "gauges.h"
 #include "truck.h"
 #include "models.h"
+#include "smt.h"
 #ifndef GAUGES_SETTINGS_TEST
 #include "sound.h"
 #endif
@@ -592,6 +593,10 @@ struct TruckWatch
     BoostModel boost;           // and its boost
     PowertrainModel power;      // and what its engine would deliver, for the probe log until the hooks hand it to the game
     GearboxModel gearbox;       // and the gear an automatic with a torque converter would be in, the same way
+    SmtReader smtReader;        // the manual transmission mod's published state (smt.h)
+    SmtView smt;                // as read on this pass
+    bool smtSeen;               // it was published on the last pass
+    unsigned smtStalls;         // the stalls it had caused on the last pass
     int probedLifts;            // the lifts of the pedal the boost had told when the probe wrote last
     uint32_t chance;            // what the pitch of the next lift's sound is drawn from
     bool pedalDown;             // the pedal was more than half down on the last step
@@ -641,6 +646,16 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
 {
     const int probe = s.probe;
     const ULONGLONG now = GetTickCount64();
+    // the manual transmission mod, when it publishes its state: said in the log when it comes and goes, and with the
+    // probe on at each stall it causes for a shift without the clutch
+    w.smt = SmtRead(w.smtReader, now);
+    if (w.smt.present != w.smtSeen)
+        Log(w.smt.present ? L"manual transmission mod: it publishes its state; while it drives the truck the automatic's model stands down"
+                          : L"manual transmission mod: its state is not published any more");
+    else if (probe && w.smt.present && w.smt.stalls > w.smtStalls)
+        Log(L"manual transmission mod: a shift without the clutch stalled the engine (%u since it loaded)", w.smt.stalls);
+    w.smtSeen = w.smt.present;
+    w.smtStalls = w.smt.stalls;
     const bool was = w.found;
     bool read = w.found && TruckRead(m, w.refs, raw);
     if (!read && (w.found || now >= w.findAt))
@@ -761,8 +776,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         // the automatic: the gear it would be in, the same way. With the probe on each of its shifts is logged beside
         // the game's gear while the game's automatic drives a numbered gear
         const int boxGear = w.gearbox.gear;
-        GearboxStep(w.gearbox, raw, scale, w.power.pedal, w.power.power, dt);
-        if (probe && boxGear >= 1 && w.gearbox.gear != boxGear && raw.automatic && raw.gearEngaged >= 1 && raw.gearEngaged <= TruckTopGear(raw))
+        if (w.smt.driving && w.smt.vehicle == w.refs.vehicle) w.gearbox = GearboxModel{}; // the manual transmission mod drives the gears
+        else GearboxStep(w.gearbox, raw, scale, w.power.pedal, w.power.power, dt);
+        if (probe && boxGear >= 1 && w.gearbox.gear >= 1 && w.gearbox.gear != boxGear && raw.automatic && raw.gearEngaged >= 1 && raw.gearEngaged <= TruckTopGear(raw))
             Log(L"automatic: the model would shift %d to %d at %.0f rpm on the gearbox's input, the pedal at %.2f (the game's gear %d)", boxGear, w.gearbox.gear,
                 w.gearbox.input, w.power.pedal, raw.gearEngaged);
         if (w.oil.on != oilWas)
@@ -819,7 +835,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                   TempZone(w.temp) != w.probedZone || DamageAdding(w.damage, s) != w.probedAdding ||
                   w.boost.flutters + w.boost.blowOffs != w.probedLifts))
     {
-        char first[640], second[1024], third[512], fourth[256], fifth[640], sixth[1024], seventh[400], eighth[400], ninth[320];
+        char first[640], second[1024], third[512], fourth[256], fifth[640], sixth[1024], seventh[400], eighth[400], ninth[320], tenth[400];
         TruckProbeText(raw, world, w.byWay, first, sizeof first, second, sizeof second);
         ModelProbeText(raw, w.tach, w.range, scale, third, sizeof third);
         Log(L"probe: %S", first);
@@ -836,8 +852,15 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         Log(L"probe: %S", seventh);
         PowertrainProbeText(raw, w.power, w.tach.rpm, eighth, sizeof eighth);
         Log(L"probe: %S", eighth);
-        GearboxProbeText(raw, w.gearbox, ninth, sizeof ninth);
+        const bool smtDrives = w.smt.driving && w.smt.vehicle == w.refs.vehicle;
+        if (smtDrives) snprintf(ninth, sizeof ninth, "automatic (not handed to the game yet): stands down, the manual transmission mod drives the gears");
+        else GearboxProbeText(raw, w.gearbox, ninth, sizeof ninth);
         Log(L"probe: %S", ninth);
+        if (w.smt.present)
+        {
+            SmtProbeText(w.smt, smtDrives, tenth, sizeof tenth);
+            Log(L"probe: %S", tenth);
+        }
         w.probedLifts = w.boost.flutters + w.boost.blowOffs;
         w.probedAdding = DamageAdding(w.damage, s);
         w.probedLamp = w.tilt.lamp;
