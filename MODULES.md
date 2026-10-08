@@ -21,9 +21,13 @@ Questions for the overseer go into `HANDOFF.md` under "Questions"; the overseer 
 | 7 | Per-truck setups: the truck's identity, scales saved and restored per truck | high | built, committed and installed (2026-10-07 12:15); NOT yet seen with a truck in the game: the user's drive is owed and is the first game check (the checklist in HANDOFF) | the module 5 session, reused on the user's word (remote, no new session possible) | Gauges.asi 0.7.0 (98251685, commit c268bc6) installed: each kind of truck keeps its own five scales (`TachClass`, `IdleRpm`, `RedlineRpm`, `MaxRpm`, `SpeedMax`) in a `[Truck:<kind>]` section of `Gauges.ini`, written when one of them is changed on the tab while such a truck is driven; every other truck has the plain ones of `[Gauges]`, and an ini without sections behaves as before. A truck goes by its kind's name, which the game holds at model + 0x588 ("lrd_110/1914924", the save's `type`; found by two scans of the running game), and by its build where no name is read. The game's id for the one truck (vehicle + 0x48) was found too and is only logged: the save keeps none for trucks in storage, so it would not last through a swap. The tab names the truck and has the button "Back to the plain scales"; the coolant and the range go by the kind. Offline tests OK (settings 32, truck 58, models 73, preview with three tab pictures); read by one C++ reviewer, nothing serious, its points taken. In the game: six unattended boots after the install never left the main menu, with 0.6.1 back in the folder as well, so they say nothing about the build (HSR's script; HSR told). |
 | 8 | Boost model and gauge | high | built, committed (bcee527) and installed (2026-10-07 14:44, F1AB83EE); the user's drive owed | the module 3 session, reused on the user's word (remote) | 0.8.0 (F1AB83EE): the boost dial live from the pedal and the tach needle's share (`BoostStep` in `src\models.h`), `BoostMax` by class (1.8 / 1.0 / 2.0 bar) and as the sixth per-truck key, blow-offs and flutters told on quick lifts and logged with the probe on, a probe line. Offline tests OK (8 new checks), the two recorded drives replayed: 1.2 to 1.4 s from a floored standstill to nine tenths of the boost. Owed: the user's drive (checklist and three questions in HANDOFF) |
 | 9 | Cluster graphics: dials, needles, lamps and icons at real-cluster quality | high | done but for the user's eye in the game: approved from the previews ("install them"), 0.9.0 installed 2026-10-07 19:22 (EE4F2EE6, commits 1b255bb and e5ecdd0) | the module 3 session (also module 8) | The drawing header rewritten with curves, a lit bezel, shaded needles and every lamp symbol redrawn; close-up previews at 4x; the draw time logged with the probe. 0.21 ms a frame at 2160p in the open style, 0.35 ms in the solid one (the preview's timing). Owed: the user's look at it in the game and the probe's draw time there (HANDOFF) |
-| 10 | Sounds: XAudio2, flutter and blow-off clips, credits | high | built with recordings and installed (2026-10-07 22:17, BCA05B9C, commits 030f1c7 and 92e8d18): the user found the made sounds unlike a turbo and supplied a clip (permission from its author, by the user's word), now nine flutter recordings in three strengths; the listening test in the game is owed, and the clip author's name and link for SOUND_CREDITS.md are owed before any release | the module 4 session, reused on the user's word (remote) | 0.10.0 (E1C05E2A): a blow-off after a full lift under boost and a flutter after a smaller one through XAudio2 (`src\sound.h`, after the tire mod's), louder with more boost, pitch within 6 percent, at most one per 0.8 s; SoundVolume and SoundsOnly on the tab and in the ini, a button to hear each. Both sounds are made by code: no clip was downloaded (one poor CC0 hit on freesound, and its files need a signed-in account); a WAV in `sounds\` or `assets\` takes a sound's place. Offline tests OK, XAudio2 played both here (HANDOFF, the top section) |
-| 11 | Powertrain: throttle, engine speed, automatic shifting and torque as one model with the dials | max | waiting (research and design note first, the user's OK before the first hook) | | |
-| 12 | Release: polish, README, GitHub | medium | waiting | | |
+| 10 | Sounds: XAudio2, flutter and blow-off clips, credits | high | done for now (the user, 2026-10-08, after playing it in the game: the playback is perfect and the recordings are good; the module goes on later with more sounds). Built with recordings and installed 2026-10-07 22:17 (BCA05B9C, commits 030f1c7 and 92e8d18): the user found the made sounds unlike a turbo and supplied a clip (permission from its author, by the user's word), now nine flutter recordings in three strengths. Still owed before any release: the clip author's name and link for SOUND_CREDITS.md | the module 4 session, reused on the user's word (remote) | 0.10.0 (E1C05E2A): a blow-off after a full lift under boost and a flutter after a smaller one through XAudio2 (`src\sound.h`, after the tire mod's), louder with more boost, pitch within 6 percent, at most one per 0.8 s; SoundVolume and SoundsOnly on the tab and in the ini, a button to hear each. Both sounds are made by code: no clip was downloaded (one poor CC0 hit on freesound, and its files need a signed-in account); a WAV in `sounds\` or `assets\` takes a sound's place. Offline tests OK, XAudio2 played both here (HANDOFF, the top section) |
+| 11 | Engine models: turbo spool profiles, water and oil temperatures, heat from the engine speed, the outside temperature by map | high | waiting | | |
+| 12 | Powertrain: throttle, engine speed and a torque curve as one model with the dials | max | waiting (research and design note first, the user's OK before the first hook) | | |
+| 13 | Automatic gearbox: a torque converter and sane shifting | max | waiting (after 12; its own research note and the user's OK first) | | |
+| 14 | SMT integration: the powertrain and the dials with the manual transmission mod | high | waiting (after 12; what "integration" covers is the user's call, see the brief) | | |
+| 15 | Differentials: front and rear locks, the centre differential's torque split and its lock | max | waiting (a feasibility note first, the user's OK before any hook) | | |
+| 16 | Release: polish, README, GitHub | medium | waiting | | |
 
 Effort is the session's effort level, set by the user when creating the session (the overseer reminds them).
 
@@ -77,7 +81,9 @@ Effort is the session's effort level, set by the user when creating the session 
     other mods (the tire mod is the user's own and may be named; a third-party mod's name or path does not belong
     in any file that is tracked).
   - The repo holds no game files and no research material; working notes stay local and ignored (`HANDOFF.md`,
-    `MODULES.md`, `docs\plan`, `out`, `test\*.ps1`, `.claude`), as Next Gen's repo ignores its notes. The font
+    `MODULES.md`, `docs\plan`, `out`, `test\*.ps1`, `.claude`), as Next Gen's repo ignores its notes. Since
+    2026-10-08 `MODULES.md` is tracked on the user's word, so cloud sessions can read the board; it names other
+    mods and local paths, so it leaves the repo (`git rm --cached`) before the public flip (module 16). The font
     files are read from the game folder at run time, never shipped; the decrypted image at `C:\Games\sr_image` is
     never committed.
   - Licence and notice texts are part of the job, never a question for the user: `LICENSE` (GPL-3.0-only, as the
@@ -329,20 +335,82 @@ clips supplied by the user. Build: XAudio2 2.9 playback (mastering voice, one so
 mono WAV from `sounds\` next to the .asi), the triggers from module 7, volume and pitch variation, a SoundsOnly
 switch, `SOUND_CREDITS.md` with author, URL and licence per clip. Changelog entry 0.10.0.
 
-### 11. Powertrain
+### 11. Engine models: turbo profiles, water and oil, heat from the engine speed, the outside temperature by map
+
+The user's notes (2026-10-08): "Turbo spool profiles to pick from", "Water and oil temp, water more reactive, oil
+less oil temp beep", "per map temperature set automatically", "Temp reacts to rpm, not throttle input."
+
+All four live in `src\models.h` and the reader; none needs a hook. Part A comes first: it is a model change with
+no game memory. Parts B to D can go in one session or be split if the session runs short.
+
+Part A, the heat from the engine speed. Today the load is the pedal, more of it the higher the needle stands
+(`TruckLoad`: pedal x (1 - kLoadRevs + kLoadRevs x needle), kLoadNeutral in neutral), so the temperature answers
+the foot. Make the heat follow the engine speed of the tach model (`TachShare`): a high-revving engine heats,
+whatever the pedal, and one lugging at low revs heats little. Retune with the replays so the settings' three times
+still come true (`TempRatesOf` solves the rates from them) and say where the README's promises move (the red zone at
+a crawl floored, the low range at its own top speed, a cruise in a high gear near the red zone, the free rev in
+neutral). Once module 12 makes the engine speed real, the heat follows that one. Question for the user before
+building: the cold damage goes by the pedal (more than half down below 60 C); does it move to the engine speed too
+(a cold engine revved high)?
+
+Part B, water and oil. The coolant model stays as the water temperature, the quick one. A second, slower oil
+temperature takes its heat from the engine and gives it to the water and the air: a larger mass, so it lags the
+water on the way up (warm well after the water is) and keeps its heat longer on the way down, and it runs above
+the water under hard work. Per kind of truck, kept as the water is. Settings with help text: the oil's warm-up
+minutes and the oil warning temperature (`OilWarnC`), on the tab under the coolant section. Where the oil shows is
+the user's pick from preview PNGs: a second needle in the temperature dial, a small dial of its own (`ShowOil`), or
+the brake air dial's place while that one rests. An oil lamp lights from `OilWarnC`.
+
+The oil beep: a warning tone when the oil passes `OilWarnC`, again every few seconds while it stays over, quiet
+once it is back under. Through the player of module 10 (`src\sound.h`), at `SoundVolume`, with `SoundsOnly` too; a
+made tone, and `sounds\oil_beep.wav` plays in its place; a button on the tab to hear it. Whether the oil counts
+for the engine damage as well as the water is the user's call; until they say, the damage stays with the water.
+
+Part C, the outside temperature by map. The map or region the truck drives in, read from the game (find its name
+as module 7 found the truck's kind: `statescan` across two maps and a reload, the object may change, the name must
+not). A table of default outside temperatures per region (the user approves the numbers), kept as `[Map:<name>]`
+sections in `Gauges.ini` and written on the first start; the tab names the map and edits its temperature;
+`AmbientC` stays the fallback for a map not in the table and while none is read. A change of map moves the
+models' outside temperature, and the trucks left on the other map cool towards their own map's air.
+
+Part D, turbo spool profiles. A profile is the turbo's character, apart from `BoostMax` (how much it makes): where
+it starts and finishes making boost (`kBoostRevsFrom`, `kBoostRevsFull`), how long it lags on the way up
+(`kBoostSpool`, `kBoostSpoolLow`) and how fast it falls (`kBoostFall`, `kBoostLift`). A first set for the user to
+pick from, shown as preview curves (the boost against time on a floored pull from a standstill, and against the
+engine speed): standard (today's numbers, the default, so an ini without the key behaves as before), a small quick
+turbo (boost from low revs, little lag), a big laggy one (boost late and slow, then all at once), and a two stage
+one (a small turbo early that hands over to a big one). `BoostProfile` in `[Gauges]` and as a per-truck key in the
+`[Truck:<kind>]` sections, on the tab under Scales beside `BoostMax`. The flutter's strength keeps following the
+boost the lift had. Once module 12 feeds the boost into the torque, the profile changes how the truck pulls.
+
+Test: the models test for each part (the heat at fixed revs with the pedal up and down, the oil's lag behind the
+water, the beep's timing, a map change, each profile's time to nine tenths of the boost), the recorded drives
+replayed, the settings test with `[Map:<name>]` sections, the truck test with the map read, the preview with the
+oil shown and the profiles' curves. Changelog 0.11.0. The user's drive: a cold start on two maps, a long hard
+climb for the oil, a swap of profiles on the tab while driving.
+
+### 12. Powertrain
 
 The user (2026-10-07): "the way the game drives engines and the gearbox and how it reacts to throttle input makes
 it impossible to use properly while the engine is cold. Either nothing happens or it revs the shit out of it ...
 I want my own fix", and on the overseer's suggestion of a separate mod: "Uh no, everything is tied to the rpm,
 the engine temp, the boost, all the dials, everything. Add to the plan." So the powertrain is part of this mod:
-one engine model drives the game's torque and the dials alike.
+one engine model drives the game's torque and the dials alike. The user's note (2026-10-08): "powertrain; engine
+torque per rpm/torque curve".
 
 Goal: a truck that can be driven gently when it has to be (a cold engine, a crawl) and whose dials tell the
 truth about it: a progressive throttle, the engine speed that the tachometer already models made real (in gear it
-follows the wheels, in neutral it revs free, the pedal fills in under load), torque from that engine speed (a
-torque curve, less when cold, more with boost, fading to nothing at the redline), and an automatic gearbox that
-shifts on the engine speed with hysteresis and does not hunt. Everything behind one `Powertrain` switch, off
-until the user has driven it; the game as it is with the switch off.
+follows the wheels, in neutral it revs free, the pedal fills in under load), and torque from that engine speed by a
+torque curve (less when cold, more with boost, fading to nothing at the redline). Everything behind one
+`Powertrain` switch, off until the user has driven it; the game as it is with the switch off. The automatic
+gearbox is module 13, the manual transmission mod module 14, the differentials module 15; this module's research
+note covers the hooks they share.
+
+The torque curve: torque against the engine speed as a share of idle to the red zone, a default curve per truck
+class (a diesel's broad plateau for trucks and heavies, a petrol's later peak for scouts), the engine's own torque
+from its record (the record module 6 looks up) as the curve's height where the game has it, and a truck's own
+curve as points in its `[Truck:<kind>]` section (for example `TorqueCurve=0:0.6,0.3:0.95,0.6:1,1:0.75`). The tab
+draws the curve of the driven truck and edits the points.
 
 Reference, for what is possible, not for copying: Power Overhaul (mod.io 6390376, an ASI with Detours, no
 source): rpm following speed in gear and free revving in neutral, automatic shifting on torque-curve thresholds
@@ -354,32 +422,108 @@ Part A, research and design note (no hook before the user's OK on the note):
   +0x44, the gear at +0x74, the engaged gear at +0x70), the readers of +0x38 and +0x44, the shift functions the
   manual transmission mod hooks (ShiftGear, SetPowerCoef, ShiftToAutoGear, its byte patterns in
   `C:\Games\Snowrunner-Manual-Transmission\DLL\memory.cpp`; its PowerCoef values 0.45 Low, 1.0 Low+, 0.2 Low-, 1.05
-  automatic), the gearbox XML (AngVel and FuelModifier per gear, the gear tops as module 2 measured them).
+  automatic), the gearbox XML (AngVel and FuelModifier per gear, the gear tops as module 2 measured them), and
+  where the drive torque is split between the driven wheels (for module 15).
 - Which levers do the job with the least code: writing the power factor (+0x38) per frame from our torque model,
   shaping the pedal (+0x44) before the physics reads it, calling the game's own shift function from our automatic
   while the game's automatic is held off (as SMT does), a hook on the game's thread with Microsoft Detours (MIT,
   into deps with its notice; the pattern is SMT's) where a write from our thread would race.
-- The design note in HANDOFF.md: the hook points, the model's formulas (torque curve against the tach share, the
-  cold factor from the coolant model, the boost term from module 8, the redline fade, the shift rule with its
-  thresholds and timers, the throttle curve and ramp), the settings, the per-truck pieces through module 7's
-  sections, what stays the game's, the risks (co-op untested: the switch off there; a game update: the stamp
-  check stands down; the manual transmission mod hooks the same functions: detect SMT.asi or SMT.addon64 and
-  stand down with a log line and a tab notice), and the checklist of the user's drive. The user says yes or
-  changes it; then part B.
+- The design note in HANDOFF.md: the hook points, the model's formulas (the torque curve against the tach share,
+  the cold factor from the oil temperature of module 11, the boost term from modules 8 and 11, the redline fade, the
+  throttle curve and ramp), the settings, the per-truck pieces through module 7's sections, what stays the game's,
+  the risks (co-op untested: the switch off there; a game update: the stamp check stands down; the manual
+  transmission mod hooks the same functions: until module 14, detect SMT.asi or SMT.addon64 and stand down with a
+  log line and a tab notice), and the checklist of the user's drive. The user says yes or changes it; then part B.
 
 Part B, build: the model in `models.h` (no game memory in it, tests and replays as the other models), the hooks
 and writes in a new `src\powertrain.h` behind the switch, the dials fed from the model (the tach shows the engine
-speed that makes the torque, the coolant's load and the boost's share come from it), the tab's Powertrain section
-and the ini keys with help text, the probe line, the changelog (0.11.0), the plan file updated as built. Install
+speed that makes the torque, the coolant's heat and the boost's share come from it), the tab's Powertrain section
+and the ini keys with help text, the probe line, the changelog (0.12.0), the plan file updated as built. Install
 with the switch off; the user's drive decides the defaults and switches it on.
 
 Effort max. A fresh session if the user can create one; else the closed session with the most room.
 
-### 12. Release
+### 13. Automatic gearbox
+
+The user's note (2026-10-08): "Auto gearbox more sane (torque converter simulation)".
+
+Goal: the game's automatic (the A gears) as a truck's automatic drives: a torque converter between the engine and
+the gearbox, and shifts that follow the engine speed and the load with hysteresis and never hunt. Behind the
+`Powertrain` switch of module 12 (or its own switch, if the note says so); the manual gears, the high gear and the
+low range stay the game's.
+
+- The torque converter: below the lock-up the engine speed is free of the wheels. With the truck held, the pedal
+  takes the engine to the converter's stall speed and no further; the converter multiplies the torque, most at
+  the stall (about two times) and none from the coupling point; the needle shows the slip. At idle in drive the
+  truck creeps. A lock-up clutch couples the engine to the wheels from a gear and a speed on, and the needle drops
+  onto the wheel speed. Settings: the stall speed and the lock-up's gear and speed, per truck through module 7.
+- The shifting: up at a share of the red zone that grows with the pedal, down with a band below it so a gear
+  holds; a floored pedal kicks down, skipping gears where the engine speed allows; no shift while the wheels spin
+  or the truck is in the air; on a long descent the gear holds for engine braking; a minimum time between shifts.
+  Our automatic calls the game's own shift function while the game's automatic is held off, as part A of module 12
+  found.
+- Part A, research note in HANDOFF.md first (what the game's automatic does now, measured on a drive with the
+  probe: where it hunts and where it over-revs; the hook points from module 12's note; the converter's formulas
+  and the shift rule with its thresholds and timers); the user's OK, then the build.
+
+Test: the models test with the converter (the stall speed held, the creep, the lock-up, a shift sequence on a climb
+without hunting) and the recorded drives replayed; the user's drive on a road, a climb, a descent and in mud.
+Changelog 0.13.0.
+
+### 14. SMT integration
+
+The user's note (2026-10-08): "SMT integration". Until now the plan had the powertrain stand down when the manual
+transmission mod is loaded (module 12, the risks). This module makes the two work together.
+
+What "integration" covers is the user's call, asked first, with the options laid out:
+- The dials follow SMT: the gear and its letter, the clutch and the engine speed read from SMT's state, so the
+  cluster is right with its H-shifter and clutch pedal. Module 2's deferred check of the gear letters with the
+  wheel's shifter closes here, on a day the sim rig is connected.
+- The powertrain with SMT: SMT picks the gear and owns the shift calls; module 12's torque model owns the torque
+  and module 13's converter steps aside; the clutch pedal slips the engine against the wheels (a stall when it
+  comes up too fast at too low an engine speed, a free rev with it down). The two mods must never both write the
+  power factor or call a shift in one frame.
+- How the state crosses over: if the user maintains the SMT build in `C:\Games\Snowrunner-Manual-Transmission`, an
+  exported state (a small struct or function in its DLL) is the clean route; if not, read SMT's state from its
+  hooks' effects in game memory and never patch its code.
+
+Research note in HANDOFF.md first (SMT's hooks and state, the order the two run in each frame, the chosen route),
+the user's OK, then the build. Test: the user's drive on the rig with the shifter and the clutch, and with SMT off
+to show nothing changed there. Changelog 0.14.0.
+
+### 15. Differentials
+
+The user's note (2026-10-08): "Front/rear Diff locks, centerdiff torque split locks".
+
+Goal: in place of the game's single differential lock and all wheel drive switch, a front lock, a rear lock and a
+centre differential with a torque split between the axles (for example 40 to 60 front to rear, per truck) and a
+centre lock that makes it 50 to 50 rigid. Each lock on its own key and pad binding (in the notation of
+`ToggleKey` and `PadToggle`), with a lamp each on the cluster (the ISO differential lock symbol with F, R and C).
+
+This module stands or falls on the game: part A is a feasibility note before anything else.
+- How the game splits the drive between the driven wheels: the drive types per wheel and their angular speeds that
+  module 2 reads, the all wheel drive and lock flags, the per-frame update that module 12's note maps, and what the
+  diff lock does to the wheels (equal speeds per axle, or across all driven wheels).
+- Which lever gives a per-axle lock and a torque split: the wheels' drive torque written per frame, the lock
+  applied per axle in a hook, or the drive types switched per axle. What it costs and what can go wrong (a truck
+  that shakes or jumps, co-op).
+- What a truck may lock: only what the truck has in the game (a truck without a diff lock gets none), or free for
+  every truck. The user's call, asked in the note.
+
+The user's OK on the note, then the build: the model in `models.h`, the writes or hooks behind a switch (off until
+the user's drive), the keys, the lamps, the tab section, the per-truck split through module 7's sections, the probe
+line. Test: the models test, and the user's drive in mud and on a cross-axle climb with each lock. Changelog
+0.15.0.
+
+### 16. Release
 
 Build: the tach and speed scales by truck class from the truck's name (module 7 finds the name; here the class
-defaults per name, if wanted), ambient temperature per map if a value turns up cheaply, README complete, rollback notes,
-the repo on GitHub (private until the user's word). A last pass over every outward text for the house rules. The sound recordings (module 10, cut from a clip the user supplied with its author's permission) are not under the GPL: SOUND_CREDITS.md names the author and the link (the user supplies both) and states the terms (used with the author's permission), and THIRD_PARTY_NOTICES.md says the recordings are excluded from the GPL licence of the code.
+defaults per name, if wanted), README complete, rollback notes, the repo on GitHub (private until the user's word).
+A last pass over every outward text for the house rules. `MODULES.md` leaves the repo (`git rm --cached`, back
+into `.gitignore`'s effect) before the public flip: it names other mods and local paths. The sound recordings
+(module 10, cut from a clip the user supplied with its author's permission) are not under the GPL: SOUND_CREDITS.md
+names the author and the link (the user supplies both) and states the terms (used with the author's permission),
+and THIRD_PARTY_NOTICES.md says the recordings are excluded from the GPL licence of the code.
 Release flow as the other repos: `CHANGELOG.md` dated, release notes and the Discord post written by hand (the
 template is the note `release-doc-style.md` in `C:\Users\User\.claude\projects\C--m-d\memory`), the wording shown
 to the user before any build; the zip, tag and GitHub release only on the user's word.
