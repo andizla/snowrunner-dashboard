@@ -127,12 +127,14 @@ static void WriteIni(const GaugeSettings &s)
     whole(L"ShowBoost", s.showBoost ? 1 : 0);
     whole(L"ShowAir", s.showAir ? 1 : 0);
     whole(L"ShowLamps", s.showLamps ? 1 : 0);
+    whole(L"OilGauge", s.oilGauge);
     whole(L"TachClass", s.tachClass);
     num(L"IdleRpm", s.idleRpm);
     num(L"RedlineRpm", s.redlineRpm);
     num(L"MaxRpm", s.maxRpm);
     num(L"SpeedMax", s.speedMax);
     num(L"BoostMax", s.boostMax);
+    whole(L"BoostProfile", s.boostProfile);
     num(L"RollWarnDeg", s.rollWarnDeg);
     num(L"RollDangerDeg", s.rollDangerDeg);
     num(L"PitchDangerDeg", s.pitchDangerDeg);
@@ -141,6 +143,8 @@ static void WriteIni(const GaugeSettings &s)
     num(L"CoolDownMinutes", s.coolDownMinutes);
     num(L"AmbientC", s.ambientC);
     num(L"AirFullKmh", s.airFullKmh);
+    num(L"OilWarmUpMinutes", s.oilWarmUpMinutes);
+    num(L"OilWarnC", s.oilWarnC);
     whole(L"Damage", s.damage ? 1 : 0);
     num(L"HotDamagePercentPerMinute", s.hotDamage);
     num(L"ColdDamagePercentPerMinute", s.coldDamage);
@@ -150,6 +154,40 @@ static void WriteIni(const GaugeSettings &s)
     whole(L"SoundsOnly", s.soundsOnly ? 1 : 0);
     whole(L"Demo", s.demo ? 1 : 0);
     whole(L"Probe", s.probe);
+}
+
+// ---- the outside temperature by map: the sections [Map:<name>] of Gauges.ini ----
+// A map can have an outside temperature of its own (AmbientC in its section), in force while a truck drives on it; a
+// map without a section takes AmbientC of [Gauges]. The names here are placeholders until the game's own names for
+// its maps are known, and the temperatures are a first guess. The mod writes them into an ini that has no map
+// section yet; one taken out by hand stays out.
+static const struct { const char *name; float ambientC; } kMapDefaults[] = {
+    { "michigan", 12.0f }, { "alaska", -12.0f }, { "taymyr", -20.0f }, { "kola", -10.0f }, { "yukon", -15.0f }, { "wisconsin", 8.0f },
+    { "amur", 2.0f }, { "don", 16.0f }, { "maine", 10.0f }, { "tennessee", 20.0f }, { "glades", 18.0f }, { "ontario", 5.0f },
+    { "british_columbia", 3.0f }, { "scandinavia", -4.0f }, { "north_carolina", 22.0f }, { "almaty", 24.0f }, { "austria", 8.0f } };
+
+static std::wstring MapSection(const char *name) { return L"Map:" + Wide(name); }
+
+// The outside temperature of a map from its section, held to its range. False when the map has none.
+static bool MapAmbient(const char *name, float &out)
+{
+    if (!name[0]) return false;
+    const std::wstring ini = IniPath(), section = MapSection(name);
+    wchar_t buf[8] = {};
+    if (!GetPrivateProfileStringW(section.c_str(), L"AmbientC", L"", buf, 8, ini.c_str())) return false;
+    out = SettingsRange(IniFloatIn(section.c_str(), L"AmbientC", kTempOutside, ini), kAmbientRange[0], kAmbientRange[1]);
+    return true;
+}
+
+// Writes the maps' sections with their first temperatures, when the ini has no map section at all.
+static void MapDefaultsWrite()
+{
+    const std::wstring ini = IniPath();
+    static wchar_t names[32768];
+    const DWORD n = GetPrivateProfileSectionNamesW(names, 32768, ini.c_str());
+    for (const wchar_t *p = names; p < names + n && *p; p += wcslen(p) + 1)
+        if (!_wcsnicmp(p, L"Map:", 4)) return;
+    for (const auto &m : kMapDefaults) IniPutFloat(MapSection(m.name).c_str(), L"AmbientC", m.ambientC, ini);
 }
 
 // The ini into s (defaults for missing keys, every number held to its range); a missing ini is written with the
@@ -172,15 +210,19 @@ static void ReadIni(GaugeSettings &s)
                         L"; Scale is its size (1 = as designed; it grows with the screen's height). Opacity 0.1 to 1.\n"
                         L"; Mph=1: speed in mph and range in miles. Psi=1: boost in psi. Fahrenheit=1: temperature in F.\n"
                         L"; ShowTemp, ShowBoost, ShowAir and ShowLamps switch the small dials and the lamps on (1) or off (0).\n"
+                        L"; OilGauge shows the oil temperature: 1 = a second needle (amber) in the temperature dial, 2 = a dial of its\n"
+                        L"; own left of the temperature dial, 0 = not at all. The oil lamp is in the lamps either way.\n"
                         L"; TachClass sets the scales: 0 = truck (idle 650 rpm, red zone from 2200 of 3000, speedometer to 100 km/h),\n"
                         L"; 1 = scout (800, 5500 of 7000, 120 km/h), 2 = heavy (600, 1900 of 2500, 80 km/h).\n"
                         L"; IdleRpm, RedlineRpm, MaxRpm and SpeedMax (km/h) replace the class's numbers; 0 = the class's own.\n"
                         L"; The boost dial shows a turbo that blows by how far the pedal is down and how fast the engine turns.\n"
                         L"; BoostMax is the boost in bar it reaches with the pedal floored at high engine speed (0.3 to 2);\n"
                         L"; 0 = the class's own: trucks 1.8 bar, scouts 1, heavy trucks 2.\n"
-                        L"; A kind of truck can have these six of its own. They stand in a section named after the truck, such as\n"
-                        L"; [Truck:chevrolet_ck1500], which the mod writes when one of the six is changed on the tab while such a truck\n"
-                        L"; is driven. The tab and Gauges.log name the truck. A truck without a section takes the six from [Gauges],\n"
+                        L"; BoostProfile is how the turbo gets there: 0 = standard, 1 = small and quick (boost early, little lag),\n"
+                        L"; 2 = big and slow (boost late, long to come at low revs), 3 = two stages (a small turbo early, a big one after).\n"
+                        L"; A kind of truck can have these seven of its own. They stand in a section named after the truck, such as\n"
+                        L"; [Truck:chevrolet_ck1500], which the mod writes when one of the seven is changed on the tab while such a truck\n"
+                        L"; is driven. The tab and Gauges.log name the truck. A truck without a section takes the seven from [Gauges],\n"
                         L"; and so does a truck's section for each of them it leaves out.\n"
                         L"; The tilt lamp is green while the truck stands level. It turns amber when the truck leans to a side by\n"
                         L"; RollWarnDeg degrees and red from RollDangerDeg, or when it points up or down a slope by PitchDangerDeg.\n"
@@ -189,8 +231,14 @@ static void ReadIni(GaugeSettings &s)
                         L"; the time from 90 C into the red zone at 118 C with the engine revved out and the wheels spinning at a\n"
                         L"; standstill, CoolDownMinutes the time a stopped engine takes from 90 C down to 40 C. AmbientC is the outside\n"
                         L"; temperature in degrees C: a truck that has stood for long is that cold. The cold lamp is lit below 60 C.\n"
+                        L"; A map can have an outside temperature of its own: AmbientC in a section named after the map, such as\n"
+                        L"; [Map:michigan], in force while a truck drives on it. The names are placeholders for now: the mod does not\n"
+                        L"; read which map a truck is on yet, so AmbientC of [Gauges] is in force everywhere.\n"
                         L"; AirFullKmh is the speed from which the radiator gets all the air that driving gives it (10 to 80 km/h).\n"
                         L"; Lower keeps a slow, hard pulling engine cooler.\n"
+                        L"; The oil follows the coolant slowly and runs a little hotter under load. OilWarmUpMinutes is the time the oil\n"
+                        L"; takes from 15 C to 85 C when the engine is driven as usual. From OilWarnC (100 to 150 C) the oil lamp blinks\n"
+                        L"; and a warning sounds every few seconds.\n"
                         L"; Damage=1: the temperature costs the engine. An engine in the red zone takes the game's own engine damage:\n"
                         L"; HotDamagePercentPerMinute percent of what it can take a minute at 125 C, less below that and more above.\n"
                         L"; A cold engine (below 60 C) revved more than half way from idle to the red zone takes ColdDamagePercentPerMinute\n"
@@ -199,9 +247,11 @@ static void ReadIni(GaugeSettings &s)
                         L"; Damage=0: the temperature is only shown.\n"
                         L"; ColdDamagePercentPerMinute=0 switches the cold part off. Damage has not been tried in co-op: leave it at 0 there.\n"
                         L"; SoundVolume (0 to 100) is how loud the turbo is heard when the pedal comes up quickly under boost: it flutters,\n"
-                        L"; longer and louder the more boost there was, until the pedal goes down again. 0 = no sound.\n"
-                        L"; SoundsOnly=1 plays the sounds and draws no cluster. WAV files sounds\\turbo_high_1.wav to _4.wav next to Gauges.asi\n"
-                        L"; (and turbo_mid_, turbo_low_ for less boost) are played in place of the mod's own recordings of that strength.\n"
+                        L"; longer and louder the more boost there was, until the pedal goes down again. The oil warning goes by it too.\n"
+                        L"; 0 = no sound. SoundsOnly=1 plays the sounds and draws no cluster.\n"
+                        L"; WAV files sounds\\turbo_high_1.wav to _4.wav next to Gauges.asi (and turbo_mid_, turbo_low_ for less boost)\n"
+                        L"; are played in place of the mod's own recordings of that strength, and sounds\\oil_beep_1.wav in place of the\n"
+                        L"; oil warning.\n"
                         L"; ToggleKey is the virtual key code of a key that hides and shows the cluster (0 = none; 120 = F9).\n"
                         L"; PadToggle does the same with pad buttons (XInput): DPadUp, DPadDown, DPadLeft, DPadRight, A, B, X, Y,\n"
                         L"; LB, RB, LS, RS, Start, Back, joined with + (LB+DPadUp), or None. The game sees these buttons too.\n"
@@ -209,9 +259,11 @@ static void ReadIni(GaugeSettings &s)
                         L"; For work on the mod: Demo=1 draws demo values whenever no truck is driven, Probe=1 logs the values read from the game.\n");
             fclose(f);
             WriteIni(s);
+            MapDefaultsWrite();
         }
         return;
     }
+    MapDefaultsWrite();
     s.layout = IniInt(L"Layout", s.layout, ini);
     s.style = IniInt(L"Style", s.style, ini);
     s.faceOpacity = IniFloat(L"FaceOpacity", s.faceOpacity, ini);
@@ -226,12 +278,14 @@ static void ReadIni(GaugeSettings &s)
     s.showBoost = IniBool(L"ShowBoost", s.showBoost, ini);
     s.showAir = IniBool(L"ShowAir", s.showAir, ini);
     s.showLamps = IniBool(L"ShowLamps", s.showLamps, ini);
+    s.oilGauge = IniInt(L"OilGauge", s.oilGauge, ini);
     s.tachClass = IniInt(L"TachClass", s.tachClass, ini);
     s.idleRpm = IniFloat(L"IdleRpm", s.idleRpm, ini);
     s.redlineRpm = IniFloat(L"RedlineRpm", s.redlineRpm, ini);
     s.maxRpm = IniFloat(L"MaxRpm", s.maxRpm, ini);
     s.speedMax = IniFloat(L"SpeedMax", s.speedMax, ini);
     s.boostMax = IniFloat(L"BoostMax", s.boostMax, ini);
+    s.boostProfile = IniInt(L"BoostProfile", s.boostProfile, ini);
     s.rollWarnDeg = IniFloat(L"RollWarnDeg", s.rollWarnDeg, ini);
     s.rollDangerDeg = IniFloat(L"RollDangerDeg", s.rollDangerDeg, ini);
     s.pitchDangerDeg = IniFloat(L"PitchDangerDeg", s.pitchDangerDeg, ini);
@@ -240,6 +294,8 @@ static void ReadIni(GaugeSettings &s)
     s.coolDownMinutes = IniFloat(L"CoolDownMinutes", s.coolDownMinutes, ini);
     s.ambientC = IniFloat(L"AmbientC", s.ambientC, ini);
     s.airFullKmh = IniFloat(L"AirFullKmh", s.airFullKmh, ini);
+    s.oilWarmUpMinutes = IniFloat(L"OilWarmUpMinutes", s.oilWarmUpMinutes, ini);
+    s.oilWarnC = IniFloat(L"OilWarnC", s.oilWarnC, ini);
     s.damage = IniBool(L"Damage", s.damage, ini);
     s.hotDamage = IniFloat(L"HotDamagePercentPerMinute", s.hotDamage, ini);
     s.coldDamage = IniFloat(L"ColdDamagePercentPerMinute", s.coldDamage, ini);
@@ -294,13 +350,13 @@ void SettingsTruckDrop() { InterlockedExchange(&g_truckDropAsked, 1); }
 void SettingsReset() { InterlockedExchange(&g_resetAsked, 1); }
 
 // ---- a truck's own scales: the section [Truck:<key>] of Gauges.ini ----
-// A truck can have six settings of its own: TachClass, IdleRpm, RedlineRpm, MaxRpm, SpeedMax and BoostMax. They are written
+// A truck can have seven settings of its own: TachClass, IdleRpm, RedlineRpm, MaxRpm, SpeedMax, BoostMax and BoostProfile. They are written
 // when one of them is changed on the tab while that truck is driven, and take the place of the plain ones of
 // [Gauges] whenever that truck is driven again. The key is the truck's as truck.h makes it (TruckKey).
 
 static std::wstring TruckSection(const char *key) { return L"Truck:" + Wide(key); }
 
-// Lays the truck's own scales over s: each of the six its section holds. One the section does not hold stays as
+// Lays the truck's own scales over s: each of the seven its section holds. One the section does not hold stays as
 // it is in s. False when the section holds none of them, or is not there.
 static bool ReadTruckIni(const char *key, GaugeSettings &s)
 {
@@ -318,11 +374,12 @@ static bool ReadTruckIni(const char *key, GaugeSettings &s)
     if (has(L"MaxRpm")) s.maxRpm = IniFloatIn(section.c_str(), L"MaxRpm", s.maxRpm, ini);
     if (has(L"SpeedMax")) s.speedMax = IniFloatIn(section.c_str(), L"SpeedMax", s.speedMax, ini);
     if (has(L"BoostMax")) s.boostMax = IniFloatIn(section.c_str(), L"BoostMax", s.boostMax, ini);
+    if (has(L"BoostProfile")) s.boostProfile = (int)GetPrivateProfileIntW(section.c_str(), L"BoostProfile", s.boostProfile, ini.c_str());
     if (any) SettingsClamp(s);
     return any;
 }
 
-// Writes the truck's section: the six scales of s.
+// Writes the truck's section: the seven scales of s.
 static void WriteTruckIni(const char *key, const GaugeSettings &s)
 {
     const std::wstring ini = IniPath(), section = TruckSection(key);
@@ -332,18 +389,19 @@ static void WriteTruckIni(const char *key, const GaugeSettings &s)
     IniPutFloat(section.c_str(), L"MaxRpm", s.maxRpm, ini);
     IniPutFloat(section.c_str(), L"SpeedMax", s.speedMax, ini);
     IniPutFloat(section.c_str(), L"BoostMax", s.boostMax, ini);
+    IniPutInt(section.c_str(), L"BoostProfile", s.boostProfile, ini);
 }
 
-// Takes the truck's six scales out of the ini, and its section with them when nothing else is in it.
+// Takes the truck's seven scales out of the ini, and its section with them when nothing else is in it.
 static void DropTruckIni(const char *key)
 {
     const std::wstring ini = IniPath(), section = TruckSection(key);
-    for (const wchar_t *name : { L"TachClass", L"IdleRpm", L"RedlineRpm", L"MaxRpm", L"SpeedMax", L"BoostMax" }) WritePrivateProfileStringW(section.c_str(), name, nullptr, ini.c_str());
+    for (const wchar_t *name : { L"TachClass", L"IdleRpm", L"RedlineRpm", L"MaxRpm", L"SpeedMax", L"BoostMax", L"BoostProfile" }) WritePrivateProfileStringW(section.c_str(), name, nullptr, ini.c_str());
     wchar_t rest[8] = {};
     if (!GetPrivateProfileSectionW(section.c_str(), rest, 8, ini.c_str())) WritePrivateProfileStringW(section.c_str(), nullptr, nullptr, ini.c_str());
 }
 
-// The six scales a truck can have of its own: copied from one set of settings into another, and compared.
+// The seven scales a truck can have of its own: copied from one set of settings into another, and compared.
 static void ScalesCopy(GaugeSettings &to, const GaugeSettings &from)
 {
     to.tachClass = from.tachClass;
@@ -352,12 +410,13 @@ static void ScalesCopy(GaugeSettings &to, const GaugeSettings &from)
     to.maxRpm = from.maxRpm;
     to.speedMax = from.speedMax;
     to.boostMax = from.boostMax;
+    to.boostProfile = from.boostProfile;
 }
 
 static bool ScalesSame(const GaugeSettings &a, const GaugeSettings &b)
 {
     return a.tachClass == b.tachClass && a.idleRpm == b.idleRpm && a.redlineRpm == b.redlineRpm && a.maxRpm == b.maxRpm && a.speedMax == b.speedMax &&
-           a.boostMax == b.boostMax;
+           a.boostMax == b.boostMax && a.boostProfile == b.boostProfile;
 }
 
 // The settings as the mod's thread keeps them. plain is what [Gauges] holds. s is what is in force: plain, with the
@@ -375,7 +434,7 @@ static void SettingsFor(SettingsState &st, const char *key)
     st.changed = false;
 }
 
-// An edit from the tab, in. A scale changed while a truck is driven makes the six scales that truck's own, and
+// An edit from the tab, in. A scale changed while a truck is driven makes the seven scales that truck's own, and
 // they stay out of the plain ones from then on. Everything else on the tab is every truck's.
 static void SettingsTake(SettingsState &st, const GaugeSettings &in)
 {
@@ -476,13 +535,16 @@ static void LogSettings(const GaugeSettings &s)
     const GaugeScale k = GaugeScaleOf(s);
     char key[32];
     KeyName(s.toggleKey, key, sizeof key);
-    Log(L"settings: %s layout, %s style, size x%g, opacity %g, offset %g / %g, dials:%s%s%s%s", layouts[s.layout], styles[s.style], s.scale, s.opacity, s.offsetX,
-        s.offsetY, s.showTemp ? L" temperature" : L"", s.showBoost ? L" boost" : L"", s.showAir ? L" air" : L"", s.showLamps ? L" lamps" : L"");
-    Log(L"settings: %s scales: idle %.0f rpm, red zone from %.0f of %.0f, speedometer to %.0f km/h, boost to %g bar; units %s, %s, %s", classes[s.tachClass], k.idle, k.redline, k.max,
-        k.speedMax, k.boost, s.mph ? L"mph" : L"km/h", s.psi ? L"psi" : L"bar", s.fahrenheit ? L"F" : L"C");
+    static const wchar_t *oils[kOilGaugeCount] = { L"", L", the oil as a second needle in the temperature dial", L", the oil in a dial of its own" },
+                         *profiles[kSpoolCount] = { L"standard", L"small and quick", L"big and slow", L"two stages" };
+    Log(L"settings: %s layout, %s style, size x%g, opacity %g, offset %g / %g, dials:%s%s%s%s%s", layouts[s.layout], styles[s.style], s.scale, s.opacity, s.offsetX,
+        s.offsetY, s.showTemp ? L" temperature" : L"", s.showBoost ? L" boost" : L"", s.showAir ? L" air" : L"", s.showLamps ? L" lamps" : L"", oils[s.oilGauge]);
+    Log(L"settings: %s scales: idle %.0f rpm, red zone from %.0f of %.0f, speedometer to %.0f km/h, boost to %g bar, a %s turbo; units %s, %s, %s", classes[s.tachClass], k.idle,
+        k.redline, k.max, k.speedMax, k.boost, profiles[s.boostProfile], s.mph ? L"mph" : L"km/h", s.psi ? L"psi" : L"bar", s.fahrenheit ? L"F" : L"C");
     Log(L"settings: tilt lamp amber from %g degrees to a side, red from %g, red from %g up or down a slope", s.rollWarnDeg, s.rollDangerDeg, s.pitchDangerDeg);
     Log(L"settings: coolant warm after %g minutes of driving, in the red zone after %g minutes floored with the wheels spinning at a standstill, cool %g minutes after the engine stops, %g C outside",
         s.warmUpMinutes, s.overheatMinutes, s.coolDownMinutes, s.ambientC);
+    Log(L"settings: the oil warm after %g minutes of driving, too hot from %g C", s.oilWarmUpMinutes, s.oilWarnC);
     Log(L"settings: the radiator has all its air from %g km/h; engine damage %s: %g percent a minute at 125 C, %g percent a minute for a cold engine at the red zone at 0 C",
         s.airFullKmh, s.damage ? L"on" : L"off", s.hotDamage, s.coldDamage);
     Log(L"settings: sound volume %d of 100%s", s.soundVolume, s.soundsOnly ? L", sounds only: the cluster is not drawn" : L"");
@@ -534,7 +596,8 @@ struct TruckWatch
     RangeModel range;           // the range of the truck with the tank it holds
     TiltModel tilt;             // how the truck stands, and the tilt lamp
     int probedLamp;             // the tilt lamp the probe wrote last
-    TempModel temp;             // the coolant temperature of every truck driven since the game started
+    TempModel temp;             // the coolant and oil temperatures of every truck driven since the game started
+    OilWarning oil;             // the oil warning: on while the driven truck's oil is too hot
     int probedZone;             // where the coolant stood when the probe wrote last (TempZone)
     DamageModel damage;         // what the temperature costs the engine of the truck at modelVehicle
     EngineRecord engine;        // the record of the engine of the truck at engineVehicle
@@ -672,7 +735,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         const float dt = w.modelAt && now - w.modelAt < 1000 ? SettingsRange((now - w.modelAt) / 1000.0f, 0.001f, 0.2f) : 0.05f;
         TachStep(w.tach, raw, scale, dt);
         // the boost, and a lift of the pedal under it, which is heard (sound.h). With the probe on it is logged
-        const int lift = BoostStep(w.boost, raw, TachShare(w.tach, scale), scale.boost, dt);
+        const int lift = BoostStep(w.boost, raw, TachShare(w.tach, scale), scale.boost, s.boostProfile, dt);
         if (lift != kLiftNone && probe)
             Log(L"boost: a %s at %.2f bar of the turbo's %.2f, %.2f of its full sound", lift == kLiftBlowOff ? L"blow-off" : L"flutter", w.boost.lastBar, scale.boost, w.boost.lastVolume);
         LiftSound sound;
@@ -684,6 +747,11 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         RangeStep(w.range, kind, raw, dt);
         TiltStep(w.tilt, raw, s, dt);
         TempStep(w.temp, kind, raw, TachShare(w.tach, scale), s, dt);
+        // the oil warning: heard every few seconds while the oil is too hot, and said in the log when it comes and goes
+        const bool oilWas = w.oil.on;
+        if (OilWarnStep(w.oil, w.temp, raw, s, dt)) SoundPlay(kSoundOil, OilBeepGain(s.soundVolume), 1.0f);
+        if (w.oil.on != oilWas)
+            Log(w.oil.on ? L"oil: %.1f C, too hot from %g C: the lamp blinks and the warning sounds" : L"oil: %.1f C, the warning is over", w.temp.oil, s.oilWarnC);
         // the engine's record, for each truck as it is first driven; one that was not found is looked for again every
         // five seconds
         if (w.refs.vehicle != w.engineVehicle || (!w.engine.found && now >= w.engineAt)) EngineLook(w, m, now);
@@ -736,7 +804,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                   TempZone(w.temp) != w.probedZone || DamageAdding(w.damage, s) != w.probedAdding ||
                   w.boost.flutters + w.boost.blowOffs != w.probedLifts))
     {
-        char first[640], second[1024], third[512], fourth[256], fifth[400], sixth[1024], seventh[400];
+        char first[640], second[1024], third[512], fourth[256], fifth[640], sixth[1024], seventh[400];
         TruckProbeText(raw, world, w.byWay, first, sizeof first, second, sizeof second);
         ModelProbeText(raw, w.tach, w.range, scale, third, sizeof third);
         Log(L"probe: %S", first);
@@ -764,12 +832,17 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     return driving && now - w.drivingSince >= 500;
 }
 
-// The tab's three buttons: the turbo's sound of one strength, as loud as the settings in force have it at the boost
-// that strength stands for.
+// The tab's buttons: the turbo's sound of one strength, as loud as the settings in force have it at the boost that
+// strength stands for, and the oil warning.
 void SoundHear(int tier)
 {
     GaugeSettings s;
     SettingsGet(s);
+    if (tier == kSoundOil)
+    {
+        SoundPlay(kSoundOil, OilBeepGain(s.soundVolume), 1.0f);
+        return;
+    }
     static const float loud[kTurboTiers] = { 1.0f, 0.55f, 0.25f };
     LiftSound sound;
     if (tier >= 0 && tier < kTurboTiers && LiftSoundOf(kLiftBlowOff, loud[tier], s.soundVolume, 0.0f, sound)) SoundPlay(tier, sound.gain, sound.pitch);
@@ -821,6 +894,11 @@ static DWORD WINAPI Run(void *)
     TruckIdentity truck = {};
     TruckWatch watch = {};
     const TruckMemory memory = { PeekGame, g_base, PokeGame };
+    // the map the truck drives on, and its own outside temperature where its section has one (mapOwn). The game's
+    // name for the map is not read yet, so map stays "" and AmbientC of [Gauges] is in force everywhere.
+    char map[64] = "", mapRead[64] = "";
+    float mapC = 0.0f;
+    bool mapOwn = false, mapAsk = true;
     for (;;)
     {
         Sleep(50);
@@ -890,10 +968,27 @@ static DWORD WINAPI Run(void *)
             visible = !visible;
             Log(L"cluster %s", visible ? L"shown" : L"hidden");
         }
+        // the outside temperature in force: the map's own, looked up again when the map changes or the ini was
+        // read or saved
+        if (strcmp(mapRead, map) || edited) mapAsk = true;
+        if (mapAsk)
+        {
+            const bool before = mapOwn;
+            mapOwn = MapAmbient(map, mapC);
+            if (strcmp(mapRead, map) || mapOwn != before)
+            {
+                if (mapOwn) Log(L"map: %S, %g C outside (its section in Gauges.ini)", map, mapC);
+                else if (map[0]) Log(L"map: %S has no section in Gauges.ini, so it is %g C outside (AmbientC)", map, s.ambientC);
+            }
+            strcpy_s(mapRead, map);
+            mapAsk = false;
+        }
+        GaugeSettings inForce = s;
+        if (mapOwn) inForce.ambientC = mapC;
         // what the cluster shows: the truck being driven; with the ini's Demo, demo values while none is
         TruckRaw raw;
         World world;
-        const bool driving = TruckPass(watch, memory, s, front, raw, world);
+        const bool driving = TruckPass(watch, memory, inForce, front, raw, world);
         const TruckIdentity &now = watch.who.taken;
         if (strcmp(now.key, truck.key))
         {
@@ -919,21 +1014,27 @@ static DWORD WINAPI Run(void *)
         GaugeView v = {};
         strcpy_s(v.truck, truck.key);
         v.truckOwn = set.own;
+        strcpy_s(v.map, map);
+        v.mapOwn = mapOwn;
+        v.ambientC = inForce.ambientC;
         v.demo = !driving && s.demo;
         v.hidden = !visible ? kHiddenByToggle : s.soundsOnly ? kHiddenSoundsOnly : driving || s.demo ? kShown : kHiddenNoTruck;
         v.show = v.hidden == kShown;
         if (driving)
         {
-            TruckToState(raw, world, s, v.st);
+            TruckToState(raw, world, inForce, v.st);
             v.st.rpm = watch.tach.rpm;
             v.st.boostBar = watch.boost.bar;
             v.st.rangeKm = watch.range.rangeKm;
             v.st.tilt = watch.tilt.running ? watch.tilt.lamp : -1;
             v.st.rollDeg = watch.tilt.rollDeg;
             v.st.tempC = watch.temp.temp;
+            v.st.oilC = watch.temp.oil;
             v.st.cold = TempCold(watch.temp);
-            // the damage lamp blinks while the model adds damage, and for two seconds after a write
+            // the damage lamp blinks while the model adds damage, and for two seconds after a write; the oil lamp
+            // while the oil is too hot
             const ULONGLONG ms = GetTickCount64();
+            v.st.oilHot = OilLamp(watch.oil, ms);
             v.st.damage = DamageLamp(v.st.damage, DamageAdding(watch.damage, s) || (watch.addedAt && ms - watch.addedAt < 2000), ms);
             v.engineDamage = raw.damage;
             v.engineCapacity = raw.damageKnown ? raw.damageCapacity : 0;
@@ -965,8 +1066,9 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
 // GAUGES_SETTINGS_TEST. It works on a Gauges.ini next to itself: a missing ini comes out as the defaults with the help
 // text, every key reads back the same (every setting is given a value that is not its default, so a key that is never
 // written shows), the help text and keys the mod does not know survive a write, values that are no numbers give the
-// defaults, values out of range are held to it, and the scales fit each other. With an ini as its argument, a copy of
-// that file must read back unchanged after a write.
+// defaults, values out of range are held to it, the scales fit each other, a truck's own scales come and go with its
+// section, and the maps' sections are written once and read. With an ini as its argument, a copy of that file must
+// read back unchanged after a write.
 bool OverlayInit(HMODULE) { return false; }
 volatile LONG g_pageCapturing = 0, g_modOff = 0;
 
@@ -979,7 +1081,8 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.rollWarnDeg == b.rollWarnDeg && a.rollDangerDeg == b.rollDangerDeg && a.pitchDangerDeg == b.pitchDangerDeg &&
            a.warmUpMinutes == b.warmUpMinutes && a.overheatMinutes == b.overheatMinutes && a.coolDownMinutes == b.coolDownMinutes && a.ambientC == b.ambientC &&
            a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.coldDamage == b.coldDamage &&
-           !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly;
+           !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly &&
+           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC;
 }
 
 static int g_failed = 0;
@@ -1010,6 +1113,8 @@ int wmain(int argc, wchar_t **argv)
           "defaults: the coolant warm after 3 minutes, in the red zone after 1.5, cool after 15, with 15 C outside");
     Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.coldDamage == 5.0f,
           "defaults: the radiator's full airflow from 30 km/h, engine damage on, 10 percent a minute for the heat and 5 for the cold");
+    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 8.0f && d.oilWarnC == 125.0f && d.boostProfile == kSpoolStandard,
+          "defaults: the oil as a second needle, warm after 8 minutes, too hot from 125 C; the standard turbo");
 
     // keys the mod does not know, in its own section and in another one
     WritePrivateProfileStringW(kIniSection, L"FromALaterVersion", L"7", ini.c_str());
@@ -1048,6 +1153,10 @@ int wmain(int argc, wchar_t **argv)
     c.probe = 1;
     c.soundVolume = 80;
     c.soundsOnly = true;
+    c.oilGauge = kOilDial;
+    c.boostProfile = kSpoolTwoStage;
+    c.oilWarmUpMinutes = 12.5f;
+    c.oilWarnC = 132.0f;
     const bool allChanged = c.layout != d.layout && c.style != d.style && c.faceOpacity != d.faceOpacity && c.offsetX != d.offsetX && c.offsetY != d.offsetY &&
                             c.scale != d.scale && c.opacity != d.opacity && c.mph != d.mph && c.psi != d.psi && c.fahrenheit != d.fahrenheit &&
                             c.showTemp != d.showTemp && c.showBoost != d.showBoost && c.showAir != d.showAir && c.showLamps != d.showLamps &&
@@ -1056,7 +1165,8 @@ int wmain(int argc, wchar_t **argv)
                             c.pitchDangerDeg != d.pitchDangerDeg && c.warmUpMinutes != d.warmUpMinutes && c.overheatMinutes != d.overheatMinutes &&
                             c.coolDownMinutes != d.coolDownMinutes && c.ambientC != d.ambientC && c.airFullKmh != d.airFullKmh && c.damage != d.damage &&
                             c.hotDamage != d.hotDamage && c.coldDamage != d.coldDamage && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
-                            c.demo != d.demo && c.probe != d.probe && c.soundVolume != d.soundVolume && c.soundsOnly != d.soundsOnly;
+                            c.demo != d.demo && c.probe != d.probe && c.soundVolume != d.soundVolume && c.soundsOnly != d.soundsOnly &&
+                            c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC;
     WriteIni(c);
     ReadIni(b);
     Check(allChanged, "ini: the test changes every setting from its default");
@@ -1077,7 +1187,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 44, "ini: the help text survives a write (44 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 56, "ini: the help text survives a write (56 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());
@@ -1122,6 +1232,13 @@ int wmain(int argc, wchar_t **argv)
     ReadIni(b);
     Check(held && b.airFullKmh == kAirFullRange[1] && b.hotDamage == d.hotDamage && b.damage,
           "ini: the radiator's speed stays between 10 and 80 km/h, the damage rates between 0 and 100, and a rate that is no number gives the default");
+    WritePrivateProfileStringW(kIniSection, L"OilWarmUpMinutes", L"0", ini.c_str());
+    WritePrivateProfileStringW(kIniSection, L"OilWarnC", L"400", ini.c_str());
+    WritePrivateProfileStringW(kIniSection, L"OilGauge", L"5", ini.c_str());
+    WritePrivateProfileStringW(kIniSection, L"BoostProfile", L"-1", ini.c_str());
+    ReadIni(b);
+    Check(b.oilWarmUpMinutes == kOilWarmUpRange[0] && b.oilWarnC == kOilWarnRange[1] && b.oilGauge == kOilNeedle && b.boostProfile == kSpoolStandard,
+          "ini: the oil's warm-up and warning temperature are held to their ranges, and an oil gauge or a turbo the mod does not have gives the default");
 
     // the scales in force
     GaugeScale k = GaugeScaleOf(d);
@@ -1181,13 +1298,14 @@ int wmain(int argc, wchar_t **argv)
         in.tachClass = kClassHeavy;
         in.speedMax = 70.0f;
         in.boostMax = 1.45f;
+        in.boostProfile = kSpoolLaggy;
         SettingsTake(state, in);
         in = state.s;
         in.scale = 1.5f;
         SettingsTake(state, in);
         SettingsWrite(state);
         Check(ckPlain && state.own && state.plain.scale == 1.5f && state.plain.tachClass == kClassScout && state.plain.speedMax == 0.0f && state.plain.boostMax == 0.0f &&
-              state.plain.redlineRpm == 5000.0f,
+              state.plain.boostProfile == kSpoolStandard && state.plain.redlineRpm == 5000.0f,
               "trucks: a second truck starts from the plain scales, and what is changed beside its scales still goes to every truck");
         // the game is started again: [Gauges] holds the plain settings, each truck its own scales
         SettingsState next = {};
@@ -1196,23 +1314,25 @@ int wmain(int argc, wchar_t **argv)
         const bool lrdBack = next.own && next.s.redlineRpm == 4500.0f && next.s.tachClass == kClassScout && next.s.maxRpm == 6000.0f && next.s.speedMax == 0.0f && next.s.boostMax == 0.0f && next.s.scale == 1.5f;
         SettingsFor(next, "chevrolet_ck1500");
         Check(SameSettings(next.plain, state.plain) && lrdBack && next.own && next.s.tachClass == kClassHeavy && next.s.speedMax == 70.0f && next.s.boostMax == 1.45f &&
-              GaugeScaleOf(next.s).boost == 1.45f && next.s.redlineRpm == 5000.0f,
+              GaugeScaleOf(next.s).boost == 1.45f && next.s.boostProfile == kSpoolLaggy && next.s.redlineRpm == 5000.0f,
               "trucks: after a new start [Gauges] reads back as the plain settings and each truck has its own scales again");
         wchar_t kept[16] = {}, later2[16] = {};
         GetPrivateProfileStringW(L"Truck:someone_elses", L"RedlineRpm", L"", kept, 16, ini.c_str());
         GetPrivateProfileStringW(L"Truck:lrd_110/1914924", L"FromALaterVersion", L"", later2, 16, ini.c_str());
         Check(!wcscmp(kept, L"1800") && !wcscmp(later2, L"7"), "trucks: the section of a truck that was not driven, and a key the mod does not know in a truck's section, survive the writes");
-        // a section that holds one of the six takes the others from [Gauges]; what is out of range is held to it
+        // a section that holds one of the seven takes the others from [Gauges]; what is out of range is held to it
         WritePrivateProfileStringW(L"Truck:half", L"MaxRpm", L"4000", ini.c_str());
         WritePrivateProfileStringW(L"Truck:wild", L"RedlineRpm", L"50", ini.c_str());
         WritePrivateProfileStringW(L"Truck:wild", L"TachClass", L"9", ini.c_str());
         WritePrivateProfileStringW(L"Truck:wild", L"IdleRpm", L"nan", ini.c_str());
+        WritePrivateProfileStringW(L"Truck:wild", L"BoostProfile", L"9", ini.c_str());
         SettingsFor(next, "wild");
-        const bool wild = next.own && next.s.redlineRpm == kRedlineRange[0] && next.s.tachClass == kClassTruck && next.s.idleRpm == next.plain.idleRpm;
+        const bool wild = next.own && next.s.redlineRpm == kRedlineRange[0] && next.s.tachClass == kClassTruck && next.s.idleRpm == next.plain.idleRpm &&
+                          next.s.boostProfile == kSpoolStandard;
         SettingsFor(next, "half");
         Check(wild && next.own && !next.changed && next.s.maxRpm == 4000.0f && next.s.redlineRpm == 5000.0f && next.s.tachClass == kClassScout,
               "trucks: a section takes from [Gauges] what it leaves out, and its values are held to their ranges as those of [Gauges] are");
-        // a save after a change of something else leaves such a section as it is; after a change of a scale it has all six
+        // a save after a change of something else leaves such a section as it is; after a change of a scale it has all seven
         wchar_t halfRed[16] = {};
         in = next.s;
         in.opacity = 0.75f;
@@ -1225,7 +1345,10 @@ int wmain(int argc, wchar_t **argv)
         SettingsTake(next, in);
         SettingsWrite(next);
         GetPrivateProfileStringW(L"Truck:half", L"RedlineRpm", L"", halfRed, 16, ini.c_str());
-        Check(leftAlone && !wcscmp(halfRed, L"5000") && !next.changed, "trucks: a save leaves a truck's section as it is until one of its scales is changed on the tab, and then writes all six");
+        wchar_t halfTurbo[16] = {};
+        GetPrivateProfileStringW(L"Truck:half", L"BoostProfile", L"", halfTurbo, 16, ini.c_str());
+        Check(leftAlone && !wcscmp(halfRed, L"5000") && !wcscmp(halfTurbo, L"0") && !next.changed,
+              "trucks: a save leaves a truck's section as it is until one of its scales is changed on the tab, and then writes all seven");
         // the truck gives its scales up: they go out of the ini, what else its section holds stays, and a section left empty goes
         SettingsFor(next, "lrd_110/1914924");
         SettingsDrop(next);
@@ -1255,6 +1378,27 @@ int wmain(int argc, wchar_t **argv)
         GetPrivateProfileStringW(L"Truck:someone_elses", L"RedlineRpm", L"", kept, 16, ini.c_str());
         Check(halfOwn && !next.own && SameSettings(next.s, defaults) && SameSettings(fromIni, defaults) && !halfMax[0] && !wcscmp(kept, L"1800"),
               "trucks: the defaults take the plain settings and the driven truck's own scales, and leave the other trucks' sections as they were");
+    }
+
+    // the maps' sections: written into an ini that has none, read, held to the range, and one taken out stays out
+    {
+        DeleteFileW(ini.c_str());
+        GaugeSettings fresh;
+        ReadIni(fresh);
+        float michigan = 0.0f, taymyr = 0.0f, none = 0.0f;
+        const bool written = MapAmbient("michigan", michigan) && michigan == 12.0f && MapAmbient("taymyr", taymyr) && taymyr == -20.0f;
+        const bool unknown = !MapAmbient("nowhere", none) && !MapAmbient("", none);
+        WritePrivateProfileStringW(L"Map:michigan", L"AmbientC", L"-3", ini.c_str());
+        WritePrivateProfileStringW(L"Map:hot", L"AmbientC", L"99", ini.c_str());
+        WritePrivateProfileStringW(L"Map:alaska", nullptr, nullptr, ini.c_str());
+        ReadIni(fresh);
+        float hot = 0.0f, alaska = 0.0f;
+        Check(written && unknown && MapAmbient("michigan", michigan) && michigan == -3.0f && MapAmbient("hot", hot) && hot == kAmbientRange[1] && !MapAmbient("alaska", alaska),
+              "maps: an ini without map sections gets them, a map's temperature is read and held to the range, and a section taken out or changed by hand stays so");
+        DeleteFileW(ini.c_str());
+        WritePrivateProfileStringW(kIniSection, L"Layout", L"1", ini.c_str());
+        ReadIni(fresh);
+        Check(fresh.layout == kLayoutBlock && MapAmbient("michigan", michigan) && michigan == 12.0f, "maps: an ini from an earlier version gets the map sections and keeps its settings");
     }
 
     // the tab's edits and the turn they were made from

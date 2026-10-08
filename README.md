@@ -2,9 +2,9 @@
 
 A gauge cluster for the truck you drive in SnowRunner: analogue dials in the style of a truck dashboard, drawn over the game in the game's own font.
 
-The cluster has a speedometer, a tachometer with the gear, fuel with the range, coolant temperature, boost pressure, brake air pressure and eight lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage, cold engine and tilt.
+The cluster has a speedometer, a tachometer with the gear, fuel with the range, coolant and oil temperature, boost pressure, brake air pressure and nine lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage, cold engine, tilt and oil temperature.
 
-This is version 0.10.0. It reads the truck's own values for the speedometer, the gear, the fuel gauge and seven of the lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage and tilt. The game has no engine speed, no range, no coolant temperature and no boost pressure, so the mod works those out from what the truck does, and lights the cold lamp by the temperature. The temperature also costs the engine: overheating it, or revving it high while cold, adds to the game's own engine damage. `Damage=0` switches that off. The scales of the tachometer and the speedometer and the turbo's boost can be set for each kind of truck. Brake air pressure comes with a later version and rests until then.
+This is version 0.11.0. It reads the truck's own values for the speedometer, the gear, the fuel gauge and seven of the lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage and tilt. The game has no engine speed, no range, no coolant or oil temperature and no boost pressure, so the mod works those out from what the truck does, and lights the cold and oil lamps by the temperatures. The temperature also costs the engine: overheating it, or revving it high while cold, adds to the game's own engine damage. `Damage=0` switches that off. The scales of the tachometer and the speedometer and the turbo's boost and character can be set for each kind of truck. Brake air pressure comes with a later version and rests until then.
 
 ## What you need
 
@@ -31,7 +31,9 @@ To update, copy the new file over the old one. Keep only one `.asi` file of this
 - The tilt lamp: a small truck seen from behind that leans as yours does. It is green while the truck stands level, amber from 15 degrees of lean to a side and red from 25, or from 35 degrees up or down a slope. A bump does not light it.
 - The coolant temperature. The game has none, so the mod works it out from the engine speed and how fast the truck drives. The pedal itself does not count: an engine revved high heats, whatever the foot does, and one pulling at low revs heats little. In neutral nothing pulls against the engine, and it makes a quarter of that heat. A cold engine starts at the outside temperature and is at 85 C after about three minutes of driving. The thermostat then holds it: about 86 C at idle, near 100 C when the engine revs high at speed. The needle goes into the red zone from 118 C only when the engine revs out at a crawl. At a standstill with the wheels spinning and the engine at the red zone that takes a minute and a half from 90 C, and longer at lower revs or with the truck still moving. From about 7 km/h up the needle stays out of the red zone: a truck in the low range at its own top speed runs hot and settles just under it. Back at idle the engine is at 100 C again within a minute. Water cools it too: from about half a metre of water at the truck's front, and with the engine standing in it (1.2 m and more) a hot engine is back at 100 C within half a minute, at any engine speed. A stopped engine cools from 90 C to 40 C in a quarter of an hour, and five times as fast in deep water. Each kind of truck keeps its own temperature while the game runs: one you left cools while you drive another, and is as warm as that when you take it again, out of the garage too. The mod knows a truck by its kind, so two trucks of the same kind share one temperature.
 - The cold lamp is lit while the coolant is below 60 C.
-- Boost pressure. The game has none, so the mod works it out from the pedal and the engine speed. The turbo makes nothing near idle and all it can from about two thirds of the way to the red zone, with the pedal floored. The needle lags behind the pedal: floored at the red zone the boost is there in under a second, and pulling away from a standstill it takes a second or more. It falls away within half a second when the foot comes off, and in neutral the turbo makes a quarter of its boost at most. How much a truck's turbo reaches is the setting `BoostMax`: trucks 1.8 bar, scouts 1, heavy trucks 2.
+- The oil temperature, as a second, amber needle in the coolant's dial or on a dial of its own left of it. The oil follows the coolant slowly: driven as usual it is at 85 C after about eight minutes, five after the coolant, and a stopped engine's oil keeps its heat longer. It heads for the coolant's temperature and over it by the work the engine does: about 2 degrees over at idle and 14 at full load. Each kind of truck keeps its own, as with the coolant.
+- The oil lamp blinks while the oil is too hot, from 125 C, and a warning sounds every four seconds until the oil is two degrees under that or the engine stops.
+- Boost pressure. The game has none, so the mod works it out from the pedal and the engine speed. The turbo makes nothing near idle and all it can from about two thirds of the way to the red zone, with the pedal floored. The needle lags behind the pedal: floored at the red zone the boost is there in under a second, and pulling away from a standstill it takes a second or more. It falls away within half a second when the foot comes off, and in neutral the turbo makes a quarter of its boost at most. How much a truck's turbo reaches is the setting `BoostMax`: trucks 1.8 bar, scouts 1, heavy trucks 2. How it gets there is `BoostProfile`: the standard turbo, a small quick one that comes in early with little lag, a big slow one that comes in late and takes long at low revs, or two stages, a small turbo early and a big one after it.
 - The turbo's flutter. Take your foot off the pedal under boost and the air beats back through the compressor wheel, slower and fainter until it is gone. The more boost the lift had, the longer and louder, and no two in a row are the same. It stops when the pedal goes down again.
 - Engine damage from the temperature. An engine in the red zone loses 10 percent of what it can take every minute at 125 C. It loses nothing at 118 C, less than that between the two and more above: floored at a standstill with the wheels spinning, an engine is used up about five minutes after it enters the red zone. A cold engine suffers when it revs high: below 60 C, with the needle more than half way from idle to the red zone, it loses up to 5 percent a minute (at the red zone at 0 C), and less the warmer it is and the lower it revs. A cold start revved to the red zone costs 2 to 3 percent of the engine, and one held to half way costs nothing. It goes by the engine speed, so a keyboard's pedal, which is either up or floored, costs no more than a gentle foot that revs as high. `ColdDamagePercentPerMinute` set to 0 switches that part off. All of it goes into the game's own engine damage, so a garage repairs it, and past the engine's own threshold the game takes torque away and burns more fuel, as with any engine damage. The mod stops one point short of what the engine takes and never stops the engine itself. With `Damage` off the temperature is only shown.
 
@@ -51,16 +53,19 @@ The Gauges tab in ReShade's overlay edits every setting while you play. Changes 
 | Opacity of the whole cluster | `Opacity` 0.1 to 1 | 1 |
 | Miles per hour, psi, Fahrenheit | `Mph`, `Psi`, `Fahrenheit` | off: km/h, bar, Celsius |
 | The temperature, boost and air dials and the lamps | `ShowTemp`, `ShowBoost`, `ShowAir`, `ShowLamps` | on, on, off, on |
+| The oil temperature: not shown, a second needle in the temperature dial, or a dial of its own | `OilGauge` 0, 1 or 2 | second needle |
 | Truck class, which sets the scales. Each kind of truck can have its own, see below | `TachClass` 0 truck, 1 scout, 2 heavy | truck |
 | Own numbers for idle, the start of the red zone, the tachometer's top and the speedometer's top. Each kind of truck can have its own | `IdleRpm`, `RedlineRpm`, `MaxRpm`, `SpeedMax` | 0: the class's own |
 | The boost in bar the turbo reaches with the pedal floored at high engine speed, from 0.3 to 2. Each kind of truck can have its own | `BoostMax` | 0: the class's own |
+| How the turbo builds its boost: standard, small and quick, big and slow, or two stages. Each kind of truck can have its own | `BoostProfile` 0, 1, 2 or 3 | standard |
 | The tilt lamp: amber and red from this many degrees of lean to a side, red from this many up or down a slope | `RollWarnDeg`, `RollDangerDeg`, `PitchDangerDeg` | 15, 25, 35 |
 | The coolant: minutes a cold engine takes from 15 C to 85 C when it is driven as usual, minutes from 90 C into the red zone with the engine revved out and the wheels spinning at a standstill, minutes a stopped engine takes from 90 C to 40 C | `WarmUpMinutes`, `OverheatMinutes`, `CoolDownMinutes` | 3, 1.5, 15 |
 | The outside temperature in degrees C, from 40 below to 50 | `AmbientC` | 15 |
 | The speed in km/h from which the radiator gets all the air that driving gives it, from 10 to 80 | `AirFullKmh` | 30 |
+| The oil: minutes it takes from 15 C to 85 C when the engine is driven as usual, from 1 to 60, and the temperature in C from which it is too hot, from 100 to 150 | `OilWarmUpMinutes`, `OilWarnC` | 8, 125 |
 | The temperature costs the engine | `Damage` 0 or 1 | on |
 | Percent of the engine lost a minute at 125 C, and by a cold engine at the red zone at 0 C, each from 0 to 100 | `HotDamagePercentPerMinute`, `ColdDamagePercentPerMinute` | 10, 5 |
-| How loud the turbo's flutter is, from 0 to 100. 0 = no sound | `SoundVolume` | 50 |
+| How loud the turbo's flutter and the oil warning are, from 0 to 100. 0 = no sound | `SoundVolume` | 50 |
 | The sounds without the cluster | `SoundsOnly` 0 or 1 | off |
 | A key that hides and shows the cluster | `ToggleKey`, a virtual key code | none |
 | Pad buttons that do the same | `PadToggle`, as `LB+DPadUp` | None |
@@ -77,7 +82,7 @@ The scales by class:
 | Speedometer top | 100 km/h | 120 km/h | 80 km/h |
 | Boost | 1.8 bar | 1 bar | 2 bar |
 
-Each kind of truck can have its own scales: the class and the five numbers. Change one of the six on the tab while you drive a truck, and all six are kept for that kind of truck. They are back whenever you drive one: after a recovery, out of the garage, after a change of trucks and after a new start of the game. The Scales section of the tab names the truck it sets and says whether the scales are its own. Its button "Back to the plain scales" lets the truck give them up.
+Each kind of truck can have its own scales: the class, the five numbers and the turbo. Change one of the seven on the tab while you drive a truck, and all seven are kept for that kind of truck. They are back whenever you drive one: after a recovery, out of the garage, after a change of trucks and after a new start of the game. The Scales section of the tab names the truck it sets and says whether the scales are its own. Its button "Back to the plain scales" lets the truck give them up.
 
 The plain scales are the ones in the ini's `[Gauges]` section. Every truck without scales of its own shows them, and the tab sets them while no truck is driven: in the game's main menu and in the garage. A truck's own scales stand in a section of their own, named after the truck as the game's files name it:
 
@@ -88,15 +93,26 @@ IdleRpm=0
 RedlineRpm=4500
 MaxRpm=0
 SpeedMax=0
+BoostMax=0
+BoostProfile=2
 ```
 
 `Gauges.log` names the truck each time you take another one. A section can be written by hand as well, and a key it leaves out is taken from `[Gauges]`. Every other setting is the same for all trucks.
+
+A map can have an outside temperature of its own, in a section named after the map:
+
+```
+[Map:alaska]
+AmbientC=-12
+```
+
+The mod writes such sections for the game's regions into an ini that has none. Their names are placeholders for now, and the mod does not yet read which map a truck is on, so `AmbientC` of `[Gauges]` is in force everywhere until it does.
 
 Each of the three coolant times changes one thing: how fast a cold engine warms up, how fast a hot one overheats, how fast a stopped one cools. The temperatures the engine settles at stay as they are. The outside temperature moves those: in frost the engine takes longer to warm up and cannot be overheated, and on a hot day it overheats sooner. `AirFullKmh` moves them at a crawl: lower keeps a slow, hard pulling engine cooler, and higher makes it overheat at speeds where it now stays out of the red zone.
 
 The cluster keeps its share of the screen: it is twice as large in pixels on a 2160p screen as on a 1080p one.
 
-The flutter comes in three strengths, for a lift at full boost, at half and at little, with three recordings of each. To hear recordings of your own instead, put them next to `Gauges.asi` as `sounds\turbo_high_1.wav` to `turbo_high_4.wav`, and `turbo_mid_` and `turbo_low_` likewise: WAV files, PCM or float, up to six seconds. A strength with at least one file of yours plays only yours. The mod brings every sound to the same loudness, and `Gauges.log` says which ones it plays. The Gauges tab has a button for each strength.
+The flutter comes in three strengths, for a lift at full boost, at half and at little, with three recordings of each. To hear recordings of your own instead, put them next to `Gauges.asi` as `sounds\turbo_high_1.wav` to `turbo_high_4.wav`, and `turbo_mid_` and `turbo_low_` likewise: WAV files, PCM or float, up to six seconds. A strength with at least one file of yours plays only yours. The oil warning is two short beeps, and `sounds\oil_beep_1.wav` plays in their place. The mod brings every sound to the same loudness, and `Gauges.log` says which ones it plays. The Gauges tab has a button for each strength and one for the oil warning.
 
 The pad is only read. The game sees the toggle buttons too, so pick buttons it does not use while driving.
 
@@ -124,13 +140,13 @@ build.bat
 test.bat
 ```
 
-`build.bat` makes `out\Gauges.asi`, the four offline test programs in `out\test`, and `out\version.dll`, the loader, from the sources in `tools`. `test.bat` runs the tests: every setting through the ini and back, the trucks' own scales, the reader of the game's memory and the write of engine damage against a made up game, the engine speed, the range, the tilt, the coolant temperature and the engine damage on made up drives, and a preview that draws the cluster and the settings tab into PNG files in `out\preview` without the game. The preview needs the full Dear ImGui sources in `deps\imgui_src`, see `test\build_preview.bat`. Without them the rest is still built.
+`build.bat` makes `out\Gauges.asi`, the four offline test programs in `out\test`, and `out\version.dll`, the loader, from the sources in `tools`. `test.bat` runs the tests: every setting through the ini and back, the trucks' own scales, the reader of the game's memory and the write of engine damage against a made up game, the engine speed, the range, the tilt, the coolant and oil temperatures, the oil warning, the engine damage and the turbo's profiles on made up drives, and a preview that draws the cluster and the settings tab into PNG files in `out\preview` without the game. The preview needs the full Dear ImGui sources in `deps\imgui_src`, see `test\build_preview.bat`. Without them the rest is still built.
 
 The headers the mod is built with are in `deps`, each with its licence: the ReShade add-on API, Dear ImGui, and stb_truetype with stb_rect_pack.
 
 ## How it works
 
-A thread in the game process reads the driven truck's values from the game's memory 20 times a second, works out the engine speed, the range, the tilt and the coolant temperature from them, and keeps the settings. With `Damage` on, the same thread writes the engine damage that the temperature caused into the game, at most once a second and only while a truck is driven. ReShade calls the mod on every frame, and the mod draws the cluster with Dear ImGui's drawing calls, which ReShade hands to its add-ons. The text is baked from the game's own font files when the game starts, at the size the cluster has on your screen.
+A thread in the game process reads the driven truck's values from the game's memory 20 times a second, works out the engine speed, the range, the tilt, the boost and the coolant and oil temperatures from them, and keeps the settings. With `Damage` on, the same thread writes the engine damage that the temperature caused into the game, at most once a second and only while a truck is driven. ReShade calls the mod on every frame, and the mod draws the cluster with Dear ImGui's drawing calls, which ReShade hands to its add-ons. The text is baked from the game's own font files when the game starts, at the size the cluster has on your screen.
 
 The sounds are played through XAudio2 2.9, the copy the game brings or Windows' own, on a thread of their own. The mod takes the audio device when a sound is due and lets go of it a few seconds after the last one.
 

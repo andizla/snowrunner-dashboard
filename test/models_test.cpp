@@ -10,6 +10,8 @@
 // boost it floors the pedal at high and at low engine speed and lifts it fast, a little and slowly.
 // build.bat makes out\test\models_test.exe; test.bat runs it.
 //
+// "spool" prints the turbo's four profiles as numbers to draw (Spool).
+//
 // With a file as its argument it runs the models over a recorded drive instead and prints what they make of it. One
 // sample a line, numbers with spaces between: seconds, flags, stall, start timer, all wheel drive, gear, gear engaged,
 // automatic, power factor, throttle, the action's + 0xB4, speed in m/s, fuel, tank, engine damage and its capacity,
@@ -170,6 +172,7 @@ static int Replay(const char *path)
     std::vector<std::string> notes;
     unsigned long long truckNow = 0;
     uint64_t kindNow = 0;
+    float hottestOil = -1000.0f;
     float withTruck = 0.0f, driving = 0.0f, hottest = -1000.0f, inRed = 0.0f, loadSum = 0.0f, kmhSum = 0.0f, drivingAll = 0.0f;
     bool past60 = false, past85 = false;
     char line[2048];
@@ -213,7 +216,7 @@ static int Replay(const char *path)
             const float dt = fminf(left, kDt), before = tach.rpm;
             const bool was = tach.running;
             TachStep(tach, t, k, dt);
-            const int lift = BoostStep(boost, t, TachShare(tach, k), k.boost, dt);
+            const int lift = BoostStep(boost, t, TachShare(tach, k), k.boost, s.boostProfile, dt);
             if (lift == kLiftBlowOff) blowOffs++;
             if (lift == kLiftFlutter) flutters++;
             mostBoost = fmaxf(mostBoost, boost.bar);
@@ -272,19 +275,21 @@ static int Replay(const char *path)
                 notes.push_back(note);
             }
             hottest = fmaxf(hottest, temp.temp);
+            hottestOil = fmaxf(hottestOil, temp.oil);
             if (temp.temp >= kTempRed) inRed += dt;
         }
         last = seconds;
         samples++;
         printf("%8.2f gear %2d %s pedal %.2f wheels %5.2f of %5.2f | %4.0f rpm | %5.1f km/h | fuel %6.2f | range %6.1f km at %.3f l/km over %4.0f m, standing %.2f l/min | "
-               "coolant %5.1f C, load %.2f, heat %.2f, %.2f taken away | boost %.2f bar\n", seconds,
+               "coolant %5.1f C, load %.2f, heat %.2f, %.2f taken away, oil %5.1f C | boost %.2f bar\n", seconds,
                t.gearEngaged, t.automatic ? "A" : " ", TruckPedal(t), TruckDrivenSpin(t), TruckGearTop(t, t.gearEngaged), tach.rpm, t.speed * 3.6f, t.fuel, range.rangeKm,
-               range.perKm, range.way - range.mark[0].way, range.standing, temp.temp, temp.load, temp.heat, temp.cooling, boost.bar);
+               range.perKm, range.way - range.mark[0].way, range.standing, temp.temp, temp.load, temp.heat, temp.cooling, temp.oil, boost.bar);
     }
     fclose(f);
     printf("%d samples, %d steps: the largest change of the engine speed in one step %.0f rpm, the highest engine speed %.0f rpm, %d steps in the red zone (from %.0f rpm)\n",
            samples, steps, mostStep, mostRpm, redSteps, k.redline);
     for (const std::string &n : notes) printf("coolant: %s\n", n.c_str());
+    printf("oil: the hottest %.1f C\n", hottestOil);
     printf("coolant: the hottest %.1f C, %.0f s in the red zone (from %.0f C); while driving (%.0f s) the mean load was %.2f and the mean speed %.1f km/h\n", hottest, inRed, kTempRed,
            drivingAll, drivingAll > 0.0f ? loadSum / drivingAll : 0.0f, drivingAll > 0.0f ? kmhSum / drivingAll : 0.0f);
     printf("boost: the highest %.2f bar of the turbo's %.2f, %.0f s above half of it; %d blow-offs and %d flutters; from a floored pedal to nine tenths of it %d times, %.1f s on average, %.1f s the longest\n",
@@ -295,14 +300,14 @@ static int Replay(const char *path)
 
 // "sounds <folder>": the turbo's sounds as the mod plays them (files in the folder's sounds\, else what this test's
 // file carries, which is nothing, so made by code), written into the folder as turbo_high_1_heard.wav and so on, and
-// played on this machine's default device, as loud as SoundVolume=50: each strength once, then the strong one again,
-// cut short after 0.3 s as by the pedal going down.
+// played on this machine's default device, as loud as SoundVolume=50: each strength once, the oil warning, then the
+// strong one again, cut short after 0.3 s as by the pedal going down, which leaves the oil warning alone.
 static int Sounds(const char *folder)
 {
     std::wstring dir;
     for (const char *p = folder; *p; p++) dir += (wchar_t)(unsigned char)*p;
     if (!dir.empty() && dir.back() != L'\\') dir += L'\\';
-    for (int t = 0; t < kTurboTiers; t++)
+    for (int t = 0; t < kSoundTierCount; t++)
     {
         SoundSet set;
         SoundLoad(t, dir, set);
@@ -344,20 +349,61 @@ static int Sounds(const char *folder)
         SoundPlay(t, ls.gain, ls.pitch);
         Sleep(4500);
     }
+    SoundPlay(kSoundOil, OilBeepGain(50), 1.0f);
+    Sleep(1500);
     LiftSoundOf(kLiftBlowOff, 1.0f, 50, 0.0f, ls);
     SoundPlay(kTurboHigh, ls.gain, ls.pitch);
-    Sleep(300);
+    SoundPlay(kSoundOil, OilBeepGain(50), 1.0f);
+    Sleep(150);
     SoundQuiet();
-    Sleep(500);
-    const bool played = g_soundOpens == 1 && g_soundStarts[kTurboHigh] == 2 && g_soundStarts[kTurboMid] == 1 && g_soundStarts[kTurboLow] == 1 && g_soundHushed == 1;
-    printf("%s sounds: XAudio2 opened %ld time(s); started: full boost %ld, half %ld, little %ld; cut short by the pedal %ld\n", played ? "ok  " : "FAIL", g_soundOpens,
-           g_soundStarts[kTurboHigh], g_soundStarts[kTurboMid], g_soundStarts[kTurboLow], g_soundHushed);
+    Sleep(800);
+    const bool played = g_soundOpens == 1 && g_soundStarts[kTurboHigh] == 2 && g_soundStarts[kTurboMid] == 1 && g_soundStarts[kTurboLow] == 1 && g_soundStarts[kSoundOil] == 2 &&
+                        g_soundHushed == 1;
+    printf("%s sounds: XAudio2 opened %ld time(s); started: full boost %ld, half %ld, little %ld, the oil warning %ld; cut short by the pedal %ld\n", played ? "ok  " : "FAIL",
+           g_soundOpens, g_soundStarts[kTurboHigh], g_soundStarts[kTurboMid], g_soundStarts[kTurboLow], g_soundStarts[kSoundOil], g_soundHushed);
     return played ? 0 : 1;
+}
+
+// "spool": the turbo's four profiles as numbers to draw, on the truck class's scales and boost: the boost held at each
+// engine speed with the pedal floored (one line for each hundredth of the way from idle to the red zone), then the
+// boost second by second as a truck floored in first gear at a standstill gathers speed to the gear's top in six
+// seconds. Both as comma separated lines: what, x, then the four profiles.
+static int Spool()
+{
+    GaugeSettings s;
+    SettingsDefaults(s);
+    const GaugeScale k = GaugeScaleOf(s);
+    TruckRaw t = Truck();
+    Drive(t, 1, true, 0.0f, 1.0f);
+    printf("what,x,standard,quick,laggy,twostage\n");
+    for (int i = 0; i <= 100; i++)
+    {
+        printf("held,%.2f", i / 100.0f);
+        for (int p = 0; p < kSpoolCount; p++) printf(",%.4f", BoostTarget(t, i / 100.0f, k.boost, p));
+        printf("\n");
+    }
+    TachModel tach[kSpoolCount] = {};
+    BoostModel boost[kSpoolCount] = {};
+    for (int step = 0; step <= 200; step++)
+    {
+        const float at = step * kDt;
+        Drive(t, 1, true, fminf(at / 6.0f, 1.0f), 1.0f);
+        printf("pull,%.2f", at);
+        for (int p = 0; p < kSpoolCount; p++)
+        {
+            TachStep(tach[p], t, k, kDt);
+            BoostStep(boost[p], t, TachShare(tach[p], k), k.boost, p, kDt);
+            printf(",%.4f", boost[p].bar);
+        }
+        printf("\n");
+    }
+    return 0;
 }
 
 int main(int argc, char **argv)
 {
     if (argc > 2 && !strcmp(argv[1], "sounds")) return Sounds(argv[2]);
+    if (argc > 1 && !strcmp(argv[1], "spool")) return Spool();
     if (argc > 1) return Replay(argv[1]);
     GaugeSettings s;
     SettingsDefaults(s);
@@ -843,7 +889,7 @@ int main(int argc, char **argv)
         {
             TempModel p = {};
             TruckRaw q = c;
-            char line[320];
+            char line[640];
             TempProbeText(q, p, set, line, sizeof line);
             const bool notYet = strstr(line, "not known yet") != nullptr;
             Heat(p, q, 1, set, 10.0f, 1.0f, 1.0f, 18.0f);
@@ -915,7 +961,7 @@ int main(int argc, char **argv)
         const float coldest = Heat(ford, stopped, 1, set, 3.0f * 3600.0f, 0.0f, 0.0f, 0.0f);
         Check(half > 20.0f && half < 90.0f && Near(cools, 180.0f, 3.0f) && coldest >= set.ambientC && coldest < set.ambientC + 0.1f,
               "water: at axle height it does half as much, a stopped engine in deep water cools five times as fast, and nothing cools below the air outside");
-        char line[400];
+        char line[640];
         depths(0.85f, 0.85f);
         TempStep(ford, 1, wet, 1.0f, set, kDt);
         TempProbeText(wet, ford, set, line, sizeof line);
@@ -931,6 +977,131 @@ int main(int argc, char **argv)
         counted.clockKnown = false;
         Check(starts && soon && stands && moves && !ClockStands(watch, counted, 9000),
               "clock: the models wait once the game's count of the truck's seconds has stood still for a second, go on when it moves, and never wait for a truck without the count");
+    }
+
+    // the oil: it follows the coolant slowly, runs a little over it, keeps its heat longer, and warns when it is too hot
+    {
+        GaugeSettings set;
+        SettingsDefaults(set);
+        TruckRaw c = Truck();
+        c.gear = c.gearEngaged = 1;
+        c.automatic = 1;
+        // driven as usual from cold: the coolant at 85 C after WarmUpMinutes, the oil after OilWarmUpMinutes
+        auto warmUp = [&](const GaugeSettings &g, float &water85, float &oil85) {
+            TempModel m = {};
+            TruckRaw e = c;
+            e.throttle = -1.0f;
+            e.speed = kUsualKmh / 3.6f;
+            water85 = oil85 = -1.0f;
+            for (float at = kDt; at <= 3600.0f && oil85 < 0.0f; at += kDt)
+            {
+                TempStep(m, 1, e, kUsualLoad, g, kDt);
+                if (water85 < 0.0f && m.temp >= kTempWarm) water85 = at;
+                if (oil85 < 0.0f && m.oil >= kTempWarm) oil85 = at;
+            }
+        };
+        TempModel first = {};
+        TempStep(first, 1, c, 0.0f, set, kDt);
+        float water85, oil85, water85b, oil85b;
+        warmUp(set, water85, oil85);
+        GaugeSettings slow = set;
+        slow.oilWarmUpMinutes = 15.0f;
+        warmUp(slow, water85b, oil85b);
+        Check(Near(first.oil, set.ambientC, 0.05f) && Near(water85, 180.0f, 3.0f) && Near(oil85, 480.0f, 6.0f) && Near(water85b, water85, 0.11f) && Near(oil85b, 900.0f, 8.0f),
+              "oil: a cold engine's oil starts at the air outside and is at 85 C after the eight minutes of OilWarmUpMinutes, and the setting moves the oil only");
+
+        // where it settles: over the coolant by the heat
+        TempModel m = {};
+        TempStep(m, 1, c, 0.0f, set, kDt);
+        Heat(m, c, 1, set, 3600.0f, 1.0f, 1.0f, 60.0f);
+        const float hard = m.oil - m.temp;
+        Heat(m, c, 1, set, 3600.0f, 0.0f, 0.0f, 0.0f);
+        const float idle = m.oil - m.temp;
+        Check(Near(hard, kOilOver, 0.3f) && Near(idle, kOilOver * kHeatIdle, 0.3f), "oil: it settles 14 degrees over the coolant at full load and 2 over it at idle");
+
+        // a stopped engine: the oil keeps its heat longer than the coolant
+        TruckRaw halted = c;
+        halted.flags = 0;
+        Coolant(m, kTempHot);
+        m.truck[m.at].oil = m.oil = kTempHot;
+        Heat(m, halted, 1, set, 900.0f, 0.0f, 0.0f, 0.0f);
+        const float slower = set.ambientC + (kTempHot - set.ambientC) * sqrtf((kTempCooled - set.ambientC) / (kTempHot - set.ambientC));
+        Check(Near(m.temp, kTempCooled, 0.3f) && Near(m.oil, slower, 0.5f), "oil: when a stopped engine's coolant has cooled from 90 C to 40 C, its oil is still at 58 C");
+
+        // a truck left standing keeps its oil, cooling the oil's way
+        TempModel fleet = {};
+        TempStep(fleet, 0x10, c, 0.0f, set, 0.0f);
+        Heat(fleet, c, 0x10, set, 1200.0f, 1.0f, kUsualLoad, kUsualKmh);
+        const float leftOil = fleet.oil;
+        Heat(fleet, c, 0x20, set, 600.0f, 1.0f, kUsualLoad, kUsualKmh);
+        TempStep(fleet, 0x10, c, 0.0f, set, 0.0f);
+        Check(Near(fleet.oil, set.ambientC + (leftOil - set.ambientC) * expf(-TempRatesOf(set).off * kOilCooling * 600.0f), 0.3f),
+              "oil: a truck taken again has its oil as it was left, less the oil's cooling");
+
+        // the warning: at once from OilWarnC, again every four seconds, over two degrees under it; not with the engine stopped
+        TempModel w = {};
+        TempStep(w, 1, c, 0.0f, set, kDt);
+        OilWarning ow = {};
+        auto beeps = [&](float oil, const TruckRaw &e, float seconds) {
+            w.truck[w.at].oil = w.oil = oil;
+            int n = 0;
+            for (float at = 0.0f; at < seconds - 0.001f; at += kDt) n += OilWarnStep(ow, w, e, set, kDt) ? 1 : 0;
+            return n;
+        };
+        const int under = beeps(set.oilWarnC - 0.5f, c, 10.0f);
+        const int over = beeps(set.oilWarnC, c, 10.0f);
+        const bool blinks = OilLamp(ow, 0) && !OilLamp(ow, kOilBlinkMs) && OilLamp(ow, 2 * kOilBlinkMs);
+        const int band = beeps(set.oilWarnC - kOilBand + 0.2f, c, 4.0f);
+        const bool held = ow.on;
+        const int below = beeps(set.oilWarnC - kOilBand - 0.2f, c, 10.0f);
+        const bool off = !ow.on && !OilLamp(ow, 0);
+        const int stopped = beeps(set.oilWarnC + 5.0f, halted, 10.0f);
+        Check(under == 0 && over == 3 && blinks && band == 1 && held && below == 0 && off && stopped == 0,
+              "oil: the warning sounds at once from OilWarnC and every four seconds, the lamp blinks, and both end two degrees under it or with the engine stopped");
+        Check(Near(OilBeepGain(50), 0.4f, 0.001f) && OilBeepGain(0) == 0.0f && Near(OilBeepGain(150), kOilBeepLoud, 0.001f), "oil: the warning is as loud as SoundVolume has it");
+
+        // the probe's line, and a speed that is no number
+        Heat(w, c, 1, set, 1.0f, 1.0f, 1.0f, 20.0f);
+        w.truck[w.at].oil = w.oil = set.oilWarnC + 1.0f;
+        char line[640];
+        TempProbeText(c, w, set, line, sizeof line);
+        const bool told = strstr(line, "| oil 126.0 C, heading for ") && strstr(line, ", too hot |");
+        c.speed = nanf("");
+        TempStep(w, 1, c, 1.0f, set, kDt);
+        Check(told && isfinite(w.oil), "oil: the probe's line carries the oil, and a step that gives no number leaves it as it was");
+    }
+
+    // the turbo's profiles: where the boost comes in and how long it lags
+    {
+        TruckRaw f = Truck();
+        f.gear = f.gearEngaged = 1;
+        f.automatic = 1;
+        f.throttle = -1.0f;
+        const float most = 1.8f;
+        // the boost held at one engine speed, and the seconds to nine tenths of it from none
+        auto held = [&](int profile, float revs) { return BoostTarget(f, revs, most, profile); };
+        auto rise = [&](int profile, float revs) {
+            BoostModel b = {};
+            const float to = 0.9f * held(profile, revs);
+            for (float at = kDt; at < 20.0f; at += kDt)
+                if (BoostStep(b, f, revs, most, profile, kDt), b.bar >= to) return at;
+            return -1.0f;
+        };
+        bool full = true;
+        for (int p = 0; p < kSpoolCount; p++) full = full && Near(held(p, 1.0f), most, 0.001f) && held(p, 0.0f) == 0.0f;
+        const bool early = held(kSpoolQuick, 0.3f) > 2.0f * held(kSpoolStandard, 0.3f) && held(kSpoolLaggy, 0.5f) < 0.5f * held(kSpoolStandard, 0.5f);
+        const bool stages = Near(held(kSpoolTwoStage, 0.35f), 0.4f * most, 0.01f) && Near(held(kSpoolTwoStage, 0.45f), 0.4f * most, 0.01f) &&
+                            held(kSpoolTwoStage, 0.6f) > 0.6f * most;
+        Check(full && early && stages, "spool: every turbo makes all its boost at the red zone and none at idle; the small one comes in early, the big one late, two stages one after the other");
+        const float standard = rise(kSpoolStandard, 1.0f), quick = rise(kSpoolQuick, 1.0f), laggy = rise(kSpoolLaggy, 1.0f), lowLaggy = rise(kSpoolLaggy, 0.85f);
+        const float small = rise(kSpoolTwoStage, 0.4f);
+        Check(Near(standard, 0.35f * logf(10.0f), 0.06f) && quick < 0.6f * standard && laggy > standard && lowLaggy > laggy + 0.1f && small > 0.0f && small < 1.0f,
+              "spool: at the red zone the standard boost is there in 0.8 s, the small turbo's sooner and the big one's later, longer still lower down, and the first of two stages within a second");
+        GaugeSettings g;
+        SettingsDefaults(g);
+        g.boostProfile = 7;
+        SettingsClamp(g);
+        Check(g.boostProfile == kSpoolStandard && &SpoolOf(-1) == &kSpoolProfiles[kSpoolStandard], "spool: a profile the mod does not have is the standard one");
     }
 
     // what the temperature costs the engine
@@ -1056,7 +1227,7 @@ int main(int argc, char **argv)
             for (float at = 0.0f; at < seconds - 0.001f; at += kDt)
             {
                 const float before = bm.bar;
-                if (BoostStep(bm, truck, revs, reach, kDt) != kLiftNone) sounds++;
+                if (BoostStep(bm, truck, revs, reach, kSpoolStandard, kDt) != kLiftNone) sounds++;
                 largest = fmaxf(largest, fabsf(bm.bar - before));
             }
             return largest;
@@ -1100,7 +1271,7 @@ int main(int argc, char **argv)
         };
         full();
         Drive(bt, 3, true, 0.9f, 0.0f);
-        const int first = BoostStep(bm, bt, 1.0f, reach, kDt);
+        const int first = BoostStep(bm, bt, 1.0f, reach, kSpoolStandard, kDt);
         const float loud = bm.lastVolume, at = bm.lastBar;
         blow(bt, 1.0f, 0.4f);
         const float fallen = bm.bar;
@@ -1134,22 +1305,22 @@ int main(int argc, char **argv)
         bm.bar = 0.15f * reach;
         bt = Truck();
         Drive(bt, 3, true, 0.9f, 1.0f);
-        BoostStep(bm, bt, 0.0f, reach, kDt);
+        BoostStep(bm, bt, 0.0f, reach, kSpoolStandard, kDt);
         bm.bar = 0.15f * reach;
         Drive(bt, 3, true, 0.9f, 0.0f);
-        const int coming = BoostStep(bm, bt, 0.0f, reach, kDt), weak = BoostStep(bm, bt, 0.0f, reach, kDt);
+        const int coming = BoostStep(bm, bt, 0.0f, reach, kSpoolStandard, kDt), weak = BoostStep(bm, bt, 0.0f, reach, kSpoolStandard, kDt);
         const float quiet = bm.lastVolume;
         bm = BoostModel{};
         bm.running = true;
         Drive(bt, 3, true, 0.9f, 1.0f);
-        BoostStep(bm, bt, 0.0f, reach, kDt);
+        BoostStep(bm, bt, 0.0f, reach, kSpoolStandard, kDt);
         bm.bar = 0.05f * reach;
         Drive(bt, 3, true, 0.9f, 0.0f);
-        Check(coming == kLiftNone && weak == kLiftFlutter && quiet > 0.0f && quiet < 0.1f && BoostStep(bm, bt, 0.0f, reach, kDt) == kLiftNone &&
-              BoostStep(bm, bt, 0.0f, reach, kDt) == kLiftNone, "lift: with little boost a full lift only flutters, quietly, and with next to none it is silent");
+        Check(coming == kLiftNone && weak == kLiftFlutter && quiet > 0.0f && quiet < 0.1f && BoostStep(bm, bt, 0.0f, reach, kSpoolStandard, kDt) == kLiftNone &&
+              BoostStep(bm, bt, 0.0f, reach, kSpoolStandard, kDt) == kLiftNone, "lift: with little boost a full lift only flutters, quietly, and with next to none it is silent");
         full();
         Drive(bt, 3, true, 0.9f, 0.0f);
-        BoostStep(bm, bt, 1.0f, reach, kDt);
+        BoostStep(bm, bt, 1.0f, reach, kSpoolStandard, kDt);
         char line[400];
         BoostProbeText(bt, bm, 1.0f, reach, line, sizeof line);
         Check(strstr(line, "of the turbo's 1.80") && strstr(line, "1 blow-offs, 0 flutters, the last a blow-off at 1.80 bar, 1.00 of its full sound"), "boost: the probe's line carries the boost and the lifts");
@@ -1204,7 +1375,7 @@ int main(int argc, char **argv)
             // floored for three seconds, then up and down every 0.3 s: more lifts than may sound
             const float at = (float)i * kDt;
             bt.throttle = at < 3.0f || fmodf(at, 0.6f) < 0.3f ? -1.0f : 0.0f;
-            const int lift = BoostStep(bm, bt, 1.0f, reach, kDt);
+            const int lift = BoostStep(bm, bt, 1.0f, reach, kSpoolStandard, kDt);
             if (LiftSoundOf(lift, bm.lastVolume, 50, 0.0f, ls))
             {
                 if (!played) { first = lift; firstGain = ls.gain; }
@@ -1266,6 +1437,20 @@ int main(int argc, char **argv)
             else if (up && level < mean * 0.8) up = false;
         }
         Check(lengths && early > 0.9 * all && puffs >= 8, "sound: the blow-off made by code is a burst that is over in a third of a second, the flutter a row of puffs");
+        // the oil warning: two beeps of 0.13 s with a gap between them, and quiet at both ends of each
+        SoundClip beep;
+        SoundMakeBeep(beep);
+        int beeps = 0;
+        bool sounding = false;
+        for (size_t i = 0; i + 441 <= beep.x.size(); i += 441)
+        {
+            double level = 0.0;
+            for (size_t j = 0; j < 441; j++) level += fabs(beep.x[i + j]) / 441.0;
+            if (!sounding && level > 0.3) { sounding = true; beeps++; }
+            else if (sounding && level < 0.05) sounding = false;
+        }
+        Check(beep.rate == 44100 && Near((float)beep.x.size() / beep.rate, 0.4f, 0.01f) && beeps == 2 && fabsf(beep.x.front()) < 0.01f && fabsf(beep.x.back()) < 0.01f,
+              "sound: the oil warning made by code is two short beeps");
         SoundClip loud = clip, quiet = clip;
         for (float &v : quiet.x) v *= 0.01f;
         SoundLevel(loud);

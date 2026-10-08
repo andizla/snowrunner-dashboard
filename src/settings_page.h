@@ -14,7 +14,7 @@ struct PageState
     unsigned long long last = 0;  // GetTickCount64 of the last frame the tab was drawn
 };
 static const unsigned long long kPageCaptureMs = 8000;
-enum { kPageChanged = 1, kPageReload = 2, kPageTruckDrop = 4, kPageDefaults = 8, kPageHearHigh = 16, kPageHearMid = 32, kPageHearLow = 64 };
+enum { kPageChanged = 1, kPageReload = 2, kPageTruckDrop = 4, kPageDefaults = 8, kPageHearHigh = 16, kPageHearMid = 32, kPageHearLow = 64, kPageHearOil = 128 };
 
 // The Dear ImGui key as a virtual key, for the keys the toggle key can be; 0 for others.
 static int PageVirtualKey(int k)
@@ -126,7 +126,13 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     changed(ImGui::Checkbox("Boost pressure", &s.showBoost));
     changed(ImGui::Checkbox("Brake air pressure", &s.showAir));
     changed(ImGui::Checkbox("Lamps", &s.showLamps));
-    PageTip("Handbrake, headlights, all wheel drive, differential lock, low gear, engine damage, cold engine and tilt.");
+    PageTip("Handbrake, headlights, all wheel drive, differential lock, low gear, engine damage, cold engine, tilt and oil temperature.");
+    static const char *oils[kOilGaugeCount] = { "Not shown", "Second needle", "Dial of its own" };
+    PageLabel("Oil temperature", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::Combo("##oilgauge", &s.oilGauge, oils, kOilGaugeCount));
+    PageTip("Second needle: an amber needle in the coolant temperature dial. Dial of its own: a small dial left of the coolant's. "
+            "The oil lamp is in the lamps either way.");
 
     ImGui::SeparatorText("Tilt lamp");
     {
@@ -214,6 +220,16 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         sprintf_s(tip, "A truck that has stood for long is this cold. In colder air the engine takes longer to warm up and is harder to overheat. "
                        "The cold lamp is lit below %s.", to);
         PageTip(tip);
+        // dimmed and wrapped: a map's name can be long
+        ImGui::BeginDisabled();
+        if (view.map[0] && view.mapOwn)
+        {
+            degrees(view.ambientC, to, sizeof to);
+            ImGui::TextWrapped("On %s it is %s outside: the map's own, from its section in Gauges.ini.", view.map, to);
+        }
+        else if (view.map[0]) ImGui::TextWrapped("On %s: this temperature, as Gauges.ini has no section for the map.", view.map);
+        else ImGui::TextWrapped("Every map has this temperature. Maps with their own come once the mod reads which map a truck is on.");
+        ImGui::EndDisabled();
         // the ini holds the speed in km/h; the slider shows it in the unit the speedometer shows
         float full = s.mph ? s.airFullKmh / 1.609f : s.airFullKmh;
         PageLabel("Full airflow from", labelX);
@@ -227,6 +243,35 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         }
         PageTip("The radiator gets more air the faster the truck drives, and all of it from this speed. Lower keeps a slow, hard pulling engine cooler. "
                 "Higher makes it run hotter at a crawl.");
+    }
+
+    ImGui::SeparatorText("Oil temperature");
+    {
+        char from[16], to[16], tip[320];
+        PageLabel("Oil warm after", labelX);
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::SliderFloat("##oilwarmup", &s.oilWarmUpMinutes, 2.0f, 30.0f, "%.1f minutes of driving", ImGuiSliderFlags_AlwaysClamp))
+        {
+            s.oilWarmUpMinutes = floorf(s.oilWarmUpMinutes * 10.0f + 0.5f) / 10.0f;
+            act |= kPageChanged;
+        }
+        degrees(kTempOutside, from, sizeof from);
+        degrees(kTempWarm, to, sizeof to);
+        sprintf_s(tip, "The time the oil takes from %s to %s when the engine is driven as usual. The oil follows the coolant slowly, "
+                       "keeps its heat longer and runs a little hotter when the engine works hard.", from, to);
+        PageTip(tip);
+        // the ini holds the temperature in C; the slider shows it in the unit the dial shows
+        float warn = s.fahrenheit ? s.oilWarnC * 1.8f + 32.0f : s.oilWarnC;
+        PageLabel("Oil warning from", labelX);
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::SliderFloat("##oilwarn", &warn, s.fahrenheit ? kOilWarnRange[0] * 1.8f + 32.0f : kOilWarnRange[0],
+                               s.fahrenheit ? kOilWarnRange[1] * 1.8f + 32.0f : kOilWarnRange[1], s.fahrenheit ? "%.0f F" : "%.0f C", ImGuiSliderFlags_AlwaysClamp))
+        {
+            warn = floorf(warn + 0.5f);
+            s.oilWarnC = SettingsRange(s.fahrenheit ? (warn - 32.0f) / 1.8f : warn, kOilWarnRange[0], kOilWarnRange[1]);
+            act |= kPageChanged;
+        }
+        PageTip("From this oil temperature the oil lamp blinks and a warning sounds every few seconds, until the oil is two degrees under it again.");
     }
 
     ImGui::SeparatorText("Engine damage");
@@ -276,7 +321,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     // whose scales these are: the driven truck's own, or the plain ones
     if (!view.truck[0]) ImGui::TextWrapped("No truck is driven. These are the plain scales, which every truck without scales of its own shows.");
     else if (!view.truckOwn)
-        ImGui::TextWrapped("Scales for %s. It shows the plain ones. Change one here and this kind of truck keeps all six as its own.", view.truck);
+        ImGui::TextWrapped("Scales for %s. It shows the plain ones. Change one here and this kind of truck keeps all seven as its own.", view.truck);
     else
     {
         ImGui::TextWrapped("Scales for %s. They are its own, kept in Gauges.ini for this kind of truck.", view.truck);
@@ -337,6 +382,12 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             s.boostMax = 0.0f;
             act |= kPageChanged;
         }
+        static const char *profiles[kSpoolCount] = { "Standard", "Small and quick", "Big and slow", "Two stages" };
+        PageLabel("Turbo", labelX);
+        ImGui::SetNextItemWidth(w);
+        changed(ImGui::Combo("##spool", &s.boostProfile, profiles, kSpoolCount));
+        PageTip("How the turbo builds its boost. Standard: from about a fifth of the way to the red zone. Small and quick: early and with little lag. "
+                "Big and slow: late, and long to come at low revs. Two stages: a small turbo early and a big one after it.");
     }
 
     ImGui::SeparatorText("Controls");
@@ -426,7 +477,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     ImGui::SetNextItemWidth(w);
     changed(ImGui::SliderInt("##soundvolume", &s.soundVolume, 0, 100, s.soundVolume > 0 ? "%d" : "off", ImGuiSliderFlags_AlwaysClamp));
     PageTip("How loud the turbo is heard when the pedal comes up quickly under boost: it flutters, longer and louder the more boost there was, "
-            "until the pedal goes down again. 0 = no sound.");
+            "until the pedal goes down again. The oil warning goes by it too. 0 = no sound.");
     ImGui::BeginDisabled(s.soundVolume <= 0);
     PageLabel("Hear it", labelX);
     if (ImGui::Button("Full boost")) act |= kPageHearHigh;
@@ -435,6 +486,9 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     ImGui::SameLine();
     if (ImGui::Button("Little")) act |= kPageHearLow;
     PageTip("Plays one of the turbo's sounds for a lift of the pedal at that much boost. Each has a few, so press again for another.");
+    ImGui::SameLine();
+    if (ImGui::Button("Oil warning")) act |= kPageHearOil;
+    PageTip("Plays the warning that sounds while the oil is too hot.");
     ImGui::EndDisabled();
     changed(ImGui::Checkbox("Sounds only", &s.soundsOnly));
     PageTip("Plays the sounds and draws no cluster.");

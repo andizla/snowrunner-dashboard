@@ -12,6 +12,7 @@
 //   block_states.png   the block, the same three states
 //   live_states.png    the strip with what this version shows of a truck: parked and cold, automatic, the low range and hot
 //   options.png        other settings: scout scales, mph, psi and Fahrenheit, the air dial on, the lamps off, larger, moved
+//   oil_dial.png       the strip and the block with the oil on a dial of its own, the oil too hot and its lamp lit
 //   fallback.png       the strip with the ImGui font standing in (no game font files)
 //   settings.png       the Gauges tab of ReShade's overlay at ReShade FontScale 2 (ReShade's own style differs), with a
 //                      truck driven that has scales of its own
@@ -246,6 +247,7 @@ int wmain(int argc, wchar_t **argv)
     cold.fuelFrac = 0.71f;
     cold.rangeKm = -1.0f;
     cold.tempC = 14.0f;
+    cold.oilC = 14.0f;
     cold.boostBar = 0.0f;
     cold.airBar = 7.6f;
     cold.handbrake = true;
@@ -261,6 +263,8 @@ int wmain(int argc, wchar_t **argv)
     hot.fuelFrac = 0.18f;
     hot.rangeKm = 90.0f;
     hot.tempC = 121.0f;
+    hot.oilC = 131.0f;
+    hot.oilHot = true;
     hot.boostBar = 1.85f;
     hot.airBar = 6.0f;
     hot.damage = true;
@@ -298,6 +302,26 @@ int wmain(int argc, wchar_t **argv)
         Screen(out, L"options.png", fonts, 1920, 1080, s, st);
     }
 
+    // the oil on a dial of its own, too hot, in both layouts at twice the size
+    {
+        ID3D11ShaderResourceView *keep = g_shot;
+        g_shot = nullptr;
+        if (gameFont) UseFonts(fonts, 2.0f);
+        GaugeSettings s = def;
+        s.oilGauge = kOilDial;
+        wchar_t path[MAX_PATH];
+        swprintf_s(path, L"%s\\oil_dial.png", out);
+        RenderPng(path, 1800, 420 + 580, [&](ImDrawList *, ImDrawList *bg) {
+            Backdrop(bg, 1800, 420 + 580);
+            GaugeDraw(bg, fonts, ImVec2(900.0f, 420.0f - 24.0f), 2.0f, 1.0f, hot, GaugeLayoutOf(s));
+            GaugeSettings b = s;
+            b.layout = kLayoutBlock;
+            GaugeDraw(bg, fonts, ImVec2(1300.0f, 1000.0f - 24.0f), 2.0f, 1.0f, hot, GaugeLayoutOf(b));
+        });
+        if (gameFont) UseFonts(fonts, 1.0f);
+        g_shot = keep;
+    }
+
     // the three states at twice the size, on the plain backdrop: the strip one above the other, the block side by side
     {
         ID3D11ShaderResourceView *keep = g_shot;
@@ -333,6 +357,8 @@ int wmain(int argc, wchar_t **argv)
         look.tilt = 1;
         look.rollDeg = 17.0f;
         look.tempC = 104.0f;
+        look.oilC = 112.0f;
+        look.oilHot = true;
         look.rangeKm = 6.4f;
         static const struct { const wchar_t *name; int style; } closeups[3] = { { L"closeup_open.png", kFaceOpen }, { L"closeup_tinted.png", kFaceTinted }, { L"closeup_solid.png", kFaceSolid } };
         for (const auto &l : closeups)
@@ -350,8 +376,8 @@ int wmain(int argc, wchar_t **argv)
                 s_open = lay.openArc;
                 s_faceAlpha = s_open ? 0.0f : lay.faceAlpha;
                 GTacho(bg, fonts, ImVec2(c.x - 196.0f * u, c.y), 72.0f * u, u, 1.0f, look);
-                GLamps(bg, fonts, ImVec2(c.x - 76.0f * u, c.y), 2, 21.0f * u, 4.0f * u, u, 1.0f, look);
-                GTemp(bg, fonts, ImVec2(c.x + 12.0f * u, c.y + 14.0f * u), 42.0f * u, u, 1.0f, look);
+                GLamps(bg, fonts, ImVec2(c.x - 76.0f * u, c.y), 2, 20.0f * u, 3.5f * u, u, 1.0f, look);
+                GTemp(bg, fonts, ImVec2(c.x + 12.0f * u, c.y + 14.0f * u), 42.0f * u, u, 1.0f, look, true);
                 GFuel(bg, fonts, ImVec2(c.x + 104.0f * u, c.y + 14.0f * u), 42.0f * u, u, 1.0f, look);
                 GBoost(bg, fonts, ImVec2(c.x + 196.0f * u, c.y + 14.0f * u), 42.0f * u, u, 1.0f, look);
                 GRange(bg, fonts, ImVec2(c.x + 104.0f * u, c.y - 46.0f * u), u, 1.0f, look);
@@ -403,11 +429,12 @@ int wmain(int argc, wchar_t **argv)
         parked.rangeKm = -1.0f;
         parked.tilt = 0;
         parked.handbrake = true;
-        parked.tempC = def.ambientC;
+        parked.tempC = parked.oilC = def.ambientC;
         parked.cold = true;
         GaugeState automatic = parked;
         automatic.engineOn = true;
         automatic.tempC = 88.0f;
+        automatic.oilC = 81.0f;
         automatic.cold = false;
         automatic.rpm = k.idle + (k.redline - k.idle) * 0.6f;
         automatic.rangeKm = 31.0f;
@@ -431,6 +458,8 @@ int wmain(int argc, wchar_t **argv)
         low.tilt = 2;
         low.rollDeg = 31.0f;
         low.tempC = 121.0f;
+        low.oilC = 127.0f;
+        low.oilHot = true;
         const GaugeState live[3] = { parked, automatic, low };
         wchar_t path[MAX_PATH];
         swprintf_s(path, L"%s\\live_states.png", out);
@@ -481,7 +510,7 @@ int wmain(int argc, wchar_t **argv)
             int act = 0;
             wchar_t path[MAX_PATH];
             swprintf_s(path, L"%s\\%s", out, tab.file);
-            RenderPng(path, 1100, 1900, [&](ImDrawList *, ImDrawList *) {
+            RenderPng(path, 1100, 2300, [&](ImDrawList *, ImDrawList *) {
                 ImGui::SetNextWindowPos(ImVec2(10, 10));
                 ImGui::SetNextWindowSize(ImVec2(1080, 0));
                 ImGui::Begin("Gauges", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);

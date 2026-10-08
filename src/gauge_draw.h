@@ -29,6 +29,7 @@ struct GaugeLayout
 {
     int variant;                    // 0 = strip (bottom centre), 1 = block (bottom right)
     bool showTemp, showBoost, showAir, showLamps;
+    int oilGauge;                   // the oil temperature: kOilOff, kOilNeedle (a second needle in the temperature dial), kOilDial (a dial of its own)
     float faceAlpha;                // 1 = solid dial faces; lower = see-through (the game shows through, drop shadows under the marks)
     bool openArc;                   // no face or bezel at all: only the scale arc with its ticks
 };
@@ -329,6 +330,28 @@ static void GIconTemp(ImDrawList *dl, ImVec2 p, float h, ImU32 col)
     }
 }
 
+// Engine oil: an oil can with its filler cap, the spout rising to the right and a drop falling from it.
+static void GIconOil(ImDrawList *dl, ImVec2 p, float h, ImU32 col)
+{
+    auto P = [&](float x, float y) { return ImVec2(p.x + x * h, p.y + y * h); };
+    GPath body;
+    GRound(body, P(-0.44f, -0.06f), P(0.1f, 0.3f), h * 0.05f);
+    GFill(dl, body, col);
+    GPath spout;
+    GTo(spout, P(0.06f, -0.06f));
+    GTo(spout, P(0.43f, -0.24f));
+    GTo(spout, P(0.47f, -0.17f));
+    GTo(spout, P(0.08f, 0.1f));
+    GFill(dl, spout, col);
+    GLine(dl, P(-0.3f, -0.06f), P(-0.3f, -0.16f), col, h * 0.08f);
+    GLine(dl, P(-0.39f, -0.19f), P(-0.21f, -0.19f), col, h * 0.08f);
+    GPath drop;
+    GTo(drop, P(0.44f, -0.06f));
+    GCurve(drop, P(0.49f, 0.04f), P(0.52f, 0.1f), P(0.44f, 0.14f));
+    GCurve(drop, P(0.36f, 0.1f), P(0.39f, 0.04f), P(0.44f, -0.06f));
+    GFill(dl, drop, col);
+}
+
 // The turbocharger: a snail housing with its wheel and the outlet at the top.
 static void GIconTurbo(ImDrawList *dl, ImVec2 p, float h, ImU32 col)
 {
@@ -590,7 +613,9 @@ static void GFuel(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float 
     GSmallNeedle(dl, c, r, GDeg(s, st.fuelFrac), u, a);
 }
 
-static void GTemp(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float u, float a, const GaugeState &st)
+// The coolant temperature. oilNeedle: the oil's needle in the same dial, amber and shorter, under the coolant's,
+// with the oil can beside the thermometer.
+static void GTemp(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float u, float a, const GaugeState &st, bool oilNeedle)
 {
     const GScale s = GSweep(50.0f, 130.0f);
     GSmallDial(dl, c, r, u, a);
@@ -603,8 +628,33 @@ static void GTemp(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float 
         sprintf_s(buf, "%.0f", st.fahrenheit ? v * 1.8f + 32.0f : v);
         GText(dl, f, kGsSmall, GPolar(c, r - 15.0f * u, GDeg(s, v)), GCol(kText, a), buf, 0, u);
     }
-    GDialIcon(ImVec2(c.x, c.y + r * 0.42f), u, GCol(kText, a), [&](ImVec2 q, ImU32 col) { GIconTemp(dl, q, 10.5f * u, col); });
+    if (!oilNeedle)
+    {
+        GDialIcon(ImVec2(c.x, c.y + r * 0.42f), u, GCol(kText, a), [&](ImVec2 q, ImU32 col) { GIconTemp(dl, q, 10.5f * u, col); });
+        GSmallNeedle(dl, c, r, GDeg(s, st.tempC), u, a);
+        return;
+    }
+    GDialIcon(ImVec2(c.x - r * 0.15f, c.y + r * 0.45f), u, GCol(kText, a), [&](ImVec2 q, ImU32 col) { GIconTemp(dl, q, 9.0f * u, col); });
+    GDialIcon(ImVec2(c.x + r * 0.16f, c.y + r * 0.47f), u, GCol(kAmber, a), [&](ImVec2 q, ImU32 col) { GIconOil(dl, q, 9.0f * u, col); });
+    GNeedle(dl, c, GDeg(s, st.oilC), r * 0.5f, 2.4f, 0.8f, u, a, GCol(kAmber, a));
     GSmallNeedle(dl, c, r, GDeg(s, st.tempC), u, a);
+}
+
+// The oil temperature on a dial of its own: 50 to 150 C, red from the settings' OilWarnC.
+static void GOil(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float u, float a, const GaugeState &st)
+{
+    const GScale s = GSweep(50.0f, 150.0f);
+    GSmallDial(dl, c, r, u, a);
+    GZone(dl, c, r - 2.5f * u, s, st.oilWarnC, 150.0f, 4.0f, u, GCol(kRed, a));
+    GTicks(dl, c, r - 2.5f * u, s, 50.0f, 2, 7.0f, 4.0f, u, a);
+    char buf[16];
+    for (float v = 50.0f; v <= 150.5f; v += 50.0f)
+    {
+        sprintf_s(buf, "%.0f", st.fahrenheit ? v * 1.8f + 32.0f : v);
+        GText(dl, f, kGsSmall, GPolar(c, r - 15.0f * u, GDeg(s, v)), GCol(kText, a), buf, 0, u);
+    }
+    GDialIcon(ImVec2(c.x, c.y + r * 0.42f), u, GCol(kText, a), [&](ImVec2 q, ImU32 col) { GIconOil(dl, q, 10.5f * u, col); });
+    GSmallNeedle(dl, c, r, GDeg(s, st.oilC), u, a);
 }
 
 static void GBoost(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float u, float a, const GaugeState &st)
@@ -659,15 +709,17 @@ static void GRange(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float u, float
 }
 
 // The lamps as a block of columns x rows cells of size s, centred on c: handbrake, headlights, all wheel drive,
-// differential lock, low range, engine damage, cold engine, tilt.
+// differential lock, low range, engine damage, cold engine, tilt, oil temperature. A last row that is not full is
+// centred.
 static void GLamps(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, int columns, float s, float gap, float u, float a, const GaugeState &st)
 {
-    const int count = 8, rows = (count + columns - 1) / columns;
+    const int count = 9, rows = (count + columns - 1) / columns;
     const float pitch = s + gap;
     const ImVec2 o(c.x - (columns - 1) * pitch * 0.5f, c.y - (rows - 1) * pitch * 0.5f);
     for (int i = 0; i < count; i++)
     {
-        const ImVec2 p(o.x + (i % columns) * pitch, o.y + (i / columns) * pitch);
+        const int row = i / columns, inRow = row == rows - 1 ? count - row * columns : columns;
+        const ImVec2 p(o.x + (i % columns + (columns - inRow) * 0.5f) * pitch, o.y + row * pitch);
         const float h = s * 0.74f;
         ImU32 col;
         // the symbol at q in the colour k (drawn twice when see-through: a shadow, then the symbol)
@@ -681,7 +733,8 @@ static void GLamps(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, int columns, f
             case 4: GIconLow(dl, f, q, h, k, u); break;
             case 5: GIconEngine(dl, q, h, k); break;
             case 6: GIconSnow(dl, q, h, k); break;
-            default: GIconTilt(dl, q, h, st.rollDeg, k); break;
+            case 7: GIconTilt(dl, q, h, st.rollDeg, k); break;
+            default: GIconOil(dl, q, h, k); break;
             }
         };
         switch (i)
@@ -693,9 +746,10 @@ static void GLamps(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, int columns, f
         case 4: col = GLampCell(dl, p, s, st.lowGear, kAmber, u, a); break;
         case 5: col = GLampCell(dl, p, s, st.damage, kAmber, u, a); break;
         case 6: col = GLampCell(dl, p, s, st.cold, kBlue, u, a); break;
-        default: col = GLampCell(dl, p, s, st.tilt > 0, st.tilt >= 2 ? kRed : kAmber, u, a);
+        case 7: col = GLampCell(dl, p, s, st.tilt > 0, st.tilt >= 2 ? kRed : kAmber, u, a);
             if (st.tilt == 0) col = GCol(kGreen, a); // level: the truck is green, without a glow
             break;
+        default: col = GLampCell(dl, p, s, st.oilHot, kRed, u, a); break;
         }
         if (GGlass()) icon(ImVec2(p.x + 1.0f * u, p.y + 1.3f * u), GCol(0, 0, 0, 0.55f * a));
         icon(p, col);
@@ -709,15 +763,16 @@ static void GaugeDraw(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float 
     s_faceAlpha = s_open ? 0.0f : lay.faceAlpha;
     if (lay.variant == 0)
     {
-        // a strip: [temp][fuel] [SPEED] lamps [TACH] [boost][air], the range under the fuel dial
+        // a strip: [oil][temp][fuel] [SPEED] lamps [TACH] [boost][air], the range under the fuel dial
         const float R = 72.0f * u, r = 42.0f * u, cy = origin.y - 96.0f * u, cx = origin.x;
         GSpeedo(dl, f, ImVec2(cx - 98.0f * u, cy), R, u, a, st);
         GTacho(dl, f, ImVec2(cx + 98.0f * u, cy), R, u, a, st);
-        if (lay.showLamps) GLamps(dl, f, ImVec2(cx, cy), 2, 21.0f * u, 4.0f * u, u, a, st);
+        if (lay.showLamps) GLamps(dl, f, ImVec2(cx, cy), 2, 20.0f * u, 3.5f * u, u, a, st);
         float x = cx - 98.0f * u - R - 10.0f * u - r;
         GFuel(dl, f, ImVec2(x, cy + 20.0f * u), r, u, a, st);
         GRange(dl, f, ImVec2(x, cy + 20.0f * u + r + 12.0f * u), u, a, st);
-        if (lay.showTemp) { x -= 2.0f * r + 8.0f * u; GTemp(dl, f, ImVec2(x, cy + 20.0f * u), r, u, a, st); }
+        if (lay.showTemp) { x -= 2.0f * r + 8.0f * u; GTemp(dl, f, ImVec2(x, cy + 20.0f * u), r, u, a, st, lay.oilGauge == kOilNeedle); }
+        if (lay.oilGauge == kOilDial) { x -= 2.0f * r + 8.0f * u; GOil(dl, f, ImVec2(x, cy + 20.0f * u), r, u, a, st); }
         x = cx + 98.0f * u + R + 10.0f * u + r;
         if (lay.showBoost) { GBoost(dl, f, ImVec2(x, cy + 20.0f * u), r, u, a, st); x += 2.0f * r + 8.0f * u; }
         if (lay.showAir) GAir(dl, f, ImVec2(x, cy + 20.0f * u), r, u, a, st);
@@ -729,11 +784,13 @@ static void GaugeDraw(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float 
         const float y1 = origin.y - 196.0f * u, y2 = origin.y - 62.0f * u;
         GSpeedo(dl, f, ImVec2(origin.x - 238.0f * u, y1), R, u, a, st);
         GTacho(dl, f, ImVec2(origin.x - 76.0f * u, y1), R, u, a, st);
-        if (lay.showLamps) GLamps(dl, f, ImVec2(origin.x - 157.0f * u, y1), 2, 19.0f * u, 4.0f * u, u, a, st);
-        int n = 1 + (lay.showTemp ? 1 : 0) + (lay.showBoost ? 1 : 0) + (lay.showAir ? 1 : 0);
+        if (lay.showLamps) GLamps(dl, f, ImVec2(origin.x - 157.0f * u, y1), 2, 17.5f * u, 3.5f * u, u, a, st);
+        int n = 1 + (lay.oilGauge == kOilDial ? 1 : 0) + (lay.showTemp ? 1 : 0) + (lay.showBoost ? 1 : 0) + (lay.showAir ? 1 : 0);
         const float pitch = 2.0f * r + 10.0f * u;
-        float x = origin.x - 157.0f * u - (n - 1) * pitch * 0.5f;
-        if (lay.showTemp) { GTemp(dl, f, ImVec2(x, y2), r, u, a, st); x += pitch; }
+        // centred under the big dials, and moved left where a long row would pass the block's right edge
+        float x = fminf(origin.x - 157.0f * u - (n - 1) * pitch * 0.5f, origin.x - (n - 1) * pitch - r);
+        if (lay.oilGauge == kOilDial) { GOil(dl, f, ImVec2(x, y2), r, u, a, st); x += pitch; }
+        if (lay.showTemp) { GTemp(dl, f, ImVec2(x, y2), r, u, a, st, lay.oilGauge == kOilNeedle); x += pitch; }
         GFuel(dl, f, ImVec2(x, y2), r, u, a, st);
         const float fuelX = x;
         x += pitch;
@@ -756,6 +813,7 @@ static GaugeLayout GaugeLayoutOf(const GaugeSettings &s)
     lay.showBoost = s.showBoost;
     lay.showAir = s.showAir;
     lay.showLamps = s.showLamps;
+    lay.oilGauge = s.oilGauge;
     lay.faceAlpha = s.style == kFaceTinted ? s.faceOpacity : 1.0f;
     lay.openArc = s.style == kFaceOpen;
     return lay;

@@ -2,13 +2,15 @@
 // compressor wheel, a flutter. It comes in three strengths, by how much boost the lift had (kTurboHigh, kTurboMid,
 // kTurboLow), and in up to kSoundVariants recordings of each, of which one is played and never the same twice
 // running. gauges.cpp asks for one when models.h tells a lift (SoundPlay) and for silence when the pedal goes down
-// again (SoundQuiet); a thread here plays it.
+// again (SoundQuiet); a thread here plays it. The oil warning (kSoundOil) is played the same way, and the pedal does
+// not silence it.
 //
 // Where the sounds of a strength come from:
-//   WAV files sounds\turbo_high_1.wav to _4.wav (turbo_mid_, turbo_low_) next to the mod, where there is at least
-//     one (PCM of 8 to 32 bits or 32-bit float, any number of channels, played as one)
+//   WAV files sounds\turbo_high_1.wav to _4.wav (turbo_mid_, turbo_low_, oil_beep_) next to the mod, where there is
+//     at least one (PCM of 8 to 32 bits or 32-bit float, any number of channels, played as one)
 //   else the recordings the mod's file carries (src\sounds.rc; SOUND_CREDITS.md says whose they are)
-//   else a sound made by code (SoundMakeBlowOff for the strong one, SoundMakeFlutter for the others)
+//   else a sound made by code (SoundMakeBlowOff for the strong one, SoundMakeFlutter for the others, SoundMakeBeep for
+//     the oil warning)
 // Every sound is brought to the same loudness, so a file of the player's is as loud as the mod's own.
 //
 // Played through XAudio2 2.9: the xaudio2_9redist.dll the game brings and uses itself, or Windows' own xaudio2_9.dll.
@@ -39,11 +41,11 @@ static const uint64_t kSoundMostBytes = 16ull << 20;
 static const float kSoundMostSeconds = 6.0f; // a longer file is cut here
 enum { kSoundVariants = 4, kSoundShots = 8 }; // recordings of one strength at most; shots that can wait
 
-// The three strengths: the name in the log, and what the files next to the mod and the recordings in src\sounds.rc
-// are called (with _1 to _4 after it).
+// The three strengths and the oil warning: the name in the log, and what the files next to the mod and the
+// recordings in src\sounds.rc are called (with _1 to _4 after it).
 struct SoundTier { const wchar_t *what, *file, *carried; };
-static const SoundTier kSoundTiers[kTurboTiers] = { { L"the turbo at full boost", L"turbo_high", L"TURBO_HIGH" }, { L"the turbo at half boost", L"turbo_mid", L"TURBO_MID" },
-                                                    { L"the turbo at little boost", L"turbo_low", L"TURBO_LOW" } };
+static const SoundTier kSoundTiers[kSoundTierCount] = { { L"the turbo at full boost", L"turbo_high", L"TURBO_HIGH" }, { L"the turbo at half boost", L"turbo_mid", L"TURBO_MID" },
+                                                        { L"the turbo at little boost", L"turbo_low", L"TURBO_LOW" }, { L"the oil warning", L"oil_beep", L"OIL_BEEP" } };
 static const float kSoundLevel = 0.45f; // how loud a sound is at SoundVolume=100 with the turbo at its full boost (against kSoundRms): two that ring together stay below 1
 static const float kSoundHush = 0.08f;  // seconds a sound that still rings takes to go when the pedal goes down again
 
@@ -137,6 +139,23 @@ inline std::vector<float> SoundFiltered(const std::vector<float> &x, const Sound
         y[i] = (float)v;
     }
     return y;
+}
+
+// The oil warning, made by code: two short beeps at 2.2 kHz, as a dashboard's buzzer gives them, each with a soft
+// start and end so they do not click.
+inline void SoundMakeBeep(SoundClip &c)
+{
+    const double rate = 44100.0, hz = 2200.0, on = 0.13, gap = 0.09, edge = 0.006;
+    const size_t n = (size_t)(rate * (2.0 * on + gap + 0.05));
+    c.x.assign(n, 0.0f);
+    for (size_t i = 0; i < n; i++)
+    {
+        const double t = (double)i / rate, in = t < on ? t : t - on - gap;
+        if (in < 0.0 || in > on) continue;
+        const double shape = min(1.0, min(in, on - in) / edge), w = 2.0 * 3.14159265358979323846 * hz * t;
+        c.x[i] = (float)(shape * (sin(w) + 0.25 * sin(3.0 * w)));
+    }
+    c.rate = 44100;
 }
 
 // The same numbers on every start: -1 .. 1.
@@ -272,22 +291,23 @@ inline void SoundLoad(int tier, const std::wstring &dir, SoundSet &set)
         if (own && set.count) GaugeLog(L"sound: %s = %d of the mod's own recordings", k.what, set.count);
     }
     if (set.count) return;
-    if (tier == kTurboHigh) SoundMakeBlowOff(set.clip[0]);
+    if (tier == kSoundOil) SoundMakeBeep(set.clip[0]);
+    else if (tier == kTurboHigh) SoundMakeBlowOff(set.clip[0]);
     else SoundMakeFlutter(set.clip[0]);
     SoundLevel(set.clip[0]);
     set.count = 1;
     GaugeLog(L"sound: %s = made by the mod's code (%.2f s)", k.what, (double)set.clip[0].x.size() / set.clip[0].rate);
 }
 
-// A sound asked for: of which strength, how loud of 1 (the setting and the boost together, before kSoundLevel) and
-// how fast (1 = as recorded).
+// A sound asked for: of which strength (or the oil warning), how loud of 1 (the setting and the boost together,
+// before kSoundLevel) and how fast (1 = as recorded).
 struct SoundShot { int tier; float gain, pitch; };
 static SoundShot g_soundShots[kSoundShots];
 static int g_soundWaiting = 0;
 static volatile LONG g_soundQuietAsked = 0;
 static std::wstring g_soundDir;
 static HANDLE g_soundWake = nullptr;
-static volatile LONG g_soundOpens = 0, g_soundStarts[kTurboTiers] = {}, g_soundHushed = 0; // for the test
+static volatile LONG g_soundOpens = 0, g_soundStarts[kSoundTierCount] = {}, g_soundHushed = 0; // for the test
 
 // XAudio2 says through this when its device is gone for good; the sound thread then lets go of the engine.
 struct SoundEvents : IXAudio2EngineCallback
@@ -305,7 +325,7 @@ struct SoundEngine
     IXAudio2MasteringVoice *master = nullptr;
     // one voice per recording. ringing: it was started and has not played out; volume: what it was started at;
     // hush: 1 while it plays as started, on its way to 0 once the pedal went down again
-    struct Voice { IXAudio2SourceVoice *voice; bool ringing, hushing; float volume, hush; } voices[kTurboTiers][kSoundVariants] = {};
+    struct Voice { IXAudio2SourceVoice *voice; bool ringing, hushing; float volume, hush; } voices[kSoundTierCount][kSoundVariants] = {};
 };
 
 inline void SoundClose(SoundEngine &e)
@@ -345,7 +365,7 @@ inline bool SoundOpen(SoundEngine &e, const SoundSet *sets, HRESULT &hr, const w
     InterlockedExchange(&g_soundEvents.failed, 0);
     e.xaudio->RegisterForCallbacks(&g_soundEvents);
     hr = e.xaudio->CreateMasteringVoice(&e.master, XAUDIO2_DEFAULT_CHANNELS, XAUDIO2_DEFAULT_SAMPLERATE, 0, nullptr, nullptr, AudioCategory_GameEffects);
-    for (int t = 0; SUCCEEDED(hr) && t < kTurboTiers; t++)
+    for (int t = 0; SUCCEEDED(hr) && t < kSoundTierCount; t++)
         for (int v = 0; SUCCEEDED(hr) && v < sets[t].count; v++)
         {
             WAVEFORMATEX format = {};
@@ -364,13 +384,13 @@ inline bool SoundOpen(SoundEngine &e, const SoundSet *sets, HRESULT &hr, const w
 static DWORD WINAPI SoundThread(void *)
 {
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    SoundSet sets[kTurboTiers];
-    for (int t = 0; t < kTurboTiers; t++) SoundLoad(t, g_soundDir, sets[t]);
+    SoundSet sets[kSoundTierCount];
+    for (int t = 0; t < kSoundTierCount; t++) SoundLoad(t, g_soundDir, sets[t]);
     SoundEngine e;
     ULONGLONG quietSince = 0, againAt = 0, last = GetTickCount64();
     HRESULT lastError = S_OK;
     bool said = false;
-    int played[kTurboTiers] = { -1, -1, -1 }; // the recording each strength played last
+    int played[kSoundTierCount] = { -1, -1, -1, -1 }; // the recording each strength played last
     SoundNoise chance = { (uint32_t)GetTickCount() | 1 };
     for (;;)
     {
@@ -412,10 +432,11 @@ static DWORD WINAPI SoundThread(void *)
             againAt = ms + 2000;
             continue;
         }
-        // the pedal went down again: what rings fades out. A sound asked for on this same pass comes after that.
+        // the pedal went down again: the turbo's sounds that ring fade out, the oil warning plays on. A sound asked for
+        // on this same pass comes after that.
         if (quiet)
-            for (auto &tier : e.voices)
-                for (SoundEngine::Voice &v : tier)
+            for (int t = 0; t < kTurboTiers; t++)
+                for (SoundEngine::Voice &v : e.voices[t])
                     if (v.ringing && !v.hushing) { v.hushing = true; InterlockedIncrement(&g_soundHushed); }
         for (int i = 0; i < waiting; i++)
         {
@@ -485,18 +506,18 @@ inline bool SoundStart(const std::wstring &dir)
     return true;
 }
 
-// Asks for a sound, from any thread: of which strength (kTurboHigh ..), how loud of 1 and how fast. One that finds
-// kSoundShots waiting is dropped.
+// Asks for a sound, from any thread: of which strength (kTurboHigh ..) or the oil warning (kSoundOil), how loud of 1
+// and how fast. One that finds kSoundShots waiting is dropped.
 inline void SoundPlay(int tier, float gain, float pitch)
 {
-    if (!g_soundWake || tier < 0 || tier >= kTurboTiers || !(gain > 0.0f)) return;
+    if (!g_soundWake || tier < 0 || tier >= kSoundTierCount || !(gain > 0.0f)) return;
     AcquireSRWLockExclusive(&g_soundLock);
     if (g_soundWaiting < kSoundShots) g_soundShots[g_soundWaiting++] = { tier, gain, pitch };
     ReleaseSRWLockExclusive(&g_soundLock);
     SetEvent(g_soundWake);
 }
 
-// Lets what still rings fade out, from any thread: the pedal went down again.
+// Lets the turbo's sounds that still ring fade out, from any thread: the pedal went down again.
 inline void SoundQuiet()
 {
     if (!g_soundWake) return;

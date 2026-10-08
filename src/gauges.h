@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#define GAUGES_VERSION "0.10.0"
+#define GAUGES_VERSION "0.11.0"
 
 // The exe the addresses in this mod are from (SnowRunner on Steam, the build of 22 July 2026). On any other the mod
 // stands down.
@@ -29,9 +29,12 @@ struct GaugeState
     float fuelFrac;                 // 0..1
     float rangeKm;                  // < 0 = not known yet
     float tempC;                    // coolant temperature (the mod's own model)
+    float oilC;                     // oil temperature (the mod's own model)
+    float oilWarnC;                 // where the oil dial's red zone starts: the settings' OilWarnC
     float boostBar;                 // boost pressure in bar, 0..2 (the mod's own model)
     float airBar;                   // brake air, cosmetic (0..10)
     bool handbrake, diffLock, awd, lowGear, headlights, damage, cold;
+    bool oilHot;                    // the oil lamp is lit (it blinks while the oil is too hot: the caller switches it on and off)
     int tilt;                       // 0 level, 1 warning, 2 danger, below 0 not known (the lamp stays dark)
     float rollDeg;                  // how far the truck leans sideways, above 0 to its right (the tilt lamp's truck leans with it)
     bool mph, psi, fahrenheit;      // units
@@ -40,6 +43,8 @@ struct GaugeState
 enum { kLayoutStrip, kLayoutBlock, kLayoutCount };           // GaugeSettings::layout
 enum { kFaceSolid, kFaceTinted, kFaceOpen, kFaceCount };     // GaugeSettings::style
 enum { kClassTruck, kClassScout, kClassHeavy, kClassCount }; // GaugeSettings::tachClass
+enum { kOilOff, kOilNeedle, kOilDial, kOilGaugeCount };      // GaugeSettings::oilGauge
+enum { kSpoolStandard, kSpoolQuick, kSpoolLaggy, kSpoolTwoStage, kSpoolCount }; // GaugeSettings::boostProfile
 
 // Everything in Gauges.ini ([Gauges]); the Gauges tab in ReShade's overlay edits all of it.
 struct GaugeSettings
@@ -52,20 +57,24 @@ struct GaugeSettings
     float opacity;           // Opacity of the whole cluster
     bool mph, psi, fahrenheit;                    // Mph, Psi, Fahrenheit
     bool showTemp, showBoost, showAir, showLamps; // ShowTemp, ShowBoost, ShowAir, ShowLamps
+    int oilGauge;            // OilGauge: the oil temperature: 0 not shown, 1 a second needle in the temperature dial, 2 a dial of its own left of it
     int tachClass;           // TachClass: 0 truck, 1 scout, 2 heavy: the scales of the tachometer and the speedometer
     float idleRpm, redlineRpm, maxRpm, speedMax;  // IdleRpm, RedlineRpm, MaxRpm, SpeedMax: 0 = the class's own
     float boostMax;          // BoostMax: the boost in bar the turbo reaches with the pedal floored at high engine speed; 0 = the class's own
+    int boostProfile;        // BoostProfile: how the turbo builds its boost: 0 standard, 1 small and quick, 2 big and slow, 3 two stages
     float rollWarnDeg, rollDangerDeg; // RollWarnDeg, RollDangerDeg: degrees of lean to the side from which the tilt lamp is amber, and red
     float pitchDangerDeg;    // PitchDangerDeg: degrees up or down a slope from which the tilt lamp is red
     float warmUpMinutes;     // WarmUpMinutes: minutes a cold engine takes from 15 C to 85 C when it is driven as usual
-    float overheatMinutes;   // OverheatMinutes: minutes from 90 C into the red zone at 118 C with the pedal floored and the wheels spinning at a standstill
+    float overheatMinutes;   // OverheatMinutes: minutes from 90 C into the red zone at 118 C with the engine revved out and the wheels spinning at a standstill
     float coolDownMinutes;   // CoolDownMinutes: minutes a stopped engine takes from 90 C down to 40 C
     float ambientC;          // AmbientC: the outside temperature in degrees C; an engine that has stood for long is this cold
     float airFullKmh;        // AirFullKmh: the speed in km/h from which the radiator gets all the air that driving gives it
-    bool damage;             // Damage: an engine in the red zone and a cold engine under a heavy pedal take the game's engine damage
+    float oilWarmUpMinutes;  // OilWarmUpMinutes: minutes a cold engine's oil takes from 15 C to 85 C when it is driven as usual
+    float oilWarnC;          // OilWarnC: the oil temperature in C from which the oil lamp blinks and the warning sounds
+    bool damage;             // Damage: an engine in the red zone and a cold engine revved high take the game's engine damage
     float hotDamage;         // HotDamagePercentPerMinute: percent of what the engine takes that it loses a minute at 125 C
-    float coldDamage;        // ColdDamagePercentPerMinute: the same for a cold engine with the pedal floored at 0 C
-    int soundVolume;         // SoundVolume: how loud the turbo's flutter is after a lift of the pedal, 0 to 100; 0 = no sound
+    float coldDamage;        // ColdDamagePercentPerMinute: the same for a cold engine at the red zone at 0 C
+    int soundVolume;         // SoundVolume: how loud the turbo's flutter and the oil warning are, 0 to 100; 0 = no sound
     bool soundsOnly;         // SoundsOnly: the sounds are played and the cluster is not drawn
     int toggleKey;           // ToggleKey: virtual key code of the key that hides and shows the cluster, 0 = none
     char padToggle[32];      // PadToggle: pad buttons that do the same ("LB+DPadUp"), "None"
@@ -83,7 +92,9 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.opacity = 1.0f;
     s.showTemp = s.showBoost = s.showLamps = true;
     s.showAir = false;
+    s.oilGauge = kOilNeedle;
     s.tachClass = kClassTruck;
+    s.boostProfile = kSpoolStandard;
     s.rollWarnDeg = 15.0f;
     s.rollDangerDeg = 25.0f;
     s.pitchDangerDeg = 35.0f;
@@ -92,6 +103,8 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.coolDownMinutes = 15.0f;
     s.ambientC = 15.0f;
     s.airFullKmh = 30.0f;
+    s.oilWarmUpMinutes = 8.0f;
+    s.oilWarnC = 125.0f;
     s.damage = true;
     s.hotDamage = 10.0f;
     s.coldDamage = 5.0f;
@@ -102,14 +115,15 @@ inline void SettingsDefaults(GaugeSettings &s)
 }
 
 // The range of each number: what the ini and the tab hold the settings to. A tinted face stops at 0.85, as a darker
-// one is the solid style. The tilt lamp's angles are degrees, the coolant's three times minutes, the outside
-// temperature degrees C, the speed of the radiator's full airflow km/h, the two damage rates percent a minute, the
-// boost bar (the dial ends at 2).
+// one is the solid style. The tilt lamp's angles are degrees, the coolant's three times and the oil's warm-up minutes,
+// the outside temperature and the oil's warning degrees C, the speed of the radiator's full airflow km/h, the two
+// damage rates percent a minute, the boost bar (the dial ends at 2).
 static const float kFaceOpacityMax = 0.85f, kScaleMin = 0.4f, kScaleMax = 3.0f, kOpacityMin = 0.1f, kOffsetMax = 4000.0f;
 static const float kIdleRange[2] = { 300.0f, 3000.0f }, kRedlineRange[2] = { 1000.0f, 12000.0f }, kMaxRpmRange[2] = { 1500.0f, 15000.0f },
                    kSpeedMaxRange[2] = { 40.0f, 300.0f }, kTiltRange[2] = { 1.0f, 89.0f }, kBoostRange[2] = { 0.3f, 2.0f };
 static const float kWarmUpRange[2] = { 0.5f, 60.0f }, kOverheatRange[2] = { 0.25f, 60.0f }, kCoolDownRange[2] = { 1.0f, 240.0f },
-                   kAmbientRange[2] = { -40.0f, 50.0f }, kAirFullRange[2] = { 10.0f, 80.0f }, kDamageRange[2] = { 0.0f, 100.0f };
+                   kAmbientRange[2] = { -40.0f, 50.0f }, kAirFullRange[2] = { 10.0f, 80.0f }, kDamageRange[2] = { 0.0f, 100.0f },
+                   kOilWarmUpRange[2] = { 1.0f, 60.0f }, kOilWarnRange[2] = { 100.0f, 150.0f };
 
 // The temperatures in C the coolant's three times are measured between: WarmUpMinutes from kTempOutside outside up
 // to kTempWarm, OverheatMinutes from kTempHot into the red zone at kTempRed, CoolDownMinutes from kTempHot down to
@@ -137,6 +151,8 @@ inline void SettingsClamp(GaugeSettings &s)
     s.maxRpm = SettingsOverride(s.maxRpm, kMaxRpmRange);
     s.speedMax = SettingsOverride(s.speedMax, kSpeedMaxRange);
     s.boostMax = SettingsOverride(s.boostMax, kBoostRange);
+    s.boostProfile = s.boostProfile < 0 || s.boostProfile >= kSpoolCount ? kSpoolStandard : s.boostProfile;
+    s.oilGauge = s.oilGauge < 0 || s.oilGauge >= kOilGaugeCount ? kOilNeedle : s.oilGauge;
     s.rollWarnDeg = SettingsRange(s.rollWarnDeg, kTiltRange[0], kTiltRange[1]);
     s.rollDangerDeg = SettingsRange(s.rollDangerDeg, s.rollWarnDeg, kTiltRange[1]); // red never comes before amber
     s.pitchDangerDeg = SettingsRange(s.pitchDangerDeg, kTiltRange[0], kTiltRange[1]);
@@ -145,6 +161,8 @@ inline void SettingsClamp(GaugeSettings &s)
     s.coolDownMinutes = SettingsRange(s.coolDownMinutes, kCoolDownRange[0], kCoolDownRange[1]);
     s.ambientC = SettingsRange(s.ambientC, kAmbientRange[0], kAmbientRange[1]);
     s.airFullKmh = SettingsRange(s.airFullKmh, kAirFullRange[0], kAirFullRange[1]);
+    s.oilWarmUpMinutes = SettingsRange(s.oilWarmUpMinutes, kOilWarmUpRange[0], kOilWarmUpRange[1]);
+    s.oilWarnC = SettingsRange(s.oilWarnC, kOilWarnRange[0], kOilWarnRange[1]);
     s.hotDamage = SettingsRange(s.hotDamage, kDamageRange[0], kDamageRange[1]);
     s.coldDamage = SettingsRange(s.coldDamage, kDamageRange[0], kDamageRange[1]);
     s.toggleKey = s.toggleKey < 0 || s.toggleKey > 255 ? 0 : s.toggleKey;
@@ -184,6 +202,7 @@ inline void GaugeStateSettings(GaugeState &st, const GaugeSettings &s)
     st.mph = s.mph;
     st.psi = s.psi;
     st.fahrenheit = s.fahrenheit;
+    st.oilWarnC = s.oilWarnC;
 }
 
 // The demo values: a truck cruising in fourth gear, warm, the lights on.
@@ -200,6 +219,7 @@ inline void GaugeDemo(GaugeState &st, const GaugeSettings &s)
     st.fuelFrac = 0.62f;
     st.rangeKm = 412.0f;
     st.tempC = 88.0f;
+    st.oilC = 97.0f;
     st.boostBar = 1.15f;
     st.airBar = 8.2f;
     st.awd = st.diffLock = st.headlights = true;
@@ -211,10 +231,14 @@ inline void GaugeDemo(GaugeState &st, const GaugeSettings &s)
 // tab; engineCapacity is 0 while it is not known.
 enum { kShown, kHiddenByToggle, kHiddenNoTruck, kHiddenSoundsOnly };
 // How strong the turbo's flutter is after a lift of the pedal, by the boost the lift had: the sounds come in these three.
+// After them the oil warning, the mod's one other sound.
 enum { kTurboHigh, kTurboMid, kTurboLow, kTurboTiers };
+enum { kSoundOil = kTurboTiers, kSoundTierCount };
 // truck: the kind of truck being driven, as the game's files name it ("" while none is driven): the scales in force
-// are that kind's. truckOwn: it has scales of its own in Gauges.ini, and those are the ones in force.
-struct GaugeView { bool show, demo; int hidden; GaugeState st; int engineDamage, engineCapacity; char truck[96]; bool truckOwn; };
+// are that kind's. truckOwn: it has scales of its own in Gauges.ini, and those are the ones in force. map: the map
+// the truck drives on ("" while it is not read), and ambientC the outside temperature in force, its own (mapOwn) or
+// AmbientC's.
+struct GaugeView { bool show, demo; int hidden; GaugeState st; int engineDamage, engineCapacity; char truck[96]; bool truckOwn; char map[64]; bool mapOwn; float ambientC; };
 
 LONG SettingsGet(GaugeSettings &out);       // the settings in force (any thread); returns their turn, for SettingsPut
 void SettingsPut(const GaugeSettings &in, LONG turn); // settings edited from those of a turn: the mod takes them at once and saves the ini a
@@ -224,7 +248,7 @@ void SettingsTruckDrop();                   // the tab's button: the driven truc
 void SettingsReset();                       // the tab's button: every setting back to its default, the driven truck's own scales too
 void DamageTestAsk(int points);             // the tab's test buttons: the mod adds this much to the driven truck's engine damage on its next pass
 void ViewGet(GaugeView &out);               // what to draw (any thread)
-void SoundHear(int tier);                   // plays the turbo's sound of that strength (kTurboHigh ..) as loud as the settings have it (the tab's buttons)
+void SoundHear(int tier);                   // plays the turbo's sound of that strength (kTurboHigh ..) or the oil warning (kSoundOil) as loud as the settings have it (the tab's buttons)
 void GaugeLog(const wchar_t *fmt, ...);     // a line in Gauges.log (any thread)
 bool OverlayInit(HMODULE self);             // registers with ReShade (the cluster and the Gauges tab); false = no ReShade
 uint32_t PadButtons();                      // the buttons of all connected pads together, 0 without a pad

@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.11.0] 2026-10-08
+
+- The coolant temperature follows the engine speed, not the pedal. An engine revved high heats whatever the foot does, one pulling at low revs heats little, and in neutral it makes a quarter of that heat.
+- The cold engine damage goes by the engine speed too: below 60 C with the needle more than half way from idle to the red zone. A keyboard's pedal, which is either up or floored, costs no more than a gentle foot that revs as high. The damage from overheating comes from the temperature, as before.
+- The oil temperature. The oil follows the coolant slowly: driven as usual it is at 85 C after about eight minutes, and a stopped engine's oil keeps its heat longer. It runs about 2 degrees over the coolant at idle and 14 at full load. Each kind of truck keeps its own.
+- `OilGauge` shows it as a second, amber needle in the coolant's dial (the default), on a dial of its own left of the coolant's, or not at all.
+- An oil lamp, the ninth. It blinks while the oil is too hot, from `OilWarnC` (125 C at first), and a warning of two short beeps sounds every four seconds until the oil is two degrees under that or the engine stops. `SoundVolume` sets how loud; `sounds\oil_beep_1.wav` plays in its place. The Gauges tab has a button to hear it.
+- New settings `OilWarmUpMinutes` (8) and `OilWarnC` (125), on the tab under Oil temperature.
+- `BoostProfile`: how the turbo builds its boost. Standard, small and quick (early, little lag), big and slow (late, long to come at low revs), or two stages (a small turbo early and a big one after it). It is on the tab under Scales, and each kind of truck can have its own, as its seventh scale.
+- Sections `[Map:<name>]` with an outside temperature for each of the game's regions are written into the ini. Their names are placeholders: the mod does not read which map a truck is on yet, so `AmbientC` is in force everywhere until it does.
+- With `Probe=1` the coolant's line has the oil, and the log says when the oil warning comes and goes.
+
 ## [0.10.0] 2026-10-07
 
 - The turbo is heard. Take your foot off the pedal under boost and the turbo flutters: the air beats back through the compressor wheel, slower and fainter until it is gone.

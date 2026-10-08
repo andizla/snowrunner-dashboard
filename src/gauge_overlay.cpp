@@ -199,6 +199,7 @@ static void OnSettingsTab(reshade::api::effect_runtime *)
     if (act & kPageHearHigh) SoundHear(kTurboHigh);
     if (act & kPageHearMid) SoundHear(kTurboMid);
     if (act & kPageHearLow) SoundHear(kTurboLow);
+    if (act & kPageHearOil) SoundHear(kSoundOil);
 }
 
 bool OverlayInit(HMODULE self)

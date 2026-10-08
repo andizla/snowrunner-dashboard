@@ -30,6 +30,11 @@
 // outside. Three of the settings are the times all of this takes, a fourth is the outside temperature, and a fifth
 // the speed from which the radiator gets all its air. Each truck keeps its own temperature.
 //
+// The oil temperature. The oil takes the engine's heat and gives it to the coolant and the air, and there is more of
+// it to warm: it heads for the coolant's temperature and a little over it, more the harder the engine works, and
+// follows slowly, so it is warm well after the coolant and keeps its heat longer. Its warm-up time is a setting.
+// From the settings' warning temperature the oil lamp blinks and a warning sounds every few seconds.
+//
 // The engine's wear. The game has engine damage and nothing that makes heat cost any. Here an engine in the red zone
 // loses a share of what it can take every minute, more the hotter it runs, and so does a cold engine revved high,
 // more the colder it is. The model counts that in points of the game's own engine damage, and gauges.cpp
@@ -38,7 +43,8 @@
 // The boost. The game has no boost pressure. Here the turbo blows by how far the pedal is down and how fast the
 // engine turns: nothing near idle, all it can from about two thirds of the way to the red zone. The pressure lags
 // behind, longer at low engine speed, and falls away quickly when the foot comes off. How much a truck's turbo
-// reaches is a setting, by truck class or the truck's own. A quick lift of the pedal under boost is told to the
+// reaches is a setting, by truck class or the truck's own, and so is how it gets there: four profiles move where the
+// boost comes in and how long it lags (a small quick turbo, a big slow one, two turbos one after the other). A quick lift of the pedal under boost is told to the
 // caller as a flutter or a blow-off, for the sounds (LiftSoundOf: how loud and how fast each is played).
 #pragma once
 #include "truck.h"
@@ -330,6 +336,8 @@ static const float kTempFall = 1.0f;         // degrees a second a running engin
 static const float kWaterFrom = 0.5f, kWaterFull = 1.2f; // metres of water at the truck's front: from about axle height it cools the engine, and with the engine in it it does all it can
 static const float kWater = 1.0f;            // what deep water adds to the air through the radiator, as a share of all the air that driving gives
 static const float kWaterStopped = 4.0f;     // a stopped engine in deep water loses its warmth this many times faster on top
+static const float kOilOver = 14.0f;         // degrees the oil heads for over the coolant at a full load's heat (and its share at less)
+static const float kOilCooling = 0.5f;       // a stopped engine's oil loses its warmth at this share of the coolant's rate
 enum { kTempTrucks = 16 };                   // the trucks the model remembers; the one left longest ago makes room for a new one
 
 // How far the thermostat is open: kThermostatLeak while it is shut, 1 when it is open.
@@ -429,27 +437,67 @@ inline TempRates TempRatesOf(const GaugeSettings &s)
     return r;
 }
 
+// The seconds the oil lags the coolant by, so that driven as usual from kTempOutside it reaches kTempWarm after the
+// settings' OilWarmUpMinutes. Worked out by running the coolant's warm-up with the oil behind it, and again only
+// when one of the settings it depends on changes.
+inline float OilLag(const GaugeSettings &s, const TempRates &r)
+{
+    static float warmUp = -1.0f, overheat = -1.0f, full = -1.0f, oilWarmUp = -1.0f, lag = 60.0f;
+    if (s.warmUpMinutes == warmUp && s.overheatMinutes == overheat && s.airFullKmh == full && s.oilWarmUpMinutes == oilWarmUp) return lag;
+    warmUp = s.warmUpMinutes;
+    overheat = s.overheatMinutes;
+    full = s.airFullKmh;
+    oilWarmUp = s.oilWarmUpMinutes;
+    const float target = fmaxf(s.oilWarmUpMinutes, kOilWarmUpRange[0]) * 60.0f, step = 0.25f, heat = TempHeat(kUsualLoad);
+    // the seconds the oil takes to kTempWarm with a lag of tau; longer than limit counts as never
+    auto time = [&](float tau, float limit) {
+        float temp = kTempOutside, oil = kTempOutside;
+        for (float at = step; at <= limit; at += step)
+        {
+            const float cooling = TempCooling(temp, kTempOutside, kUsualKmh, s.airFullKmh, 0.0f);
+            const float rate = heat < cooling ? kTempFall : r.warm + (r.hot - r.warm) * SettingsRange((temp - kTempWarm) / (kTempHot - kTempWarm), 0.0f, 1.0f);
+            temp += rate * (heat - cooling) * step;
+            oil += (temp + kOilOver * heat - oil) * (1.0f - expf(-step / tau));
+            if (oil >= kTempWarm) return at;
+        }
+        return limit * 2.0f;
+    };
+    // a longer lag is a longer time: halve the way between the shortest and the longest lag until it fits
+    float lo = 1.0f, hi = 3600.0f;
+    for (int i = 0; i < 40; i++)
+    {
+        const float mid = sqrtf(lo * hi);
+        (time(mid, target * 2.0f + 600.0f) < target ? lo : hi) = mid;
+    }
+    lag = sqrtf(lo * hi);
+    return lag;
+}
+
 struct TempModel
 {
-    // A kind of truck the model has driven (TruckKeyNumber of its key), its coolant temperature, and the model's
-    // clock when it was last driven. id 0 is a free place.
-    struct Truck { uint64_t id; float temp; double left; } truck[kTempTrucks];
+    // A kind of truck the model has driven (TruckKeyNumber of its key), its coolant and oil temperatures, and the
+    // model's clock when it was last driven. id 0 is a free place.
+    struct Truck { uint64_t id; float temp, oil; double left; } truck[kTempTrucks];
     bool known;      // truck[at] is the truck being driven
     int at;
     double clock;    // seconds the model has been stepped for, whichever truck was driven
     float temp;      // the driven truck's coolant temperature in C
+    float oil;       // and its oil temperature in C
     float load, heat, cooling, perSecond; // the last step, for the probe: the load, the heat made and taken away, degrees a second
     float depth, water;                   // and the metres of water at the truck's front, and how much of its cooling the water did (0 to 1)
+    float oilTarget;                      // and where the oil heads for
 };
 
 // One step of dt seconds for a truck of the kind id (TruckKeyNumber of its key, never 0); revs is TachShare. A
 // kind driven for the first time is as cold as the air outside. One driven before has cooled as a stopped engine
 // does for as long as other trucks were driven; the time the game spends in its menus does not count. The kind is
 // all the model knows a truck by: a truck the game puts back into the world or takes out of the garage again is as
-// warm as it was left, less the cooling, and two trucks of one kind share their temperature.
+// warm as it was left, less the cooling, and two trucks of one kind share their temperature. The oil goes with the
+// coolant in all of it.
 inline void TempStep(TempModel &m, uint64_t id, const TruckRaw &t, float revs, const GaugeSettings &s, float dt)
 {
     const TempRates r = TempRatesOf(s);
+    const float lag = OilLag(s, r);
     if (!m.known || m.truck[m.at].id != id)
     {
         int to = -1, room = -1;
@@ -460,11 +508,16 @@ inline void TempStep(TempModel &m, uint64_t id, const TruckRaw &t, float revs, c
             if (m.known && i == m.at) continue;
             if (room < 0 || (m.truck[room].id && (!k.id || k.left < m.truck[room].left))) room = i;
         }
-        if (to >= 0) m.truck[to].temp = s.ambientC + (m.truck[to].temp - s.ambientC) * expf(-r.off * (float)(m.clock - m.truck[to].left));
+        if (to >= 0)
+        {
+            const float away = (float)(m.clock - m.truck[to].left);
+            m.truck[to].temp = s.ambientC + (m.truck[to].temp - s.ambientC) * expf(-r.off * away);
+            m.truck[to].oil = s.ambientC + (m.truck[to].oil - s.ambientC) * expf(-r.off * kOilCooling * away);
+        }
         else
         {
             to = room;
-            m.truck[to] = { id, s.ambientC, m.clock };
+            m.truck[to] = { id, s.ambientC, s.ambientC, m.clock };
         }
         m.at = to;
         m.known = true;
@@ -472,7 +525,7 @@ inline void TempStep(TempModel &m, uint64_t id, const TruckRaw &t, float revs, c
     TempModel::Truck &k = m.truck[m.at];
     m.clock += dt;
     k.left = m.clock;
-    const float was = k.temp;
+    const float was = k.temp, oilWas = k.oil;
     m.depth = TruckWaterDepth(t);
     m.water = TempWater(m.depth);
     if (TruckEngineOn(t))
@@ -482,17 +535,27 @@ inline void TempStep(TempModel &m, uint64_t id, const TruckRaw &t, float revs, c
         m.cooling = TempCooling(k.temp, s.ambientC, fabsf(t.speed) * 3.6f, s.airFullKmh, m.water);
         const float rate = m.heat < m.cooling ? kTempFall : r.warm + (r.hot - r.warm) * SettingsRange((k.temp - kTempWarm) / (kTempHot - kTempWarm), 0.0f, 1.0f);
         k.temp += rate * (m.heat - m.cooling) * dt;
+        // the oil: towards the coolant and over it by the heat, slowly
+        m.oilTarget = k.temp + kOilOver * m.heat;
+        k.oil += (m.oilTarget - k.oil) * (1.0f - expf(-dt / lag));
     }
     else
     {
-        // a stopped engine: slowly towards the air outside, and faster the deeper it stands in water
+        // a stopped engine: slowly towards the air outside, and faster the deeper it stands in water; the oil slower
+        // than the coolant
         m.load = m.heat = m.cooling = 0.0f;
-        k.temp = s.ambientC + (k.temp - s.ambientC) * expf(-r.off * (1.0f + kWaterStopped * m.water) * dt);
+        const float off = r.off * (1.0f + kWaterStopped * m.water) * dt;
+        k.temp = s.ambientC + (k.temp - s.ambientC) * expf(-off);
+        k.oil = s.ambientC + (k.oil - s.ambientC) * expf(-off * kOilCooling);
+        m.oilTarget = s.ambientC;
     }
     if (!isfinite(k.temp)) k.temp = isfinite(was) ? was : s.ambientC; // a step that gave no number leaves the temperature as it was
+    if (!isfinite(k.oil)) k.oil = isfinite(oilWas) ? oilWas : s.ambientC;
     if (k.temp > kTempMost) k.temp = kTempMost;
+    if (k.oil > kTempMost) k.oil = kTempMost;
     m.perSecond = dt > 0.0f ? (k.temp - was) / dt : 0.0f;
     m.temp = k.temp;
+    m.oil = k.oil;
 }
 
 // The cold lamp: on while the driven truck's coolant is below kTempCold. The temperature moves too slowly for the
@@ -501,6 +564,42 @@ inline bool TempCold(const TempModel &m) { return m.known && m.temp < kTempCold;
 
 // Where the temperature stands: 0 the cold lamp is on, 1 between, 2 in the red zone; below 0 not known.
 inline int TempZone(const TempModel &m) { return !m.known ? -1 : m.temp < kTempCold ? 0 : m.temp < kTempRed ? 1 : 2; }
+
+// ---- the oil warning ----
+
+static const float kOilBand = 2.0f;         // the warning ends this many degrees under the setting's temperature, so it does not flicker on and off
+static const float kOilBeepEvery = 4.0f;    // seconds from one warning sound to the next while the oil stays too hot
+static const int kOilBlinkMs = 400;         // the oil lamp's blink: this long lit, then this long dark
+
+// on: the oil is too hot; wait: seconds until the next warning sound; beeps: how many have sounded since the model began.
+struct OilWarning { bool on; float wait; int beeps; };
+
+// One step of dt seconds. Returns true when the warning is to sound: at once when the running engine's oil reaches
+// the settings' OilWarnC, and every kOilBeepEvery while it stays there. It ends kOilBand under OilWarnC, and with the
+// engine stopped.
+inline bool OilWarnStep(OilWarning &w, const TempModel &m, const TruckRaw &t, const GaugeSettings &s, float dt)
+{
+    const bool hot = m.known && TruckEngineOn(t) && m.oil >= (w.on ? s.oilWarnC - kOilBand : s.oilWarnC);
+    if (!hot)
+    {
+        w.on = false;
+        w.wait = 0.0f;
+        return false;
+    }
+    w.on = true;
+    w.wait -= dt;
+    if (w.wait > 0.0f) return false;
+    w.wait = kOilBeepEvery;
+    w.beeps++;
+    return true;
+}
+
+// The oil lamp at a time in milliseconds: it blinks while the warning is on, and is dark otherwise.
+inline bool OilLamp(const OilWarning &w, unsigned long long ms) { return w.on && (ms / kOilBlinkMs) % 2 == 0; }
+
+// How loud of 1 the oil warning sounds at the settings' SoundVolume (0 to 100): a little under the turbo at its loudest.
+static const float kOilBeepLoud = 0.8f;
+inline float OilBeepGain(int soundVolume) { return (float)(soundVolume < 0 ? 0 : soundVolume > 100 ? 100 : soundVolume) / 100.0f * kOilBeepLoud; }
 
 // The coolant in a line of text for the probe log, with what the last step made of the truck.
 inline void TempProbeText(const TruckRaw &t, const TempModel &m, const GaugeSettings &s, char *out, size_t size)
@@ -511,17 +610,35 @@ inline void TempProbeText(const TruckRaw &t, const TempModel &m, const GaugeSett
         return;
     }
     const float kmh = fabsf(t.speed) * 3.6f;
-    sprintf_s(out, size, "coolant %.1f C, %+.2f C/s, cold lamp %s%s | heat %.2f of a full load's (load %.2f), %.2f taken away (thermostat %.2f, air %.2f at %.1f km/h, fan %.2f, water %.2f at %.2f m%s) | %.0f C outside",
-              m.temp, m.perSecond, TempCold(m) ? "on" : "off", TempZone(m) == 2 ? ", in the red zone" : "", m.heat, m.load, m.cooling, TempThermostat(m.temp),
-              TempAirflow(m.temp, kmh, s.airFullKmh) - kFan * TempFan(m.temp), kmh, TempFan(m.temp), m.water, m.depth, t.waterKnown ? "" : " (not read)", s.ambientC);
+    sprintf_s(out, size, "coolant %.1f C, %+.2f C/s, cold lamp %s%s | oil %.1f C, heading for %.1f%s | heat %.2f of a full load's (load %.2f), %.2f taken away (thermostat %.2f, air %.2f at %.1f km/h, fan %.2f, water %.2f at %.2f m%s) | %.0f C outside",
+              m.temp, m.perSecond, TempCold(m) ? "on" : "off", TempZone(m) == 2 ? ", in the red zone" : "", m.oil, m.oilTarget, m.oil >= s.oilWarnC ? ", too hot" : "",
+              m.heat, m.load, m.cooling, TempThermostat(m.temp), TempAirflow(m.temp, kmh, s.airFullKmh) - kFan * TempFan(m.temp), kmh, TempFan(m.temp), m.water, m.depth,
+              t.waterKnown ? "" : " (not read)", s.ambientC);
 }
 
 // ---- the boost ----
 
-static const float kBoostRevsFrom = 0.2f, kBoostRevsFull = 0.65f; // the turbo starts to blow with the needle this far from idle to the red zone, and blows all it can from here
+static const float kBoostRevsFrom = 0.2f, kBoostRevsFull = 0.65f; // the standard turbo starts to blow with the needle this far from idle to the red zone, and blows all it can from here
 static const float kBoostPedal = 1.3f;       // the boost goes with the pedal to this power: little of it at a light foot
-static const float kBoostSpool = 0.35f, kBoostSpoolLow = 0.9f; // seconds the boost lags by on the way up at the red zone, and this much more at idle
+static const float kBoostSpool = 0.35f, kBoostSpoolLow = 0.9f; // seconds the standard boost lags by on the way up at the red zone, and this much more at idle
 static const float kBoostFall = 0.18f, kBoostLift = 0.1f; // seconds on the way down, and with the foot off the pedal
+
+// A turbo's character (the settings' BoostProfile). Its boost comes from one or two stages: each makes its share of
+// the boost, starting with the needle at from of the way to the red zone and all of it from full, and lags by spool
+// seconds at the red zone and spoolLow more at idle. Two stages are a small turbo early and a big one after it; the
+// lag on the way up is the small one's until the boost has reached what the small one makes. fall and lift: seconds
+// the boost takes on the way down, and with the foot off the pedal.
+struct SpoolStage { float share, from, full, spool, spoolLow; };
+struct SpoolProfile { SpoolStage stage[2]; float fall, lift; };
+static const SpoolProfile kSpoolProfiles[kSpoolCount] = {
+    { { { 1.0f, kBoostRevsFrom, kBoostRevsFull, kBoostSpool, kBoostSpoolLow }, {} }, kBoostFall, kBoostLift }, // standard
+    { { { 1.0f, 0.08f, 0.45f, 0.18f, 0.35f }, {} }, 0.15f, 0.08f },                                         // small and quick: early and little lag
+    { { { 1.0f, 0.4f, 0.8f, 0.45f, 2.2f }, {} }, 0.25f, 0.12f },                                             // big and slow: late, and long to come at low revs
+    { { { 0.4f, 0.08f, 0.35f, 0.18f, 0.35f }, { 0.6f, 0.45f, 0.8f, 0.4f, 1.6f } }, 0.2f, 0.1f } };          // two stages: the small one early, the big one after it
+inline const SpoolProfile &SpoolOf(int profile) { return kSpoolProfiles[profile < 0 || profile >= kSpoolCount ? kSpoolStandard : profile]; }
+
+// The share of a stage's boost that the needle (0 to 1) brings.
+inline float SpoolRamp(const SpoolStage &k, float needle) { return k.share <= 0.0f ? 0.0f : k.share * SettingsRange((needle - k.from) / (k.full - k.from), 0.0f, 1.0f); }
 static const float kLiftWindow = 0.25f;      // seconds: a lift is the pedal coming up within this time
 static const float kLiftForBlowOff = 0.5f, kLiftForFlutter = 0.25f; // how far the pedal has to come up for a blow-off, and for a flutter
 static const float kBlowOffFrom = 0.22f, kFlutterFrom = 0.11f; // the boost it takes, as a share of the most the turbo reaches
@@ -545,14 +662,18 @@ struct BoostModel
 };
 
 // The boost the turbo heads for, in bar: most (the truck's BoostMax) with the pedal floored and the tachometer's
-// needle from kBoostRevsFull of the way to the red zone (revs, TachShare). Nothing below kBoostRevsFrom, with the
-// engine off or while it starts, and little in neutral, where nothing pulls against the engine.
-inline float BoostTarget(const TruckRaw &t, float revs, float most)
+// needle (revs, TachShare) where the profile's last stage blows all it can. Nothing below where its first stage
+// starts, with the engine off or while it starts, and little in neutral, where nothing pulls against the engine.
+// first: what the first stage makes of it.
+inline float BoostTarget(const TruckRaw &t, float revs, float most, int profile, float *first = nullptr)
 {
+    if (first) *first = 0.0f;
     if (!TruckEngineOn(t) || (t.startTimer > 0.0f && !(t.flags & 2))) return 0.0f;
+    const SpoolProfile &p = SpoolOf(profile);
     const float needle = revs > 0.0f ? fminf(revs, 1.0f) : 0.0f; // 0 too for revs that are no number
-    const float target = most * powf(TruckPedal(t), kBoostPedal) * SettingsRange((needle - kBoostRevsFrom) / (kBoostRevsFull - kBoostRevsFrom), 0.0f, 1.0f);
-    return t.gearEngaged == 0 ? target * kLoadNeutral : target;
+    const float foot = most * powf(TruckPedal(t), kBoostPedal) * (t.gearEngaged == 0 ? kLoadNeutral : 1.0f);
+    if (first) *first = foot * SpoolRamp(p.stage[0], needle);
+    return foot * (SpoolRamp(p.stage[0], needle) + SpoolRamp(p.stage[1], needle));
 }
 
 // One step of dt seconds. Returns what a lift of the pedal on this step sounds like: kLiftBlowOff as soon as the
@@ -560,7 +681,7 @@ inline float BoostTarget(const TruckRaw &t, float revs, float most)
 // began to; kLiftFlutter once the pedal has stopped after a smaller lift, or after one with less boost; kLiftNone
 // otherwise and for kLiftPause after a sound. The model keeps the boost the sound came at and how loud it is
 // (lastBar, lastVolume).
-inline int BoostStep(BoostModel &m, const TruckRaw &t, float revs, float most, float dt)
+inline int BoostStep(BoostModel &m, const TruckRaw &t, float revs, float most, int profile, float dt)
 {
     const float pedal = TruckPedal(t);
     if (!m.running)
@@ -605,9 +726,12 @@ inline int BoostStep(BoostModel &m, const TruckRaw &t, float revs, float most, f
         m.mark[0] = m.mark[m.marks - 1];
         m.marks = 1;
     }
-    m.target = BoostTarget(t, revs, most);
+    float first = 0.0f;
+    m.target = BoostTarget(t, revs, most, profile, &first);
+    const SpoolProfile &p = SpoolOf(profile);
     const float needle = revs > 0.0f ? fminf(revs, 1.0f) : 0.0f;
-    const float tau = m.target > m.bar ? kBoostSpool + kBoostSpoolLow * (1.0f - needle) : pedal < 0.05f ? kBoostLift : kBoostFall;
+    const SpoolStage &building = p.stage[1].share > 0.0f && m.bar >= first ? p.stage[1] : p.stage[0];
+    const float tau = m.target > m.bar ? building.spool + building.spoolLow * (1.0f - needle) : pedal < 0.05f ? p.lift : p.fall;
     m.bar += (m.target - m.bar) * (1.0f - expf(-dt / tau));
     if (!(m.bar >= 0.0f)) m.bar = 0.0f; // 0 too for a boost that is no number
     return sound;
