@@ -590,6 +590,7 @@ struct TruckWatch
     float byWay;
     TachModel tach;             // the engine speed of the truck at modelVehicle
     BoostModel boost;           // and its boost
+    PowertrainModel power;      // and what its engine would deliver, for the probe log until the hooks hand it to the game
     int probedLifts;            // the lifts of the pedal the boost had told when the probe wrote last
     uint32_t chance;            // what the pitch of the next lift's sound is drawn from
     bool pedalDown;             // the pedal was more than half down on the last step
@@ -727,6 +728,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         {
             w.tach = TachModel{};
             w.boost = BoostModel{};
+            w.power = PowertrainModel{};
             w.tilt = TiltModel{};
             w.owed = w.asked = 0;
             w.modelVehicle = w.refs.vehicle;
@@ -751,6 +753,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         // the oil warning: heard every few seconds while the oil is too hot, and said in the log when it comes and goes
         const bool oilWas = w.oil.on;
         if (OilWarnStep(w.oil, w.temp, raw, s, dt)) SoundPlay(kSoundOil, OilBeepGain(s.soundVolume), 1.0f);
+        // the powertrain: what the engine would deliver, worked out and logged, not handed to the game yet
+        PowertrainStep(w.power, raw, kClassCurves[s.tachClass], TachSpeed(w.tach, scale), scale.redline > 0.0f ? scale.max / scale.redline : 1.0f, w.temp.oil,
+                       scale.boost > 0.0f ? w.boost.bar / scale.boost : 0.0f, dt);
         if (w.oil.on != oilWas)
             Log(w.oil.on ? L"oil: %.1f C, too hot from %g C: the lamp blinks and the warning sounds" : L"oil: %.1f C, the warning is over", w.temp.oil, s.oilWarnC);
         // the engine's record, for each truck as it is first driven; one that was not found is looked for again every
@@ -805,7 +810,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                   TempZone(w.temp) != w.probedZone || DamageAdding(w.damage, s) != w.probedAdding ||
                   w.boost.flutters + w.boost.blowOffs != w.probedLifts))
     {
-        char first[640], second[1024], third[512], fourth[256], fifth[640], sixth[1024], seventh[400];
+        char first[640], second[1024], third[512], fourth[256], fifth[640], sixth[1024], seventh[400], eighth[400];
         TruckProbeText(raw, world, w.byWay, first, sizeof first, second, sizeof second);
         ModelProbeText(raw, w.tach, w.range, scale, third, sizeof third);
         Log(L"probe: %S", first);
@@ -820,6 +825,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         BoostProbeText(raw, w.boost, TachShare(w.tach, scale), scale.boost, seventh, sizeof seventh);
         Log(L"probe: %S", sixth);
         Log(L"probe: %S", seventh);
+        PowertrainProbeText(raw, w.power, w.tach.rpm, eighth, sizeof eighth);
+        Log(L"probe: %S", eighth);
         w.probedLifts = w.boost.flutters + w.boost.blowOffs;
         w.probedAdding = DamageAdding(w.damage, s);
         w.probedLamp = w.tilt.lamp;

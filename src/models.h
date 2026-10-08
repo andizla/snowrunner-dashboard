@@ -51,6 +51,14 @@
 // reaches is a setting, by truck class or the truck's own, and so is how it gets there: four profiles move where the
 // boost comes in and how long it lags (a small quick turbo, a big slow one, two turbos one after the other). A quick lift of the pedal under boost is told to the
 // caller as a flutter or a blow-off, for the sounds (LiftSoundOf: how loud and how fast each is played).
+//
+// The powertrain. What the engine would deliver if the mod drove it, as a real engine does: the pedal is shaped (a
+// progressive curve, and a ramp so that a keyboard's pedal, which is either up or floored, comes in over a moment),
+// and the torque comes from the engine speed by a torque curve (a diesel's broad plateau for trucks, a later peak
+// for scouts, nothing past the governor), with less of it while the oil is cold and more with the turbo's boost. The
+// power is that torque times the shaped pedal, 1 being the engine floored at its peak, warm and at full boost. The
+// mod does not hand any of it to the game yet: that waits for the hooks (module 12), and until then the probe log
+// says what it would have done.
 #pragma once
 #include "truck.h"
 
@@ -803,6 +811,107 @@ inline void BoostProbeText(const TruckRaw &t, const BoostModel &m, float revs, f
     if (m.last != kLiftNone) sprintf_s(last, "the last a %s at %.2f bar, %.2f of its full sound", m.last == kLiftBlowOff ? "blow-off" : "flutter", m.lastBar, m.lastVolume);
     sprintf_s(out, size, "boost %.2f bar of the turbo's %.2f, heading for %.2f (pedal %.2f, the needle %.2f of the way to the red zone) | lifts: %d blow-offs, %d flutters, %s",
               m.bar, most, m.target, TruckPedal(t), revs, m.blowOffs, m.flutters, last);
+}
+
+// ---- the powertrain ----
+
+static const float kThrottleCurve = 1.8f;    // the shaped pedal is the pedal to this power: half way down gives 0.29
+static const float kThrottleUp = 0.6f;       // seconds the shaped pedal takes from up to floored when the pedal goes down at once
+static const float kThrottleDown = 0.15f;    // and from floored to up
+static const float kColdTorque = 0.15f;      // the torque the engine loses with its oil at 0 C, none from kColdTorqueTo up
+static const float kColdTorqueTo = 60.0f;
+static const float kBoostTorque = 0.35f;     // the share of the torque that comes from the boost: without it the engine has the rest
+enum { kCurvePoints = 8 };                   // points a torque curve holds at most
+
+// A torque curve: the torque as a share of the engine's most (y, 0 to 1) at engine speeds as a share of where the
+// red zone starts (x, rising). Between two points the torque goes straight from one to the other; below the first
+// it is the first's; from the last point to the tachometer's top it falls to nothing, as the governor cuts the fuel.
+struct TorqueCurve { int n; float x[kCurvePoints], y[kCurvePoints]; };
+
+// The curves by truck class: trucks and heavy trucks a diesel's, broad and early, scouts a later peak.
+static const TorqueCurve kClassCurves[kClassCount] = {
+    { 5, { 0.25f, 0.45f, 0.6f, 0.8f, 1.0f }, { 0.55f, 0.85f, 1.0f, 1.0f, 0.85f } },
+    { 5, { 0.15f, 0.35f, 0.6f, 0.75f, 1.0f }, { 0.5f, 0.75f, 0.95f, 1.0f, 0.85f } },
+    { 5, { 0.25f, 0.4f, 0.55f, 0.75f, 1.0f }, { 0.6f, 0.9f, 1.0f, 1.0f, 0.8f } } };
+
+// A curve written as text, "x:y,x:y,...", as a truck's own will stand in Gauges.ini. False, and out untouched, for
+// text that is not 2 to kCurvePoints points with x rising from above 0 and y from 0 to 1.
+inline bool TorqueCurveParse(const char *text, TorqueCurve &out)
+{
+    TorqueCurve c = {};
+    const char *p = text;
+    while (*p)
+    {
+        float x = 0.0f, y = 0.0f;
+        int used = 0;
+        if (c.n >= kCurvePoints || sscanf_s(p, " %f : %f%n", &x, &y, &used) != 2 || !(x > 0.0f) || !(y >= 0.0f && y <= 1.0f) || (c.n && !(x > c.x[c.n - 1]))) return false;
+        c.x[c.n] = x;
+        c.y[c.n] = y;
+        c.n++;
+        p += used;
+        while (*p == ' ') p++;
+        if (*p == ',')
+        {
+            p++;
+            while (*p == ' ') p++;
+            if (!*p) return false; // a comma with no point after it
+        }
+        else if (*p) return false;
+    }
+    if (c.n < 2) return false;
+    out = c;
+    return true;
+}
+
+// The torque at an engine speed (rpm over the red zone's), from the curve; top is the tachometer's top over the red
+// zone's, where the governor leaves nothing.
+inline float TorqueAt(const TorqueCurve &c, float speed, float top)
+{
+    if (c.n < 1 || !(speed >= 0.0f)) return 0.0f;
+    if (speed <= c.x[0]) return c.y[0];
+    for (int i = 1; i < c.n; i++)
+        if (speed <= c.x[i]) return c.y[i - 1] + (c.y[i] - c.y[i - 1]) * (speed - c.x[i - 1]) / (c.x[i] - c.x[i - 1]);
+    const float last = c.x[c.n - 1];
+    return top > last ? c.y[c.n - 1] * SettingsRange(1.0f - (speed - last) / (top - last), 0.0f, 1.0f) : 0.0f;
+}
+
+// The pedal shaped by the curve, the way it is ramped. pedal: as the driver holds it, 0 to 1.
+inline float ThrottleShape(float pedal) { return powf(SettingsRange(pedal, 0.0f, 1.0f), kThrottleCurve); }
+
+struct PowertrainModel
+{
+    bool running;      // the model has a truck
+    float pedal;       // the shaped pedal, 0 to 1, after the ramp
+    float torque;      // the torque the engine has now, as a share of its most: the curve, the cold and the boost
+    float curve, cold, boost; // the three, for the probe
+    float power;       // what it delivers: the torque times the shaped pedal, 1 = floored at the peak, warm, at full boost
+    float load;        // the fuel it burns, as a share of floored at the red zone: the power times the engine speed
+};
+
+// One step of dt seconds. speed: the engine speed over the red zone's (TachSpeed); top: the tachometer's top over the
+// red zone's; oil: the oil temperature in C (TempModel::oil); boost: the boost as a share of the most the turbo makes.
+// The shaped pedal follows the driver's at the ramp's pace; with the engine off it and the power are 0.
+inline void PowertrainStep(PowertrainModel &m, const TruckRaw &t, const TorqueCurve &c, float speed, float top, float oil, float boost, float dt)
+{
+    if (!m.running) m = PowertrainModel{ true };
+    const float want = TruckEngineOn(t) ? ThrottleShape(TruckPedal(t)) : 0.0f;
+    const float step = dt / (want > m.pedal ? kThrottleUp : kThrottleDown);
+    m.pedal = want > m.pedal ? fminf(want, m.pedal + step) : fmaxf(want, m.pedal - step);
+    if (!(m.pedal >= 0.0f)) m.pedal = 0.0f; // 0 too for a step that gave no number
+    m.curve = TorqueAt(c, speed, top);
+    m.cold = isfinite(oil) ? 1.0f - kColdTorque * SettingsRange((kColdTorqueTo - oil) / kColdTorqueTo, 0.0f, 1.0f) : 1.0f;
+    m.boost = 1.0f - kBoostTorque + kBoostTorque * (boost > 0.0f ? fminf(boost, 1.0f) : 0.0f);
+    m.torque = TruckEngineOn(t) ? m.curve * m.cold * m.boost : 0.0f;
+    m.power = m.torque * m.pedal;
+    m.load = m.power * (speed > 0.0f ? fminf(speed, 1.0f) : 0.0f);
+}
+
+// The powertrain in a line of text for the probe log.
+inline void PowertrainProbeText(const TruckRaw &t, const PowertrainModel &m, float rpm, char *out, size_t size)
+{
+    sprintf_s(out, size, "powertrain (not handed to the game yet): pedal %.2f, shaped %.2f | torque %.2f of the most at %.0f rpm (curve %.2f, cold x%.2f, boost x%.2f) | "
+                         "power %.2f, fuel %.2f of floored at the red zone",
+              TruckPedal(t), m.pedal, m.torque, rpm, m.curve, m.cold, m.boost, m.power, m.load);
 }
 
 // ---- the game's own clock ----

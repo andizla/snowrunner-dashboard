@@ -166,6 +166,9 @@ static int Replay(const char *path, float idleRpm, float redlineRpm)
     // the boost: the highest, the time above half of what the turbo reaches, the lifts told, and how long it takes
     // from a floored pedal at next to no boost to nine tenths of it
     BoostModel boost = {};
+    // the powertrain while driving: the pedal as held and as shaped, the power, and the seconds near full power
+    PowertrainModel power = {};
+    float pedalSum = 0.0f, shapedSum = 0.0f, powerSum = 0.0f, nearFull = 0.0f;
     float mostBoost = 0.0f, boosted = 0.0f, climb = -1.0f, climbSum = 0.0f, climbLongest = 0.0f;
     int climbs = 0, flutters = 0, blowOffs = 0;
     float hotPoints = 0.0f, coldPoints = 0.0f;
@@ -209,6 +212,7 @@ static int Replay(const char *path, float idleRpm, float redlineRpm)
         {
             tach = TachModel{};
             boost = BoostModel{};
+            power = PowertrainModel{};
             climb = -1.0f;
             range = RangeModel{};
             last = seconds - kDt;
@@ -244,6 +248,7 @@ static int Replay(const char *path, float idleRpm, float redlineRpm)
             steps++;
             if (tach.rpm > k.redline) redSteps++;
             TempStep(temp, kind, t, TachSpeed(tach, k), s, dt);
+            PowertrainStep(power, t, kClassCurves[s.tachClass], TachSpeed(tach, k), k.max / k.redline, temp.oil, boost.bar / k.boost, dt);
             const int cost = DamageStep(wear, truck, t, temp, TachSpeed(tach, k), s, dt);
             (wear.hot > 0.0f ? hotPoints : coldPoints) += (float)cost;
             char note[200];
@@ -265,6 +270,10 @@ static int Replay(const char *path, float idleRpm, float redlineRpm)
                 drivingAll += dt;
                 loadSum += temp.load * dt;
                 kmhSum += fabsf(t.speed) * 3.6f * dt;
+                pedalSum += TruckPedal(t) * dt;
+                shapedSum += power.pedal * dt;
+                powerSum += power.power * dt;
+                if (power.power >= 0.9f) nearFull += dt;
             }
             if (!past60 && temp.temp >= kTempCold)
             {
@@ -294,6 +303,8 @@ static int Replay(const char *path, float idleRpm, float redlineRpm)
            samples, steps, mostStep, mostRpm, redSteps, k.redline);
     for (const std::string &n : notes) printf("coolant: %s\n", n.c_str());
     printf("oil: the hottest %.1f C\n", hottestOil);
+    printf("powertrain: while driving the pedal was down %.2f on average and %.2f shaped; the power %.2f on average, %.0f s at 0.9 of full or more\n",
+           drivingAll > 0.0f ? pedalSum / drivingAll : 0.0f, drivingAll > 0.0f ? shapedSum / drivingAll : 0.0f, drivingAll > 0.0f ? powerSum / drivingAll : 0.0f, nearFull);
     printf("coolant: the hottest %.1f C, %.0f s in the red zone (from %.0f C); while driving (%.0f s) the mean load was %.2f and the mean speed %.1f km/h\n", hottest, inRed, kTempRed,
            drivingAll, drivingAll > 0.0f ? loadSum / drivingAll : 0.0f, drivingAll > 0.0f ? kmhSum / drivingAll : 0.0f);
     printf("boost: the highest %.2f bar of the turbo's %.2f, %.0f s above half of it; %d blow-offs and %d flutters; from a floored pedal to nine tenths of it %d times, %.1f s on average, %.1f s the longest\n",
@@ -1112,6 +1123,68 @@ int main(int argc, char **argv)
         g.boostProfile = 7;
         SettingsClamp(g);
         Check(g.boostProfile == kSpoolStandard && &SpoolOf(-1) == &kSpoolProfiles[kSpoolStandard], "spool: a profile the mod does not have is the standard one");
+    }
+
+    // the powertrain: the shaped pedal, the torque curves, the cold and the boost
+    {
+        const bool shape = ThrottleShape(0.0f) == 0.0f && ThrottleShape(1.0f) == 1.0f && Near(ThrottleShape(0.5f), 0.287f, 0.002f) && ThrottleShape(0.3f) < ThrottleShape(0.31f) &&
+                           ThrottleShape(1.5f) == 1.0f && ThrottleShape(-1.0f) == 0.0f;
+        Check(shape, "powertrain: the pedal is shaped progressively: half way down gives 0.29, and up and floored stay as they are");
+        // a keyboard's pedal: floored at once, held, then let go
+        TruckRaw f = Truck();
+        f.gear = f.gearEngaged = 1;
+        f.automatic = 1;
+        PowertrainModel pm = {};
+        const TorqueCurve &truckCurve = kClassCurves[kClassTruck];
+        const float top = 3000.0f / 2200.0f;
+        f.throttle = 0.0f;
+        PowertrainStep(pm, f, truckCurve, 0.7f, top, 90.0f, 1.0f, kDt);
+        f.throttle = -1.0f;
+        float half = -1.0f, full = -1.0f;
+        for (float at = kDt; at < 2.0f; at += kDt)
+        {
+            PowertrainStep(pm, f, truckCurve, 0.7f, top, 90.0f, 1.0f, kDt);
+            if (half < 0.0f && pm.pedal >= 0.5f) half = at;
+            if (full < 0.0f && pm.pedal >= 1.0f) full = at;
+        }
+        const bool atFull = Near(pm.power, 1.0f, 0.001f) && Near(pm.load, 0.7f, 0.001f);
+        f.throttle = 0.0f;
+        float gone = -1.0f;
+        for (float at = kDt; at < 1.0f && gone < 0.0f; at += kDt)
+        {
+            PowertrainStep(pm, f, truckCurve, 0.7f, top, 90.0f, 1.0f, kDt);
+            if (pm.pedal <= 0.0f) gone = at;
+        }
+        Check(Near(half, 0.3f, 0.06f) && Near(full, kThrottleUp, 0.06f) && atFull && gone > 0.0f && gone <= kThrottleDown + 0.06f,
+              "powertrain: a pedal floored at once comes in over 0.6 s and goes in 0.15 s; floored warm at full boost on the plateau it is all the power, and burns 0.7 at 0.7 of the red zone's speed");
+        // the curves
+        const bool truck = Near(TorqueAt(truckCurve, 0.1f, top), 0.55f, 0.001f) && Near(TorqueAt(truckCurve, 0.35f, top), 0.7f, 0.001f) &&
+                           Near(TorqueAt(truckCurve, 0.7f, top), 1.0f, 0.001f) && Near(TorqueAt(truckCurve, 1.0f, top), 0.85f, 0.001f) &&
+                           Near(TorqueAt(truckCurve, (1.0f + top) * 0.5f, top), 0.425f, 0.001f) && TorqueAt(truckCurve, top, top) == 0.0f && TorqueAt(truckCurve, 2.0f, top) == 0.0f;
+        bool peaks = true;
+        for (int c = 0; c < kClassCount; c++)
+        {
+            float most = 0.0f;
+            for (float x = 0.0f; x <= 1.0f; x += 0.01f) most = fmaxf(most, TorqueAt(kClassCurves[c], x, top));
+            peaks = peaks && Near(most, 1.0f, 0.001f) && TorqueAt(kClassCurves[c], 1.0f, top) >= 0.8f && TorqueAt(kClassCurves[c], 0.0f, top) >= 0.5f;
+        }
+        Check(truck && peaks && TorqueAt(truckCurve, nanf(""), top) == 0.0f,
+              "powertrain: each class's curve peaks at its most, keeps 0.8 of it at the red zone and half at idle, and falls to nothing at the tachometer's top");
+        TorqueCurve own = {}, kept = kClassCurves[kClassScout];
+        const bool read = TorqueCurveParse("0.3:0.6, 0.6:1 ,1:0.8", own) && own.n == 3 && own.x[1] == 0.6f && own.y[2] == 0.8f;
+        const bool refused = !TorqueCurveParse("0.6:1,0.3:0.5", kept) && !TorqueCurveParse("abc", kept) && !TorqueCurveParse("0.3:1.2,0.6:1", kept) &&
+                             !TorqueCurveParse("1:1", kept) && !TorqueCurveParse("0.3:0.6,0.6:1,", kept) && !TorqueCurveParse("0:0.5,0.5:1", kept) && kept.n == kClassCurves[kClassScout].n;
+        Check(read && refused, "powertrain: a truck's own curve is read from \"x:y,x:y\", and text that is no rising curve of 2 to 8 points is refused");
+        // the cold and the boost: floored at the plateau with cold oil and no boost yet, and with the engine off
+        PowertrainModel cold = {};
+        f.throttle = -1.0f;
+        for (float at = 0.0f; at < 1.0f; at += kDt) PowertrainStep(cold, f, truckCurve, 0.7f, top, 0.0f, 0.0f, kDt);
+        const bool weak = Near(cold.cold, 1.0f - kColdTorque, 0.001f) && Near(cold.boost, 1.0f - kBoostTorque, 0.001f) &&
+                          Near(cold.power, (1.0f - kColdTorque) * (1.0f - kBoostTorque), 0.001f);
+        TruckRaw off = f;
+        off.flags = 0;
+        PowertrainStep(cold, off, truckCurve, 0.7f, top, 90.0f, 1.0f, kDt);
+        Check(weak && cold.power == 0.0f && cold.load == 0.0f, "powertrain: cold oil takes 15 percent of the torque and no boost 35 percent; a stopped engine delivers nothing");
     }
 
     // what the temperature costs the engine
