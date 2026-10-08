@@ -184,16 +184,16 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         PageTip(tip);
         PageLabel("Overheats after", labelX);
         ImGui::SetNextItemWidth(w);
-        if (ImGui::SliderFloat("##overheat", &s.overheatMinutes, 0.5f, 10.0f, "%.1f minutes revved out", ImGuiSliderFlags_AlwaysClamp))
+        if (ImGui::SliderFloat("##overheat", &s.overheatMinutes, 0.5f, 10.0f, "%.1f minutes floored", ImGuiSliderFlags_AlwaysClamp))
         {
             s.overheatMinutes = floorf(s.overheatMinutes * 10.0f + 0.5f) / 10.0f;
             act |= kPageChanged;
         }
         degrees(kTempHot, from, sizeof from);
         degrees(kTempRed, to, sizeof to);
-        sprintf_s(tip, "The time from %s into the red zone at %s with the engine revved out and the wheels spinning at a standstill. "
-                       "The heat follows the engine speed, not the pedal. Driving cools the engine: the faster the truck goes, the more air "
-                       "the radiator gets.", from, to);
+        sprintf_s(tip, "The time from %s into the red zone at %s floored at the red zone with the wheels spinning at a standstill. "
+                       "The heat follows the fuel the engine burns: the pedal and the engine speed together. Driving cools the engine: the faster "
+                       "the truck goes, the more air the radiator gets.", from, to);
         PageTip(tip);
         PageLabel("Cool after", labelX);
         ImGui::SetNextItemWidth(w);
@@ -257,8 +257,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         }
         degrees(kTempOutside, from, sizeof from);
         degrees(kTempWarm, to, sizeof to);
-        sprintf_s(tip, "The time the oil takes from %s to %s when the engine is driven as usual. The oil follows the coolant slowly, "
-                       "keeps its heat longer and runs a little hotter when the engine works hard.", from, to);
+        sprintf_s(tip, "The time the oil takes from %s to %s when the engine is driven as usual, at least a minute after the coolant. "
+                       "The oil follows the coolant slowly, keeps its heat longer and runs a few degrees hotter when the engine works hard.", from, to);
         PageTip(tip);
         // the ini holds the temperature in C; the slider shows it in the unit the dial shows
         float warn = s.fahrenheit ? s.oilWarnC * 1.8f + 32.0f : s.oilWarnC;
@@ -278,7 +278,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     {
         char at[16], from[16], tip[320];
         changed(ImGui::Checkbox("The temperature costs the engine", &s.damage));
-        PageTip("On: an engine in the red zone, and a cold engine revved high, take the game's own engine damage. A garage repairs it. "
+        PageTip("On: an engine in the red zone, and a cold engine worked hard, take the game's own engine damage. A garage repairs it. "
                 "Off: the temperature is only shown. It has not been tried in co-op: leave it off there.");
         ImGui::BeginDisabled(!s.damage);
         PageLabel("Overheating", labelX);
@@ -302,8 +302,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         }
         degrees(0.0f, at, sizeof at);
         degrees(kTempCold, from, sizeof from);
-        sprintf_s(tip, "The share it loses each minute at the red zone at %s. Less the warmer the engine and the lower it revs: "
-                       "nothing from %s up, and nothing with the needle half way from idle to the red zone or lower. 0 = none.", at, from);
+        sprintf_s(tip, "The share it loses each minute floored at the red zone at %s. Less the warmer the engine and the lighter the work: "
+                       "nothing from %s up, and nothing while it burns half the fuel it burns floored at the red zone or less. 0 = none.", at, from);
         PageTip(tip);
         ImGui::EndDisabled();
         if (view.engineCapacity > 0) ImGui::TextDisabled("This truck's engine has %d of %d left.", view.engineCapacity - view.engineDamage, view.engineCapacity);

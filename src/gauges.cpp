@@ -226,9 +226,10 @@ static void ReadIni(GaugeSettings &s)
                         L"; and so does a truck's section for each of them it leaves out.\n"
                         L"; The tilt lamp is green while the truck stands level. It turns amber when the truck leans to a side by\n"
                         L"; RollWarnDeg degrees and red from RollDangerDeg, or when it points up or down a slope by PitchDangerDeg.\n"
-                        L"; The coolant temperature is worked out from the engine speed and how fast the truck drives, not the pedal.\n"
+                        L"; The coolant temperature is worked out from the fuel the engine burns (the pedal and the engine speed) and\n"
+                        L"; how fast the truck drives.\n"
                         L"; WarmUpMinutes is the time a cold engine takes from 15 C to 85 C when it is driven as usual, OverheatMinutes\n"
-                        L"; the time from 90 C into the red zone at 118 C with the engine revved out and the wheels spinning at a\n"
+                        L"; the time from 90 C into the red zone at 118 C floored at the red zone with the wheels spinning at a\n"
                         L"; standstill, CoolDownMinutes the time a stopped engine takes from 90 C down to 40 C. AmbientC is the outside\n"
                         L"; temperature in degrees C: a truck that has stood for long is that cold. The cold lamp is lit below 60 C.\n"
                         L"; A map can have an outside temperature of its own: AmbientC in a section named after the map, such as\n"
@@ -237,13 +238,13 @@ static void ReadIni(GaugeSettings &s)
                         L"; AirFullKmh is the speed from which the radiator gets all the air that driving gives it (10 to 80 km/h).\n"
                         L"; Lower keeps a slow, hard pulling engine cooler.\n"
                         L"; The oil follows the coolant slowly and runs a little hotter under load. OilWarmUpMinutes is the time the oil\n"
-                        L"; takes from 15 C to 85 C when the engine is driven as usual. From OilWarnC (100 to 150 C) the oil lamp blinks\n"
-                        L"; and a warning sounds every few seconds.\n"
+                        L"; takes from 15 C to 85 C when the engine is driven as usual, a minute after the coolant at the least.\n"
+                        L"; From OilWarnC (100 to 150 C) the oil lamp blinks and a warning sounds every few seconds.\n"
                         L"; Damage=1: the temperature costs the engine. An engine in the red zone takes the game's own engine damage:\n"
                         L"; HotDamagePercentPerMinute percent of what it can take a minute at 125 C, less below that and more above.\n"
-                        L"; A cold engine (below 60 C) revved more than half way from idle to the red zone takes ColdDamagePercentPerMinute\n"
-                        L"; percent a minute at the red zone at 0 C, and less the warmer it is and the lower it revs. A garage repairs\n"
-                        L"; this like any engine damage.\n"
+                        L"; A cold engine (below 60 C) worked hard, burning more than half the fuel it burns floored at the red zone,\n"
+                        L"; takes ColdDamagePercentPerMinute percent a minute floored at the red zone at 0 C, and less the warmer it is\n"
+                        L"; and the lighter the work. A garage repairs this like any engine damage.\n"
                         L"; Damage=0: the temperature is only shown.\n"
                         L"; ColdDamagePercentPerMinute=0 switches the cold part off. Damage has not been tried in co-op: leave it at 0 there.\n"
                         L"; SoundVolume (0 to 100) is how loud the turbo is heard when the pedal comes up quickly under boost: it flutters,\n"
@@ -545,7 +546,7 @@ static void LogSettings(const GaugeSettings &s)
     Log(L"settings: coolant warm after %g minutes of driving, in the red zone after %g minutes floored with the wheels spinning at a standstill, cool %g minutes after the engine stops, %g C outside",
         s.warmUpMinutes, s.overheatMinutes, s.coolDownMinutes, s.ambientC);
     Log(L"settings: the oil warm after %g minutes of driving, too hot from %g C", s.oilWarmUpMinutes, s.oilWarnC);
-    Log(L"settings: the radiator has all its air from %g km/h; engine damage %s: %g percent a minute at 125 C, %g percent a minute for a cold engine at the red zone at 0 C",
+    Log(L"settings: the radiator has all its air from %g km/h; engine damage %s: %g percent a minute at 125 C, %g percent a minute for a cold engine floored at the red zone at 0 C",
         s.airFullKmh, s.damage ? L"on" : L"off", s.hotDamage, s.coldDamage);
     Log(L"settings: sound volume %d of 100%s", s.soundVolume, s.soundsOnly ? L", sounds only: the cluster is not drawn" : L"");
     Log(L"settings: toggle key %S, pad %S, demo values %s, probe %d", key, s.padToggle, s.demo ? L"on" : L"off", s.probe);
@@ -604,7 +605,7 @@ struct TruckWatch
     uint64_t engineVehicle;
     ULONGLONG engineAt;         // when a record that was not found is looked for again
     int owed, asked;            // whole points of engine damage that wait to be written: the model's, and the tab's test buttons'
-    int cause;                  // what the model's points came from: 1 the heat, 2 high revs on a cold engine
+    int cause;                  // what the model's points came from: 1 the heat, 2 a cold engine worked hard
     ULONGLONG writeAt;          // when the next write may go out
     ULONGLONG addedAt;          // when damage was last written, 0 = never: the damage lamp blinks for two seconds after
     const char *refused;        // why the last write did not go out, a string literal; a reason is logged once
@@ -746,7 +747,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         w.pedalDown = pedalDown;
         RangeStep(w.range, kind, raw, dt);
         TiltStep(w.tilt, raw, s, dt);
-        TempStep(w.temp, kind, raw, TachShare(w.tach, scale), s, dt);
+        TempStep(w.temp, kind, raw, TachSpeed(w.tach, scale), s, dt);
         // the oil warning: heard every few seconds while the oil is too hot, and said in the log when it comes and goes
         const bool oilWas = w.oil.on;
         if (OilWarnStep(w.oil, w.temp, raw, s, dt)) SoundPlay(kSoundOil, OilBeepGain(s.soundVolume), 1.0f);
@@ -757,7 +758,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         if (w.refs.vehicle != w.engineVehicle || (!w.engine.found && now >= w.engineAt)) EngineLook(w, m, now);
         // what the temperature costs the engine: the whole points wait in owed until they are written. Nothing comes
         // together while the game's window is not in front, as the game may stand still then with its last values.
-        const int points = DamageStep(w.damage, w.refs.vehicle, raw, w.temp, TachShare(w.tach, scale), s, front ? dt : 0.0f);
+        const int points = DamageStep(w.damage, w.refs.vehicle, raw, w.temp, TachSpeed(w.tach, scale), s, front ? dt : 0.0f);
         if (points > 0)
         {
             w.owed = w.owed + points < 1000000 ? w.owed + points : 1000000; // more than any engine takes
@@ -780,7 +781,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 char cause[128], effect[256], after[64] = ""; // the effect and the torque factor are the game's: room for numbers of any size
                 if (test) strcpy_s(cause, "the tab's test");
                 else
-                    sprintf_s(cause, w.cause == 2 ? "high revs on a cold engine at %.1f C (%.1f percent a minute)" : "the heat at %.1f C (%.1f percent a minute)", w.temp.temp,
+                    sprintf_s(cause, w.cause == 2 ? "a cold engine worked hard at %.1f C (%.1f percent a minute)" : "the heat at %.1f C (%.1f percent a minute)", w.temp.temp,
                               w.damage.hot + w.damage.cold);
                 if (d.effectAfter != d.effectBefore || d.torqueAfter != d.torqueBefore)
                     sprintf_s(effect, "effect %.3f to %.3f, torque x%.3f to x%.3f", d.effectBefore, d.effectAfter, d.torqueBefore, d.torqueAfter);
@@ -1113,8 +1114,8 @@ int wmain(int argc, wchar_t **argv)
           "defaults: the coolant warm after 3 minutes, in the red zone after 1.5, cool after 15, with 15 C outside");
     Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.coldDamage == 5.0f,
           "defaults: the radiator's full airflow from 30 km/h, engine damage on, 10 percent a minute for the heat and 5 for the cold");
-    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 8.0f && d.oilWarnC == 125.0f && d.boostProfile == kSpoolStandard,
-          "defaults: the oil as a second needle, warm after 8 minutes, too hot from 125 C; the standard turbo");
+    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard,
+          "defaults: the oil as a second needle, warm after 5 minutes, too hot from 120 C; the standard turbo");
 
     // keys the mod does not know, in its own section and in another one
     WritePrivateProfileStringW(kIniSection, L"FromALaterVersion", L"7", ini.c_str());
@@ -1187,7 +1188,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 56, "ini: the help text survives a write (56 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 57, "ini: the help text survives a write (57 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());

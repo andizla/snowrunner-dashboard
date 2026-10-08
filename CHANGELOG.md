@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.1] 2026-10-08
+
+- The heat comes from the fuel the engine burns: the pedal and the engine speed together, as in a real engine. Floored at the red zone makes the most heat, floored at low revs little, and coasting or rolling downhill with the foot off next to none. In 0.11.0 a truck coasting at high revs heated as if floored.
+- The cold engine damage goes by the fuel burned too: only a cold engine burning more than half of what it burns floored at the red zone suffers. Pulling away and driving about at moderate revs cost nothing, also on a keyboard.
+- The oil takes its own heat: the friction, which grows with the engine speed, and the pistons' cooling, which grows with the load. It runs about 7 degrees over the coolant at cruise and 14 floored at the red zone, and it is warm a minute after the coolant at the least, whatever `OilWarmUpMinutes` says.
+- New defaults: `OilWarmUpMinutes` 5 (was 8) and `OilWarnC` 120 C (was 125), the warning one maker puts on its truck diesels. An ini that holds the old values keeps them.
+- `models_test.exe <drive> <idle> <red zone>` replays a recorded drive on a truck's own scales.
+
 ## [0.11.0] 2026-10-08
 
 - The coolant temperature follows the engine speed, not the pedal. An engine revved high heats whatever the foot does, one pulling at low revs heats little, and in neutral it makes a quarter of that heat.

@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#define GAUGES_VERSION "0.11.0"
+#define GAUGES_VERSION "0.11.1"
 
 // The exe the addresses in this mod are from (SnowRunner on Steam, the build of 22 July 2026). On any other the mod
 // stands down.
@@ -69,11 +69,11 @@ struct GaugeSettings
     float coolDownMinutes;   // CoolDownMinutes: minutes a stopped engine takes from 90 C down to 40 C
     float ambientC;          // AmbientC: the outside temperature in degrees C; an engine that has stood for long is this cold
     float airFullKmh;        // AirFullKmh: the speed in km/h from which the radiator gets all the air that driving gives it
-    float oilWarmUpMinutes;  // OilWarmUpMinutes: minutes a cold engine's oil takes from 15 C to 85 C when it is driven as usual
+    float oilWarmUpMinutes;  // OilWarmUpMinutes: minutes a cold engine's oil takes from 15 C to 85 C when it is driven as usual (at least a minute more than the coolant's)
     float oilWarnC;          // OilWarnC: the oil temperature in C from which the oil lamp blinks and the warning sounds
-    bool damage;             // Damage: an engine in the red zone and a cold engine revved high take the game's engine damage
+    bool damage;             // Damage: an engine in the red zone and a cold engine worked hard take the game's engine damage
     float hotDamage;         // HotDamagePercentPerMinute: percent of what the engine takes that it loses a minute at 125 C
-    float coldDamage;        // ColdDamagePercentPerMinute: the same for a cold engine at the red zone at 0 C
+    float coldDamage;        // ColdDamagePercentPerMinute: the same for a cold engine floored at the red zone at 0 C
     int soundVolume;         // SoundVolume: how loud the turbo's flutter and the oil warning are, 0 to 100; 0 = no sound
     bool soundsOnly;         // SoundsOnly: the sounds are played and the cluster is not drawn
     int toggleKey;           // ToggleKey: virtual key code of the key that hides and shows the cluster, 0 = none
@@ -103,8 +103,8 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.coolDownMinutes = 15.0f;
     s.ambientC = 15.0f;
     s.airFullKmh = 30.0f;
-    s.oilWarmUpMinutes = 8.0f;
-    s.oilWarnC = 125.0f;
+    s.oilWarmUpMinutes = 5.0f;
+    s.oilWarnC = 120.0f;
     s.damage = true;
     s.hotDamage = 10.0f;
     s.coldDamage = 5.0f;

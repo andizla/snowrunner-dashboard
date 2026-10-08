@@ -6,13 +6,14 @@
 // game's own burn rule. For the tilt it stands the truck on slopes and leans it to either side, over a bump and onto
 // its roof. For the coolant it warms a cold engine up, floors it at a crawl and at speed, lets it idle, stops it,
 // changes the settings and the outside temperature, and drives one truck after another. For what the temperature
-// costs the engine it holds an engine in the red zone, revs a cold one high, and counts the points of damage. For the
+// costs the engine it holds an engine in the red zone, works a cold one hard, and counts the points of damage. For the
 // boost it floors the pedal at high and at low engine speed and lifts it fast, a little and slowly.
 // build.bat makes out\test\models_test.exe; test.bat runs it.
 //
 // "spool" prints the turbo's four profiles as numbers to draw (Spool).
 //
-// With a file as its argument it runs the models over a recorded drive instead and prints what they make of it. One
+// With a file as its argument it runs the models over a recorded drive instead and prints what they make of it, on a
+// scout's scales, or on a truck's own idle and red zone when two more numbers follow (models_test drive.txt 800 4850). One
 // sample a line, numbers with spaces between: seconds, flags, stall, start timer, all wheel drive, gear, gear engaged,
 // automatic, power factor, throttle, the action's + 0xB4, speed in m/s, fuel, tank, engine damage and its capacity,
 // the number of gear speeds and each, the number of wheels and each one's drive and turning speed, and after those
@@ -142,7 +143,7 @@ static float Until(TempModel &m, TruckRaw &t, uint64_t id, const GaugeSettings &
 // Sets the driven truck's coolant to a temperature.
 static void Coolant(TempModel &m, float temp) { m.truck[m.at].temp = m.temp = temp; }
 
-static int Replay(const char *path)
+static int Replay(const char *path, float idleRpm, float redlineRpm)
 {
     FILE *f = nullptr;
     if (fopen_s(&f, path, "r") || !f)
@@ -153,6 +154,9 @@ static int Replay(const char *path)
     GaugeSettings s;
     SettingsDefaults(s);
     s.tachClass = kClassScout;
+    s.idleRpm = idleRpm;
+    s.redlineRpm = redlineRpm;
+    SettingsClamp(s);
     s.damage = true; // the replay counts what the drive would have cost the engine
     const GaugeScale k = GaugeScaleOf(s);
     TachModel tach = {};
@@ -239,8 +243,8 @@ static int Replay(const char *path)
             mostRpm = fmaxf(mostRpm, tach.rpm);
             steps++;
             if (tach.rpm > k.redline) redSteps++;
-            TempStep(temp, kind, t, TachShare(tach, k), s, dt);
-            const int cost = DamageStep(wear, truck, t, temp, TachShare(tach, k), s, dt);
+            TempStep(temp, kind, t, TachSpeed(tach, k), s, dt);
+            const int cost = DamageStep(wear, truck, t, temp, TachSpeed(tach, k), s, dt);
             (wear.hot > 0.0f ? hotPoints : coldPoints) += (float)cost;
             char note[200];
             if (truck != truckNow)
@@ -294,7 +298,7 @@ static int Replay(const char *path)
            drivingAll, drivingAll > 0.0f ? loadSum / drivingAll : 0.0f, drivingAll > 0.0f ? kmhSum / drivingAll : 0.0f);
     printf("boost: the highest %.2f bar of the turbo's %.2f, %.0f s above half of it; %d blow-offs and %d flutters; from a floored pedal to nine tenths of it %d times, %.1f s on average, %.1f s the longest\n",
            mostBoost, k.boost, boosted, blowOffs, flutters, climbs, climbs ? climbSum / (float)climbs : 0.0f, climbLongest);
-    printf("damage: with Damage on the heat would have cost the engine %.0f points on this drive, and high revs on a cold engine %.0f\n", hotPoints, coldPoints);
+    printf("damage: with Damage on the heat would have cost the engine %.0f points on this drive, and working a cold engine hard %.0f\n", hotPoints, coldPoints);
     return 0;
 }
 
@@ -404,7 +408,7 @@ int main(int argc, char **argv)
 {
     if (argc > 2 && !strcmp(argv[1], "sounds")) return Sounds(argv[2]);
     if (argc > 1 && !strcmp(argv[1], "spool")) return Spool();
-    if (argc > 1) return Replay(argv[1]);
+    if (argc > 1) return Replay(argv[1], argc > 3 ? (float)atof(argv[2]) : 0.0f, argc > 3 ? (float)atof(argv[3]) : 0.0f);
     GaugeSettings s;
     SettingsDefaults(s);
     const GaugeScale k = GaugeScaleOf(s); // the truck class: idle 650, red zone from 2200
@@ -728,8 +732,10 @@ int main(int argc, char **argv)
               "coolant: the thermostat holds an idling engine at about 86 C, and a little lower with the truck rolling");
         Check(Near(Heat(temp, c, 1, set, 1800.0f, 1.0f, 1.0f, 60.0f), kTempCruise, 1.0f), "coolant: at full load with all the air the radiator can get the engine settles at 97 C");
         const float coasting = Heat(temp, c, 1, set, 1800.0f, 0.0f, 1.0f, 60.0f), lugging = Heat(temp, c, 1, set, 1800.0f, 1.0f, 0.0f, 0.0f);
-        Check(Near(coasting, kTempCruise, 1.0f) && Near(lugging, idling, 0.5f),
-              "coolant: the heat goes by the engine speed: at the red zone with the pedal up the engine settles as it does floored, and floored at idle revs as it does idling");
+        const float half = Heat(temp, c, 1, set, 1800.0f, 0.5f, 1.0f, 60.0f), halfSpeed = Heat(temp, c, 1, set, 1800.0f, 1.0f, 0.5f, 60.0f);
+        Check(Near(coasting, rolling, 0.5f) && Near(lugging, idling, 0.5f) && Near(half, halfSpeed, 0.2f) && half > rolling + 3.0f && half < kTempCruise - 3.0f,
+              "coolant: the heat goes by the fuel burned, the pedal times the engine speed: coasting at the red zone with the foot off makes the heat of idle, "
+              "and so does the pedal floored at idle revs");
         bool outOfRed = true;
         float at10 = 0.0f, slower = 200.0f;
         for (float kmh : { 30.0f, 20.0f, 15.0f, 10.0f })
@@ -1002,13 +1008,16 @@ int main(int argc, char **argv)
         };
         TempModel first = {};
         TempStep(first, 1, c, 0.0f, set, kDt);
-        float water85, oil85, water85b, oil85b;
+        float water85, oil85, water85b, oil85b, water85c, oil85c;
         warmUp(set, water85, oil85);
-        GaugeSettings slow = set;
+        GaugeSettings slow = set, quick = set;
         slow.oilWarmUpMinutes = 15.0f;
         warmUp(slow, water85b, oil85b);
-        Check(Near(first.oil, set.ambientC, 0.05f) && Near(water85, 180.0f, 3.0f) && Near(oil85, 480.0f, 6.0f) && Near(water85b, water85, 0.11f) && Near(oil85b, 900.0f, 8.0f),
-              "oil: a cold engine's oil starts at the air outside and is at 85 C after the eight minutes of OilWarmUpMinutes, and the setting moves the oil only");
+        Check(Near(first.oil, set.ambientC, 0.05f) && Near(water85, 180.0f, 3.0f) && Near(oil85, 300.0f, 6.0f) && Near(water85b, water85, 0.11f) && Near(oil85b, 900.0f, 8.0f),
+              "oil: a cold engine's oil starts at the air outside and is at 85 C after the five minutes of OilWarmUpMinutes, and the setting moves the oil only");
+        quick.oilWarmUpMinutes = 2.0f;
+        warmUp(quick, water85c, oil85c);
+        Check(Near(water85c, water85, 0.11f) && Near(oil85c, water85c + kOilAfter, 6.0f), "oil: set to warm before the coolant, the oil is warm a minute after it");
 
         // where it settles: over the coolant by the heat
         TempModel m = {};
@@ -1017,7 +1026,8 @@ int main(int argc, char **argv)
         const float hard = m.oil - m.temp;
         Heat(m, c, 1, set, 3600.0f, 0.0f, 0.0f, 0.0f);
         const float idle = m.oil - m.temp;
-        Check(Near(hard, kOilOver, 0.3f) && Near(idle, kOilOver * kHeatIdle, 0.3f), "oil: it settles 14 degrees over the coolant at full load and 2 over it at idle");
+        Check(Near(hard, OilOver(1.0f, 1.0f), 0.3f) && Near(OilOver(1.0f, 1.0f), 14.0f, 0.01f) && Near(idle, OilOver(0.0f, 0.0f), 0.3f) && Near(OilOver(0.7f, 0.7f), 8.96f, 0.01f) &&
+              Near(OilOver(0.0f, 1.0f), kOilFriction, 0.01f), "oil: it settles 14 degrees over the coolant floored at the red zone, 9 driven as usual, 4 coasting at the red zone and none at idle");
 
         // a stopped engine: the oil keeps its heat longer than the coolant
         TruckRaw halted = c;
@@ -1065,7 +1075,7 @@ int main(int argc, char **argv)
         w.truck[w.at].oil = w.oil = set.oilWarnC + 1.0f;
         char line[640];
         TempProbeText(c, w, set, line, sizeof line);
-        const bool told = strstr(line, "| oil 126.0 C, heading for ") && strstr(line, ", too hot |");
+        const bool told = strstr(line, "| oil 121.0 C, heading for ") && strstr(line, ", too hot |");
         c.speed = nanf("");
         TempStep(w, 1, c, 1.0f, set, kDt);
         Check(told && isfinite(w.oil), "oil: the probe's line carries the oil, and a step that gives no number leaves it as it was");
@@ -1115,7 +1125,7 @@ int main(int argc, char **argv)
         Check(Near(DamageCold(0.0f, 1.0f, set), 5.0f, 0.001f) && Near(DamageCold(15.0f, 1.0f, set), 3.75f, 0.001f) && Near(DamageCold(15.0f, 0.75f, set), 0.9375f, 0.001f) &&
               DamageCold(15.0f, 0.5f, set) == 0.0f && DamageCold(kTempCold, 1.0f, set) == 0.0f && Near(DamageCold(-20.0f, 1.0f, set), 6.667f, 0.01f) &&
               Near(DamageCold(0.0f, 1.1f, set), 5.0f, 0.001f) && DamageCold(0.0f, nanf(""), set) == 0.0f,
-              "damage: a cold engine at the red zone at 0 C loses 5 percent a minute, less the warmer it is and the lower it revs, nothing at half way or from 60 C");
+              "damage: a cold engine floored at the red zone at 0 C loses 5 percent a minute, less the warmer it is and the lighter the work, nothing at half of that or from 60 C");
 
         // a minute in the red zone at 125 C, the engine running in gear with the pedal down
         TruckRaw c = Truck();
@@ -1176,7 +1186,14 @@ int main(int argc, char **argv)
         float revvedFor = 0.0f, gentleFor = 0.0f;
         const float revved = coldStart(1.0f, revvedFor), gentle = coldStart(0.5f, gentleFor);
         Check(revved > 1.5f && revved < 6.0f && revvedFor > 40.0f && revvedFor < 150.0f && gentle == 0.0f && gentleFor > revvedFor,
-              "damage: a cold start revved to the red zone costs a few points until the cold lamp goes out, and none held to half way with the pedal floored");
+              "damage: a cold start floored at the red zone costs a few points until the cold lamp goes out, and none floored at half the red zone's engine speed");
+        // a parking lot: a cold engine at 2000 rpm of a scout's 4850, floored, and a light foot at the red zone
+        TruckRaw lot = c;
+        lot.throttle = -1.0f;
+        const float floored2000 = TruckLoad(lot, 2000.0f / 4850.0f);
+        lot.throttle = -0.45f;
+        Check(DamageCold(0.0f, floored2000, set) == 0.0f && DamageCold(0.0f, TruckLoad(lot, 1.0f), set) == 0.0f,
+              "damage: driving about cold costs nothing, floored at 2000 rpm of a scout's 4850 or with a light foot at the red zone");
 
         Check(DamageLamp(true, false, 0) && !DamageLamp(false, false, 0) && DamageLamp(false, true, 0) && !DamageLamp(true, true, kDamageBlinkMs) &&
               DamageLamp(true, true, 2 * kDamageBlinkMs), "damage: the lamp is lit above half the engine's damage, and blinks while damage is added");
