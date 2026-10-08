@@ -1184,6 +1184,76 @@ inline void ClutchProbeText(const ClutchModel &m, float travel, char *out, size_
               travel, m.grip, !m.connected ? "no gear in" : m.locked ? "locked" : m.grip > 0.0f ? "slipping" : "free", m.rpm, m.input, m.torque, m.carried, m.stalls);
 }
 
+// ---- the brake air ----
+
+static const float kAirCutOut = 8.2f;        // bar: the governor stops the compressor here
+static const float kAirCutIn = 6.9f;         // and starts it again here
+static const float kAirFlow = 0.23f;         // bar each second the compressor gives at the red zone's speed into an empty tank
+static const float kAirMost = 12.0f;         // bar the compressor could reach at all: it gives less as the tank fills
+static const float kBrakeAir = 0.35f;        // bar a full brake application takes from the tank; a lighter one its share
+static const float kSpringAir = 0.4f;        // bar the spring brakes take to be held off when the handbrake is let go
+static const float kAirLeak = 0.1f / 60.0f;  // bar each second the system loses through its fittings
+static const float kAirLeakBraking = 0.25f / 60.0f; // and on top of that while the brake is held
+static const float kAirWarn = 5.5f;          // under this the dial's red zone: too little air to brake safely
+
+// The air in the brakes' tanks of a truck, scouts aside (they brake by hydraulics; the dial is not drawn for them).
+// The engine drives the compressor, which gives more air the faster the engine turns and less as the tank fills; the
+// governor runs it from kAirCutIn up to kAirCutOut and lets it rest in between, so the needle climbs and settles at
+// the cut-out and wanders down to the cut-in as the brakes draw air. Each press of the brake takes air by how far it
+// goes down (a gamepad's trigger, often floored, takes the most), letting the handbrake go takes the air that holds
+// the spring brakes off, and the system leaks a little, more with the brake held. Filled from empty in about three
+// minutes at idle and one at the red zone; eight full brake applications with the engine off take a full tank into
+// the red zone.
+struct AirModel
+{
+    bool running;      // the model has a truck
+    float bar;         // the tank's pressure
+    bool pumping;      // the governor runs the compressor
+    float brake;       // the brake as held on the last step, 0 to 1
+    bool handbrake;    // the handbrake was on on the last step
+    int cutOuts;       // times the governor stopped the compressor: the air dryer's purge
+};
+
+// One step of dt seconds. speed: the engine speed over the red zone's (TachSpeed). A new truck starts with a full
+// tank. Returns true on the step the governor stops the compressor, when a truck's air dryer purges with a hiss.
+inline bool AirStep(AirModel &m, const TruckRaw &t, float speed, float dt)
+{
+    const float brake = TruckBrake(t);
+    const bool handbrake = t.handbrake != 0;
+    if (!m.running)
+    {
+        m = AirModel{ true, kAirCutOut };
+        m.brake = brake;
+        m.handbrake = handbrake;
+    }
+    // what the brakes take: a press by how much further it goes down, the spring brakes when the handbrake goes off
+    float used = fmaxf(brake - m.brake, 0.0f) * kBrakeAir + (m.handbrake && !handbrake ? kSpringAir : 0.0f);
+    used += (kAirLeak + (brake > 0.05f ? kAirLeakBraking : 0.0f)) * dt;
+    m.brake = brake;
+    m.handbrake = handbrake;
+    // the compressor, by the governor
+    bool cutOut = false;
+    if (m.bar <= kAirCutIn) m.pumping = true;
+    const float gives = m.pumping && TruckEngineOn(t) ? kAirFlow * SettingsRange(speed, 0.0f, 1.0f) * fmaxf(1.0f - m.bar / kAirMost, 0.0f) * dt : 0.0f;
+    m.bar = fmaxf(m.bar + gives - used, 0.0f);
+    if (!isfinite(m.bar)) m.bar = kAirCutOut;
+    if (m.pumping && m.bar >= kAirCutOut)
+    {
+        m.bar = kAirCutOut;
+        m.pumping = false;
+        m.cutOuts++;
+        cutOut = true;
+    }
+    return cutOut;
+}
+
+// The brake air in a line of text for the probe log.
+inline void AirProbeText(const TruckRaw &t, const AirModel &m, char *out, size_t size)
+{
+    sprintf_s(out, size, "brake air: %.2f bar, the compressor %s (cut-in %.1f, cut-out %.1f bar) | brake %.2f, handbrake %d | %d cut-outs",
+              m.bar, m.pumping ? (TruckEngineOn(t) ? "running" : "waiting for the engine") : "resting", kAirCutIn, kAirCutOut, m.brake, t.handbrake, m.cutOuts);
+}
+
 // ---- the game's own clock ----
 
 static const unsigned long long kClockHoldMs = 1000; // the game's count of simulated seconds standing still for this long: the game is not simulating

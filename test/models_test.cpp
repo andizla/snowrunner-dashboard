@@ -195,6 +195,10 @@ static int Replay(const char *path, float idleRpm, float redlineRpm)
     GearboxModel box = {};
     ShiftCount gameShifts = {}, boxShifts = {};
     float automaticFor = 0.0f, lockedFor = 0.0f, spinBefore = 0.0f;
+    // the brake air: the lowest it fell to, the seconds in the red zone and the governor's cut-outs
+    AirModel air = {};
+    float airLowest = kAirCutOut, airRed = 0.0f;
+    int airCutOuts = 0;
     float mostBoost = 0.0f, boosted = 0.0f, climb = -1.0f, climbSum = 0.0f, climbLongest = 0.0f;
     int climbs = 0, flutters = 0, blowOffs = 0;
     float hotPoints = 0.0f, coldPoints = 0.0f;
@@ -240,6 +244,8 @@ static int Replay(const char *path, float idleRpm, float redlineRpm)
             boost = BoostModel{};
             power = PowertrainModel{};
             box = GearboxModel{};
+            airCutOuts += air.cutOuts;
+            air = AirModel{};
             gameShifts.gear = boxShifts.gear = 0;
             climb = -1.0f;
             range = RangeModel{};
@@ -278,6 +284,9 @@ static int Replay(const char *path, float idleRpm, float redlineRpm)
             TempStep(temp, kind, t, TachSpeed(tach, k), s, dt);
             PowertrainStep(power, t, kClassCurves[s.tachClass], TachSpeed(tach, k), k.max / k.redline, temp.oil, boost.bar / k.boost, dt);
             GearboxStep(box, t, k, power.pedal, power.power, dt);
+            AirStep(air, t, TachSpeed(tach, k), dt);
+            airLowest = fminf(airLowest, air.bar);
+            if (air.bar < kAirWarn) airRed += dt;
             if (t.automatic && t.gearEngaged >= 1 && t.gearEngaged <= TruckTopGear(t) && TruckEngineOn(t))
             {
                 automaticFor += dt;
@@ -349,6 +358,7 @@ static int Replay(const char *path, float idleRpm, float redlineRpm)
     printf("automatic: in %.0f s of the game's automatic in a numbered gear, seen at the samples, it shifted %d times and back within %.0f s %d times; the model would have "
            "shifted %d times and back %d times, with the converter locked %.0f s\n",
            automaticFor, gameShifts.shifts, kShiftCountBack, gameShifts.hunts, boxShifts.shifts, boxShifts.hunts, lockedFor);
+    printf("brake air: at the lowest %.2f bar, %.0f s in the red zone (under %.1f bar), %d cut-outs of the governor\n", airLowest, airRed, kAirWarn, airCutOuts + air.cutOuts);
     printf("powertrain: while driving the pedal was down %.2f on average and %.2f shaped; the power %.2f on average, %.0f s at 0.9 of full or more\n",
            drivingAll > 0.0f ? pedalSum / drivingAll : 0.0f, drivingAll > 0.0f ? shapedSum / drivingAll : 0.0f, drivingAll > 0.0f ? powerSum / drivingAll : 0.0f, nearFull);
     printf("coolant: the hottest %.1f C, %.0f s in the red zone (from %.0f C); while driving (%.0f s) the mean load was %.2f and the mean speed %.1f km/h\n", hottest, inRed, kTempRed,
@@ -1392,6 +1402,76 @@ int main(int argc, char **argv)
         Check(Near(ClutchGrip(0.0f), 1.0f, 0.001f) && ClutchGrip(1.0f) == 0.0f && ClutchGrip(kClutchFree) == 0.0f && Near(ClutchGrip(kClutchBite), 1.0f, 0.001f) &&
                   Near(ClutchGrip(0.5f * (kClutchFree + kClutchBite)), 0.5f, 0.001f),
               "clutch: the grip is all of it let up, none pressed, and the bite between");
+    }
+
+    // the brake air: filled by the engine's speed, held between the governor's cut-in and cut-out, drawn by the brake
+    // and the handbrake, and leaking with the engine off
+    {
+        TruckRaw a = Truck();
+        a.gear = a.gearEngaged = 1;
+        const float idle = k.idle / k.redline;
+        // the time to fill an empty tank to the cut-out at idle and at the red zone's speed
+        auto fill = [&](float speed) {
+            AirModel m = {};
+            AirStep(m, a, speed, kDt);
+            m.bar = 0.0f;
+            m.pumping = true;
+            float at = 0.0f;
+            while (m.pumping && at < 600.0f)
+            {
+                AirStep(m, a, speed, kDt);
+                at += kDt;
+            }
+            return at;
+        };
+        const float atIdle = fill(idle), atRed = fill(1.0f);
+        Check(atIdle > 140.0f && atIdle < 220.0f && atRed > 45.0f && atRed < 75.0f, "brake air: an empty tank fills in about three minutes at idle and one at the red zone");
+        // ten minutes at idle with a half press of the brake every ten seconds: the compressor rests until the cut-in,
+        // and the needle stays between the two
+        AirModel gov = {};
+        float lowest = 100.0f, highest = 0.0f, startedAt = -1.0f;
+        int presses = 0;
+        for (int step = 0; step < (int)(600.0f / kDt); step++)
+        {
+            const int inTen = step % (int)(10.0f / kDt);
+            const bool press = inTen < (int)(2.0f / kDt);
+            a.throttle = press ? 0.5f : 0.0f;
+            presses += inTen == 0 ? 1 : 0;
+            const bool before = gov.pumping;
+            AirStep(gov, a, idle, kDt);
+            if (gov.pumping && !before && startedAt < 0.0f) startedAt = gov.bar;
+            lowest = fminf(lowest, gov.bar);
+            highest = fmaxf(highest, gov.bar);
+        }
+        a.throttle = 0.0f;
+        Check(presses == 60 && startedAt <= kAirCutIn + 0.001f && startedAt > kAirCutIn - kBrakeAir && lowest > kAirCutIn - kBrakeAir - 0.05f && highest <= kAirCutOut + 0.001f &&
+                  gov.cutOuts >= 1,
+              "brake air: the governor starts the compressor at the cut-in and stops it at the cut-out, and the needle stays between them while braking at idle");
+        // with the engine off: seven full brake applications leave it over the red zone, the eighth takes it in
+        TruckRaw off = a;
+        off.flags = 0;
+        AirModel fan = {};
+        AirStep(fan, off, 0.0f, kDt);
+        auto press = [&](float how) {
+            off.throttle = how;
+            AirStep(fan, off, 0.0f, kDt);
+            off.throttle = 0.0f;
+            AirStep(fan, off, 0.0f, kDt);
+        };
+        for (int i = 0; i < 7; i++) press(1.0f);
+        const float afterSeven = fan.bar;
+        press(1.0f);
+        Check(afterSeven > kAirWarn && fan.bar < kAirWarn, "brake air: with the engine off seven full brake applications leave it over the red zone, the eighth takes it in");
+        // the handbrake let go takes the spring brakes' air; ten minutes standing with the engine off lose a bar
+        AirModel spring = {};
+        off.handbrake = 1;
+        AirStep(spring, off, 0.0f, kDt);
+        off.handbrake = 0;
+        const float before = spring.bar;
+        AirStep(spring, off, 0.0f, kDt);
+        const float released = before - spring.bar;
+        for (float at = 0.0f; at < 600.0f; at += kDt) AirStep(spring, off, 0.0f, kDt);
+        Check(Near(released, kSpringAir, 0.01f) && Near(before - released - spring.bar, 1.0f, 0.02f), "brake air: letting the handbrake go takes the spring brakes' air, and it leaks a bar in ten minutes standing");
     }
 
     // what the temperature costs the engine

@@ -32,7 +32,7 @@ struct GaugeState
     float oilC;                     // oil temperature (the mod's own model)
     float oilWarnC;                 // where the oil dial's red zone starts: the settings' OilWarnC
     float boostBar;                 // boost pressure in bar, 0..2 (the mod's own model)
-    float airBar;                   // brake air, cosmetic (0..10)
+    float airBar;                   // brake air in bar (0..10), from the model (AirModel)
     bool handbrake, diffLock, awd, lowGear, headlights, damage, cold;
     bool oilHot;                    // the oil lamp is lit (it blinks while the oil is too hot: the caller switches it on and off)
     int tilt;                       // 0 level, 1 warning, 2 danger, below 0 not known (the lamp stays dark)

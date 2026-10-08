@@ -594,6 +594,7 @@ struct TruckWatch
     PowertrainModel power;      // and what its engine would deliver, for the probe log until the hooks hand it to the game
     GearboxModel gearbox;       // and the gear an automatic with a torque converter would be in, the same way
     ClutchModel clutch;         // and, while the manual transmission mod drives it, the engine behind its clutch pedal
+    AirModel air;               // and the air in its brakes' tanks
     SmtReader smtReader;        // the manual transmission mod's published state (smt.h)
     SmtView smt;                // as read on this pass
     bool smtSeen;               // it was published on the last pass
@@ -748,6 +749,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             w.power = PowertrainModel{};
             w.gearbox = GearboxModel{};
             w.clutch = ClutchModel{};
+            w.air = AirModel{};
             w.tilt = TiltModel{};
             w.owed = w.asked = 0;
             w.modelVehicle = w.refs.vehicle;
@@ -767,6 +769,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         if (pedalDown && !w.pedalDown) SoundQuiet();
         w.pedalDown = pedalDown;
         RangeStep(w.range, kind, raw, dt);
+        AirStep(w.air, raw, TachSpeed(w.tach, scale), dt);
         TiltStep(w.tilt, raw, s, dt);
         TempStep(w.temp, kind, raw, TachSpeed(w.tach, scale), s, dt);
         // the oil warning: heard every few seconds while the oil is too hot, and said in the log when it comes and goes
@@ -849,7 +852,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                   TempZone(w.temp) != w.probedZone || DamageAdding(w.damage, s) != w.probedAdding ||
                   w.boost.flutters + w.boost.blowOffs != w.probedLifts))
     {
-        char first[640], second[1024], third[512], fourth[256], fifth[640], sixth[1024], seventh[400], eighth[400], ninth[320], tenth[400], eleventh[320];
+        char first[640], second[1024], third[512], fourth[256], fifth[640], sixth[1024], seventh[400], eighth[400], ninth[320], tenth[400], eleventh[320], twelfth[256];
         TruckProbeText(raw, world, w.byWay, first, sizeof first, second, sizeof second);
         ModelProbeText(raw, w.tach, w.range, scale, third, sizeof third);
         Log(L"probe: %S", first);
@@ -880,6 +883,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             ClutchProbeText(w.clutch, w.smt.clutch, eleventh, sizeof eleventh);
             Log(L"probe: %S", eleventh);
         }
+        AirProbeText(raw, w.air, twelfth, sizeof twelfth);
+        Log(L"probe: %S", twelfth);
         w.probedLifts = w.boost.flutters + w.boost.blowOffs;
         w.probedAdding = DamageAdding(w.damage, s);
         w.probedLamp = w.tilt.lamp;
@@ -1086,6 +1091,7 @@ static DWORD WINAPI Run(void *)
             TruckToState(raw, world, inForce, v.st);
             v.st.rpm = watch.tach.rpm;
             v.st.boostBar = watch.boost.bar;
+            v.st.airBar = watch.air.bar;
             v.st.rangeKm = watch.range.rangeKm;
             v.st.tilt = watch.tilt.running ? watch.tilt.lamp : -1;
             v.st.rollDeg = watch.tilt.rollDeg;

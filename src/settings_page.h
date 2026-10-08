@@ -125,6 +125,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     changed(ImGui::Checkbox("Coolant temperature", &s.showTemp));
     changed(ImGui::Checkbox("Boost pressure", &s.showBoost));
     changed(ImGui::Checkbox("Brake air pressure", &s.showAir));
+    PageTip("The air in the brakes' tanks. The engine's compressor fills them up to 8.2 bar, faster the higher it revs, and starts again at 6.9; "
+            "each press of the brake and letting the handbrake go draw from them. Under 5.5 bar it is in the red. Not drawn for scouts, which brake by hydraulics.");
     changed(ImGui::Checkbox("Lamps", &s.showLamps));
     PageTip("Handbrake, headlights, all wheel drive, differential lock, low gear, engine damage, cold engine, tilt and oil temperature.");
     static const char *oils[kOilGaugeCount] = { "Not shown", "Second needle", "Dial of its own" };

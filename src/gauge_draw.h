@@ -811,7 +811,7 @@ static GaugeLayout GaugeLayoutOf(const GaugeSettings &s)
     lay.variant = s.layout == kLayoutBlock ? 1 : 0;
     lay.showTemp = s.showTemp;
     lay.showBoost = s.showBoost;
-    lay.showAir = s.showAir;
+    lay.showAir = s.showAir && s.tachClass != kClassScout; // scouts brake by hydraulics: no air to show
     lay.showLamps = s.showLamps;
     lay.oilGauge = s.oilGauge;
     lay.faceAlpha = s.style == kFaceTinted ? s.faceOpacity : 1.0f;
