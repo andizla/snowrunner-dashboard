@@ -3,6 +3,7 @@
 ## [0.11.2] 2026-10-08
 
 - With `Probe=1` the log has a line for the powertrain that comes with 0.12.0: the pedal as it will be shaped (a progressive curve, and a ramp so a keyboard's pedal comes in over 0.6 s), the torque from the truck class's torque curve at the engine speed, less with cold oil and more with boost, and the power the engine would deliver. Nothing of it reaches the game yet.
+- With `Probe=1` the log has a line for an automatic gearbox with a torque converter as well, and a line at each of its shifts beside the game's own gear: the gear it would be in, the converter's slip and lock-up, and how much it multiplies the torque. It shifts up later the further the pedal is down, kicks down when floored, holds its gear rolling downhill, and does not shift up at a lift of the foot or in wheelspin. Nothing of it reaches the game yet.
 - `WarmUpMinutes` is measured on driving as it really is: the mean load and speed of a 25 minute drive (half of what the engine burns floored at the red zone, at 13 km/h), where it was a heavier foot before. On that drive the coolant was at 85 C after 4 minutes of driving with the setting at 3, where it took nearly 5 with 0.11.1.
 
 ## [0.11.1] 2026-10-08

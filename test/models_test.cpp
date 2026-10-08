@@ -62,6 +62,27 @@ static void Stand(TruckRaw &t, float pitch, float roll)
 
 // A scout standing with its engine running in neutral: four wheels, the front two driven with all wheel drive only,
 // 60 of 75 litres, and the burn numbers the game gives such a truck.
+// Shifts seen at a replay's samples, and the shifts back the other way within kShiftCountBack seconds, but for those
+// made as the truck comes to a stop or pulls away (the driven wheels under kShiftCountStop rad/s).
+static const float kShiftCountBack = 5.0f, kShiftCountStop = 1.0f;
+struct ShiftCount
+{
+    int gear, shifts, hunts, way;
+    float at;
+    void See(int now, float seconds, bool stopping)
+    {
+        if (gear >= 1 && now != gear)
+        {
+            const int to = now > gear ? 1 : -1;
+            shifts++;
+            if (to == -way && seconds - at < kShiftCountBack && !stopping) hunts++;
+            way = to;
+            at = seconds;
+        }
+        gear = now;
+    }
+};
+
 static TruckRaw Truck()
 {
     TruckRaw t = {};
@@ -169,6 +190,11 @@ static int Replay(const char *path, float idleRpm, float redlineRpm)
     // the powertrain while driving: the pedal as held and as shaped, the power, and the seconds near full power
     PowertrainModel power = {};
     float pedalSum = 0.0f, shapedSum = 0.0f, powerSum = 0.0f, nearFull = 0.0f;
+    // the automatic: its shifts against the game's own while the game's automatic drives a numbered gear, both seen at
+    // the samples, and the seconds it would have had the converter locked
+    GearboxModel box = {};
+    ShiftCount gameShifts = {}, boxShifts = {};
+    float automaticFor = 0.0f, lockedFor = 0.0f, spinBefore = 0.0f;
     float mostBoost = 0.0f, boosted = 0.0f, climb = -1.0f, climbSum = 0.0f, climbLongest = 0.0f;
     int climbs = 0, flutters = 0, blowOffs = 0;
     float hotPoints = 0.0f, coldPoints = 0.0f;
@@ -213,6 +239,8 @@ static int Replay(const char *path, float idleRpm, float redlineRpm)
             tach = TachModel{};
             boost = BoostModel{};
             power = PowertrainModel{};
+            box = GearboxModel{};
+            gameShifts.gear = boxShifts.gear = 0;
             climb = -1.0f;
             range = RangeModel{};
             last = seconds - kDt;
@@ -249,6 +277,12 @@ static int Replay(const char *path, float idleRpm, float redlineRpm)
             if (tach.rpm > k.redline) redSteps++;
             TempStep(temp, kind, t, TachSpeed(tach, k), s, dt);
             PowertrainStep(power, t, kClassCurves[s.tachClass], TachSpeed(tach, k), k.max / k.redline, temp.oil, boost.bar / k.boost, dt);
+            GearboxStep(box, t, k, power.pedal, power.power, dt);
+            if (t.automatic && t.gearEngaged >= 1 && t.gearEngaged <= TruckTopGear(t) && TruckEngineOn(t))
+            {
+                automaticFor += dt;
+                if (box.locked) lockedFor += dt;
+            }
             const int cost = DamageStep(wear, truck, t, temp, TachSpeed(tach, k), s, dt);
             (wear.hot > 0.0f ? hotPoints : coldPoints) += (float)cost;
             char note[200];
@@ -291,6 +325,15 @@ static int Replay(const char *path, float idleRpm, float redlineRpm)
             hottestOil = fmaxf(hottestOil, temp.oil);
             if (temp.temp >= kTempRed) inRed += dt;
         }
+        if (t.automatic && t.gearEngaged >= 1 && t.gearEngaged <= TruckTopGear(t) && TruckEngineOn(t))
+        {
+            const bool stopping = fminf(TruckDrivenSpin(t), spinBefore) < kShiftCountStop;
+            gameShifts.See(t.gearEngaged, seconds, stopping);
+            boxShifts.See(box.gear, seconds, stopping);
+        }
+        else
+            gameShifts.gear = boxShifts.gear = 0;
+        spinBefore = TruckDrivenSpin(t);
         last = seconds;
         samples++;
         printf("%8.2f gear %2d %s pedal %.2f wheels %5.2f of %5.2f | %4.0f rpm | %5.1f km/h | fuel %6.2f | range %6.1f km at %.3f l/km over %4.0f m, standing %.2f l/min | "
@@ -303,6 +346,9 @@ static int Replay(const char *path, float idleRpm, float redlineRpm)
            samples, steps, mostStep, mostRpm, redSteps, k.redline);
     for (const std::string &n : notes) printf("coolant: %s\n", n.c_str());
     printf("oil: the hottest %.1f C\n", hottestOil);
+    printf("automatic: in %.0f s of the game's automatic in a numbered gear, seen at the samples, it shifted %d times and back within %.0f s %d times; the model would have "
+           "shifted %d times and back %d times, with the converter locked %.0f s\n",
+           automaticFor, gameShifts.shifts, kShiftCountBack, gameShifts.hunts, boxShifts.shifts, boxShifts.hunts, lockedFor);
     printf("powertrain: while driving the pedal was down %.2f on average and %.2f shaped; the power %.2f on average, %.0f s at 0.9 of full or more\n",
            drivingAll > 0.0f ? pedalSum / drivingAll : 0.0f, drivingAll > 0.0f ? shapedSum / drivingAll : 0.0f, drivingAll > 0.0f ? powerSum / drivingAll : 0.0f, nearFull);
     printf("coolant: the hottest %.1f C, %.0f s in the red zone (from %.0f C); while driving (%.0f s) the mean load was %.2f and the mean speed %.1f km/h\n", hottest, inRed, kTempRed,
@@ -1185,6 +1231,112 @@ int main(int argc, char **argv)
         off.flags = 0;
         PowertrainStep(cold, off, truckCurve, 0.7f, top, 90.0f, 1.0f, kDt);
         Check(weak && cold.power == 0.0f && cold.load == 0.0f, "powertrain: cold oil takes 15 percent of the torque and no boost 35 percent; a stopped engine delivers nothing");
+    }
+
+    // the automatic gearbox: the converter, the shift points, the hysteresis, the kickdown and a descent
+    {
+        TruckRaw g = Truck();
+        g.gear = g.gearEngaged = 1;
+        g.automatic = 1;
+        // all driven wheels at one speed
+        auto wheels = [&](float spin) { for (int i = 0; i < g.wheels; i++) g.spin[i] = spin; };
+        // a model already driving in a gear at the wheels' speed
+        auto driving = [&](int gear) {
+            GearboxModel m = {};
+            m.running = true;
+            m.gear = gear;
+            m.spin = TruckDrivenSpin(g);
+            return m;
+        };
+        // standing: the converter at the stall floored, and creeping at idle
+        GearboxModel box = {};
+        wheels(0.0f);
+        GearboxStep(box, g, k, 1.0f, 1.0f, kDt);
+        const bool stall = box.gear == 1 && !box.locked && Near(box.rpm, k.redline * kStallSpeed, 1.0f) && Near(box.ratio, kStallRatio, 0.001f) && Near(box.drive, kStallRatio, 0.001f);
+        GearboxStep(box, g, k, 0.0f, 0.0f, kDt);
+        const bool creep = Near(box.rpm, k.idle, 1.0f) && Near(box.drive, kCreep * kStallRatio, 0.001f);
+        Check(stall && creep, "automatic: standing, a floored engine runs at the converter's stall with the torque doubled, and an idling one creeps");
+        // a floored pull from a standstill to the top gear's top in 40 seconds, and the same at a light foot
+        auto pull = [&](float pedal, float &firstShiftAt, float &shortestPause, bool &lockedOnce) {
+            GearboxModel b = {};
+            firstShiftAt = -1.0f;
+            shortestPause = 100.0f;
+            lockedOnce = false;
+            float lastShift = -100.0f;
+            const float topSpin = TruckGearTop(g, TruckTopGear(g));
+            for (float at = 0.0f; at < 40.0f; at += kDt)
+            {
+                const float spin = topSpin * at / 40.0f;
+                wheels(spin);
+                const int before = b.gear;
+                GearboxStep(b, g, k, pedal, pedal, kDt);
+                if (b.gear != before && before >= 1) // its first gear is no shift
+                {
+                    if (firstShiftAt < 0.0f) firstShiftAt = b.spin; // the speed the gearbox goes by
+                    shortestPause = fminf(shortestPause, at - lastShift);
+                    lastShift = at;
+                }
+                lockedOnce = lockedOnce || b.locked;
+            }
+            return b;
+        };
+        float floorShift, floorPause, lightShift, lightPause;
+        bool floorLocked, lightLocked;
+        const GearboxModel floored = pull(1.0f, floorShift, floorPause, floorLocked), light = pull(0.3f, lightShift, lightPause, lightLocked);
+        // floored, the first shift is called for at kShiftUpFloored and made kShiftUpAfter later
+        const float floorPoint = TruckGearTop(g, 1) * kShiftUpFloored, gaining = TruckGearTop(g, TruckTopGear(g)) / 40.0f;
+        Check(floored.gear == 4 && floored.shifts == 3 && light.shifts == 3 && floorShift >= floorPoint && floorShift <= floorPoint + gaining * kShiftUpAfter + 0.1f && lightShift < floorShift - 2.0f &&
+                  floorPause >= kShiftPause && floorLocked && lightLocked,
+              "automatic: pulling away it shifts through each gear once, late when floored and early at a light foot, a second apart, and locks the converter up");
+        // a steady speed between the shift points with the pedal wandering: the gear holds
+        wheels(10.0f);
+        GearboxModel hold = driving(2);
+        uint32_t seed = 7;
+        for (float at = 0.0f; at < 60.0f; at += kDt) GearboxStep(hold, g, k, 0.45f + 0.15f * LiftChance(seed), 0.5f, kDt);
+        Check(hold.shifts <= 1, "automatic: at a steady speed with the pedal wandering between 0.3 and 0.6 the gear holds");
+        // floored in the second gear at 0.8 of the red zone's speed, then the foot lifted: no shift up at the lift, one
+        // once the foot has stayed off
+        wheels(TruckGearTop(g, 2) * 0.8f);
+        GearboxModel lift = driving(2);
+        for (float at = 0.0f; at < 2.0f; at += kDt) GearboxStep(lift, g, k, 1.0f, 1.0f, kDt);
+        const int floorGear = lift.gear;
+        for (float at = 0.0f; at < 1.0f; at += kDt) GearboxStep(lift, g, k, 0.0f, 0.0f, kDt);
+        const int liftedGear = lift.gear;
+        for (float at = 0.0f; at < 2.0f; at += kDt) GearboxStep(lift, g, k, 0.0f, 0.0f, kDt);
+        Check(floorGear == 2 && liftedGear == 2 && lift.gear == 3, "automatic: a lifted foot is no call to shift up at once; one kept off shifts up");
+        // a kickdown from the top gear at a low speed, skipping a gear
+        wheels(10.0f);
+        GearboxModel kick = driving(4);
+        for (float at = 0.0f; at < kShiftDownAfter + kShiftPause + 0.1f; at += kDt) GearboxStep(kick, g, k, 0.0f, 0.0f, kDt);
+        const int cruising = kick.gear;
+        GearboxStep(kick, g, k, 1.0f, 1.0f, kDt);
+        Check(cruising == 3 && kick.gear == 2, "automatic: floored at a low speed it kicks down to the lowest gear that keeps the engine under 0.85 of the red zone's speed");
+        // rolling downhill with the foot off the gear holds until the engine would pass the red zone; on the flat it shifts up
+        wheels(8.0f);
+        GearboxModel down = driving(2);
+        GearboxStep(down, g, k, 0.0f, 0.0f, kDt);
+        bool held = true;
+        for (float at = 0.0f; at < 10.0f; at += kDt)
+        {
+            wheels(8.0f + 1.0f * at);
+            GearboxStep(down, g, k, 0.0f, 0.0f, kDt);
+            if (GearboxInput(g, k, 2, g.spin[0]) <= k.redline && down.gear != 2) held = false;
+        }
+        wheels(14.0f);
+        GearboxModel flat = driving(2);
+        for (float at = 0.0f; at < 2.0f; at += kDt) GearboxStep(flat, g, k, 0.0f, 0.0f, kDt);
+        Check(held && down.gear == 3 && flat.gear == 3, "automatic: rolling downhill with the foot off it holds the gear for the engine's braking and shifts up only past the red zone");
+        TruckRaw off = g;
+        off.flags = 0;
+        GearboxStep(box, off, k, 1.0f, 1.0f, kDt);
+        Check(box.drive == 0.0f && box.rpm == 0.0f && TruckBrake(g) == 0.0f, "automatic: a stopped engine drives nothing");
+        TruckRaw braking = g;
+        braking.throttle = 0.6f;
+        TruckRaw reversing = g;
+        reversing.gear = reversing.gearEngaged = -1;
+        reversing.throttle = -0.4f;
+        Check(Near(TruckBrake(braking), 0.6f, 0.001f) && TruckPedal(braking) == 0.0f && Near(TruckBrake(reversing), 0.4f, 0.001f) && TruckPedal(reversing) == 0.0f,
+              "automatic: the brake is the side of the pedal that does not drive, in an automatic's reverse too");
     }
 
     // what the temperature costs the engine
