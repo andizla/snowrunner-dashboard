@@ -349,9 +349,12 @@ the foot. Make the heat follow the engine speed of the tach model (`TachShare`):
 whatever the pedal, and one lugging at low revs heats little. Retune with the replays so the settings' three times
 still come true (`TempRatesOf` solves the rates from them) and say where the README's promises move (the red zone at
 a crawl floored, the low range at its own top speed, a cruise in a high gear near the red zone, the free rev in
-neutral). Once module 12 makes the engine speed real, the heat follows that one. Question for the user before
-building: the cold damage goes by the pedal (more than half down below 60 C); does it move to the engine speed too
-(a cold engine revved high)?
+neutral). Once module 12 makes the engine speed real, the heat follows that one. The engine damage moves with it
+(the user, 2026-10-08: "cold and warm engine damage should both move"): the cold damage goes by the engine speed in
+place of the pedal (`DamageCold` reads `TruckPedal` above `kDamagePedal` today), so a cold engine revved high
+suffers and one pulling at low revs does not; the hot damage already goes by the temperature alone (`DamageHot`),
+so it follows the engine speed through the heat, and its replays are checked against the new heat. The README,
+the ini help and the tab say engine speed where they say pedal.
 
 Part B, water and oil. The coolant model stays as the water temperature, the quick one. A second, slower oil
 temperature takes its heat from the engine and gives it to the water and the air: a larger mass, so it lags the
@@ -483,9 +486,13 @@ What "integration" covers is the user's call, asked first, with the options laid
   and module 13's converter steps aside; the clutch pedal slips the engine against the wheels (a stall when it
   comes up too fast at too low an engine speed, a free rev with it down). The two mods must never both write the
   power factor or call a shift in one frame.
-- How the state crosses over: if the user maintains the SMT build in `C:\Games\Snowrunner-Manual-Transmission`, an
-  exported state (a small struct or function in its DLL) is the clean route; if not, read SMT's state from its
-  hooks' effects in game memory and never patch its code.
+- How the state crosses over: SMT is the user's own fork (github.com/andizla/Snowrunner-Manual-Transmission,
+  locally `C:\Games\Snowrunner-Manual-Transmission`), so the route is an exported state: a small versioned struct
+  or function in its DLL (the gear, the clutch, its mode, whether it holds the game's automatic off) that this mod
+  finds with GetModuleHandle and GetProcAddress and reads once a frame, and, if the powertrain needs it, a call
+  back the other way so only one of the two writes the power factor or calls a shift. The change to SMT is made in
+  its own repo on a branch, as a separate commit the user approves; this mod works on with an SMT build that has
+  no export by standing the powertrain down, as module 12 does.
 
 Research note in HANDOFF.md first (SMT's hooks and state, the order the two run in each frame, the chosen route),
 the user's OK, then the build. Test: the user's drive on the rig with the shifter and the clutch, and with SMT off
