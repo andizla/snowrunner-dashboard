@@ -1,6 +1,7 @@
-# map_names.ps1: the names the game gives its maps, from its own files, for the [Map:<name>] sections of Gauges.ini.
-# It reads the game's .pak files (zip archives) for the level names and the English texts that go with them, and the
-# save files for what they say about the map last driven on. It only reads; it writes out\map_names.txt.
+# map_names.ps1: the names the game gives its maps and regions, from its own files, for the [Map:<name>] sections of
+# Gauges.ini. It reads the English texts in the game's .pak files (zip archives) for the maps' and the regions' names,
+# and the save files for what they say about the map last driven on. It only reads the game's files; it writes
+# out\map_names.txt, and the English texts whole as out\strings_english.txt.
 #   map_names.bat [the game's folder]
 # Without a folder the Steam default is used.
 param([string]$Game = 'C:\Program Files (x86)\Steam\steamapps\common\Snowrunner')
@@ -11,6 +12,7 @@ $Game = $Game.TrimEnd('\')
 $outDir = Join-Path (Split-Path $PSScriptRoot) 'out'
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $outFile = Join-Path $outDir 'map_names.txt'
+$stringsFile = Join-Path $outDir 'strings_english.txt'
 $report = New-Object System.Collections.Generic.List[string]
 function Say([string]$s) { $report.Add($s); Write-Host $s }
 
@@ -19,13 +21,6 @@ if (-not (Test-Path -LiteralPath (Join-Path $Game 'Sources\Bin\SnowRunner.exe'))
     Write-Host 'Give the game''s folder: map_names.bat "D:\Games\Snowrunner"'
     exit 1
 }
-
-# a level's name, as in level_us_01_01, and a region's or a map's key in the texts, as in US_01 or US_01_01
-$levelRx = [regex]'(?i)level_[a-z]{2}_\d{2}_\d{2}[a-z0-9_]*'
-$keyRx = [regex]'(?i)(?<![a-z0-9])(us|ru)_\d{2}(_\d{2})?(?![0-9])'
-$levels = @{}
-$texts = New-Object System.Collections.Generic.List[string]
-$textEntries = New-Object System.Collections.Generic.List[string]
 
 # Text from bytes, UTF-16 where the bytes say so, else UTF-8.
 function TextOf([byte[]]$b) {
@@ -39,55 +34,84 @@ function BytesOf([System.IO.Stream]$s) {
     try { $s.CopyTo($ms); return , $ms.ToArray() } finally { $ms.Dispose() }
 }
 
-Say "The game's map names, from its files in $Game"
-Say ''
-Say '== the .pak files'
+# ---- the .pak files: the maps they hold, and the English texts
 $paks = Get-ChildItem -LiteralPath $Game -Recurse -Filter *.pak -File -ErrorAction SilentlyContinue | Sort-Object FullName
+$levels = New-Object System.Collections.Generic.List[string]
+$pakLines = New-Object System.Collections.Generic.List[string]
+$english = $null
+$englishSize = 0
 foreach ($pak in $paks) {
     $rel = $pak.FullName.Substring($Game.Length).TrimStart('\')
+    if ($pak.BaseName -match '(?i)^level_(us|ru)_\d{2}_\d{2}') { $levels.Add($pak.BaseName.ToLower()) }
     try {
         $zip = [IO.Compression.ZipFile]::OpenRead($pak.FullName)
         try {
-            $named = 0
+            # the game's own English texts: the biggest file of that name, as a mod's .pak may bring a small one
             foreach ($e in $zip.Entries) {
-                foreach ($m in $levelRx.Matches($e.FullName)) {
-                    $id = $m.Value.ToLower()
-                    if (-not $levels.ContainsKey($id)) { $levels[$id] = New-Object System.Collections.Generic.List[string] }
-                    if (-not $levels[$id].Contains($rel)) { $levels[$id].Add($rel) }
-                    $named++
-                }
-                # the texts, where the maps' and regions' names are: all of them listed, the English ones read
-                if ($e.FullName -notmatch '(?i)string|\.str$|locali') { continue }
-                $english = $e.FullName -match '(?i)engl|_en\b|\ben\b'
-                $textEntries.Add(('{0} : {1} ({2:N0} bytes){3}' -f $rel, $e.FullName, $e.Length, $(if ($english) { ', read' } else { '' })))
-                if ($english -and $e.Length -gt 0 -and $e.Length -lt 64MB) {
-                    $s = $e.Open()
-                    try { $text = TextOf (BytesOf $s) } finally { $s.Dispose() }
-                    foreach ($line in ($text -split "`r?`n")) {
-                        if ($levelRx.IsMatch($line) -or $keyRx.IsMatch($line)) { $texts.Add(('{0}: {1}' -f $e.Name, $line.Trim())) }
-                    }
-                }
+                if ($e.FullName -notmatch '(?i)(^|[\\/\]])strings_english\.str$' -or $e.Length -le $englishSize -or $e.Length -ge 64MB) { continue }
+                $s = $e.Open()
+                try { $english = TextOf (BytesOf $s) } finally { $s.Dispose() }
+                $englishSize = $e.Length
+                $englishFrom = ('the English texts: {0} : {1} ({2:N0} bytes)' -f $rel, $e.FullName, $e.Length)
             }
-            Say ('{0}  {1:N0} MB, {2} entries, {3} level names in them' -f $rel, ($pak.Length / 1MB), $zip.Entries.Count, $named)
         }
         finally { $zip.Dispose() }
     }
-    catch { Say ('{0}  {1:N0} MB, not read as a zip: {2}' -f $rel, ($pak.Length / 1MB), $_.Exception.Message) }
+    catch { $pakLines.Add(('{0} not read as a zip: {1}' -f $rel, $_.Exception.Message)) }
+}
+if ($null -ne $english) { $pakLines.Insert(0, $englishFrom) }
+
+# The texts as key and value: KEY, some tabs, "value". The first of a key that is given twice is kept.
+$texts = @{}
+$order = New-Object System.Collections.Generic.List[string]
+if ($null -ne $english) {
+    [IO.File]::WriteAllText($stringsFile, $english, (New-Object Text.UTF8Encoding $true))
+    foreach ($line in ($english -split "`r?`n")) {
+        if ($line -notmatch '^\s*(\S+)\s+"(.*)"\s*$') { continue }
+        $key = $Matches[1].ToUpper()
+        if ($texts.ContainsKey($key)) { continue }
+        $texts[$key] = $Matches[2] -replace '\\"', '"'
+        $order.Add($key)
+    }
 }
 
-Say ''
-Say ('== the level names ({0})' -f $levels.Count)
-foreach ($id in ($levels.Keys | Sort-Object)) { Say ('{0}   in {1}' -f $id, (($levels[$id] | Select-Object -First 3) -join ', ')) }
+Say "The game's map and region names, from its files in $Game"
+foreach ($l in $pakLines) { Say $l }
+if ($null -eq $english) { Say 'No strings_english.str was found in the .pak files.' }
+else { Say ('{0:N0} texts in it; all of them are in {1}' -f $texts.Count, $stringsFile) }
 
+# ---- the maps: each level's name, under US_01_01_NAME or LEVEL_US_01_01_NAME
 Say ''
-Say ('== the text files ({0}, at most 200 here; the English ones are read)' -f $textEntries.Count)
-foreach ($t in ($textEntries | Select-Object -First 200)) { Say $t }
-Say ''
-Say ('== the lines in them with a map''s or a region''s key ({0}, at most 3000 here)' -f $texts.Count)
-foreach ($t in ($texts | Select-Object -First 3000)) { $report.Add($t) }
-Write-Host '(in the file)'
+Say ('== the maps ({0} .pak files of a level): the level, its region, its English name' -f $levels.Count)
+$mapRx = [regex]'(?i)^level_((us|ru)_\d{2})_(\d{2})'
+foreach ($id in ($levels | Sort-Object -Unique)) {
+    $m = $mapRx.Match($id)
+    $key = '{0}_{1}' -f $m.Groups[1].Value.ToUpper(), $m.Groups[3].Value
+    $name = $null
+    foreach ($k in @("$($key)_NAME", "LEVEL_$($key)_NAME", "$($key)_NEW_NAME", "LEVEL_$($key)_NEW_NAME")) {
+        if ($texts.ContainsKey($k) -and $texts[$k]) { $name = $texts[$k]; break }
+    }
+    if (-not $name) { $name = '(no name found under ' + $key + '_NAME)' }
+    Say ('{0,-24} {1}  {2}' -f $id, $m.Groups[1].Value.ToLower(), $name)
+}
 
-# The saves: whether they say which map was driven on last. Steam keeps them in userdata, the other stores in
+# ---- the regions: the texts whose key names a region (US_01 with no map's number after it), or a region in words
+Say ''
+Say '== the regions: the texts whose key names a region but no map, or says REGION, COUNTRY or STATE (short values)'
+$regionRx = [regex]'(?i)(^|_)(us|ru)_\d{2}(?!_?\d)'
+$found = 0
+foreach ($key in ($order | Sort-Object)) {
+    $value = $texts[$key]
+    if ($value.Length -eq 0 -or $value.Length -gt 48 -or $value -match '[<\n]') { continue }
+    $byId = $regionRx.IsMatch($key) -and $key -notmatch '(?i)(us|ru)_\d{2}_\d{2}'
+    $byWord = $key -match '(?i)REGION|COUNTRY|STATE_NAME|_STATE$'
+    if (-not ($byId -or $byWord)) { continue }
+    Say ('{0} = {1}' -f $key, $value)
+    $found++
+}
+if ($found -eq 0) { Say 'none: send me out\strings_english.txt as well' }
+
+# ---- the saves: whether they say which map was driven on last. Steam keeps them in userdata, the other stores in
 # Documents\My Games\SnowRunner.
 Say ''
 Say '== the save files'
@@ -101,23 +125,84 @@ if ($docs) { $docs = Join-Path $docs 'My Games\SnowRunner' }
 if ($docs -and (Test-Path -LiteralPath $docs)) {
     $saves += Get-ChildItem -LiteralPath $docs -Recurse -Filter 'CompleteSave*' -File -ErrorAction SilentlyContinue
 }
-foreach ($save in $saves) {
-    Say ('{0}  {1:N0} KB, saved {2}' -f $save.FullName, ($save.Length / 1KB), $save.LastWriteTime)
-    if ($save.Length -gt 64MB) { continue }
-    $text = TextOf ([IO.File]::ReadAllBytes($save.FullName))
-    $seen = @{}
-    foreach ($m in $levelRx.Matches($text)) {
-        $id = $m.Value.ToLower()
-        if (-not $seen.ContainsKey($id)) { $seen[$id] = 0 }
-        $seen[$id]++
-        if ($seen[$id] -gt 2) { continue }
-        $from = [Math]::Max(0, $m.Index - 60)
-        $around = $text.Substring($from, [Math]::Min($text.Length - $from, $m.Index - $from + $m.Length + 20)) -replace '\s+', ' '
-        $report.Add(('    {0}: ...{1}...' -f $id, $around))
-    }
-    Say ('    {0} level names in it: {1}' -f $seen.Count, (($seen.Keys | Sort-Object | ForEach-Object { '{0} x{1}' -f $_, $seen[$_] }) -join ', '))
-}
 if ($saves.Count -eq 0) { Say 'none found' }
+
+# the folders the saves are in, every file with its time, the newest first: the map files written last
+foreach ($dir in ($saves | ForEach-Object { $_.DirectoryName } | Sort-Object -Unique)) {
+    Say ''
+    Say ('{0}, the newest first:' -f $dir)
+    foreach ($f in (Get-ChildItem -LiteralPath $dir -File | Sort-Object LastWriteTime -Descending | Select-Object -First 80)) {
+        Say ('    {0:yyyy-MM-dd HH:mm:ss}  {1,10:N0} bytes  {2}' -f $f.LastWriteTime, $f.Length, $f.Name)
+    }
+}
+
+# Every place in a save that holds a map's or a region's name as its value, with the names it holds. Lists become [],
+# and an object's keys that are maps' names become {level}, so the same place is counted once.
+$places = [ordered]@{}
+function Walk($node, [string]$path, [int]$depth) {
+    if ($depth -gt 40 -or $null -eq $node) { return }
+    if ($node -is [string]) {
+        if ($node -match '(?i)^(level_)?(us|ru)_\d{2}') {
+            if (-not $places.Contains($path)) { $places[$path] = New-Object System.Collections.Generic.List[string] }
+            if (-not $places[$path].Contains($node)) { $places[$path].Add($node) }
+        }
+        return
+    }
+    if ($node -is [System.Collections.IList]) {
+        foreach ($item in $node) { Walk $item ($path + '[]') ($depth + 1) }
+        return
+    }
+    if ($node -is [System.Management.Automation.PSCustomObject]) {
+        foreach ($p in $node.PSObject.Properties) {
+            $name = if ($p.Name -match '(?i)^(level_)?(us|ru)_\d{2}') { '{level}' } else { $p.Name }
+            Walk $p.Value ($path + '.' + $name) ($depth + 1)
+        }
+    }
+}
+
+foreach ($save in $saves) {
+    Say ''
+    Say ('{0}  {1:N0} KB, saved {2:yyyy-MM-dd HH:mm:ss}' -f $save.FullName, ($save.Length / 1KB), $save.LastWriteTime)
+    if ($save.Length -gt 64MB) { continue }
+    $text = (TextOf ([IO.File]::ReadAllBytes($save.FullName))).Trim([char]0, ' ', "`r", "`n", "`t")
+    # every key whose value is a map's name, read from the text as it stands, so this holds when the JSON does not
+    $pairs = [ordered]@{}
+    foreach ($m in [regex]::Matches($text, '"([^"]+)"\s*:\s*"(level_[^"]+)"')) {
+        $k = $m.Groups[1].Value
+        if (-not $pairs.Contains($k)) { $pairs[$k] = New-Object System.Collections.Generic.List[string] }
+        if (-not $pairs[$k].Contains($m.Groups[2].Value)) { $pairs[$k].Add($m.Groups[2].Value) }
+    }
+    Say '    the keys whose value is a map''s name:'
+    if ($pairs.Count -eq 0) { Say '      none' }
+    foreach ($k in $pairs.Keys) { Say ('      {0} = {1}' -f $k, ($pairs[$k] -join ', ')) }
+    try { $json = $text | ConvertFrom-Json }
+    catch { Say ('    not read as JSON: {0}' -f $_.Exception.Message); continue }
+    # the top of the save: each key, with its value when it is short
+    $top = $json
+    # a save is one object named after its file (CompleteSave, CompleteSave1) that holds SslValue
+    $outer = @($top.PSObject.Properties)
+    if ($outer.Count -eq 1 -and $outer[0].Value -is [System.Management.Automation.PSCustomObject]) { $top = $outer[0].Value }
+    if ($top.PSObject.Properties['SslValue']) { $top = $top.SslValue }
+    Say '    its keys:'
+    foreach ($p in $top.PSObject.Properties) {
+        $v = $p.Value
+        $shown = if ($null -eq $v) { 'null' }
+                 elseif ($v -is [System.Collections.IList]) { '[{0} items]' -f $v.Count }
+                 elseif ($v -is [System.Management.Automation.PSCustomObject]) { '{{{0} keys}}' -f @($v.PSObject.Properties).Count }
+                 else { $s = [string]$v; if ($s.Length -gt 60) { $s.Substring(0, 60) + '...' } else { $s } }
+        Say ('      {0} = {1}' -f $p.Name, $shown)
+    }
+    $places.Clear()
+    Walk $json '' 0
+    Say '    the places that hold a map''s or a region''s name:'
+    if ($places.Count -eq 0) { Say '      none' }
+    foreach ($path in $places.Keys) {
+        $names = $places[$path]
+        $shown = ($names | Select-Object -First 12) -join ', '
+        if ($names.Count -gt 12) { $shown += (', and {0} more' -f ($names.Count - 12)) }
+        Say ('      {0} = {1}' -f $path.TrimStart('.'), $shown)
+    }
+}
 
 $report | Set-Content -LiteralPath $outFile -Encoding UTF8
 Write-Host ''

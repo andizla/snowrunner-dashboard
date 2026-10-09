@@ -798,9 +798,9 @@ int main(int argc, char **argv)
         Check(idling > 84.0f && idling < 90.0f && rolling > kThermostatShut - 0.5f && rolling < idling,
               "coolant: the thermostat holds an idling engine at about 86 C, and a little lower with the truck rolling");
         Check(Near(Heat(temp, c, 1, set, 1800.0f, 1.0f, 1.0f, 60.0f), kTempCruise, 1.0f), "coolant: at full load with all the air the radiator can get the engine settles at 97 C");
-        const float coasting = Heat(temp, c, 1, set, 1800.0f, 0.0f, 1.0f, 60.0f), lugging = Heat(temp, c, 1, set, 1800.0f, 1.0f, 0.0f, 0.0f);
+        const float coastingHeat = Heat(temp, c, 1, set, 1800.0f, 0.0f, 1.0f, 60.0f), lugging = Heat(temp, c, 1, set, 1800.0f, 1.0f, 0.0f, 0.0f);
         const float half = Heat(temp, c, 1, set, 1800.0f, 0.5f, 1.0f, 60.0f), halfSpeed = Heat(temp, c, 1, set, 1800.0f, 1.0f, 0.5f, 60.0f);
-        Check(Near(coasting, rolling, 0.5f) && Near(lugging, idling, 0.5f) && Near(half, halfSpeed, 0.2f) && half > rolling + 3.0f && half < kTempCruise - 3.0f,
+        Check(Near(coastingHeat, rolling, 0.5f) && Near(lugging, idling, 0.5f) && Near(half, halfSpeed, 0.2f) && half > rolling + 3.0f && half < kTempCruise - 3.0f,
               "coolant: the heat goes by the fuel burned, the pedal times the engine speed: coasting at the red zone with the foot off makes the heat of idle, "
               "and so does the pedal floored at idle revs");
         bool outOfRed = true;
@@ -1087,23 +1087,23 @@ int main(int argc, char **argv)
         Check(Near(water85c, water85, 0.11f) && Near(oil85c, water85c + kOilAfter, 6.0f), "oil: set to warm before the coolant, the oil is warm a minute after it");
 
         // where it settles: over the coolant by the heat
-        TempModel m = {};
-        TempStep(m, 1, c, 0.0f, set, kDt);
-        Heat(m, c, 1, set, 3600.0f, 1.0f, 1.0f, 60.0f);
-        const float hard = m.oil - m.temp;
-        Heat(m, c, 1, set, 3600.0f, 0.0f, 0.0f, 0.0f);
-        const float idleOver = m.oil - m.temp;
+        TempModel settled = {};
+        TempStep(settled, 1, c, 0.0f, set, kDt);
+        Heat(settled, c, 1, set, 3600.0f, 1.0f, 1.0f, 60.0f);
+        const float hard = settled.oil - settled.temp;
+        Heat(settled, c, 1, set, 3600.0f, 0.0f, 0.0f, 0.0f);
+        const float idleOver = settled.oil - settled.temp;
         Check(Near(hard, OilOver(1.0f, 1.0f), 0.3f) && Near(OilOver(1.0f, 1.0f), 14.0f, 0.01f) && Near(idleOver, OilOver(0.0f, 0.0f), 0.3f) && Near(OilOver(0.7f, 0.7f), 8.96f, 0.01f) &&
               Near(OilOver(0.0f, 1.0f), kOilFriction, 0.01f), "oil: it settles 14 degrees over the coolant floored at the red zone, 9 driven as usual, 4 coasting at the red zone and none at idle");
 
         // a stopped engine: the oil keeps its heat longer than the coolant
         TruckRaw halted = c;
         halted.flags = 0;
-        Coolant(m, kTempHot);
-        m.truck[m.at].oil = m.oil = kTempHot;
-        Heat(m, halted, 1, set, 900.0f, 0.0f, 0.0f, 0.0f);
+        Coolant(settled, kTempHot);
+        settled.truck[settled.at].oil = settled.oil = kTempHot;
+        Heat(settled, halted, 1, set, 900.0f, 0.0f, 0.0f, 0.0f);
         const float slower = set.ambientC + (kTempHot - set.ambientC) * sqrtf((kTempCooled - set.ambientC) / (kTempHot - set.ambientC));
-        Check(Near(m.temp, kTempCooled, 0.3f) && Near(m.oil, slower, 0.5f), "oil: when a stopped engine's coolant has cooled from 90 C to 40 C, its oil is still at 58 C");
+        Check(Near(settled.temp, kTempCooled, 0.3f) && Near(settled.oil, slower, 0.5f), "oil: when a stopped engine's coolant has cooled from 90 C to 40 C, its oil is still at 58 C");
 
         // a truck left standing keeps its oil, cooling the oil's way
         TempModel fleet = {};

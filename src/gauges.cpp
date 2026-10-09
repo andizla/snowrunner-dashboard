@@ -1453,14 +1453,14 @@ int wmain(int argc, wchar_t **argv)
         GaugeSettings fresh;
         ReadIni(fresh);
         float michigan = 0.0f, taymyr = 0.0f, none = 0.0f;
-        const bool written = MapAmbient("michigan", michigan) && michigan == 12.0f && MapAmbient("taymyr", taymyr) && taymyr == -20.0f;
+        const bool mapsWritten = MapAmbient("michigan", michigan) && michigan == 12.0f && MapAmbient("taymyr", taymyr) && taymyr == -20.0f;
         const bool unknown = !MapAmbient("nowhere", none) && !MapAmbient("", none);
         WritePrivateProfileStringW(L"Map:michigan", L"AmbientC", L"-3", ini.c_str());
         WritePrivateProfileStringW(L"Map:hot", L"AmbientC", L"99", ini.c_str());
         WritePrivateProfileStringW(L"Map:alaska", nullptr, nullptr, ini.c_str());
         ReadIni(fresh);
         float hot = 0.0f, alaska = 0.0f;
-        Check(written && unknown && MapAmbient("michigan", michigan) && michigan == -3.0f && MapAmbient("hot", hot) && hot == kAmbientRange[1] && !MapAmbient("alaska", alaska),
+        Check(mapsWritten && unknown && MapAmbient("michigan", michigan) && michigan == -3.0f && MapAmbient("hot", hot) && hot == kAmbientRange[1] && !MapAmbient("alaska", alaska),
               "maps: an ini without map sections gets them, a map's temperature is read and held to the range, and a section taken out or changed by hand stays so");
         DeleteFileW(ini.c_str());
         WritePrivateProfileStringW(kIniSection, L"Layout", L"1", ini.c_str());
