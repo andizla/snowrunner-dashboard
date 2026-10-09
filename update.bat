@@ -5,9 +5,17 @@ rem build or a test fails. All the build and the tests print goes to out\build.l
 rem shows the errors and the failed tests.
 rem   update.bat [the game's Sources\Bin folder]
 rem Without a folder the Steam default is used. Run it from a cmd window or by a double click.
+rem It runs from a copy in %TEMP%: the merge may bring a new update.bat, and cmd reads a running batch file from disk
+rem as it goes.
+if "%~1"=="--copy" goto start
+del "%TEMP%\snowrunner_gauges_update.bat" 2>nul
+copy /y "%~f0" "%TEMP%\snowrunner_gauges_update.bat" >nul
+if not exist "%TEMP%\snowrunner_gauges_update.bat" (echo Could not copy update.bat to the temp folder. & pause & exit /b 1)
+"%TEMP%\snowrunner_gauges_update.bat" --copy "%~dp0" %*
+:start
 setlocal
-cd /d "%~dp0"
-set "BIN=%~1"
+cd /d "%~2"
+set "BIN=%~3"
 if "%BIN%"=="" set "BIN=C:\Program Files (x86)\Steam\steamapps\common\Snowrunner\Sources\Bin"
 set "BRANCH=claude/vibrant-darwin-anbhqw"
 
