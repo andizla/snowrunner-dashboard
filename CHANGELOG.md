@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.11.3] 2026-10-09
+
+- The outside temperature goes by the map. The mod reads which map you are on from the game's save (the map it loaded last), and the `[Map:<name>]` sections now carry the game's own names: one for each of its 21 regions (`[Map:Michigan]`, `[Map:Zurdania]`), and a map can have one apart from its region's (`[Map:Black River]`). A map of a mod goes by its id. `Gauges.log` says the map, its region and the section in force when it changes, and the Gauges tab names them under the outside temperature.
+- The placeholder sections of 0.11.0 to 0.11.2 are renamed to the game's names with the temperatures they hold, and the four regions they lacked (Quebec, Washington, Chiapas, Zurdania) are added.
+
 ## [0.11.2] 2026-10-08
 
 - The brake air dial shows the air in the brakes' tanks. The engine's compressor fills them, faster the higher it revs (about three minutes from empty at idle, one at the red zone); its governor stops it at 8.2 bar and starts it again at 6.9. Each press of the brake takes air by how far it goes down, letting the handbrake go takes the air that holds the spring brakes off, and the system leaks a little. Eight full presses with the engine off take a full tank into the red zone. Scouts brake by hydraulics and have no air dial. `ShowAir` is still off at first. With `Probe=1` the log has a line for it.

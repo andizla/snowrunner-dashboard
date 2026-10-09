@@ -6,7 +6,7 @@
 // most, with the effect and the torque factor the game's own rule gives. And it checks which truck the mod takes a
 // truck for: by its kind's name where the game has one, by its build where it has none.
 // And it checks the reading of the manual transmission mod's published state (smt.h), through a block of shared
-// memory written as that mod writes it.
+// memory written as that mod writes it, and the maps by the game's names with the map its save names (maps.h).
 // build.bat makes out\test\truck_test.exe; test.bat runs it.
 #include <windows.h>
 #include <stdio.h>
@@ -17,6 +17,7 @@
 #include "gauges.h"
 #include "truck.h"
 #include "smt.h"
+#include "maps.h"
 
 struct Region { uint64_t at; std::vector<uint8_t> bytes; };
 static std::vector<Region> g_game;
@@ -773,6 +774,56 @@ int main()
         char line[400];
         SmtProbeText(fresh, true, line, sizeof line);
         Check(strstr(line, "drives this truck | gear 3 of 6") && strstr(line, "clutch held, 0.70 (an axis)") && strstr(line, "2 stalls"), "manual transmission mod: its probe line");
+    }
+
+    // the maps by the game's names, and the map its save names as loaded last
+    {
+        Check(MapIdValid("level_ru_17_01") && MapIdValid("level_my_map") && !MapIdValid("level_") && !MapIdValid("Level_us_01_01") && !MapIdValid("level_us_01 01"),
+              "maps: a map's id is level_ and lower case letters, digits and _");
+        Check(MapIdCore("level_us_01_04_new") == 14 && MapIdCore("level_ru_02_01_crop") == 14 && MapIdCore("level_us_01_01") == 14 && MapIdCore("level_my_map") == 0 &&
+                  MapIdCore("level_us_01_0") == 0 && MapIdCore("level_us_01_012") == 0,
+              "maps: the id up to the map's number, with or without more after it");
+        const MapRegion *drummond = MapRegionOf("level_us_01_04_new"), *zurdania = MapRegionOf("level_ru_17_01"), *wisconsin = MapRegionOf("level_us_03_02");
+        Check(drummond && !strcmp(drummond->name, "Michigan") && zurdania && !strcmp(zurdania->name, "Zurdania") && wisconsin && !strcmp(wisconsin->name, "Wisconsin") &&
+                  !MapRegionOf("level_us_99_01") && !MapRegionOf("level_my_map"),
+              "maps: the region of a map by its id, none for a region the game's texts do not know or a mod's map");
+        const char *drummondName = MapNameOf("level_us_01_04_new"), *crop = MapNameOf("level_ru_02_01_crop");
+        Check(drummondName && !strcmp(drummondName, "Drummond Island") && crop && !strcmp(crop, "Quarry") && !MapNameOf("level_us_03_02") && !MapNameOf("level_us_01_0"),
+              "maps: a map's English name, also with more after its number; none where the texts give none");
+        char title[96], title2[96], title3[96];
+        MapTitle("level_ru_17_01", title, sizeof title);
+        MapTitle("level_us_03_02", title2, sizeof title2);
+        MapTitle("level_my_map", title3, sizeof title3);
+        Check(!strcmp(title, "Zurdanian Valley, Zurdania") && !strcmp(title2, "level_us_03_02, Wisconsin") && !strcmp(title3, "level_my_map"), "maps: a map in words");
+        bool regionsKnown = true, idsOnce = true;
+        for (const auto &m : kMapLevels)
+        {
+            regionsKnown &= MapRegionOf(m.id) != nullptr && MapIdCore(m.id) == strlen(m.id);
+            int seen = 0;
+            for (const auto &n : kMapLevels) seen += !strcmp(n.id, m.id);
+            idsOnce &= seen == 1;
+        }
+        Check(regionsKnown && idsOnce && sizeof kMapLevels / sizeof kMapLevels[0] == 52 && sizeof kMapRegions / sizeof kMapRegions[0] == 21,
+              "maps: 52 named maps, each once and in one of the 21 regions");
+
+        // a save as the game writes it, its end a 0
+        static const char save[] = "{\"CompleteSave\":{\"SslType\":\"CompleteSave\",\"SslValue\":{\"persistentProfileData\":{\"trucksInWarehouse\":"
+                                   "[{\"retainedMapId\":\"level_us_15_01\"}]},\"lastLoadedLevel\":\"level_ru_17_01\",\"visitedLevels\":[\"level_us_01_01\"]}},"
+                                   "\"cfg_version\":1}";
+        char loaded[64] = "";
+        const bool read = MapFromSave(save, sizeof save, loaded, sizeof loaded) && !strcmp(loaded, "level_ru_17_01");
+        const char *value = strstr(save, "level_ru_17_01");
+        char cut[64] = "x";
+        const bool partial = !MapFromSave(save, (size_t)(value - save) + 5, cut, sizeof cut) && !strcmp(cut, "x");
+        static const char spaced[] = "{ \"lastLoadedLevel\" :\r\n \"level_us_01_04_new\" }";
+        char spacedOut[64] = "";
+        const bool spaces = MapFromSave(spaced, sizeof spaced - 1, spacedOut, sizeof spacedOut) && !strcmp(spacedOut, "level_us_01_04_new");
+        static const char notId[] = "{\"lastLoadedLevel\":\"<none>\"}", noKey[] = "{\"retainedMapId\":\"level_us_15_01\"}", noValue[] = "{\"lastLoadedLevel\":\"\"}";
+        char wrongOut[64] = "x", tooShort[8] = "x";
+        const bool refused = !MapFromSave(notId, sizeof notId - 1, wrongOut, sizeof wrongOut) && !MapFromSave(noKey, sizeof noKey - 1, wrongOut, sizeof wrongOut) &&
+                             !MapFromSave(noValue, sizeof noValue - 1, wrongOut, sizeof wrongOut) && !MapFromSave(save, sizeof save, tooShort, sizeof tooShort) && !strcmp(wrongOut, "x");
+        Check(read && partial && spaces && refused,
+              "maps: the map loaded last from a save's text; nothing from a save cut short, a value that is no map's id, a save without it, or no room for it");
     }
 
     printf(g_failed ? "TRUCK TEST FAILED (%d)\n" : "TRUCK TEST OK\n", g_failed);

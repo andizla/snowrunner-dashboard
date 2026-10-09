@@ -7,17 +7,23 @@
 // lamps. The engine speed, the range, the tilt and the coolant temperature are worked out from those values
 // (models.h). With the ini's Damage on, what the temperature costs the engine goes into the game's own engine
 // damage, and that is all the mod writes into the game's memory. The cluster is on screen only while a truck is
-// driven in the world. The mod stands down on any exe but the one its addresses are from (kGaugesExeStamp).
+// driven in the world. The mod stands down on any exe but the one its addresses are from (kGaugesExeStamp). The map
+// a truck is on comes from the game's save (maps.h), for the map's outside temperature.
 #include <windows.h>
 #include <xinput.h>
+#include <shlobj.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <math.h>
 #include <string>
+#include <vector>
 #include "gauges.h"
 #include "truck.h"
 #include "models.h"
 #include "smt.h"
+#include "maps.h"
+#pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "shell32.lib")
 #ifndef GAUGES_SETTINGS_TEST
 #include "sound.h"
 #endif
@@ -158,19 +164,16 @@ static void WriteIni(const GaugeSettings &s)
 }
 
 // ---- the outside temperature by map: the sections [Map:<name>] of Gauges.ini ----
-// A map can have an outside temperature of its own (AmbientC in its section), in force while a truck drives on it; a
-// map without a section takes AmbientC of [Gauges]. The names here are placeholders until the game's own names for
-// its maps are known, and the temperatures are a first guess. The mod writes them into an ini that has no map
-// section yet; one taken out by hand stays out.
-static const struct { const char *name; float ambientC; } kMapDefaults[] = {
-    { "michigan", 12.0f }, { "alaska", -12.0f }, { "taymyr", -20.0f }, { "kola", -10.0f }, { "yukon", -15.0f }, { "wisconsin", 8.0f },
-    { "amur", 2.0f }, { "don", 16.0f }, { "maine", 10.0f }, { "tennessee", 20.0f }, { "glades", 18.0f }, { "ontario", 5.0f },
-    { "british_columbia", 3.0f }, { "scandinavia", -4.0f }, { "north_carolina", 22.0f }, { "almaty", 24.0f }, { "austria", 8.0f } };
+// A region can have an outside temperature of its own (AmbientC in a section named after it, [Map:Michigan]), and a
+// map one apart from its region's ([Map:Black River]); a map of a mod goes by its id ([Map:level_my_map]). They are
+// in force while a truck drives there; elsewhere AmbientC of [Gauges] is. The names are the game's own (maps.h). The
+// mod writes the regions' sections with a first guess into an ini that has no map section; one taken out by hand
+// stays out.
 
 static std::wstring MapSection(const char *name) { return L"Map:" + Wide(name); }
 
-// The outside temperature of a map from its section, held to its range. False when the map has none.
-static bool MapAmbient(const char *name, float &out)
+// The outside temperature of one section, held to its range. False when the ini has no such section with AmbientC.
+static bool MapSectionAmbient(const char *name, float &out)
 {
     if (!name[0]) return false;
     const std::wstring ini = IniPath(), section = MapSection(name);
@@ -180,15 +183,74 @@ static bool MapAmbient(const char *name, float &out)
     return true;
 }
 
-// Writes the maps' sections with their first temperatures, when the ini has no map section at all.
+// The outside temperature of the map with the game's id level: its own section, else its region's, else one named
+// after the id. from: the section's name. False when none of them is in the ini.
+static bool MapAmbient(const char *level, float &out, char *from, size_t size)
+{
+    const char *name = MapNameOf(level);
+    const MapRegion *region = MapRegionOf(level);
+    const char *tries[3] = { name ? name : "", region ? region->name : "", level };
+    for (const char *t : tries)
+        if (MapSectionAmbient(t, out))
+        {
+            snprintf(from, size, "%s", t);
+            return true;
+        }
+    from[0] = 0;
+    return false;
+}
+
+// The names of the ini's sections.
+static std::vector<std::wstring> IniSections(const std::wstring &ini)
+{
+    static wchar_t names[32768];
+    std::vector<std::wstring> out;
+    const DWORD n = GetPrivateProfileSectionNamesW(names, 32768, ini.c_str());
+    for (const wchar_t *p = names; p < names + n && *p; p += wcslen(p) + 1) out.push_back(p);
+    return out;
+}
+
+static bool IniHas(const std::vector<std::wstring> &sections, const std::wstring &name)
+{
+    for (const auto &s : sections)
+        if (!_wcsicmp(s.c_str(), name.c_str())) return true;
+    return false;
+}
+
+// Writes the regions' sections with their first temperatures when the ini has no map section at all. An ini from
+// 0.11.0 to 0.11.2 has the placeholder names of then: the five that are not the game's names are renamed with the
+// temperatures they hold, and the four regions they lacked are added.
 static void MapDefaultsWrite()
 {
+    static const struct { const char *was, *now; } renamed[] = {
+        { "kola", "Kola Peninsula" }, { "glades", "Belozersk Glades" }, { "british_columbia", "British Columbia" },
+        { "north_carolina", "North Carolina" }, { "almaty", "Almaty Region" } };
+    static const char *added[] = { "Quebec", "Washington", "Chiapas", "Zurdania" };
     const std::wstring ini = IniPath();
-    static wchar_t names[32768];
-    const DWORD n = GetPrivateProfileSectionNamesW(names, 32768, ini.c_str());
-    for (const wchar_t *p = names; p < names + n && *p; p += wcslen(p) + 1)
-        if (!_wcsnicmp(p, L"Map:", 4)) return;
-    for (const auto &m : kMapDefaults) IniPutFloat(MapSection(m.name).c_str(), L"AmbientC", m.ambientC, ini);
+    const std::vector<std::wstring> sections = IniSections(ini);
+    bool any = false, placeholders = false;
+    for (const auto &name : sections)
+        if (!_wcsnicmp(name.c_str(), L"Map:", 4)) any = true;
+    for (const auto &r : renamed)
+        if (IniHas(sections, MapSection(r.was))) placeholders = true;
+    if (!any)
+    {
+        for (const auto &r : kMapRegions) IniPutFloat(MapSection(r.name).c_str(), L"AmbientC", r.ambientC, ini);
+        return;
+    }
+    if (!placeholders) return;
+    for (const auto &r : renamed)
+    {
+        const std::wstring was = MapSection(r.was), now = MapSection(r.now);
+        if (!IniHas(sections, was)) continue;
+        wchar_t value[32] = {};
+        GetPrivateProfileStringW(was.c_str(), L"AmbientC", L"", value, 32, ini.c_str());
+        if (!IniHas(sections, now) && value[0]) WritePrivateProfileStringW(now.c_str(), L"AmbientC", value, ini.c_str());
+        WritePrivateProfileStringW(was.c_str(), nullptr, nullptr, ini.c_str());
+    }
+    for (const char *name : added)
+        for (const auto &r : kMapRegions)
+            if (!strcmp(r.name, name) && !IniHas(sections, MapSection(name))) IniPutFloat(MapSection(name).c_str(), L"AmbientC", r.ambientC, ini);
 }
 
 // The ini into s (defaults for missing keys, every number held to its range); a missing ini is written with the
@@ -233,9 +295,11 @@ static void ReadIni(GaugeSettings &s)
                         L"; the time from 90 C into the red zone at 118 C floored at the red zone with the wheels spinning at a\n"
                         L"; standstill, CoolDownMinutes the time a stopped engine takes from 90 C down to 40 C. AmbientC is the outside\n"
                         L"; temperature in degrees C: a truck that has stood for long is that cold. The cold lamp is lit below 60 C.\n"
-                        L"; A map can have an outside temperature of its own: AmbientC in a section named after the map, such as\n"
-                        L"; [Map:michigan], in force while a truck drives on it. The names are placeholders for now: the mod does not\n"
-                        L"; read which map a truck is on yet, so AmbientC of [Gauges] is in force everywhere.\n"
+                        L"; A region can have an outside temperature of its own: AmbientC in a section named after it, such as\n"
+                        L"; [Map:Michigan], in force while a truck drives there. A map can have one apart from its region's, in a\n"
+                        L"; section named after the map, such as [Map:Black River]; a map of a mod goes by its id, such as\n"
+                        L"; [Map:level_my_map]. The names are the game's own, and Gauges.log names the map. The mod learns the map\n"
+                        L"; from the game's save, as the map loaded last. Elsewhere AmbientC of [Gauges] is in force.\n"
                         L"; AirFullKmh is the speed from which the radiator gets all the air that driving gives it (10 to 80 km/h).\n"
                         L"; Lower keeps a slow, hard pulling engine cooler.\n"
                         L"; The oil follows the coolant slowly and runs a little hotter under load. OilWarmUpMinutes is the time the oil\n"
@@ -530,6 +594,106 @@ uint32_t PadButtons()
 }
 
 #ifndef GAUGES_SETTINGS_TEST
+// ---- the map a truck is on: the game's save says which map it loaded last (maps.h) ----
+// Steam keeps the saves in userdata\<account>\1465360\remote of its own folder, the other stores in
+// Documents\My Games\SnowRunner\base\storage\<account>. The newest CompleteSave*.cfg is the slot being played. It is
+// looked for every kSaveLookMs and read when it is another file or was written since.
+static const ULONGLONG kSaveLookMs = 5000;
+
+// The folders that may hold the saves.
+static std::vector<std::wstring> SaveFolders()
+{
+    std::vector<std::wstring> roots, out;
+    auto subfolders = [](const std::wstring &dir, const wchar_t *tail, std::vector<std::wstring> &into) {
+        WIN32_FIND_DATAW f;
+        const HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &f);
+        if (h == INVALID_HANDLE_VALUE) return;
+        do
+            if ((f.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && wcscmp(f.cFileName, L".") && wcscmp(f.cFileName, L".."))
+                into.push_back(dir + L"\\" + f.cFileName + tail);
+        while (FindNextFileW(h, &f));
+        FindClose(h);
+    };
+    // Steam's own folder from the registry, and five folders up from the game's (steamapps\common\Snowrunner\Sources\Bin)
+    // for a game in Steam's own library
+    wchar_t steam[MAX_PATH] = {};
+    DWORD size = sizeof steam;
+    if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\Valve\\Steam", L"SteamPath", RRF_RT_REG_SZ, nullptr, steam, &size) == ERROR_SUCCESS && steam[0])
+    {
+        for (wchar_t *p = steam; *p; p++)
+            if (*p == L'/') *p = L'\\';
+        roots.push_back(steam);
+    }
+    std::wstring up = g_dir;
+    for (int i = 0; i < 5 && !up.empty(); i++)
+    {
+        while (!up.empty() && up.back() == L'\\') up.pop_back();
+        const size_t cut = up.find_last_of(L'\\');
+        up = cut == std::wstring::npos ? L"" : up.substr(0, cut);
+    }
+    if (!up.empty()) roots.push_back(up);
+    for (const auto &root : roots) subfolders(root + L"\\userdata", L"\\1465360\\remote", out);
+    wchar_t docs[MAX_PATH] = {};
+    if (SHGetFolderPathW(nullptr, CSIDL_PERSONAL, nullptr, SHGFP_TYPE_CURRENT, docs) == S_OK)
+    {
+        const std::wstring storage = std::wstring(docs) + L"\\My Games\\SnowRunner\\base\\storage";
+        out.push_back(storage);
+        subfolders(storage, L"", out);
+    }
+    return out;
+}
+
+// The newest CompleteSave*.cfg in those folders, and when it was written. False when there is none.
+static bool SaveNewest(std::wstring &path, FILETIME &written)
+{
+    bool found = false;
+    for (const auto &dir : SaveFolders())
+    {
+        WIN32_FIND_DATAW f;
+        const HANDLE h = FindFirstFileW((dir + L"\\CompleteSave*.cfg").c_str(), &f);
+        if (h == INVALID_HANDLE_VALUE) continue;
+        do
+            if (!(f.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && (!found || CompareFileTime(&f.ftLastWriteTime, &written) > 0))
+            {
+                path = dir + L"\\" + f.cFileName;
+                written = f.ftLastWriteTime;
+                found = true;
+            }
+        while (FindNextFileW(h, &f));
+        FindClose(h);
+    }
+    return found;
+}
+
+// The map the save at path names as the one loaded last. False while it cannot be read or names none, as when the
+// game is writing it.
+static bool SaveReadMap(const std::wstring &path, char *level, size_t size)
+{
+    const HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    LARGE_INTEGER length = {};
+    std::string text;
+    bool ok = GetFileSizeEx(h, &length) && length.QuadPart > 0 && length.QuadPart < (64LL << 20);
+    if (ok)
+    {
+        text.resize((size_t)length.QuadPart);
+        DWORD got = 0;
+        ok = ReadFile(h, &text[0], (DWORD)text.size(), &got, nullptr) && got == text.size();
+    }
+    CloseHandle(h);
+    return ok && MapFromSave(text.data(), text.size(), level, size);
+}
+
+// A file's time as the clock on the wall shows it, hh:mm:ss.
+static void ClockText(const FILETIME &t, char *out, size_t size)
+{
+    FILETIME local;
+    SYSTEMTIME st = {};
+    FileTimeToLocalFileTime(&t, &local);
+    FileTimeToSystemTime(&local, &st);
+    snprintf(out, size, "%02u:%02u:%02u", st.wHour, st.wMinute, st.wSecond);
+}
+
 static void LogSettings(const GaugeSettings &s)
 {
     static const wchar_t *layouts[kLayoutCount] = { L"strip", L"block" }, *styles[kFaceCount] = { L"solid", L"tinted", L"open" },
@@ -960,11 +1124,15 @@ static DWORD WINAPI Run(void *)
     TruckIdentity truck = {};
     TruckWatch watch = {};
     const TruckMemory memory = { PeekGame, g_base, PokeGame };
-    // the map the truck drives on, and its own outside temperature where its section has one (mapOwn). The game's
-    // name for the map is not read yet, so map stays "" and AmbientC of [Gauges] is in force everywhere.
-    char map[64] = "", mapRead[64] = "";
+    // the map the truck drives on, the game's id for it from its save, and the outside temperature of its section,
+    // its region's or its own, where the ini has one (mapOwn, from the section mapFrom). Without a save map stays ""
+    // and AmbientC of [Gauges] is in force everywhere.
+    char map[64] = "", mapRead[64] = "", mapFrom[64] = "";
     float mapC = 0.0f;
-    bool mapOwn = false, mapAsk = true;
+    bool mapOwn = false, mapAsk = true, saveSeen = true;
+    std::wstring savePath;
+    FILETIME saveWritten = {};
+    ULONGLONG saveLookAt = 0;
     for (;;)
     {
         Sleep(50);
@@ -1034,17 +1202,47 @@ static DWORD WINAPI Run(void *)
             visible = !visible;
             Log(L"cluster %s", visible ? L"shown" : L"hidden");
         }
-        // the outside temperature in force: the map's own, looked up again when the map changes or the ini was
-        // read or saved
+        // the map: the game's save, looked for every kSaveLookMs and read when it is another or was written since
+        const ULONGLONG lookNow = GetTickCount64();
+        if (lookNow >= saveLookAt)
+        {
+            saveLookAt = lookNow + kSaveLookMs;
+            std::wstring path;
+            FILETIME written = {};
+            const bool found = SaveNewest(path, written);
+            if (found != saveSeen)
+            {
+                if (!found) Log(L"map: no save of the game was found, so the map is not known and AmbientC of [Gauges] is in force");
+                saveSeen = found;
+            }
+            char level[64];
+            if (found && (path != savePath || CompareFileTime(&written, &saveWritten)) && SaveReadMap(path, level, sizeof level))
+            {
+                savePath = path;
+                saveWritten = written;
+                if (strcmp(level, map))
+                {
+                    char at[16], title[96];
+                    ClockText(written, at, sizeof at);
+                    MapTitle(level, title, sizeof title);
+                    Log(L"map: %S (%S), the map loaded last as the game's save of %S says (%s)", title, level, at, path.c_str());
+                    strcpy_s(map, level);
+                }
+            }
+        }
+        // the outside temperature in force: the map's or its region's, looked up again when the map changes or the
+        // ini was read or saved
         if (strcmp(mapRead, map) || edited) mapAsk = true;
         if (mapAsk)
         {
             const bool before = mapOwn;
-            mapOwn = MapAmbient(map, mapC);
+            mapOwn = map[0] && MapAmbient(map, mapC, mapFrom, sizeof mapFrom);
             if (strcmp(mapRead, map) || mapOwn != before)
             {
-                if (mapOwn) Log(L"map: %S, %g C outside (its section in Gauges.ini)", map, mapC);
-                else if (map[0]) Log(L"map: %S has no section in Gauges.ini, so it is %g C outside (AmbientC)", map, s.ambientC);
+                char title[96];
+                MapTitle(map, title, sizeof title);
+                if (mapOwn) Log(L"map: %S, %g C outside ([Map:%S] in Gauges.ini)", title, mapC, mapFrom);
+                else if (map[0]) Log(L"map: %S has no section in Gauges.ini, nor has its region, so it is %g C outside (AmbientC)", title, s.ambientC);
             }
             strcpy_s(mapRead, map);
             mapAsk = false;
@@ -1080,7 +1278,9 @@ static DWORD WINAPI Run(void *)
         GaugeView v = {};
         strcpy_s(v.truck, truck.key);
         v.truckOwn = set.own;
-        strcpy_s(v.map, map);
+        if (map[0]) MapTitle(map, v.map, sizeof v.map);
+        else v.map[0] = 0;
+        strcpy_s(v.mapFrom, mapFrom);
         v.mapOwn = mapOwn;
         v.ambientC = inForce.ambientC;
         v.demo = !driving && s.demo;
@@ -1254,7 +1454,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 57, "ini: the help text survives a write (57 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 59, "ini: the help text survives a write (59 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());
@@ -1447,25 +1647,49 @@ int wmain(int argc, wchar_t **argv)
               "trucks: the defaults take the plain settings and the driven truck's own scales, and leave the other trucks' sections as they were");
     }
 
-    // the maps' sections: written into an ini that has none, read, held to the range, and one taken out stays out
+    // the maps' sections: the regions' written into an ini that has none; a map takes its own section, else its
+    // region's, else one named after its id, held to the range; one taken out by hand stays out; the placeholder
+    // names of 0.11.0 to 0.11.2 are renamed with their temperatures, once
     {
         DeleteFileW(ini.c_str());
         GaugeSettings fresh;
         ReadIni(fresh);
-        float michigan = 0.0f, taymyr = 0.0f, none = 0.0f;
-        const bool mapsWritten = MapAmbient("michigan", michigan) && michigan == 12.0f && MapAmbient("taymyr", taymyr) && taymyr == -20.0f;
-        const bool unknown = !MapAmbient("nowhere", none) && !MapAmbient("", none);
-        WritePrivateProfileStringW(L"Map:michigan", L"AmbientC", L"-3", ini.c_str());
-        WritePrivateProfileStringW(L"Map:hot", L"AmbientC", L"99", ini.c_str());
-        WritePrivateProfileStringW(L"Map:alaska", nullptr, nullptr, ini.c_str());
+        char section[64];
+        float deg = 0.0f;
+        const bool regionsWritten = MapSectionAmbient("Michigan", deg) && deg == 12.0f && MapSectionAmbient("Zurdania", deg) && deg == 22.0f &&
+                                    MapSectionAmbient("kola peninsula", deg) && deg == -10.0f;
+        const bool byRegion = MapAmbient("level_us_01_04_new", deg, section, sizeof section) && deg == 12.0f && !strcmp(section, "Michigan");
+        const bool unknown = !MapAmbient("level_nowhere", deg, section, sizeof section) && !section[0] && !MapSectionAmbient("", deg);
+        WritePrivateProfileStringW(L"Map:Black River", L"AmbientC", L"-3", ini.c_str());
+        WritePrivateProfileStringW(L"Map:level_my_map", L"AmbientC", L"99", ini.c_str());
+        WritePrivateProfileStringW(L"Map:Alaska", nullptr, nullptr, ini.c_str());
         ReadIni(fresh);
-        float hot = 0.0f, alaska = 0.0f;
-        Check(mapsWritten && unknown && MapAmbient("michigan", michigan) && michigan == -3.0f && MapAmbient("hot", hot) && hot == kAmbientRange[1] && !MapAmbient("alaska", alaska),
-              "maps: an ini without map sections gets them, a map's temperature is read and held to the range, and a section taken out or changed by hand stays so");
+        const bool byMap = MapAmbient("level_us_01_01", deg, section, sizeof section) && deg == -3.0f && !strcmp(section, "Black River");
+        const bool sameRegion = MapAmbient("level_us_01_02", deg, section, sizeof section) && deg == 12.0f;
+        const bool byId = MapAmbient("level_my_map", deg, section, sizeof section) && deg == kAmbientRange[1] && !strcmp(section, "level_my_map");
+        const bool takenOut = !MapAmbient("level_us_02_01", deg, section, sizeof section);
+        Check(regionsWritten && byRegion && unknown && byMap && sameRegion && byId && takenOut,
+              "maps: an ini without map sections gets the regions', a map takes its own section, else its region's, else its id's, held to the range, "
+              "and a section taken out or changed by hand stays so");
         DeleteFileW(ini.c_str());
         WritePrivateProfileStringW(kIniSection, L"Layout", L"1", ini.c_str());
         ReadIni(fresh);
-        Check(fresh.layout == kLayoutBlock && MapAmbient("michigan", michigan) && michigan == 12.0f, "maps: an ini from an earlier version gets the map sections and keeps its settings");
+        Check(fresh.layout == kLayoutBlock && MapSectionAmbient("Michigan", deg) && deg == 12.0f, "maps: an ini from an earlier version gets the map sections and keeps its settings");
+        DeleteFileW(ini.c_str());
+        WritePrivateProfileStringW(kIniSection, L"Layout", L"1", ini.c_str());
+        WritePrivateProfileStringW(L"Map:michigan", L"AmbientC", L"7", ini.c_str());
+        WritePrivateProfileStringW(L"Map:kola", L"AmbientC", L"-30", ini.c_str());
+        WritePrivateProfileStringW(L"Map:british_columbia", L"AmbientC", L"4", ini.c_str());
+        ReadIni(fresh);
+        wchar_t kolaLeft[8] = {};
+        GetPrivateProfileStringW(L"Map:kola", L"AmbientC", L"", kolaLeft, 8, ini.c_str());
+        const bool renamedOk = MapSectionAmbient("Kola Peninsula", deg) && deg == -30.0f && MapSectionAmbient("British Columbia", deg) && deg == 4.0f && !kolaLeft[0];
+        const bool heldTemp = MapAmbient("level_us_01_01", deg, section, sizeof section) && deg == 7.0f && !MapSectionAmbient("Taymyr", deg);
+        const bool addedOk = MapSectionAmbient("Zurdania", deg) && deg == 22.0f && MapSectionAmbient("Chiapas", deg) && deg == 26.0f;
+        ReadIni(fresh);
+        const bool once = MapSectionAmbient("Kola Peninsula", deg) && deg == -30.0f && !MapSectionAmbient("Taymyr", deg) && fresh.layout == kLayoutBlock;
+        Check(renamedOk && heldTemp && addedOk && once,
+              "maps: the placeholder names of 0.11.0 are renamed to the game's with their temperatures, the regions they lacked are added, and nothing else");
     }
 
     // the tab's edits and the turn they were made from

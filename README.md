@@ -4,7 +4,7 @@ A gauge cluster for the truck you drive in SnowRunner: analogue dials in the sty
 
 The cluster has a speedometer, a tachometer with the gear, fuel with the range, coolant and oil temperature, boost pressure, brake air pressure and nine lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage, cold engine, tilt and oil temperature.
 
-This is version 0.11.2. It reads the truck's own values for the speedometer, the gear, the fuel gauge and seven of the lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage and tilt. The game has no engine speed, no range, no coolant or oil temperature, no boost pressure and no brake air, so the mod works those out from what the truck does, and lights the cold and oil lamps by the temperatures. The temperature also costs the engine: overheating it, or working it hard while cold, adds to the game's own engine damage. `Damage=0` switches that off. The scales of the tachometer and the speedometer and the turbo's boost and character can be set for each kind of truck. The brake air comes from the engine's compressor, which fills the tanks up to 8.2 bar and starts again at 6.9, and each press of the brake and letting the handbrake go draw from them; scouts brake by hydraulics and have no air dial.
+This is version 0.11.3. It reads the truck's own values for the speedometer, the gear, the fuel gauge and seven of the lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage and tilt. The game has no engine speed, no range, no coolant or oil temperature, no boost pressure and no brake air, so the mod works those out from what the truck does, and lights the cold and oil lamps by the temperatures. The temperature also costs the engine: overheating it, or working it hard while cold, adds to the game's own engine damage. `Damage=0` switches that off. The scales of the tachometer and the speedometer and the turbo's boost and character can be set for each kind of truck. The brake air comes from the engine's compressor, which fills the tanks up to 8.2 bar and starts again at 6.9, and each press of the brake and letting the handbrake go draw from them; scouts brake by hydraulics and have no air dial. The outside temperature goes by the map you are on, which the mod reads from the game's save.
 
 ## What you need
 
@@ -99,14 +99,17 @@ BoostProfile=2
 
 `Gauges.log` names the truck each time you take another one. A section can be written by hand as well, and a key it leaves out is taken from `[Gauges]`. Every other setting is the same for all trucks.
 
-A map can have an outside temperature of its own, in a section named after the map:
+A region can have an outside temperature of its own, in a section named after it, and a map can have one apart from its region's:
 
 ```
-[Map:alaska]
+[Map:Alaska]
 AmbientC=-12
+
+[Map:Black River]
+AmbientC=5
 ```
 
-The mod writes such sections for the game's regions into an ini that has none. Their names are placeholders for now, and the mod does not yet read which map a truck is on, so `AmbientC` of `[Gauges]` is in force everywhere until it does.
+The names are the game's own English names. The mod writes a section for each of the game's regions into an ini that has none, with a first guess at its temperature, and reads which map you are on from the game's save, as the map it loaded last. `Gauges.log` and the Gauges tab name the map, its region and the section in force. A map of a mod goes by its id, such as `[Map:level_my_map]`. Where neither the map nor its region has a section, `AmbientC` of `[Gauges]` is in force.
 
 Each of the three coolant times changes one thing: how fast a cold engine warms up, how fast a hot one overheats, how fast a stopped one cools. The temperatures the engine settles at stay as they are. The outside temperature moves those: in frost the engine takes longer to warm up and cannot be overheated, and on a hot day it overheats sooner. `AirFullKmh` moves them at a crawl: lower keeps a slow, hard pulling engine cooler, and higher makes it overheat at speeds where it now stays out of the red zone.
 

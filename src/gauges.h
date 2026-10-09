@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#define GAUGES_VERSION "0.11.2"
+#define GAUGES_VERSION "0.11.3"
 
 // The exe the addresses in this mod are from (SnowRunner on Steam, the build of 22 July 2026). On any other the mod
 // stands down.
@@ -236,9 +236,9 @@ enum { kTurboHigh, kTurboMid, kTurboLow, kTurboTiers };
 enum { kSoundOil = kTurboTiers, kSoundTierCount };
 // truck: the kind of truck being driven, as the game's files name it ("" while none is driven): the scales in force
 // are that kind's. truckOwn: it has scales of its own in Gauges.ini, and those are the ones in force. map: the map
-// the truck drives on ("" while it is not read), and ambientC the outside temperature in force, its own (mapOwn) or
-// AmbientC's.
-struct GaugeView { bool show, demo; int hidden; GaugeState st; int engineDamage, engineCapacity; char truck[96]; bool truckOwn; char map[64]; bool mapOwn; float ambientC; };
+// the truck drives on in words, with its region ("" while it is not known), and ambientC the outside temperature in
+// force: its section's (mapOwn, from the section [Map:<mapFrom>], the map's or its region's) or AmbientC's.
+struct GaugeView { bool show, demo; int hidden; GaugeState st; int engineDamage, engineCapacity; char truck[96]; bool truckOwn; char map[96], mapFrom[64]; bool mapOwn; float ambientC; };
 
 LONG SettingsGet(GaugeSettings &out);       // the settings in force (any thread); returns their turn, for SettingsPut
 void SettingsPut(const GaugeSettings &in, LONG turn); // settings edited from those of a turn: the mod takes them at once and saves the ini a

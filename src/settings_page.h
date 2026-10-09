@@ -227,10 +227,10 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         if (view.map[0] && view.mapOwn)
         {
             degrees(view.ambientC, to, sizeof to);
-            ImGui::TextWrapped("On %s it is %s outside: the map's own, from its section in Gauges.ini.", view.map, to);
+            ImGui::TextWrapped("On %s it is %s outside, from [Map:%s] in Gauges.ini.", view.map, to, view.mapFrom);
         }
-        else if (view.map[0]) ImGui::TextWrapped("On %s: this temperature, as Gauges.ini has no section for the map.", view.map);
-        else ImGui::TextWrapped("Every map has this temperature. Maps with their own come once the mod reads which map a truck is on.");
+        else if (view.map[0]) ImGui::TextWrapped("On %s: this temperature, as Gauges.ini has no section for the map or its region.", view.map);
+        else ImGui::TextWrapped("Every map has this temperature until the mod has found the game's save, which says the map.");
         ImGui::EndDisabled();
         // the ini holds the speed in km/h; the slider shows it in the unit the speedometer shows
         float full = s.mph ? s.airFullKmh / 1.609f : s.airFullKmh;
