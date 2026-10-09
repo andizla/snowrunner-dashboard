@@ -1,4 +1,4 @@
-// gauges.h: what the parts of Gauges.asi share: the state the cluster shows, the settings of Gauges.ini, and the
+// gauges.h: what the parts of the mod share: the state the cluster shows, the settings of Gauges.ini, and the
 // calls between the mod's thread (gauges.cpp, which owns the settings and the state) and ReShade's render thread
 // (gauge_overlay.cpp, which draws the cluster and the settings tab). No Dear ImGui in here: gauges.cpp is built
 // without it.

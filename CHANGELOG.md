@@ -3,6 +3,7 @@
 ## [0.11.3] 2026-10-09
 
 - The outside temperature goes by the map. The mod reads which map you are on from the game's save (the map it loaded last), and the `[Map:<name>]` sections now carry the game's own names: one for each of its 21 regions (`[Map:Michigan]`, `[Map:Zurdania]`), and a map can have one apart from its region's (`[Map:Black River]`). A map of a mod goes by its id. `Gauges.log` says the map, its region and the section in force when it changes, and the Gauges tab names them under the outside temperature.
+- The mod is a ReShade add-on now, `Gauges.addon64`: ReShade loads it, so no ASI loader is needed. Delete `Gauges.asi` when you install it; with both in the folder only one runs, and the log says which. `Gauges.asi` is the same file for a game set up with an ASI loader, and the log says which of the two loaded it.
 - The placeholder sections of 0.11.0 to 0.11.2 are renamed to the game's names with the temperatures they hold, and the four regions they lacked (Quebec, Washington, Chiapas, Zurdania) are added.
 
 ## [0.11.2] 2026-10-08

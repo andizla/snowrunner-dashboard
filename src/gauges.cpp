@@ -1,4 +1,4 @@
-// Gauges.asi for SnowRunner: a gauge cluster for the truck being driven, drawn through ReShade's add-on overlay
+// Gauges.addon64 for SnowRunner: a gauge cluster for the truck being driven, drawn through ReShade's add-on overlay
 // (gauge_overlay.cpp). This file is the mod's own thread: it owns the settings (Gauges.ini next to the exe, written
 // with the defaults on the first start), the log (Gauges.log, rewritten at each game start), the toggle key and pad
 // buttons, and the state the cluster shows, which it leaves for the render thread 20 times a second.
@@ -32,6 +32,8 @@ static HMODULE g_self = nullptr;
 static std::wstring g_dir; // the game's folder, with the last backslash
 static uint64_t g_base = 0;
 static bool g_reshadeOk = false;
+static bool g_addon = false;  // loaded by ReShade as an add-on (Gauges.addon64), not by an ASI loader (Gauges.asi)
+static bool g_second = false; // another copy of the mod runs in this game, and this one stands down
 
 // The ini's settings in force. The Gauges tab in ReShade's overlay reads them and hands back edits (SettingsPut,
 // render thread); the mod's thread takes those on its next pass and saves the ini a second later. g_setTurn counts
@@ -315,7 +317,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; SoundVolume (0 to 100) is how loud the turbo is heard when the pedal comes up quickly under boost: it flutters,\n"
                         L"; longer and louder the more boost there was, until the pedal goes down again. The oil warning goes by it too.\n"
                         L"; 0 = no sound. SoundsOnly=1 plays the sounds and draws no cluster.\n"
-                        L"; WAV files sounds\\turbo_high_1.wav to _4.wav next to Gauges.asi (and turbo_mid_, turbo_low_ for less boost)\n"
+                        L"; WAV files sounds\\turbo_high_1.wav to _4.wav next to the game's exe (and turbo_mid_, turbo_low_ for less boost)\n"
                         L"; are played in place of the mod's own recordings of that strength, and sounds\\oil_beep_1.wav in place of the\n"
                         L"; oil warning.\n"
                         L"; ToggleKey is the virtual key code of a key that hides and shows the cluster (0 = none; 120 = F9).\n"
@@ -1080,27 +1082,32 @@ void SoundHear(int tier)
 
 // ---- the mod's thread ----
 
+// The exe's link time stamp, which tells one build of the game from another.
+static DWORD ExeStamp()
+{
+    const BYTE *image = (const BYTE *)g_base;
+    return *(const DWORD *)(image + *(const DWORD *)(image + 0x3C) + 8);
+}
+
 static DWORD WINAPI Run(void *)
 {
-    // One copy of the mod per game: the loader loads every .asi in the folder, and a second file of this mod (a copy
-    // left under another name) would draw a second cluster and write the same ini. The mutex is the process's; the
-    // second copy adds its line to the first one's log and ends.
-    wchar_t once[64];
-    swprintf_s(once, L"Local\\SnowRunnerGauges-%lu", GetCurrentProcessId());
-    if (CreateMutexW(nullptr, FALSE, once) && GetLastError() == ERROR_ALREADY_EXISTS)
+    if (g_second)
     {
+        // a second file of this mod: DllMain found the first one's mutex
         wchar_t file[MAX_PATH] = {};
         GetModuleFileNameW(g_self, file, MAX_PATH);
         Sleep(1000); // after the first copy's first line, which starts the log anew
         g_logStarted = true;
-        Log(L"this mod is in the folder twice: only one copy runs, and this one (%s) stands down. Keep one .asi file of it.", file);
+        Log(L"this mod is in the folder twice: only one copy runs, and this one (%s) stands down. Keep one file of it, Gauges.addon64.", file);
         return 0;
     }
-    const BYTE *image = (const BYTE *)g_base;
-    const DWORD stamp = *(const DWORD *)(image + *(const DWORD *)(image + 0x3C) + 8);
-    Log(L"Gauges " GAUGES_VERSION L": exe stamp %08lx", stamp);
-    SettingsDefaults(g_set); // what the tab shows until the ini is read
-    g_reshadeOk = OverlayInit(g_self);
+    const DWORD stamp = ExeStamp();
+    if (!g_addon)
+    {
+        Log(L"Gauges " GAUGES_VERSION L": exe stamp %08lx, loaded by an ASI loader", stamp);
+        SettingsDefaults(g_set); // what the tab shows until the ini is read
+        g_reshadeOk = OverlayInit(g_self);
+    }
     if (stamp != kGaugesExeStamp)
     {
         Log(L"this is not the game version the mod is made for (exe stamp %08lx): standing down, nothing is drawn or changed", kGaugesExeStamp);
@@ -1313,6 +1320,11 @@ static DWORD WINAPI Run(void *)
     }
 }
 
+// Loaded by ReShade as an add-on (Gauges.addon64), the mod registers with it here, as ReShade asks of the add-ons it
+// loads, and pins itself: ReShade unloads and loads its add-ons again each time the game drops its graphics device,
+// which SnowRunner does at start-up, and the mod's thread runs for the whole game. ReShade.log then says the add-on
+// "was not unregistered" and loads it as "externally registered", which is expected. Loaded by an ASI loader
+// (Gauges.asi), its thread registers once ReShade is there.
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
 {
     if (reason != DLL_PROCESS_ATTACH) return TRUE;
@@ -1320,10 +1332,43 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
     wchar_t path[MAX_PATH] = {};
     GetModuleFileNameW(nullptr, path, MAX_PATH);
     const wchar_t *name = wcsrchr(path, L'\\');
-    if (!name || _wcsicmp(name + 1, L"SnowRunner.exe")) return TRUE; // loaded into another program: do nothing
+    wchar_t own[MAX_PATH] = {};
+    GetModuleFileNameW(inst, own, MAX_PATH);
+    const wchar_t *dot = wcsrchr(own, L'.');
+    const bool addon = dot && !_wcsnicmp(dot, L".addon", 6);
+    if (!name || _wcsicmp(name + 1, L"SnowRunner.exe")) return addon ? FALSE : TRUE; // loaded into another program: do nothing
     g_dir.assign(path, name + 1 - path);
     g_base = (uint64_t)GetModuleHandleW(nullptr);
     g_self = inst;
+    g_addon = addon;
+    // One copy of the mod per game: a second file of it (Gauges.asi beside Gauges.addon64, or a copy left under
+    // another name) would draw a second cluster and write the same ini. The mutex is the process's.
+    wchar_t once[64];
+    swprintf_s(once, L"Local\\SnowRunnerGauges-%lu", GetCurrentProcessId());
+    const HANDLE mutex = CreateMutexW(nullptr, FALSE, once);
+    g_second = mutex && GetLastError() == ERROR_ALREADY_EXISTS;
+    if (g_addon)
+    {
+        if (g_second)
+        {
+            g_logStarted = true;
+            Log(L"this mod is in the folder twice: only one copy runs, and this one (%s) stands down. Keep one file of it, Gauges.addon64.", own);
+            CloseHandle(mutex);
+            return FALSE;
+        }
+        Log(L"Gauges " GAUGES_VERSION L": exe stamp %08lx, loaded by ReShade as an add-on", ExeStamp());
+        HMODULE pinned = nullptr;
+        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCWSTR)&DllMain, &pinned))
+            Log(L"overlay: the add-on could not pin itself, so ReShade's unloading at start-up may take it out");
+        SettingsDefaults(g_set); // what the tab shows until the ini is read
+        g_reshadeOk = OverlayInit(inst);
+        if (!g_reshadeOk)
+        {
+            Log(L"overlay: ReShade did not take the add-on (a ReShade without add-on support, or of another version), so nothing is drawn");
+            CloseHandle(mutex); // a copy of the mod loaded by an ASI loader may still run
+            return FALSE;
+        }
+    }
     const HANDLE t = CreateThread(nullptr, 0, Run, nullptr, 0, nullptr);
     if (t) CloseHandle(t);
     return TRUE;

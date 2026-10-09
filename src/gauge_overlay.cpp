@@ -1,4 +1,4 @@
-// gauge_overlay.cpp: the render side of Gauges.asi. The cluster is drawn from ReShade's reshade_overlay add-on event,
+// gauge_overlay.cpp: the render side of the mod. The cluster is drawn from ReShade's reshade_overlay add-on event,
 // which ReShade runs on every frame once an add-on listens to it. ReShade owns the swap chain and Dear ImGui and hands
 // add-ons the ImGui functions through a table, so only headers are compiled in (deps\reshade, deps\imgui; their
 // versions must match the installed ReShade). Without ReShade nothing is drawn.
@@ -22,7 +22,7 @@
 
 // ReShade lists the add-on under these.
 extern "C" __declspec(dllexport) const char *NAME = "Gauges";
-extern "C" __declspec(dllexport) const char *DESCRIPTION = "A gauge cluster for SnowRunner: speedometer, tachometer, fuel and warning lamps, drawn by Gauges.asi.";
+extern "C" __declspec(dllexport) const char *DESCRIPTION = "A gauge cluster for SnowRunner: speedometer, tachometer, fuel and warning lamps, temperatures, boost and brake air.";
 
 volatile LONG g_pageCapturing = 0;
 volatile LONG g_modOff = 0;

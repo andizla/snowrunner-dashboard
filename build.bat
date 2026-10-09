@@ -1,5 +1,6 @@
 @echo off
-rem Builds out\Gauges.asi (the mod), out\test\settings_test.exe (the ini round trip and the scales, offline),
+rem Builds out\Gauges.addon64 (the mod, a ReShade add-on; out\Gauges.asi is the same file for an ASI loader),
+rem out\test\settings_test.exe (the ini round trip and the scales, offline),
 rem out\test\truck_test.exe (the reader of the game's memory and the write of engine damage against a made up game, offline),
 rem out\test\models_test.exe (the engine speed, the range, the tilt, the coolant temperature and what it costs the engine
 rem on made up drives, offline),
@@ -18,7 +19,9 @@ rem the recordings the mod's file carries (src\sounds.rc: assets\turbo_high_1.wa
 rem mod is built all the same and makes its sounds by code (src\sound.h)
 set SOUNDS=
 if exist assets\turbo_high_1.wav (rc /nologo /fo out\obj\sounds.res src\sounds.rc || goto fail) & set SOUNDS=out\obj\sounds.res
-cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /LD /Fo:out\obj\gauges.obj /Fe:out\Gauges.asi src\gauges.cpp out\obj\gauge_overlay.obj %SOUNDS% /link user32.lib ole32.lib || goto fail
+cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /LD /Fo:out\obj\gauges.obj /Fe:out\Gauges.addon64 src\gauges.cpp out\obj\gauge_overlay.obj %SOUNDS% /link user32.lib ole32.lib || goto fail
+rem the same file under the name an ASI loader loads: it tells by its own name which of the two loaded it
+copy /y out\Gauges.addon64 out\Gauges.asi >nul || goto fail
 rem the settings test: the same source with a main in place of the mod's thread
 cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /D GAUGES_SETTINGS_TEST /Fo:out\obj\settings_test.obj /Fe:out\test\settings_test.exe src\gauges.cpp /link user32.lib || goto fail
 rem the truck test: the reader of the game's memory and the write of engine damage (src\truck.h) against a made up game
@@ -32,9 +35,9 @@ cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /Fo:out\obj\loader.obj tools\l
 link /nologo /DLL /DEF:tools\version.def /OUT:out\version.dll /IMPLIB:out\obj\version_proxy.lib out\obj\version_stubs.obj out\obj\loader.obj || goto fail
 rem the preview: left out, with a note, where there are no Dear ImGui sources
 call test\build_preview.bat
-if errorlevel 2 (echo BUILD OK without the preview: out\Gauges.asi, out\test\settings_test.exe, out\test\truck_test.exe, out\test\models_test.exe, out\version.dll & exit /b 0)
+if errorlevel 2 (echo BUILD OK without the preview: out\Gauges.addon64, out\Gauges.asi, out\test\settings_test.exe, out\test\truck_test.exe, out\test\models_test.exe, out\version.dll & exit /b 0)
 if errorlevel 1 goto fail
-echo BUILD OK: out\Gauges.asi, out\test\settings_test.exe, out\test\truck_test.exe, out\test\models_test.exe, out\test\gauge_preview.exe, out\version.dll
+echo BUILD OK: out\Gauges.addon64, out\Gauges.asi, out\test\settings_test.exe, out\test\truck_test.exe, out\test\models_test.exe, out\test\gauge_preview.exe, out\version.dll
 exit /b 0
 :fail
 echo BUILD FAILED

@@ -9,16 +9,15 @@ This is version 0.11.3. It reads the truck's own values for the speedometer, the
 ## What you need
 
 - SnowRunner for Windows, the Steam version (the game build of 22 July 2026). On any other build of the game the mod writes that into its log and does nothing.
-- ReShade 6.8.0 or newer, the build "with full add-on support". The cluster and its settings tab are drawn through ReShade. Without ReShade nothing is drawn.
-- An ASI loader in the game folder. The SnowRunner Tire Inflation System brings one (`version.dll`), and any other loader that loads `.asi` files from the game folder will do.
+- ReShade 6.8.0 or newer, the build "with full add-on support", installed for SnowRunner. It loads the mod and draws the cluster and its settings tab. Nothing else is needed.
 
 ## Install
 
 1. Close the game.
-2. Copy `Gauges.asi` into the game's `Sources\Bin` folder, next to `SnowRunner.exe`.
-3. Start the game. The Home key opens ReShade's overlay, which has a Gauges tab.
+2. Copy `Gauges.addon64` into the game's `Sources\Bin` folder, next to `SnowRunner.exe`, where ReShade's `dxgi.dll` is. (A `ReShade.ini` that sets `AddonPath` loads add-ons from that folder instead.)
+3. Start the game. The Home key opens ReShade's overlay, which has a Gauges tab, and its Add-ons tab lists Gauges.
 
-To update, copy the new file over the old one. Keep only one `.asi` file of this mod in the folder: a second copy under another name stands down and says so in the log.
+To update, copy the new file over the old one. Before 0.11.3 the mod was `Gauges.asi`, loaded by an ASI loader: delete that file when you install `Gauges.addon64`. With two files of the mod in the folder only one runs, and the log says which. `Gauges.asi` is still in the release for a game set up with an ASI loader, and works the same.
 
 ## What it shows
 
@@ -115,17 +114,17 @@ Each of the three coolant times changes one thing: how fast a cold engine warms 
 
 The cluster keeps its share of the screen: it is twice as large in pixels on a 2160p screen as on a 1080p one.
 
-The flutter comes in three strengths, for a lift at full boost, at half and at little, with three recordings of each. To hear recordings of your own instead, put them next to `Gauges.asi` as `sounds\turbo_high_1.wav` to `turbo_high_4.wav`, and `turbo_mid_` and `turbo_low_` likewise: WAV files, PCM or float, up to six seconds. A strength with at least one file of yours plays only yours. The oil warning is two short beeps, and `sounds\oil_beep_1.wav` plays in their place. The mod brings every sound to the same loudness, and `Gauges.log` says which ones it plays. The Gauges tab has a button for each strength and one for the oil warning.
+The flutter comes in three strengths, for a lift at full boost, at half and at little, with three recordings of each. To hear recordings of your own instead, put them in the game's `Sources\Bin` folder as `sounds\turbo_high_1.wav` to `turbo_high_4.wav`, and `turbo_mid_` and `turbo_low_` likewise: WAV files, PCM or float, up to six seconds. A strength with at least one file of yours plays only yours. The oil warning is two short beeps, and `sounds\oil_beep_1.wav` plays in their place. The mod brings every sound to the same loudness, and `Gauges.log` says which ones it plays. The Gauges tab has a button for each strength and one for the oil warning.
 
 The pad is only read. The game sees the toggle buttons too, so pick buttons it does not use while driving.
 
 ## With the SnowRunner Tire Inflation System
 
-The two mods are made to run side by side. Each is its own `.asi` file and its own ReShade add-on with its own tab, ini and log. One `version.dll` loads both. This mod does not touch the pad's buttons, so that mod's panel keeps working as before.
+The two mods are made to run side by side, each with its own tab, ini and log. That mod's `version.dll` loads its `.asi` file; ReShade loads this one. This mod does not touch the pad's buttons, so that mod's panel keeps working as before.
 
 ## Remove
 
-Delete `Gauges.asi`, `Gauges.ini` and `Gauges.log` from `Sources\Bin`.
+Delete `Gauges.addon64` (or `Gauges.asi`), `Gauges.ini` and `Gauges.log` from `Sources\Bin`.
 
 ## Notes
 
@@ -143,7 +142,7 @@ build.bat
 test.bat
 ```
 
-`build.bat` makes `out\Gauges.asi`, the four offline test programs in `out\test`, and `out\version.dll`, the loader, from the sources in `tools`. `test.bat` runs the tests: every setting through the ini and back, the trucks' own scales, the reader of the game's memory and the write of engine damage against a made up game, the engine speed, the range, the tilt, the coolant and oil temperatures, the oil warning, the engine damage and the turbo's profiles on made up drives, and a preview that draws the cluster and the settings tab into PNG files in `out\preview` without the game. The preview needs the full Dear ImGui sources in `deps\imgui_src`, see `test\build_preview.bat`. Without them the rest is still built.
+`build.bat` makes `out\Gauges.addon64` (and the same file as `out\Gauges.asi`), the four offline test programs in `out\test`, and `out\version.dll`, the loader, from the sources in `tools`. `test.bat` runs the tests: every setting through the ini and back, the trucks' own scales, the reader of the game's memory and the write of engine damage against a made up game, the engine speed, the range, the tilt, the coolant and oil temperatures, the oil warning, the engine damage and the turbo's profiles on made up drives, and a preview that draws the cluster and the settings tab into PNG files in `out\preview` without the game. The preview needs the full Dear ImGui sources in `deps\imgui_src`, see `test\build_preview.bat`. Without them the rest is still built.
 
 The headers the mod is built with are in `deps`, each with its licence: the ReShade add-on API, Dear ImGui, and stb_truetype with stb_rect_pack.
 

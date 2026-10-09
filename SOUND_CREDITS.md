@@ -9,4 +9,4 @@ Where each sound of SnowRunner Gauges comes from.
 
 The recordings are not under the mod's GPL. Anyone who passes the mod on with them needs the clip author's leave as well, or builds it without the `assets` folder.
 
-A file you put into `sounds\` next to `Gauges.asi` yourself is yours to answer for: the mod plays it and does not pass it on.
+A file you put into `sounds\` in the game's `Sources\Bin` folder yourself is yours to answer for: the mod plays it and does not pass it on.
