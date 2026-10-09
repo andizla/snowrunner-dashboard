@@ -526,7 +526,18 @@ stays its own). SMT needs no change.
   0x11C) and the slip; (4) the automatic (GearboxStep handed to the game) for pads; (5) the engine's torque
   (module 12 part A) through the power factor, or a hook into the game's input path found in a session on the
   user's PC if the factor cannot carry it. Steps 2 to 5 behind a `Gearbox` setting that is the game's own by
-  default. Step 2's read-only half is in 0.11.3 (`src/game_code.h`): once a truck is found, the nine functions are looked
+  default.
+- The user's rig and the device merger (andizla/dimerge, the user's own, 2026-10-09 read): a SIMAGIC Alpha wheelbase
+  (0483:0522), SIMSONN pedals (DDFD:6011) merged onto it as X->Y throttle, Y->Z brake, Z->Rz clutch, a GX100
+  H-shifter (04B0:5750, buttons from 64, a pull collar layer from 80) and a PXN-CB1 button box, all handed to the
+  game as one DirectInput device by a dinput8.dll proxy in Bin (HideMerged=1). For step 3: this mod reads the merged
+  wheel through that proxy like SMT does, opened DISCL_NONEXCLUSIVE | DISCL_BACKGROUND (the proxy downgrades
+  exclusive only for the modules it lists, smt.asi and smt.addon64), by GetDeviceState; the clutch is the merged
+  wheel's Rz, the axis slot the game's wheel presets give the clutch (Y, Z, Rz are throttle, brake, clutch); a pedal
+  may read full scale at rest, so each axis binding learns its two ends (rest and pressed) rather than assume a
+  direction; the shifter's gates are buttons, a layer's gates other buttons. Gamepads through XInput, as the pad
+  toggle already reads them: no fork of the manual transmission mod on GitHub reads XInput (the original and its
+  forks read DirectInput through their input library, where a pad's triggers share one axis). Step 2's read-only half is in 0.11.3 (`src/game_code.h`): once a truck is found, the nine functions are looked
   for in the exe's code sections and logged (offset, more than once, or held behind a jump); 0.7 s over 100 MB here.
 
 ### 15. Differentials
