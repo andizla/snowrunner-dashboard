@@ -73,7 +73,9 @@
 // runs behind the clutch: pressed, the engine is free and its governor holds the speed the pedal asks for; let up, it
 // turns with the gearbox; in the bite it slips, the engine pulled towards the gearbox's speed by what the clutch
 // holds. Let up too fast with the truck standing, or in too high a gear at a crawl, it drags the engine under half its
-// idle speed and the engine stalls. Worked out and logged the same way, while the manual transmission mod drives.
+// idle speed and the engine stalls, and it stays dead until the clutch is pressed or the gearbox is in neutral. Without
+// a pedal (a clutch button, or none) the clutch works by itself: let go at idle, taking hold as the engine speeds up,
+// and it never stalls the engine. Worked out and logged the same way, while the manual transmission mod drives.
 #pragma once
 #include "truck.h"
 
@@ -1069,7 +1071,8 @@ static const float kEngineRevTime = 0.8f;    // seconds an engine takes from idl
 static const float kGovernorBand = 0.1f;     // the governor gives full torque this far under the speed it holds, as a share of idle to red zone
 static const float kEngineDrag = 0.4f;       // what the engine's friction and pumping take at the red zone, as a share of its most torque; it grows with the speed
 static const float kClutchStall = 0.5f;      // an engine dragged under this share of its idle speed dies
-static const float kStallRest = 2.0f;        // seconds a stalled engine stays dead in the model before it starts over at idle
+static const float kStallRest = 2.0f;        // seconds a stalled engine stays dead in the model at the least, before it can be started again
+static const float kAutoClutchSpan = 0.25f;  // a clutch that works by itself holds fully this far from idle to the red zone
 
 // The clutch pedal's grip, 0 to 1, from its travel, 0 let up to 1 pressed: nothing past kClutchFree, all of it short
 // of kClutchBite, and between them the bite, eased in.
@@ -1089,7 +1092,9 @@ struct ClutchModel
     bool connected;    // a gear is in
     float torque;      // what the fuel gives, as a share of the engine's most: by its governor, at most its curve's
     float carried;     // what the clutch passes on, the same way: below 0 the engine brakes the truck
-    float stalled;     // seconds left of a stall, 0 while the engine runs
+    bool dead;         // the engine stalled, and has not been started again
+    float stalled;     // seconds left of the stall's rest
+    bool automatic;    // the clutch works by itself (no pedal)
     int stalls;        // stalls since the model began
 };
 
@@ -1100,9 +1105,12 @@ struct ClutchModel
 // rest), with up to full torque; the clutch passes on up to its grip times kClutchHold. Let up, it turns the engine
 // with the gearbox where it can hold what the engine gives; slipping, it pulls the engine towards the gearbox's
 // speed. An engine dragged under kClutchStall of its idle speed stalls: a clutch let up too fast with the truck
-// standing, or in too high a gear at a crawl. The wheels are the game's, so the model only follows them. Returns
-// true on the step the engine stalls.
-inline bool ClutchStep(ClutchModel &m, const TruckRaw &t, const GaugeScale &k, const TorqueCurve &c, float travel, float pedal, float factor, float dt)
+// standing, or in too high a gear at a crawl. A stalled engine is started again after kStallRest once the clutch is
+// pressed or no gear is in. automatic: no pedal, so travel is a button's (1 held) or 0, and the clutch takes hold by
+// the engine's speed, from none at idle to all of it kAutoClutchSpan on, and fully with the gearbox turning at idle
+// or over; it never stalls the engine. The wheels are the game's, so the model only follows them. Returns true on the
+// step the engine stalls.
+inline bool ClutchStep(ClutchModel &m, const TruckRaw &t, const GaugeScale &k, const TorqueCurve &c, float travel, float pedal, float factor, bool automatic, float dt)
 {
     if (!m.running)
     {
@@ -1114,23 +1122,35 @@ inline bool ClutchStep(ClutchModel &m, const TruckRaw &t, const GaugeScale &k, c
     const float top = gear ? TruckGearTop(t, gear) : 0.0f, spin = TruckDrivenSpin(t);
     m.connected = top > 0.0f && isfinite(spin);
     m.input = m.connected ? spin / top * k.redline : 0.0f;
+    m.automatic = automatic;
     m.grip = m.connected ? ClutchGrip(SettingsRange(travel, 0.0f, 1.0f)) : 0.0f;
     if (!TruckEngineOn(t) || !(range > 0.0f))
     {
         m.rpm = 0.0f;
         m.torque = m.carried = 0.0f;
-        m.locked = false;
+        m.locked = m.dead = false;
         m.stalled = 0.0f;
         return false;
     }
-    if (m.stalled > 0.0f)
+    if (m.dead)
     {
-        m.stalled -= dt;
+        m.stalled = fmaxf(m.stalled - dt, 0.0f);
         m.rpm = 0.0f;
         m.torque = m.carried = 0.0f;
         m.locked = false;
-        if (m.stalled <= 0.0f) m.rpm = k.idle; // the model's engine starts over
+        // started again as a driver would: the clutch pressed, or no gear in
+        if (m.stalled <= 0.0f && (automatic || !m.connected || travel >= kClutchFree))
+        {
+            m.dead = false;
+            m.rpm = k.idle;
+        }
         return false;
+    }
+    if (automatic && m.connected && m.input < k.idle)
+    {
+        // the clutch that works by itself: none of it at idle, all of it kAutoClutchSpan of the way to the red zone
+        const float g = SettingsRange((m.rpm - k.idle) / (range * kAutoClutchSpan), 0.0f, 1.0f);
+        m.grip = fminf(m.grip, g * g * (3.0f - 2.0f * g));
     }
     // the governor: the speed the pedal asks for, and the torque to hold it, up to the curve's
     const float want = k.idle + range * kTachFree * SettingsRange(pedal, 0.0f, 1.0f);
@@ -1160,8 +1180,10 @@ inline bool ClutchStep(ClutchModel &m, const TruckRaw &t, const GaugeScale &k, c
         }
         m.rpm = next;
     }
-    if (m.rpm < k.idle * kClutchStall)
+    if (automatic && m.rpm < k.idle * kClutchStall) m.rpm = k.idle * kClutchStall; // let go before it could stall
+    else if (m.rpm < k.idle * kClutchStall)
     {
+        m.dead = true;
         m.stalled = kStallRest;
         m.stalls++;
         m.rpm = 0.0f;
@@ -1175,13 +1197,15 @@ inline bool ClutchStep(ClutchModel &m, const TruckRaw &t, const GaugeScale &k, c
 // The clutch in a line of text for the probe log.
 inline void ClutchProbeText(const ClutchModel &m, float travel, char *out, size_t size)
 {
-    if (m.stalled > 0.0f)
+    if (m.dead)
     {
-        sprintf_s(out, size, "clutch (not handed to the game yet): the engine stalled, %d stalls", m.stalls);
+        sprintf_s(out, size, "clutch (not handed to the game yet): the engine stalled, %s, %d stalls",
+                  m.stalled > 0.0f ? "resting" : "waiting for the clutch pressed or neutral to start again", m.stalls);
         return;
     }
-    sprintf_s(out, size, "clutch (not handed to the game yet): pedal %.2f, grip %.2f, %s | engine %.0f rpm, gearbox %.0f rpm | torque %.2f, through the clutch %.2f | %d stalls",
-              travel, m.grip, !m.connected ? "no gear in" : m.locked ? "locked" : m.grip > 0.0f ? "slipping" : "free", m.rpm, m.input, m.torque, m.carried, m.stalls);
+    sprintf_s(out, size, "clutch (not handed to the game yet): %s %.2f, grip %.2f, %s | engine %.0f rpm, gearbox %.0f rpm | torque %.2f, through the clutch %.2f | %d stalls",
+              m.automatic ? "works by itself, button" : "pedal", travel, m.grip, !m.connected ? "no gear in" : m.locked ? "locked" : m.grip > 0.0f ? "slipping" : "free",
+              m.rpm, m.input, m.torque, m.carried, m.stalls);
 }
 
 // ---- the brake air ----

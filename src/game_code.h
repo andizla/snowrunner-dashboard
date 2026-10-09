@@ -6,7 +6,8 @@
 //
 // Each pattern is the function's first bytes as the game's build of 22 July 2026 has them, "?" for a byte that
 // changes from build to build (a call's or a jump's distance). ShiftToNeutral is looked for between ShiftToHigh and
-// ShiftToReverse, where it stands in the exe, as its few bytes are found in many places.
+// ShiftToReverse, where it stands in the exe, as its few bytes are found in many places; without both of their places
+// it is not looked for.
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
@@ -29,7 +30,9 @@ static const GameFunction kGameFunctions[kFnCount] = {
     { "SetCurrentVehicle", "48 8B C4 53 57 48 81 EC 98 00 00 00 48 8B FA 48 8B D9 48 39 51 08 0F 84 ? ? ? ? 48 89 68 E8 48 83 C1 70 48 89 70 E0 4C 89 70 D8 4C 89 78 D0" } };
 
 static const int kPatternMax = 64;
-static const int kHookBytes = 6; // what a hook puts over a function's start: a jump of 5 bytes (E9) or 6 (FF 25)
+// What a hook may put over a function's start: a jump (E9 and its distance, or FF 25 and an address) and int3 (CC)
+// over the rest of the instructions it moved away. A pattern needs kHookLeft bytes after that to be told by.
+static const int kHookSpan = 16, kHookLeft = 8;
 
 // A pattern as bytes and a mask (1 where the byte counts). Its length, or 0 when it is not a pattern.
 inline int PatternParse(const char *text, uint8_t *bytes, uint8_t *mask)
@@ -102,17 +105,18 @@ inline bool PatternFind(const uint8_t *code, size_t from, size_t to, const uint8
 }
 
 // What became of a function in the code.
-enum { kFnNotFound, kFnFound, kFnHeld };
+enum { kFnNotFound, kFnFound, kFnHeld, kFnUnplaced };
 struct FunctionFind
 {
     int state;
-    size_t at;   // its offset in the code (the exe's address of it, less the exe's base)
-    int count;   // how often its pattern stands there
+    size_t at;     // its offset in the code (the exe's address of it, less the exe's base)
+    int count;     // how often its pattern stands there
+    bool tooShort; // its pattern is too short to tell it behind a hook's jump
 };
 
 // Looks for every function in code, the exe's image of size bytes, between from and to (its code). A function not
-// found is looked for again with its first kHookBytes left out: found so, behind a jump (E9, or FF 25), another mod
-// holds it.
+// found is looked for again with its first bytes left out, up to kHookSpan of them: found so, behind a jump (E9, or
+// FF 25), another mod holds it.
 inline void GameFunctionsFind(const uint8_t *code, size_t from, size_t to, FunctionFind out[kFnCount])
 {
     for (int f = 0; f < kFnCount; f++)
@@ -120,24 +124,31 @@ inline void GameFunctionsFind(const uint8_t *code, size_t from, size_t to, Funct
         uint8_t bytes[kPatternMax], mask[kPatternMax];
         const int length = PatternParse(kGameFunctions[f].pattern, bytes, mask);
         size_t lo = from, hi = to;
-        if (f == kFnShiftToNeutral && out[kFnShiftToHigh].state == kFnFound && out[kFnShiftToReverse].state == kFnFound &&
-            out[kFnShiftToHigh].at < out[kFnShiftToReverse].at)
-        {
-            lo = out[kFnShiftToHigh].at;
-            hi = out[kFnShiftToReverse].at;
-        }
         FunctionFind &r = out[f];
         r = FunctionFind{};
+        if (f == kFnShiftToNeutral)
+        {
+            const FunctionFind &high = out[kFnShiftToHigh], &reverse = out[kFnShiftToReverse];
+            if (high.state == kFnNotFound || reverse.state == kFnNotFound || high.at >= reverse.at)
+            {
+                r.state = kFnUnplaced;
+                continue;
+            }
+            lo = high.at;
+            hi = reverse.at;
+        }
         if (PatternFind(code, lo, hi, bytes, mask, length, r.at, r.count))
         {
             r.state = kFnFound;
             continue;
         }
         // behind a jump: the rest of the pattern, when enough of it is left to tell the function by
-        if (length - kHookBytes < 8) continue;
+        const int span = length - kHookLeft < kHookSpan ? length - kHookLeft : kHookSpan;
+        r.tooShort = span < 5;
+        if (r.tooShort) continue;
         uint8_t rest[kPatternMax];
         memcpy(rest, mask, sizeof rest);
-        memset(rest, 0, kHookBytes);
+        memset(rest, 0, (size_t)span);
         size_t at = 0;
         int count = 0;
         if (PatternFind(code, lo, hi, bytes, rest, length, at, count) && (code[at] == 0xE9 || (code[at] == 0xFF && code[at + 1] == 0x25)))
@@ -160,7 +171,8 @@ inline void GameFunctionsText(const FunctionFind finds[kFnCount], char *out, siz
         int w;
         if (r.state == kFnFound) w = snprintf(out + n, size - n, "%s%s at +%zx%s", f ? ", " : "", kGameFunctions[f].name, r.at, r.count > 1 ? " (more than once)" : "");
         else if (r.state == kFnHeld) w = snprintf(out + n, size - n, "%s%s at +%zx held by another mod", f ? ", " : "", kGameFunctions[f].name, r.at);
-        else w = snprintf(out + n, size - n, "%s%s not found", f ? ", " : "", kGameFunctions[f].name);
+        else if (r.state == kFnUnplaced) w = snprintf(out + n, size - n, "%s%s not looked for (its place is between ShiftToHigh and ShiftToReverse)", f ? ", " : "", kGameFunctions[f].name);
+        else w = snprintf(out + n, size - n, "%s%s not found%s", f ? ", " : "", kGameFunctions[f].name, r.tooShort ? " (too short to tell it behind a hook)" : "");
         if (w < 0) break;
         n += (size_t)w;
     }

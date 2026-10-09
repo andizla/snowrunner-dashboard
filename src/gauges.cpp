@@ -985,7 +985,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             // the manual transmission mod drives the gears: the automatic stands down, and the engine runs behind the
             // clutch pedal, the same way
             w.gearbox = GearboxModel{};
-            if (ClutchStep(w.clutch, raw, scale, kClassCurves[s.tachClass], w.smt.clutch, w.power.pedal, w.power.cold * w.power.boost, dt) && probe)
+            // a clutch pedal on an axis is the driver's; without one (a button, or none) the clutch works by itself
+            if (ClutchStep(w.clutch, raw, scale, kClassCurves[s.tachClass], w.smt.clutch, w.power.pedal, w.power.cold * w.power.boost, !w.smt.clutchAxis, dt) && probe)
                 Log(L"clutch: the engine would have stalled, the clutch let up at %.0f rpm on the gearbox's input in gear %d", w.clutch.input, raw.gearEngaged);
         }
         else

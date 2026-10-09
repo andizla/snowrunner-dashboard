@@ -848,24 +848,34 @@ int main()
         GameFunctionsFind(code.data(), 0x400, code.size(), clean);
         bool allFound = true;
         for (int f = 0; f < kFnCount; f++) allFound &= clean[f].state == kFnFound && clean[f].at == placed[f] && clean[f].count == 1;
-        // a hook's jump over ShiftGear's and ShiftToAutoGear's starts, and SetPowerFactor's bytes a second time
+        // a hook's jump over ShiftGear's, ShiftToAutoGear's and GetMaxGear's starts, int3 over the rest of the
+        // instructions it moved (ShiftToAutoGear's first two are 9 bytes, GetMaxGear's 8), and SetPowerFactor's bytes a
+        // second time
         code[0x1000] = 0xE9;
         code[0x1001] = code[0x1002] = code[0x1003] = code[0x1004] = 0x7F;
         code[0x2000] = 0xFF;
         code[0x2001] = 0x25;
+        for (int i = 6; i < 9; i++) code[0x2000 + i] = 0xCC;
+        code[0x4000] = 0xE9;
+        for (int i = 5; i < 8; i++) code[0x4000 + i] = 0xCC;
         put(kFnSetPower, 0x9000);
         FunctionFind hooked[kFnCount];
         GameFunctionsFind(code.data(), 0x400, code.size(), hooked);
         const bool heldSeen = hooked[kFnShiftGear].state == kFnHeld && hooked[kFnShiftGear].at == 0x1000 && hooked[kFnShiftToAuto].state == kFnHeld &&
-                              hooked[kFnShiftToAuto].at == 0x2000 && hooked[kFnSetPower].state == kFnFound && hooked[kFnSetPower].count == 2;
+                              hooked[kFnShiftToAuto].at == 0x2000 && hooked[kFnMaxGear].state == kFnHeld && hooked[kFnMaxGear].at == 0x4000 &&
+                              hooked[kFnSetPower].state == kFnFound && hooked[kFnSetPower].count == 2;
         // a short function's bytes changed are not taken for a hook: too little is left to tell it by
         code[0x3400] = 0xE9;
         FunctionFind shortGone[kFnCount];
         GameFunctionsFind(code.data(), 0x400, code.size(), shortGone);
         char line[1024];
         GameFunctionsText(hooked, line, sizeof line);
-        Check(allFound && heldSeen && shortGone[kFnShiftToReverse].state == kFnNotFound && strstr(line, "ShiftGear at +1000 held by another mod") &&
-                  strstr(line, "SetPowerFactor at +6000 (more than once)") && strstr(line, "ShiftToNeutral at +3200,"),
+        char line2[1024];
+        GameFunctionsText(shortGone, line2, sizeof line2);
+        Check(allFound && heldSeen && shortGone[kFnShiftToReverse].state == kFnNotFound && shortGone[kFnShiftToReverse].tooShort &&
+                  shortGone[kFnShiftToNeutral].state == kFnUnplaced && strstr(line, "ShiftGear at +1000 held by another mod") &&
+                  strstr(line, "SetPowerFactor at +6000 (more than once)") && strstr(line, "ShiftToNeutral at +3200,") &&
+                  strstr(line2, "ShiftToReverse not found (too short to tell it behind a hook)") && strstr(line2, "ShiftToNeutral not looked for"),
               "gearbox code: each function found by its bytes, ShiftToNeutral between ShiftToHigh and ShiftToReverse, one behind a hook's jump held by another mod");
     }
 

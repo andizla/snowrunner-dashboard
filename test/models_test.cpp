@@ -1359,15 +1359,15 @@ int main(int argc, char **argv)
         const float range = k.redline - k.idle;
         wheels(0.0f);
         ClutchModel free = {};
-        for (float at = 0.0f; at < 2.0f; at += kDt) ClutchStep(free, c, k, curve, 1.0f, 1.0f, 1.0f, kDt);
+        for (float at = 0.0f; at < 2.0f; at += kDt) ClutchStep(free, c, k, curve, 1.0f, 1.0f, 1.0f, false, kDt);
         Check(!free.locked && free.stalls == 0 && Near(free.rpm, k.idle + range * kTachFree, range * 0.05f) && free.carried == 0.0f,
               "clutch: pressed, a floored engine runs free up to the governor's speed in a gear with the truck standing");
         // let up at once at idle, the truck standing: the engine dies within a few tenths of a second
         ClutchModel dump = {};
-        for (float at = 0.0f; at < 0.5f; at += kDt) ClutchStep(dump, c, k, curve, 1.0f, 0.0f, 1.0f, kDt);
+        for (float at = 0.0f; at < 0.5f; at += kDt) ClutchStep(dump, c, k, curve, 1.0f, 0.0f, 1.0f, false, kDt);
         float diedAfter = -1.0f;
         for (float at = 0.0f; at < 2.0f && diedAfter < 0.0f; at += kDt)
-            if (ClutchStep(dump, c, k, curve, 0.0f, 0.0f, 1.0f, kDt)) diedAfter = at;
+            if (ClutchStep(dump, c, k, curve, 0.0f, 0.0f, 1.0f, false, kDt)) diedAfter = at;
         Check(diedAfter >= 0.0f && diedAfter < 0.5f && dump.stalls == 1 && dump.rpm == 0.0f, "clutch: let up at once at idle with the truck standing, the engine stalls");
         // let up over three seconds with a third of the pedal, the truck pulling away with what the clutch passes on
         // (the gearbox's input gaining 2000 rpm a second for each share of the most torque, as in a first gear)
@@ -1376,7 +1376,7 @@ int main(int argc, char **argv)
         for (float at = 0.0f; at < 5.0f; at += kDt)
         {
             wheels(TruckGearTop(c, 1) * input / k.redline);
-            ClutchStep(pull, c, k, curve, 1.0f - SettingsRange(at / 3.0f, 0.0f, 1.0f), ThrottleShape(0.33f), 1.0f, kDt);
+            ClutchStep(pull, c, k, curve, 1.0f - SettingsRange(at / 3.0f, 0.0f, 1.0f), ThrottleShape(0.33f), 1.0f, false, kDt);
             input = fmaxf(0.0f, input + pull.carried * 2000.0f * kDt);
             if (at > 0.5f) dip = fminf(dip, pull.rpm);
         }
@@ -1385,20 +1385,59 @@ int main(int argc, char **argv)
         // let up at speed: the engine turns with the gearbox; pressed again with the foot off, back to idle
         wheels(TruckGearTop(c, 1) * 0.6f);
         ClutchModel cruise = {};
-        for (float at = 0.0f; at < 2.0f; at += kDt) ClutchStep(cruise, c, k, curve, 0.0f, ThrottleShape(0.5f), 1.0f, kDt);
+        for (float at = 0.0f; at < 2.0f; at += kDt) ClutchStep(cruise, c, k, curve, 0.0f, ThrottleShape(0.5f), 1.0f, false, kDt);
         const bool turning = cruise.locked && Near(cruise.rpm, k.redline * 0.6f, 1.0f);
-        for (float at = 0.0f; at < 3.0f; at += kDt) ClutchStep(cruise, c, k, curve, 1.0f, 0.0f, 1.0f, kDt);
+        for (float at = 0.0f; at < 3.0f; at += kDt) ClutchStep(cruise, c, k, curve, 1.0f, 0.0f, 1.0f, false, kDt);
         Check(turning && !cruise.locked && Near(cruise.rpm, k.idle, range * 0.03f),
               "clutch: let up at speed the engine turns with the gearbox, and pressed with the foot off it is back at idle within three seconds");
         // a stalled engine stays dead for kStallRest, then the model's engine starts over; neutral is never a stall
-        for (float at = 0.0f; at < kStallRest + 0.1f; at += kDt) ClutchStep(dump, c, k, curve, 1.0f, 0.0f, 1.0f, kDt);
+        for (float at = 0.0f; at < kStallRest + 0.1f; at += kDt) ClutchStep(dump, c, k, curve, 1.0f, 0.0f, 1.0f, false, kDt);
         TruckRaw neutral = c;
         neutral.gear = neutral.gearEngaged = 0;
         wheels(0.0f);
         ClutchModel neutralRun = {};
-        for (float at = 0.0f; at < 1.0f; at += kDt) ClutchStep(neutralRun, neutral, k, curve, 0.0f, 0.0f, 1.0f, kDt);
-        Check(Near(dump.rpm, k.idle, range * 0.03f) && dump.stalled <= 0.0f && neutralRun.stalls == 0 && !neutralRun.connected && Near(neutralRun.rpm, k.idle, range * 0.03f),
-              "clutch: a stalled engine starts over after its rest, and in neutral the clutch takes nothing");
+        for (float at = 0.0f; at < 1.0f; at += kDt) ClutchStep(neutralRun, neutral, k, curve, 0.0f, 0.0f, 1.0f, false, kDt);
+        Check(Near(dump.rpm, k.idle, range * 0.03f) && !dump.dead && neutralRun.stalls == 0 && !neutralRun.connected && Near(neutralRun.rpm, k.idle, range * 0.03f),
+              "clutch: a stalled engine starts over after its rest with the clutch pressed, and in neutral the clutch takes nothing");
+        // stalled and left in gear with the clutch up, the engine stays dead past its rest; in neutral it starts again
+        ClutchModel left = {};
+        for (float at = 0.0f; at < 0.5f; at += kDt) ClutchStep(left, c, k, curve, 1.0f, 0.0f, 1.0f, false, kDt);
+        int leftStalls = 0;
+        for (float at = 0.0f; at < kStallRest * 3.0f; at += kDt) leftStalls += ClutchStep(left, c, k, curve, 0.0f, 0.0f, 1.0f, false, kDt) ? 1 : 0;
+        const bool stillDead = left.dead && left.rpm == 0.0f && leftStalls == 1;
+        for (float at = 0.0f; at < 1.0f; at += kDt) ClutchStep(left, neutral, k, curve, 0.0f, 0.0f, 1.0f, false, kDt);
+        char deadLine[200];
+        ClutchModel shown = {};
+        shown.dead = true;
+        ClutchProbeText(shown, 0.0f, deadLine, sizeof deadLine);
+        Check(stillDead && !left.dead && Near(left.rpm, k.idle, range * 0.03f) && strstr(deadLine, "waiting for the clutch pressed or neutral"),
+              "clutch: stalled and left in gear with the clutch up, the engine stays dead, once, and starts again in neutral");
+
+        // without a pedal the clutch works by itself: standing in gear at idle it takes nothing and nothing stalls;
+        // a little pedal pulls the truck away and it locks; slowing under idle it lets go again
+        wheels(0.0f);
+        ClutchModel byItself = {};
+        int autoStalls = 0;
+        for (float at = 0.0f; at < 3.0f; at += kDt) autoStalls += ClutchStep(byItself, c, k, curve, 0.0f, 0.0f, 1.0f, true, kDt) ? 1 : 0;
+        const bool standing = autoStalls == 0 && Near(byItself.rpm, k.idle, range * 0.02f) && fabsf(byItself.carried) < 0.1f && byItself.automatic;
+        float autoInput = 0.0f, autoDip = 1e9f;
+        for (float at = 0.0f; at < 8.0f; at += kDt)
+        {
+            wheels(TruckGearTop(c, 1) * autoInput / k.redline);
+            autoStalls += ClutchStep(byItself, c, k, curve, 0.0f, ThrottleShape(0.33f), 1.0f, true, kDt) ? 1 : 0;
+            autoInput = fmaxf(0.0f, autoInput + byItself.carried * 2000.0f * kDt);
+            autoDip = fminf(autoDip, byItself.rpm);
+        }
+        const bool pulled = autoStalls == 0 && byItself.locked && byItself.input > k.idle && autoDip >= k.idle * kClutchStall;
+        for (float at = 0.0f; at < 3.0f; at += kDt)
+        {
+            autoInput = fmaxf(0.0f, autoInput - 3000.0f * kDt); // braked to a stop in gear
+            wheels(TruckGearTop(c, 1) * autoInput / k.redline);
+            autoStalls += ClutchStep(byItself, c, k, curve, 0.0f, 0.0f, 1.0f, true, kDt) ? 1 : 0;
+        }
+        Check(standing && pulled && autoStalls == 0 && !byItself.locked && Near(byItself.rpm, k.idle, range * 0.03f),
+              "clutch: without a pedal it works by itself: in gear at idle it takes nothing, a little pedal pulls away and locks, braked to a stop it lets go, "
+              "and the engine never stalls");
         Check(Near(ClutchGrip(0.0f), 1.0f, 0.001f) && ClutchGrip(1.0f) == 0.0f && ClutchGrip(kClutchFree) == 0.0f && Near(ClutchGrip(kClutchBite), 1.0f, 0.001f) &&
                   Near(ClutchGrip(0.5f * (kClutchFree + kClutchBite)), 0.5f, 0.001f),
               "clutch: the grip is all of it let up, none pressed, and the bite between");
