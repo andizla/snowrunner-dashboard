@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.12.1] 2026-10-10
+
+- The mod's automatic shifts sooner. Floored it shifts up at about four fifths of the way from idle to the red zone, where it waited until nearly the red zone (on the Defender 4040 rpm, where it was about 4600 from 4th to 5th), and at a light foot lower still. The shift points are measured from idle, so a slow revving diesel and a fast revving petrol engine both shift in their band.
+- With the foot off it no longer shifts up (only past the red zone, rolling downhill), and it shifts down early, at a quarter of the way from idle to the red zone, gears at a time when the truck slows hard, never so far that the engine races. Before, a lift shifted up and the shifts down came late, the last one as the truck stopped.
+- Climbing (the truck slowing with the foot on) it shifts down where floored would and holds those points four seconds after, so it does not shift up and straight back down. Before, it barely shifted on a climb: wheels slipping held every shift.
+- It goes by the truck's speed over the ground, learned against the wheels while they grip, so wheelspin in mud does not shift it up and wheels locked under the brake do not throw it into first; the shifts no longer wait while the wheels slip.
+- A push of the pedal to the floor kicks down at once, once; held floored it steps down a gear at a time as the truck slows.
+- Tapping the shift modifier while the mod drives lets the game's own automatic pick a gear, which the mod takes on and holds for two seconds. Before, the mod set its own gear straight back, and a tap for 5th went back to 4th.
+- Another mod raising the power factor in A (a manual transmission mod sets 1.05) no longer reads as a low gear picked by hand, which gave the gears back a few seconds after they were taken.
+
 ## [0.12.0] 2026-10-10
 
 - The mod's automatic drives the game's gears. `Gearbox=1` (the tab's new Gearbox section) hands the gears to the mod's automatic while the game's shifter is in A: a torque converter (the engine at its stall speed with the pedal floored against a standing truck, at most 2400 rpm, following the road speed with a little slip on the move, locked up from the second gear), shift points that rise with the pedal, a kickdown when floored, the gear held when the foot lifts and rolling downhill, no shift in wheelspin, and the first gear by the time the truck stops. The tachometer and everything that goes by it (the turbo, the heat) take the converter's engine speed, and the cluster shows A. The gears are set through the game's own shift function with the game's automatic put down; picking a gear by hand gives the gearbox back, A takes it again. The truck still pulls with the game's own torque. `Gearbox=0`, the default, leaves the game's automatic as it was.

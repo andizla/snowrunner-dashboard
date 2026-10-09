@@ -1066,6 +1066,14 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             Log(L"gearbox: the mod's automatic takes the gears, in gear %d", raw.gear);
         }
         if (orders.gaveBack) Log(L"gearbox: the mod's automatic gives the gears back: %S, after %d shifts", TakeoverWhy(w.take.lastHandBack), w.take.shifts);
+        if (orders.adopted)
+        {
+            if (w.gearbox.gear != orders.adopted) w.gearbox.locked = false;
+            w.gearbox.gear = orders.adopted;
+            w.gearbox.pause = kTakeHold;
+            w.gearbox.wanted = 0.0f;
+            if (probe) Log(L"gearbox: the game's own automatic picked gear %d (the shift modifier, or A picked again); the mod's goes on from it", orders.adopted);
+        }
         if (orders.flagDown) m.put(w.refs.action + 0x3C, (uint8_t)0);
         if (orders.shiftTo)
         {

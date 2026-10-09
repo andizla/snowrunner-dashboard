@@ -1246,7 +1246,7 @@ int main(int argc, char **argv)
         Check(weak && cold.power == 0.0f && cold.load == 0.0f, "powertrain: cold oil takes 15 percent of the torque and no boost 35 percent; a stopped engine delivers nothing");
     }
 
-    // the automatic gearbox: the converter, the shift points, the hysteresis, the kickdown and a descent
+    // the automatic gearbox: the converter, the shift points, the hysteresis, the kickdown, a descent, a climb and wheelspin
     {
         TruckRaw g = Truck();
         g.gear = g.gearEngaged = 1;
@@ -1258,7 +1258,7 @@ int main(int argc, char **argv)
             GearboxModel m = {};
             m.running = true;
             m.gear = gear;
-            m.spin = TruckDrivenSpin(g);
+            m.spin = m.by = TruckDrivenSpin(g);
             return m;
         };
         // standing: the converter at the stall floored, and creeping at idle
@@ -1296,9 +1296,11 @@ int main(int argc, char **argv)
         float floorShift, floorPause, lightShift, lightPause;
         bool floorLocked, lightLocked;
         const GearboxModel floored = pull(1.0f, floorShift, floorPause, floorLocked), light = pull(0.3f, lightShift, lightPause, lightLocked);
-        // floored, the first shift is called for at kShiftUpFloored and made kShiftUpAfter later
-        const float floorPoint = TruckGearTop(g, 1) * kShiftUpFloored, gaining = TruckGearTop(g, TruckTopGear(g)) / 40.0f;
-        Check(floored.gear == 4 && floored.shifts == 3 && light.shifts == 3 && floorShift >= floorPoint && floorShift <= floorPoint + gaining * kShiftUpAfter + 0.1f && lightShift < floorShift - 2.0f &&
+        // floored, the first shift is called for at kShiftUpFloored, or once the second gear has its room, and made
+        // kShiftUpAfter later
+        const float floorPoint = fmaxf(TruckGearTop(g, 1) * GearboxPoint(k, kShiftUpFloored) / k.redline, TruckGearTop(g, 2) * GearboxPoint(k, kShiftDownFloored) * kShiftRoom / k.redline);
+        const float gaining = TruckGearTop(g, TruckTopGear(g)) / 40.0f;
+        Check(floored.gear == 4 && floored.shifts == 3 && light.shifts == 3 && floorShift >= floorPoint && floorShift <= floorPoint + gaining * kShiftUpAfter + 0.1f && lightShift < floorShift - 1.0f &&
                   floorPause >= kShiftPause && floorLocked && lightLocked,
               "automatic: pulling away it shifts through each gear once, late when floored and early at a light foot, a second apart, and locks the converter up");
         // a steady speed between the shift points with the pedal wandering: the gear holds
@@ -1307,54 +1309,129 @@ int main(int argc, char **argv)
         uint32_t seed = 7;
         for (float at = 0.0f; at < 60.0f; at += kDt) GearboxStep(hold, g, k, 0.45f + 0.15f * LiftChance(seed), 0.5f, kDt);
         Check(hold.shifts <= 1, "automatic: at a steady speed with the pedal wandering between 0.3 and 0.6 the gear holds");
-        // floored in the second gear at 0.8 of the red zone's speed, then the foot lifted: no shift up at the lift, one
-        // once the foot has stayed off
+        // floored in the second gear at 0.8 of the red zone's speed, then the foot lifted: no shift up with the foot
+        // off, however long; one once a light foot is back on
         wheels(TruckGearTop(g, 2) * 0.8f);
         GearboxModel lift = driving(2);
         for (float at = 0.0f; at < 2.0f; at += kDt) GearboxStep(lift, g, k, 1.0f, 1.0f, kDt);
         const int floorGear = lift.gear;
-        for (float at = 0.0f; at < 1.0f; at += kDt) GearboxStep(lift, g, k, 0.0f, 0.0f, kDt);
+        for (float at = 0.0f; at < 4.0f; at += kDt) GearboxStep(lift, g, k, 0.0f, 0.0f, kDt);
         const int liftedGear = lift.gear;
-        for (float at = 0.0f; at < 2.0f; at += kDt) GearboxStep(lift, g, k, 0.0f, 0.0f, kDt);
-        Check(floorGear == 2 && liftedGear == 2 && lift.gear == 3, "automatic: a lifted foot is no call to shift up at once; one kept off shifts up");
-        // a kickdown from the top gear at a low speed, skipping a gear
+        for (float at = 0.0f; at < 1.0f; at += kDt) GearboxStep(lift, g, k, 0.2f, 0.2f, kDt);
+        Check(floorGear == 2 && liftedGear == 2 && lift.gear == 3, "automatic: with the foot lifted it never shifts up short of the red zone; a light foot back on shifts up");
+        // the foot off at a low speed in the top gear: down at once to the gear that keeps the engine between the
+        // points, skipping one
         wheels(10.0f);
+        GearboxModel coast = driving(4);
+        for (float at = 0.0f; at < kCoastDownAfter + 0.1f; at += kDt) GearboxStep(coast, g, k, 0.0f, 0.0f, kDt);
+        Check(coast.gear == 2 && coast.shifts == 1 && GearboxInput(g, k, 2, 10.0f) < GearboxPoint(k, kCoastDownTo),
+              "automatic: with the foot off at a low speed it shifts down early, gears at a time, the engine kept under the coast point's top");
+        // a push of the pedal past kKickdown at a low speed kicks down at once, skipping a gear; held there without a
+        // push it steps down a gear at a time
         GearboxModel kick = driving(4);
-        for (float at = 0.0f; at < kShiftDownAfter + kShiftPause + 0.1f; at += kDt) GearboxStep(kick, g, k, 0.0f, 0.0f, kDt);
-        const int cruising = kick.gear;
+        GearboxStep(kick, g, k, 0.3f, 0.3f, kDt);
         GearboxStep(kick, g, k, 1.0f, 1.0f, kDt);
-        Check(cruising == 3 && kick.gear == 2, "automatic: floored at a low speed it kicks down to the lowest gear that keeps the engine under 0.85 of the red zone's speed");
-        // rolling downhill with the foot off the gear holds until the engine would pass the red zone; on the flat it shifts up
-        wheels(8.0f);
+        GearboxModel held4 = driving(4);
+        held4.pedal = 1.0f;
+        GearboxStep(held4, g, k, 1.0f, 1.0f, kDt);
+        const int heldFirst = held4.gear;
+        for (float at = 0.0f; at < kShiftDownAfter + 0.1f; at += kDt) GearboxStep(held4, g, k, 1.0f, 1.0f, kDt);
+        Check(kick.gear == 2 && kick.shifts == 1 && heldFirst == 4 && held4.gear == 3,
+              "automatic: a push of the pedal kicks down at once to the lowest gear that keeps the engine under kKickdownTo; a pedal held down steps down");
+        // rolling downhill with the foot off the gear holds until the engine would pass the red zone, on the flat too
+        wheels(9.0f);
         GearboxModel down = driving(2);
         GearboxStep(down, g, k, 0.0f, 0.0f, kDt);
         bool held = true;
         for (float at = 0.0f; at < 10.0f; at += kDt)
         {
-            wheels(8.0f + 1.0f * at);
+            wheels(9.0f + 1.0f * at);
             GearboxStep(down, g, k, 0.0f, 0.0f, kDt);
             if (GearboxInput(g, k, 2, g.spin[0]) <= k.redline && down.gear != 2) held = false;
         }
         wheels(14.0f);
         GearboxModel flat = driving(2);
         for (float at = 0.0f; at < 2.0f; at += kDt) GearboxStep(flat, g, k, 0.0f, 0.0f, kDt);
-        Check(held && down.gear == 3 && flat.gear == 3, "automatic: rolling downhill with the foot off it holds the gear for the engine's braking and shifts up only past the red zone");
-        // braked hard from the top gear to a stop in a second and a half: in the first gear once the wheels have all but
-        // stopped, not left in a high one for the next pull away
-        wheels(TruckGearTop(g, 4) * 0.7f);
-        GearboxModel halt = driving(4);
-        int haltShifts = 0;
-        float firstAt = -1.0f;
-        for (float at = 0.0f; at < 3.0f; at += kDt)
+        Check(held && down.gear == 3 && flat.gear == 2, "automatic: rolling downhill with the foot off it holds the gear for the engine's braking and shifts up only past the red zone, on the flat too");
+        // climbing: the wheels losing speed with the foot half down. It shifts down where floored would, and does not
+        // shift up while the climb's hold lasts after the slowing stops
+        GearboxModel climb = driving(3), flatter = driving(3);
+        float climbDownAt = -1.0f, flatterDownAt = -1.0f;
+        for (float at = 0.0f; at < 4.0f; at += kDt)
         {
-            wheels(fmaxf(0.0f, TruckGearTop(g, 4) * 0.7f * (1.0f - at / 1.5f)));
-            const int gearBefore = halt.gear;
-            GearboxStep(halt, g, k, 0.0f, 0.0f, kDt);
-            haltShifts += halt.gear != gearBefore;
-            if (halt.gear == 1 && firstAt < 0.0f) firstAt = at;
+            wheels(16.0f - at);
+            GearboxStep(climb, g, k, 0.5f, 0.5f, kDt);
+            if (climb.gear == 2 && climbDownAt < 0.0f) climbDownAt = at;
         }
-        Check(halt.gear == 1 && firstAt >= 1.4f && firstAt < 2.5f && haltShifts <= 3,
-              "automatic: braked hard to a stop it is in the first gear within a second of the wheels stopping, not left in a high gear");
+        const int climbShifts = climb.shifts;
+        for (float at = 0.0f; at < kClimbHold - 0.5f; at += kDt) GearboxStep(climb, g, k, 0.5f, 0.5f, kDt);
+        // the same speeds without the climb: a light foot's lower point
+        for (float at = 0.0f; at < 4.0f; at += kDt)
+        {
+            wheels(16.0f - at);
+            flatter.trend = 0.0f;
+            flatter.climb = 0.0f;
+            GearboxStep(flatter, g, k, 0.5f, 0.5f, kDt);
+            if (flatter.gear == 2 && flatterDownAt < 0.0f) flatterDownAt = at;
+        }
+        Check(climbDownAt > 0.0f && (flatterDownAt < 0.0f || climbDownAt < flatterDownAt - 1.0f) && climb.gear == 2 && climb.shifts == climbShifts,
+              "automatic: climbing it shifts down where floored would, and holds the gear while the climb's hold lasts");
+        // wheelspin: with the ground's speed learned, wheels spinning up in the first gear while the truck crawls do
+        // not shift up; without the ground's speed they would
+        {
+            TruckRaw mud = g;
+            auto mudWheels = [&](float spin) { for (int i = 0; i < mud.wheels; i++) mud.spin[i] = spin; };
+            mudWheels(6.0f);
+            mud.speed = 6.0f / 2.2f;
+            GearboxModel spinning = driving(1);
+            for (float at = 0.0f; at < 1.0f; at += kDt) GearboxStep(spinning, mud, k, 0.5f, 0.5f, kDt);
+            const bool learned = Near(spinning.grip, 2.2f, 0.01f) && !spinning.spinning;
+            mudWheels(10.5f);
+            mud.speed = 2.5f;
+            for (float at = 0.0f; at < 3.0f; at += kDt) GearboxStep(spinning, mud, k, 1.0f, 1.0f, kDt);
+            TruckRaw unknown = mud;
+            unknown.speed = 0.0f;
+            GearboxModel blind = driving(1);
+            for (float at = 0.0f; at < 3.0f; at += kDt) GearboxStep(blind, unknown, k, 1.0f, 1.0f, kDt);
+            Check(learned && spinning.spinning && spinning.gear == 1 && blind.gear == 2 && spinning.input > blind.input - 1.0f,
+                  "automatic: wheels spinning faster than the ground goes do not shift up; the engine still turns with them");
+        }
+        // braked hard from the top gear to a stop in a second and a half: in the first gear by the time the wheels
+        // stop, not left in a high one for the next pull away, and never a shift down that would race the engine
+        // with the ground's speed known (wheels of 0.45 m), and without it, when the shifts go by the wheels' speed
+        // smoothed, which lags behind
+        auto haltFrom = [&](bool groundKnown, float &firstAt, float &race) {
+            TruckRaw h = g;
+            const float from = TruckGearTop(h, 4) * 0.7f;
+            auto set = [&](float spin) {
+                for (int i = 0; i < h.wheels; i++) h.spin[i] = spin;
+                h.speed = groundKnown ? spin * 0.45f : 0.0f;
+            };
+            set(from);
+            GearboxModel hm = driving(4);
+            hm.spin = hm.by = TruckDrivenSpin(h);
+            GearboxStep(hm, h, k, 0.3f, 0.3f, kDt); // the ground's speed learned on the way
+            int shifts = 0;
+            firstAt = -1.0f;
+            race = 0.0f;
+            for (float at = 0.0f; at < 3.0f; at += kDt)
+            {
+                set(fmaxf(0.0f, from * (1.0f - at / 1.5f)));
+                const int gearBefore = hm.gear;
+                GearboxStep(hm, h, k, 0.0f, 0.0f, kDt);
+                if (hm.gear != gearBefore)
+                {
+                    shifts++;
+                    race = fmaxf(race, GearboxInput(h, k, hm.gear, TruckDrivenSpin(h)));
+                }
+                if (hm.gear == 1 && firstAt < 0.0f) firstAt = at;
+            }
+            return hm.gear == 1 && shifts <= 3;
+        };
+        float firstAt, haltRace, blindAt, blindRace;
+        const bool halted = haltFrom(true, firstAt, haltRace), blindHalted = haltFrom(false, blindAt, blindRace);
+        Check(halted && firstAt > 0.5f && firstAt <= 1.6f && haltRace < GearboxPoint(k, kCoastDownTo) + 50.0f && blindHalted && blindAt < 2.5f,
+              "automatic: braked hard to a stop it is in the first gear by the time the wheels stop, the engine never raced, and within a second after without the ground's speed");
         // the mod's automatic in the game: taken in the game's gear while its shifter is in A, the model's gears set
         // through the game, given back to a gear picked by hand, a low gear, the setting off or a stopped engine
         {
@@ -1371,29 +1448,36 @@ int main(int argc, char **argv)
             tk.gear = tk.gearEngaged = 3;
             const TakeoverOrders arrived = TakeoverStep(take, tk, 3, true, 1.0f);
             const bool shifting = up.shiftTo == 3 && !up.flagDown && take.set == 3 && !waiting.gaveBack && waiting.shiftTo == 0 && !arrived.gaveBack && take.driving;
-            // the shift modifier tapped: the game's flag up and its own gear; the mod sets its gear again
+            // the shift modifier tapped: the game's flag up and its own automatic's gear, which the mod takes on
             tk.automatic = 1;
             tk.gear = tk.gearEngaged = 1;
             const TakeoverOrders tapped = TakeoverStep(take, tk, 3, true, kDt);
-            const bool again = tapped.flagDown && tapped.shiftTo == 3 && take.driving;
+            tk.automatic = 0;
+            const TakeoverOrders goneOn = TakeoverStep(take, tk, 1, true, 1.0f); // the model in the gear taken on
+            const bool again = tapped.flagDown && tapped.adopted == 1 && tapped.shiftTo == 0 && !goneOn.gaveBack && goneOn.shiftTo == 0 && take.set == 1 && take.driving;
             // reverse picked in A (the game's flag up with it): given back at once, never shifted forwards again
             TruckRaw back = tk;
+            back.automatic = 1;
             back.gear = back.gearEngaged = -1;
             TakeoverModel inReverse = take;
             const TakeoverOrders reversed = TakeoverStep(inReverse, back, 3, true, kDt);
             const bool reverseHandsBack = reversed.gaveBack && reversed.shiftTo == 0 && !reversed.flagDown && !inReverse.driving;
             // a gear picked by hand once the mod's has had its time
-            tk.automatic = 0;
+            TakeoverStep(take, tk, 3, true, kDt);
             tk.gear = tk.gearEngaged = 3;
             TakeoverStep(take, tk, 3, true, 1.0f);
             tk.gear = tk.gearEngaged = 1;
             const TakeoverOrders picked = TakeoverStep(take, tk, 3, true, 1.0f);
             const bool byHand = picked.gaveBack && !take.driving && take.lastHandBack == kTakePicked && picked.shiftTo == 0;
-            // taken again from A; a low gear (another power factor) hands it back, so does the engine stopping
+            // taken again from A; another mod raising the power factor for the automatic is no gear picked; a low gear
+            // (a power factor under the most it was) hands it back, so does the engine stopping
             tk.automatic = 1;
             TakeoverStep(take, tk, 1, true, kDt);
             tk.automatic = 0;
-            tk.powerFactor = 0.2f;
+            tk.powerFactor = 1.05f;
+            const TakeoverOrders raised = TakeoverStep(take, tk, 1, true, kDt);
+            const bool stillDriving = !raised.gaveBack && take.driving;
+            tk.powerFactor = 1.0f;
             const TakeoverOrders lowPicked = TakeoverStep(take, tk, 1, true, kDt);
             const int lowWhy = take.lastHandBack;
             tk.powerFactor = 1.0f;
@@ -1402,7 +1486,7 @@ int main(int argc, char **argv)
             tk.automatic = 0;
             tk.flags = 0;
             const TakeoverOrders stopped = TakeoverStep(take, tk, 1, true, kDt);
-            const bool lowOrOff = lowPicked.gaveBack && lowWhy == kTakeLow && take.lastHandBack == kTakeGone && stopped.gaveBack && !take.driving && take.handBacks == 3;
+            const bool lowOrOff = stillDriving && lowPicked.gaveBack && lowWhy == kTakeLow && take.lastHandBack == kTakeGone && stopped.gaveBack && !take.driving && take.handBacks == 3;
             // the game refusing a gear: it counts as set at the game's, so the next wish is set again
             tk.flags = g.flags;
             tk.automatic = 1;
@@ -1413,8 +1497,8 @@ int main(int argc, char **argv)
             TakeoverRefused(take, tk);
             const TakeoverOrders retry = TakeoverStep(take, tk, 3, true, kDt);
             Check(taking && shifting && again && reverseHandsBack && byHand && lowOrOff && wish.shiftTo == 3 && retry.shiftTo == 3 && take.driving,
-                  "automatic in the game: taken in the game's gear from A, the model's gears set, set again after the shift modifier, given back to reverse, to a gear "
-                  "or a low gear picked by hand and to a stopped engine, and a gear the game refused set again");
+                  "automatic in the game: taken in the game's gear from A, the model's gears set, the game's own gear taken on at the shift modifier, given back to "
+                  "reverse, to a gear or a low gear picked by hand (not to a power factor raised) and to a stopped engine, and a gear the game refused set again");
             // the needle follows the converter's engine speed with its lag; with the engine off it falls to nothing
             TachModel follow = {};
             TachFollow(follow, g, k, 1500.0f, kDt);
