@@ -540,7 +540,9 @@ line. Test: the models test, and the user's drive in mud and on a cross-axle cli
 Build: the tach and speed scales by truck class from the truck's name (module 7 finds the name; here the class
 defaults per name, if wanted), README complete, rollback notes, the repo on GitHub (private until the user's word).
 A last pass over every outward text for the house rules. `MODULES.md` leaves the repo (`git rm --cached`, back
-into `.gitignore`'s effect) before the public flip: it names other mods and local paths. The sound recordings
+into `.gitignore`'s effect) before the public flip: it names other mods and local paths. `update.bat` (the work
+branch brought in, built, tested and installed) and `map_names.bat` are the user's development tools: they name the
+work branch and the Steam path, so they leave with it or are made general. The sound recordings
 (module 10, cut from a clip the user supplied with its author's permission) are not under the GPL: SOUND_CREDITS.md
 names the author and the link (the user supplies both) and states the terms (used with the author's permission),
 and THIRD_PARTY_NOTICES.md says the recordings are excluded from the GPL licence of the code.
