@@ -17,7 +17,9 @@
 // sample a line, numbers with spaces between: seconds, flags, stall, start timer, all wheel drive, gear, gear engaged,
 // automatic, power factor, throttle, the action's + 0xB4, speed in m/s, fuel, tank, engine damage and its capacity,
 // the number of gear speeds and each, the number of wheels and each one's drive and turning speed, and after those
-// the game's object for the truck as a hex number, where the table has it.
+// the game's object for the truck as a hex number, where the table has it. tools\log2drive.py makes such a file from
+// the probe's lines of a Gauges.log (python tools\log2drive.py Gauges.log drive.txt); the samples are then a second or
+// two apart, and each line also says the automatic's model's gear beside the game's.
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -346,9 +348,10 @@ static int Replay(const char *path, float idleRpm, float redlineRpm)
         last = seconds;
         samples++;
         printf("%8.2f gear %2d %s pedal %.2f wheels %5.2f of %5.2f | %4.0f rpm | %5.1f km/h | fuel %6.2f | range %6.1f km at %.3f l/km over %4.0f m, standing %.2f l/min | "
-               "coolant %5.1f C, load %.2f, heat %.2f, %.2f taken away, oil %5.1f C | boost %.2f bar\n", seconds,
+               "coolant %5.1f C, load %.2f, heat %.2f, %.2f taken away, oil %5.1f C | boost %.2f bar | the automatic's model: gear %d, %s, input %.0f rpm\n", seconds,
                t.gearEngaged, t.automatic ? "A" : " ", TruckPedal(t), TruckDrivenSpin(t), TruckGearTop(t, t.gearEngaged), tach.rpm, t.speed * 3.6f, t.fuel, range.rangeKm,
-               range.perKm, range.way - range.mark[0].way, range.standing, temp.temp, temp.load, temp.heat, temp.cooling, temp.oil, boost.bar);
+               range.perKm, range.way - range.mark[0].way, range.standing, temp.temp, temp.load, temp.heat, temp.cooling, temp.oil, boost.bar, box.gear,
+               box.locked ? "locked" : "slipping", box.input);
     }
     fclose(f);
     printf("%d samples, %d steps: the largest change of the engine speed in one step %.0f rpm, the highest engine speed %.0f rpm, %d steps in the red zone (from %.0f rpm)\n",
@@ -1336,6 +1339,22 @@ int main(int argc, char **argv)
         GearboxModel flat = driving(2);
         for (float at = 0.0f; at < 2.0f; at += kDt) GearboxStep(flat, g, k, 0.0f, 0.0f, kDt);
         Check(held && down.gear == 3 && flat.gear == 3, "automatic: rolling downhill with the foot off it holds the gear for the engine's braking and shifts up only past the red zone");
+        // braked hard from the top gear to a stop in a second and a half: in the first gear once the wheels have all but
+        // stopped, not left in a high one for the next pull away
+        wheels(TruckGearTop(g, 4) * 0.7f);
+        GearboxModel halt = driving(4);
+        int haltShifts = 0;
+        float firstAt = -1.0f;
+        for (float at = 0.0f; at < 3.0f; at += kDt)
+        {
+            wheels(fmaxf(0.0f, TruckGearTop(g, 4) * 0.7f * (1.0f - at / 1.5f)));
+            const int before = halt.gear;
+            GearboxStep(halt, g, k, 0.0f, 0.0f, kDt);
+            haltShifts += halt.gear != before;
+            if (halt.gear == 1 && firstAt < 0.0f) firstAt = at;
+        }
+        Check(halt.gear == 1 && firstAt >= 1.4f && firstAt < 2.5f && haltShifts <= 3,
+              "automatic: braked hard to a stop it is in the first gear within a second of the wheels stopping, not left in a high gear");
         TruckRaw stopped = g;
         stopped.flags = 0;
         GearboxStep(box, stopped, k, 1.0f, 1.0f, kDt);

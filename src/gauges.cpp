@@ -822,6 +822,10 @@ struct TruckWatch
     TruckWho who;               // which truck refs are, as the passes read it; who.taken's key is "" while none is read
 };
 
+// The manual transmission mod drives this truck in a manual gear: the game's automatic is off. In its automatic range
+// the game's automatic picks the gears, and the automatic's model runs beside it as without the mod.
+static bool SmtManual(const TruckWatch &w, const TruckRaw &raw) { return w.smt.driving && w.smt.vehicle == w.refs.vehicle && !raw.automatic; }
+
 // Looks up the record of the driven truck's engine, and says so in the log when it is another one than before.
 static void EngineLook(TruckWatch &w, const TruckMemory &m, ULONGLONG now)
 {
@@ -850,7 +854,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     // probe on at each stall it causes for a shift without the clutch
     w.smt = SmtRead(w.smtReader, now);
     if (w.smt.present != w.smtSeen)
-        Log(w.smt.present ? L"manual transmission mod: it publishes its state; while it drives the truck the automatic's model stands down"
+        Log(w.smt.present ? L"manual transmission mod: it publishes its state; while it drives the truck in a manual gear, the game's automatic off, the automatic's model stands down"
                           : L"manual transmission mod: its state is not published any more");
     else if (probe && w.smt.present && w.smt.stalls > w.smtStalls)
         Log(L"manual transmission mod: a shift without the clutch stalled the engine (%u since it loaded)", w.smt.stalls);
@@ -979,11 +983,11 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         // the automatic: the gear it would be in, the same way. With the probe on each of its shifts is logged beside
         // the game's gear while the game's automatic drives a numbered gear
         const int boxGear = w.gearbox.gear;
-        const bool smtDrives = w.smt.driving && w.smt.vehicle == w.refs.vehicle;
+        const bool smtDrives = SmtManual(w, raw);
         if (smtDrives)
         {
-            // the manual transmission mod drives the gears: the automatic stands down, and the engine runs behind the
-            // clutch pedal, the same way
+            // the manual transmission mod drives the gears, the game's automatic off: the automatic's model stands
+            // down, and the engine runs behind the clutch, the same way
             w.gearbox = GearboxModel{};
             // a clutch pedal on an axis is the driver's; without one (a button, or none) the clutch works by itself
             if (ClutchStep(w.clutch, raw, scale, kClassCurves[s.tachClass], w.smt.clutch, w.power.pedal, w.power.cold * w.power.boost, !w.smt.clutchAxis, dt) && probe)
@@ -1068,13 +1072,13 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         Log(L"probe: %S", seventh);
         PowertrainProbeText(raw, w.power, w.tach.rpm, eighth, sizeof eighth);
         Log(L"probe: %S", eighth);
-        const bool smtDrives = w.smt.driving && w.smt.vehicle == w.refs.vehicle;
+        const bool smtDrives = SmtManual(w, raw);
         if (smtDrives) snprintf(ninth, sizeof ninth, "automatic (not handed to the game yet): stands down, the manual transmission mod drives the gears");
         else GearboxProbeText(raw, w.gearbox, ninth, sizeof ninth);
         Log(L"probe: %S", ninth);
         if (w.smt.present)
         {
-            SmtProbeText(w.smt, smtDrives, tenth, sizeof tenth);
+            SmtProbeText(w.smt, w.smt.driving && w.smt.vehicle == w.refs.vehicle, tenth, sizeof tenth);
             Log(L"probe: %S", tenth);
         }
         if (smtDrives)

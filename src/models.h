@@ -946,6 +946,7 @@ static const float kStallRatio = 2.0f;       // and at the stall it doubles the 
 static const float kCreep = 0.06f;           // what an idling engine pushes through the converter at a standstill, as a share of the most power
 static const float kLockFrom = 0.5f, kUnlockBelow = 0.4f; // the converter locks from the second gear with the input at this share of the red zone's speed, and lets go below that or at a shift
 static const float kDescending = 0.3f;       // rad/s each second the driven wheels gain with the foot off: rolling downhill, the gear is held
+static const float kStopShift = 0.1f;        // under this share of the red zone's speed in the first gear the truck all but stands: the first gear at once
 static const float kShiftSmooth = 0.5f;      // seconds the wheels' speed is smoothed over before the gearbox goes by it
 static const float kSpinning = 6.0f;         // rad/s each second the driven wheels gain or lose beyond this: they spin or grip again, and nothing shifts
 static const float kShiftUpAfter = 0.4f, kShiftDownAfter = 0.8f; // seconds a shift up, and a shift down, has to be called for before it is made
@@ -1021,7 +1022,11 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     const bool wantUp = m.gear < top && (now > k.redline || (now >= up && !downhill && GearboxInput(t, k, m.gear + 1, spin) >= down * kShiftRoom));
     const bool wantDown = m.gear > 1 && now < down && GearboxInput(t, k, m.gear - 1, spin) < up;
     m.wanted = slipping ? 0.0f : wantUp ? fmaxf(m.wanted, 0.0f) + dt : wantDown ? fminf(m.wanted, 0.0f) - dt : 0.0f;
-    if (m.pause <= 0.0f && !slipping)
+    // all but standing, the first gear at once, whatever the pause: an automatic is in it by the time the truck stops,
+    // also after a hard stop that left no time for the shifts down one by one
+    if (m.gear > 1 && GearboxInput(t, k, 1, fmaxf(raw, spin)) < k.redline * kStopShift)
+        to = 1;
+    else if (m.pause <= 0.0f && !slipping)
     {
         if (p >= kKickdown && m.gear > 1 && GearboxInput(t, k, m.gear - 1, spin) < k.redline * kKickdownTo)
         {

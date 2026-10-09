@@ -7,6 +7,8 @@
 - Once a truck is driven, the log says where the game's gearbox functions are in its code, or that another mod holds them. Nothing is written: this is the ground for the gearbox, the clutch and the engine that come with 0.12.0.
 - The clutch's model in the log (`Probe=1`, while the manual transmission mod drives): a stalled engine stays dead until the clutch is pressed or the gearbox is in neutral, where it started over every two seconds before and stalled again at once while the truck stood in gear. Without a clutch pedal on an axis (a clutch button, or none) the clutch works by itself: it lets go at idle, takes hold as the engine speeds up, and never stalls the engine.
 - The look for the game's gearbox functions tells a function behind another mod's hook also where the hook moved more than one instruction, and no longer looks for ShiftToNeutral where its neighbours are not both found.
+- The automatic's model (`Probe=1`) runs beside the game's automatic also while the manual transmission mod is loaded; it stands down only while that mod drives a manual gear with the game's automatic off. Before, it stood down whenever the mod was loaded.
+- The automatic's model is in the first gear as the truck all but stands, also after a hard stop that left no time to shift down gear by gear.
 - The placeholder sections of 0.11.0 to 0.11.2 are renamed to the game's names with the temperatures they hold, and the four regions they lacked (Quebec, Washington, Chiapas, Zurdania) are added.
 
 ## [0.11.2] 2026-10-08
