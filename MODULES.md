@@ -526,7 +526,8 @@ stays its own). SMT needs no change.
   0x11C) and the slip; (4) the automatic (GearboxStep handed to the game) for pads; (5) the engine's torque
   (module 12 part A) through the power factor, or a hook into the game's input path found in a session on the
   user's PC if the factor cannot carry it. Steps 2 to 5 behind a `Gearbox` setting that is the game's own by
-  default.
+  default. Step 2's read-only half is in 0.11.3 (`src/game_code.h`): once a truck is found, the nine functions are looked
+  for in the exe's code sections and logged (offset, more than once, or held behind a jump); 0.7 s over 100 MB here.
 
 ### 15. Differentials
 

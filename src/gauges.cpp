@@ -22,6 +22,7 @@
 #include "models.h"
 #include "smt.h"
 #include "maps.h"
+#include "game_code.h"
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "shell32.lib")
 #ifndef GAUGES_SETTINGS_TEST
@@ -686,6 +687,37 @@ static bool SaveReadMap(const std::wstring &path, char *level, size_t size)
     return ok && MapFromSave(text.data(), text.size(), level, size);
 }
 
+// The game's gearbox functions in its code (game_code.h), looked for once a truck is driven, so a manual transmission
+// mod has hooked its own by then: where each one is, or that another mod holds it. Nothing is written.
+static void GameCodeLook()
+{
+    const uint8_t *image = (const uint8_t *)g_base;
+    const IMAGE_NT_HEADERS64 *nt = (const IMAGE_NT_HEADERS64 *)(image + ((const IMAGE_DOS_HEADER *)image)->e_lfanew);
+    const IMAGE_SECTION_HEADER *section = IMAGE_FIRST_SECTION(nt);
+    size_t from = SIZE_MAX, to = 0;
+    for (int i = 0; i < nt->FileHeader.NumberOfSections; i++, section++)
+        if (section->Characteristics & IMAGE_SCN_MEM_EXECUTE)
+        {
+            from = section->VirtualAddress < from ? section->VirtualAddress : from;
+            const size_t end = (size_t)section->VirtualAddress + section->Misc.VirtualSize;
+            to = end > to ? end : to;
+        }
+    if (from >= to)
+    {
+        Log(L"gearbox code: the exe has no code section to look in");
+        return;
+    }
+    const ULONGLONG started = GetTickCount64();
+    FunctionFind finds[kFnCount];
+    GameFunctionsFind(image, from, to, finds);
+    static char line[2048];
+    GameFunctionsText(finds, line, sizeof line);
+    int held = 0;
+    for (const auto &f : finds) held += f.state == kFnHeld;
+    Log(L"gearbox code (%.1f s, nothing written): %S", (GetTickCount64() - started) / 1000.0, line);
+    if (held) Log(L"gearbox code: another mod holds %d of the game's gearbox functions, so the gearbox stays with it", held);
+}
+
 // A file's time as the clock on the wall shows it, hh:mm:ss.
 static void ClockText(const FILETIME &t, char *out, size_t size)
 {
@@ -1140,6 +1172,7 @@ static DWORD WINAPI Run(void *)
     std::wstring savePath;
     FILETIME saveWritten = {};
     ULONGLONG saveLookAt = 0;
+    bool codeLooked = false; // the gearbox functions were looked for, once a truck was found
     for (;;)
     {
         Sleep(50);
@@ -1260,6 +1293,11 @@ static DWORD WINAPI Run(void *)
         TruckRaw raw;
         World world;
         const bool driving = TruckPass(watch, memory, inForce, front, raw, world);
+        if (watch.found && !codeLooked)
+        {
+            codeLooked = true;
+            GameCodeLook();
+        }
         const TruckIdentity &now = watch.who.taken;
         if (strcmp(now.key, truck.key))
         {

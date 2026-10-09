@@ -6,7 +6,8 @@
 // most, with the effect and the torque factor the game's own rule gives. And it checks which truck the mod takes a
 // truck for: by its kind's name where the game has one, by its build where it has none.
 // And it checks the reading of the manual transmission mod's published state (smt.h), through a block of shared
-// memory written as that mod writes it, and the maps by the game's names with the map its save names (maps.h).
+// memory written as that mod writes it, the maps by the game's names with the map its save names (maps.h), and the
+// search for the game's gearbox functions in a made up exe's code (game_code.h).
 // build.bat makes out\test\truck_test.exe; test.bat runs it.
 #include <windows.h>
 #include <stdio.h>
@@ -18,6 +19,7 @@
 #include "truck.h"
 #include "smt.h"
 #include "maps.h"
+#include "game_code.h"
 
 struct Region { uint64_t at; std::vector<uint8_t> bytes; };
 static std::vector<Region> g_game;
@@ -824,6 +826,47 @@ int main()
                              !MapFromSave(noValue, sizeof noValue - 1, wrongOut, sizeof wrongOut) && !MapFromSave(save, sizeof save, tooShort, sizeof tooShort) && !strcmp(wrongOut, "x");
         Check(read && partial && spaces && refused,
               "maps: the map loaded last from a save's text; nothing from a save cut short, a value that is no map's id, a save without it, or no room for it");
+    }
+
+    // the game's gearbox functions in a made up exe's code: each one's bytes put in place, a hook's jump over one
+    {
+        uint8_t parsed[kPatternMax], parsedMask[kPatternMax];
+        const int parsedLength = PatternParse("48 ? FF", parsed, parsedMask);
+        Check(parsedLength == 3 && parsed[0] == 0x48 && !parsedMask[1] && parsedMask[2] && parsed[2] == 0xFF && !PatternParse("4G", parsed, parsedMask) &&
+                  !PatternParse("4", parsed, parsedMask),
+              "gearbox code: a pattern read as bytes and a mask");
+        std::vector<uint8_t> code(0x10000, 0x90);
+        size_t placed[kFnCount] = { 0x1000, 0x2000, 0x3000, 0x3400, 0x3200, 0x4000, 0x5000, 0x6000, 0x7000 };
+        auto put = [&](int f, size_t at) {
+            uint8_t b[kPatternMax], k[kPatternMax];
+            const int length = PatternParse(kGameFunctions[f].pattern, b, k);
+            for (int i = 0; i < length; i++) code[at + i] = k[i] ? b[i] : (uint8_t)(0x11 + i);
+        };
+        for (int f = 0; f < kFnCount; f++) put(f, placed[f]);
+        put(kFnShiftToNeutral, 0x0800); // its few bytes elsewhere too, before ShiftToHigh
+        FunctionFind clean[kFnCount];
+        GameFunctionsFind(code.data(), 0x400, code.size(), clean);
+        bool allFound = true;
+        for (int f = 0; f < kFnCount; f++) allFound &= clean[f].state == kFnFound && clean[f].at == placed[f] && clean[f].count == 1;
+        // a hook's jump over ShiftGear's and ShiftToAutoGear's starts, and SetPowerFactor's bytes a second time
+        code[0x1000] = 0xE9;
+        code[0x1001] = code[0x1002] = code[0x1003] = code[0x1004] = 0x7F;
+        code[0x2000] = 0xFF;
+        code[0x2001] = 0x25;
+        put(kFnSetPower, 0x9000);
+        FunctionFind hooked[kFnCount];
+        GameFunctionsFind(code.data(), 0x400, code.size(), hooked);
+        const bool heldSeen = hooked[kFnShiftGear].state == kFnHeld && hooked[kFnShiftGear].at == 0x1000 && hooked[kFnShiftToAuto].state == kFnHeld &&
+                              hooked[kFnShiftToAuto].at == 0x2000 && hooked[kFnSetPower].state == kFnFound && hooked[kFnSetPower].count == 2;
+        // a short function's bytes changed are not taken for a hook: too little is left to tell it by
+        code[0x3400] = 0xE9;
+        FunctionFind shortGone[kFnCount];
+        GameFunctionsFind(code.data(), 0x400, code.size(), shortGone);
+        char line[1024];
+        GameFunctionsText(hooked, line, sizeof line);
+        Check(allFound && heldSeen && shortGone[kFnShiftToReverse].state == kFnNotFound && strstr(line, "ShiftGear at +1000 held by another mod") &&
+                  strstr(line, "SetPowerFactor at +6000 (more than once)") && strstr(line, "ShiftToNeutral at +3200,"),
+              "gearbox code: each function found by its bytes, ShiftToNeutral between ShiftToHigh and ShiftToReverse, one behind a hook's jump held by another mod");
     }
 
     printf(g_failed ? "TRUCK TEST FAILED (%d)\n" : "TRUCK TEST OK\n", g_failed);
