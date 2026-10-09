@@ -754,7 +754,7 @@ static void GameCodeLook()
     int held = 0;
     for (const auto &f : finds) held += f.state == kFnHeld;
     Log(L"gearbox code (%.1f s, nothing written): %S", (GetTickCount64() - started) / 1000.0, line);
-    if (held) Log(L"gearbox code: another mod holds %d of the game's gearbox functions, so the gearbox stays with it", held);
+    if (held) Log(L"gearbox code: another mod holds %d of the game's gearbox functions (a manual transmission mod); its hooks pass the game's shifts on", held);
     const FunctionFind &shift = finds[kFnShiftGear];
     if ((shift.state == kFnFound && shift.count == 1) || shift.state == kFnHeld) g_shiftGear = (GameShiftFn)(g_base + shift.at);
     Log(g_shiftGear ? L"gearbox code: the mod's automatic can set gears through the game's shift function (Gearbox=1)"
@@ -791,7 +791,8 @@ static void LogSettings(const GaugeSettings &s)
     Log(L"settings: the radiator has all its air from %g km/h; engine damage %s: %g percent a minute at 125 C, %g percent a minute for a cold engine floored at the red zone at 0 C",
         s.airFullKmh, s.damage ? L"on" : L"off", s.hotDamage, s.coldDamage);
     Log(L"settings: sound volume %d of 100%s", s.soundVolume, s.soundsOnly ? L", sounds only: the cluster is not drawn" : L"");
-    Log(L"settings: gearbox %s", s.gearbox == kGearboxModel ? L"the mod's automatic, with a torque converter, picks the gears in A" : L"the game's own");
+    Log(L"settings: gearbox %s", s.gearbox == kGearboxModel ? L"the mod's automatic, with a torque converter, picks the gears in A"
+                                                            : L"the game's own (the tab's Gearbox section, or Gearbox=1, hands the gears in A to the mod's automatic)");
     Log(L"settings: toggle key %S, pad %S, demo values %s, probe %d", key, s.padToggle, s.demo ? L"on" : L"off", s.probe);
 }
 
