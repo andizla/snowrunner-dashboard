@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.12.2] 2026-10-10
+
+- The mod's automatic no longer shifts down into a gear that races the engine. In 0.12.1 it learned how fast the wheels turn for the truck's speed from any moment with the foot on, so a bump or the truck sliding back down a slope could teach it the truck went at half its speed: it then shifted down as far as first at up to 6800 rpm, and held first on the limiter for half a minute. It learns now only while the wheels turn steadily and alike, the truck going forwards with no brake or handbrake, and follows a lower reading over two seconds. It goes by the wheels again and weighs them against the ground only to tell wheelspin and locked wheels, and no shift down takes the engine past nine tenths of the way to the red zone at the speed the wheels turn.
+- A climb is told by the truck losing speed for half a second with the foot on, where a moment of it was enough, so the shift points no longer jump to floored's on a bump.
+- A tap of the shift modifier the game goes back on within two seconds (it picked 3rd from 1st and fell back to 1st) is taken on as well; before, it gave the gears back as if picked by hand.
+
 ## [0.12.1] 2026-10-10
 
 - The mod's automatic shifts sooner. Floored it shifts up at about four fifths of the way from idle to the red zone, where it waited until nearly the red zone (on the Defender 4040 rpm, where it was about 4600 from 4th to 5th), and at a light foot lower still. The shift points are measured from idle, so a slow revving diesel and a fast revving petrol engine both shift in their band.

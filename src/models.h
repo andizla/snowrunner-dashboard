@@ -103,6 +103,24 @@ inline float TruckDrivenSpin(const TruckRaw &t)
     return n ? sum / n : t.wheels ? all / t.wheels : 0.0f;
 }
 
+// How far the driven wheels' speeds lie apart, the fastest less the slowest as a share of their mean; 0 for one wheel
+// or none turning.
+inline float TruckDrivenSpread(const TruckRaw &t)
+{
+    float lo = 0.0f, hi = 0.0f, sum = 0.0f;
+    int n = 0;
+    for (int i = 0; i < t.wheels; i++)
+    {
+        if (!(t.drive[i] == 1 || (t.drive[i] == 2 && t.awd))) continue;
+        const float s = fabsf(t.spin[i]);
+        lo = n ? fminf(lo, s) : s;
+        hi = n ? fmaxf(hi, s) : s;
+        sum += s;
+        n++;
+    }
+    return n > 1 && sum > 0.0f ? (hi - lo) / (sum / n) : 0.0f;
+}
+
 // The wheel speed in rad/s the game governs a gear to, 0 for neutral or a gear the gearbox does not have. From the
 // gearbox's number a for the gear: 2 a + 5, and a + 2 in the high gear. The low range is the first gear held to a
 // share of that by the power factor.
@@ -972,11 +990,16 @@ static const float kStopShift = 0.1f;        // under this share of the red zone
 static const float kShiftSmooth = 0.25f;     // seconds the wheels' speed is smoothed over before the gearbox goes by it
 static const float kTrendSmooth = 1.0f;      // and seconds how fast it changes is smoothed over
 static const float kFootOff = 0.05f;         // a pedal under this is the foot off
-static const float kLabouring = 0.25f;       // rad/s each second the wheels lose with the foot on: a climb
+static const float kLabouring = 0.35f;       // rad/s each second the truck loses with the foot on, for kLabourAfter: a climb
+static const float kLabourAfter = 0.5f;
 static const float kClimbHold = 4.0f;        // seconds the shift points stay where floored puts them after a climb
-static const float kGripSpeed = 2.0f;        // m/s the truck goes at the least for the wheels' speed against the ground's to be learned
-static const float kGripDrift = 60.0f;       // seconds over which a learned grip forgets a low reading
-static const float kSlipShare = 1.3f, kSlipSpare = 1.0f; // wheels this much faster than the ground under them, and this many rad/s more, spin: the gearbox goes by the ground
+static const float kGripSpeed = 2.5f;        // m/s the truck goes at the least for the wheels' speed against the ground's to be learned
+static const float kGripSteady = 0.05f;      // and the wheels within this share of their smoothed speed and of each other, the truck gaining or losing
+static const float kGripSpread = 0.15f;      // under kGripGain rad/s each second: no bump, no wheel off the ground, no start
+static const float kGripGain = 1.0f;
+static const float kGripFall = 2.0f, kGripRise = 20.0f; // seconds the grip takes to follow a lower reading, and a higher one
+static const float kSlipShare = 1.4f, kSlipSpare = 1.0f; // wheels this much faster than the ground under them, and this many rad/s more, spin: the gearbox goes by the ground
+static const float kDownMost = 0.9f;         // no shift down puts the engine, at the speed the wheels turn, further than this from idle to the red zone
 static const float kShiftUpAfter = 0.4f, kShiftDownAfter = 0.5f, kCoastDownAfter = 0.3f; // seconds a shift up, a shift down and one with the foot off has to be called for before it is made
 static const float kPedalFall = 0.5f;        // the pedal the shift points go by follows a lifted foot down this much each second: a lift is no call to shift up
 
@@ -1002,8 +1025,9 @@ struct GearboxModel
     float pause;       // seconds until it may shift again
     float spin;        // the driven wheels' speed, smoothed over kShiftSmooth
     float grip;        // rad/s the driven wheels turn for each m/s the truck goes, as learned where they grip; 0 before
-    float by;          // the speed the shifts go by in rad/s of the wheels: the ground's once grip is known, else spin
+    float by;          // the truck's speed in rad/s of the wheels: the ground's once grip is known, else spin
     float trend;       // how fast that changes, rad/s each second, smoothed over kTrendSmooth
+    float labour;      // seconds the truck has been losing speed with the foot on
     bool spinning;     // the wheels turn faster than the ground goes under them
     float wanted;      // seconds a shift has been called for, above 0 up and below 0 down
     float feel;        // the pedal the shift points go by: up with the foot at once, down at kPedalFall
@@ -1027,9 +1051,9 @@ inline float GearboxPoint(const GaugeScale &k, float share) { return k.idle + (k
 // (PowertrainModel). In the high gear, the low range, neutral and reverse the game's gearbox is left as it is, and the
 // model only follows the wheels.
 //
-// The shifts go by the ground's speed in the wheels' terms, as a truck's automatic goes by its output shaft, but
-// neither wheelspin in mud nor wheels locked under the brake shift it; before the wheels' grip is learned they go by
-// the wheels' speed smoothed. The shift points lie between idle and the red zone and go by a pedal that falls slowly
+// The shifts go by the wheels' speed, as a truck's automatic goes by its output shaft, but neither wheelspin in mud nor
+// wheels locked under the brake shift it, once the wheels' speed against the ground's is learned; no shift down puts
+// the engine near the red zone at the speed the wheels turn. The shift points lie between idle and the red zone and go by a pedal that falls slowly
 // after a lift, so a foot floored and lifted by turns does not shift up at each lift. With the foot off it never
 // shifts up short of the red zone, and shifts down early, gears at a time when the truck slows hard. A truck slowing
 // with the foot on is climbing: the points go where floored puts them, and stay there kClimbHold after, so it shifts
@@ -1059,42 +1083,52 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     if (m.gear < 1 || m.gear > top) m.gear = 1;
     // the wheels' speed smoothed
     m.spin += (raw - m.spin) * (1.0f - expf(-dt / kShiftSmooth));
-    // the ground's speed in the wheels' terms: the least the wheels turn for each m/s with the foot on and no brake,
-    // where they cannot turn slower than the ground goes
-    const float ground = isfinite(t.speed) ? fabsf(t.speed) : 0.0f;
-    if (p > 0.1f && TruckBrake(t) == 0.0f && ground > kGripSpeed && raw > 1.0f)
+    // the wheels' speed against the ground's, learned where they cannot turn slower than the ground goes and turn
+    // steadily: the foot on, no brake, no handbrake, all driven wheels alike and the truck neither starting nor
+    // braking. A lower reading is followed over kGripFall, so a bump that slows the wheels for a moment does not count.
+    // The ground's speed is the truck's forwards: sliding back down a slope in a forward gear it goes nowhere
+    const float ground = isfinite(t.speed) && t.speed > 0.0f ? t.speed : 0.0f;
+    const bool steady = fabsf(raw - m.spin) < kGripSteady * raw && TruckDrivenSpread(t) < kGripSpread && fabsf(m.trend) < kGripGain;
+    if (p > 0.2f && TruckBrake(t) == 0.0f && !t.handbrake && ground > kGripSpeed && raw > 1.0f && steady)
     {
         const float r = raw / ground;
-        m.grip = m.grip > 0.0f && r > m.grip ? m.grip + (r - m.grip) * dt / kGripDrift : r;
+        m.grip = m.grip > 0.0f ? m.grip + (r - m.grip) * (1.0f - expf(-dt / (r < m.grip ? kGripFall : kGripRise))) : r;
     }
-    // the speed the shifts go by: the ground's once it is known, which neither lags behind a quick pull or a hard stop
-    // nor is fooled by wheels spinning in mud or locked under the brake; the wheels' smoothed before. And how fast it
-    // changes
-    const float by = m.grip > 0.0f ? m.grip * ground : m.spin, before = m.by;
-    m.by = by;
-    if (dt > 0.0f) m.trend += ((by - before) / dt - m.trend) * (1.0f - expf(-dt / kTrendSmooth));
-    m.spinning = m.grip > 0.0f && m.spin > by * kSlipShare + kSlipSpare;
+    // the truck's speed in the wheels' terms (the ground's once the grip is known), and how fast it changes
+    const float onGround = m.grip * ground, before = m.by;
+    m.by = m.grip > 0.0f ? onGround : m.spin;
+    if (dt > 0.0f) m.trend += ((m.by - before) / dt - m.trend) * (1.0f - expf(-dt / kTrendSmooth));
+    // the speed the shifts go by: the wheels', at the most kSlipShare over the ground's, so wheelspin in mud does not
+    // shift up; with the foot off the ground's where the wheels turn slower, so wheels locked under the brake do not
+    // shift down; and the speed the wheels will turn at after a shift down, for the engine's sake
+    const float pace = m.grip > 0.0f ? fminf(m.spin, onGround * kSlipShare + kSlipSpare) : m.spin;
+    const float coast = m.grip > 0.0f ? fmaxf(raw, onGround) : m.spin, rolling = fmaxf(fmaxf(raw, m.spin), onGround);
+    m.spinning = m.grip > 0.0f && m.spin > onGround * kSlipShare + kSlipSpare;
     // where it would shift at this pedal, at floored's while climbing
-    const bool footOff = p < kFootOff, labouring = !footOff && m.trend < -kLabouring;
+    const bool footOff = p < kFootOff;
+    m.labour = !footOff && m.trend < -kLabouring ? m.labour + dt : 0.0f;
+    const bool labouring = m.labour >= kLabourAfter;
     if (labouring) m.climb = kClimbHold;
     else if (m.climb > 0.0f) m.climb -= dt;
     const float feel = m.climb > 0.0f ? 1.0f : m.feel;
     const float up = GearboxPoint(k, kShiftUpLight + (kShiftUpFloored - kShiftUpLight) * feel);
     const float down = GearboxPoint(k, kShiftDownLight + (kShiftDownFloored - kShiftDownLight) * feel);
-    const float coastDown = GearboxPoint(k, kCoastDown), coastTo = GearboxPoint(k, kCoastDownTo);
-    const float now = GearboxInput(t, k, m.gear, by), lower = GearboxInput(t, k, m.gear - 1, by);
+    const float coastDown = GearboxPoint(k, kCoastDown), coastTo = GearboxPoint(k, kCoastDownTo), most = GearboxPoint(k, kDownMost);
+    const float by = footOff ? coast : pace, now = GearboxInput(t, k, m.gear, by), lower = GearboxInput(t, k, m.gear - 1, by);
+    // a lower gear the engine can take at the speed the wheels turn
+    auto fits = [&](int gear) { return GearboxInput(t, k, gear, rolling) < most; };
     int to = m.gear;
     const bool wantUp = m.gear < top && (now > k.redline || (!footOff && !labouring && now >= up && GearboxInput(t, k, m.gear + 1, by) >= down * kShiftRoom));
-    const bool wantDown = m.gear > 1 && (footOff ? now < coastDown && lower < coastTo : now < down && lower < up);
+    const bool wantDown = m.gear > 1 && fits(m.gear - 1) && (footOff ? now < coastDown && lower < coastTo : now < down && lower < up);
     m.wanted = wantUp ? fmaxf(m.wanted, 0.0f) + dt : wantDown ? fminf(m.wanted, 0.0f) - dt : 0.0f;
     // all but standing, the first gear at once, whatever the pause: an automatic is in it by the time the truck stops,
     // also after a hard stop that left no time for the shifts down one by one
-    if (m.gear > 1 && GearboxInput(t, k, 1, fmaxf(raw, by)) < k.redline * kStopShift)
+    if (m.gear > 1 && GearboxInput(t, k, 1, fmaxf(raw, m.by)) < k.redline * kStopShift)
         to = 1;
-    else if (m.kick > 0.0f && m.gear > 1 && lower < GearboxPoint(k, kKickdownTo))
+    else if (m.kick > 0.0f && m.gear > 1 && lower < GearboxPoint(k, kKickdownTo) && fits(m.gear - 1))
     {
         // a kickdown, at once and whatever the pause: the lowest gear that keeps the engine under kKickdownTo
-        while (to > 1 && GearboxInput(t, k, to - 1, by) < GearboxPoint(k, kKickdownTo)) to--;
+        while (to > 1 && GearboxInput(t, k, to - 1, by) < GearboxPoint(k, kKickdownTo) && fits(to - 1)) to--;
         m.kick = 0.0f;
     }
     else if (m.pause <= 0.0f)
@@ -1105,7 +1139,7 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
         {
             // coasting down: as far as the engine stays under coastTo, gears at a time when the truck slows hard
             to = m.gear - 1;
-            while (to > 1 && GearboxInput(t, k, to, by) < coastDown && GearboxInput(t, k, to - 1, by) < coastTo) to--;
+            while (to > 1 && GearboxInput(t, k, to, by) < coastDown && GearboxInput(t, k, to - 1, by) < coastTo && fits(to - 1)) to--;
         }
         else if (!footOff && m.wanted <= -kShiftDownAfter)
             to = m.gear - 1;
@@ -1136,9 +1170,9 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
 // driving: the mod's automatic sets the game's gears (TakeoverModel).
 inline void GearboxProbeText(const TruckRaw &t, const GearboxModel &m, bool driving, char *out, size_t size)
 {
-    sprintf_s(out, size, "automatic (%s): gear %d of %d (the game's %d), %s, input %.0f rpm, engine %.0f rpm, torque x%.2f, to the wheels %.2f | %s%s%d shifts",
+    sprintf_s(out, size, "automatic (%s): gear %d of %d (the game's %d), %s, input %.0f rpm, engine %.0f rpm, torque x%.2f, to the wheels %.2f | wheels %.2f rad/s for each m/s%s | %s%s%d shifts",
               driving ? "the mod's, setting the game's gears" : "not handed to the game", m.gear, TruckTopGear(t), t.gearEngaged, m.locked ? "locked up" : "converter slipping",
-              m.input, m.rpm, m.ratio, m.drive, m.climb > 0.0f ? "climbing, " : "", m.spinning ? "wheels spinning, going by the ground, " : "", m.shifts);
+              m.input, m.rpm, m.ratio, m.drive, m.grip, m.grip > 0.0f ? "" : " (not learned yet)", m.climb > 0.0f ? "climbing, " : "", m.spinning ? "wheels spinning, going by the ground, " : "", m.shifts);
 }
 
 // ---- the mod's automatic in the game ----
@@ -1148,7 +1182,8 @@ inline void GearboxProbeText(const TruckRaw &t, const GearboxModel &m, bool driv
 // transmission mod sets a gear from a key. The player gets the gearbox back by picking a gear by hand: a gear the
 // mod did not set, once the last one it set has had kTakeSettle to arrive. The game's flag up again (A picked once
 // more, or the shift modifier tapped) asks the game's own automatic for a gear: the mod takes that gear on and holds
-// it kTakeHold before its own shift points go on from there.
+// it kTakeHold before its own shift points go on from there. Another numbered gear within that time (the game or
+// another mod going back on the pick) is taken on the same way, not read as a gear picked by hand.
 static const float kTakeSettle = 0.5f;       // seconds the game has to take a gear the mod set before another gear is the player's
 static const float kTakeHold = 2.0f;         // seconds the gear the game's own automatic picked holds
 static const float kTakeLowPower = 0.02f;    // the power factor this far under the most it was while the mod drove: a low gear picked by hand
@@ -1162,6 +1197,7 @@ struct TakeoverModel
     int shifts;        // gears set since it took the gearbox
     int handBacks;     // times it gave the gearbox back
     int lastHandBack;  // why, the last time: one of the kTake... reasons
+    bool adopted;      // the gear it holds is one the game's own automatic picked, not one it set
 };
 enum { kTakeNone, kTakePicked, kTakeLow, kTakeOff, kTakeGone };
 
@@ -1208,6 +1244,13 @@ inline TakeoverOrders TakeoverStep(TakeoverModel &m, const TruckRaw &t, int mode
     // the player's
     if (t.powerFactor > m.power) m.power = t.powerFactor;
     const bool outside = t.gear < 1 || t.gear > top;
+    if (!outside && !t.automatic && t.gear != m.set && m.adopted && m.since < kTakeHold && t.powerFactor >= m.power - kTakeLowPower)
+    {
+        // the gear the game's own automatic picked, gone back on within the hold: the gear it went to is taken on
+        o.adopted = t.gear;
+        m.set = t.gear;
+        return o;
+    }
     const bool otherGear = outside || (!t.automatic && t.gear != m.set && m.since >= kTakeSettle), lowGear = t.powerFactor < m.power - kTakeLowPower;
     if (otherGear || lowGear)
     {
@@ -1225,10 +1268,12 @@ inline TakeoverOrders TakeoverStep(TakeoverModel &m, const TruckRaw &t, int mode
         if (m.set) m.shifts++;
         m.set = t.gear;
         m.since = 0.0f;
+        m.adopted = true;
         return o;
     }
     if (want != m.set || (t.automatic && t.gear != want))
     {
+        m.adopted = false;
         o.shiftTo = want;
         if (m.set) m.shifts++;
         m.set = want;

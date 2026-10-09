@@ -1384,8 +1384,27 @@ int main(int argc, char **argv)
             mudWheels(6.0f);
             mud.speed = 6.0f / 2.2f;
             GearboxModel spinning = driving(1);
+            spinning.spin = spinning.by = 6.0f;
             for (float at = 0.0f; at < 1.0f; at += kDt) GearboxStep(spinning, mud, k, 0.5f, 0.5f, kDt);
             const bool learned = Near(spinning.grip, 2.2f, 0.01f) && !spinning.spinning;
+            // a bump: the wheels slowed to half for a moment while the truck rolls on; and the handbrake held with the
+            // foot on. Neither is learned
+            GearboxModel bumped = spinning;
+            TruckRaw bump = mud;
+            for (int i = 0; i < bump.wheels; i++) bump.spin[i] = 3.0f;
+            for (float at = 0.0f; at < 0.3f; at += kDt) GearboxStep(bumped, bump, k, 0.5f, 0.5f, kDt);
+            bump.handbrake = 1;
+            for (float at = 0.0f; at < 2.0f; at += kDt) GearboxStep(bumped, bump, k, 0.5f, 0.5f, kDt);
+            // sliding back down a slope with the wheels turning forwards steadily: the truck goes nowhere forwards
+            TruckRaw sliding = mud;
+            sliding.speed = -2.0f * mud.speed;
+            for (float at = 0.0f; at < 3.0f; at += kDt) GearboxStep(bumped, sliding, k, 0.5f, 0.5f, kDt);
+            // a lower reading held steadily is followed
+            GearboxModel lowered = spinning;
+            TruckRaw firmer = mud;
+            firmer.speed = 6.0f / 2.0f;
+            for (float at = 0.0f; at < 6.0f; at += kDt) GearboxStep(lowered, firmer, k, 0.5f, 0.5f, kDt);
+            const bool robust = Near(bumped.grip, 2.2f, 0.01f) && lowered.grip < 2.05f && lowered.grip >= 2.0f;
             mudWheels(10.5f);
             mud.speed = 2.5f;
             for (float at = 0.0f; at < 3.0f; at += kDt) GearboxStep(spinning, mud, k, 1.0f, 1.0f, kDt);
@@ -1393,8 +1412,22 @@ int main(int argc, char **argv)
             unknown.speed = 0.0f;
             GearboxModel blind = driving(1);
             for (float at = 0.0f; at < 3.0f; at += kDt) GearboxStep(blind, unknown, k, 1.0f, 1.0f, kDt);
-            Check(learned && spinning.spinning && spinning.gear == 1 && blind.gear == 2 && spinning.input > blind.input - 1.0f,
-                  "automatic: wheels spinning faster than the ground goes do not shift up; the engine still turns with them");
+            Check(learned && robust && spinning.spinning && spinning.gear == 1 && blind.gear == 2 && spinning.input > blind.input - 1.0f,
+                  "automatic: wheels spinning faster than the ground goes do not shift up; the engine still turns with them; the wheels' speed against the "
+                  "ground's is learned where they turn steadily, not from a bump, the handbrake or the truck sliding back");
+            // a grip learned far too low (the truck's speed read as under half the wheels'): floored in the top gear, and
+            // a push of the pedal, never shift down into a gear the engine cannot take at the speed the wheels turn
+            TruckRaw fast = g;
+            for (int i = 0; i < fast.wheels; i++) fast.spin[i] = 30.0f;
+            fast.speed = 30.0f / 2.2f;
+            GearboxModel misled = driving(4);
+            misled.spin = misled.by = 30.0f;
+            misled.grip = 0.8f;
+            for (float at = 0.0f; at < 2.0f; at += kDt) GearboxStep(misled, fast, k, 1.0f, 1.0f, kDt);
+            GearboxStep(misled, fast, k, 0.3f, 0.3f, kDt);
+            GearboxStep(misled, fast, k, 1.0f, 1.0f, kDt);
+            Check(misled.gear == 4 && GearboxInput(fast, k, 3, 30.0f) > GearboxPoint(k, kDownMost),
+                  "automatic: no shift down, kickdown or not, puts the engine near the red zone at the speed the wheels turn");
         }
         // braked hard from the top gear to a stop in a second and a half: in the first gear by the time the wheels
         // stop, not left in a high one for the next pull away, and never a shift down that would race the engine
@@ -1454,7 +1487,22 @@ int main(int argc, char **argv)
             const TakeoverOrders tapped = TakeoverStep(take, tk, 3, true, kDt);
             tk.automatic = 0;
             const TakeoverOrders goneOn = TakeoverStep(take, tk, 1, true, 1.0f); // the model in the gear taken on
-            const bool again = tapped.flagDown && tapped.adopted == 1 && tapped.shiftTo == 0 && !goneOn.gaveBack && goneOn.shiftTo == 0 && take.set == 1 && take.driving;
+            bool again = tapped.flagDown && tapped.adopted == 1 && tapped.shiftTo == 0 && !goneOn.gaveBack && goneOn.shiftTo == 0 && take.set == 1 && take.driving;
+            // a tap for the third gear the game goes back on within the hold: taken on too, not a gear picked by hand
+            {
+                TakeoverModel undone = take;
+                TruckRaw tu = tk;
+                tu.automatic = 1;
+                tu.gear = tu.gearEngaged = 3;
+                const TakeoverOrders pick = TakeoverStep(undone, tu, 1, true, kDt);
+                tu.automatic = 0;
+                tu.gear = tu.gearEngaged = 1;
+                const TakeoverOrders back = TakeoverStep(undone, tu, 3, true, 0.6f);
+                const TakeoverOrders later = TakeoverStep(undone, tu, 1, true, 0.1f);
+                tu.gear = tu.gearEngaged = 2;
+                const TakeoverOrders afterHold = TakeoverStep(undone, tu, 1, true, kTakeHold);
+                again = again && pick.adopted == 3 && back.adopted == 1 && !back.gaveBack && later.shiftTo == 0 && !later.gaveBack && afterHold.gaveBack;
+            }
             // reverse picked in A (the game's flag up with it): given back at once, never shifted forwards again
             TruckRaw back = tk;
             back.automatic = 1;
