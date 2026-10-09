@@ -1092,8 +1092,8 @@ int main(int argc, char **argv)
         Heat(m, c, 1, set, 3600.0f, 1.0f, 1.0f, 60.0f);
         const float hard = m.oil - m.temp;
         Heat(m, c, 1, set, 3600.0f, 0.0f, 0.0f, 0.0f);
-        const float idle = m.oil - m.temp;
-        Check(Near(hard, OilOver(1.0f, 1.0f), 0.3f) && Near(OilOver(1.0f, 1.0f), 14.0f, 0.01f) && Near(idle, OilOver(0.0f, 0.0f), 0.3f) && Near(OilOver(0.7f, 0.7f), 8.96f, 0.01f) &&
+        const float idleOver = m.oil - m.temp;
+        Check(Near(hard, OilOver(1.0f, 1.0f), 0.3f) && Near(OilOver(1.0f, 1.0f), 14.0f, 0.01f) && Near(idleOver, OilOver(0.0f, 0.0f), 0.3f) && Near(OilOver(0.7f, 0.7f), 8.96f, 0.01f) &&
               Near(OilOver(0.0f, 1.0f), kOilFriction, 0.01f), "oil: it settles 14 degrees over the coolant floored at the red zone, 9 driven as usual, 4 coasting at the red zone and none at idle");
 
         // a stopped engine: the oil keeps its heat longer than the coolant
@@ -1131,9 +1131,9 @@ int main(int argc, char **argv)
         const int band = beeps(set.oilWarnC - kOilBand + 0.2f, c, 4.0f);
         const bool held = ow.on;
         const int below = beeps(set.oilWarnC - kOilBand - 0.2f, c, 10.0f);
-        const bool off = !ow.on && !OilLamp(ow, 0);
+        const bool dark = !ow.on && !OilLamp(ow, 0);
         const int stopped = beeps(set.oilWarnC + 5.0f, halted, 10.0f);
-        Check(under == 0 && over == 3 && blinks && band == 1 && held && below == 0 && off && stopped == 0,
+        Check(under == 0 && over == 3 && blinks && band == 1 && held && below == 0 && dark && stopped == 0,
               "oil: the warning sounds at once from OilWarnC and every four seconds, the lamp blinks, and both end two degrees under it or with the engine stopped");
         Check(Near(OilBeepGain(50), 0.4f, 0.001f) && OilBeepGain(0) == 0.0f && Near(OilBeepGain(150), kOilBeepLoud, 0.001f), "oil: the warning is as loud as SoundVolume has it");
 
@@ -1154,25 +1154,25 @@ int main(int argc, char **argv)
         f.gear = f.gearEngaged = 1;
         f.automatic = 1;
         f.throttle = -1.0f;
-        const float most = 1.8f;
+        const float mostBar = 1.8f;
         // the boost held at one engine speed, and the seconds to nine tenths of it from none
-        auto held = [&](int profile, float revs) { return BoostTarget(f, revs, most, profile); };
+        auto held = [&](int profile, float revs) { return BoostTarget(f, revs, mostBar, profile); };
         auto rise = [&](int profile, float revs) {
             BoostModel b = {};
             const float to = 0.9f * held(profile, revs);
             for (float at = kDt; at < 20.0f; at += kDt)
-                if (BoostStep(b, f, revs, most, profile, kDt), b.bar >= to) return at;
+                if (BoostStep(b, f, revs, mostBar, profile, kDt), b.bar >= to) return at;
             return -1.0f;
         };
         bool full = true;
-        for (int p = 0; p < kSpoolCount; p++) full = full && Near(held(p, 1.0f), most, 0.001f) && held(p, 0.0f) == 0.0f;
+        for (int p = 0; p < kSpoolCount; p++) full = full && Near(held(p, 1.0f), mostBar, 0.001f) && held(p, 0.0f) == 0.0f;
         const bool early = held(kSpoolQuick, 0.3f) > 2.0f * held(kSpoolStandard, 0.3f) && held(kSpoolLaggy, 0.5f) < 0.5f * held(kSpoolStandard, 0.5f);
-        const bool stages = Near(held(kSpoolTwoStage, 0.35f), 0.4f * most, 0.01f) && Near(held(kSpoolTwoStage, 0.45f), 0.4f * most, 0.01f) &&
-                            held(kSpoolTwoStage, 0.6f) > 0.6f * most;
+        const bool stages = Near(held(kSpoolTwoStage, 0.35f), 0.4f * mostBar, 0.01f) && Near(held(kSpoolTwoStage, 0.45f), 0.4f * mostBar, 0.01f) &&
+                            held(kSpoolTwoStage, 0.6f) > 0.6f * mostBar;
         Check(full && early && stages, "spool: every turbo makes all its boost at the red zone and none at idle; the small one comes in early, the big one late, two stages one after the other");
         const float standard = rise(kSpoolStandard, 1.0f), quick = rise(kSpoolQuick, 1.0f), laggy = rise(kSpoolLaggy, 1.0f), lowLaggy = rise(kSpoolLaggy, 0.85f);
-        const float small = rise(kSpoolTwoStage, 0.4f);
-        Check(Near(standard, 0.35f * logf(10.0f), 0.06f) && quick < 0.6f * standard && laggy > standard && lowLaggy > laggy + 0.1f && small > 0.0f && small < 1.0f,
+        const float firstStage = rise(kSpoolTwoStage, 0.4f);
+        Check(Near(standard, 0.35f * logf(10.0f), 0.06f) && quick < 0.6f * standard && laggy > standard && lowLaggy > laggy + 0.1f && firstStage > 0.0f && firstStage < 1.0f,
               "spool: at the red zone the standard boost is there in 0.8 s, the small turbo's sooner and the big one's later, longer still lower down, and the first of two stages within a second");
         GaugeSettings g;
         SettingsDefaults(g);
@@ -1220,9 +1220,9 @@ int main(int argc, char **argv)
         bool peaks = true;
         for (int c = 0; c < kClassCount; c++)
         {
-            float most = 0.0f;
-            for (float x = 0.0f; x <= 1.0f; x += 0.01f) most = fmaxf(most, TorqueAt(kClassCurves[c], x, top));
-            peaks = peaks && Near(most, 1.0f, 0.001f) && TorqueAt(kClassCurves[c], 1.0f, top) >= 0.8f && TorqueAt(kClassCurves[c], 0.0f, top) >= 0.5f;
+            float mostBar = 0.0f;
+            for (float x = 0.0f; x <= 1.0f; x += 0.01f) mostBar = fmaxf(mostBar, TorqueAt(kClassCurves[c], x, top));
+            peaks = peaks && Near(mostBar, 1.0f, 0.001f) && TorqueAt(kClassCurves[c], 1.0f, top) >= 0.8f && TorqueAt(kClassCurves[c], 0.0f, top) >= 0.5f;
         }
         Check(truck && peaks && TorqueAt(truckCurve, nanf(""), top) == 0.0f,
               "powertrain: each class's curve peaks at its most, keeps 0.8 of it at the red zone and half at idle, and falls to nothing at the tachometer's top");
@@ -1237,9 +1237,9 @@ int main(int argc, char **argv)
         for (float at = 0.0f; at < 1.0f; at += kDt) PowertrainStep(cold, f, truckCurve, 0.7f, top, 0.0f, 0.0f, kDt);
         const bool weak = Near(cold.cold, 1.0f - kColdTorque, 0.001f) && Near(cold.boost, 1.0f - kBoostTorque, 0.001f) &&
                           Near(cold.power, (1.0f - kColdTorque) * (1.0f - kBoostTorque), 0.001f);
-        TruckRaw off = f;
-        off.flags = 0;
-        PowertrainStep(cold, off, truckCurve, 0.7f, top, 90.0f, 1.0f, kDt);
+        TruckRaw stopped = f;
+        stopped.flags = 0;
+        PowertrainStep(cold, stopped, truckCurve, 0.7f, top, 90.0f, 1.0f, kDt);
         Check(weak && cold.power == 0.0f && cold.load == 0.0f, "powertrain: cold oil takes 15 percent of the torque and no boost 35 percent; a stopped engine delivers nothing");
     }
 
@@ -1336,9 +1336,9 @@ int main(int argc, char **argv)
         GearboxModel flat = driving(2);
         for (float at = 0.0f; at < 2.0f; at += kDt) GearboxStep(flat, g, k, 0.0f, 0.0f, kDt);
         Check(held && down.gear == 3 && flat.gear == 3, "automatic: rolling downhill with the foot off it holds the gear for the engine's braking and shifts up only past the red zone");
-        TruckRaw off = g;
-        off.flags = 0;
-        GearboxStep(box, off, k, 1.0f, 1.0f, kDt);
+        TruckRaw stopped = g;
+        stopped.flags = 0;
+        GearboxStep(box, stopped, k, 1.0f, 1.0f, kDt);
         Check(box.drive == 0.0f && box.rpm == 0.0f && TruckBrake(g) == 0.0f, "automatic: a stopped engine drives nothing");
         TruckRaw braking = g;
         braking.throttle = 0.6f;
@@ -1372,15 +1372,15 @@ int main(int argc, char **argv)
         // let up over three seconds with a third of the pedal, the truck pulling away with what the clutch passes on
         // (the gearbox's input gaining 2000 rpm a second for each share of the most torque, as in a first gear)
         ClutchModel pull = {};
-        float lowest = 1e9f, input = 0.0f;
+        float dip = 1e9f, input = 0.0f;
         for (float at = 0.0f; at < 5.0f; at += kDt)
         {
             wheels(TruckGearTop(c, 1) * input / k.redline);
             ClutchStep(pull, c, k, curve, 1.0f - SettingsRange(at / 3.0f, 0.0f, 1.0f), ThrottleShape(0.33f), 1.0f, kDt);
             input = fmaxf(0.0f, input + pull.carried * 2000.0f * kDt);
-            if (at > 0.5f) lowest = fminf(lowest, pull.rpm);
+            if (at > 0.5f) dip = fminf(dip, pull.rpm);
         }
-        Check(pull.stalls == 0 && lowest > k.idle * 0.75f && pull.locked && Near(pull.rpm, pull.input, 1.0f),
+        Check(pull.stalls == 0 && dip > k.idle * 0.75f && pull.locked && Near(pull.rpm, pull.input, 1.0f),
               "clutch: let up slowly with a little pedal as the truck pulls away, the engine dips under its idle without stalling and the clutch locks");
         // let up at speed: the engine turns with the gearbox; pressed again with the foot off, back to idle
         wheels(TruckGearTop(c, 1) * 0.6f);
@@ -1395,9 +1395,9 @@ int main(int argc, char **argv)
         TruckRaw neutral = c;
         neutral.gear = neutral.gearEngaged = 0;
         wheels(0.0f);
-        ClutchModel idle = {};
-        for (float at = 0.0f; at < 1.0f; at += kDt) ClutchStep(idle, neutral, k, curve, 0.0f, 0.0f, 1.0f, kDt);
-        Check(Near(dump.rpm, k.idle, range * 0.03f) && dump.stalled <= 0.0f && idle.stalls == 0 && !idle.connected && Near(idle.rpm, k.idle, range * 0.03f),
+        ClutchModel neutralRun = {};
+        for (float at = 0.0f; at < 1.0f; at += kDt) ClutchStep(neutralRun, neutral, k, curve, 0.0f, 0.0f, 1.0f, kDt);
+        Check(Near(dump.rpm, k.idle, range * 0.03f) && dump.stalled <= 0.0f && neutralRun.stalls == 0 && !neutralRun.connected && Near(neutralRun.rpm, k.idle, range * 0.03f),
               "clutch: a stalled engine starts over after its rest, and in neutral the clutch takes nothing");
         Check(Near(ClutchGrip(0.0f), 1.0f, 0.001f) && ClutchGrip(1.0f) == 0.0f && ClutchGrip(kClutchFree) == 0.0f && Near(ClutchGrip(kClutchBite), 1.0f, 0.001f) &&
                   Near(ClutchGrip(0.5f * (kClutchFree + kClutchBite)), 0.5f, 0.001f),
@@ -1407,56 +1407,56 @@ int main(int argc, char **argv)
     // the brake air: filled by the engine's speed, held between the governor's cut-in and cut-out, drawn by the brake
     // and the handbrake, and leaking with the engine off
     {
-        TruckRaw a = Truck();
-        a.gear = a.gearEngaged = 1;
-        const float idle = k.idle / k.redline;
+        TruckRaw airTruck = Truck();
+        airTruck.gear = airTruck.gearEngaged = 1;
+        const float idleSpeed = k.idle / k.redline;
         // the time to fill an empty tank to the cut-out at idle and at the red zone's speed
         auto fill = [&](float speed) {
             AirModel m = {};
-            AirStep(m, a, speed, kDt);
+            AirStep(m, airTruck, speed, kDt);
             m.bar = 0.0f;
             m.pumping = true;
             float at = 0.0f;
             while (m.pumping && at < 600.0f)
             {
-                AirStep(m, a, speed, kDt);
+                AirStep(m, airTruck, speed, kDt);
                 at += kDt;
             }
             return at;
         };
-        const float atIdle = fill(idle), atRed = fill(1.0f);
+        const float atIdle = fill(idleSpeed), atRed = fill(1.0f);
         Check(atIdle > 140.0f && atIdle < 220.0f && atRed > 45.0f && atRed < 75.0f, "brake air: an empty tank fills in about three minutes at idle and one at the red zone");
         // ten minutes at idle with a half press of the brake every ten seconds: the compressor rests until the cut-in,
         // and the needle stays between the two
         AirModel gov = {};
-        float lowest = 100.0f, highest = 0.0f, startedAt = -1.0f;
+        float airLow = 100.0f, airHigh = 0.0f, startedAt = -1.0f;
         int presses = 0;
         for (int step = 0; step < (int)(600.0f / kDt); step++)
         {
             const int inTen = step % (int)(10.0f / kDt);
             const bool press = inTen < (int)(2.0f / kDt);
-            a.throttle = press ? 0.5f : 0.0f;
+            airTruck.throttle = press ? 0.5f : 0.0f;
             presses += inTen == 0 ? 1 : 0;
-            const bool before = gov.pumping;
-            AirStep(gov, a, idle, kDt);
-            if (gov.pumping && !before && startedAt < 0.0f) startedAt = gov.bar;
-            lowest = fminf(lowest, gov.bar);
-            highest = fmaxf(highest, gov.bar);
+            const bool wasPumping = gov.pumping;
+            AirStep(gov, airTruck, idleSpeed, kDt);
+            if (gov.pumping && !wasPumping && startedAt < 0.0f) startedAt = gov.bar;
+            airLow = fminf(airLow, gov.bar);
+            airHigh = fmaxf(airHigh, gov.bar);
         }
-        a.throttle = 0.0f;
-        Check(presses == 60 && startedAt <= kAirCutIn + 0.001f && startedAt > kAirCutIn - kBrakeAir && lowest > kAirCutIn - kBrakeAir - 0.05f && highest <= kAirCutOut + 0.001f &&
+        airTruck.throttle = 0.0f;
+        Check(presses == 60 && startedAt <= kAirCutIn + 0.001f && startedAt > kAirCutIn - kBrakeAir && airLow > kAirCutIn - kBrakeAir - 0.05f && airHigh <= kAirCutOut + 0.001f &&
                   gov.cutOuts >= 1,
               "brake air: the governor starts the compressor at the cut-in and stops it at the cut-out, and the needle stays between them while braking at idle");
         // with the engine off: seven full brake applications leave it over the red zone, the eighth takes it in
-        TruckRaw off = a;
-        off.flags = 0;
+        TruckRaw stopped = airTruck;
+        stopped.flags = 0;
         AirModel fan = {};
-        AirStep(fan, off, 0.0f, kDt);
+        AirStep(fan, stopped, 0.0f, kDt);
         auto press = [&](float how) {
-            off.throttle = how;
-            AirStep(fan, off, 0.0f, kDt);
-            off.throttle = 0.0f;
-            AirStep(fan, off, 0.0f, kDt);
+            stopped.throttle = how;
+            AirStep(fan, stopped, 0.0f, kDt);
+            stopped.throttle = 0.0f;
+            AirStep(fan, stopped, 0.0f, kDt);
         };
         for (int i = 0; i < 7; i++) press(1.0f);
         const float afterSeven = fan.bar;
@@ -1464,14 +1464,14 @@ int main(int argc, char **argv)
         Check(afterSeven > kAirWarn && fan.bar < kAirWarn, "brake air: with the engine off seven full brake applications leave it over the red zone, the eighth takes it in");
         // the handbrake let go takes the spring brakes' air; ten minutes standing with the engine off lose a bar
         AirModel spring = {};
-        off.handbrake = 1;
-        AirStep(spring, off, 0.0f, kDt);
-        off.handbrake = 0;
-        const float before = spring.bar;
-        AirStep(spring, off, 0.0f, kDt);
-        const float released = before - spring.bar;
-        for (float at = 0.0f; at < 600.0f; at += kDt) AirStep(spring, off, 0.0f, kDt);
-        Check(Near(released, kSpringAir, 0.01f) && Near(before - released - spring.bar, 1.0f, 0.02f), "brake air: letting the handbrake go takes the spring brakes' air, and it leaks a bar in ten minutes standing");
+        stopped.handbrake = 1;
+        AirStep(spring, stopped, 0.0f, kDt);
+        stopped.handbrake = 0;
+        const float charged = spring.bar;
+        AirStep(spring, stopped, 0.0f, kDt);
+        const float released = charged - spring.bar;
+        for (float at = 0.0f; at < 600.0f; at += kDt) AirStep(spring, stopped, 0.0f, kDt);
+        Check(Near(released, kSpringAir, 0.01f) && Near(charged - released - spring.bar, 1.0f, 0.02f), "brake air: letting the handbrake go takes the spring brakes' air, and it leaks a bar in ten minutes standing");
     }
 
     // what the temperature costs the engine

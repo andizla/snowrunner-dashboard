@@ -1,7 +1,8 @@
 @echo off
 rem Brings this folder up to the branch, builds, runs the tests and installs out\Gauges.asi into the game, keeping
 rem the one it replaces as out\rollback\Gauges_previous.asi. Close the game first. Nothing is installed when the
-rem build or a test fails.
+rem build or a test fails. All the build and the tests print goes to out\build.log and out\test.log; the window
+rem shows the errors and the failed tests.
 rem   update.bat [the game's Sources\Bin folder]
 rem Without a folder the Steam default is used. Run it from a cmd window or by a double click.
 setlocal
@@ -16,11 +17,13 @@ git fetch origin || goto fail
 git merge --ff-only origin/%BRANCH% || goto fail
 git push origin main || goto fail
 
-echo == the build
-call build.bat || goto fail
+if not exist out mkdir out
+echo == the build: a minute or two, all it prints goes to out\build.log
+call build.bat > out\build.log 2>&1 || goto buildfail
 
-echo == the tests
-call test.bat || goto fail
+echo == the tests: all they print goes to out\test.log
+call test.bat > out\test.log 2>&1 || goto testfail
+findstr /c:"TEST OK" /c:"TESTS OK" out\test.log
 
 echo == the install
 tasklist /fi "imagename eq SnowRunner.exe" 2>nul | find /i "SnowRunner.exe" >nul && goto running
@@ -35,6 +38,16 @@ echo The one it replaced is out\rollback\Gauges_previous.asi.
 pause
 exit /b 0
 
+:buildfail
+echo The errors:
+findstr /i /c:" error " /c:"error C" /c:"error L" /c:"fatal error" /c:"BUILD FAILED" out\build.log
+echo The whole build output is in out\build.log: send me that file.
+goto fail
+:testfail
+echo The tests that failed:
+findstr /c:"FAIL" out\test.log
+echo The whole test output is in out\test.log: send me that file.
+goto fail
 :running
 echo The game is running. Close it and run update.bat again: the build and the tests are done, only the install is left.
 goto fail

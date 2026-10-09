@@ -745,7 +745,7 @@ int main()
               "manual transmission mod: its gears by its own names, the low ones by the power it gave them");
         // the whole way: nothing before the mod's mapping is there, then looked for again only after kSmtLookMs
         SmtReader reader = {};
-        const SmtView none = SmtRead(reader, 20000);
+        const SmtView before = SmtRead(reader, 20000);
         wchar_t mapName[64];
         swprintf(mapName, 64, L"Local\\SnowRunnerMT.State.%lu", GetCurrentProcessId());
         HANDLE mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(SmtBlock), mapName);
@@ -764,7 +764,7 @@ int main()
             InterlockedIncrement(&shared->sequence);
             const SmtView early = SmtRead(reader, 20000 + kSmtLookMs - 1), found = SmtRead(reader, 20000 + kSmtLookMs);
             const SmtView later = SmtRead(reader, 20000 + kSmtLookMs + kSmtStaleMs + 1);
-            through = !none.present && !early.present && found.present && found.gear == 3 && found.vehicle == kVehicle && !later.present;
+            through = !before.present && !early.present && found.present && found.gear == 3 && found.vehicle == kVehicle && !later.present;
             SmtClose(reader);
             UnmapViewOfFile(shared);
         }
