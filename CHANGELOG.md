@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.12.0] 2026-10-10
+
+- The mod's automatic drives the game's gears. `Gearbox=1` (the tab's new Gearbox section) hands the gears to the mod's automatic while the game's shifter is in A: a torque converter (the engine at its stall speed with the pedal floored against a standing truck, at most 2400 rpm, following the road speed with a little slip on the move, locked up from the second gear), shift points that rise with the pedal, a kickdown when floored, the gear held when the foot lifts and rolling downhill, no shift in wheelspin, and the first gear by the time the truck stops. The tachometer and everything that goes by it (the turbo, the heat) take the converter's engine speed, and the cluster shows A. The gears are set through the game's own shift function with the game's automatic put down; picking a gear by hand gives the gearbox back, A takes it again. The truck still pulls with the game's own torque. `Gearbox=0`, the default, leaves the game's automatic as it was.
+- The converter's stall speed is at most 2400 rpm: a fast revving engine stops well short of its red zone floored against a standing truck.
+
 ## [0.11.3] 2026-10-09
 
 - The outside temperature goes by the map. The mod reads which map you are on from the game's save (the map it loaded last), and the `[Map:<name>]` sections now carry the game's own names: one for each of its 21 regions (`[Map:Michigan]`, `[Map:Zurdania]`), and a map can have one apart from its region's (`[Map:Black River]`). A map of a mod goes by its id. `Gauges.log` says the map, its region and the section in force when it changes, and the Gauges tab names them under the outside temperature.

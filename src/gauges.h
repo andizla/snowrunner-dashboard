@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#define GAUGES_VERSION "0.11.3"
+#define GAUGES_VERSION "0.12.0"
 
 // The exe the addresses in this mod are from (SnowRunner on Steam, the build of 22 July 2026). On any other the mod
 // stands down.
@@ -45,6 +45,7 @@ enum { kFaceSolid, kFaceTinted, kFaceOpen, kFaceCount };     // GaugeSettings::s
 enum { kClassTruck, kClassScout, kClassHeavy, kClassCount }; // GaugeSettings::tachClass
 enum { kOilOff, kOilNeedle, kOilDial, kOilGaugeCount };      // GaugeSettings::oilGauge
 enum { kSpoolStandard, kSpoolQuick, kSpoolLaggy, kSpoolTwoStage, kSpoolCount }; // GaugeSettings::boostProfile
+enum { kGearboxGame, kGearboxModel, kGearboxCount };          // GaugeSettings::gearbox
 
 // Everything in Gauges.ini ([Gauges]); the Gauges tab in ReShade's overlay edits all of it.
 struct GaugeSettings
@@ -62,6 +63,7 @@ struct GaugeSettings
     float idleRpm, redlineRpm, maxRpm, speedMax;  // IdleRpm, RedlineRpm, MaxRpm, SpeedMax: 0 = the class's own
     float boostMax;          // BoostMax: the boost in bar the turbo reaches with the pedal floored at high engine speed; 0 = the class's own
     int boostProfile;        // BoostProfile: how the turbo builds its boost: 0 standard, 1 small and quick, 2 big and slow, 3 two stages
+    int gearbox;             // Gearbox: 0 the game's own automatic, 1 the mod's: a torque converter and its own shift points pick the gears in A
     float rollWarnDeg, rollDangerDeg; // RollWarnDeg, RollDangerDeg: degrees of lean to the side from which the tilt lamp is amber, and red
     float pitchDangerDeg;    // PitchDangerDeg: degrees up or down a slope from which the tilt lamp is red
     float warmUpMinutes;     // WarmUpMinutes: minutes a cold engine takes from 15 C to 85 C when it is driven as usual
@@ -95,6 +97,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.oilGauge = kOilNeedle;
     s.tachClass = kClassTruck;
     s.boostProfile = kSpoolStandard;
+    s.gearbox = kGearboxGame;
     s.rollWarnDeg = 15.0f;
     s.rollDangerDeg = 25.0f;
     s.pitchDangerDeg = 35.0f;
@@ -152,6 +155,7 @@ inline void SettingsClamp(GaugeSettings &s)
     s.speedMax = SettingsOverride(s.speedMax, kSpeedMaxRange);
     s.boostMax = SettingsOverride(s.boostMax, kBoostRange);
     s.boostProfile = s.boostProfile < 0 || s.boostProfile >= kSpoolCount ? kSpoolStandard : s.boostProfile;
+    s.gearbox = s.gearbox < 0 || s.gearbox >= kGearboxCount ? kGearboxGame : s.gearbox;
     s.oilGauge = s.oilGauge < 0 || s.oilGauge >= kOilGaugeCount ? kOilNeedle : s.oilGauge;
     s.rollWarnDeg = SettingsRange(s.rollWarnDeg, kTiltRange[0], kTiltRange[1]);
     s.rollDangerDeg = SettingsRange(s.rollDangerDeg, s.rollWarnDeg, kTiltRange[1]); // red never comes before amber

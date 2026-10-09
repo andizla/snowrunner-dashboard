@@ -178,6 +178,26 @@ inline void TachStep(TachModel &m, const TruckRaw &t, const GaugeScale &k, float
     if (!(m.rpm >= 0.0f)) m.rpm = 0.0f;
 }
 
+// One step of the needle towards an engine speed worked out elsewhere (the converter of the mod's automatic, while it
+// drives the game's gears), with the needle's own lag; starting, stalling and stopped as TachTarget has them.
+inline void TachFollow(TachModel &m, const TruckRaw &t, const GaugeScale &k, float rpm, float dt)
+{
+    float target = !TruckEngineOn(t) ? 0.0f : t.startTimer > 0.0f && !(t.flags & 2) ? TachTarget(t, k) : rpm;
+    const float alive = SettingsRange(1.0f - kStallRate * t.stall, 0.0f, 1.0f);
+    target *= alive * alive;
+    m.gear = t.gearEngaged;
+    m.dip = 0.0f;
+    if (!m.running || !(target >= 0.0f))
+    {
+        m.rpm = target >= 0.0f ? target : 0.0f;
+        m.running = true;
+        return;
+    }
+    const float tau = !TruckEngineOn(t) ? kTachOff : target > m.rpm ? kTachUp : kTachDown;
+    m.rpm += (target - m.rpm) * (1.0f - expf(-dt / tau));
+    if (!(m.rpm >= 0.0f)) m.rpm = 0.0f;
+}
+
 // How far the needle stands on the way from idle to the red zone, 0 to 1.
 inline float TachShare(const TachModel &m, const GaugeScale &k)
 {
@@ -940,6 +960,7 @@ static const float kShiftPause = 1.0f;       // seconds from one shift to the ne
 static const float kKickdown = 0.9f;         // a pedal this far down kicks down to the lowest gear that keeps the engine under kKickdownTo
 static const float kKickdownTo = 0.85f;
 static const float kStallSpeed = 0.75f;      // the converter's stall speed as a share of the red zone's: where a floored engine stops against a standing truck
+static const float kStallRpmMost = 2400.0f;  // and at the most this: a fast revving engine's converter stalls well short of its red zone
 static const float kConverterSlip = 0.04f;   // an unlocked converter turns the engine this much faster than the gearbox's input
 static const float kCouplingPoint = 0.85f;   // from this ratio of the gearbox's input speed to the engine's the converter multiplies nothing
 static const float kStallRatio = 2.0f;       // and at the stall it doubles the torque
@@ -951,6 +972,9 @@ static const float kShiftSmooth = 0.5f;      // seconds the wheels' speed is smo
 static const float kSpinning = 6.0f;         // rad/s each second the driven wheels gain or lose beyond this: they spin or grip again, and nothing shifts
 static const float kShiftUpAfter = 0.4f, kShiftDownAfter = 0.8f; // seconds a shift up, and a shift down, has to be called for before it is made
 static const float kPedalFall = 0.5f;        // the pedal the shift points go by follows a lifted foot down this much each second: a lift is no call to shift up
+
+// The converter's stall speed: where a floored engine stops against a standing truck.
+inline float ConverterStall(const GaugeScale &k) { return fmaxf(fminf(k.redline * kStallSpeed, kStallRpmMost), k.idle); }
 
 // The brake as held, 0 to 1: the side of the pedal opposite to the one that drives.
 inline float TruckBrake(const TruckRaw &t)
@@ -1050,7 +1074,7 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     m.input = GearboxInput(t, k, m.gear, spin);
     if (!m.locked && m.gear >= 2 && m.pause <= 0.0f && m.input >= k.redline * kLockFrom) m.locked = true;
     else if (m.locked && m.input < k.redline * kUnlockBelow) m.locked = false;
-    const float stall = k.idle + (k.redline * kStallSpeed - k.idle) * p;
+    const float stall = k.idle + (ConverterStall(k) - k.idle) * p;
     m.rpm = m.locked ? fmaxf(m.input, k.idle) : fmaxf(fmaxf(m.input * (1.0f + kConverterSlip), stall), k.idle);
     const float speedRatio = m.rpm > 0.0f ? m.input / m.rpm : 1.0f;
     m.ratio = m.locked || speedRatio >= kCouplingPoint ? 1.0f : 1.0f + (kStallRatio - 1.0f) * (1.0f - speedRatio / kCouplingPoint);
@@ -1061,10 +1085,102 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
 }
 
 // The gearbox in a line of text for the probe log, beside the game's own gear.
-inline void GearboxProbeText(const TruckRaw &t, const GearboxModel &m, char *out, size_t size)
+// driving: the mod's automatic sets the game's gears (TakeoverModel).
+inline void GearboxProbeText(const TruckRaw &t, const GearboxModel &m, bool driving, char *out, size_t size)
 {
-    sprintf_s(out, size, "automatic (not handed to the game yet): gear %d of %d (the game's %d), %s, input %.0f rpm, engine %.0f rpm, torque x%.2f, to the wheels %.2f | %d shifts",
-              m.gear, TruckTopGear(t), t.gearEngaged, m.locked ? "locked up" : "converter slipping", m.input, m.rpm, m.ratio, m.drive, m.shifts);
+    sprintf_s(out, size, "automatic (%s): gear %d of %d (the game's %d), %s, input %.0f rpm, engine %.0f rpm, torque x%.2f, to the wheels %.2f | %d shifts",
+              driving ? "the mod's, setting the game's gears" : "not handed to the game", m.gear, TruckTopGear(t), t.gearEngaged, m.locked ? "locked up" : "converter slipping",
+              m.input, m.rpm, m.ratio, m.drive, m.shifts);
+}
+
+// ---- the mod's automatic in the game ----
+// With Gearbox set to the mod's, the model above picks the gears while the player has the game's shifter in A. The
+// game shows A by a flag in the truck's action (TruckRaw::automatic); the mod puts that flag down, so the game's own
+// automatic stops choosing, and sets the model's gear through the game's own shift function, as a manual
+// transmission mod sets a gear from a key. The player gets the gearbox back by picking a gear by hand: a gear the
+// mod did not set, once the last one it set has had kTakeSettle to arrive. The game's flag up again (A picked once
+// more, or the shift modifier tapped) only makes the mod set its own gear again.
+static const float kTakeSettle = 0.5f;       // seconds the game has to take a gear the mod set before another gear is the player's
+
+struct TakeoverModel
+{
+    bool driving;      // the mod has the gearbox
+    float power;       // the power factor when it took it: another one is a low gear picked by hand
+    int set;           // the gear it set last
+    float since;       // seconds since then
+    int shifts;        // gears set since it took the gearbox
+    int handBacks;     // times it gave the gearbox back
+    int lastHandBack;  // why, the last time: one of the kTake... reasons
+};
+enum { kTakeNone, kTakePicked, kTakeLow, kTakeOff, kTakeGone };
+
+// What the mod does to the game on this pass.
+struct TakeoverOrders
+{
+    bool flagDown;     // put the game's automatic flag down
+    int shiftTo;       // set this gear, 0 for none
+    bool took;         // it took the gearbox on this pass
+    bool gaveBack;     // it gave the gearbox back on this pass (lastHandBack says why)
+};
+
+// One pass of dt seconds. enabled: Gearbox is the mod's and the game's shift function is known; t: the truck as
+// read; modelGear: the gear the model wants (GearboxModel::gear). The gearbox is taken when the game's shifter is in A
+// on a numbered gear (from neutral the game puts the first gear in itself as the truck sets off), in the gear the
+// game is in, and given back when the player picks a gear, the setting goes off or the engine stops.
+inline TakeoverOrders TakeoverStep(TakeoverModel &m, const TruckRaw &t, int modelGear, bool enabled, float dt)
+{
+    TakeoverOrders o = {};
+    const int top = TruckTopGear(t);
+    const int want = modelGear < 1 ? 1 : modelGear > top ? top : modelGear;
+    m.since += dt;
+    if (m.driving && (!enabled || !TruckEngineOn(t) || top < 1))
+    {
+        m.driving = false;
+        m.handBacks++;
+        m.lastHandBack = !enabled ? kTakeOff : kTakeGone;
+        o.gaveBack = true;
+        return o;
+    }
+    if (!enabled || !TruckEngineOn(t) || top < 1) return o;
+    if (!m.driving)
+    {
+        // taken in the gear the game is in: the model goes on from there (the caller puts its gear there)
+        if (!t.automatic || t.gear < 1 || t.gear > top) return o;
+        m = TakeoverModel{ true, t.powerFactor, t.gear, 0.0f, 0, m.handBacks, m.lastHandBack };
+        o.took = true;
+        o.flagDown = true;
+        return o;
+    }
+    // reverse, neutral or the high gear (picked in A or not), a gear the mod did not set, or a low gear by its power:
+    // the player's
+    const bool outside = t.gear < 1 || t.gear > top;
+    const bool otherGear = outside || (!t.automatic && t.gear != m.set && m.since >= kTakeSettle), lowGear = fabsf(t.powerFactor - m.power) > 0.02f;
+    if (otherGear || lowGear)
+    {
+        m.driving = false;
+        m.handBacks++;
+        m.lastHandBack = lowGear ? kTakeLow : kTakePicked;
+        o.gaveBack = true;
+        return o;
+    }
+    o.flagDown = t.automatic != 0;
+    if (want != m.set || (t.automatic && t.gear != want))
+    {
+        o.shiftTo = want;
+        if (m.set) m.shifts++;
+        m.set = want;
+        m.since = 0.0f;
+    }
+    return o;
+}
+
+// The game did not take the gear the mod set (its shift function said no): the gear it is in counts as set, so the
+// mod tries again when the model next wants another gear, and the player's gear is told by the next one.
+inline void TakeoverRefused(TakeoverModel &m, const TruckRaw &t) { m.set = t.gear; }
+
+inline const char *TakeoverWhy(int reason)
+{
+    return reason == kTakePicked ? "a gear was picked by hand" : reason == kTakeLow ? "a low gear was picked by hand" : reason == kTakeOff ? "the setting is off" : reason == kTakeGone ? "the engine stopped" : "";
 }
 
 // ---- the clutch ----

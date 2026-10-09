@@ -1265,7 +1265,7 @@ int main(int argc, char **argv)
         GearboxModel box = {};
         wheels(0.0f);
         GearboxStep(box, g, k, 1.0f, 1.0f, kDt);
-        const bool stall = box.gear == 1 && !box.locked && Near(box.rpm, k.redline * kStallSpeed, 1.0f) && Near(box.ratio, kStallRatio, 0.001f) && Near(box.drive, kStallRatio, 0.001f);
+        const bool stall = box.gear == 1 && !box.locked && Near(box.rpm, ConverterStall(k), 1.0f) && Near(box.ratio, kStallRatio, 0.001f) && Near(box.drive, kStallRatio, 0.001f);
         GearboxStep(box, g, k, 0.0f, 0.0f, kDt);
         const bool creep = Near(box.rpm, k.idle, 1.0f) && Near(box.drive, kCreep * kStallRatio, 0.001f);
         Check(stall && creep, "automatic: standing, a floored engine runs at the converter's stall with the torque doubled, and an idling one creeps");
@@ -1348,13 +1348,87 @@ int main(int argc, char **argv)
         for (float at = 0.0f; at < 3.0f; at += kDt)
         {
             wheels(fmaxf(0.0f, TruckGearTop(g, 4) * 0.7f * (1.0f - at / 1.5f)));
-            const int before = halt.gear;
+            const int gearBefore = halt.gear;
             GearboxStep(halt, g, k, 0.0f, 0.0f, kDt);
-            haltShifts += halt.gear != before;
+            haltShifts += halt.gear != gearBefore;
             if (halt.gear == 1 && firstAt < 0.0f) firstAt = at;
         }
         Check(halt.gear == 1 && firstAt >= 1.4f && firstAt < 2.5f && haltShifts <= 3,
               "automatic: braked hard to a stop it is in the first gear within a second of the wheels stopping, not left in a high gear");
+        // the mod's automatic in the game: taken in the game's gear while its shifter is in A, the model's gears set
+        // through the game, given back to a gear picked by hand, a low gear, the setting off or a stopped engine
+        {
+            TruckRaw tk = g;
+            tk.gear = tk.gearEngaged = 2;
+            tk.automatic = 1;
+            TakeoverModel take = {};
+            const TakeoverOrders disabled = TakeoverStep(take, tk, 3, false, kDt);
+            const TakeoverOrders took = TakeoverStep(take, tk, 3, true, kDt);
+            const bool taking = !disabled.took && !disabled.flagDown && take.driving && took.took && took.flagDown && took.shiftTo == 0 && take.set == 2;
+            tk.automatic = 0; // the flag down
+            const TakeoverOrders up = TakeoverStep(take, tk, 3, true, kDt);
+            const TakeoverOrders waiting = TakeoverStep(take, tk, 3, true, 0.3f); // the game still in 2: within kTakeSettle
+            tk.gear = tk.gearEngaged = 3;
+            const TakeoverOrders arrived = TakeoverStep(take, tk, 3, true, 1.0f);
+            const bool shifting = up.shiftTo == 3 && !up.flagDown && take.set == 3 && !waiting.gaveBack && waiting.shiftTo == 0 && !arrived.gaveBack && take.driving;
+            // the shift modifier tapped: the game's flag up and its own gear; the mod sets its gear again
+            tk.automatic = 1;
+            tk.gear = tk.gearEngaged = 1;
+            const TakeoverOrders tapped = TakeoverStep(take, tk, 3, true, kDt);
+            const bool again = tapped.flagDown && tapped.shiftTo == 3 && take.driving;
+            // reverse picked in A (the game's flag up with it): given back at once, never shifted forwards again
+            TruckRaw back = tk;
+            back.gear = back.gearEngaged = -1;
+            TakeoverModel inReverse = take;
+            const TakeoverOrders reversed = TakeoverStep(inReverse, back, 3, true, kDt);
+            const bool reverseHandsBack = reversed.gaveBack && reversed.shiftTo == 0 && !reversed.flagDown && !inReverse.driving;
+            // a gear picked by hand once the mod's has had its time
+            tk.automatic = 0;
+            tk.gear = tk.gearEngaged = 3;
+            TakeoverStep(take, tk, 3, true, 1.0f);
+            tk.gear = tk.gearEngaged = 1;
+            const TakeoverOrders picked = TakeoverStep(take, tk, 3, true, 1.0f);
+            const bool byHand = picked.gaveBack && !take.driving && take.lastHandBack == kTakePicked && picked.shiftTo == 0;
+            // taken again from A; a low gear (another power factor) hands it back, so does the engine stopping
+            tk.automatic = 1;
+            TakeoverStep(take, tk, 1, true, kDt);
+            tk.automatic = 0;
+            tk.powerFactor = 0.2f;
+            const TakeoverOrders lowPicked = TakeoverStep(take, tk, 1, true, kDt);
+            const int lowWhy = take.lastHandBack;
+            tk.powerFactor = 1.0f;
+            tk.automatic = 1;
+            TakeoverStep(take, tk, 1, true, kDt);
+            tk.automatic = 0;
+            tk.flags = 0;
+            const TakeoverOrders stopped = TakeoverStep(take, tk, 1, true, kDt);
+            const bool lowOrOff = lowPicked.gaveBack && lowWhy == kTakeLow && take.lastHandBack == kTakeGone && stopped.gaveBack && !take.driving && take.handBacks == 3;
+            // the game refusing a gear: it counts as set at the game's, so the next wish is set again
+            tk.flags = g.flags;
+            tk.automatic = 1;
+            tk.gear = tk.gearEngaged = 2;
+            TakeoverStep(take, tk, 2, true, kDt);
+            tk.automatic = 0;
+            const TakeoverOrders wish = TakeoverStep(take, tk, 3, true, kDt);
+            TakeoverRefused(take, tk);
+            const TakeoverOrders retry = TakeoverStep(take, tk, 3, true, kDt);
+            Check(taking && shifting && again && reverseHandsBack && byHand && lowOrOff && wish.shiftTo == 3 && retry.shiftTo == 3 && take.driving,
+                  "automatic in the game: taken in the game's gear from A, the model's gears set, set again after the shift modifier, given back to reverse, to a gear "
+                  "or a low gear picked by hand and to a stopped engine, and a gear the game refused set again");
+            // the needle follows the converter's engine speed with its lag; with the engine off it falls to nothing
+            TachModel follow = {};
+            TachFollow(follow, g, k, 1500.0f, kDt);
+            const bool followPlaced = Near(follow.rpm, 1500.0f, 0.5f);
+            for (float at = 0.0f; at < 0.2f; at += kDt) TachFollow(follow, g, k, 3000.0f, kDt);
+            const bool followLagging = follow.rpm > 1500.0f && follow.rpm < 3000.0f;
+            for (float at = 0.0f; at < 3.0f; at += kDt) TachFollow(follow, g, k, 3000.0f, kDt);
+            TruckRaw dead = g;
+            dead.flags = 0;
+            const float gearBefore = follow.rpm;
+            for (float at = 0.0f; at < 5.0f; at += kDt) TachFollow(follow, dead, k, 3000.0f, kDt);
+            Check(followPlaced && followLagging && Near(gearBefore, 3000.0f, 5.0f) && follow.rpm < 50.0f && Near(ConverterStall(k), fminf(k.redline * kStallSpeed, kStallRpmMost), 0.01f),
+                  "automatic in the game: the needle follows the converter's engine speed with its lag, and falls with the engine off; the stall speed at most 2400 rpm");
+        }
         TruckRaw stopped = g;
         stopped.flags = 0;
         GearboxStep(box, stopped, k, 1.0f, 1.0f, kDt);

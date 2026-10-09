@@ -4,7 +4,7 @@ A gauge cluster for the truck you drive in SnowRunner: analogue dials in the sty
 
 The cluster has a speedometer, a tachometer with the gear, fuel with the range, coolant and oil temperature, boost pressure, brake air pressure and nine lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage, cold engine, tilt and oil temperature.
 
-This is version 0.11.3. It reads the truck's own values for the speedometer, the gear, the fuel gauge and seven of the lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage and tilt. The game has no engine speed, no range, no coolant or oil temperature, no boost pressure and no brake air, so the mod works those out from what the truck does, and lights the cold and oil lamps by the temperatures. The temperature also costs the engine: overheating it, or working it hard while cold, adds to the game's own engine damage. `Damage=0` switches that off. The scales of the tachometer and the speedometer and the turbo's boost and character can be set for each kind of truck. The brake air comes from the engine's compressor, which fills the tanks up to 8.2 bar and starts again at 6.9, and each press of the brake and letting the handbrake go draw from them; scouts brake by hydraulics and have no air dial. The outside temperature goes by the map you are on, which the mod reads from the game's save.
+This is version 0.12.0. It reads the truck's own values for the speedometer, the gear, the fuel gauge and seven of the lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage and tilt. The game has no engine speed, no range, no coolant or oil temperature, no boost pressure and no brake air, so the mod works those out from what the truck does, and lights the cold and oil lamps by the temperatures. The temperature also costs the engine: overheating it, or working it hard while cold, adds to the game's own engine damage. `Damage=0` switches that off. The scales of the tachometer and the speedometer and the turbo's boost and character can be set for each kind of truck. The brake air comes from the engine's compressor, which fills the tanks up to 8.2 bar and starts again at 6.9, and each press of the brake and letting the handbrake go draw from them; scouts brake by hydraulics and have no air dial. The outside temperature goes by the map you are on, which the mod reads from the game's save. With `Gearbox=1` an automatic of the mod's own, with a torque converter, picks the gears while the game's shifter is in A.
 
 ## What you need
 
@@ -117,6 +117,18 @@ The cluster keeps its share of the screen: it is twice as large in pixels on a 2
 The flutter comes in three strengths, for a lift at full boost, at half and at little, with three recordings of each. To hear recordings of your own instead, put them in the game's `Sources\Bin` folder as `sounds\turbo_high_1.wav` to `turbo_high_4.wav`, and `turbo_mid_` and `turbo_low_` likewise: WAV files, PCM or float, up to six seconds. A strength with at least one file of yours plays only yours. The oil warning is two short beeps, and `sounds\oil_beep_1.wav` plays in their place. The mod brings every sound to the same loudness, and `Gauges.log` says which ones it plays. The Gauges tab has a button for each strength and one for the oil warning.
 
 The pad is only read. The game sees the toggle buttons too, so pick buttons it does not use while driving.
+
+## The mod's automatic
+
+The game's automatic shifts up at fixed speeds whatever the pedal, never shifts down under load until the engine bogs, and then drops to first. `Gearbox=1` (on the tab: Gearbox, Automatic, "The mod's automatic") hands the gears to an automatic of the mod's own while the game's shifter is in A:
+
+- a torque converter: standing with the pedal floored the engine stops at the converter's stall speed (at most 2400 rpm), and on the move it follows the road speed with a little slip and locks up from the second gear;
+- shifts up later the further the pedal is down, a kickdown to the lowest gear that keeps the engine under the red zone when it is floored, the gear held when the foot lifts and rolling downhill, no shift in wheelspin, and the first gear by the time the truck stops;
+- the tachometer shows the converter's engine speed, and the cluster shows A.
+
+The mod sets its gears through the game's own shift function and puts the game's automatic down while it drives, so the game's shifter shows the gear's number. Picking a gear by hand (a number, L, reverse, neutral or the high gear) hands the gearbox back to you; A takes it again. Tapping the shift modifier is no longer needed, and when you do it the mod sets its own gear again. The pull is still the game's: the truck drives with the game's torque in the gear the mod picks. `Gauges.log` says when the mod takes and gives back the gears, and with `Probe=1` each shift.
+
+It works with a manual transmission mod installed, as long as you drive in A.
 
 ## With the SnowRunner Tire Inflation System
 

@@ -392,6 +392,15 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 "Big and slow: late, and long to come at low revs. Two stages: a small turbo early and a big one after it.");
     }
 
+    ImGui::SeparatorText("Gearbox");
+    static const char *gearboxes[kGearboxCount] = { "The game's own", "The mod's automatic" };
+    PageLabel("Automatic", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::Combo("##gearbox", &s.gearbox, gearboxes, kGearboxCount));
+    PageTip("The mod's automatic picks the gears while the game's shifter is in A: a torque converter, shifts up later the further the pedal is down, "
+            "a kickdown when it is floored, the gear held when the foot lifts, and the first gear as the truck stops. The tachometer shows its engine "
+            "speed. Picking a gear by hand hands the gearbox back to you.");
+
     ImGui::SeparatorText("Controls");
     PageLabel("Toggle key", labelX);
     KeyName(s.toggleKey, buf, sizeof buf);
