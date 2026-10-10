@@ -377,6 +377,43 @@ sections in `Gauges.ini` and written on the first start; the tab names the map a
 `AmbientC` stays the fallback for a map not in the table and while none is read. A change of map moves the
 models' outside temperature, and the trucks left on the other map cool towards their own map's air.
 
+The regions' temperatures, researched on the web (2026-10-10, on the user's "That's guesses tho. Let's see what they
+say"), for the user to check against a drive on each map before any default changes: "i can research them myself
+after an ingame drive so i get a feel about the place. save this in some note." Nothing changed in the mod: the
+defaults in `src/maps.h` and the user's `[Map:<region>]` sections still hold the first guesses. A value is the real
+place's mean daily temperature in the season the game shows there. Found from search extracts only (the
+environment's network blocks the wiki, Wikipedia and Steam pages), so take them as about 2 C either way;
+"uncertain" where sources conflict or are missing. To put them in on the user's word: the new values in
+`kMapRegions`, and a migration that replaces a region's section only where it still holds the old guess.
+
+| Region | What the game shows (source) | Real place, months | Guess | Researched |
+|---|---|---|---|---|
+| Michigan | late autumn, wet, mud, no snow (wiki, VGTimes) | Sault Ste. Marie, Oct to Nov | 12 | 6 |
+| Alaska | midwinter, snow, icy roads (wiki, publisher) | Iliamna by Pedro Bay, Jan to Mar | -12 | -8 |
+| Taymyr | swamp and deep mud, no snow; early summer or spring, uncertain (VGTimes, a trophy guide) | Norilsk, Jun to Jul | -20 | 10 |
+| Kola Peninsula | late winter, thin ice on frozen lakes, Imandra snowy (publisher) | Kandalaksha, Jan to Mar | -10 | -6 |
+| Yukon | winter, Big Salmon Peak snowier, Flooded Foothills more mud (Steam) | Whitehorse, Nov or Mar | -15 | -6 (Flooded Foothills about -2) |
+| Wisconsin | flooded forest, mud, no snow; season not found, uncertain | Rhinelander, Apr to Oct: 5 to 19 | 8 | 13 |
+| Amur | winter, river ice used as road (store text) | Svobodny by the Vostochny cosmodrome, Mar or Nov (Jan -24) | 2 | -10 |
+| Don | autumn (wiki, press) | Rostov-on-Don, Sep to Oct | 16 | 13 |
+| Maine | "on the edge of winter", mud and snow (publisher; the wiki says spring); ice roads on Yellowrock | Bangor, Nov to Dec | 10 | 0 (Yellowrock -2) |
+| Tennessee | summer (wiki, Focus) | Knoxville, Jun to Aug | 20 | 25 |
+| Belozersk Glades | summer, farm fields (wiki); the place it stands for uncertain: Belozersk 17, Krasnodar 25, Ganja 26 in July | | 18 | 22 |
+| Ontario | early autumn, burned forest, no snow (Focus, wiki) | Moosonee, Sep | 5 | 11 |
+| British Columbia | summer, no snow (wiki, stores: "2 new summer maps") | Campbell River, Jul to Aug | 3 | 17 |
+| Scandinavia | spring, snow on Mountain Ridge (wiki); the story's ski resort for "the next winter season" says autumn, uncertain | Lillehammer, May to Jun | -4 | 8 |
+| North Carolina | summer (wiki, Saber) | Raleigh and Durham, Jun to Aug | 22 | 26 |
+| Austria | summer, an alpine valley after rain and landslides (wiki, Focus) | Innsbruck, Jul | 8 | 19 |
+| Quebec | winter, frozen rivers (official store text, players) | Quebec City, Jan to Feb | 0 | -10 |
+| Washington | autumn (wiki) | Bellingham, Oct | 10 | 10 |
+| Chiapas | summer jungle, beaches, mangroves (wiki, press) | Tapachula, Jun to Sep; 25 to 29, uncertain | 26 | 27 |
+| Almaty Region | autumn (wiki only) | Almaty, Sep to Oct | 24 | 14 |
+| Zurdania | autumn, very muddy (wiki, press); Central or Western Asia by the sources, uncertain | Osh, Sep to Oct | 22 | 12 |
+
+Sources: the community wiki (spintires.fandom.com, a page per region), the store and press texts (Steam, Xbox and
+Epic store pages of the seasons, Focus and Saber news, VGTimes), and the Wikipedia climate tables of the towns named
+(climate-data.org for Sault Ste. Marie, Norilsk and Tapachula, weatherapi.com for Svobodny).
+
 Part D, turbo spool profiles. A profile is the turbo's character, apart from `BoostMax` (how much it makes): where
 it starts and finishes making boost (`kBoostRevsFrom`, `kBoostRevsFull`), how long it lags on the way up
 (`kBoostSpool`, `kBoostSpoolLow`) and how fast it falls (`kBoostFall`, `kBoostLift`). A first set for the user to
