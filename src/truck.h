@@ -425,6 +425,7 @@ inline uint64_t TruckKeyNumber(const char *key)
 struct EngineRecord
 {
     bool found;
+    uint64_t at;                            // where the record is
     char name[kMaxText];                    // the engine fitted, by its name in the game's files
     float threshold, torqueMin, torqueMax;  // record + 0x74, + 0x78, + 0x7C
     int capacity;                           // record + 0x84: the damage the engine takes
@@ -502,10 +503,49 @@ inline bool TruckEngineRecord(const TruckMemory &m, uint64_t vehicle, EngineReco
         e.torqueMin = numbers[1];
         e.torqueMax = numbers[2];
         e.capacity = capacity;
+        e.at = record;
         e.found = true;
         return true;
     }
     return false;
+}
+
+// A stretch of the game's memory as text for the probe log, to find where the game keeps a figure its files give (an
+// engine's Torque, a truck's mass): words 4-byte words from the address from, each as a number where it reads as a
+// float of a likely size (0.001 to 10 million, either sign), else in hex, "?" where it cannot be read.
+inline void TruckWordsText(const TruckMemory &m, uint64_t from, int words, char *out, size_t size)
+{
+    size_t n = 0;
+    out[0] = 0;
+    for (int i = 0; i < words && n + 24 < size; i++)
+    {
+        uint32_t word = 0;
+        float f = 0.0f;
+        if (!m.get(from + 4 * (uint64_t)i, word)) n += (size_t)snprintf(out + n, size - n, "%s?", i ? " " : "");
+        else
+        {
+            memcpy(&f, &word, 4);
+            const float a = fabsf(f);
+            n += (size_t)(a >= 0.001f && a <= 1e7f ? snprintf(out + n, size - n, "%s%g", i ? " " : "", f) : snprintf(out + n, size - n, "%s%x", i ? " " : "", word));
+        }
+    }
+}
+
+// The floats from lo to hi in the bytes from the address from, as "+offset value" for the probe log, at most most of
+// them: where a truck's mass may stand. Their count.
+inline int TruckFloatsText(const TruckMemory &m, uint64_t from, int bytes, float lo, float hi, int most, char *out, size_t size)
+{
+    size_t n = 0;
+    int count = 0;
+    out[0] = 0;
+    for (int at = 0; at + 4 <= bytes && count < most && n + 24 < size; at += 4)
+    {
+        float f = 0.0f;
+        if (!m.get(from + (uint64_t)at, f) || !(f >= lo && f <= hi)) continue;
+        n += (size_t)snprintf(out + n, size - n, "%s+%x %g", count ? ", " : "", at, f);
+        count++;
+    }
+    return count;
 }
 
 // What the game's damage update makes of an engine's damage (RVA 0xd6f690). While the damage's share of what the

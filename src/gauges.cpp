@@ -1148,8 +1148,10 @@ static bool SmtManual(const TruckWatch &w, const TruckRaw &raw)
     return w.smt.driving && w.smt.vehicle == w.refs.vehicle && !raw.automatic && !w.take.driving;
 }
 
-// Looks up the record of the driven truck's engine, and says so in the log when it is another one than before.
-static void EngineLook(TruckWatch &w, const TruckMemory &m, ULONGLONG now)
+// Looks up the record of the driven truck's engine, and says so in the log when it is another one than before. With
+// the probe on, the record's first 0x100 bytes and the floats of a mass's size in the vehicle and its model go into
+// the log as well, to find the engine's Torque and the truck's mass.
+static void EngineLook(TruckWatch &w, const TruckMemory &m, ULONGLONG now, bool probe)
 {
     EngineRecord e;
     TruckEngineRecord(m, w.refs.vehicle, e);
@@ -1158,6 +1160,23 @@ static void EngineLook(TruckWatch &w, const TruckMemory &m, ULONGLONG now)
     {
         if (e.found) Log(L"engine: %S takes %d damage; past %.2f of it the torque falls, from x%.2f to x%.2f", e.name, e.capacity, e.threshold, e.torqueMin, e.torqueMax);
         else Log(L"engine: no record of \"%S\" was found; its damage is written without the effect, which the game sets at its next damage event", e.name);
+        if (probe && e.found)
+        {
+            char words[1024];
+            for (int row = 0; row < 4; row++)
+            {
+                TruckWordsText(m, e.at + 0x40 * (uint64_t)row, 16, words, sizeof words);
+                Log(L"probe: engine record + 0x%02x: %S", 0x40 * row, words);
+            }
+        }
+        if (probe && w.refs.vehicle != w.engineVehicle)
+        {
+            char masses[2048];
+            const int inVehicle = TruckFloatsText(m, w.refs.vehicle, 0x1000, 300.0f, 100000.0f, 60, masses, sizeof masses);
+            Log(L"probe: floats of a mass's size in the vehicle (%d): %S", inVehicle, masses);
+            const int inModel = TruckFloatsText(m, w.refs.model, 0x1000, 300.0f, 100000.0f, 60, masses, sizeof masses);
+            Log(L"probe: floats of a mass's size in its model (%d): %S", inModel, masses);
+        }
     }
     w.engine = e;
     w.engineVehicle = w.refs.vehicle;
@@ -1436,7 +1455,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             Log(w.oil.on ? L"oil: %.1f C, too hot from %g C: the lamp blinks and the warning sounds" : L"oil: %.1f C, the warning is over", w.temp.oil, s.oilWarnC);
         // the engine's record, for each truck as it is first driven; one that was not found is looked for again every
         // five seconds
-        if (w.refs.vehicle != w.engineVehicle || (!w.engine.found && now >= w.engineAt)) EngineLook(w, m, now);
+        if (w.refs.vehicle != w.engineVehicle || (!w.engine.found && now >= w.engineAt)) EngineLook(w, m, now, s.probe != 0);
         // what the temperature costs the engine: the whole points wait in owed until they are written. Nothing comes
         // together while the game's window is not in front, as the game may stand still then with its last values.
         const int points = DamageStep(w.damage, w.refs.vehicle, raw, w.temp, TachSpeed(w.tach, scale), s, front ? dt : 0.0f);
@@ -1456,7 +1475,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         {
             DamageWrite d;
             const bool test = w.asked > 0;
-            EngineLook(w, m, now);
+            EngineLook(w, m, now, false);
             if (TruckDamageAdd(m, w.refs, w.owed + w.asked, w.engine, d))
             {
                 char cause[128], effect[256], after[64] = ""; // the effect and the torque factor are the game's: room for numbers of any size

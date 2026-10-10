@@ -648,7 +648,11 @@ speed). `EngineShare` (0 to 100, 50 by default): `TorqueBlend(lift, share) = 1 +
 drive on the scout at 50 percent; whether the start in second leaves heavy trucks too weak to pull away (the stuck
 rule takes the first after a second). Later, owed by the user's idea: per truck figures (the engine's Torque, the
 gears' AngVel, the masses) read from the game's own records, for the curve's height and the start gear by weight.
-Models 144 OK.
+Toward it, with the probe: the engine record's first 0x100 bytes (`TruckWordsText`; the record is at node + 0x40, the
+damage numbers at + 0x74 to + 0x84) and the floats from 300 to 100000 in the vehicle's and the model's first 0x1000
+bytes (`TruckFloatsText`), once a truck. On the scout of the drives the engine's file gives Torque 195000,
+EngineResponsiveness 0.35, MaxDeltaAngVel 0.04 and the bodies 4000, 4000 and 1000 kg: the next probe log should show
+where. Models 144 OK, truck 76.
 
 Part A, research and design note (no hook before the user's OK on the note):
 - Where the game turns the pedal into torque and how the automatic decides a shift: the truck action's per-frame

@@ -450,6 +450,26 @@ int main()
     PutText(kVehicle + 0x968, "us_scout_modern_a", kTexts);
     Check(unknown && TruckEngineRecord(kMemory, kVehicle, e) && e.capacity == 200 && Near(e.threshold, 0.5f),
           "engine: an engine that is in none of the sets has no record, and its neighbour in the tree is found by its own name");
+    // the probe's dumps: the record's words as numbers or in hex, and the floats of a mass's size in a stretch
+    {
+        MakeGame();
+        TruckFind(kMemory, r);
+        EngineRecord dumped;
+        TruckEngineRecord(kMemory, kVehicle, dumped);
+        Put(dumped.at + 0x10, 195000.0f);
+        Put(dumped.at + 0x14, 0.35f);
+        Put(dumped.at + 0x18, (uint32_t)0x12345678u);
+        char words[512], masses[512];
+        TruckWordsText(kMemory, dumped.at + 0x10, 3, words, sizeof words);
+        Put(kVehicle + 0x200, 9000.0f);
+        Put(kVehicle + 0x204, 120000.0f);
+        Put(kVehicle + 0x208, 4000.0f);
+        const int found = TruckFloatsText(kMemory, kVehicle + 0x200, 0x10, 300.0f, 100000.0f, 60, masses, sizeof masses);
+        char unread[64];
+        TruckWordsText(kMemory, 0x100, 1, unread, sizeof unread);
+        Check(dumped.at && !strcmp(words, "195000 0.35 12345678") && found == 2 && !strcmp(masses, "+0 9000, +8 4000") && !strcmp(unread, "?"),
+              "probe: the engine record's words as numbers or in hex, and the floats of a mass's size with their offsets");
+    }
     // memory that is not what it is taken for
     MakeGame();
     PutText(kTexts + 0x100, "e_no_such_set", 0);
