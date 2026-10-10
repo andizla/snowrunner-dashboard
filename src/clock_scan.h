@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <math.h>
 #include <vector>
 #include "truck.h"
@@ -57,13 +58,23 @@ inline void ClockPathText(const ClockPath &p, char *out, size_t size)
 }
 inline bool ClockPathParse(const char *text, ClockPath &p)
 {
-    unsigned rva = 0, a = 0, b = 0;
-    int depth = 0;
-    char type = 0;
-    float scale = 0.0f;
-    if (sscanf(text, "%x,%d,%x,%x,%c,%f", &rva, &depth, &a, &b, &type, &scale) != 6) return false;
-    if (depth < 0 || depth > 2 || (type != 'f' && type != 'd') || !(scale == 1.0f || scale == 24.0f)) return false;
-    p = ClockPath{ rva, depth, { a, b }, type == 'd', scale };
+    // six fields split by commas: three hex numbers around a decimal depth, a letter, a decimal scale
+    const char *at = text;
+    unsigned long v[4] = {};
+    for (int i = 0; i < 4; i++)
+    {
+        char *end = nullptr;
+        v[i] = strtoul(at, &end, i == 1 ? 10 : 16);
+        if (end == at || *end != ',') return false;
+        at = end + 1;
+    }
+    const char type = *at;
+    if ((type != 'f' && type != 'd') || at[1] != ',') return false;
+    char *end = nullptr;
+    const float scale = strtof(at + 2, &end);
+    if (end == at + 2 || *end) return false;
+    if (v[1] > 2 || !(scale == 1.0f || scale == 24.0f)) return false;
+    p = ClockPath{ (uint32_t)v[0], (int)v[1], { (uint32_t)v[2], (uint32_t)v[3] }, type == 'd', scale };
     return true;
 }
 
