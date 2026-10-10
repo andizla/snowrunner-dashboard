@@ -976,7 +976,8 @@ static const float kShiftDownLight = 0.12f;  // and down below this; floored, wh
 static const float kShiftRoom = 1.1f;        // at a light foot a shift up waits until the next gear's speed is this far over the point the gearbox would shift back down at
 static const float kCoastDown = 0.25f, kCoastDownTo = 0.75f; // with the foot off it shifts down below this, as far as the engine stays under kCoastDownTo
 static const float kShiftPause = 1.0f;       // seconds from one shift to the next
-static const float kShiftUpAgain = 0.5f;     // and from a shift up to the next one up: a heavy truck in its low gears goes through them fast
+static const float kShiftAgain = 0.5f;       // and from a shift to the next one the same way: a truck goes through its low gears fast, and
+                                             // slows through them fast up a steep climb
 static const float kKickdown = 0.9f;         // a pedal pushed past this kicks down at once, to the gear that pulls the most in the game
 static const float kKickWindow = 0.5f;       // seconds after the push the kickdown may come in
 static const float kStallSpeed = 0.75f;      // the converter's stall speed as a share of the red zone's: where a floored engine stops against a standing truck
@@ -1193,8 +1194,10 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     const float feel = m.climb > 0.0f ? 1.0f : m.feel;
     const float coastDown = GearboxPoint(k, kCoastDown), coastTo = GearboxPoint(k, kCoastDownTo), most = GearboxPoint(k, kDownMost);
     const float by = footOff ? coast : pace, now = GearboxInput(t, k, m.gear, by), lower = GearboxInput(t, k, m.gear - 1, by);
-    // a shift up with the foot on goes by the ground: wheels spinning in mud or on rocks pull no harder in a taller gear
-    const float byUp = footOff || m.grip <= 0.0f ? by : fminf(pace, onGround * kSlipUp);
+    // a shift up with the foot on goes by the ground: wheels spinning in mud or on rocks pull no harder in a taller gear.
+    // The wheels as they turn now, not smoothed: a scout's first gear is through in a second, a quarter of it in the
+    // smoothing's lag
+    const float byUp = footOff || m.grip <= 0.0f ? by : fminf(raw, onGround * kSlipUp);
     // a lower gear the engine can take at the speed the wheels turn
     auto fits = [&](int gear) { return GearboxInput(t, k, gear, rolling) < most; };
     // what a gear pulls in the game at this speed, against the others
@@ -1219,10 +1222,20 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
         while (g < top && upFrom(g)) g++;
         return g;
     };
+    // with the foot on, a gear the pedal would shift down from, the one below taking the engine and not shifting
+    // straight back up; a shift down lands as far down as the gears would each shift down at once too
+    auto downFrom = [&](int gear) {
+        return gear > 1 && fits(gear - 1) && GearboxInput(t, k, gear, by) < GearboxDownPoint(t, k, gear, feel) &&
+               GearboxInput(t, k, gear - 1, by) < GearboxUpPoint(t, k, gear - 1, feel);
+    };
+    auto downTo = [&](int gear) {
+        int g = gear - 1;
+        while (g > 1 && downFrom(g)) g--;
+        return g;
+    };
     const bool wantUp = m.gear < top && upFrom(m.gear);
     const bool pastIt = m.gear < top && pastIn(m.gear);
-    const bool wantDown = m.gear > 1 && fits(m.gear - 1) &&
-                          (footOff ? now < coastDown && lower < coastTo : now < GearboxDownPoint(t, k, m.gear, feel) && lower < GearboxUpPoint(t, k, m.gear - 1, feel));
+    const bool wantDown = footOff ? m.gear > 1 && fits(m.gear - 1) && now < coastDown && lower < coastTo : downFrom(m.gear);
     m.wanted = wantUp ? fmaxf(m.wanted, 0.0f) + dt : wantDown ? fminf(m.wanted, 0.0f) - dt : 0.0f;
     // all but standing, the first gear at once, whatever the pause: an automatic is in it by the time the truck stops,
     // also after a hard stop that left no time for the shifts down one by one
@@ -1236,7 +1249,7 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     }
     else if (pastIt)
         to = upTo(m.gear); // past the red zone or what the engine can take: up at once, whatever the pause
-    else if (m.pause <= (m.upLast ? kShiftPause - kShiftUpAgain : 0.0f) && m.wanted >= kShiftUpAfter + (kShiftUpAfterFloored - kShiftUpAfter) * feel)
+    else if (m.pause <= (m.upLast ? kShiftPause - kShiftAgain : 0.0f) && m.wanted >= kShiftUpAfter + (kShiftUpAfterFloored - kShiftUpAfter) * feel)
         to = upTo(m.gear);
     else if (m.pause <= 0.0f && footOff && m.wanted <= -kCoastDownAfter)
     {
@@ -1244,8 +1257,8 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
         to = m.gear - 1;
         while (to > 1 && GearboxInput(t, k, to, by) < coastDown && GearboxInput(t, k, to - 1, by) < coastTo && fits(to - 1)) to--;
     }
-    else if (m.pause <= 0.0f && !footOff && m.wanted <= -kShiftDownAfter)
-        to = m.gear - 1;
+    else if (m.pause <= (m.upLast ? 0.0f : kShiftPause - kShiftAgain) && !footOff && m.wanted <= -kShiftDownAfter)
+        to = downTo(m.gear);
     if (to != m.gear)
     {
         m.upLast = to > m.gear;

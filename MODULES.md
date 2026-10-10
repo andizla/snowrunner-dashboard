@@ -593,6 +593,16 @@ version may not, and the wheel class check finds no truck then. The Microsoft St
 Tests: truck 75 OK (the harvest from one made up build, found in another moved by 0x40 with the static 0x800 on).
 Owed: the harvest from the user's Steam build (any drive with Probe=1 on 0.12.11), the signatures into kGlobalSigs,
 and a player on the Epic or Microsoft Store build to try it; not tried under the Microsoft Store's sandbox.
+The user's drive of 21:23 (0.12.10, before 0.12.11 was out: no harvest; the Scania 36 s, the Tacoma TRD 19 minutes, the
+Defender 7). The taps: eleven, each put back, no trading of gears. B4 on the Tacoma, floored and steady: 0.95 at 0.55
+to 0.60 of the gear's top, 0.82 at 0.60 to 0.65, 0.75 at 0.65 to 0.70, 0.63 at 0.70 to 0.75: the third truck on the
+same curve. Found: floored from a standstill the Tacoma (tops 8, 11, 17, 25, 41, 53 rad/s) left first at 0.88 of its
+top and second at 0.89 (21:33:54, 21:34:07: 0 to 3.2 m/s in about a second, the first gear through in one), the shift
+up going by the wheels smoothed over kShiftSmooth; and slowing up climbs it went down a gear a second (21:35:00 to 01:
+6 to 5 to 4, the fifth at 0.29 of its top). 0.12.12: a shift up with the grip known goes by the wheels as they turn,
+held to 1.05 times the ground (0.79 of first's top in a replay at 7 rad/s each second, the 0.15 s of
+kShiftUpAfterFloored the rest); a shift down with the foot on lands as far as the gears would each shift down
+(`downTo`), and a shift down may follow another after kShiftAgain (0.5 s, as up after up). Models 142 OK.
 
 Part A, research and design note (no hook before the user's OK on the note):
 - Where the game turns the pedal into torque and how the automatic decides a shift: the truck action's per-frame

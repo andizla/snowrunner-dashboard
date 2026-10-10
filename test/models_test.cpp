@@ -1328,7 +1328,7 @@ int main(int argc, char **argv)
               "automatic: with the foot off at a low speed it shifts down early, gears at a time, the engine kept under the coast point's top");
         // a push of the pedal past kKickdown at a low speed kicks down at once, skipping a gear, to the gear that pulls
         // the most in the game, and holds it while the pedal stays down until the next gear pulls more; held there
-        // without a push it steps down a gear at a time
+        // without a push it shifts down the same way once the shift down has been called for kShiftDownAfter
         wheels(12.0f);
         GearboxModel kick = driving(4);
         for (float at = 0.0f; at < kKickArm + 0.05f; at += kDt) GearboxStep(kick, g, k, 0.3f, 0.3f, kDt);
@@ -1348,10 +1348,10 @@ int main(int argc, char **argv)
             if (kickHold.gear == 3) kickUpAt = GearboxInput(g, k, 2, TruckDrivenSpin(g));
         }
         wheels(12.0f);
-        Check(beforeKick == 4 && kick.gear == 2 && kick.shifts == 1 && heldFirst == 4 && held4.gear == 3 && kickUpAt >= GearboxUpPoint(g, k, 2, 1.0f) - 1.0f &&
+        Check(beforeKick == 4 && kick.gear == 2 && kick.shifts == 1 && heldFirst == 4 && held4.gear == 2 && held4.shifts == 1 && kickUpAt >= GearboxUpPoint(g, k, 2, 1.0f) - 1.0f &&
                   kickUpAt < GearboxUpPoint(g, k, 2, 1.0f) + 200.0f,
               "automatic: a push of the pedal kicks down at once, gears at a time, to the gear that pulls the most in the game, and holds it while floored until "
-              "the next gear pulls more; a pedal held down steps down");
+              "the next gear pulls more; a pedal held down shifts down as far, a little later");
         // floored with the game's throttle cut to nothing for a pass now and then (as at its shifts): no kickdown, no
         // shift down with the foot off; a lift that lasts is one
         wheels(TruckGearTop(g, 2) * 0.6f);
@@ -1529,6 +1529,53 @@ int main(int argc, char **argv)
             spinUp.spin = TruckDrivenSpin(so);
             for (float at = 0.0f; at < 1.0f; at += kDt) GearboxStep(spinUp, so, sk, 1.0f, 1.0f, kDt);
             Check(spinUp.gear == 2 && spinUp.shifts == 0, "automatic: wheels spinning faster than the ground goes shift nothing up, floored or not");
+        }
+        // the Tacoma's gears (tops 8, 11, 17, 25, 41 and 53 rad/s, 800 to 5600 rpm), the grip learned: floored from a
+        // standstill its first gear is through in about a second, and the shift up comes near its point all the same
+        // (0.67, and kShiftUpAfterFloored on: 0.79), not as late as the smoothed wheels had it (0.88 of the top at
+        // 21:33:54); and up a climb
+        // that slows the truck from the fifth hard, it is down in the gear that pulls the most within a second of
+        // the slowing's end, gears at a time
+        {
+            TruckRaw ta = g;
+            static const float tacomaSpeeds[8] = { 3.0f, 1.5f, 3.0f, 6.0f, 10.0f, 18.0f, 24.0f, 10.0f };
+            ta.gearSpeeds = 8;
+            memcpy(ta.gearSpeed, tacomaSpeeds, sizeof tacomaSpeeds);
+            GaugeScale tk2 = k;
+            tk2.idle = 800.0f;
+            tk2.redline = 5600.0f;
+            tk2.max = 7000.0f;
+            auto tacomaAt = [&](float spin) {
+                for (int i = 0; i < ta.wheels; i++) ta.spin[i] = spin;
+                ta.speed = spin / 2.1f;
+            };
+            GearboxModel launch = {};
+            launch.running = true;
+            launch.gear = 1;
+            launch.grip = 2.1f;
+            float firstUpAt = -1.0f;
+            for (float at = 0.0f; at < 1.5f && firstUpAt < 0.0f; at += kDt)
+            {
+                tacomaAt(7.0f * at);
+                GearboxStep(launch, ta, tk2, 1.0f, 1.0f, kDt);
+                if (launch.gear > 1) firstUpAt = 7.0f * at / TruckGearTop(ta, 1);
+            }
+            GearboxModel slowing = {};
+            slowing.running = true;
+            slowing.gear = 5;
+            slowing.grip = 2.1f;
+            tacomaAt(20.0f);
+            slowing.spin = slowing.by = slowing.rolling = 20.0f;
+            slowing.pedal = slowing.held = slowing.feel = 1.0f;
+            for (float at = 0.0f; at < 2.0f; at += kDt)
+            {
+                tacomaAt(20.0f - 7.0f * at);
+                GearboxStep(slowing, ta, tk2, 1.0f, 1.0f, kDt);
+            }
+            for (float at = 0.0f; at < 1.0f; at += kDt) GearboxStep(slowing, ta, tk2, 1.0f, 1.0f, kDt);
+            Check(firstUpAt > 0.6f && firstUpAt < 0.82f && slowing.gear == 2 && slowing.shifts <= 3,
+                  "automatic: floored from a standstill the first gear is left near its point however fast it goes by; slowing hard up a climb it is "
+                  "down in the gear that pulls the most within a second, gears at a time");
         }
         // a close-ratio box (the Scania's ten gears, tops 7.5 to 30.5 rad/s, 600 to 1930 rpm) floored from a standstill
         // with the grip learned: through the gears faster than a shift a second, skipping gears, never held to its top;

@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.12.12] 2026-10-10
+
+- Floored from a standstill, the mod's automatic leaves first gear near its point. A scout's first gear is through in about a second, and the gearbox went by the wheels' speed smoothed over a quarter second, which put the shift a quarter of the gear late (the Tacoma at 0.88 of first's top and 0.89 of second's). A shift up now goes by the wheels as they turn, held to the truck's speed over the ground.
+- Slowing hard up a climb, it shifts down gears at a time to the gear that pulls the most, and a shift down may follow another after half a second. The Tacoma went 6, 5, 4 a second at a time, by then at 0.29 of the gear's top.
+
 ## [0.12.11] 2026-10-10
 
 - The mod no longer stands down on every build but the Steam one it is made on. On another build (the Epic or Microsoft Store version, or the game after an update) it looks for the places it reads by the game's code that uses them, logs what it found, and runs where it finds the driven truck. The signatures it looks for come from the Steam build: with `Probe=1` on that build the mod harvests them once into `Gauges.log`, and the next version carries them.
