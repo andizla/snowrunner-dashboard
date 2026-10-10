@@ -501,7 +501,7 @@ int wmain(int argc, wchar_t **argv)
         ImGui::GetStyle().FontScaleMain = 2.0f;
         // a truck with scales of its own, a truck that shows the plain ones, and no truck
         static const struct { const wchar_t *file; const char *truck; bool own; } tabs[3] = {
-            { L"settings.png", "lrd_110/1914924", true }, { L"settings_plain.png", "chevrolet_ck1500", false }, { L"settings_none.png", "", false } };
+            { L"settings.png", "mod_suv/1000001", true }, { L"settings_plain.png", "chevrolet_ck1500", false }, { L"settings_none.png", "", false } };
         for (const auto &tab : tabs)
         {
             strcpy_s(view.truck, tab.truck);

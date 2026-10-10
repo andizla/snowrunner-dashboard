@@ -2189,14 +2189,14 @@ int wmain(int argc, wchar_t **argv)
         WriteIni(state.plain);
         // a truck this test never drives, and a truck's section with something in it that the mod does not know
         WritePrivateProfileStringW(L"Truck:someone_elses", L"RedlineRpm", L"1800", ini.c_str());
-        WritePrivateProfileStringW(L"Truck:lrd_110/1914924", L"FromALaterVersion", L"7", ini.c_str());
+        WritePrivateProfileStringW(L"Truck:mod_suv/1000001", L"FromALaterVersion", L"7", ini.c_str());
         SettingsFor(state, "");
         const bool none = !state.own && SameSettings(state.s, state.plain);
         GaugeSettings in = state.s;
         in.maxRpm = 6000.0f;
         SettingsTake(state, in);
         const bool plainEdit = !state.own && !state.changed && state.plain.maxRpm == 6000.0f;
-        SettingsFor(state, "lrd_110/1914924");
+        SettingsFor(state, "mod_suv/1000001");
         Check(none && plainEdit && !state.own && SameSettings(state.s, state.plain), "trucks: with no truck driven the tab sets the plain scales, and a truck without scales of its own shows them");
         in = state.s;
         in.opacity = 0.5f;
@@ -2227,15 +2227,15 @@ int wmain(int argc, wchar_t **argv)
         // the game is started again: [Gauges] holds the plain settings, each truck its own scales
         SettingsState next = {};
         ReadIni(next.plain);
-        SettingsFor(next, "lrd_110/1914924");
-        const bool lrdBack = next.own && next.s.redlineRpm == 4500.0f && next.s.tachClass == kClassScout && next.s.maxRpm == 6000.0f && next.s.speedMax == 0.0f && next.s.boostMax == 0.0f && next.s.scale == 1.5f;
+        SettingsFor(next, "mod_suv/1000001");
+        const bool moddedBack = next.own && next.s.redlineRpm == 4500.0f && next.s.tachClass == kClassScout && next.s.maxRpm == 6000.0f && next.s.speedMax == 0.0f && next.s.boostMax == 0.0f && next.s.scale == 1.5f;
         SettingsFor(next, "chevrolet_ck1500");
-        Check(SameSettings(next.plain, state.plain) && lrdBack && next.own && next.s.tachClass == kClassHeavy && next.s.speedMax == 70.0f && next.s.boostMax == 1.45f &&
+        Check(SameSettings(next.plain, state.plain) && moddedBack && next.own && next.s.tachClass == kClassHeavy && next.s.speedMax == 70.0f && next.s.boostMax == 1.45f &&
               GaugeScaleOf(next.s).boost == 1.45f && next.s.boostProfile == kSpoolLaggy && next.s.redlineRpm == 5000.0f,
               "trucks: after a new start [Gauges] reads back as the plain settings and each truck has its own scales again");
         wchar_t kept[16] = {}, later2[16] = {};
         GetPrivateProfileStringW(L"Truck:someone_elses", L"RedlineRpm", L"", kept, 16, ini.c_str());
-        GetPrivateProfileStringW(L"Truck:lrd_110/1914924", L"FromALaterVersion", L"", later2, 16, ini.c_str());
+        GetPrivateProfileStringW(L"Truck:mod_suv/1000001", L"FromALaterVersion", L"", later2, 16, ini.c_str());
         Check(!wcscmp(kept, L"1800") && !wcscmp(later2, L"7"), "trucks: the section of a truck that was not driven, and a key the mod does not know in a truck's section, survive the writes");
         // a section that holds one of the seven takes the others from [Gauges]; what is out of range is held to it
         WritePrivateProfileStringW(L"Truck:half", L"MaxRpm", L"4000", ini.c_str());
@@ -2267,12 +2267,12 @@ int wmain(int argc, wchar_t **argv)
         Check(leftAlone && !wcscmp(halfRed, L"5000") && !wcscmp(halfTurbo, L"0") && !next.changed,
               "trucks: a save leaves a truck's section as it is until one of its scales is changed on the tab, and then writes all seven");
         // the truck gives its scales up: they go out of the ini, what else its section holds stays, and a section left empty goes
-        SettingsFor(next, "lrd_110/1914924");
+        SettingsFor(next, "mod_suv/1000001");
         SettingsDrop(next);
         const bool dropped = !next.own && SameSettings(next.s, next.plain);
-        SettingsFor(next, "lrd_110/1914924");
-        GetPrivateProfileStringW(L"Truck:lrd_110/1914924", L"FromALaterVersion", L"", later2, 16, ini.c_str());
-        const bool lrdPlain = !next.own && SameSettings(next.s, next.plain) && !wcscmp(later2, L"7");
+        SettingsFor(next, "mod_suv/1000001");
+        GetPrivateProfileStringW(L"Truck:mod_suv/1000001", L"FromALaterVersion", L"", later2, 16, ini.c_str());
+        const bool moddedPlain = !next.own && SameSettings(next.s, next.plain) && !wcscmp(later2, L"7");
         SettingsFor(next, "chevrolet_ck1500");
         SettingsDrop(next);
         wchar_t rest[64] = {}, names[1024] = {};
@@ -2280,7 +2280,7 @@ int wmain(int argc, wchar_t **argv)
         GetPrivateProfileSectionNamesW(names, 1024, ini.c_str());
         bool ckSection = false;
         for (const wchar_t *n = names; *n; n += wcslen(n) + 1) if (!_wcsicmp(n, L"Truck:chevrolet_ck1500")) ckSection = true;
-        Check(dropped && lrdPlain && !next.own && !left && !ckSection,
+        Check(dropped && moddedPlain && !next.own && !left && !ckSection,
               "trucks: a truck that gives up its scales takes the plain ones, its section keeps what else it holds, and an empty section goes");
         // the defaults: the plain settings and the driven truck's own scales; another truck keeps its own
         SettingsFor(next, "half");

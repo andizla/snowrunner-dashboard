@@ -333,7 +333,7 @@ inline int TruckTextOrder(const char *a, size_t aLength, const char *b, size_t b
 
 // Which truck is driven, for what the mod keeps per truck: the scales in Gauges.ini and the models' memory.
 // key: the truck's kind as the game's files name it, a text the game holds at model + 0x588 ("chevrolet_ck1500";
-// for a truck from a mod with the mod's number behind a stroke, "lrd_110/1914924"). It is what the game's save
+// for a truck from a mod with the mod's number behind a stroke, "mod_suv/1000001"). It is what the game's save
 // calls the truck's type, so every truck of the kind has it, in every game. Where the text cannot be read the key
 // is made from the truck's build (named is false then), which trucks of one kind share as well.
 // id: the text in braces the game holds for the one truck while it is in the world, behind the pointer at
