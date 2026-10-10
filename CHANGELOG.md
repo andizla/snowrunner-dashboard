@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.12.10] 2026-10-10
+
+- A tap of the shift modifier does nothing while the mod's automatic drives. The game's own automatic still picks a gear at the tap, and the mod sets its own gear straight back; a gear the game goes to right after its pick is put back too, not taken for one picked by hand. In 0.12.9 the mod and the game traded 5th and 4th ten times in six seconds over one burst of taps.
+- A heavy truck's close gears no longer run to the top of each one. The Scania's ten gears went by faster than the mod's one shift a second, so it shifted at nine tenths of a gear's top and the floor under the gears pushed it up and back (4, 3, 4 within a second). Shifts up now skip gears where the next one would shift up at once too, a shift up may follow another after half a second, and a gear past what the engine can take is left at once.
+- Wheels spinning in mud or on rocks no longer shift up. A shift up goes by the truck's speed over the ground; up a rocky climb in the sooty, wheels spinning a third faster than the ground shifted 2 to 3 and back four times in four seconds.
+
 ## [0.12.9] 2026-10-10
 
 - Floored, the mod's automatic shifts where the next gear pulls more in the game. The game gives the engine's torque by how far the wheels are toward the gear's top speed, not by the engine speed: all of it at about half the top, falling in a line to nothing at the top (the value at action + 0xB4, the same on the Defender and the sooty), and a lower gear multiplies it. So a gear revved near its top pulls a fraction of the next one. Floored it now shifts up at 0.63 to 0.79 of the gear's top, by how big the step to the next gear is (it was 0.8 of the way from idle to the red zone, about 0.83 of the top), and down where the gear below pulls more. At a light foot the points are as they were.

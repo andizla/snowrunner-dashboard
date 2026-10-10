@@ -1208,7 +1208,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         // the game's own shift function, with the game's automatic flag put down so its own choice stops; not while the
         // pull test holds the gear
         const TakeoverOrders orders = testing ? TakeoverOrders{} : TakeoverStep(w.take, raw, w.gearbox.gear, s.gearbox == kGearboxModel && g_shiftGear != nullptr, dt,
-                                                                                GearboxLowestFit(w.gearbox, raw, scale), GearboxHighestFit(w.gearbox, raw, scale));
+                                                                                GearboxLowestFit(w.gearbox, raw, scale));
         if (orders.took)
         {
             w.gearbox.gear = raw.gear;
@@ -1216,21 +1216,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             Log(L"gearbox: the mod's automatic takes the gears, in gear %d", raw.gear);
         }
         if (orders.gaveBack) Log(L"gearbox: the mod's automatic gives the gears back: %S, after %d shifts", TakeoverWhy(w.take.lastHandBack), w.take.shifts);
-        if (orders.adopted)
-        {
-            if (w.gearbox.gear != orders.adopted) w.gearbox.locked = false;
-            w.gearbox.gear = orders.adopted;
-            w.gearbox.pause = kTakeHold;
-            w.gearbox.wanted = 0.0f;
-            if (probe && orders.adopted == raw.gear)
-                Log(L"gearbox: the game's own automatic picked gear %d (the shift modifier, or A picked again); the mod's goes on from it", orders.adopted);
-            else if (probe && orders.adopted > raw.gear)
-                Log(L"gearbox: the game's own automatic picked gear %d, lower than the engine can take at %.1f m/s; the mod's goes on from gear %d", raw.gear, raw.speed,
-                    orders.adopted);
-            else if (probe)
-                Log(L"gearbox: the game's own automatic picked gear %d, the wheels at %.2f of its top at %.1f m/s, where the mod's would shift down at once; it goes on from gear %d",
-                    raw.gear, GearboxInput(raw, scale, raw.gear, w.gearbox.by) / scale.redline, raw.speed, orders.adopted);
-        }
+        if (probe && orders.tapped)
+            Log(L"gearbox: the game's own automatic picked gear %d (the shift modifier, or A picked again); the mod puts its gear %d back", orders.tapped, orders.shiftTo);
+        if (probe && orders.undone) Log(L"gearbox: the game went to gear %d after its own automatic's pick; the mod puts its gear %d back", raw.gear, orders.shiftTo);
         if (orders.flagDown) m.put(w.refs.action + 0x3C, (uint8_t)0);
         if (orders.shiftTo)
         {

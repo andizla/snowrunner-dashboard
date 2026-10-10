@@ -558,6 +558,25 @@ bumps), none at a steady one. For step 5 this means: the torque factor written a
 B4 (read live, as the factor does not move it, capped) makes the game's pull follow our curve, and then a gear revved
 high pulls as it would in a real engine; with that on, the shift points can go back to the engine's (late, revving),
 which is what the user feels for ("it didnt rev"). Owed: the user's drive; the step 5 note.
+The user's drive of 20:09 (0.12.9; the sooty, then the Scania nextgen 8x8, ten gears with tops of 7.5 to 30.5 rad/s, its
+scales set on the tab to idle 600 and the red zone at 1930 of 2500). The Scania gave too few steady floored samples
+to check the B4 curve (0.75 at 0.60 to 0.65 of the gear's top from six, against 0.84 on the petrol trucks). Found: (1) the taps: at 20:19:28 to 34 the game's own automatic picked 5th ten times, the cap set 4th
+back each time, and the next pick came within a second (the user's habit of the clutch at each shift, or the
+modifier held: 66 to 76 shifts on SMT's count). The user: "the tap is not really supposed to do anything. the tap is
+only useful in Vanilla, to force the proper pulling gear. its something that we DONT want to incorporate". 0.12.10:
+the tap is put back at once (the model's gear set again, the flag down), and a numbered gear the game goes to within
+kTakeHold of its pick is put back too (`TakeoverModel::tapped`, `TakeoverOrders::undone`); the taking on of 0.12.1 to
+0.12.9, the hold and the cap (`GearboxHighestFit`) are gone. (2) The Scania's close gears: one shift a second was
+slower than the truck went through them, so shifts came at 0.89 to 0.95 of a gear's top, and the floor
+(`GearboxLowestFit`, at 0.93 of the top there) set 1 to 2 to 3 to 4, 4 to 3 and 3 to 4 within a second at 20:38:07
+to 08 as the wheels' speed moved about it. 0.12.10: a shift up lands as far up as the gears would each shift up at
+once (`upTo`), a shift up may follow another after 0.5 s (`kShiftUpAgain`, `GearboxModel::upLast`), and a gear past
+the red zone, or with the grip known past `kDownMost` at the speed the truck goes, is left at once whatever the pause,
+so the model is never under the floor (in a replay of a floored pull at 2.5 rad/s each second the shifts came at
+0.66 to 0.77 of a gear's top, 1 to 3 to 4 to 6 to 7 to 8 to 9 to 10). (3) Wheelspin: up a rocky climb (nose up to 28
+degrees, the wheels 6 to 22 rad/s) the sooty went 3, 2, 3, 2, 3 in four seconds, the shifts up going by the wheels
+at up to 1.2 times the ground and 1 rad/s more; now a shift up with the foot on goes by the wheels at most 1.05 times
+the ground (`kSlipUp`). Models 141 OK.
 
 Part A, research and design note (no hook before the user's OK on the note):
 - Where the game turns the pedal into torque and how the automatic decides a shift: the truck action's per-frame

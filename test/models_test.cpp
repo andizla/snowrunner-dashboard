@@ -1521,24 +1521,60 @@ int main(int argc, char **argv)
             Check(second.gear == 2 && second.shifts == 0 && fifth.gear == 4 && fifth.shifts == 1 && third.gear == 4 && third.shifts == 1,
                   "automatic: floored it takes the gear that pulls the most in the game: no kickdown into a first near its top, the fifth at 0.4 of its top "
                   "down to the fourth, the third at 0.69 of its top up to the fourth");
-            // the game's own automatic picking the fifth on a tap of the shift modifier, floored in the third at 8.5 m/s
-            // (18:34:57): taken on as the fourth, the highest the model would not shift down from at once; at a light
-            // foot the fifth stays
-            sootyAt(16.4f);
-            GearboxModel tapped = sootyDriving(3);
-            const int floorMost = GearboxHighestFit(tapped, so, sk);
-            TakeoverModel tm = {};
-            tm.driving = true;
-            tm.power = 1.0f;
-            tm.set = 3;
-            TruckRaw picked5 = so;
-            picked5.automatic = 1;
-            picked5.gear = picked5.gearEngaged = 5;
-            const TakeoverOrders capped = TakeoverStep(tm, picked5, 3, true, kDt, GearboxLowestFit(tapped, so, sk), floorMost);
-            tapped.feel = tapped.held = 0.3f;
-            const int lightMost = GearboxHighestFit(tapped, so, sk);
-            Check(floorMost == 4 && capped.adopted == 4 && capped.shiftTo == 4 && capped.flagDown && tm.set == 4 && lightMost == 5,
-                  "takeover: floored, the game's own automatic's pick of a gear the model would shift down from at once is taken on as the highest it would keep");
+            // the second floored with the ground at 0.56 of its top and the wheels spinning 1.35 times as fast: no shift
+            // up (the third pulls less at the truck's speed); wheels spinning pull no harder in a taller gear
+            GearboxModel spinUp = sootyDriving(2);
+            for (int i = 0; i < so.wheels; i++) so.spin[i] = 0.56f * 17.0f * 1.35f;
+            so.speed = 0.56f * 17.0f / 1.93f;
+            spinUp.spin = TruckDrivenSpin(so);
+            for (float at = 0.0f; at < 1.0f; at += kDt) GearboxStep(spinUp, so, sk, 1.0f, 1.0f, kDt);
+            Check(spinUp.gear == 2 && spinUp.shifts == 0, "automatic: wheels spinning faster than the ground goes shift nothing up, floored or not");
+        }
+        // a close-ratio box (the Scania's ten gears, tops 7.5 to 30.5 rad/s, 600 to 1930 rpm) floored from a standstill
+        // with the grip learned: through the gears faster than a shift a second, skipping gears, never held to its top;
+        // and a gear past what the engine can take is left at once, whatever the pause
+        {
+            TruckRaw sc = g;
+            static const float scaniaSpeeds[12] = { 1.0f, 1.268f, 1.563f, 2.054f, 2.839f, 3.625f, 4.901f, 5.981f, 7.453f, 10.103f, 12.754f, 8.0f };
+            sc.gearSpeeds = 12;
+            memcpy(sc.gearSpeed, scaniaSpeeds, sizeof scaniaSpeeds);
+            GaugeScale ck = k;
+            ck.idle = 600.0f;
+            ck.redline = 1930.0f;
+            ck.max = 2500.0f;
+            GearboxModel close = {};
+            close.running = true;
+            close.gear = 1;
+            close.grip = 2.2f;
+            int closeShifts = 0;
+            float closeMost = 0.0f;
+            for (float at = 0.0f; at < 12.0f; at += kDt)
+            {
+                const float spin = 2.5f * at;
+                for (int i = 0; i < sc.wheels; i++) sc.spin[i] = spin;
+                sc.speed = spin / 2.2f;
+                const int closeWas = close.gear;
+                const float x = closeWas >= 1 ? spin / TruckGearTop(sc, closeWas) : 0.0f;
+                GearboxStep(close, sc, ck, 1.0f, 1.0f, kDt);
+                if (closeWas >= 1 && close.gear > closeWas)
+                {
+                    closeShifts++;
+                    closeMost = fmaxf(closeMost, x);
+                }
+            }
+            // in the fourth (top 10.7) at 0.95 of its top just after a shift: up at once
+            GearboxModel past = {};
+            past.running = true;
+            past.gear = 4;
+            past.grip = 2.2f;
+            past.pause = kShiftPause;
+            for (int i = 0; i < sc.wheels; i++) sc.spin[i] = 0.95f * TruckGearTop(sc, 4);
+            sc.speed = sc.spin[0] / 2.2f;
+            past.spin = past.by = past.rolling = sc.spin[0];
+            past.pedal = past.held = past.feel = 1.0f;
+            GearboxStep(past, sc, ck, 1.0f, 1.0f, kDt);
+            Check(close.gear == 10 && closeShifts < 9 && closeMost < 0.85f && past.gear > 4 && GearboxInput(sc, ck, past.gear, past.rolling) < GearboxPoint(ck, kDownMost),
+                  "automatic: a close-ratio box floored skips gears and is never held to a gear's top; a gear past what the engine can take is left at once");
         }
         // braked hard from the top gear to a stop in a second and a half: in the first gear by the time the wheels
         // stop, not left in a high one for the next pull away, and never a shift down that would race the engine
@@ -1592,34 +1628,40 @@ int main(int argc, char **argv)
             tk.gear = tk.gearEngaged = 3;
             const TakeoverOrders arrived = TakeoverStep(take, tk, 3, true, 1.0f);
             const bool shifting = up.shiftTo == 3 && !up.flagDown && take.set == 3 && !waiting.gaveBack && waiting.shiftTo == 0 && !arrived.gaveBack && take.driving;
-            // the shift modifier tapped: the game's flag up and its own automatic's gear, which the mod takes on
+            // the shift modifier tapped: the game's flag up and its own automatic's gear; the mod puts the flag down and
+            // its own gear back at once: the tap does nothing
             tk.automatic = 1;
             tk.gear = tk.gearEngaged = 1;
             const TakeoverOrders tapped = TakeoverStep(take, tk, 3, true, kDt);
             tk.automatic = 0;
-            const TakeoverOrders goneOn = TakeoverStep(take, tk, 1, true, 1.0f); // the model in the gear taken on
-            bool again = tapped.flagDown && tapped.adopted == 1 && tapped.shiftTo == 0 && !goneOn.gaveBack && goneOn.shiftTo == 0 && take.set == 1 && take.driving;
-            // a tap for the third gear the game goes back on within the hold: taken on too, not a gear picked by hand
+            tk.gear = tk.gearEngaged = 3;
+            const TakeoverOrders putBack = TakeoverStep(take, tk, 3, true, 1.0f);
+            bool again = tapped.flagDown && tapped.tapped == 1 && tapped.shiftTo == 3 && !putBack.gaveBack && putBack.shiftTo == 0 && take.set == 3 && take.driving;
+            // the game going back on its pick after the mod's gear is back (it picked 3rd from 1st and fell back to 1st
+            // in the drive of 01:45): the mod's gear again within the hold, not a gear picked by hand; after it, one is
             {
                 TakeoverModel undone = take;
                 TruckRaw tu = tk;
                 tu.automatic = 1;
-                tu.gear = tu.gearEngaged = 3;
-                const TakeoverOrders pick = TakeoverStep(undone, tu, 1, true, kDt);
+                tu.gear = tu.gearEngaged = 4;
+                const TakeoverOrders pick = TakeoverStep(undone, tu, 3, true, kDt);
                 tu.automatic = 0;
-                tu.gear = tu.gearEngaged = 1;
+                tu.gear = tu.gearEngaged = 3;
+                TakeoverStep(undone, tu, 3, true, 0.1f);
+                tu.gear = tu.gearEngaged = 4;
                 const TakeoverOrders back = TakeoverStep(undone, tu, 3, true, 0.6f);
-                const TakeoverOrders later = TakeoverStep(undone, tu, 1, true, 0.1f);
+                tu.gear = tu.gearEngaged = 3;
+                const TakeoverOrders later = TakeoverStep(undone, tu, 3, true, 0.1f);
                 tu.gear = tu.gearEngaged = 2;
-                const TakeoverOrders afterHold = TakeoverStep(undone, tu, 1, true, kTakeHold);
-                again = again && pick.adopted == 3 && back.adopted == 1 && !back.gaveBack && later.shiftTo == 0 && !later.gaveBack && afterHold.gaveBack;
+                const TakeoverOrders afterHold = TakeoverStep(undone, tu, 3, true, kTakeHold);
+                again = again && pick.tapped == 4 && pick.shiftTo == 3 && back.undone && back.shiftTo == 3 && !back.gaveBack && later.shiftTo == 0 && !later.gaveBack &&
+                        afterHold.gaveBack;
             }
-            // the game's own automatic picking the first gear at speed (the foot off): put back to the lowest gear the
-            // engine can take, also when the game goes back to the first within the hold
+            // the game's own automatic picking the first gear at speed (the foot off): the mod's gear back, never one
+            // lower than the engine can take
             {
                 TakeoverModel fast = take;
-                fast.set = 3; // driving in the third gear it set
-                fast.adopted = false;
+                fast.set = 3;
                 TruckRaw tf = tk;
                 tf.automatic = 1;
                 tf.gear = tf.gearEngaged = 1;
@@ -1627,19 +1669,13 @@ int main(int argc, char **argv)
                 rollingAt.rolling = 20.0f;
                 rollingAt.grip = 2.2f;
                 const int fit = GearboxLowestFit(rollingAt, tf, k);
-                const TakeoverOrders low = TakeoverStep(fast, tf, 4, true, kDt, fit);
-                tf.automatic = 0;
-                tf.gear = tf.gearEngaged = 3;
-                TakeoverStep(fast, tf, 3, true, 0.2f, fit);
-                tf.gear = tf.gearEngaged = 1;
-                const TakeoverOrders lowAgain = TakeoverStep(fast, tf, 3, true, 0.2f, fit);
-                again = again && fit == 3 && low.adopted == 3 && low.shiftTo == 3 && lowAgain.adopted == 3 && lowAgain.shiftTo == 3 && fast.driving;
+                const TakeoverOrders low = TakeoverStep(fast, tf, 2, true, kDt, fit);
+                again = again && fit == 3 && low.tapped == 1 && low.shiftTo == 3 && fast.driving;
             }
             // the model holding a gear lower than the engine can take (as after a test that held the game's gear): not set
             {
                 TakeoverModel floorTest = take;
                 floorTest.set = 3;
-                floorTest.adopted = false;
                 TruckRaw held3 = tk;
                 held3.automatic = 0;
                 held3.gear = held3.gearEngaged = 3;
@@ -1688,8 +1724,8 @@ int main(int argc, char **argv)
             TakeoverRefused(take, tk);
             const TakeoverOrders retry = TakeoverStep(take, tk, 3, true, kDt);
             Check(taking && shifting && again && reverseHandsBack && byHand && lowOrOff && wish.shiftTo == 3 && retry.shiftTo == 3 && take.driving,
-                  "automatic in the game: taken in the game's gear from A, the model's gears set, the game's own gear taken on at the shift modifier (never lower than the "
-                  "engine can take), given back to "
+                  "automatic in the game: taken in the game's gear from A, the model's gears set, its own gear put back at once at the shift modifier and when the "
+                  "game goes back on its pick (never one lower than the engine can take), given back to "
                   "reverse, to a gear or a low gear picked by hand (not to a power factor raised) and to a stopped engine, and a gear the game refused set again");
             // the needle follows the converter's engine speed with its lag; with the engine off it falls to nothing
             TachModel follow = {};

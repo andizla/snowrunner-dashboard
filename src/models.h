@@ -976,6 +976,7 @@ static const float kShiftDownLight = 0.12f;  // and down below this; floored, wh
 static const float kShiftRoom = 1.1f;        // at a light foot a shift up waits until the next gear's speed is this far over the point the gearbox would shift back down at
 static const float kCoastDown = 0.25f, kCoastDownTo = 0.75f; // with the foot off it shifts down below this, as far as the engine stays under kCoastDownTo
 static const float kShiftPause = 1.0f;       // seconds from one shift to the next
+static const float kShiftUpAgain = 0.5f;     // and from a shift up to the next one up: a heavy truck in its low gears goes through them fast
 static const float kKickdown = 0.9f;         // a pedal pushed past this kicks down at once, to the gear that pulls the most in the game
 static const float kKickWindow = 0.5f;       // seconds after the push the kickdown may come in
 static const float kStallSpeed = 0.75f;      // the converter's stall speed as a share of the red zone's: where a floored engine stops against a standing truck
@@ -1000,6 +1001,7 @@ static const float kGripSteady = 0.05f;      // and the wheels within this share
 static const float kGripSpread = 0.15f;      // under kGripGain rad/s each second: no bump, no wheel off the ground, no start
 static const float kGripGain = 1.0f;
 static const float kGripFall = 2.0f, kGripRise = 20.0f; // seconds the grip takes to follow a lower reading, and a higher one
+static const float kSlipUp = 1.05f;          // a shift up goes by the wheels at most this much faster than the ground: wheelspin in rough ground shifts nothing up
 static const float kSlipShare = 1.2f, kSlipSpare = 1.0f; // wheels this much faster than the ground under them, and this many rad/s more, spin: the gearbox goes by the ground
                                                         // (floored in the user's drives the wheels turned within 1.13 times the learned grip nine times in ten)
 static const float kDownMost = 0.9f;         // no shift down puts the engine, at the speed the wheels turn, further than this from idle to the red zone
@@ -1035,6 +1037,7 @@ struct GearboxModel
     float ratio;       // how much the converter multiplies the torque, 1 to kStallRatio
     float drive;       // what goes to the wheels: the power times the ratio, and the creep, as a share of the most power
     float pause;       // seconds until it may shift again
+    bool upLast;       // the last shift was up
     float spin;        // the driven wheels' speed, smoothed over kShiftSmooth
     float grip;        // rad/s the driven wheels turn for each m/s the truck goes, as learned where they grip; 0 before
     float by;          // the truck's speed in rad/s of the wheels: the ground's once grip is known, else spin
@@ -1190,6 +1193,8 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     const float feel = m.climb > 0.0f ? 1.0f : m.feel;
     const float coastDown = GearboxPoint(k, kCoastDown), coastTo = GearboxPoint(k, kCoastDownTo), most = GearboxPoint(k, kDownMost);
     const float by = footOff ? coast : pace, now = GearboxInput(t, k, m.gear, by), lower = GearboxInput(t, k, m.gear - 1, by);
+    // a shift up with the foot on goes by the ground: wheels spinning in mud or on rocks pull no harder in a taller gear
+    const float byUp = footOff || m.grip <= 0.0f ? by : fminf(pace, onGround * kSlipUp);
     // a lower gear the engine can take at the speed the wheels turn
     auto fits = [&](int gear) { return GearboxInput(t, k, gear, rolling) < most; };
     // what a gear pulls in the game at this speed, against the others
@@ -1198,8 +1203,24 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     // the room a shift up leaves over the next gear's point down: kShiftRoom at a light foot, none floored, where the
     // points lie where one gear pulls kShiftPullGain more than the other, either way
     const float room = kShiftRoom + (1.0f - kShiftRoom) * feel;
-    const bool wantUp = m.gear < top && (now > k.redline || (!footOff && !labouring && now >= GearboxUpPoint(t, k, m.gear, feel) &&
-                                                               GearboxInput(t, k, m.gear + 1, by) >= GearboxDownPoint(t, k, m.gear + 1, feel) * room));
+    // a gear the engine is past the red zone in, or, the grip known, past what it can take at the speed the truck goes
+    // (the floor the takeover keeps the game's gear over, GearboxLowestFit)
+    auto pastIn = [&](int gear) { return GearboxInput(t, k, gear, by) > k.redline || (m.grip > 0.0f && !fits(gear)); };
+    // that, or a gear the pedal would shift up from
+    auto upFrom = [&](int gear) {
+        return pastIn(gear) ||
+               (!footOff && !labouring && GearboxInput(t, k, gear, byUp) >= GearboxUpPoint(t, k, gear, feel) &&
+                GearboxInput(t, k, gear + 1, byUp) >= GearboxDownPoint(t, k, gear + 1, feel) * room);
+    };
+    // the gear a shift up lands in: gears at a time while the next one would shift up at once too, as a close-ratio
+    // box goes through its gears faster than a shift a second
+    auto upTo = [&](int gear) {
+        int g = gear + 1;
+        while (g < top && upFrom(g)) g++;
+        return g;
+    };
+    const bool wantUp = m.gear < top && upFrom(m.gear);
+    const bool pastIt = m.gear < top && pastIn(m.gear);
     const bool wantDown = m.gear > 1 && fits(m.gear - 1) &&
                           (footOff ? now < coastDown && lower < coastTo : now < GearboxDownPoint(t, k, m.gear, feel) && lower < GearboxUpPoint(t, k, m.gear - 1, feel));
     m.wanted = wantUp ? fmaxf(m.wanted, 0.0f) + dt : wantDown ? fminf(m.wanted, 0.0f) - dt : 0.0f;
@@ -1213,21 +1234,21 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
         while (to > 1 && fits(to - 1) && pulls(to - 1) >= pulls(to) * (1.0f + kShiftPullGain)) to--;
         m.kick = 0.0f;
     }
-    else if (m.pause <= 0.0f)
+    else if (pastIt)
+        to = upTo(m.gear); // past the red zone or what the engine can take: up at once, whatever the pause
+    else if (m.pause <= (m.upLast ? kShiftPause - kShiftUpAgain : 0.0f) && m.wanted >= kShiftUpAfter + (kShiftUpAfterFloored - kShiftUpAfter) * feel)
+        to = upTo(m.gear);
+    else if (m.pause <= 0.0f && footOff && m.wanted <= -kCoastDownAfter)
     {
-        if (m.wanted >= kShiftUpAfter + (kShiftUpAfterFloored - kShiftUpAfter) * feel || (wantUp && now > k.redline))
-            to = m.gear + 1;
-        else if (footOff && m.wanted <= -kCoastDownAfter)
-        {
-            // coasting down: as far as the engine stays under coastTo, gears at a time when the truck slows hard
-            to = m.gear - 1;
-            while (to > 1 && GearboxInput(t, k, to, by) < coastDown && GearboxInput(t, k, to - 1, by) < coastTo && fits(to - 1)) to--;
-        }
-        else if (!footOff && m.wanted <= -kShiftDownAfter)
-            to = m.gear - 1;
+        // coasting down: as far as the engine stays under coastTo, gears at a time when the truck slows hard
+        to = m.gear - 1;
+        while (to > 1 && GearboxInput(t, k, to, by) < coastDown && GearboxInput(t, k, to - 1, by) < coastTo && fits(to - 1)) to--;
     }
+    else if (m.pause <= 0.0f && !footOff && m.wanted <= -kShiftDownAfter)
+        to = m.gear - 1;
     if (to != m.gear)
     {
+        m.upLast = to > m.gear;
         m.gear = to;
         m.locked = false;
         m.pause = kShiftPause;
@@ -1259,17 +1280,6 @@ inline int GearboxLowestFit(const GearboxModel &m, const TruckRaw &t, const Gaug
     return gear;
 }
 
-// The highest gear the model would not shift down from at once at the speed the truck goes and the pedal it goes by,
-// and never lower than its own: the most a gear the game's own automatic picks is taken on as (TakeoverStep).
-inline int GearboxHighestFit(const GearboxModel &m, const TruckRaw &t, const GaugeScale &k)
-{
-    const int top = TruckTopGear(t);
-    const float feel = m.climb > 0.0f ? 1.0f : m.feel;
-    int gear = m.gear < 1 ? 1 : m.gear;
-    while (gear < top && GearboxInput(t, k, gear + 1, m.by) >= (m.held < kFootOff ? GearboxPoint(k, kCoastDown) : GearboxDownPoint(t, k, gear + 1, feel))) gear++;
-    return gear;
-}
-
 // The gearbox in a line of text for the probe log, beside the game's own gear.
 // driving: the mod's automatic sets the game's gears (TakeoverModel).
 inline void GearboxProbeText(const TruckRaw &t, const GearboxModel &m, bool driving, char *out, size_t size)
@@ -1288,15 +1298,12 @@ inline void GearboxProbeText(const TruckRaw &t, const GearboxModel &m, bool driv
 // automatic stops choosing, and sets the model's gear through the game's own shift function, as a manual
 // transmission mod sets a gear from a key. The player gets the gearbox back by picking a gear by hand: a gear the
 // mod did not set, once the last one it set has had kTakeSettle to arrive. The game's flag up again (A picked once
-// more, or the shift modifier tapped) asks the game's own automatic for a gear: the mod takes that gear on and holds
-// it kTakeHold before its own shift points go on from there, but never a gear lower than the engine can take at the
-// speed the wheels turn: with the foot off the game's own automatic picks the first gear at any speed, and that gear
-// is put back to the lowest the engine can take; and never a gear higher than the model would keep: floored up a climb
-// it picks the 5th with the wheels at 0.4 of its top, where the 4th pulls a fifth more, and that gear is put back to
-// the highest the model would not shift down from at once. Another numbered gear within that time (the game or
-// another mod going back on the pick) is taken on the same way, not read as a gear picked by hand.
+// more, or the shift modifier tapped) makes the game's own automatic pick a gear: the mod puts its flag down and its
+// own gear back at once. The tap only forces a pulling gear on the game's own automatic; with the mod's it does
+// nothing. Another numbered gear within kTakeHold of it (the game going back on its pick) is put back the same way,
+// not read as a gear picked by hand.
 static const float kTakeSettle = 0.5f;       // seconds the game has to take a gear the mod set before another gear is the player's
-static const float kTakeHold = 2.0f;         // seconds the gear the game's own automatic picked holds
+static const float kTakeHold = 2.0f;         // seconds after the game's own automatic picked a gear that another gear is no gear picked by hand
 static const float kTakeLowPower = 0.02f;    // the power factor this far under the most it was while the mod drove: a low gear picked by hand
 
 struct TakeoverModel
@@ -1308,7 +1315,8 @@ struct TakeoverModel
     int shifts;        // gears set since it took the gearbox
     int handBacks;     // times it gave the gearbox back
     int lastHandBack;  // why, the last time: one of the kTake... reasons
-    bool adopted;      // the gear it holds is one the game's own automatic picked, not one it set
+    bool tapped;       // the game's own automatic picked a gear (the shift modifier tapped, or A picked again)
+    float tapFor;      // seconds since
 };
 enum { kTakeNone, kTakePicked, kTakeLow, kTakeOff, kTakeGone };
 
@@ -1318,19 +1326,18 @@ struct TakeoverOrders
     bool flagDown;     // put the game's automatic flag down
     int shiftTo;       // set this gear, 0 for none
     bool took;         // it took the gearbox on this pass
-    int adopted;       // the gear the game's own automatic picked on this pass, or the lowest the engine can take where
-                       // it picked lower, which the model takes on; 0 for none
+    int tapped;        // the gear the game's own automatic picked on this pass, put back; 0 for none
+    bool undone;       // the game went back on its pick, and the mod's gear is put back
     bool gaveBack;     // it gave the gearbox back on this pass (lastHandBack says why)
 };
 
 // One pass of dt seconds. enabled: Gearbox is the mod's and the game's shift function is known; t: the truck as
 // read; modelGear: the gear the model wants (GearboxModel::gear); lowestFit: the lowest gear the engine can take
-// (GearboxLowestFit); highestFit: the highest the model would not shift down from at once (GearboxHighestFit), the most
-// a pick of the game's own automatic is taken on as. The gearbox is taken when the game's shifter is in A
+// (GearboxLowestFit). The gearbox is taken when the game's shifter is in A
 // on a numbered gear (from neutral the game puts the first gear in itself as the truck sets off), in the gear the
 // game is in, and given back when the player picks a gear, the setting goes off or the engine stops. A rise of the
 // power factor (another mod setting its own for the automatic) is no gear picked.
-inline TakeoverOrders TakeoverStep(TakeoverModel &m, const TruckRaw &t, int modelGear, bool enabled, float dt, int lowestFit = 1, int highestFit = 99)
+inline TakeoverOrders TakeoverStep(TakeoverModel &m, const TruckRaw &t, int modelGear, bool enabled, float dt, int lowestFit = 1)
 {
     TakeoverOrders o = {};
     const int top = TruckTopGear(t);
@@ -1338,6 +1345,7 @@ inline TakeoverOrders TakeoverStep(TakeoverModel &m, const TruckRaw &t, int mode
     const int asked = modelGear < lowestFit ? lowestFit : modelGear;
     const int want = asked < 1 ? 1 : asked > top ? top : asked;
     m.since += dt;
+    if (m.tapped) m.tapFor += dt;
     if (m.driving && (!enabled || !TruckEngineOn(t) || top < 1))
     {
         m.driving = false;
@@ -1360,18 +1368,18 @@ inline TakeoverOrders TakeoverStep(TakeoverModel &m, const TruckRaw &t, int mode
     // the player's
     if (t.powerFactor > m.power) m.power = t.powerFactor;
     const bool outside = t.gear < 1 || t.gear > top;
-    // the game's own automatic's pick, never lower than the engine can take nor higher than the model would keep
-    const int most = highestFit < lowestFit ? lowestFit : highestFit;
-    const int pick = t.gear < lowestFit ? lowestFit : t.gear > most ? most : t.gear;
-    if (!outside && !t.automatic && t.gear != m.set && m.adopted && m.since < kTakeHold && t.powerFactor >= m.power - kTakeLowPower)
+    const bool lowGear = t.powerFactor < m.power - kTakeLowPower;
+    if (!outside && !lowGear && !t.automatic && t.gear != m.set && m.tapped && m.tapFor < kTakeHold)
     {
-        // the gear the game's own automatic picked, gone back on within the hold: the gear it went to is taken on
-        o.adopted = pick;
-        if (pick != t.gear) o.shiftTo = pick;
-        m.set = pick;
+        // the game going back on its own automatic's pick: the mod's gear again, not a gear picked by hand
+        o.undone = true;
+        o.shiftTo = want;
+        if (m.set) m.shifts++;
+        m.set = want;
+        m.since = 0.0f;
         return o;
     }
-    const bool otherGear = outside || (!t.automatic && t.gear != m.set && m.since >= kTakeSettle), lowGear = t.powerFactor < m.power - kTakeLowPower;
+    const bool otherGear = outside || (!t.automatic && t.gear != m.set && m.since >= kTakeSettle);
     if (otherGear || lowGear)
     {
         m.driving = false;
@@ -1381,20 +1389,15 @@ inline TakeoverOrders TakeoverStep(TakeoverModel &m, const TruckRaw &t, int mode
         return o;
     }
     o.flagDown = t.automatic != 0;
-    if (t.automatic && t.gear != m.set)
+    if (t.automatic && t.gear != want)
     {
-        // the game's own automatic picked a gear (the shift modifier tapped): the model goes on from it
-        o.adopted = pick;
-        if (pick != t.gear) o.shiftTo = pick;
-        if (m.set) m.shifts++;
-        m.set = pick;
-        m.since = 0.0f;
-        m.adopted = true;
-        return o;
+        // the game's own automatic picked a gear (the shift modifier tapped, or A picked again): the mod's gear back
+        o.tapped = t.gear;
+        m.tapped = true;
+        m.tapFor = 0.0f;
     }
     if (want != m.set || (t.automatic && t.gear != want))
     {
-        m.adopted = false;
         o.shiftTo = want;
         if (m.set) m.shifts++;
         m.set = want;
