@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.12.5] 2026-10-10
+
+- The outside temperature by the map is a setting of its own, on by default: `AmbientByMap` (on the tab, "Outside by map"). While the map's temperature is in force, the tab's slider shows it and sets it in the map's or its region's section of `Gauges.ini`; before, the slider showed and set `AmbientC`, which is only in force where the map is not known, so the tab looked as if the temperature were set by hand. Off, `AmbientC` is in force on every map.
+
 ## [0.12.4] 2026-10-10
 
 - A power test on the tab (Gearbox, "Test the power factor"): floored in the third gear or higher on flat ground, the mod holds the gear for seven seconds and changes the game's power factor a second at a time (as it is, halved by a write alone, halved with the gear set again, doubled with the gear set again), measures the pull in each, and puts the factor back. `Gauges.log` gets the numbers: whether the factor changes the pull at once, only once the gear is set again, or not at all, which decides how the engine's torque reaches the game next. Lifting the foot, the brake, another gear or the game's automatic stops it.

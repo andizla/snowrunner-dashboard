@@ -196,6 +196,7 @@ static void OnSettingsTab(reshade::api::effect_runtime *)
     if (act & kPageTruckDrop) SettingsTruckDrop();
     if (act & kPagePowerTest) PowerTestAsk(true);
     if (act & kPagePowerCancel) PowerTestAsk(false);
+    if (act & kPageMapAmbient) MapAmbientSet(st.mapAmbientC);
     if (act & kPageDefaults) SettingsReset();
     if (act & kPageReload) SettingsReload();
     if (act & kPageHearHigh) SoundHear(kTurboHigh);

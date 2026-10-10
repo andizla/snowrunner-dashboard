@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#define GAUGES_VERSION "0.12.4"
+#define GAUGES_VERSION "0.12.5"
 
 // The exe the addresses in this mod are from (SnowRunner on Steam, the build of 22 July 2026). On any other the mod
 // stands down.
@@ -70,6 +70,7 @@ struct GaugeSettings
     float overheatMinutes;   // OverheatMinutes: minutes from 90 C into the red zone at 118 C with the engine revved out and the wheels spinning at a standstill
     float coolDownMinutes;   // CoolDownMinutes: minutes a stopped engine takes from 90 C down to 40 C
     float ambientC;          // AmbientC: the outside temperature in degrees C; an engine that has stood for long is this cold
+    bool ambientByMap;       // AmbientByMap: where the map is known, its section's or its region's temperature ([Map:<name>]) in place of AmbientC
     float airFullKmh;        // AirFullKmh: the speed in km/h from which the radiator gets all the air that driving gives it
     float oilWarmUpMinutes;  // OilWarmUpMinutes: minutes a cold engine's oil takes from 15 C to 85 C when it is driven as usual (at least a minute more than the coolant's)
     float oilWarnC;          // OilWarnC: the oil temperature in C from which the oil lamp blinks and the warning sounds
@@ -105,6 +106,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.overheatMinutes = 1.5f;
     s.coolDownMinutes = 15.0f;
     s.ambientC = 15.0f;
+    s.ambientByMap = true;
     s.airFullKmh = 30.0f;
     s.oilWarmUpMinutes = 5.0f;
     s.oilWarnC = 120.0f;
@@ -255,6 +257,7 @@ void SettingsReload();                      // read the ini again (the tab's but
 void SettingsTruckDrop();                   // the tab's button: the driven truck gives up its own scales and takes the plain ones
 void SettingsReset();                       // the tab's button: every setting back to its default, the driven truck's own scales too
 void PowerTestAsk(bool run);                 // the tab's button: arm the power factor test, or cancel it
+void MapAmbientSet(float c);                 // the tab's slider: the outside temperature of the map's section in force
 void DamageTestAsk(int points);             // the tab's test buttons: the mod adds this much to the driven truck's engine damage on its next pass
 void ViewGet(GaugeView &out);               // what to draw (any thread)
 void SoundHear(int tier);                   // plays the turbo's sound of that strength (kTurboHigh ..) or the oil warning (kSoundOil) as loud as the settings have it (the tab's buttons)

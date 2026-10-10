@@ -12,10 +12,11 @@ struct PageState
     bool armed = false;           // every pad button was up since the capture began: the press that began it is not read
     unsigned long long began = 0; // GetTickCount64 when the capture began (it gives up after kPageCaptureMs)
     unsigned long long last = 0;  // GetTickCount64 of the last frame the tab was drawn
+    float mapAmbientC = 0.0f;     // the outside temperature the slider set for the map's section in force (kPageMapAmbient)
 };
 static const unsigned long long kPageCaptureMs = 8000;
 enum { kPageChanged = 1, kPageReload = 2, kPageTruckDrop = 4, kPageDefaults = 8, kPageHearHigh = 16, kPageHearMid = 32, kPageHearLow = 64, kPageHearOil = 128,
-       kPagePowerTest = 256, kPagePowerCancel = 512 };
+       kPagePowerTest = 256, kPagePowerCancel = 512, kPageMapAmbient = 1024 };
 
 // The Dear ImGui key as a virtual key, for the keys the toggle key can be; 0 for others.
 static int PageVirtualKey(int k)
@@ -208,16 +209,33 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         degrees(kTempCooled, to, sizeof to);
         sprintf_s(tip, "The time a stopped engine takes from %s down to %s.", from, to);
         PageTip(tip);
-        // the ini holds the outside temperature in C; the slider shows it in the unit the dial shows
-        float outside = s.fahrenheit ? s.ambientC * 1.8f + 32.0f : s.ambientC;
+        // the outside temperature: by the map (the default), the slider shows and sets the temperature of the map's
+        // section in force, its own or its region's; where none is, and with the map left out, it sets AmbientC. The
+        // ini holds it in C; the slider shows it in the unit the dial shows
+        PageLabel("Outside by map", labelX);
+        changed(ImGui::Checkbox("##ambientbymap", &s.ambientByMap));
+        PageTip("The outside temperature goes by the map you drive on, which the mod reads from the game's save: the map's own or its region's, "
+                "as Gauges.ini has them under [Map:<name>]. Off: one temperature on every map.");
+        const bool byMap = s.ambientByMap && view.map[0] && view.mapOwn;
+        const float shown = byMap ? view.ambientC : s.ambientC;
+        float outside = s.fahrenheit ? shown * 1.8f + 32.0f : shown;
         PageLabel("Outside temperature", labelX);
         ImGui::SetNextItemWidth(w);
         if (ImGui::SliderFloat("##ambient", &outside, s.fahrenheit ? kAmbientRange[0] * 1.8f + 32.0f : kAmbientRange[0],
                                s.fahrenheit ? kAmbientRange[1] * 1.8f + 32.0f : kAmbientRange[1], s.fahrenheit ? "%.0f F" : "%.0f C", ImGuiSliderFlags_AlwaysClamp))
         {
             outside = floorf(outside + 0.5f);
-            s.ambientC = s.fahrenheit ? (outside - 32.0f) / 1.8f : outside;
-            act |= kPageChanged;
+            const float c = s.fahrenheit ? (outside - 32.0f) / 1.8f : outside;
+            if (byMap)
+            {
+                st.mapAmbientC = c;
+                act |= kPageMapAmbient;
+            }
+            else
+            {
+                s.ambientC = c;
+                act |= kPageChanged;
+            }
         }
         degrees(kTempCold, to, sizeof to);
         sprintf_s(tip, "A truck that has stood for long is this cold. In colder air the engine takes longer to warm up and is harder to overheat. "
@@ -225,13 +243,10 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         PageTip(tip);
         // dimmed and wrapped: a map's name can be long
         ImGui::BeginDisabled();
-        if (view.map[0] && view.mapOwn)
-        {
-            degrees(view.ambientC, to, sizeof to);
-            ImGui::TextWrapped("On %s it is %s outside, from [Map:%s] in Gauges.ini.", view.map, to, view.mapFrom);
-        }
+        if (byMap) ImGui::TextWrapped("On %s, from [Map:%s] in Gauges.ini: the slider sets it there.", view.map, view.mapFrom);
+        else if (!s.ambientByMap) ImGui::TextWrapped("The same on every map.");
         else if (view.map[0]) ImGui::TextWrapped("On %s: this temperature, as Gauges.ini has no section for the map or its region.", view.map);
-        else ImGui::TextWrapped("Every map has this temperature until the mod has found the game's save, which says the map.");
+        else ImGui::TextWrapped("This temperature until the mod has found the game's save, which says the map.");
         ImGui::EndDisabled();
         // the ini holds the speed in km/h; the slider shows it in the unit the speedometer shows
         float full = s.mph ? s.airFullKmh / 1.609f : s.airFullKmh;

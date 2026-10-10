@@ -45,6 +45,7 @@ static GaugeSettings g_set;
 static LONG g_setTurn = 0;
 static volatile LONG g_setDirty = 0, g_reloadAsked = 0, g_truckDropAsked = 0, g_resetAsked = 0;
 static volatile LONG g_powerTestAsked = 0; // 1 arm the power factor test, 2 cancel it
+static volatile LONG g_mapAmbientAsked = 0, g_mapAmbientTenths = 0; // the tab set the map's outside temperature, in tenths of a degree C
 
 // What the cluster shows, written by the mod's thread and read by the render thread.
 static SRWLOCK g_viewLock = SRWLOCK_INIT;
@@ -155,6 +156,7 @@ static void WriteIni(const GaugeSettings &s)
     num(L"OverheatMinutes", s.overheatMinutes);
     num(L"CoolDownMinutes", s.coolDownMinutes);
     num(L"AmbientC", s.ambientC);
+    whole(L"AmbientByMap", s.ambientByMap ? 1 : 0);
     num(L"AirFullKmh", s.airFullKmh);
     num(L"OilWarmUpMinutes", s.oilWarmUpMinutes);
     num(L"OilWarnC", s.oilWarnC);
@@ -305,7 +307,8 @@ static void ReadIni(GaugeSettings &s)
                         L"; [Map:Michigan], in force while a truck drives there. A map can have one apart from its region's, in a\n"
                         L"; section named after the map, such as [Map:Black River]; a map of a mod goes by its id, such as\n"
                         L"; [Map:level_my_map]. The names are the game's own, and Gauges.log names the map. The mod learns the map\n"
-                        L"; from the game's save, as the map loaded last. Elsewhere AmbientC of [Gauges] is in force.\n"
+                        L"; from the game's save, as the map loaded last. With AmbientByMap=1, the default, the map's section or its\n"
+                        L"; region's is in force where the map is known; elsewhere, and everywhere with AmbientByMap=0, AmbientC is.\n"
                         L"; AirFullKmh is the speed from which the radiator gets all the air that driving gives it (10 to 80 km/h).\n"
                         L"; Lower keeps a slow, hard pulling engine cooler.\n"
                         L"; The oil follows the coolant slowly and runs a little hotter under load. OilWarmUpMinutes is the time the oil\n"
@@ -369,6 +372,7 @@ static void ReadIni(GaugeSettings &s)
     s.overheatMinutes = IniFloat(L"OverheatMinutes", s.overheatMinutes, ini);
     s.coolDownMinutes = IniFloat(L"CoolDownMinutes", s.coolDownMinutes, ini);
     s.ambientC = IniFloat(L"AmbientC", s.ambientC, ini);
+    s.ambientByMap = IniBool(L"AmbientByMap", s.ambientByMap, ini);
     s.airFullKmh = IniFloat(L"AirFullKmh", s.airFullKmh, ini);
     s.oilWarmUpMinutes = IniFloat(L"OilWarmUpMinutes", s.oilWarmUpMinutes, ini);
     s.oilWarnC = IniFloat(L"OilWarnC", s.oilWarnC, ini);
@@ -425,6 +429,11 @@ void SettingsReload() { InterlockedExchange(&g_reloadAsked, 1); }
 void SettingsTruckDrop() { InterlockedExchange(&g_truckDropAsked, 1); }
 void SettingsReset() { InterlockedExchange(&g_resetAsked, 1); }
 void PowerTestAsk(bool run) { InterlockedExchange(&g_powerTestAsked, run ? 1 : 2); }
+void MapAmbientSet(float c)
+{
+    InterlockedExchange(&g_mapAmbientTenths, (LONG)lroundf(c * 10.0f));
+    InterlockedExchange(&g_mapAmbientAsked, 1);
+}
 
 // ---- a truck's own scales: the section [Truck:<key>] of Gauges.ini ----
 // A truck can have seven settings of its own: TachClass, IdleRpm, RedlineRpm, MaxRpm, SpeedMax, BoostMax and BoostProfile. They are written
@@ -787,8 +796,8 @@ static void LogSettings(const GaugeSettings &s)
     Log(L"settings: %s scales: idle %.0f rpm, red zone from %.0f of %.0f, speedometer to %.0f km/h, boost to %g bar, a %s turbo; units %s, %s, %s", classes[s.tachClass], k.idle,
         k.redline, k.max, k.speedMax, k.boost, profiles[s.boostProfile], s.mph ? L"mph" : L"km/h", s.psi ? L"psi" : L"bar", s.fahrenheit ? L"F" : L"C");
     Log(L"settings: tilt lamp amber from %g degrees to a side, red from %g, red from %g up or down a slope", s.rollWarnDeg, s.rollDangerDeg, s.pitchDangerDeg);
-    Log(L"settings: coolant warm after %g minutes of driving, in the red zone after %g minutes floored with the wheels spinning at a standstill, cool %g minutes after the engine stops, %g C outside",
-        s.warmUpMinutes, s.overheatMinutes, s.coolDownMinutes, s.ambientC);
+    Log(L"settings: coolant warm after %g minutes of driving, in the red zone after %g minutes floored with the wheels spinning at a standstill, cool %g minutes after the engine stops, %g C outside%s",
+        s.warmUpMinutes, s.overheatMinutes, s.coolDownMinutes, s.ambientC, s.ambientByMap ? L" where the map's temperature is not known" : L" on every map");
     Log(L"settings: the oil warm after %g minutes of driving, too hot from %g C", s.oilWarmUpMinutes, s.oilWarnC);
     Log(L"settings: the radiator has all its air from %g km/h; engine damage %s: %g percent a minute at 125 C, %g percent a minute for a cold engine floored at the red zone at 0 C",
         s.airFullKmh, s.damage ? L"on" : L"off", s.hotDamage, s.coldDamage);
@@ -1306,6 +1315,7 @@ static DWORD WINAPI Run(void *)
     char map[64] = "", mapRead[64] = "", mapFrom[64] = "";
     float mapC = 0.0f;
     bool mapOwn = false, mapAsk = true, saveSeen = true;
+    ULONGLONG mapAmbientLogAt = 0; // when to log the temperature the tab set, once the slider has rested
     std::wstring savePath;
     FILETIME saveWritten = {};
     ULONGLONG saveLookAt = 0;
@@ -1407,8 +1417,24 @@ static DWORD WINAPI Run(void *)
                 }
             }
         }
-        // the outside temperature in force: the map's or its region's, looked up again when the map changes or the
-        // ini was read or saved
+        // the outside temperature in force: the map's or its region's (AmbientByMap), looked up again when the map
+        // changes or the ini was read or saved. The tab's slider sets the section in force
+        if (InterlockedExchange(&g_mapAmbientAsked, 0) && mapOwn && mapFrom[0])
+        {
+            const float c = SettingsRange(g_mapAmbientTenths / 10.0f, kAmbientRange[0], kAmbientRange[1]);
+            if (c != mapC)
+            {
+                const std::wstring ini = IniPath();
+                IniPutFloat(MapSection(mapFrom).c_str(), L"AmbientC", c, ini);
+                mapC = c;
+                mapAmbientLogAt = GetTickCount64() + 1000;
+            }
+        }
+        if (mapAmbientLogAt && GetTickCount64() >= mapAmbientLogAt)
+        {
+            Log(L"map: [Map:%S] set to %g C outside from the tab", mapFrom, mapC);
+            mapAmbientLogAt = 0;
+        }
         if (strcmp(mapRead, map) || edited) mapAsk = true;
         if (mapAsk)
         {
@@ -1418,14 +1444,15 @@ static DWORD WINAPI Run(void *)
             {
                 char title[96];
                 MapTitle(map, title, sizeof title);
-                if (mapOwn) Log(L"map: %S, %g C outside ([Map:%S] in Gauges.ini)", title, mapC, mapFrom);
+                if (mapOwn && s.ambientByMap) Log(L"map: %S, %g C outside ([Map:%S] in Gauges.ini)", title, mapC, mapFrom);
+                else if (mapOwn) Log(L"map: %S, %g C outside (AmbientC: AmbientByMap=0 leaves [Map:%S] out)", title, s.ambientC, mapFrom);
                 else if (map[0]) Log(L"map: %S has no section in Gauges.ini, nor has its region, so it is %g C outside (AmbientC)", title, s.ambientC);
             }
             strcpy_s(mapRead, map);
             mapAsk = false;
         }
         GaugeSettings inForce = s;
-        if (mapOwn) inForce.ambientC = mapC;
+        if (mapOwn && s.ambientByMap) inForce.ambientC = mapC;
         // what the cluster shows: the truck being driven; with the ini's Demo, demo values while none is
         TruckRaw raw;
         World world;
@@ -1463,7 +1490,7 @@ static DWORD WINAPI Run(void *)
         if (map[0]) MapTitle(map, v.map, sizeof v.map);
         else v.map[0] = 0;
         strcpy_s(v.mapFrom, mapFrom);
-        v.mapOwn = mapOwn;
+        v.mapOwn = mapOwn && s.ambientByMap;
         v.ambientC = inForce.ambientC;
         v.powerTest = watch.powerTest.state;
         v.powerPhase = watch.powerTest.phase;
@@ -1576,7 +1603,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.redlineRpm == b.redlineRpm && a.maxRpm == b.maxRpm && a.speedMax == b.speedMax && a.boostMax == b.boostMax && a.toggleKey == b.toggleKey &&
            a.rollWarnDeg == b.rollWarnDeg && a.rollDangerDeg == b.rollDangerDeg && a.pitchDangerDeg == b.pitchDangerDeg &&
            a.warmUpMinutes == b.warmUpMinutes && a.overheatMinutes == b.overheatMinutes && a.coolDownMinutes == b.coolDownMinutes && a.ambientC == b.ambientC &&
-           a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.coldDamage == b.coldDamage &&
+           a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.coldDamage == b.coldDamage &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly &&
            a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox;
 }
@@ -1605,7 +1632,7 @@ int wmain(int argc, wchar_t **argv)
     Check(d.layout == kLayoutStrip && d.style == kFaceOpen && !d.showAir && !d.demo && d.probe == 0 && !d.mph && !d.psi && !d.fahrenheit && d.toggleKey == 0 &&
           !strcmp(d.padToggle, "None") && d.rollWarnDeg == 15.0f && d.rollDangerDeg == 25.0f && d.pitchDangerDeg == 35.0f,
           "defaults: strip, open style, metric, the air dial off, no toggle, demo off, probe off, the tilt lamp at 15, 25 and 35 degrees");
-    Check(d.warmUpMinutes == 3.0f && d.overheatMinutes == 1.5f && d.coolDownMinutes == 15.0f && d.ambientC == 15.0f,
+    Check(d.warmUpMinutes == 3.0f && d.overheatMinutes == 1.5f && d.coolDownMinutes == 15.0f && d.ambientC == 15.0f && d.ambientByMap,
           "defaults: the coolant warm after 3 minutes, in the red zone after 1.5, cool after 15, with 15 C outside");
     Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.coldDamage == 5.0f,
           "defaults: the radiator's full airflow from 30 km/h, engine damage on, 10 percent a minute for the heat and 5 for the cold");
@@ -1639,6 +1666,7 @@ int wmain(int argc, wchar_t **argv)
     c.overheatMinutes = 2.3f;
     c.coolDownMinutes = 20.0f;
     c.ambientC = -12.5f;
+    c.ambientByMap = false;
     c.airFullKmh = 45.5f;
     c.damage = false;
     c.hotDamage = 22.5f;
@@ -1660,7 +1688,7 @@ int wmain(int argc, wchar_t **argv)
                             c.tachClass != d.tachClass && c.idleRpm != d.idleRpm && c.redlineRpm != d.redlineRpm && c.maxRpm != d.maxRpm &&
                             c.speedMax != d.speedMax && c.boostMax != d.boostMax && c.rollWarnDeg != d.rollWarnDeg && c.rollDangerDeg != d.rollDangerDeg &&
                             c.pitchDangerDeg != d.pitchDangerDeg && c.warmUpMinutes != d.warmUpMinutes && c.overheatMinutes != d.overheatMinutes &&
-                            c.coolDownMinutes != d.coolDownMinutes && c.ambientC != d.ambientC && c.airFullKmh != d.airFullKmh && c.damage != d.damage &&
+                            c.coolDownMinutes != d.coolDownMinutes && c.ambientC != d.ambientC && c.ambientByMap != d.ambientByMap && c.airFullKmh != d.airFullKmh && c.damage != d.damage &&
                             c.hotDamage != d.hotDamage && c.coldDamage != d.coldDamage && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
                             c.demo != d.demo && c.probe != d.probe && c.soundVolume != d.soundVolume && c.soundsOnly != d.soundsOnly &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
@@ -1685,7 +1713,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 62, "ini: the help text survives a write (62 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 63, "ini: the help text survives a write (63 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());
