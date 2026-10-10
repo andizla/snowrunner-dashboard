@@ -1035,9 +1035,10 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         // the powertrain: what the engine would deliver, worked out and logged, not handed to the game yet
         PowertrainStep(w.power, raw, kClassCurves[s.tachClass], TachSpeed(w.tach, scale), scale.redline > 0.0f ? scale.max / scale.redline : 1.0f, w.temp.oil,
                        scale.boost > 0.0f ? w.boost.bar / scale.boost : 0.0f, dt);
-        // the automatic: the gear it would be in, the same way. With the probe on each of its shifts is logged beside
-        // the game's gear while the game's automatic drives a numbered gear
+        // the automatic: the gear it would be in, the same way, by the pedal as held. With the probe on each of its
+        // shifts is logged beside the game's gear while the game's automatic drives a numbered gear
         const int boxGear = w.gearbox.gear;
+        const float foot = TruckEngineOn(raw) ? TruckPedal(raw) : 0.0f;
         const bool smtDrives = SmtManual(w, raw);
         if (smtDrives)
         {
@@ -1050,15 +1051,15 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         }
         else
         {
-            GearboxStep(w.gearbox, raw, scale, w.power.pedal, w.power.power, dt);
+            GearboxStep(w.gearbox, raw, scale, foot, w.power.power, dt);
             w.clutch = ClutchModel{};
         }
         if (probe && boxGear >= 1 && w.gearbox.gear >= 1 && w.gearbox.gear != boxGear && raw.automatic && raw.gearEngaged >= 1 && raw.gearEngaged <= TruckTopGear(raw))
             Log(L"automatic: the model would shift %d to %d at %.0f rpm on the gearbox's input, the pedal at %.2f (the game's gear %d)", boxGear, w.gearbox.gear,
-                w.gearbox.input, w.power.pedal, raw.gearEngaged);
+                w.gearbox.input, foot, raw.gearEngaged);
         // the mod's automatic in the game (Gearbox=1): while the game's shifter is in A the model's gear is set through
         // the game's own shift function, with the game's automatic flag put down so its own choice stops
-        const TakeoverOrders orders = TakeoverStep(w.take, raw, w.gearbox.gear, s.gearbox == kGearboxModel && g_shiftGear != nullptr, dt);
+        const TakeoverOrders orders = TakeoverStep(w.take, raw, w.gearbox.gear, s.gearbox == kGearboxModel && g_shiftGear != nullptr, dt, GearboxLowestFit(w.gearbox, raw, scale));
         if (orders.took)
         {
             w.gearbox.gear = raw.gear;
@@ -1072,7 +1073,11 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             w.gearbox.gear = orders.adopted;
             w.gearbox.pause = kTakeHold;
             w.gearbox.wanted = 0.0f;
-            if (probe) Log(L"gearbox: the game's own automatic picked gear %d (the shift modifier, or A picked again); the mod's goes on from it", orders.adopted);
+            if (probe && orders.adopted == raw.gear)
+                Log(L"gearbox: the game's own automatic picked gear %d (the shift modifier, or A picked again); the mod's goes on from it", orders.adopted);
+            else if (probe)
+                Log(L"gearbox: the game's own automatic picked gear %d, lower than the engine can take at %.1f m/s; the mod's goes on from gear %d", raw.gear, raw.speed,
+                    orders.adopted);
         }
         if (orders.flagDown) m.put(w.refs.action + 0x3C, (uint8_t)0);
         if (orders.shiftTo)
@@ -1080,7 +1085,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             if (GameShift(w.refs.vehicle, orders.shiftTo))
             {
                 if (probe) Log(L"gearbox: %d to %d at %.0f rpm on the gearbox's input, the engine at %.0f rpm, the pedal at %.2f", raw.gear, orders.shiftTo, w.gearbox.input,
-                               w.gearbox.rpm, w.power.pedal);
+                               w.gearbox.rpm, foot);
             }
             else
             {

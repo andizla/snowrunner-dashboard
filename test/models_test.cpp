@@ -285,7 +285,7 @@ static int Replay(const char *path, float idleRpm, float redlineRpm)
             if (tach.rpm > k.redline) redSteps++;
             TempStep(temp, kind, t, TachSpeed(tach, k), s, dt);
             PowertrainStep(power, t, kClassCurves[s.tachClass], TachSpeed(tach, k), k.max / k.redline, temp.oil, boost.bar / k.boost, dt);
-            GearboxStep(box, t, k, power.pedal, power.power, dt);
+            GearboxStep(box, t, k, TruckEngineOn(t) ? TruckPedal(t) : 0.0f, power.power, dt);
             AirStep(air, t, TachSpeed(tach, k), dt);
             airLowest = fminf(airLowest, air.bar);
             if (air.bar < kAirWarn) airRed += dt;
@@ -1297,10 +1297,10 @@ int main(int argc, char **argv)
         bool floorLocked, lightLocked;
         const GearboxModel floored = pull(1.0f, floorShift, floorPause, floorLocked), light = pull(0.3f, lightShift, lightPause, lightLocked);
         // floored, the first shift is called for at kShiftUpFloored, or once the second gear has its room, and made
-        // kShiftUpAfter later
+        // kShiftUpAfterFloored later
         const float floorPoint = fmaxf(TruckGearTop(g, 1) * GearboxPoint(k, kShiftUpFloored) / k.redline, TruckGearTop(g, 2) * GearboxPoint(k, kShiftDownFloored) * kShiftRoom / k.redline);
         const float gaining = TruckGearTop(g, TruckTopGear(g)) / 40.0f;
-        Check(floored.gear == 4 && floored.shifts == 3 && light.shifts == 3 && floorShift >= floorPoint && floorShift <= floorPoint + gaining * kShiftUpAfter + 0.1f && lightShift < floorShift - 1.0f &&
+        Check(floored.gear == 4 && floored.shifts == 3 && light.shifts == 3 && floorShift >= floorPoint && floorShift <= floorPoint + gaining * kShiftUpAfterFloored + 0.1f && lightShift < floorShift - 1.0f &&
                   floorPause >= kShiftPause && floorLocked && lightLocked,
               "automatic: pulling away it shifts through each gear once, late when floored and early at a light foot, a second apart, and locks the converter up");
         // a steady speed between the shift points with the pedal wandering: the gear holds
@@ -1503,6 +1503,26 @@ int main(int argc, char **argv)
                 const TakeoverOrders afterHold = TakeoverStep(undone, tu, 1, true, kTakeHold);
                 again = again && pick.adopted == 3 && back.adopted == 1 && !back.gaveBack && later.shiftTo == 0 && !later.gaveBack && afterHold.gaveBack;
             }
+            // the game's own automatic picking the first gear at speed (the foot off): put back to the lowest gear the
+            // engine can take, also when the game goes back to the first within the hold
+            {
+                TakeoverModel fast = take;
+                fast.set = 3; // driving in the third gear it set
+                fast.adopted = false;
+                TruckRaw tf = tk;
+                tf.automatic = 1;
+                tf.gear = tf.gearEngaged = 1;
+                GearboxModel rollingAt = {};
+                rollingAt.rolling = 20.0f;
+                const int fit = GearboxLowestFit(rollingAt, tf, k);
+                const TakeoverOrders low = TakeoverStep(fast, tf, 4, true, kDt, fit);
+                tf.automatic = 0;
+                tf.gear = tf.gearEngaged = 3;
+                TakeoverStep(fast, tf, 3, true, 0.2f, fit);
+                tf.gear = tf.gearEngaged = 1;
+                const TakeoverOrders lowAgain = TakeoverStep(fast, tf, 3, true, 0.2f, fit);
+                again = again && fit == 3 && low.adopted == 3 && low.shiftTo == 3 && lowAgain.adopted == 3 && lowAgain.shiftTo == 3 && fast.driving;
+            }
             // reverse picked in A (the game's flag up with it): given back at once, never shifted forwards again
             TruckRaw back = tk;
             back.automatic = 1;
@@ -1545,7 +1565,8 @@ int main(int argc, char **argv)
             TakeoverRefused(take, tk);
             const TakeoverOrders retry = TakeoverStep(take, tk, 3, true, kDt);
             Check(taking && shifting && again && reverseHandsBack && byHand && lowOrOff && wish.shiftTo == 3 && retry.shiftTo == 3 && take.driving,
-                  "automatic in the game: taken in the game's gear from A, the model's gears set, the game's own gear taken on at the shift modifier, given back to "
+                  "automatic in the game: taken in the game's gear from A, the model's gears set, the game's own gear taken on at the shift modifier (never lower than the "
+                  "engine can take), given back to "
                   "reverse, to a gear or a low gear picked by hand (not to a power factor raised) and to a stopped engine, and a gear the game refused set again");
             // the needle follows the converter's engine speed with its lag; with the engine off it falls to nothing
             TachModel follow = {};

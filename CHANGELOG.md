@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.12.3] 2026-10-10
+
+- The mod's automatic goes by the pedal where your foot holds it. It went by the pedal after the powertrain's curve, under which a fifth of the pedal reads as a twentieth, so a light foot sat on the line between coasting and driving and it shifted 4 to 5 and back every few seconds.
+- A tap of the shift modifier with the foot off no longer drops the truck into first at speed. The game's own automatic picks first then whatever the speed (at 23 km/h, about 8400 rpm), and the mod took that gear on; it now takes the lowest gear the engine can take at the speed the wheels turn.
+- Floored, a shift up comes 0.15 s after it is called for, where it was 0.4 s: a short first gear went 300 to 800 rpm past its shift point in that time.
+
 ## [0.12.2] 2026-10-10
 
 - The mod's automatic no longer shifts down into a gear that races the engine. In 0.12.1 it learned how fast the wheels turn for the truck's speed from any moment with the foot on, so a bump or the truck sliding back down a slope could teach it the truck went at half its speed: it then shifted down as far as first at up to 6800 rpm, and held first on the limiter for half a minute. It learns now only while the wheels turn steadily and alike, the truck going forwards with no brake or handbrake, and follows a lower reading over two seconds. It goes by the wheels again and weighs them against the ground only to tell wheelspin and locked wheels, and no shift down takes the engine past nine tenths of the way to the red zone at the speed the wheels turn.
