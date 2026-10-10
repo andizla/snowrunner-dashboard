@@ -420,6 +420,19 @@ Reference, for what is possible, not for copying: Power Overhaul (mod.io 6390376
 source): rpm following speed in gear and free revving in neutral, automatic shifting on torque-curve thresholds
 with anti-repeat and skip-gear downshifts, a low-speed torque boost, Low / Low- multipliers, a redline fuel cut.
 
+Step 5 of module 14's order, begun 2026-10-10 on "continue on the next thing on the agenda" (the wheel's manual,
+step 3, put off by the user until the automatic is done): first the power factor test (0.12.4, `PowerTestStep` in
+models.h, the tab's Gearbox section): floored in 3rd or higher, the wheels under 0.6 of the gear's top, the game's
+automatic flag down, seven phases of 1 s with the gear held and the mod's automatic left out: the factor as it is,
+halved by a write of action + 0x38 alone, as it is, halved and the gear set again (ShiftGear to the same gear), as it
+is set again, doubled set again, as it is set again; each phase's pull the slope of the speed after 0.3 s, its first
+0.3 s apart (a gap at the shift), the factor read back at its end (does the game keep the write) and action + 0xB4's
+highest; the ratios against the neighbouring phases as it is. The factor put back (and the gear set again where a
+phase did) at the end, at a lift, the brake, another gear, the flag up, the engine stopping or past 0.95 of the
+gear's top. Models 135 OK. Owed: the user's run; then the torque route: the factor written each pass if a write alone
+counts, else at each shift only (and a hook for the rest), and whether it goes over 1 (the converter's 2 at the
+stall, the boost).
+
 Part A, research and design note (no hook before the user's OK on the note):
 - Where the game turns the pedal into torque and how the automatic decides a shift: the truck action's per-frame
   update, the helper 0xd717e0 (the plan has it: the wheel path, the power factor at TruckAction+0x38, the pedal at
