@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#define GAUGES_VERSION "0.12.5"
+#define GAUGES_VERSION "0.12.6"
 
 // The exe the addresses in this mod are from (SnowRunner on Steam, the build of 22 July 2026). On any other the mod
 // stands down.
@@ -248,7 +248,8 @@ enum { kSoundOil = kTurboTiers, kSoundTierCount };
 // stopped, a string that lives as long as the mod
 enum { kViewPowerOff, kViewPowerArmed, kViewPowerRunning, kViewPowerDone, kViewPowerStopped };
 struct GaugeView { bool show, demo; int hidden; GaugeState st; int engineDamage, engineCapacity; char truck[96]; bool truckOwn; char map[96], mapFrom[64]; bool mapOwn; float ambientC;
-                   int powerTest, powerPhase; const char *powerWhy; };
+                   int powerTest, powerPhase; const char *powerWhy;
+                   float ambientDay, ambientNight, hour; }; // the map's day and night (with mapOwn), the hour of the game's day (-1 not known)
 
 LONG SettingsGet(GaugeSettings &out);       // the settings in force (any thread); returns their turn, for SettingsPut
 void SettingsPut(const GaugeSettings &in, LONG turn); // settings edited from those of a turn: the mod takes them at once and saves the ini a

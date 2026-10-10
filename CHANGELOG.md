@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.12.6] 2026-10-10
+
+- The outside temperature follows the game's day: coldest just before sunrise, warmest in the afternoon. A map's section can give the day's warmest and the night's coldest, `DayC` and `NightC` (Scandinavia's asphalt has frost at night and none by day: `DayC=3`, `NightC=-12`); a section with only `AmbientC` swings 10 C around it. The tab shows both and the hour, and its slider moves them together.
+- The mod finds the game's clock by itself: with `Probe=1` it looks through the game's main objects for a value from 0 to 24 that rises at a day's pace while you drive, and takes the one that jumps when the night is skipped on the map (or time passes in a garage), or the only one left after three minutes. `Gauges.log` tells the search; the place is kept in `Gauges.ini` under `[Clock]` for this version of the game and read from then on. Until it is found the day's mean is in force, as before.
+
 ## [0.12.5] 2026-10-10
 
 - The outside temperature by the map is a setting of its own, on by default: `AmbientByMap` (on the tab, "Outside by map"). While the map's temperature is in force, the tab's slider shows it and sets it in the map's or its region's section of `Gauges.ini`; before, the slider showed and set `AmbientC`, which is only in force where the map is not known, so the tab looked as if the temperature were set by hand. Off, `AmbientC` is in force on every map.

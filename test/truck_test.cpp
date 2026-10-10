@@ -20,6 +20,7 @@
 #include "smt.h"
 #include "maps.h"
 #include "game_code.h"
+#include "clock_scan.h"
 
 struct Region { uint64_t at; std::vector<uint8_t> bytes; };
 static std::vector<Region> g_game;
@@ -877,6 +878,76 @@ int main()
                   strstr(line, "SetPowerFactor at +6000 (more than once)") && strstr(line, "ShiftToNeutral at +3200,") &&
                   strstr(line2, "ShiftToReverse not found (too short to tell it behind a hook)") && strstr(line2, "ShiftToNeutral not looked for"),
               "gearbox code: each function found by its bytes, ShiftToNeutral between ShiftToHigh and ShiftToReverse, one behind a hook's jump held by another mod");
+    }
+
+    // the game's clock: a made up game with the hour two pointers away from a static ([[exe+static]+0x30]+0x44), a
+    // day of 24 minutes, a decoy that rises at a pace of its own, and a value that stands. Both rising places become
+    // steady, neither is taken while there are two, and the night skipped on the map (a gap, the hour 9 on) makes the
+    // hour the clock
+    {
+        Block(kExe + kClockStaticFrom, kClockStaticTo - kClockStaticFrom);
+        const uint64_t sky = 0x10200000, decoy = 0x10210000, deep = 0x10220000;
+        Block(sky, 0x1000);
+        Block(decoy, 0x1000);
+        Block(deep, 0x1000);
+        Put(kExe + kClockStaticFrom + 0x100, sky);
+        Put(sky + 0x30, deep);
+        Put(kExe + kClockStaticFrom + 0x108, decoy);
+        float hour = 21.0f, timer = 3.0f, clock = 100.0f;
+        auto set = [&]() {
+            Put(deep + 0x44, hour);
+            Put(decoy + 0x10, timer);
+            Put(sky + 0x8, 5.0f);
+        };
+        set();
+        ClockScan scan;
+        ClockScanBegin(scan, kMemory, 0x100000);
+        const bool begun = scan.state == kClockSearching && scan.objects.size() == 4 && scan.slots.size() >= 3;
+        int steadyCount = 0;
+        bool foundEarly = false;
+        auto drive = [&](float seconds, bool driving) {
+            for (float at = 0.0f; at < seconds; at += 1.0f)
+            {
+                if (driving) clock += 1.0f;
+                hour += driving ? 24.0f / (24.0f * 60.0f) : 0.0f;
+                if (hour >= 24.0f) hour -= 24.0f;
+                timer += driving ? 0.005f : 0.0f;
+                set();
+                const ClockNews news = ClockScanStep(scan, kMemory, kVehicle, clock, driving);
+                steadyCount += news.steadyNow;
+                foundEarly = foundEarly || news.found;
+            }
+        };
+        drive(120.0f, true);
+        const bool twoSteady = scan.state == kClockSearching && steadyCount == 2 && !foundEarly && scan.slots.size() == 2;
+        // the night skipped on the map: the truck not driven, the hour 9 on
+        drive(3.0f, false);
+        hour += 9.0f;
+        if (hour >= 24.0f) hour -= 24.0f;
+        set();
+        drive(10.0f, true);
+        float read = -1.0f;
+        const bool found = scan.state == kClockFound && scan.found.depth == 2 && scan.found.rva == kClockStaticFrom + 0x100 && scan.found.off[0] == 0x30 &&
+                           scan.found.off[1] == 0x44 && !scan.found.isDouble && scan.found.scale == 1.0f && ClockRead(kMemory, scan.found, read) && fabsf(read - hour) < 0.001f;
+        char text[64];
+        ClockPath parsed = {};
+        ClockPathText(scan.found, text, sizeof text);
+        const bool roundTrip = ClockPathParse(text, parsed) && parsed.rva == scan.found.rva && parsed.depth == 2 && parsed.off[1] == 0x44 && parsed.scale == 1.0f &&
+                               !ClockPathParse("2a8eb90,3,0,0,f,1", parsed) && !ClockPathParse("nonsense", parsed);
+        Check(begun && twoSteady && found && roundTrip, "clock: the game's hour found two pointers from a static: steady among a decoy, taken when the night is skipped, kept as text");
+        // the only steady place is taken after kClockAlone without a jump
+        Put(decoy + 0x10, 0.0f);
+        ClockScan single;
+        ClockScanBegin(single, kMemory, 0x100000);
+        for (float at = 0.0f; at < kClockAlone + 30.0f; at += 1.0f)
+        {
+            clock += 1.0f;
+            hour += 24.0f / (24.0f * 60.0f);
+            if (hour >= 24.0f) hour -= 24.0f;
+            Put(deep + 0x44, hour);
+            ClockScanStep(single, kMemory, kVehicle, clock, true);
+        }
+        Check(single.state == kClockFound && single.found.off[1] == 0x44, "clock: the only place that rises at a day's pace is taken after three minutes");
     }
 
     printf(g_failed ? "TRUCK TEST FAILED (%d)\n" : "TRUCK TEST OK\n", g_failed);

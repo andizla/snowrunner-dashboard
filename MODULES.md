@@ -414,6 +414,26 @@ Sources: the community wiki (spintires.fandom.com, a page per region), the store
 Epic store pages of the seasons, Focus and Saber news, VGTimes), and the Wikipedia climate tables of the towns named
 (climate-data.org for Sault Ste. Marie, Norilsk and Tapachula, weatherapi.com for Svobodny).
 
+The air over the game's day (0.12.6, 2026-10-10), on the user's word: "we need dynamic temps based on time of day.
+For example the scandinavia map features frost on the asphalt roads at night but not on day. So something like
++2-4 mid-day and -12 at night." `DayC` and `NightC` per section (`MapAir` in gauges.cpp), else `AmbientC` with
+`kDaySwing` 10 C; `DayNightC` (maps.h) half cosines from the coldest at 5:00 to the warmest at 15:00 and back; the
+slider shifts both (`MapAirShift`). The game's clock is not in its save, and trainers freeze it at 12:00 or 00:00
+(so it is kept in hours), but its place for exe 6a607c05 was not known and their tables were out of reach (the
+network blocks the sites): `src/clock_scan.h` searches for it in the game with `Probe=1`: the statics exe + 0x2a80000
+to + 0x2ac0000 (around the main objects at 0x2a8eb30 to 0x2a90728), the first 0x800 bytes of up to 4096 objects
+they point to and the first 0x200 of up to 16384 those point to (pointers into the exe's image left out), every
+float or double from 0 to 24 (not 0) kept while it rises at one pace (within 10 %, between a day of 5 minutes and
+one of 12 hours) against the truck's clock (vehicle + 0x114), looks every 10 s, steady after 4; then looks every 2
+s, a jump of an hour or more off the pace kept for 2 looks after it is the clock set (the night skipped with T on
+the map); else the only steady place after 180 s. Found, it is kept as `[Clock]` Exe= the stamp, Place=
+rva,depth,off0,off1,f|d,scale (1 hours, 24 a share of the day), read each pass; forgotten after five minutes of
+driving without a read. Truck test 74 OK (two for the search on a made up game: the hour two pointers deep among a
+decoy, taken at the skipped night; the only steady place taken after three minutes), settings 36 of 39 (the Wine nan
+cases; two new for the sections' day and night and the curve; the help text 66 lines). Owed: the user's drive with
+the probe and a skipped night, the log's "clock:" lines; then the frost itself is the game's (not in the mod's
+hands), the mod's air only moves the engine's temperatures.
+
 Part D, turbo spool profiles. A profile is the turbo's character, apart from `BoostMax` (how much it makes): where
 it starts and finishes making boost (`kBoostRevsFrom`, `kBoostRevsFull`), how long it lags on the way up
 (`kBoostSpool`, `kBoostSpoolLow`) and how fast it falls (`kBoostFall`, `kBoostLift`). A first set for the user to

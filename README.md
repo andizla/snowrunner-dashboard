@@ -4,7 +4,7 @@ A gauge cluster for the truck you drive in SnowRunner: analogue dials in the sty
 
 The cluster has a speedometer, a tachometer with the gear, fuel with the range, coolant and oil temperature, boost pressure, brake air pressure and nine lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage, cold engine, tilt and oil temperature.
 
-This is version 0.12.5. It reads the truck's own values for the speedometer, the gear, the fuel gauge and seven of the lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage and tilt. The game has no engine speed, no range, no coolant or oil temperature, no boost pressure and no brake air, so the mod works those out from what the truck does, and lights the cold and oil lamps by the temperatures. The temperature also costs the engine: overheating it, or working it hard while cold, adds to the game's own engine damage. `Damage=0` switches that off. The scales of the tachometer and the speedometer and the turbo's boost and character can be set for each kind of truck. The brake air comes from the engine's compressor, which fills the tanks up to 8.2 bar and starts again at 6.9, and each press of the brake and letting the handbrake go draw from them; scouts brake by hydraulics and have no air dial. The outside temperature goes by the map you are on, which the mod reads from the game's save. With `Gearbox=1` an automatic of the mod's own, with a torque converter, picks the gears while the game's shifter is in A.
+This is version 0.12.6. It reads the truck's own values for the speedometer, the gear, the fuel gauge and seven of the lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage and tilt. The game has no engine speed, no range, no coolant or oil temperature, no boost pressure and no brake air, so the mod works those out from what the truck does, and lights the cold and oil lamps by the temperatures. The temperature also costs the engine: overheating it, or working it hard while cold, adds to the game's own engine damage. `Damage=0` switches that off. The scales of the tachometer and the speedometer and the turbo's boost and character can be set for each kind of truck. The brake air comes from the engine's compressor, which fills the tanks up to 8.2 bar and starts again at 6.9, and each press of the brake and letting the handbrake go draw from them; scouts brake by hydraulics and have no air dial. The outside temperature goes by the map you are on, which the mod reads from the game's save. With `Gearbox=1` an automatic of the mod's own, with a torque converter, picks the gears while the game's shifter is in A.
 
 ## What you need
 
@@ -110,6 +110,16 @@ AmbientC=5
 ```
 
 The names are the game's own English names. The mod writes a section for each of the game's regions into an ini that has none, with a first guess at its temperature, and reads which map you are on from the game's save, as the map it loaded last. `Gauges.log` and the Gauges tab name the map, its region and the section in force. A map of a mod goes by its id, such as `[Map:level_my_map]`. Where neither the map nor its region has a section, or before the mod has read the save, `AmbientC` of `[Gauges]` is in force; `AmbientByMap=0` (on the tab, "Outside by map" off) puts it in force on every map. While the map's temperature is in force, the tab's "Outside temperature" slider shows it and sets it in the section it comes from.
+
+The air follows the game's day: coldest just before sunrise, warmest in the afternoon. A section can give both ends, `DayC` and `NightC`:
+
+```ini
+[Map:Scandinavia]
+DayC=3
+NightC=-12
+```
+
+A section with only `AmbientC` swings 10 C around it. The game keeps its clock in memory where no mod knew it for this version of the game, so the mod looks for it while you drive with `Probe=1`: drive a few minutes, then skip the night on the map (T) or let time pass in a garage once, and `Gauges.log` says "the game's time of day is at ...". The mod keeps the place in `Gauges.ini` under `[Clock]` and reads the clock from then on, also without `Probe`; until then the day's mean is in force. The tab shows the day's and the night's temperature and the hour of the game's day.
 
 Each of the three coolant times changes one thing: how fast a cold engine warms up, how fast a hot one overheats, how fast a stopped one cools. The temperatures the engine settles at stay as they are. The outside temperature moves those: in frost the engine takes longer to warm up and cannot be overheated, and on a hot day it overheats sooner. `AirFullKmh` moves them at a crawl: lower keeps a slow, hard pulling engine cooler, and higher makes it overheat at speeds where it now stays out of the red zone.
 

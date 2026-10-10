@@ -8,6 +8,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stddef.h>
+#include <math.h>
 
 // A region: its id, its name, and its first outside temperature, a guess the user sets in Gauges.ini.
 struct MapRegion { const char *id, *name; float ambientC; };
@@ -116,4 +117,27 @@ inline bool MapFromSave(const char *text, size_t length, char *out, size_t size)
         return true;
     }
     return false;
+}
+
+// ---- the outside temperature over the game's day ----
+// A map's air is coldest just before sunrise and warmest in the afternoon. A section gives the day's warmest and the
+// night's coldest (DayC and NightC), or only the day's mean (AmbientC), which then swings kDaySwing between them.
+static const float kDaySwing = 10.0f;        // C from the night's coldest to the day's warmest where a section gives only the mean
+static const float kColdestHour = 5.0f, kWarmestHour = 15.0f;
+
+// The outside temperature at hour (0 to 24) of the game's day: from night at kColdestHour up to day at kWarmestHour,
+// and down again through the evening and the night, along half a cosine each way.
+inline float DayNightC(float day, float night, float hour)
+{
+    float h = fmodf(hour, 24.0f);
+    if (h < 0.0f) h += 24.0f;
+    const float rise = kWarmestHour - kColdestHour, fall = 24.0f - rise;
+    float share; // 0 at the coldest, 1 at the warmest
+    if (h >= kColdestHour && h <= kWarmestHour) share = 0.5f - 0.5f * cosf(3.14159265f * (h - kColdestHour) / rise);
+    else
+    {
+        const float since = h > kWarmestHour ? h - kWarmestHour : h + 24.0f - kWarmestHour;
+        share = 0.5f + 0.5f * cosf(3.14159265f * since / fall);
+    }
+    return night + (day - night) * share;
 }

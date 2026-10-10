@@ -243,7 +243,18 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         PageTip(tip);
         // dimmed and wrapped: a map's name can be long
         ImGui::BeginDisabled();
-        if (byMap) ImGui::TextWrapped("On %s, from [Map:%s] in Gauges.ini: the slider sets it there.", view.map, view.mapFrom);
+        if (byMap)
+        {
+            char day[32], night[32];
+            degrees(view.ambientDay, day, sizeof day);
+            degrees(view.ambientNight, night, sizeof night);
+            if (view.hour >= 0.0f)
+                ImGui::TextWrapped("On %s, from [Map:%s] in Gauges.ini: %s by day, %s by night, now %02d:%02d of the game's day. The slider moves both.", view.map,
+                                   view.mapFrom, day, night, (int)view.hour, (int)((view.hour - (int)view.hour) * 60.0f));
+            else
+                ImGui::TextWrapped("On %s, from [Map:%s] in Gauges.ini: %s by day, %s by night. The game's clock is not known yet (with Probe=1 the mod looks "
+                                   "for it while you drive), so the day's mean is in force. The slider moves both.", view.map, view.mapFrom, day, night);
+        }
         else if (!s.ambientByMap) ImGui::TextWrapped("The same on every map.");
         else if (view.map[0]) ImGui::TextWrapped("On %s: this temperature, as Gauges.ini has no section for the map or its region.", view.map);
         else ImGui::TextWrapped("This temperature until the mod has found the game's save, which says the map.");

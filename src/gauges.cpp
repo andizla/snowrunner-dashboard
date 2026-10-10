@@ -24,6 +24,7 @@
 #include "smt.h"
 #include "maps.h"
 #include "game_code.h"
+#include "clock_scan.h"
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "shell32.lib")
 #ifndef GAUGES_SETTINGS_TEST
@@ -191,21 +192,116 @@ static bool MapSectionAmbient(const char *name, float &out)
     return true;
 }
 
-// The outside temperature of the map with the game's id level: its own section, else its region's, else one named
-// after the id. from: the section's name. False when none of them is in the ini.
-static bool MapAmbient(const char *level, float &out, char *from, size_t size)
+// A section's air over the game's day: the day's warmest and the night's coldest, DayC and NightC where it has both,
+// else AmbientC as the mean with kDaySwing between them.
+struct MapAir
+{
+    float mean, day, night;
+    bool dayNight; // DayC and NightC are the section's own
+};
+
+static bool MapSectionAir(const char *name, MapAir &out)
+{
+    if (!MapSectionAmbient(name, out.mean))
+    {
+        // a section with DayC and NightC needs no AmbientC
+        const std::wstring ini = IniPath(), section = MapSection(name);
+        wchar_t buf[8] = {};
+        if (!name[0] || !GetPrivateProfileStringW(section.c_str(), L"DayC", L"", buf, 8, ini.c_str())) return false;
+        out.mean = kTempOutside;
+    }
+    const std::wstring ini = IniPath(), section = MapSection(name);
+    wchar_t day[16] = {}, night[16] = {};
+    GetPrivateProfileStringW(section.c_str(), L"DayC", L"", day, 16, ini.c_str());
+    GetPrivateProfileStringW(section.c_str(), L"NightC", L"", night, 16, ini.c_str());
+    out.dayNight = day[0] && night[0];
+    if (out.dayNight)
+    {
+        out.day = SettingsRange(IniFloatIn(section.c_str(), L"DayC", out.mean, ini), kAmbientRange[0], kAmbientRange[1]);
+        out.night = SettingsRange(IniFloatIn(section.c_str(), L"NightC", out.mean, ini), kAmbientRange[0], kAmbientRange[1]);
+        if (out.night > out.day)
+        {
+            const float t = out.day;
+            out.day = out.night;
+            out.night = t;
+        }
+        out.mean = (out.day + out.night) * 0.5f;
+    }
+    else
+    {
+        out.day = out.mean + kDaySwing * 0.5f;
+        out.night = out.mean - kDaySwing * 0.5f;
+    }
+    return true;
+}
+
+// The air of the map with the game's id level: its own section, else its region's, else one named after the id.
+// from: the section's name. False when none of them is in the ini.
+static bool MapAmbient(const char *level, MapAir &out, char *from, size_t size)
 {
     const char *name = MapNameOf(level);
     const MapRegion *region = MapRegionOf(level);
     const char *tries[3] = { name ? name : "", region ? region->name : "", level };
     for (const char *t : tries)
-        if (MapSectionAmbient(t, out))
+        if (MapSectionAir(t, out))
         {
             snprintf(from, size, "%s", t);
             return true;
         }
     from[0] = 0;
     return false;
+}
+
+// The section's air moved by delta C: DayC and NightC where it has them, else AmbientC.
+static void MapAirShift(const char *name, const MapAir &air, float delta)
+{
+    const std::wstring ini = IniPath(), section = MapSection(name);
+    if (air.dayNight)
+    {
+        IniPutFloat(section.c_str(), L"DayC", SettingsRange(air.day + delta, kAmbientRange[0], kAmbientRange[1]), ini);
+        IniPutFloat(section.c_str(), L"NightC", SettingsRange(air.night + delta, kAmbientRange[0], kAmbientRange[1]), ini);
+    }
+    else IniPutFloat(section.c_str(), L"AmbientC", SettingsRange(air.mean + delta, kAmbientRange[0], kAmbientRange[1]), ini);
+}
+
+// ---- the game's clock (clock_scan.h): where it is, kept under [Clock] for the exe it was found in ----
+static bool ClockLoad(DWORD stamp, ClockPath &p)
+{
+    const std::wstring ini = IniPath();
+    wchar_t exe[16] = {}, place[64] = {};
+    GetPrivateProfileStringW(L"Clock", L"Exe", L"", exe, 16, ini.c_str());
+    GetPrivateProfileStringW(L"Clock", L"Place", L"", place, 64, ini.c_str());
+    if (wcstoul(exe, nullptr, 16) != stamp || !place[0]) return false;
+    char text[64];
+    size_t n = 0;
+    for (const wchar_t *c = place; *c && n + 1 < sizeof text; c++) text[n++] = *c < 128 ? (char)*c : '?';
+    text[n] = 0;
+    return ClockPathParse(text, p);
+}
+
+static void ClockSave(DWORD stamp, const ClockPath &p)
+{
+    const std::wstring ini = IniPath();
+    wchar_t exe[16];
+    swprintf_s(exe, L"%08lx", stamp);
+    char text[64];
+    ClockPathText(p, text, sizeof text);
+    WritePrivateProfileStringW(L"Clock", L"Exe", exe, ini.c_str());
+    WritePrivateProfileStringW(L"Clock", L"Place", Wide(text).c_str(), ini.c_str());
+}
+
+static void ClockForget()
+{
+    const std::wstring ini = IniPath();
+    WritePrivateProfileStringW(L"Clock", nullptr, nullptr, ini.c_str());
+}
+
+// The exe's image size in memory, which the clock's search keeps its pointers out of.
+static uint64_t ImageSize()
+{
+    const uint8_t *image = (const uint8_t *)g_base;
+    const IMAGE_NT_HEADERS64 *nt = (const IMAGE_NT_HEADERS64 *)(image + ((const IMAGE_DOS_HEADER *)image)->e_lfanew);
+    return nt->OptionalHeader.SizeOfImage;
 }
 
 // The names of the ini's sections.
@@ -309,6 +405,9 @@ static void ReadIni(GaugeSettings &s)
                         L"; [Map:level_my_map]. The names are the game's own, and Gauges.log names the map. The mod learns the map\n"
                         L"; from the game's save, as the map loaded last. With AmbientByMap=1, the default, the map's section or its\n"
                         L"; region's is in force where the map is known; elsewhere, and everywhere with AmbientByMap=0, AmbientC is.\n"
+                        L"; A section's air follows the game's day: DayC the warmest in the afternoon, NightC the coldest before\n"
+                        L"; sunrise, such as DayC=3 and NightC=-12; a section with only AmbientC swings 10 C around it. The mod finds\n"
+                        L"; the game's clock while you drive with Probe=1 and keeps its place under [Clock]; until then the mean holds.\n"
                         L"; AirFullKmh is the speed from which the radiator gets all the air that driving gives it (10 to 80 km/h).\n"
                         L"; Lower keeps a slow, hard pulling engine cooler.\n"
                         L"; The oil follows the coolant slowly and runs a little hotter under load. OilWarmUpMinutes is the time the oil\n"
@@ -1313,7 +1412,21 @@ static DWORD WINAPI Run(void *)
     // its region's or its own, where the ini has one (mapOwn, from the section mapFrom). Without a save map stays ""
     // and AmbientC of [Gauges] is in force everywhere.
     char map[64] = "", mapRead[64] = "", mapFrom[64] = "";
-    float mapC = 0.0f;
+    MapAir mapAir = {};
+    // the game's clock: where it is (clockOwn), from Gauges.ini or found by the search (Probe=1), and the hour read on
+    // this pass, -1 while it is not known
+    ClockPath clockPath = {};
+    bool clockOwn = ClockLoad(stamp, clockPath), clockSaid = false;
+    ClockScan clockScan = {};
+    float hour = -1.0f;
+    int hourSaid = -1, clockFails = 0;
+    bool wasDriving = false; // a truck was driven in the world on the last pass, where the clock must be readable
+    if (clockOwn)
+    {
+        char words[96];
+        ClockPathWords(clockPath, words, sizeof words);
+        Log(L"clock: the game's time of day is read at %S, as found before (Gauges.ini, [Clock])", words);
+    }
     bool mapOwn = false, mapAsk = true, saveSeen = true;
     ULONGLONG mapAmbientLogAt = 0; // when to log the temperature the tab set, once the slider has rested
     std::wstring savePath;
@@ -1419,32 +1532,53 @@ static DWORD WINAPI Run(void *)
         }
         // the outside temperature in force: the map's or its region's (AmbientByMap), looked up again when the map
         // changes or the ini was read or saved. The tab's slider sets the section in force
+        // the hour of the game's day, where the clock is known; a clock that cannot be read for long (a game update
+        // that kept the exe's stamp, a wrong find) is forgotten
+        if (clockOwn)
+        {
+            if (ClockRead(memory, clockPath, hour)) clockFails = 0;
+            else
+            {
+                hour = -1.0f;
+                if (wasDriving && ++clockFails == 6000) // five minutes of passes with a truck driven
+                {
+                    Log(L"clock: the game's time of day could not be read for five minutes, so its place is forgotten and looked for again");
+                    ClockForget();
+                    clockOwn = false;
+                }
+            }
+        }
+        // the map's temperature now: between its night and its day by the hour, or the day's mean without a clock
+        const float mapNow = hour >= 0.0f ? DayNightC(mapAir.day, mapAir.night, hour) : mapAir.mean;
         if (InterlockedExchange(&g_mapAmbientAsked, 0) && mapOwn && mapFrom[0])
         {
+            // the slider moves the section's air so the temperature now is what it shows
             const float c = SettingsRange(g_mapAmbientTenths / 10.0f, kAmbientRange[0], kAmbientRange[1]);
-            if (c != mapC)
+            if (fabsf(c - mapNow) >= 0.05f)
             {
-                const std::wstring ini = IniPath();
-                IniPutFloat(MapSection(mapFrom).c_str(), L"AmbientC", c, ini);
-                mapC = c;
+                MapAirShift(mapFrom, mapAir, c - mapNow);
+                MapSectionAir(mapFrom, mapAir);
                 mapAmbientLogAt = GetTickCount64() + 1000;
             }
         }
         if (mapAmbientLogAt && GetTickCount64() >= mapAmbientLogAt)
         {
-            Log(L"map: [Map:%S] set to %g C outside from the tab", mapFrom, mapC);
+            if (mapAir.dayNight) Log(L"map: [Map:%S] set from the tab to %g C by day and %g C by night", mapFrom, mapAir.day, mapAir.night);
+            else Log(L"map: [Map:%S] set from the tab to %g C outside on the day's mean", mapFrom, mapAir.mean);
             mapAmbientLogAt = 0;
         }
         if (strcmp(mapRead, map) || edited) mapAsk = true;
         if (mapAsk)
         {
             const bool before = mapOwn;
-            mapOwn = map[0] && MapAmbient(map, mapC, mapFrom, sizeof mapFrom);
+            mapOwn = map[0] && MapAmbient(map, mapAir, mapFrom, sizeof mapFrom);
             if (strcmp(mapRead, map) || mapOwn != before)
             {
                 char title[96];
                 MapTitle(map, title, sizeof title);
-                if (mapOwn && s.ambientByMap) Log(L"map: %S, %g C outside ([Map:%S] in Gauges.ini)", title, mapC, mapFrom);
+                if (mapOwn && s.ambientByMap)
+                    Log(L"map: %S, %g C outside by day and %g C by night%s ([Map:%S] in Gauges.ini)", title, mapAir.day, mapAir.night,
+                        mapAir.dayNight ? L"" : L", around the day's mean", mapFrom);
                 else if (mapOwn) Log(L"map: %S, %g C outside (AmbientC: AmbientByMap=0 leaves [Map:%S] out)", title, s.ambientC, mapFrom);
                 else if (map[0]) Log(L"map: %S has no section in Gauges.ini, nor has its region, so it is %g C outside (AmbientC)", title, s.ambientC);
             }
@@ -1452,15 +1586,62 @@ static DWORD WINAPI Run(void *)
             mapAsk = false;
         }
         GaugeSettings inForce = s;
-        if (mapOwn && s.ambientByMap) inForce.ambientC = mapC;
+        if (mapOwn && s.ambientByMap) inForce.ambientC = hour >= 0.0f ? DayNightC(mapAir.day, mapAir.night, hour) : mapAir.mean;
+        if (s.probe && hour >= 0.0f && (int)hour != hourSaid)
+        {
+            hourSaid = (int)hour;
+            Log(L"clock: %02d:%02d of the game's day, %.1f C outside", (int)hour, (int)((hour - (int)hour) * 60.0f), inForce.ambientC);
+        }
         // what the cluster shows: the truck being driven; with the ini's Demo, demo values while none is
         TruckRaw raw;
         World world;
         const bool driving = TruckPass(watch, memory, inForce, front, raw, world);
+        wasDriving = driving;
         if (watch.found && !codeLooked)
         {
             codeLooked = true;
             GameCodeLook();
+        }
+        // the search for the game's clock (Probe=1, while its place is not known): begun once a truck is driven
+        if (!clockOwn && s.probe && driving && raw.clockKnown)
+        {
+            if (clockScan.state == kClockIdle)
+            {
+                const ULONGLONG began = GetTickCount64();
+                ClockScanBegin(clockScan, memory, ImageSize());
+                Log(L"clock: looking for the game's time of day: %zu objects (%u KB), %zu places with a value from 0 to 24 (%llu ms). Drive on; "
+                    L"skip the night on the map (or wait in a garage) once and it is found",
+                    clockScan.objects.size(), clockScan.bytes / 1024, clockScan.slots.size(), GetTickCount64() - began);
+            }
+            const ClockNews news = ClockScanStep(clockScan, memory, watch.refs.vehicle, raw.clock, driving);
+            if (news.steadyNow || news.jumpedNow)
+                for (ClockSlot &slot : clockScan.slots)
+                    if (slot.steady >= kClockSteady && (!slot.told || (slot.jumped && news.jumpedNow)))
+                    {
+                        char words[96];
+                        const ClockPath p = ClockSlotPath(clockScan, slot, slot.most > 1.05 ? 1.0f : 24.0f);
+                        ClockPathWords(p, words, sizeof words);
+                        Log(L"clock: %S %s at %.3f, a day of %.0f minutes by its pace", words, slot.jumped ? L"jumped and kept its pace" : L"rises steadily",
+                            slot.last, ClockDayMinutes(slot));
+                        slot.told = true;
+                    }
+            if (news.looked && !news.found && !news.failed && clockScan.looks % 6 == 0)
+                Log(L"clock: %d places still rise at a day's pace", news.left);
+            if (news.found)
+            {
+                clockPath = clockScan.found;
+                clockOwn = true;
+                ClockSave(stamp, clockPath);
+                char words[96];
+                ClockPathWords(clockPath, words, sizeof words);
+                Log(L"clock: the game's time of day is at %S (kept in Gauges.ini under [Clock]); the outside temperature follows it from now on", words);
+                clockScan = ClockScan{};
+            }
+            else if (news.failed && !clockSaid)
+            {
+                Log(L"clock: no place rose at a day's pace; the time of day stays unknown until the game is started again");
+                clockSaid = true;
+            }
         }
         const TruckIdentity &now = watch.who.taken;
         if (strcmp(now.key, truck.key))
@@ -1492,6 +1673,9 @@ static DWORD WINAPI Run(void *)
         strcpy_s(v.mapFrom, mapFrom);
         v.mapOwn = mapOwn && s.ambientByMap;
         v.ambientC = inForce.ambientC;
+        v.ambientDay = mapAir.day;
+        v.ambientNight = mapAir.night;
+        v.hour = hour;
         v.powerTest = watch.powerTest.state;
         v.powerPhase = watch.powerTest.phase;
         v.powerWhy = watch.powerTest.why;
@@ -1713,7 +1897,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 63, "ini: the help text survives a write (63 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 66, "ini: the help text survives a write (66 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());
@@ -1919,19 +2103,41 @@ int wmain(int argc, wchar_t **argv)
         float deg = 0.0f;
         const bool regionsWritten = MapSectionAmbient("Michigan", deg) && deg == 12.0f && MapSectionAmbient("Zurdania", deg) && deg == 22.0f &&
                                     MapSectionAmbient("kola peninsula", deg) && deg == -10.0f;
-        const bool byRegion = MapAmbient("level_us_01_04_new", deg, section, sizeof section) && deg == 12.0f && !strcmp(section, "Michigan");
-        const bool unknown = !MapAmbient("level_nowhere", deg, section, sizeof section) && !section[0] && !MapSectionAmbient("", deg);
+        MapAir air = {};
+        const bool byRegion = MapAmbient("level_us_01_04_new", air, section, sizeof section) && air.mean == 12.0f && !strcmp(section, "Michigan") &&
+                              !air.dayNight && air.day == 12.0f + kDaySwing * 0.5f && air.night == 12.0f - kDaySwing * 0.5f;
+        const bool unknown = !MapAmbient("level_nowhere", air, section, sizeof section) && !section[0] && !MapSectionAmbient("", deg);
         WritePrivateProfileStringW(L"Map:Black River", L"AmbientC", L"-3", ini.c_str());
         WritePrivateProfileStringW(L"Map:level_my_map", L"AmbientC", L"99", ini.c_str());
         WritePrivateProfileStringW(L"Map:Alaska", nullptr, nullptr, ini.c_str());
         ReadIni(fresh);
-        const bool byMap = MapAmbient("level_us_01_01", deg, section, sizeof section) && deg == -3.0f && !strcmp(section, "Black River");
-        const bool sameRegion = MapAmbient("level_us_01_02", deg, section, sizeof section) && deg == 12.0f;
-        const bool byId = MapAmbient("level_my_map", deg, section, sizeof section) && deg == kAmbientRange[1] && !strcmp(section, "level_my_map");
-        const bool takenOut = !MapAmbient("level_us_02_01", deg, section, sizeof section);
+        const bool byMap = MapAmbient("level_us_01_01", air, section, sizeof section) && air.mean == -3.0f && !strcmp(section, "Black River");
+        const bool sameRegion = MapAmbient("level_us_01_02", air, section, sizeof section) && air.mean == 12.0f;
+        const bool byId = MapAmbient("level_my_map", air, section, sizeof section) && air.mean == kAmbientRange[1] && !strcmp(section, "level_my_map");
+        const bool takenOut = !MapAmbient("level_us_02_01", air, section, sizeof section);
         Check(regionsWritten && byRegion && unknown && byMap && sameRegion && byId && takenOut,
               "maps: an ini without map sections gets the regions', a map takes its own section, else its region's, else its id's, held to the range, "
               "and a section taken out or changed by hand stays so");
+        // a section's day and night: DayC and NightC as given (the two the right way round), the slider's move
+        // shifting both, and a section with only them and no AmbientC
+        WritePrivateProfileStringW(L"Map:Scandinavia", L"DayC", L"-12", ini.c_str());
+        WritePrivateProfileStringW(L"Map:Scandinavia", L"NightC", L"3", ini.c_str());
+        const bool dayNight = MapSectionAir("Scandinavia", air) && air.dayNight && air.day == 3.0f && air.night == -12.0f && air.mean == -4.5f;
+        MapAirShift("Scandinavia", air, 2.0f);
+        const bool shifted = MapSectionAir("Scandinavia", air) && air.day == 5.0f && air.night == -10.0f;
+        WritePrivateProfileStringW(L"Map:Taymyr", L"AmbientC", nullptr, ini.c_str());
+        WritePrivateProfileStringW(L"Map:Taymyr", L"DayC", L"14", ini.c_str());
+        WritePrivateProfileStringW(L"Map:Taymyr", L"NightC", L"6", ini.c_str());
+        const bool noMean = MapSectionAir("Taymyr", air) && air.dayNight && air.day == 14.0f && air.night == 6.0f && air.mean == 10.0f;
+        MapSectionAir("Michigan", air);
+        MapAirShift("Michigan", air, -4.0f);
+        const bool meanShifted = MapSectionAir("Michigan", air) && air.mean == 8.0f && !air.dayNight;
+        Check(dayNight && shifted && noMean && meanShifted, "maps: a section's day and night, shifted together by the slider; a section of only the mean moves its mean");
+        // the curve over the game's day: the coldest at 5, the warmest at 15, half way at 10 and at 22, no step at midnight
+        const bool curve = DayNightC(3.0f, -12.0f, kColdestHour) == -12.0f && fabsf(DayNightC(3.0f, -12.0f, kWarmestHour) - 3.0f) < 0.001f &&
+                           fabsf(DayNightC(3.0f, -12.0f, 10.0f) + 4.5f) < 0.001f && fabsf(DayNightC(3.0f, -12.0f, 22.0f) + 4.5f) < 0.001f &&
+                           fabsf(DayNightC(3.0f, -12.0f, 23.999f) - DayNightC(3.0f, -12.0f, 0.0f)) < 0.01f && DayNightC(3.0f, -12.0f, 2.0f) < DayNightC(3.0f, -12.0f, 0.0f);
+        Check(curve, "maps: the air over the game's day, coldest before sunrise and warmest in the afternoon, without a step at midnight");
         DeleteFileW(ini.c_str());
         WritePrivateProfileStringW(kIniSection, L"Layout", L"1", ini.c_str());
         ReadIni(fresh);
@@ -1945,7 +2151,8 @@ int wmain(int argc, wchar_t **argv)
         wchar_t kolaLeft[8] = {};
         GetPrivateProfileStringW(L"Map:kola", L"AmbientC", L"", kolaLeft, 8, ini.c_str());
         const bool renamedOk = MapSectionAmbient("Kola Peninsula", deg) && deg == -30.0f && MapSectionAmbient("British Columbia", deg) && deg == 4.0f && !kolaLeft[0];
-        const bool heldTemp = MapAmbient("level_us_01_01", deg, section, sizeof section) && deg == 7.0f && !MapSectionAmbient("Taymyr", deg);
+        MapAir kept = {};
+        const bool heldTemp = MapAmbient("level_us_01_01", kept, section, sizeof section) && kept.mean == 7.0f && !MapSectionAmbient("Taymyr", deg);
         const bool addedOk = MapSectionAmbient("Zurdania", deg) && deg == 22.0f && MapSectionAmbient("Chiapas", deg) && deg == 26.0f;
         ReadIni(fresh);
         const bool once = MapSectionAmbient("Kola Peninsula", deg) && deg == -30.0f && !MapSectionAmbient("Taymyr", deg) && fresh.layout == kLayoutBlock;
