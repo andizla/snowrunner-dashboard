@@ -498,7 +498,13 @@ one a taller gear: no lever for torque. The two runs in the 3rd gear stopped at 
 phase. 0.12.7: the test (`PullTestStep`) changes the torque factor at action + 0xCC instead, the share the game
 leaves a damaged engine (the mod writes it with its engine damage since 0.10): halved, raised by half, at three
 quarters, from the 4th gear with the wheels under 0.55 of the gear's top; whether the game keeps the write (read
-back) and whether the pull follows, and whether it goes over 1. Models 135 OK. Owed: the user's run.
+back) and whether the pull follows, and whether it goes over 1. Models 135 OK. Owed: the user's run. Found in the
+same log: at the end of both 3rd gear runs the mod's automatic set the 2nd at 6547 and 6422 rpm on the wheels' input
+(17:50:37, 17:55:51): its model shifted down by itself while the test held the game's gear (the halved factor braked
+the truck, "climbing"), and the takeover set the model's gear once the test let go; fixed: the model's gear is the
+game's while a test holds it, and `TakeoverStep` never sets a gear under `GearboxLowestFit`, whatever the model
+holds (a takeover test for it). The save is written at a map's load: the log has Scandinavia read from the save of
+17:56:51, two seconds after the truck left Zurdania.
 
 Part A, research and design note (no hook before the user's OK on the note):
 - Where the game turns the pedal into torque and how the automatic decides a shift: the truck action's per-frame

@@ -2,6 +2,7 @@
 
 ## [0.12.7] 2026-10-10
 
+- The mod's automatic never sets a gear the engine cannot take at the speed the wheels turn, whatever gear its model holds. At the end of both power tests in the third gear it set the second at about 6500 rpm: the model had shifted down by itself while the test held the game's gear, and set its own once the test let go. The model now holds the test's gear too.
 - The tab's power test is a pull test now: it changes the game's torque factor (the share of its torque the game leaves a damaged engine) in place of the power factor, halved, raised by half and at three quarters, in the fourth gear or higher. The power factor's answer is in: a write counts at once and is kept, but it moves the gear's top speed, the way the game makes its low gears, so halved the truck braked hard and doubled the gear pulled less. It cannot carry the engine's torque.
 
 ## [0.12.6] 2026-10-10

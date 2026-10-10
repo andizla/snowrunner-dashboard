@@ -1190,7 +1190,12 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         if (pullWas == kPullArmed && w.pullTest.state == kPullRunning)
             Log(L"pull test: running in gear %d at %.1f m/s, the torque factor %.3f; keep it floored", w.pullTest.gear, raw.speed, w.pullTest.factor);
         if (pull.write) m.put(w.refs.action + 0xCC, pull.factor);
-        if (pull.hold) w.gearbox.pause = fmaxf(w.gearbox.pause, kShiftPause);
+        if (pull.hold || pull.ended)
+        {
+            // the gear held is the game's: the automatic's model goes on from it, not from a gear it picked meanwhile
+            w.gearbox.gear = raw.gear;
+            w.gearbox.pause = fmaxf(w.gearbox.pause, kShiftPause);
+        }
         if (pull.ended)
         {
             char first[1400], second[320];

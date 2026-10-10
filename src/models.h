@@ -1238,7 +1238,9 @@ inline TakeoverOrders TakeoverStep(TakeoverModel &m, const TruckRaw &t, int mode
 {
     TakeoverOrders o = {};
     const int top = TruckTopGear(t);
-    const int want = modelGear < 1 ? 1 : modelGear > top ? top : modelGear;
+    // the model's gear, never lower than the engine can take at the speed the wheels turn, whatever the model holds
+    const int asked = modelGear < lowestFit ? lowestFit : modelGear;
+    const int want = asked < 1 ? 1 : asked > top ? top : asked;
     m.since += dt;
     if (m.driving && (!enabled || !TruckEngineOn(t) || top < 1))
     {

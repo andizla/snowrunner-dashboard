@@ -1523,6 +1523,17 @@ int main(int argc, char **argv)
                 const TakeoverOrders lowAgain = TakeoverStep(fast, tf, 3, true, 0.2f, fit);
                 again = again && fit == 3 && low.adopted == 3 && low.shiftTo == 3 && lowAgain.adopted == 3 && lowAgain.shiftTo == 3 && fast.driving;
             }
+            // the model holding a gear lower than the engine can take (as after a test that held the game's gear): not set
+            {
+                TakeoverModel floorTest = take;
+                floorTest.set = 3;
+                floorTest.adopted = false;
+                TruckRaw held3 = tk;
+                held3.automatic = 0;
+                held3.gear = held3.gearEngaged = 3;
+                const TakeoverOrders floored = TakeoverStep(floorTest, held3, 2, true, kDt, 3);
+                again = again && floored.shiftTo == 0 && floorTest.set == 3 && floorTest.driving;
+            }
             // reverse picked in A (the game's flag up with it): given back at once, never shifted forwards again
             TruckRaw back = tk;
             back.automatic = 1;
