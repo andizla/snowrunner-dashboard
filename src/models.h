@@ -1151,7 +1151,7 @@ static const float kEngineDownLight = 0.1f, kEngineDownFloored = 0.4f;  // down 
 static const float kEngineKickTo = 0.85f;   // the kickdown goes to the lowest gear that keeps the engine under this
 static const float kEngineLimit = 0.98f;    // past this the engine is on the limiter: up at once, whatever the pause
 // A game's gearbox has its first gears for crawling: on a scout's road gearbox the first can be an eighth of the top
-// gear's speed, where a real one's is a sixth to a fifth. With the mod's engine the automatic sets off in the lowest gear at
+// gear's speed, where a real one's is a fifth to a seventh. With the mod's engine the automatic sets off in the lowest gear at
 // least kStartShare of the top gear's (as a truck automatic starts in the second), and takes a lower one only stuck:
 // floored with the truck under kStuckShare of that gear's top and not gaining for kStuckAfter.
 static const float kStartShare = 1.0f / 7.0f;
