@@ -4,11 +4,11 @@ A gauge cluster for the truck you drive in SnowRunner: analogue dials in the sty
 
 The cluster has a speedometer, a tachometer with the gear, fuel with the range, coolant and oil temperature, boost pressure, brake air pressure and nine lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage, cold engine, tilt and oil temperature.
 
-This is version 0.12.10. It reads the truck's own values for the speedometer, the gear, the fuel gauge and seven of the lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage and tilt. The game has no engine speed, no range, no coolant or oil temperature, no boost pressure and no brake air, so the mod works those out from what the truck does, and lights the cold and oil lamps by the temperatures. The temperature also costs the engine: overheating it, or working it hard while cold, adds to the game's own engine damage. `Damage=0` switches that off. The scales of the tachometer and the speedometer and the turbo's boost and character can be set for each kind of truck. The brake air comes from the engine's compressor, which fills the tanks up to 8.2 bar and starts again at 6.9, and each press of the brake and letting the handbrake go draw from them; scouts brake by hydraulics and have no air dial. The outside temperature goes by the map you are on, which the mod reads from the game's save. With `Gearbox=1` an automatic of the mod's own, with a torque converter, picks the gears while the game's shifter is in A.
+This is version 0.12.11. It reads the truck's own values for the speedometer, the gear, the fuel gauge and seven of the lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage and tilt. The game has no engine speed, no range, no coolant or oil temperature, no boost pressure and no brake air, so the mod works those out from what the truck does, and lights the cold and oil lamps by the temperatures. The temperature also costs the engine: overheating it, or working it hard while cold, adds to the game's own engine damage. `Damage=0` switches that off. The scales of the tachometer and the speedometer and the turbo's boost and character can be set for each kind of truck. The brake air comes from the engine's compressor, which fills the tanks up to 8.2 bar and starts again at 6.9, and each press of the brake and letting the handbrake go draw from them; scouts brake by hydraulics and have no air dial. The outside temperature goes by the map you are on, which the mod reads from the game's save. With `Gearbox=1` an automatic of the mod's own, with a torque converter, picks the gears while the game's shifter is in A.
 
 ## What you need
 
-- SnowRunner for Windows, the Steam version (the game build of 22 July 2026). On any other build of the game the mod writes that into its log and does nothing.
+- SnowRunner for Windows: the Steam, Epic Games Store or Microsoft Store (Xbox app) version. The mod is made on the Steam build of 22 July 2026 and knows where that build keeps what it reads. On any other build (another store's, or after a game update) it finds those places by the game's code that uses them, and says in its log what it found; where it cannot find the truck it stands down and changes nothing. The signatures it finds them by come from the Steam build: until they are in (see the changelog), another build stands down.
 - ReShade 6.8.0 or newer, the build "with full add-on support", installed for SnowRunner. It loads the mod and draws the cluster and its settings tab. Nothing else is needed.
 
 ## Install
@@ -156,7 +156,7 @@ Delete `Gauges.addon64` (or `Gauges.asi`), `Gauges.ini` and `Gauges.log` from `S
 
 ## Notes
 
-- The mod changes no game file. With `Damage` off it writes nothing into the game's memory. With `Damage` on it writes one thing there: the engine damage of the truck you drive.
+- The mod changes no game file. What it writes into the game's memory: with `Damage` on, the engine damage of the truck you drive; with `Gearbox=1`, the game's automatic flag and the gears, through the game's own shift function; during the pull test, the game's torque factor, for seven seconds. With all of them off it writes nothing.
 - `Damage` has not been tried in co-op. Leave it off there.
 - If something does not work, `Gauges.log` in `Sources\Bin` says what the mod found and did.
 - The game's own HUD stays as it is. Its "Immersive Mode" option hides it while it is not in use.

@@ -577,6 +577,22 @@ so the model is never under the floor (in a replay of a floored pull at 2.5 rad/
 degrees, the wheels 6 to 22 rad/s) the sooty went 3, 2, 3, 2, 3 in four seconds, the shifts up going by the wheels
 at up to 1.2 times the ground and 1 rad/s more; now a shift up with the foot on goes by the wheels at most 1.05 times
 the ground (`kSlipUp`). Models 141 OK.
+Any build of the game (the user, 2026-10-10: "the addon needs to work with any game version(epic, microsoft etc)"):
+until 0.12.10 the mod stood down on every exe but the Steam build of 22 July 2026, as the places it reads (the
+statics control, the wheel class, game, map, viewer, garage, input, the engine sets and the clock) were that build's
+numbers. 0.12.11: `game_globals.h` finds them by the code that reaches them (RIP-relative loads, compares and stores,
+a field 8 past the engine sets), a signature being the bytes around such an instruction with its displacement and any
+call, jump or other RIP-relative operand near it left out, taken where it stands once in the code. `PlacesHarvest`
+runs once (`[Signatures] Harvested` in the ini) with `Probe=1` on the Steam build and writes up to four signatures of
+each static into Gauges.log as lines ready for `kGlobalSigs`; `PlacesFind` takes the known places on that build and
+looks for them on any other (a static two of whose signatures disagree is not taken); without control, the wheel
+class or game the mod stands down. truck.h reads through `g_places` (0 for a place not found: not read). The offsets
+inside the objects are taken as they are: the stores' builds of one version share the code; a build of another
+version may not, and the wheel class check finds no truck then. The Microsoft Store build's saves are looked for in
+%LOCALAPPDATA%\Packages\*SnowRunner*\SystemAppData\wgs, a container file whose first bytes name a CompleteSave.
+Tests: truck 75 OK (the harvest from one made up build, found in another moved by 0x40 with the static 0x800 on).
+Owed: the harvest from the user's Steam build (any drive with Probe=1 on 0.12.11), the signatures into kGlobalSigs,
+and a player on the Epic or Microsoft Store build to try it; not tried under the Microsoft Store's sandbox.
 
 Part A, research and design note (no hook before the user's OK on the note):
 - Where the game turns the pedal into torque and how the automatic decides a shift: the truck action's per-frame

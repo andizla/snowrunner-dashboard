@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.12.11] 2026-10-10
+
+- The mod no longer stands down on every build but the Steam one it is made on. On another build (the Epic or Microsoft Store version, or the game after an update) it looks for the places it reads by the game's code that uses them, logs what it found, and runs where it finds the driven truck. The signatures it looks for come from the Steam build: with `Probe=1` on that build the mod harvests them once into `Gauges.log`, and the next version carries them.
+- The Microsoft Store version's saves are read for the map, from the game's save containers.
+- The README says what the mod writes into the game's memory: the engine damage, the gears with `Gearbox=1`, and the torque factor during the pull test.
+
 ## [0.12.10] 2026-10-10
 
 - A tap of the shift modifier does nothing while the mod's automatic drives. The game's own automatic still picks a gear at the tap, and the mod sets its own gear straight back; a gear the game goes to right after its pick is put back too, not taken for one picked by hand. In 0.12.9 the mod and the game traded 5th and 4th ten times in six seconds over one burst of taps.

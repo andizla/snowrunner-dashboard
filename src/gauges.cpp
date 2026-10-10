@@ -8,7 +8,7 @@
 // (models.h). With the ini's Damage on, what the temperature costs the engine goes into the game's own engine
 // damage. With Gearbox=1 the mod's automatic sets the gears while the game's shifter is in A: it puts the game's
 // automatic flag down and calls the game's own shift function (models.h, TakeoverStep). Those are all the mod
-// writes into the game and all it calls there. The cluster is on screen only while a truck is driven in the world. The mod stands down on any exe but the one its addresses are from (kGaugesExeStamp). The map
+// writes into the game and all it calls there. The cluster is on screen only while a truck is driven in the world. On another build than the one its addresses are from (kGaugesExeStamp) the mod finds them by the code that uses them (game_globals.h), and stands down where it cannot. The map
 // a truck is on comes from the game's save (maps.h), for the map's outside temperature.
 #include <windows.h>
 #include <xinput.h>
@@ -24,6 +24,7 @@
 #include "smt.h"
 #include "maps.h"
 #include "game_code.h"
+#include "game_globals.h"
 #include "clock_scan.h"
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "shell32.lib")
@@ -714,8 +715,10 @@ uint32_t PadButtons()
 
 #ifndef GAUGES_SETTINGS_TEST
 // ---- the map a truck is on: the game's save says which map it loaded last (maps.h) ----
-// Steam keeps the saves in userdata\<account>\1465360\remote of its own folder, the other stores in
-// Documents\My Games\SnowRunner\base\storage\<account>. The newest CompleteSave*.cfg is the slot being played. It is
+// Steam keeps the saves in userdata\<account>\1465360\remote of its own folder, the Epic store in
+// Documents\My Games\SnowRunner\base\storage\<account>. The newest CompleteSave*.cfg is the slot being played. The
+// Microsoft Store's build keeps them in the app's containers, %LOCALAPPDATA%\Packages\<the game's package>\SystemAppData\wgs,
+// as files without names of their own: one whose first bytes name a CompleteSave is taken as such a file. It is
 // looked for every kSaveLookMs and read when it is another file or was written since.
 static const ULONGLONG kSaveLookMs = 5000;
 
@@ -762,7 +765,51 @@ static std::vector<std::wstring> SaveFolders()
     return out;
 }
 
-// The newest CompleteSave*.cfg in those folders, and when it was written. False when there is none.
+// The files of the Microsoft Store build's save containers: wgs\<account>\<container>\<file> in each package of the game.
+static void SaveContainerFiles(std::vector<std::pair<std::wstring, FILETIME>> &out)
+{
+    wchar_t local[MAX_PATH] = {};
+    if (SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, local) != S_OK) return;
+    auto each = [](const std::wstring &dir, bool folders, const auto &take) {
+        WIN32_FIND_DATAW f;
+        const HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &f);
+        if (h == INVALID_HANDLE_VALUE) return;
+        do
+            if (wcscmp(f.cFileName, L".") && wcscmp(f.cFileName, L"..") && !(f.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == !folders)
+                take(dir + L"\\" + f.cFileName, f);
+        while (FindNextFileW(h, &f));
+        FindClose(h);
+    };
+    WIN32_FIND_DATAW p;
+    const std::wstring packages = std::wstring(local) + L"\\Packages";
+    const HANDLE h = FindFirstFileW((packages + L"\\*SnowRunner*").c_str(), &p);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do
+        if (p.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            each(packages + L"\\" + p.cFileName + L"\\SystemAppData\\wgs", true, [&](const std::wstring &account, const WIN32_FIND_DATAW &) {
+                each(account, true, [&](const std::wstring &container, const WIN32_FIND_DATAW &) {
+                    each(container, false, [&](const std::wstring &file, const WIN32_FIND_DATAW &f) { out.push_back({ file, f.ftLastWriteTime }); });
+                });
+            });
+    while (FindNextFileW(h, &p));
+    FindClose(h);
+}
+
+// Whether the file's first bytes name a CompleteSave (a save of the game's progress, as the Microsoft Store build's
+// containers hold it).
+static bool SaveHeadIsComplete(const std::wstring &path)
+{
+    const HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    char head[96] = {};
+    DWORD got = 0;
+    const bool read = ReadFile(h, head, sizeof head - 1, &got, nullptr) != 0;
+    CloseHandle(h);
+    return read && got > 0 && strstr(head, "CompleteSave") != nullptr;
+}
+
+// The newest CompleteSave*.cfg in those folders (or CompleteSave in the Microsoft Store build's containers), and when
+// it was written. False when there is none.
 static bool SaveNewest(std::wstring &path, FILETIME &written)
 {
     bool found = false;
@@ -781,6 +828,15 @@ static bool SaveNewest(std::wstring &path, FILETIME &written)
         while (FindNextFileW(h, &f));
         FindClose(h);
     }
+    std::vector<std::pair<std::wstring, FILETIME>> contained;
+    SaveContainerFiles(contained);
+    for (const auto &c : contained)
+        if ((!found || CompareFileTime(&c.second, &written) > 0) && SaveHeadIsComplete(c.first))
+        {
+            path = c.first;
+            written = c.second;
+            found = true;
+        }
     return found;
 }
 
@@ -836,14 +892,15 @@ static bool GameShift(uint64_t vehicle, int gear)
     return took;
 }
 
-// The game's gearbox functions in its code (game_code.h), looked for once a truck is driven, so a manual transmission
-// mod has hooked its own by then: where each one is, or that another mod holds it. Nothing is written.
-static void GameCodeLook()
+// The exe's code: from the first byte of its first code section to the end of its last, from its base. False where it
+// has none.
+static bool CodeRange(size_t &from, size_t &to)
 {
     const uint8_t *image = (const uint8_t *)g_base;
     const IMAGE_NT_HEADERS64 *nt = (const IMAGE_NT_HEADERS64 *)(image + ((const IMAGE_DOS_HEADER *)image)->e_lfanew);
     const IMAGE_SECTION_HEADER *section = IMAGE_FIRST_SECTION(nt);
-    size_t from = SIZE_MAX, to = 0;
+    from = SIZE_MAX;
+    to = 0;
     for (int i = 0; i < nt->FileHeader.NumberOfSections; i++, section++)
         if (section->Characteristics & IMAGE_SCN_MEM_EXECUTE)
         {
@@ -851,7 +908,88 @@ static void GameCodeLook()
             const size_t end = (size_t)section->VirtualAddress + section->Misc.VirtualSize;
             to = end > to ? end : to;
         }
-    if (from >= to)
+    return from < to;
+}
+
+// The game's statics in the build that runs (truck.h's g_places, game_globals.h): on the Steam build of 22 July 2026
+// its known places, on any other found by the code that uses them. clock: the clock's static, 0 where it is not
+// known. False where one the mod cannot do without is not found: it stands down then.
+static bool PlacesFind(DWORD stamp, uint64_t &clock)
+{
+    clock = 0;
+    if (stamp == kGaugesExeStamp)
+    {
+        clock = kGameGlobals[kGlobClock].steam;
+        return true;
+    }
+    size_t from = 0, to = 0;
+    if (!CodeRange(from, to))
+    {
+        Log(L"places: the exe has no code section to look in");
+        return false;
+    }
+    const ULONGLONG started = GetTickCount64();
+    uint64_t found[kGlobCount] = {};
+    bool missing = false;
+    for (int g = 0; g < kGlobCount; g++)
+    {
+        int signatures = 0;
+        bool conflict = false;
+        found[g] = GlobalResolve((const uint8_t *)g_base, from, to, kGlobalSigs, g, signatures, conflict);
+        if (found[g]) Log(L"places: %S at +%llx, by %d of its signatures", kGameGlobals[g].name, found[g], signatures);
+        else Log(L"places: %S not found%S", kGameGlobals[g].name, conflict ? " (its signatures point at different places)" : "");
+        missing = missing || (!found[g] && kGameGlobals[g].needed);
+    }
+    Log(L"places: looked for in %.1f s", (GetTickCount64() - started) / 1000.0);
+    g_places = GamePlaces{ found[kGlobControl], found[kGlobWheelClass], found[kGlobGame], found[kGlobMap], found[kGlobViewer], found[kGlobGarage], found[kGlobInput],
+                           found[kGlobEngineSets] };
+    clock = found[kGlobClock];
+    return !missing;
+}
+
+// On the Steam build of 22 July 2026 with Probe=1, once for each version of the harvest: the signatures of the game's
+// statics (game_globals.h) into Gauges.log, for the mod to find them in other builds, and the ones it has checked
+// against the known places.
+static void PlacesHarvest(DWORD stamp)
+{
+    if (stamp != kGaugesExeStamp) return;
+    const std::wstring ini = IniPath();
+    wchar_t done[32] = {}, want[32];
+    swprintf_s(want, L"%08lx.%d", stamp, kHarvestVersion);
+    GetPrivateProfileStringW(L"Signatures", L"Harvested", L"", done, 32, ini.c_str());
+    size_t from = 0, to = 0;
+    if (!wcscmp(done, want) || !CodeRange(from, to)) return;
+    const uint8_t *code = (const uint8_t *)g_base;
+    const ULONGLONG started = GetTickCount64();
+    Log(L"signatures: harvesting the game's statics from this build, for the other builds (a few seconds, once)");
+    for (int g = 0; g < kGlobCount; g++)
+    {
+        GlobalHarvested sigs[4];
+        const int n = GlobalHarvest(code, from, to, ImageSize(), kGameGlobals[g].steam, kGameGlobals[g].reach, sigs, 4);
+        if (!n) Log(L"signatures: %S: none that stands once in the code", kGameGlobals[g].name);
+        for (int i = 0; i < n; i++)
+            Log(L"signature: { %S, \"%S\", %d, %d, %d },", kGameGlobals[g].id, sigs[i].pattern, sigs[i].at, sigs[i].after, sigs[i].into);
+    }
+    // the signatures the mod has, checked against the known places
+    for (int g = 0; g < kGlobCount && kGlobalSigs[0].global >= 0; g++)
+    {
+        int signatures = 0;
+        bool conflict = false;
+        const uint64_t place = GlobalResolve(code, from, to, kGlobalSigs, g, signatures, conflict);
+        Log(L"signatures: %S %S (%d of them stand once)", kGameGlobals[g].name, place == kGameGlobals[g].steam ? "found where it is" : place ? "found at the wrong place" : "not found",
+            signatures);
+    }
+    Log(L"signatures: done in %.1f s", (GetTickCount64() - started) / 1000.0);
+    WritePrivateProfileStringW(L"Signatures", L"Harvested", want, ini.c_str());
+}
+
+// The game's gearbox functions in its code (game_code.h), looked for once a truck is driven, so a manual transmission
+// mod has hooked its own by then: where each one is, or that another mod holds it. Nothing is written.
+static void GameCodeLook()
+{
+    const uint8_t *image = (const uint8_t *)g_base;
+    size_t from = 0, to = 0;
+    if (!CodeRange(from, to))
     {
         Log(L"gearbox code: the exe has no code section to look in");
         return;
@@ -1383,9 +1521,12 @@ static DWORD WINAPI Run(void *)
         SettingsDefaults(g_set); // what the tab shows until the ini is read
         g_reshadeOk = OverlayInit(g_self);
     }
-    if (stamp != kGaugesExeStamp)
+    // the game's statics: known on the build the mod was made on, found by the code that uses them on any other
+    uint64_t clockPlace = 0;
+    if (stamp != kGaugesExeStamp) Log(L"places: another build of the game than the one the mod was made on (exe stamp %08lx): looking for what it reads", kGaugesExeStamp);
+    if (!PlacesFind(stamp, clockPlace))
     {
-        Log(L"this is not the game version the mod is made for (exe stamp %08lx): standing down, nothing is drawn or changed", kGaugesExeStamp);
+        Log(L"places: the mod cannot find the driven truck in this build of the game: standing down, nothing is drawn or changed. Gauges.log above says what is missing");
         InterlockedExchange(&g_modOff, 1);
         return 0;
     }
@@ -1397,6 +1538,7 @@ static DWORD WINAPI Run(void *)
     const GaugeSettings &s = set.s;
     SettingsPublish(s);
     LogSettings(s);
+    if (s.probe) PlacesHarvest(stamp);
     Log(g_reshadeOk ? L"overlay: the cluster and the Gauges tab are drawn through ReShade's overlay"
                     : L"overlay: ReShade with add-on support was not found, so nothing is drawn");
     SoundStart(g_dir); // the sounds are read or made now; the audio device is only taken while one plays
@@ -1416,10 +1558,10 @@ static DWORD WINAPI Run(void *)
     ClockPath clockPath = {};
     bool clockOwn = ClockLoad(stamp, clockPath), clockSaid = false;
     const bool clockFromIni = clockOwn;
-    if (!clockOwn && stamp == kGaugesExeStamp)
+    if (!clockOwn && clockPlace)
     {
-        // the place found in the user's game on 2026-10-10 for this build: [exe + 0x2a8eb48] + 0x150, the hour
-        clockPath = ClockPath{ 0x2a8eb48, 1, { 0x150, 0 }, false, 1.0f };
+        // the place found in the user's game on 2026-10-10: [exe + 0x2a8eb48] + 0x150 in that build, the hour
+        clockPath = ClockPath{ (uint32_t)clockPlace, 1, { 0x150, 0 }, false, 1.0f };
         clockOwn = true;
     }
     ClockScan clockScan = {};

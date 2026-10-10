@@ -6,7 +6,8 @@
 // engine speed, the range, the tilt, the coolant temperature and what it costs the engine are worked out from these
 // values in models.h.
 //
-// Where the values are, in the Steam build of 22 July 2026 (kGaugesExeStamp):
+// Where the values are, in the Steam build of 22 July 2026 (kGaugesExeStamp); in another build the statics of the exe
+// (the places "exe +" below) are found by the code that uses them (game_globals.h), and the offsets are taken as they are:
 //   control = [exe + 0x2a8eb78]      the game's object for the truck being driven (it exists while a level is loaded);
 //                                    vehicle = [control + 8]
 //   vehicle + 0x768                  bit 0: the engine is on, bit 1: it has finished starting, bit 2: headlights,
@@ -55,6 +56,14 @@
 
 static const uint64_t kRvaControl = 0x2a8eb78, kRvaWheelClass = 0x2258918, kRvaGame = 0x2a8eb90, kRvaMap = 0x2a8eb30, kRvaViewer = 0x2a8eb38,
                       kRvaGarage = 0x2a90728, kRvaInput = 0x2a8ebe0, kRvaEngineSets = 0x2a9e8e0;
+
+// Those places in the build that runs, from the exe's base: the Steam build's until gauges.cpp finds them in another
+// build by the code that uses them (game_globals.h). 0 for a place not found: what is read there is not read.
+struct GamePlaces
+{
+    uint64_t control, wheelClass, game, map, viewer, garage, input, engineSets;
+};
+inline GamePlaces g_places = { kRvaControl, kRvaWheelClass, kRvaGame, kRvaMap, kRvaViewer, kRvaGarage, kRvaInput, kRvaEngineSets };
 enum { kMaxWheels = 32, kMaxGears = 16 };
 
 // Game memory: peek copies size bytes from addr and says whether it could, and poke copies size bytes to addr the
@@ -154,7 +163,7 @@ inline bool TruckFind(const TruckMemory &m, TruckRefs &r)
 {
     r = TruckRefs{};
     uint64_t begin = 0, end = 0;
-    if (!m.get(m.base + kRvaControl, r.control) || !m.get(r.control + 8, r.vehicle) || !m.get(r.vehicle + 0x68, r.action) ||
+    if (!g_places.control || !m.get(m.base + g_places.control, r.control) || !m.get(r.control + 8, r.vehicle) || !m.get(r.vehicle + 0x68, r.action) ||
         !m.get(r.vehicle + 0x60, r.model) || !m.get(r.model + 0x230, r.chassis) || !m.get(r.vehicle + 0x200, begin) || !m.get(r.vehicle + 0x208, end))
         return false;
     if (!r.action || !r.chassis || end <= begin || (end - begin) % 8 || end - begin > kMaxWheels * 8) return false;
@@ -162,7 +171,7 @@ inline bool TruckFind(const TruckMemory &m, TruckRefs &r)
     for (int i = 0; i < count; i++)
     {
         uint64_t model = 0, wheel = 0, cls = 0;
-        if (m.get(begin + (uint64_t)i * 8, model) && m.get(model + 0x2C8, wheel) && m.get(wheel, cls) && cls == m.base + kRvaWheelClass) r.wheel[r.wheels++] = wheel;
+        if (m.get(begin + (uint64_t)i * 8, model) && m.get(model + 0x2C8, wheel) && m.get(wheel, cls) && cls == m.base + g_places.wheelClass) r.wheel[r.wheels++] = wheel;
     }
     return r.wheels > 0;
 }
@@ -426,7 +435,7 @@ struct EngineRecord
 inline uint64_t TruckEngineSet(const TruckMemory &m, const char *name, size_t length)
 {
     uint64_t head = 0, entry = 0, tree = 0;
-    if (!m.get(m.base + kRvaEngineSets + 8, head) || !m.get(head, entry)) return 0;
+    if (!g_places.engineSets || !m.get(m.base + g_places.engineSets + 8, head) || !m.get(head, entry)) return 0;
     for (int i = 0; i < kMaxSetEntries && entry && entry != head; i++)
     {
         char key[kMaxText];
@@ -547,7 +556,7 @@ inline bool TruckDamageAdd(const TruckMemory &m, const TruckRefs &r, int points,
     int block[3] = {}, after = 0;
     float torque = 0.0f, effect = 0.0f;
     if (!m.poke || points <= 0) { w.why = "there is nothing to write"; return false; }
-    if (!m.get(m.base + kRvaControl, control) || control != r.control || !m.get(r.control + 8, vehicle) || vehicle != r.vehicle ||
+    if (!g_places.control || !m.get(m.base + g_places.control, control) || control != r.control || !m.get(r.control + 8, vehicle) || vehicle != r.vehicle ||
         !m.get(r.vehicle + 0x68, action) || action != r.action)
     {
         w.why = "the truck is no longer the one being driven";
@@ -590,11 +599,11 @@ inline void WorldRead(const TruckMemory &m, uint64_t control, World &w)
     w = World{};
     uint64_t game = 0, map = 0, viewer = 0, garage = 0, input = 0;
     uint8_t wheel[5] = {}; // input + 0x1D8 .. + 0x1DC
-    w.known = m.get(m.base + kRvaGame, game) && m.get(game + 0x30, w.menu) && m.get(game + 0x4A, w.loading);
-    if (m.get(m.base + kRvaMap, map) && map) w.mapThere = m.get(map + 0x148, w.mapOpen);
-    w.viewer = m.get(m.base + kRvaViewer, viewer) && viewer;
-    w.garage = m.get(m.base + kRvaGarage, garage) && garage;
-    const bool inputRead = m.get(m.base + kRvaInput, input) && m.get(input + 0x1D8, wheel);
+    w.known = g_places.game && m.get(m.base + g_places.game, game) && m.get(game + 0x30, w.menu) && m.get(game + 0x4A, w.loading);
+    if (g_places.map && m.get(m.base + g_places.map, map) && map) w.mapThere = m.get(map + 0x148, w.mapOpen);
+    w.viewer = g_places.viewer && m.get(m.base + g_places.viewer, viewer) && viewer;
+    w.garage = g_places.garage && m.get(m.base + g_places.garage, garage) && garage;
+    const bool inputRead = g_places.input && m.get(m.base + g_places.input, input) && m.get(input + 0x1D8, wheel);
     if (inputRead)
     {
         w.menuInput = wheel[0];

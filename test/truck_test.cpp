@@ -20,6 +20,7 @@
 #include "smt.h"
 #include "maps.h"
 #include "game_code.h"
+#include "game_globals.h"
 #include "clock_scan.h"
 
 struct Region { uint64_t at; std::vector<uint8_t> bytes; };
@@ -878,6 +879,71 @@ int main()
                   strstr(line, "SetPowerFactor at +6000 (more than once)") && strstr(line, "ShiftToNeutral at +3200,") &&
                   strstr(line2, "ShiftToReverse not found (too short to tell it behind a hook)") && strstr(line2, "ShiftToNeutral not looked for"),
               "gearbox code: each function found by its bytes, ShiftToNeutral between ShiftToHigh and ShiftToReverse, one behind a hook's jump held by another mod");
+    }
+
+    // the game's statics by the code that uses them (game_globals.h): a made up exe whose code reaches a static by a
+    // load, a compare with a byte, a store of a dword and a load of a field 8 past it, a call near the load; the
+    // signatures harvested from it find the static in a second build where the code and the static have moved, and
+    // a signature found twice or one that points elsewhere is not taken
+    {
+        auto build = [](size_t shift, uint64_t place, std::vector<uint8_t> &image) {
+            image.assign(0x20000, 0);
+            uint32_t seed = 12345;
+            for (size_t i = 0x1000; i < 0xF000; i++)
+            {
+                seed = seed * 1103515245u + 12345u;
+                image[i + shift] = (uint8_t)(seed >> 16);
+            }
+            auto ref = [&](size_t at, const std::vector<uint8_t> &head, int after, int into) {
+                const size_t p = at + shift + head.size();
+                memcpy(&image[at + shift], head.data(), head.size());
+                const int32_t disp = (int32_t)((int64_t)place + into - (int64_t)(p + 4 + after));
+                memcpy(&image[p], &disp, 4);
+            };
+            ref(0x2000, { 0x48, 0x8B, 0x05 }, 0, 0);       // mov rax, [rip + d]
+            const size_t call = 0x2000 + shift - 5;        // a call just before it, to a place that moves with the build
+            image[call] = 0xE8;
+            const int32_t to = (int32_t)(0x1800 + shift - (call + 5));
+            memcpy(&image[call + 1], &to, 4);
+            ref(0x3000, { 0x80, 0x3D }, 1, 0);             // cmp byte [rip + d], 0
+            image[0x3000 + shift + 6] = 0x00;
+            ref(0x4000, { 0xC7, 0x05 }, 4, 0);             // mov dword [rip + d], 7
+            const int32_t seven = 7;
+            memcpy(&image[0x4000 + shift + 6], &seven, 4);
+            ref(0x5000, { 0x48, 0x8B, 0x0D }, 0, 8);       // mov rcx, [rip + d]: the field 8 past it
+        };
+        std::vector<uint8_t> oldBuild, newBuild;
+        build(0, 0x18000, oldBuild);
+        build(0x40, 0x18800, newBuild);
+        GlobalHarvested sigs[6];
+        const int harvested = GlobalHarvest(oldBuild.data(), 0x1000, 0xF000, oldBuild.size(), 0x18000, 16, sigs, 6);
+        std::vector<GlobalSig> table;
+        for (int i = 0; i < harvested; i++) table.push_back(GlobalSig{ kGlobControl, sigs[i].pattern, sigs[i].at, sigs[i].after, sigs[i].into });
+        table.push_back(GlobalSig{ -1, "", 0, 0, 0 });
+        int signatures = 0;
+        bool conflict = false;
+        const uint64_t again = GlobalResolve(oldBuild.data(), 0x1000, 0xF000, table.data(), kGlobControl, signatures, conflict);
+        const bool sameBuild = again == 0x18000 && signatures == harvested && !conflict;
+        const uint64_t moved = GlobalResolve(newBuild.data(), 0x1000, 0xF040, table.data(), kGlobControl, signatures, conflict);
+        const bool otherBuild = moved == 0x18800 && signatures == harvested && !conflict;
+        bool callLeftOut = false, kinds = harvested == 4;
+        for (int i = 0; i < harvested; i++)
+        {
+            callLeftOut = callLeftOut || strstr(sigs[i].pattern, "E8 ? ? ? ? 48 8B 05 ? ? ? ?") != nullptr;
+            kinds = kinds && (sigs[i].after == 0 || sigs[i].after == 1 || sigs[i].after == 4);
+        }
+        const bool fieldSeen = harvested == 4 && sigs[3].into == 8;
+        // a signature that points elsewhere in the second build makes a conflict; one found twice is not counted
+        std::vector<GlobalSig> askew = table;
+        askew.insert(askew.begin(), GlobalSig{ kGlobControl, sigs[0].pattern, sigs[0].at, sigs[0].after, sigs[0].into + 0x10 });
+        const uint64_t split = GlobalResolve(newBuild.data(), 0x1000, 0xF040, askew.data(), kGlobControl, signatures, conflict);
+        const bool conflictSeen = split == 0 && conflict;
+        std::vector<uint8_t> twice = newBuild;
+        memcpy(&twice[0x9000], &twice[0x2040 - 13], 40); // the load's bytes again elsewhere
+        const uint64_t onceLess = GlobalResolve(twice.data(), 0x1000, 0xF040, table.data(), kGlobControl, signatures, conflict);
+        Check(sameBuild && otherBuild && callLeftOut && kinds && fieldSeen && conflictSeen && onceLess == 0x18800 && signatures == harvested - 1,
+              "places: the signatures harvested from one build find a static moved in another, a call's distance and the displacement left out; a load, a "
+              "compare with a byte, a store of a dword and a field past it; a signature found twice is not taken, two that disagree take neither");
     }
 
     // the game's clock: a made up game with the hour two pointers away from a static ([[exe+static]+0x30]+0x44), a
