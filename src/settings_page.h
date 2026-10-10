@@ -430,9 +430,18 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     PageLabel("Engine to the game", labelX);
     changed(ImGui::Checkbox("##powertrain", &s.powertrain));
     PageTip("The truck pulls with the mod's engine: its torque curve against the engine speed the needle shows, less with cold oil and "
-            "without boost, and with the mod's automatic doubled by the converter at its stall. The game's own engine gives all its torque "
-            "at about half a gear's top speed and less and less toward the top; with this on, a gear revved high pulls as a real engine's "
-            "would, and floored the mod's automatic revs out before it shifts up. The mod writes the game's torque factor for it.");
+            "without boost where the pedal asks for more, and with the mod's automatic doubled by the converter at its stall. The game's own "
+            "engine gives all its torque at about half a gear's top speed and less and less toward the top; with this on, a gear revved high "
+            "pulls as a real engine's would, and the mod's automatic shifts as a truck's does: floored at the red zone, early at a light "
+            "foot. The mod writes the game's torque factor for it.");
+    if (s.powertrain)
+    {
+        PageLabel("How much of it", labelX);
+        ImGui::SetNextItemWidth(w);
+        changed(ImGui::SliderInt("##engineshare", &s.engineShare, 0, 100, "%d %%", ImGuiSliderFlags_AlwaysClamp));
+        PageTip("How much of the mod's engine the game gets: 0 leaves the game's own pull, 100 hands it all of the mod's engine, and between the "
+                "two the truck pulls between them. Lower it where a truck pulls too hard.");
+    }
     PageLabel("Pull test", labelX);
     const bool pullOn = view.pullTest == kViewPullArmed || view.pullTest == kViewPullRunning;
     if (ImGui::Button(pullOn ? "Cancel###pulltest" : "Test the engine's pull###pulltest", ImVec2(w, 0))) act |= pullOn ? kPagePullCancel : kPagePullTest;

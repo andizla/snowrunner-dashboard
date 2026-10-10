@@ -1604,14 +1604,87 @@ int main(int argc, char **argv)
             // a factor left over above 1 (a test, or the mod's own) is taken as the game's 1
             TorqueHand left = {};
             const TorqueOrders over = TorqueHandStep(left, true, 0x5000, 0x4000, 2.4f, 1.0f);
-            // floored, with the scout's curve through the game, the points lie near the gear's top: it revs out
-            const PullShape scoutShape{ &kClassCurves[kClassScout], 7000.0f / 5600.0f };
-            const bool revs = GearUpShare(1.5f, scoutShape) > 0.85f && GearUpShare(1.5f, scoutShape) > GearUpShare(1.5f) + 0.15f &&
-                              GearDownShare(1.5f, scoutShape) > GearDownShare(1.5f) + 0.1f;
-            Check(lifts && followed && givenBack && over.write && Near(over.factor, 1.0f, 0.001f) && revs,
+            // EngineShare: none of it leaves the game's own, all of it the whole lift, half of it half way
+            const bool blends = TorqueBlend(2.0f, 0.0f) == 1.0f && TorqueBlend(2.0f, 1.0f) == 2.0f && Near(TorqueBlend(2.0f, 0.5f), 1.5f, 0.001f) &&
+                                Near(TorqueBlend(0.4f, 0.5f), 0.7f, 0.001f) && TorqueBlend(2.0f, 3.0f) == 2.0f;
+            Check(lifts && followed && givenBack && over.write && Near(over.factor, 1.0f, 0.001f) && blends,
                   "powertrain: the torque factor lifts the game's curve by the engine's torque (the cold and the boost only where the pedal asks more) and the "
-                  "converter's ratio, at the most 3 times, stands on the "
-                  "game's own share and follows it, and gives it back when it goes off and to the last truck; floored, the shift points by the engine lie near the top");
+                  "converter's ratio, at the most 3 times, as far as EngineShare hands it, stands on the "
+                  "game's own share and follows it, and gives it back when it goes off and to the last truck");
+        }
+        // with the engine handed over, a truck automatic's schedule, on a scout's road gearbox with a crawling first
+        // (tops 8, 13, 19, 27, 43 and 65 rad/s, 750 to 4000 rpm): it sets off in the second; floored it revs each gear
+        // to near the red zone, at a light foot it shifts up early, and neither takes a shift back; stuck floored it
+        // takes the first after a second, and the second again once the foot comes off
+        {
+            TruckRaw sd = g;
+            static const float scoutSpeeds[8] = { 3.0f, 1.5f, 4.0f, 7.0f, 11.0f, 19.0f, 30.0f, 20.0f };
+            sd.gearSpeeds = 8;
+            memcpy(sd.gearSpeed, scoutSpeeds, sizeof scoutSpeeds);
+            GaugeScale dk = k;
+            dk.idle = 750.0f;
+            dk.redline = 4000.0f;
+            dk.max = 4800.0f;
+            auto scoutAt = [&](float spin) {
+                for (int i = 0; i < sd.wheels; i++) sd.spin[i] = spin;
+                sd.speed = spin / 2.0f;
+            };
+            // from a standstill to 0.9 of the top gear's top at gain rad/s each second: the share of each gear's top it
+            // left them at, the most and the least, and the shifts down on the way
+            auto scoutPull = [&](float pedal, float gain, int &firstGear, float &leftMost, float &leftLeast, int &downs) {
+                GearboxModel sb = {};
+                sb.running = true;
+                sb.gear = 1;
+                sb.grip = 2.0f;
+                firstGear = 0;
+                leftMost = 0.0f;
+                leftLeast = 1.0f;
+                downs = 0;
+                for (float at = 0.0f; at < 120.0f && gain * at < 0.9f * TruckGearTop(sd, 6); at += kDt)
+                {
+                    scoutAt(gain * at);
+                    const int was = sb.gear;
+                    GearboxStep(sb, sd, dk, pedal, pedal, kDt, true);
+                    if (!firstGear) firstGear = sb.gear;
+                    if (was >= 1 && sb.gear > was && at > 0.0f)
+                    {
+                        const float x = gain * at / TruckGearTop(sd, was);
+                        leftMost = fmaxf(leftMost, x);
+                        leftLeast = fminf(leftLeast, x);
+                    }
+                    if (was >= 1 && sb.gear < was) downs++;
+                }
+                return sb.gear;
+            };
+            int flooredFirst = 0, lightFirst = 0, flooredDowns = 0, lightDowns = 0;
+            float flooredMost = 0.0f, flooredLeast = 0.0f, lightMost = 0.0f, lightLeast = 0.0f;
+            const int flooredLast = scoutPull(1.0f, 3.0f, flooredFirst, flooredMost, flooredLeast, flooredDowns);
+            const int lightLast = scoutPull(0.3f, 1.0f, lightFirst, lightMost, lightLeast, lightDowns);
+            const bool schedule = GearboxStartGear(sd) == 2 && GearboxStartGear(g) == 1 && flooredFirst == 2 && lightFirst == 2 && flooredLast == 6 &&
+                                  lightLast == 6 && flooredLeast > 0.93f && flooredMost < 0.995f && lightMost < 0.7f && flooredDowns == 0 && lightDowns == 0;
+            // stuck at a standstill, floored: the second, the first after kStuckAfter, the second with the foot off
+            GearboxModel stuckBox = {};
+            stuckBox.running = true;
+            stuckBox.gear = 1;
+            stuckBox.grip = 2.0f;
+            scoutAt(0.0f);
+            int stuckAtHalf = 0, stuckAfter = 0;
+            for (float at = 0.0f; at < 1.6f; at += kDt)
+            {
+                GearboxStep(stuckBox, sd, dk, 1.0f, 1.0f, kDt, true);
+                if (at < 0.5f) stuckAtHalf = stuckBox.gear;
+            }
+            stuckAfter = stuckBox.gear;
+            for (float at = 0.0f; at < kFootGap + 0.2f; at += kDt) GearboxStep(stuckBox, sd, dk, 0.0f, 0.0f, kDt, true);
+            // and without the mod's engine the first gear as before
+            GearboxModel gameOwn = {};
+            gameOwn.running = true;
+            gameOwn.gear = 1;
+            gameOwn.grip = 2.0f;
+            GearboxStep(gameOwn, sd, dk, 1.0f, 1.0f, kDt);
+            Check(schedule && stuckAtHalf == 2 && stuckAfter == 1 && stuckBox.gear == 2 && gameOwn.gear == 1,
+                  "automatic, the engine handed over: it sets off in the second of a crawling first; floored it revs each gear near the red zone, at a "
+                  "light foot it shifts up early, no shift taken back; stuck floored it takes the first after a second, the second again with the foot off");
         }
         // a close-ratio box (the Scania's ten gears, tops 7.5 to 30.5 rad/s, 600 to 1930 rpm) floored from a standstill
         // with the grip learned: through the gears faster than a shift a second, skipping gears, never held to its top;

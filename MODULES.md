@@ -632,6 +632,23 @@ only where the pedal asks more than their limit leaves; x goes by the ground onc
 most kSlipUp over it), so spinning wheels keep the game's fall. The harvest writes `Gauges.signatures.txt` (its first
 line names the exe and the harvest's version; run again where it is missing), and the ini's [Signatures] goes.
 Models 143 OK.
+0.13.2, from the same drive (34 shifts up taken back within 5 s in ten minutes with the foot on; floored, up at 0.86
+of the gear's top on average, landing at 0.56, where the gear above's down point lay) and the user's report on a scout
+with a modded gearbox (too fast, hard to hold; its road gearbox: AngVel 1.5, 4, 7, 11, 19, 30, tops 8 to 65 rad/s, a
+crawling first an eighth of the top gear's). A truck automatic's schedule, as the shift maps of the transmission makers
+and the tuners' guides lay it out: an up line by pedal from a light foot's early point to floored at the governed
+speed, a down line well under it (the gap the hysteresis, so the gear a shift up lands in never shifts down at that
+pedal), a kickdown on a push of the pedal, the start in second where the first is a crawler. With the engine handed
+over (`GearboxStep(..., engine)`): up from 0.3 (a light foot) to 0.95 (floored) of the way from idle to the red zone,
+down from 0.1 to 0.4, the room over the next gear's down point kShiftRoom at any pedal, one gear up at a time after
+the full pause but on the limiter (0.98), the kickdown to the lowest gear under 0.85. `GearboxStartGear`: the lowest
+gear whose top is at least a seventh of the top gear's; the gears under it only stuck (floored, under 0.3 of the start
+gear's top, gaining under 0.5 rad/s each second for a second; held until the foot comes off or the truck is past that
+speed). `EngineShare` (0 to 100, 50 by default): `TorqueBlend(lift, share) = 1 + share * (lift - 1)`. Owed: the user's
+drive on the scout at 50 percent; whether the start in second leaves heavy trucks too weak to pull away (the stuck
+rule takes the first after a second). Later, owed by the user's idea: per truck figures (the engine's Torque, the
+gears' AngVel, the masses) read from the game's own records, for the curve's height and the start gear by weight.
+Models 144 OK.
 
 Part A, research and design note (no hook before the user's OK on the note):
 - Where the game turns the pedal into torque and how the automatic decides a shift: the truck action's per-frame
