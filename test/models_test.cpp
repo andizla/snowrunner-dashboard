@@ -1595,6 +1595,61 @@ int main(int argc, char **argv)
               "automatic: the brake is the side of the pedal that does not drive, in an automatic's reverse too");
     }
 
+    // the power factor test: on a made up truck whose pull follows the factor at once, and on one where it follows only
+    // once the gear is set again; it starts floored in the third gear, measures the three changes, and puts the factor
+    // back; lifting the foot stops it and puts the factor back too
+    {
+        auto run = [&](bool atOnce, float liftAt, PowerTest &test, PowerOrders &last, float &factorAfter) {
+            TruckRaw p = Truck();
+            p.gear = p.gearEngaged = 3;
+            p.automatic = 0;
+            p.powerFactor = 1.05f;
+            p.throttle = -1.0f;
+            float v = 5.0f, inForce = 1.05f;
+            test = PowerTest{ kPowerArmed };
+            last = PowerOrders{};
+            for (float at = 0.0f; at < 10.0f; at += 0.05f)
+            {
+                if (liftAt >= 0.0f && at >= liftAt) p.throttle = 0.0f;
+                for (int i = 0; i < p.wheels; i++) p.spin[i] = v * 2.2f;
+                p.speed = v;
+                const PowerOrders o = PowerTestStep(test, p, TruckPedal(p), 0.05f);
+                if (o.write) p.powerFactor = o.factor;
+                if (atOnce || o.shiftTo) inForce = p.powerFactor;
+                if (o.ended) last = o;
+                v += 0.5f * inForce / 1.05f * 0.05f;
+            }
+            factorAfter = p.powerFactor;
+        };
+        PowerTest once, onShift, lifted;
+        PowerOrders onceEnd, shiftEnd, liftEnd;
+        float onceAfter, shiftAfter, liftAfter;
+        run(true, -1.0f, once, onceEnd, onceAfter);
+        run(false, -1.0f, onShift, shiftEnd, shiftAfter);
+        run(false, 4.0f, lifted, liftEnd, liftAfter);
+        const bool measured = once.state == kPowerDone && Near(PowerRatio(once, 1), 0.5f, 0.05f) && Near(PowerRatio(once, 3), 0.5f, 0.05f) && Near(PowerRatio(once, 5), 2.0f, 0.1f) &&
+                              onShift.state == kPowerDone && Near(PowerRatio(onShift, 1), 1.0f, 0.05f) && Near(PowerRatio(onShift, 3), 0.5f, 0.05f) &&
+                              Near(PowerRatio(onShift, 5), 2.0f, 0.1f) && Near(onceAfter, 1.05f, 0.001f) && Near(shiftAfter, 1.05f, 0.001f) && shiftEnd.shiftTo == 3;
+        const bool stopped = lifted.state == kPowerStopped && !strcmp(lifted.why, "the pedal was lifted") && Near(liftAfter, 1.05f, 0.001f) && liftEnd.shiftTo == 3;
+        // not in the second gear, nor with the game's automatic flag up
+        TruckRaw low = Truck();
+        low.gear = low.gearEngaged = 2;
+        low.throttle = -1.0f;
+        low.powerFactor = 1.05f;
+        low.speed = 3.0f;
+        PowerTest waiting = { kPowerArmed };
+        PowerTestStep(waiting, low, 1.0f, 0.05f);
+        TruckRaw flagUp = low;
+        flagUp.gear = flagUp.gearEngaged = 3;
+        flagUp.automatic = 1;
+        PowerTestStep(waiting, flagUp, 1.0f, 0.05f);
+        char first[1400], second[320];
+        PowerTestText(onShift, first, sizeof first, second, sizeof second);
+        Check(measured && stopped && waiting.state == kPowerArmed && strstr(second, "x1.00") && strstr(second, "x0.50") && strstr(second, "x2.00"),
+              "power test: measures a pull that follows the factor at once and one that follows it at the next shift, puts the factor back, stops at a lift, "
+              "and waits for the third gear and the game's automatic flag down");
+    }
+
     // the clutch: free with the pedal pressed, a stall when it is let up at once with the truck standing, none when it
     // is let up slowly as the truck pulls away, locked at speed, and the engine back to idle with it pressed
     {

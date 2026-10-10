@@ -44,6 +44,7 @@ static SRWLOCK g_setLock = SRWLOCK_INIT;
 static GaugeSettings g_set;
 static LONG g_setTurn = 0;
 static volatile LONG g_setDirty = 0, g_reloadAsked = 0, g_truckDropAsked = 0, g_resetAsked = 0;
+static volatile LONG g_powerTestAsked = 0; // 1 arm the power factor test, 2 cancel it
 
 // What the cluster shows, written by the mod's thread and read by the render thread.
 static SRWLOCK g_viewLock = SRWLOCK_INIT;
@@ -423,6 +424,7 @@ static void SettingsPublish(const GaugeSettings &s)
 void SettingsReload() { InterlockedExchange(&g_reloadAsked, 1); }
 void SettingsTruckDrop() { InterlockedExchange(&g_truckDropAsked, 1); }
 void SettingsReset() { InterlockedExchange(&g_resetAsked, 1); }
+void PowerTestAsk(bool run) { InterlockedExchange(&g_powerTestAsked, run ? 1 : 2); }
 
 // ---- a truck's own scales: the section [Truck:<key>] of Gauges.ini ----
 // A truck can have seven settings of its own: TachClass, IdleRpm, RedlineRpm, MaxRpm, SpeedMax, BoostMax and BoostProfile. They are written
@@ -839,6 +841,7 @@ struct TruckWatch
     GearboxModel gearbox;       // and the gear an automatic with a torque converter would be in, the same way
     ClutchModel clutch;         // and, while the manual transmission mod drives it, the engine behind its clutch pedal
     TakeoverModel take;         // the mod's automatic setting the game's gears (Gearbox)
+    PowerTest powerTest;        // the power factor test (the tab's button)
     AirModel air;               // and the air in its brakes' tanks
     SmtReader smtReader;        // the manual transmission mod's published state (smt.h)
     SmtView smt;                // as read on this pass
@@ -1004,6 +1007,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             w.clutch = ClutchModel{};
             if (w.take.driving) Log(L"gearbox: the mod's automatic lets the last truck's gears go: another truck is driven");
             w.take = TakeoverModel{};
+            if (w.powerTest.state == kPowerRunning) Log(L"power test: stopped, another truck is driven (the last one's power factor may be left changed until its next shift)");
+            if (w.powerTest.state == kPowerRunning) w.powerTest = PowerTest{};
             w.air = AirModel{};
             w.tilt = TiltModel{};
             w.owed = w.asked = 0;
@@ -1057,9 +1062,44 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         if (probe && boxGear >= 1 && w.gearbox.gear >= 1 && w.gearbox.gear != boxGear && raw.automatic && raw.gearEngaged >= 1 && raw.gearEngaged <= TruckTopGear(raw))
             Log(L"automatic: the model would shift %d to %d at %.0f rpm on the gearbox's input, the pedal at %.2f (the game's gear %d)", boxGear, w.gearbox.gear,
                 w.gearbox.input, foot, raw.gearEngaged);
+        // the power factor test (the tab's button): armed until the truck is floored in the third gear or higher, then
+        // seven seconds of the factor changed and the pull measured, the gear held and the mod's automatic left out
+        const LONG powerAsk = InterlockedExchange(&g_powerTestAsked, 0);
+        if (powerAsk == 1 && w.powerTest.state != kPowerRunning)
+        {
+            w.powerTest = PowerTest{ kPowerArmed };
+            Log(L"power test: armed; it runs once the truck is floored in the third gear or higher, the wheels under %.0f %% of the gear's top, the game's "
+                L"automatic flag down%s", kPowerTopMost * 100.0f, g_shiftGear ? L"" : L" (the game's shift function is not known: the phases that set the gear again only write)");
+        }
+        else if (powerAsk == 2 && (w.powerTest.state == kPowerArmed || w.powerTest.state == kPowerRunning))
+        {
+            if (w.powerTest.state == kPowerRunning)
+            {
+                m.put(w.refs.action + 0x38, w.powerTest.factor);
+                if (w.powerTest.shifted && raw.gear >= 1 && raw.gear <= TruckTopGear(raw)) GameShift(w.refs.vehicle, raw.gear);
+            }
+            w.powerTest.state = kPowerOff;
+            Log(L"power test: cancelled from the tab");
+        }
+        const int powerWas = w.powerTest.state;
+        const PowerOrders power = PowerTestStep(w.powerTest, raw, foot, dt);
+        if (powerWas == kPowerArmed && w.powerTest.state == kPowerRunning)
+            Log(L"power test: running in gear %d at %.1f m/s, the power factor %.3f; keep it floored", w.powerTest.gear, raw.speed, w.powerTest.factor);
+        if (power.write) m.put(w.refs.action + 0x38, power.factor);
+        if (power.shiftTo) GameShift(w.refs.vehicle, power.shiftTo);
+        if (power.hold) w.gearbox.pause = fmaxf(w.gearbox.pause, kShiftPause);
+        if (power.ended)
+        {
+            char first[1400], second[320];
+            PowerTestText(w.powerTest, first, sizeof first, second, sizeof second);
+            Log(L"%S", first);
+            Log(L"%S", second);
+        }
+        const bool testing = w.powerTest.state == kPowerRunning || power.ended;
         // the mod's automatic in the game (Gearbox=1): while the game's shifter is in A the model's gear is set through
-        // the game's own shift function, with the game's automatic flag put down so its own choice stops
-        const TakeoverOrders orders = TakeoverStep(w.take, raw, w.gearbox.gear, s.gearbox == kGearboxModel && g_shiftGear != nullptr, dt, GearboxLowestFit(w.gearbox, raw, scale));
+        // the game's own shift function, with the game's automatic flag put down so its own choice stops; not while the
+        // power test holds the gear
+        const TakeoverOrders orders = testing ? TakeoverOrders{} : TakeoverStep(w.take, raw, w.gearbox.gear, s.gearbox == kGearboxModel && g_shiftGear != nullptr, dt, GearboxLowestFit(w.gearbox, raw, scale));
         if (orders.took)
         {
             w.gearbox.gear = raw.gear;
@@ -1425,6 +1465,9 @@ static DWORD WINAPI Run(void *)
         strcpy_s(v.mapFrom, mapFrom);
         v.mapOwn = mapOwn;
         v.ambientC = inForce.ambientC;
+        v.powerTest = watch.powerTest.state;
+        v.powerPhase = watch.powerTest.phase;
+        v.powerWhy = watch.powerTest.why;
         v.demo = !driving && s.demo;
         v.hidden = !visible ? kHiddenByToggle : s.soundsOnly ? kHiddenSoundsOnly : driving || s.demo ? kShown : kHiddenNoTruck;
         v.show = v.hidden == kShown;

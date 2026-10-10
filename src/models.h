@@ -1313,6 +1313,163 @@ inline const char *TakeoverWhy(int reason)
     return reason == kTakePicked ? "a gear was picked by hand" : reason == kTakeLow ? "a low gear was picked by hand" : reason == kTakeOff ? "the setting is off" : reason == kTakeGone ? "the engine stopped" : "";
 }
 
+// ---- the power factor test ----
+// Whether a write of the game's power factor (action + 0x38) changes the pull, at once or only once the gear is set
+// again through the game's shift function (the manual transmission mod sets the gear again each time it sets the
+// factor): the answer decides how the engine's torque reaches the game (module 12). Armed from the tab, it runs once
+// the truck is driven floored in the third gear or higher, the wheels well under the gear's top, the game's automatic
+// flag down (the mod's automatic driving, or a gear picked by hand), and holds the gear through kPowerPhase seconds a
+// phase: the factor as it is, halved by a write alone, as it is, halved with the gear set again, as it is with the
+// gear set again, doubled with the gear set again, and as it is with the gear set again. A phase's pull is the slope
+// of the truck's speed over its time after its first kPowerSettle seconds, which are measured on their own for a gap
+// at the shift. The foot lifted, the brake, another gear, the game's automatic, the gear's top or the engine stopping
+// ends it, and the factor is put back as it was, the gear set again where a phase did.
+static const float kPowerPhase = 1.0f, kPowerSettle = 0.3f;
+static const float kPowerPedal = 0.9f;       // the pedal floored
+static const float kPowerTopMost = 0.6f;     // the wheels at most this share of the gear's top for it to begin
+static const float kPowerTopEnd = 0.95f;     // and it ends past this share
+static const int kPowerGearLeast = 3;
+enum { kPowerOff, kPowerArmed, kPowerRunning, kPowerDone, kPowerStopped };
+struct PowerPhase { const char *name; float share; bool shift; };
+static const PowerPhase kPowerPhases[] = { { "as it is", 1.0f, false },
+                                           { "halved, written alone", 0.5f, false },
+                                           { "as it is", 1.0f, false },
+                                           { "halved, the gear set again", 0.5f, true },
+                                           { "as it is, the gear set again", 1.0f, true },
+                                           { "doubled, the gear set again", 2.0f, true },
+                                           { "as it is, the gear set again", 1.0f, true } };
+static const int kPowerPhaseCount = (int)(sizeof kPowerPhases / sizeof kPowerPhases[0]);
+
+// A line fitted to the truck's speed against the time by least squares.
+struct PowerFit { float n, sx, sy, sxx, sxy; };
+inline void PowerFitAdd(PowerFit &f, float x, float y)
+{
+    f.n += 1.0f;
+    f.sx += x;
+    f.sy += y;
+    f.sxx += x * x;
+    f.sxy += x * y;
+}
+// Its slope, the truck's gain in m/s each second; NAN with fewer than three points.
+inline float PowerFitSlope(const PowerFit &f)
+{
+    const float d = f.n * f.sxx - f.sx * f.sx;
+    return f.n >= 3.0f && d > 0.0f ? (f.n * f.sxy - f.sx * f.sy) / d : NAN;
+}
+
+struct PowerTest
+{
+    int state;         // one of kPowerOff to kPowerStopped
+    int phase;         // the phase running, or the one it stopped in
+    float at;          // seconds into the phase
+    float factor;      // the power factor as it was when the test began
+    int gear;          // the gear it runs in
+    bool shifted;      // a phase set the gear again, so the end does too
+    float from, to;    // the truck's speed at the start and at the end, m/s
+    float topShare;    // the wheels' highest share of the gear's top
+    PowerFit pull[kPowerPhaseCount], early[kPowerPhaseCount];
+    float seen[kPowerPhaseCount]; // the factor read back at the end of each phase: whether the game kept the write
+    float b4[kPowerPhaseCount];   // the highest of action + 0xB4 in each phase, which moves at a shift
+    const char *why;   // why it stopped
+};
+
+// What the test does to the game on this pass.
+struct PowerOrders
+{
+    bool write;        // write factor into the power factor
+    float factor;
+    int shiftTo;       // set this gear again through the game's shift function, 0 for none
+    bool hold;         // the gearbox holds its gear
+    bool ended;        // it ended on this pass (state says how)
+};
+
+// One pass of dt seconds. pedal: the pedal as held (TruckPedal).
+inline PowerOrders PowerTestStep(PowerTest &m, const TruckRaw &t, float pedal, float dt)
+{
+    PowerOrders o = {};
+    if (m.state != kPowerArmed && m.state != kPowerRunning) return o;
+    const int top = TruckTopGear(t);
+    const float gearTop = TruckGearTop(t, t.gear), share = gearTop > 0.0f ? TruckDrivenSpin(t) / gearTop : 1.0f;
+    const bool engine = TruckEngineOn(t), braking = TruckBrake(t) > 0.0f || t.handbrake;
+    if (m.state == kPowerArmed)
+    {
+        if (!engine || t.automatic || t.gear < kPowerGearLeast || t.gear > top || t.gearEngaged != t.gear || pedal < kPowerPedal || braking || t.speed < 1.0f ||
+            share > kPowerTopMost || !(t.powerFactor > 0.1f) || !isfinite(t.speed))
+            return o;
+        m = PowerTest{ kPowerRunning, 0, 0.0f, t.powerFactor, t.gear, false, t.speed, t.speed, share };
+        m.why = "";
+    }
+    const char *stop = !engine ? "the engine stopped" : t.automatic ? "the game's automatic took the gears" : t.gear != m.gear ? "another gear was put in" :
+                       pedal < kPowerPedal ? "the pedal was lifted" : braking ? "the brake was put on" : share > kPowerTopEnd ? "the wheels reached the gear's top" : nullptr;
+    if (stop)
+    {
+        m.state = kPowerStopped;
+        m.why = stop;
+        o.write = true;
+        o.factor = m.factor;
+        o.shiftTo = m.shifted && engine && t.gear >= 1 && t.gear <= top ? t.gear : 0;
+        o.ended = true;
+        return o;
+    }
+    // this pass's speed is the one the last pass's factor made: the first kPowerSettle seconds of a phase apart
+    PowerFitAdd(m.at >= kPowerSettle ? m.pull[m.phase] : m.early[m.phase], m.at, t.speed);
+    m.to = t.speed;
+    m.topShare = fmaxf(m.topShare, share);
+    m.b4[m.phase] = fmaxf(m.b4[m.phase], t.actionB4);
+    const PowerPhase &ph = kPowerPhases[m.phase];
+    o.write = true;
+    o.factor = m.factor * ph.share;
+    o.hold = true;
+    if (m.at == 0.0f && ph.shift)
+    {
+        o.shiftTo = m.gear;
+        m.shifted = true;
+    }
+    m.at += dt;
+    if (m.at >= kPowerPhase)
+    {
+        m.seen[m.phase] = t.powerFactor;
+        m.at = 0.0f;
+        if (++m.phase >= kPowerPhaseCount)
+        {
+            m.phase = kPowerPhaseCount - 1;
+            m.state = kPowerDone;
+            o.factor = m.factor;
+            o.shiftTo = m.shifted ? m.gear : 0;
+            o.hold = false;
+            o.ended = true;
+        }
+    }
+    return o;
+}
+
+// A test phase's pull against the mean of the phases as it is on either side, NAN where one is missing.
+inline float PowerRatio(const PowerTest &m, int phase)
+{
+    if (phase < 1 || phase + 1 >= kPowerPhaseCount) return NAN;
+    const float before = PowerFitSlope(m.pull[phase - 1]), after = PowerFitSlope(m.pull[phase + 1]), test = PowerFitSlope(m.pull[phase]);
+    const float base = isfinite(after) ? (before + after) * 0.5f : before;
+    return isfinite(test) && isfinite(base) && fabsf(base) > 0.02f ? test / base : NAN;
+}
+
+// The test's numbers in lines for the log: what was measured, then each change against the phases as it is.
+inline void PowerTestText(const PowerTest &m, char *first, size_t firstSize, char *second, size_t secondSize)
+{
+    size_t n = (size_t)snprintf(first, firstSize, "power test: in gear %d from %.1f to %.1f m/s (the wheels up to %.2f of the gear's top), the factor %.3f:", m.gear, m.from,
+                                m.to, m.topShare, m.factor);
+    for (int p = 0; p < kPowerPhaseCount && n < firstSize; p++)
+    {
+        const float pull = PowerFitSlope(m.pull[p]), early = PowerFitSlope(m.early[p]);
+        if (!isfinite(pull) && !isfinite(early)) break;
+        n += (size_t)snprintf(first + n, firstSize - n, "%s %s %.2f m/s each second (the first %.1f s %.2f), the factor read %.3f, B4 up to %.3f", p ? ";" : "",
+                              kPowerPhases[p].name, pull, kPowerSettle, early, m.seen[p], m.b4[p]);
+    }
+    const float half = PowerRatio(m, 1), halfShift = PowerRatio(m, 3), twice = PowerRatio(m, 5);
+    snprintf(second, secondSize, "power test: the pull halved by a write alone x%.2f, halved with the gear set again x%.2f, doubled with the gear set again x%.2f "
+                                 "(x1.00 is no change; nan where the phase was not measured)%s%s",
+             half, halfShift, twice, m.state == kPowerStopped ? "; stopped: " : "", m.state == kPowerStopped ? m.why : "");
+}
+
 // ---- the clutch ----
 
 static const float kClutchFree = 0.85f;      // a pedal pressed past this share of its travel holds nothing

@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#define GAUGES_VERSION "0.12.3"
+#define GAUGES_VERSION "0.12.4"
 
 // The exe the addresses in this mod are from (SnowRunner on Steam, the build of 22 July 2026). On any other the mod
 // stands down.
@@ -242,7 +242,11 @@ enum { kSoundOil = kTurboTiers, kSoundTierCount };
 // are that kind's. truckOwn: it has scales of its own in Gauges.ini, and those are the ones in force. map: the map
 // the truck drives on in words, with its region ("" while it is not known), and ambientC the outside temperature in
 // force: its section's (mapOwn, from the section [Map:<mapFrom>], the map's or its region's) or AmbientC's.
-struct GaugeView { bool show, demo; int hidden; GaugeState st; int engineDamage, engineCapacity; char truck[96]; bool truckOwn; char map[96], mapFrom[64]; bool mapOwn; float ambientC; };
+// powerTest: kViewPowerOff to kViewPowerStopped, the power factor test's state (PowerTest in models.h); powerWhy: why it
+// stopped, a string that lives as long as the mod
+enum { kViewPowerOff, kViewPowerArmed, kViewPowerRunning, kViewPowerDone, kViewPowerStopped };
+struct GaugeView { bool show, demo; int hidden; GaugeState st; int engineDamage, engineCapacity; char truck[96]; bool truckOwn; char map[96], mapFrom[64]; bool mapOwn; float ambientC;
+                   int powerTest, powerPhase; const char *powerWhy; };
 
 LONG SettingsGet(GaugeSettings &out);       // the settings in force (any thread); returns their turn, for SettingsPut
 void SettingsPut(const GaugeSettings &in, LONG turn); // settings edited from those of a turn: the mod takes them at once and saves the ini a
@@ -250,6 +254,7 @@ void SettingsPut(const GaugeSettings &in, LONG turn); // settings edited from th
 void SettingsReload();                      // read the ini again (the tab's button)
 void SettingsTruckDrop();                   // the tab's button: the driven truck gives up its own scales and takes the plain ones
 void SettingsReset();                       // the tab's button: every setting back to its default, the driven truck's own scales too
+void PowerTestAsk(bool run);                 // the tab's button: arm the power factor test, or cancel it
 void DamageTestAsk(int points);             // the tab's test buttons: the mod adds this much to the driven truck's engine damage on its next pass
 void ViewGet(GaugeView &out);               // what to draw (any thread)
 void SoundHear(int tier);                   // plays the turbo's sound of that strength (kTurboHigh ..) or the oil warning (kSoundOil) as loud as the settings have it (the tab's buttons)

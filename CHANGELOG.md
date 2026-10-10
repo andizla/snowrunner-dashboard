@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.12.4] 2026-10-10
+
+- A power test on the tab (Gearbox, "Test the power factor"): floored in the third gear or higher on flat ground, the mod holds the gear for seven seconds and changes the game's power factor a second at a time (as it is, halved by a write alone, halved with the gear set again, doubled with the gear set again), measures the pull in each, and puts the factor back. `Gauges.log` gets the numbers: whether the factor changes the pull at once, only once the gear is set again, or not at all, which decides how the engine's torque reaches the game next. Lifting the foot, the brake, another gear or the game's automatic stops it.
+
 ## [0.12.3] 2026-10-10
 
 - The mod's automatic goes by the pedal where your foot holds it. It went by the pedal after the powertrain's curve, under which a fifth of the pedal reads as a twentieth, so a light foot sat on the line between coasting and driving and it shifted 4 to 5 and back every few seconds.
