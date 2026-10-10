@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.12.7] 2026-10-10
+
+- The tab's power test is a pull test now: it changes the game's torque factor (the share of its torque the game leaves a damaged engine) in place of the power factor, halved, raised by half and at three quarters, in the fourth gear or higher. The power factor's answer is in: a write counts at once and is kept, but it moves the gear's top speed, the way the game makes its low gears, so halved the truck braked hard and doubled the gear pulled less. It cannot carry the engine's torque.
+
 ## [0.12.6] 2026-10-10
 
 - The outside temperature follows the game's day: coldest just before sunrise, warmest in the afternoon. A map's section can give the day's warmest and the night's coldest, `DayC` and `NightC` (Scandinavia's asphalt has frost at night and none by day: `DayC=3`, `NightC=-12`); a section with only `AmbientC` swings 10 C around it. The tab shows both and the hour, and its slider moves them together.

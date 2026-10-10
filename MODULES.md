@@ -489,6 +489,16 @@ phase did) at the end, at a lift, the brake, another gear, the flag up, the engi
 gear's top. Models 135 OK. Owed: the user's run; then the torque route: the factor written each pass if a write alone
 counts, else at each shift only (and a hook for the rest), and whether it goes over 1 (the converter's 2 at the
 stall, the boost).
+The user's three runs (log of 17:42, 0.12.5, the Defender in Zurdania): a write alone counts at once and the game
+keeps it (read back 0.525); halved, the truck braked at 1.0 to 1.8 m/s each second (5.3 to 6.3 in the first 0.3 s)
+where it gained 1.2 to 2.9 at 1.05, in the 3rd gear and in the 5th; set again by a shift, the same; doubled (5th, at
+0.62 of the gear's top) it gained -0.77 against 1.43 and 0.81 on either side. So the factor moves the gear's top
+speed (the game's low gears are the 1st with it at 0.45 and 0.2), a lower one braking the truck down to it, a higher
+one a taller gear: no lever for torque. The two runs in the 3rd gear stopped at the gear's top in the doubled
+phase. 0.12.7: the test (`PullTestStep`) changes the torque factor at action + 0xCC instead, the share the game
+leaves a damaged engine (the mod writes it with its engine damage since 0.10): halved, raised by half, at three
+quarters, from the 4th gear with the wheels under 0.55 of the gear's top; whether the game keeps the write (read
+back) and whether the pull follows, and whether it goes over 1. Models 135 OK. Owed: the user's run.
 
 Part A, research and design note (no hook before the user's OK on the note):
 - Where the game turns the pedal into torque and how the automatic decides a shift: the truck action's per-frame

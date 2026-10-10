@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#define GAUGES_VERSION "0.12.6"
+#define GAUGES_VERSION "0.12.7"
 
 // The exe the addresses in this mod are from (SnowRunner on Steam, the build of 22 July 2026). On any other the mod
 // stands down.
@@ -244,11 +244,11 @@ enum { kSoundOil = kTurboTiers, kSoundTierCount };
 // are that kind's. truckOwn: it has scales of its own in Gauges.ini, and those are the ones in force. map: the map
 // the truck drives on in words, with its region ("" while it is not known), and ambientC the outside temperature in
 // force: its section's (mapOwn, from the section [Map:<mapFrom>], the map's or its region's) or AmbientC's.
-// powerTest: kViewPowerOff to kViewPowerStopped, the power factor test's state (PowerTest in models.h); powerWhy: why it
-// stopped, a string that lives as long as the mod
-enum { kViewPowerOff, kViewPowerArmed, kViewPowerRunning, kViewPowerDone, kViewPowerStopped };
+// pullTest: kViewPullOff to kViewPullStopped, the pull test's state (PullTest in models.h); pullWhy: why it stopped, a
+// string that lives as long as the mod
+enum { kViewPullOff, kViewPullArmed, kViewPullRunning, kViewPullDone, kViewPullStopped };
 struct GaugeView { bool show, demo; int hidden; GaugeState st; int engineDamage, engineCapacity; char truck[96]; bool truckOwn; char map[96], mapFrom[64]; bool mapOwn; float ambientC;
-                   int powerTest, powerPhase; const char *powerWhy;
+                   int pullTest, pullPhase; const char *pullWhy;
                    float ambientDay, ambientNight, hour; }; // the map's day and night (with mapOwn), the hour of the game's day (-1 not known)
 
 LONG SettingsGet(GaugeSettings &out);       // the settings in force (any thread); returns their turn, for SettingsPut
@@ -257,7 +257,7 @@ void SettingsPut(const GaugeSettings &in, LONG turn); // settings edited from th
 void SettingsReload();                      // read the ini again (the tab's button)
 void SettingsTruckDrop();                   // the tab's button: the driven truck gives up its own scales and takes the plain ones
 void SettingsReset();                       // the tab's button: every setting back to its default, the driven truck's own scales too
-void PowerTestAsk(bool run);                 // the tab's button: arm the power factor test, or cancel it
+void PullTestAsk(bool run);                  // the tab's button: arm the pull test, or cancel it
 void MapAmbientSet(float c);                 // the tab's slider: the outside temperature of the map's section in force
 void DamageTestAsk(int points);             // the tab's test buttons: the mod adds this much to the driven truck's engine damage on its next pass
 void ViewGet(GaugeView &out);               // what to draw (any thread)

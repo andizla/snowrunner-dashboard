@@ -16,7 +16,7 @@ struct PageState
 };
 static const unsigned long long kPageCaptureMs = 8000;
 enum { kPageChanged = 1, kPageReload = 2, kPageTruckDrop = 4, kPageDefaults = 8, kPageHearHigh = 16, kPageHearMid = 32, kPageHearLow = 64, kPageHearOil = 128,
-       kPagePowerTest = 256, kPagePowerCancel = 512, kPageMapAmbient = 1024 };
+       kPagePullTest = 256, kPagePullCancel = 512, kPageMapAmbient = 1024 };
 
 // The Dear ImGui key as a virtual key, for the keys the toggle key can be; 0 for others.
 static int PageVirtualKey(int k)
@@ -427,16 +427,16 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     PageTip("The mod's automatic picks the gears while the game's shifter is in A: a torque converter, shifts up later the further the pedal is down, "
             "a kickdown when it is floored, the gear held when the foot lifts, and the first gear as the truck stops. The tachometer shows its engine "
             "speed. Picking a gear by hand hands the gearbox back to you.");
-    PageLabel("Power test", labelX);
-    const bool powerOn = view.powerTest == kViewPowerArmed || view.powerTest == kViewPowerRunning;
-    if (ImGui::Button(powerOn ? "Cancel###powertest" : "Test the power factor###powertest", ImVec2(w, 0))) act |= powerOn ? kPagePowerCancel : kPagePowerTest;
-    PageTip("Finds out whether the game's power factor can carry the engine's torque, for the powertrain that comes next. Press it, then on a long flat "
-            "road drive in the third gear or higher (the mod's automatic, or a gear picked by hand) and floor the pedal for seven seconds. The mod holds "
-            "the gear, changes the power factor for a second at a time and measures the pull, then puts it back. The numbers go into Gauges.log.");
-    if (view.powerTest == kViewPowerArmed) ImGui::TextDisabled("Armed: floor it in the third gear or higher on a long flat road.");
-    else if (view.powerTest == kViewPowerRunning) ImGui::TextDisabled("Running, step %d of 7: keep it floored.", view.powerPhase + 1);
-    else if (view.powerTest == kViewPowerDone) ImGui::TextDisabled("Done: the numbers are in Gauges.log.");
-    else if (view.powerTest == kViewPowerStopped) ImGui::TextDisabled("Stopped: %s. The power factor is back as it was.", view.powerWhy ? view.powerWhy : "");
+    PageLabel("Pull test", labelX);
+    const bool pullOn = view.pullTest == kViewPullArmed || view.pullTest == kViewPullRunning;
+    if (ImGui::Button(pullOn ? "Cancel###pulltest" : "Test the engine's pull###pulltest", ImVec2(w, 0))) act |= pullOn ? kPagePullCancel : kPagePullTest;
+    PageTip("Finds out whether the game's torque factor can carry the engine's torque, for the powertrain that comes next. Press it, then on a long flat "
+            "road drive in the fourth gear or higher (the mod's automatic, or a gear picked by hand) and floor the pedal for seven seconds. The mod holds "
+            "the gear, changes the torque factor for a second at a time and measures the pull, then puts it back. The numbers go into Gauges.log.");
+    if (view.pullTest == kViewPullArmed) ImGui::TextDisabled("Armed: floor it in the fourth gear or higher on a long flat road.");
+    else if (view.pullTest == kViewPullRunning) ImGui::TextDisabled("Running, step %d of 7: keep it floored.", view.pullPhase + 1);
+    else if (view.pullTest == kViewPullDone) ImGui::TextDisabled("Done: the numbers are in Gauges.log.");
+    else if (view.pullTest == kViewPullStopped) ImGui::TextDisabled("Stopped: %s. The torque factor is back as it was.", view.pullWhy ? view.pullWhy : "");
 
     ImGui::SeparatorText("Controls");
     PageLabel("Toggle key", labelX);
