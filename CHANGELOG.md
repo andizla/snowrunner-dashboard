@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.13.1] 2026-10-10
+
+- With the engine handed to the game, a light foot no longer leaves the truck weak. The missing boost and the cold oil cost torque on every pedal, so at 40 percent pedal the game got two thirds of the torque it asked for; now they cost only where the pedal asks more than they leave, as a turbo diesel gives a light foot what it asks without boost.
+- Wheels spinning in mud no longer get three times the torque. The lift went by the wheels' speed, and wheels spinning at their gear's top put it at its most; it goes by the truck's speed over the ground now, so spinning wheels keep the game's own fall toward the top, which holds them back.
+- The signatures for other builds of the game go into a file of their own, `Gauges.signatures.txt`, with `Probe=1` on the Steam build. In the log they were lost when the game started again before the log was sent; the harvest runs again wherever that file is missing.
+
 ## [0.13.0] 2026-10-10
 
 - The truck can pull with the mod's engine. `Powertrain=1` (the tab's Gearbox section, "Engine to the game") hands the game the mod's torque in place of its own: the class's torque curve against the engine speed on the needle, less with cold oil and without boost, and with the mod's automatic doubled by the converter at its stall. The game's own gives all its torque at half a gear's top speed and falls to nothing at the top whatever the engine speed; the mod lifts that fall by the game's torque factor, written on every pass at up to three times the game's own share, so a gear revved high pulls as a real engine's would. The game's share comes back when the setting goes off, the engine stops, a pull test is armed or another truck is driven. Off by default.

@@ -1076,9 +1076,10 @@ inline float GamePull(float x) { return isfinite(x) ? SettingsRange(fminf(kGameP
 
 // ---- the engine's torque handed to the game (Powertrain=1) ----
 // With Powertrain on the mod writes the torque factor at action + 0xCC on each pass: the game's own share (what it
-// leaves a damaged engine) times the engine's torque at the needle's speed (the curve, the cold oil and the boost:
-// PowertrainModel::torque) times what the converter multiplies, over what the game's curve has fallen to at the
-// wheels' share of the gear's top (GameFall), at the most kTorqueFactorMost. So the truck pulls as the mod's engine
+// leaves a damaged engine) times the engine's torque at the needle's speed (the curve; the cold oil and the boost
+// where the pedal asks more than they leave) times what the converter multiplies, over what the game's curve has
+// fallen to at the wheels' share of the gear's top (GameFall, by the truck's speed over the ground: wheels spinning
+// in mud keep the game's fall, which holds them back), at the most kTorqueFactorMost. So the truck pulls as the mod's engine
 // does: all its torque where the game's curve gives all of its own, and as much where the game's falls away toward
 // the gear's top, up to near it; past the top the game gives nothing whatever the factor, so a gear's top speed stays
 // the game's. Under half the top the game's curve is left as it is: there it reads low only as the engine picks up.
@@ -1089,10 +1090,13 @@ static const float kTorqueFactorStep = 0.005f;  // a change of the factor smalle
 // What the game's curve has fallen to with the wheels at x of the gear's top: 1 up to about half, nothing at the top.
 inline float GameFall(float x) { return isfinite(x) ? SettingsRange(kGamePullFall * (1.0f - x), 0.0f, 1.0f) : 0.0f; }
 
-// The factor over the game's own share: the engine's torque (0 to 1) times the converter's ratio, over GameFall at x.
-inline float TorqueLift(float torque, float ratio, float x)
+// The factor over the game's own share, by the engine's torque curve at its speed (0 to 1), the share of it the cold
+// oil and the boost leave (limit), the pedal (the game asks the engine for that share of its torque, which it has as
+// far as the limit goes: at a light foot a turbo engine without boost gives what the pedal asks), the converter's
+// ratio, over GameFall at x.
+inline float TorqueLift(float curve, float limit, float pedal, float ratio, float x)
 {
-    const float lift = torque * ratio / fmaxf(GameFall(x), 1e-3f);
+    const float lift = curve * ratio * fminf(1.0f, limit / fmaxf(pedal, 1e-3f)) / fmaxf(GameFall(x), 1e-3f);
     return SettingsRange(isfinite(lift) ? lift : 1.0f, kTorqueFactorLeast, kTorqueFactorMost);
 }
 

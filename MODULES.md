@@ -620,6 +620,18 @@ game's): up at 0.88 to 0.94 of the top by the step (the floor at kDownMost, 0.91
 share followed and given back, the points by the engine). Owed: the user's drive with it on; whether factors up to 3
 behave in the game (only 1.5 was tried); the turbo's lag (35 percent of the torque without boost) and the cold may
 make pulling away weaker than the game's own, against the converter's doubling at the stall.
+The user's drive of 00:27 (0.13.0, the Defender, Powertrain on from 00:31:32 to 00:41, mostly off road at 0 to 5
+m/s; no signature lines: the harvest had run on an earlier start, marked done in the ini, into a log since rewritten).
+The factor: 0.25 to 3, at 3 in 744 of 3753 samples. Floored, shifts up at 0.91 to 0.93 of the gear's top (revving
+out as built). Found: at a light foot the factor stood at 0.5 to 0.7 (00:31:48 to 55: the pedal at 0.33 to 0.43, the
+curve 0.5 to 0.6, boost x0.65): the boost's and the cold's shares were taken off whatever the pedal, on top of the
+game's own throttle, two cuts for one; and in mud the wheels spun to and past their gear's top (x 0.8 to 1.46 at 0.1
+to 1 m/s), which put the factor at 3 and gave spinning wheels three times the game's pull there (the converter at 1:
+its turbine spins with the wheels). 0.13.1: `TorqueLift(curve, limit, pedal, ratio, x)` takes the cold and the boost
+only where the pedal asks more than their limit leaves; x goes by the ground once the grip is known (the wheels at
+most kSlipUp over it), so spinning wheels keep the game's fall. The harvest writes `Gauges.signatures.txt` (its first
+line names the exe and the harvest's version; run again where it is missing), and the ini's [Signatures] goes.
+Models 143 OK.
 
 Part A, research and design note (no hook before the user's OK on the note):
 - Where the game turns the pedal into torque and how the automatic decides a shift: the truck action's per-frame

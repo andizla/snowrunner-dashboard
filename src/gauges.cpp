@@ -952,28 +952,39 @@ static bool PlacesFind(DWORD stamp, uint64_t &clock)
     return !missing;
 }
 
-// On the Steam build of 22 July 2026 with Probe=1, once for each version of the harvest: the signatures of the game's
-// statics (game_globals.h) into Gauges.log, for the mod to find them in other builds, and the ones it has checked
-// against the known places.
+// On the Steam build of 22 July 2026 with Probe=1: the signatures of the game's statics (game_globals.h), for the
+// mod to find them in other builds, into Gauges.signatures.txt next to the log, as lines for kGlobalSigs, and the
+// ones it has checked against the known places. Once for each version of the harvest: the file's first line names
+// it, and the harvest runs again where the file is gone or names another (a log of its own, as Gauges.log starts
+// anew at each start of the game).
 static void PlacesHarvest(DWORD stamp)
 {
     if (stamp != kGaugesExeStamp) return;
-    const std::wstring ini = IniPath();
-    wchar_t done[32] = {}, want[32];
-    swprintf_s(want, L"%08lx.%d", stamp, kHarvestVersion);
-    GetPrivateProfileStringW(L"Signatures", L"Harvested", L"", done, 32, ini.c_str());
+    const std::wstring path = g_dir + L"Gauges.signatures.txt";
+    char head[64], first[64] = "";
+    sprintf_s(head, "// harvested from exe %08lx, harvest %d", stamp, kHarvestVersion);
+    FILE *f = nullptr;
+    if (_wfopen_s(&f, path.c_str(), L"r") == 0 && f)
+    {
+        if (!fgets(first, sizeof first, f)) first[0] = 0;
+        fclose(f);
+        first[strcspn(first, "\r\n")] = 0;
+    }
+    WritePrivateProfileStringW(L"Signatures", nullptr, nullptr, IniPath().c_str()); // where 0.12.11 to 0.13.0 kept it
     size_t from = 0, to = 0;
-    if (!wcscmp(done, want) || !CodeRange(from, to)) return;
+    if (!strcmp(first, head) || !CodeRange(from, to) || _wfopen_s(&f, path.c_str(), L"w") != 0 || !f) return;
     const uint8_t *code = (const uint8_t *)g_base;
     const ULONGLONG started = GetTickCount64();
     Log(L"signatures: harvesting the game's statics from this build, for the other builds (a few seconds, once)");
+    fprintf(f, "%s\n", head);
+    int total = 0;
     for (int g = 0; g < kGlobCount; g++)
     {
         GlobalHarvested sigs[4];
         const int n = GlobalHarvest(code, from, to, ImageSize(), kGameGlobals[g].steam, kGameGlobals[g].reach, sigs, 4);
-        if (!n) Log(L"signatures: %S: none that stands once in the code", kGameGlobals[g].name);
-        for (int i = 0; i < n; i++)
-            Log(L"signature: { %S, \"%S\", %d, %d, %d },", kGameGlobals[g].id, sigs[i].pattern, sigs[i].at, sigs[i].after, sigs[i].into);
+        if (!n) fprintf(f, "// %s: none that stands once in the code\n", kGameGlobals[g].name);
+        for (int i = 0; i < n; i++) fprintf(f, "{ %s, \"%s\", %d, %d, %d },\n", kGameGlobals[g].id, sigs[i].pattern, sigs[i].at, sigs[i].after, sigs[i].into);
+        total += n;
     }
     // the signatures the mod has, checked against the known places
     for (int g = 0; g < kGlobCount && kGlobalSigs[0].global >= 0; g++)
@@ -981,11 +992,11 @@ static void PlacesHarvest(DWORD stamp)
         int signatures = 0;
         bool conflict = false;
         const uint64_t place = GlobalResolve(code, from, to, kGlobalSigs, g, signatures, conflict);
-        Log(L"signatures: %S %S (%d of them stand once)", kGameGlobals[g].name, place == kGameGlobals[g].steam ? "found where it is" : place ? "found at the wrong place" : "not found",
-            signatures);
+        fprintf(f, "// %s %s (%d of them stand once)\n", kGameGlobals[g].name, place == kGameGlobals[g].steam ? "found where it is" : place ? "found at the wrong place" : "not found",
+                signatures);
     }
-    Log(L"signatures: done in %.1f s", (GetTickCount64() - started) / 1000.0);
-    WritePrivateProfileStringW(L"Signatures", L"Harvested", want, ini.c_str());
+    fclose(f);
+    Log(L"signatures: %d written to Gauges.signatures.txt in %.1f s", total, (GetTickCount64() - started) / 1000.0);
 }
 
 // The game's gearbox functions in its code (game_code.h), looked for once a truck is driven, so a manual transmission
@@ -1386,11 +1397,15 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         {
             const bool pullBusy = w.pullTest.state == kPullArmed || w.pullTest.state == kPullRunning || pull.ended;
             const bool want = s.powertrain && TruckEngineOn(raw) && !pullBusy;
-            const float gearTop = TruckGearTop(raw, raw.gearEngaged), x = gearTop > 0.0f ? TruckDrivenSpin(raw) / gearTop : 0.0f;
+            // the wheels' share of the gear's top by the truck's speed over the ground, once the wheels' grip is known
+            const float spin = TruckDrivenSpin(raw), ground = isfinite(raw.speed) && raw.speed > 0.0f ? raw.speed : 0.0f;
+            const float wheels = w.gearbox.grip > 0.0f ? fminf(spin, w.gearbox.grip * ground * kSlipUp) : spin;
+            const float gearTop = TruckGearTop(raw, raw.gearEngaged), x = gearTop > 0.0f ? wheels / gearTop : 0.0f;
             const float ratio = w.take.driving ? w.gearbox.ratio : 1.0f;
             const bool handWas = w.hand.on;
             const float gameWas = w.hand.game;
-            TorqueGive(m, w.refs, true, TorqueHandStep(w.hand, want, w.refs.action, w.refs.vehicle, raw.torqueFactor, TorqueLift(w.power.torque, ratio, x)));
+            TorqueGive(m, w.refs, true, TorqueHandStep(w.hand, want, w.refs.action, w.refs.vehicle, raw.torqueFactor,
+                                                 TorqueLift(w.power.curve, w.power.cold * w.power.boost, TruckPedal(raw), ratio, x)));
             if (w.hand.on != handWas)
                 Log(w.hand.on ? L"powertrain: the engine's torque handed to the game, the game's own torque factor %.3f" : L"powertrain: the game's own torque factor %.3f given back",
                     w.hand.on ? w.hand.game : gameWas);
