@@ -653,6 +653,25 @@ damage numbers at + 0x74 to + 0x84) and the floats from 300 to 100000 in the veh
 bytes (`TruckFloatsText`), once a truck. On the scout of the drives the engine's file gives Torque 195000,
 EngineResponsiveness 0.35, MaxDeltaAngVel 0.04 and the bodies 4000, 4000 and 1000 kg: the next probe log should show
 where. Models 144 OK, truck 76.
+The user's drive of 01:24 (0.13.2, the scout, Powertrain at 50 percent, two minutes on the road): the factor 0.74
+to 2, median 1.11 (floored 1.2); floored, shifts up at 0.94 to 0.99 of the gear's top by the ground, at a part pedal
+at 0.57 to 0.78; set off in second; every shift down called by the pedal, a stop, or wheelspin (01:26:05, a
+kickdown 3 to 2 with the wheels 2.5 times over the ground, the needle at 5457 rpm over the red zone at 4850: the
+wheels', the ground's within the limit). The record's dump: + 0x58 a pointer, + 0x60 Torque 195000, + 0x64
+BrakesDelay 0.5, + 0x68 MaxDeltaAngVel 0.04, + 0x6C FuelConsumption 2, + 0x70 DamagedConsumptionModifier 1.5, + 0x74
+CriticalDamageThreshold 0.7, + 0x78 and + 0x7C the damaged torque multipliers 1 and 0.7, + 0x80 EngineResponsiveness
+0.35, + 0x84 DamageCapacity 150: the file's own order. 0.13.3 reads Torque, MaxDeltaAngVel, FuelConsumption and
+EngineResponsiveness (`EngineRecord`). The mass: the model's float at + 0x784 is 9007 where the file's bodies weigh
+9001 (4000, 4000, 1000 and 1); owed: a second truck's dump to tell it from chance. The vehicle has no float of the
+kind but 855 to 869 (two of them, as the model has a dozen of: not the mass).
+The harvest of 01:23 (harvest 1): 7 signatures, 2 for the wheel class, 1 for the garage, 4 for the engine sets;
+none for control, game, map, viewer, input and clock, which lie within 0xB0 bytes (0x2a8eb30 to 0x2a8ebe0): fields
+of a static object the code reaches by its start, as the found ones are reached by lea (a vtable, a getter, a
+constructor's). Harvest 2 (`GlobalBaseBelow`, `kGlobalBaseSpan` 0x400, `kGlobalBaseTries` 4): where no reference to
+the place stands once, the nearest place before it that the code reaches, the signature's into below 0
+(`GlobalResolve` adds it back); windows 10 to 40 bytes a side (`kPatternMax` 96); displacements a window cuts at either
+end left out (`GlobalSigOf`); the file says per place how many references it found and through which place. The 7
+are in `kGlobalSigs`, their four cut displacements left out by hand. Truck 79 OK.
 
 Part A, research and design note (no hook before the user's OK on the note):
 - Where the game turns the pedal into torque and how the automatic decides a shift: the truck action's per-frame

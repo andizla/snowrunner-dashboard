@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.13.3] 2026-10-11
+
+- The signatures for other builds are harvested again (`Probe=1` on the Steam build, into `Gauges.signatures.txt`). The first harvest gave 7 signatures for 3 of the 9 places the mod reads, and none for the driven truck's control, the game, the map, the viewer, the input and the clock: those lie within 0xB0 bytes of each other, fields of one static object that the game's code reaches by its start, never by their own places. The harvest now takes the nearest place before such a field that the code does reach, with how far before it stands. Its windows go up to 40 bytes on each side, and a displacement a window cuts at either end is left out: the first harvest kept the first bytes of four of them, which another build moves. The first harvest's 7 signatures are in the mod, and the new harvest checks them against the known places.
+- The engine's figures from its file are read from the game's record of it and logged for each truck: its torque, responsiveness, MaxDeltaAngVel and fuel consumption. The probe's dump of the record found them, against a scout's file: Torque 195000 at + 0x60. They are a first step toward shift points and a start gear by each truck's own figures.
+
 ## [0.13.2] 2026-10-10
 
 - With the engine handed to the game, the mod's automatic shifts as a truck automatic does. Floored, it takes each gear to the red zone (0.95 of the way from idle to it); at a light foot it shifts up early, from 0.3 of the way; it shifts down at 0.1 to 0.4 of the way, well under where a shift up lands, so no shift is taken back. In the drive of 00:27 the points by the game's pull put a floored shift up at 0.86 of the gear's top and landed it at 0.56, where the gear above wanted to shift down: a shift up was taken back within five seconds 34 times in ten minutes. One gear up at a time, after a second in each, unless the engine is on the limiter; a kickdown goes to the lowest gear that keeps the engine under 0.85 of the way.

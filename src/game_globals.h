@@ -6,8 +6,10 @@
 // it), with where the displacement stands in it.
 //
 // The signatures are harvested from the Steam build of 22 July 2026, whose places are known (GlobalHarvest, run with
-// Probe=1 on that build, writes them into Gauges.log), and looked for in any other build (GlobalResolve). Nothing
-// here reads the game's memory but its code, and nothing is written.
+// Probe=1 on that build, writes them into Gauges.signatures.txt), and looked for in any other build (GlobalResolve).
+// Some places the code never names: they are fields of a static object the code reaches by its start, and loads
+// from that by an offset. For those the signature is of a reference to the nearest place before them the code does
+// name, with how far before it stands. Nothing here reads the game's memory but its code, and nothing is written.
 #pragma once
 #include "game_code.h"
 
@@ -25,20 +27,32 @@ static const GameGlobal kGameGlobals[kGlobCount] = {
     { "viewer", "kGlobViewer", 0x2a8eb38, false, 1 },          { "garage", "kGlobGarage", 0x2a90728, false, 1 },
     { "input", "kGlobInput", 0x2a8ebe0, false, 1 },            { "engine sets", "kGlobEngineSets", 0x2a9e8e0, false, 16 },
     { "clock", "kGlobClock", 0x2a8eb48, false, 1 } };
-// The harvest's version: a new one is run again on the known build where Gauges.ini holds an older one.
-static const int kHarvestVersion = 1;
+// The harvest's version: a new one is run again on the known build where Gauges.signatures.txt is of an older one.
+static const int kHarvestVersion = 2;
+// How far before a place the code never names the harvest looks for one it does (a static object's start), and
+// how many such places it tries, nearest first.
+static const int kGlobalBaseSpan = 0x400, kGlobalBaseTries = 4;
 
 // A signature of a global: the pattern, the place of the displacement in it, how many bytes of the instruction
 // follow the displacement (an immediate: the instruction ends that much later), and how far past the global's place
-// the instruction reaches (a field of it).
+// the instruction reaches (a field of it; below 0 the start of a static object the global is a field of).
 struct GlobalSig
 {
     int global;
     const char *pattern;
     int at, after, into;
 };
-// Harvested from the Steam build of 22 July 2026 (the end marked by a global of -1).
-static const GlobalSig kGlobalSigs[] = { { -1, "", 0, 0, 0 } };
+// Harvested from the Steam build of 22 July 2026 (harvest 1, the displacements its windows cut at the end left out
+// by hand; the end marked by a global of -1).
+static const GlobalSig kGlobalSigs[] = {
+    { kGlobWheelClass, "01 00 00 00 87 43 08 48 8D 0D ? ? ? ? 48 89 0B 89 BB CC 00 00 00 40", 10, 0, 0 },
+    { kGlobWheelClass, "FE FF FF FF 48 8B D9 48 8D 05 ? ? ? ? 48 89 01 48 8B 51 18 48 85 D2", 10, 0, 0 },
+    { kGlobGarage, "? ? ? ? C3 CC CC CC CC CC CC CC CC 48 8D 05 ? ? ? ? C3 CC CC CC CC CC CC CC CC 48 8B C4 4C 89 40 18", 16, 0, 0 },
+    { kGlobEngineSets, "10 05 ? ? ? ? F3 0F 11 05 ? ? ? ? BA 08 00 00 00 48 8D 0D ? ?", 10, 0, 0 },
+    { kGlobEngineSets, "1F FE FF FF FF 48 89 58 08 48 89 70 18 48 8B F1 48 85 D2 75 11 4C 8D 05 ? ? ? ? E8 ? ? ? ? ? ? ? ? ? C6 44 24 20 01 41 B1 01 4C 8D 05 ? ? ?", 24, 0, 0 },
+    { kGlobEngineSets, "EC 20 48 8B EA 4C 8B C1 48 8D 54 24 40 48 8D 0D ? ? ? ? E8 ? ? ? ? 48 8B 44 24 40 48 3B 05 ? ? ?", 16, 0, 0 },
+    { kGlobEngineSets, "0F 00 BA 08 00 00 00 48 8D 0D ? ? ? ? E8 ? ? ? ? 90 48 8D 0D ?", 10, 0, 0 },
+    { -1, "", 0, 0, 0 } };
 
 // The bytes of an immediate that follow a RIP-relative displacement at p, by the instruction's opcode before its
 // ModRM byte (code[p - 1]); -1 for an instruction that is no data access of the kinds the game uses.
@@ -111,9 +125,11 @@ inline bool GlobalSigOf(const uint8_t *code, size_t from, size_t to, uint64_t si
     uint8_t keep[kPatternMax];
     memset(keep, 1, sizeof keep);
     for (int i = 0; i < 4; i++) keep[before + i] = 0;
-    for (size_t q = lo; q + 4 <= hi; q++)
+    // a displacement or a distance in the window, or one it cuts at either end
+    for (size_t q = lo >= from + 3 ? lo - 3 : from; q < hi && q + 4 <= to; q++)
         if (q != r.at && GlobalMoving(code, from, q, size))
-            for (int i = 0; i < 4; i++) keep[q - lo + i] = 0;
+            for (size_t i = q; i < q + 4; i++)
+                if (i >= lo && i < hi) keep[i - lo] = 0;
     size_t n = 0;
     text[0] = 0;
     for (size_t q = lo; q < hi && n + 4 < textSize; q++)
@@ -130,19 +146,44 @@ inline bool GlobalPatternFind(const uint8_t *code, size_t from, size_t to, const
     return length > 0 && PatternFind(code, from, to, bytes, mask, length, at, count);
 }
 
+// The nearest place before rva, at most kGlobalBaseSpan before it and before rva + below, that an instruction in
+// code[from, to) reaches: how far before rva it stands (below 0), 0 where there is none.
+inline int GlobalBaseBelow(const uint8_t *code, size_t from, size_t to, uint64_t rva, int below)
+{
+    int best = 0;
+    for (size_t p = from + 2; p + 4 <= to; p++)
+    {
+        if ((code[p - 1] & 0xC7) != 0x05) continue;
+        const int after = RipAfter(code, from, p);
+        if (after < 0) continue;
+        int32_t d;
+        memcpy(&d, code + p, 4);
+        const int64_t k = (int64_t)p + 4 + after + d - (int64_t)rva;
+        if (k >= below || k < -kGlobalBaseSpan || (best && k <= best)) continue;
+        best = (int)k;
+    }
+    return best;
+}
+
 // Up to most signatures of a global at rva, each standing once in code[from, to): from its first references on, the
-// shortest window that stands once (10 bytes on each side, then 16 and 24). Their count.
+// shortest window that stands once (10 bytes on each side, then 16, 24, 32 and 40). Where none of them does, the same
+// for the nearest places before it that the code reaches (GlobalBaseBelow), up to kGlobalBaseTries of them. Their
+// count; note: what was found on the way, for the harvest's file.
 struct GlobalHarvested
 {
     char pattern[kPatternMax * 3 + 4];
     int at, after, into;
 };
-inline int GlobalHarvest(const uint8_t *code, size_t from, size_t to, uint64_t size, uint64_t rva, int reach, GlobalHarvested *out, int most)
+struct GlobalHarvestNote
 {
-    GlobalRef refs[24];
-    const int found = GlobalRefsFind(code, from, to, rva, reach, refs, 24);
+    int direct;  // references to the global (up to 24)
+    int base;    // where its signatures are of a place before it: how far before (below 0); else 0
+    int baseRefs; // references to that place (up to 24)
+};
+inline int GlobalHarvestAt(const uint8_t *code, size_t from, size_t to, uint64_t size, const GlobalRef *refs, int found, int shift, GlobalHarvested *out, int most)
+{
     int n = 0;
-    static const int sides[3] = { 10, 16, 24 };
+    static const int sides[5] = { 10, 16, 24, 32, 40 };
     for (int i = 0; i < found && n < most; i++)
         for (int side : sides)
         {
@@ -153,11 +194,33 @@ inline int GlobalHarvest(const uint8_t *code, size_t from, size_t to, uint64_t s
             if (GlobalPatternFind(code, from, to, h.pattern, at, count) && count == 1)
             {
                 h.after = refs[i].after;
-                h.into = refs[i].into;
+                h.into = refs[i].into + shift;
                 out[n++] = h;
                 break;
             }
         }
+    return n;
+}
+inline int GlobalHarvest(const uint8_t *code, size_t from, size_t to, uint64_t size, uint64_t rva, int reach, GlobalHarvested *out, int most, GlobalHarvestNote *note = nullptr)
+{
+    GlobalRef refs[24];
+    GlobalHarvestNote seen = {};
+    seen.direct = GlobalRefsFind(code, from, to, rva, reach, refs, 24);
+    int n = GlobalHarvestAt(code, from, to, size, refs, seen.direct, 0, out, most);
+    for (int tries = 0, below = 0; !n && tries < kGlobalBaseTries; tries++)
+    {
+        const int k = GlobalBaseBelow(code, from, to, rva, below);
+        if (!k) break;
+        const int found = GlobalRefsFind(code, from, to, (uint64_t)((int64_t)rva + k), 1, refs, 24);
+        n = GlobalHarvestAt(code, from, to, size, refs, found, k, out, most);
+        if (n)
+        {
+            seen.base = k;
+            seen.baseRefs = found;
+        }
+        below = k;
+    }
+    if (note) *note = seen;
     return n;
 }
 

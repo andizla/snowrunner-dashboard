@@ -429,6 +429,10 @@ struct EngineRecord
     char name[kMaxText];                    // the engine fitted, by its name in the game's files
     float threshold, torqueMin, torqueMax;  // record + 0x74, + 0x78, + 0x7C
     int capacity;                           // record + 0x84: the damage the engine takes
+    // the engine's figures from its file, 0 where one is no likely number: Torque (record + 0x60), MaxDeltaAngVel
+    // (+ 0x68), FuelConsumption (+ 0x6C) and EngineResponsiveness (+ 0x80); found by the probe's dump of a scout's
+    // record against its file (Torque 195000, 0.04, 2, 0.35)
+    float torque, deltaAngVel, consumption, responsiveness;
 };
 
 // The engines of a set, by the set's name: the tree at + 0x30 of the set's entry in the game's list of sets. 0 when
@@ -504,6 +508,11 @@ inline bool TruckEngineRecord(const TruckMemory &m, uint64_t vehicle, EngineReco
         e.torqueMax = numbers[2];
         e.capacity = capacity;
         e.at = record;
+        float figure = 0.0f;
+        e.torque = m.get(record + 0x60, figure) && figure >= 1000.0f && figure <= 1e8f ? figure : 0.0f;
+        e.deltaAngVel = m.get(record + 0x68, figure) && figure > 0.0f && figure <= 10.0f ? figure : 0.0f;
+        e.consumption = m.get(record + 0x6C, figure) && figure > 0.0f && figure <= 100.0f ? figure : 0.0f;
+        e.responsiveness = m.get(record + 0x80, figure) && figure > 0.0f && figure <= 10.0f ? figure : 0.0f;
         e.found = true;
         return true;
     }

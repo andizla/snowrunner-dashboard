@@ -984,8 +984,11 @@ static void PlacesHarvest(DWORD stamp)
     for (int g = 0; g < kGlobCount; g++)
     {
         GlobalHarvested sigs[4];
-        const int n = GlobalHarvest(code, from, to, ImageSize(), kGameGlobals[g].steam, kGameGlobals[g].reach, sigs, 4);
-        if (!n) fprintf(f, "// %s: none that stands once in the code\n", kGameGlobals[g].name);
+        GlobalHarvestNote note;
+        const int n = GlobalHarvest(code, from, to, ImageSize(), kGameGlobals[g].steam, kGameGlobals[g].reach, sigs, 4, &note);
+        if (!n) fprintf(f, "// %s: %d references to it, none that stands once in the code, nor one to a place up to 0x%x before it\n", kGameGlobals[g].name, note.direct, kGlobalBaseSpan);
+        else if (note.base)
+            fprintf(f, "// %s: %d references to it, none that stands once; by the place 0x%x before it, which %d reach\n", kGameGlobals[g].name, note.direct, -note.base, note.baseRefs);
         for (int i = 0; i < n; i++) fprintf(f, "{ %s, \"%s\", %d, %d, %d },\n", kGameGlobals[g].id, sigs[i].pattern, sigs[i].at, sigs[i].after, sigs[i].into);
         total += n;
     }
@@ -1156,9 +1159,12 @@ static void EngineLook(TruckWatch &w, const TruckMemory &m, ULONGLONG now, bool 
     EngineRecord e;
     TruckEngineRecord(m, w.refs.vehicle, e);
     if (w.refs.vehicle != w.engineVehicle || e.found != w.engine.found || strcmp(e.name, w.engine.name) || e.capacity != w.engine.capacity ||
-        e.threshold != w.engine.threshold || e.torqueMin != w.engine.torqueMin || e.torqueMax != w.engine.torqueMax)
+        e.threshold != w.engine.threshold || e.torqueMin != w.engine.torqueMin || e.torqueMax != w.engine.torqueMax || e.torque != w.engine.torque)
     {
-        if (e.found) Log(L"engine: %S takes %d damage; past %.2f of it the torque falls, from x%.2f to x%.2f", e.name, e.capacity, e.threshold, e.torqueMin, e.torqueMax);
+        if (e.found)
+            Log(L"engine: %S takes %d damage; past %.2f of it the torque falls, from x%.2f to x%.2f | its file's figures: torque %.0f, responsiveness %.2f, "
+                L"MaxDeltaAngVel %.3f, fuel consumption %.2f (0: not read)",
+                e.name, e.capacity, e.threshold, e.torqueMin, e.torqueMax, e.torque, e.responsiveness, e.deltaAngVel, e.consumption);
         else Log(L"engine: no record of \"%S\" was found; its damage is written without the effect, which the game sets at its next damage event", e.name);
         if (probe && e.found)
         {

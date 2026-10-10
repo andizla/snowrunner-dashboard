@@ -456,6 +456,18 @@ int main()
         TruckFind(kMemory, r);
         EngineRecord dumped;
         TruckEngineRecord(kMemory, kVehicle, dumped);
+        Put(dumped.at + 0x60, 195000.0f);
+        Put(dumped.at + 0x68, 0.04f);
+        Put(dumped.at + 0x6C, 2.0f);
+        Put(dumped.at + 0x80, 0.35f);
+        EngineRecord figures;
+        TruckEngineRecord(kMemory, kVehicle, figures);
+        Put(dumped.at + 0x60, 5.0f); // no engine's torque
+        EngineRecord odd;
+        TruckEngineRecord(kMemory, kVehicle, odd);
+        Check(figures.found && figures.torque == 195000.0f && Near(figures.deltaAngVel, 0.04f) && figures.consumption == 2.0f && Near(figures.responsiveness, 0.35f) &&
+                  odd.found && odd.torque == 0.0f && odd.capacity == figures.capacity,
+              "engine: the figures of its file read from its record, a torque no engine has read as none and the record kept");
         Put(dumped.at + 0x10, 195000.0f);
         Put(dumped.at + 0x14, 0.35f);
         Put(dumped.at + 0x18, (uint32_t)0x12345678u);
@@ -964,6 +976,60 @@ int main()
         Check(sameBuild && otherBuild && callLeftOut && kinds && fieldSeen && conflictSeen && onceLess == 0x18800 && signatures == harvested - 1,
               "places: the signatures harvested from one build find a static moved in another, a call's distance and the displacement left out; a load, a "
               "compare with a byte, a store of a dword and a field past it; a signature found twice is not taken, two that disagree take neither");
+    }
+    // the signatures the mod carries: each one a pattern with its displacement in it, of a global the mod knows
+    {
+        bool carried = kGlobalSigs[0].global >= 0;
+        for (const GlobalSig *sig = kGlobalSigs; sig->global >= 0; sig++)
+        {
+            uint8_t b[kPatternMax], k[kPatternMax];
+            const int length = PatternParse(sig->pattern, b, k);
+            carried = carried && sig->global < kGlobCount && length > 0 && sig->at >= 0 && sig->at + 4 <= length && !k[sig->at] && !k[sig->at + 3];
+        }
+        Check(carried, "places: each signature the mod carries reads as a pattern, its displacement left out");
+    }
+    // a static the code never names, a field 0x48 into an object the code reaches by its start (lea rcx, [rip + d]),
+    // with another instruction's displacement cut by the window's end: the signature is of the object's start, 0x48
+    // before the static, and finds it in a second build where the code and the object have moved
+    {
+        auto build = [](size_t shift, uint64_t object, std::vector<uint8_t> &image) {
+            image.assign(0x20000, 0);
+            uint32_t seed = 777;
+            for (size_t i = 0x1000; i < 0xF000; i++)
+            {
+                seed = seed * 1103515245u + 12345u;
+                image[i + shift] = (uint8_t)(seed >> 16);
+            }
+            auto lea = [&](size_t at, uint8_t modrm, uint64_t target) {
+                const size_t p = at + shift + 3;
+                image[at + shift] = 0x48;
+                image[at + shift + 1] = 0x8D;
+                image[at + shift + 2] = modrm;
+                const int32_t disp = (int32_t)((int64_t)target - (int64_t)(p + 4));
+                memcpy(&image[p], &disp, 4);
+            };
+            lea(0x6000, 0x0D, object);          // lea rcx, [rip + d]: the object's start
+            lea(0x6000 + 3 + 4 + 10 - 2 - 3, 0x15, 0x1400); // lea rdx, [rip + d] to code that stays: its displacement's first two bytes in the window
+            lea(0x7000, 0x0D, object);
+        };
+        std::vector<uint8_t> oldBuild, newBuild;
+        build(0, 0x19000, oldBuild);
+        build(0x40, 0x19800, newBuild);
+        GlobalHarvested sigs[4];
+        GlobalHarvestNote note;
+        const int harvested = GlobalHarvest(oldBuild.data(), 0x1000, 0xF000, oldBuild.size(), 0x19048, 1, sigs, 4, &note);
+        std::vector<GlobalSig> table;
+        for (int i = 0; i < harvested; i++) table.push_back(GlobalSig{ kGlobGame, sigs[i].pattern, sigs[i].at, sigs[i].after, sigs[i].into });
+        table.push_back(GlobalSig{ -1, "", 0, 0, 0 });
+        int signatures = 0;
+        bool conflict = false;
+        const uint64_t again = GlobalResolve(oldBuild.data(), 0x1000, 0xF000, table.data(), kGlobGame, signatures, conflict);
+        const uint64_t moved = GlobalResolve(newBuild.data(), 0x1000, 0xF040, table.data(), kGlobGame, signatures, conflict);
+        const bool cut = harvested >= 1 && strlen(sigs[0].pattern) > 12 && !strcmp(sigs[0].pattern + strlen(sigs[0].pattern) - 12, "48 8D 15 ? ?");
+        Check(harvested == 2 && note.direct == 0 && note.base == -0x48 && note.baseRefs == 2 && sigs[0].into == -0x48 && again == 0x19048 &&
+                  moved == 0x19848 && signatures == 2 && !conflict && cut,
+              "places: a static the code never names is found by the object it is a field of, the signature of its start with how far before it "
+              "stands; a displacement the window cuts is left out");
     }
 
     // the game's clock: a made up game with the hour two pointers away from a static ([[exe+static]+0x30]+0x44), a

@@ -29,7 +29,7 @@ static const GameFunction kGameFunctions[kFnCount] = {
     { "SetPowerFactor", "48 8B 41 68 F3 0F 11 48 38 C3" },
     { "SetCurrentVehicle", "48 8B C4 53 57 48 81 EC 98 00 00 00 48 8B FA 48 8B D9 48 39 51 08 0F 84 ? ? ? ? 48 89 68 E8 48 83 C1 70 48 89 70 E0 4C 89 70 D8 4C 89 78 D0" } };
 
-static const int kPatternMax = 64;
+static const int kPatternMax = 96;
 // What a hook may put over a function's start: a jump (E9 and its distance, or FF 25 and an address) and int3 (CC)
 // over the rest of the instructions it moved away. A pattern needs kHookLeft bytes after that to be told by.
 static const int kHookSpan = 16, kHookLeft = 8;
