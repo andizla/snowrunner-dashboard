@@ -519,6 +519,45 @@ drops count after 0.3 s (`GearboxModel::held`), the converter by the pedal as it
 0.9 first. The kickdown went only into a gear under 0.75 of idle to the red zone (3840 rpm here), so floored in 5th
 at 2600 rpm it did not come (4th at 4140): now under 0.9 (as `kDownMost`), and the gear held while floored until 0.95
 (`kKickUp`); floored down at 0.4 (was 0.3). Models 137 OK.
+The user's drive of 18:23 (0.12.8; the Defender, then the sooty with the 3.8L_V6, idle 800 and red 5600, tops 9, 17,
+26, 34, 42 and 55 rad/s; "it also didnt shift into higher gears. or rather, it didnt rev. that modded engine has
+insane torque figures"). The pull test ran four times (18:26:48 in the Defender, 18:36:14, 18:38:02 and 18:38:17 in
+the sooty, 4th gear each time): the game keeps a write of action + 0xCC (read back 0.500, 1.500, 0.750); halved, the
+pull fell in all four runs (0.02 against 1.59 and 0.44 m/s each second; -0.61 against 1.41 and 0.77; -0.72 against
+0.30 and 0.64; -1.76 against -0.59 and 3.14); raised by half it rose in three (0.64 against 0.44 and -0.03; 1.55
+against 0.64 and -0.35; 3.97 against 3.14 and 0.62); at three quarters it fell in three. One second phases on a
+climb are noisy, but the factor is the lever for step 5, and it goes over 1. In the first run the wheels rose to 0.86
+of the gear's top and B4 fell phase by phase (0.92, 0.62, 0.61, 0.45, 0.36, 0.31) whatever the factor (halved 0.618,
+as it is after 0.608), and raised by half still pulled more at B4 0.45: B4 is the game's own curve against the wheels'
+share of the gear's top, not the factor's output, and the factor scales the pull past the curve's knee too.
+B4 against that share, floored and steady (three floored samples in the same gear, the wheels within 15 % of each
+other), in all the drives on both trucks alike: 0.66 at 0.30 to 0.35, 0.81 at 0.35 to 0.40, 0.94 at 0.40 to 0.45, 0.98
+to 1.00 at 0.45 to 0.55, 0.84 at 0.60 to 0.65, 0.73 at 0.65 to 0.70, 0.58 at 0.70 to 0.75, 0.45 at 0.75 to 0.80, 0.35 at
+0.80 to 0.85, 0.23 at 0.85 to 0.90, 0.13 at 0.90 to 0.95, 0.09 at 0.95 to 1.00, 0.04 past the top: a line from all of it
+at about 0.52 to nothing at the top (2.1 times one less the share), and 2.8 times the share less 0.25 under 0.45. With
+the gear multiplying the torque as its top is lower (0.12.5's doubled power factor pulled less), a gear at a given
+speed pulls the share times B4 against the others: the most at half the gear's top. So in the game as it stands a
+gear revved high pulls a fraction of the next one: the sooty's 1 to 2 and back six times at 18:35:20 to 22 (kicked down
+into the first at 0.87 to 0.89 of its top, held there by `kKickUp`, up again as the user's pedal dipped under 0.9 for
+0.3 s: the first pulled under half of the second), the 3rd held 13 s at 0.57 to 0.69 of its top up a 4 degree climb
+(floored up at 0.83), and the user's taps of the shift modifier (every 5 to 10 s while floored) took on the game's
+own 5th at 0.39 to 0.43 of its top five times, where the 4th pulls a fifth more; the model then went 5 to 4 after the
+hold, 2 s later. In the 4th at 0.52 of its top up that climb B4 read 0.97 to 1.00 and the torque factor 1.000: the
+game gave all it has, and the 3rd would have pulled about as much (the needle at 3700 rpm in place of 2900). 0.12.9:
+floored, the points lie where one gear pulls 5 % more than the other (`GamePull`, `GearPull`, `GearUpShare`,
+`GearDownShare` in models.h): up at 0.63 to 0.79 of the gear's top by the step to the next gear (1.24 to 1.89), down
+under 0.48 to 0.40; at a light foot the old points (0.35 and 0.12 of idle to the red zone), between them by the pedal;
+no room rule floored (the 5 % either way is the hysteresis); the kickdown down to the gear that pulls the most,
+gears at a time, and no hold (`kKickdownTo`, `kKickUp` and `kicked` gone); a tap's gear never above
+`GearboxHighestFit`, the highest the model would not shift down from at once; the wheels spin from 1.2 times the
+ground (1.4: in the drives floored they turned within 1.13 times the learned grip nine times in ten, 1.30 at 95 %).
+The probe line has the truck's gain, the share and B4's model; a shift's line both gears' share and pull. Models 140
+OK; replays of the drives of 23:36, 01:12 and 08:50: floored shifts up earlier (the Defender's 5th from 0.47 of its
+top), back-and-forths within 5 s 10, 1 and 16 against 14, 0 and 11, the new ones all at speeds that changed (brakes,
+bumps), none at a steady one. For step 5 this means: the torque factor written as our torque at our engine speed over
+B4 (read live, as the factor does not move it, capped) makes the game's pull follow our curve, and then a gear revved
+high pulls as it would in a real engine; with that on, the shift points can go back to the engine's (late, revving),
+which is what the user feels for ("it didnt rev"). Owed: the user's drive; the step 5 note.
 
 Part A, research and design note (no hook before the user's OK on the note):
 - Where the game turns the pedal into torque and how the automatic decides a shift: the truck action's per-frame

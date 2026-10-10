@@ -1207,7 +1207,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         // the mod's automatic in the game (Gearbox=1): while the game's shifter is in A the model's gear is set through
         // the game's own shift function, with the game's automatic flag put down so its own choice stops; not while the
         // pull test holds the gear
-        const TakeoverOrders orders = testing ? TakeoverOrders{} : TakeoverStep(w.take, raw, w.gearbox.gear, s.gearbox == kGearboxModel && g_shiftGear != nullptr, dt, GearboxLowestFit(w.gearbox, raw, scale));
+        const TakeoverOrders orders = testing ? TakeoverOrders{} : TakeoverStep(w.take, raw, w.gearbox.gear, s.gearbox == kGearboxModel && g_shiftGear != nullptr, dt,
+                                                                                GearboxLowestFit(w.gearbox, raw, scale), GearboxHighestFit(w.gearbox, raw, scale));
         if (orders.took)
         {
             w.gearbox.gear = raw.gear;
@@ -1223,17 +1224,26 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             w.gearbox.wanted = 0.0f;
             if (probe && orders.adopted == raw.gear)
                 Log(L"gearbox: the game's own automatic picked gear %d (the shift modifier, or A picked again); the mod's goes on from it", orders.adopted);
-            else if (probe)
+            else if (probe && orders.adopted > raw.gear)
                 Log(L"gearbox: the game's own automatic picked gear %d, lower than the engine can take at %.1f m/s; the mod's goes on from gear %d", raw.gear, raw.speed,
                     orders.adopted);
+            else if (probe)
+                Log(L"gearbox: the game's own automatic picked gear %d, the wheels at %.2f of its top at %.1f m/s, where the mod's would shift down at once; it goes on from gear %d",
+                    raw.gear, GearboxInput(raw, scale, raw.gear, w.gearbox.by) / scale.redline, raw.speed, orders.adopted);
         }
         if (orders.flagDown) m.put(w.refs.action + 0x3C, (uint8_t)0);
         if (orders.shiftTo)
         {
             if (GameShift(w.refs.vehicle, orders.shiftTo))
             {
-                if (probe) Log(L"gearbox: %d to %d at %.0f rpm on the gearbox's input, the engine at %.0f rpm, the pedal at %.2f", raw.gear, orders.shiftTo, w.gearbox.input,
-                               w.gearbox.rpm, foot);
+                if (probe)
+                {
+                    // where the wheels are against each gear's top, by the ground, and what the game gives there
+                    const float from = GearboxInput(raw, scale, raw.gear, w.gearbox.by) / scale.redline, into = GearboxInput(raw, scale, orders.shiftTo, w.gearbox.by) / scale.redline;
+                    Log(L"gearbox: %d to %d at %.0f rpm on the gearbox's input, the engine at %.0f rpm, the pedal at %.2f; the wheels at %.2f of the gear's top "
+                        L"(the game's pull %.2f) and %.2f of the new one's (%.2f)",
+                        raw.gear, orders.shiftTo, w.gearbox.input, w.gearbox.rpm, foot, from, GamePull(from), into, GamePull(into));
+                }
             }
             else
             {
@@ -1295,7 +1305,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                   TempZone(w.temp) != w.probedZone || DamageAdding(w.damage, s) != w.probedAdding ||
                   w.boost.flutters + w.boost.blowOffs != w.probedLifts))
     {
-        char first[640], second[1024], third[512], fourth[256], fifth[640], sixth[1024], seventh[400], eighth[400], ninth[320], tenth[400], eleventh[320], twelfth[256];
+        char first[640], second[1024], third[512], fourth[256], fifth[640], sixth[1024], seventh[400], eighth[400], ninth[512], tenth[400], eleventh[320], twelfth[256];
         TruckProbeText(raw, world, w.byWay, first, sizeof first, second, sizeof second);
         ModelProbeText(raw, w.tach, w.range, scale, third, sizeof third);
         Log(L"probe: %S", first);

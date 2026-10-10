@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.9] 2026-10-10
+
+- Floored, the mod's automatic shifts where the next gear pulls more in the game. The game gives the engine's torque by how far the wheels are toward the gear's top speed, not by the engine speed: all of it at about half the top, falling in a line to nothing at the top (the value at action + 0xB4, the same on the Defender and the sooty), and a lower gear multiplies it. So a gear revved near its top pulls a fraction of the next one. Floored it now shifts up at 0.63 to 0.79 of the gear's top, by how big the step to the next gear is (it was 0.8 of the way from idle to the red zone, about 0.83 of the top), and down where the gear below pulls more. At a light foot the points are as they were.
+- The kickdown goes to the gear that pulls the most, gears at a time, and no longer holds that gear to near the red zone. Up a climb in the sooty it kicked down into first at nine tenths of first's top, where first pulls under half of what second does, and went 1 to 2 and back six times in two seconds.
+- A tap of the shift modifier no longer leaves the truck in a gear too tall. Floored up a climb the game's own automatic picked 5th at 0.4 of its top five times in four minutes, where 4th pulls a fifth more; the mod now takes the highest gear its own shifts would keep (4th there). At a light foot the tall gear stays.
+- Wheels count as spinning from 1.2 times the ground's speed (was 1.4); floored, they turned within 1.13 times nine times in ten in your drives.
+- With `Probe=1` the gearbox line shows how fast the truck gains and where the wheels are against the gear's top, with the game's pull there; each shift's line shows that for both gears.
+
 ## [0.12.8] 2026-10-10
 
 - Flooring it from a standstill no longer sends the mod's automatic through the gears. One wheel spinning by itself (all wheel drive off) read as a fast truck to the floor 0.12.7 put under the gears, which set the third gear and back at a standstill, and the game's throttle, cut to nothing for a moment at each shift, read as lifts and pushes of the pedal, which shifted down and kicked down by turns. The floor goes by the truck's speed over the ground now, and only once the wheels' grip is learned; a drop of the pedal shorter than 0.3 s is no lift, and a kickdown needs the pedal short of the floor for 0.3 s before the push.
