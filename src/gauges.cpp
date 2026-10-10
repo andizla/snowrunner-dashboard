@@ -1417,6 +1417,13 @@ static DWORD WINAPI Run(void *)
     // this pass, -1 while it is not known
     ClockPath clockPath = {};
     bool clockOwn = ClockLoad(stamp, clockPath), clockSaid = false;
+    const bool clockFromIni = clockOwn;
+    if (!clockOwn && stamp == kGaugesExeStamp)
+    {
+        // the place found in the user's game on 2026-10-10 for this build: [exe + 0x2a8eb48] + 0x150, the hour
+        clockPath = ClockPath{ 0x2a8eb48, 1, { 0x150, 0 }, false, 1.0f };
+        clockOwn = true;
+    }
     ClockScan clockScan = {};
     float hour = -1.0f;
     int hourSaid = -1, clockFails = 0;
@@ -1425,7 +1432,8 @@ static DWORD WINAPI Run(void *)
     {
         char words[96];
         ClockPathWords(clockPath, words, sizeof words);
-        Log(L"clock: the game's time of day is read at %S, as found before (Gauges.ini, [Clock])", words);
+        Log(clockFromIni ? L"clock: the game's time of day is read at %S, as found before (Gauges.ini, [Clock])"
+                         : L"clock: the game's time of day is read at %S, the place known for this version of the game", words);
     }
     bool mapOwn = false, mapAsk = true, saveSeen = true;
     ULONGLONG mapAmbientLogAt = 0; // when to log the temperature the tab set, once the slider has rested

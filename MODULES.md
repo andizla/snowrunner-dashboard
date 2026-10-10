@@ -505,6 +505,20 @@ the truck, "climbing"), and the takeover set the model's gear once the test let 
 game's while a test holds it, and `TakeoverStep` never sets a gear under `GearboxLowestFit`, whatever the model
 holds (a takeover test for it). The save is written at a map's load: the log has Scandinavia read from the save of
 17:56:51, two seconds after the truck left Zurdania.
+The user's drive of 18:05 (0.12.7, "flooring it from standstill makes the gearbox go nuts", and "kickdown in general
+has been wonky. like, not kicking down"): the clock search ran (16968 objects, 10.5 MB, 105970 places, 47 ms), 47
+places steady at the first report, 18 left after four minutes, and the night skipped at 18:11:45 took
+`[exe+2a8eb48]+150` (hours, a float; a day of 60 minutes of driving); after it, time passed in a garage moved it to
+13:00, 20:30, 00:00 and 06:00. Built in for exe 6a607c05 since 0.12.8. The launch: at 18:12:11 one rear wheel spun
+alone at 20.6 rad/s (all wheel drive off) with the truck standing; `GearboxLowestFit` went by the wheels and set the
+3rd, then the 1st, then the 3rd, up to 9531 rpm on the wheels' input, and the game's throttle read 0 on every other
+sample by the shifts (the game cuts it for a moment at a shift; single drops between floored samples are in every log,
+4 to 9 a drive), which the model took for lifts (coasting down) and pushes (kicking down). 0.12.8: the floor goes by
+the ground (the wheels at most kSlipShare over it) and only with the grip learned; the shifts go by a pedal whose
+drops count after 0.3 s (`GearboxModel::held`), the converter by the pedal as it is; a kickdown needs 0.3 s short of
+0.9 first. The kickdown went only into a gear under 0.75 of idle to the red zone (3840 rpm here), so floored in 5th
+at 2600 rpm it did not come (4th at 4140): now under 0.9 (as `kDownMost`), and the gear held while floored until 0.95
+(`kKickUp`); floored down at 0.4 (was 0.3). Models 137 OK.
 
 Part A, research and design note (no hook before the user's OK on the note):
 - Where the game turns the pedal into torque and how the automatic decides a shift: the truck action's per-frame

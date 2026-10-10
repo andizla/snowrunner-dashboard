@@ -1326,18 +1326,62 @@ int main(int argc, char **argv)
         for (float at = 0.0f; at < kCoastDownAfter + 0.1f; at += kDt) GearboxStep(coast, g, k, 0.0f, 0.0f, kDt);
         Check(coast.gear == 2 && coast.shifts == 1 && GearboxInput(g, k, 2, 10.0f) < GearboxPoint(k, kCoastDownTo),
               "automatic: with the foot off at a low speed it shifts down early, gears at a time, the engine kept under the coast point's top");
-        // a push of the pedal past kKickdown at a low speed kicks down at once, skipping a gear; held there without a
-        // push it steps down a gear at a time
+        // a push of the pedal past kKickdown at a low speed kicks down at once, skipping a gear, and holds the gear while
+        // the pedal stays down until the engine is near the red zone; held there without a push it steps down a gear at
+        // a time
+        wheels(12.0f);
         GearboxModel kick = driving(4);
-        GearboxStep(kick, g, k, 0.3f, 0.3f, kDt);
+        for (float at = 0.0f; at < kKickArm + 0.05f; at += kDt) GearboxStep(kick, g, k, 0.3f, 0.3f, kDt);
+        const int beforeKick = kick.gear;
         GearboxStep(kick, g, k, 1.0f, 1.0f, kDt);
         GearboxModel held4 = driving(4);
-        held4.pedal = 1.0f;
+        held4.pedal = held4.held = 1.0f;
         GearboxStep(held4, g, k, 1.0f, 1.0f, kDt);
         const int heldFirst = held4.gear;
         for (float at = 0.0f; at < kShiftDownAfter + 0.1f; at += kDt) GearboxStep(held4, g, k, 1.0f, 1.0f, kDt);
-        Check(kick.gear == 2 && kick.shifts == 1 && heldFirst == 4 && held4.gear == 3,
-              "automatic: a push of the pedal kicks down at once to the lowest gear that keeps the engine under kKickdownTo; a pedal held down steps down");
+        float kickUpAt = -1.0f;
+        GearboxModel kickHold = kick;
+        for (float at = 0.0f; at < 4.0f && kickUpAt < 0.0f; at += kDt)
+        {
+            wheels(12.0f + 2.0f * at);
+            GearboxStep(kickHold, g, k, 1.0f, 1.0f, kDt);
+            if (kickHold.gear == 3) kickUpAt = GearboxInput(g, k, 2, TruckDrivenSpin(g));
+        }
+        wheels(12.0f);
+        Check(beforeKick == 4 && kick.gear == 2 && kick.shifts == 1 && heldFirst == 4 && held4.gear == 3 && kickUpAt >= GearboxPoint(k, kKickUp) - 1.0f,
+              "automatic: a push of the pedal kicks down at once to the lowest gear that keeps the engine under kKickdownTo and holds it to near the red zone; "
+              "a pedal held down steps down");
+        // floored with the game's throttle cut to nothing for a pass now and then (as at its shifts): no kickdown, no
+        // shift down with the foot off; a lift that lasts is one
+        wheels(TruckGearTop(g, 2) * 0.6f);
+        GearboxModel cuts = driving(2);
+        cuts.pedal = cuts.held = 1.0f;
+        int cutShifts = 0;
+        for (int i = 0; i < 120; i++)
+        {
+            const int before = cuts.gear;
+            GearboxStep(cuts, g, k, i % 6 == 3 ? 0.0f : 1.0f, 1.0f, kDt);
+            cutShifts += cuts.gear < before;
+        }
+        GearboxModel lifted = cuts;
+        for (float at = 0.0f; at < kFootGap + 0.05f; at += kDt) GearboxStep(lifted, g, k, 0.0f, 0.0f, kDt);
+        Check(cutShifts == 0 && cuts.kick <= 0.0f && lifted.held == 0.0f,
+              "automatic: the game's throttle cut for a moment is no lift and no push to kick down; a lift that lasts kFootGap is one");
+        // a wheel spinning by itself at a standstill: no floor under the gears before the grip is learned, nor after it
+        // while the ground's speed is nothing
+        {
+            TruckRaw one = g;
+            for (int i = 0; i < one.wheels; i++) one.spin[i] = 0.0f;
+            one.spin[3] = 20.0f;
+            one.speed = 0.0f;
+            GearboxModel standing = driving(1);
+            GearboxStep(standing, one, k, 1.0f, 1.0f, kDt);
+            const int blindFit = GearboxLowestFit(standing, one, k);
+            standing.grip = 2.2f;
+            for (float at = 0.0f; at < 1.0f; at += kDt) GearboxStep(standing, one, k, 1.0f, 1.0f, kDt);
+            Check(blindFit == 1 && GearboxLowestFit(standing, one, k) == 1 && standing.gear == 1,
+                  "automatic: a wheel spinning by itself at a standstill sets no floor under the gears and shifts nothing up");
+        }
         // rolling downhill with the foot off the gear holds until the engine would pass the red zone, on the flat too
         wheels(9.0f);
         GearboxModel down = driving(2);
@@ -1415,16 +1459,16 @@ int main(int argc, char **argv)
             Check(learned && robust && spinning.spinning && spinning.gear == 1 && blind.gear == 2 && spinning.input > blind.input - 1.0f,
                   "automatic: wheels spinning faster than the ground goes do not shift up; the engine still turns with them; the wheels' speed against the "
                   "ground's is learned where they turn steadily, not from a bump, the handbrake or the truck sliding back");
-            // a grip learned far too low (the truck's speed read as under half the wheels'): floored in the top gear, and
-            // a push of the pedal, never shift down into a gear the engine cannot take at the speed the wheels turn
+            // fast in the top gear, the grip learned: floored, and a push of the pedal after a light foot, never shift
+            // down into a gear the engine cannot take at the speed the truck goes
             TruckRaw fast = g;
             for (int i = 0; i < fast.wheels; i++) fast.spin[i] = 30.0f;
             fast.speed = 30.0f / 2.2f;
             GearboxModel misled = driving(4);
             misled.spin = misled.by = 30.0f;
-            misled.grip = 0.8f;
+            misled.grip = 2.2f;
             for (float at = 0.0f; at < 2.0f; at += kDt) GearboxStep(misled, fast, k, 1.0f, 1.0f, kDt);
-            GearboxStep(misled, fast, k, 0.3f, 0.3f, kDt);
+            for (float at = 0.0f; at < kFootGap + kKickArm + 0.1f; at += kDt) GearboxStep(misled, fast, k, 0.3f, 0.3f, kDt);
             GearboxStep(misled, fast, k, 1.0f, 1.0f, kDt);
             Check(misled.gear == 4 && GearboxInput(fast, k, 3, 30.0f) > GearboxPoint(k, kDownMost),
                   "automatic: no shift down, kickdown or not, puts the engine near the red zone at the speed the wheels turn");
@@ -1514,6 +1558,7 @@ int main(int argc, char **argv)
                 tf.gear = tf.gearEngaged = 1;
                 GearboxModel rollingAt = {};
                 rollingAt.rolling = 20.0f;
+                rollingAt.grip = 2.2f;
                 const int fit = GearboxLowestFit(rollingAt, tf, k);
                 const TakeoverOrders low = TakeoverStep(fast, tf, 4, true, kDt, fit);
                 tf.automatic = 0;

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.12.8] 2026-10-10
+
+- Flooring it from a standstill no longer sends the mod's automatic through the gears. One wheel spinning by itself (all wheel drive off) read as a fast truck to the floor 0.12.7 put under the gears, which set the third gear and back at a standstill, and the game's throttle, cut to nothing for a moment at each shift, read as lifts and pushes of the pedal, which shifted down and kicked down by turns. The floor goes by the truck's speed over the ground now, and only once the wheels' grip is learned; a drop of the pedal shorter than 0.3 s is no lift, and a kickdown needs the pedal short of the floor for 0.3 s before the push.
+- The kickdown goes as far down as the engine can take (to nine tenths of the way from idle to the red zone, where it stopped at three quarters and often did not come at all) and holds the gear while the pedal stays floored until the engine is near the red zone. Floored, the gears go down as the truck slows at 0.4 of the way from idle to the red zone, where it was 0.3, so a climb lugs the engine less.
+- The game's clock is read where it was found in this version of the game, `[exe+2a8eb48]+150`, without the search; the day lasts an hour of driving.
+
 ## [0.12.7] 2026-10-10
 
 - The mod's automatic never sets a gear the engine cannot take at the speed the wheels turn, whatever gear its model holds. At the end of both power tests in the third gear it set the second at about 6500 rpm: the model had shifted down by itself while the test held the game's gear, and set its own once the test let go. The model now holds the test's gear too.

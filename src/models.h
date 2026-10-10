@@ -972,12 +972,13 @@ inline void PowertrainProbeText(const TruckRaw &t, const PowertrainModel &m, flo
 // ---- the automatic gearbox ----
 
 static const float kShiftUpLight = 0.35f, kShiftUpFloored = 0.8f;   // shift up with the engine this far from idle to the red zone's speed: at a light foot, and floored
-static const float kShiftDownLight = 0.12f, kShiftDownFloored = 0.3f; // shift down below this, the same way
+static const float kShiftDownLight = 0.12f, kShiftDownFloored = 0.4f; // shift down below this, the same way
 static const float kShiftRoom = 1.1f;        // a shift up waits until the next gear's speed is this far over the point the gearbox would shift back down at
 static const float kCoastDown = 0.25f, kCoastDownTo = 0.75f; // with the foot off it shifts down below this, as far as the engine stays under kCoastDownTo
 static const float kShiftPause = 1.0f;       // seconds from one shift to the next
 static const float kKickdown = 0.9f;         // a pedal pushed past this kicks down, once, to the lowest gear that keeps the engine under kKickdownTo
-static const float kKickdownTo = 0.75f;
+static const float kKickdownTo = 0.9f;
+static const float kKickUp = 0.95f;          // and while it stays there the gear holds until the engine is this far to the red zone's speed
 static const float kKickWindow = 0.5f;       // seconds after the push the kickdown may come in
 static const float kStallSpeed = 0.75f;      // the converter's stall speed as a share of the red zone's: where a floored engine stops against a standing truck
 static const float kStallRpmMost = 2400.0f;  // and at the most this: a fast revving engine's converter stalls well short of its red zone
@@ -990,6 +991,9 @@ static const float kStopShift = 0.1f;        // under this share of the red zone
 static const float kShiftSmooth = 0.25f;     // seconds the wheels' speed is smoothed over before the gearbox goes by it
 static const float kTrendSmooth = 1.0f;      // and seconds how fast it changes is smoothed over
 static const float kFootOff = 0.05f;         // a pedal under this is the foot off
+static const float kFootGap = 0.3f;          // seconds a pedal has to stay down from where it was before the drop counts: the game cuts the
+                                             // throttle for a moment at each shift, and now and then besides, which is no lift
+static const float kKickArm = 0.3f;          // seconds the pedal has to be short of kKickdown before a push past it kicks down
 static const float kLabouring = 0.35f;       // rad/s each second the truck loses with the foot on, for kLabourAfter: a climb
 static const float kLabourAfter = 0.5f;
 static const float kClimbHold = 4.0f;        // seconds the shift points stay where floored puts them after a climb
@@ -1034,7 +1038,11 @@ struct GearboxModel
     float wanted;      // seconds a shift has been called for, above 0 up and below 0 down
     float feel;        // the pedal the shift points go by: up with the foot at once, down at kPedalFall
     float pedal;       // the pedal on the last step, for the push that kicks down
+    float held;        // the pedal the shifts go by: up with the foot at once, down once it has stayed down kFootGap
+    float dropFor;     // seconds the pedal has been down from held
+    float shortFor;    // seconds the pedal has been short of kKickdown
     float kick;        // seconds the kickdown of a push may still come in
+    bool kicked;       // it kicked down and the pedal has stayed past kKickdown since
     float climb;       // seconds the shift points stay at floored's after a climb
     int shifts;        // shifts since the model began
 };
@@ -1064,17 +1072,31 @@ inline float GearboxPoint(const GaugeScale &k, float share) { return k.idle + (k
 inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k, float pedal, float power, float dt)
 {
     const int top = TruckTopGear(t);
-    const float raw = TruckDrivenSpin(t), p = SettingsRange(pedal, 0.0f, 1.0f);
+    const float raw = TruckDrivenSpin(t), pedalNow = SettingsRange(pedal, 0.0f, 1.0f);
+    float p = pedalNow; // the shifts' pedal; the converter goes by pedalNow
     if (!m.running)
     {
         m = GearboxModel{ true };
         m.spin = m.by = raw;
-        m.pedal = p;
+        m.pedal = m.held = p;
+    }
+    // a drop of the pedal counts once it has lasted kFootGap: the game's throttle cut at a shift is no lift
+    if (p >= m.held - 0.05f || m.dropFor >= kFootGap)
+    {
+        m.held = p;
+        m.dropFor = 0.0f;
+    }
+    else
+    {
+        m.dropFor += dt;
+        p = m.held;
     }
     if (m.pause > 0.0f) m.pause -= dt;
     m.feel = fmaxf(p, m.feel - kPedalFall * dt);
-    if (p >= kKickdown && m.pedal < kKickdown) m.kick = kKickWindow;
+    if (p >= kKickdown && m.pedal < kKickdown && m.shortFor >= kKickArm) m.kick = kKickWindow;
     else if (m.kick > 0.0f) m.kick -= dt;
+    m.shortFor = p < kKickdown ? m.shortFor + dt : 0.0f;
+    if (p < kKickdown) m.kicked = false;
     m.pedal = p;
     if (top < 1 || !TruckEngineOn(t) || !isfinite(raw))
     {
@@ -1105,7 +1127,9 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     // shift up; with the foot off the ground's where the wheels turn slower, so wheels locked under the brake do not
     // shift down; and the speed the wheels will turn at after a shift down, for the engine's sake
     const float pace = m.grip > 0.0f ? fminf(m.spin, onGround * kSlipShare + kSlipSpare) : m.spin;
-    const float coast = m.grip > 0.0f ? fmaxf(raw, onGround) : m.spin, rolling = fmaxf(fmaxf(raw, m.spin), onGround);
+    // the speed the wheels will turn at after a shift down: the ground's, and the wheels' as far as they do not spin
+    const float coast = m.grip > 0.0f ? fmaxf(raw, onGround) : m.spin;
+    const float rolling = m.grip > 0.0f ? fmaxf(onGround, fminf(m.spin, onGround * kSlipShare + kSlipSpare)) : m.spin;
     m.spinning = m.grip > 0.0f && m.spin > onGround * kSlipShare + kSlipSpare;
     m.rolling = rolling;
     // where it would shift at this pedal, at floored's while climbing
@@ -1115,7 +1139,7 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     if (labouring) m.climb = kClimbHold;
     else if (m.climb > 0.0f) m.climb -= dt;
     const float feel = m.climb > 0.0f ? 1.0f : m.feel;
-    const float up = GearboxPoint(k, kShiftUpLight + (kShiftUpFloored - kShiftUpLight) * feel);
+    const float up = GearboxPoint(k, m.kicked ? kKickUp : kShiftUpLight + (kShiftUpFloored - kShiftUpLight) * feel);
     const float down = GearboxPoint(k, kShiftDownLight + (kShiftDownFloored - kShiftDownLight) * feel);
     const float coastDown = GearboxPoint(k, kCoastDown), coastTo = GearboxPoint(k, kCoastDownTo), most = GearboxPoint(k, kDownMost);
     const float by = footOff ? coast : pace, now = GearboxInput(t, k, m.gear, by), lower = GearboxInput(t, k, m.gear - 1, by);
@@ -1134,6 +1158,7 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
         // a kickdown, at once and whatever the pause: the lowest gear that keeps the engine under kKickdownTo
         while (to > 1 && GearboxInput(t, k, to - 1, by) < GearboxPoint(k, kKickdownTo) && fits(to - 1)) to--;
         m.kick = 0.0f;
+        m.kicked = true;
     }
     else if (m.pause <= 0.0f)
     {
@@ -1160,20 +1185,21 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     m.input = GearboxInput(t, k, m.gear, m.spin);
     if (!m.locked && m.gear >= 2 && m.pause <= 0.0f && m.input >= k.redline * kLockFrom) m.locked = true;
     else if (m.locked && m.input < k.redline * kUnlockBelow) m.locked = false;
-    const float stall = k.idle + (ConverterStall(k) - k.idle) * p;
+    const float stall = k.idle + (ConverterStall(k) - k.idle) * pedalNow;
     m.rpm = m.locked ? fmaxf(m.input, k.idle) : fmaxf(fmaxf(m.input * (1.0f + kConverterSlip), stall), k.idle);
     const float speedRatio = m.rpm > 0.0f ? m.input / m.rpm : 1.0f;
     m.ratio = m.locked || speedRatio >= kCouplingPoint ? 1.0f : 1.0f + (kStallRatio - 1.0f) * (1.0f - speedRatio / kCouplingPoint);
     // the creep: what an idling engine pushes through the converter, less as the truck rolls up to the engine's speed
-    const float creep = kCreep * (1.0f - p) * (1.0f - SettingsRange(speedRatio, 0.0f, 1.0f));
+    const float creep = kCreep * (1.0f - pedalNow) * (1.0f - SettingsRange(speedRatio, 0.0f, 1.0f));
     m.drive = m.locked ? power : (power + creep) * m.ratio;
     if (!isfinite(m.drive)) m.drive = 0.0f;
 }
 
-// The lowest gear the engine can take at the speed the wheels turn (under kDownMost from idle to the red zone), 1 when
-// the first can.
+// The lowest gear the engine can take at the speed the truck goes (under kDownMost from idle to the red zone), 1 when the
+// first can, and 1 before the wheels' grip is learned: a wheel spinning by itself at a standstill is no speed.
 inline int GearboxLowestFit(const GearboxModel &m, const TruckRaw &t, const GaugeScale &k)
 {
+    if (m.grip <= 0.0f) return 1;
     const int top = TruckTopGear(t);
     int gear = 1;
     while (gear < top && GearboxInput(t, k, gear, m.rolling) >= GearboxPoint(k, kDownMost)) gear++;
