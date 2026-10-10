@@ -603,6 +603,23 @@ up going by the wheels smoothed over kShiftSmooth; and slowing up climbs it went
 held to 1.05 times the ground (0.79 of first's top in a replay at 7 rad/s each second, the 0.15 s of
 kShiftUpAfterFloored the rest); a shift down with the foot on lands as far as the gears would each shift down
 (`downTo`), and a shift down may follow another after kShiftAgain (0.5 s, as up after up). Models 142 OK.
+Step 5 built (0.13.0, on the user's "bruh. just go. what are we waiting for", the design as put to the user before
+it): `Powertrain=1` (the tab's Gearbox section, "Engine to the game", ini, help, log, settings test) writes action +
+0xCC on each pass while the engine runs and no pull test is armed or running: the game's own share times
+`TorqueLift` (the powertrain's torque, curve times cold times boost, times the converter's ratio while the mod's
+automatic drives, over `GameFall` at the driven wheels' share of the engaged gear's top: the game's fall from 1 at
+about half the top to 0 at it, its low side under 0.45 left alone as a transient of the engine picking up), from
+0.05 to 3. `TorqueHandStep` keeps the game's own share (the factor before the first write, clamped to 1; and any
+the game writes since, a read that differs from the last write: the damage write's share past the engine's
+threshold), writes a change of 0.005 or more, and gives the share back when the setting goes off, the engine stops,
+a pull test is armed, the truck is lost or another is driven (`TorqueGive` writes to a truck no longer driven only
+where its vehicle still holds that action). While it is handed, the gearbox's floored points go by the engine
+through the game (`PullShape`, `EnginePull`: the share times the class's curve, as far as 3 times GameFall lifts the
+game's): up at 0.88 to 0.94 of the top by the step (the floor at kDownMost, 0.91 on a scout, comes first), down at
+0.49 to 0.70. The probe's powertrain line says the factor written and the game's own. Models 143 OK (the lift, the
+share followed and given back, the points by the engine). Owed: the user's drive with it on; whether factors up to 3
+behave in the game (only 1.5 was tried); the turbo's lag (35 percent of the torque without boost) and the cold may
+make pulling away weaker than the game's own, against the converter's doubling at the stall.
 
 Part A, research and design note (no hook before the user's OK on the note):
 - Where the game turns the pedal into torque and how the automatic decides a shift: the truck action's per-frame

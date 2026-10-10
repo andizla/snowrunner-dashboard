@@ -1577,6 +1577,40 @@ int main(int argc, char **argv)
                   "automatic: floored from a standstill the first gear is left near its point however fast it goes by; slowing hard up a climb it is "
                   "down in the gear that pulls the most within a second, gears at a time");
         }
+        // the engine handed to the game (Powertrain=1): the factor lifts the game's curve where it falls away toward the
+        // gear's top, by the engine's torque and the converter's ratio, at the most 3 times; it stands on the game's own
+        // share, follows the game where it writes its own (engine damage), and gives it back when the switch goes off and
+        // to the last truck when another is driven
+        {
+            const bool lifts = Near(TorqueLift(1.0f, 1.0f, 0.5f), 1.0f, 0.001f) && Near(TorqueLift(1.0f, 1.0f, 0.8f), 1.0f / (kGamePullFall * 0.2f), 0.01f) &&
+                               TorqueLift(1.0f, 1.0f, 0.97f) == kTorqueFactorMost && Near(TorqueLift(1.0f, kStallRatio, 0.1f), kStallRatio, 0.001f) &&
+                               Near(TorqueLift(0.55f, 1.0f, 0.3f), 0.55f, 0.001f) && TorqueLift(0.0f, 1.0f, 0.5f) == kTorqueFactorLeast &&
+                               TorqueLift(nanf(""), 1.0f, 0.5f) == 1.0f;
+            TorqueHand hand = {};
+            const TorqueOrders first = TorqueHandStep(hand, true, 0x5000, 0x4000, 0.9f, 2.0f);
+            const TorqueOrders same = TorqueHandStep(hand, true, 0x5000, 0x4000, first.factor, 2.0f);
+            const TorqueOrders moved = TorqueHandStep(hand, true, 0x5000, 0x4000, first.factor, 1.5f);
+            const TorqueOrders gameWrote = TorqueHandStep(hand, true, 0x5000, 0x4000, 0.8f, 1.5f);
+            const bool followed = first.write && first.action == 0x5000 && Near(first.factor, 1.8f, 0.001f) && !same.write && moved.write && Near(moved.factor, 1.35f, 0.001f) &&
+                                  gameWrote.write && Near(gameWrote.factor, 1.2f, 0.001f) && Near(hand.game, 0.8f, 0.001f);
+            const TorqueOrders switchedOff = TorqueHandStep(hand, false, 0x5000, 0x4000, 1.2f, 1.5f);
+            const TorqueOrders again = TorqueHandStep(hand, true, 0x5000, 0x4000, 0.8f, 1.5f);
+            const TorqueOrders other = TorqueHandStep(hand, true, 0x7000, 0x6000, 1.0f, 1.5f);
+            const TorqueOrders taken = TorqueHandStep(hand, true, 0x7000, 0x6000, 1.0f, 1.5f);
+            const bool givenBack = switchedOff.write && switchedOff.action == 0x5000 && Near(switchedOff.factor, 0.8f, 0.001f) && again.write &&
+                                   other.write && other.action == 0x5000 && other.vehicle == 0x4000 && Near(other.factor, 0.8f, 0.001f) && taken.write &&
+                                   taken.action == 0x7000 && Near(taken.factor, 1.5f, 0.001f);
+            // a factor left over above 1 (a test, or the mod's own) is taken as the game's 1
+            TorqueHand left = {};
+            const TorqueOrders over = TorqueHandStep(left, true, 0x5000, 0x4000, 2.4f, 1.0f);
+            // floored, with the scout's curve through the game, the points lie near the gear's top: it revs out
+            const PullShape scoutShape{ &kClassCurves[kClassScout], 7000.0f / 5600.0f };
+            const bool revs = GearUpShare(1.5f, scoutShape) > 0.85f && GearUpShare(1.5f, scoutShape) > GearUpShare(1.5f) + 0.15f &&
+                              GearDownShare(1.5f, scoutShape) > GearDownShare(1.5f) + 0.1f;
+            Check(lifts && followed && givenBack && over.write && Near(over.factor, 1.0f, 0.001f) && revs,
+                  "powertrain: the torque factor lifts the game's curve by the engine's torque and the converter's ratio, at the most 3 times, stands on the "
+                  "game's own share and follows it, and gives it back when it goes off and to the last truck; floored, the shift points by the engine lie near the top");
+        }
         // a close-ratio box (the Scania's ten gears, tops 7.5 to 30.5 rad/s, 600 to 1930 rpm) floored from a standstill
         // with the grip learned: through the gears faster than a shift a second, skipping gears, never held to its top;
         // and a gear past what the engine can take is left at once, whatever the pause

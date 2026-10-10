@@ -961,12 +961,16 @@ inline void PowertrainStep(PowertrainModel &m, const TruckRaw &t, const TorqueCu
     m.load = m.power * (speed > 0.0f ? fminf(speed, 1.0f) : 0.0f);
 }
 
-// The powertrain in a line of text for the probe log.
-inline void PowertrainProbeText(const TruckRaw &t, const PowertrainModel &m, float rpm, char *out, size_t size)
+// The powertrain in a line of text for the probe log. handed: the torque factor is written (Powertrain=1), written:
+// the last factor written, game: the game's own share.
+inline void PowertrainProbeText(const TruckRaw &t, const PowertrainModel &m, float rpm, bool handed, float written, float game, char *out, size_t size)
 {
-    sprintf_s(out, size, "powertrain (not handed to the game yet): pedal %.2f, shaped %.2f | torque %.2f of the most at %.0f rpm (curve %.2f, cold x%.2f, boost x%.2f) | "
+    char hand[96];
+    if (handed) sprintf_s(hand, "handed to the game: the torque factor %.2f, the game's own %.2f", written, game);
+    else strcpy_s(hand, "not handed to the game");
+    sprintf_s(out, size, "powertrain (%s): pedal %.2f, shaped %.2f | torque %.2f of the most at %.0f rpm (curve %.2f, cold x%.2f, boost x%.2f) | "
                          "power %.2f, fuel %.2f of floored at the red zone",
-              TruckPedal(t), m.pedal, m.torque, rpm, m.curve, m.cold, m.boost, m.power, m.load);
+              hand, TruckPedal(t), m.pedal, m.torque, rpm, m.curve, m.cold, m.boost, m.power, m.load);
 }
 
 // ---- the automatic gearbox ----
@@ -1070,42 +1074,116 @@ inline float GearboxPoint(const GaugeScale &k, float share) { return k.idle + (k
 // The share of the engine's torque the game gives the wheels with them at x of the gear's top speed.
 inline float GamePull(float x) { return isfinite(x) ? SettingsRange(fminf(kGamePullRise * x - kGamePullRiseFrom, kGamePullFall * (1.0f - x)), 0.0f, 1.0f) : 0.0f; }
 
-// What a gear pulls with the wheels at x of its top, against the other gears at the same speed.
-inline float GearPull(float x) { return x * GamePull(x); }
+// ---- the engine's torque handed to the game (Powertrain=1) ----
+// With Powertrain on the mod writes the torque factor at action + 0xCC on each pass: the game's own share (what it
+// leaves a damaged engine) times the engine's torque at the needle's speed (the curve, the cold oil and the boost:
+// PowertrainModel::torque) times what the converter multiplies, over what the game's curve has fallen to at the
+// wheels' share of the gear's top (GameFall), at the most kTorqueFactorMost. So the truck pulls as the mod's engine
+// does: all its torque where the game's curve gives all of its own, and as much where the game's falls away toward
+// the gear's top, up to near it; past the top the game gives nothing whatever the factor, so a gear's top speed stays
+// the game's. Under half the top the game's curve is left as it is: there it reads low only as the engine picks up.
+static const float kTorqueFactorMost = 3.0f;    // the factor written at the most, for the game's own share of 1
+static const float kTorqueFactorLeast = 0.05f;  // and at the least
+static const float kTorqueFactorStep = 0.005f;  // a change of the factor smaller than this is not written
+
+// What the game's curve has fallen to with the wheels at x of the gear's top: 1 up to about half, nothing at the top.
+inline float GameFall(float x) { return isfinite(x) ? SettingsRange(kGamePullFall * (1.0f - x), 0.0f, 1.0f) : 0.0f; }
+
+// The factor over the game's own share: the engine's torque (0 to 1) times the converter's ratio, over GameFall at x.
+inline float TorqueLift(float torque, float ratio, float x)
+{
+    const float lift = torque * ratio / fmaxf(GameFall(x), 1e-3f);
+    return SettingsRange(isfinite(lift) ? lift : 1.0f, kTorqueFactorLeast, kTorqueFactorMost);
+}
+
+// What the mod's engine pulls through the game with the wheels at x of a gear's top (the engine at x of the red zone's
+// speed), as far as kTorqueFactorMost lifts the game's curve. top: the tachometer's top over the red zone's.
+inline float EnginePull(const TorqueCurve &c, float top, float x) { return x * fminf(TorqueAt(c, x, top), kTorqueFactorMost * GameFall(x)); }
+
+// What the factor's writes stand on.
+struct TorqueHand
+{
+    bool on;           // the mod writes the factor
+    uint64_t action, vehicle; // the truck it writes it for
+    float game;        // the game's own share: the factor before the first write, and whatever the game writes since
+    float written;     // the factor last written
+};
+struct TorqueOrders
+{
+    bool write;
+    uint64_t action, vehicle; // write the factor at this action's + 0xCC, of this vehicle
+    float factor;
+};
+
+// One pass. want: Powertrain on, a truck driven with its engine running, no pull test; action and vehicle: the driven
+// truck's; read: the factor as read at its action now; lift: TorqueLift. With want gone, the game's own share is
+// written back once, where the factor was written (the caller checks that truck is still there).
+inline TorqueOrders TorqueHandStep(TorqueHand &h, bool want, uint64_t action, uint64_t vehicle, float read, float lift)
+{
+    TorqueOrders o = {};
+    const float share = isfinite(read) && read > 0.0f ? fminf(read, 1.0f) : 1.0f;
+    if (!want || !action || (h.on && h.action != action))
+    {
+        if (h.on) o = TorqueOrders{ true, h.action, h.vehicle, h.game };
+        h = TorqueHand{};
+        if (!want || !action) return o;
+    }
+    if (!h.on) h = TorqueHand{ true, action, vehicle, share, -1.0f };
+    else if (fabsf(read - h.written) > 1e-4f) h.game = share; // the game wrote its own, as engine damage moved it
+    const float factor = h.game * lift;
+    if (!o.write && fabsf(factor - h.written) >= kTorqueFactorStep)
+    {
+        o = TorqueOrders{ true, action, vehicle, factor };
+        h.written = factor;
+    }
+    return o;
+}
+
+// The torque curve the shift points go by with the engine handed to the game (Powertrain=1), and the tachometer's top
+// over the red zone's; none: the game's own pull.
+struct PullShape
+{
+    const TorqueCurve *engine;
+    float top;
+};
+
+// What a gear pulls with the wheels at x of its top, against the other gears at the same speed: the game's curve
+// (GamePull), or the mod's engine through it (EnginePull).
+inline float GearPull(float x, PullShape shape = PullShape{}) { return shape.engine ? EnginePull(*shape.engine, shape.top, x) : x * GamePull(x); }
 
 // x of a gear's top where the next gear, r times as tall, pulls kShiftPullGain more: the floored shift up. 1 for a
 // next gear no taller.
-inline float GearUpShare(float r)
+inline float GearUpShare(float r, PullShape shape = PullShape{})
 {
     if (!(r > 1.01f)) return 1.0f;
     for (float x = 0.5f; x < 1.0f; x += 0.005f)
-        if (GearPull(x / r) >= GearPull(x) * (1.0f + kShiftPullGain)) return x;
+        if (GearPull(x / r, shape) >= GearPull(x, shape) * (1.0f + kShiftPullGain)) return x;
     return 1.0f;
 }
 
 // x of a gear's top under which the gear below, r times shorter, pulls kShiftPullGain more: the floored shift down.
-inline float GearDownShare(float r)
+inline float GearDownShare(float r, PullShape shape = PullShape{})
 {
     if (!(r > 1.01f)) return 0.0f;
-    for (float x = 0.6f; x > 0.1f; x -= 0.005f)
-        if (x * r < 1.0f && GearPull(x * r) >= GearPull(x) * (1.0f + kShiftPullGain)) return x;
+    for (float x = 0.8f; x > 0.1f; x -= 0.005f)
+        if (x * r < 1.0f && GearPull(x * r, shape) >= GearPull(x, shape) * (1.0f + kShiftPullGain)) return x;
     return 0.0f;
 }
 
 // The gearbox's input speed a gear shifts up at, with feel the pedal the points go by: the light point at a light foot,
 // the gear's floored one (GearUpShare) floored, and between them between.
-inline float GearboxUpPoint(const TruckRaw &t, const GaugeScale &k, int gear, float feel)
+inline float GearboxUpPoint(const TruckRaw &t, const GaugeScale &k, int gear, float feel, PullShape shape = PullShape{})
 {
     const float light = GearboxPoint(k, kShiftUpLight), low = TruckGearTop(t, gear), high = TruckGearTop(t, gear + 1);
-    const float floored = low > 0.0f && high > 0.0f ? fmaxf(GearUpShare(high / low) * k.redline, light) : light;
+    const float floored = low > 0.0f && high > 0.0f ? fmaxf(GearUpShare(high / low, shape) * k.redline, light) : light;
     return light + (floored - light) * SettingsRange(feel, 0.0f, 1.0f);
 }
 
 // The gearbox's input speed a gear shifts down below, the same way (GearDownShare).
-inline float GearboxDownPoint(const TruckRaw &t, const GaugeScale &k, int gear, float feel)
+inline float GearboxDownPoint(const TruckRaw &t, const GaugeScale &k, int gear, float feel, PullShape shape = PullShape{})
 {
     const float light = GearboxPoint(k, kShiftDownLight), low = TruckGearTop(t, gear - 1), high = TruckGearTop(t, gear);
-    const float floored = low > 0.0f && high > 0.0f ? fmaxf(GearDownShare(high / low) * k.redline, light) : light;
+    const float floored = low > 0.0f && high > 0.0f ? fmaxf(GearDownShare(high / low, shape) * k.redline, light) : light;
     return light + (floored - light) * SettingsRange(feel, 0.0f, 1.0f);
 }
 
@@ -1120,10 +1198,12 @@ inline float GearboxDownPoint(const TruckRaw &t, const GaugeScale &k, int gear, 
 // lift, so a foot floored and lifted by turns does not shift up at each lift: at a light foot between idle and the red
 // zone, floored where the next gear or the one below pulls more in the game (GamePull), which gives the most with the
 // wheels at half the gear's top. With the foot off it never shifts up short of the red zone, and shifts down early,
-// gears at a time when the truck slows hard. A truck slowing with the foot on is climbing: the points go where floored
+// gears at a time when the truck slows hard. With the engine handed to the game (Powertrain=1, shape) the floored
+// points go by the mod's engine through the game (EnginePull), which pulls up to near the gear's top, so it revs out
+// before it shifts up. A truck slowing with the foot on is climbing: the points go where floored
 // puts them, and stay there kClimbHold after, so it shifts down in time and does not hunt. A push of the pedal past
 // kKickdown kicks down at once to the gear that pulls the most.
-inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k, float pedal, float power, float dt)
+inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k, float pedal, float power, float dt, PullShape shape = PullShape{})
 {
     const int top = TruckTopGear(t);
     const float raw = TruckDrivenSpin(t), pedalNow = SettingsRange(pedal, 0.0f, 1.0f);
@@ -1201,7 +1281,7 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     // a lower gear the engine can take at the speed the wheels turn
     auto fits = [&](int gear) { return GearboxInput(t, k, gear, rolling) < most; };
     // what a gear pulls in the game at this speed, against the others
-    auto pulls = [&](int gear) { return GearPull(GearboxInput(t, k, gear, by) / k.redline); };
+    auto pulls = [&](int gear) { return GearPull(GearboxInput(t, k, gear, by) / k.redline, shape); };
     int to = m.gear;
     // the room a shift up leaves over the next gear's point down: kShiftRoom at a light foot, none floored, where the
     // points lie where one gear pulls kShiftPullGain more than the other, either way
@@ -1212,8 +1292,8 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     // that, or a gear the pedal would shift up from
     auto upFrom = [&](int gear) {
         return pastIn(gear) ||
-               (!footOff && !labouring && GearboxInput(t, k, gear, byUp) >= GearboxUpPoint(t, k, gear, feel) &&
-                GearboxInput(t, k, gear + 1, byUp) >= GearboxDownPoint(t, k, gear + 1, feel) * room);
+               (!footOff && !labouring && GearboxInput(t, k, gear, byUp) >= GearboxUpPoint(t, k, gear, feel, shape) &&
+                GearboxInput(t, k, gear + 1, byUp) >= GearboxDownPoint(t, k, gear + 1, feel, shape) * room);
     };
     // the gear a shift up lands in: gears at a time while the next one would shift up at once too, as a close-ratio
     // box goes through its gears faster than a shift a second
@@ -1225,8 +1305,8 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     // with the foot on, a gear the pedal would shift down from, the one below taking the engine and not shifting
     // straight back up; a shift down lands as far down as the gears would each shift down at once too
     auto downFrom = [&](int gear) {
-        return gear > 1 && fits(gear - 1) && GearboxInput(t, k, gear, by) < GearboxDownPoint(t, k, gear, feel) &&
-               GearboxInput(t, k, gear - 1, by) < GearboxUpPoint(t, k, gear - 1, feel);
+        return gear > 1 && fits(gear - 1) && GearboxInput(t, k, gear, by) < GearboxDownPoint(t, k, gear, feel, shape) &&
+               GearboxInput(t, k, gear - 1, by) < GearboxUpPoint(t, k, gear - 1, feel, shape);
     };
     auto downTo = [&](int gear) {
         int g = gear - 1;

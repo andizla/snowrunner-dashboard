@@ -4,7 +4,7 @@ A gauge cluster for the truck you drive in SnowRunner: analogue dials in the sty
 
 The cluster has a speedometer, a tachometer with the gear, fuel with the range, coolant and oil temperature, boost pressure, brake air pressure and nine lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage, cold engine, tilt and oil temperature.
 
-This is version 0.12.12. It reads the truck's own values for the speedometer, the gear, the fuel gauge and seven of the lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage and tilt. The game has no engine speed, no range, no coolant or oil temperature, no boost pressure and no brake air, so the mod works those out from what the truck does, and lights the cold and oil lamps by the temperatures. The temperature also costs the engine: overheating it, or working it hard while cold, adds to the game's own engine damage. `Damage=0` switches that off. The scales of the tachometer and the speedometer and the turbo's boost and character can be set for each kind of truck. The brake air comes from the engine's compressor, which fills the tanks up to 8.2 bar and starts again at 6.9, and each press of the brake and letting the handbrake go draw from them; scouts brake by hydraulics and have no air dial. The outside temperature goes by the map you are on, which the mod reads from the game's save. With `Gearbox=1` an automatic of the mod's own, with a torque converter, picks the gears while the game's shifter is in A.
+This is version 0.13.0. It reads the truck's own values for the speedometer, the gear, the fuel gauge and seven of the lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage and tilt. The game has no engine speed, no range, no coolant or oil temperature, no boost pressure and no brake air, so the mod works those out from what the truck does, and lights the cold and oil lamps by the temperatures. The temperature also costs the engine: overheating it, or working it hard while cold, adds to the game's own engine damage. `Damage=0` switches that off. The scales of the tachometer and the speedometer and the turbo's boost and character can be set for each kind of truck. The brake air comes from the engine's compressor, which fills the tanks up to 8.2 bar and starts again at 6.9, and each press of the brake and letting the handbrake go draw from them; scouts brake by hydraulics and have no air dial. The outside temperature goes by the map you are on, which the mod reads from the game's save. With `Gearbox=1` an automatic of the mod's own, with a torque converter, picks the gears while the game's shifter is in A, and with `Powertrain=1` the truck pulls with the mod's engine and converter in place of the game's own.
 
 ## What you need
 
@@ -64,6 +64,8 @@ The Gauges tab in ReShade's overlay edits every setting while you play. Changes 
 | The speed in km/h from which the radiator gets all the air that driving gives it, from 10 to 80 | `AirFullKmh` | 30 |
 | The oil: minutes it takes from 15 C to 85 C when the engine is driven as usual, from 1 to 60 and at least a minute after the coolant, and the temperature in C from which it is too hot, from 100 to 150 | `OilWarmUpMinutes`, `OilWarnC` | 5, 120 |
 | The temperature costs the engine | `Damage` 0 or 1 | on |
+| The mod's automatic picks the gears in A (see below) | `Gearbox` 0 or 1 | off |
+| The truck pulls with the mod's engine and converter (see below) | `Powertrain` 0 or 1 | off |
 | Percent of the engine lost a minute at 125 C, and by a cold engine floored at the red zone at 0 C, each from 0 to 100 | `HotDamagePercentPerMinute`, `ColdDamagePercentPerMinute` | 10, 5 |
 | How loud the turbo's flutter and the oil warning are, from 0 to 100. 0 = no sound | `SoundVolume` | 50 |
 | The sounds without the cluster | `SoundsOnly` 0 or 1 | off |
@@ -144,6 +146,12 @@ The mod sets its gears through the game's own shift function and puts the game's
 
 It works with a manual transmission mod installed, as long as you drive in A.
 
+## The mod's engine
+
+The game's engine gives all of its torque with the wheels at about half of the gear's top speed, and less and less from there to nothing at the top, whatever the engine speed. `Powertrain=1` (on the tab: Gearbox, "Engine to the game") hands the game the mod's engine in its place: the torque curve of the truck's class against the engine speed the needle shows, less with cold oil (up to 15 percent at 0 C) and without boost (35 percent of a turbo engine's torque comes from it), and with the mod's automatic doubled by the converter at its stall, fading out as the truck catches up with the engine. So a gear revved high pulls as a real engine's would, pulling away and a gear too tall on a climb get the converter's push, and floored the mod's automatic revs out before it shifts up. A gear's top speed stays the game's: past it the game gives nothing.
+
+The mod does it through the game's torque factor, the share of its torque the game leaves a damaged engine: it writes the factor on every pass, at most three times the game's own, and gives the game its own back when the setting goes off, the engine stops, a pull test is armed or another truck is driven. The game's own share stays in it: a damaged engine pulls less, as before. The probe line "powertrain" says what is written.
+
 The Gearbox section of the tab also has a pull test, for the engine's torque the mod will hand to the game next. Press "Test the engine's pull", then on a long flat road drive in the fourth gear or higher and floor the pedal for seven seconds. The mod holds the gear, changes the game's torque factor (what it leaves a damaged engine) for a second at a time (halved, raised by half, at three quarters) and measures how hard the truck pulls, then puts the factor back. Lifting the foot, braking or another gear stops it. The numbers go into `Gauges.log`.
 
 ## With the SnowRunner Tire Inflation System
@@ -156,7 +164,7 @@ Delete `Gauges.addon64` (or `Gauges.asi`), `Gauges.ini` and `Gauges.log` from `S
 
 ## Notes
 
-- The mod changes no game file. What it writes into the game's memory: with `Damage` on, the engine damage of the truck you drive; with `Gearbox=1`, the game's automatic flag and the gears, through the game's own shift function; during the pull test, the game's torque factor, for seven seconds. With all of them off it writes nothing.
+- The mod changes no game file. What it writes into the game's memory: with `Damage` on, the engine damage of the truck you drive; with `Gearbox=1`, the game's automatic flag and the gears, through the game's own shift function; with `Powertrain=1`, the game's torque factor of the truck you drive, on every pass; during the pull test, the torque factor, for seven seconds. With all of them off it writes nothing.
 - `Damage` has not been tried in co-op. Leave it off there.
 - If something does not work, `Gauges.log` in `Sources\Bin` says what the mod found and did.
 - The game's own HUD stays as it is. Its "Immersive Mode" option hides it while it is not in use.

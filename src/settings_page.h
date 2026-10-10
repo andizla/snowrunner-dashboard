@@ -427,10 +427,16 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     PageTip("The mod's automatic picks the gears while the game's shifter is in A: a torque converter, shifts up later the further the pedal is down, "
             "a kickdown when it is floored, the gear held when the foot lifts, and the first gear as the truck stops. The tachometer shows its engine "
             "speed. Picking a gear by hand hands the gearbox back to you.");
+    PageLabel("Engine to the game", labelX);
+    changed(ImGui::Checkbox("##powertrain", &s.powertrain));
+    PageTip("The truck pulls with the mod's engine: its torque curve against the engine speed the needle shows, less with cold oil and "
+            "without boost, and with the mod's automatic doubled by the converter at its stall. The game's own engine gives all its torque "
+            "at about half a gear's top speed and less and less toward the top; with this on, a gear revved high pulls as a real engine's "
+            "would, and floored the mod's automatic revs out before it shifts up. The mod writes the game's torque factor for it.");
     PageLabel("Pull test", labelX);
     const bool pullOn = view.pullTest == kViewPullArmed || view.pullTest == kViewPullRunning;
     if (ImGui::Button(pullOn ? "Cancel###pulltest" : "Test the engine's pull###pulltest", ImVec2(w, 0))) act |= pullOn ? kPagePullCancel : kPagePullTest;
-    PageTip("Finds out whether the game's torque factor can carry the engine's torque, for the powertrain that comes next. Press it, then on a long flat "
+    PageTip("Measures how the game's torque factor, which carries the engine's torque (Engine to the game), changes the pull. Press it, then on a long flat "
             "road drive in the fourth gear or higher (the mod's automatic, or a gear picked by hand) and floor the pedal for seven seconds. The mod holds "
             "the gear, changes the torque factor for a second at a time and measures the pull, then puts it back. The numbers go into Gauges.log.");
     if (view.pullTest == kViewPullArmed) ImGui::TextDisabled("Armed: floor it in the fourth gear or higher on a long flat road.");

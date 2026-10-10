@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.13.0] 2026-10-10
+
+- The truck can pull with the mod's engine. `Powertrain=1` (the tab's Gearbox section, "Engine to the game") hands the game the mod's torque in place of its own: the class's torque curve against the engine speed on the needle, less with cold oil and without boost, and with the mod's automatic doubled by the converter at its stall. The game's own gives all its torque at half a gear's top speed and falls to nothing at the top whatever the engine speed; the mod lifts that fall by the game's torque factor, written on every pass at up to three times the game's own share, so a gear revved high pulls as a real engine's would. The game's share comes back when the setting goes off, the engine stops, a pull test is armed or another truck is driven. Off by default.
+- With the engine handed to the game, the mod's automatic shifts by it: floored it revs out to near the gear's top before it shifts up (0.88 to 0.94 of it, where the game's own engine wants 0.63 to 0.79), and shifts down sooner.
+
 ## [0.12.12] 2026-10-10
 
 - Floored from a standstill, the mod's automatic leaves first gear near its point. A scout's first gear is through in about a second, and the gearbox went by the wheels' speed smoothed over a quarter second, which put the shift a quarter of the gear late (the Tacoma at 0.88 of first's top and 0.89 of second's). A shift up now goes by the wheels as they turn, held to the truck's speed over the ground.
