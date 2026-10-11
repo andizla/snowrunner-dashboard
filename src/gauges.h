@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#define GAUGES_VERSION "0.14.1"
+#define GAUGES_VERSION "0.15.0"
 
 // The exe the addresses in this mod are from (SnowRunner on Steam, the build of 22 July 2026). On any other the mod
 // stands down.
@@ -23,6 +23,7 @@ struct GaugeState
     float speedMax;                 // the speedometer's top in km/h (trucks 100, scouts 120, heavy 80)
     float rpm;                      // engine speed (the mod's own model)
     float rpmRedline, rpmMax;       // the tachometer's scale: red zone from rpmRedline to rpmMax
+    bool natural;                   // the engine is naturally aspirated (its profile): no boost dial
     int gear;                       // below 0 reverse, 0 neutral, 1.. forward
     const char *gearMode;           // "A" automatic (drawn beside the gear's number); "H" high, "L", "L+", "L-" (drawn in the number's place);
                                     // "" a numbered gear. String literals only: the pointer crosses threads
@@ -45,7 +46,8 @@ enum { kFaceSolid, kFaceTinted, kFaceOpen, kFaceCount };     // GaugeSettings::s
 enum { kClassTruck, kClassScout, kClassHeavy, kClassCount }; // GaugeSettings::tachClass
 enum { kOilOff, kOilNeedle, kOilDial, kOilGaugeCount };      // GaugeSettings::oilGauge
 enum { kSpoolStandard, kSpoolQuick, kSpoolLaggy, kSpoolTwoStage, kSpoolCount }; // GaugeSettings::boostProfile
-enum { kGearboxGame, kGearboxModel, kGearboxCount };          // GaugeSettings::gearbox
+enum { kGearboxGame, kGearboxModel, kGearboxCount };
+enum { kAspTurbo, kAspNatural, kAspCount };                  // an engine's profile's Aspiration          // GaugeSettings::gearbox
 
 // Everything in Gauges.ini ([Gauges]); the Gauges tab in ReShade's overlay edits all of it.
 struct GaugeSettings
@@ -252,10 +254,13 @@ enum { kSoundOil = kTurboTiers, kSoundTierCount };
 // pullTest: kViewPullOff to kViewPullStopped, the pull test's state (PullTest in models.h); pullWhy: why it stopped, a
 // string that lives as long as the mod
 enum { kViewPullOff, kViewPullArmed, kViewPullRunning, kViewPullDone, kViewPullStopped };
+static const int kEnginePlot = 40; // points of the tab's torque plot
 struct GaugeView { bool show, demo; int hidden; GaugeState st; int engineDamage, engineCapacity; char truck[96]; bool truckOwn; char map[96], mapFrom[64]; bool mapOwn; float ambientC;
                    int pullTest, pullPhase; const char *pullWhy;
                    float ambientDay, ambientNight, hour; // the map's day and night (with mapOwn), the hour of the game's day (-1 not known)
-                   char gearbox[96]; float gearHold; bool gearHoldOwn; }; // the driven truck's gearbox (its key, "" for none), the seconds each gear is held going up with the mod's engine, and whether [Gearbox:<key>] sets them
+                   char gearbox[96]; float gearHold; bool gearHoldOwn; // the driven truck's gearbox (its key, "" for none), the seconds each gear is held going up with the mod's engine, and whether its file sets them
+                   char engine[96]; bool engineOwn, engineCustom; float enginePeakRpm; int engineAspiration; // the driven truck's engine ("" not known): its own profile or not, a whole curve of its own in it, the peak torque's speed in force, turbo or not
+                   float engineIdle, engineRedline; float engineCurve[kEnginePlot]; }; // the slider's range, and the torque in force from idle to the tachometer's top, for the tab's plot
 
 LONG SettingsGet(GaugeSettings &out);       // the settings in force (any thread); returns their turn, for SettingsPut
 void SettingsPut(const GaugeSettings &in, LONG turn); // settings edited from those of a turn: the mod takes them at once and saves the ini a
@@ -266,6 +271,8 @@ void SettingsReset();                       // the tab's button: every setting b
 void PullTestAsk(bool run);                  // the tab's button: arm the pull test, or cancel it
 void MapAmbientSet(float c);                 // the tab's slider: the outside temperature of the map's section in force
 void GearHoldSet(float seconds);            // the tab's slider: the seconds each gear of the driven truck's gearbox is held going up
+void EngineProfileSet(float peakRpm, int aspiration); // the tab's Engine section: the driven truck's engine's profile into its file
+void EngineProfileDrop();                   // the tab's button: the driven truck's engine gives its profile up
 void DamageTestAsk(int points);             // the tab's test buttons: the mod adds this much to the driven truck's engine damage on its next pass
 void ViewGet(GaugeView &out);               // what to draw (any thread)
 void SoundHear(int tier);                   // plays the turbo's sound of that strength (kTurboHigh ..) or the oil warning (kSoundOil) as loud as the settings have it (the tab's buttons)

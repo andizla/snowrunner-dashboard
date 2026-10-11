@@ -14,10 +14,13 @@ struct PageState
     unsigned long long last = 0;  // GetTickCount64 of the last frame the tab was drawn
     float mapAmbientC = 0.0f;     // the outside temperature the slider set for the map's section in force (kPageMapAmbient)
     float gearHold = 0.0f;        // the seconds the slider set for the driven truck's gearbox (kPageGearHold)
+    float enginePeak = 0.0f;      // the driven truck's engine's profile as the Engine section set it (kPageEngineSet)
+    int engineAspiration = 0;
 };
 static const unsigned long long kPageCaptureMs = 8000;
 enum { kPageChanged = 1, kPageReload = 2, kPageTruckDrop = 4, kPageDefaults = 8, kPageHearHigh = 16, kPageHearMid = 32, kPageHearLow = 64, kPageHearOil = 128,
-       kPagePullTest = 256, kPagePullCancel = 512, kPageMapAmbient = 1024, kPageGearHold = 2048 };
+       kPagePullTest = 256, kPagePullCancel = 512, kPageMapAmbient = 1024, kPageGearHold = 2048, kPageEngineSet = 4096,
+       kPageEngineDrop = 8192 };
 
 // The Dear ImGui key as a virtual key, for the keys the toggle key can be; 0 for others.
 static int PageVirtualKey(int k)
@@ -418,6 +421,42 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         changed(ImGui::Combo("##spool", &s.boostProfile, profiles, kSpoolCount));
         PageTip("How the turbo builds its boost. Standard: from about a fifth of the way to the red zone. Small and quick: early and with little lag. "
                 "Big and slow: late, and long to come at low revs. Two stages: a small turbo early and a big one after it.");
+    }
+
+    ImGui::SeparatorText("Engine");
+    // the driven truck's engine: its peak torque's speed and how it breathes, kept for that engine in its own file
+    if (!view.engine[0]) ImGui::TextWrapped("No truck is driven, or its engine is not known yet.");
+    else
+    {
+        if (view.engineOwn) ImGui::TextWrapped("Engine %s. Its own profile, kept in Gauges\\engines.", view.engine);
+        else ImGui::TextWrapped("Engine %s. It pulls by the class's torque curve. Set its peak torque here and this engine keeps a profile of its own.", view.engine);
+        float peak = view.enginePeakRpm;
+        int aspiration = view.engineAspiration;
+        bool set = false;
+        PageLabel("Peak torque at", labelX);
+        ImGui::SetNextItemWidth(w);
+        if (view.engineCustom) ImGui::BeginDisabled();
+        if (ImGui::SliderFloat("##peakrpm", &peak, view.engineIdle, view.engineRedline, "%.0f rpm", ImGuiSliderFlags_AlwaysClamp)) set = true;
+        if (view.engineCustom) ImGui::EndDisabled();
+        PageTip(view.engineCustom ? "Its file holds a torque curve of its own (TorqueCurve), which takes the place of one built from the peak."
+                                  : "The engine speed of the engine's peak torque, as its maker gives it (most engines' figures are published). The torque curve is "
+                                    "built around it: a turbo diesel's broad plateau from a little under it to half as much again over it, a naturally aspirated "
+                                    "engine's narrower hump. With the mod's automatic and the engine handed over, a light foot shifts up no sooner than 0.8 of it.");
+        static const char *aspirations[kAspCount] = { "Turbo", "Naturally aspirated" };
+        PageLabel("Aspiration", labelX);
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::Combo("##aspiration", &aspiration, aspirations, kAspCount)) set = true;
+        PageTip("Naturally aspirated: no boost, so no boost dial and no turbo sounds, and all of the torque at once with the pedal.");
+        if (set)
+        {
+            st.enginePeak = floorf(peak / 50.0f + 0.5f) * 50.0f;
+            st.engineAspiration = aspiration;
+            act |= kPageEngineSet;
+        }
+        PageLabel("Torque", labelX);
+        ImGui::PlotLines("##torquecurve", view.engineCurve, kEnginePlot, 0, nullptr, 0.0f, 1.05f, ImVec2(w, 60.0f * ImGui::GetFontSize() / 13.0f));
+        PageTip("The torque in force from idle to the tachometer's top, as a share of the engine's most.");
+        if (view.engineOwn && ImGui::SmallButton("Back to the class's curve")) act |= kPageEngineDrop;
     }
 
     ImGui::SeparatorText("Gearbox");

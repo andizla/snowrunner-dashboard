@@ -33,7 +33,7 @@ game's memory (a lot to go through; with the user, another day).
 | 9b | Brake air: the compressor, the governor and the brakes' draw | medium | built (2026-10-08, cloud session, on "go, do every thing you can"): the air dial shows the model, not drawn for scouts; `ShowAir` still off at first | | `AirStep` in models.h: the compressor by the engine speed (0.23 bar a second at the red zone into an empty tank, less as it fills towards 12 bar), the governor from 6.9 to 8.2 bar, a brake press takes 0.35 bar times how far it goes down, the handbrake let go 0.4 bar, a leak of 0.1 bar a minute and 0.25 more with the brake held. From empty: about three minutes at idle, one at the red zone; eight full presses with the engine off reach the red zone (5.5 bar). The user's two drives replayed: at the lowest 6.8 bar, never in the red. Models test 125 OK (four new). Owed: the user's look in the game; an air dryer's purge at the cut-out could be heard (module 10 goes on later) |
 | 15 | Differentials: front and rear locks, the centre differential's torque split and its lock | max | waiting (a feasibility note first, the user's OK before any hook) | | |
 | 16 | Release: polish, README, GitHub | medium | waiting; the release carries `Gauges.addon64` (and `Gauges.asi`, the same file) since 0.11.3 | | |
-| 17 | Naturally aspirated engines | high | waiting (the user, 2026-10-11: "sort of important"; per truck, per engine if it can be) | | |
+| 17 | Engine profiles: peak torque speed, aspiration | high | built (0.15.0, on the user's "go ahead"): `Gauges\engines\<name>.ini` per engine (PeakTorqueRpm, Aspiration, TorqueCurve), the tab's Engine section with a plot; the user's drive owed | | |
 | 18 | Sharing truck and engine setups | high | part one built (0.14.0, on the user's "begin"): each truck's scales and each gearbox's hold in a file of their own, `Gauges\trucks\<kind>.ini` and `Gauges\gearboxes\<name>.ini`, the old sections moved out of Gauges.ini on the first start. Part two, the public list on GitHub: a to-do for later (the user, 2026-10-11) | | |
 | 19 | Winch: its temperature, and the line that snaps or the winch that stops when it is too hot | max | waiting (the user, 2026-10-11); a feasibility note first, the user's OK before any hook | | |
 
@@ -751,6 +751,12 @@ own car (a nine-speed automatic behind a 2-litre diesel) shifts at about 1500 rp
 up about as far along as the pedal is down (a fifth of the pedal, a fifth of the way), in steps if need be. Then the
 point down has to follow: with the scout's wide steps (1.4 to 1.6) a shift up at 1500 rpm lands near 1000, and the
 point down and `kShiftRoom` must leave that landing above it, or the shift up never comes (GearboxStep's room check).
+The user: "it's a diesel so 1000 rpm is fine; peak torque is like 2k rpm". 0.15.0: the point up `idle + (floored - idle)
+x feel`, not under `EngineHand::least`; the point down per gear, the gear below's point up over the step over
+`kEngineDownRoom` 1.15, not under `kEngineDownIdle` 1.15 times idle (the landing clears it by the room check's 1.1 by
+construction); the converter's lock-up from `kLockIdle` 1.3 times idle up to `kLockLight` 0.3 of the pedal, to half
+the red zone floored. The test: the scout's gearbox at a fifth of the pedal shifts up at 1579 to 1639 rpm, none taken
+back, locked after each.
 The user: "a slider for it, 1 s to 3 s, per gearbox". 0.13.9: `[Gearbox:<key>] GearHold` (`kGearHoldRange` 1 to 3), the
 tab's slider "Each gear going up" (`GearHoldSet`, as the map's temperature slider), the class's default without it.
 The key: the gearbox's name in the game's files ("g_" and the rest, as the scout's pak names its four), looked for among the texts of
@@ -941,6 +947,13 @@ a hint for a default at most. The user (2026-10-11): a setting per truck, and pe
 can: the engine fitted is known by its name in the game's files (`EngineRecord::name`, "<truck>_engine_<n>"), so
 a section of its own per engine (`[Engine:<name>]`, or the engine's file under 18's folder) overrides the truck's.
 Tests: the curve, the torque with no boost term, the settings round trip, the engine's section over the truck's.
+0.15.0, with the user's design ("the plan" of 2026-10-11): per engine, not per truck (the scales stay the truck's: an
+engine file over the truck's scales would make the tab's scale edits seem to do nothing). `EngineProfile`,
+`EngineCurveOf` (its own `TorqueCurve`, else `EngineCurveFromPeak`, else the class's), `EngineProfileRead`/`Write` in
+gauges.cpp under `Gauges\engines`, loaded in `EngineLook` per engine name; the curve in force goes to the powertrain,
+the clutch and the automatic (`EngineHand::curve`); `natural`: no `BoostStep`, the boost share 1 to the powertrain,
+`GaugeState::natural` drops the boost dial. The light foot's floor `EngineHand::least` = `kLightPeak` 0.8 times the
+curve's peak (`CurvePeak`) in rpm. Models 146, settings 40 (72 help lines) OK.
 The user (2026-10-11), for the engine profiles: a peak torque rpm per engine, as most engines have their peak torque
 figures published. The profile's curve then built around it (the peak at that speed over the red zone's, say a
 plateau around it for a turbo diesel, a narrower peak for an atmospheric engine), in the engine's own file

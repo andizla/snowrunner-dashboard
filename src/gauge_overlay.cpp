@@ -135,7 +135,9 @@ static void OnOverlay(reshade::api::effect_runtime *runtime)
     // the background list: under ReShade's own windows, so the cluster never covers the settings tab
     LARGE_INTEGER before, after;
     QueryPerformanceCounter(&before);
-    GaugeDraw(ImGui::GetBackgroundDrawList(), g_fonts, GaugeOrigin(s, io.DisplaySize.x, io.DisplaySize.y), u, alpha * s.opacity, shown, GaugeLayoutOf(s));
+    GaugeLayout lay = GaugeLayoutOf(s);
+    if (shown.natural) lay.showBoost = false; // a naturally aspirated engine has no boost to show
+    GaugeDraw(ImGui::GetBackgroundDrawList(), g_fonts, GaugeOrigin(s, io.DisplaySize.x, io.DisplaySize.y), u, alpha * s.opacity, shown, lay);
     QueryPerformanceCounter(&after);
     if (s.probe)
     {
@@ -198,6 +200,8 @@ static void OnSettingsTab(reshade::api::effect_runtime *)
     if (act & kPagePullCancel) PullTestAsk(false);
     if (act & kPageMapAmbient) MapAmbientSet(st.mapAmbientC);
     if (act & kPageGearHold) GearHoldSet(st.gearHold);
+    if (act & kPageEngineSet) EngineProfileSet(st.enginePeak, st.engineAspiration);
+    if (act & kPageEngineDrop) EngineProfileDrop();
     if (act & kPageDefaults) SettingsReset();
     if (act & kPageReload) SettingsReload();
     if (act & kPageHearHigh) SoundHear(kTurboHigh);

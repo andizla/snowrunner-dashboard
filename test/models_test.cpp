@@ -1785,6 +1785,59 @@ int main(int argc, char **argv)
                   "gear taken where it pulls more; a kickdown only into a gear short of its point up; stuck floored it takes the first after a second, the "
                   "second again with the foot off; a weaker engine for the truck's mass sets off in the first; a light foot losing speed is no climb; a "
                   "quick truck through close gears floored holds each gear two and a half seconds, a scout one and a half");
+            // an engine's own curve from its peak torque's speed: a turbo diesel's plateau from 0.85 to 1.5 times it, three
+            // fifths at half of it, four fifths at the red zone; a naturally aspirated engine's hump at the peak
+            const TorqueCurve td = EngineCurveFromPeak(1950.0f / 4850.0f, false), na = EngineCurveFromPeak(0.6f, true);
+            const float tdPeak = 1950.0f / 4850.0f;
+            const bool curves = Near(TorqueAt(td, tdPeak, 1.25f), 1.0f, 0.001f) && Near(TorqueAt(td, tdPeak * 0.5f, 1.25f), 0.6f, 0.001f) &&
+                                Near(TorqueAt(td, tdPeak * 1.4f, 1.25f), 1.0f, 0.001f) && Near(TorqueAt(td, 1.0f, 1.25f), 0.8f, 0.001f) &&
+                                Near(CurvePeak(td), tdPeak * kPeakFrom, 0.001f) && Near(TorqueAt(na, 0.6f, 1.25f), 1.0f, 0.001f) && Near(CurvePeak(na), 0.6f, 0.001f) &&
+                                TorqueAt(na, 0.3f, 1.25f) < 0.9f && TorqueAt(na, 0.9f, 1.25f) < 0.95f && EngineCurveFromPeak(0.97f, false).n >= 2;
+            // at a light foot the scout (idle 800, red zone from 4850) with a peak at 1950 rpm: up about as far along as the
+            // pedal is down, not under 0.8 of the peak's speed; down where the gear below comes in 1.15 under its point up
+            GaugeScale tk = dk;
+            tk.idle = 800.0f;
+            tk.redline = 4850.0f;
+            tk.max = 6000.0f;
+            EngineHand diesel = whole;
+            diesel.top = 6000.0f / 4850.0f;
+            diesel.least = kLightPeak * 1950.0f;
+            const float upFifth = GearboxUpPoint(sd, tk, 3, 0.2f, diesel), upHalf = GearboxUpPoint(sd, tk, 3, 0.5f, diesel), upFull = GearboxUpPoint(sd, tk, 3, 1.0f, diesel);
+            const float downFifth = GearboxDownPoint(sd, tk, 4, 0.2f, diesel);
+            const float landFifth = upFifth * TruckGearTop(sd, 3) / TruckGearTop(sd, 4);
+            const bool lightPoints = Near(upFifth, 1560.0f, 1.0f) && upHalf > 2400.0f && upHalf < 2800.0f && upFull > 4000.0f && downFifth > 900.0f && downFifth < 1000.0f &&
+                                     landFifth > downFifth * kShiftRoom && GearboxDownPoint(sd, tk, 1, 0.2f, diesel) == 0.0f;
+            // and so through the gears at a fifth of the pedal, gaining slowly: each shift up near 1560 rpm, none taken back,
+            // the converter locked after each one
+            float lightLow = 1e9f, lightHigh = 0.0f;
+            int lightDownsDiesel = 0, lightLastDiesel = 0, unlockedAfter = 0;
+            {
+                GearboxModel lb = {};
+                lb.running = true;
+                lb.gear = 1;
+                lb.grip = 2.0f;
+                for (float at = 0.0f; at < 120.0f; at += kDt)
+                {
+                    scoutAt(fminf(0.5f * at, 0.9f * TruckGearTop(sd, 6)));
+                    const int was = lb.gear;
+                    const float spinNow = sd.spin[0];
+                    GearboxStep(lb, sd, tk, 0.2f, 0.2f, kDt, diesel);
+                    if (was >= 2 && lb.gear > was)
+                    {
+                        const float rpm = GearboxInput(sd, tk, was, spinNow);
+                        lightLow = fminf(lightLow, rpm);
+                        lightHigh = fmaxf(lightHigh, rpm);
+                    }
+                    if (lb.gear < was && was >= 1) lightDownsDiesel++;
+                    // past the lock-up's speed at a light foot (kLockIdle times idle) and clear of a shift, locked
+                    if (lb.gear == was && lb.gear >= 2 && lb.pause <= 0.0f && lb.input > tk.idle * kLockIdle + 30.0f && !lb.locked) unlockedAfter++;
+                }
+                lightLastDiesel = lb.gear;
+            }
+            Check(curves && lightPoints && lightLow > 1500.0f && lightHigh < 1800.0f && lightDownsDiesel == 0 && lightLastDiesel == 6 && unlockedAfter == 0,
+                  "automatic, the engine handed over: an engine's curve from its peak torque's speed; at a light foot up about as far along as the pedal "
+                  "is down, not under 0.8 of the peak's speed (a fifth of the pedal: 1560 rpm), down where the gear below comes in clear of its point up, "
+                  "through the gears without a shift taken back, the converter locked");
             // the share of the gear's top the lift goes by: by the ground once the grip is known, the wheels at most
             // kSlipUp over it; before that the wheels, at most kLiftBlind
             Check(Near(LiftShare(10.0f, 4.0f, 2.0f, 20.0f), 0.42f, 0.001f) && Near(LiftShare(6.0f, 4.0f, 2.0f, 20.0f), 0.3f, 0.001f) &&

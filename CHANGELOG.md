@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0] 2026-10-11
+
+- Engine profiles. Each engine can have a profile of its own in `Gauges\engines\<name>.ini`, set on the tab's new Engine section while the truck is driven: the engine speed of its peak torque (`PeakTorqueRpm`), as its maker gives it, and its aspiration (`Aspiration`, turbo or naturally aspirated). The torque curve is built around the peak: a turbo diesel's broad plateau from 0.85 to 1.5 times its speed, a naturally aspirated engine's narrower hump. A curve can also be written whole (`TorqueCurve`). A naturally aspirated engine has no boost, no boost dial and no turbo sounds. A plot on the tab shows the curve in force. Without a profile an engine pulls by its class's curve, as before.
+- With the engine handed to the game, a light foot shifts up about as far along as the pedal is down: a fifth of the pedal, a fifth of the way from idle to the floored point. A scout's diesel with its peak at 1950 rpm shifts at about 1560 rpm at a fifth of the pedal (it was about 2500), as a road car's automatic does, and never under 0.8 of the peak torque's speed. Floored is as before.
+- It shifts down where the gear below would come in 15 percent under its own point up, gear by gear, so the point down follows the point up whatever the gearbox's steps; at a light foot a diesel lugs down to about 1000 rpm before it shifts down.
+- The converter locks up from 1.3 times idle at a light foot (from half the red zone floored, as before), so a gentle shift up lands locked.
+
 ## [0.14.1] 2026-10-11
 
 - The gearbox's name is read where the game keeps it, at the truck's vehicle + 0x9a0, which 0.14.0's search found on four trucks. A name there is taken whatever it begins with, so a modded gearbox not named with "g_" is known by its name too, where it went by its gears' speeds (two modded trucks in the drive of 16:48). The search stays behind it, and the gears behind that.

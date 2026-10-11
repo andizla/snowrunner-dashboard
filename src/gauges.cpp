@@ -49,6 +49,7 @@ static volatile LONG g_setDirty = 0, g_reloadAsked = 0, g_truckDropAsked = 0, g_
 static volatile LONG g_pullTestAsked = 0; // 1 arm the pull test, 2 cancel it
 static volatile LONG g_mapAmbientAsked = 0, g_mapAmbientTenths = 0; // the tab set the map's outside temperature, in tenths of a degree C
 static volatile LONG g_gearHoldAsked = 0, g_gearHoldTenths = 0;     // the tab set the driven gearbox's hold, in tenths of a second
+static volatile LONG g_engineAsked = 0, g_enginePeak = 0, g_engineAspiration = 0; // the tab set (1) or dropped (2) the driven engine's profile: the peak torque's rpm, the aspiration
 
 // What the cluster shows, written by the mod's thread and read by the render thread.
 static SRWLOCK g_viewLock = SRWLOCK_INIT;
@@ -128,11 +129,11 @@ static void IniPutInt(const wchar_t *section, const wchar_t *key, int v, const s
 // can be passed on and dropped in as it is. A file's name cannot hold a stroke, which a modded truck's kind does
 // ("<name>/<mod id>"): it is written "@" there, and any other character a file's name cannot hold "_". Up to 0.13.9
 // they stood in Gauges.ini as [Truck:<kind>] and [Gearbox:<name>]: SetupsMove takes them out into the files.
-enum { kSetupTruck, kSetupGearbox, kSetupKinds };
-static const wchar_t *const kSetupFolders[kSetupKinds] = { L"trucks", L"gearboxes" };
-static const wchar_t *const kSetupSections[kSetupKinds] = { L"Truck", L"Gearbox" };
-static const wchar_t *const kSetupNameKeys[kSetupKinds] = { L"Kind", L"Name" };
-static const wchar_t *const kSetupIniPrefixes[kSetupKinds] = { L"Truck:", L"Gearbox:" };
+enum { kSetupTruck, kSetupGearbox, kSetupEngine, kSetupKinds };
+static const wchar_t *const kSetupFolders[kSetupKinds] = { L"trucks", L"gearboxes", L"engines" };
+static const wchar_t *const kSetupSections[kSetupKinds] = { L"Truck", L"Gearbox", L"Engine" };
+static const wchar_t *const kSetupNameKeys[kSetupKinds] = { L"Kind", L"Name", L"Name" };
+static const wchar_t *const kSetupIniPrefixes[kSetupKinds] = { L"Truck:", L"Gearbox:", L"Engine:" };
 
 // The file's name for a key, without the folder and ".ini".
 static std::wstring SetupFileName(const std::wstring &key)
@@ -165,7 +166,7 @@ static void SetupBegin(int kind, const std::wstring &key)
 static void SetupsMove(int (&moved)[kSetupKinds])
 {
     const std::wstring ini = IniPath();
-    moved[kSetupTruck] = moved[kSetupGearbox] = 0;
+    for (int &n : moved) n = 0;
     std::vector<wchar_t> names(65536, L'\0');
     const DWORD got = GetPrivateProfileSectionNamesW(names.data(), (DWORD)names.size(), ini.c_str());
     if (!got) return;
@@ -514,6 +515,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; of the game's own, which falls away toward each gear's top. The mod writes the game's torque factor for it.\n"
                         L"; EngineShare: how much of the mod's engine the game gets, 0 to 100 percent (50: half way between the two).\n"
                         L"; Gauges\\gearboxes\\<name>.ini GearHold: seconds a gearbox holds each gear going up with Powertrain=1, 1 to 3 (the tab).\n"
+                        L"; Gauges\\engines\\<name>.ini: PeakTorqueRpm, Aspiration (0 turbo, 1 naturally aspirated), TorqueCurve (the tab's Engine).\n"
                         L"; For work on the mod: Demo=1 draws demo values whenever no truck is driven, Probe=1 logs the values read from the game.\n");
             fclose(f);
             WriteIni(s);
@@ -622,6 +624,15 @@ void MapAmbientSet(float c)
     InterlockedExchange(&g_mapAmbientAsked, 1);
 }
 
+void EngineProfileSet(float peakRpm, int aspiration)
+{
+    InterlockedExchange(&g_enginePeak, (LONG)lroundf(peakRpm));
+    InterlockedExchange(&g_engineAspiration, aspiration);
+    InterlockedExchange(&g_engineAsked, 1);
+}
+
+void EngineProfileDrop() { InterlockedExchange(&g_engineAsked, 2); }
+
 void GearHoldSet(float seconds)
 {
     InterlockedExchange(&g_gearHoldTenths, (LONG)lroundf(seconds * 10.0f));
@@ -650,6 +661,55 @@ static void GearHoldWrite(const char *key, float hold)
     swprintf_s(buf, L"%.1f", hold);
     SetupBegin(kSetupGearbox, Wide(key));
     WritePrivateProfileStringW(kSetupSections[kSetupGearbox], L"GearHold", buf, SetupFile(kSetupGearbox, key).c_str());
+}
+
+// ---- an engine's own profile: its file Gauges\engines\<name>.ini ----
+// PeakTorqueRpm: the engine speed of its peak torque (100 to 20000 rpm), the curve built around it (EngineCurveFromPeak);
+// Aspiration: 0 turbo, 1 naturally aspirated (no boost, no turbo sounds, no boost dial); TorqueCurve: a whole curve of
+// its own, "x:y,x:y,..." with x the engine speed over the red zone's and y the torque over its most, in place of the
+// one from the peak. The key is the engine's name in the game's files (EngineRecord::name).
+static const float kPeakRpmRange[2] = { 100.0f, 20000.0f };
+
+// The engine's profile, into p; false where its file holds none of the three.
+static bool EngineProfileRead(const char *name, EngineProfile &p)
+{
+    p = EngineProfile{};
+    if (!name[0]) return false;
+    const std::wstring file = SetupFile(kSetupEngine, name);
+    if (GetFileAttributesW(file.c_str()) == INVALID_FILE_ATTRIBUTES) return false;
+    const wchar_t *section = kSetupSections[kSetupEngine];
+    wchar_t buf[256] = {};
+    if (GetPrivateProfileStringW(section, L"PeakTorqueRpm", L"", buf, 256, file.c_str()) > 0)
+    {
+        const float v = (float)_wtof(buf);
+        p.peakRpm = isfinite(v) && v > 0.0f ? SettingsRange(v, kPeakRpmRange[0], kPeakRpmRange[1]) : 0.0f;
+        p.own = true;
+    }
+    if (GetPrivateProfileStringW(section, L"Aspiration", L"", buf, 256, file.c_str()) > 0)
+    {
+        const int a = _wtoi(buf);
+        p.aspiration = a >= 0 && a < kAspCount ? a : kAspTurbo;
+        p.own = true;
+    }
+    if (GetPrivateProfileStringW(section, L"TorqueCurve", L"", buf, 256, file.c_str()) > 0)
+    {
+        char text[256];
+        size_t n = 0;
+        for (; buf[n] && n + 1 < sizeof text; n++) text[n] = buf[n] < 128 ? (char)buf[n] : '?';
+        text[n] = 0;
+        p.custom = TorqueCurveParse(text, p.curve);
+        p.own = true;
+    }
+    return p.own;
+}
+
+// The tab's Engine section into the engine's file: the peak torque's speed and the aspiration.
+static void EngineProfileWrite(const char *name, float peakRpm, int aspiration)
+{
+    const std::wstring file = SetupFile(kSetupEngine, name);
+    SetupBegin(kSetupEngine, Wide(name));
+    IniPutFloat(kSetupSections[kSetupEngine], L"PeakTorqueRpm", roundf(SettingsRange(peakRpm, kPeakRpmRange[0], kPeakRpmRange[1])), file);
+    IniPutInt(kSetupSections[kSetupEngine], L"Aspiration", aspiration >= 0 && aspiration < kAspCount ? aspiration : kAspTurbo, file);
 }
 
 // ---- a truck's own scales: its file Gauges\trucks\<kind>.ini ----
@@ -1243,6 +1303,8 @@ struct TruckWatch
     EngineRecord engine;        // the record of the engine of the truck at engineVehicle
     float mass;                 // that truck's mass in kg by its files (TruckMass), 0 where not read
     uint64_t engineVehicle;
+    EngineProfile profile;      // the engine's own profile (Gauges\engines), for the engine named profileFor
+    char profileFor[kMaxText];
     char gearboxKey[96];        // the gearbox of the truck at gearboxVehicle: its key (GearboxKey), "" before one is known
     bool gearHoldOwn;           // [Gearbox:<key>] holds GearHold, which is gearHold; else the truck's class has it
     float gearHold;
@@ -1335,6 +1397,17 @@ static void EngineLook(TruckWatch &w, const TruckMemory &m, ULONGLONG now, bool 
     }
     w.engine = e;
     w.engineVehicle = w.refs.vehicle;
+    // the engine's own profile, for each engine as it is first known
+    if (e.name[0] && strcmp(e.name, w.profileFor))
+    {
+        strcpy_s(w.profileFor, e.name);
+        if (EngineProfileRead(e.name, w.profile))
+            Log(L"engine: %S has a profile of its own (Gauges\\engines\\%s.ini): %s%s", e.name, SetupFileName(Wide(e.name)).c_str(),
+                w.profile.custom ? L"a torque curve of its own" : w.profile.peakRpm > 0.0f ? L"its torque curve from its peak torque's speed" : L"the class's torque curve",
+                w.profile.aspiration == kAspNatural ? L", naturally aspirated" : L", turbocharged");
+        else Log(L"engine: %S has no profile of its own: the class's torque curve, turbocharged", e.name);
+        if (w.profile.peakRpm > 0.0f) Log(L"engine: its peak torque at %.0f rpm", w.profile.peakRpm);
+    }
     w.engineAt = now + 5000;
 }
 
@@ -1474,8 +1547,13 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         // the needle: while the mod's automatic drives the gears, its converter's engine speed (of the last pass)
         if (w.take.driving) TachFollow(w.tach, raw, scale, w.gearbox.rpm, dt);
         else TachStep(w.tach, raw, scale, dt);
+        // the engine's torque curve: its own profile's (Gauges\\engines), else the class's; a naturally aspirated one
+        // has no boost, no turbo sounds and no boost dial
+        const TorqueCurve curve = EngineCurveOf(w.profile, kClassCurves[s.tachClass], scale.redline);
+        const bool natural = w.profile.aspiration == kAspNatural;
         // the boost, and a lift of the pedal under it, which is heard (sound.h). With the probe on it is logged
-        const int lift = BoostStep(w.boost, raw, TachShare(w.tach, scale), scale.boost, s.boostProfile, dt);
+        if (natural) w.boost = BoostModel{};
+        const int lift = natural ? kLiftNone : BoostStep(w.boost, raw, TachShare(w.tach, scale), scale.boost, s.boostProfile, dt);
         if (lift != kLiftNone && probe)
             Log(L"boost: a %s at %.2f bar of the turbo's %.2f, %.2f of its full sound", lift == kLiftBlowOff ? L"blow-off" : L"flutter", w.boost.lastBar, scale.boost, w.boost.lastVolume);
         LiftSound sound;
@@ -1492,8 +1570,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         const bool oilWas = w.oil.on;
         if (OilWarnStep(w.oil, w.temp, raw, s, dt)) SoundPlay(kSoundOil, OilBeepGain(s.soundVolume), 1.0f);
         // the powertrain: what the engine would deliver, worked out and logged, not handed to the game yet
-        PowertrainStep(w.power, raw, kClassCurves[s.tachClass], TachSpeed(w.tach, scale), scale.redline > 0.0f ? scale.max / scale.redline : 1.0f, w.temp.oil,
-                       scale.boost > 0.0f ? w.boost.bar / scale.boost : 0.0f, dt);
+        PowertrainStep(w.power, raw, curve, TachSpeed(w.tach, scale), scale.redline > 0.0f ? scale.max / scale.redline : 1.0f, w.temp.oil,
+                       natural ? 1.0f : scale.boost > 0.0f ? w.boost.bar / scale.boost : 0.0f, dt);
         // the automatic: the gear it would be in, the same way, by the pedal as held. With the probe on each of its
         // shifts is logged beside the game's gear while the game's automatic drives a numbered gear
         const int boxGear = w.gearbox.gear;
@@ -1505,7 +1583,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             // down, and the engine runs behind the clutch, the same way
             w.gearbox = GearboxModel{};
             // a clutch pedal on an axis is the driver's; without one (a button, or none) the clutch works by itself
-            if (ClutchStep(w.clutch, raw, scale, kClassCurves[s.tachClass], w.smt.clutch, w.power.pedal, w.power.cold * w.power.boost, !w.smt.clutchAxis, dt) && probe)
+            if (ClutchStep(w.clutch, raw, scale, curve, w.smt.clutch, w.power.pedal, w.power.cold * w.power.boost, !w.smt.clutchAxis, dt) && probe)
                 Log(L"clutch: the engine would have stalled, the clutch let up at %.0f rpm on the gearbox's input in gear %d", w.clutch.input, raw.gearEngaged);
         }
         else
@@ -1513,8 +1591,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             // the shift points a truck automatic's schedule while the mod's engine is handed to the game, else by the
             // game's own pull
             const float launch = w.engine.torque > 0.0f && w.mass > 0.0f && w.engineVehicle == w.refs.vehicle ? w.engine.torque / w.mass : 0.0f;
-            const EngineHand hand{ w.hand.on, &kClassCurves[s.tachClass], scale.redline > 0.0f ? scale.max / scale.redline : 1.0f, s.engineShare / 100.0f, launch,
-                                   GearHoldOf(w, s.tachClass) };
+            const EngineHand hand{ w.hand.on, &curve, scale.redline > 0.0f ? scale.max / scale.redline : 1.0f, s.engineShare / 100.0f, launch,
+                                   GearHoldOf(w, s.tachClass), kLightPeak * CurvePeak(curve) * scale.redline };
             GearboxStep(w.gearbox, raw, scale, foot, w.power.power, dt, hand);
             w.clutch = ClutchModel{};
         }
@@ -1813,6 +1891,7 @@ static DWORD WINAPI Run(void *)
     bool mapOwn = false, mapAsk = true, saveSeen = true;
     ULONGLONG mapAmbientLogAt = 0; // when to log the temperature the tab set, once the slider has rested
     ULONGLONG gearHoldLogAt = 0;   // and the gearbox's hold
+    ULONGLONG engineLogAt = 0;     // and the engine's profile
     std::wstring savePath;
     FILETIME saveWritten = {};
     ULONGLONG saveLookAt = 0;
@@ -1829,7 +1908,10 @@ static DWORD WINAPI Run(void *)
             ReadIni(set.plain);
             SettingsFor(set, truck.key);
             SettingsPublish(s);
-            Log(L"settings: Gauges.ini read again");
+            // the driven engine's profile and gearbox's hold read again too, as a file edited by hand may have changed them
+            if (watch.profileFor[0]) EngineProfileRead(watch.profileFor, watch.profile);
+            if (watch.gearboxKey[0]) watch.gearHoldOwn = GearHoldRead(watch.gearboxKey, watch.gearHold);
+            Log(L"settings: Gauges.ini read again, and the driven truck's engine and gearbox files");
             LogSettings(s);
             saveAt = 0;
             edited = true;
@@ -1956,6 +2038,28 @@ static DWORD WINAPI Run(void *)
                 gearHoldLogAt = GetTickCount64() + 1000;
             }
         }
+        // the engine's profile from the tab: into its file, in force at once; or given up, the file gone
+        const LONG engineAsk = InterlockedExchange(&g_engineAsked, 0);
+        if (engineAsk && watch.profileFor[0])
+        {
+            if (engineAsk == 1)
+            {
+                EngineProfileWrite(watch.profileFor, (float)g_enginePeak, (int)g_engineAspiration);
+                engineLogAt = GetTickCount64() + 1000;
+            }
+            else
+            {
+                DeleteFileW(SetupFile(kSetupEngine, watch.profileFor).c_str());
+                Log(L"engine: %S gave its profile up: the class's torque curve, turbocharged", watch.profileFor);
+            }
+            EngineProfileRead(watch.profileFor, watch.profile);
+        }
+        if (engineLogAt && GetTickCount64() >= engineLogAt)
+        {
+            Log(L"engine: %S set from the tab: its peak torque at %.0f rpm, %s (Gauges\\engines\\%s.ini)", watch.profileFor, watch.profile.peakRpm,
+                watch.profile.aspiration == kAspNatural ? L"naturally aspirated" : L"turbocharged", SetupFileName(Wide(watch.profileFor)).c_str());
+            engineLogAt = 0;
+        }
         if (gearHoldLogAt && GetTickCount64() >= gearHoldLogAt)
         {
             Log(L"gearbox: %S set from the tab: each gear held %.1f s going up (Gauges\\gearboxes\\%s.ini)", watch.gearboxKey, watch.gearHold,
@@ -2078,6 +2182,21 @@ static DWORD WINAPI Run(void *)
         v.ambientNight = mapAir.night;
         v.hour = hour;
         strcpy_s(v.gearbox, driving ? watch.gearboxKey : "");
+        // the engine and its curve in force, for the tab's Engine section and its plot
+        if (driving && watch.profileFor[0])
+        {
+            const GaugeScale es = GaugeScaleOf(inForce);
+            const TorqueCurve ec = EngineCurveOf(watch.profile, kClassCurves[inForce.tachClass], es.redline);
+            strncpy_s(v.engine, watch.profileFor, _TRUNCATE);
+            v.engineOwn = watch.profile.own;
+            v.engineCustom = watch.profile.custom;
+            v.engineAspiration = watch.profile.aspiration;
+            v.enginePeakRpm = watch.profile.peakRpm > 0.0f && !watch.profile.custom ? watch.profile.peakRpm : CurvePeak(ec) * es.redline;
+            v.engineIdle = es.idle;
+            v.engineRedline = es.redline;
+            const float top = es.redline > 0.0f ? es.max / es.redline : 1.0f, from = es.redline > 0.0f ? es.idle / es.redline : 0.0f;
+            for (int i = 0; i < kEnginePlot; i++) v.engineCurve[i] = TorqueAt(ec, from + (top - from) * i / (kEnginePlot - 1), top);
+        }
         v.gearHold = GearHoldOf(watch, inForce.tachClass);
         v.gearHoldOwn = watch.gearHoldOwn;
         v.pullTest = watch.pullTest.state;
@@ -2097,6 +2216,7 @@ static DWORD WINAPI Run(void *)
                 v.st.lowGear = false;
             }
             v.st.boostBar = watch.boost.bar;
+            v.st.natural = watch.profile.aspiration == kAspNatural;
             v.st.airBar = watch.air.bar;
             v.st.rangeKm = watch.range.rangeKm;
             v.st.tilt = watch.tilt.running ? watch.tilt.lamp : -1;
@@ -2303,7 +2423,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 71, "ini: the help text survives a write (71 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 72, "ini: the help text survives a write (72 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());
@@ -2516,6 +2636,26 @@ int wmain(int argc, wchar_t **argv)
         GetPrivateProfileStringW(L"Gearbox", L"Name", L"", boxName, 32, SetupFile(kSetupGearbox, "g_test_box").c_str());
         Check(noHold && holdRead && fabsf(holdBack - 1.7f) < 0.001f && holdWild == kGearHoldRange[1] && !wcscmp(boxName, L"g_test_box"),
               "setups: a gearbox's hold in its own file with its name, read back, held to 1 to 3 seconds");
+        // an engine's profile: its peak torque's speed and aspiration into its file and back; a curve of its own taken
+        // in place of the one from the peak; what is out of range held to it; none without a file
+        const char *engineName = "test_engine_2";
+        DeleteFileW(SetupFile(kSetupEngine, engineName).c_str());
+        EngineProfile profile;
+        const bool noProfile = !EngineProfileRead(engineName, profile) && !profile.own;
+        EngineProfileWrite(engineName, 1950.0f, kAspNatural);
+        const bool profileBack = EngineProfileRead(engineName, profile) && profile.own && profile.peakRpm == 1950.0f && profile.aspiration == kAspNatural && !profile.custom;
+        const TorqueCurve fromPeak = EngineCurveOf(profile, kClassCurves[kClassScout], 4850.0f);
+        WritePrivateProfileStringW(L"Engine", L"TorqueCurve", L"0.3:0.7,0.5:1,1:0.75", SetupFile(kSetupEngine, engineName).c_str());
+        WritePrivateProfileStringW(L"Engine", L"Aspiration", L"7", SetupFile(kSetupEngine, engineName).c_str());
+        EngineProfileRead(engineName, profile);
+        const TorqueCurve own = EngineCurveOf(profile, kClassCurves[kClassScout], 4850.0f);
+        WritePrivateProfileStringW(L"Engine", L"PeakTorqueRpm", L"50000", SetupFile(kSetupEngine, engineName).c_str());
+        EngineProfile wildEngine;
+        EngineProfileRead(engineName, wildEngine);
+        Check(noProfile && profileBack && fabsf(CurvePeak(fromPeak) - 1950.0f / 4850.0f) < 0.001f && profile.custom && own.n == 3 && own.x[1] == 0.5f &&
+                  profile.aspiration == kAspTurbo && wildEngine.peakRpm == kPeakRpmRange[1],
+              "setups: an engine's profile in its own file, read back; its curve from its peak torque's speed, or its own written one; out of range held");
+        DeleteFileW(SetupFile(kSetupEngine, engineName).c_str());
         // the sections of 0.13.9 and before moved out of Gauges.ini into the files, a key the file holds already kept
         DeleteFileW(truckFile("mover/123").c_str());
         DeleteFileW(SetupFile(kSetupGearbox, "g_moved").c_str());

@@ -930,6 +930,66 @@ inline float TorqueAt(const TorqueCurve &c, float speed, float top)
     return top > last ? c.y[c.n - 1] * SettingsRange(1.0f - (speed - last) / (top - last), 0.0f, 1.0f) : 0.0f;
 }
 
+// An engine's torque curve from the engine speed of its peak torque (peak: over the red zone's), as the engine's own
+// profile gives it (Gauges\engines\<name>.ini, PeakTorqueRpm): a turbo diesel's broad plateau, from a little under
+// the peak to half as much again over it, with three fifths of the torque at half the peak's speed and four fifths
+// left at the red zone; a naturally aspirated engine's narrower hump around the peak, falling off sooner after it.
+// Beyond the last point TorqueAt takes it down to nothing at the tachometer's top, as for every curve.
+static const float kPeakFrom = 0.85f, kPeakTo = 1.5f; // a turbo diesel's plateau, from and to these times the peak's speed
+inline TorqueCurve EngineCurveFromPeak(float peak, bool natural)
+{
+    TorqueCurve c = {};
+    const float p = SettingsRange(isfinite(peak) ? peak : 0.5f, 0.15f, 0.95f);
+    auto add = [&](float x, float y) {
+        if (c.n < kCurvePoints && (c.n == 0 || x > c.x[c.n - 1] + 0.005f)) { c.x[c.n] = x; c.y[c.n] = y; c.n++; }
+    };
+    if (natural)
+    {
+        add(p * 0.4f, 0.7f);
+        add(p, 1.0f);
+        add(p + (1.0f - p) * 0.5f, 0.92f);
+        add(1.0f, 0.8f);
+    }
+    else
+    {
+        add(p * 0.5f, 0.6f);
+        add(p * kPeakFrom, 1.0f);
+        add(fminf(p * kPeakTo, 0.95f), 1.0f);
+        add(1.0f, 0.8f);
+    }
+    return c;
+}
+
+// An engine's own profile (Gauges\engines\<name>.ini): the engine speed of its peak torque in rpm (0: none), how it
+// breathes, and a whole curve of its own where one is written (custom). own: its file holds any of them.
+struct EngineProfile
+{
+    bool own;
+    float peakRpm;
+    int aspiration;
+    bool custom;
+    TorqueCurve curve;
+};
+
+// The curve an engine pulls by: its own written one, else one from its peak torque's speed (redline: the red zone's
+// rpm), else the class's.
+inline TorqueCurve EngineCurveOf(const EngineProfile &p, const TorqueCurve &classCurve, float redline)
+{
+    if (p.custom && p.curve.n >= 2) return p.curve;
+    if (p.peakRpm > 0.0f && redline > 0.0f) return EngineCurveFromPeak(p.peakRpm / redline, p.aspiration == kAspNatural);
+    return classCurve;
+}
+
+// Where a curve first reaches its peak: the engine speed over the red zone's at which it has 0.98 of its most.
+inline float CurvePeak(const TorqueCurve &c)
+{
+    float most = 0.0f;
+    for (int i = 0; i < c.n; i++) most = fmaxf(most, c.y[i]);
+    for (int i = 0; i < c.n; i++)
+        if (c.y[i] >= most * 0.98f) return c.x[i];
+    return 1.0f;
+}
+
 // The pedal shaped by the curve, the way it is ramped. pedal: as the driver holds it, 0 to 1.
 inline float ThrottleShape(float pedal) { return powf(SettingsRange(pedal, 0.0f, 1.0f), kThrottleCurve); }
 
@@ -1158,12 +1218,18 @@ inline TorqueOrders TorqueHandStep(TorqueHand &h, bool want, uint64_t action, ui
     return o;
 }
 
-// With the mod's engine handed to the game (Powertrain=1) the shift points are a truck automatic's schedule: up at a
-// light foot early, floored at the red zone or where the next gear pulls more if that comes first (EngineUpShare: at
-// EngineShare 50 a scout's road gearbox at 0.86 to 0.87 of a gear's top, at 100 at 0.90 to 0.92), down well under
-// where the gear above lands, so no shift is taken back.
-static const float kEngineUpLight = 0.3f, kEngineUpFloored = 0.95f;     // up this far from idle to the red zone's speed: at a light foot, floored
-static const float kEngineDownLight = 0.1f, kEngineDownFloored = 0.3f;  // down below this, the same way
+// With the mod's engine handed to the game (Powertrain=1) the shift points are a truck automatic's schedule. Up: as far
+// from idle toward the floored point as the pedal is down (a fifth of the pedal, a fifth of the way: a scout's diesel
+// at about 1500 rpm, as the user's own car with a nine-speed automatic shifts), but not under kLightPeak of the
+// engine's peak torque speed, where it begins to pull; floored at the red zone, or where the next gear pulls more if
+// that comes first (EngineUpShare: at EngineShare 50 a scout's road gearbox at 0.86 to 0.87 of a gear's top, at 100 at
+// 0.90 to 0.92). Down: where the gear below would come in kEngineDownRoom under its own point up, so no shift is taken
+// back whatever the gearbox's steps, and not over idle's kEngineDownIdle (a diesel at 1000 rpm is fine).
+static const float kEngineUpFloored = 0.95f;   // floored, up this far from idle to the red zone's speed at the latest
+static const float kLightPeak = 0.8f;          // at a light foot, up no sooner than this share of the peak torque's speed
+static const float kEngineDownRoom = 1.15f, kEngineDownIdle = 1.15f;
+static const float kLockIdle = 1.3f;           // with the mod's engine the converter locks from this times idle up to kLockLight of the pedal,
+static const float kLockLight = 0.3f;          // and from there up to kLockFrom of the red zone floored: a light foot's shift up lands locked
 static const float kEngineKickTo = 0.85f;   // the kickdown goes to the lowest gear that keeps the engine under this,
 static const float kKickRoom = 0.92f;       // and under this share of the gear's floored point up, so it is not left again at once
 static const float kEngineLimit = 0.98f;    // past this the engine is on the limiter: up at once, but for kEngineGearHold
@@ -1222,13 +1288,14 @@ inline float GearDownShare(float r)
 
 // The mod's engine as the automatic's shift points go by it while it is handed to the game (Powertrain=1): its torque
 // curve, the tachometer's top over the red zone's (where the governor leaves nothing), how much of it the game gets
-// (EngineShare, 0 to 1), the engine's Torque over the truck's mass (0 where not known; GearboxStartGear), and the
-// seconds each gear is held going up (0: kEngineGearHold). on false: the game's own engine.
+// (EngineShare, 0 to 1), the engine's Torque over the truck's mass (0 where not known; GearboxStartGear), the
+// seconds each gear is held going up (0: kEngineGearHold), and the engine speed in rpm under which a light foot does
+// not shift up (kLightPeak of the peak torque's; 0: idle). on false: the game's own engine.
 struct EngineHand
 {
     bool on;
     const TorqueCurve *curve;
-    float top, share, launch, hold;
+    float top, share, launch, hold, least;
 };
 
 // What a gear pulls with the wheels at x of its top with the engine handed over, floored, the converter locked: the
@@ -1251,29 +1318,36 @@ inline float EngineUpShare(const EngineHand &e, float r)
 }
 
 // The gearbox's input speed a gear shifts up at, with feel the pedal the points go by: the light point at a light foot,
-// the floored one floored, and between them between. engine: the mod's engine is handed to the game, and the points
-// are the schedule's (kEngineUpLight to kEngineUpFloored), floored no later than where the next gear pulls more
-// (EngineUpShare); else the floored point is where the next gear pulls more in the game (GearUpShare).
+// the floored one floored, and between them between. engine: the mod's engine is handed to the game, and the point is
+// the schedule's: as far from idle toward the floored point (kEngineUpFloored, or where the next gear pulls more,
+// EngineUpShare) as the pedal is down, not under engine.least; else the floored point is where the next gear pulls
+// more in the game (GearUpShare).
 inline float GearboxUpPoint(const TruckRaw &t, const GaugeScale &k, int gear, float feel, const EngineHand &engine = EngineHand{})
 {
     const float low = TruckGearTop(t, gear), high = TruckGearTop(t, gear + 1);
     if (engine.on)
     {
-        const float soft = GearboxPoint(k, kEngineUpLight);
+        const float least = fmaxf(engine.least, k.idle);
         float hard = GearboxPoint(k, kEngineUpFloored);
-        if (engine.curve && low > 0.0f && high > 0.0f) hard = fmaxf(fminf(hard, EngineUpShare(engine, high / low) * k.redline), soft);
-        return soft + (hard - soft) * SettingsRange(feel, 0.0f, 1.0f);
+        if (engine.curve && low > 0.0f && high > 0.0f) hard = fminf(hard, EngineUpShare(engine, high / low) * k.redline);
+        hard = fmaxf(hard, least);
+        return fmaxf(k.idle + (hard - k.idle) * SettingsRange(feel, 0.0f, 1.0f), least);
     }
     const float light = GearboxPoint(k, kShiftUpLight);
     const float floored = low > 0.0f && high > 0.0f ? fmaxf(GearUpShare(high / low) * k.redline, light) : light;
     return light + (floored - light) * SettingsRange(feel, 0.0f, 1.0f);
 }
 
-// The gearbox's input speed a gear shifts down below, the same way (kEngineDownLight to kEngineDownFloored, or
-// GearDownShare).
+// The gearbox's input speed a gear shifts down below, the same way. engine: where the gear below would come in
+// kEngineDownRoom under its own point up at this pedal, and not under kEngineDownIdle times idle; else GearDownShare's.
 inline float GearboxDownPoint(const TruckRaw &t, const GaugeScale &k, int gear, float feel, const EngineHand &engine = EngineHand{})
 {
-    if (engine.on) return GearboxPoint(k, kEngineDownLight + (kEngineDownFloored - kEngineDownLight) * SettingsRange(feel, 0.0f, 1.0f));
+    if (engine.on)
+    {
+        const float below = TruckGearTop(t, gear - 1), here = TruckGearTop(t, gear);
+        if (gear < 2 || !(below > 0.0f) || !(here > 0.0f)) return 0.0f;
+        return fmaxf(GearboxUpPoint(t, k, gear - 1, feel, engine) * below / here / kEngineDownRoom, k.idle * kEngineDownIdle);
+    }
     const float light = GearboxPoint(k, kShiftDownLight), low = TruckGearTop(t, gear - 1), high = TruckGearTop(t, gear);
     const float floored = low > 0.0f && high > 0.0f ? fmaxf(GearDownShare(high / low) * k.redline, light) : light;
     return light + (floored - light) * SettingsRange(feel, 0.0f, 1.0f);
@@ -1291,7 +1365,7 @@ inline float GearboxDownPoint(const TruckRaw &t, const GaugeScale &k, int gear, 
 // zone, floored where the next gear or the one below pulls more in the game (GamePull), which gives the most with the
 // wheels at half the gear's top. With the foot off it never shifts up short of the red zone, and shifts down early,
 // gears at a time when the truck slows hard. With the engine handed to the game (Powertrain=1, engine) the points are
-// a truck automatic's schedule (kEngineUpLight and the rest): floored it revs to the red zone, at a light foot it
+// a truck automatic's schedule (kLightPeak and the rest): floored it revs to the red zone, at a light foot it
 // shifts early, down well under where the gear above lands, one gear up at a time and a second in each but on the
 // limiter, each gear held kEngineGearHold going up, and a kickdown to the lowest gear under kEngineKickTo; it sets off in the start gear (GearboxStartGear) and
 // takes the gears under it only stuck (kStuckShare). A truck slowing with the foot on is climbing: the points go where floored
@@ -1479,8 +1553,11 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     }
     // the converter: locked, or slipping up to the engine's speed against the gearbox's input
     m.input = GearboxInput(t, k, m.gear, m.spin);
-    if (!m.locked && m.gear >= 2 && m.pause <= 0.0f && m.input >= k.redline * kLockFrom) m.locked = true;
-    else if (m.locked && m.input < k.redline * kUnlockBelow) m.locked = false;
+    // with the mod's engine it locks lower at a light foot, as a road automatic does (kLockIdle), floored where it did
+    const float lockAt = engine ? k.idle * kLockIdle + (k.redline * kLockFrom - k.idle * kLockIdle) * SettingsRange((m.feel - kLockLight) / (1.0f - kLockLight), 0.0f, 1.0f)
+                                : k.redline * kLockFrom;
+    if (!m.locked && m.gear >= 2 && m.pause <= 0.0f && m.input >= lockAt) m.locked = true;
+    else if (m.locked && m.input < lockAt * (kUnlockBelow / kLockFrom)) m.locked = false;
     const float stall = k.idle + (ConverterStall(k) - k.idle) * pedalNow;
     m.rpm = m.locked ? fmaxf(m.input, k.idle) : fmaxf(fmaxf(m.input * (1.0f + kConverterSlip), stall), k.idle);
     const float speedRatio = m.rpm > 0.0f ? m.input / m.rpm : 1.0f;
