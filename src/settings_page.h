@@ -13,10 +13,11 @@ struct PageState
     unsigned long long began = 0; // GetTickCount64 when the capture began (it gives up after kPageCaptureMs)
     unsigned long long last = 0;  // GetTickCount64 of the last frame the tab was drawn
     float mapAmbientC = 0.0f;     // the outside temperature the slider set for the map's section in force (kPageMapAmbient)
+    float gearHold = 0.0f;        // the seconds the slider set for the driven truck's gearbox (kPageGearHold)
 };
 static const unsigned long long kPageCaptureMs = 8000;
 enum { kPageChanged = 1, kPageReload = 2, kPageTruckDrop = 4, kPageDefaults = 8, kPageHearHigh = 16, kPageHearMid = 32, kPageHearLow = 64, kPageHearOil = 128,
-       kPagePullTest = 256, kPagePullCancel = 512, kPageMapAmbient = 1024 };
+       kPagePullTest = 256, kPagePullCancel = 512, kPageMapAmbient = 1024, kPageGearHold = 2048 };
 
 // The Dear ImGui key as a virtual key, for the keys the toggle key can be; 0 for others.
 static int PageVirtualKey(int k)
@@ -441,6 +442,22 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         changed(ImGui::SliderInt("##engineshare", &s.engineShare, 0, 100, "%d %%", ImGuiSliderFlags_AlwaysClamp));
         PageTip("How much of the mod's engine the game gets: 0 leaves the game's own pull, 100 hands it all of the mod's engine, and between the "
                 "two the truck pulls between them. Lower it where a truck pulls too hard.");
+        // the driven truck's gearbox: how long each gear is held going up, kept for that gearbox
+        if (view.gearbox[0] && s.gearbox == kGearboxModel)
+        {
+            float hold = view.gearHold;
+            PageLabel("Each gear going up", labelX);
+            ImGui::SetNextItemWidth(w);
+            if (ImGui::SliderFloat("##gearhold", &hold, kGearHoldRange[0], kGearHoldRange[1], "%.1f s", ImGuiSliderFlags_AlwaysClamp))
+            {
+                st.gearHold = floorf(hold * 10.0f + 0.5f) / 10.0f;
+                act |= kPageGearHold;
+            }
+            char gearTip[256];
+            sprintf_s(gearTip, "Going up through the gears the mod's automatic holds each gear at least this long, on the limiter if it comes to that. "
+                               "Kept for this gearbox (%s)%s.", view.gearbox, view.gearHoldOwn ? "" : "; until it is moved, the truck class's: a scout 1.5 s, the others 2.5 s");
+            PageTip(gearTip);
+        }
     }
     PageLabel("Pull test", labelX);
     const bool pullOn = view.pullTest == kViewPullArmed || view.pullTest == kViewPullRunning;

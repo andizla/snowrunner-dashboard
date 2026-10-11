@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#define GAUGES_VERSION "0.13.8"
+#define GAUGES_VERSION "0.13.9"
 
 // The exe the addresses in this mod are from (SnowRunner on Steam, the build of 22 July 2026). On any other the mod
 // stands down.
@@ -131,7 +131,7 @@ static const float kFaceOpacityMax = 0.85f, kScaleMin = 0.4f, kScaleMax = 3.0f, 
 static const float kIdleRange[2] = { 300.0f, 3000.0f }, kRedlineRange[2] = { 1000.0f, 12000.0f }, kMaxRpmRange[2] = { 1500.0f, 15000.0f },
                    kSpeedMaxRange[2] = { 40.0f, 300.0f }, kTiltRange[2] = { 1.0f, 89.0f }, kBoostRange[2] = { 0.3f, 2.0f };
 static const float kWarmUpRange[2] = { 0.5f, 60.0f }, kOverheatRange[2] = { 0.25f, 60.0f }, kCoolDownRange[2] = { 1.0f, 240.0f },
-                   kAmbientRange[2] = { -40.0f, 50.0f }, kAirFullRange[2] = { 10.0f, 80.0f }, kDamageRange[2] = { 0.0f, 100.0f },
+                   kAmbientRange[2] = { -40.0f, 50.0f }, kGearHoldRange[2] = { 1.0f, 3.0f }, kAirFullRange[2] = { 10.0f, 80.0f }, kDamageRange[2] = { 0.0f, 100.0f },
                    kOilWarmUpRange[2] = { 1.0f, 60.0f }, kOilWarnRange[2] = { 100.0f, 150.0f };
 
 // The temperatures in C the coolant's three times are measured between: WarmUpMinutes from kTempOutside outside up
@@ -254,7 +254,8 @@ enum { kSoundOil = kTurboTiers, kSoundTierCount };
 enum { kViewPullOff, kViewPullArmed, kViewPullRunning, kViewPullDone, kViewPullStopped };
 struct GaugeView { bool show, demo; int hidden; GaugeState st; int engineDamage, engineCapacity; char truck[96]; bool truckOwn; char map[96], mapFrom[64]; bool mapOwn; float ambientC;
                    int pullTest, pullPhase; const char *pullWhy;
-                   float ambientDay, ambientNight, hour; }; // the map's day and night (with mapOwn), the hour of the game's day (-1 not known)
+                   float ambientDay, ambientNight, hour; // the map's day and night (with mapOwn), the hour of the game's day (-1 not known)
+                   char gearbox[96]; float gearHold; bool gearHoldOwn; }; // the driven truck's gearbox (its key, "" for none), the seconds each gear is held going up with the mod's engine, and whether [Gearbox:<key>] sets them
 
 LONG SettingsGet(GaugeSettings &out);       // the settings in force (any thread); returns their turn, for SettingsPut
 void SettingsPut(const GaugeSettings &in, LONG turn); // settings edited from those of a turn: the mod takes them at once and saves the ini a
@@ -264,6 +265,7 @@ void SettingsTruckDrop();                   // the tab's button: the driven truc
 void SettingsReset();                       // the tab's button: every setting back to its default, the driven truck's own scales too
 void PullTestAsk(bool run);                  // the tab's button: arm the pull test, or cancel it
 void MapAmbientSet(float c);                 // the tab's slider: the outside temperature of the map's section in force
+void GearHoldSet(float seconds);            // the tab's slider: the seconds each gear of the driven truck's gearbox is held going up
 void DamageTestAsk(int points);             // the tab's test buttons: the mod adds this much to the driven truck's engine damage on its next pass
 void ViewGet(GaugeView &out);               // what to draw (any thread)
 void SoundHear(int tier);                   // plays the turbo's sound of that strength (kTurboHigh ..) or the oil warning (kSoundOil) as loud as the settings have it (the tab's buttons)

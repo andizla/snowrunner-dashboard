@@ -468,6 +468,19 @@ int main()
         Check(figures.found && figures.torque == 195000.0f && Near(figures.deltaAngVel, 0.04f) && figures.consumption == 2.0f && Near(figures.responsiveness, 0.35f) &&
                   odd.found && odd.torque == 0.0f && odd.capacity == figures.capacity,
               "engine: the figures of its file read from its record, a torque no engine has read as none and the record kept");
+        // the gearbox: its name, the first text from + 0x900 that begins with "g_" and is a name, else its gears
+        char gearboxName[kMaxText], gearboxKey[96], gearsKey[96];
+        uint32_t gearboxAt = 0;
+        const bool noName = !TruckGearboxName(kMemory, kVehicle, gearboxName, gearboxAt);
+        PutText(kVehicle + 0xA00, "g_ab cd", 0);                   // a text with a space: no name
+        PutText(kVehicle + 0xA28, "g_scout_highway_long", kTexts + 0x380);
+        const bool named = TruckGearboxName(kMemory, kVehicle, gearboxName, gearboxAt) && !strcmp(gearboxName, "g_scout_highway_long") && gearboxAt == 0xA28;
+        TruckRaw gearsOnly = {};
+        TruckRead(kMemory, r, gearsOnly);
+        GearboxKey(gearsOnly, gearboxName, gearboxKey, sizeof gearboxKey);
+        GearboxKey(gearsOnly, "", gearsKey, sizeof gearsKey);
+        Check(noName && named && !strcmp(gearboxKey, "g_scout_highway_long") && !strcmp(gearsKey, "gears 3 6 12 16 high 8"),
+              "gearbox: its name read from the vehicle, a text that is no name passed over; without a name it goes by its gears");
         Put(kModel + 0x784, 9007.0f);
         const float massRead = TruckMass(kMemory, kModel);
         Put(kModel + 0x784, 5.0f);

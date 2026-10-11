@@ -745,6 +745,13 @@ after shifts up: the scout 2 to 3 s a gear mostly, at 0.89 to 0.95 of the top (5
 1.02); the Fleetstar 2 to 3 s at 0.94 to 0.98; the heavy one 2 to 3 s at 0.86 to 1.10. 0.13.8: `EngineHand::hold` by the
 tachometer's class, `kEngineGearHoldScout` 1.5 s for scouts, 2.5 for the others (the mass cannot tell them: 9007 kg
 for the scout, 6314 for the Fleetstar). Models 145 OK.
+The user: "a slider for it, 1 s to 3 s, per gearbox". 0.13.9: `[Gearbox:<key>] GearHold` (`kGearHoldRange` 1 to 3), the
+tab's slider "Each gear going up" (`GearHoldSet`, as the map's temperature slider), the class's default without it.
+The key: the gearbox's name in the game's files ("g_" and the rest, as the scout's pak names its four), looked for among the texts of
+the vehicle from + 0x900 to + 0xC00 (the engine's is at + 0x968), the first that begins with "g_" and is a name
+(`TruckGearboxName`); its place unknown till the user's log says it ("its name at vehicle + 0x..."), then it can be
+read there alone. Without a name, by the gears' speeds ("gears 1.5 4 7 11 19 30 high 20"). Looked up for each truck
+and when its gears change (another gearbox fitted in the garage). Truck 81, settings 36 (71 help lines) OK.
 
 Part A, research and design note (no hook before the user's OK on the note):
 - Where the game turns the pedal into torque and how the automatic decides a shift: the truck action's per-frame

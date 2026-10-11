@@ -48,6 +48,7 @@ static LONG g_setTurn = 0;
 static volatile LONG g_setDirty = 0, g_reloadAsked = 0, g_truckDropAsked = 0, g_resetAsked = 0;
 static volatile LONG g_pullTestAsked = 0; // 1 arm the pull test, 2 cancel it
 static volatile LONG g_mapAmbientAsked = 0, g_mapAmbientTenths = 0; // the tab set the map's outside temperature, in tenths of a degree C
+static volatile LONG g_gearHoldAsked = 0, g_gearHoldTenths = 0;     // the tab set the driven gearbox's hold, in tenths of a second
 
 // What the cluster shows, written by the mod's thread and read by the render thread.
 static SRWLOCK g_viewLock = SRWLOCK_INIT;
@@ -440,6 +441,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; shows, less with cold oil and without boost, and doubled by the converter at its stall (Gearbox=1), in place\n"
                         L"; of the game's own, which falls away toward each gear's top. The mod writes the game's torque factor for it.\n"
                         L"; EngineShare: how much of the mod's engine the game gets, 0 to 100 percent (50: half way between the two).\n"
+                        L"; [Gearbox:<name>] GearHold: seconds a gearbox holds each gear going up with Powertrain=1, 1 to 3 (the tab's slider).\n"
                         L"; For work on the mod: Demo=1 draws demo values whenever no truck is driven, Probe=1 logs the values read from the game.\n");
             fclose(f);
             WriteIni(s);
@@ -541,6 +543,36 @@ void MapAmbientSet(float c)
 {
     InterlockedExchange(&g_mapAmbientTenths, (LONG)lroundf(c * 10.0f));
     InterlockedExchange(&g_mapAmbientAsked, 1);
+}
+
+void GearHoldSet(float seconds)
+{
+    InterlockedExchange(&g_gearHoldTenths, (LONG)lroundf(seconds * 10.0f));
+    InterlockedExchange(&g_gearHoldAsked, 1);
+}
+
+// ---- a gearbox's own hold: the section [Gearbox:<key>] of Gauges.ini ----
+// GearHold: the seconds each gear of that gearbox is held going up with the mod's engine (kGearHoldRange); without
+// it the truck's class has it (kEngineGearHold, kEngineGearHoldScout). The key is GearboxKey's: the gearbox's name in
+// the game's files, or its gears' speeds where the name is not read.
+static std::wstring GearboxSection(const char *key) { return L"Gearbox:" + Wide(key); }
+
+// The gearbox's own hold, into hold; false where its section has none.
+static bool GearHoldRead(const char *key, float &hold)
+{
+    wchar_t buf[16] = {};
+    if (!key[0] || GetPrivateProfileStringW(GearboxSection(key).c_str(), L"GearHold", L"", buf, 16, IniPath().c_str()) == 0) return false;
+    const float v = (float)_wtof(buf);
+    if (!isfinite(v) || v <= 0.0f) return false;
+    hold = SettingsRange(v, kGearHoldRange[0], kGearHoldRange[1]);
+    return true;
+}
+
+static void GearHoldWrite(const char *key, float hold)
+{
+    wchar_t buf[16];
+    swprintf_s(buf, L"%.1f", hold);
+    WritePrivateProfileStringW(GearboxSection(key).c_str(), L"GearHold", buf, IniPath().c_str());
 }
 
 // ---- a truck's own scales: the section [Truck:<key>] of Gauges.ini ----
@@ -1132,6 +1164,12 @@ struct TruckWatch
     EngineRecord engine;        // the record of the engine of the truck at engineVehicle
     float mass;                 // that truck's mass in kg by its files (TruckMass), 0 where not read
     uint64_t engineVehicle;
+    char gearboxKey[96];        // the gearbox of the truck at gearboxVehicle: its key (GearboxKey), "" before one is known
+    bool gearHoldOwn;           // [Gearbox:<key>] holds GearHold, which is gearHold; else the truck's class has it
+    float gearHold;
+    uint64_t gearboxVehicle;
+    int gearSpeeds;             // that gearbox's speeds as last read: another set means another gearbox (the garage)
+    float gearSpeed[kMaxGears];
     ULONGLONG engineAt;         // when a record that was not found is looked for again
     int owed, asked;            // whole points of engine damage that wait to be written: the model's, and the tab's test buttons'
     int cause;                  // what the model's points came from: 1 the heat, 2 a cold engine worked hard
@@ -1150,6 +1188,33 @@ struct TruckWatch
 static bool SmtManual(const TruckWatch &w, const TruckRaw &raw)
 {
     return w.smt.driving && w.smt.vehicle == w.refs.vehicle && !raw.automatic && !w.take.driving;
+}
+
+// The seconds each gear is held going up with the mod's engine: the gearbox's own, else its class's.
+static float GearHoldOf(const TruckWatch &w, int tachClass)
+{
+    return w.gearHoldOwn ? w.gearHold : tachClass == kClassScout ? kEngineGearHoldScout : kEngineGearHold;
+}
+
+// Finds the driven truck's gearbox (its name, or its gears where the name is not read) and its own hold, and says so
+// in the log when it is another than before.
+static void GearboxLook(TruckWatch &w, const TruckMemory &m, const TruckRaw &raw, int tachClass)
+{
+    char name[kMaxText];
+    uint32_t at = 0;
+    const bool named = TruckGearboxName(m, w.refs.vehicle, name, at);
+    char key[96];
+    GearboxKey(raw, named ? name : "", key, sizeof key);
+    w.gearboxVehicle = w.refs.vehicle;
+    w.gearSpeeds = raw.gearSpeeds;
+    memcpy(w.gearSpeed, raw.gearSpeed, sizeof w.gearSpeed);
+    if (!strcmp(key, w.gearboxKey)) return;
+    strcpy_s(w.gearboxKey, key);
+    w.gearHoldOwn = GearHoldRead(key, w.gearHold);
+    if (named) Log(L"gearbox: %S (its name at vehicle + 0x%x); each gear held going up %.1f s, %s", key, at, GearHoldOf(w, tachClass),
+                   w.gearHoldOwn ? L"its own ([Gearbox:...] GearHold)" : L"the truck class's");
+    else Log(L"gearbox: its name not read, so it goes by its gears (%S); each gear held going up %.1f s, %s", key, GearHoldOf(w, tachClass),
+             w.gearHoldOwn ? L"its own ([Gearbox:...] GearHold)" : L"the truck class's");
 }
 
 // Looks up the record of the driven truck's engine, and says so in the log when it is another one than before. With
@@ -1370,7 +1435,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             // game's own pull
             const float launch = w.engine.torque > 0.0f && w.mass > 0.0f && w.engineVehicle == w.refs.vehicle ? w.engine.torque / w.mass : 0.0f;
             const EngineHand hand{ w.hand.on, &kClassCurves[s.tachClass], scale.redline > 0.0f ? scale.max / scale.redline : 1.0f, s.engineShare / 100.0f, launch,
-                                   s.tachClass == kClassScout ? kEngineGearHoldScout : kEngineGearHold };
+                                   GearHoldOf(w, s.tachClass) };
             GearboxStep(w.gearbox, raw, scale, foot, w.power.power, dt, hand);
             w.clutch = ClutchModel{};
         }
@@ -1470,6 +1535,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         // the engine's record, for each truck as it is first driven; one that was not found is looked for again every
         // five seconds
         if (w.refs.vehicle != w.engineVehicle || (!w.engine.found && now >= w.engineAt)) EngineLook(w, m, now, s.probe != 0);
+        // the gearbox: for each truck as it is first driven, and again when its gears change (another fitted in the garage)
+        if (w.refs.vehicle != w.gearboxVehicle || raw.gearSpeeds != w.gearSpeeds || memcmp(raw.gearSpeed, w.gearSpeed, sizeof w.gearSpeed))
+            GearboxLook(w, m, raw, s.tachClass);
         // what the temperature costs the engine: the whole points wait in owed until they are written. Nothing comes
         // together while the game's window is not in front, as the game may stand still then with its last values.
         const int points = DamageStep(w.damage, w.refs.vehicle, raw, w.temp, TachSpeed(w.tach, scale), s, front ? dt : 0.0f);
@@ -1665,6 +1733,7 @@ static DWORD WINAPI Run(void *)
     }
     bool mapOwn = false, mapAsk = true, saveSeen = true;
     ULONGLONG mapAmbientLogAt = 0; // when to log the temperature the tab set, once the slider has rested
+    ULONGLONG gearHoldLogAt = 0;   // and the gearbox's hold
     std::wstring savePath;
     FILETIME saveWritten = {};
     ULONGLONG saveLookAt = 0;
@@ -1797,6 +1866,22 @@ static DWORD WINAPI Run(void *)
                 mapAmbientLogAt = GetTickCount64() + 1000;
             }
         }
+        if (InterlockedExchange(&g_gearHoldAsked, 0) && watch.gearboxKey[0])
+        {
+            const float hold = SettingsRange(g_gearHoldTenths / 10.0f, kGearHoldRange[0], kGearHoldRange[1]);
+            if (!watch.gearHoldOwn || fabsf(hold - watch.gearHold) >= 0.05f)
+            {
+                watch.gearHold = hold;
+                watch.gearHoldOwn = true;
+                GearHoldWrite(watch.gearboxKey, hold);
+                gearHoldLogAt = GetTickCount64() + 1000;
+            }
+        }
+        if (gearHoldLogAt && GetTickCount64() >= gearHoldLogAt)
+        {
+            Log(L"gearbox: [Gearbox:%S] set from the tab: each gear held %.1f s going up", watch.gearboxKey, watch.gearHold);
+            gearHoldLogAt = 0;
+        }
         if (mapAmbientLogAt && GetTickCount64() >= mapAmbientLogAt)
         {
             if (mapAir.dayNight) Log(L"map: [Map:%S] set from the tab to %g C by day and %g C by night", mapFrom, mapAir.day, mapAir.night);
@@ -1912,6 +1997,9 @@ static DWORD WINAPI Run(void *)
         v.ambientDay = mapAir.day;
         v.ambientNight = mapAir.night;
         v.hour = hour;
+        strcpy_s(v.gearbox, driving ? watch.gearboxKey : "");
+        v.gearHold = GearHoldOf(watch, inForce.tachClass);
+        v.gearHoldOwn = watch.gearHoldOwn;
         v.pullTest = watch.pullTest.state;
         v.pullPhase = watch.pullTest.phase;
         v.pullWhy = watch.pullTest.why;
@@ -2135,7 +2223,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 70, "ini: the help text survives a write (70 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 71, "ini: the help text survives a write (71 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());

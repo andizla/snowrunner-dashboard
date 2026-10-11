@@ -519,6 +519,50 @@ inline bool TruckEngineRecord(const TruckMemory &m, uint64_t vehicle, EngineReco
     return false;
 }
 
+// The name of the gearbox fitted, as the game's files name it ("g_" and more, as "g_scout_highway"): a text the game
+// holds in the vehicle, as it holds the engine's at + 0x968. Its place is not known yet: the texts from + 0x900 to
+// + 0xC00 are looked through for the first that begins with "g_" and is a name (letters, digits and "_"). at: where
+// it stood, from the vehicle, for the log. False where none is.
+static const uint32_t kGearboxNameFrom = 0x900, kGearboxNameTo = 0xC00;
+inline bool TruckGearboxName(const TruckMemory &m, uint64_t vehicle, char (&out)[kMaxText], uint32_t &at)
+{
+    out[0] = 0;
+    at = 0;
+    if (!vehicle) return false;
+    for (uint32_t o = kGearboxNameFrom; o + 0x20 <= kGearboxNameTo; o += 8)
+    {
+        char text[kMaxText];
+        size_t length = 0;
+        if (!TruckText(m, vehicle + o, text, length) || length < 3 || text[0] != 'g' || text[1] != '_') continue;
+        bool name = true;
+        for (size_t i = 0; i < length && name; i++)
+        {
+            const char c = text[i];
+            name = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+        }
+        if (!name) continue;
+        memcpy(out, text, length + 1);
+        at = o;
+        return true;
+    }
+    return false;
+}
+
+// The gearbox's key for what the mod keeps for it ([Gearbox:<key>] in Gauges.ini): its name where it was read, else
+// its gears' speeds as the game holds them, the gears and the high gear ("gears 1.5 4 7 11 19 30 high 20").
+inline void GearboxKey(const TruckRaw &t, const char *name, char *out, size_t size)
+{
+    if (name && name[0])
+    {
+        strncpy_s(out, size, name, _TRUNCATE);
+        return;
+    }
+    size_t n = (size_t)snprintf(out, size, "gears");
+    const int top = TruckTopGear(t);
+    for (int g = 1; g <= top && n + 12 < size; g++) n += (size_t)snprintf(out + n, size - n, " %g", t.gearSpeed[g]);
+    if (top >= 1 && n + 16 < size) snprintf(out + n, size - n, " high %g", t.gearSpeed[top + 1]);
+}
+
 // The truck's mass in kg as its files give it (the bodies of its chassis, without addons, cargo or a trailer): a float
 // at model + 0x784, found by the probe's scan of five trucks against their files (a scout's 9007 where its bodies weigh
 // 9001, a pickup's 2212, others of 5507, 6314 and 8100). 0 where it is no likely mass.

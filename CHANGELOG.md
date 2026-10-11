@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.13.9] 2026-10-11
+
+- How long each gear is held going up can be set for each gearbox: the tab's slider "Each gear going up" (Gearbox section, with the mod's automatic and the engine handed over), from 1 to 3 seconds. It is kept in Gauges.ini under `[Gearbox:<name>]` as `GearHold`, and every truck with that gearbox fitted takes it; without it the truck's class has it (1.5 seconds for a scout, 2.5 for the others). The mod reads the gearbox's name from the truck as the game's files give it ("g_" and the rest); where it cannot, the gearbox goes by its gears' speeds. The log says which gearbox is fitted and where its name was found.
+
 ## [0.13.8] 2026-10-11
 
 - A scout holds each gear one and a half seconds going up, where trucks and heavy trucks keep two and a half. The scout of the drives, a light 4x4, sat in its gears slightly too long for its kind; the big trucks were right. The class is the one set for the truck on the tab (its scales). The game's files put that scout at 9007 kg and the Fleetstar at 6314, so the mass could not tell them apart.

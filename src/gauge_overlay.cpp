@@ -197,6 +197,7 @@ static void OnSettingsTab(reshade::api::effect_runtime *)
     if (act & kPagePullTest) PullTestAsk(true);
     if (act & kPagePullCancel) PullTestAsk(false);
     if (act & kPageMapAmbient) MapAmbientSet(st.mapAmbientC);
+    if (act & kPageGearHold) GearHoldSet(st.gearHold);
     if (act & kPageDefaults) SettingsReset();
     if (act & kPageReload) SettingsReload();
     if (act & kPageHearHigh) SoundHear(kTurboHigh);
