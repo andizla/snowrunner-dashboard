@@ -468,6 +468,11 @@ int main()
         Check(figures.found && figures.torque == 195000.0f && Near(figures.deltaAngVel, 0.04f) && figures.consumption == 2.0f && Near(figures.responsiveness, 0.35f) &&
                   odd.found && odd.torque == 0.0f && odd.capacity == figures.capacity,
               "engine: the figures of its file read from its record, a torque no engine has read as none and the record kept");
+        Put(kModel + 0x784, 9007.0f);
+        const float massRead = TruckMass(kMemory, kModel);
+        Put(kModel + 0x784, 5.0f);
+        Check(massRead == 9007.0f && TruckMass(kMemory, kModel) == 0.0f && TruckMass(kMemory, 0) == 0.0f,
+              "truck: its mass read from its model, a number no truck weighs read as none");
         Put(dumped.at + 0x10, 195000.0f);
         Put(dumped.at + 0x14, 0.35f);
         Put(dumped.at + 0x18, (uint32_t)0x12345678u);

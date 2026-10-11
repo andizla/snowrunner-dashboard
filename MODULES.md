@@ -690,6 +690,21 @@ the next gear pulls kShiftPullGain more (on the road gearbox: 0.86 to 0.87 at 50
 at 0). kEngineDownFloored 0.4 to 0.3: the landings at 50 (2597 to 2935 rpm at a red zone of 4850) stand clear of
 the down point by kShiftRoom (2216; at 0.4 it was 2662, over two of them). The second truck of the drive was the
 same kind (a second of it): the model's + 0x784 again 9007, no new word on the mass. Models 144, truck 79 OK.
+Harvest 3 (12:12, 0.13.4): all nine found where they are; the harvest's own pick for the input is the object at
+0x2a8eba0 (0x40 before it), nearer than control's (0x80); 0.13.5 takes it. The drive of 12:14 to 12:42 (0.13.4,
+EngineShare 100 throughout): five trucks, the mass at model + 0x784 against their files: the scout of the drives
+9007, a smaller one of its kind 5507, a ten-speed heavy one 8100, the Chevrolet CK1500 2212, the Fleetstar 6314.2;
+their engines' Torque 195000, 90000, 300000, 35000, 135000. Torque over mass over the start gear's top: 1.67 (second,
+13 rad/s), 1.26 (second), 4.7, 1.44, 2.67 (first each). `kStartPull` 1.2: the scout with its engine of 100000 (0.85
+in second) sets off in the first (1.39), as the user expected. Found: 12:16:41, pedal 0.15 (shaped 0.03), the truck
+slowing at 0.6 rad/s each second, "climbing", floored points, 5 to 4 at 1580 rpm: labour now needs `kClimbPedal`
+0.4. Kickdowns landing at 0.83 to 0.85 of the gear's top and up again within 1 to 2 s (the scout at 12:17:19 and 25,
+the heavy one 7 to 4 then 4 to 5 at 12:23:49): `kickable` takes a gear under `kKickRoom` 0.92 of its floored point up
+(at 50 the point is 0.86, under the old kick limit of 0.875). 12:14:23: the scout stuck in second took the first, the
+grip not learned yet, the lift went by the wheels spinning past first's top: factor 3.00; `LiftShare` holds x to
+`kLiftBlind` 0.5 until the grip is known. Launches that failed (the Fleetstar 8 to 9 s in first, rear wheels at
+first's top, all wheel drive off, 0.1 m/s): mud; the factor there 0.81 to 0.84, the engine at 5000 rpm by the
+spinning wheels (curve 0.9) and cold (x0.91): the engine as a real one, left as it is. Models 145, truck 80 OK.
 
 Part A, research and design note (no hook before the user's OK on the note):
 - Where the game turns the pedal into torque and how the automatic decides a shift: the truck action's per-frame

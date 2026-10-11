@@ -1130,6 +1130,7 @@ struct TruckWatch
     int probedZone;             // where the coolant stood when the probe wrote last (TempZone)
     DamageModel damage;         // what the temperature costs the engine of the truck at modelVehicle
     EngineRecord engine;        // the record of the engine of the truck at engineVehicle
+    float mass;                 // that truck's mass in kg by its files (TruckMass), 0 where not read
     uint64_t engineVehicle;
     ULONGLONG engineAt;         // when a record that was not found is looked for again
     int owed, asked;            // whole points of engine damage that wait to be written: the model's, and the tab's test buttons'
@@ -1158,6 +1159,10 @@ static void EngineLook(TruckWatch &w, const TruckMemory &m, ULONGLONG now, bool 
 {
     EngineRecord e;
     TruckEngineRecord(m, w.refs.vehicle, e);
+    const float mass = TruckMass(m, w.refs.model);
+    if (w.refs.vehicle != w.engineVehicle || mass != w.mass)
+        Log(mass > 0.0f ? L"truck: it weighs %.0f kg by its files (without addons, cargo or a trailer)" : L"truck: its mass by its files was not read (%.0f)", mass);
+    w.mass = mass;
     if (w.refs.vehicle != w.engineVehicle || e.found != w.engine.found || strcmp(e.name, w.engine.name) || e.capacity != w.engine.capacity ||
         e.threshold != w.engine.threshold || e.torqueMin != w.engine.torqueMin || e.torqueMax != w.engine.torqueMax || e.torque != w.engine.torque)
     {
@@ -1363,7 +1368,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         {
             // the shift points a truck automatic's schedule while the mod's engine is handed to the game, else by the
             // game's own pull
-            const EngineHand hand{ w.hand.on, &kClassCurves[s.tachClass], scale.redline > 0.0f ? scale.max / scale.redline : 1.0f, s.engineShare / 100.0f };
+            const float launch = w.engine.torque > 0.0f && w.mass > 0.0f && w.engineVehicle == w.refs.vehicle ? w.engine.torque / w.mass : 0.0f;
+            const EngineHand hand{ w.hand.on, &kClassCurves[s.tachClass], scale.redline > 0.0f ? scale.max / scale.redline : 1.0f, s.engineShare / 100.0f, launch };
             GearboxStep(w.gearbox, raw, scale, foot, w.power.power, dt, hand);
             w.clutch = ClutchModel{};
         }
@@ -1427,9 +1433,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             const bool pullBusy = w.pullTest.state == kPullArmed || w.pullTest.state == kPullRunning || pull.ended;
             const bool want = s.powertrain && TruckEngineOn(raw) && !pullBusy;
             // the wheels' share of the gear's top by the truck's speed over the ground, once the wheels' grip is known
-            const float spin = TruckDrivenSpin(raw), ground = isfinite(raw.speed) && raw.speed > 0.0f ? raw.speed : 0.0f;
-            const float wheels = w.gearbox.grip > 0.0f ? fminf(spin, w.gearbox.grip * ground * kSlipUp) : spin;
-            const float gearTop = TruckGearTop(raw, raw.gearEngaged), x = gearTop > 0.0f ? wheels / gearTop : 0.0f;
+            // (LiftShare: before the grip is known, no more than kLiftBlind)
+            const float ground = isfinite(raw.speed) && raw.speed > 0.0f ? raw.speed : 0.0f;
+            const float x = LiftShare(TruckDrivenSpin(raw), ground, w.gearbox.grip, TruckGearTop(raw, raw.gearEngaged));
             const float ratio = w.take.driving ? w.gearbox.ratio : 1.0f;
             const bool handWas = w.hand.on;
             const float gameWas = w.hand.game;

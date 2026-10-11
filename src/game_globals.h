@@ -42,17 +42,17 @@ struct GlobalSig
     const char *pattern;
     int at, after, into;
 };
-// Harvested from the Steam build of 22 July 2026 (harvest 2; the end marked by a global of -1). Control and the map
-// are fields of two static objects that small functions hand out by their start (control 0x18 into the one at
-// 0x2a8eb60, the map 0x20 into the one at 0x2a8eb10); the game and the input are fields of the first (0x30 and 0x80
-// into it), the viewer and the clock of the second (0x28 and 0x38), and are found by the same signatures.
+// Harvested from the Steam build of 22 July 2026 (harvest 3, each checked there; the end marked by a global of -1).
+// Control, the game, the map, the viewer, the input and the clock are fields of static objects that small functions
+// hand out by their start: control and the game 0x18 and 0x30 into the one at 0x2a8eb60, the map, the viewer and the
+// clock 0x20, 0x28 and 0x38 into the one at 0x2a8eb10, the input 0x40 into the one at 0x2a8eba0.
 static const char *const kSigControlObject = "? ? ? ? C3 CC CC CC CC CC CC CC CC 48 8D 05 ? ? ? ? C3 CC CC CC CC CC CC CC CC 40 53 48 83 EC 60 48";
 static const char *const kSigMapObject = "? ? ? ? C3 CC CC CC CC CC CC CC CC 48 8D 05 ? ? ? ? C3 CC CC CC CC CC CC CC CC 48 8D 05 ? ? ? ? C3 CC CC CC CC CC CC CC "
                                          "CC 48 8D 05 ? ? ? ? C3 CC CC CC CC CC CC CC CC 40 53 48 83 EC 60 48";
 static const GlobalSig kGlobalSigs[] = {
     { kGlobControl, kSigControlObject, 16, 0, -0x18 },
     { kGlobGame, kSigControlObject, 16, 0, -0x30 },
-    { kGlobInput, kSigControlObject, 16, 0, -0x80 },
+    { kGlobInput, "5B C3 CC CC CC CC CC 48 8D 05 ? ? ? ? C3 CC CC CC CC CC CC CC CC 48", 10, 0, -0x40 },
     { kGlobMap, kSigMapObject, 32, 0, -0x20 },
     { kGlobViewer, kSigMapObject, 32, 0, -0x28 },
     { kGlobClock, kSigMapObject, 32, 0, -0x38 },

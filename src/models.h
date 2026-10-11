@@ -998,7 +998,8 @@ static const float kFootOff = 0.05f;         // a pedal under this is the foot o
 static const float kFootGap = 0.3f;          // seconds a pedal has to stay down from where it was before the drop counts: the game cuts the
                                              // throttle for a moment at each shift, and now and then besides, which is no lift
 static const float kKickArm = 0.3f;          // seconds the pedal has to be short of kKickdown before a push past it kicks down
-static const float kLabouring = 0.35f;       // rad/s each second the truck loses with the foot on, for kLabourAfter: a climb
+static const float kLabouring = 0.35f;       // rad/s each second the truck loses with the foot at kClimbPedal or more, for kLabourAfter: a climb
+static const float kClimbPedal = 0.4f;       // a lighter foot that loses speed is no climb: the engine gives a fifth of its torque or less
 static const float kLabourAfter = 0.5f;
 static const float kClimbHold = 4.0f;        // seconds the shift points stay where floored puts them after a climb
 static const float kGripSpeed = 2.5f;        // m/s the truck goes at the least for the wheels' speed against the ground's to be learned
@@ -1088,6 +1089,17 @@ static const float kTorqueFactorMost = 3.0f;    // the factor written at the mos
 static const float kTorqueFactorLeast = 0.05f;  // and at the least
 static const float kTorqueFactorStep = 0.005f;  // a change of the factor smaller than this is not written
 
+// The wheels' share of the gear's top the lift goes by: by the truck's speed over the ground once the wheels' grip is
+// known (the wheels at most kSlipUp over it: wheels spinning in mud keep the game's fall), and before that no more than
+// kLiftBlind, where the game's curve has not begun to fall: wheels spun up from a standstill get no lift for it.
+static const float kLiftBlind = 0.5f;
+inline float LiftShare(float spin, float ground, float grip, float top)
+{
+    if (!(top > 0.0f) || !isfinite(spin)) return 0.0f;
+    const float wheels = grip > 0.0f ? fminf(spin, grip * fmaxf(ground, 0.0f) * kSlipUp) : fminf(spin, kLiftBlind * top);
+    return fmaxf(wheels, 0.0f) / top;
+}
+
 // What the game's curve has fallen to with the wheels at x of the gear's top: 1 up to about half, nothing at the top.
 inline float GameFall(float x) { return isfinite(x) ? SettingsRange(kGamePullFall * (1.0f - x), 0.0f, 1.0f) : 0.0f; }
 
@@ -1150,23 +1162,31 @@ inline TorqueOrders TorqueHandStep(TorqueHand &h, bool want, uint64_t action, ui
 // where the gear above lands, so no shift is taken back.
 static const float kEngineUpLight = 0.3f, kEngineUpFloored = 0.95f;     // up this far from idle to the red zone's speed: at a light foot, floored
 static const float kEngineDownLight = 0.1f, kEngineDownFloored = 0.3f;  // down below this, the same way
-static const float kEngineKickTo = 0.85f;   // the kickdown goes to the lowest gear that keeps the engine under this
+static const float kEngineKickTo = 0.85f;   // the kickdown goes to the lowest gear that keeps the engine under this,
+static const float kKickRoom = 0.92f;       // and under this share of the gear's floored point up, so it is not left again at once
 static const float kEngineLimit = 0.98f;    // past this the engine is on the limiter: up at once, whatever the pause
 // A game's gearbox has its first gears for crawling: on a scout's road gearbox the first can be an eighth of the top
 // gear's speed, where a real one's is a fifth to a seventh. With the mod's engine the automatic sets off in the lowest gear at
 // least kStartShare of the top gear's (as a truck automatic starts in the second), and takes a lower one only stuck:
 // floored with the truck under kStuckShare of that gear's top and not gaining for kStuckAfter.
 static const float kStartShare = 1.0f / 7.0f;
+// And lower while the engine is weak for the truck: the engine's Torque over the truck's mass (both from its files)
+// over the gear's top under kStartPull. A scout of 9007 kg with 195000 has 1.67 in a second gear of 13 rad/s and sets
+// off in it; with 100000, 0.85, and sets off in the first (1.39 in a first of 8).
+static const float kStartPull = 1.2f;
 static const float kStuckShare = 0.3f, kStuckGain = 0.5f, kStuckAfter = 1.0f;
 
 // The gear the automatic sets off in with the mod's engine: the lowest whose top is at least kStartShare of the top
-// gear's.
-inline int GearboxStartGear(const TruckRaw &t)
+// gear's, and lower while launch (the engine's Torque over the truck's mass; 0 where either is not known) over the
+// gear's top is under kStartPull.
+inline int GearboxStartGear(const TruckRaw &t, float launch = 0.0f)
 {
     const int top = TruckTopGear(t);
     const float most = TruckGearTop(t, top);
     int gear = 1;
     while (gear < top && TruckGearTop(t, gear) < most * kStartShare) gear++;
+    if (launch > 0.0f && isfinite(launch))
+        while (gear > 1 && launch < kStartPull * TruckGearTop(t, gear)) gear--;
     return gear;
 }
 
@@ -1193,13 +1213,14 @@ inline float GearDownShare(float r)
 }
 
 // The mod's engine as the automatic's shift points go by it while it is handed to the game (Powertrain=1): its torque
-// curve, the tachometer's top over the red zone's (where the governor leaves nothing), and how much of it the game
-// gets (EngineShare, 0 to 1). on false: the game's own engine.
+// curve, the tachometer's top over the red zone's (where the governor leaves nothing), how much of it the game gets
+// (EngineShare, 0 to 1), and the engine's Torque over the truck's mass (0 where not known; GearboxStartGear). on
+// false: the game's own engine.
 struct EngineHand
 {
     bool on;
     const TorqueCurve *curve;
-    float top, share;
+    float top, share, launch;
 };
 
 // What a gear pulls with the wheels at x of its top with the engine handed over, floored, the converter locked: the
@@ -1333,7 +1354,7 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     m.rolling = rolling;
     // where it would shift at this pedal, at floored's while climbing
     const bool footOff = p < kFootOff;
-    m.labour = !footOff && m.trend < -kLabouring ? m.labour + dt : 0.0f;
+    m.labour = p >= kClimbPedal && m.trend < -kLabouring ? m.labour + dt : 0.0f;
     const bool labouring = m.labour >= kLabourAfter;
     if (labouring) m.climb = kClimbHold;
     else if (m.climb > 0.0f) m.climb -= dt;
@@ -1341,7 +1362,7 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     // with the mod's engine the lowest gear it shifts down to is the start gear (GearboxStartGear), and the first only
     // stuck: floored under kStuckShare of the start gear's top, gaining less than kStuckGain for kStuckAfter. Stuck
     // lasts until the foot comes off or the truck is past that speed
-    const int start = engine ? GearboxStartGear(t) : 1;
+    const int start = engine ? GearboxStartGear(t, hand.launch) : 1;
     const bool slow = m.by < kStuckShare * TruckGearTop(t, start);
     if (!engine || footOff || !slow) m.stuck = 0.0f;
     else if (m.stuck >= kStuckAfter || (p >= kKickdown && m.trend < kStuckGain)) m.stuck += dt;
@@ -1392,6 +1413,10 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
         while (g > least && downFrom(g)) g--;
         return g;
     };
+    // with the mod's engine, a gear a kickdown may land in: under kEngineKickTo, and short of its own floored point up
+    auto kickable = [&](int gear) {
+        return GearboxInput(t, k, gear, by) < fminf(GearboxPoint(k, kEngineKickTo), GearboxUpPoint(t, k, gear, 1.0f, hand) * kKickRoom);
+    };
     const bool wantUp = m.gear < top && upFrom(m.gear);
     const bool pastIt = m.gear < top && pastIn(m.gear);
     const bool wantDown = footOff ? m.gear > least && fits(m.gear - 1) && now < coastDown && lower < coastTo : downFrom(m.gear);
@@ -1401,12 +1426,12 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     if (m.gear != least && GearboxInput(t, k, 1, fmaxf(raw, m.by)) < k.redline * kStopShift)
         to = least;
     else if (m.kick > 0.0f && m.gear > least && fits(m.gear - 1) &&
-             (engine ? lower < GearboxPoint(k, kEngineKickTo) : pulls(m.gear - 1) >= pulls(m.gear) * (1.0f + kShiftPullGain)))
+             (engine ? kickable(m.gear - 1) : pulls(m.gear - 1) >= pulls(m.gear) * (1.0f + kShiftPullGain)))
     {
         // a kickdown, at once and whatever the pause: gears at a time, down to the one that pulls the most (with the
         // mod's engine, the lowest under kEngineKickTo)
         while (to > least && fits(to - 1) &&
-               (engine ? GearboxInput(t, k, to - 1, by) < GearboxPoint(k, kEngineKickTo) : pulls(to - 1) >= pulls(to) * (1.0f + kShiftPullGain)))
+               (engine ? kickable(to - 1) : pulls(to - 1) >= pulls(to) * (1.0f + kShiftPullGain)))
             to--;
         m.kick = 0.0f;
     }

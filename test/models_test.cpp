@@ -1697,12 +1697,61 @@ int main(int argc, char **argv)
                 return hb.gear;
             };
             const int heldHalf = heldAt(half), heldWhole = heldAt(whole);
+            // a kickdown at EngineShare 50 from the fifth: not into a fourth it would land in at 0.84 of its top, past
+            // its point up (0.86 or so) less kKickRoom, but into one it lands in at 0.7
+            auto kickFrom5 = [&](float fourthShare) {
+                GearboxModel kb = {};
+                kb.running = true;
+                kb.gear = 5;
+                kb.grip = 2.0f;
+                scoutAt(fourthShare * TruckGearTop(sd, 4));
+                kb.spin = kb.by = kb.rolling = sd.spin[0];
+                for (float at = 0.0f; at < 0.6f; at += kDt) GearboxStep(kb, sd, dk, 0.5f, 0.5f, kDt, half);
+                for (float at = 0.0f; at < 0.3f; at += kDt) GearboxStep(kb, sd, dk, 1.0f, 1.0f, kDt, half);
+                return kb.gear;
+            };
+            const int kickHigh = kickFrom5(0.84f), kickLow = kickFrom5(0.7f);
+            // the start gear by the engine's Torque over the truck's mass: 195000 over 9007 kg the second, 100000 the first
+            EngineHand strong = whole, weak = whole;
+            strong.launch = 195000.0f / 9007.0f;
+            weak.launch = 100000.0f / 9007.0f;
+            const bool starts = GearboxStartGear(sd, strong.launch) == 2 && GearboxStartGear(sd, weak.launch) == 1 && GearboxStartGear(sd, 0.0f) == 2;
+            GearboxModel weakStart = {};
+            weakStart.running = true;
+            weakStart.gear = 2;
+            weakStart.grip = 2.0f;
+            scoutAt(0.0f);
+            GearboxStep(weakStart, sd, dk, 1.0f, 1.0f, kDt, weak);
+            // a light foot (0.15) losing speed is no climb; a heavy one (0.8) is
+            auto slowingAt = [&](float pedal) {
+                GearboxModel cb = {};
+                cb.running = true;
+                cb.gear = 5;
+                cb.grip = 2.0f;
+                cb.pedal = cb.held = cb.feel = pedal;
+                for (float at = 0.0f; at < 1.5f; at += kDt)
+                {
+                    scoutAt(0.45f * TruckGearTop(sd, 5) - 0.8f * at);
+                    if (at == 0.0f) cb.spin = cb.by = cb.rolling = sd.spin[0];
+                    GearboxStep(cb, sd, dk, pedal, pedal, kDt, whole);
+                }
+                return cb.climb > 0.0f;
+            };
+            const bool climbs = !slowingAt(0.15f) && slowingAt(0.8f);
             const bool crossing = EngineUpShare(half, 43.0f / 27.0f) < EngineUpShare(whole, 43.0f / 27.0f) && EngineUpShare(half, 43.0f / 27.0f) < 0.87f &&
                                   EngineUpShare(whole, 43.0f / 27.0f) > 0.88f;
-            Check(schedule && stuckAtHalf == 2 && stuckAfter == 1 && stuckBox.gear == 2 && gameOwn.gear == 1 && crossing && heldHalf == 5 && heldWhole == 4,
+            Check(schedule && stuckAtHalf == 2 && stuckAfter == 1 && stuckBox.gear == 2 && gameOwn.gear == 1 && crossing && heldHalf == 5 && heldWhole == 4 &&
+                      kickHigh == 5 && kickLow == 4 && starts && weakStart.gear == 1 && climbs,
                   "automatic, the engine handed over: it sets off in the second of a crawling first; floored it revs each gear toward the red zone and shifts "
                   "where the next gear pulls more if that comes first, at a light foot early, no shift taken back; held short of the point floored, the next "
-                  "gear taken where it pulls more; stuck floored it takes the first after a second, the second again with the foot off");
+                  "gear taken where it pulls more; a kickdown only into a gear short of its point up; stuck floored it takes the first after a second, the "
+                  "second again with the foot off; a weaker engine for the truck's mass sets off in the first; a light foot losing speed is no climb");
+            // the share of the gear's top the lift goes by: by the ground once the grip is known, the wheels at most
+            // kSlipUp over it; before that the wheels, at most kLiftBlind
+            Check(Near(LiftShare(10.0f, 4.0f, 2.0f, 20.0f), 0.42f, 0.001f) && Near(LiftShare(6.0f, 4.0f, 2.0f, 20.0f), 0.3f, 0.001f) &&
+                      Near(LiftShare(24.0f, 0.2f, 0.0f, 20.0f), kLiftBlind, 0.001f) && Near(LiftShare(4.0f, 0.2f, 0.0f, 20.0f), 0.2f, 0.001f) &&
+                      LiftShare(4.0f, 1.0f, 2.0f, 0.0f) == 0.0f,
+                  "powertrain: the lift goes by the ground once the grip is known; wheels spun up before that get no more than at half the gear's top");
         }
         // a close-ratio box (the Scania's ten gears, tops 7.5 to 30.5 rad/s, 600 to 1930 rpm) floored from a standstill
         // with the grip learned: through the gears faster than a shift a second, skipping gears, never held to its top;

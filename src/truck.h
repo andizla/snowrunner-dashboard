@@ -519,6 +519,15 @@ inline bool TruckEngineRecord(const TruckMemory &m, uint64_t vehicle, EngineReco
     return false;
 }
 
+// The truck's mass in kg as its files give it (the bodies of its chassis, without addons, cargo or a trailer): a float
+// at model + 0x784, found by the probe's scan of five trucks against their files (a scout's 9007 where its bodies weigh
+// 9001, a pickup's 2212, others of 5507, 6314 and 8100). 0 where it is no likely mass.
+inline float TruckMass(const TruckMemory &m, uint64_t model)
+{
+    float mass = 0.0f;
+    return model && m.get(model + 0x784, mass) && mass >= 100.0f && mass <= 500000.0f ? mass : 0.0f;
+}
+
 // A stretch of the game's memory as text for the probe log, to find where the game keeps a figure its files give (an
 // engine's Torque, a truck's mass): words 4-byte words from the address from, each as a number where it reads as a
 // float of a likely size (0.001 to 10 million, either sign), else in hex, "?" where it cannot be read.

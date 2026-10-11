@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.13.5] 2026-10-11
+
+- With the engine handed to the game, the automatic sets off in a lower gear where the engine is weak for the truck: its torque over the truck's mass, both now read from the game's files (the mass at the truck's model + 0x784, checked on five trucks). A scout of 9007 kg sets off in second with an engine of 195000 and in first with one of 100000. The mass leaves out addons, cargo and trailers; a truck that cannot pull away in its start gear still takes the first by the stuck rule.
+- A kickdown lands only in a gear short of its own floored point up. At `EngineShare` 50 it could land at 0.86 of a gear's top, where the next gear already pulls harder, and shift straight back up; at 100 a scout kicked down and was back up within one to two seconds (5 to 4 and back at 12:17:19 and 12:17:25).
+- A truck losing speed with the pedal under 0.4 is no longer taken for one climbing. At 0.15, the engine giving one to two hundredths of its power, a scout slowing on the road took the floored points and shifted 5 to 4 at 1580 rpm (12:16:41).
+- Before the wheels' grip on the ground is learned, the engine's torque goes to the game by no more than half the gear's top. Wheels spun up from a standstill read as the gear's top, which handed them three times the game's torque: a scout put in first at a standstill went to 3.00 and spun its wheels to 1.23 of first's top (12:14:23).
+- The signature for the input is the one harvest 3 found: 0x40 into the object it belongs to, not 0x80 into control's. All nine places stand once and are found where they are on the Steam build.
+
 ## [0.13.4] 2026-10-11
 
 - With the engine handed to the game, floored, the mod's automatic shifts up where the next gear pulls harder, if that comes before the red zone. The game's pull falls away toward a gear's top whatever the engine, and at `EngineShare` 50 a scout floored in third, fourth and fifth hung at 0.86 to 0.87 of the gear's top for up to five seconds (11:51:00 to 11:51:05 in fourth), short of the shift point at 0.96, where the next gear would have pulled 13 percent more. On a scout's road gearbox it now shifts at 0.86 to 0.87 of a gear's top at 50, and at 0.90 to 0.92 at 100.
