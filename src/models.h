@@ -1170,8 +1170,9 @@ static const float kEngineLimit = 0.98f;    // past this the engine is on the li
 // Going up through the gears, from a standstill or from a shift up, each gear is held this many seconds of moving,
 // on the limiter if it comes to that (the game governs the wheels at the gear's top): an empty Fleetstar went 1 to 5
 // in two seconds and pulled like a late truck; the user: at least two to three seconds a gear. A gear a shift down or a
-// kickdown brought is not held.
-static const float kEngineGearHold = 2.5f;
+// kickdown brought is not held. A scout shifts sooner (kEngineGearHoldScout): at 2.5 s the scout of the drives, a light
+// 4x4, sat in its gears too long for its kind (the user, 2026-10-11), where trucks and heavy trucks were right.
+static const float kEngineGearHold = 2.5f, kEngineGearHoldScout = 1.5f;
 // A game's gearbox has its first gears for crawling: on a scout's road gearbox the first can be an eighth of the top
 // gear's speed, where a real one's is a fifth to a seventh. With the mod's engine the automatic sets off in the lowest gear at
 // least kStartShare of the top gear's (as a truck automatic starts in the second), and takes a lower one only stuck:
@@ -1221,13 +1222,13 @@ inline float GearDownShare(float r)
 
 // The mod's engine as the automatic's shift points go by it while it is handed to the game (Powertrain=1): its torque
 // curve, the tachometer's top over the red zone's (where the governor leaves nothing), how much of it the game gets
-// (EngineShare, 0 to 1), and the engine's Torque over the truck's mass (0 where not known; GearboxStartGear). on
-// false: the game's own engine.
+// (EngineShare, 0 to 1), the engine's Torque over the truck's mass (0 where not known; GearboxStartGear), and the
+// seconds each gear is held going up (0: kEngineGearHold). on false: the game's own engine.
 struct EngineHand
 {
     bool on;
     const TorqueCurve *curve;
-    float top, share, launch;
+    float top, share, launch, hold;
 };
 
 // What a gear pulls with the wheels at x of its top with the engine handed over, floored, the converter locked: the
@@ -1439,7 +1440,7 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     }
     else m.moving += dt;
     // with the mod's engine, a gear come by a shift up or from a standstill is held kEngineGearHold
-    const bool held = engine && m.holdUp && m.moving < kEngineGearHold;
+    const bool held = engine && m.holdUp && m.moving < (hand.hold > 0.0f ? hand.hold : kEngineGearHold);
     if (m.gear != least && standing)
         to = least;
     else if (m.kick > 0.0f && m.gear > least && fits(m.gear - 1) &&

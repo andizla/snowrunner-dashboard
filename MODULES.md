@@ -739,6 +739,12 @@ shift up or from a standstill (`holdUp`), the limiter's shift up included; a kic
 `kEngineAgainFeel` gone; `GearboxLowestFit` with the mod's engine by the tachometer's top, so the takeover's floor does
 not shift a held gear up. The floored pull test at 2 rad/s each second (at 3 the third gear is through in 1.8 s and
 held); the quick truck (gaining 6, governed at the gear's top) holds each gear 2.55 s. Models 145 OK.
+The drive of 14:48 (0.13.7, EngineShare 100: the scout, the CK1500, the Fleetstar, the ten-speed heavy one): the user:
+"a lot better on the big trucks; the scout sat in gears slightly too long for its vehicle type maybe". Floored shifts up
+after shifts up: the scout 2 to 3 s a gear mostly, at 0.89 to 0.95 of the top (5 of 22 held on the limiter, 0.97 to
+1.02); the Fleetstar 2 to 3 s at 0.94 to 0.98; the heavy one 2 to 3 s at 0.86 to 1.10. 0.13.8: `EngineHand::hold` by the
+tachometer's class, `kEngineGearHoldScout` 1.5 s for scouts, 2.5 for the others (the mass cannot tell them: 9007 kg
+for the scout, 6314 for the Fleetstar). Models 145 OK.
 
 Part A, research and design note (no hook before the user's OK on the note):
 - Where the game turns the pedal into torque and how the automatic decides a shift: the truck action's per-frame

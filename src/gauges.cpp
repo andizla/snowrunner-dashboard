@@ -1369,7 +1369,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             // the shift points a truck automatic's schedule while the mod's engine is handed to the game, else by the
             // game's own pull
             const float launch = w.engine.torque > 0.0f && w.mass > 0.0f && w.engineVehicle == w.refs.vehicle ? w.engine.torque / w.mass : 0.0f;
-            const EngineHand hand{ w.hand.on, &kClassCurves[s.tachClass], scale.redline > 0.0f ? scale.max / scale.redline : 1.0f, s.engineShare / 100.0f, launch };
+            const EngineHand hand{ w.hand.on, &kClassCurves[s.tachClass], scale.redline > 0.0f ? scale.max / scale.redline : 1.0f, s.engineShare / 100.0f, launch,
+                                   s.tachClass == kClassScout ? kEngineGearHoldScout : kEngineGearHold };
             GearboxStep(w.gearbox, raw, scale, foot, w.power.power, dt, hand);
             w.clutch = ClutchModel{};
         }

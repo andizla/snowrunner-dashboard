@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.13.8] 2026-10-11
+
+- A scout holds each gear one and a half seconds going up, where trucks and heavy trucks keep two and a half. The scout of the drives, a light 4x4, sat in its gears slightly too long for its kind; the big trucks were right. The class is the one set for the truck on the tab (its scales). The game's files put that scout at 9007 kg and the Fleetstar at 6314, so the mass could not tell them apart.
+
 ## [0.13.7] 2026-10-11
 
 - With the engine handed to the game, going up through the gears, from a standstill or after a shift up, each gear is held at least two and a half seconds of moving, on the limiter if it comes to that. An empty Fleetstar, one of the first trucks of the game, went 1 to 5 in two seconds and pulled like a late one. A gear a kickdown brings is not held: the kickdown keeps its pace. 0.13.6's half second between shifts up floored is gone again, and the floor the gearbox keeps under the game's gear lets a gear held on the limiter stay.
