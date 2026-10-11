@@ -10,6 +10,10 @@ Questions for the overseer go into `HANDOFF.md` under "Questions"; the overseer 
 
 ## Board
 
+Other builds (the user, 2026-10-11): the user hands the next version to a player on the Epic build, whose log will
+say what the signatures find there. The user's lead: "next gen's notes" may say how the other builds lay out the
+game's memory (a lot to go through; with the user, another day).
+
 | # | Module | Effort | Status | Session | Result |
 |---|---|---|---|---|---|
 | 1 | Foundation: repo, build, loader, overlay, settings | high | done (the user confirmed the cluster and the tire panel in the game, 2026-10-06) | Gauges M1 (created 2026-10-05) | Gauges.asi 0.1.0 (0A9C3341) built clean, offline tests OK, installed; in the game both mods load, the font bakes and the cluster is drawn with demo values (logs of two starts by the user). Not yet shown: an overlay picture of the cluster, a tab edit saved in the game, the tire panel opening beside it (HANDOFF, "The game run") |
@@ -29,8 +33,8 @@ Questions for the overseer go into `HANDOFF.md` under "Questions"; the overseer 
 | 9b | Brake air: the compressor, the governor and the brakes' draw | medium | built (2026-10-08, cloud session, on "go, do every thing you can"): the air dial shows the model, not drawn for scouts; `ShowAir` still off at first | | `AirStep` in models.h: the compressor by the engine speed (0.23 bar a second at the red zone into an empty tank, less as it fills towards 12 bar), the governor from 6.9 to 8.2 bar, a brake press takes 0.35 bar times how far it goes down, the handbrake let go 0.4 bar, a leak of 0.1 bar a minute and 0.25 more with the brake held. From empty: about three minutes at idle, one at the red zone; eight full presses with the engine off reach the red zone (5.5 bar). The user's two drives replayed: at the lowest 6.8 bar, never in the red. Models test 125 OK (four new). Owed: the user's look in the game; an air dryer's purge at the cut-out could be heard (module 10 goes on later) |
 | 15 | Differentials: front and rear locks, the centre differential's torque split and its lock | max | waiting (a feasibility note first, the user's OK before any hook) | | |
 | 16 | Release: polish, README, GitHub | medium | waiting; the release carries `Gauges.addon64` (and `Gauges.asi`, the same file) since 0.11.3 | | |
-| 17 | Naturally aspirated engines | high | waiting (the user, 2026-10-11: "sort of important") | | |
-| 18 | Sharing truck and engine setups | high | waiting (the user, 2026-10-11); a design note first, the user's word before anything goes public | | |
+| 17 | Naturally aspirated engines | high | waiting (the user, 2026-10-11: "sort of important"; per truck, per engine if it can be) | | |
+| 18 | Sharing truck and engine setups | high | waiting (the user, 2026-10-11: a public list on GitHub; each truck's setup a file of its own, in a folder of its own in the game's directory); the user's word before anything goes public | | |
 | 19 | Winch: its temperature, and the line that snaps or the winch that stops when it is too hot | max | waiting (the user, 2026-10-11); a feasibility note first, the user's OK before any hook | | |
 
 Effort is the session's effort level, set by the user when creating the session (the overseer reminds them).
@@ -718,6 +722,14 @@ grip not learned yet, the lift went by the wheels spinning past first's top: fac
 `kLiftBlind` 0.5 until the grip is known. Launches that failed (the Fleetstar 8 to 9 s in first, rear wheels at
 first's top, all wheel drive off, 0.1 m/s): mud; the factor there 0.81 to 0.84, the engine at 5000 rpm by the
 spinning wheels (curve 0.9) and cold (x0.91): the engine as a real one, left as it is. Models 145, truck 80 OK.
+The drive of 14:08 to 14:21 (0.13.5, EngineShare 100): the Fleetstar, the smaller scout of the drives (its stock engine
+of 90000: 1.26 at second's top, sets off in second, the first by the stuck rule at 14:15:48 and 14:17:18), the CK1500.
+The user: "with the stock motor versions the kickdowns weren't that severe". Found: the Fleetstar empty, 10 of 21
+floored shifts up on the limiter (0.98 to 1.15 of the gear's top; 1 to 5 in 2 s at 14:12:05): the whole pause of
+0.13.2 (one gear a second) is longer than its gears last. 0.13.6: floored (`kEngineAgainFeel` 0.9) up after up after
+`kShiftAgain`; `pastIn` with the mod's engine also by `byUp` (the smoothed `by` lagged 1.35 rad/s at 6 rad/s each
+second). The scout's shifts taken back at 14:15:36 and 14:16:39: the truck stopped in two to three seconds (from 0.57
+of the fifth's top to 0.14), an obstacle or deep mud, not the gearbox. Models 145 OK.
 
 Part A, research and design note (no hook before the user's OK on the note):
 - Where the game turns the pedal into torque and how the automatic decides a shift: the truck action's per-frame
@@ -897,7 +909,10 @@ low down than a turbo diesel's). Build: `BoostProfile` gains "none" (or a separa
 in `[Truck:<kind>]` as the scales are; the powertrain's boost term 1 for it; the cluster drops the boost dial; the
 sounds stay quiet. Whether the game's files say which engines are turbocharged: the engine's record holds no such
 flag (module 12's dump of a scout's record, + 0x58 to + 0x84); its UI text sometimes names "TurboDiesel", which is
-a hint for a default at most. Tests: the curve, the torque with no boost term, the settings round trip.
+a hint for a default at most. The user (2026-10-11): a setting per truck, and per engine if that can be done. It
+can: the engine fitted is known by its name in the game's files (`EngineRecord::name`, "<truck>_engine_<n>"), so
+a section of its own per engine (`[Engine:<name>]`, or the engine's file under 18's folder) overrides the truck's.
+Tests: the curve, the torque with no boost term, the settings round trip, the engine's section over the truck's.
 
 ### 18. Sharing truck and engine setups
 
@@ -911,6 +926,11 @@ little more than (b) gives. The likely path: (a) first, (b) after. To settle wit
 public repository (the house rule: nothing public without the user's word), and setups for modded trucks carry their
 kinds, which name the mods (`<name>/<mod.io id>`): whether such entries may stand in a public list at all. The add-on
 fetches only on the button, never on its own, and says in the log what it fetched.
+The user (2026-10-11): the public list on GitHub is the way; each truck's setup a file of its own, in a folder of its
+own in the game's directory (beside `Gauges.ini`, say `Gauges\trucks\`), so a file from the list drops in as it is.
+The file name from the truck's kind: a modded truck's kind holds a stroke (`<name>/<mod.io id>`), which no file name
+may, so it is written another way (`<name>@<id>.ini`). Gauges.ini's `[Truck:<kind>]` sections move into the folder on
+the first start of the version that has it, and are read from there after. Later, on the user's word.
 
 ### 19. Winch
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.13.6] 2026-10-11
+
+- With the engine handed to the game, floored, a shift up may follow another after half a second, not a whole one. An empty Fleetstar went through its close gears (tops 8, 13, 17, 21 and 25 rad/s) faster than a shift a second, so 10 of its 21 floored shifts up came on the limiter, at 0.98 to 1.15 of the gear's top (1 to 5 in two seconds at 14:12:05, each on the limiter). The limiter is now also judged by the wheels as they turn, not only by their smoothed speed, which lags a quick truck by a fifth of a short gear.
+
 ## [0.13.5] 2026-10-11
 
 - With the engine handed to the game, the automatic sets off in a lower gear where the engine is weak for the truck: its torque over the truck's mass, both now read from the game's files (the mass at the truck's model + 0x784, checked on five trucks). A scout of 9007 kg sets off in second with an engine of 195000 and in first with one of 100000. The mass leaves out addons, cargo and trailers; a truck that cannot pull away in its start gear still takes the first by the stuck rule.

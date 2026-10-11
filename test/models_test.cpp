@@ -1738,14 +1738,45 @@ int main(int argc, char **argv)
                 return cb.climb > 0.0f;
             };
             const bool climbs = !slowingAt(0.15f) && slowingAt(0.8f);
+            // an empty truck through close gears (tops 8, 13, 17, 21 and 25 rad/s) floored, gaining 6 rad/s each
+            // second (the drive of 14:12:05, every gear at 0.99 to 1.1 of its top): the first, through in a second
+            // and a third, left by the limiter at the latest (within a step of the test's, 0.04 of its top); the
+            // others short of it, a shift up after another after kShiftAgain (0.99 of the top with the whole pause)
+            float quickFirst = 0.0f, quickMost = 0.0f;
+            int quickLast = 0;
+            {
+                TruckRaw qt = sd;
+                static const float quickSpeeds[7] = { 3.0f, 1.5f, 4.0f, 6.0f, 8.0f, 10.0f, 7.5f };
+                qt.gearSpeeds = 7;
+                memcpy(qt.gearSpeed, quickSpeeds, sizeof quickSpeeds);
+                GearboxModel qb = {};
+                qb.running = true;
+                qb.gear = 1;
+                qb.grip = 2.0f;
+                for (float at = 0.0f; at < 4.0f; at += kDt)
+                {
+                    for (int i = 0; i < qt.wheels; i++) qt.spin[i] = 6.0f * at;
+                    qt.speed = 3.0f * at;
+                    const int was = qb.gear;
+                    GearboxStep(qb, qt, dk, 1.0f, 1.0f, kDt, whole);
+                    if (qb.gear > was && at > 0.0f)
+                    {
+                        const float x = 6.0f * at / TruckGearTop(qt, was);
+                        if (was == 1) quickFirst = x;
+                        else quickMost = fmaxf(quickMost, x);
+                    }
+                }
+                quickLast = qb.gear;
+            }
             const bool crossing = EngineUpShare(half, 43.0f / 27.0f) < EngineUpShare(whole, 43.0f / 27.0f) && EngineUpShare(half, 43.0f / 27.0f) < 0.87f &&
                                   EngineUpShare(whole, 43.0f / 27.0f) > 0.88f;
             Check(schedule && stuckAtHalf == 2 && stuckAfter == 1 && stuckBox.gear == 2 && gameOwn.gear == 1 && crossing && heldHalf == 5 && heldWhole == 4 &&
-                      kickHigh == 5 && kickLow == 4 && starts && weakStart.gear == 1 && climbs,
+                      kickHigh == 5 && kickLow == 4 && starts && weakStart.gear == 1 && climbs && quickLast == 5 && quickFirst < 1.02f && quickMost < 0.97f,
                   "automatic, the engine handed over: it sets off in the second of a crawling first; floored it revs each gear toward the red zone and shifts "
                   "where the next gear pulls more if that comes first, at a light foot early, no shift taken back; held short of the point floored, the next "
                   "gear taken where it pulls more; a kickdown only into a gear short of its point up; stuck floored it takes the first after a second, the "
-                  "second again with the foot off; a weaker engine for the truck's mass sets off in the first; a light foot losing speed is no climb");
+                  "second again with the foot off; a weaker engine for the truck's mass sets off in the first; a light foot losing speed is no climb; a "
+                  "quick truck through close gears floored shifts short of the limiter");
             // the share of the gear's top the lift goes by: by the ground once the grip is known, the wheels at most
             // kSlipUp over it; before that the wheels, at most kLiftBlind
             Check(Near(LiftShare(10.0f, 4.0f, 2.0f, 20.0f), 0.42f, 0.001f) && Near(LiftShare(6.0f, 4.0f, 2.0f, 20.0f), 0.3f, 0.001f) &&

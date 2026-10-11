@@ -1165,6 +1165,8 @@ static const float kEngineDownLight = 0.1f, kEngineDownFloored = 0.3f;  // down 
 static const float kEngineKickTo = 0.85f;   // the kickdown goes to the lowest gear that keeps the engine under this,
 static const float kKickRoom = 0.92f;       // and under this share of the gear's floored point up, so it is not left again at once
 static const float kEngineLimit = 0.98f;    // past this the engine is on the limiter: up at once, whatever the pause
+static const float kEngineAgainFeel = 0.9f; // floored this far, a shift up may follow another after kShiftAgain, not the whole pause: an
+                                            // empty truck goes through close gears faster than a shift a second, and met the limiter in each
 // A game's gearbox has its first gears for crawling: on a scout's road gearbox the first can be an eighth of the top
 // gear's speed, where a real one's is a fifth to a seventh. With the mod's engine the automatic sets off in the lowest gear at
 // least kStartShare of the top gear's (as a truck automatic starts in the second), and takes a lower one only stuck:
@@ -1285,7 +1287,7 @@ inline float GearboxDownPoint(const TruckRaw &t, const GaugeScale &k, int gear, 
 // gears at a time when the truck slows hard. With the engine handed to the game (Powertrain=1, engine) the points are
 // a truck automatic's schedule (kEngineUpLight and the rest): floored it revs to the red zone, at a light foot it
 // shifts early, down well under where the gear above lands, one gear up at a time and a second in each but on the
-// limiter, and a kickdown to the lowest gear under kEngineKickTo; it sets off in the start gear (GearboxStartGear) and
+// limiter (floored, after kShiftAgain), and a kickdown to the lowest gear under kEngineKickTo; it sets off in the start gear (GearboxStartGear) and
 // takes the gears under it only stuck (kStuckShare). A truck slowing with the foot on is climbing: the points go where floored
 // puts them, and stay there kClimbHold after, so it shifts down in time and does not hunt. A push of the pedal past
 // kKickdown kicks down at once to the gear that pulls the most.
@@ -1383,10 +1385,11 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     // engine none floored, where the points lie where one gear pulls kShiftPullGain more than the other, either way
     const float room = engine ? kShiftRoom : kShiftRoom + (1.0f - kShiftRoom) * feel;
     // a gear the engine is past the red zone in, or, the grip known, past what it can take at the speed the truck goes
-    // (the floor the takeover keeps the game's gear over, GearboxLowestFit); with the mod's engine, on the limiter
+    // (the floor the takeover keeps the game's gear over, GearboxLowestFit); with the mod's engine, on the limiter, by
+    // the wheels as they turn too (byUp): the smoothed speed lags a quick truck's by a fifth of a short gear
     const float limit = engine ? GearboxPoint(k, kEngineLimit) : k.redline;
     auto pastIn = [&](int gear) {
-        return engine ? GearboxInput(t, k, gear, by) >= limit || (m.grip > 0.0f && GearboxInput(t, k, gear, rolling) >= limit)
+        return engine ? GearboxInput(t, k, gear, fmaxf(by, byUp)) >= limit || (m.grip > 0.0f && GearboxInput(t, k, gear, rolling) >= limit)
                       : GearboxInput(t, k, gear, by) > k.redline || (m.grip > 0.0f && !fits(gear));
     };
     // that, or a gear the pedal would shift up from
@@ -1437,7 +1440,8 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     }
     else if (pastIt)
         to = upTo(m.gear); // past the red zone or what the engine can take: up at once, whatever the pause
-    else if (m.pause <= (m.upLast && !engine ? kShiftPause - kShiftAgain : 0.0f) && m.wanted >= kShiftUpAfter + (kShiftUpAfterFloored - kShiftUpAfter) * feel)
+    else if (m.pause <= (m.upLast && (!engine || feel >= kEngineAgainFeel) ? kShiftPause - kShiftAgain : 0.0f) &&
+             m.wanted >= kShiftUpAfter + (kShiftUpAfterFloored - kShiftUpAfter) * feel)
         to = upTo(m.gear);
     else if (m.pause <= 0.0f && footOff && m.wanted <= -kCoastDownAfter)
     {
