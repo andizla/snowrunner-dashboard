@@ -354,7 +354,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         ImGui::TextWrapped("Scales for %s. It shows the plain ones. Change one here and this kind of truck keeps all seven as its own.", view.truck);
     else
     {
-        ImGui::TextWrapped("Scales for %s. They are its own, kept in Gauges.ini for this kind of truck.", view.truck);
+        ImGui::TextWrapped("Scales for %s. They are its own, kept for this kind of truck in its file in Gauges\\trucks.", view.truck);
         if (ImGui::SmallButton("Back to the plain scales")) act |= kPageTruckDrop;
         PageTip("This kind of truck gives up its own scales and shows the plain ones again, as every truck without its own does.");
     }
@@ -604,6 +604,6 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     PageTip("Every setting back to its default. The truck you drive gives up its own scales; other kinds of truck keep theirs.");
     ImGui::SameLine();
     if (ImGui::Button("Read the ini again")) act |= kPageReload;
-    ImGui::TextDisabled("Changes count at once and go into Gauges.ini. Version " GAUGES_VERSION ".");
+    ImGui::TextDisabled("Changes count at once and go into Gauges.ini, a truck's or a gearbox's own into its file in Gauges. Version " GAUGES_VERSION ".");
     return act;
 }

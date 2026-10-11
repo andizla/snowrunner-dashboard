@@ -4,7 +4,7 @@ A gauge cluster for the truck you drive in SnowRunner: analogue dials in the sty
 
 The cluster has a speedometer, a tachometer with the gear, fuel with the range, coolant and oil temperature, boost pressure, brake air pressure and nine lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage, cold engine, tilt and oil temperature.
 
-This is version 0.13.9. It reads the truck's own values for the speedometer, the gear, the fuel gauge and seven of the lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage and tilt. The game has no engine speed, no range, no coolant or oil temperature, no boost pressure and no brake air, so the mod works those out from what the truck does, and lights the cold and oil lamps by the temperatures. The temperature also costs the engine: overheating it, or working it hard while cold, adds to the game's own engine damage. `Damage=0` switches that off. The scales of the tachometer and the speedometer and the turbo's boost and character can be set for each kind of truck. The brake air comes from the engine's compressor, which fills the tanks up to 8.2 bar and starts again at 6.9, and each press of the brake and letting the handbrake go draw from them; scouts brake by hydraulics and have no air dial. The outside temperature goes by the map you are on, which the mod reads from the game's save. With `Gearbox=1` an automatic of the mod's own, with a torque converter, picks the gears while the game's shifter is in A, and with `Powertrain=1` the truck pulls with the mod's engine and converter in place of the game's own.
+This is version 0.14.0. It reads the truck's own values for the speedometer, the gear, the fuel gauge and seven of the lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage and tilt. The game has no engine speed, no range, no coolant or oil temperature, no boost pressure and no brake air, so the mod works those out from what the truck does, and lights the cold and oil lamps by the temperatures. The temperature also costs the engine: overheating it, or working it hard while cold, adds to the game's own engine damage. `Damage=0` switches that off. The scales of the tachometer and the speedometer and the turbo's boost and character can be set for each kind of truck. The brake air comes from the engine's compressor, which fills the tanks up to 8.2 bar and starts again at 6.9, and each press of the brake and letting the handbrake go draw from them; scouts brake by hydraulics and have no air dial. The outside temperature goes by the map you are on, which the mod reads from the game's save. With `Gearbox=1` an automatic of the mod's own, with a torque converter, picks the gears while the game's shifter is in A, and with `Powertrain=1` the truck pulls with the mod's engine and converter in place of the game's own.
 
 ## What you need
 
@@ -87,10 +87,11 @@ The scales by class:
 
 Each kind of truck can have its own scales: the class, the five numbers and the turbo. Change one of the seven on the tab while you drive a truck, and all seven are kept for that kind of truck. They are back whenever you drive one: after a recovery, out of the garage, after a change of trucks and after a new start of the game. The Scales section of the tab names the truck it sets and says whether the scales are its own. Its button "Back to the plain scales" lets the truck give them up.
 
-The plain scales are the ones in the ini's `[Gauges]` section. Every truck without scales of its own shows them, and the tab sets them while no truck is driven: in the game's main menu and in the garage. A truck's own scales stand in a section of their own, named after the truck as the game's files name it:
+The plain scales are the ones in the ini's `[Gauges]` section. Every truck without scales of its own shows them, and the tab sets them while no truck is driven: in the game's main menu and in the garage. A truck's own scales stand in a file of their own in the folder `Gauges\trucks` beside `Gauges.ini`, named after the truck as the game's files name it (a modded truck's kind holds a stroke, `<name>/<mod id>`, which a file's name cannot: it is written `<name>@<mod id>.ini`). A file can be passed to another player and dropped into their folder as it is. `Gauges\trucks\chevrolet_ck1500.ini`:
 
 ```
-[Truck:chevrolet_ck1500]
+[Truck]
+Kind=chevrolet_ck1500
 TachClass=1
 IdleRpm=0
 RedlineRpm=4500
@@ -100,7 +101,7 @@ BoostMax=0
 BoostProfile=2
 ```
 
-`Gauges.log` names the truck each time you take another one. A section can be written by hand as well, and a key it leaves out is taken from `[Gauges]`. Every other setting is the same for all trucks.
+`Gauges.log` names the truck each time you take another one. A file can be written by hand as well, and a key it leaves out is taken from `[Gauges]`. Every other setting is the same for all trucks. Up to 0.13.9 the trucks' scales stood in `Gauges.ini` as sections such as `[Truck:chevrolet_ck1500]`: the first start of 0.14.0 moves them into their files.
 
 A region can have an outside temperature of its own, in a section named after it, and a map can have one apart from its region's:
 
@@ -157,7 +158,7 @@ With the engine handed over, the mod's automatic shifts as a truck automatic doe
 
 - floored, it takes each gear to the red zone, or shifts up sooner where the next gear already pulls harder: the game's pull falls away toward a gear's top whatever the engine, so at a lower `EngineShare` the truck would otherwise hang short of the red zone; at a light foot it shifts up early, at about a third of the way from idle to the red zone, and between the two it goes by the pedal;
 - it shifts down well under where a shift up lands, so it does not shift up and straight back down;
-- one gear up at a time; going up through the gears, from a standstill or after a shift up, each gear is held at least two and a half seconds of moving (a scout one and a half, by the class set for the truck; the tab's slider "Each gear going up", 1 to 3 seconds, sets it for the gearbox fitted, kept in `[Gearbox:<name>]` of Gauges.ini), on the limiter if it comes to that (the game governs the wheels at the gear's top), so a light truck does not run through its gears in a moment; a gear a kickdown brings is not held; a kickdown goes to the lowest gear that keeps the engine under the red zone and short of where it would shift straight back up;
+- one gear up at a time; going up through the gears, from a standstill or after a shift up, each gear is held at least two and a half seconds of moving (a scout one and a half, by the class set for the truck; the tab's slider "Each gear going up", 1 to 3 seconds, sets it for the gearbox fitted, kept in its file `Gauges\gearboxes\<name>.ini` as `GearHold`), on the limiter if it comes to that (the game governs the wheels at the gear's top), so a light truck does not run through its gears in a moment; a gear a kickdown brings is not held; a kickdown goes to the lowest gear that keeps the engine under the red zone and short of where it would shift straight back up;
 - a game's gearbox is set up for the game's own engine, with a first gear for crawling, so the automatic sets off in the lowest gear with at least a seventh of the top gear's speed, and lower where the engine is weak for the truck: its torque over the truck's mass, both read from the game's files (a scout of 9 tonnes sets off in second with an engine of 195000, in first with one of 100000). It takes the gears under that only when the truck is stuck: floored, slow and not gaining for a second. The mass is the truck's own, without addons, cargo or a trailer, so a loaded truck that cannot pull away in its start gear takes the first by the stuck rule;
 - a truck losing speed with the pedal under 0.4 is not taken for one climbing, so a light foot does not bring the floored points and an early shift down.
 

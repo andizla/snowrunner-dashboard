@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.14.0] 2026-10-11
+
+- Each truck's own scales and each gearbox's own hold are kept in a file of their own, in the folder `Gauges` beside `Gauges.ini`: `Gauges\trucks\<kind>.ini` and `Gauges\gearboxes\<name>.ini`. A setup can be passed to another player and dropped into their folder as it is. A modded truck's kind holds a stroke (`<name>/<mod id>`), which a file's name cannot, so its file is `<name>@<mod id>.ini`. The first start of this version moves the `[Truck:<kind>]` and `[Gearbox:<name>]` sections out of `Gauges.ini` into their files, keeping what a file already holds, and says so in the log.
+
 ## [0.13.9] 2026-10-11
 
 - How long each gear is held going up can be set for each gearbox: the tab's slider "Each gear going up" (Gearbox section, with the mod's automatic and the engine handed over), from 1 to 3 seconds. It is kept in Gauges.ini under `[Gearbox:<name>]` as `GearHold`, and every truck with that gearbox fitted takes it; without it the truck's class has it (1.5 seconds for a scout, 2.5 for the others). The mod reads the gearbox's name from the truck as the game's files give it ("g_" and the rest); where it cannot, the gearbox goes by its gears' speeds. The log says which gearbox is fitted and where its name was found.

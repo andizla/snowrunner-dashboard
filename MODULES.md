@@ -34,7 +34,7 @@ game's memory (a lot to go through; with the user, another day).
 | 15 | Differentials: front and rear locks, the centre differential's torque split and its lock | max | waiting (a feasibility note first, the user's OK before any hook) | | |
 | 16 | Release: polish, README, GitHub | medium | waiting; the release carries `Gauges.addon64` (and `Gauges.asi`, the same file) since 0.11.3 | | |
 | 17 | Naturally aspirated engines | high | waiting (the user, 2026-10-11: "sort of important"; per truck, per engine if it can be) | | |
-| 18 | Sharing truck and engine setups | high | waiting (the user, 2026-10-11: a public list on GitHub; each truck's setup a file of its own, in a folder of its own in the game's directory); the user's word before anything goes public | | |
+| 18 | Sharing truck and engine setups | high | part one built (0.14.0, on the user's "begin"): each truck's scales and each gearbox's hold in a file of their own, `Gauges\trucks\<kind>.ini` and `Gauges\gearboxes\<name>.ini`, the old sections moved out of Gauges.ini on the first start. Part two, the public list on GitHub: a to-do for later (the user, 2026-10-11) | | |
 | 19 | Winch: its temperature, and the line that snaps or the winch that stops when it is too hot | max | waiting (the user, 2026-10-11); a feasibility note first, the user's OK before any hook | | |
 
 Effort is the session's effort level, set by the user when creating the session (the overseer reminds them).
@@ -953,6 +953,11 @@ own in the game's directory (beside `Gauges.ini`, say `Gauges\trucks\`), so a fi
 The file name from the truck's kind: a modded truck's kind holds a stroke (`<name>/<mod.io id>`), which no file name
 may, so it is written another way (`<name>@<id>.ini`). Gauges.ini's `[Truck:<kind>]` sections move into the folder on
 the first start of the version that has it, and are read from there after. Later, on the user's word.
+0.14.0 (the user: "begin; keep the public GitHub a to-do for later"): `SetupFile(kind, key)` under `Gauges\trucks` and
+`Gauges\gearboxes`, one section each (`[Truck]` with `Kind=`, `[Gearbox]` with `Name=`), `SetupFileName` (a stroke as
+"@", what no file's name holds as "_"); `ReadTruckIni`, `WriteTruckIni`, `DropTruckIni` (the file goes when nothing else
+is in it), `GearHoldRead`, `GearHoldWrite` on the files; `SetupsMove` in `ReadIni` (each start and each reload) moves
+`[Truck:...]` and `[Gearbox:...]` out of Gauges.ini, a key the file holds already kept. Settings 39 OK (three new).
 
 ### 19. Winch
 

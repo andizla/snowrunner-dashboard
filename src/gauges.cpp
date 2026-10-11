@@ -122,6 +122,78 @@ static void IniPutInt(const wchar_t *section, const wchar_t *key, int v, const s
     WritePrivateProfileStringW(section, key, b, ini.c_str());
 }
 
+// ---- setups of their own: a file each in the folder Gauges\ beside Gauges.ini ----
+// A truck's own scales stand in Gauges\trucks\<kind>.ini, a gearbox's own hold in Gauges\gearboxes\<name>.ini, each
+// under one section ([Truck], [Gearbox]) with the kind or the name written in it: a file for each, so that a setup
+// can be passed on and dropped in as it is. A file's name cannot hold a stroke, which a modded truck's kind does
+// ("<name>/<mod id>"): it is written "@" there, and any other character a file's name cannot hold "_". Up to 0.13.9
+// they stood in Gauges.ini as [Truck:<kind>] and [Gearbox:<name>]: SetupsMove takes them out into the files.
+enum { kSetupTruck, kSetupGearbox, kSetupKinds };
+static const wchar_t *const kSetupFolders[kSetupKinds] = { L"trucks", L"gearboxes" };
+static const wchar_t *const kSetupSections[kSetupKinds] = { L"Truck", L"Gearbox" };
+static const wchar_t *const kSetupNameKeys[kSetupKinds] = { L"Kind", L"Name" };
+static const wchar_t *const kSetupIniPrefixes[kSetupKinds] = { L"Truck:", L"Gearbox:" };
+
+// The file's name for a key, without the folder and ".ini".
+static std::wstring SetupFileName(const std::wstring &key)
+{
+    std::wstring name;
+    for (wchar_t c : key) name += c == L'/' ? L'@' : (c < 32 || wcschr(L"\\:*?\"<>|", c)) ? L'_' : c;
+    return name;
+}
+
+static std::wstring SetupFolder(int kind) { return g_dir + L"Gauges\\" + kSetupFolders[kind]; }
+static std::wstring SetupFile(int kind, const std::wstring &key) { return SetupFolder(kind) + L"\\" + SetupFileName(key) + L".ini"; }
+static std::wstring SetupFile(int kind, const char *key) { return SetupFile(kind, Wide(key)); }
+
+// The folder made where it is not (WritePrivateProfileString makes a file, not a folder).
+static void SetupFolderMake(int kind)
+{
+    CreateDirectoryW((g_dir + L"Gauges").c_str(), nullptr);
+    CreateDirectoryW(SetupFolder(kind).c_str(), nullptr);
+}
+
+// A setup's file begun: the folder, and the kind or the name written in it.
+static void SetupBegin(int kind, const std::wstring &key)
+{
+    SetupFolderMake(kind);
+    WritePrivateProfileStringW(kSetupSections[kind], kSetupNameKeys[kind], key.c_str(), SetupFile(kind, key).c_str());
+}
+
+// The setups Gauges.ini still holds, [Truck:<kind>] and [Gearbox:<name>], moved into their files: each key the file
+// does not hold yet goes in, and the section leaves Gauges.ini. Their count, by kind.
+static void SetupsMove(int (&moved)[kSetupKinds])
+{
+    const std::wstring ini = IniPath();
+    moved[kSetupTruck] = moved[kSetupGearbox] = 0;
+    std::vector<wchar_t> names(65536, L'\0');
+    const DWORD got = GetPrivateProfileSectionNamesW(names.data(), (DWORD)names.size(), ini.c_str());
+    if (!got) return;
+    std::vector<std::wstring> sections;
+    for (const wchar_t *n = names.data(); *n && n < names.data() + got; n += wcslen(n) + 1) sections.push_back(n);
+    std::vector<wchar_t> pairs(32768, L'\0');
+    for (const std::wstring &section : sections)
+        for (int kind = 0; kind < kSetupKinds; kind++)
+        {
+            const size_t prefix = wcslen(kSetupIniPrefixes[kind]);
+            if (section.size() <= prefix || _wcsnicmp(section.c_str(), kSetupIniPrefixes[kind], prefix)) continue;
+            const std::wstring key = section.substr(prefix), file = SetupFile(kind, key);
+            SetupBegin(kind, key);
+            const DWORD length = GetPrivateProfileSectionW(section.c_str(), pairs.data(), (DWORD)pairs.size(), ini.c_str());
+            for (const wchar_t *pair = pairs.data(); length && *pair && pair < pairs.data() + length; pair += wcslen(pair) + 1)
+            {
+                const wchar_t *eq = wcschr(pair, L'=');
+                if (!eq || eq == pair) continue;
+                const std::wstring name(pair, eq);
+                wchar_t there[8] = {};
+                if (!GetPrivateProfileStringW(kSetupSections[kind], name.c_str(), L"", there, 8, file.c_str()))
+                    WritePrivateProfileStringW(kSetupSections[kind], name.c_str(), eq + 1, file.c_str());
+            }
+            WritePrivateProfileStringW(section.c_str(), nullptr, nullptr, ini.c_str());
+            moved[kind]++;
+        }
+}
+
 // Every key of [Gauges] into the ini (WritePrivateProfileString keeps the comments, the keys it is not given and the
 // other sections).
 static void WriteIni(const GaugeSettings &s)
@@ -391,10 +463,10 @@ static void ReadIni(GaugeSettings &s)
                         L"; 0 = the class's own: trucks 1.8 bar, scouts 1, heavy trucks 2.\n"
                         L"; BoostProfile is how the turbo gets there: 0 = standard, 1 = small and quick (boost early, little lag),\n"
                         L"; 2 = big and slow (boost late, long to come at low revs), 3 = two stages (a small turbo early, a big one after).\n"
-                        L"; A kind of truck can have these seven of its own. They stand in a section named after the truck, such as\n"
-                        L"; [Truck:chevrolet_ck1500], which the mod writes when one of the seven is changed on the tab while such a truck\n"
-                        L"; is driven. The tab and Gauges.log name the truck. A truck without a section takes the seven from [Gauges],\n"
-                        L"; and so does a truck's section for each of them it leaves out.\n"
+                        L"; A kind of truck can have these seven of its own. They stand in a file of its own in the folder Gauges\\trucks,\n"
+                        L"; such as Gauges\\trucks\\chevrolet_ck1500.ini, which the mod writes when one of the seven is changed on the tab\n"
+                        L"; while such a truck is driven; a file can be passed on and dropped in. The tab and Gauges.log name the truck.\n"
+                        L"; A truck without a file takes the seven from [Gauges], and so does a truck's file for each of them it leaves out.\n"
                         L"; The tilt lamp is green while the truck stands level. It turns amber when the truck leans to a side by\n"
                         L"; RollWarnDeg degrees and red from RollDangerDeg, or when it points up or down a slope by PitchDangerDeg.\n"
                         L"; The coolant temperature is worked out from the fuel the engine burns (the pedal and the engine speed) and\n"
@@ -441,7 +513,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; shows, less with cold oil and without boost, and doubled by the converter at its stall (Gearbox=1), in place\n"
                         L"; of the game's own, which falls away toward each gear's top. The mod writes the game's torque factor for it.\n"
                         L"; EngineShare: how much of the mod's engine the game gets, 0 to 100 percent (50: half way between the two).\n"
-                        L"; [Gearbox:<name>] GearHold: seconds a gearbox holds each gear going up with Powertrain=1, 1 to 3 (the tab's slider).\n"
+                        L"; Gauges\\gearboxes\\<name>.ini GearHold: seconds a gearbox holds each gear going up with Powertrain=1, 1 to 3 (the tab).\n"
                         L"; For work on the mod: Demo=1 draws demo values whenever no truck is driven, Probe=1 logs the values read from the game.\n");
             fclose(f);
             WriteIni(s);
@@ -450,6 +522,11 @@ static void ReadIni(GaugeSettings &s)
         return;
     }
     MapDefaultsWrite();
+    int moved[kSetupKinds];
+    SetupsMove(moved);
+    if (moved[kSetupTruck] || moved[kSetupGearbox])
+        Log(L"settings: %d trucks' scales and %d gearboxes' holds moved out of Gauges.ini, each into a file of its own in Gauges\\trucks and "
+            L"Gauges\\gearboxes", moved[kSetupTruck], moved[kSetupGearbox]);
     s.layout = IniInt(L"Layout", s.layout, ini);
     s.style = IniInt(L"Style", s.style, ini);
     s.faceOpacity = IniFloat(L"FaceOpacity", s.faceOpacity, ini);
@@ -551,17 +628,16 @@ void GearHoldSet(float seconds)
     InterlockedExchange(&g_gearHoldAsked, 1);
 }
 
-// ---- a gearbox's own hold: the section [Gearbox:<key>] of Gauges.ini ----
+// ---- a gearbox's own hold: its file Gauges\gearboxes\<name>.ini ----
 // GearHold: the seconds each gear of that gearbox is held going up with the mod's engine (kGearHoldRange); without
 // it the truck's class has it (kEngineGearHold, kEngineGearHoldScout). The key is GearboxKey's: the gearbox's name in
 // the game's files, or its gears' speeds where the name is not read.
-static std::wstring GearboxSection(const char *key) { return L"Gearbox:" + Wide(key); }
 
-// The gearbox's own hold, into hold; false where its section has none.
+// The gearbox's own hold, into hold; false where its file has none.
 static bool GearHoldRead(const char *key, float &hold)
 {
     wchar_t buf[16] = {};
-    if (!key[0] || GetPrivateProfileStringW(GearboxSection(key).c_str(), L"GearHold", L"", buf, 16, IniPath().c_str()) == 0) return false;
+    if (!key[0] || GetPrivateProfileStringW(kSetupSections[kSetupGearbox], L"GearHold", L"", buf, 16, SetupFile(kSetupGearbox, key).c_str()) == 0) return false;
     const float v = (float)_wtof(buf);
     if (!isfinite(v) || v <= 0.0f) return false;
     hold = SettingsRange(v, kGearHoldRange[0], kGearHoldRange[1]);
@@ -572,21 +648,20 @@ static void GearHoldWrite(const char *key, float hold)
 {
     wchar_t buf[16];
     swprintf_s(buf, L"%.1f", hold);
-    WritePrivateProfileStringW(GearboxSection(key).c_str(), L"GearHold", buf, IniPath().c_str());
+    SetupBegin(kSetupGearbox, Wide(key));
+    WritePrivateProfileStringW(kSetupSections[kSetupGearbox], L"GearHold", buf, SetupFile(kSetupGearbox, key).c_str());
 }
 
-// ---- a truck's own scales: the section [Truck:<key>] of Gauges.ini ----
+// ---- a truck's own scales: its file Gauges\trucks\<kind>.ini ----
 // A truck can have seven settings of its own: TachClass, IdleRpm, RedlineRpm, MaxRpm, SpeedMax, BoostMax and BoostProfile. They are written
 // when one of them is changed on the tab while that truck is driven, and take the place of the plain ones of
 // [Gauges] whenever that truck is driven again. The key is the truck's as truck.h makes it (TruckKey).
 
-static std::wstring TruckSection(const char *key) { return L"Truck:" + Wide(key); }
-
-// Lays the truck's own scales over s: each of the seven its section holds. One the section does not hold stays as
-// it is in s. False when the section holds none of them, or is not there.
+// Lays the truck's own scales over s: each of the seven its file holds. One the file does not hold stays as it is in
+// s. False when the file holds none of them, or is not there.
 static bool ReadTruckIni(const char *key, GaugeSettings &s)
 {
-    const std::wstring ini = IniPath(), section = TruckSection(key);
+    const std::wstring ini = SetupFile(kSetupTruck, key), section = kSetupSections[kSetupTruck];
     bool any = false;
     auto has = [&](const wchar_t *name) {
         wchar_t buf[8] = {};
@@ -605,10 +680,11 @@ static bool ReadTruckIni(const char *key, GaugeSettings &s)
     return any;
 }
 
-// Writes the truck's section: the seven scales of s.
+// Writes the truck's file: the seven scales of s.
 static void WriteTruckIni(const char *key, const GaugeSettings &s)
 {
-    const std::wstring ini = IniPath(), section = TruckSection(key);
+    const std::wstring ini = SetupFile(kSetupTruck, key), section = kSetupSections[kSetupTruck];
+    SetupBegin(kSetupTruck, Wide(key));
     IniPutInt(section.c_str(), L"TachClass", s.tachClass, ini);
     IniPutFloat(section.c_str(), L"IdleRpm", s.idleRpm, ini);
     IniPutFloat(section.c_str(), L"RedlineRpm", s.redlineRpm, ini);
@@ -618,13 +694,16 @@ static void WriteTruckIni(const char *key, const GaugeSettings &s)
     IniPutInt(section.c_str(), L"BoostProfile", s.boostProfile, ini);
 }
 
-// Takes the truck's seven scales out of the ini, and its section with them when nothing else is in it.
+// Takes the truck's seven scales out of its file, and the file with them when nothing else is in it.
 static void DropTruckIni(const char *key)
 {
-    const std::wstring ini = IniPath(), section = TruckSection(key);
-    for (const wchar_t *name : { L"TachClass", L"IdleRpm", L"RedlineRpm", L"MaxRpm", L"SpeedMax", L"BoostMax", L"BoostProfile" }) WritePrivateProfileStringW(section.c_str(), name, nullptr, ini.c_str());
+    const std::wstring ini = SetupFile(kSetupTruck, key), section = kSetupSections[kSetupTruck];
+    if (GetFileAttributesW(ini.c_str()) == INVALID_FILE_ATTRIBUTES) return;
+    for (const wchar_t *name : { L"TachClass", L"IdleRpm", L"RedlineRpm", L"MaxRpm", L"SpeedMax", L"BoostMax", L"BoostProfile", L"Kind" })
+        WritePrivateProfileStringW(section.c_str(), name, nullptr, ini.c_str());
     wchar_t rest[8] = {};
-    if (!GetPrivateProfileSectionW(section.c_str(), rest, 8, ini.c_str())) WritePrivateProfileStringW(section.c_str(), nullptr, nullptr, ini.c_str());
+    if (!GetPrivateProfileSectionW(section.c_str(), rest, 8, ini.c_str())) DeleteFileW(ini.c_str());
+    else SetupBegin(kSetupTruck, Wide(key)); // something else stays: the kind with it
 }
 
 // The seven scales a truck can have of its own: copied from one set of settings into another, and compared.
@@ -1103,7 +1182,7 @@ static void LogSettings(const GaugeSettings &s)
 // Saves the ini and says so in the log.
 static void SettingsSave(SettingsState &st)
 {
-    if (st.own && st.changed) Log(L"settings: saved to Gauges.ini, the scales under [Truck:%S]", st.key);
+    if (st.own && st.changed) Log(L"settings: saved, the truck's scales in Gauges\\trucks\\%s.ini", SetupFileName(Wide(st.key)).c_str());
     else Log(L"settings: saved to Gauges.ini");
     SettingsWrite(st);
     LogSettings(st.s);
@@ -1212,9 +1291,9 @@ static void GearboxLook(TruckWatch &w, const TruckMemory &m, const TruckRaw &raw
     strcpy_s(w.gearboxKey, key);
     w.gearHoldOwn = GearHoldRead(key, w.gearHold);
     if (named) Log(L"gearbox: %S (its name at vehicle + 0x%x); each gear held going up %.1f s, %s", key, at, GearHoldOf(w, tachClass),
-                   w.gearHoldOwn ? L"its own ([Gearbox:...] GearHold)" : L"the truck class's");
+                   w.gearHoldOwn ? L"its own (its file in Gauges\\gearboxes)" : L"the truck class's");
     else Log(L"gearbox: its name not read, so it goes by its gears (%S); each gear held going up %.1f s, %s", key, GearHoldOf(w, tachClass),
-             w.gearHoldOwn ? L"its own ([Gearbox:...] GearHold)" : L"the truck class's");
+             w.gearHoldOwn ? L"its own (its file in Gauges\\gearboxes)" : L"the truck class's");
 }
 
 // Looks up the record of the driven truck's engine, and says so in the log when it is another one than before. With
@@ -1761,7 +1840,7 @@ static DWORD WINAPI Run(void *)
             GaugeSettings in;
             SettingsGet(in);
             SettingsTake(set, in);
-            if (set.own && !ownBefore) Log(L"truck: %S has scales of its own from now on, kept under [Truck:%S] in Gauges.ini", set.key, set.key);
+            if (set.own && !ownBefore) Log(L"truck: %S has scales of its own from now on, kept in Gauges\\trucks\\%s.ini", set.key, SetupFileName(Wide(set.key)).c_str());
             saveAt = GetTickCount64() + 1000;
             edited = true;
         }
@@ -1879,7 +1958,8 @@ static DWORD WINAPI Run(void *)
         }
         if (gearHoldLogAt && GetTickCount64() >= gearHoldLogAt)
         {
-            Log(L"gearbox: [Gearbox:%S] set from the tab: each gear held %.1f s going up", watch.gearboxKey, watch.gearHold);
+            Log(L"gearbox: %S set from the tab: each gear held %.1f s going up (Gauges\\gearboxes\\%s.ini)", watch.gearboxKey, watch.gearHold,
+                SetupFileName(Wide(watch.gearboxKey)).c_str());
             gearHoldLogAt = 0;
         }
         if (mapAmbientLogAt && GetTickCount64() >= mapAmbientLogAt)
@@ -2300,8 +2380,14 @@ int wmain(int argc, wchar_t **argv)
     Check(st.engineOn && st.rpm > 650.0f && st.rpm < 2200.0f && st.rpmMax == 3000.0f && st.speedMax == 100.0f && st.mph && !st.psi && st.gearMode &&
           !strcmp(st.gearMode, "A"), "demo: a cruising truck on the scales and units of the settings");
 
-    // a truck's own scales, in its section of the ini: one state, as the mod's thread keeps it
+    // a truck's own scales, in its file in Gauges\trucks: one state, as the mod's thread keeps it
     {
+        auto truckFile = [](const char *key) { return SetupFile(kSetupTruck, key); };
+        auto truckPut = [&](const char *key, const wchar_t *name, const wchar_t *value) {
+            SetupFolderMake(kSetupTruck);
+            WritePrivateProfileStringW(L"Truck", name, value, truckFile(key).c_str());
+        };
+        for (const char *key : { "someone_elses", "mod_suv/1000001", "chevrolet_ck1500", "half", "wild" }) DeleteFileW(truckFile(key).c_str());
         DeleteFileW(ini.c_str());
         SettingsState state = {};
         ReadIni(state.plain);
@@ -2309,8 +2395,8 @@ int wmain(int argc, wchar_t **argv)
         state.plain.redlineRpm = 5000.0f;
         WriteIni(state.plain);
         // a truck this test never drives, and a truck's section with something in it that the mod does not know
-        WritePrivateProfileStringW(L"Truck:someone_elses", L"RedlineRpm", L"1800", ini.c_str());
-        WritePrivateProfileStringW(L"Truck:mod_suv/1000001", L"FromALaterVersion", L"7", ini.c_str());
+        truckPut("someone_elses", L"RedlineRpm", L"1800");
+        truckPut("mod_suv/1000001", L"FromALaterVersion", L"7");
         SettingsFor(state, "");
         const bool none = !state.own && SameSettings(state.s, state.plain);
         GaugeSettings in = state.s;
@@ -2355,54 +2441,52 @@ int wmain(int argc, wchar_t **argv)
               GaugeScaleOf(next.s).boost == 1.45f && next.s.boostProfile == kSpoolLaggy && next.s.redlineRpm == 5000.0f,
               "trucks: after a new start [Gauges] reads back as the plain settings and each truck has its own scales again");
         wchar_t kept[16] = {}, later2[16] = {};
-        GetPrivateProfileStringW(L"Truck:someone_elses", L"RedlineRpm", L"", kept, 16, ini.c_str());
-        GetPrivateProfileStringW(L"Truck:mod_suv/1000001", L"FromALaterVersion", L"", later2, 16, ini.c_str());
-        Check(!wcscmp(kept, L"1800") && !wcscmp(later2, L"7"), "trucks: the section of a truck that was not driven, and a key the mod does not know in a truck's section, survive the writes");
+        GetPrivateProfileStringW(L"Truck", L"RedlineRpm", L"", kept, 16, truckFile("someone_elses").c_str());
+        GetPrivateProfileStringW(L"Truck", L"FromALaterVersion", L"", later2, 16, truckFile("mod_suv/1000001").c_str());
+        Check(!wcscmp(kept, L"1800") && !wcscmp(later2, L"7"), "trucks: the file of a truck that was not driven, and a key the mod does not know in a truck's file, survive the writes");
         // a section that holds one of the seven takes the others from [Gauges]; what is out of range is held to it
-        WritePrivateProfileStringW(L"Truck:half", L"MaxRpm", L"4000", ini.c_str());
-        WritePrivateProfileStringW(L"Truck:wild", L"RedlineRpm", L"50", ini.c_str());
-        WritePrivateProfileStringW(L"Truck:wild", L"TachClass", L"9", ini.c_str());
-        WritePrivateProfileStringW(L"Truck:wild", L"IdleRpm", L"nan", ini.c_str());
-        WritePrivateProfileStringW(L"Truck:wild", L"BoostProfile", L"9", ini.c_str());
+        truckPut("half", L"MaxRpm", L"4000");
+        truckPut("wild", L"RedlineRpm", L"50");
+        truckPut("wild", L"TachClass", L"9");
+        truckPut("wild", L"IdleRpm", L"nan");
+        truckPut("wild", L"BoostProfile", L"9");
         SettingsFor(next, "wild");
         const bool wild = next.own && next.s.redlineRpm == kRedlineRange[0] && next.s.tachClass == kClassTruck && next.s.idleRpm == next.plain.idleRpm &&
                           next.s.boostProfile == kSpoolStandard;
         SettingsFor(next, "half");
         Check(wild && next.own && !next.changed && next.s.maxRpm == 4000.0f && next.s.redlineRpm == 5000.0f && next.s.tachClass == kClassScout,
-              "trucks: a section takes from [Gauges] what it leaves out, and its values are held to their ranges as those of [Gauges] are");
+              "trucks: a file takes from [Gauges] what it leaves out, and its values are held to their ranges as those of [Gauges] are");
         // a save after a change of something else leaves such a section as it is; after a change of a scale it has all seven
         wchar_t halfRed[16] = {};
         in = next.s;
         in.opacity = 0.75f;
         SettingsTake(next, in);
         SettingsWrite(next);
-        GetPrivateProfileStringW(L"Truck:half", L"RedlineRpm", L"", halfRed, 16, ini.c_str());
+        GetPrivateProfileStringW(L"Truck", L"RedlineRpm", L"", halfRed, 16, truckFile("half").c_str());
         const bool leftAlone = next.own && !halfRed[0];
         in = next.s;
         in.idleRpm = 900.0f;
         SettingsTake(next, in);
         SettingsWrite(next);
-        GetPrivateProfileStringW(L"Truck:half", L"RedlineRpm", L"", halfRed, 16, ini.c_str());
+        GetPrivateProfileStringW(L"Truck", L"RedlineRpm", L"", halfRed, 16, truckFile("half").c_str());
         wchar_t halfTurbo[16] = {};
-        GetPrivateProfileStringW(L"Truck:half", L"BoostProfile", L"", halfTurbo, 16, ini.c_str());
+        GetPrivateProfileStringW(L"Truck", L"BoostProfile", L"", halfTurbo, 16, truckFile("half").c_str());
         Check(leftAlone && !wcscmp(halfRed, L"5000") && !wcscmp(halfTurbo, L"0") && !next.changed,
-              "trucks: a save leaves a truck's section as it is until one of its scales is changed on the tab, and then writes all seven");
+              "trucks: a save leaves a truck's file as it is until one of its scales is changed on the tab, and then writes all seven");
         // the truck gives its scales up: they go out of the ini, what else its section holds stays, and a section left empty goes
         SettingsFor(next, "mod_suv/1000001");
         SettingsDrop(next);
         const bool dropped = !next.own && SameSettings(next.s, next.plain);
         SettingsFor(next, "mod_suv/1000001");
-        GetPrivateProfileStringW(L"Truck:mod_suv/1000001", L"FromALaterVersion", L"", later2, 16, ini.c_str());
+        GetPrivateProfileStringW(L"Truck", L"FromALaterVersion", L"", later2, 16, truckFile("mod_suv/1000001").c_str());
         const bool moddedPlain = !next.own && SameSettings(next.s, next.plain) && !wcscmp(later2, L"7");
         SettingsFor(next, "chevrolet_ck1500");
         SettingsDrop(next);
-        wchar_t rest[64] = {}, names[1024] = {};
-        const DWORD left = GetPrivateProfileSectionW(L"Truck:chevrolet_ck1500", rest, 64, ini.c_str());
-        GetPrivateProfileSectionNamesW(names, 1024, ini.c_str());
-        bool ckSection = false;
-        for (const wchar_t *n = names; *n; n += wcslen(n) + 1) if (!_wcsicmp(n, L"Truck:chevrolet_ck1500")) ckSection = true;
+        wchar_t rest[64] = {};
+        const DWORD left = GetPrivateProfileSectionW(L"Truck", rest, 64, truckFile("chevrolet_ck1500").c_str());
+        const bool ckSection = GetFileAttributesW(truckFile("chevrolet_ck1500").c_str()) != INVALID_FILE_ATTRIBUTES;
         Check(dropped && moddedPlain && !next.own && !left && !ckSection,
-              "trucks: a truck that gives up its scales takes the plain ones, its section keeps what else it holds, and an empty section goes");
+              "trucks: a truck that gives up its scales takes the plain ones, its file keeps what else it holds, and an empty file goes");
         // the defaults: the plain settings and the driven truck's own scales; another truck keeps its own
         SettingsFor(next, "half");
         const bool halfOwn = next.own;
@@ -2412,10 +2496,46 @@ int wmain(int argc, wchar_t **argv)
         SettingsDefaults(defaults);
         ReadIni(fromIni);
         wchar_t halfMax[16] = {};
-        GetPrivateProfileStringW(L"Truck:half", L"MaxRpm", L"", halfMax, 16, ini.c_str());
-        GetPrivateProfileStringW(L"Truck:someone_elses", L"RedlineRpm", L"", kept, 16, ini.c_str());
+        GetPrivateProfileStringW(L"Truck", L"MaxRpm", L"", halfMax, 16, truckFile("half").c_str());
+        GetPrivateProfileStringW(L"Truck", L"RedlineRpm", L"", kept, 16, truckFile("someone_elses").c_str());
         Check(halfOwn && !next.own && SameSettings(next.s, defaults) && SameSettings(fromIni, defaults) && !halfMax[0] && !wcscmp(kept, L"1800"),
-              "trucks: the defaults take the plain settings and the driven truck's own scales, and leave the other trucks' sections as they were");
+              "trucks: the defaults take the plain settings and the driven truck's own scales, and leave the other trucks' files as they were");
+            // the files' names: a modded truck's stroke as "@", what no file's name may hold as "_"
+        Check(SetupFileName(L"mod_suv/1000001") == L"mod_suv@1000001" && SetupFileName(L"a:b*c?") == L"a_b_c_" &&
+                  SetupFileName(L"gears 1.5 4 high 2") == L"gears 1.5 4 high 2" && truckFile("mod_suv/1000001").find(L"Gauges\\trucks\\mod_suv@1000001.ini") != std::wstring::npos,
+              "setups: a file's name from the truck's kind or the gearbox's name");
+        // a gearbox's hold into its file and back, held to its range
+        DeleteFileW(SetupFile(kSetupGearbox, "g_test_box").c_str());
+        float holdBack = 0.0f, holdWild = 0.0f;
+        const bool noHold = !GearHoldRead("g_test_box", holdBack);
+        GearHoldWrite("g_test_box", 1.7f);
+        const bool holdRead = GearHoldRead("g_test_box", holdBack);
+        WritePrivateProfileStringW(L"Gearbox", L"GearHold", L"9", SetupFile(kSetupGearbox, "g_test_box").c_str());
+        GearHoldRead("g_test_box", holdWild);
+        wchar_t boxName[32] = {};
+        GetPrivateProfileStringW(L"Gearbox", L"Name", L"", boxName, 32, SetupFile(kSetupGearbox, "g_test_box").c_str());
+        Check(noHold && holdRead && fabsf(holdBack - 1.7f) < 0.001f && holdWild == kGearHoldRange[1] && !wcscmp(boxName, L"g_test_box"),
+              "setups: a gearbox's hold in its own file with its name, read back, held to 1 to 3 seconds");
+        // the sections of 0.13.9 and before moved out of Gauges.ini into the files, a key the file holds already kept
+        DeleteFileW(truckFile("mover/123").c_str());
+        DeleteFileW(SetupFile(kSetupGearbox, "g_moved").c_str());
+        truckPut("mover/123", L"TachClass", L"1");
+        WritePrivateProfileStringW(L"Truck:mover/123", L"TachClass", L"2", ini.c_str());
+        WritePrivateProfileStringW(L"Truck:mover/123", L"RedlineRpm", L"3000", ini.c_str());
+        WritePrivateProfileStringW(L"Gearbox:g_moved", L"GearHold", L"1.2", ini.c_str());
+        GaugeSettings afterMove;
+        ReadIni(afterMove);
+        wchar_t movedClass[16] = {}, movedRed[16] = {}, movedKind[32] = {}, iniNames[2048] = {};
+        GetPrivateProfileStringW(L"Truck", L"TachClass", L"", movedClass, 16, truckFile("mover/123").c_str());
+        GetPrivateProfileStringW(L"Truck", L"RedlineRpm", L"", movedRed, 16, truckFile("mover/123").c_str());
+        GetPrivateProfileStringW(L"Truck", L"Kind", L"", movedKind, 32, truckFile("mover/123").c_str());
+        float movedHold = 0.0f;
+        const bool holdMoved = GearHoldRead("g_moved", movedHold) && fabsf(movedHold - 1.2f) < 0.001f;
+        GetPrivateProfileSectionNamesW(iniNames, 2048, ini.c_str());
+        bool leftInIni = false;
+        for (const wchar_t *n = iniNames; *n; n += wcslen(n) + 1) leftInIni = leftInIni || !_wcsnicmp(n, L"Truck:", 6) || !_wcsnicmp(n, L"Gearbox:", 8);
+        Check(!wcscmp(movedClass, L"1") && !wcscmp(movedRed, L"3000") && !wcscmp(movedKind, L"mover/123") && holdMoved && !leftInIni,
+              "setups: the trucks' and gearboxes' sections of Gauges.ini moved into their own files, what a file held already kept, none left behind");
     }
 
     // the maps' sections: the regions' written into an ini that has none; a map takes its own section, else its
