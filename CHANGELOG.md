@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.13.7] 2026-10-11
+
+- With the engine handed to the game, going up through the gears, from a standstill or after a shift up, each gear is held at least two and a half seconds of moving, on the limiter if it comes to that. An empty Fleetstar, one of the first trucks of the game, went 1 to 5 in two seconds and pulled like a late one. A gear a kickdown brings is not held: the kickdown keeps its pace. 0.13.6's half second between shifts up floored is gone again, and the floor the gearbox keeps under the game's gear lets a gear held on the limiter stay.
+
 ## [0.13.6] 2026-10-11
 
 - With the engine handed to the game, floored, a shift up may follow another after half a second, not a whole one. An empty Fleetstar went through its close gears (tops 8, 13, 17, 21 and 25 rad/s) faster than a shift a second, so 10 of its 21 floored shifts up came on the limiter, at 0.98 to 1.15 of the gear's top (1 to 5 in two seconds at 14:12:05, each on the limiter). The limiter is now also judged by the wheels as they turn, not only by their smoothed speed, which lags a quick truck by a fifth of a short gear.

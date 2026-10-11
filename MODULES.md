@@ -730,6 +730,15 @@ floored shifts up on the limiter (0.98 to 1.15 of the gear's top; 1 to 5 in 2 s 
 `kShiftAgain`; `pastIn` with the mod's engine also by `byUp` (the smoothed `by` lagged 1.35 rad/s at 6 rad/s each
 second). The scout's shifts taken back at 14:15:36 and 14:16:39: the truck stopped in two to three seconds (from 0.57
 of the fifth's top to 0.14), an obstacle or deep mud, not the gearbox. Models 145 OK.
+The drive of 14:30 (0.13.5, the scout of the drives, EngineShare 100): the user: "kickdown works; the truck tops out at
+close to 100 km/h with this gearbox, which is a good thing". On the Fleetstar's 1 to 5 in two seconds: "pretty annoying;
+one of the first base game trucks, it accelerates like a late game truck; the mod has to go through the gears, at
+least 2 to 3 seconds; faster than the base game is fine, as long as it does not jump to fifth". 0.13.7:
+`kEngineGearHold` 2.5 s of moving (`GearboxModel::moving`, 0 at a shift and while standing) for a gear that came by a
+shift up or from a standstill (`holdUp`), the limiter's shift up included; a kickdown's gear not held; 0.13.6's
+`kEngineAgainFeel` gone; `GearboxLowestFit` with the mod's engine by the tachometer's top, so the takeover's floor does
+not shift a held gear up. The floored pull test at 2 rad/s each second (at 3 the third gear is through in 1.8 s and
+held); the quick truck (gaining 6, governed at the gear's top) holds each gear 2.55 s. Models 145 OK.
 
 Part A, research and design note (no hook before the user's OK on the note):
 - Where the game turns the pedal into torque and how the automatic decides a shift: the truck action's per-frame

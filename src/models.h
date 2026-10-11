@@ -1060,6 +1060,8 @@ struct GearboxModel
     float kick;        // seconds the kickdown of a push may still come in
     float climb;       // seconds the shift points stay at floored's after a climb
     float stuck;       // seconds the truck has been stuck floored (kStuckShare): the crawling gears are let in
+    float moving;      // seconds in the gear with the truck moving: 0 at a shift and while it stands
+    bool holdUp;       // the gear came by a shift up or from a standstill: with the mod's engine it is held kEngineGearHold
     int shifts;        // shifts since the model began
 };
 
@@ -1164,9 +1166,12 @@ static const float kEngineUpLight = 0.3f, kEngineUpFloored = 0.95f;     // up th
 static const float kEngineDownLight = 0.1f, kEngineDownFloored = 0.3f;  // down below this, the same way
 static const float kEngineKickTo = 0.85f;   // the kickdown goes to the lowest gear that keeps the engine under this,
 static const float kKickRoom = 0.92f;       // and under this share of the gear's floored point up, so it is not left again at once
-static const float kEngineLimit = 0.98f;    // past this the engine is on the limiter: up at once, whatever the pause
-static const float kEngineAgainFeel = 0.9f; // floored this far, a shift up may follow another after kShiftAgain, not the whole pause: an
-                                            // empty truck goes through close gears faster than a shift a second, and met the limiter in each
+static const float kEngineLimit = 0.98f;    // past this the engine is on the limiter: up at once, but for kEngineGearHold
+// Going up through the gears, from a standstill or from a shift up, each gear is held this many seconds of moving,
+// on the limiter if it comes to that (the game governs the wheels at the gear's top): an empty Fleetstar went 1 to 5
+// in two seconds and pulled like a late truck; the user: at least two to three seconds a gear. A gear a shift down or a
+// kickdown brought is not held.
+static const float kEngineGearHold = 2.5f;
 // A game's gearbox has its first gears for crawling: on a scout's road gearbox the first can be an eighth of the top
 // gear's speed, where a real one's is a fifth to a seventh. With the mod's engine the automatic sets off in the lowest gear at
 // least kStartShare of the top gear's (as a truck automatic starts in the second), and takes a lower one only stuck:
@@ -1287,7 +1292,7 @@ inline float GearboxDownPoint(const TruckRaw &t, const GaugeScale &k, int gear, 
 // gears at a time when the truck slows hard. With the engine handed to the game (Powertrain=1, engine) the points are
 // a truck automatic's schedule (kEngineUpLight and the rest): floored it revs to the red zone, at a light foot it
 // shifts early, down well under where the gear above lands, one gear up at a time and a second in each but on the
-// limiter (floored, after kShiftAgain), and a kickdown to the lowest gear under kEngineKickTo; it sets off in the start gear (GearboxStartGear) and
+// limiter, each gear held kEngineGearHold going up, and a kickdown to the lowest gear under kEngineKickTo; it sets off in the start gear (GearboxStartGear) and
 // takes the gears under it only stuck (kStuckShare). A truck slowing with the foot on is climbing: the points go where floored
 // puts them, and stay there kClimbHold after, so it shifts down in time and does not hunt. A push of the pedal past
 // kKickdown kicks down at once to the gear that pulls the most.
@@ -1426,7 +1431,16 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     m.wanted = wantUp ? fmaxf(m.wanted, 0.0f) + dt : wantDown ? fminf(m.wanted, 0.0f) - dt : 0.0f;
     // all but standing, the first gear (the start gear) at once, whatever the pause: an automatic is in it by the time
     // the truck stops, also after a hard stop that left no time for the shifts down one by one
-    if (m.gear != least && GearboxInput(t, k, 1, fmaxf(raw, m.by)) < k.redline * kStopShift)
+    const bool standing = GearboxInput(t, k, 1, fmaxf(raw, m.by)) < k.redline * kStopShift;
+    if (standing)
+    {
+        m.moving = 0.0f;
+        m.holdUp = true;
+    }
+    else m.moving += dt;
+    // with the mod's engine, a gear come by a shift up or from a standstill is held kEngineGearHold
+    const bool held = engine && m.holdUp && m.moving < kEngineGearHold;
+    if (m.gear != least && standing)
         to = least;
     else if (m.kick > 0.0f && m.gear > least && fits(m.gear - 1) &&
              (engine ? kickable(m.gear - 1) : pulls(m.gear - 1) >= pulls(m.gear) * (1.0f + kShiftPullGain)))
@@ -1438,9 +1452,9 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
             to--;
         m.kick = 0.0f;
     }
-    else if (pastIt)
+    else if (pastIt && !held)
         to = upTo(m.gear); // past the red zone or what the engine can take: up at once, whatever the pause
-    else if (m.pause <= (m.upLast && (!engine || feel >= kEngineAgainFeel) ? kShiftPause - kShiftAgain : 0.0f) &&
+    else if (!held && m.pause <= (m.upLast && !engine ? kShiftPause - kShiftAgain : 0.0f) &&
              m.wanted >= kShiftUpAfter + (kShiftUpAfterFloored - kShiftUpAfter) * feel)
         to = upTo(m.gear);
     else if (m.pause <= 0.0f && footOff && m.wanted <= -kCoastDownAfter)
@@ -1454,6 +1468,8 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     if (to != m.gear)
     {
         m.upLast = to > m.gear;
+        m.holdUp = to > m.gear || standing;
+        m.moving = 0.0f;
         m.gear = to;
         m.locked = false;
         m.pause = kShiftPause;
@@ -1475,13 +1491,13 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
 }
 
 // The lowest gear the engine can take at the speed the truck goes (under kDownMost from idle to the red zone; with the
-// mod's engine, engine, under the limiter, kEngineLimit), 1 when the first can, and 1 before the wheels' grip is
+// mod's engine, engine, under the tachometer's top), 1 when the first can, and 1 before the wheels' grip is
 // learned: a wheel spinning by itself at a standstill is no speed.
 inline int GearboxLowestFit(const GearboxModel &m, const TruckRaw &t, const GaugeScale &k, bool engine = false)
 {
     if (m.grip <= 0.0f) return 1;
     const int top = TruckTopGear(t);
-    const float most = GearboxPoint(k, engine ? kEngineLimit : kDownMost); // with the mod's engine, the limiter
+    const float most = engine ? k.max : GearboxPoint(k, kDownMost); // with the mod's engine, the tachometer's top: a gear held on the limiter (kEngineGearHold) stays
     int gear = 1;
     while (gear < top && GearboxInput(t, k, gear, m.rolling) >= most) gear++;
     return gear;
