@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.14.1] 2026-10-11
+
+- The gearbox's name is read where the game keeps it, at the truck's vehicle + 0x9a0, which 0.14.0's search found on four trucks. A name there is taken whatever it begins with, so a modded gearbox not named with "g_" is known by its name too, where it went by its gears' speeds (two modded trucks in the drive of 16:48). The search stays behind it, and the gears behind that.
+
 ## [0.14.0] 2026-10-11
 
 - Each truck's own scales and each gearbox's own hold are kept in a file of their own, in the folder `Gauges` beside `Gauges.ini`: `Gauges\trucks\<kind>.ini` and `Gauges\gearboxes\<name>.ini`. A setup can be passed to another player and dropped into their folder as it is. A modded truck's kind holds a stroke (`<name>/<mod id>`), which a file's name cannot, so its file is `<name>@<mod id>.ini`. The first start of this version moves the `[Truck:<kind>]` and `[Gearbox:<name>]` sections out of `Gauges.ini` into their files, keeping what a file already holds, and says so in the log.

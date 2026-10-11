@@ -519,28 +519,39 @@ inline bool TruckEngineRecord(const TruckMemory &m, uint64_t vehicle, EngineReco
     return false;
 }
 
-// The name of the gearbox fitted, as the game's files name it ("g_" and more, as "g_scout_highway"): a text the game
-// holds in the vehicle, as it holds the engine's at + 0x968. Its place is not known yet: the texts from + 0x900 to
-// + 0xC00 are looked through for the first that begins with "g_" and is a name (letters, digits and "_"). at: where
-// it stood, from the vehicle, for the log. False where none is.
-static const uint32_t kGearboxNameFrom = 0x900, kGearboxNameTo = 0xC00;
+// The name of the gearbox fitted, as the game's files name it (the game's own begin with "g_", as "g_scout_default";
+// a mod's may not): a text the game holds at vehicle + 0x9a0, as it holds the engine's at + 0x968 (found by 0.13.9's
+// search on four trucks, two of the game's and two modded: "g_truck_default", "g_scout_default" and the mods' own). A
+// name there is taken whatever it begins with; where none is, the texts from + 0x900 to + 0xC00 are looked through
+// for the first that begins with "g_". A name: letters, digits, "_" and "-". at: where it stood, from the vehicle,
+// for the log. False where none is.
+static const uint32_t kGearboxNameAt = 0x9a0, kGearboxNameFrom = 0x900, kGearboxNameTo = 0xC00;
+inline bool TruckNameText(const TruckMemory &m, uint64_t at, char (&out)[kMaxText], size_t &length)
+{
+    if (!TruckText(m, at, out, length) || length < 2) return false;
+    for (size_t i = 0; i < length; i++)
+    {
+        const char c = out[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-')) return false;
+    }
+    return true;
+}
 inline bool TruckGearboxName(const TruckMemory &m, uint64_t vehicle, char (&out)[kMaxText], uint32_t &at)
 {
     out[0] = 0;
     at = 0;
     if (!vehicle) return false;
+    char text[kMaxText];
+    size_t length = 0;
+    if (TruckNameText(m, vehicle + kGearboxNameAt, text, length))
+    {
+        memcpy(out, text, length + 1);
+        at = kGearboxNameAt;
+        return true;
+    }
     for (uint32_t o = kGearboxNameFrom; o + 0x20 <= kGearboxNameTo; o += 8)
     {
-        char text[kMaxText];
-        size_t length = 0;
-        if (!TruckText(m, vehicle + o, text, length) || length < 3 || text[0] != 'g' || text[1] != '_') continue;
-        bool name = true;
-        for (size_t i = 0; i < length && name; i++)
-        {
-            const char c = text[i];
-            name = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
-        }
-        if (!name) continue;
+        if (!TruckNameText(m, vehicle + o, text, length) || length < 3 || text[0] != 'g' || text[1] != '_') continue;
         memcpy(out, text, length + 1);
         at = o;
         return true;

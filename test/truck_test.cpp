@@ -479,8 +479,14 @@ int main()
         TruckRead(kMemory, r, gearsOnly);
         GearboxKey(gearsOnly, gearboxName, gearboxKey, sizeof gearboxKey);
         GearboxKey(gearsOnly, "", gearsKey, sizeof gearsKey);
-        Check(noName && named && !strcmp(gearboxKey, "g_scout_highway_long") && !strcmp(gearsKey, "gears 3 6 12 16 high 8"),
-              "gearbox: its name read from the vehicle, a text that is no name passed over; without a name it goes by its gears");
+        // at + 0x9a0, where the game keeps it, a mod's name that does not begin with "g_" is taken too
+        PutText(kVehicle + 0x9a0, "box-of_a_mod", 0);
+        char atName[kMaxText];
+        uint32_t atAt = 0;
+        const bool atPlace = TruckGearboxName(kMemory, kVehicle, atName, atAt) && !strcmp(atName, "box-of_a_mod") && atAt == 0x9a0;
+        Check(noName && named && atPlace && !strcmp(gearboxKey, "g_scout_highway_long") && !strcmp(gearsKey, "gears 3 6 12 16 high 8"),
+              "gearbox: its name read from the vehicle at + 0x9a0, whatever it begins with, else the first name with g_ near it, a text that is no "
+              "name passed over; without a name it goes by its gears");
         Put(kModel + 0x784, 9007.0f);
         const float massRead = TruckMass(kMemory, kModel);
         Put(kModel + 0x784, 5.0f);

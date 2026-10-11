@@ -745,6 +745,12 @@ after shifts up: the scout 2 to 3 s a gear mostly, at 0.89 to 0.95 of the top (5
 1.02); the Fleetstar 2 to 3 s at 0.94 to 0.98; the heavy one 2 to 3 s at 0.86 to 1.10. 0.13.8: `EngineHand::hold` by the
 tachometer's class, `kEngineGearHoldScout` 1.5 s for scouts, 2.5 for the others (the mass cannot tell them: 9007 kg
 for the scout, 6314 for the Fleetstar). Models 145 OK.
+The user (2026-10-11), for later: at a light foot the automatic shifts up too late (the scout at about 2500 rpm at
+a fifth of the pedal: `kEngineUpLight` 0.3 plus 0.6 of the pedal, of the way from idle to the red zone); the user's
+own car (a nine-speed automatic behind a 2-litre diesel) shifts at about 1500 rpm at a light foot. Wanted: the point
+up about as far along as the pedal is down (a fifth of the pedal, a fifth of the way), in steps if need be. Then the
+point down has to follow: with the scout's wide steps (1.4 to 1.6) a shift up at 1500 rpm lands near 1000, and the
+point down and `kShiftRoom` must leave that landing above it, or the shift up never comes (GearboxStep's room check).
 The user: "a slider for it, 1 s to 3 s, per gearbox". 0.13.9: `[Gearbox:<key>] GearHold` (`kGearHoldRange` 1 to 3), the
 tab's slider "Each gear going up" (`GearHoldSet`, as the map's temperature slider), the class's default without it.
 The key: the gearbox's name in the game's files ("g_" and the rest, as the scout's pak names its four), looked for among the texts of
@@ -935,6 +941,10 @@ a hint for a default at most. The user (2026-10-11): a setting per truck, and pe
 can: the engine fitted is known by its name in the game's files (`EngineRecord::name`, "<truck>_engine_<n>"), so
 a section of its own per engine (`[Engine:<name>]`, or the engine's file under 18's folder) overrides the truck's.
 Tests: the curve, the torque with no boost term, the settings round trip, the engine's section over the truck's.
+The user (2026-10-11), for the engine profiles: a peak torque rpm per engine, as most engines have their peak torque
+figures published. The profile's curve then built around it (the peak at that speed over the red zone's, say a
+plateau around it for a turbo diesel, a narrower peak for an atmospheric engine), in the engine's own file
+(`Gauges\engines\<name>.ini`, beside 18's trucks and gearboxes), the class's curve where none is set.
 
 ### 18. Sharing truck and engine setups
 
