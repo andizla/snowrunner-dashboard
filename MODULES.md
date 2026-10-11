@@ -672,6 +672,24 @@ the place stands once, the nearest place before it that the code reaches, the si
 (`GlobalResolve` adds it back); windows 10 to 40 bytes a side (`kPatternMax` 96); displacements a window cuts at either
 end left out (`GlobalSigOf`); the file says per place how many references it found and through which place. The 7
 are in `kGlobalSigs`, their four cut displacements left out by hand. Truck 79 OK.
+Harvest 2 (11:46, 0.13.3): control, game, map, viewer, input and clock each have one reference in the code, none
+standing once (a run of stores, by the look of it); control found by a getter (lea rax, [rip + d]; ret) handing out
+the object at 0x2a8eb60, control 0x18 into it; the map by the getter before it, the object at 0x2a8eb10, the map 0x20
+into it; game, viewer, input and clock not within four places reached before them. The engine sets' four of harvest
+1, hand cut, no longer stood once; harvest 2's four do. 0.13.4: the table is harvest 2's, and game (0x30), input
+(0x80), viewer (0x28) and clock (0x38) by the same two getters; `GlobalBaseBelow` takes only places a lea reaches
+(an object's start), up to 8; harvest 3 to check the table on the Steam build.
+The user's drive of 11:47 (0.13.3, the scout; EngineShare 50 to 11:54:01, then 100): "at 50 it sometimes won't shift
+when it should; 100 is better". Floored plateaus at 50: 11:50:57 to 59 and 11:51:00 to 05 in fourth at 0.85 to 0.88
+of its top, the factor at its most (2), gaining nothing; 11:52:34 in fifth at 0.80 to 0.83; 11:53:39 to 44 in third
+at 0.82 to 0.92 (the user: "in 3rd, 4th, and 5th"). The game's pull at 0.87 is 0.27 of its most; doubled by the
+blend, the fourth pulls 0.020 against the fifth's 0.023 at the same speed (x 0.55, all of the curve): short of the
+schedule's 0.96, which it never reached. `EngineHand` (the curve, the tachometer's top over the red zone's,
+EngineShare) gives `EngineGearPull` and `EngineUpShare`: the floored up point the earlier of the schedule's and where
+the next gear pulls kShiftPullGain more (on the road gearbox: 0.86 to 0.87 at 50, 0.90 to 0.92 at 100; 0.69 to 0.73
+at 0). kEngineDownFloored 0.4 to 0.3: the landings at 50 (2597 to 2935 rpm at a red zone of 4850) stand clear of
+the down point by kShiftRoom (2216; at 0.4 it was 2662, over two of them). The second truck of the drive was the
+same kind (a second of it): the model's + 0x784 again 9007, no new word on the mass. Models 144, truck 79 OK.
 
 Part A, research and design note (no hook before the user's OK on the note):
 - Where the game turns the pedal into torque and how the automatic decides a shift: the truck action's per-frame

@@ -7,9 +7,9 @@
 //
 // The signatures are harvested from the Steam build of 22 July 2026, whose places are known (GlobalHarvest, run with
 // Probe=1 on that build, writes them into Gauges.signatures.txt), and looked for in any other build (GlobalResolve).
-// Some places the code never names: they are fields of a static object the code reaches by its start, and loads
-// from that by an offset. For those the signature is of a reference to the nearest place before them the code does
-// name, with how far before it stands. Nothing here reads the game's memory but its code, and nothing is written.
+// Some places the code never names: they are fields of a static object the code reaches by its start (a lea, as the
+// small functions that hand the object out do), and loads from that by an offset. For those the signature is of a
+// reference to the nearest object start before them, with how far before it stands. Nothing here reads the game's memory but its code, and nothing is written.
 #pragma once
 #include "game_code.h"
 
@@ -28,10 +28,10 @@ static const GameGlobal kGameGlobals[kGlobCount] = {
     { "input", "kGlobInput", 0x2a8ebe0, false, 1 },            { "engine sets", "kGlobEngineSets", 0x2a9e8e0, false, 16 },
     { "clock", "kGlobClock", 0x2a8eb48, false, 1 } };
 // The harvest's version: a new one is run again on the known build where Gauges.signatures.txt is of an older one.
-static const int kHarvestVersion = 2;
-// How far before a place the code never names the harvest looks for one it does (a static object's start), and
-// how many such places it tries, nearest first.
-static const int kGlobalBaseSpan = 0x400, kGlobalBaseTries = 4;
+static const int kHarvestVersion = 3;
+// How far before a place the code never names the harvest looks for a static object's start, and how many it tries,
+// nearest first.
+static const int kGlobalBaseSpan = 0x400, kGlobalBaseTries = 8;
 
 // A signature of a global: the pattern, the place of the displacement in it, how many bytes of the instruction
 // follow the displacement (an immediate: the instruction ends that much later), and how far past the global's place
@@ -42,16 +42,27 @@ struct GlobalSig
     const char *pattern;
     int at, after, into;
 };
-// Harvested from the Steam build of 22 July 2026 (harvest 1, the displacements its windows cut at the end left out
-// by hand; the end marked by a global of -1).
+// Harvested from the Steam build of 22 July 2026 (harvest 2; the end marked by a global of -1). Control and the map
+// are fields of two static objects that small functions hand out by their start (control 0x18 into the one at
+// 0x2a8eb60, the map 0x20 into the one at 0x2a8eb10); the game and the input are fields of the first (0x30 and 0x80
+// into it), the viewer and the clock of the second (0x28 and 0x38), and are found by the same signatures.
+static const char *const kSigControlObject = "? ? ? ? C3 CC CC CC CC CC CC CC CC 48 8D 05 ? ? ? ? C3 CC CC CC CC CC CC CC CC 40 53 48 83 EC 60 48";
+static const char *const kSigMapObject = "? ? ? ? C3 CC CC CC CC CC CC CC CC 48 8D 05 ? ? ? ? C3 CC CC CC CC CC CC CC CC 48 8D 05 ? ? ? ? C3 CC CC CC CC CC CC CC "
+                                         "CC 48 8D 05 ? ? ? ? C3 CC CC CC CC CC CC CC CC 40 53 48 83 EC 60 48";
 static const GlobalSig kGlobalSigs[] = {
+    { kGlobControl, kSigControlObject, 16, 0, -0x18 },
+    { kGlobGame, kSigControlObject, 16, 0, -0x30 },
+    { kGlobInput, kSigControlObject, 16, 0, -0x80 },
+    { kGlobMap, kSigMapObject, 32, 0, -0x20 },
+    { kGlobViewer, kSigMapObject, 32, 0, -0x28 },
+    { kGlobClock, kSigMapObject, 32, 0, -0x38 },
     { kGlobWheelClass, "01 00 00 00 87 43 08 48 8D 0D ? ? ? ? 48 89 0B 89 BB CC 00 00 00 40", 10, 0, 0 },
     { kGlobWheelClass, "FE FF FF FF 48 8B D9 48 8D 05 ? ? ? ? 48 89 01 48 8B 51 18 48 85 D2", 10, 0, 0 },
     { kGlobGarage, "? ? ? ? C3 CC CC CC CC CC CC CC CC 48 8D 05 ? ? ? ? C3 CC CC CC CC CC CC CC CC 48 8B C4 4C 89 40 18", 16, 0, 0 },
-    { kGlobEngineSets, "10 05 ? ? ? ? F3 0F 11 05 ? ? ? ? BA 08 00 00 00 48 8D 0D ? ?", 10, 0, 0 },
-    { kGlobEngineSets, "1F FE FF FF FF 48 89 58 08 48 89 70 18 48 8B F1 48 85 D2 75 11 4C 8D 05 ? ? ? ? E8 ? ? ? ? ? ? ? ? ? C6 44 24 20 01 41 B1 01 4C 8D 05 ? ? ?", 24, 0, 0 },
-    { kGlobEngineSets, "EC 20 48 8B EA 4C 8B C1 48 8D 54 24 40 48 8D 0D ? ? ? ? E8 ? ? ? ? 48 8B 44 24 40 48 3B 05 ? ? ?", 16, 0, 0 },
-    { kGlobEngineSets, "0F 00 BA 08 00 00 00 48 8D 0D ? ? ? ? E8 ? ? ? ? 90 48 8D 0D ?", 10, 0, 0 },
+    { kGlobEngineSets, "20 22 00 00 48 8D 0D ? ? ? ? E8 ? ? ? ? BA 08 00 00 00 48 8D 0D ? ? ? ? E8 ? ? ? ? 90 8B 15 ? ? ? ? 48 8B 0D ? ? ? ? E8 ? ? ? ?", 24, 0, 0 },
+    { kGlobEngineSets, "44 24 70 48 8D 55 10 48 8D 0D ? ? ? ? E8 ? ? ? ? 48 8B 45 10 48", 10, 0, 0 },
+    { kGlobEngineSets, "8D 41 10 48 8D 55 50 48 8D 0D ? ? ? ? E8 ? ? ? ? 4C 8B 74 24 50", 10, 0, 0 },
+    { kGlobEngineSets, "29 BC 24 20 22 00 00 48 8D 0D ? ? ? ? E8 ? ? ? ? BA 08 00 00 00", 10, 0, 8 },
     { -1, "", 0, 0, 0 } };
 
 // The bytes of an immediate that follow a RIP-relative displacement at p, by the instruction's opcode before its
@@ -146,19 +157,17 @@ inline bool GlobalPatternFind(const uint8_t *code, size_t from, size_t to, const
     return length > 0 && PatternFind(code, from, to, bytes, mask, length, at, count);
 }
 
-// The nearest place before rva, at most kGlobalBaseSpan before it and before rva + below, that an instruction in
-// code[from, to) reaches: how far before rva it stands (below 0), 0 where there is none.
+// The nearest object start before rva, at most kGlobalBaseSpan before it and before rva + below: a place a lea in
+// code[from, to) takes the address of. How far before rva it stands (below 0), 0 where there is none.
 inline int GlobalBaseBelow(const uint8_t *code, size_t from, size_t to, uint64_t rva, int below)
 {
     int best = 0;
     for (size_t p = from + 2; p + 4 <= to; p++)
     {
-        if ((code[p - 1] & 0xC7) != 0x05) continue;
-        const int after = RipAfter(code, from, p);
-        if (after < 0) continue;
+        if ((code[p - 1] & 0xC7) != 0x05 || code[p - 2] != 0x8D) continue;
         int32_t d;
         memcpy(&d, code + p, 4);
-        const int64_t k = (int64_t)p + 4 + after + d - (int64_t)rva;
+        const int64_t k = (int64_t)p + 4 + d - (int64_t)rva;
         if (k >= below || k < -kGlobalBaseSpan || (best && k <= best)) continue;
         best = (int)k;
     }

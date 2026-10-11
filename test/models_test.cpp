@@ -1629,6 +1629,7 @@ int main(int argc, char **argv)
                 for (int i = 0; i < sd.wheels; i++) sd.spin[i] = spin;
                 sd.speed = spin / 2.0f;
             };
+            const EngineHand whole{ true, &kClassCurves[kClassScout], 4800.0f / 4000.0f, 1.0f }, half{ true, &kClassCurves[kClassScout], 4800.0f / 4000.0f, 0.5f };
             // from a standstill to 0.9 of the top gear's top at gain rad/s each second: the share of each gear's top it
             // left them at, the most and the least, and the shifts down on the way
             auto scoutPull = [&](float pedal, float gain, int &firstGear, float &leftMost, float &leftLeast, int &downs) {
@@ -1644,7 +1645,7 @@ int main(int argc, char **argv)
                 {
                     scoutAt(gain * at);
                     const int was = sb.gear;
-                    GearboxStep(sb, sd, dk, pedal, pedal, kDt, true);
+                    GearboxStep(sb, sd, dk, pedal, pedal, kDt, whole);
                     if (!firstGear) firstGear = sb.gear;
                     if (was >= 1 && sb.gear > was && at > 0.0f)
                     {
@@ -1661,7 +1662,7 @@ int main(int argc, char **argv)
             const int flooredLast = scoutPull(1.0f, 3.0f, flooredFirst, flooredMost, flooredLeast, flooredDowns);
             const int lightLast = scoutPull(0.3f, 1.0f, lightFirst, lightMost, lightLeast, lightDowns);
             const bool schedule = GearboxStartGear(sd) == 2 && GearboxStartGear(g) == 1 && flooredFirst == 2 && lightFirst == 2 && flooredLast == 6 &&
-                                  lightLast == 6 && flooredLeast > 0.93f && flooredMost < 0.995f && lightMost < 0.7f && flooredDowns == 0 && lightDowns == 0;
+                                  lightLast == 6 && flooredLeast > 0.88f && flooredMost < 0.97f && lightMost < 0.7f && flooredDowns == 0 && lightDowns == 0;
             // stuck at a standstill, floored: the second, the first after kStuckAfter, the second with the foot off
             GearboxModel stuckBox = {};
             stuckBox.running = true;
@@ -1671,20 +1672,37 @@ int main(int argc, char **argv)
             int stuckAtHalf = 0, stuckAfter = 0;
             for (float at = 0.0f; at < 1.6f; at += kDt)
             {
-                GearboxStep(stuckBox, sd, dk, 1.0f, 1.0f, kDt, true);
+                GearboxStep(stuckBox, sd, dk, 1.0f, 1.0f, kDt, whole);
                 if (at < 0.5f) stuckAtHalf = stuckBox.gear;
             }
             stuckAfter = stuckBox.gear;
-            for (float at = 0.0f; at < kFootGap + 0.2f; at += kDt) GearboxStep(stuckBox, sd, dk, 0.0f, 0.0f, kDt, true);
+            for (float at = 0.0f; at < kFootGap + 0.2f; at += kDt) GearboxStep(stuckBox, sd, dk, 0.0f, 0.0f, kDt, whole);
             // and without the mod's engine the first gear as before
             GearboxModel gameOwn = {};
             gameOwn.running = true;
             gameOwn.gear = 1;
             gameOwn.grip = 2.0f;
             GearboxStep(gameOwn, sd, dk, 1.0f, 1.0f, kDt);
-            Check(schedule && stuckAtHalf == 2 && stuckAfter == 1 && stuckBox.gear == 2 && gameOwn.gear == 1,
-                  "automatic, the engine handed over: it sets off in the second of a crawling first; floored it revs each gear near the red zone, at a "
-                  "light foot it shifts up early, no shift taken back; stuck floored it takes the first after a second, the second again with the foot off");
+            // floored in the fourth at 0.87 of its top and gaining nothing (the drive of 11:51, EngineShare 50): the fifth
+            // pulls more there, and it shifts up; with all of the engine the fourth still pulls more
+            auto heldAt = [&](const EngineHand &hand) {
+                GearboxModel hb = {};
+                hb.running = true;
+                hb.gear = 4;
+                hb.grip = 2.0f;
+                scoutAt(0.87f * TruckGearTop(sd, 4));
+                hb.spin = hb.by = hb.rolling = sd.spin[0];
+                hb.pedal = hb.held = hb.feel = 1.0f;
+                for (float at = 0.0f; at < 2.0f; at += kDt) GearboxStep(hb, sd, dk, 1.0f, 1.0f, kDt, hand);
+                return hb.gear;
+            };
+            const int heldHalf = heldAt(half), heldWhole = heldAt(whole);
+            const bool crossing = EngineUpShare(half, 43.0f / 27.0f) < EngineUpShare(whole, 43.0f / 27.0f) && EngineUpShare(half, 43.0f / 27.0f) < 0.87f &&
+                                  EngineUpShare(whole, 43.0f / 27.0f) > 0.88f;
+            Check(schedule && stuckAtHalf == 2 && stuckAfter == 1 && stuckBox.gear == 2 && gameOwn.gear == 1 && crossing && heldHalf == 5 && heldWhole == 4,
+                  "automatic, the engine handed over: it sets off in the second of a crawling first; floored it revs each gear toward the red zone and shifts "
+                  "where the next gear pulls more if that comes first, at a light foot early, no shift taken back; held short of the point floored, the next "
+                  "gear taken where it pulls more; stuck floored it takes the first after a second, the second again with the foot off");
         }
         // a close-ratio box (the Scania's ten gears, tops 7.5 to 30.5 rad/s, 600 to 1930 rpm) floored from a standstill
         // with the grip learned: through the gears faster than a shift a second, skipping gears, never held to its top;

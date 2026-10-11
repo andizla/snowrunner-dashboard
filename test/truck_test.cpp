@@ -989,8 +989,9 @@ int main()
         Check(carried, "places: each signature the mod carries reads as a pattern, its displacement left out");
     }
     // a static the code never names, a field 0x48 into an object the code reaches by its start (lea rcx, [rip + d]),
-    // with another instruction's displacement cut by the window's end: the signature is of the object's start, 0x48
-    // before the static, and finds it in a second build where the code and the object have moved
+    // with another instruction's displacement cut by the window's end and a load of a nearer field: the signature is
+    // of the object's start, 0x48 before the static, and finds it in a second build where the code and the object
+    // have moved
     {
         auto build = [](size_t shift, uint64_t object, std::vector<uint8_t> &image) {
             image.assign(0x20000, 0);
@@ -1011,6 +1012,12 @@ int main()
             lea(0x6000, 0x0D, object);          // lea rcx, [rip + d]: the object's start
             lea(0x6000 + 3 + 4 + 10 - 2 - 3, 0x15, 0x1400); // lea rdx, [rip + d] to code that stays: its displacement's first two bytes in the window
             lea(0x7000, 0x0D, object);
+            // a load of another field, nearer the static but no object's start: not taken
+            image[0x8000 + shift] = 0x48;
+            image[0x8001 + shift] = 0x8B;
+            image[0x8002 + shift] = 0x05;
+            const int32_t field = (int32_t)((int64_t)object + 0x40 - (int64_t)(0x8003 + shift + 4));
+            memcpy(&image[0x8003 + shift], &field, 4);
         };
         std::vector<uint8_t> oldBuild, newBuild;
         build(0, 0x19000, oldBuild);

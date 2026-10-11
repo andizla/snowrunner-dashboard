@@ -1145,9 +1145,11 @@ inline TorqueOrders TorqueHandStep(TorqueHand &h, bool want, uint64_t action, ui
 }
 
 // With the mod's engine handed to the game (Powertrain=1) the shift points are a truck automatic's schedule: up at a
-// light foot early, floored at the red zone, down well under where the gear above lands, so no shift is taken back.
+// light foot early, floored at the red zone or where the next gear pulls more if that comes first (EngineUpShare: at
+// EngineShare 50 a scout's road gearbox at 0.86 to 0.87 of a gear's top, at 100 at 0.90 to 0.92), down well under
+// where the gear above lands, so no shift is taken back.
 static const float kEngineUpLight = 0.3f, kEngineUpFloored = 0.95f;     // up this far from idle to the red zone's speed: at a light foot, floored
-static const float kEngineDownLight = 0.1f, kEngineDownFloored = 0.4f;  // down below this, the same way
+static const float kEngineDownLight = 0.1f, kEngineDownFloored = 0.3f;  // down below this, the same way
 static const float kEngineKickTo = 0.85f;   // the kickdown goes to the lowest gear that keeps the engine under this
 static const float kEngineLimit = 0.98f;    // past this the engine is on the limiter: up at once, whatever the pause
 // A game's gearbox has its first gears for crawling: on a scout's road gearbox the first can be an eighth of the top
@@ -1190,23 +1192,59 @@ inline float GearDownShare(float r)
     return 0.0f;
 }
 
+// The mod's engine as the automatic's shift points go by it while it is handed to the game (Powertrain=1): its torque
+// curve, the tachometer's top over the red zone's (where the governor leaves nothing), and how much of it the game
+// gets (EngineShare, 0 to 1). on false: the game's own engine.
+struct EngineHand
+{
+    bool on;
+    const TorqueCurve *curve;
+    float top, share;
+};
+
+// What a gear pulls with the wheels at x of its top with the engine handed over, floored, the converter locked: the
+// game's curve as far as the factor lifts it (TorqueLift, TorqueBlend), against the other gears at the same speed.
+inline float EngineGearPull(const EngineHand &e, float x)
+{
+    if (!e.curve) return GearPull(x);
+    return x * GamePull(x) * TorqueBlend(TorqueLift(TorqueAt(*e.curve, x, e.top), 1.0f, 1.0f, 1.0f, x), e.share);
+}
+
+// x of a gear's top where the next gear, r times as tall, pulls kShiftPullGain more with the engine handed over: the
+// game's curve falls toward a gear's top whatever the factor, so floored a truck may never reach the schedule's
+// point, and the next gear pulls more short of it. 1 where it never does.
+inline float EngineUpShare(const EngineHand &e, float r)
+{
+    if (!(r > 1.01f)) return 1.0f;
+    for (float x = 0.5f; x < 1.0f; x += 0.005f)
+        if (EngineGearPull(e, x / r) >= EngineGearPull(e, x) * (1.0f + kShiftPullGain)) return x;
+    return 1.0f;
+}
+
 // The gearbox's input speed a gear shifts up at, with feel the pedal the points go by: the light point at a light foot,
 // the floored one floored, and between them between. engine: the mod's engine is handed to the game, and the points
-// are the schedule's (kEngineUpLight to kEngineUpFloored); else the floored point is where the next gear pulls more in
-// the game (GearUpShare).
-inline float GearboxUpPoint(const TruckRaw &t, const GaugeScale &k, int gear, float feel, bool engine = false)
+// are the schedule's (kEngineUpLight to kEngineUpFloored), floored no later than where the next gear pulls more
+// (EngineUpShare); else the floored point is where the next gear pulls more in the game (GearUpShare).
+inline float GearboxUpPoint(const TruckRaw &t, const GaugeScale &k, int gear, float feel, const EngineHand &engine = EngineHand{})
 {
-    if (engine) return GearboxPoint(k, kEngineUpLight + (kEngineUpFloored - kEngineUpLight) * SettingsRange(feel, 0.0f, 1.0f));
-    const float light = GearboxPoint(k, kShiftUpLight), low = TruckGearTop(t, gear), high = TruckGearTop(t, gear + 1);
+    const float low = TruckGearTop(t, gear), high = TruckGearTop(t, gear + 1);
+    if (engine.on)
+    {
+        const float soft = GearboxPoint(k, kEngineUpLight);
+        float hard = GearboxPoint(k, kEngineUpFloored);
+        if (engine.curve && low > 0.0f && high > 0.0f) hard = fmaxf(fminf(hard, EngineUpShare(engine, high / low) * k.redline), soft);
+        return soft + (hard - soft) * SettingsRange(feel, 0.0f, 1.0f);
+    }
+    const float light = GearboxPoint(k, kShiftUpLight);
     const float floored = low > 0.0f && high > 0.0f ? fmaxf(GearUpShare(high / low) * k.redline, light) : light;
     return light + (floored - light) * SettingsRange(feel, 0.0f, 1.0f);
 }
 
 // The gearbox's input speed a gear shifts down below, the same way (kEngineDownLight to kEngineDownFloored, or
 // GearDownShare).
-inline float GearboxDownPoint(const TruckRaw &t, const GaugeScale &k, int gear, float feel, bool engine = false)
+inline float GearboxDownPoint(const TruckRaw &t, const GaugeScale &k, int gear, float feel, const EngineHand &engine = EngineHand{})
 {
-    if (engine) return GearboxPoint(k, kEngineDownLight + (kEngineDownFloored - kEngineDownLight) * SettingsRange(feel, 0.0f, 1.0f));
+    if (engine.on) return GearboxPoint(k, kEngineDownLight + (kEngineDownFloored - kEngineDownLight) * SettingsRange(feel, 0.0f, 1.0f));
     const float light = GearboxPoint(k, kShiftDownLight), low = TruckGearTop(t, gear - 1), high = TruckGearTop(t, gear);
     const float floored = low > 0.0f && high > 0.0f ? fmaxf(GearDownShare(high / low) * k.redline, light) : light;
     return light + (floored - light) * SettingsRange(feel, 0.0f, 1.0f);
@@ -1230,8 +1268,9 @@ inline float GearboxDownPoint(const TruckRaw &t, const GaugeScale &k, int gear, 
 // takes the gears under it only stuck (kStuckShare). A truck slowing with the foot on is climbing: the points go where floored
 // puts them, and stay there kClimbHold after, so it shifts down in time and does not hunt. A push of the pedal past
 // kKickdown kicks down at once to the gear that pulls the most.
-inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k, float pedal, float power, float dt, bool engine = false)
+inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k, float pedal, float power, float dt, const EngineHand &hand = EngineHand{})
 {
+    const bool engine = hand.on;
     const int top = TruckTopGear(t);
     const float raw = TruckDrivenSpin(t), pedalNow = SettingsRange(pedal, 0.0f, 1.0f);
     float p = pedalNow; // the shifts' pedal; the converter goes by pedalNow
@@ -1332,8 +1371,8 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     // that, or a gear the pedal would shift up from
     auto upFrom = [&](int gear) {
         return pastIn(gear) ||
-               (!footOff && !labouring && GearboxInput(t, k, gear, byUp) >= GearboxUpPoint(t, k, gear, feel, engine) &&
-                GearboxInput(t, k, gear + 1, byUp) >= GearboxDownPoint(t, k, gear + 1, feel, engine) * room);
+               (!footOff && !labouring && GearboxInput(t, k, gear, byUp) >= GearboxUpPoint(t, k, gear, feel, hand) &&
+                GearboxInput(t, k, gear + 1, byUp) >= GearboxDownPoint(t, k, gear + 1, feel, hand) * room);
     };
     // the gear a shift up lands in: gears at a time while the next one would shift up at once too, as a close-ratio
     // box goes through its gears faster than a shift a second; with the mod's engine one at a time, but past the limiter
@@ -1345,8 +1384,8 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     // with the foot on, a gear the pedal would shift down from, the one below taking the engine and not shifting
     // straight back up; a shift down lands as far down as the gears would each shift down at once too
     auto downFrom = [&](int gear) {
-        return gear > least && fits(gear - 1) && GearboxInput(t, k, gear, by) < GearboxDownPoint(t, k, gear, feel, engine) &&
-               GearboxInput(t, k, gear - 1, by) < GearboxUpPoint(t, k, gear - 1, feel, engine);
+        return gear > least && fits(gear - 1) && GearboxInput(t, k, gear, by) < GearboxDownPoint(t, k, gear, feel, hand) &&
+               GearboxInput(t, k, gear - 1, by) < GearboxUpPoint(t, k, gear - 1, feel, hand);
     };
     auto downTo = [&](int gear) {
         int g = gear - 1;

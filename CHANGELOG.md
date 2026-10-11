@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.13.4] 2026-10-11
+
+- With the engine handed to the game, floored, the mod's automatic shifts up where the next gear pulls harder, if that comes before the red zone. The game's pull falls away toward a gear's top whatever the engine, and at `EngineShare` 50 a scout floored in third, fourth and fifth hung at 0.86 to 0.87 of the gear's top for up to five seconds (11:51:00 to 11:51:05 in fourth), short of the shift point at 0.96, where the next gear would have pulled 13 percent more. On a scout's road gearbox it now shifts at 0.86 to 0.87 of a gear's top at 50, and at 0.90 to 0.92 at 100.
+- Floored, it shifts down from 0.3 of the way from idle to the red zone (0.4 before), so a shift up at a lower `EngineShare` lands clear above it.
+- The signatures for other builds now find all nine places the mod reads on the Steam build. Control and the map are fields of two static objects that small functions in the game's code hand out by their start; the game, the input, the viewer and the clock are fields of the same two, and are found by the same signatures. The harvest (run again on the Steam build with `Probe=1`) looks only for such object starts before a place the code never names, up to eight of them. Whether other builds lay the objects out alike is still to be seen on one.
+
 ## [0.13.3] 2026-10-11
 
 - The signatures for other builds are harvested again (`Probe=1` on the Steam build, into `Gauges.signatures.txt`). The first harvest gave 7 signatures for 3 of the 9 places the mod reads, and none for the driven truck's control, the game, the map, the viewer, the input and the clock: those lie within 0xB0 bytes of each other, fields of one static object that the game's code reaches by its start, never by their own places. The harvest now takes the nearest place before such a field that the code does reach, with how far before it stands. Its windows go up to 40 bytes on each side, and a displacement a window cuts at either end is left out: the first harvest kept the first bytes of four of them, which another build moves. The first harvest's 7 signatures are in the mod, and the new harvest checks them against the known places.

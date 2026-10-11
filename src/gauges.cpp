@@ -986,9 +986,9 @@ static void PlacesHarvest(DWORD stamp)
         GlobalHarvested sigs[4];
         GlobalHarvestNote note;
         const int n = GlobalHarvest(code, from, to, ImageSize(), kGameGlobals[g].steam, kGameGlobals[g].reach, sigs, 4, &note);
-        if (!n) fprintf(f, "// %s: %d references to it, none that stands once in the code, nor one to a place up to 0x%x before it\n", kGameGlobals[g].name, note.direct, kGlobalBaseSpan);
+        if (!n) fprintf(f, "// %s: %d references to it, none that stands once in the code, nor one to an object that starts up to 0x%x before it\n", kGameGlobals[g].name, note.direct, kGlobalBaseSpan);
         else if (note.base)
-            fprintf(f, "// %s: %d references to it, none that stands once; by the place 0x%x before it, which %d reach\n", kGameGlobals[g].name, note.direct, -note.base, note.baseRefs);
+            fprintf(f, "// %s: %d references to it, none that stands once; by the object that starts 0x%x before it, which %d reach\n", kGameGlobals[g].name, note.direct, -note.base, note.baseRefs);
         for (int i = 0; i < n; i++) fprintf(f, "{ %s, \"%s\", %d, %d, %d },\n", kGameGlobals[g].id, sigs[i].pattern, sigs[i].at, sigs[i].after, sigs[i].into);
         total += n;
     }
@@ -1363,7 +1363,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         {
             // the shift points a truck automatic's schedule while the mod's engine is handed to the game, else by the
             // game's own pull
-            GearboxStep(w.gearbox, raw, scale, foot, w.power.power, dt, w.hand.on);
+            const EngineHand hand{ w.hand.on, &kClassCurves[s.tachClass], scale.redline > 0.0f ? scale.max / scale.redline : 1.0f, s.engineShare / 100.0f };
+            GearboxStep(w.gearbox, raw, scale, foot, w.power.power, dt, hand);
             w.clutch = ClutchModel{};
         }
         if (probe && boxGear >= 1 && w.gearbox.gear >= 1 && w.gearbox.gear != boxGear && raw.automatic && raw.gearEngaged >= 1 && raw.gearEngaged <= TruckTopGear(raw))
