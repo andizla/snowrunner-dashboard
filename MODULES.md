@@ -29,8 +29,21 @@ Questions for the overseer go into `HANDOFF.md` under "Questions"; the overseer 
 | 9b | Brake air: the compressor, the governor and the brakes' draw | medium | built (2026-10-08, cloud session, on "go, do every thing you can"): the air dial shows the model, not drawn for scouts; `ShowAir` still off at first | | `AirStep` in models.h: the compressor by the engine speed (0.23 bar a second at the red zone into an empty tank, less as it fills towards 12 bar), the governor from 6.9 to 8.2 bar, a brake press takes 0.35 bar times how far it goes down, the handbrake let go 0.4 bar, a leak of 0.1 bar a minute and 0.25 more with the brake held. From empty: about three minutes at idle, one at the red zone; eight full presses with the engine off reach the red zone (5.5 bar). The user's two drives replayed: at the lowest 6.8 bar, never in the red. Models test 125 OK (four new). Owed: the user's look in the game; an air dryer's purge at the cut-out could be heard (module 10 goes on later) |
 | 15 | Differentials: front and rear locks, the centre differential's torque split and its lock | max | waiting (a feasibility note first, the user's OK before any hook) | | |
 | 16 | Release: polish, README, GitHub | medium | waiting; the release carries `Gauges.addon64` (and `Gauges.asi`, the same file) since 0.11.3 | | |
+| 17 | Naturally aspirated engines | high | waiting (the user, 2026-10-11: "sort of important") | | |
+| 18 | Sharing truck and engine setups | high | waiting (the user, 2026-10-11); a design note first, the user's word before anything goes public | | |
+| 19 | Winch: its temperature, and the line that snaps or the winch that stops when it is too hot | max | waiting (the user, 2026-10-11); a feasibility note first, the user's OK before any hook | | |
 
 Effort is the session's effort level, set by the user when creating the session (the overseer reminds them).
+
+For the tire session (the user, 2026-10-11; its repo, not this one):
+- The tire mod's grip reacts to the outside temperature as real tires do: rubber hardens in the cold and grips less,
+  and the pressure falls with the temperature (about 1 psi for each 5.5 C, as the gas law has it for a tire at 30
+  to 40 psi). Gauges already works out the outside temperature by map and time of day (module 11); it could
+  publish it for the tire mod as it publishes for the manual transmission mod (module 14's shared state), so the
+  two agree on the weather. The interface is the two sessions' to settle.
+- The tire mod works with every build of the game (Steam, Epic, Microsoft Store, after updates). Gauges does this
+  for its own statics in `src\game_globals.h` (signatures harvested on the Steam build with the probe, looked for in
+  any other, fields of static objects found by the object's start): the tire session can take the method.
 
 ## Rules for every module session
 
@@ -873,3 +886,39 @@ and THIRD_PARTY_NOTICES.md says the recordings are excluded from the GPL licence
 Release flow as the other repos: `CHANGELOG.md` dated, release notes and the Discord post written by hand (the
 template is the note `release-doc-style.md` in `C:\Users\User\.claude\projects\C--m-d\memory`), the wording shown
 to the user before any build; the zip, tag and GitHub release only on the user's word.
+
+### 17. Naturally aspirated engines
+
+The models take every engine for a turbo diesel: the boost dial, the flutter and blow-off sounds, and 35 percent of
+the torque that comes only with boost (`kBoostTorque`, the cold and the boost's limit in `TorqueLift`). A naturally
+aspirated engine has none of that: no boost dial (or one that stays at 0, hidden), no turbo sounds, all of its
+torque at once with the pedal, and a curve of its own (torque rising with the engine speed to a later peak, less
+low down than a turbo diesel's). Build: `BoostProfile` gains "none" (or a separate `Aspiration` setting), per truck
+in `[Truck:<kind>]` as the scales are; the powertrain's boost term 1 for it; the cluster drops the boost dial; the
+sounds stay quiet. Whether the game's files say which engines are turbocharged: the engine's record holds no such
+flag (module 12's dump of a scout's record, + 0x58 to + 0x84); its UI text sometimes names "TurboDiesel", which is
+a hint for a default at most. Tests: the curve, the torque with no boost term, the settings round trip.
+
+### 18. Sharing truck and engine setups
+
+What would be shared: a truck kind's section of Gauges.ini (the scales, the class, the boost profile, the torque
+curve and aspiration once 17 has them). Ways, from least to most: (a) export and import as text: a button copies the
+section to the clipboard, another reads one pasted in; nothing to run anywhere, shared on Discord or a forum. (b) A
+public list of setups by truck kind, a file in a GitHub repository, read over HTTPS when the user presses a button
+and offered for the trucks that have none of their own (never over the user's own without asking); contributions as
+pull requests or through a form. (c) A database with uploads: a server, accounts, moderation and its upkeep, for
+little more than (b) gives. The likely path: (a) first, (b) after. To settle with the user before (b): it is a
+public repository (the house rule: nothing public without the user's word), and setups for modded trucks carry their
+kinds, which name the mods (`<name>/<mod.io id>`): whether such entries may stand in a public list at all. The add-on
+fetches only on the button, never on its own, and says in the log what it fetched.
+
+### 19. Winch
+
+Wanted: the winch heats as it pulls and cools at rest; too hot, it stops (or the line snaps). First a feasibility note
+from the game's memory and code: where the game keeps whether the winch is attached and pulling, what it pulls with
+(the line's tension or the load, the winch's strength from the truck's files), and the game's own function that
+lets the line go (as the player does). The model then: heat from the work done (tension times the line's speed) and
+from time under load, cooling with the air (module 11's outside temperature); a gauge or a lamp for it; at the limit
+the mod calls the game's release, or cuts the winch's pull until it has cooled. Which of the two (snap or stop) is the
+user's to choose, perhaps as a setting. No write and no hook before the user's OK on the note.
+
