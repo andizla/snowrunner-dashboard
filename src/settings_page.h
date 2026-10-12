@@ -476,6 +476,13 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     PageTip("The mod's automatic picks the gears while the game's shifter is in A: a torque converter, shifts up later the further the pedal is down, "
             "a kickdown when it is floored, the gear held when the foot lifts, and the first gear as the truck stops. The tachometer shows its engine "
             "speed. Picking a gear by hand hands the gearbox back to you.");
+    static const char *inputs[kInputCount] = { "A wheel's pedals", "A pad", "The keyboard" };
+    PageLabel("Driven with", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::Combo("##input", &s.input, inputs, kInputCount));
+    PageTip("What the mod's automatic takes the pedal for. A wheel's pedals: a push from part throttle to the floor kicks down. A pad: the same, "
+            "but the trigger has to come from under three quarters, as one held near its end wavers. The keyboard: no kickdown, and a key held "
+            "shifts as the pedal floored.");
     PageLabel("Engine to the game", labelX);
     changed(ImGui::Checkbox("##powertrain", &s.powertrain));
     PageTip("The truck pulls with the mod's engine: its torque curve against the engine speed the needle shows, less with cold oil and "

@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#define GAUGES_VERSION "0.15.5"
+#define GAUGES_VERSION "0.15.6"
 
 // The exe the addresses in this mod are from (SnowRunner on Steam, the build of 22 July 2026). On any other the mod
 // stands down.
@@ -47,6 +47,7 @@ enum { kClassTruck, kClassScout, kClassHeavy, kClassCount }; // GaugeSettings::t
 enum { kOilOff, kOilNeedle, kOilDial, kOilGaugeCount };      // GaugeSettings::oilGauge
 enum { kSpoolStandard, kSpoolQuick, kSpoolLaggy, kSpoolTwoStage, kSpoolCount }; // GaugeSettings::boostProfile
 enum { kGearboxGame, kGearboxModel, kGearboxCount };
+enum { kInputWheel, kInputPad, kInputKeys, kInputCount }; // GaugeSettings::input
 enum { kAspTurbo, kAspNatural, kAspCount };                  // an engine's profile's Aspiration          // GaugeSettings::gearbox
 
 // Everything in Gauges.ini ([Gauges]); the Gauges tab in ReShade's overlay edits all of it.
@@ -66,6 +67,7 @@ struct GaugeSettings
     float boostMax;          // BoostMax: the boost in bar the turbo reaches with the pedal floored at high engine speed; 0 = the class's own
     int boostProfile;        // BoostProfile: how the turbo builds its boost: 0 standard, 1 small and quick, 2 big and slow, 3 two stages
     int gearbox;             // Gearbox: 0 the game's own automatic, 1 the mod's: a torque converter and its own shift points pick the gears in A
+    int input;               // Input: what the pedal is: 0 a wheel's pedals, 1 a pad's trigger, 2 keys. The mod's automatic kicks down by it
     bool powertrain;         // Powertrain: the engine's torque (its curve, the cold oil, the boost) and the converter's handed to the game
     int engineShare;         // EngineShare: how much of the mod's engine the game gets with it, in percent: 0 the game's own pull, 100 the mod's
     float rollWarnDeg, rollDangerDeg; // RollWarnDeg, RollDangerDeg: degrees of lean to the side from which the tilt lamp is amber, and red
@@ -165,6 +167,7 @@ inline void SettingsClamp(GaugeSettings &s)
     s.boostProfile = s.boostProfile < 0 || s.boostProfile >= kSpoolCount ? kSpoolStandard : s.boostProfile;
     s.engineShare = s.engineShare < 0 ? 0 : s.engineShare > 100 ? 100 : s.engineShare;
     s.gearbox = s.gearbox < 0 || s.gearbox >= kGearboxCount ? kGearboxGame : s.gearbox;
+    s.input = s.input < 0 || s.input >= kInputCount ? kInputWheel : s.input;
     s.oilGauge = s.oilGauge < 0 || s.oilGauge >= kOilGaugeCount ? kOilNeedle : s.oilGauge;
     s.rollWarnDeg = SettingsRange(s.rollWarnDeg, kTiltRange[0], kTiltRange[1]);
     s.rollDangerDeg = SettingsRange(s.rollDangerDeg, s.rollWarnDeg, kTiltRange[1]); // red never comes before amber

@@ -1375,6 +1375,43 @@ int main(int argc, char **argv)
             Check(fromOff && through.kick <= 0.0f && light.kick <= 0.0f && light.gear == lightGear && halfGear == 4 && half.gear == 2 && half.shifts == 1,
                   "automatic: a kickdown is a push from part throttle; a press from the foot off, a pedal on its way through and one that rested under a fifth kick nothing down");
         }
+        // the input in use. Keys: no kickdown from any pedal, and a key held shifts as floored, however far the game
+        // has ramped it. A pad: a trigger wavering near its end (0.85, then full) kicks nothing down, a push from half
+        // does, also through a pass between; a wheel's pedal kicks down from 0.85 as well
+        {
+            wheels(12.0f);
+            auto pushed = [&](int input, float from) {
+                EngineHand how = {};
+                how.input = input;
+                GearboxModel m = driving(4);
+                for (float at = 0.0f; at < kKickArm + 0.05f; at += kDt) GearboxStep(m, g, k, from, from, kDt, how);
+                const int was = m.gear;
+                GearboxStep(m, g, k, 1.0f, 1.0f, kDt, how);
+                return was == 4 && m.gear < 4 && m.shifts == 1;
+            };
+            EngineHand pad = {}, keys = {};
+            pad.input = kInputPad;
+            keys.input = kInputKeys;
+            GearboxModel slow = driving(4);
+            for (float at = 0.0f; at < kKickArm + 0.1f; at += kDt) GearboxStep(slow, g, k, 0.5f, 0.5f, kDt, pad);
+            GearboxStep(slow, g, k, 0.8f, 0.8f, kDt, pad);
+            GearboxStep(slow, g, k, 1.0f, 1.0f, kDt, pad);
+            // keys ramped to 0.3 shift as a wheel's pedal floored does, and not as one at 0.3
+            GearboxModel ramped = driving(4), light = driving(4), floored = driving(4);
+            for (float at = 0.0f; at < kShiftDownAfter + 0.3f; at += kDt)
+            {
+                GearboxStep(ramped, g, k, 0.3f, 0.3f, kDt, keys);
+                GearboxStep(light, g, k, 0.3f, 0.3f, kDt);
+                GearboxStep(floored, g, k, 1.0f, 1.0f, kDt);
+            }
+            const bool wheel = pushed(kInputWheel, 0.5f) && pushed(kInputWheel, 0.85f), trigger = pushed(kInputPad, 0.5f) && !pushed(kInputPad, 0.85f),
+                       through = slow.gear < 4 && slow.shifts == 1, key = !pushed(kInputKeys, 0.5f) && ramped.gear == floored.gear && ramped.shifts == floored.shifts && ramped.gear < light.gear && ramped.kick <= 0.0f;
+            if (!(wheel && trigger && through && key))
+                printf("     wheel %d, trigger %d, through %d (gear %d, %d shifts), key %d (light %d, ramped %d)\n", wheel, trigger, through, slow.gear, slow.shifts, key, light.gear,
+                       ramped.gear);
+            Check(wheel && trigger && through && key,
+                  "automatic: by the input in use: a pad's trigger kicks down only from under three quarters, keys kick nothing down and shift as floored");
+        }
         // floored with the game's throttle cut to nothing for a pass now and then (as at its shifts): no kickdown, no
         // shift down with the foot off; a lift that lasts is one
         wheels(TruckGearTop(g, 2) * 0.6f);

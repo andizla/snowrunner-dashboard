@@ -1060,6 +1060,8 @@ static const float kFootGap = 0.3f;          // seconds a pedal has to stay down
 static const float kKickArm = 0.3f;          // seconds the pedal has to be short of kKickdown before a push past it kicks down
 static const float kKickFrom = 0.2f;         // and at this or more for those seconds: a kickdown is a push from part throttle. A press from the foot off (every
                                              // press of a key) drives on the floored points, which shift down where the truck is slow
+static const float kKickPadFrom = 0.75f;     // a pad's trigger arms a kickdown only under this: one held near its end dips under kKickdown and comes
+                                             // back with no push meant. Between the two the arm runs out, in the time it took to build
 static const float kLabouring = 0.35f;       // rad/s each second the truck loses with the foot at kClimbPedal or more, for kLabourAfter: a climb
 static const float kClimbPedal = 0.4f;       // a lighter foot that loses speed is no climb: the engine gives a fifth of its torque or less
 static const float kLabourAfter = 0.5f;
@@ -1335,6 +1337,7 @@ struct EngineHand
     bool on;
     const TorqueCurve *curve;
     float top, share, launch, hold, least;
+    int input; // what the pedal is (kInputWheel, kInputPad, kInputKeys): the kickdown goes by it, with the engine handed over or not
 };
 
 // What a gear pulls with the wheels at x of its top with the engine handed over, floored, the converter locked: the
@@ -1411,13 +1414,15 @@ inline float GearboxDownPoint(const TruckRaw &t, const GaugeScale &k, int gear, 
 // puts them, and stay there kClimbHold after, so it shifts down in time; a shift up the next gear cannot hold, taken
 // back within kHuntWindow, keeps the gear below kHuntKeep and longer, so it does not hunt. A push of the pedal from
 // part throttle (kKickFrom or more for kKickArm) past kKickdown kicks down at once to the gear that pulls the most; a
-// press from the foot off does not.
+// press from the foot off does not. By the input in use (hand.input): a pad's trigger kicks down only from under
+// kKickPadFrom, and keys kick nothing down and shift as floored whenever one is held.
 inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k, float pedal, float power, float dt, const EngineHand &hand = EngineHand{})
 {
     const bool engine = hand.on;
     const int top = TruckTopGear(t);
     const float raw = TruckDrivenSpin(t), pedalNow = SettingsRange(pedal, 0.0f, 1.0f);
     float p = pedalNow; // the shifts' pedal; the converter goes by pedalNow
+    if (hand.input == kInputKeys && p >= kFootOff) p = 1.0f; // keys have no part throttle: a key held is the pedal floored, however the game ramps it
     if (!m.running)
     {
         m = GearboxModel{ true };
@@ -1437,9 +1442,13 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     }
     if (m.pause > 0.0f) m.pause -= dt;
     m.feel = fmaxf(p, m.feel - kPedalFall * dt);
-    if (p >= kKickdown && m.pedal < kKickdown && m.shortFor >= kKickArm) m.kick = kKickWindow;
+    // a push from part throttle kicks down. A pad's trigger has to come from under kKickPadFrom; keys kick nothing down
+    const float partTo = hand.input == kInputPad ? kKickPadFrom : kKickdown;
+    if (hand.input != kInputKeys && p >= kKickdown && m.pedal < kKickdown && m.shortFor >= kKickArm) m.kick = kKickWindow;
     else if (m.kick > 0.0f) m.kick -= dt;
-    m.shortFor = p < kKickdown && p >= kKickFrom ? m.shortFor + dt : 0.0f;
+    if (p >= kKickFrom && p < partTo) m.shortFor = fminf(m.shortFor + dt, 2.0f * kKickArm);
+    else if (p >= partTo && p < kKickdown) m.shortFor = fmaxf(0.0f, m.shortFor - dt);
+    else m.shortFor = 0.0f;
     m.pedal = p;
     if (top < 1 || !TruckEngineOn(t) || !isfinite(raw))
     {

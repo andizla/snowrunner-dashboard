@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.15.6] 2026-10-12
+
+- A new setting says what you drive with, so the mod's automatic fits it: `Input`, on the tab "Driven with" under Gearbox. A wheel's pedals (0, the default): as before. A pad (1): the trigger has to come from under three quarters before a push to the end kicks down, as one held near its end wavers past the mark. The keyboard (2): no kickdown at all, and a key held shifts as the pedal floored, however the game ramps it.
+
 ## [0.15.5] 2026-10-12
 
 - The automatic kicks down only on a push from part throttle: the pedal a fifth of the way down or more for 0.3 seconds, then past nine tenths. Until now any push after 0.3 seconds short of the floor kicked down, the foot off included, so on a keyboard every press of the key after a lift did. A press from the foot off now drives by the floored shift points, which still shift down where the truck is slow.
