@@ -1058,6 +1058,8 @@ static const float kFootOff = 0.05f;         // a pedal under this is the foot o
 static const float kFootGap = 0.3f;          // seconds a pedal has to stay down from where it was before the drop counts: the game cuts the
                                              // throttle for a moment at each shift, and now and then besides, which is no lift
 static const float kKickArm = 0.3f;          // seconds the pedal has to be short of kKickdown before a push past it kicks down
+static const float kKickFrom = 0.2f;         // and at this or more for those seconds: a kickdown is a push from part throttle. A press from the foot off (every
+                                             // press of a key) drives on the floored points, which shift down where the truck is slow
 static const float kLabouring = 0.35f;       // rad/s each second the truck loses with the foot at kClimbPedal or more, for kLabourAfter: a climb
 static const float kClimbPedal = 0.4f;       // a lighter foot that loses speed is no climb: the engine gives a fifth of its torque or less
 static const float kLabourAfter = 0.5f;
@@ -1116,7 +1118,7 @@ struct GearboxModel
     float pedal;       // the pedal on the last step, for the push that kicks down
     float held;        // the pedal the shifts go by: up with the foot at once, down once it has stayed down kFootGap
     float dropFor;     // seconds the pedal has been down from held
-    float shortFor;    // seconds the pedal has been short of kKickdown
+    float shortFor;    // seconds the pedal has been at part throttle: kKickFrom or more, short of kKickdown
     float kick;        // seconds the kickdown of a push may still come in
     float climb;       // seconds the shift points stay at floored's after a climb
     float stuck;       // seconds the truck has been stuck floored (kStuckShare): the crawling gears are let in
@@ -1407,8 +1409,9 @@ inline float GearboxDownPoint(const TruckRaw &t, const GaugeScale &k, int gear, 
 // limiter, each gear held kEngineGearHold going up, and a kickdown to the lowest gear under kEngineKickTo; it sets off in the start gear (GearboxStartGear) and
 // takes the gears under it only stuck (kStuckShare). A truck slowing with the foot on is climbing: the points go where floored
 // puts them, and stay there kClimbHold after, so it shifts down in time; a shift up the next gear cannot hold, taken
-// back within kHuntWindow, keeps the gear below kHuntKeep and longer, so it does not hunt. A push of the pedal past
-// kKickdown kicks down at once to the gear that pulls the most.
+// back within kHuntWindow, keeps the gear below kHuntKeep and longer, so it does not hunt. A push of the pedal from
+// part throttle (kKickFrom or more for kKickArm) past kKickdown kicks down at once to the gear that pulls the most; a
+// press from the foot off does not.
 inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k, float pedal, float power, float dt, const EngineHand &hand = EngineHand{})
 {
     const bool engine = hand.on;
@@ -1436,7 +1439,7 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     m.feel = fmaxf(p, m.feel - kPedalFall * dt);
     if (p >= kKickdown && m.pedal < kKickdown && m.shortFor >= kKickArm) m.kick = kKickWindow;
     else if (m.kick > 0.0f) m.kick -= dt;
-    m.shortFor = p < kKickdown ? m.shortFor + dt : 0.0f;
+    m.shortFor = p < kKickdown && p >= kKickFrom ? m.shortFor + dt : 0.0f;
     m.pedal = p;
     if (top < 1 || !TruckEngineOn(t) || !isfinite(raw))
     {

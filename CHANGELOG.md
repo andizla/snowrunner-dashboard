@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.15.5] 2026-10-12
+
+- The automatic kicks down only on a push from part throttle: the pedal a fifth of the way down or more for 0.3 seconds, then past nine tenths. Until now any push after 0.3 seconds short of the floor kicked down, the foot off included, so on a keyboard every press of the key after a lift did. A press from the foot off now drives by the floored shift points, which still shift down where the truck is slow.
+- `update.bat` follows `main` on GitHub. Commits made in the folder go up first, GitHub's come down, and only the two apart stop it.
+
 ## [0.15.4] 2026-10-12
 
 - Every start's log is kept. `Gauges.log` is still the log of the game's last start; at each start the one before moves into `Gauges\logs`, named by the date and time that start began (`Gauges 2026-10-12 21-29-11.log`, the day before for a drive past midnight). The mod rewrote `Gauges.log` at each start, so a tester's log was lost unless copied out before the next one. The log's second line says where the last one went. The mod never empties the folder: with `Probe=1` a long drive's log runs to 20 or 30 MB.

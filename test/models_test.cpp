@@ -1353,6 +1353,28 @@ int main(int argc, char **argv)
                   kickUpAt < GearboxUpPoint(g, k, 2, 1.0f) + 200.0f,
               "automatic: a push of the pedal kicks down at once, gears at a time, to the gear that pulls the most in the game, and holds it while floored until "
               "the next gear pulls more; a pedal held down shifts down as far, a little later");
+        // a kickdown is a push from part throttle. A press from the foot off, as every press of a key is, arms none,
+        // however long the foot was off; nor does a pedal that passes through part throttle on its way down in one
+        // pass, or one that rested under kKickFrom. From half throttle held kKickArm the push kicks down at once
+        {
+            wheels(12.0f);
+            GearboxModel key = driving(4);
+            for (float at = 0.0f; at < kFootGap + kKickArm + 0.1f; at += kDt) GearboxStep(key, g, k, 0.0f, 0.0f, kDt);
+            GearboxModel through = key, light = driving(4), half = driving(4);
+            const int keyGear = key.gear, keyShifts = key.shifts;
+            GearboxStep(key, g, k, 1.0f, 1.0f, kDt);
+            const bool fromOff = key.kick <= 0.0f && key.gear == keyGear && key.shifts == keyShifts;
+            GearboxStep(through, g, k, 0.5f, 0.5f, kDt);
+            GearboxStep(through, g, k, 1.0f, 1.0f, kDt);
+            for (float at = 0.0f; at < kKickArm + 0.05f; at += kDt) GearboxStep(light, g, k, kKickFrom - 0.05f, kKickFrom - 0.05f, kDt);
+            const int lightGear = light.gear;
+            GearboxStep(light, g, k, 1.0f, 1.0f, kDt);
+            for (float at = 0.0f; at < kKickArm + 0.05f; at += kDt) GearboxStep(half, g, k, 0.5f, 0.5f, kDt);
+            const int halfGear = half.gear;
+            GearboxStep(half, g, k, 1.0f, 1.0f, kDt);
+            Check(fromOff && through.kick <= 0.0f && light.kick <= 0.0f && light.gear == lightGear && halfGear == 4 && half.gear == 2 && half.shifts == 1,
+                  "automatic: a kickdown is a push from part throttle; a press from the foot off, a pedal on its way through and one that rested under a fifth kick nothing down");
+        }
         // floored with the game's throttle cut to nothing for a pass now and then (as at its shifts): no kickdown, no
         // shift down with the foot off; a lift that lasts is one
         wheels(TruckGearTop(g, 2) * 0.6f);
