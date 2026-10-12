@@ -7,7 +7,8 @@ rem shows the errors and the failed tests.
 rem   update.bat [the game's Sources\Bin folder]
 rem Without a folder the Steam default is used. Run it from a cmd window or by a double click.
 rem It runs from a copy in %TEMP%: the merge may bring a new update.bat, and cmd reads a running batch file from disk
-rem as it goes.
+rem as it goes. Edits made in this folder are set aside for the merge and put back after it; a file the branch changed
+rem too is left as the branch has it, and the edits are kept in git's stash (git stash show -p shows them).
 if "%~1"=="--copy" goto start
 del "%TEMP%\snowrunner_gauges_update.bat" 2>nul
 copy /y "%~f0" "%TEMP%\snowrunner_gauges_update.bat" >nul
@@ -23,7 +24,13 @@ set "BRANCH=claude/vibrant-darwin-anbhqw"
 echo == the branch
 git switch main || goto fail
 git fetch origin || goto fail
-git merge --ff-only origin/%BRANCH% || goto fail
+git merge --ff-only --autostash origin/%BRANCH% || goto fail
+set "CLASHED="
+for /f "delims=" %%f in ('git diff --name-only --diff-filter U') do (
+    set "CLASHED=1"
+    echo Your edit of %%f clashed with the branch: the branch's is in place, yours is kept in git's stash.
+    git checkout HEAD -- "%%f"
+)
 git push origin main || goto fail
 
 if not exist out mkdir out
@@ -47,6 +54,7 @@ for /f "tokens=3" %%v in ('findstr /c:"#define GAUGES_VERSION" src\gauges.h') do
 echo.
 echo UPDATE OK: Gauges %VERSION% is installed. Gauges.log should start with "Gauges %VERSION%".
 echo The one it replaced is out\rollback\Gauges_previous.addon64, and a Gauges.asi from before is in out\rollback too.
+if defined CLASHED echo Your edits that clashed are in git's stash: git stash show -p shows them, git stash pop puts them back.
 pause
 exit /b 0
 
