@@ -793,6 +793,13 @@ the grade over the try holds and the wait clears. `ClassByMass` (`kScoutMassMost
 truck without its own scales (`AutoClass`): its hold and its class curve, as the tester's plain scales were a scout's
 (the Tayga 12.0 t, the Western Star 20.3 t). A scout over 6 t still needs its own scales. Models 148 OK. The game's own
 automatic picking a gear 0 to 3 s after a takeover (17 times in the two logs, put back on the same pass) left as it is.
+The tester (2026-10-12, on 0.15.0): plays on the keyboard; up a hill the mod's automatic holds the second or the third to
+the top, where the game's own runs up to the last gear and drops to the first halfway. On a keyboard the pedal is off or
+on: no light-foot points, and each press of W after a lift of 0.3 s or more is a kickdown (`kKickArm`; the logs' 4 to 1
+at a new press at 3 m/s). Proposed, waiting on the tester's 0.15.4 logs: a kickdown only from part throttle, a press from
+foot-off driving on the floored points. For later (the user, 2026-10-12, "not now, just note it"): a dropdown on the tab
+for the input in use, wheel, pad or keyboard, so the automatic fits it: the keyboard's press no kickdown and its
+light-foot points left out; a pad's trigger, which dips under kKickdown and comes back, a firmer push to kick down.
 The user: "a slider for it, 1 s to 3 s, per gearbox". 0.13.9: `[Gearbox:<key>] GearHold` (`kGearHoldRange` 1 to 3), the
 tab's slider "Each gear going up" (`GearHoldSet`, as the map's temperature slider), the class's default without it.
 The key: the gearbox's name in the game's files ("g_" and the rest, as the scout's pak names its four), looked for among the texts of
