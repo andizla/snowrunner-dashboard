@@ -1123,7 +1123,22 @@ struct GearboxModel
     float moving;      // seconds in the gear with the truck moving: 0 at a shift and while it stands
     bool holdUp;       // the gear came by a shift up or from a standstill: with the mod's engine it is held kEngineGearHold
     int shifts;        // shifts since the model began
+    int upFrom;        // the gear the last shift up with the foot on came from, while kHuntWindow lasts; 0 for none
+    float sinceUp;     // seconds since that shift up
+    int keep;          // the gear a shift up taken back keeps it in: none up past it while keepFor lasts
+    float keepFor;     // seconds it is still kept
+    float keepWait;    // seconds the last keep lasted: the next is twice as long, up to kHuntKeepMost; 0 after a shift up that held
+    int hunts;         // shifts up taken back since the model began
 };
+
+// The hunt guard let go: a lift of the foot, a stop, a kickdown, or the gears taken anew.
+inline void GearboxHuntClear(GearboxModel &m)
+{
+    m.upFrom = 0;
+    m.keep = 0;
+    m.keepFor = 0.0f;
+    m.keepWait = 0.0f;
+}
 
 // The gearbox's input speed in rpm in a gear with the driven wheels at spin rad/s: the red zone's speed at the gear's top.
 inline float GearboxInput(const TruckRaw &t, const GaugeScale &k, int gear, float spin)
@@ -1239,6 +1254,14 @@ static const float kEngineLimit = 0.98f;    // past this the engine is on the li
 // kickdown brought is not held. A scout shifts sooner (kEngineGearHoldScout): at 2.5 s the scout of the drives, a light
 // 4x4, sat in its gears too long for its kind (the user, 2026-10-11), where trucks and heavy trucks were right.
 static const float kEngineGearHold = 2.5f, kEngineGearHoldScout = 1.5f;
+// A shift up the gear above cannot hold: up a grade or through mud the next gear loses speed and comes back down, and
+// the gear below is at its point up again a second later (a tester's drives on 0.15.0: a Tayga swapped its first
+// and second 18 times in six minutes, another truck every second up a climb). A truck automatic's grade logic keeps the
+// lower gear: a shift up taken back down with the foot on within kHuntWindow keeps the gear it left, with no shift up
+// past it, the limiter's neither (the engine sits at its governed speed, as a loaded truck's does on a hill), for
+// kHuntKeep, then one more try; each try taken back doubles the wait, up to kHuntKeepMost. A lift of the foot, a stop
+// or a kickdown ends it, and so does a shift up that holds past kHuntWindow.
+static const float kHuntWindow = 6.0f, kHuntKeep = 8.0f, kHuntKeepMost = 30.0f;
 // A game's gearbox has its first gears for crawling: on a scout's road gearbox the first can be an eighth of the top
 // gear's speed, where a real one's is a fifth to a seventh. With the mod's engine the automatic sets off in the lowest gear at
 // least kStartShare of the top gear's (as a truck automatic starts in the second), and takes a lower one only stuck:
@@ -1249,6 +1272,20 @@ static const float kStartShare = 1.0f / 7.0f;
 // off in it; with 100000, 0.85, and sets off in the first (1.39 in a first of 8).
 static const float kStartPull = 1.2f;
 static const float kStuckShare = 0.3f, kStuckGain = 0.5f, kStuckAfter = 1.0f;
+// The class a truck without scales of its own goes by in the automatic (each gear's hold, and the engine's curve where
+// it has no profile of its own), by its mass (TruckMass: without addons, cargo or a trailer): the game's scouts weigh
+// up to 6 t (a TUZ 108 4.1 t), its trucks under 16 t (a Tayga 12.0 t), its heavy trucks more (a Western Star 6900
+// twin 20.3 t). A tester's plain scales were a scout's, and every truck without its own shifted like one. The weight
+// cannot tell every scout from a truck: the Fleetstar (6314 kg) is a truck, and a modded scout of 9007 kg shifts as a
+// truck until scales of its own name it a scout.
+static const float kScoutMassMost = 6000.0f, kHeavyMassLeast = 16000.0f;
+
+// The class of a truck of kg by its files; plain where the mass is not known.
+inline int ClassByMass(float kg, int plain)
+{
+    if (!(kg > 0.0f) || !isfinite(kg)) return plain;
+    return kg <= kScoutMassMost ? kClassScout : kg < kHeavyMassLeast ? kClassTruck : kClassHeavy;
+}
 
 // The gear the automatic sets off in with the mod's engine: the lowest whose top is at least kStartShare of the top
 // gear's, and lower while launch (the engine's Torque over the truck's mass; 0 where either is not known) over the
@@ -1369,7 +1406,8 @@ inline float GearboxDownPoint(const TruckRaw &t, const GaugeScale &k, int gear, 
 // shifts early, down well under where the gear above lands, one gear up at a time and a second in each but on the
 // limiter, each gear held kEngineGearHold going up, and a kickdown to the lowest gear under kEngineKickTo; it sets off in the start gear (GearboxStartGear) and
 // takes the gears under it only stuck (kStuckShare). A truck slowing with the foot on is climbing: the points go where floored
-// puts them, and stay there kClimbHold after, so it shifts down in time and does not hunt. A push of the pedal past
+// puts them, and stay there kClimbHold after, so it shifts down in time; a shift up the next gear cannot hold, taken
+// back within kHuntWindow, keeps the gear below kHuntKeep and longer, so it does not hunt. A push of the pedal past
 // kKickdown kicks down at once to the gear that pulls the most.
 inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k, float pedal, float power, float dt, const EngineHand &hand = EngineHand{})
 {
@@ -1482,7 +1520,7 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     // box goes through its gears faster than a shift a second; with the mod's engine one at a time, but past the limiter
     auto upTo = [&](int gear) {
         int g = gear + 1;
-        while (g < top && (engine ? pastIn(g) : upFrom(g))) g++;
+        while (g < top && !(engine && m.keepFor > 0.0f && g >= m.keep) && (engine ? pastIn(g) : upFrom(g))) g++;
         return g;
     };
     // with the foot on, a gear the pedal would shift down from, the one below taking the engine and not shifting
@@ -1515,6 +1553,22 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     else m.moving += dt;
     // with the mod's engine, a gear come by a shift up or from a standstill is held kEngineGearHold
     const bool held = engine && m.holdUp && m.moving < (hand.hold > 0.0f ? hand.hold : kEngineGearHold);
+    // the hunt guard (kHuntWindow): a shift up that held past the window clears the wait; a lift of the foot or a stop
+    // lets go. Kept, no shift up past the gear kept, the limiter's neither, but halfway into the red zone (rolling faster
+    // down a slope than the engine can take) it goes up all the same
+    if (m.upFrom)
+    {
+        m.sinceUp += dt;
+        if (m.sinceUp > kHuntWindow)
+        {
+            m.upFrom = 0;
+            m.keepWait = 0.0f;
+        }
+    }
+    if (m.keepFor > 0.0f) m.keepFor -= dt;
+    if (footOff || standing) GearboxHuntClear(m);
+    const bool kept = engine && m.keepFor > 0.0f && m.gear >= m.keep;
+    const bool overRed = GearboxInput(t, k, m.gear, fmaxf(by, byUp)) >= (k.redline + fmaxf(k.max, k.redline)) * 0.5f;
     if (m.gear != least && standing)
         to = least;
     else if (m.kick > 0.0f && m.gear > least && fits(m.gear - 1) &&
@@ -1526,10 +1580,11 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
                (engine ? kickable(to - 1) : pulls(to - 1) >= pulls(to) * (1.0f + kShiftPullGain)))
             to--;
         m.kick = 0.0f;
+        GearboxHuntClear(m); // the driver's call: the gear kept, if any, is let go
     }
-    else if (pastIt && !held)
+    else if (pastIt && !held && (!kept || overRed))
         to = upTo(m.gear); // past the red zone or what the engine can take: up at once, whatever the pause
-    else if (!held && m.pause <= (m.upLast && !engine ? kShiftPause - kShiftAgain : 0.0f) &&
+    else if (!held && !kept && m.pause <= (m.upLast && !engine ? kShiftPause - kShiftAgain : 0.0f) &&
              m.wanted >= kShiftUpAfter + (kShiftUpAfterFloored - kShiftUpAfter) * feel)
         to = upTo(m.gear);
     else if (m.pause <= 0.0f && footOff && m.wanted <= -kCoastDownAfter)
@@ -1542,6 +1597,22 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
         to = downTo(m.gear);
     if (to != m.gear)
     {
+        // the hunt guard: a shift up with the foot on is watched for kHuntWindow; taken back down with the foot on in
+        // that time, the gear it left is kept (or the one it comes down to, where that is higher)
+        if (engine && to > m.gear && !footOff)
+        {
+            m.upFrom = m.gear;
+            m.sinceUp = 0.0f;
+        }
+        else if (engine && to < m.gear && m.upFrom && !footOff)
+        {
+            m.keep = to > m.upFrom ? to : m.upFrom;
+            m.keepWait = m.keepWait > 0.0f ? fminf(m.keepWait * 2.0f, kHuntKeepMost) : kHuntKeep;
+            m.keepFor = m.keepWait;
+            m.upFrom = 0;
+            m.hunts++;
+        }
+        else if (to < m.gear) m.upFrom = 0;
         m.upLast = to > m.gear;
         m.holdUp = to > m.gear || standing;
         m.moving = 0.0f;
@@ -1586,11 +1657,13 @@ inline int GearboxLowestFit(const GearboxModel &m, const TruckRaw &t, const Gaug
 inline void GearboxProbeText(const TruckRaw &t, const GearboxModel &m, bool driving, char *out, size_t size)
 {
     const float top = TruckGearTop(t, t.gearEngaged), x = top > 0.0f ? m.by / top : 0.0f;
+    char kept[96] = "";
+    if (m.keepFor > 0.0f) sprintf_s(kept, sizeof kept, "kept in gear %d or under for %.0f s more (the grade), ", m.keep, m.keepFor);
     sprintf_s(out, size, "automatic (%s): gear %d of %d (the game's %d), %s, input %.0f rpm, engine %.0f rpm, torque x%.2f, to the wheels %.2f | wheels %.2f rad/s for each m/s%s | "
-                         "gaining %.2f rad/s each second, the wheels at %.2f of the game's gear's top (its pull %.2f) | %s%s%d shifts",
+                         "gaining %.2f rad/s each second, the wheels at %.2f of the game's gear's top (its pull %.2f) | %s%s%s%d shifts, %d taken back",
               driving ? "the mod's, setting the game's gears" : "not handed to the game", m.gear, TruckTopGear(t), t.gearEngaged, m.locked ? "locked up" : "converter slipping",
               m.input, m.rpm, m.ratio, m.drive, m.grip, m.grip > 0.0f ? "" : " (not learned yet)", m.trend, x, GamePull(x), m.climb > 0.0f ? "climbing, " : "",
-              m.spinning ? "wheels spinning, going by the ground, " : "", m.shifts);
+              m.spinning ? "wheels spinning, going by the ground, " : "", kept, m.shifts, m.hunts);
 }
 
 // ---- the mod's automatic in the game ----

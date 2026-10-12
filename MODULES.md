@@ -769,6 +769,18 @@ x feel`, not under `EngineHand::least`; the point down per gear, the gear below'
 construction); the converter's lock-up from `kLockIdle` 1.3 times idle up to `kLockLight` 0.3 of the pedal, to half
 the red zone floored. The test: the scout's gearbox at a fifth of the pedal shifts up at 1579 to 1639 rpm, none taken
 back, locked after each.
+The tester's drives (2026-10-12, 0.15.0, EngineShare 100): 37 of 119 shifts up taken back down within 6 s with the
+foot on (a Tayga 24 of 52, 18 swaps of its first and second in six minutes; another truck 9 of 32, every second up a
+climb). The first two gears nearly 1:2 apart (tops 9 and 17 rad/s): floored, up at 0.94 of the first lands at 0.49 of
+the second, whose floored point down is 0.43; on the grade the second loses 0.5 rad/s each second, and the first, not
+held after a shift down, is at its point up a second later. 0.15.2: the hunt guard (`kHuntWindow` 6 s, `kHuntKeep` 8 s
+doubled up to `kHuntKeepMost` 30 s; `upFrom`, `keep`, `keepFor`, `keepWait`, `hunts` in `GearboxModel`; kept, no shift
+up past the gear, the limiter's neither, but halfway into the red zone; let go at a lift, a stop, a kickdown, a try that
+holds and a takeover). The test (the Tayga's gears, the tester's plain scales): 3 up in 40 s, 8 without the guard; with
+the grade over the try holds and the wait clears. `ClassByMass` (`kScoutMassMost` 6 t, `kHeavyMassLeast` 16 t) for a
+truck without its own scales (`AutoClass`): its hold and its class curve, as the tester's plain scales were a scout's
+(the Tayga 12.0 t, the Western Star 20.3 t). A scout over 6 t still needs its own scales. Models 148 OK. The game's own
+automatic picking a gear 0 to 3 s after a takeover (17 times in the two logs, put back on the same pass) left as it is.
 The user: "a slider for it, 1 s to 3 s, per gearbox". 0.13.9: `[Gearbox:<key>] GearHold` (`kGearHoldRange` 1 to 3), the
 tab's slider "Each gear going up" (`GearHoldSet`, as the map's temperature slider), the class's default without it.
 The key: the gearbox's name in the game's files ("g_" and the rest, as the scout's pak names its four), looked for among the texts of

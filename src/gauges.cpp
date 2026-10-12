@@ -1347,6 +1347,7 @@ struct TruckWatch
     DamageModel damage;         // what the temperature costs the engine of the truck at modelVehicle
     EngineRecord engine;        // the record of the engine of the truck at engineVehicle
     float mass;                 // that truck's mass in kg by its files (TruckMass), 0 where not read
+    bool ownScales;             // the driven truck has scales of its own (Gauges\trucks): their class is the automatic's, else its weight's
     uint64_t engineVehicle;
     EngineProfile profile;      // the engine's own profile (Gauges\engines), for the engine named profileFor
     char profileFor[kMaxText];
@@ -1382,6 +1383,16 @@ static float GearHoldOf(const TruckWatch &w, int tachClass)
     return w.gearHoldOwn ? w.gearHold : tachClass == kClassScout ? kEngineGearHoldScout : kEngineGearHold;
 }
 
+static const wchar_t *const kClassWords[kClassCount] = { L"truck", L"scout", L"heavy" };
+
+// The class the automatic goes by (each gear's hold, and the engine's curve where it has no profile of its own): the
+// class of the truck's own scales, and without them the class of its weight (ClassByMass), the plain scales' where
+// the weight is not read. tachClass: the class of the scales in force.
+static int AutoClass(const TruckWatch &w, int tachClass)
+{
+    return w.ownScales ? tachClass : ClassByMass(w.mass, tachClass);
+}
+
 // Finds the driven truck's gearbox (its name, or its gears where the name is not read) and its own hold, and says so
 // in the log when it is another than before.
 static void GearboxLook(TruckWatch &w, const TruckMemory &m, const TruckRaw &raw, int tachClass)
@@ -1397,10 +1408,12 @@ static void GearboxLook(TruckWatch &w, const TruckMemory &m, const TruckRaw &raw
     if (!strcmp(key, w.gearboxKey)) return;
     strcpy_s(w.gearboxKey, key);
     w.gearHoldOwn = GearHoldRead(key, w.gearHold);
-    if (named) Log(L"gearbox: %S (its name at vehicle + 0x%x); each gear held going up %.1f s, %s", key, at, GearHoldOf(w, tachClass),
-                   w.gearHoldOwn ? L"its own (its file in Gauges\\gearboxes)" : L"the truck class's");
-    else Log(L"gearbox: its name not read, so it goes by its gears (%S); each gear held going up %.1f s, %s", key, GearHoldOf(w, tachClass),
-             w.gearHoldOwn ? L"its own (its file in Gauges\\gearboxes)" : L"the truck class's");
+    wchar_t whose[96];
+    if (w.gearHoldOwn) wcscpy_s(whose, L"its own (its file in Gauges\\gearboxes)");
+    else swprintf_s(whose, L"the %s class's%s", kClassWords[tachClass < 0 || tachClass >= kClassCount ? kClassTruck : tachClass],
+                    w.ownScales || !(w.mass > 0.0f) ? L"" : L", the class of the truck's weight");
+    if (named) Log(L"gearbox: %S (its name at vehicle + 0x%x); each gear held going up %.1f s, %s", key, at, GearHoldOf(w, tachClass), whose);
+    else Log(L"gearbox: its name not read, so it goes by its gears (%S); each gear held going up %.1f s, %s", key, GearHoldOf(w, tachClass), whose);
 }
 
 // Looks up the record of the driven truck's engine, and says so in the log when it is another one than before. With
@@ -1412,7 +1425,13 @@ static void EngineLook(TruckWatch &w, const TruckMemory &m, ULONGLONG now, bool 
     TruckEngineRecord(m, w.refs.vehicle, e);
     const float mass = TruckMass(m, w.refs.model);
     if (w.refs.vehicle != w.engineVehicle || mass != w.mass)
-        Log(mass > 0.0f ? L"truck: it weighs %.0f kg by its files (without addons, cargo or a trailer)" : L"truck: its mass by its files was not read (%.0f)", mass);
+    {
+        if (mass > 0.0f)
+            Log(L"truck: it weighs %.0f kg by its files (without addons, cargo or a trailer): a %s's weight, the class the automatic goes by where the truck "
+                L"has no scales of its own",
+                mass, kClassWords[ClassByMass(mass, kClassTruck)]);
+        else Log(L"truck: its mass by its files was not read (%.0f)", mass);
+    }
     w.mass = mass;
     if (w.refs.vehicle != w.engineVehicle || e.found != w.engine.found || strcmp(e.name, w.engine.name) || e.capacity != w.engine.capacity ||
         e.threshold != w.engine.threshold || e.torqueMin != w.engine.torqueMin || e.torqueMax != w.engine.torqueMax || e.torque != w.engine.torque)
@@ -1594,7 +1613,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         else TachStep(w.tach, raw, scale, dt);
         // the engine's torque curve: its own profile's (Gauges\\engines), else the class's; a naturally aspirated one
         // has no boost, no turbo sounds and no boost dial
-        const TorqueCurve curve = EngineCurveOf(w.profile, kClassCurves[s.tachClass], scale.redline);
+        const int autoClass = AutoClass(w, s.tachClass);
+        const TorqueCurve curve = EngineCurveOf(w.profile, kClassCurves[autoClass], scale.redline);
         const bool natural = w.profile.aspiration == kAspNatural;
         // the boost, and a lift of the pedal under it, which is heard (sound.h). With the probe on it is logged
         if (natural) w.boost = BoostModel{};
@@ -1637,8 +1657,14 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             // game's own pull
             const float launch = w.engine.torque > 0.0f && w.mass > 0.0f && w.engineVehicle == w.refs.vehicle ? w.engine.torque / w.mass : 0.0f;
             const EngineHand hand{ w.hand.on, &curve, scale.redline > 0.0f ? scale.max / scale.redline : 1.0f, s.engineShare / 100.0f, launch,
-                                   GearHoldOf(w, s.tachClass), kLightPeak * CurvePeak(curve) * scale.redline };
+                                   GearHoldOf(w, autoClass), kLightPeak * CurvePeak(curve) * scale.redline };
+            const int huntsWere = w.gearbox.hunts;
             GearboxStep(w.gearbox, raw, scale, foot, w.power.power, dt, hand);
+            if (w.gearbox.hunts != huntsWere)
+                Log(L"gearbox: a shift up taken back within %.0f s with the foot on (the grade or the ground), the %d%s time; no shift up past %d for %.0f s, "
+                    L"the limiter's neither, then it tries again",
+                    kHuntWindow, w.gearbox.hunts, w.gearbox.hunts == 1 ? L"st" : w.gearbox.hunts == 2 ? L"nd" : w.gearbox.hunts == 3 ? L"rd" : L"th",
+                    w.gearbox.keep, w.gearbox.keepFor);
             w.clutch = ClutchModel{};
         }
         if (probe && boxGear >= 1 && w.gearbox.gear >= 1 && w.gearbox.gear != boxGear && raw.automatic && raw.gearEngaged >= 1 && raw.gearEngaged <= TruckTopGear(raw))
@@ -1687,6 +1713,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         {
             w.gearbox.gear = raw.gear;
             w.gearbox.pause = kShiftPause;
+            GearboxHuntClear(w.gearbox);
             Log(L"gearbox: the mod's automatic takes the gears, in gear %d", raw.gear);
         }
         if (orders.gaveBack) Log(L"gearbox: the mod's automatic gives the gears back: %S, after %d shifts", TakeoverWhy(w.take.lastHandBack), w.take.shifts);
@@ -1739,7 +1766,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         if (w.refs.vehicle != w.engineVehicle || (!w.engine.found && now >= w.engineAt)) EngineLook(w, m, now, s.probe != 0);
         // the gearbox: for each truck as it is first driven, and again when its gears change (another fitted in the garage)
         if (w.refs.vehicle != w.gearboxVehicle || raw.gearSpeeds != w.gearSpeeds || memcmp(raw.gearSpeed, w.gearSpeed, sizeof w.gearSpeed))
-            GearboxLook(w, m, raw, s.tachClass);
+            GearboxLook(w, m, raw, AutoClass(w, s.tachClass));
         // what the temperature costs the engine: the whole points wait in owed until they are written. Nothing comes
         // together while the game's window is not in front, as the game may stand still then with its last values.
         const int points = DamageStep(w.damage, w.refs.vehicle, raw, w.temp, TachSpeed(w.tach, scale), s, front ? dt : 0.0f);
@@ -2169,6 +2196,7 @@ static DWORD WINAPI Run(void *)
         // what the cluster shows: the truck being driven; with the ini's Demo, demo values while none is
         TruckRaw raw;
         World world;
+        watch.ownScales = set.own;
         const bool driving = TruckPass(watch, memory, inForce, front, raw, world);
         wasDriving = driving;
         if (watch.found && !codeLooked)
@@ -2228,10 +2256,14 @@ static DWORD WINAPI Run(void *)
             SettingsFor(set, truck.key);
             SettingsPublish(s);
             const GaugeScale k = GaugeScaleOf(s);
+            watch.ownScales = set.own;
+            const int autoClass = AutoClass(watch, s.tachClass);
             if (truck.key[0])
-                Log(L"truck: this is %S%s, the game's id for it %S; %s: idle %.0f rpm, red zone from %.0f of %.0f, speedometer to %.0f km/h", truck.key,
-                    truck.named ? L"" : L" (the name of its kind was not read, so it goes by its build)", truck.id[0] ? truck.id : "not read",
-                    set.own ? L"it has scales of its own" : L"it has no scales of its own and takes the plain ones", k.idle, k.redline, k.max, k.speedMax);
+                Log(L"truck: this is %S%s, the game's id for it %S; %s: idle %.0f rpm, red zone from %.0f of %.0f, speedometer to %.0f km/h; the automatic "
+                    L"goes by the %s class%s",
+                    truck.key, truck.named ? L"" : L" (the name of its kind was not read, so it goes by its build)", truck.id[0] ? truck.id : "not read",
+                    set.own ? L"it has scales of its own" : L"it has no scales of its own and takes the plain ones", k.idle, k.redline, k.max, k.speedMax,
+                    kClassWords[autoClass], set.own ? L", its scales'" : watch.mass > 0.0f ? L", its weight's" : L", the plain scales' (its weight not read)");
         }
         else if (strcmp(now.id, truck.id))
         {
@@ -2255,7 +2287,7 @@ static DWORD WINAPI Run(void *)
         if (driving && watch.profileFor[0])
         {
             const GaugeScale es = GaugeScaleOf(inForce);
-            const TorqueCurve ec = EngineCurveOf(watch.profile, kClassCurves[inForce.tachClass], es.redline);
+            const TorqueCurve ec = EngineCurveOf(watch.profile, kClassCurves[AutoClass(watch, inForce.tachClass)], es.redline);
             strncpy_s(v.engine, watch.profileFor, _TRUNCATE);
             v.engineOwn = watch.profile.own;
             v.engineCustom = watch.profile.custom;
@@ -2266,8 +2298,11 @@ static DWORD WINAPI Run(void *)
             const float top = es.redline > 0.0f ? es.max / es.redline : 1.0f, from = es.redline > 0.0f ? es.idle / es.redline : 0.0f;
             for (int i = 0; i < kEnginePlot; i++) v.engineCurve[i] = TorqueAt(ec, from + (top - from) * i / (kEnginePlot - 1), top);
         }
-        v.gearHold = GearHoldOf(watch, inForce.tachClass);
+        v.gearHold = GearHoldOf(watch, AutoClass(watch, inForce.tachClass));
         v.gearHoldOwn = watch.gearHoldOwn;
+        v.autoClass = AutoClass(watch, inForce.tachClass);
+        v.autoByWeight = driving && !watch.ownScales && watch.mass > 0.0f;
+        v.massKg = driving ? watch.mass : 0.0f;
         v.pullTest = watch.pullTest.state;
         v.pullPhase = watch.pullTest.phase;
         v.pullWhy = watch.pullTest.why;

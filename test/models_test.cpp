@@ -1838,6 +1838,75 @@ int main(int argc, char **argv)
                   "automatic, the engine handed over: an engine's curve from its peak torque's speed; at a light foot up about as far along as the pedal "
                   "is down, not under 0.8 of the peak's speed (a fifth of the pedal: 1560 rpm), down where the gear below comes in clear of its point up, "
                   "through the gears without a shift taken back, the converter locked");
+            // a climb the second gear cannot take (the tester's drive of 22:02: gears' tops 9, 17, 21 and 29 rad/s, the
+            // plain scales a scout's, 800 to 5600 of 7000 rpm): floored, the first gains 1.1 rad/s each second, less near
+            // its top, where the game governs it, and the second loses 0.5. The drive swapped them every few seconds; now
+            // the first shift up taken back keeps the first kHuntKeep on its limiter, the next try twice as long. With
+            // the grade over (the second gaining from easeAt), the next try holds and the wait is let go; a lift of
+            // the foot lets it go too
+            TruckRaw ht = g;
+            static const float huntSpeeds[6] = { 0.5f, 2.0f, 6.0f, 8.0f, 12.0f, 8.0f };
+            ht.gearSpeeds = 6;
+            memcpy(ht.gearSpeed, huntSpeeds, sizeof huntSpeeds);
+            GaugeScale hk = dk;
+            hk.idle = 800.0f;
+            hk.redline = 5600.0f;
+            hk.max = 7000.0f;
+            EngineHand huntHand = whole;
+            huntHand.top = 7000.0f / 5600.0f;
+            huntHand.hold = kEngineGearHoldScout;
+            huntHand.least = kLightPeak * CurvePeak(kClassCurves[kClassScout]) * 5600.0f;
+            struct HuntRun { int ups, downs, hunts, last; float firstLongest, firstMost, waitAfter; bool liftLetGo; };
+            auto huntRun = [&](float seconds, float easeAt, float liftAt) {
+                HuntRun run = {};
+                GearboxModel hb = {};
+                hb.running = true;
+                hb.gear = 2;
+                hb.grip = 2.0f;
+                hb.moving = kEngineGearHold;
+                hb.pedal = hb.held = hb.feel = 1.0f;
+                float spin = 0.48f * TruckGearTop(ht, 2), inFirst = 0.0f;
+                hb.spin = hb.by = hb.rolling = spin;
+                for (float at = 0.0f; at < seconds; at += kDt)
+                {
+                    for (int i = 0; i < ht.wheels; i++) ht.spin[i] = spin;
+                    ht.speed = spin / 2.0f;
+                    const bool footUp = liftAt >= 0.0f && at >= liftAt && at < liftAt + 1.0f;
+                    const float pedal = footUp ? 0.0f : 1.0f;
+                    const int was = hb.gear;
+                    const bool keptBefore = hb.keepFor > 0.0f;
+                    GearboxStep(hb, ht, hk, pedal, pedal, kDt, huntHand);
+                    if (footUp && keptBefore && hb.keepFor <= 0.0f && hb.keep == 0) run.liftLetGo = true;
+                    if (hb.gear > was) run.ups++;
+                    if (hb.gear < was) run.downs++;
+                    inFirst = hb.gear == 1 ? inFirst + kDt : 0.0f;
+                    run.firstLongest = fmaxf(run.firstLongest, inFirst);
+                    const float x = spin / TruckGearTop(ht, hb.gear);
+                    if (hb.gear == 1) run.firstMost = fmaxf(run.firstMost, x);
+                    // the first gains up to its top, the game's pull falling to nothing there; above it the climb takes
+                    // speed, or gives it once the grade is over; coasting, it slows
+                    const float gain = footUp ? -1.0f : hb.gear == 1 ? 1.1f * SettingsRange((0.99f - x) / 0.09f, 0.0f, 1.0f) : easeAt >= 0.0f && at >= easeAt ? 0.3f : -0.5f;
+                    spin = fminf(fmaxf(spin + gain * kDt, 0.5f), TruckGearTop(ht, hb.gear));
+                }
+                run.hunts = hb.hunts;
+                run.last = hb.gear;
+                run.waitAfter = hb.keepWait;
+                return run;
+            };
+            const HuntRun grade = huntRun(40.0f, -1.0f, -1.0f), eased = huntRun(55.0f, 20.0f, -1.0f), liftRun = huntRun(12.0f, -1.0f, 9.0f);
+            printf("    hunt: on the grade %d up, %d down, %d taken back, the first held %.1f s at most, up to %.3f of its top; eased: %d up, "
+                   "%d taken back, in %d at the end, the wait %.1f; lifted: let go %d\n",
+                   grade.ups, grade.downs, grade.hunts, grade.firstLongest, grade.firstMost, eased.ups, eased.hunts, eased.last, eased.waitAfter, liftRun.liftLetGo);
+            Check(grade.ups <= 3 && grade.hunts == 3 && grade.firstLongest >= 2.0f * kHuntKeep - 0.5f && grade.firstMost > kEngineLimit &&
+                      eased.last >= 2 && eased.hunts == 2 && eased.waitAfter == 0.0f && liftRun.liftLetGo,
+                  "automatic, the engine handed over: up a climb the second cannot take, a shift up taken back keeps the first on its limiter "
+                  "eight seconds, the next try sixteen, so it no longer swaps them every few seconds; once the grade is over the next try holds "
+                  "and the wait is let go; a lift of the foot lets it go");
+            // the class a truck without scales of its own shifts by, from its weight by its files (the tester's trucks)
+            Check(ClassByMass(4091.0f, kClassTruck) == kClassScout && ClassByMass(6501.0f, kClassScout) == kClassTruck && ClassByMass(12022.0f, kClassScout) == kClassTruck &&
+                      ClassByMass(20308.0f, kClassScout) == kClassHeavy && ClassByMass(0.0f, kClassScout) == kClassScout && ClassByMass(NAN, kClassHeavy) == kClassHeavy,
+                  "automatic: a truck without scales of its own shifts by the class of its weight, a scout's up to 6 t, a truck's under 16 t, a heavy "
+                  "truck's from there; the plain scales' class where the weight is not read");
             // the share of the gear's top the lift goes by: by the ground once the grip is known, the wheels at most
             // kSlipUp over it; before that the wheels, at most kLiftBlind
             Check(Near(LiftShare(10.0f, 4.0f, 2.0f, 20.0f), 0.42f, 0.001f) && Near(LiftShare(6.0f, 4.0f, 2.0f, 20.0f), 0.3f, 0.001f) &&

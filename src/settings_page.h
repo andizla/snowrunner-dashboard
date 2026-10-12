@@ -49,6 +49,13 @@ static void PageTip(const char *text)
 }
 
 // A label in the left column, the widget after it.
+// A class's name in the tab's text (GaugeSettings::tachClass).
+static const char *PageClassWord(int tachClass)
+{
+    static const char *const words[kClassCount] = { "truck", "scout", "heavy" };
+    return words[tachClass < 0 || tachClass >= kClassCount ? kClassTruck : tachClass];
+}
+
 static void PageLabel(const char *text, float x)
 {
     ImGui::AlignTextToFramePadding();
@@ -366,7 +373,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     ImGui::SetNextItemWidth(w);
     changed(ImGui::Combo("##class", &s.tachClass, classes, kClassCount));
     PageTip("Sets the five numbers below: trucks idle at 650 rpm with the red zone from 2200 of 3000, a speedometer to 100 km/h and 1.8 bar of boost, "
-            "scouts 800, 5500 of 7000, 120 km/h and 1 bar, heavy trucks 600, 1900 of 2500, 80 km/h and 2 bar.");
+            "scouts 800, 5500 of 7000, 120 km/h and 1 bar, heavy trucks 600, 1900 of 2500, 80 km/h and 2 bar. The mod's automatic shifts by the class of "
+            "a truck's own scales; a truck without them shifts by the class of its weight (a scout up to 6 t, a truck under 16 t, a heavy truck from 16 t).");
     {
         const GaugeScale own = kClassScales[s.tachClass < 0 || s.tachClass >= kClassCount ? kClassTruck : s.tachClass];
         // each number is the class's own until it is changed here; "Class" gives it back to the class
@@ -429,7 +437,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     else
     {
         if (view.engineOwn) ImGui::TextWrapped("Engine %s. Its own profile, kept in Gauges\\engines.", view.engine);
-        else ImGui::TextWrapped("Engine %s. It pulls by the class's torque curve. Set its peak torque here and this engine keeps a profile of its own.", view.engine);
+        else ImGui::TextWrapped("Engine %s. It pulls by the %s class's torque curve%s. Set its peak torque here and this engine keeps a profile of its own.", view.engine,
+                                PageClassWord(view.autoClass), view.autoByWeight ? " (the class of the truck's weight)" : "");
         float peak = view.enginePeakRpm;
         int aspiration = view.engineAspiration;
         bool set = false;
@@ -492,9 +501,12 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 st.gearHold = floorf(hold * 10.0f + 0.5f) / 10.0f;
                 act |= kPageGearHold;
             }
-            char gearTip[256];
+            char gearTip[400], whose[160] = "";
+            if (!view.gearHoldOwn)
+                sprintf_s(whose, "; until it is moved, the %s class's%s: a scout 1.5 s, the others 2.5 s", PageClassWord(view.autoClass),
+                          view.autoByWeight ? " (the class of the truck's weight; scales of its own set it instead)" : "");
             sprintf_s(gearTip, "Going up through the gears the mod's automatic holds each gear at least this long, on the limiter if it comes to that. "
-                               "Kept for this gearbox (%s)%s.", view.gearbox, view.gearHoldOwn ? "" : "; until it is moved, the truck class's: a scout 1.5 s, the others 2.5 s");
+                               "Kept for this gearbox (%s)%s.", view.gearbox, whose);
             PageTip(gearTip);
         }
     }

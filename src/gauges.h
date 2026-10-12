@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#define GAUGES_VERSION "0.15.1"
+#define GAUGES_VERSION "0.15.2"
 
 // The exe the addresses in this mod are from (SnowRunner on Steam, the build of 22 July 2026). On any other the mod
 // stands down.
@@ -259,6 +259,7 @@ struct GaugeView { bool show, demo; int hidden; GaugeState st; int engineDamage,
                    int pullTest, pullPhase; const char *pullWhy;
                    float ambientDay, ambientNight, hour; // the map's day and night (with mapOwn), the hour of the game's day (-1 not known)
                    char gearbox[96]; float gearHold; bool gearHoldOwn; // the driven truck's gearbox (its key, "" for none), the seconds each gear is held going up with the mod's engine, and whether its file sets them
+                   int autoClass; bool autoByWeight; float massKg; // the class the automatic goes by for it, whether by its weight (no scales of its own), and that weight (0 not read)
                    char engine[96]; bool engineOwn, engineCustom; float enginePeakRpm; int engineAspiration; // the driven truck's engine ("" not known): its own profile or not, a whole curve of its own in it, the peak torque's speed in force, turbo or not
                    float engineIdle, engineRedline; float engineCurve[kEnginePlot]; }; // the slider's range, and the torque in force from idle to the tachometer's top, for the tab's plot
 
