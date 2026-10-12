@@ -34,9 +34,12 @@ Taken over on the PC (2026-10-12, the module 4 session, on the overseer's go aft
 `docs\HANDOVER.md`): `update.bat` follows `main` on GitHub (c2c7a15, tried on a throwaway repository pair: level,
 behind, ahead, the two apart, behind with a local edit). 0.15.5 (5f5cdd3, installed 21:44, `Gauges.addon64`
 5661C879): a kickdown only on a push from part throttle (`kKickFrom` 0.2 for `kKickArm`), so a key's press from the
-foot off drives by the floored points; its check fails on the rule before. Not started: the input dropdown (the
-user: "not now, just note it") and the engine sound (pinned below: a probe in the game first, so it waits for a
-run with the PC idle and the user's word). The tester's logs on 0.15.4 or later are still owed.
+foot off drives by the floored points; its check fails on the rule before. 0.15.6 (4fa1afa, on the user's go
+through the overseer, installed 22:17, `Gauges.addon64` 59B4FC6D, not pushed until the user's word): the setting
+`Input`, "Driven with" on the tab, a wheel's pedals, a pad or the keyboard: a pad's trigger kicks down only from
+under three quarters (`kKickPadFrom`), keys kick nothing down and shift as floored; `SOUND_CREDITS.md` names no
+author for the flutter clip, at the author's wish. Not started: the engine sound (pinned below: a probe in the
+game first, so it waits for a run with the PC idle and the user's word). The tester's logs on 0.15.4 or later are still owed.
 
 Pinned (the user, 2026-10-12): the engine sound by our rpm, route 1 of the note of 2026-10-11 (find the value the game's
 engine sound goes by, a probe reading the vehicle, the action, the truck control and its three sound objects at
