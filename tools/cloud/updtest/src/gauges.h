@@ -1,0 +1,1 @@
+#define GAUGES_VERSION "0.11.2"

@@ -26,6 +26,10 @@ Logs (the user, 2026-10-12: "write a timestamp when it creates the file so it'll
 moves the last start's Gauges.log into Gauges\logs as `Gauges <date> <time>.log` before the first line (the start's
 time from its first line, the date from its last write, a day back past midnight); Gauges.log stays the current one
 for the docs and update.bat. Nothing pruned. Numbered 0.15.4, as module 20 took 0.15.3.
+Handover (2026-10-12): the cloud session's work ends on the user's word and a session on the PC takes it over;
+`docs\HANDOVER.md` has the state, the branch and update.bat, the build and test commands, what the tester owes and
+what only the cloud session knew. Its tools are in `tools\cloud` (the MinGW and Wine kit) and `tools\analysis` (the
+log scripts).
 Pinned (the user, 2026-10-12): the engine sound by our rpm, route 1 of the note of 2026-10-11 (find the value the game's
 engine sound goes by, a probe reading the vehicle, the action, the truck control and its three sound objects at
 + 0x70 to + 0x80, keeping what moves like revs in neutral; nothing written); later.
