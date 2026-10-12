@@ -13,6 +13,18 @@ Questions for the overseer go into `HANDOFF.md` under "Questions"; the overseer 
 Other builds (the user, 2026-10-11): the user hands the next version to a player on the Epic build, whose log will
 say what the signatures find there. The user's lead: "next gen's notes" may say how the other builds lay out the
 game's memory (a lot to go through; with the user, another day).
+The tester's two logs (2026-10-12, 0.15.0, Gauges.log of 21:29 and Gauges.1.log of 10:34): exe stamp 6a607c05, the
+Steam build's, the places known without the signatures, the trucks found and driven (the tester on the Epic build, as
+the user arranged, if so: the Epic build then runs the same exe; `LogGameFolder` will say); the outside temperature at
+AmbientC throughout: "map: no save of the game was found". The Epic store saves as CompleteSave*.dat in
+Documents\My Games\SnowRunner\base\storage\<account> (community guides; Steam's are .cfg), and `SaveNewest` looked
+for .cfg alone. 0.15.1: `kSavePatterns` both, `SaveNewestIn` (tested on a folder of each), the profile's Documents
+beside the shell's, the folders looked in logged when none is found (`PathForLog`: %USERPROFILE%), the game's folder
+and its likely store at the start (`LogGameFolder`). Owed: the tester's next log, to see the save found and read (the
+.dat taken for the same text as the .cfg, as the guides say the two are renamed into each other).
+Pinned (the user, 2026-10-12): the engine sound by our rpm, route 1 of the note of 2026-10-11 (find the value the game's
+engine sound goes by, a probe reading the vehicle, the action, the truck control and its three sound objects at
++ 0x70 to + 0x80, keeping what moves like revs in neutral; nothing written); later.
 
 | # | Module | Effort | Status | Session | Result |
 |---|---|---|---|---|---|

@@ -892,10 +892,61 @@ uint32_t PadButtons()
     return buttons;
 }
 
+// A path for the log with the user's profile folder written %USERPROFILE%: the log is passed on, the account's name stays out.
+static std::wstring PathForLog(const std::wstring &path)
+{
+    wchar_t profile[MAX_PATH] = {};
+    const DWORD n = GetEnvironmentVariableW(L"USERPROFILE", profile, MAX_PATH);
+    if (n > 0 && n < MAX_PATH && path.size() >= n && !_wcsnicmp(path.c_str(), profile, n)) return L"%USERPROFILE%" + path.substr(n);
+    return path;
+}
+
+// The saves' names, by the store: Steam's and the Microsoft Store's .cfg, Epic's .dat.
+static const wchar_t *const kSavePatterns[2] = { L"CompleteSave*.cfg", L"CompleteSave*.dat" };
+
+// The newest save in the folders, and when it was written; false when there is none.
+static bool SaveNewestIn(const std::vector<std::wstring> &folders, std::wstring &path, FILETIME &written)
+{
+    bool found = false;
+    for (const auto &dir : folders)
+        for (const wchar_t *pattern : kSavePatterns)
+        {
+            WIN32_FIND_DATAW f;
+            const HANDLE h = FindFirstFileW((dir + L"\\" + pattern).c_str(), &f);
+            if (h == INVALID_HANDLE_VALUE) continue;
+            do
+                if (!(f.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && (!found || CompareFileTime(&f.ftLastWriteTime, &written) > 0))
+                {
+                    path = dir + L"\\" + f.cFileName;
+                    written = f.ftLastWriteTime;
+                    found = true;
+                }
+            while (FindNextFileW(h, &f));
+            FindClose(h);
+        }
+    return found;
+}
+
+
+
 #ifndef GAUGES_SETTINGS_TEST
+// The game's folder in the log at the start, and the store its path suggests: where its saves are follows from it.
+static void LogGameFolder()
+{
+    std::wstring lower = g_dir;
+    for (auto &c : lower) c = (wchar_t)towlower(c);
+    const wchar_t *store = lower.find(L"\\steamapps\\") != std::wstring::npos ? L"a Steam library"
+                           : lower.find(L"epic games") != std::wstring::npos ? L"the Epic store's folder"
+                           : lower.find(L"windowsapps") != std::wstring::npos || lower.find(L"xboxgames") != std::wstring::npos ? L"the Microsoft Store's folder"
+                           : L"a folder that does not tell the store";
+    Log(L"game: its folder %s, by its path %s", PathForLog(g_dir).c_str(), store);
+}
+
 // ---- the map a truck is on: the game's save says which map it loaded last (maps.h) ----
-// Steam keeps the saves in userdata\<account>\1465360\remote of its own folder, the Epic store in
-// Documents\My Games\SnowRunner\base\storage\<account>. The newest CompleteSave*.cfg is the slot being played. The
+// Steam keeps the saves in userdata\<account>\1465360\remote of its own folder as CompleteSave*.cfg, the Epic store in
+// Documents\My Games\SnowRunner\base\storage\<account> as CompleteSave*.dat (the same save under another name, as
+// the community's guides have it). The newest is the slot being played. Documents is the shell's
+// (which OneDrive may have moved) and the profile's own, for a game that writes to the latter. The
 // Microsoft Store's build keeps them in the app's containers, %LOCALAPPDATA%\Packages\<the game's package>\SystemAppData\wgs,
 // as files without names of their own: one whose first bytes name a CompleteSave is taken as such a file. It is
 // looked for every kSaveLookMs and read when it is another file or was written since.
@@ -934,15 +985,24 @@ static std::vector<std::wstring> SaveFolders()
     }
     if (!up.empty()) roots.push_back(up);
     for (const auto &root : roots) subfolders(root + L"\\userdata", L"\\1465360\\remote", out);
+    std::vector<std::wstring> documents;
     wchar_t docs[MAX_PATH] = {};
-    if (SHGetFolderPathW(nullptr, CSIDL_PERSONAL, nullptr, SHGFP_TYPE_CURRENT, docs) == S_OK)
+    if (SHGetFolderPathW(nullptr, CSIDL_PERSONAL, nullptr, SHGFP_TYPE_CURRENT, docs) == S_OK && docs[0]) documents.push_back(docs);
+    wchar_t profile[MAX_PATH] = {};
+    if (GetEnvironmentVariableW(L"USERPROFILE", profile, MAX_PATH) > 0)
     {
-        const std::wstring storage = std::wstring(docs) + L"\\My Games\\SnowRunner\\base\\storage";
+        const std::wstring own = std::wstring(profile) + L"\\Documents";
+        if (documents.empty() || _wcsicmp(documents[0].c_str(), own.c_str())) documents.push_back(own);
+    }
+    for (const auto &d : documents)
+    {
+        const std::wstring storage = d + L"\\My Games\\SnowRunner\\base\\storage";
         out.push_back(storage);
         subfolders(storage, L"", out);
     }
     return out;
 }
+
 
 // The files of the Microsoft Store build's save containers: wgs\<account>\<container>\<file> in each package of the game.
 static void SaveContainerFiles(std::vector<std::pair<std::wstring, FILETIME>> &out)
@@ -987,26 +1047,11 @@ static bool SaveHeadIsComplete(const std::wstring &path)
     return read && got > 0 && strstr(head, "CompleteSave") != nullptr;
 }
 
-// The newest CompleteSave*.cfg in those folders (or CompleteSave in the Microsoft Store build's containers), and when
-// it was written. False when there is none.
+// The newest save in those folders (or CompleteSave in the Microsoft Store build's containers), and when it was
+// written. False when there is none.
 static bool SaveNewest(std::wstring &path, FILETIME &written)
 {
-    bool found = false;
-    for (const auto &dir : SaveFolders())
-    {
-        WIN32_FIND_DATAW f;
-        const HANDLE h = FindFirstFileW((dir + L"\\CompleteSave*.cfg").c_str(), &f);
-        if (h == INVALID_HANDLE_VALUE) continue;
-        do
-            if (!(f.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && (!found || CompareFileTime(&f.ftLastWriteTime, &written) > 0))
-            {
-                path = dir + L"\\" + f.cFileName;
-                written = f.ftLastWriteTime;
-                found = true;
-            }
-        while (FindNextFileW(h, &f));
-        FindClose(h);
-    }
+    bool found = SaveNewestIn(SaveFolders(), path, written);
     std::vector<std::pair<std::wstring, FILETIME>> contained;
     SaveContainerFiles(contained);
     for (const auto &c : contained)
@@ -1831,6 +1876,7 @@ static DWORD WINAPI Run(void *)
     if (!g_addon)
     {
         Log(L"Gauges " GAUGES_VERSION L": exe stamp %08lx, loaded by an ASI loader", stamp);
+        LogGameFolder();
         SettingsDefaults(g_set); // what the tab shows until the ini is read
         g_reshadeOk = OverlayInit(g_self);
     }
@@ -1892,7 +1938,7 @@ static DWORD WINAPI Run(void *)
     ULONGLONG mapAmbientLogAt = 0; // when to log the temperature the tab set, once the slider has rested
     ULONGLONG gearHoldLogAt = 0;   // and the gearbox's hold
     ULONGLONG engineLogAt = 0;     // and the engine's profile
-    std::wstring savePath;
+    std::wstring savePath, saveUnread; // the save read last, and one found that named no map (said once)
     FILETIME saveWritten = {};
     ULONGLONG saveLookAt = 0;
     bool codeLooked = false; // the gearbox functions were looked for, once a truck was found
@@ -1978,21 +2024,44 @@ static DWORD WINAPI Run(void *)
             const bool found = SaveNewest(path, written);
             if (found != saveSeen)
             {
-                if (!found) Log(L"map: no save of the game was found, so the map is not known and AmbientC of [Gauges] is in force");
+                if (!found)
+                {
+                    // where it looked: the folders that are there, and how many more are not
+                    std::wstring there;
+                    int missing = 0;
+                    for (const auto &dir : SaveFolders())
+                    {
+                        if (GetFileAttributesW(dir.c_str()) == INVALID_FILE_ATTRIBUTES) { missing++; continue; }
+                        if (there.size() < 1500) there += (there.empty() ? L"" : L"; ") + PathForLog(dir);
+                    }
+                    Log(L"map: no save of the game was found, so the map is not known and AmbientC of [Gauges] is in force (looked for CompleteSave*.cfg "
+                        L"and .dat in: %s; %d more folders not there; and the Microsoft Store's containers)", there.empty() ? L"no folder that is there" : there.c_str(),
+                        missing);
+                }
                 saveSeen = found;
             }
             char level[64];
-            if (found && (path != savePath || CompareFileTime(&written, &saveWritten)) && SaveReadMap(path, level, sizeof level))
+            if (found && (path != savePath || CompareFileTime(&written, &saveWritten)))
             {
-                savePath = path;
-                saveWritten = written;
-                if (strcmp(level, map))
+                if (SaveReadMap(path, level, sizeof level))
                 {
-                    char at[16], title[96];
-                    ClockText(written, at, sizeof at);
-                    MapTitle(level, title, sizeof title);
-                    Log(L"map: %S (%S), the map loaded last as the game's save of %S says (%s)", title, level, at, path.c_str());
-                    strcpy_s(map, level);
+                    savePath = path;
+                    saveWritten = written;
+                    saveUnread.clear();
+                    if (strcmp(level, map))
+                    {
+                        char at[16], title[96];
+                        ClockText(written, at, sizeof at);
+                        MapTitle(level, title, sizeof title);
+                        Log(L"map: %S (%S), the map loaded last as the game's save of %S says (%s)", title, level, at, PathForLog(path).c_str());
+                        strcpy_s(map, level);
+                    }
+                }
+                else if (path != saveUnread)
+                {
+                    // said once for each save: one the game is writing reads again on the next look
+                    saveUnread = path;
+                    Log(L"map: the save %s names no map the mod can read (yet: it is read again when it is written)", PathForLog(path).c_str());
                 }
             }
         }
@@ -2276,6 +2345,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             return FALSE;
         }
         Log(L"Gauges " GAUGES_VERSION L": exe stamp %08lx, loaded by ReShade as an add-on", ExeStamp());
+        LogGameFolder();
         HMODULE pinned = nullptr;
         if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCWSTR)&DllMain, &pinned))
             Log(L"overlay: the add-on could not pin itself, so ReShade's unloading at start-up may take it out");
@@ -2676,6 +2746,46 @@ int wmain(int argc, wchar_t **argv)
         for (const wchar_t *n = iniNames; *n; n += wcslen(n) + 1) leftInIni = leftInIni || !_wcsnicmp(n, L"Truck:", 6) || !_wcsnicmp(n, L"Gearbox:", 8);
         Check(!wcscmp(movedClass, L"1") && !wcscmp(movedRed, L"3000") && !wcscmp(movedKind, L"mover/123") && holdMoved && !leftInIni,
               "setups: the trucks' and gearboxes' sections of Gauges.ini moved into their own files, what a file held already kept, none left behind");
+    }
+
+    // the saves: the newest of Steam's CompleteSave*.cfg and Epic's CompleteSave*.dat in the folders looked in; a path
+    // in the log with the profile's folder written %USERPROFILE%
+    {
+        const std::wstring root = g_dir + L"savetest", steamDir = root + L"\\steam", epicDir = root + L"\\epic";
+        CreateDirectoryW(root.c_str(), nullptr);
+        CreateDirectoryW(steamDir.c_str(), nullptr);
+        CreateDirectoryW(epicDir.c_str(), nullptr);
+        auto saveAt = [](const std::wstring &file, int minutesAgo) {
+            const HANDLE h = CreateFileW(file.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+            DWORD put = 0;
+            WriteFile(h, "{}", 2, &put, nullptr);
+            FILETIME now;
+            GetSystemTimeAsFileTime(&now);
+            ULARGE_INTEGER t;
+            t.LowPart = now.dwLowDateTime;
+            t.HighPart = now.dwHighDateTime;
+            t.QuadPart -= (ULONGLONG)minutesAgo * 60ULL * 10000000ULL;
+            FILETIME then = { t.LowPart, t.HighPart };
+            SetFileTime(h, nullptr, nullptr, &then);
+            CloseHandle(h);
+        };
+        saveAt(steamDir + L"\\CompleteSave.cfg", 30);
+        saveAt(epicDir + L"\\CompleteSave1.dat", 5);
+        saveAt(epicDir + L"\\CompleteSaveBackup.txt", 1); // no save
+        std::wstring newest;
+        FILETIME when = {};
+        const bool epicNewest = SaveNewestIn({ steamDir, epicDir }, newest, when) && newest == epicDir + L"\\CompleteSave1.dat";
+        const bool steamOnly = SaveNewestIn({ steamDir }, newest, when) && newest == steamDir + L"\\CompleteSave.cfg";
+        const bool none = !SaveNewestIn({ root }, newest, when);
+        wchar_t profile[MAX_PATH] = {};
+        GetEnvironmentVariableW(L"USERPROFILE", profile, MAX_PATH);
+        const bool masked = !profile[0] || PathForLog(std::wstring(profile) + L"\\Documents\\x") == L"%USERPROFILE%\\Documents\\x";
+        Check(epicNewest && steamOnly && none && masked && PathForLog(L"D:\\Games\\x") == L"D:\\Games\\x",
+              "saves: the newest of Steam's .cfg and Epic's .dat is found, nothing else is taken for one; the profile's folder stays out of the log");
+        for (const wchar_t *f : { L"\\steam\\CompleteSave.cfg", L"\\epic\\CompleteSave1.dat", L"\\epic\\CompleteSaveBackup.txt" }) DeleteFileW((root + f).c_str());
+        RemoveDirectoryW(steamDir.c_str());
+        RemoveDirectoryW(epicDir.c_str());
+        RemoveDirectoryW(root.c_str());
     }
 
     // the maps' sections: the regions' written into an ini that has none; a map takes its own section, else its

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.15.1] 2026-10-12
+
+- The outside temperature by map works on the Epic store's build. Its saves are `CompleteSave*.dat` in `Documents\My Games\SnowRunner\base\storage\<account>`, where Steam's are `CompleteSave*.cfg`; the mod looked in that folder for `.cfg` alone, found nothing, and kept `AmbientC` in force (a tester's two logs: "no save of the game was found"). It now takes both, the newest of them. Documents is looked for where the shell has it (OneDrive may have moved it) and in the user's profile as well.
+- Where no save is found, the log says which folders were looked in; a save found that names no map the mod can read is said once. At the start the log names the game's folder and the store its path suggests. The user's profile folder stands in the log as `%USERPROFILE%`, so a log passed on does not carry the account's name.
+- The tester's logs carry the Steam build's exe stamp, and the mod knew the game's places without the signatures. If the tester plays the Epic build, as arranged, that build runs the same exe; the next log's line naming the game's folder will say.
+
 ## [0.15.0] 2026-10-11
 
 - Engine profiles. Each engine can have a profile of its own in `Gauges\engines\<name>.ini`, set on the tab's new Engine section while the truck is driven: the engine speed of its peak torque (`PeakTorqueRpm`), as its maker gives it, and its aspiration (`Aspiration`, turbo or naturally aspirated). The torque curve is built around the peak: a turbo diesel's broad plateau from 0.85 to 1.5 times its speed, a naturally aspirated engine's narrower hump. A curve can also be written whole (`TorqueCurve`). A naturally aspirated engine has no boost, no boost dial and no turbo sounds. A plot on the tab shows the curve in force. Without a profile an engine pulls by its class's curve, as before.
