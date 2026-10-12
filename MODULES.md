@@ -74,6 +74,13 @@ For the tire session (the user, 2026-10-11; its repo, not this one):
 - The tire mod's repo `C:\Games\snowrunner-tire-pressure` belongs to the tire session: read it, copy from it, never
   edit it. Its `HANDOFF.md`, `src\panel.cpp`, `src\panel.h`, `src\settings_page.h`, `src\tire_pressure.cpp`,
   `src\loader.cpp`, `build.bat` and `deps\README.md` are the patterns to follow.
+- Git, since 2026-10-12 (agreed with the cloud session that builds Gauges on its branch
+  `claude/vibrant-darwin-anbhqw`, which `update.bat` brings into this folder): before any commit here, bring `main`
+  up to the branch (`git fetch origin && git merge --ff-only origin/claude/vibrant-darwin-anbhqw`, or run
+  `update.bat`); commit on top of that on `main`, `git push origin main`, and tell the user; the cloud session
+  fast-forwards the branch to it. Take the next free version number after the branch's (`src\gauges.h` after the
+  merge). Commits made only in this folder's `main` without a push stop every update. On this board edit only your
+  module's row and notes.
 - Game runs: only when the PC is idle and the display is on (the TV is often in use: do offline work then). Check
   that no other session's installer is running (HSR owns hid.dll and shader.pak). Unattended boots go through
   `C:\Games\snowrunner-shadows\tools\game_run.ps1` (never edit it). Desktop captures are black in fullscreen: use
