@@ -22,6 +22,10 @@ for .cfg alone. 0.15.1: `kSavePatterns` both, `SaveNewestIn` (tested on a folder
 beside the shell's, the folders looked in logged when none is found (`PathForLog`: %USERPROFILE%), the game's folder
 and its likely store at the start (`LogGameFolder`). Owed: the tester's next log, to see the save found and read (the
 .dat taken for the same text as the .cfg, as the guides say the two are renamed into each other).
+Logs (the user, 2026-10-12: "write a timestamp when it creates the file so it'll keep them all"): 0.15.3, `LogKeepLast`
+moves the last start's Gauges.log into Gauges\logs as `Gauges <date> <time>.log` before the first line (the start's
+time from its first line, the date from its last write, a day back past midnight); Gauges.log stays the current one
+for the docs and update.bat. Nothing pruned.
 Pinned (the user, 2026-10-12): the engine sound by our rpm, route 1 of the note of 2026-10-11 (find the value the game's
 engine sound goes by, a probe reading the vehicle, the action, the truck control and its three sound objects at
 + 0x70 to + 0x80, keeping what moves like revs in neutral; nothing written); later.

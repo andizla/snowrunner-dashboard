@@ -59,9 +59,62 @@ static GaugeView g_view = {};
 // as the file is opened for one writer and a second open would fail and lose its line.
 static SRWLOCK g_logLock = SRWLOCK_INIT;
 static bool g_logStarted = false; // true once this start's first line is in
+static std::wstring g_logKept;    // where the last start's log was kept, "" for nowhere
+
+// The last start's log kept: Gauges.log in dir moves into Gauges\logs beside it, named by the date and time that
+// start began, so every start's log is kept and a log passed on says when it was. The time is its first line's; the
+// date the day it was last written, or the day before where that is later in the day than its last write (a drive
+// past midnight). The name taken, "" where there was no log or it could not be moved.
+static std::wstring LogKeepLast(const std::wstring &dir)
+{
+    const std::wstring path = dir + L"Gauges.log";
+    WIN32_FILE_ATTRIBUTE_DATA a;
+    if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &a) || (a.nFileSizeHigh == 0 && a.nFileSizeLow == 0)) return L"";
+    FILETIME local;
+    SYSTEMTIME last, began;
+    if (!FileTimeToLocalFileTime(&a.ftLastWriteTime, &local) || !FileTimeToSystemTime(&local, &last)) return L"";
+    began = last;
+    char head[24] = {};
+    FILE *f = nullptr;
+    if (_wfopen_s(&f, path.c_str(), L"rb") == 0 && f)
+    {
+        fread(head, 1, sizeof head - 1, f);
+        fclose(f);
+    }
+    const char *line = head + (memcmp(head, "\xEF\xBB\xBF", 3) ? 0 : 3);
+    int h = 0, m = 0, sec = 0;
+    if (sscanf_s(line, "%2d:%2d:%2d", &h, &m, &sec) == 3 && h >= 0 && h < 24 && m >= 0 && m < 60 && sec >= 0 && sec < 60)
+    {
+        if (h * 3600 + m * 60 + sec > last.wHour * 3600 + last.wMinute * 60 + last.wSecond)
+        {
+            ULARGE_INTEGER day;
+            day.LowPart = local.dwLowDateTime;
+            day.HighPart = local.dwHighDateTime;
+            day.QuadPart -= 24ULL * 3600ULL * 10000000ULL;
+            const FILETIME before = { day.LowPart, day.HighPart };
+            FileTimeToSystemTime(&before, &began);
+        }
+        began.wHour = (WORD)h;
+        began.wMinute = (WORD)m;
+        began.wSecond = (WORD)sec;
+    }
+    const std::wstring folder = dir + L"Gauges\\logs\\";
+    CreateDirectoryW((dir + L"Gauges").c_str(), nullptr);
+    CreateDirectoryW(folder.c_str(), nullptr);
+    wchar_t stem[48];
+    swprintf_s(stem, L"Gauges %04u-%02u-%02u %02u-%02u-%02u", began.wYear, began.wMonth, began.wDay, began.wHour, began.wMinute, began.wSecond);
+    std::wstring name = std::wstring(stem) + L".log";
+    for (int i = 2; i < 100 && GetFileAttributesW((folder + name).c_str()) != INVALID_FILE_ATTRIBUTES; i++)
+        name = std::wstring(stem) + L" (" + std::to_wstring(i) + L").log";
+    return MoveFileExW(path.c_str(), (folder + name).c_str(), MOVEFILE_COPY_ALLOWED) ? name : L"";
+}
+
 static void LogV(const wchar_t *fmt, va_list ap)
 {
     AcquireSRWLockExclusive(&g_logLock);
+#ifndef GAUGES_SETTINGS_TEST
+    if (!g_logStarted) g_logKept = LogKeepLast(g_dir);
+#endif
     FILE *f = nullptr;
     if (_wfopen_s(&f, (g_dir + L"Gauges.log").c_str(), g_logStarted ? L"a, ccs=UTF-8" : L"w, ccs=UTF-8") == 0 && f)
     {
@@ -84,6 +137,14 @@ void GaugeLog(const wchar_t *fmt, ...)
     va_end(ap);
 }
 #define Log GaugeLog
+
+#ifndef GAUGES_SETTINGS_TEST
+// Says where the last start's log went, once this start's first line is in.
+static void LogKeptSay()
+{
+    if (!g_logKept.empty()) Log(L"log: the last start's log is kept as Gauges\\logs\\%s", g_logKept.c_str());
+}
+#endif
 
 // ---- Gauges.ini ----
 
@@ -1903,6 +1964,7 @@ static DWORD WINAPI Run(void *)
     if (!g_addon)
     {
         Log(L"Gauges " GAUGES_VERSION L": exe stamp %08lx, loaded by an ASI loader", stamp);
+        LogKeptSay();
         LogGameFolder();
         SettingsDefaults(g_set); // what the tab shows until the ini is read
         g_reshadeOk = OverlayInit(g_self);
@@ -2380,6 +2442,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             return FALSE;
         }
         Log(L"Gauges " GAUGES_VERSION L": exe stamp %08lx, loaded by ReShade as an add-on", ExeStamp());
+        LogKeptSay();
         LogGameFolder();
         HMODULE pinned = nullptr;
         if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCWSTR)&DllMain, &pinned))
@@ -2820,6 +2883,48 @@ int wmain(int argc, wchar_t **argv)
         for (const wchar_t *f : { L"\\steam\\CompleteSave.cfg", L"\\epic\\CompleteSave1.dat", L"\\epic\\CompleteSaveBackup.txt" }) DeleteFileW((root + f).c_str());
         RemoveDirectoryW(steamDir.c_str());
         RemoveDirectoryW(epicDir.c_str());
+        RemoveDirectoryW(root.c_str());
+    }
+
+    // the last start's log kept in Gauges\logs, named by the day and time it began: the same day, a drive past
+    // midnight, another log of the same start's time; an empty log left where it is
+    {
+        const std::wstring root = g_dir + L"logtest\\", kept = root + L"Gauges\\logs\\", log = root + L"Gauges.log";
+        CreateDirectoryW(root.c_str(), nullptr);
+        auto logAt = [&](const char *first, WORD day, WORD hour, WORD minute) {
+            FILE *f = nullptr;
+            if (_wfopen_s(&f, log.c_str(), L"wb") == 0 && f)
+            {
+                fputs("\xEF\xBB\xBF", f);
+                fputs(first, f);
+                fputs(" Gauges " GAUGES_VERSION "\n", f);
+                fclose(f);
+            }
+            SYSTEMTIME st = { 2026, 10, 0, day, hour, minute, 0, 0 };
+            FILETIME lt, ut;
+            SystemTimeToFileTime(&st, &lt);
+            LocalFileTimeToFileTime(&lt, &ut);
+            HANDLE file = CreateFileW(log.c_str(), FILE_WRITE_ATTRIBUTES, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+            if (file != INVALID_HANDLE_VALUE)
+            {
+                SetFileTime(file, nullptr, nullptr, &ut);
+                CloseHandle(file);
+            }
+            return LogKeepLast(root);
+        };
+        const std::wstring sameDay = logAt("21:29:11", 12, 23, 10), pastMidnight = logAt("23:50:00", 13, 0, 20), again = logAt("21:29:11", 12, 22, 0);
+        const bool moved = GetFileAttributesW((kept + sameDay).c_str()) != INVALID_FILE_ATTRIBUTES && GetFileAttributesW(log.c_str()) == INVALID_FILE_ATTRIBUTES;
+        FILE *f = nullptr;
+        if (_wfopen_s(&f, log.c_str(), L"wb") == 0 && f) fclose(f);
+        const bool emptyStays = LogKeepLast(root).empty() && GetFileAttributesW(log.c_str()) != INVALID_FILE_ATTRIBUTES;
+        Check(sameDay == L"Gauges 2026-10-12 21-29-11.log" && pastMidnight == L"Gauges 2026-10-12 23-50-00.log" && again == L"Gauges 2026-10-12 21-29-11 (2).log" &&
+                  moved && emptyStays,
+              "log: the last start's log is kept in Gauges\\logs by the day and time it began, a drive past midnight by the day before, a second of the "
+              "same time beside the first; an empty one stays");
+        for (const std::wstring &name : { sameDay, pastMidnight, again }) DeleteFileW((kept + name).c_str());
+        DeleteFileW(log.c_str());
+        RemoveDirectoryW(kept.c_str());
+        RemoveDirectoryW((root + L"Gauges").c_str());
         RemoveDirectoryW(root.c_str());
     }
 

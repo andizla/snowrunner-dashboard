@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.15.3] 2026-10-12
+
+- Every start's log is kept. `Gauges.log` is still the log of the game's last start; at each start the one before moves into `Gauges\logs`, named by the date and time that start began (`Gauges 2026-10-12 21-29-11.log`, the day before for a drive past midnight). The mod rewrote `Gauges.log` at each start, so a tester's log was lost unless copied out before the next one. The log's second line says where the last one went. The mod never empties the folder: with `Probe=1` a long drive's log runs to 20 or 30 MB.
+
 ## [0.15.2] 2026-10-12
 
 - The automatic no longer hunts up a grade or through mud. A tester's drives (0.15.0) had 37 of 119 shifts up come back down within six seconds with the foot on: a Tayga swapped its first and second 18 times in six minutes, another truck every second up a climb. Floored, the first shifted up near its top, the second could not hold the speed on the grade, fell under its point down in about a second, and the first, not held after a shift down, was at its point up again a second later. Now a shift up taken back down with the foot on within six seconds keeps the gear it left: no shift up past it for eight seconds, the limiter's neither, so the engine sits at its governed speed as a loaded truck's does on a hill, then one more try. Each try taken back doubles the wait, up to 30 seconds. A lift of the foot, a stop, a kickdown or a try that holds lets it go. The log says each time, and the probe's automatic line shows the gear kept and for how long. On the test's climb it shifts up 3 times in 40 seconds, where it shifted 8.

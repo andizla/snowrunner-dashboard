@@ -4,7 +4,7 @@ A gauge cluster for the truck you drive in SnowRunner: analogue dials in the sty
 
 The cluster has a speedometer, a tachometer with the gear, fuel with the range, coolant and oil temperature, boost pressure, brake air pressure and nine lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage, cold engine, tilt and oil temperature.
 
-This is version 0.15.2. It reads the truck's own values for the speedometer, the gear, the fuel gauge and seven of the lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage and tilt. The game has no engine speed, no range, no coolant or oil temperature, no boost pressure and no brake air, so the mod works those out from what the truck does, and lights the cold and oil lamps by the temperatures. The temperature also costs the engine: overheating it, or working it hard while cold, adds to the game's own engine damage. `Damage=0` switches that off. The scales of the tachometer and the speedometer and the turbo's boost and character can be set for each kind of truck. The brake air comes from the engine's compressor, which fills the tanks up to 8.2 bar and starts again at 6.9, and each press of the brake and letting the handbrake go draw from them; scouts brake by hydraulics and have no air dial. The outside temperature goes by the map you are on, which the mod reads from the game's save. With `Gearbox=1` an automatic of the mod's own, with a torque converter, picks the gears while the game's shifter is in A, and with `Powertrain=1` the truck pulls with the mod's engine and converter in place of the game's own.
+This is version 0.15.3. It reads the truck's own values for the speedometer, the gear, the fuel gauge and seven of the lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage and tilt. The game has no engine speed, no range, no coolant or oil temperature, no boost pressure and no brake air, so the mod works those out from what the truck does, and lights the cold and oil lamps by the temperatures. The temperature also costs the engine: overheating it, or working it hard while cold, adds to the game's own engine damage. `Damage=0` switches that off. The scales of the tachometer and the speedometer and the turbo's boost and character can be set for each kind of truck. The brake air comes from the engine's compressor, which fills the tanks up to 8.2 bar and starts again at 6.9, and each press of the brake and letting the handbrake go draw from them; scouts brake by hydraulics and have no air dial. The outside temperature goes by the map you are on, which the mod reads from the game's save. With `Gearbox=1` an automatic of the mod's own, with a torque converter, picks the gears while the game's shifter is in A, and with `Powertrain=1` the truck pulls with the mod's engine and converter in place of the game's own.
 
 ## What you need
 
@@ -189,13 +189,13 @@ The two mods are made to run side by side, each with its own tab, ini and log. T
 
 ## Remove
 
-Delete `Gauges.addon64` (or `Gauges.asi`), `Gauges.ini` and `Gauges.log` from `Sources\Bin`.
+Delete `Gauges.addon64` (or `Gauges.asi`), `Gauges.ini`, `Gauges.log` and the folder `Gauges` (the setups of trucks, gearboxes and engines, and the older logs) from `Sources\Bin`.
 
 ## Notes
 
 - The mod changes no game file. What it writes into the game's memory: with `Damage` on, the engine damage of the truck you drive; with `Gearbox=1`, the game's automatic flag and the gears, through the game's own shift function; with `Powertrain=1`, the game's torque factor of the truck you drive, on every pass; during the pull test, the torque factor, for seven seconds. With all of them off it writes nothing.
 - `Damage` has not been tried in co-op. Leave it off there.
-- If something does not work, `Gauges.log` in `Sources\Bin` says what the mod found and did.
+- If something does not work, `Gauges.log` in `Sources\Bin` says what the mod found and did. It is the log of the game's last start; at each start the one before moves into `Gauges\logs`, named by the date and time that start began (`Gauges 2026-10-12 21-29-11.log`), so none is lost. With `Probe=1` a long drive's log runs to 20 or 30 MB, and the folder is never emptied by the mod.
 - The game's own HUD stays as it is. Its "Immersive Mode" option hides it while it is not in use.
 
 ## Build
