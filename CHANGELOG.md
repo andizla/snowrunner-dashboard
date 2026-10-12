@@ -1,8 +1,12 @@
 # Changelog
 
-## [0.15.3] 2026-10-12
+## [0.15.4] 2026-10-12
 
 - Every start's log is kept. `Gauges.log` is still the log of the game's last start; at each start the one before moves into `Gauges\logs`, named by the date and time that start began (`Gauges 2026-10-12 21-29-11.log`, the day before for a drive past midnight). The mod rewrote `Gauges.log` at each start, so a tester's log was lost unless copied out before the next one. The log's second line says where the last one went. The mod never empties the folder: with `Probe=1` a long drive's log runs to 20 or 30 MB.
+
+## [0.15.3] 2026-10-12
+
+- The mod publishes its state for other mods in shared memory, `Local\SnowRunnerGauges.State.<process id>`: the truck driven, the outside temperature in force (the map's by map and hour, or `AmbientC`), the coolant temperature, the engine speed and the boost, about 20 times a second. A tire mod by the same author reads the outside temperature from it. `Gauges.log` names the block at the start.
 
 ## [0.15.2] 2026-10-12
 

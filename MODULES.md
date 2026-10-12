@@ -22,10 +22,10 @@ for .cfg alone. 0.15.1: `kSavePatterns` both, `SaveNewestIn` (tested on a folder
 beside the shell's, the folders looked in logged when none is found (`PathForLog`: %USERPROFILE%), the game's folder
 and its likely store at the start (`LogGameFolder`). Owed: the tester's next log, to see the save found and read (the
 .dat taken for the same text as the .cfg, as the guides say the two are renamed into each other).
-Logs (the user, 2026-10-12: "write a timestamp when it creates the file so it'll keep them all"): 0.15.3, `LogKeepLast`
+Logs (the user, 2026-10-12: "write a timestamp when it creates the file so it'll keep them all"): 0.15.4, `LogKeepLast`
 moves the last start's Gauges.log into Gauges\logs as `Gauges <date> <time>.log` before the first line (the start's
 time from its first line, the date from its last write, a day back past midnight); Gauges.log stays the current one
-for the docs and update.bat. Nothing pruned.
+for the docs and update.bat. Nothing pruned. Numbered 0.15.4, as module 20 took 0.15.3.
 Pinned (the user, 2026-10-12): the engine sound by our rpm, route 1 of the note of 2026-10-11 (find the value the game's
 engine sound goes by, a probe reading the vehicle, the action, the truck control and its three sound objects at
 + 0x70 to + 0x80, keeping what moves like revs in neutral; nothing written); later.
@@ -52,6 +52,7 @@ engine sound goes by, a probe reading the vehicle, the action, the truck control
 | 17 | Engine profiles: peak torque speed, aspiration | high | built (0.15.0, on the user's "go ahead"): `Gauges\engines\<name>.ini` per engine (PeakTorqueRpm, Aspiration, TorqueCurve), the tab's Engine section with a plot; the user's drive owed | | |
 | 18 | Sharing truck and engine setups | high | part one built (0.14.0, on the user's "begin"): each truck's scales and each gearbox's hold in a file of their own, `Gauges\trucks\<kind>.ini` and `Gauges\gearboxes\<name>.ini`, the old sections moved out of Gauges.ini on the first start. Part two, the public list on GitHub: a to-do for later (the user, 2026-10-11) | | |
 | 19 | Winch: its temperature, and the line that snaps or the winch that stops when it is too hot | max | waiting (the user, 2026-10-11); a feasibility note first, the user's OK before any hook | | |
+| 20 | Shared state for other mods | low | built, committed (49c6906) and installed (2026-10-12 13:28, `Gauges.addon64` 662825AF); not yet seen in the game: the first start's `Gauges.log` should have "state published for other mods in ...", and the tire mod's reader is the other half | the module 4 session, reused on the overseer's start signal | 0.15.3: `src\state.h` writes a 64 byte block in `Local\SnowRunnerGauges.State.<process id>` at the end of every pass (magic "GAUG", version 1, sequence odd while writing, tick, vehicle, ambientC in force, coolantC, rpm, boostBar, flags: truck driven, temperature by map, engine on), the offsets held by a static_assert to the tire mod's `outside.h`. The models test writes the block and reads it back by its offsets. Build with no new warning, TESTS OK |
 
 Effort is the session's effort level, set by the user when creating the session (the overseer reminds them).
 
