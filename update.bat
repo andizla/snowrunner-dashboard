@@ -1,5 +1,5 @@
 @echo off
-rem Brings this folder up to the branch, builds, runs the tests and installs out\Gauges.addon64 into the game (ReShade
+rem Brings this folder up to main on GitHub, builds, runs the tests and installs out\Gauges.addon64 into the game (ReShade
 rem loads it), keeping the one it replaces as out\rollback\Gauges_previous.addon64. A Gauges.asi from before is moved
 rem out of the game to out\rollback\Gauges_previous.asi, so one copy runs. Close the game first. Nothing is installed when the
 rem build or a test fails. All the build and the tests print goes to out\build.log and out\test.log; the window
@@ -7,8 +7,8 @@ rem shows the errors and the failed tests.
 rem   update.bat [the game's Sources\Bin folder]
 rem Without a folder the Steam default is used. Run it from a cmd window or by a double click.
 rem It runs from a copy in %TEMP%: the merge may bring a new update.bat, and cmd reads a running batch file from disk
-rem as it goes. Edits made in this folder are set aside for the merge and put back after it; a file the branch changed
-rem too is left as the branch has it, and the edits are kept in git's stash (git stash show -p shows them).
+rem as it goes. Edits made in this folder are set aside for the merge and put back after it; a file GitHub's main changed
+rem too is left as GitHub has it, and the edits are kept in git's stash (git stash show -p shows them).
 if "%~1"=="--copy" goto start
 del "%TEMP%\snowrunner_gauges_update.bat" 2>nul
 copy /y "%~f0" "%TEMP%\snowrunner_gauges_update.bat" >nul
@@ -19,19 +19,22 @@ setlocal
 cd /d "%~2"
 set "BIN=%~3"
 if "%BIN%"=="" set "BIN=C:\Program Files (x86)\Steam\steamapps\common\Snowrunner\Sources\Bin"
-set "BRANCH=claude/vibrant-darwin-anbhqw"
+set "BRANCH=main"
 
-echo == the branch
+echo == GitHub's %BRANCH%
 git switch main || goto fail
 git fetch origin || goto fail
+set "CLASHED="
+rem commits made in this folder that GitHub does not have yet only go up; otherwise GitHub's come down first
+git merge-base --is-ancestor origin/%BRANCH% main && goto pushmain
 git merge-base --is-ancestor main origin/%BRANCH% || goto diverged
 git merge --ff-only --autostash origin/%BRANCH% || goto fail
-set "CLASHED="
 for /f "delims=" %%f in ('git diff --name-only --diff-filter U') do (
     set "CLASHED=1"
-    echo Your edit of %%f clashed with the branch: the branch's is in place, yours is kept in git's stash.
+    echo Your edit of %%f clashed with GitHub's: GitHub's is in place, yours is kept in git's stash.
     git checkout HEAD -- "%%f"
 )
+:pushmain
 git push origin main || goto fail
 
 if not exist out mkdir out
@@ -61,10 +64,9 @@ exit /b 0
 
 :diverged
 echo.
-echo This folder's main has commits the branch does not have, made here by hand or by a session working in this folder:
-git log --oneline origin/%BRANCH%..main
-git push origin main || goto fail
-echo They are now on GitHub's main. Ask Claude to bring them into the branch, then run update.bat again.
+echo This folder's main and GitHub's %BRANCH% each have commits the other does not have (this folder's are marked ^<):
+git log --oneline --left-right main...origin/%BRANCH%
+echo Ask Claude to bring the two together, then run update.bat again.
 goto fail
 :buildfail
 echo The errors:
