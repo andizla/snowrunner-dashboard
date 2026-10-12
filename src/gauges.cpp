@@ -30,6 +30,7 @@
 #pragma comment(lib, "shell32.lib")
 #ifndef GAUGES_SETTINGS_TEST
 #include "sound.h"
+#include "state.h"
 #endif
 
 static HMODULE g_self = nullptr;
@@ -1928,6 +1929,14 @@ static DWORD WINAPI Run(void *)
     Log(g_reshadeOk ? L"overlay: the cluster and the Gauges tab are drawn through ReShade's overlay"
                     : L"overlay: ReShade with add-on support was not found, so nothing is drawn");
     SoundStart(g_dir); // the sounds are read or made now; the audio device is only taken while one plays
+    // the block other mods read the mod's state from (state.h), written at the end of every pass
+    StateWriter state = {};
+    {
+        wchar_t name[64];
+        StateName(name, 64);
+        if (StateOpen(state)) Log(L"state published for other mods in %s", name);
+        else Log(L"state: Windows gave no shared memory for %s (error %lu), so nothing is published for other mods", name, GetLastError());
+    }
     bool visible = true, keyDown = false;
     uint32_t padMask = PadParse(s.padToggle), padPrev = 0;
     ULONGLONG saveAt = 0;
@@ -2340,6 +2349,19 @@ static DWORD WINAPI Run(void *)
         AcquireSRWLockExclusive(&g_viewLock);
         g_view = v;
         ReleaseSRWLockExclusive(&g_viewLock);
+        // and for other mods: the outside temperature in force always, the truck's values while one is driven
+        StateValues published = {};
+        published.ambientC = inForce.ambientC;
+        if (mapOwn && s.ambientByMap) published.flags |= kStateByMap;
+        if (driving)
+        {
+            published.vehicle = watch.refs.vehicle;
+            published.coolantC = watch.temp.temp;
+            published.rpm = watch.tach.rpm;
+            published.boostBar = watch.boost.bar;
+            published.flags |= kStateVehicle | (TruckEngineOn(raw) ? kStateEngineOn : 0);
+        }
+        StateWrite(state, published, GetTickCount64());
     }
 }
 

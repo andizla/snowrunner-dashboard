@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.15.3] 2026-10-12
+
+- The mod publishes its state for other mods in shared memory, `Local\SnowRunnerGauges.State.<process id>`: the truck driven, the outside temperature in force (the map's by map and hour, or `AmbientC`), the coolant temperature, the engine speed and the boost, about 20 times a second. A tire mod by the same author reads the outside temperature from it. `Gauges.log` names the block at the start.
+
 ## [0.15.2] 2026-10-12
 
 - The automatic no longer hunts up a grade or through mud. A tester's drives (0.15.0) had 37 of 119 shifts up come back down within six seconds with the foot on: a Tayga swapped its first and second 18 times in six minutes, another truck every second up a climb. Floored, the first shifted up near its top, the second could not hold the speed on the grade, fell under its point down in about a second, and the first, not held after a shift down, was at its point up again a second later. Now a shift up taken back down with the foot on within six seconds keeps the gear it left: no shift up past it for eight seconds, the limiter's neither, so the engine sits at its governed speed as a loaded truck's does on a hill, then one more try. Each try taken back doubles the wait, up to 30 seconds. A lift of the foot, a stop, a kickdown or a try that holds lets it go. The log says each time, and the probe's automatic line shows the gear kept and for how long. On the test's climb it shifts up 3 times in 40 seconds, where it shifted 8.

@@ -30,6 +30,7 @@
 #include "truck.h"
 #include "models.h"
 #include "sound.h"
+#include "state.h"
 
 void GaugeLog(const wchar_t *, ...) {} // the sounds say in the mod's log where each comes from; here that goes nowhere
 
@@ -2646,6 +2647,46 @@ int main(int argc, char **argv)
         }
         Check(first == kLiftBlowOff && Near(firstGain, 0.5f, 0.02f) && played >= 2 && closest >= 0.8f - 0.001f,
               "sound: a full lift at full boost plays at the setting's loudness, and no two sounds come within 0.8 s");
+    }
+
+    // the state for other mods: written as the mod writes it, and read back through the name as another mod reads it
+    {
+        StateWriter writer = {};
+        wchar_t name[64];
+        StateName(name, 64);
+        wchar_t expected[64];
+        swprintf(expected, 64, L"Local\\SnowRunnerGauges.State.%lu", GetCurrentProcessId());
+        const bool opened = StateOpen(writer) && !wcscmp(name, expected);
+        StateValues values = {};
+        values.vehicle = 0x1234567890ull;
+        values.ambientC = -12.5f;
+        values.coolantC = 88.0f;
+        values.rpm = 1850.0f;
+        values.boostBar = 1.2f;
+        values.flags = kStateVehicle | kStateByMap | kStateEngineOn;
+        StateWrite(writer, values, 777000);
+        const HANDLE mapping = OpenFileMappingW(FILE_MAP_READ, FALSE, name);
+        const uint8_t *seen = mapping ? (const uint8_t *)MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 64) : nullptr;
+        bool read = false, again = false;
+        if (seen)
+        {
+            // by the offsets of version 1, not through the writer's struct
+            auto u32 = [&](size_t at) { uint32_t v; memcpy(&v, seen + at, 4); return v; };
+            auto u64 = [&](size_t at) { uint64_t v; memcpy(&v, seen + at, 8); return v; };
+            auto f32 = [&](size_t at) { float v; memcpy(&v, seen + at, 4); return v; };
+            const uint32_t sequence = u32(12);
+            read = u32(0) == 0x47554147u && u32(4) == 1 && u32(8) == 64 && !(sequence & 1) && u64(16) == 777000 && u64(24) == 0x1234567890ull && f32(32) == -12.5f &&
+                   f32(36) == 88.0f && f32(40) == 1850.0f && f32(44) == 1.2f && u32(48) == 7 && u32(52) == 0 && u32(56) == 0 && u32(60) == 0;
+            values = StateValues{};
+            values.ambientC = 15.0f;
+            StateWrite(writer, values, 777050);
+            again = u32(12) == sequence + 2 && u64(16) == 777050 && u64(24) == 0 && f32(32) == 15.0f && f32(36) == 0.0f && u32(48) == 0 && u32(0) == 0x47554147u;
+            UnmapViewOfFile(seen);
+        }
+        if (mapping) CloseHandle(mapping);
+        StateWriter none = {};
+        StateWrite(none, values, 1); // a writer without a block writes nowhere
+        Check(opened && read && again, "state: the block for other mods carries its magic, version and size, each write leaves the sequence even and two further, and the values stand at their places");
     }
 
     // the sounds themselves: a WAV file read, the two made by code, and every sound brought to one loudness

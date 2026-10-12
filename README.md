@@ -187,6 +187,8 @@ The Gearbox section of the tab also has a pull test, for the engine's torque the
 
 The two mods are made to run side by side, each with its own tab, ini and log. That mod's `version.dll` loads its `.asi` file; ReShade loads this one. This mod does not touch the pad's buttons, so that mod's panel keeps working as before.
 
+The mod publishes a little of its state for other mods to read: a block of 64 bytes of shared memory named `Local\SnowRunnerGauges.State.<process id>`, written about 20 times a second. It holds the truck driven, the outside temperature in force, the coolant temperature, the engine speed and the boost. A tire mod by the same author reads the outside temperature from it. `src\state.h` has the layout.
+
 ## Remove
 
 Delete `Gauges.addon64` (or `Gauges.asi`), `Gauges.ini` and `Gauges.log` from `Sources\Bin`.
