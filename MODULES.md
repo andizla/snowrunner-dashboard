@@ -30,6 +30,14 @@ Handover (2026-10-12): the cloud session's work ends on the user's word and a se
 `docs\HANDOVER.md` has the state, the branch and update.bat, the build and test commands, what the tester owes and
 what only the cloud session knew. Its tools are in `tools\cloud` (the MinGW and Wine kit) and `tools\analysis` (the
 log scripts).
+Taken over on the PC (2026-10-12, the module 4 session, on the overseer's go after the cloud session's handover,
+`docs\HANDOVER.md`): `update.bat` follows `main` on GitHub (c2c7a15, tried on a throwaway repository pair: level,
+behind, ahead, the two apart, behind with a local edit). 0.15.5 (5f5cdd3, installed 21:44, `Gauges.addon64`
+5661C879): a kickdown only on a push from part throttle (`kKickFrom` 0.2 for `kKickArm`), so a key's press from the
+foot off drives by the floored points; its check fails on the rule before. Not started: the input dropdown (the
+user: "not now, just note it") and the engine sound (pinned below: a probe in the game first, so it waits for a
+run with the PC idle and the user's word). The tester's logs on 0.15.4 or later are still owed.
+
 Pinned (the user, 2026-10-12): the engine sound by our rpm, route 1 of the note of 2026-10-11 (find the value the game's
 engine sound goes by, a probe reading the vehicle, the action, the truck control and its three sound objects at
 + 0x70 to + 0x80, keeping what moves like revs in neutral; nothing written); later.
