@@ -24,6 +24,7 @@ set "BRANCH=claude/vibrant-darwin-anbhqw"
 echo == the branch
 git switch main || goto fail
 git fetch origin || goto fail
+git merge-base --is-ancestor main origin/%BRANCH% || goto diverged
 git merge --ff-only --autostash origin/%BRANCH% || goto fail
 set "CLASHED="
 for /f "delims=" %%f in ('git diff --name-only --diff-filter U') do (
@@ -58,6 +59,13 @@ if defined CLASHED echo Your edits that clashed are in git's stash: git stash sh
 pause
 exit /b 0
 
+:diverged
+echo.
+echo This folder's main has commits the branch does not have, made here by hand or by a session working in this folder:
+git log --oneline origin/%BRANCH%..main
+git push origin main || goto fail
+echo They are now on GitHub's main. Ask Claude to bring them into the branch, then run update.bat again.
+goto fail
 :buildfail
 echo The errors:
 findstr /i /c:" error " /c:"error C" /c:"error L" /c:"fatal error" /c:"BUILD FAILED" out\build.log
