@@ -1,5 +1,5 @@
 // revscan.cpp: a research tool for the engine sound. It reads the running SnowRunner.exe from outside with
-// ReadProcessMemory and writes nothing into the game. 20 times a second it takes every float of the driven truck's
+// ReadProcessMemory and writes nothing into the game. 10 times a second it takes every float of the driven truck's
 // vehicle, its drive train (the action), the game's truck control and the three objects the control points to at
 // + 0x70, + 0x78 and + 0x80 (its sounds), together with the pedal, the gear, the speed and the engine speed the mod
 // publishes (src\state.h). When the game ends, the time is up or a file <out>.stop appears, it says which of those
@@ -82,9 +82,13 @@ static uint64_t ExeBase(DWORD pid)
 }
 
 // The blocks read on every sample, one after the other in a sample's row of floats.
-struct Block { const char *name; size_t size; size_t first; uint64_t at; uint64_t seenAt; };
-static Block g_blocks[] = { { "vehicle", 0x1000 }, { "action", 0x200 }, { "control", 0x400 }, { "sound70", 0x400 }, { "sound78", 0x400 }, { "sound80", 0x400 } };
+struct Block { std::string name; size_t size; size_t first; uint64_t at; uint64_t seenAt; };
+static std::vector<Block> g_blocks = { { "vehicle", 0x2000 }, { "action", 0x200 }, { "control", 0x800 }, { "sound70", 0x1000 }, { "sound78", 0x1000 }, { "sound80", 0x1000 } };
 enum { kVehicle, kAction, kControl, kSound70, kSound78, kSound80, kBlocks };
+// What each of a sound object's first kBehind pointers points to is read as well, kBehindSize bytes of it: a block
+// named "sound70>+0x18" is what the pointer at sound70 + 0x18 points to. The first run (2026-10-13, the first 0x400
+// bytes of each object) found only the pedal itself.
+enum { kBehind = 64, kBehindSize = 0x100 };
 
 struct Sample { float t, pedal, speed, modRpm; int gear; bool engine; };
 
@@ -112,6 +116,13 @@ int wmain(int argc, wchar_t **argv)
     if (argc < 2) { printf("revscan <out, without an ending> [seconds of driving, default 300]\n"); return 1; }
     const std::wstring out = argv[1];
     const int seconds = argc > 2 ? _wtoi(argv[2]) : 300;
+    for (int s = kSound70; s <= kSound80; s++)
+        for (int i = 0; i < kBehind; i++)
+        {
+            char name[40];
+            sprintf_s(name, "%s>+0x%X", g_blocks[s].name.c_str(), i * 8);
+            g_blocks.push_back({ name, kBehindSize });
+        }
     size_t slots = 0;
     for (Block &b : g_blocks) { b.first = slots; slots += b.size / 4; }
 
@@ -142,7 +153,7 @@ int wmain(int argc, wchar_t **argv)
     std::string notes;
     for (;;)
     {
-        if (WaitForSingleObject(g_proc, 50) != WAIT_TIMEOUT) { printf("the game ended\n"); break; }
+        if (WaitForSingleObject(g_proc, 100) != WAIT_TIMEOUT) { printf("the game ended\n"); break; }
         if (GetFileAttributesW(stopFile.c_str()) != INVALID_FILE_ATTRIBUTES) { printf("stopped by %ls\n", stopFile.c_str()); break; }
         const ULONGLONG now = GetTickCount64();
         if (!state)
@@ -164,7 +175,7 @@ int wmain(int argc, wchar_t **argv)
                 uint64_t vt = 0;
                 Rd(at[b], vt);
                 char line[160];
-                sprintf_s(line, "%s at %p, its first 8 bytes %016llx%s\n", g_blocks[b].name, (void *)at[b], vt,
+                sprintf_s(line, "%s at %p, its first 8 bytes %016llx%s\n", g_blocks[b].name.c_str(), (void *)at[b], vt,
                           vt >= g_base && vt < g_base + 0x3000000 ? " (a pointer into the exe: a class)" : "");
                 notes += line;
                 if (vt >= g_base && vt < g_base + 0x3000000) { sprintf_s(line, "    class at exe + 0x%llx\n", vt - g_base); notes += line; }
@@ -205,6 +216,18 @@ int wmain(int argc, wchar_t **argv)
             RdBlock(at[b], raw.data(), raw.size());
             memcpy(&rows[row + g_blocks[b].first], raw.data(), raw.size());
         }
+        // behind the sound objects' pointers: only what lies in the game's heap, not in the exe (code and classes)
+        for (int o = kSound70; o <= kSound80; o++)
+            for (int i = 0; i < kBehind; i++)
+            {
+                uint64_t to = 0;
+                memcpy(&to, (const BYTE *)&rows[row + g_blocks[o].first] + (size_t)i * 8, 8);
+                const Block &child = g_blocks[(size_t)kBlocks + (size_t)(o - kSound70) * kBehind + i];
+                if (to < 0x10000 || to > 0x7FFFFFFFFFFFull || (to >= g_base && to < g_base + 0x3000000) || (to & 3)) continue; // zeros stay
+                raw.resize(child.size);
+                RdBlock(to, raw.data(), raw.size());
+                memcpy(&rows[row + child.first], raw.data(), raw.size());
+            }
         samples.push_back(s);
         if (now - said >= 5000)
         {
@@ -290,14 +313,51 @@ int wmain(int argc, wchar_t **argv)
         for (size_t i = 0; i < found.size() && i < 80; i++)
         {
             const Found &c = found[i];
-            int b = kBlocks - 1;
+            int b = (int)g_blocks.size() - 1;
             while (b > 0 && c.slot < g_blocks[b].first) b--;
-            fprintf(f, "  %-8s + 0x%-4zX  %+.3f  %.2f s  %9.4g %9.4g  %9.4g %9.4g  %7d  %+.3f\n", g_blocks[b].name, (c.slot - g_blocks[b].first) * 4, c.r, kLags[c.lag], c.low, c.high,
+            fprintf(f, "  %-15s + 0x%-4zX  %+.3f  %.2f s  %9.4g %9.4g  %9.4g %9.4g  %7d  %+.3f\n", g_blocks[b].name.c_str(), (c.slot - g_blocks[b].first) * 4, c.r, kLags[c.lag], c.low, c.high,
                     c.footOff, c.floored, c.values, c.withMod);
         }
         if (found.empty()) fprintf(f, "  none\n");
     }
-    else fprintf(f, "\nnot enough of the run was in neutral at a standstill with the pedal both up and down: nothing to say\n");
+    else fprintf(f, "\nnot enough of the run was in neutral at a standstill with the pedal both up and down: nothing to say of the pedal\n");
+    // whatever the run held: the floats that follow the mod's own engine speed while the engine runs. Wheels and the
+    // truck's speed do so within one gear; what holds through the gear changes is worth a look
+    struct Follows { size_t slot; double r; float low, high; int values; };
+    std::vector<Follows> follows;
+    if (running.size() >= 200)
+    {
+        std::vector<float> x(running.size()), mod(running.size());
+        for (size_t j = 0; j < running.size(); j++) mod[j] = samples[running[j]].modRpm;
+        for (size_t slot = 0; slot < slots; slot++)
+        {
+            bool sane = true;
+            float low = 1e30f, high = -1e30f;
+            int values = 1;
+            for (size_t j = 0; j < running.size() && sane; j++)
+            {
+                const float v = rows[running[j] * slots + slot];
+                sane = isfinite(v) && fabsf(v) < 1e7f && (v == 0.0f || fabsf(v) > 1e-6f);
+                x[j] = v;
+                low = min(low, v);
+                high = max(high, v);
+                if (j && v != x[j - 1]) values++;
+            }
+            if (!sane || high - low < 1e-4f || values < 50) continue;
+            const double r = Correlation(x, mod);
+            if (fabs(r) >= 0.8) follows.push_back({ slot, r, low, high, values });
+        }
+        std::sort(follows.begin(), follows.end(), [](const Follows &a, const Follows &b) { return fabs(a.r) > fabs(b.r); });
+        fprintf(f, "\nfloats that follow the mod's engine speed over the whole run (|r| from 0.8), the best first:\n  where                          r      least      most  changes\n");
+        for (size_t i = 0; i < follows.size() && i < 60; i++)
+        {
+            int b = (int)g_blocks.size() - 1;
+            while (b > 0 && follows[i].slot < g_blocks[b].first) b--;
+            fprintf(f, "  %-15s + 0x%-4zX  %+.3f  %9.4g %9.4g  %7d\n", g_blocks[b].name.c_str(), (follows[i].slot - g_blocks[b].first) * 4, follows[i].r, follows[i].low, follows[i].high,
+                    follows[i].values);
+        }
+        if (follows.empty()) fprintf(f, "  none\n");
+    }
     fclose(f);
 
     // the pedal and the twelve best over time, for a look by eye
@@ -307,9 +367,9 @@ int wmain(int argc, wchar_t **argv)
         const size_t most = min(found.size(), (size_t)12);
         for (size_t i = 0; i < most; i++)
         {
-            int b = kBlocks - 1;
+            int b = (int)g_blocks.size() - 1;
             while (b > 0 && found[i].slot < g_blocks[b].first) b--;
-            fprintf(f, ",%s+0x%zX", g_blocks[b].name, (found[i].slot - g_blocks[b].first) * 4);
+            fprintf(f, ",%s+0x%zX", g_blocks[b].name.c_str(), (found[i].slot - g_blocks[b].first) * 4);
         }
         fprintf(f, "\n");
         for (size_t i = 0; i < n; i++)
