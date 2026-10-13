@@ -37,7 +37,28 @@ Route A, in two steps, each stopping for the user's word:
 
 If step 1 finds that the script works the pitch out itself from the pedal and the speed, route A is dead and the choice is C or D.
 
+## Step 1, done (2026-10-13, reading only)
+
+From the decrypted image (cdb on a throwaway process) and the game's script bundle (`initial.pak`, `[ssl_cache]/initial_release.sslbundle`, read, not changed):
+
+- The three callers of the tachometer helper `0xd79170` are not the sound. `0xb834a0` is a script getter (a "getter-only native var" of the truck, registered in the function around `0xb5b3e0` with its stub setter `0xb93fb0`); `0xc7e7b0` and `0xc7ecf0` are the in-cab gauges, a switch over what a needle shows (speed, this value, fuel over tank, engine on, lights).
+- The sound script (`game.effects.handlers.truck_effects_processor`, class `TruckEffectsProcessor`) has no engine speed among its names. It keeps `engineTension`, `accelRevving`, `timeSpentOnGear`, `idleVolume`, `lowVolume`, `lowPitch`, `highVolume`, `highPitch`, and works them out itself (`GetTruckEngineTension`, `GetLowPitch`, `GetHighPitch`, `UpdateFallingPitch`, `UpdateGrowingVolume`, `UpdateTimeSpentOnGear`) from the truck's parameters: `gear`, `pedalAccelerate`, `velocityFactor`, `torqueFactor`, `pedalBrake`, the velocities. It mixes the layers `ENGINE_IDLE`, `ENGINE_LOW`, `ENGINE_HIGH` and plays `ENGINE_REV_IN`, `ENGINE_REV_OUT`, `ENGINE_ACCEL`, `ENGINE_TURBO`, `ENGINE_TRANS`.
+- So route A as written above is dead: changing the tachometer helper's answer would move the in-cab needles and whatever script reads that getter, not the engine sound.
+- Where the exe fills those parameters: the function at `0xb22700`. At `0xb22ee0` it calls `0xd717e0(vehicle, 1, 1)` (the wheel path: the driven wheels' speed over the gear's top, times the pedal), multiplies by `0xd71d80(vehicle)`, adds `vehicle + 0x738`, holds the sum to a most, and stores it at `+ 0x0C` of the object it fills; another float goes to `+ 0x2C`. By its place and shape this is `velocityFactor` or a neighbour of it. Not proven: which field is which name.
+
+What that leaves:
+
+| Route | What it takes | What it changes |
+|---|---|---|
+| A2. Replace `velocityFactor` (and, if needed, `gear` and `pedalAccelerate`) where `0xb22700` fills the script's parameters | Read `0xb22700` whole to name its fields; a patch of one call there, or a hook of the function, that puts the mod's engine speed share in. Then listen | The script goes on mixing its layers, by the mod's engine speed where it took the wheels' |
+| C. A sound of the mod's own | as above | as above |
+| D. Leave it | | |
+
+A2 is smaller than a hook on a helper many callers share: one function, called for the sound's parameters only as far as seen. What it cannot promise before it is tried: how the script turns `velocityFactor` into pitch (its code is bytecode in the bundle, not read), so the result may be better or merely different.
+
 ## Open questions for the user
+
+- A2: go for the next reading step (the whole of `0xb22700`, its fields named, still no change to the mod), then a patch behind a setting to listen to?
 
 - Step 1 of route A: go, or leave the engine sound (D)?
 - A hook in the mod at all: so far it only reads memory, writes a few numbers and calls two game functions. A hook is a step further, in what it risks on a game update.
