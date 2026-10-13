@@ -22,6 +22,7 @@
 #include "truck.h"
 #include "models.h"
 #include "smt.h"
+#include "tires.h"
 #include "maps.h"
 #include "game_code.h"
 #include "game_globals.h"
@@ -1399,6 +1400,9 @@ struct TruckWatch
     AirModel air;               // and the air in its brakes' tanks
     SmtReader smtReader;        // the manual transmission mod's published state (smt.h)
     SmtView smt;                // as read on this pass
+    TiresReader tiresReader;    // the tire inflation mod's published state (tires.h)
+    TiresView tires;            // as read on this pass
+    bool tiresSeen;
     bool smtSeen;               // it was published on the last pass
     unsigned smtStalls;         // the stalls it had caused on the last pass
     int probedLifts;            // the lifts of the pedal the boost had told when the probe wrote last
@@ -1560,6 +1564,12 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
 {
     const int probe = s.probe;
     const ULONGLONG now = GetTickCount64();
+    // the tire inflation mod, when it publishes its state: the cluster's tire lamp goes by it
+    w.tires = TiresRead(w.tiresReader, now);
+    if (w.tires.present != w.tiresSeen)
+        Log(w.tires.present ? L"tire inflation mod: it publishes its state; the cluster shows the tires' pressure mode in a lamp"
+                            : L"tire inflation mod: its state is no longer published; the tire lamp is gone");
+    w.tiresSeen = w.tires.present;
     // the manual transmission mod, when it publishes its state: said in the log when it comes and goes, and with the
     // probe on at each stall it causes for a shift without the clutch
     w.smt = SmtRead(w.smtReader, now);
@@ -2408,6 +2418,7 @@ static DWORD WINAPI Run(void *)
             // while the oil is too hot
             const ULONGLONG ms = GetTickCount64();
             v.st.oilHot = OilLamp(watch.oil, ms);
+            TiresLamp(watch.tires, watch.refs.vehicle, ms, v.st.tireLamp, v.st.tireLit, v.st.tireWarn);
             v.st.damage = DamageLamp(v.st.damage, DamageAdding(watch.damage, s) || (watch.addedAt && ms - watch.addedAt < 2000), ms);
             v.engineDamage = raw.damage;
             v.engineCapacity = raw.damageKnown ? raw.damageCapacity : 0;

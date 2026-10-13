@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#define GAUGES_VERSION "0.15.6"
+#define GAUGES_VERSION "0.15.7"
 
 // The exe the addresses in this mod are from (SnowRunner on Steam, the build of 22 July 2026). On any other the mod
 // stands down.
@@ -36,6 +36,8 @@ struct GaugeState
     float airBar;                   // brake air in bar (0..10), from the model (AirModel)
     bool handbrake, diffLock, awd, lowGear, headlights, damage, cold;
     bool oilHot;                    // the oil lamp is lit (it blinks while the oil is too hot: the caller switches it on and off)
+    int tireLamp;                   // the tire lamp: 0 none (no tire mod for this truck), 1 Low, 2 Reduced, 3 Normal, 4 Increased (tires.h)
+    bool tireLit, tireWarn;         // it is lit (steady away from Normal, blinking while the pressure changes); the tires take damage: lit red
     int tilt;                       // 0 level, 1 warning, 2 danger, below 0 not known (the lamp stays dark)
     float rollDeg;                  // how far the truck leans sideways, above 0 to its right (the tilt lamp's truck leans with it)
     bool mph, psi, fahrenheit;      // units

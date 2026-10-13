@@ -456,6 +456,8 @@ int wmain(int argc, wchar_t **argv)
         low.rpm = k.redline;
         low.rangeKm = 6.4f;
         low.tilt = 2;
+        low.tireLamp = 1; // a tire mod at Low: the tenth lamp, lit
+        low.tireLit = true;
         low.rollDeg = 31.0f;
         low.tempC = 121.0f;
         low.oilC = 127.0f;

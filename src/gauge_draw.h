@@ -458,6 +458,24 @@ static void GIconLow(ImDrawList *dl, const GaugeFonts &f, ImVec2 p, float h, ImU
     TextDraw(dl, f, kGsLamp, ImVec2(p.x + 0.3f * u, p.y), col, "L", 0, u);
 }
 
+// The tires' pressure: a tire seen from the side, its tread as short strokes around it, with the mode's letter inside:
+// L, R, N, or + for the increased pressure.
+static void GIconTire(ImDrawList *dl, const GaugeFonts &f, ImVec2 p, float h, int lamp, ImU32 col, float u)
+{
+    GPath ring;
+    for (int i = 0; i < 24; i++) GTo(ring, GPolar(p, h * 0.35f, 15.0f * (float)i));
+    GStroke(dl, ring, col, h * 0.07f, true);
+    for (int i = 0; i < 12; i++)
+    {
+        GPath tread;
+        GTo(tread, GPolar(p, h * 0.41f, 30.0f * (float)i));
+        GTo(tread, GPolar(p, h * 0.49f, 30.0f * (float)i));
+        GStroke(dl, tread, col, h * 0.07f, false);
+    }
+    static const char *letters[4] = { "L", "R", "N", "+" };
+    TextDraw(dl, f, kGsLamp, ImVec2(p.x + 0.3f * u, p.y), col, letters[lamp < 1 || lamp > 4 ? 2 : lamp - 1], 0, u);
+}
+
 // The engine: its block with the intake on top, the fan's stub on the left and the gearbox flange on the right.
 static void GIconEngine(ImDrawList *dl, ImVec2 p, float h, ImU32 col)
 {
@@ -713,7 +731,7 @@ static void GRange(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float u, float
 // centred.
 static void GLamps(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, int columns, float s, float gap, float u, float a, const GaugeState &st)
 {
-    const int count = 9, rows = (count + columns - 1) / columns;
+    const int count = st.tireLamp > 0 ? 10 : 9, rows = (count + columns - 1) / columns; // the tire lamp only with a tire mod that publishes its state
     const float pitch = s + gap;
     const ImVec2 o(c.x - (columns - 1) * pitch * 0.5f, c.y - (rows - 1) * pitch * 0.5f);
     for (int i = 0; i < count; i++)
@@ -734,7 +752,8 @@ static void GLamps(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, int columns, f
             case 5: GIconEngine(dl, q, h, k); break;
             case 6: GIconSnow(dl, q, h, k); break;
             case 7: GIconTilt(dl, q, h, st.rollDeg, k); break;
-            default: GIconOil(dl, q, h, k); break;
+            case 8: GIconOil(dl, q, h, k); break;
+            default: GIconTire(dl, f, q, h, st.tireLamp, k, u); break;
             }
         };
         switch (i)
@@ -749,7 +768,8 @@ static void GLamps(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, int columns, f
         case 7: col = GLampCell(dl, p, s, st.tilt > 0, st.tilt >= 2 ? kRed : kAmber, u, a);
             if (st.tilt == 0) col = GCol(kGreen, a); // level: the truck is green, without a glow
             break;
-        default: col = GLampCell(dl, p, s, st.oilHot, kRed, u, a); break;
+        case 8: col = GLampCell(dl, p, s, st.oilHot, kRed, u, a); break;
+        default: col = GLampCell(dl, p, s, st.tireLit, st.tireWarn ? kRed : st.tireLamp == 4 ? kGreen : kAmber, u, a); break;
         }
         if (GGlass()) icon(ImVec2(p.x + 1.0f * u, p.y + 1.3f * u), GCol(0, 0, 0, 0.55f * a));
         icon(p, col);

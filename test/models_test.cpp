@@ -31,6 +31,7 @@
 #include "models.h"
 #include "sound.h"
 #include "state.h"
+#include "tires.h"
 
 void GaugeLog(const wchar_t *, ...) {} // the sounds say in the mod's log where each comes from; here that goes nowhere
 
@@ -2706,6 +2707,68 @@ int main(int argc, char **argv)
         }
         Check(first == kLiftBlowOff && Near(firstGain, 0.5f, 0.02f) && played >= 2 && closest >= 0.8f - 0.001f,
               "sound: a full lift at full boost plays at the setting's loudness, and no two sounds come within 0.8 s");
+    }
+
+    // the tire inflation mod's block, made here as that mod makes it and read as the cluster reads it, and the lamp
+    {
+        TiresReader reader = {};
+        const bool noneYet = !TiresRead(reader, 1000).present; // looked for, not there: looked for again from 6000
+        wchar_t name[64];
+        swprintf(name, 64, L"Local\\SnowRunnerTirePressure.State.%lu", GetCurrentProcessId());
+        const HANDLE mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, 64, name);
+        TiresBlock *block = mapping ? (TiresBlock *)MapViewOfFile(mapping, FILE_MAP_WRITE, 0, 0, 64) : nullptr;
+        bool read = false, lamps = false, gone = false;
+        if (block)
+        {
+            block->magic = kTiresMagic;
+            block->version = 1;
+            block->size = 64;
+            block->sequence = 2;
+            block->tick = 6900;
+            block->vehicle = 0x55;
+            block->mode = 0;
+            block->pressure = 0.45f;
+            block->flags = kTiresVehicle;
+            const bool tooSoon = !TiresRead(reader, 5000).present;
+            TiresView v = TiresRead(reader, 7000);
+            read = tooSoon && v.present && v.driving && v.vehicle == 0x55 && v.mode == 0 && v.pressure == 0.45f && !v.changing && !v.tooFast;
+            int lamp = -1;
+            bool lit = false, warn = false;
+            TiresLamp(v, 0x55, 0, lamp, lit, warn);
+            const bool low = lamp == 1 && lit && !warn;
+            TiresLamp(v, 0x66, 0, lamp, lit, warn);
+            const bool otherTruck = lamp == 0 && !lit;
+            block->mode = 2;
+            v = TiresRead(reader, 7000);
+            TiresLamp(v, 0x55, 0, lamp, lit, warn);
+            const bool normal = lamp == 3 && !lit && !warn;
+            block->flags = kTiresVehicle | kTiresChanging;
+            v = TiresRead(reader, 7000);
+            TiresLamp(v, 0x55, 0, lamp, lit, warn);
+            const bool blinkOn = lamp == 3 && lit;
+            TiresLamp(v, 0x55, 400, lamp, lit, warn);
+            const bool blinkOff = !lit && !warn;
+            block->mode = 3;
+            block->flags = kTiresVehicle;
+            v = TiresRead(reader, 7000);
+            TiresLamp(v, 0x55, 400, lamp, lit, warn);
+            const bool increased = lamp == 4 && lit && !warn;
+            block->flags = kTiresVehicle | kTiresTooFast;
+            v = TiresRead(reader, 7000);
+            TiresLamp(v, 0x55, 400, lamp, lit, warn);
+            lamps = low && otherTruck && normal && blinkOn && blinkOff && increased && lamp == 4 && lit && warn;
+            // a block that stands still, one in the middle of a write, one that is not the tire mod's
+            const bool stale = !TiresRead(reader, 6900 + kTiresStaleMs + 1).present;
+            block->sequence = 3;
+            const bool writing = !TiresRead(reader, 7000).present;
+            block->sequence = 4;
+            block->magic = 0x12345678;
+            gone = stale && writing && !TiresRead(reader, 7000).present;
+            UnmapViewOfFile(block);
+        }
+        if (mapping) CloseHandle(mapping);
+        Check(noneYet && read && lamps && gone, "tires: the tire mod's block is found once it is there and read while it is fresh and whole; the lamp shows the mode, lit away from Normal, "
+                                                 "blinking while the pressure changes, red while the tires take damage, and is not there for another truck");
     }
 
     // the state for other mods: written as the mod writes it, and read back through the name as another mod reads it

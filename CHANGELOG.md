@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.15.7] 2026-10-13
+
+- A tire lamp, with a tire inflation mod by the same author from the version of it that publishes its state: a tire with the letter of the pressure mode chosen there (L, R, N, or + for Increased). Amber at Low and Reduced, green at Increased, dark at Normal, blinking while the pressure is on its way, red while the tires take damage or one is worn out. Without that mod the cluster has its nine lamps as before.
+
 ## [0.15.6] 2026-10-12
 
 - A new setting says what you drive with, so the mod's automatic fits it: `Input`, on the tab "Driven with" under Gearbox. A wheel's pedals (0, the default): as before. A pad (1): the trigger has to come from under three quarters before a push to the end kicks down, as one held near its end wavers past the mark. The keyboard (2): no kickdown at all, and a key held shifts as the pedal floored, however the game ramps it.
