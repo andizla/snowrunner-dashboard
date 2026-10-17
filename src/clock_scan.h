@@ -137,7 +137,7 @@ struct ClockScan
     ClockPath found;
 };
 
-// A value that may be an address in the game's heap: not in the exe's image, inside the user space, aligned.
+// A value that may be an address in the game's heap: not in the exe's image, inside the address range a program gets, aligned.
 inline bool ClockPointer(uint64_t q, uint64_t base, uint64_t imageSize)
 {
     return q >= 0x10000 && q < 0x7FFFFFFFFFFFull && !(q & 7) && !(q >= base && q < base + imageSize);

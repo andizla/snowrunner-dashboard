@@ -66,7 +66,7 @@
 // second gear once the engine and the wheels turn together. It shifts up later the further the pedal is down, down
 // well below that so a gear holds, kicks down on a floored pedal, holds its gear rolling downhill with the foot off,
 // and lets a second pass between two shifts. A lifted foot is no call to shift up at once, and wheelspin shifts
-// nothing. On the user's 20 minute drive it shifts as often as the game's own automatic, which hunts the same. With
+// nothing. On a 20 minute drive logged in the game it shifts as often as the game's own automatic, which hunts the same. With
 // Gearbox=1 it drives the game's gears (TakeoverStep); without, it is worked out and logged.
 //
 // The clutch. With a manual gearbox and a clutch pedal (a wheel's, through the manual transmission mod) the engine
@@ -408,7 +408,7 @@ static const float kAirStill = 0.35f;        // the air through the radiator of 
 static const float kFan = 0.3f, kFanFrom = 98.0f, kFanFull = 102.0f; // the fan adds this share on top; it comes in between these temperatures
 static const float kHeatIdle = 0.15f;        // the heat of an idling engine as a share of its heat at full load
 static const float kLoadNeutral = 0.25f;     // in neutral nothing pulls against the engine: the load is this share of what it would be in gear
-static const float kUsualLoad = 0.5f, kUsualKmh = 13.0f; // "driven as usual", for WarmUpMinutes: the mean load and speed while driving on the user's drive of 2026-10-08 (0.49 at 13.1 km/h)
+static const float kUsualLoad = 0.5f, kUsualKmh = 13.0f; // "driven as usual", for WarmUpMinutes: the mean load and speed on a drive logged in the game on 2026-10-08 (0.49 at 13.1 km/h)
 static const float kTempFall = 1.0f;         // degrees a second a running engine's coolant falls for each share of a full load's heat taken away beyond what the engine makes
 static const float kWaterFrom = 0.5f, kWaterFull = 1.2f; // metres of water at the truck's front: from about axle height it cools the engine, and with the engine in it it does all it can
 static const float kWater = 1.0f;            // what deep water adds to the air through the radiator, as a share of all the air that driving gives
@@ -1075,7 +1075,7 @@ static const float kGripGain = 1.0f;
 static const float kGripFall = 2.0f, kGripRise = 20.0f; // seconds the grip takes to follow a lower reading, and a higher one
 static const float kSlipUp = 1.05f;          // a shift up goes by the wheels at most this much faster than the ground: wheelspin in rough ground shifts nothing up
 static const float kSlipShare = 1.2f, kSlipSpare = 1.0f; // wheels this much faster than the ground under them, and this many rad/s more, spin: the gearbox goes by the ground
-                                                        // (floored in the user's drives the wheels turned within 1.13 times the learned grip nine times in ten)
+                                                        // (floored in drives logged in the game the wheels turned within 1.13 times the learned grip nine times in ten)
 static const float kDownMost = 0.9f;         // no shift down puts the engine, at the speed the wheels turn, further than this from idle to the red zone
 static const float kShiftUpAfter = 0.4f, kShiftDownAfter = 0.5f, kCoastDownAfter = 0.3f; // seconds a shift up, a shift down and one with the foot off has to be called for before it is made
 static const float kShiftUpAfterFloored = 0.15f; // and a shift up floored, where a short first gear is through in a second
@@ -1241,7 +1241,7 @@ inline TorqueOrders TorqueHandStep(TorqueHand &h, bool want, uint64_t action, ui
 
 // With the mod's engine handed to the game (Powertrain=1) the shift points are a truck automatic's schedule. Up: as far
 // from idle toward the floored point as the pedal is down (a fifth of the pedal, a fifth of the way: a scout's diesel
-// at about 1500 rpm, as the user's own car with a nine-speed automatic shifts), but not under kLightPeak of the
+// at about 1500 rpm, as a car's nine-speed automatic shifts), but not under kLightPeak of the
 // engine's peak torque speed, where it begins to pull; floored at the red zone, or where the next gear pulls more if
 // that comes first (EngineUpShare: at EngineShare 50 a scout's road gearbox at 0.86 to 0.87 of a gear's top, at 100 at
 // 0.90 to 0.92). Down: where the gear below would come in kEngineDownRoom under its own point up, so no shift is taken
@@ -1256,9 +1256,9 @@ static const float kKickRoom = 0.92f;       // and under this share of the gear'
 static const float kEngineLimit = 0.98f;    // past this the engine is on the limiter: up at once, but for kEngineGearHold
 // Going up through the gears, from a standstill or from a shift up, each gear is held this many seconds of moving,
 // on the limiter if it comes to that (the game governs the wheels at the gear's top): an empty Fleetstar went 1 to 5
-// in two seconds and pulled like a late truck; the user: at least two to three seconds a gear. A gear a shift down or a
+// in two seconds and pulled like a late truck; driven in the game, two to three seconds a gear felt right. A gear a shift down or a
 // kickdown brought is not held. A scout shifts sooner (kEngineGearHoldScout): at 2.5 s the scout of the drives, a light
-// 4x4, sat in its gears too long for its kind (the user, 2026-10-11), where trucks and heavy trucks were right.
+// 4x4, sat in its gears too long for its kind (driven in the game, 2026-10-11), where trucks and heavy trucks were right.
 static const float kEngineGearHold = 2.5f, kEngineGearHoldScout = 1.5f;
 // A shift up the gear above cannot hold: up a grade or through mud the next gear loses speed and comes back down, and
 // the gear below is at its point up again a second later (a tester's drives on 0.15.0: a Tayga swapped its first

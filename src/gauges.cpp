@@ -960,7 +960,7 @@ uint32_t PadButtons()
     return buttons;
 }
 
-// A path for the log with the user's profile folder written %USERPROFILE%: the log is passed on, the account's name stays out.
+// A path for the log with the Windows profile folder written %USERPROFILE%: the log is passed on, the account's name stays out.
 static std::wstring PathForLog(const std::wstring &path)
 {
     wchar_t profile[MAX_PATH] = {};
@@ -2033,7 +2033,7 @@ static DWORD WINAPI Run(void *)
     const bool clockFromIni = clockOwn;
     if (!clockOwn && clockPlace)
     {
-        // the place found in the user's game on 2026-10-10: [exe + 0x2a8eb48] + 0x150 in that build, the hour
+        // the place found in the running game on 2026-10-10: [exe + 0x2a8eb48] + 0x150 in that build, the hour
         clockPath = ClockPath{ (uint32_t)clockPlace, 1, { 0x150, 0 }, false, 1.0f };
         clockOwn = true;
     }

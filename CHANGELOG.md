@@ -36,8 +36,8 @@
 
 ## [0.15.1] 2026-10-12
 
-- The outside temperature by map works on the Epic store's build. Its saves are `CompleteSave*.dat` in `Documents\My Games\SnowRunner\base\storage\<account>`, where Steam's are `CompleteSave*.cfg`; the mod looked in that folder for `.cfg` alone, found nothing, and kept `AmbientC` in force (a tester's two logs: "no save of the game was found"). It now takes both, the newest of them. Documents is looked for where the shell has it (OneDrive may have moved it) and in the user's profile as well.
-- Where no save is found, the log says which folders were looked in; a save found that names no map the mod can read is said once. At the start the log names the game's folder and the store its path suggests. The user's profile folder stands in the log as `%USERPROFILE%`, so a log passed on does not carry the account's name.
+- The outside temperature by map works on the Epic store's build. Its saves are `CompleteSave*.dat` in `Documents\My Games\SnowRunner\base\storage\<account>`, where Steam's are `CompleteSave*.cfg`; the mod looked in that folder for `.cfg` alone, found nothing, and kept `AmbientC` in force (a tester's two logs: "no save of the game was found"). It now takes both, the newest of them. Documents is looked for where the shell has it (OneDrive may have moved it) and in the Windows profile folder as well.
+- Where no save is found, the log says which folders were looked in; a save found that names no map the mod can read is said once. At the start the log names the game's folder and the store its path suggests. The Windows profile folder stands in the log as `%USERPROFILE%`, so a log passed on does not carry the account's name.
 - The tester's logs carry the Steam build's exe stamp, and the mod knew the game's places without the signatures. If the tester plays the Epic build, as arranged, that build runs the same exe; the next log's line naming the game's folder will say.
 
 ## [0.15.0] 2026-10-11

@@ -1540,7 +1540,7 @@ int main(int argc, char **argv)
         Check(Near(GamePull(0.5f), 1.0f, 0.001f) && Near(GamePull(0.725f), 0.58f, 0.03f) && Near(GamePull(0.875f), 0.26f, 0.03f) && GamePull(1.02f) == 0.0f &&
                   Near(GamePull(0.325f), 0.66f, 0.03f) && GamePull(nanf("")) == 0.0f && GearUpShare(1.0f) == 1.0f && GearDownShare(1.0f) == 0.0f,
               "automatic: the game gives all of the torque with the wheels at half the gear's top and nothing at the top, as action + 0xB4 read");
-        // the sooty's gears (tops 9, 17, 26, 34, 42 and 55 rad/s, 800 to 5600 rpm, the user's drive of 18:23) floored up a
+        // the sooty's gears (tops 9, 17, 26, 34, 42 and 55 rad/s, 800 to 5600 rpm, a drive logged in the game at 18:23) floored up a
         // climb at a steady speed, the grip learned
         {
             TruckRaw so = g;

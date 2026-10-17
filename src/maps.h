@@ -10,7 +10,7 @@
 #include <stddef.h>
 #include <math.h>
 
-// A region: its id, its name, and its first outside temperature, a guess the user sets in Gauges.ini.
+// A region: its id, its name, and its first outside temperature, a guess to be set in Gauges.ini.
 struct MapRegion { const char *id, *name; float ambientC; };
 static const MapRegion kMapRegions[] = {
     { "us_01", "Michigan", 12.0f }, { "us_02", "Alaska", -12.0f }, { "us_03", "Wisconsin", 8.0f }, { "us_04", "Yukon", -15.0f },
