@@ -56,8 +56,8 @@
 // progressive curve, and a ramp so that a keyboard's pedal, which is either up or floored, comes in over a moment),
 // and the torque comes from the engine speed by a torque curve (a diesel's broad plateau for trucks, a later peak
 // for scouts, nothing past the governor), with less of it while the oil is cold and more with the turbo's boost. The
-// power is that torque times the shaped pedal, 1 being the engine floored at its peak, warm and at full boost. The
-// mod does not hand any of it to the game yet: that waits for the hooks (module 12), and until then the probe log
+// power is that torque times the shaped pedal, 1 being the engine floored at its peak, warm and at full boost. With
+// Powertrain=1 the mod hands it to the game through the game's torque factor (TorqueLift); without, the probe log
 // says what it would have done.
 //
 // The automatic gearbox. What a truck's automatic with a torque converter would do with the driven wheels' speed and
@@ -66,8 +66,8 @@
 // second gear once the engine and the wheels turn together. It shifts up later the further the pedal is down, down
 // well below that so a gear holds, kicks down on a floored pedal, holds its gear rolling downhill with the foot off,
 // and lets a second pass between two shifts. A lifted foot is no call to shift up at once, and wheelspin shifts
-// nothing. On the user's 20 minute drive it shifts as often as the game's own automatic, which hunts the same. Like the
-// powertrain it is worked out and logged, not handed to the game.
+// nothing. On the user's 20 minute drive it shifts as often as the game's own automatic, which hunts the same. With
+// Gearbox=1 it drives the game's gears (TakeoverStep); without, it is worked out and logged.
 //
 // The clutch. With a manual gearbox and a clutch pedal (a wheel's, through the manual transmission mod) the engine
 // runs behind the clutch: pressed, the engine is free and its governor holds the speed the pedal asks for; let up, it
@@ -197,12 +197,14 @@ inline void TachStep(TachModel &m, const TruckRaw &t, const GaugeScale &k, float
 }
 
 // One step of the needle towards an engine speed worked out elsewhere (the converter of the mod's automatic, while it
-// drives the game's gears), with the needle's own lag; starting, stalling and stopped as TachTarget has them.
+// drives the game's gears), with the needle's own lag; starting, stalling and stopped as TachTarget has them, and no
+// further past the red zone than wheelspin takes it there (kTachOverrun): the converter's speed has no top of its own.
 inline void TachFollow(TachModel &m, const TruckRaw &t, const GaugeScale &k, float rpm, float dt)
 {
     float target = !TruckEngineOn(t) ? 0.0f : t.startTimer > 0.0f && !(t.flags & 2) ? TachTarget(t, k) : rpm;
     const float alive = SettingsRange(1.0f - kStallRate * t.stall, 0.0f, 1.0f);
     target *= alive * alive;
+    target = fminf(target, k.idle + (k.redline - k.idle) * kTachOverrun);
     m.gear = t.gearEngaged;
     m.dip = 0.0f;
     if (!m.running || !(target >= 0.0f))
@@ -2099,7 +2101,6 @@ static const float kBrakeAir = 0.35f;        // bar a full brake application tak
 static const float kSpringAir = 0.4f;        // bar the spring brakes take to be held off when the handbrake is let go
 static const float kAirLeak = 0.1f / 60.0f;  // bar each second the system loses through its fittings
 static const float kAirLeakBraking = 0.25f / 60.0f; // and on top of that while the brake is held
-static const float kAirWarn = 5.5f;          // under this the dial's red zone: too little air to brake safely
 
 // The air in the brakes' tanks of a truck, scouts aside (they brake by hydraulics; the dial is not drawn for them).
 // The engine drives the compressor, which gives more air the faster the engine turns and less as the tank fills; the

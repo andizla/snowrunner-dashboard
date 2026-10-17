@@ -7,8 +7,9 @@
 // lamps. The engine speed, the range, the tilt and the coolant temperature are worked out from those values
 // (models.h). With the ini's Damage on, what the temperature costs the engine goes into the game's own engine
 // damage. With Gearbox=1 the mod's automatic sets the gears while the game's shifter is in A: it puts the game's
-// automatic flag down and calls the game's own shift function (models.h, TakeoverStep). Those are all the mod
-// writes into the game and all it calls there. The cluster is on screen only while a truck is driven in the world. On another build than the one its addresses are from (kGaugesExeStamp) the mod finds them by the code that uses them (game_globals.h), and stands down where it cannot. The map
+// automatic flag down and calls the game's own shift function (models.h, TakeoverStep). With Powertrain=1, and for
+// the pull test's seven seconds, it writes the game's torque factor (TorqueLift, PullTestStep). Those are all the
+// mod writes into the game and all it calls there. The cluster is on screen only while a truck is driven in the world. On another build than the one its addresses are from (kGaugesExeStamp) the mod finds them by the code that uses them (game_globals.h), and stands down where it cannot. The map
 // a truck is on comes from the game's save (maps.h), for the map's outside temperature.
 #include <windows.h>
 #include <xinput.h>
@@ -1371,8 +1372,8 @@ static bool GameInFront()
 // Game memory is read through this, so an object the game freed under the mod is a failed read, not a fault.
 static bool PeekGame(uint64_t addr, void *out, size_t size) { return ReadProcessMemory(GetCurrentProcess(), (const void *)addr, out, size, nullptr) != 0; }
 
-// And written through this, for the same reason: the engine's damage (TruckDamageAdd) and, with Gearbox=1, the game's
-// automatic flag.
+// And written through this, for the same reason: the engine's damage (TruckDamageAdd), with Gearbox=1 the game's
+// automatic flag, and with Powertrain=1 or the pull test the game's torque factor.
 static bool PokeGame(uint64_t addr, const void *in, size_t size) { return WriteProcessMemory(GetCurrentProcess(), (void *)addr, in, size, nullptr) != 0; }
 
 // The driven truck as the mod's thread follows it from pass to pass.
@@ -1391,7 +1392,7 @@ struct TruckWatch
     float byWay;
     TachModel tach;             // the engine speed of the truck at modelVehicle
     BoostModel boost;           // and its boost
-    PowertrainModel power;      // and what its engine would deliver, for the probe log until the hooks hand it to the game
+    PowertrainModel power;      // and what its engine delivers, handed to the game with Powertrain=1
     GearboxModel gearbox;       // and the gear an automatic with a torque converter would be in, the same way
     ClutchModel clutch;         // and, while the manual transmission mod drives it, the engine behind its clutch pedal
     TakeoverModel take;         // the mod's automatic setting the game's gears (Gearbox)
@@ -1711,7 +1712,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         // the oil warning: heard every few seconds while the oil is too hot, and said in the log when it comes and goes
         const bool oilWas = w.oil.on;
         if (OilWarnStep(w.oil, w.temp, raw, s, dt)) SoundPlay(kSoundOil, OilBeepGain(s.soundVolume), 1.0f);
-        // the powertrain: what the engine would deliver, worked out and logged, not handed to the game yet
+        // the powertrain: what the engine delivers, logged, and handed to the game with Powertrain=1 (below)
         PowertrainStep(w.power, raw, curve, TachSpeed(w.tach, scale), scale.redline > 0.0f ? scale.max / scale.redline : 1.0f, w.temp.oil,
                        natural ? 1.0f : scale.boost > 0.0f ? w.boost.bar / scale.boost : 0.0f, dt);
         // the automatic: the gear it would be in, the same way, by the pedal as held. With the probe on each of its

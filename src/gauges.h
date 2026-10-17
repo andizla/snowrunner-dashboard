@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#define GAUGES_VERSION "0.15.7"
+#define GAUGES_VERSION "0.15.8"
 
 // The exe the addresses in this mod are from (SnowRunner on Steam, the build of 22 July 2026). On any other the mod
 // stands down.
@@ -191,6 +191,7 @@ inline void SettingsClamp(GaugeSettings &s)
 // The scales of a truck class: idle, where the red zone starts, the tachometer's top (rpm), the speedometer's top
 // (km/h) and the boost its turbo reaches (bar).
 struct GaugeScale { float idle, redline, max, speedMax, boost; };
+static const float kAirWarn = 5.5f; // bar: under this the brake air dial's red zone, too little air to brake safely (AirStep, GAir)
 static const GaugeScale kClassScales[kClassCount] = { { 650.0f, 2200.0f, 3000.0f, 100.0f, 1.8f }, { 800.0f, 5500.0f, 7000.0f, 120.0f, 1.0f }, { 600.0f, 1900.0f, 2500.0f, 80.0f, 2.0f } };
 
 // The scales in force: the class's, with the settings' own numbers in their place where given, made to fit each other

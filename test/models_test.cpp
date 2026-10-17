@@ -2176,15 +2176,21 @@ int main(int argc, char **argv)
             TachModel follow = {};
             TachFollow(follow, g, k, 1500.0f, kDt);
             const bool followPlaced = Near(follow.rpm, 1500.0f, 0.5f);
-            for (float at = 0.0f; at < 0.2f; at += kDt) TachFollow(follow, g, k, 3000.0f, kDt);
-            const bool followLagging = follow.rpm > 1500.0f && follow.rpm < 3000.0f;
-            for (float at = 0.0f; at < 3.0f; at += kDt) TachFollow(follow, g, k, 3000.0f, kDt);
+            for (float at = 0.0f; at < 0.2f; at += kDt) TachFollow(follow, g, k, 2000.0f, kDt);
+            const bool followLagging = follow.rpm > 1500.0f && follow.rpm < 2000.0f;
+            for (float at = 0.0f; at < 3.0f; at += kDt) TachFollow(follow, g, k, 2000.0f, kDt);
+            const bool followThere = Near(follow.rpm, 2000.0f, 5.0f);
+            // a converter speed past the red zone (wheels spinning in a low gear) takes the needle no further than wheelspin does
+            TachModel over = {};
+            for (float at = 0.0f; at < 3.0f; at += kDt) TachFollow(over, g, k, k.max * 2.0f, kDt);
+            const bool followCapped = Near(over.rpm, k.idle + (k.redline - k.idle) * kTachOverrun, 5.0f);
             TruckRaw dead = g;
             dead.flags = 0;
             const float gearBefore = follow.rpm;
             for (float at = 0.0f; at < 5.0f; at += kDt) TachFollow(follow, dead, k, 3000.0f, kDt);
-            Check(followPlaced && followLagging && Near(gearBefore, 3000.0f, 5.0f) && follow.rpm < 50.0f && Near(ConverterStall(k), fminf(k.redline * kStallSpeed, kStallRpmMost), 0.01f),
-                  "automatic in the game: the needle follows the converter's engine speed with its lag, and falls with the engine off; the stall speed at most 2400 rpm");
+            Check(followPlaced && followLagging && followThere && followCapped && Near(gearBefore, 2000.0f, 5.0f) && follow.rpm < 50.0f && Near(ConverterStall(k), fminf(k.redline * kStallSpeed, kStallRpmMost), 0.01f),
+                  "automatic in the game: the needle follows the converter's engine speed with its lag, no further past the red zone than wheelspin takes it, and falls "
+                  "with the engine off; the stall speed at most 2400 rpm");
         }
         TruckRaw stopped = g;
         stopped.flags = 0;

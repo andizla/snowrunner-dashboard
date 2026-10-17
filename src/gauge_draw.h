@@ -696,7 +696,7 @@ static void GAir(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float u
 {
     const GScale s = GSweep(0.0f, 10.0f);
     GSmallDial(dl, c, r, u, a);
-    GZone(dl, c, r - 2.5f * u, s, 0.0f, 5.5f, 4.0f, u, GCol(kRed, a));
+    GZone(dl, c, r - 2.5f * u, s, 0.0f, kAirWarn, 4.0f, u, GCol(kRed, a));
     GTicks(dl, c, r - 2.5f * u, s, 5.0f, 5, 7.0f, 4.0f, u, a);
     char buf[16];
     for (float v = 0.0f; v <= 10.5f; v += 5.0f)

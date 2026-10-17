@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.15.8]
+
+- Under the mod's automatic the needle goes no further past the red zone than wheelspin takes it without (1.1 of the way from idle to the red zone). The torque converter's engine speed has no top of its own, and with the wheels spinning in a low gear it took the needle to the end of the dial.
+- The brake air dial's red zone comes from the air model's own figure (5.5 bar, the same as before).
+- The readme says where another build of the game stands down (only without the truck, its wheels or the game's state), how far a diesel comes down at a light foot (1.15 times idle), that the damage lamp also blinks for two seconds after a write, and that the air dial is hidden on scout scales. Comments that still said the engine and the automatic are not handed to the game say they are.
+
 ## [0.15.7] 2026-10-13
 
 - A tire lamp, with a tire inflation mod by the same author from the version of it that publishes its state: a tire with the letter of the pressure mode chosen there (L, R, N, or + for Increased). Amber at Low and Reduced, green at Increased, dark at Normal, blinking while the pressure is on its way, red while the tires take damage or one is worn out. Without that mod the cluster has its nine lamps as before.

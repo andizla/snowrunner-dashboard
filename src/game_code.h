@@ -1,6 +1,5 @@
-// game_code.h: the game's own gearbox functions, found in the exe's code by their bytes. This mod will call them and
-// hook a few (the gearbox and the clutch, MODULES.md module 14); for now it only looks for them, once a truck is
-// driven, and says in the log where each one is, whether its bytes are there more than once, and whether another
+// game_code.h: the game's own gearbox functions, found in the exe's code by their bytes. The mod calls ShiftGear with
+// Gearbox=1 (TakeoverStep) and only looks for the others, once a truck is driven, and says in the log where each one is, whether its bytes are there more than once, and whether another
 // mod holds it: a hook puts a jump over a function's first bytes, so its pattern no longer matches there, and the
 // rest of it still does. Nothing here writes to the game.
 //
