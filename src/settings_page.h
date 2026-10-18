@@ -323,7 +323,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         ImGui::BeginDisabled(!s.damage);
         PageLabel("Overheating", labelX);
         ImGui::SetNextItemWidth(w);
-        if (ImGui::SliderFloat("##hotdamage", &s.hotDamage, 0.0f, 50.0f, "%.0f percent a minute", ImGuiSliderFlags_AlwaysClamp))
+        if (ImGui::SliderFloat("##hotdamage", &s.hotDamage, 0.0f, 100.0f, "%.0f percent a minute", ImGuiSliderFlags_AlwaysClamp))
         {
             s.hotDamage = floorf(s.hotDamage + 0.5f);
             act |= kPageChanged;
@@ -335,7 +335,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         PageTip(tip);
         PageLabel("Cold engine", labelX);
         ImGui::SetNextItemWidth(w);
-        if (ImGui::SliderFloat("##colddamage", &s.coldDamage, 0.0f, 30.0f, "%.0f percent a minute", ImGuiSliderFlags_AlwaysClamp))
+        if (ImGui::SliderFloat("##colddamage", &s.coldDamage, 0.0f, 60.0f, "%.0f percent a minute", ImGuiSliderFlags_AlwaysClamp))
         {
             s.coldDamage = floorf(s.coldDamage + 0.5f);
             act |= kPageChanged;

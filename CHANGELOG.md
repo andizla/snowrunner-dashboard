@@ -2,6 +2,7 @@
 
 ## [0.15.8]
 
+- The Gauges tab's engine damage sliders go to 100 percent a minute for overheating and 60 for a cold engine (they stopped at 50 and 30), for a harder game. Gauges.ini takes up to 100 for both, as before.
 - Under the mod's automatic the needle goes no further past the red zone than wheelspin takes it without (1.1 of the way from idle to the red zone). The torque converter's engine speed has no top of its own, and with the wheels spinning in a low gear it took the needle to the end of the dial.
 - The brake air dial's red zone comes from the air model's own figure (5.5 bar, the same as before).
 - The readme says where another build of the game stands down (only without the truck, its wheels or the game's state), how far a diesel comes down at a light foot (1.15 times idle), that the damage lamp also blinks for two seconds after a write, and that the air dial is hidden on scout scales. Comments that still said the engine and the automatic are not handed to the game say they are.
