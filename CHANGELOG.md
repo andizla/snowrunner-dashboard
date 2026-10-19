@@ -2,6 +2,12 @@
 
 ## [0.15.8]
 
+- The mod's automatic cruises low: a light foot held steady shifts up as soon as the next gear lands at 0.8 of the engine's peak torque speed or over (and clear of its point down), without waiting for the light point up. A car's nine-speed automatic, filmed on the road, cruised at 1200 to 1300 rpm against a peak at about 1600.
+- Lifting at speed shifts up a gear at a time where the next lands clear of the coast point; before, with the foot off it never shifted up short of the red zone. Rolling downhill or slowing hard (mud, a climb) it keeps the gear, for the engine's braking.
+- Coasting holds the gear down to 0.15 of the way from idle to the red zone (was 0.25); with the brake on it shifts down from 0.25, as before. The same car coasted in its gear to 1000 to 1300 rpm of a 4500 rpm red zone.
+- A lift opens the converter's lockup for a second, the needle a little under the gear's speed meanwhile, as a road automatic's is at a tip-out.
+- With `Powertrain=1` the torque factor goes up to six times the game's own (was three), so the engine's torque holds to about 0.92 of a gear's top speed (was 0.84) before falling to nothing at the top, as a diesel's governor does; with the wheels at a gear's top or past it, rolling downhill, the game's own factor is written. A tester's log had the factor at the old roof in 1133 readings, nearly all near the red zone. Floored, the automatic takes each gear nearer its top accordingly.
+- Checked: floored shifts up with the engine handed over follow its curve, by its power. A diesel profile built from a peak keeps 0.8 of its torque at the red zone and still gains power up to it, so it revs near the top; a profile whose power falls before the red zone shifts up sooner. A test holds both.
 - The Gauges tab's engine damage sliders go to 100 percent a minute for overheating and 60 for a cold engine (they stopped at 50 and 30), for a harder game. Gauges.ini takes up to 100 for both, as before.
 - Under the mod's automatic the needle goes no further past the red zone than wheelspin takes it without (1.1 of the way from idle to the red zone). The torque converter's engine speed has no top of its own, and with the wheels spinning in a low gear it took the needle to the end of the dial.
 - The brake air dial's red zone comes from the air model's own figure (5.5 bar, the same as before).

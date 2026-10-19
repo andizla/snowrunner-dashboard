@@ -1458,7 +1458,87 @@ int main(int argc, char **argv)
         wheels(14.0f);
         GearboxModel flat = driving(2);
         for (float at = 0.0f; at < 2.0f; at += kDt) GearboxStep(flat, g, k, 0.0f, 0.0f, kDt);
-        Check(held && down.gear == 3 && flat.gear == 2, "automatic: rolling downhill with the foot off it holds the gear for the engine's braking and shifts up only past the red zone, on the flat too");
+        Check(held && down.gear == 3 && flat.gear == 3 && flat.shifts == 1,
+              "automatic: rolling downhill with the foot off it holds the gear for the engine's braking and shifts up only past the red zone; on the flat a lift at "
+              "speed shifts up one gear, where the next lands over the coast point");
+        // a lift slowing hard (mud) keeps the gear; coasting holds it down to kCoastDown, and with the brake on it shifts down
+        // from kCoastDownBraking, for the engine's braking, and never up
+        {
+            GearboxModel mud = driving(2);
+            for (float at = 0.0f; at < 2.0f; at += kDt)
+            {
+                wheels(14.0f - 3.0f * at);
+                GearboxStep(mud, g, k, 0.0f, 0.0f, kDt);
+            }
+            const float third = 1000.0f / k.redline * TruckGearTop(g, 3); // the third at 1000 rpm: between the two coast points
+            wheels(third);
+            GearboxModel coasting = driving(3), braked = driving(3);
+            for (float at = 0.0f; at < 1.0f; at += kDt) GearboxStep(coasting, g, k, 0.0f, 0.0f, kDt);
+            g.throttle = 0.5f; // the brake: the pedal's other side
+            for (float at = 0.0f; at < 1.0f; at += kDt) GearboxStep(braked, g, k, 0.0f, 0.0f, kDt);
+            g.throttle = 0.0f;
+            wheels(14.0f);
+            GearboxModel brakedFast = driving(2);
+            g.throttle = 0.5f;
+            for (float at = 0.0f; at < 2.0f; at += kDt) GearboxStep(brakedFast, g, k, 0.0f, 0.0f, kDt);
+            g.throttle = 0.0f;
+            Check(mud.gear <= 2 && coasting.gear == 3 && coasting.shifts == 0 && GearboxInput(g, k, 3, third) < GearboxPoint(k, kCoastDownBraking) &&
+                      GearboxInput(g, k, 3, third) > GearboxPoint(k, kCoastDown) && braked.gear == 2 && brakedFast.gear == 2,
+                  "automatic: a lift slowing hard keeps the gear; coasting holds it down to 0.15 of the way from idle to the red zone, with the brake on "
+                  "it shifts down from 0.25 and never up");
+        }
+        // a lift opens the converter's lockup kLiftOpen, the engine coasting a little under the gearbox's input, then it
+        // locks again
+        {
+            wheels(1200.0f / k.redline * TruckGearTop(g, 3));
+            GearboxModel tip = driving(3);
+            for (float at = 0.0f; at < 2.0f; at += kDt) GearboxStep(tip, g, k, 0.5f, 0.5f, kDt);
+            const bool lockedBefore = tip.locked;
+            for (float at = 0.0f; at < kFootGap + 0.1f; at += kDt) GearboxStep(tip, g, k, 0.0f, 0.0f, kDt);
+            const bool opened = !tip.locked && Near(tip.rpm, tip.input * (1.0f - kCoastSlip), 1.0f);
+            for (float at = 0.0f; at < kLiftOpen + 0.1f; at += kDt) GearboxStep(tip, g, k, 0.0f, 0.0f, kDt);
+            Check(lockedBefore && opened && tip.locked && tip.gear == 3 && tip.shifts == 0,
+                  "automatic: a lift opens the converter's lockup for a second, the engine coasting under the gearbox's input, then it locks again");
+        }
+        // cruising, as a car's nine-speed automatic did on the road (2026-10-19): a light foot held steady shifts up as
+        // soon as the next gear lands over kLightPeak of the peak torque's speed and kShiftRoom over its point down, short
+        // of the light point up; not while gaining, nor at a heavier foot
+        {
+            TruckRaw c = g;
+            static const float closeSpeeds[7] = { 1.5f, 3.0f, 5.0f, 7.5f, 10.5f, 14.5f, 8.0f }; // tops 11, 15, 20, 26 and 34 rad/s
+            c.gearSpeeds = 7;
+            memcpy(c.gearSpeed, closeSpeeds, sizeof closeSpeeds);
+            GaugeScale car = k;
+            car.idle = 750.0f;
+            car.redline = 4500.0f;
+            car.max = 5000.0f;
+            EngineHand peak = {};
+            peak.least = kLightPeak * 1600.0f;
+            const float from = 2200.0f / car.redline * TruckGearTop(c, 3); // the third at 2200 rpm
+            auto cruiseFrom = [&](float pedal, float gain, float rpm) {
+                GearboxModel m = {};
+                m.running = true;
+                m.gear = 3;
+                float spin = rpm / car.redline * TruckGearTop(c, 3);
+                m.spin = m.by = spin;
+                for (float at = 0.0f; at < 3.0f; at += kDt)
+                {
+                    for (int i = 0; i < c.wheels; i++) c.spin[i] = spin;
+                    GearboxStep(m, c, car, pedal, pedal, kDt, peak);
+                    spin += gain * kDt;
+                }
+                return m;
+            };
+            // gaining from 2000 rpm, short of the light point up in the three seconds
+            const GearboxModel steady = cruiseFrom(0.3f, 0.0f, 2200.0f), gaining = cruiseFrom(0.3f, 0.25f, 2000.0f), heavier = cruiseFrom(0.6f, 0.0f, 2200.0f);
+            const float landed = GearboxInput(c, car, 4, from);
+            if (!(GearboxUpPoint(c, car, 3, 0.3f) > 2200.0f && steady.gear == 4 && steady.shifts == 1 && landed >= peak.least && gaining.gear == 3 && heavier.gear == 3))
+                printf("     up point %.0f, steady %d (%d shifts), landed %.0f, gaining %d, heavier %d\n", GearboxUpPoint(c, car, 3, 0.3f), steady.gear, steady.shifts, landed,
+                       gaining.gear, heavier.gear);
+            Check(GearboxUpPoint(c, car, 3, 0.3f) > 2200.0f && steady.gear == 4 && steady.shifts == 1 && landed >= peak.least && gaining.gear == 3 && heavier.gear == 3,
+                  "automatic: a light foot held steady cruises a gear up where the next lands over 0.8 of the peak torque's speed, short of the light point up; "
+                  "gaining or at a heavier foot it keeps the gear");
+        }
         // climbing: the wheels losing speed with the foot half down. It shifts down where floored would, and does not
         // shift up while the climb's hold lasts after the slowing stops
         GearboxModel climb = driving(3), flatter = driving(3);
@@ -1639,13 +1719,16 @@ int main(int argc, char **argv)
                   "down in the gear that pulls the most within a second, gears at a time");
         }
         // the engine handed to the game (Powertrain=1): the factor lifts the game's curve where it falls away toward the
-        // gear's top, by the engine's torque and the converter's ratio, at the most 3 times; it stands on the game's own
+        // gear's top, by the engine's torque and the converter's ratio, at the most 6 times, and the game's own at the
+        // gear's top and past it; it stands on the game's own
         // share, follows the game where it writes its own (engine damage), and gives it back when the switch goes off and
         // to the last truck when another is driven
         {
             const bool lifts = Near(TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, 0.5f), 1.0f, 0.001f) &&
                                Near(TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, 0.8f), 1.0f / (kGamePullFall * 0.2f), 0.01f) &&
-                               TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, 0.97f) == kTorqueFactorMost && Near(TorqueLift(1.0f, 1.0f, 1.0f, kStallRatio, 0.1f), kStallRatio, 0.001f) &&
+                               TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, 0.97f) == kTorqueFactorMost && kTorqueFactorMost == 6.0f &&
+                               Near(TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, 0.9f), 1.0f / (kGamePullFall * 0.1f), 0.01f) && TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, 1.0f) == 1.0f &&
+                               TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, 1.3f) == 1.0f && Near(TorqueLift(1.0f, 1.0f, 1.0f, kStallRatio, 0.1f), kStallRatio, 0.001f) &&
                                Near(TorqueLift(0.8f, 0.55f, 1.0f, 1.0f, 0.3f), 0.8f * 0.55f, 0.001f) && Near(TorqueLift(0.8f, 0.55f, 0.4f, 1.0f, 0.3f), 0.8f, 0.001f) &&
                                TorqueLift(0.0f, 1.0f, 1.0f, 1.0f, 0.5f) == kTorqueFactorLeast && TorqueLift(nanf(""), 1.0f, 1.0f, 1.0f, 0.5f) == 1.0f;
             TorqueHand hand = {};
@@ -1670,7 +1753,7 @@ int main(int argc, char **argv)
                                 Near(TorqueBlend(0.4f, 0.5f), 0.7f, 0.001f) && TorqueBlend(2.0f, 3.0f) == 2.0f;
             Check(lifts && followed && givenBack && over.write && Near(over.factor, 1.0f, 0.001f) && blends,
                   "powertrain: the torque factor lifts the game's curve by the engine's torque (the cold and the boost only where the pedal asks more) and the "
-                  "converter's ratio, at the most 3 times, as far as EngineShare hands it, stands on the "
+                  "converter's ratio, at the most 6 times and the game's own at the gear's top, as far as EngineShare hands it, stands on the "
                   "game's own share and follows it, and gives it back when it goes off and to the last truck");
         }
         // with the engine handed over, a truck automatic's schedule, on a scout's road gearbox with a crawling first
@@ -1723,7 +1806,7 @@ int main(int argc, char **argv)
             const int flooredLast = scoutPull(1.0f, 2.0f, flooredFirst, flooredMost, flooredLeast, flooredDowns);
             const int lightLast = scoutPull(0.3f, 1.0f, lightFirst, lightMost, lightLeast, lightDowns);
             const bool schedule = GearboxStartGear(sd) == 2 && GearboxStartGear(g) == 1 && flooredFirst == 2 && lightFirst == 2 && flooredLast == 6 &&
-                                  lightLast == 6 && flooredLeast > 0.88f && flooredMost < 0.97f && lightMost < 0.7f && flooredDowns == 0 && lightDowns == 0;
+                                  lightLast == 6 && flooredLeast > 0.9f && flooredMost < 0.99f && lightMost < 0.7f && flooredDowns == 0 && lightDowns == 0;
             // stuck at a standstill, floored: the second, the first after kStuckAfter, the second with the foot off
             GearboxModel stuckBox = {};
             stuckBox.running = true;
@@ -1744,14 +1827,15 @@ int main(int argc, char **argv)
             gameOwn.gear = 1;
             gameOwn.grip = 2.0f;
             GearboxStep(gameOwn, sd, dk, 1.0f, 1.0f, kDt);
-            // floored in the fourth at 0.87 of its top and gaining nothing (the drive of 11:51, EngineShare 50): the fifth
-            // pulls more there, and it shifts up; with all of the engine the fourth still pulls more
+            // floored in the fourth at 0.935 of its top and gaining nothing: at EngineShare 50 the fifth pulls more there, and
+            // it shifts up; with all of the engine the fourth still pulls more (with the factor up to 6 the two cross at
+            // 0.915 and 0.955; at 3 they crossed at 0.86 and 0.89, and the drive of 11:51 at EngineShare 50 shifted at 0.87)
             auto heldAt = [&](const EngineHand &hand) {
                 GearboxModel hb = {};
                 hb.running = true;
                 hb.gear = 4;
                 hb.grip = 2.0f;
-                scoutAt(0.87f * TruckGearTop(sd, 4));
+                scoutAt(0.935f * TruckGearTop(sd, 4));
                 hb.spin = hb.by = hb.rolling = sd.spin[0];
                 hb.pedal = hb.held = hb.feel = 1.0f;
                 hb.moving = kEngineGearHold; // in the gear a while
@@ -1759,8 +1843,8 @@ int main(int argc, char **argv)
                 return hb.gear;
             };
             const int heldHalf = heldAt(half), heldWhole = heldAt(whole);
-            // a kickdown at EngineShare 50 from the fifth: not into a fourth it would land in at 0.84 of its top, past
-            // its point up (0.86 or so) less kKickRoom, but into one it lands in at 0.7
+            // a kickdown at EngineShare 50 from the fifth: not into a fourth it would land in at 0.86 of its top, past
+            // its point up (0.915 or so) less kKickRoom, but into one it lands in at 0.7
             auto kickFrom5 = [&](float fourthShare) {
                 GearboxModel kb = {};
                 kb.running = true;
@@ -1772,7 +1856,7 @@ int main(int argc, char **argv)
                 for (float at = 0.0f; at < 0.3f; at += kDt) GearboxStep(kb, sd, dk, 1.0f, 1.0f, kDt, half);
                 return kb.gear;
             };
-            const int kickHigh = kickFrom5(0.84f), kickLow = kickFrom5(0.7f);
+            const int kickHigh = kickFrom5(0.86f), kickLow = kickFrom5(0.7f);
             // the start gear by the engine's Torque over the truck's mass: 195000 over 9007 kg the second, 100000 the first
             EngineHand strong = whole, weak = whole;
             strong.launch = 195000.0f / 9007.0f;
@@ -1836,8 +1920,8 @@ int main(int argc, char **argv)
                 }
                 last = qb.gear;
             }
-            const bool crossing = EngineUpShare(half, 43.0f / 27.0f) < EngineUpShare(whole, 43.0f / 27.0f) && EngineUpShare(half, 43.0f / 27.0f) < 0.87f &&
-                                  EngineUpShare(whole, 43.0f / 27.0f) > 0.88f;
+            const bool crossing = EngineUpShare(half, 43.0f / 27.0f) < EngineUpShare(whole, 43.0f / 27.0f) && EngineUpShare(half, 43.0f / 27.0f) < 0.93f &&
+                                  EngineUpShare(whole, 43.0f / 27.0f) > 0.94f;
             Check(schedule && stuckAtHalf == 2 && stuckAfter == 1 && stuckBox.gear == 2 && gameOwn.gear == 1 && crossing && heldHalf == 5 && heldWhole == 4 &&
                       kickHigh == 5 && kickLow == 4 && starts && weakStart.gear == 1 && climbs && quickLast == 5 && quickShortest >= kEngineGearHold - kDt && scoutLast == 5 && scoutShortest >= kEngineGearHoldScout - kDt &&
                       scoutShortest < kEngineGearHold - kDt,
@@ -1866,7 +1950,7 @@ int main(int argc, char **argv)
             const float upFifth = GearboxUpPoint(sd, tk, 3, 0.2f, diesel), upHalf = GearboxUpPoint(sd, tk, 3, 0.5f, diesel), upFull = GearboxUpPoint(sd, tk, 3, 1.0f, diesel);
             const float downFifth = GearboxDownPoint(sd, tk, 4, 0.2f, diesel);
             const float landFifth = upFifth * TruckGearTop(sd, 3) / TruckGearTop(sd, 4);
-            const bool lightPoints = Near(upFifth, 1560.0f, 1.0f) && upHalf > 2400.0f && upHalf < 2800.0f && upFull > 4000.0f && downFifth > 900.0f && downFifth < 1000.0f &&
+            const bool lightPoints = upFifth >= 1560.0f && upFifth < 1580.0f && upHalf > 2400.0f && upHalf < 2800.0f && upFull > 4000.0f && downFifth > 900.0f && downFifth < 1000.0f &&
                                      landFifth > downFifth * kShiftRoom && GearboxDownPoint(sd, tk, 1, 0.2f, diesel) == 0.0f;
             // and so through the gears at a fifth of the pedal, gaining slowly: each shift up near 1560 rpm, none taken back,
             // the converter locked after each one
@@ -1895,8 +1979,17 @@ int main(int argc, char **argv)
                 }
                 lightLastDiesel = lb.gear;
             }
-            Check(curves && lightPoints && lightLow > 1500.0f && lightHigh < 1800.0f && lightDownsDiesel == 0 && lightLastDiesel == 6 && unlockedAfter == 0,
-                  "automatic, the engine handed over: an engine's curve from its peak torque's speed; at a light foot up about as far along as the pedal "
+            // floored it shifts up by the engine's power at the wheels (the pull, the torque times the speed): a curve whose
+            // power falls before the red zone (from 1 at 0.6 to 0.4 at the red zone) shifts up sooner than a flat one; the
+            // diesel's from its peak (0.8 at the red zone) still gains power up to it, and shifts with the flat one, near the top
+            EngineHand fading = whole, flat = whole, dieselFloored = whole;
+            static const TorqueCurve flatCurve = { 2, { 0.2f, 1.0f }, { 1.0f, 1.0f } }, fallingCurve = { 3, { 0.2f, 0.6f, 1.0f }, { 1.0f, 1.0f, 0.4f } };
+            fading.curve = &fallingCurve;
+            flat.curve = &flatCurve;
+            dieselFloored.curve = &td;
+            const bool fades = EngineUpShare(fading, 1.3f) < 0.9f && EngineUpShare(flat, 1.3f) > 0.93f && fabsf(EngineUpShare(dieselFloored, 1.3f) - EngineUpShare(flat, 1.3f)) < 0.02f;
+            Check(curves && fades && lightPoints && lightLow > 1500.0f && lightHigh < 1800.0f && lightDownsDiesel == 0 && lightLastDiesel == 6 && unlockedAfter == 0,
+                  "automatic, the engine handed over: an engine's curve from its peak torque's speed, floored one whose power falls before the red zone shifting up sooner than a flat one; at a light foot up about as far along as the pedal "
                   "is down, not under 0.8 of the peak's speed (a fifth of the pedal: 1560 rpm), down where the gear below comes in clear of its point up, "
                   "through the gears without a shift taken back, the converter locked");
             // a climb the second gear cannot take (the tester's drive of 22:02: gears' tops 9, 17, 21 and 29 rad/s, the
