@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.15.10]
+
+- Floored, with the engine handed over, the mod's automatic shifts up where the next gear pulls more, or on the limiter where none does. The cap at 0.95 of the way from idle to the red zone is gone: it came before the fade toward a gear's top was worked out, and with the torque factor's roof at 6 it sat just over where the next gear pulls more anyway (a tester's ZIL-131: 3024 to 3056 rpm against the cap's 3072), so shifts hardly move.
+- An engine's own `FullPull`, the tab's "Full pull up to" in its Engine section: how far toward a gear's top it keeps all its torque floored before it fades out, 92 to 98 percent (92, the roof of 6, for every engine at first). The torque factor's roof follows (about 10 times the game's own at 95, 24 at 98), and floored the automatic shifts up later with it. A tester's ZIL-131 shifted at about 3000 rpm of its 3200 red zone; a petrol engine that makes its power up to its red zone can now keep its pull there.
+
 ## [0.15.9]
 
 - Driven with the keyboard (`Input`, "Driven with" on the tab), a lift shifts up only once the key has been let go for 2 seconds, and a lift's shift up that the next press or the brake takes back within 6 seconds stops lifts shifting up for 10 seconds, twice as long each time again, up to a minute. A tester's keyboard drive on 0.15.8 had 19 of 23 lift upshifts go straight back down, most within 4 seconds: a key tapped to hold the speed (376 of 412 lifts were under a second) shifted up at a lift and down at the next tap, the fourth and the fifth of a ZIL-131 swapping. A wheel's pedals and a pad shift as in 0.15.8. A test taps the key the same way, and lifts a wheel's pedal.

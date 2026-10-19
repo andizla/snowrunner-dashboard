@@ -202,6 +202,7 @@ static void OnSettingsTab(reshade::api::effect_runtime *)
     if (act & kPageGearHold) GearHoldSet(st.gearHold);
     if (act & kPageEngineSet) EngineProfileSet(st.enginePeak, st.engineAspiration);
     if (act & kPageEngineDrop) EngineProfileDrop();
+    if (act & kPageEngineFull) EngineFullPullSet(st.engineFullPull);
     if (act & kPageDefaults) SettingsReset();
     if (act & kPageReload) SettingsReload();
     if (act & kPageHearHigh) SoundHear(kTurboHigh);

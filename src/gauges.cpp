@@ -53,6 +53,7 @@ static volatile LONG g_pullTestAsked = 0; // 1 arm the pull test, 2 cancel it
 static volatile LONG g_mapAmbientAsked = 0, g_mapAmbientTenths = 0; // the tab set the map's outside temperature, in tenths of a degree C
 static volatile LONG g_gearHoldAsked = 0, g_gearHoldTenths = 0;     // the tab set the driven gearbox's hold, in tenths of a second
 static volatile LONG g_engineAsked = 0, g_enginePeak = 0, g_engineAspiration = 0; // the tab set (1) or dropped (2) the driven engine's profile: the peak torque's rpm, the aspiration
+static volatile LONG g_engineFullAsked = 0, g_engineFullPercent = 0; // the tab set the driven engine's full pull, in percent of a gear's top
 
 // What the cluster shows, written by the mod's thread and read by the render thread.
 static SRWLOCK g_viewLock = SRWLOCK_INIT;
@@ -583,6 +584,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; EngineShare: how much of the mod's engine the game gets, 0 to 100 percent (50: half way between the two).\n"
                         L"; Gauges\\gearboxes\\<name>.ini GearHold: seconds a gearbox holds each gear going up with Powertrain=1, 1 to 3 (the tab).\n"
                         L"; Gauges\\engines\\<name>.ini: PeakTorqueRpm, Aspiration (0 turbo, 1 naturally aspirated), TorqueCurve (the tab's Engine).\n"
+                        L";   FullPull: how far toward a gear's top, 92 to 98 percent, the engine keeps its full pull floored (92 when not set).\n"
                         L"; For work on the mod: Demo=1 draws demo values whenever no truck is driven, Probe=1 logs the values read from the game.\n");
             fclose(f);
             WriteIni(s);
@@ -701,6 +703,12 @@ void EngineProfileSet(float peakRpm, int aspiration)
 
 void EngineProfileDrop() { InterlockedExchange(&g_engineAsked, 2); }
 
+void EngineFullPullSet(float share)
+{
+    InterlockedExchange(&g_engineFullPercent, (LONG)lroundf(share * 100.0f));
+    InterlockedExchange(&g_engineFullAsked, 1);
+}
+
 void GearHoldSet(float seconds)
 {
     InterlockedExchange(&g_gearHoldTenths, (LONG)lroundf(seconds * 10.0f));
@@ -735,10 +743,12 @@ static void GearHoldWrite(const char *key, float hold)
 // PeakTorqueRpm: the engine speed of its peak torque (100 to 20000 rpm), the curve built around it (EngineCurveFromPeak);
 // Aspiration: 0 turbo, 1 naturally aspirated (no boost, no turbo sounds, no boost dial); TorqueCurve: a whole curve of
 // its own, "x:y,x:y,..." with x the engine speed over the red zone's and y the torque over its most, in place of the
-// one from the peak. The key is the engine's name in the game's files (EngineRecord::name).
+// one from the peak; FullPull: how far toward a gear's top, in percent (92 to 98, kFullPullRange), it keeps its full
+// pull floored before the fade, the torque factor's roof following (TorqueFactorMostOf). The key is the engine's name
+// in the game's files (EngineRecord::name).
 static const float kPeakRpmRange[2] = { 100.0f, 20000.0f };
 
-// The engine's profile, into p; false where its file holds none of the three.
+// The engine's profile, into p; false where its file holds none of them.
 static bool EngineProfileRead(const char *name, EngineProfile &p)
 {
     p = EngineProfile{};
@@ -768,6 +778,12 @@ static bool EngineProfileRead(const char *name, EngineProfile &p)
         p.custom = TorqueCurveParse(text, p.curve);
         p.own = true;
     }
+    if (GetPrivateProfileStringW(section, L"FullPull", L"", buf, 256, file.c_str()) > 0)
+    {
+        const float v = (float)_wtof(buf);
+        p.fullPull = isfinite(v) && v > 0.0f ? SettingsRange(v / 100.0f, kFullPullRange[0], kFullPullRange[1]) : 0.0f;
+        p.own = true;
+    }
     return p.own;
 }
 
@@ -778,6 +794,14 @@ static void EngineProfileWrite(const char *name, float peakRpm, int aspiration)
     SetupBegin(kSetupEngine, Wide(name));
     IniPutFloat(kSetupSections[kSetupEngine], L"PeakTorqueRpm", roundf(SettingsRange(peakRpm, kPeakRpmRange[0], kPeakRpmRange[1])), file);
     IniPutInt(kSetupSections[kSetupEngine], L"Aspiration", aspiration >= 0 && aspiration < kAspCount ? aspiration : kAspTurbo, file);
+}
+
+// The tab's slider into the engine's file: how far toward a gear's top it keeps its full pull, in percent.
+static void EngineFullPullWrite(const char *name, int percent)
+{
+    const std::wstring file = SetupFile(kSetupEngine, name);
+    SetupBegin(kSetupEngine, Wide(name));
+    IniPutInt(kSetupSections[kSetupEngine], L"FullPull", (int)lroundf(SettingsRange((float)percent, kFullPullRange[0] * 100.0f, kFullPullRange[1] * 100.0f)), file);
 }
 
 // ---- a truck's own scales: its file Gauges\trucks\<kind>.ini ----
@@ -1543,6 +1567,8 @@ static void EngineLook(TruckWatch &w, const TruckMemory &m, ULONGLONG now, bool 
                 w.profile.aspiration == kAspNatural ? L", naturally aspirated" : L", turbocharged");
         else Log(L"engine: %S has no profile of its own: the class's torque curve, turbocharged", e.name);
         if (w.profile.peakRpm > 0.0f) Log(L"engine: its peak torque at %.0f rpm", w.profile.peakRpm);
+        if (w.profile.fullPull > 0.0f)
+            Log(L"engine: its full pull floored to %.0f percent of a gear's top, the torque factor up to %.1f", w.profile.fullPull * 100.0f, TorqueFactorMostOf(w.profile.fullPull));
     }
     w.engineAt = now + 5000;
 }
@@ -1735,7 +1761,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             // game's own pull
             const float launch = w.engine.torque > 0.0f && w.mass > 0.0f && w.engineVehicle == w.refs.vehicle ? w.engine.torque / w.mass : 0.0f;
             const EngineHand hand{ w.hand.on, &curve, scale.redline > 0.0f ? scale.max / scale.redline : 1.0f, s.engineShare / 100.0f, launch,
-                                   GearHoldOf(w, autoClass), kLightPeak * CurvePeak(curve) * scale.redline, s.input };
+                                   GearHoldOf(w, autoClass), kLightPeak * CurvePeak(curve) * scale.redline, s.input,
+                                   TorqueFactorMostOf(w.profile.fullPull) };
             const int huntsWere = w.gearbox.hunts;
             GearboxStep(w.gearbox, raw, scale, foot, w.power.power, dt, hand);
             if (w.gearbox.hunts != huntsWere)
@@ -1813,7 +1840,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             const bool handWas = w.hand.on;
             const float gameWas = w.hand.game;
             TorqueGive(m, w.refs, true, TorqueHandStep(w.hand, want, w.refs.action, w.refs.vehicle, raw.torqueFactor,
-                                                 TorqueBlend(TorqueLift(w.power.curve, w.power.cold * w.power.boost, TruckPedal(raw), ratio, x), s.engineShare / 100.0f)));
+                                                 TorqueBlend(TorqueLift(w.power.curve, w.power.cold * w.power.boost, TruckPedal(raw), ratio, x,
+                                                                                  TorqueFactorMostOf(w.profile.fullPull)), s.engineShare / 100.0f)));
             if (w.hand.on != handWas)
                 Log(w.hand.on ? L"powertrain: the engine's torque handed to the game, the game's own torque factor %.3f" : L"powertrain: the game's own torque factor %.3f given back",
                     w.hand.on ? w.hand.game : gameWas);
@@ -2052,6 +2080,7 @@ static DWORD WINAPI Run(void *)
     ULONGLONG mapAmbientLogAt = 0; // when to log the temperature the tab set, once the slider has rested
     ULONGLONG gearHoldLogAt = 0;   // and the gearbox's hold
     ULONGLONG engineLogAt = 0;     // and the engine's profile
+    ULONGLONG fullPullLogAt = 0;   // and the engine's full pull
     std::wstring savePath, saveUnread; // the save read last, and one found that named no map (said once)
     FILETIME saveWritten = {};
     ULONGLONG saveLookAt = 0;
@@ -2237,6 +2266,19 @@ static DWORD WINAPI Run(void *)
             }
             EngineProfileRead(watch.profileFor, watch.profile);
         }
+        // the engine's full pull from the tab's slider: into its file, in force at once
+        if (InterlockedExchange(&g_engineFullAsked, 0) && watch.profileFor[0])
+        {
+            EngineFullPullWrite(watch.profileFor, (int)g_engineFullPercent);
+            EngineProfileRead(watch.profileFor, watch.profile);
+            fullPullLogAt = GetTickCount64() + 1000;
+        }
+        if (fullPullLogAt && GetTickCount64() >= fullPullLogAt)
+        {
+            Log(L"engine: %S set from the tab: its full pull floored to %.0f percent of a gear's top, the torque factor up to %.1f (Gauges\\engines\\%s.ini)",
+                watch.profileFor, watch.profile.fullPull * 100.0f, TorqueFactorMostOf(watch.profile.fullPull), SetupFileName(Wide(watch.profileFor)).c_str());
+            fullPullLogAt = 0;
+        }
         if (engineLogAt && GetTickCount64() >= engineLogAt)
         {
             Log(L"engine: %S set from the tab: its peak torque at %.0f rpm, %s (Gauges\\engines\\%s.ini)", watch.profileFor, watch.profile.peakRpm,
@@ -2379,6 +2421,7 @@ static DWORD WINAPI Run(void *)
             v.engineOwn = watch.profile.own;
             v.engineCustom = watch.profile.custom;
             v.engineAspiration = watch.profile.aspiration;
+            v.engineFullPull = watch.profile.fullPull > 0.0f ? watch.profile.fullPull : kFullPullRange[0];
             v.enginePeakRpm = watch.profile.peakRpm > 0.0f && !watch.profile.custom ? watch.profile.peakRpm : CurvePeak(ec) * es.redline;
             v.engineIdle = es.idle;
             v.engineRedline = es.redline;
@@ -2631,7 +2674,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 74, "ini: the help text survives a write (74 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 75, "ini: the help text survives a write (75 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());
@@ -2863,6 +2906,20 @@ int wmain(int argc, wchar_t **argv)
         Check(noProfile && profileBack && fabsf(CurvePeak(fromPeak) - 1950.0f / 4850.0f) < 0.001f && profile.custom && own.n == 3 && own.x[1] == 0.5f &&
                   profile.aspiration == kAspTurbo && wildEngine.peakRpm == kPeakRpmRange[1],
               "setups: an engine's profile in its own file, read back; its curve from its peak torque's speed, or its own written one; out of range held");
+        // its full pull: into its file and back, held to 92 to 98 percent, the roof following; none set, the roof of 6
+        const bool fullNone = wildEngine.fullPull == 0.0f && TorqueFactorMostOf(wildEngine.fullPull) == kTorqueFactorMost;
+        EngineFullPullWrite(engineName, 97);
+        EngineProfile fullEngine;
+        EngineProfileRead(engineName, fullEngine);
+        const bool fullBack = fabsf(fullEngine.fullPull - 0.97f) < 0.001f && fabsf(TorqueFactorMostOf(fullEngine.fullPull) - 1.0f / (kGamePullFall * 0.03f)) < 0.01f &&
+                              fullEngine.custom;
+        WritePrivateProfileStringW(L"Engine", L"FullPull", L"120", SetupFile(kSetupEngine, engineName).c_str());
+        EngineProfileRead(engineName, fullEngine);
+        const bool fullHigh = fullEngine.fullPull == kFullPullRange[1];
+        WritePrivateProfileStringW(L"Engine", L"FullPull", L"50", SetupFile(kSetupEngine, engineName).c_str());
+        EngineProfileRead(engineName, fullEngine);
+        Check(fullNone && fullBack && fullHigh && fullEngine.fullPull == kFullPullRange[0] && TorqueFactorMostOf(fullEngine.fullPull) == kTorqueFactorMost,
+              "setups: an engine's full pull in its file, read back and held to 92 to 98 percent, the torque factor's roof following (6 at 92, 6 when none)");
         DeleteFileW(SetupFile(kSetupEngine, engineName).c_str());
         // the sections of 0.13.9 and before moved out of Gauges.ini into the files, a key the file holds already kept
         DeleteFileW(truckFile("mover/123").c_str());

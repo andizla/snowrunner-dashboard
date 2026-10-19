@@ -1558,6 +1558,41 @@ int main(int argc, char **argv)
                   "automatic, keys: taps of the key to hold the speed keep the gear; a lift of 2 s shifts up, the next tap takes it back and lifts "
                   "shift nothing up for 10 s, then 20; a wheel's pedal lifted shifts up as before");
         }
+        // an engine's own full pull (FullPull, 2026-10-19): the roof 1 over the game's fall there, 6 at 0.92 and when none
+        // is set; floored, the point up goes where the next gear pulls more, so it follows (a tester's ZIL-131 with its own
+        // profile, a naturally aspirated peak at 1800 of a 3200 red zone: 3024 to 3056 rpm at the roof of 6, under the old
+        // cap's 3072; about 3150 at 0.97, the limiter's 3149)
+        {
+            TruckRaw z = g;
+            static const float zilSpeeds[7] = { 0.7f, 1.0f, 2.2f, 4.0f, 7.5f, 9.0f, 7.0f };
+            z.gearSpeeds = 7;
+            memcpy(z.gearSpeed, zilSpeeds, sizeof zilSpeeds);
+            GaugeScale zk = k;
+            zk.idle = 650.0f;
+            zk.redline = 3200.0f;
+            zk.max = 3400.0f;
+            const TorqueCurve zil = EngineCurveFromPeak(1800.0f / zk.redline, true);
+            EngineHand six{ true, &zil, zk.max / zk.redline, 1.0f };
+            EngineHand full = six;
+            full.most = TorqueFactorMostOf(0.97f);
+            float sixLow = 1e9f, sixHigh = 0.0f, fullLow = 1e9f;
+            for (int gear = 1; gear < 5; gear++)
+            {
+                const float at6 = GearboxUpPoint(z, zk, gear, 1.0f, six), atFull = GearboxUpPoint(z, zk, gear, 1.0f, full);
+                sixLow = fminf(sixLow, at6);
+                sixHigh = fmaxf(sixHigh, at6);
+                fullLow = fminf(fullLow, atFull);
+            }
+            const bool roofs = TorqueFactorMostOf(0.0f) == kTorqueFactorMost && TorqueFactorMostOf(0.92f) == kTorqueFactorMost &&
+                               Near(TorqueFactorMostOf(0.95f), 1.0f / (kGamePullFall * 0.05f), 0.01f) && Near(TorqueFactorMostOf(0.98f), 1.0f / (kGamePullFall * 0.02f), 0.01f) &&
+                               TorqueFactorMostOf(1.5f) == TorqueFactorMostOf(0.98f) &&
+                               Near(TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, 0.97f, TorqueFactorMostOf(0.98f)), 1.0f / (kGamePullFall * 0.03f), 0.01f);
+            printf("    full pull: the ZIL's floored points up %.0f to %.0f rpm at the roof of 6, from %.0f at 0.97 (the limiter %.0f)\n", sixLow, sixHigh, fullLow,
+                   GearboxPoint(zk, kEngineLimit));
+            Check(roofs && sixLow > 3000.0f && sixHigh < GearboxPoint(zk, kEngineUpFloored) && fullLow > sixHigh + 60.0f,
+                  "powertrain: an engine's own full pull lifts the torque factor's roof to 1 over the game's fall there (6 at 92 percent and when none "
+                  "is set); floored the automatic's point up follows it, a ZIL-131's from about 3040 to about 3150 rpm");
+        }
         // cruising, as a car's nine-speed automatic did on the road (2026-10-19): a light foot held steady shifts up as
         // soon as the next gear lands over kLightPeak of the peak torque's speed and kShiftRoom over its point down, short
         // of the light point up; not while gaining, nor at a heavier foot

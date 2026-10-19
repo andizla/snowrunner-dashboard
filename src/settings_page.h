@@ -16,11 +16,12 @@ struct PageState
     float gearHold = 0.0f;        // the seconds the slider set for the driven truck's gearbox (kPageGearHold)
     float enginePeak = 0.0f;      // the driven truck's engine's profile as the Engine section set it (kPageEngineSet)
     int engineAspiration = 0;
+    float engineFullPull = 0.0f;  // and the share of a gear's top its full pull reaches, as the slider set it (kPageEngineFull)
 };
 static const unsigned long long kPageCaptureMs = 8000;
 enum { kPageChanged = 1, kPageReload = 2, kPageTruckDrop = 4, kPageDefaults = 8, kPageHearHigh = 16, kPageHearMid = 32, kPageHearLow = 64, kPageHearOil = 128,
        kPagePullTest = 256, kPagePullCancel = 512, kPageMapAmbient = 1024, kPageGearHold = 2048, kPageEngineSet = 4096,
-       kPageEngineDrop = 8192 };
+       kPageEngineDrop = 8192, kPageEngineFull = 16384 };
 
 // The Dear ImGui key as a virtual key, for the keys the toggle key can be; 0 for others.
 static int PageVirtualKey(int k)
@@ -456,6 +457,21 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         ImGui::SetNextItemWidth(w);
         if (ImGui::Combo("##aspiration", &aspiration, aspirations, kAspCount)) set = true;
         PageTip("Naturally aspirated: no boost, so no boost dial and no turbo sounds, and all of the torque at once with the pedal.");
+        // how far toward a gear's top the engine keeps its full pull, shown in rpm on these scales, kept in percent
+        float pullRpm = SettingsRange(view.engineFullPull, kFullPullRange[0], kFullPullRange[1]) * view.engineRedline;
+        PageLabel("Full pull up to", labelX);
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::SliderFloat("##fullpull", &pullRpm, kFullPullRange[0] * view.engineRedline, kFullPullRange[1] * view.engineRedline, "%.0f rpm", ImGuiSliderFlags_AlwaysClamp) &&
+            view.engineRedline > 0.0f)
+        {
+            st.engineFullPull = floorf(pullRpm / view.engineRedline * 100.0f + 0.5f) / 100.0f;
+            act |= kPageEngineFull;
+        }
+        PageTip("With the engine handed to the game: how close to the red zone the engine keeps all its torque floored, before it fades out "
+                "toward the top of each gear as a governor cuts the fuel. 92 percent of the red zone is every engine's at first and suits a "
+                "diesel; a petrol engine that makes its power up to its red zone can keep it to 96 to 98. Floored, the mod's automatic shifts "
+                "up where the next gear pulls more, so it revs further too. Near a gear's top the mod writes a large torque factor for it "
+                "(10 times the game's own at 95, 24 at 98): lower it where a truck surges at the top of a gear.");
         if (set)
         {
             st.enginePeak = floorf(peak / 50.0f + 0.5f) * 50.0f;
