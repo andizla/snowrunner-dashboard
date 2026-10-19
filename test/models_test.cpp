@@ -1500,6 +1500,64 @@ int main(int argc, char **argv)
             Check(lockedBefore && opened && tip.locked && tip.gear == 3 && tip.shifts == 0,
                   "automatic: a lift opens the converter's lockup for a second, the engine coasting under the gearbox's input, then it locks again");
         }
+        // keys tapped to hold the speed (a tester's ZIL-131 on 0.15.8, 2026-10-19: the fourth's and the fifth's tops 20
+        // and 23 rad/s, 650 to 3200 rpm, the key held a fraction of a second at a time, 0.15.8 swapping the two at the
+        // taps): the taps keep the gear, as a lift shifts up only once the foot has been off kLiftAfter; a lift that lasts
+        // shifts up, and the next tap taking it back keeps lifts from shifting up kLiftBlock, twice as long the next time
+        {
+            TruckRaw z = g;
+            static const float zilSpeeds[7] = { 0.7f, 1.0f, 2.2f, 4.0f, 7.5f, 9.0f, 7.0f };
+            z.gearSpeeds = 7;
+            memcpy(z.gearSpeed, zilSpeeds, sizeof zilSpeeds);
+            z.speed = 0.0f;
+            const float zs = 0.8f * TruckGearTop(z, 4);
+            for (int i = 0; i < z.wheels; i++) z.spin[i] = zs;
+            GaugeScale zk = k;
+            zk.idle = 650.0f;
+            zk.redline = 3200.0f;
+            zk.max = 3400.0f;
+            EngineHand zh{ true, &kClassCurves[kClassTruck], 3400.0f / 3200.0f, 1.0f };
+            zh.least = kLightPeak * 1800.0f;
+            zh.input = kInputKeys;
+            GearboxModel zb = {};
+            zb.running = true;
+            zb.gear = 4;
+            zb.pedal = zb.held = zb.feel = 1.0f;
+            zb.spin = zb.by = zb.rolling = zs;
+            // the key held on seconds and let go off seconds by turns
+            auto keyed = [&](float seconds, float on, float off) {
+                for (float at = 0.0f; at < seconds; at += kDt) GearboxStep(zb, z, zk, fmodf(at, on + off) < on ? 1.0f : 0.0f, 1.0f, kDt, zh);
+            };
+            keyed(30.0f, 0.3f, 0.7f);
+            const int tapShifts = zb.shifts;
+            keyed(4.0f, 0.0f, 1.0f);
+            const int liftedTo = zb.gear;
+            keyed(1.0f, 1.0f, 0.0f);
+            const int tappedTo = zb.gear;
+            const float block = zb.liftBlock;
+            keyed(4.0f, 0.0f, 1.0f);
+            const int blockedIn = zb.gear;
+            keyed(10.0f, 0.0f, 1.0f);
+            const int afterBlock = zb.gear;
+            keyed(1.0f, 1.0f, 0.0f);
+            // the same taps on a wheel's pedals: as 0.15.8, a lift shifts up at once (only keys wait)
+            GearboxModel wb = {};
+            wb.running = true;
+            wb.gear = 4;
+            wb.pedal = wb.held = wb.feel = 1.0f;
+            wb.spin = wb.by = wb.rolling = zs;
+            EngineHand wheel = zh;
+            wheel.input = kInputWheel;
+            for (float at = 0.0f; at < 1.0f; at += kDt) GearboxStep(wb, z, zk, at < 0.3f ? 1.0f : 0.0f, 1.0f, kDt, wheel);
+            const int wheelLifted = wb.gear;
+            printf("    keys: %d shifts in 30 s of taps; a lift to %d, a tap to %d, blocked %.1f s, in %d after 4 s, %d after 14 s; then %d, the next block %.0f s; "
+                   "a wheel's pedal lifted 0.7 s: in %d\n",
+                   tapShifts, liftedTo, tappedTo, block, blockedIn, afterBlock, zb.gear, zb.liftBlockWait, wheelLifted);
+            Check(tapShifts == 0 && liftedTo == 5 && tappedTo == 4 && Near(block, kLiftBlock, 0.6f) && blockedIn == 4 && afterBlock == 5 && zb.gear == 4 &&
+                      Near(zb.liftBlockWait, 2.0f * kLiftBlock, 0.001f) && wheelLifted == 5,
+                  "automatic, keys: taps of the key to hold the speed keep the gear; a lift of 2 s shifts up, the next tap takes it back and lifts "
+                  "shift nothing up for 10 s, then 20; a wheel's pedal lifted shifts up as before");
+        }
         // cruising, as a car's nine-speed automatic did on the road (2026-10-19): a light foot held steady shifts up as
         // soon as the next gear lands over kLightPeak of the peak torque's speed and kShiftRoom over its point down, short
         // of the light point up; not while gaining, nor at a heavier foot

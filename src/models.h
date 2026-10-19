@@ -1093,6 +1093,8 @@ static const float kCruisePedal = 0.5f;      // a pedal at or under this is a li
 static const float kCruiseSteady = 0.02f;    // the truck's speed changing by no more than this share of itself each second is steady
 static const float kCruiseAfter = 2.0f;      // seconds a light foot has to be held steady before it cruises
 static const float kLiftSlowing = 0.04f;     // with the foot off, slowing by more than this share each second is no lift to shift up for
+static const float kLiftAfter = 2.0f;        // driven with keys, seconds the key has to be let go before a lift shifts up: a key tapped to hold the speed is no lift (a tester's keyboard drive on 0.15.8: 376 of 412 lifts under a second, and 19 of 23 lift upshifts taken straight back by the next tap)
+static const float kLiftBlock = 10.0f, kLiftBlockMost = 60.0f; // and with keys a lift's shift up taken back within kHuntWindow keeps lifts from shifting up this long, twice as long each time again, up to kLiftBlockMost
 static const float kLiftOpen = 1.0f;         // seconds a lift opens the converter's lockup, as a road automatic does at a tip-out
 static const float kCoastSlip = 0.05f;       // and the engine coasts this much under the gearbox's input meanwhile
 // The game's pull: the share of the engine's torque the game gives the wheels with them at x of the gear's top speed
@@ -1153,6 +1155,11 @@ struct GearboxModel
     float cruise;      // seconds a light foot has been held steady (kCruiseAfter)
     float liftOpen;    // seconds the lockup stays open after a lift (kLiftOpen)
     bool footWasOff;   // the foot was off on the last step
+    float liftFor;     // seconds the foot has been off (kLiftAfter)
+    float liftUpFor;   // seconds a lift's shift up is still watched (kHuntWindow); 0 for none
+    int liftUpFrom;    // the gear that shift up came from
+    float liftBlock;   // seconds lifts still shift nothing up (kLiftBlock)
+    float liftBlockWait; // seconds the last block lasted: the next is twice as long, up to kLiftBlockMost; 0 after a lift's shift up that held
 };
 
 // The hunt guard let go: a lift of the foot, a stop, a kickdown, or the gears taken anew.
@@ -1429,7 +1436,7 @@ inline float GearboxDownPoint(const TruckRaw &t, const GaugeScale &k, int gear, 
 // the engine near the red zone at the speed the wheels turn. The shift points go by a pedal that falls slowly after a
 // lift, so a foot floored and lifted by turns does not shift up at each lift: at a light foot between idle and the red
 // zone, floored where the next gear or the one below pulls more in the game (GamePull), which gives the most with the
-// wheels at half the gear's top. With the foot off it never shifts up short of the red zone, and shifts down early,
+// wheels at half the gear's top. With the foot off it shifts up only on a lift at speed, and shifts down early,
 // gears at a time when the truck slows hard. With the engine handed to the game (Powertrain=1, engine) the points are
 // a truck automatic's schedule (kLightPeak and the rest): floored it revs to the red zone, at a light foot it
 // shifts early, down well under where the gear above lands, one gear up at a time and a second in each but on the
@@ -1439,7 +1446,8 @@ inline float GearboxDownPoint(const TruckRaw &t, const GaugeScale &k, int gear, 
 // back within kHuntWindow, keeps the gear below kHuntKeep and longer, so it does not hunt. A push of the pedal from
 // part throttle (kKickFrom or more for kKickArm) past kKickdown kicks down at once to the gear that pulls the most; a
 // press from the foot off does not. By the input in use (hand.input): a pad's trigger kicks down only from under
-// kKickPadFrom, and keys kick nothing down and shift as floored whenever one is held.
+// kKickPadFrom, and keys kick nothing down, shift as floored whenever one is held, and shift up at a lift only once
+// it has lasted kLiftAfter, and none for kLiftBlock after such a shift up was taken back (a key tapped to hold the speed).
 inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k, float pedal, float power, float dt, const EngineHand &hand = EngineHand{})
 {
     const bool engine = hand.on;
@@ -1510,6 +1518,7 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     m.rolling = rolling;
     // where it would shift at this pedal, at floored's while climbing
     const bool footOff = p < kFootOff;
+    m.liftFor = footOff ? m.liftFor + dt : 0.0f;
     m.labour = p >= kClimbPedal && m.trend < -kLabouring ? m.labour + dt : 0.0f;
     const bool labouring = m.labour >= kLabourAfter;
     if (labouring) m.climb = kClimbHold;
@@ -1537,6 +1546,7 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     // what a gear pulls in the game at this speed, against the others
     auto pulls = [&](int gear) { return GearPull(GearboxInput(t, k, gear, by) / k.redline); };
     int to = m.gear;
+    bool liftUp = false; // with keys, a lift's shift up (lifted, not cruising)
     // the room a shift up leaves over the next gear's point down: kShiftRoom at a light foot, and with the game's own
     // engine none floored, where the points lie where one gear pulls kShiftPullGain more than the other, either way
     const float room = engine ? kShiftRoom : kShiftRoom + (1.0f - kShiftRoom) * feel;
@@ -1576,15 +1586,17 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     auto kickable = [&](int gear) {
         return GearboxInput(t, k, gear, by) < fminf(GearboxPoint(k, kEngineKickTo), GearboxUpPoint(t, k, gear, 1.0f, hand) * kKickRoom);
     };
-    // cruising: a light foot held steady kCruiseAfter, no climb. A lift at speed: the foot off, no brake, the truck
-    // neither gaining (downhill: the engine brakes it) nor slowing hard (mud, a climb). Either shifts up one gear where
+    // cruising: a light foot held steady kCruiseAfter, no climb. A lift at speed: the foot off (with keys for kLiftAfter,
+    // and lifts not blocked, kLiftBlock: a key tapped to hold the speed is no lift), no brake, the truck neither gaining
+    // (downhill: the engine brakes it) nor slowing hard (mud, a climb). Either shifts up one gear where
     // the next lands over the floor: kLightPeak of the peak torque's speed (hand.least), and kShiftRoom over the next
     // gear's point down, with the foot off the coast point
     const float pace1 = fmaxf(m.by, 1.0f);
     const bool even = fabsf(m.trend) <= kCruiseSteady * pace1;
     m.cruise = !footOff && p <= kCruisePedal && m.feel <= kCruisePedal && even && !labouring && m.climb <= 0.0f ? m.cruise + dt : 0.0f;
     const bool cruising = m.cruise >= kCruiseAfter;
-    const bool lifted = footOff && !braking && m.trend <= kCruiseSteady * pace1 && m.trend >= -kLiftSlowing * pace1;
+    const bool keys = hand.input == kInputKeys;
+    const bool lifted = footOff && (!keys || (m.liftFor >= kLiftAfter && m.liftBlock <= 0.0f)) && !braking && m.trend <= kCruiseSteady * pace1 && m.trend >= -kLiftSlowing * pace1;
     auto easyUp = [&](int gear) {
         if (gear >= top || !(cruising || lifted)) return false;
         const float next = GearboxInput(t, k, gear + 1, footOff ? by : byUp);
@@ -1620,6 +1632,14 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     }
     if (m.keepFor > 0.0f) m.keepFor -= dt;
     if (footOff || standing) GearboxHuntClear(m);
+    // with keys a lift's shift up is watched kHuntWindow too: one that held past it lets the block's wait go; a stop ends both
+    if (m.liftBlock > 0.0f) m.liftBlock -= dt;
+    if (m.liftUpFor > 0.0f)
+    {
+        m.liftUpFor -= dt;
+        if (m.liftUpFor <= 0.0f) m.liftBlockWait = 0.0f;
+    }
+    if (standing) m.liftUpFor = m.liftBlock = m.liftBlockWait = 0.0f;
     const bool kept = engine && m.keepFor > 0.0f && m.gear >= m.keep;
     const bool overRed = GearboxInput(t, k, m.gear, fmaxf(by, byUp)) >= (k.redline + fmaxf(k.max, k.redline)) * 0.5f;
     if (m.gear != least && standing)
@@ -1639,7 +1659,10 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
         to = upTo(m.gear); // past the red zone or what the engine can take: up at once, whatever the pause
     else if (!held && !kept && m.pause <= (m.upLast && !engine ? kShiftPause - kShiftAgain : 0.0f) &&
              m.wanted >= kShiftUpAfter + (kShiftUpAfterFloored - kShiftUpAfter) * feel)
+    {
         to = pedalUp ? upTo(m.gear) : m.gear + 1; // cruising or lifted: one gear
+        liftUp = keys && !pedalUp && footOff;
+    }
     else if (m.pause <= 0.0f && footOff && m.wanted <= -kCoastDownAfter)
     {
         // coasting down: as far as the engine stays under coastTo, gears at a time when the truck slows hard
@@ -1650,6 +1673,19 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
         to = downTo(m.gear);
     if (to != m.gear)
     {
+        // with keys a lift's shift up is watched kHuntWindow: taken back down in that time (the key pressed again, the
+        // brake), lifts shift nothing up kLiftBlock, twice as long each time again
+        if (liftUp)
+        {
+            m.liftUpFor = kHuntWindow;
+            m.liftUpFrom = m.gear;
+        }
+        else if (to < m.gear && m.liftUpFor > 0.0f && to <= m.liftUpFrom)
+        {
+            m.liftBlockWait = m.liftBlockWait > 0.0f ? fminf(m.liftBlockWait * 2.0f, kLiftBlockMost) : kLiftBlock;
+            m.liftBlock = m.liftBlockWait;
+            m.liftUpFor = 0.0f;
+        }
         // the hunt guard: a shift up with the foot on is watched for kHuntWindow; taken back down with the foot on in
         // that time, the gear it left is kept (or the one it comes down to, where that is higher)
         if (engine && to > m.gear && !footOff)

@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.15.9]
+
+- Driven with the keyboard (`Input`, "Driven with" on the tab), a lift shifts up only once the key has been let go for 2 seconds, and a lift's shift up that the next press or the brake takes back within 6 seconds stops lifts shifting up for 10 seconds, twice as long each time again, up to a minute. A tester's keyboard drive on 0.15.8 had 19 of 23 lift upshifts go straight back down, most within 4 seconds: a key tapped to hold the speed (376 of 412 lifts were under a second) shifted up at a lift and down at the next tap, the fourth and the fifth of a ZIL-131 swapping. A wheel's pedals and a pad shift as in 0.15.8. A test taps the key the same way, and lifts a wheel's pedal.
+
 ## [0.15.8]
 
 - The mod's automatic cruises low: a light foot held steady shifts up as soon as the next gear lands at 0.8 of the engine's peak torque speed or over (and clear of its point down), without waiting for the light point up. A car's nine-speed automatic, filmed on the road, cruised at 1200 to 1300 rpm against a peak at about 1600.
