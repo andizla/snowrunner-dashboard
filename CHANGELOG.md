@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.15.11]
+
+- A look for the game's places that misses one the mod needs is made again every 2 seconds, 31 looks in all, before the mod stands down. Loaded early, as through another mod's DirectX probe (the Spotter minimap mod, on the game's build of 20 October 2026), it looked before the game's code was ready, found nothing and stood down; the next start without that mod found every place. The look runs on the game's own code, so no offline test covers it.
+
 ## [0.15.10]
 
 - Floored, with the engine handed over, the mod's automatic shifts up where the next gear pulls more, or on the limiter where none does. The cap at 0.95 of the way from idle to the red zone is gone: it came before the fade toward a gear's top was worked out, and with the torque factor's roof at 6 it sat just over where the next gear pulls more anyway (a tester's ZIL-131: 3024 to 3056 rpm against the cap's 3072), so shifts hardly move.

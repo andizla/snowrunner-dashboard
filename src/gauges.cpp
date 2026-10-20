@@ -1229,8 +1229,11 @@ static bool CodeRange(size_t &from, size_t &to)
 
 // The game's statics in the build that runs (truck.h's g_places, game_globals.h): on the Steam build of 22 July 2026
 // its known places, on any other found by the code that uses them. clock: the clock's static, 0 where it is not
-// known. False where one the mod cannot do without is not found: it stands down then.
-static bool PlacesFind(DWORD stamp, uint64_t &clock)
+// known. False where one the mod cannot do without is not found: it stands down then. quiet: no line for each place (a
+// look made again, kPlacesRetryMs after the last).
+static const DWORD kPlacesRetryMs = 2000;
+static const int kPlacesLooks = 31;
+static bool PlacesFind(DWORD stamp, uint64_t &clock, bool quiet = false)
 {
     clock = 0;
     if (stamp == kGaugesExeStamp)
@@ -1252,11 +1255,12 @@ static bool PlacesFind(DWORD stamp, uint64_t &clock)
         int signatures = 0;
         bool conflict = false;
         found[g] = GlobalResolve((const uint8_t *)g_base, from, to, kGlobalSigs, g, signatures, conflict);
-        if (found[g]) Log(L"places: %S at +%llx, by %d of its signatures", kGameGlobals[g].name, found[g], signatures);
+        if (quiet) {}
+        else if (found[g]) Log(L"places: %S at +%llx, by %d of its signatures", kGameGlobals[g].name, found[g], signatures);
         else Log(L"places: %S not found%S", kGameGlobals[g].name, conflict ? " (its signatures point at different places)" : "");
         missing = missing || (!found[g] && kGameGlobals[g].needed);
     }
-    Log(L"places: looked for in %.1f s", (GetTickCount64() - started) / 1000.0);
+    if (!quiet) Log(L"places: looked for in %.1f s", (GetTickCount64() - started) / 1000.0);
     g_places = GamePlaces{ found[kGlobControl], found[kGlobWheelClass], found[kGlobGame], found[kGlobMap], found[kGlobViewer], found[kGlobGarage], found[kGlobInput],
                            found[kGlobEngineSets] };
     clock = found[kGlobClock];
@@ -2017,9 +2021,23 @@ static DWORD WINAPI Run(void *)
     // the game's statics: known on the build the mod was made on, found by the code that uses them on any other
     uint64_t clockPlace = 0;
     if (stamp != kGaugesExeStamp) Log(L"places: another build of the game than the one the mod was made on (exe stamp %08lx): looking for what it reads", kGaugesExeStamp);
-    if (!PlacesFind(stamp, clockPlace))
+    // a look that finds them not, as when the mod is loaded before the game has its code ready (another mod's early
+    // DirectX probe loads ReShade and this add-on with it: the Spotter minimap mod, 2026-10-21, where one look found
+    // nothing and the next start without it found all), is made again every kPlacesRetryMs, kPlacesLooks in all
+    bool placesOk = PlacesFind(stamp, clockPlace);
+    for (int look = 2; !placesOk && look <= kPlacesLooks; look++)
     {
-        Log(L"places: the mod cannot find the driven truck in this build of the game: standing down, nothing is drawn or changed. Gauges.log above says what is missing");
+        Sleep(kPlacesRetryMs);
+        if (PlacesFind(stamp, clockPlace, true))
+        {
+            Log(L"places: all found on look %d, %.0f s after the first (the game's code was not ready yet):", look, (look - 1) * kPlacesRetryMs / 1000.0);
+            placesOk = PlacesFind(stamp, clockPlace);
+        }
+    }
+    if (!placesOk)
+    {
+        Log(L"places: the mod cannot find the driven truck in this build of the game, %d looks over %.0f s: standing down, nothing is drawn or changed. "
+            L"Gauges.log above says what is missing", kPlacesLooks, (kPlacesLooks - 1) * kPlacesRetryMs / 1000.0);
         InterlockedExchange(&g_modOff, 1);
         return 0;
     }
