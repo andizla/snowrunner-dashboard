@@ -1,10 +1,10 @@
 # Third party notices
 
-SnowRunner Gauges is licensed under the GNU General Public License v3.0 (GPL-3.0-only, see `LICENSE`). It is built with the following third-party work.
+Next Gen Gameplay (formerly SnowRunner Gauges) is licensed under the GNU General Public License v3.0 (GPL-3.0-only, see `LICENSE`). It is built with the following third-party work.
 
 ## ReShade add-on API
 
-`deps/reshade/include` holds the add-on API headers of ReShade 6.8.0 (https://github.com/crosire/reshade), distributed under the BSD 3-Clause License:
+`deps/reshade/include` holds the add-on API headers of ReShade 6.8.0 (https://github.com/crosire/reshade); the mod uses them only to be handed the game's swap chain where ReShade is installed, and needs no ReShade. Distributed under the BSD 3-Clause License:
 
 Copyright 2014 Patrick Mours. All rights reserved.
 
@@ -18,7 +18,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 
 ## Dear ImGui
 
-`deps/imgui` holds `imgui.h` and `imconfig.h` of Dear ImGui 1.92.5 (https://github.com/ocornut/imgui), distributed under the MIT License:
+`deps/imgui` holds the sources of Dear ImGui 1.92.1 (https://github.com/ocornut/imgui), compiled into `Gauges.asi`, and `src/ng_dx11.cpp` is its DirectX 11 renderer with one change, both distributed under the MIT License:
 
 Copyright (c) 2014-2026 Omar Cornut
 

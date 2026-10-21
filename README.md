@@ -1,6 +1,6 @@
-# SnowRunner Gauges
+# Next Gen Gameplay
 
-A gauge cluster for the truck you drive in SnowRunner: analogue dials in the style of a truck dashboard, drawn over the game in the game's own font.
+Formerly SnowRunner Gauges; its files keep the name `Gauges`. A gauge cluster for the truck you drive in SnowRunner: analogue dials in the style of a truck dashboard, drawn over the game in the game's own font.
 
 The cluster has a speedometer, a tachometer with the gear, fuel with the range, coolant and oil temperature, boost pressure, brake air pressure and nine lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage, cold engine, tilt and oil temperature.
 
@@ -9,15 +9,15 @@ This is version 0.16.0. It reads the truck's own values for the speedometer, the
 ## What you need
 
 - SnowRunner for Windows: the Steam, Epic Games Store or Microsoft Store (Xbox app) version. The mod is made on the Steam build of 22 July 2026 and knows where that build keeps what it reads. On any other build (another store's, or after a game update) it finds those places by the game's code that uses them, and says in its log what it found; where it cannot find the truck it looks again every 2 seconds for a minute (another mod can load it before the game's code is ready), then stands down and changes nothing. The signatures it finds them by were taken from the Steam build; another build stands down only where the truck, its wheels or the game's state cannot be found, and its clock is looked for with `Probe=1` (see the outside temperature).
-- ReShade 6.8.0 or newer, the build "with full add-on support", installed for SnowRunner. It loads the mod and draws the cluster and its settings tab. Nothing else is needed.
+- An ASI loader, which loads `Gauges.asi` when the game starts: the `version.dll` in the release, the same file as Next Gen Tire Inflation's (the SnowRunner Tire Inflation System). Nothing else is needed. ReShade is not; where it is installed (with Luma for HDR, say), the mod draws after it, on the picture that goes to the screen.
 
 ## Install
 
 1. Close the game.
-2. Copy `Gauges.addon64` into the game's `Sources\Bin` folder, next to `SnowRunner.exe`, where ReShade's `dxgi.dll` is. (A `ReShade.ini` that sets `AddonPath` loads add-ons from that folder instead.)
-3. Start the game. The Home key opens ReShade's overlay, which has a Gauges tab, and its Add-ons tab lists Gauges.
+2. Copy `Gauges.asi` and `version.dll` into the game's `Sources\Bin` folder, next to `SnowRunner.exe`. A `version.dll` already there from Next Gen Tire Inflation is the same loader: keep it.
+3. Start the game. Delete opens the NEXT GEN menu, and its Gameplay tab has the mod's settings.
 
-To update, copy the new file over the old one. Before 0.11.3 the mod was `Gauges.asi`, loaded by an ASI loader: delete that file when you install `Gauges.addon64`. With two files of the mod in the folder only one runs, and the log says which. `Gauges.asi` is still in the release for a game set up with an ASI loader, and works the same.
+To update, copy the new file over the old one. Up to 0.15.11 the mod was `Gauges.addon64`, loaded by ReShade: delete that file when you install `Gauges.asi`. With two files of the mod in the folder only one runs, and the log says which. `Gauges.ini` keeps working.
 
 ## What it shows
 
@@ -40,7 +40,7 @@ The cluster is on screen while you drive a truck in the world, and it fades in a
 
 ## Settings
 
-The Gauges tab in ReShade's overlay edits every setting while you play. Changes count at once and are saved to `Gauges.ini` in the same folder. The game writes that file with the defaults and a short guide on its first start, so it can be edited by hand too.
+The Gameplay tab of the NEXT GEN menu edits every setting while you play. Delete opens and closes the menu; another key is set by clicking the key's name at the menu's top right and pressing it, or in `NextGen.ini` next to the exe (`[Menu]`, `Key=` a virtual key code), which the Next Gen mods share. While the menu is open the game gets no mouse and no keys. Changes count at once and are saved to `Gauges.ini` in the same folder. The game writes that file with the defaults and a short guide on its first start, so it can be edited by hand too.
 
 | Setting | In the ini | Default |
 |---|---|---|
@@ -187,9 +187,9 @@ The mod does it through the game's torque factor, the share of its torque the ga
 
 The Gearbox section of the tab also has a pull test, for the engine's torque the mod will hand to the game next. Press "Test the engine's pull", then on a long flat road drive in the fourth gear or higher and floor the pedal for seven seconds. The mod holds the gear, changes the game's torque factor (what it leaves a damaged engine) for a second at a time (halved, raised by half, at three quarters) and measures how hard the truck pulls, then puts the factor back. Lifting the foot, braking or another gear stops it. The numbers go into `Gauges.log`.
 
-## With the SnowRunner Tire Inflation System
+## With Next Gen Tire Inflation
 
-The two mods are made to run side by side, each with its own tab, ini and log. That mod's `version.dll` loads its `.asi` file; ReShade loads this one. This mod does not touch the pad's buttons, so that mod's panel keeps working as before.
+Next Gen Tire Inflation (the SnowRunner Tire Inflation System) and this mod are made to run side by side, each with its own ini and log, their tabs in the one NEXT GEN menu. The same `version.dll` loads both `.asi` files. This mod does not touch the pad's buttons, so that mod's panel keeps working as before.
 
 The mod publishes a little of its state for other mods to read: a block of 64 bytes of shared memory named `Local\SnowRunnerGauges.State.<process id>`, written about 20 times a second. It holds the truck driven, the outside temperature in force, the coolant temperature, the engine speed and the boost. A tire mod by the same author reads the outside temperature from it. `src\state.h` has the layout.
 
@@ -197,7 +197,7 @@ From the version of that mod that publishes its own state, the cluster has a ten
 
 ## Remove
 
-Delete `Gauges.addon64` (or `Gauges.asi`), `Gauges.ini`, `Gauges.log` and the folder `Gauges` (the setups of trucks, gearboxes and engines, and the older logs) from `Sources\Bin`.
+Delete `Gauges.asi`, `Gauges.ini`, `Gauges.log` and the folder `Gauges` (the setups of trucks, gearboxes and engines, and the older logs) from `Sources\Bin`. `NextGen.ini` and `version.dll` go too when no other Next Gen mod is left.
 
 ## Notes
 
@@ -215,13 +215,13 @@ build.bat
 test.bat
 ```
 
-`build.bat` makes `out\Gauges.addon64` (and the same file as `out\Gauges.asi`), the four offline test programs in `out\test`, and `out\version.dll`, the loader, from the sources in `tools`. `test.bat` runs the tests: every setting through the ini and back, the trucks' own scales, the reader of the game's memory and the write of engine damage against a made up game, the engine speed, the range, the tilt, the coolant and oil temperatures, the oil warning, the engine damage and the turbo's profiles on made up drives, and a preview that draws the cluster and the settings tab into PNG files in `out\preview` without the game. The preview needs the full Dear ImGui sources in `deps\imgui_src`, see `test\build_preview.bat`. Without them the rest is still built.
+`build.bat` makes `out\Gauges.asi`, the four offline test programs in `out\test`, and `out\version.dll`, the loader, from the sources in `tools`. `test.bat` runs the tests: every setting through the ini and back, the trucks' own scales, the reader of the game's memory and the write of engine damage against a made up game, the engine speed, the range, the tilt, the coolant and oil temperatures, the oil warning, the engine damage and the turbo's profiles on made up drives, and a preview that draws the cluster and the settings tab into PNG files in `out\preview` without the game. The preview needs the full Dear ImGui sources in `deps\imgui_src`, see `test\build_preview.bat`. Without them the rest is still built. `test\build_menu_preview.bat` makes `out\test\menu_preview.exe`, which hooks the mod's overlay onto a swap chain of its own without the game and draws the NEXT GEN menu into PNG files.
 
-The headers the mod is built with are in `deps`, each with its licence: the ReShade add-on API, Dear ImGui, and stb_truetype with stb_rect_pack.
+What the mod is built with is in `deps`, each with its licence: Dear ImGui, compiled in; the ReShade add-on API's headers, used only to be handed the game's swap chain where ReShade is installed; and stb_truetype with stb_rect_pack.
 
 ## How it works
 
-A thread in the game process reads the driven truck's values from the game's memory 20 times a second, works out the engine speed, the range, the tilt, the boost and the coolant and oil temperatures from them, and keeps the settings. With `Damage` on, the same thread writes the engine damage that the temperature caused into the game, at most once a second and only while a truck is driven. ReShade calls the mod on every frame, and the mod draws the cluster with Dear ImGui's drawing calls, which ReShade hands to its add-ons. The text is baked from the game's own font files when the game starts, at the size the cluster has on your screen.
+A thread in the game process reads the driven truck's values from the game's memory 20 times a second, works out the engine speed, the range, the tilt, the boost and the coolant and oil temperatures from them, and keeps the settings. With `Damage` on, the same thread writes the engine damage that the temperature caused into the game, at most once a second and only while a truck is driven. The mod hooks the game's Present, the call that puts each frame on the screen, by its slot in the swap chain's method table, and draws the cluster and the menu with Dear ImGui on the game's own device just before the frame goes out. It finds that slot with a DirectX probe of its own on Windows' WARP software device; where ReShade is installed, ReShade hands it the game's swap chain at its first present instead, as a probe at start runs into ReShade setting up its hooks. Whatever was in the slot before (the game, ReShade, another mod) is called after the mod has drawn. The text is baked from the game's own font files when the game starts, at the size the cluster has on your screen.
 
 The sounds are played through XAudio2 2.9, the copy the game brings or Windows' own, on a thread of their own. The mod takes the audio device when a sound is due and lets go of it a few seconds after the last one.
 
@@ -229,7 +229,7 @@ The sounds are played through XAudio2 2.9, the copy the game brings or Windows' 
 
 GNU General Public License v3.0 (GPL-3.0-only), see `LICENSE`.
 
-The cluster is drawn through ReShade by Patrick Mours (crosire) with Dear ImGui by Omar Cornut, and its text is baked with stb_truetype by Sean Barrett. Their notices are in `THIRD_PARTY_NOTICES.md`. The loader in `tools` is the one of the SnowRunner Tire Inflation System.
+The cluster and the menu are drawn with Dear ImGui by Omar Cornut, and their text is baked with stb_truetype by Sean Barrett. Where ReShade by Patrick Mours (crosire) is installed, its add-on API hands the mod the game's swap chain. Their notices are in `THIRD_PARTY_NOTICES.md`. The loader in `tools` is the one of the SnowRunner Tire Inflation System.
 
 `SOUND_CREDITS.md` says where each sound comes from.
 
