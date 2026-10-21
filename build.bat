@@ -1,5 +1,5 @@
 @echo off
-rem Builds out\Gauges.addon64 (the mod, a ReShade add-on; out\Gauges.asi is the same file for an ASI loader),
+rem Builds out\Gauges.asi (the mod, Next Gen Gameplay, for an ASI loader such as out\version.dll; it draws by itself),
 rem out\test\settings_test.exe (the ini round trip and the scales, offline),
 rem out\test\truck_test.exe (the reader of the game's memory and the write of engine damage against a made up game, offline),
 rem out\test\models_test.exe (the engine speed, the range, the tilt, the coolant temperature and what it costs the engine
@@ -12,16 +12,18 @@ cd /d "%~dp0"
 if not exist out mkdir out
 if not exist out\obj mkdir out\obj
 if not exist out\test mkdir out\test
-rem the mod: gauge_overlay.cpp draws through ReShade's add-on overlay (headers only, deps\reshade and deps\imgui), its
-rem text in the game's font through stb_truetype (deps\stb); gauges.cpp is the mod's thread
-cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I deps\imgui /I deps\reshade\include /I deps\stb /Fo:out\obj\gauge_overlay.obj src\gauge_overlay.cpp || goto fail
+rem the mod: Dear ImGui (deps\imgui, 1.92.1) and its DirectX 11 renderer (src\ng_dx11.cpp) compiled in; ng_overlay.cpp
+rem is Next Gen's overlay (the Present hook, the NEXT GEN menu), gauge_overlay.cpp draws the cluster and the Gameplay
+rem tab with it, its text in the game's font through stb_truetype (deps\stb); gauges.cpp is the mod's thread
+cl /nologo /c /O2 /W3 /EHsc /std:c++17 /utf-8 /MT /I deps\imgui /I deps\stb /Fo:out\obj\ deps\imgui\imgui.cpp deps\imgui\imgui_draw.cpp deps\imgui\imgui_tables.cpp deps\imgui\imgui_widgets.cpp src\ng_dx11.cpp || goto fail
+cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I deps\imgui /I deps\stb /Fo:out\obj\ src\ng_overlay.cpp src\gauge_overlay.cpp || goto fail
+cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I deps\reshade\include /Fo:out\obj\ng_reshade.obj src\ng_reshade.cpp || goto fail
+set IMGUI_OBJ=out\obj\imgui.obj out\obj\imgui_draw.obj out\obj\imgui_tables.obj out\obj\imgui_widgets.obj out\obj\ng_dx11.obj out\obj\ng_overlay.obj out\obj\ng_reshade.obj
 rem the recordings the mod's file carries (src\sounds.rc: assets\turbo_high_1.wav and eight more). Without them the
 rem mod is built all the same and makes its sounds by code (src\sound.h)
 set SOUNDS=
 if exist assets\turbo_high_1.wav (rc /nologo /fo out\obj\sounds.res src\sounds.rc || goto fail) & set SOUNDS=out\obj\sounds.res
-cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /LD /Fo:out\obj\gauges.obj /Fe:out\Gauges.addon64 src\gauges.cpp out\obj\gauge_overlay.obj %SOUNDS% /link user32.lib ole32.lib || goto fail
-rem the same file under the name an ASI loader loads: it tells by its own name which of the two loaded it
-copy /y out\Gauges.addon64 out\Gauges.asi >nul || goto fail
+cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /LD /Fo:out\obj\gauges.obj /Fe:out\Gauges.asi src\gauges.cpp out\obj\gauge_overlay.obj %IMGUI_OBJ% %SOUNDS% /link user32.lib ole32.lib d3d11.lib d3dcompiler.lib || goto fail
 rem the settings test: the same source with a main in place of the mod's thread
 cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /D GAUGES_SETTINGS_TEST /Fo:out\obj\settings_test.obj /Fe:out\test\settings_test.exe src\gauges.cpp /link user32.lib || goto fail
 rem the truck test: the reader of the game's memory and the write of engine damage (src\truck.h) against a made up game
@@ -35,9 +37,9 @@ cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /Fo:out\obj\loader.obj tools\l
 link /nologo /DLL /DEF:tools\version.def /OUT:out\version.dll /IMPLIB:out\obj\version_proxy.lib out\obj\version_stubs.obj out\obj\loader.obj || goto fail
 rem the preview: left out, with a note, where there are no Dear ImGui sources
 call test\build_preview.bat
-if errorlevel 2 (echo BUILD OK without the preview: out\Gauges.addon64, out\Gauges.asi, out\test\settings_test.exe, out\test\truck_test.exe, out\test\models_test.exe, out\version.dll & exit /b 0)
+if errorlevel 2 (echo BUILD OK without the preview: out\Gauges.asi, out\test\settings_test.exe, out\test\truck_test.exe, out\test\models_test.exe, out\version.dll & exit /b 0)
 if errorlevel 1 goto fail
-echo BUILD OK: out\Gauges.addon64, out\Gauges.asi, out\test\settings_test.exe, out\test\truck_test.exe, out\test\models_test.exe, out\test\gauge_preview.exe, out\version.dll
+echo BUILD OK: out\Gauges.asi, out\test\settings_test.exe, out\test\truck_test.exe, out\test\models_test.exe, out\test\gauge_preview.exe, out\version.dll
 exit /b 0
 :fail
 echo BUILD FAILED

@@ -1,5 +1,5 @@
-// Gauges.addon64 for SnowRunner: a gauge cluster for the truck being driven, drawn through ReShade's add-on overlay
-// (gauge_overlay.cpp). This file is the mod's own thread: it owns the settings (Gauges.ini next to the exe, written
+// Gauges.asi for SnowRunner (Next Gen Gameplay): a gauge cluster for the truck being driven, drawn by Next Gen's own
+// overlay (gauge_overlay.cpp, ng_overlay.cpp; no ReShade needed). This file is the mod's own thread: it owns the settings (Gauges.ini next to the exe, written
 // with the defaults on the first start), the log (Gauges.log, rewritten at each game start), the toggle key and pad
 // buttons, and the state the cluster shows, which it leaves for the render thread 20 times a second.
 //
@@ -38,11 +38,11 @@
 static HMODULE g_self = nullptr;
 static std::wstring g_dir; // the game's folder, with the last backslash
 static uint64_t g_base = 0;
-static bool g_reshadeOk = false;
-static bool g_addon = false;  // loaded by ReShade as an add-on (Gauges.addon64), not by an ASI loader (Gauges.asi)
+static bool g_overlayOk = false;
+static bool g_addon = false;  // loaded by ReShade under the name from before 0.16 (Gauges.addon64), not by an ASI loader (Gauges.asi)
 static bool g_second = false; // another copy of the mod runs in this game, and this one stands down
 
-// The ini's settings in force. The Gauges tab in ReShade's overlay reads them and hands back edits (SettingsPut,
+// The ini's settings in force. The Gameplay tab of the NEXT GEN menu reads them and hands back edits (SettingsPut,
 // render thread); the mod's thread takes those on its next pass and saves the ini a second later. g_setTurn counts
 // the times the mod's thread put settings in force itself (SettingsPublish).
 static SRWLOCK g_setLock = SRWLOCK_INIT;
@@ -59,7 +59,7 @@ static volatile LONG g_engineFullAsked = 0, g_engineFullPercent = 0; // the tab 
 static SRWLOCK g_viewLock = SRWLOCK_INIT;
 static GaugeView g_view = {};
 
-// The log is rewritten at each game start. The mod's thread and ReShade's render thread both write it: one at a time,
+// The log is rewritten at each game start. The mod's thread and the game's render thread (the overlay) both write it: one at a time,
 // as the file is opened for one writer and a second open would fail and lose its line.
 static SRWLOCK g_logLock = SRWLOCK_INIT;
 static bool g_logStarted = false; // true once this start's first line is in
@@ -511,8 +511,8 @@ static void ReadIni(GaugeSettings &s)
         FILE *f = nullptr;
         if (_wfopen_s(&f, ini.c_str(), L"w, ccs=UTF-16LE") == 0 && f)
         {
-            fwprintf(f, L"; Gauges: a gauge cluster for the truck being driven. It needs ReShade with add-on support.\n"
-                        L"; The Gauges tab in ReShade's overlay edits everything here in the game.\n"
+            fwprintf(f, L"; Gauges: the gauge cluster of Next Gen Gameplay for the truck being driven, drawn by the mod itself.\n"
+                        L"; The Gameplay tab of the NEXT GEN menu (End opens it) edits everything here in the game.\n"
                         L"; Layout: 0 = a strip along the bottom centre, 1 = a block in the bottom right corner.\n"
                         L"; Style: 0 = solid dial faces, 1 = tinted see-through faces (FaceOpacity 0 to 0.85 sets how dark),\n"
                         L"; 2 = open: no faces, only the scales, numbers and needles.\n"
@@ -2006,18 +2006,16 @@ static DWORD WINAPI Run(void *)
         GetModuleFileNameW(g_self, file, MAX_PATH);
         Sleep(1000); // after the first copy's first line, which starts the log anew
         g_logStarted = true;
-        Log(L"this mod is in the folder twice: only one copy runs, and this one (%s) stands down. Keep one file of it, Gauges.addon64.", file);
+        Log(L"this mod is in the folder twice: only one copy runs, and this one (%s) stands down. Keep one file of it, Gauges.asi.", file);
         return 0;
     }
     const DWORD stamp = ExeStamp();
-    if (!g_addon)
-    {
-        Log(L"Gauges " GAUGES_VERSION L": exe stamp %08lx, loaded by an ASI loader", stamp);
-        LogKeptSay();
-        LogGameFolder();
-        SettingsDefaults(g_set); // what the tab shows until the ini is read
-        g_reshadeOk = OverlayInit(g_self);
-    }
+    Log(L"Gauges " GAUGES_VERSION L": exe stamp %08lx, loaded %s", stamp,
+        g_addon ? L"by ReShade as Gauges.addon64, the name from before 0.16 (the mod needs no ReShade now: keep it as Gauges.asi)" : L"by an ASI loader");
+    LogKeptSay();
+    LogGameFolder();
+    SettingsDefaults(g_set); // what the tab shows until the ini is read
+    g_overlayOk = OverlayInit(g_self);
     // the game's statics: known on the build the mod was made on, found by the code that uses them on any other
     uint64_t clockPlace = 0;
     if (stamp != kGaugesExeStamp) Log(L"places: another build of the game than the one the mod was made on (exe stamp %08lx): looking for what it reads", kGaugesExeStamp);
@@ -2050,8 +2048,8 @@ static DWORD WINAPI Run(void *)
     SettingsPublish(s);
     LogSettings(s);
     if (s.probe) PlacesHarvest(stamp);
-    Log(g_reshadeOk ? L"overlay: the cluster and the Gauges tab are drawn through ReShade's overlay"
-                    : L"overlay: ReShade with add-on support was not found, so nothing is drawn");
+    Log(g_overlayOk ? L"overlay: the cluster and the Gameplay tab of the NEXT GEN menu are drawn by the mod's own overlay"
+                    : L"overlay: the overlay did not start (the lines above say why), so nothing is drawn");
     SoundStart(g_dir); // the sounds are read or made now; the audio device is only taken while one plays
     // the block other mods read the mod's state from (state.h), written at the end of every pass
     StateWriter state = {};
@@ -2505,11 +2503,9 @@ static DWORD WINAPI Run(void *)
     }
 }
 
-// Loaded by ReShade as an add-on (Gauges.addon64), the mod registers with it here, as ReShade asks of the add-ons it
-// loads, and pins itself: ReShade unloads and loads its add-ons again each time the game drops its graphics device,
-// which SnowRunner does at start-up, and the mod's thread runs for the whole game. ReShade.log then says the add-on
-// "was not unregistered" and loads it as "externally registered", which is expected. Loaded by an ASI loader
-// (Gauges.asi), its thread registers once ReShade is there.
+// Loaded by an ASI loader (Gauges.asi), or by ReShade under the name from before 0.16 (Gauges.addon64): the mod's thread
+// starts the overlay either way. ReShade unloads an add-on that does not register with it, so under that name the mod
+// pins itself first and runs for the whole game all the same.
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
 {
     if (reason != DLL_PROCESS_ATTACH) return TRUE;
@@ -2532,29 +2528,10 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
     swprintf_s(once, L"Local\\SnowRunnerGauges-%lu", GetCurrentProcessId());
     const HANDLE mutex = CreateMutexW(nullptr, FALSE, once);
     g_second = mutex && GetLastError() == ERROR_ALREADY_EXISTS;
-    if (g_addon)
+    if (g_addon && !g_second)
     {
-        if (g_second)
-        {
-            g_logStarted = true;
-            Log(L"this mod is in the folder twice: only one copy runs, and this one (%s) stands down. Keep one file of it, Gauges.addon64.", own);
-            CloseHandle(mutex);
-            return FALSE;
-        }
-        Log(L"Gauges " GAUGES_VERSION L": exe stamp %08lx, loaded by ReShade as an add-on", ExeStamp());
-        LogKeptSay();
-        LogGameFolder();
         HMODULE pinned = nullptr;
-        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCWSTR)&DllMain, &pinned))
-            Log(L"overlay: the add-on could not pin itself, so ReShade's unloading at start-up may take it out");
-        SettingsDefaults(g_set); // what the tab shows until the ini is read
-        g_reshadeOk = OverlayInit(inst);
-        if (!g_reshadeOk)
-        {
-            Log(L"overlay: ReShade did not take the add-on (a ReShade without add-on support, or of another version), so nothing is drawn");
-            CloseHandle(mutex); // a copy of the mod loaded by an ASI loader may still run
-            return FALSE;
-        }
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCWSTR)&DllMain, &pinned);
     }
     const HANDLE t = CreateThread(nullptr, 0, Run, nullptr, 0, nullptr);
     if (t) CloseHandle(t);
