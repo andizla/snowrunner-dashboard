@@ -848,13 +848,13 @@ int main()
                   !MapRegionOf("level_us_99_01") && !MapRegionOf("level_my_map"),
               "maps: the region of a map by its id, none for a region the game's texts do not know or a mod's map");
         const char *drummondName = MapNameOf("level_us_01_04_new"), *crop = MapNameOf("level_ru_02_01_crop");
-        Check(drummondName && !strcmp(drummondName, "Drummond Island") && crop && !strcmp(crop, "Quarry") && !MapNameOf("level_us_03_02") && !MapNameOf("level_us_01_0"),
-              "maps: a map's English name, also with more after its number; none where the texts give none");
+        Check(drummondName && !strcmp(drummondName, "Drummond Island") && crop && !strcmp(crop, "Quarry") && MapNameOf("level_us_03_02") && !strcmp(MapNameOf("level_us_03_02"), "Grainwoods River") && !MapNameOf("level_us_01_0"),
+              "maps: a map's English name, also with more after its number (Grainwoods River, under its id in the texts); none for an id that is no map's");
         char title[96], title2[96], title3[96];
         MapTitle("level_ru_17_01", title, sizeof title);
-        MapTitle("level_us_03_02", title2, sizeof title2);
+        MapTitle("level_us_03_09", title2, sizeof title2);
         MapTitle("level_my_map", title3, sizeof title3);
-        Check(!strcmp(title, "Zurdanian Valley, Zurdania") && !strcmp(title2, "level_us_03_02, Wisconsin") && !strcmp(title3, "level_my_map"), "maps: a map in words");
+        Check(!strcmp(title, "Zurdanian Valley, Zurdania") && !strcmp(title2, "level_us_03_09, Wisconsin") && !strcmp(title3, "level_my_map"), "maps: a map in words");
         bool regionsKnown = true, idsOnce = true;
         for (const auto &m : kMapLevels)
         {
@@ -863,8 +863,8 @@ int main()
             for (const auto &n : kMapLevels) seen += !strcmp(n.id, m.id);
             idsOnce &= seen == 1;
         }
-        Check(regionsKnown && idsOnce && sizeof kMapLevels / sizeof kMapLevels[0] == 52 && sizeof kMapRegions / sizeof kMapRegions[0] == 21,
-              "maps: 52 named maps, each once and in one of the 21 regions");
+        Check(regionsKnown && idsOnce && sizeof kMapLevels / sizeof kMapLevels[0] == 56 && sizeof kMapRegions / sizeof kMapRegions[0] == 22,
+              "maps: 56 named maps, each once and in one of the 22 regions (Switzerland, Season 19, the newest)");
 
         // a save as the game writes it, its end a 0
         static const char save[] = "{\"CompleteSave\":{\"SslType\":\"CompleteSave\",\"SslValue\":{\"persistentProfileData\":{\"trucksInWarehouse\":"

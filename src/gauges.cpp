@@ -170,7 +170,21 @@ static float IniFloat(const wchar_t *key, float def, const std::wstring &ini) { 
 static int IniInt(const wchar_t *key, int def, const std::wstring &ini) { return (int)GetPrivateProfileIntW(kIniSection, key, def, ini.c_str()); }
 static bool IniBool(const wchar_t *key, bool def, const std::wstring &ini) { return IniInt(key, def ? 1 : 0, ini) != 0; }
 
-static std::wstring Wide(const char *s) { std::wstring w; while (*s) w += (wchar_t)(unsigned char)*s++; return w; }
+// Text as UTF-8 (the game's names, such as Grüntal Hollow), or byte by byte where it is not valid UTF-8.
+static std::wstring Wide(const char *s)
+{
+    const int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, nullptr, 0);
+    if (n > 0)
+    {
+        std::wstring w((size_t)n, L'\0');
+        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, &w[0], n);
+        w.resize((size_t)n - 1);
+        return w;
+    }
+    std::wstring w;
+    while (*s) w += (wchar_t)(unsigned char)*s++;
+    return w;
+}
 
 // A number into a section of the ini, with the fewest digits that read back as the same float.
 static void IniPutFloat(const wchar_t *section, const wchar_t *key, float v, const std::wstring &ini)
@@ -466,7 +480,9 @@ static bool IniHas(const std::vector<std::wstring> &sections, const std::wstring
 
 // Writes the regions' sections with their first temperatures when the ini has no map section at all. An ini from
 // 0.11.0 to 0.11.2 has the placeholder names of then: the five that are not the game's names are renamed with the
-// temperatures they hold, and the four regions they lacked are added.
+// temperatures they hold, and the four regions they lacked are added. A region the game added after an ini got its
+// sections (Switzerland, Season 19, in 0.16.0) is offered to it once: [Gauges] MapRegionsOffered lists the ones
+// offered, so a section taken out by hand stays out.
 static void MapDefaultsWrite()
 {
     static const struct { const char *was, *now; } renamed[] = {
@@ -480,6 +496,25 @@ static void MapDefaultsWrite()
         if (!_wcsnicmp(name.c_str(), L"Map:", 4)) any = true;
     for (const auto &r : renamed)
         if (IniHas(sections, MapSection(r.was))) placeholders = true;
+    static const char *later[] = { "Switzerland" };
+    std::wstring offered;
+    {
+        wchar_t b[512] = {};
+        GetPrivateProfileStringW(L"Gauges", L"MapRegionsOffered", L"", b, 512, ini.c_str());
+        offered = b;
+    }
+    bool more = false;
+    for (const char *name : later)
+    {
+        const std::wstring w = Wide(name);
+        if ((L"," + offered + L",").find(L"," + w + L",") != std::wstring::npos) continue;
+        if (any)
+            for (const auto &r : kMapRegions)
+                if (!strcmp(r.name, name) && !IniHas(sections, MapSection(name))) IniPutFloat(MapSection(name).c_str(), L"AmbientC", r.ambientC, ini);
+        offered += (offered.empty() ? L"" : L",") + w;
+        more = true;
+    }
+    if (more) WritePrivateProfileStringW(L"Gauges", L"MapRegionsOffered", offered.c_str(), ini.c_str());
     if (!any)
     {
         for (const auto &r : kMapRegions) IniPutFloat(MapSection(r.name).c_str(), L"AmbientC", r.ambientC, ini);
@@ -2212,7 +2247,7 @@ static DWORD WINAPI Run(void *)
                         char at[16], title[96];
                         ClockText(written, at, sizeof at);
                         MapTitle(level, title, sizeof title);
-                        Log(L"map: %S (%S), the map loaded last as the game's save of %S says (%s)", title, level, at, PathForLog(path).c_str());
+                        Log(L"map: %s (%S), the map loaded last as the game's save of %S says (%s)", Wide(title).c_str(), level, at, PathForLog(path).c_str());
                         strcpy_s(map, level);
                     }
                 }
@@ -2323,10 +2358,10 @@ static DWORD WINAPI Run(void *)
                 char title[96];
                 MapTitle(map, title, sizeof title);
                 if (mapOwn && s.ambientByMap)
-                    Log(L"map: %S, %g C outside by day and %g C by night%s ([Map:%S] in Gauges.ini)", title, mapAir.day, mapAir.night,
-                        mapAir.dayNight ? L"" : L", around the day's mean", mapFrom);
-                else if (mapOwn) Log(L"map: %S, %g C outside (AmbientC: AmbientByMap=0 leaves [Map:%S] out)", title, s.ambientC, mapFrom);
-                else if (map[0]) Log(L"map: %S has no section in Gauges.ini, nor has its region, so it is %g C outside (AmbientC)", title, s.ambientC);
+                    Log(L"map: %s, %g C outside by day and %g C by night%s ([Map:%s] in Gauges.ini)", Wide(title).c_str(), mapAir.day, mapAir.night,
+                        mapAir.dayNight ? L"" : L", around the day's mean", Wide(mapFrom).c_str());
+                else if (mapOwn) Log(L"map: %s, %g C outside (AmbientC: AmbientByMap=0 leaves [Map:%s] out)", Wide(title).c_str(), s.ambientC, Wide(mapFrom).c_str());
+                else if (map[0]) Log(L"map: %s has no section in Gauges.ini, nor has its region, so it is %g C outside (AmbientC)", Wide(title).c_str(), s.ambientC);
             }
             strcpy_s(mapRead, map);
             mapAsk = false;
@@ -3043,6 +3078,20 @@ int wmain(int argc, wchar_t **argv)
         const bool sameRegion = MapAmbient("level_us_01_02", air, section, sizeof section) && air.mean == 12.0f;
         const bool byId = MapAmbient("level_my_map", air, section, sizeof section) && air.mean == kAmbientRange[1] && !strcmp(section, "level_my_map");
         const bool takenOut = !MapAmbient("level_us_02_01", air, section, sizeof section);
+        const bool swissFresh = MapAmbient("level_us_19_02", air, section, sizeof section) && air.mean == -10.0f && !strcmp(section, "Switzerland");
+        WritePrivateProfileStringW(L"Map:Switzerland", nullptr, nullptr, ini.c_str());
+        WritePrivateProfileStringW(L"Gauges", L"MapRegionsOffered", nullptr, ini.c_str());
+        ReadIni(fresh);
+        const bool swissOffered = MapAmbient("level_us_19_01", air, section, sizeof section) && air.mean == -10.0f;
+        WritePrivateProfileStringW(L"Map:Switzerland", nullptr, nullptr, ini.c_str());
+        ReadIni(fresh);
+        const bool swissStaysOut = !MapAmbient("level_us_19_03", air, section, sizeof section);
+        char swissTitle[96];
+        MapTitle("level_us_19_01", swissTitle, sizeof swissTitle);
+        const bool swissName = Wide(swissTitle) == L"Gr\u00fcntal Hollow, Switzerland";
+        Check(swissFresh && swissOffered && swissStaysOut && swissName,
+              "maps: Switzerland (Season 19) is in a new ini, is offered once to an ini that has the other regions, stays out once taken out, "
+              "and its map's name reads as UTF-8");
         Check(regionsWritten && byRegion && unknown && byMap && sameRegion && byId && takenOut,
               "maps: an ini without map sections gets the regions', a map takes its own section, else its region's, else its id's, held to the range, "
               "and a section taken out or changed by hand stays so");

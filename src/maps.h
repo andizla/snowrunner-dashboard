@@ -16,16 +16,18 @@ static const MapRegion kMapRegions[] = {
     { "us_01", "Michigan", 12.0f }, { "us_02", "Alaska", -12.0f }, { "us_03", "Wisconsin", 8.0f }, { "us_04", "Yukon", -15.0f },
     { "us_06", "Maine", 10.0f }, { "us_07", "Tennessee", 20.0f }, { "us_09", "Ontario", 5.0f }, { "us_10", "British Columbia", 3.0f },
     { "us_11", "Scandinavia", -4.0f }, { "us_12", "North Carolina", 22.0f }, { "us_14", "Austria", 8.0f }, { "us_15", "Quebec", 0.0f },
-    { "us_16", "Washington", 10.0f }, { "us_18", "Chiapas", 26.0f }, { "ru_02", "Taymyr", -20.0f }, { "ru_03", "Kola Peninsula", -10.0f },
+    { "us_16", "Washington", 10.0f }, { "us_18", "Chiapas", 26.0f }, { "us_19", "Switzerland", -10.0f }, { "ru_02", "Taymyr", -20.0f }, { "ru_03", "Kola Peninsula", -10.0f },
     { "ru_04", "Amur", 2.0f }, { "ru_05", "Don", 16.0f }, { "ru_08", "Belozersk Glades", 18.0f }, { "ru_13", "Almaty Region", 24.0f },
     { "ru_17", "Zurdania", 22.0f } };
 
-// A map: its id without what follows its number, and its name. Wisconsin's second map has no name in the texts.
+// A map: its id without what follows its number, and its name (UTF-8, as the game's texts have it: Grüntal Hollow).
+// Wisconsin's second map has its name under its id alone, without _NAME. Switzerland (us_19) came with the game's
+// update of 20 October 2026, Season 19.
 struct MapLevel { const char *id, *name; };
 static const MapLevel kMapLevels[] = {
     { "level_us_01_01", "Black River" }, { "level_us_01_02", "Smithville Dam" }, { "level_us_01_03", "Island Lake" },
     { "level_us_01_04", "Drummond Island" }, { "level_us_02_01", "North Port" }, { "level_us_02_02", "Mountain River" },
-    { "level_us_02_03", "White Valley" }, { "level_us_02_04", "Pedro Bay" }, { "level_us_03_01", "Black Badger Lake" },
+    { "level_us_02_03", "White Valley" }, { "level_us_02_04", "Pedro Bay" }, { "level_us_03_01", "Black Badger Lake" }, { "level_us_03_02", "Grainwoods River" },
     { "level_us_04_01", "Flooded Foothills" }, { "level_us_04_02", "Big Salmon Peak" }, { "level_us_06_01", "The Lowland" },
     { "level_us_06_02", "Yellowrock National Forest" }, { "level_us_07_01", "Burning Mill" }, { "level_us_09_01", "The Albany River" },
     { "level_us_09_02", "Burned Forest" }, { "level_us_10_01", "Duncan Bay" }, { "level_us_10_02", "North Peak National Park" },
@@ -33,7 +35,8 @@ static const MapLevel kMapLevels[] = {
     { "level_us_12_02", "Reactive Zone" }, { "level_us_12_03", "Flatland" }, { "level_us_12_04", "Oviro Hills" },
     { "level_us_14_01", "Unterfeld" }, { "level_us_14_02", "Foothills" }, { "level_us_15_01", "Harbor" }, { "level_us_15_02", "Lake Ribiere" },
     { "level_us_16_01", "Solace Bay" }, { "level_us_16_02", "Selten River National Park" }, { "level_us_16_03", "Selten River Mountains" },
-    { "level_us_18_01", "Costa Atardecer" }, { "level_us_18_02", "Sierra Fuerte" }, { "level_ru_02_01", "Quarry" },
+    { "level_us_18_01", "Costa Atardecer" }, { "level_us_18_02", "Sierra Fuerte" }, { "level_us_19_01", "Grüntal Hollow" },
+    { "level_us_19_02", "Schneetal" }, { "level_us_19_03", "Eiswandspitze" }, { "level_ru_02_01", "Quarry" },
     { "level_ru_02_02", "Drowned Lands" }, { "level_ru_02_03", "Zimnegorsk" }, { "level_ru_02_04", "Rift" }, { "level_ru_03_01", "Lake Kovd" },
     { "level_ru_03_02", "Imandra" }, { "level_ru_04_01", "Urska River" }, { "level_ru_04_02", "Cosmodrome" },
     { "level_ru_04_03", "Northern Aegis Installation" }, { "level_ru_04_04", "Chernokamensk" }, { "level_ru_05_01", "Factory Grounds" },
