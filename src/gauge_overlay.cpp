@@ -147,7 +147,7 @@ static void OnPage()
     if (!logged)
     {
         logged = true;
-        GaugeLog(L"overlay: the Gauges tab was opened");
+        GaugeLog(L"overlay: the Gameplay tab was opened");
     }
     GaugeSettings s;
     GaugeView view;

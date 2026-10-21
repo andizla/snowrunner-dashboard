@@ -1,7 +1,7 @@
-// settings_page.h: the Gauges tab in ReShade's overlay, every Gauges.ini setting edited in the game. Shared by the mod
-// (gauge_overlay.cpp, Dear ImGui through ReShade's function table) and the offline preview (test\gauge_preview.cpp).
-// Include after imgui.h. The tab works on a copy of the settings in force and reports what to do with it; ReShade
-// hands the overlay's keyboard to Dear ImGui, so a new toggle key is read from there.
+// settings_page.h: the Gameplay tab of the NEXT GEN menu, every Gauges.ini setting edited in the game. Shared by the mod
+// (gauge_overlay.cpp, on the mod's own overlay) and the offline previews (test\gauge_preview.cpp, test\menu_preview.cpp).
+// Include after imgui.h. The tab works on a copy of the settings in force and reports what to do with it; the menu
+// hands every key to Dear ImGui while it is open, so a new toggle key is read from there.
 #pragma once
 #include "gauges.h"
 
@@ -587,9 +587,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     }
     if (st.capture >= 1)
     {
-        // The buttons are read in a window of its own: ReShade's overlay can be worked with the pad, and on the tab
-        // the buttons being held would walk the widgets and press them (PageCaptureStep has the rest). B closes a
-        // popup, so it is opened again each frame it is found closed.
+        // The buttons are read in a popup of its own, so held buttons never reach the tab's widgets (PageCaptureStep
+        // has the rest). B closes a popup, so it is opened again each frame it is found closed.
         uint32_t bound = 0;
         const bool done = PageCaptureStep(st, padNow, beganNow, ImGui::IsKeyPressed(ImGuiKey_Escape, false), now, bound);
         if (bound)
