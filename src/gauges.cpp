@@ -2010,7 +2010,7 @@ static DWORD WINAPI Run(void *)
         return 0;
     }
     const DWORD stamp = ExeStamp();
-    Log(L"Gauges " GAUGES_VERSION L": exe stamp %08lx, loaded %s", stamp,
+    Log(L"Next Gen Gameplay " GAUGES_VERSION L" (Gauges): exe stamp %08lx, loaded %s", stamp,
         g_addon ? L"by ReShade as Gauges.addon64, the name from before 0.16 (the mod needs no ReShade now: keep it as Gauges.asi)" : L"by an ASI loader");
     LogKeptSay();
     LogGameFolder();
