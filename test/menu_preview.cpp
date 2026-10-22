@@ -1,5 +1,6 @@
-// menu_preview.cpp: Next Gen's overlay without the game. A hidden window gets a swap chain on the WARP device, the
-// overlay (src\ng_overlay.cpp, the mod's own file) hooks its Present as it hooks the game's, and the NEXT GEN menu is
+// menu_preview.cpp: Next Gen's overlay without the game. A hidden window gets a swap chain on the WARP device, made
+// through this program's imports of CreateDXGIFactory1 and D3D11CreateDevice as the game makes its own, so the overlay
+// (src\ng_overlay.cpp, the mod's own file) hooks its Present as it hooks the game's, and the NEXT GEN menu is
 // drawn into it with the mod's Gameplay tab (src\settings_page.h) and the cluster (src\gauge_draw.h) on demo values. A
 // second tab, as the Next Gen Tire Inflation mod would add, is put into the shared block by hand. What the overlay
 // drew is taken from the back buffer right before the real Present and written as PNG files:
@@ -8,6 +9,7 @@
 // the exe, so they are copied there first when they are not there yet. Writes menu_1080p.png and menu_1440p.png.
 #include <windows.h>
 #include <d3d11.h>
+#include <dxgi1_4.h>
 #include <wincodec.h>
 #include <stdio.h>
 #include <vector>
@@ -179,10 +181,21 @@ static bool Run(const wchar_t *out, int w, int h)
     sd.SampleDesc.Count = 1;
     sd.Windowed = TRUE;
     sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+    // the game's way: a factory from CreateDXGIFactory1, a device on one of its adapters, the swap chain from the factory
+    IDXGIFactory1 *f = nullptr;
+    IDXGIFactory4 *f4 = nullptr;
+    IDXGIAdapter *warp = nullptr;
     IDXGISwapChain *sc = nullptr;
     ID3D11Device *dev = nullptr;
     ID3D11DeviceContext *ctx = nullptr;
-    if (!wnd || FAILED(D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &sd, &sc, &dev, nullptr, &ctx)))
+    if (wnd && SUCCEEDED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void **)&f)) && SUCCEEDED(f->QueryInterface(__uuidof(IDXGIFactory4), (void **)&f4)))
+        f4->EnumWarpAdapter(__uuidof(IDXGIAdapter), (void **)&warp);
+    const bool made = warp && SUCCEEDED(D3D11CreateDevice(warp, D3D_DRIVER_TYPE_UNKNOWN, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &dev, nullptr, &ctx)) &&
+                      SUCCEEDED(f->CreateSwapChain(dev, &sd, &sc));
+    if (warp) warp->Release();
+    if (f4) f4->Release();
+    if (f) f->Release();
+    if (!made)
     {
         printf("FAIL no WARP swap chain\n");
         return false;
@@ -289,8 +302,6 @@ int wmain(int argc, wchar_t **argv)
     strcpy_s(sh->slots[1].tab, "Tire Inflation");
     sh->slots[1].ready = 1;
     sh->open = 1;
-    for (int i = 0; i < 100 && !sh->table; i++) Sleep(20);
-    Sleep(200);
     Run(argv[1], 1920, 1080);
     // the window's place is the shared one: a new size starts it in the middle again. The overlay keeps to the swap
     // chain it drew on until that one has not presented for 3 s, as when the game makes its own anew
