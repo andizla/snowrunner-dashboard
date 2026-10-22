@@ -1243,23 +1243,27 @@ static bool GameShift(uint64_t vehicle, int gear)
     return took;
 }
 
-// The exe's code: from the first byte of its first code section to the end of its last, from its base. False where it
-// has none.
-static bool CodeRange(size_t &from, size_t &to)
+// The exe's code (CodeRangeOf), from its base. False where it has none.
+static bool CodeRange(size_t &from, size_t &to) { return CodeRangeOf((const uint8_t *)g_base, 0x1000, from, to); }
+
+// The exe's code copied out through ReadProcessMemory, at its own offsets in copy (the rest zeros): the searches read
+// the copy, so a page of the exe that cannot be read is no fault on the mod's thread (it reads as zeros).
+static bool CodeCopy(std::vector<uint8_t> &copy, size_t &from, size_t &to)
 {
-    const uint8_t *image = (const uint8_t *)g_base;
-    const IMAGE_NT_HEADERS64 *nt = (const IMAGE_NT_HEADERS64 *)(image + ((const IMAGE_DOS_HEADER *)image)->e_lfanew);
-    const IMAGE_SECTION_HEADER *section = IMAGE_FIRST_SECTION(nt);
-    from = SIZE_MAX;
-    to = 0;
-    for (int i = 0; i < nt->FileHeader.NumberOfSections; i++, section++)
-        if (section->Characteristics & IMAGE_SCN_MEM_EXECUTE)
+    if (!CodeRange(from, to)) return false;
+    copy.assign(to, 0);
+    const size_t kChunk = 1 << 20;
+    for (size_t at = from; at < to; at += kChunk)
+    {
+        const size_t n = to - at < kChunk ? to - at : kChunk;
+        if (ReadProcessMemory(GetCurrentProcess(), (const void *)(g_base + at), copy.data() + at, n, nullptr)) continue;
+        for (size_t p = at; p < at + n; p += 0x1000) // page by page where one of them cannot be read
         {
-            from = section->VirtualAddress < from ? section->VirtualAddress : from;
-            const size_t end = (size_t)section->VirtualAddress + section->Misc.VirtualSize;
-            to = end > to ? end : to;
+            const size_t c = at + n - p < 0x1000 ? at + n - p : 0x1000;
+            if (!ReadProcessMemory(GetCurrentProcess(), (const void *)(g_base + p), copy.data() + p, c, nullptr)) memset(copy.data() + p, 0, c);
         }
-    return from < to;
+    }
+    return true;
 }
 
 // The game's statics in the build that runs (truck.h's g_places, game_globals.h): on the Steam build of 22 July 2026
@@ -1277,7 +1281,8 @@ static bool PlacesFind(DWORD stamp, uint64_t &clock, bool quiet = false)
         return true;
     }
     size_t from = 0, to = 0;
-    if (!CodeRange(from, to))
+    std::vector<uint8_t> code;
+    if (!CodeCopy(code, from, to))
     {
         Log(L"places: the exe has no code section to look in");
         return false;
@@ -1289,10 +1294,13 @@ static bool PlacesFind(DWORD stamp, uint64_t &clock, bool quiet = false)
     {
         int signatures = 0;
         bool conflict = false;
-        found[g] = GlobalResolve((const uint8_t *)g_base, from, to, kGlobalSigs, g, signatures, conflict);
+        found[g] = GlobalResolve(code.data(), from, to, kGlobalSigs, g, signatures, conflict);
+        const bool outside = found[g] && !RvaInDataOf((const uint8_t *)g_base, 0x1000, found[g]);
         if (quiet) {}
+        else if (outside) Log(L"places: %S at +%llx is not in the exe's data, so it is not taken", kGameGlobals[g].name, found[g]);
         else if (found[g]) Log(L"places: %S at +%llx, by %d of its signatures", kGameGlobals[g].name, found[g], signatures);
         else Log(L"places: %S not found%S", kGameGlobals[g].name, conflict ? " (its signatures point at different places)" : "");
+        if (outside) found[g] = 0;
         missing = missing || (!found[g] && kGameGlobals[g].needed);
     }
     if (!quiet) Log(L"places: looked for in %.1f s", (GetTickCount64() - started) / 1000.0);
@@ -1356,16 +1364,16 @@ static void PlacesHarvest(DWORD stamp)
 // mod has hooked its own by then: where each one is, or that another mod holds it. Nothing is written.
 static void GameCodeLook()
 {
-    const uint8_t *image = (const uint8_t *)g_base;
     size_t from = 0, to = 0;
-    if (!CodeRange(from, to))
+    std::vector<uint8_t> code;
+    if (!CodeCopy(code, from, to))
     {
         Log(L"gearbox code: the exe has no code section to look in");
         return;
     }
     const ULONGLONG started = GetTickCount64();
     FunctionFind finds[kFnCount];
-    GameFunctionsFind(image, from, to, finds);
+    GameFunctionsFind(code.data(), from, to, finds);
     static char line[2048];
     GameFunctionsText(finds, line, sizeof line);
     int held = 0;
@@ -1373,7 +1381,8 @@ static void GameCodeLook()
     Log(L"gearbox code (%.1f s, nothing written): %S", (GetTickCount64() - started) / 1000.0, line);
     if (held) Log(L"gearbox code: another mod holds %d of the game's gearbox functions (a manual transmission mod); its hooks pass the game's shifts on", held);
     const FunctionFind &shift = finds[kFnShiftGear];
-    if ((shift.state == kFnFound && shift.count == 1) || shift.state == kFnHeld) g_shiftGear = (GameShiftFn)(g_base + shift.at);
+    // one place only, also behind another mod's jump
+    if ((shift.state == kFnFound || shift.state == kFnHeld) && shift.count == 1) g_shiftGear = (GameShiftFn)(g_base + shift.at);
     Log(g_shiftGear ? L"gearbox code: the mod's automatic can set gears through the game's shift function (Gearbox=1)"
                     : L"gearbox code: the game's shift function is not known for sure, so the mod's automatic cannot set gears (Gearbox stays the game's)");
 }
@@ -1460,6 +1469,7 @@ struct TruckWatch
     ClutchModel clutch;         // and, while the manual transmission mod drives it, the engine behind its clutch pedal
     TakeoverModel take;         // the mod's automatic setting the game's gears (Gearbox)
     PullTest pullTest;          // the pull test (the tab's button)
+    uint64_t pullVehicle, pullAction; // the truck whose torque factor a running pull test changed
     TorqueHand hand;            // the engine's torque handed to the game (Powertrain)
     AirModel air;               // and the air in its brakes' tanks
     SmtReader smtReader;        // the manual transmission mod's published state (smt.h)
@@ -1626,6 +1636,17 @@ static void TorqueGive(const TruckMemory &m, const TruckRefs &refs, bool read, c
     m.put(o.action + 0xCC, o.factor);
 }
 
+// A running pull test ends: the torque factor it changed goes back to its truck, where that truck's vehicle still holds
+// the drive train it changed (a switch of trucks or a truck lost mid-test left it changed before).
+static void PullGiveBack(const TruckMemory &m, TruckWatch &w, const wchar_t *why)
+{
+    if (w.pullTest.state != kPullRunning) return;
+    uint64_t action = 0;
+    const bool back = w.pullAction && m.get(w.pullVehicle + 0x68, action) && action == w.pullAction && m.put(w.pullAction + 0xCC, w.pullTest.factor);
+    Log(L"pull test: stopped, %s; the truck's torque factor %s", why, back ? L"given back" : L"not given back (its drive train is gone)");
+    w.pullTest = PullTest{};
+}
+
 static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s, bool front, TruckRaw &raw, World &world)
 {
     const int probe = s.probe;
@@ -1697,6 +1718,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         w.engineVehicle = 0;
         w.clock = ClockWatch{};
         w.who = TruckWho{};
+        PullGiveBack(m, w, L"the truck is not read any more");
         // the engine's torque the mod handed to the game: the game's own share back, where the truck still is
         TorqueGive(m, w.refs, false, TorqueHandStep(w.hand, false, 0, 0, 0.0f, 1.0f));
         return false;
@@ -1741,8 +1763,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             w.clutch = ClutchModel{};
             if (w.take.driving) Log(L"gearbox: the mod's automatic lets the last truck's gears go: another truck is driven");
             w.take = TakeoverModel{};
-            if (w.pullTest.state == kPullRunning) Log(L"pull test: stopped, another truck is driven (the last one's torque factor may be left changed)");
-            if (w.pullTest.state == kPullRunning) w.pullTest = PullTest{};
+            PullGiveBack(m, w, L"another truck is driven");
             w.air = AirModel{};
             w.tilt = TiltModel{};
             w.owed = w.asked = 0;
@@ -1832,7 +1853,11 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         const int pullWas = w.pullTest.state;
         const PullOrders pull = PullTestStep(w.pullTest, raw, foot, dt);
         if (pullWas == kPullArmed && w.pullTest.state == kPullRunning)
+        {
+            w.pullVehicle = w.refs.vehicle;
+            w.pullAction = w.refs.action;
             Log(L"pull test: running in gear %d at %.1f m/s, the torque factor %.3f; keep it floored", w.pullTest.gear, raw.speed, w.pullTest.factor);
+        }
         if (pull.write) m.put(w.refs.action + 0xCC, pull.factor);
         if (pull.hold || pull.ended)
         {
@@ -2051,6 +2076,7 @@ static DWORD WINAPI Run(void *)
     LogGameFolder();
     SettingsDefaults(g_set); // what the tab shows until the ini is read
     g_overlayOk = OverlayInit(g_self);
+    g_exeSize = ImageSize(); // where the exe ends, which the engine damage write keeps out of
     // the game's statics: known on the build the mod was made on, found by the code that uses them on any other
     uint64_t clockPlace = 0;
     if (stamp != kGaugesExeStamp) Log(L"places: another build of the game than the one the mod was made on (exe stamp %08lx): looking for what it reads", kGaugesExeStamp);
@@ -2069,7 +2095,8 @@ static DWORD WINAPI Run(void *)
     }
     if (!placesOk)
     {
-        Log(L"places: the mod cannot find the driven truck in this build of the game, %d looks over %.0f s: standing down, nothing is drawn or changed. "
+        Log(L"places: the mod cannot find the driven truck in this build of the game, %d looks over %.0f s: standing down, nothing in the game is changed and "
+            L"no cluster is drawn (the Gameplay tab says the mod is not running). "
             L"Gauges.log above says what is missing", kPlacesLooks, (kPlacesLooks - 1) * kPlacesRetryMs / 1000.0);
         InterlockedExchange(&g_modOff, 1);
         return 0;

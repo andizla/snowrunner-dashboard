@@ -2,7 +2,8 @@
 rem Runs the offline tests build.bat made: the settings (the ini round trip, the scales, the names of keys and pad
 rem buttons), the truck reader and the write of engine damage against a made up game, the engine speed, the range,
 rem the tilt, the coolant temperature and what it costs the engine on made up drives, and the preview, which draws
-rem the cluster and the Gauges tab into out\preview\*.png.
+rem the cluster and the Gauges tab into out\preview\*.png. With SR_IMAGE set to a copy of the game exe's image from a
+rem running game (as the tire mod's test takes one), the truck test checks the place search on it too.
 rem   test.bat [game Bin folder] [game screenshot.png]
 rem The game's font files are read from its Bin folder (the Steam default when none is given; without them the
 rem preview draws with the ImGui font). With a screenshot the cluster is drawn over it.

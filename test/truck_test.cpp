@@ -261,6 +261,78 @@ static bool Letters(int gear, int automatic, float power, bool shifter, const ch
     return ok;
 }
 
+// The place search on a real image of the game's exe (SR_IMAGE: a copy of its image from a running game, laid out as
+// in memory, as the tire mod's test takes one): every place and ShiftGear where the code review of 2026-10-23 found
+// them in the builds it knows, every place in the exe's data.
+static void RealImageTest()
+{
+    char file[MAX_PATH] = "";
+    GetEnvironmentVariableA("SR_IMAGE", file, MAX_PATH);
+    if (!*file)
+    {
+        printf("     places in a real image of the game's exe: no SR_IMAGE names one, not tested\n");
+        return;
+    }
+    std::vector<uint8_t> image;
+    FILE *f = nullptr;
+    if (fopen_s(&f, file, "rb") == 0 && f)
+    {
+        fseek(f, 0, SEEK_END);
+        const long n = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        image.resize(n > 0 ? (size_t)n : 0);
+        if (!image.empty() && fread(image.data(), 1, image.size(), f) != image.size()) image.clear();
+        fclose(f);
+    }
+    uint32_t stamp = 0, size = 0, lfanew = 0;
+    if (image.size() > 0x1000)
+    {
+        memcpy(&lfanew, image.data() + 0x3C, 4);
+        if (lfanew + 0x58 < 0x1000)
+        {
+            memcpy(&stamp, image.data() + lfanew + 8, 4);
+            memcpy(&size, image.data() + lfanew + 0x50, 4);
+        }
+    }
+    size_t from = 0, to = 0;
+    if (!size || size != image.size() || !CodeRangeOf(image.data(), 0x1000, from, to))
+    {
+        Check(false, "places in a real image of the game's exe: SR_IMAGE is not an image of an exe as it lies in memory");
+        return;
+    }
+    // the builds the review checked; the order of kGameGlobals: control, wheel class, game, map, viewer, garage, input,
+    // engine sets, clock
+    static const uint64_t kUpdate[kGlobCount] = { 0x2a92e38, 0x225ab38, 0x2a92e50, 0x2a92df0, 0x2a92df8, 0x2a949e8, 0x2a92ea0, 0x2aa2ba0, 0x2a92e08 };
+    const bool steam = stamp == kGaugesExeStamp, update = stamp == 0x6ab52f5d;
+    int right = 0, inData = 0;
+    char wrong[512] = "";
+    for (int g = 0; g < kGlobCount; g++)
+    {
+        int signatures = 0;
+        bool conflict = false;
+        const uint64_t place = GlobalResolve(image.data(), from, to, kGlobalSigs, g, signatures, conflict);
+        const uint64_t want = steam ? kGameGlobals[g].steam : update ? kUpdate[g] : place;
+        if (place && place == want) right++;
+        else
+        {
+            char one[80];
+            snprintf(one, sizeof one, " %s at %llx, not %llx;", kGameGlobals[g].name, (unsigned long long)place, (unsigned long long)want);
+            strcat_s(wrong, one);
+        }
+        if (place && RvaInDataOf(image.data(), 0x1000, place)) inData++;
+    }
+    FunctionFind finds[kFnCount];
+    GameFunctionsFind(image.data(), from, to, finds);
+    const FunctionFind &shift = finds[kFnShiftGear];
+    const size_t shiftWant = steam ? 0xd72360 : update ? 0xd73d80 : shift.at;
+    const bool shiftRight = shift.state == kFnFound && shift.count == 1 && shift.at == shiftWant;
+    char line[900];
+    snprintf(line, sizeof line, "places in a real image of the game's exe (stamp %08x%s, code %zx to %zx): %d of %d places, %d in its data, ShiftGear at %zx%s%s", stamp,
+             steam ? ", the Steam build of 22 July" : update ? ", the update of 20 October" : ", a build the test has no numbers for", from, to, right, kGlobCount, inData,
+             shift.at, *wrong ? "; wrong:" : "", wrong);
+    Check(right == kGlobCount && inData == kGlobCount && shiftRight, line);
+}
+
 int main()
 {
     TruckRefs r;
@@ -289,6 +361,11 @@ int main()
     TruckRaw bare;
     Check(TruckRead(kMemory, r, bare) && !bare.burnKnown && TruckSane(bare), "read: a truck without burn numbers is still read");
     Put(kVehicle + 0xE58, kSpeeds + 0x20 + 7 * sizeof(float));
+    // the game rebuilt the drive train under the truck: what was found is no longer read, so nothing is written through it
+    Put(kVehicle + 0x68, kAction + 0x1000);
+    TruckRaw staleRead;
+    Check(!TruckRead(kMemory, r, staleRead), "read: none once the vehicle holds another drive train than the one found (the mod's writes go through it)");
+    Put(kVehicle + 0x68, kAction);
 
     WorldRead(kMemory, r.control, w);
     TruckToState(t, w, s, st);
@@ -1132,6 +1209,8 @@ int main()
         }
         Check(single.state == kClockFound && single.found.off[1] == 0x44, "clock: the only place that rises at a day's pace is taken after three minutes");
     }
+
+    RealImageTest();
 
     printf(g_failed ? "TRUCK TEST FAILED (%d)\n" : "TRUCK TEST OK\n", g_failed);
     return g_failed ? 1 : 0;

@@ -8,6 +8,7 @@
 // ShiftToReverse, where it stands in the exe, as its few bytes are found in many places; without both of their places
 // it is not looked for.
 #pragma once
+#include <windows.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
@@ -101,6 +102,53 @@ inline bool PatternFind(const uint8_t *code, size_t from, size_t to, const uint8
         p++;
     }
     return count > 0;
+}
+
+// The sections of an image (headers: how many of its first bytes are there to read), or nullptr.
+inline const IMAGE_SECTION_HEADER *ImageSections(const uint8_t *image, size_t headers, int &count)
+{
+    count = 0;
+    if (headers < 0x40) return nullptr;
+    uint32_t lfanew = 0;
+    memcpy(&lfanew, image + 0x3C, 4);
+    if ((size_t)lfanew + sizeof(IMAGE_NT_HEADERS64) > headers) return nullptr;
+    const IMAGE_NT_HEADERS64 *nt = (const IMAGE_NT_HEADERS64 *)(image + lfanew);
+    const IMAGE_SECTION_HEADER *first = IMAGE_FIRST_SECTION(nt);
+    if ((const uint8_t *)(first + nt->FileHeader.NumberOfSections) > image + headers) return nullptr;
+    count = nt->FileHeader.NumberOfSections;
+    return first;
+}
+
+// The exe's code to look in, by RVA: from the first byte of its first code section to the end of its last. Steam's DRM
+// stub (the section .bind, code as well) is left out: none of the game's code is in it, and with it the span took in
+// the exe's data too (the code review of 2026-10-23). False where there is no code.
+inline bool CodeRangeOf(const uint8_t *image, size_t headers, size_t &from, size_t &to)
+{
+    from = SIZE_MAX;
+    to = 0;
+    int count = 0;
+    const IMAGE_SECTION_HEADER *section = ImageSections(image, headers, count);
+    for (int i = 0; section && i < count; i++, section++)
+        if ((section->Characteristics & IMAGE_SCN_MEM_EXECUTE) && memcmp(section->Name, ".bind", 5) != 0)
+        {
+            from = section->VirtualAddress < from ? section->VirtualAddress : from;
+            const size_t end = (size_t)section->VirtualAddress + section->Misc.VirtualSize;
+            to = end > to ? end : to;
+        }
+    return from < to;
+}
+
+// Whether an RVA lies in a section of the image that is not code (its data or its read-only data), where a static of
+// the game's or a class's method table has to be: a single signature that stands once in another build could point
+// anywhere.
+inline bool RvaInDataOf(const uint8_t *image, size_t headers, uint64_t rva)
+{
+    int count = 0;
+    const IMAGE_SECTION_HEADER *section = ImageSections(image, headers, count);
+    for (int i = 0; section && i < count; i++, section++)
+        if (rva >= section->VirtualAddress && rva < (uint64_t)section->VirtualAddress + section->Misc.VirtualSize)
+            return !(section->Characteristics & IMAGE_SCN_MEM_EXECUTE);
+    return false;
 }
 
 // What became of a function in the code.

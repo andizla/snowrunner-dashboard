@@ -18,8 +18,9 @@
 //   vehicle + 0x730                  seconds until a starting engine runs (1.8 at the start, then down to 0)
 //   vehicle + 0xE38 .. + 0xE6C       what the game burns fuel by (floats): + 0xE38 and + 0xE3C the engine's two shares,
 //                                    + 0xE40 the factor for all wheel drive, + 0xE44 for a damaged engine, + 0xE48 for
-//                                    a damaged gearbox, + 0xE50 .. + 0xE58 each gear's factor (reverse, neutral, 1 .. N,
-//                                    high), + 0xE68 the idle share, + 0xE6C litres a minute out of a holed tank
+//                                    a damaged gearbox, + 0xE50 and + 0xE58 the begin and the end of the list of each
+//                                    gear's factor (reverse, neutral, 1 .. N, high), + 0xE68 the idle share, + 0xE6C
+//                                    litres a minute out of a holed tank
 //   action = [vehicle + 0x68]        the drive train: + 0x38 power factor (float), + 0x3C automatic (byte),
 //                                    + 0x44 throttle (float, below 0 = forwards), + 0x48 handbrake, + 0x49 all wheel
 //                                    drive, + 0x4A differential lock (bytes), + 0x70 the gear engaged, + 0x74 the gear
@@ -180,8 +181,11 @@ inline bool TruckFind(const TruckMemory &m, TruckRefs &r)
 inline bool TruckRead(const TruckMemory &m, const TruckRefs &r, TruckRaw &t)
 {
     t = TruckRaw{};
-    uint64_t vehicle = 0;
+    uint64_t vehicle = 0, action = 0;
     if (!m.get(r.control + 8, vehicle) || vehicle != r.vehicle) return false;
+    // the drive train the truck was found with: the game rebuilds it under a truck that stays (a gearbox fitted), and
+    // the mod's writes go through it on this pass, so an old one is no read (and the truck is looked up anew)
+    if (!m.get(r.vehicle + 0x68, action) || action != r.action) return false;
     // the action from + 0x38 to + 0xD0 in one read
     uint8_t a[0x98];
     if (!m.get(r.vehicle + 0x768, t.flags) || !m.get(r.vehicle + 0x11C, t.stall) || !m.get(r.vehicle + 0x730, t.startTimer) || !m.get(r.action + 0x38, a)) return false;
@@ -299,8 +303,9 @@ enum { kMaxText = 96, kMaxEngineSets = 16, kMaxSetEntries = 256, kMaxTreeSteps =
 // which the torque falls, the torque factor there and the torque factor with the engine worn out. Nothing is
 // written by them.
 static const float kEngineThreshold = 0.7f, kEngineTorqueMin = 1.0f, kEngineTorqueMax = 0.6f;
-// How far the exe reaches from where it is loaded. The game's objects are never inside it, and nothing is written there.
-static const uint64_t kExeSize = 0x2e02000;
+// How far the exe reaches from where it is loaded (its image size; gauges.cpp sets the running one's at the start). The
+// game's objects are never inside it, and nothing is written there.
+inline uint64_t g_exeSize = 0x2e06000;
 
 // A text as the game keeps it, 0x20 bytes: the characters themselves while it has room for fewer than 16, else a
 // pointer to them; the length at + 0x10 and the room at + 0x18. False for one that cannot be read or has kMaxText
@@ -676,7 +681,7 @@ inline bool TruckDamageAdd(const TruckMemory &m, const TruckRefs &r, int points,
         return false;
     }
     const uint64_t data = TruckBlock(m, r.vehicle + 0x150);
-    if ((data >= m.base && data < m.base + kExeSize) || (r.action >= m.base && r.action < m.base + kExeSize))
+    if ((data >= m.base && data < m.base + g_exeSize) || (r.action >= m.base && r.action < m.base + g_exeSize))
     {
         w.why = "the engine's damage is not where the game keeps its objects";
         return false;

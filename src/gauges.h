@@ -11,8 +11,8 @@
 #include <string.h>
 #define GAUGES_VERSION "0.16.0"
 
-// The exe the addresses in this mod are from (SnowRunner on Steam, the build of 22 July 2026). On any other the mod
-// stands down.
+// The exe the addresses in this mod were taken from (SnowRunner on Steam, the build of 22 July 2026). On any other build
+// the mod finds them by the code that uses them (game_globals.h, game_code.h), and stands down where it cannot.
 static const DWORD kGaugesExeStamp = 0x6a607c05;
 
 // Everything the cluster shows, as the mod's thread leaves it for the render thread.
