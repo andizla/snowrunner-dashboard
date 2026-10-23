@@ -4,7 +4,7 @@ Next Gen Gameplay (formerly SnowRunner Gauges) is licensed under the GNU General
 
 ## ReShade add-on API
 
-`deps/reshade/include` holds the add-on API headers of ReShade 6.8.0 (https://github.com/crosire/reshade); the mod uses them to be handed the game's swap chains by ReShade. The release carries ReShade 6.8.0 with full add-on support itself, as `dxgi.dll`, changed in one place (its start banner is not drawn; Next Gen Tire Inflation's `tools/reshade_nobanner.py` makes it), and with a `ReShade.ini` that loads no effects and binds no keys. Distributed under the BSD 3-Clause License:
+`deps/reshade/include` holds the add-on API headers of ReShade 6.8.0 (https://github.com/crosire/reshade); the mod uses them to be handed the game's swap chains by ReShade. The release carries ReShade 6.8.0 with full add-on support itself, as `dxgi.dll`, changed in one place (its start banner is not drawn; Next Gen Tire Inflation's `tools/reshade_nobanner.py` makes it), and with a `ReShade.ini` that loads no effects and keeps Home for ReShade's own window. Distributed under the BSD 3-Clause License:
 
 Copyright 2014 Patrick Mours. All rights reserved.
 
