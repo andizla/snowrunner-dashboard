@@ -16,7 +16,7 @@ This is version 0.16.0. It reads the truck's own values for the speedometer, the
 
 1. Close the game.
 2. Copy `Gauges.asi`, `version.dll`, `dxgi.dll` and `ReShade.ini` into the game's `Sources\Bin` folder, next to `SnowRunner.exe`. A `version.dll` already there from Next Gen Tire Inflation is the same loader: keep it; its `dxgi.dll` and `ReShade.ini` are the same files as this release's.
-3. Start the game. Page Down opens the NEXT GEN menu, and its Gameplay tab has the mod's settings.
+3. Start the game. F2 opens the NEXT GEN menu, and its Gameplay tab has the mod's settings.
 
 Already using ReShade? If Windows asks whether to replace `dxgi.dll` or `ReShade.ini`, ReShade is already in the game: choose Skip for those two, and your ReShade and its settings stay. If the mod then says the ReShade in the game takes no add-ons, copy in `dxgi.dll` alone.
 
@@ -43,7 +43,7 @@ The cluster is on screen while you drive a truck in the world, and it fades in a
 
 ## Settings
 
-The Gameplay tab of the NEXT GEN menu edits every setting while you play. Page Down opens and closes the menu; another key is set by clicking the key's name at the menu's top right and pressing it, or in `NextGen.ini` next to the exe (`[Menu]`, `Key=` a virtual key code), which the Next Gen mods share. While the menu is open the game gets no mouse and no keys. Changes count at once and are saved to `Gauges.ini` in the same folder. The game writes that file with the defaults and a short guide on its first start, so it can be edited by hand too. With Next Gen Graphics installed the menu also has a Graphics tab. It switches Graphics' effects while you play. Its F keys are off then; KeysWithMenu=1 in SnowRunnerShadows.ini keeps them.
+The Gameplay tab of the NEXT GEN menu edits every setting while you play. F2 opens and closes the menu; another key is set by clicking the key's name at the menu's top right and pressing it, or in `NextGen.ini` next to the exe (`[Menu]`, `Key=` a virtual key code), which the Next Gen mods share. While the menu is open the game gets no mouse and no keys. Changes count at once and are saved to `Gauges.ini` in the same folder. The game writes that file with the defaults and a short guide on its first start, so it can be edited by hand too. With Next Gen Graphics installed the menu also has a Graphics tab. It switches Graphics' effects while you play. Its F keys are off then; KeysWithMenu=1 in SnowRunnerShadows.ini keeps them.
 
 | Setting | In the ini | Default |
 |---|---|---|

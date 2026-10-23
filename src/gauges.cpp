@@ -547,7 +547,7 @@ static void ReadIni(GaugeSettings &s)
         if (_wfopen_s(&f, ini.c_str(), L"w, ccs=UTF-16LE") == 0 && f)
         {
             fwprintf(f, L"; Gauges: the gauge cluster of Next Gen Gameplay for the truck being driven, drawn by the mod itself.\n"
-                        L"; The Gameplay tab of the NEXT GEN menu (Page Down opens it, or the key in NextGen.ini) edits everything here in the game.\n"
+                        L"; The Gameplay tab of the NEXT GEN menu (F2 opens it, or the key in NextGen.ini) edits everything here in the game.\n"
                         L"; Layout: 0 = a strip along the bottom centre, 1 = a block in the bottom right corner.\n"
                         L"; Style: 0 = solid dial faces, 1 = tinted see-through faces (FaceOpacity 0 to 0.85 sets how dark),\n"
                         L"; 2 = open: no faces, only the scales, numbers and needles.\n"
