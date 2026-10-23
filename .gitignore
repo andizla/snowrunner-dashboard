@@ -12,7 +12,8 @@ out/
 image_snap.bin
 sr_image/
 
-# working notes and the plan with its mockups: local only
+# release drafts and zip scripts, working notes and the plan with its mockups: local only
+release/
 HANDOFF.md
 MODULES.md
 docs/plan/
