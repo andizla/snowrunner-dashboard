@@ -31,12 +31,12 @@ void GaugeLog(const wchar_t *fmt, ...)
     wprintf(L"\n");
 }
 
-// The block's layout as ng_overlay.cpp has it (kNgSharedVersion 2): the test opens the menu and adds a tab through it.
+// The block's layout as ng_overlay.cpp has it (kNgSharedVersion 3): the test opens the menu and adds a tab through it.
 struct NgSharedCopy
 {
     volatile LONG version, open, chosen, toggledAt, key, inputSlot, wheelTurn, charCount, chars[32], cursorX, cursorY, placeTurn;
     float x, y, w, h;
-    volatile LONG64 table;
+    volatile LONG64 graphics;
     struct Slot
     {
         volatile LONG used, ready;
@@ -292,7 +292,7 @@ int wmain(int argc, wchar_t **argv)
     swprintf_s(name, L"Local\\NextGen.Menu.%lu", GetCurrentProcessId());
     const HANDLE map = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, name);
     NgSharedCopy *sh = map ? (NgSharedCopy *)MapViewOfFile(map, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(NgSharedCopy)) : nullptr;
-    if (!sh || sh->version != 2)
+    if (!sh || sh->version != 3)
     {
         printf("FAIL the shared block is not there\n");
         return 1;
