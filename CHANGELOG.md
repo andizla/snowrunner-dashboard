@@ -7,7 +7,7 @@
 - The NEXT GEN menu opens on F2. A `NextGen.ini` from a test build that still holds that build's default key (Delete or Page Down) moves to F2 once.
 - With Next Gen Graphics installed the NEXT GEN menu has a Graphics tab with its switches and status lines. Its F keys are off while the tab is there.
 - The settings are in the Gameplay tab of the NEXT GEN menu, which F2 opens and closes. The Next Gen Tire Inflation mod, where installed, has its tab in the same window. The key is set in `NextGen.ini` next to the game's exe, or in the menu: click the key's name at its top right, then press the new key. While the menu is open the game gets no mouse or keys.
-- Works alongside the Spotter minimap mod. With ReShade too, Spotter needs its own `reshade_addon_mode` on (in `Spotter\options.json`): its DirectX probe at start otherwise ends the game while ReShade sets up its hooks.
+- Works alongside other mods that draw over the game. A minimap mod with a ReShade add-on mode of its own needs that mode on next to ReShade: its DirectX probe at start otherwise ends the game while ReShade sets up its hooks.
 - Should one Next Gen mod's overlay fail, its tab leaves the NEXT GEN menu and the other mod's tab shows; with no tab left the menu closes, so the game never loses its mouse and keys to a menu nobody draws. The log says where it failed.
 - The loader in the zip, `version.dll`, loads the mods into the game only. SnowRunner's crash reporter and its other programs in `Bin` load it too: they get no `.asi` file, and `AsiLoader.log` keeps the game's lines, with one line added when the crash reporter starts.
 - Works with the Steam overlay of Steam's client from 21 October 2026. Without ReShade it ended the game at its first frame on a tester's PC: Steam hooked both DirectX's Present and the mod's, and the two called each other until the game ran out of stack. The mod now hooks only the swap chains the game makes, each through a method table of its own, and leaves DirectX's as they are.
@@ -21,7 +21,7 @@
 
 ## [0.15.11]
 
-- A look for the game's places that misses one the mod needs is made again every 2 seconds, 31 looks in all, before the mod stands down. Loaded early, as through another mod's DirectX probe (the Spotter minimap mod, on the game's build of 20 October 2026), it looked before the game's code was ready, found nothing and stood down; the next start without that mod found every place. The look runs on the game's own code, so no offline test covers it.
+- A look for the game's places that misses one the mod needs is made again every 2 seconds, 31 looks in all, before the mod stands down. Loaded early, as through another mod's DirectX probe (a minimap mod, on the game's build of 20 October 2026), it looked before the game's code was ready, found nothing and stood down; the next start without that mod found every place. The look runs on the game's own code, so no offline test covers it.
 
 ## [0.15.10]
 

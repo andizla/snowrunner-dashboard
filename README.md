@@ -10,7 +10,7 @@ This is version 0.16.0. It reads the truck's own values for the speedometer, the
 
 - SnowRunner for Windows: the Steam, Epic Games Store or Microsoft Store (Xbox app) version. The mod is made on the Steam build of 22 July 2026 and knows where that build keeps what it reads. On any other build (another store's, or after a game update) it finds those places by the game's code that uses them, and says in its log what it found; where it cannot find the truck it looks again every 2 seconds for a minute (another mod can load it before the game's code is ready), then stands down and changes nothing. The signatures it finds them by were taken from the Steam build; another build stands down only where the truck, its wheels or the game's state cannot be found, and its clock is looked for with `Probe=1` (see the outside temperature).
 - An ASI loader, which loads `Gauges.asi` when the game starts: the `version.dll` in the release, the same file as Next Gen Tire Inflation's (the SnowRunner Tire Inflation System).
-- ReShade 6.8.0, which comes in the zip as `dxgi.dll` and `ReShade.ini`, the same files as Next Gen Tire Inflation's, for compatibility with overlays such as RivaTuner, Discord, Nvidia and Steam. It shows nothing of its own; Home opens its window. A ReShade already in the game works as it is (any ReShade from 6.8.0 on with add-on support). Without it the game can crash with those overlays, and the mod says so at the start.
+- ReShade 6.8.0, which comes in the zip as `dxgi.dll` and `ReShade.ini`, the same files as Next Gen Tire Inflation's, for compatibility with overlays such as RivaTuner, Discord, Nvidia and Steam. It shows nothing of its own; Home opens its window. A ReShade already in the game works as it is (any ReShade from 6.8.0 on with add-on support). Without ReShade the game can crash with the RivaTuner or Discord overlay or with multiple monitors, and the mod says so at the start.
 
 - The full manual, with every dial, setting and model, as a PDF: [Next Gen Gameplay Manual](https://github.com/andizla/snowrunner-dashboard/blob/main/docs/Next_Gen_Gameplay_Manual.pdf), also [in Russian](https://github.com/andizla/snowrunner-dashboard/blob/main/docs/Next_Gen_Gameplay_Manual_ru.pdf).
 
@@ -208,6 +208,7 @@ Delete `Gauges.asi`, `Gauges.ini`, `Gauges.log` and the folder `Gauges` (the set
 
 - The mod changes no game file. What it writes into the game's memory: with `Damage` on, the engine damage of the truck you drive; with `Gearbox=1`, the game's automatic flag and the gears, through the game's own shift function; with `Powertrain=1`, the game's torque factor of the truck you drive, on every pass; during the pull test, the torque factor, for seven seconds. With all of them off it writes nothing.
 - `Damage` has not been tried in co-op. Leave it off there.
+- On a PC whose Windows proxy settings are on automatic detection the first frame can come late by half a minute: ReShade checks for its own update at the start and waits on that lookup.
 - If something does not work, `Gauges.log` in `Sources\Bin` says what the mod found and did. `GrabDumps.bat` from the zip, run in `Sources\Bin` with the game closed, gathers the logs, the ini files and the crash dump into one zip beside itself, for a report. It is the log of the game's last start; at each start the one before moves into `Gauges\logs`, named by the date and time that start began (`Gauges 2026-10-12 21-29-11.log`), so none is lost. With `Probe=1` a long drive's log runs to 20 or 30 MB, and the folder is never emptied by the mod.
 - The game's own HUD stays as it is. Its "Immersive Mode" option hides it while it is not in use.
 
@@ -238,6 +239,6 @@ The cluster and the menu are drawn with Dear ImGui by Omar Cornut, and their tex
 
 `SOUND_CREDITS.md` says where each sound comes from.
 
-Thanks to the testers: [Milos_Mk6](https://mod.io/u/milos_mk6) for the Epic runs, the crash dump at Enter and the ZIL gearbox drives; Globalhacker for the Steam overlay crash dump, the insanity preset and his tire ideas; [Zenosxy](https://mod.io/u/zenosxy) for the first clean run outside the development PC.
+Thanks to the testers: [Milos_Mk6](https://mod.io/g/snowrunner/u/milos-mk6) for the Epic runs, the crash dump at Enter and the ZIL gearbox drives; Globalhacker for the Steam overlay crash dump and his ideas, the damage start, the spring brakes and the clock among them; [Zenosxy](https://mod.io/g/snowrunner/u/zenosxy) for the first clean run outside the development PC.
 
 SnowRunner is a game by Saber Interactive. This project is not affiliated with Saber Interactive or Focus Entertainment and contains no game files.
