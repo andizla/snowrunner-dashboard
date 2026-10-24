@@ -1243,8 +1243,8 @@ inline float TorqueFactorMostOf(float fullPull)
 inline float TorqueBlend(float lift, float share) { return 1.0f + SettingsRange(share, 0.0f, 1.0f) * (lift - 1.0f); }
 
 // An engine held back (Torque, kTorqueShareRange): the whole push the hand gives, the game's own share included,
-// times the share, no lower than the factor's least; 0 (none set) or 1 leaves it as it is. For an overhaul's engine
-// with several times a stock engine's torque (a tester's RLM trucks, 2026-10-24).
+// times the share, no lower than the factor's least; 0 (none set) or 1 leaves it as it is. For a mod's engine with
+// several times a stock engine's torque, such as RLM's (a tester's trucks, 2026-10-24).
 inline float TorqueHeld(float factor, float share) { return share > 0.0f && share < 1.0f ? fmaxf(kTorqueFactorLeast, factor * share) : factor; }
 
 // What the factor's writes stand on.

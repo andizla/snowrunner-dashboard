@@ -484,7 +484,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             act |= kPageEngineTorque;
         }
         PageTip("How much of the engine's torque the truck gets while Engine to the game is on, the game's own pull included. 100 is the engine as it comes. "
-                "Lower it for an overhaul's engine with several times a stock engine's torque: at 25 an engine with four times the torque pulls like the stock one. "
+                "Lower it for a mod's engine with several times a stock engine's torque, such as RLM's: at 25 an engine with four times the torque pulls like the stock one. "
                 "The set-off gear follows it. No effect with Engine to the game off.");
         if (set)
         {

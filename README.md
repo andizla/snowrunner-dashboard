@@ -181,7 +181,7 @@ Each engine can have a profile of its own, in its own file `Gauges\engines\<name
 - `Aspiration`: 0 turbo, 1 naturally aspirated. Naturally aspirated has no boost, so no boost dial and no turbo sounds, and all of its torque at once with the pedal;
 - `TorqueCurve`: a whole curve of its own, written by hand as `x:y` points (`0.3:0.7,0.5:1,1:0.75`, x the engine speed over the red zone's, y the torque over its most), in place of the one from the peak;
 - `FullPull`: how far toward a gear's top, in percent, the engine keeps all its torque floored before it fades out (92 to 98; 92 when not set). The tab's "Full pull up to" shows it in rpm. 92 suits a diesel, whose governor cuts the fuel from its rated speed; a petrol engine that makes its power up to its red zone can keep it to 96 to 98, and floored the automatic then shifts up later too, where the next gear pulls more. Near a gear's top the torque factor gets large for it (about 10 times the game's own at 95, 24 at 98): lower it where a truck surges at the top of a gear.
-- `Torque`: how much of its torque the truck gets with the engine handed to the game, the game's own pull included, in percent (10 to 100; 100 when not set). The tab's "Torque" slider. For an overhaul's engine with several times a stock engine's torque: at 25 an engine with four times the torque pulls like the stock one. The set-off gear follows it.
+- `Torque`: how much of its torque the truck gets with the engine handed to the game, the game's own pull included, in percent (10 to 100; 100 when not set). The tab's "Torque" slider. For a mod's engine with several times a stock engine's torque, such as RLM's: at 25 an engine with four times the torque pulls like the stock one. The set-off gear follows it.
 
 ```
 [Engine]

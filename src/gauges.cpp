@@ -625,7 +625,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; Gauges\\gearboxes\\<name>.ini GearHold: seconds a gearbox holds each gear going up with Powertrain=1, 1 to 3 (the tab).\n"
                         L"; Gauges\\engines\\<name>.ini: PeakTorqueRpm, Aspiration (0 turbo, 1 naturally aspirated), TorqueCurve (the tab's Engine).\n"
                         L";   FullPull: how far toward a gear's top, 92 to 98 percent, the engine keeps its full pull floored (92 when not set).\n"
-                        L";   Torque: how much of its torque the truck gets, 10 to 100 percent (100 when not set), for an overhaul's engine with several times a stock engine's torque.\n"
+                        L";   Torque: how much of its torque the truck gets, 10 to 100 percent (100 when not set), for a mod's engine with several times a stock engine's torque, such as RLM's.\n"
                         L"; For work on the mod: Demo=1 draws demo values whenever no truck is driven, Probe=1 logs the values read from the game.\n");
             fclose(f);
             WriteIni(s);
