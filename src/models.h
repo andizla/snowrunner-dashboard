@@ -972,6 +972,7 @@ struct EngineProfile
     bool custom;
     TorqueCurve curve;
     float fullPull; // FullPull: the share of a gear's top it keeps its full pull to floored (kFullPullRange), 0 for none: kTorqueFactorMost's
+    float torque;   // Torque: the share of its torque the truck gets (kTorqueShareRange), 0 for none: all of it
 };
 
 // The curve an engine pulls by: its own written one, else one from its peak torque's speed (redline: the red zone's
@@ -1240,6 +1241,11 @@ inline float TorqueFactorMostOf(float fullPull)
 // The lift as far as the setting hands the mod's engine to the game (EngineShare, 0 to 1): 0 leaves the game's own, 1
 // the whole lift, and between the two the pull lies between the game's and the mod's engine's.
 inline float TorqueBlend(float lift, float share) { return 1.0f + SettingsRange(share, 0.0f, 1.0f) * (lift - 1.0f); }
+
+// An engine held back (Torque, kTorqueShareRange): the whole push the hand gives, the game's own share included,
+// times the share, no lower than the factor's least; 0 (none set) or 1 leaves it as it is. For an overhaul's engine
+// with several times a stock engine's torque (a tester's RLM trucks, 2026-10-24).
+inline float TorqueHeld(float factor, float share) { return share > 0.0f && share < 1.0f ? fmaxf(kTorqueFactorLeast, factor * share) : factor; }
 
 // What the factor's writes stand on.
 struct TorqueHand

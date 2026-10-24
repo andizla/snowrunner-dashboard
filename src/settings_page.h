@@ -17,11 +17,12 @@ struct PageState
     float enginePeak = 0.0f;      // the driven truck's engine's profile as the Engine section set it (kPageEngineSet)
     int engineAspiration = 0;
     float engineFullPull = 0.0f;  // and the share of a gear's top its full pull reaches, as the slider set it (kPageEngineFull)
+    int engineTorque = 100;       // and how much of its torque the truck gets, in percent, as the slider set it (kPageEngineTorque)
 };
 static const unsigned long long kPageCaptureMs = 8000;
 enum { kPageChanged = 1, kPageReload = 2, kPageTruckDrop = 4, kPageDefaults = 8, kPageHearHigh = 16, kPageHearMid = 32, kPageHearLow = 64, kPageHearOil = 128,
        kPagePullTest = 256, kPagePullCancel = 512, kPageMapAmbient = 1024, kPageGearHold = 2048, kPageEngineSet = 4096,
-       kPageEngineDrop = 8192, kPageEngineFull = 16384 };
+       kPageEngineDrop = 8192, kPageEngineFull = 16384, kPageEngineTorque = 32768 };
 
 // The Dear ImGui key as a virtual key, for the keys the toggle key can be; 0 for others.
 static int PageVirtualKey(int k)
@@ -440,6 +441,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         if (view.engineOwn) ImGui::TextWrapped("Engine %s. Its own profile, kept in Gauges\\engines.", view.engine);
         else ImGui::TextWrapped("Engine %s. It pulls by the %s class's torque curve%s. Set its peak torque here and this engine keeps a profile of its own.", view.engine,
                                 PageClassWord(view.autoClass), view.autoByWeight ? " (the class of the truck's weight)" : "");
+        if (view.engineFigure > 0.0f) ImGui::TextWrapped("Its torque in the game's files: %.0f (a stock scout's engine reads about 195000).", view.engineFigure);
         float peak = view.enginePeakRpm;
         int aspiration = view.engineAspiration;
         bool set = false;
@@ -472,13 +474,25 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 "diesel; a petrol engine that makes its power up to its red zone can keep it to 96 to 98. Floored, the mod's automatic shifts "
                 "up where the next gear pulls more, so it revs further too. Near a gear's top the mod writes a large torque factor for it "
                 "(10 times the game's own at 95, 24 at 98): lower it where a truck surges at the top of a gear.");
+        // how much of its torque the truck gets, kept in percent
+        int torquePercent = (int)lroundf(view.engineTorque * 100.0f);
+        PageLabel("Torque", labelX);
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::SliderInt("##torqueshare", &torquePercent, (int)(kTorqueShareRange[0] * 100.0f), (int)(kTorqueShareRange[1] * 100.0f), "%d %%", ImGuiSliderFlags_AlwaysClamp))
+        {
+            st.engineTorque = torquePercent;
+            act |= kPageEngineTorque;
+        }
+        PageTip("How much of the engine's torque the truck gets while Engine to the game is on, the game's own pull included. 100 is the engine as it comes. "
+                "Lower it for an overhaul's engine with several times a stock engine's torque: at 25 an engine with four times the torque pulls like the stock one. "
+                "The set-off gear follows it. No effect with Engine to the game off.");
         if (set)
         {
             st.enginePeak = floorf(peak / 50.0f + 0.5f) * 50.0f;
             st.engineAspiration = aspiration;
             act |= kPageEngineSet;
         }
-        PageLabel("Torque", labelX);
+        PageLabel("Curve", labelX);
         ImGui::PlotLines("##torquecurve", view.engineCurve, kEnginePlot, 0, nullptr, 0.0f, 1.05f, ImVec2(w, 60.0f * ImGui::GetFontSize() / 13.0f));
         PageTip("The torque in force from idle to the tachometer's top, as a share of the engine's most.");
         if (view.engineOwn && ImGui::SmallButton("Back to the class's curve")) act |= kPageEngineDrop;

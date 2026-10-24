@@ -1600,6 +1600,9 @@ int main(int argc, char **argv)
             Check(roofs && sixLow > 3000.0f && sixHigh < GearboxPoint(zk, kEngineUpFloored) && fullLow > sixHigh + 60.0f,
                   "powertrain: an engine's own full pull lifts the torque factor's roof to 1 over the game's fall there (6 at 92 percent and when none "
                   "is set); floored the automatic's point up follows it, a ZIL-131's from about 3040 to about 3150 rpm");
+            Check(TorqueHeld(6.0f, 0.25f) == 1.5f && TorqueHeld(1.0f, 0.25f) == 0.25f && TorqueHeld(0.1f, 0.25f) == kTorqueFactorLeast && TorqueHeld(3.0f, 0.0f) == 3.0f &&
+                      TorqueHeld(3.0f, 1.0f) == 3.0f && TorqueHeld(3.0f, 1.5f) == 3.0f,
+                  "torque held: a quarter of the push for the roof of 6 is 1.5 and for the game's own 1 is 0.25, never under the least; none set or a whole share leaves it");
         }
         // cruising, as a car's nine-speed automatic did on the road (2026-10-19): a light foot held steady shifts up as
         // soon as the next gear lands over kLightPeak of the peak torque's speed and kShiftRoom over its point down, short
