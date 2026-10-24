@@ -1,10 +1,10 @@
 # Changelog
 
-## [0.16.1]
+## [0.16.1] 2026-10-25
 
 - `RevCap`, the tab's "Rev cap 95%" under Engine to the game, off by default: with the mod's engine the pull ends at 95 percent of the way from idle to the red zone and the automatic shifts up there floored. For a truck that shoots from 40 to 80 km/h on its own, a game bug that RLM-like engines and this mod make worse.
 - `Torque`, the tab's "Torque" slider under Engine, per engine in `Gauges\engines\<name>.ini`: how much of its torque the truck gets with the engine handed to the game, 10 to 100 percent (100 when not set). Lower it for an RLM-like engine with several times a stock engine's torque: at 25 an engine with four times the torque pulls like the stock one. The set-off gear follows it. The tab's torque plot is labelled Curve now.
-- On another map every truck's engine starts as cold as the air outside: the coolant and oil the mod remembers for each kind of truck are dropped when the game's save names another map. A reload of the same map keeps them.
+- On another map every truck's engine is meant to start as cold as the air outside. Known: it does not take effect yet (a drive on 25 October kept the engine warm over a map change); the code stays in and a fix follows.
 
 ## [0.16.0] 2026-10-24
 
