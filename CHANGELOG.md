@@ -4,6 +4,7 @@
 
 - `RevCap`, the tab's "Rev cap 95%" under Engine to the game, a test switch, off by default: with the mod's engine the pull ends at 95 percent of the way from idle to the red zone, as it did until 0.15.10, and the automatic shifts up there floored. For a tester whose heavy trucks run away on their own, to tell whether the pull past that point is in it.
 - `Torque`, the tab's "Torque" slider under Engine, per engine in `Gauges\engines\<name>.ini`: how much of its torque the truck gets with the engine handed to the game, the game's own pull included, 10 to 100 percent (100 when not set). For a mod's engine with several times a stock engine's torque, such as RLM's: at 25 an engine with four times the torque pulls like the stock one. The set-off gear follows it. The tab's torque plot is labelled Curve now.
+- On another map every truck's engine starts as cold as the air outside: the coolant and oil the mod remembers for each kind of truck are dropped when the game's save names another map. A reload of the same map keeps them.
 
 ## [0.16.0] 2026-10-24
 

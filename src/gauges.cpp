@@ -2440,6 +2440,15 @@ static DWORD WINAPI Run(void *)
                 else if (mapOwn) Log(L"map: %s, %g C outside (AmbientC: AmbientByMap=0 leaves [Map:%s] out)", Wide(title).c_str(), s.ambientC, Wide(mapFrom).c_str());
                 else if (map[0]) Log(L"map: %s has no section in Gauges.ini, nor has its region, so it is %g C outside (AmbientC)", Wide(title).c_str(), s.ambientC);
             }
+            // another map: the coolant and oil the model remembers for each kind of truck are dropped, so every truck
+            // starts as cold as the air outside there. Both names must be known. A save caught mid-write names no map
+            // for a moment (map ""), and that is no change of map
+            if (mapRead[0] && map[0] && strcmp(mapRead, map))
+            {
+                watch.temp = TempModel{};
+                watch.oil = OilWarning{};
+                Log(L"map: another map, so every truck's engine is as cold as the air outside again (the coolant and the oil)");
+            }
             strcpy_s(mapRead, map);
             mapAsk = false;
         }
