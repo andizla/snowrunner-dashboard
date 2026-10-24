@@ -620,12 +620,12 @@ static void ReadIni(GaugeSettings &s)
                         L"; shows, less with cold oil and without boost, and doubled by the converter at its stall (Gearbox=1), in place\n"
                         L"; of the game's own, which falls away toward each gear's top. The mod writes the game's torque factor for it.\n"
                         L"; EngineShare: how much of the mod's engine the game gets, 0 to 100 percent (50: half way between the two).\n"
-                        L"; RevCap=1: a test switch: with the mod's engine the pull ends at 95 percent of the way from idle to the red\n"
-                        L"; zone, as it did until 0.15.10, and the automatic shifts up there floored. For a truck that runs away on its own.\n"
+                        L"; RevCap=1: with the mod's engine the pull ends at 95 percent of the way from idle to the red zone (as until 0.15.10) and the\n"
+                        L"; automatic shifts up there floored: for a truck that shoots from 40 to 80 km/h on its own, a game bug RLM-like mods and this mod's engine make worse.\n"
                         L"; Gauges\\gearboxes\\<name>.ini GearHold: seconds a gearbox holds each gear going up with Powertrain=1, 1 to 3 (the tab).\n"
                         L"; Gauges\\engines\\<name>.ini: PeakTorqueRpm, Aspiration (0 turbo, 1 naturally aspirated), TorqueCurve (the tab's Engine).\n"
                         L";   FullPull: how far toward a gear's top, 92 to 98 percent, the engine keeps its full pull floored (92 when not set).\n"
-                        L";   Torque: how much of its torque the truck gets, 10 to 100 percent (100 when not set), for a mod's engine with several times a stock engine's torque, such as RLM's.\n"
+                        L";   Torque: how much of its torque the truck gets, 10 to 100 percent (100 when not set). Lower it for a mod's engine with several times a stock engine's torque (RLM): a truck that shoots from 40 to 80 km/h on its own hit a game bug such engines and this mod's engine make worse.\n"
                         L"; For work on the mod: Demo=1 draws demo values whenever no truck is driven, Probe=1 logs the values read from the game.\n");
             fclose(f);
             WriteIni(s);

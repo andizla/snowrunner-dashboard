@@ -73,7 +73,7 @@ The Gameplay tab of the NEXT GEN menu edits every setting while you play. F2 ope
 | What you drive with, for the mod's automatic: a wheel's pedals, a pad or the keyboard (see below) | `Input` 0, 1 or 2 | a wheel's pedals |
 | The truck pulls with the mod's engine and converter (see below) | `Powertrain` 0 or 1 | off |
 | How much of the mod's engine the game gets with `Powertrain=1`, from 0 to 100 percent: 0 leaves the game's own pull | `EngineShare` | 50 |
-| A test switch: with the mod's engine the pull ends at 95 percent of the way from idle to the red zone, as it did until 0.15.10, and the automatic shifts up there floored | `RevCap` | 0 |
+| With the mod's engine the pull ends at 95 percent of the way from idle to the red zone, as it did until 0.15.10, and the automatic shifts up there floored: for a truck that suddenly shoots from 40 to 80 km/h on its own | `RevCap` | 0 |
 | Percent of the engine lost a minute at 125 C, and by a cold engine floored at the red zone at 0 C, each from 0 to 100 | `HotDamagePercentPerMinute`, `ColdDamagePercentPerMinute` | 10, 5 |
 | How loud the turbo's flutter and the oil warning are, from 0 to 100. 0 = no sound | `SoundVolume` | 50 |
 | The sounds without the cluster | `SoundsOnly` 0 or 1 | off |
@@ -163,7 +163,7 @@ The game's engine gives all of its torque with the wheels at about half of the g
 
 `EngineShare` sets how much of the mod's engine the game gets: at 50, the default, the truck pulls half way between the game's own engine and the mod's, and at 100 all of the mod's. Lower it where a truck pulls too hard.
 
-`RevCap=1`, the tab's "Rev cap 95%" under Engine to the game, is a test switch, off by default: with the mod's engine the pull ends at 95 percent of the way from idle to the red zone, as it did until 0.15.10, and the automatic shifts up there floored. For a heavy truck that runs away on its own: with it on, the pull past that point is out of the picture.
+`RevCap=1`, the tab's "Rev cap 95%" under Engine to the game, off by default: with the mod's engine the pull ends at 95 percent of the way from idle to the red zone, as it did until 0.15.10, and the automatic shifts up there floored. It is for a truck that suddenly shoots from 40 to 80 km/h on its own. That leap is a bug of the game itself: RLM and mods like it, with engines of several times a stock engine's torque, make it far worse, and this mod's engine adds to it. The cap takes the pull past that point out of the picture; the engine's `Torque` (below) takes the surplus torque out.
 
 With the engine handed over, the mod's automatic shifts as a truck automatic does:
 
@@ -181,7 +181,7 @@ Each engine can have a profile of its own, in its own file `Gauges\engines\<name
 - `Aspiration`: 0 turbo, 1 naturally aspirated. Naturally aspirated has no boost, so no boost dial and no turbo sounds, and all of its torque at once with the pedal;
 - `TorqueCurve`: a whole curve of its own, written by hand as `x:y` points (`0.3:0.7,0.5:1,1:0.75`, x the engine speed over the red zone's, y the torque over its most), in place of the one from the peak;
 - `FullPull`: how far toward a gear's top, in percent, the engine keeps all its torque floored before it fades out (92 to 98; 92 when not set). The tab's "Full pull up to" shows it in rpm. 92 suits a diesel, whose governor cuts the fuel from its rated speed; a petrol engine that makes its power up to its red zone can keep it to 96 to 98, and floored the automatic then shifts up later too, where the next gear pulls more. Near a gear's top the torque factor gets large for it (about 10 times the game's own at 95, 24 at 98): lower it where a truck surges at the top of a gear.
-- `Torque`: how much of its torque the truck gets with the engine handed to the game, the game's own pull included, in percent (10 to 100; 100 when not set). The tab's "Torque" slider. For a mod's engine with several times a stock engine's torque, such as RLM's: at 25 an engine with four times the torque pulls like the stock one. The set-off gear follows it.
+- `Torque`: how much of its torque the truck gets with the engine handed to the game, the game's own pull included, in percent (10 to 100; 100 when not set). The tab's "Torque" slider. A truck that suddenly shoots from 40 to 80 km/h on its own has run into a bug of the game itself, which RLM and mods like it make far worse with their engines of several times a stock engine's torque, and this mod's engine adds to it. Lower the torque for such an engine: at 25 an engine with four times the torque pulls like the stock one. The set-off gear follows it.
 
 ```
 [Engine]
