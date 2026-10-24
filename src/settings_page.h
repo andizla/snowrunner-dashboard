@@ -513,6 +513,10 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         changed(ImGui::SliderInt("##engineshare", &s.engineShare, 0, 100, "%d %%", ImGuiSliderFlags_AlwaysClamp));
         PageTip("How much of the mod's engine the game gets: 0 leaves the game's own pull, 100 hands it all of the mod's engine, and between the "
                 "two the truck pulls between them. Lower it where a truck pulls too hard.");
+        PageLabel("Rev cap 95%", labelX);
+        changed(ImGui::Checkbox("##revcap", &s.revCap));
+        PageTip("A test switch. With the mod's engine the pull ends at 95 percent of the way from idle to the red zone, as it did until 0.15.10, "
+                "and the automatic shifts up there floored. Try it where a heavy truck runs away on its own.");
         // the driven truck's gearbox: how long each gear is held going up, kept for that gearbox
         if (view.gearbox[0] && s.gearbox == kGearboxModel)
         {

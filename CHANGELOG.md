@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.16.1]
+
+- `RevCap`, the tab's "Rev cap 95%" under Engine to the game, a test switch, off by default: with the mod's engine the pull ends at 95 percent of the way from idle to the red zone, as it did until 0.15.10, and the automatic shifts up there floored. For a tester whose heavy trucks run away on their own, to tell whether the pull past that point is in it.
+
 ## [0.16.0] 2026-10-24
 
 - The mod draws the cluster and its settings with its own overlay, Dear ImGui compiled in, on the game's DirectX 11 device, no longer through ReShade's overlay. It is now `Gauges.asi`, loaded by an ASI loader such as the SnowRunner Tire Inflation System's `version.dll`; a `Gauges.addon64` from before should be removed (one left beside it stands down). The release brings ReShade 6.8.0 without its start banner and with a `ReShade.ini` that loads no effects and keeps Home for ReShade's own window, and the mod takes the game's swap chains from it, drawing after ReShade and its add-ons. Without ReShade the mod draws on its own. The game can then crash with the Steam, Discord or RivaTuner overlay or with multiple monitors.

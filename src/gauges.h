@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#define GAUGES_VERSION "0.16.0"
+#define GAUGES_VERSION "0.16.1"
 
 // The exe the addresses in this mod were taken from (SnowRunner on Steam, the build of 22 July 2026). On any other build
 // the mod finds them by the code that uses them (game_globals.h, game_code.h), and stands down where it cannot.
@@ -72,6 +72,8 @@ struct GaugeSettings
     int input;               // Input: what the pedal is: 0 a wheel's pedals, 1 a pad's trigger, 2 keys. The mod's automatic kicks down by it
     bool powertrain;         // Powertrain: the engine's torque (its curve, the cold oil, the boost) and the converter's handed to the game
     int engineShare;         // EngineShare: how much of the mod's engine the game gets with it, in percent: 0 the game's own pull, 100 the mod's
+    bool revCap;             // RevCap: a test switch: with the mod's engine the pull ends at 95 percent of the way from idle to the red zone,
+                             // as it did until 0.15.10, and the automatic shifts up there floored
     float rollWarnDeg, rollDangerDeg; // RollWarnDeg, RollDangerDeg: degrees of lean to the side from which the tilt lamp is amber, and red
     float pitchDangerDeg;    // PitchDangerDeg: degrees up or down a slope from which the tilt lamp is red
     float warmUpMinutes;     // WarmUpMinutes: minutes a cold engine takes from 15 C to 85 C when it is driven as usual
@@ -109,6 +111,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.gearbox = kGearboxGame;
     s.powertrain = false;
     s.engineShare = 50;
+    s.revCap = false;
     s.rollWarnDeg = 15.0f;
     s.rollDangerDeg = 25.0f;
     s.pitchDangerDeg = 35.0f;

@@ -1389,6 +1389,7 @@ struct EngineHand
     float top, share, launch, hold, least;
     int input; // what the pedal is (kInputWheel, kInputPad, kInputKeys): the kickdown goes by it, with the engine handed over or not
     float most; // the torque factor's roof for the engine (TorqueFactorMostOf), 0 for kTorqueFactorMost
+    bool cap;   // RevCap, a test switch: floored, the automatic shifts up no later than kEngineUpFloored, as until 0.15.10
 };
 
 // What a gear pulls with the wheels at x of its top with the engine handed over, floored, the converter locked: the
@@ -1398,6 +1399,10 @@ inline float EngineGearPull(const EngineHand &e, float x)
     if (!e.curve) return GearPull(x);
     return x * GamePull(x) * TorqueBlend(TorqueLift(TorqueAt(*e.curve, x, e.top), 1.0f, 1.0f, 1.0f, x, e.most > 0.0f ? e.most : kTorqueFactorMost), e.share);
 }
+
+// The rev cap (RevCap, a test switch): from this share of the way from idle to the red zone the mod's engine hands the
+// game its own pull, and floored the automatic shifts up no later than here (kEngineUpFloored), as until 0.15.10.
+inline bool RevCapped(const GaugeScale &k, float rpm) { return k.redline > k.idle && isfinite(rpm) && (rpm - k.idle) / (k.redline - k.idle) >= kEngineUpFloored; }
 
 // x of a gear's top where the next gear, r times as tall, pulls kShiftPullGain more with the engine handed over: the
 // game's curve falls toward a gear's top whatever the factor, so floored a truck may never reach the schedule's
@@ -1422,6 +1427,7 @@ inline float GearboxUpPoint(const TruckRaw &t, const GaugeScale &k, int gear, fl
     {
         const float least = fmaxf(engine.least, k.idle);
         float hard = engine.curve && low > 0.0f && high > 0.0f ? EngineUpShare(engine, high / low) * k.redline : GearboxPoint(k, kEngineUpFloored);
+        if (engine.cap) hard = fminf(hard, GearboxPoint(k, kEngineUpFloored)); // RevCap: the rule from before 0.15.10
         hard = fmaxf(hard, least);
         return fmaxf(k.idle + (hard - k.idle) * SettingsRange(feel, 0.0f, 1.0f), least);
     }

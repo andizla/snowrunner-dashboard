@@ -1575,14 +1575,22 @@ int main(int argc, char **argv)
             EngineHand six{ true, &zil, zk.max / zk.redline, 1.0f };
             EngineHand full = six;
             full.most = TorqueFactorMostOf(0.97f);
+            EngineHand capped = six;
+            capped.cap = true;
+            bool capOk = true;
             float sixLow = 1e9f, sixHigh = 0.0f, fullLow = 1e9f;
             for (int gear = 1; gear < 5; gear++)
             {
                 const float at6 = GearboxUpPoint(z, zk, gear, 1.0f, six), atFull = GearboxUpPoint(z, zk, gear, 1.0f, full);
+                const float atCap = GearboxUpPoint(z, zk, gear, 1.0f, capped);
+                capOk = capOk && atCap <= GearboxPoint(zk, kEngineUpFloored) + 0.5f && atCap <= at6 + 0.5f;
                 sixLow = fminf(sixLow, at6);
                 sixHigh = fmaxf(sixHigh, at6);
                 fullLow = fminf(fullLow, atFull);
             }
+            Check(capOk && RevCapped(zk, zk.idle + 0.96f * (zk.redline - zk.idle)) && !RevCapped(zk, zk.idle + 0.9f * (zk.redline - zk.idle)) && !RevCapped(zk, nanf("")),
+                  "rev cap: with RevCap the ZIL's floored points up stay at or under 0.95 of the way from idle to the red zone and never later than at the roof of 6, "
+                  "and the rule holds from 0.95 of the way up, not at 0.9 or without a reading");
             const bool roofs = TorqueFactorMostOf(0.0f) == kTorqueFactorMost && TorqueFactorMostOf(0.92f) == kTorqueFactorMost &&
                                Near(TorqueFactorMostOf(0.95f), 1.0f / (kGamePullFall * 0.05f), 0.01f) && Near(TorqueFactorMostOf(0.98f), 1.0f / (kGamePullFall * 0.02f), 0.01f) &&
                                TorqueFactorMostOf(1.5f) == TorqueFactorMostOf(0.98f) &&
