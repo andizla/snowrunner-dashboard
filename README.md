@@ -251,6 +251,6 @@ The cluster and the menu are drawn with Dear ImGui by Omar Cornut, and their tex
 
 `SOUND_CREDITS.md` says where each sound comes from.
 
-A big thank you to the testers who gave their time to the early builds: [Milos_Mk6](https://mod.io/g/snowrunner/u/milos-mk6), Globalhacker and [Zenosxy](https://mod.io/g/snowrunner/u/zenosxy). Your runs, logs, ideas and patience shaped this release, and it would not be what it is without you.
+A big thank you to the testers who gave their time to the early builds: Milos_Mk6, Globalhacker and Zenosxy. Your runs, logs, ideas and patience shaped this release, and it would not be what it is without you.
 
 SnowRunner is a game by Saber Interactive. This project is not affiliated with Saber Interactive or Focus Entertainment and contains no game files.
