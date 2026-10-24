@@ -483,10 +483,9 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             st.engineTorque = torquePercent;
             act |= kPageEngineTorque;
         }
-        PageTip("How much of the engine's torque the truck gets while Engine to the game is on, the game's own pull included. 100 is the engine as it comes. "
-                "A truck that suddenly shoots from 40 to 80 km/h on its own has hit a bug of the game itself. RLM and mods like it make it far worse with "
-                "engines of several times a stock engine's torque. This mod's engine adds to it. Lower the torque for such an engine: at 25 an engine with "
-                "four times the torque pulls like the stock one. The set-off gear follows it. No effect with Engine to the game off.");
+        PageTip("How much of the engine's torque the truck gets with Engine to the game on. 100 is the engine as it comes. A truck that shoots from 40 to "
+                "80 km/h on its own has hit a game bug that RLM-like engines and this mod make worse: lower the torque here. At 25 an engine with four "
+                "times a stock engine's torque pulls like the stock one.");
         if (set)
         {
             st.enginePeak = floorf(peak / 50.0f + 0.5f) * 50.0f;
@@ -530,9 +529,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 "two the truck pulls between them. Lower it where a truck pulls too hard.");
         PageLabel("Rev cap 95%", labelX);
         changed(ImGui::Checkbox("##revcap", &s.revCap));
-        PageTip("With the mod's engine the pull ends at 95 percent of the way from idle to the red zone, as it did until 0.15.10, and the automatic shifts up "
-                "there floored. For a truck that suddenly shoots from 40 to 80 km/h on its own. The leap is a bug of the game itself. RLM and mods like it "
-                "make it far worse, and this mod's engine adds to it. Try this first, then lower the engine's Torque under Engine.");
+        PageTip("The pull ends at 95 percent of the way from idle to the red zone. For a truck that shoots from 40 to 80 km/h on its own: "
+                "a game bug that RLM-like engines and this mod make worse. Try this first, then the Torque slider under Engine.");
         // the driven truck's gearbox: how long each gear is held going up, kept for that gearbox
         if (view.gearbox[0] && s.gearbox == kGearboxModel)
         {

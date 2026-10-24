@@ -620,12 +620,12 @@ static void ReadIni(GaugeSettings &s)
                         L"; shows, less with cold oil and without boost, and doubled by the converter at its stall (Gearbox=1), in place\n"
                         L"; of the game's own, which falls away toward each gear's top. The mod writes the game's torque factor for it.\n"
                         L"; EngineShare: how much of the mod's engine the game gets, 0 to 100 percent (50: half way between the two).\n"
-                        L"; RevCap=1: with the mod's engine the pull ends at 95 percent of the way from idle to the red zone (as until 0.15.10) and the\n"
-                        L"; automatic shifts up there floored. For a truck that shoots from 40 to 80 km/h on its own: a bug of the game, made worse by RLM-like mods and by this mod's engine.\n"
+                        L"; RevCap=1: the pull ends at 95 percent of the way from idle to the red zone. For a truck that shoots from\n"
+                        L"; 40 to 80 km/h on its own: a game bug that RLM-like engines and this mod make worse. Then Torque, below.\n"
                         L"; Gauges\\gearboxes\\<name>.ini GearHold: seconds a gearbox holds each gear going up with Powertrain=1, 1 to 3 (the tab).\n"
                         L"; Gauges\\engines\\<name>.ini: PeakTorqueRpm, Aspiration (0 turbo, 1 naturally aspirated), TorqueCurve (the tab's Engine).\n"
                         L";   FullPull: how far toward a gear's top, 92 to 98 percent, the engine keeps its full pull floored (92 when not set).\n"
-                        L";   Torque: how much of its torque the truck gets, 10 to 100 percent (100 when not set). Lower it for a mod's engine with several times a stock engine's torque (RLM). A truck that shoots from 40 to 80 km/h on its own hit a bug of the game that such engines and this mod's engine make worse.\n"
+                        L";   Torque: how much of its torque the truck gets, 10 to 100 percent (100 when not set). Lower it for an RLM-like engine with several times a stock engine's torque.\n"
                         L"; For work on the mod: Demo=1 draws demo values whenever no truck is driven, Probe=1 logs the values read from the game.\n");
             fclose(f);
             WriteIni(s);
@@ -1449,7 +1449,7 @@ static void LogSettings(const GaugeSettings &s)
     Log(L"settings: gearbox %s", s.gearbox == kGearboxModel ? L"the mod's automatic, with a torque converter, picks the gears in A"
                                                             : L"the game's own (the tab's Gearbox section, or Gearbox=1, hands the gears in A to the mod's automatic)");
     if (s.powertrain) Log(L"settings: powertrain on: the truck pulls with %d percent of the mod's engine and converter, through the game's torque factor%s", s.engineShare,
-                          s.revCap ? L"; rev cap: no pull past 95 percent of the way from idle to the red zone (RevCap, a test switch)" : L"");
+                          s.revCap ? L"; rev cap: no pull past 95 percent of the way from idle to the red zone (RevCap)" : L"");
     else Log(L"settings: powertrain off: the truck pulls with the game's own engine (Powertrain=1 hands it the mod's)");
     Log(L"settings: toggle key %S, pad %S, demo values %s, probe %d", key, s.padToggle, s.demo ? L"on" : L"off", s.probe);
 }
