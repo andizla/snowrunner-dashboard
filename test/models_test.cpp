@@ -1841,13 +1841,25 @@ int main(int argc, char **argv)
             // a factor left over above 1 (a test, or the mod's own) is taken as the game's 1
             TorqueHand left = {};
             const TorqueOrders over = TorqueHandStep(left, true, 0x5000, 0x4000, 2.4f, 1.0f);
+            // a rebuilt action that reads the factor the mod wrote last keeps the game's share (review 5, G-R1): the damage cut
+            // of 0.8 stays through a rebuild above 1, and below 1 the share does not sink with each rebuild
+            TorqueHand rebuilt = {};
+            TorqueHandStep(rebuilt, true, 0x5000, 0x4000, 0.8f, 1.5f);                       // the game's 0.8: writes 1.2
+            const TorqueOrders r1 = TorqueHandStep(rebuilt, true, 0x9000, 0x4000, 1.2f, 1.5f); // the rebuilt action reads 1.2: the old one gets 0.8 back
+            const TorqueOrders r2 = TorqueHandStep(rebuilt, true, 0x9000, 0x4000, 1.2f, 1.5f); // and 1.2 stands, not 1.5
+            TorqueHand sinking = {};
+            TorqueHandStep(sinking, true, 0x5000, 0x4000, 1.0f, 0.6f);                       // the game's 1: writes 0.6
+            TorqueHandStep(sinking, true, 0xA000, 0x4000, 0.6f, 0.6f);
+            const TorqueOrders s2 = TorqueHandStep(sinking, true, 0xA000, 0x4000, 0.6f, 0.6f); // 0.6 stands, not 0.36
+            const bool carried = r1.write && r1.action == 0x5000 && Near(r1.factor, 0.8f, 0.001f) && !r2.write && Near(rebuilt.game, 0.8f, 0.001f) &&
+                                 Near(rebuilt.written, 1.2f, 0.001f) && !s2.write && Near(sinking.game, 1.0f, 0.001f) && Near(sinking.written, 0.6f, 0.001f);
             // EngineShare: none of it leaves the game's own, all of it the whole lift, half of it half way
             const bool blends = TorqueBlend(2.0f, 0.0f) == 1.0f && TorqueBlend(2.0f, 1.0f) == 2.0f && Near(TorqueBlend(2.0f, 0.5f), 1.5f, 0.001f) &&
                                 Near(TorqueBlend(0.4f, 0.5f), 0.7f, 0.001f) && TorqueBlend(2.0f, 3.0f) == 2.0f;
-            Check(lifts && followed && givenBack && over.write && Near(over.factor, 1.0f, 0.001f) && blends,
+            Check(lifts && followed && givenBack && over.write && Near(over.factor, 1.0f, 0.001f) && blends && carried,
                   "powertrain: the torque factor lifts the game's curve by the engine's torque (the cold and the boost only where the pedal asks more) and the "
                   "converter's ratio, at the most 6 times and the game's own at the gear's top, as far as EngineShare hands it, stands on the "
-                  "game's own share and follows it, and gives it back when it goes off and to the last truck");
+                  "game's own share and follows it, keeps it over a rebuilt action that reads the mod's own factor, and gives it back when it goes off and to the last truck");
         }
         // with the engine handed over, a truck automatic's schedule, on a scout's road gearbox with a crawling first
         // (tops 8, 13, 19, 27, 43 and 65 rad/s, 750 to 4000 rpm): it sets off in the second; floored it revs each gear

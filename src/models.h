@@ -1263,13 +1263,18 @@ inline TorqueOrders TorqueHandStep(TorqueHand &h, bool want, uint64_t action, ui
 {
     TorqueOrders o = {};
     const float share = isfinite(read) && read > 0.0f ? fminf(read, 1.0f) : 1.0f;
+    // a rebuilt action that reads the factor the mod wrote last carries the mod's own value, not the game's share (the
+    // game seeds it from the truck as it stands): the game's share is kept then. Read as a share, a factor above 1 lost
+    // the damage cut and one below 1 sank with each rebuild (review 5, G-R1, 2026-10-24).
+    const bool carries = h.on && isfinite(read) && fabsf(read - h.written) <= 1e-4f;
+    const float carried = carries ? h.game : share;
     if (!want || !action || (h.on && h.action != action))
     {
         if (h.on) o = TorqueOrders{ true, h.action, h.vehicle, h.game };
         h = TorqueHand{};
         if (!want || !action) return o;
     }
-    if (!h.on) h = TorqueHand{ true, action, vehicle, share, -1.0f };
+    if (!h.on) h = TorqueHand{ true, action, vehicle, carried, carries ? read : -1.0f }; // what it reads is what the mod wrote: no write due
     else if (fabsf(read - h.written) > 1e-4f) h.game = share; // the game wrote its own, as engine damage moved it
     const float factor = h.game * lift;
     if (!o.write && fabsf(factor - h.written) >= kTorqueFactorStep)
