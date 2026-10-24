@@ -23,6 +23,7 @@
 #include "truck.h"
 #include "models.h"
 #include "smt.h"
+bool NgMenuOpen(); // ng_overlay.cpp (its header wants Dear ImGui): the toggle key rests while the NEXT GEN menu has the keys
 #include "tires.h"
 #include "maps.h"
 #include "game_code.h"
@@ -2222,7 +2223,7 @@ static DWORD WINAPI Run(void *)
         // the toggle: the key, or the pad buttons all down that were not all down on the last pass; only while the
         // game's window is in front, and the pad not while the tab waits for buttons to bind
         const bool front = GameInFront();
-        const bool keyNow = front && s.toggleKey && (GetAsyncKeyState(s.toggleKey) & 0x8000);
+        const bool keyNow = front && s.toggleKey && !NgMenuOpen() && (GetAsyncKeyState(s.toggleKey) & 0x8000); // not while the NEXT GEN menu has the keys
         bool toggle = keyNow && !keyDown;
         keyDown = keyNow;
         const LONG capture = g_pageCapturing;
