@@ -1,6 +1,6 @@
 # Next Gen Gameplay
 
-Formerly SnowRunner Gauges; its files keep the name `Gauges`. A gauge cluster for the truck you drive in SnowRunner: analogue dials in the style of a truck dashboard, drawn over the game in the game's own font.
+A gauge cluster for the truck you drive in SnowRunner: analogue dials in the style of a truck dashboard, drawn over the game in the game's own font.
 
 The cluster has a speedometer, a tachometer with the gear, fuel with the range, coolant and oil temperature, boost pressure, brake air pressure and nine lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage, cold engine, tilt and oil temperature.
 
@@ -20,7 +20,7 @@ This is version 0.16.0. It reads the truck's own values for the speedometer, the
 
 Already using ReShade? If Windows asks whether to replace `dxgi.dll` or `ReShade.ini`, ReShade is already in the game: choose Skip for those two, and your ReShade and its settings stay. If the mod then says the ReShade in the game takes no add-ons, copy in `dxgi.dll` alone.
 
-To update, copy the new file over the old one. Up to 0.15.11 the mod was `Gauges.addon64`, loaded by ReShade: delete that file when you install `Gauges.asi`. With two files of the mod in the folder only one runs, and the log says which. `Gauges.ini` keeps working.
+To update, copy the new file over the old one. A `Gauges.addon64` from a test build was loaded by ReShade: delete it when you install `Gauges.asi`. With two files of the mod in the folder only one runs, and the log says which. `Gauges.ini` keeps working.
 
 ## What it shows
 
@@ -105,7 +105,7 @@ BoostMax=0
 BoostProfile=2
 ```
 
-`Gauges.log` names the truck each time you take another one. A file can be written by hand as well, and a key it leaves out is taken from `[Gauges]`. Every other setting is the same for all trucks. Up to 0.13.9 the trucks' scales stood in `Gauges.ini` as sections such as `[Truck:chevrolet_ck1500]`: the first start of 0.14.0 moves them into their files.
+`Gauges.log` names the truck each time you take another one. A file can be written by hand as well, and a key it leaves out is taken from `[Gauges]`. Every other setting is the same for all trucks. A `Gauges.ini` from a test build may still hold a truck's scales as a section such as `[Truck:chevrolet_ck1500]`: the first start moves them into their files.
 
 A region can have an outside temperature of its own, in a section named after it, and a map can have one apart from its region's:
 

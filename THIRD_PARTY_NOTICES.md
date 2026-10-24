@@ -1,6 +1,6 @@
 # Third party notices
 
-Next Gen Gameplay (formerly SnowRunner Gauges) is licensed under the GNU General Public License v3.0 (GPL-3.0-only, see `LICENSE`). It is built with the following third-party work.
+Next Gen Gameplay is licensed under the GNU General Public License v3.0 (GPL-3.0-only, see `LICENSE`). It is built with the following third-party work.
 
 ## ReShade add-on API
 

@@ -1,6 +1,6 @@
 # Sound credits
 
-Where each sound of SnowRunner Gauges comes from.
+Where each sound of Next Gen Gameplay comes from.
 
 | Sound | Files | Source | Author | Licence |
 |---|---|---|---|---|
