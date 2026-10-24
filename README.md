@@ -213,6 +213,17 @@ Delete `Gauges.asi`, `Gauges.ini`, `Gauges.log` and the folder `Gauges` (the set
 - The game's own HUD stays as it is. Its "Immersive Mode" option hides it while it is not in use.
 - Support, discussion and ideas: the author's channel on Enthusiast Runner's Discord, https://discord.com/invite/MssDb2Pvcj, or an issue on GitHub for a bug report.
 
+## Planned
+
+- Shareable truck setups: the files of the trucks' scales, gearboxes and engines on a platform of their own, with an upload and a download button in the Gameplay tab.
+- Lockable differentials.
+- Brakes that hold the truck when the air is low, as spring brakes do, and brakes that weaken after long braking.
+- The winch: it stays attached when the engine stalls, it overheats after sustained use, and it can be reeled out.
+- A clock on the cluster, with the outside temperature.
+- Engine sound by the mod's engine speed.
+- A setting for where engine damage starts.
+- Clearer names for the settings.
+
 ## Build
 
 Windows with Visual Studio 2022 (C++ desktop tools).
