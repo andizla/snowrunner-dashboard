@@ -10,7 +10,9 @@ This is version 0.16.0. It reads the truck's own values for the speedometer, the
 
 - SnowRunner for Windows: the Steam, Epic Games Store or Microsoft Store (Xbox app) version. The mod is made on the Steam build of 22 July 2026 and knows where that build keeps what it reads. On any other build (another store's, or after a game update) it finds those places by the game's code that uses them, and says in its log what it found; where it cannot find the truck it looks again every 2 seconds for a minute (another mod can load it before the game's code is ready), then stands down and changes nothing. The signatures it finds them by were taken from the Steam build; another build stands down only where the truck, its wheels or the game's state cannot be found, and its clock is looked for with `Probe=1` (see the outside temperature).
 - An ASI loader, which loads `Gauges.asi` when the game starts: the `version.dll` in the release, the same file as Next Gen Tire Inflation's (the SnowRunner Tire Inflation System).
-- ReShade, which comes in the release, the same files as Next Gen Tire Inflation's: the mod draws the cluster and the menu through it. It is ReShade 6.8.0 with full add-on support, changed in one place: it shows no banner at the start. Its `ReShade.ini` loads no effects, so nothing of ReShade itself shows. Home opens and closes ReShade's own window. A ReShade already in the game, such as the one Luma brings for HDR, works as it is: any ReShade from 6.8.0 on with add-on support. Without ReShade the mod draws on its own. The game can then crash with the Steam, Discord or RivaTuner overlay or with multiple monitors. When ReShade is missing or takes no add-ons, the mod says so at the start, in a line at the top, and in the NEXT GEN menu, with what to do.
+- ReShade 6.8.0, which comes in the zip as `dxgi.dll` and `ReShade.ini`, the same files as Next Gen Tire Inflation's, for compatibility with overlays such as RivaTuner, Discord, Nvidia and Steam. It shows nothing of its own; Home opens its window. A ReShade already in the game works as it is (any ReShade from 6.8.0 on with add-on support). Without it the game can crash with those overlays, and the mod says so at the start.
+
+- The full manual, with every dial, setting and model, as a PDF: [Next Gen Gameplay Manual](https://github.com/andizla/snowrunner-dashboard/blob/main/docs/Next_Gen_Gameplay_Manual.pdf), also [in Russian](https://github.com/andizla/snowrunner-dashboard/blob/main/docs/Next_Gen_Gameplay_Manual_ru.pdf).
 
 ## Install
 
@@ -18,7 +20,7 @@ This is version 0.16.0. It reads the truck's own values for the speedometer, the
 2. Copy `Gauges.asi`, `version.dll`, `dxgi.dll` and `ReShade.ini` into the game's `Sources\Bin` folder, next to `SnowRunner.exe`. A `version.dll` already there from Next Gen Tire Inflation is the same loader: keep it; its `dxgi.dll` and `ReShade.ini` are the same files as this release's.
 3. Start the game. F2 opens the NEXT GEN menu, and its Gameplay tab has the mod's settings.
 
-Already using ReShade? If Windows asks whether to replace `dxgi.dll` or `ReShade.ini`, ReShade is already in the game: choose Skip for those two, and your ReShade and its settings stay. If the mod then says the ReShade in the game takes no add-ons, copy in `dxgi.dll` alone.
+Already using ReShade? Choose Skip for `dxgi.dll` and `ReShade.ini` when Windows asks, and yours stays. If the mod then says the ReShade in the game takes no add-ons, copy in `dxgi.dll` alone.
 
 To update, copy the new file over the old one. A `Gauges.addon64` from a test build was loaded by ReShade: delete it when you install `Gauges.asi`. With two files of the mod in the folder only one runs, and the log says which. `Gauges.ini` keeps working.
 
