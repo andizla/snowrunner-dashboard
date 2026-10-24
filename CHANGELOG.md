@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.16.0] - not released yet
+## [0.16.0] 2026-10-24
 
 - The mod draws the cluster and its settings with its own overlay, Dear ImGui compiled in, on the game's DirectX 11 device, no longer through ReShade's overlay. It is now `Gauges.asi`, loaded by an ASI loader such as the SnowRunner Tire Inflation System's `version.dll`; a `Gauges.addon64` from before should be removed (one left beside it stands down). The release brings ReShade 6.8.0 without its start banner and with a `ReShade.ini` that loads no effects and keeps Home for ReShade's own window, and the mod takes the game's swap chains from it, drawing after ReShade and Luma's HDR. Without ReShade the mod draws on its own. The game can then crash with the Steam, Discord or RivaTuner overlay or with multiple monitors.
 - When ReShade is missing, takes no add-ons, or another program's `dxgi.dll` is in its place, the mod says so at the start: in a line at the top for 15 seconds and in the NEXT GEN menu, with what to do, and in its log.

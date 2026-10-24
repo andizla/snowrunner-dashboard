@@ -238,4 +238,6 @@ The cluster and the menu are drawn with Dear ImGui by Omar Cornut, and their tex
 
 `SOUND_CREDITS.md` says where each sound comes from.
 
+Thanks to the testers: [Milos_Mk6](https://mod.io/u/milos_mk6) for the Epic runs, the crash dump at Enter and the ZIL gearbox drives; Globalhacker for the Steam overlay crash dump, the insanity preset and his tire ideas; [Zenosxy](https://mod.io/u/zenosxy) for the first clean run outside the development PC.
+
 SnowRunner is a game by Saber Interactive. This project is not affiliated with Saber Interactive or Focus Entertainment and contains no game files.
