@@ -785,14 +785,20 @@ inline void TruckToState(const TruckRaw &t, const World &w, const GaugeSettings 
 // ---- the probe log (ini Probe=1): the values as read, for checking them against the game ----
 
 // The truck's values in two lines of text. byPosition: metres a second from the way the chassis went, to hold the
-// speed against.
-inline void TruckProbeText(const TruckRaw &t, const World &w, float byPosition, char *first, size_t firstSize, char *second, size_t secondSize)
+// speed against. letter: while the mod's gearbox has the truck, its position's letter (GearboxPosLetter; "" a numbered
+// gear, which then reads as its number), as the cluster shows it; nullptr: the letter by the game's flag and power factor.
+inline void TruckProbeText(const TruckRaw &t, const World &w, float byPosition, char *first, size_t firstSize, char *second, size_t secondSize,
+                           const char *letter = nullptr)
 {
+    char number[16] = "";
+    sprintf_s(number, "%d", t.gear);
+    const char *mode = TruckGearMode(t, w.shifter != 0);
+    const char *named = letter ? (letter[0] ? letter : number) : (mode[0] ? mode : "a numbered gear");
     sprintf_s(first, firstSize,
               "flags %02X (engine %d, running %d, lights %d) stall %.3f start %.2f | handbrake %d awd %d diff %d | gear %d (engaged %d) automatic %d power %.3f = %s%s | "
               "throttle %.3f | speed %.2f m/s = %.1f km/h (%.2f m/s by the way gone) | fuel %.2f of %.2f l | engine damage %d of %d, effect %.3f, torque x%.3f%s | B4 %.3f",
               t.flags, t.flags & 1, (t.flags >> 1) & 1, (t.flags >> 2) & 1, t.stall, t.startTimer, t.handbrake, t.awd, t.diffLock, t.gear, t.gearEngaged, t.automatic, t.powerFactor,
-              t.gear < 0 ? "R" : t.gear == 0 ? "N" : "", t.gear > 0 ? (TruckGearMode(t, w.shifter != 0)[0] ? TruckGearMode(t, w.shifter != 0) : "a numbered gear") : "",
+              t.gear < 0 ? "R" : t.gear == 0 ? "N" : "", t.gear > 0 ? named : "",
               t.throttle, t.speed, t.speed * 3.6f, byPosition, t.fuel, t.tank, t.damage, t.damageCapacity, t.damageEffect, t.torqueFactor,
               t.damageKnown ? "" : " (no damage data)", t.actionB4);
     char wheels[kMaxWheels * 16] = "", speeds[kMaxGears * 12] = "";

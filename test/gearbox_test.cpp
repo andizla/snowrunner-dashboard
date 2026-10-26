@@ -257,6 +257,46 @@ int main()
         Check(a.clutchTravel < 0.0f && m.travel == 0.0f && !m.clutch, "gearbox: actions read no clutch axis unless one is given");
     }
 
+    // A or a gear picked from R while the truck still rolls back: N until it stands or rolls forward, told once; a truck
+    // rolling back in a forward gear it was already in keeps it (the first drives, 2026-10-26)
+    {
+        GearboxPosModel m = {};
+        GearboxTruck t = Truck(-1);
+        t.speed = -2.6f;
+        Pass(m, plain, None(), t);
+        GearboxActions pickA = {};
+        pickA.a = true;
+        const GearboxPosOrders first = Pass(m, plain, pickA, t, 2);
+        const bool waitsA = m.pos == kPosA && t.gear == 0 && m.waitBack && !strcmp(first.why, "A picked while rolling back: neutral until the truck stands");
+        const GearboxPosOrders still = Pass(m, plain, None(), t, 2);
+        const bool once = t.gear == 0 && !still.why[0];
+        t.speed = -0.2f;
+        t.pedal = 0.5f;
+        Pass(m, plain, None(), t, 2);
+        const bool goesA = t.gear == 2 && !m.waitBack;
+
+        GearboxPosModel g = {};
+        GearboxTruck u = Truck(-1);
+        u.speed = -3.0f;
+        Pass(g, plain, None(), u);
+        GearboxActions pick2 = {};
+        pick2.gearPressed = 2;
+        const GearboxPosOrders key = Pass(g, plain, pick2, u);
+        const bool waitsGear = g.pos == kPosGear && u.gear == 0 && !strcmp(key.why, "a gear picked while rolling back: neutral until the truck stands");
+        u.speed = 0.3f;
+        Pass(g, plain, None(), u);
+        const bool goesGear = u.gear == 2;
+
+        GearboxPosModel f = {};
+        GearboxTruck v = Truck(1);
+        v.speed = -2.0f; // rolling back down a grade in the first gear
+        Pass(f, plain, None(), v);
+        const GearboxPosOrders keep = Pass(f, plain, None(), v);
+        const bool kept = v.gear == 1 && !keep.setGear && !f.waitBack;
+        Check(waitsA && once && goesA && waitsGear && goesGear && kept,
+              "gearbox: A or a gear picked from R while rolling back waits in N until the truck stands, told once; a forward gear already in stays");
+    }
+
     // the hooks' policy: while the gearbox has the truck the game's own six shifts and its power factor are refused, the
     // vehicle change passes, and the mod's own calls through GearboxOriginal go through; with the flag off all pass
     {
@@ -295,8 +335,9 @@ int main()
               "vehicle change passes and the mod's own call goes through; with the flag off all pass");
     }
 
-    // the levels: at Gearbox=1 only a reverse while standing in A with the brake down is refused, at whichever door it
-    // comes; other shifts pass, and a reverse with the truck rolling passes; at 0 nothing is refused
+    // the levels: at Gearbox=1 only a reverse while standing in A with the brake down and the game's automatic flag up
+    // is refused, at whichever door it comes; with the flag down (the shifter's R) it passes, other shifts pass, and a
+    // reverse with the truck rolling passes; at 0 nothing is refused
     {
         FunctionFind finds[kFnCount] = {};
         void *fakes[kFnCount] = { (void *)&FakeShift, (void *)&FakeAuto, (void *)&FakeHigh, (void *)&FakeReverse, (void *)&FakeNeutral, nullptr,
@@ -306,19 +347,26 @@ int main()
         char why[512];
         const bool hooked = GearboxHook(0, finds, why, sizeof why) == 8;
         for (int f = 0; f < kFnCount; f++) g_ran[f] = 0;
-        GearboxPolicy(kPolicyBrakeReverse, nullptr, true);
+        volatile uint8_t flag = 1; // the game's automatic flag: up for a moment after a tap
+        GearboxPolicy(kPolicyBrakeReverse, nullptr, true, &flag);
         const bool refused = !FakeReverse(nullptr) && !FakeShift(nullptr, -1) && !FakeAutoOff(nullptr, -1);
         const bool passed = FakeShift(nullptr, 3) && FakeHigh(nullptr) && FakeNeutral(nullptr);
         const unsigned told = GearboxRefusedNew();
-        GearboxPolicy(kPolicyBrakeReverse, nullptr, false);
+        const int door = GearboxBrakeDoor();
+        flag = 0; // put down again: the shifter's R is the player's
+        const bool flagDown = FakeReverse(nullptr) && FakeAutoOff(nullptr, -1);
+        flag = 1;
+        GearboxPolicy(kPolicyBrakeReverse, nullptr, false, &flag);
         const bool rolling = FakeReverse(nullptr) && FakeShift(nullptr, -1);
-        GearboxPolicy(kPolicyPass, nullptr, true);
+        GearboxPolicy(kPolicyBrakeReverse, nullptr, true, nullptr);
+        const bool unknown = FakeReverse(nullptr); // no flag to read: passes
+        GearboxPolicy(kPolicyPass, nullptr, true, &flag);
         const bool levelZero = FakeReverse(nullptr) && FakeAutoOff(nullptr, -1);
         GearboxUnhook();
-        Check(hooked && refused && passed && rolling && levelZero && (told & kRefusedBrakeReverse) && g_ran[kFnShiftToReverse] == 2 &&
-                  g_ran[kFnShiftGear] == 2 && g_ran[kFnShiftToHigh] == 1,
-              "gearbox hooks: at Gearbox=1 only a reverse while the truck stands in A with the brake down is refused, at any of its three doors; at 0 "
-              "nothing is refused");
+        Check(hooked && refused && passed && flagDown && rolling && unknown && levelZero && (told & kRefusedBrakeReverse) && door == kFnAutoOffAndShift &&
+                  g_ran[kFnShiftToReverse] == 4 && g_ran[kFnShiftGear] == 2 && g_ran[kFnShiftToHigh] == 1,
+              "gearbox hooks: at Gearbox=1 only a reverse while the truck stands in A with the brake down and the game's automatic flag up is "
+              "refused, at any of its three doors; with the flag down (the shifter's R) or rolling it passes; at 0 nothing is refused");
     }
 
     printf(g_failed ? "GEARBOX TEST FAILED: %d\n" : "GEARBOX TEST OK\n", g_failed);

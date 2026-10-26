@@ -2089,7 +2089,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     if (fresh & kRefusedBrakeReverse)
     {
         const int door = GearboxBrakeDoor();
-        Log(L"gearbox: the game's reverse on the brake refused: the truck is in A (it came through %S)", door >= 0 && door < kFnCount ? kGameFunctions[door].name : "?");
+        Log(L"gearbox: the game's reverse on the brake refused: the game's automatic was up for a moment (the shift modifier or A picked again); through %S",
+            door >= 0 && door < kFnCount ? kGameFunctions[door].name : "?");
     }
     for (unsigned fn = 0; fresh && fn < kFnCount; fn++)
         if (fresh & (1u << fn)) Log(L"gearbox: the game asked for %s, refused: the mod's gearbox has the truck", GearboxAskName((int)fn));
@@ -2367,7 +2368,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         const int level = s.gearbox == kGearboxOwn && !w.canReverse ? kGearboxModel : s.gearbox;
         const bool own = level == kGearboxOwn;
         const TakeoverOrders orders = TakeoverStep(w.take, raw, level >= kGearboxModel && g_shiftGear != nullptr && GearboxHooked(), !own);
-        const GearboxTruck boxTruck{ raw.gear, TruckTopGear(raw), isfinite(raw.speed) ? fabsf(raw.speed) : 0.0f, TruckEngineOn(raw), raw.stall,
+        const GearboxTruck boxTruck{ raw.gear, TruckTopGear(raw), isfinite(raw.speed) ? raw.speed : 0.0f, TruckEngineOn(raw), raw.stall,
                                      raw.powerFactor, raw.automatic != 0, foot };
         if (orders.took)
         {
@@ -2411,9 +2412,11 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         if (w.take.driving)
         {
             // the policy for the held truck, each pass: everything refused at level 2; at level 1 only a reverse while
-            // the truck stands in A with the brake down
-            const bool brakeStand = w.pos.pos == kPosA && boxTruck.speed < kStandStill && TruckBrake(raw) > 0.05f;
-            GearboxPolicy(own ? kPolicyAll : kPolicyBrakeReverse, (void *)w.refs.vehicle, brakeStand);
+            // the truck stands in A with the brake down and the game's automatic flag up, read by the hook at the call
+            // (the flag comes up for a moment after the shift modifier is tapped or A picked again, before this pass
+            // puts it down; the first drives, 2026-10-26)
+            const bool brakeStand = w.pos.pos == kPosA && fabsf(boxTruck.speed) < kStandStill && TruckBrake(raw) > 0.05f;
+            GearboxPolicy(own ? kPolicyAll : kPolicyBrakeReverse, (void *)w.refs.vehicle, brakeStand, (const volatile uint8_t *)(w.refs.action + 0x3C));
         }
         bool shiftAsk = false;
         int shiftTo = 0;
@@ -2427,7 +2430,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             if (box.setPower) m.put(w.refs.action + 0x38, box.power);
             if (box.stall) m.put(w.refs.vehicle + 0x11C, kStallSeconds);
             if (box.moved && w.pos.pos != posWas) Log(L"gearbox: %S to %S", GearboxPosName(posWas), GearboxPosName(w.pos.pos));
-            if (box.why[0]) Log(L"gearbox: %S (%d since it took the truck)", box.why, w.pos.stalls);
+            if (box.why[0] && box.stall) Log(L"gearbox: %S (%d since it took the truck)", box.why, w.pos.stalls);
+            else if (box.why[0]) Log(L"gearbox: %S", box.why);
             shiftAsk = box.setGear;
             shiftTo = box.gear;
         }
@@ -2531,7 +2535,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                   w.boost.flutters + w.boost.blowOffs != w.probedLifts))
     {
         char first[640], second[1024], third[512], fourth[256], fifth[640], sixth[1024], seventh[400], eighth[400], ninth[512], tenth[400], eleventh[320], twelfth[256];
-        TruckProbeText(raw, world, w.byWay, first, sizeof first, second, sizeof second);
+        // while the mod's gearbox has the truck the letter is the model's, as the cluster's (the flag is down, so the
+        // game's own rule would read the first gear's factor as L+)
+        TruckProbeText(raw, world, w.byWay, first, sizeof first, second, sizeof second, w.take.driving && w.pos.running ? GearboxPosLetter(w.pos.pos) : nullptr);
         ModelProbeText(raw, w.tach, w.range, scale, third, sizeof third);
         Log(L"probe: %S", first);
         Log(L"probe: %S", second);

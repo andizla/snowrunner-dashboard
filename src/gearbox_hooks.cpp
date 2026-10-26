@@ -30,6 +30,22 @@ static volatile float g_power = 0.0f;
 static volatile LONG g_policy = kPolicyPass, g_brakeStand = 0, g_told = 0, g_new = 0;
 static volatile LONG g_brakeDoor = -1; // the hook (kFn...) that carried the last reverse refused on the brake (review 8, W3)
 static void *volatile g_heldVehicle = nullptr;
+static const volatile uint8_t *volatile g_autoFlag = nullptr; // the held truck's automatic flag (action + 0x3C), for level 1
+
+// The game's automatic flag as it is at the call; false where it cannot be read (no truck, or its memory gone).
+static bool AutoFlagUp()
+{
+    const volatile uint8_t *flag = g_autoFlag;
+    if (!flag) return false;
+    __try
+    {
+        return *flag != 0;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
 static volatile LONG g_refused[kFnCount] = {};
 
 static void Tell(LONG bit)
@@ -43,10 +59,12 @@ static bool Refused(int fn, void *vehicle, int32_t gear = 0)
     const LONG policy = g_policy;
     if (policy == kPolicyPass || vehicle != g_heldVehicle) return false;
     bool refuse = policy == kPolicyAll;
-    if (policy == kPolicyBrakeReverse && g_brakeStand)
+    // level 1: the brake-reverse is the game's own automatic's, which acts only while its flag is up; with the flag down
+    // a reverse is the player's (the shifter's R) and passes. At whichever door it comes: ShiftToReverse, or a gear below
+    // 0 through AutoOffAndShift or ShiftGear
+    if (policy == kPolicyBrakeReverse && g_brakeStand && (fn == kFnShiftToReverse || fn == kFnShiftGear || fn == kFnAutoOffAndShift) && AutoFlagUp())
     {
-        // reverse at whichever door it comes: ShiftToReverse, or a gear below 0 through AutoOffAndShift or ShiftGear
-        refuse = fn == kFnShiftToReverse || ((fn == kFnShiftGear || fn == kFnAutoOffAndShift) && gear < 0);
+        refuse = fn == kFnShiftToReverse || gear < 0;
         if (refuse)
         {
             InterlockedExchange(&g_brakeDoor, fn);
@@ -111,11 +129,12 @@ static void HookSetPower(void *vehicle, float factor)
     ((PowerFn)g_way[kFnSetPower])(vehicle, factor);
 }
 
-void GearboxPolicy(int policy, void *vehicle, bool brakeStand)
+void GearboxPolicy(int policy, void *vehicle, bool brakeStand, const volatile uint8_t *autoFlag)
 {
     const bool on = policy != kPolicyPass;
     if (on && vehicle != g_heldVehicle) InterlockedExchange(&g_told, 0);
     if (on) InterlockedExchangePointer((void *volatile *)&g_heldVehicle, vehicle);
+    InterlockedExchangePointer((void *volatile *)&g_autoFlag, (void *)autoFlag);
     InterlockedExchange(&g_brakeStand, brakeStand ? 1 : 0);
     InterlockedExchange(&g_policy, policy);
 }

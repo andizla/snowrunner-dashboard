@@ -950,6 +950,20 @@ int main()
     Check(strstr(first, "gear 3 (engaged 3) automatic 1 power 1.000 = A") && strstr(first, "speed 5.00 m/s = 18.0 km/h (4.90 m/s by the way gone)") && strstr(first, "fuel 60.00 of 75.00 l") &&
           strstr(first, "engine damage 30 of 150") && strstr(second, " 2:11.50 2:12.50 1:13.50 1:14.50") && strstr(second, "gear speeds 1.500 3.000 6.000 12.000 16.000 8.000") &&
           strstr(second, "menu 0 loading 0"), "probe: the two lines carry the values as read");
+    {
+        // the mod's gearbox has the truck: the model's letter, as the cluster's; a numbered gear reads as its number
+        // where the game's own rule would read the first gear's factor as L+ (the first drives, 2026-10-26)
+        TruckRaw g1 = t;
+        g1.gear = 1;
+        g1.automatic = 0;
+        g1.powerFactor = 1.0f;
+        char own[640], game[640], low[640];
+        TruckProbeText(g1, w, 4.9f, game, sizeof game, second, sizeof second);
+        TruckProbeText(g1, w, 4.9f, own, sizeof own, second, sizeof second, "");
+        TruckProbeText(g1, w, 4.9f, low, sizeof low, second, sizeof second, "L");
+        Check(strstr(game, "power 1.000 = L+") && strstr(own, "power 1.000 = 1 |") && strstr(low, "power 1.000 = L |"),
+              "probe: while the mod's gearbox has the truck the letter is the model's, a numbered gear its number");
+    }
     TruckRaw t2 = t;
     World w2 = w;
     t2.speed += 0.5f;

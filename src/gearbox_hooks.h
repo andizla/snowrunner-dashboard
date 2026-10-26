@@ -34,8 +34,10 @@ bool GearboxHooked();
 void GearboxCountsGet(GearboxCounts &out);
 // The policy, by the level of Gearbox. kPolicyPass: everything passes (Gearbox=0, or the truck not held).
 // kPolicyBrakeReverse (Gearbox=1, the mod's automatic in A): only the game's reverse while the truck stands in A with
-// the brake down (brakeStand) is refused, at whichever door it comes (ShiftToReverse, or a gear below 0 through
-// AutoOffAndShift or ShiftGear). kPolicyAll (Gearbox=2, the mod's own gearbox): the game's own calls of ShiftGear,
+// the brake down (brakeStand) and the game's automatic flag up (read through autoFlag at the call: it is up only for a
+// moment, after the shift modifier is tapped or A picked again, before the mod puts it down) is refused, at whichever
+// door it comes (ShiftToReverse, or a gear below 0 through AutoOffAndShift or ShiftGear). With the flag down a reverse
+// is the player's (the shifter's R, through ShiftToReverse) and passes. kPolicyAll (Gearbox=2, the mod's own gearbox): the game's own calls of ShiftGear,
 // ShiftToAutoGear, ShiftToHigh, ShiftToReverse, ShiftToNeutral, AutoOffAndShift and SetPowerFactor are refused. A
 // refused call is not passed to the game's function (false, or nothing) and is counted; SetCurrentVehicle always
 // passes. As the counts nest (reverse and neutral go through auto off, auto off through ShiftGear), each is refused at
@@ -45,7 +47,7 @@ void GearboxCountsGet(GearboxCounts &out);
 // map), it does not.
 enum { kPolicyPass, kPolicyBrakeReverse, kPolicyAll };
 static const unsigned kRefusedBrakeReverse = 1u << 30;
-void GearboxPolicy(int policy, void *vehicle, bool brakeStand);
+void GearboxPolicy(int policy, void *vehicle, bool brakeStand, const volatile uint8_t *autoFlag = nullptr);
 int GearboxPolicyNow();
 // The hook (kFn...) that carried the last reverse refused on the brake, -1 for none yet: the outermost of the three
 // doors, as a refused call never reaches the ones nested in it.

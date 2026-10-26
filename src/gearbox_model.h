@@ -16,8 +16,9 @@
 enum { kPosA, kPosGear, kPosN, kPosR, kPosH, kPosLowMinus, kPosLow, kPosLowPlus, kPosCount };
 
 // The power factor of the low range, L-, L and L+, which the game gives a truck in its first gear: the figures truck.h
-// has (TruckGearMode reads the letters by them). A drive with Gearbox=0 through the game's own L-, L and L+ confirms
-// them in the probe's SetPowerFactor line (the last factor) (review 7, R8).
+// has (TruckGearMode reads the letters by them). L's 0.45 is confirmed by a drive (2026-10-26, the d110 with Gearbox=0:
+// SetPowerFactor 0.450 in L; A, H, N and R 1.000). The d110 has no L- or L+, so 0.2 and 1.0 stand until a heavy truck's
+// drive through L- and L+ with Gearbox=0 confirms them in the probe's SetPowerFactor line (review 7, R8).
 static const float kLowRangePower[3] = { 0.20f, 0.45f, 1.00f };
 static const float kLowMinusUnder = 0.325f, kLowUnder = 0.725f; // a factor in gear 1 under these is L-, and L (truck.h)
 // What a shift without the clutch writes into the truck's stall seconds (vehicle + 0x11C): the game kills an engine
@@ -50,7 +51,7 @@ struct GearboxActions
 struct GearboxTruck
 {
     int gear, top;        // the game's gear (as above) and its top numbered gear
-    float speed;          // m/s over the ground
+    float speed;          // m/s over the ground, below 0 rolling backwards
     bool engineOn;
     float stall;          // the stall seconds (vehicle + 0x11C): above 0 the engine is already dying
     float power;          // the power factor (action + 0x38)
@@ -69,6 +70,7 @@ struct GearboxPosModel
     int lastSet;          // the gear it set last, as the game numbers them
     int stalls, shifts;
     bool refusedSaid;     // a refusal of the game's was told since the position last changed
+    bool waitBack;        // A or a gear picked from R while the truck still rolled back: N until it stands
 };
 
 struct GearboxPosOrders
@@ -198,9 +200,18 @@ inline GearboxPosOrders GearboxPosStep(GearboxPosModel &m, const GearboxOptions 
     if (o.requireGearHeld && m.pos == kPosGear && a.gearHeld < 1) m.pos = kPosN;
     r.moved = m.pos != was || (m.pos == kPosGear && m.gear != wasGear);
     if (r.moved) m.refusedSaid = false;
+    // A or a gear picked from R while the truck still rolls back: neutral until it stands or rolls forward, so no
+    // forward gear goes in against the rolling truck (the first drive put gear 1 in at 2.6 m/s backwards)
+    const bool forward = m.pos == kPosA || m.pos == kPosGear;
+    if (r.moved && was == kPosR && forward && t.speed < -kStandStill)
+    {
+        m.waitBack = true;
+        r.why = m.pos == kPosA ? "A picked while rolling back: neutral until the truck stands" : "a gear picked while rolling back: neutral until the truck stands";
+    }
+    if (m.waitBack && (!forward || t.speed >= -kStandStill)) m.waitBack = false;
     // the gear and the power the position asks for; A sets off from N only once the pedal is down
-    int want = GearboxPosGear(m, t, autoGear);
-    if (m.pos == kPosA && t.gear == 0 && t.speed < kStandStill && t.pedal < kSetOffPedal) want = 0;
+    int want = m.waitBack ? 0 : GearboxPosGear(m, t, autoGear);
+    if (m.pos == kPosA && t.gear == 0 && fabsf(t.speed) < kStandStill && t.pedal < kSetOffPedal) want = 0;
     if (want != t.gear && (r.moved || want != m.lastSet))
     {
         r.setGear = true;
