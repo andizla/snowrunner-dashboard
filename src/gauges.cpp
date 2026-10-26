@@ -2434,7 +2434,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 w.gearboxDamageSeen = raw.gearboxDamage;
             }
             const bool burnWas = w.clutchHeat.burning;
-            ClutchHeatStep(w.clutchHeat, kind, w.clutch, most, s.damage && s.clutchBurn, dt);
+            ClutchHeatStep(w.clutchHeat, kind, w.clutch, most, s.damage && s.clutchBurn, dt, isfinite(raw.speed) ? fabsf(raw.speed) * 3.6f : 0.0f);
             if (w.clutchHeat.burning && !burnWas)
             {
                 w.burnPoints = 0;

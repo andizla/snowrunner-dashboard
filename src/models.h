@@ -2186,8 +2186,24 @@ inline void ClutchProbeText(const ClutchModel &m, float travel, char *out, size_
 // about 1.9 s and red at about 4 s in third, red at about 3.2 s stuck, and a first-gear start (0.57 at the most) never
 // brings the warning up. From red the clutch costs kClutchBurnRate times q / kClutchBurnFrom of the gearbox's capacity a
 // second: 0.025 at red, about a twentieth every two seconds while the slip goes on, half of the first tuning's pace.
-static const float kClutchHeatCapacity = 2.04e7f; // game torque times rad/s times s for one unit of heat
-static const float kClutchCooling = 0.05f;        // the share of its heat the clutch loses a second
+//
+// After the user's second test (26 October: uphill, pinned while trying to shift down, it "started overheating veeery
+// quickly, and didn't go back down for a good while"): the clutch cools in seconds once it grips. kClutchCooling
+// ln 2 / 4 = 0.173 halves the heat in 4 s with the clutch locked or open (0.05 took 14 s), so from the end of a red
+// slip (about 4.5 in third) the box is amber after about 2 s and gone after about 6, from a stuck start (about 6.3)
+// gone after about 8. The faster cooling also takes heat away during a slip, so kClutchHeatCapacity came down from
+// 2.04e7 to 1.6e7 to keep the pace on the clutch model's states: the automatic clutch floored in third amber after
+// 1.6 s and red after 4.0 s, fourth red after 3.4 s, a gear it cannot pull after 2.9 s, first 0.66 at most (1.7e7 gave
+// red after 4.6 s, 1.8e7 none in third, 1.4e7 after 3.1 s). And the heating goes by the truck's speed
+// (ClutchHeatShare): full under kClutchHeatFullKmh, a fifth from kClutchHeatSlowKmh up, linear between, as a clutch
+// slipping while the truck rolls is a short event and a truck pinned at a crawl is the abuse; cooling is not scaled.
+// So a start from a standstill keeps the pace above, a crawl up a hill at 8 km/h heats at 0.76 of it, and from 15 km/h
+// it heats five times slower.
+static const float kClutchHeatCapacity = 1.6e7f; // game torque times rad/s times s for one unit of heat
+static const float kClutchCooling = 0.173f;      // the share of its heat the clutch loses a second: half of it in 4 s
+static const float kClutchHeatFullKmh = 5.0f;    // under this speed the clutch heats at its full rate
+static const float kClutchHeatSlowKmh = 15.0f;   // from this speed up at kClutchHeatSlowShare of it
+static const float kClutchHeatSlowShare = 0.2f;
 static const float kClutchBurnFrom = 3.2f;        // the heat from which it burns (the lamp red)
 static const float kClutchWarnFrom = 1.6f;        // the heat from which the lamp warns amber
 static const float kClutchBurnRate = 0.025f;      // the gearbox's capacity a second it costs at kClutchBurnFrom, more as it gets hotter
@@ -2213,7 +2229,9 @@ struct ClutchHeat
 // share (0 not known: no heat). on: Damage and ClutchBurn; off, the heat is kept but costs nothing. A kind driven
 // before has cooled for as long as other trucks were driven. A change of truck forgives what the burn owed and was not
 // dealt yet (owed, less than one of the gearbox's points); the heat itself stays with the kind (review 10, D6).
-inline void ClutchHeatStep(ClutchHeat &h, uint64_t id, const ClutchModel &c, float torque, bool on, float dt)
+// kmh: the truck's speed (its size), by which the heating goes (ClutchHeatShare, below); 0 standing.
+inline float ClutchHeatShare(float kmh);
+inline void ClutchHeatStep(ClutchHeat &h, uint64_t id, const ClutchModel &c, float torque, bool on, float dt, float kmh = 0.0f)
 {
     if (!h.known || h.truck[h.at].id != id)
     {
@@ -2240,7 +2258,7 @@ inline void ClutchHeatStep(ClutchHeat &h, uint64_t id, const ClutchModel &c, flo
     float &q = h.truck[h.at].q;
     const bool slipping = c.running && c.connected && !c.locked && !c.dead;
     const float slip = slipping ? fmaxf(c.rpm - c.input, 0.0f) * 6.2831853f / 60.0f : 0.0f;
-    h.power = slipping && torque > 0.0f ? fmaxf(c.carried, 0.0f) * torque * slip / kClutchHeatCapacity : 0.0f;
+    h.power = slipping && torque > 0.0f ? fmaxf(c.carried, 0.0f) * torque * slip / kClutchHeatCapacity * ClutchHeatShare(kmh) : 0.0f;
     q = fmaxf(q + (h.power - q * kClutchCooling) * dt, 0.0f);
     h.q = q;
     h.burning = q > kClutchBurnFrom;
@@ -2251,6 +2269,14 @@ inline void ClutchHeatStep(ClutchHeat &h, uint64_t id, const ClutchModel &c, flo
     else h.owed = 0.0f;
     h.clock += dt;
     h.truck[h.at].left = h.clock;
+}
+
+// The share of the clutch's heating at a truck's speed: 1 under kClutchHeatFullKmh, kClutchHeatSlowShare from
+// kClutchHeatSlowKmh up, linear between.
+inline float ClutchHeatShare(float kmh)
+{
+    const float x = SettingsRange((kmh - kClutchHeatFullKmh) / (kClutchHeatSlowKmh - kClutchHeatFullKmh), 0.0f, 1.0f);
+    return 1.0f - (1.0f - kClutchHeatSlowShare) * x;
 }
 
 // A repair (the gearbox's damage as read fell: the game's repair or a repair point): the driven truck's clutch cold

@@ -3157,17 +3157,17 @@ int main(int argc, char **argv)
         ClutchHeat hill = {};
         run(hill, 1, 0.5f, 1300.0f, 1300.0f, 4.5f, stock, true, began, owed);
         const bool hillNotYet = began < 0.0f;
-        run(hill, 1, 0.5f, 1300.0f, 1300.0f, 1.5f, stock, true, began, owed);
+        run(hill, 1, 0.5f, 1300.0f, 1300.0f, 3.0f, stock, true, began, owed);
         const bool hillBurns = began >= 0.0f;
         printf("     clutch heat: third floored burns after %.2f s and costs %.3f in the two after; three times the torque %.2f s and %.3f\n", thirdBegan, thirdOwed,
                strongBegan, strongOwed);
         // as retuned after the user's first test (the idealised slip of the first tuning: carrying 1.0 at 1600 rpm): the
         // first gear never warns; third goes red after about two seconds and costs about a twentieth in the two after,
         // half the first tuning's tenth; three times the torque goes red three times as soon and costs more
-        Check(firstCold && thirdBegan > 1.8f && thirdBegan < 2.6f && thirdOwed > 0.04f && thirdOwed < 0.09f && strongBegan * 2.5f < thirdBegan &&
+        Check(firstCold && thirdBegan > 1.5f && thirdBegan < 2.6f && thirdOwed > 0.04f && thirdOwed < 0.09f && strongBegan * 2.5f < thirdBegan &&
                   strongOwed > thirdOwed && hillNotYet && hillBurns,
               "clutch heat: a first-gear start never warns; a floored start in third burns after about two seconds and costs about a twentieth of the "
-              "gearbox in the two after, three times the torque burns three times as soon; a hill held at half throttle burns after about five seconds");
+              "gearbox in the two after, three times the torque burns three times as soon; a hill held at half throttle burns after about six seconds");
         // no cost from stored heat: past the burn point and then locked, the clutch owes nothing and only cools, the
         // warning red until it falls under the burn point; a repair clears the heat
         {
@@ -3236,20 +3236,32 @@ int main(int argc, char **argv)
         ClutchHeat h = {};
         run(h, 7, 1.0f, 1600.0f, 1600.0f, 4.0f, stock, true, began, owed);
         const float hot = h.q;
-        for (int i = 0; i < 200; i++) ClutchHeatStep(h, 7, ClutchModel{}, stock, true, dt); // ten seconds open
-        const bool cooled = h.q < hot * 0.65f && h.q > hot * 0.55f;
+        for (int i = 0; i < 80; i++) ClutchHeatStep(h, 7, ClutchModel{}, stock, true, dt); // four seconds open
+        const bool cooled = h.q < hot * 0.53f && h.q > hot * 0.47f;
+        const float coolShare = h.q / hot;
         const float leftAt = h.q;
         for (int i = 0; i < 200; i++) ClutchHeatStep(h, 8, ClutchModel{}, stock, true, dt); // ten seconds in another truck
         ClutchHeatStep(h, 7, ClutchModel{}, stock, true, dt);
-        const bool kept = h.q < leftAt && h.q > leftAt * 0.55f;
+        const bool kept = h.q < leftAt * 0.21f && h.q > leftAt * 0.15f; // e^(-0.173 x 10) = 0.18
+        const float keptShare = h.q / leftAt;
+        // the heating by the truck's speed: full standing and at a crawl, about three quarters at 8 km/h, a fifth from
+        // 15 km/h up; the same slip at 20 km/h heats five times slower, and cooling is the same at any speed
+        ClutchHeat still = {}, rolling = {};
+        ClutchHeatStep(still, 9, slipping(1.0f, 1600.0f), stock, true, dt, 0.0f);
+        ClutchHeatStep(rolling, 9, slipping(1.0f, 1600.0f), stock, true, dt, 20.0f);
+        const bool bySpeed = ClutchHeatShare(0.0f) == 1.0f && ClutchHeatShare(4.0f) == 1.0f && fabsf(ClutchHeatShare(8.0f) - 0.76f) < 0.01f &&
+                             fabsf(ClutchHeatShare(15.0f) - 0.2f) < 1e-5f && fabsf(ClutchHeatShare(40.0f) - 0.2f) < 1e-5f &&
+                             fabsf(rolling.power * 5.0f - still.power) < still.power * 0.01f;
+        printf("     clutch heat: %.3f of it left after four seconds open, %.3f after ten seconds away; the heating's share at 0, 8 and 20 km/h %.2f, %.2f, %.2f\n",
+               coolShare, keptShare, ClutchHeatShare(0.0f), ClutchHeatShare(8.0f), ClutchHeatShare(20.0f));
         ClutchHeat off = {};
         run(off, 1, 1.0f, 1600.0f, 1600.0f, 6.0f, stock, false, began, owed);
         GaugeSettings gs;
         SettingsDefaults(gs);
         const bool defaults = gs.clutchBurn && gs.damage;
-        Check(cooled && kept && began >= 0.0f && owed == 0.0f && off.owed == 0.0f && defaults,
-              "clutch heat: an open clutch cools, about 40 percent in ten seconds; each kind of truck keeps its heat and cools while away; burning with "
-              "ClutchBurn or Damage off owes nothing");
+        Check(cooled && kept && bySpeed && began >= 0.0f && owed == 0.0f && off.owed == 0.0f && defaults,
+              "clutch heat: an open clutch cools to half in four seconds; each kind of truck keeps its heat and cools while away; it heats fully only "
+              "under 5 km/h, a fifth as fast from 15 km/h; burning with ClutchBurn or Damage off owes nothing");
     }
 
     printf(g_failed ? "MODELS TEST FAILED (%d)\n" : "MODELS TEST OK\n", g_failed);
