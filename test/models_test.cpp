@@ -1515,7 +1515,7 @@ int main(int argc, char **argv)
             z.gearSpeeds = 7;
             memcpy(z.gearSpeed, zilSpeeds, sizeof zilSpeeds);
             z.speed = 0.0f;
-            const float zs = 0.8f * TruckGearTop(z, 4);
+            const float zs = 0.7f * TruckGearTop(z, 4); // short of 4th's floored point up, which the lift's fade brought to about 0.8 of its top
             for (int i = 0; i < z.wheels; i++) z.spin[i] = zs;
             GaugeScale zk = k;
             zk.idle = 650.0f;
@@ -1563,8 +1563,9 @@ int main(int argc, char **argv)
                   "automatic, keys: taps of the key to hold the speed keep the gear; a lift of 2 s shifts up, the next tap takes it back and lifts "
                   "shift nothing up for 10 s, then 20; a wheel's pedal lifted shifts up as before");
         }
-        // floored, the point up goes where the next gear pulls more at the roof of 6 (a tester's ZIL-131 with its own
-        // profile, a naturally aspirated peak at 1800 of a 3200 red zone: 3024 to 3056 rpm, under kEngineUpFloored's 3072)
+        // floored, the point up goes where the next gear pulls more at a truck's roof of 6 as it fades over the gear's last
+        // fifth (a tester's ZIL-131 with its own profile, a naturally aspirated peak at 1800 of a 3200 red zone: 2880 to
+        // 2928 rpm; with the flat roof of 6 it was 3024 to 3056, under kEngineUpFloored's 3072)
         {
             TruckRaw z = g;
             static const float zilSpeeds[7] = { 0.7f, 1.0f, 2.2f, 4.0f, 7.5f, 9.0f, 7.0f };
@@ -1584,8 +1585,9 @@ int main(int argc, char **argv)
                 sixHigh = fmaxf(sixHigh, at6);
             }
             printf("    roof of 6: the ZIL's floored points up %.0f to %.0f rpm (the limiter %.0f)\n", sixLow, sixHigh, GearboxPoint(zk, kEngineLimit));
-            Check(sixLow > 3000.0f && sixHigh < GearboxPoint(zk, kEngineUpFloored),
-                  "powertrain: at the torque factor's roof of 6 a ZIL-131's floored points up lie where the next gear pulls more, about 3040 rpm");
+            Check(sixLow > 2840.0f && sixHigh < 2960.0f && sixHigh < GearboxPoint(zk, kEngineUpFloored),
+                  "powertrain: at a truck's roof of 6 fading over the gear's last fifth a ZIL-131's floored points up lie where the next gear pulls more, "
+                  "about 2900 rpm");
             Check(TorqueHeld(6.0f, 0.25f) == 1.5f && TorqueHeld(1.0f, 0.25f) == 0.25f && TorqueHeld(0.1f, 0.25f) == kTorqueFactorLeast && TorqueHeld(3.0f, 0.0f) == 3.0f &&
                       TorqueHeld(3.0f, 1.0f) == 3.0f && TorqueHeld(3.0f, 1.5f) == 3.0f,
                   "torque held: a quarter of the push for the roof of 6 is 1.5 and for the game's own 1 is 0.25, never under the least; none set or a whole share leaves it");
@@ -1814,10 +1816,23 @@ int main(int argc, char **argv)
         // share, follows the game where it writes its own (engine damage), and gives it back when the switch goes off and
         // to the last truck when another is driven
         {
-            const bool lifts = Near(TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, 0.5f), 1.0f, 0.001f) &&
+            // the roof by class (a scout's 3, a truck's and a heavy truck's 6) and its fade over a gear's last fifth: flat to
+            // 0.8 of the top, then down to 1 at the top (a vanilla Defender's runaway, 27 October)
+            const float scoutRoof = TorqueRoof(kClassScout), truckRoof = TorqueRoof(kClassTruck);
+            const bool roofs = scoutRoof == 3.0f && truckRoof == 6.0f && TorqueRoof(kClassHeavy) == 6.0f && kTorqueFactorMost == 6.0f &&
+                               LiftRoof(truckRoof, 0.5f) == 6.0f && LiftRoof(truckRoof, 0.8f) == 6.0f && Near(LiftRoof(truckRoof, 0.85f), 4.75f, 0.001f) &&
+                               Near(LiftRoof(truckRoof, 0.9f), 3.5f, 0.001f) && Near(LiftRoof(truckRoof, 0.95f), 2.25f, 0.001f) && Near(LiftRoof(truckRoof, 1.0f), 1.0f, 0.001f) &&
+                               LiftRoof(scoutRoof, 0.5f) == 3.0f && LiftRoof(scoutRoof, 0.8f) == 3.0f && Near(LiftRoof(scoutRoof, 0.85f), 2.5f, 0.001f) &&
+                               Near(LiftRoof(scoutRoof, 0.9f), 2.0f, 0.001f) && Near(LiftRoof(scoutRoof, 0.95f), 1.5f, 0.001f) && Near(LiftRoof(scoutRoof, 1.0f), 1.0f, 0.001f) &&
+                               Near(TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, 0.8f, scoutRoof), fminf(1.0f / (kGamePullFall * 0.2f), 3.0f), 0.01f) &&
+                               Near(TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, 0.9f, scoutRoof), 2.0f, 0.01f);
+            printf("     the lift's roof at 0.5, 0.8, 0.85, 0.9, 0.95 and 1.0 of a gear's top: a truck's %.2f %.2f %.2f %.2f %.2f %.2f, a scout's %.2f %.2f %.2f %.2f %.2f %.2f\n",
+                   LiftRoof(truckRoof, 0.5f), LiftRoof(truckRoof, 0.8f), LiftRoof(truckRoof, 0.85f), LiftRoof(truckRoof, 0.9f), LiftRoof(truckRoof, 0.95f), LiftRoof(truckRoof, 1.0f),
+                   LiftRoof(scoutRoof, 0.5f), LiftRoof(scoutRoof, 0.8f), LiftRoof(scoutRoof, 0.85f), LiftRoof(scoutRoof, 0.9f), LiftRoof(scoutRoof, 0.95f), LiftRoof(scoutRoof, 1.0f));
+            const bool lifts = roofs && Near(TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, 0.5f), 1.0f, 0.001f) &&
                                Near(TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, 0.8f), 1.0f / (kGamePullFall * 0.2f), 0.01f) &&
-                               TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, 0.97f) == kTorqueFactorMost && kTorqueFactorMost == 6.0f &&
-                               Near(TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, 0.9f), 1.0f / (kGamePullFall * 0.1f), 0.01f) && TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, 1.0f) == 1.0f &&
+                               Near(TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, 0.97f), 1.75f, 0.01f) &&
+                               Near(TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, 0.9f), fminf(1.0f / (kGamePullFall * 0.1f), 3.5f), 0.01f) && TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, 1.0f) == 1.0f &&
                                TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, 1.3f) == 1.0f && Near(TorqueLift(1.0f, 1.0f, 1.0f, kStallRatio, 0.1f), kStallRatio, 0.001f) &&
                                Near(TorqueLift(0.8f, 0.55f, 1.0f, 1.0f, 0.3f), 0.8f * 0.55f, 0.001f) && Near(TorqueLift(0.8f, 0.55f, 0.4f, 1.0f, 0.3f), 0.8f, 0.001f) &&
                                TorqueLift(0.0f, 1.0f, 1.0f, 1.0f, 0.5f) == kTorqueFactorLeast && TorqueLift(nanf(""), 1.0f, 1.0f, 1.0f, 0.5f) == 1.0f;
@@ -1929,15 +1944,16 @@ int main(int argc, char **argv)
             gameOwn.gear = 1;
             gameOwn.grip = 2.0f;
             GearboxStep(gameOwn, sd, dk, 1.0f, 1.0f, kDt);
-            // floored in the fourth at 0.935 of its top and gaining nothing: at EngineShare 50 the fifth pulls more there, and
-            // it shifts up; with all of the engine the fourth still pulls more (with the factor up to 6 the two cross at
-            // 0.915 and 0.955; at 3 they crossed at 0.86 and 0.89, and the drive of 11:51 at EngineShare 50 shifted at 0.87)
+            // floored in the fourth at 0.905 of its top and gaining nothing: at EngineShare 50 the fifth pulls more there, and
+            // it shifts up; with all of the engine the fourth still pulls more (with a truck's roof of 6 fading over the
+            // gear's last fifth the two cross at 0.89 and 0.92; with the flat roof of 6 at 0.915 and 0.955; at 3 they crossed
+            // at 0.86 and 0.89, and the drive of 11:51 at EngineShare 50 shifted at 0.87)
             auto heldAt = [&](const EngineHand &hand) {
                 GearboxModel hb = {};
                 hb.running = true;
                 hb.gear = 4;
                 hb.grip = 2.0f;
-                scoutAt(0.935f * TruckGearTop(sd, 4));
+                scoutAt(0.905f * TruckGearTop(sd, 4));
                 hb.spin = hb.by = hb.rolling = sd.spin[0];
                 hb.pedal = hb.held = hb.feel = 1.0f;
                 hb.moving = kEngineGearHold; // in the gear a while
@@ -2022,8 +2038,16 @@ int main(int argc, char **argv)
                 }
                 last = qb.gear;
             }
-            const bool crossing = EngineUpShare(half, 43.0f / 27.0f) < EngineUpShare(whole, 43.0f / 27.0f) && EngineUpShare(half, 43.0f / 27.0f) < 0.93f &&
-                                  EngineUpShare(whole, 43.0f / 27.0f) > 0.94f;
+            EngineHand scoutWhole = whole, scoutHalf = half;
+            scoutWhole.roof = scoutHalf.roof = TorqueRoof(kClassScout);
+            printf("     engine handed over, the next gear 43/27 taller: floored shift up at %.3f of the gear's top at EngineShare 100, %.3f at 50 (a truck's roof); "
+                   "%.3f and %.3f with a scout's\n",
+                   EngineUpShare(whole, 43.0f / 27.0f), EngineUpShare(half, 43.0f / 27.0f), EngineUpShare(scoutWhole, 43.0f / 27.0f), EngineUpShare(scoutHalf, 43.0f / 27.0f));
+            // the fade brings the floored point up under 0.92 of the top for a truck's roof and under 0.9 for a scout's (the
+            // flat roof of 6 had it at 0.955 and 0.915)
+            const bool crossing = EngineUpShare(half, 43.0f / 27.0f) < EngineUpShare(whole, 43.0f / 27.0f) && EngineUpShare(half, 43.0f / 27.0f) < 0.9f &&
+                                  EngineUpShare(whole, 43.0f / 27.0f) > 0.9f && EngineUpShare(whole, 43.0f / 27.0f) < 0.93f &&
+                                  EngineUpShare(scoutWhole, 43.0f / 27.0f) < 0.9f && EngineUpShare(scoutHalf, 43.0f / 27.0f) < EngineUpShare(scoutWhole, 43.0f / 27.0f);
             Check(schedule && stuckAtHalf == 2 && stuckAfter == 1 && stuckBox.gear == 2 && gameOwn.gear == 1 && crossing && heldHalf == 5 && heldWhole == 4 &&
                       kickHigh == 5 && kickLow == 4 && starts && weakStart.gear == 1 && climbs && quickLast == 5 && quickShortest >= kEngineGearHold - kDt && scoutLast == 5 && scoutShortest >= kEngineGearHoldScout - kDt &&
                       scoutShortest < kEngineGearHold - kDt,
@@ -2089,7 +2113,11 @@ int main(int argc, char **argv)
             fading.curve = &fallingCurve;
             flat.curve = &flatCurve;
             dieselFloored.curve = &td;
-            const bool fades = EngineUpShare(fading, 1.3f) < 0.9f && EngineUpShare(flat, 1.3f) > 0.93f && fabsf(EngineUpShare(dieselFloored, 1.3f) - EngineUpShare(flat, 1.3f)) < 0.02f;
+            printf("     floored point up, the next gear 1.3 taller: a falling curve %.3f, a flat one %.3f, the diesel's %.3f\n", EngineUpShare(fading, 1.3f),
+                   EngineUpShare(flat, 1.3f), EngineUpShare(dieselFloored, 1.3f));
+            // (with the lift's fade the flat curve's point up is 0.905, the flat roof had it past 0.93)
+            const bool fades = EngineUpShare(fading, 1.3f) < 0.85f && EngineUpShare(flat, 1.3f) > 0.88f && EngineUpShare(fading, 1.3f) < EngineUpShare(flat, 1.3f) - 0.05f &&
+                               fabsf(EngineUpShare(dieselFloored, 1.3f) - EngineUpShare(flat, 1.3f)) < 0.02f;
             Check(curves && fades && lightPoints && lightLow > 1500.0f && lightHigh < 1800.0f && lightDownsDiesel == 0 && lightLastDiesel == 6 && unlockedAfter == 0,
                   "automatic, the engine handed over: an engine's curve from its peak torque's speed, floored one whose power falls before the red zone shifting up sooner than a flat one; at a light foot up about as far along as the pedal "
                   "is down, not under 0.8 of the peak's speed (a fifth of the pedal: 1560 rpm), down where the gear below comes in clear of its point up, "
