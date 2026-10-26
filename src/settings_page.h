@@ -518,6 +518,12 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                            "SMT.addon64 (or SMT.asi) and SMT.ini from Sources\\Bin and start the game again. The mod's gearbox stands down until then.");
         ImGui::PopStyleColor();
     }
+    else if (view.gearboxHeld)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.68f, 0.15f, 1.0f));
+        ImGui::TextWrapped("Another mod holds the game's gearbox functions, so the mod's gearbox stands down.");
+        ImGui::PopStyleColor();
+    }
     static const char *gearboxes[kGearboxCount] = { "The game's own", "The mod's automatic" };
     PageLabel("Automatic", labelX);
     ImGui::SetNextItemWidth(w);

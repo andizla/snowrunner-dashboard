@@ -1416,19 +1416,25 @@ static void PlacesHarvest(DWORD stamp)
     Log(L"signatures: %d written to Gauges.signatures.txt in %.1f s", total, (GetTickCount64() - started) / 1000.0);
 }
 
-// The manual transmission mod (SMT) found in the game: its file loaded, its state published (smt.h), or a gearbox
-// function held by another mod. The mod's gearbox stands down then, and the tab says so (GaugeView::smtInstalled).
-static volatile LONG g_smtInstalled = 0;
-static bool SmtInstalled(const FunctionFind finds[kFnCount])
+// Another gearbox in the game: the manual transmission mod (SMT) by its file or its published state, else another mod
+// that holds one of the game's gearbox functions (review 6, G5: that one is not named SMT). The mod's gearbox stands
+// down then, and the tab says why (GaugeView::smtInstalled, ::gearboxHeld).
+enum { kGearboxFree, kGearboxSmt, kGearboxHeld };
+static volatile LONG g_gearboxBlocked = kGearboxFree;
+static int GearboxBlocked(const FunctionFind finds[kFnCount])
 {
-    if (GetModuleHandleW(L"SMT.addon64") || GetModuleHandleW(L"SMT.asi")) return true;
-    for (int f = 0; f < kFnCount; f++)
-        if (finds[f].state == kFnHeld) return true;
+    if (GetModuleHandleW(L"SMT.addon64") || GetModuleHandleW(L"SMT.asi")) return kGearboxSmt;
     wchar_t name[64];
     swprintf_s(name, L"Local\\SnowRunnerMT.State.%lu", GetCurrentProcessId());
     const HANDLE map = OpenFileMappingW(FILE_MAP_READ, FALSE, name);
-    if (map) CloseHandle(map);
-    return map != nullptr;
+    if (map)
+    {
+        CloseHandle(map);
+        return kGearboxSmt;
+    }
+    for (int f = 0; f < kFnCount; f++)
+        if (finds[f].state == kFnHeld) return kGearboxHeld;
+    return kGearboxFree;
 }
 
 // The game's gearbox functions in its code (game_code.h), looked for once a truck is driven, so a manual transmission
@@ -1450,18 +1456,24 @@ static void GameCodeLook()
     GameFunctionsText(finds, line, sizeof line);
     int held = 0;
     for (const auto &f : finds) held += f.state == kFnHeld;
-    Log(L"gearbox code (%.1f s, nothing written): %S", (GetTickCount64() - started) / 1000.0, line);
-    if (held) Log(L"gearbox code: another mod holds %d of the game's gearbox functions (a manual transmission mod); its hooks pass the game's shifts on", held);
+    Log(L"gearbox code (%.1f s, nothing written yet): %S", (GetTickCount64() - started) / 1000.0, line);
+    if (held) Log(L"gearbox code: another mod holds %d of the game's gearbox functions; its hooks pass the game's shifts on", held);
     const FunctionFind &shift = finds[kFnShiftGear];
     // one place only, also behind another mod's jump
     if ((shift.state == kFnFound || shift.state == kFnHeld) && shift.count == 1) g_shiftGear = (GameShiftFn)(g_base + shift.at);
     Log(g_shiftGear ? L"gearbox code: the mod's automatic can set gears through the game's shift function (Gearbox=1)"
                     : L"gearbox code: the game's shift function is not known for sure, so the mod's automatic cannot set gears (Gearbox stays the game's)");
-    if (SmtInstalled(finds))
+    const int blocked = GearboxBlocked(finds);
+    InterlockedExchange(&g_gearboxBlocked, blocked);
+    if (blocked == kGearboxSmt)
     {
-        InterlockedExchange(&g_smtInstalled, 1);
         Log(L"gearbox: the manual transmission mod (SMT) is installed. It is not compatible with this version and no longer needed: remove SMT.addon64 "
             L"(or SMT.asi) and SMT.ini from Sources\\Bin and start the game again. The mod's gearbox stands down until then");
+        return;
+    }
+    if (blocked == kGearboxHeld)
+    {
+        Log(L"gearbox: another mod holds the game's gearbox functions, so the mod's gearbox stands down");
         return;
     }
     static char why[1024];
@@ -1476,7 +1488,8 @@ static void GameCodeLook()
         if (!end) break;
         one = end + 1;
     }
-    // the mod's own shifts go through to the game's function behind the hook, so the probe counts only the game's
+    // the mod's own shifts go through to the game's function behind the hook, so the probe counts only the game's. With
+    // fewer than eight hooked the mod runs with those it has; each one missing is in the log above
     if (void *own = GearboxOriginal(kFnShiftGear)) g_shiftGear = (GameShiftFn)own;
 }
 
@@ -2185,13 +2198,14 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         w.probeAt = now + 2000;
     }
     // the game's gearbox functions as the hooks count them, every second while a truck is driven (phase 1: which of
-    // them the game calls when, as when a truck in A reverses on the brake)
+    // them the game calls when, as when a truck in A reverses on the brake). The counts nest: reverse and neutral go
+    // through auto off, and auto off through ShiftGear, so one reverse counts in all three (review 6, G2)
     if (probe && driving && GearboxHooked() && now >= w.gearboxProbeAt)
     {
         GearboxCounts c;
         GearboxCountsGet(c);
         Log(L"probe: gearbox code: ShiftGear %ld (last gear %d) | auto %ld | high %ld | reverse %ld | neutral %ld | auto off %ld (last %d) | power %ld (last %.3f) | "
-            L"vehicle %ld (%s)",
+            L"vehicle %ld (%s) | counts nest: reverse and neutral go through auto off, auto off through ShiftGear",
             c.shift, c.shiftGear, c.autoGear, c.high, c.reverse, c.neutral, c.autoOff, c.autoOffGear, c.power, c.factor, c.vehicle, c.vehicleSet ? L"set" : L"cleared");
         w.gearboxProbeAt = now + 1000;
     }
@@ -2657,7 +2671,8 @@ static DWORD WINAPI Run(void *)
         v.ambientDay = mapAir.day;
         v.ambientNight = mapAir.night;
         v.hour = hour;
-        v.smtInstalled = g_smtInstalled != 0;
+        v.smtInstalled = g_gearboxBlocked == kGearboxSmt;
+        v.gearboxHeld = g_gearboxBlocked == kGearboxHeld;
         strcpy_s(v.gearbox, driving ? watch.gearboxKey : "");
         // the engine and its curve in force, for the tab's Engine section and its plot
         if (driving && watch.profileFor[0])
@@ -2743,12 +2758,10 @@ static DWORD WINAPI Run(void *)
 }
 
 // Loaded by an ASI loader (Gauges.asi), or by ReShade under the name from before 0.16 (Gauges.addon64): the mod's thread
-// starts the overlay either way. ReShade unloads an add-on that does not register with it, so under that name the mod
-// pins itself first and runs for the whole game all the same.
-BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
+// starts the overlay either way. The mod pins itself first and runs for the whole game: ReShade unloads an add-on that
+// does not register with it, and the gearbox hooks must outlive any unload.
+BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
 {
-    // unloaded while the game goes on (not at the game's end): the gearbox hooks come out first
-    if (reason == DLL_PROCESS_DETACH && !reserved) GearboxUnhook();
     if (reason != DLL_PROCESS_ATTACH) return TRUE;
     DisableThreadLibraryCalls(inst);
     wchar_t path[MAX_PATH] = {};
@@ -2769,11 +2782,9 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
     swprintf_s(once, L"Local\\SnowRunnerGauges-%lu", GetCurrentProcessId());
     const HANDLE mutex = CreateMutexW(nullptr, FALSE, once);
     g_second = mutex && GetLastError() == ERROR_ALREADY_EXISTS;
-    if (g_addon && !g_second)
-    {
-        HMODULE pinned = nullptr;
-        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCWSTR)&DllMain, &pinned);
-    }
+    // pinned in every case: the gearbox hooks live as long as the game, so no unload path exists (review 6, G3)
+    HMODULE pinned = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCWSTR)&DllMain, &pinned);
     const HANDLE t = CreateThread(nullptr, 0, Run, nullptr, 0, nullptr);
     if (t) CloseHandle(t);
     return TRUE;

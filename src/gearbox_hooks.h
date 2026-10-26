@@ -28,7 +28,7 @@ long GearboxDetach(void **targets[], void *const hooks[], int n);
 // Hooks the game's gearbox functions the finder found once and not held by another mod, at base (the exe's). why:
 // one line per function that is not hooked, and why. The number hooked; 0 when the transaction failed.
 int GearboxHook(uintptr_t base, const FunctionFind finds[kFnCount], char *why, size_t size);
-// Takes every hook out again (the mod unloading).
+// Takes every hook out again. The mod never unloads (it pins itself), so only the test calls it.
 void GearboxUnhook();
 bool GearboxHooked();
 void GearboxCountsGet(GearboxCounts &out);

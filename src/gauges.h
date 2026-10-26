@@ -289,8 +289,9 @@ enum { kSoundOil = kTurboTiers, kSoundPurge, kSoundTierCount }; // the oil warni
 // string that lives as long as the mod
 enum { kViewPullOff, kViewPullArmed, kViewPullRunning, kViewPullDone, kViewPullStopped };
 static const int kEnginePlot = 40; // points of the tab's torque plot
-// smtInstalled: the manual transmission mod is in the game, so the mod's gearbox stands down (the tab says why).
-struct GaugeView { bool show, demo; int hidden; GaugeState st; int engineDamage, engineCapacity; char truck[96]; bool truckOwn, smtInstalled; char map[96], mapFrom[64]; bool mapOwn; float ambientC;
+// smtInstalled: the manual transmission mod is in the game; gearboxHeld: another mod holds the game's gearbox
+// functions. Either way the mod's gearbox stands down (the tab says why).
+struct GaugeView { bool show, demo; int hidden; GaugeState st; int engineDamage, engineCapacity; char truck[96]; bool truckOwn, smtInstalled, gearboxHeld; char map[96], mapFrom[64]; bool mapOwn; float ambientC;
                    int pullTest, pullPhase; const char *pullWhy;
                    float ambientDay, ambientNight, hour; // the map's day and night (with mapOwn), the hour of the game's day (-1 not known)
                    char gearbox[96]; float gearHold; bool gearHoldOwn; // the driven truck's gearbox (its key, "" for none), the seconds each gear is held going up with the mod's engine, and whether its file sets them

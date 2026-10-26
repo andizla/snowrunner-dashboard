@@ -37,6 +37,12 @@ static int TestHook(int a, int b)
     g_hookSaw = g_hookSaw + 1;
     return g_testWay(a, b);
 }
+// a second function for GearboxHook's choice (never called while hooked: the game's hooks take other arguments)
+__declspec(noinline) static int TestTarget2(int a, int b)
+{
+    volatile int x = b;
+    return x * 7 - a;
+}
 
 struct Region { uint64_t at; std::vector<uint8_t> bytes; };
 static std::vector<Region> g_game;
@@ -903,6 +909,37 @@ int main()
         const int after = TestTarget(a, b);
         Check(before == 17 && attached && wayMoved && seen && through == before && detached && after == before && g_hookSaw == 1 && g_testWay == &TestTarget,
               "gearbox hooks: a function detoured calls the hook, which calls through with its arguments and answer unchanged; the detach makes it its own again");
+    }
+
+    // GearboxHook's choice (review 6, G6): made-up finds at base 0, two found once at the test's own functions, one held,
+    // one there twice, one unplaced, the rest not found; the guard against a second attach; the unhook; and a failed
+    // transaction (a found function at address 0) that leaves nothing hooked and no way through
+    {
+        FunctionFind finds[kFnCount] = {};
+        finds[kFnShiftGear] = FunctionFind{ kFnFound, (size_t)(uintptr_t)&TestTarget, 1, false };
+        finds[kFnShiftToAuto] = FunctionFind{ kFnHeld, 0x100, 1, false };
+        finds[kFnShiftToHigh] = FunctionFind{ kFnFound, 0x200, 2, false };
+        finds[kFnShiftToNeutral] = FunctionFind{ kFnUnplaced, 0, 0, false };
+        finds[kFnAutoOffAndShift] = FunctionFind{ kFnFound, (size_t)(uintptr_t)&TestTarget2, 1, false };
+        char why[1024];
+        const int hooked = GearboxHook(0, finds, why, sizeof why);
+        const bool reasons = strstr(why, "ShiftToAutoGear: another mod holds it") && strstr(why, "ShiftToHigh: its bytes stand more than once") &&
+                             strstr(why, "ShiftToReverse: not found") && strstr(why, "ShiftToNeutral: not looked for") && strstr(why, "SetPowerFactor: not found") &&
+                             strstr(why, "SetCurrentVehicle: not found") && !strstr(why, "GetMaxGear");
+        void *const way = GearboxOriginal(kFnShiftGear);
+        const bool ways = way && way != (void *)&TestTarget && GearboxOriginal(kFnAutoOffAndShift) && !GearboxOriginal(kFnShiftToHigh) && !GearboxOriginal(kFnMaxGear);
+        char again[256];
+        const bool guarded = GearboxHook(0, finds, again, sizeof again) == 2 && GearboxHooked();
+        GearboxUnhook();
+        const bool unhooked = !GearboxHooked() && !GearboxOriginal(kFnShiftGear) && TestTarget(4, 5) == 17 && TestTarget2(4, 5) == 31;
+        FunctionFind nowhere[kFnCount] = {};
+        nowhere[kFnShiftGear] = FunctionFind{ kFnFound, 0, 1, false };
+        char failed[512];
+        const bool refused = GearboxHook(0, nowhere, failed, sizeof failed) == 0 && strstr(failed, "Detours could not attach") && !GearboxHooked() &&
+                             !GearboxOriginal(kFnShiftGear);
+        Check(hooked == 2 && reasons && ways && guarded && unhooked && refused,
+              "gearbox hooks: only functions found once and not held are hooked, each other one with its reason; a second attach changes nothing; the unhook "
+              "gives the functions back; a failed transaction hooks none");
     }
 
     // the probe's text and what makes it write

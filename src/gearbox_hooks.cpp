@@ -2,8 +2,12 @@
 // AutoOffAndShift take the vehicle and a gear and answer whether the game took it, ShiftToHigh, ShiftToReverse and
 // ShiftToNeutral take the vehicle and answer the same, ShiftToAutoGear takes the vehicle, SetPowerFactor the vehicle
 // and a factor, SetCurrentVehicle the truck control and the vehicle (nullptr when the driver leaves).
+//
+// The counts nest: in the game's code ShiftToReverse and ShiftToNeutral jump into AutoOffAndShift (the gear -1 or 0),
+// and AutoOffAndShift into ShiftGear, so one reverse adds one to reverse, to auto off and to ShiftGear (review 6, G2).
 #include "gearbox_hooks.h"
 #include "detours\detours.h"
+#include <tlhelp32.h>
 #include <stdio.h>
 
 typedef bool (*ShiftFn)(void *vehicle, int32_t gear);
@@ -75,33 +79,52 @@ static void HookSetVehicle(void *control, void *vehicle)
 static void *const kHooks[kFnCount] = { (void *)&HookShiftGear, (void *)&HookShiftToAuto, (void *)&HookShiftToHigh, (void *)&HookShiftToReverse,
                                         (void *)&HookShiftToNeutral, nullptr, (void *)&HookAutoOffAndShift, (void *)&HookSetPower, (void *)&HookSetVehicle };
 
-long GearboxAttach(void **targets[], void *const hooks[], int n)
+// Every other thread of the process, opened so Detours can suspend it for the commit and move it out of the bytes it
+// patches: the hooks go in while the game drives a truck, and a game thread inside a function's first bytes would run
+// half old, half new code (review 6, G1). Taken after the attaches, so Detours' own allocations come before any thread
+// is suspended. The caller closes the handles after the commit.
+static const int kMostThreads = 1024;
+static int OtherThreads(HANDLE out[kMostThreads])
 {
-    LONG error = DetourTransactionBegin();
-    if (error != NO_ERROR) return error;
-    DetourUpdateThread(GetCurrentThread());
-    for (int i = 0; i < n && error == NO_ERROR; i++) error = DetourAttach(targets[i], hooks[i]);
-    if (error != NO_ERROR)
+    const HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE) return 0;
+    THREADENTRY32 te = {};
+    te.dwSize = sizeof te;
+    const DWORD process = GetCurrentProcessId(), self = GetCurrentThreadId();
+    int n = 0;
+    for (BOOL ok = Thread32First(snap, &te); ok && n < kMostThreads; ok = Thread32Next(snap, &te))
     {
-        DetourTransactionAbort();
-        return error;
+        if (te.th32OwnerProcessID != process || te.th32ThreadID == self) continue;
+        const HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_SET_CONTEXT, FALSE, te.th32ThreadID);
+        if (h) out[n++] = h;
     }
-    return DetourTransactionCommit();
+    CloseHandle(snap);
+    return n;
 }
 
-long GearboxDetach(void **targets[], void *const hooks[], int n)
+// One transaction of attaches (attach) or detaches, every other thread suspended for its commit.
+static long Transact(bool attach, void **targets[], void *const hooks[], int n)
 {
     LONG error = DetourTransactionBegin();
     if (error != NO_ERROR) return error;
     DetourUpdateThread(GetCurrentThread());
-    for (int i = 0; i < n && error == NO_ERROR; i++) error = DetourDetach(targets[i], hooks[i]);
+    for (int i = 0; i < n && error == NO_ERROR; i++) error = attach ? DetourAttach(targets[i], hooks[i]) : DetourDetach(targets[i], hooks[i]);
     if (error != NO_ERROR)
     {
         DetourTransactionAbort();
         return error;
     }
-    return DetourTransactionCommit();
+    static HANDLE threads[kMostThreads];
+    const int count = OtherThreads(threads);
+    for (int i = 0; i < count; i++) DetourUpdateThread(threads[i]);
+    error = DetourTransactionCommit();
+    for (int i = 0; i < count; i++) CloseHandle(threads[i]);
+    return error;
 }
+
+long GearboxAttach(void **targets[], void *const hooks[], int n) { return Transact(true, targets, hooks, n); }
+
+long GearboxDetach(void **targets[], void *const hooks[], int n) { return Transact(false, targets, hooks, n); }
 
 // the functions hooked, in the order attached
 static void **g_targets[kFnCount];
@@ -152,11 +175,11 @@ int GearboxHook(uintptr_t base, const FunctionFind finds[kFnCount], char *why, s
 void GearboxUnhook()
 {
     if (!g_hooked) return;
+    // the ways through stay as they are: a thread still inside a hook calls on through them (review 6, G3)
     if (GearboxDetach(g_targets, g_hooks, g_hookedCount) == NO_ERROR)
     {
         g_hooked = false;
         g_hookedCount = 0;
-        for (int f = 0; f < kFnCount; f++) g_way[f] = nullptr;
     }
 }
 
