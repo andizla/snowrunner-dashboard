@@ -2454,6 +2454,48 @@ int main(int argc, char **argv)
                   "clutch heat from ClutchStep's states: a start in first stays under a tenth of the burn point; floored in third with the clutch held in its "
                   "bite it heats more than ten times as much, past 0.6 of the burn point; let up and locked it only cools");
         }
+        // the automatic clutch (no pedal axis: keyboard, pad, a button clutch) burns as a pedal does (the user, 26 October:
+        // "it should do it if trying to use a too high gear even when using the sequential mode"): floored from a
+        // standstill, its own take-up in first stays under a third of the burn point; in a gear the engine cannot pull
+        // from a standstill the slip lasts and heats it much more. The truck gains 2000 rpm of the gearbox's input a
+        // second for each share of the most torque in first, a third of that in third, a fifth in fifth
+        {
+            const float stock = 195000.0f;
+            auto start = [&](int gear, float gain, float seconds, float &most, float &began) {
+                TruckRaw t = c;
+                t.gear = t.gearEngaged = gear;
+                ClutchModel cm = {};
+                ClutchHeat h = {};
+                float input = 0.0f;
+                most = 0.0f;
+                began = -1.0f;
+                for (float at = 0.0f; at < seconds; at += kDt)
+                {
+                    for (int i = 0; i < t.wheels; i++) t.spin[i] = TruckGearTop(t, gear) * input / k.redline;
+                    ClutchStep(cm, t, k, curve, 0.0f, ThrottleShape(1.0f), 1.0f, true, kDt);
+                    input = fmaxf(0.0f, input + cm.carried * gain * kDt);
+                    ClutchHeatStep(h, 1, cm, stock, true, kDt);
+                    most = fmaxf(most, h.q);
+                    if (h.burning && began < 0.0f) began = at;
+                }
+            };
+            float firstMost = 0.0f, firstBegan = 0.0f, thirdMost = 0.0f, thirdBegan = 0.0f, fifthMost = 0.0f, fifthBegan = 0.0f, heavyMost = 0.0f, heavyBegan = 0.0f;
+            start(1, 2000.0f, 6.0f, firstMost, firstBegan);
+            start(3, 2000.0f / 3.0f, 6.0f, thirdMost, thirdBegan);
+            start(5, 2000.0f / 5.0f, 6.0f, fifthMost, fifthBegan);
+            // a gear the engine can hardly pull from a standstill (a high gear with a load, or uphill): the truck gains a
+            // thirtieth as fast as in first; and one it cannot pull at all: the truck does not move, the clutch slips on
+            float slowMost = 0.0f, slowBegan = 0.0f;
+            start(5, 2000.0f / 30.0f, 10.0f, slowMost, slowBegan);
+            start(5, 0.0f, 10.0f, heavyMost, heavyBegan);
+            printf("     automatic clutch floored from a standstill: first at most %.2f of %.2f; third %.2f; fifth %.2f; a gear it can hardly pull %.2f; one it "
+                   "cannot pull %.2f%s%.1f s\n",
+                   firstMost, kClutchBurnFrom, thirdMost, fifthMost, slowMost, heavyMost, heavyBegan >= 0.0f ? ", burning after " : ", no burn ", heavyBegan);
+            Check(firstMost < kClutchBurnFrom / 3.0f && firstBegan < 0.0f && thirdMost > firstMost * 2.0f && fifthMost > thirdMost && slowMost > fifthMost &&
+                      heavyBegan >= 0.0f && heavyBegan < 10.0f,
+                  "clutch heat, the automatic clutch: floored from a standstill a start in first stays under a third of the burn point; higher gears heat it "
+                  "more; a start in a gear the engine cannot pull burns as its slip goes on");
+        }
         // let up at speed: the engine turns with the gearbox; pressed again with the foot off, back to idle
         wheels(TruckGearTop(c, 1) * 0.6f);
         ClutchModel cruise = {};

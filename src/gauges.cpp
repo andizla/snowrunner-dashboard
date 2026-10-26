@@ -620,7 +620,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; Damage=0: the temperature is only shown.\n"
                         L"; ColdDamagePercentPerMinute=0 switches the cold part off. Damage has not been tried in co-op: leave it at 0 there.\n"
                         L"; StallDamagePercent: what a shift without the clutch costs the gearbox, percent of what it takes, 0 to 25 (5), with Damage=1.\n"
-                        L"; ClutchBurn=1: a clutch pedal (on an axis) slipped under load heats up and costs the gearbox, faster the stronger the engine, with Damage=1.\n"
+                        L"; ClutchBurn=1: a clutch slipping under load heats up and costs the gearbox, a pedal's or the one that works by itself, with Damage=1.\n"
                         L"; SoundVolume (0 to 100) is how loud the turbo is heard when the pedal comes up quickly under boost: it flutters,\n"
                         L"; longer and louder the more boost there was, until the pedal goes down again. The oil warning goes by it too.\n"
                         L"; 0 = no sound. SoundsOnly=1 plays the sounds and draws no cluster.\n"
@@ -2410,13 +2410,15 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                     w.gearbox.keep, w.gearbox.keepFor);
             w.clutch = ClutchModel{};
         }
-        // the clutch's heat from the clutch as stepped, by the engine's most torque and its profile's share. Only a
-        // clutch pedal on an axis heats it (review 10, D1): the clutch that works by itself (a button, or none) slips on
-        // every start and cannot be feathered, so it only cools, as one outside a position of the player's does
+        // the clutch's heat from the clutch as stepped, by the engine's most torque and its profile's share, for every
+        // clutch, a pedal on an axis or the one that works by itself (a button, or none; the user, 26 October: "it should
+        // do it if trying to use a too high gear even when using the sequential mode"). The automatic clutch's own take-up
+        // in first stays cold (0.17 of the burn point floored, models test); what burns is the long slip of a start in a
+        // gear the engine cannot pull, whoever drives. Outside a position of the player's the clutch is empty and only cools
         {
             const float most = w.engine.torque > 0.0f && w.engineVehicle == w.refs.vehicle ? w.engine.torque * (w.profile.torque > 0.0f ? w.profile.torque : 1.0f) : 0.0f;
             const bool burnWas = w.clutchHeat.burning;
-            ClutchHeatStep(w.clutchHeat, kind, w.actions.clutchTravel >= 0.0f ? w.clutch : ClutchModel{}, most, s.damage && s.clutchBurn, dt);
+            ClutchHeatStep(w.clutchHeat, kind, w.clutch, most, s.damage && s.clutchBurn, dt);
             if (w.clutchHeat.burning && !burnWas)
             {
                 w.burnPoints = 0;
