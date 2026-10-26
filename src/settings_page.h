@@ -548,33 +548,41 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         PageTip("Neutral the moment no gear key is held. For an H shifter with every gear bound: a gear reached with up or down is not held.");
         changed(ImGui::Checkbox("Skip neutral", &s.skipNeutral));
         PageTip("Up and down step from the first gear to reverse and back without stopping in neutral.");
-        // the bindings: two slots an action; a click binds the next key, pad chord, button or pedal moved, x clears
-        // (the order is input_bindings.h's GearAction)
-        static const char *actions[kViewActions] = { "Gear 1", "Gear 2", "Gear 3", "Gear 4", "Gear 5", "Gear 6", "Gear 7", "Gear 8", "Gear 9", "Gear 10",
-                                                     "Gear 11", "Gear 12", "H", "L-", "L", "L+", "Neutral", "Reverse", "Gear up", "Gear down", "Clutch",
-                                                     "Range high", "Range low", "A" };
-        ImGui::TextDisabled("Bindings: click a slot, then press a key, a pad's buttons or a wheel's button, or move the clutch pedal. Escape cancels.");
-        for (int a = 0; a < kViewActions && actions[a]; a++)
+    }
+    // the bindings: two slots an action; a click binds the next key, pad chord, button or pedal moved, x clears (the
+    // order is input_bindings.h's GearAction). The shifter's at Gearbox=2, the locks' at every level
+    static const char *actions[kViewActions] = { "Gear 1", "Gear 2", "Gear 3", "Gear 4", "Gear 5", "Gear 6", "Gear 7", "Gear 8", "Gear 9", "Gear 10",
+                                                 "Gear 11", "Gear 12", "H", "L-", "L", "L+", "Neutral", "Reverse", "Gear up", "Gear down", "Clutch",
+                                                 "Range high", "Range low", "A", "Diff lock", "AWD" };
+    auto bindingRow = [&](int a) {
+        ImGui::PushID(1000 + a);
+        PageLabel(actions[a], labelX);
+        for (int slot = 0; slot < 2; slot++)
         {
-            ImGui::PushID(1000 + a);
-            PageLabel(actions[a], labelX);
-            for (int slot = 0; slot < 2; slot++)
-            {
-                ImGui::PushID(slot);
-                if (slot) ImGui::SameLine();
-                const bool waiting = view.captureAction == a && view.captureSlot == slot;
-                char text[64];
-                sprintf_s(text, "%s###bind", waiting ? "press a key, a button or move the pedal..." : view.bindText[a][slot]);
-                if (ImGui::Button(text, ImVec2(w * 0.42f, 0.0f))) BindingAsk(waiting ? kBindAskCancel : kBindAskCapture, a, slot);
-                ImGui::SameLine();
-                if (ImGui::SmallButton("x")) BindingAsk(kBindAskClear, a, slot);
-                ImGui::PopID();
-            }
+            ImGui::PushID(slot);
+            if (slot) ImGui::SameLine();
+            const bool waiting = view.captureAction == a && view.captureSlot == slot;
+            char text[64];
+            sprintf_s(text, "%s###bind", waiting ? "press a key, a button or move the pedal..." : view.bindText[a][slot]);
+            if (ImGui::Button(text, ImVec2(w * 0.42f, 0.0f))) BindingAsk(waiting ? kBindAskCancel : kBindAskCapture, a, slot);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("x")) BindingAsk(kBindAskClear, a, slot);
             ImGui::PopID();
         }
+        ImGui::PopID();
+    };
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextDisabled("Bindings: click a slot, then press a key, a pad's buttons or a wheel's button, or move the clutch pedal. Escape cancels.");
+    ImGui::PopTextWrapPos();
+    if (s.gearbox == kGearboxOwn)
+    {
+        for (int a = 0; a < kViewShifts; a++) bindingRow(a);
         if (view.gearShifts || view.gearStalls) ImGui::TextDisabled("Since the truck was taken: %d shifts, %d stalls.", view.gearShifts, view.gearStalls);
-        if (view.controllers) ImGui::TextDisabled("%d wheel or shifter read through DirectInput.", view.controllers);
     }
+    ImGui::TextDisabled("Locks");
+    PageTip("The differential lock and all-wheel drive on a key, on every truck, the upgrade fitted or not; the cluster's lamps show them.");
+    for (int a = kViewShifts; a < kViewActions; a++) bindingRow(a);
+    if (view.controllers) ImGui::TextDisabled("%d wheel or shifter read through DirectInput.", view.controllers);
     static const char *inputs[kInputCount] = { "A wheel's pedals", "A pad", "The keyboard" };
     PageLabel("Driven with", labelX);
     ImGui::SetNextItemWidth(w);

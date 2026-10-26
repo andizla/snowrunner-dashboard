@@ -2,8 +2,8 @@
 // player binds, a binding and its text form for the ini, one snapshot of the keys, the pad and the wheels and shifters
 // (input_devices.cpp fills it from Windows), and from snapshot to snapshot the state of every action (held, pressed
 // on this pass, the clutch's travel) and the capture of a new binding. The list of actions is the manual transmission
-// mod's (its SMT.ini), without its menu key, AWD, the diff lock and the handbrake, which the game and the NEXT GEN menu
-// have. Nothing here reads a device or the game: the tests run it on made up snapshots.
+// mod's (its SMT.ini), with its AWD and diff lock, without its menu key and the handbrake, which the game and the NEXT
+// GEN menu have. Nothing here reads a device or the game: the tests run it on made up snapshots.
 #pragma once
 #include "gauges.h"
 #include <ctype.h>
@@ -13,13 +13,15 @@ enum GearAction
 {
     kActGear1, kActGear2, kActGear3, kActGear4, kActGear5, kActGear6, kActGear7, kActGear8, kActGear9, kActGear10, kActGear11, kActGear12,
     kActGearH, kActGearLMinus, kActGearL, kActGearLPlus, kActGearN, kActGearR, kActUp, kActDown, kActClutch, kActRangeHigh, kActRangeLow,
-    kActGearA, // A: the gear choice handed to the mod's automatic (the mod's own; SMT has none)
+    kActGearA,    // A: the gear choice handed to the mod's automatic (the mod's own; SMT has none)
+    kActDiffLock, // the differential lock and all-wheel drive flipped (truck.h, LocksStep), at every level of Gearbox
+    kActAwd,
     kActCount
 };
 // Their names, as the ini's keys and the log have them.
 static const char *const kActionNames[kActCount] = { "Gear1", "Gear2", "Gear3", "Gear4", "Gear5", "Gear6", "Gear7", "Gear8", "Gear9", "Gear10",
                                                      "Gear11", "Gear12", "GearH", "GearL-", "GearL", "GearL+", "GearN", "GearR", "GearUp",
-                                                     "GearDown", "Clutch", "RangeHigh", "RangeLow", "GearA" };
+                                                     "GearDown", "Clutch", "RangeHigh", "RangeLow", "GearA", "DiffLock", "Awd" };
 
 // A binding: a key (its virtual key code), a pad chord (XInput buttons, PadParse), a wheel's or shifter's button, one
 // direction of its POV hat, or one of its axes (the clutch: inverted where the pedal reads backwards). Wheels count

@@ -746,6 +746,52 @@ inline void WorldRead(const TruckMemory &m, uint64_t control, World &w)
 // is neither in the garage nor being put back into the world.
 inline bool WorldDriving(const World &w) { return w.known && w.menu <= 0 && !w.loading && !w.mapOpen && !w.viewer && !w.garage; }
 
+// ---- the differential lock and all-wheel drive on the mod's keys (DiffLock, Awd) ----
+// The manual transmission mod's way: a press flips one byte in the truck's action, the lock at + 0x4A and all-wheel
+// drive at + 0x49, which the game took on a truck without the upgrade too. Where the game puts a byte back to 0 on the
+// next pass after a write of 1 with no press between, it is said once a truck (kLockCleared) and left.
+enum { kLockDiff, kLockAwd, kLocks };
+static const uint64_t kLockAt[kLocks] = { 0x4A, 0x49 };
+enum { kLockNone, kLockOn, kLockOff, kLockCleared };
+struct LocksWatch
+{
+    uint64_t action;      // the truck's action the rest is for
+    bool check[kLocks];   // a 1 was written on the last pass
+    bool said[kLocks];    // a clear was said for this truck
+};
+
+// One pass with a truck driven (action: its action object, outside the exe): pressed holds the keys' presses, out
+// what came of each.
+inline void LocksStep(LocksWatch &l, const TruckMemory &m, uint64_t action, const bool pressed[kLocks], int out[kLocks])
+{
+    if (action != l.action)
+    {
+        l = LocksWatch{};
+        l.action = action;
+    }
+    for (int i = 0; i < kLocks; i++)
+    {
+        out[i] = kLockNone;
+        const bool check = l.check[i];
+        l.check[i] = false;
+        uint8_t now = 0;
+        if (!m.get(action + kLockAt[i], now)) continue;
+        if (!pressed[i])
+        {
+            if (check && !now && !l.said[i])
+            {
+                l.said[i] = true;
+                out[i] = kLockCleared;
+            }
+            continue;
+        }
+        const uint8_t to = now ? 0 : 1;
+        if (!m.put(action + kLockAt[i], to)) continue;
+        out[i] = to ? kLockOn : kLockOff;
+        l.check[i] = to == 1;
+    }
+}
+
 // The gearbox position by the letters the cluster shows: "A" automatic (the gear's number goes with it), "H" the high
 // gear, "L", "L+", "L-" the low range, "" a numbered gear picked on a wheel's shifter, reverse and neutral. The low
 // range is the game's first gear with a power factor: 0.45 in L, 0.2 in L- and 1 in L+.

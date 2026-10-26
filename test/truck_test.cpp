@@ -725,6 +725,46 @@ int main()
     readEngine();
     Check(leftAlone && engine[0] == 150, "write: an engine at its end is left alone");
 
+    // the locks on the mod's keys: a press flips its byte in the action (the lock at + 0x4A, all-wheel drive at + 0x49,
+    // the made up truck with all-wheel drive on and the lock off), a key held is no press, and a byte the game puts back
+    // to 0 after a write of 1 is said once a truck
+    {
+        MakeGame();
+        LocksWatch l = {};
+        int out[kLocks];
+        uint8_t diff = 0, awd = 0;
+        auto pass = [&](bool pressDiff, bool pressAwd) {
+            const bool pressed[kLocks] = { pressDiff, pressAwd };
+            LocksStep(l, kMemory, kAction, pressed, out);
+            Peek(kAction + 0x4A, &diff, 1);
+            Peek(kAction + 0x49, &awd, 1);
+        };
+        pass(true, false);
+        const bool lockOn = out[kLockDiff] == kLockOn && out[kLockAwd] == kLockNone && diff == 1 && awd == 1;
+        pass(false, false); // the key held: the reader gives no second press
+        pass(false, false);
+        const bool held = out[kLockDiff] == kLockNone && diff == 1;
+        pass(false, true);
+        const bool awdOff = out[kLockAwd] == kLockOff && awd == 0 && diff == 1;
+        pass(true, false);
+        const bool lockOff = out[kLockDiff] == kLockOff && diff == 0;
+        pass(true, false);
+        Put(kAction + 0x4A, (uint8_t)0); // a truck without the upgrade: the game puts it back
+        pass(false, false);
+        const bool cleared = out[kLockDiff] == kLockCleared && diff == 0;
+        pass(true, false);
+        Put(kAction + 0x4A, (uint8_t)0);
+        pass(false, false);
+        const bool once = out[kLockDiff] == kLockNone;
+        Check(lockOn && held && awdOff && lockOff && cleared && once,
+              "locks: a press flips the differential lock or all-wheel drive in the truck's action, held is no repeat, a clear by the game said once");
+        const TruckMemory readOnly = { Peek, kExe };
+        const bool pressed[kLocks] = { true, true };
+        LocksStep(l, readOnly, kAction, pressed, out);
+        Peek(kAction + 0x4A, &diff, 1);
+        Check(out[kLockDiff] == kLockNone && out[kLockAwd] == kLockNone && diff == 0, "locks: a write the memory does not take is no flip");
+    }
+
     // the effect the game holds is never lowered: 100 of 150 with an effect of 0.25 from a rule the record does not give
     MakeGame();
     TruckFind(kMemory, r);

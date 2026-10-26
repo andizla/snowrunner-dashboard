@@ -46,6 +46,34 @@ int main()
                   pad.code == (XINPUT_GAMEPAD_LEFT_SHOULDER | XINPUT_GAMEPAD_DPAD_DOWN) && axis.kind == kBindAxis && axis.device == 1 && axis.code == 3 && axis.inverted,
               "bindings: every kind's text read and written back the same, in any case");
     }
+    // the locks: DiffLock and Awd by their names, their bindings' texts both ways, one press for a key held over passes
+    {
+        GearBindings b = {};
+        b.slot[kActDiffLock][0] = Parsed("Key L");
+        b.slot[kActDiffLock][1] = Parsed("Pad RB+DPadLeft");
+        b.slot[kActAwd][0] = Parsed("Wheel 1 Button 7");
+        char lock[64], lockPad[64], awd[64];
+        BindingText(b.slot[kActDiffLock][0], lock, sizeof lock);
+        BindingText(b.slot[kActDiffLock][1], lockPad, sizeof lockPad);
+        BindingText(b.slot[kActAwd][0], awd, sizeof awd);
+        InputReader r = {};
+        ActionState st[kActCount];
+        InputSnapshot s = {};
+        s.front = true;
+        s.device[0].present = true;
+        int locks = 0, awds = 0;
+        for (int pass = 0; pass < 5; pass++)
+        {
+            s.key['L'] = pass >= 1 && pass <= 3;
+            s.device[0].button[6] = pass == 2;
+            InputStep(r, b, s, st);
+            locks += st[kActDiffLock].pressed;
+            awds += st[kActAwd].pressed;
+        }
+        Check(!strcmp(kActionNames[kActDiffLock], "DiffLock") && !strcmp(kActionNames[kActAwd], "Awd") && !strcmp(lock, "Key L") &&
+                  !strcmp(lockPad, "Pad RB+DPadLeft") && !strcmp(awd, "Wheel 1 Button 7") && locks == 1 && awds == 1,
+              "bindings: DiffLock and Awd by name, their texts both ways, a key held three passes one press");
+    }
     // bad texts: refused, each with its reason
     {
         static const char *const bad[] = { "", "Key", "Key Nothing", "Key 0", "Key 300", "Pad", "Pad LB+Nothing", "Wheel", "Wheel 0 Button 1", "Wheel 9 Button 1",

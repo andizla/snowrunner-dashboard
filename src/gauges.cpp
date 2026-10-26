@@ -631,7 +631,9 @@ static void ReadIni(GaugeSettings &s)
                         L"; is down, a kickdown floored), the game's shifter yours, only its reverse on the brake refused. 2 the mod's own\n"
                         L"; gearbox takes the shifter: A, the numbered gears, N, R, H, L-, L, L+ on the bindings below (as 1 until one reaches R).\n"
                         L"; [Gearbox] Bind<Action> and Bind<Action>2: two bindings each for Gear1 to Gear12, GearH, GearL-, GearL, GearL+, GearN,\n"
-                        L"; GearR, GearA, GearUp, GearDown, Clutch, RangeHigh, RangeLow. A binding is Key <name or code>, Pad <buttons with +>,\n"
+                        L"; GearR, GearA, GearUp, GearDown, Clutch, RangeHigh, RangeLow, and at every Gearbox level DiffLock and Awd (the\n"
+                        L"; differential lock and all-wheel drive flipped, on every truck, the upgrade fitted or not; none by default).\n"
+                        L"; A binding is Key <name or code>, Pad <buttons with +>,\n"
                         L"; Wheel <n> Button <n>, Wheel <n> POV [<n>] Up/Right/Down/Left, Wheel <n> Axis <n> [inverted] (the clutch), or None.\n"
                         L"; The tab's Gearbox section binds them by a press. Without a key in the ini the defaults below hold:\n"
                         L";   BindGearUp=Key Num 8\n"
@@ -1007,6 +1009,7 @@ static void SettingsWrite(SettingsState &st)
 // not there keeps the default: up, down, N, R and A on the number pad, which the game, the shipped ReShade.ini (Home
 // alone) and the usual mods leave alone.
 static_assert(kActCount <= kViewActions, "the view holds the bindings of every action");
+static_assert(kActDiffLock == kViewShifts && kActAwd == kViewShifts + 1, "the tab's rows of the locks follow the shifter's");
 static const wchar_t *const kBindSection = L"Gearbox";
 
 static void BindingsDefault(GearBindings &b)
@@ -1111,7 +1114,7 @@ static void BindingsLog(const GearBindings &b)
 // The manual transmission mod's SMT.ini, taken over once: its [KEYBOARD] bindings (Kb.<n>, a DirectInput scan code,
 // turned into a Windows key; a combination of keys or another code is left) into the first slot of each matching
 // action, and its [OPTIONS] REQUIRE CLUTCH, REQUIRE GEAR HELD and SKIP NEUTRAL. Its [CONTROLLER] section is left (its
-// codes are OIS's own, not Windows'), and so are SHOW MENU, AWD, DIFF LOCK and HANDBRAKE. Nothing in SMT.ini is
+// codes are OIS's own, not Windows'), and so are SHOW MENU and HANDBRAKE. Nothing in SMT.ini is
 // written. The number of bindings taken; taken and left name them for the log.
 static int SmtIniImport(const std::wstring &path, GearBindings &b, GaugeSettings &s, std::wstring &taken, std::wstring &left)
 {
@@ -1126,7 +1129,8 @@ static int SmtIniImport(const std::wstring &path, GearBindings &b, GaugeSettings
     static const struct { const wchar_t *smt; int action; } named[] = { { L"GEAR H", kActGearH }, { L"GEAR L-", kActGearLMinus }, { L"GEAR L", kActGearL },
                                                                          { L"GEAR L+", kActGearLPlus }, { L"GEAR N", kActGearN }, { L"GEAR R", kActGearR },
                                                                          { L"GEAR UP", kActUp }, { L"GEAR DOWN", kActDown }, { L"CLUTCH", kActClutch },
-                                                                         { L"RANGE HIGH", kActRangeHigh }, { L"RANGE LOW", kActRangeLow } };
+                                                                         { L"RANGE HIGH", kActRangeHigh }, { L"RANGE LOW", kActRangeLow },
+                                                                         { L"DIFF LOCK", kActDiffLock }, { L"AWD", kActAwd } };
     for (const auto &n : named)
     {
         wcscpy_s(pairs[count].smt, n.smt);
@@ -1862,6 +1866,8 @@ struct TruckWatch
     TakeoverModel take;         // the mod's gearbox has the truck (Gearbox)
     GearboxPosModel pos;        // the gearbox's position, clutch, stalls and shifts (gearbox_model.h)
     GearboxActions actions;     // the player's actions on this pass (from the bindings, at Gearbox=2)
+    bool lockPress[kLocks];     // DiffLock and Awd pressed on this pass (at every level of Gearbox)
+    LocksWatch locks;           // what the mod's keys wrote to the locks (LocksStep)
     bool canReverse;            // a binding reaches reverse (GearDown, GearR or GearN): Gearbox=2 may take the shifter
     long gameShifts;            // GameShiftCount on the last pass
     PullTest pullTest;          // the pull test (the tab's button)
@@ -2435,6 +2441,17 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             shiftAsk = box.setGear;
             shiftTo = box.gear;
         }
+        // the differential lock and all-wheel drive on the mod's keys, at every level of Gearbox: not shifts, and the
+        // game's own keys still work on a truck with the upgrade
+        if (w.refs.action && !(w.refs.action >= m.base && w.refs.action < m.base + g_exeSize))
+        {
+            int lockSaid[kLocks];
+            LocksStep(w.locks, m, w.refs.action, w.lockPress, lockSaid);
+            static const wchar_t *const lockName[kLocks] = { L"the differential lock", L"all-wheel drive" };
+            for (int i = 0; i < kLocks; i++)
+                if (lockSaid[i] == kLockOn || lockSaid[i] == kLockOff) Log(L"locks: %s %s by the mod's key", lockName[i], lockSaid[i] == kLockOn ? L"on" : L"off");
+                else if (lockSaid[i] == kLockCleared) Log(L"locks: the game cleared %s on this truck; it may not have the upgrade", lockName[i]);
+        }
         // the engine's torque handed to the game (Powertrain): the torque factor for the engine's torque at the needle's
         // speed and the converter's ratio over the game's curve at the wheels' share of the gear's top, while the engine
         // runs and no pull test is armed or running; the game's own share given back once it stops
@@ -2690,7 +2707,7 @@ static DWORD WINAPI Run(void *)
             SettingsWrite(set);
             SettingsPublish(s);
             Log(L"gearbox: SMT.ini taken over once: %d keyboard bindings (%s), its options RequireClutch %d, RequireGearHeld %d, SkipNeutral %d; left: "
-                L"its pad and wheel section (other codes than Windows'), its menu, AWD, diff lock and handbrake keys%s%s",
+                L"its pad and wheel section (other codes than Windows'), its menu and handbrake keys%s%s",
                 bound, taken.empty() ? L"none" : taken.c_str(), s.requireClutch, s.requireGearHeld, s.skipNeutral, left.empty() ? L"" : L", ", left.c_str());
         }
         else BindingsRead(ini, binds, true);
@@ -2835,7 +2852,7 @@ static DWORD WINAPI Run(void *)
         // the gearbox's bindings: one snapshot of the keys, the pad and the wheels and shifters a pass, read only while
         // the game is in front. The tab's asks (a capture into a slot, a slot cleared) are done here with it, and a
         // capture ends when the NEXT GEN menu closes; the actions go to the gearbox only at Gearbox=2 with a binding
-        // that reaches reverse, and none goes down while the menu is open or a capture runs
+        // that reaches reverse, the locks' at every level, and none goes down while the menu is open or a capture runs
         {
             static InputSnapshot snap, seen;
             InputSnapshotRead(snap, front, PadButtons());
@@ -2892,6 +2909,10 @@ static DWORD WINAPI Run(void *)
             watch.canReverse = BindingsCanReverse(binds, snap, PadPresent());
             if (s.gearbox != kGearboxOwn || !watch.canReverse) watch.actions = GearboxActions{};
             else watch.actions = NgMenuOpen() || bindCapture.active ? ActionsResting(watch.actions) : ActionsOf(states, binds);
+            // the locks at every level: a press while no truck is driven is gone, not kept for later
+            const bool locksHeard = !NgMenuOpen() && !bindCapture.active;
+            watch.lockPress[kLockDiff] = locksHeard && states[kActDiffLock].pressed;
+            watch.lockPress[kLockAwd] = locksHeard && states[kActAwd].pressed;
         }
         // the map: the game's save, looked for every kSaveLookMs and read when it is another or was written since
         const ULONGLONG lookNow = GetTickCount64();
@@ -3410,7 +3431,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 90, "ini: the help text survives a write (90 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 92, "ini: the help text survives a write (92 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());
@@ -4040,6 +4061,8 @@ int wmain(int argc, wchar_t **argv)
         WritePrivateProfileStringW(L"KEYBOARD", L"GEAR 3", L"Kb.80", smtIni.c_str());         // Num 2, the default of GearDown, which goes
         WritePrivateProfileStringW(L"KEYBOARD", L"GEAR 4", L"Kb.83", smtIni.c_str());         // Num .
         WritePrivateProfileStringW(L"KEYBOARD", L"SHOW MENU", L"Kb.211", smtIni.c_str());     // not an action of the mod's
+        WritePrivateProfileStringW(L"KEYBOARD", L"DIFF LOCK", L"Kb.38", smtIni.c_str());      // L
+        WritePrivateProfileStringW(L"KEYBOARD", L"AWD", L"Kb.30", smtIni.c_str());            // A
         WritePrivateProfileStringW(L"CONTROLLER", L"GEAR DOWN", L"Joy.0.Btn.5", smtIni.c_str());
         WritePrivateProfileStringW(L"OPTIONS", L"REQUIRE CLUTCH", L"true", smtIni.c_str());
         WritePrivateProfileStringW(L"OPTIONS", L"SKIP NEUTRAL", L"1", smtIni.c_str());
@@ -4050,12 +4073,13 @@ int wmain(int argc, wchar_t **argv)
         std::wstring taken, left;
         const int bound = SmtIniImport(smtIni, b, o, taken, left);
         DeleteFileW(smtIni.c_str());
-        Check(bound == 4 && b.slot[kActUp][0].code == 'E' && b.slot[kActGearR][0].code == VK_END && b.slot[kActGear3][0].code == VK_NUMPAD2 &&
+        Check(bound == 6 && b.slot[kActUp][0].code == 'E' && b.slot[kActGearR][0].code == VK_END && b.slot[kActGear3][0].code == VK_NUMPAD2 &&
                   b.slot[kActGear4][0].code == VK_DECIMAL && !b.slot[kActDown][0].kind && b.slot[kActGearN][0].code == VK_NUMPAD5 &&
+                  b.slot[kActDiffLock][0].code == 'L' && b.slot[kActAwd][0].code == 'A' && wcsstr(taken.c_str(), L"DIFF LOCK") &&
                   !b.slot[kActGear1][0].kind && o.requireClutch && o.skipNeutral && !o.requireGearHeld && wcsstr(left.c_str(), L"GEAR 1") &&
                   wcsstr(left.c_str(), L"the default of GearDown") && wcsstr(taken.c_str(), L"GEAR UP"),
               "gearbox: SMT.ini's keyboard bindings taken over by their scan codes (an extended key and the number pad too), a default on a key "
-              "it took dropped, a combination left, its controller section and menu key left, its options taken");
+              "it took dropped, a combination left, its controller section and menu key left, its diff lock and AWD keys taken, its options taken");
     }
     printf(g_failed ? "SETTINGS TEST FAILED (%d)\n" : "SETTINGS TEST OK\n", g_failed);
     return g_failed ? 1 : 0;
