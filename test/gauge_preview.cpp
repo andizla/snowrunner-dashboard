@@ -32,6 +32,7 @@
 
 volatile LONG g_pageCapturing = 0; // gauge_overlay.cpp's, which is not part of this program
 void DamageTestAsk(int) {}         // gauges.cpp's: the tab's test buttons write nothing here
+void BindingAsk(int, int, int) {}  // and the gearbox's bindings are not captured here
 
 static ID3D11Device *g_dev = nullptr;
 static ID3D11DeviceContext *g_ctx = nullptr;
@@ -473,6 +474,31 @@ int wmain(int argc, wchar_t **argv)
             for (int i = 0; i < 3; i++) GaugeDraw(bg, fonts, ImVec2(780.0f, 420.0f * (i + 1) - 24.0f), 2.0f, 1.0f, live[i], GaugeLayoutOf(def));
         });
         g_shot = keep;
+    }
+
+    // the warning boxes at 1080p, as the tire mod's TIRE DAMAGE box (slot 0, drawn here in its shape for the stack), the
+    // clutch's amber below it and the engine's red with its film title below that, over the backdrop
+    {
+        static GaugeFonts warnFonts;
+        ID3D11ShaderResourceView *warnSrv = nullptr;
+        const float wu = WarnUnit(1920.0f, 1080.0f);
+        if (FontsLoad(warnFonts, fontDir, kWarnStyles, kWsStyleCount) && FontsBake(warnFonts, wu))
+        {
+            warnSrv = MakeTexture(warnFonts.rgba, warnFonts.w, warnFonts.h);
+            free(warnFonts.rgba);
+            warnFonts.rgba = nullptr;
+            warnFonts.tex = (ImTextureID)(intptr_t)warnSrv;
+        }
+        const WarnBox boxes[3] = { { kWarnRed, "TIRE DAMAGE", "Slow down or raise the pressure", 34 },
+                                   { kWarnAmber, "CLUTCH HOT", "Ease off or shift down", 62 },
+                                   { kWarnRed, "DANGER TO MANIFOLD", "Keep an eye on the floor pan", 71 } };
+        wchar_t path[MAX_PATH];
+        swprintf_s(path, L"%s\\warnings.png", out);
+        RenderPng(path, 1920, 1080, [&](ImDrawList *, ImDrawList *bg) {
+            Backdrop(bg, 1920, 1080);
+            for (int i = 0; i < 3; i++) GWarnBox(bg, warnFonts, WarnOrigin(1920.0f, 1080.0f, i), wu, 1.0f, boxes[i]);
+        });
+        Release(warnSrv);
     }
 
     // without the game's font

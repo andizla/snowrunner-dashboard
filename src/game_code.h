@@ -207,6 +207,59 @@ inline void GameFunctionsFind(const uint8_t *code, size_t from, size_t to, Funct
     }
 }
 
+// ---- the game's damage path: its truck update and its damage update ----
+// As the tire mod deals tire damage (its build_find.h, the same patterns): the damage update (one argument, the
+// vehicle) sums the parts' damage at vehicle + 0x108, sets their effects and tells the truck's script, which brings up
+// the game's truck card (RVA 0xd6f690 in the Steam build 6a607c05); the truck update runs on the game's thread every
+// frame for the driven truck, its first argument an object with the vehicle at + 0x20 (RVA 0xa56970 there). It is
+// found by its call of GetForegroundWindow, then its first bytes, the nearest ones before that call that follow int3
+// padding.
+static const char *const kDamageUpdatePattern = "48 8B C4 48 89 48 08 55 56 57 41 54 41 55 41 56 41 57 48 83 EC 50 48 C7 40 98 FE FF FF FF 48 89 58 18 "
+                                                "0F 29 70 B8 0F 29 78 A8 4C 8B E9 48 8D B9 50 01 00 00 48 8B CF E8";
+static const char *const kTruckUpdateCallPattern = "40 B7 01 40 88 7C 24 50 44 0F B6 FF FF 15 ? ? ? ? 48 8B D8 E8 ? ? ? ? 48 3B C3 74";
+static const char *const kTruckUpdateHeadPattern = "CC 48 8B C4 F3 0F 11 58 20 F3 0F 11 50 18 48 89 50 10 48 89 48 08 55 53 56 57 41 54 41 55 41 56 41 57";
+static const size_t kTruckUpdateMost = 0x4000; // how far before the call its first bytes may stand
+
+struct DamagePath
+{
+    size_t truckUpdate, damageUpdate; // offsets in the code, 0 = not found
+    const char *why;                  // what was not found (a string literal), "" when both were
+};
+
+inline bool DamagePathFind(const uint8_t *code, size_t from, size_t to, DamagePath &out)
+{
+    out = DamagePath{};
+    out.why = "";
+    uint8_t bytes[kPatternMax], mask[kPatternMax];
+    size_t at = 0;
+    int count = 0;
+    int length = PatternParse(kDamageUpdatePattern, bytes, mask);
+    if (!PatternFind(code, from, to, bytes, mask, length, at, count) || count != 1)
+    {
+        out.why = count > 1 ? "the damage update stands more than once" : "the damage update was not found";
+        return false;
+    }
+    out.damageUpdate = at;
+    length = PatternParse(kTruckUpdateCallPattern, bytes, mask);
+    if (!PatternFind(code, from, to, bytes, mask, length, at, count) || count != 1)
+    {
+        out.why = count > 1 ? "the truck update's call of GetForegroundWindow stands more than once" : "the truck update's call of GetForegroundWindow was not found";
+        out.damageUpdate = 0;
+        return false;
+    }
+    const size_t call = at;
+    length = PatternParse(kTruckUpdateHeadPattern, bytes, mask);
+    for (size_t head = call; head > from && call - head < kTruckUpdateMost; head--)
+        if (PatternAt(code + head - 1, bytes, mask, length))
+        {
+            out.truckUpdate = head;
+            return true;
+        }
+    out.why = "the truck update's first bytes were not found before its call";
+    out.damageUpdate = 0;
+    return false;
+}
+
 // The finds in a line of text for the log.
 inline void GameFunctionsText(const FunctionFind finds[kFnCount], char *out, size_t size)
 {

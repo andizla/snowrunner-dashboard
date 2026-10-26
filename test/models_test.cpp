@@ -2252,121 +2252,34 @@ int main(int argc, char **argv)
         const bool halted = haltFrom(true, firstAt, haltRace), blindHalted = haltFrom(false, blindAt, blindRace);
         Check(halted && firstAt > 0.5f && firstAt <= 1.6f && haltRace < GearboxPoint(k, kCoastDownTo) + 50.0f && blindHalted && blindAt < 2.5f,
               "automatic: braked hard to a stop it is in the first gear by the time the wheels stop, the engine never raced, and within a second after without the ground's speed");
-        // the mod's automatic in the game: taken in the game's gear while its shifter is in A, the model's gears set
-        // through the game, given back to a gear picked by hand, a low gear, the setting off or a stopped engine
+        // the mod's gearbox in the game: it takes a truck the moment it is driven with its engine running, in any gear,
+        // and lets it go when the setting goes off or the engine stops; A's gear is the model's, never lower than the
+        // engine can take, within the gears
         {
             TruckRaw tk = g;
-            tk.gear = tk.gearEngaged = 2;
-            tk.automatic = 1;
+            tk.gear = tk.gearEngaged = -1; // reverse: taken all the same
             TakeoverModel take = {};
-            const TakeoverOrders disabled = TakeoverStep(take, tk, 3, false, kDt);
-            const TakeoverOrders took = TakeoverStep(take, tk, 3, true, kDt);
-            const bool taking = !disabled.took && !disabled.flagDown && take.driving && took.took && took.flagDown && took.shiftTo == 0 && take.set == 2;
-            tk.automatic = 0; // the flag down
-            const TakeoverOrders up = TakeoverStep(take, tk, 3, true, kDt);
-            const TakeoverOrders waiting = TakeoverStep(take, tk, 3, true, 0.3f); // the game still in 2: within kTakeSettle
-            tk.gear = tk.gearEngaged = 3;
-            const TakeoverOrders arrived = TakeoverStep(take, tk, 3, true, 1.0f);
-            const bool shifting = up.shiftTo == 3 && !up.flagDown && take.set == 3 && !waiting.gaveBack && waiting.shiftTo == 0 && !arrived.gaveBack && take.driving;
-            // the shift modifier tapped: the game's flag up and its own automatic's gear; the mod puts the flag down and
-            // its own gear back at once: the tap does nothing
-            tk.automatic = 1;
-            tk.gear = tk.gearEngaged = 1;
-            const TakeoverOrders tapped = TakeoverStep(take, tk, 3, true, kDt);
-            tk.automatic = 0;
-            tk.gear = tk.gearEngaged = 3;
-            const TakeoverOrders putBack = TakeoverStep(take, tk, 3, true, 1.0f);
-            bool again = tapped.flagDown && tapped.tapped == 1 && tapped.shiftTo == 3 && !putBack.gaveBack && putBack.shiftTo == 0 && take.set == 3 && take.driving;
-            // the game going back on its pick after the mod's gear is back (it picked 3rd from 1st and fell back to 1st
-            // in the drive of 01:45): the mod's gear again within the hold, not a gear picked by hand; after it, one is
-            {
-                TakeoverModel undone = take;
-                TruckRaw tu = tk;
-                tu.automatic = 1;
-                tu.gear = tu.gearEngaged = 4;
-                const TakeoverOrders pick = TakeoverStep(undone, tu, 3, true, kDt);
-                tu.automatic = 0;
-                tu.gear = tu.gearEngaged = 3;
-                TakeoverStep(undone, tu, 3, true, 0.1f);
-                tu.gear = tu.gearEngaged = 4;
-                const TakeoverOrders back = TakeoverStep(undone, tu, 3, true, 0.6f);
-                tu.gear = tu.gearEngaged = 3;
-                const TakeoverOrders later = TakeoverStep(undone, tu, 3, true, 0.1f);
-                tu.gear = tu.gearEngaged = 2;
-                const TakeoverOrders afterHold = TakeoverStep(undone, tu, 3, true, kTakeHold);
-                again = again && pick.tapped == 4 && pick.shiftTo == 3 && back.undone && back.shiftTo == 3 && !back.gaveBack && later.shiftTo == 0 && !later.gaveBack &&
-                        afterHold.gaveBack;
-            }
-            // the game's own automatic picking the first gear at speed (the foot off): the mod's gear back, never one
-            // lower than the engine can take
-            {
-                TakeoverModel fast = take;
-                fast.set = 3;
-                TruckRaw tf = tk;
-                tf.automatic = 1;
-                tf.gear = tf.gearEngaged = 1;
-                GearboxModel rollingAt = {};
-                rollingAt.rolling = 20.0f;
-                rollingAt.grip = 2.2f;
-                const int fit = GearboxLowestFit(rollingAt, tf, k);
-                const TakeoverOrders low = TakeoverStep(fast, tf, 2, true, kDt, fit);
-                again = again && fit == 3 && low.tapped == 1 && low.shiftTo == 3 && fast.driving;
-            }
-            // the model holding a gear lower than the engine can take (as after a test that held the game's gear): not set
-            {
-                TakeoverModel floorTest = take;
-                floorTest.set = 3;
-                TruckRaw held3 = tk;
-                held3.automatic = 0;
-                held3.gear = held3.gearEngaged = 3;
-                const TakeoverOrders floored = TakeoverStep(floorTest, held3, 2, true, kDt, 3);
-                again = again && floored.shiftTo == 0 && floorTest.set == 3 && floorTest.driving;
-            }
-            // reverse picked in A (the game's flag up with it): given back at once, never shifted forwards again
-            TruckRaw back = tk;
-            back.automatic = 1;
-            back.gear = back.gearEngaged = -1;
-            TakeoverModel inReverse = take;
-            const TakeoverOrders reversed = TakeoverStep(inReverse, back, 3, true, kDt);
-            const bool reverseHandsBack = reversed.gaveBack && reversed.shiftTo == 0 && !reversed.flagDown && !inReverse.driving;
-            // a gear picked by hand once the mod's has had its time
-            TakeoverStep(take, tk, 3, true, kDt);
-            tk.gear = tk.gearEngaged = 3;
-            TakeoverStep(take, tk, 3, true, 1.0f);
-            tk.gear = tk.gearEngaged = 1;
-            const TakeoverOrders picked = TakeoverStep(take, tk, 3, true, 1.0f);
-            const bool byHand = picked.gaveBack && !take.driving && take.lastHandBack == kTakePicked && picked.shiftTo == 0;
-            // taken again from A; another mod raising the power factor for the automatic is no gear picked; a low gear
-            // (a power factor under the most it was) hands it back, so does the engine stopping
-            tk.automatic = 1;
-            TakeoverStep(take, tk, 1, true, kDt);
-            tk.automatic = 0;
-            tk.powerFactor = 1.05f;
-            const TakeoverOrders raised = TakeoverStep(take, tk, 1, true, kDt);
-            const bool stillDriving = !raised.gaveBack && take.driving;
-            tk.powerFactor = 1.0f;
-            const TakeoverOrders lowPicked = TakeoverStep(take, tk, 1, true, kDt);
-            const int lowWhy = take.lastHandBack;
-            tk.powerFactor = 1.0f;
-            tk.automatic = 1;
-            TakeoverStep(take, tk, 1, true, kDt);
-            tk.automatic = 0;
+            const TakeoverOrders disabled = TakeoverStep(take, tk, false);
+            const TakeoverOrders took = TakeoverStep(take, tk, true);
+            const TakeoverOrders stays = TakeoverStep(take, tk, true);
+            const TakeoverOrders off = TakeoverStep(take, tk, false);
+            const bool offWhy = take.lastHandBack == kTakeOff;
+            TakeoverStep(take, tk, true);
             tk.flags = 0;
-            const TakeoverOrders stopped = TakeoverStep(take, tk, 1, true, kDt);
-            const bool lowOrOff = stillDriving && lowPicked.gaveBack && lowWhy == kTakeLow && take.lastHandBack == kTakeGone && stopped.gaveBack && !take.driving && take.handBacks == 3;
-            // the game refusing a gear: it counts as set at the game's, so the next wish is set again
+            const TakeoverOrders stopped = TakeoverStep(take, tk, true);
             tk.flags = g.flags;
-            tk.automatic = 1;
-            tk.gear = tk.gearEngaged = 2;
-            TakeoverStep(take, tk, 2, true, kDt);
-            tk.automatic = 0;
-            const TakeoverOrders wish = TakeoverStep(take, tk, 3, true, kDt);
-            TakeoverRefused(take, tk);
-            const TakeoverOrders retry = TakeoverStep(take, tk, 3, true, kDt);
-            Check(taking && shifting && again && reverseHandsBack && byHand && lowOrOff && wish.shiftTo == 3 && retry.shiftTo == 3 && take.driving,
-                  "automatic in the game: taken in the game's gear from A, the model's gears set, its own gear put back at once at the shift modifier and when the "
-                  "game goes back on its pick (never one lower than the engine can take), given back to "
-                  "reverse, to a gear or a low gear picked by hand (not to a power factor raised) and to a stopped engine, and a gear the game refused set again");
+            GearboxModel rollingAt = {};
+            rollingAt.rolling = 20.0f;
+            rollingAt.grip = 2.2f;
+            TruckRaw tf = g;
+            tf.gear = tf.gearEngaged = 1;
+            const int fit = GearboxLowestFit(rollingAt, tf, k);
+            Check(!disabled.took && took.took && take.handBacks == 1 && !stays.took && !stays.gaveBack && off.gaveBack && offWhy && !stopped.gaveBack &&
+                      take.lastHandBack == kTakeOff && take.driving && fit == 3 && TakeoverAutoGear(tf, 2, fit) == 3 && TakeoverAutoGear(tf, 4, 1) == 4 &&
+                      TakeoverAutoGear(tf, 0, 1) == 1 && TakeoverAutoGear(tf, 40, 1) == TruckTopGear(tf),
+                  "gearbox in the game: taken the moment a truck is driven, in any gear; let go when the setting goes off, kept through an engine stop (a "
+                  "stall); A's gear the "
+                  "model's, never lower than the engine can take, within the gears");
             // the needle follows the converter's engine speed with its lag; with the engine off it falls to nothing
             TachModel follow = {};
             TachFollow(follow, g, k, 1500.0f, kDt);
@@ -2488,6 +2401,147 @@ int main(int argc, char **argv)
         }
         Check(pull.stalls == 0 && dip > k.idle * 0.75f && pull.locked && Near(pull.rpm, pull.input, 1.0f),
               "clutch: let up slowly with a little pedal as the truck pulls away, the engine dips under its idle without stalling and the clutch locks");
+        // the clutch's heat driven from ClutchStep's own states (review 10, D7), for a stock engine (Torque 195000): the
+        // same start in first stays cold; floored in third, revved with the clutch pressed and then held in its bite (the
+        // truck gaining a third as fast as in first), it burns within a few seconds; let up and locked, it only cools
+        {
+            const float stock = 195000.0f;
+            ClutchModel firstGear = {};
+            ClutchHeat firstHeat = {};
+            float in = 0.0f, firstMost = 0.0f;
+            for (float at = 0.0f; at < 5.0f; at += kDt)
+            {
+                wheels(TruckGearTop(c, 1) * in / k.redline);
+                ClutchStep(firstGear, c, k, curve, 1.0f - SettingsRange(at / 3.0f, 0.0f, 1.0f), ThrottleShape(0.33f), 1.0f, false, kDt);
+                in = fmaxf(0.0f, in + firstGear.carried * 2000.0f * kDt);
+                ClutchHeatStep(firstHeat, 1, firstGear, stock, true, kDt);
+                firstMost = fmaxf(firstMost, firstHeat.q);
+            }
+            TruckRaw third = c;
+            third.gear = third.gearEngaged = 3;
+            ClutchModel thirdGear = {};
+            ClutchHeat thirdHeat = {};
+            float thirdBegan = -1.0f, thirdMost = 0.0f, thirdCarried = 0.0f;
+            in = 0.0f;
+            // floored with the clutch pressed for a second, then held in its bite (0.65 of the pedal's travel)
+            for (float at = 0.0f; at < 1.0f; at += kDt) ClutchStep(thirdGear, third, k, curve, 1.0f, ThrottleShape(1.0f), 1.0f, false, kDt);
+            for (float at = 0.0f; at < 6.0f && thirdBegan < 0.0f; at += kDt)
+            {
+                for (int i = 0; i < third.wheels; i++) third.spin[i] = TruckGearTop(third, 3) * in / k.redline;
+                ClutchStep(thirdGear, third, k, curve, 0.65f, ThrottleShape(1.0f), 1.0f, false, kDt);
+                in = fmaxf(0.0f, in + thirdGear.carried * 2000.0f / 3.0f * kDt);
+                ClutchHeatStep(thirdHeat, 1, thirdGear, stock, true, kDt);
+                if (thirdHeat.burning) thirdBegan = at;
+                thirdMost = fmaxf(thirdMost, thirdHeat.q);
+                if (thirdGear.carried > thirdCarried) thirdCarried = thirdGear.carried;
+            }
+            // let up fully at speed: locked, so the heat only falls
+            const float hot = thirdHeat.q;
+            wheels(TruckGearTop(c, 1) * 0.6f);
+            ClutchModel locked = {};
+            for (float at = 0.0f; at < 2.0f; at += kDt)
+            {
+                ClutchStep(locked, c, k, curve, 0.0f, ThrottleShape(0.5f), 1.0f, false, kDt);
+                ClutchHeatStep(thirdHeat, 1, locked, stock, true, kDt);
+            }
+            // as tuned (the figures over the constants take the clutch carrying 1.0 at 1600 rpm), the clutch model held in
+            // its bite at its governor carries about 0.53 at 1900 rpm, and the heat of this start stays short of the burn
+            // point: what it reaches is printed for the retune the drives will ask for
+            printf("     clutch heat from ClutchStep: first gear at most %.2f of %.2f; third floored in the bite carries at most %.2f and heats to %.2f (%s)\n",
+                   firstMost, kClutchBurnFrom, thirdCarried, thirdMost, thirdBegan >= 0.0f ? "burns" : "no burn");
+            Check(firstMost < kClutchBurnFrom * 0.1f && thirdMost > firstMost * 10.0f && thirdMost > kClutchBurnFrom * 0.6f && thirdGear.stalls == 0 && locked.locked &&
+                      thirdHeat.q < hot,
+                  "clutch heat from ClutchStep's states: a start in first stays under a tenth of the burn point; floored in third with the clutch held in its "
+                  "bite it heats more than ten times as much, past 0.6 of the burn point; let up and locked it only cools");
+        }
+        // the automatic clutch at speed (the user's hill test, 27 October): from kAutoLockKmh up it stays locked, and with
+        // the engine held under its idle speed in a high gear it lugs (the game's stall seconds rise, gauges.cpp); back
+        // above idle it does not; in the slow band it slips as before
+        {
+            auto at = [&](float kmh, float inputShare) {
+                TruckRaw t = c;
+                t.gear = t.gearEngaged = 4;
+                t.speed = kmh / 3.6f;
+                for (int i = 0; i < t.wheels; i++) t.spin[i] = TruckGearTop(t, 4) * inputShare * k.idle / k.redline;
+                ClutchModel cm = {};
+                for (int i = 0; i < 10; i++) ClutchStep(cm, t, k, curve, 0.0f, ThrottleShape(1.0f), 1.0f, true, kDt);
+                return cm;
+            };
+            const ClutchModel lugging = at(20.0f, 0.6f), pulling = at(20.0f, 1.5f), crawling = at(3.0f, 0.3f);
+            Check(lugging.locked && lugging.lugging && Near(lugging.rpm, lugging.input, 1.0f) && pulling.locked && !pulling.lugging && !crawling.locked &&
+                      !crawling.lugging && crawling.dead == false,
+                  "clutch, the automatic one at speed: from 15 km/h it stays locked, lugging with the engine under idle in a high gear and not once above "
+                  "it; at a crawl it slips as before");
+        }
+        // the automatic clutch (no pedal axis: keyboard, pad, a button clutch) burns as a pedal does (the user, 26 October:
+        // "it should do it if trying to use a too high gear even when using the sequential mode"): it slips until the
+        // gearbox's input has come up to the engine's speed. Floored from a standstill, a start in first stays under a
+        // third of the burn point; a start in too high a gear burns. The truck gains 2000 rpm of the gearbox's input a
+        // second for each share of the most torque in first; in a taller gear by the square of the gears' speeds, as the
+        // wheels gain more slowly and each turn of them is fewer turns of the gearbox (this truck's 3, 6, 12 and 16: a
+        // quarter of first's pace in second, a sixteenth in third, 1/28 in fourth)
+        {
+            const float stock = 195000.0f;
+            auto gain = [&](int gear) { const float r = TruckGearTop(c, 1) / TruckGearTop(c, gear); return 2000.0f * r * r; };
+            float warned = -1.0f; // when the last start's heat came to the amber warning
+            float rate = 1.0f;    // ClutchHeatPercent / 100: the model's own pace unless set
+            auto start = [&](int gear, float gain, float seconds, float &most, float &began) {
+                TruckRaw t = c;
+                t.gear = t.gearEngaged = gear;
+                ClutchModel cm = {};
+                ClutchHeat h = {};
+                float input = 0.0f;
+                most = 0.0f;
+                began = -1.0f;
+                for (float at = 0.0f; at < seconds; at += kDt)
+                {
+                    for (int i = 0; i < t.wheels; i++) t.spin[i] = TruckGearTop(t, gear) * input / k.redline;
+                    ClutchStep(cm, t, k, curve, 0.0f, ThrottleShape(1.0f), 1.0f, true, kDt);
+                    input = fmaxf(0.0f, input + cm.carried * gain * kDt);
+                    ClutchHeatStep(h, 1, cm, stock, true, kDt, 0.0f, rate);
+                    most = fmaxf(most, h.q);
+                    if (h.burning && began < 0.0f) began = at;
+                    if (h.q >= kClutchWarnFrom && warned < 0.0f) warned = at;
+                }
+            };
+            float most[5] = {}, began[5] = {}, stuckMost = 0.0f, stuckBegan = 0.0f, thirdWarned = -1.0f;
+            for (int g = 1; g <= 4; g++)
+            {
+                warned = -1.0f;
+                start(g, gain(g), 8.0f, most[g], began[g]);
+                if (g == 3) thirdWarned = warned;
+            }
+            start(3, 0.0f, 8.0f, stuckMost, stuckBegan); // a gear it cannot pull at all: the truck does not move
+            printf("     automatic clutch floored from a standstill: first at most %.2f of %.2f (amber from %.2f), second %.2f; third amber after %.1f s, %.2f%s%.1f s; "
+                   "fourth %.2f%s%.1f s; a gear it cannot pull %.2f%s%.1f s\n",
+                   most[1], kClutchBurnFrom, kClutchWarnFrom, most[2], thirdWarned, most[3], began[3] >= 0.0f ? ", red after " : ", no red ", began[3], most[4],
+                   began[4] >= 0.0f ? ", red after " : ", no red ", began[4], stuckMost, stuckBegan >= 0.0f ? ", red after " : ", no red ", stuckBegan);
+            Check(most[1] < kClutchWarnFrom && began[1] < 0.0f && thirdWarned > 1.4f && thirdWarned < 2.6f && began[3] > 3.4f && began[3] < 4.6f && began[4] >= 0.0f &&
+                      began[4] <= began[3] && stuckBegan >= 0.0f && stuckBegan <= began[3],
+                  "clutch heat, the automatic clutch slips until the truck catches up: floored from a standstill a start in first never warns; one in third "
+                  "warns amber after about two seconds and goes red after about four, in fourth sooner, and in a gear the engine cannot pull soonest");
+            // ClutchHeatPercent at its default 60: the same starts at 0.6 of the heating, the cooling as it is
+            rate = 0.6f;
+            float m60[5] = {}, b60[5] = {}, stuck60Most = 0.0f, stuck60Began = 0.0f, third60Warned = -1.0f, fourth60Warned = -1.0f, stuck60Warned = -1.0f;
+            for (int g = 1; g <= 4; g++)
+            {
+                warned = -1.0f;
+                start(g, gain(g), 12.0f, m60[g], b60[g]);
+                if (g == 3) third60Warned = warned;
+                if (g == 4) fourth60Warned = warned;
+            }
+            warned = -1.0f;
+            start(3, 0.0f, 12.0f, stuck60Most, stuck60Began);
+            stuck60Warned = warned;
+            rate = 1.0f;
+            printf("     at ClutchHeatPercent 60: first at most %.2f; third amber after %.1f s, at most %.2f%s%.1f s; fourth amber after %.1f s, %.2f%s%.1f s; "
+                   "a gear it cannot pull amber after %.1f s, %.2f%s%.1f s\n",
+                   m60[1], third60Warned, m60[3], b60[3] >= 0.0f ? ", red after " : ", no red ", b60[3], fourth60Warned, m60[4],
+                   b60[4] >= 0.0f ? ", red after " : ", no red ", b60[4], stuck60Warned, stuck60Most, stuck60Began >= 0.0f ? ", red after " : ", no red ", stuck60Began);
+            Check(m60[1] < m60[3] && m60[1] < kClutchWarnFrom && third60Warned > thirdWarned && stuck60Began > stuckBegan && stuck60Began >= 0.0f,
+                  "clutch heat at ClutchHeatPercent 60: every start heats more slowly than at 100, first never warns, and a gear the engine cannot pull "
+                  "still burns");
+        }
         // let up at speed: the engine turns with the gearbox; pressed again with the foot off, back to idle
         wheels(TruckGearTop(c, 1) * 0.6f);
         ClutchModel cruise = {};
@@ -3103,6 +3157,152 @@ int main(int argc, char **argv)
         Check(Near(SoundRms(loud.x), SoundRms(quiet.x), 0.001f) && peak(loud) <= kSoundPeak + 0.001f && peak(blow) <= kSoundPeak + 0.001f && peak(flutter) <= kSoundPeak + 0.001f &&
               peak(blow) > 0.2f && peak(flutter) > 0.2f && fabsf(loud.x.back()) < 0.001f,
               "sound: every sound is brought to one loudness with its peaks held, and its end fades out");
+    }
+
+    // the clutch's heat, at the figures over its constants: a slipping clutch carrying `carried` at `slip` rpm over the
+    // gearbox for a stock engine (Torque 195000) or three times that, stepped at 20 a second
+    {
+        const float stock = 195000.0f, dt = 0.05f;
+        auto slipping = [](float carried, float slip) {
+            ClutchModel c = {};
+            c.running = c.connected = true;
+            c.input = 800.0f;
+            c.rpm = 800.0f + slip;
+            c.carried = carried;
+            return c;
+        };
+        // seconds to the burn point (-1 never within `seconds`), and the share of the gearbox owed in the two after
+        auto run = [&](ClutchHeat &h, uint64_t id, float carried, float slipFrom, float slipTo, float seconds, float torque, bool on, float &began, float &owedAfter) {
+            began = -1.0f;
+            float paid = 0.0f;
+            for (float t = 0.0f; t < seconds; t += dt)
+            {
+                const float slip = slipFrom + (slipTo - slipFrom) * t / seconds;
+                ClutchHeatStep(h, id, slipping(carried, slip), torque, on, dt);
+                if (h.burning && began < 0.0f) began = t;
+                if (began >= 0.0f && t < began + 2.0f) paid += h.owed;
+                h.owed = 0.0f; // dealt each step
+            }
+            owedAfter = paid;
+        };
+        float began = 0.0f, owed = 0.0f;
+        ClutchHeat first = {};
+        run(first, 1, 1.0f, 1200.0f, 0.0f, 1.5f, stock, true, began, owed);
+        const bool firstCold = began < 0.0f && first.q < kClutchWarnFrom;
+        ClutchHeat third = {};
+        run(third, 1, 1.0f, 1600.0f, 1600.0f, 6.0f, stock, true, began, owed);
+        const float thirdBegan = began, thirdOwed = owed;
+        ClutchHeat strong = {};
+        run(strong, 1, 1.0f, 1600.0f, 1600.0f, 6.0f, stock * 3.0f, true, began, owed);
+        const float strongBegan = began, strongOwed = owed;
+        ClutchHeat hill = {};
+        run(hill, 1, 0.5f, 1300.0f, 1300.0f, 4.5f, stock, true, began, owed);
+        const bool hillNotYet = began < 0.0f;
+        run(hill, 1, 0.5f, 1300.0f, 1300.0f, 3.0f, stock, true, began, owed);
+        const bool hillBurns = began >= 0.0f;
+        printf("     clutch heat: third floored burns after %.2f s and costs %.3f in the two after; three times the torque %.2f s and %.3f\n", thirdBegan, thirdOwed,
+               strongBegan, strongOwed);
+        // as retuned after the user's first test (the idealised slip of the first tuning: carrying 1.0 at 1600 rpm): the
+        // first gear never warns; third goes red after about two seconds and costs about a twentieth in the two after,
+        // half the first tuning's tenth; three times the torque goes red three times as soon and costs more
+        Check(firstCold && thirdBegan > 1.5f && thirdBegan < 2.6f && thirdOwed > 0.04f && thirdOwed < 0.09f && strongBegan * 2.5f < thirdBegan &&
+                  strongOwed > thirdOwed && hillNotYet && hillBurns,
+              "clutch heat: a first-gear start never warns; a floored start in third burns after about two seconds and costs about a twentieth of the "
+              "gearbox in the two after, three times the torque burns three times as soon; a hill held at half throttle burns after about six seconds");
+        // no cost from stored heat: past the burn point and then locked, the clutch owes nothing and only cools, the
+        // warning red until it falls under the burn point; a repair clears the heat
+        {
+            ClutchHeat hot = {};
+            for (int i = 0; i < 200; i++) ClutchHeatStep(hot, 3, slipping(1.0f, 1600.0f), stock, true, dt); // ten seconds slipping
+            const bool paying = hot.dealing && hot.owed > 0.0f && ClutchLamp(hot) == kClutchLampDealing && ClutchWarn(hot, true).state == kWarnRed;
+            ClutchModel locked = slipping(1.0f, 0.0f);
+            locked.locked = true;
+            ClutchHeatStep(hot, 3, locked, stock, true, dt);
+            const bool stopped = !hot.dealing && hot.owed == 0.0f && hot.q > kClutchBurnFrom && ClutchLamp(hot) == kClutchLampRed;
+            const float qLocked = hot.q;
+            float owedLater = 0.0f;
+            for (int i = 0; i < 100; i++)
+            {
+                ClutchHeatStep(hot, 3, locked, stock, true, dt);
+                owedLater += hot.owed;
+            }
+            const bool cooling = owedLater == 0.0f && hot.q < qLocked * 0.8f;
+            ClutchHeatRepair(hot);
+            const bool repaired = hot.q == 0.0f && hot.owed == 0.0f && ClutchLamp(hot) == kClutchLampOff && ClutchWarn(hot, true).state == kWarnNone;
+            // a burn's job no frame took is dropped by the repair; a stall's stays
+            StallJob job = {};
+            TruckRefs refs = {};
+            refs.vehicle = 0x1000;
+            const bool burnDropped = StallJobPost(job, refs, 2.0f, 0, true) && StallJobDropBurn(job) && job.state == kStallJobIdle;
+            const bool stallKept = StallJobPost(job, refs, 5.0f, 0, false) && !StallJobDropBurn(job) && job.state == kStallJobPosted;
+            Check(paying && stopped && cooling && repaired && burnDropped && stallKept,
+                  "clutch heat: it costs only while it slips past the burn point, nothing once it grips however hot, and a repair clears the heat and "
+                  "drops a burn's points not dealt yet, a stall's kept");
+        }
+        // the warning boxes: the clutch's off, amber from half the burn point, red from it, the number its share of the
+        // burn point; the engine's amber from the coolant's red mark, red while the heat costs, its film title at the
+        // turbo's full with the pedal floored and the floor pan's line once a point lands under it
+        {
+            ClutchHeat wh = {};
+            wh.known = true;
+            auto at = [&](float q) { wh.q = wh.truck[0].q = q; wh.dealing = false; return ClutchWarn(wh, true); };
+            const WarnBox none = at(kClutchWarnFrom * 0.9f), amber = at(kClutchWarnFrom * 1.1f), red = at(kClutchBurnFrom * 1.5f), off = ClutchWarn(wh, false);
+            const bool clutchBoxes = none.state == kWarnNone && amber.state == kWarnAmber && !strcmp(amber.title, "CLUTCH HOT") &&
+                                     !strcmp(amber.line, "Ease off or shift down") && amber.percent == (int)(kClutchWarnFrom * 1.1f / kClutchBurnFrom * 100.0f) &&
+                                     red.state == kWarnRed && !strcmp(red.title, "CLUTCH DAMAGE") && !strcmp(red.line, "Shift down, the clutch is wearing") &&
+                                     red.percent == 100 && off.state == kWarnNone;
+            bool pan = false;
+            const WarnBox cool = EngineWarn(110.0f, 0.0f, true, false, false, pan), hotAmber = EngineWarn(kTempRed + 1.0f, 0.0f, true, false, false, pan),
+                          hotRed = EngineWarn(121.5f, 3.0f, true, false, true, pan), noDamage = EngineWarn(130.0f, 5.0f, false, true, true, pan);
+            const bool engineBoxes = cool.state == kWarnNone && hotAmber.state == kWarnAmber && !strcmp(hotAmber.title, "ENGINE HOT") &&
+                                     !strcmp(hotAmber.line, "Ease off, the coolant is in the red") && hotRed.state == kWarnRed && !strcmp(hotRed.title, "ENGINE DAMAGE") &&
+                                     !strcmp(hotRed.line, "Ease off, the engine is wearing") && hotRed.percent == 50 && noDamage.state == kWarnNone && !pan;
+            // the film: DANGER TO MANIFOLD only at the turbo's full with the pedal floored, the floor pan watched, then
+            // fallen once a point lands, for the rest of the red spell, and the plain lines again once it is amber
+            const bool fullBoost = BoostFull(1.0f, 1.0f, 1.0f) && !BoostFull(0.9f, 1.0f, 1.0f) && !BoostFull(1.0f, 1.0f, 0.8f);
+            const WarnBox manifold = EngineWarn(122.0f, 3.0f, true, true, false, pan);
+            const bool watched = !strcmp(manifold.title, "DANGER TO MANIFOLD") && !strcmp(manifold.line, "Keep an eye on the floor pan") && !pan;
+            const WarnBox fell = EngineWarn(122.0f, 3.0f, true, true, true, pan);
+            const WarnBox stillRed = EngineWarn(122.0f, 3.0f, true, false, false, pan);
+            const bool fallen = !strcmp(fell.title, "DANGER TO MANIFOLD") && !strcmp(fell.line, "The floor pan fell off") && pan && !strcmp(stillRed.title, "ENGINE DAMAGE") &&
+                                !strcmp(stillRed.line, "The floor pan fell off");
+            const WarnBox backAmber = EngineWarn(kTempRed + 1.0f, 0.0f, true, false, false, pan);
+            const WarnBox againRed = EngineWarn(122.0f, 3.0f, true, false, false, pan);
+            const bool plainAgain = backAmber.state == kWarnAmber && !pan && !strcmp(againRed.line, "Ease off, the engine is wearing");
+            Check(clutchBoxes && engineBoxes && fullBoost && watched && fallen && plainAgain,
+                  "warnings: the clutch's box amber from half the burn point and red from it with its number; the engine's amber from the red mark and red "
+                  "while the heat costs; at the turbo's full the film's title, the floor pan watched and then fallen for the rest of that red spell");
+        }
+        // cooling with the clutch open, kept per kind of truck, and nothing owed with ClutchBurn or Damage off
+        ClutchHeat h = {};
+        run(h, 7, 1.0f, 1600.0f, 1600.0f, 4.0f, stock, true, began, owed);
+        const float hot = h.q;
+        for (int i = 0; i < 80; i++) ClutchHeatStep(h, 7, ClutchModel{}, stock, true, dt); // four seconds open
+        const bool cooled = h.q < hot * 0.53f && h.q > hot * 0.47f;
+        const float coolShare = h.q / hot;
+        const float leftAt = h.q;
+        for (int i = 0; i < 200; i++) ClutchHeatStep(h, 8, ClutchModel{}, stock, true, dt); // ten seconds in another truck
+        ClutchHeatStep(h, 7, ClutchModel{}, stock, true, dt);
+        const bool kept = h.q < leftAt * 0.21f && h.q > leftAt * 0.15f; // e^(-0.173 x 10) = 0.18
+        const float keptShare = h.q / leftAt;
+        // the heating by the truck's speed: full standing and at a crawl, about three quarters at 8 km/h, a fifth from
+        // 15 km/h up; the same slip at 20 km/h heats five times slower, and cooling is the same at any speed
+        ClutchHeat still = {}, rolling = {};
+        ClutchHeatStep(still, 9, slipping(1.0f, 1600.0f), stock, true, dt, 0.0f);
+        ClutchHeatStep(rolling, 9, slipping(1.0f, 1600.0f), stock, true, dt, 20.0f);
+        const bool bySpeed = ClutchHeatShare(0.0f) == 1.0f && ClutchHeatShare(4.0f) == 1.0f && fabsf(ClutchHeatShare(8.0f) - 0.76f) < 0.01f &&
+                             fabsf(ClutchHeatShare(15.0f) - 0.2f) < 1e-5f && fabsf(ClutchHeatShare(40.0f) - 0.2f) < 1e-5f &&
+                             fabsf(rolling.power * 5.0f - still.power) < still.power * 0.01f;
+        printf("     clutch heat: %.3f of it left after four seconds open, %.3f after ten seconds away; the heating's share at 0, 8 and 20 km/h %.2f, %.2f, %.2f\n",
+               coolShare, keptShare, ClutchHeatShare(0.0f), ClutchHeatShare(8.0f), ClutchHeatShare(20.0f));
+        ClutchHeat off = {};
+        run(off, 1, 1.0f, 1600.0f, 1600.0f, 6.0f, stock, false, began, owed);
+        GaugeSettings gs;
+        SettingsDefaults(gs);
+        const bool defaults = gs.clutchBurn && gs.damage;
+        Check(cooled && kept && bySpeed && began >= 0.0f && owed == 0.0f && off.owed == 0.0f && defaults,
+              "clutch heat: an open clutch cools to half in four seconds; each kind of truck keeps its heat and cools while away; it heats fully only "
+              "under 5 km/h, a fifth as fast from 15 km/h; burning with ClutchBurn or Damage off owes nothing");
     }
 
     printf(g_failed ? "MODELS TEST FAILED (%d)\n" : "MODELS TEST OK\n", g_failed);

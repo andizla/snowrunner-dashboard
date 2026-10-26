@@ -51,7 +51,7 @@ enum { kFaceSolid, kFaceTinted, kFaceOpen, kFaceCount };     // GaugeSettings::s
 enum { kClassTruck, kClassScout, kClassHeavy, kClassCount }; // GaugeSettings::tachClass
 enum { kOilOff, kOilNeedle, kOilDial, kOilGaugeCount };      // GaugeSettings::oilGauge
 enum { kSpoolStandard, kSpoolQuick, kSpoolLaggy, kSpoolTwoStage, kSpoolCount }; // GaugeSettings::boostProfile
-enum { kGearboxGame, kGearboxModel, kGearboxCount };
+enum { kGearboxGame, kGearboxModel, kGearboxOwn, kGearboxCount }; // GaugeSettings::gearbox: the game's own, the mod's automatic in A, the mod's own gearbox
 enum { kInputWheel, kInputPad, kInputKeys, kInputCount }; // GaugeSettings::input
 enum { kAspTurbo, kAspNatural, kAspCount };                  // an engine's profile's Aspiration          // GaugeSettings::gearbox
 
@@ -74,7 +74,11 @@ struct GaugeSettings
     float idleRpm, redlineRpm, maxRpm, speedMax;  // IdleRpm, RedlineRpm, MaxRpm, SpeedMax: 0 = the class's own
     float boostMax;          // BoostMax: the boost in bar the turbo reaches with the pedal floored at high engine speed; 0 = the class's own
     int boostProfile;        // BoostProfile: how the turbo builds its boost: 0 standard, 1 small and quick, 2 big and slow, 3 two stages
-    int gearbox;             // Gearbox: 0 the game's own automatic, 1 the mod's: a torque converter and its own shift points pick the gears in A
+    int gearbox;             // Gearbox: 0 the game's own, 1 the mod's automatic in A (only the game's reverse on the brake refused),
+                             // 2 the mod's own gearbox (gearbox_model.h): the shifter taken, its positions from the bindings
+    bool requireClutch;      // RequireClutch: a shift into a gear without the clutch stalls the engine
+    bool requireGearHeld;    // RequireGearHeld: neutral while no gear key is held, as an H shifter
+    bool skipNeutral;        // SkipNeutral: from the first gear to reverse and back without stopping in neutral
     int input;               // Input: what the pedal is: 0 a wheel's pedals, 1 a pad's trigger, 2 keys. The mod's automatic kicks down by it
     bool powertrain;         // Powertrain: the engine's torque (its curve, the cold oil, the boost) and the converter's handed to the game
     int engineShare;         // EngineShare: how much of the mod's engine the game gets with it, in percent: 0 the game's own pull, 100 the mod's
@@ -92,7 +96,10 @@ struct GaugeSettings
     float hotDamage;         // HotDamagePercentPerMinute: percent of what the engine takes that it loses a minute at 125 C
     float hotDamageFrom;     // HotDamageFrom: the coolant temperature in C where the hot damage starts (kHotDamageFromRange)
     float coldDamage;        // ColdDamagePercentPerMinute: the same for a cold engine floored at the red zone at 0 C
-    int soundVolume;         // SoundVolume: how loud the turbo's flutter and the oil warning are, 0 to 100; 0 = no sound
+    float stallDamage;       // StallDamagePercent: percent of what the gearbox takes that a shift without the clutch costs it (with Damage)
+    bool clutchBurn;         // ClutchBurn: a slipping clutch under load heats up and costs the gearbox (with Damage)
+    float clutchHeat;        // ClutchHeatPercent: how fast it heats, percent of the model's own pace (kClutchHeatRange); cooling is not scaled
+    int soundVolume;        // SoundVolume: how loud the turbo's flutter and the oil warning are, 0 to 100; 0 = no sound
     bool soundsOnly;         // SoundsOnly: the sounds are played and the cluster is not drawn
     int toggleKey;           // ToggleKey: virtual key code of the key that hides and shows the cluster, 0 = none
     char padToggle[32];      // PadToggle: pad buttons that do the same ("LB+DPadUp"), "None"
@@ -117,6 +124,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.tachClass = kClassTruck;
     s.boostProfile = kSpoolStandard;
     s.gearbox = kGearboxGame;
+    s.requireClutch = s.requireGearHeld = s.skipNeutral = false;
     s.powertrain = false;
     s.engineShare = 50;
     s.rollWarnDeg = 15.0f;
@@ -134,6 +142,9 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.hotDamage = 10.0f;
     s.hotDamageFrom = 118.0f;
     s.coldDamage = 5.0f;
+    s.stallDamage = 5.0f;
+    s.clutchBurn = true;
+    s.clutchHeat = 60.0f;
     s.soundVolume = 50;
     strcpy_s(s.padToggle, "None");
     s.demo = false;
@@ -143,14 +154,15 @@ inline void SettingsDefaults(GaugeSettings &s)
 // The range of each number: what the ini and the tab hold the settings to. A tinted face stops at 0.85, as a darker
 // one is the solid style. The tilt lamp's angles are degrees, the coolant's three times and the oil's warm-up minutes,
 // the outside temperature and the oil's warning degrees C, the speed of the radiator's full airflow km/h, the two
-// damage rates percent a minute, the boost bar (the dial ends at 2), an engine's torque a share of its own.
+// damage rates percent a minute, a stall's gearbox damage percent, the boost bar (the dial ends at 2), an engine's torque a share of its own.
 static const float kFaceOpacityMax = 0.85f, kScaleMin = 0.4f, kScaleMax = 3.0f, kOpacityMin = 0.1f, kOffsetMax = 4000.0f;
 static const float kIdleRange[2] = { 300.0f, 3000.0f }, kRedlineRange[2] = { 1000.0f, 12000.0f }, kMaxRpmRange[2] = { 1500.0f, 15000.0f },
                    kSpeedMaxRange[2] = { 40.0f, 300.0f }, kTiltRange[2] = { 1.0f, 89.0f }, kBoostRange[2] = { 0.3f, 2.0f };
 static const float kWarmUpRange[2] = { 0.5f, 60.0f }, kOverheatRange[2] = { 0.25f, 60.0f }, kCoolDownRange[2] = { 1.0f, 240.0f },
                    kAmbientRange[2] = { -40.0f, 50.0f }, kGearHoldRange[2] = { 1.0f, 3.0f }, kAirFullRange[2] = { 10.0f, 80.0f }, kDamageRange[2] = { 0.0f, 100.0f },
                    kOilWarmUpRange[2] = { 1.0f, 60.0f }, kOilWarnRange[2] = { 100.0f, 150.0f }, kTorqueShareRange[2] = { 0.10f, 1.00f },
-                   kHotDamageFromRange[2] = { 100.0f, 124.0f };
+                   kHotDamageFromRange[2] = { 100.0f, 124.0f }, kStallDamageRange[2] = { 0.0f, 25.0f },
+                   kClutchHeatRange[2] = { 10.0f, 300.0f };
 
 // The temperatures in C the coolant's three times are measured between: WarmUpMinutes from kTempOutside outside up
 // to kTempWarm, OverheatMinutes from kTempHot into the red zone at kTempRed, CoolDownMinutes from kTempHot down to
@@ -196,6 +208,8 @@ inline void SettingsClamp(GaugeSettings &s)
     s.hotDamage = SettingsRange(s.hotDamage, kDamageRange[0], kDamageRange[1]);
     s.hotDamageFrom = SettingsRange(s.hotDamageFrom, kHotDamageFromRange[0], kHotDamageFromRange[1]);
     s.coldDamage = SettingsRange(s.coldDamage, kDamageRange[0], kDamageRange[1]);
+    s.stallDamage = SettingsRange(s.stallDamage, kStallDamageRange[0], kStallDamageRange[1]);
+    s.clutchHeat = SettingsRange(s.clutchHeat, kClutchHeatRange[0], kClutchHeatRange[1]);
     s.toggleKey = s.toggleKey < 0 || s.toggleKey > 255 ? 0 : s.toggleKey;
     s.soundVolume = s.soundVolume < 0 ? 0 : s.soundVolume > 100 ? 100 : s.soundVolume;
     s.probe = s.probe < 0 ? 0 : s.probe;
@@ -289,13 +303,38 @@ enum { kSoundOil = kTurboTiers, kSoundPurge, kSoundTierCount }; // the oil warni
 // string that lives as long as the mod
 enum { kViewPullOff, kViewPullArmed, kViewPullRunning, kViewPullDone, kViewPullStopped };
 static const int kEnginePlot = 40; // points of the tab's torque plot
-struct GaugeView { bool show, demo; int hidden; GaugeState st; int engineDamage, engineCapacity; char truck[96]; bool truckOwn; char map[96], mapFrom[64]; bool mapOwn; float ambientC;
+static const int kViewActions = 26; // the gearbox's actions the view holds the bindings of (input_bindings.h's kActCount)
+static const int kViewShifts = 24;  // of them the shifter's, before the two locks (DiffLock, Awd)
+// The tab's asks of the gearbox's bindings: begin a capture into an action's slot, or clear it (the mod's thread does
+// both, with the snapshot of its pass).
+void BindingAsk(int what, int action, int slot);
+enum { kBindAskCapture = 1, kBindAskClear = 2, kBindAskCancel = 3 };
+// A warning box (models.h, ClutchWarn and EngineWarn; drawn by gauge_draw.h, GWarnBox, the tire mod's TIRE DAMAGE box's
+// shape): none, amber or red, its title and line of advice (string literals), and the number at its right and the bar
+// along its bottom in percent, 0 to 100.
+enum { kWarnNone, kWarnAmber, kWarnRed };
+struct WarnBox
+{
+    int state;
+    const char *title, *line;
+    int percent;
+};
+enum { kWarnClutch, kWarnEngine, kWarnBoxes };
+
+// smtInstalled: the manual transmission mod is in the game; gearboxHeld: another mod holds the game's gearbox
+// functions. Either way the mod's gearbox stands down (the tab says why). warn: the clutch's and the engine's warning
+// boxes while a truck is driven.
+struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWarnBoxes]; int engineDamage, engineCapacity; char truck[96]; bool truckOwn, smtInstalled, gearboxHeld; char map[96], mapFrom[64]; bool mapOwn; float ambientC;
                    int pullTest, pullPhase; const char *pullWhy;
                    float ambientDay, ambientNight, hour; // the map's day and night (with mapOwn), the hour of the game's day (-1 not known)
                    char gearbox[96]; float gearHold; bool gearHoldOwn; // the driven truck's gearbox (its key, "" for none), the seconds each gear is held going up with the mod's engine, and whether its file sets them
                    int autoClass; bool autoByWeight; float massKg; // the class the automatic goes by for it, whether by its weight (no scales of its own), and that weight (0 not read)
                    char engine[96]; bool engineOwn, engineCustom; float enginePeakRpm; int engineAspiration; float engineTorque, engineFigure; // the driven truck's engine ("" not known): its own profile or not, a whole curve of its own in it, the peak torque's speed in force, turbo or not, the share of its torque the truck gets (1 none set), and the engine's torque figure from the game's files (0 not read)
-                   float engineIdle, engineRedline; float engineCurve[kEnginePlot]; }; // the slider's range, and the torque in force from idle to the tachometer's top, for the tab's plot
+                   float engineIdle, engineRedline; float engineCurve[kEnginePlot]; // the slider's range, and the torque in force from idle to the tachometer's top, for the tab's plot
+                   // the gearbox's bindings as text (input_bindings.h, kActCount actions, two slots), the capture the tab
+                   // asked for (-1 none), whether a binding reaches reverse (Gearbox=2 may take the shifter), the
+                   // controllers read, and the stalls and shifts since the truck was taken
+                   char bindText[kViewActions][2][40]; int captureAction, captureSlot; bool canReverse; int controllers, gearStalls, gearShifts; };
 
 LONG SettingsGet(GaugeSettings &out);       // the settings in force (any thread); returns their turn, for SettingsPut
 void SettingsPut(const GaugeSettings &in, LONG turn); // settings edited from those of a turn: the mod takes them at once and saves the ini a
@@ -366,7 +405,7 @@ inline void KeyName(int vk, char *out, size_t size)
         { VK_INSERT, "Insert" }, { VK_DELETE, "Delete" }, { VK_HOME, "Home" }, { VK_END, "End" }, { VK_PRIOR, "Page Up" },
         { VK_NEXT, "Page Down" }, { VK_UP, "Up" }, { VK_DOWN, "Down" }, { VK_LEFT, "Left" }, { VK_RIGHT, "Right" },
         { VK_PAUSE, "Pause" }, { VK_SCROLL, "Scroll Lock" }, { VK_TAB, "Tab" }, { VK_SPACE, "Space" }, { VK_BACK, "Backspace" },
-        { VK_RETURN, "Enter" } };
+        { VK_RETURN, "Enter" }, { VK_ADD, "Num +" }, { VK_SUBTRACT, "Num -" }, { VK_MULTIPLY, "Num *" }, { VK_DIVIDE, "Num /" }, { VK_DECIMAL, "Num ." } };
     if (vk <= 0) strcpy_s(out, size, "None");
     else if (vk >= VK_F1 && vk <= VK_F24) sprintf_s(out, size, "F%d", vk - VK_F1 + 1);
     else if ((vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z')) sprintf_s(out, size, "%c", (char)vk);

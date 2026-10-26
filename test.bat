@@ -1,6 +1,7 @@
 @echo off
 rem Runs the offline tests build.bat made: the settings (the ini round trip, the scales, the names of keys and pad
-rem buttons), the truck reader and the write of engine damage against a made up game, the engine speed, the range,
+rem buttons), the truck reader and the write of engine damage against a made up game, the mod's own gearbox and the
+rem hooks' policy, the engine speed, the range,
 rem the tilt, the coolant temperature and what it costs the engine on made up drives, and the preview, which draws
 rem the cluster and the Gauges tab into out\preview\*.png. With SR_IMAGE set to a copy of the game exe's image from a
 rem running game (as the tire mod's test takes one), the truck test checks the place search on it too.
@@ -13,7 +14,9 @@ if "%FONTS%"=="" set FONTS=C:\Program Files (x86)\Steam\steamapps\common\Snowrun
 set failed=0
 out\test\settings_test.exe || set failed=1
 out\test\truck_test.exe || set failed=1
+out\test\gearbox_test.exe || set failed=1
 out\test\models_test.exe || set failed=1
+out\test\input_test.exe || set failed=1
 if not exist out\test\gauge_preview.exe goto nopreview
 out\test\gauge_preview.exe out\preview "%FONTS%" %2 || set failed=1
 goto done

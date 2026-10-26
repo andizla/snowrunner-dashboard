@@ -511,13 +511,103 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     }
 
     ImGui::SeparatorText("Gearbox");
-    static const char *gearboxes[kGearboxCount] = { "The game's own", "The mod's automatic" };
-    PageLabel("Automatic", labelX);
-    ImGui::SetNextItemWidth(w);
-    changed(ImGui::Combo("##gearbox", &s.gearbox, gearboxes, kGearboxCount));
+    if (view.smtInstalled)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.68f, 0.15f, 1.0f));
+        ImGui::TextWrapped("The manual transmission mod (SMT) is installed. It is not compatible with this version and no longer needed: remove "
+                           "SMT.addon64 (or SMT.asi) and SMT.ini from Sources\\Bin and start the game again. The mod's gearbox stands down until then.");
+        ImGui::PopStyleColor();
+    }
+    else if (view.gearboxHeld)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.68f, 0.15f, 1.0f));
+        ImGui::TextWrapped("Another mod holds the game's gearbox functions, so the mod's gearbox stands down.");
+        ImGui::PopStyleColor();
+    }
+    // the three levels of Gearbox
+    changed(ImGui::RadioButton("The game's own", &s.gearbox, kGearboxGame));
+    PageTip("The game's own gearbox and automatic, as without the mod.");
+    changed(ImGui::RadioButton("The mod's automatic in A", &s.gearbox, kGearboxModel));
     PageTip("The mod's automatic picks the gears while the game's shifter is in A: a torque converter, shifts up later the further the pedal is down, "
-            "a kickdown when it is floored, the gear held when the foot lifts, and the first gear as the truck stops. The tachometer shows its engine "
-            "speed. Picking a gear by hand hands the gearbox back to you.");
+            "a kickdown when it is floored, the gear held when the foot lifts, and the first gear as the truck stops. The game's shifter stays yours: "
+            "a gear picked there hands the gearbox back until A is picked again. Only the game's reverse on the brake while standing in A is refused.");
+    changed(ImGui::RadioButton("The mod's own gearbox", &s.gearbox, kGearboxOwn));
+    PageTip("The mod takes the shifter: A, the numbered gears, N, R, H and the low range on the bindings below, with a clutch and the options. "
+            "The game's own shifting is refused while it has the truck.");
+    if (s.gearbox == kGearboxOwn && !view.canReverse)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.68f, 0.15f, 1.0f));
+        ImGui::TextWrapped("Bind at least Gear down or Reverse before the mod's own gearbox takes the shifter. Until then it runs as the mod's automatic in A.");
+        ImGui::PopStyleColor();
+    }
+    if (s.gearbox == kGearboxOwn)
+    {
+        changed(ImGui::Checkbox("Require the clutch", &s.requireClutch));
+        PageTip("A shift into a gear with the clutch not held still shifts, and stalls the engine once. Into neutral it does not.");
+        changed(ImGui::Checkbox("Require the gear held", &s.requireGearHeld));
+        PageTip("Neutral the moment no gear key is held. For an H shifter with every gear bound: a gear reached with up or down is not held.");
+        changed(ImGui::Checkbox("Skip neutral", &s.skipNeutral));
+        PageTip("Up and down step from the first gear to reverse and back without stopping in neutral.");
+        PageLabel("Stall damage", labelX);
+        ImGui::SetNextItemWidth(w);
+        ImGui::BeginDisabled(!s.damage);
+        if (ImGui::SliderFloat("##stalldamage", &s.stallDamage, kStallDamageRange[0], kStallDamageRange[1], "%.0f %%", ImGuiSliderFlags_AlwaysClamp))
+        {
+            s.stallDamage = floorf(s.stallDamage + 0.5f);
+            act |= kPageChanged;
+        }
+        ImGui::EndDisabled();
+        PageTip("What a shift without the clutch costs the gearbox, of what it takes. Needs Damage on.");
+        ImGui::BeginDisabled(!s.damage);
+        changed(ImGui::Checkbox("Clutch burns", &s.clutchBurn));
+        ImGui::EndDisabled();
+        PageTip("A clutch slipping under load heats up and costs the gearbox: a start in too high a gear, a hill held on the clutch, with a pedal "
+                "or without. Needs Damage on.");
+        PageLabel("Clutch heat rate", labelX);
+        ImGui::SetNextItemWidth(w);
+        ImGui::BeginDisabled(!s.damage || !s.clutchBurn);
+        if (ImGui::SliderFloat("##clutchheat", &s.clutchHeat, kClutchHeatRange[0], kClutchHeatRange[1], "%.0f %%", ImGuiSliderFlags_AlwaysClamp))
+        {
+            s.clutchHeat = floorf(s.clutchHeat + 0.5f);
+            act |= kPageChanged;
+        }
+        ImGui::EndDisabled();
+        PageTip("How fast a slipping clutch heats up. 100 is the model's own pace; lower gives more time to react.");
+    }
+    // the bindings: two slots an action; a click binds the next key, pad chord, button or pedal moved, x clears (the
+    // order is input_bindings.h's GearAction). The shifter's at Gearbox=2, the locks' at every level
+    static const char *actions[kViewActions] = { "Gear 1", "Gear 2", "Gear 3", "Gear 4", "Gear 5", "Gear 6", "Gear 7", "Gear 8", "Gear 9", "Gear 10",
+                                                 "Gear 11", "Gear 12", "H", "L-", "L", "L+", "Neutral", "Reverse", "Gear up", "Gear down", "Clutch",
+                                                 "Range high", "Range low", "A", "Diff lock", "AWD" };
+    auto bindingRow = [&](int a) {
+        ImGui::PushID(1000 + a);
+        PageLabel(actions[a], labelX);
+        for (int slot = 0; slot < 2; slot++)
+        {
+            ImGui::PushID(slot);
+            if (slot) ImGui::SameLine();
+            const bool waiting = view.captureAction == a && view.captureSlot == slot;
+            char text[64];
+            sprintf_s(text, "%s###bind", waiting ? "press a key, a button or move the pedal..." : view.bindText[a][slot]);
+            if (ImGui::Button(text, ImVec2(w * 0.42f, 0.0f))) BindingAsk(waiting ? kBindAskCancel : kBindAskCapture, a, slot);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("x")) BindingAsk(kBindAskClear, a, slot);
+            ImGui::PopID();
+        }
+        ImGui::PopID();
+    };
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextDisabled("Bindings: click a slot, then press a key, a pad's buttons or a wheel's button, or move the clutch pedal. Escape cancels.");
+    ImGui::PopTextWrapPos();
+    if (s.gearbox == kGearboxOwn)
+    {
+        for (int a = 0; a < kViewShifts; a++) bindingRow(a);
+        if (view.gearShifts || view.gearStalls) ImGui::TextDisabled("Since the truck was taken: %d shifts, %d stalls.", view.gearShifts, view.gearStalls);
+    }
+    ImGui::TextDisabled("Locks");
+    PageTip("The differential lock and all-wheel drive on a key, on every truck, the upgrade fitted or not; the cluster's lamps show them.");
+    for (int a = kViewShifts; a < kViewActions; a++) bindingRow(a);
+    if (view.controllers) ImGui::TextDisabled("%d wheel or shifter read through DirectInput.", view.controllers);
     static const char *inputs[kInputCount] = { "A wheel's pedals", "A pad", "The keyboard" };
     PageLabel("Driven with", labelX);
     ImGui::SetNextItemWidth(w);
@@ -540,7 +630,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         PageTip("How much of the mod's engine the game gets: 0 leaves the game's own pull, 100 hands it all of the mod's engine, and between the "
                 "two the truck pulls between them. Lower it where a truck pulls too hard.");
         // the driven truck's gearbox: how long each gear is held going up, kept for that gearbox
-        if (view.gearbox[0] && s.gearbox == kGearboxModel)
+        if (view.gearbox[0] && s.gearbox >= kGearboxModel)
         {
             float hold = view.gearHold;
             PageLabel("Each gear going up", labelX);

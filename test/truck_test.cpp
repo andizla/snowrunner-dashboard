@@ -5,9 +5,8 @@
 // game finds it, and that engine damage is written only where it belongs: up, one short of what the engine takes at
 // most, with the effect and the torque factor the game's own rule gives. And it checks which truck the mod takes a
 // truck for: by its kind's name where the game has one, by its build where it has none.
-// And it checks the reading of the manual transmission mod's published state (smt.h), through a block of shared
-// memory written as that mod writes it, the maps by the game's names with the map its save names (maps.h), and the
-// search for the game's gearbox functions in a made up exe's code (game_code.h).
+// And it checks the maps by the game's names with the map its save names (maps.h), the search for the game's gearbox
+// functions in a made up exe's code (game_code.h), and the hooks on them (gearbox_hooks.h).
 // build.bat makes out\test\truck_test.exe; test.bat runs it.
 #include <windows.h>
 #include <stdio.h>
@@ -17,11 +16,44 @@
 #include <vector>
 #include "gauges.h"
 #include "truck.h"
-#include "smt.h"
+#include "models.h"
 #include "maps.h"
 #include "game_code.h"
 #include "game_globals.h"
 #include "clock_scan.h"
+#include "gearbox_hooks.h"
+
+// The hooks' attach and detach (gearbox_hooks.h) on a function of the test's own: the hook counts and calls through.
+static volatile int g_hookSaw = 0;
+static int (*g_testWay)(int, int) = nullptr;
+__declspec(noinline) static int TestTarget(int a, int b)
+{
+    volatile int x = a;
+    return x * 3 + b;
+}
+static int TestHook(int a, int b)
+{
+    g_hookSaw = g_hookSaw + 1;
+    return g_testWay(a, b);
+}
+// a second function for GearboxHook's choice (never called while hooked: the game's hooks take other arguments)
+__declspec(noinline) static int TestTarget2(int a, int b)
+{
+    volatile int x = b;
+    return x * 7 - a;
+}
+
+// A stand-in for the game's truck update (review 10, D7): two pointers and two floats as the game's homes them, and
+// two things the hook does not declare: a fifth argument on the stack and an answer in xmm0. Both reach the caller
+// only while the hook's call through stays a tail jump (D2).
+static volatile uint64_t g_fakeVehicle = 0;
+__declspec(noinline) static float FakeTruckUpdate(void *first, void *second, float third, float fourth, int fifth)
+{
+    g_fakeVehicle = *(volatile uint64_t *)((uint8_t *)first + 0x20);
+    return third + fourth + (float)fifth + (second ? 0.5f : 0.0f);
+}
+static volatile LONG64 g_frameFirst = 0;
+static void FakeOnFrame(void *first) { g_frameFirst = (LONG64)first; }
 
 struct Region { uint64_t at; std::vector<uint8_t> bytes; };
 static std::vector<Region> g_game;
@@ -331,6 +363,14 @@ static void RealImageTest()
              steam ? ", the Steam build of 22 July" : update ? ", the update of 20 October" : ", a build the test has no numbers for", from, to, right, kGlobCount, inData,
              shift.at, *wrong ? "; wrong:" : "", wrong);
     Check(right == kGlobCount && inData == kGlobCount && shiftRight, line);
+    // the damage path the tire mod uses: the truck update and the damage update (in the Steam build of 22 July where the
+    // tire mod has them, in another build found once)
+    DamagePath path;
+    const bool pathFound = DamagePathFind(image.data(), from, to, path);
+    const bool pathRight = pathFound && (!steam || (path.truckUpdate == 0xa56970 && path.damageUpdate == 0xd6f690));
+    snprintf(line, sizeof line, "places in a real image of the game's exe: the truck update at %zx, the damage update at %zx%s%s", path.truckUpdate, path.damageUpdate,
+             pathFound ? "" : "; ", path.why);
+    Check(pathRight, line);
 
     // the places the mod cannot do without, by each of their ways alone (game_globals.h): on a build the test has
     // numbers for, every way a place has must give it there; on another the line tells which ways found what, so a
@@ -712,6 +752,145 @@ int main()
     readEngine();
     Check(leftAlone && engine[0] == 150, "write: an engine at its end is left alone");
 
+    // a stall the mod's gearbox ordered costs the gearbox: 5 percent of its 200 is 10 points into the block behind
+    // vehicle + 0x148, again on a second stall, capped at what it takes; nothing with Damage off or StallDamagePercent 0
+    {
+        MakeGame();
+        TruckFind(kMemory, r);
+        const uint64_t kGearboxBlock = 0x10200000;
+        Block(kGearboxBlock, 0x80);
+        Put(kVehicle + 0x148, kGearboxBlock | 0x00CD000000000000ull);
+        Put(kGearboxBlock + 0x10, (uint16_t)1);
+        const int sound[2] = { 0, 200 };
+        Put(kGearboxBlock + 0x38, sound);
+        GaugeSettings gs;
+        SettingsDefaults(gs);
+        GearboxDamageWrite gw;
+        int gearbox[2] = {};
+        const bool first = TruckGearboxDamageAdd(kMemory, r, StallDamageShare(gs), gw) && gw.points == 10 && gw.capacity == 200;
+        Peek(kGearboxBlock + 0x38, gearbox, sizeof gearbox);
+        const bool ten = gearbox[0] == 10 && gearbox[1] == 200;
+        const bool second = TruckGearboxDamageAdd(kMemory, r, StallDamageShare(gs), gw) && gw.before == 10 && gw.wrote == 20;
+        Peek(kGearboxBlock + 0x38, gearbox, sizeof gearbox);
+        const bool twenty = gearbox[0] == 20;
+        gs.damage = false;
+        const bool off = StallDamageShare(gs) == 0.0f && !TruckGearboxDamageAdd(kMemory, r, StallDamageShare(gs), gw);
+        gs.damage = true;
+        gs.stallDamage = 0.0f;
+        const bool none = !TruckGearboxDamageAdd(kMemory, r, StallDamageShare(gs), gw);
+        Peek(kGearboxBlock + 0x38, gearbox, sizeof gearbox);
+        const bool untouched = gearbox[0] == 20;
+        const int nearly[2] = { 195, 200 };
+        Put(kGearboxBlock + 0x38, nearly);
+        gs.stallDamage = 5.0f;
+        const bool capped = TruckGearboxDamageAdd(kMemory, r, StallDamageShare(gs), gw) && gw.wrote == 200 && gw.points == 5;
+        const bool worst = !TruckGearboxDamageAdd(kMemory, r, StallDamageShare(gs), gw) && gw.before == 200;
+        Peek(kGearboxBlock + 0x38, gearbox, sizeof gearbox);
+        TruckRaw t;
+        const bool read = TruckRead(kMemory, r, t) && t.gearboxKnown && t.gearboxDamage == 200 && t.gearboxCapacity == 200;
+        Check(first && ten && second && twenty && off && none && untouched && capped && worst && gearbox[0] == 200 && read,
+              "stall: 5 percent of the gearbox's 200 is 10 points behind vehicle + 0x148, again on a second stall, capped at what it takes; nothing with "
+              "Damage off or StallDamagePercent 0; the reader names the gearbox's damage");
+
+        // the job: posted by the mod's thread, dealt by a frame of the truck update for that truck only, the game's damage
+        // update run after the write (here it sums the parts into vehicle + 0x108), the result read once; one at a time;
+        // a job no frame took is taken back after its wait
+        Put(kGearboxBlock + 0x38, sound);
+        static uint64_t updated = 0;
+        updated = 0;
+        auto update = [](uint64_t vehicle) {
+            updated = vehicle;
+            int block[2] = {}, sums[2] = { 0, 0 };
+            Peek(0x10200000 + 0x38, block, sizeof block);
+            sums[0] = 30 + block[0];
+            sums[1] = 150 + block[1];
+            Put(vehicle + 0x108, sums);
+        };
+        StallJob job = {};
+        const bool posted = StallJobPost(job, r, 5.0f, 1000) && !StallJobPost(job, r, 5.0f, 1001);
+        const bool otherTruck = !StallJobDeal(job, kMemory, kOtherVehicle, update) && job.state == kStallJobPosted;
+        GearboxDamageWrite jw;
+        bool ran = false;
+        int sum = 0, sumCapacity = 0;
+        const bool notYet = !StallJobResult(job, jw, ran, sum, sumCapacity);
+        const bool dealt = StallJobDeal(job, kMemory, kVehicle, update) && !StallJobDeal(job, kMemory, kVehicle, update);
+        Peek(kGearboxBlock + 0x38, gearbox, sizeof gearbox);
+        const bool result = StallJobResult(job, jw, ran, sum, sumCapacity) && jw.written && jw.points == 10 && ran && updated == kVehicle && sum == 40 &&
+                            sumCapacity == 350 && gearbox[0] == 10 && job.state == kStallJobIdle && !StallJobResult(job, jw, ran, sum, sumCapacity);
+        // kept however long while the same truck is driven (a pause, a menu), dropped once another one is (review 10, D4)
+        const bool again = StallJobPost(job, r, 5.0f, 2000) && !StallJobDrop(job, kVehicle) && job.state == kStallJobPosted &&
+                           StallJobDrop(job, kOtherVehicle) && job.state == kStallJobIdle;
+        Check(posted && otherTruck && notYet && dealt && result && again,
+              "stall job: posted once at a time, dealt only by a frame for its truck with the game's damage update after, its result and the game's sum "
+              "read once; kept while its truck is driven, dropped once another is");
+
+        // a frame of the truck update: its first argument an object with the vehicle at + 0x20 (StallJobFrame, what the
+        // hook's callback runs); and the clutch's burn end to end, its whole points posted to the job and dealt by a frame
+        // (review 10, D7)
+        const uint64_t kFirst = 0x10210000, kOtherFirst = 0x10220000;
+        Block(kFirst, 0x40);
+        Block(kOtherFirst, 0x40);
+        Put(kFirst + 0x20, kVehicle);
+        Put(kOtherFirst + 0x20, kOtherVehicle);
+        Put(kGearboxBlock + 0x38, sound);
+        ClutchHeat heat = {};
+        heat.owed = 0.004f; // under one point of 200
+        const int underOne = ClutchBurnPost(heat, job, r, 200, 3000);
+        heat.owed = 0.057f; // 11.4 points of 200
+        const int points = ClutchBurnPost(heat, job, r, 200, 3000);
+        const bool busy = ClutchBurnPost(heat, job, r, 200, 3000) == 0;
+        const bool idleFrame = !StallJobFrame(job, kMemory, kOtherFirst, update) && job.state == kStallJobPosted;
+        const bool frame = StallJobFrame(job, kMemory, kFirst, update);
+        bool burn = false;
+        const bool burnt = StallJobResult(job, jw, ran, sum, sumCapacity, &burn) && burn && jw.written && jw.points == 11;
+        Peek(kGearboxBlock + 0x38, gearbox, sizeof gearbox);
+        StallJob quiet = {};
+        const bool unread = !StallJobFrame(quiet, kMemory, 0x5000, update); // no job: first is not read, nor is a bad one
+        Check(underOne == 0 && points == 11 && Near(heat.owed, 0.002f) && busy && idleFrame && frame && burnt && gearbox[0] == 11 && unread,
+              "clutch burn end to end: whole points owed are posted to the job, the rest kept; a frame reads the vehicle at first + 0x20 and deals "
+              "only its truck's job, the gearbox's damage written and marked as the burn's");
+    }
+
+    // the locks on the mod's keys: a press flips its byte in the action (the lock at + 0x4A, all-wheel drive at + 0x49,
+    // the made up truck with all-wheel drive on and the lock off), a key held is no press, and a byte the game puts back
+    // to 0 after a write of 1 is said once a truck
+    {
+        MakeGame();
+        LocksWatch l = {};
+        int out[kLocks];
+        uint8_t diff = 0, awd = 0;
+        auto pass = [&](bool pressDiff, bool pressAwd) {
+            const bool pressed[kLocks] = { pressDiff, pressAwd };
+            LocksStep(l, kMemory, kAction, pressed, out);
+            Peek(kAction + 0x4A, &diff, 1);
+            Peek(kAction + 0x49, &awd, 1);
+        };
+        pass(true, false);
+        const bool lockOn = out[kLockDiff] == kLockOn && out[kLockAwd] == kLockNone && diff == 1 && awd == 1;
+        pass(false, false); // the key held: the reader gives no second press
+        pass(false, false);
+        const bool held = out[kLockDiff] == kLockNone && diff == 1;
+        pass(false, true);
+        const bool awdOff = out[kLockAwd] == kLockOff && awd == 0 && diff == 1;
+        pass(true, false);
+        const bool lockOff = out[kLockDiff] == kLockOff && diff == 0;
+        pass(true, false);
+        Put(kAction + 0x4A, (uint8_t)0); // a truck without the upgrade: the game puts it back
+        pass(false, false);
+        const bool cleared = out[kLockDiff] == kLockCleared && diff == 0;
+        pass(true, false);
+        Put(kAction + 0x4A, (uint8_t)0);
+        pass(false, false);
+        const bool once = out[kLockDiff] == kLockNone;
+        Check(lockOn && held && awdOff && lockOff && cleared && once,
+              "locks: a press flips the differential lock or all-wheel drive in the truck's action, held is no repeat, a clear by the game said once");
+        const TruckMemory readOnly = { Peek, kExe };
+        const bool pressed[kLocks] = { true, true };
+        LocksStep(l, readOnly, kAction, pressed, out);
+        Peek(kAction + 0x4A, &diff, 1);
+        Check(out[kLockDiff] == kLockNone && out[kLockAwd] == kLockNone && diff == 0, "locks: a write the memory does not take is no flip");
+    }
+
     // the effect the game holds is never lowered: 100 of 150 with an effect of 0.25 from a rule the record does not give
     MakeGame();
     TruckFind(kMemory, r);
@@ -878,6 +1057,81 @@ int main()
               "load: the same truck by its id drives on warm; another truck, none before the load, or none for a minute after it goes cold");
     }
 
+    // the gearbox hooks' attach and detach: a function of the test's own detoured, the hook called and calling through
+    // with the arguments and the answer unchanged, and the function its own again after the detach
+    {
+        g_testWay = &TestTarget;
+        void **targets[1] = { (void **)&g_testWay };
+        void *const hooks[1] = { (void *)&TestHook };
+        volatile int a = 4, b = 5;
+        const int before = TestTarget(a, b);
+        const bool attached = GearboxAttach(targets, hooks, 1) == NO_ERROR;
+        const bool wayMoved = g_testWay != &TestTarget;
+        const int through = TestTarget(a, b);
+        const bool seen = g_hookSaw == 1;
+        const bool detached = GearboxDetach(targets, hooks, 1) == NO_ERROR;
+        const int after = TestTarget(a, b);
+        Check(before == 17 && attached && wayMoved && seen && through == before && detached && after == before && g_hookSaw == 1 && g_testWay == &TestTarget,
+              "gearbox hooks: a function detoured calls the hook, which calls through with its arguments and answer unchanged; the detach makes it its own again");
+    }
+
+    // the truck update's hook through Detours on a function with the game's signature (review 10, D7): the callback gets
+    // the first argument before the update runs; the update gets all five arguments, the fifth on the stack, and its
+    // answer in xmm0 comes back; after the unhook the function is its own again
+    {
+        uint8_t object[0x40] = {};
+        const uint64_t truck = 0x1234567890ull;
+        memcpy(object + 0x20, &truck, 8);
+        int second = 0;
+        float (*volatile update)(void *, void *, float, float, int) = &FakeTruckUpdate;
+        const float plain = update(object, &second, 1.5f, 2.0f, 7);
+        char why[160] = "";
+        const bool hooked = TruckUpdateHook((uintptr_t)&FakeTruckUpdate, &FakeOnFrame, why, sizeof why);
+        const long framesBefore = TruckUpdateFrames();
+        g_fakeVehicle = 0;
+        const float through = update(object, &second, 1.5f, 2.0f, 7);
+        const bool seen = g_frameFirst == (LONG64)(uintptr_t)object && TruckUpdateFrames() == framesBefore + 1 && g_fakeVehicle == truck;
+        const bool twice = TruckUpdateHook((uintptr_t)&FakeTruckUpdate, &FakeOnFrame, why, sizeof why);
+        TruckUpdateUnhook();
+        g_frameFirst = 0;
+        const float after = update(object, &second, 1.5f, 2.0f, 7);
+        Check(plain == 11.0f && hooked && through == 11.0f && seen && twice && after == 11.0f && g_frameFirst == 0 && TruckUpdateFrames() == framesBefore + 1,
+              "truck update hook: through Detours on a function with the game's signature, the callback gets the first argument, the function its five "
+              "arguments (the fifth on the stack) and its answer in xmm0 comes back; after the unhook it is its own again");
+        if (!hooked) printf("     %s\n", why);
+    }
+
+    // GearboxHook's choice (review 6, G6): made-up finds at base 0, two found once at the test's own functions, one held,
+    // one there twice, one unplaced, the rest not found; the guard against a second attach; the unhook; and a failed
+    // transaction (a found function at address 0) that leaves nothing hooked and no way through
+    {
+        FunctionFind finds[kFnCount] = {};
+        finds[kFnShiftGear] = FunctionFind{ kFnFound, (size_t)(uintptr_t)&TestTarget, 1, false };
+        finds[kFnShiftToAuto] = FunctionFind{ kFnHeld, 0x100, 1, false };
+        finds[kFnShiftToHigh] = FunctionFind{ kFnFound, 0x200, 2, false };
+        finds[kFnShiftToNeutral] = FunctionFind{ kFnUnplaced, 0, 0, false };
+        finds[kFnAutoOffAndShift] = FunctionFind{ kFnFound, (size_t)(uintptr_t)&TestTarget2, 1, false };
+        char why[1024];
+        const int hooked = GearboxHook(0, finds, why, sizeof why);
+        const bool reasons = strstr(why, "ShiftToAutoGear: another mod holds it") && strstr(why, "ShiftToHigh: its bytes stand more than once") &&
+                             strstr(why, "ShiftToReverse: not found") && strstr(why, "ShiftToNeutral: not looked for") && strstr(why, "SetPowerFactor: not found") &&
+                             strstr(why, "SetCurrentVehicle: not found") && !strstr(why, "GetMaxGear");
+        void *const way = GearboxOriginal(kFnShiftGear);
+        const bool ways = way && way != (void *)&TestTarget && GearboxOriginal(kFnAutoOffAndShift) && !GearboxOriginal(kFnShiftToHigh) && !GearboxOriginal(kFnMaxGear);
+        char again[256];
+        const bool guarded = GearboxHook(0, finds, again, sizeof again) == 2 && GearboxHooked();
+        GearboxUnhook();
+        const bool unhooked = !GearboxHooked() && !GearboxOriginal(kFnShiftGear) && TestTarget(4, 5) == 17 && TestTarget2(4, 5) == 31;
+        FunctionFind nowhere[kFnCount] = {};
+        nowhere[kFnShiftGear] = FunctionFind{ kFnFound, 0, 1, false };
+        char failed[512];
+        const bool refused = GearboxHook(0, nowhere, failed, sizeof failed) == 0 && strstr(failed, "Detours could not attach") && !GearboxHooked() &&
+                             !GearboxOriginal(kFnShiftGear);
+        Check(hooked == 2 && reasons && ways && guarded && unhooked && refused,
+              "gearbox hooks: only functions found once and not held are hooked, each other one with its reason; a second attach changes nothing; the unhook "
+              "gives the functions back; a failed transaction hooks none");
+    }
+
     // the probe's text and what makes it write
     MakeGame();
     TruckFind(kMemory, r);
@@ -888,6 +1142,20 @@ int main()
     Check(strstr(first, "gear 3 (engaged 3) automatic 1 power 1.000 = A") && strstr(first, "speed 5.00 m/s = 18.0 km/h (4.90 m/s by the way gone)") && strstr(first, "fuel 60.00 of 75.00 l") &&
           strstr(first, "engine damage 30 of 150") && strstr(second, " 2:11.50 2:12.50 1:13.50 1:14.50") && strstr(second, "gear speeds 1.500 3.000 6.000 12.000 16.000 8.000") &&
           strstr(second, "menu 0 loading 0"), "probe: the two lines carry the values as read");
+    {
+        // the mod's gearbox has the truck: the model's letter, as the cluster's; a numbered gear reads as its number
+        // where the game's own rule would read the first gear's factor as L+ (the first drives, 2026-10-26)
+        TruckRaw g1 = t;
+        g1.gear = 1;
+        g1.automatic = 0;
+        g1.powerFactor = 1.0f;
+        char own[640], game[640], low[640];
+        TruckProbeText(g1, w, 4.9f, game, sizeof game, second, sizeof second);
+        TruckProbeText(g1, w, 4.9f, own, sizeof own, second, sizeof second, "");
+        TruckProbeText(g1, w, 4.9f, low, sizeof low, second, sizeof second, "L");
+        Check(strstr(game, "power 1.000 = L+") && strstr(own, "power 1.000 = 1 |") && strstr(low, "power 1.000 = L |"),
+              "probe: while the mod's gearbox has the truck the letter is the model's, a numbered gear its number");
+    }
     TruckRaw t2 = t;
     World w2 = w;
     t2.speed += 0.5f;
@@ -898,77 +1166,6 @@ int main()
     t2 = t;
     w2.mapOpen = 1;
     Check(quiet && lever && TruckProbeEvent(t2, w2, t, w), "probe: a switch or the game's state writes at once, a changing speed does not");
-
-    // the manual transmission mod's state: a block copied only while it is not being written, a stale one is the mod
-    // gone, the gears by its names, and the whole way through a mapping named as the mod names it
-    {
-        SmtBlock b = {};
-        b.magic = kSmtMagic;
-        b.version = kSmtVersion;
-        b.size = sizeof b;
-        b.tick = 10000;
-        b.vehicle = kVehicle;
-        b.gear = 3;
-        b.maxGear = 6;
-        b.flags = kSmtVehicle | kSmtAutoRange | kSmtClutch | kSmtClutchAxis | kSmtRequireClutch;
-        b.clutch = 0.7f;
-        b.powerCoef = 1.05f;
-        b.stalls = 2;
-        SmtBlock copy;
-        const bool copied = SmtCopy(&b, copy) && copy.gear == 3 && copy.vehicle == kVehicle;
-        b.sequence = 5;
-        const bool writing = !SmtCopy(&b, copy);
-        b.sequence = 6;
-        b.magic = 0;
-        const bool foreign = !SmtCopy(&b, copy);
-        b.magic = kSmtMagic;
-        Check(copied && writing && foreign, "manual transmission mod: its block is copied while the sequence is even, not while it is written, and not with another magic");
-        const SmtView fresh = SmtViewOf(b, 10500), stale = SmtViewOf(b, 10000 + kSmtStaleMs + 1);
-        Check(fresh.present && fresh.driving && fresh.vehicle == kVehicle && fresh.gear == 3 && fresh.clutchHeld && fresh.clutchAxis && Near(fresh.clutch, 0.7f) &&
-                  fresh.requireClutch && fresh.stalls == 2 && !stale.present && !stale.driving,
-              "manual transmission mod: a fresh block gives its truck, gear and clutch; one not written for a second is the mod gone");
-        auto name = [&](int gear, bool autoRange, float coef) {
-            static char out[8];
-            SmtView v = fresh;
-            v.gear = gear;
-            v.autoRange = autoRange;
-            v.powerCoef = coef;
-            return std::string(SmtGearName(v, out, sizeof out));
-        };
-        Check(name(-1, true, 1.05f) == "R" && name(0, true, 1.05f) == "N" && name(4, true, 1.05f) == "4" && name(7, true, 1.0f) == "H" && name(1, false, 0.2f) == "L-" &&
-                  name(1, false, 0.45f) == "L" && name(1, false, 1.0f) == "L+" && name(1, true, 1.05f) == "1",
-              "manual transmission mod: its gears by its own names, the low ones by the power it gave them");
-        // the whole way: nothing before the mod's mapping is there, then looked for again only after kSmtLookMs
-        SmtReader reader = {};
-        const SmtView before = SmtRead(reader, 20000);
-        wchar_t mapName[64];
-        swprintf(mapName, 64, L"Local\\SnowRunnerMT.State.%lu", GetCurrentProcessId());
-        HANDLE mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(SmtBlock), mapName);
-        SmtBlock *shared = mapping ? (SmtBlock *)MapViewOfFile(mapping, FILE_MAP_WRITE, 0, 0, sizeof(SmtBlock)) : nullptr;
-        bool through = false;
-        if (shared)
-        {
-            // written as the mod writes it: the sequence odd while the fields go in
-            b.sequence = 0;
-            b.tick = 20000 + kSmtLookMs;
-            shared->magic = b.magic;
-            shared->version = b.version;
-            shared->size = b.size;
-            InterlockedIncrement(&shared->sequence);
-            memcpy((char *)shared + offsetof(SmtBlock, tick), (const char *)&b + offsetof(SmtBlock, tick), sizeof b - offsetof(SmtBlock, tick));
-            InterlockedIncrement(&shared->sequence);
-            const SmtView early = SmtRead(reader, 20000 + kSmtLookMs - 1), found = SmtRead(reader, 20000 + kSmtLookMs);
-            const SmtView later = SmtRead(reader, 20000 + kSmtLookMs + kSmtStaleMs + 1);
-            through = !before.present && !early.present && found.present && found.gear == 3 && found.vehicle == kVehicle && !later.present;
-            SmtClose(reader);
-            UnmapViewOfFile(shared);
-        }
-        if (mapping) CloseHandle(mapping);
-        Check(through, "manual transmission mod: its state read through the shared memory it names, looked for every five seconds until it is there");
-        char line[400];
-        SmtProbeText(fresh, true, line, sizeof line);
-        Check(strstr(line, "drives this truck | gear 3 of 6") && strstr(line, "clutch held, 0.70 (an axis)") && strstr(line, "2 stalls"), "manual transmission mod: its probe line");
-    }
 
     // the maps by the game's names, and the map its save names as loaded last
     {

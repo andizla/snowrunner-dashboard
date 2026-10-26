@@ -816,6 +816,47 @@ static void GLamps(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, int columns, f
     }
 }
 
+// ---- the warning boxes: the clutch's and the engine's, the shape of the tire mod's TIRE DAMAGE box (its panel_draw.h,
+// PanelWarning and PanelWarnOrigin), stacked below it on the HUD's stage ----
+// The box in reference pixels of the tire mod's panel (an 800 wide panel on a 400 wide stage slot), the HUD's 1920 x 1080
+// stage, and the tire warning's corner on it (52, 205: in line with the game's truck card's text, below it). Slot 0 is
+// the tire mod's own; the clutch's box takes slot 1 and the engine's slot 2, 16 apart as the tire mod stacks its hint.
+static const float kWarnW = 800.0f, kWarnH = 148.0f, kWarnGap = 16.0f;
+static const float kWarnStageW = 1920.0f, kWarnStageH = 1080.0f, kWarnStageX = 52.0f, kWarnStageY = 205.0f, kWarnStageWidth = 400.0f;
+enum WarnTextStyle { kWsTitle, kWsLine, kWsStyleCount };
+static const FontStyle kWarnStyles[kWsStyleCount] = { { 26.0f, 1 }, { 26.0f, 0 } }; // the tire mod's kMode and kLabel
+// The stage's scale on a screen this size (fitted in), and screen pixels per reference pixel of the box.
+static float WarnStageScale(float w, float h) { return fminf(w / kWarnStageW, h / kWarnStageH); }
+static float WarnUnit(float w, float h) { return WarnStageScale(w, h) * (kWarnStageWidth / kWarnW); }
+// The top left corner of the box in slot (0 the tire mod's warning, 1 the clutch's, 2 the engine's): the stage centred top
+// to bottom, the box at the same distance from the left edge on a wider screen.
+static ImVec2 WarnOrigin(float w, float h, int slot)
+{
+    const float s = WarnStageScale(w, h);
+    return ImVec2(s * kWarnStageX, (h - kWarnStageH * s) * 0.5f + s * kWarnStageY + slot * (kWarnH + kWarnGap) * WarnUnit(w, h));
+}
+
+// One box at `at` (u: screen pixels per reference pixel, a: opacity): a dark rounded body with a stripe down its left
+// in the box's colour (red, or amber), the title, the line of advice, the number at the right and the bar along the
+// bottom. f: fonts with kWarnStyles.
+static void GWarnBox(ImDrawList *dl, const GaugeFonts &f, ImVec2 at, float u, float a, const WarnBox &b)
+{
+    if (b.state == kWarnNone) return;
+    const float x0 = floorf(at.x), y0 = floorf(at.y);
+    auto P = [&](float x, float y) { return ImVec2(x0 + x * u, y0 + y * u); };
+    const ImU32 col = b.state == kWarnRed ? GCol(225, 58, 70, a) : GCol(236, 182, 48, a);
+    dl->AddRectFilled(P(0, 0), P(kWarnW, kWarnH), GCol(5, 5, 5, 0.94f * a), 3.0f * u);
+    dl->AddRectFilled(P(0, 0), P(12, kWarnH), col, 3.0f * u, ImDrawFlags_RoundCornersLeft);
+    TextDraw(dl, f, kWsTitle, P(44, 50), GCol(255, 255, 255, a), b.title, -1, u);
+    TextDraw(dl, f, kWsLine, P(44, 101), GCol(142, 150, 152, a), b.line, -1, u);
+    const int shown = b.percent < 0 ? 0 : b.percent > 100 ? 100 : b.percent;
+    char text[8];
+    snprintf(text, sizeof text, "%d%%", shown);
+    TextDraw(dl, f, kWsTitle, P(kWarnW - 44, 50), col, text, 1, u);
+    dl->AddRectFilled(P(12, kWarnH - 9), P(kWarnW, kWarnH), GCol(33, 33, 33, a), 3.0f * u, ImDrawFlags_RoundCornersBottomRight);
+    dl->AddRectFilled(P(12, kWarnH - 9), P(12 + (kWarnW - 12) * (float)shown / 100.0f, kWarnH), col);
+}
+
 // The cluster. origin: the strip's bottom centre (variant 0) or the block's bottom right corner (variant 1).
 static void GaugeDraw(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float u, float a, const GaugeState &st, const GaugeLayout &lay)
 {

@@ -1781,127 +1781,62 @@ inline void GearboxProbeText(const TruckRaw &t, const GearboxModel &m, bool driv
               m.spinning ? "wheels spinning, going by the ground, " : "", kept, m.shifts, m.hunts);
 }
 
-// ---- the mod's automatic in the game ----
-// With Gearbox set to the mod's, the model above picks the gears while the player has the game's shifter in A. The
-// game shows A by a flag in the truck's action (TruckRaw::automatic); the mod puts that flag down, so the game's own
-// automatic stops choosing, and sets the model's gear through the game's own shift function, as a manual
-// transmission mod sets a gear from a key. The player gets the gearbox back by picking a gear by hand: a gear the
-// mod did not set, once the last one it set has had kTakeSettle to arrive. The game's flag up again (A picked once
-// more, or the shift modifier tapped) makes the game's own automatic pick a gear: the mod puts its flag down and its
-// own gear back at once. The tap only forces a pulling gear on the game's own automatic; with the mod's it does
-// nothing. Another numbered gear within kTakeHold of it (the game going back on its pick) is put back the same way,
-// not read as a gear picked by hand.
-static const float kTakeSettle = 0.5f;       // seconds the game has to take a gear the mod set before another gear is the player's
-static const float kTakeHold = 2.0f;         // seconds after the game's own automatic picked a gear that another gear is no gear picked by hand
-static const float kTakeLowPower = 0.02f;    // the power factor this far under the most it was while the mod drove: a low gear picked by hand
-
+// ---- the mod's gearbox in the game ----
+// With Gearbox set to the mod's and the game's shift function known, the mod's own gearbox (gearbox_model.h) takes a
+// truck the moment it is driven with its engine running, in whatever position the game has it (A when the game's
+// automatic flag is up). From then on every shift is the gearbox's: the hooks refuse the game's own (gearbox_hooks.h,
+// GearboxHolding), the player's position changes come only through the gearbox's actions, and in A the automatic's
+// model above picks the gear. It keeps the truck through an engine stop (a stall from RequireClutch among them) and
+// gives it back when the setting goes off; the truck gone (another driven, or none read) the caller lets go
+// (review 7, R4).
 struct TakeoverModel
 {
-    bool driving;      // the mod has the gearbox
-    float power;       // the most the power factor was while it drove: a lower one is a low gear picked by hand
-    int set;           // the gear it set last
-    float since;       // seconds since then
-    int shifts;        // gears set since it took the gearbox
-    int handBacks;     // times it gave the gearbox back
+    bool driving;      // the mod's gearbox has the truck
+    int shifts;        // gears set since it took it
+    int handBacks;     // times it gave a truck back
     int lastHandBack;  // why, the last time: one of the kTake... reasons
-    bool tapped;       // the game's own automatic picked a gear (the shift modifier tapped, or A picked again)
-    float tapFor;      // seconds since
 };
-enum { kTakeNone, kTakePicked, kTakeLow, kTakeOff, kTakeGone };
+enum { kTakeNone, kTakeOff, kTakeGone };
 
-// What the mod does to the game on this pass.
 struct TakeoverOrders
 {
-    bool flagDown;     // put the game's automatic flag down
-    int shiftTo;       // set this gear, 0 for none
-    bool took;         // it took the gearbox on this pass
-    int tapped;        // the gear the game's own automatic picked on this pass, put back; 0 for none
-    bool undone;       // the game went back on its pick, and the mod's gear is put back
-    bool gaveBack;     // it gave the gearbox back on this pass (lastHandBack says why)
+    bool took;         // it took the truck on this pass
+    bool gaveBack;     // it gave the truck back on this pass (lastHandBack says why)
 };
 
-// One pass of dt seconds. enabled: Gearbox is the mod's and the game's shift function is known; t: the truck as
-// read; modelGear: the gear the model wants (GearboxModel::gear); lowestFit: the lowest gear the engine can take
-// (GearboxLowestFit). The gearbox is taken when the game's shifter is in A
-// on a numbered gear (from neutral the game puts the first gear in itself as the truck sets off), in the gear the
-// game is in, and given back when the player picks a gear, the setting goes off or the engine stops. A rise of the
-// power factor (another mod setting its own for the automatic) is no gear picked.
-inline TakeoverOrders TakeoverStep(TakeoverModel &m, const TruckRaw &t, int modelGear, bool enabled, float dt, int lowestFit = 1)
+// One pass. enabled: Gearbox is the mod's and the game's shift function is known; t: the truck as read; fromA: the
+// truck is taken only while the game's automatic flag is up (Gearbox=1, where the game's shifter is the player's).
+inline TakeoverOrders TakeoverStep(TakeoverModel &m, const TruckRaw &t, bool enabled, bool fromA = false)
 {
     TakeoverOrders o = {};
-    const int top = TruckTopGear(t);
-    // the model's gear, never lower than the engine can take at the speed the wheels turn, whatever the model holds
-    const int asked = modelGear < lowestFit ? lowestFit : modelGear;
-    const int want = asked < 1 ? 1 : asked > top ? top : asked;
-    m.since += dt;
-    if (m.tapped) m.tapFor += dt;
-    if (m.driving && (!enabled || !TruckEngineOn(t) || top < 1))
+    if (m.driving && !enabled)
     {
         m.driving = false;
         m.handBacks++;
-        m.lastHandBack = !enabled ? kTakeOff : kTakeGone;
+        m.lastHandBack = kTakeOff;
         o.gaveBack = true;
         return o;
     }
-    if (!enabled || !TruckEngineOn(t) || top < 1) return o;
-    if (!m.driving)
+    if (!m.driving && enabled && TruckEngineOn(t) && TruckTopGear(t) >= 1 && (!fromA || t.automatic))
     {
-        // taken in the gear the game is in: the model goes on from there (the caller puts its gear there)
-        if (!t.automatic || t.gear < 1 || t.gear > top) return o;
-        m = TakeoverModel{ true, t.powerFactor, t.gear, 0.0f, 0, m.handBacks, m.lastHandBack };
+        m.driving = true;
+        m.shifts = 0;
         o.took = true;
-        o.flagDown = true;
-        return o;
-    }
-    // reverse, neutral or the high gear (picked in A or not), a gear the mod did not set, or a low gear by its power:
-    // the player's
-    if (t.powerFactor > m.power) m.power = t.powerFactor;
-    const bool outside = t.gear < 1 || t.gear > top;
-    const bool lowGear = t.powerFactor < m.power - kTakeLowPower;
-    if (!outside && !lowGear && !t.automatic && t.gear != m.set && m.tapped && m.tapFor < kTakeHold)
-    {
-        // the game going back on its own automatic's pick: the mod's gear again, not a gear picked by hand
-        o.undone = true;
-        o.shiftTo = want;
-        if (m.set) m.shifts++;
-        m.set = want;
-        m.since = 0.0f;
-        return o;
-    }
-    const bool otherGear = outside || (!t.automatic && t.gear != m.set && m.since >= kTakeSettle);
-    if (otherGear || lowGear)
-    {
-        m.driving = false;
-        m.handBacks++;
-        m.lastHandBack = lowGear ? kTakeLow : kTakePicked;
-        o.gaveBack = true;
-        return o;
-    }
-    o.flagDown = t.automatic != 0;
-    if (t.automatic && t.gear != want)
-    {
-        // the game's own automatic picked a gear (the shift modifier tapped, or A picked again): the mod's gear back
-        o.tapped = t.gear;
-        m.tapped = true;
-        m.tapFor = 0.0f;
-    }
-    if (want != m.set || (t.automatic && t.gear != want))
-    {
-        o.shiftTo = want;
-        if (m.set) m.shifts++;
-        m.set = want;
-        m.since = 0.0f;
     }
     return o;
 }
 
-// The game did not take the gear the mod set (its shift function said no): the gear it is in counts as set, so the
-// mod tries again when the model next wants another gear, and the player's gear is told by the next one.
-inline void TakeoverRefused(TakeoverModel &m, const TruckRaw &t) { m.set = t.gear; }
-
 inline const char *TakeoverWhy(int reason)
 {
-    return reason == kTakePicked ? "a gear was picked by hand" : reason == kTakeLow ? "a low gear was picked by hand" : reason == kTakeOff ? "the setting is off" : reason == kTakeGone ? "the engine stopped" : "";
+    return reason == kTakeOff ? "the setting is off" : reason == kTakeGone ? "the truck is gone" : "";
+}
+
+// The automatic's gear for A: the model's, never lower than the engine can take at the speed the wheels turn
+// (lowestFit, GearboxLowestFit), and within the gears.
+inline int TakeoverAutoGear(const TruckRaw &t, int modelGear, int lowestFit)
+{
+    const int top = TruckTopGear(t), asked = modelGear < lowestFit ? lowestFit : modelGear;
+    return asked < 1 ? 1 : asked > top ? top : asked;
 }
 
 // ---- the pull test ----
@@ -2056,7 +1991,8 @@ static const float kGovernorBand = 0.1f;     // the governor gives full torque t
 static const float kEngineDrag = 0.4f;       // what the engine's friction and pumping take at the red zone, as a share of its most torque; it grows with the speed
 static const float kClutchStall = 0.5f;      // an engine dragged under this share of its idle speed dies
 static const float kStallRest = 2.0f;        // seconds a stalled engine stays dead in the model at the least, before it can be started again
-static const float kAutoClutchSpan = 0.25f;  // a clutch that works by itself holds fully this far from idle to the red zone
+static const float kAutoTakeUp = 0.9f;       // a clutch that works by itself slips with the engine this far to the pedal's governor speed
+static const float kAutoLockKmh = 15.0f;     // and from this speed up stays locked: a lugging engine stalls the game's way (kClutchHeatSlowKmh, the same)
 
 // The clutch pedal's grip, 0 to 1, from its travel, 0 let up to 1 pressed: nothing past kClutchFree, all of it short
 // of kClutchBite, and between them the bite, eased in.
@@ -2079,21 +2015,23 @@ struct ClutchModel
     bool dead;         // the engine stalled, and has not been started again
     float stalled;     // seconds left of the stall's rest
     bool automatic;    // the clutch works by itself (no pedal)
+    bool lugging;      // it does, locked at kAutoLockKmh or more with the engine held under its idle speed in gear: the
+                       // game's stall seconds rise (gauges.cpp), so the game's own notice shows and it dies by its rule
     int stalls;        // stalls since the model began
 };
 
-// One step of dt seconds of the engine behind a clutch, for a manual gearbox with a clutch pedal (a wheel's, through
-// the manual transmission mod; smt.h). c: the engine's torque curve; travel: the clutch pedal, 0 let up to 1 pressed;
+// One step of dt seconds of the engine behind a clutch, for a manual gearbox with a clutch pedal (the mod's own
+// gearbox in a position of the player's; gearbox_model.h). c: the engine's torque curve; travel: the clutch pedal, 0 let up to 1 pressed;
 // pedal: the shaped pedal and factor: the cold and the boost's share of the torque, both from the powertrain
 // (PowertrainModel::pedal, and ::cold times ::boost). The engine's governor holds the speed the pedal asks for (idle at
 // rest), with up to full torque; the clutch passes on up to its grip times kClutchHold. Let up, it turns the engine
 // with the gearbox where it can hold what the engine gives; slipping, it pulls the engine towards the gearbox's
 // speed. An engine dragged under kClutchStall of its idle speed stalls: a clutch let up too fast with the truck
 // standing, or in too high a gear at a crawl. A stalled engine is started again after kStallRest once the clutch is
-// pressed or no gear is in. automatic: no pedal, so travel is a button's (1 held) or 0, and the clutch takes hold by
-// the engine's speed, from none at idle to all of it kAutoClutchSpan on, and fully with the gearbox turning at idle
-// or over; it never stalls the engine. The wheels are the game's, so the model only follows them. Returns true on the
-// step the engine stalls.
+// pressed or no gear is in. automatic: no pedal, so travel is a button's (1 held) or 0, and the clutch rides as a
+// driver's foot would: the engine at kAutoTakeUp of the pedal's speed while it slips, until the gearbox's input has
+// come up to it (see below); it never stalls the engine. The wheels are the game's, so the model only follows them.
+// Returns true on the step the engine stalls.
 inline bool ClutchStep(ClutchModel &m, const TruckRaw &t, const GaugeScale &k, const TorqueCurve &c, float travel, float pedal, float factor, bool automatic, float dt)
 {
     if (!m.running)
@@ -2130,12 +2068,6 @@ inline bool ClutchStep(ClutchModel &m, const TruckRaw &t, const GaugeScale &k, c
         }
         return false;
     }
-    if (automatic && m.connected && m.input < k.idle)
-    {
-        // the clutch that works by itself: none of it at idle, all of it kAutoClutchSpan of the way to the red zone
-        const float g = SettingsRange((m.rpm - k.idle) / (range * kAutoClutchSpan), 0.0f, 1.0f);
-        m.grip = fminf(m.grip, g * g * (3.0f - 2.0f * g));
-    }
     // the governor: the speed the pedal asks for, and the torque to hold it, up to the curve's
     const float want = k.idle + range * kTachFree * SettingsRange(pedal, 0.0f, 1.0f);
     const float speed = m.rpm / k.redline;
@@ -2144,6 +2076,45 @@ inline bool ClutchStep(ClutchModel &m, const TruckRaw &t, const GaugeScale &k, c
     m.torque = SettingsRange((want - m.rpm) / (range * kGovernorBand), 0.0f, full);
     const float hold = m.grip * kClutchHold;
     const float rate = range / kEngineRevTime; // rpm each second for each share of the most torque
+    // the clutch that works by itself rides as a driver's foot would: it lets go when the gearbox's input falls under
+    // idle (the truck slowing in a gear), and while it slips the engine goes where the pedal asks, kAutoTakeUp of the
+    // governor's speed, at the free engine's pace, and the clutch passes on all the engine gives there, until the
+    // gearbox's input has come up to the engine's speed: then it locks. So it never drags the engine down, and a start
+    // in a gear the truck cannot pull keeps it slipping (and heating, ClutchHeat) as long as the pedal is down. A
+    // button held (grip 0) frees it, as a pedal pressed does. From kAutoLockKmh up it does not slip at all (the user's
+    // hill test, 27 October: at speed in too high a gear the game's own "engine stalling", not the clutch's heat): it
+    // stays locked, and an engine held under its idle speed lugs (lugging), for the game's stall seconds to rise
+    m.lugging = false;
+    const bool fast = isfinite(t.speed) && fabsf(t.speed) * 3.6f >= kAutoLockKmh;
+    if (automatic && m.connected && hold > 0.0f && fast)
+    {
+        m.locked = true;
+        m.rpm = m.input;
+        m.carried = m.torque - drag;
+        m.lugging = m.input < k.idle;
+        return false;
+    }
+    if (automatic && m.connected && hold > 0.0f)
+    {
+        if (m.locked && m.input < k.idle) m.locked = false;
+        if (!m.locked)
+        {
+            const float target = fmaxf(k.idle + (want - k.idle) * kAutoTakeUp, k.idle);
+            const float pace = fmaxf(full - drag, 0.1f) * rate * dt;
+            m.rpm = m.rpm < target ? fminf(m.rpm + pace, target) : fmaxf(m.rpm - pace, target);
+            // the engine gives what holds it there under the clutch's load: none of it at idle, all of it a tenth of
+            // the way to the red zone, so at rest in gear it takes nothing and a little pedal pulls away
+            const float bite = SettingsRange((m.rpm - k.idle) / (range * 0.1f), 0.0f, 1.0f);
+            m.torque = full * bite;
+            m.carried = SettingsRange(m.torque - drag, 0.0f, hold);
+            if (m.input >= m.rpm)
+            {
+                m.rpm = m.input;
+                m.locked = true;
+            }
+            return false;
+        }
+    }
     // locked: the engine turns with the gearbox while the clutch holds what the engine gives, or brakes with
     if (m.locked && (hold < fabsf(m.torque - drag) || m.grip <= 0.0f)) m.locked = false;
     if (m.locked)
@@ -2190,6 +2161,234 @@ inline void ClutchProbeText(const ClutchModel &m, float travel, char *out, size_
     sprintf_s(out, size, "clutch (not handed to the game yet): %s %.2f, grip %.2f, %s | engine %.0f rpm, gearbox %.0f rpm | torque %.2f, through the clutch %.2f | %d stalls",
               m.automatic ? "works by itself, button" : "pedal", travel, m.grip, !m.connected ? "no gear in" : m.locked ? "locked" : m.grip > 0.0f ? "slipping" : "free",
               m.rpm, m.input, m.torque, m.carried, m.stalls);
+}
+
+// ---- the clutch's heat ----
+// A slipping clutch under load turns power into heat: what it carries (ClutchModel::carried, a share of the engine's
+// most torque, 0 where it brakes) times the engine's most torque in the game's figures (EngineRecord::torque, times the
+// profile's Torque) times the slip (the engine's speed less the gearbox's, rad/s). The heat q rises by that power over
+// kClutchHeatCapacity and falls by kClutchCooling of itself a second; a locked or open clutch only cools. Past
+// kClutchBurnFrom the clutch burns: (q - kClutchBurnFrom) / kClutchBurnFrom * kClutchBurnRate of the gearbox's capacity
+// a second, dealt through the stall damage's path.
+//
+// The tuning. One unit of heat is a second of the stock truck's engine (Torque 195000, the d110's and a scout's
+// figure) carrying its most torque at 1000 rpm of slip: 195000 * 1000 * 2pi/60 = 2.04e7, kClutchHeatCapacity. With
+// P the power in those units and the cooling k, q(t) = P/k * (1 - e^-kt) from cold.
+//   - a floored start in third: the clutch carries about its most (1.0) at about 1600 rpm of slip, P = 1.6. With
+//     k = 0.05 (a clutch that cools from the burn point in about a minute), q reaches 2.85 at 1.87 s: kClutchBurnFrom.
+//     In the two seconds after, (q - 2.85)/2.85 grows to 0.98 summed over them, so kClutchBurnRate 0.1 costs the
+//     gearbox 0.098 of what it takes: about a tenth every two seconds.
+//   - three times the torque: P = 4.8, the burn begins at 0.60 s and costs 0.315 in the two seconds after: 3.2 times.
+//   - a hill held at half throttle on the slipping clutch: about half its most (0.5) at 1300 rpm, P = 0.65; q
+//     reaches 2.85 at 4.95 s.
+//   - a start in first with a normal slip: its most at 1200 rpm falling to none over 1.5 s, P from 1.2 to 0: 0.9 of
+//     heat at the most, a third of the burn point.
+//   - the clutch that works by itself (keyboard, pad, a button clutch), floored from a standstill (models test, a truck
+//     of gears 3, 6, 12 and 16 gaining 2000 rpm of input a second a share in first, by the square of the gears'
+//     speeds in the others): the engine goes to kAutoTakeUp 0.9 of the pedal's speed at the free engine's pace and
+//     the clutch passes on what the engine gives there until the input comes up to it. First at most 0.57 of the burn
+//     point, second 1.66; third burns after 3.5 s, fourth after 3.2 s, a gear the truck cannot pull at all after 2.8
+//     s (the engine's rise to the take-up speed is what sets that floor). Take-ups of 0.5, 0.7 and 1.0 gave third no
+//     burn, 3.9 s and 3.5 s with first 0.37, 0.47 and 0.61.
+//
+// The retune after the user's first test (26 October: "the damage works, but it queues up damage. so when you repair it
+// will keep damaging. also, theres no warning notice like when tires wear. the damage also comes so fast that theres no
+// chance to react"): the cost is dealt only while the clutch slips under load past the burn point, never from stored
+// heat (locked or open it only cools, and what it owed is dropped), a repair clears the heat, and a warning box shows
+// first (ClutchWarn, as the tire mod's TIRE DAMAGE box): amber from half the burn point (kClutchWarnFrom), red from it. On the clutch model's
+// own states (the automatic clutch floored in third on the models test's truck) the heat is 1.76 at 2 s, 3.17 at 4 s
+// and 4.04 at 6 s; stuck in a gear it cannot pull, 1.97 at 2 s and 3.98 at 4 s. So kClutchBurnFrom 3.2 puts amber at
+// about 1.9 s and red at about 4 s in third, red at about 3.2 s stuck, and a first-gear start (0.57 at the most) never
+// brings the warning up. From red the clutch costs kClutchBurnRate times q / kClutchBurnFrom of the gearbox's capacity a
+// second: 0.025 at red, about a twentieth every two seconds while the slip goes on, half of the first tuning's pace.
+//
+// After the user's second test (26 October: uphill, pinned while trying to shift down, it "started overheating veeery
+// quickly, and didn't go back down for a good while"): the clutch cools in seconds once it grips. kClutchCooling
+// ln 2 / 4 = 0.173 halves the heat in 4 s with the clutch locked or open (0.05 took 14 s), so from the end of a red
+// slip (about 4.5 in third) the box is amber after about 2 s and gone after about 6, from a stuck start (about 6.3)
+// gone after about 8. The faster cooling also takes heat away during a slip, so kClutchHeatCapacity came down from
+// 2.04e7 to 1.6e7 to keep the pace on the clutch model's states: the automatic clutch floored in third amber after
+// 1.6 s and red after 4.0 s, fourth red after 3.4 s, a gear it cannot pull after 2.9 s, first 0.66 at most (1.7e7 gave
+// red after 4.6 s, 1.8e7 none in third, 1.4e7 after 3.1 s). And the heating goes by the truck's speed
+// (ClutchHeatShare): full under kClutchHeatFullKmh, a fifth from kClutchHeatSlowKmh up, linear between, as a clutch
+// slipping while the truck rolls is a short event and a truck pinned at a crawl is the abuse; cooling is not scaled.
+// So a start from a standstill keeps the pace above, a crawl up a hill at 8 km/h heats at 0.76 of it, and from 15 km/h
+// it heats five times slower.
+static const float kClutchHeatCapacity = 1.6e7f; // game torque times rad/s times s for one unit of heat
+static const float kClutchCooling = 0.173f;      // the share of its heat the clutch loses a second: half of it in 4 s
+static const float kClutchHeatFullKmh = 5.0f;    // under this speed the clutch heats at its full rate
+static const float kClutchHeatSlowKmh = 15.0f;   // from this speed up at kClutchHeatSlowShare of it
+static const float kClutchHeatSlowShare = 0.2f;
+static const float kClutchBurnFrom = 3.2f;        // the heat from which it burns (the lamp red)
+static const float kClutchWarnFrom = 1.6f;        // the heat from which the lamp warns amber
+static const float kClutchBurnRate = 0.025f;      // the gearbox's capacity a second it costs at kClutchBurnFrom, more as it gets hotter
+enum { kClutchLampOff, kClutchLampAmber, kClutchLampRed, kClutchLampDealing }; // ClutchLamp: the clutch's state for its warning box
+
+struct ClutchHeat
+{
+    // A kind of truck the model has driven (TruckKeyNumber of its key), its clutch's heat and the model's clock when
+    // it was last driven, as the temperatures keep theirs (TempModel). id 0 is a free place.
+    struct Truck { uint64_t id; float q; double left; } truck[kTempTrucks];
+    bool known;     // truck[at] is the truck being driven
+    int at;
+    double clock;   // seconds the model has been stepped for
+    float q;        // the driven truck's clutch heat
+    float power;    // the last step's power, in units of heat a second
+    bool burning;   // q is past kClutchBurnFrom
+    bool dealing;   // and the clutch slips under load with on: the burn costs on this step
+    float owed;     // the share of the gearbox's capacity the burn has cost and is not dealt yet (with on)
+};
+
+// One step of dt seconds for a truck of the kind id (never 0). c: its clutch (an empty one while the mod's gearbox has
+// no position of the player's: it only cools); torque: the engine's most in the game's figures, times its profile's
+// share (0 not known: no heat). on: Damage and ClutchBurn; off, the heat is kept but costs nothing. A kind driven
+// before has cooled for as long as other trucks were driven. A change of truck forgives what the burn owed and was not
+// dealt yet (owed, less than one of the gearbox's points); the heat itself stays with the kind (review 10, D6).
+// kmh: the truck's speed (its size), by which the heating goes (ClutchHeatShare, below); 0 standing. rate: the
+// heating's scale, ClutchHeatPercent / 100 (1 the model's own pace); the cooling is not scaled.
+inline float ClutchHeatShare(float kmh);
+inline void ClutchHeatStep(ClutchHeat &h, uint64_t id, const ClutchModel &c, float torque, bool on, float dt, float kmh = 0.0f, float rate = 1.0f)
+{
+    if (!h.known || h.truck[h.at].id != id)
+    {
+        if (h.known) h.truck[h.at].left = h.clock;
+        int to = -1, room = -1;
+        for (int i = 0; i < kTempTrucks; i++)
+        {
+            const ClutchHeat::Truck &k = h.truck[i];
+            if (k.id == id) to = i;
+            if (h.known && i == h.at) continue;
+            if (room < 0 || (h.truck[room].id && (!k.id || k.left < h.truck[room].left))) room = i;
+        }
+        if (to >= 0) h.truck[to].q *= expf(-kClutchCooling * (float)(h.clock - h.truck[to].left));
+        else
+        {
+            to = room;
+            h.truck[to] = { id, 0.0f, h.clock };
+        }
+        h.at = to;
+        h.known = true;
+        h.owed = 0.0f;
+        h.burning = false;
+    }
+    float &q = h.truck[h.at].q;
+    const bool slipping = c.running && c.connected && !c.locked && !c.dead;
+    const float slip = slipping ? fmaxf(c.rpm - c.input, 0.0f) * 6.2831853f / 60.0f : 0.0f;
+    h.power = slipping && torque > 0.0f ? fmaxf(c.carried, 0.0f) * torque * slip / kClutchHeatCapacity * ClutchHeatShare(kmh) * fmaxf(rate, 0.0f) : 0.0f;
+    q = fmaxf(q + (h.power - q * kClutchCooling) * dt, 0.0f);
+    h.q = q;
+    h.burning = q > kClutchBurnFrom;
+    // the cost only while it slips under load past the burn point: stored heat costs nothing, and what was owed when
+    // the slip ended is dropped, so the cost stops the moment the clutch grips or the pedal comes up
+    h.dealing = on && h.burning && h.power > 0.0f;
+    if (h.dealing) h.owed = fminf(h.owed + q / kClutchBurnFrom * kClutchBurnRate * dt, 1.0f);
+    else h.owed = 0.0f;
+    h.clock += dt;
+    h.truck[h.at].left = h.clock;
+}
+
+// The share of the clutch's heating at a truck's speed: 1 under kClutchHeatFullKmh, kClutchHeatSlowShare from
+// kClutchHeatSlowKmh up, linear between.
+inline float ClutchHeatShare(float kmh)
+{
+    const float x = SettingsRange((kmh - kClutchHeatFullKmh) / (kClutchHeatSlowKmh - kClutchHeatFullKmh), 0.0f, 1.0f);
+    return 1.0f - (1.0f - kClutchHeatSlowShare) * x;
+}
+
+// A repair (the gearbox's damage as read fell: the game's repair or a repair point): the driven truck's clutch cold
+// again, and nothing owed.
+inline void ClutchHeatRepair(ClutchHeat &h)
+{
+    if (h.known) h.truck[h.at].q = 0.0f;
+    h.q = h.power = h.owed = 0.0f;
+    h.burning = h.dealing = false;
+}
+
+// The clutch's state by the heat: off under kClutchWarnFrom, amber from it, red from kClutchBurnFrom, and dealing
+// while the burn costs.
+inline int ClutchLamp(const ClutchHeat &h)
+{
+    return h.dealing ? kClutchLampDealing : h.q >= kClutchBurnFrom ? kClutchLampRed : h.q >= kClutchWarnFrom ? kClutchLampAmber : kClutchLampOff;
+}
+
+// ---- the warning boxes (gauges.h, WarnBox: the tire mod's TIRE DAMAGE box, the same shape, below it) ----
+
+// The clutch's box, with ClutchBurn and Damage on (on): amber from half the burn point, red from it; the number is the
+// heat in percent of the burn point, at most 100.
+inline WarnBox ClutchWarn(const ClutchHeat &h, bool on)
+{
+    WarnBox w = { kWarnNone, "", "", 0 };
+    if (!on) return w;
+    const int lamp = ClutchLamp(h);
+    if (lamp == kClutchLampOff) return w;
+    w.percent = (int)fminf(h.q / kClutchBurnFrom * 100.0f, 100.0f);
+    if (lamp == kClutchLampAmber)
+    {
+        w.state = kWarnAmber;
+        w.title = "CLUTCH HOT";
+        w.line = "Ease off or shift down";
+    }
+    else
+    {
+        w.state = kWarnRed;
+        w.title = "CLUTCH DAMAGE";
+        w.line = "Shift down, the clutch is wearing"; // the cost lands on the game's gearbox part; the words speak of the clutch
+    }
+    return w;
+}
+
+// The engine's box, with Damage on (on): amber from the coolant's red zone mark (kTempRed), red while the heat costs the
+// engine (hot: DamageHot above 0); the number is the coolant's degrees over the red mark in percent of the way to
+// kTempHotDamage, at most 100. Red with the boost at the turbo's full and the pedal floored (fullBoost) it reads DANGER TO
+// MANIFOLD, a line from a film, with "Keep an eye on the floor pan", and ENGINE DAMAGE again the moment the boost drops;
+// once a point of the heat's damage has landed on the engine under that title (dealt), "The floor pan fell off" for the
+// rest of that red spell (floorPan, kept by the caller from pass to pass, cleared once the box is amber or gone).
+inline WarnBox EngineWarn(float coolant, float hot, bool on, bool fullBoost, bool dealt, bool &floorPan)
+{
+    WarnBox w = { kWarnNone, "", "", 0 };
+    if (!on || !(coolant >= kTempRed || hot > 0.0f))
+    {
+        floorPan = false;
+        return w;
+    }
+    w.percent = (int)fminf(fmaxf((coolant - kTempRed) / (kTempHotDamage - kTempRed) * 100.0f, 0.0f), 100.0f);
+    if (hot > 0.0f)
+    {
+        w.state = kWarnRed;
+        if (fullBoost && dealt) floorPan = true;
+        w.title = fullBoost ? "DANGER TO MANIFOLD" : "ENGINE DAMAGE";
+        w.line = floorPan ? "The floor pan fell off" : fullBoost ? "Keep an eye on the floor pan" : "Ease off, the engine is wearing";
+    }
+    else
+    {
+        floorPan = false;
+        w.state = kWarnAmber;
+        w.title = "ENGINE HOT";
+        w.line = "Ease off, the coolant is in the red";
+    }
+    return w;
+}
+
+// The boost at the turbo's full with the pedal floored, for EngineWarn: the bar within 3 percent of the boost's top
+// (scale.boost) and the pedal past 95 percent.
+inline bool BoostFull(float bar, float boostMax, float pedal) { return boostMax > 0.0f && bar >= boostMax * 0.97f && pedal >= 0.95f; }
+
+// What the burn owes, in whole points of a gearbox that takes capacity, posted to the stall damage's job (truck.h,
+// StallJob) as a percent of it. The points posted; 0 while less than one is owed or the job is busy.
+inline int ClutchBurnPost(ClutchHeat &h, StallJob &j, const TruckRefs &r, int capacity, unsigned long long now)
+{
+    if (!(h.owed > 0.0f) || capacity <= 0) return 0;
+    const float points = floorf(h.owed * (float)capacity);
+    if (points < 1.0f || !StallJobPost(j, r, points / (float)capacity * 100.0f, now, true)) return 0;
+    h.owed = fmaxf(h.owed - points / (float)capacity, 0.0f);
+    return (int)points;
+}
+
+// The heat in a few words for the probe's clutch line.
+inline void ClutchHeatProbeText(const ClutchHeat &h, char *out, size_t size)
+{
+    static const char *const lamp[] = { "none", "amber", "red", "red: the gearbox pays" };
+    sprintf_s(out, size, " | heat %.2f, %.0f %% of the burn point, %.2f a second, the warning %s", h.q, h.q / kClutchBurnFrom * 100.0f, h.power, lamp[ClutchLamp(h)]);
 }
 
 // ---- the brake air ----
@@ -2366,11 +2565,14 @@ inline void DamageProbeText(const TruckRaw &t, const EngineRecord &e, const Dama
     if (e.found) sprintf_s(record, "record %.80s: takes %d, the torque falls past %.2f of it, from x%.2f to x%.2f", e.name, e.capacity, e.threshold, e.torqueMin, e.torqueMax);
     else if (!e.name[0]) sprintf_s(record, "the engine's record is looked up once the truck is driven");
     else sprintf_s(record, "no record of the engine \"%.80s\"", e.name);
+    char gearbox[64];
+    if (t.gearboxKnown) sprintf_s(gearbox, "gearbox damage %d of %d, effect %.3f", t.gearboxDamage, t.gearboxCapacity, t.gearboxEffect);
+    else sprintf_s(gearbox, "gearbox damage not read");
     sprintf_s(out, size,
-              "engine damage %d of %d, effect %.3f, torque x%.3f; by the game's rule effect %.3f and torque x%.3f (%s) | all parts %d of %d | %s | "
+              "engine damage %d of %d, effect %.3f, torque x%.3f; by the game's rule effect %.3f and torque x%.3f (%s) | %s | all parts %d of %d | %s | "
               "the model: %.2f %% a minute from the heat, %.2f from the cold, %.2f of a point owed, Damage %s",
               t.damage, t.damageCapacity, t.damageEffect, t.torqueFactor, effect, torque, !e.found ? "a guess without the record" : same ? "as read" : "NOT as read",
-              t.damageSum, t.damageSumCapacity, record, m.hot, m.cold, m.owed, s.damage ? "on" : "off");
+              gearbox, t.damageSum, t.damageSumCapacity, record, m.hot, m.cold, m.owed, s.damage ? "on" : "off");
 }
 
 // The models' numbers in a line of text for the probe log.
