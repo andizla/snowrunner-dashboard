@@ -56,6 +56,7 @@ enum { kAspTurbo, kAspNatural, kAspCount };                  // an engine's prof
 struct GaugeSettings
 {
     int layout;              // Layout: 0 a strip along the bottom centre, 1 a block in the bottom right corner
+    bool swapDials;          // SwapDials: the speedometer and the tachometer change places, in both layouts
     int style;               // Style: 0 solid dial faces, 1 tinted (see-through) faces, 2 open (no faces, the scale arcs only)
     float faceOpacity;       // FaceOpacity: how dark the tinted faces are, 0 = clear
     float offsetX, offsetY;  // OffsetX, OffsetY: moves the cluster from its place, in pixels of a 1080p screen (right and down)
@@ -97,6 +98,7 @@ inline void SettingsDefaults(GaugeSettings &s)
 {
     s = GaugeSettings{};
     s.layout = kLayoutStrip;
+    s.swapDials = false;
     s.style = kFaceOpen;
     s.faceOpacity = 0.35f;
     s.scale = 1.0f;

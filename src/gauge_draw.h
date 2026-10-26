@@ -28,6 +28,7 @@ static const FontStyle kGaugeStyles[kGsStyleCount] = {
 struct GaugeLayout
 {
     int variant;                    // 0 = strip (bottom centre), 1 = block (bottom right)
+    bool swapDials;                 // the speedometer where the tachometer is and the tachometer where the speedometer is
     bool showTemp, showBoost, showAir, showLamps;
     int oilGauge;                   // the oil temperature: kOilOff, kOilNeedle (a second needle in the temperature dial), kOilDial (a dial of its own)
     float faceAlpha;                // 1 = solid dial faces; lower = see-through (the game shows through, drop shadows under the marks)
@@ -783,10 +784,12 @@ static void GaugeDraw(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float 
     s_faceAlpha = s_open ? 0.0f : lay.faceAlpha;
     if (lay.variant == 0)
     {
-        // a strip: [oil][temp][fuel] [SPEED] lamps [TACH] [boost][air], the range under the fuel dial
+        // a strip: [oil][temp][fuel] [SPEED] lamps [TACH] [boost][air], the range under the fuel dial; with swapDials
+        // the two big dials change places and the rest stays
         const float R = 72.0f * u, r = 42.0f * u, cy = origin.y - 96.0f * u, cx = origin.x;
-        GSpeedo(dl, f, ImVec2(cx - 98.0f * u, cy), R, u, a, st);
-        GTacho(dl, f, ImVec2(cx + 98.0f * u, cy), R, u, a, st);
+        const float side = lay.swapDials ? -1.0f : 1.0f;
+        GSpeedo(dl, f, ImVec2(cx - side * 98.0f * u, cy), R, u, a, st);
+        GTacho(dl, f, ImVec2(cx + side * 98.0f * u, cy), R, u, a, st);
         if (lay.showLamps) GLamps(dl, f, ImVec2(cx, cy), 2, 20.0f * u, 3.5f * u, u, a, st);
         float x = cx - 98.0f * u - R - 10.0f * u - r;
         GFuel(dl, f, ImVec2(x, cy + 20.0f * u), r, u, a, st);
@@ -802,8 +805,8 @@ static void GaugeDraw(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float 
         // a block: speed and rpm with the lamps between them, the small dials in a row below, the range last
         const float R = 58.0f * u, r = 36.0f * u;
         const float y1 = origin.y - 196.0f * u, y2 = origin.y - 62.0f * u;
-        GSpeedo(dl, f, ImVec2(origin.x - 238.0f * u, y1), R, u, a, st);
-        GTacho(dl, f, ImVec2(origin.x - 76.0f * u, y1), R, u, a, st);
+        GSpeedo(dl, f, ImVec2(origin.x - (lay.swapDials ? 76.0f : 238.0f) * u, y1), R, u, a, st);
+        GTacho(dl, f, ImVec2(origin.x - (lay.swapDials ? 238.0f : 76.0f) * u, y1), R, u, a, st);
         if (lay.showLamps) GLamps(dl, f, ImVec2(origin.x - 157.0f * u, y1), 2, 17.5f * u, 3.5f * u, u, a, st);
         int n = 1 + (lay.oilGauge == kOilDial ? 1 : 0) + (lay.showTemp ? 1 : 0) + (lay.showBoost ? 1 : 0) + (lay.showAir ? 1 : 0);
         const float pitch = 2.0f * r + 10.0f * u;
@@ -829,6 +832,7 @@ static GaugeLayout GaugeLayoutOf(const GaugeSettings &s)
 {
     GaugeLayout lay = {};
     lay.variant = s.layout == kLayoutBlock ? 1 : 0;
+    lay.swapDials = s.swapDials;
     lay.showTemp = s.showTemp;
     lay.showBoost = s.showBoost;
     lay.showAir = s.showAir && s.tachClass != kClassScout; // scouts brake by hydraulics: no air to show

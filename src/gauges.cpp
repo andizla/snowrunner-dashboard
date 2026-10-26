@@ -284,6 +284,7 @@ static void WriteIni(const GaugeSettings &s)
     auto num = [&](const wchar_t *key, float v) { IniPutFloat(kIniSection, key, v, ini); };
     auto whole = [&](const wchar_t *key, int v) { IniPutInt(kIniSection, key, v, ini); };
     whole(L"Layout", s.layout);
+    whole(L"SwapDials", s.swapDials ? 1 : 0);
     whole(L"Style", s.style);
     num(L"FaceOpacity", s.faceOpacity);
     num(L"OffsetX", s.offsetX);
@@ -551,6 +552,7 @@ static void ReadIni(GaugeSettings &s)
             fwprintf(f, L"; Gauges: the gauge cluster of Next Gen Gameplay for the truck being driven, drawn by the mod itself.\n"
                         L"; The Gameplay tab of the NEXT GEN menu (F2 opens it, or the key in NextGen.ini) edits everything here in the game.\n"
                         L"; Layout: 0 = a strip along the bottom centre, 1 = a block in the bottom right corner.\n"
+                        L"; SwapDials=1 puts the speedometer where the tachometer is and the tachometer where the speedometer is, in both layouts.\n"
                         L"; Style: 0 = solid dial faces, 1 = tinted see-through faces (FaceOpacity 0 to 0.85 sets how dark),\n"
                         L"; 2 = open: no faces, only the scales, numbers and needles.\n"
                         L"; OffsetX and OffsetY move the cluster from its place, in pixels of a 1080p screen (right and down).\n"
@@ -636,6 +638,7 @@ static void ReadIni(GaugeSettings &s)
         Log(L"settings: %d trucks' scales and %d gearboxes' holds moved out of Gauges.ini, each into a file of its own in Gauges\\trucks and "
             L"Gauges\\gearboxes", moved[kSetupTruck], moved[kSetupGearbox]);
     s.layout = IniInt(L"Layout", s.layout, ini);
+    s.swapDials = IniBool(L"SwapDials", s.swapDials, ini);
     s.style = IniInt(L"Style", s.style, ini);
     s.faceOpacity = IniFloat(L"FaceOpacity", s.faceOpacity, ini);
     s.offsetX = IniFloat(L"OffsetX", s.offsetX, ini);
@@ -1449,7 +1452,8 @@ static void LogSettings(const GaugeSettings &s)
     KeyName(s.toggleKey, key, sizeof key);
     static const wchar_t *oils[kOilGaugeCount] = { L"", L", the oil as a second needle in the temperature dial", L", the oil in a dial of its own" },
                          *profiles[kSpoolCount] = { L"standard", L"small and quick", L"big and slow", L"two stages" };
-    Log(L"settings: %s layout, %s style, size x%g, opacity %g, offset %g / %g, dials:%s%s%s%s%s", layouts[s.layout], styles[s.style], s.scale, s.opacity, s.offsetX,
+    Log(L"settings: %s layout%s, %s style, size x%g, opacity %g, offset %g / %g, dials:%s%s%s%s%s", layouts[s.layout],
+        s.swapDials ? L" with the speedometer and the tachometer swapped" : L"", styles[s.style], s.scale, s.opacity, s.offsetX,
         s.offsetY, s.showTemp ? L" temperature" : L"", s.showBoost ? L" boost" : L"", s.showAir ? L" air" : L"", s.showLamps ? L" lamps" : L"", oils[s.oilGauge]);
     Log(L"settings: %s scales: idle %.0f rpm, red zone from %.0f of %.0f, speedometer to %.0f km/h, boost to %g bar, a %s turbo; units %s, %s, %s", classes[s.tachClass], k.idle,
         k.redline, k.max, k.speedMax, k.boost, profiles[s.boostProfile], s.mph ? L"mph" : L"km/h", s.psi ? L"psi" : L"bar", s.fahrenheit ? L"F" : L"C");
@@ -2700,7 +2704,7 @@ volatile LONG g_pageCapturing = 0, g_modOff = 0;
 
 static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
 {
-    return a.layout == b.layout && a.style == b.style && a.faceOpacity == b.faceOpacity && a.offsetX == b.offsetX && a.offsetY == b.offsetY &&
+    return a.layout == b.layout && a.swapDials == b.swapDials && a.style == b.style && a.faceOpacity == b.faceOpacity && a.offsetX == b.offsetX && a.offsetY == b.offsetY &&
            a.scale == b.scale && a.opacity == b.opacity && a.mph == b.mph && a.psi == b.psi && a.fahrenheit == b.fahrenheit && a.showTemp == b.showTemp &&
            a.showBoost == b.showBoost && a.showAir == b.showAir && a.showLamps == b.showLamps && a.tachClass == b.tachClass && a.idleRpm == b.idleRpm &&
            a.redlineRpm == b.redlineRpm && a.maxRpm == b.maxRpm && a.speedMax == b.speedMax && a.boostMax == b.boostMax && a.toggleKey == b.toggleKey &&
@@ -2732,7 +2736,7 @@ int wmain(int argc, wchar_t **argv)
     const bool written = GetFileAttributesW(ini.c_str()) != INVALID_FILE_ATTRIBUTES;
     ReadIni(b);
     Check(gone && written && SameSettings(a, d) && SameSettings(b, d), "ini: a missing ini is written with the defaults and reads back as them");
-    Check(d.layout == kLayoutStrip && d.style == kFaceOpen && !d.showAir && !d.demo && d.probe == 0 && !d.mph && !d.psi && !d.fahrenheit && d.toggleKey == 0 &&
+    Check(d.layout == kLayoutStrip && !d.swapDials && d.style == kFaceOpen && !d.showAir && !d.demo && d.probe == 0 && !d.mph && !d.psi && !d.fahrenheit && d.toggleKey == 0 &&
           !strcmp(d.padToggle, "None") && d.rollWarnDeg == 15.0f && d.rollDangerDeg == 25.0f && d.pitchDangerDeg == 35.0f,
           "defaults: strip, open style, metric, the air dial off, no toggle, demo off, probe off, the tilt lamp at 15, 25 and 35 degrees");
     Check(d.warmUpMinutes == 3.0f && d.overheatMinutes == 1.5f && d.coolDownMinutes == 15.0f && d.ambientC == 15.0f && d.ambientByMap,
@@ -2747,6 +2751,7 @@ int wmain(int argc, wchar_t **argv)
     WritePrivateProfileStringW(L"Other", L"Kept", L"yes", ini.c_str());
     c = d;
     c.layout = kLayoutBlock;
+    c.swapDials = true;
     c.style = kFaceTinted;
     c.faceOpacity = 0.6f;
     c.offsetX = -212.5f;
@@ -2788,7 +2793,7 @@ int wmain(int argc, wchar_t **argv)
     c.engineShare = 80;
     c.oilWarmUpMinutes = 12.5f;
     c.oilWarnC = 132.0f;
-    const bool allChanged = c.layout != d.layout && c.style != d.style && c.faceOpacity != d.faceOpacity && c.offsetX != d.offsetX && c.offsetY != d.offsetY &&
+    const bool allChanged = c.layout != d.layout && c.swapDials != d.swapDials && c.style != d.style && c.faceOpacity != d.faceOpacity && c.offsetX != d.offsetX && c.offsetY != d.offsetY &&
                             c.scale != d.scale && c.opacity != d.opacity && c.mph != d.mph && c.psi != d.psi && c.fahrenheit != d.fahrenheit &&
                             c.showTemp != d.showTemp && c.showBoost != d.showBoost && c.showAir != d.showAir && c.showLamps != d.showLamps &&
                             c.tachClass != d.tachClass && c.idleRpm != d.idleRpm && c.redlineRpm != d.redlineRpm && c.maxRpm != d.maxRpm &&
@@ -2819,7 +2824,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 75, "ini: the help text survives a write (75 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 76, "ini: the help text survives a write (76 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());

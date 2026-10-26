@@ -7,6 +7,7 @@
 // drawn over it, otherwise over a plain backdrop. Writes, in <out dir>:
 //   strip_open.png, strip_tinted.png, strip_solid.png   the strip layout in each style on a 1920 x 1080 screen, demo values
 //   block_open.png, block_tinted.png, block_solid.png   the block layout, the same
+//   strip_swapped.png, block_swapped.png   both layouts with the speedometer and the tachometer swapped (SwapDials)
 //   strip_2160p.png    the default settings on a 3840 x 2160 screen
 //   strip_states.png   the strip at twice its size: a cold start, the demo values, overheating on a slope
 //   block_states.png   the block, the same three states
@@ -274,14 +275,16 @@ int wmain(int argc, wchar_t **argv)
     const GaugeState states[3] = { cold, drive, hot };
 
     // both layouts in the three styles, where the mod puts them on a 1080p screen
-    static const struct { const wchar_t *name; int layout, style; } looks[6] = {
+    static const struct { const wchar_t *name; int layout, style; bool swap; } looks[8] = {
         { L"strip_open.png", kLayoutStrip, kFaceOpen }, { L"strip_tinted.png", kLayoutStrip, kFaceTinted }, { L"strip_solid.png", kLayoutStrip, kFaceSolid },
-        { L"block_open.png", kLayoutBlock, kFaceOpen }, { L"block_tinted.png", kLayoutBlock, kFaceTinted }, { L"block_solid.png", kLayoutBlock, kFaceSolid } };
+        { L"block_open.png", kLayoutBlock, kFaceOpen }, { L"block_tinted.png", kLayoutBlock, kFaceTinted }, { L"block_solid.png", kLayoutBlock, kFaceSolid },
+        { L"strip_swapped.png", kLayoutStrip, kFaceOpen, true }, { L"block_swapped.png", kLayoutBlock, kFaceOpen, true } };
     for (const auto &l : looks)
     {
         GaugeSettings s = def;
         s.layout = l.layout;
         s.style = l.style;
+        s.swapDials = l.swap;
         Screen(out, l.name, fonts, 1920, 1080, s, drive);
     }
     Screen(out, L"strip_2160p.png", fonts, 3840, 2160, def, drive);

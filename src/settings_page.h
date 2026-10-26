@@ -102,6 +102,9 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     PageLabel("Layout", labelX);
     ImGui::SetNextItemWidth(w);
     changed(ImGui::Combo("##layout", &s.layout, layouts, kLayoutCount));
+    PageLabel("Swap dials", labelX);
+    changed(ImGui::Checkbox("##swapdials", &s.swapDials));
+    PageTip("The speedometer and the tachometer change places.");
     static const char *styles[kFaceCount] = { "Solid", "Tinted", "Open" };
     PageLabel("Style", labelX);
     ImGui::SetNextItemWidth(w);
