@@ -2327,9 +2327,12 @@ static DWORD WINAPI Run(void *)
         keyDown = keyNow;
         const LONG capture = g_pageCapturing;
         const bool capturing = capture && GetTickCount() - (DWORD)capture < 500;
-        const uint32_t pad = padMask && front && !capturing ? PadButtons() : 0;
+        const uint32_t padHeld = padMask && front && !capturing ? PadButtons() : 0;
+        // not while the NEXT GEN menu has the pad. What is held then still counts as held on the last pass, so a toggle
+        // held as the menu opens or closes is no press when it closes
+        const uint32_t pad = NgMenuOpen() ? 0 : padHeld;
         if (padMask && (pad & padMask) == padMask && (padPrev & padMask) != padMask) toggle = true;
-        padPrev = pad;
+        padPrev = padHeld;
         if (toggle)
         {
             visible = !visible;
