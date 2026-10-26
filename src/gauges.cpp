@@ -633,11 +633,11 @@ static void ReadIni(GaugeSettings &s)
                         L"; GearR, GearA, GearUp, GearDown, Clutch, RangeHigh, RangeLow. A binding is Key <name or code>, Pad <buttons with +>,\n"
                         L"; Wheel <n> Button <n>, Wheel <n> POV [<n>] Up/Right/Down/Left, Wheel <n> Axis <n> [inverted] (the clutch), or None.\n"
                         L"; The tab's Gearbox section binds them by a press. Without a key in the ini the defaults below hold:\n"
-                        L";   BindGearUp=Key PageUp\n"
-                        L";   BindGearDown=Key PageDown\n"
-                        L";   BindGearN=Key Home\n"
-                        L";   BindGearR=Key End\n"
-                        L";   BindGearA=Key Insert\n"
+                        L";   BindGearUp=Key Num 8\n"
+                        L";   BindGearDown=Key Num 2\n"
+                        L";   BindGearN=Key Num 5\n"
+                        L";   BindGearR=Key Num 0\n"
+                        L";   BindGearA=Key Num 7\n"
                         L"; RequireClutch=1 stalls the engine on a shift into a gear without the clutch, RequireGearHeld=1 goes to N while no\n"
                         L"; gear key is held (an H shifter with every gear bound), SkipNeutral=1 steps from gear 1 to reverse and back past N.\n"
                         L"; Input is what you drive with: 0 a wheel's pedals, 1 a pad's trigger, 2 the keyboard. The mod's automatic kicks\n"
@@ -1002,15 +1002,17 @@ static void SettingsWrite(SettingsState &st)
 
 // ---- the gearbox's bindings: the [Gearbox] section of Gauges.ini ----
 // One key per action and slot, Bind<Action> and Bind<Action>2, in the reader's text forms (input_bindings.h:
-// "Key PageUp", "Pad LB+DPadDown", "Wheel 1 Button 5", "Wheel 1 POV Up", "Wheel 1 Axis 3 inverted", "None"). A key
-// not there keeps the default: up, down, N, R and A on keys the game does not drive with.
+// "Key Num 8", "Pad LB+DPadDown", "Wheel 1 Button 5", "Wheel 1 POV Up", "Wheel 1 Axis 3 inverted", "None"). A key
+// not there keeps the default: up, down, N, R and A on the number pad, which the game, the shipped ReShade.ini (Home
+// alone) and the usual mods leave alone.
 static_assert(kActCount <= kViewActions, "the view holds the bindings of every action");
 static const wchar_t *const kBindSection = L"Gearbox";
 
 static void BindingsDefault(GearBindings &b)
 {
     b = GearBindings{};
-    static const struct { int action, vk; } keys[] = { { kActUp, VK_PRIOR }, { kActDown, VK_NEXT }, { kActGearN, VK_HOME }, { kActGearR, VK_END }, { kActGearA, VK_INSERT } };
+    static const struct { int action, vk; } keys[] = { { kActUp, VK_NUMPAD8 }, { kActDown, VK_NUMPAD2 }, { kActGearN, VK_NUMPAD5 }, { kActGearR, VK_NUMPAD0 },
+                                                       { kActGearA, VK_NUMPAD7 } };
     for (const auto &k : keys) b.slot[k.action][0] = Binding{ kBindKey, 0, (uint32_t)k.vk, 0, false };
 }
 
@@ -3833,8 +3835,17 @@ int wmain(int argc, wchar_t **argv)
         BindingsDefault(b);
         const bool none = !BindingsInIni(bindIni);
         BindingsRead(bindIni, b, false);
-        const bool defaults = b.slot[kActUp][0].kind == kBindKey && b.slot[kActUp][0].code == VK_PRIOR && b.slot[kActGearA][0].code == VK_INSERT &&
-                              b.slot[kActGearR][0].code == VK_END && !b.slot[kActClutch][0].kind && BindingsCanReverse(b);
+        const bool defaults = b.slot[kActUp][0].kind == kBindKey && b.slot[kActUp][0].code == VK_NUMPAD8 && b.slot[kActDown][0].code == VK_NUMPAD2 &&
+                              b.slot[kActGearN][0].code == VK_NUMPAD5 && b.slot[kActGearA][0].code == VK_NUMPAD7 && b.slot[kActGearR][0].code == VK_NUMPAD0 &&
+                              !b.slot[kActClutch][0].kind && BindingsCanReverse(b);
+        // the number pad's operators by name, and back from it
+        char plus[16], dot[16];
+        KeyName(VK_ADD, plus, sizeof plus);
+        KeyName(VK_DECIMAL, dot, sizeof dot);
+        Binding numPlus = {};
+        char numWhy[64];
+        const bool named = !strcmp(plus, "Num +") && !strcmp(dot, "Num .") && BindingParse("Key Num +", numPlus, numWhy, sizeof numWhy) &&
+                           numPlus.kind == kBindKey && numPlus.code == VK_ADD && KeyFromText("Num /") == VK_DIVIDE;
         b.slot[kActClutch][1] = Binding{ kBindAxis, 1, 3, 0, true };
         b.slot[kActGear3][0] = Binding{ kBindButton, 2, 5, 0, false };
         b.slot[kActUp][0] = Binding{};
@@ -3853,9 +3864,9 @@ int wmain(int argc, wchar_t **argv)
         const bool fallback = !BindingsCanReverse(bare);
         bare.slot[kActGearR][1] = Binding{ kBindKey, 0, 'R', 0, false };
         DeleteFileW(bindIni.c_str());
-        Check(none && defaults && round && kept && fallback && BindingsCanReverse(bare),
-              "gearbox: bindings default to PageUp, PageDown, Home, End and Insert, round trip through the ini, None clears, no binding leaves a slot; "
-              "the shifter is taken only with one that reaches reverse");
+        Check(none && defaults && named && round && kept && fallback && BindingsCanReverse(bare),
+              "gearbox: bindings default to Num 8, Num 2, Num 5, Num 0 and Num 7, the number pad's operators by name, round trip through the ini, None "
+              "clears, no binding leaves a slot; the shifter is taken only with one that reaches reverse");
     }
     // the SMT.ini import: a Kb. scan code turned into its key, a combination and an unknown code left, the options taken
     {
@@ -3875,7 +3886,7 @@ int wmain(int argc, wchar_t **argv)
         std::wstring taken, left;
         const int bound = SmtIniImport(smtIni, b, o, taken, left);
         DeleteFileW(smtIni.c_str());
-        Check(bound == 2 && b.slot[kActUp][0].code == 'E' && b.slot[kActGearR][0].code == VK_END && b.slot[kActDown][0].code == VK_NEXT &&
+        Check(bound == 2 && b.slot[kActUp][0].code == 'E' && b.slot[kActGearR][0].code == VK_END && b.slot[kActDown][0].code == VK_NUMPAD2 &&
                   !b.slot[kActGear1][0].kind && o.requireClutch && o.skipNeutral && !o.requireGearHeld && wcsstr(left.c_str(), L"GEAR 1") &&
                   wcsstr(taken.c_str(), L"GEAR UP"),
               "gearbox: SMT.ini's keyboard bindings taken over by their scan codes (an extended key too), a combination left, its controller section "
