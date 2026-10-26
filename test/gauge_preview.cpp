@@ -383,7 +383,7 @@ int wmain(int argc, wchar_t **argv)
                 GTemp(bg, fonts, ImVec2(c.x + 12.0f * u, c.y + 14.0f * u), 42.0f * u, u, 1.0f, look, true);
                 GFuel(bg, fonts, ImVec2(c.x + 104.0f * u, c.y + 14.0f * u), 42.0f * u, u, 1.0f, look);
                 GBoost(bg, fonts, ImVec2(c.x + 196.0f * u, c.y + 14.0f * u), 42.0f * u, u, 1.0f, look);
-                GRange(bg, fonts, ImVec2(c.x + 104.0f * u, c.y - 46.0f * u), u, 1.0f, look, lay.showBurn);
+                GRange(bg, fonts, ImVec2(c.x + 104.0f * u, c.y - 46.0f * u), u, 1.0f, look, lay.showFuelUse);
             });
         }
         // what the drawing costs at 2160p, in the solid style with every dial, which draws the most: the strip once

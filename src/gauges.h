@@ -68,7 +68,7 @@ struct GaugeSettings
     bool mph, psi, fahrenheit;                    // Mph, Psi, Fahrenheit
     bool showTemp, showBoost, showAir, showLamps; // ShowTemp, ShowBoost, ShowAir, ShowLamps
     bool showClock;          // ShowClock: a clock dial with the game's time of day, the outside temperature in its face
-    bool showBurn;           // ShowBurn: the fuel burn a minute after the range under the fuel dial
+    bool showFuelUse;           // ShowFuelUse: the fuel used a minute, after the range under the fuel dial
     int oilGauge;            // OilGauge: the oil temperature: 0 not shown, 1 a second needle in the temperature dial, 2 a dial of its own left of it
     int tachClass;           // TachClass: 0 truck, 1 scout, 2 heavy: the scales of the tachometer and the speedometer
     float idleRpm, redlineRpm, maxRpm, speedMax;  // IdleRpm, RedlineRpm, MaxRpm, SpeedMax: 0 = the class's own
@@ -112,7 +112,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.showTemp = s.showBoost = s.showLamps = true;
     s.showAir = false;
     s.showClock = true;
-    s.showBurn = true;
+    s.showFuelUse = true;
     s.oilGauge = kOilNeedle;
     s.tachClass = kClassTruck;
     s.boostProfile = kSpoolStandard;

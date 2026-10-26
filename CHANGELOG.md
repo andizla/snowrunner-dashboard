@@ -12,7 +12,7 @@
 - A clock on the cluster, `ShowClock` and the tab's "Clock": an analog dial with the game's time of day, the outside temperature in its face (from the mod.io list).
 - The pad toggle rests while the NEXT GEN menu is open, as the toggle key does.
 - The air dryer's purge: a short hiss each time the governor stops the compressor at the cut-out, made by the mod's code, or your own `sounds\air_purge_1.wav` to `_4.wav` next to the mod; it follows `SoundVolume`.
-- The fuel burn a minute after the range under the fuel dial, `ShowBurn` and the tab's "Burn": the game's own burn smoothed over a second, litres a minute, gallons an hour with Mph (asked for in the comments).
+- The fuel used a minute, after the range under the fuel dial, `ShowFuelUse` and the tab's "Fuel use": the game's own burn smoothed over a second, litres a minute, gallons an hour with Mph (asked for in the comments).
 
 ## [0.16.1] 2026-10-25
 

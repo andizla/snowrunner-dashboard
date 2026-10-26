@@ -29,7 +29,7 @@ struct GaugeLayout
 {
     int variant;                    // 0 = strip (bottom centre), 1 = block (bottom right)
     bool swapDials;                 // the speedometer where the tachometer is and the tachometer where the speedometer is
-    bool showTemp, showBoost, showAir, showLamps, showClock, showBurn;
+    bool showTemp, showBoost, showAir, showLamps, showClock, showFuelUse;
     int oilGauge;                  // the oil temperature: kOilOff, kOilNeedle (a second needle in the temperature dial), kOilDial (a dial of its own)
     float faceAlpha;                // 1 = solid dial faces; lower = see-through (the game shows through, drop shadows under the marks)
     bool openArc;                   // no face or bezel at all: only the scale arc with its ticks
@@ -832,7 +832,7 @@ static void GaugeDraw(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float 
         if (lay.showLamps) GLamps(dl, f, ImVec2(cx, cy), 2, 20.0f * u, 3.5f * u, u, a, st);
         float x = cx - 98.0f * u - R - 10.0f * u - r;
         GFuel(dl, f, ImVec2(x, cy + 20.0f * u), r, u, a, st);
-        GRange(dl, f, ImVec2(x, cy + 20.0f * u + r + 12.0f * u), u, a, st, lay.showBurn);
+        GRange(dl, f, ImVec2(x, cy + 20.0f * u + r + 12.0f * u), u, a, st, lay.showFuelUse);
         if (lay.showTemp) { x -= 2.0f * r + 8.0f * u; GTemp(dl, f, ImVec2(x, cy + 20.0f * u), r, u, a, st, lay.oilGauge == kOilNeedle); }
         if (lay.oilGauge == kOilDial) { x -= 2.0f * r + 8.0f * u; GOil(dl, f, ImVec2(x, cy + 20.0f * u), r, u, a, st); }
         x = cx + 98.0f * u + R + 10.0f * u + r;
@@ -860,7 +860,7 @@ static void GaugeDraw(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float 
         if (lay.showBoost) { GBoost(dl, f, ImVec2(x, y2), r, u, a, st); x += pitch; }
         if (lay.showAir) { GAir(dl, f, ImVec2(x, y2), r, u, a, st); x += pitch; }
         if (lay.showClock) GClock(dl, f, ImVec2(x, y2), r, u, a, st);
-        GRange(dl, f, ImVec2(fuelX, y2 + r + 12.0f * u), u, a, st, lay.showBurn);
+        GRange(dl, f, ImVec2(fuelX, y2 + r + 12.0f * u), u, a, st, lay.showFuelUse);
     }
 }
 
@@ -879,7 +879,7 @@ static GaugeLayout GaugeLayoutOf(const GaugeSettings &s)
     lay.showAir = s.showAir && s.tachClass != kClassScout; // scouts brake by hydraulics: no air to show
     lay.showLamps = s.showLamps;
     lay.showClock = s.showClock;
-    lay.showBurn = s.showBurn;
+    lay.showFuelUse = s.showFuelUse;
     lay.oilGauge = s.oilGauge;
     lay.faceAlpha = s.style == kFaceTinted ? s.faceOpacity : 1.0f;
     lay.openArc = s.style == kFaceOpen;
