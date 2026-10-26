@@ -1804,8 +1804,9 @@ struct TakeoverOrders
     bool gaveBack;     // it gave the truck back on this pass (lastHandBack says why)
 };
 
-// One pass. enabled: Gearbox is the mod's and the game's shift function is known; t: the truck as read.
-inline TakeoverOrders TakeoverStep(TakeoverModel &m, const TruckRaw &t, bool enabled)
+// One pass. enabled: Gearbox is the mod's and the game's shift function is known; t: the truck as read; fromA: the
+// truck is taken only while the game's automatic flag is up (Gearbox=1, where the game's shifter is the player's).
+inline TakeoverOrders TakeoverStep(TakeoverModel &m, const TruckRaw &t, bool enabled, bool fromA = false)
 {
     TakeoverOrders o = {};
     if (m.driving && !enabled)
@@ -1816,7 +1817,7 @@ inline TakeoverOrders TakeoverStep(TakeoverModel &m, const TruckRaw &t, bool ena
         o.gaveBack = true;
         return o;
     }
-    if (!m.driving && enabled && TruckEngineOn(t) && TruckTopGear(t) >= 1)
+    if (!m.driving && enabled && TruckEngineOn(t) && TruckTopGear(t) >= 1 && (!fromA || t.automatic))
     {
         m.driving = true;
         m.shifts = 0;

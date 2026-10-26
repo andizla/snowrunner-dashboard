@@ -25,6 +25,10 @@
 #include "models.h"
 #include "gearbox_hooks.h"
 #include "gearbox_model.h"
+#include "input_bindings.h"
+#ifndef GAUGES_SETTINGS_TEST
+#include "input_devices.h"
+#endif
 bool NgMenuOpen(); // ng_overlay.cpp (its header wants Dear ImGui): the toggle key rests while the NEXT GEN menu has the keys
 #include "tires.h"
 #include "maps.h"
@@ -622,9 +626,18 @@ static void ReadIni(GaugeSettings &s)
                         L"; PadToggle does the same with pad buttons (XInput): DPadUp, DPadDown, DPadLeft, DPadRight, A, B, X, Y,\n"
                         L"; LB, RB, LS, RS, Start, Back, joined with + (LB+DPadUp), or None. The game sees these buttons too.\n"
                         L"; The cluster is on screen while a truck is driven in the world: not on loading screens, in menus, the garage or the map.\n"
-                        L"; Gearbox=1: the mod's own gearbox has the truck: A (its automatic: a torque converter, shifts up later the further\n"
-                        L"; the pedal is down, a kickdown floored, the gear held when the foot lifts), the numbered gears, N, R, H, L-, L, L+;\n"
-                        L"; the game's own shifting is refused while it has the truck. 0 = the game's own gearbox and automatic.\n"
+                        L"; Gearbox: 0 the game's own. 1 the mod's automatic in A (a torque converter, shifts up later the further the pedal\n"
+                        L"; is down, a kickdown floored), the game's shifter yours, only its reverse on the brake refused. 2 the mod's own\n"
+                        L"; gearbox takes the shifter: A, the numbered gears, N, R, H, L-, L, L+ on the bindings below (as 1 until one reaches R).\n"
+                        L"; [Gearbox] Bind<Action> and Bind<Action>2: two bindings each for Gear1 to Gear12, GearH, GearL-, GearL, GearL+, GearN,\n"
+                        L"; GearR, GearA, GearUp, GearDown, Clutch, RangeHigh, RangeLow. A binding is Key <name or code>, Pad <buttons with +>,\n"
+                        L"; Wheel <n> Button <n>, Wheel <n> POV [<n>] Up/Right/Down/Left, Wheel <n> Axis <n> [inverted] (the clutch), or None.\n"
+                        L"; The tab's Gearbox section binds them by a press. Without a key in the ini the defaults below hold:\n"
+                        L";   BindGearUp=Key PageUp\n"
+                        L";   BindGearDown=Key PageDown\n"
+                        L";   BindGearN=Key Home\n"
+                        L";   BindGearR=Key End\n"
+                        L";   BindGearA=Key Insert\n"
                         L"; RequireClutch=1 stalls the engine on a shift into a gear without the clutch, RequireGearHeld=1 goes to N while no\n"
                         L"; gear key is held (an H shifter with every gear bound), SkipNeutral=1 steps from gear 1 to reverse and back past N.\n"
                         L"; Input is what you drive with: 0 a wheel's pedals, 1 a pad's trigger, 2 the keyboard. The mod's automatic kicks\n"
@@ -986,6 +999,180 @@ static void SettingsWrite(SettingsState &st)
     if (st.own && st.changed) WriteTruckIni(st.key, st.s);
     st.changed = false;
 }
+
+// ---- the gearbox's bindings: the [Gearbox] section of Gauges.ini ----
+// One key per action and slot, Bind<Action> and Bind<Action>2, in the reader's text forms (input_bindings.h:
+// "Key PageUp", "Pad LB+DPadDown", "Wheel 1 Button 5", "Wheel 1 POV Up", "Wheel 1 Axis 3 inverted", "None"). A key
+// not there keeps the default: up, down, N, R and A on keys the game does not drive with.
+static_assert(kActCount <= kViewActions, "the view holds the bindings of every action");
+static const wchar_t *const kBindSection = L"Gearbox";
+
+static void BindingsDefault(GearBindings &b)
+{
+    b = GearBindings{};
+    static const struct { int action, vk; } keys[] = { { kActUp, VK_PRIOR }, { kActDown, VK_NEXT }, { kActGearN, VK_HOME }, { kActGearR, VK_END }, { kActGearA, VK_INSERT } };
+    for (const auto &k : keys) b.slot[k.action][0] = Binding{ kBindKey, 0, (uint32_t)k.vk, 0, false };
+}
+
+static void BindingKey(int action, int slot, wchar_t *out, size_t size) { swprintf_s(out, size, L"Bind%S%s", kActionNames[action], slot ? L"2" : L""); }
+
+// Whether the ini holds a binding key yet.
+static bool BindingsInIni(const std::wstring &ini)
+{
+    static wchar_t keys[16384];
+    if (!GetPrivateProfileSectionW(kBindSection, keys, 16384, ini.c_str())) return false;
+    for (const wchar_t *p = keys; *p; p += wcslen(p) + 1)
+        if (!_wcsnicmp(p, L"Bind", 4)) return true;
+    return false;
+}
+
+// The bindings the ini holds over b; a text that is no binding is said with why (say) and leaves the slot as it was.
+static void BindingsRead(const std::wstring &ini, GearBindings &b, bool say)
+{
+    for (int a = 0; a < kActCount; a++)
+        for (int slot = 0; slot < kBindingSlots; slot++)
+        {
+            wchar_t key[48], buf[128];
+            BindingKey(a, slot, key, 48);
+            GetPrivateProfileStringW(kBindSection, key, L"\x01", buf, 128, ini.c_str());
+            if (buf[0] == 1) continue; // not there
+            char text[128];
+            size_t n = 0;
+            for (; buf[n] && n + 1 < sizeof text; n++) text[n] = buf[n] < 128 ? (char)buf[n] : '?';
+            text[n] = 0;
+            Binding bind = {};
+            char why[96] = "";
+            if (!text[0] || BindingParse(text, bind, why, sizeof why)) b.slot[a][slot] = bind;
+            else if (say) Log(L"gearbox: %s=%S is no binding (%S), so it is left as it was", key, text, why);
+        }
+}
+
+static void BindingsWrite(const std::wstring &ini, const GearBindings &b)
+{
+    for (int a = 0; a < kActCount; a++)
+        for (int slot = 0; slot < kBindingSlots; slot++)
+        {
+            wchar_t key[48];
+            char text[96];
+            BindingKey(a, slot, key, 48);
+            BindingText(b.slot[a][slot], text, sizeof text);
+            WritePrivateProfileStringW(kBindSection, key, Wide(text).c_str(), ini.c_str());
+        }
+}
+
+// Whether a binding reaches reverse (Gear down, Reverse, or Neutral on the way): the mod's own gearbox takes the
+// shifter only then, so a truck can always be backed up.
+static bool BindingsCanReverse(const GearBindings &b)
+{
+    for (int slot = 0; slot < kBindingSlots; slot++)
+        if (b.slot[kActDown][slot].kind || b.slot[kActGearR][slot].kind || b.slot[kActGearN][slot].kind) return true;
+    return false;
+}
+
+// The bound actions in the log, one line each.
+static void BindingsLog(const GearBindings &b)
+{
+    for (int a = 0; a < kActCount; a++)
+    {
+        char first[96], second[96];
+        BindingText(b.slot[a][0], first, sizeof first);
+        BindingText(b.slot[a][1], second, sizeof second);
+        if (b.slot[a][0].kind && b.slot[a][1].kind) Log(L"gearbox: %S = %S, %S", kActionNames[a], first, second);
+        else if (b.slot[a][0].kind || b.slot[a][1].kind) Log(L"gearbox: %S = %S", kActionNames[a], b.slot[a][0].kind ? first : second);
+    }
+}
+
+// The manual transmission mod's SMT.ini, taken over once: its [KEYBOARD] bindings (Kb.<n>, a DirectInput scan code,
+// turned into a Windows key; a combination of keys or another code is left) into the first slot of each matching
+// action, and its [OPTIONS] REQUIRE CLUTCH, REQUIRE GEAR HELD and SKIP NEUTRAL. Its [CONTROLLER] section is left (its
+// codes are OIS's own, not Windows'), and so are SHOW MENU, AWD, DIFF LOCK and HANDBRAKE. Nothing in SMT.ini is
+// written. The number of bindings taken; taken and left name them for the log.
+static int SmtIniImport(const std::wstring &path, GearBindings &b, GaugeSettings &s, std::wstring &taken, std::wstring &left)
+{
+    struct Pair { wchar_t smt[16]; int action; };
+    Pair pairs[kActCount] = {};
+    int count = 0;
+    for (int g = 0; g < 12; g++)
+    {
+        swprintf_s(pairs[count].smt, L"GEAR %d", g + 1);
+        pairs[count++].action = kActGear1 + g;
+    }
+    static const struct { const wchar_t *smt; int action; } named[] = { { L"GEAR H", kActGearH }, { L"GEAR L-", kActGearLMinus }, { L"GEAR L", kActGearL },
+                                                                         { L"GEAR L+", kActGearLPlus }, { L"GEAR N", kActGearN }, { L"GEAR R", kActGearR },
+                                                                         { L"GEAR UP", kActUp }, { L"GEAR DOWN", kActDown }, { L"CLUTCH", kActClutch },
+                                                                         { L"RANGE HIGH", kActRangeHigh }, { L"RANGE LOW", kActRangeLow } };
+    for (const auto &n : named)
+    {
+        wcscpy_s(pairs[count].smt, n.smt);
+        pairs[count++].action = n.action;
+    }
+    int bound = 0;
+    for (int i = 0; i < count; i++)
+    {
+        wchar_t value[64];
+        GetPrivateProfileStringW(L"KEYBOARD", pairs[i].smt, L"", value, 64, path.c_str());
+        if (!value[0] || !_wcsicmp(value, L"NONE")) continue;
+        const wchar_t *digits = !_wcsnicmp(value, L"Kb.", 3) ? value + 3 : nullptr;
+        wchar_t *end = nullptr;
+        const long code = digits ? wcstol(digits, &end, 10) : -1;
+        // an extended key's code has its high bit set: Windows reads it as 0xE0 and the low seven bits
+        const UINT scan = code >= 0x80 ? (0xE000u | (UINT)(code & 0x7F)) : (UINT)code;
+        const UINT vk = code > 0 && code < 0x100 && end && !*end ? MapVirtualKeyW(scan, MAPVK_VSC_TO_VK_EX) : 0;
+        wchar_t line[96];
+        if (vk)
+        {
+            b.slot[pairs[i].action][0] = Binding{ kBindKey, 0, vk, 0, false };
+            bound++;
+            swprintf_s(line, L"%s%s", taken.empty() ? L"" : L", ", pairs[i].smt);
+            taken += line;
+        }
+        else
+        {
+            swprintf_s(line, L"%s%s (%s)", left.empty() ? L"" : L", ", pairs[i].smt, value);
+            left += line;
+        }
+    }
+    auto option = [&](const wchar_t *key, bool &out) {
+        wchar_t value[16];
+        GetPrivateProfileStringW(L"OPTIONS", key, L"", value, 16, path.c_str());
+        if (value[0]) out = !_wcsicmp(value, L"true") || !_wcsicmp(value, L"1") || !_wcsicmp(value, L"yes");
+    };
+    option(L"REQUIRE CLUTCH", s.requireClutch);
+    option(L"REQUIRE GEAR HELD", s.requireGearHeld);
+    option(L"SKIP NEUTRAL", s.skipNeutral);
+    return bound;
+}
+
+// The gearbox's actions from the reader's states: the edges for up, down, the positions and the gears, the gear key
+// held (RequireGearHeld), the clutch held, and its travel where it is bound to an axis (-1 without one).
+static GearboxActions ActionsOf(const ActionState st[kActCount], const GearBindings &b)
+{
+    GearboxActions a;
+    a.up = st[kActUp].pressed;
+    a.down = st[kActDown].pressed;
+    for (int g = 0; g < 12; g++)
+    {
+        if (st[kActGear1 + g].pressed && !a.gearPressed) a.gearPressed = g + 1;
+        if (st[kActGear1 + g].held && !a.gearHeld) a.gearHeld = g + 1;
+    }
+    a.a = st[kActGearA].pressed;
+    a.n = st[kActGearN].pressed;
+    a.r = st[kActGearR].pressed;
+    a.h = st[kActGearH].pressed;
+    a.lowMinus = st[kActGearLMinus].pressed;
+    a.low = st[kActGearL].pressed;
+    a.lowPlus = st[kActGearLPlus].pressed;
+    a.rangeHigh = st[kActRangeHigh].pressed;
+    a.rangeLow = st[kActRangeLow].pressed;
+    a.clutch = st[kActClutch].held;
+    const bool axis = b.slot[kActClutch][0].kind == kBindAxis || b.slot[kActClutch][1].kind == kBindAxis;
+    a.clutchTravel = axis ? st[kActClutch].travel : -1.0f;
+    return a;
+}
+
+// The tab's asks of the bindings (render thread), done by the mod's thread on its next pass.
+static volatile LONG g_bindAsk = 0;
+void BindingAsk(int what, int action, int slot) { InterlockedExchange(&g_bindAsk, (LONG)((what << 16) | ((action & 0xFF) << 8) | (slot & 0xFF))); }
 
 // The tab's test buttons (render thread): the points wait here until the mod's thread writes them on its next pass.
 static volatile LONG g_damageTest = 0;
@@ -1534,8 +1721,11 @@ static void LogSettings(const GaugeSettings &s)
         s.airFullKmh, s.damage ? L"on" : L"off", s.hotDamageFrom, s.hotDamage, s.coldDamage);
     Log(L"settings: sound volume %d of 100%s", s.soundVolume, s.soundsOnly ? L", sounds only: the cluster is not drawn" : L"");
     Log(L"settings: driven with %s", s.input == kInputKeys ? L"the keyboard" : s.input == kInputPad ? L"a pad" : L"a wheel's pedals");
-    Log(L"settings: gearbox %s", s.gearbox == kGearboxModel ? L"the mod's automatic, with a torque converter, picks the gears in A"
-                                                            : L"the game's own (the tab's Gearbox section, or Gearbox=1, hands the gears in A to the mod's automatic)");
+    Log(L"settings: gearbox %s; RequireClutch %d, RequireGearHeld %d, SkipNeutral %d",
+        s.gearbox == kGearboxOwn     ? L"the mod's own (Gearbox=2): it takes the shifter, its positions on the bindings"
+        : s.gearbox == kGearboxModel ? L"the mod's automatic in A (Gearbox=1), the game's shifter yours, its reverse on the brake refused"
+                                     : L"the game's own (Gearbox=1 or 2 in the tab's Gearbox section hand it to the mod)",
+        s.requireClutch, s.requireGearHeld, s.skipNeutral);
     if (s.powertrain) Log(L"settings: powertrain on: the truck pulls with %d percent of the mod's engine and converter, through the game's torque factor", s.engineShare);
     else Log(L"settings: powertrain off: the truck pulls with the game's own engine (Powertrain=1 hands it the mod's)");
     Log(L"settings: toggle key %S, pad %S, demo values %s, probe %d", key, s.padToggle, s.demo ? L"on" : L"off", s.probe);
@@ -1586,7 +1776,9 @@ struct TruckWatch
     ClutchModel clutch;         // and, in a position of the mod's gearbox other than A, the engine behind its clutch
     TakeoverModel take;         // the mod's gearbox has the truck (Gearbox)
     GearboxPosModel pos;        // the gearbox's position, clutch, stalls and shifts (gearbox_model.h)
-    GearboxActions actions;     // the player's actions on this pass (none until the bindings come)
+    GearboxActions actions;     // the player's actions on this pass (from the bindings, at Gearbox=2)
+    bool canReverse;            // a binding reaches reverse (GearDown, GearR or GearN): Gearbox=2 may take the shifter
+    long gameShifts;            // GameShiftCount on the last pass
     PullTest pullTest;          // the pull test (the tab's button)
     uint64_t pullVehicle, pullAction; // the truck whose torque factor a running pull test changed
     TorqueHand hand;            // the engine's torque handed to the game (Powertrain)
@@ -1642,8 +1834,18 @@ static bool GearboxManual(const TruckWatch &w) { return w.take.driving && w.pos.
 // The mod's gearbox lets the truck go: the game's own shifting passes again.
 static void GearboxLetGo(TruckWatch &w)
 {
-    GearboxHolding(false, nullptr);
+    GearboxPolicy(kPolicyPass, nullptr, false);
     w.pos = GearboxPosModel{};
+}
+
+// The game's own shifts that passed the hooks so far (its automatic picked again, ShiftToAutoGear, left out): one more
+// on a pass at level 1 is the player's hand on the game's shifter.
+static long GameShiftCount()
+{
+    GearboxCounts c;
+    GearboxCountsGet(c);
+    return (c.shift - c.refused[kFnShiftGear]) + (c.high - c.refused[kFnShiftToHigh]) + (c.reverse - c.refused[kFnShiftToReverse]) +
+           (c.neutral - c.refused[kFnShiftToNeutral]) + (c.autoOff - c.refused[kFnAutoOffAndShift]);
 }
 
 // What the game asked for, by the hook that refused it, for the log.
@@ -1798,7 +2000,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     w.tiresSeen = w.tires.present;
     // the game's own shifts the hooks refused while the mod's gearbox has the truck: each kind said once a truck, so the
     // drive that first sees a truck in A reverse on the brake names the call that carries it
-    for (unsigned fresh = GearboxRefusedNew(), fn = 0; fresh && fn < kFnCount; fn++)
+    const unsigned fresh = GearboxRefusedNew();
+    if (fresh & kRefusedBrakeReverse) Log(L"gearbox: the game's reverse on the brake refused: the truck is in A");
+    for (unsigned fn = 0; fresh && fn < kFnCount; fn++)
         if (fresh & (1u << fn)) Log(L"gearbox: the game asked for %s, refused: the mod's gearbox has the truck", GearboxAskName((int)fn));
     const bool was = w.found;
     bool read = w.found && TruckRead(m, w.refs, raw);
@@ -1935,7 +2139,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     const uint64_t kind = TruckKeyNumber(w.who.taken.key);
     // out of the world (the garage, the map, the viewer, a menu): the game's own calls pass, so a gearbox fitted in the
     // garage takes its gear; the gearbox keeps the truck and reads its position again on the way back (review 7, R6)
-    if (w.take.driving && !(driving && !held && same) && GearboxHoldingNow()) GearboxHolding(false, nullptr);
+    if (w.take.driving && !(driving && !held && same) && GearboxHoldingNow()) GearboxPolicy(kPolicyPass, nullptr, false);
     if (driving && !held && same)
     {
         if (w.refs.vehicle != w.modelVehicle)
@@ -2067,20 +2271,24 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             Log(L"%S", second);
         }
         const bool testing = w.pullTest.state == kPullRunning || pull.ended;
-        // the mod's gearbox in the game (Gearbox=1, with the hooks in place): it takes the truck the moment it is driven,
-        // in the position the game has it, and from then on every shift is its own; the game's own are refused
-        // (GearboxHolding). In A the automatic's model picks the gear. No gear is set while the pull test holds one
-        const TakeoverOrders orders = TakeoverStep(w.take, raw, s.gearbox == kGearboxModel && g_shiftGear != nullptr && GearboxHooked());
+        // the levels of Gearbox (with the hooks in place): 1 the mod's automatic in A, the game's shifter the player's and
+        // only the game's reverse on the brake refused; 2 the mod's own gearbox, which takes the truck the moment it is
+        // driven, in whatever position, and refuses every shift of the game's. Level 2 runs as 1 while no binding reaches
+        // reverse (w.canReverse), so a truck can always be backed up. No gear is set while the pull test holds one
+        const int level = s.gearbox == kGearboxOwn && !w.canReverse ? kGearboxModel : s.gearbox;
+        const bool own = level == kGearboxOwn;
+        const TakeoverOrders orders = TakeoverStep(w.take, raw, level >= kGearboxModel && g_shiftGear != nullptr && GearboxHooked(), !own);
         const GearboxTruck boxTruck{ raw.gear, TruckTopGear(raw), isfinite(raw.speed) ? fabsf(raw.speed) : 0.0f, TruckEngineOn(raw), raw.stall,
                                      raw.powerFactor, raw.automatic != 0, foot };
         if (orders.took)
         {
             GearboxPosTake(w.pos, boxTruck);
-            GearboxHolding(true, (void *)w.refs.vehicle);
             w.gearbox.gear = raw.gear >= 1 && raw.gear <= TruckTopGear(raw) ? raw.gear : 1;
             w.gearbox.pause = kShiftPause;
             GearboxHuntClear(w.gearbox);
-            Log(L"gearbox: the mod's gearbox takes the truck in %S (the game's gear %d); the game's own shifting is refused from now on", GearboxPosName(w.pos.pos), raw.gear);
+            w.gameShifts = GameShiftCount();
+            if (own) Log(L"gearbox: the mod's gearbox takes the truck in %S (the game's gear %d); the game's own shifting is refused from now on", GearboxPosName(w.pos.pos), raw.gear);
+            else Log(L"gearbox: the mod's automatic takes the truck in A (the game's gear %d); the game's reverse on the brake is refused", raw.gear);
         }
         if (orders.gaveBack)
         {
@@ -2089,13 +2297,34 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             if (w.pos.running && w.pos.pos == kPosA) m.put(w.refs.action + 0x3C, (uint8_t)1);
             GearboxLetGo(w);
         }
-        // back in the world after the garage, the map or the viewer (the policy passed meanwhile): the position read
-        // again from the game, and the policy on again for the same truck (review 7, R6)
-        if (w.take.driving && !GearboxHoldingNow())
+        if (w.take.driving)
         {
-            GearboxPosTake(w.pos, boxTruck);
-            GearboxHolding(true, (void *)w.refs.vehicle);
-            Log(L"gearbox: back in the world, the mod's gearbox reads the truck in %S again", GearboxPosName(w.pos.pos));
+            // back in the world after the garage, the map or the viewer (the policy passed meanwhile): the position read
+            // again from the game (review 7, R6)
+            if (!GearboxHoldingNow())
+            {
+                GearboxPosTake(w.pos, boxTruck);
+                w.gameShifts = GameShiftCount();
+                Log(L"gearbox: back in the world, the mod's gearbox reads the truck in %S again", GearboxPosName(w.pos.pos));
+            }
+            // level 1: the game's shifter is the player's. A shift of the game's that leaves A (H, N, R, the low range or
+            // a numbered gear picked) hands the truck back to the game's position; it is taken again when A is picked
+            const long shiftsNow = GameShiftCount();
+            if (!own && ((shiftsNow != w.gameShifts && !raw.automatic && raw.gear != w.pos.lastSet) || w.pos.pos != kPosA))
+            {
+                Log(L"gearbox: the game's shifter picked gear %d: the mod's automatic hands the truck back, and takes it again when A is picked", raw.gear);
+                w.take.driving = false;
+                w.take.handBacks++;
+                GearboxLetGo(w);
+            }
+            w.gameShifts = shiftsNow;
+        }
+        if (w.take.driving)
+        {
+            // the policy for the held truck, each pass: everything refused at level 2; at level 1 only a reverse while
+            // the truck stands in A with the brake down
+            const bool brakeStand = w.pos.pos == kPosA && boxTruck.speed < kStandStill && TruckBrake(raw) > 0.05f;
+            GearboxPolicy(own ? kPolicyAll : kPolicyBrakeReverse, (void *)w.refs.vehicle, brakeStand);
         }
         bool shiftAsk = false;
         int shiftTo = 0;
@@ -2349,7 +2578,31 @@ static DWORD WINAPI Run(void *)
     SettingsFor(set, "");
     const GaugeSettings &s = set.s;
     SettingsPublish(s);
+    // the gearbox's bindings: the defaults with the ini's over them; the first time, without one in the ini yet, the
+    // manual transmission mod's SMT.ini taken over, and the result written so it happens once
+    GearBindings binds;
+    BindingsDefault(binds);
+    {
+        const std::wstring ini = IniPath(), smtIni = g_dir + L"SMT.ini";
+        if (!BindingsInIni(ini) && GetFileAttributesW(smtIni.c_str()) != INVALID_FILE_ATTRIBUTES)
+        {
+            std::wstring taken, left;
+            const int bound = SmtIniImport(smtIni, binds, set.plain, taken, left);
+            set.s.requireClutch = set.plain.requireClutch;
+            set.s.requireGearHeld = set.plain.requireGearHeld;
+            set.s.skipNeutral = set.plain.skipNeutral;
+            BindingsWrite(ini, binds);
+            SettingsWrite(set);
+            SettingsPublish(s);
+            Log(L"gearbox: SMT.ini taken over once: %d keyboard bindings (%s), its options RequireClutch %d, RequireGearHeld %d, SkipNeutral %d; left: "
+                L"its pad and wheel section (other codes than Windows'), its menu, AWD, diff lock and handbrake keys%s%s",
+                bound, taken.empty() ? L"none" : taken.c_str(), s.requireClutch, s.requireGearHeld, s.skipNeutral, left.empty() ? L"" : L", ", left.c_str());
+        }
+        else BindingsRead(ini, binds, true);
+    }
     LogSettings(s);
+    BindingsLog(binds);
+    InputDevicesStart([](const wchar_t *line) { Log(L"%s", line); });
     if (s.probe) PlacesHarvest(stamp);
     Log(g_overlayOk ? L"overlay: the cluster and the Gameplay tab of the NEXT GEN menu are drawn by the mod's own overlay"
                     : L"overlay: the overlay did not start (the lines above say why), so nothing is drawn");
@@ -2367,6 +2620,8 @@ static DWORD WINAPI Run(void *)
     ULONGLONG saveAt = 0;
     TruckIdentity truck = {};
     TruckWatch watch = {};
+    InputReader bindReader = {};   // the bindings' states from pass to pass
+    InputCapture bindCapture = {}; // a capture the tab began
     const TruckMemory memory = { PeekGame, g_base, PokeGame };
     // the map the truck drives on, the game's id for it from its save, and the outside temperature of its section,
     // its region's or its own, where the ini has one (mapOwn, from the section mapFrom). Without a save map stays ""
@@ -2419,8 +2674,11 @@ static DWORD WINAPI Run(void *)
             // the driven engine's profile and gearbox's hold read again too, as a file edited by hand may have changed them
             if (watch.profileFor[0]) EngineProfileRead(watch.profileFor, watch.profile);
             if (watch.gearboxKey[0]) watch.gearHoldOwn = GearHoldRead(watch.gearboxKey, watch.gearHold);
+            BindingsDefault(binds);
+            BindingsRead(IniPath(), binds, true);
             Log(L"settings: Gauges.ini read again, and the driven truck's engine and gearbox files");
             LogSettings(s);
+            BindingsLog(binds);
             saveAt = 0;
             edited = true;
         }
@@ -2478,6 +2736,51 @@ static DWORD WINAPI Run(void *)
         {
             visible = !visible;
             Log(L"cluster %s", visible ? L"shown" : L"hidden");
+        }
+        // the gearbox's bindings: one snapshot of the keys, the pad and the wheels and shifters a pass. The tab's asks
+        // (a capture into a slot, a slot cleared) are done here with it; the actions go to the gearbox only at Gearbox=2
+        // with a binding that reaches reverse, and not while the NEXT GEN menu is open or a capture runs
+        {
+            static InputSnapshot snap;
+            InputSnapshotRead(snap, front, PadButtons());
+            const ULONGLONG bindNow = GetTickCount64();
+            bool bindsChanged = false;
+            const LONG ask = InterlockedExchange(&g_bindAsk, 0);
+            const int askWhat = ask >> 16, askAction = (ask >> 8) & 0xFF, askSlot = ask & 0xFF;
+            if (ask && askAction < kActCount && askSlot < kBindingSlots)
+            {
+                if (askWhat == kBindAskCapture) BindingCaptureBegin(bindCapture, askAction, askSlot, bindNow);
+                else if (askWhat == kBindAskCancel) bindCapture.active = false;
+                else if (askWhat == kBindAskClear)
+                {
+                    binds.slot[askAction][askSlot] = Binding{};
+                    bindsChanged = true;
+                }
+            }
+            if (bindCapture.active)
+            {
+                Binding caught = {};
+                const int step = BindingCaptureStep(bindCapture, snap, bindNow, caught);
+                if (step == kCaptureBound)
+                {
+                    binds.slot[bindCapture.action][bindCapture.slot] = caught;
+                    bindsChanged = true;
+                }
+                if (step != kCaptureWaiting) bindCapture.active = false;
+            }
+            if (bindsChanged)
+            {
+                BindingsWrite(IniPath(), binds);
+                Log(L"gearbox: the bindings set from the tab, written to Gauges.ini:");
+                BindingsLog(binds);
+            }
+            static InputSnapshot gated;
+            if (NgMenuOpen() || bindCapture.active) gated = InputSnapshot{};
+            else gated = snap;
+            static ActionState states[kActCount];
+            InputStep(bindReader, binds, gated, states);
+            watch.canReverse = BindingsCanReverse(binds);
+            watch.actions = s.gearbox == kGearboxOwn && watch.canReverse ? ActionsOf(states, binds) : GearboxActions{};
         }
         // the map: the game's save, looked for every kSaveLookMs and read when it is another or was written since
         const ULONGLONG lookNow = GetTickCount64();
@@ -2733,6 +3036,16 @@ static DWORD WINAPI Run(void *)
         v.hour = hour;
         v.smtInstalled = g_gearboxBlocked == kGearboxSmt;
         v.gearboxHeld = g_gearboxBlocked == kGearboxHeld;
+        for (int a = 0; a < kViewActions; a++)
+            for (int slot = 0; slot < 2; slot++)
+                if (a < kActCount) BindingText(binds.slot[a][slot], v.bindText[a][slot], sizeof v.bindText[a][slot]);
+                else v.bindText[a][slot][0] = 0;
+        v.captureAction = bindCapture.active ? bindCapture.action : -1;
+        v.captureSlot = bindCapture.active ? bindCapture.slot : -1;
+        v.canReverse = watch.canReverse;
+        v.controllers = InputDevicesFound();
+        v.gearStalls = watch.take.driving ? watch.pos.stalls : 0;
+        v.gearShifts = watch.take.driving ? watch.take.shifts : 0;
         strcpy_s(v.gearbox, driving ? watch.gearboxKey : "");
         // the engine and its curve in force, for the tab's Engine section and its plot
         if (driving && watch.profileFor[0])
@@ -2986,7 +3299,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 81, "ini: the help text survives a write (81 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 90, "ini: the help text survives a write (90 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());
@@ -3509,6 +3822,64 @@ int wmain(int argc, wchar_t **argv)
         WriteIni(a);
         ReadIni(b);
         Check(SameSettings(a, b), "ini: a copy of the given ini reads back the same after a write");
+    }
+
+    // the gearbox's bindings: the defaults without a key, a key written and read back, None clears, a text that is no
+    // binding leaves the slot; Gearbox=2 takes the shifter only with a binding that reaches reverse
+    {
+        const std::wstring bindIni = g_dir + L"Gauges.binds_test.ini";
+        DeleteFileW(bindIni.c_str());
+        GearBindings b;
+        BindingsDefault(b);
+        const bool none = !BindingsInIni(bindIni);
+        BindingsRead(bindIni, b, false);
+        const bool defaults = b.slot[kActUp][0].kind == kBindKey && b.slot[kActUp][0].code == VK_PRIOR && b.slot[kActGearA][0].code == VK_INSERT &&
+                              b.slot[kActGearR][0].code == VK_END && !b.slot[kActClutch][0].kind && BindingsCanReverse(b);
+        b.slot[kActClutch][1] = Binding{ kBindAxis, 1, 3, 0, true };
+        b.slot[kActGear3][0] = Binding{ kBindButton, 2, 5, 0, false };
+        b.slot[kActUp][0] = Binding{};
+        BindingsWrite(bindIni, b);
+        GearBindings back;
+        BindingsDefault(back);
+        BindingsRead(bindIni, back, false);
+        const bool round = BindingsInIni(bindIni) && back.slot[kActClutch][1].kind == kBindAxis && back.slot[kActClutch][1].device == 1 &&
+                           back.slot[kActClutch][1].code == 3 && back.slot[kActClutch][1].inverted && back.slot[kActGear3][0].kind == kBindButton &&
+                           back.slot[kActGear3][0].code == 5 && !back.slot[kActUp][0].kind;
+        WritePrivateProfileStringW(kBindSection, L"BindGearH", L"Wheel nine", bindIni.c_str());
+        back.slot[kActGearH][0] = Binding{ kBindKey, 0, 'H', 0, false };
+        BindingsRead(bindIni, back, false);
+        const bool kept = back.slot[kActGearH][0].kind == kBindKey && back.slot[kActGearH][0].code == 'H';
+        GearBindings bare = {};
+        const bool fallback = !BindingsCanReverse(bare);
+        bare.slot[kActGearR][1] = Binding{ kBindKey, 0, 'R', 0, false };
+        DeleteFileW(bindIni.c_str());
+        Check(none && defaults && round && kept && fallback && BindingsCanReverse(bare),
+              "gearbox: bindings default to PageUp, PageDown, Home, End and Insert, round trip through the ini, None clears, no binding leaves a slot; "
+              "the shifter is taken only with one that reaches reverse");
+    }
+    // the SMT.ini import: a Kb. scan code turned into its key, a combination and an unknown code left, the options taken
+    {
+        const std::wstring smtIni = g_dir + L"SMT.test.ini";
+        DeleteFileW(smtIni.c_str());
+        WritePrivateProfileStringW(L"KEYBOARD", L"GEAR UP", L"Kb.18", smtIni.c_str());        // E
+        WritePrivateProfileStringW(L"KEYBOARD", L"GEAR R", L"Kb.207", smtIni.c_str());        // End, an extended key
+        WritePrivateProfileStringW(L"KEYBOARD", L"GEAR 1", L"Kb.42+Kb.2", smtIni.c_str());    // a combination: left
+        WritePrivateProfileStringW(L"KEYBOARD", L"SHOW MENU", L"Kb.211", smtIni.c_str());     // not an action of the mod's
+        WritePrivateProfileStringW(L"CONTROLLER", L"GEAR DOWN", L"Joy.0.Btn.5", smtIni.c_str());
+        WritePrivateProfileStringW(L"OPTIONS", L"REQUIRE CLUTCH", L"true", smtIni.c_str());
+        WritePrivateProfileStringW(L"OPTIONS", L"SKIP NEUTRAL", L"1", smtIni.c_str());
+        GearBindings b;
+        BindingsDefault(b);
+        GaugeSettings o;
+        SettingsDefaults(o);
+        std::wstring taken, left;
+        const int bound = SmtIniImport(smtIni, b, o, taken, left);
+        DeleteFileW(smtIni.c_str());
+        Check(bound == 2 && b.slot[kActUp][0].code == 'E' && b.slot[kActGearR][0].code == VK_END && b.slot[kActDown][0].code == VK_NEXT &&
+                  !b.slot[kActGear1][0].kind && o.requireClutch && o.skipNeutral && !o.requireGearHeld && wcsstr(left.c_str(), L"GEAR 1") &&
+                  wcsstr(taken.c_str(), L"GEAR UP"),
+              "gearbox: SMT.ini's keyboard bindings taken over by their scan codes (an extended key too), a combination left, its controller section "
+              "and menu key left, its options taken");
     }
     printf(g_failed ? "SETTINGS TEST FAILED (%d)\n" : "SETTINGS TEST OK\n", g_failed);
     return g_failed ? 1 : 0;

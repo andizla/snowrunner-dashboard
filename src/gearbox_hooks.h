@@ -32,15 +32,21 @@ int GearboxHook(uintptr_t base, const FunctionFind finds[kFnCount], char *why, s
 void GearboxUnhook();
 bool GearboxHooked();
 void GearboxCountsGet(GearboxCounts &out);
-// The policy (phase 2). While on, the mod's gearbox has the truck: the game's own calls of ShiftGear,
-// ShiftToAutoGear, ShiftToHigh, ShiftToReverse, ShiftToNeutral, AutoOffAndShift and SetPowerFactor are refused, the
-// game's function not called (false, or nothing), and counted; SetCurrentVehicle always passes. As the counts nest
-// (reverse and neutral go through auto off, auto off through ShiftGear), refusing ShiftGear alone would refuse them
-// all; each is refused at its own door. The mod's own calls go through GearboxOriginal and are never refused. Turned
-// on, it tells each kind afresh: GearboxRefusedNew gives the kinds (1 << kFn...) refused for the first time since.
-// vehicle: the held truck (TruckRefs::vehicle): only its calls are refused. Turned on for another truck, it tells
-// each kind afresh; off and on again for the same truck (the garage, the map), it does not.
-void GearboxHolding(bool on, void *vehicle);
+// The policy, by the level of Gearbox. kPolicyPass: everything passes (Gearbox=0, or the truck not held).
+// kPolicyBrakeReverse (Gearbox=1, the mod's automatic in A): only the game's reverse while the truck stands in A with
+// the brake down (brakeStand) is refused, at whichever door it comes (ShiftToReverse, or a gear below 0 through
+// AutoOffAndShift or ShiftGear). kPolicyAll (Gearbox=2, the mod's own gearbox): the game's own calls of ShiftGear,
+// ShiftToAutoGear, ShiftToHigh, ShiftToReverse, ShiftToNeutral, AutoOffAndShift and SetPowerFactor are refused. A
+// refused call is not passed to the game's function (false, or nothing) and is counted; SetCurrentVehicle always
+// passes. As the counts nest (reverse and neutral go through auto off, auto off through ShiftGear), each is refused at
+// its own door. The mod's own calls go through GearboxOriginal and are never refused. vehicle: the held truck
+// (TruckRefs::vehicle): only its calls are refused. On for another truck, it tells each kind afresh through
+// GearboxRefusedNew (1 << kFn..., or kRefusedBrakeReverse); off and on again for the same truck (the garage, the
+// map), it does not.
+enum { kPolicyPass, kPolicyBrakeReverse, kPolicyAll };
+static const unsigned kRefusedBrakeReverse = 1u << 30;
+void GearboxPolicy(int policy, void *vehicle, bool brakeStand);
+int GearboxPolicyNow();
 bool GearboxHoldingNow();
 unsigned GearboxRefusedNew();
 // The way through to the game's own function behind a hook (fn one of kFn*), nullptr while it has none: the mod's own

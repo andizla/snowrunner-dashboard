@@ -29,7 +29,8 @@ rem the recordings the mod's file carries (src\sounds.rc: assets\turbo_high_1.wa
 rem mod is built all the same and makes its sounds by code (src\sound.h)
 set SOUNDS=
 if exist assets\turbo_high_1.wav (rc /nologo /fo out\obj\sounds.res src\sounds.rc || goto fail) & set SOUNDS=out\obj\sounds.res
-cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /LD /Fo:out\obj\gauges.obj /Fe:out\Gauges.asi src\gauges.cpp out\obj\gauge_overlay.obj %IMGUI_OBJ% %SOUNDS% out\obj\gearbox.lib /link user32.lib ole32.lib d3d11.lib d3dcompiler.lib || goto fail
+cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /Fo:out\obj\input_devices.obj src\input_devices.cpp || goto fail
+cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /LD /Fo:out\obj\gauges.obj /Fe:out\Gauges.asi src\gauges.cpp out\obj\input_devices.obj out\obj\gauge_overlay.obj %IMGUI_OBJ% %SOUNDS% out\obj\gearbox.lib /link user32.lib ole32.lib d3d11.lib d3dcompiler.lib dinput8.lib dxguid.lib || goto fail
 rem the settings test: the same source with a main in place of the mod's thread
 cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /D GAUGES_SETTINGS_TEST /Fo:out\obj\settings_test.obj /Fe:out\test\settings_test.exe src\gauges.cpp out\obj\gearbox.lib /link user32.lib || goto fail
 rem the truck test: the reader of the game's memory and the write of engine damage (src\truck.h) against a made up game

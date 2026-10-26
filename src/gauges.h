@@ -51,7 +51,7 @@ enum { kFaceSolid, kFaceTinted, kFaceOpen, kFaceCount };     // GaugeSettings::s
 enum { kClassTruck, kClassScout, kClassHeavy, kClassCount }; // GaugeSettings::tachClass
 enum { kOilOff, kOilNeedle, kOilDial, kOilGaugeCount };      // GaugeSettings::oilGauge
 enum { kSpoolStandard, kSpoolQuick, kSpoolLaggy, kSpoolTwoStage, kSpoolCount }; // GaugeSettings::boostProfile
-enum { kGearboxGame, kGearboxModel, kGearboxCount };
+enum { kGearboxGame, kGearboxModel, kGearboxOwn, kGearboxCount }; // GaugeSettings::gearbox: the game's own, the mod's automatic in A, the mod's own gearbox
 enum { kInputWheel, kInputPad, kInputKeys, kInputCount }; // GaugeSettings::input
 enum { kAspTurbo, kAspNatural, kAspCount };                  // an engine's profile's Aspiration          // GaugeSettings::gearbox
 
@@ -74,7 +74,8 @@ struct GaugeSettings
     float idleRpm, redlineRpm, maxRpm, speedMax;  // IdleRpm, RedlineRpm, MaxRpm, SpeedMax: 0 = the class's own
     float boostMax;          // BoostMax: the boost in bar the turbo reaches with the pedal floored at high engine speed; 0 = the class's own
     int boostProfile;        // BoostProfile: how the turbo builds its boost: 0 standard, 1 small and quick, 2 big and slow, 3 two stages
-    int gearbox;             // Gearbox: 0 the game's own gearbox, 1 the mod's (gearbox_model.h): its positions, and in A its automatic
+    int gearbox;             // Gearbox: 0 the game's own, 1 the mod's automatic in A (only the game's reverse on the brake refused),
+                             // 2 the mod's own gearbox (gearbox_model.h): the shifter taken, its positions from the bindings
     bool requireClutch;      // RequireClutch: a shift into a gear without the clutch stalls the engine
     bool requireGearHeld;    // RequireGearHeld: neutral while no gear key is held, as an H shifter
     bool skipNeutral;        // SkipNeutral: from the first gear to reverse and back without stopping in neutral
@@ -293,6 +294,11 @@ enum { kSoundOil = kTurboTiers, kSoundPurge, kSoundTierCount }; // the oil warni
 // string that lives as long as the mod
 enum { kViewPullOff, kViewPullArmed, kViewPullRunning, kViewPullDone, kViewPullStopped };
 static const int kEnginePlot = 40; // points of the tab's torque plot
+static const int kViewActions = 24; // the gearbox's actions the view holds the bindings of (input_bindings.h's kActCount)
+// The tab's asks of the gearbox's bindings: begin a capture into an action's slot, or clear it (the mod's thread does
+// both, with the snapshot of its pass).
+void BindingAsk(int what, int action, int slot);
+enum { kBindAskCapture = 1, kBindAskClear = 2, kBindAskCancel = 3 };
 // smtInstalled: the manual transmission mod is in the game; gearboxHeld: another mod holds the game's gearbox
 // functions. Either way the mod's gearbox stands down (the tab says why).
 struct GaugeView { bool show, demo; int hidden; GaugeState st; int engineDamage, engineCapacity; char truck[96]; bool truckOwn, smtInstalled, gearboxHeld; char map[96], mapFrom[64]; bool mapOwn; float ambientC;
@@ -301,7 +307,11 @@ struct GaugeView { bool show, demo; int hidden; GaugeState st; int engineDamage,
                    char gearbox[96]; float gearHold; bool gearHoldOwn; // the driven truck's gearbox (its key, "" for none), the seconds each gear is held going up with the mod's engine, and whether its file sets them
                    int autoClass; bool autoByWeight; float massKg; // the class the automatic goes by for it, whether by its weight (no scales of its own), and that weight (0 not read)
                    char engine[96]; bool engineOwn, engineCustom; float enginePeakRpm; int engineAspiration; float engineTorque, engineFigure; // the driven truck's engine ("" not known): its own profile or not, a whole curve of its own in it, the peak torque's speed in force, turbo or not, the share of its torque the truck gets (1 none set), and the engine's torque figure from the game's files (0 not read)
-                   float engineIdle, engineRedline; float engineCurve[kEnginePlot]; }; // the slider's range, and the torque in force from idle to the tachometer's top, for the tab's plot
+                   float engineIdle, engineRedline; float engineCurve[kEnginePlot]; // the slider's range, and the torque in force from idle to the tachometer's top, for the tab's plot
+                   // the gearbox's bindings as text (input_bindings.h, kActCount actions, two slots), the capture the tab
+                   // asked for (-1 none), whether a binding reaches reverse (Gearbox=2 may take the shifter), the
+                   // controllers read, and the stalls and shifts since the truck was taken
+                   char bindText[kViewActions][2][40]; int captureAction, captureSlot; bool canReverse; int controllers, gearStalls, gearShifts; };
 
 LONG SettingsGet(GaugeSettings &out);       // the settings in force (any thread); returns their turn, for SettingsPut
 void SettingsPut(const GaugeSettings &in, LONG turn); // settings edited from those of a turn: the mod takes them at once and saves the ini a

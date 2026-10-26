@@ -13,12 +13,13 @@ enum GearAction
 {
     kActGear1, kActGear2, kActGear3, kActGear4, kActGear5, kActGear6, kActGear7, kActGear8, kActGear9, kActGear10, kActGear11, kActGear12,
     kActGearH, kActGearLMinus, kActGearL, kActGearLPlus, kActGearN, kActGearR, kActUp, kActDown, kActClutch, kActRangeHigh, kActRangeLow,
+    kActGearA, // A: the gear choice handed to the mod's automatic (the mod's own; SMT has none)
     kActCount
 };
 // Their names, as the ini's keys and the log have them.
 static const char *const kActionNames[kActCount] = { "Gear1", "Gear2", "Gear3", "Gear4", "Gear5", "Gear6", "Gear7", "Gear8", "Gear9", "Gear10",
                                                      "Gear11", "Gear12", "GearH", "GearL-", "GearL", "GearL+", "GearN", "GearR", "GearUp",
-                                                     "GearDown", "Clutch", "RangeHigh", "RangeLow" };
+                                                     "GearDown", "Clutch", "RangeHigh", "RangeLow", "GearA" };
 
 // A binding: a key (its virtual key code), a pad chord (XInput buttons, PadParse), a wheel's or shifter's button, one
 // direction of its POV hat, or one of its axes (the clutch: inverted where the pedal reads backwards). Wheels count

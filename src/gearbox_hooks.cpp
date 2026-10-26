@@ -23,20 +23,34 @@ static volatile LONG g_count[kFnCount] = {};
 static volatile LONG g_shiftGear = 0, g_autoOffGear = 0, g_vehicleSet = 0;
 static volatile float g_power = 0.0f;
 
-// The policy: while the mod's gearbox has the truck (g_holding) the game's own shifts and its power factor for that
-// truck (g_heldVehicle) are refused, the game's function not called; another vehicle's calls pass (review 7, R5).
-// Each refusal is counted, and each kind is told once a truck (g_told, cleared when another truck is held) through
-// g_new, which the mod's thread logs.
-static volatile LONG g_holding = 0, g_told = 0, g_new = 0;
+// The policy (gearbox_hooks.h, GearboxPolicy): for the held truck only (g_heldVehicle; another vehicle's calls pass,
+// review 7, R5), the level and, for kPolicyBrakeReverse, whether the truck stands in A with the brake down. A refused
+// call is counted, the game's function not called, and each kind is told once a truck (g_told, cleared when another
+// truck is held) through g_new, which the mod's thread logs.
+static volatile LONG g_policy = kPolicyPass, g_brakeStand = 0, g_told = 0, g_new = 0;
 static void *volatile g_heldVehicle = nullptr;
 static volatile LONG g_refused[kFnCount] = {};
 
-static bool Refused(int fn, void *vehicle)
+static void Tell(LONG bit)
 {
-    if (!g_holding || vehicle != g_heldVehicle) return false;
-    InterlockedIncrement(&g_refused[fn]);
-    const LONG bit = 1L << fn;
     if (!(InterlockedOr(&g_told, bit) & bit)) InterlockedOr(&g_new, bit);
+}
+
+// gear: the gear the call asks for (ShiftGear, AutoOffAndShift), else 0
+static bool Refused(int fn, void *vehicle, int32_t gear = 0)
+{
+    const LONG policy = g_policy;
+    if (policy == kPolicyPass || vehicle != g_heldVehicle) return false;
+    bool refuse = policy == kPolicyAll;
+    if (policy == kPolicyBrakeReverse && g_brakeStand)
+    {
+        // reverse at whichever door it comes: ShiftToReverse, or a gear below 0 through AutoOffAndShift or ShiftGear
+        refuse = fn == kFnShiftToReverse || ((fn == kFnShiftGear || fn == kFnAutoOffAndShift) && gear < 0);
+        if (refuse) Tell((LONG)kRefusedBrakeReverse);
+    }
+    if (!refuse) return false;
+    InterlockedIncrement(&g_refused[fn]);
+    if (policy == kPolicyAll) Tell(1L << fn);
     return true;
 }
 
@@ -44,7 +58,7 @@ static bool HookShiftGear(void *vehicle, int32_t gear)
 {
     InterlockedIncrement(&g_count[kFnShiftGear]);
     InterlockedExchange(&g_shiftGear, gear);
-    if (Refused(kFnShiftGear, vehicle)) return false;
+    if (Refused(kFnShiftGear, vehicle, gear)) return false;
     return ((ShiftFn)g_way[kFnShiftGear])(vehicle, gear);
 }
 
@@ -80,7 +94,7 @@ static bool HookAutoOffAndShift(void *vehicle, int32_t gear)
 {
     InterlockedIncrement(&g_count[kFnAutoOffAndShift]);
     InterlockedExchange(&g_autoOffGear, gear);
-    if (Refused(kFnAutoOffAndShift, vehicle)) return false;
+    if (Refused(kFnAutoOffAndShift, vehicle, gear)) return false;
     return ((ShiftFn)g_way[kFnAutoOffAndShift])(vehicle, gear);
 }
 
@@ -92,14 +106,18 @@ static void HookSetPower(void *vehicle, float factor)
     ((PowerFn)g_way[kFnSetPower])(vehicle, factor);
 }
 
-void GearboxHolding(bool on, void *vehicle)
+void GearboxPolicy(int policy, void *vehicle, bool brakeStand)
 {
+    const bool on = policy != kPolicyPass;
     if (on && vehicle != g_heldVehicle) InterlockedExchange(&g_told, 0);
     if (on) InterlockedExchangePointer((void *volatile *)&g_heldVehicle, vehicle);
-    InterlockedExchange(&g_holding, on ? 1 : 0);
+    InterlockedExchange(&g_brakeStand, brakeStand ? 1 : 0);
+    InterlockedExchange(&g_policy, policy);
 }
 
-bool GearboxHoldingNow() { return g_holding != 0; }
+int GearboxPolicyNow() { return (int)g_policy; }
+
+bool GearboxHoldingNow() { return g_policy != kPolicyPass; }
 
 unsigned GearboxRefusedNew() { return (unsigned)InterlockedExchange(&g_new, 0); }
 

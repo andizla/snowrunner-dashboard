@@ -32,6 +32,7 @@
 
 volatile LONG g_pageCapturing = 0; // gauge_overlay.cpp's, which is not part of this program
 void DamageTestAsk(int) {}         // gauges.cpp's: the tab's test buttons write nothing here
+void BindingAsk(int, int, int) {}  // and the gearbox's bindings are not captured here
 
 static ID3D11Device *g_dev = nullptr;
 static ID3D11DeviceContext *g_ctx = nullptr;

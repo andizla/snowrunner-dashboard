@@ -72,7 +72,7 @@ The Gameplay tab of the NEXT GEN menu edits every setting while you play. F2 ope
 | The speed in km/h from which the radiator gets all the air that driving gives it, from 10 to 80 | `AirFullKmh` | 30 |
 | The oil: minutes it takes from 15 C to 85 C when the engine is driven as usual, from 1 to 60 and at least a minute after the coolant, and the temperature in C from which it is too hot, from 100 to 150 | `OilWarmUpMinutes`, `OilWarnC` | 5, 120 |
 | The temperature costs the engine | `Damage` 0 or 1 | on |
-| The mod's own gearbox, with its automatic in A (see below) | `Gearbox` 0 or 1 | off |
+| The game's own gearbox, the mod's automatic in A, or the mod's own gearbox (see below) | `Gearbox` 0, 1 or 2 | 0 |
 | A shift into a gear without the clutch stalls the engine | `RequireClutch` 0 or 1 | off |
 | Neutral while no gear key is held, for an H shifter | `RequireGearHeld` 0 or 1 | off |
 | From the first gear to reverse and back without stopping in neutral | `SkipNeutral` 0 or 1 | off |
@@ -159,12 +159,20 @@ The game's automatic shifts up at fixed speeds whatever the pedal, never shifts 
 - no shift down ever takes the engine near the red zone at the speed the wheels turn;
 - the tachometer shows the converter's engine speed, and the cluster shows A. A lift opens the lockup for a second, so the needle sits a little under the gear's speed, as a road automatic's does.
 
-With `Gearbox=1` the mod's own gearbox has the truck from the moment it is driven, in whatever position the game had it. Its positions are A (the automatic above), the numbered gears, N, R, H and the low range L-, L and L+, picked with bindings set in the tab. Up and down walk the gears from the first to the top and down through N to R. A gear key sets its gear, and A hands the choice back to the automatic until another position is picked. In A a truck standing in N sets off in the first gear once the pedal goes down. The numbered gears, A and H keep the power the truck had when the gearbox took it. The low range has power of its own, and a range key moves between the low range and the gears for a shifter without a range. While the gearbox has the truck the game's own shifting is refused, so a truck in A no longer reverses on the brake. `Gauges.log` says each kind of the game's shift it refused, once a truck.
+`Gearbox` has three levels, the three choices in the tab's Gearbox section:
+
+- `0`: the game's own gearbox and automatic.
+- `1`: the mod's automatic in A, as above. The game's shifter stays yours: a gear picked there hands the gearbox back, and picking A takes it again. Only one thing of the game's is refused: its reverse while the truck stands in A with the brake down, so a truck in A no longer backs up on the brake. No bindings are needed.
+- `2`: the mod's own gearbox takes the shifter from the moment a truck is driven, in whatever position the game had it, and refuses every shift of the game's. It runs as `1` until a binding reaches reverse (Gear down, Reverse or Neutral), so a truck can always be backed up.
+
+At `2` the positions are A (the automatic), the numbered gears, N, R, H and the low range L-, L and L+. Up and down walk the gears from the first to the top and down through N to R, and down from H lands on the top gear. A gear key sets its gear, and A hands the choice to the automatic until another position is picked. In A a truck standing in N sets off in the first gear once the pedal goes down. The numbered gears, A and H keep the power the truck had when the gearbox took it, and the low range has power of its own. A range key moves between the low range and the gears for a shifter without a range of its own. `Gauges.log` says each kind of the game's shift it refused, once a truck.
+
+Each action has two bindings, set in the tab by a click and then a press: a key, a pad's buttons together, a wheel's or shifter's button or POV hat, or for the clutch a pedal's axis. In `Gauges.ini` they are the `[Gearbox]` section's `Bind<Action>` and `Bind<Action>2` keys (`BindGearUp=Key PageUp`, `BindGear3=Wheel 2 Button 5`, `BindClutch2=Wheel 1 Axis 3 inverted`, `BindGearR=Pad LB+DPadDown`, `None`), for Gear1 to Gear12, GearH, GearL-, GearL, GearL+, GearN, GearR, GearA, GearUp, GearDown, Clutch, RangeHigh and RangeLow. The defaults are Page Up for up, Page Down for down, Home for N, End for R and Insert for A. The first time the mod finds `SMT.ini` in `Sources\Bin` and no binding in its own ini, it takes over SMT's keyboard bindings and its three options once and says in the log what it took; SMT's pad and wheel section is left (its codes are not Windows'). `SMT.ini` itself is not changed.
 
 Three options, off by default:
 
 - `RequireClutch=1`: a shift into a gear with the clutch not held still shifts, and stalls the engine once, as with a real clutch; into N it does not;
-- `RequireGearHeld=1`: N the moment no gear key is held, for an H shifter;
+- `RequireGearHeld=1`: N the moment no gear key is held, for an H shifter with every gear bound;
 - `SkipNeutral=1`: up and down step from the first gear to reverse and back without stopping in N.
 
 The mod sets its gears through the game's own shift function and puts the game's automatic flag down, so the game's shifter shows the gear's number and the cluster shows the gearbox's letter. The pull is still the game's: the truck drives with the game's torque in the gear the gearbox picks. `Gauges.log` says when the gearbox takes and lets go of a truck, each position it moves to, and with `Probe=1` each shift and a line with the position, the clutch and the stalls.

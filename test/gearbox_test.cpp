@@ -269,7 +269,7 @@ int main()
         const bool hooked = GearboxHook(0, finds, why, sizeof why) == 8;
         // flag off: everything passes
         const bool passOff = FakeShift(nullptr, 3) && FakeReverse(nullptr) && g_ran[kFnShiftGear] == 1 && g_ran[kFnShiftToReverse] == 1;
-        GearboxHolding(true, nullptr);
+        GearboxPolicy(kPolicyAll, nullptr, false);
         const bool refShift = !FakeShift(nullptr, 3);
         FakeAuto(nullptr);
         const bool refHigh = !FakeHigh(nullptr), refReverse = !FakeReverse(nullptr), refNeutral = !FakeNeutral(nullptr), refOff = !FakeAutoOff(nullptr, 2);
@@ -286,13 +286,39 @@ int main()
         const bool own = ((Shift)GearboxOriginal(kFnShiftGear))(nullptr, 4) && g_ran[kFnShiftGear] == 2;
         // another vehicle's call passes while the held truck's are refused (review 7, R5)
         const bool other = FakeShift((void *)0x1234, 3) && g_ran[kFnShiftGear] == 3 && !FakeShift(nullptr, 3) && g_ran[kFnShiftGear] == 3;
-        GearboxHolding(false, nullptr);
+        GearboxPolicy(kPolicyPass, nullptr, false);
         const bool passAgain = FakeHigh(nullptr) && g_ran[kFnShiftToHigh] == 1;
         GearboxUnhook();
         Check(hooked && other && passOff && refShift && refHigh && refReverse && refNeutral && refOff && bodies && counted && own && passAgain &&
                   (firsts & (1u << kFnShiftToReverse)) && (firsts & (1u << kFnSetPower)) && !(firsts & (1u << kFnSetVehicle)) && none == 0,
               "gearbox hooks: while the gearbox has the truck the game's six shifts and its power factor are refused and counted, each kind told once, the "
               "vehicle change passes and the mod's own call goes through; with the flag off all pass");
+    }
+
+    // the levels: at Gearbox=1 only a reverse while standing in A with the brake down is refused, at whichever door it
+    // comes; other shifts pass, and a reverse with the truck rolling passes; at 0 nothing is refused
+    {
+        FunctionFind finds[kFnCount] = {};
+        void *fakes[kFnCount] = { (void *)&FakeShift, (void *)&FakeAuto, (void *)&FakeHigh, (void *)&FakeReverse, (void *)&FakeNeutral, nullptr,
+                                  (void *)&FakeAutoOff, (void *)&FakePower, (void *)&FakeVehicle };
+        for (int f = 0; f < kFnCount; f++)
+            if (fakes[f]) finds[f] = FunctionFind{ kFnFound, (size_t)(uintptr_t)fakes[f], 1, false };
+        char why[512];
+        const bool hooked = GearboxHook(0, finds, why, sizeof why) == 8;
+        for (int f = 0; f < kFnCount; f++) g_ran[f] = 0;
+        GearboxPolicy(kPolicyBrakeReverse, nullptr, true);
+        const bool refused = !FakeReverse(nullptr) && !FakeShift(nullptr, -1) && !FakeAutoOff(nullptr, -1);
+        const bool passed = FakeShift(nullptr, 3) && FakeHigh(nullptr) && FakeNeutral(nullptr);
+        const unsigned told = GearboxRefusedNew();
+        GearboxPolicy(kPolicyBrakeReverse, nullptr, false);
+        const bool rolling = FakeReverse(nullptr) && FakeShift(nullptr, -1);
+        GearboxPolicy(kPolicyPass, nullptr, true);
+        const bool levelZero = FakeReverse(nullptr) && FakeAutoOff(nullptr, -1);
+        GearboxUnhook();
+        Check(hooked && refused && passed && rolling && levelZero && (told & kRefusedBrakeReverse) && g_ran[kFnShiftToReverse] == 2 &&
+                  g_ran[kFnShiftGear] == 2 && g_ran[kFnShiftToHigh] == 1,
+              "gearbox hooks: at Gearbox=1 only a reverse while the truck stands in A with the brake down is refused, at any of its three doors; at 0 "
+              "nothing is refused");
     }
 
     printf(g_failed ? "GEARBOX TEST FAILED: %d\n" : "GEARBOX TEST OK\n", g_failed);
