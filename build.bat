@@ -34,6 +34,8 @@ rem the settings test: the same source with a main in place of the mod's thread
 cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /D GAUGES_SETTINGS_TEST /Fo:out\obj\settings_test.obj /Fe:out\test\settings_test.exe src\gauges.cpp out\obj\gearbox.lib /link user32.lib || goto fail
 rem the truck test: the reader of the game's memory and the write of engine damage (src\truck.h) against a made up game
 cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I src /Fo:out\obj\truck_test.obj /Fe:out\test\truck_test.exe test\truck_test.cpp out\obj\gearbox.lib || goto fail
+rem the gearbox test: the mod's own gearbox (src\gearbox_model.h) and the hooks' policy, on functions of its own
+cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I src /Fo:out\obj\gearbox_test.obj /Fe:out\test\gearbox_test.exe test\gearbox_test.cpp out\obj\gearbox.lib || goto fail
 rem the models test: the engine speed, the range, the tilt, the coolant temperature and what it costs the engine
 rem (src\models.h) on made up drives, and the sounds of a lifted pedal (src\sound.h)
 cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I src /Fo:out\obj\models_test.obj /Fe:out\test\models_test.exe test\models_test.cpp /link ole32.lib || goto fail

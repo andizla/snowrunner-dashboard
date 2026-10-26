@@ -74,7 +74,10 @@ struct GaugeSettings
     float idleRpm, redlineRpm, maxRpm, speedMax;  // IdleRpm, RedlineRpm, MaxRpm, SpeedMax: 0 = the class's own
     float boostMax;          // BoostMax: the boost in bar the turbo reaches with the pedal floored at high engine speed; 0 = the class's own
     int boostProfile;        // BoostProfile: how the turbo builds its boost: 0 standard, 1 small and quick, 2 big and slow, 3 two stages
-    int gearbox;             // Gearbox: 0 the game's own automatic, 1 the mod's: a torque converter and its own shift points pick the gears in A
+    int gearbox;             // Gearbox: 0 the game's own gearbox, 1 the mod's (gearbox_model.h): its positions, and in A its automatic
+    bool requireClutch;      // RequireClutch: a shift into a gear without the clutch stalls the engine
+    bool requireGearHeld;    // RequireGearHeld: neutral while no gear key is held, as an H shifter
+    bool skipNeutral;        // SkipNeutral: from the first gear to reverse and back without stopping in neutral
     int input;               // Input: what the pedal is: 0 a wheel's pedals, 1 a pad's trigger, 2 keys. The mod's automatic kicks down by it
     bool powertrain;         // Powertrain: the engine's torque (its curve, the cold oil, the boost) and the converter's handed to the game
     int engineShare;         // EngineShare: how much of the mod's engine the game gets with it, in percent: 0 the game's own pull, 100 the mod's
@@ -117,6 +120,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.tachClass = kClassTruck;
     s.boostProfile = kSpoolStandard;
     s.gearbox = kGearboxGame;
+    s.requireClutch = s.requireGearHeld = s.skipNeutral = false;
     s.powertrain = false;
     s.engineShare = 50;
     s.rollWarnDeg = 15.0f;

@@ -14,6 +14,7 @@
 - The air dryer's purge: a short hiss each time the governor stops the compressor at the cut-out, made by the mod's code, or your own `sounds\air_purge_1.wav` to `_4.wav` next to the mod; it follows `SoundVolume`.
 - The fuel burn a minute after the range under the fuel dial, `ShowBurn` and the tab's "Burn": the game's own burn smoothed over a second, litres a minute, gallons an hour with Mph (asked for in the comments).
 - The game's gearbox functions are hooked, calling through, as the ground for the mod's own gearbox in the next version; a probe line counts their calls. The manual transmission mod (SMT) is no longer needed and not compatible: the mod says so in the log and the tab when it finds it installed.
+- The mod's own gearbox: A, the numbered gears, N, R, H and the low range as positions of its own, with a clutch, stalls for a shift without it, a held-gear mode for H shifters and a choice to skip neutral; while it has the truck the game's own shifting is refused, so a truck in A no longer reverses on the brake. The bindings follow in the next phase. The manual transmission mod's state is no longer read.
 
 ## [0.16.1] 2026-10-25
 

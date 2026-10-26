@@ -72,7 +72,10 @@ The Gameplay tab of the NEXT GEN menu edits every setting while you play. F2 ope
 | The speed in km/h from which the radiator gets all the air that driving gives it, from 10 to 80 | `AirFullKmh` | 30 |
 | The oil: minutes it takes from 15 C to 85 C when the engine is driven as usual, from 1 to 60 and at least a minute after the coolant, and the temperature in C from which it is too hot, from 100 to 150 | `OilWarmUpMinutes`, `OilWarnC` | 5, 120 |
 | The temperature costs the engine | `Damage` 0 or 1 | on |
-| The mod's automatic picks the gears in A (see below) | `Gearbox` 0 or 1 | off |
+| The mod's own gearbox, with its automatic in A (see below) | `Gearbox` 0 or 1 | off |
+| A shift into a gear without the clutch stalls the engine | `RequireClutch` 0 or 1 | off |
+| Neutral while no gear key is held, for an H shifter | `RequireGearHeld` 0 or 1 | off |
+| From the first gear to reverse and back without stopping in neutral | `SkipNeutral` 0 or 1 | off |
 | What you drive with, for the mod's automatic: a wheel's pedals, a pad or the keyboard (see below) | `Input` 0, 1 or 2 | a wheel's pedals |
 | The truck pulls with the mod's engine and converter (see below) | `Powertrain` 0 or 1 | off |
 | How much of the mod's engine the game gets with `Powertrain=1`, from 0 to 100 percent: 0 leaves the game's own pull | `EngineShare` | 50 |
@@ -156,9 +159,17 @@ The game's automatic shifts up at fixed speeds whatever the pedal, never shifts 
 - no shift down ever takes the engine near the red zone at the speed the wheels turn;
 - the tachometer shows the converter's engine speed, and the cluster shows A. A lift opens the lockup for a second, so the needle sits a little under the gear's speed, as a road automatic's does.
 
-The mod sets its gears through the game's own shift function and puts the game's automatic down while it drives, so the game's shifter shows the gear's number. Picking a gear by hand (a number, L, reverse, neutral or the high gear) hands the gearbox back to you; A takes it again. Tapping the shift modifier does nothing: in the game's own automatic a tap forces a pulling gear, and with the mod's the game's pick is put straight back to the mod's gear. The pull is still the game's: the truck drives with the game's torque in the gear the mod picks. `Gauges.log` says when the mod takes and gives back the gears, and with `Probe=1` each shift.
+With `Gearbox=1` the mod's own gearbox has the truck from the moment it is driven, in whatever position the game had it. Its positions are A (the automatic above), the numbered gears, N, R, H and the low range L-, L and L+, picked with bindings set in the tab. Up and down walk the gears from the first to the top and down through N to R. A gear key sets its gear, and A hands the choice back to the automatic until another position is picked. In A a truck standing in N sets off in the first gear once the pedal goes down. The numbered gears, A and H keep the power the truck had when the gearbox took it. The low range has power of its own, and a range key moves between the low range and the gears for a shifter without a range. While the gearbox has the truck the game's own shifting is refused, so a truck in A no longer reverses on the brake. `Gauges.log` says each kind of the game's shift it refused, once a truck.
 
-The game's gearbox functions are hooked, calling through, as the ground for the mod's own gearbox in the next version; a probe line counts their calls. The manual transmission mod (SMT) is no longer needed and not compatible: the mod says so in the log and the tab when it finds it installed.
+Three options, off by default:
+
+- `RequireClutch=1`: a shift into a gear with the clutch not held still shifts, and stalls the engine once, as with a real clutch; into N it does not;
+- `RequireGearHeld=1`: N the moment no gear key is held, for an H shifter;
+- `SkipNeutral=1`: up and down step from the first gear to reverse and back without stopping in N.
+
+The mod sets its gears through the game's own shift function and puts the game's automatic flag down, so the game's shifter shows the gear's number and the cluster shows the gearbox's letter. The pull is still the game's: the truck drives with the game's torque in the gear the gearbox picks. `Gauges.log` says when the gearbox takes and lets go of a truck, each position it moves to, and with `Probe=1` each shift and a line with the position, the clutch and the stalls.
+
+The manual transmission mod (SMT) is no longer needed and not compatible: the mod says so in the log and the tab when it finds it installed, and its gearbox stands down until SMT is removed.
 
 ## The mod's engine
 
@@ -210,7 +221,7 @@ Delete `Gauges.asi`, `Gauges.ini`, `Gauges.log` and the folder `Gauges` (the set
 
 ## Notes
 
-- The mod changes no game file. What it writes into the game's memory: with `Damage` on, the engine damage of the truck you drive; with `Gearbox=1`, the game's automatic flag and the gears, through the game's own shift function; with `Powertrain=1`, the game's torque factor of the truck you drive, on every pass; during the pull test, the torque factor, for seven seconds. With all of them off it writes nothing.
+- The mod changes no game file. What it writes into the game's memory: with `Damage` on, the engine damage of the truck you drive; with `Gearbox=1`, the game's automatic flag, the gears through the game's own shift function, the power factor of the low range, and the stall seconds for a shift without the clutch under `RequireClutch`; with `Powertrain=1`, the game's torque factor of the truck you drive, on every pass; during the pull test, the torque factor, for seven seconds. With all of them off it writes nothing.
 - `Damage` has not been tried in co-op. Leave it off there.
 - On a PC whose Windows proxy settings are on automatic detection the first frame can come late by half a minute: ReShade checks for its own update at the start and waits on that lookup.
 - When another program holds the game's swap chain in a way the mod cannot draw on, `Gauges.log` names that program.

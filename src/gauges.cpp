@@ -23,8 +23,8 @@
 #include "gauges.h"
 #include "truck.h"
 #include "models.h"
-#include "smt.h"
 #include "gearbox_hooks.h"
+#include "gearbox_model.h"
 bool NgMenuOpen(); // ng_overlay.cpp (its header wants Dear ImGui): the toggle key rests while the NEXT GEN menu has the keys
 #include "tires.h"
 #include "maps.h"
@@ -310,6 +310,9 @@ static void WriteIni(const GaugeSettings &s)
     num(L"BoostMax", s.boostMax);
     whole(L"BoostProfile", s.boostProfile);
     whole(L"Gearbox", s.gearbox);
+    whole(L"RequireClutch", s.requireClutch ? 1 : 0);
+    whole(L"RequireGearHeld", s.requireGearHeld ? 1 : 0);
+    whole(L"SkipNeutral", s.skipNeutral ? 1 : 0);
     whole(L"Input", s.input);
     whole(L"Powertrain", s.powertrain ? 1 : 0);
     whole(L"EngineShare", s.engineShare);
@@ -619,9 +622,11 @@ static void ReadIni(GaugeSettings &s)
                         L"; PadToggle does the same with pad buttons (XInput): DPadUp, DPadDown, DPadLeft, DPadRight, A, B, X, Y,\n"
                         L"; LB, RB, LS, RS, Start, Back, joined with + (LB+DPadUp), or None. The game sees these buttons too.\n"
                         L"; The cluster is on screen while a truck is driven in the world: not on loading screens, in menus, the garage or the map.\n"
-                        L"; Gearbox=1: the mod's automatic picks the gears while the game's shifter is in A: a torque converter, shifts\n"
-                        L"; up later the further the pedal is down, a kickdown when it is floored, the gear held when the foot lifts, the\n"
-                        L"; first gear as the truck stops. Picking a gear by hand hands it back. 0 = the game's own automatic.\n"
+                        L"; Gearbox=1: the mod's own gearbox has the truck: A (its automatic: a torque converter, shifts up later the further\n"
+                        L"; the pedal is down, a kickdown floored, the gear held when the foot lifts), the numbered gears, N, R, H, L-, L, L+;\n"
+                        L"; the game's own shifting is refused while it has the truck. 0 = the game's own gearbox and automatic.\n"
+                        L"; RequireClutch=1 stalls the engine on a shift into a gear without the clutch, RequireGearHeld=1 goes to neutral\n"
+                        L"; while no gear key is held (an H shifter), SkipNeutral=1 steps from the first gear to reverse and back past neutral.\n"
                         L"; Input is what you drive with: 0 a wheel's pedals, 1 a pad's trigger, 2 the keyboard. The mod's automatic kicks\n"
                         L"; down by it: a trigger has to come from under three quarters, and keys kick nothing down and shift as floored.\n"
                         L"; Powertrain=1: the truck pulls with the mod's engine: its torque curve against the engine speed the needle\n"
@@ -670,6 +675,9 @@ static void ReadIni(GaugeSettings &s)
     s.boostMax = IniFloat(L"BoostMax", s.boostMax, ini);
     s.boostProfile = IniInt(L"BoostProfile", s.boostProfile, ini);
     s.gearbox = IniInt(L"Gearbox", s.gearbox, ini);
+    s.requireClutch = IniBool(L"RequireClutch", s.requireClutch, ini);
+    s.requireGearHeld = IniBool(L"RequireGearHeld", s.requireGearHeld, ini);
+    s.skipNeutral = IniBool(L"SkipNeutral", s.skipNeutral, ini);
     s.input = IniInt(L"Input", s.input, ini);
     s.powertrain = IniBool(L"Powertrain", s.powertrain, ini);
     s.engineShare = IniInt(L"EngineShare", s.engineShare, ini);
@@ -1575,19 +1583,17 @@ struct TruckWatch
     BoostModel boost;           // and its boost
     PowertrainModel power;      // and what its engine delivers, handed to the game with Powertrain=1
     GearboxModel gearbox;       // and the gear an automatic with a torque converter would be in, the same way
-    ClutchModel clutch;         // and, while the manual transmission mod drives it, the engine behind its clutch pedal
-    TakeoverModel take;         // the mod's automatic setting the game's gears (Gearbox)
+    ClutchModel clutch;         // and, in a position of the mod's gearbox other than A, the engine behind its clutch
+    TakeoverModel take;         // the mod's gearbox has the truck (Gearbox)
+    GearboxPosModel pos;        // the gearbox's position, clutch, stalls and shifts (gearbox_model.h)
+    GearboxActions actions;     // the player's actions on this pass (none until the bindings come)
     PullTest pullTest;          // the pull test (the tab's button)
     uint64_t pullVehicle, pullAction; // the truck whose torque factor a running pull test changed
     TorqueHand hand;            // the engine's torque handed to the game (Powertrain)
     AirModel air;               // and the air in its brakes' tanks
-    SmtReader smtReader;        // the manual transmission mod's published state (smt.h)
-    SmtView smt;                // as read on this pass
     TiresReader tiresReader;    // the tire inflation mod's published state (tires.h)
     TiresView tires;            // as read on this pass
     bool tiresSeen;
-    bool smtSeen;               // it was published on the last pass
-    unsigned smtStalls;         // the stalls it had caused on the last pass
     int probedLifts;            // the lifts of the pedal the boost had told when the probe wrote last
     uint32_t chance;            // what the pitch of the next lift's sound is drawn from
     bool pedalDown;             // the pedal was more than half down on the last step
@@ -1630,12 +1636,30 @@ struct TruckWatch
     TruckWho who;               // which truck refs are, as the passes read it; who.taken's key is "" while none is read
 };
 
-// The manual transmission mod drives this truck in a manual gear: the game's automatic is off, and not because the
-// mod's own automatic put it down. In its automatic range the game's automatic picks the gears, and the automatic's
-// model runs beside it as without the mod.
-static bool SmtManual(const TruckWatch &w, const TruckRaw &raw)
+// The mod's gearbox has the truck in a position of the player's own (not A): the engine runs behind its clutch.
+static bool GearboxManual(const TruckWatch &w) { return w.take.driving && w.pos.running && w.pos.pos != kPosA; }
+
+// The mod's gearbox lets the truck go: the game's own shifting passes again.
+static void GearboxLetGo(TruckWatch &w)
 {
-    return w.smt.driving && w.smt.vehicle == w.refs.vehicle && !raw.automatic && !w.take.driving;
+    GearboxHolding(false);
+    w.pos = GearboxPosModel{};
+}
+
+// What the game asked for, by the hook that refused it, for the log.
+static const wchar_t *GearboxAskName(int fn)
+{
+    switch (fn)
+    {
+    case kFnShiftGear: return L"a gear";
+    case kFnShiftToAuto: return L"its automatic";
+    case kFnShiftToHigh: return L"the high gear";
+    case kFnShiftToReverse: return L"reverse";
+    case kFnShiftToNeutral: return L"neutral";
+    case kFnAutoOffAndShift: return L"a gear with its automatic off";
+    case kFnSetPower: return L"a power factor";
+    default: return L"something";
+    }
 }
 
 // The seconds each gear is held going up with the mod's engine: the gearbox's own, else its class's.
@@ -1772,16 +1796,10 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         Log(w.tires.present ? L"tire inflation mod: it publishes its state; the cluster shows the tires' pressure mode in a lamp"
                             : L"tire inflation mod: its state is no longer published; the tire lamp is gone");
     w.tiresSeen = w.tires.present;
-    // the manual transmission mod, when it publishes its state: said in the log when it comes and goes, and with the
-    // probe on at each stall it causes for a shift without the clutch
-    w.smt = SmtRead(w.smtReader, now);
-    if (w.smt.present != w.smtSeen)
-        Log(w.smt.present ? L"manual transmission mod: it publishes its state; while it drives the truck in a manual gear, the game's automatic off, the automatic's model stands down"
-                          : L"manual transmission mod: its state is not published any more");
-    else if (probe && w.smt.present && w.smt.stalls > w.smtStalls)
-        Log(L"manual transmission mod: a shift without the clutch stalled the engine (%u since it loaded)", w.smt.stalls);
-    w.smtSeen = w.smt.present;
-    w.smtStalls = w.smt.stalls;
+    // the game's own shifts the hooks refused while the mod's gearbox has the truck: each kind said once a truck, so the
+    // drive that first sees a truck in A reverse on the brake names the call that carries it
+    for (unsigned fresh = GearboxRefusedNew(), fn = 0; fresh && fn < kFnCount; fn++)
+        if (fresh & (1u << fn)) Log(L"gearbox: the game asked for %s, refused: the mod's gearbox has the truck", GearboxAskName((int)fn));
     const bool was = w.found;
     bool read = w.found && TruckRead(m, w.refs, raw);
     if (!read && (w.found || now >= w.findAt))
@@ -1861,6 +1879,12 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         w.clock = ClockWatch{};
         w.who = TruckWho{};
         w.burnKnown = false;
+        if (w.take.driving)
+        {
+            Log(L"gearbox: the mod's gearbox lets the truck go: it is not read any more");
+            w.take.driving = false;
+        }
+        GearboxLetGo(w);
         PullGiveBack(m, w, L"the truck is not read any more");
         // the engine's torque the mod handed to the game: the game's own share back, where the truck still is
         TorqueGive(m, w.refs, false, TorqueHandStep(w.hand, false, 0, 0, 0.0f, 1.0f));
@@ -1918,8 +1942,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             w.power = PowertrainModel{};
             w.gearbox = GearboxModel{};
             w.clutch = ClutchModel{};
-            if (w.take.driving) Log(L"gearbox: the mod's automatic lets the last truck's gears go: another truck is driven");
+            if (w.take.driving) Log(L"gearbox: the mod's gearbox lets the last truck go: another truck is driven");
             w.take = TakeoverModel{};
+            GearboxLetGo(w);
             PullGiveBack(m, w, L"another truck is driven");
             w.air = AirModel{};
             w.tilt = TiltModel{};
@@ -1929,8 +1954,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         }
         if (!w.modelAt || now - w.modelAt >= 1000) w.tilt = TiltModel{};
         const float dt = w.modelAt && now - w.modelAt < 1000 ? SettingsRange((now - w.modelAt) / 1000.0f, 0.001f, 0.2f) : 0.05f;
-        // the needle: while the mod's automatic drives the gears, its converter's engine speed (of the last pass)
-        if (w.take.driving) TachFollow(w.tach, raw, scale, w.gearbox.rpm, dt);
+        // the needle: while the mod's gearbox is in A, its converter's engine speed (of the last pass)
+        if (w.take.driving && !GearboxManual(w)) TachFollow(w.tach, raw, scale, w.gearbox.rpm, dt);
         else TachStep(w.tach, raw, scale, dt);
         // the engine's torque curve: its own profile's (Gauges\\engines), else the class's; a naturally aspirated one
         // has no boost, no turbo sounds and no boost dial
@@ -1973,14 +1998,12 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         // shifts is logged beside the game's gear while the game's automatic drives a numbered gear
         const int boxGear = w.gearbox.gear;
         const float foot = TruckEngineOn(raw) ? TruckPedal(raw) : 0.0f;
-        const bool smtDrives = SmtManual(w, raw);
-        if (smtDrives)
+        if (GearboxManual(w))
         {
-            // the manual transmission mod drives the gears, the game's automatic off: the automatic's model stands
-            // down, and the engine runs behind the clutch, the same way
+            // a position of the player's own: the automatic's model stands down, and the engine runs behind the
+            // gearbox's clutch; a clutch on an axis is the driver's, without one (a button, or none) it works by itself
             w.gearbox = GearboxModel{};
-            // a clutch pedal on an axis is the driver's; without one (a button, or none) the clutch works by itself
-            if (ClutchStep(w.clutch, raw, scale, curve, w.smt.clutch, w.power.pedal, w.power.cold * w.power.boost, !w.smt.clutchAxis, dt) && probe)
+            if (ClutchStep(w.clutch, raw, scale, curve, w.pos.travel, w.power.pedal, w.power.cold * w.power.boost, w.actions.clutchTravel < 0.0f, dt) && probe)
                 Log(L"clutch: the engine would have stalled, the clutch let up at %.0f rpm on the gearbox's input in gear %d", w.clutch.input, raw.gearEngaged);
         }
         else
@@ -2041,23 +2064,42 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             Log(L"%S", second);
         }
         const bool testing = w.pullTest.state == kPullRunning || pull.ended;
-        // the mod's automatic in the game (Gearbox=1): while the game's shifter is in A the model's gear is set through
-        // the game's own shift function, with the game's automatic flag put down so its own choice stops; not while the
-        // pull test holds the gear
-        const TakeoverOrders orders = testing ? TakeoverOrders{} : TakeoverStep(w.take, raw, w.gearbox.gear, s.gearbox == kGearboxModel && g_shiftGear != nullptr, dt,
-                                                                                GearboxLowestFit(w.gearbox, raw, scale, w.hand.on));
+        // the mod's gearbox in the game (Gearbox=1, with the hooks in place): it takes the truck the moment it is driven,
+        // in the position the game has it, and from then on every shift is its own; the game's own are refused
+        // (GearboxHolding). In A the automatic's model picks the gear. No gear is set while the pull test holds one
+        const TakeoverOrders orders = TakeoverStep(w.take, raw, s.gearbox == kGearboxModel && g_shiftGear != nullptr && GearboxHooked());
+        const GearboxTruck boxTruck{ raw.gear, TruckTopGear(raw), isfinite(raw.speed) ? fabsf(raw.speed) : 0.0f, TruckEngineOn(raw), raw.stall,
+                                     raw.powerFactor, raw.automatic != 0, foot };
         if (orders.took)
         {
-            w.gearbox.gear = raw.gear;
+            GearboxPosTake(w.pos, boxTruck);
+            GearboxHolding(true);
+            w.gearbox.gear = raw.gear >= 1 && raw.gear <= TruckTopGear(raw) ? raw.gear : 1;
             w.gearbox.pause = kShiftPause;
             GearboxHuntClear(w.gearbox);
-            Log(L"gearbox: the mod's automatic takes the gears, in gear %d", raw.gear);
+            Log(L"gearbox: the mod's gearbox takes the truck in %S (the game's gear %d); the game's own shifting is refused from now on", GearboxPosName(w.pos.pos), raw.gear);
         }
-        if (orders.gaveBack) Log(L"gearbox: the mod's automatic gives the gears back: %S, after %d shifts", TakeoverWhy(w.take.lastHandBack), w.take.shifts);
-        if (probe && orders.tapped)
-            Log(L"gearbox: the game's own automatic picked gear %d (the shift modifier, or A picked again); the mod puts its gear %d back", orders.tapped, orders.shiftTo);
-        if (probe && orders.undone) Log(L"gearbox: the game went to gear %d after its own automatic's pick; the mod puts its gear %d back", raw.gear, orders.shiftTo);
-        if (orders.flagDown) m.put(w.refs.action + 0x3C, (uint8_t)0);
+        if (orders.gaveBack)
+        {
+            Log(L"gearbox: the mod's gearbox lets the truck go: %S, after %d shifts and %d stalls", TakeoverWhy(w.take.lastHandBack), w.take.shifts, w.pos.stalls);
+            GearboxLetGo(w);
+        }
+        bool shiftAsk = false;
+        int shiftTo = 0;
+        if (w.take.driving && !testing)
+        {
+            const GearboxOptions options{ s.requireClutch, s.requireGearHeld, s.skipNeutral };
+            const int autoGear = TakeoverAutoGear(raw, w.gearbox.gear, GearboxLowestFit(w.gearbox, raw, scale, w.hand.on));
+            const int posWas = w.pos.pos;
+            const GearboxPosOrders box = GearboxPosStep(w.pos, options, w.actions, boxTruck, autoGear);
+            if (box.flagDown) m.put(w.refs.action + 0x3C, (uint8_t)0);
+            if (box.setPower) m.put(w.refs.action + 0x38, box.power);
+            if (box.stall) m.put(w.refs.vehicle + 0x11C, kStallSeconds);
+            if (box.moved && w.pos.pos != posWas) Log(L"gearbox: %S to %S", GearboxPosName(posWas), GearboxPosName(w.pos.pos));
+            if (box.why[0]) Log(L"gearbox: %S (%d since it took the truck)", box.why, w.pos.stalls);
+            shiftAsk = box.setGear;
+            shiftTo = box.gear;
+        }
         // the engine's torque handed to the game (Powertrain): the torque factor for the engine's torque at the needle's
         // speed and the converter's ratio over the game's curve at the wheels' share of the gear's top, while the engine
         // runs and no pull test is armed or running; the game's own share given back once it stops
@@ -2068,7 +2110,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             // (LiftShare: before the grip is known, no more than kLiftBlind)
             const float ground = isfinite(raw.speed) && raw.speed > 0.0f ? raw.speed : 0.0f;
             const float x = LiftShare(TruckDrivenSpin(raw), ground, w.gearbox.grip, TruckGearTop(raw, raw.gearEngaged));
-            const float ratio = w.take.driving ? w.gearbox.ratio : 1.0f;
+            const float ratio = w.take.driving && !GearboxManual(w) ? w.gearbox.ratio : 1.0f;
             const bool handWas = w.hand.on;
             const float gameWas = w.hand.game;
             // held back to the engine's Torque share where one is set
@@ -2079,23 +2121,25 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 Log(w.hand.on ? L"powertrain: the engine's torque handed to the game, the game's own torque factor %.3f" : L"powertrain: the game's own torque factor %.3f given back",
                     w.hand.on ? w.hand.game : gameWas);
         }
-        if (orders.shiftTo)
+        if (shiftAsk)
         {
-            if (GameShift(w.refs.vehicle, orders.shiftTo))
+            if (GameShift(w.refs.vehicle, shiftTo))
             {
-                if (probe)
+                w.take.shifts++;
+                if (probe && shiftTo >= 1 && raw.gear >= 1)
                 {
                     // where the wheels are against each gear's top, by the ground, and what the game gives there
-                    const float from = GearboxInput(raw, scale, raw.gear, w.gearbox.by) / scale.redline, into = GearboxInput(raw, scale, orders.shiftTo, w.gearbox.by) / scale.redline;
+                    const float from = GearboxInput(raw, scale, raw.gear, w.gearbox.by) / scale.redline, into = GearboxInput(raw, scale, shiftTo, w.gearbox.by) / scale.redline;
                     Log(L"gearbox: %d to %d at %.0f rpm on the gearbox's input, the engine at %.0f rpm, the pedal at %.2f; the wheels at %.2f of the gear's top "
                         L"(the game's pull %.2f) and %.2f of the new one's (%.2f)",
-                        raw.gear, orders.shiftTo, w.gearbox.input, w.gearbox.rpm, foot, from, GamePull(from), into, GamePull(into));
+                        raw.gear, shiftTo, w.gearbox.input, w.gearbox.rpm, foot, from, GamePull(from), into, GamePull(into));
                 }
+                else if (probe) Log(L"gearbox: %d to %d", raw.gear, shiftTo);
             }
             else
             {
-                TakeoverRefused(w.take, raw);
-                Log(L"gearbox: the game did not take gear %d from the mod's automatic, in gear %d", orders.shiftTo, raw.gear);
+                GearboxPosRefused(w.pos, boxTruck);
+                Log(L"gearbox: the game did not take gear %d from the mod's gearbox, in gear %d", shiftTo, raw.gear);
             }
         }
         if (w.oil.on != oilWas)
@@ -2172,18 +2216,18 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         Log(L"probe: %S", seventh);
         PowertrainProbeText(raw, w.power, w.tach.rpm, w.hand.on, w.hand.written, w.hand.game, eighth, sizeof eighth);
         Log(L"probe: %S", eighth);
-        const bool smtDrives = SmtManual(w, raw);
-        if (smtDrives) snprintf(ninth, sizeof ninth, "automatic (not handed to the game yet): stands down, the manual transmission mod drives the gears");
+        const bool manual = GearboxManual(w);
+        if (manual) snprintf(ninth, sizeof ninth, "automatic: stands down, the gearbox is in a position of the player's own");
         else GearboxProbeText(raw, w.gearbox, w.take.driving, ninth, sizeof ninth);
         Log(L"probe: %S", ninth);
-        if (w.smt.present)
+        if (w.take.driving)
         {
-            SmtProbeText(w.smt, w.smt.driving && w.smt.vehicle == w.refs.vehicle, tenth, sizeof tenth);
+            GearboxPosProbeText(w.pos, GearboxOptions{ s.requireClutch, s.requireGearHeld, s.skipNeutral }, raw.gear, tenth, sizeof tenth);
             Log(L"probe: %S", tenth);
         }
-        if (smtDrives)
+        if (manual)
         {
-            ClutchProbeText(w.clutch, w.smt.clutch, eleventh, sizeof eleventh);
+            ClutchProbeText(w.clutch, w.pos.travel, eleventh, sizeof eleventh);
             Log(L"probe: %S", eleventh);
         }
         AirProbeText(raw, w.air, twelfth, sizeof twelfth);
@@ -2205,8 +2249,11 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         GearboxCounts c;
         GearboxCountsGet(c);
         Log(L"probe: gearbox code: ShiftGear %ld (last gear %d) | auto %ld | high %ld | reverse %ld | neutral %ld | auto off %ld (last %d) | power %ld (last %.3f) | "
-            L"vehicle %ld (%s) | counts nest: reverse and neutral go through auto off, auto off through ShiftGear",
-            c.shift, c.shiftGear, c.autoGear, c.high, c.reverse, c.neutral, c.autoOff, c.autoOffGear, c.power, c.factor, c.vehicle, c.vehicleSet ? L"set" : L"cleared");
+            L"vehicle %ld (%s) | counts nest: reverse and neutral go through auto off, auto off through ShiftGear | refused%s: ShiftGear %ld, auto %ld, "
+            L"high %ld, reverse %ld, neutral %ld, auto off %ld, power %ld",
+            c.shift, c.shiftGear, c.autoGear, c.high, c.reverse, c.neutral, c.autoOff, c.autoOffGear, c.power, c.factor, c.vehicle, c.vehicleSet ? L"set" : L"cleared",
+            GearboxHoldingNow() ? L" (the mod's gearbox has the truck)" : L"", c.refused[kFnShiftGear], c.refused[kFnShiftToAuto], c.refused[kFnShiftToHigh],
+            c.refused[kFnShiftToReverse], c.refused[kFnShiftToNeutral], c.refused[kFnAutoOffAndShift], c.refused[kFnSetPower]);
         w.gearboxProbeAt = now + 1000;
     }
     // on screen once the truck has been driven for half a second: a state that only flickers by does not show it
@@ -2706,11 +2753,11 @@ static DWORD WINAPI Run(void *)
         {
             TruckToState(raw, world, inForce, v.st);
             v.st.rpm = watch.tach.rpm;
-            if (watch.take.driving)
+            if (watch.take.driving && watch.pos.running)
             {
-                // the game's flag is down, but the gears are an automatic's
-                v.st.gearMode = "A";
-                v.st.lowGear = false;
+                // the game's flag is down, so its own letter would be a number: the gearbox's position gives it
+                v.st.gearMode = GearboxPosLetter(watch.pos.pos);
+                v.st.lowGear = watch.pos.pos >= kPosLowMinus && watch.pos.pos <= kPosLowPlus;
             }
             v.st.boostBar = watch.boost.bar;
             v.st.natural = watch.profile.aspiration == kAspNatural;
@@ -2810,7 +2857,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.warmUpMinutes == b.warmUpMinutes && a.overheatMinutes == b.overheatMinutes && a.coolDownMinutes == b.coolDownMinutes && a.ambientC == b.ambientC &&
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly &&
-           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.input == b.input && a.powertrain == b.powertrain && a.engineShare == b.engineShare;
+           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.input == b.input && a.powertrain == b.powertrain && a.engineShare == b.engineShare;
 }
 
 static int g_failed = 0;
@@ -2841,7 +2888,7 @@ int wmain(int argc, wchar_t **argv)
           "defaults: the coolant warm after 3 minutes, in the red zone after 1.5, cool after 15, with 15 C outside");
     Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.hotDamageFrom == kTempRed && d.coldDamage == 5.0f,
           "defaults: the radiator's full airflow from 30 km/h, engine damage on from the red zone, 10 percent a minute for the heat and 5 for the cold");
-    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && d.input == kInputWheel && !d.powertrain && d.engineShare == 50,
+    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && d.input == kInputWheel && !d.powertrain && d.engineShare == 50,
           "defaults: the oil as a second needle, warm after 5 minutes, too hot from 120 C; the standard turbo");
 
     // keys the mod does not know, in its own section and in another one
@@ -2889,6 +2936,7 @@ int wmain(int argc, wchar_t **argv)
     c.oilGauge = kOilDial;
     c.boostProfile = kSpoolTwoStage;
     c.gearbox = kGearboxModel;
+    c.requireClutch = c.requireGearHeld = c.skipNeutral = true;
     c.input = kInputKeys;
     c.powertrain = true;
     c.engineShare = 80;
@@ -2904,7 +2952,7 @@ int wmain(int argc, wchar_t **argv)
                             c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
                             c.demo != d.demo && c.probe != d.probe && c.soundVolume != d.soundVolume && c.soundsOnly != d.soundsOnly &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
-                            c.gearbox != d.gearbox && c.input != d.input && c.powertrain != d.powertrain && c.engineShare != d.engineShare;
+                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.input != d.input && c.powertrain != d.powertrain && c.engineShare != d.engineShare;
     WriteIni(c);
     ReadIni(b);
     Check(allChanged, "ini: the test changes every setting from its default");
@@ -2925,7 +2973,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 79, "ini: the help text survives a write (79 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 81, "ini: the help text survives a write (81 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());
