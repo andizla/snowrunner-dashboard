@@ -39,15 +39,18 @@ cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I src /Fo:out\obj\gearbox_test.o
 rem the models test: the engine speed, the range, the tilt, the coolant temperature and what it costs the engine
 rem (src\models.h) on made up drives, and the sounds of a lifted pedal (src\sound.h)
 cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I src /Fo:out\obj\models_test.obj /Fe:out\test\models_test.exe test\models_test.cpp /link ole32.lib || goto fail
+rem the input test: the gearbox's bindings (src\input_bindings.h) on made up snapshots, and the wheels and shifters
+rem this machine has through DirectInput (src\input_devices.cpp; DirectInput comes with the Windows SDK)
+cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I src /Fo:out\obj\ /Fe:out\test\input_test.exe test\input_test.cpp src\input_devices.cpp /link user32.lib dinput8.lib dxguid.lib || goto fail
 rem the loader
 ml64 /nologo /c /Fo out\obj\version_stubs.obj tools\version_stubs.asm || goto fail
 cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /Fo:out\obj\loader.obj tools\loader.cpp || goto fail
 link /nologo /DLL /DEF:tools\version.def /OUT:out\version.dll /IMPLIB:out\obj\version_proxy.lib out\obj\version_stubs.obj out\obj\loader.obj || goto fail
 rem the preview: left out, with a note, where there are no Dear ImGui sources
 call test\build_preview.bat
-if errorlevel 2 (echo BUILD OK without the preview: out\Gauges.asi, out\test\settings_test.exe, out\test\truck_test.exe, out\test\models_test.exe, out\version.dll & exit /b 0)
+if errorlevel 2 (echo BUILD OK without the preview: out\Gauges.asi, out\test\settings_test.exe, out\test\truck_test.exe, out\test\models_test.exe, out\test\input_test.exe, out\version.dll & exit /b 0)
 if errorlevel 1 goto fail
-echo BUILD OK: out\Gauges.asi, out\test\settings_test.exe, out\test\truck_test.exe, out\test\models_test.exe, out\test\gauge_preview.exe, out\version.dll
+echo BUILD OK: out\Gauges.asi, out\test\settings_test.exe, out\test\truck_test.exe, out\test\models_test.exe, out\test\input_test.exe, out\test\gauge_preview.exe, out\version.dll
 exit /b 0
 :fail
 echo BUILD FAILED

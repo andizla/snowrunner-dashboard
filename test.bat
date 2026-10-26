@@ -16,6 +16,7 @@ out\test\settings_test.exe || set failed=1
 out\test\truck_test.exe || set failed=1
 out\test\gearbox_test.exe || set failed=1
 out\test\models_test.exe || set failed=1
+out\test\input_test.exe || set failed=1
 if not exist out\test\gauge_preview.exe goto nopreview
 out\test\gauge_preview.exe out\preview "%FONTS%" %2 || set failed=1
 goto done

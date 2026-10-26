@@ -15,6 +15,7 @@
 - The fuel burn a minute after the range under the fuel dial, `ShowBurn` and the tab's "Burn": the game's own burn smoothed over a second, litres a minute, gallons an hour with Mph (asked for in the comments).
 - The game's gearbox functions are hooked, calling through, as the ground for the mod's own gearbox in the next version; a probe line counts their calls. The manual transmission mod (SMT) is no longer needed and not compatible: the mod says so in the log and the tab when it finds it installed.
 - The mod's own gearbox: A, the numbered gears, N, R, H and the low range as positions of its own, with a clutch, stalls for a shift without it, a held-gear mode for H shifters and a choice to skip neutral; while it has the truck the game's own shifting is refused, so a truck in A no longer reverses on the brake. The bindings follow in the next phase. The manual transmission mod's state is no longer read.
+- An input reader for the gearbox's bindings: keys, pad chords, and wheels and shifters through DirectInput, with a capture; not used yet.
 
 ## [0.16.1] 2026-10-25
 
