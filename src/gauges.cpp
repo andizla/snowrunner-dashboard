@@ -1891,7 +1891,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         if (pedalDown && !w.pedalDown) SoundQuiet();
         w.pedalDown = pedalDown;
         RangeStep(w.range, kind, raw, dt);
-        AirStep(w.air, raw, TachSpeed(w.tach, scale), dt);
+        // the air dryer's purge: a hiss each time the governor stops the compressor, a little under the oil warning
+        if (AirStep(w.air, raw, TachSpeed(w.tach, scale), dt) && TruckEngineOn(raw)) SoundPlay(kSoundPurge, 0.8f * OilBeepGain(s.soundVolume), 1.0f);
         TiltStep(w.tilt, raw, s, dt);
         TempStep(w.temp, kind, raw, TachSpeed(w.tach, scale), s, dt);
         // the oil warning: heard every few seconds while the oil is too hot, and said in the log when it comes and goes

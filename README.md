@@ -77,7 +77,7 @@ The Gameplay tab of the NEXT GEN menu edits every setting while you play. F2 ope
 | How much of the mod's engine the game gets with `Powertrain=1`, from 0 to 100 percent: 0 leaves the game's own pull | `EngineShare` | 50 |
 | Percent of the engine lost a minute at 125 C, and by a cold engine floored at the red zone at 0 C, each from 0 to 100 | `HotDamagePercentPerMinute`, `ColdDamagePercentPerMinute` | 10, 5 |
 | The coolant temperature where the hot damage starts, 100 to 124 C; the rate above is still reached at 125 C (the tab's "Damage from") | `HotDamageFrom` | 118 |
-| How loud the turbo's flutter and the oil warning are, from 0 to 100. 0 = no sound | `SoundVolume` | 50 |
+| How loud the turbo's flutter, the oil warning and the air dryer's purge are, from 0 to 100. 0 = no sound | `SoundVolume` | 50 |
 | The sounds without the cluster | `SoundsOnly` 0 or 1 | off |
 | A key that hides and shows the cluster | `ToggleKey`, a virtual key code | none |
 | Pad buttons that do the same | `PadToggle`, as `LB+DPadUp` | None |
@@ -138,7 +138,7 @@ Each of the three coolant times changes one thing: how fast a cold engine warms 
 
 The cluster keeps its share of the screen: it is twice as large in pixels on a 2160p screen as on a 1080p one.
 
-The flutter comes in three strengths, for a lift at full boost, at half and at little, with three recordings of each. To hear recordings of your own instead, put them in the game's `Sources\Bin` folder as `sounds\turbo_high_1.wav` to `turbo_high_4.wav`, and `turbo_mid_` and `turbo_low_` likewise: WAV files, PCM or float, up to six seconds. A strength with at least one file of yours plays only yours. The oil warning is two short beeps, and `sounds\oil_beep_1.wav` plays in their place. The mod brings every sound to the same loudness, and `Gauges.log` says which ones it plays. The Gameplay tab has a button for each strength and one for the oil warning.
+The flutter comes in three strengths, for a lift at full boost, at half and at little, with three recordings of each. To hear recordings of your own instead, put them in the game's `Sources\Bin` folder as `sounds\turbo_high_1.wav` to `turbo_high_4.wav`, and `turbo_mid_` and `turbo_low_` likewise: WAV files, PCM or float, up to six seconds. A strength with at least one file of yours plays only yours. The oil warning is two short beeps, and `sounds\oil_beep_1.wav` plays in their place. Each time the governor stops the compressor at the cut-out, the air dryer purges with a short hiss, made by the mod's code, or `sounds\air_purge_1.wav` to `_4.wav` in its place. The mod brings every sound to the same loudness, and `Gauges.log` says which ones it plays. The Gameplay tab has a button for each strength and one for the oil warning.
 
 The pad is only read. The game sees the toggle buttons too, so pick buttons it does not use while driving.
 

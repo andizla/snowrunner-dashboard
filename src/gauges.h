@@ -274,9 +274,9 @@ inline void GaugeDemo(GaugeState &st, const GaugeSettings &s)
 // tab; engineCapacity is 0 while it is not known.
 enum { kShown, kHiddenByToggle, kHiddenNoTruck, kHiddenSoundsOnly };
 // How strong the turbo's flutter is after a lift of the pedal, by the boost the lift had: the sounds come in these three.
-// After them the oil warning, the mod's one other sound.
+// After them the oil warning and the air dryer's purge, the mod's other sounds.
 enum { kTurboHigh, kTurboMid, kTurboLow, kTurboTiers };
-enum { kSoundOil = kTurboTiers, kSoundTierCount };
+enum { kSoundOil = kTurboTiers, kSoundPurge, kSoundTierCount }; // the oil warning, then the air dryer's purge at the compressor's cut-out
 // truck: the kind of truck being driven, as the game's files name it ("" while none is driven): the scales in force
 // are that kind's. truckOwn: it has scales of its own in Gauges.ini, and those are the ones in force. map: the map
 // the truck drives on in words, with its region ("" while it is not known), and ambientC the outside temperature in

@@ -2,15 +2,15 @@
 // compressor wheel, a flutter. It comes in three strengths, by how much boost the lift had (kTurboHigh, kTurboMid,
 // kTurboLow), and in up to kSoundVariants recordings of each, of which one is played and never the same twice
 // running. gauges.cpp asks for one when models.h tells a lift (SoundPlay) and for silence when the pedal goes down
-// again (SoundQuiet); a thread here plays it. The oil warning (kSoundOil) is played the same way, and the pedal does
-// not silence it.
+// again (SoundQuiet); a thread here plays it. The oil warning (kSoundOil) and the air dryer's purge (kSoundPurge) are
+// played the same way, and the pedal does not silence them.
 //
 // Where the sounds of a strength come from:
-//   WAV files sounds\turbo_high_1.wav to _4.wav (turbo_mid_, turbo_low_, oil_beep_) next to the mod, where there is
+//   WAV files sounds\turbo_high_1.wav to _4.wav (turbo_mid_, turbo_low_, oil_beep_, air_purge_) next to the mod, where there is
 //     at least one (PCM of 8 to 32 bits or 32-bit float, any number of channels, played as one)
 //   else the recordings the mod's file carries (src\sounds.rc; SOUND_CREDITS.md says whose they are)
 //   else a sound made by code (SoundMakeBlowOff for the strong one, SoundMakeFlutter for the others, SoundMakeBeep for
-//     the oil warning)
+//     the oil warning, SoundMakePurge for the purge, which carries no recording)
 // Every sound is brought to the same loudness, so a file of the player's is as loud as the mod's own.
 //
 // Played through XAudio2 2.9: the xaudio2_9redist.dll the game brings and uses itself, or Windows' own xaudio2_9.dll.
@@ -45,7 +45,8 @@ enum { kSoundVariants = 4, kSoundShots = 8 }; // recordings of one strength at m
 // recordings in src\sounds.rc are called (with _1 to _4 after it).
 struct SoundTier { const wchar_t *what, *file, *carried; };
 static const SoundTier kSoundTiers[kSoundTierCount] = { { L"the turbo at full boost", L"turbo_high", L"TURBO_HIGH" }, { L"the turbo at half boost", L"turbo_mid", L"TURBO_MID" },
-                                                        { L"the turbo at little boost", L"turbo_low", L"TURBO_LOW" }, { L"the oil warning", L"oil_beep", L"OIL_BEEP" } };
+                                                        { L"the turbo at little boost", L"turbo_low", L"TURBO_LOW" }, { L"the oil warning", L"oil_beep", L"OIL_BEEP" },
+                                                        { L"the air dryer's purge", L"air_purge", L"AIR_PURGE" } };
 static const float kSoundLevel = 0.45f; // how loud a sound is at SoundVolume=100 with the turbo at its full boost (against kSoundRms): two that ring together stay below 1
 static const float kSoundHush = 0.08f;  // seconds a sound that still rings takes to go when the pedal goes down again
 
@@ -171,6 +172,28 @@ struct SoundNoise
     }
 };
 
+// The air dryer's purge, made by code: the valve opening at the compressor's cut-out. 0.6 s of noise softened to a
+// hiss (a one-pole low pass at 4 kHz and a one-pole high pass at 600 Hz), sharp at the start, loud for its first tenth
+// of a second and falling away over the rest.
+inline void SoundMakePurge(SoundClip &c)
+{
+    const double rate = 44100.0, pi = 3.14159265358979323846;
+    const size_t n = (size_t)(rate * 0.6);
+    const float low = (float)(1.0 - exp(-2.0 * pi * 4000.0 / rate)), high = (float)exp(-2.0 * pi * 600.0 / rate);
+    SoundNoise noise = { 0xa1290e };
+    float lp = 0.0f, hpIn = 0.0f, hpOut = 0.0f;
+    c.x.assign(n, 0.0f);
+    for (size_t i = 0; i < n; i++)
+    {
+        const float t = (float)i / (float)rate, open = fminf(1.0f, t / 0.003f), fall = t < 0.1f ? 1.0f : expf(-(t - 0.1f) / 0.15f);
+        lp += low * (noise() - lp);
+        hpOut = high * (hpOut + lp - hpIn);
+        hpIn = lp;
+        c.x[i] = hpOut * open * fall;
+    }
+    c.rate = 44100;
+}
+
 // A blow-off valve, made by code: charge air let go at once. A burst of noise between 1.5 and 6 kHz that opens in
 // a few milliseconds, holds for a moment and dies away in a quarter of a second, a little lower in tone as it goes.
 inline void SoundMakeBlowOff(SoundClip &c)
@@ -292,6 +315,7 @@ inline void SoundLoad(int tier, const std::wstring &dir, SoundSet &set)
     }
     if (set.count) return;
     if (tier == kSoundOil) SoundMakeBeep(set.clip[0]);
+    else if (tier == kSoundPurge) SoundMakePurge(set.clip[0]);
     else if (tier == kTurboHigh) SoundMakeBlowOff(set.clip[0]);
     else SoundMakeFlutter(set.clip[0]);
     SoundLevel(set.clip[0]);
@@ -390,7 +414,7 @@ static DWORD WINAPI SoundThread(void *)
     ULONGLONG quietSince = 0, againAt = 0, last = GetTickCount64();
     HRESULT lastError = S_OK;
     bool said = false;
-    int played[kSoundTierCount] = { -1, -1, -1, -1 }; // the recording each strength played last
+    int played[kSoundTierCount] = { -1, -1, -1, -1, -1 }; // the recording each strength played last
     SoundNoise chance = { (uint32_t)GetTickCount() | 1 };
     for (;;)
     {

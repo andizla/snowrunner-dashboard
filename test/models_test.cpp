@@ -3080,6 +3080,19 @@ int main(int argc, char **argv)
         }
         Check(beep.rate == 44100 && Near((float)beep.x.size() / beep.rate, 0.4f, 0.01f) && beeps == 2 && fabsf(beep.x.front()) < 0.01f && fabsf(beep.x.back()) < 0.01f,
               "sound: the oil warning made by code is two short beeps");
+        // the air dryer's purge: about 0.6 s, loudest in its first tenth, brought to the common loudness there
+        SoundClip purge;
+        SoundMakePurge(purge);
+        const size_t tenth = purge.rate / 10;
+        auto rmsAt = [&](size_t from) {
+            double sum = 0.0;
+            for (size_t i = from; i < from + tenth && i < purge.x.size(); i++) sum += (double)purge.x[i] * purge.x[i];
+            return sqrt(sum / (double)tenth);
+        };
+        const double firstRaw = rmsAt(0), lastRaw = rmsAt(purge.x.size() - tenth);
+        SoundLevel(purge);
+        Check(!purge.x.empty() && Near((float)purge.x.size() / purge.rate, 0.6f, 0.01f) && firstRaw > 4.0 * lastRaw && Near((float)rmsAt(0), kSoundRms, 0.01f),
+              "sound: the purge made by code is a hiss of 0.6 s, loudest in its first tenth, at the common loudness there");
         SoundClip loud = clip, quiet = clip;
         for (float &v : quiet.x) v *= 0.01f;
         SoundLevel(loud);

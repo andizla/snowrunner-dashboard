@@ -11,6 +11,7 @@
 - The tab's "Truck class" keeps the scale numbers set by hand when the class changes; only the ones still at the old class's own follow the new class. The peak torque slider's tip says it ends at the red zone and the curve's peak sits at most at 0.95 of it.
 - A clock on the cluster, `ShowClock` and the tab's "Clock": an analog dial with the game's time of day, the outside temperature in its face (from the mod.io list).
 - The pad toggle rests while the NEXT GEN menu is open, as the toggle key does.
+- The air dryer's purge: a short hiss each time the governor stops the compressor at the cut-out, made by the mod's code, or your own `sounds\air_purge_1.wav` to `_4.wav` next to the mod; it follows `SoundVolume`.
 
 ## [0.16.1] 2026-10-25
 
