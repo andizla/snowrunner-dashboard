@@ -41,6 +41,8 @@ struct GaugeState
     int tilt;                       // 0 level, 1 warning, 2 danger, below 0 not known (the lamp stays dark)
     float rollDeg;                  // how far the truck leans sideways, above 0 to its right (the tilt lamp's truck leans with it)
     bool mph, psi, fahrenheit;      // units
+    float hour;                     // the hour of the game's day, 0 to 24, for the clock; below 0 not known (no hands)
+    float outsideC;                 // the outside temperature in force, in C, in the clock's face
 };
 
 enum { kLayoutStrip, kLayoutBlock, kLayoutCount };           // GaugeSettings::layout
@@ -64,6 +66,7 @@ struct GaugeSettings
     float opacity;           // Opacity of the whole cluster
     bool mph, psi, fahrenheit;                    // Mph, Psi, Fahrenheit
     bool showTemp, showBoost, showAir, showLamps; // ShowTemp, ShowBoost, ShowAir, ShowLamps
+    bool showClock;          // ShowClock: a clock dial with the game's time of day, the outside temperature in its face
     int oilGauge;            // OilGauge: the oil temperature: 0 not shown, 1 a second needle in the temperature dial, 2 a dial of its own left of it
     int tachClass;           // TachClass: 0 truck, 1 scout, 2 heavy: the scales of the tachometer and the speedometer
     float idleRpm, redlineRpm, maxRpm, speedMax;  // IdleRpm, RedlineRpm, MaxRpm, SpeedMax: 0 = the class's own
@@ -106,6 +109,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.opacity = 1.0f;
     s.showTemp = s.showBoost = s.showLamps = true;
     s.showAir = false;
+    s.showClock = true;
     s.oilGauge = kOilNeedle;
     s.tachClass = kClassTruck;
     s.boostProfile = kSpoolStandard;
@@ -261,6 +265,8 @@ inline void GaugeDemo(GaugeState &st, const GaugeSettings &s)
     st.airBar = 8.2f;
     st.awd = st.diffLock = st.headlights = true;
     st.rollDeg = 5.0f;
+    st.hour = 14.0f + 35.0f / 60.0f;
+    st.outsideC = 12.0f;
 }
 
 // What the render thread draws: show = the cluster is on screen, demo = st holds the demo values, hidden = why it is

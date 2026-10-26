@@ -29,8 +29,8 @@ struct GaugeLayout
 {
     int variant;                    // 0 = strip (bottom centre), 1 = block (bottom right)
     bool swapDials;                 // the speedometer where the tachometer is and the tachometer where the speedometer is
-    bool showTemp, showBoost, showAir, showLamps;
-    int oilGauge;                   // the oil temperature: kOilOff, kOilNeedle (a second needle in the temperature dial), kOilDial (a dial of its own)
+    bool showTemp, showBoost, showAir, showLamps, showClock;
+    int oilGauge;                  // the oil temperature: kOilOff, kOilNeedle (a second needle in the temperature dial), kOilDial (a dial of its own)
     float faceAlpha;                // 1 = solid dial faces; lower = see-through (the game shows through, drop shadows under the marks)
     bool openArc;                   // no face or bezel at all: only the scale arc with its ticks
 };
@@ -710,6 +710,38 @@ static void GAir(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float u
     GSmallNeedle(dl, c, r, GDeg(s, st.airBar), u, a);
 }
 
+// A clock as on an older vehicle's dash: twelve hour marks (the 12, 3, 6 and 9 longer), no numbers, plain hour and
+// minute hands, no second hand; the game's time of day (st.hour, none drawn below 0) and the outside temperature as a
+// number in the lower half of the face.
+static void GClock(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float u, float a, const GaugeState &st)
+{
+    const GScale s = GScale{ 0.0f, 12.0f, -90.0f, 270.0f };
+    if (s_open)
+    {
+        // the whole round, not a scale's 240 degrees
+        const ImVec2 low(c.x + 1.0f * u, c.y + 1.3f * u);
+        GArc(dl, low, r - 2.5f * u, 0.0f, 360.0f, 4.6f * u, GCol(0, 0, 0, 0.16f * a));
+        GArc(dl, low, r - 2.5f * u, 0.0f, 360.0f, 2.4f * u, GCol(0, 0, 0, 0.5f * a));
+        GArc(dl, c, r - 2.5f * u, 0.0f, 360.0f, 1.9f * u, GCol(kTick, a));
+    }
+    else GSmallDial(dl, c, r, u, a);
+    GTicks(dl, c, r - 2.5f * u, s, 1.0f, 1, 4.0f, 4.0f, u, a);
+    GTicks(dl, c, r - 2.5f * u, s, 3.0f, 1, 8.0f, 8.0f, u, a);
+    char buf[16];
+    sprintf_s(buf, "%.0f %s", st.fahrenheit ? st.outsideC * 1.8f + 32.0f : st.outsideC, st.fahrenheit ? "F" : "C");
+    GText(dl, f, kGsSmall, ImVec2(c.x, c.y + r * 0.42f), GCol(kText, a), buf, 0, u);
+    if (!(st.hour >= 0.0f)) return;
+    const float h = fmodf(st.hour, 12.0f), minutes = (st.hour - floorf(st.hour)) * 60.0f;
+    auto hand = [&](float deg, float len, float thick) {
+        const ImVec2 tip = GPolar(c, len, deg);
+        GLine(dl, ImVec2(c.x + 1.0f * u, c.y + 1.6f * u), ImVec2(tip.x + 1.0f * u, tip.y + 1.6f * u), GCol(0, 0, 0, 0.36f * a), thick * u);
+        GLine(dl, c, tip, GCol(kNeedle, a), thick * u);
+    };
+    hand(-90.0f + h * 30.0f, r * 0.55f, 3.2f);
+    hand(-90.0f + minutes * 6.0f, r * 0.85f, 2.0f);
+    GHub(dl, c, 3.6f * u, u, a);
+}
+
 // The fuel range readout: a pump and "412 km", with a tenth below ten ("6.4 km"), or "---" until the mod has measured
 // the consumption.
 static void GRange(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float u, float a, const GaugeState &st)
@@ -784,7 +816,7 @@ static void GaugeDraw(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float 
     s_faceAlpha = s_open ? 0.0f : lay.faceAlpha;
     if (lay.variant == 0)
     {
-        // a strip: [oil][temp][fuel] [SPEED] lamps [TACH] [boost][air], the range under the fuel dial; with swapDials
+        // a strip: [oil][temp][fuel] [SPEED] lamps [TACH] [boost][air][clock], the range under the fuel dial; with swapDials
         // the two big dials change places and the rest stays
         const float R = 72.0f * u, r = 42.0f * u, cy = origin.y - 96.0f * u, cx = origin.x;
         const float side = lay.swapDials ? -1.0f : 1.0f;
@@ -798,7 +830,8 @@ static void GaugeDraw(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float 
         if (lay.oilGauge == kOilDial) { x -= 2.0f * r + 8.0f * u; GOil(dl, f, ImVec2(x, cy + 20.0f * u), r, u, a, st); }
         x = cx + 98.0f * u + R + 10.0f * u + r;
         if (lay.showBoost) { GBoost(dl, f, ImVec2(x, cy + 20.0f * u), r, u, a, st); x += 2.0f * r + 8.0f * u; }
-        if (lay.showAir) GAir(dl, f, ImVec2(x, cy + 20.0f * u), r, u, a, st);
+        if (lay.showAir) { GAir(dl, f, ImVec2(x, cy + 20.0f * u), r, u, a, st); x += 2.0f * r + 8.0f * u; }
+        if (lay.showClock) GClock(dl, f, ImVec2(x, cy + 20.0f * u), r, u, a, st);
     }
     else
     {
@@ -808,7 +841,7 @@ static void GaugeDraw(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float 
         GSpeedo(dl, f, ImVec2(origin.x - (lay.swapDials ? 76.0f : 238.0f) * u, y1), R, u, a, st);
         GTacho(dl, f, ImVec2(origin.x - (lay.swapDials ? 238.0f : 76.0f) * u, y1), R, u, a, st);
         if (lay.showLamps) GLamps(dl, f, ImVec2(origin.x - 157.0f * u, y1), 2, 17.5f * u, 3.5f * u, u, a, st);
-        int n = 1 + (lay.oilGauge == kOilDial ? 1 : 0) + (lay.showTemp ? 1 : 0) + (lay.showBoost ? 1 : 0) + (lay.showAir ? 1 : 0);
+        int n = 1 + (lay.oilGauge == kOilDial ? 1 : 0) + (lay.showTemp ? 1 : 0) + (lay.showBoost ? 1 : 0) + (lay.showAir ? 1 : 0) + (lay.showClock ? 1 : 0);
         const float pitch = 2.0f * r + 10.0f * u;
         // centred under the big dials, and moved left where a long row would pass the block's right edge
         float x = fminf(origin.x - 157.0f * u - (n - 1) * pitch * 0.5f, origin.x - (n - 1) * pitch - r);
@@ -818,7 +851,8 @@ static void GaugeDraw(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float 
         const float fuelX = x;
         x += pitch;
         if (lay.showBoost) { GBoost(dl, f, ImVec2(x, y2), r, u, a, st); x += pitch; }
-        if (lay.showAir) GAir(dl, f, ImVec2(x, y2), r, u, a, st);
+        if (lay.showAir) { GAir(dl, f, ImVec2(x, y2), r, u, a, st); x += pitch; }
+        if (lay.showClock) GClock(dl, f, ImVec2(x, y2), r, u, a, st);
         GRange(dl, f, ImVec2(fuelX, y2 + r + 12.0f * u), u, a, st);
     }
 }
@@ -837,6 +871,7 @@ static GaugeLayout GaugeLayoutOf(const GaugeSettings &s)
     lay.showBoost = s.showBoost;
     lay.showAir = s.showAir && s.tachClass != kClassScout; // scouts brake by hydraulics: no air to show
     lay.showLamps = s.showLamps;
+    lay.showClock = s.showClock;
     lay.oilGauge = s.oilGauge;
     lay.faceAlpha = s.style == kFaceTinted ? s.faceOpacity : 1.0f;
     lay.openArc = s.style == kFaceOpen;
