@@ -19,6 +19,7 @@
 #include <math.h>
 #include <string>
 #include <vector>
+#include <algorithm>
 #include "gauges.h"
 #include "truck.h"
 #include "models.h"
@@ -1059,10 +1060,18 @@ static std::wstring PathForLog(const std::wstring &path)
 // The saves' names, by the store: Steam's and the Microsoft Store's .cfg, Epic's .dat.
 static const wchar_t *const kSavePatterns[2] = { L"CompleteSave*.cfg", L"CompleteSave*.dat" };
 
-// The newest save in the folders, and when it was written; false when there is none.
-static bool SaveNewestIn(const std::vector<std::wstring> &folders, std::wstring &path, FILETIME &written)
+// A save and when it was written.
+typedef std::pair<std::wstring, FILETIME> SaveFile;
+
+// Saves newest first; of two written at once, the one found first.
+static void SavesNewestFirst(std::vector<SaveFile> &saves)
 {
-    bool found = false;
+    std::stable_sort(saves.begin(), saves.end(), [](const SaveFile &a, const SaveFile &b) { return CompareFileTime(&a.second, &b.second) > 0; });
+}
+
+// The saves in the folders, newest first.
+static void SavesIn(const std::vector<std::wstring> &folders, std::vector<SaveFile> &out)
+{
     for (const auto &dir : folders)
         for (const wchar_t *pattern : kSavePatterns)
         {
@@ -1070,16 +1079,57 @@ static bool SaveNewestIn(const std::vector<std::wstring> &folders, std::wstring 
             const HANDLE h = FindFirstFileW((dir + L"\\" + pattern).c_str(), &f);
             if (h == INVALID_HANDLE_VALUE) continue;
             do
-                if (!(f.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && (!found || CompareFileTime(&f.ftLastWriteTime, &written) > 0))
-                {
-                    path = dir + L"\\" + f.cFileName;
-                    written = f.ftLastWriteTime;
-                    found = true;
-                }
+                if (!(f.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) out.push_back({ dir + L"\\" + f.cFileName, f.ftLastWriteTime });
             while (FindNextFileW(h, &f));
             FindClose(h);
         }
-    return found;
+    SavesNewestFirst(out);
+}
+
+// What a save says of the map: the one loaded last, an empty slot (SaveSlotEmpty), or nothing yet (being written, or
+// not to be read).
+enum SaveSays { kSaveUnread, kSaveEmpty, kSaveMap };
+
+static SaveSays SaveReadMap(const std::wstring &path, char *level, size_t size)
+{
+    const HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return kSaveUnread;
+    LARGE_INTEGER length = {};
+    std::string text;
+    bool ok = GetFileSizeEx(h, &length) && length.QuadPart > 0 && length.QuadPart < (64LL << 20);
+    if (ok)
+    {
+        text.resize((size_t)length.QuadPart);
+        DWORD got = 0;
+        ok = ReadFile(h, &text[0], (DWORD)text.size(), &got, nullptr) && got == text.size();
+    }
+    CloseHandle(h);
+    if (!ok) return kSaveUnread;
+    if (MapFromSave(text.data(), text.size(), level, size)) return kSaveMap;
+    return SaveSlotEmpty(text.data(), text.size()) ? kSaveEmpty : kSaveUnread;
+}
+
+// The map of the slot being played, from the saves (newest first): the newest save that names one. Empty slots are
+// passed over, as the game writes one a few seconds after the slot played; taken as the newest, it hid the map that
+// changed. The look ends with nothing new at a save no newer than the one read last (written at lastWritten), and at
+// a save that cannot be read yet (being written, unread names it), so an older slot does not take its place.
+static bool SavePick(const std::vector<SaveFile> &saves, const FILETIME &lastWritten, SaveFile &picked, char *level, size_t size, std::wstring &unread)
+{
+    unread.clear();
+    for (const auto &save : saves)
+    {
+        if (CompareFileTime(&save.second, &lastWritten) <= 0) return false;
+        const SaveSays says = SaveReadMap(save.first, level, size);
+        if (says == kSaveEmpty) continue;
+        if (says == kSaveUnread)
+        {
+            unread = save.first;
+            return false;
+        }
+        picked = save;
+        return true;
+    }
+    return false;
 }
 
 
@@ -1100,7 +1150,7 @@ static void LogGameFolder()
 // ---- the map a truck is on: the game's save says which map it loaded last (maps.h) ----
 // Steam keeps the saves in userdata\<account>\1465360\remote of its own folder as CompleteSave*.cfg, the Epic store in
 // Documents\My Games\SnowRunner\base\storage\<account> as CompleteSave*.dat (the same save under another name, as
-// the community's guides have it). The newest is the slot being played. Documents is the shell's
+// the community's guides have it). The newest that names a map is the slot being played (SavePick). Documents is the shell's
 // (which OneDrive may have moved) and the profile's own, for a game that writes to the latter. The
 // Microsoft Store's build keeps them in the app's containers, %LOCALAPPDATA%\Packages\<the game's package>\SystemAppData\wgs,
 // as files without names of their own: one whose first bytes name a CompleteSave is taken as such a file. It is
@@ -1159,8 +1209,23 @@ static std::vector<std::wstring> SaveFolders()
 }
 
 
+// A save written this long after a level had loaded names that level's map: one written during the load or just
+// after may still name the map before.
+static const unsigned kSaveAfterLoadS = 60;
+
+// Whether a is at least seconds after b.
+static bool FileTimeAfter(const FILETIME &a, const FILETIME &b, unsigned seconds)
+{
+    ULARGE_INTEGER x, y;
+    x.LowPart = a.dwLowDateTime;
+    x.HighPart = a.dwHighDateTime;
+    y.LowPart = b.dwLowDateTime;
+    y.HighPart = b.dwHighDateTime;
+    return x.QuadPart >= y.QuadPart + seconds * 10000000ULL;
+}
+
 // The files of the Microsoft Store build's save containers: wgs\<account>\<container>\<file> in each package of the game.
-static void SaveContainerFiles(std::vector<std::pair<std::wstring, FILETIME>> &out)
+static void SaveContainerFiles(std::vector<SaveFile> &out)
 {
     wchar_t local[MAX_PATH] = {};
     if (SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, local) != S_OK) return;
@@ -1202,40 +1267,15 @@ static bool SaveHeadIsComplete(const std::wstring &path)
     return read && got > 0 && strstr(head, "CompleteSave") != nullptr;
 }
 
-// The newest save in those folders (or CompleteSave in the Microsoft Store build's containers), and when it was
-// written. False when there is none.
-static bool SaveNewest(std::wstring &path, FILETIME &written)
+// The saves in those folders and the CompleteSaves in the Microsoft Store build's containers, newest first.
+static void Saves(std::vector<SaveFile> &saves)
 {
-    bool found = SaveNewestIn(SaveFolders(), path, written);
-    std::vector<std::pair<std::wstring, FILETIME>> contained;
+    SavesIn(SaveFolders(), saves);
+    std::vector<SaveFile> contained;
     SaveContainerFiles(contained);
     for (const auto &c : contained)
-        if ((!found || CompareFileTime(&c.second, &written) > 0) && SaveHeadIsComplete(c.first))
-        {
-            path = c.first;
-            written = c.second;
-            found = true;
-        }
-    return found;
-}
-
-// The map the save at path names as the one loaded last. False while it cannot be read or names none, as when the
-// game is writing it.
-static bool SaveReadMap(const std::wstring &path, char *level, size_t size)
-{
-    const HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return false;
-    LARGE_INTEGER length = {};
-    std::string text;
-    bool ok = GetFileSizeEx(h, &length) && length.QuadPart > 0 && length.QuadPart < (64LL << 20);
-    if (ok)
-    {
-        text.resize((size_t)length.QuadPart);
-        DWORD got = 0;
-        ok = ReadFile(h, &text[0], (DWORD)text.size(), &got, nullptr) && got == text.size();
-    }
-    CloseHandle(h);
-    return ok && MapFromSave(text.data(), text.size(), level, size);
+        if (SaveHeadIsComplete(c.first)) saves.push_back(c);
+    SavesNewestFirst(saves);
 }
 
 // The game's shift function (ShiftGear: a vehicle and a gear, true when the game took the gear), once the code look
@@ -1516,6 +1556,10 @@ struct TruckWatch
     TiltModel tilt;             // how the truck stands, and the tilt lamp
     int probedLamp;             // the tilt lamp the probe wrote last
     TempModel temp;             // the coolant and oil temperatures of every truck driven since the game started
+    TempModel tempCold;         // the same since the last level loaded, from as cold as the air outside: temp on another map
+    bool tempColdOn;            // tempCold runs: a level loaded, and no save since has said whether it was another map
+    bool loading;               // a level was loading on the last pass
+    FILETIME loadedAt;          // when the last level had loaded
     OilWarning oil;             // the oil warning: on while the driven truck's oil is too hot
     int probedZone;             // where the coolant stood when the probe wrote last (TempZone)
     DamageModel damage;         // what the temperature costs the engine of the truck at modelVehicle
@@ -1730,6 +1774,18 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         else Log(L"truck: none is driven now");
     }
     WorldRead(m, w.found ? w.refs.control : 0, world);
+    // a level loading may be another map. The game's save names it only when the game saves next, minutes later
+    // (found in the game, 2026-10-25). From here every engine also warms up from cold beside (tempCold), to take the
+    // kept temperatures' place if it was another map
+    const bool loading = world.known && world.loading;
+    if (loading && !w.loading)
+    {
+        w.tempCold = TempModel{};
+        w.tempColdOn = true;
+        Log(L"map: a level is loading. Until a save names its map, every engine also warms up from cold beside, in case it is another map");
+    }
+    if (!loading && w.loading) GetSystemTimeAsFileTime(&w.loadedAt);
+    w.loading = loading;
     const bool driving = read && TruckSane(raw) && WorldDriving(world);
     if (!driving) w.drivingSince = 0;
     else if (!w.drivingSince) w.drivingSince = now;
@@ -1825,6 +1881,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         AirStep(w.air, raw, TachSpeed(w.tach, scale), dt);
         TiltStep(w.tilt, raw, s, dt);
         TempStep(w.temp, kind, raw, TachSpeed(w.tach, scale), s, dt);
+        if (w.tempColdOn) TempStep(w.tempCold, kind, raw, TachSpeed(w.tach, scale), s, dt);
         // the oil warning: heard every few seconds while the oil is too hot, and said in the log when it comes and goes
         const bool oilWas = w.oil.on;
         if (OilWarnStep(w.oil, w.temp, raw, s, dt)) SoundPlay(kSoundOil, OilBeepGain(s.soundVolume), 1.0f);
@@ -2196,8 +2253,8 @@ static DWORD WINAPI Run(void *)
     ULONGLONG engineLogAt = 0;     // and the engine's profile
     ULONGLONG fullPullLogAt = 0;   // and the engine's full pull
     ULONGLONG torqueLogAt = 0;     // and the engine's torque share
-    std::wstring savePath, saveUnread; // the save read last, and one found that named no map (said once)
-    FILETIME saveWritten = {};
+    std::wstring saveUnread; // a save found that named no map (said once)
+    FILETIME saveWritten = {}; // when the save read last was written
     ULONGLONG saveLookAt = 0;
     bool codeLooked = false; // the gearbox functions were looked for, once a truck was found
     for (;;)
@@ -2277,9 +2334,9 @@ static DWORD WINAPI Run(void *)
         if (lookNow >= saveLookAt)
         {
             saveLookAt = lookNow + kSaveLookMs;
-            std::wstring path;
-            FILETIME written = {};
-            const bool found = SaveNewest(path, written);
+            std::vector<SaveFile> saves;
+            Saves(saves);
+            const bool found = !saves.empty();
             if (found != saveSeen)
             {
                 if (!found)
@@ -2299,28 +2356,34 @@ static DWORD WINAPI Run(void *)
                 saveSeen = found;
             }
             char level[64];
-            if (found && (path != savePath || CompareFileTime(&written, &saveWritten)))
+            SaveFile picked;
+            std::wstring unread;
+            if (SavePick(saves, saveWritten, picked, level, sizeof level, unread))
             {
-                if (SaveReadMap(path, level, sizeof level))
+                saveWritten = picked.second;
+                saveUnread.clear();
+                if (strcmp(level, map))
                 {
-                    savePath = path;
-                    saveWritten = written;
-                    saveUnread.clear();
-                    if (strcmp(level, map))
-                    {
-                        char at[16], title[96];
-                        ClockText(written, at, sizeof at);
-                        MapTitle(level, title, sizeof title);
-                        Log(L"map: %s (%S), the map loaded last as the game's save of %S says (%s)", Wide(title).c_str(), level, at, PathForLog(path).c_str());
-                        strcpy_s(map, level);
-                    }
+                    char at[16], title[96];
+                    ClockText(picked.second, at, sizeof at);
+                    MapTitle(level, title, sizeof title);
+                    Log(L"map: %s (%S), the map loaded last as the game's save of %S says (%s)", Wide(title).c_str(), level, at, PathForLog(picked.first).c_str());
+                    strcpy_s(map, level);
                 }
-                else if (path != saveUnread)
+                else if (watch.tempColdOn && !watch.loading && FileTimeAfter(picked.second, watch.loadedAt, kSaveAfterLoadS))
                 {
-                    // said once for each save: one the game is writing reads again on the next look
-                    saveUnread = path;
-                    Log(L"map: the save %s names no map the mod can read (yet: it is read again when it is written)", PathForLog(path).c_str());
+                    // the level loaded last was the same map: the engines stay as warm as they were
+                    watch.tempColdOn = false;
+                    char at[16];
+                    ClockText(picked.second, at, sizeof at);
+                    Log(L"map: the save of %S names the same map, so the level loaded was no other map and the engines stay as warm as they were", at);
                 }
+            }
+            else if (!unread.empty() && unread != saveUnread)
+            {
+                // said once for each save: one the game is writing reads again on the next look
+                saveUnread = unread;
+                Log(L"map: the save %s names no map the mod can read (yet: it is read again when it is written)", PathForLog(unread).c_str());
             }
         }
         // the outside temperature in force: the map's or its region's (AmbientByMap), looked up again when the map
@@ -2442,12 +2505,20 @@ static DWORD WINAPI Run(void *)
             }
             // another map: the coolant and oil the model remembers for each kind of truck are dropped, so every truck
             // starts as cold as the air outside there. Both names must be known. A save caught mid-write names no map
-            // for a moment (map ""), and that is no change of map
+            // for a moment (map ""), and that is no change of map. The save names the map minutes after the level
+            // loaded: the engines take the temperatures that warmed up from cold since the load (tempCold), and only
+            // where no load was seen do they start cold now
             if (mapRead[0] && map[0] && strcmp(mapRead, map))
             {
-                watch.temp = TempModel{};
+                const bool sinceLoad = watch.tempColdOn;
+                watch.temp = sinceLoad ? watch.tempCold : TempModel{};
+                watch.tempColdOn = false;
                 watch.oil = OilWarning{};
-                Log(L"map: another map, so every truck's engine is as cold as the air outside again (the coolant and the oil)");
+                if (sinceLoad && watch.temp.known)
+                    Log(L"map: another map, so every truck's engine was as cold as the air outside when the level loaded, and warmed since by the drive (the coolant %.1f C, the oil %.1f C)",
+                        watch.temp.temp, watch.temp.oil);
+                else if (sinceLoad) Log(L"map: another map, so every truck's engine is as cold as the air outside was when the level loaded (the coolant and the oil)");
+                else Log(L"map: another map, so every truck's engine is as cold as the air outside again (the coolant and the oil)");
             }
             strcpy_s(mapRead, map);
             mapAsk = false;
@@ -3082,10 +3153,10 @@ int wmain(int argc, wchar_t **argv)
         CreateDirectoryW(root.c_str(), nullptr);
         CreateDirectoryW(steamDir.c_str(), nullptr);
         CreateDirectoryW(epicDir.c_str(), nullptr);
-        auto saveAt = [](const std::wstring &file, int minutesAgo) {
+        auto saveAt = [](const std::wstring &file, int minutesAgo, const char *text = "{}") {
             const HANDLE h = CreateFileW(file.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
             DWORD put = 0;
-            WriteFile(h, "{}", 2, &put, nullptr);
+            WriteFile(h, text, (DWORD)strlen(text), &put, nullptr);
             FILETIME now;
             GetSystemTimeAsFileTime(&now);
             ULARGE_INTEGER t;
@@ -3099,17 +3170,45 @@ int wmain(int argc, wchar_t **argv)
         saveAt(steamDir + L"\\CompleteSave.cfg", 30);
         saveAt(epicDir + L"\\CompleteSave1.dat", 5);
         saveAt(epicDir + L"\\CompleteSaveBackup.txt", 1); // no save
-        std::wstring newest;
-        FILETIME when = {};
-        const bool epicNewest = SaveNewestIn({ steamDir, epicDir }, newest, when) && newest == epicDir + L"\\CompleteSave1.dat";
-        const bool steamOnly = SaveNewestIn({ steamDir }, newest, when) && newest == steamDir + L"\\CompleteSave.cfg";
-        const bool none = !SaveNewestIn({ root }, newest, when);
+        auto newestIn = [](const std::vector<std::wstring> &folders) {
+            std::vector<SaveFile> found;
+            SavesIn(folders, found);
+            return found.empty() ? std::wstring() : found[0].first;
+        };
+        const bool epicNewest = newestIn({ steamDir, epicDir }) == epicDir + L"\\CompleteSave1.dat";
+        const bool steamOnly = newestIn({ steamDir }) == steamDir + L"\\CompleteSave.cfg";
+        const bool none = newestIn({ root }).empty();
         wchar_t profile[MAX_PATH] = {};
         GetEnvironmentVariableW(L"USERPROFILE", profile, MAX_PATH);
         const bool masked = !profile[0] || PathForLog(std::wstring(profile) + L"\\Documents\\x") == L"%USERPROFILE%\\Documents\\x";
         Check(epicNewest && steamOnly && none && masked && PathForLog(L"D:\\Games\\x") == L"D:\\Games\\x",
               "saves: the newest of Steam's .cfg and Epic's .dat is found, nothing else is taken for one; the profile's folder stays out of the log");
-        for (const wchar_t *f : { L"\\steam\\CompleteSave.cfg", L"\\epic\\CompleteSave1.dat", L"\\epic\\CompleteSaveBackup.txt" }) DeleteFileW((root + f).c_str());
+        // the slot being played: the newest save that names a map, past an empty slot the game wrote after it (as
+        // on 25 October); nothing new while that save is the same; a save being written ends the look, and an older
+        // slot does not take its place
+        const std::wstring played = steamDir + L"\\CompleteSave.cfg", emptySlot = steamDir + L"\\CompleteSave1.cfg", older = steamDir + L"\\CompleteSave2.cfg";
+        saveAt(older, 30, "{\"CompleteSave2\":{\"lastLoadedLevel\":\"level_us_01_01\"}}");
+        saveAt(played, 3, "{\"CompleteSave\":{\"lastLoadedLevel\":\"level_ru_17_02\"}}");
+        saveAt(emptySlot, 2, "{\"CompleteSave1\":{\"lastLoadedLevel\":\"\",\"discoveredObjects\":[]}}");
+        std::vector<SaveFile> saves;
+        SavesIn({ steamDir }, saves);
+        SaveFile picked;
+        char level[64] = "";
+        std::wstring unread;
+        const FILETIME never = {};
+        const bool pastEmpty = SavePick(saves, never, picked, level, sizeof level, unread) && picked.first == played && !strcmp(level, "level_ru_17_02") && unread.empty();
+        const FILETIME pickedAt = picked.second;
+        SaveFile again;
+        const bool nothingNew = !SavePick(saves, pickedAt, again, level, sizeof level, unread) && unread.empty();
+        saveAt(played, 1, "{\"CompleteSave\":{\"lastLoadedLevel\":\"level_ru_"); // being written
+        saves.clear();
+        SavesIn({ steamDir }, saves);
+        const bool waits = !SavePick(saves, never, again, level, sizeof level, unread) && unread == played;
+        Check(pastEmpty && nothingNew && waits,
+              "saves: the map from the newest save that names one, past an empty slot written after it; none from a save being written, nor from an older slot");
+        for (const wchar_t *f : { L"\\steam\\CompleteSave.cfg", L"\\steam\\CompleteSave1.cfg", L"\\steam\\CompleteSave2.cfg", L"\\epic\\CompleteSave1.dat",
+                                  L"\\epic\\CompleteSaveBackup.txt" })
+            DeleteFileW((root + f).c_str());
         RemoveDirectoryW(steamDir.c_str());
         RemoveDirectoryW(epicDir.c_str());
         RemoveDirectoryW(root.c_str());

@@ -122,6 +122,25 @@ inline bool MapFromSave(const char *text, size_t length, char *out, size_t size)
     return false;
 }
 
+// Whether the text of a save is an empty slot: its "lastLoadedLevel" is "", a slot never played on a map. The game
+// still writes such a slot a few seconds after the one played (found in the game, 2026-10-25). A save cut short as it
+// is written is not one.
+inline bool SaveSlotEmpty(const char *text, size_t length)
+{
+    static const char key[] = "\"lastLoadedLevel\"";
+    const size_t keyLength = sizeof key - 1;
+    for (size_t i = 0; i + keyLength < length; i++)
+    {
+        if (memcmp(text + i, key, keyLength)) continue;
+        size_t at = i + keyLength;
+        while (at < length && (text[at] == ' ' || text[at] == '\t' || text[at] == '\r' || text[at] == '\n')) at++;
+        if (at >= length || text[at++] != ':') return false;
+        while (at < length && (text[at] == ' ' || text[at] == '\t' || text[at] == '\r' || text[at] == '\n')) at++;
+        return at + 1 < length && text[at] == '"' && text[at + 1] == '"';
+    }
+    return false;
+}
+
 // ---- the outside temperature over the game's day ----
 // A map's air is coldest just before sunrise and warmest in the afternoon. A section gives the day's warmest and the
 // night's coldest (DayC and NightC), or only the day's mean (AmbientC), which then swings kDaySwing between them.

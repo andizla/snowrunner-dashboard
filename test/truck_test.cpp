@@ -961,6 +961,11 @@ int main()
                              !MapFromSave(noValue, sizeof noValue - 1, wrongOut, sizeof wrongOut) && !MapFromSave(save, sizeof save, tooShort, sizeof tooShort) && !strcmp(wrongOut, "x");
         Check(read && partial && spaces && refused,
               "maps: the map loaded last from a save's text; nothing from a save cut short, a value that is no map's id, a save without it, or no room for it");
+        // an empty slot, as the game writes CompleteSave1.cfg a few seconds after the slot played (25 October)
+        static const char emptySlot[] = "{\"CompleteSave1\":{\"SslValue\":{\"lastLoadedLevel\" : \"\",\"discoveredObjects\":[]}}}";
+        const bool empty = SaveSlotEmpty(emptySlot, sizeof emptySlot - 1) && !SaveSlotEmpty(save, sizeof save) && !SaveSlotEmpty(noKey, sizeof noKey - 1) &&
+                           !SaveSlotEmpty(save, (size_t)(value - save) - 1) && !SaveSlotEmpty(notId, sizeof notId - 1);
+        Check(empty, "maps: an empty slot (its lastLoadedLevel \"\") told from a save that names a map, one without it and one cut short");
     }
 
     // the game's gearbox functions in a made up exe's code: each one's bytes put in place, a hook's jump over one
