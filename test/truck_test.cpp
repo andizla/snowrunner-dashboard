@@ -593,24 +593,30 @@ int main()
                   odd.found && odd.torque == 0.0f && odd.capacity == figures.capacity,
               "engine: the figures of its file read from its record, a torque no engine has read as none and the record kept");
         // the gearbox: its name, the first text from + 0x900 that begins with "g_" and is a name, else its gears
-        char gearboxName[kMaxText], gearboxKey[96], gearsKey[96];
+        char gearboxName[kMaxText], gearboxStock[kMaxText], gearboxKey[96], gearsKey[96];
         uint32_t gearboxAt = 0;
-        const bool noName = !TruckGearboxName(kMemory, kVehicle, gearboxName, gearboxAt);
+        const bool noName = !TruckGearboxName(kMemory, kVehicle, gearboxName, gearboxAt, gearboxStock);
         PutText(kVehicle + 0xA00, "g_ab cd", 0);                   // a text with a space: no name
         PutText(kVehicle + 0xA28, "g_scout_highway_long", kTexts + 0x380);
-        const bool named = TruckGearboxName(kMemory, kVehicle, gearboxName, gearboxAt) && !strcmp(gearboxName, "g_scout_highway_long") && gearboxAt == 0xA28;
+        const bool named = TruckGearboxName(kMemory, kVehicle, gearboxName, gearboxAt, gearboxStock) && !strcmp(gearboxName, "g_scout_highway_long") &&
+                           gearboxAt == 0xA28 && !gearboxStock[0];
         TruckRaw gearsOnly = {};
         TruckRead(kMemory, r, gearsOnly);
         GearboxKey(gearsOnly, gearboxName, gearboxKey, sizeof gearboxKey);
         GearboxKey(gearsOnly, "", gearsKey, sizeof gearsKey);
-        // at + 0x9a0, where the game keeps it, a mod's name that does not begin with "g_" is taken too
+        // the socket block: at + 0x9a0 the truck's default, taken while nothing is at + 0x9c0 (a mod's name that does
+        // not begin with "g_" too); at + 0x9c0 the gearbox fitted, which wins (a d110 on its highway gearbox, 2026-10-26)
         PutText(kVehicle + 0x9a0, "box-of_a_mod", 0);
-        char atName[kMaxText];
+        char atName[kMaxText], atStock[kMaxText];
         uint32_t atAt = 0;
-        const bool atPlace = TruckGearboxName(kMemory, kVehicle, atName, atAt) && !strcmp(atName, "box-of_a_mod") && atAt == 0x9a0;
-        Check(noName && named && atPlace && !strcmp(gearboxKey, "g_scout_highway_long") && !strcmp(gearsKey, "gears 3 6 12 16 high 8"),
-              "gearbox: its name read from the vehicle at + 0x9a0, whatever it begins with, else the first name with g_ near it, a text that is no "
-              "name passed over; without a name it goes by its gears");
+        const bool atDefault = TruckGearboxName(kMemory, kVehicle, atName, atAt, atStock) && !strcmp(atName, "box-of_a_mod") && atAt == 0x9a0 &&
+                               !strcmp(atStock, "box-of_a_mod");
+        PutText(kVehicle + 0x9c0, "g_lrd_110_highway", kTexts + 0x3c0);
+        const bool fitted = TruckGearboxName(kMemory, kVehicle, atName, atAt, atStock) && !strcmp(atName, "g_lrd_110_highway") && atAt == 0x9c0 &&
+                            !strcmp(atStock, "box-of_a_mod");
+        Check(noName && named && atDefault && fitted && !strcmp(gearboxKey, "g_scout_highway_long") && !strcmp(gearsKey, "gears 3 6 12 16 high 8"),
+              "gearbox: the name of the gearbox fitted at + 0x9c0, the truck's default at + 0x9a0 only while none is fitted, whatever they begin "
+              "with, else the first name with g_ near them, a text that is no name passed over; without a name it goes by its gears");
         Put(kModel + 0x784, 9007.0f);
         const float massRead = TruckMass(kMemory, kModel);
         Put(kModel + 0x784, 5.0f);
