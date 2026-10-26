@@ -1991,7 +1991,7 @@ static const float kGovernorBand = 0.1f;     // the governor gives full torque t
 static const float kEngineDrag = 0.4f;       // what the engine's friction and pumping take at the red zone, as a share of its most torque; it grows with the speed
 static const float kClutchStall = 0.5f;      // an engine dragged under this share of its idle speed dies
 static const float kStallRest = 2.0f;        // seconds a stalled engine stays dead in the model at the least, before it can be started again
-static const float kAutoClutchSpan = 0.25f;  // a clutch that works by itself holds fully this far from idle to the red zone
+static const float kAutoTakeUp = 0.9f;       // a clutch that works by itself slips with the engine this far to the pedal's governor speed
 
 // The clutch pedal's grip, 0 to 1, from its travel, 0 let up to 1 pressed: nothing past kClutchFree, all of it short
 // of kClutchBite, and between them the bite, eased in.
@@ -2025,10 +2025,10 @@ struct ClutchModel
 // with the gearbox where it can hold what the engine gives; slipping, it pulls the engine towards the gearbox's
 // speed. An engine dragged under kClutchStall of its idle speed stalls: a clutch let up too fast with the truck
 // standing, or in too high a gear at a crawl. A stalled engine is started again after kStallRest once the clutch is
-// pressed or no gear is in. automatic: no pedal, so travel is a button's (1 held) or 0, and the clutch takes hold by
-// the engine's speed, from none at idle to all of it kAutoClutchSpan on, and fully with the gearbox turning at idle
-// or over; it never stalls the engine. The wheels are the game's, so the model only follows them. Returns true on the
-// step the engine stalls.
+// pressed or no gear is in. automatic: no pedal, so travel is a button's (1 held) or 0, and the clutch rides as a
+// driver's foot would: the engine at kAutoTakeUp of the pedal's speed while it slips, until the gearbox's input has
+// come up to it (see below); it never stalls the engine. The wheels are the game's, so the model only follows them.
+// Returns true on the step the engine stalls.
 inline bool ClutchStep(ClutchModel &m, const TruckRaw &t, const GaugeScale &k, const TorqueCurve &c, float travel, float pedal, float factor, bool automatic, float dt)
 {
     if (!m.running)
@@ -2065,12 +2065,6 @@ inline bool ClutchStep(ClutchModel &m, const TruckRaw &t, const GaugeScale &k, c
         }
         return false;
     }
-    if (automatic && m.connected && m.input < k.idle)
-    {
-        // the clutch that works by itself: none of it at idle, all of it kAutoClutchSpan of the way to the red zone
-        const float g = SettingsRange((m.rpm - k.idle) / (range * kAutoClutchSpan), 0.0f, 1.0f);
-        m.grip = fminf(m.grip, g * g * (3.0f - 2.0f * g));
-    }
     // the governor: the speed the pedal asks for, and the torque to hold it, up to the curve's
     const float want = k.idle + range * kTachFree * SettingsRange(pedal, 0.0f, 1.0f);
     const float speed = m.rpm / k.redline;
@@ -2079,6 +2073,33 @@ inline bool ClutchStep(ClutchModel &m, const TruckRaw &t, const GaugeScale &k, c
     m.torque = SettingsRange((want - m.rpm) / (range * kGovernorBand), 0.0f, full);
     const float hold = m.grip * kClutchHold;
     const float rate = range / kEngineRevTime; // rpm each second for each share of the most torque
+    // the clutch that works by itself rides as a driver's foot would: it lets go when the gearbox's input falls under
+    // idle (the truck slowing in a gear), and while it slips the engine goes where the pedal asks, kAutoTakeUp of the
+    // governor's speed, at the free engine's pace, and the clutch passes on all the engine gives there, until the
+    // gearbox's input has come up to the engine's speed: then it locks. So it never drags the engine down, and a start
+    // in a gear the truck cannot pull keeps it slipping (and heating, ClutchHeat) as long as the pedal is down. A
+    // button held (grip 0) frees it, as a pedal pressed does
+    if (automatic && m.connected && hold > 0.0f)
+    {
+        if (m.locked && m.input < k.idle) m.locked = false;
+        if (!m.locked)
+        {
+            const float target = fmaxf(k.idle + (want - k.idle) * kAutoTakeUp, k.idle);
+            const float pace = fmaxf(full - drag, 0.1f) * rate * dt;
+            m.rpm = m.rpm < target ? fminf(m.rpm + pace, target) : fmaxf(m.rpm - pace, target);
+            // the engine gives what holds it there under the clutch's load: none of it at idle, all of it a tenth of
+            // the way to the red zone, so at rest in gear it takes nothing and a little pedal pulls away
+            const float bite = SettingsRange((m.rpm - k.idle) / (range * 0.1f), 0.0f, 1.0f);
+            m.torque = full * bite;
+            m.carried = SettingsRange(m.torque - drag, 0.0f, hold);
+            if (m.input >= m.rpm)
+            {
+                m.rpm = m.input;
+                m.locked = true;
+            }
+            return false;
+        }
+    }
     // locked: the engine turns with the gearbox while the clutch holds what the engine gives, or brakes with
     if (m.locked && (hold < fabsf(m.torque - drag) || m.grip <= 0.0f)) m.locked = false;
     if (m.locked)
@@ -2147,6 +2168,13 @@ inline void ClutchProbeText(const ClutchModel &m, float travel, char *out, size_
 //     reaches 2.85 at 4.95 s.
 //   - a start in first with a normal slip: its most at 1200 rpm falling to none over 1.5 s, P from 1.2 to 0: 0.9 of
 //     heat at the most, a third of the burn point.
+//   - the clutch that works by itself (keyboard, pad, a button clutch), floored from a standstill (models test, a truck
+//     of gears 3, 6, 12 and 16 gaining 2000 rpm of input a second a share in first, by the square of the gears'
+//     speeds in the others): the engine goes to kAutoTakeUp 0.9 of the pedal's speed at the free engine's pace and
+//     the clutch passes on what the engine gives there until the input comes up to it. First at most 0.57 of the burn
+//     point, second 1.66; third burns after 3.5 s, fourth after 3.2 s, a gear the truck cannot pull at all after 2.8
+//     s (the engine's rise to the take-up speed is what sets that floor). Take-ups of 0.5, 0.7 and 1.0 gave third no
+//     burn, 3.9 s and 3.5 s with first 0.37, 0.47 and 0.61.
 static const float kClutchHeatCapacity = 2.04e7f; // game torque times rad/s times s for one unit of heat
 static const float kClutchCooling = 0.05f;        // the share of its heat the clutch loses a second
 static const float kClutchBurnFrom = 2.85f;       // the heat from which it burns
