@@ -163,7 +163,7 @@ The game's automatic shifts up at fixed speeds whatever the pedal, never shifts 
 
 `Gearbox` has three levels, the three choices in the tab's Gearbox section:
 
-- `0`: the game's own gearbox and automatic.
+- `0`: the game's own gearbox and automatic. The mod hooks nothing in the game's code and runs as 0.16.x did.
 - `1`: the mod's automatic in A, as above. The game's shifter stays yours: a gear picked there hands the gearbox back, and picking A takes it again. Only one thing of the game's is refused: the reverse its own automatic puts in while the truck stands in A with the brake down, which it can only do in the moment its automatic is up again (the shift modifier tapped, or A picked once more), so a truck in A no longer backs up on the brake; R picked on the game's shifter always passes. No bindings are needed.
 - `2`: the mod's own gearbox takes the shifter from the moment a truck is driven, in whatever position the game had it, and refuses every shift of the game's. It runs as `1` until a binding that can be pressed reaches reverse (Gear down, Reverse or Neutral: a key, a wheel's binding while that wheel is plugged in, a pad's while a pad is connected), so a truck can always be backed up. While the NEXT GEN menu is open the gearbox stands where it is.
 
@@ -237,7 +237,7 @@ Delete `Gauges.asi`, `Gauges.ini`, `Gauges.log` and the folder `Gauges` (the set
 
 ## Notes
 
-- The mod changes no game file. What it writes into the game's memory: with `Damage` on, the engine damage of the truck you drive, and its gearbox damage on a stall from a shift without the clutch or from a burning clutch (on the game's thread, through a hook on its truck update, with the game's damage update after); with `Gearbox=1`, the game's automatic flag, the gears through the game's own shift function, the power factor of the low range, and the stall seconds for a shift without the clutch under `RequireClutch`; with `Powertrain=1`, the game's torque factor of the truck you drive, on every pass; during the pull test, the torque factor, for seven seconds. With all of them off it writes nothing.
+- The mod changes no game file. What it writes into the game's memory: with `Damage` on, the engine damage of the truck you drive, and its gearbox damage on a stall from a shift without the clutch or from a burning clutch (on the game's thread, through a hook on its truck update, with the game's damage update after); with `Gearbox=1`, the game's automatic flag, the gears through the game's own shift function, the power factor of the low range, and the stall seconds for a shift without the clutch under `RequireClutch`; with `Powertrain=1`, the game's torque factor of the truck you drive, on every pass; during the pull test, the torque factor, for seven seconds. With all of them off it writes nothing. The hooks in the game's code go by the level of `Gearbox`: at `0` none at all; at `1` and `2` the eight gearbox functions, calling through; at `2` with `Damage` on also the game's truck update. Each is put in the first time the level needs it, also when the tab turns it on, and stays until the game is started again.
 - `Damage` has not been tried in co-op. Leave it off there.
 - On a PC whose Windows proxy settings are on automatic detection the first frame can come late by half a minute: ReShade checks for its own update at the start and waits on that lookup.
 - When another program holds the game's swap chain in a way the mod cannot draw on, `Gauges.log` names that program.

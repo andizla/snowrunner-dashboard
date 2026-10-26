@@ -257,6 +257,25 @@ int main()
         Check(a.clutchTravel < 0.0f && m.travel == 0.0f && !m.clutch, "gearbox: actions read no clutch axis unless one is given");
     }
 
+    // the gate (0.17.0): which hooks a level needs, attached once and never taken out while the game runs
+    {
+        const HooksWanted none = GearboxHooksWanted(0, true), one = GearboxHooksWanted(1, true), twoOff = GearboxHooksWanted(2, false),
+                          twoOn = GearboxHooksWanted(2, true);
+        const bool chosen = !none.shifts && !none.truckUpdate && one.shifts && !one.truckUpdate && twoOff.shifts && !twoOff.truckUpdate && twoOn.shifts &&
+                            twoOn.truckUpdate;
+        HooksGate g = {};
+        const bool idle = GearboxGateStep(g, none) == 0 && !g.shifts;                   // Gearbox=0: nothing asked
+        const bool shiftsNow = GearboxGateStep(g, one) == kGateAttachShifts;              // the tab turns 1 on mid-game
+        const bool onceOnly = GearboxGateStep(g, one) == 0;                               // a second pass attaches nothing
+        const bool truckNow = GearboxGateStep(g, twoOn) == kGateAttachTruck;              // 2 with Damage: the truck update too
+        const bool leftTruck = GearboxGateStep(g, twoOff) == kGateTruckLeft && GearboxGateStep(g, twoOff) == 0; // Damage off: left, said once
+        const bool leftAll = GearboxGateStep(g, none) == kGateShiftsLeft && GearboxGateStep(g, none) == 0;     // back to 0: left, said once
+        const bool again = GearboxGateStep(g, twoOn) == 0 && g.shifts && g.truckUpdate;   // on again: in place already, nothing twice
+        Check(chosen && idle && shiftsNow && onceOnly && truckNow && leftTruck && leftAll && again,
+              "gearbox gate: Gearbox=0 hooks nothing, 1 the eight, 2 the eight and with Damage the truck update; each attached once, also mid-game, "
+              "and left in place when no longer needed, said once");
+    }
+
     // A or a gear picked from R while the truck still rolls back: N until it stands or rolls forward, told once; a truck
     // rolling back in a forward gear it was already in keeps it (the first drives, 2026-10-26)
     {

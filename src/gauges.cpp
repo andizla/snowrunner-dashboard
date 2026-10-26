@@ -1733,10 +1733,16 @@ static StallJob g_stallJob = {};
 static void (*g_damageUpdate)(uint64_t) = nullptr;
 static void OnTruckFrame(void *first);
 
+// The places of the hooks, from the finder's look, for the gate (GearboxHooksStep): the gearbox functions, and the
+// game's truck update and damage update. g_hooksReady: looked, and no other mod holds the gearbox functions.
+static FunctionFind g_finds[kFnCount] = {};
+static DamagePath g_path = {};
+static bool g_pathFound = false, g_hooksReady = false;
+
 // The game's gearbox functions in its code (game_code.h), looked for once a truck is driven, so a manual transmission
-// mod has hooked its own by then: where each one is, or that another mod holds it. Then, without SMT in the game,
-// eight of them are hooked, calling through (gearbox_hooks.h, phase 1 of the mod's own gearbox), and the game's truck
-// update, for a stall's gearbox damage on the game's thread.
+// mod has hooked its own by then: where each one is, or that another mod holds it. Without SMT in the game, the places
+// are kept for the gate, which hooks only what the level needs (GearboxHooksStep): the eight gearbox functions,
+// calling through, and the game's truck update, for the gearbox's damage on the game's thread.
 static void GameCodeLook()
 {
     size_t from = 0, to = 0;
@@ -1773,32 +1779,70 @@ static void GameCodeLook()
         Log(L"gearbox: another mod holds the game's gearbox functions, so the mod's gearbox stands down");
         return;
     }
-    static char why[1024];
-    const int hooked = GearboxHook((uintptr_t)g_base, finds, why, sizeof why);
-    if (hooked) Log(hooked == 8 ? L"gearbox: eight of the game's gearbox functions hooked, calling through (phase 1)"
-                                : L"gearbox: %d of the game's eight gearbox functions hooked, calling through (phase 1)", hooked);
-    for (char *one = why; *one;)
+    // the places are kept for the gate (GearboxHooksStep), which attaches the hooks only when a level needs them
+    memcpy(g_finds, finds, sizeof finds);
+    if (DamagePathFind(code.data(), from, to, g_path)) g_pathFound = true;
+    else Log(L"gearbox damage: %S, so a stall costs the gearbox nothing", g_path.why);
+    g_hooksReady = true;
+}
+
+// The gate (gearbox_hooks.h, GearboxGateStep), every pass once the finder has looked: the eight shift hooks attached
+// the first time Gearbox is 1 or 2, the truck update's the first time Gearbox is 2 with Damage on, each through the same
+// transaction code with the same suspension of the other threads; at Gearbox=0 nothing is hooked, and a hook a level no
+// longer needs stays in place until the game is started again (a hook is never taken out while the game runs). The
+// policy that refuses the game's calls is set only while the mod has the truck (TakeoverStep), which needs the hooks:
+// without them nothing is ever refused.
+static void GearboxHooksStep(const GaugeSettings &s)
+{
+    if (!g_hooksReady) return;
+    static HooksGate gate = {};
+    static bool saidNone = false, saidNoTruck = false;
+    const HooksWanted want = GearboxHooksWanted(s.gearbox, s.damage);
+    const int act = GearboxGateStep(gate, want);
+    if (!want.shifts && !gate.shifts && !saidNone)
     {
-        char *end = strchr(one, '\n');
-        if (end) *end = 0;
-        Log(L"gearbox: not hooked: %S", one);
-        if (!end) break;
-        one = end + 1;
+        saidNone = true;
+        Log(L"gearbox: Gearbox=0, the game's gearbox functions are left alone");
     }
-    // the mod's own shifts go through to the game's function behind the hook, so the probe counts only the game's. With
-    // fewer than eight hooked the mod runs with those it has; each one missing is in the log above
-    if (void *own = GearboxOriginal(kFnShiftGear)) g_shiftGear = (GameShiftFn)own;
-    // the damage path: the game's damage update, and its truck update hooked so the damage is dealt on its thread
-    DamagePath path;
-    char hookWhy[160] = "";
-    if (!DamagePathFind(code.data(), from, to, path)) Log(L"gearbox damage: %S, so a stall costs the gearbox nothing", path.why);
-    else if (!TruckUpdateHook((uintptr_t)(g_base + path.truckUpdate), &OnTruckFrame, hookWhy, sizeof hookWhy))
-        Log(L"gearbox damage: %S, so a stall costs the gearbox nothing", hookWhy);
-    else
+    if (want.shifts && !want.truckUpdate && !gate.truckUpdate && !saidNoTruck)
     {
-        g_damageUpdate = (void (*)(uint64_t))(g_base + path.damageUpdate);
-        Log(L"gearbox damage: dealt on the game's own thread, from its truck update at +%zx, with its damage update at +%zx after", path.truckUpdate, path.damageUpdate);
+        saidNoTruck = true;
+        Log(L"gearbox damage: the game's truck update is left alone (it is hooked only at Gearbox=2 with Damage on)");
     }
+    if (act & kGateAttachShifts)
+    {
+        static char why[1024];
+        const int hooked = GearboxHook((uintptr_t)g_base, g_finds, why, sizeof why);
+        if (hooked == 8) Log(L"gearbox: eight of the game's gearbox functions hooked at Gearbox=%d, calling through", s.gearbox);
+        else if (hooked) Log(L"gearbox: %d of the game's eight gearbox functions hooked at Gearbox=%d, calling through", hooked, s.gearbox);
+        for (char *one = why; *one;)
+        {
+            char *end = strchr(one, '\n');
+            if (end) *end = 0;
+            Log(L"gearbox: not hooked: %S", one);
+            if (!end) break;
+            one = end + 1;
+        }
+        // the mod's own shifts go through to the game's function behind the hook, so the probe counts only the game's.
+        // With fewer than eight hooked the mod runs with those it has; each one missing is in the log above
+        if (void *own = GearboxOriginal(kFnShiftGear)) g_shiftGear = (GameShiftFn)own;
+    }
+    if (act & kGateAttachTruck)
+    {
+        // the damage path: the game's truck update hooked so the damage is dealt on its thread, its damage update after
+        char hookWhy[160] = "";
+        if (!g_pathFound) Log(L"gearbox damage: the game's damage path was not found, so a stall or the clutch's burn costs the gearbox nothing");
+        else if (!TruckUpdateHook((uintptr_t)(g_base + g_path.truckUpdate), &OnTruckFrame, hookWhy, sizeof hookWhy))
+            Log(L"gearbox damage: %S, so a stall or the clutch's burn costs the gearbox nothing", hookWhy);
+        else
+        {
+            g_damageUpdate = (void (*)(uint64_t))(g_base + g_path.damageUpdate);
+            Log(L"gearbox damage: dealt on the game's own thread, from its truck update at +%zx (hooked at Gearbox=2 with Damage on), with its damage update at +%zx after",
+                g_path.truckUpdate, g_path.damageUpdate);
+        }
+    }
+    if (act & kGateShiftsLeft) Log(L"gearbox: Gearbox=0 needs no hooks; the gearbox hooks are left in place until the game is started again");
+    if (act & kGateTruckLeft) Log(L"gearbox damage: the truck update's hook is not needed now; left in place until the game is started again");
 }
 
 // A file's time as the clock on the wall shows it, hh:mm:ss.
@@ -3181,6 +3225,8 @@ static DWORD WINAPI Run(void *)
             codeLooked = true;
             GameCodeLook();
         }
+        // the hooks a level needs, attached the first time it needs them (also when the tab turns them on mid-game)
+        GearboxHooksStep(s);
         // the search for the game's clock (Probe=1, while its place is not known): begun once a truck is driven
         if (!clockOwn && s.probe && driving && raw.clockKnown)
         {

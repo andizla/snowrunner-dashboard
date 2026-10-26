@@ -58,6 +58,48 @@ unsigned GearboxRefusedNew();
 // calls go this way, so the probe counts only the game's.
 void *GearboxOriginal(int fn);
 
+// ---- the gate: which hooks a level needs (0.17.0) ----
+// The eight shift hooks at Gearbox 1 and 2 (level as GaugeSettings::gearbox: 0 the game's, 1 the mod's automatic, 2
+// the mod's own gearbox), the truck update's at 2 with Damage on (the stall's damage and the clutch's burn go through
+// it). At Gearbox=0 none: the mod changes nothing in the game's code and runs as 0.16.x did.
+struct HooksWanted { bool shifts, truckUpdate; };
+inline HooksWanted GearboxHooksWanted(int level, bool damage) { return HooksWanted{ level >= 1, level >= 2 && damage }; }
+
+// What has been asked of the hooks so far. A hook is attached the first time a level needs it (at the finder's look,
+// or later when the tab turns it on) and never detached while the game runs: a level that no longer needs it leaves
+// it in place, said once each time.
+struct HooksGate { bool shifts, truckUpdate, shiftsLeftSaid, truckLeftSaid; };
+enum { kGateAttachShifts = 1, kGateAttachTruck = 2, kGateShiftsLeft = 4, kGateTruckLeft = 8 };
+// One step with what the settings want now: the bits of kGate... for the caller to act on (attach, or say "left in
+// place"); each attach is asked once.
+inline int GearboxGateStep(HooksGate &g, const HooksWanted &w)
+{
+    int act = 0;
+    if (w.shifts && !g.shifts) act |= kGateAttachShifts;
+    if (w.truckUpdate && !g.truckUpdate) act |= kGateAttachTruck;
+    if (w.shifts)
+    {
+        g.shifts = true;
+        g.shiftsLeftSaid = false;
+    }
+    else if (g.shifts && !g.shiftsLeftSaid)
+    {
+        act |= kGateShiftsLeft;
+        g.shiftsLeftSaid = true;
+    }
+    if (w.truckUpdate)
+    {
+        g.truckUpdate = true;
+        g.truckLeftSaid = false;
+    }
+    else if (g.truckUpdate && !g.truckLeftSaid)
+    {
+        act |= kGateTruckLeft;
+        g.truckLeftSaid = true;
+    }
+    return act;
+}
+
 // The game's truck update (game_code.h, DamagePathFind) detoured at address at, in a transaction of its own: on the
 // game's thread, every frame and before the update runs, onFrame gets its first argument (an object with the vehicle
 // at + 0x20). False with why when Detours refused it; true at once when it is in place already.
