@@ -144,6 +144,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     changed(ImGui::Checkbox("Brake air pressure", &s.showAir));
     changed(ImGui::Checkbox("Clock", &s.showClock));
     PageTip("An analog clock with the game's time of day, the outside temperature in its face.");
+    changed(ImGui::Checkbox("Burn", &s.showBurn));
+    PageTip("The fuel burn a minute after the range under the fuel dial.");
     PageTip("The air in the brakes' tanks. The engine's compressor fills them up to 8.2 bar, faster the higher it revs, and starts again at 6.9; "
             "each press of the brake and letting the handbrake go draw from them. Under 5.5 bar it is in the red. Not drawn for scouts, which brake by hydraulics.");
     changed(ImGui::Checkbox("Lamps", &s.showLamps));

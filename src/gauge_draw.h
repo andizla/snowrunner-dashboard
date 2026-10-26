@@ -29,7 +29,7 @@ struct GaugeLayout
 {
     int variant;                    // 0 = strip (bottom centre), 1 = block (bottom right)
     bool swapDials;                 // the speedometer where the tachometer is and the tachometer where the speedometer is
-    bool showTemp, showBoost, showAir, showLamps, showClock;
+    bool showTemp, showBoost, showAir, showLamps, showClock, showBurn;
     int oilGauge;                  // the oil temperature: kOilOff, kOilNeedle (a second needle in the temperature dial), kOilDial (a dial of its own)
     float faceAlpha;                // 1 = solid dial faces; lower = see-through (the game shows through, drop shadows under the marks)
     bool openArc;                   // no face or bezel at all: only the scale arc with its ticks
@@ -743,15 +743,22 @@ static void GClock(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float
 }
 
 // The fuel range readout: a pump and "412 km", with a tenth below ten ("6.4 km"), or "---" until the mod has measured
-// the consumption.
-static void GRange(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float u, float a, const GaugeState &st)
+// the consumption; with burn the fuel burn after it, "412 km  4.1 l/min" (US gallons an hour with mph, "1.1 gal/h").
+static void GRange(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float u, float a, const GaugeState &st, bool burn)
 {
-    char buf[32];
+    char buf[64];
     if (st.rangeKm < 0.0f) sprintf_s(buf, "--- %s", st.mph ? "mi" : "km");
     else
     {
         const float range = st.mph ? st.rangeKm / 1.609f : st.rangeKm;
         sprintf_s(buf, range < 9.95f ? "%.1f %s" : "%.0f %s", range, st.mph ? "mi" : "km");
+    }
+    if (burn)
+    {
+        char more[32];
+        if (st.burnPerMin < 0.0f) sprintf_s(more, "  --- %s", st.mph ? "gal/h" : "l/min");
+        else sprintf_s(more, "  %.1f %s", st.mph ? st.burnPerMin * 60.0f / 3.785f : st.burnPerMin, st.mph ? "gal/h" : "l/min");
+        strcat_s(buf, more);
     }
     const float w = TextWidth(f, kGsReadout, buf, u), ih = 11.0f * u;
     const float x0 = c.x - (w + ih + 4.0f * u) * 0.5f;
@@ -825,7 +832,7 @@ static void GaugeDraw(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float 
         if (lay.showLamps) GLamps(dl, f, ImVec2(cx, cy), 2, 20.0f * u, 3.5f * u, u, a, st);
         float x = cx - 98.0f * u - R - 10.0f * u - r;
         GFuel(dl, f, ImVec2(x, cy + 20.0f * u), r, u, a, st);
-        GRange(dl, f, ImVec2(x, cy + 20.0f * u + r + 12.0f * u), u, a, st);
+        GRange(dl, f, ImVec2(x, cy + 20.0f * u + r + 12.0f * u), u, a, st, lay.showBurn);
         if (lay.showTemp) { x -= 2.0f * r + 8.0f * u; GTemp(dl, f, ImVec2(x, cy + 20.0f * u), r, u, a, st, lay.oilGauge == kOilNeedle); }
         if (lay.oilGauge == kOilDial) { x -= 2.0f * r + 8.0f * u; GOil(dl, f, ImVec2(x, cy + 20.0f * u), r, u, a, st); }
         x = cx + 98.0f * u + R + 10.0f * u + r;
@@ -853,7 +860,7 @@ static void GaugeDraw(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float 
         if (lay.showBoost) { GBoost(dl, f, ImVec2(x, y2), r, u, a, st); x += pitch; }
         if (lay.showAir) { GAir(dl, f, ImVec2(x, y2), r, u, a, st); x += pitch; }
         if (lay.showClock) GClock(dl, f, ImVec2(x, y2), r, u, a, st);
-        GRange(dl, f, ImVec2(fuelX, y2 + r + 12.0f * u), u, a, st);
+        GRange(dl, f, ImVec2(fuelX, y2 + r + 12.0f * u), u, a, st, lay.showBurn);
     }
 }
 
@@ -872,6 +879,7 @@ static GaugeLayout GaugeLayoutOf(const GaugeSettings &s)
     lay.showAir = s.showAir && s.tachClass != kClassScout; // scouts brake by hydraulics: no air to show
     lay.showLamps = s.showLamps;
     lay.showClock = s.showClock;
+    lay.showBurn = s.showBurn;
     lay.oilGauge = s.oilGauge;
     lay.faceAlpha = s.style == kFaceTinted ? s.faceOpacity : 1.0f;
     lay.openArc = s.style == kFaceOpen;

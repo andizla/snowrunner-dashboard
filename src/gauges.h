@@ -29,6 +29,7 @@ struct GaugeState
                                     // "" a numbered gear. String literals only: the pointer crosses threads
     float fuelFrac;                 // 0..1
     float rangeKm;                  // < 0 = not known yet
+    float burnPerMin;               // the fuel burn in litres a minute, smoothed; < 0 = not known
     float tempC;                    // coolant temperature (the mod's own model)
     float oilC;                     // oil temperature (the mod's own model)
     float oilWarnC;                 // where the oil dial's red zone starts: the settings' OilWarnC
@@ -67,6 +68,7 @@ struct GaugeSettings
     bool mph, psi, fahrenheit;                    // Mph, Psi, Fahrenheit
     bool showTemp, showBoost, showAir, showLamps; // ShowTemp, ShowBoost, ShowAir, ShowLamps
     bool showClock;          // ShowClock: a clock dial with the game's time of day, the outside temperature in its face
+    bool showBurn;           // ShowBurn: the fuel burn a minute after the range under the fuel dial
     int oilGauge;            // OilGauge: the oil temperature: 0 not shown, 1 a second needle in the temperature dial, 2 a dial of its own left of it
     int tachClass;           // TachClass: 0 truck, 1 scout, 2 heavy: the scales of the tachometer and the speedometer
     float idleRpm, redlineRpm, maxRpm, speedMax;  // IdleRpm, RedlineRpm, MaxRpm, SpeedMax: 0 = the class's own
@@ -110,6 +112,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.showTemp = s.showBoost = s.showLamps = true;
     s.showAir = false;
     s.showClock = true;
+    s.showBurn = true;
     s.oilGauge = kOilNeedle;
     s.tachClass = kClassTruck;
     s.boostProfile = kSpoolStandard;
@@ -259,6 +262,7 @@ inline void GaugeDemo(GaugeState &st, const GaugeSettings &s)
     st.gearMode = "A";
     st.fuelFrac = 0.62f;
     st.rangeKm = 412.0f;
+    st.burnPerMin = 4.1f;
     st.tempC = 88.0f;
     st.oilC = 97.0f;
     st.boostBar = 1.15f;

@@ -298,6 +298,7 @@ static void WriteIni(const GaugeSettings &s)
     whole(L"ShowBoost", s.showBoost ? 1 : 0);
     whole(L"ShowAir", s.showAir ? 1 : 0);
     whole(L"ShowClock", s.showClock ? 1 : 0);
+    whole(L"ShowBurn", s.showBurn ? 1 : 0);
     whole(L"ShowLamps", s.showLamps ? 1 : 0);
     whole(L"OilGauge", s.oilGauge);
     whole(L"TachClass", s.tachClass);
@@ -562,6 +563,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; Mph=1: speed in mph and range in miles. Psi=1: boost in psi. Fahrenheit=1: temperature in F.\n"
                         L"; ShowTemp, ShowBoost, ShowAir and ShowLamps switch the small dials and the lamps on (1) or off (0).\n"
                         L"; ShowClock=1 draws a clock dial with the game's time of day, the outside temperature in its face.\n"
+                        L"; ShowBurn=1 draws the fuel burn a minute after the range under the fuel dial (litres a minute, gallons an hour with Mph).\n"
                         L"; OilGauge shows the oil temperature: 1 = a second needle (amber) in the temperature dial, 2 = a dial of its\n"
                         L"; own left of the temperature dial, 0 = not at all. The oil lamp is in the lamps either way.\n"
                         L"; TachClass sets the scales: 0 = truck (idle 650 rpm, red zone from 2200 of 3000, speedometer to 100 km/h),\n"
@@ -656,6 +658,7 @@ static void ReadIni(GaugeSettings &s)
     s.showBoost = IniBool(L"ShowBoost", s.showBoost, ini);
     s.showAir = IniBool(L"ShowAir", s.showAir, ini);
     s.showClock = IniBool(L"ShowClock", s.showClock, ini);
+    s.showBurn = IniBool(L"ShowBurn", s.showBurn, ini);
     s.showLamps = IniBool(L"ShowLamps", s.showLamps, ini);
     s.oilGauge = IniInt(L"OilGauge", s.oilGauge, ini);
     s.tachClass = IniInt(L"TachClass", s.tachClass, ini);
@@ -1458,10 +1461,10 @@ static void LogSettings(const GaugeSettings &s)
     KeyName(s.toggleKey, key, sizeof key);
     static const wchar_t *oils[kOilGaugeCount] = { L"", L", the oil as a second needle in the temperature dial", L", the oil in a dial of its own" },
                          *profiles[kSpoolCount] = { L"standard", L"small and quick", L"big and slow", L"two stages" };
-    Log(L"settings: %s layout%s, %s style, size x%g, opacity %g, offset %g / %g, dials:%s%s%s%s%s%s", layouts[s.layout],
+    Log(L"settings: %s layout%s, %s style, size x%g, opacity %g, offset %g / %g, dials:%s%s%s%s%s%s%s", layouts[s.layout],
         s.swapDials ? L" with the speedometer and the tachometer swapped" : L"", styles[s.style], s.scale, s.opacity, s.offsetX,
         s.offsetY, s.showTemp ? L" temperature" : L"", s.showBoost ? L" boost" : L"", s.showAir ? L" air" : L"", s.showClock ? L" clock" : L"",
-        s.showLamps ? L" lamps" : L"", oils[s.oilGauge]);
+        s.showBurn ? L" burn" : L"", s.showLamps ? L" lamps" : L"", oils[s.oilGauge]);
     Log(L"settings: %s scales: idle %.0f rpm, red zone from %.0f of %.0f, speedometer to %.0f km/h, boost to %g bar, a %s turbo; units %s, %s, %s", classes[s.tachClass], k.idle,
         k.redline, k.max, k.speedMax, k.boost, profiles[s.boostProfile], s.mph ? L"mph" : L"km/h", s.psi ? L"psi" : L"bar", s.fahrenheit ? L"F" : L"C");
     Log(L"settings: tilt lamp amber from %g degrees to a side, red from %g, red from %g up or down a slope", s.rollWarnDeg, s.rollDangerDeg, s.pitchDangerDeg);
@@ -1538,6 +1541,8 @@ struct TruckWatch
     bool pedalDown;             // the pedal was more than half down on the last step
     uint64_t modelVehicle;
     RangeModel range;           // the range of the truck with the tank it holds
+    float burn;                 // the game's fuel burn in litres a minute, smoothed over about a second (the cluster's readout)
+    bool burnKnown;             // burn holds a truck's
     TiltModel tilt;             // how the truck stands, and the tilt lamp
     int probedLamp;             // the tilt lamp the probe wrote last
     TempModel temp;             // the coolant and oil temperatures of every truck driven since the last load
@@ -1803,6 +1808,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         w.engineVehicle = 0;
         w.clock = ClockWatch{};
         w.who = TruckWho{};
+        w.burnKnown = false;
         PullGiveBack(m, w, L"the truck is not read any more");
         // the engine's torque the mod handed to the game: the game's own share back, where the truck still is
         TorqueGive(m, w.refs, false, TorqueHandStep(w.hand, false, 0, 0, 0.0f, 1.0f));
@@ -1891,6 +1897,16 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         if (pedalDown && !w.pedalDown) SoundQuiet();
         w.pedalDown = pedalDown;
         RangeStep(w.range, kind, raw, dt);
+        // the burn for the readout: the game's rule, nothing with the engine off, smoothed so it does not flicker with the pedal
+        // (the rule's numbers not read: not known)
+        const float burnNow = TruckFuelRate(raw);
+        if (!(burnNow >= 0.0f)) w.burnKnown = false;
+        else
+        {
+            if (!w.burnKnown || !isfinite(w.burn)) w.burn = burnNow;
+            else w.burn += (1.0f - expf(-dt / 1.0f)) * (burnNow - w.burn);
+            w.burnKnown = isfinite(w.burn);
+        }
         // the air dryer's purge: a hiss each time the governor stops the compressor, a little under the oil warning
         if (AirStep(w.air, raw, TachSpeed(w.tach, scale), dt) && TruckEngineOn(raw)) SoundPlay(kSoundPurge, 0.8f * OilBeepGain(s.soundVolume), 1.0f);
         TiltStep(w.tilt, raw, s, dt);
@@ -2634,6 +2650,7 @@ static DWORD WINAPI Run(void *)
             v.st.natural = watch.profile.aspiration == kAspNatural;
             v.st.airBar = watch.air.bar;
             v.st.rangeKm = watch.range.rangeKm;
+            v.st.burnPerMin = watch.burnKnown ? watch.burn : -1.0f;
             v.st.tilt = watch.tilt.running ? watch.tilt.lamp : -1;
             v.st.rollDeg = watch.tilt.rollDeg;
             v.st.tempC = watch.temp.temp;
@@ -2723,7 +2740,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
 {
     return a.layout == b.layout && a.swapDials == b.swapDials && a.style == b.style && a.faceOpacity == b.faceOpacity && a.offsetX == b.offsetX && a.offsetY == b.offsetY &&
            a.scale == b.scale && a.opacity == b.opacity && a.mph == b.mph && a.psi == b.psi && a.fahrenheit == b.fahrenheit && a.showTemp == b.showTemp &&
-           a.showBoost == b.showBoost && a.showAir == b.showAir && a.showClock == b.showClock && a.showLamps == b.showLamps && a.tachClass == b.tachClass && a.idleRpm == b.idleRpm &&
+           a.showBoost == b.showBoost && a.showAir == b.showAir && a.showClock == b.showClock && a.showBurn == b.showBurn && a.showLamps == b.showLamps && a.tachClass == b.tachClass && a.idleRpm == b.idleRpm &&
            a.redlineRpm == b.redlineRpm && a.maxRpm == b.maxRpm && a.speedMax == b.speedMax && a.boostMax == b.boostMax && a.toggleKey == b.toggleKey &&
            a.rollWarnDeg == b.rollWarnDeg && a.rollDangerDeg == b.rollDangerDeg && a.pitchDangerDeg == b.pitchDangerDeg &&
            a.warmUpMinutes == b.warmUpMinutes && a.overheatMinutes == b.overheatMinutes && a.coolDownMinutes == b.coolDownMinutes && a.ambientC == b.ambientC &&
@@ -2753,7 +2770,7 @@ int wmain(int argc, wchar_t **argv)
     const bool written = GetFileAttributesW(ini.c_str()) != INVALID_FILE_ATTRIBUTES;
     ReadIni(b);
     Check(gone && written && SameSettings(a, d) && SameSettings(b, d), "ini: a missing ini is written with the defaults and reads back as them");
-    Check(d.layout == kLayoutStrip && !d.swapDials && d.style == kFaceOpen && !d.showAir && d.showClock && !d.demo && d.probe == 0 && !d.mph && !d.psi && !d.fahrenheit && d.toggleKey == 0 &&
+    Check(d.layout == kLayoutStrip && !d.swapDials && d.style == kFaceOpen && !d.showAir && d.showClock && d.showBurn && !d.demo && d.probe == 0 && !d.mph && !d.psi && !d.fahrenheit && d.toggleKey == 0 &&
           !strcmp(d.padToggle, "None") && d.rollWarnDeg == 15.0f && d.rollDangerDeg == 25.0f && d.pitchDangerDeg == 35.0f,
           "defaults: strip, open style, metric, the air dial off, no toggle, demo off, probe off, the tilt lamp at 15, 25 and 35 degrees");
     Check(d.warmUpMinutes == 3.0f && d.overheatMinutes == 1.5f && d.coolDownMinutes == 15.0f && d.ambientC == 15.0f && d.ambientByMap,
@@ -2779,6 +2796,7 @@ int wmain(int argc, wchar_t **argv)
     c.showTemp = c.showBoost = c.showLamps = false;
     c.showAir = true;
     c.showClock = false;
+    c.showBurn = false;
     c.tachClass = kClassHeavy;
     c.idleRpm = 700.0f;
     c.redlineRpm = 2100.0f;
@@ -2814,7 +2832,7 @@ int wmain(int argc, wchar_t **argv)
     c.oilWarnC = 132.0f;
     const bool allChanged = c.layout != d.layout && c.swapDials != d.swapDials && c.style != d.style && c.faceOpacity != d.faceOpacity && c.offsetX != d.offsetX && c.offsetY != d.offsetY &&
                             c.scale != d.scale && c.opacity != d.opacity && c.mph != d.mph && c.psi != d.psi && c.fahrenheit != d.fahrenheit &&
-                            c.showTemp != d.showTemp && c.showBoost != d.showBoost && c.showAir != d.showAir && c.showClock != d.showClock && c.showLamps != d.showLamps &&
+                            c.showTemp != d.showTemp && c.showBoost != d.showBoost && c.showAir != d.showAir && c.showClock != d.showClock && c.showBurn != d.showBurn && c.showLamps != d.showLamps &&
                             c.tachClass != d.tachClass && c.idleRpm != d.idleRpm && c.redlineRpm != d.redlineRpm && c.maxRpm != d.maxRpm &&
                             c.speedMax != d.speedMax && c.boostMax != d.boostMax && c.rollWarnDeg != d.rollWarnDeg && c.rollDangerDeg != d.rollDangerDeg &&
                             c.pitchDangerDeg != d.pitchDangerDeg && c.warmUpMinutes != d.warmUpMinutes && c.overheatMinutes != d.overheatMinutes &&
@@ -2843,7 +2861,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 78, "ini: the help text survives a write (78 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 79, "ini: the help text survives a write (79 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());

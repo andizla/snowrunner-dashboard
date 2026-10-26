@@ -2,7 +2,7 @@
 
 A gauge cluster for the truck you drive in SnowRunner: analogue dials in the style of a truck dashboard, drawn over the game in the game's own font.
 
-The cluster has a speedometer, a tachometer with the gear, fuel with the range, coolant and oil temperature, boost pressure, brake air pressure, a clock with the game's time of day and the outside temperature, and nine lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage, cold engine, tilt and oil temperature.
+The cluster has a speedometer, a tachometer with the gear, fuel with the range and the burn a minute, coolant and oil temperature, boost pressure, brake air pressure, a clock with the game's time of day and the outside temperature, and nine lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage, cold engine, tilt and oil temperature.
 
 This is version 0.16.1. It reads the truck's own values for the speedometer, the gear, the fuel gauge and seven of the lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage and tilt. The game has no engine speed, no range, no coolant or oil temperature, no boost pressure and no brake air, so the mod works those out from what the truck does, and lights the cold and oil lamps by the temperatures. The temperature also costs the engine: overheating it, or working it hard while cold, adds to the game's own engine damage. `Damage=0` switches that off. The scales of the tachometer and the speedometer and the turbo's boost and character can be set for each kind of truck. The brake air comes from the engine's compressor, which fills the tanks up to 8.2 bar and starts again at 6.9, and each press of the brake and letting the handbrake go draw from them; scouts brake by hydraulics, so the air dial is hidden on scout scales (`TachClass=1`, or a truck file that sets it). The outside temperature goes by the map you are on, which the mod reads from the game's save. With `Gearbox=1` an automatic of the mod's own, with a torque converter, picks the gears while the game's shifter is in A, and with `Powertrain=1` the truck pulls with the mod's engine and converter in place of the game's own.
 
@@ -59,6 +59,7 @@ The Gameplay tab of the NEXT GEN menu edits every setting while you play. F2 ope
 | Miles per hour, psi, Fahrenheit | `Mph`, `Psi`, `Fahrenheit` | off: km/h, bar, Celsius |
 | The temperature, boost and air dials and the lamps | `ShowTemp`, `ShowBoost`, `ShowAir`, `ShowLamps` | on, on, off, on |
 | A clock dial with the game's time of day, the outside temperature in its face (the tab's "Clock") | `ShowClock` | on |
+| The fuel burn after the range under the fuel dial: the game's own, smoothed over a second, litres a minute (gallons an hour with `Mph`) (the tab's "Burn") | `ShowBurn` | on |
 | The oil temperature: not shown, a second needle in the temperature dial, or a dial of its own | `OilGauge` 0, 1 or 2 | second needle |
 | Truck class, which sets the scales. Each kind of truck can have its own, see below. A number set by hand on the tab stays when the class changes | `TachClass` 0 truck, 1 scout, 2 heavy | truck |
 | Own numbers for idle, the start of the red zone, the tachometer's top and the speedometer's top. Each kind of truck can have its own | `IdleRpm`, `RedlineRpm`, `MaxRpm`, `SpeedMax` | 0: the class's own |
