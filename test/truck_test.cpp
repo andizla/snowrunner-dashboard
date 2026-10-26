@@ -16,6 +16,7 @@
 #include <vector>
 #include "gauges.h"
 #include "truck.h"
+#include "models.h"
 #include "maps.h"
 #include "game_code.h"
 #include "game_globals.h"
@@ -41,6 +42,18 @@ __declspec(noinline) static int TestTarget2(int a, int b)
     volatile int x = b;
     return x * 7 - a;
 }
+
+// A stand-in for the game's truck update (review 10, D7): two pointers and two floats as the game's homes them, and
+// two things the hook does not declare: a fifth argument on the stack and an answer in xmm0. Both reach the caller
+// only while the hook's call through stays a tail jump (D2).
+static volatile uint64_t g_fakeVehicle = 0;
+__declspec(noinline) static float FakeTruckUpdate(void *first, void *second, float third, float fourth, int fifth)
+{
+    g_fakeVehicle = *(volatile uint64_t *)((uint8_t *)first + 0x20);
+    return third + fourth + (float)fifth + (second ? 0.5f : 0.0f);
+}
+static volatile LONG64 g_frameFirst = 0;
+static void FakeOnFrame(void *first) { g_frameFirst = (LONG64)first; }
 
 struct Region { uint64_t at; std::vector<uint8_t> bytes; };
 static std::vector<Region> g_game;
@@ -804,10 +817,38 @@ int main()
         Peek(kGearboxBlock + 0x38, gearbox, sizeof gearbox);
         const bool result = StallJobResult(job, jw, ran, sum, sumCapacity) && jw.written && jw.points == 10 && ran && updated == kVehicle && sum == 40 &&
                             sumCapacity == 350 && gearbox[0] == 10 && job.state == kStallJobIdle && !StallJobResult(job, jw, ran, sum, sumCapacity);
-        const bool again = StallJobPost(job, r, 5.0f, 2000) && !StallJobCancel(job, 6999, 5000) && StallJobCancel(job, 7000, 5000) && job.state == kStallJobIdle;
+        // kept however long while the same truck is driven (a pause, a menu), dropped once another one is (review 10, D4)
+        const bool again = StallJobPost(job, r, 5.0f, 2000) && !StallJobDrop(job, kVehicle) && job.state == kStallJobPosted &&
+                           StallJobDrop(job, kOtherVehicle) && job.state == kStallJobIdle;
         Check(posted && otherTruck && notYet && dealt && result && again,
               "stall job: posted once at a time, dealt only by a frame for its truck with the game's damage update after, its result and the game's sum "
-              "read once, taken back when no frame took it within the wait");
+              "read once; kept while its truck is driven, dropped once another is");
+
+        // a frame of the truck update: its first argument an object with the vehicle at + 0x20 (StallJobFrame, what the
+        // hook's callback runs); and the clutch's burn end to end, its whole points posted to the job and dealt by a frame
+        // (review 10, D7)
+        const uint64_t kFirst = 0x10210000, kOtherFirst = 0x10220000;
+        Block(kFirst, 0x40);
+        Block(kOtherFirst, 0x40);
+        Put(kFirst + 0x20, kVehicle);
+        Put(kOtherFirst + 0x20, kOtherVehicle);
+        Put(kGearboxBlock + 0x38, sound);
+        ClutchHeat heat = {};
+        heat.owed = 0.004f; // under one point of 200
+        const int underOne = ClutchBurnPost(heat, job, r, 200, 3000);
+        heat.owed = 0.057f; // 11.4 points of 200
+        const int points = ClutchBurnPost(heat, job, r, 200, 3000);
+        const bool busy = ClutchBurnPost(heat, job, r, 200, 3000) == 0;
+        const bool idleFrame = !StallJobFrame(job, kMemory, kOtherFirst, update) && job.state == kStallJobPosted;
+        const bool frame = StallJobFrame(job, kMemory, kFirst, update);
+        bool burn = false;
+        const bool burnt = StallJobResult(job, jw, ran, sum, sumCapacity, &burn) && burn && jw.written && jw.points == 11;
+        Peek(kGearboxBlock + 0x38, gearbox, sizeof gearbox);
+        StallJob quiet = {};
+        const bool unread = !StallJobFrame(quiet, kMemory, 0x5000, update); // no job: first is not read, nor is a bad one
+        Check(underOne == 0 && points == 11 && Near(heat.owed, 0.002f) && busy && idleFrame && frame && burnt && gearbox[0] == 11 && unread,
+              "clutch burn end to end: whole points owed are posted to the job, the rest kept; a frame reads the vehicle at first + 0x20 and deals "
+              "only its truck's job, the gearbox's damage written and marked as the burn's");
     }
 
     // the locks on the mod's keys: a press flips its byte in the action (the lock at + 0x4A, all-wheel drive at + 0x49,
@@ -1032,6 +1073,32 @@ int main()
         const int after = TestTarget(a, b);
         Check(before == 17 && attached && wayMoved && seen && through == before && detached && after == before && g_hookSaw == 1 && g_testWay == &TestTarget,
               "gearbox hooks: a function detoured calls the hook, which calls through with its arguments and answer unchanged; the detach makes it its own again");
+    }
+
+    // the truck update's hook through Detours on a function with the game's signature (review 10, D7): the callback gets
+    // the first argument before the update runs; the update gets all five arguments, the fifth on the stack, and its
+    // answer in xmm0 comes back; after the unhook the function is its own again
+    {
+        uint8_t object[0x40] = {};
+        const uint64_t truck = 0x1234567890ull;
+        memcpy(object + 0x20, &truck, 8);
+        int second = 0;
+        float (*volatile update)(void *, void *, float, float, int) = &FakeTruckUpdate;
+        const float plain = update(object, &second, 1.5f, 2.0f, 7);
+        char why[160] = "";
+        const bool hooked = TruckUpdateHook((uintptr_t)&FakeTruckUpdate, &FakeOnFrame, why, sizeof why);
+        const long framesBefore = TruckUpdateFrames();
+        g_fakeVehicle = 0;
+        const float through = update(object, &second, 1.5f, 2.0f, 7);
+        const bool seen = g_frameFirst == (LONG64)(uintptr_t)object && TruckUpdateFrames() == framesBefore + 1 && g_fakeVehicle == truck;
+        const bool twice = TruckUpdateHook((uintptr_t)&FakeTruckUpdate, &FakeOnFrame, why, sizeof why);
+        TruckUpdateUnhook();
+        g_frameFirst = 0;
+        const float after = update(object, &second, 1.5f, 2.0f, 7);
+        Check(plain == 11.0f && hooked && through == 11.0f && seen && twice && after == 11.0f && g_frameFirst == 0 && TruckUpdateFrames() == framesBefore + 1,
+              "truck update hook: through Detours on a function with the game's signature, the callback gets the first argument, the function its five "
+              "arguments (the fifth on the stack) and its answer in xmm0 comes back; after the unhook it is its own again");
+        if (!hooked) printf("     %s\n", why);
     }
 
     // GearboxHook's choice (review 6, G6): made-up finds at base 0, two found once at the test's own functions, one held,

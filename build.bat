@@ -20,7 +20,8 @@ cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I deps\imgui /I deps\stb /Fo:
 cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I deps\reshade\include /Fo:out\obj\ng_reshade.obj src\ng_reshade.cpp || goto fail
 set IMGUI_OBJ=out\obj\imgui.obj out\obj\imgui_draw.obj out\obj\imgui_tables.obj out\obj\imgui_widgets.obj out\obj\ng_dx11.obj out\obj\ng_overlay.obj out\obj\ng_reshade.obj
 rem the game's gearbox functions hooked (src\gearbox_hooks.cpp) through Microsoft Detours (src\detours, MIT, built from
-rem its source with the static CRT; its own warnings are not ours), in one library the mod and the tests link
+rem its source with the static CRT; its own warnings are not ours), in one library the mod and the tests link. It
+rem must be built /O2: the hook on the game's truck update relies on its call through being a tail jump (review 10, D2)
 if not exist out\obj\detours mkdir out\obj\detours
 cl /nologo /c /O2 /w /MT /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0601 /Fo:out\obj\detours\ src\detours\detours.cpp src\detours\disasm.cpp src\detours\modules.cpp src\detours\creatwth.cpp src\detours\image.cpp || goto fail
 cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /Fo:out\obj\gearbox_hooks.obj src\gearbox_hooks.cpp || goto fail

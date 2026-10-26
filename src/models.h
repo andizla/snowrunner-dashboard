@@ -2169,7 +2169,8 @@ struct ClutchHeat
 // One step of dt seconds for a truck of the kind id (never 0). c: its clutch (an empty one while the mod's gearbox has
 // no position of the player's: it only cools); torque: the engine's most in the game's figures, times its profile's
 // share (0 not known: no heat). on: Damage and ClutchBurn; off, the heat is kept but costs nothing. A kind driven
-// before has cooled for as long as other trucks were driven.
+// before has cooled for as long as other trucks were driven. A change of truck forgives what the burn owed and was not
+// dealt yet (owed, less than one of the gearbox's points); the heat itself stays with the kind (review 10, D6).
 inline void ClutchHeatStep(ClutchHeat &h, uint64_t id, const ClutchModel &c, float torque, bool on, float dt)
 {
     if (!h.known || h.truck[h.at].id != id)
@@ -2205,6 +2206,17 @@ inline void ClutchHeatStep(ClutchHeat &h, uint64_t id, const ClutchModel &c, flo
     if (!on) h.owed = 0.0f;
     h.clock += dt;
     h.truck[h.at].left = h.clock;
+}
+
+// What the burn owes, in whole points of a gearbox that takes capacity, posted to the stall damage's job (truck.h,
+// StallJob) as a percent of it. The points posted; 0 while less than one is owed or the job is busy.
+inline int ClutchBurnPost(ClutchHeat &h, StallJob &j, const TruckRefs &r, int capacity, unsigned long long now)
+{
+    if (!(h.owed > 0.0f) || capacity <= 0) return 0;
+    const float points = floorf(h.owed * (float)capacity);
+    if (points < 1.0f || !StallJobPost(j, r, points / (float)capacity * 100.0f, now, true)) return 0;
+    h.owed = fmaxf(h.owed - points / (float)capacity, 0.0f);
+    return (int)points;
 }
 
 // The heat in a few words for the probe's clutch line.

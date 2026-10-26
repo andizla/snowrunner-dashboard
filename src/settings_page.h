@@ -561,7 +561,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         ImGui::BeginDisabled(!s.damage);
         changed(ImGui::Checkbox("Clutch burns", &s.clutchBurn));
         ImGui::EndDisabled();
-        PageTip("A slipping clutch under load heats up and costs the gearbox, faster the stronger the engine. Needs Damage on.");
+        PageTip("A clutch pedal slipped under load heats up and costs the gearbox, faster the stronger the engine. Only with the clutch on a "
+                "pedal's axis: a clutch on a button, or none, works by itself and does not burn. Needs Damage on.");
     }
     // the bindings: two slots an action; a click binds the next key, pad chord, button or pedal moved, x clears (the
     // order is input_bindings.h's GearAction). The shifter's at Gearbox=2, the locks' at every level

@@ -620,7 +620,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; Damage=0: the temperature is only shown.\n"
                         L"; ColdDamagePercentPerMinute=0 switches the cold part off. Damage has not been tried in co-op: leave it at 0 there.\n"
                         L"; StallDamagePercent: what a shift without the clutch costs the gearbox, percent of what it takes, 0 to 25 (5), with Damage=1.\n"
-                        L"; ClutchBurn=1: a slipping clutch under load heats up and costs the gearbox, faster the stronger the engine, with Damage=1.\n"
+                        L"; ClutchBurn=1: a clutch pedal (on an axis) slipped under load heats up and costs the gearbox, faster the stronger the engine, with Damage=1.\n"
                         L"; SoundVolume (0 to 100) is how loud the turbo is heard when the pedal comes up quickly under boost: it flutters,\n"
                         L"; longer and louder the more boost there was, until the pedal goes down again. The oil warning goes by it too.\n"
                         L"; 0 = no sound. SoundsOnly=1 plays the sounds and draws no cluster.\n"
@@ -1872,10 +1872,8 @@ static bool PokeGame(uint64_t addr, const void *in, size_t size) { return WriteP
 static void OnTruckFrame(void *first)
 {
     if (g_stallJob.state != kStallJobPosted) return;
-    uint64_t vehicle = 0;
-    if (!PeekGame((uint64_t)first + 0x20, &vehicle, sizeof vehicle)) return;
     const TruckMemory m = { PeekGame, g_base, PokeGame };
-    StallJobDeal(g_stallJob, m, vehicle, g_damageUpdate);
+    StallJobFrame(g_stallJob, m, (uint64_t)first, g_damageUpdate);
 }
 
 // The driven truck as the mod's thread follows it from pass to pass.
@@ -2368,20 +2366,21 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                     w.gearbox.keep, w.gearbox.keepFor);
             w.clutch = ClutchModel{};
         }
-        // the clutch's heat from the clutch as stepped (outside a position of the player's it is empty and only cools),
-        // by the engine's most torque and its profile's share
+        // the clutch's heat from the clutch as stepped, by the engine's most torque and its profile's share. Only a
+        // clutch pedal on an axis heats it (review 10, D1): the clutch that works by itself (a button, or none) slips on
+        // every start and cannot be feathered, so it only cools, as one outside a position of the player's does
         {
             const float most = w.engine.torque > 0.0f && w.engineVehicle == w.refs.vehicle ? w.engine.torque * (w.profile.torque > 0.0f ? w.profile.torque : 1.0f) : 0.0f;
-            const bool was = w.clutchHeat.burning;
-            ClutchHeatStep(w.clutchHeat, kind, w.clutch, most, s.damage && s.clutchBurn, dt);
-            if (w.clutchHeat.burning && !was)
+            const bool burnWas = w.clutchHeat.burning;
+            ClutchHeatStep(w.clutchHeat, kind, w.actions.clutchTravel >= 0.0f ? w.clutch : ClutchModel{}, most, s.damage && s.clutchBurn, dt);
+            if (w.clutchHeat.burning && !burnWas)
             {
                 w.burnPoints = 0;
                 Log(s.damage && s.clutchBurn && g_damageUpdate ? L"clutch: burning, the gearbox pays"
                     : s.damage && s.clutchBurn ? L"clutch: burning, but the game's damage path was not found, so the gearbox pays nothing"
                                                : L"clutch: burning, but Damage or ClutchBurn is off, so the gearbox pays nothing");
             }
-            else if (!w.clutchHeat.burning && was) Log(L"clutch: cooled under its burn point; the burn cost the gearbox %d points", w.burnPoints);
+            else if (!w.clutchHeat.burning && burnWas) Log(L"clutch: cooled under its burn point; the burn cost the gearbox %d points", w.burnPoints);
         }
         if (probe && boxGear >= 1 && w.gearbox.gear >= 1 && w.gearbox.gear != boxGear && raw.automatic && raw.gearEngaged >= 1 && raw.gearEngaged <= TruckTopGear(raw))
             Log(L"automatic: the model would shift %d to %d at %.0f rpm on the gearbox's input, the pedal at %.2f (the game's gear %d)", boxGear, w.gearbox.gear,
@@ -2510,18 +2509,12 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             shiftAsk = box.setGear;
             shiftTo = box.gear;
         }
-        // a stall's gearbox damage: posted to the game's thread one stall at a time, and what came of it told
+        // a stall's gearbox damage: posted to the game's thread one stall at a time, and what came of it told; the
+        // stalls owed go when the share has gone to 0 meanwhile (review 10, D5)
+        if (StallDamageShare(s) <= 0.0f) w.stallsOwed = 0;
         if (w.stallsOwed && g_damageUpdate && StallJobPost(g_stallJob, w.refs, StallDamageShare(s), now)) w.stallsOwed--;
         // the clutch's burn, the same way once whole points are owed
-        if (!w.stallsOwed && w.clutchHeat.owed > 0.0f && raw.gearboxKnown && raw.gearboxCapacity > 0 && g_damageUpdate)
-        {
-            const float points = floorf(w.clutchHeat.owed * (float)raw.gearboxCapacity);
-            if (points >= 1.0f && StallJobPost(g_stallJob, w.refs, points / (float)raw.gearboxCapacity * 100.0f, now, true))
-            {
-                w.clutchHeat.owed = fmaxf(w.clutchHeat.owed - points / (float)raw.gearboxCapacity, 0.0f);
-                w.burnPoints += (int)points;
-            }
-        }
+        if (!w.stallsOwed && raw.gearboxKnown && g_damageUpdate) w.burnPoints += ClutchBurnPost(w.clutchHeat, g_stallJob, w.refs, raw.gearboxCapacity, now);
         {
             GearboxDamageWrite gw;
             bool updated = false, burn = false;
@@ -2536,8 +2529,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 else if (gw.capacity > 0 && gw.before >= gw.capacity) Log(L"gearbox damage: %s not dealt: the gearbox at its worst already", what);
                 else Log(L"gearbox damage: %s not dealt: %S", what, gw.why);
             }
-            if (StallJobCancel(g_stallJob, now, 5000))
-                Log(L"gearbox damage: the gearbox's damage not dealt: the game's truck update did not run for this truck within 5 s");
+            if (StallJobDrop(g_stallJob, w.refs.vehicle))
+                Log(L"gearbox damage: the last truck's gearbox damage not dealt: another truck is driven before the game's truck update took it");
         }
         // the differential lock and all-wheel drive on the mod's keys, at every level of Gearbox: not shifts, and the
         // game's own keys still work on a truck with the upgrade

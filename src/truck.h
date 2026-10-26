@@ -800,7 +800,8 @@ inline bool TruckGearboxDamageAdd(const TruckMemory &m, const TruckRefs &r, floa
 // The mod's thread posts the job (StallJobPost); the game's truck update, detoured (gearbox_hooks.h, TruckUpdateHook),
 // deals it on its next frame for that truck (StallJobDeal): the damage into the gearbox's block, then the game's own
 // damage update, which sums the parts' damage (vehicle + 0x108) and brings up the game's truck card. The mod's thread
-// reads what came of it (StallJobResult), or takes a job back that no frame took (StallJobCancel).
+// reads what came of it (StallJobResult), or takes a job back that no frame took for its truck once another truck is
+// driven (StallJobDrop).
 enum { kStallJobIdle, kStallJobPosted, kStallJobDealing, kStallJobDone };
 struct StallJob
 {
@@ -850,6 +851,16 @@ inline bool StallJobDeal(StallJob &j, const TruckMemory &m, uint64_t vehicle, vo
     return true;
 }
 
+// On the game's thread, every frame of its truck update: first is the update's first argument, an object with the
+// vehicle at + 0x20; the job dealt when it is for that truck. Nothing is read while no job is posted.
+inline bool StallJobFrame(StallJob &j, const TruckMemory &m, uint64_t first, void (*update)(uint64_t))
+{
+    if (j.state != kStallJobPosted) return false;
+    uint64_t vehicle = 0;
+    if (!m.get(first + 0x20, vehicle)) return false;
+    return StallJobDeal(j, m, vehicle, update);
+}
+
 // On the mod's thread: a dealt job's result into out, and the job free again.
 inline bool StallJobResult(StallJob &j, GearboxDamageWrite &write, bool &updated, int &sum, int &sumCapacity, bool *burn = nullptr)
 {
@@ -863,10 +874,11 @@ inline bool StallJobResult(StallJob &j, GearboxDamageWrite &write, bool &updated
     return true;
 }
 
-// On the mod's thread: a job no frame took within waitMs taken back (the truck left, the game paused). True when it was.
-inline bool StallJobCancel(StallJob &j, unsigned long long now, unsigned long long waitMs)
+// On the mod's thread, with vehicle the truck driven now: a job no frame took for its truck taken back once another
+// truck is driven. While the same truck is driven it waits, through a pause or a menu (review 10, D4). True when it was.
+inline bool StallJobDrop(StallJob &j, uint64_t vehicle)
 {
-    return j.state == kStallJobPosted && now - j.posted >= waitMs && InterlockedCompareExchange(&j.state, kStallJobIdle, kStallJobPosted) == kStallJobPosted;
+    return j.state == kStallJobPosted && j.refs.vehicle != vehicle && InterlockedCompareExchange(&j.state, kStallJobIdle, kStallJobPosted) == kStallJobPosted;
 }
 
 // What the game is showing. control: the driven truck's control object, 0 when there is none.

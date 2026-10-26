@@ -2401,6 +2401,59 @@ int main(int argc, char **argv)
         }
         Check(pull.stalls == 0 && dip > k.idle * 0.75f && pull.locked && Near(pull.rpm, pull.input, 1.0f),
               "clutch: let up slowly with a little pedal as the truck pulls away, the engine dips under its idle without stalling and the clutch locks");
+        // the clutch's heat driven from ClutchStep's own states (review 10, D7), for a stock engine (Torque 195000): the
+        // same start in first stays cold; floored in third, revved with the clutch pressed and then held in its bite (the
+        // truck gaining a third as fast as in first), it burns within a few seconds; let up and locked, it only cools
+        {
+            const float stock = 195000.0f;
+            ClutchModel firstGear = {};
+            ClutchHeat firstHeat = {};
+            float in = 0.0f, firstMost = 0.0f;
+            for (float at = 0.0f; at < 5.0f; at += kDt)
+            {
+                wheels(TruckGearTop(c, 1) * in / k.redline);
+                ClutchStep(firstGear, c, k, curve, 1.0f - SettingsRange(at / 3.0f, 0.0f, 1.0f), ThrottleShape(0.33f), 1.0f, false, kDt);
+                in = fmaxf(0.0f, in + firstGear.carried * 2000.0f * kDt);
+                ClutchHeatStep(firstHeat, 1, firstGear, stock, true, kDt);
+                firstMost = fmaxf(firstMost, firstHeat.q);
+            }
+            TruckRaw third = c;
+            third.gear = third.gearEngaged = 3;
+            ClutchModel thirdGear = {};
+            ClutchHeat thirdHeat = {};
+            float thirdBegan = -1.0f, thirdMost = 0.0f, thirdCarried = 0.0f;
+            in = 0.0f;
+            // floored with the clutch pressed for a second, then held in its bite (0.65 of the pedal's travel)
+            for (float at = 0.0f; at < 1.0f; at += kDt) ClutchStep(thirdGear, third, k, curve, 1.0f, ThrottleShape(1.0f), 1.0f, false, kDt);
+            for (float at = 0.0f; at < 6.0f && thirdBegan < 0.0f; at += kDt)
+            {
+                for (int i = 0; i < third.wheels; i++) third.spin[i] = TruckGearTop(third, 3) * in / k.redline;
+                ClutchStep(thirdGear, third, k, curve, 0.65f, ThrottleShape(1.0f), 1.0f, false, kDt);
+                in = fmaxf(0.0f, in + thirdGear.carried * 2000.0f / 3.0f * kDt);
+                ClutchHeatStep(thirdHeat, 1, thirdGear, stock, true, kDt);
+                if (thirdHeat.burning) thirdBegan = at;
+                thirdMost = fmaxf(thirdMost, thirdHeat.q);
+                if (thirdGear.carried > thirdCarried) thirdCarried = thirdGear.carried;
+            }
+            // let up fully at speed: locked, so the heat only falls
+            const float hot = thirdHeat.q;
+            wheels(TruckGearTop(c, 1) * 0.6f);
+            ClutchModel locked = {};
+            for (float at = 0.0f; at < 2.0f; at += kDt)
+            {
+                ClutchStep(locked, c, k, curve, 0.0f, ThrottleShape(0.5f), 1.0f, false, kDt);
+                ClutchHeatStep(thirdHeat, 1, locked, stock, true, kDt);
+            }
+            // as tuned (the figures over the constants take the clutch carrying 1.0 at 1600 rpm), the clutch model held in
+            // its bite at its governor carries about 0.53 at 1900 rpm, and the heat of this start stays short of the burn
+            // point: what it reaches is printed for the retune the drives will ask for
+            printf("     clutch heat from ClutchStep: first gear at most %.2f of %.2f; third floored in the bite carries at most %.2f and heats to %.2f (%s)\n",
+                   firstMost, kClutchBurnFrom, thirdCarried, thirdMost, thirdBegan >= 0.0f ? "burns" : "no burn");
+            Check(firstMost < kClutchBurnFrom * 0.1f && thirdMost > firstMost * 10.0f && thirdMost > kClutchBurnFrom * 0.6f && thirdGear.stalls == 0 && locked.locked &&
+                      thirdHeat.q < hot,
+                  "clutch heat from ClutchStep's states: a start in first stays under a tenth of the burn point; floored in third with the clutch held in its "
+                  "bite it heats more than ten times as much, past 0.6 of the burn point; let up and locked it only cools");
+        }
         // let up at speed: the engine turns with the gearbox; pressed again with the foot off, back to idle
         wheels(TruckGearTop(c, 1) * 0.6f);
         ClutchModel cruise = {};

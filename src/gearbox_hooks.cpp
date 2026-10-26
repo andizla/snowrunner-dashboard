@@ -284,8 +284,11 @@ void GearboxCountsGet(GearboxCounts &out)
 void *GearboxOriginal(int fn) { return g_hooked && fn >= 0 && fn < kFnCount && kHooks[fn] ? g_way[fn] : nullptr; }
 
 // ---- the game's truck update ----
-// Its first bytes keep its four arguments in their home slots (rcx, rdx, xmm2, xmm3): two pointers and two floats.
-// The hook ends in the call through, so what the update returns in rax or xmm0 is handed back untouched.
+// Its first bytes keep its four arguments in their home slots (rcx, rdx, xmm2, xmm3): two pointers and two floats;
+// whether it takes more on the stack is not known. So the call through must stay the hook's last statement, and the
+// compiler must make it a tail jump (built /O2 it is: rsp restored, then jmp [g_truckWay]): a stack argument then
+// reaches the game where the game left it, and what the update returns in rax or xmm0 is handed back untouched. A
+// statement after it, or a build without /O2, would make it a call from the hook's own frame (review 10, D2).
 typedef void (*TruckUpdateFn)(void *, void *, float, float);
 static void *g_truckWay = nullptr;
 static TruckFrameFn volatile g_onFrame = nullptr;
