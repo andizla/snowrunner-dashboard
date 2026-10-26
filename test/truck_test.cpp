@@ -350,6 +350,14 @@ static void RealImageTest()
              steam ? ", the Steam build of 22 July" : update ? ", the update of 20 October" : ", a build the test has no numbers for", from, to, right, kGlobCount, inData,
              shift.at, *wrong ? "; wrong:" : "", wrong);
     Check(right == kGlobCount && inData == kGlobCount && shiftRight, line);
+    // the damage path the tire mod uses: the truck update and the damage update (in the Steam build of 22 July where the
+    // tire mod has them, in another build found once)
+    DamagePath path;
+    const bool pathFound = DamagePathFind(image.data(), from, to, path);
+    const bool pathRight = pathFound && (!steam || (path.truckUpdate == 0xa56970 && path.damageUpdate == 0xd6f690));
+    snprintf(line, sizeof line, "places in a real image of the game's exe: the truck update at %zx, the damage update at %zx%s%s", path.truckUpdate, path.damageUpdate,
+             pathFound ? "" : "; ", path.why);
+    Check(pathRight, line);
 
     // the places the mod cannot do without, by each of their ways alone (game_globals.h): on a build the test has
     // numbers for, every way a place has must give it there; on another the line tells which ways found what, so a
@@ -730,6 +738,77 @@ int main()
     const bool leftAlone = !TruckDamageAdd(kMemory, r, 1, e, d);
     readEngine();
     Check(leftAlone && engine[0] == 150, "write: an engine at its end is left alone");
+
+    // a stall the mod's gearbox ordered costs the gearbox: 5 percent of its 200 is 10 points into the block behind
+    // vehicle + 0x148, again on a second stall, capped at what it takes; nothing with Damage off or StallDamagePercent 0
+    {
+        MakeGame();
+        TruckFind(kMemory, r);
+        const uint64_t kGearboxBlock = 0x10200000;
+        Block(kGearboxBlock, 0x80);
+        Put(kVehicle + 0x148, kGearboxBlock | 0x00CD000000000000ull);
+        Put(kGearboxBlock + 0x10, (uint16_t)1);
+        const int sound[2] = { 0, 200 };
+        Put(kGearboxBlock + 0x38, sound);
+        GaugeSettings gs;
+        SettingsDefaults(gs);
+        GearboxDamageWrite gw;
+        int gearbox[2] = {};
+        const bool first = TruckGearboxDamageAdd(kMemory, r, StallDamageShare(gs), gw) && gw.points == 10 && gw.capacity == 200;
+        Peek(kGearboxBlock + 0x38, gearbox, sizeof gearbox);
+        const bool ten = gearbox[0] == 10 && gearbox[1] == 200;
+        const bool second = TruckGearboxDamageAdd(kMemory, r, StallDamageShare(gs), gw) && gw.before == 10 && gw.wrote == 20;
+        Peek(kGearboxBlock + 0x38, gearbox, sizeof gearbox);
+        const bool twenty = gearbox[0] == 20;
+        gs.damage = false;
+        const bool off = StallDamageShare(gs) == 0.0f && !TruckGearboxDamageAdd(kMemory, r, StallDamageShare(gs), gw);
+        gs.damage = true;
+        gs.stallDamage = 0.0f;
+        const bool none = !TruckGearboxDamageAdd(kMemory, r, StallDamageShare(gs), gw);
+        Peek(kGearboxBlock + 0x38, gearbox, sizeof gearbox);
+        const bool untouched = gearbox[0] == 20;
+        const int nearly[2] = { 195, 200 };
+        Put(kGearboxBlock + 0x38, nearly);
+        gs.stallDamage = 5.0f;
+        const bool capped = TruckGearboxDamageAdd(kMemory, r, StallDamageShare(gs), gw) && gw.wrote == 200 && gw.points == 5;
+        const bool worst = !TruckGearboxDamageAdd(kMemory, r, StallDamageShare(gs), gw) && gw.before == 200;
+        Peek(kGearboxBlock + 0x38, gearbox, sizeof gearbox);
+        TruckRaw t;
+        const bool read = TruckRead(kMemory, r, t) && t.gearboxKnown && t.gearboxDamage == 200 && t.gearboxCapacity == 200;
+        Check(first && ten && second && twenty && off && none && untouched && capped && worst && gearbox[0] == 200 && read,
+              "stall: 5 percent of the gearbox's 200 is 10 points behind vehicle + 0x148, again on a second stall, capped at what it takes; nothing with "
+              "Damage off or StallDamagePercent 0; the reader names the gearbox's damage");
+
+        // the job: posted by the mod's thread, dealt by a frame of the truck update for that truck only, the game's damage
+        // update run after the write (here it sums the parts into vehicle + 0x108), the result read once; one at a time;
+        // a job no frame took is taken back after its wait
+        Put(kGearboxBlock + 0x38, sound);
+        static uint64_t updated = 0;
+        updated = 0;
+        auto update = [](uint64_t vehicle) {
+            updated = vehicle;
+            int block[2] = {}, sums[2] = { 0, 0 };
+            Peek(0x10200000 + 0x38, block, sizeof block);
+            sums[0] = 30 + block[0];
+            sums[1] = 150 + block[1];
+            Put(vehicle + 0x108, sums);
+        };
+        StallJob job = {};
+        const bool posted = StallJobPost(job, r, 5.0f, 1000) && !StallJobPost(job, r, 5.0f, 1001);
+        const bool otherTruck = !StallJobDeal(job, kMemory, kOtherVehicle, update) && job.state == kStallJobPosted;
+        GearboxDamageWrite jw;
+        bool ran = false;
+        int sum = 0, sumCapacity = 0;
+        const bool notYet = !StallJobResult(job, jw, ran, sum, sumCapacity);
+        const bool dealt = StallJobDeal(job, kMemory, kVehicle, update) && !StallJobDeal(job, kMemory, kVehicle, update);
+        Peek(kGearboxBlock + 0x38, gearbox, sizeof gearbox);
+        const bool result = StallJobResult(job, jw, ran, sum, sumCapacity) && jw.written && jw.points == 10 && ran && updated == kVehicle && sum == 40 &&
+                            sumCapacity == 350 && gearbox[0] == 10 && job.state == kStallJobIdle && !StallJobResult(job, jw, ran, sum, sumCapacity);
+        const bool again = StallJobPost(job, r, 5.0f, 2000) && !StallJobCancel(job, 6999, 5000) && StallJobCancel(job, 7000, 5000) && job.state == kStallJobIdle;
+        Check(posted && otherTruck && notYet && dealt && result && again,
+              "stall job: posted once at a time, dealt only by a frame for its truck with the game's damage update after, its result and the game's sum "
+              "read once, taken back when no frame took it within the wait");
+    }
 
     // the locks on the mod's keys: a press flips its byte in the action (the lock at + 0x4A, all-wheel drive at + 0x49,
     // the made up truck with all-wheel drive on and the lock off), a key held is no press, and a byte the game puts back

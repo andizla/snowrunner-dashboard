@@ -124,6 +124,8 @@ struct TruckRaw
     float damageEffect;
     int damageSum, damageSumCapacity; // vehicle + 0x108, + 0x10C: all the parts' damage and what they take, as the game last summed them
     float gearboxEffect, tankEffect; // what the gearbox's and the fuel tank's damage does, 0 when sound
+    bool gearboxKnown;
+    int gearboxDamage, gearboxCapacity; // the gearbox's damage and what it takes (vehicle + 0x148's block)
     bool burnKnown;                // the numbers of the game's fuel burn were read
     float burnShare[2];            // vehicle + 0xE38, + 0xE3C
     float burnAwd, burnEngine, burnGearbox, burnIdle, burnLeak; // + 0xE40, + 0xE44, + 0xE48, + 0xE68, + 0xE6C
@@ -261,6 +263,12 @@ inline bool TruckRead(const TruckMemory &m, const TruckRefs &r, TruckRaw &t)
     }
     // the fuel burn's numbers; a truck without them is still a truck
     const uint64_t gearbox = TruckBlock(m, r.vehicle + 0x148), tank = TruckBlock(m, r.vehicle + 0x158);
+    if (gearbox && m.get(gearbox, block) && block[1] > 0 && block[1] < 1000000 && block[0] >= 0 && block[0] <= block[1])
+    {
+        t.gearboxKnown = true;
+        t.gearboxDamage = block[0];
+        t.gearboxCapacity = block[1];
+    }
     if (gearbox) m.get(gearbox + 8, t.gearboxEffect);
     if (tank) m.get(tank + 8, t.tankEffect);
     uint8_t b[0x38]; // vehicle + 0xE38 .. + 0xE70
@@ -675,6 +683,23 @@ inline void TruckEngineEffect(int damage, int capacity, const EngineRecord &e, f
     }
 }
 
+// The data of one of the driven truck's damage blocks (handleAt: vehicle + 0x150 the engine's, + 0x148 the gearbox's),
+// for a write: nullptr with data set, else why not (a string literal). Not while the game drives the truck in r through
+// other objects, nor where the block or the drive train lies inside the exe.
+inline const char *TruckPartBlock(const TruckMemory &m, const TruckRefs &r, uint64_t handleAt, uint64_t &data)
+{
+    uint64_t control = 0, vehicle = 0, action = 0;
+    data = 0;
+    if (!g_places.control || !m.get(m.base + g_places.control, control) || control != r.control || !m.get(r.control + 8, vehicle) || vehicle != r.vehicle ||
+        !m.get(r.vehicle + 0x68, action) || action != r.action)
+        return "the truck is no longer the one being driven";
+    const uint64_t block = TruckBlock(m, handleAt);
+    if ((block >= m.base && block < m.base + g_exeSize) || (r.action >= m.base && r.action < m.base + g_exeSize))
+        return handleAt == r.vehicle + 0x150 ? "the engine's damage is not where the game keeps its objects" : "the part's damage is not where the game keeps its objects";
+    data = block;
+    return nullptr;
+}
+
 // What a write of engine damage did. written: the damage went into the game; why: what stood in the way when it
 // did not. before, wrote and capacity are the engine's damage as read, as written and what the engine takes; after
 // is what the game held right after the write. The effect and the torque factor are as read and as left.
@@ -699,22 +724,12 @@ inline bool TruckDamageAdd(const TruckMemory &m, const TruckRefs &r, int points,
 {
     w = DamageWrite{};
     w.why = "";
-    uint64_t control = 0, vehicle = 0, action = 0;
     int block[3] = {}, after = 0;
     float torque = 0.0f, effect = 0.0f;
     if (!m.poke || points <= 0) { w.why = "there is nothing to write"; return false; }
-    if (!g_places.control || !m.get(m.base + g_places.control, control) || control != r.control || !m.get(r.control + 8, vehicle) || vehicle != r.vehicle ||
-        !m.get(r.vehicle + 0x68, action) || action != r.action)
-    {
-        w.why = "the truck is no longer the one being driven";
-        return false;
-    }
-    const uint64_t data = TruckBlock(m, r.vehicle + 0x150);
-    if ((data >= m.base && data < m.base + g_exeSize) || (r.action >= m.base && r.action < m.base + g_exeSize))
-    {
-        w.why = "the engine's damage is not where the game keeps its objects";
-        return false;
-    }
+    uint64_t data = 0;
+    if ((w.why = TruckPartBlock(m, r, r.vehicle + 0x150, data)) != nullptr) return false;
+    w.why = "";
     if (!data || !m.get(r.action + 0xCC, torque) || !m.get(data, block)) { w.why = "the engine's damage could not be read"; return false; }
     w.before = w.wrote = w.after = block[0];
     w.capacity = block[1];
@@ -738,6 +753,120 @@ inline bool TruckDamageAdd(const TruckMemory &m, const TruckRefs &r, int points,
         if (m.put(r.action + 0xCC, torque)) w.torqueAfter = torque;
     }
     return true;
+}
+
+// What a write of gearbox damage did, as DamageWrite: written, why, the damage before and as written, what the gearbox
+// takes, and the points written.
+struct GearboxDamageWrite
+{
+    bool written;
+    const char *why; // a string literal
+    int before, wrote, capacity, points;
+};
+
+// What a stall the mod's gearbox ordered costs the gearbox by the settings, percent of what it takes: StallDamagePercent
+// with Damage on, else 0 (nothing).
+inline float StallDamageShare(const GaugeSettings &s) { return s.damage ? s.stallDamage : 0.0f; }
+
+// Adds percent of what the driven truck's gearbox takes to its damage, rounded, in the game's memory (vehicle + 0x148's
+// block, as the engine's), up to what it takes. The same guards as TruckDamageAdd's. On the game's own thread, with
+// the game's damage update after it (StallJobDeal), as the tire mod deals tire damage.
+inline bool TruckGearboxDamageAdd(const TruckMemory &m, const TruckRefs &r, float percent, GearboxDamageWrite &w)
+{
+    w = GearboxDamageWrite{};
+    w.why = "";
+    if (!(percent > 0.0f)) { w.why = "Damage is off or StallDamagePercent is 0"; return false; }
+    if (!m.poke) { w.why = "there is nothing to write"; return false; }
+    uint64_t data = 0;
+    if ((w.why = TruckPartBlock(m, r, r.vehicle + 0x148, data)) != nullptr) return false;
+    w.why = "";
+    int block[2] = {};
+    if (!data || !m.get(data, block)) { w.why = "the gearbox's damage could not be read"; return false; }
+    w.before = w.wrote = block[0];
+    w.capacity = block[1];
+    if (block[1] < 1 || block[1] >= 1000000 || block[0] < 0 || block[0] > block[1]) { w.why = "the gearbox's damage does not read as a part's"; return false; }
+    if (block[0] >= block[1]) { w.why = "the gearbox is at its worst already"; return false; }
+    int points = (int)floorf(block[1] * percent / 100.0f + 0.5f);
+    if (points < 1) points = 1;
+    const int to = block[0] + points < block[1] ? block[0] + points : block[1];
+    if (!m.put(data, to)) { w.why = "the game's memory did not take the write"; return false; }
+    w.written = true;
+    w.wrote = to;
+    w.points = to - block[0];
+    return true;
+}
+
+// ---- a stall's gearbox damage, dealt on the game's thread ----
+// The mod's thread posts the job (StallJobPost); the game's truck update, detoured (gearbox_hooks.h, TruckUpdateHook),
+// deals it on its next frame for that truck (StallJobDeal): the damage into the gearbox's block, then the game's own
+// damage update, which sums the parts' damage (vehicle + 0x108) and brings up the game's truck card. The mod's thread
+// reads what came of it (StallJobResult), or takes a job back that no frame took (StallJobCancel).
+enum { kStallJobIdle, kStallJobPosted, kStallJobDealing, kStallJobDone };
+struct StallJob
+{
+    volatile LONG state;
+    TruckRefs refs;           // the truck it is for
+    float percent;
+    bool burn;                // the clutch's burn (ClutchHeat), else a stall
+    unsigned long long posted; // when, in the mod's milliseconds
+    GearboxDamageWrite write; // what was dealt
+    bool updated;             // the game's damage update ran after it
+    int sum, sumCapacity;     // vehicle + 0x108, + 0x10C after it: all the parts' damage, as the game summed it
+};
+
+// False while another job waits or is being dealt.
+inline bool StallJobPost(StallJob &j, const TruckRefs &r, float percent, unsigned long long now, bool burn = false)
+{
+    if (j.state != kStallJobIdle) return false;
+    j.refs = r;
+    j.percent = percent;
+    j.burn = burn;
+    j.posted = now;
+    j.write = GearboxDamageWrite{};
+    j.updated = false;
+    j.sum = j.sumCapacity = 0;
+    InterlockedExchange(&j.state, kStallJobPosted);
+    return true;
+}
+
+// On the game's thread, from its truck update for vehicle: the job when it is for that truck, the game's damage update
+// (update, one argument: the vehicle) after a write. True when this frame dealt it.
+inline bool StallJobDeal(StallJob &j, const TruckMemory &m, uint64_t vehicle, void (*update)(uint64_t))
+{
+    if (j.state != kStallJobPosted || !vehicle || j.refs.vehicle != vehicle) return false;
+    if (InterlockedCompareExchange(&j.state, kStallJobDealing, kStallJobPosted) != kStallJobPosted) return false;
+    if (TruckGearboxDamageAdd(m, j.refs, j.percent, j.write) && update)
+    {
+        update(vehicle);
+        j.updated = true;
+    }
+    int sums[2];
+    if (m.get(vehicle + 0x108, sums))
+    {
+        j.sum = sums[0];
+        j.sumCapacity = sums[1];
+    }
+    InterlockedExchange(&j.state, kStallJobDone);
+    return true;
+}
+
+// On the mod's thread: a dealt job's result into out, and the job free again.
+inline bool StallJobResult(StallJob &j, GearboxDamageWrite &write, bool &updated, int &sum, int &sumCapacity, bool *burn = nullptr)
+{
+    if (j.state != kStallJobDone) return false;
+    if (burn) *burn = j.burn;
+    write = j.write;
+    updated = j.updated;
+    sum = j.sum;
+    sumCapacity = j.sumCapacity;
+    InterlockedExchange(&j.state, kStallJobIdle);
+    return true;
+}
+
+// On the mod's thread: a job no frame took within waitMs taken back (the truck left, the game paused). True when it was.
+inline bool StallJobCancel(StallJob &j, unsigned long long now, unsigned long long waitMs)
+{
+    return j.state == kStallJobPosted && now - j.posted >= waitMs && InterlockedCompareExchange(&j.state, kStallJobIdle, kStallJobPosted) == kStallJobPosted;
 }
 
 // What the game is showing. control: the driven truck's control object, 0 when there is none.
@@ -882,7 +1011,7 @@ inline bool TruckProbeEvent(const TruckRaw &a, const World &wa, const TruckRaw &
 {
     return a.flags != b.flags || a.handbrake != b.handbrake || a.awd != b.awd || a.diffLock != b.diffLock || a.gear != b.gear || a.gearEngaged != b.gearEngaged ||
            a.automatic != b.automatic ||
-           !TruckSameBits(a.powerFactor, b.powerFactor) || a.damage != b.damage || a.damageCapacity != b.damageCapacity || !TruckSameBits(a.torqueFactor, b.torqueFactor) ||
+           !TruckSameBits(a.powerFactor, b.powerFactor) || a.damage != b.damage || a.damageCapacity != b.damageCapacity || a.gearboxDamage != b.gearboxDamage || !TruckSameBits(a.torqueFactor, b.torqueFactor) ||
            !TruckSameBits(a.damageEffect, b.damageEffect) || a.damageSum != b.damageSum ||
            a.gearSpeeds != b.gearSpeeds || a.wheels != b.wheels || (a.throttle != 0.0f) != (b.throttle != 0.0f) || (a.stall > 0.0f) != (b.stall > 0.0f) ||
            (a.startTimer > 0.0f) != (b.startTimer > 0.0f) || wa.menu != wb.menu || wa.loading != wb.loading || wa.mapThere != wb.mapThere ||

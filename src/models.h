@@ -2127,6 +2127,92 @@ inline void ClutchProbeText(const ClutchModel &m, float travel, char *out, size_
               m.rpm, m.input, m.torque, m.carried, m.stalls);
 }
 
+// ---- the clutch's heat ----
+// A slipping clutch under load turns power into heat: what it carries (ClutchModel::carried, a share of the engine's
+// most torque, 0 where it brakes) times the engine's most torque in the game's figures (EngineRecord::torque, times the
+// profile's Torque) times the slip (the engine's speed less the gearbox's, rad/s). The heat q rises by that power over
+// kClutchHeatCapacity and falls by kClutchCooling of itself a second; a locked or open clutch only cools. Past
+// kClutchBurnFrom the clutch burns: (q - kClutchBurnFrom) / kClutchBurnFrom * kClutchBurnRate of the gearbox's capacity
+// a second, dealt through the stall damage's path.
+//
+// The tuning. One unit of heat is a second of the stock truck's engine (Torque 195000, the d110's and a scout's
+// figure) carrying its most torque at 1000 rpm of slip: 195000 * 1000 * 2pi/60 = 2.04e7, kClutchHeatCapacity. With
+// P the power in those units and the cooling k, q(t) = P/k * (1 - e^-kt) from cold.
+//   - a floored start in third: the clutch carries about its most (1.0) at about 1600 rpm of slip, P = 1.6. With
+//     k = 0.05 (a clutch that cools from the burn point in about a minute), q reaches 2.85 at 1.87 s: kClutchBurnFrom.
+//     In the two seconds after, (q - 2.85)/2.85 grows to 0.98 summed over them, so kClutchBurnRate 0.1 costs the
+//     gearbox 0.098 of what it takes: about a tenth every two seconds.
+//   - three times the torque: P = 4.8, the burn begins at 0.60 s and costs 0.315 in the two seconds after: 3.2 times.
+//   - a hill held at half throttle on the slipping clutch: about half its most (0.5) at 1300 rpm, P = 0.65; q
+//     reaches 2.85 at 4.95 s.
+//   - a start in first with a normal slip: its most at 1200 rpm falling to none over 1.5 s, P from 1.2 to 0: 0.9 of
+//     heat at the most, a third of the burn point.
+static const float kClutchHeatCapacity = 2.04e7f; // game torque times rad/s times s for one unit of heat
+static const float kClutchCooling = 0.05f;        // the share of its heat the clutch loses a second
+static const float kClutchBurnFrom = 2.85f;       // the heat from which it burns
+static const float kClutchBurnRate = 0.1f;        // the gearbox's capacity a second it costs at twice kClutchBurnFrom
+
+struct ClutchHeat
+{
+    // A kind of truck the model has driven (TruckKeyNumber of its key), its clutch's heat and the model's clock when
+    // it was last driven, as the temperatures keep theirs (TempModel). id 0 is a free place.
+    struct Truck { uint64_t id; float q; double left; } truck[kTempTrucks];
+    bool known;     // truck[at] is the truck being driven
+    int at;
+    double clock;   // seconds the model has been stepped for
+    float q;        // the driven truck's clutch heat
+    float power;    // the last step's power, in units of heat a second
+    bool burning;   // q is past kClutchBurnFrom
+    float owed;     // the share of the gearbox's capacity the burn has cost and is not dealt yet (with on)
+};
+
+// One step of dt seconds for a truck of the kind id (never 0). c: its clutch (an empty one while the mod's gearbox has
+// no position of the player's: it only cools); torque: the engine's most in the game's figures, times its profile's
+// share (0 not known: no heat). on: Damage and ClutchBurn; off, the heat is kept but costs nothing. A kind driven
+// before has cooled for as long as other trucks were driven.
+inline void ClutchHeatStep(ClutchHeat &h, uint64_t id, const ClutchModel &c, float torque, bool on, float dt)
+{
+    if (!h.known || h.truck[h.at].id != id)
+    {
+        if (h.known) h.truck[h.at].left = h.clock;
+        int to = -1, room = -1;
+        for (int i = 0; i < kTempTrucks; i++)
+        {
+            const ClutchHeat::Truck &k = h.truck[i];
+            if (k.id == id) to = i;
+            if (h.known && i == h.at) continue;
+            if (room < 0 || (h.truck[room].id && (!k.id || k.left < h.truck[room].left))) room = i;
+        }
+        if (to >= 0) h.truck[to].q *= expf(-kClutchCooling * (float)(h.clock - h.truck[to].left));
+        else
+        {
+            to = room;
+            h.truck[to] = { id, 0.0f, h.clock };
+        }
+        h.at = to;
+        h.known = true;
+        h.owed = 0.0f;
+        h.burning = false;
+    }
+    float &q = h.truck[h.at].q;
+    const bool slipping = c.running && c.connected && !c.locked && !c.dead;
+    const float slip = slipping ? fmaxf(c.rpm - c.input, 0.0f) * 6.2831853f / 60.0f : 0.0f;
+    h.power = slipping && torque > 0.0f ? fmaxf(c.carried, 0.0f) * torque * slip / kClutchHeatCapacity : 0.0f;
+    q = fmaxf(q + (h.power - q * kClutchCooling) * dt, 0.0f);
+    h.q = q;
+    h.burning = q > kClutchBurnFrom;
+    if (on && h.burning) h.owed = fminf(h.owed + (q - kClutchBurnFrom) / kClutchBurnFrom * kClutchBurnRate * dt, 1.0f);
+    if (!on) h.owed = 0.0f;
+    h.clock += dt;
+    h.truck[h.at].left = h.clock;
+}
+
+// The heat in a few words for the probe's clutch line.
+inline void ClutchHeatProbeText(const ClutchHeat &h, char *out, size_t size)
+{
+    sprintf_s(out, size, " | heat %.2f, %.0f %% of the burn point, %.2f a second%s", h.q, h.q / kClutchBurnFrom * 100.0f, h.power, h.burning ? ", burning" : "");
+}
+
 // ---- the brake air ----
 
 static const float kAirCutOut = 8.2f;        // bar: the governor stops the compressor here
@@ -2301,11 +2387,14 @@ inline void DamageProbeText(const TruckRaw &t, const EngineRecord &e, const Dama
     if (e.found) sprintf_s(record, "record %.80s: takes %d, the torque falls past %.2f of it, from x%.2f to x%.2f", e.name, e.capacity, e.threshold, e.torqueMin, e.torqueMax);
     else if (!e.name[0]) sprintf_s(record, "the engine's record is looked up once the truck is driven");
     else sprintf_s(record, "no record of the engine \"%.80s\"", e.name);
+    char gearbox[64];
+    if (t.gearboxKnown) sprintf_s(gearbox, "gearbox damage %d of %d, effect %.3f", t.gearboxDamage, t.gearboxCapacity, t.gearboxEffect);
+    else sprintf_s(gearbox, "gearbox damage not read");
     sprintf_s(out, size,
-              "engine damage %d of %d, effect %.3f, torque x%.3f; by the game's rule effect %.3f and torque x%.3f (%s) | all parts %d of %d | %s | "
+              "engine damage %d of %d, effect %.3f, torque x%.3f; by the game's rule effect %.3f and torque x%.3f (%s) | %s | all parts %d of %d | %s | "
               "the model: %.2f %% a minute from the heat, %.2f from the cold, %.2f of a point owed, Damage %s",
               t.damage, t.damageCapacity, t.damageEffect, t.torqueFactor, effect, torque, !e.found ? "a guess without the record" : same ? "as read" : "NOT as read",
-              t.damageSum, t.damageSumCapacity, record, m.hot, m.cold, m.owed, s.damage ? "on" : "off");
+              gearbox, t.damageSum, t.damageSumCapacity, record, m.hot, m.cold, m.owed, s.damage ? "on" : "off");
 }
 
 // The models' numbers in a line of text for the probe log.

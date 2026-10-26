@@ -57,3 +57,11 @@ unsigned GearboxRefusedNew();
 // The way through to the game's own function behind a hook (fn one of kFn*), nullptr while it has none: the mod's own
 // calls go this way, so the probe counts only the game's.
 void *GearboxOriginal(int fn);
+
+// The game's truck update (game_code.h, DamagePathFind) detoured at address at, in a transaction of its own: on the
+// game's thread, every frame and before the update runs, onFrame gets its first argument (an object with the vehicle
+// at + 0x20). False with why when Detours refused it; true at once when it is in place already.
+typedef void (*TruckFrameFn)(void *first);
+bool TruckUpdateHook(uintptr_t at, TruckFrameFn onFrame, char *why, size_t size);
+void TruckUpdateUnhook();
+long TruckUpdateFrames(); // the frames the hook has seen
