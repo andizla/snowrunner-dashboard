@@ -2229,9 +2229,10 @@ struct ClutchHeat
 // share (0 not known: no heat). on: Damage and ClutchBurn; off, the heat is kept but costs nothing. A kind driven
 // before has cooled for as long as other trucks were driven. A change of truck forgives what the burn owed and was not
 // dealt yet (owed, less than one of the gearbox's points); the heat itself stays with the kind (review 10, D6).
-// kmh: the truck's speed (its size), by which the heating goes (ClutchHeatShare, below); 0 standing.
+// kmh: the truck's speed (its size), by which the heating goes (ClutchHeatShare, below); 0 standing. rate: the
+// heating's scale, ClutchHeatPercent / 100 (1 the model's own pace); the cooling is not scaled.
 inline float ClutchHeatShare(float kmh);
-inline void ClutchHeatStep(ClutchHeat &h, uint64_t id, const ClutchModel &c, float torque, bool on, float dt, float kmh = 0.0f)
+inline void ClutchHeatStep(ClutchHeat &h, uint64_t id, const ClutchModel &c, float torque, bool on, float dt, float kmh = 0.0f, float rate = 1.0f)
 {
     if (!h.known || h.truck[h.at].id != id)
     {
@@ -2258,7 +2259,7 @@ inline void ClutchHeatStep(ClutchHeat &h, uint64_t id, const ClutchModel &c, flo
     float &q = h.truck[h.at].q;
     const bool slipping = c.running && c.connected && !c.locked && !c.dead;
     const float slip = slipping ? fmaxf(c.rpm - c.input, 0.0f) * 6.2831853f / 60.0f : 0.0f;
-    h.power = slipping && torque > 0.0f ? fmaxf(c.carried, 0.0f) * torque * slip / kClutchHeatCapacity * ClutchHeatShare(kmh) : 0.0f;
+    h.power = slipping && torque > 0.0f ? fmaxf(c.carried, 0.0f) * torque * slip / kClutchHeatCapacity * ClutchHeatShare(kmh) * fmaxf(rate, 0.0f) : 0.0f;
     q = fmaxf(q + (h.power - q * kClutchCooling) * dt, 0.0f);
     h.q = q;
     h.burning = q > kClutchBurnFrom;

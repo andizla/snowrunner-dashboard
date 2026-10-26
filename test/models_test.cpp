@@ -2465,6 +2465,7 @@ int main(int argc, char **argv)
             const float stock = 195000.0f;
             auto gain = [&](int gear) { const float r = TruckGearTop(c, 1) / TruckGearTop(c, gear); return 2000.0f * r * r; };
             float warned = -1.0f; // when the last start's heat came to the amber warning
+            float rate = 1.0f;    // ClutchHeatPercent / 100: the model's own pace unless set
             auto start = [&](int gear, float gain, float seconds, float &most, float &began) {
                 TruckRaw t = c;
                 t.gear = t.gearEngaged = gear;
@@ -2478,7 +2479,7 @@ int main(int argc, char **argv)
                     for (int i = 0; i < t.wheels; i++) t.spin[i] = TruckGearTop(t, gear) * input / k.redline;
                     ClutchStep(cm, t, k, curve, 0.0f, ThrottleShape(1.0f), 1.0f, true, kDt);
                     input = fmaxf(0.0f, input + cm.carried * gain * kDt);
-                    ClutchHeatStep(h, 1, cm, stock, true, kDt);
+                    ClutchHeatStep(h, 1, cm, stock, true, kDt, 0.0f, rate);
                     most = fmaxf(most, h.q);
                     if (h.burning && began < 0.0f) began = at;
                     if (h.q >= kClutchWarnFrom && warned < 0.0f) warned = at;
@@ -2500,6 +2501,27 @@ int main(int argc, char **argv)
                       began[4] <= began[3] && stuckBegan >= 0.0f && stuckBegan <= began[3],
                   "clutch heat, the automatic clutch slips until the truck catches up: floored from a standstill a start in first never warns; one in third "
                   "warns amber after about two seconds and goes red after about four, in fourth sooner, and in a gear the engine cannot pull soonest");
+            // ClutchHeatPercent at its default 60: the same starts at 0.6 of the heating, the cooling as it is
+            rate = 0.6f;
+            float m60[5] = {}, b60[5] = {}, stuck60Most = 0.0f, stuck60Began = 0.0f, third60Warned = -1.0f, fourth60Warned = -1.0f, stuck60Warned = -1.0f;
+            for (int g = 1; g <= 4; g++)
+            {
+                warned = -1.0f;
+                start(g, gain(g), 12.0f, m60[g], b60[g]);
+                if (g == 3) third60Warned = warned;
+                if (g == 4) fourth60Warned = warned;
+            }
+            warned = -1.0f;
+            start(3, 0.0f, 12.0f, stuck60Most, stuck60Began);
+            stuck60Warned = warned;
+            rate = 1.0f;
+            printf("     at ClutchHeatPercent 60: first at most %.2f; third amber after %.1f s, at most %.2f%s%.1f s; fourth amber after %.1f s, %.2f%s%.1f s; "
+                   "a gear it cannot pull amber after %.1f s, %.2f%s%.1f s\n",
+                   m60[1], third60Warned, m60[3], b60[3] >= 0.0f ? ", red after " : ", no red ", b60[3], fourth60Warned, m60[4],
+                   b60[4] >= 0.0f ? ", red after " : ", no red ", b60[4], stuck60Warned, stuck60Most, stuck60Began >= 0.0f ? ", red after " : ", no red ", stuck60Began);
+            Check(m60[1] < m60[3] && m60[1] < kClutchWarnFrom && third60Warned > thirdWarned && stuck60Began > stuckBegan && stuck60Began >= 0.0f,
+                  "clutch heat at ClutchHeatPercent 60: every start heats more slowly than at 100, first never warns, and a gear the engine cannot pull "
+                  "still burns");
         }
         // let up at speed: the engine turns with the gearbox; pressed again with the foot off, back to idle
         wheels(TruckGearTop(c, 1) * 0.6f);
