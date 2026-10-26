@@ -323,6 +323,7 @@ static void WriteIni(const GaugeSettings &s)
     num(L"OilWarnC", s.oilWarnC);
     whole(L"Damage", s.damage ? 1 : 0);
     num(L"HotDamagePercentPerMinute", s.hotDamage);
+    num(L"HotDamageFrom", s.hotDamageFrom);
     num(L"ColdDamagePercentPerMinute", s.coldDamage);
     whole(L"ToggleKey", s.toggleKey);
     WritePrivateProfileStringW(kIniSection, L"PadToggle", Wide(s.padToggle).c_str(), ini.c_str());
@@ -597,6 +598,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; From OilWarnC (100 to 150 C) the oil lamp blinks and a warning sounds every few seconds.\n"
                         L"; Damage=1: the temperature costs the engine. An engine in the red zone takes the game's own engine damage:\n"
                         L"; HotDamagePercentPerMinute percent of what it can take a minute at 125 C, less below that and more above.\n"
+                        L"; HotDamageFrom: the coolant temperature in C where the hot damage starts, 100 to 124 (118, the red zone's start); the rate above is reached at 125.\n"
                         L"; A cold engine (below 60 C) worked hard, burning more than half the fuel it burns floored at the red zone,\n"
                         L"; takes ColdDamagePercentPerMinute percent a minute floored at the red zone at 0 C, and less the warmer it is\n"
                         L"; and the lighter the work. A garage repairs this like any engine damage.\n"
@@ -677,6 +679,7 @@ static void ReadIni(GaugeSettings &s)
     s.oilWarnC = IniFloat(L"OilWarnC", s.oilWarnC, ini);
     s.damage = IniBool(L"Damage", s.damage, ini);
     s.hotDamage = IniFloat(L"HotDamagePercentPerMinute", s.hotDamage, ini);
+    s.hotDamageFrom = IniFloat(L"HotDamageFrom", s.hotDamageFrom, ini);
     s.coldDamage = IniFloat(L"ColdDamagePercentPerMinute", s.coldDamage, ini);
     s.toggleKey = IniInt(L"ToggleKey", s.toggleKey, ini);
     wchar_t buf[64] = {};
@@ -1461,8 +1464,8 @@ static void LogSettings(const GaugeSettings &s)
     Log(L"settings: coolant warm after %g minutes of driving, in the red zone after %g minutes floored with the wheels spinning at a standstill, cool %g minutes after the engine stops, %g C outside%s",
         s.warmUpMinutes, s.overheatMinutes, s.coolDownMinutes, s.ambientC, s.ambientByMap ? L" where the map's temperature is not known" : L" on every map");
     Log(L"settings: the oil warm after %g minutes of driving, too hot from %g C", s.oilWarmUpMinutes, s.oilWarnC);
-    Log(L"settings: the radiator has all its air from %g km/h; engine damage %s: %g percent a minute at 125 C, %g percent a minute for a cold engine floored at the red zone at 0 C",
-        s.airFullKmh, s.damage ? L"on" : L"off", s.hotDamage, s.coldDamage);
+    Log(L"settings: the radiator has all its air from %g km/h; engine damage %s: from %g C, %g percent a minute at 125 C, %g percent a minute for a cold engine floored at the red zone at 0 C",
+        s.airFullKmh, s.damage ? L"on" : L"off", s.hotDamageFrom, s.hotDamage, s.coldDamage);
     Log(L"settings: sound volume %d of 100%s", s.soundVolume, s.soundsOnly ? L", sounds only: the cluster is not drawn" : L"");
     Log(L"settings: driven with %s", s.input == kInputKeys ? L"the keyboard" : s.input == kInputPad ? L"a pad" : L"a wheel's pedals");
     Log(L"settings: gearbox %s", s.gearbox == kGearboxModel ? L"the mod's automatic, with a torque converter, picks the gears in A"
@@ -2710,7 +2713,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.redlineRpm == b.redlineRpm && a.maxRpm == b.maxRpm && a.speedMax == b.speedMax && a.boostMax == b.boostMax && a.toggleKey == b.toggleKey &&
            a.rollWarnDeg == b.rollWarnDeg && a.rollDangerDeg == b.rollDangerDeg && a.pitchDangerDeg == b.pitchDangerDeg &&
            a.warmUpMinutes == b.warmUpMinutes && a.overheatMinutes == b.overheatMinutes && a.coolDownMinutes == b.coolDownMinutes && a.ambientC == b.ambientC &&
-           a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.coldDamage == b.coldDamage &&
+           a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly &&
            a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.input == b.input && a.powertrain == b.powertrain && a.engineShare == b.engineShare;
 }
@@ -2741,8 +2744,8 @@ int wmain(int argc, wchar_t **argv)
           "defaults: strip, open style, metric, the air dial off, no toggle, demo off, probe off, the tilt lamp at 15, 25 and 35 degrees");
     Check(d.warmUpMinutes == 3.0f && d.overheatMinutes == 1.5f && d.coolDownMinutes == 15.0f && d.ambientC == 15.0f && d.ambientByMap,
           "defaults: the coolant warm after 3 minutes, in the red zone after 1.5, cool after 15, with 15 C outside");
-    Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.coldDamage == 5.0f,
-          "defaults: the radiator's full airflow from 30 km/h, engine damage on, 10 percent a minute for the heat and 5 for the cold");
+    Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.hotDamageFrom == kTempRed && d.coldDamage == 5.0f,
+          "defaults: the radiator's full airflow from 30 km/h, engine damage on from the red zone, 10 percent a minute for the heat and 5 for the cold");
     Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && d.input == kInputWheel && !d.powertrain && d.engineShare == 50,
           "defaults: the oil as a second needle, warm after 5 minutes, too hot from 120 C; the standard turbo");
 
@@ -2778,6 +2781,7 @@ int wmain(int argc, wchar_t **argv)
     c.airFullKmh = 45.5f;
     c.damage = false;
     c.hotDamage = 22.5f;
+    c.hotDamageFrom = 110.5f;
     c.coldDamage = 7.5f;
     c.toggleKey = VK_F9;
     strcpy_s(c.padToggle, "RB+DPadUp");
@@ -2800,7 +2804,7 @@ int wmain(int argc, wchar_t **argv)
                             c.speedMax != d.speedMax && c.boostMax != d.boostMax && c.rollWarnDeg != d.rollWarnDeg && c.rollDangerDeg != d.rollDangerDeg &&
                             c.pitchDangerDeg != d.pitchDangerDeg && c.warmUpMinutes != d.warmUpMinutes && c.overheatMinutes != d.overheatMinutes &&
                             c.coolDownMinutes != d.coolDownMinutes && c.ambientC != d.ambientC && c.ambientByMap != d.ambientByMap && c.airFullKmh != d.airFullKmh && c.damage != d.damage &&
-                            c.hotDamage != d.hotDamage && c.coldDamage != d.coldDamage && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
+                            c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
                             c.demo != d.demo && c.probe != d.probe && c.soundVolume != d.soundVolume && c.soundsOnly != d.soundsOnly &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
                             c.gearbox != d.gearbox && c.input != d.input && c.powertrain != d.powertrain && c.engineShare != d.engineShare;
@@ -2824,7 +2828,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 76, "ini: the help text survives a write (76 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 77, "ini: the help text survives a write (77 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());
@@ -2861,14 +2865,20 @@ int wmain(int argc, wchar_t **argv)
     WritePrivateProfileStringW(kIniSection, L"HotDamagePercentPerMinute", L"500", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"ColdDamagePercentPerMinute", L"-3", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"Damage", L"0", ini.c_str());
+    WritePrivateProfileStringW(kIniSection, L"HotDamageFrom", L"90", ini.c_str());
     ReadIni(b);
-    const bool held = b.airFullKmh == kAirFullRange[0] && b.hotDamage == kDamageRange[1] && b.coldDamage == 0.0f && !b.damage;
+    const bool held = b.airFullKmh == kAirFullRange[0] && b.hotDamage == kDamageRange[1] && b.coldDamage == 0.0f && !b.damage && b.hotDamageFrom == kHotDamageFromRange[0];
+    WritePrivateProfileStringW(kIniSection, L"HotDamageFrom", L"130", ini.c_str());
+    ReadIni(b);
+    const bool fromHigh = b.hotDamageFrom == kHotDamageFromRange[1];
+    WritePrivateProfileStringW(kIniSection, L"HotDamageFrom", L"118", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"AirFullKmh", L"200", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"HotDamagePercentPerMinute", L"nan", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"Damage", L"7", ini.c_str());
     ReadIni(b);
-    Check(held && b.airFullKmh == kAirFullRange[1] && b.hotDamage == d.hotDamage && b.damage,
-          "ini: the radiator's speed stays between 10 and 80 km/h, the damage rates between 0 and 100, and a rate that is no number gives the default");
+    Check(held && fromHigh && b.airFullKmh == kAirFullRange[1] && b.hotDamage == d.hotDamage && b.damage,
+          "ini: the radiator's speed stays between 10 and 80 km/h, the damage rates between 0 and 100, where the hot damage starts between 100 and 124 C, "
+          "and a rate that is no number gives the default");
     WritePrivateProfileStringW(kIniSection, L"OilWarmUpMinutes", L"0", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"OilWarnC", L"400", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"OilGauge", L"5", ini.c_str());

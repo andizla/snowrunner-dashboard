@@ -7,6 +7,7 @@
 - The torque factor's roof is 6 for every engine again. An engine profile's `FullPull` and the tab's "Full pull up to" are gone: at 98 percent the roof was 24, and a truck got a kick at the top of 2nd to 5th gear (a d110, 25 October). `RevCap` and "Rev cap 95%" of 0.16.1 are gone too: the cap went by the engine's modelled speed, the kick by the wheels' share of the gear, and it never stopped one. For an engine with several times a stock engine's torque, lower `Torque`.
 - The mod finds its places on the Microsoft Store and Game Pass build the way Next Gen Tire Inflation does: each place by two more patterns when the first misses, and the optional ones left out with a line in the log.
 - `SwapDials` and the tab's "Swap dials": the speedometer and the tachometer change places, in both layouts (asked for in the comments).
+- `HotDamageFrom` and the tab's "Damage from": where the hot engine damage starts, 100 to 124 C, 118 as before; the rate is still reached at 125 C (from the mod.io list).
 
 ## [0.16.1] 2026-10-25
 

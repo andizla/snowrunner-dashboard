@@ -2627,6 +2627,11 @@ int main(int argc, char **argv)
         Check(DamageHot(kTempRed, set) == 0.0f && DamageHot(100.0f, set) == 0.0f && Near(DamageHot(121.5f, set), 5.0f, 0.001f) &&
               Near(DamageHot(kTempHotDamage, set), 10.0f, 0.001f) && Near(DamageHot(132.0f, set), 20.0f, 0.001f),
               "damage: nothing up to the red zone at 118 C, 10 percent a minute at 125 C, half of that half way there and more above");
+        GaugeSettings early = set;
+        early.hotDamageFrom = 110.0f;
+        Check(DamageHot(kTempHotDamage, set) == set.hotDamage && DamageHot(112.0f, early) > 0.0f && DamageHot(108.0f, early) == 0.0f &&
+                  Near(DamageHot(kTempHotDamage, early), 10.0f, 0.001f),
+              "damage: from 110 C an engine at 112 C takes damage and one at 108 C none, the rate still reached at 125 C as at the default");
         Check(Near(DamageCold(0.0f, 1.0f, set), 5.0f, 0.001f) && Near(DamageCold(15.0f, 1.0f, set), 3.75f, 0.001f) && Near(DamageCold(15.0f, 0.75f, set), 0.9375f, 0.001f) &&
               DamageCold(15.0f, 0.5f, set) == 0.0f && DamageCold(kTempCold, 1.0f, set) == 0.0f && Near(DamageCold(-20.0f, 1.0f, set), 6.667f, 0.01f) &&
               Near(DamageCold(0.0f, 1.1f, set), 5.0f, 0.001f) && DamageCold(0.0f, nanf(""), set) == 0.0f,

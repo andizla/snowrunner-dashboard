@@ -75,6 +75,7 @@ The Gameplay tab of the NEXT GEN menu edits every setting while you play. F2 ope
 | The truck pulls with the mod's engine and converter (see below) | `Powertrain` 0 or 1 | off |
 | How much of the mod's engine the game gets with `Powertrain=1`, from 0 to 100 percent: 0 leaves the game's own pull | `EngineShare` | 50 |
 | Percent of the engine lost a minute at 125 C, and by a cold engine floored at the red zone at 0 C, each from 0 to 100 | `HotDamagePercentPerMinute`, `ColdDamagePercentPerMinute` | 10, 5 |
+| The coolant temperature where the hot damage starts, 100 to 124 C; the rate above is still reached at 125 C (the tab's "Damage from") | `HotDamageFrom` | 118 |
 | How loud the turbo's flutter and the oil warning are, from 0 to 100. 0 = no sound | `SoundVolume` | 50 |
 | The sounds without the cluster | `SoundsOnly` 0 or 1 | off |
 | A key that hides and shows the cluster | `ToggleKey`, a virtual key code | none |

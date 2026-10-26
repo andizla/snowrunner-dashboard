@@ -325,6 +325,20 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         PageTip("On: an engine in the red zone, and a cold engine worked hard, take the game's own engine damage. A garage repairs it. "
                 "Off: the temperature is only shown. It has not been tried in co-op: leave it off there.");
         ImGui::BeginDisabled(!s.damage);
+        // where the hot damage starts, shown in the units in force, kept in C
+        float fromShown = s.fahrenheit ? s.hotDamageFrom * 1.8f + 32.0f : s.hotDamageFrom;
+        const float fromLo = s.fahrenheit ? kHotDamageFromRange[0] * 1.8f + 32.0f : kHotDamageFromRange[0],
+                    fromHi = s.fahrenheit ? kHotDamageFromRange[1] * 1.8f + 32.0f : kHotDamageFromRange[1];
+        PageLabel("Damage from", labelX);
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::SliderFloat("##hotdamagefrom", &fromShown, fromLo, fromHi, s.fahrenheit ? "%.0f F" : "%.0f C", ImGuiSliderFlags_AlwaysClamp))
+        {
+            s.hotDamageFrom = SettingsRange(floorf((s.fahrenheit ? (fromShown - 32.0f) / 1.8f : fromShown) + 0.5f), kHotDamageFromRange[0], kHotDamageFromRange[1]);
+            act |= kPageChanged;
+        }
+        degrees(kTempHotDamage, at, sizeof at);
+        sprintf_s(tip, "Where the hot damage starts. The rate beside is reached at %s.", at);
+        PageTip(tip);
         PageLabel("Overheating", labelX);
         ImGui::SetNextItemWidth(w);
         if (ImGui::SliderFloat("##hotdamage", &s.hotDamage, 0.0f, 100.0f, "%.0f percent a minute", ImGuiSliderFlags_AlwaysClamp))
@@ -333,8 +347,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             act |= kPageChanged;
         }
         degrees(kTempHotDamage, at, sizeof at);
-        degrees(kTempRed, from, sizeof from);
-        sprintf_s(tip, "The share of what the engine can take that it loses each minute at %s. It loses nothing below the red zone at %s, "
+        degrees(s.hotDamageFrom, from, sizeof from);
+        sprintf_s(tip, "The share of what the engine can take that it loses each minute at %s. It loses nothing below %s (Damage from), "
                        "less than this between the two and more above. 0 = none.", at, from);
         PageTip(tip);
         PageLabel("Cold engine", labelX);

@@ -85,6 +85,7 @@ struct GaugeSettings
     float oilWarnC;          // OilWarnC: the oil temperature in C from which the oil lamp blinks and the warning sounds
     bool damage;             // Damage: an engine in the red zone and a cold engine worked hard take the game's engine damage
     float hotDamage;         // HotDamagePercentPerMinute: percent of what the engine takes that it loses a minute at 125 C
+    float hotDamageFrom;     // HotDamageFrom: the coolant temperature in C where the hot damage starts (kHotDamageFromRange)
     float coldDamage;        // ColdDamagePercentPerMinute: the same for a cold engine floored at the red zone at 0 C
     int soundVolume;         // SoundVolume: how loud the turbo's flutter and the oil warning are, 0 to 100; 0 = no sound
     bool soundsOnly;         // SoundsOnly: the sounds are played and the cluster is not drawn
@@ -124,6 +125,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.oilWarnC = 120.0f;
     s.damage = true;
     s.hotDamage = 10.0f;
+    s.hotDamageFrom = 118.0f;
     s.coldDamage = 5.0f;
     s.soundVolume = 50;
     strcpy_s(s.padToggle, "None");
@@ -140,12 +142,13 @@ static const float kIdleRange[2] = { 300.0f, 3000.0f }, kRedlineRange[2] = { 100
                    kSpeedMaxRange[2] = { 40.0f, 300.0f }, kTiltRange[2] = { 1.0f, 89.0f }, kBoostRange[2] = { 0.3f, 2.0f };
 static const float kWarmUpRange[2] = { 0.5f, 60.0f }, kOverheatRange[2] = { 0.25f, 60.0f }, kCoolDownRange[2] = { 1.0f, 240.0f },
                    kAmbientRange[2] = { -40.0f, 50.0f }, kGearHoldRange[2] = { 1.0f, 3.0f }, kAirFullRange[2] = { 10.0f, 80.0f }, kDamageRange[2] = { 0.0f, 100.0f },
-                   kOilWarmUpRange[2] = { 1.0f, 60.0f }, kOilWarnRange[2] = { 100.0f, 150.0f }, kTorqueShareRange[2] = { 0.10f, 1.00f };
+                   kOilWarmUpRange[2] = { 1.0f, 60.0f }, kOilWarnRange[2] = { 100.0f, 150.0f }, kTorqueShareRange[2] = { 0.10f, 1.00f },
+                   kHotDamageFromRange[2] = { 100.0f, 124.0f };
 
 // The temperatures in C the coolant's three times are measured between: WarmUpMinutes from kTempOutside outside up
 // to kTempWarm, OverheatMinutes from kTempHot into the red zone at kTempRed, CoolDownMinutes from kTempHot down to
 // kTempCooled. The cold lamp is lit below kTempCold. HotDamagePercentPerMinute is what an engine at kTempHotDamage
-// loses. The model, the dial's zones and the tab's texts all use these.
+// loses; the damage starts at HotDamageFrom, kTempRed by default. The model, the dial's zones and the tab's texts all use these.
 static const float kTempOutside = 15.0f, kTempWarm = 85.0f, kTempHot = 90.0f, kTempRed = 118.0f, kTempCooled = 40.0f, kTempCold = 60.0f,
                    kTempHotDamage = 125.0f;
 
@@ -184,6 +187,7 @@ inline void SettingsClamp(GaugeSettings &s)
     s.oilWarmUpMinutes = SettingsRange(s.oilWarmUpMinutes, kOilWarmUpRange[0], kOilWarmUpRange[1]);
     s.oilWarnC = SettingsRange(s.oilWarnC, kOilWarnRange[0], kOilWarnRange[1]);
     s.hotDamage = SettingsRange(s.hotDamage, kDamageRange[0], kDamageRange[1]);
+    s.hotDamageFrom = SettingsRange(s.hotDamageFrom, kHotDamageFromRange[0], kHotDamageFromRange[1]);
     s.coldDamage = SettingsRange(s.coldDamage, kDamageRange[0], kDamageRange[1]);
     s.toggleKey = s.toggleKey < 0 || s.toggleKey > 255 ? 0 : s.toggleKey;
     s.soundVolume = s.soundVolume < 0 ? 0 : s.soundVolume > 100 ? 100 : s.soundVolume;

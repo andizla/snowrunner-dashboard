@@ -2300,11 +2300,12 @@ struct DamageModel
     float hot, cold;  // percent of the engine a minute on the last step: from the heat, and from working a cold engine hard
 };
 
-// Percent of what the engine takes that it loses a minute in the red zone: nothing at kTempRed, the settings'
-// HotDamagePercentPerMinute at kTempHotDamage, and more in the same measure above that.
+// Percent of what the engine takes that it loses a minute when hot: nothing at the settings' HotDamageFrom (kTempRed
+// by default), their HotDamagePercentPerMinute at kTempHotDamage, and more in the same measure above that.
 inline float DamageHot(float temp, const GaugeSettings &s)
 {
-    return temp > kTempRed ? s.hotDamage * (temp - kTempRed) / (kTempHotDamage - kTempRed) : 0.0f;
+    const float from = SettingsRange(s.hotDamageFrom, kHotDamageFromRange[0], kHotDamageFromRange[1]);
+    return temp > from ? s.hotDamage * (temp - from) / (kTempHotDamage - from) : 0.0f;
 }
 
 // The same for a cold engine worked hard: the settings' ColdDamagePercentPerMinute floored at the red zone (a load of
