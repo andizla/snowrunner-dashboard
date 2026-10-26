@@ -1975,9 +1975,9 @@ static int AutoClass(const TruckWatch &w, int tachClass)
 // in the log when it is another than before.
 static void GearboxLook(TruckWatch &w, const TruckMemory &m, const TruckRaw &raw, int tachClass)
 {
-    char name[kMaxText];
+    char name[kMaxText], stock[kMaxText];
     uint32_t at = 0;
-    const bool named = TruckGearboxName(m, w.refs.vehicle, name, at);
+    const bool named = TruckGearboxName(m, w.refs.vehicle, name, at, stock);
     char key[96];
     GearboxKey(raw, named ? name : "", key, sizeof key);
     w.gearboxVehicle = w.refs.vehicle;
@@ -1990,7 +1990,10 @@ static void GearboxLook(TruckWatch &w, const TruckMemory &m, const TruckRaw &raw
     if (w.gearHoldOwn) wcscpy_s(whose, L"its own (its file in Gauges\\gearboxes)");
     else swprintf_s(whose, L"the %s class's%s", kClassWords[tachClass < 0 || tachClass >= kClassCount ? kClassTruck : tachClass],
                     w.ownScales || !(w.mass > 0.0f) ? L"" : L", the class of the truck's weight");
-    if (named) Log(L"gearbox: %S (its name at vehicle + 0x%x); each gear held going up %.1f s, %s", key, at, GearHoldOf(w, tachClass), whose);
+    // the gearbox fitted, and the truck's default where it is another (an upgrade fitted)
+    char other[kMaxText + 40] = "";
+    if (stock[0] && strcmp(stock, name)) sprintf_s(other, " (the truck's default is %s)", stock);
+    if (named) Log(L"gearbox: %S fitted%S; each gear held going up %.1f s, %s", key, other, GearHoldOf(w, tachClass), whose);
     else Log(L"gearbox: its name not read, so it goes by its gears (%S); each gear held going up %.1f s, %s", key, GearHoldOf(w, tachClass), whose);
 }
 

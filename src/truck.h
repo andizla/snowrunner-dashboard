@@ -40,6 +40,13 @@
 //                                    game's damage update last summed them
 //   vehicle + 0x930 .. + 0x938       the names of the engine sets the truck picks its engine from (0x20 bytes each);
 //                                    vehicle + 0x968 the name of the engine fitted
+//   vehicle + 0x930, + 0x988, + 0x9e0  one block a socket (engine, gearbox, winch), 0x58 bytes: the list of the
+//                                    socket's types (begin, end: texts of 0x20 bytes, as "gearboxes_lrd_110"), then the
+//                                    truck's default part's name (+ 0x18) and the part fitted (+ 0x38): the engine's
+//                                    + 0x948 and + 0x968, the gearbox's + 0x9a0 and + 0x9c0, the winch's + 0x9f8 and
+//                                    + 0xa18. Then the rims' and tires' names from + 0xac8, the suspension's at + 0xd30
+//                                    and the skin's at + 0xf18 (the diagnostic run of 2026-10-26, a d110 on its
+//                                    highway gearbox and an extended battery winch)
 //   [exe + 0x2a9e8e0 + 8]            the game's engine sets, a list: an entry holds the next one at + 0, the set's
 //                                    name at + 0x10 and its engines at + 0x30, a tree by name. An engine's record is
 //                                    0x40 into its node: + 0x74 the share of its damage from which the torque falls,
@@ -537,12 +544,14 @@ inline bool TruckEngineRecord(const TruckMemory &m, uint64_t vehicle, EngineReco
 }
 
 // The name of the gearbox fitted, as the game's files name it (the game's own begin with "g_", as "g_scout_default";
-// a mod's may not): a text the game holds at vehicle + 0x9a0, as it holds the engine's at + 0x968 (found by 0.13.9's
-// search on four trucks, two of the game's and two modded: "g_truck_default", "g_scout_default" and the mods' own). A
-// name there is taken whatever it begins with; where none is, the texts from + 0x900 to + 0xC00 are looked through
-// for the first that begins with "g_". A name: letters, digits, "_" and "-". at: where it stood, from the vehicle,
-// for the log. False where none is.
-static const uint32_t kGearboxNameAt = 0x9a0, kGearboxNameFrom = 0x900, kGearboxNameTo = 0xC00;
+// a mod's may not): the text the game holds at vehicle + 0x9c0, in the gearbox's socket block after the truck's
+// default gearbox at + 0x9a0 (see the layout above). Before 2026-10-26 the mod read + 0x9a0 (0.13.9's search had four
+// trucks on their stock gearboxes), so a truck with an upgraded gearbox was read as its stock one: a d110 on its
+// highway gearbox read "g_lrd_110_default". A name at + 0x9c0 is taken whatever it begins with; where none is, the
+// default at + 0x9a0; where neither is, the texts from + 0x900 to + 0xC00 are looked through for the first that begins
+// with "g_". A name: letters, digits, "_" and "-". at: where it stood, from the vehicle, for the log; stock: the
+// truck's default gearbox where it was read, else "". False where no name is.
+static const uint32_t kGearboxFittedAt = 0x9c0, kGearboxNameAt = 0x9a0, kGearboxNameFrom = 0x900, kGearboxNameTo = 0xC00;
 inline bool TruckNameText(const TruckMemory &m, uint64_t at, char (&out)[kMaxText], size_t &length)
 {
     if (!TruckText(m, at, out, length) || length < 2) return false;
@@ -553,16 +562,24 @@ inline bool TruckNameText(const TruckMemory &m, uint64_t at, char (&out)[kMaxTex
     }
     return true;
 }
-inline bool TruckGearboxName(const TruckMemory &m, uint64_t vehicle, char (&out)[kMaxText], uint32_t &at)
+inline bool TruckGearboxName(const TruckMemory &m, uint64_t vehicle, char (&out)[kMaxText], uint32_t &at, char (&stock)[kMaxText])
 {
     out[0] = 0;
+    stock[0] = 0;
     at = 0;
     if (!vehicle) return false;
     char text[kMaxText];
     size_t length = 0;
-    if (TruckNameText(m, vehicle + kGearboxNameAt, text, length))
+    if (TruckNameText(m, vehicle + kGearboxNameAt, text, length)) memcpy(stock, text, length + 1);
+    if (TruckNameText(m, vehicle + kGearboxFittedAt, text, length))
     {
         memcpy(out, text, length + 1);
+        at = kGearboxFittedAt;
+        return true;
+    }
+    if (stock[0])
+    {
+        strcpy_s(out, stock);
         at = kGearboxNameAt;
         return true;
     }
