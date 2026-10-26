@@ -2896,6 +2896,22 @@ int wmain(int argc, wchar_t **argv)
     a.tachClass = kClassScout;
     k = GaugeScaleOf(a);
     Check(k.idle == 800.0f && k.redline == 5500.0f && k.max == 7000.0f && k.speedMax == 120.0f, "scales: the scout class");
+    {
+        // a class change: a number at the old class's own follows the new class, one set by hand stays, the class's stays the class's
+        GaugeSettings sc = d;
+        sc.tachClass = kClassTruck;
+        sc.idleRpm = 650.0f;   // the truck class's own, written as a number
+        sc.redlineRpm = 2600.0f; // set by hand
+        sc.maxRpm = 0.0f;      // the class's
+        sc.speedMax = 90.0f;   // set by hand
+        sc.boostMax = 1.8f;    // the truck class's own
+        sc.tachClass = kClassScout;
+        ScalesClassChange(sc, kClassTruck);
+        const GaugeScale ks = GaugeScaleOf(sc);
+        Check(sc.idleRpm == 0.0f && sc.redlineRpm == 2600.0f && sc.maxRpm == 0.0f && sc.speedMax == 90.0f && sc.boostMax == 0.0f && ks.idle == 800.0f &&
+                  ks.max == 7000.0f && ks.boost == 1.0f,
+              "scales: on a class change the numbers set by hand stay, the ones at the old class's own follow the new class");
+    }
     a.tachClass = kClassHeavy;
     a.maxRpm = 2750.0f;
     a.redlineRpm = 4000.0f;

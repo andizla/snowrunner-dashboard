@@ -59,7 +59,7 @@ The Gameplay tab of the NEXT GEN menu edits every setting while you play. F2 ope
 | Miles per hour, psi, Fahrenheit | `Mph`, `Psi`, `Fahrenheit` | off: km/h, bar, Celsius |
 | The temperature, boost and air dials and the lamps | `ShowTemp`, `ShowBoost`, `ShowAir`, `ShowLamps` | on, on, off, on |
 | The oil temperature: not shown, a second needle in the temperature dial, or a dial of its own | `OilGauge` 0, 1 or 2 | second needle |
-| Truck class, which sets the scales. Each kind of truck can have its own, see below | `TachClass` 0 truck, 1 scout, 2 heavy | truck |
+| Truck class, which sets the scales. Each kind of truck can have its own, see below. A number set by hand on the tab stays when the class changes | `TachClass` 0 truck, 1 scout, 2 heavy | truck |
 | Own numbers for idle, the start of the red zone, the tachometer's top and the speedometer's top. Each kind of truck can have its own | `IdleRpm`, `RedlineRpm`, `MaxRpm`, `SpeedMax` | 0: the class's own |
 | The boost in bar the turbo reaches with the pedal floored at high engine speed, from 0.3 to 2. Each kind of truck can have its own | `BoostMax` | 0: the class's own |
 | How the turbo builds its boost: standard, small and quick, big and slow, or two stages. Each kind of truck can have its own | `BoostProfile` 0, 1, 2 or 3 | standard |

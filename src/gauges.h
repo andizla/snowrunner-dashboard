@@ -200,6 +200,18 @@ struct GaugeScale { float idle, redline, max, speedMax, boost; };
 static const float kAirWarn = 5.5f; // bar: under this the brake air dial's red zone, too little air to brake safely (AirStep, GAir)
 static const GaugeScale kClassScales[kClassCount] = { { 650.0f, 2200.0f, 3000.0f, 100.0f, 1.8f }, { 800.0f, 5500.0f, 7000.0f, 120.0f, 1.0f }, { 600.0f, 1900.0f, 2500.0f, 80.0f, 2.0f } };
 
+// The class changed from was: a number set to the old class's own follows the new class (0, the class's), and one set
+// by hand to anything else stays (Milos_Mk6 lost his numbers picking a class).
+inline void ScalesClassChange(GaugeSettings &s, int was)
+{
+    const GaugeScale old = kClassScales[was < 0 || was >= kClassCount ? kClassTruck : was];
+    if (s.idleRpm == old.idle) s.idleRpm = 0.0f;
+    if (s.redlineRpm == old.redline) s.redlineRpm = 0.0f;
+    if (s.maxRpm == old.max) s.maxRpm = 0.0f;
+    if (s.speedMax == old.speedMax) s.speedMax = 0.0f;
+    if (s.boostMax == old.boost) s.boostMax = 0.0f;
+}
+
 // The scales in force: the class's, with the settings' own numbers in their place where given, made to fit each other
 // (the tachometer's top a whole step of its numbers, the red zone inside it, idle well below the red zone).
 inline GaugeScale GaugeScaleOf(const GaugeSettings &s)

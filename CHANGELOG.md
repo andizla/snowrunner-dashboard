@@ -8,6 +8,7 @@
 - The mod finds its places on the Microsoft Store and Game Pass build the way Next Gen Tire Inflation does: each place by two more patterns when the first misses, and the optional ones left out with a line in the log.
 - `SwapDials` and the tab's "Swap dials": the speedometer and the tachometer change places, in both layouts (asked for in the comments).
 - `HotDamageFrom` and the tab's "Damage from": where the hot engine damage starts, 100 to 124 C, 118 as before; the rate is still reached at 125 C (from the mod.io list).
+- The tab's "Truck class" keeps the scale numbers set by hand when the class changes; only the ones still at the old class's own follow the new class. The peak torque slider's tip says it ends at the red zone and the curve's peak sits at most at 0.95 of it.
 
 ## [0.16.1] 2026-10-25
 

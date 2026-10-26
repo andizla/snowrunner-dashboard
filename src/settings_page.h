@@ -389,10 +389,16 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     static const char *classes[kClassCount] = { "Truck", "Scout", "Heavy" };
     PageLabel("Truck class", labelX);
     ImGui::SetNextItemWidth(w);
-    changed(ImGui::Combo("##class", &s.tachClass, classes, kClassCount));
+    const int classWas = s.tachClass;
+    if (ImGui::Combo("##class", &s.tachClass, classes, kClassCount))
+    {
+        ScalesClassChange(s, classWas);
+        act |= kPageChanged;
+    }
     PageTip("Sets the five numbers below: trucks idle at 650 rpm with the red zone from 2200 of 3000, a speedometer to 100 km/h and 1.8 bar of boost, "
             "scouts 800, 5500 of 7000, 120 km/h and 1 bar, heavy trucks 600, 1900 of 2500, 80 km/h and 2 bar. The mod's automatic shifts by the class of "
-            "a truck's own scales; a truck without them shifts by the class of its weight (a scout up to 6 t, a truck under 16 t, a heavy truck from 16 t).");
+            "a truck's own scales; a truck without them shifts by the class of its weight (a scout up to 6 t, a truck under 16 t, a heavy truck from 16 t). "
+            "A number you set by hand stays when the class changes; Class beside it gives it back.");
     {
         const GaugeScale own = kClassScales[s.tachClass < 0 || s.tachClass >= kClassCount ? kClassTruck : s.tachClass];
         // each number is the class's own until it is changed here; "Class" gives it back to the class
@@ -469,7 +475,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         PageTip(view.engineCustom ? "Its file holds a torque curve of its own (TorqueCurve), which takes the place of one built from the peak."
                                   : "The engine speed of the engine's peak torque, as its maker gives it (most engines' figures are published). The torque curve is "
                                     "built around it: a turbo diesel's broad plateau from a little under it to half as much again over it, a naturally aspirated "
-                                    "engine's narrower hump. With the mod's automatic and the engine handed over, a light foot shifts up no sooner than 0.8 of it.");
+                                    "engine's narrower hump. With the mod's automatic and the engine handed over, a light foot shifts up no sooner than 0.8 of it. "
+                                    "The slider ends at the red zone, and the curve's peak sits at most at 0.95 of it: a figure nearer the red zone counts as that.");
         static const char *aspirations[kAspCount] = { "Turbo", "Naturally aspirated" };
         PageLabel("Aspiration", labelX);
         ImGui::SetNextItemWidth(w);
