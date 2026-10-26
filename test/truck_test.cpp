@@ -331,6 +331,53 @@ static void RealImageTest()
              steam ? ", the Steam build of 22 July" : update ? ", the update of 20 October" : ", a build the test has no numbers for", from, to, right, kGlobCount, inData,
              shift.at, *wrong ? "; wrong:" : "", wrong);
     Check(right == kGlobCount && inData == kGlobCount && shiftRight, line);
+
+    // the places the mod cannot do without, by each of their ways alone (game_globals.h): on a build the test has
+    // numbers for, every way a place has must give it there; on another the line tells which ways found what, so a
+    // player's Gauges.log of that build can be read against it
+    uint64_t imageBase = 0;
+    memcpy(&imageBase, image.data() + lfanew + 0x18 + 24, 8);
+    uint64_t control = 0;
+    for (int g : { kGlobControl, kGlobGame, kGlobWheelClass })
+    {
+        const int ways = g == kGlobControl ? kWaysMost : 2;
+        const uint64_t want = steam ? kGameGlobals[g].steam : update ? kUpdate[g] : 0;
+        char said[400] = "";
+        bool agree = true;
+        uint64_t any = 0;
+        for (int w = 1; w <= ways; w++)
+        {
+            int signatures = 0;
+            bool conflict = false;
+            const uint64_t place = GlobalByWay(image.data(), image.size(), imageBase, from, to, g, w, control, signatures, conflict);
+            char one[64];
+            if (place) snprintf(one, sizeof one, "%sway %d at %llx", w > 1 ? ", " : "", w, (unsigned long long)place);
+            else snprintf(one, sizeof one, "%sway %d not found", w > 1 ? ", " : "", w);
+            strcat_s(said, one);
+            agree = agree && (want ? place == want : true);
+            if (!any) any = place;
+        }
+        if (g == kGlobControl) control = want ? want : any;
+        snprintf(line, sizeof line, "places by their ways alone (stamp %08x): %s: %s", stamp, kGameGlobals[g].name, said);
+        Check(want ? agree : any != 0, line);
+    }
+
+    // a build whose accessor of control's object reads otherwise (its lea broken here): the signatures of control and
+    // the game miss, the truck update's calls still give control and the game stands beside it
+    size_t window = 0;
+    int windows = 0;
+    if ((steam || update) && GlobalPatternFind(image.data(), from, to, kSigControlObject, window, windows) && windows == 1)
+    {
+        image[window + 13] = 0x90;
+        int signatures = 0;
+        bool conflict = false;
+        const uint64_t controlOne = GlobalByWay(image.data(), image.size(), imageBase, from, to, kGlobControl, 1, 0, signatures, conflict);
+        const uint64_t controlTwo = GlobalByWay(image.data(), image.size(), imageBase, from, to, kGlobControl, 2, 0, signatures, conflict);
+        const uint64_t gameOne = GlobalByWay(image.data(), image.size(), imageBase, from, to, kGlobGame, 1, controlTwo, signatures, conflict);
+        const uint64_t gameTwo = GlobalByWay(image.data(), image.size(), imageBase, from, to, kGlobGame, 2, controlTwo, signatures, conflict);
+        Check(!controlOne && !gameOne && controlTwo == control && gameTwo == control + 0x18,
+              "places: with the accessor's code of another kind the signatures of control and the game miss, and way 2 finds both");
+    }
 }
 
 int main()

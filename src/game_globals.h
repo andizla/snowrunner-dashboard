@@ -256,3 +256,91 @@ inline uint64_t GlobalResolve(const uint8_t *code, size_t from, size_t to, const
     }
     return conflict ? 0 : place;
 }
+
+// ---- more ways to the places the mod cannot do without, as Next Gen Tire Inflation finds them (its build_find.h) ----
+// The signatures above are way 1. Another build of the same source can lay some code out otherwise (the Microsoft
+// Store and Game Pass build, stamp 6a607d39, in a tire mod player's log of 2026-10-15), so where they miss:
+// - control, way 2: the truck update's three small calls in a row that hand out statics, the second one control's;
+//   way 3: the same with the stack frame's offsets left open;
+// - the game, way 2: 0x18 past control, in the same static object, once control is found by any way;
+// - the wheel class, way 2: the method table of combine::TRUCK_WHEEL_PARAMS, by the name in its type information.
+static const int kWaysMost = 3;
+static const char *const kWheelClassName = ".?AUTRUCK_WHEEL_PARAMS@combine@@";
+static const char *const kControlCalls[2] = {
+    "E8 ? ? ? ? 4C 8B 20 4C 89 65 C8 E8 ? ? ? ? 48 8B 30 48 89 75 A0 E8 ? ? ? ? 48 89 45 18 4C 8B 00 80 BE D8 00 00 00 00",
+    "E8 ? ? ? ? 4C 8B 20 4C 89 65 ? E8 ? ? ? ? 48 8B 30 48 89 75 ? E8 ? ? ? ? 48 89 45 ? 4C 8B 00 80 BE D8 00 00 00 00" };
+
+// What the mod goes without where an optional place is not found, for the log ("" for the ones it cannot do without).
+static const char *const kGlobalWithout[kGlobCount] = {
+    "", "", "", "the cluster stays on over the game's map", "the cluster stays on in the truck viewer", "the cluster stays on in the garage",
+    "the game's menus over the truck and its shifter are not seen", "an engine's record is not read (its damage and torque are the game's alone)",
+    "the hour of the game's day is not known, so a map's temperature is its day's mean" };
+
+// The static a small accessor at rva hands out ("lea rax, [rip + x]; ret"): its RVA, 0 where the code there is none.
+inline uint64_t AccessorTarget(const uint8_t *code, size_t from, size_t to, uint64_t rva)
+{
+    if (rva < from || rva + 8 > to || code[rva] != 0x48 || code[rva + 1] != 0x8D || code[rva + 2] != 0x05 || code[rva + 7] != 0xC3) return 0;
+    int32_t d;
+    memcpy(&d, code + rva + 3, 4);
+    return (uint64_t)((int64_t)rva + 7 + d);
+}
+
+// Control by way 2 or 3: where the calls stand once in code[from, to), the static the second one's accessor hands out.
+inline uint64_t ControlByCalls(const uint8_t *code, size_t from, size_t to, int way)
+{
+    size_t at = 0;
+    int count = 0;
+    if (way < 2 || way > 3 || !GlobalPatternFind(code, from, to, kControlCalls[way - 2], at, count) || count != 1) return 0;
+    int32_t d;
+    memcpy(&d, code + at + 13, 4);
+    return AccessorTarget(code, from, to, (uint64_t)((int64_t)at + 17 + d));
+}
+
+// A class's method table by the name its type information carries, in an image of size bytes laid out as in memory
+// and loaded at base: the type descriptor holds the name 16 bytes in, the object locator of the class's first table
+// names the descriptor and itself by RVA, and the table begins right after a pointer to that locator. Its RVA, 0
+// where there is not exactly one.
+inline uint64_t VtableByName(const uint8_t *image, size_t size, uint64_t base, const char *name)
+{
+    const size_t length = strlen(name) + 1;
+    uint64_t found = 0;
+    int count = 0;
+    for (size_t s = 16; s + length <= size; s++)
+    {
+        const uint8_t *next = (const uint8_t *)memchr(image + s, name[0], size - length - s + 1);
+        if (!next) break;
+        s = (size_t)(next - image);
+        if (memcmp(next, name, length)) continue;
+        const uint32_t type = (uint32_t)(s - 16);
+        for (size_t o = 0; o + 24 <= size; o += 4)
+        {
+            uint32_t at[6];
+            memcpy(at, image + o, sizeof at);
+            if (at[3] != type || at[0] != 1 || at[1] != 0 || at[5] != o) continue;
+            const uint64_t locator = base + o;
+            for (size_t v = 0; v + 16 <= size; v += 8)
+                if (!memcmp(image + v, &locator, 8))
+                {
+                    found = v + 8;
+                    count++;
+                }
+        }
+    }
+    return count == 1 ? found : 0;
+}
+
+// Global g by one way (1 to kWaysMost) in an image of size bytes loaded at base, its code in [from, to): its RVA, 0
+// where that way does not find it, or finds it outside the exe's data. control: control's place, for the game's way 2.
+// signatures: for way 1, how many of its signatures stood once; conflict: two of them point at different places.
+inline uint64_t GlobalByWay(const uint8_t *image, size_t size, uint64_t base, size_t from, size_t to, int g, int way, uint64_t control, int &signatures,
+                            bool &conflict)
+{
+    signatures = 0;
+    conflict = false;
+    uint64_t place = 0;
+    if (way == 1) place = GlobalResolve(image, from, to, kGlobalSigs, g, signatures, conflict);
+    else if (g == kGlobControl) place = ControlByCalls(image, from, to, way);
+    else if (g == kGlobGame && way == 2) place = control ? control + 0x18 : 0;
+    else if (g == kGlobWheelClass && way == 2) place = VtableByName(image, size, base, kWheelClassName);
+    return place && place < size && RvaInDataOf(image, 0x1000, place) ? place : 0;
+}

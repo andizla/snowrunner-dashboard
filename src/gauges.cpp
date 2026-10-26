@@ -1274,15 +1274,17 @@ static bool GameShift(uint64_t vehicle, int gear)
 static bool CodeRange(size_t &from, size_t &to) { return CodeRangeOf((const uint8_t *)g_base, 0x1000, from, to); }
 
 // The exe's code copied out through ReadProcessMemory, at its own offsets in copy (the rest zeros): the searches read
-// the copy, so a page of the exe that cannot be read is no fault on the mod's thread (it reads as zeros).
-static bool CodeCopy(std::vector<uint8_t> &copy, size_t &from, size_t &to)
+// the copy, so a page of the exe that cannot be read is no fault on the mod's thread (it reads as zeros). whole: the
+// exe's whole image, its headers and data too (a class's type information lies in its data).
+static bool CodeCopy(std::vector<uint8_t> &copy, size_t &from, size_t &to, bool whole = false)
 {
     if (!CodeRange(from, to)) return false;
-    copy.assign(to, 0);
+    const size_t first = whole ? 0 : from, last = whole && ImageSize() > to ? (size_t)ImageSize() : to;
+    copy.assign(last, 0);
     const size_t kChunk = 1 << 20;
-    for (size_t at = from; at < to; at += kChunk)
+    for (size_t at = first; at < last; at += kChunk)
     {
-        const size_t n = to - at < kChunk ? to - at : kChunk;
+        const size_t n = last - at < kChunk ? last - at : kChunk;
         if (ReadProcessMemory(GetCurrentProcess(), (const void *)(g_base + at), copy.data() + at, n, nullptr)) continue;
         for (size_t p = at; p < at + n; p += 0x1000) // page by page where one of them cannot be read
         {
@@ -1308,8 +1310,8 @@ static bool PlacesFind(DWORD stamp, uint64_t &clock, bool quiet = false)
         return true;
     }
     size_t from = 0, to = 0;
-    std::vector<uint8_t> code;
-    if (!CodeCopy(code, from, to))
+    std::vector<uint8_t> image;
+    if (!CodeCopy(image, from, to, true))
     {
         Log(L"places: the exe has no code section to look in");
         return false;
@@ -1317,17 +1319,31 @@ static bool PlacesFind(DWORD stamp, uint64_t &clock, bool quiet = false)
     const ULONGLONG started = GetTickCount64();
     uint64_t found[kGlobCount] = {};
     bool missing = false;
+    // each place by its ways in turn (game_globals.h): its signatures, then for the ones the mod cannot do without the
+    // ways Next Gen Tire Inflation finds them by
+    static const wchar_t *const kWayWords[kWaysMost + 1] = { L"", L"", L"the truck update's three calls", L"the truck update's three calls, the frame left open" };
     for (int g = 0; g < kGlobCount; g++)
     {
-        int signatures = 0;
-        bool conflict = false;
-        found[g] = GlobalResolve(code.data(), from, to, kGlobalSigs, g, signatures, conflict);
-        const bool outside = found[g] && !RvaInDataOf((const uint8_t *)g_base, 0x1000, found[g]);
+        int signatures = 0, way = 0, firstSignatures = 0;
+        bool conflict = false, firstConflict = false;
+        for (int w = 1; w <= (kGameGlobals[g].needed ? kWaysMost : 1) && !found[g]; w++)
+        {
+            found[g] = GlobalByWay(image.data(), image.size(), g_base, from, to, g, w, found[kGlobControl], signatures, conflict);
+            if (w == 1)
+            {
+                firstSignatures = signatures;
+                firstConflict = conflict;
+            }
+            if (found[g]) way = w;
+        }
         if (quiet) {}
-        else if (outside) Log(L"places: %S at +%llx is not in the exe's data, so it is not taken", kGameGlobals[g].name, found[g]);
-        else if (found[g]) Log(L"places: %S at +%llx, by %d of its signatures", kGameGlobals[g].name, found[g], signatures);
-        else Log(L"places: %S not found%S", kGameGlobals[g].name, conflict ? " (its signatures point at different places)" : "");
-        if (outside) found[g] = 0;
+        else if (way == 1) Log(L"places: %S at +%llx, by %d of its signatures", kGameGlobals[g].name, found[g], firstSignatures);
+        else if (found[g])
+            Log(L"places: %S at +%llx, by way %d (%s)%S", kGameGlobals[g].name, found[g], way,
+                g == kGlobGame ? L"beside control" : g == kGlobWheelClass ? L"its type information" : kWayWords[way],
+                firstConflict ? "; its signatures point at different places" : firstSignatures ? "; its signatures point outside the exe's data" : "; its signatures stand nowhere once");
+        else if (kGameGlobals[g].needed) Log(L"places: %S not found by any of its ways%S", kGameGlobals[g].name, firstConflict ? " (its signatures point at different places)" : "");
+        else Log(L"places: %S not found%S, so %S", kGameGlobals[g].name, firstConflict ? " (its signatures point at different places)" : "", kGlobalWithout[g]);
         missing = missing || (!found[g] && kGameGlobals[g].needed);
     }
     if (!quiet) Log(L"places: looked for in %.1f s", (GetTickCount64() - started) / 1000.0);
