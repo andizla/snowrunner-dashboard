@@ -47,6 +47,9 @@ enum { kPolicyPass, kPolicyBrakeReverse, kPolicyAll };
 static const unsigned kRefusedBrakeReverse = 1u << 30;
 void GearboxPolicy(int policy, void *vehicle, bool brakeStand);
 int GearboxPolicyNow();
+// The hook (kFn...) that carried the last reverse refused on the brake, -1 for none yet: the outermost of the three
+// doors, as a refused call never reaches the ones nested in it.
+int GearboxBrakeDoor();
 bool GearboxHoldingNow();
 unsigned GearboxRefusedNew();
 // The way through to the game's own function behind a hook (fn one of kFn*), nullptr while it has none: the mod's own

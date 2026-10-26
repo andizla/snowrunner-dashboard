@@ -30,6 +30,7 @@
 #include "input_devices.h"
 #endif
 bool NgMenuOpen(); // ng_overlay.cpp (its header wants Dear ImGui): the toggle key rests while the NEXT GEN menu has the keys
+int NgMenuKeyFromIni(); // the menu's key, which a capture never binds
 #include "tires.h"
 #include "maps.h"
 #include "game_code.h"
@@ -1062,13 +1063,36 @@ static void BindingsWrite(const std::wstring &ini, const GearBindings &b)
         }
 }
 
-// Whether a binding reaches reverse (Gear down, Reverse, or Neutral on the way): the mod's own gearbox takes the
-// shifter only then, so a truck can always be backed up.
-static bool BindingsCanReverse(const GearBindings &b)
+// Whether a binding that can be pressed now reaches reverse (Gear down, Reverse, or Neutral on the way): the mod's own
+// gearbox takes the shifter only then, so a truck can always be backed up. A key counts always, a wheel's binding only
+// while that wheel is there (s, read whether or not the game is in front), a pad's only while a pad answers (review 8,
+// W5).
+static bool BindingsCanReverse(const GearBindings &b, const InputSnapshot &s, bool padThere)
 {
+    auto reaches = [&](const Binding &x) {
+        switch (x.kind)
+        {
+        case kBindKey: return true;
+        case kBindPad: return padThere;
+        case kBindButton:
+        case kBindPov:
+        case kBindAxis: return x.device >= 1 && x.device <= kInputDevicesMost && s.device[x.device - 1].present;
+        default: return false;
+        }
+    };
     for (int slot = 0; slot < kBindingSlots; slot++)
-        if (b.slot[kActDown][slot].kind || b.slot[kActGearR][slot].kind || b.slot[kActGearN][slot].kind) return true;
+        if (reaches(b.slot[kActDown][slot]) || reaches(b.slot[kActGearR][slot]) || reaches(b.slot[kActGearN][slot])) return true;
     return false;
+}
+
+// Why a capture may not bind what it caught: the NEXT GEN menu's key, the cluster's toggle key, or pad buttons that
+// hold the PadToggle chord or are held in it, as both would then act at once (review 8, W1 and W9). nullptr: it may.
+static const char *BindingClash(const Binding &b, int menuKey, int toggleKey, uint32_t padChord)
+{
+    if (b.kind == kBindKey && menuKey && (int)b.code == menuKey) return "the NEXT GEN menu's key";
+    if (b.kind == kBindKey && toggleKey && (int)b.code == toggleKey) return "the cluster's toggle key (ToggleKey)";
+    if (b.kind == kBindPad && padChord && ((b.code & padChord) == b.code || (b.code & padChord) == padChord)) return "the cluster's pad toggle (PadToggle)";
+    return nullptr;
 }
 
 // The bound actions in the log, one line each.
@@ -1108,6 +1132,11 @@ static int SmtIniImport(const std::wstring &path, GearBindings &b, GaugeSettings
         wcscpy_s(pairs[count].smt, n.smt);
         pairs[count++].action = n.action;
     }
+    // the numpad's codes 0x47 to 0x53: Windows maps them to the arrows, Home, End and the rest of that block, which
+    // NumLock on makes VK_NUMPADn again, so they are named here (review 8, W6)
+    static const UINT numpad[] = { VK_NUMPAD7, VK_NUMPAD8, VK_NUMPAD9, VK_SUBTRACT, VK_NUMPAD4, VK_NUMPAD5, VK_NUMPAD6,
+                                   VK_ADD,     VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3,  VK_NUMPAD0, VK_DECIMAL };
+    bool took[kActCount] = {};
     int bound = 0;
     for (int i = 0; i < count; i++)
     {
@@ -1119,11 +1148,13 @@ static int SmtIniImport(const std::wstring &path, GearBindings &b, GaugeSettings
         const long code = digits ? wcstol(digits, &end, 10) : -1;
         // an extended key's code has its high bit set: Windows reads it as 0xE0 and the low seven bits
         const UINT scan = code >= 0x80 ? (0xE000u | (UINT)(code & 0x7F)) : (UINT)code;
-        const UINT vk = code > 0 && code < 0x100 && end && !*end ? MapVirtualKeyW(scan, MAPVK_VSC_TO_VK_EX) : 0;
+        const bool valid = code > 0 && code < 0x100 && end && !*end;
+        const UINT vk = !valid ? 0 : code >= 0x47 && code <= 0x53 ? numpad[code - 0x47] : MapVirtualKeyW(scan, MAPVK_VSC_TO_VK_EX);
         wchar_t line[96];
         if (vk)
         {
             b.slot[pairs[i].action][0] = Binding{ kBindKey, 0, vk, 0, false };
+            took[pairs[i].action] = true;
             bound++;
             swprintf_s(line, L"%s%s", taken.empty() ? L"" : L", ", pairs[i].smt);
             taken += line;
@@ -1134,6 +1165,23 @@ static int SmtIniImport(const std::wstring &path, GearBindings &b, GaugeSettings
             left += line;
         }
     }
+    // a default whose key the import gave to another action goes, so one key does not shift two ways
+    for (int a = 0; a < kActCount; a++)
+        for (int slot = 0; slot < kBindingSlots && !took[a]; slot++)
+        {
+            const Binding &d = b.slot[a][slot];
+            for (int t = 0; t < kActCount && d.kind == kBindKey; t++)
+                if (took[t] && b.slot[t][0].code == d.code)
+                {
+                    char key[32];
+                    KeyText((int)d.code, key, sizeof key);
+                    wchar_t line[96];
+                    swprintf_s(line, L"%sthe default of %S (%S, now %S's)", left.empty() ? L"" : L", ", kActionNames[a], key, kActionNames[t]);
+                    left += line;
+                    b.slot[a][slot] = Binding{};
+                    break;
+                }
+        }
     auto option = [&](const wchar_t *key, bool &out) {
         wchar_t value[16];
         GetPrivateProfileStringW(L"OPTIONS", key, L"", value, 16, path.c_str());
@@ -1149,7 +1197,7 @@ static int SmtIniImport(const std::wstring &path, GearBindings &b, GaugeSettings
 // held (RequireGearHeld), the clutch held, and its travel where it is bound to an axis (-1 without one).
 static GearboxActions ActionsOf(const ActionState st[kActCount], const GearBindings &b)
 {
-    GearboxActions a;
+    GearboxActions a = {};
     a.up = st[kActUp].pressed;
     a.down = st[kActDown].pressed;
     for (int g = 0; g < 12; g++)
@@ -1170,6 +1218,31 @@ static GearboxActions ActionsOf(const ActionState st[kActCount], const GearBindi
     const bool axis = b.slot[kActClutch][0].kind == kBindAxis || b.slot[kActClutch][1].kind == kBindAxis;
     a.clutchTravel = axis ? st[kActClutch].travel : -1.0f;
     return a;
+}
+
+// The actions while the NEXT GEN menu is open or a capture runs: none goes down, and what was held (the gear key under
+// RequireGearHeld, the clutch and its travel) stands as it was, so the position stays where it is (review 8, W2).
+static GearboxActions ActionsResting(const GearboxActions &before)
+{
+    GearboxActions a = {};
+    a.gearHeld = before.gearHeld;
+    a.clutch = before.clutch;
+    a.clutchTravel = before.clutchTravel;
+    return a;
+}
+
+// The snapshot as the gearbox and a capture read it: the pad and the wheels only while the game is in front, as the
+// keys (review 8, W7).
+static InputSnapshot InputFrontOnly(const InputSnapshot &s)
+{
+    InputSnapshot out = s;
+    if (!s.front)
+    {
+        memset(out.key, 0, sizeof out.key);
+        out.pad = 0;
+        for (InputDevice &d : out.device) d = InputDevice{};
+    }
+    return out;
 }
 
 // The tab's asks of the bindings (render thread), done by the mod's thread on its next pass.
@@ -1209,11 +1282,18 @@ static XInputGetStateFn PadFunction()
 
 // The buttons of every connected pad together. A slot with no pad is slow to ask, so the empty ones are only asked
 // again every two seconds.
+static volatile LONG g_padsConnected = 0xF; // the slots that answered when all were last asked
+
 uint32_t PadButtons()
 {
-    static volatile LONG connected = 0xF, askedAt = 0;
+    static volatile LONG askedAt = 0;
+    volatile LONG &connected = g_padsConnected;
     const XInputGetStateFn get = PadFunction();
-    if (!get) return 0;
+    if (!get)
+    {
+        InterlockedExchange(&connected, 0);
+        return 0;
+    }
     const DWORD now = GetTickCount();
     const bool all = now - (DWORD)askedAt > 2000;
     if (all) InterlockedExchange(&askedAt, (LONG)now);
@@ -1231,6 +1311,9 @@ uint32_t PadButtons()
     if (all) InterlockedExchange(&connected, answered);
     return buttons;
 }
+
+// Whether a pad answered when PadButtons last asked every slot.
+static bool PadPresent() { return g_padsConnected != 0; }
 
 // A path for the log with the Windows profile folder written %USERPROFILE%: the log is passed on, the account's name stays out.
 static std::wstring PathForLog(const std::wstring &path)
@@ -2003,7 +2086,11 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     // the game's own shifts the hooks refused while the mod's gearbox has the truck: each kind said once a truck, so the
     // drive that first sees a truck in A reverse on the brake names the call that carries it
     const unsigned fresh = GearboxRefusedNew();
-    if (fresh & kRefusedBrakeReverse) Log(L"gearbox: the game's reverse on the brake refused: the truck is in A");
+    if (fresh & kRefusedBrakeReverse)
+    {
+        const int door = GearboxBrakeDoor();
+        Log(L"gearbox: the game's reverse on the brake refused: the truck is in A (it came through %S)", door >= 0 && door < kFnCount ? kGameFunctions[door].name : "?");
+    }
     for (unsigned fn = 0; fresh && fn < kFnCount; fn++)
         if (fresh & (1u << fn)) Log(L"gearbox: the game asked for %s, refused: the mod's gearbox has the truck", GearboxAskName((int)fn));
     const bool was = w.found;
@@ -2739,12 +2826,14 @@ static DWORD WINAPI Run(void *)
             visible = !visible;
             Log(L"cluster %s", visible ? L"shown" : L"hidden");
         }
-        // the gearbox's bindings: one snapshot of the keys, the pad and the wheels and shifters a pass. The tab's asks
-        // (a capture into a slot, a slot cleared) are done here with it; the actions go to the gearbox only at Gearbox=2
-        // with a binding that reaches reverse, and not while the NEXT GEN menu is open or a capture runs
+        // the gearbox's bindings: one snapshot of the keys, the pad and the wheels and shifters a pass, read only while
+        // the game is in front. The tab's asks (a capture into a slot, a slot cleared) are done here with it, and a
+        // capture ends when the NEXT GEN menu closes; the actions go to the gearbox only at Gearbox=2 with a binding
+        // that reaches reverse, and none goes down while the menu is open or a capture runs
         {
-            static InputSnapshot snap;
+            static InputSnapshot snap, seen;
             InputSnapshotRead(snap, front, PadButtons());
+            seen = InputFrontOnly(snap);
             const ULONGLONG bindNow = GetTickCount64();
             bool bindsChanged = false;
             const LONG ask = InterlockedExchange(&g_bindAsk, 0);
@@ -2759,13 +2848,27 @@ static DWORD WINAPI Run(void *)
                     bindsChanged = true;
                 }
             }
+            if (bindCapture.active && !NgMenuOpen())
+            {
+                bindCapture.active = false; // the menu closed under it: the key that closed it, or the next one driven with, is no binding
+                Log(L"gearbox: the capture for %S ended as the NEXT GEN menu closed; nothing bound", kActionNames[bindCapture.action]);
+            }
             if (bindCapture.active)
             {
                 Binding caught = {};
-                const int step = BindingCaptureStep(bindCapture, snap, bindNow, caught);
-                if (step == kCaptureBound)
+                const int step = BindingCaptureStep(bindCapture, seen, bindNow, caught);
+                const char *clash = step == kCaptureBound ? BindingClash(caught, NgMenuKeyFromIni(), s.toggleKey, padMask) : nullptr;
+                if (clash)
+                {
+                    char text[96];
+                    BindingText(caught, text, sizeof text);
+                    Log(L"gearbox: %S not bound to %S: it is %S", text, kActionNames[bindCapture.action], clash);
+                }
+                else if (step == kCaptureBound)
                 {
                     binds.slot[bindCapture.action][bindCapture.slot] = caught;
+                    // held as it is bound: a press only once it was let go
+                    bindReader.latched[bindCapture.action][bindCapture.slot] = true;
                     bindsChanged = true;
                 }
                 if (step != kCaptureWaiting) bindCapture.active = false;
@@ -2776,13 +2879,13 @@ static DWORD WINAPI Run(void *)
                 Log(L"gearbox: the bindings set from the tab, written to Gauges.ini:");
                 BindingsLog(binds);
             }
-            static InputSnapshot gated;
-            if (NgMenuOpen() || bindCapture.active) gated = InputSnapshot{};
-            else gated = snap;
+            // the reader steps on what is really held every pass, so its latches follow the hardware through the menu
+            // (review 8, W2); reverse is reached by what is there, in front or not
             static ActionState states[kActCount];
-            InputStep(bindReader, binds, gated, states);
-            watch.canReverse = BindingsCanReverse(binds);
-            watch.actions = s.gearbox == kGearboxOwn && watch.canReverse ? ActionsOf(states, binds) : GearboxActions{};
+            InputStep(bindReader, binds, seen, states);
+            watch.canReverse = BindingsCanReverse(binds, snap, PadPresent());
+            if (s.gearbox != kGearboxOwn || !watch.canReverse) watch.actions = GearboxActions{};
+            else watch.actions = NgMenuOpen() || bindCapture.active ? ActionsResting(watch.actions) : ActionsOf(states, binds);
         }
         // the map: the game's save, looked for every kSaveLookMs and read when it is another or was written since
         const ULONGLONG lookNow = GetTickCount64();
@@ -3837,7 +3940,7 @@ int wmain(int argc, wchar_t **argv)
         BindingsRead(bindIni, b, false);
         const bool defaults = b.slot[kActUp][0].kind == kBindKey && b.slot[kActUp][0].code == VK_NUMPAD8 && b.slot[kActDown][0].code == VK_NUMPAD2 &&
                               b.slot[kActGearN][0].code == VK_NUMPAD5 && b.slot[kActGearA][0].code == VK_NUMPAD7 && b.slot[kActGearR][0].code == VK_NUMPAD0 &&
-                              !b.slot[kActClutch][0].kind && BindingsCanReverse(b);
+                              !b.slot[kActClutch][0].kind && BindingsCanReverse(b, InputSnapshot{}, false);
         // the number pad's operators by name, and back from it
         char plus[16], dot[16];
         KeyName(VK_ADD, plus, sizeof plus);
@@ -3861,12 +3964,65 @@ int wmain(int argc, wchar_t **argv)
         BindingsRead(bindIni, back, false);
         const bool kept = back.slot[kActGearH][0].kind == kBindKey && back.slot[kActGearH][0].code == 'H';
         GearBindings bare = {};
-        const bool fallback = !BindingsCanReverse(bare);
+        const bool fallback = !BindingsCanReverse(bare, InputSnapshot{}, true);
         bare.slot[kActGearR][1] = Binding{ kBindKey, 0, 'R', 0, false };
         DeleteFileW(bindIni.c_str());
-        Check(none && defaults && named && round && kept && fallback && BindingsCanReverse(bare),
+        Check(none && defaults && named && round && kept && fallback && BindingsCanReverse(bare, InputSnapshot{}, false),
               "gearbox: bindings default to Num 8, Num 2, Num 5, Num 0 and Num 7, the number pad's operators by name, round trip through the ini, None "
               "clears, no binding leaves a slot; the shifter is taken only with one that reaches reverse");
+    }
+    // review 8: reverse reached only by what can be pressed now (W5), what a capture may not bind (W1, W9), the actions
+    // from the reader's states, the actions resting while the menu is open (W2), the snapshot out of front (W7)
+    {
+        GearBindings b = {};
+        b.slot[kActGearR][0] = Binding{ kBindButton, 2, 5, 0, false };
+        b.slot[kActDown][1] = Binding{ kBindPad, 0, XINPUT_GAMEPAD_DPAD_DOWN, 0, false };
+        InputSnapshot there = {};
+        there.device[1].present = true;
+        const bool wheel = !BindingsCanReverse(b, InputSnapshot{}, false) && BindingsCanReverse(b, there, false);
+        b.slot[kActGearR][0] = Binding{};
+        const bool pad = !BindingsCanReverse(b, there, false) && BindingsCanReverse(b, InputSnapshot{}, true);
+        Check(wheel && pad, "gearbox: reverse counts a wheel's binding only while that wheel is there, a pad's only while a pad answers");
+
+        const uint32_t chord = XINPUT_GAMEPAD_RIGHT_SHOULDER | XINPUT_GAMEPAD_DPAD_UP;
+        const Binding f2 = { kBindKey, 0, VK_F2, 0, false }, f8 = { kBindKey, 0, VK_F8, 0, false }, num8 = { kBindKey, 0, VK_NUMPAD8, 0, false };
+        const Binding rb = { kBindPad, 0, XINPUT_GAMEPAD_RIGHT_SHOULDER, 0, false }, rbUpA = { kBindPad, 0, chord | XINPUT_GAMEPAD_A, 0, false };
+        const Binding padA = { kBindPad, 0, XINPUT_GAMEPAD_A, 0, false };
+        Check(BindingClash(f2, VK_F2, VK_F8, chord) && BindingClash(f8, VK_F2, VK_F8, chord) && BindingClash(rb, VK_F2, VK_F8, chord) &&
+                  BindingClash(rbUpA, VK_F2, VK_F8, chord) && !BindingClash(num8, VK_F2, VK_F8, chord) && !BindingClash(padA, VK_F2, VK_F8, chord) &&
+                  !BindingClash(f8, VK_F2, 0, 0),
+              "gearbox: a capture never binds the menu's key, the toggle key or pad buttons in or holding the PadToggle chord");
+
+        ActionState rs[kActCount] = {};
+        rs[kActUp].pressed = rs[kActUp].held = true;
+        rs[kActGear3].held = true;
+        rs[kActGear5].pressed = rs[kActGear5].held = true;
+        rs[kActGearR].pressed = true;
+        rs[kActClutch].held = true;
+        rs[kActClutch].travel = 0.7f;
+        GearBindings keys = {};
+        keys.slot[kActClutch][0] = Binding{ kBindKey, 0, VK_SPACE, 0, false };
+        const GearboxActions withKey = ActionsOf(rs, keys);
+        GearBindings axis = {};
+        axis.slot[kActClutch][1] = Binding{ kBindAxis, 1, 3, 0, false };
+        const GearboxActions x = ActionsOf(rs, axis);
+        Check(withKey.up && !withKey.down && withKey.gearPressed == 5 && withKey.gearHeld == 3 && withKey.r && !withKey.n && withKey.clutch && withKey.clutchTravel < 0.0f && x.clutchTravel == 0.7f,
+              "gearbox: the actions from the reader's states: the edges, the gear held, the clutch's travel only from an axis");
+
+        const GearboxActions r = ActionsResting(x);
+        Check(!r.up && !r.r && !r.gearPressed && r.gearHeld == 3 && r.clutch && r.clutchTravel == 0.7f,
+              "gearbox: while the menu is open or a capture runs, nothing goes down and what was held stands");
+
+        InputSnapshot back = {};
+        back.front = false;
+        back.pad = XINPUT_GAMEPAD_A;
+        back.device[0].present = true;
+        back.device[0].button[0] = 1;
+        const InputSnapshot behind = InputFrontOnly(back);
+        back.front = true;
+        const InputSnapshot kept = InputFrontOnly(back);
+        Check(!behind.pad && !behind.device[0].present && kept.pad == XINPUT_GAMEPAD_A && kept.device[0].button[0],
+              "gearbox: the pad and the wheels are read as nothing while the game is not in front");
     }
     // the SMT.ini import: a Kb. scan code turned into its key, a combination and an unknown code left, the options taken
     {
@@ -3875,6 +4031,8 @@ int wmain(int argc, wchar_t **argv)
         WritePrivateProfileStringW(L"KEYBOARD", L"GEAR UP", L"Kb.18", smtIni.c_str());        // E
         WritePrivateProfileStringW(L"KEYBOARD", L"GEAR R", L"Kb.207", smtIni.c_str());        // End, an extended key
         WritePrivateProfileStringW(L"KEYBOARD", L"GEAR 1", L"Kb.42+Kb.2", smtIni.c_str());    // a combination: left
+        WritePrivateProfileStringW(L"KEYBOARD", L"GEAR 3", L"Kb.80", smtIni.c_str());         // Num 2, the default of GearDown, which goes
+        WritePrivateProfileStringW(L"KEYBOARD", L"GEAR 4", L"Kb.83", smtIni.c_str());         // Num .
         WritePrivateProfileStringW(L"KEYBOARD", L"SHOW MENU", L"Kb.211", smtIni.c_str());     // not an action of the mod's
         WritePrivateProfileStringW(L"CONTROLLER", L"GEAR DOWN", L"Joy.0.Btn.5", smtIni.c_str());
         WritePrivateProfileStringW(L"OPTIONS", L"REQUIRE CLUTCH", L"true", smtIni.c_str());
@@ -3886,11 +4044,12 @@ int wmain(int argc, wchar_t **argv)
         std::wstring taken, left;
         const int bound = SmtIniImport(smtIni, b, o, taken, left);
         DeleteFileW(smtIni.c_str());
-        Check(bound == 2 && b.slot[kActUp][0].code == 'E' && b.slot[kActGearR][0].code == VK_END && b.slot[kActDown][0].code == VK_NUMPAD2 &&
+        Check(bound == 4 && b.slot[kActUp][0].code == 'E' && b.slot[kActGearR][0].code == VK_END && b.slot[kActGear3][0].code == VK_NUMPAD2 &&
+                  b.slot[kActGear4][0].code == VK_DECIMAL && !b.slot[kActDown][0].kind && b.slot[kActGearN][0].code == VK_NUMPAD5 &&
                   !b.slot[kActGear1][0].kind && o.requireClutch && o.skipNeutral && !o.requireGearHeld && wcsstr(left.c_str(), L"GEAR 1") &&
-                  wcsstr(taken.c_str(), L"GEAR UP"),
-              "gearbox: SMT.ini's keyboard bindings taken over by their scan codes (an extended key too), a combination left, its controller section "
-              "and menu key left, its options taken");
+                  wcsstr(left.c_str(), L"the default of GearDown") && wcsstr(taken.c_str(), L"GEAR UP"),
+              "gearbox: SMT.ini's keyboard bindings taken over by their scan codes (an extended key and the number pad too), a default on a key "
+              "it took dropped, a combination left, its controller section and menu key left, its options taken");
     }
     printf(g_failed ? "SETTINGS TEST FAILED (%d)\n" : "SETTINGS TEST OK\n", g_failed);
     return g_failed ? 1 : 0;

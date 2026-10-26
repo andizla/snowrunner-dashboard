@@ -21,7 +21,9 @@ HWND g_window = nullptr;
 Wheel g_wheels[kInputDevicesMost] = {};
 void (*g_log)(const wchar_t *) = nullptr;
 ULONGLONG g_lookAt = 0;          // when to list the controllers again while one is missing
-const ULONGLONG kLookAgainMs = 5000;
+const ULONGLONG kLookAgainMs = 5000, kLookLaterMs = 30000; // every 5 s at first, every 30 s after kLookMisses looks that found it not
+const int kLookMisses = 3;       // (listing them can take a few hundred milliseconds on the mod's thread; review 8, W8)
+int g_lookMisses = 0;
 
 void Say(const wchar_t *fmt, ...)
 {
@@ -158,14 +160,26 @@ void InputSnapshotRead(InputSnapshot &s, bool front, uint32_t pad)
     memset(&s, 0, sizeof s);
     s.front = front;
     s.pad = pad;
+    // the hidden window's messages: Windows waits on a top-level window's answer to some of them (a broadcast), so
+    // its queue is emptied once a pass (review 8, W4)
+    if (g_window)
+    {
+        MSG msg;
+        while (PeekMessageW(&msg, g_window, 0, 0, PM_REMOVE)) DispatchMessageW(&msg);
+    }
     if (front)
         for (int vk = 1; vk < 256; vk++) s.key[vk] = (GetAsyncKeyState(vk) & 0x8000) ? 1 : 0;
     if (!g_input) return;
     const ULONGLONG now = GetTickCount64();
     if (now >= g_lookAt)
     {
-        g_lookAt = now + kLookAgainMs;
-        if (AnyMissing()) LookForDevices();
+        if (AnyMissing())
+        {
+            LookForDevices();
+            g_lookMisses = AnyMissing() ? g_lookMisses + 1 : 0;
+        }
+        else g_lookMisses = 0;
+        g_lookAt = now + (g_lookMisses >= kLookMisses ? kLookLaterMs : kLookAgainMs);
     }
     for (int i = 0; i < kInputDevicesMost; i++)
     {

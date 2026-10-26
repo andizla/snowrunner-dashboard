@@ -28,6 +28,7 @@ static volatile float g_power = 0.0f;
 // call is counted, the game's function not called, and each kind is told once a truck (g_told, cleared when another
 // truck is held) through g_new, which the mod's thread logs.
 static volatile LONG g_policy = kPolicyPass, g_brakeStand = 0, g_told = 0, g_new = 0;
+static volatile LONG g_brakeDoor = -1; // the hook (kFn...) that carried the last reverse refused on the brake (review 8, W3)
 static void *volatile g_heldVehicle = nullptr;
 static volatile LONG g_refused[kFnCount] = {};
 
@@ -46,7 +47,11 @@ static bool Refused(int fn, void *vehicle, int32_t gear = 0)
     {
         // reverse at whichever door it comes: ShiftToReverse, or a gear below 0 through AutoOffAndShift or ShiftGear
         refuse = fn == kFnShiftToReverse || ((fn == kFnShiftGear || fn == kFnAutoOffAndShift) && gear < 0);
-        if (refuse) Tell((LONG)kRefusedBrakeReverse);
+        if (refuse)
+        {
+            InterlockedExchange(&g_brakeDoor, fn);
+            Tell((LONG)kRefusedBrakeReverse);
+        }
     }
     if (!refuse) return false;
     InterlockedIncrement(&g_refused[fn]);
@@ -116,6 +121,8 @@ void GearboxPolicy(int policy, void *vehicle, bool brakeStand)
 }
 
 int GearboxPolicyNow() { return (int)g_policy; }
+
+int GearboxBrakeDoor() { return (int)g_brakeDoor; }
 
 bool GearboxHoldingNow() { return g_policy != kPolicyPass; }
 
