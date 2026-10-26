@@ -72,8 +72,6 @@ struct GaugeSettings
     int input;               // Input: what the pedal is: 0 a wheel's pedals, 1 a pad's trigger, 2 keys. The mod's automatic kicks down by it
     bool powertrain;         // Powertrain: the engine's torque (its curve, the cold oil, the boost) and the converter's handed to the game
     int engineShare;         // EngineShare: how much of the mod's engine the game gets with it, in percent: 0 the game's own pull, 100 the mod's
-    bool revCap;             // RevCap: a test switch: with the mod's engine the pull ends at 95 percent of the way from idle to the red zone,
-                             // as it did until 0.15.10, and the automatic shifts up there floored
     float rollWarnDeg, rollDangerDeg; // RollWarnDeg, RollDangerDeg: degrees of lean to the side from which the tilt lamp is amber, and red
     float pitchDangerDeg;    // PitchDangerDeg: degrees up or down a slope from which the tilt lamp is red
     float warmUpMinutes;     // WarmUpMinutes: minutes a cold engine takes from 15 C to 85 C when it is driven as usual
@@ -111,7 +109,6 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.gearbox = kGearboxGame;
     s.powertrain = false;
     s.engineShare = 50;
-    s.revCap = false;
     s.rollWarnDeg = 15.0f;
     s.rollDangerDeg = 25.0f;
     s.pitchDangerDeg = 35.0f;
@@ -135,13 +132,13 @@ inline void SettingsDefaults(GaugeSettings &s)
 // The range of each number: what the ini and the tab hold the settings to. A tinted face stops at 0.85, as a darker
 // one is the solid style. The tilt lamp's angles are degrees, the coolant's three times and the oil's warm-up minutes,
 // the outside temperature and the oil's warning degrees C, the speed of the radiator's full airflow km/h, the two
-// damage rates percent a minute, the boost bar (the dial ends at 2), an engine's full pull a share of a gear's top.
+// damage rates percent a minute, the boost bar (the dial ends at 2), an engine's torque a share of its own.
 static const float kFaceOpacityMax = 0.85f, kScaleMin = 0.4f, kScaleMax = 3.0f, kOpacityMin = 0.1f, kOffsetMax = 4000.0f;
 static const float kIdleRange[2] = { 300.0f, 3000.0f }, kRedlineRange[2] = { 1000.0f, 12000.0f }, kMaxRpmRange[2] = { 1500.0f, 15000.0f },
                    kSpeedMaxRange[2] = { 40.0f, 300.0f }, kTiltRange[2] = { 1.0f, 89.0f }, kBoostRange[2] = { 0.3f, 2.0f };
 static const float kWarmUpRange[2] = { 0.5f, 60.0f }, kOverheatRange[2] = { 0.25f, 60.0f }, kCoolDownRange[2] = { 1.0f, 240.0f },
                    kAmbientRange[2] = { -40.0f, 50.0f }, kGearHoldRange[2] = { 1.0f, 3.0f }, kAirFullRange[2] = { 10.0f, 80.0f }, kDamageRange[2] = { 0.0f, 100.0f },
-                   kOilWarmUpRange[2] = { 1.0f, 60.0f }, kOilWarnRange[2] = { 100.0f, 150.0f }, kFullPullRange[2] = { 0.92f, 0.98f }, kTorqueShareRange[2] = { 0.10f, 1.00f };
+                   kOilWarmUpRange[2] = { 1.0f, 60.0f }, kOilWarnRange[2] = { 100.0f, 150.0f }, kTorqueShareRange[2] = { 0.10f, 1.00f };
 
 // The temperatures in C the coolant's three times are measured between: WarmUpMinutes from kTempOutside outside up
 // to kTempWarm, OverheatMinutes from kTempHot into the red zone at kTempRed, CoolDownMinutes from kTempHot down to
@@ -269,7 +266,7 @@ struct GaugeView { bool show, demo; int hidden; GaugeState st; int engineDamage,
                    float ambientDay, ambientNight, hour; // the map's day and night (with mapOwn), the hour of the game's day (-1 not known)
                    char gearbox[96]; float gearHold; bool gearHoldOwn; // the driven truck's gearbox (its key, "" for none), the seconds each gear is held going up with the mod's engine, and whether its file sets them
                    int autoClass; bool autoByWeight; float massKg; // the class the automatic goes by for it, whether by its weight (no scales of its own), and that weight (0 not read)
-                   char engine[96]; bool engineOwn, engineCustom; float enginePeakRpm; int engineAspiration; float engineFullPull, engineTorque, engineFigure; // the driven truck's engine ("" not known): its own profile or not, a whole curve of its own in it, the peak torque's speed in force, turbo or not, the share of a gear's top it keeps its full pull to, the share of its torque the truck gets (1 none set), and the engine's torque figure from the game's files (0 not read)
+                   char engine[96]; bool engineOwn, engineCustom; float enginePeakRpm; int engineAspiration; float engineTorque, engineFigure; // the driven truck's engine ("" not known): its own profile or not, a whole curve of its own in it, the peak torque's speed in force, turbo or not, the share of its torque the truck gets (1 none set), and the engine's torque figure from the game's files (0 not read)
                    float engineIdle, engineRedline; float engineCurve[kEnginePlot]; }; // the slider's range, and the torque in force from idle to the tachometer's top, for the tab's plot
 
 LONG SettingsGet(GaugeSettings &out);       // the settings in force (any thread); returns their turn, for SettingsPut
@@ -283,7 +280,6 @@ void MapAmbientSet(float c);                 // the tab's slider: the outside te
 void GearHoldSet(float seconds);            // the tab's slider: the seconds each gear of the driven truck's gearbox is held going up
 void EngineProfileSet(float peakRpm, int aspiration); // the tab's Engine section: the driven truck's engine's profile into its file
 void EngineProfileDrop();                   // the tab's button: the driven truck's engine gives its profile up
-void EngineFullPullSet(float share);        // the tab's slider: how far toward a gear's top the driven truck's engine keeps its full pull (FullPull)
 void EngineTorqueSet(int percent);          // the tab's slider: how much of its torque the driven truck's engine gives the truck (Torque), in percent
 void DamageTestAsk(int points);             // the tab's test buttons: the mod adds this much to the driven truck's engine damage on its next pass
 void ViewGet(GaugeView &out);               // what to draw (any thread)

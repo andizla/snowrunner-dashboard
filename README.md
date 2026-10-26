@@ -73,7 +73,6 @@ The Gameplay tab of the NEXT GEN menu edits every setting while you play. F2 ope
 | What you drive with, for the mod's automatic: a wheel's pedals, a pad or the keyboard (see below) | `Input` 0, 1 or 2 | a wheel's pedals |
 | The truck pulls with the mod's engine and converter (see below) | `Powertrain` 0 or 1 | off |
 | How much of the mod's engine the game gets with `Powertrain=1`, from 0 to 100 percent: 0 leaves the game's own pull | `EngineShare` | 50 |
-| The pull ends at 95 percent of the way from idle to the red zone. For a truck that shoots from 40 to 80 km/h on its own | `RevCap` | 0 |
 | Percent of the engine lost a minute at 125 C, and by a cold engine floored at the red zone at 0 C, each from 0 to 100 | `HotDamagePercentPerMinute`, `ColdDamagePercentPerMinute` | 10, 5 |
 | How loud the turbo's flutter and the oil warning are, from 0 to 100. 0 = no sound | `SoundVolume` | 50 |
 | The sounds without the cluster | `SoundsOnly` 0 or 1 | off |
@@ -163,8 +162,6 @@ The game's engine gives all of its torque with the wheels at about half of the g
 
 `EngineShare` sets how much of the mod's engine the game gets: at 50, the default, the truck pulls half way between the game's own engine and the mod's, and at 100 all of the mod's. Lower it where a truck pulls too hard.
 
-`RevCap=1`, the tab's "Rev cap 95%" under Engine to the game, off by default: with the mod's engine the pull ends at 95 percent of the way from idle to the red zone and the automatic shifts up there floored. For a truck that shoots from 40 to 80 km/h on its own, a game bug that RLM-like engines and this mod make worse. Try the cap first, then the engine's `Torque` below.
-
 With the engine handed over, the mod's automatic shifts as a truck automatic does:
 
 - floored, it takes each gear to the red zone, or shifts up sooner where the next gear already pulls harder, by the engine's power (a profile that still gains power up to the red zone, as one built from a peak does, is revved near the top): the game's pull falls away toward a gear's top whatever the engine, so at a lower `EngineShare` the truck would otherwise hang short of the red zone; at a lighter foot it shifts up about as far along as the pedal is down: a fifth of the pedal, a fifth of the way from idle to there (a diesel at about 1500 rpm, as a road car's automatic shifts), but never under 0.8 of the engine's peak torque speed, where it begins to pull (see the engine profiles below);
@@ -180,7 +177,6 @@ Each engine can have a profile of its own, in its own file `Gauges\engines\<name
 - `PeakTorqueRpm`: the engine speed of its peak torque, as its maker gives it (most engines' figures are published). The torque curve is built around it: a turbo diesel's broad plateau, from 0.85 to 1.5 times that speed, with three fifths of the torque at half of it and four fifths left at the red zone; a naturally aspirated engine's narrower hump around the peak. Without it the engine pulls by its class's curve;
 - `Aspiration`: 0 turbo, 1 naturally aspirated. Naturally aspirated has no boost, so no boost dial and no turbo sounds, and all of its torque at once with the pedal;
 - `TorqueCurve`: a whole curve of its own, written by hand as `x:y` points (`0.3:0.7,0.5:1,1:0.75`, x the engine speed over the red zone's, y the torque over its most), in place of the one from the peak;
-- `FullPull`: how far toward a gear's top, in percent, the engine keeps all its torque floored before it fades out (92 to 98; 92 when not set). The tab's "Full pull up to" shows it in rpm. 92 suits a diesel, whose governor cuts the fuel from its rated speed; a petrol engine that makes its power up to its red zone can keep it to 96 to 98, and floored the automatic then shifts up later too, where the next gear pulls more. Near a gear's top the torque factor gets large for it (about 10 times the game's own at 95, 24 at 98): lower it where a truck surges at the top of a gear.
 - `Torque`: how much of its torque the truck gets with the engine handed to the game, in percent (10 to 100; 100 when not set). The tab's "Torque" slider. Lower it for an RLM-like engine with several times a stock engine's torque: at 25 an engine with four times the torque pulls like the stock one. The set-off gear follows it.
 
 ```
@@ -192,7 +188,7 @@ Aspiration=0
 
 The scales (idle, the red zone, the tachometer's top) stay the truck's. Each engine's profile goes with the engine, so a truck fitted with another engine in the garage pulls by that one's. A file written or changed by hand counts from the tab's reload button, or the next time the truck is driven.
 
-The mod does it through the game's torque factor, the share of its torque the game leaves a damaged engine: it writes the factor on every pass, at most six times the game's own, or more for an engine whose own `FullPull` keeps its pull nearer a gear's top (the game's own with the wheels at a gear's top or past it), times the engine's `Torque` share where one is set, and gives the game its own back when the setting goes off, the engine stops, a pull test is armed or another truck is driven. The game's own share stays in it: a damaged engine pulls less, as before. The probe line "powertrain" says what is written.
+The mod does it through the game's torque factor, the share of its torque the game leaves a damaged engine: it writes the factor on every pass, at most six times the game's own (the game's own with the wheels at a gear's top or past it), times the engine's `Torque` share where one is set, and gives the game its own back when the setting goes off, the engine stops, a pull test is armed or another truck is driven. The game's own share stays in it: a damaged engine pulls less, as before. The probe line "powertrain" says what is written.
 
 The Gearbox section of the tab also has a pull test, for the engine's torque the mod will hand to the game next. Press "Test the engine's pull", then on a long flat road drive in the fourth gear or higher and floor the pedal for seven seconds. The mod holds the gear, changes the game's torque factor (what it leaves a damaged engine) for a second at a time (halved, raised by half, at three quarters) and measures how hard the truck pulls, then puts the factor back. Lifting the foot, braking or another gear stops it. The numbers go into `Gauges.log`.
 

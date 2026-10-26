@@ -971,7 +971,6 @@ struct EngineProfile
     int aspiration;
     bool custom;
     TorqueCurve curve;
-    float fullPull; // FullPull: the share of a gear's top it keeps its full pull to floored (kFullPullRange), 0 for none: kTorqueFactorMost's
     float torque;   // Torque: the share of its torque the truck gets (kTorqueShareRange), 0 for none: all of it
 };
 
@@ -1197,7 +1196,10 @@ inline float GamePull(float x) { return isfinite(x) ? SettingsRange(fminf(kGameP
 // readings, nearly all with the engine near the red zone), then down to nothing at the top, as a diesel's governor
 // cuts the fuel between its rated speed and its high idle. At the top and past it (rolling downhill) the factor is the
 // game's own: the fall would be divided by nothing there. Under half the top the game's curve is left as it is: there
-// it reads low only as the engine picks up.
+// it reads low only as the engine picks up. The roof is 6 for every engine: near a gear's top the lift divides by the
+// fitted fall, and where the fit is off a higher roof turns it into a kick (a d110 with a roof of 24 leapt at the top
+// of 2nd to 5th gear, and a tester's RLM trucks at the roof of 6, 2026-10-25). An engine with several times a stock
+// engine's torque is held back with its Torque instead.
 static const float kTorqueFactorMost = 6.0f;    // the factor written at the most, for the game's own share of 1
 static const float kTorqueFactorLeast = 0.05f;  // and at the least
 static const float kTorqueFactorStep = 0.005f;  // a change of the factor smaller than this is not written
@@ -1219,23 +1221,13 @@ inline float GameFall(float x) { return isfinite(x) ? SettingsRange(kGamePullFal
 // The factor over the game's own share, by the engine's torque curve at its speed (0 to 1), the share of it the cold
 // oil and the boost leave (limit), the pedal (the game asks the engine for that share of its torque, which it has as
 // far as the limit goes: at a light foot a turbo engine without boost gives what the pedal asks), the converter's
-// ratio, over GameFall at x; 1 (the game's own) with the wheels at the gear's top or past it.
-inline float TorqueLift(float curve, float limit, float pedal, float ratio, float x, float most = kTorqueFactorMost)
+// ratio, over GameFall at x, at most the roof of 6 (kTorqueFactorMost says why); 1 (the game's own) with the wheels at
+// the gear's top or past it.
+inline float TorqueLift(float curve, float limit, float pedal, float ratio, float x)
 {
     if (isfinite(x) && x >= 1.0f) return 1.0f;
     const float lift = curve * ratio * fminf(1.0f, limit / fmaxf(pedal, 1e-3f)) / fmaxf(GameFall(x), 1e-3f);
-    return SettingsRange(isfinite(lift) ? lift : 1.0f, kTorqueFactorLeast, most);
-}
-
-// The roof for an engine whose profile says how far toward a gear's top it keeps its full pull floored (FullPull,
-// kFullPullRange): 1 over the game's fall there, so 0.92 is the roof of 6 and 0.98 one of about 24, for a petrol engine
-// that makes its power up to its red zone (a tester's ZIL-131 shifted at about 3000 of its 3200, 2026-10-19). Near the
-// top a small error in the fitted fall times a big factor is a big error in the torque, so it is each engine's own
-// choice, and kTorqueFactorMost stays for the rest. 0: none set.
-inline float TorqueFactorMostOf(float fullPull)
-{
-    if (!(fullPull > 0.0f)) return kTorqueFactorMost;
-    return fmaxf(kTorqueFactorMost, 1.0f / GameFall(SettingsRange(fullPull, kFullPullRange[0], kFullPullRange[1])));
+    return SettingsRange(isfinite(lift) ? lift : 1.0f, kTorqueFactorLeast, kTorqueFactorMost);
 }
 
 // The lift as far as the setting hands the mod's engine to the game (EngineShare, 0 to 1): 0 leaves the game's own, 1
@@ -1296,7 +1288,7 @@ inline TorqueOrders TorqueHandStep(TorqueHand &h, bool want, uint64_t action, ui
 // at about 1500 rpm, as a car's nine-speed automatic shifts), but not under kLightPeak of the
 // engine's peak torque speed, where it begins to pull; floored where the next gear pulls more (EngineUpShare: at
 // EngineShare 50 a scout's road gearbox at 0.86 to 0.87 of a gear's top, at 100 at 0.90 to 0.92; with the roof of 6 a
-// ZIL-131's at 0.945 to 0.955, further with the engine's own FullPull), or where none does on the limiter
+// ZIL-131's at 0.945 to 0.955), or where none does on the limiter
 // (kEngineLimit). Until 0.15.10 it also went no further than kEngineUpFloored, a rule from before the fade toward a
 // gear's top was worked out, which with the roof of 6 sat just over where the next gear pulls more. Down: where the gear below would come in kEngineDownRoom under its own point up, so no shift is taken
 // back whatever the gearbox's steps, and not over idle's kEngineDownIdle (a diesel at 1000 rpm is fine).
@@ -1394,8 +1386,6 @@ struct EngineHand
     const TorqueCurve *curve;
     float top, share, launch, hold, least;
     int input; // what the pedal is (kInputWheel, kInputPad, kInputKeys): the kickdown goes by it, with the engine handed over or not
-    float most; // the torque factor's roof for the engine (TorqueFactorMostOf), 0 for kTorqueFactorMost
-    bool cap;   // RevCap, a test switch: floored, the automatic shifts up no later than kEngineUpFloored, as until 0.15.10
 };
 
 // What a gear pulls with the wheels at x of its top with the engine handed over, floored, the converter locked: the
@@ -1403,12 +1393,8 @@ struct EngineHand
 inline float EngineGearPull(const EngineHand &e, float x)
 {
     if (!e.curve) return GearPull(x);
-    return x * GamePull(x) * TorqueBlend(TorqueLift(TorqueAt(*e.curve, x, e.top), 1.0f, 1.0f, 1.0f, x, e.most > 0.0f ? e.most : kTorqueFactorMost), e.share);
+    return x * GamePull(x) * TorqueBlend(TorqueLift(TorqueAt(*e.curve, x, e.top), 1.0f, 1.0f, 1.0f, x), e.share);
 }
-
-// The rev cap (RevCap, a test switch): from this share of the way from idle to the red zone the mod's engine hands the
-// game its own pull, and floored the automatic shifts up no later than here (kEngineUpFloored), as until 0.15.10.
-inline bool RevCapped(const GaugeScale &k, float rpm) { return k.redline > k.idle && isfinite(rpm) && (rpm - k.idle) / (k.redline - k.idle) >= kEngineUpFloored; }
 
 // x of a gear's top where the next gear, r times as tall, pulls kShiftPullGain more with the engine handed over: the
 // game's curve falls toward a gear's top whatever the factor, so floored a truck may never reach the schedule's
@@ -1433,7 +1419,6 @@ inline float GearboxUpPoint(const TruckRaw &t, const GaugeScale &k, int gear, fl
     {
         const float least = fmaxf(engine.least, k.idle);
         float hard = engine.curve && low > 0.0f && high > 0.0f ? EngineUpShare(engine, high / low) * k.redline : GearboxPoint(k, kEngineUpFloored);
-        if (engine.cap) hard = fminf(hard, GearboxPoint(k, kEngineUpFloored)); // RevCap: the rule from before 0.15.10
         hard = fmaxf(hard, least);
         return fmaxf(k.idle + (hard - k.idle) * SettingsRange(feel, 0.0f, 1.0f), least);
     }

@@ -164,7 +164,6 @@ static void OnPage()
     if (act & kPageGearHold) GearHoldSet(st.gearHold);
     if (act & kPageEngineSet) EngineProfileSet(st.enginePeak, st.engineAspiration);
     if (act & kPageEngineDrop) EngineProfileDrop();
-    if (act & kPageEngineFull) EngineFullPullSet(st.engineFullPull);
     if (act & kPageEngineTorque) EngineTorqueSet(st.engineTorque);
     if (act & kPageDefaults) SettingsReset();
     if (act & kPageReload) SettingsReload();
