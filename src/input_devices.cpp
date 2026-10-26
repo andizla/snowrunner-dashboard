@@ -16,14 +16,23 @@ struct Wheel
     bool known; // instance holds one: the place is this wheel's
     int buttons, povs, axes;
 };
+// All of this but the latch and the counts is the poll thread's own.
 IDirectInput8W *g_input = nullptr;
 HWND g_window = nullptr;
 Wheel g_wheels[kInputDevicesMost] = {};
 void (*g_log)(const wchar_t *) = nullptr;
+uint32_t (*g_pad)() = nullptr;
 ULONGLONG g_lookAt = 0;          // when to list the controllers again while one is missing
 const ULONGLONG kLookAgainMs = 5000, kLookLaterMs = 30000; // every 5 s at first, every 30 s after kLookMisses looks that found it not
-const int kLookMisses = 3;       // (listing them can take a few hundred milliseconds on the mod's thread; review 8, W8)
+const int kLookMisses = 3;       // (listing them can take a few hundred milliseconds; review 8, W8: now on the poll thread)
 int g_lookMisses = 0;
+const DWORD kPollMs = 5;         // the poll thread reads the controls about 200 times a second
+// shared with the passes: the latch (InputLatch) and the last reading, under g_latchLock
+SRWLOCK g_latchLock = SRWLOCK_INIT;
+InputSnapshot g_latched = {}, g_now = {};
+volatile LONG g_found = 0, g_stop = 0;
+HANDLE g_thread = nullptr, g_ready = nullptr;
+bool g_started = false;          // DirectInput came up (InputDevicesStart's answer)
 
 void Say(const wchar_t *fmt, ...)
 {
@@ -109,66 +118,22 @@ bool AnyMissing()
 }
 }
 
-bool InputDevicesStart(void (*log)(const wchar_t *line))
-{
-    g_log = log;
-    if (g_input) return true;
-    const HINSTANCE self = (HINSTANCE)&__ImageBase;
-    // DirectInput wants a window of the process for a device's cooperative level: a hidden one of its own
-    WNDCLASSW wc = {};
-    wc.lpfnWndProc = DefWindowProcW;
-    wc.hInstance = self;
-    wc.lpszClassName = L"NextGenGameplayInput";
-    RegisterClassW(&wc);
-    g_window = CreateWindowExW(WS_EX_TOOLWINDOW, wc.lpszClassName, L"", WS_POPUP, 0, 0, 0, 0, nullptr, nullptr, self, nullptr);
-    if (!g_window || FAILED(DirectInput8Create(self, DIRECTINPUT_VERSION, IID_IDirectInput8W, (void **)&g_input, nullptr)) || !g_input)
-    {
-        Say(L"input: DirectInput could not start, so wheels and shifters are not read (keys and the pad are)");
-        g_input = nullptr;
-        return false;
-    }
-    LookForDevices();
-    if (!InputDevicesFound()) Say(L"input: no wheel or shifter found (the XInput pads are read on their own)");
-    g_lookAt = GetTickCount64() + kLookAgainMs;
-    return true;
-}
-
-void InputDevicesStop()
-{
-    for (Wheel &w : g_wheels)
-        if (w.device)
-        {
-            w.device->Unacquire();
-            w.device->Release();
-        }
-    memset(g_wheels, 0, sizeof g_wheels);
-    if (g_input) g_input->Release();
-    g_input = nullptr;
-    if (g_window) DestroyWindow(g_window);
-    g_window = nullptr;
-}
-
-int InputDevicesFound()
+// The controllers being read (the poll thread's count, for any thread).
+static int WheelsRead()
 {
     int n = 0;
     for (const Wheel &w : g_wheels) n += w.device != nullptr;
     return n;
 }
 
-void InputSnapshotRead(InputSnapshot &s, bool front, uint32_t pad)
+// One reading of the controls on the poll thread: every key, the pad, and each controller (its loss and the looks for
+// the missing ones handled here).
+static void PollOnce(InputSnapshot &s)
 {
     memset(&s, 0, sizeof s);
-    s.front = front;
-    s.pad = pad;
-    // the hidden window's messages: Windows waits on a top-level window's answer to some of them (a broadcast), so
-    // its queue is emptied once a pass (review 8, W4)
-    if (g_window)
-    {
-        MSG msg;
-        while (PeekMessageW(&msg, g_window, 0, 0, PM_REMOVE)) DispatchMessageW(&msg);
-    }
-    if (front)
-        for (int vk = 1; vk < 256; vk++) s.key[vk] = (GetAsyncKeyState(vk) & 0x8000) ? 1 : 0;
+    s.front = true;
+    for (int vk = 1; vk < 256; vk++) s.key[vk] = (GetAsyncKeyState(vk) & 0x8000) ? 1 : 0;
+    s.pad = g_pad ? g_pad() : 0;
     if (!g_input) return;
     const ULONGLONG now = GetTickCount64();
     if (now >= g_lookAt)
@@ -213,4 +178,108 @@ void InputSnapshotRead(InputSnapshot &s, bool front, uint32_t pad)
         const LONG axes[kInputAxesMost] = { js.lX, js.lY, js.lZ, js.lRx, js.lRy, js.lRz, js.rglSlider[0], js.rglSlider[1] };
         for (int a = 0; a < kInputAxesMost; a++) d.axis[a] = (float)axes[a] / 65535.0f;
     }
+}
+
+// The poll thread: the hidden window DirectInput wants for a device's cooperative level, DirectInput and the
+// controllers, all made and read here; every kPollMs the window's queue emptied (Windows waits on a top-level window's
+// answer to a broadcast; review 8, W4) and the controls read into the latch. g_ready is set once the first reading is
+// in, so a pass right after the start has one.
+static DWORD WINAPI PollThread(void *)
+{
+    const HINSTANCE self = (HINSTANCE)&__ImageBase;
+    WNDCLASSW wc = {};
+    wc.lpfnWndProc = DefWindowProcW;
+    wc.hInstance = self;
+    wc.lpszClassName = L"NextGenGameplayInput";
+    RegisterClassW(&wc);
+    g_window = CreateWindowExW(WS_EX_TOOLWINDOW, wc.lpszClassName, L"", WS_POPUP, 0, 0, 0, 0, nullptr, nullptr, self, nullptr);
+    if (!g_window || FAILED(DirectInput8Create(self, DIRECTINPUT_VERSION, IID_IDirectInput8W, (void **)&g_input, nullptr)) || !g_input)
+    {
+        Say(L"input: DirectInput could not start, so wheels and shifters are not read (keys and the pad are)");
+        g_input = nullptr;
+    }
+    else
+    {
+        g_started = true;
+        LookForDevices();
+        if (!WheelsRead()) Say(L"input: no wheel or shifter found (the XInput pads are read on their own)");
+        g_lookAt = GetTickCount64() + kLookAgainMs;
+    }
+    bool first = true;
+    while (!g_stop)
+    {
+        if (g_window)
+        {
+            MSG msg;
+            while (PeekMessageW(&msg, g_window, 0, 0, PM_REMOVE)) DispatchMessageW(&msg);
+        }
+        InputSnapshot now;
+        PollOnce(now);
+        InterlockedExchange(&g_found, WheelsRead());
+        AcquireSRWLockExclusive(&g_latchLock);
+        if (first) g_latched = now;
+        else InputLatch(g_latched, now);
+        g_now = now;
+        ReleaseSRWLockExclusive(&g_latchLock);
+        if (first)
+        {
+            first = false;
+            SetEvent(g_ready);
+        }
+        Sleep(kPollMs);
+    }
+    for (Wheel &w : g_wheels)
+        if (w.device)
+        {
+            w.device->Unacquire();
+            w.device->Release();
+        }
+    memset(g_wheels, 0, sizeof g_wheels);
+    InterlockedExchange(&g_found, 0);
+    if (g_input) g_input->Release();
+    g_input = nullptr;
+    if (g_window) DestroyWindow(g_window);
+    g_window = nullptr;
+    return 0;
+}
+
+bool InputDevicesStart(void (*log)(const wchar_t *line), uint32_t (*pad)())
+{
+    g_log = log;
+    g_pad = pad;
+    if (g_thread) return g_started;
+    g_stop = 0;
+    g_ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    g_thread = CreateThread(nullptr, 0, PollThread, nullptr, 0, nullptr);
+    if (!g_thread)
+    {
+        Say(L"input: the poll thread could not start, so nothing is read");
+        return false;
+    }
+    WaitForSingleObject(g_ready, 5000);
+    return g_started;
+}
+
+void InputDevicesStop()
+{
+    if (!g_thread) return;
+    InterlockedExchange(&g_stop, 1);
+    WaitForSingleObject(g_thread, 5000);
+    CloseHandle(g_thread);
+    g_thread = nullptr;
+    if (g_ready) CloseHandle(g_ready);
+    g_ready = nullptr;
+    g_started = false;
+}
+
+int InputDevicesFound() { return (int)g_found; }
+
+void InputSnapshotRead(InputSnapshot &s, bool front)
+{
+    AcquireSRWLockExclusive(&g_latchLock);
+    s = g_latched;
+    g_latched = g_now; // the latch starts again from the controls as they are
+    ReleaseSRWLockExclusive(&g_latchLock);
+    s.front = front;
+    if (!front) memset(s.key, 0, sizeof s.key);
 }

@@ -1950,6 +1950,8 @@ struct TruckWatch
     ClutchHeat clutchHeat;      // each kind of truck's clutch heat, and what its burn owes the gearbox (ClutchBurn)
     int burnPoints;             // the gearbox's points posted for the clutch's burn since it began
     int gearboxDamageSeen;      // the gearbox's damage as read on the last pass, -1 not yet (a fall is a repair)
+    StallWrite stallWrite;      // what the mod writes into the game's stall seconds (StallStep)
+    bool lugSaid;               // the lugging was told in the log
     bool floorPan;              // the engine box's line after its film title's damage landed (EngineWarn)
     bool lockPress[kLocks];     // DiffLock and Awd pressed on this pass (at every level of Gearbox)
     LocksWatch locks;           // what the mod's keys wrote to the locks (LocksStep)
@@ -2546,7 +2548,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             const bool brakeStand = w.pos.pos == kPosA && fabsf(boxTruck.speed) < kStandStill && TruckBrake(raw) > 0.05f;
             GearboxPolicy(own ? kPolicyAll : kPolicyBrakeReverse, (void *)w.refs.vehicle, brakeStand, (const volatile uint8_t *)(w.refs.action + 0x3C));
         }
-        bool shiftAsk = false;
+        bool shiftAsk = false, stallOrdered = false;
         int shiftTo = 0;
         if (w.take.driving && !testing)
         {
@@ -2556,7 +2558,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             const GearboxPosOrders box = GearboxPosStep(w.pos, options, w.actions, boxTruck, autoGear);
             if (box.flagDown) m.put(w.refs.action + 0x3C, (uint8_t)0);
             if (box.setPower) m.put(w.refs.action + 0x38, box.power);
-            if (box.stall) m.put(w.refs.vehicle + 0x11C, kStallSeconds);
+            stallOrdered = box.stall; // ramped into the game's stall seconds below (StallStep), so its notice shows
             // the stall the model ordered costs the gearbox (StallDamagePercent, with Damage), dealt on the game's thread;
             // a stall of the game's own does not
             const wchar_t *stallCost = L"";
@@ -2574,6 +2576,19 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             else if (box.why[0]) Log(L"gearbox: %S", box.why);
             shiftAsk = box.setGear;
             shiftTo = box.gear;
+        }
+        // the game's stall seconds: a stall the gearbox ordered ramped in over kStallRamp, and while the automatic clutch
+        // lugs the engine at speed in too high a gear, raised by dt each pass and cleared when it recovers, so the game
+        // shows its own "engine stalling" notice and kills the engine by its rule (the user's hill test, 27 October)
+        {
+            const float stallTo = StallStep(w.stallWrite, stallOrdered, w.clutch.lugging, TruckEngineOn(raw), dt);
+            if (stallTo >= 0.0f) m.put(w.refs.vehicle + 0x11C, stallTo);
+            if (w.clutch.lugging != w.lugSaid)
+            {
+                w.lugSaid = w.clutch.lugging;
+                Log(w.lugSaid ? L"clutch: the engine lugs in gear %d at %.0f km/h, the game's stall seconds rise" : L"clutch: the engine is back above idle, the stall seconds cleared",
+                    raw.gearEngaged, fabsf(raw.speed) * 3.6f);
+            }
         }
         // a stall's gearbox damage: posted to the game's thread one stall at a time, and what came of it told; the
         // stalls owed go when the share has gone to 0 meanwhile (review 10, D5)
@@ -2873,7 +2888,7 @@ static DWORD WINAPI Run(void *)
     }
     LogSettings(s);
     BindingsLog(binds);
-    InputDevicesStart([](const wchar_t *line) { Log(L"%s", line); });
+    InputDevicesStart([](const wchar_t *line) { Log(L"%s", line); }, PadButtons);
     if (s.probe) PlacesHarvest(stamp);
     Log(g_overlayOk ? L"overlay: the cluster and the Gameplay tab of the NEXT GEN menu are drawn by the mod's own overlay"
                     : L"overlay: the overlay did not start (the lines above say why), so nothing is drawn");
@@ -3014,7 +3029,7 @@ static DWORD WINAPI Run(void *)
         // that reaches reverse, the locks' at every level, and none goes down while the menu is open or a capture runs
         {
             static InputSnapshot snap, seen;
-            InputSnapshotRead(snap, front, PadButtons());
+            InputSnapshotRead(snap, front); // what was down since the last pass, from the poll thread (a quick tap is not lost)
             seen = InputFrontOnly(snap);
             const ULONGLONG bindNow = GetTickCount64();
             bool bindsChanged = false;

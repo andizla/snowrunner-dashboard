@@ -195,6 +195,36 @@ struct InputSnapshot
     InputDevice device[kInputDevicesMost];
 };
 
+// The latch for taps shorter than a pass (the user's hill test, 27 October: a downshift tapped too fast was missed):
+// a poll thread reads the controls about 200 times a second and folds each reading (now) into latched, which the pass
+// takes and starts again from the controls as they are (InputDevices). A key, pad button or device button down at any
+// poll since the last pass counts as down on it, and a POV direction seen since then is kept over a centred hat; the
+// axes and which devices are there are as now. So a tap between two passes gives one press, and two taps between
+// two passes give one press too (nobody shifts twice in 50 ms on purpose).
+inline void InputLatch(InputSnapshot &latched, const InputSnapshot &now)
+{
+    latched.front = now.front;
+    for (int vk = 0; vk < 256; vk++) latched.key[vk] |= now.key[vk];
+    latched.pad |= now.pad;
+    for (int i = 0; i < kInputDevicesMost; i++)
+    {
+        InputDevice &l = latched.device[i];
+        const InputDevice &n = now.device[i];
+        if (!n.present || !l.present)
+        {
+            l = n; // gone, or come: nothing of the old one carries over
+            continue;
+        }
+        l.buttons = n.buttons;
+        l.povs = n.povs;
+        l.axes = n.axes;
+        for (int b = 0; b < kInputButtonsMost; b++) l.button[b] |= n.button[b];
+        for (int p = 0; p < kInputPovsMost; p++)
+            if (n.pov[p] <= 36000 || l.pov[p] > 36000) l.pov[p] = n.pov[p];
+        for (int a = 0; a < kInputAxesMost; a++) l.axis[a] = n.axis[a];
+    }
+}
+
 // Whether a POV reading points in a direction: within 45 degrees of it, so a diagonal counts for both of its sides,
 // as on a d-pad.
 inline bool PovPoints(uint32_t reading, int direction)

@@ -21,9 +21,54 @@ enum { kPosA, kPosGear, kPosN, kPosR, kPosH, kPosLowMinus, kPosLow, kPosLowPlus,
 // drive through L- and L+ with Gearbox=0 confirms them in the probe's SetPowerFactor line (review 7, R8).
 static const float kLowRangePower[3] = { 0.20f, 0.45f, 1.00f };
 static const float kLowMinusUnder = 0.325f, kLowUnder = 0.725f; // a factor in gear 1 under these is L-, and L (truck.h)
-// What a shift without the clutch writes into the truck's stall seconds (vehicle + 0x11C): the game kills an engine
-// there from 1.4 on, as SMT's 5 does.
-static const float kStallSeconds = 5.0f;
+// What a shift without the clutch brings the truck's stall seconds to (vehicle + 0x11C): the game kills an engine there
+// from 1.4 on (SMT writes 5 at once).
+static const float kStallSeconds = 1.5f;
+// The stall is ramped from 0 to kStallSeconds over kStallRamp seconds (gauges.cpp), so the game's own "engine stalling"
+// notice shows as it does when the game stalls an engine itself (the user's hill test, 27 October; a drive confirms
+// the notice), where 5 at once killed the engine without it.
+static const float kStallRamp = 0.3f;
+
+// What the mod writes into the game's stall seconds from pass to pass: a stall ordered (RequireClutch) ramped from 0
+// to kStallSeconds over kStallRamp; while the automatic clutch lugs the engine at speed (ClutchModel::lugging), its own
+// seconds rising by dt as the game's would, and 0 once, the moment the engine is back above idle; nothing with the
+// engine off (it died, or was never running). StallStep's answer is the seconds to write on this pass, below 0 none.
+struct StallWrite
+{
+    bool ramping;
+    float ramp; // seconds into the ramp
+    float lug;  // the seconds the lugging has raised
+};
+inline float StallStep(StallWrite &w, bool ordered, bool lugging, bool engineOn, float dt)
+{
+    if (!engineOn)
+    {
+        w = StallWrite{};
+        return -1.0f;
+    }
+    if (ordered)
+    {
+        w.ramping = true;
+        w.ramp = 0.0f;
+    }
+    if (w.ramping)
+    {
+        w.ramp += dt;
+        if (w.ramp >= kStallRamp) w.ramping = false;
+        return fminf(w.ramp / kStallRamp, 1.0f) * kStallSeconds;
+    }
+    if (lugging)
+    {
+        w.lug += dt;
+        return w.lug;
+    }
+    if (w.lug > 0.0f)
+    {
+        w.lug = 0.0f;
+        return 0.0f;
+    }
+    return -1.0f;
+}
 static const float kPowerStep = 0.005f;   // a power factor this close to the one wanted is left as it is
 static const float kStandStill = 0.5f;    // m/s under which the truck stands, for the setting off in A
 static const float kSetOffPedal = 0.1f;   // the pedal over which a truck standing in N in A sets off in the first gear

@@ -2454,6 +2454,25 @@ int main(int argc, char **argv)
                   "clutch heat from ClutchStep's states: a start in first stays under a tenth of the burn point; floored in third with the clutch held in its "
                   "bite it heats more than ten times as much, past 0.6 of the burn point; let up and locked it only cools");
         }
+        // the automatic clutch at speed (the user's hill test, 27 October): from kAutoLockKmh up it stays locked, and with
+        // the engine held under its idle speed in a high gear it lugs (the game's stall seconds rise, gauges.cpp); back
+        // above idle it does not; in the slow band it slips as before
+        {
+            auto at = [&](float kmh, float inputShare) {
+                TruckRaw t = c;
+                t.gear = t.gearEngaged = 4;
+                t.speed = kmh / 3.6f;
+                for (int i = 0; i < t.wheels; i++) t.spin[i] = TruckGearTop(t, 4) * inputShare * k.idle / k.redline;
+                ClutchModel cm = {};
+                for (int i = 0; i < 10; i++) ClutchStep(cm, t, k, curve, 0.0f, ThrottleShape(1.0f), 1.0f, true, kDt);
+                return cm;
+            };
+            const ClutchModel lugging = at(20.0f, 0.6f), pulling = at(20.0f, 1.5f), crawling = at(3.0f, 0.3f);
+            Check(lugging.locked && lugging.lugging && Near(lugging.rpm, lugging.input, 1.0f) && pulling.locked && !pulling.lugging && !crawling.locked &&
+                      !crawling.lugging && crawling.dead == false,
+                  "clutch, the automatic one at speed: from 15 km/h it stays locked, lugging with the engine under idle in a high gear and not once above "
+                  "it; at a crawl it slips as before");
+        }
         // the automatic clutch (no pedal axis: keyboard, pad, a button clutch) burns as a pedal does (the user, 26 October:
         // "it should do it if trying to use a too high gear even when using the sequential mode"): it slips until the
         // gearbox's input has come up to the engine's speed. Floored from a standstill, a start in first stays under a

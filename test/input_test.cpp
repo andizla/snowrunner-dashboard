@@ -247,11 +247,50 @@ int main()
         const int escape = BindingCaptureStep(c, s, 20100, out);
         Check(waiting == kCaptureWaiting && gaveUp == kCaptureGone && escape == kCaptureGone && out.kind == kBindNone, "capture: given up after 8 s with nothing, and Escape cancels");
     }
+    // the latch (the user's hill test, 27 October: a downshift tapped too fast was missed): a key tapped and let go
+    // between two passes still reaches the pass, and gives one press through the reader; the pass after it starts
+    // again from the controls as they are
+    {
+        GearBindings b = {};
+        b.slot[kActDown][0] = Binding{ kBindKey, 0, VK_NUMPAD2, 0, false };
+        b.slot[kActUp][0] = Binding{ kBindPad, 0, XINPUT_GAMEPAD_DPAD_UP, 0, false };
+        InputSnapshot latched = {}, poll = {};
+        latched.front = poll.front = true;
+        InputReader r = {};
+        ActionState st[kActCount];
+        InputStep(r, b, latched, st); // a pass with nothing down
+        poll.key[VK_NUMPAD2] = 1;
+        poll.pad = XINPUT_GAMEPAD_DPAD_UP;
+        InputLatch(latched, poll); // tapped at one poll ...
+        poll.key[VK_NUMPAD2] = 0;
+        poll.pad = 0;
+        InputLatch(latched, poll); // ... and let go at the next, before the pass
+        InputStep(r, b, latched, st);
+        const bool tapped = st[kActDown].pressed && st[kActUp].pressed;
+        latched = poll; // the pass took it: the latch starts again from the controls
+        InputStep(r, b, latched, st);
+        const bool once = !st[kActDown].pressed && !st[kActDown].held && !st[kActUp].pressed;
+        // a POV direction seen between passes is kept over a centred hat; a device that goes away carries nothing over
+        InputSnapshot hat = {}, hatPoll = {};
+        hat.device[0].present = hatPoll.device[0].present = true;
+        hat.device[0].pov[0] = hatPoll.device[0].pov[0] = 0xFFFF;
+        hatPoll.device[0].pov[0] = 9000;
+        InputLatch(hat, hatPoll);
+        hatPoll.device[0].pov[0] = 0xFFFF;
+        InputLatch(hat, hatPoll);
+        const bool povKept = hat.device[0].pov[0] == 9000;
+        hatPoll.device[0].present = false;
+        InputLatch(hat, hatPoll);
+        const bool goneClean = !hat.device[0].present && hat.device[0].pov[0] == 0xFFFF;
+        Check(tapped && once && povKept && goneClean,
+              "latch: a key or pad button tapped and let go between two passes gives one press on the pass, none after; a POV direction seen between "
+              "passes is kept; a device gone carries nothing over");
+    }
     // the wheels and shifters on this machine, through DirectInput: once, for real; none is a pass
     {
         const bool started = InputDevicesStart(Log);
         InputSnapshot s;
-        InputSnapshotRead(s, false, 0);
+        InputSnapshotRead(s, false);
         int present = 0;
         for (const InputDevice &d : s.device) present += d.present;
         const int found = InputDevicesFound();

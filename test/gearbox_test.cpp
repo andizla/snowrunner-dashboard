@@ -257,6 +257,32 @@ int main()
         Check(a.clutchTravel < 0.0f && m.travel == 0.0f && !m.clutch, "gearbox: actions read no clutch axis unless one is given");
     }
 
+    // the game's stall seconds (the user's hill test, 27 October): a stall ordered ramps from 0 to kStallSeconds over
+    // kStallRamp; lugging raises them by dt a pass, and the recovery writes 0 once; nothing with the engine off
+    {
+        StallWrite w = {};
+        const float dt = 0.05f;
+        const float first = StallStep(w, true, false, true, dt);
+        float last = first;
+        int passes = 1;
+        while (w.ramping && passes < 20)
+        {
+            last = StallStep(w, false, false, true, dt);
+            passes++;
+        }
+        const bool ramped = first > 0.0f && first < kStallSeconds && last == kStallSeconds && passes == (int)(kStallRamp / dt + 0.5f) &&
+                            StallStep(w, false, false, true, dt) < 0.0f;
+        float lug = 0.0f;
+        for (int i = 0; i < 10; i++) lug = StallStep(w, false, true, true, dt);
+        const bool lugging = fabsf(lug - 0.5f) < 0.001f;
+        const bool cleared = StallStep(w, false, false, true, dt) == 0.0f && StallStep(w, false, false, true, dt) < 0.0f;
+        StallStep(w, false, true, true, dt);
+        const bool dead = StallStep(w, false, true, false, dt) < 0.0f && w.lug == 0.0f && !w.ramping;
+        Check(ramped && lugging && cleared && dead,
+              "gearbox: a stall ramps the game's stall seconds from 0 past 1.4 in 0.3 s; lugging raises them by the pass's time and the recovery clears "
+              "them once; nothing with the engine off");
+    }
+
     // the gate (0.17.0): which hooks a level needs, attached once and never taken out while the game runs
     {
         const HooksWanted none = GearboxHooksWanted(0, true), one = GearboxHooksWanted(1, true), twoOff = GearboxHooksWanted(2, false),

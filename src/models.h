@@ -1992,6 +1992,7 @@ static const float kEngineDrag = 0.4f;       // what the engine's friction and p
 static const float kClutchStall = 0.5f;      // an engine dragged under this share of its idle speed dies
 static const float kStallRest = 2.0f;        // seconds a stalled engine stays dead in the model at the least, before it can be started again
 static const float kAutoTakeUp = 0.9f;       // a clutch that works by itself slips with the engine this far to the pedal's governor speed
+static const float kAutoLockKmh = 15.0f;     // and from this speed up stays locked: a lugging engine stalls the game's way (kClutchHeatSlowKmh, the same)
 
 // The clutch pedal's grip, 0 to 1, from its travel, 0 let up to 1 pressed: nothing past kClutchFree, all of it short
 // of kClutchBite, and between them the bite, eased in.
@@ -2014,6 +2015,8 @@ struct ClutchModel
     bool dead;         // the engine stalled, and has not been started again
     float stalled;     // seconds left of the stall's rest
     bool automatic;    // the clutch works by itself (no pedal)
+    bool lugging;      // it does, locked at kAutoLockKmh or more with the engine held under its idle speed in gear: the
+                       // game's stall seconds rise (gauges.cpp), so the game's own notice shows and it dies by its rule
     int stalls;        // stalls since the model began
 };
 
@@ -2078,7 +2081,19 @@ inline bool ClutchStep(ClutchModel &m, const TruckRaw &t, const GaugeScale &k, c
     // governor's speed, at the free engine's pace, and the clutch passes on all the engine gives there, until the
     // gearbox's input has come up to the engine's speed: then it locks. So it never drags the engine down, and a start
     // in a gear the truck cannot pull keeps it slipping (and heating, ClutchHeat) as long as the pedal is down. A
-    // button held (grip 0) frees it, as a pedal pressed does
+    // button held (grip 0) frees it, as a pedal pressed does. From kAutoLockKmh up it does not slip at all (the user's
+    // hill test, 27 October: at speed in too high a gear the game's own "engine stalling", not the clutch's heat): it
+    // stays locked, and an engine held under its idle speed lugs (lugging), for the game's stall seconds to rise
+    m.lugging = false;
+    const bool fast = isfinite(t.speed) && fabsf(t.speed) * 3.6f >= kAutoLockKmh;
+    if (automatic && m.connected && hold > 0.0f && fast)
+    {
+        m.locked = true;
+        m.rpm = m.input;
+        m.carried = m.torque - drag;
+        m.lugging = m.input < k.idle;
+        return false;
+    }
     if (automatic && m.connected && hold > 0.0f)
     {
         if (m.locked && m.input < k.idle) m.locked = false;
