@@ -558,6 +558,10 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         }
         ImGui::EndDisabled();
         PageTip("What a shift without the clutch costs the gearbox, of what it takes. Needs Damage on.");
+        ImGui::BeginDisabled(!s.damage);
+        changed(ImGui::Checkbox("Clutch burns", &s.clutchBurn));
+        ImGui::EndDisabled();
+        PageTip("A slipping clutch under load heats up and costs the gearbox, faster the stronger the engine. Needs Damage on.");
     }
     // the bindings: two slots an action; a click binds the next key, pad chord, button or pedal moved, x clears (the
     // order is input_bindings.h's GearAction). The shifter's at Gearbox=2, the locks' at every level

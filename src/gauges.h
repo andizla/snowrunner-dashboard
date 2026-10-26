@@ -97,6 +97,7 @@ struct GaugeSettings
     float hotDamageFrom;     // HotDamageFrom: the coolant temperature in C where the hot damage starts (kHotDamageFromRange)
     float coldDamage;        // ColdDamagePercentPerMinute: the same for a cold engine floored at the red zone at 0 C
     float stallDamage;       // StallDamagePercent: percent of what the gearbox takes that a shift without the clutch costs it (with Damage)
+    bool clutchBurn;         // ClutchBurn: a slipping clutch under load heats up and costs the gearbox (with Damage)
     int soundVolume;        // SoundVolume: how loud the turbo's flutter and the oil warning are, 0 to 100; 0 = no sound
     bool soundsOnly;         // SoundsOnly: the sounds are played and the cluster is not drawn
     int toggleKey;           // ToggleKey: virtual key code of the key that hides and shows the cluster, 0 = none
@@ -141,6 +142,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.hotDamageFrom = 118.0f;
     s.coldDamage = 5.0f;
     s.stallDamage = 5.0f;
+    s.clutchBurn = true;
     s.soundVolume = 50;
     strcpy_s(s.padToggle, "None");
     s.demo = false;

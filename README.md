@@ -77,6 +77,7 @@ The Gameplay tab of the NEXT GEN menu edits every setting while you play. F2 ope
 | Neutral while no gear key is held, for an H shifter | `RequireGearHeld` 0 or 1 | off |
 | From the first gear to reverse and back without stopping in neutral | `SkipNeutral` 0 or 1 | off |
 | Percent of the gearbox a shift without the clutch costs, 0 to 25, with `Damage` on | `StallDamagePercent` | 5 |
+| A slipping clutch under load burns and costs the gearbox, with `Damage` on | `ClutchBurn` 0 or 1 | on |
 | What you drive with, for the mod's automatic: a wheel's pedals, a pad or the keyboard (see below) | `Input` 0, 1 or 2 | a wheel's pedals |
 | The truck pulls with the mod's engine and converter (see below) | `Powertrain` 0 or 1 | off |
 | How much of the mod's engine the game gets with `Powertrain=1`, from 0 to 100 percent: 0 leaves the game's own pull | `EngineShare` | 50 |
@@ -180,6 +181,8 @@ Three options, off by default:
 
 A stall from a shift without the clutch also costs the gearbox, with `Damage` on: `StallDamagePercent` of what it takes, 5 by default, 0 to 25 (the tab's "Stall damage"). It is dealt the way Next Gen Tire Inflation deals tire damage: on the game's own thread, on its next frame, with the game's own damage update after it. So the game's truck card comes up, a garage repairs it, and the game does the rest. A stall the game causes by itself costs nothing. `Gauges.log` says what the gearbox took and the parts' damage the game summed after it.
 
+The clutch burns too, with `Damage` on and `ClutchBurn=1` (the default; the tab's "Clutch burns"). A slipping clutch under load heats up by what it carries times the slip, scaled by the engine's own torque, and cools while it is locked or open. Past its burn point it costs the gearbox, through the same path as a stall. A start in first with a normal slip never gets there. A floored start in third on a stock engine burns within about two seconds and then costs about a tenth of the gearbox every two seconds; an engine of three times the torque costs about three times as fast. A truck held on a hill on the slipping clutch at half throttle starts to burn after about five seconds. Each kind of truck keeps its clutch's heat, so leaving it and coming back does not cool it at once. `Gauges.log` says when the burn begins and what it cost when it ends.
+
 The mod sets its gears through the game's own shift function and puts the game's automatic flag down, so the game's shifter shows the gear's number and the cluster shows the gearbox's letter. The pull is still the game's: the truck drives with the game's torque in the gear the gearbox picks. `Gauges.log` says when the gearbox takes and lets go of a truck, each position it moves to, and with `Probe=1` each shift and a line with the position, the clutch and the stalls.
 
 The manual transmission mod (SMT) is no longer needed and not compatible: the mod says so in the log and the tab when it finds it installed, and its gearbox stands down until SMT is removed.
@@ -234,7 +237,7 @@ Delete `Gauges.asi`, `Gauges.ini`, `Gauges.log` and the folder `Gauges` (the set
 
 ## Notes
 
-- The mod changes no game file. What it writes into the game's memory: with `Damage` on, the engine damage of the truck you drive, and its gearbox damage on a stall from a shift without the clutch (on the game's thread, through a hook on its truck update, with the game's damage update after); with `Gearbox=1`, the game's automatic flag, the gears through the game's own shift function, the power factor of the low range, and the stall seconds for a shift without the clutch under `RequireClutch`; with `Powertrain=1`, the game's torque factor of the truck you drive, on every pass; during the pull test, the torque factor, for seven seconds. With all of them off it writes nothing.
+- The mod changes no game file. What it writes into the game's memory: with `Damage` on, the engine damage of the truck you drive, and its gearbox damage on a stall from a shift without the clutch or from a burning clutch (on the game's thread, through a hook on its truck update, with the game's damage update after); with `Gearbox=1`, the game's automatic flag, the gears through the game's own shift function, the power factor of the low range, and the stall seconds for a shift without the clutch under `RequireClutch`; with `Powertrain=1`, the game's torque factor of the truck you drive, on every pass; during the pull test, the torque factor, for seven seconds. With all of them off it writes nothing.
 - `Damage` has not been tried in co-op. Leave it off there.
 - On a PC whose Windows proxy settings are on automatic detection the first frame can come late by half a minute: ReShade checks for its own update at the start and waits on that lookup.
 - When another program holds the game's swap chain in a way the mod cannot draw on, `Gauges.log` names that program.

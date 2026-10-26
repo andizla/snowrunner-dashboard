@@ -3018,6 +3018,74 @@ int main(int argc, char **argv)
               "sound: every sound is brought to one loudness with its peaks held, and its end fades out");
     }
 
+    // the clutch's heat, at the figures over its constants: a slipping clutch carrying `carried` at `slip` rpm over the
+    // gearbox for a stock engine (Torque 195000) or three times that, stepped at 20 a second
+    {
+        const float stock = 195000.0f, dt = 0.05f;
+        auto slipping = [](float carried, float slip) {
+            ClutchModel c = {};
+            c.running = c.connected = true;
+            c.input = 800.0f;
+            c.rpm = 800.0f + slip;
+            c.carried = carried;
+            return c;
+        };
+        // seconds to the burn point (-1 never within `seconds`), and the share of the gearbox owed in the two after
+        auto run = [&](ClutchHeat &h, uint64_t id, float carried, float slipFrom, float slipTo, float seconds, float torque, bool on, float &began, float &owedAfter) {
+            began = -1.0f;
+            float paid = 0.0f;
+            for (float t = 0.0f; t < seconds; t += dt)
+            {
+                const float slip = slipFrom + (slipTo - slipFrom) * t / seconds;
+                ClutchHeatStep(h, id, slipping(carried, slip), torque, on, dt);
+                if (h.burning && began < 0.0f) began = t;
+                if (began >= 0.0f && t < began + 2.0f) paid += h.owed;
+                h.owed = 0.0f; // dealt each step
+            }
+            owedAfter = paid;
+        };
+        float began = 0.0f, owed = 0.0f;
+        ClutchHeat first = {};
+        run(first, 1, 1.0f, 1200.0f, 0.0f, 1.5f, stock, true, began, owed);
+        const bool firstCold = began < 0.0f && first.q < kClutchBurnFrom * 0.4f;
+        ClutchHeat third = {};
+        run(third, 1, 1.0f, 1600.0f, 1600.0f, 6.0f, stock, true, began, owed);
+        const float thirdBegan = began, thirdOwed = owed;
+        ClutchHeat strong = {};
+        run(strong, 1, 1.0f, 1600.0f, 1600.0f, 6.0f, stock * 3.0f, true, began, owed);
+        const float strongBegan = began, strongOwed = owed;
+        ClutchHeat hill = {};
+        run(hill, 1, 0.5f, 1300.0f, 1300.0f, 4.5f, stock, true, began, owed);
+        const bool hillNotYet = began < 0.0f;
+        run(hill, 1, 0.5f, 1300.0f, 1300.0f, 1.5f, stock, true, began, owed);
+        const bool hillBurns = began >= 0.0f;
+        printf("     clutch heat: third floored burns after %.2f s and costs %.3f in the two after; three times the torque %.2f s and %.3f\n", thirdBegan, thirdOwed,
+               strongBegan, strongOwed);
+        Check(firstCold && thirdBegan > 1.5f && thirdBegan < 2.3f && thirdOwed > 0.08f && thirdOwed < 0.12f && strongBegan < thirdBegan &&
+                  strongOwed > thirdOwed * 2.7f && strongOwed < thirdOwed * 3.6f && hillNotYet && hillBurns,
+              "clutch heat: a first-gear start stays under a third of the burn point; a floored start in third burns within about two seconds and costs "
+              "about a tenth of the gearbox in the two after, three times the torque about three times as much; a hill held at half throttle burns "
+              "after about five seconds");
+        // cooling with the clutch open, kept per kind of truck, and nothing owed with ClutchBurn or Damage off
+        ClutchHeat h = {};
+        run(h, 7, 1.0f, 1600.0f, 1600.0f, 4.0f, stock, true, began, owed);
+        const float hot = h.q;
+        for (int i = 0; i < 200; i++) ClutchHeatStep(h, 7, ClutchModel{}, stock, true, dt); // ten seconds open
+        const bool cooled = h.q < hot * 0.65f && h.q > hot * 0.55f;
+        const float leftAt = h.q;
+        for (int i = 0; i < 200; i++) ClutchHeatStep(h, 8, ClutchModel{}, stock, true, dt); // ten seconds in another truck
+        ClutchHeatStep(h, 7, ClutchModel{}, stock, true, dt);
+        const bool kept = h.q < leftAt && h.q > leftAt * 0.55f;
+        ClutchHeat off = {};
+        run(off, 1, 1.0f, 1600.0f, 1600.0f, 6.0f, stock, false, began, owed);
+        GaugeSettings gs;
+        SettingsDefaults(gs);
+        const bool defaults = gs.clutchBurn && gs.damage;
+        Check(cooled && kept && began >= 0.0f && owed == 0.0f && off.owed == 0.0f && defaults,
+              "clutch heat: an open clutch cools, about 40 percent in ten seconds; each kind of truck keeps its heat and cools while away; burning with "
+              "ClutchBurn or Damage off owes nothing");
+    }
+
     printf(g_failed ? "MODELS TEST FAILED (%d)\n" : "MODELS TEST OK\n", g_failed);
     return g_failed ? 1 : 0;
 }

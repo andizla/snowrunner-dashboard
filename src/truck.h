@@ -790,6 +790,7 @@ struct StallJob
     volatile LONG state;
     TruckRefs refs;           // the truck it is for
     float percent;
+    bool burn;                // the clutch's burn (ClutchHeat), else a stall
     unsigned long long posted; // when, in the mod's milliseconds
     GearboxDamageWrite write; // what was dealt
     bool updated;             // the game's damage update ran after it
@@ -797,11 +798,12 @@ struct StallJob
 };
 
 // False while another job waits or is being dealt.
-inline bool StallJobPost(StallJob &j, const TruckRefs &r, float percent, unsigned long long now)
+inline bool StallJobPost(StallJob &j, const TruckRefs &r, float percent, unsigned long long now, bool burn = false)
 {
     if (j.state != kStallJobIdle) return false;
     j.refs = r;
     j.percent = percent;
+    j.burn = burn;
     j.posted = now;
     j.write = GearboxDamageWrite{};
     j.updated = false;
@@ -832,9 +834,10 @@ inline bool StallJobDeal(StallJob &j, const TruckMemory &m, uint64_t vehicle, vo
 }
 
 // On the mod's thread: a dealt job's result into out, and the job free again.
-inline bool StallJobResult(StallJob &j, GearboxDamageWrite &write, bool &updated, int &sum, int &sumCapacity)
+inline bool StallJobResult(StallJob &j, GearboxDamageWrite &write, bool &updated, int &sum, int &sumCapacity, bool *burn = nullptr)
 {
     if (j.state != kStallJobDone) return false;
+    if (burn) *burn = j.burn;
     write = j.write;
     updated = j.updated;
     sum = j.sum;
