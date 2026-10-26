@@ -19,15 +19,21 @@ cl /nologo /c /O2 /W3 /EHsc /std:c++17 /utf-8 /MT /I deps\imgui /I deps\stb /Fo:
 cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I deps\imgui /I deps\stb /Fo:out\obj\ src\ng_overlay.cpp src\gauge_overlay.cpp || goto fail
 cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I deps\reshade\include /Fo:out\obj\ng_reshade.obj src\ng_reshade.cpp || goto fail
 set IMGUI_OBJ=out\obj\imgui.obj out\obj\imgui_draw.obj out\obj\imgui_tables.obj out\obj\imgui_widgets.obj out\obj\ng_dx11.obj out\obj\ng_overlay.obj out\obj\ng_reshade.obj
+rem the game's gearbox functions hooked (src\gearbox_hooks.cpp) through Microsoft Detours (src\detours, MIT, built from
+rem its source with the static CRT; its own warnings are not ours), in one library the mod and the tests link
+if not exist out\obj\detours mkdir out\obj\detours
+cl /nologo /c /O2 /w /MT /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0601 /Fo:out\obj\detours\ src\detours\detours.cpp src\detours\disasm.cpp src\detours\modules.cpp src\detours\creatwth.cpp src\detours\image.cpp || goto fail
+cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /Fo:out\obj\gearbox_hooks.obj src\gearbox_hooks.cpp || goto fail
+lib /nologo /OUT:out\obj\gearbox.lib out\obj\gearbox_hooks.obj out\obj\detours\detours.obj out\obj\detours\disasm.obj out\obj\detours\modules.obj out\obj\detours\creatwth.obj out\obj\detours\image.obj || goto fail
 rem the recordings the mod's file carries (src\sounds.rc: assets\turbo_high_1.wav and eight more). Without them the
 rem mod is built all the same and makes its sounds by code (src\sound.h)
 set SOUNDS=
 if exist assets\turbo_high_1.wav (rc /nologo /fo out\obj\sounds.res src\sounds.rc || goto fail) & set SOUNDS=out\obj\sounds.res
-cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /LD /Fo:out\obj\gauges.obj /Fe:out\Gauges.asi src\gauges.cpp out\obj\gauge_overlay.obj %IMGUI_OBJ% %SOUNDS% /link user32.lib ole32.lib d3d11.lib d3dcompiler.lib || goto fail
+cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /LD /Fo:out\obj\gauges.obj /Fe:out\Gauges.asi src\gauges.cpp out\obj\gauge_overlay.obj %IMGUI_OBJ% %SOUNDS% out\obj\gearbox.lib /link user32.lib ole32.lib d3d11.lib d3dcompiler.lib || goto fail
 rem the settings test: the same source with a main in place of the mod's thread
-cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /D GAUGES_SETTINGS_TEST /Fo:out\obj\settings_test.obj /Fe:out\test\settings_test.exe src\gauges.cpp /link user32.lib || goto fail
+cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /D GAUGES_SETTINGS_TEST /Fo:out\obj\settings_test.obj /Fe:out\test\settings_test.exe src\gauges.cpp out\obj\gearbox.lib /link user32.lib || goto fail
 rem the truck test: the reader of the game's memory and the write of engine damage (src\truck.h) against a made up game
-cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I src /Fo:out\obj\truck_test.obj /Fe:out\test\truck_test.exe test\truck_test.cpp || goto fail
+cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I src /Fo:out\obj\truck_test.obj /Fe:out\test\truck_test.exe test\truck_test.cpp out\obj\gearbox.lib || goto fail
 rem the models test: the engine speed, the range, the tilt, the coolant temperature and what it costs the engine
 rem (src\models.h) on made up drives, and the sounds of a lifted pedal (src\sound.h)
 cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I src /Fo:out\obj\models_test.obj /Fe:out\test\models_test.exe test\models_test.cpp /link ole32.lib || goto fail

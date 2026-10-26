@@ -24,6 +24,7 @@
 #include "truck.h"
 #include "models.h"
 #include "smt.h"
+#include "gearbox_hooks.h"
 bool NgMenuOpen(); // ng_overlay.cpp (its header wants Dear ImGui): the toggle key rests while the NEXT GEN menu has the keys
 #include "tires.h"
 #include "maps.h"
@@ -1415,8 +1416,24 @@ static void PlacesHarvest(DWORD stamp)
     Log(L"signatures: %d written to Gauges.signatures.txt in %.1f s", total, (GetTickCount64() - started) / 1000.0);
 }
 
+// The manual transmission mod (SMT) found in the game: its file loaded, its state published (smt.h), or a gearbox
+// function held by another mod. The mod's gearbox stands down then, and the tab says so (GaugeView::smtInstalled).
+static volatile LONG g_smtInstalled = 0;
+static bool SmtInstalled(const FunctionFind finds[kFnCount])
+{
+    if (GetModuleHandleW(L"SMT.addon64") || GetModuleHandleW(L"SMT.asi")) return true;
+    for (int f = 0; f < kFnCount; f++)
+        if (finds[f].state == kFnHeld) return true;
+    wchar_t name[64];
+    swprintf_s(name, L"Local\\SnowRunnerMT.State.%lu", GetCurrentProcessId());
+    const HANDLE map = OpenFileMappingW(FILE_MAP_READ, FALSE, name);
+    if (map) CloseHandle(map);
+    return map != nullptr;
+}
+
 // The game's gearbox functions in its code (game_code.h), looked for once a truck is driven, so a manual transmission
-// mod has hooked its own by then: where each one is, or that another mod holds it. Nothing is written.
+// mod has hooked its own by then: where each one is, or that another mod holds it. Then, without SMT in the game,
+// eight of them are hooked, calling through (gearbox_hooks.h, phase 1 of the mod's own gearbox).
 static void GameCodeLook()
 {
     size_t from = 0, to = 0;
@@ -1440,6 +1457,27 @@ static void GameCodeLook()
     if ((shift.state == kFnFound || shift.state == kFnHeld) && shift.count == 1) g_shiftGear = (GameShiftFn)(g_base + shift.at);
     Log(g_shiftGear ? L"gearbox code: the mod's automatic can set gears through the game's shift function (Gearbox=1)"
                     : L"gearbox code: the game's shift function is not known for sure, so the mod's automatic cannot set gears (Gearbox stays the game's)");
+    if (SmtInstalled(finds))
+    {
+        InterlockedExchange(&g_smtInstalled, 1);
+        Log(L"gearbox: the manual transmission mod (SMT) is installed. It is not compatible with this version and no longer needed: remove SMT.addon64 "
+            L"(or SMT.asi) and SMT.ini from Sources\\Bin and start the game again. The mod's gearbox stands down until then");
+        return;
+    }
+    static char why[1024];
+    const int hooked = GearboxHook((uintptr_t)g_base, finds, why, sizeof why);
+    if (hooked) Log(hooked == 8 ? L"gearbox: eight of the game's gearbox functions hooked, calling through (phase 1)"
+                                : L"gearbox: %d of the game's eight gearbox functions hooked, calling through (phase 1)", hooked);
+    for (char *one = why; *one;)
+    {
+        char *end = strchr(one, '\n');
+        if (end) *end = 0;
+        Log(L"gearbox: not hooked: %S", one);
+        if (!end) break;
+        one = end + 1;
+    }
+    // the mod's own shifts go through to the game's function behind the hook, so the probe counts only the game's
+    if (void *own = GearboxOriginal(kFnShiftGear)) g_shiftGear = (GameShiftFn)own;
 }
 
 // A file's time as the clock on the wall shows it, hh:mm:ss.
@@ -1515,6 +1553,7 @@ struct TruckWatch
     TruckRaw probed;            // what the probe wrote last
     World probedWorld;
     ULONGLONG probeAt;          // when the probe writes next
+    ULONGLONG gearboxProbeAt;   // and its line of the game's gearbox functions (gearbox_hooks.h)
     bool probedAny;
     float way[3];               // where the chassis was half a second ago, for the speed by the way gone
     ULONGLONG wayAt;
@@ -2145,6 +2184,17 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         w.probedAny = true;
         w.probeAt = now + 2000;
     }
+    // the game's gearbox functions as the hooks count them, every second while a truck is driven (phase 1: which of
+    // them the game calls when, as when a truck in A reverses on the brake)
+    if (probe && driving && GearboxHooked() && now >= w.gearboxProbeAt)
+    {
+        GearboxCounts c;
+        GearboxCountsGet(c);
+        Log(L"probe: gearbox code: ShiftGear %ld (last gear %d) | auto %ld | high %ld | reverse %ld | neutral %ld | auto off %ld (last %d) | power %ld (last %.3f) | "
+            L"vehicle %ld (%s)",
+            c.shift, c.shiftGear, c.autoGear, c.high, c.reverse, c.neutral, c.autoOff, c.autoOffGear, c.power, c.factor, c.vehicle, c.vehicleSet ? L"set" : L"cleared");
+        w.gearboxProbeAt = now + 1000;
+    }
     // on screen once the truck has been driven for half a second: a state that only flickers by does not show it
     return driving && now - w.drivingSince >= 500;
 }
@@ -2607,6 +2657,7 @@ static DWORD WINAPI Run(void *)
         v.ambientDay = mapAir.day;
         v.ambientNight = mapAir.night;
         v.hour = hour;
+        v.smtInstalled = g_smtInstalled != 0;
         strcpy_s(v.gearbox, driving ? watch.gearboxKey : "");
         // the engine and its curve in force, for the tab's Engine section and its plot
         if (driving && watch.profileFor[0])
@@ -2694,8 +2745,10 @@ static DWORD WINAPI Run(void *)
 // Loaded by an ASI loader (Gauges.asi), or by ReShade under the name from before 0.16 (Gauges.addon64): the mod's thread
 // starts the overlay either way. ReShade unloads an add-on that does not register with it, so under that name the mod
 // pins itself first and runs for the whole game all the same.
-BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
+BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
 {
+    // unloaded while the game goes on (not at the game's end): the gearbox hooks come out first
+    if (reason == DLL_PROCESS_DETACH && !reserved) GearboxUnhook();
     if (reason != DLL_PROCESS_ATTACH) return TRUE;
     DisableThreadLibraryCalls(inst);
     wchar_t path[MAX_PATH] = {};

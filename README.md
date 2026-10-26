@@ -158,7 +158,7 @@ The game's automatic shifts up at fixed speeds whatever the pedal, never shifts 
 
 The mod sets its gears through the game's own shift function and puts the game's automatic down while it drives, so the game's shifter shows the gear's number. Picking a gear by hand (a number, L, reverse, neutral or the high gear) hands the gearbox back to you; A takes it again. Tapping the shift modifier does nothing: in the game's own automatic a tap forces a pulling gear, and with the mod's the game's pick is put straight back to the mod's gear. The pull is still the game's: the truck drives with the game's torque in the gear the mod picks. `Gauges.log` says when the mod takes and gives back the gears, and with `Probe=1` each shift.
 
-It works with a manual transmission mod installed, as long as you drive in A.
+The game's gearbox functions are hooked, calling through, as the ground for the mod's own gearbox in the next version; a probe line counts their calls. The manual transmission mod (SMT) is no longer needed and not compatible: the mod says so in the log and the tab when it finds it installed.
 
 ## The mod's engine
 
@@ -252,7 +252,7 @@ The sounds are played through XAudio2 2.9, the copy the game brings or Windows' 
 
 GNU General Public License v3.0 (GPL-3.0-only), see `LICENSE`.
 
-The cluster and the menu are drawn with Dear ImGui by Omar Cornut, and their text is baked with stb_truetype by Sean Barrett. ReShade by Patrick Mours (crosire), which the release brings without its start banner, hands the mod the game's swap chains through its add-on API. Their notices are in `THIRD_PARTY_NOTICES.md`. The loader in `tools` is the one of the SnowRunner Tire Inflation System.
+The cluster and the menu are drawn with Dear ImGui by Omar Cornut, and their text is baked with stb_truetype by Sean Barrett. ReShade by Patrick Mours (crosire), which the release brings without its start banner, hands the mod the game's swap chains through its add-on API. The game's gearbox functions are hooked through Microsoft Detours. Their notices are in `THIRD_PARTY_NOTICES.md`. The mod's gearbox takes its method from drafty46's Snowrunner Manual Transmission (SMT, MIT) and its knowledge of the game's gearbox functions from Ferrster's reverse engineering. The loader in `tools` is the one of the SnowRunner Tire Inflation System.
 
 `SOUND_CREDITS.md` says where each sound comes from.
 

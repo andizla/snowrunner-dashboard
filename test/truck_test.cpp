@@ -22,6 +22,21 @@
 #include "game_code.h"
 #include "game_globals.h"
 #include "clock_scan.h"
+#include "gearbox_hooks.h"
+
+// The hooks' attach and detach (gearbox_hooks.h) on a function of the test's own: the hook counts and calls through.
+static volatile int g_hookSaw = 0;
+static int (*g_testWay)(int, int) = nullptr;
+__declspec(noinline) static int TestTarget(int a, int b)
+{
+    volatile int x = a;
+    return x * 3 + b;
+}
+static int TestHook(int a, int b)
+{
+    g_hookSaw = g_hookSaw + 1;
+    return g_testWay(a, b);
+}
 
 struct Region { uint64_t at; std::vector<uint8_t> bytes; };
 static std::vector<Region> g_game;
@@ -870,6 +885,24 @@ int main()
         Check(LoadTruckAfter(kId, kId, 500) == kLoadSame && LoadTruckAfter(kId, otherId.id, 500) == kLoadOther && LoadTruckAfter("", kId, 500) == kLoadOther &&
                   LoadTruckAfter(kId, nullptr, 59000) == kLoadWait && LoadTruckAfter(kId, "", kLoadWaitMs) == kLoadNone,
               "load: the same truck by its id drives on warm; another truck, none before the load, or none for a minute after it goes cold");
+    }
+
+    // the gearbox hooks' attach and detach: a function of the test's own detoured, the hook called and calling through
+    // with the arguments and the answer unchanged, and the function its own again after the detach
+    {
+        g_testWay = &TestTarget;
+        void **targets[1] = { (void **)&g_testWay };
+        void *const hooks[1] = { (void *)&TestHook };
+        volatile int a = 4, b = 5;
+        const int before = TestTarget(a, b);
+        const bool attached = GearboxAttach(targets, hooks, 1) == NO_ERROR;
+        const bool wayMoved = g_testWay != &TestTarget;
+        const int through = TestTarget(a, b);
+        const bool seen = g_hookSaw == 1;
+        const bool detached = GearboxDetach(targets, hooks, 1) == NO_ERROR;
+        const int after = TestTarget(a, b);
+        Check(before == 17 && attached && wayMoved && seen && through == before && detached && after == before && g_hookSaw == 1 && g_testWay == &TestTarget,
+              "gearbox hooks: a function detoured calls the hook, which calls through with its arguments and answer unchanged; the detach makes it its own again");
     }
 
     // the probe's text and what makes it write
