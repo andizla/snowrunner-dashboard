@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- The overlay copies a swap chain's method table that another program has put at the start of its memory. Before, it drew nothing there (no cluster, no panel and no NEXT GEN menu on two players' PCs). When a table still cannot be copied, `Gauges.log` says in whose code the table and its Present lie, so the program can be named.
+
 ## [0.16.1] 2026-10-25
 
 - `RevCap`, the tab's "Rev cap 95%" under Engine to the game, off by default: with the mod's engine the pull ends at 95 percent of the way from idle to the red zone and the automatic shifts up there floored. For a truck that shoots from 40 to 80 km/h on its own, a game bug that RLM-like engines and this mod make worse.
