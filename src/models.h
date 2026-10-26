@@ -2290,7 +2290,7 @@ inline WarnBox ClutchWarn(const ClutchHeat &h, bool on)
     {
         w.state = kWarnRed;
         w.title = "CLUTCH DAMAGE";
-        w.line = "Shift down, the gearbox is wearing";
+        w.line = "Shift down, the clutch is wearing"; // the cost lands on the game's gearbox part; the words speak of the clutch
     }
     return w;
 }

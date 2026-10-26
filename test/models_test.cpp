@@ -3208,7 +3208,7 @@ int main(int argc, char **argv)
             const WarnBox none = at(kClutchWarnFrom * 0.9f), amber = at(kClutchWarnFrom * 1.1f), red = at(kClutchBurnFrom * 1.5f), off = ClutchWarn(wh, false);
             const bool clutchBoxes = none.state == kWarnNone && amber.state == kWarnAmber && !strcmp(amber.title, "CLUTCH HOT") &&
                                      !strcmp(amber.line, "Ease off or shift down") && amber.percent == (int)(kClutchWarnFrom * 1.1f / kClutchBurnFrom * 100.0f) &&
-                                     red.state == kWarnRed && !strcmp(red.title, "CLUTCH DAMAGE") && !strcmp(red.line, "Shift down, the gearbox is wearing") &&
+                                     red.state == kWarnRed && !strcmp(red.title, "CLUTCH DAMAGE") && !strcmp(red.line, "Shift down, the clutch is wearing") &&
                                      red.percent == 100 && off.state == kWarnNone;
             bool pan = false;
             const WarnBox cool = EngineWarn(110.0f, 0.0f, true, false, false, pan), hotAmber = EngineWarn(kTempRed + 1.0f, 0.0f, true, false, false, pan),
