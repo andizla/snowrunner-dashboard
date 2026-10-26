@@ -961,11 +961,11 @@ int main(int argc, char **argv)
             const bool forgotten = Near(many.temp, 15.0f, 0.01f);
             TempStep(many, 0x100 + (uint64_t)(kTempTrucks + 1), x, 0.0f, set, 0.0f);
             Check(forgotten && many.temp > kTempCold && many.temp < kTempWarm, "coolant: of more kinds than the model remembers, the one left longest ago starts cold again and the others are still warm");
-            // another map: the game's save names another map, and the mod drops the model's memory
+            // a load: the game's loading screen ends, and the mod drops the model's memory
             fleet = TempModel{};
             TempStep(fleet, 0x2000, hauler, 0.0f, set, 0.0f);
             Check(leftHauler > set.ambientC + 20.0f && Near(fleet.temp, set.ambientC, 1.0f) && Near(fleet.oil, set.ambientC, 1.0f),
-                  "coolant: on another map a kind driven warm before starts as cold as the air outside, the coolant and the oil, as on a first drive");
+                  "coolant: after a load a kind driven warm before starts as cold as the air outside, the coolant and the oil, as on a first drive");
         }
 
         // the probe's line, and a needle that is no number

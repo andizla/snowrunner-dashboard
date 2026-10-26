@@ -1209,21 +1209,6 @@ static std::vector<std::wstring> SaveFolders()
 }
 
 
-// A save written this long after a level had loaded names that level's map: one written during the load or just
-// after may still name the map before.
-static const unsigned kSaveAfterLoadS = 60;
-
-// Whether a is at least seconds after b.
-static bool FileTimeAfter(const FILETIME &a, const FILETIME &b, unsigned seconds)
-{
-    ULARGE_INTEGER x, y;
-    x.LowPart = a.dwLowDateTime;
-    x.HighPart = a.dwHighDateTime;
-    y.LowPart = b.dwLowDateTime;
-    y.HighPart = b.dwHighDateTime;
-    return x.QuadPart >= y.QuadPart + seconds * 10000000ULL;
-}
-
 // The files of the Microsoft Store build's save containers: wgs\<account>\<container>\<file> in each package of the game.
 static void SaveContainerFiles(std::vector<SaveFile> &out)
 {
@@ -1555,11 +1540,8 @@ struct TruckWatch
     RangeModel range;           // the range of the truck with the tank it holds
     TiltModel tilt;             // how the truck stands, and the tilt lamp
     int probedLamp;             // the tilt lamp the probe wrote last
-    TempModel temp;             // the coolant and oil temperatures of every truck driven since the game started
-    TempModel tempCold;         // the same since the last level loaded, from as cold as the air outside: temp on another map
-    bool tempColdOn;            // tempCold runs: a level loaded, and no save since has said whether it was another map
-    bool loading;               // a level was loading on the last pass
-    FILETIME loadedAt;          // when the last level had loaded
+    TempModel temp;             // the coolant and oil temperatures of every truck driven since the last load
+    bool loadingWas;            // the game showed its loading screen on the last pass
     OilWarning oil;             // the oil warning: on while the driven truck's oil is too hot
     int probedZone;             // where the coolant stood when the probe wrote last (TempZone)
     DamageModel damage;         // what the temperature costs the engine of the truck at modelVehicle
@@ -1774,18 +1756,17 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         else Log(L"truck: none is driven now");
     }
     WorldRead(m, w.found ? w.refs.control : 0, world);
-    // a level loading may be another map. The game's save names it only when the game saves next, minutes later
-    // (found in the game, 2026-10-25). From here every engine also warms up from cold beside (tempCold), to take the
-    // kept temperatures' place if it was another map
+    // a load ended (the game's loading screen gone): the coolant and oil the model remembers for each kind of truck are
+    // dropped, so every truck starts as cold as the air outside. Another map, a reload of the same one and fast travel
+    // all come with a loading screen; the game's save names a new map only minutes later (found in the game, 2026-10-25)
     const bool loading = world.known && world.loading;
-    if (loading && !w.loading)
+    if (w.loadingWas && !loading)
     {
-        w.tempCold = TempModel{};
-        w.tempColdOn = true;
-        Log(L"map: a level is loading. Until a save names its map, every engine also warms up from cold beside, in case it is another map");
+        w.temp = TempModel{};
+        w.oil = OilWarning{};
+        Log(L"map: a load ended, so every truck's engine is as cold as the air outside again (the coolant and the oil)");
     }
-    if (!loading && w.loading) GetSystemTimeAsFileTime(&w.loadedAt);
-    w.loading = loading;
+    w.loadingWas = loading;
     const bool driving = read && TruckSane(raw) && WorldDriving(world);
     if (!driving) w.drivingSince = 0;
     else if (!w.drivingSince) w.drivingSince = now;
@@ -1881,7 +1862,6 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         AirStep(w.air, raw, TachSpeed(w.tach, scale), dt);
         TiltStep(w.tilt, raw, s, dt);
         TempStep(w.temp, kind, raw, TachSpeed(w.tach, scale), s, dt);
-        if (w.tempColdOn) TempStep(w.tempCold, kind, raw, TachSpeed(w.tach, scale), s, dt);
         // the oil warning: heard every few seconds while the oil is too hot, and said in the log when it comes and goes
         const bool oilWas = w.oil.on;
         if (OilWarnStep(w.oil, w.temp, raw, s, dt)) SoundPlay(kSoundOil, OilBeepGain(s.soundVolume), 1.0f);
@@ -2370,14 +2350,6 @@ static DWORD WINAPI Run(void *)
                     Log(L"map: %s (%S), the map loaded last as the game's save of %S says (%s)", Wide(title).c_str(), level, at, PathForLog(picked.first).c_str());
                     strcpy_s(map, level);
                 }
-                else if (watch.tempColdOn && !watch.loading && FileTimeAfter(picked.second, watch.loadedAt, kSaveAfterLoadS))
-                {
-                    // the level loaded last was the same map: the engines stay as warm as they were
-                    watch.tempColdOn = false;
-                    char at[16];
-                    ClockText(picked.second, at, sizeof at);
-                    Log(L"map: the save of %S names the same map, so the level loaded was no other map and the engines stay as warm as they were", at);
-                }
             }
             else if (!unread.empty() && unread != saveUnread)
             {
@@ -2502,23 +2474,6 @@ static DWORD WINAPI Run(void *)
                         mapAir.dayNight ? L"" : L", around the day's mean", Wide(mapFrom).c_str());
                 else if (mapOwn) Log(L"map: %s, %g C outside (AmbientC: AmbientByMap=0 leaves [Map:%s] out)", Wide(title).c_str(), s.ambientC, Wide(mapFrom).c_str());
                 else if (map[0]) Log(L"map: %s has no section in Gauges.ini, nor has its region, so it is %g C outside (AmbientC)", Wide(title).c_str(), s.ambientC);
-            }
-            // another map: the coolant and oil the model remembers for each kind of truck are dropped, so every truck
-            // starts as cold as the air outside there. Both names must be known. A save caught mid-write names no map
-            // for a moment (map ""), and that is no change of map. The save names the map minutes after the level
-            // loaded: the engines take the temperatures that warmed up from cold since the load (tempCold), and only
-            // where no load was seen do they start cold now
-            if (mapRead[0] && map[0] && strcmp(mapRead, map))
-            {
-                const bool sinceLoad = watch.tempColdOn;
-                watch.temp = sinceLoad ? watch.tempCold : TempModel{};
-                watch.tempColdOn = false;
-                watch.oil = OilWarning{};
-                if (sinceLoad && watch.temp.known)
-                    Log(L"map: another map, so every truck's engine was as cold as the air outside when the level loaded, and warmed since by the drive (the coolant %.1f C, the oil %.1f C)",
-                        watch.temp.temp, watch.temp.oil);
-                else if (sinceLoad) Log(L"map: another map, so every truck's engine is as cold as the air outside was when the level loaded (the coolant and the oil)");
-                else Log(L"map: another map, so every truck's engine is as cold as the air outside again (the coolant and the oil)");
             }
             strcpy_s(mapRead, map);
             mapAsk = false;

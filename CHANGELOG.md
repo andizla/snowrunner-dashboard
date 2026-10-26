@@ -3,7 +3,7 @@
 ## [Unreleased]
 
 - The overlay copies a swap chain's method table that another program has put at the start of its memory. Before, it drew nothing there (no cluster, no panel and no NEXT GEN menu on two players' PCs). When a table still cannot be copied, `Gauges.log` says in whose code the table and its Present lie, so the program can be named.
-- The cold start on another map takes effect now: the game names the new map in its save only at its next save, minutes after the load, and an empty save slot it writes right after could hide even that. The mod now warms every engine up from cold beside the kept temperatures from each load, and that cold start takes over once a save names another map. The known issue of 0.16.1 is closed.
+- After every load (the loading screen) every truck's engine starts as cold as the air outside, the coolant and the oil. The cold start of 0.16.1 went by the save, which names the new map minutes after the load; the known issue is closed.
 
 ## [0.16.1] 2026-10-25
 
