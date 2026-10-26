@@ -1946,6 +1946,8 @@ struct TruckWatch
     int stallsOwed;             // stalls whose gearbox damage waits to be posted to the game's thread (StallJob)
     ClutchHeat clutchHeat;      // each kind of truck's clutch heat, and what its burn owes the gearbox (ClutchBurn)
     int burnPoints;             // the gearbox's points posted for the clutch's burn since it began
+    int gearboxDamageSeen;      // the gearbox's damage as read on the last pass, -1 not yet (a fall is a repair)
+    bool floorPan;              // the engine box's line after its film title's damage landed (EngineWarn)
     bool lockPress[kLocks];     // DiffLock and Awd pressed on this pass (at every level of Gearbox)
     LocksWatch locks;           // what the mod's keys wrote to the locks (LocksStep)
     bool canReverse;            // a binding reaches reverse (GearDown, GearR or GearN): Gearbox=2 may take the shifter
@@ -2336,6 +2338,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             w.tilt = TiltModel{};
             w.owed = w.asked = 0;
             w.stallsOwed = 0;
+            w.gearboxDamageSeen = -1;
+            w.floorPan = false;
             w.modelVehicle = w.refs.vehicle;
             w.modelAt = 0;
         }
@@ -2417,6 +2421,18 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         // gear the engine cannot pull, whoever drives. Outside a position of the player's the clutch is empty and only cools
         {
             const float most = w.engine.torque > 0.0f && w.engineVehicle == w.refs.vehicle ? w.engine.torque * (w.profile.torque > 0.0f ? w.profile.torque : 1.0f) : 0.0f;
+            // a repair (the gearbox's damage as read fell: the game's repair or a repair point): the clutch cold again
+            // and a burn's points not dealt yet dropped, so nothing of it lands on the repaired gearbox
+            if (raw.gearboxKnown)
+            {
+                if (w.gearboxDamageSeen >= 0 && raw.gearboxDamage < w.gearboxDamageSeen)
+                {
+                    const bool dropped = StallJobDropBurn(g_stallJob);
+                    if (w.clutchHeat.q > 0.0f || dropped) Log(L"clutch: repaired, the heat is gone%s", dropped ? L" and the burn's points not dealt yet dropped" : L"");
+                    ClutchHeatRepair(w.clutchHeat);
+                }
+                w.gearboxDamageSeen = raw.gearboxDamage;
+            }
             const bool burnWas = w.clutchHeat.burning;
             ClutchHeatStep(w.clutchHeat, kind, w.clutch, most, s.damage && s.clutchBurn, dt);
             if (w.clutchHeat.burning && !burnWas)
@@ -3374,6 +3390,16 @@ static DWORD WINAPI Run(void *)
             v.st.oilHot = OilLamp(watch.oil, ms);
             TiresLamp(watch.tires, watch.refs.vehicle, ms, v.st.tireLamp, v.st.tireLit, v.st.tireWarn);
             v.st.damage = DamageLamp(v.st.damage, DamageAdding(watch.damage, s) || (watch.addedAt && ms - watch.addedAt < 2000), ms);
+            // the warning boxes, below the tire mod's: the clutch's with ClutchBurn and Damage, the engine's with Damage
+            // (red while the heat's damage is dealt; a point dealt is a new write of engine damage)
+            {
+                static ULONGLONG addedWas = 0;
+                const bool dealt = watch.addedAt != addedWas;
+                addedWas = watch.addedAt;
+                const bool full = BoostFull(watch.boost.bar, GaugeScaleOf(inForce).boost, TruckPedal(raw));
+                v.warn[kWarnClutch] = ClutchWarn(watch.clutchHeat, s.damage && s.clutchBurn);
+                v.warn[kWarnEngine] = EngineWarn(watch.temp.temp, s.damage ? watch.damage.hot : 0.0f, s.damage, full, dealt, watch.floorPan);
+            }
             v.engineDamage = raw.damage;
             v.engineCapacity = raw.damageKnown ? raw.damageCapacity : 0;
         }

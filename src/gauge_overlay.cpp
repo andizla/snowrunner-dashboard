@@ -26,10 +26,53 @@ static GaugeFonts g_fonts;
 static bool g_fontFiles = false;
 static float g_fontFailedAt = 0.0f; // the size a bake failed at: not tried again until the size changes
 
+// The warning boxes' text (gauge_draw.h, kWarnStyles), baked for the HUD stage's size as the tire mod bakes its own.
+static GaugeFonts g_warnFonts;
+static bool g_warnFontFiles = false;
+static float g_warnFontFailedAt = 0.0f;
+
 static void FreeFontTexture()
 {
     NgTextureFree(g_fonts.tex);
     g_fonts.tex = 0;
+    NgTextureFree(g_warnFonts.tex);
+    g_warnFonts.tex = 0;
+}
+
+// The boxes' atlas for u (WarnUnit), again when the picture's size changes.
+static void UpdateWarnFontTexture(float u)
+{
+    if (!g_warnFontFiles || (g_warnFonts.tex && fabsf(g_warnFonts.u - u) < 0.001f)) return;
+    if (!g_warnFonts.tex && g_warnFontFailedAt > 0.0f && fabsf(g_warnFontFailedAt - u) < 0.001f) return;
+    NgTextureFree(g_warnFonts.tex);
+    g_warnFonts.tex = 0;
+    if (FontsBake(g_warnFonts, u))
+    {
+        g_warnFonts.tex = NgTextureMake(g_warnFonts.rgba, g_warnFonts.w, g_warnFonts.h);
+        free(g_warnFonts.rgba);
+        g_warnFonts.rgba = nullptr;
+    }
+    g_warnFontFailedAt = g_warnFonts.tex ? 0.0f : u;
+    if (!g_warnFonts.tex) GaugeLog(L"overlay: the warning boxes' font did not become a texture at %.3f px per reference px, Dear ImGui's font stands in", u);
+}
+
+// The clutch's and the engine's warning boxes, below the tire mod's: each fades in over a quarter second while it has
+// something to say and out again after, keeping its last words while it fades; not while the NEXT GEN menu is open,
+// and on the background list, so never over the menu.
+static void DrawWarnings(const GaugeView &view, float w, float h, float dt)
+{
+    static float fade[kWarnBoxes] = {};
+    static WarnBox last[kWarnBoxes] = {};
+    const float u = WarnUnit(w, h);
+    UpdateWarnFontTexture(u);
+    const bool menu = NgMenuOpen();
+    for (int i = 0; i < kWarnBoxes; i++)
+    {
+        const bool on = view.warn[i].state != kWarnNone && !menu;
+        if (view.warn[i].state != kWarnNone) last[i] = view.warn[i];
+        fade[i] = fminf(fmaxf(fade[i] + (on ? dt : -dt) / 0.25f, 0.0f), 1.0f);
+        if (fade[i] > 0.0f) GWarnBox(ImGui::GetBackgroundDrawList(), g_warnFonts, WarnOrigin(w, h, 1 + i), u, fade[i], last[i]);
+    }
 }
 
 static void UpdateFontTexture(float u)
@@ -79,6 +122,7 @@ static void OnFrame()
     const float u = GaugeUnit(io.DisplaySize.y, s);
     UpdateFontTexture(u);
     const float dt = fminf(fmaxf(io.DeltaTime, 0.0f), 0.1f);
+    DrawWarnings(view, io.DisplaySize.x, io.DisplaySize.y, dt);
     alpha = fminf(fmaxf(alpha + (view.show ? dt : -dt) / 0.15f, 0.0f), 1.0f);
     // the mod's thread leaves a new state 20 times a second: the two big needles glide from one to the next
     const float speedWas = shown.speedKmh, rpmWas = shown.rpm;
@@ -181,6 +225,7 @@ bool OverlayInit(HMODULE)
     wchar_t *slash = n && n < MAX_PATH ? wcsrchr(dir, L'\\') : nullptr;
     if (slash) *slash = 0;
     g_fontFiles = slash && FontsLoad(g_fonts, dir, kGaugeStyles, kGsStyleCount);
+    g_warnFontFiles = slash && FontsLoad(g_warnFonts, dir, kWarnStyles, kWsStyleCount);
     GaugeLog(g_fontFiles ? L"overlay: game font read (TT Lakes Compressed)" : L"overlay: game font not found, Dear ImGui's font stands in");
     NgClient client = {};
     client.tab = "Gameplay";

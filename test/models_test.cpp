@@ -2464,6 +2464,7 @@ int main(int argc, char **argv)
         {
             const float stock = 195000.0f;
             auto gain = [&](int gear) { const float r = TruckGearTop(c, 1) / TruckGearTop(c, gear); return 2000.0f * r * r; };
+            float warned = -1.0f; // when the last start's heat came to the amber warning
             auto start = [&](int gear, float gain, float seconds, float &most, float &began) {
                 TruckRaw t = c;
                 t.gear = t.gearEngaged = gear;
@@ -2480,19 +2481,25 @@ int main(int argc, char **argv)
                     ClutchHeatStep(h, 1, cm, stock, true, kDt);
                     most = fmaxf(most, h.q);
                     if (h.burning && began < 0.0f) began = at;
+                    if (h.q >= kClutchWarnFrom && warned < 0.0f) warned = at;
                 }
             };
-            float most[5] = {}, began[5] = {}, stuckMost = 0.0f, stuckBegan = 0.0f;
-            for (int g = 1; g <= 4; g++) start(g, gain(g), 8.0f, most[g], began[g]);
+            float most[5] = {}, began[5] = {}, stuckMost = 0.0f, stuckBegan = 0.0f, thirdWarned = -1.0f;
+            for (int g = 1; g <= 4; g++)
+            {
+                warned = -1.0f;
+                start(g, gain(g), 8.0f, most[g], began[g]);
+                if (g == 3) thirdWarned = warned;
+            }
             start(3, 0.0f, 8.0f, stuckMost, stuckBegan); // a gear it cannot pull at all: the truck does not move
-            printf("     automatic clutch floored from a standstill: first at most %.2f of %.2f, second %.2f; third %.2f%s%.1f s; fourth %.2f%s%.1f s; "
-                   "a gear it cannot pull %.2f%s%.1f s\n",
-                   most[1], kClutchBurnFrom, most[2], most[3], began[3] >= 0.0f ? ", burning after " : ", no burn ", began[3], most[4],
-                   began[4] >= 0.0f ? ", burning after " : ", no burn ", began[4], stuckMost, stuckBegan >= 0.0f ? ", burning after " : ", no burn ", stuckBegan);
-            Check(most[1] < kClutchBurnFrom / 3.0f && began[1] < 0.0f && began[3] >= 0.0f && began[3] < 4.0f && began[4] >= 0.0f && began[4] <= began[3] &&
-                      stuckBegan >= 0.0f && stuckBegan <= began[3],
-                  "clutch heat, the automatic clutch slips until the truck catches up: floored from a standstill a start in first stays under a third of the "
-                  "burn point; one in third burns within three or four seconds, in fourth sooner, and in a gear the engine cannot pull soonest");
+            printf("     automatic clutch floored from a standstill: first at most %.2f of %.2f (amber from %.2f), second %.2f; third amber after %.1f s, %.2f%s%.1f s; "
+                   "fourth %.2f%s%.1f s; a gear it cannot pull %.2f%s%.1f s\n",
+                   most[1], kClutchBurnFrom, kClutchWarnFrom, most[2], thirdWarned, most[3], began[3] >= 0.0f ? ", red after " : ", no red ", began[3], most[4],
+                   began[4] >= 0.0f ? ", red after " : ", no red ", began[4], stuckMost, stuckBegan >= 0.0f ? ", red after " : ", no red ", stuckBegan);
+            Check(most[1] < kClutchWarnFrom && began[1] < 0.0f && thirdWarned > 1.4f && thirdWarned < 2.6f && began[3] > 3.4f && began[3] < 4.6f && began[4] >= 0.0f &&
+                      began[4] <= began[3] && stuckBegan >= 0.0f && stuckBegan <= began[3],
+                  "clutch heat, the automatic clutch slips until the truck catches up: floored from a standstill a start in first never warns; one in third "
+                  "warns amber after about two seconds and goes red after about four, in fourth sooner, and in a gear the engine cannot pull soonest");
         }
         // let up at speed: the engine turns with the gearbox; pressed again with the foot off, back to idle
         wheels(TruckGearTop(c, 1) * 0.6f);
@@ -3140,7 +3147,7 @@ int main(int argc, char **argv)
         float began = 0.0f, owed = 0.0f;
         ClutchHeat first = {};
         run(first, 1, 1.0f, 1200.0f, 0.0f, 1.5f, stock, true, began, owed);
-        const bool firstCold = began < 0.0f && first.q < kClutchBurnFrom * 0.4f;
+        const bool firstCold = began < 0.0f && first.q < kClutchWarnFrom;
         ClutchHeat third = {};
         run(third, 1, 1.0f, 1600.0f, 1600.0f, 6.0f, stock, true, began, owed);
         const float thirdBegan = began, thirdOwed = owed;
@@ -3154,11 +3161,77 @@ int main(int argc, char **argv)
         const bool hillBurns = began >= 0.0f;
         printf("     clutch heat: third floored burns after %.2f s and costs %.3f in the two after; three times the torque %.2f s and %.3f\n", thirdBegan, thirdOwed,
                strongBegan, strongOwed);
-        Check(firstCold && thirdBegan > 1.5f && thirdBegan < 2.3f && thirdOwed > 0.08f && thirdOwed < 0.12f && strongBegan < thirdBegan &&
-                  strongOwed > thirdOwed * 2.7f && strongOwed < thirdOwed * 3.6f && hillNotYet && hillBurns,
-              "clutch heat: a first-gear start stays under a third of the burn point; a floored start in third burns within about two seconds and costs "
-              "about a tenth of the gearbox in the two after, three times the torque about three times as much; a hill held at half throttle burns "
-              "after about five seconds");
+        // as retuned after the user's first test (the idealised slip of the first tuning: carrying 1.0 at 1600 rpm): the
+        // first gear never warns; third goes red after about two seconds and costs about a twentieth in the two after,
+        // half the first tuning's tenth; three times the torque goes red three times as soon and costs more
+        Check(firstCold && thirdBegan > 1.8f && thirdBegan < 2.6f && thirdOwed > 0.04f && thirdOwed < 0.09f && strongBegan * 2.5f < thirdBegan &&
+                  strongOwed > thirdOwed && hillNotYet && hillBurns,
+              "clutch heat: a first-gear start never warns; a floored start in third burns after about two seconds and costs about a twentieth of the "
+              "gearbox in the two after, three times the torque burns three times as soon; a hill held at half throttle burns after about five seconds");
+        // no cost from stored heat: past the burn point and then locked, the clutch owes nothing and only cools, the
+        // warning red until it falls under the burn point; a repair clears the heat
+        {
+            ClutchHeat hot = {};
+            for (int i = 0; i < 200; i++) ClutchHeatStep(hot, 3, slipping(1.0f, 1600.0f), stock, true, dt); // ten seconds slipping
+            const bool paying = hot.dealing && hot.owed > 0.0f && ClutchLamp(hot) == kClutchLampDealing && ClutchWarn(hot, true).state == kWarnRed;
+            ClutchModel locked = slipping(1.0f, 0.0f);
+            locked.locked = true;
+            ClutchHeatStep(hot, 3, locked, stock, true, dt);
+            const bool stopped = !hot.dealing && hot.owed == 0.0f && hot.q > kClutchBurnFrom && ClutchLamp(hot) == kClutchLampRed;
+            const float qLocked = hot.q;
+            float owedLater = 0.0f;
+            for (int i = 0; i < 100; i++)
+            {
+                ClutchHeatStep(hot, 3, locked, stock, true, dt);
+                owedLater += hot.owed;
+            }
+            const bool cooling = owedLater == 0.0f && hot.q < qLocked * 0.8f;
+            ClutchHeatRepair(hot);
+            const bool repaired = hot.q == 0.0f && hot.owed == 0.0f && ClutchLamp(hot) == kClutchLampOff && ClutchWarn(hot, true).state == kWarnNone;
+            // a burn's job no frame took is dropped by the repair; a stall's stays
+            StallJob job = {};
+            TruckRefs refs = {};
+            refs.vehicle = 0x1000;
+            const bool burnDropped = StallJobPost(job, refs, 2.0f, 0, true) && StallJobDropBurn(job) && job.state == kStallJobIdle;
+            const bool stallKept = StallJobPost(job, refs, 5.0f, 0, false) && !StallJobDropBurn(job) && job.state == kStallJobPosted;
+            Check(paying && stopped && cooling && repaired && burnDropped && stallKept,
+                  "clutch heat: it costs only while it slips past the burn point, nothing once it grips however hot, and a repair clears the heat and "
+                  "drops a burn's points not dealt yet, a stall's kept");
+        }
+        // the warning boxes: the clutch's off, amber from half the burn point, red from it, the number its share of the
+        // burn point; the engine's amber from the coolant's red mark, red while the heat costs, its film title at the
+        // turbo's full with the pedal floored and the floor pan's line once a point lands under it
+        {
+            ClutchHeat wh = {};
+            wh.known = true;
+            auto at = [&](float q) { wh.q = wh.truck[0].q = q; wh.dealing = false; return ClutchWarn(wh, true); };
+            const WarnBox none = at(kClutchWarnFrom * 0.9f), amber = at(kClutchWarnFrom * 1.1f), red = at(kClutchBurnFrom * 1.5f), off = ClutchWarn(wh, false);
+            const bool clutchBoxes = none.state == kWarnNone && amber.state == kWarnAmber && !strcmp(amber.title, "CLUTCH HOT") &&
+                                     !strcmp(amber.line, "Ease off or shift down") && amber.percent == (int)(kClutchWarnFrom * 1.1f / kClutchBurnFrom * 100.0f) &&
+                                     red.state == kWarnRed && !strcmp(red.title, "CLUTCH DAMAGE") && !strcmp(red.line, "Shift down, the gearbox is wearing") &&
+                                     red.percent == 100 && off.state == kWarnNone;
+            bool pan = false;
+            const WarnBox cool = EngineWarn(110.0f, 0.0f, true, false, false, pan), hotAmber = EngineWarn(kTempRed + 1.0f, 0.0f, true, false, false, pan),
+                          hotRed = EngineWarn(121.5f, 3.0f, true, false, true, pan), noDamage = EngineWarn(130.0f, 5.0f, false, true, true, pan);
+            const bool engineBoxes = cool.state == kWarnNone && hotAmber.state == kWarnAmber && !strcmp(hotAmber.title, "ENGINE HOT") &&
+                                     !strcmp(hotAmber.line, "Ease off, the coolant is in the red") && hotRed.state == kWarnRed && !strcmp(hotRed.title, "ENGINE DAMAGE") &&
+                                     !strcmp(hotRed.line, "Ease off, the engine is wearing") && hotRed.percent == 50 && noDamage.state == kWarnNone && !pan;
+            // the film: DANGER TO MANIFOLD only at the turbo's full with the pedal floored, the floor pan watched, then
+            // fallen once a point lands, for the rest of the red spell, and the plain lines again once it is amber
+            const bool fullBoost = BoostFull(1.0f, 1.0f, 1.0f) && !BoostFull(0.9f, 1.0f, 1.0f) && !BoostFull(1.0f, 1.0f, 0.8f);
+            const WarnBox manifold = EngineWarn(122.0f, 3.0f, true, true, false, pan);
+            const bool watched = !strcmp(manifold.title, "DANGER TO MANIFOLD") && !strcmp(manifold.line, "Keep an eye on the floor pan") && !pan;
+            const WarnBox fell = EngineWarn(122.0f, 3.0f, true, true, true, pan);
+            const WarnBox stillRed = EngineWarn(122.0f, 3.0f, true, false, false, pan);
+            const bool fallen = !strcmp(fell.title, "DANGER TO MANIFOLD") && !strcmp(fell.line, "The floor pan fell off") && pan && !strcmp(stillRed.title, "ENGINE DAMAGE") &&
+                                !strcmp(stillRed.line, "The floor pan fell off");
+            const WarnBox backAmber = EngineWarn(kTempRed + 1.0f, 0.0f, true, false, false, pan);
+            const WarnBox againRed = EngineWarn(122.0f, 3.0f, true, false, false, pan);
+            const bool plainAgain = backAmber.state == kWarnAmber && !pan && !strcmp(againRed.line, "Ease off, the engine is wearing");
+            Check(clutchBoxes && engineBoxes && fullBoost && watched && fallen && plainAgain,
+                  "warnings: the clutch's box amber from half the burn point and red from it with its number; the engine's amber from the red mark and red "
+                  "while the heat costs; at the turbo's full the film's title, the floor pan watched and then fallen for the rest of that red spell");
+        }
         // cooling with the clutch open, kept per kind of truck, and nothing owed with ClutchBurn or Damage off
         ClutchHeat h = {};
         run(h, 7, 1.0f, 1600.0f, 1600.0f, 4.0f, stock, true, began, owed);

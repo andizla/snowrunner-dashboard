@@ -881,6 +881,13 @@ inline bool StallJobDrop(StallJob &j, uint64_t vehicle)
     return j.state == kStallJobPosted && j.refs.vehicle != vehicle && InterlockedCompareExchange(&j.state, kStallJobIdle, kStallJobPosted) == kStallJobPosted;
 }
 
+// On the mod's thread after a repair: a burn's job no frame took yet taken back (a stall's stays: one stall, one deal).
+// True when it was.
+inline bool StallJobDropBurn(StallJob &j)
+{
+    return j.state == kStallJobPosted && j.burn && InterlockedCompareExchange(&j.state, kStallJobIdle, kStallJobPosted) == kStallJobPosted;
+}
+
 // What the game is showing. control: the driven truck's control object, 0 when there is none.
 inline void WorldRead(const TruckMemory &m, uint64_t control, World &w)
 {

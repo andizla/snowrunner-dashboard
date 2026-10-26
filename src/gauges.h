@@ -305,9 +305,22 @@ static const int kViewShifts = 24;  // of them the shifter's, before the two loc
 // both, with the snapshot of its pass).
 void BindingAsk(int what, int action, int slot);
 enum { kBindAskCapture = 1, kBindAskClear = 2, kBindAskCancel = 3 };
+// A warning box (models.h, ClutchWarn and EngineWarn; drawn by gauge_draw.h, GWarnBox, the tire mod's TIRE DAMAGE box's
+// shape): none, amber or red, its title and line of advice (string literals), and the number at its right and the bar
+// along its bottom in percent, 0 to 100.
+enum { kWarnNone, kWarnAmber, kWarnRed };
+struct WarnBox
+{
+    int state;
+    const char *title, *line;
+    int percent;
+};
+enum { kWarnClutch, kWarnEngine, kWarnBoxes };
+
 // smtInstalled: the manual transmission mod is in the game; gearboxHeld: another mod holds the game's gearbox
-// functions. Either way the mod's gearbox stands down (the tab says why).
-struct GaugeView { bool show, demo; int hidden; GaugeState st; int engineDamage, engineCapacity; char truck[96]; bool truckOwn, smtInstalled, gearboxHeld; char map[96], mapFrom[64]; bool mapOwn; float ambientC;
+// functions. Either way the mod's gearbox stands down (the tab says why). warn: the clutch's and the engine's warning
+// boxes while a truck is driven.
+struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWarnBoxes]; int engineDamage, engineCapacity; char truck[96]; bool truckOwn, smtInstalled, gearboxHeld; char map[96], mapFrom[64]; bool mapOwn; float ambientC;
                    int pullTest, pullPhase; const char *pullWhy;
                    float ambientDay, ambientNight, hour; // the map's day and night (with mapOwn), the hour of the game's day (-1 not known)
                    char gearbox[96]; float gearHold; bool gearHoldOwn; // the driven truck's gearbox (its key, "" for none), the seconds each gear is held going up with the mod's engine, and whether its file sets them

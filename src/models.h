@@ -2175,10 +2175,23 @@ inline void ClutchProbeText(const ClutchModel &m, float travel, char *out, size_
 //     point, second 1.66; third burns after 3.5 s, fourth after 3.2 s, a gear the truck cannot pull at all after 2.8
 //     s (the engine's rise to the take-up speed is what sets that floor). Take-ups of 0.5, 0.7 and 1.0 gave third no
 //     burn, 3.9 s and 3.5 s with first 0.37, 0.47 and 0.61.
+//
+// The retune after the user's first test (26 October: "the damage works, but it queues up damage. so when you repair it
+// will keep damaging. also, theres no warning notice like when tires wear. the damage also comes so fast that theres no
+// chance to react"): the cost is dealt only while the clutch slips under load past the burn point, never from stored
+// heat (locked or open it only cools, and what it owed is dropped), a repair clears the heat, and a warning box shows
+// first (ClutchWarn, as the tire mod's TIRE DAMAGE box): amber from half the burn point (kClutchWarnFrom), red from it. On the clutch model's
+// own states (the automatic clutch floored in third on the models test's truck) the heat is 1.76 at 2 s, 3.17 at 4 s
+// and 4.04 at 6 s; stuck in a gear it cannot pull, 1.97 at 2 s and 3.98 at 4 s. So kClutchBurnFrom 3.2 puts amber at
+// about 1.9 s and red at about 4 s in third, red at about 3.2 s stuck, and a first-gear start (0.57 at the most) never
+// brings the warning up. From red the clutch costs kClutchBurnRate times q / kClutchBurnFrom of the gearbox's capacity a
+// second: 0.025 at red, about a twentieth every two seconds while the slip goes on, half of the first tuning's pace.
 static const float kClutchHeatCapacity = 2.04e7f; // game torque times rad/s times s for one unit of heat
 static const float kClutchCooling = 0.05f;        // the share of its heat the clutch loses a second
-static const float kClutchBurnFrom = 2.85f;       // the heat from which it burns
-static const float kClutchBurnRate = 0.1f;        // the gearbox's capacity a second it costs at twice kClutchBurnFrom
+static const float kClutchBurnFrom = 3.2f;        // the heat from which it burns (the lamp red)
+static const float kClutchWarnFrom = 1.6f;        // the heat from which the lamp warns amber
+static const float kClutchBurnRate = 0.025f;      // the gearbox's capacity a second it costs at kClutchBurnFrom, more as it gets hotter
+enum { kClutchLampOff, kClutchLampAmber, kClutchLampRed, kClutchLampDealing }; // ClutchLamp: the clutch's state for its warning box
 
 struct ClutchHeat
 {
@@ -2191,6 +2204,7 @@ struct ClutchHeat
     float q;        // the driven truck's clutch heat
     float power;    // the last step's power, in units of heat a second
     bool burning;   // q is past kClutchBurnFrom
+    bool dealing;   // and the clutch slips under load with on: the burn costs on this step
     float owed;     // the share of the gearbox's capacity the burn has cost and is not dealt yet (with on)
 };
 
@@ -2230,11 +2244,92 @@ inline void ClutchHeatStep(ClutchHeat &h, uint64_t id, const ClutchModel &c, flo
     q = fmaxf(q + (h.power - q * kClutchCooling) * dt, 0.0f);
     h.q = q;
     h.burning = q > kClutchBurnFrom;
-    if (on && h.burning) h.owed = fminf(h.owed + (q - kClutchBurnFrom) / kClutchBurnFrom * kClutchBurnRate * dt, 1.0f);
-    if (!on) h.owed = 0.0f;
+    // the cost only while it slips under load past the burn point: stored heat costs nothing, and what was owed when
+    // the slip ended is dropped, so the cost stops the moment the clutch grips or the pedal comes up
+    h.dealing = on && h.burning && h.power > 0.0f;
+    if (h.dealing) h.owed = fminf(h.owed + q / kClutchBurnFrom * kClutchBurnRate * dt, 1.0f);
+    else h.owed = 0.0f;
     h.clock += dt;
     h.truck[h.at].left = h.clock;
 }
+
+// A repair (the gearbox's damage as read fell: the game's repair or a repair point): the driven truck's clutch cold
+// again, and nothing owed.
+inline void ClutchHeatRepair(ClutchHeat &h)
+{
+    if (h.known) h.truck[h.at].q = 0.0f;
+    h.q = h.power = h.owed = 0.0f;
+    h.burning = h.dealing = false;
+}
+
+// The clutch's state by the heat: off under kClutchWarnFrom, amber from it, red from kClutchBurnFrom, and dealing
+// while the burn costs.
+inline int ClutchLamp(const ClutchHeat &h)
+{
+    return h.dealing ? kClutchLampDealing : h.q >= kClutchBurnFrom ? kClutchLampRed : h.q >= kClutchWarnFrom ? kClutchLampAmber : kClutchLampOff;
+}
+
+// ---- the warning boxes (gauges.h, WarnBox: the tire mod's TIRE DAMAGE box, the same shape, below it) ----
+
+// The clutch's box, with ClutchBurn and Damage on (on): amber from half the burn point, red from it; the number is the
+// heat in percent of the burn point, at most 100.
+inline WarnBox ClutchWarn(const ClutchHeat &h, bool on)
+{
+    WarnBox w = { kWarnNone, "", "", 0 };
+    if (!on) return w;
+    const int lamp = ClutchLamp(h);
+    if (lamp == kClutchLampOff) return w;
+    w.percent = (int)fminf(h.q / kClutchBurnFrom * 100.0f, 100.0f);
+    if (lamp == kClutchLampAmber)
+    {
+        w.state = kWarnAmber;
+        w.title = "CLUTCH HOT";
+        w.line = "Ease off or shift down";
+    }
+    else
+    {
+        w.state = kWarnRed;
+        w.title = "CLUTCH DAMAGE";
+        w.line = "Shift down, the gearbox is wearing";
+    }
+    return w;
+}
+
+// The engine's box, with Damage on (on): amber from the coolant's red zone mark (kTempRed), red while the heat costs the
+// engine (hot: DamageHot above 0); the number is the coolant's degrees over the red mark in percent of the way to
+// kTempHotDamage, at most 100. Red with the boost at the turbo's full and the pedal floored (fullBoost) it reads DANGER TO
+// MANIFOLD, a line from a film, with "Keep an eye on the floor pan", and ENGINE DAMAGE again the moment the boost drops;
+// once a point of the heat's damage has landed on the engine under that title (dealt), "The floor pan fell off" for the
+// rest of that red spell (floorPan, kept by the caller from pass to pass, cleared once the box is amber or gone).
+inline WarnBox EngineWarn(float coolant, float hot, bool on, bool fullBoost, bool dealt, bool &floorPan)
+{
+    WarnBox w = { kWarnNone, "", "", 0 };
+    if (!on || !(coolant >= kTempRed || hot > 0.0f))
+    {
+        floorPan = false;
+        return w;
+    }
+    w.percent = (int)fminf(fmaxf((coolant - kTempRed) / (kTempHotDamage - kTempRed) * 100.0f, 0.0f), 100.0f);
+    if (hot > 0.0f)
+    {
+        w.state = kWarnRed;
+        if (fullBoost && dealt) floorPan = true;
+        w.title = fullBoost ? "DANGER TO MANIFOLD" : "ENGINE DAMAGE";
+        w.line = floorPan ? "The floor pan fell off" : fullBoost ? "Keep an eye on the floor pan" : "Ease off, the engine is wearing";
+    }
+    else
+    {
+        floorPan = false;
+        w.state = kWarnAmber;
+        w.title = "ENGINE HOT";
+        w.line = "Ease off, the coolant is in the red";
+    }
+    return w;
+}
+
+// The boost at the turbo's full with the pedal floored, for EngineWarn: the bar within 3 percent of the boost's top
+// (scale.boost) and the pedal past 95 percent.
+inline bool BoostFull(float bar, float boostMax, float pedal) { return boostMax > 0.0f && bar >= boostMax * 0.97f && pedal >= 0.95f; }
 
 // What the burn owes, in whole points of a gearbox that takes capacity, posted to the stall damage's job (truck.h,
 // StallJob) as a percent of it. The points posted; 0 while less than one is owed or the job is busy.
@@ -2250,7 +2345,8 @@ inline int ClutchBurnPost(ClutchHeat &h, StallJob &j, const TruckRefs &r, int ca
 // The heat in a few words for the probe's clutch line.
 inline void ClutchHeatProbeText(const ClutchHeat &h, char *out, size_t size)
 {
-    sprintf_s(out, size, " | heat %.2f, %.0f %% of the burn point, %.2f a second%s", h.q, h.q / kClutchBurnFrom * 100.0f, h.power, h.burning ? ", burning" : "");
+    static const char *const lamp[] = { "none", "amber", "red", "red: the gearbox pays" };
+    sprintf_s(out, size, " | heat %.2f, %.0f %% of the burn point, %.2f a second, the warning %s", h.q, h.q / kClutchBurnFrom * 100.0f, h.power, lamp[ClutchLamp(h)]);
 }
 
 // ---- the brake air ----
