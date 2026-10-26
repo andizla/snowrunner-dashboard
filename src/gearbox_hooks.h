@@ -38,7 +38,9 @@ void GearboxCountsGet(GearboxCounts &out);
 // (reverse and neutral go through auto off, auto off through ShiftGear), refusing ShiftGear alone would refuse them
 // all; each is refused at its own door. The mod's own calls go through GearboxOriginal and are never refused. Turned
 // on, it tells each kind afresh: GearboxRefusedNew gives the kinds (1 << kFn...) refused for the first time since.
-void GearboxHolding(bool on);
+// vehicle: the held truck (TruckRefs::vehicle): only its calls are refused. Turned on for another truck, it tells
+// each kind afresh; off and on again for the same truck (the garage, the map), it does not.
+void GearboxHolding(bool on, void *vehicle);
 bool GearboxHoldingNow();
 unsigned GearboxRefusedNew();
 // The way through to the game's own function behind a hook (fn one of kFn*), nullptr while it has none: the mod's own

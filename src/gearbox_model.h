@@ -15,10 +15,11 @@
 
 enum { kPosA, kPosGear, kPosN, kPosR, kPosH, kPosLowMinus, kPosLow, kPosLowPlus, kPosCount };
 
-// The power factor of the low range, L-, L and L+, which the game gives a truck in its first gear. Placeholders: a drive
-// with Gearbox=0 through the game's own L-, L and L+ shows the real ones in the probe's SetPowerFactor line (the last
-// factor), which then replace them.
-static const float kLowRangePower[3] = { 0.30f, 0.50f, 1.00f };
+// The power factor of the low range, L-, L and L+, which the game gives a truck in its first gear: the figures truck.h
+// has (TruckGearMode reads the letters by them). A drive with Gearbox=0 through the game's own L-, L and L+ confirms
+// them in the probe's SetPowerFactor line (the last factor) (review 7, R8).
+static const float kLowRangePower[3] = { 0.20f, 0.45f, 1.00f };
+static const float kLowMinusUnder = 0.325f, kLowUnder = 0.725f; // a factor in gear 1 under these is L-, and L (truck.h)
 // What a shift without the clutch writes into the truck's stall seconds (vehicle + 0x11C): the game kills an engine
 // there from 1.4 on, as SMT's 5 does.
 static const float kStallSeconds = 5.0f;
@@ -42,7 +43,7 @@ struct GearboxActions
     bool a, n, r, h, lowMinus, low, lowPlus;
     bool rangeHigh, rangeLow; // for a shifter without a range of its own: between the low range and the numbered gears
     bool clutch;              // the clutch is held
-    float clutchTravel;       // its travel on an axis, 0 let up to 1 pressed; below 0 no axis (a button, or none)
+    float clutchTravel = -1.0f; // its travel on an axis, 0 let up to 1 pressed; below 0 no axis (a button, or none) (review 7, R7)
 };
 
 // The truck as read on this pass.
@@ -67,6 +68,7 @@ struct GearboxPosModel
     float travel;         // its travel, 0 to 1
     int lastSet;          // the gear it set last, as the game numbers them
     int stalls, shifts;
+    bool refusedSaid;     // a refusal of the game's was told since the position last changed
 };
 
 struct GearboxPosOrders
@@ -94,8 +96,9 @@ inline const char *GearboxPosLetter(int pos)
     return pos >= 0 && pos < kPosCount ? letters[pos] : "";
 }
 
-// Takes the truck in the position the game has it in: A when its automatic flag is up, else by its gear (the low range
-// is read as the first gear, its power kept).
+// Takes the truck in the position the game has it in: A when its automatic flag is up, else by its gear. The first gear
+// at a factor under kLowUnder is L- or L, and the other positions get the plain 1 then: kept, the low factor would
+// pull every gear (review 7, R3). L+ has the plain factor and reads as the first gear.
 inline void GearboxPosTake(GearboxPosModel &m, const GearboxTruck &t)
 {
     m = GearboxPosModel{ true };
@@ -105,6 +108,11 @@ inline void GearboxPosTake(GearboxPosModel &m, const GearboxTruck &t)
     else if (t.gear < 0) m.pos = kPosR;
     else if (t.gear == 0) m.pos = kPosN;
     else if (t.gear > t.top) m.pos = kPosH;
+    else if (t.gear == 1 && t.power > 0.0f && t.power < kLowUnder)
+    {
+        m.pos = t.power < kLowMinusUnder ? kPosLowMinus : kPosLow;
+        m.power = 1.0f;
+    }
     else
     {
         m.pos = kPosGear;
@@ -132,7 +140,8 @@ inline float GearboxPosPower(const GearboxPosModel &m)
 }
 
 // The numbered gear a manual position stands for, for up and down: a numbered gear its own, the low range and A the
-// game's gear (at least 1), H the top, N 0, R -1.
+// game's gear (at least 1), H the top + 1 (so down from H lands on the top, as SMT's walk does; review 7, R2), N 0,
+// R -1.
 inline int GearboxPosAsGear(const GearboxPosModel &m, const GearboxTruck &t)
 {
     switch (m.pos)
@@ -140,7 +149,7 @@ inline int GearboxPosAsGear(const GearboxPosModel &m, const GearboxTruck &t)
     case kPosGear: return m.gear;
     case kPosN: return 0;
     case kPosR: return -1;
-    case kPosH: return t.top;
+    case kPosH: return t.top + 1;
     default: return t.gear < 1 ? 1 : t.gear > t.top ? t.top : t.gear;
     }
 }
@@ -175,19 +184,20 @@ inline GearboxPosOrders GearboxPosStep(GearboxPosModel &m, const GearboxOptions 
     else if (a.low) m.pos = kPosLow;
     else if (a.lowPlus) m.pos = kPosLowPlus;
     else if (a.gearPressed >= 1) GearboxPosToGear(m, a.gearPressed > top ? top : a.gearPressed);
-    else if (a.up || a.down)
+    else if ((a.up || a.down) && !(a.up && m.pos == kPosH)) // up from H stays in H
     {
         const int g = GearboxPosAsGear(m, t);
         int to = g;
         if (a.up) to = g >= top ? top : g == -1 && o.skipNeutral ? 1 : g + 1;
         else to = g <= -1 ? -1 : g == 1 && o.skipNeutral ? -1 : g - 1;
-        GearboxPosToGear(m, to);
+        GearboxPosToGear(m, to > top ? top : to);
     }
     else if (a.rangeLow && !(m.pos >= kPosLowMinus && m.pos <= kPosLowPlus)) m.pos = kPosLow;
     else if (a.rangeHigh && m.pos >= kPosLowMinus && m.pos <= kPosLowPlus) GearboxPosToGear(m, 1);
     // an H shifter: neutral the moment no gear key is held
     if (o.requireGearHeld && m.pos == kPosGear && a.gearHeld < 1) m.pos = kPosN;
     r.moved = m.pos != was || (m.pos == kPosGear && m.gear != wasGear);
+    if (r.moved) m.refusedSaid = false;
     // the gear and the power the position asks for; A sets off from N only once the pedal is down
     int want = GearboxPosGear(m, t, autoGear);
     if (m.pos == kPosA && t.gear == 0 && t.speed < kStandStill && t.pedal < kSetOffPedal) want = 0;
@@ -225,6 +235,13 @@ inline void GearboxPosProbeText(const GearboxPosModel &m, const GearboxOptions &
              GearboxPosName(m.pos), at, gear, m.clutch ? "held" : "let up", m.travel, m.shifts, m.stalls, o.requireClutch, o.requireGearHeld, o.skipNeutral);
 }
 
-// The game did not take the gear the mod set: the gear it is in counts as set, so the mod tries again when the
-// position next asks for another.
-inline void GearboxPosRefused(GearboxPosModel &m, const GearboxTruck &t) { m.lastSet = t.gear; }
+// The game did not take the gear the mod set: it counts as asked, so the mod asks again when the position (or A's
+// gear) next asks for another, not on every pass (review 7, R1). True the first time since the position changed: the
+// refusal is logged once a position.
+inline bool GearboxPosRefused(GearboxPosModel &m, int gear)
+{
+    m.lastSet = gear;
+    const bool say = !m.refusedSaid;
+    m.refusedSaid = true;
+    return say;
+}

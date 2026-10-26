@@ -29,7 +29,6 @@ static GearboxTruck Truck(int g)
 // One pass with these actions; the game takes the gear set.
 static GearboxPosOrders Pass(GearboxPosModel &m, const GearboxOptions &o, GearboxActions a, GearboxTruck &t, int autoGear = 1)
 {
-    if (a.clutchTravel == 0.0f) a.clutchTravel = -1.0f;
     const GearboxPosOrders r = GearboxPosStep(m, o, a, t, autoGear);
     if (r.setGear) t.gear = r.gear;
     if (r.setPower) t.power = r.power;
@@ -181,16 +180,81 @@ int main()
         Check(lowMinus && low && lowPlus && high && geared && rangedLow && m.pos == kPosGear && t.gear == 1 && t.power == 1.05f,
               "gearbox: the power factor is the truck's own in A, the gears and H, the low range's in L-, L and L+; the range keys move between the low range and the gears");
     }
-    // a gear the game refused is tried again
+    // a gear the game refused is not asked on every pass after, and told once a position; a new position asks again
+    // (review 7, R1)
     {
         GearboxPosModel m = {};
         GearboxTruck t = Truck(2);
         Pass(m, plain, None(), t);
         const GearboxPosOrders first = GearboxPosStep(m, plain, Up(), t, 1); // not taken: t stays in 2
-        const GearboxPosOrders quiet = GearboxPosStep(m, plain, None(), t, 1);
-        GearboxPosRefused(m, t);
-        const GearboxPosOrders retry = GearboxPosStep(m, plain, None(), t, 1);
-        Check(first.setGear && first.gear == 3 && !quiet.setGear && retry.setGear && retry.gear == 3, "gearbox: a gear the game did not take is asked again once the refusal is told");
+        const bool sayFirst = GearboxPosRefused(m, first.gear);
+        int asked = 0;
+        for (int i = 0; i < 20; i++) asked += GearboxPosStep(m, plain, None(), t, 1).setGear;
+        const bool sayAgain = GearboxPosRefused(m, first.gear);
+        const GearboxPosOrders next = GearboxPosStep(m, plain, Up(), t, 1);
+        Check(first.setGear && first.gear == 3 && sayFirst && asked == 0 && !sayAgain && next.setGear && next.gear == 4 && GearboxPosRefused(m, 4),
+              "gearbox: a gear the game did not take is not asked on every pass after, the refusal told once a position; the next position asks again");
+    }
+    // H: down lands on the top gear, up stays in H; up from A starts from the game's gear; the range keys from A and
+    // from H go to L, and high from the gears does nothing (review 7, R2, R11)
+    {
+        GearboxPosModel m = {};
+        GearboxTruck t = Truck(3);
+        GearboxActions h = {};
+        h.h = true;
+        Pass(m, plain, h, t);
+        Pass(m, plain, Up(), t);
+        const bool upStays = m.pos == kPosH && t.gear == 7;
+        Pass(m, plain, Down(), t);
+        const bool downTop = m.pos == kPosGear && t.gear == 6;
+        GearboxPosModel ma = {};
+        GearboxTruck ta = Truck(3);
+        ta.automatic = true;
+        Pass(ma, plain, None(), ta, 3);
+        ta.automatic = false;
+        Pass(ma, plain, Up(), ta, 3);
+        const bool upFromA = ma.pos == kPosGear && ta.gear == 4;
+        GearboxActions low = {}, high = {}, a = {};
+        low.rangeLow = true;
+        high.rangeHigh = true;
+        a.a = true;
+        Pass(ma, plain, a, ta, 3);
+        Pass(ma, plain, low, ta, 3);
+        const bool lowFromA = ma.pos == kPosLow && ta.gear == 1;
+        Pass(m, plain, h, t);
+        Pass(m, plain, low, t);
+        const bool lowFromH = m.pos == kPosLow;
+        GearboxActions g = {};
+        g.gearPressed = 2;
+        Pass(m, plain, g, t);
+        Pass(m, plain, high, t);
+        Check(upStays && downTop && upFromA && lowFromA && lowFromH && m.pos == kPosGear && t.gear == 2,
+              "gearbox: down from H lands on the top gear and up stays in H; up from A goes on from the game's gear; the low range key from A or H gives L");
+    }
+    // a truck taken in the game's L- or L reads as that, the other positions at the plain factor (review 7, R3)
+    {
+        GearboxPosModel m = {};
+        GearboxTruck t = Truck(1);
+        t.power = 0.45f;
+        Pass(m, plain, None(), t);
+        const bool inL = m.pos == kPosLow && t.power == kLowRangePower[1];
+        GearboxActions g = {};
+        g.gearPressed = 3;
+        Pass(m, plain, g, t);
+        GearboxPosModel mm = {};
+        GearboxTruck tm = Truck(1);
+        tm.power = 0.2f;
+        GearboxPosTake(mm, tm);
+        Check(inL && t.gear == 3 && t.power == 1.0f && mm.pos == kPosLowMinus && mm.power == 1.0f && !strcmp(GearboxPosLetter(kPosLow), "L"),
+              "gearbox: a truck taken in the game's L- or L reads as that, and its gears get the plain factor, not the low one");
+    }
+    // no clutch axis is the default of the actions (review 7, R7)
+    {
+        GearboxActions a = {};
+        GearboxPosModel m = {};
+        GearboxTruck t = Truck(2);
+        GearboxPosStep(m, plain, a, t, 1);
+        Check(a.clutchTravel < 0.0f && m.travel == 0.0f && !m.clutch, "gearbox: actions read no clutch axis unless one is given");
     }
 
     // the hooks' policy: while the gearbox has the truck the game's own six shifts and its power factor are refused, the
@@ -205,7 +269,7 @@ int main()
         const bool hooked = GearboxHook(0, finds, why, sizeof why) == 8;
         // flag off: everything passes
         const bool passOff = FakeShift(nullptr, 3) && FakeReverse(nullptr) && g_ran[kFnShiftGear] == 1 && g_ran[kFnShiftToReverse] == 1;
-        GearboxHolding(true);
+        GearboxHolding(true, nullptr);
         const bool refShift = !FakeShift(nullptr, 3);
         FakeAuto(nullptr);
         const bool refHigh = !FakeHigh(nullptr), refReverse = !FakeReverse(nullptr), refNeutral = !FakeNeutral(nullptr), refOff = !FakeAutoOff(nullptr, 2);
@@ -220,10 +284,12 @@ int main()
         // the mod's own call goes through the way past the hook
         typedef bool (*Shift)(void *, int32_t);
         const bool own = ((Shift)GearboxOriginal(kFnShiftGear))(nullptr, 4) && g_ran[kFnShiftGear] == 2;
-        GearboxHolding(false);
+        // another vehicle's call passes while the held truck's are refused (review 7, R5)
+        const bool other = FakeShift((void *)0x1234, 3) && g_ran[kFnShiftGear] == 3 && !FakeShift(nullptr, 3) && g_ran[kFnShiftGear] == 3;
+        GearboxHolding(false, nullptr);
         const bool passAgain = FakeHigh(nullptr) && g_ran[kFnShiftToHigh] == 1;
         GearboxUnhook();
-        Check(hooked && passOff && refShift && refHigh && refReverse && refNeutral && refOff && bodies && counted && own && passAgain &&
+        Check(hooked && other && passOff && refShift && refHigh && refReverse && refNeutral && refOff && bodies && counted && own && passAgain &&
                   (firsts & (1u << kFnShiftToReverse)) && (firsts & (1u << kFnSetPower)) && !(firsts & (1u << kFnSetVehicle)) && none == 0,
               "gearbox hooks: while the gearbox has the truck the game's six shifts and its power factor are refused and counted, each kind told once, the "
               "vehicle change passes and the mod's own call goes through; with the flag off all pass");

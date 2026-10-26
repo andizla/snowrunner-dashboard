@@ -1786,7 +1786,9 @@ inline void GearboxProbeText(const TruckRaw &t, const GearboxModel &m, bool driv
 // truck the moment it is driven with its engine running, in whatever position the game has it (A when the game's
 // automatic flag is up). From then on every shift is the gearbox's: the hooks refuse the game's own (gearbox_hooks.h,
 // GearboxHolding), the player's position changes come only through the gearbox's actions, and in A the automatic's
-// model above picks the gear. It gives the truck back when the setting goes off or the engine stops (the truck left).
+// model above picks the gear. It keeps the truck through an engine stop (a stall from RequireClutch among them) and
+// gives it back when the setting goes off; the truck gone (another driven, or none read) the caller lets go
+// (review 7, R4).
 struct TakeoverModel
 {
     bool driving;      // the mod's gearbox has the truck
@@ -1806,16 +1808,15 @@ struct TakeoverOrders
 inline TakeoverOrders TakeoverStep(TakeoverModel &m, const TruckRaw &t, bool enabled)
 {
     TakeoverOrders o = {};
-    const bool can = enabled && TruckEngineOn(t) && TruckTopGear(t) >= 1;
-    if (m.driving && !can)
+    if (m.driving && !enabled)
     {
         m.driving = false;
         m.handBacks++;
-        m.lastHandBack = !enabled ? kTakeOff : kTakeGone;
+        m.lastHandBack = kTakeOff;
         o.gaveBack = true;
         return o;
     }
-    if (!m.driving && can)
+    if (!m.driving && enabled && TruckEngineOn(t) && TruckTopGear(t) >= 1)
     {
         m.driving = true;
         m.shifts = 0;
@@ -1826,7 +1827,7 @@ inline TakeoverOrders TakeoverStep(TakeoverModel &m, const TruckRaw &t, bool ena
 
 inline const char *TakeoverWhy(int reason)
 {
-    return reason == kTakeOff ? "the setting is off" : reason == kTakeGone ? "the engine stopped" : "";
+    return reason == kTakeOff ? "the setting is off" : reason == kTakeGone ? "the truck is gone" : "";
 }
 
 // The automatic's gear for A: the model's, never lower than the engine can take at the speed the wheels turn

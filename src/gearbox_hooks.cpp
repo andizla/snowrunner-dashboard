@@ -23,15 +23,17 @@ static volatile LONG g_count[kFnCount] = {};
 static volatile LONG g_shiftGear = 0, g_autoOffGear = 0, g_vehicleSet = 0;
 static volatile float g_power = 0.0f;
 
-// The policy: while the mod's gearbox has the truck (g_holding) the game's own shifts and its power factor are refused,
-// the game's function not called. Each refusal is counted, and each kind is told once a truck (g_told, cleared when
-// the gearbox takes a truck) through g_new, which the mod's thread logs.
+// The policy: while the mod's gearbox has the truck (g_holding) the game's own shifts and its power factor for that
+// truck (g_heldVehicle) are refused, the game's function not called; another vehicle's calls pass (review 7, R5).
+// Each refusal is counted, and each kind is told once a truck (g_told, cleared when another truck is held) through
+// g_new, which the mod's thread logs.
 static volatile LONG g_holding = 0, g_told = 0, g_new = 0;
+static void *volatile g_heldVehicle = nullptr;
 static volatile LONG g_refused[kFnCount] = {};
 
-static bool Refused(int fn)
+static bool Refused(int fn, void *vehicle)
 {
-    if (!g_holding) return false;
+    if (!g_holding || vehicle != g_heldVehicle) return false;
     InterlockedIncrement(&g_refused[fn]);
     const LONG bit = 1L << fn;
     if (!(InterlockedOr(&g_told, bit) & bit)) InterlockedOr(&g_new, bit);
@@ -42,35 +44,35 @@ static bool HookShiftGear(void *vehicle, int32_t gear)
 {
     InterlockedIncrement(&g_count[kFnShiftGear]);
     InterlockedExchange(&g_shiftGear, gear);
-    if (Refused(kFnShiftGear)) return false;
+    if (Refused(kFnShiftGear, vehicle)) return false;
     return ((ShiftFn)g_way[kFnShiftGear])(vehicle, gear);
 }
 
 static void HookShiftToAuto(void *vehicle)
 {
     InterlockedIncrement(&g_count[kFnShiftToAuto]);
-    if (Refused(kFnShiftToAuto)) return;
+    if (Refused(kFnShiftToAuto, vehicle)) return;
     ((AutoFn)g_way[kFnShiftToAuto])(vehicle);
 }
 
 static bool HookShiftToHigh(void *vehicle)
 {
     InterlockedIncrement(&g_count[kFnShiftToHigh]);
-    if (Refused(kFnShiftToHigh)) return false;
+    if (Refused(kFnShiftToHigh, vehicle)) return false;
     return ((VehicleFn)g_way[kFnShiftToHigh])(vehicle);
 }
 
 static bool HookShiftToReverse(void *vehicle)
 {
     InterlockedIncrement(&g_count[kFnShiftToReverse]);
-    if (Refused(kFnShiftToReverse)) return false;
+    if (Refused(kFnShiftToReverse, vehicle)) return false;
     return ((VehicleFn)g_way[kFnShiftToReverse])(vehicle);
 }
 
 static bool HookShiftToNeutral(void *vehicle)
 {
     InterlockedIncrement(&g_count[kFnShiftToNeutral]);
-    if (Refused(kFnShiftToNeutral)) return false;
+    if (Refused(kFnShiftToNeutral, vehicle)) return false;
     return ((VehicleFn)g_way[kFnShiftToNeutral])(vehicle);
 }
 
@@ -78,7 +80,7 @@ static bool HookAutoOffAndShift(void *vehicle, int32_t gear)
 {
     InterlockedIncrement(&g_count[kFnAutoOffAndShift]);
     InterlockedExchange(&g_autoOffGear, gear);
-    if (Refused(kFnAutoOffAndShift)) return false;
+    if (Refused(kFnAutoOffAndShift, vehicle)) return false;
     return ((ShiftFn)g_way[kFnAutoOffAndShift])(vehicle, gear);
 }
 
@@ -86,13 +88,14 @@ static void HookSetPower(void *vehicle, float factor)
 {
     InterlockedIncrement(&g_count[kFnSetPower]);
     g_power = factor;
-    if (Refused(kFnSetPower)) return;
+    if (Refused(kFnSetPower, vehicle)) return;
     ((PowerFn)g_way[kFnSetPower])(vehicle, factor);
 }
 
-void GearboxHolding(bool on)
+void GearboxHolding(bool on, void *vehicle)
 {
-    if (on && !g_holding) InterlockedExchange(&g_told, 0);
+    if (on && vehicle != g_heldVehicle) InterlockedExchange(&g_told, 0);
+    if (on) InterlockedExchangePointer((void *volatile *)&g_heldVehicle, vehicle);
     InterlockedExchange(&g_holding, on ? 1 : 0);
 }
 

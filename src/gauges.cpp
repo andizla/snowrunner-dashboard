@@ -625,8 +625,8 @@ static void ReadIni(GaugeSettings &s)
                         L"; Gearbox=1: the mod's own gearbox has the truck: A (its automatic: a torque converter, shifts up later the further\n"
                         L"; the pedal is down, a kickdown floored, the gear held when the foot lifts), the numbered gears, N, R, H, L-, L, L+;\n"
                         L"; the game's own shifting is refused while it has the truck. 0 = the game's own gearbox and automatic.\n"
-                        L"; RequireClutch=1 stalls the engine on a shift into a gear without the clutch, RequireGearHeld=1 goes to neutral\n"
-                        L"; while no gear key is held (an H shifter), SkipNeutral=1 steps from the first gear to reverse and back past neutral.\n"
+                        L"; RequireClutch=1 stalls the engine on a shift into a gear without the clutch, RequireGearHeld=1 goes to N while no\n"
+                        L"; gear key is held (an H shifter with every gear bound), SkipNeutral=1 steps from gear 1 to reverse and back past N.\n"
                         L"; Input is what you drive with: 0 a wheel's pedals, 1 a pad's trigger, 2 the keyboard. The mod's automatic kicks\n"
                         L"; down by it: a trigger has to come from under three quarters, and keys kick nothing down and shift as floored.\n"
                         L"; Powertrain=1: the truck pulls with the mod's engine: its torque curve against the engine speed the needle\n"
@@ -1642,7 +1642,7 @@ static bool GearboxManual(const TruckWatch &w) { return w.take.driving && w.pos.
 // The mod's gearbox lets the truck go: the game's own shifting passes again.
 static void GearboxLetGo(TruckWatch &w)
 {
-    GearboxHolding(false);
+    GearboxHolding(false, nullptr);
     w.pos = GearboxPosModel{};
 }
 
@@ -1933,6 +1933,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     // stands (held), nothing is stepped: the game is not simulating, whatever its window shows.
     const GaugeScale scale = GaugeScaleOf(s);
     const uint64_t kind = TruckKeyNumber(w.who.taken.key);
+    // out of the world (the garage, the map, the viewer, a menu): the game's own calls pass, so a gearbox fitted in the
+    // garage takes its gear; the gearbox keeps the truck and reads its position again on the way back (review 7, R6)
+    if (w.take.driving && !(driving && !held && same) && GearboxHoldingNow()) GearboxHolding(false, nullptr);
     if (driving && !held && same)
     {
         if (w.refs.vehicle != w.modelVehicle)
@@ -2073,7 +2076,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         if (orders.took)
         {
             GearboxPosTake(w.pos, boxTruck);
-            GearboxHolding(true);
+            GearboxHolding(true, (void *)w.refs.vehicle);
             w.gearbox.gear = raw.gear >= 1 && raw.gear <= TruckTopGear(raw) ? raw.gear : 1;
             w.gearbox.pause = kShiftPause;
             GearboxHuntClear(w.gearbox);
@@ -2082,7 +2085,17 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         if (orders.gaveBack)
         {
             Log(L"gearbox: the mod's gearbox lets the truck go: %S, after %d shifts and %d stalls", TakeoverWhy(w.take.lastHandBack), w.take.shifts, w.pos.stalls);
+            // given back from A: the game's automatic back on, so the truck is not left in a plain gear (review 7, R10)
+            if (w.pos.running && w.pos.pos == kPosA) m.put(w.refs.action + 0x3C, (uint8_t)1);
             GearboxLetGo(w);
+        }
+        // back in the world after the garage, the map or the viewer (the policy passed meanwhile): the position read
+        // again from the game, and the policy on again for the same truck (review 7, R6)
+        if (w.take.driving && !GearboxHoldingNow())
+        {
+            GearboxPosTake(w.pos, boxTruck);
+            GearboxHolding(true, (void *)w.refs.vehicle);
+            Log(L"gearbox: back in the world, the mod's gearbox reads the truck in %S again", GearboxPosName(w.pos.pos));
         }
         bool shiftAsk = false;
         int shiftTo = 0;
@@ -2138,8 +2151,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             }
             else
             {
-                GearboxPosRefused(w.pos, boxTruck);
-                Log(L"gearbox: the game did not take gear %d from the mod's gearbox, in gear %d", shiftTo, raw.gear);
+                if (GearboxPosRefused(w.pos, shiftTo))
+                    Log(L"gearbox: the game did not take gear %d from the mod's gearbox, in gear %d; asked again when the position changes", shiftTo, raw.gear);
             }
         }
         if (w.oil.on != oilWas)

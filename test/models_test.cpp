@@ -2274,10 +2274,11 @@ int main(int argc, char **argv)
             TruckRaw tf = g;
             tf.gear = tf.gearEngaged = 1;
             const int fit = GearboxLowestFit(rollingAt, tf, k);
-            Check(!disabled.took && took.took && take.handBacks == 2 && !stays.took && !stays.gaveBack && off.gaveBack && offWhy && stopped.gaveBack &&
-                      take.lastHandBack == kTakeGone && !take.driving && fit == 3 && TakeoverAutoGear(tf, 2, fit) == 3 && TakeoverAutoGear(tf, 4, 1) == 4 &&
+            Check(!disabled.took && took.took && take.handBacks == 1 && !stays.took && !stays.gaveBack && off.gaveBack && offWhy && !stopped.gaveBack &&
+                      take.lastHandBack == kTakeOff && take.driving && fit == 3 && TakeoverAutoGear(tf, 2, fit) == 3 && TakeoverAutoGear(tf, 4, 1) == 4 &&
                       TakeoverAutoGear(tf, 0, 1) == 1 && TakeoverAutoGear(tf, 40, 1) == TruckTopGear(tf),
-                  "gearbox in the game: taken the moment a truck is driven, in any gear; let go when the setting goes off or the engine stops; A's gear the "
+                  "gearbox in the game: taken the moment a truck is driven, in any gear; let go when the setting goes off, kept through an engine stop (a "
+                  "stall); A's gear the "
                   "model's, never lower than the engine can take, within the gears");
             // the needle follows the converter's engine speed with its lag; with the engine off it falls to nothing
             TachModel follow = {};
