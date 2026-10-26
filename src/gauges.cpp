@@ -1531,6 +1531,10 @@ struct TruckWatch
     int probedLamp;             // the tilt lamp the probe wrote last
     TempModel temp;             // the coolant and oil temperatures of every truck driven since the last load
     bool loadingWas;            // the game showed its loading screen on the last pass
+    char lastId[40];            // the game's id of the last truck taken, kept while none is driven
+    char loadId[40];            // lastId as the last loading screen came up
+    bool loadPending;           // a load ended and whether the same truck drives on is not decided yet (LoadTruckAfter)
+    uint64_t loadEndedAt;       // when it ended
     OilWarning oil;             // the oil warning: on while the driven truck's oil is too hot
     int probedZone;             // where the coolant stood when the probe wrote last (TempZone)
     DamageModel damage;         // what the temperature costs the engine of the truck at modelVehicle
@@ -1743,17 +1747,33 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         else Log(L"truck: none is driven now");
     }
     WorldRead(m, w.found ? w.refs.control : 0, world);
-    // a load ended (the game's loading screen gone): the coolant and oil the model remembers for each kind of truck are
-    // dropped, so every truck starts as cold as the air outside. Another map, a reload of the same one and fast travel
-    // all come with a loading screen; the game's save names a new map only minutes later (found in the game, 2026-10-25)
+    // a load ended (the game's loading screen gone): the truck that drives on under the game's id it had before the
+    // screen keeps its heat, so a travel between regions, a border crossing and a reload are no cold start (a tester's
+    // UAZ arrived cold from each travel and took cold-engine damage at once, 2026-10-26; the author's answer: keep
+    // it). A game start, the garage, a recovery (a new id) and a change of truck drop the coolant and oil the model
+    // remembers for each kind of truck, so every truck starts as cold as the air outside. The id is taken as the screen
+    // comes up, as the game can make a truck during it; the decision waits for the first truck read after it, a minute
+    // at most (LoadTruckAfter). The game's save names a new map only minutes after a border crossing (found in the
+    // game, 2026-10-25), so it is no guide.
     const bool loading = world.known && world.loading;
+    if (!w.loadingWas && loading)
+    {
+        memcpy(w.loadId, w.lastId, sizeof w.loadId);
+        w.loadPending = false;
+    }
     if (w.loadingWas && !loading)
     {
-        w.temp = TempModel{};
-        w.oil = OilWarning{};
-        Log(L"map: a load ended, so every truck's engine is as cold as the air outside again (the coolant and the oil)");
+        w.loadPending = true;
+        w.loadEndedAt = now;
     }
     w.loadingWas = loading;
+    if (w.loadPending && !read && LoadTruckAfter(w.loadId, nullptr, now - w.loadEndedAt) == kLoadNone)
+    {
+        w.loadPending = false;
+        w.temp = TempModel{};
+        w.oil = OilWarning{};
+        Log(L"map: a load ended and no truck was driven for a minute, so every truck's engine is as cold as the air outside again (the coolant and the oil)");
+    }
     const bool driving = read && TruckSane(raw) && WorldDriving(world);
     if (!driving) w.drivingSince = 0;
     else if (!w.drivingSince) w.drivingSince = now;
@@ -1785,6 +1805,20 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     TruckKey(m, w.refs, raw, id);
     const bool same = TruckWhoStep(w.who, id, taking);
     if (taking) w.modelVehicle = 0;
+    if (w.loadPending)
+    {
+        const int after = LoadTruckAfter(w.loadId, id.id, now - w.loadEndedAt);
+        if (after == kLoadSame) Log(L"map: a load ended and the same truck drives on (%S), so its engine keeps its heat", id.id);
+        else if (after != kLoadWait)
+        {
+            w.temp = TempModel{};
+            w.oil = OilWarning{};
+            Log(after == kLoadOther ? L"map: a load ended and another truck is driven, so every truck's engine is as cold as the air outside again (the coolant and the oil)"
+                                    : L"map: a load ended and the driven truck's id was not read for a minute, so every truck's engine is as cold as the air outside again (the coolant and the oil)");
+        }
+        if (after != kLoadWait) w.loadPending = false;
+    }
+    if (w.who.taken.id[0]) memcpy(w.lastId, w.who.taken.id, sizeof w.lastId);
     if (asked > 0 && driving && !held && !same) Log(L"engine damage: the test's %d points were not written, as the truck was only just taken", asked);
     // the speed by the way the chassis went in the last half second, for the probe to hold the speed against
     if (!w.wayAt || now - w.wayAt >= 500)

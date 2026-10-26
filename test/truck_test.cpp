@@ -866,6 +866,10 @@ int main()
         const bool stillNot = !early && !strcmp(who.taken.key, ck.key);
         const bool atLast = !TruckWhoStep(who, built, taking) && taking && !strcmp(who.taken.key, built.key);
         Check(notYet && interrupted && stillNot && atLast, "identity: a truck that goes by its build is taken only after twenty passes in a row read that build");
+        // after a load the truck that drives on under its id keeps its heat; another, none before, or none for a minute is cold
+        Check(LoadTruckAfter(kId, kId, 500) == kLoadSame && LoadTruckAfter(kId, otherId.id, 500) == kLoadOther && LoadTruckAfter("", kId, 500) == kLoadOther &&
+                  LoadTruckAfter(kId, nullptr, 59000) == kLoadWait && LoadTruckAfter(kId, "", kLoadWaitMs) == kLoadNone,
+              "load: the same truck by its id drives on warm; another truck, none before the load, or none for a minute after it goes cold");
     }
 
     // the probe's text and what makes it write

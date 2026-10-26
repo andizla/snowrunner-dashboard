@@ -417,6 +417,18 @@ inline bool TruckWhoStep(TruckWho &w, const TruckIdentity &id, bool &taking)
     return false;
 }
 
+// After a loading screen: whether the truck that drives on is the one driven before it, by the game's id for it
+// (before: the id as the screen came up, "" for none; after: the id read now, "" or nullptr while none is read;
+// waited: milliseconds since the load ended). kLoadSame keeps its heat; kLoadOther (another truck, or none before)
+// and kLoadNone (no truck for kLoadWaitMs) make every engine cold; kLoadWait is not decided yet.
+enum { kLoadWait, kLoadSame, kLoadOther, kLoadNone };
+static const uint64_t kLoadWaitMs = 60000;
+inline int LoadTruckAfter(const char *before, const char *after, uint64_t waited)
+{
+    if (after && after[0]) return before[0] && !strcmp(before, after) ? kLoadSame : kLoadOther;
+    return waited >= kLoadWaitMs ? kLoadNone : kLoadWait;
+}
+
 // A number for a key, never 0, for the models to tell trucks apart by.
 inline uint64_t TruckKeyNumber(const char *key)
 {
