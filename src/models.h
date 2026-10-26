@@ -2301,11 +2301,14 @@ inline void DamageProbeText(const TruckRaw &t, const EngineRecord &e, const Dama
     if (e.found) sprintf_s(record, "record %.80s: takes %d, the torque falls past %.2f of it, from x%.2f to x%.2f", e.name, e.capacity, e.threshold, e.torqueMin, e.torqueMax);
     else if (!e.name[0]) sprintf_s(record, "the engine's record is looked up once the truck is driven");
     else sprintf_s(record, "no record of the engine \"%.80s\"", e.name);
+    char gearbox[64];
+    if (t.gearboxKnown) sprintf_s(gearbox, "gearbox damage %d of %d, effect %.3f", t.gearboxDamage, t.gearboxCapacity, t.gearboxEffect);
+    else sprintf_s(gearbox, "gearbox damage not read");
     sprintf_s(out, size,
-              "engine damage %d of %d, effect %.3f, torque x%.3f; by the game's rule effect %.3f and torque x%.3f (%s) | all parts %d of %d | %s | "
+              "engine damage %d of %d, effect %.3f, torque x%.3f; by the game's rule effect %.3f and torque x%.3f (%s) | %s | all parts %d of %d | %s | "
               "the model: %.2f %% a minute from the heat, %.2f from the cold, %.2f of a point owed, Damage %s",
               t.damage, t.damageCapacity, t.damageEffect, t.torqueFactor, effect, torque, !e.found ? "a guess without the record" : same ? "as read" : "NOT as read",
-              t.damageSum, t.damageSumCapacity, record, m.hot, m.cold, m.owed, s.damage ? "on" : "off");
+              gearbox, t.damageSum, t.damageSumCapacity, record, m.hot, m.cold, m.owed, s.damage ? "on" : "off");
 }
 
 // The models' numbers in a line of text for the probe log.

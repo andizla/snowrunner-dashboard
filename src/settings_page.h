@@ -548,6 +548,16 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         PageTip("Neutral the moment no gear key is held. For an H shifter with every gear bound: a gear reached with up or down is not held.");
         changed(ImGui::Checkbox("Skip neutral", &s.skipNeutral));
         PageTip("Up and down step from the first gear to reverse and back without stopping in neutral.");
+        PageLabel("Stall damage", labelX);
+        ImGui::SetNextItemWidth(w);
+        ImGui::BeginDisabled(!s.damage);
+        if (ImGui::SliderFloat("##stalldamage", &s.stallDamage, kStallDamageRange[0], kStallDamageRange[1], "%.0f %%", ImGuiSliderFlags_AlwaysClamp))
+        {
+            s.stallDamage = floorf(s.stallDamage + 0.5f);
+            act |= kPageChanged;
+        }
+        ImGui::EndDisabled();
+        PageTip("What a shift without the clutch costs the gearbox, of what it takes. Needs Damage on.");
     }
     // the bindings: two slots an action; a click binds the next key, pad chord, button or pedal moved, x clears (the
     // order is input_bindings.h's GearAction). The shifter's at Gearbox=2, the locks' at every level

@@ -282,3 +282,48 @@ void GearboxCountsGet(GearboxCounts &out)
 }
 
 void *GearboxOriginal(int fn) { return g_hooked && fn >= 0 && fn < kFnCount && kHooks[fn] ? g_way[fn] : nullptr; }
+
+// ---- the game's truck update ----
+// Its first bytes keep its four arguments in their home slots (rcx, rdx, xmm2, xmm3): two pointers and two floats.
+// The hook ends in the call through, so what the update returns in rax or xmm0 is handed back untouched.
+typedef void (*TruckUpdateFn)(void *, void *, float, float);
+static void *g_truckWay = nullptr;
+static TruckFrameFn volatile g_onFrame = nullptr;
+static volatile LONG g_frames = 0;
+static bool g_truckHooked = false;
+
+static void HookTruckUpdate(void *first, void *second, float third, float fourth)
+{
+    InterlockedIncrement(&g_frames);
+    if (const TruckFrameFn on = g_onFrame) on(first);
+    ((TruckUpdateFn)g_truckWay)(first, second, third, fourth);
+}
+
+bool TruckUpdateHook(uintptr_t at, TruckFrameFn onFrame, char *why, size_t size)
+{
+    why[0] = 0;
+    if (g_truckHooked) return true;
+    g_onFrame = onFrame;
+    g_truckWay = (void *)at;
+    void **targets[1] = { &g_truckWay };
+    void *const hooks[1] = { (void *)&HookTruckUpdate };
+    const long error = GearboxAttach(targets, hooks, 1);
+    if (error != NO_ERROR)
+    {
+        snprintf(why, size, "Detours could not attach the truck update's hook (error %ld)", error);
+        g_truckWay = nullptr;
+        return false;
+    }
+    g_truckHooked = true;
+    return true;
+}
+
+void TruckUpdateUnhook()
+{
+    if (!g_truckHooked) return;
+    void **targets[1] = { &g_truckWay };
+    void *const hooks[1] = { (void *)&HookTruckUpdate };
+    if (GearboxDetach(targets, hooks, 1) == NO_ERROR) g_truckHooked = false;
+}
+
+long TruckUpdateFrames() { return g_frames; }

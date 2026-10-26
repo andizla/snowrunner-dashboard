@@ -336,6 +336,7 @@ static void WriteIni(const GaugeSettings &s)
     num(L"HotDamagePercentPerMinute", s.hotDamage);
     num(L"HotDamageFrom", s.hotDamageFrom);
     num(L"ColdDamagePercentPerMinute", s.coldDamage);
+    num(L"StallDamagePercent", s.stallDamage);
     whole(L"ToggleKey", s.toggleKey);
     WritePrivateProfileStringW(kIniSection, L"PadToggle", Wide(s.padToggle).c_str(), ini.c_str());
     whole(L"SoundVolume", s.soundVolume);
@@ -617,6 +618,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; and the lighter the work. A garage repairs this like any engine damage.\n"
                         L"; Damage=0: the temperature is only shown.\n"
                         L"; ColdDamagePercentPerMinute=0 switches the cold part off. Damage has not been tried in co-op: leave it at 0 there.\n"
+                        L"; StallDamagePercent: what a shift without the clutch costs the gearbox, percent of what it takes, 0 to 25 (5), with Damage=1.\n"
                         L"; SoundVolume (0 to 100) is how loud the turbo is heard when the pedal comes up quickly under boost: it flutters,\n"
                         L"; longer and louder the more boost there was, until the pedal goes down again. The oil warning goes by it too.\n"
                         L"; 0 = no sound. SoundsOnly=1 plays the sounds and draws no cluster.\n"
@@ -712,6 +714,7 @@ static void ReadIni(GaugeSettings &s)
     s.hotDamage = IniFloat(L"HotDamagePercentPerMinute", s.hotDamage, ini);
     s.hotDamageFrom = IniFloat(L"HotDamageFrom", s.hotDamageFrom, ini);
     s.coldDamage = IniFloat(L"ColdDamagePercentPerMinute", s.coldDamage, ini);
+    s.stallDamage = IniFloat(L"StallDamagePercent", s.stallDamage, ini);
     s.toggleKey = IniInt(L"ToggleKey", s.toggleKey, ini);
     wchar_t buf[64] = {};
     GetPrivateProfileStringW(kIniSection, L"PadToggle", Wide(s.padToggle).c_str(), buf, 64, ini.c_str());
@@ -1721,9 +1724,16 @@ static int GearboxBlocked(const FunctionFind finds[kFnCount])
     return kGearboxFree;
 }
 
+// A stall's gearbox damage, dealt on the game's thread (truck.h, StallJob): the job, the game's damage update (0 until
+// found) and the callback the truck update's hook runs every frame (below PeekGame).
+static StallJob g_stallJob = {};
+static void (*g_damageUpdate)(uint64_t) = nullptr;
+static void OnTruckFrame(void *first);
+
 // The game's gearbox functions in its code (game_code.h), looked for once a truck is driven, so a manual transmission
 // mod has hooked its own by then: where each one is, or that another mod holds it. Then, without SMT in the game,
-// eight of them are hooked, calling through (gearbox_hooks.h, phase 1 of the mod's own gearbox).
+// eight of them are hooked, calling through (gearbox_hooks.h, phase 1 of the mod's own gearbox), and the game's truck
+// update, for a stall's gearbox damage on the game's thread.
 static void GameCodeLook()
 {
     size_t from = 0, to = 0;
@@ -1775,6 +1785,17 @@ static void GameCodeLook()
     // the mod's own shifts go through to the game's function behind the hook, so the probe counts only the game's. With
     // fewer than eight hooked the mod runs with those it has; each one missing is in the log above
     if (void *own = GearboxOriginal(kFnShiftGear)) g_shiftGear = (GameShiftFn)own;
+    // the damage path: the game's damage update, and its truck update hooked so the damage is dealt on its thread
+    DamagePath path;
+    char hookWhy[160] = "";
+    if (!DamagePathFind(code.data(), from, to, path)) Log(L"gearbox damage: %S, so a stall costs the gearbox nothing", path.why);
+    else if (!TruckUpdateHook((uintptr_t)(g_base + path.truckUpdate), &OnTruckFrame, hookWhy, sizeof hookWhy))
+        Log(L"gearbox damage: %S, so a stall costs the gearbox nothing", hookWhy);
+    else
+    {
+        g_damageUpdate = (void (*)(uint64_t))(g_base + path.damageUpdate);
+        Log(L"gearbox damage: dealt on the game's own thread, from its truck update at +%zx, with its damage update at +%zx after", path.truckUpdate, path.damageUpdate);
+    }
 }
 
 // A file's time as the clock on the wall shows it, hh:mm:ss.
@@ -1806,8 +1827,8 @@ static void LogSettings(const GaugeSettings &s)
     Log(L"settings: coolant warm after %g minutes of driving, in the red zone after %g minutes floored with the wheels spinning at a standstill, cool %g minutes after the engine stops, %g C outside%s",
         s.warmUpMinutes, s.overheatMinutes, s.coolDownMinutes, s.ambientC, s.ambientByMap ? L" where the map's temperature is not known" : L" on every map");
     Log(L"settings: the oil warm after %g minutes of driving, too hot from %g C", s.oilWarmUpMinutes, s.oilWarnC);
-    Log(L"settings: the radiator has all its air from %g km/h; engine damage %s: from %g C, %g percent a minute at 125 C, %g percent a minute for a cold engine floored at the red zone at 0 C",
-        s.airFullKmh, s.damage ? L"on" : L"off", s.hotDamageFrom, s.hotDamage, s.coldDamage);
+    Log(L"settings: the radiator has all its air from %g km/h; engine damage %s: from %g C, %g percent a minute at 125 C, %g percent a minute for a cold engine floored at the red zone at 0 C; %g percent of the gearbox for a shift without the clutch",
+        s.airFullKmh, s.damage ? L"on" : L"off", s.hotDamageFrom, s.hotDamage, s.coldDamage, s.stallDamage);
     Log(L"settings: sound volume %d of 100%s", s.soundVolume, s.soundsOnly ? L", sounds only: the cluster is not drawn" : L"");
     Log(L"settings: driven with %s", s.input == kInputKeys ? L"the keyboard" : s.input == kInputPad ? L"a pad" : L"a wheel's pedals");
     Log(L"settings: gearbox %s; RequireClutch %d, RequireGearHeld %d, SkipNeutral %d",
@@ -1839,9 +1860,20 @@ static bool GameInFront()
 // Game memory is read through this, so an object the game freed under the mod is a failed read, not a fault.
 static bool PeekGame(uint64_t addr, void *out, size_t size) { return ReadProcessMemory(GetCurrentProcess(), (const void *)addr, out, size, nullptr) != 0; }
 
-// And written through this, for the same reason: the engine's damage (TruckDamageAdd), with Gearbox=1 the game's
+// And written through this, for the same reason: the engine's damage (TruckDamageAdd), the gearbox's on a stall (on
+// the game's thread, StallJobDeal), with Gearbox=1 the game's
 // automatic flag, and with Powertrain=1 or the pull test the game's torque factor.
 static bool PokeGame(uint64_t addr, const void *in, size_t size) { return WriteProcessMemory(GetCurrentProcess(), (void *)addr, in, size, nullptr) != 0; }
+
+// On the game's thread, every frame of its truck update: a stall's job dealt for the truck the update is for.
+static void OnTruckFrame(void *first)
+{
+    if (g_stallJob.state != kStallJobPosted) return;
+    uint64_t vehicle = 0;
+    if (!PeekGame((uint64_t)first + 0x20, &vehicle, sizeof vehicle)) return;
+    const TruckMemory m = { PeekGame, g_base, PokeGame };
+    StallJobDeal(g_stallJob, m, vehicle, g_damageUpdate);
+}
 
 // The driven truck as the mod's thread follows it from pass to pass.
 struct TruckWatch
@@ -1866,6 +1898,7 @@ struct TruckWatch
     TakeoverModel take;         // the mod's gearbox has the truck (Gearbox)
     GearboxPosModel pos;        // the gearbox's position, clutch, stalls and shifts (gearbox_model.h)
     GearboxActions actions;     // the player's actions on this pass (from the bindings, at Gearbox=2)
+    int stallsOwed;             // stalls whose gearbox damage waits to be posted to the game's thread (StallJob)
     bool lockPress[kLocks];     // DiffLock and Awd pressed on this pass (at every level of Gearbox)
     LocksWatch locks;           // what the mod's keys wrote to the locks (LocksStep)
     bool canReverse;            // a binding reaches reverse (GearDown, GearR or GearN): Gearbox=2 may take the shifter
@@ -2252,6 +2285,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             w.air = AirModel{};
             w.tilt = TiltModel{};
             w.owed = w.asked = 0;
+            w.stallsOwed = 0;
             w.modelVehicle = w.refs.vehicle;
             w.modelAt = 0;
         }
@@ -2435,11 +2469,41 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             if (box.flagDown) m.put(w.refs.action + 0x3C, (uint8_t)0);
             if (box.setPower) m.put(w.refs.action + 0x38, box.power);
             if (box.stall) m.put(w.refs.vehicle + 0x11C, kStallSeconds);
+            // the stall the model ordered costs the gearbox (StallDamagePercent, with Damage), dealt on the game's thread;
+            // a stall of the game's own does not
+            const wchar_t *stallCost = L"";
+            if (box.stall && StallDamageShare(s) > 0.0f)
+            {
+                if (!g_damageUpdate) stallCost = L"; it costs the gearbox nothing, as the game's damage path was not found";
+                else
+                {
+                    w.stallsOwed++;
+                    stallCost = L"; its gearbox damage goes to the game's thread";
+                }
+            }
             if (box.moved && w.pos.pos != posWas) Log(L"gearbox: %S to %S", GearboxPosName(posWas), GearboxPosName(w.pos.pos));
-            if (box.why[0] && box.stall) Log(L"gearbox: %S (%d since it took the truck)", box.why, w.pos.stalls);
+            if (box.why[0] && box.stall) Log(L"gearbox: %S (%d since it took the truck)%s", box.why, w.pos.stalls, stallCost);
             else if (box.why[0]) Log(L"gearbox: %S", box.why);
             shiftAsk = box.setGear;
             shiftTo = box.gear;
+        }
+        // a stall's gearbox damage: posted to the game's thread one stall at a time, and what came of it told
+        if (w.stallsOwed && g_damageUpdate && StallJobPost(g_stallJob, w.refs, StallDamageShare(s), now)) w.stallsOwed--;
+        {
+            GearboxDamageWrite gw;
+            bool updated = false;
+            int sum = 0, sumCapacity = 0;
+            if (StallJobResult(g_stallJob, gw, updated, sum, sumCapacity))
+            {
+                if (gw.written)
+                    Log(L"gearbox damage: the game's thread dealt the stall's damage on its next frame: the gearbox took %d of %d (%d now)%s; the game's sum of "
+                        L"the parts' damage %d of %d",
+                        gw.points, gw.capacity, gw.wrote, updated ? L", the game's damage update run after it" : L"", sum, sumCapacity);
+                else if (gw.capacity > 0 && gw.before >= gw.capacity) Log(L"gearbox damage: the stall's damage not dealt: the gearbox at its worst already");
+                else Log(L"gearbox damage: the stall's damage not dealt: %S", gw.why);
+            }
+            if (StallJobCancel(g_stallJob, now, 5000))
+                Log(L"gearbox damage: the stall's damage not dealt: the game's truck update did not run for this truck within 5 s");
         }
         // the differential lock and all-wheel drive on the mod's keys, at every level of Gearbox: not shifts, and the
         // game's own keys still work on a truck with the upgrade
@@ -3313,7 +3377,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.redlineRpm == b.redlineRpm && a.maxRpm == b.maxRpm && a.speedMax == b.speedMax && a.boostMax == b.boostMax && a.toggleKey == b.toggleKey &&
            a.rollWarnDeg == b.rollWarnDeg && a.rollDangerDeg == b.rollDangerDeg && a.pitchDangerDeg == b.pitchDangerDeg &&
            a.warmUpMinutes == b.warmUpMinutes && a.overheatMinutes == b.overheatMinutes && a.coolDownMinutes == b.coolDownMinutes && a.ambientC == b.ambientC &&
-           a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage &&
+           a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.stallDamage == b.stallDamage &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly &&
            a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.input == b.input && a.powertrain == b.powertrain && a.engineShare == b.engineShare;
 }
@@ -3344,7 +3408,7 @@ int wmain(int argc, wchar_t **argv)
           "defaults: strip, open style, metric, the air dial off, no toggle, demo off, probe off, the tilt lamp at 15, 25 and 35 degrees");
     Check(d.warmUpMinutes == 3.0f && d.overheatMinutes == 1.5f && d.coolDownMinutes == 15.0f && d.ambientC == 15.0f && d.ambientByMap,
           "defaults: the coolant warm after 3 minutes, in the red zone after 1.5, cool after 15, with 15 C outside");
-    Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.hotDamageFrom == kTempRed && d.coldDamage == 5.0f,
+    Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.hotDamageFrom == kTempRed && d.coldDamage == 5.0f && d.stallDamage == 5.0f,
           "defaults: the radiator's full airflow from 30 km/h, engine damage on from the red zone, 10 percent a minute for the heat and 5 for the cold");
     Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && d.input == kInputWheel && !d.powertrain && d.engineShare == 50,
           "defaults: the oil as a second needle, warm after 5 minutes, too hot from 120 C; the standard turbo");
@@ -3385,6 +3449,7 @@ int wmain(int argc, wchar_t **argv)
     c.hotDamage = 22.5f;
     c.hotDamageFrom = 110.5f;
     c.coldDamage = 7.5f;
+    c.stallDamage = 12.0f;
     c.toggleKey = VK_F9;
     strcpy_s(c.padToggle, "RB+DPadUp");
     c.demo = true;
@@ -3407,7 +3472,7 @@ int wmain(int argc, wchar_t **argv)
                             c.speedMax != d.speedMax && c.boostMax != d.boostMax && c.rollWarnDeg != d.rollWarnDeg && c.rollDangerDeg != d.rollDangerDeg &&
                             c.pitchDangerDeg != d.pitchDangerDeg && c.warmUpMinutes != d.warmUpMinutes && c.overheatMinutes != d.overheatMinutes &&
                             c.coolDownMinutes != d.coolDownMinutes && c.ambientC != d.ambientC && c.ambientByMap != d.ambientByMap && c.airFullKmh != d.airFullKmh && c.damage != d.damage &&
-                            c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
+                            c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.stallDamage != d.stallDamage && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
                             c.demo != d.demo && c.probe != d.probe && c.soundVolume != d.soundVolume && c.soundsOnly != d.soundsOnly &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
                             c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.input != d.input && c.powertrain != d.powertrain && c.engineShare != d.engineShare;
@@ -3431,7 +3496,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 92, "ini: the help text survives a write (92 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 93, "ini: the help text survives a write (93 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());
@@ -3469,8 +3534,11 @@ int wmain(int argc, wchar_t **argv)
     WritePrivateProfileStringW(kIniSection, L"ColdDamagePercentPerMinute", L"-3", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"Damage", L"0", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"HotDamageFrom", L"90", ini.c_str());
+    WritePrivateProfileStringW(kIniSection, L"StallDamagePercent", L"40", ini.c_str());
     ReadIni(b);
-    const bool held = b.airFullKmh == kAirFullRange[0] && b.hotDamage == kDamageRange[1] && b.coldDamage == 0.0f && !b.damage && b.hotDamageFrom == kHotDamageFromRange[0];
+    const bool held = b.airFullKmh == kAirFullRange[0] && b.hotDamage == kDamageRange[1] && b.coldDamage == 0.0f && !b.damage && b.hotDamageFrom == kHotDamageFromRange[0] &&
+                      b.stallDamage == kStallDamageRange[1];
+    WritePrivateProfileStringW(kIniSection, L"StallDamagePercent", L"5", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"HotDamageFrom", L"130", ini.c_str());
     ReadIni(b);
     const bool fromHigh = b.hotDamageFrom == kHotDamageFromRange[1];
