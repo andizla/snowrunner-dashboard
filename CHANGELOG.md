@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- At `Gearbox=1` a position picked on the game's shifter hands the truck back by the door it came through, whatever gear it names, so the automatic never shifts out of a player's L+ and the game keeps the diff lock. Before, the hand-back went by the gear number. L+ and the automatic's first are the same gear, so the automatic shifted on out of L+ and the game dropped the diff lock (a tester's report, 28 October). L and L- picked from the automatic's first gear were missed the same way. The log names the position picked (L+, L, L-, H, N, R or the gear).
 - With `Powertrain=1` the engine's push near a gear's top dies down before the shift: over the gear's last fifth the torque factor's roof falls in a straight line to the game's own at the top, and a scout's roof is 3, a truck's and a heavy truck's 6. With the flat roof of 6 a vanilla Defender floored on a road shot from 27 to 58 km/h in 5 seconds through three gears (27 October). The automatic's floored shift up comes a little earlier with it.
 - At `Gearbox=2` up and down walk the low range too: 2, 1, L+, L, L-, N, R and back, as SMT's up and down did, on every truck. `SkipNeutral` now steps from L- to R.
 - `DownStaysForward` (the tab's "Down stays in forward gears", off by default): at `Gearbox=2` Gear down stops at L-, so N and R are only on their own keys or the game's shifter, as SMT's immersive mode did. It wins over `SkipNeutral`, and the once-only import of `SMT.ini` takes its IMMERSIVE MODE over. Asked for in the comments.

@@ -635,8 +635,9 @@ static void ReadIni(GaugeSettings &s)
                         L"; LB, RB, LS, RS, Start, Back, joined with + (LB+DPadUp), or None. The game sees these buttons too.\n"
                         L"; The cluster is on screen while a truck is driven in the world: not on loading screens, in menus, the garage or the map.\n"
                         L"; Gearbox: 0 the game's own. 1 the mod's automatic in A (a torque converter, shifts up later the further the pedal\n"
-                        L"; is down, a kickdown floored), the game's shifter yours, only its reverse on the brake refused. 2 the mod's own\n"
-                        L"; gearbox takes the shifter: A, the numbered gears, N, R, H, L-, L, L+ on the bindings below (as 1 until one reaches R).\n"
+                        L"; is down, a kickdown floored), the game's shifter yours, only its reverse on the brake refused. A position picked\n"
+                        L"; on the shifter (L+ among them) hands the truck back until A is picked, so the automatic never shifts out of it. 2 the mod's\n"
+                        L"; own gearbox takes the shifter: A, the numbered gears, N, R, H, L-, L, L+ on the bindings below (as 1 until one reaches R).\n"
                         L"; [Gearbox] Bind<Action> and Bind<Action>2: two bindings each for Gear1 to Gear12, GearH, GearL-, GearL, GearL+, GearN,\n"
                         L"; GearR, GearA, GearUp, GearDown, Clutch, RangeHigh, RangeLow, and at every Gearbox level DiffLock and Awd (the\n"
                         L"; differential lock and all-wheel drive flipped, on every truck, the upgrade fitted or not; none by default).\n"
@@ -1965,7 +1966,7 @@ struct TruckWatch
     LocksWatch locks;           // what the mod's keys wrote to the locks (LocksStep)
     bool canReverse;            // a binding reaches reverse (GearDown, GearR or GearN): Gearbox=2 with a wheel's pedals may take the shifter
     bool lowPlusSaid;           // the log said once that the game's shifter's L+ reads as the first gear
-    long gameShifts;            // GameShiftCount on the last pass
+    GearboxDoors doors;         // GearboxDoorsNow on the last pass
     PullTest pullTest;          // the pull test (the tab's button)
     uint64_t pullVehicle, pullAction; // the truck whose torque factor a running pull test changed
     TorqueHand hand;            // the engine's torque handed to the game (Powertrain)
@@ -2025,14 +2026,13 @@ static void GearboxLetGo(TruckWatch &w)
     w.pos = GearboxPosModel{};
 }
 
-// The game's own shifts that passed the hooks so far (its automatic picked again, ShiftToAutoGear, left out): one more
-// on a pass at level 1 is the player's hand on the game's shifter.
-static long GameShiftCount()
+// The calls that passed the doors a position picked on the game's shifter comes through, so far: one more on a pass at
+// level 1 is the player's hand on the shifter (GearboxHandsBack).
+static GearboxDoors GearboxDoorsNow()
 {
     GearboxCounts c;
     GearboxCountsGet(c);
-    return (c.shift - c.refused[kFnShiftGear]) + (c.high - c.refused[kFnShiftToHigh]) + (c.reverse - c.refused[kFnShiftToReverse]) +
-           (c.neutral - c.refused[kFnShiftToNeutral]) + (c.autoOff - c.refused[kFnAutoOffAndShift]);
+    return GearboxDoorsOf(c);
 }
 
 // What the game asked for, by the hook that refused it, for the log.
@@ -2522,7 +2522,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             w.gearbox.gear = raw.gear >= 1 && raw.gear <= TruckTopGear(raw) ? raw.gear : 1;
             w.gearbox.pause = kShiftPause;
             GearboxHuntClear(w.gearbox);
-            w.gameShifts = GameShiftCount();
+            w.doors = GearboxDoorsNow();
             if (own && shifterAsks)
                 Log(L"gearbox: the mod's gearbox takes the truck in %S (the game's gear %d); the game's own shifting is refused from now on, its shifter "
                     L"picks the mod's position (driven with %s)", GearboxPosName(w.pos.pos), raw.gear, s.input == kInputKeys ? L"the keyboard" : L"a pad");
@@ -2544,20 +2544,24 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             if (!GearboxHoldingNow())
             {
                 GearboxPosTake(w.pos, boxTruck);
-                w.gameShifts = GameShiftCount();
+                w.doors = GearboxDoorsNow();
                 Log(L"gearbox: back in the world, the mod's gearbox reads the truck in %S again", GearboxPosName(w.pos.pos));
             }
-            // level 1: the game's shifter is the player's. A shift of the game's that leaves A (H, N, R, the low range or
-            // a numbered gear picked) hands the truck back to the game's position; it is taken again when A is picked
-            const long shiftsNow = GameShiftCount();
-            if (!own && ((shiftsNow != w.gameShifts && !raw.automatic && raw.gear != w.pos.lastSet) || w.pos.pos != kPosA))
+            // level 1: the game's shifter is the player's. A position picked on it (H, N, R, the low range or a numbered
+            // gear) hands the truck back by the door it came through, whatever gear it names, so L+ is told from the
+            // automatic's own first gear (a tester's report, 28 October). The mod then sets no gear and no flag until A
+            // is picked, when it takes the truck again
+            const GearboxDoors doorsNow = GearboxDoorsNow();
+            if (!own && (GearboxHandsBack(w.doors, doorsNow, w.pos.pos == kPosA, raw.automatic != 0) || w.pos.pos != kPosA))
             {
-                Log(L"gearbox: the game's shifter picked gear %d: the mod's automatic hands the truck back, and takes it again when A is picked", raw.gear);
+                const char *picked = GearboxDoorPos(w.doors, doorsNow, raw.gear, raw.powerFactor);
+                if (picked) Log(L"gearbox: the game's shifter picked %S: the mod's automatic hands the truck back, and takes it again when A is picked", picked);
+                else Log(L"gearbox: the game's shifter picked gear %d: the mod's automatic hands the truck back, and takes it again when A is picked", raw.gear);
                 w.take.driving = false;
                 w.take.handBacks++;
                 GearboxLetGo(w);
             }
-            w.gameShifts = shiftsNow;
+            w.doors = doorsNow;
         }
         if (w.take.driving)
         {
@@ -3657,7 +3661,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 98, "ini: the help text survives a write (98 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 99, "ini: the help text survives a write (99 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());

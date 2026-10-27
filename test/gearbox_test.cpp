@@ -232,6 +232,43 @@ int main()
         Check(rev && first && low.kind == kAskLow && lowMinus.kind == kAskLowMinus && plus.kind == kAskGear && alone && doors,
               "gearbox: a shift's doors make one request, the first door naming it; the power factor after a first gear makes L or L- (L+ stays the first gear); a factor alone asks nothing");
     }
+    // the hand-back at level 1 by the door, on counts as the hooks nest them (reverse and neutral through auto off,
+    // auto off through ShiftGear): L+ (AutoOffAndShift(1), the first gear the automatic set last) hands back as H, N
+    // and R do; a bare ShiftGear does not; nothing out of a position other than A, with the game's automatic flag up,
+    // or from a refused call
+    {
+        GearboxCounts c = {};
+        c.shift = 40;
+        c.autoOff = 7;
+        const GearboxDoors was = GearboxDoorsOf(c);
+        auto after = [&](long shift, long autoOff, long high, long neutral, long reverse) {
+            GearboxCounts n = c;
+            n.shift += shift;
+            n.autoOff += autoOff;
+            n.high += high;
+            n.neutral += neutral;
+            n.reverse += reverse;
+            return n;
+        };
+        const GearboxDoors lowPlus = GearboxDoorsOf(after(1, 1, 0, 0, 0)), high = GearboxDoorsOf(after(1, 0, 1, 0, 0)), neutral = GearboxDoorsOf(after(1, 1, 0, 1, 0)),
+                           reverse = GearboxDoorsOf(after(1, 1, 0, 0, 1)), bare = GearboxDoorsOf(after(1, 0, 0, 0, 0));
+        GearboxCounts refusedCounts = after(1, 1, 0, 0, 1);
+        refusedCounts.refused[kFnShiftToReverse] = 1;
+        refusedCounts.refused[kFnAutoOffAndShift] = 1;
+        const GearboxDoors refused = GearboxDoorsOf(refusedCounts);
+        const bool picks = GearboxHandsBack(was, lowPlus, true, false) && GearboxHandsBack(was, high, true, false) && GearboxHandsBack(was, neutral, true, false) &&
+                           GearboxHandsBack(was, reverse, true, false);
+        const bool keeps = !GearboxHandsBack(was, bare, true, false) && !GearboxHandsBack(was, was, true, false) && !GearboxHandsBack(was, lowPlus, false, false) &&
+                           !GearboxHandsBack(was, reverse, false, false) && !GearboxHandsBack(was, lowPlus, true, true) && !GearboxHandsBack(was, refused, true, false);
+        const char *plusName = GearboxDoorPos(was, lowPlus, 1, 1.0f), *lowName = GearboxDoorPos(was, lowPlus, 1, 0.45f), *minusName = GearboxDoorPos(was, lowPlus, 1, 0.2f);
+        const char *hName = GearboxDoorPos(was, high, 7, 1.0f), *nName = GearboxDoorPos(was, neutral, 0, 1.0f), *rName = GearboxDoorPos(was, reverse, -1, 1.0f);
+        const char *gearName = GearboxDoorPos(was, GearboxDoorsOf(after(1, 1, 0, 0, 0)), 3, 1.0f);
+        const bool names = plusName && !strcmp(plusName, "L+") && lowName && !strcmp(lowName, "L") && minusName && !strcmp(minusName, "L-") && hName && !strcmp(hName, "H") &&
+                           nName && !strcmp(nName, "N") && rName && !strcmp(rName, "R") && !gearName;
+        Check(picks && keeps && names,
+              "gearbox: at level 1 a door hands the truck back whatever gear it names (L+ though the automatic's last gear was 1, H, N, R); a bare ShiftGear, a position other "
+              "than A, the flag up or a refused call does not; the log names L+, L, L-, H, N, R or the gear");
+    }
     // RequireGearHeld: a gear key held keeps its gear, let go is neutral
     {
         GearboxPosModel m = {};

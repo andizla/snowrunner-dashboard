@@ -88,6 +88,35 @@ void GearboxShifterAsks(bool on);
 // request older than two passes is dropped; one made on this very pass waits for the next. False for none.
 bool GearboxAskTake(GearboxAsk &out);
 
+// ---- the hand-back at Gearbox=1, by the door (0.17.1) ----
+// A position picked on the game's shifter comes through one of four doors: AutoOffAndShift (a gear, the low range
+// among them), ShiftToHigh, ShiftToNeutral or ShiftToReverse. Each counts the calls that passed it (refused ones left
+// out). The mod's own shifts go through GearboxOriginal and are not counted, and a bare ShiftGear is no pick.
+struct GearboxDoors { long autoOff, high, neutral, reverse; };
+inline GearboxDoors GearboxDoorsOf(const GearboxCounts &c)
+{
+    return GearboxDoors{ c.autoOff - c.refused[kFnAutoOffAndShift], c.high - c.refused[kFnShiftToHigh], c.neutral - c.refused[kFnShiftToNeutral],
+                         c.reverse - c.refused[kFnShiftToReverse] };
+}
+// The mod's automatic in A (inA) hands the truck back when a door passed a call since the last pass (was) with the
+// game's automatic flag down: a pick of the player's, whatever gear it names. L+ is the first gear with the plain
+// power, as the automatic's own first is, so the gear could not tell them apart. With the flag up a call is the
+// game's own automatic's.
+inline bool GearboxHandsBack(const GearboxDoors &was, const GearboxDoors &now, bool inA, bool flagUp)
+{
+    return inA && !flagUp && (now.autoOff != was.autoOff || now.high != was.high || now.neutral != was.neutral || now.reverse != was.reverse);
+}
+// The position a hand-back names, by its door and then the gear and the power factor as TruckGearMode reads the low
+// range: "R", "N", "H", "L-", "L", "L+", or nullptr for a numbered gear.
+inline const char *GearboxDoorPos(const GearboxDoors &was, const GearboxDoors &now, int gear, float power)
+{
+    if (now.reverse != was.reverse || gear < 0) return "R";
+    if (now.neutral != was.neutral || gear == 0) return "N";
+    if (now.high != was.high) return "H";
+    if (gear == 1) return power > 0.0f && power < kLowMinusUnder ? "L-" : power > 0.0f && power < kLowUnder ? "L" : "L+";
+    return nullptr;
+}
+
 // ---- the gate: which hooks a level needs (0.17.0) ----
 // The eight shift hooks at Gearbox 1 and 2 (level as GaugeSettings::gearbox: 0 the game's, 1 the mod's automatic, 2
 // the mod's own gearbox), the truck update's at 2 with Damage on (the stall's damage and the clutch's burn go through
