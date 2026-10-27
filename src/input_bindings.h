@@ -94,7 +94,8 @@ inline bool BindingParse(const char *text, Binding &out, char *why, size_t whySi
     int words = 0;
     char *ctx = nullptr;
     for (char *w = strtok_s(buf, " \t", &ctx); w && words < 8; w = strtok_s(nullptr, " \t", &ctx)) word[words++] = w;
-    auto refuse = [&](const char *reason) { strcpy_s(why, whySize, reason); out = Binding{}; return false; };
+    // cut to the caller's room: strcpy_s would end the game on a reason longer than it
+    auto refuse = [&](const char *reason) { strncpy_s(why, whySize, reason, _TRUNCATE); out = Binding{}; return false; };
     auto number = [](const char *w, int lo, int hi) {
         char *end = nullptr;
         const long n = w ? strtol(w, &end, 10) : 0;
@@ -122,7 +123,8 @@ inline bool BindingParse(const char *text, Binding &out, char *why, size_t whySi
     {
         if (words != 2) return refuse("Pad wants its buttons joined with + (LB+DPadDown)");
         const uint32_t mask = PadParse(word[1]);
-        if (!mask) return refuse("no such pad button (DPadUp, DPadDown, DPadLeft, DPadRight, A, B, X, Y, LB, RB, LS, RS, Start, Back)");
+        if (!mask) return refuse("no such pad button (DPadUp, DPadDown, DPadLeft, DPadRight, A, B, X, Y, LB, RB, LS, RS, Start, Back, LSUp, LSDown, LSLeft, "
+                                 "LSRight, RSUp, RSDown, RSLeft, RSRight)");
         out.kind = kBindPad;
         out.code = mask;
         return true;

@@ -640,7 +640,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; [Gearbox] Bind<Action> and Bind<Action>2: two bindings each for Gear1 to Gear12, GearH, GearL-, GearL, GearL+, GearN,\n"
                         L"; GearR, GearA, GearUp, GearDown, Clutch, RangeHigh, RangeLow, and at every Gearbox level DiffLock and Awd (the\n"
                         L"; differential lock and all-wheel drive flipped, on every truck, the upgrade fitted or not; none by default).\n"
-                        L"; A binding is Key <name or code>, Pad <buttons with +>,\n"
+                        L"; A binding is Key <name or code>, Pad <buttons with +, a stick's direction LSUp to RSRight among them>,\n"
                         L"; Wheel <n> Button <n>, Wheel <n> POV [<n>] Up/Right/Down/Left, Wheel <n> Axis <n> [inverted] (the clutch), or None.\n"
                         L"; The tab's Gearbox section binds them by a press. Without a key in the ini the defaults below hold:\n"
                         L";   BindGearUp=Key Num 8\n"
@@ -1060,7 +1060,7 @@ static void BindingsRead(const std::wstring &ini, GearBindings &b, bool say)
             for (; buf[n] && n + 1 < sizeof text; n++) text[n] = buf[n] < 128 ? (char)buf[n] : '?';
             text[n] = 0;
             Binding bind = {};
-            char why[96] = "";
+            char why[256] = "";
             if (!text[0] || BindingParse(text, bind, why, sizeof why)) b.slot[a][slot] = bind;
             else if (say) Log(L"gearbox: %s=%S is no binding (%S), so it is left as it was", key, text, why);
         }
@@ -1299,8 +1299,8 @@ static XInputGetStateFn PadFunction()
     return own;
 }
 
-// The buttons of every connected pad together. A slot with no pad is slow to ask, so the empty ones are only asked
-// again every two seconds.
+// The buttons of every connected pad together, the sticks' directions among them (PadStickButtons). A slot with no pad
+// is slow to ask, so the empty ones are only asked again every two seconds.
 static volatile LONG g_padsConnected = 0xF; // the slots that answered when all were last asked
 
 uint32_t PadButtons()
@@ -1325,7 +1325,7 @@ uint32_t PadButtons()
         XINPUT_STATE st = {};
         if (get(i, &st) != ERROR_SUCCESS) continue;
         answered |= 1L << i;
-        buttons |= st.Gamepad.wButtons;
+        buttons |= st.Gamepad.wButtons | PadStickButtons(st.Gamepad.sThumbLX, st.Gamepad.sThumbLY, st.Gamepad.sThumbRX, st.Gamepad.sThumbRY);
     }
     if (all) InterlockedExchange(&connected, answered);
     return buttons;

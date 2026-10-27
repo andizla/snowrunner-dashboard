@@ -359,14 +359,37 @@ uint32_t PadButtons();                      // the buttons of all connected pads
 extern volatile LONG g_pageCapturing; // GetTickCount() of the last frame the tab waited for pad buttons, 0 = none: the mod ignores the pad then
 extern volatile LONG g_modOff;        // 1 = the mod stood down (another version of the game): the tab says so
 
-// Pad buttons by name, as the SnowRunner Tire Inflation System writes them: "LB+DPadDown", "None". The pad is only
-// read here, never hidden from the game.
-static const struct { const char *name; uint32_t mask; } kPadButtons[14] = {
+// A stick's direction as a pad button, above XInput's 16 buttons in the mask: down while that axis of the stick is past
+// half its travel from the dead zone (the right stick's, the larger, for both sticks; up is the axis' positive side,
+// as XInput has it). A diagonal past half on both axes holds both directions, as a d-pad's does.
+static const uint32_t kPadLSUp = 1u << 16, kPadLSDown = 1u << 17, kPadLSLeft = 1u << 18, kPadLSRight = 1u << 19, kPadRSUp = 1u << 20,
+                      kPadRSDown = 1u << 21, kPadRSLeft = 1u << 22, kPadRSRight = 1u << 23;
+static const int kPadStickDeadZone = XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE;
+static const int kPadStickPast = kPadStickDeadZone + (32767 - kPadStickDeadZone) / 2;
+inline uint32_t PadStickButtons(int lx, int ly, int rx, int ry)
+{
+    uint32_t m = 0;
+    if (ly > kPadStickPast) m |= kPadLSUp;
+    if (ly < -kPadStickPast) m |= kPadLSDown;
+    if (lx < -kPadStickPast) m |= kPadLSLeft;
+    if (lx > kPadStickPast) m |= kPadLSRight;
+    if (ry > kPadStickPast) m |= kPadRSUp;
+    if (ry < -kPadStickPast) m |= kPadRSDown;
+    if (rx < -kPadStickPast) m |= kPadRSLeft;
+    if (rx > kPadStickPast) m |= kPadRSRight;
+    return m;
+}
+
+// Pad buttons by name, as the SnowRunner Tire Inflation System writes them: "LB+DPadDown", "None", and the sticks'
+// directions ("LB+RSUp"). The pad is only read here, never hidden from the game.
+static const int kPadButtonCount = 22;
+static const struct { const char *name; uint32_t mask; } kPadButtons[kPadButtonCount] = {
     { "DPadUp", XINPUT_GAMEPAD_DPAD_UP }, { "DPadDown", XINPUT_GAMEPAD_DPAD_DOWN }, { "DPadLeft", XINPUT_GAMEPAD_DPAD_LEFT },
     { "DPadRight", XINPUT_GAMEPAD_DPAD_RIGHT }, { "Start", XINPUT_GAMEPAD_START }, { "Back", XINPUT_GAMEPAD_BACK },
     { "LS", XINPUT_GAMEPAD_LEFT_THUMB }, { "RS", XINPUT_GAMEPAD_RIGHT_THUMB }, { "LB", XINPUT_GAMEPAD_LEFT_SHOULDER },
     { "RB", XINPUT_GAMEPAD_RIGHT_SHOULDER }, { "A", XINPUT_GAMEPAD_A }, { "B", XINPUT_GAMEPAD_B }, { "X", XINPUT_GAMEPAD_X },
-    { "Y", XINPUT_GAMEPAD_Y } };
+    { "Y", XINPUT_GAMEPAD_Y }, { "LSUp", kPadLSUp }, { "LSDown", kPadLSDown }, { "LSLeft", kPadLSLeft }, { "LSRight", kPadLSRight },
+    { "RSUp", kPadRSUp }, { "RSDown", kPadRSDown }, { "RSLeft", kPadRSLeft }, { "RSRight", kPadRSRight } };
 
 // "LB+DPadDown" -> XINPUT_GAMEPAD_* mask; 0 for "None" or a name that is not a button
 inline uint32_t PadParse(const char *text)
@@ -388,7 +411,7 @@ inline uint32_t PadParse(const char *text)
 // mask -> "LB+DPadDown" (shoulders and sticks first), "None" for 0
 inline void PadName(uint32_t mask, char *out, size_t size)
 {
-    static const int order[14] = { 8, 9, 6, 7, 4, 5, 0, 1, 2, 3, 10, 11, 12, 13 };
+    static const int order[kPadButtonCount] = { 8, 9, 6, 7, 14, 15, 16, 17, 18, 19, 20, 21, 4, 5, 0, 1, 2, 3, 10, 11, 12, 13 };
     out[0] = 0;
     for (int i : order)
         if ((mask & kPadButtons[i].mask) && strlen(out) + strlen(kPadButtons[i].name) + 2 <= size) // a name that does not fit is left out
