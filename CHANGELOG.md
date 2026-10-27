@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - With `Powertrain=1` the engine's push near a gear's top dies down before the shift: over the gear's last fifth the torque factor's roof falls in a straight line to the game's own at the top, and a scout's roof is 3, a truck's and a heavy truck's 6. With the flat roof of 6 a vanilla Defender floored on a road shot from 27 to 58 km/h in 5 seconds through three gears (27 October). The automatic's floored shift up comes a little earlier with it.
+- A pad's stick directions bind as buttons in the gearbox's bindings: LSUp to RSRight, each down past half the stick's travel, so LB with the right stick up or down shifts (`Pad LB+RSUp`). Before, the capture saw only LB (asked for in the comments). A pad binding with an unknown button in `Gauges.ini` no longer ends the game at its start: it is refused with its reason in the log, as other bad bindings are.
 
 ## [0.17.0]
 

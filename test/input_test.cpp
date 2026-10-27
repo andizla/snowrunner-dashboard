@@ -286,6 +286,96 @@ int main()
               "latch: a key or pad button tapped and let go between two passes gives one press on the pass, none after; a POV direction seen between "
               "passes is kept; a device gone carries nothing over");
     }
+    // the sticks' directions as pad buttons (a mod.io comment on 0.17.0: LB + RS up or down registered LB alone): down
+    // past half the stick's travel from the dead zone, not inside it; their names through the ini's text; a chord with a
+    // stick captured and pressed once while held; a flick between two passes kept by the latch
+    {
+        const int past = kPadStickPast + 1, short_ = kPadStickPast - 1, inDead = kPadStickDeadZone - 1;
+        const bool directions = PadStickButtons(0, past, 0, 0) == kPadLSUp && PadStickButtons(0, -past, 0, 0) == kPadLSDown &&
+                                PadStickButtons(-past, 0, 0, 0) == kPadLSLeft && PadStickButtons(past, 0, 0, 0) == kPadLSRight &&
+                                PadStickButtons(0, 0, 0, past) == kPadRSUp && PadStickButtons(0, 0, 0, -past) == kPadRSDown &&
+                                PadStickButtons(0, 0, -past, 0) == kPadRSLeft && PadStickButtons(0, 0, past, 0) == kPadRSRight &&
+                                PadStickButtons(past, past, 0, 0) == (kPadLSUp | kPadLSRight);
+        const bool short_of = PadStickButtons(short_, -short_, short_, -short_) == 0 && PadStickButtons(inDead, inDead, -inDead, -inDead) == 0 &&
+                              PadStickButtons(32767, 0, 0, -32768) == (kPadLSRight | kPadRSDown);
+        // the names both ways, in a binding's text and in any case
+        static const char *const sticks[] = { "Pad LSUp", "Pad LSDown", "Pad LSLeft", "Pad LSRight", "Pad RSUp", "Pad RSDown", "Pad RSLeft", "Pad RSRight",
+                                              "Pad LB+RSUp", "Pad RB+LSLeft+RSDown" };
+        bool same = true;
+        for (const char *t : sticks)
+        {
+            char back[64];
+            BindingText(Parsed(t), back, sizeof back);
+            if (strcmp(back, t))
+            {
+                printf("     \"%s\" came back as \"%s\"\n", t, back);
+                same = false;
+            }
+        }
+        const Binding lower = Parsed("pad rsup+lb");
+        // the capture: LB held, then the right stick up, let go: the chord; the stick alone: the direction alone
+        InputCapture c;
+        InputSnapshot s = {};
+        s.front = true;
+        Binding out;
+        char text[64];
+        BindingCaptureBegin(c, kActUp, 0, 1000);
+        BindingCaptureStep(c, s, 1050, out); // arms
+        s.pad = XINPUT_GAMEPAD_LEFT_SHOULDER;
+        BindingCaptureStep(c, s, 1100, out);
+        s.pad = XINPUT_GAMEPAD_LEFT_SHOULDER | PadStickButtons(0, 0, 0, past);
+        BindingCaptureStep(c, s, 1150, out);
+        s.pad = 0;
+        const int chordBound = BindingCaptureStep(c, s, 1200, out);
+        BindingText(out, text, sizeof text);
+        const bool chord = chordBound == kCaptureBound && !strcmp(text, "Pad LB+RSUp");
+        BindingCaptureBegin(c, kActDown, 0, 2000);
+        BindingCaptureStep(c, s, 2050, out);
+        s.pad = PadStickButtons(0, 0, 0, -past);
+        BindingCaptureStep(c, s, 2100, out);
+        s.pad = 0;
+        const int aloneBound = BindingCaptureStep(c, s, 2150, out);
+        BindingText(out, text, sizeof text);
+        const bool alone = aloneBound == kCaptureBound && !strcmp(text, "Pad RSDown");
+        // the reader: LB+RSUp held over passes is one press, and RSUp bound alone elsewhere rests under the chord
+        GearBindings b = {};
+        b.slot[kActUp][0] = Parsed("Pad LB+RSUp");
+        b.slot[kActDown][0] = Parsed("Pad RSUp");
+        InputReader r = {};
+        ActionState st[kActCount];
+        InputSnapshot pass = {};
+        pass.front = true;
+        int ups = 0, downs = 0;
+        const uint32_t held[] = { XINPUT_GAMEPAD_LEFT_SHOULDER, XINPUT_GAMEPAD_LEFT_SHOULDER | kPadRSUp, XINPUT_GAMEPAD_LEFT_SHOULDER | kPadRSUp, 0 };
+        for (uint32_t p : held)
+        {
+            pass.pad = p;
+            InputStep(r, b, pass, st);
+            ups += st[kActUp].pressed;
+            downs += st[kActDown].pressed;
+        }
+        // the latch: a flick of the stick between two passes still gives the press
+        InputSnapshot latched = {}, poll = {};
+        latched.front = poll.front = true;
+        InputStep(r, b, latched, st);
+        poll.pad = PadStickButtons(0, 0, 0, past);
+        InputLatch(latched, poll);
+        poll.pad = 0;
+        InputLatch(latched, poll);
+        InputStep(r, b, latched, st);
+        const bool flick = st[kActDown].pressed;
+        Check(directions && short_of && same && lower.code == (XINPUT_GAMEPAD_LEFT_SHOULDER | kPadRSUp) && chord && alone && ups == 1 && downs == 0 && flick,
+              "sticks: each direction down past half the stick's travel, none short of it or in the dead zone, a diagonal both; their names through the "
+              "ini's text in any case; LB then RS up captured as Pad LB+RSUp, a stick alone as its direction; the chord one press with the stick alone "
+              "resting under it; a flick between passes kept by the latch");
+    }
+    // a pad binding with an unknown button in the ini: refused with its reason cut to the caller's room, not ended there
+    {
+        Binding b;
+        char room[16] = "";
+        const bool refused = !BindingParse("Pad LB+Nothing", b, room, sizeof room) && strlen(room) == sizeof room - 1;
+        Check(refused, "bindings: a reason longer than the caller's room is cut to it");
+    }
     // the wheels and shifters on this machine, through DirectInput: once, for real; none is a pass
     {
         const bool started = InputDevicesStart(Log);
