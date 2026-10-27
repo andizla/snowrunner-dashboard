@@ -86,6 +86,100 @@ int main()
         Pass(m, skip, Up(), t);
         Check(toR && t.gear == 1, "gearbox: SkipNeutral steps from the first gear to reverse and back without stopping in neutral");
     }
+    // DownStopsAtFirst: down from 3 to 2, from 1 it stays, from N and R nothing; up from R still walks N and 1; with
+    // SkipNeutral on too this one wins
+    {
+        const GearboxOptions stop = { false, false, false, true }, both = { false, false, true, true };
+        GearboxPosModel m = {};
+        GearboxTruck t = Truck(3);
+        GearboxActions a = {};
+        a.gearPressed = 3;
+        Pass(m, stop, a, t);
+        Pass(m, stop, Down(), t);
+        const bool to2 = t.gear == 2 && m.pos == kPosGear;
+        Pass(m, stop, Down(), t);
+        const GearboxPosOrders at1 = Pass(m, stop, Down(), t);
+        const bool stays1 = t.gear == 1 && m.pos == kPosGear && !at1.moved;
+        GearboxActions n = {};
+        n.n = true;
+        Pass(m, stop, n, t);
+        const GearboxPosOrders fromN = Pass(m, stop, Down(), t);
+        const bool staysN = t.gear == 0 && m.pos == kPosN && !fromN.moved;
+        GearboxActions r = {};
+        r.r = true;
+        Pass(m, stop, r, t);
+        Pass(m, stop, Down(), t);
+        const bool staysR = t.gear == -1 && m.pos == kPosR;
+        Pass(m, stop, Up(), t);
+        const bool upN = t.gear == 0;
+        Pass(m, stop, Up(), t);
+        const bool up1 = t.gear == 1;
+        GearboxPosModel k = {};
+        GearboxTruck u = Truck(1);
+        a.gearPressed = 1;
+        Pass(k, both, a, u);
+        Pass(k, both, Down(), u);
+        const bool wins = u.gear == 1 && k.pos == kPosGear;
+        Check(to2 && stays1 && staysN && staysR && upN && up1 && wins,
+              "gearbox: DownStopsAtFirst steps down to the first gear and no further, does nothing from N or R, up from R still walks N and 1; it wins over SkipNeutral");
+    }
+    // the game's shifter's request (Gearbox=2 with a pad or the keyboard) as that pass's action: R, N, H, A, a gear (past
+    // the top H) and L; under RequireClutch it stalls as a key would; DownStopsAtFirst does not hold it back; a gear it
+    // picked stays under RequireGearHeld, as the shifter stays where it was put
+    {
+        const GearboxOptions stop = { false, false, false, true };
+        GearboxPosModel m = {};
+        GearboxTruck t = Truck(3);
+        Pass(m, stop, None(), t);
+        auto ask = [&](int kind, int gear, const GearboxOptions &o) {
+            GearboxActions a = {};
+            GearboxActionsAsk(a, GearboxAsk{ kind, gear }, t.top);
+            return Pass(m, o, a, t);
+        };
+        ask(kAskR, 0, stop);
+        const bool r = m.pos == kPosR && t.gear == -1;
+        ask(kAskN, 0, stop);
+        const bool n = m.pos == kPosN && t.gear == 0;
+        ask(kAskGear, 4, stop);
+        const bool g4 = m.pos == kPosGear && t.gear == 4;
+        ask(kAskH, 0, stop);
+        const bool h = m.pos == kPosH && t.gear == 7;
+        ask(kAskGear, 7, stop);
+        const bool past = m.pos == kPosH;
+        ask(kAskLow, 0, stop);
+        const bool low = m.pos == kPosLow && t.gear == 1 && fabsf(t.power - 0.45f) < 0.01f;
+        t.automatic = false;
+        ask(kAskA, 0, stop);
+        const bool isA = m.pos == kPosA;
+        const GearboxOptions clutchOn = { true, false, false, false }, heldOn = { false, true, false, false };
+        const GearboxPosOrders stalled = ask(kAskGear, 2, clutchOn);
+        const bool stalls = stalled.stall && t.gear == 2;
+        ask(kAskGear, 3, heldOn);
+        Pass(m, heldOn, None(), t);
+        const bool held = m.pos == kPosGear && t.gear == 3;
+        GearboxActions none = {};
+        GearboxActionsAsk(none, GearboxAsk{ kAskNone, 0 }, t.top);
+        Check(r && n && g4 && h && past && low && isA && stalls && held && !none.shifter,
+              "gearbox: the game's shifter's request picks R, N, a gear, H (a gear past the top too), L and A as their keys do; under RequireClutch it stalls; "
+              "a gear it picked stays under RequireGearHeld");
+    }
+    // the doors' calls as one request: the first names it, the later ones of the same shift repeat it, the power factor
+    // turns a first gear into L or L-, a factor alone asks nothing
+    {
+        GearboxAsk p = {};
+        p = GearboxAskMerge(p, kFnShiftToReverse, 0, 0.0f);
+        p = GearboxAskMerge(p, kFnAutoOffAndShift, -1, 0.0f);
+        const bool rev = p.kind == kAskR;
+        GearboxAsk g = GearboxAskMerge(GearboxAsk{}, kFnAutoOffAndShift, 1, 0.0f);
+        g = GearboxAskMerge(g, kFnShiftGear, 1, 0.0f);
+        const bool first = g.kind == kAskGear && g.gear == 1;
+        const GearboxAsk low = GearboxAskMerge(g, kFnSetPower, 0, 0.45f), lowMinus = GearboxAskMerge(g, kFnSetPower, 0, 0.2f), plus = GearboxAskMerge(g, kFnSetPower, 0, 1.0f);
+        const bool alone = GearboxAskMerge(GearboxAsk{}, kFnSetPower, 0, 0.45f).kind == kAskNone;
+        const bool doors = GearboxAskMerge(GearboxAsk{}, kFnShiftToNeutral, 0, 0.0f).kind == kAskN && GearboxAskMerge(GearboxAsk{}, kFnShiftToHigh, 0, 0.0f).kind == kAskH &&
+                           GearboxAskMerge(GearboxAsk{}, kFnShiftToAuto, 0, 0.0f).kind == kAskA && GearboxAskMerge(GearboxAsk{}, kFnShiftGear, 0, 0.0f).kind == kAskN;
+        Check(rev && first && low.kind == kAskLow && lowMinus.kind == kAskLowMinus && plus.kind == kAskGear && alone && doors,
+              "gearbox: a shift's doors make one request, the first door naming it; the power factor after a first gear makes L or L- (L+ stays the first gear); a factor alone asks nothing");
+    }
     // RequireGearHeld: a gear key held keeps its gear, let go is neutral
     {
         GearboxPosModel m = {};
@@ -378,6 +472,40 @@ int main()
                   (firsts & (1u << kFnShiftToReverse)) && (firsts & (1u << kFnSetPower)) && !(firsts & (1u << kFnSetVehicle)) && none == 0,
               "gearbox hooks: while the gearbox has the truck the game's six shifts and its power factor are refused and counted, each kind told once, the "
               "vehicle change passes and the mod's own call goes through; with the flag off all pass");
+    }
+
+    // the game's shifter at Gearbox=2 with a pad or the keyboard: its calls stay refused, the first door of a shift becomes
+    // one request taken on the next pass, the later doors of the same shift do not repeat it; with the asks off (a wheel's
+    // pedals) none is made
+    {
+        FunctionFind finds[kFnCount] = {};
+        void *fakes[kFnCount] = { (void *)&FakeShift, (void *)&FakeAuto, (void *)&FakeHigh, (void *)&FakeReverse, (void *)&FakeNeutral, nullptr,
+                                  (void *)&FakeAutoOff, (void *)&FakePower, (void *)&FakeVehicle };
+        for (int f = 0; f < kFnCount; f++)
+            if (fakes[f]) finds[f] = FunctionFind{ kFnFound, (size_t)(uintptr_t)fakes[f], 1, false };
+        char why[512];
+        const bool hooked = GearboxHook(0, finds, why, sizeof why) == 8;
+        for (int f = 0; f < kFnCount; f++) g_ran[f] = 0;
+        GearboxAsk a = {};
+        GearboxAskTake(a); // nothing left from before
+        GearboxPolicy(kPolicyAll, nullptr, false);
+        GearboxShifterAsks(false);
+        const bool offRefused = !FakeReverse(nullptr);
+        const bool offNone = !GearboxAskTake(a);
+        GearboxShifterAsks(true);
+        const bool refused = !FakeAutoOff(nullptr, 1) && !FakeShift(nullptr, 1);
+        FakePower(nullptr, 0.45f);
+        const bool low = GearboxAskTake(a) && a.kind == kAskLow;
+        const bool once = !GearboxAskTake(a);
+        const bool rev = !FakeReverse(nullptr) && !FakeAutoOff(nullptr, -1) && GearboxAskTake(a) && a.kind == kAskR && !GearboxAskTake(a);
+        const bool gear = !FakeAutoOff(nullptr, 5) && GearboxAskTake(a) && a.kind == kAskGear && a.gear == 5;
+        const bool other = FakeReverse((void *)0x1234) && !GearboxAskTake(a); // another vehicle's call passes and asks nothing
+        GearboxShifterAsks(false);
+        GearboxPolicy(kPolicyPass, nullptr, false);
+        GearboxUnhook();
+        Check(hooked && offRefused && offNone && refused && low && once && rev && gear && other && g_ran[kFnShiftGear] == 0 && g_ran[kFnAutoOffAndShift] == 0,
+              "gearbox hooks: at Gearbox=2 with the asks on the game's shifter's calls stay refused and its first door is one request, taken once on the "
+              "next pass (L from the power factor after the first gear); with the asks off none is made");
     }
 
     // the levels: at Gearbox=1 only a reverse while standing in A with the brake down and the game's automatic flag up

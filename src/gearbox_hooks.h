@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "game_code.h"
+#include "gearbox_model.h"
 
 // The calls each hook has seen since the attach, and the last arguments of those that have some.
 struct GearboxCounts
@@ -57,6 +58,35 @@ unsigned GearboxRefusedNew();
 // The way through to the game's own function behind a hook (fn one of kFn*), nullptr while it has none: the mod's own
 // calls go this way, so the probe counts only the game's.
 void *GearboxOriginal(int fn);
+
+// ---- the game's shifter as a request (Gearbox=2 with a pad or the keyboard, 0.17.1) ----
+// With the game's automatic flag down the game makes no gearbox call of its own at a standstill (the drives of 26
+// October), so a call refused at kPolicyAll is the player's shifter. The calls stay refused (the mod's gearbox shifts
+// through GearboxOriginal, so nothing is shifted twice), but the door the first one came through names the position:
+// ShiftToReverse R, ShiftToNeutral N, ShiftToHigh H, ShiftToAutoGear A, a gear through AutoOffAndShift or ShiftGear (below
+// 0 R, 0 N); the later calls of the same shift repeat it, and SetPowerFactor's factor under kLowUnder turns a first gear
+// into L- or L. pending: the request not yet taken (kind kAskNone for none).
+inline GearboxAsk GearboxAskMerge(GearboxAsk pending, int fn, int32_t gear, float factor)
+{
+    if (pending.kind == kAskGear && pending.gear == 1 && fn == kFnSetPower && factor > 0.0f && factor < kLowUnder)
+        return GearboxAsk{ factor < kLowMinusUnder ? kAskLowMinus : kAskLow, 0 };
+    if (pending.kind != kAskNone) return pending;
+    switch (fn)
+    {
+    case kFnShiftToReverse: return GearboxAsk{ kAskR, 0 };
+    case kFnShiftToNeutral: return GearboxAsk{ kAskN, 0 };
+    case kFnShiftToHigh: return GearboxAsk{ kAskH, 0 };
+    case kFnShiftToAuto: return GearboxAsk{ kAskA, 0 };
+    case kFnShiftGear:
+    case kFnAutoOffAndShift: return gear < 0 ? GearboxAsk{ kAskR, 0 } : gear == 0 ? GearboxAsk{ kAskN, 0 } : GearboxAsk{ kAskGear, gear > 255 ? 255 : gear };
+    default: return pending;
+    }
+}
+// On (the mod's thread, by Input: a pad or the keyboard), the calls refused at kPolicyAll are read as requests.
+void GearboxShifterAsks(bool on);
+// Once a pass on the mod's thread: the request the game's shifter made since the last pass, taken and cleared. A
+// request older than two passes is dropped; one made on this very pass waits for the next. False for none.
+bool GearboxAskTake(GearboxAsk &out);
 
 // ---- the gate: which hooks a level needs (0.17.0) ----
 // The eight shift hooks at Gearbox 1 and 2 (level as GaugeSettings::gearbox: 0 the game's, 1 the mod's automatic, 2

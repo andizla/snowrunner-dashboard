@@ -53,8 +53,49 @@ static void Tell(LONG bit)
     if (!(InterlockedOr(&g_told, bit) & bit)) InterlockedOr(&g_new, bit);
 }
 
-// gear: the gear the call asks for (ShiftGear, AutoOffAndShift), else 0
-static bool Refused(int fn, void *vehicle, int32_t gear = 0)
+// The game's shifter's request (gearbox_hooks.h, GearboxAskMerge), packed in one word for the hooks' threads and the
+// mod's: the kind in bits 0 to 3, the gear in 4 to 11, and in 12 to 31 the mod's pass it was made in (g_pass, which
+// GearboxAskTake steps); 0 none pending.
+static volatile LONG g_asks = 0, g_ask = 0, g_pass = 0;
+static const ULONG kPassMask = 0xFFFFF;
+
+static ULONG AskPack(const GearboxAsk &a, ULONG pass) { return (ULONG)a.kind | ((ULONG)(a.gear & 0xFF) << 4) | ((pass & kPassMask) << 12); }
+
+static GearboxAsk AskUnpack(ULONG v) { return GearboxAsk{ (int)(v & 0xF), (int)((v >> 4) & 0xFF) }; }
+
+static void Ask(int fn, int32_t gear, float factor)
+{
+    for (;;)
+    {
+        const ULONG was = (ULONG)g_ask;
+        const GearboxAsk pending = was ? AskUnpack(was) : GearboxAsk{ kAskNone, 0 };
+        const GearboxAsk now = GearboxAskMerge(pending, fn, gear, factor);
+        if (now.kind == kAskNone) return;
+        const ULONG packed = AskPack(now, was ? was >> 12 : (ULONG)g_pass);
+        if (packed == was || (ULONG)InterlockedCompareExchange(&g_ask, (LONG)packed, (LONG)was) == was) return;
+    }
+}
+
+void GearboxShifterAsks(bool on) { InterlockedExchange(&g_asks, on ? 1 : 0); }
+
+bool GearboxAskTake(GearboxAsk &out)
+{
+    const ULONG pass = (ULONG)InterlockedIncrement(&g_pass) & kPassMask;
+    for (;;)
+    {
+        const ULONG was = (ULONG)g_ask;
+        if (!was) return false;
+        const ULONG age = (pass - (was >> 12)) & kPassMask;
+        if (age == 0) return false; // made on this pass: the next takes it
+        if ((ULONG)InterlockedCompareExchange(&g_ask, 0, (LONG)was) != was) continue;
+        if (age > 2) return false;
+        out = AskUnpack(was);
+        return true;
+    }
+}
+
+// gear: the gear the call asks for (ShiftGear, AutoOffAndShift), else 0; factor: SetPowerFactor's, else 0
+static bool Refused(int fn, void *vehicle, int32_t gear = 0, float factor = 0.0f)
 {
     const LONG policy = g_policy;
     if (policy == kPolicyPass || vehicle != g_heldVehicle) return false;
@@ -73,7 +114,11 @@ static bool Refused(int fn, void *vehicle, int32_t gear = 0)
     }
     if (!refuse) return false;
     InterlockedIncrement(&g_refused[fn]);
-    if (policy == kPolicyAll) Tell(1L << fn);
+    if (policy == kPolicyAll)
+    {
+        Tell(1L << fn);
+        if (g_asks) Ask(fn, gear, factor);
+    }
     return true;
 }
 
@@ -125,7 +170,7 @@ static void HookSetPower(void *vehicle, float factor)
 {
     InterlockedIncrement(&g_count[kFnSetPower]);
     g_power = factor;
-    if (Refused(kFnSetPower, vehicle)) return;
+    if (Refused(kFnSetPower, vehicle, 0, factor)) return;
     ((PowerFn)g_way[kFnSetPower])(vehicle, factor);
 }
 

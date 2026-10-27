@@ -533,11 +533,12 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             "a gear picked there hands the gearbox back until A is picked again. Only the game's reverse on the brake while standing in A is refused.");
     changed(ImGui::RadioButton("The mod's own gearbox", &s.gearbox, kGearboxOwn));
     PageTip("The mod takes the shifter: A, the numbered gears, N, R, H and the low range on the bindings below, with a clutch and the options. "
-            "The game's own shifting is refused while it has the truck.");
-    if (s.gearbox == kGearboxOwn && !view.canReverse)
+            "The game's own shifting is refused while it has the truck. Driven with a pad or the keyboard, the game's shifter picks the position too; "
+            "with a wheel's pedals only the bindings do.");
+    if (s.gearbox == kGearboxOwn && s.input == kInputWheel && !view.canReverse)
     {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.68f, 0.15f, 1.0f));
-        ImGui::TextWrapped("Bind at least Gear down or Reverse before the mod's own gearbox takes the shifter. Until then it runs as the mod's automatic in A.");
+        ImGui::TextWrapped("Driven with a wheel's pedals: bind at least Gear down or Reverse before the mod's own gearbox takes the shifter. Until then it runs as the mod's automatic in A.");
         ImGui::PopStyleColor();
     }
     if (s.gearbox == kGearboxOwn)
@@ -548,6 +549,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         PageTip("Neutral the moment no gear key is held. For an H shifter with every gear bound: a gear reached with up or down is not held.");
         changed(ImGui::Checkbox("Skip neutral", &s.skipNeutral));
         PageTip("Up and down step from the first gear to reverse and back without stopping in neutral.");
+        changed(ImGui::Checkbox("Down stops at first gear", &s.downStopsAtFirst));
+        PageTip("Gear down never goes past the first gear into N or R; N and R only on their own keys, as SMT's immersive mode did. Wins over Skip neutral.");
         PageLabel("Stall damage", labelX);
         ImGui::SetNextItemWidth(w);
         ImGui::BeginDisabled(!s.damage);

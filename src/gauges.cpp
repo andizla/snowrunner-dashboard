@@ -318,6 +318,7 @@ static void WriteIni(const GaugeSettings &s)
     whole(L"RequireClutch", s.requireClutch ? 1 : 0);
     whole(L"RequireGearHeld", s.requireGearHeld ? 1 : 0);
     whole(L"SkipNeutral", s.skipNeutral ? 1 : 0);
+    whole(L"DownStopsAtFirst", s.downStopsAtFirst ? 1 : 0);
     whole(L"Input", s.input);
     whole(L"Powertrain", s.powertrain ? 1 : 0);
     whole(L"EngineShare", s.engineShare);
@@ -649,6 +650,8 @@ static void ReadIni(GaugeSettings &s)
                         L";   BindGearA=Key Num 7\n"
                         L"; RequireClutch=1 stalls the engine on a shift into a gear without the clutch, RequireGearHeld=1 goes to N while no\n"
                         L"; gear key is held (an H shifter with every gear bound), SkipNeutral=1 steps from gear 1 to reverse and back past N.\n"
+                        L"; DownStopsAtFirst=1: GearDown never leaves the forward gears, N and R only on their own keys (wins over SkipNeutral).\n"
+                        L"; At Gearbox=2 with Input 1 or 2 the game's own shifter picks a position too; with Input 0 its shifts stay refused.\n"
                         L"; Input is what you drive with: 0 a wheel's pedals, 1 a pad's trigger, 2 the keyboard. The mod's automatic kicks\n"
                         L"; down by it: a trigger has to come from under three quarters, and keys kick nothing down and shift as floored.\n"
                         L"; Powertrain=1: the truck pulls with the mod's engine: its torque curve against the engine speed the needle\n"
@@ -700,6 +703,7 @@ static void ReadIni(GaugeSettings &s)
     s.requireClutch = IniBool(L"RequireClutch", s.requireClutch, ini);
     s.requireGearHeld = IniBool(L"RequireGearHeld", s.requireGearHeld, ini);
     s.skipNeutral = IniBool(L"SkipNeutral", s.skipNeutral, ini);
+    s.downStopsAtFirst = IniBool(L"DownStopsAtFirst", s.downStopsAtFirst, ini);
     s.input = IniInt(L"Input", s.input, ini);
     s.powertrain = IniBool(L"Powertrain", s.powertrain, ini);
     s.engineShare = IniInt(L"EngineShare", s.engineShare, ini);
@@ -1122,7 +1126,8 @@ static void BindingsLog(const GearBindings &b)
 
 // The manual transmission mod's SMT.ini, taken over once: its [KEYBOARD] bindings (Kb.<n>, a DirectInput scan code,
 // turned into a Windows key; a combination of keys or another code is left) into the first slot of each matching
-// action, and its [OPTIONS] REQUIRE CLUTCH, REQUIRE GEAR HELD and SKIP NEUTRAL. Its [CONTROLLER] section is left (its
+// action, and its [OPTIONS] REQUIRE CLUTCH, REQUIRE GEAR HELD, SKIP NEUTRAL and IMMERSIVE MODE (its gear down clamped at
+// the first gear, the mod's DownStopsAtFirst). Its [CONTROLLER] section is left (its
 // codes are OIS's own, not Windows'), and so are SHOW MENU and HANDBRAKE. Nothing in SMT.ini is
 // written. The number of bindings taken; taken and left name them for the log.
 static int SmtIniImport(const std::wstring &path, GearBindings &b, GaugeSettings &s, std::wstring &taken, std::wstring &left)
@@ -1203,6 +1208,7 @@ static int SmtIniImport(const std::wstring &path, GearBindings &b, GaugeSettings
     option(L"REQUIRE CLUTCH", s.requireClutch);
     option(L"REQUIRE GEAR HELD", s.requireGearHeld);
     option(L"SKIP NEUTRAL", s.skipNeutral);
+    option(L"IMMERSIVE MODE", s.downStopsAtFirst);
     return bound;
 }
 
@@ -1881,11 +1887,12 @@ static void LogSettings(const GaugeSettings &s)
         s.airFullKmh, s.damage ? L"on" : L"off", s.hotDamageFrom, s.hotDamage, s.coldDamage, s.stallDamage, s.clutchBurn ? L"on" : L"off", s.clutchHeat);
     Log(L"settings: sound volume %d of 100%s", s.soundVolume, s.soundsOnly ? L", sounds only: the cluster is not drawn" : L"");
     Log(L"settings: driven with %s", s.input == kInputKeys ? L"the keyboard" : s.input == kInputPad ? L"a pad" : L"a wheel's pedals");
-    Log(L"settings: gearbox %s; RequireClutch %d, RequireGearHeld %d, SkipNeutral %d",
-        s.gearbox == kGearboxOwn     ? L"the mod's own (Gearbox=2): it takes the shifter, its positions on the bindings"
+    Log(L"settings: gearbox %s; RequireClutch %d, RequireGearHeld %d, SkipNeutral %d, DownStopsAtFirst %d",
+        s.gearbox == kGearboxOwn && s.input != kInputWheel ? L"the mod's own (Gearbox=2): it takes the shifter, its positions on the bindings and on the game's shifter"
+        : s.gearbox == kGearboxOwn ? L"the mod's own (Gearbox=2): it takes the shifter, its positions on the bindings (with a wheel's pedals the game's shifter stays refused)"
         : s.gearbox == kGearboxModel ? L"the mod's automatic in A (Gearbox=1), the game's shifter yours, its reverse on the brake refused"
                                      : L"the game's own (Gearbox=1 or 2 in the tab's Gearbox section hand it to the mod)",
-        s.requireClutch, s.requireGearHeld, s.skipNeutral);
+        s.requireClutch, s.requireGearHeld, s.skipNeutral, s.downStopsAtFirst);
     if (s.powertrain) Log(L"settings: powertrain on: the truck pulls with %d percent of the mod's engine and converter, through the game's torque factor", s.engineShare);
     else Log(L"settings: powertrain off: the truck pulls with the game's own engine (Powertrain=1 hands it the mod's)");
     Log(L"settings: toggle key %S, pad %S, demo values %s, probe %d", key, s.padToggle, s.demo ? L"on" : L"off", s.probe);
@@ -1955,7 +1962,8 @@ struct TruckWatch
     bool floorPan;              // the engine box's line after its film title's damage landed (EngineWarn)
     bool lockPress[kLocks];     // DiffLock and Awd pressed on this pass (at every level of Gearbox)
     LocksWatch locks;           // what the mod's keys wrote to the locks (LocksStep)
-    bool canReverse;            // a binding reaches reverse (GearDown, GearR or GearN): Gearbox=2 may take the shifter
+    bool canReverse;            // a binding reaches reverse (GearDown, GearR or GearN): Gearbox=2 with a wheel's pedals may take the shifter
+    bool lowPlusSaid;           // the log said once that the game's shifter's L+ reads as the first gear
     long gameShifts;            // GameShiftCount on the last pass
     PullTest pullTest;          // the pull test (the tab's button)
     uint64_t pullVehicle, pullAction; // the truck whose torque factor a running pull test changed
@@ -2493,10 +2501,17 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         const bool testing = w.pullTest.state == kPullRunning || pull.ended;
         // the levels of Gearbox (with the hooks in place): 1 the mod's automatic in A, the game's shifter the player's and
         // only the game's reverse on the brake refused; 2 the mod's own gearbox, which takes the truck the moment it is
-        // driven, in whatever position, and refuses every shift of the game's. Level 2 runs as 1 while no binding reaches
-        // reverse (w.canReverse), so a truck can always be backed up. No gear is set while the pull test holds one
-        const int level = s.gearbox == kGearboxOwn && !w.canReverse ? kGearboxModel : s.gearbox;
+        // driven, in whatever position, and refuses every shift of the game's. Driven with a pad or the keyboard the game's
+        // shifter picks a position too (its refused calls read as requests), so reverse is always reachable; with a wheel's
+        // pedals the game's shifts stay refused and level 2 runs as 1 while no binding reaches reverse (w.canReverse), so a
+        // truck can always be backed up (the user's rule, 2026-10-27). No gear is set while the pull test holds one
+        const bool shifterAsks = s.input != kInputWheel;
+        const int level = s.gearbox == kGearboxOwn && !shifterAsks && !w.canReverse ? kGearboxModel : s.gearbox;
         const bool own = level == kGearboxOwn;
+        GearboxShifterAsks(own && shifterAsks);
+        // the game's shifter's request since the last pass, taken every pass so none waits out a pause
+        GearboxAsk ask = {};
+        const bool shifterAsked = GearboxAskTake(ask) && own && shifterAsks;
         const TakeoverOrders orders = TakeoverStep(w.take, raw, level >= kGearboxModel && g_shiftGear != nullptr && GearboxHooked(), !own);
         const GearboxTruck boxTruck{ raw.gear, TruckTopGear(raw), isfinite(raw.speed) ? raw.speed : 0.0f, TruckEngineOn(raw), raw.stall,
                                      raw.powerFactor, raw.automatic != 0, foot };
@@ -2507,7 +2522,11 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             w.gearbox.pause = kShiftPause;
             GearboxHuntClear(w.gearbox);
             w.gameShifts = GameShiftCount();
-            if (own) Log(L"gearbox: the mod's gearbox takes the truck in %S (the game's gear %d); the game's own shifting is refused from now on", GearboxPosName(w.pos.pos), raw.gear);
+            if (own && shifterAsks)
+                Log(L"gearbox: the mod's gearbox takes the truck in %S (the game's gear %d); the game's own shifting is refused from now on, its shifter "
+                    L"picks the mod's position (driven with %s)", GearboxPosName(w.pos.pos), raw.gear, s.input == kInputKeys ? L"the keyboard" : L"a pad");
+            else if (own) Log(L"gearbox: the mod's gearbox takes the truck in %S (the game's gear %d); the game's own shifting is refused from now on, "
+                              L"the bindings pick the position (driven with a wheel's pedals)", GearboxPosName(w.pos.pos), raw.gear);
             else Log(L"gearbox: the mod's automatic takes the truck in A (the game's gear %d); the game's reverse on the brake is refused", raw.gear);
         }
         if (orders.gaveBack)
@@ -2552,10 +2571,23 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         int shiftTo = 0;
         if (w.take.driving && !testing)
         {
-            const GearboxOptions options{ s.requireClutch, s.requireGearHeld, s.skipNeutral };
+            const GearboxOptions options{ s.requireClutch, s.requireGearHeld, s.skipNeutral, s.downStopsAtFirst };
             const int autoGear = TakeoverAutoGear(raw, w.gearbox.gear, GearboxLowestFit(w.gearbox, raw, scale, w.hand.on));
             const int posWas = w.pos.pos;
-            const GearboxPosOrders box = GearboxPosStep(w.pos, options, w.actions, boxTruck, autoGear);
+            GearboxActions acts = w.actions;
+            if (shifterAsked)
+            {
+                GearboxActionsAsk(acts, ask, boxTruck.top);
+                static const char *const askName[] = { "", "A", "N", "R", "H", "a gear", "L-", "L" };
+                if (ask.kind == kAskGear) Log(L"gearbox: the game's shifter asked for gear %d", ask.gear);
+                else Log(L"gearbox: the game's shifter asked for %S", askName[ask.kind]);
+                if (ask.kind == kAskGear && ask.gear == 1 && !w.lowPlusSaid)
+                {
+                    w.lowPlusSaid = true;
+                    Log(L"gearbox: the game's L+ cannot be told from its first gear (the same gear, the plain power), so the shifter's L+ reads as the first gear");
+                }
+            }
+            const GearboxPosOrders box = GearboxPosStep(w.pos, options, acts, boxTruck, autoGear);
             if (box.flagDown) m.put(w.refs.action + 0x3C, (uint8_t)0);
             if (box.setPower) m.put(w.refs.action + 0x38, box.power);
             stallOrdered = box.stall; // ramped into the game's stall seconds below (StallStep), so its notice shows
@@ -2750,7 +2782,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         Log(L"probe: %S", ninth);
         if (w.take.driving)
         {
-            GearboxPosProbeText(w.pos, GearboxOptions{ s.requireClutch, s.requireGearHeld, s.skipNeutral }, raw.gear, tenth, sizeof tenth);
+            GearboxPosProbeText(w.pos, GearboxOptions{ s.requireClutch, s.requireGearHeld, s.skipNeutral, s.downStopsAtFirst }, raw.gear, tenth, sizeof tenth);
             Log(L"probe: %S", tenth);
         }
         if (manual)
@@ -2879,12 +2911,13 @@ static DWORD WINAPI Run(void *)
             set.s.requireClutch = set.plain.requireClutch;
             set.s.requireGearHeld = set.plain.requireGearHeld;
             set.s.skipNeutral = set.plain.skipNeutral;
+            set.s.downStopsAtFirst = set.plain.downStopsAtFirst;
             BindingsWrite(ini, binds);
             SettingsWrite(set);
             SettingsPublish(s);
-            Log(L"gearbox: SMT.ini taken over once: %d keyboard bindings (%s), its options RequireClutch %d, RequireGearHeld %d, SkipNeutral %d; left: "
+            Log(L"gearbox: SMT.ini taken over once: %d keyboard bindings (%s), its options RequireClutch %d, RequireGearHeld %d, SkipNeutral %d, DownStopsAtFirst (its immersive mode) %d; left: "
                 L"its pad and wheel section (other codes than Windows'), its menu and handbrake keys%s%s",
-                bound, taken.empty() ? L"none" : taken.c_str(), s.requireClutch, s.requireGearHeld, s.skipNeutral, left.empty() ? L"" : L", ", left.c_str());
+                bound, taken.empty() ? L"none" : taken.c_str(), s.requireClutch, s.requireGearHeld, s.skipNeutral, s.downStopsAtFirst, left.empty() ? L"" : L", ", left.c_str());
         }
         else BindingsRead(ini, binds, true);
     }
@@ -3083,7 +3116,7 @@ static DWORD WINAPI Run(void *)
             static ActionState states[kActCount];
             InputStep(bindReader, binds, seen, states);
             watch.canReverse = BindingsCanReverse(binds, snap, PadPresent());
-            if (s.gearbox != kGearboxOwn || !watch.canReverse) watch.actions = GearboxActions{};
+            if (s.gearbox != kGearboxOwn || (s.input == kInputWheel && !watch.canReverse)) watch.actions = GearboxActions{};
             else watch.actions = NgMenuOpen() || bindCapture.active ? ActionsResting(watch.actions) : ActionsOf(states, binds);
             // the locks at every level: a press while no truck is driven is gone, not kept for later
             const bool locksHeard = !NgMenuOpen() && !bindCapture.active;
@@ -3504,7 +3537,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.warmUpMinutes == b.warmUpMinutes && a.overheatMinutes == b.overheatMinutes && a.coolDownMinutes == b.coolDownMinutes && a.ambientC == b.ambientC &&
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly &&
-           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.input == b.input && a.powertrain == b.powertrain && a.engineShare == b.engineShare;
+           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStopsAtFirst == b.downStopsAtFirst && a.input == b.input && a.powertrain == b.powertrain && a.engineShare == b.engineShare;
 }
 
 static int g_failed = 0;
@@ -3535,7 +3568,7 @@ int wmain(int argc, wchar_t **argv)
           "defaults: the coolant warm after 3 minutes, in the red zone after 1.5, cool after 15, with 15 C outside");
     Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.hotDamageFrom == kTempRed && d.coldDamage == 5.0f && d.stallDamage == 5.0f && d.clutchBurn && d.clutchHeat == 60.0f,
           "defaults: the radiator's full airflow from 30 km/h, engine damage on from the red zone, 10 percent a minute for the heat and 5 for the cold");
-    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && d.input == kInputWheel && !d.powertrain && d.engineShare == 50,
+    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStopsAtFirst && d.input == kInputWheel && !d.powertrain && d.engineShare == 50,
           "defaults: the oil as a second needle, warm after 5 minutes, too hot from 120 C; the standard turbo");
 
     // keys the mod does not know, in its own section and in another one
@@ -3586,7 +3619,7 @@ int wmain(int argc, wchar_t **argv)
     c.oilGauge = kOilDial;
     c.boostProfile = kSpoolTwoStage;
     c.gearbox = kGearboxModel;
-    c.requireClutch = c.requireGearHeld = c.skipNeutral = true;
+    c.requireClutch = c.requireGearHeld = c.skipNeutral = c.downStopsAtFirst = true;
     c.input = kInputKeys;
     c.powertrain = true;
     c.engineShare = 80;
@@ -3602,7 +3635,7 @@ int wmain(int argc, wchar_t **argv)
                             c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
                             c.demo != d.demo && c.probe != d.probe && c.soundVolume != d.soundVolume && c.soundsOnly != d.soundsOnly &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
-                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.input != d.input && c.powertrain != d.powertrain && c.engineShare != d.engineShare;
+                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStopsAtFirst != d.downStopsAtFirst && c.input != d.input && c.powertrain != d.powertrain && c.engineShare != d.engineShare;
     WriteIni(c);
     ReadIni(b);
     Check(allChanged, "ini: the test changes every setting from its default");
@@ -3623,7 +3656,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 95, "ini: the help text survives a write (95 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 97, "ini: the help text survives a write (97 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());
@@ -4263,6 +4296,7 @@ int wmain(int argc, wchar_t **argv)
         WritePrivateProfileStringW(L"CONTROLLER", L"GEAR DOWN", L"Joy.0.Btn.5", smtIni.c_str());
         WritePrivateProfileStringW(L"OPTIONS", L"REQUIRE CLUTCH", L"true", smtIni.c_str());
         WritePrivateProfileStringW(L"OPTIONS", L"SKIP NEUTRAL", L"1", smtIni.c_str());
+        WritePrivateProfileStringW(L"OPTIONS", L"IMMERSIVE MODE", L"true", smtIni.c_str());
         GearBindings b;
         BindingsDefault(b);
         GaugeSettings o;
@@ -4273,7 +4307,7 @@ int wmain(int argc, wchar_t **argv)
         Check(bound == 6 && b.slot[kActUp][0].code == 'E' && b.slot[kActGearR][0].code == VK_END && b.slot[kActGear3][0].code == VK_NUMPAD2 &&
                   b.slot[kActGear4][0].code == VK_DECIMAL && !b.slot[kActDown][0].kind && b.slot[kActGearN][0].code == VK_NUMPAD5 &&
                   b.slot[kActDiffLock][0].code == 'L' && b.slot[kActAwd][0].code == 'A' && wcsstr(taken.c_str(), L"DIFF LOCK") &&
-                  !b.slot[kActGear1][0].kind && o.requireClutch && o.skipNeutral && !o.requireGearHeld && wcsstr(left.c_str(), L"GEAR 1") &&
+                  !b.slot[kActGear1][0].kind && o.requireClutch && o.skipNeutral && o.downStopsAtFirst && !o.requireGearHeld && wcsstr(left.c_str(), L"GEAR 1") &&
                   wcsstr(left.c_str(), L"the default of GearDown") && wcsstr(taken.c_str(), L"GEAR UP"),
               "gearbox: SMT.ini's keyboard bindings taken over by their scan codes (an extended key and the number pad too), a default on a key "
               "it took dropped, a combination left, its controller section and menu key left, its diff lock and AWD keys taken, its options taken");
