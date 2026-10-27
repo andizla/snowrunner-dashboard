@@ -78,8 +78,8 @@ struct GaugeSettings
                              // 2 the mod's own gearbox (gearbox_model.h): the shifter taken, its positions from the bindings
     bool requireClutch;      // RequireClutch: a shift into a gear without the clutch stalls the engine
     bool requireGearHeld;    // RequireGearHeld: neutral while no gear key is held, as an H shifter
-    bool skipNeutral;        // SkipNeutral: from the first gear to reverse and back without stopping in neutral
-    bool downStopsAtFirst;   // DownStopsAtFirst: Gear down never leaves the forward gears; wins over SkipNeutral
+    bool skipNeutral;        // SkipNeutral: from L- to reverse and back without stopping in neutral
+    bool downStaysForward;   // DownStaysForward: Gear down stops at L-; wins over SkipNeutral
     int input;               // Input: what the pedal is: 0 a wheel's pedals, 1 a pad's trigger, 2 keys. The mod's automatic kicks down by it
     bool powertrain;         // Powertrain: the engine's torque (its curve, the cold oil, the boost) and the converter's handed to the game
     int engineShare;         // EngineShare: how much of the mod's engine the game gets with it, in percent: 0 the game's own pull, 100 the mod's
@@ -125,7 +125,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.tachClass = kClassTruck;
     s.boostProfile = kSpoolStandard;
     s.gearbox = kGearboxGame;
-    s.requireClutch = s.requireGearHeld = s.skipNeutral = s.downStopsAtFirst = false;
+    s.requireClutch = s.requireGearHeld = s.skipNeutral = s.downStaysForward = false;
     s.powertrain = false;
     s.engineShare = 50;
     s.rollWarnDeg = 15.0f;

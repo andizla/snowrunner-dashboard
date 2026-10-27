@@ -54,7 +54,8 @@ int main()
 {
     const GearboxOptions plain = {}, skip = { false, false, true }, held = { false, true, false }, clutch = { true, false, false };
 
-    // the walk up and down: 1 to the top and no further, down through N to R
+    // the walk up and down: up to the top and no further; down from the 2nd through 1, L+, L, L- and N to R, each a
+    // pass (the low range is the first gear at 1.00, 0.45 and 0.20); up from R the same row back to the 2nd
     {
         GearboxPosModel m = {};
         GearboxTruck t = Truck(1);
@@ -64,42 +65,92 @@ int main()
         int tops = 0;
         for (int i = 0; i < 8; i++) Pass(m, plain, Up(), t), tops += t.gear == 6;
         const bool upTop = t.gear == 6 && m.pos == kPosGear && tops >= 3;
-        for (int i = 0; i < 6; i++) Pass(m, plain, Down(), t);
-        const bool atN = t.gear == 0 && m.pos == kPosN;
-        Pass(m, plain, Down(), t);
-        const bool atR = t.gear == -1 && m.pos == kPosR;
-        Pass(m, plain, Down(), t);
-        const bool staysR = t.gear == -1;
+        for (int i = 0; i < 4; i++) Pass(m, plain, Down(), t);
+        const bool at2 = t.gear == 2 && m.pos == kPosGear;
+        const int row[7] = { kPosGear, kPosLowPlus, kPosLow, kPosLowMinus, kPosN, kPosR, kPosR };
+        const int gears[7] = { 1, 1, 1, 1, 0, -1, -1 };
+        const float powers[7] = { 1.0f, 1.0f, 0.45f, 0.2f, 1.0f, 1.0f, 1.0f };
+        bool down = true;
+        for (int i = 0; i < 7; i++)
+        {
+            Pass(m, plain, Down(), t);
+            down = down && m.pos == row[i] && t.gear == gears[i] && fabsf(t.power - powers[i]) < 0.01f && (row[i] != kPosGear || m.gear == 1);
+        }
+        bool up = true;
+        for (int i = 4; i >= 0; i--)
+        {
+            Pass(m, plain, Up(), t);
+            up = up && m.pos == row[i] && t.gear == gears[i] && fabsf(t.power - powers[i]) < 0.01f;
+        }
         Pass(m, plain, Up(), t);
-        const bool backN = t.gear == 0;
-        Check(upTop && atN && atR && staysR && backN, "gearbox: up walks 1 to the top and stops there, down walks to N and then R, and up from R to N");
+        up = up && m.pos == kPosGear && m.gear == 2 && t.gear == 2;
+        Check(upTop && at2 && down && up, "gearbox: up walks to the top and stops there; down from 2 walks 1, L+ (1.00), L (0.45), L- (0.20), N, R and stays; up from R walks the same row back to 2");
     }
-    // SkipNeutral: from 1 down to R and from R up to 1, past N
+    // H by its key: up from H stays, down from H lands on the top; A at the game's gear 1, down gives L+; the range keys
+    // as before (RangeLow from a gear lands in L, RangeHigh from the low range in the 1st)
+    {
+        GearboxPosModel m = {};
+        GearboxTruck t = Truck(3);
+        GearboxActions h = {};
+        h.h = true;
+        Pass(m, plain, h, t);
+        Pass(m, plain, Up(), t);
+        const bool staysH = m.pos == kPosH && t.gear == 7;
+        Pass(m, plain, Down(), t);
+        const bool toTop = m.pos == kPosGear && m.gear == 6 && t.gear == 6;
+        GearboxActions aa = {};
+        aa.a = true;
+        Pass(m, plain, aa, t, 1);
+        Pass(m, plain, None(), t, 1);
+        const bool inA = m.pos == kPosA && t.gear == 1;
+        Pass(m, plain, Down(), t, 1);
+        const bool aToLowPlus = m.pos == kPosLowPlus && t.gear == 1;
+        GearboxActions g = {};
+        g.gearPressed = 3;
+        Pass(m, plain, g, t);
+        GearboxActions lo = {};
+        lo.rangeLow = true;
+        Pass(m, plain, lo, t);
+        const bool rangeLow = m.pos == kPosLow && t.gear == 1 && fabsf(t.power - 0.45f) < 0.01f;
+        GearboxActions hi = {};
+        hi.rangeHigh = true;
+        Pass(m, plain, hi, t);
+        const bool rangeHigh = m.pos == kPosGear && m.gear == 1 && t.gear == 1 && fabsf(t.power - 1.0f) < 0.01f;
+        Check(staysH && toTop && inA && aToLowPlus && rangeLow && rangeHigh,
+              "gearbox: up from H stays, down from H gives the top; down from A in the game's gear 1 gives L+; RangeLow from 3 gives L, RangeHigh from L the 1st");
+    }
+    // SkipNeutral: from L- down to R and from R up to L-, past N; from the 1st down still walks L+
     {
         GearboxPosModel m = {};
         GearboxTruck t = Truck(1);
         GearboxActions a = {};
+        a.lowMinus = true;
+        Pass(m, skip, a, t);
+        Pass(m, skip, Down(), t);
+        const bool toR = t.gear == -1 && m.pos == kPosR;
+        Pass(m, skip, Up(), t);
+        const bool toLowMinus = m.pos == kPosLowMinus && t.gear == 1 && fabsf(t.power - 0.2f) < 0.01f;
+        a = {};
         a.gearPressed = 1;
         Pass(m, skip, a, t);
         Pass(m, skip, Down(), t);
-        const bool toR = t.gear == -1;
-        Pass(m, skip, Up(), t);
-        Check(toR && t.gear == 1, "gearbox: SkipNeutral steps from the first gear to reverse and back without stopping in neutral");
+        Check(toR && toLowMinus && m.pos == kPosLowPlus, "gearbox: SkipNeutral steps from L- to reverse and back without stopping in neutral; from the 1st down is still L+");
     }
-    // DownStopsAtFirst: down from 3 to 2, from 1 it stays, from N and R nothing; up from R still walks N and 1; with
-    // SkipNeutral on too this one wins
+    // DownStaysForward: down from the 1st gives L+, then L and L-, and from L- nothing; from N and R nothing; up from R
+    // still walks N and L-; with SkipNeutral on too this one wins
     {
         const GearboxOptions stop = { false, false, false, true }, both = { false, false, true, true };
         GearboxPosModel m = {};
-        GearboxTruck t = Truck(3);
+        GearboxTruck t = Truck(1);
         GearboxActions a = {};
-        a.gearPressed = 3;
+        a.gearPressed = 1;
         Pass(m, stop, a, t);
         Pass(m, stop, Down(), t);
-        const bool to2 = t.gear == 2 && m.pos == kPosGear;
+        const bool toLowPlus = m.pos == kPosLowPlus && t.gear == 1;
         Pass(m, stop, Down(), t);
-        const GearboxPosOrders at1 = Pass(m, stop, Down(), t);
-        const bool stays1 = t.gear == 1 && m.pos == kPosGear && !at1.moved;
+        Pass(m, stop, Down(), t);
+        const GearboxPosOrders atLowMinus = Pass(m, stop, Down(), t);
+        const bool staysLowMinus = m.pos == kPosLowMinus && t.gear == 1 && !atLowMinus.moved;
         GearboxActions n = {};
         n.n = true;
         Pass(m, stop, n, t);
@@ -113,18 +164,19 @@ int main()
         Pass(m, stop, Up(), t);
         const bool upN = t.gear == 0;
         Pass(m, stop, Up(), t);
-        const bool up1 = t.gear == 1;
+        const bool upLowMinus = m.pos == kPosLowMinus;
         GearboxPosModel k = {};
         GearboxTruck u = Truck(1);
-        a.gearPressed = 1;
+        a = {};
+        a.lowMinus = true;
         Pass(k, both, a, u);
         Pass(k, both, Down(), u);
-        const bool wins = u.gear == 1 && k.pos == kPosGear;
-        Check(to2 && stays1 && staysN && staysR && upN && up1 && wins,
-              "gearbox: DownStopsAtFirst steps down to the first gear and no further, does nothing from N or R, up from R still walks N and 1; it wins over SkipNeutral");
+        const bool wins = u.gear == 1 && k.pos == kPosLowMinus;
+        Check(toLowPlus && staysLowMinus && staysN && staysR && upN && upLowMinus && wins,
+              "gearbox: DownStaysForward steps down from the 1st to L+, L and L- and no further, does nothing from N or R, up from R still walks N and L-; it wins over SkipNeutral");
     }
     // the game's shifter's request (Gearbox=2 with a pad or the keyboard) as that pass's action: R, N, H, A, a gear (past
-    // the top H) and L; under RequireClutch it stalls as a key would; DownStopsAtFirst does not hold it back; a gear it
+    // the top H) and L; under RequireClutch it stalls as a key would; DownStaysForward does not hold it back; a gear it
     // picked stays under RequireGearHeld, as the shifter stays where it was put
     {
         const GearboxOptions stop = { false, false, false, true };
