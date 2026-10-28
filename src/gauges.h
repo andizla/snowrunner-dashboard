@@ -53,7 +53,8 @@ enum { kOilOff, kOilNeedle, kOilDial, kOilGaugeCount };      // GaugeSettings::o
 enum { kSpoolStandard, kSpoolQuick, kSpoolLaggy, kSpoolTwoStage, kSpoolCount }; // GaugeSettings::boostProfile
 enum { kGearboxGame, kGearboxModel, kGearboxOwn, kGearboxCount }; // GaugeSettings::gearbox: the game's own, the mod's automatic in A, the mod's own gearbox
 enum { kInputWheel, kInputPad, kInputKeys, kInputCount }; // GaugeSettings::input
-enum { kAspTurbo, kAspNatural, kAspCount };                  // an engine's profile's Aspiration          // GaugeSettings::gearbox
+enum { kAspTurbo, kAspNatural, kAspCount };                  // an engine's profile's Aspiration
+enum { kFuelClass, kFuelDiesel, kFuelPetrol, kFuelCount };   // an engine's profile's Fuel: the class's (trucks diesel, scouts petrol), or its own
 
 // Everything in Gauges.ini ([Gauges]); the Gameplay tab of the NEXT GEN menu edits all of it.
 struct GaugeSettings
@@ -332,7 +333,7 @@ struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWar
                    float ambientDay, ambientNight, hour; // the map's day and night (with mapOwn), the hour of the game's day (-1 not known)
                    char gearbox[96]; float gearHold; bool gearHoldOwn; // the driven truck's gearbox (its key, "" for none), the seconds each gear is held going up with the mod's engine, and whether its file sets them
                    int autoClass; bool autoByWeight; float massKg; // the class the automatic goes by for it, whether by its weight (no scales of its own), and that weight (0 not read)
-                   char engine[96]; bool engineOwn, engineCustom; float enginePeakRpm; int engineAspiration; float engineTorque, engineFigure; // the driven truck's engine ("" not known): its own profile or not, a whole curve of its own in it, the peak torque's speed in force, turbo or not, the share of its torque the truck gets (1 none set), and the engine's torque figure from the game's files (0 not read)
+                   char engine[96]; bool engineOwn, engineCustom; float enginePeakRpm; int engineAspiration, engineFuel; float engineTorque, engineFigure; // the driven truck's engine ("" not known): its own profile or not, a whole curve of its own in it, the peak torque's speed in force, turbo or not, its fuel (kFuelClass the class's), the share of its torque the truck gets (1 none set), and the engine's torque figure from the game's files (0 not read)
                    float engineIdle, engineRedline; float engineCurve[kEnginePlot]; // the slider's range, and the torque in force from idle to the tachometer's top, for the tab's plot
                    // the gearbox's bindings as text (input_bindings.h, kActCount actions, two slots), the capture the tab
                    // asked for (-1 none), whether a binding reaches reverse (Gearbox=2 may take the shifter), the
@@ -348,7 +349,7 @@ void SettingsReset();                       // the tab's button: every setting b
 void PullTestAsk(bool run);                  // the tab's button: arm the pull test, or cancel it
 void MapAmbientSet(float c);                 // the tab's slider: the outside temperature of the map's section in force
 void GearHoldSet(float seconds);            // the tab's slider: the seconds each gear of the driven truck's gearbox is held going up
-void EngineProfileSet(float peakRpm, int aspiration); // the tab's Engine section: the driven truck's engine's profile into its file
+void EngineProfileSet(float peakRpm, int aspiration, int fuel); // the tab's Engine section: the driven truck's engine's profile into its file
 void EngineProfileDrop();                   // the tab's button: the driven truck's engine gives its profile up
 void EngineTorqueSet(int percent);          // the tab's slider: how much of its torque the driven truck's engine gives the truck (Torque), in percent
 void DamageTestAsk(int points);             // the tab's test buttons: the mod adds this much to the driven truck's engine damage on its next pass

@@ -127,6 +127,15 @@ static void Drive(TruckRaw &t, int gear, bool automatic, float share, float peda
     t.speed = (gear < 0 ? -spin : spin) * 0.45f; // wheels of 0.45 m
 }
 
+// One step of the boost at the engine speed n (over the red zone's rpm) with the class's turbo under profile, its
+// most (0: the class's) and fuel, the class's curve, warm; the engine free in neutral.
+static int Blow(BoostModel &m, const TruckRaw &t, float n, float dt, int cls = kClassTruck, int profile = kSpoolStandard, float most = 0.0f, int fuel = kFuelClass)
+{
+    const GaugeScale &s = kClassScales[cls];
+    const TurboChar k = TurboOf(cls, profile, most > 0.0f ? most : s.boost, fuel);
+    return BoostStep(m, t, k, n, kClassCurves[cls], s.max / s.redline, 1.0f, t.gearEngaged == 0, dt);
+}
+
 // Steps the engine speed for a while and returns the largest change from one step to the next.
 static float Run(TachModel &m, const TruckRaw &t, const GaugeScale &k, float seconds)
 {
@@ -262,7 +271,8 @@ static int Replay(const char *path, float idleRpm, float redlineRpm)
             const float dt = fminf(left, kDt), before = tach.rpm;
             const bool was = tach.running;
             TachStep(tach, t, k, dt);
-            const int lift = BoostStep(boost, t, TachShare(tach, k), k.boost, s.boostProfile, dt);
+            const int lift = BoostStep(boost, t, TurboOf(s.tachClass, s.boostProfile, k.boost, kFuelClass), TachSpeed(tach, k), kClassCurves[s.tachClass],
+                                       k.max / k.redline, 1.0f, t.gearEngaged == 0, dt);
             if (lift == kLiftBlowOff) blowOffs++;
             if (lift == kLiftFlutter) flutters++;
             mostBoost = fmaxf(mostBoost, boost.bar);
@@ -440,10 +450,10 @@ static int Sounds(const char *folder)
     return played ? 0 : 1;
 }
 
-// "spool": the turbo's four profiles as numbers to draw, on the truck class's scales and boost: the boost held at each
-// engine speed with the pedal floored (one line for each hundredth of the way from idle to the red zone), then the
-// boost second by second as a truck floored in first gear at a standstill gathers speed to the gear's top in six
-// seconds. Both as comma separated lines: what, x, then the four profiles.
+// "spool": the turbo's four profiles as numbers to draw, on the truck class's scales and boost: the full-load boost
+// at each engine speed (one line for each hundredth of the red zone's rpm), then the boost step by step as a truck
+// floored in first gear at a standstill gathers speed to the gear's top in six seconds. Both as comma separated
+// lines: what, x, then the four profiles.
 static int Spool()
 {
     GaugeSettings s;
@@ -455,7 +465,7 @@ static int Spool()
     for (int i = 0; i <= 100; i++)
     {
         printf("held,%.2f", i / 100.0f);
-        for (int p = 0; p < kSpoolCount; p++) printf(",%.4f", BoostTarget(t, i / 100.0f, k.boost, p));
+        for (int p = 0; p < kSpoolCount; p++) printf(",%.4f", TurboFull(TurboOf(kClassTruck, p, k.boost, kFuelClass), i / 100.0f));
         printf("\n");
     }
     TachModel tach[kSpoolCount] = {};
@@ -468,7 +478,7 @@ static int Spool()
         for (int p = 0; p < kSpoolCount; p++)
         {
             TachStep(tach[p], t, k, kDt);
-            BoostStep(boost[p], t, TachShare(tach[p], k), k.boost, p, kDt);
+            Blow(boost[p], t, TachSpeed(tach[p], k), kDt, kClassTruck, p, k.boost);
             printf(",%.4f", boost[p].bar);
         }
         printf("\n");
@@ -500,6 +510,7 @@ struct LoopTruck
     float brakeDecel = 3.0f; // m/s² the brake floored takes off the truck
     float pullLag = 0.0f; // seconds the game's pull (action + 0xB4) lags its target by, the engine's responsiveness; 0 at once
     float clutchGrip = 1.0f; // the clutch's grip the creep goes by in a gear picked by hand
+    int boostProfile = kSpoolStandard, fuel = kFuelClass; // the turbo: the class's under this profile, and the fuel
 };
 struct LoopState
 {
@@ -544,8 +555,9 @@ static void LoopStep(const LoopTruck &c, LoopState &s, const TorqueCurve &curve,
     const bool driving = !c.fixedGear;
     if (driving) TachFollow(s.tach, t, c.k, s.box.rpm, dt);
     else TachStep(s.tach, t, c.k, dt);
-    BoostStep(s.boost, t, TachShare(s.tach, c.k), c.k.boost, 0, dt);
-    PowertrainStep(s.power, t, curve, TachSpeed(s.tach, c.k), c.k.max / c.k.redline, 80.0f, c.k.boost > 0.0f ? s.boost.bar / c.k.boost : 0.0f, dt);
+    BoostStep(s.boost, t, TurboOf(c.cls, c.boostProfile, c.k.boost, c.fuel), s.tach.rpm / c.k.redline, curve, c.k.max / c.k.redline, s.power.running ? s.power.cold : 1.0f,
+              t.gearEngaged == 0, dt);
+    PowertrainStep(s.power, t, curve, TachSpeed(s.tach, c.k), c.k.max / c.k.redline, 80.0f, s.boost.limit, dt);
     const EngineHand hand{ true, &curve, c.k.max / c.k.redline, 1.0f, 0.0f, 0.0f, EngineLightFloor(curve, c.k.redline), kInputPad, TorqueRoof(c.cls) };
     GearboxStep(s.box, t, c.k, pedal, s.power.power, dt, hand);
     // the factor, as gauges.cpp hands it
@@ -1320,42 +1332,162 @@ int main(int argc, char **argv)
         Check(told && isfinite(w.oil), "oil: the probe's line carries the oil, and a step that gives no number leaves it as it was");
     }
 
-    // the turbo's profiles: where the boost comes in and how long it lags
+    // the turbo: review 12's model as its addendum corrected it, at a held engine speed against the addendum's figures
+    // (its simulation, turbo_model_sim.py)
     {
         TruckRaw f = Truck();
         f.gear = f.gearEngaged = 1;
         f.automatic = 1;
-        f.throttle = -1.0f;
-        const float mostBar = 1.8f;
-        // the boost held at one engine speed, and the seconds to nine tenths of it from none
-        auto held = [&](int profile, float revs) { return BoostTarget(f, revs, mostBar, profile); };
-        auto rise = [&](int profile, float revs) {
+        // the boost held at n with the pedal at p for half a minute
+        auto settled = [&](int cls, float n, float p, int fuel = kFuelClass) {
             BoostModel b = {};
-            const float to = 0.9f * held(profile, revs);
-            for (float at = kDt; at < 20.0f; at += kDt)
-                if (BoostStep(b, f, revs, mostBar, profile, kDt), b.bar >= to) return at;
-            return -1.0f;
+            f.throttle = -p;
+            for (float at = 0.0f; at < 30.0f; at += kDt) Blow(b, f, n, kDt, cls, kSpoolStandard, 0.0f, fuel);
+            return b;
         };
-        bool full = true;
-        for (int p = 0; p < kSpoolCount; p++) full = full && Near(held(p, 1.0f), mostBar, 0.001f) && held(p, 0.0f) == 0.0f;
-        const bool early = held(kSpoolQuick, 0.2f) > 2.0f * held(kSpoolStandard, 0.2f) && held(kSpoolLaggy, 0.35f) < 0.5f * held(kSpoolStandard, 0.35f);
-        const bool stages = Near(held(kSpoolTwoStage, 0.25f), 0.4f * mostBar, 0.01f) && Near(held(kSpoolTwoStage, 0.3f), 0.4f * mostBar, 0.01f) &&
-                            held(kSpoolTwoStage, 0.45f) > 0.6f * mostBar;
-        bool halfWay = true;
-        for (int p = 0; p < kSpoolCount; p++) halfWay = halfWay && Near(held(p, p == kSpoolLaggy || p == kSpoolTwoStage ? 0.6f : 0.45f), mostBar, 0.001f);
-        Check(full && early && stages && halfWay,
-              "spool: every turbo makes all its boost at the red zone and none at idle, all of it from about half the way there (the big one and two stages from 0.6); the small one comes in early, "
-              "the big one late, two stages one after the other");
-        const float standard = rise(kSpoolStandard, 1.0f), quick = rise(kSpoolQuick, 1.0f), laggy = rise(kSpoolLaggy, 1.0f), lowLaggy = rise(kSpoolLaggy, 0.7f);
-        const float firstStage = rise(kSpoolTwoStage, 0.3f);
-        printf("     spool: 0.9 of the boost in %.2f s standard, %.2f small, %.2f big (%.2f at 0.7), %.2f the first of two stages at 0.3\n", standard, quick, laggy, lowLaggy, firstStage);
-        Check(Near(standard, 0.35f * logf(10.0f), 0.06f) && quick < 0.6f * standard && laggy > standard && lowLaggy > laggy + 0.1f && firstStage > 0.0f && firstStage < 1.1f,
-              "spool: at the red zone the standard boost is there in 0.8 s, the small turbo's sooner and the big one's later, longer still lower down, and the first of two stages in about a second");
+        // the characters: the class's, under the profiles
+        const TurboChar truck = TurboOf(kClassTruck, kSpoolStandard, 1.8f, kFuelClass), scout = TurboOf(kClassScout, kSpoolStandard, 1.0f, kFuelClass),
+                        heavy = TurboOf(kClassHeavy, kSpoolStandard, 2.0f, kFuelClass), quick = TurboOf(kClassTruck, kSpoolQuick, 1.8f, kFuelClass),
+                        laggy = TurboOf(kClassTruck, kSpoolLaggy, 1.8f, kFuelClass), two = TurboOf(kClassTruck, kSpoolTwoStage, 1.8f, kFuelClass),
+                        petrolTruck = TurboOf(kClassTruck, kSpoolStandard, 1.8f, kFuelPetrol), dieselScout = TurboOf(kClassScout, kSpoolStandard, 1.0f, kFuelDiesel),
+                        wild = TurboOf(kClassTruck, 7, 1.8f, kFuelClass);
+        const bool classes = !truck.petrol && scout.petrol && !heavy.petrol && truck.n0 == 0.36f && truck.n1 == 0.6f && scout.n1 == 0.3f && heavy.n1 == 0.68f &&
+                             truck.tauRed == 0.045f && heavy.tauRed == 0.085f && scout.tauRed == 0.01f && truck.r == 1.2f && scout.r == 1.0f && petrolTruck.petrol &&
+                             !dieselScout.petrol && wild.profile == kSpoolStandard;
+        const bool profiles = Near(quick.n1, 0.48f, 1e-5f) && Near(quick.tauRed, 0.0225f, 1e-5f) && Near(laggy.n0, 0.504f, 1e-5f) && Near(laggy.n1, 0.84f, 1e-5f) &&
+                              Near(laggy.tauRed, 0.0675f, 1e-5f) && Near(two.n1, 0.45f, 1e-5f) && Near(two.most, 2.34f, 1e-5f) && two.twoStage;
         GaugeSettings g;
         SettingsDefaults(g);
         g.boostProfile = 7;
         SettingsClamp(g);
-        Check(g.boostProfile == kSpoolStandard && &SpoolOf(-1) == &kSpoolProfiles[kSpoolStandard], "spool: a profile the mod does not have is the standard one");
+        Check(classes && profiles && g.boostProfile == kSpoolStandard,
+              "turbo: trucks and heavy trucks a diesel, scouts petrol unless the engine says otherwise, each class's points and spool; the small one full sooner "
+              "and quicker, the big one later and slower, two stages sooner and higher; a profile the mod does not have is the standard one");
+        // the dial, settled (A4): idle, a light foot of 0.3 at 0.6 of the red zone's rpm, floored at 0.45 and at 0.8
+        const float tIdle = settled(kClassTruck, 650.0f / 2200.0f, 0.0f).bar, tLight = settled(kClassTruck, 0.6f, 0.3f).bar, tLow = settled(kClassTruck, 0.45f, 1.0f).bar,
+                    tHigh = settled(kClassTruck, 0.8f, 1.0f).bar;
+        const float sIdle = settled(kClassScout, 800.0f / 5500.0f, 0.0f).bar, sLight = settled(kClassScout, 0.6f, 0.3f).bar, sLow = settled(kClassScout, 0.45f, 1.0f).bar,
+                    sHigh = settled(kClassScout, 0.8f, 1.0f).bar;
+        printf("     turbo, the dial settled: a truck %.2f at idle, %.2f at a light foot, %.2f and %.2f floored low and high; a petrol scout %.2f, %.2f, %.2f and %.2f bar\n",
+               tIdle, tLight, tLow, tHigh, sIdle, sLight, sLow, sHigh);
+        Check(Near(tIdle, 0.0f, 0.05f) && Near(tLight, 0.26f, 0.05f) && Near(tLow, 0.67f, 0.05f) && Near(tHigh, 1.8f, 0.05f) && Near(sIdle, -0.7f, 0.05f) &&
+                  Near(sLight, -0.19f, 0.05f) && Near(sLow, 1.0f, 0.05f) && Near(sHigh, 1.0f, 0.05f),
+              "turbo: the dial reads a truck diesel's 0 at idle, 0.26 bar at a light foot, 0.67 floored at 0.45 of the red zone's rpm and 1.8 at 0.8; a petrol "
+              "scout's vacuum of 0.7 bar at idle and 0.19 at a light foot, 1 bar floored");
+        // settled and floored the limit is 1 at every speed (finding 1); at part load it stays over the pedal
+        bool whole = true;
+        for (int c = 0; c < kClassCount; c++)
+            for (float n = 0.3f; n <= 1.001f; n += 0.1f) whole = whole && settled(c, n, 1.0f).limit >= 0.999f;
+        const float tPart = settled(kClassTruck, 0.8f, 0.6f).limit, sPart = settled(kClassScout, 0.8f, 0.6f).limit;
+        printf("     turbo: at 0.6 of the pedal and 0.8 of the red zone's rpm the limit %.2f on a truck, %.2f on a scout\n", tPart, sPart);
+        Check(whole && Near(tPart, 0.77f, 0.02f) && Near(sPart, 0.66f, 0.02f),
+              "turbo: settled and floored the air allows all of the curve at every speed; at part load more than the pedal asks");
+        // the spool (A3): 90 percent of the torque the air allows after a press from a light foot (0.2) to the floor
+        auto spool = [&](int cls, float n) {
+            BoostModel b = {};
+            f.throttle = -0.2f;
+            for (float at = 0.0f; at < 10.0f; at += kDt) Blow(b, f, n, kDt, cls);
+            const float from = b.limit;
+            BoostModel end = b;
+            f.throttle = -1.0f;
+            for (float at = 0.0f; at < 20.0f; at += kDt) Blow(end, f, n, kDt, cls);
+            f.throttle = -1.0f;
+            for (float at = kDt; at < 20.0f; at += kDt)
+                if (Blow(b, f, n, kDt, cls), b.limit >= from + 0.9f * (end.limit - from) - 1e-6f) return at;
+            return -1.0f;
+        };
+        const float tSlow = spool(kClassTruck, 1100.0f / 2200.0f), tQuick = spool(kClassTruck, 0.8f), hSlow = spool(kClassHeavy, 1000.0f / 1900.0f),
+                    hQuick = spool(kClassHeavy, 0.8f), sSlow = spool(kClassScout, 2000.0f / 5500.0f), sQuick = spool(kClassScout, 0.8f);
+        printf("     turbo, 90 percent of the torque from a light foot floored: a truck %.1f s at 1100 rpm and %.1f at 1760, a heavy truck %.1f at 1000 and %.1f at 1520, "
+               "a scout %.1f at 2000 and %.1f at 4400\n", tSlow, tQuick, hSlow, hQuick, sSlow, sQuick);
+        Check(Near(tSlow, 2.0f, 0.2f) && Near(tQuick, 0.9f, 0.15f) && Near(hSlow, 2.9f, 0.25f) && Near(hQuick, 1.5f, 0.2f) && Near(sSlow, 1.4f, 0.2f) && Near(sQuick, 0.3f, 0.1f),
+              "turbo: the spool is slow low down and quick high up: a truck about 2 s at 1100 rpm and under 1 s at 1760, a heavy truck about 3 s at 1000, a scout "
+              "about 1.4 s at 2000 and 0.3 s at 4400");
+        // a lift at 0.8 of the red zone's rpm, then the pedal back (A4, B)
+        auto lift = [&](int cls, float off, float &atPress, float &after, float &limitAfter, float &half, float &one, float &two) {
+            BoostModel b = {};
+            f.throttle = -1.0f;
+            for (float at = 0.0f; at < 20.0f; at += kDt) Blow(b, f, 0.8f, kDt, cls);
+            f.throttle = 0.0f;
+            for (float at = 0.0f; at < off - 0.001f; at += kDt) Blow(b, f, 0.8f, kDt, cls);
+            atPress = b.bar;
+            f.throttle = -1.0f;
+            for (float at = kDt; at < 2.001f; at += kDt)
+            {
+                Blow(b, f, 0.8f, kDt, cls);
+                if (Near(at, 0.1f, 0.001f)) { after = b.bar; limitAfter = b.limit; }
+                if (Near(at, 0.3f, 0.001f) && cls == kClassScout) half = b.bar;
+                if (Near(at, 0.5f, 0.001f) && cls != kClassScout) half = b.bar;
+                if (Near(at, 1.0f, 0.001f)) one = b.bar;
+                two = b.bar;
+            }
+        };
+        float shortPress, shortAfter, shortLimit, shortHalf, shortOne, shortTwo, longPress, longAfter, longLimit, longHalf, longOne, longTwo;
+        float scoutPress, scoutAfter, scoutLimit, scoutThird, scoutOne, scoutTwo;
+        lift(kClassTruck, 0.5f, shortPress, shortAfter, shortLimit, shortHalf, shortOne, shortTwo);
+        lift(kClassTruck, 3.0f, longPress, longAfter, longLimit, longHalf, longOne, longTwo);
+        lift(kClassScout, 0.5f, scoutPress, scoutAfter, scoutLimit, scoutThird, scoutOne, scoutTwo);
+        printf("     turbo, lifts at 0.8: a truck's half second %.2f bar at the press, %.2f 0.1 s after (the limit %.2f), %.2f at 1 s; three seconds %.2f, %.2f, then %.2f, "
+               "%.2f and %.2f at 0.5, 1 and 2 s; a scout's half second %.2f, %.2f 0.1 s after, %.2f at 0.3 s\n",
+               shortPress, shortAfter, shortLimit, shortOne, longPress, longAfter, longHalf, longOne, longTwo, scoutPress, scoutAfter, scoutThird);
+        Check(shortAfter >= 0.55f * 1.8f && shortLimit >= 0.85f && Near(shortOne, 1.8f, 0.05f) && longPress < 0.1f * 1.8f && longTwo >= 0.9f * 1.8f &&
+                  Near(longAfter, 0.07f, 0.05f) && Near(longHalf, 0.5f, 0.1f) && Near(longOne, 1.28f, 0.1f) && Near(scoutPress, -0.69f, 0.05f) &&
+                  Near(scoutAfter, 0.22f, 0.07f) && Near(scoutThird, 0.89f, 0.07f),
+              "turbo: the rotor keeps turning through a short lift, so the boost is back at once and whole within a second; after three seconds it spools "
+              "again, nine tenths within 2 s; a petrol's manifold goes to vacuum the moment the throttle shuts");
+        // a floored launch from idle through the converter, the engine flaring to its stall in 0.7 s (A4)
+        auto launch = [&](int cls, float &dip, float &whole1) {
+            BoostModel b = {};
+            const GaugeScale &k = kClassScales[cls];
+            const float ni = k.idle / k.redline;
+            f.throttle = -1.0f;
+            dip = 2.0f;
+            whole1 = -1.0f;
+            float dipAt = 0.0f;
+            for (float at = kDt; at < 6.0f; at += kDt)
+            {
+                Blow(b, f, ni + (0.8f - ni) * fminf(at / 0.7f, 1.0f), kDt, cls);
+                if (b.limit < dip) { dip = b.limit; dipAt = at; }
+                if (whole1 < 0.0f && at > dipAt && dip < 0.9f && b.limit >= 0.999f) whole1 = at;
+            }
+        };
+        float tDip, tWhole, hDip, hWhole;
+        launch(kClassTruck, tDip, tWhole);
+        launch(kClassHeavy, hDip, hWhole);
+        printf("     turbo, a floored launch from idle: a truck's limit dips to %.2f and is whole at %.1f s, a heavy truck's %.2f and %.1f s\n", tDip, tWhole, hDip, hWhole);
+        Check(Near(tDip, 0.43f, 0.04f) && tWhole > 1.0f && tWhole < 2.2f && Near(hDip, 0.41f, 0.04f) && hWhole > 1.5f && hWhole < 3.0f,
+              "turbo: floored from idle the air allows all at first, a dip to about 0.43 as the engine passes the full-load point with no boost yet, and all "
+              "again within about 1.6 s (a heavy truck 2.4 s)");
+        // the fuel: in neutral a free engine's, past the curve's last point the governor's taper; nothing with the engine off
+        TruckRaw free = f;
+        free.gear = free.gearEngaged = 0;
+        free.throttle = -1.0f;
+        BoostModel nb = {};
+        for (float at = 0.0f; at < 30.0f; at += kDt) Blow(nb, free, 0.8f, kDt);
+        const float topN = kClassScales[kClassTruck].max / kClassScales[kClassTruck].redline;
+        const BoostModel governed = settled(kClassTruck, (1.0f + topN) * 0.5f, 1.0f), redZone = settled(kClassTruck, 1.0f, 1.0f);
+        TruckRaw off = f;
+        off.flags = 0;
+        BoostModel ob = settled(kClassTruck, 0.8f, 1.0f);
+        for (float at = 0.0f; at < 10.0f; at += kDt) Blow(ob, off, 0.8f, kDt);
+        printf("     turbo: floored in neutral %.2f bar; on the governor half way to the top the fuel %.2f and %.2f bar (%.2f at the red zone)\n", nb.bar, governed.q, governed.bar,
+               redZone.bar);
+        Check(Near(nb.bar, 0.2f, 0.06f) && Near(governed.q, 0.5f, 0.02f) && governed.bar < 0.8f * redZone.bar && governed.limit >= 0.999f && Near(redZone.bar, 1.8f, 0.05f) &&
+                  fabsf(ob.bar) < 0.01f && ob.limit == 1.0f,
+              "turbo: floored in neutral the free engine's fuel holds about 0.2 bar; on the governor the fuel and the boost taper and the air still allows "
+              "all the curve gives there; with the engine off nothing");
+        // two stages: a dip of a tenth for 0.3 s at the changeover
+        {
+            BoostModel b = {};
+            f.throttle = -1.0f;
+            for (float at = 0.0f; at < 10.0f; at += kDt) Blow(b, f, 0.55f, kDt, kClassTruck, kSpoolTwoStage);
+            const float before = b.bar;
+            float least = before;
+            for (float at = 0.0f; at < 0.3f; at += kDt) { Blow(b, f, 0.65f, kDt, kClassTruck, kSpoolTwoStage); least = fminf(least, b.bar); }
+            for (float at = 0.0f; at < 2.0f; at += kDt) Blow(b, f, 0.65f, kDt, kClassTruck, kSpoolTwoStage);
+            Check(Near(before, 2.34f, 0.05f) && least < 0.95f * before && least > 0.85f * before && Near(b.bar, before, 0.02f),
+                  "turbo: two stages make 1.3 times the boost, with a short dip of about a tenth at the changeover");
+        }
     }
 
     // the powertrain: the shaped pedal, the torque curves, the cold and the boost
@@ -1408,16 +1540,17 @@ int main(int argc, char **argv)
         const bool refused = !TorqueCurveParse("0.6:1,0.3:0.5", kept) && !TorqueCurveParse("abc", kept) && !TorqueCurveParse("0.3:1.2,0.6:1", kept) &&
                              !TorqueCurveParse("1:1", kept) && !TorqueCurveParse("0.3:0.6,0.6:1,", kept) && !TorqueCurveParse("0:0.5,0.5:1", kept) && kept.n == kClassCurves[kClassScout].n;
         Check(read && refused, "powertrain: a truck's own curve is read from \"x:y,x:y\", and text that is no rising curve of 2 to 8 points is refused");
-        // the cold and the boost: floored at the plateau with cold oil and no boost yet, and with the engine off
+        // the cold and the air: floored at the plateau with cold oil at a first instant's limit (0.43, review 12), and
+        // with the engine off
         PowertrainModel cold = {};
         f.throttle = -1.0f;
-        for (float at = 0.0f; at < 1.0f; at += kDt) PowertrainStep(cold, f, truckCurve, 0.7f, top, 0.0f, 0.0f, kDt);
-        const bool weak = Near(cold.cold, 1.0f - kColdTorque, 0.001f) && Near(cold.boost, 1.0f - kBoostTorque, 0.001f) &&
-                          Near(cold.power, (1.0f - kColdTorque) * (1.0f - kBoostTorque), 0.001f);
+        for (float at = 0.0f; at < 1.0f; at += kDt) PowertrainStep(cold, f, truckCurve, 0.7f, top, 0.0f, 0.43f, kDt);
+        const bool weak = Near(cold.cold, 1.0f - kColdTorque, 0.001f) && Near(cold.boost, 0.43f, 0.001f) && Near(cold.power, (1.0f - kColdTorque) * 0.43f, 0.001f);
         TruckRaw stopped = f;
         stopped.flags = 0;
         PowertrainStep(cold, stopped, truckCurve, 0.7f, top, 90.0f, 1.0f, kDt);
-        Check(weak && cold.power == 0.0f && cold.load == 0.0f, "powertrain: cold oil takes 15 percent of the torque and no boost 35 percent; a stopped engine delivers nothing");
+        Check(weak && cold.power == 0.0f && cold.load == 0.0f,
+              "powertrain: cold oil takes 15 percent of the torque and the air takes what its limit leaves; a stopped engine delivers nothing");
         // the author's drive, 28 October: floored at mid revs a truck has all but a little of its torque once the
         // boost has built, as the game's own engine has all of it. Floored and steady with the needle at needle of the
         // way from idle to the red zone, with the class's scale, curve and turbo: what the engine delivers
@@ -1431,8 +1564,8 @@ int main(int argc, char **argv)
             PowertrainModel pw = {};
             for (float at = 0.0f; at < 6.0f; at += kDt)
             {
-                BoostStep(bm, f, needle, k.boost, kSpoolStandard, kDt);
-                PowertrainStep(pw, f, kClassCurves[tachClass], rpm / k.redline, k.max / k.redline, 90.0f, bm.bar / k.boost, kDt);
+                Blow(bm, f, rpm / k.redline, kDt, tachClass);
+                PowertrainStep(pw, f, kClassCurves[tachClass], rpm / k.redline, k.max / k.redline, 90.0f, bm.limit, kDt);
             }
             printf("     floored at %.0f rpm (%.2f of the way to the red zone): boost x%.2f, curve %.2f, %.2f of the most\n", rpm, needle, pw.boost, pw.curve, pw.power);
             return pw.power;
@@ -3204,111 +3337,98 @@ int main(int argc, char **argv)
         Check(truckMost == 1.8f && scoutMost == 1.0f && heavyMost == 2.0f && GaugeScaleOf(bs).boost == 1.35f,
               "boost: trucks reach 1.8 bar, scouts 1, heavy trucks 2, and a number of the settings takes the class's place");
         const float reach = 1.8f;
-        // steps the boost for a while with the needle at revs; returns the largest change in one step
+        // steps the truck's boost for a while at n of the red zone's rpm; returns the largest change in one step
         BoostModel bm = {};
         int sounds = 0;
-        auto blow = [&](TruckRaw &truck, float revs, float seconds) {
+        auto blow = [&](TruckRaw &truck, float n, float seconds) {
             float largest = 0.0f;
             for (float at = 0.0f; at < seconds - 0.001f; at += kDt)
             {
                 const float before = bm.bar;
-                if (BoostStep(bm, truck, revs, reach, kSpoolStandard, kDt) != kLiftNone) sounds++;
+                if (Blow(bm, truck, n, kDt) != kLiftNone) sounds++;
                 largest = fmaxf(largest, fabsf(bm.bar - before));
             }
             return largest;
         };
         TruckRaw bt = Truck();
         Drive(bt, 3, true, 0.0f, 0.0f);
-        blow(bt, 0.0f, 1.0f);
+        blow(bt, 650.0f / 2200.0f, 2.0f);
         const float idling = bm.bar;
         Drive(bt, 3, true, 0.9f, 1.0f);
-        const float step = blow(bt, 1.0f, 0.8f);
-        const float soon = bm.bar;
-        blow(bt, 1.0f, 3.0f);
-        Check(idling == 0.0f && soon > 0.85f * reach && soon < reach && Near(bm.bar, reach, 0.01f) && step < 0.2f * reach,
-              "boost: none at idle; floored at the red zone it is nearly all there after 0.8 s, without a jump");
-        bm = BoostModel{};
-        blow(bt, 0.3f, 0.8f);
-        const float slow = bm.bar;
-        blow(bt, 0.3f, 6.0f);
-        const float lowEnd = bm.bar;
-        blow(bt, 0.1f, 3.0f);
-        Check(slow < 0.6f * lowEnd && Near(lowEnd, reach * (0.3f - kBoostRevsFrom) / (kBoostRevsFull - kBoostRevsFrom), 0.01f) && bm.bar < 0.01f,
-              "boost: at low engine speed there is less of it and it comes slower, and near idle there is none");
-        bm = BoostModel{};
-        Drive(bt, 3, true, 0.9f, 0.5f);
-        blow(bt, 1.0f, 4.0f);
-        const float half = bm.bar;
-        Drive(bt, 0, false, 0.0f, 1.0f);
-        blow(bt, 1.0f, 4.0f);
-        const float neutral = bm.bar;
+        const float step = blow(bt, 0.8f, 4.0f);
+        const float floored = bm.bar;
         bt.flags = 0;
-        blow(bt, 1.0f, 2.0f);
-        Check(Near(half, reach * powf(0.5f, kBoostPedal), 0.01f) && Near(neutral, reach * kLoadNeutral, 0.01f) && bm.bar < 0.01f && sounds == 0,
-              "boost: less than half of it at half pedal, a quarter in neutral, none with the engine off, and no sound without a lift");
+        blow(bt, 0.8f, 10.0f);
+        Check(fabsf(idling) < 0.005f && Near(floored, reach, 0.02f) && step < 0.2f * reach && fabsf(bm.bar) < 0.01f && sounds == 0,
+              "boost: none at idle; floored at 0.8 of the red zone's rpm all of it, without a jump; none with the engine off, and no sound without a lift");
         // lifts of the pedal
         auto full = [&]() {
             bt = Truck();
             bm = BoostModel{};
             sounds = 0;
             Drive(bt, 3, true, 0.9f, 1.0f);
-            blow(bt, 1.0f, 4.0f);
+            blow(bt, 0.8f, 6.0f);
         };
         full();
         Drive(bt, 3, true, 0.9f, 0.0f);
-        const int first = BoostStep(bm, bt, 1.0f, reach, kSpoolStandard, kDt);
+        const int first = Blow(bm, bt, 0.8f, kDt);
         const float loud = bm.lastVolume, at = bm.lastBar;
-        blow(bt, 1.0f, 0.4f);
+        blow(bt, 0.8f, 0.4f);
         const float fallen = bm.bar;
         Drive(bt, 3, true, 0.9f, 1.0f);
-        blow(bt, 1.0f, 0.1f);
+        blow(bt, 0.8f, 0.1f);
         Drive(bt, 3, true, 0.9f, 0.0f);
-        blow(bt, 1.0f, 0.2f);
-        Check(first == kLiftBlowOff && Near(loud, 1.0f, 0.01f) && Near(at, reach, 0.01f) && fallen < 0.05f * reach && sounds == 0 && bm.blowOffs == 1,
-              "lift: the foot off a floored pedal at full boost is a blow-off at full sound, the boost is gone in 0.4 s, and a second lift right after is silent");
+        blow(bt, 0.8f, 0.2f);
+        Check(first == kLiftBlowOff && Near(loud, 1.0f, 0.01f) && Near(at, reach, 0.02f) && fallen < 0.8f * reach && fallen > 0.4f * reach && sounds == 0 && bm.blowOffs == 1,
+              "lift: the foot off a floored pedal at full boost is a blow-off at full sound, the boost winds down with the rotor, and a second lift right after is silent");
         full();
         Drive(bt, 3, true, 0.9f, 0.7f);
-        blow(bt, 1.0f, 0.2f);
+        blow(bt, 0.8f, 0.2f);
         const bool smallLift = sounds == 1 && bm.flutters == 1 && bm.blowOffs == 0;
         full();
         for (int i = 1; i <= 4; i++)
         {
             Drive(bt, 3, true, 0.9f, 1.0f - 0.15f * (float)i);
-            blow(bt, 1.0f, kDt);
+            blow(bt, 0.8f, kDt);
         }
         const bool quick = sounds == 1 && bm.blowOffs == 1 && bm.flutters == 0;
         full();
         for (int i = 1; i <= 40; i++)
         {
             Drive(bt, 3, true, 0.9f, 1.0f - 0.025f * (float)i);
-            blow(bt, 1.0f, kDt);
+            blow(bt, 0.8f, kDt);
         }
-        blow(bt, 1.0f, 1.0f);
+        blow(bt, 0.8f, 1.0f);
         Check(smallLift && quick && sounds == 0, "lift: a small lift flutters, the pedal let up over 0.2 s is a blow-off, and one let up over two seconds makes no sound");
         bm = BoostModel{};
         bm.running = true;
+        bm.limit = 1.0f;
         bm.bar = 0.15f * reach;
         bt = Truck();
         Drive(bt, 3, true, 0.9f, 1.0f);
-        BoostStep(bm, bt, 0.0f, reach, kSpoolStandard, kDt);
+        Blow(bm, bt, 0.0f, kDt);
         bm.bar = 0.15f * reach;
         Drive(bt, 3, true, 0.9f, 0.0f);
-        const int coming = BoostStep(bm, bt, 0.0f, reach, kSpoolStandard, kDt), weak = BoostStep(bm, bt, 0.0f, reach, kSpoolStandard, kDt);
+        const int coming = Blow(bm, bt, 0.0f, kDt), weak = Blow(bm, bt, 0.0f, kDt);
         const float quiet = bm.lastVolume;
         bm = BoostModel{};
         bm.running = true;
+        bm.limit = 1.0f;
         Drive(bt, 3, true, 0.9f, 1.0f);
-        BoostStep(bm, bt, 0.0f, reach, kSpoolStandard, kDt);
+        Blow(bm, bt, 0.0f, kDt);
         bm.bar = 0.05f * reach;
         Drive(bt, 3, true, 0.9f, 0.0f);
-        Check(coming == kLiftNone && weak == kLiftFlutter && quiet > 0.0f && quiet < 0.1f && BoostStep(bm, bt, 0.0f, reach, kSpoolStandard, kDt) == kLiftNone &&
-              BoostStep(bm, bt, 0.0f, reach, kSpoolStandard, kDt) == kLiftNone, "lift: with little boost a full lift only flutters, quietly, and with next to none it is silent");
+        Check(coming == kLiftNone && weak == kLiftFlutter && quiet > 0.0f && quiet < 0.1f && Blow(bm, bt, 0.0f, kDt) == kLiftNone && Blow(bm, bt, 0.0f, kDt) == kLiftNone,
+              "lift: with little boost a full lift only flutters, quietly, and with next to none it is silent");
         full();
         Drive(bt, 3, true, 0.9f, 0.0f);
-        BoostStep(bm, bt, 1.0f, reach, kSpoolStandard, kDt);
-        char line[400];
-        BoostProbeText(bt, bm, 1.0f, reach, line, sizeof line);
-        Check(strstr(line, "of the turbo's 1.80") && strstr(line, "1 blow-offs, 0 flutters, the last a blow-off at 1.80 bar, 1.00 of its full sound"), "boost: the probe's line carries the boost and the lifts");
+        Blow(bm, bt, 0.8f, kDt);
+        char line[512];
+        BoostProbeText(bt, bm, TurboOf(kClassTruck, kSpoolStandard, reach, kFuelClass), line, sizeof line);
+        Check(strstr(line, "of the turbo's 1.80") && strstr(line, "| n 0.80 of the red zone's rpm, pedal 0.00, fuel 0.00, full load 1.80 bar there | the limit ") &&
+                  strstr(line, "a standard turbo, diesel (n 0.36 to 0.60, spool 0.045 s)") &&
+                  strstr(line, "1 blow-offs, 0 flutters, the last a blow-off at 1.80 bar, 1.00 of its full sound"),
+              "boost: the probe's line carries the boost, the rotor, what they go by, the limit, the turbo and the lifts");
     }
 
     // the probe's line
@@ -3360,7 +3480,7 @@ int main(int argc, char **argv)
             // floored for three seconds, then up and down every 0.3 s: more lifts than may sound
             const float at = (float)i * kDt;
             bt.throttle = at < 3.0f || fmodf(at, 0.6f) < 0.3f ? -1.0f : 0.0f;
-            const int lift = BoostStep(bm, bt, 1.0f, reach, kSpoolStandard, kDt);
+            const int lift = Blow(bm, bt, 1.0f, kDt);
             if (LiftSoundOf(lift, bm.lastVolume, 50, 0.0f, ls))
             {
                 if (!played) { first = lift; firstGain = ls.gain; }
@@ -3770,6 +3890,33 @@ int main(int argc, char **argv)
         Check(ds.gear >= 3 && ds.v > vAt20 && ds.box.hunts == 0 && factorMost <= TorqueRoof(kClassHeavy) + 0.001f && rpmMost <= drive.k.max,
               "loop: the automatic takes a heavy truck floored from a rolling start up through the gears with its speed fed back, no shift taken back, "
               "the factor under the roof and the needle under the tachometer's top");
+        // review 12's closed loop: the same truck floored from a standstill in A, the converter flaring its engine (the
+        // limit dips while the rotor spools, then the air allows all of it); and a climb held at mid revs in second by
+        // hand (settled, the limit 1 and the engine gives its curve)
+        {
+            LoopTruck launch = drive;
+            LoopState ls;
+            float dip = 2.0f, dipAt = 0.0f, whole = -1.0f;
+            for (float at = kDt; at < 10.0f; at += kDt)
+            {
+                LoopStep(launch, ls, hc, 1.0f, kDt, false);
+                if (ls.boost.limit < dip) { dip = ls.boost.limit; dipAt = at; }
+                if (whole < 0.0f && at > dipAt && dip < 0.9f && ls.boost.limit >= 0.999f) whole = at;
+            }
+            LoopTruck climb = drive;
+            climb.fixedGear = 2;
+            climb.grade = 1.0f;
+            LoopState cl;
+            LoopDrive(climb, cl, hc, 1.0f, 30.0f, false, false);
+            const float climbRpm = cl.tach.rpm;
+            printf("     loop, the HX 520 floored from a standstill in A: the limit dips to %.2f at %.1f s and is whole at %.1f s; climbing in second at %.0f rpm "
+                   "settled: the boost %.2f bar, the limit %.2f, the engine %.2f of its curve's %.2f\n", dip, dipAt, whole, climbRpm, cl.boost.bar, cl.boost.limit, cl.power.power,
+                   cl.power.curve);
+            Check(dip < 0.7f && whole > 0.0f && whole < 4.0f && climbRpm > 0.5f * climb.k.redline && climbRpm < 0.95f * climb.k.redline && cl.boost.limit >= 0.999f &&
+                      Near(cl.power.power, cl.power.curve, 0.005f),
+                  "loop: floored from a standstill the turbo costs torque only while it spools, then the air allows all of it; climbing at mid revs settled the "
+                  "engine gives its whole curve");
+        }
 
         // the creep (review 11's addendum): the share by its rules, then the loop with the share raising the game's throttle
         {
@@ -3880,8 +4027,12 @@ int main(int argc, char **argv)
             LoopDrive(wall, as, hc, 0.1f, 3.0f, false, false);
             printf("     creep, stuck in A: the share %.3f, the needle %.0f rpm, the powertrain's pedal %.2f; pressed to 0.1 it reads %.3f (shaped 0.1 is %.3f)\n", wallShare,
                    wallRpm, wallPedal, as.power.pedal, ThrottleShape(0.1f));
-            Check(wallShare > 0.0f && Near(wallRpm, wall.k.idle, 1.0f) && wallPedal == 0.0f && Near(as.power.pedal, ThrottleShape(0.1f), 0.001f) && as.stallAt < 0.0f,
-                  "creep: stuck in A the needle stands at idle and the powertrain's pedal at 0, a press reads as the press alone, and the converter never stalls it");
+            LoopState creepBoost;
+            LoopDrive(wall, creepBoost, hc, 0.0f, 10.0f, false, false);
+            Check(wallShare > 0.0f && Near(wallRpm, wall.k.idle, 1.0f) && wallPedal == 0.0f && Near(as.power.pedal, ThrottleShape(0.1f), 0.001f) && as.stallAt < 0.0f &&
+                      creepBoost.boost.q == 0.0f && fabsf(creepBoost.boost.bar) < 0.005f,
+                  "creep: stuck in A the needle stands at idle and the powertrain's pedal at 0, a press reads as the press alone, the turbo burns nothing and "
+                  "makes no boost, and the converter never stalls it");
 
             // the governor in the low range, the game's pull half a second late (review 11's addendum to this brief): from
             // a standstill it settles under the gear's idle speed, no overshoot past 1.3 times it and no cycle; again with
@@ -4156,15 +4307,17 @@ int main(int argc, char **argv)
             Check(held.gear == 3 && held.relock && held.moving == 0.0f && same.gear == 3 && same.shifts == held.shifts,
                   "automatic: the game's gear lifted by the floor past the model's held gear takes the model's gear with it; a lower or the same one changes nothing");
         }
-        // finding 16: without boost the engine has 65 percent of its torque (kBoostTorque 0.35 again after the author's
-        // drive of 28 October), with all of it all
+        // review 12, finding 1 (in place of review 11's finding 16): the engine has the torque the air allows, the
+        // turbo's limit as BoostStep gives it; a limit that is no number is all of it
         {
             TruckRaw on = lt;
             on.flags = 3;
-            PowertrainModel none = {}, full = {};
-            PowertrainStep(none, on, tc, 0.6f, tk.max / tk.redline, 80.0f, 0.0f, kDt);
+            PowertrainModel none = {}, full = {}, wild = {};
+            PowertrainStep(none, on, tc, 0.6f, tk.max / tk.redline, 80.0f, 0.43f, kDt);
             PowertrainStep(full, on, tc, 0.6f, tk.max / tk.redline, 80.0f, 1.0f, kDt);
-            Check(Near(none.boost, 0.65f, 0.001f) && Near(full.boost, 1.0f, 0.001f), "powertrain: an engine without boost has 0.65 of its torque, with full boost all of it");
+            PowertrainStep(wild, on, tc, 0.6f, tk.max / tk.redline, 80.0f, nanf(""), kDt);
+            Check(Near(none.boost, 0.43f, 0.001f) && Near(full.boost, 1.0f, 0.001f) && wild.boost == 1.0f,
+                  "powertrain: the engine has the torque the air allows, at a first instant's 0.43 that much, settled all of it");
         }
         // finding 8: a floored plateau (the game's pull at nothing, the wheels steady) in a numbered gear at 0.93 of 2a + 5
         // gives that gear's top, which TruckGearTop then goes by, and with it the limiter and the floored point up; not

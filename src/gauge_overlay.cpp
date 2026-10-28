@@ -206,7 +206,7 @@ static void OnPage()
     if (act & kPagePullCancel) PullTestAsk(false);
     if (act & kPageMapAmbient) MapAmbientSet(st.mapAmbientC);
     if (act & kPageGearHold) GearHoldSet(st.gearHold);
-    if (act & kPageEngineSet) EngineProfileSet(st.enginePeak, st.engineAspiration);
+    if (act & kPageEngineSet) EngineProfileSet(st.enginePeak, st.engineAspiration, st.engineFuel);
     if (act & kPageEngineDrop) EngineProfileDrop();
     if (act & kPageEngineTorque) EngineTorqueSet(st.engineTorque);
     if (act & kPageDefaults) SettingsReset();

@@ -778,27 +778,80 @@ inline void TempProbeText(const TruckRaw &t, const TempModel &m, const GaugeSett
 
 // ---- the boost ----
 
-static const float kBoostRevsFrom = 0.1f, kBoostRevsFull = 0.45f; // the standard turbo starts to blow with the needle this far from idle to the red zone, and blows all it can from here
-static const float kBoostPedal = 1.3f;       // the boost goes with the pedal to this power: little of it at a light foot
-static const float kBoostSpool = 0.35f, kBoostSpoolLow = 0.9f; // seconds the standard boost lags by on the way up at the red zone, and this much more at idle
-static const float kBoostFall = 0.18f, kBoostLift = 0.1f; // seconds on the way down, and with the foot off the pedal
+enum { kCurvePoints = 8 };                   // points a torque curve holds at most
 
-// A turbo's character (the settings' BoostProfile). Its boost comes from one or two stages: each makes its share of
-// the boost, starting with the needle at from of the way to the red zone and all of it from full, and lags by spool
-// seconds at the red zone and spoolLow more at idle. Two stages are a small turbo early and a big one after it; the
-// lag on the way up is the small one's until the boost has reached what the small one makes. fall and lift: seconds
-// the boost takes on the way down, and with the foot off the pedal.
-struct SpoolStage { float share, from, full, spool, spoolLow; };
-struct SpoolProfile { SpoolStage stage[2]; float fall, lift; };
-static const SpoolProfile kSpoolProfiles[kSpoolCount] = {
-    { { { 1.0f, kBoostRevsFrom, kBoostRevsFull, kBoostSpool, kBoostSpoolLow }, {} }, kBoostFall, kBoostLift }, // standard
-    { { { 1.0f, 0.05f, 0.3f, 0.18f, 0.35f }, {} }, 0.15f, 0.08f },                                          // small and quick: early and little lag
-    { { { 1.0f, 0.25f, 0.6f, 0.45f, 2.2f }, {} }, 0.25f, 0.12f },                                            // big and slow: late, and long to come at low revs
-    { { { 0.4f, 0.08f, 0.25f, 0.18f, 0.35f }, { 0.6f, 0.3f, 0.6f, 0.4f, 1.6f } }, 0.2f, 0.1f } };           // two stages: the small one early, the big one after it
-inline const SpoolProfile &SpoolOf(int profile) { return kSpoolProfiles[profile < 0 || profile >= kSpoolCount ? kSpoolStandard : profile]; }
+// A torque curve: the torque as a share of the engine's most (y, 0 to 1) at engine speeds as a share of where the
+// red zone starts (x, rising). Between two points the torque goes straight from one to the other; below the first
+// it is the first's; from the last point to the tachometer's top it falls to nothing, as the governor cuts the fuel.
+// (Here for the boost's governor taper; the curves themselves are with the powertrain below.)
+struct TorqueCurve { int n; float x[kCurvePoints], y[kCurvePoints]; };
+inline float TorqueAt(const TorqueCurve &c, float speed, float top);
 
-// The share of a stage's boost that the needle (0 to 1) brings.
-inline float SpoolRamp(const SpoolStage &k, float needle) { return k.share <= 0.0f ? 0.0f : k.share * SettingsRange((needle - k.from) / (k.full - k.from), 0.0f, 1.0f); }
+// Review 12's model, as its addendum corrected it (2026-10-28). Two states: the rotor's speed w, as a share of what
+// makes the most boost, and the manifold's pressure b in bar, gauge. n is the engine speed over the red zone's rpm
+// (TachSpeed), p the pedal, q the fuel the engine burns as a share of full load at n: min(p, the last pass's limit
+// times the cold's share), times the governor's taper past the curve's last point; in neutral or with the clutch
+// pressed p times kLoadNeutral, the free engine's fuel.
+//   1. the full-load boost at n: full(n) = most · clamp((n − n0)/(n1 − n0), 0, 1), a truck diesel's straight line;
+//   2. what the rotor heads for: a diesel's w_want = sqrt(full(n) · q^1.6 / most), the boost the fuel holds (the
+//      smoke limiter's loop through q); a petrol's throttle by p sets the manifold, MAP = kThrottleShut + (1 +
+//      full(n) − kThrottleShut) · p bar absolute, and w_want = sqrt(max(MAP − 1, 0) / most);
+//   3. the rotor: up with τ = τ_red / max(q · n⁴, 0.02), slow low down and at a light foot, quick high up; down with
+//      kRotorDown;
+//   4. the pressure by the rotor, with kManifold: a diesel's to min(full(n), most · w²); a petrol's to MAP − 1 while
+//      that is 0 or under (the throttle, at once), else to min(MAP − 1, most · w²);
+//   5. the torque the air allows: limit = min(1, r · (1 + b) / (1 + full(n))), r 1.2 for a diesel and 1 for a petrol.
+//      Settled and floored it is 1 at every speed: the curve is a turbo engine's full-load curve, measured with the
+//      boost it makes there. Only the spool costs (review 12, finding 1). On the governor full(n) is taken at the
+//      taper's fuel, full(n) · taper^1.6, as the curve already falls there.
+static const float kThrottleShut = 0.3f;    // bar absolute in a petrol's manifold with the throttle shut: 0.7 bar of vacuum at idle
+static const float kRotorDown = 1.5f;       // seconds the rotor takes to run down
+static const float kManifold = 0.1f;        // seconds the manifold's pressure takes to follow
+static const float kFuelBoost = 1.6f;       // a diesel's boost goes with its fuel to this power
+static const float kSpoolLeast = 0.02f;     // q · n⁴ under this spools as slowly as at it
+static const float kStageSwap = 0.6f, kStageDip = 0.3f, kStageDrop = 0.1f; // two stages: the changeover at this n, the boost a tenth down for 0.3 s
+
+// A turbo's character: the class's (kTurboClasses) under the player's BoostProfile and BoostMax (most) and the
+// engine's Fuel. n0 and n1 over the red zone's rpm; tauRed the spool's seconds floored at the red zone's speed.
+struct TurboChar { int profile; bool petrol; float most, n0, n1, tauRed, r; bool twoStage; };
+struct TurboClass { bool petrol; float n0, n1, tauRed; };
+static const TurboClass kTurboClasses[kClassCount] = {
+    { false, 0.36f, 0.60f, 0.045f },   // trucks: a diesel like the C13 or the 3406E, full from about 1300 rpm
+    { true, 0.20f, 0.30f, 0.010f },    // scouts: a modern small petrol turbo, full from about 1650 rpm
+    { false, 0.37f, 0.68f, 0.085f } }; // heavy trucks: an older big diesel
+static const char *const kTurboNames[kSpoolCount] = { "standard", "small and quick", "big and slow", "two stages" };
+
+// The character in force. cls: the truck's class; profile: BoostProfile; most: the boost in bar the turbo reaches
+// (the class's or BoostMax); fuel: the engine's Fuel (kFuelClass: the class's).
+inline TurboChar TurboOf(int cls, int profile, float most, int fuel)
+{
+    const TurboClass &c = kTurboClasses[cls < 0 || cls >= kClassCount ? kClassTruck : cls];
+    TurboChar k = { profile < 0 || profile >= kSpoolCount ? kSpoolStandard : profile, fuel == kFuelPetrol || (fuel != kFuelDiesel && c.petrol), most, c.n0, c.n1,
+                    c.tauRed, 1.0f, false };
+    if (k.profile == kSpoolQuick) // a small turbo or a VGT: full sooner, quicker
+    {
+        k.n1 *= 0.8f;
+        k.tauRed *= 0.5f;
+    }
+    else if (k.profile == kSpoolLaggy) // a big turbo: later and slower
+    {
+        k.n0 *= 1.4f;
+        k.n1 = fminf(k.n1 * 1.4f, 0.85f);
+        k.tauRed *= 1.5f;
+    }
+    else if (k.profile == kSpoolTwoStage) // a small turbo early and a big one after it: full sooner and higher, a dip at the changeover
+    {
+        k.n1 *= 0.75f;
+        k.most *= 1.3f;
+        k.twoStage = true;
+    }
+    k.n1 = fmaxf(k.n1, k.n0 + 0.02f);
+    k.r = k.petrol ? 1.0f : 1.2f;
+    return k;
+}
+
+// The full-load boost at n, in bar.
+inline float TurboFull(const TurboChar &k, float n) { return k.most * SettingsRange((n - k.n0) / (k.n1 - k.n0), 0.0f, 1.0f); }
 static const float kLiftWindow = 0.25f;      // seconds: a lift is the pedal coming up within this time
 static const float kLiftForBlowOff = 0.5f, kLiftForFlutter = 0.25f; // how far the pedal has to come up for a blow-off, and for a flutter
 static const float kBlowOffFrom = 0.22f, kFlutterFrom = 0.11f; // the boost it takes, as a share of the most the turbo reaches
@@ -809,8 +862,15 @@ enum { kLiftMarks = 8 };                     // pedal positions kept for kLiftWi
 struct BoostModel
 {
     bool running;        // the model has a truck
-    float bar;           // the boost in bar
-    float target;        // where it heads, for the probe
+    float bar;           // b, the manifold's pressure in bar, gauge: under 0 a petrol's vacuum
+    float rotor;         // w, the rotor's speed as a share of what makes the most boost
+    float limit;         // the torque the air allows, 0 to 1 (equation 5), for the powertrain and the next pass's q
+    float target;        // where the pressure heads, and for the probe: what the rotor heads for, the full-load
+    float want, full;    // boost at n, the fuel q and n, and the turbo's most
+    float q, n, most;
+    bool petrol;         // the character in force is a petrol engine's
+    float dip;           // seconds left of the two stages' dip at the changeover
+    float nWas;          // n on the last pass
     struct { float pedal, age; } mark[kLiftMarks]; // the pedal on the last steps, newest last, and how long ago
     int marks;
     bool lifting;        // the pedal came up on the last step
@@ -821,33 +881,23 @@ struct BoostModel
     float lastBar, lastVolume;
 };
 
-// The boost the turbo heads for, in bar: most (the truck's BoostMax) with the pedal floored and the tachometer's
-// needle (revs, TachShare) where the profile's last stage blows all it can. Nothing below where its first stage
-// starts, with the engine off or while it starts, and little in neutral, where nothing pulls against the engine.
-// first: what the first stage makes of it.
-inline float BoostTarget(const TruckRaw &t, float revs, float most, int profile, float *first = nullptr)
-{
-    if (first) *first = 0.0f;
-    if (!TruckEngineOn(t) || (t.startTimer > 0.0f && !(t.flags & 2))) return 0.0f;
-    const SpoolProfile &p = SpoolOf(profile);
-    const float needle = revs > 0.0f ? fminf(revs, 1.0f) : 0.0f; // 0 too for revs that are no number
-    const float foot = most * powf(TruckPedal(t), kBoostPedal) * (t.gearEngaged == 0 ? kLoadNeutral : 1.0f);
-    if (first) *first = foot * SpoolRamp(p.stage[0], needle);
-    return foot * (SpoolRamp(p.stage[0], needle) + SpoolRamp(p.stage[1], needle));
-}
-
-// One step of dt seconds. Returns what a lift of the pedal on this step sounds like: kLiftBlowOff as soon as the
-// pedal has come up by kLiftForBlowOff within kLiftWindow with the boost at kBlowOffFrom of most or above when it
-// began to; kLiftFlutter once the pedal has stopped after a smaller lift, or after one with less boost; kLiftNone
-// otherwise and for kLiftPause after a sound. The model keeps the boost the sound came at and how loud it is
-// (lastBar, lastVolume).
-inline int BoostStep(BoostModel &m, const TruckRaw &t, float revs, float most, int profile, float dt)
+// One step of dt seconds of the model above. k: the character in force (TurboOf); n: the engine speed over the red
+// zone's rpm, past 1 on the governor (TachSpeed stops at 1); c and top: the engine's curve and the tachometer's top over the red zone, for the
+// governor's taper; cold: the cold's share of the torque (PowertrainModel::cold, the last pass's); free: nothing
+// pulls against the engine (neutral, or the clutch pressed). Nothing with the engine off or while it starts.
+// Returns what a lift of the pedal on this step sounds like: kLiftBlowOff as soon as the pedal has come up by
+// kLiftForBlowOff within kLiftWindow with the boost at kBlowOffFrom of most or above when it began to; kLiftFlutter
+// once the pedal has stopped after a smaller lift, or after one with less boost; kLiftNone otherwise and for
+// kLiftPause after a sound. The model keeps the boost the sound came at and how loud it is (lastBar, lastVolume).
+inline int BoostStep(BoostModel &m, const TruckRaw &t, const TurboChar &k, float n, const TorqueCurve &c, float top, float cold, bool free, float dt)
 {
     const float pedal = TruckPedal(t);
+    const float most = k.most;
     if (!m.running)
     {
         m = BoostModel{};
         m.running = true;
+        m.limit = 1.0f;
     }
     // is the pedal coming up, and with how much boost did it begin to
     const bool lifting = m.marks > 0 && pedal < m.mark[m.marks - 1].pedal - 0.01f;
@@ -886,14 +936,42 @@ inline int BoostStep(BoostModel &m, const TruckRaw &t, float revs, float most, i
         m.mark[0] = m.mark[m.marks - 1];
         m.marks = 1;
     }
-    float first = 0.0f;
-    m.target = BoostTarget(t, revs, most, profile, &first);
-    const SpoolProfile &p = SpoolOf(profile);
-    const float needle = revs > 0.0f ? fminf(revs, 1.0f) : 0.0f;
-    const SpoolStage &building = p.stage[1].share > 0.0f && m.bar >= first ? p.stage[1] : p.stage[0];
-    const float tau = m.target > m.bar ? building.spool + building.spoolLow * (1.0f - needle) : pedal < 0.05f ? p.lift : p.fall;
-    m.bar += (m.target - m.bar) * (1.0f - expf(-dt / tau));
-    if (!(m.bar >= 0.0f)) m.bar = 0.0f; // 0 too for a boost that is no number
+    // the inputs: n, the fuel q
+    const bool on = TruckEngineOn(t) && !(t.startTimer > 0.0f && !(t.flags & 2));
+    n = isfinite(n) ? SettingsRange(n, 0.0f, top > 1.0f ? top : 1.0f) : 0.0f;
+    const float full = on && most > 0.0f ? TurboFull(k, n) : 0.0f;
+    const float last = c.n > 0 ? c.x[c.n - 1] : 1.0f;
+    const float taper = n <= last ? 1.0f : c.n > 0 && c.y[c.n - 1] > 0.0f ? SettingsRange(TorqueAt(c, n, top) / c.y[c.n - 1], 0.0f, 1.0f) : 0.0f;
+    const float foot = free ? pedal * kLoadNeutral : pedal;
+    const float q = on ? SettingsRange(free ? foot : fminf(foot, m.limit * (isfinite(cold) ? cold : 1.0f)), 0.0f, 1.0f) * taper : 0.0f;
+    // what the rotor heads for (2), the rotor (3)
+    const float manifold = k.petrol && on ? kThrottleShut + (1.0f + full - kThrottleShut) * foot - 1.0f : 0.0f; // a petrol's throttle, bar gauge
+    const float want = most <= 0.0f ? 0.0f : k.petrol ? sqrtf(fmaxf(manifold, 0.0f) / most) : full > 0.0f ? sqrtf(full * powf(q, kFuelBoost) / most) : 0.0f;
+    const float tau = want > m.rotor ? k.tauRed / fmaxf(q * n * n * n * n, kSpoolLeast) : kRotorDown;
+    m.rotor += (want - m.rotor) * (1.0f - expf(-dt / tau));
+    if (!(m.rotor >= 0.0f)) m.rotor = 0.0f; // 0 too for a rotor that is no number
+    // the pressure by the rotor (4)
+    const float made = most * m.rotor * m.rotor;
+    float target = k.petrol ? (manifold <= 0.0f ? manifold : fminf(manifold, made)) : fminf(full, made);
+    if (k.twoStage && m.nWas < kStageSwap && n >= kStageSwap) m.dip = kStageDip;
+    m.nWas = n;
+    if (m.dip > 0.0f)
+    {
+        m.dip -= dt;
+        if (target > 0.0f) target *= 1.0f - kStageDrop;
+    }
+    m.bar += (target - m.bar) * (1.0f - expf(-dt / kManifold));
+    if (!isfinite(m.bar)) m.bar = 0.0f;
+    // the torque the air allows (5), against the full-load boost at n: on the governor the full load's fuel is the
+    // taper's, which the curve has already taken, so the reference is the boost that fuel makes there
+    m.limit = on ? SettingsRange(k.r * (1.0f + m.bar) / (1.0f + full * powf(taper, kFuelBoost)), 0.0f, 1.0f) : 1.0f;
+    m.target = target;
+    m.want = want;
+    m.full = full;
+    m.q = q;
+    m.n = n;
+    m.most = most;
+    m.petrol = k.petrol;
     return sound;
 }
 
@@ -931,13 +1009,15 @@ inline float LiftChance(uint32_t &seed)
     return (float)((double)seed / 4294967296.0 * 2.0 - 1.0);
 }
 
-// The boost in a line of text for the probe log.
-inline void BoostProbeText(const TruckRaw &t, const BoostModel &m, float revs, float most, char *out, size_t size)
+// The boost in a line of text for the probe log: what it is made of (review 12, finding 10).
+inline void BoostProbeText(const TruckRaw &t, const BoostModel &m, const TurboChar &k, char *out, size_t size)
 {
     char last[96] = "none yet";
     if (m.last != kLiftNone) sprintf_s(last, "the last a %s at %.2f bar, %.2f of its full sound", m.last == kLiftBlowOff ? "blow-off" : "flutter", m.lastBar, m.lastVolume);
-    sprintf_s(out, size, "boost %.2f bar of the turbo's %.2f, heading for %.2f (pedal %.2f, the needle %.2f of the way to the red zone) | lifts: %d blow-offs, %d flutters, %s",
-              m.bar, most, m.target, TruckPedal(t), revs, m.blowOffs, m.flutters, last);
+    sprintf_s(out, size, "boost %.2f bar of the turbo's %.2f, heading for %.2f | the rotor %.2f, heading for %.2f | n %.2f of the red zone's rpm, pedal %.2f, fuel %.2f, "
+                         "full load %.2f bar there | the limit %.2f | a %s turbo, %s (n %.2f to %.2f, spool %.3f s) | lifts: %d blow-offs, %d flutters, %s",
+              m.bar, k.most, m.target, m.rotor, m.want, m.n, TruckPedal(t), m.q, m.full, m.limit, kTurboNames[k.profile], k.petrol ? "petrol" : "diesel", k.n0, k.n1,
+              k.tauRed, m.blowOffs, m.flutters, last);
 }
 
 // ---- the powertrain ----
@@ -947,14 +1027,6 @@ static const float kThrottleUp = 0.6f;       // seconds the shaped pedal takes f
 static const float kThrottleDown = 0.15f;    // and from floored to up
 static const float kColdTorque = 0.15f;      // the torque the engine loses with its oil at 0 C, none from kColdTorqueTo up
 static const float kColdTorqueTo = 60.0f;
-static const float kBoostTorque = 0.35f;     // the share of the torque that comes from the boost: without it the engine has the rest. 0.45 on
-                                             // review 11 left trucks at mid revs short of the game's own pull (a drive, 28 October)
-enum { kCurvePoints = 8 };                   // points a torque curve holds at most
-
-// A torque curve: the torque as a share of the engine's most (y, 0 to 1) at engine speeds as a share of where the
-// red zone starts (x, rising). Between two points the torque goes straight from one to the other; below the first
-// it is the first's; from the last point to the tachometer's top it falls to nothing, as the governor cuts the fuel.
-struct TorqueCurve { int n; float x[kCurvePoints], y[kCurvePoints]; };
 
 // The curves by truck class: trucks and heavy trucks a diesel's, broad and early, scouts a later peak.
 static const TorqueCurve kClassCurves[kClassCount] = {
@@ -1040,6 +1112,7 @@ struct EngineProfile
     bool own;
     float peakRpm;
     int aspiration;
+    int fuel;       // Fuel: kFuelClass (the class's), kFuelDiesel or kFuelPetrol
     bool custom;
     TorqueCurve curve;
     float torque;   // Torque: the share of its torque the truck gets (kTorqueShareRange), 0 for none: all of it
@@ -1084,15 +1157,16 @@ struct PowertrainModel
     bool running;      // the model has a truck
     float pedal;       // the shaped pedal, 0 to 1, after the ramp
     float torque;      // the torque the engine has now, as a share of its most: the curve, the cold and the boost
-    float curve, cold, boost; // the three, for the probe
+    float curve, cold, boost; // the three, for the probe: boost is the torque the air allows (BoostModel::limit)
     float power;       // what it delivers: the torque times the shaped pedal, 1 = floored at the peak, warm, at full boost
     float load;        // the fuel it burns, as a share of floored at the red zone: the power times the engine speed
 };
 
 // One step of dt seconds. speed: the engine speed over the red zone's (TachSpeed); top: the tachometer's top over the
-// red zone's; oil: the oil temperature in C (TempModel::oil); boost: the boost as a share of the most the turbo makes.
-// The shaped pedal follows the driver's at the ramp's pace; with the engine off it and the power are 0.
-inline void PowertrainStep(PowertrainModel &m, const TruckRaw &t, const TorqueCurve &c, float speed, float top, float oil, float boost, float dt)
+// red zone's; oil: the oil temperature in C (TempModel::oil); limit: the torque the air allows (BoostModel::limit), 1
+// for an aspirated engine. The shaped pedal follows the driver's at the ramp's pace; with the engine off it and the
+// power are 0.
+inline void PowertrainStep(PowertrainModel &m, const TruckRaw &t, const TorqueCurve &c, float speed, float top, float oil, float limit, float dt)
 {
     if (!m.running) m = PowertrainModel{ true };
     const float want = TruckEngineOn(t) ? ThrottleShape(TruckPedal(t)) : 0.0f;
@@ -1101,7 +1175,7 @@ inline void PowertrainStep(PowertrainModel &m, const TruckRaw &t, const TorqueCu
     if (!(m.pedal >= 0.0f)) m.pedal = 0.0f; // 0 too for a step that gave no number
     m.curve = TorqueAt(c, speed, top);
     m.cold = isfinite(oil) ? 1.0f - kColdTorque * SettingsRange((kColdTorqueTo - oil) / kColdTorqueTo, 0.0f, 1.0f) : 1.0f;
-    m.boost = 1.0f - kBoostTorque + kBoostTorque * (boost > 0.0f ? fminf(boost, 1.0f) : 0.0f);
+    m.boost = isfinite(limit) ? SettingsRange(limit, 0.0f, 1.0f) : 1.0f;
     m.torque = TruckEngineOn(t) ? m.curve * m.cold * m.boost : 0.0f;
     m.power = m.torque * m.pedal;
     m.load = m.power * (speed > 0.0f ? fminf(speed, 1.0f) : 0.0f);

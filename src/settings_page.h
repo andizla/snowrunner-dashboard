@@ -16,6 +16,7 @@ struct PageState
     float gearHold = 0.0f;        // the seconds the slider set for the driven truck's gearbox (kPageGearHold)
     float enginePeak = 0.0f;      // the driven truck's engine's profile as the Engine section set it (kPageEngineSet)
     int engineAspiration = 0;
+    int engineFuel = kFuelClass;
     int engineTorque = 100;       // and how much of its torque the truck gets, in percent, as the slider set it (kPageEngineTorque)
 };
 static const unsigned long long kPageCaptureMs = 8000;
@@ -455,8 +456,10 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         PageLabel("Turbo", labelX);
         ImGui::SetNextItemWidth(w);
         changed(ImGui::Combo("##spool", &s.boostProfile, profiles, kSpoolCount));
-        PageTip("How the turbo builds its boost. Standard: from about a tenth of the way to the red zone, all of it from half way. Small and quick: early and with little lag. "
-                "Big and slow: late, and long to come at low revs. Two stages: a small turbo early and a big one after it.");
+        PageTip("How the turbo builds its boost, on the class's own turbo: a truck's diesel all of it from about 1300 rpm, a scout's petrol from about 1650. "
+                "The boost goes by the fuel the engine burns, and the turbo spools slowly low down and quickly high up. Standard: the class's. Small and "
+                "quick: full sooner, half the lag. Big and slow: later, half as much lag again. Two stages: full sooner with 1.3 times the boost, a short "
+                "dip at the changeover.");
     }
 
     ImGui::SeparatorText("Engine");
@@ -469,7 +472,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                                 PageClassWord(view.autoClass), view.autoByWeight ? " (the class of the truck's weight)" : "");
         if (view.engineFigure > 0.0f) ImGui::TextWrapped("Its torque in the game's files: %.0f (a stock scout's engine reads about 195000).", view.engineFigure);
         float peak = view.enginePeakRpm;
-        int aspiration = view.engineAspiration;
+        int aspiration = view.engineAspiration, fuel = view.engineFuel;
         bool set = false;
         PageLabel("Peak torque at", labelX);
         ImGui::SetNextItemWidth(w);
@@ -486,6 +489,12 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         ImGui::SetNextItemWidth(w);
         if (ImGui::Combo("##aspiration", &aspiration, aspirations, kAspCount)) set = true;
         PageTip("Naturally aspirated: no boost, so no boost dial and no turbo sounds, and all of the torque at once with the pedal.");
+        const char *fuels[kFuelCount] = { view.autoClass == kClassScout ? "The class's (petrol)" : "The class's (diesel)", "Diesel", "Petrol" };
+        PageLabel("Fuel", labelX);
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::Combo("##fuel", &fuel, fuels, kFuelCount)) set = true;
+        PageTip("How the turbo breathes. A diesel's boost goes with its fuel, from nothing at idle. A petrol engine's throttle holds its manifold in "
+                "vacuum at idle and a light foot, so its dial reads under 0. Trucks and heavy trucks are diesels and scouts petrol unless set here.");
         // how much of its torque the truck gets, kept in percent
         int torquePercent = (int)lroundf(view.engineTorque * 100.0f);
         PageLabel("Torque", labelX);
@@ -502,6 +511,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         {
             st.enginePeak = floorf(peak / 50.0f + 0.5f) * 50.0f;
             st.engineAspiration = aspiration;
+            st.engineFuel = fuel;
             act |= kPageEngineSet;
         }
         PageLabel("Curve", labelX);
