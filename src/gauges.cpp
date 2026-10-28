@@ -629,7 +629,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; SoundVolume (0 to 100) is how loud the turbo is heard when the pedal comes up quickly under boost: it flutters,\n"
                         L"; longer and louder the more boost there was, until the pedal goes down again. The oil warning goes by it too.\n"
                         L"; 0 = no sound. SoundsOnly=1 plays the sounds and draws no cluster.\n"
-                        L"; A diesel has no blow-off valve: its lift plays the turbo's whistle running down. DieselFlutter=1: it flutters too.\n"
+                        L"; A diesel has no blow-off valve: its lift is quiet, or plays sounds\\turbo_whistle_1.wav to _4.wav. DieselFlutter=1: it flutters.\n"
                         L"; WAV files sounds\\turbo_high_1.wav to _4.wav next to the game's exe (and turbo_mid_, turbo_low_ for less boost)\n"
                         L"; are played in place of the mod's own recordings of that strength, and sounds\\oil_beep_1.wav in place of the\n"
                         L"; oil warning.\n"
@@ -1950,7 +1950,8 @@ static void LogSettings(const GaugeSettings &s)
     Log(L"settings: the radiator has all its air from %g km/h; engine damage %s: from %g C, %g percent a minute at 125 C, %g percent a minute for a cold engine floored at the red zone at 0 C; %g percent of the gearbox for a shift without the clutch; clutch burn %s, heating at %g percent of the model's pace",
         s.airFullKmh, s.damage ? L"on" : L"off", s.hotDamageFrom, s.hotDamage, s.coldDamage, s.stallDamage, s.clutchBurn ? L"on" : L"off", s.clutchHeat);
     Log(L"settings: sound volume %d of 100%s%s", s.soundVolume, s.soundsOnly ? L", sounds only: the cluster is not drawn" : L"",
-        s.dieselFlutter ? L", a diesel's lift flutters" : L", a diesel's lift whistles");
+        s.dieselFlutter ? L", a diesel's lift flutters"
+                        : SoundWhistles() > 0 ? L", a diesel's lift plays the sounds\\turbo_whistle_ files" : L", a diesel's lift is quiet");
     Log(L"settings: driven with %s", s.input == kInputKeys ? L"the keyboard" : s.input == kInputPad ? L"a pad" : L"a wheel's pedals");
     Log(L"settings: gearbox %s; RequireClutch %d, RequireGearHeld %d, SkipNeutral %d, DownStaysForward %d",
         s.gearbox == kGearboxOwn && s.input != kInputWheel ? L"the mod's own (Gearbox=2): it takes the shifter, its positions on the bindings and on the game's shifter"
@@ -2489,15 +2490,21 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         const int lift = natural ? kLiftNone
                                  : BoostStep(w.boost, raw, w.turbo, scale.redline > 0.0f ? w.tach.rpm / scale.redline : 0.0f, curve, tachTop,
                                              w.power.running ? w.power.cold : 1.0f, engineFree, dt);
-        // a diesel's lift whistles as its turbo coasts down, unless DieselFlutter has it flutter (review 12, finding 6)
+        // a diesel has no blow-off valve: its lift plays the player's own turbo whistle files, and is quiet without them
+        // (the one made by code went after the author's drive of 8ED18842), unless DieselFlutter has it flutter
+        // (review 12, finding 6)
         const bool whistle = !w.turbo.petrol && !s.dieselFlutter;
         if (lift != kLiftNone && probe)
-            Log(L"boost: a %s at %.2f bar of the turbo's %.2f, %.2f of its full sound", whistle ? L"diesel's whistle" : lift == kLiftBlowOff ? L"blow-off" : L"flutter",
-                w.boost.lastBar, w.turbo.most, w.boost.lastVolume);
+        {
+            if (whistle && (SoundWhistles() <= 0 || s.soundVolume <= 0))
+                Log(L"boost: a diesel's lift, quiet, at %.2f bar of the turbo's %.2f", w.boost.lastBar, w.turbo.most);
+            else
+                Log(L"boost: a %s at %.2f bar of the turbo's %.2f, %.2f of its full sound", whistle ? L"diesel's whistle" : lift == kLiftBlowOff ? L"blow-off" : L"flutter",
+                    w.boost.lastBar, w.turbo.most, w.boost.lastVolume);
+        }
         LiftSound sound;
-        if (whistle ? WhistleSoundOf(lift, w.boost.lastVolume, w.boost.lastRotor, s.soundVolume, LiftChance(w.chance), sound)
-                    : LiftSoundOf(lift, w.boost.lastVolume, s.soundVolume, LiftChance(w.chance), sound))
-            SoundPlay(sound.tier, sound.gain, sound.pitch);
+        if (LiftSoundFor(w.turbo.petrol, s.dieselFlutter, lift, w.boost.lastVolume, w.boost.lastRotor, s.soundVolume, LiftChance(w.chance), sound))
+            SoundPlay(sound.tier, sound.gain, sound.pitch); // the whistle's tier holds no clip without own files: nothing plays
         // the pedal going down again ends a flutter that still rings
         const bool pedalDown = TruckPedal(raw) > 0.5f;
         if (pedalDown && !w.pedalDown) SoundQuiet();
@@ -3781,7 +3788,7 @@ int wmain(int argc, wchar_t **argv)
     Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.hotDamageFrom == kTempRed && d.coldDamage == 5.0f && d.stallDamage == 5.0f && d.clutchBurn && d.clutchHeat == 60.0f,
           "defaults: the radiator's full airflow from 30 km/h, engine damage on from the red zone, 10 percent a minute for the heat and 5 for the cold");
     Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && d.input == kInputWheel && !d.powertrain && d.engineShare == 50 && d.creep && !d.dieselFlutter,
-          "defaults: the oil as a second needle, warm after 5 minutes, too hot from 120 C; the standard turbo, a diesel's lift whistling; the creep on");
+          "defaults: the oil as a second needle, warm after 5 minutes, too hot from 120 C; the standard turbo, a diesel's lift without the flutter; the creep on");
 
     // keys the mod does not know, in its own section and in another one
     WritePrivateProfileStringW(kIniSection, L"FromALaterVersion", L"7", ini.c_str());

@@ -1002,9 +1002,9 @@ inline bool LiftSoundOf(int lift, float loud, int soundVolume, float chance, Lif
 }
 
 // A diesel's lift (review 12, finding 6): it has no throttle plate and no blow-off valve, so its air keeps flowing and
-// the turbo coasts down with its whistle falling (kSoundWhistle). As loud as LiftSoundOf has a lift, and played
-// faster or slower by the rotor's speed at the lift (the model's lastRotor): at full speed as made, at a third of it
-// at kWhistleSlowest.
+// the turbo coasts down with its whistle falling (kSoundWhistle: the player's own files only; without them the lift
+// is quiet). As loud as LiftSoundOf has a lift, and played faster or slower by the rotor's speed at the lift (the
+// model's lastRotor): at full speed as recorded, at a third of it at kWhistleSlowest.
 static const float kWhistleSlowest = 0.5f;
 inline bool WhistleSoundOf(int lift, float loud, float rotor, int soundVolume, float chance, LiftSound &out)
 {
@@ -1012,6 +1012,14 @@ inline bool WhistleSoundOf(int lift, float loud, float rotor, int soundVolume, f
     out.tier = kSoundWhistle;
     out.pitch *= kWhistleSlowest + (1.0f - kWhistleSlowest) * SettingsRange((rotor - 1.0f / 3.0f) * 1.5f, 0.0f, 1.0f);
     return true;
+}
+
+// A lift's sound by the engine: a petrol engine's flutter or blow-off (LiftSoundOf); a diesel's whistle
+// (WhistleSoundOf), which plays only the player's own files and is quiet without them, unless dieselFlutter has it
+// flutter as a petrol engine does.
+inline bool LiftSoundFor(bool petrol, bool dieselFlutter, int lift, float loud, float rotor, int soundVolume, float chance, LiftSound &out)
+{
+    return petrol || dieselFlutter ? LiftSoundOf(lift, loud, soundVolume, chance, out) : WhistleSoundOf(lift, loud, rotor, soundVolume, chance, out);
 }
 
 // A number from -1 to 1 that differs from call to call.

@@ -106,7 +106,7 @@ struct GaugeSettings
     float clutchHeat;        // ClutchHeatPercent: how fast it heats, percent of the model's own pace (kClutchHeatRange); cooling is not scaled
     int soundVolume;        // SoundVolume: how loud the turbo's flutter and the oil warning are, 0 to 100; 0 = no sound
     bool soundsOnly;         // SoundsOnly: the sounds are played and the cluster is not drawn
-    bool dieselFlutter;      // DieselFlutter: a diesel's lift flutters too; off, it plays the turbo's whistle (review 12, finding 6)
+    bool dieselFlutter;      // DieselFlutter: a diesel's lift flutters too; off, it is quiet, or plays the player's own turbo whistle files (review 12, finding 6)
     int toggleKey;           // ToggleKey: virtual key code of the key that hides and shows the cluster, 0 = none
     char padToggle[32];      // PadToggle: pad buttons that do the same ("LB+DPadUp"), "None"
     bool demo;               // Demo: for work on the mod: demo values are drawn whenever no truck is driven, menus and loading screens included
@@ -300,9 +300,10 @@ inline void GaugeDemo(GaugeState &st, const GaugeSettings &s)
 // tab; engineCapacity is 0 while it is not known.
 enum { kShown, kHiddenByToggle, kHiddenNoTruck, kHiddenSoundsOnly };
 // How strong the turbo's flutter is after a lift of the pedal, by the boost the lift had: the sounds come in these three.
-// After them the oil warning, the air dryer's purge and a diesel turbo's whistle, the mod's other sounds.
+// After them the oil warning, the air dryer's purge and a diesel turbo's whistle (the player's own files only), the
+// mod's other sounds.
 enum { kTurboHigh, kTurboMid, kTurboLow, kTurboTiers };
-enum { kSoundOil = kTurboTiers, kSoundPurge, kSoundWhistle, kSoundTierCount }; // the oil warning, the air dryer's purge at the compressor's cut-out, a diesel's lift
+enum { kSoundOil = kTurboTiers, kSoundPurge, kSoundWhistle, kSoundTierCount }; // the oil warning, the air dryer's purge at the compressor's cut-out, a diesel's lift (own files)
 // truck: the kind of truck being driven, as the game's files name it ("" while none is driven): the scales in force
 // are that kind's. truckOwn: it has scales of its own in Gauges.ini, and those are the ones in force. map: the map
 // the truck drives on in words, with its region ("" while it is not known), and ambientC the outside temperature in

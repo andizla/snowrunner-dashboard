@@ -3453,23 +3453,59 @@ int main(int argc, char **argv)
                               LiftSoundOf(kLiftBlowOff, 0.3f, 50, 0.0f, ls) && ls.tier == kTurboMid;
         const bool smallLift = LiftSoundOf(kLiftFlutter, 0.8f, 50, 0.0f, ls) && ls.tier == kTurboMid && LiftSoundOf(kLiftFlutter, 0.2f, 50, 0.0f, ls) && ls.tier == kTurboLow;
         Check(fullLift && smallLift, "sound: a full lift with much boost is the strong sound and with less the middle one, a small lift the middle and the weak one");
-        // a diesel's lift: the turbo's whistle, as loud as a lift, slower the slower the rotor was turning; it falls in
-        // pitch as it runs down (review 12, finding 6)
-        LiftSound lifted, whistled, slowWhistle;
-        const bool whistle = LiftSoundOf(kLiftBlowOff, 0.8f, 50, 0.0f, lifted) && WhistleSoundOf(kLiftBlowOff, 0.8f, 1.0f, 50, 0.0f, whistled) &&
+        // a diesel's lift (the author's drive of 8ED18842: the whistle made by code went): it asks for the whistle's
+        // tier, which holds only the player's own files, so without them nothing plays; their pitch goes by the rotor.
+        // DieselFlutter on, it flutters; a petrol engine's lift as before
+        LiftSound lifted, whistled, slowWhistle, fluttered, petrolLift;
+        const bool whistle = LiftSoundOf(kLiftBlowOff, 0.8f, 50, 0.0f, lifted) && LiftSoundFor(false, false, kLiftBlowOff, 0.8f, 1.0f, 50, 0.0f, whistled) &&
                              whistled.tier == kSoundWhistle && Near(whistled.gain, lifted.gain, 1e-5f) && Near(whistled.pitch, 1.0f, 1e-5f) &&
                              WhistleSoundOf(kLiftFlutter, 0.8f, 0.2f, 50, 0.0f, slowWhistle) && Near(slowWhistle.pitch, kWhistleSlowest, 1e-5f) &&
                              !WhistleSoundOf(kLiftNone, 0.8f, 1.0f, 50, 0.0f, slowWhistle) && !WhistleSoundOf(kLiftBlowOff, 0.8f, 1.0f, 0, 0.0f, slowWhistle);
-        SoundSet made;
-        SoundLoad(kSoundWhistle, L"C:\\no such folder\\", made);
-        auto crossings = [&](float from, float to) {
-            const SoundClip &c = made.clip[0];
-            int n = 0;
-            for (size_t i = (size_t)(from * c.rate) + 1; i < (size_t)(to * c.rate) && i < c.x.size(); i++) n += (c.x[i - 1] < 0.0f) != (c.x[i] < 0.0f);
-            return n;
-        };
-        const bool falls = made.count == 1 && Near((float)made.clip[0].x.size() / made.clip[0].rate, 1.8f, 0.01f) && crossings(0.9f, 1.0f) < 0.7f * crossings(0.0f, 0.1f);
-        Check(whistle && falls, "sound: a diesel's lift whistles, as loud as a lift and slower with the rotor slower, its pitch falling as it runs down");
+        const bool flutterOn = LiftSoundFor(false, true, kLiftBlowOff, 0.8f, 1.0f, 50, 0.0f, fluttered) && fluttered.tier == lifted.tier &&
+                               Near(fluttered.gain, lifted.gain, 1e-5f) && Near(fluttered.pitch, lifted.pitch, 1e-5f);
+        const bool petrolSame = LiftSoundFor(true, false, kLiftBlowOff, 0.8f, 1.0f, 50, 0.0f, petrolLift) && petrolLift.tier == lifted.tier &&
+                                Near(petrolLift.gain, lifted.gain, 1e-5f) && LiftSoundFor(true, true, kLiftFlutter, 0.2f, 1.0f, 50, 0.0f, petrolLift) && petrolLift.tier == kTurboLow;
+        SoundSet noWhistle, flutters;
+        SoundLoad(kSoundWhistle, L"C:\\no such folder\\", noWhistle);
+        SoundLoad(kTurboMid, L"C:\\no such folder\\", flutters);
+        // own files: a short tone written as sounds\turbo_whistle_1.wav in a folder of the test's
+        wchar_t temp[MAX_PATH];
+        GetTempPathW(MAX_PATH, temp);
+        const std::wstring own = std::wstring(temp) + L"gauges_whistle_test\\";
+        CreateDirectoryW(own.c_str(), nullptr);
+        CreateDirectoryW((own + L"sounds").c_str(), nullptr);
+        {
+            const uint32_t rate = 22050, n = rate / 2;
+            std::vector<uint8_t> wav(44 + n * 2);
+            auto put = [&](size_t at, uint32_t value, int bytes) { for (int i = 0; i < bytes; i++) wav[at + i] = (uint8_t)(value >> (8 * i)); };
+            memcpy(&wav[0], "RIFF", 4);
+            put(4, (uint32_t)wav.size() - 8, 4);
+            memcpy(&wav[8], "WAVEfmt ", 8);
+            put(16, 16, 4);
+            put(20, 1, 2);
+            put(22, 1, 2);
+            put(24, rate, 4);
+            put(28, rate * 2, 4);
+            put(32, 2, 2);
+            put(34, 16, 2);
+            memcpy(&wav[36], "data", 4);
+            put(40, n * 2, 4);
+            for (uint32_t i = 0; i < n; i++) put(44 + i * 2, (uint32_t)(uint16_t)(int16_t)(8000.0 * sin(2.0 * 3.14159265 * 3000.0 * i / rate)), 2);
+            FILE *f = nullptr;
+            if (_wfopen_s(&f, (own + L"sounds\\turbo_whistle_1.wav").c_str(), L"wb") == 0 && f)
+            {
+                fwrite(wav.data(), 1, wav.size(), f);
+                fclose(f);
+            }
+        }
+        SoundSet owned;
+        SoundLoad(kSoundWhistle, own, owned);
+        DeleteFileW((own + L"sounds\\turbo_whistle_1.wav").c_str());
+        RemoveDirectoryW((own + L"sounds").c_str());
+        RemoveDirectoryW(own.c_str());
+        Check(whistle && flutterOn && petrolSame && noWhistle.count == 0 && flutters.count == 1 && owned.count == 1,
+              "sound: a diesel's lift asks for the whistle, which holds no sound of the mod's, so it is quiet; own turbo_whistle files play there, slower "
+              "with the rotor slower; with DieselFlutter on it flutters, and a petrol engine's lift is as before");
         const bool fast = LiftSoundOf(kLiftBlowOff, 1.0f, 50, 1.0f, ls) && Near(ls.pitch, 1.06f, 0.001f), slow = LiftSoundOf(kLiftBlowOff, 1.0f, 50, -9.0f, ls) && Near(ls.pitch, 0.94f, 0.001f);
         uint32_t seed = 0;
         float least = 1.0f, widest = -1.0f, sum = 0.0f;
