@@ -110,6 +110,8 @@ struct TruckRaw
     float actionB4, torqueFactor;  // action + 0xB4, + 0xCC
     int gearSpeeds;                // how many entries the gearbox has: reverse, the gears, high
     float gearSpeed[kMaxGears];
+    float gearTop[kMaxGears];      // the mod's own, not read: each numbered gear's top learned where the game's pull reaches nothing
+                                   // (GearTopStep; kept in the gearbox's file), 0 not learned. TruckGearTop goes by it
     int wheels;
     int drive[kMaxWheels];         // 0 not driven, 1 driven, 2 driven with all wheel drive
     float spin[kMaxWheels];

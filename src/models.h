@@ -121,15 +121,25 @@ inline float TruckDrivenSpread(const TruckRaw &t)
     return n > 1 && sum > 0.0f ? (hi - lo) / (sum / n) : 0.0f;
 }
 
-// The wheel speed in rad/s the game governs a gear to, 0 for neutral or a gear the gearbox does not have. From the
-// gearbox's number a for the gear: 2 a + 5, and a + 2 in the high gear. The low range is the first gear held to a
-// share of that by the power factor.
-inline float TruckGearTop(const TruckRaw &t, int gear)
+// The wheel speed in rad/s the game governs a gear to by the gearbox's number a for it alone: 2 a + 5, and a + 2 in the
+// high gear; 0 for neutral or a gear the gearbox does not have. Before the low range.
+inline float TruckGearFormulaTop(const TruckRaw &t, int gear)
 {
     if (gear == 0 || gear >= t.gearSpeeds) return 0.0f;
     const float a = t.gearSpeed[gear < 0 ? 0 : gear];
     if (!(a > 0.0f)) return 0.0f;
-    float top = gear == TruckTopGear(t) + 1 ? a + 2.0f : 2.0f * a + 5.0f;
+    return gear == TruckTopGear(t) + 1 ? a + 2.0f : 2.0f * a + 5.0f;
+}
+
+// The wheel speed in rad/s the game governs a gear to: a numbered gear's own top where it is learned (t.gearTop, from
+// where the game's pull reaches nothing: GearTopStep; review 11 read 0.90 to 0.99 of 2 a + 5 in some gears), else
+// TruckGearFormulaTop. The high gear's a + 2 holds (an HX 520 sat at 15.8 to 16.3 rad/s in H against 16 in 11 floored
+// plateaus). The low range is the first gear held to a share of that by the power factor.
+inline float TruckGearTop(const TruckRaw &t, int gear)
+{
+    float top = TruckGearFormulaTop(t, gear);
+    if (!(top > 0.0f)) return 0.0f;
+    if (gear >= 1 && gear <= TruckTopGear(t) && gear < kMaxGears && t.gearTop[gear] > 0.0f && isfinite(t.gearTop[gear])) top = t.gearTop[gear];
     if (gear == 1 && !t.automatic) top = 1.0f + (top - 1.0f) * SettingsRange(t.powerFactor, 0.0f, 1.0f);
     return top;
 }
@@ -141,6 +151,62 @@ inline float TruckPedal(const TruckRaw &t)
     const float p = t.automatic && t.gearEngaged < 0 ? t.throttle : -t.throttle;
     return SettingsRange(p, 0.0f, 1.0f);
 }
+
+// ---- each gear's top, learned (review 11, finding 8) ----
+// A floored plateau: the pedal at kPlateauPedal or more, the game's own pull (action + 0xB4) at kPlateauPull or under,
+// the power factor whole (not the low range), the wheels between kPlateauFrom and kPlateauTo of 2 a + 5 and steady
+// within kPlateauSteady of their mean for kPlateauFor, in a numbered gear (the high gear's a + 2 holds). The wheels' mean
+// over that second is where the game governs the gear: its top. Each plateau gives one; a gear's top learned again is
+// the mean of the old and the new.
+static const float kPlateauPedal = 0.9f, kPlateauPull = 0.02f, kPlateauFrom = 0.85f, kPlateauTo = 1.15f, kPlateauSteady = 0.01f, kPlateauFor = 1.0f;
+struct GearTopLearn
+{
+    int gear;        // the gear of the plateau being watched, 0 none
+    float time, sum; // its seconds so far and the wheels' sum over its passes
+    int passes;
+    float lo, hi;    // the wheels' least and most over it
+    bool done;       // this plateau has given its top: no other until it ends
+};
+// One pass: true when a plateau has just completed, with the gear and the wheels' mean in gear and top.
+inline bool GearTopStep(GearTopLearn &l, const TruckRaw &t, float dt, int &gear, float &top)
+{
+    const int g = t.gearEngaged;
+    const float spin = TruckDrivenSpin(t), formula = g >= 1 && g <= TruckTopGear(t) ? TruckGearFormulaTop(t, g) : 0.0f;
+    const bool plateau = TruckEngineOn(t) && formula > 0.0f && g == t.gear && TruckPedal(t) >= kPlateauPedal && isfinite(t.actionB4) &&
+                         t.actionB4 <= kPlateauPull && t.powerFactor >= 0.99f && isfinite(spin) && spin >= kPlateauFrom * formula && spin <= kPlateauTo * formula;
+    if (!plateau || g != l.gear)
+    {
+        l = GearTopLearn{};
+        if (!plateau) return false;
+        l.gear = g;
+        l.lo = l.hi = spin;
+    }
+    if (l.done) return false;
+    l.lo = fminf(l.lo, spin);
+    l.hi = fmaxf(l.hi, spin);
+    l.sum += spin;
+    l.passes++;
+    l.time += dt;
+    const float mean = l.sum / (float)l.passes;
+    if (l.hi - l.lo > 2.0f * kPlateauSteady * mean)
+    {
+        // not steady: start again from this pass
+        l = GearTopLearn{};
+        l.gear = g;
+        l.lo = l.hi = l.sum = spin;
+        l.passes = 1;
+        l.time = dt;
+        return false;
+    }
+    if (l.time < kPlateauFor) return false;
+    gear = g;
+    top = mean;
+    l.done = true;
+    return true;
+}
+
+// A gear's top learned again: the mean of the one kept and the new plateau's (the first plateau as it is).
+inline float GearTopMerge(float kept, float plateau) { return kept > 0.0f && isfinite(kept) ? 0.5f * (kept + plateau) : plateau; }
 
 // The share of its top speed the engaged gear's wheels turn at, 0 in neutral.
 inline float TachWheelShare(const TruckRaw &t)

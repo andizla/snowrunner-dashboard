@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Each gear's top is learned where the game's own pull reaches nothing (review 11). A floored plateau, the pull under 0.02 with the wheels steady for a second between 0.85 and 1.15 of the gearbox's figure for the gear, is logged with the gear, the wheels and the figure, and from then on that gear's top is the one learned, kept in the gearbox's file (`Top1`, `Top2` ... in `Gauges\gearboxes\<name>.ini`) so a truck's gears are learned once. The limiter, the floored points, the needle and the lift go by it. Until a gear is learned its top is the gearbox's figure as before, and the high gear's stays as it is. The review read 0.90 to 0.99 of the figure in some gears from the game's pull; the three testers' logs at hand had plateaus at the top of the first gear and of H only (0.92 to 1.03 of it).
+
 - At `Gearbox=2` in the gearbox's own positions there is one engine (review 11). The needle and the torque curve the game gets go by the clutch model's engine speed, not by the wheels' share and a pedal lift that worked with the clutch pressed too. The clutch model's governor is a road truck's min-max one: the pedal is a torque between the idle governor and the high-speed one. A stall with the clutch on a pedal's axis is handed to the game, so a dropped clutch stalls the engine; a clutch on a button never stalls it, as before.
 - `RequireClutch=1`: a shift without the clutch while the truck rolls at about 5 km/h or more grinds and stays out (N, with a line in `Gauges.log`) instead of stalling the engine. Standing or crawling it still stalls, as a gear forced in does (review 11: it stalled at 60 km/h too).
 

@@ -3914,6 +3914,48 @@ int main(int argc, char **argv)
             PowertrainStep(full, on, tc, 0.6f, tk.max / tk.redline, 80.0f, 1.0f, kDt);
             Check(Near(none.boost, 0.55f, 0.001f) && Near(full.boost, 1.0f, 0.001f), "powertrain: an engine without boost has 0.55 of its torque, with full boost all of it");
         }
+        // finding 8: a floored plateau (the game's pull at nothing, the wheels steady) in a numbered gear at 0.93 of 2a + 5
+        // gives that gear's top, which TruckGearTop then goes by, and with it the limiter and the floored point up; not
+        // with the pull still on, a light pedal, the low range or in H; a second plateau gives the mean
+        {
+            TruckRaw pt = lt;
+            pt.flags = 3;
+            pt.automatic = 0;
+            pt.powerFactor = 1.0f;
+            pt.gear = pt.gearEngaged = 3;
+            pt.throttle = -1.0f;
+            pt.actionB4 = 0.0f;
+            const float formula = TruckGearFormulaTop(pt, 3);
+            auto plateauAt = [&](TruckRaw t, float share, float seconds, int &gear, float &top) {
+                GearTopLearn l = {};
+                for (int i = 0; i < t.wheels; i++) t.spin[i] = share * formula;
+                bool got = false;
+                for (float at = 0.0f; at < seconds && !got; at += kDt) got = GearTopStep(l, t, kDt, gear, top);
+                return got;
+            };
+            int gear = 0;
+            float top = 0.0f;
+            const bool seen = plateauAt(pt, 0.93f, 1.5f, gear, top) && gear == 3 && Near(top, 0.93f * formula, 0.01f);
+            TruckRaw pulling = pt, light = pt, low = pt, high = pt;
+            pulling.actionB4 = 0.2f;
+            light.throttle = -0.5f;
+            low.gear = low.gearEngaged = 1;
+            low.powerFactor = 0.45f;
+            high.gear = high.gearEngaged = TruckTopGear(high) + 1;
+            int g2 = 0;
+            float t2 = 0.0f;
+            const bool refused = !plateauAt(pulling, 0.93f, 1.5f, g2, t2) && !plateauAt(light, 0.93f, 1.5f, g2, t2) && !plateauAt(low, 0.93f, 1.5f, g2, t2) &&
+                                 !plateauAt(high, 0.95f, 1.5f, g2, t2) && !plateauAt(pt, 0.93f, 0.9f, g2, t2);
+            TruckRaw learned = pt;
+            learned.gearTop[3] = top;
+            const float upBefore = GearboxUpPoint(pt, tk, 3, 1.0f, handOf(kInputPad)), upAfter = GearboxUpPoint(learned, tk, 3, 1.0f, handOf(kInputPad));
+            const bool used = Near(TruckGearTop(learned, 3), top, 0.001f) && Near(TruckGearTop(learned, 2), TruckGearTop(pt, 2), 0.001f) && upAfter != upBefore &&
+                              Near(GearTopMerge(top, 0.97f * formula), 0.95f * formula, 0.01f) && Near(GearTopMerge(0.0f, 20.0f), 20.0f, 0.001f);
+            printf("     finding 8: a plateau in third at %.2f rad/s (2a + 5 gives %.2f): learned; the floored point up from %.0f to %.0f rpm\n", top, formula, upBefore, upAfter);
+            Check(seen && refused && used,
+                  "gearbox: a floored plateau gives a gear's top, which the limiter and the floored points go by; none with the pull on, a light pedal, the low range, "
+                  "in H or under a second; a second plateau gives the mean");
+        }
         // the probe texts carry what they say they do
         {
             GearboxModel pb = boxIn(3, rollAt(3, 1500.0f), 0.5f);

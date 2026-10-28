@@ -661,6 +661,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; of the game's own, which falls away toward each gear's top. The mod writes the game's torque factor for it.\n"
                         L"; EngineShare: how much of the mod's engine the game gets, 0 to 100 percent (50: half way between the two).\n"
                         L"; Gauges\\gearboxes\\<name>.ini GearHold: seconds a gearbox holds each gear going up with Powertrain=1, 1 to 3 (the tab).\n"
+                        L"; Top1, Top2 ...: each gear's top in rad/s, learned where the game's pull reaches nothing floored (2a + 5 until then).\n"
                         L"; Gauges\\engines\\<name>.ini: PeakTorqueRpm, Aspiration (0 turbo, 1 naturally aspirated), TorqueCurve (the tab's Engine).\n"
                         L";   Torque: how much of its torque the truck gets, 10 to 100 percent (100 when not set). Lower it for an RLM-like engine with several times a stock engine's torque.\n"
                         L"; For work on the mod: Demo=1 draws demo values whenever no truck is driven, Probe=1 logs the values read from the game.\n");
@@ -827,6 +828,34 @@ static void GearHoldWrite(const char *key, float hold)
     swprintf_s(buf, L"%.1f", hold);
     SetupBegin(kSetupGearbox, Wide(key));
     WritePrivateProfileStringW(kSetupSections[kSetupGearbox], L"GearHold", buf, SetupFile(kSetupGearbox, key).c_str());
+}
+
+// Top1 .. Top<n>: each numbered gear's top in rad/s, learned where the game's own pull reaches nothing (GearTopStep), so
+// a truck's gears are learned once (review 11). Into tops, 0 for a gear without one; the number read.
+static int GearTopRead(const char *key, float tops[kMaxGears])
+{
+    int n = 0;
+    for (int g = 0; g < kMaxGears; g++) tops[g] = 0.0f;
+    if (!key[0]) return 0;
+    for (int g = 1; g < kMaxGears; g++)
+    {
+        wchar_t name[16], buf[24] = {};
+        swprintf_s(name, L"Top%d", g);
+        if (GetPrivateProfileStringW(kSetupSections[kSetupGearbox], name, L"", buf, 24, SetupFile(kSetupGearbox, key).c_str()) == 0) continue;
+        const float v = (float)_wtof(buf);
+        if (isfinite(v) && v > 0.0f && v < 1000.0f) tops[g] = v, n++;
+    }
+    return n;
+}
+
+static void GearTopWrite(const char *key, int gear, float top)
+{
+    if (!key[0] || gear < 1 || gear >= kMaxGears) return;
+    wchar_t name[16], buf[24];
+    swprintf_s(name, L"Top%d", gear);
+    swprintf_s(buf, L"%.2f", top);
+    SetupBegin(kSetupGearbox, Wide(key));
+    WritePrivateProfileStringW(kSetupSections[kSetupGearbox], name, buf, SetupFile(kSetupGearbox, key).c_str());
 }
 
 // ---- an engine's own profile: its file Gauges\engines\<name>.ini ----
@@ -2002,6 +2031,8 @@ struct TruckWatch
     char gearboxKey[96];        // the gearbox of the truck at gearboxVehicle: its key (GearboxKey), "" before one is known
     bool gearHoldOwn;           // [Gearbox:<key>] holds GearHold, which is gearHold; else the truck's class has it
     float gearHold;
+    float gearTop[kMaxGears];   // each numbered gear's top learned where the game's pull reaches nothing (GearTopStep), 0 not yet; kept in the gearbox's file
+    GearTopLearn topLearn;      // the plateau being watched
     uint64_t gearboxVehicle;
     int gearSpeeds;             // that gearbox's speeds as last read: another set means another gearbox (the garage)
     float gearSpeed[kMaxGears];
@@ -2083,6 +2114,9 @@ static void GearboxLook(TruckWatch &w, const TruckMemory &m, const TruckRaw &raw
     if (!strcmp(key, w.gearboxKey)) return;
     strcpy_s(w.gearboxKey, key);
     w.gearHoldOwn = GearHoldRead(key, w.gearHold);
+    w.topLearn = GearTopLearn{};
+    const int tops = GearTopRead(key, w.gearTop);
+    if (tops) Log(L"gearbox: %d of its gears' tops learned before (its file in Gauges\\gearboxes): the limiter and the floored points go by them", tops);
     wchar_t whose[96];
     if (w.gearHoldOwn) wcscpy_s(whose, L"its own (its file in Gauges\\gearboxes)");
     else swprintf_s(whose, L"the %s class's%s", kClassWords[tachClass < 0 || tachClass >= kClassCount ? kClassTruck : tachClass],
@@ -2360,6 +2394,22 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         }
         if (!w.modelAt || now - w.modelAt >= 1000) w.tilt = TiltModel{};
         const float dt = w.modelAt && now - w.modelAt < 1000 ? SettingsRange((now - w.modelAt) / 1000.0f, 0.001f, 0.2f) : 0.05f;
+        // each gear's top as learned for this gearbox (TruckGearTop goes by it), and a floored plateau watched for: the
+        // game's pull at nothing with the wheels steady is where it governs the gear (review 11)
+        const bool sameBox = w.gearboxVehicle == w.refs.vehicle && raw.gearSpeeds == w.gearSpeeds && !memcmp(raw.gearSpeed, w.gearSpeed, sizeof w.gearSpeed);
+        if (sameBox) memcpy(raw.gearTop, w.gearTop, sizeof raw.gearTop);
+        int plateauGear = 0;
+        float plateauTop = 0.0f;
+        if (sameBox && GearTopStep(w.topLearn, raw, dt, plateauGear, plateauTop))
+        {
+            const float formula = TruckGearFormulaTop(raw, plateauGear), was = w.gearTop[plateauGear];
+            w.gearTop[plateauGear] = GearTopMerge(was, plateauTop);
+            raw.gearTop[plateauGear] = w.gearTop[plateauGear];
+            GearTopWrite(w.gearboxKey, plateauGear, w.gearTop[plateauGear]);
+            Log(L"gearbox: a floored plateau in gear %d, the game's pull %.3f: the wheels at %.2f rad/s, 2a + 5 gives %.2f (x%.3f); the gear's top %.2f%s, kept in its file",
+                plateauGear, raw.actionB4, plateauTop, formula, formula > 0.0f ? plateauTop / formula : 0.0f, w.gearTop[plateauGear],
+                was > 0.0f ? L" (the mean with the one kept)" : L" (learned)");
+        }
         // the needle: while the mod's gearbox is in A, its converter's engine speed (of the last pass); in a position of
         // its own, the clutch model's, so the needle and the torque curve the game gets go by the one engine the clutch
         // sets (review 11: they went by the wheels' share and a pedal lift that worked with the clutch pressed too)
@@ -3687,7 +3737,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 99, "ini: the help text survives a write (99 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 100, "ini: the help text survives a write (100 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());
