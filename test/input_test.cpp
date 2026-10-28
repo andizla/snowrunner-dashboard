@@ -177,7 +177,8 @@ int main()
         Check(fabsf(plain - 0.25f) < 1e-6f && !plainHeld && fabsf(inverted - 0.75f) < 1e-6f && invertedHeld && invertedPressed && st[kActClutch].travel == 1.0f,
               "reader: the clutch's axis travel, 0.25 as it is and 0.75 inverted (held past half); a key on it is the full travel");
     }
-    // the capture: armed only at rest, the pad's chord at its fullest, a key, a device's button, the clutch's axis, giving up
+    // the capture: what is held at the start left alone until let go, the pad's chord at its fullest, a key, a device's
+    // button, the clutch's axis, giving up
     {
         InputCapture c;
         InputSnapshot s = {};
@@ -185,10 +186,10 @@ int main()
         Binding out;
         BindingCaptureBegin(c, kActUp, 0, 1000);
         s.pad = XINPUT_GAMEPAD_A; // the press that began it, still held
-        const int a = BindingCaptureStep(c, s, 1050, out);
-        const bool armedEarly = c.armed;
+        const int a = BindingCaptureStep(c, s, 1050, out); // the start snapshot
+        const bool heldAlone = c.started && c.padHeld == XINPUT_GAMEPAD_A;
         s.pad = 0;
-        BindingCaptureStep(c, s, 1100, out); // arms
+        BindingCaptureStep(c, s, 1100, out); // A let go: no binding
         s.pad = XINPUT_GAMEPAD_LEFT_SHOULDER;
         BindingCaptureStep(c, s, 1150, out);
         s.pad = XINPUT_GAMEPAD_LEFT_SHOULDER | XINPUT_GAMEPAD_DPAD_DOWN;
@@ -199,19 +200,21 @@ int main()
         const int bound = BindingCaptureStep(c, s, 1300, out);
         char text[64];
         BindingText(out, text, sizeof text);
-        Check(a == kCaptureWaiting && !armedEarly && !c.active && partial == kCaptureWaiting && bound == kCaptureBound && !strcmp(text, "Pad LB+DPadDown"),
-              "capture: armed once the pad is let go, the chord held at its fullest bound when let go (Pad LB+DPadDown)");
+        Check(a == kCaptureWaiting && heldAlone && !c.active && partial == kCaptureWaiting && bound == kCaptureBound && !strcmp(text, "Pad LB+DPadDown"),
+              "capture: the A that began it is left alone, the chord held at its fullest bound when let go (Pad LB+DPadDown)");
         BindingCaptureBegin(c, kActGearN, 0, 2000);
         s.key[VK_LBUTTON] = 1; // the click on the tab's button
-        s.key['G'] = 1;        // and G, down before it armed
-        const int notArmed = BindingCaptureStep(c, s, 2050, out);
+        s.key['G'] = 1;        // and G, down at the start
+        BindingCaptureStep(c, s, 2050, out);
+        const int stillHeld = BindingCaptureStep(c, s, 2100, out);
         s.key['G'] = 0;
-        BindingCaptureStep(c, s, 2100, out); // arms: only the mouse is down
+        BindingCaptureStep(c, s, 2150, out); // only the mouse is down
         s.key['G'] = 1;
-        const int key = BindingCaptureStep(c, s, 2150, out);
+        const int key = BindingCaptureStep(c, s, 2200, out);
         BindingText(out, text, sizeof text);
         s.key['G'] = s.key[VK_LBUTTON] = 0;
-        Check(notArmed == kCaptureWaiting && key == kCaptureBound && !strcmp(text, "Key G"), "capture: a key held before it armed waits; the first key after it is bound, the mouse never");
+        Check(stillHeld == kCaptureWaiting && key == kCaptureBound && !strcmp(text, "Key G"),
+              "capture: a key held at the start is left alone until let go, then pressed again it is bound; the mouse never");
         BindingCaptureBegin(c, kActGear1, 1, 3000);
         s.device[0].present = true;
         for (uint32_t &p : s.device[0].pov) p = 0xFFFF;
@@ -246,6 +249,51 @@ int main()
         s.key[VK_ESCAPE] = 1;
         const int escape = BindingCaptureStep(c, s, 20100, out);
         Check(waiting == kCaptureWaiting && gaveUp == kCaptureGone && escape == kCaptureGone && out.kind == kBindNone, "capture: given up after 8 s with nothing, and Escape cancels");
+        // a controller reporting a hat or a switch as pressed while idle (two players could bind nothing, only Escape
+        // worked): a hat pointing at 0 and a button held from the start are left alone, and a key binds; with a pad
+        // button held from the start another one pressed and let go binds alone; a held hat moved to another direction
+        // binds that one; held controls alone give up after 8 s; the mouse never binds
+        memset(&s, 0, sizeof s);
+        s.front = true;
+        s.device[1].present = true;
+        for (uint32_t &p : s.device[1].pov) p = 0xFFFF;
+        s.device[1].pov[0] = 0;       // pointing up while idle
+        s.device[1].button[6] = 1;    // a switch reported as pressed
+        s.key[VK_LBUTTON] = 1;
+        BindingCaptureBegin(c, kActGear3, 0, 30000);
+        BindingCaptureStep(c, s, 30050, out);
+        char held[256];
+        const bool said = BindingCaptureHeld(c, s, held, sizeof held) && !strcmp(held, "Wheel 2 Button 7, Wheel 2 POV 1 pointing at 0 degrees");
+        const int heldWaits = BindingCaptureStep(c, s, 30100, out);
+        s.key['K'] = 1;
+        const int keyPast = BindingCaptureStep(c, s, 30150, out);
+        BindingText(out, text, sizeof text);
+        const bool keyOverHeld = heldWaits == kCaptureWaiting && keyPast == kCaptureBound && !strcmp(text, "Key K");
+        s.key['K'] = 0;
+        BindingCaptureBegin(c, kActGear4, 0, 31000);
+        s.pad = XINPUT_GAMEPAD_LEFT_SHOULDER; // a pad's bit stuck down
+        BindingCaptureStep(c, s, 31050, out);
+        s.pad = XINPUT_GAMEPAD_LEFT_SHOULDER | XINPUT_GAMEPAD_Y;
+        BindingCaptureStep(c, s, 31100, out);
+        s.pad = XINPUT_GAMEPAD_LEFT_SHOULDER;
+        const int padPast = BindingCaptureStep(c, s, 31150, out);
+        BindingText(out, text, sizeof text);
+        const bool padAlone = padPast == kCaptureBound && !strcmp(text, "Pad Y");
+        s.pad = 0;
+        BindingCaptureBegin(c, kActGear5, 0, 32000);
+        BindingCaptureStep(c, s, 32050, out);
+        s.device[1].pov[0] = 9000; // the hat that pointed up now points right
+        const int hatMoved = BindingCaptureStep(c, s, 32100, out);
+        BindingText(out, text, sizeof text);
+        const bool hatRight = hatMoved == kCaptureBound && !strcmp(text, "Wheel 2 POV Right");
+        s.device[1].pov[0] = 0;
+        BindingCaptureBegin(c, kActGear6, 0, 33000);
+        BindingCaptureStep(c, s, 33050, out);
+        const int heldOnly = BindingCaptureStep(c, s, 40000, out);
+        const int heldGaveUp = BindingCaptureStep(c, s, 41100, out);
+        Check(said && keyOverHeld && padAlone && hatRight && heldOnly == kCaptureWaiting && heldGaveUp == kCaptureGone && out.kind == kBindNone,
+              "capture: a hat pointing and a button held from the start are left alone and named for the log, a key then binds; a pad button "
+              "held from the start is not in the chord (Pad Y alone); the held hat moved binds its new direction; held controls alone give up after 8 s");
     }
     // the latch (the user's hill test, 27 October: a downshift tapped too fast was missed): a key tapped and let go
     // between two passes still reaches the pass, and gives one press through the reader; the pass after it starts

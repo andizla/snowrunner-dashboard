@@ -600,7 +600,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         ImGui::PopID();
     };
     ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextDisabled("Bindings: click a slot, then press a key, a pad's buttons or a wheel's button, or move the clutch pedal. Escape cancels.");
+    ImGui::TextDisabled("Bindings: click a slot, then press a key, a pad's buttons or a wheel's button, or move the clutch pedal. A control already "
+                        "held is left alone. Escape cancels.");
     ImGui::PopTextWrapPos();
     if (s.gearbox == kGearboxOwn)
     {

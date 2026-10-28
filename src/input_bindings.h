@@ -309,19 +309,27 @@ inline void InputStep(InputReader &r, const GearBindings &b, const InputSnapshot
 }
 
 // ---- the capture of a new binding ----
-// Begun for an action and a slot, then stepped once a pass with the snapshot: it arms once every key, pad button,
-// device button and POV is let go (the click or press that began it is not read), and binds the first key down, the
-// most buttons of the pad held together once they are let go, the first device button or POV, or for the clutch the
-// axis that moved most, more than a third of its travel from where it rested when the capture armed (inverted when it
-// moved down). Escape cancels; with nothing held it gives up after kCaptureMs.
+// Begun for an action and a slot, then stepped once a pass with the snapshot. Its first pass takes a snapshot of every
+// control, and from then on it binds the first thing that changes: a key that goes down, the most buttons of the pad
+// held together once they are let go, a device button that goes down, a POV direction it did not point in at the
+// start, or for the clutch the axis that moved most, more than a third of its travel from where it was at the start
+// (inverted when it moved down). A control held or a POV pointing at the start (the click or press that began it, a
+// controller that reports a hat or a switch as pressed while idle) is left alone until it is let go: neither bound nor
+// a reason to wait. Before, the capture waited for every control to be at rest, and two players with such a
+// controller could bind nothing (only Escape worked). Escape cancels; with nothing held it gives up after kCaptureMs.
 static const unsigned long long kCaptureMs = 8000;
 struct InputCapture
 {
-    bool active, armed;
+    bool active, started;                            // started: the snapshot of its first pass taken
+    bool told;                                       // the caller logged what was held at the start
     int action, slot;
     unsigned long long began;
     uint32_t peak;                                   // the pad buttons held together so far
-    float rest[kInputDevicesMost][kInputAxesMost];   // each axis where it rested when the capture armed
+    uint32_t padHeld;                                // the pad buttons held at the start and not let go since
+    uint8_t keyHeld[256];                            // the same for the keys,
+    uint8_t buttonHeld[kInputDevicesMost][kInputButtonsMost]; // each device's buttons
+    uint8_t povHeld[kInputDevicesMost][kInputPovsMost];       // and the directions each POV pointed in (1 << kPov..)
+    float rest[kInputDevicesMost][kInputAxesMost];   // each axis where it was at the start
 };
 enum { kCaptureWaiting, kCaptureBound, kCaptureGone };
 
@@ -337,21 +345,13 @@ inline void BindingCaptureBegin(InputCapture &c, int action, int slot, unsigned 
 // Whether a virtual key is the mouse's (its buttons): never bound, as the tab's button that begins a capture is clicked.
 inline bool KeyIsMouse(int vk) { return vk == VK_LBUTTON || vk == VK_RBUTTON || vk == VK_MBUTTON || vk == VK_XBUTTON1 || vk == VK_XBUTTON2; }
 
-// Whether nothing of the snapshot is down (keys but the mouse's, the pad, device buttons and POVs).
-inline bool InputAtRest(const InputSnapshot &s)
+// The directions a POV reading points in, as bits (1 << kPov..): a diagonal gives two.
+inline uint8_t PovDirections(uint32_t reading)
 {
-    if (s.pad) return false;
-    for (int vk = 1; vk < 256; vk++)
-        if (s.key[vk] && !KeyIsMouse(vk)) return false;
-    for (const InputDevice &d : s.device)
-    {
-        if (!d.present) continue;
-        for (int i = 0; i < kInputButtonsMost; i++)
-            if (d.button[i]) return false;
-        for (int i = 0; i < kInputPovsMost; i++)
-            if (d.pov[i] <= 36000) return false;
-    }
-    return true;
+    uint8_t bits = 0;
+    for (int dir = 0; dir < 4; dir++)
+        if (PovPoints(reading, dir)) bits |= (uint8_t)(1 << dir);
+    return bits;
 }
 
 // One pass of a capture: kCaptureBound with the binding in out, kCaptureGone when cancelled or given up (the old binding
@@ -363,18 +363,34 @@ inline int BindingCaptureStep(InputCapture &c, const InputSnapshot &s, unsigned 
     auto done = [&](int how) { c.active = false; return how; };
     if (s.key[VK_ESCAPE]) return done(kCaptureGone);
     if (!c.peak && now - c.began > kCaptureMs) return done(kCaptureGone);
-    if (!c.armed)
+    if (!c.started)
     {
-        if (!InputAtRest(s)) return kCaptureWaiting;
-        c.armed = true;
+        c.started = true;
+        c.padHeld = s.pad;
+        for (int vk = 1; vk < 256; vk++) c.keyHeld[vk] = s.key[vk] && !KeyIsMouse(vk);
         for (int d = 0; d < kInputDevicesMost; d++)
-            for (int a = 0; a < kInputAxesMost; a++) c.rest[d][a] = s.device[d].axis[a];
+        {
+            const InputDevice &dev = s.device[d];
+            for (int i = 0; i < kInputButtonsMost; i++) c.buttonHeld[d][i] = dev.present && dev.button[i];
+            for (int i = 0; i < kInputPovsMost; i++) c.povHeld[d][i] = dev.present ? PovDirections(dev.pov[i]) : 0;
+            for (int a = 0; a < kInputAxesMost; a++) c.rest[d][a] = dev.axis[a];
+        }
         return kCaptureWaiting;
     }
-    // the pad: its buttons held together, bound once they are let go
-    if (s.pad)
+    // what was held at the start stays left alone only while it is still held
+    c.padHeld &= s.pad;
+    for (int vk = 1; vk < 256; vk++) c.keyHeld[vk] = c.keyHeld[vk] && s.key[vk];
+    for (int d = 0; d < kInputDevicesMost; d++)
     {
-        c.peak |= s.pad;
+        const InputDevice &dev = s.device[d];
+        for (int i = 0; i < kInputButtonsMost; i++) c.buttonHeld[d][i] = c.buttonHeld[d][i] && dev.present && dev.button[i];
+        for (int i = 0; i < kInputPovsMost; i++) c.povHeld[d][i] &= dev.present ? PovDirections(dev.pov[i]) : 0;
+    }
+    // the pad: its buttons held together, bound once they are let go (those held from the start are not among them)
+    const uint32_t pad = s.pad & ~c.padHeld;
+    if (pad)
+    {
+        c.peak |= pad;
         return kCaptureWaiting;
     }
     if (c.peak)
@@ -384,7 +400,7 @@ inline int BindingCaptureStep(InputCapture &c, const InputSnapshot &s, unsigned 
         return done(kCaptureBound);
     }
     for (int vk = 1; vk < 256; vk++)
-        if (s.key[vk] && !KeyIsMouse(vk))
+        if (s.key[vk] && !KeyIsMouse(vk) && !c.keyHeld[vk])
         {
             out.kind = kBindKey;
             out.code = (uint32_t)vk;
@@ -396,7 +412,7 @@ inline int BindingCaptureStep(InputCapture &c, const InputSnapshot &s, unsigned 
         const InputDevice &dev = s.device[d];
         if (!dev.present) continue;
         for (int i = 0; i < kInputButtonsMost; i++)
-            if (dev.button[i])
+            if (dev.button[i] && !c.buttonHeld[d][i])
             {
                 out.kind = kBindButton;
                 out.device = d + 1;
@@ -405,7 +421,7 @@ inline int BindingCaptureStep(InputCapture &c, const InputSnapshot &s, unsigned 
             }
         for (int i = 0; i < kInputPovsMost; i++)
             for (int dir = 0; dir < 4; dir++)
-                if (PovPoints(dev.pov[i], dir))
+                if (PovPoints(dev.pov[i], dir) && !(c.povHeld[d][i] & (1 << dir)))
                 {
                     out.kind = kBindPov;
                     out.device = d + 1;
@@ -430,4 +446,45 @@ inline int BindingCaptureStep(InputCapture &c, const InputSnapshot &s, unsigned 
     if (out.kind == kBindAxis) return done(kCaptureBound);
     out = Binding{};
     return kCaptureWaiting;
+}
+
+// What the capture's start snapshot found held and leaves alone, for the log: "Pad LB, Wheel 1 Button 7, Wheel 2 POV 1
+// pointing at 0 degrees". s: the snapshot of its first pass (the POVs' readings). False when nothing was held. A name
+// that does not fit is left out.
+inline bool BindingCaptureHeld(const InputCapture &c, const InputSnapshot &s, char *out, size_t size)
+{
+    out[0] = 0;
+    auto add = [&](const char *part) {
+        if (strlen(out) + strlen(part) + 3 > size) return;
+        if (out[0]) strcat_s(out, size, ", ");
+        strcat_s(out, size, part);
+    };
+    char part[64];
+    if (c.padHeld)
+    {
+        BindingText(Binding{ kBindPad, 0, c.padHeld, 0, false }, part, sizeof part);
+        add(part);
+    }
+    for (int vk = 1; vk < 256; vk++)
+        if (c.keyHeld[vk])
+        {
+            BindingText(Binding{ kBindKey, 0, (uint32_t)vk, 0, false }, part, sizeof part);
+            add(part);
+        }
+    for (int d = 0; d < kInputDevicesMost; d++)
+    {
+        for (int i = 0; i < kInputButtonsMost; i++)
+            if (c.buttonHeld[d][i])
+            {
+                BindingText(Binding{ kBindButton, d + 1, (uint32_t)(i + 1), 0, false }, part, sizeof part);
+                add(part);
+            }
+        for (int i = 0; i < kInputPovsMost; i++)
+            if (c.povHeld[d][i])
+            {
+                sprintf_s(part, "Wheel %d POV %d pointing at %u degrees", d + 1, i + 1, s.device[d].pov[i] / 100);
+                add(part);
+            }
+    }
+    return out[0] != 0;
 }

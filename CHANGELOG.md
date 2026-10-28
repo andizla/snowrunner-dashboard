@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- A binding's capture in the tab binds the first thing that changes. A control already held or a hat already pointing when you click is left alone until it is let go, and `Gauges.log` names it. Two players could bind nothing in the tab, and only Escape worked: the capture waited for every control to be at rest, and a controller reporting a hat or a switch as pressed kept it waiting.
 - With `Powertrain=1` the automatic's shift up out of first (and out of the gear it sets off in) goes by the wheels as they turn, spinning or not. A tester's log of 27 October: a ZIL-157 on dirt sat in first for 10 to 40 seconds with its wheels spinning near the gear's top, since the shift up went by the ground speed, and the game's pull falls by the wheel speed. From the second gear up a shift up goes by the ground as before. A truck stuck where it stands, under 0.3 of its start gear's top over the ground, keeps the ground's rule, so it does not shift up and back.
 
 ## [0.17.1]

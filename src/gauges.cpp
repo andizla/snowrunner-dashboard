@@ -3094,6 +3094,15 @@ static DWORD WINAPI Run(void *)
             {
                 Binding caught = {};
                 const int step = BindingCaptureStep(bindCapture, seen, bindNow, caught);
+                // once a capture, what its start found held (a controller reporting a hat or a switch as pressed, two
+                // players' reports): left alone, and said so the next report shows it
+                if (bindCapture.started && !bindCapture.told)
+                {
+                    bindCapture.told = true;
+                    char held[512];
+                    if (BindingCaptureHeld(bindCapture, seen, held, sizeof held))
+                        Log(L"gearbox: the capture for %S: held at the start and left alone until let go: %S", kActionNames[bindCapture.action], held);
+                }
                 const char *clash = step == kCaptureBound ? BindingClash(caught, NgMenuKeyFromIni(), s.toggleKey, padMask) : nullptr;
                 if (clash)
                 {
