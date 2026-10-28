@@ -2399,14 +2399,20 @@ inline void ClutchProbeText(const ClutchModel &m, float travel, char *out, size_
 //     the converter's speed ratio at idle reaches the coupling point, which it does at 0.87 of the gear's idle speed
 //     (the wheels at idle over the red zone of the gear's top). The torque factor doubles it at the stall with Powertrain=1;
 //   - in a gear picked by hand (the game's own manual gears, or the mod's own gearbox in a position of the player's):
-//     an idle governor, kIdleShare while the gearbox's input is kGovernorBand of idle to the red zone or more under
-//     idle, falling in a line to nothing at idle, times the clutch's grip. In a gear too tall to pull at idle the
-//     clutch model's lug and stall rules take over;
+//     an idle governor, its most at a standstill falling in a line to nothing at the gear's idle speed, times the
+//     clutch's grip. The game multiplies the throttle by the gear's torque, so the most goes by the gear: kIdleShare
+//     times the gear's top over the first gear's without the low range, held to kIdleShare, which keeps the wheels'
+//     push about the same in the low range. Its rise is paced (CreepStep), as the game's pull answers a change about a
+//     second late: the governor at once and whole overshot the idle speed in the low range and cycled (a drive, 28
+//     October). Stuck in a gear picked by hand the engine stalls (CreepStep);
 //   - both less as the pedal goes down (the hook takes the larger of the pedal's throttle and the share, so a light foot
 //     never drops the creep); nothing with the engine off or starting, in neutral, on the brake or the handbrake.
 static const float kCreepShare = 0.15f; // the throttle through the converter at a standstill: a first figure, for the test build's logs to set
-static const float kIdleShare = 0.15f;  // the idle governor's most in a gear picked by hand
+static const float kIdleShare = 0.15f;  // the idle governor's most in a gear picked by hand, at a standstill in first
 static const float kCreepBrake = 0.02f; // a brake past this stands the truck
+static const float kIdleRise = 0.3f;    // the governor's share rises at most this much a second; it falls at once
+static const float kIdleLead = 0.6f;    // seconds ahead the governor looks at the wheels rising, as the game's pull answers late
+static const float kIdleRateLag = 0.2f; // seconds the wheels' rise is smoothed over for it
 
 // What the creep went by, for the probe.
 struct CreepCase
@@ -2418,8 +2424,9 @@ struct CreepCase
 };
 
 // The drive throttle the truck gets at idle, 0 to 1. converter: the truck drives through the converter; grip: the
-// clutch's grip, 0 to 1 (1 where there is no clutch of the mod's).
-inline float CreepShare(const TruckRaw &t, const GaugeScale &k, bool converter, float grip, CreepCase *out = nullptr)
+// clutch's grip, 0 to 1 (1 where there is no clutch of the mod's); ahead: rad/s the governor adds to the wheels'
+// speed, where they will be by the time the game answers (CreepStep).
+inline float CreepShare(const TruckRaw &t, const GaugeScale &k, bool converter, float grip, CreepCase *out = nullptr, float ahead = 0.0f)
 {
     CreepCase c = { converter, 0.0f, 0.0f, converter ? 0.0f : grip };
     if (out) *out = c;
@@ -2437,10 +2444,98 @@ inline float CreepShare(const TruckRaw &t, const GaugeScale &k, bool converter, 
         c.ratio = c.input / rpm;
         share = kCreepShare * (1.0f - SettingsRange(c.ratio / kCouplingPoint, 0.0f, 1.0f));
     }
-    else share = kIdleShare * SettingsRange((k.idle - c.input) / (range * kGovernorBand), 0.0f, 1.0f) * SettingsRange(grip, 0.0f, 1.0f);
+    else
+    {
+        // the first gear's top without the low range's share (TruckGearTop holds the first gear to it)
+        float first = TruckGearFormulaTop(t, 1);
+        if (TruckTopGear(t) >= 1 && t.gearTop[1] > 0.0f && isfinite(t.gearTop[1])) first = t.gearTop[1];
+        const float most = kIdleShare * (first > 0.0f ? SettingsRange(top / first, 0.0f, 1.0f) : 1.0f);
+        share = most * SettingsRange(1.0f - (spin + fmaxf(ahead, 0.0f)) / c.idleSpin, 0.0f, 1.0f) * SettingsRange(grip, 0.0f, 1.0f);
+    }
     if (out) *out = c;
     share *= 1.0f - TruckPedal(t);
     return isfinite(share) ? SettingsRange(share, 0.0f, 1.0f) : 0.0f;
+}
+
+// A stuck truck in a gear picked by hand stalls, as a lugged engine dies in about a second (the author's drive, 28
+// October: a V6 in third against mud got the governor's share for 36 s with the game's pull at nothing). The grace
+// starts once the game's pull (action + 0xB4) has stopped rising, by no more than kPullBuilt of itself over
+// kPullWindow, so a slow truck pulling away is not stalled (a Zetros took 7 s to reach a quarter of the idle speed,
+// its pull rising all the while). From then on, with the wheels under kCreepStuck of the gear's idle speed and not
+// gaining kCreepGain of it over the window (a heavy truck on firm ground is still speeding up from rest), for
+// kCreepGrace, the engine stalls the game's way (gauges.cpp ramps the stall seconds, as RequireClutch's stall). Only
+// while the governor drives with the clutch let up: none through the converter, with the clutch held, on the brake.
+static const float kPullWindow = 0.5f, kPullBuilt = 0.03f;
+static const float kCreepStuck = 0.25f, kCreepGrace = 1.0f, kCreepGain = 0.03f;
+static const float kStallCreepOff = 3.0f; // seconds the creep stays off after its stall when the engine does not die
+static const float kGripUp = 0.99f;       // the clutch's grip from which it is let up
+
+struct CreepModel
+{
+    float share;     // the share handed to the hook on the last pass, paced on the way up
+    float spinWas;   // the driven wheels' speed on the last pass, below 0 none yet
+    float rate;      // how fast they rise, rad/s a second, smoothed over kIdleRateLag
+    float pullRef;   // the game's pull at the start of the window
+    float spinRef;   // the driven wheels' speed at the start of the window
+    float window;    // seconds into the window
+    bool built;      // the game's pull rose no more than kPullBuilt over the last window
+    bool gaining;    // the wheels gained kCreepGain of the idle speed over the last window
+    float stuck;     // seconds stuck since the pull had built
+    bool stalled;    // the creep stalled the engine, and is off until it is off
+    float stalledFor;
+};
+
+// One pass of dt seconds: the share to hand the hook, the governor's rise paced by kIdleRise, and the governor going
+// by where the wheels will be kIdleLead ahead while they rise: on soft ground they spin up freely past the idle speed
+// within the game's lag and drop back. stall: set on the pass the engine is to stall.
+inline float CreepStep(CreepModel &m, const TruckRaw &t, const GaugeScale &k, bool converter, float grip, float dt, CreepCase *out, bool &stall)
+{
+    stall = false;
+    const float spin = TruckDrivenSpin(t);
+    if (dt > 0.0f && isfinite(spin))
+    {
+        if (m.spinWas > 0.0f || m.rate != 0.0f) m.rate += ((spin - m.spinWas) / dt - m.rate) * (1.0f - expf(-dt / kIdleRateLag));
+        m.spinWas = spin;
+    }
+    CreepCase c;
+    const float target = CreepShare(t, k, converter, grip, &c, m.rate * kIdleLead);
+    if (out) *out = c;
+    if (m.stalled)
+    {
+        m.stalledFor += dt;
+        if (!TruckEngineOn(t) || m.stalledFor >= kStallCreepOff) m.stalled = false;
+        m.share = 0.0f;
+        return 0.0f;
+    }
+    m.share = converter || target <= m.share ? target : fminf(target, m.share + kIdleRise * dt);
+    const bool governing = !converter && target > 0.0f && grip >= kGripUp;
+    if (!governing)
+    {
+        m.window = m.stuck = 0.0f;
+        m.built = m.gaining = false;
+        m.pullRef = t.actionB4;
+        m.spinRef = spin;
+        return m.share;
+    }
+    m.window += dt;
+    if (m.window >= kPullWindow)
+    {
+        m.built = !(t.actionB4 > m.pullRef * (1.0f + kPullBuilt) + 0.0005f);
+        m.gaining = spin > m.spinRef + kCreepGain * c.idleSpin;
+        m.pullRef = t.actionB4;
+        m.spinRef = spin;
+        m.window = 0.0f;
+    }
+    const bool stuckNow = m.built && !m.gaining && spin < kCreepStuck * c.idleSpin;
+    m.stuck = stuckNow ? m.stuck + dt : 0.0f;
+    if (m.stuck >= kCreepGrace)
+    {
+        stall = true;
+        m = CreepModel{};
+        m.stalled = true;
+        return 0.0f;
+    }
+    return m.share;
 }
 
 // The creep in a line of text for the probe log: the share handed to the hook and what it went by, the hook's calls

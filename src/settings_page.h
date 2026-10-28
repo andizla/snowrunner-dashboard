@@ -655,7 +655,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     }
     PageLabel("Creep at idle", labelX);
     changed(ImGui::Checkbox("##creep", &s.creep));
-    PageTip("An idling truck in gear moves as a real one does, an automatic to walking pace, a manual at the gear's idle speed; hold the brake to stand.");
+    PageTip("An idling truck in gear moves as a real one does, an automatic to walking pace, a manual at about the gear's idle speed; hold the brake to stand. "
+            "Stuck in a gear picked by hand the engine stalls.");
     PageLabel("Pull test", labelX);
     const bool pullOn = view.pullTest == kViewPullArmed || view.pullTest == kViewPullRunning;
     if (ImGui::Button(pullOn ? "Cancel###pulltest" : "Test the engine's pull###pulltest", ImVec2(w, 0))) act |= pullOn ? kPagePullCancel : kPagePullTest;

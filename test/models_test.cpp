@@ -498,22 +498,27 @@ struct LoopTruck
     bool creep = false;   // the creep's share raises the game's throttle (CreepShare: the converter while the automatic drives, else the governor)
     float lowPull = 0.0f; // the game's pull at a standstill, as a share: its target is the throttle times (1 - D4 + D4 times its curve)
     float brakeDecel = 3.0f; // m/s² the brake floored takes off the truck
+    float pullLag = 0.0f; // seconds the game's pull (action + 0xB4) lags its target by, the engine's responsiveness; 0 at once
+    float clutchGrip = 1.0f; // the clutch's grip the creep goes by in a gear picked by hand
 };
 struct LoopState
 {
     float v = 0.0f, applied = 1.0f, at = 0.0f; // m/s, the factor as the game applies it, seconds
     float queue[64] = {};                        // the factors written, waiting out the dead time
     int head = 0;
-    TachModel tach;
-    BoostModel boost;
-    PowertrainModel power;
-    GearboxModel box;
-    TorqueHand hand;
+    TachModel tach = {};
+    BoostModel boost = {};
+    PowertrainModel power = {};
+    GearboxModel box = {};
+    TorqueHand hand = {};
     int gear = 1;        // the game's gear
     int shifts = 0;      // the game's gear changes
     bool paced = false;  // the last write was held back by the pace
     float brake = 0.0f;  // the brake held, 0 to 1 (the pedal then 0)
     float share = 0.0f;  // the creep's share on the last pass
+    CreepModel creep = {}; // the creep's pace and stall
+    float pull = 0.0f;   // the game's pull (action + 0xB4)
+    float stallAt = -1.0f; // seconds into the drive the creep stalled the engine, which is off from then on
 };
 
 // The lift as it was before c9c99ea: the roof fading from 0.8 of the gear's top, written at once.
@@ -528,8 +533,9 @@ static float LiftBefore(float curve, float limit, float pedal, float ratio, floa
 static void LoopStep(const LoopTruck &c, LoopState &s, const TorqueCurve &curve, float pedal, float dt, bool before)
 {
     TruckRaw t = c.t;
-    t.flags = 3;
+    t.flags = s.stallAt < 0.0f ? 3 : 0;
     t.automatic = 0;
+    t.actionB4 = s.pull;
     t.gear = t.gearEngaged = c.fixedGear ? c.fixedGear : s.gear;
     t.throttle = s.brake > 0.0f ? s.brake : -pedal;
     t.speed = s.v;
@@ -557,13 +563,18 @@ static void LoopStep(const LoopTruck &c, LoopState &s, const TorqueCurve &curve,
     const float arrived = s.queue[(s.head + 64 - delay) % 64];
     s.head = (s.head + 1) % 64;
     s.applied += (arrived - s.applied) * (1.0f - expf(-dt / c.lag));
-    const float top = TruckGearTop(t, t.gearEngaged), first = TruckGearTop(t, 1);
+    TruckRaw plain = t;
+    plain.powerFactor = 1.0f;
+    const float top = TruckGearTop(t, t.gearEngaged), first = TruckGearTop(plain, 1); // the low range pushes harder by its top
     const float share = top > 0.0f ? c.grip * s.v / (top * c.realTop) : 0.0f;
     // the hook: the game's throttle raised to the creep's share (the mod hands it on this pass, the game takes it on its steps)
-    s.share = c.creep ? CreepShare(t, c.k, driving, 1.0f) : 0.0f;
-    const float throttle = s.brake > 0.0f ? 0.0f : fmaxf(pedal, s.share);
-    const float pull = c.lowPull + (1.0f - c.lowPull) * GamePull(share);
-    const float pushNow = top > 0.0f ? c.push * throttle * pull * s.applied * first / top : 0.0f;
+    bool stalls = false;
+    s.share = c.creep ? CreepStep(s.creep, t, c.k, driving, c.clutchGrip, dt, nullptr, stalls) : 0.0f;
+    if (stalls) s.stallAt = s.at;
+    const float throttle = s.brake > 0.0f || !TruckEngineOn(t) ? 0.0f : fmaxf(pedal, s.share);
+    const float target = throttle * (c.lowPull + (1.0f - c.lowPull) * GamePull(share));
+    s.pull = c.pullLag > 0.0f ? s.pull + (target - s.pull) * (1.0f - expf(-dt / c.pullLag)) : target;
+    const float pushNow = top > 0.0f ? c.push * s.pull * s.applied * first / top : 0.0f;
     const float ground = c.grade + c.bumps * sinf(6.2831853f * s.at / c.bumpPeriod);
     const float braking = s.v > 0.0f ? c.brakeDecel * s.brake : 0.0f;
     s.v = fmaxf(0.0f, s.v + (pushNow - c.drag0 - c.drag2 * s.v * s.v - ground - braking) * dt);
@@ -3774,17 +3785,27 @@ int main(int argc, char **argv)
             const float convHalf = CreepShare(c, ck, true, 1.0f);
             Drive(c, 1, false, kCouplingPoint * idleAt + 0.001f, 0.0f);
             const float convCoupled = CreepShare(c, ck, true, 1.0f);
-            Drive(c, 1, false, (ck.idle - (ck.redline - ck.idle) * kGovernorBand) / ck.redline - 0.001f, 0.0f);
-            const float govBand = CreepShare(c, ck, false, 1.0f);
+            Drive(c, 1, false, 0.5f * idleAt, 0.0f);
+            const float govHalf = CreepShare(c, ck, false, 1.0f);
             Drive(c, 1, false, idleAt - 0.01f, 0.0f);
             const float govNear = CreepShare(c, ck, false, 1.0f);
             Drive(c, 1, false, idleAt, 0.0f);
             const float govIdle = CreepShare(c, ck, false, 1.0f);
+            // the low range: the governor's most by the first gear's top in it over the plain first's
+            TruckRaw plainFirst = c;
+            c.powerFactor = 0.2f;
+            Drive(c, 1, false, 0.0f, 0.0f);
+            const float govLow = CreepShare(c, ck, false, 1.0f), lowMost = kIdleShare * TruckGearTop(c, 1) / TruckGearTop(plainFirst, 1);
+            Drive(c, 2, false, 0.0f, 0.0f);
+            const float govSecond = CreepShare(c, ck, false, 1.0f);
+            c.powerFactor = 1.0f;
             Check(Near(convStand, kCreepShare, 1e-5f) && Near(govStand, kIdleShare, 1e-5f) && Near(govHalfGrip, 0.5f * kIdleShare, 1e-5f) && govPressed == 0.0f &&
                       Near(convHalfPedal, 0.5f * kCreepShare, 1e-5f) && convHalf > 0.2f * kCreepShare && convHalf < 0.8f * kCreepShare && convCoupled == 0.0f &&
-                      Near(govBand, kIdleShare, 1e-4f) && govNear > 0.0f && govNear < 0.5f * kIdleShare && govIdle == 0.0f,
-                  "creep: through the converter its share at a standstill fades to nothing at the coupling point, the governor's is whole a band under the gear's "
-                  "idle speed and nothing at it, by the clutch's grip; both less as the pedal goes down");
+                      Near(govHalf, 0.5f * kIdleShare, 1e-4f) && govNear > 0.0f && govNear < 0.1f * kIdleShare && govIdle == 0.0f && Near(govLow, lowMost, 1e-4f) &&
+                      govLow < 0.5f * kIdleShare && Near(govSecond, kIdleShare, 1e-5f),
+                  "creep: through the converter its share at a standstill fades to nothing at the coupling point; the governor's falls in a line from its most at a "
+                  "standstill to nothing at the gear's idle speed, by the clutch's grip, its most less in the low range by the gear's top, whole in first and up; "
+                  "both less as the pedal goes down");
             Drive(c, 1, false, 0.0f, 0.0f);
             c.throttle = 0.3f; // the brake
             const float braked = CreepShare(c, ck, true, 1.0f);
@@ -3842,10 +3863,107 @@ int main(int argc, char **argv)
                    "on the brake %.2f m/s; by hand %.2f to %.2f m/s, the needle %.0f rpm; with Creep off %.2f m/s\n",
                    held.vLo, held.vHi, idleMs, creepRpm, crawl.k.idle, stopV, handHeld.vLo, handHeld.vHi, hs.tach.rpm, ns.v);
             Check(held.vLo > 0.3f * idleMs && held.vHi < kCouplingPoint * idleMs && held.vHi - held.vLo < 0.02f && creepGear == 1.0f && Near(creepRpm, crawl.k.idle, 15.0f) &&
-                      stopV == 0.0f && stopShare == 0.0f && handHeld.vLo > 0.85f * idleMs && handHeld.vHi < idleMs && handHeld.vHi - handHeld.vLo < 0.02f &&
+                      stopV == 0.0f && stopShare == 0.0f && handHeld.vLo > 0.75f * idleMs && handHeld.vHi < idleMs && handHeld.vHi - handHeld.vLo < 0.02f &&
                       Near(hs.tach.rpm, crawl.k.idle, 15.0f) && ns.v == 0.0f,
                   "loop: a heavy truck in first at zero pedal creeps in A under the gear's idle speed and holds it, the needle at idle, stops on the brake; "
-                  "in first by hand it holds the gear's idle speed; with Creep off it stands");
+                  "in first by hand it holds a little under the gear's idle speed (the governor's line from a standstill to it); with Creep off it stands");
+
+            // the brief's part 1, kept as a guard: the hook never writes the pedal field, so creeping at a standstill in A
+            // (stuck: a grade nothing climbs) the needle stays at idle, the powertrain's pedal at 0 and nothing stalls; a
+            // light press reads as the press alone
+            LoopTruck wall = crawl;
+            wall.grade = 100.0f;
+            wall.pullLag = 0.5f;
+            LoopState as;
+            LoopDrive(wall, as, hc, 0.0f, 10.0f, false, false);
+            const float wallRpm = as.tach.rpm, wallPedal = as.power.pedal, wallShare = as.share;
+            LoopDrive(wall, as, hc, 0.1f, 3.0f, false, false);
+            printf("     creep, stuck in A: the share %.3f, the needle %.0f rpm, the powertrain's pedal %.2f; pressed to 0.1 it reads %.3f (shaped 0.1 is %.3f)\n", wallShare,
+                   wallRpm, wallPedal, as.power.pedal, ThrottleShape(0.1f));
+            Check(wallShare > 0.0f && Near(wallRpm, wall.k.idle, 1.0f) && wallPedal == 0.0f && Near(as.power.pedal, ThrottleShape(0.1f), 0.001f) && as.stallAt < 0.0f,
+                  "creep: stuck in A the needle stands at idle and the powertrain's pedal at 0, a press reads as the press alone, and the converter never stalls it");
+
+            // the governor in the low range, the game's pull half a second late (review 11's addendum to this brief): from
+            // a standstill it settles under the gear's idle speed, no overshoot past 1.3 times it and no cycle; again with
+            // the wheels free to spin, as in mud (ten times the push, little drag)
+            auto governed = [&](float push, float drag0, float &most, float &spanLate, float &settled) {
+                LoopTruck low = crawl;
+                low.fixedGear = 1;
+                low.t.powerFactor = 0.2f; // L-
+                low.push = push;
+                low.drag0 = drag0;
+                low.pullLag = 0.5f;
+                const float lowIdle = low.k.idle / low.k.redline * TruckGearTop(low.t, 1) / low.grip;
+                LoopState ls;
+                const LoopSpan early = LoopDrive(low, ls, hc, 0.0f, 20.0f, false);
+                const LoopSpan late = LoopDrive(low, ls, hc, 0.0f, 10.0f, false);
+                most = fmaxf(early.vHi, late.vHi) / lowIdle;
+                spanLate = (late.vHi - late.vLo) / lowIdle;
+                settled = ls.v / lowIdle;
+                return ls.stallAt < 0.0f;
+            };
+            float firmMost, firmSpan, firmAt, mudMost, mudSpan, mudAt;
+            const bool firmAlive = governed(8.0f, 0.1f, firmMost, firmSpan, firmAt), mudAlive = governed(80.0f, 0.02f, mudMost, mudSpan, mudAt);
+            printf("     creep, by hand in L-: on firm ground at most %.2f of the idle speed, %.2f at the end, the last 10 s within %.3f; the wheels free to spin: at most "
+                   "%.2f, %.2f at the end, within %.3f\n", firmMost, firmAt, firmSpan, mudMost, mudAt, mudSpan);
+            Check(firmAlive && mudAlive && firmMost < 1.3f && mudMost < 1.3f && firmSpan < 0.05f && mudSpan < 0.05f && firmAt > 0.5f && mudAt > 0.9f && firmAt < 1.0f &&
+                      mudAt < 1.02f,
+                  "loop: the governor in the low range settles under the gear's idle speed with the game's pull half a second late, no overshoot past 1.3 times "
+                  "it and no cycle, on firm ground and with the wheels free to spin");
+
+            // stuck in first by hand the engine stalls a second after the game's pull has built; not with the clutch held,
+            // not in A (above), not at the gear's idle speed (byHand above), and not for a slow truck pulling away (a Zetros:
+            // its pull three seconds late)
+            LoopTruck stuckHand = crawl;
+            stuckHand.fixedGear = 1;
+            stuckHand.grade = 100.0f;
+            stuckHand.pullLag = 0.5f;
+            LoopState ss;
+            float builtAt = -1.0f;
+            for (float at = 0.0f; at < 10.0f && ss.stallAt < 0.0f; at += kDt)
+            {
+                LoopStep(stuckHand, ss, hc, 0.0f, kDt, false);
+                if (builtAt < 0.0f && ss.pull >= 0.95f * kIdleShare * stuckHand.lowPull) builtAt = ss.at;
+            }
+            LoopTruck heldClutch = stuckHand;
+            heldClutch.clutchGrip = 0.0f;
+            LoopState cl;
+            LoopDrive(heldClutch, cl, hc, 0.0f, 10.0f, false, false);
+            LoopTruck zetros = crawl;
+            zetros.fixedGear = 1;
+            zetros.pullLag = 3.0f;
+            LoopState zs;
+            LoopDrive(zetros, zs, hc, 0.0f, 20.0f, false, false);
+            printf("     creep, stuck in first by hand: the pull built at %.2f s, the engine stalled at %.2f s; with the clutch held no stall (%.2f); a slow truck "
+                   "pulling away at %.2f m/s after 20 s, no stall (%.2f); at the gear's idle speed none (%.2f)\n",
+                   builtAt, ss.stallAt, cl.stallAt, zs.v, zs.stallAt, hs.stallAt);
+            Check(builtAt > 0.0f && ss.stallAt > builtAt + 0.5f && ss.stallAt < builtAt + 2.0f && cl.stallAt < 0.0f && zs.stallAt < 0.0f && zs.v > 0.5f * idleMs &&
+                      hs.stallAt < 0.0f && as.stallAt < 0.0f,
+                  "creep: stuck in a gear picked by hand the engine stalls about a second after the game's pull has built; not with the clutch held, in A, "
+                  "at the gear's idle speed or for a slow truck pulling away");
+            // the stall in the model: once, the creep off until the engine is off
+            {
+                CreepModel cm = {};
+                TruckRaw st = Truck();
+                Drive(st, 1, false, 0.0f, 0.0f);
+                st.actionB4 = 0.01f;
+                bool stalled = false, again = false, any = false;
+                float after = 1.0f;
+                for (float at = 0.0f; at < 3.0f; at += kDt)
+                {
+                    bool now = false;
+                    const float sh = CreepStep(cm, st, ck, false, 1.0f, kDt, nullptr, now);
+                    if (now && stalled) again = true;
+                    if (now) stalled = true;
+                    if (stalled && !now) after = fminf(after, sh);
+                }
+                st.flags = 0;
+                CreepStep(cm, st, ck, false, 1.0f, kDt, nullptr, any);
+                st.flags = 3;
+                CreepStep(cm, st, ck, false, 1.0f, kDt, nullptr, any);
+                Check(stalled && !again && after == 0.0f && !cm.stalled && cm.share > 0.0f,
+                      "creep: its stall comes once and the creep is off until the engine is off; running again it creeps");
+            }
         }
 
         // a truck's scales and the mod's engine for the unit paths below

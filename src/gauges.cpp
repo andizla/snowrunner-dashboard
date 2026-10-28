@@ -661,7 +661,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; shows, less with cold oil and without boost, and doubled by the converter at its stall (Gearbox=1), in place\n"
                         L"; of the game's own, which falls away toward each gear's top. The mod writes the game's torque factor for it.\n"
                         L"; EngineShare: how much of the mod's engine the game gets, 0 to 100 percent (50: half way between the two).\n"
-                        L"; Creep=1: an idling truck in gear moves, an automatic to walking pace, a manual at the gear's idle speed; the brake holds it.\n"
+                        L"; Creep=1: an idling truck in gear moves, an automatic to walking pace, a manual at about the gear's idle speed; the brake holds it. Stuck by hand it stalls.\n"
                         L"; Gauges\\gearboxes\\<name>.ini GearHold: seconds a gearbox holds each gear going up with Powertrain=1, 1 to 3 (the tab).\n"
                         L"; Top1, Top2 ...: each gear's top in rad/s, learned where the game's pull reaches nothing floored (2a + 5 until then).\n"
                         L"; Gauges\\engines\\<name>.ini: PeakTorqueRpm, Aspiration (0 turbo, 1 naturally aspirated), TorqueCurve (the tab's Engine).\n"
@@ -2028,6 +2028,8 @@ struct TruckWatch
     float creepFor;             // seconds until its next line in the log
     int creepLines;             // its lines since it began
     long creepHits, creepCalls; // the hook's counts at its last line
+    CreepModel creep;           // the creep's paced share and its stall (CreepStep)
+    bool creepStall;            // the creep stalled a stuck truck on the last pass: handed to the game's stall seconds on this one
     AirModel air;               // and the air in its brakes' tanks
     TiresReader tiresReader;    // the tire inflation mod's published state (tires.h)
     TiresView tires;            // as read on this pass
@@ -2352,6 +2354,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         TorqueGive(m, w.refs, false, TorqueHandStep(w.hand, false, 0, 0, 0.0f, 1.0f));
         CreepGive(0, 0.0f);
         w.creeping = false;
+        w.creep = CreepModel{};
+        w.creepStall = false;
         return false;
     }
     // which truck this is (TruckWhoStep). While another truck than the one taken is read, the models wait: on the
@@ -2405,6 +2409,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     {
         CreepGive(0, 0.0f);
         w.creeping = false;
+        w.creep = CreepModel{};
+        w.creepStall = false;
     }
     if (driving && !held && same)
     {
@@ -2714,13 +2720,14 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             shiftAsk = box.setGear;
             shiftTo = box.gear;
         }
-        // the game's stall seconds: a stall the gearbox ordered, or the clutch model's on a pedal's axis (a dropped clutch,
-        // review 11), ramped in over kStallRamp, and while the automatic clutch lugs the engine at speed in too high a
-        // gear, raised by dt each pass and cleared when it recovers, so the game shows its own "engine stalling" notice
-        // and kills the engine by its rule (the user's hill test, 27 October)
+        // the game's stall seconds: a stall the gearbox ordered, the clutch model's on a pedal's axis (a dropped clutch,
+        // review 11) or the creep's with the truck stuck in a gear picked by hand (CreepStep, at every level of Gearbox),
+        // ramped in over kStallRamp, and while the automatic clutch lugs the engine at speed in too high a gear, raised by
+        // dt each pass and cleared when it recovers, so the game shows its own "engine stalling" notice and kills the
+        // engine by its rule (the user's hill test, 27 October)
         {
-            stallOrdered = stallOrdered || w.clutchStall;
-            w.clutchStall = false;
+            stallOrdered = stallOrdered || w.clutchStall || w.creepStall;
+            w.clutchStall = w.creepStall = false;
             const float stallTo = StallStep(w.stallWrite, stallOrdered, w.clutch.lugging, TruckEngineOn(raw), dt);
             if (stallTo >= 0.0f) m.put(w.refs.vehicle + 0x11C, stallTo);
             if (w.clutch.lugging != w.lugSaid)
@@ -2794,15 +2801,25 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         // the creep (review 11's addendum): an idling truck in gear moves, its drive throttle raised for this truck alone
         // by the hook on the game's wheels' drive. Through the converter while the mod's automatic drives in A or the
         // game's automatic is up; the idle governor in a position of the mod's own gearbox, by its clutch's grip, and in
-        // a manual gear of the game's, where the mod has no clutch. Nothing while the pull test runs. Its first line in
-        // the log a quarter second after it begins and one as it ends; with the probe on, one each quarter second
+        // a manual gear of the game's, where the mod has no clutch; stuck there it stalls the engine, handed to the stall
+        // seconds on the next pass. Nothing while the pull test runs. Its first line in the log a quarter second after it
+        // begins and one as it ends; with the probe on, one each quarter second
         {
             const bool manual = GearboxManual(w);
             const bool converter = !manual && (w.take.driving || raw.automatic != 0);
             const float grip = manual ? (w.clutch.dead ? 0.0f : w.clutch.grip) : 1.0f;
-            CreepCase creepCase;
-            const float share = s.creep && CreepHooked() && !testing ? CreepShare(raw, scale, converter, grip, &creepCase) : 0.0f;
+            CreepCase creepCase = {};
+            bool stalls = false;
+            const bool on = s.creep && CreepHooked() && !testing;
+            if (!on) w.creep = CreepModel{};
+            const float share = on ? CreepStep(w.creep, raw, scale, converter, grip, dt, &creepCase, stalls) : 0.0f;
             CreepGive(share > 0.0f ? w.refs.action : 0, share);
+            if (stalls)
+            {
+                w.creepStall = true;
+                Log(L"creep: the engine stalled, stuck in gear %d (the wheels %.2f of the idle speed's %.2f rad/s, the game's pull %.3f)", raw.gearEngaged,
+                    TruckDrivenSpin(raw), creepCase.idleSpin, raw.actionB4);
+            }
             const bool creeping = share > 0.0f;
             long hits = 0, calls = 0;
             CreepCounts(hits, calls);
