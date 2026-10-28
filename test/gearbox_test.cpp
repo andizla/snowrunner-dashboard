@@ -204,15 +204,21 @@ int main()
         ask(kAskA, 0, stop);
         const bool isA = m.pos == kPosA;
         const GearboxOptions clutchOn = { true, false, false, false }, heldOn = { false, true, false, false };
+        // crawling, a gear forced in without the clutch stalls; at speed it stays out (review 11)
+        const GearboxPosOrders grind = ask(kAskGear, 2, clutchOn);
+        const bool staysOut = !grind.stall && m.pos == kPosN && t.gear == 0 && grind.why[0];
+        t.speed = 0.5f * kGrindSpeed;
         const GearboxPosOrders stalled = ask(kAskGear, 2, clutchOn);
-        const bool stalls = stalled.stall && t.gear == 2;
+        const bool stalls = stalled.stall && t.gear == 2 && staysOut;
+        t.speed = 5.0f;
         ask(kAskGear, 3, heldOn);
         Pass(m, heldOn, None(), t);
         const bool held = m.pos == kPosGear && t.gear == 3;
         GearboxActions none = {};
         GearboxActionsAsk(none, GearboxAsk{ kAskNone, 0 }, t.top);
         Check(r && n && g4 && h && past && low && isA && stalls && held && !none.shifter,
-              "gearbox: the game's shifter's request picks R, N, a gear, H (a gear past the top too), L and A as their keys do; under RequireClutch it stalls; "
+              "gearbox: the game's shifter's request picks R, N, a gear, H (a gear past the top too), L and A as their keys do; under RequireClutch it stalls "
+              "crawling and stays out at speed; "
               "a gear it picked stays under RequireGearHeld");
     }
     // the doors' calls as one request: the first names it, the later ones of the same shift repeat it, the power factor
@@ -284,11 +290,17 @@ int main()
         Pass(m, held, None(), t);
         Check(in3 && still3 && t.gear == 0 && m.pos == kPosN, "gearbox: RequireGearHeld keeps a gear while its key is held and goes to neutral when it is let go");
     }
-    // RequireClutch: a shift without the clutch shifts and stalls once; into N no stall; with the clutch none; an engine
-    // already dying none
+    // RequireClutch, crawling: a shift without the clutch shifts and stalls once; into N no stall; with the clutch none; an
+    // engine already dying none. At speed (review 11) the gear grinds and stays out, neutral, with no stall
     {
+        GearboxPosModel atSpeed = {};
+        GearboxTruck ts = Truck(2);
+        GearboxPosStep(atSpeed, clutch, None(), ts, 1);
+        const GearboxPosOrders grind = Pass(atSpeed, clutch, Up(), ts);
+        const bool out = !grind.stall && atSpeed.pos == kPosN && ts.gear == 0 && atSpeed.stalls == 0 && grind.why[0];
         GearboxPosModel m = {};
         GearboxTruck t = Truck(2);
+        t.speed = 0.5f * kGrindSpeed;
         GearboxPosStep(m, clutch, None(), t, 1);
         const GearboxPosOrders noClutch = Pass(m, clutch, Up(), t);
         const bool stalled = noClutch.stall && noClutch.setGear && t.gear == 3 && m.stalls == 1 && noClutch.why[0];
@@ -301,8 +313,9 @@ int main()
         const GearboxPosOrders clean = Pass(m, clutch, withClutch, t);
         t.stall = 0.5f;
         const GearboxPosOrders dying = Pass(m, clutch, Up(), t);
-        Check(stalled && !again.stall && !toN.stall && t.gear >= 1 && !clean.stall && !dying.stall && m.stalls == 1,
-              "gearbox: RequireClutch stalls the engine once for a shift into a gear without the clutch, not into neutral, not with the clutch, not when it is already dying");
+        Check(out && stalled && !again.stall && !toN.stall && t.gear >= 1 && !clean.stall && !dying.stall && m.stalls == 1,
+              "gearbox: RequireClutch, crawling, stalls the engine once for a shift into a gear without the clutch, not into neutral, not with the clutch, not "
+              "when it is already dying; at speed the gear stays out instead");
     }
     // A: the automatic's gear set through; a gear key ends A; A sets off from N only with the pedal down
     {

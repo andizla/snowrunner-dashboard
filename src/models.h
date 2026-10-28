@@ -2181,12 +2181,16 @@ inline bool ClutchStep(ClutchModel &m, const TruckRaw &t, const GaugeScale &k, c
         }
         return false;
     }
-    // the governor: the speed the pedal asks for, and the torque to hold it, up to the curve's
+    // the governors, as a road truck's min-max one (review 11): the pedal is a torque, its share of the curve's, between
+    // the idle governor, which gives what holds idle, and the high-speed one, which is the curve's own fall from the red
+    // zone to the tachometer's top. want: the speed the pedal would ask of an all-speed governor, which the clutch that
+    // works by itself still rides to
     const float want = k.idle + range * kTachFree * SettingsRange(pedal, 0.0f, 1.0f);
     const float speed = m.rpm / k.redline;
     const float full = TorqueAt(c, speed, k.max / k.redline) * (factor > 0.0f ? factor : 1.0f);
     const float drag = kEngineDrag * speed;
-    m.torque = SettingsRange((want - m.rpm) / (range * kGovernorBand), 0.0f, full);
+    const float idleHold = SettingsRange((k.idle - m.rpm) / (range * kGovernorBand), 0.0f, full);
+    m.torque = fmaxf(idleHold, full * SettingsRange(pedal, 0.0f, 1.0f));
     const float hold = m.grip * kClutchHold;
     const float rate = range / kEngineRevTime; // rpm each second for each share of the most torque
     // the clutch that works by itself rides as a driver's foot would: it lets go when the gearbox's input falls under
@@ -2267,11 +2271,11 @@ inline void ClutchProbeText(const ClutchModel &m, float travel, char *out, size_
 {
     if (m.dead)
     {
-        sprintf_s(out, size, "clutch (not handed to the game yet): the engine stalled, %s, %d stalls",
+        sprintf_s(out, size, "clutch (the needle's engine; a stall on a pedal is the game's): the engine stalled, %s, %d stalls",
                   m.stalled > 0.0f ? "resting" : "waiting for the clutch pressed or neutral to start again", m.stalls);
         return;
     }
-    sprintf_s(out, size, "clutch (not handed to the game yet): %s %.2f, grip %.2f, %s | engine %.0f rpm, gearbox %.0f rpm | torque %.2f, through the clutch %.2f | %d stalls",
+    sprintf_s(out, size, "clutch (the needle's engine; a stall on a pedal is the game's): %s %.2f, grip %.2f, %s | engine %.0f rpm, gearbox %.0f rpm | torque %.2f, through the clutch %.2f | %d stalls",
               m.automatic ? "works by itself, button" : "pedal", travel, m.grip, !m.connected ? "no gear in" : m.locked ? "locked" : m.grip > 0.0f ? "slipping" : "free",
               m.rpm, m.input, m.torque, m.carried, m.stalls);
 }

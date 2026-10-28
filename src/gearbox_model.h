@@ -72,6 +72,7 @@ inline float StallStep(StallWrite &w, bool ordered, bool lugging, bool engineOn,
 }
 static const float kPowerStep = 0.005f;   // a power factor this close to the one wanted is left as it is
 static const float kStandStill = 0.5f;    // m/s under which the truck stands, for the setting off in A
+static const float kGrindSpeed = 1.5f;    // m/s (about 5 km/h) from which a gear picked without the clutch stays out instead of stalling the engine
 static const float kSetOffPedal = 0.1f;   // the pedal over which a truck standing in N in A sets off in the first gear
 
 struct GearboxOptions
@@ -300,6 +301,15 @@ inline GearboxPosOrders GearboxPosStep(GearboxPosModel &m, const GearboxOptions 
     if (o.requireGearHeld && m.pos == kPosGear && a.gearHeld < 1 && !m.byShifter) m.pos = kPosN;
     r.moved = m.pos != was || (m.pos == kPosGear && m.gear != wasGear);
     if (r.moved) m.refusedSaid = false;
+    // with RequireClutch a gear picked without the clutch while the truck rolls at kGrindSpeed or more does not go in: it
+    // grinds and stays out, as a running truck's does unless the speeds match (review 11: it stalled the engine at any
+    // speed). Standing or crawling the gear is forced in and stalls the engine (below)
+    const bool clutchless = o.requireClutch && r.moved && m.pos != kPosN && m.pos != kPosA && !m.clutch && t.engineOn && !(t.stall > 0.0f);
+    if (clutchless && fabsf(t.speed) >= kGrindSpeed)
+    {
+        m.pos = kPosN;
+        r.why = "a shift without the clutch at speed: the gear grinds and stays out, neutral";
+    }
     // A or a gear picked from R while the truck still rolls back: neutral until it stands or rolls forward, so no
     // forward gear goes in against the rolling truck (the first drive put gear 1 in at 2.6 m/s backwards)
     const bool forward = m.pos == kPosA || m.pos == kPosGear;
@@ -326,9 +336,9 @@ inline GearboxPosOrders GearboxPosStep(GearboxPosModel &m, const GearboxOptions 
         r.power = power;
     }
     r.flagDown = t.automatic;
-    // a shift by the player into a gear without the clutch stalls the engine once, not into neutral, and not when the
-    // engine is already dying or off
-    if (o.requireClutch && r.moved && m.pos != kPosN && m.pos != kPosA && !m.clutch && t.engineOn && !(t.stall > 0.0f))
+    // a shift by the player into a gear without the clutch, standing or crawling, stalls the engine once, not into
+    // neutral, and not when the engine is already dying or off
+    if (clutchless && fabsf(t.speed) < kGrindSpeed)
     {
         r.stall = true;
         m.stalls++;

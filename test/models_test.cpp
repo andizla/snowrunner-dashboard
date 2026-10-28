@@ -2717,8 +2717,14 @@ int main(int argc, char **argv)
         wheels(0.0f);
         ClutchModel free = {};
         for (float at = 0.0f; at < 2.0f; at += kDt) ClutchStep(free, c, k, curve, 1.0f, 1.0f, 1.0f, false, kDt);
-        Check(!free.locked && free.stalls == 0 && Near(free.rpm, k.idle + range * kTachFree, range * 0.05f) && free.carried == 0.0f,
-              "clutch: pressed, a floored engine runs free up to the governor's speed in a gear with the truck standing");
+        // pressed, floored: the pedal is a torque (a road truck's min-max governor, review 11), so the free engine runs up
+        // past the red zone to where the curve's fall, the high-speed governor, meets its friction, short of the top
+        ClutchModel idling = {};
+        for (float at = 0.0f; at < 2.0f; at += kDt) ClutchStep(idling, c, k, curve, 1.0f, 0.0f, 1.0f, false, kDt);
+        Check(!free.locked && free.stalls == 0 && free.rpm > k.redline && free.rpm < k.max && free.carried == 0.0f && Near(idling.rpm, k.idle, range * 0.03f),
+              "clutch: pressed, a floored engine runs free to its high-speed governor, past the red zone and short of the top; with the pedal up the idle "
+              "governor holds idle");
+        (void)range;
         // let up at once at idle, the truck standing: the engine dies within a few tenths of a second
         ClutchModel dump = {};
         for (float at = 0.0f; at < 0.5f; at += kDt) ClutchStep(dump, c, k, curve, 1.0f, 0.0f, 1.0f, false, kDt);
@@ -2737,7 +2743,11 @@ int main(int argc, char **argv)
             input = fmaxf(0.0f, input + pull.carried * 2000.0f * kDt);
             if (at > 0.5f) dip = fminf(dip, pull.rpm);
         }
-        Check(pull.stalls == 0 && dip > k.idle * 0.75f && pull.locked && Near(pull.rpm, pull.input, 1.0f),
+        // with the min-max governor the third of the pedal is a torque, so the engine dips further than an all-speed one let
+        // it (0.71 of idle, from 0.75 and over): the idle governor's full torque under idle catches it short of the stall
+        printf("     clutch: a third of the pedal pulling away dips the engine to %.0f rpm (idle %.0f, the stall under %.0f) and locks at %.0f\n", dip, k.idle,
+               k.idle * kClutchStall, pull.rpm);
+        Check(pull.stalls == 0 && dip > k.idle * kClutchStall + 50.0f && dip < k.idle && pull.locked && Near(pull.rpm, pull.input, 1.0f),
               "clutch: let up slowly with a little pedal as the truck pulls away, the engine dips under its idle without stalling and the clutch locks");
         // the clutch's heat driven from ClutchStep's own states (review 10, D7), for a stock engine (Torque 195000): the
         // same start in first stays cold; floored in third, revved with the clutch pressed and then held in its bite (the

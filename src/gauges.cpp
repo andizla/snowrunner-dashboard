@@ -1961,6 +1961,7 @@ struct TruckWatch
     int gearboxDamageSeen;      // the gearbox's damage as read on the last pass, -1 not yet (a fall is a repair)
     StallWrite stallWrite;      // what the mod writes into the game's stall seconds (StallStep)
     bool lugSaid;               // the lugging was told in the log
+    bool clutchStall;           // the clutch model stalled the engine on this pass, the clutch on a pedal's axis: handed to the game's stall seconds
     bool floorPan;              // the engine box's line after its film title's damage landed (EngineWarn)
     bool lockPress[kLocks];     // DiffLock and Awd pressed on this pass (at every level of Gearbox)
     LocksWatch locks;           // what the mod's keys wrote to the locks (LocksStep)
@@ -2359,8 +2360,11 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         }
         if (!w.modelAt || now - w.modelAt >= 1000) w.tilt = TiltModel{};
         const float dt = w.modelAt && now - w.modelAt < 1000 ? SettingsRange((now - w.modelAt) / 1000.0f, 0.001f, 0.2f) : 0.05f;
-        // the needle: while the mod's gearbox is in A, its converter's engine speed (of the last pass)
+        // the needle: while the mod's gearbox is in A, its converter's engine speed (of the last pass); in a position of
+        // its own, the clutch model's, so the needle and the torque curve the game gets go by the one engine the clutch
+        // sets (review 11: they went by the wheels' share and a pedal lift that worked with the clutch pressed too)
         if (w.take.driving && !GearboxManual(w)) TachFollow(w.tach, raw, scale, w.gearbox.rpm, dt);
+        else if (w.take.driving && w.clutch.running) TachFollow(w.tach, raw, scale, w.clutch.rpm, dt);
         else TachStep(w.tach, raw, scale, dt);
         // the engine's torque curve: its own profile's (Gauges\\engines), else the class's; a naturally aspirated one
         // has no boost, no turbo sounds and no boost dial
@@ -2408,8 +2412,15 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             // a position of the player's own: the automatic's model stands down, and the engine runs behind the
             // gearbox's clutch; a clutch on an axis is the driver's, without one (a button, or none) it works by itself
             w.gearbox = GearboxModel{};
-            if (ClutchStep(w.clutch, raw, scale, curve, w.pos.travel, w.power.pedal, w.power.cold * w.power.boost, w.actions.clutchTravel < 0.0f, dt) && probe)
-                Log(L"clutch: the engine would have stalled, the clutch let up at %.0f rpm on the gearbox's input in gear %d", w.clutch.input, raw.gearEngaged);
+            // a stall with the clutch on a pedal's axis is the game's: handed to its stall seconds below, as the gearbox's
+            // own; a clutch on a button works by itself and never stalls the engine
+            const bool onAxis = w.actions.clutchTravel >= 0.0f;
+            if (ClutchStep(w.clutch, raw, scale, curve, w.pos.travel, w.power.pedal, w.power.cold * w.power.boost, !onAxis, dt))
+            {
+                w.clutchStall = onAxis;
+                Log(L"clutch: the engine stalled, the clutch let up at %.0f rpm on the gearbox's input in gear %d; the game's engine stalls with it", w.clutch.input,
+                    raw.gearEngaged);
+            }
         }
         else
         {
@@ -2615,10 +2626,13 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             shiftAsk = box.setGear;
             shiftTo = box.gear;
         }
-        // the game's stall seconds: a stall the gearbox ordered ramped in over kStallRamp, and while the automatic clutch
-        // lugs the engine at speed in too high a gear, raised by dt each pass and cleared when it recovers, so the game
-        // shows its own "engine stalling" notice and kills the engine by its rule (the user's hill test, 27 October)
+        // the game's stall seconds: a stall the gearbox ordered, or the clutch model's on a pedal's axis (a dropped clutch,
+        // review 11), ramped in over kStallRamp, and while the automatic clutch lugs the engine at speed in too high a
+        // gear, raised by dt each pass and cleared when it recovers, so the game shows its own "engine stalling" notice
+        // and kills the engine by its rule (the user's hill test, 27 October)
         {
+            stallOrdered = stallOrdered || w.clutchStall;
+            w.clutchStall = false;
             const float stallTo = StallStep(w.stallWrite, stallOrdered, w.clutch.lugging, TruckEngineOn(raw), dt);
             if (stallTo >= 0.0f) m.put(w.refs.vehicle + 0x11C, stallTo);
             if (w.clutch.lugging != w.lugSaid)
