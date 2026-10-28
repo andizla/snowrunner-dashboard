@@ -1104,15 +1104,21 @@ inline void PowertrainStep(PowertrainModel &m, const TruckRaw &t, const TorqueCu
 }
 
 // The powertrain in a line of text for the probe log. handed: the torque factor is written (Powertrain=1), written:
-// the last factor written, game: the game's own share.
-inline void PowertrainProbeText(const TruckRaw &t, const PowertrainModel &m, float rpm, bool handed, float written, float game, char *out, size_t size)
+// the last factor written, game: the game's own share; x, roof and heldBack the factor's own terms (review 11): the
+// wheels' share of the gear's top it went by (LiftShare; below 0 not given), the roof there (LiftRoof) and whether the
+// pace held this pass's rise back. The factor goes by the game's own pedal (the line's "pedal"); the power and the fuel
+// are the model's own, by the shaped pedal ("shaped"), which the game does not use. The fields up to "rpm" stay as
+// they are, for the tools that read the line.
+inline void PowertrainProbeText(const TruckRaw &t, const PowertrainModel &m, float rpm, bool handed, float written, float game, char *out, size_t size, float x = -1.0f,
+                                float roof = 0.0f, bool heldBack = false)
 {
-    char hand[96];
+    char hand[96], terms[128] = "";
     if (handed) sprintf_s(hand, "handed to the game: the torque factor %.2f, the game's own %.2f", written, game);
     else strcpy_s(hand, "not handed to the game");
-    sprintf_s(out, size, "powertrain (%s): pedal %.2f, shaped %.2f | torque %.2f of the most at %.0f rpm (curve %.2f, cold x%.2f, boost x%.2f) | "
-                         "power %.2f, fuel %.2f of floored at the red zone",
-              hand, TruckPedal(t), m.pedal, m.torque, rpm, m.curve, m.cold, m.boost, m.power, m.load);
+    if (x >= 0.0f) snprintf(terms, sizeof terms, " | the factor's terms: the game's pedal, the wheels at %.2f of the gear's top, the roof %.2f there, the rise %s", x, roof, heldBack ? "paced" : "free");
+    snprintf(out, size, "powertrain (%s): pedal %.2f, shaped %.2f | torque %.2f of the most at %.0f rpm (curve %.2f, cold x%.2f, boost x%.2f) | "
+                         "power %.2f, fuel %.2f of floored at the red zone (the model's own, by the shaped pedal)%s",
+              hand, TruckPedal(t), m.pedal, m.torque, rpm, m.curve, m.cold, m.boost, m.power, m.load, terms);
 }
 
 // ---- the automatic gearbox ----
@@ -1209,6 +1215,10 @@ struct GearboxModel
     int gear;          // the gear it would be in, 1 to the gearbox's top (TruckTopGear); 0 before it has one
     bool locked;       // the converter is locked up
     bool relock;       // the converter was locked when the last shift opened it: it locks again on the next pass over the lock point
+    float upAt, downAt; // for the probe (review 11): the points in force for the gear it is in, rpm on the gearbox's input,
+    float lockAt, unlockAt; // the converter's lock and unlock points,
+    int startGear;     // the gear it sets off in,
+    bool heldNow;      // and whether the gear's hold keeps it from shifting up on this pass
     float input;       // the gearbox's input speed in rpm: what the engine turns at with the converter locked
     float rpm;         // the engine speed
     float ratio;       // how much the converter multiplies the torque, 1 to kStallRatio
@@ -1293,7 +1303,9 @@ inline float GamePull(float x) { return isfinite(x) ? SettingsRange(fminf(kGameP
 // (the user's drive, 27 October: "the super acceleration bug"). The fade began at 0.8 until 28 October: over the last
 // fifth the push fell so steeply that a heavy truck held near its top gear's limit at part throttle overshot into the
 // dead zone, slowed, got the push back in one jump and surged, every two seconds (a tester's log: the factor swinging
-// 1.0 to 2.4, an HX 520 at 36 to 39 km/h). From 0.7 it falls about half as steeply, and a rise comes back at kLiftRise.
+// 1.0 to 2.4, an HX 520 at 36 to 39 km/h). From 0.7 the roof falls two thirds as steeply (the roof less 1 over 0.3 of
+// the top against 0.2), and the pull's own fall near 0.9 of the top a quarter less (about 9.1 a unit of x from 12.6;
+// review 11); a rise after a cut comes back at kLiftRise.
 static const float kTorqueFactorMost = 6.0f;    // the factor written at the most (the largest roof), for the game's own share of 1
 static const float kLiftFadeFrom = 0.7f;        // the share of a gear's top from which the roof fades to 1 at the top
 static const float kLiftRise = 1.0f;            // the factor a second a rising write may climb within a gear after a cut (TorqueHandStep): 1.0 to 2.4 in 1.4 s
@@ -1358,6 +1370,7 @@ struct TorqueHand
     int gear;          // the game's gear on the last pass: a new one is written at once
     bool paced;        // a write has been made since the hand took the truck: rises may be paced from then on
     float cutFor;      // seconds a rise is still paced after the last cut (a write lower than the one before): kLiftCutWindow
+    bool heldBack;     // this pass's rise was held back by the pace (for the probe)
 };
 struct TorqueOrders
 {
@@ -1396,7 +1409,13 @@ inline TorqueOrders TorqueHandStep(TorqueHand &h, bool want, uint64_t action, ui
     const bool newGear = gear != h.gear;
     h.gear = gear;
     if (h.cutFor > 0.0f) h.cutFor -= dt;
-    if (dt > 0.0f && h.paced && h.cutFor > 0.0f && !newGear && factor > h.written) factor = fminf(factor, h.written + fmaxf(kLiftRise * dt, kTorqueFactorStep));
+    h.heldBack = false;
+    if (dt > 0.0f && h.paced && h.cutFor > 0.0f && !newGear && factor > h.written)
+    {
+        const float paced = fminf(factor, h.written + fmaxf(kLiftRise * dt, kTorqueFactorStep));
+        h.heldBack = paced < factor;
+        factor = paced;
+    }
     if (!o.write && fabsf(factor - h.written) >= kTorqueFactorStep)
     {
         if (h.paced && factor < h.written && !newGear) h.cutFor = kLiftCutWindow;
@@ -1909,6 +1928,13 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     else if (m.locked && m.input < unlockAt) m.locked = false;
     if (!shifting) m.relock = false;
     m.rpm = m.locked ? fmaxf(m.input, k.idle) : open;
+    // what the rules went by, for the probe
+    m.upAt = GearboxUpPoint(t, k, m.gear, feel, hand);
+    m.downAt = GearboxDownPoint(t, k, m.gear, feel, hand);
+    m.lockAt = lockAt;
+    m.unlockAt = unlockAt;
+    m.startGear = start;
+    m.heldNow = held;
     const float speedRatio = m.rpm > 0.0f ? m.input / m.rpm : 1.0f;
     m.ratio = m.locked || speedRatio >= kCouplingPoint ? 1.0f : 1.0f + (kStallRatio - 1.0f) * (1.0f - speedRatio / kCouplingPoint);
     // the creep: what an idling engine pushes through the converter, less as the truck rolls up to the engine's speed
@@ -1948,16 +1974,27 @@ inline void GearboxFollowFloor(GearboxModel &m, int gameGear)
 
 // The gearbox in a line of text for the probe log, beside the game's own gear.
 // driving: the mod's automatic sets the game's gears (TakeoverModel).
+// Past the counts, what the rules decide by (review 11): the pedal they go by (feel), the points up and down in force for
+// the model's gear, the converter's lock and unlock points, the pause, how long a shift has been called for (wanted, up
+// over 0, down under) and the gear's hold, the kickdown's arm and window, the cruise, lift and stuck timers, the start
+// gear, and the wheels against the model's own gear's top. The fields up to "its pull" stay as they are, for the tools
+// that read the line.
 inline void GearboxProbeText(const TruckRaw &t, const GearboxModel &m, bool driving, char *out, size_t size)
 {
     const float top = TruckGearTop(t, t.gearEngaged), x = top > 0.0f ? m.by / top : 0.0f;
+    const float ownTop = TruckGearTop(t, m.gear), ownX = ownTop > 0.0f ? m.by / ownTop : 0.0f;
     char kept[96] = "";
     if (m.keepFor > 0.0f) sprintf_s(kept, sizeof kept, "kept in gear %d or under for %.0f s more (the grade), ", m.keep, m.keepFor);
-    sprintf_s(out, size, "automatic (%s): gear %d of %d (the game's %d), %s, input %.0f rpm, engine %.0f rpm, torque x%.2f, to the wheels %.2f | wheels %.2f rad/s for each m/s%s | "
-                         "gaining %.2f rad/s each second, the wheels at %.2f of the game's gear's top (its pull %.2f) | %s%s%s%d shifts, %d taken back",
+    char rules[400];
+    snprintf(rules, sizeof rules, " | rules: feel %.2f, up at %.0f rpm, down at %.0f, lock at %.0f, unlock at %.0f, pause %.1f s, wanted %.2f s, %s (%.1f s moving), "
+                     "kickdown armed %.1f s (window %.1f), cruise %.1f s, lift %.1f s, stuck %.1f s, start gear %d, the wheels at %.2f of the model's gear's top",
+              m.feel, m.upAt, m.downAt, m.lockAt, m.unlockAt, fmaxf(m.pause, 0.0f), m.wanted, m.heldNow ? "held" : "not held", m.moving, m.shortFor, fmaxf(m.kick, 0.0f),
+              m.cruise, m.liftFor, m.stuck, m.startGear, ownX);
+    snprintf(out, size, "automatic (%s): gear %d of %d (the game's %d), %s, input %.0f rpm, engine %.0f rpm, torque x%.2f, to the wheels %.2f | wheels %.2f rad/s for each m/s%s | "
+                         "gaining %.2f rad/s each second, the wheels at %.2f of the game's gear's top (its pull %.2f) | %s%s%s%d shifts, %d taken back%s",
               driving ? "the mod's, setting the game's gears" : "not handed to the game", m.gear, TruckTopGear(t), t.gearEngaged, m.locked ? "locked up" : "converter slipping",
               m.input, m.rpm, m.ratio, m.drive, m.grip, m.grip > 0.0f ? "" : " (not learned yet)", m.trend, x, GamePull(x), m.climb > 0.0f ? "climbing, " : "",
-              m.spinning ? "wheels spinning, going by the ground, " : "", kept, m.shifts, m.hunts);
+              m.spinning ? "wheels spinning, going by the ground, " : "", kept, m.shifts, m.hunts, rules);
 }
 
 // ---- the mod's gearbox in the game ----

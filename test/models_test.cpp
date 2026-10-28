@@ -3962,7 +3962,7 @@ int main(int argc, char **argv)
             pb.locked = true;
             pb.keep = 3;
             pb.keepFor = 5.0f;
-            char text[512];
+            char text[1024];
             GearboxProbeText(lt, pb, true, text, sizeof text);
             const bool gearText = strstr(text, "gear 3 of 4 (the game's 3)") && strstr(text, "locked up") && strstr(text, "kept in gear 3") && strstr(text, "setting the game's gears");
             PowertrainModel pm = {};
@@ -3972,7 +3972,24 @@ int main(int argc, char **argv)
             PowertrainProbeText(lt, pm, 1500.0f, true, 2.4f, 0.8f, power, sizeof power);
             const bool powerText = strstr(power, "the torque factor 2.40, the game's own 0.80") && strstr(power, "1500 rpm");
             PowertrainProbeText(lt, pm, 1500.0f, false, 2.4f, 0.8f, power, sizeof power);
-            Check(gearText && powerText && strstr(power, "not handed to the game"), "probe: the automatic's and the powertrain's lines carry the gear, the lock, the keep, the factor and the engine speed");
+            const bool offText = strstr(power, "not handed to the game") != nullptr;
+            // review 11: the factor's own terms and what the rules decide by, after the fields the overseer's tools read
+            // ("...the game's own Y): pedal P, shaped S | torque T of the most at R rpm", "gear N of M (the game's G)" and
+            // "the wheels at X of the game's gear's top (its pull P)"), which stay as they were
+            PowertrainProbeText(lt, pm, 1500.0f, true, 2.4f, 0.8f, power, sizeof power, 0.93f, 2.17f, true);
+            const char *terms = strstr(power, "the factor's terms");
+            const bool factorTerms = terms && strstr(terms, "0.93 of the gear's top") && strstr(terms, "the roof 2.17") && strstr(terms, "paced") &&
+                                     strstr(power, "the model's own, by the shaped pedal") && strstr(power, "the game's own 0.80): pedal ") && strstr(power, ", shaped ") &&
+                                     strstr(power, " | torque ") && strstr(power, " of the most at 1500 rpm") < terms;
+            pb.feel = 0.6f;
+            pb.startGear = 1;
+            GearboxProbeText(lt, pb, true, text, sizeof text);
+            const char *rules = strstr(text, " | rules: ");
+            const bool ruleText = rules && strstr(rules, "feel 0.60") && strstr(rules, "start gear 1") && strstr(rules, "of the model's gear's top") && strstr(rules, "unlock at") &&
+                                  strstr(text, "of the game's gear's top (its pull ") < rules;
+            Check(gearText && powerText && offText && factorTerms && ruleText,
+                  "probe: the automatic's and the powertrain's lines carry the gear, the lock, the keep, the factor and the engine speed, the factor's own terms and "
+                  "what the rules decide by, after the fields the log tools read");
         }
     }
 

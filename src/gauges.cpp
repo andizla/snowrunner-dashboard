@@ -2000,6 +2000,7 @@ struct TruckWatch
     PullTest pullTest;          // the pull test (the tab's button)
     uint64_t pullVehicle, pullAction; // the truck whose torque factor a running pull test changed
     TorqueHand hand;            // the engine's torque handed to the game (Powertrain)
+    float liftX, liftRoof;      // the lift's x and the roof there on the last pass, for the probe (review 11)
     AirModel air;               // and the air in its brakes' tanks
     TiresReader tiresReader;    // the tire inflation mod's published state (tires.h)
     TiresView tires;            // as read on this pass
@@ -2482,7 +2483,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                                    GearHoldOf(w, autoClass), EngineLightFloor(curve, scale.redline), s.input, TorqueRoof(autoClass) };
             const int huntsWere = w.gearbox.hunts;
             GearboxStep(w.gearbox, raw, scale, foot, w.power.power, dt, hand);
-            if (w.gearbox.hunts != huntsWere)
+            // told only while the model drives the game's gears: with the player in a position of the game's own (L+, H, L,
+            // R at Gearbox=1) the model's hunts are its own following, not the truck's (review 11)
+            if (w.gearbox.hunts != huntsWere && w.take.driving)
                 Log(L"gearbox: a shift up taken back within %.0f s with the foot on (the grade or the ground), the %d%s time; no shift up past %d for %.0f s, "
                     L"the limiter's neither, then it tries again",
                     kHuntWindow, w.gearbox.hunts, w.gearbox.hunts == 1 ? L"st" : w.gearbox.hunts == 2 ? L"nd" : w.gearbox.hunts == 3 ? L"rd" : L"th",
@@ -2736,6 +2739,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             // (LiftShare: before the grip is known, no more than kLiftBlind)
             const float ground = isfinite(raw.speed) && raw.speed > 0.0f ? raw.speed : 0.0f;
             const float x = LiftShare(TruckDrivenSpin(raw), ground, w.gearbox.grip, TruckGearTop(raw, raw.gearEngaged));
+            w.liftX = x;
+            w.liftRoof = LiftRoof(TorqueRoof(autoClass), x);
             const float ratio = w.take.driving && !GearboxManual(w) ? w.gearbox.ratio : 1.0f;
             const bool handWas = w.hand.on;
             const float gameWas = w.hand.game;
@@ -2758,11 +2763,16 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 w.take.shifts++;
                 if (probe && shiftTo >= 1 && raw.gear >= 1)
                 {
-                    // where the wheels are against each gear's top, by the ground, and what the game gives there
-                    const float from = GearboxInput(raw, scale, raw.gear, w.gearbox.by) / scale.redline, into = GearboxInput(raw, scale, shiftTo, w.gearbox.by) / scale.redline;
+                    // where the wheels are against each gear's top, by the ground, and what the game gives there; in a position
+                    // of the gearbox's own the automatic's model stands down, so the wheels and the clutch model's engine
+                    // give the figures (review 11: they were zeros)
+                    const bool ownPos = GearboxManual(w);
+                    const float by = ownPos ? TruckDrivenSpin(raw) : w.gearbox.by, shiftInput = ownPos ? w.clutch.input : w.gearbox.input,
+                                shiftRpm = ownPos ? w.clutch.rpm : w.gearbox.rpm;
+                    const float from = GearboxInput(raw, scale, raw.gear, by) / scale.redline, into = GearboxInput(raw, scale, shiftTo, by) / scale.redline;
                     Log(L"gearbox: %d to %d at %.0f rpm on the gearbox's input, the engine at %.0f rpm, the pedal at %.2f; the wheels at %.2f of the gear's top "
                         L"(the game's pull %.2f) and %.2f of the new one's (%.2f)",
-                        raw.gear, shiftTo, w.gearbox.input, w.gearbox.rpm, foot, from, GamePull(from), into, GamePull(into));
+                        raw.gear, shiftTo, shiftInput, shiftRpm, foot, from, GamePull(from), into, GamePull(into));
                 }
                 else if (probe) Log(L"gearbox: %d to %d", raw.gear, shiftTo);
             }
@@ -2829,7 +2839,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                   TempZone(w.temp) != w.probedZone || DamageAdding(w.damage, s) != w.probedAdding ||
                   w.boost.flutters + w.boost.blowOffs != w.probedLifts))
     {
-        char first[640], second[1024], third[512], fourth[256], fifth[640], sixth[1024], seventh[400], eighth[400], ninth[512], tenth[400], eleventh[320], twelfth[256];
+        char first[640], second[1024], third[512], fourth[256], fifth[640], sixth[1024], seventh[400], eighth[640], ninth[1024], tenth[400], eleventh[320], twelfth[256];
         // while the mod's gearbox has the truck the letter is the model's, as the cluster's (the flag is down, so the
         // game's own rule would read the first gear's factor as L+)
         TruckProbeText(raw, world, w.byWay, first, sizeof first, second, sizeof second, w.take.driving && w.pos.running ? GearboxPosLetter(w.pos.pos) : nullptr);
@@ -2846,7 +2856,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         BoostProbeText(raw, w.boost, TachShare(w.tach, scale), scale.boost, seventh, sizeof seventh);
         Log(L"probe: %S", sixth);
         Log(L"probe: %S", seventh);
-        PowertrainProbeText(raw, w.power, w.tach.rpm, w.hand.on, w.hand.written, w.hand.game, eighth, sizeof eighth);
+        PowertrainProbeText(raw, w.power, w.tach.rpm, w.hand.on, w.hand.written, w.hand.game, eighth, sizeof eighth, w.hand.on ? w.liftX : -1.0f, w.liftRoof,
+                            w.hand.heldBack);
         Log(L"probe: %S", eighth);
         const bool manual = GearboxManual(w);
         if (manual) snprintf(ninth, sizeof ninth, "automatic: stands down, the gearbox is in a position of the player's own");
