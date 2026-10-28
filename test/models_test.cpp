@@ -1276,6 +1276,23 @@ int main(int argc, char **argv)
         GearboxStep(box, g, k, 0.0f, 0.0f, kDt);
         const bool creep = Near(box.rpm, k.idle, 1.0f) && Near(box.drive, kCreep * kStallRatio, 0.001f);
         Check(stall && creep, "automatic: standing, a floored engine runs at the converter's stall with the torque doubled, and an idling one creeps");
+        // the tight converter (28 October): the stall at 0.6 of the red zone, at most 2000 rpm (a truck 1320, a heavy
+        // truck 1140, a scout's 5500 rpm engine 2000), where the diesel curves of the truck and the heavy truck still
+        // give all their torque; it couples at 0.75 of the engine's speed and slips 0.02
+        {
+            const float truckStall = ConverterStall(kClassScales[kClassTruck]), heavyStall = ConverterStall(kClassScales[kClassHeavy]),
+                        scoutStall = ConverterStall(kClassScales[kClassScout]);
+            auto share = [](int c, float rpm) {
+                const GaugeScale &cs = kClassScales[c];
+                return TorqueAt(kClassCurves[c], rpm / cs.redline, cs.max / cs.redline);
+            };
+            const bool full = Near(share(kClassTruck, truckStall), 1.0f, 0.001f) && Near(share(kClassHeavy, heavyStall), 1.0f, 0.001f);
+            const float scoutShare = share(kClassScout, scoutStall);
+            Check(Near(truckStall, 1320.0f, 0.5f) && Near(heavyStall, 1140.0f, 0.5f) && Near(scoutStall, 2000.0f, 0.5f) && full && scoutShare > 0.75f &&
+                      kCouplingPoint == 0.75f && kConverterSlip == 0.02f,
+                  "automatic: the tight converter stalls at 0.6 of the red zone, at most 2000 rpm, where a truck's and a heavy truck's diesel give all "
+                  "their torque (a scout's over three quarters), and couples at 0.75, slipping 0.02");
+        }
         // a floored pull from a standstill to the top gear's top in 40 seconds, and the same at a light foot
         auto pull = [&](float pedal, float &firstShiftAt, float &shortestPause, bool &lockedOnce) {
             GearboxModel b = {};
@@ -1492,18 +1509,79 @@ int main(int argc, char **argv)
                   "automatic: a lift slowing hard keeps the gear; coasting holds it down to 0.15 of the way from idle to the red zone, with the brake on "
                   "it shifts down from 0.25 and never up");
         }
-        // a lift opens the converter's lockup kLiftOpen, the engine coasting a little under the gearbox's input, then it
-        // locks again
+        // a lift keeps the converter locked, the engine at the gearbox's input (no flare, the engine braking with the
+        // gear held), while the input stays over the unlock point; slowing under it opens the converter, and a stop
+        // keeps it open (two players' reports, 28 October: the truck felt like a rubber band)
         {
-            wheels(1200.0f / k.redline * TruckGearTop(g, 3));
+            const float lockSpeed = 1200.0f / k.redline * TruckGearTop(g, 3);
+            wheels(lockSpeed);
             GearboxModel tip = driving(3);
             for (float at = 0.0f; at < 2.0f; at += kDt) GearboxStep(tip, g, k, 0.5f, 0.5f, kDt);
             const bool lockedBefore = tip.locked;
-            for (float at = 0.0f; at < kFootGap + 0.1f; at += kDt) GearboxStep(tip, g, k, 0.0f, 0.0f, kDt);
-            const bool opened = !tip.locked && Near(tip.rpm, tip.input * (1.0f - kCoastSlip), 1.0f);
-            for (float at = 0.0f; at < kLiftOpen + 0.1f; at += kDt) GearboxStep(tip, g, k, 0.0f, 0.0f, kDt);
-            Check(lockedBefore && opened && tip.locked && tip.gear == 3 && tip.shifts == 0,
-                  "automatic: a lift opens the converter's lockup for a second, the engine coasting under the gearbox's input, then it locks again");
+            bool stayed = true;
+            for (float at = 0.0f; at < 2.0f; at += kDt)
+            {
+                GearboxStep(tip, g, k, 0.0f, 0.0f, kDt);
+                stayed = stayed && tip.locked && Near(tip.rpm, fmaxf(tip.input, k.idle), 1.0f);
+            }
+            const bool liftKept = lockedBefore && stayed && tip.shifts == 0 && tip.gear == 3;
+            // slowing with the foot off in the first gear (in a higher one the coast shift down comes before the unlock
+            // point): locked down past the unlock point (kUnlockBelow of the lock point), open under it
+            const float firstLocked = 1000.0f / k.redline * TruckGearTop(g, 1);
+            wheels(firstLocked);
+            GearboxModel slow = driving(1);
+            slow.locked = true;
+            float openedAt = -1.0f;
+            for (float at = 0.0f; at < 10.0f; at += kDt)
+            {
+                wheels(firstLocked * (1.0f - at / 10.0f));
+                GearboxStep(slow, g, k, 0.0f, 0.0f, kDt);
+                if (!slow.locked && openedAt < 0.0f) openedAt = slow.input;
+            }
+            const float unlockAt = k.redline * kUnlockBelow; // with the game's own engine the lock point is kLockFrom at any pedal
+            Check(liftKept && slow.gear == 1 && openedAt > 0.0f && openedAt < unlockAt + 1.0f && openedAt > unlockAt - 60.0f && !slow.locked,
+                  "automatic: a lift keeps the converter locked, the engine at the gearbox's input; slowing under the unlock point opens it");
+        }
+        // after a shift up the converter locks again from the next pass, the input over the lock point; the first gear
+        // locks over it too, and a launch from a standstill stays open under it
+        {
+            wheels(0.95f * TruckGearTop(g, 2));
+            GearboxModel up = driving(2);
+            up.locked = true;
+            up.feel = up.held = up.pedal = 1.0f;
+            up.moving = 10.0f;
+            bool shifted = false, openOnShift = false;
+            for (int i = 0; i < 200 && !shifted; i++)
+            {
+                const int was = up.gear;
+                GearboxStep(up, g, k, 1.0f, 1.0f, kDt);
+                shifted = up.gear > was;
+                openOnShift = shifted && !up.locked;
+            }
+            // the wheels past the floored lock point in the new gear: locked on the next pass, within the shifts' pause
+            wheels(0.6f * TruckGearTop(g, up.gear));
+            GearboxStep(up, g, k, 1.0f, 1.0f, kDt);
+            const bool relocked = shifted && openOnShift && up.gear == 3 && up.locked && up.pause > 0.0f;
+            // the launch in first: from a standstill, floored, gaining; open under the lock point, locked past it
+            GearboxModel launch = {};
+            float spin = 0.0f, lockedFrom = -1.0f;
+            bool openUnder = true;
+            for (float at = 0.0f; at < 6.0f && launch.gear <= 1; at += kDt)
+            {
+                wheels(spin);
+                GearboxStep(launch, g, k, 1.0f, 1.0f, kDt);
+                if (launch.gear != 1) break;
+                if (launch.locked && lockedFrom < 0.0f) lockedFrom = launch.input;
+                if (!launch.locked && launch.input >= k.redline * kLockFrom + 1.0f) openUnder = false;
+                if (launch.locked && launch.input < k.redline * kLockFrom * (kUnlockBelow / kLockFrom)) openUnder = false;
+                spin += 0.4f * TruckGearTop(g, 1) * kDt;
+            }
+            GearboxModel standing = {};
+            wheels(0.0f);
+            for (float at = 0.0f; at < 1.0f; at += kDt) GearboxStep(standing, g, k, 1.0f, 1.0f, kDt);
+            Check(relocked && lockedFrom >= k.redline * kLockFrom - 1.0f && openUnder && !standing.locked && Near(standing.ratio, kStallRatio, 0.001f),
+                  "automatic: after a shift up the converter locks again on the next pass; the first gear locks past the lock point and a launch from a "
+                  "standstill goes through the open converter under it");
         }
         // keys tapped to hold the speed (a tester's ZIL-131 on 0.15.8, 2026-10-19: the fourth's and the fifth's tops 20
         // and 23 rad/s, 650 to 3200 rpm, the key held a fraction of a second at a time, 0.15.8 swapping the two at the
@@ -2370,7 +2448,7 @@ int main(int argc, char **argv)
             for (float at = 0.0f; at < 5.0f; at += kDt) TachFollow(follow, dead, k, 3000.0f, kDt);
             Check(followPlaced && followLagging && followThere && followCapped && Near(gearBefore, 2000.0f, 5.0f) && follow.rpm < 50.0f && Near(ConverterStall(k), fminf(k.redline * kStallSpeed, kStallRpmMost), 0.01f),
                   "automatic in the game: the needle follows the converter's engine speed with its lag, no further past the red zone than wheelspin takes it, and falls "
-                  "with the engine off; the stall speed at most 2400 rpm");
+                  "with the engine off; the stall speed at most 2000 rpm");
         }
         TruckRaw stopped = g;
         stopped.flags = 0;
