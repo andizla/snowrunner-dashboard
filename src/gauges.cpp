@@ -2675,11 +2675,13 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             const bool handWas = w.hand.on;
             const float gameWas = w.hand.game;
             // held back to the engine's Torque share where one is set; the lift's roof is the truck's class's, fading over
-            // the gear's last fifth (TorqueRoof, LiftRoof)
+            // the gear's last three tenths (TorqueRoof, LiftRoof); a rise paced by the pass, a new gear (the game's
+            // engaged gear) at once
             TorqueGive(m, w.refs, true, TorqueHandStep(w.hand, want, w.refs.action, w.refs.vehicle, raw.torqueFactor,
                                                  TorqueHeld(TorqueBlend(TorqueLift(w.power.curve, w.power.cold * w.power.boost, TruckPedal(raw), ratio, x,
                                                                                    TorqueRoof(autoClass)), s.engineShare / 100.0f),
-                                                            w.profile.torque)));
+                                                            w.profile.torque),
+                                                 dt, raw.gearEngaged));
             if (w.hand.on != handWas)
                 Log(w.hand.on ? L"powertrain: the engine's torque handed to the game, the game's own torque factor %.3f" : L"powertrain: the game's own torque factor %.3f given back",
                     w.hand.on ? w.hand.game : gameWas);

@@ -1201,13 +1201,17 @@ inline float GamePull(float x) { return isfinite(x) ? SettingsRange(fminf(kGameP
 // of 2nd to 5th gear, and a tester's RLM trucks at the roof of 6, 2026-10-25). An engine with several times a stock
 // engine's torque is held back with its Torque instead.
 // The roof is the truck's class's (kTorqueRoof: a scout's 3, a truck's and a heavy truck's 6) and it fades over a gear's
-// last fifth (LiftRoof): flat up to kLiftFadeFrom of the top, then in a straight line down to 1 at the top, so near
-// the top the truck gets less and less of the lift and at the top the game's own fall, where its limiter lets the pull
-// die. With the flat roof a vanilla Defender 90 (1776 kg, a scout) floored on a road sat at the roof of 6 from 0.85 of
-// each gear's top, shifted at 0.97 to 1.09 of it and went from 24 to 58 km/h in 7 seconds through 3rd, 4th and 5th (the
-// user's drive, 27 October: "the super acceleration bug").
+// last three tenths (LiftRoof): flat up to kLiftFadeFrom of the top, then in a straight line down to 1 at the top, so
+// near the top the truck gets less and less of the lift and at the top the game's own fall, where its limiter lets the
+// pull die. With the flat roof a vanilla Defender 90 (1776 kg, a scout) floored on a road sat at the roof of 6 from 0.85
+// of each gear's top, shifted at 0.97 to 1.09 of it and went from 24 to 58 km/h in 7 seconds through 3rd, 4th and 5th
+// (the user's drive, 27 October: "the super acceleration bug"). The fade began at 0.8 until 28 October: over the last
+// fifth the push fell so steeply that a heavy truck held near its top gear's limit at part throttle overshot into the
+// dead zone, slowed, got the push back in one jump and surged, every two seconds (a tester's log: the factor swinging
+// 1.0 to 2.4, an HX 520 at 36 to 39 km/h). From 0.7 it falls about half as steeply, and a rise comes back at kLiftRise.
 static const float kTorqueFactorMost = 6.0f;    // the factor written at the most (the largest roof), for the game's own share of 1
-static const float kLiftFadeFrom = 0.8f;        // the share of a gear's top from which the roof fades to 1 at the top
+static const float kLiftFadeFrom = 0.7f;        // the share of a gear's top from which the roof fades to 1 at the top
+static const float kLiftRise = 1.0f;            // the factor a second a rising write may climb within a gear (TorqueHandStep): 1.0 to 2.4 in 1.4 s
 static const float kTorqueRoof[kClassCount] = { 6.0f, 3.0f, 6.0f }; // the roof by the truck's class: truck, scout, heavy
 static const float kTorqueFactorLeast = 0.05f;  // and at the least
 static const float kTorqueFactorStep = 0.005f;  // a change of the factor smaller than this is not written
@@ -1230,7 +1234,7 @@ inline float GameFall(float x) { return isfinite(x) ? SettingsRange(kGamePullFal
 inline float TorqueRoof(int tachClass) { return tachClass >= 0 && tachClass < kClassCount ? kTorqueRoof[tachClass] : kTorqueFactorMost; }
 
 // The roof most with the wheels at x of the gear's top: most up to kLiftFadeFrom, then in a straight line down to 1 at
-// the top (6: 3.5 at 0.9, 1.75 at 0.97; a scout's 3: 2 at 0.9).
+// the top (6: 3.5 at 0.85, 1.75 at 0.955; a scout's 3: 2 at 0.85).
 inline float LiftRoof(float most, float x)
 {
     if (!isfinite(x) || x <= kLiftFadeFrom) return most;
@@ -1241,7 +1245,7 @@ inline float LiftRoof(float most, float x)
 // oil and the boost leave (limit), the pedal (the game asks the engine for that share of its torque, which it has as
 // far as the limit goes: at a light foot a turbo engine without boost gives what the pedal asks), the converter's
 // ratio, over GameFall at x, at most the roof (most, the truck's class's: TorqueRoof; kTorqueFactorMost says why) as it
-// fades over the gear's last fifth (LiftRoof); 1 (the game's own) with the wheels at the gear's top or past it.
+// fades over the gear's last three tenths (LiftRoof); 1 (the game's own) with the wheels at the gear's top or past it.
 inline float TorqueLift(float curve, float limit, float pedal, float ratio, float x, float most = kTorqueFactorMost)
 {
     if (isfinite(x) && x >= 1.0f) return 1.0f;
@@ -1265,6 +1269,8 @@ struct TorqueHand
     uint64_t action, vehicle; // the truck it writes it for
     float game;        // the game's own share: the factor before the first write, and whatever the game writes since
     float written;     // the factor last written
+    int gear;          // the game's gear on the last pass: a new one is written at once
+    bool paced;        // a write has been made since the hand took the truck: rises are paced from then on
 };
 struct TorqueOrders
 {
@@ -1275,8 +1281,12 @@ struct TorqueOrders
 
 // One pass. want: Powertrain on, a truck driven with its engine running, no pull test; action and vehicle: the driven
 // truck's; read: the factor as read at its action now; lift: TorqueLift. With want gone, the game's own share is
-// written back once, where the factor was written (the caller checks that truck is still there).
-inline TorqueOrders TorqueHandStep(TorqueHand &h, bool want, uint64_t action, uint64_t vehicle, float read, float lift)
+// written back once, where the factor was written (the caller checks that truck is still there). dt: the pass's
+// seconds, and gear the game's gear: within a gear a factor higher than the last written one climbs toward it by
+// kLiftRise a second (at least kTorqueFactorStep a pass, so it is written), so after an overshoot into the fade the push
+// comes back gradually and the truck settles where it matches the drag; a lower one is written at once, as are a new
+// gear's and the first write after the hand takes the truck. dt 0 writes every factor at once.
+inline TorqueOrders TorqueHandStep(TorqueHand &h, bool want, uint64_t action, uint64_t vehicle, float read, float lift, float dt = 0.0f, int gear = 0)
 {
     TorqueOrders o = {};
     const float share = isfinite(read) && read > 0.0f ? fminf(read, 1.0f) : 1.0f;
@@ -1293,11 +1303,15 @@ inline TorqueOrders TorqueHandStep(TorqueHand &h, bool want, uint64_t action, ui
     }
     if (!h.on) h = TorqueHand{ true, action, vehicle, carried, carries ? read : -1.0f }; // what it reads is what the mod wrote: no write due
     else if (fabsf(read - h.written) > 1e-4f) h.game = share; // the game wrote its own, as engine damage moved it
-    const float factor = h.game * lift;
+    float factor = h.game * lift;
+    const bool newGear = gear != h.gear;
+    h.gear = gear;
+    if (dt > 0.0f && h.paced && !newGear && factor > h.written) factor = fminf(factor, h.written + fmaxf(kLiftRise * dt, kTorqueFactorStep));
     if (!o.write && fabsf(factor - h.written) >= kTorqueFactorStep)
     {
         o = TorqueOrders{ true, action, vehicle, factor };
         h.written = factor;
+        h.paced = true;
     }
     return o;
 }
