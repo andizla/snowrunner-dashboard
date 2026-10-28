@@ -345,6 +345,7 @@ static void WriteIni(const GaugeSettings &s)
     WritePrivateProfileStringW(kIniSection, L"PadToggle", Wide(s.padToggle).c_str(), ini.c_str());
     whole(L"SoundVolume", s.soundVolume);
     whole(L"SoundsOnly", s.soundsOnly ? 1 : 0);
+    whole(L"DieselFlutter", s.dieselFlutter ? 1 : 0);
     whole(L"Demo", s.demo ? 1 : 0);
     whole(L"Probe", s.probe);
 }
@@ -584,7 +585,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; 1 = scout (800, 5500 of 7000, 120 km/h), 2 = heavy (600, 1900 of 2500, 80 km/h).\n"
                         L"; IdleRpm, RedlineRpm, MaxRpm and SpeedMax (km/h) replace the class's numbers; 0 = the class's own.\n"
                         L"; The boost dial shows a turbo that blows by the fuel the engine burns and how fast it turns.\n"
-                        L"; BoostMax is the boost in bar it reaches with the pedal floored at high engine speed (0.3 to 2);\n"
+                        L"; BoostMax is the boost in bar it reaches with the pedal floored at high engine speed (0.3 to 3);\n"
                         L"; 0 = the class's own: trucks 1.8 bar, scouts 1, heavy trucks 2.\n"
                         L"; BoostProfile is how the turbo gets there: 0 = the class's own, 1 = small and quick (full sooner, half the lag),\n"
                         L"; 2 = big and slow (later, more lag), 3 = two stages (full sooner with 1.3 times the boost).\n"
@@ -628,6 +629,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; SoundVolume (0 to 100) is how loud the turbo is heard when the pedal comes up quickly under boost: it flutters,\n"
                         L"; longer and louder the more boost there was, until the pedal goes down again. The oil warning goes by it too.\n"
                         L"; 0 = no sound. SoundsOnly=1 plays the sounds and draws no cluster.\n"
+                        L"; A diesel has no blow-off valve: its lift plays the turbo's whistle running down. DieselFlutter=1: it flutters too.\n"
                         L"; WAV files sounds\\turbo_high_1.wav to _4.wav next to the game's exe (and turbo_mid_, turbo_low_ for less boost)\n"
                         L"; are played in place of the mod's own recordings of that strength, and sounds\\oil_beep_1.wav in place of the\n"
                         L"; oil warning.\n"
@@ -739,6 +741,7 @@ static void ReadIni(GaugeSettings &s)
     s.padToggle[n] = 0;
     s.soundVolume = IniInt(L"SoundVolume", s.soundVolume, ini);
     s.soundsOnly = IniBool(L"SoundsOnly", s.soundsOnly, ini);
+    s.dieselFlutter = IniBool(L"DieselFlutter", s.dieselFlutter, ini);
     s.demo = IniBool(L"Demo", s.demo, ini);
     s.probe = IniInt(L"Probe", s.probe, ini);
     SettingsClamp(s);
@@ -1946,7 +1949,8 @@ static void LogSettings(const GaugeSettings &s)
     Log(L"settings: the oil warm after %g minutes of driving, too hot from %g C", s.oilWarmUpMinutes, s.oilWarnC);
     Log(L"settings: the radiator has all its air from %g km/h; engine damage %s: from %g C, %g percent a minute at 125 C, %g percent a minute for a cold engine floored at the red zone at 0 C; %g percent of the gearbox for a shift without the clutch; clutch burn %s, heating at %g percent of the model's pace",
         s.airFullKmh, s.damage ? L"on" : L"off", s.hotDamageFrom, s.hotDamage, s.coldDamage, s.stallDamage, s.clutchBurn ? L"on" : L"off", s.clutchHeat);
-    Log(L"settings: sound volume %d of 100%s", s.soundVolume, s.soundsOnly ? L", sounds only: the cluster is not drawn" : L"");
+    Log(L"settings: sound volume %d of 100%s%s", s.soundVolume, s.soundsOnly ? L", sounds only: the cluster is not drawn" : L"",
+        s.dieselFlutter ? L", a diesel's lift flutters" : L", a diesel's lift whistles");
     Log(L"settings: driven with %s", s.input == kInputKeys ? L"the keyboard" : s.input == kInputPad ? L"a pad" : L"a wheel's pedals");
     Log(L"settings: gearbox %s; RequireClutch %d, RequireGearHeld %d, SkipNeutral %d, DownStaysForward %d",
         s.gearbox == kGearboxOwn && s.input != kInputWheel ? L"the mod's own (Gearbox=2): it takes the shifter, its positions on the bindings and on the game's shifter"
@@ -2485,11 +2489,15 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         const int lift = natural ? kLiftNone
                                  : BoostStep(w.boost, raw, w.turbo, scale.redline > 0.0f ? w.tach.rpm / scale.redline : 0.0f, curve, tachTop,
                                              w.power.running ? w.power.cold : 1.0f, engineFree, dt);
+        // a diesel's lift whistles as its turbo coasts down, unless DieselFlutter has it flutter (review 12, finding 6)
+        const bool whistle = !w.turbo.petrol && !s.dieselFlutter;
         if (lift != kLiftNone && probe)
-            Log(L"boost: a %s at %.2f bar of the turbo's %.2f, %.2f of its full sound", lift == kLiftBlowOff ? L"blow-off" : L"flutter", w.boost.lastBar, w.turbo.most,
-                w.boost.lastVolume);
+            Log(L"boost: a %s at %.2f bar of the turbo's %.2f, %.2f of its full sound", whistle ? L"diesel's whistle" : lift == kLiftBlowOff ? L"blow-off" : L"flutter",
+                w.boost.lastBar, w.turbo.most, w.boost.lastVolume);
         LiftSound sound;
-        if (LiftSoundOf(lift, w.boost.lastVolume, s.soundVolume, LiftChance(w.chance), sound)) SoundPlay(sound.tier, sound.gain, sound.pitch);
+        if (whistle ? WhistleSoundOf(lift, w.boost.lastVolume, w.boost.lastRotor, s.soundVolume, LiftChance(w.chance), sound)
+                    : LiftSoundOf(lift, w.boost.lastVolume, s.soundVolume, LiftChance(w.chance), sound))
+            SoundPlay(sound.tier, sound.gain, sound.pitch);
         // the pedal going down again ends a flutter that still rings
         const bool pedalDown = TruckPedal(raw) > 0.5f;
         if (pedalDown && !w.pedalDown) SoundQuiet();
@@ -3632,6 +3640,8 @@ static DWORD WINAPI Run(void *)
                 v.st.lowGear = watch.pos.pos >= kPosLowMinus && watch.pos.pos <= kPosLowPlus;
             }
             v.st.boostBar = watch.boost.bar;
+            v.st.boostVacuum = watch.turbo.petrol;
+            v.st.boostTop = watch.turbo.most;
             v.st.natural = watch.profile.aspiration == kAspNatural;
             v.st.airBar = watch.air.bar;
             v.st.rangeKm = watch.range.rangeKm;
@@ -3738,7 +3748,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.rollWarnDeg == b.rollWarnDeg && a.rollDangerDeg == b.rollDangerDeg && a.pitchDangerDeg == b.pitchDangerDeg &&
            a.warmUpMinutes == b.warmUpMinutes && a.overheatMinutes == b.overheatMinutes && a.coolDownMinutes == b.coolDownMinutes && a.ambientC == b.ambientC &&
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
-           !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly &&
+           !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
            a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.input == b.input && a.powertrain == b.powertrain && a.engineShare == b.engineShare && a.creep == b.creep;
 }
 
@@ -3770,8 +3780,8 @@ int wmain(int argc, wchar_t **argv)
           "defaults: the coolant warm after 3 minutes, in the red zone after 1.5, cool after 15, with 15 C outside");
     Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.hotDamageFrom == kTempRed && d.coldDamage == 5.0f && d.stallDamage == 5.0f && d.clutchBurn && d.clutchHeat == 60.0f,
           "defaults: the radiator's full airflow from 30 km/h, engine damage on from the red zone, 10 percent a minute for the heat and 5 for the cold");
-    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && d.input == kInputWheel && !d.powertrain && d.engineShare == 50 && d.creep,
-          "defaults: the oil as a second needle, warm after 5 minutes, too hot from 120 C; the standard turbo; the creep on");
+    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && d.input == kInputWheel && !d.powertrain && d.engineShare == 50 && d.creep && !d.dieselFlutter,
+          "defaults: the oil as a second needle, warm after 5 minutes, too hot from 120 C; the standard turbo, a diesel's lift whistling; the creep on");
 
     // keys the mod does not know, in its own section and in another one
     WritePrivateProfileStringW(kIniSection, L"FromALaterVersion", L"7", ini.c_str());
@@ -3818,6 +3828,7 @@ int wmain(int argc, wchar_t **argv)
     c.probe = 1;
     c.soundVolume = 80;
     c.soundsOnly = true;
+    c.dieselFlutter = true;
     c.oilGauge = kOilDial;
     c.boostProfile = kSpoolTwoStage;
     c.gearbox = kGearboxModel;
@@ -3836,7 +3847,7 @@ int wmain(int argc, wchar_t **argv)
                             c.pitchDangerDeg != d.pitchDangerDeg && c.warmUpMinutes != d.warmUpMinutes && c.overheatMinutes != d.overheatMinutes &&
                             c.coolDownMinutes != d.coolDownMinutes && c.ambientC != d.ambientC && c.ambientByMap != d.ambientByMap && c.airFullKmh != d.airFullKmh && c.damage != d.damage &&
                             c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
-                            c.demo != d.demo && c.probe != d.probe && c.soundVolume != d.soundVolume && c.soundsOnly != d.soundsOnly &&
+                            c.demo != d.demo && c.probe != d.probe && c.soundVolume != d.soundVolume && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
                             c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.input != d.input && c.powertrain != d.powertrain && c.engineShare != d.engineShare && c.creep != d.creep;
     WriteIni(c);
@@ -3859,7 +3870,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 101, "ini: the help text survives a write (101 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 102, "ini: the help text survives a write (102 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());

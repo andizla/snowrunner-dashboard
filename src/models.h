@@ -879,6 +879,7 @@ struct BoostModel
     int flutters, blowOffs;  // how many of each since the model began
     int last;            // the last lift's sound (kLiftNone: none yet), the boost it came at, and how loud of 1
     float lastBar, lastVolume;
+    float lastRotor;     // and the rotor's speed then, for a diesel's whistle
 };
 
 // One step of dt seconds of the model above. k: the character in force (TurboOf); n: the engine speed over the red
@@ -930,6 +931,7 @@ inline int BoostStep(BoostModel &m, const TruckRaw &t, const TurboChar &k, float
         m.last = sound;
         m.lastBar = m.liftBar;
         m.lastVolume = powf(SettingsRange(m.liftBar / most, 0.0f, 1.0f), 1.5f);
+        m.lastRotor = m.rotor;
         (sound == kLiftBlowOff ? m.blowOffs : m.flutters)++;
         m.pause = kLiftPause;
         // the lift is told: the pedal's way up to here does not count again
@@ -996,6 +998,19 @@ inline bool LiftSoundOf(int lift, float loud, int soundVolume, float chance, Lif
     out.tier = lift == kLiftBlowOff ? (loud >= kLiftStrong ? kTurboHigh : kTurboMid) : (loud >= kLiftStrong ? kTurboMid : kTurboLow);
     out.gain = (float)(soundVolume > 100 ? 100 : soundVolume) / 100.0f * (kLiftQuietest + (1.0f - kLiftQuietest) * SettingsRange(loud, 0.0f, 1.0f));
     out.pitch = 1.0f + kLiftPitchSpread * SettingsRange(chance, -1.0f, 1.0f);
+    return true;
+}
+
+// A diesel's lift (review 12, finding 6): it has no throttle plate and no blow-off valve, so its air keeps flowing and
+// the turbo coasts down with its whistle falling (kSoundWhistle). As loud as LiftSoundOf has a lift, and played
+// faster or slower by the rotor's speed at the lift (the model's lastRotor): at full speed as made, at a third of it
+// at kWhistleSlowest.
+static const float kWhistleSlowest = 0.5f;
+inline bool WhistleSoundOf(int lift, float loud, float rotor, int soundVolume, float chance, LiftSound &out)
+{
+    if (!LiftSoundOf(lift, loud, soundVolume, chance, out)) return false;
+    out.tier = kSoundWhistle;
+    out.pitch *= kWhistleSlowest + (1.0f - kWhistleSlowest) * SettingsRange((rotor - 1.0f / 3.0f) * 1.5f, 0.0f, 1.0f);
     return true;
 }
 

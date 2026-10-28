@@ -33,7 +33,9 @@ struct GaugeState
     float tempC;                    // coolant temperature (the mod's own model)
     float oilC;                     // oil temperature (the mod's own model)
     float oilWarnC;                 // where the oil dial's red zone starts: the settings' OilWarnC
-    float boostBar;                 // boost pressure in bar, 0..2 (the mod's own model)
+    float boostBar;                 // boost pressure in bar, gauge (the mod's own model): under 0 a petrol engine's vacuum, up to 3
+    bool boostVacuum;               // the dial starts at -1 bar: a petrol engine (BoostModel::petrol)
+    float boostTop;                 // the turbo's most in bar: the dial ends at 2 bar up to 2, else at 3
     float airBar;                   // brake air in bar (0..10), from the model (AirModel)
     bool handbrake, diffLock, awd, lowGear, headlights, damage, cold;
     bool oilHot;                    // the oil lamp is lit (it blinks while the oil is too hot: the caller switches it on and off)
@@ -104,6 +106,7 @@ struct GaugeSettings
     float clutchHeat;        // ClutchHeatPercent: how fast it heats, percent of the model's own pace (kClutchHeatRange); cooling is not scaled
     int soundVolume;        // SoundVolume: how loud the turbo's flutter and the oil warning are, 0 to 100; 0 = no sound
     bool soundsOnly;         // SoundsOnly: the sounds are played and the cluster is not drawn
+    bool dieselFlutter;      // DieselFlutter: a diesel's lift flutters too; off, it plays the turbo's whistle (review 12, finding 6)
     int toggleKey;           // ToggleKey: virtual key code of the key that hides and shows the cluster, 0 = none
     char padToggle[32];      // PadToggle: pad buttons that do the same ("LB+DPadUp"), "None"
     bool demo;               // Demo: for work on the mod: demo values are drawn whenever no truck is driven, menus and loading screens included
@@ -158,10 +161,10 @@ inline void SettingsDefaults(GaugeSettings &s)
 // The range of each number: what the ini and the tab hold the settings to. A tinted face stops at 0.85, as a darker
 // one is the solid style. The tilt lamp's angles are degrees, the coolant's three times and the oil's warm-up minutes,
 // the outside temperature and the oil's warning degrees C, the speed of the radiator's full airflow km/h, the two
-// damage rates percent a minute, a stall's gearbox damage percent, the boost bar (the dial ends at 2), an engine's torque a share of its own.
+// damage rates percent a minute, a stall's gearbox damage percent, the boost bar (the dial ends at 2, or 3 over 2), an engine's torque a share of its own.
 static const float kFaceOpacityMax = 0.85f, kScaleMin = 0.4f, kScaleMax = 3.0f, kOpacityMin = 0.1f, kOffsetMax = 4000.0f;
 static const float kIdleRange[2] = { 300.0f, 3000.0f }, kRedlineRange[2] = { 1000.0f, 12000.0f }, kMaxRpmRange[2] = { 1500.0f, 15000.0f },
-                   kSpeedMaxRange[2] = { 40.0f, 300.0f }, kTiltRange[2] = { 1.0f, 89.0f }, kBoostRange[2] = { 0.3f, 2.0f };
+                   kSpeedMaxRange[2] = { 40.0f, 300.0f }, kTiltRange[2] = { 1.0f, 89.0f }, kBoostRange[2] = { 0.3f, 3.0f };
 static const float kWarmUpRange[2] = { 0.5f, 60.0f }, kOverheatRange[2] = { 0.25f, 60.0f }, kCoolDownRange[2] = { 1.0f, 240.0f },
                    kAmbientRange[2] = { -40.0f, 50.0f }, kGearHoldRange[2] = { 1.0f, 3.0f }, kAirFullRange[2] = { 10.0f, 80.0f }, kDamageRange[2] = { 0.0f, 100.0f },
                    kOilWarmUpRange[2] = { 1.0f, 60.0f }, kOilWarnRange[2] = { 100.0f, 150.0f }, kTorqueShareRange[2] = { 0.10f, 1.00f },
@@ -284,6 +287,7 @@ inline void GaugeDemo(GaugeState &st, const GaugeSettings &s)
     st.tempC = 88.0f;
     st.oilC = 97.0f;
     st.boostBar = 1.15f;
+    st.boostTop = 1.8f;
     st.airBar = 8.2f;
     st.awd = st.diffLock = st.headlights = true;
     st.rollDeg = 5.0f;
@@ -296,9 +300,9 @@ inline void GaugeDemo(GaugeState &st, const GaugeSettings &s)
 // tab; engineCapacity is 0 while it is not known.
 enum { kShown, kHiddenByToggle, kHiddenNoTruck, kHiddenSoundsOnly };
 // How strong the turbo's flutter is after a lift of the pedal, by the boost the lift had: the sounds come in these three.
-// After them the oil warning and the air dryer's purge, the mod's other sounds.
+// After them the oil warning, the air dryer's purge and a diesel turbo's whistle, the mod's other sounds.
 enum { kTurboHigh, kTurboMid, kTurboLow, kTurboTiers };
-enum { kSoundOil = kTurboTiers, kSoundPurge, kSoundTierCount }; // the oil warning, then the air dryer's purge at the compressor's cut-out
+enum { kSoundOil = kTurboTiers, kSoundPurge, kSoundWhistle, kSoundTierCount }; // the oil warning, the air dryer's purge at the compressor's cut-out, a diesel's lift
 // truck: the kind of truck being driven, as the game's files name it ("" while none is driven): the scales in force
 // are that kind's. truckOwn: it has scales of its own in Gauges.ini, and those are the ones in force. map: the map
 // the truck drives on in words, with its region ("" while it is not known), and ambientC the outside temperature in

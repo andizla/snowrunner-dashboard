@@ -763,8 +763,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     PageLabel("Volume", labelX);
     ImGui::SetNextItemWidth(w);
     changed(ImGui::SliderInt("##soundvolume", &s.soundVolume, 0, 100, s.soundVolume > 0 ? "%d" : "off", ImGuiSliderFlags_AlwaysClamp));
-    PageTip("How loud the turbo is heard when the pedal comes up quickly under boost: it flutters, longer and louder the more boost there was, "
-            "until the pedal goes down again. The oil warning goes by it too. 0 = no sound.");
+    PageTip("How loud the turbo is heard when the pedal comes up quickly under boost: a petrol engine flutters and a diesel's turbo whistles as it runs "
+            "down, longer and louder the more boost there was, until the pedal goes down again. The oil warning goes by it too. 0 = no sound.");
     ImGui::BeginDisabled(s.soundVolume <= 0);
     PageLabel("Hear it", labelX);
     if (ImGui::Button("Full boost")) act |= kPageHearHigh;
@@ -777,6 +777,9 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     if (ImGui::Button("Oil warning")) act |= kPageHearOil;
     PageTip("Plays the warning that sounds while the oil is too hot.");
     ImGui::EndDisabled();
+    changed(ImGui::Checkbox("Flutter on a diesel", &s.dieselFlutter));
+    PageTip("A diesel has no throttle plate and no blow-off valve, so a lift plays its turbo's whistle running down. On: it flutters and blows off as a "
+            "petrol engine does.");
     changed(ImGui::Checkbox("Sounds only", &s.soundsOnly));
     PageTip("Plays the sounds and draws no cluster.");
 

@@ -32,7 +32,7 @@ struct StateBlock
     float ambientC;         // the outside temperature in force, degrees C
     float coolantC;         // the coolant temperature, degrees C
     float rpm;              // the engine speed
-    float boostBar;         // the boost pressure
+    float boostBar;         // the boost pressure in bar, gauge: under 0 a petrol engine's vacuum (down to about -0.7)
     uint32_t flags;
     uint32_t reserved[3];
 };

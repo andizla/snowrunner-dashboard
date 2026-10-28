@@ -267,7 +267,8 @@ int wmain(int argc, wchar_t **argv)
     hot.tempC = 121.0f;
     hot.oilC = 131.0f;
     hot.oilHot = true;
-    hot.boostBar = 1.85f;
+    hot.boostBar = 2.4f;
+    hot.boostTop = 2.6f; // a turbo of more than 2 bar: the dial to 3
     hot.airBar = 6.0f;
     hot.damage = true;
     hot.tilt = 2;
@@ -303,6 +304,8 @@ int wmain(int argc, wchar_t **argv)
         s.opacity = 0.9f;
         GaugeState st;
         GaugeDemo(st, s);
+        st.boostVacuum = true; // a petrol scout at a light foot: the dial from -15 psi
+        st.boostBar = -0.45f;
         Screen(out, L"options.png", fonts, 1920, 1080, s, st);
     }
 

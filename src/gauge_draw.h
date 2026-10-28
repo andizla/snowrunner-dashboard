@@ -678,12 +678,16 @@ static void GOil(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float u
 
 static void GBoost(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float u, float a, const GaugeState &st)
 {
-    const float top = st.psi ? 30.0f : 2.0f, step = st.psi ? 10.0f : 1.0f;
-    const GScale s = GSweep(0.0f, top);
+    // from 0 for a diesel or -1 bar (-15 psi) for a petrol engine's vacuum, to 2 bar (30 psi) or, for a turbo of more
+    // than 2 bar, 3 (45 psi) (review 12, findings 5 and 9)
+    const bool high = st.boostTop > 2.0f;
+    const float bottom = st.boostVacuum ? (st.psi ? -15.0f : -1.0f) : 0.0f, top = st.psi ? (high ? 45.0f : 30.0f) : (high ? 3.0f : 2.0f);
+    const float step = st.psi ? (high || st.boostVacuum ? 15.0f : 10.0f) : 1.0f;
+    const GScale s = GSweep(bottom, top);
     GSmallDial(dl, c, r, u, a);
     GTicks(dl, c, r - 2.5f * u, s, step, 2, 7.0f, 4.0f, u, a);
     char buf[16];
-    for (float v = 0.0f; v <= top + 0.5f; v += step)
+    for (float v = bottom; v <= top + 0.5f; v += step)
     {
         sprintf_s(buf, "%.0f", v);
         GText(dl, f, kGsSmall, GPolar(c, r - 15.0f * u, GDeg(s, v)), GCol(kText, a), buf, 0, u);

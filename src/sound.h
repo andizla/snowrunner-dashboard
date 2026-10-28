@@ -2,15 +2,16 @@
 // compressor wheel, a flutter. It comes in three strengths, by how much boost the lift had (kTurboHigh, kTurboMid,
 // kTurboLow), and in up to kSoundVariants recordings of each, of which one is played and never the same twice
 // running. gauges.cpp asks for one when models.h tells a lift (SoundPlay) and for silence when the pedal goes down
-// again (SoundQuiet); a thread here plays it. The oil warning (kSoundOil) and the air dryer's purge (kSoundPurge) are
-// played the same way, and the pedal does not silence them.
+// again (SoundQuiet); a thread here plays it. A diesel's lift plays its turbo's whistle (kSoundWhistle) in place of
+// the flutter unless DieselFlutter is on, and the pedal silences it the same way. The oil warning (kSoundOil) and the
+// air dryer's purge (kSoundPurge) are played the same way, and the pedal does not silence them.
 //
 // Where the sounds of a strength come from:
-//   WAV files sounds\turbo_high_1.wav to _4.wav (turbo_mid_, turbo_low_, oil_beep_, air_purge_) next to the mod, where there is
+//   WAV files sounds\turbo_high_1.wav to _4.wav (turbo_mid_, turbo_low_, oil_beep_, air_purge_, turbo_whistle_) next to the mod, where there is
 //     at least one (PCM of 8 to 32 bits or 32-bit float, any number of channels, played as one)
 //   else the recordings the mod's file carries (src\sounds.rc; SOUND_CREDITS.md says whose they are)
 //   else a sound made by code (SoundMakeBlowOff for the strong one, SoundMakeFlutter for the others, SoundMakeBeep for
-//     the oil warning, SoundMakePurge for the purge, which carries no recording)
+//     the oil warning, SoundMakePurge for the purge and SoundMakeWhistle for the whistle, which carry no recording)
 // Every sound is brought to the same loudness, so a file of the player's is as loud as the mod's own.
 //
 // Played through XAudio2 2.9: the xaudio2_9redist.dll the game brings and uses itself, or Windows' own xaudio2_9.dll.
@@ -46,7 +47,8 @@ enum { kSoundVariants = 4, kSoundShots = 8 }; // recordings of one strength at m
 struct SoundTier { const wchar_t *what, *file, *carried; };
 static const SoundTier kSoundTiers[kSoundTierCount] = { { L"the turbo at full boost", L"turbo_high", L"TURBO_HIGH" }, { L"the turbo at half boost", L"turbo_mid", L"TURBO_MID" },
                                                         { L"the turbo at little boost", L"turbo_low", L"TURBO_LOW" }, { L"the oil warning", L"oil_beep", L"OIL_BEEP" },
-                                                        { L"the air dryer's purge", L"air_purge", L"AIR_PURGE" } };
+                                                        { L"the air dryer's purge", L"air_purge", L"AIR_PURGE" },
+                                                        { L"a diesel turbo's whistle", L"turbo_whistle", L"TURBO_WHISTLE" } };
 static const float kSoundLevel = 0.45f; // how loud a sound is at SoundVolume=100 with the turbo at its full boost (against kSoundRms): two that ring together stay below 1
 static const float kSoundHush = 0.08f;  // seconds a sound that still rings takes to go when the pedal goes down again
 
@@ -237,6 +239,28 @@ inline void SoundMakeFlutter(SoundClip &c)
     c.rate = 44100;
 }
 
+// A diesel turbo's whistle on a lift, made by code: the compressor coasting down (review 12, finding 6). A tone that
+// falls from 4.5 kHz as the rotor runs down over a second and a half, with a breath of air around it, fading as it
+// goes. It is played faster or slower by the rotor's speed at the lift (WhistleSoundOf).
+inline void SoundMakeWhistle(SoundClip &c)
+{
+    const double rate = 44100.0, pi = 3.14159265358979323846;
+    const size_t n = (size_t)(rate * 1.8);
+    SoundNoise noise = { 0x5e1157 };
+    std::vector<float> air(n);
+    for (float &v : air) v = noise();
+    air = SoundFiltered(air, SoundFilter(kSoundBandPass, 3800.0, 1.5, rate));
+    c.x.assign(n, 0.0f);
+    double phase = 0.0;
+    for (size_t i = 0; i < n; i++)
+    {
+        const double t = (double)i / rate, hz = 4500.0 * exp(-t / 1.5), open = min(1.0, t / 0.01), fade = exp(-t / 0.55);
+        phase += 2.0 * pi * hz / rate;
+        c.x[i] = (float)((sin(phase) + 0.2 * sin(2.0 * phase) + 0.5 * air[i]) * open * fade);
+    }
+    c.rate = 44100;
+}
+
 // Every sound at the same loudness, whatever it was recorded at, by its loudest tenth of a second, and one with high
 // peaks a little quieter. A recording's last 20 ms fade out, so one that was cut does not click.
 inline void SoundLevel(SoundClip &c)
@@ -316,6 +340,7 @@ inline void SoundLoad(int tier, const std::wstring &dir, SoundSet &set)
     if (set.count) return;
     if (tier == kSoundOil) SoundMakeBeep(set.clip[0]);
     else if (tier == kSoundPurge) SoundMakePurge(set.clip[0]);
+    else if (tier == kSoundWhistle) SoundMakeWhistle(set.clip[0]);
     else if (tier == kTurboHigh) SoundMakeBlowOff(set.clip[0]);
     else SoundMakeFlutter(set.clip[0]);
     SoundLevel(set.clip[0]);
@@ -414,7 +439,8 @@ static DWORD WINAPI SoundThread(void *)
     ULONGLONG quietSince = 0, againAt = 0, last = GetTickCount64();
     HRESULT lastError = S_OK;
     bool said = false;
-    int played[kSoundTierCount] = { -1, -1, -1, -1, -1 }; // the recording each strength played last
+    int played[kSoundTierCount];                            // the recording each strength played last
+    for (int &p : played) p = -1;
     SoundNoise chance = { (uint32_t)GetTickCount() | 1 };
     for (;;)
     {
@@ -458,8 +484,8 @@ static DWORD WINAPI SoundThread(void *)
         }
         // the pedal went down again: the turbo's sounds that ring fade out, the oil warning plays on. A sound asked for
         // on this same pass comes after that.
-        if (quiet)
-            for (int t = 0; t < kTurboTiers; t++)
+        for (int t = 0; quiet && t < kSoundTierCount; t++)
+            if (t < kTurboTiers || t == kSoundWhistle)
                 for (SoundEngine::Voice &v : e.voices[t])
                     if (v.ringing && !v.hushing) { v.hushing = true; InterlockedIncrement(&g_soundHushed); }
         for (int i = 0; i < waiting; i++)
