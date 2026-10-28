@@ -455,7 +455,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         PageLabel("Turbo", labelX);
         ImGui::SetNextItemWidth(w);
         changed(ImGui::Combo("##spool", &s.boostProfile, profiles, kSpoolCount));
-        PageTip("How the turbo builds its boost. Standard: from about a fifth of the way to the red zone. Small and quick: early and with little lag. "
+        PageTip("How the turbo builds its boost. Standard: from about a tenth of the way to the red zone, all of it from half way. Small and quick: early and with little lag. "
                 "Big and slow: late, and long to come at low revs. Two stages: a small turbo early and a big one after it.");
     }
 

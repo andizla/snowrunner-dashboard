@@ -1327,14 +1327,19 @@ int main(int argc, char **argv)
         };
         bool full = true;
         for (int p = 0; p < kSpoolCount; p++) full = full && Near(held(p, 1.0f), mostBar, 0.001f) && held(p, 0.0f) == 0.0f;
-        const bool early = held(kSpoolQuick, 0.3f) > 2.0f * held(kSpoolStandard, 0.3f) && held(kSpoolLaggy, 0.5f) < 0.5f * held(kSpoolStandard, 0.5f);
-        const bool stages = Near(held(kSpoolTwoStage, 0.35f), 0.4f * mostBar, 0.01f) && Near(held(kSpoolTwoStage, 0.45f), 0.4f * mostBar, 0.01f) &&
-                            held(kSpoolTwoStage, 0.6f) > 0.6f * mostBar;
-        Check(full && early && stages, "spool: every turbo makes all its boost at the red zone and none at idle; the small one comes in early, the big one late, two stages one after the other");
-        const float standard = rise(kSpoolStandard, 1.0f), quick = rise(kSpoolQuick, 1.0f), laggy = rise(kSpoolLaggy, 1.0f), lowLaggy = rise(kSpoolLaggy, 0.85f);
-        const float firstStage = rise(kSpoolTwoStage, 0.4f);
-        Check(Near(standard, 0.35f * logf(10.0f), 0.06f) && quick < 0.6f * standard && laggy > standard && lowLaggy > laggy + 0.1f && firstStage > 0.0f && firstStage < 1.0f,
-              "spool: at the red zone the standard boost is there in 0.8 s, the small turbo's sooner and the big one's later, longer still lower down, and the first of two stages within a second");
+        const bool early = held(kSpoolQuick, 0.2f) > 2.0f * held(kSpoolStandard, 0.2f) && held(kSpoolLaggy, 0.35f) < 0.5f * held(kSpoolStandard, 0.35f);
+        const bool stages = Near(held(kSpoolTwoStage, 0.25f), 0.4f * mostBar, 0.01f) && Near(held(kSpoolTwoStage, 0.3f), 0.4f * mostBar, 0.01f) &&
+                            held(kSpoolTwoStage, 0.45f) > 0.6f * mostBar;
+        bool halfWay = true;
+        for (int p = 0; p < kSpoolCount; p++) halfWay = halfWay && Near(held(p, p == kSpoolLaggy || p == kSpoolTwoStage ? 0.6f : 0.45f), mostBar, 0.001f);
+        Check(full && early && stages && halfWay,
+              "spool: every turbo makes all its boost at the red zone and none at idle, all of it from about half the way there (the big one and two stages from 0.6); the small one comes in early, "
+              "the big one late, two stages one after the other");
+        const float standard = rise(kSpoolStandard, 1.0f), quick = rise(kSpoolQuick, 1.0f), laggy = rise(kSpoolLaggy, 1.0f), lowLaggy = rise(kSpoolLaggy, 0.7f);
+        const float firstStage = rise(kSpoolTwoStage, 0.3f);
+        printf("     spool: 0.9 of the boost in %.2f s standard, %.2f small, %.2f big (%.2f at 0.7), %.2f the first of two stages at 0.3\n", standard, quick, laggy, lowLaggy, firstStage);
+        Check(Near(standard, 0.35f * logf(10.0f), 0.06f) && quick < 0.6f * standard && laggy > standard && lowLaggy > laggy + 0.1f && firstStage > 0.0f && firstStage < 1.1f,
+              "spool: at the red zone the standard boost is there in 0.8 s, the small turbo's sooner and the big one's later, longer still lower down, and the first of two stages in about a second");
         GaugeSettings g;
         SettingsDefaults(g);
         g.boostProfile = 7;
@@ -1402,6 +1407,27 @@ int main(int argc, char **argv)
         stopped.flags = 0;
         PowertrainStep(cold, stopped, truckCurve, 0.7f, top, 90.0f, 1.0f, kDt);
         Check(weak && cold.power == 0.0f && cold.load == 0.0f, "powertrain: cold oil takes 15 percent of the torque and no boost 35 percent; a stopped engine delivers nothing");
+        // the author's drive, 28 October: floored at mid revs a truck has all but a little of its torque once the
+        // boost has built, as the game's own engine has all of it. Floored and steady with the needle at needle of the
+        // way from idle to the red zone, with the class's scale, curve and turbo: what the engine delivers
+        auto steady = [&](int tachClass, float needle) {
+            GaugeSettings cs;
+            SettingsDefaults(cs);
+            cs.tachClass = tachClass;
+            const GaugeScale k = GaugeScaleOf(cs);
+            const float rpm = k.idle + needle * (k.redline - k.idle);
+            BoostModel bm = {};
+            PowertrainModel pw = {};
+            for (float at = 0.0f; at < 6.0f; at += kDt)
+            {
+                BoostStep(bm, f, needle, k.boost, kSpoolStandard, kDt);
+                PowertrainStep(pw, f, kClassCurves[tachClass], rpm / k.redline, k.max / k.redline, 90.0f, bm.bar / k.boost, kDt);
+            }
+            printf("     floored at %.0f rpm (%.2f of the way to the red zone): boost x%.2f, curve %.2f, %.2f of the most\n", rpm, needle, pw.boost, pw.curve, pw.power);
+            return pw.power;
+        };
+        Check(steady(kClassScout, 0.6f) >= 0.9f && steady(kClassTruck, 0.5f) >= 0.9f,
+              "powertrain: floored and steady a scout at 0.6 of the way to its red zone and a truck's diesel at half way hand at least 0.9 of their most once the boost has built");
     }
 
     // the automatic gearbox: the converter, the shift points, the hysteresis, the kickdown, a descent, a climb and wheelspin
@@ -4012,14 +4038,15 @@ int main(int argc, char **argv)
             Check(held.gear == 3 && held.relock && held.moving == 0.0f && same.gear == 3 && same.shifts == held.shifts,
                   "automatic: the game's gear lifted by the floor past the model's held gear takes the model's gear with it; a lower or the same one changes nothing");
         }
-        // finding 16: without boost the engine has 55 percent of its torque (kBoostTorque 0.45), with all of it all
+        // finding 16: without boost the engine has 65 percent of its torque (kBoostTorque 0.35 again after the author's
+        // drive of 28 October), with all of it all
         {
             TruckRaw on = lt;
             on.flags = 3;
             PowertrainModel none = {}, full = {};
             PowertrainStep(none, on, tc, 0.6f, tk.max / tk.redline, 80.0f, 0.0f, kDt);
             PowertrainStep(full, on, tc, 0.6f, tk.max / tk.redline, 80.0f, 1.0f, kDt);
-            Check(Near(none.boost, 0.55f, 0.001f) && Near(full.boost, 1.0f, 0.001f), "powertrain: an engine without boost has 0.55 of its torque, with full boost all of it");
+            Check(Near(none.boost, 0.65f, 0.001f) && Near(full.boost, 1.0f, 0.001f), "powertrain: an engine without boost has 0.65 of its torque, with full boost all of it");
         }
         // finding 8: a floored plateau (the game's pull at nothing, the wheels steady) in a numbered gear at 0.93 of 2a + 5
         // gives that gear's top, which TruckGearTop then goes by, and with it the limiter and the floored point up; not

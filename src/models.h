@@ -778,7 +778,7 @@ inline void TempProbeText(const TruckRaw &t, const TempModel &m, const GaugeSett
 
 // ---- the boost ----
 
-static const float kBoostRevsFrom = 0.2f, kBoostRevsFull = 0.65f; // the standard turbo starts to blow with the needle this far from idle to the red zone, and blows all it can from here
+static const float kBoostRevsFrom = 0.1f, kBoostRevsFull = 0.45f; // the standard turbo starts to blow with the needle this far from idle to the red zone, and blows all it can from here
 static const float kBoostPedal = 1.3f;       // the boost goes with the pedal to this power: little of it at a light foot
 static const float kBoostSpool = 0.35f, kBoostSpoolLow = 0.9f; // seconds the standard boost lags by on the way up at the red zone, and this much more at idle
 static const float kBoostFall = 0.18f, kBoostLift = 0.1f; // seconds on the way down, and with the foot off the pedal
@@ -792,9 +792,9 @@ struct SpoolStage { float share, from, full, spool, spoolLow; };
 struct SpoolProfile { SpoolStage stage[2]; float fall, lift; };
 static const SpoolProfile kSpoolProfiles[kSpoolCount] = {
     { { { 1.0f, kBoostRevsFrom, kBoostRevsFull, kBoostSpool, kBoostSpoolLow }, {} }, kBoostFall, kBoostLift }, // standard
-    { { { 1.0f, 0.08f, 0.45f, 0.18f, 0.35f }, {} }, 0.15f, 0.08f },                                         // small and quick: early and little lag
-    { { { 1.0f, 0.4f, 0.8f, 0.45f, 2.2f }, {} }, 0.25f, 0.12f },                                             // big and slow: late, and long to come at low revs
-    { { { 0.4f, 0.08f, 0.35f, 0.18f, 0.35f }, { 0.6f, 0.45f, 0.8f, 0.4f, 1.6f } }, 0.2f, 0.1f } };          // two stages: the small one early, the big one after it
+    { { { 1.0f, 0.05f, 0.3f, 0.18f, 0.35f }, {} }, 0.15f, 0.08f },                                          // small and quick: early and little lag
+    { { { 1.0f, 0.25f, 0.6f, 0.45f, 2.2f }, {} }, 0.25f, 0.12f },                                            // big and slow: late, and long to come at low revs
+    { { { 0.4f, 0.08f, 0.25f, 0.18f, 0.35f }, { 0.6f, 0.3f, 0.6f, 0.4f, 1.6f } }, 0.2f, 0.1f } };           // two stages: the small one early, the big one after it
 inline const SpoolProfile &SpoolOf(int profile) { return kSpoolProfiles[profile < 0 || profile >= kSpoolCount ? kSpoolStandard : profile]; }
 
 // The share of a stage's boost that the needle (0 to 1) brings.
@@ -947,8 +947,8 @@ static const float kThrottleUp = 0.6f;       // seconds the shaped pedal takes f
 static const float kThrottleDown = 0.15f;    // and from floored to up
 static const float kColdTorque = 0.15f;      // the torque the engine loses with its oil at 0 C, none from kColdTorqueTo up
 static const float kColdTorqueTo = 60.0f;
-static const float kBoostTorque = 0.45f;     // the share of the torque that comes from the boost: without it the engine has the rest. A turbo
-                                             // diesel stepped on at low speed has 30 to 50 percent at first (review 11, from 0.35; for a drive to confirm)
+static const float kBoostTorque = 0.35f;     // the share of the torque that comes from the boost: without it the engine has the rest. 0.45 on
+                                             // review 11 left trucks at mid revs short of the game's own pull (a drive, 28 October)
 enum { kCurvePoints = 8 };                   // points a torque curve holds at most
 
 // A torque curve: the torque as a share of the engine's most (y, 0 to 1) at engine speeds as a share of where the
