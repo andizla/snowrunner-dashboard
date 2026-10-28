@@ -2056,6 +2056,50 @@ int main(int argc, char **argv)
                   "gear taken where it pulls more; a kickdown only into a gear short of its point up; stuck floored it takes the first after a second, the "
                   "second again with the foot off; a weaker engine for the truck's mass sets off in the first; a light foot losing speed is no climb; a "
                   "quick truck through close gears floored holds each gear two and a half seconds, a scout one and a half");
+            // the wheels spinning at 0.95 of the gear's top while the ground says 0.6 (the grip known), floored: out of the
+            // gear it set off in the shift up goes by the wheels, so the first shifts up once its hold has passed (and
+            // not before); from the second gear up the ground guard holds (a tester's log, 27 October: a ZIL-157 sat in
+            // first 10 to 40 s on dirt)
+            auto spinningIn = [&](int gear, const EngineHand &hand, float moved) {
+                GearboxModel sb = {};
+                sb.running = true;
+                sb.gear = gear;
+                sb.grip = 2.0f;
+                const float top = TruckGearTop(sd, gear);
+                for (int i = 0; i < sd.wheels; i++) sd.spin[i] = 0.95f * top;
+                sd.speed = 0.6f * top / sb.grip;
+                sb.spin = sb.by = sb.rolling = sd.spin[0];
+                sb.pedal = sb.held = sb.feel = 1.0f;
+                sb.holdUp = true;
+                sb.moving = moved;
+                for (float at = 0.0f; at < 0.5f; at += kDt) GearboxStep(sb, sd, dk, 1.0f, 1.0f, kDt, hand);
+                return sb.gear;
+            };
+            // stuck where it stands, the ground at nothing and the wheels at 0.95 of the first's top, floored 12 s: no
+            // shift up and back (without the ground's rule while slow it went up and down every 9 s)
+            int stuckShifts = 0;
+            {
+                GearboxModel sb = {};
+                sb.running = true;
+                sb.gear = 1;
+                sb.grip = 2.0f;
+                for (int i = 0; i < sd.wheels; i++) sd.spin[i] = 0.95f * TruckGearTop(sd, 1);
+                sd.speed = 0.0f;
+                sb.spin = sb.by = sb.rolling = sd.spin[0];
+                sb.pedal = sb.held = sb.feel = 1.0f;
+                for (float at = 0.0f; at < 12.0f; at += kDt)
+                {
+                    const int was = sb.gear;
+                    GearboxStep(sb, sd, dk, 1.0f, 1.0f, kDt, weak);
+                    stuckShifts += sb.gear != was;
+                }
+            }
+            const int firstAfter = spinningIn(1, weak, kEngineGearHold), firstBefore = spinningIn(1, weak, 0.0f), secondWeak = spinningIn(2, weak, kEngineGearHold),
+                      startGear = spinningIn(2, whole, kEngineGearHold), third = spinningIn(3, whole, kEngineGearHold);
+            Check(firstAfter == 2 && firstBefore == 1 && secondWeak == 2 && startGear == 3 && third == 3 && stuckShifts == 0,
+                  "automatic, the engine handed over: wheels spinning at 0.95 of the gear's top on ground that says 0.6, floored: the first shifts up "
+                  "once its hold has passed, not before; the start gear (the second of a crawling first) shifts up the same; the third holds, and "
+                  "the second when it is not the start gear; stuck where it stands the first holds");
             // an engine's own curve from its peak torque's speed: a turbo diesel's plateau from 0.85 to 1.5 times it, three
             // fifths at half of it, four fifths at the red zone; a naturally aspirated engine's hump at the peak
             const TorqueCurve td = EngineCurveFromPeak(1950.0f / 4850.0f, false), na = EngineCurveFromPeak(0.6f, true);

@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- With `Powertrain=1` the automatic's shift up out of first (and out of the gear it sets off in) goes by the wheels as they turn, spinning or not. A tester's log of 27 October: a ZIL-157 on dirt sat in first for 10 to 40 seconds with its wheels spinning near the gear's top, since the shift up went by the ground speed, and the game's pull falls by the wheel speed. From the second gear up a shift up goes by the ground as before. A truck stuck where it stands, under 0.3 of its start gear's top over the ground, keeps the ground's rule, so it does not shift up and back.
+
 ## [0.17.1]
 
 - With `Powertrain=1` the engine's push near a gear's top dies down before the shift: over the gear's last fifth the torque factor's roof falls in a straight line to the game's own at the top, and a scout's roof is 3, a truck's and a heavy truck's 6. With the flat roof of 6 a vanilla Defender floored on a road shot from 27 to 58 km/h in 5 seconds through three gears (27 October). The automatic's floored shift up comes a little earlier with it.

@@ -1470,7 +1470,9 @@ inline float GearboxDownPoint(const TruckRaw &t, const GaugeScale &k, int gear, 
 // model only follows the wheels.
 //
 // The shifts go by the wheels' speed, as a truck's automatic goes by its output shaft, but neither wheelspin in mud nor
-// wheels locked under the brake shift it, once the wheels' speed against the ground's is learned; no shift down puts
+// wheels locked under the brake shift it, once the wheels' speed against the ground's is learned. With the mod's engine
+// the first gear (and the start gear) differs: its shift up goes by the wheels spinning or not, as the game's pull
+// falls by the wheel speed and a spinning first gear would sit until the ground caught up, pulling almost nothing. No shift down puts
 // the engine near the red zone at the speed the wheels turn. The shift points go by a pedal that falls slowly after a
 // lift, so a foot floored and lifted by turns does not shift up at each lift: at a light foot between idle and the red
 // zone, floored where the next gear or the one below pulls more in the game (GamePull), which gives the most with the
@@ -1575,10 +1577,17 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     const bool braking = TruckBrake(t) > 0.0f || t.handbrake;
     const float coastDown = GearboxPoint(k, braking ? kCoastDownBraking : kCoastDown), coastTo = GearboxPoint(k, kCoastDownTo), most = GearboxPoint(k, kDownMost);
     const float by = footOff ? coast : pace, now = GearboxInput(t, k, m.gear, by), lower = GearboxInput(t, k, m.gear - 1, by);
-    // a shift up with the foot on goes by the ground: wheels spinning in mud or on rocks pull no harder in a taller gear.
-    // The wheels as they turn now, not smoothed: a scout's first gear is through in a second, a quarter of it in the
-    // smoothing's lag
-    const float byUp = footOff || m.grip <= 0.0f ? by : fminf(raw, onGround * kSlipUp);
+    // a shift up with the foot on, from the second gear up, goes by the ground: wheels spinning in mud or on rocks pull no
+    // harder in a taller gear. With the mod's engine, in the gears it sets off in (the first, and the start gear), it
+    // goes by the wheels as they turn, spinning or not: the game's pull falls by the wheel speed, so a spinning first
+    // gear gets almost none and gains nothing from staying, and the next gear turns the wheels slower at the same engine
+    // speed (a tester's log, 27 October: a ZIL-157 on dirt sat in first 10 to 40 s, its wheels near the gear's top).
+    // The gear's hold (kEngineGearHold) still gives a launch with wheelspin its seconds there, and a truck going under
+    // kStuckShare of the start gear's top (slow: stuck, spinning where it stands) keeps the ground's rule, so it does
+    // not shift up and back. The wheels as they turn now, not smoothed: a scout's first gear is through in a second, a
+    // quarter of it in the smoothing's lag. The limiter goes by this too (pastIn)
+    const bool setOff = engine && m.gear <= start && !slow;
+    const float byUp = footOff || m.grip <= 0.0f ? by : setOff ? raw : fminf(raw, onGround * kSlipUp);
     // a lower gear the engine can take at the speed the wheels turn
     auto fits = [&](int gear) { return GearboxInput(t, k, gear, rolling) < most; };
     // what a gear pulls in the game at this speed, against the others
