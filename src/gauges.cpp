@@ -2418,7 +2418,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             const float launch = w.engine.torque > 0.0f && w.mass > 0.0f && w.engineVehicle == w.refs.vehicle
                                      ? w.engine.torque / w.mass * (w.profile.torque > 0.0f ? w.profile.torque : 1.0f) : 0.0f;
             const EngineHand hand{ w.hand.on, &curve, scale.redline > 0.0f ? scale.max / scale.redline : 1.0f, s.engineShare / 100.0f, launch,
-                                   GearHoldOf(w, autoClass), kLightPeak * CurvePeak(curve) * scale.redline, s.input, TorqueRoof(autoClass) };
+                                   GearHoldOf(w, autoClass), EngineLightFloor(curve, scale.redline), s.input, TorqueRoof(autoClass) };
             const int huntsWere = w.gearbox.hunts;
             GearboxStep(w.gearbox, raw, scale, foot, w.power.power, dt, hand);
             if (w.gearbox.hunts != huntsWere)
@@ -2578,6 +2578,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         {
             const GearboxOptions options{ s.requireClutch, s.requireGearHeld, s.skipNeutral, s.downStaysForward };
             const int autoGear = TakeoverAutoGear(raw, w.gearbox.gear, GearboxLowestFit(w.gearbox, raw, scale, w.hand.on));
+            if (!own || w.pos.pos == kPosA) GearboxFollowFloor(w.gearbox, autoGear); // in A the model's gear goes where the floor lifts the game's
             const int posWas = w.pos.pos;
             GearboxActions acts = w.actions;
             if (shifterAsked)
