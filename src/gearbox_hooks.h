@@ -120,7 +120,7 @@ inline const char *GearboxDoorPos(const GearboxDoors &was, const GearboxDoors &n
 // ---- the gate: which hooks a level needs (0.17.0) ----
 // The eight shift hooks at Gearbox 1 and 2 (level as GaugeSettings::gearbox: 0 the game's, 1 the mod's automatic, 2
 // the mod's own gearbox), the truck update's at 2 with Damage on (the stall's damage and the clutch's burn go through
-// it). At Gearbox=0 none: the mod changes nothing in the game's code and runs as 0.16.x did.
+// it). At Gearbox=0 none of them; the creep's hook on the wheels' drive (CreepHook) goes by Creep alone, at every level.
 struct HooksWanted { bool shifts, truckUpdate; };
 inline HooksWanted GearboxHooksWanted(int level, bool damage) { return HooksWanted{ level >= 1, level >= 2 && damage }; }
 
@@ -166,3 +166,14 @@ typedef void (*TruckFrameFn)(void *first);
 bool TruckUpdateHook(uintptr_t at, TruckFrameFn onFrame, char *why, size_t size);
 void TruckUpdateUnhook();
 long TruckUpdateFrames(); // the frames the hook has seen
+
+// The game's wheels' drive (game_code.h, DrivePlaceFind) detoured at address at to the stub of creep_stub.asm, in a
+// transaction of its own, the first time Creep is on with a truck driven; never taken out while the game runs. False
+// with why when Detours refused it; true at once when it is in place already.
+bool CreepHook(uintptr_t at, char *why, size_t size);
+bool CreepHooked();
+// The share of the drive throttle the hook gives the truck whose action this is (models.h, CreepShare): the larger of
+// the game's and this. An action of 0 or a share of 0 lets every call pass as it came.
+void CreepGive(uint64_t action, float share);
+// The hook's calls so far: for the action given (hits) and all of them.
+void CreepCounts(long &hits, long &calls);

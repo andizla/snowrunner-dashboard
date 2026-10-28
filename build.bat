@@ -25,7 +25,9 @@ rem must be built /O2: the hook on the game's truck update relies on its call th
 if not exist out\obj\detours mkdir out\obj\detours
 cl /nologo /c /O2 /w /MT /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0601 /Fo:out\obj\detours\ src\detours\detours.cpp src\detours\disasm.cpp src\detours\modules.cpp src\detours\creatwth.cpp src\detours\image.cpp || goto fail
 cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /Fo:out\obj\gearbox_hooks.obj src\gearbox_hooks.cpp || goto fail
-lib /nologo /OUT:out\obj\gearbox.lib out\obj\gearbox_hooks.obj out\obj\detours\detours.obj out\obj\detours\disasm.obj out\obj\detours\modules.obj out\obj\detours\creatwth.obj out\obj\detours\image.obj || goto fail
+rem the creep's stub on the game's wheels' drive (src\creep_stub.asm), in the same library
+ml64 /nologo /c /Fo out\obj\creep_stub.obj src\creep_stub.asm || goto fail
+lib /nologo /OUT:out\obj\gearbox.lib out\obj\gearbox_hooks.obj out\obj\creep_stub.obj out\obj\detours\detours.obj out\obj\detours\disasm.obj out\obj\detours\modules.obj out\obj\detours\creatwth.obj out\obj\detours\image.obj || goto fail
 rem the recordings the mod's file carries (src\sounds.rc: assets\turbo_high_1.wav and eight more). Without them the
 rem mod is built all the same and makes its sounds by code (src\sound.h)
 set SOUNDS=

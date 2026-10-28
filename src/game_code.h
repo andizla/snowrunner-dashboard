@@ -260,6 +260,61 @@ inline bool DamagePathFind(const uint8_t *code, size_t from, size_t to, DamagePa
     return false;
 }
 
+// ---- the game's wheels' drive, for the creep (models.h, CreepShare) ----
+// Once a physics step the game hands the drive throttle it made from the pedal to its wheels' drive: movss xmm2,[rbp+8]
+// (the step's seconds); mov rcx,rbx (the action); movss xmm1,[rsp+150h] (the throttle); call. In the 6ab52f5d image the
+// call is at c41d40 and the drive at c41da0, in 6a607c05 at c40270 and c402d0; it is the drive's only call there. The
+// call's target has to be a function's start (int3 padding before it) with the drive's first bytes, and the bytes
+// before the call have to stand once in the code.
+static const char *const kDriveCallPattern = "F3 0F 10 55 08 48 8B CB F3 0F 10 8C 24 50 01 00 00 E8 ? ? ? ?";
+static const char *const kDriveHeadPattern = "48 8B C4 55 56 57 41 54 41 55 41 56 41 57 48 8D A8 ? ? ? ? 48 81 EC ? ? ? ? 48 C7 45 ? FE FF FF FF";
+
+struct DrivePlace
+{
+    size_t call, drive; // offsets in the code, 0 = not found
+    const char *why;    // what was not found (a string literal), "" when both were
+};
+
+inline bool DrivePlaceFind(const uint8_t *code, size_t from, size_t to, DrivePlace &out)
+{
+    out = DrivePlace{};
+    out.why = "";
+    uint8_t bytes[kPatternMax], mask[kPatternMax];
+    size_t at = 0;
+    int count = 0;
+    int length = PatternParse(kDriveCallPattern, bytes, mask);
+    if (!PatternFind(code, from, to, bytes, mask, length, at, count) || count != 1)
+    {
+        out.why = count > 1 ? "the call of the wheels' drive stands more than once" : "the call of the wheels' drive was not found";
+        return false;
+    }
+    const size_t call = at + (size_t)length - 5;
+    int32_t distance = 0;
+    memcpy(&distance, code + call + 1, sizeof distance);
+    const int64_t target = (int64_t)call + 5 + distance;
+    length = PatternParse(kDriveHeadPattern, bytes, mask);
+    if (target <= (int64_t)from || target + length > (int64_t)to)
+    {
+        out.why = "the call of the wheels' drive goes outside the game's code";
+        return false;
+    }
+    const size_t drive = (size_t)target;
+    if (code[drive - 1] != 0xCC)
+    {
+        out.why = "the call of the wheels' drive does not go to a function's start";
+        return false;
+    }
+    if (!PatternAt(code + drive, bytes, mask, length))
+    {
+        out.why = code[drive] == 0xE9 || (code[drive] == 0xFF && code[drive + 1] == 0x25) ? "another mod holds the wheels' drive"
+                                                                                       : "the wheels' drive does not start as it should";
+        return false;
+    }
+    out.call = call;
+    out.drive = drive;
+    return true;
+}
+
 // The finds in a line of text for the log.
 inline void GameFunctionsText(const FunctionFind finds[kFnCount], char *out, size_t size)
 {

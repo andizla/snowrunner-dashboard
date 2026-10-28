@@ -55,6 +55,17 @@ __declspec(noinline) static float FakeTruckUpdate(void *first, void *second, flo
 static volatile LONG64 g_frameFirst = 0;
 static void FakeOnFrame(void *first) { g_frameFirst = (LONG64)first; }
 
+// A stand-in for the game's wheels' drive (the creep's hook): the action, the throttle and the step's seconds, as
+// the game passes them; what it got is kept.
+static volatile float g_driveThrottle = 0.0f, g_driveDt = 0.0f;
+static void *volatile g_driveAction = nullptr;
+__declspec(noinline) static void FakeDrive(void *action, float throttle, float dt)
+{
+    g_driveAction = action;
+    g_driveThrottle = throttle;
+    g_driveDt = dt;
+}
+
 struct Region { uint64_t at; std::vector<uint8_t> bytes; };
 static std::vector<Region> g_game;
 
@@ -371,6 +382,13 @@ static void RealImageTest()
     snprintf(line, sizeof line, "places in a real image of the game's exe: the truck update at %zx, the damage update at %zx%s%s", path.truckUpdate, path.damageUpdate,
              pathFound ? "" : "; ", path.why);
     Check(pathRight, line);
+    // the wheels' drive for the creep: its call and the drive where the two builds have them (review 11's addendum), in
+    // another build found once
+    DrivePlace drive;
+    const bool driveFound = DrivePlaceFind(image.data(), from, to, drive);
+    const bool driveRight = driveFound && (!steam || (drive.call == 0xc40270 && drive.drive == 0xc402d0)) && (!update || (drive.call == 0xc41d40 && drive.drive == 0xc41da0));
+    snprintf(line, sizeof line, "places in a real image of the game's exe: the wheels' drive at %zx, called at %zx%s%s", drive.drive, drive.call, driveFound ? "" : "; ", drive.why);
+    Check(driveRight, line);
 
     // the places the mod cannot do without, by each of their ways alone (game_globals.h): on a build the test has
     // numbers for, every way a place has must give it there; on another the line tells which ways found what, so a
@@ -1099,6 +1117,70 @@ int main()
               "truck update hook: through Detours on a function with the game's signature, the callback gets the first argument, the function its five "
               "arguments (the fifth on the stack) and its answer in xmm0 comes back; after the unhook it is its own again");
         if (!hooked) printf("     %s\n", why);
+    }
+
+    // the creep's stub on a function with the wheels' drive's signature: for the action given the throttle becomes the
+    // larger of its own and the share, the step's seconds and every other action's throttle pass as they came, and
+    // with no share every call passes; the counts follow
+    {
+        uint8_t truck[0x100] = {}, other[0x100] = {};
+        void (*volatile drive)(void *, float, float) = &FakeDrive;
+        char why[160] = "";
+        const bool hooked = CreepHook((uintptr_t)&FakeDrive, why, sizeof why);
+        long hits0 = 0, calls0 = 0;
+        CreepCounts(hits0, calls0);
+        CreepGive((uint64_t)(uintptr_t)truck, 0.2f);
+        drive(truck, 0.05f, 0.033f);
+        const bool raised = g_driveThrottle == 0.2f && g_driveDt == 0.033f && g_driveAction == truck;
+        drive(truck, 0.5f, 0.033f);
+        const bool pedalWins = g_driveThrottle == 0.5f;
+        drive(other, 0.05f, 0.033f);
+        const bool otherPasses = g_driveThrottle == 0.05f && g_driveAction == other;
+        CreepGive(0, 0.0f);
+        drive(truck, 0.05f, 0.033f);
+        const bool nonePasses = g_driveThrottle == 0.05f;
+        CreepGive((uint64_t)(uintptr_t)truck, 0.0f);
+        drive(truck, 0.0f, 0.033f);
+        const bool zeroPasses = g_driveThrottle == 0.0f;
+        long hits = 0, calls = 0;
+        CreepCounts(hits, calls);
+        const bool twice = CreepHook((uintptr_t)&FakeDrive, why, sizeof why);
+        Check(hooked && raised && pedalWins && otherPasses && nonePasses && zeroPasses && hits - hits0 == 2 && calls - calls0 == 5 && twice && CreepHooked(),
+              "creep hook: through Detours on a function with the wheels' drive's signature, the driven truck's throttle is the larger of its own and the "
+              "share, the seconds pass as they came, another truck's throttle and every call without a share pass; the counts follow");
+        if (!hooked) printf("     %s\n", why);
+    }
+
+    // the wheels' drive found by its call in made-up code: int3 padding, the drive's first bytes, the call's bytes once;
+    // not taken where the call is there twice, does not go to a function's start, or another mod's jump stands there
+    {
+        uint8_t driveHead[kPatternMax], driveMask[kPatternMax], callBytes[kPatternMax], callMask[kPatternMax];
+        const int headLength = PatternParse(kDriveHeadPattern, driveHead, driveMask), callLength = PatternParse(kDriveCallPattern, callBytes, callMask);
+        std::vector<uint8_t> code(0x400, 0x90);
+        const size_t driveAt = 0x200, callAt = 0x80;
+        memset(code.data() + driveAt - 16, 0xCC, 16);
+        for (int i = 0; i < headLength; i++) code[driveAt + i] = driveMask[i] ? driveHead[i] : 0x11;
+        for (int i = 0; i < callLength; i++) code[callAt + i] = callMask[i] ? callBytes[i] : 0;
+        const size_t call = callAt + (size_t)callLength - 5;
+        const int32_t distance = (int32_t)driveAt - (int32_t)(call + 5);
+        memcpy(code.data() + call + 1, &distance, 4);
+        DrivePlace place;
+        const bool found = DrivePlaceFind(code.data(), 0x10, code.size(), place) && place.call == call && place.drive == driveAt && !*place.why;
+        std::vector<uint8_t> held = code;
+        held[driveAt] = 0xE9;
+        DrivePlace heldPlace;
+        const bool heldNot = !DrivePlaceFind(held.data(), 0x10, held.size(), heldPlace) && strstr(heldPlace.why, "another mod");
+        std::vector<uint8_t> noStart = code;
+        noStart[driveAt - 1] = 0x90;
+        DrivePlace noStartPlace;
+        const bool noStartNot = !DrivePlaceFind(noStart.data(), 0x10, noStart.size(), noStartPlace) && strstr(noStartPlace.why, "start");
+        std::vector<uint8_t> twiceCode = code;
+        memcpy(twiceCode.data() + 0x300, code.data() + callAt, (size_t)callLength);
+        DrivePlace twicePlace;
+        const bool twiceNot = !DrivePlaceFind(twiceCode.data(), 0x10, twiceCode.size(), twicePlace) && strstr(twicePlace.why, "more than once");
+        Check(found && heldNot && noStartNot && twiceNot,
+              "creep place: the wheels' drive found by its call's bytes, the call's target a function's start with the drive's first bytes; not where the "
+              "call stands twice, does not go to a start, or another mod holds the drive");
     }
 
     // GearboxHook's choice (review 6, G6): made-up finds at base 0, two found once at the test's own functions, one held,

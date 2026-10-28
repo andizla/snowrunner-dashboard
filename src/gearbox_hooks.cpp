@@ -375,3 +375,64 @@ void TruckUpdateUnhook()
 }
 
 long TruckUpdateFrames() { return g_frames; }
+
+// ---- the game's wheels' drive (the creep) ----
+// The stub (creep_stub.asm, CreepDrive) reads these by their C names. The slot it reads is one of two, filled on the
+// mod's thread and then published whole, so the stub never sees an action with another truck's share: the slot it
+// may still be reading is written again only two passes later, and the stub reads it within a few instructions.
+struct CreepSlot
+{
+    uint64_t action;
+    float share;
+    uint32_t spare;
+};
+extern "C"
+{
+void *g_creepWay = nullptr;
+void *volatile g_creepSlot = nullptr;
+volatile LONG g_creepHits = 0, g_creepCalls = 0;
+void CreepDrive();
+}
+static CreepSlot g_creepSlots[2];
+static int g_creepNext = 0;
+static bool g_creepHooked = false;
+
+bool CreepHook(uintptr_t at, char *why, size_t size)
+{
+    why[0] = 0;
+    if (g_creepHooked) return true;
+    g_creepWay = (void *)at;
+    void **targets[1] = { &g_creepWay };
+    void *const hooks[1] = { (void *)&CreepDrive };
+    const long error = GearboxAttach(targets, hooks, 1);
+    if (error != NO_ERROR)
+    {
+        snprintf(why, size, "Detours could not attach the wheels' drive's hook (error %ld)", error);
+        g_creepWay = nullptr;
+        return false;
+    }
+    g_creepHooked = true;
+    return true;
+}
+
+bool CreepHooked() { return g_creepHooked; }
+
+void CreepGive(uint64_t action, float share)
+{
+    if (!action || !(share > 0.0f))
+    {
+        InterlockedExchangePointer(&g_creepSlot, nullptr);
+        return;
+    }
+    CreepSlot &slot = g_creepSlots[g_creepNext];
+    g_creepNext ^= 1;
+    slot.action = action;
+    slot.share = share;
+    InterlockedExchangePointer(&g_creepSlot, &slot);
+}
+
+void CreepCounts(long &hits, long &calls)
+{
+    hits = g_creepHits;
+    calls = g_creepCalls;
+}
