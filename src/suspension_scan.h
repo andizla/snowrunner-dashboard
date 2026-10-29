@@ -140,12 +140,36 @@ inline bool SuspValueSane(int k, float v)
     return v > 0.0f && v <= 1.0f;
 }
 
+// The stock put back into every value the tune wrote, where the constraint is still that class and the value still
+// the tune's (review 15: a truck left tuned would else give its scaled values as the stock when driven again, and the
+// slider would scale them anew). Returns the values put back.
+inline int SuspTuneRestore(SuspTune &t, const TruckMemory &m, uint64_t vtable)
+{
+    int restored = 0;
+    for (SuspWheel &w : t.wheel)
+    {
+        uint64_t vt = 0;
+        if (!w.constraint || !vtable || !m.get(w.constraint, vt) || vt != vtable) continue;
+        for (int k = 0; k < kSuspValues; k++)
+        {
+            float now = 0.0f;
+            if (w.ours[k] && m.get(w.constraint + kSuspValueAt[k], now) && now == w.wrote[k] && m.put(w.constraint + kSuspValueAt[k], w.stock[k])) restored++;
+            w.ours[k] = false;
+        }
+    }
+    return restored;
+}
+
 // One pass for the driven truck: vtable is the constraint's vtable in the game (0 = not known: nothing is done).
 // scale: SpringScale, DampingScale, TravelMinScale, TravelMaxScale. Returns the wheels written on this pass.
-inline int SuspTuneStep(SuspTune &t, const TruckMemory &m, const TruckRefs &r, uint64_t vtable, const float scale[kSuspValues])
+// restored: the values of the truck driven before put back on this pass (another truck is driven now).
+inline int SuspTuneStep(SuspTune &t, const TruckMemory &m, const TruckRefs &r, uint64_t vtable, const float scale[kSuspValues], int *restored = nullptr)
 {
+    if (restored) *restored = 0;
     if (t.vehicle != r.vehicle)
     {
+        const int back = SuspTuneRestore(t, m, vtable);
+        if (restored) *restored = back;
         t = SuspTune{ r.vehicle };
         memcpy(t.scale, scale, sizeof t.scale);
     }

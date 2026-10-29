@@ -2354,8 +2354,17 @@ static void SuspTunePass(SuspTune &t, const TruckMemory &m, const TruckRefs &r, 
     const float scale[kSuspValues] = { s.springScale, s.dampingScale, s.travelMinScale, s.travelMaxScale };
     bool tuned = false;
     for (float f : scale) tuned |= f != 1.0f;
-    if (!tuned && t.vehicle != r.vehicle) return; // nothing to write, and nothing written to put back
-    SuspTuneStep(t, m, r, SuspVtable(), scale);
+    if (!tuned && t.vehicle != r.vehicle)
+    {
+        // nothing to write on this truck; the truck driven before (if any) gets its stock back
+        const int back = t.vehicle ? SuspTuneRestore(t, m, SuspVtable()) : 0;
+        if (back) Log(L"suspension: the truck driven before: %d values put back to its stock", back);
+        t = SuspTune{};
+        return;
+    }
+    int restored = 0;
+    SuspTuneStep(t, m, r, SuspVtable(), scale, &restored);
+    if (restored) Log(L"suspension: the truck driven before: %d values put back to its stock", restored);
     for (int i = 0; i < r.wheels && i < kMaxWheels; i++)
     {
         SuspWheel &w = t.wheel[i];

@@ -1636,6 +1636,45 @@ int main()
               "a rebuilt constraint read anew, another class never written; the travel limits scaled on their side of 0, an unknown one left alone; a moving slider's writes not counted");
     }
 
+    // a truck left tuned (review 15): truck A tuned, truck B driven, A again. A gets its stock back when B is driven,
+    // so A's stock is read as the truck's own again and the slider scales it once, never twice
+    {
+        const uint64_t vtable = kExe + 0x23d9538, wheelA = 0x10430000, wheelB = 0x10440000, a = 0x10450000, b = 0x10460000;
+        for (uint64_t at : { wheelA, wheelB, a, b }) Block(at, 0x200);
+        Put(wheelA + 0x28, a);
+        Put(wheelB + 0x28, b);
+        for (uint64_t c : { a, b })
+        {
+            Put(c, vtable);
+            Put(c + 0xC4, 0.026f);
+            Put(c + 0xC8, 0.4f);
+            Put(c + 0xB4, -0.6f);
+            Put(c + 0xB8, 0.4f);
+        }
+        TruckRefs truckA = {}, truckB = {};
+        truckA.vehicle = kVehicle;
+        truckA.wheel[0] = wheelA;
+        truckA.wheels = 1;
+        truckB.vehicle = kOtherVehicle;
+        truckB.wheel[0] = wheelB;
+        truckB.wheels = 1;
+        auto at = [&](uint64_t c, uint32_t off) { float v = 0.0f; Peek(c + off, &v, sizeof v); return v; };
+        const float twice[kSuspValues] = { 2.0f, 1.0f, 2.0f, 1.0f };
+        SuspTune tune = {};
+        int restored = -1;
+        const bool tuned = SuspTuneStep(tune, kMemory, truckA, vtable, twice, &restored) == 1 && restored == 0 && Near(at(a, 0xC4), 0.052f) && Near(at(a, 0xB4), -1.2f);
+        const bool left = SuspTuneStep(tune, kMemory, truckB, vtable, twice, &restored) == 1 && restored == 2 && at(a, 0xC4) == 0.026f && at(a, 0xB4) == -0.6f &&
+                          Near(at(b, 0xC4), 0.052f);
+        const bool again = SuspTuneStep(tune, kMemory, truckA, vtable, twice, &restored) == 1 && restored == 2 && tune.wheel[0].stock[kSuspStrength] == 0.026f &&
+                           Near(at(a, 0xC4), 0.052f) && Near(at(a, 0xB4), -1.2f) && at(b, 0xC4) == 0.026f;
+        // a value the game wrote in the meantime is the game's, never overwritten by the old stock
+        Put(a + 0xC8, 0.5f);
+        Put(a + 0xC4, 0.03f);
+        const bool theirs = SuspTuneStep(tune, kMemory, truckB, vtable, twice, &restored) == 1 && restored == 1 && at(a, 0xC4) == 0.03f && at(a, 0xB4) == -0.6f;
+        Check(tuned && left && again && theirs, "suspension tune: a truck left tuned gets its stock back when another is driven, so driven again it is scaled once and never twice; "
+                                                "a value the game wrote in the meantime is left as the game's");
+    }
+
     RealImageTest();
 
     printf(g_failed ? "TRUCK TEST FAILED (%d)\n" : "TRUCK TEST OK\n", g_failed);
