@@ -224,3 +224,70 @@ inline int SuspTuneStep(SuspTune &t, const TruckMemory &m, const TruckRefs &r, u
     }
     return written;
 }
+
+// ---- the travel probe (review 14: constraint + 0xA4 is the attach point the game's deviation moves, not the travel) ----
+// A wheel's centre in the chassis's frame: the world's offset from the chassis along its forward, up and left axes.
+// Along up it is the candidate for the wheel's travel, rising as the suspension compresses; the probe logs it with
+// its range and its fastest speed, so a drive over bumps and with a load shows whether it is.
+inline void SuspLocal(const TruckRaw &t, int i, float out[3])
+{
+    const float d[3] = { t.wheelAt[i][0] - t.position[0], t.wheelAt[i][1] - t.position[1], t.wheelAt[i][2] - t.position[2] };
+    const float *axis[3] = { t.forward, t.up, t.left };
+    for (int k = 0; k < 3; k++) out[k] = d[0] * axis[k][0] + d[1] * axis[k][1] + d[2] * axis[k][2];
+}
+
+struct SuspTravel
+{
+    uint64_t vehicle;
+    int looks;                   // passes in this window
+    float clock;                 // the game's clock at the last pass (TruckRaw::clock)
+    float last[kMaxWheels];      // each wheel's height in the chassis's frame at the last pass
+    float least[kMaxWheels], most[kMaxWheels], fastest[kMaxWheels]; // in this window; fastest signed, rising positive
+};
+
+// One pass: false where the truck's places were not read. A new truck starts over; a pass without the game's clock
+// moving (a menu, a pause) adds nothing.
+inline bool SuspTravelStep(SuspTravel &s, const TruckRaw &t, uint64_t vehicle)
+{
+    if (!t.waterKnown || !t.clockKnown || t.wheels <= 0) return false;
+    if (s.vehicle != vehicle)
+    {
+        s = SuspTravel{ vehicle };
+        s.clock = t.clock;
+    }
+    const float dt = t.clock - s.clock;
+    if (s.looks && dt <= 0.0f) return true;
+    for (int i = 0; i < t.wheels && i < kMaxWheels; i++)
+    {
+        float local[3];
+        SuspLocal(t, i, local);
+        const float h = local[1];
+        if (!s.looks)
+        {
+            s.least[i] = s.most[i] = h;
+            s.fastest[i] = 0.0f;
+        }
+        else
+        {
+            s.least[i] = fminf(s.least[i], h);
+            s.most[i] = fmaxf(s.most[i], h);
+            const float v = dt > 0.0f ? (h - s.last[i]) / dt : 0.0f;
+            if (fabsf(v) > fabsf(s.fastest[i])) s.fastest[i] = v;
+        }
+        s.last[i] = h;
+    }
+    s.clock = t.clock;
+    s.looks++;
+    return true;
+}
+
+// A new window: the ranges start from the last heights.
+inline void SuspTravelWindow(SuspTravel &s, int wheels)
+{
+    for (int i = 0; i < wheels && i < kMaxWheels; i++)
+    {
+        s.least[i] = s.most[i] = s.last[i];
+        s.fastest[i] = 0.0f;
+    }
+    s.looks = 1;
+}

@@ -2132,6 +2132,8 @@ struct TruckWatch
     TruckWho who;               // which truck refs are, as the passes read it; who.taken's key is "" while none is read
     SuspProbe susp;             // the probe's scan for each wheel's suspension constraint (Probe=1)
     SuspTune tune;              // what SpringScale and DampingScale wrote into each wheel's constraint
+    SuspTravel travel;          // the travel probe: each wheel's height in the chassis's frame (Probe=1)
+    ULONGLONG travelAt;         // when it logs next
 };
 
 // The mod's gearbox has the truck in a position of the player's own (not A): the engine runs behind its clutch.
@@ -2387,6 +2389,37 @@ static void SuspTunePass(SuspTune &t, const TruckMemory &m, const TruckRefs &r, 
     }
 }
 
+// With Probe=1: the travel probe (suspension_scan.h). Once a truck, each wheel's centre in the chassis's frame (along
+// forward, up, left) beside its constraint's attach point (+ 0xA0) and axis (+ 0x70), to match the two frames; then
+// every kSuspEvery ms each wheel's height along up, its range in the window and its fastest speed (rising positive).
+static void SuspTravelProbe(SuspTravel &p, ULONGLONG &at, const TruckMemory &m, const TruckRefs &r, const TruckRaw &t, ULONGLONG now)
+{
+    const bool fresh = p.vehicle != r.vehicle;
+    if (!SuspTravelStep(p, t, r.vehicle)) return;
+    if (fresh)
+    {
+        for (int i = 0; i < t.wheels && i < kMaxWheels; i++)
+        {
+            float local[3], pivot[3] = {}, axis[3] = {};
+            uint64_t c = 0;
+            SuspLocal(t, i, local);
+            const bool known = m.get(r.wheel[i] + kSuspConstraintAt, c) && m.get(c + 0xA0, pivot) && m.get(c + 0x70, axis);
+            Log(L"probe: travel: wheel %d at %.4f, %.4f, %.4f in the chassis's frame; its constraint's attach point %.4f, %.4f, %.4f, axis %.3f, %.3f, %.3f%s", i, local[0],
+                local[1], local[2], pivot[0], pivot[1], pivot[2], axis[0], axis[1], axis[2], known ? L"" : L" (not read)");
+        }
+        at = now + kSuspEvery;
+        return;
+    }
+    if (now < at) return;
+    at = now + kSuspEvery;
+    wchar_t line[1600];
+    int used = 0;
+    for (int i = 0; i < t.wheels && i < kMaxWheels && used < 1500; i++)
+        used += swprintf_s(line + used, 1600 - used, L"%s%d: %.4f (%.4f to %.4f) %+.3f m/s", i ? L" | " : L"", i, p.last[i], p.least[i], p.most[i], p.fastest[i]);
+    Log(L"probe: travel: %s", line);
+    SuspTravelWindow(p, t.wheels);
+}
+
 static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s, bool front, TruckRaw &raw, World &world)
 {
     const int probe = s.probe;
@@ -2441,6 +2474,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         else Log(L"truck: none is driven now");
     }
     if (probe && w.found) SuspProbeStep(w.susp, m, w.refs, now);
+    if (probe && w.found) SuspTravelProbe(w.travel, w.travelAt, m, w.refs, raw, now);
     if (w.found) SuspTunePass(w.tune, m, w.refs, s);
     WorldRead(m, w.found ? w.refs.control : 0, world);
     // a load ended (the game's loading screen gone): the truck that drives on under the game's id it had before the

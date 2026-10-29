@@ -1675,6 +1675,37 @@ int main()
                                                 "a value the game wrote in the meantime is left as the game's");
     }
 
+    // the travel probe (suspension_scan.h): a chassis turned a quarter round, its forward along the world's z and its
+    // left along -x. A wheel 2 m ahead, 0.5 m down and 1 m to the left is that in the chassis's frame; rising 1 cm in
+    // 0.05 s of the game's clock is 0.2 m/s, and a pass with the clock standing adds nothing
+    {
+        TruckRaw t = {};
+        t.waterKnown = t.clockKnown = true;
+        t.wheels = 1;
+        const float forward[3] = { 0.0f, 0.0f, 1.0f }, up[3] = { 0.0f, 1.0f, 0.0f }, left[3] = { -1.0f, 0.0f, 0.0f }, at[3] = { 10.0f, 5.0f, 20.0f };
+        memcpy(t.forward, forward, sizeof forward);
+        memcpy(t.up, up, sizeof up);
+        memcpy(t.left, left, sizeof left);
+        memcpy(t.position, at, sizeof at);
+        t.wheelAt[0][0] = 9.0f;
+        t.wheelAt[0][1] = 4.5f;
+        t.wheelAt[0][2] = 22.0f;
+        t.clock = 100.0f;
+        float local[3];
+        SuspLocal(t, 0, local);
+        SuspTravel s = {};
+        const bool frame = Near(local[0], 2.0f) && Near(local[1], -0.5f) && Near(local[2], 1.0f) && SuspTravelStep(s, t, kVehicle) && s.looks == 1;
+        t.wheelAt[0][1] = 4.51f;
+        t.clock = 100.05f;
+        const bool rise = SuspTravelStep(s, t, kVehicle) && Near(s.most[0], -0.49f) && Near(s.least[0], -0.5f) && fabsf(s.fastest[0] - 0.2f) < 0.002f;
+        t.wheelAt[0][1] = 4.0f;
+        const bool still = SuspTravelStep(s, t, kVehicle) && s.looks == 2 && Near(s.least[0], -0.5f);
+        SuspTravelWindow(s, 1);
+        t.waterKnown = false;
+        const bool window = s.looks == 1 && s.fastest[0] == 0.0f && Near(s.least[0], -0.49f) && Near(s.most[0], -0.49f) && !SuspTravelStep(s, t, kVehicle);
+        Check(frame && rise && still && window, "travel probe: a wheel's centre in a turned chassis's frame, its range and its speed by the game's clock; a standing clock adds nothing");
+    }
+
     RealImageTest();
 
     printf(g_failed ? "TRUCK TEST FAILED (%d)\n" : "TRUCK TEST OK\n", g_failed);
