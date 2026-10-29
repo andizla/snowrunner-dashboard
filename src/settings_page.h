@@ -770,6 +770,14 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     ImGui::SetNextItemWidth(w);
     changed(ImGui::SliderFloat("##dampingscale", &s.dampingScale, kSuspScaleRange[0], kSuspScaleRange[1], "x%.2f", ImGuiSliderFlags_AlwaysClamp));
     PageTip("A test: each wheel's damping as a factor of the truck's own. Above 1 the body settles faster, below 1 it bounces longer. 1 = the truck's own.");
+    PageLabel("Travel min", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::SliderFloat("##travelminscale", &s.travelMinScale, kSuspScaleRange[0], kSuspScaleRange[1], "x%.2f", ImGuiSliderFlags_AlwaysClamp));
+    PageTip("A test: one end of each wheel's travel, the truck file's SuspensionMin, as a factor of the truck's own. 1 = the truck's own.");
+    PageLabel("Travel max", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::SliderFloat("##travelmaxscale", &s.travelMaxScale, kSuspScaleRange[0], kSuspScaleRange[1], "x%.2f", ImGuiSliderFlags_AlwaysClamp));
+    PageTip("A test: the other end of each wheel's travel, the truck file's SuspensionMax, as a factor of the truck's own. 1 = the truck's own.");
 
     ImGui::SeparatorText("Sounds");
     PageLabel("Volume", labelX);

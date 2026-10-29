@@ -1593,17 +1593,21 @@ int main()
         Put(first, vtable);
         Put(first + 0xC4, 0.026f);
         Put(first + 0xC8, 0.4f);
+        Put(first + 0xB4, -0.6f);
+        Put(first + 0xB8, 0.4f);
         TruckRefs refs = {};
         refs.vehicle = kVehicle;
         refs.wheel[0] = wheel;
         refs.wheels = 1;
         SuspTune tune = {};
         auto at = [&](uint64_t c, uint32_t off) { float v = 0.0f; Peek(c + off, &v, sizeof v); return v; };
-        const float same[2] = { 1.0f, 1.0f }, soft[2] = { 1.5f, 0.5f }, hard[2] = { 2.0f, 2.0f };
+        const float same[kSuspValues] = { 1.0f, 1.0f, 1.0f, 1.0f }, soft[kSuspValues] = { 1.5f, 0.5f, 1.0f, 1.0f }, hard[kSuspValues] = { 2.0f, 2.0f, 1.0f, 1.0f };
         const bool none = SuspTuneStep(tune, kMemory, refs, vtable, same) == 0 && tune.wheel[0].fresh && tune.wheel[0].stock[0] == 0.026f && at(first, 0xC4) == 0.026f;
         const bool once = SuspTuneStep(tune, kMemory, refs, vtable, soft) == 1 && Near(at(first, 0xC4), 0.039f) && Near(at(first, 0xC8), 0.2f) && Near(tune.wheel[0].back[0], 0.039f);
-        const bool steady = SuspTuneStep(tune, kMemory, refs, vtable, soft) == 0 && Near(at(first, 0xC4), 0.039f) && tune.wheel[0].stock[0] == 0.026f;
-        const bool held = SuspTuneStep(tune, kMemory, refs, vtable, hard) == 1 && Near(at(first, 0xC4), 0.052f) && at(first, 0xC8) == 0.8f;
+        const bool steady = SuspTuneStep(tune, kMemory, refs, vtable, soft) == 0 && !tune.moved && Near(at(first, 0xC4), 0.039f) && tune.wheel[0].stock[0] == 0.026f &&
+                            at(first, 0xB4) == -0.6f && at(first, 0xB8) == 0.4f;
+        const bool held = SuspTuneStep(tune, kMemory, refs, vtable, hard) == 1 && tune.moved && tune.wheel[0].settle && tune.wheel[0].writes == 0 && Near(at(first, 0xC4), 0.052f) &&
+                          at(first, 0xC8) == 0.8f;
         Put(first + 0xC4, 0.03f); // the game rebuilt the spring in place (another suspension fitted)
         const bool anew = SuspTuneStep(tune, kMemory, refs, vtable, hard) == 1 && tune.wheel[0].fresh && tune.wheel[0].stock[0] == 0.03f && Near(at(first, 0xC4), 0.06f) &&
                           tune.wheel[0].stock[1] == 0.4f && at(first, 0xC8) == 0.8f;
@@ -1618,9 +1622,18 @@ int main()
         const bool other = SuspTuneStep(tune, kMemory, refs, vtable, hard) == 0 && at(second, 0xC4) == 0.02f;
         Put(second, vtable);
         const bool rebuilt = SuspTuneStep(tune, kMemory, refs, vtable, soft) == 1 && tune.wheel[0].constraint == second && Near(at(second, 0xC4), 0.03f);
-        Check(none && once && steady && held && anew && back && top && other && rebuilt,
+        // the travel limits: each keeps its side of 0, a limit of a kind not known (0 here) is left as it is, then
+        // both known and scaled; back at 1 they are the stock again
+        const float travel[kSuspValues] = { 1.5f, 0.5f, 1.5f, 0.5f };
+        const bool unknown = SuspTuneStep(tune, kMemory, refs, vtable, travel) == 0 && at(second, 0xB4) == 0.0f && at(second, 0xB8) == 0.0f;
+        Put(second + 0xB4, -0.44f);
+        Put(second + 0xB8, 0.4f);
+        const bool limits = SuspTuneStep(tune, kMemory, refs, vtable, travel) == 1 && Near(at(second, 0xB4), -0.66f) && Near(at(second, 0xB8), 0.2f) &&
+                            Near(at(second, 0xC4), 0.03f) && tune.wheel[0].stock[kSuspMin] == -0.44f && SuspTuneStep(tune, kMemory, refs, vtable, travel) == 0;
+        const bool limitsBack = SuspTuneStep(tune, kMemory, refs, vtable, same) == 1 && at(second, 0xB4) == -0.44f && at(second, 0xB8) == 0.4f && at(second, 0xC4) == 0.02f;
+        Check(none && once && steady && held && anew && back && top && other && rebuilt && unknown && limits && limitsBack,
               "suspension tune: the stock times the slider and never times what is there, held to 1, the game's new value taken as the stock, 1 puts the stock back, "
-              "a rebuilt constraint read anew, another class never written");
+              "a rebuilt constraint read anew, another class never written; the travel limits scaled on their side of 0, an unknown one left alone; a moving slider's writes not counted");
     }
 
     RealImageTest();

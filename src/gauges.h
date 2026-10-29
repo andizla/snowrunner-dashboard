@@ -106,6 +106,7 @@ struct GaugeSettings
     float clutchHeat;        // ClutchHeatPercent: how fast it heats, percent of the model's own pace (kClutchHeatRange); cooling is not scaled
     float springScale;       // SpringScale: each wheel's suspension spring as a factor of the truck's own (kSuspScaleRange); 1 writes nothing (a test)
     float dampingScale;      // DampingScale: the same for its damping
+    float travelMinScale, travelMaxScale; // TravelMinScale, TravelMaxScale: the same for its travel limits (the truck file's SuspensionMin and SuspensionMax)
     int soundVolume;        // SoundVolume: how loud the turbo's flutter and the oil warning are, 0 to 100; 0 = no sound
     bool soundsOnly;         // SoundsOnly: the sounds are played and the cluster is not drawn
     bool dieselFlutter;      // DieselFlutter: a diesel's lift flutters too; off, it is quiet, or plays the player's own turbo whistle files (review 12, finding 6)
@@ -154,7 +155,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.stallDamage = 5.0f;
     s.clutchBurn = true;
     s.clutchHeat = 60.0f;
-    s.springScale = s.dampingScale = 1.0f;
+    s.springScale = s.dampingScale = s.travelMinScale = s.travelMaxScale = 1.0f;
     s.soundVolume = 50;
     strcpy_s(s.padToggle, "None");
     s.demo = false;
@@ -222,6 +223,8 @@ inline void SettingsClamp(GaugeSettings &s)
     s.clutchHeat = SettingsRange(s.clutchHeat, kClutchHeatRange[0], kClutchHeatRange[1]);
     s.springScale = SettingsRange(s.springScale, kSuspScaleRange[0], kSuspScaleRange[1]);
     s.dampingScale = SettingsRange(s.dampingScale, kSuspScaleRange[0], kSuspScaleRange[1]);
+    s.travelMinScale = SettingsRange(s.travelMinScale, kSuspScaleRange[0], kSuspScaleRange[1]);
+    s.travelMaxScale = SettingsRange(s.travelMaxScale, kSuspScaleRange[0], kSuspScaleRange[1]);
     s.toggleKey = s.toggleKey < 0 || s.toggleKey > 255 ? 0 : s.toggleKey;
     s.soundVolume = s.soundVolume < 0 ? 0 : s.soundVolume > 100 ? 100 : s.soundVolume;
     s.probe = s.probe < 0 ? 0 : s.probe;

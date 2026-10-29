@@ -100,73 +100,102 @@ inline bool SuspFloatsText(const TruckMemory &m, uint64_t at, uint64_t vtable, c
 }
 
 // ---- the tune (BRIEF_suspension_simple.md, review 14's probe drive) ----
-// Each wheel's own constraint is [wheel object + 0x28], and in it the truck file's Strength (+0xC4) and Damping
-// (+0xC8) as Havok's soft atom keeps them, factors from 0 to 1 that the game does not rewrite while driving. The tune
-// writes each as the stock value times its slider, held to 0 to 1. The stock is read once per truck and wheel, again
-// when [wheel + 0x28] changes, and again when the value there is neither the stock nor what the tune wrote (the game
-// rebuilt the constraint in place). The slider at 1 writes nothing, but it puts the stock back where the tune wrote.
-static const uint32_t kSuspConstraintAt = 0x28, kSuspStrengthAt = 0xC4, kSuspDampingAt = 0xC8;
+// Each wheel's own constraint is [wheel object + 0x28]. In it are the truck file's SuspensionMin (+0xB4) and
+// SuspensionMax (+0xB8), Havok's travel limits in metres, and Strength (+0xC4) and Damping (+0xC8), Havok's soft
+// atom's factors from 0 to 1. The game does not rewrite them while driving. The tune writes each as the stock value
+// times its slider; the spring and the damping are held to 0 to 1, and a limit keeps its side of 0. The stock is read
+// once per truck and wheel, again when [wheel + 0x28] changes, and again for a value that is neither the stock nor
+// what the tune wrote (the game rebuilt the constraint in place). A slider at 1 writes nothing, but it puts the stock
+// back where the tune wrote.
+enum { kSuspStrength, kSuspDamping, kSuspMin, kSuspMax, kSuspValues };
+static const uint32_t kSuspConstraintAt = 0x28;
+static const uint32_t kSuspValueAt[kSuspValues] = { 0xC4, 0xC8, 0xB4, 0xB8 };
 
 struct SuspWheel
 {
-    uint64_t constraint;    // where the stock was read, 0 = not yet
-    float stock[2];         // Strength, Damping as the truck has them
-    float wrote[2];         // what the tune last wrote, below 0 = nothing
-    bool fresh;             // the stock was read on this pass (for the log)
-    bool wroteNow;          // a value was written on this pass (for the log), and what was read back right after
-    float back[2];
-    int writes;             // passes that wrote it, from the stock read on
+    uint64_t constraint;        // where the stock was read, 0 = not yet
+    float stock[kSuspValues];   // as the truck has them
+    float wrote[kSuspValues];   // what the tune last wrote, where ours
+    bool ours[kSuspValues];     // the value there is the tune's
+    bool fresh;                 // a stock was read on this pass (for the log)
+    bool wroteNow;              // a value was written on this pass, and what was read back right after
+    float back[kSuspValues];
+    bool settle;                // written while a slider moved: the values are logged once the sliders stand still
+    int writes;                 // passes that wrote it while the sliders stood still, from the stock read on
 };
 
 struct SuspTune
 {
     uint64_t vehicle;
+    float scale[kSuspValues];   // the sliders on the last pass
+    bool moved;                 // they moved since the last pass
     SuspWheel wheel[kMaxWheels];
 };
 
-inline bool SuspFactor(float v) { return v > 0.0f && v <= 1.0f; }
+// A value the tune may take as a stock: the spring and the damping a factor of Havok's, a limit on its side of 0.
+inline bool SuspValueSane(int k, float v)
+{
+    if (k == kSuspMin) return v < 0.0f && v > -5.0f;
+    if (k == kSuspMax) return v > 0.0f && v < 5.0f;
+    return v > 0.0f && v <= 1.0f;
+}
 
 // One pass for the driven truck: vtable is the constraint's vtable in the game (0 = not known: nothing is done).
-// scale: SpringScale and DampingScale. Returns the wheels written on this pass.
-inline int SuspTuneStep(SuspTune &t, const TruckMemory &m, const TruckRefs &r, uint64_t vtable, const float scale[2])
+// scale: SpringScale, DampingScale, TravelMinScale, TravelMaxScale. Returns the wheels written on this pass.
+inline int SuspTuneStep(SuspTune &t, const TruckMemory &m, const TruckRefs &r, uint64_t vtable, const float scale[kSuspValues])
 {
-    if (t.vehicle != r.vehicle) t = SuspTune{ r.vehicle };
+    if (t.vehicle != r.vehicle)
+    {
+        t = SuspTune{ r.vehicle };
+        memcpy(t.scale, scale, sizeof t.scale);
+    }
+    t.moved = memcmp(t.scale, scale, sizeof t.scale) != 0;
+    memcpy(t.scale, scale, sizeof t.scale);
     int written = 0;
     for (int i = 0; i < r.wheels && i < kMaxWheels; i++)
     {
         SuspWheel &w = t.wheel[i];
         w.fresh = w.wroteNow = false;
         uint64_t c = 0, vt = 0;
-        float now[2] = {};
-        if (!vtable || !m.get(r.wheel[i] + kSuspConstraintAt, c) || !m.get(c, vt) || vt != vtable || !m.get(c + kSuspStrengthAt, now[0]) ||
-            !m.get(c + kSuspDampingAt, now[1]) || !SuspFactor(now[0]) || !SuspFactor(now[1]))
-            continue;
-        if (w.constraint != c) w = SuspWheel{ c, { now[0], now[1] }, { -1.0f, -1.0f }, true };
+        float now[kSuspValues] = {};
+        bool read = vtable && m.get(r.wheel[i] + kSuspConstraintAt, c) && m.get(c, vt) && vt == vtable;
+        for (int k = 0; read && k < kSuspValues; k++) read = m.get(c + kSuspValueAt[k], now[k]);
+        if (!read) continue;
+        if (w.constraint != c)
+        {
+            w = SuspWheel{ c };
+            memcpy(w.stock, now, sizeof w.stock);
+            w.fresh = true;
+        }
         else
-            for (int k = 0; k < 2; k++)
-                if (now[k] != w.wrote[k] && now[k] != w.stock[k])
+            for (int k = 0; k < kSuspValues; k++)
+                if (!(w.ours[k] && now[k] == w.wrote[k]) && now[k] != w.stock[k])
                 {
                     // the game wrote this one anew: its new stock (never what the tune wrote, so nothing compounds)
                     w.stock[k] = now[k];
-                    w.wrote[k] = -1.0f;
+                    w.ours[k] = false;
                     w.fresh = true;
                 }
-        for (int k = 0; k < 2; k++)
+        for (int k = 0; k < kSuspValues; k++)
         {
-            const float want = scale[k] == 1.0f ? w.stock[k] : fminf(1.0f, fmaxf(0.0f, w.stock[k] * scale[k]));
-            if (now[k] == want || (scale[k] == 1.0f && w.wrote[k] < 0.0f)) continue;
+            if (!SuspValueSane(k, w.stock[k])) continue; // not a value of the kind known: left as it is
+            float want = w.stock[k] * scale[k];
+            if (k == kSuspStrength || k == kSuspDamping) want = fminf(1.0f, want);
+            if (scale[k] == 1.0f) want = w.stock[k];
+            if (now[k] == want || (scale[k] == 1.0f && !w.ours[k])) continue;
             uint64_t still = 0;
             if (!m.get(r.wheel[i] + kSuspConstraintAt, still) || still != c || !m.get(c, vt) || vt != vtable) break;
-            if (!m.put(c + (k ? kSuspDampingAt : kSuspStrengthAt), want)) continue;
-            w.wrote[k] = scale[k] == 1.0f ? -1.0f : want;
+            if (!m.put(c + kSuspValueAt[k], want)) continue;
+            w.wrote[k] = want;
+            w.ours[k] = scale[k] != 1.0f;
             w.wroteNow = true;
         }
         if (w.wroteNow)
         {
             written++;
-            w.writes++;
-            m.get(c + kSuspStrengthAt, w.back[0]);
-            m.get(c + kSuspDampingAt, w.back[1]);
+            if (t.moved) w.settle = true;
+            else w.writes++;
+            for (int k = 0; k < kSuspValues; k++) m.get(c + kSuspValueAt[k], w.back[k]);
         }
     }
     return written;
