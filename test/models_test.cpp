@@ -512,6 +512,8 @@ struct LoopTruck
     float clutchGrip = 1.0f; // the clutch's grip the creep goes by in a gear picked by hand
     int boostProfile = kSpoolStandard, fuel = kFuelClass; // the turbo: the class's under this profile, and the fuel
     float holdMost = 1.0f; // the creep's holding part's most: 1, the engine handed to the game as the loop has it
+    bool mayStall = true;  // the creep may stall the engine: the mod's own gearbox in a position picked by hand (else Gearbox 0 or 1)
+    bool shifterConverter = false; // R or the low range on the game's shifter: the creep through the converter, calmed (CreepStep's calm)
 };
 struct LoopState
 {
@@ -582,7 +584,7 @@ static void LoopStep(const LoopTruck &c, LoopState &s, const TorqueCurve &curve,
     const float share = top > 0.0f ? c.grip * s.v / (top * c.realTop) : 0.0f;
     // the hook: the game's throttle raised to the creep's share (the mod hands it on this pass, the game takes it on its steps)
     bool stalls = false;
-    s.share = c.creep ? CreepStep(s.creep, t, c.k, driving, c.clutchGrip, dt, nullptr, stalls, c.holdMost) : 0.0f;
+    s.share = c.creep ? CreepStep(s.creep, t, c.k, driving || c.shifterConverter, c.clutchGrip, dt, nullptr, stalls, c.holdMost, c.mayStall, c.shifterConverter) : 0.0f;
     if (stalls) s.stallAt = s.at;
     const float throttle = s.brake > 0.0f || !TruckEngineOn(t) ? 0.0f : fmaxf(pedal, s.share);
     const float target = throttle * (c.lowPull + (1.0f - c.lowPull) * GamePull(share));
@@ -4196,12 +4198,11 @@ int main(int argc, char **argv)
                 LoopTruck uphill = tall;
                 uphill.grade = 1.5f * tall.push * GamePull(tall.k.idle / tall.k.redline) * TruckGearTop(tall.t, 1) / TruckGearTop(tall.t, 4);
                 LoopState gr = fl;
-                float under = -1.0f, needleLow = 1e9f;
+                float under = -1.0f;
                 for (float at = 0.0f; at < 15.0f && gr.stallAt < 0.0f; at += kDt)
                 {
                     LoopStep(uphill, gr, hc, 0.0f, kDt, false);
                     if (under < 0.0f && gr.v < kHoldStall * tallIdle) under = gr.at;
-                    if (gr.stallAt < 0.0f) needleLow = fminf(needleLow, gr.tach.rpm);
                 }
                 const bool armedStall = gr.stallAt > 0.0f && under > 0.0f && gr.creep.stallArmed;
                 // from a standstill in 4th
@@ -4213,21 +4214,108 @@ int main(int argc, char **argv)
                     moved = fmaxf(moved, st.v);
                 }
                 printf("     creep, the HX 520 in 4th by hand: on the flat %.3f to %.3f of its idle speed (%.2f m/s), armed %d; a grade of %.2f m/s2: under 0.6 at %.1f s, "
-                       "stalled at %.1f s (armed %d), the needle down to %.0f rpm; from a standstill at most %.3f of the idle speed, stalled at %.1f s (armed %d)\n",
-                       flat.vLo / tallIdle, flat.vHi / tallIdle, tallIdle, fl.creep.armed, uphill.grade, under, gr.stallAt, gr.creep.stallArmed, needleLow,
+                       "stalled at %.1f s (armed %d); from a standstill at most %.3f of the idle speed, stalled at %.1f s (armed %d)\n",
+                       flat.vLo / tallIdle, flat.vHi / tallIdle, tallIdle, fl.creep.armed, uphill.grade, under, gr.stallAt, gr.creep.stallArmed,
                        moved / tallIdle, st.stallAt, st.creep.stallArmed);
                 printf("     creep, 4th with Powertrain off (the most %.2f): %.3f to %.3f of the idle speed\n", tallOff.holdMost, flatOff.vLo / tallIdle, flatOff.vHi / tallIdle);
                 Check(flatArmed && flat.vLo > 0.95f * tallIdle && flat.vHi < 1.05f * tallIdle && flat.vHi - flat.vLo < 0.05f * tallIdle && flatOff.vLo > 0.95f * tallIdle &&
                           flatOff.vHi < 1.05f * tallIdle && fo.stallAt < 0.0f,
                       "creep: rolling in a tall gear by hand on the flat the truck holds the gear's idle speed, with no cycle over 20 s; with Powertrain off too");
-                Check(armedStall && gr.stallAt - under > 0.5f && gr.stallAt - under < 2.5f && needleLow < 0.75f * tall.k.idle && needleLow >= kTachLug * tall.k.idle - 15.0f,
-                      "creep: a grade past the engine's torque at idle lugs the truck under 0.6 of the gear's idle speed, the needle following it down, and the engine "
+                Check(armedStall && gr.stallAt - under > 0.5f && gr.stallAt - under < 2.5f,
+                      "creep: in the mod's own gearbox a grade past the engine's torque at idle lugs the truck under 0.6 of the gear's idle speed, and the engine "
                       "stalls about a second later");
                 Check(moved < kCreepStuck * tallIdle && st.stallAt > 0.0f && !st.creep.stallArmed,
                       "creep: from a standstill in a tall gear the truck does not move off at idle, the holding part stays unarmed, and the engine stalls as before");
+                // the author's drive of BF57872B: at Gearbox 0 and 1 (the game's gears) no stall comes. The same grade in 4th,
+                // and stuck in R, L- and L+ picked on the game's shifter: the governor pushes, the engine idles on, the
+                // needle (the game's gears' TachTarget) stays at idle
+                LoopTruck gameUphill = uphill;
+                gameUphill.mayStall = false;
+                LoopState gg = fl;
+                float gameNeedle = 1e9f, gameShare = 0.0f;
+                for (float at = 0.0f; at < 15.0f; at += kDt)
+                {
+                    LoopStep(gameUphill, gg, hc, 0.0f, kDt, false);
+                    gameNeedle = fminf(gameNeedle, gg.tach.rpm);
+                    gameShare = fmaxf(gameShare, gg.share);
+                }
+                bool stuckQuiet = true;
+                float stuckNeedle = 1e9f;
+                for (int which = 0; which < 3; which++)
+                {
+                    LoopTruck stuck = crawl;
+                    stuck.mayStall = false;
+                    stuck.grade = 100.0f;
+                    stuck.fixedGear = which == 0 ? -1 : 1;
+                    stuck.t.powerFactor = which == 1 ? 0.2f : 1.0f; // R, L-, L+ (the game's L+ is its first gear: the governor)
+                    stuck.shifterConverter = which < 2;
+                    stuck.pullLag = 0.5f;
+                    LoopState ss2;
+                    for (float at = 0.0f; at < 10.0f; at += kDt)
+                    {
+                        LoopStep(stuck, ss2, hc, 0.0f, kDt, false);
+                        if (at > 2.0f) stuckNeedle = fminf(stuckNeedle, ss2.tach.rpm);
+                    }
+                    stuckQuiet = stuckQuiet && ss2.stallAt < 0.0f && ss2.share > 0.0f;
+                }
+                printf("     creep at Gearbox 0 and 1: the grade in 4th, no stall (%.1f), the governor at most %.3f, the needle at least %.0f rpm; stuck in R, L- and L+: "
+                       "no stall %d, the needle at least %.0f rpm (idle %.0f)\n", gg.stallAt, gameShare, gameNeedle, stuckQuiet, stuckNeedle, tall.k.idle);
+                Check(gg.stallAt < 0.0f && gameShare > 0.5f && gameNeedle >= tall.k.idle - 1.0f && stuckQuiet && stuckNeedle >= tall.k.idle - 1.0f,
+                      "creep: in the game's gears (Gearbox 0 and 1) no stall comes: lugged in a tall gear, or stuck in R and L- (through the converter) or L+, the "
+                      "creep pushes, the engine idles on and the needle stays at idle");
+                // part E: R and L- on the game's shifter from a standstill creep through the converter, calmed: no overshoot
+                // past 1.3 of the gear's idle speed, no cycle over 10 s, under the coupling point
+                auto shifterCreep = [&](int gear, float powerFactor, float &most, float &span, float &settled, float &share) {
+                    LoopTruck sc = crawl;
+                    sc.mayStall = false;
+                    sc.fixedGear = gear;
+                    sc.t.powerFactor = powerFactor;
+                    sc.shifterConverter = true;
+                    sc.pullLag = 0.5f;
+                    const float idleSpeed = sc.k.idle / sc.k.redline * TruckGearTop(sc.t, gear) / sc.grip;
+                    LoopState cs2;
+                    const LoopSpan early = LoopDrive(sc, cs2, hc, 0.0f, 30.0f, false);
+                    const LoopSpan late = LoopDrive(sc, cs2, hc, 0.0f, 10.0f, false);
+                    most = fmaxf(early.vHi, late.vHi) / idleSpeed;
+                    span = (late.vHi - late.vLo) / idleSpeed;
+                    settled = cs2.v / idleSpeed;
+                    share = cs2.share;
+                    return cs2.stallAt < 0.0f && !cs2.creep.armed;
+                };
+                float rMost, rSpan, rAt, rShare, lMost, lSpan, lAt, lShare;
+                const bool rQuiet = shifterCreep(-1, 1.0f, rMost, rSpan, rAt, rShare), lQuiet = shifterCreep(1, 0.2f, lMost, lSpan, lAt, lShare);
+                printf("     creep through the converter on the game's shifter: R at most %.2f of its idle speed, %.2f at the end, within %.3f; L- at most %.2f, %.2f, "
+                       "within %.3f\n", rMost, rAt, rSpan, lMost, lAt, lSpan);
+                Check(rQuiet && lQuiet && rMost < 1.3f && lMost < 1.3f && rSpan < 0.05f && lSpan < 0.05f && rAt > 0.3f && lAt > 0.3f && rAt < kCouplingPoint + 0.02f &&
+                          lAt < kCouplingPoint + 0.02f,
+                      "creep: R and L- on the game's shifter creep through the converter from a standstill, under the coupling point, no overshoot past 1.3 of "
+                      "the gear's idle speed and no cycle, with no holding part and no stall");
             }
-            // the needle at zero pedal in a gear of the game's own: the wheels under idle pull it down to 0.6 of idle; a
-            // standing truck, the game's automatic and a pressed pedal as before
+            // a shift: no stuck time counts within a second of it, at every level; at Gearbox 2 still stuck after it, the
+            // engine stalls. Stuck in 3rd from the start (the game's pull steady), then a shift into 4th at 0.4 s
+            {
+                const GaugeScale sk = kClassScales[kClassTruck];
+                auto stallAt = [&](bool shift, bool mayStall) {
+                    CreepModel sm = {};
+                    TruckRaw sh = Truck();
+                    Drive(sh, 3, false, 0.0f, 0.0f);
+                    sh.actionB4 = 0.01f;
+                    for (float at = kDt; at < 5.0f; at += kDt)
+                    {
+                        if (shift && at >= 0.4f && sh.gearEngaged == 3) Drive(sh, 4, false, 0.0f, 0.0f);
+                        bool now = false;
+                        CreepStep(sm, sh, sk, false, 1.0f, kDt, nullptr, now, 0.6f, mayStall);
+                        if (now) return at;
+                    }
+                    return -1.0f;
+                };
+                const float plain = stallAt(false, true), shifted = stallAt(true, true), game = stallAt(true, false);
+                printf("     creep, stuck at Gearbox 2: stalled at %.2f s; with a shift at 0.4 s at %.2f s; at Gearbox 1 none (%.2f)\n", plain, shifted, game);
+                Check(plain > 0.0f && shifted >= 0.4f + kShiftQuiet + kCreepGrace - kDt - 0.01f && shifted > plain && shifted < 3.5f && game < 0.0f,
+                      "creep: no stall within a second of a shift; still stuck after it in the mod's own gearbox the engine stalls, and at Gearbox 1 never");
+            }
+            // the needle at zero pedal in a gear of the game's own (Gearbox 0 and 1): never under idle, as no stall comes
+            // there; over idle with the wheels and with the pedal down as before
             {
                 const GaugeScale nk = kClassScales[kClassTruck];
                 TruckRaw nt = Truck();
@@ -4235,12 +4323,12 @@ int main(int argc, char **argv)
                     Drive(nt, 4, automatic, ofIdle * nk.idle / nk.redline, pedal);
                     return TachTarget(nt, nk);
                 };
-                const float lug = needleAt(0.8f, false, 0.0f), floorNeedle = needleAt(0.4f, false, 0.0f), standing = needleAt(0.1f, false, 0.0f),
+                const float lug = needleAt(0.8f, false, 0.0f), deep = needleAt(0.4f, false, 0.0f), standing = needleAt(0.1f, false, 0.0f),
                             automaticNeedle = needleAt(0.8f, true, 0.0f), pressed = needleAt(0.8f, false, 0.3f), over = needleAt(1.2f, false, 0.0f);
-                Check(Near(lug, 0.8f * nk.idle, 1.0f) && Near(floorNeedle, kTachLug * nk.idle, 1.0f) && Near(standing, nk.idle, 1.0f) && Near(automaticNeedle, nk.idle, 1.0f) &&
+                Check(Near(lug, nk.idle, 1.0f) && Near(deep, nk.idle, 1.0f) && Near(standing, nk.idle, 1.0f) && Near(automaticNeedle, nk.idle, 1.0f) &&
                           pressed > nk.idle && Near(over, 1.2f * nk.idle, 1.0f),
-                      "needle: at zero pedal in a gear of the game's own the wheels under idle pull it down, to 0.6 of idle at the least; standing, in the game's "
-                      "automatic and with the pedal down as before");
+                      "needle: at zero pedal in a gear of the game's own it stays at idle with the wheels under it, as no stall comes there; over idle with the "
+                      "wheels and with the pedal down as before");
             }
         }
 

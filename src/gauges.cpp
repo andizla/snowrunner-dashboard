@@ -663,7 +663,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; shows, less with cold oil and without boost, and doubled by the converter at its stall (Gearbox=1), in place\n"
                         L"; of the game's own, which falls away toward each gear's top. The mod writes the game's torque factor for it.\n"
                         L"; EngineShare: how much of the mod's engine the game gets, 0 to 100 percent (50: half way between the two).\n"
-                        L"; Creep=1: an idling truck in gear moves, an automatic to walking pace, a manual at about the gear's idle speed; the brake holds it. Stuck by hand it stalls.\n"
+                        L"; Creep=1: an idling truck in gear moves, an automatic to walking pace, a manual at about the gear's idle speed; the brake holds it. Stuck at Gearbox=2 it stalls.\n"
                         L"; Gauges\\gearboxes\\<name>.ini GearHold: seconds a gearbox holds each gear going up with Powertrain=1, 1 to 3 (the tab).\n"
                         L"; Top1, Top2 ...: each gear's top in rad/s, learned where the game's pull reaches nothing floored (2a + 5 until then).\n"
                         L"; Gauges\\engines\\<name>.ini: PeakTorqueRpm, Aspiration (0 turbo, 1 naturally aspirated), Fuel (diesel, petrol), TorqueCurve (the tab's Engine).\n"
@@ -2842,7 +2842,12 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         // begins and one as it ends; with the probe on, one each quarter second
         {
             const bool manual = GearboxManual(w);
-            const bool converter = !manual && (w.take.driving || raw.automatic != 0);
+            // R and the low range picked on the game's shifter (Gearbox 0 and 1) drive through the converter, as a real
+            // automatic's do (the author, 29 October: "i assumed it was handled through converter already? do it"), its
+            // share calmed there as the governor's (CreepShare's calm). The game's L+ is its first gear at full power and
+            // cannot be told from it, so it keeps the governor
+            const bool shifterLow = !manual && (raw.gearEngaged < 0 || (raw.gearEngaged == 1 && raw.powerFactor < kLowUnder));
+            const bool converter = !manual && (w.take.driving || raw.automatic != 0 || shifterLow);
             const float grip = manual ? (w.clutch.dead ? 0.0f : w.clutch.grip) : 1.0f;
             CreepCase creepCase = {};
             bool stalls = false;
@@ -2851,7 +2856,11 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             // the holding part's most: the engine's full fuel at idle, a throttle of 1 with the engine handed to the game
             // (the factor makes it the curve's torque there), else the torque at idle of the curve it pulls by (review 13)
             const float holdMost = w.hand.on ? 1.0f : TorqueAt(curve, scale.redline > 0.0f ? scale.idle / scale.redline : 0.0f, tachTop);
-            const float share = on ? CreepStep(w.creep, raw, scale, converter, grip, dt, &creepCase, stalls, holdMost) : 0.0f;
+            // the stalls only as a manual gearbox's: the mod's own gearbox in a position picked by hand (the author's drive
+            // of BF57872B); on the automatic and the game's shifter the governor pushes and the engine idles on
+            const bool mayStall = s.gearbox == kGearboxOwn && manual;
+            const float share = on ? CreepStep(w.creep, raw, scale, converter, grip, dt, &creepCase, stalls, holdMost, mayStall,
+                                               shifterLow && !w.take.driving && raw.automatic == 0) : 0.0f;
             CreepGive(share > 0.0f ? w.refs.action : 0, share);
             if (stalls)
             {
