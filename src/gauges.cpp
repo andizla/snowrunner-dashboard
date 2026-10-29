@@ -2541,7 +2541,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             // a stall with the clutch on a pedal's axis is the game's: handed to its stall seconds below, as the gearbox's
             // own; a clutch on a button works by itself and never stalls the engine
             const bool onAxis = w.actions.clutchTravel >= 0.0f;
-            if (ClutchStep(w.clutch, raw, scale, curve, w.pos.travel, w.power.pedal, w.power.cold * w.power.boost, !onAxis, dt))
+            // one stall a lug: none of the clutch model's once the creep has stalled the engine (and the creep has no grip
+            // to stall by once the clutch model's engine is dead)
+            if (ClutchStep(w.clutch, raw, scale, curve, w.pos.travel, w.power.pedal, w.power.cold * w.power.boost, !onAxis, dt) && !w.creep.stalled)
             {
                 w.clutchStall = onAxis;
                 Log(L"clutch: the engine stalled, the clutch let up at %.0f rpm on the gearbox's input in gear %d; the game's engine stalls with it", w.clutch.input,
@@ -2846,13 +2848,17 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             bool stalls = false;
             const bool on = s.creep && CreepHooked() && !testing;
             if (!on) w.creep = CreepModel{};
-            const float share = on ? CreepStep(w.creep, raw, scale, converter, grip, dt, &creepCase, stalls) : 0.0f;
+            // the holding part's most: the engine's full fuel at idle, a throttle of 1 with the engine handed to the game
+            // (the factor makes it the curve's torque there), else the torque at idle of the curve it pulls by (review 13)
+            const float holdMost = w.hand.on ? 1.0f : TorqueAt(curve, scale.redline > 0.0f ? scale.idle / scale.redline : 0.0f, tachTop);
+            const float share = on ? CreepStep(w.creep, raw, scale, converter, grip, dt, &creepCase, stalls, holdMost) : 0.0f;
             CreepGive(share > 0.0f ? w.refs.action : 0, share);
             if (stalls)
             {
                 w.creepStall = true;
-                Log(L"creep: the engine stalled, stuck in gear %d (the wheels %.2f of the idle speed's %.2f rad/s, the game's pull %.3f)", raw.gearEngaged,
-                    TruckDrivenSpin(raw), creepCase.idleSpin, raw.actionB4);
+                Log(w.creep.stallArmed ? L"creep: the engine stalled, lugged under idle in gear %d (the wheels %.2f of the idle speed's %.2f rad/s, the game's pull %.3f)"
+                                       : L"creep: the engine stalled, stuck in gear %d (the wheels %.2f of the idle speed's %.2f rad/s, the game's pull %.3f)",
+                    raw.gearEngaged, TruckDrivenSpin(raw), creepCase.idleSpin, raw.actionB4);
             }
             const bool creeping = share > 0.0f;
             long hits = 0, calls = 0;
@@ -2869,7 +2875,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             if (line)
             {
                 char text[512];
-                CreepProbeText(raw, share, creepCase, hits - w.creepHits, calls - w.creepCalls, text, sizeof text);
+                CreepProbeText(raw, share, creepCase, hits - w.creepHits, calls - w.creepCalls, text, sizeof text, &w.creep);
                 Log(L"%S%s", text, creeping ? L"" : L" (it ends)");
                 w.creepFor = 0.25f;
                 w.creepLines++;
