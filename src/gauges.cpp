@@ -342,6 +342,8 @@ static void WriteIni(const GaugeSettings &s)
     num(L"StallDamagePercent", s.stallDamage);
     whole(L"ClutchBurn", s.clutchBurn ? 1 : 0);
     num(L"ClutchHeatPercent", s.clutchHeat);
+    num(L"SpringScale", s.springScale);
+    num(L"DampingScale", s.dampingScale);
     whole(L"ToggleKey", s.toggleKey);
     WritePrivateProfileStringW(kIniSection, L"PadToggle", Wide(s.padToggle).c_str(), ini.c_str());
     whole(L"SoundVolume", s.soundVolume);
@@ -627,6 +629,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; StallDamagePercent: what a shift without the clutch costs the gearbox, percent of what it takes, 0 to 25 (5), with Damage=1.\n"
                         L"; ClutchBurn=1: a clutch slipping under load heats up and costs the gearbox, a pedal's or the one that works by itself, with Damage=1.\n"
                         L"; ClutchHeatPercent: how fast it heats up, percent of the model's own pace, 10 to 300 (60); lower gives more time to react.\n"
+                        L"; SpringScale and DampingScale (a test): the suspension's spring and damping as a factor of the truck's own, 0.5 to 2 (1 = the truck's own).\n"
                         L"; SoundVolume (0 to 100) is how loud the turbo is heard when the pedal comes up quickly under boost: it flutters,\n"
                         L"; longer and louder the more boost there was, until the pedal goes down again. The oil warning goes by it too.\n"
                         L"; 0 = no sound. SoundsOnly=1 plays the sounds and draws no cluster.\n"
@@ -734,6 +737,8 @@ static void ReadIni(GaugeSettings &s)
     s.stallDamage = IniFloat(L"StallDamagePercent", s.stallDamage, ini);
     s.clutchBurn = IniBool(L"ClutchBurn", s.clutchBurn, ini);
     s.clutchHeat = IniFloat(L"ClutchHeatPercent", s.clutchHeat, ini);
+    s.springScale = IniFloat(L"SpringScale", s.springScale, ini);
+    s.dampingScale = IniFloat(L"DampingScale", s.dampingScale, ini);
     s.toggleKey = IniInt(L"ToggleKey", s.toggleKey, ini);
     wchar_t buf[64] = {};
     GetPrivateProfileStringW(kIniSection, L"PadToggle", Wide(s.padToggle).c_str(), buf, 64, ini.c_str());
@@ -1950,6 +1955,7 @@ static void LogSettings(const GaugeSettings &s)
     Log(L"settings: the oil warm after %g minutes of driving, too hot from %g C", s.oilWarmUpMinutes, s.oilWarnC);
     Log(L"settings: the radiator has all its air from %g km/h; engine damage %s: from %g C, %g percent a minute at 125 C, %g percent a minute for a cold engine floored at the red zone at 0 C; %g percent of the gearbox for a shift without the clutch; clutch burn %s, heating at %g percent of the model's pace",
         s.airFullKmh, s.damage ? L"on" : L"off", s.hotDamageFrom, s.hotDamage, s.coldDamage, s.stallDamage, s.clutchBurn ? L"on" : L"off", s.clutchHeat);
+    Log(L"settings: suspension spring x%g, damping x%g of the truck's own", s.springScale, s.dampingScale);
     Log(L"settings: sound volume %d of 100%s%s", s.soundVolume, s.soundsOnly ? L", sounds only: the cluster is not drawn" : L"",
         s.dieselFlutter ? L", a diesel's lift flutters"
                         : SoundWhistles() > 0 ? L", a diesel's lift plays the sounds\\turbo_whistle_ files" : L", a diesel's lift is quiet");
@@ -1999,11 +2005,27 @@ static void OnTruckFrame(void *first)
     StallJobFrame(g_stallJob, m, (uint64_t)first, g_damageUpdate);
 }
 
+// Havok's wheel constraint's vtable in the game (suspension_scan.h), by its RTTI name, looked for once: 0 where it is
+// not found.
+static uint64_t SuspVtable()
+{
+    static bool looked = false;
+    static uint64_t vtable = 0;
+    if (looked) return vtable;
+    looked = true;
+    size_t from = 0, to = 0;
+    std::vector<uint8_t> image;
+    const uint64_t rva = CodeCopy(image, from, to, true) ? VtableByName(image.data(), image.size(), g_base, kSuspConstraintName) : 0;
+    vtable = rva ? g_base + rva : 0;
+    if (rva) Log(L"suspension: hkpWheelConstraintData's vtable at +%llx", rva);
+    else Log(L"suspension: hkpWheelConstraintData's vtable not found: no probe scan and no tune");
+    return vtable;
+}
+
 // The probe's scan for each wheel's suspension constraint (suspension_scan.h), read only.
 struct SuspProbe
 {
-    uint64_t vtable;            // the constraint's vtable in the game; 0 before it is looked for, or not found
-    bool looked;                // its RTTI name was looked for
+    uint64_t vtable;            // the constraint's vtable in the game, 0 = not known
     uint64_t key;               // the vehicle and wheel objects the last scan was of, summed
     SuspHit hits[kSuspHitsMost];
     int count;
@@ -2104,6 +2126,7 @@ struct TruckWatch
     ULONGLONG modelAt;          // when the models last ran
     TruckWho who;               // which truck refs are, as the passes read it; who.taken's key is "" while none is read
     SuspProbe susp;             // the probe's scan for each wheel's suspension constraint (Probe=1)
+    SuspTune tune;              // what SpringScale and DampingScale wrote into each wheel's constraint
 };
 
 // The mod's gearbox has the truck in a position of the player's own (not A): the engine runs behind its clutch.
@@ -2277,16 +2300,7 @@ static void PullGiveBack(const TruckMemory &m, TruckWatch &w, const wchar_t *why
 // Reads only. Also the fitted suspension's name (vehicle + 0xd30), to match the floats against the truck's file.
 static void SuspProbeStep(SuspProbe &p, const TruckMemory &m, const TruckRefs &r, ULONGLONG now)
 {
-    if (!p.looked)
-    {
-        p.looked = true;
-        size_t from = 0, to = 0;
-        std::vector<uint8_t> image;
-        const uint64_t rva = CodeCopy(image, from, to, true) ? VtableByName(image.data(), image.size(), g_base, kSuspConstraintName) : 0;
-        p.vtable = rva ? g_base + rva : 0;
-        if (rva) Log(L"probe: suspension: %S's vtable at +%llx", kSuspConstraintName + 4, rva);
-        else Log(L"probe: suspension: %S's vtable not found, no scan", kSuspConstraintName + 4);
-    }
+    p.vtable = SuspVtable();
     if (!p.vtable) return;
     uint64_t key = r.vehicle;
     for (int i = 0; i < r.wheels; i++) key += r.wheel[i] * (uint64_t)(i + 3);
@@ -2322,6 +2336,28 @@ static void SuspProbeStep(SuspProbe &p, const TruckMemory &m, const TruckRefs &r
     for (int i = 0; i < p.count && i < 2; i++)
         if (SuspFloatsText(m, p.hits[i].at, p.vtable, text, sizeof text)) Log(L"probe: suspension %d: %S", i, text);
         else p.key = 0; // gone: the next pass scans again
+}
+
+// SpringScale and DampingScale (a test, BRIEF_suspension_simple.md): each wheel's spring and damping as the stock
+// times the slider (suspension_scan.h's SuspTuneStep). The stock and the first writes of each wheel are logged with
+// what was read back right after, and a wheel the game keeps putting back once.
+static const int kSuspWritesTold = 2, kSuspWritesBack = 20;
+static void SuspTunePass(SuspTune &t, const TruckMemory &m, const TruckRefs &r, const GaugeSettings &s)
+{
+    const bool tuned = s.springScale != 1.0f || s.dampingScale != 1.0f;
+    if (!tuned && t.vehicle != r.vehicle) return; // nothing to write, and nothing written to put back
+    const uint64_t vtable = SuspVtable();
+    const float scale[2] = { s.springScale, s.dampingScale };
+    SuspTuneStep(t, m, r, vtable, scale);
+    for (int i = 0; i < r.wheels && i < kMaxWheels; i++)
+    {
+        const SuspWheel &w = t.wheel[i];
+        if (w.fresh) Log(L"suspension: wheel %d's stock spring %g, damping %g (its constraint %p)", i, w.stock[0], w.stock[1], (void *)w.constraint);
+        if (!w.wroteNow) continue;
+        if (w.writes <= kSuspWritesTold)
+            Log(L"suspension: wheel %d written (spring x%g, damping x%g of the stock): read back spring %g, damping %g", i, s.springScale, s.dampingScale, w.back[0], w.back[1]);
+        else if (w.writes == kSuspWritesBack) Log(L"suspension: wheel %d written %d times: the game puts its values back", i, w.writes);
+    }
 }
 
 static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s, bool front, TruckRaw &raw, World &world)
@@ -2378,6 +2414,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         else Log(L"truck: none is driven now");
     }
     if (probe && w.found) SuspProbeStep(w.susp, m, w.refs, now);
+    if (w.found) SuspTunePass(w.tune, m, w.refs, s);
     WorldRead(m, w.found ? w.refs.control : 0, world);
     // a load ended (the game's loading screen gone): the truck that drives on under the game's id it had before the
     // screen keeps its heat, so a travel between regions, a border crossing and a reload are no cold start (a tester's
@@ -3836,6 +3873,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.rollWarnDeg == b.rollWarnDeg && a.rollDangerDeg == b.rollDangerDeg && a.pitchDangerDeg == b.pitchDangerDeg &&
            a.warmUpMinutes == b.warmUpMinutes && a.overheatMinutes == b.overheatMinutes && a.coolDownMinutes == b.coolDownMinutes && a.ambientC == b.ambientC &&
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
+           a.springScale == b.springScale && a.dampingScale == b.dampingScale &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
            a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.input == b.input && a.powertrain == b.powertrain && a.engineShare == b.engineShare && a.creep == b.creep;
 }
@@ -3866,7 +3904,8 @@ int wmain(int argc, wchar_t **argv)
           "defaults: strip, open style, metric, the air dial off, no toggle, demo off, probe off, the tilt lamp at 15, 25 and 35 degrees");
     Check(d.warmUpMinutes == 3.0f && d.overheatMinutes == 1.5f && d.coolDownMinutes == 15.0f && d.ambientC == 15.0f && d.ambientByMap,
           "defaults: the coolant warm after 3 minutes, in the red zone after 1.5, cool after 15, with 15 C outside");
-    Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.hotDamageFrom == kTempRed && d.coldDamage == 5.0f && d.stallDamage == 5.0f && d.clutchBurn && d.clutchHeat == 60.0f,
+    Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.hotDamageFrom == kTempRed && d.coldDamage == 5.0f && d.stallDamage == 5.0f && d.clutchBurn && d.clutchHeat == 60.0f &&
+              d.springScale == 1.0f && d.dampingScale == 1.0f,
           "defaults: the radiator's full airflow from 30 km/h, engine damage on from the red zone, 10 percent a minute for the heat and 5 for the cold");
     Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && d.input == kInputWheel && !d.powertrain && d.engineShare == 50 && d.creep && !d.dieselFlutter,
           "defaults: the oil as a second needle, warm after 5 minutes, too hot from 120 C; the standard turbo, a diesel's lift without the flutter; the creep on");
@@ -3910,6 +3949,8 @@ int wmain(int argc, wchar_t **argv)
     c.stallDamage = 12.0f;
     c.clutchBurn = false;
     c.clutchHeat = 150.0f;
+    c.springScale = 1.5f;
+    c.dampingScale = 0.75f;
     c.toggleKey = VK_F9;
     strcpy_s(c.padToggle, "RB+DPadUp");
     c.demo = true;
@@ -3934,7 +3975,7 @@ int wmain(int argc, wchar_t **argv)
                             c.speedMax != d.speedMax && c.boostMax != d.boostMax && c.rollWarnDeg != d.rollWarnDeg && c.rollDangerDeg != d.rollDangerDeg &&
                             c.pitchDangerDeg != d.pitchDangerDeg && c.warmUpMinutes != d.warmUpMinutes && c.overheatMinutes != d.overheatMinutes &&
                             c.coolDownMinutes != d.coolDownMinutes && c.ambientC != d.ambientC && c.ambientByMap != d.ambientByMap && c.airFullKmh != d.airFullKmh && c.damage != d.damage &&
-                            c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
+                            c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springScale != d.springScale && c.dampingScale != d.dampingScale && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
                             c.demo != d.demo && c.probe != d.probe && c.soundVolume != d.soundVolume && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
                             c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.input != d.input && c.powertrain != d.powertrain && c.engineShare != d.engineShare && c.creep != d.creep;
@@ -3958,7 +3999,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 102, "ini: the help text survives a write (102 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 103, "ini: the help text survives a write (103 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());
@@ -3998,9 +4039,11 @@ int wmain(int argc, wchar_t **argv)
     WritePrivateProfileStringW(kIniSection, L"HotDamageFrom", L"90", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"StallDamagePercent", L"40", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"ClutchHeatPercent", L"5", ini.c_str());
+    WritePrivateProfileStringW(kIniSection, L"SpringScale", L"9", ini.c_str());
     ReadIni(b);
     const bool held = b.airFullKmh == kAirFullRange[0] && b.hotDamage == kDamageRange[1] && b.coldDamage == 0.0f && !b.damage && b.hotDamageFrom == kHotDamageFromRange[0] &&
-                      b.stallDamage == kStallDamageRange[1] && b.clutchHeat == kClutchHeatRange[0];
+                      b.stallDamage == kStallDamageRange[1] && b.clutchHeat == kClutchHeatRange[0] && b.springScale == kSuspScaleRange[1];
+    WritePrivateProfileStringW(kIniSection, L"SpringScale", L"1", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"StallDamagePercent", L"5", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"ClutchHeatPercent", L"60", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"HotDamageFrom", L"130", ini.c_str());

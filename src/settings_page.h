@@ -761,6 +761,16 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     }
     InterlockedExchange(&g_pageCapturing, st.capture >= 1 ? (LONG)GetTickCount() : 0);
 
+    ImGui::SeparatorText("Suspension");
+    PageLabel("Spring", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::SliderFloat("##springscale", &s.springScale, kSuspScaleRange[0], kSuspScaleRange[1], "x%.2f", ImGuiSliderFlags_AlwaysClamp));
+    PageTip("A test: each wheel's spring as a factor of the truck's own suspension. Above 1 stiffer and higher, below 1 softer. 1 = the truck's own.");
+    PageLabel("Damping", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::SliderFloat("##dampingscale", &s.dampingScale, kSuspScaleRange[0], kSuspScaleRange[1], "x%.2f", ImGuiSliderFlags_AlwaysClamp));
+    PageTip("A test: each wheel's damping as a factor of the truck's own. Above 1 the body settles faster, below 1 it bounces longer. 1 = the truck's own.");
+
     ImGui::SeparatorText("Sounds");
     PageLabel("Volume", labelX);
     ImGui::SetNextItemWidth(w);

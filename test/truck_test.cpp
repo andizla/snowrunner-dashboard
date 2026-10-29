@@ -1583,6 +1583,46 @@ int main()
         Check(found && text, "suspension probe: a constraint two pointers from the wheel and one in its model, each once, with its path and floats; a decoy left out");
     }
 
+    // the suspension tune (suspension_scan.h): a made up wheel whose constraint at + 0x28 holds the Arocs' front
+    // figures. The stock times the slider, never times what is there; held to 1; the game's own new value taken as
+    // the stock; 1 puts the stock back; a new constraint read anew; another class never written
+    {
+        const uint64_t vtable = kExe + 0x23d9538, wheel = 0x10400000, first = 0x10410000, second = 0x10420000;
+        for (uint64_t at : { wheel, first, second }) Block(at, 0x200);
+        Put(wheel + 0x28, first);
+        Put(first, vtable);
+        Put(first + 0xC4, 0.026f);
+        Put(first + 0xC8, 0.4f);
+        TruckRefs refs = {};
+        refs.vehicle = kVehicle;
+        refs.wheel[0] = wheel;
+        refs.wheels = 1;
+        SuspTune tune = {};
+        auto at = [&](uint64_t c, uint32_t off) { float v = 0.0f; Peek(c + off, &v, sizeof v); return v; };
+        const float same[2] = { 1.0f, 1.0f }, soft[2] = { 1.5f, 0.5f }, hard[2] = { 2.0f, 2.0f };
+        const bool none = SuspTuneStep(tune, kMemory, refs, vtable, same) == 0 && tune.wheel[0].fresh && tune.wheel[0].stock[0] == 0.026f && at(first, 0xC4) == 0.026f;
+        const bool once = SuspTuneStep(tune, kMemory, refs, vtable, soft) == 1 && Near(at(first, 0xC4), 0.039f) && Near(at(first, 0xC8), 0.2f) && Near(tune.wheel[0].back[0], 0.039f);
+        const bool steady = SuspTuneStep(tune, kMemory, refs, vtable, soft) == 0 && Near(at(first, 0xC4), 0.039f) && tune.wheel[0].stock[0] == 0.026f;
+        const bool held = SuspTuneStep(tune, kMemory, refs, vtable, hard) == 1 && Near(at(first, 0xC4), 0.052f) && at(first, 0xC8) == 0.8f;
+        Put(first + 0xC4, 0.03f); // the game rebuilt the spring in place (another suspension fitted)
+        const bool anew = SuspTuneStep(tune, kMemory, refs, vtable, hard) == 1 && tune.wheel[0].fresh && tune.wheel[0].stock[0] == 0.03f && Near(at(first, 0xC4), 0.06f) &&
+                          tune.wheel[0].stock[1] == 0.4f && at(first, 0xC8) == 0.8f;
+        const bool back = SuspTuneStep(tune, kMemory, refs, vtable, same) == 1 && at(first, 0xC4) == 0.03f && at(first, 0xC8) == 0.4f &&
+                          SuspTuneStep(tune, kMemory, refs, vtable, same) == 0;
+        Put(first + 0xC8, 0.9f);
+        const bool top = SuspTuneStep(tune, kMemory, refs, vtable, hard) == 1 && at(first, 0xC8) == 1.0f;
+        Put(second, kExe + 0x23d9540);
+        Put(second + 0xC4, 0.02f);
+        Put(second + 0xC8, 0.4f);
+        Put(wheel + 0x28, second);
+        const bool other = SuspTuneStep(tune, kMemory, refs, vtable, hard) == 0 && at(second, 0xC4) == 0.02f;
+        Put(second, vtable);
+        const bool rebuilt = SuspTuneStep(tune, kMemory, refs, vtable, soft) == 1 && tune.wheel[0].constraint == second && Near(at(second, 0xC4), 0.03f);
+        Check(none && once && steady && held && anew && back && top && other && rebuilt,
+              "suspension tune: the stock times the slider and never times what is there, held to 1, the game's new value taken as the stock, 1 puts the stock back, "
+              "a rebuilt constraint read anew, another class never written");
+    }
+
     RealImageTest();
 
     printf(g_failed ? "TRUCK TEST FAILED (%d)\n" : "TRUCK TEST OK\n", g_failed);

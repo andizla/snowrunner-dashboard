@@ -81,6 +81,7 @@ The Gameplay tab of the NEXT GEN menu edits every setting while you play. F2 ope
 | Percent of the gearbox a shift without the clutch costs, 0 to 25, with `Damage` on | `StallDamagePercent` | 5 |
 | A slipping clutch under load burns and costs the gearbox, with `Damage` on | `ClutchBurn` 0 or 1 | on |
 | How fast a slipping clutch heats up, percent of the model's own pace, 10 to 300 (the tab's "Clutch heat rate") | `ClutchHeatPercent` | 60 |
+| A test: each wheel's suspension spring and damping as a factor of the truck's own, 0.5 to 2 (the tab's Suspension section); 1 writes nothing | `SpringScale`, `DampingScale` | 1 |
 | What you drive with, for the mod's automatic: a wheel's pedals, a pad or the keyboard (see below) | `Input` 0, 1 or 2 | a wheel's pedals |
 | The truck pulls with the mod's engine and converter (see below) | `Powertrain` 0 or 1 | off |
 | How much of the mod's engine the game gets with `Powertrain=1`, from 0 to 100 percent: 0 leaves the game's own pull | `EngineShare` | 50 |
