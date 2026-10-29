@@ -21,6 +21,7 @@
 #include "game_code.h"
 #include "game_globals.h"
 #include "clock_scan.h"
+#include "suspension_scan.h"
 #include "gearbox_hooks.h"
 
 // The hooks' attach and detach (gearbox_hooks.h) on a function of the test's own: the hook counts and calls through.
@@ -436,6 +437,10 @@ static void RealImageTest()
         Check(!controlOne && !gameOne && controlTwo == control && gameTwo == control + 0x18,
               "places: with the accessor's code of another kind the signatures of control and the game miss, and way 2 finds both");
     }
+    // the suspension probe's vtable (suspension_scan.h): by its RTTI name, at RVA 0x23d9538 in 6ab52f5d (the finding
+    // pass of review 14)
+    const uint64_t constraint = VtableByName(image.data(), image.size(), imageBase, kSuspConstraintName);
+    Check(update ? constraint == 0x23d9538 : constraint != 0, "places: hkpWheelConstraintData's vtable by its RTTI name, for the suspension probe");
 }
 
 int main()
@@ -1549,6 +1554,33 @@ int main()
             ClockScanStep(single, kMemory, kVehicle, clock, true);
         }
         Check(single.state == kClockFound && single.found.off[1] == 0x44, "clock: the only place that rises at a day's pace is taken after three minutes");
+    }
+
+    // the suspension probe (suspension_scan.h): a made up wheel whose body holds a constraint at + 0x40 (two pointers
+    // from the wheel), the same constraint again at + 0x48, a wheel model holding a second one itself at + 0x60, and
+    // a decoy of another class. Each constraint once for each root, with its path, and its floats as text
+    {
+        const uint64_t vtable = kExe + 0x23d9538, wheel = 0x10300000, model = 0x10310000, body = 0x10320000, inBody = 0x10330000, inModel = 0x10340000, decoy = 0x10350000;
+        for (uint64_t at : { wheel, model, body, inBody, inModel, decoy }) Block(at, 0x800);
+        Put(wheel, kExe + 0x100);
+        Put(wheel + 0x18, body);
+        Put(wheel + 0x20, decoy);
+        Put(body + 0x40, inBody);
+        Put(body + 0x48, inBody);
+        Put(model + 0x60, inModel);
+        Put(inBody, vtable);
+        Put(inModel, vtable);
+        Put(decoy, kExe + 0x23d9540);
+        Put(inBody + 0x30, 1.5f);
+        Put(inBody + 0x34, 0.25f);
+        SuspHit hits[8];
+        const int n = SuspScan(kMemory, 0x100000, &wheel, &model, 1, vtable, hits, 8);
+        char path[96], floats[1400];
+        SuspHitWords(hits[0], path, sizeof path);
+        const bool found = n == 2 && hits[0].at == inBody && hits[0].depth == 2 && hits[0].off[0] == 0x18 && hits[0].off[1] == 0x40 && !hits[0].fromModel &&
+                           hits[1].at == inModel && hits[1].depth == 1 && hits[1].off[0] == 0x60 && hits[1].fromModel && !strcmp(path, "wheel 0's object [[+0x18]+0x40]");
+        const bool text = SuspFloatsText(kMemory, inBody, vtable, floats, sizeof floats) && strstr(floats, "| +30 1.5 0.25 ") && !SuspFloatsText(kMemory, decoy, vtable, floats, sizeof floats);
+        Check(found && text, "suspension probe: a constraint two pointers from the wheel and one in its model, each once, with its path and floats; a decoy left out");
     }
 
     RealImageTest();

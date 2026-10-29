@@ -36,6 +36,7 @@ int NgMenuKeyFromIni(); // the menu's key, which a capture never binds
 #include "game_code.h"
 #include "game_globals.h"
 #include "clock_scan.h"
+#include "suspension_scan.h"
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "shell32.lib")
 #ifndef GAUGES_SETTINGS_TEST
@@ -1998,6 +1999,17 @@ static void OnTruckFrame(void *first)
     StallJobFrame(g_stallJob, m, (uint64_t)first, g_damageUpdate);
 }
 
+// The probe's scan for each wheel's suspension constraint (suspension_scan.h), read only.
+struct SuspProbe
+{
+    uint64_t vtable;            // the constraint's vtable in the game; 0 before it is looked for, or not found
+    bool looked;                // its RTTI name was looked for
+    uint64_t key;               // the vehicle and wheel objects the last scan was of, summed
+    SuspHit hits[kSuspHitsMost];
+    int count;
+    ULONGLONG at;               // when the first two are logged next
+};
+
 // The driven truck as the mod's thread follows it from pass to pass.
 struct TruckWatch
 {
@@ -2091,6 +2103,7 @@ struct TruckWatch
     ClockWatch clock;           // the game's own count of the seconds it has simulated the truck for, and when it last moved
     ULONGLONG modelAt;          // when the models last ran
     TruckWho who;               // which truck refs are, as the passes read it; who.taken's key is "" while none is read
+    SuspProbe susp;             // the probe's scan for each wheel's suspension constraint (Probe=1)
 };
 
 // The mod's gearbox has the truck in a position of the player's own (not A): the engine runs behind its clutch.
@@ -2259,6 +2272,58 @@ static void PullGiveBack(const TruckMemory &m, TruckWatch &w, const wchar_t *why
     w.pullTest = PullTest{};
 }
 
+// With Probe=1: the driven truck's suspension constraints looked for once for each truck and again when its wheels
+// are rebuilt, each logged with its path and floats, then the first two every kSuspEvery ms (suspension_scan.h).
+// Reads only. Also the fitted suspension's name (vehicle + 0xd30), to match the floats against the truck's file.
+static void SuspProbeStep(SuspProbe &p, const TruckMemory &m, const TruckRefs &r, ULONGLONG now)
+{
+    if (!p.looked)
+    {
+        p.looked = true;
+        size_t from = 0, to = 0;
+        std::vector<uint8_t> image;
+        const uint64_t rva = CodeCopy(image, from, to, true) ? VtableByName(image.data(), image.size(), g_base, kSuspConstraintName) : 0;
+        p.vtable = rva ? g_base + rva : 0;
+        if (rva) Log(L"probe: suspension: %S's vtable at +%llx", kSuspConstraintName + 4, rva);
+        else Log(L"probe: suspension: %S's vtable not found, no scan", kSuspConstraintName + 4);
+    }
+    if (!p.vtable) return;
+    uint64_t key = r.vehicle;
+    for (int i = 0; i < r.wheels; i++) key += r.wheel[i] * (uint64_t)(i + 3);
+    char text[1400];
+    if (key != p.key)
+    {
+        // each wheel object's model: the entry of the vehicle's list of wheel models that holds it
+        uint64_t models[kMaxWheels] = {}, begin = 0, end = 0;
+        if (m.get(r.vehicle + 0x200, begin) && m.get(r.vehicle + 0x208, end) && end > begin && end - begin <= kMaxWheels * 8)
+            for (uint64_t at = begin; at < end; at += 8)
+            {
+                uint64_t model = 0, wheel = 0;
+                if (!m.get(at, model) || !m.get(model + 0x2C8, wheel)) continue;
+                for (int i = 0; i < r.wheels; i++)
+                    if (r.wheel[i] == wheel) models[i] = model;
+            }
+        p.key = key;
+        p.count = SuspScan(m, ImageSize(), r.wheel, models, r.wheels, p.vtable, p.hits, kSuspHitsMost);
+        char name[kMaxText];
+        size_t length = 0;
+        Log(L"probe: suspension: %d constraints behind %d wheels, the suspension fitted \"%S\"", p.count, r.wheels,
+            TruckNameText(m, r.vehicle + 0xd30, name, length) ? name : "?");
+        for (int i = 0; i < p.count; i++)
+        {
+            char path[96];
+            SuspHitWords(p.hits[i], path, sizeof path);
+            if (SuspFloatsText(m, p.hits[i].at, p.vtable, text, sizeof text)) Log(L"probe: suspension: %S %p: %S", path, (void *)p.hits[i].at, text);
+        }
+        p.at = now + kSuspEvery;
+    }
+    if (now < p.at) return;
+    p.at = now + kSuspEvery;
+    for (int i = 0; i < p.count && i < 2; i++)
+        if (SuspFloatsText(m, p.hits[i].at, p.vtable, text, sizeof text)) Log(L"probe: suspension %d: %S", i, text);
+        else p.key = 0; // gone: the next pass scans again
+}
+
 static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s, bool front, TruckRaw &raw, World &world)
 {
     const int probe = s.probe;
@@ -2312,6 +2377,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         if (w.found) Log(L"truck: found, %d wheels, %d gears and a high gear, a %.0f l tank", raw.wheels, TruckTopGear(raw), raw.tank);
         else Log(L"truck: none is driven now");
     }
+    if (probe && w.found) SuspProbeStep(w.susp, m, w.refs, now);
     WorldRead(m, w.found ? w.refs.control : 0, world);
     // a load ended (the game's loading screen gone): the truck that drives on under the game's id it had before the
     // screen keeps its heat, so a travel between regions, a border crossing and a reload are no cold start (a tester's
