@@ -4256,13 +4256,14 @@ int main(int argc, char **argv)
                         LoopStep(stuck, ss2, hc, 0.0f, kDt, false);
                         if (at > 2.0f) stuckNeedle = fminf(stuckNeedle, ss2.tach.rpm);
                     }
-                    stuckQuiet = stuckQuiet && ss2.stallAt < 0.0f && ss2.share > 0.0f;
+                    // no creep in R at all (0.18.2's round 2), so nothing pushes there
+                    stuckQuiet = stuckQuiet && ss2.stallAt < 0.0f && (which == 0 ? ss2.share == 0.0f : ss2.share > 0.0f);
                 }
                 printf("     creep at Gearbox 0 and 1: the grade in 4th, no stall (%.1f), the governor at most %.3f, the needle at least %.0f rpm; stuck in R, L- and L+: "
                        "no stall %d, the needle at least %.0f rpm (idle %.0f)\n", gg.stallAt, gameShare, gameNeedle, stuckQuiet, stuckNeedle, tall.k.idle);
                 Check(gg.stallAt < 0.0f && gameShare > 0.5f && gameNeedle >= tall.k.idle - 1.0f && stuckQuiet && stuckNeedle >= tall.k.idle - 1.0f,
-                      "creep: in the game's gears (Gearbox 0 and 1) no stall comes: lugged in a tall gear, or stuck in R and L- (through the converter) or L+, the "
-                      "creep pushes, the engine idles on and the needle stays at idle");
+                      "creep: in the game's gears (Gearbox 0 and 1) no stall comes: lugged in a tall gear, or stuck in L- (through the converter) or L+, the "
+                      "creep pushes, the engine idles on and the needle stays at idle; stuck in R nothing pushes");
                 // part E: R and L- on the game's shifter from a standstill creep through the converter, calmed: no overshoot
                 // past 1.3 of the gear's idle speed, no cycle over 10 s, under the coupling point
                 auto shifterCreep = [&](int gear, float powerFactor, float &most, float &span, float &settled, float &share) {
@@ -4286,10 +4287,9 @@ int main(int argc, char **argv)
                 const bool rQuiet = shifterCreep(-1, 1.0f, rMost, rSpan, rAt, rShare), lQuiet = shifterCreep(1, 0.2f, lMost, lSpan, lAt, lShare);
                 printf("     creep through the converter on the game's shifter: R at most %.2f of its idle speed, %.2f at the end, within %.3f; L- at most %.2f, %.2f, "
                        "within %.3f\n", rMost, rAt, rSpan, lMost, lAt, lSpan);
-                Check(rQuiet && lQuiet && rMost < 1.3f && lMost < 1.3f && rSpan < 0.05f && lSpan < 0.05f && rAt > 0.3f && lAt > 0.3f && rAt < kCouplingPoint + 0.02f &&
-                          lAt < kCouplingPoint + 0.02f,
-                      "creep: R and L- on the game's shifter creep through the converter from a standstill, under the coupling point, no overshoot past 1.3 of "
-                      "the gear's idle speed and no cycle, with no holding part and no stall");
+                Check(rQuiet && lQuiet && rShare == 0.0f && rAt < 0.01f && lMost < 1.3f && lSpan < 0.05f && lAt > 0.3f && lAt < kCouplingPoint + 0.02f,
+                      "creep: L- on the game's shifter creeps through the converter from a standstill, under the coupling point, no overshoot past 1.3 of the "
+                      "gear's idle speed and no cycle, with no holding part and no stall; R does not creep (0.18.2)");
             }
             // a shift: no stuck time counts within a second of it, at every level; at Gearbox 2 still stuck after it, the
             // engine stalls. Stuck in 3rd from the start (the game's pull steady), then a shift into 4th at 0.4 s
@@ -4345,9 +4345,40 @@ int main(int argc, char **argv)
                 Drive(wt, 0, false, 0.0f, 0.0f); // N
                 wt.powerFactor = 1.0f;
                 const float inN = CreepStep(wm, wt, wk, false, 1.0f, kDt, nullptr, any, 0.6f, true);
-                Check(heldInLPlus && quietHeld && overHeld && inN == 0.0f && !wm.armed,
-                      "creep (0.18.2): L+ to L to L- and N each a shift, nothing for half a second after each; in L- at four times its idle speed the holding "
-                      "part never arms or pushes");
+                // round 2: A standing on the game's gear 0, then R, then back to A moving off in gear 1, at Gearbox 2
+                // (R a position of the mod's own: the governor, a stall may come) and at Gearbox 1 (the converter).
+                // Nothing in R, nothing within kCreepQuiet of each change, the creep back after it in A
+                bool walkHeld = true;
+                for (int level = 1; level <= 2; level++)
+                {
+                    CreepModel am = {};
+                    TruckRaw atr = Truck();
+                    Drive(atr, 0, true, 0.0f, 0.0f);
+                    atr.powerFactor = 1.0f;
+                    float clock = 0.0f, changedAt = -100.0f, afterShare = 0.0f;
+                    bool stall = false;
+                    auto step = [&](bool converter, float until) {
+                        for (; clock < until; clock += kDt)
+                        {
+                            const float sh = CreepStep(am, atr, wk, converter, 1.0f, kDt, nullptr, stall, 0.6f, level == 2 && !converter);
+                            if (atr.gearEngaged < 0 && sh != 0.0f) walkHeld = false;
+                            if (clock < changedAt + kCreepQuiet - kDt && sh != 0.0f) walkHeld = false;
+                            if (atr.gearEngaged == 1 && clock > changedAt + kCreepQuiet + kDt) afterShare = fmaxf(afterShare, sh);
+                            if (stall) walkHeld = false;
+                        }
+                    };
+                    step(true, 2.0f);
+                    Drive(atr, -1, level == 1, 0.0f, 0.0f); // R
+                    changedAt = clock;
+                    step(level == 1, 6.0f);
+                    Drive(atr, 1, true, 0.0f, 0.0f); // back to A, moving off in gear 1
+                    changedAt = clock;
+                    step(true, 10.0f);
+                    walkHeld = walkHeld && afterShare > 0.0f;
+                }
+                Check(heldInLPlus && quietHeld && overHeld && inN == 0.0f && !wm.armed && walkHeld,
+                      "creep (0.18.2): L+ to L to L- and N each a shift, nothing for 1.5 s after each; in L- at four times its idle speed the holding part "
+                      "never arms or pushes; A on gear 0 to R and back at Gearbox 2 and 1: nothing in R, nothing within 1.5 s of a change, the creep back in A");
             }
             // the needle at zero pedal in a gear of the game's own (Gearbox 0 and 1): never under idle, as no stall comes
             // there; over idle with the wheels and with the pedal down as before

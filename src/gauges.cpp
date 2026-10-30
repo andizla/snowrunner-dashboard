@@ -156,13 +156,17 @@ void GaugeLog(const wchar_t *fmt, ...)
 // code, its place as module + RVA and its thread, then goes on to the filter that was there before (the game's crash
 // reporter). Set once a truck is first driven, after the game set its own. The line is written without the log's lock
 // and without the heap, as the fault may have come while either was held.
+// Round 2: the game closed with no such line, so the fault, if any, is handled inside the game. A vectored handler,
+// first in the chain, also names the first kFaultLines faults of the kinds that end a program on any thread, as they
+// are raised, and lets them go on as they would (EXCEPTION_CONTINUE_SEARCH): it changes nothing.
 static LPTOP_LEVEL_EXCEPTION_FILTER g_crashBefore = nullptr;
 static wchar_t g_crashLog[MAX_PATH + 16];
 static DWORD g_crashModThread = 0;
-static LONG WINAPI CrashLine(EXCEPTION_POINTERS *e)
+static const LONG kFaultLines = 3;
+
+// One line about the fault into Gauges.log, written with no heap and no lock. what: "crash" or "fault".
+static void CrashWrite(const EXCEPTION_POINTERS *e, const char *what, const char *after)
 {
-    static volatile LONG once = 0;
-    if (e && e->ExceptionRecord && InterlockedExchange(&once, 1) == 0)
     {
         const void *at = e->ExceptionRecord->ExceptionAddress;
         HMODULE module = nullptr;
@@ -175,9 +179,9 @@ static LONG WINAPI CrashLine(EXCEPTION_POINTERS *e)
         GetLocalTime(&st);
         char line[512];
         const DWORD thread = GetCurrentThreadId();
-        const int n = _snprintf_s(line, sizeof line, _TRUNCATE, "%02u:%02u:%02u crash: code %08lX at %ls+%llx, thread %lu%s; passed on to the game's handler\r\n",
-                                  st.wHour, st.wMinute, st.wSecond, e->ExceptionRecord->ExceptionCode, name,
-                                  (unsigned long long)((const uint8_t *)at - (const uint8_t *)module), thread, thread == g_crashModThread ? " (the mod's thread)" : "");
+        const int n = _snprintf_s(line, sizeof line, _TRUNCATE, "%02u:%02u:%02u %s: code %08lX at %ls+%llx, thread %lu%s; %s\r\n", st.wHour, st.wMinute,
+                                  st.wSecond, what, e->ExceptionRecord->ExceptionCode, name, (unsigned long long)((const uint8_t *)at - (const uint8_t *)module),
+                                  thread, thread == g_crashModThread ? " (the mod's thread)" : "", after);
         const HANDLE f = CreateFileW(g_crashLog, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, 0, nullptr);
         if (f != INVALID_HANDLE_VALUE)
         {
@@ -187,7 +191,24 @@ static LONG WINAPI CrashLine(EXCEPTION_POINTERS *e)
             CloseHandle(f);
         }
     }
+}
+
+static LONG WINAPI CrashLine(EXCEPTION_POINTERS *e)
+{
+    static volatile LONG once = 0;
+    if (e && e->ExceptionRecord && InterlockedExchange(&once, 1) == 0) CrashWrite(e, "crash", "passed on to the game's handler");
     return g_crashBefore ? g_crashBefore(e) : EXCEPTION_CONTINUE_SEARCH;
+}
+
+static LONG WINAPI FaultLine(EXCEPTION_POINTERS *e)
+{
+    static volatile LONG lines = 0;
+    if (!e || !e->ExceptionRecord) return EXCEPTION_CONTINUE_SEARCH;
+    const DWORD code = e->ExceptionRecord->ExceptionCode;
+    if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION && code != EXCEPTION_INT_DIVIDE_BY_ZERO && code != EXCEPTION_STACK_OVERFLOW)
+        return EXCEPTION_CONTINUE_SEARCH;
+    if (InterlockedIncrement(&lines) <= kFaultLines) CrashWrite(e, "fault", "as raised, before any handler (it may be handled)");
+    return EXCEPTION_CONTINUE_SEARCH;
 }
 
 static void CrashLineSet()
@@ -198,7 +219,9 @@ static void CrashLineSet()
     wcsncpy_s(g_crashLog, (g_dir + L"Gauges.log").c_str(), _TRUNCATE);
     g_crashModThread = GetCurrentThreadId();
     g_crashBefore = SetUnhandledExceptionFilter(CrashLine);
-    Log(L"crash line: a fault nothing handles will be named in this log, then passed on to %s", g_crashBefore ? L"the game's own handler" : L"Windows");
+    const bool first = AddVectoredExceptionHandler(1, FaultLine) != nullptr;
+    Log(L"crash line: a fault nothing handles will be named in this log, then passed on to %s; %s", g_crashBefore ? L"the game's own handler" : L"Windows",
+        first ? L"the first three faults of any thread are named as they are raised" : L"the line for faults as they are raised could not be added");
 }
 
 // Says where the last start's log went, once this start's first line is in.

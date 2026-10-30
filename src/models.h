@@ -2603,9 +2603,11 @@ static const float kHoldLead = 1.0f;   // seconds ahead it looks at the wheels, 
 // switching gears"). Where no stall may come the governor and its holding part push as ever and the engine idles on.
 static const float kShiftQuiet = 1.0f;
 // No creep at all for kCreepQuiet after any change of gear or of range (the game's L+, L and L- are one gear at three
-// powers): a truck's crash on a shift with the creep's holding part still pushing (0.18.2's hotfix, the player's report
-// and the author's repro of 30 October). The mod's own shifts clear the creep's slot before they are made (gauges.cpp).
-static const float kCreepQuiet = 0.5f, kPowerShift = 0.01f;
+// powers), and none in reverse: a truck's crash on a shift with the creep pushing (0.18.2's hotfix, the player's report
+// and the author's repro of 30 October; round 2: the game closed about 2 s after the mod's shift into R, before the
+// creep's first line, with the quiet at 0.5 s). The mod's own shifts clear the creep's slot before they are made
+// (gauges.cpp).
+static const float kCreepQuiet = 1.5f, kPowerShift = 0.01f;
 
 struct CreepModel
 {
@@ -2679,7 +2681,7 @@ inline float CreepStep(CreepModel &m, const TruckRaw &t, const GaugeScale &k, bo
         m.armed = false;
         return 0.0f;
     }
-    if (m.shifted && m.sinceShift < kCreepQuiet)
+    if ((m.shifted && m.sinceShift < kCreepQuiet) || t.gearEngaged < 0)
     {
         m.share = m.hold = m.given = 0.0f;
         m.armed = false;
