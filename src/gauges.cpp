@@ -159,38 +159,93 @@ void GaugeLog(const wchar_t *fmt, ...)
 // Round 2: the game closed with no such line, so the fault, if any, is handled inside the game. A vectored handler,
 // first in the chain, also names the first kFaultLines faults of the kinds that end a program on any thread, as they
 // are raised, and lets them go on as they would (EXCEPTION_CONTINUE_SEARCH): it changes nothing.
+// Round 3: it named nothing, so the game ends itself. ExitProcess, TerminateProcess on this process and
+// RaiseFailFastException are hooked, and each call writes an exit line with kExitFrames return addresses. The vectored
+// handler also names C++ throws (0xE06D7363) and fast fails (0xC0000409). A game may throw as part of its work, so each
+// throw's return addresses are kept (the last one only, in static memory) and an exit line names the last throw too.
 static LPTOP_LEVEL_EXCEPTION_FILTER g_crashBefore = nullptr;
 static wchar_t g_crashLog[MAX_PATH + 16];
 static DWORD g_crashModThread = 0;
 static const LONG kFaultLines = 3;
+static const int kExitFrames = 8;
+static const DWORD kCodeCppThrow = 0xE06D7363, kCodeFastFail = 0xC0000409;
+static void *g_lastThrow[kExitFrames];
+static volatile LONG g_lastThrowFrames = 0, g_throws = 0;
+static volatile DWORD g_lastThrowThread = 0;
 
-// One line about the fault into Gauges.log, written with no heap and no lock. what: "crash" or "fault".
+// at as module + RVA ("SnowRunner.exe+a58220") into out, with no heap.
+static int CrashPlace(const void *at, char *out, size_t size)
+{
+    HMODULE module = nullptr;
+    wchar_t path[MAX_PATH] = L"?";
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)at, &module) && module)
+        GetModuleFileNameW(module, path, MAX_PATH);
+    const wchar_t *name = wcsrchr(path, L'\\');
+    name = name ? name + 1 : path;
+    return _snprintf_s(out, size, _TRUNCATE, "%ls+%llx", name, module ? (unsigned long long)((const uint8_t *)at - (const uint8_t *)module) : (unsigned long long)at);
+}
+
+// Return addresses as places, joined by " < ", appended at out + used.
+static int CrashFrames(void *const *frames, int count, char *out, size_t size, int used)
+{
+    for (int i = 0; i < count && used + 8 < (int)size; i++)
+    {
+        if (i) used += _snprintf_s(out + used, size - used, _TRUNCATE, " < ");
+        const int n = CrashPlace(frames[i], out + used, size - used);
+        if (n > 0) used += n;
+    }
+    return used;
+}
+
+// One line into Gauges.log, written with no heap and no lock: the time, then text.
+static void CrashLineOut(const char *text)
+{
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    char line[1400];
+    const int n = _snprintf_s(line, sizeof line, _TRUNCATE, "%02u:%02u:%02u %s\r\n", st.wHour, st.wMinute, st.wSecond, text);
+    const HANDLE f = CreateFileW(g_crashLog, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, 0, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return;
+    DWORD wrote = 0;
+    if (n > 0) WriteFile(f, line, (DWORD)n, &wrote, nullptr);
+    FlushFileBuffers(f);
+    CloseHandle(f);
+}
+
+static const char *CrashThreadWord(DWORD thread) { return thread == g_crashModThread ? " (the mod's thread)" : ""; }
+
+// A fault's line. what: "crash" or "fault"; the place it was raised at, its thread and its callers.
 static void CrashWrite(const EXCEPTION_POINTERS *e, const char *what, const char *after)
 {
+    char text[1200], at[320];
+    void *frames[kExitFrames];
+    CrashPlace(e->ExceptionRecord->ExceptionAddress, at, sizeof at);
+    const DWORD thread = GetCurrentThreadId();
+    int used = _snprintf_s(text, sizeof text, _TRUNCATE, "%s: code %08lX at %s, thread %lu%s; %s; called from ", what, e->ExceptionRecord->ExceptionCode, at, thread,
+                           CrashThreadWord(thread), after);
+    if (used < 0) used = (int)strlen(text);
+    CrashFrames(frames, CaptureStackBackTrace(1, kExitFrames, frames, nullptr), text, sizeof text, used);
+    CrashLineOut(text);
+}
+
+// An exit's line: the call, its code, its callers, and the last C++ throw's callers where there was one.
+static void ExitWrite(const char *call, DWORD code)
+{
+    static volatile LONG once = 0;
+    if (InterlockedExchange(&once, 1)) return;
+    char text[1400];
+    void *frames[kExitFrames];
+    const DWORD thread = GetCurrentThreadId();
+    int used = _snprintf_s(text, sizeof text, _TRUNCATE, "exit: %s(%lu), thread %lu%s, called from ", call, code, thread, CrashThreadWord(thread));
+    if (used < 0) used = (int)strlen(text);
+    used = CrashFrames(frames, CaptureStackBackTrace(1, kExitFrames, frames, nullptr), text, sizeof text, used);
+    const LONG thrown = g_lastThrowFrames;
+    if (thrown > 0 && used + 64 < (int)sizeof text)
     {
-        const void *at = e->ExceptionRecord->ExceptionAddress;
-        HMODULE module = nullptr;
-        wchar_t path[MAX_PATH] = L"?";
-        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)at, &module) && module)
-            GetModuleFileNameW(module, path, MAX_PATH);
-        const wchar_t *name = wcsrchr(path, L'\\');
-        name = name ? name + 1 : path;
-        SYSTEMTIME st;
-        GetLocalTime(&st);
-        char line[512];
-        const DWORD thread = GetCurrentThreadId();
-        const int n = _snprintf_s(line, sizeof line, _TRUNCATE, "%02u:%02u:%02u %s: code %08lX at %ls+%llx, thread %lu%s; %s\r\n", st.wHour, st.wMinute,
-                                  st.wSecond, what, e->ExceptionRecord->ExceptionCode, name, (unsigned long long)((const uint8_t *)at - (const uint8_t *)module),
-                                  thread, thread == g_crashModThread ? " (the mod's thread)" : "", after);
-        const HANDLE f = CreateFileW(g_crashLog, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, 0, nullptr);
-        if (f != INVALID_HANDLE_VALUE)
-        {
-            DWORD wrote = 0;
-            if (n > 0) WriteFile(f, line, (DWORD)n, &wrote, nullptr);
-            FlushFileBuffers(f);
-            CloseHandle(f);
-        }
+        const int n = _snprintf_s(text + used, sizeof text - used, _TRUNCATE, "; the last of %ld C++ throws, thread %lu, from ", (long)g_throws, (unsigned long)g_lastThrowThread);
+        if (n > 0) CrashFrames(g_lastThrow, (int)thrown, text, sizeof text, used + n);
     }
+    CrashLineOut(text);
 }
 
 static LONG WINAPI CrashLine(EXCEPTION_POINTERS *e)
@@ -202,13 +257,43 @@ static LONG WINAPI CrashLine(EXCEPTION_POINTERS *e)
 
 static LONG WINAPI FaultLine(EXCEPTION_POINTERS *e)
 {
-    static volatile LONG lines = 0;
+    static volatile LONG lines = 0, throwLines = 0;
     if (!e || !e->ExceptionRecord) return EXCEPTION_CONTINUE_SEARCH;
     const DWORD code = e->ExceptionRecord->ExceptionCode;
-    if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION && code != EXCEPTION_INT_DIVIDE_BY_ZERO && code != EXCEPTION_STACK_OVERFLOW)
+    if (code == kCodeCppThrow)
+    {
+        // kept for the exit's line; the first kFaultLines named at once
+        InterlockedIncrement(&g_throws);
+        g_lastThrowFrames = 0;
+        g_lastThrowFrames = CaptureStackBackTrace(1, kExitFrames, g_lastThrow, nullptr);
+        g_lastThrowThread = GetCurrentThreadId();
+        if (InterlockedIncrement(&throwLines) <= kFaultLines) CrashWrite(e, "fault", "a C++ throw, before any catch (it may be caught)");
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION && code != EXCEPTION_INT_DIVIDE_BY_ZERO && code != EXCEPTION_STACK_OVERFLOW &&
+        code != kCodeFastFail)
         return EXCEPTION_CONTINUE_SEARCH;
     if (InterlockedIncrement(&lines) <= kFaultLines) CrashWrite(e, "fault", "as raised, before any handler (it may be handled)");
     return EXCEPTION_CONTINUE_SEARCH;
+}
+
+static VOID(WINAPI *g_exitProcess)(UINT) = ExitProcess;
+static BOOL(WINAPI *g_terminateProcess)(HANDLE, UINT) = TerminateProcess;
+static VOID(WINAPI *g_failFast)(PEXCEPTION_RECORD, PCONTEXT, DWORD) = RaiseFailFastException;
+static VOID WINAPI ExitProcessHook(UINT code)
+{
+    ExitWrite("ExitProcess", code);
+    g_exitProcess(code);
+}
+static BOOL WINAPI TerminateProcessHook(HANDLE process, UINT code)
+{
+    if (process == GetCurrentProcess() || GetProcessId(process) == GetCurrentProcessId()) ExitWrite("TerminateProcess", code);
+    return g_terminateProcess(process, code);
+}
+static VOID WINAPI FailFastHook(PEXCEPTION_RECORD record, PCONTEXT context, DWORD flags)
+{
+    ExitWrite("RaiseFailFastException", record ? record->ExceptionCode : 0);
+    g_failFast(record, context, flags);
 }
 
 static void CrashLineSet()
@@ -220,8 +305,12 @@ static void CrashLineSet()
     g_crashModThread = GetCurrentThreadId();
     g_crashBefore = SetUnhandledExceptionFilter(CrashLine);
     const bool first = AddVectoredExceptionHandler(1, FaultLine) != nullptr;
-    Log(L"crash line: a fault nothing handles will be named in this log, then passed on to %s; %s", g_crashBefore ? L"the game's own handler" : L"Windows",
-        first ? L"the first three faults of any thread are named as they are raised" : L"the line for faults as they are raised could not be added");
+    void **targets[3] = { (void **)&g_exitProcess, (void **)&g_terminateProcess, (void **)&g_failFast };
+    void *const hooks[3] = { (void *)ExitProcessHook, (void *)TerminateProcessHook, (void *)FailFastHook };
+    const long hooked = GearboxAttach(targets, hooks, 3);
+    Log(L"crash line: a fault nothing handles will be named in this log, then passed on to %s; %s; %s", g_crashBefore ? L"the game's own handler" : L"Windows",
+        first ? L"the first three faults and C++ throws of any thread are named as they are raised" : L"the line for faults as they are raised could not be added",
+        hooked == NO_ERROR ? L"ExitProcess, TerminateProcess and RaiseFailFastException name their caller" : L"the exit calls could not be hooked");
 }
 
 // Says where the last start's log went, once this start's first line is in.
@@ -3105,7 +3194,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             // the stalls only as a manual gearbox's: the mod's own gearbox in a position picked by hand (the author's drive
             // of BF57872B); on the automatic and the game's shifter the governor pushes and the engine idles on
             const bool mayStall = s.gearbox == kGearboxOwn && manual;
-            const float share = on ? CreepStep(w.creep, raw, scale, converter, grip, dt, &creepCase, stalls, holdMost, mayStall,
+            // a pass that shifts gives nothing and leaves the model as it was: the gear it reads is the one before the
+            // shift, and the next pass sees the change and keeps kCreepQuiet (round 3 of the crash hotfix)
+            const float share = on && !shiftAsk ? CreepStep(w.creep, raw, scale, converter, grip, dt, &creepCase, stalls, holdMost, mayStall,
                                                shifterLow && !w.take.driving && raw.automatic == 0) : 0.0f;
             CreepGive(share > 0.0f ? w.refs.action : 0, share);
             if (stalls)
