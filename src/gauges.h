@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#define GAUGES_VERSION "0.18.2"
+#define GAUGES_VERSION "0.18.3"
 
 // The exe the addresses in this mod were taken from (SnowRunner on Steam, the build of 22 July 2026). On any other build
 // the mod finds them by the code that uses them (game_globals.h, game_code.h), and stands down where it cannot.
