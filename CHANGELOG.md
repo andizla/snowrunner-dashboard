@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- R creeps through the converter again, at every level, as in 0.18.0; 0.18.2 left it without creep (the author, 30 October).
 - A test: Spring, Damping, Travel min and Travel max in a new Suspension section, each wheel's spring, damping and travel limits as a factor of the truck's own (`SpringScale`, `DampingScale`, `TravelMinScale`, `TravelMaxScale`, 0.5 to 2; 1 writes nothing; the author, 29 and 30 October; review 14).
 
 ## [0.18.2]

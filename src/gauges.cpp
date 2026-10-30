@@ -3084,7 +3084,10 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         // seconds on the next pass. Nothing while the pull test runs. Its first line in the log a quarter second after it
         // begins and one as it ends; with the probe on, one each quarter second
         {
-            const bool manual = own && GearboxManual(w);
+            // R creeps through the converter at every level, the mod's own gearbox's R too (the author, 30 October: "R creep
+            // is supposed to be torque converter. 0.18.0 worked, 18.1 didn't"): there is no governor, holding part, stall
+            // or clutch for the creep in R
+            const bool manual = own && GearboxManual(w) && raw.gearEngaged >= 0;
             // R and the low range picked on the game's shifter (Gearbox 0 and 1) drive through the converter, as a real
             // automatic's do (the author, 29 October: "i assumed it was handled through converter already? do it"), its
             // share calmed there as the governor's (CreepShare's calm). The game's L+ is its first gear at full power and
