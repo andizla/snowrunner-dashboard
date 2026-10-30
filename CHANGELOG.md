@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- A crash on a shift with the creep pushing is fixed: no creep for half a second after any change of gear or of the low range, its push cleared before the mod's own shifts, and its holding part never pushes a truck that rolls faster than its gear idles. At Gearbox 0 and 1 the mod shifts only within A. A crash now leaves a line in `Gauges.log` naming its place (a player's report on mod.io and the author's repro, 30 October).
 - A test: Spring, Damping, Travel min and Travel max in a new Suspension section, each wheel's spring, damping and travel limits as a factor of the truck's own (`SpringScale`, `DampingScale`, `TravelMinScale`, `TravelMaxScale`, 0.5 to 2; 1 writes nothing; the author, 29 and 30 October; review 14).
 
 ## [0.18.1]

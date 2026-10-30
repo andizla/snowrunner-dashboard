@@ -152,6 +152,55 @@ void GaugeLog(const wchar_t *fmt, ...)
 #define Log GaugeLog
 
 #ifndef GAUGES_SETTINGS_TEST
+// A crash's line (0.18.2's hotfix, the reviewer's item 5): a fault nothing handled writes one line to Gauges.log, its
+// code, its place as module + RVA and its thread, then goes on to the filter that was there before (the game's crash
+// reporter). Set once a truck is first driven, after the game set its own. The line is written without the log's lock
+// and without the heap, as the fault may have come while either was held.
+static LPTOP_LEVEL_EXCEPTION_FILTER g_crashBefore = nullptr;
+static wchar_t g_crashLog[MAX_PATH + 16];
+static DWORD g_crashModThread = 0;
+static LONG WINAPI CrashLine(EXCEPTION_POINTERS *e)
+{
+    static volatile LONG once = 0;
+    if (e && e->ExceptionRecord && InterlockedExchange(&once, 1) == 0)
+    {
+        const void *at = e->ExceptionRecord->ExceptionAddress;
+        HMODULE module = nullptr;
+        wchar_t path[MAX_PATH] = L"?";
+        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)at, &module) && module)
+            GetModuleFileNameW(module, path, MAX_PATH);
+        const wchar_t *name = wcsrchr(path, L'\\');
+        name = name ? name + 1 : path;
+        SYSTEMTIME st;
+        GetLocalTime(&st);
+        char line[512];
+        const DWORD thread = GetCurrentThreadId();
+        const int n = _snprintf_s(line, sizeof line, _TRUNCATE, "%02u:%02u:%02u crash: code %08lX at %ls+%llx, thread %lu%s; passed on to the game's handler\r\n",
+                                  st.wHour, st.wMinute, st.wSecond, e->ExceptionRecord->ExceptionCode, name,
+                                  (unsigned long long)((const uint8_t *)at - (const uint8_t *)module), thread, thread == g_crashModThread ? " (the mod's thread)" : "");
+        const HANDLE f = CreateFileW(g_crashLog, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, 0, nullptr);
+        if (f != INVALID_HANDLE_VALUE)
+        {
+            DWORD wrote = 0;
+            if (n > 0) WriteFile(f, line, (DWORD)n, &wrote, nullptr);
+            FlushFileBuffers(f);
+            CloseHandle(f);
+        }
+    }
+    return g_crashBefore ? g_crashBefore(e) : EXCEPTION_CONTINUE_SEARCH;
+}
+
+static void CrashLineSet()
+{
+    static bool set = false;
+    if (set) return;
+    set = true;
+    wcsncpy_s(g_crashLog, (g_dir + L"Gauges.log").c_str(), _TRUNCATE);
+    g_crashModThread = GetCurrentThreadId();
+    g_crashBefore = SetUnhandledExceptionFilter(CrashLine);
+    Log(L"crash line: a fault nothing handles will be named in this log, then passed on to %s", g_crashBefore ? L"the game's own handler" : L"Windows");
+}
+
 // Says where the last start's log went, once this start's first line is in.
 static void LogKeptSay()
 {
@@ -2470,6 +2519,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     if (!read) w.found = false;
     if (w.found != was)
     {
+        if (w.found) CrashLineSet();
         if (w.found) Log(L"truck: found, %d wheels, %d gears and a high gear, a %.0f l tank", raw.wheels, TruckTopGear(raw), raw.tank);
         else Log(L"truck: none is driven now");
     }
@@ -2898,7 +2948,13 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                     Log(L"gearbox: the game's L+ cannot be told from its first gear (the same gear, the plain power), so the shifter's L+ reads as the first gear");
                 }
             }
-            const GearboxPosOrders box = GearboxPosStep(w.pos, options, acts, boxTruck, autoGear);
+            GearboxPosOrders box = GearboxPosStep(w.pos, options, acts, boxTruck, autoGear);
+            // at Gearbox 0 and 1 the game's shifter is the player's: the mod's automatic writes and shifts only within
+            // A, never into N or R and never out of a position of the game's (0.18.2's hotfix, the reviewer's item 4)
+            if (!own && !GearboxOwnOrders(w.pos.pos, box.gear, box.setGear))
+            {
+                box.flagDown = box.setPower = box.setGear = false;
+            }
             if (box.flagDown) m.put(w.refs.action + 0x3C, (uint8_t)0);
             if (box.setPower) m.put(w.refs.action + 0x38, box.power);
             stallOrdered = box.stall; // ramped into the game's stall seconds below (StallStep), so its notice shows
@@ -3005,7 +3061,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         // seconds on the next pass. Nothing while the pull test runs. Its first line in the log a quarter second after it
         // begins and one as it ends; with the probe on, one each quarter second
         {
-            const bool manual = GearboxManual(w);
+            const bool manual = own && GearboxManual(w);
             // R and the low range picked on the game's shifter (Gearbox 0 and 1) drive through the converter, as a real
             // automatic's do (the author, 29 October: "i assumed it was handled through converter already? do it"), its
             // share calmed there as the governor's (CreepShare's calm). The game's L+ is its first gear at full power and
@@ -3059,6 +3115,11 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         }
         if (shiftAsk)
         {
+            // nothing of the creep's through the shift: its slot cleared first, and CreepStep gives nothing for
+            // kCreepQuiet once the game's gear moves (0.18.2's hotfix)
+            CreepGive(0, 0.0f);
+            w.creep.share = w.creep.hold = w.creep.given = 0.0f;
+            w.creep.armed = false;
             if (GameShift(w.refs.vehicle, shiftTo))
             {
                 w.take.shifts++;

@@ -4314,6 +4314,41 @@ int main(int argc, char **argv)
                 Check(plain > 0.0f && shifted >= 0.4f + kShiftQuiet + kCreepGrace - kDt - 0.01f && shifted > plain && shifted < 3.5f && game < 0.0f,
                       "creep: no stall within a second of a shift; still stuck after it in the mod's own gearbox the engine stalls, and at Gearbox 1 never");
             }
+            // 0.18.2's hotfix: the walk of the author's repro, L+ to L to L- (gear 1 at three powers) with the truck
+            // rolling at L+'s idle speed, then N. Each change of range is a shift: nothing for kCreepQuiet after it,
+            // and in L- (the wheels at about four times its idle speed) the holding part never arms or pushes
+            {
+                const GaugeScale wk = kClassScales[kClassTruck];
+                CreepModel wm = {};
+                TruckRaw wt = Truck();
+                Drive(wt, 1, false, wk.idle / wk.redline, 0.0f);
+                wt.powerFactor = 1.0f;
+                bool any = false, quietHeld = true, overHeld = true, armedOnce = false;
+                float at = 0.0f, quietUntil = -1.0f;
+                auto run = [&](float until) {
+                    for (; at < until; at += kDt)
+                    {
+                        const float sh = CreepStep(wm, wt, wk, false, 1.0f, kDt, nullptr, any, 0.6f, true);
+                        if (at < quietUntil && sh > 0.0f) quietHeld = false;
+                        armedOnce = armedOnce || wm.armed;
+                        if (wt.powerFactor < 0.3f && at >= quietUntil && (sh > 0.0f || wm.armed)) overHeld = false;
+                    }
+                };
+                run(3.0f);
+                const bool heldInLPlus = armedOnce;
+                wt.powerFactor = 0.5f; // L
+                quietUntil = at + kCreepQuiet - kDt;
+                run(4.0f);
+                wt.powerFactor = 0.27f; // L-
+                quietUntil = at + kCreepQuiet - kDt;
+                run(6.0f);
+                Drive(wt, 0, false, 0.0f, 0.0f); // N
+                wt.powerFactor = 1.0f;
+                const float inN = CreepStep(wm, wt, wk, false, 1.0f, kDt, nullptr, any, 0.6f, true);
+                Check(heldInLPlus && quietHeld && overHeld && inN == 0.0f && !wm.armed,
+                      "creep (0.18.2): L+ to L to L- and N each a shift, nothing for half a second after each; in L- at four times its idle speed the holding "
+                      "part never arms or pushes");
+            }
             // the needle at zero pedal in a gear of the game's own (Gearbox 0 and 1): never under idle, as no stall comes
             // there; over idle with the wheels and with the pedal down as before
             {

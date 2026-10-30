@@ -166,6 +166,10 @@ struct GearboxPosOrders
     const char *why;      // what happened, for the log, a string literal; "" for nothing to say
 };
 
+// At Gearbox 0 and 1 the game's shifter is the player's: the mod's orders go out only in A, and a gear only forward
+// (never N or R from the mod's thread; 0.18.2's hotfix). pos: the position the model holds after its step.
+inline bool GearboxOwnOrders(int pos, int gear, bool setGear) { return pos == kPosA && (!setGear || gear >= 1); }
+
 inline const char *GearboxPosName(int pos)
 {
     static const char *names[kPosCount] = { "A", "a numbered gear", "N", "R", "H", "L-", "L", "L+" };

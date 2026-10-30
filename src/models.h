@@ -2602,6 +2602,10 @@ static const float kHoldLead = 1.0f;   // seconds ahead it looks at the wheels, 
 // within kShiftQuiet of a gear change (the author's drive of BF57872B: "on auto, the truck stalls in R, L-+, when
 // switching gears"). Where no stall may come the governor and its holding part push as ever and the engine idles on.
 static const float kShiftQuiet = 1.0f;
+// No creep at all for kCreepQuiet after any change of gear or of range (the game's L+, L and L- are one gear at three
+// powers): a truck's crash on a shift with the creep's holding part still pushing (0.18.2's hotfix, the player's report
+// and the author's repro of 30 October). The mod's own shifts clear the creep's slot before they are made (gauges.cpp).
+static const float kCreepQuiet = 0.5f, kPowerShift = 0.01f;
 
 struct CreepModel
 {
@@ -2622,7 +2626,10 @@ struct CreepModel
     bool stalled;    // the creep stalled the engine, and is off until it is off
     float stalledFor;
     bool stallArmed; // its last stall came with the holding part armed (rolling), else pulling away
-    int gearSeen;    // the gear engaged on the last pass, and the seconds since it last changed: no stuck time counts
+    int gearSeen;    // the gear engaged on the last pass, and the seconds since it or the range last changed: no stuck time counts
+    float powerSeen; // the power factor on the last pass (the range: L+, L and L- are gear 1 at three powers)
+    bool seen;       // gearSeen and powerSeen hold a pass's
+    bool shifted;    // a change was seen (so a truck's first pass is no shift)
     float sinceShift; // within kShiftQuiet of a shift, as a shift passes through moments that read as stuck
     bool mayStall;   // a stall may come here (CreepStep's mayStall on the last pass)
 };
@@ -2638,10 +2645,20 @@ inline float CreepStep(CreepModel &m, const TruckRaw &t, const GaugeScale &k, bo
                        float holdMost = 0.0f, bool mayStall = true, bool calm = false)
 {
     stall = false;
-    if (t.gearEngaged != m.gearSeen)
+    if (!m.seen || t.gearEngaged != m.gearSeen || fabsf(t.powerFactor - m.powerSeen) > kPowerShift)
     {
+        // a change of gear or range: the holding part and the line empty, nothing given for kCreepQuiet (the first
+        // pass only records)
+        if (m.seen)
+        {
+            m.sinceShift = 0.0f;
+            m.share = m.hold = m.given = 0.0f;
+            m.armed = false;
+            m.shifted = true;
+        }
+        m.seen = true;
         m.gearSeen = t.gearEngaged;
-        m.sinceShift = 0.0f;
+        m.powerSeen = t.powerFactor;
     }
     else m.sinceShift += dt;
     m.mayStall = mayStall;
@@ -2662,6 +2679,12 @@ inline float CreepStep(CreepModel &m, const TruckRaw &t, const GaugeScale &k, bo
         m.armed = false;
         return 0.0f;
     }
+    if (m.shifted && m.sinceShift < kCreepQuiet)
+    {
+        m.share = m.hold = m.given = 0.0f;
+        m.armed = false;
+        return 0.0f;
+    }
     m.share = (converter && !calm) || target <= m.share ? target : fminf(target, m.share + kIdleRise * dt);
     // the holding part: armed while the truck rolls in this gear by hand with the clutch let up, empty otherwise
     const bool byHand = !converter && c.live && grip >= kGripUp;
@@ -2672,7 +2695,15 @@ inline float CreepStep(CreepModel &m, const TruckRaw &t, const GaugeScale &k, bo
         m.armed = false;
         m.hold = 0.0f;
     }
-    if (byHand && !m.armed && m.holdMost > 0.0f && spin >= kHoldArm * c.idleSpin) m.armed = true;
+    // armed only between kHoldArm and the band over the idle speed, and empty over it: it never pushes a truck that
+    // rolls faster than its gear idles (it held 0.12 to 0.18 at 7 times L-'s idle speed, the engine at 6121 rpm)
+    const bool over = spin > (1.0f + kHoldBand) * c.idleSpin;
+    if (over)
+    {
+        m.armed = false;
+        m.hold = 0.0f;
+    }
+    if (byHand && !m.armed && m.holdMost > 0.0f && spin >= kHoldArm * c.idleSpin && !over) m.armed = true;
     m.gear = t.gearEngaged;
     if (m.armed)
     {

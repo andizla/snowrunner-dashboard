@@ -644,6 +644,12 @@ int main()
               "refused, at any of its three doors; with the flag down (the shifter's R) or rolling it passes; at 0 nothing is refused");
     }
 
+    // at Gearbox 0 and 1 the mod's orders go out only in A and a gear only forward (0.18.2: no N or R from the mod's
+    // thread there)
+    Check(GearboxOwnOrders(kPosA, 3, true) && GearboxOwnOrders(kPosA, 0, false) && !GearboxOwnOrders(kPosA, 0, true) && !GearboxOwnOrders(kPosA, -1, true) &&
+              !GearboxOwnOrders(kPosN, 0, true) && !GearboxOwnOrders(kPosR, -1, true) && !GearboxOwnOrders(kPosLowMinus, 1, false),
+          "gearbox (0.18.2): at Gearbox 0 and 1 the mod's orders only in A, its shifts only into a forward gear");
+
     printf(g_failed ? "GEARBOX TEST FAILED: %d\n" : "GEARBOX TEST OK\n", g_failed);
     return g_failed ? 1 : 0;
 }
