@@ -9,6 +9,7 @@
 #include "detours\detours.h"
 #include <tlhelp32.h>
 #include <stdio.h>
+#include <xmmintrin.h>
 
 typedef bool (*ShiftFn)(void *vehicle, int32_t gear);
 typedef bool (*VehicleFn)(void *vehicle);
@@ -376,26 +377,45 @@ void TruckUpdateUnhook()
 
 long TruckUpdateFrames() { return g_frames; }
 
-// ---- the game's wheels' drive (the creep) ----
-// The stub (creep_stub.asm, CreepDrive) reads these by their C names. The slot it reads is one of two, filled on the
-// mod's thread and then published whole, so the stub never sees an action with another truck's share: the slot it
-// may still be reading is written again only two passes later, and the stub reads it within a few instructions.
+// ---- the game's wheels' drive (the creep, and the suspension's step probe) ----
+// In the 6ab52f5d image the drive (c41da0) reads only the action in rcx, the drive throttle in xmm1 and the step's
+// seconds in xmm2: rdx, r8, r9, xmm0 and xmm3 it writes before any read, it reads no argument from the stack (only
+// the home slots of rcx and r9, as its own scratch), and its caller (c41d40) loads rax anew right after the call and
+// takes nothing from xmm0. So a C++ function of three arguments with no answer forwards all it takes (the brief of
+// the step probe, part 1). The creep's slot is one of two, filled on the mod's thread and then published whole, so
+// the hook never sees an action with another truck's share: the slot it may still be reading is written again only
+// two passes later, and the hook reads it within a few instructions.
 struct CreepSlot
 {
     uint64_t action;
     float share;
     uint32_t spare;
 };
-extern "C"
-{
-void *g_creepWay = nullptr;
-void *volatile g_creepSlot = nullptr;
-volatile LONG g_creepHits = 0, g_creepCalls = 0;
-void CreepDrive();
-}
+typedef void (*DriveFn)(void *action, float throttle, float dt);
+static void *g_creepWay = nullptr;
+static void *volatile g_creepSlot = nullptr;
+static volatile LONG g_creepHits = 0, g_creepCalls = 0;
+static DriveStepFn volatile g_driveStep = nullptr;
 static CreepSlot g_creepSlots[2];
 static int g_creepNext = 0;
 static bool g_creepHooked = false;
+
+// The creep's larger of the two throttles, as the stub's maxss had it (the share where the game's is not a number),
+// then the step probe's look, then on into the drive with the step's seconds as they came.
+static void CreepDrive(void *action, float throttle, float dt)
+{
+    InterlockedIncrement(&g_creepCalls);
+    const CreepSlot *slot = (const CreepSlot *)g_creepSlot;
+    if (slot && (uint64_t)(uintptr_t)action == slot->action)
+    {
+        InterlockedIncrement(&g_creepHits);
+        throttle = _mm_cvtss_f32(_mm_max_ss(_mm_set_ss(throttle), _mm_set_ss(slot->share))); // maxss itself: a ?: may be built with its operands swapped
+    }
+    if (const DriveStepFn step = g_driveStep) step((uint64_t)(uintptr_t)action, dt);
+    ((DriveFn)g_creepWay)(action, throttle, dt);
+}
+
+void DriveStepSet(DriveStepFn step) { g_driveStep = step; }
 
 bool CreepHook(uintptr_t at, char *why, size_t size)
 {

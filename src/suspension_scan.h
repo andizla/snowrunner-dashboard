@@ -160,10 +160,21 @@ inline int SuspTuneRestore(SuspTune &t, const TruckMemory &m, uint64_t vtable)
     return restored;
 }
 
+// SuspStepTest's write (suspension_step.h): one wheel's value at factor times what the tune gives it, made by the tune
+// and recorded as its own, so it never becomes a new stock (review 15). Its wheel's writes are not counted while a
+// test runs, as they are no sign of the game putting its values back. A factor of 1 is the test between its writes.
+struct SuspTuneTest
+{
+    int wheel, value;
+    float factor;
+};
+
 // One pass for the driven truck: vtable is the constraint's vtable in the game (0 = not known: nothing is done).
 // scale: SpringScale, DampingScale, TravelMinScale, TravelMaxScale. Returns the wheels written on this pass.
 // restored: the values of the truck driven before put back on this pass (another truck is driven now).
-inline int SuspTuneStep(SuspTune &t, const TruckMemory &m, const TruckRefs &r, uint64_t vtable, const float scale[kSuspValues], int *restored = nullptr)
+// test: SuspStepTest's write, nullptr for none.
+inline int SuspTuneStep(SuspTune &t, const TruckMemory &m, const TruckRefs &r, uint64_t vtable, const float scale[kSuspValues], int *restored = nullptr,
+                        const SuspTuneTest *test = nullptr)
 {
     if (restored) *restored = 0;
     if (t.vehicle != r.vehicle)
@@ -206,19 +217,21 @@ inline int SuspTuneStep(SuspTune &t, const TruckMemory &m, const TruckRefs &r, u
             float want = w.stock[k] * scale[k];
             if (k == kSuspStrength || k == kSuspDamping) want = fminf(1.0f, want);
             if (scale[k] == 1.0f) want = w.stock[k];
-            if (now[k] == want || (scale[k] == 1.0f && !w.ours[k])) continue;
+            if (test && test->wheel == i && test->value == k && test->factor != 1.0f) want *= test->factor;
+            const bool tuned = want != w.stock[k];
+            if (now[k] == want || (!tuned && !w.ours[k])) continue;
             uint64_t still = 0;
             if (!m.get(r.wheel[i] + kSuspConstraintAt, still) || still != c || !m.get(c, vt) || vt != vtable) break;
             if (!m.put(c + kSuspValueAt[k], want)) continue;
             w.wrote[k] = want;
-            w.ours[k] = scale[k] != 1.0f;
+            w.ours[k] = tuned;
             w.wroteNow = true;
         }
         if (w.wroteNow)
         {
             written++;
             if (t.moved) w.settle = true;
-            else w.writes++;
+            else if (!(test && test->wheel == i)) w.writes++;
             for (int k = 0; k < kSuspValues; k++) m.get(c + kSuspValueAt[k], w.back[k]);
         }
     }
@@ -243,6 +256,7 @@ struct SuspTravel
     float clock;                 // the game's clock at the last pass (TruckRaw::clock)
     float last[kMaxWheels];      // each wheel's height in the chassis's frame at the last pass
     float least[kMaxWheels], most[kMaxWheels], fastest[kMaxWheels]; // in this window; fastest signed, rising positive
+    uint32_t generation;         // the step probe's (gauges.cpp, SuspStepPass) the window is of
 };
 
 // One pass: false where the truck's places were not read. A new truck starts over; a pass without the game's clock

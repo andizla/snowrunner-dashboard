@@ -107,6 +107,7 @@ struct GaugeSettings
     float springScale;       // SpringScale: each wheel's suspension spring as a factor of the truck's own (kSuspScaleRange); 1 writes nothing (a test)
     float dampingScale;      // DampingScale: the same for its damping
     float travelMinScale, travelMaxScale; // TravelMinScale, TravelMaxScale: the same for its travel limits (the truck file's SuspensionMin and SuspensionMax)
+    int suspStepTest;        // SuspStepTest (ini only, a test, with Probe=1): every 20 s wheel 0's spring at half for 1 s standing (1), or its damping at a tenth for 0.5 s moving (2)
     int soundVolume;        // SoundVolume: how loud the turbo's flutter and the oil warning are, 0 to 100; 0 = no sound
     bool soundsOnly;         // SoundsOnly: the sounds are played and the cluster is not drawn
     bool dieselFlutter;      // DieselFlutter: a diesel's lift flutters too; off, it is quiet, or plays the player's own turbo whistle files (review 12, finding 6)
@@ -228,6 +229,7 @@ inline void SettingsClamp(GaugeSettings &s)
     s.toggleKey = s.toggleKey < 0 || s.toggleKey > 255 ? 0 : s.toggleKey;
     s.soundVolume = s.soundVolume < 0 ? 0 : s.soundVolume > 100 ? 100 : s.soundVolume;
     s.probe = s.probe < 0 ? 0 : s.probe;
+    s.suspStepTest = s.suspStepTest < 0 || s.suspStepTest > 2 ? 0 : s.suspStepTest;
 }
 
 // The scales of a truck class: idle, where the red zone starts, the tachometer's top (rpm), the speedometer's top

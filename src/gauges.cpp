@@ -37,6 +37,7 @@ int NgMenuKeyFromIni(); // the menu's key, which a capture never binds
 #include "game_globals.h"
 #include "clock_scan.h"
 #include "suspension_scan.h"
+#include "suspension_step.h"
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "shell32.lib")
 #ifndef GAUGES_SETTINGS_TEST
@@ -905,6 +906,7 @@ static void ReadIni(GaugeSettings &s)
     s.dampingScale = IniFloat(L"DampingScale", s.dampingScale, ini);
     s.travelMinScale = IniFloat(L"TravelMinScale", s.travelMinScale, ini);
     s.travelMaxScale = IniFloat(L"TravelMaxScale", s.travelMaxScale, ini);
+    s.suspStepTest = IniInt(L"SuspStepTest", s.suspStepTest, ini); // a test: read, never written
     s.toggleKey = IniInt(L"ToggleKey", s.toggleKey, ini);
     wchar_t buf[64] = {};
     GetPrivateProfileStringW(kIniSection, L"PadToggle", Wide(s.padToggle).c_str(), buf, 64, ini.c_str());
@@ -1991,7 +1993,7 @@ static void GameCodeLook()
     if (held) Log(L"gearbox code: another mod holds %d of the game's gearbox functions; its hooks pass the game's shifts on", held);
     // the wheels' drive, for the creep: hooked by the creep's step (CreepHookStep) at any level of Gearbox
     if (DrivePlaceFind(code.data(), from, to, g_drive))
-        Log(L"creep: the game's wheels' drive at +%zx, called at +%zx; hooked once Creep is on with a truck driven", g_drive.drive, g_drive.call);
+        Log(L"creep: the game's wheels' drive at +%zx, called at +%zx; hooked once Creep or Probe is on with a truck driven", g_drive.drive, g_drive.call);
     else Log(L"creep: %S, so an idling truck stands as in the game", g_drive.why);
     const FunctionFind &shift = finds[kFnShiftGear];
     // one place only, also behind another mod's jump
@@ -2077,17 +2079,22 @@ static void GearboxHooksStep(const GaugeSettings &s)
     if (act & kGateTruckLeft) Log(L"gearbox damage: the truck update's hook is not needed now; left in place until the game is started again");
 }
 
-// The creep's hook on the game's wheels' drive (gearbox_hooks.cpp, CreepHook): attached the first time Creep is on
-// with a truck driven, at any level of Gearbox, and left in place until the game is started again; with Creep off it
-// lets every call pass (TruckPass hands it no share).
+// The hook on the game's wheels' drive (gearbox_hooks.cpp, CreepHook): attached the first time Creep or Probe is on
+// with a truck driven, at any level of Gearbox, and left in place until the game is started again. With Creep off it
+// gives no share (TruckPass hands it none); without Probe=1 the step probe has no block and reads nothing. With both
+// off it is never attached, so the game's drive runs as it is.
+static void SuspStepHook(uint64_t action, float dt);
 static void CreepHookStep(const GaugeSettings &s, bool driving)
 {
     static bool tried = false;
-    if (tried || !s.creep || !driving || !g_drive.drive) return;
+    if (tried || (!s.creep && !s.probe) || !driving || !g_drive.drive) return;
     tried = true;
+    DriveStepSet(SuspStepHook);
     char why[160] = "";
-    if (CreepHook((uintptr_t)(g_base + g_drive.drive), why, sizeof why)) Log(L"creep: the game's wheels' drive hooked (Creep=1): an idling truck in gear moves");
-    else Log(L"creep: %S, so an idling truck stands as in the game", why);
+    if (CreepHook((uintptr_t)(g_base + g_drive.drive), why, sizeof why))
+        Log(L"creep: the game's wheels' drive hooked (%s): %s", s.creep ? L"Creep=1" : L"Probe=1",
+            s.creep ? L"an idling truck in gear moves, and with Probe=1 each wheel's travel is read every physics step" : L"each wheel's travel is read every physics step");
+    else Log(L"creep: %S, so an idling truck stands as in the game and the travel is not read every step", why);
 }
 
 // A file's time as the clock on the wall shows it, hh:mm:ss.
@@ -2199,6 +2206,26 @@ struct SuspProbe
 };
 
 // The driven truck as the mod's thread follows it from pass to pass.
+// The travel read every physics step (suspension_step.h), on the mod's side: the block published for the physics
+// thread, what goes into its generation, and SuspStepTest's course.
+struct SuspStepWatch
+{
+    SuspStepBlock block;        // as published last (serial 0: none)
+    uint32_t generation, serial;
+    int next;                   // the slot written next
+    uint64_t vehicle, constraint[kMaxWheels];
+    int wheels;
+    float scale[kSuspValues], position[3];
+    float attachUp[kMaxWheels], axisUp[kMaxWheels]; // each constraint's attach point and axis along up, for the travel
+    bool other[kMaxWheels];     // its constraint is on another body, not found: measured against the chassis, its speeds not to be trusted
+    LONG windows, tail, faults; // the windows, the ring's entries and the faults taken so far
+    int test;                   // SuspStepTest as it runs
+    bool on;                    // its write holds
+    ULONGLONG due, until, report;
+    uint32_t mark;              // the step the trace stood at when the write was made
+    float was, value;           // the field before the write and while it held
+};
+
 struct TruckWatch
 {
     TruckRefs refs;
@@ -2295,6 +2322,7 @@ struct TruckWatch
     SuspTune tune;              // what SpringScale and DampingScale wrote into each wheel's constraint
     SuspTravel travel;          // the travel probe: each wheel's height in the chassis's frame (Probe=1)
     ULONGLONG travelAt;         // when it logs next
+    SuspStepWatch step;         // the travel read every physics step, and SuspStepTest (Probe=1)
 };
 
 // The mod's gearbox has the truck in a position of the player's own (not A): the engine runs behind its clutch.
@@ -2512,10 +2540,10 @@ static void SuspProbeStep(SuspProbe &p, const TruckMemory &m, const TruckRefs &r
 // counted, and each wheel's values are logged once when the sliders stand still again. A wheel written kSuspWritesBack
 // times with the sliders still is one the game keeps putting back, said once.
 static const int kSuspWritesTold = 2, kSuspWritesBack = 20;
-static void SuspTunePass(SuspTune &t, const TruckMemory &m, const TruckRefs &r, const GaugeSettings &s)
+static void SuspTunePass(SuspTune &t, const TruckMemory &m, const TruckRefs &r, const GaugeSettings &s, const SuspTuneTest *test)
 {
     const float scale[kSuspValues] = { s.springScale, s.dampingScale, s.travelMinScale, s.travelMaxScale };
-    bool tuned = false;
+    bool tuned = test != nullptr;
     for (float f : scale) tuned |= f != 1.0f;
     if (!tuned && t.vehicle != r.vehicle)
     {
@@ -2526,7 +2554,7 @@ static void SuspTunePass(SuspTune &t, const TruckMemory &m, const TruckRefs &r, 
         return;
     }
     int restored = 0;
-    SuspTuneStep(t, m, r, SuspVtable(), scale, &restored);
+    SuspTuneStep(t, m, r, SuspVtable(), scale, &restored, test);
     if (restored) Log(L"suspension: the truck driven before: %d values put back to its stock", restored);
     for (int i = 0; i < r.wheels && i < kMaxWheels; i++)
     {
@@ -2553,10 +2581,18 @@ static void SuspTunePass(SuspTune &t, const TruckMemory &m, const TruckRefs &r, 
 // With Probe=1: the travel probe (suspension_scan.h). Once a truck, each wheel's centre in the chassis's frame (along
 // forward, up, left) beside its constraint's attach point (+ 0xA0) and axis (+ 0x70), to match the two frames; then
 // every kSuspEvery ms each wheel's height along up, its range in the window and its fastest speed (rising positive).
-static void SuspTravelProbe(SuspTravel &p, ULONGLONG &at, const TruckMemory &m, const TruckRefs &r, const TruckRaw &t, ULONGLONG now)
+// A new generation of the step probe's (SuspStepPass) starts a new window.
+static void SuspTravelProbe(SuspTravel &p, ULONGLONG &at, const TruckMemory &m, const TruckRefs &r, const TruckRaw &t, ULONGLONG now, uint32_t generation)
 {
     const bool fresh = p.vehicle != r.vehicle;
     if (!SuspTravelStep(p, t, r.vehicle)) return;
+    if (!fresh && p.generation != generation)
+    {
+        // a slider move, a new constraint or a recovery: a new window, so none mixes two of them (review 14)
+        SuspTravelWindow(p, t.wheels);
+        at = now + kSuspEvery;
+    }
+    p.generation = generation;
     if (fresh)
     {
         for (int i = 0; i < t.wheels && i < kMaxWheels; i++)
@@ -2579,6 +2615,301 @@ static void SuspTravelProbe(SuspTravel &p, ULONGLONG &at, const TruckMemory &m, 
         used += swprintf_s(line + used, 1600 - used, L"%s%d: %.4f (%.4f to %.4f) %+.3f m/s", i ? L" | " : L"", i, p.last[i], p.least[i], p.most[i], p.fastest[i]);
     Log(L"probe: travel: %s", line);
     SuspTravelWindow(p, t.wheels);
+}
+
+// ---- the travel read every physics step (suspension_step.h; BRIEF_suspension_step_probe.md, review 14's phase 1) ----
+// With Probe=1 the mod's thread publishes the driven truck's block for the hook on the wheels' drive, which reads each
+// wheel's height every step on the physics thread; each window it fills (every kStepWindow s, and at each new
+// generation) is logged here. The ring of wheel 0's steps, kept while SuspStepTest is on, is drained into a history the
+// test's report reads.
+static SuspStepBlock g_stepSlots[2];
+static SuspStepBlock *volatile g_stepBlock = nullptr;
+static SuspStepState g_step;
+static const int kStepHistory = 4096;
+static SuspStepTraceEntry g_stepHistory[kStepHistory];
+static int g_stepHistoryCount = 0;
+static const ULONGLONG kStepTestEvery = 20000;
+static const float kStepTestFactor[3] = { 1.0f, 0.5f, 0.1f };
+static const ULONGLONG kStepTestHold[3] = { 0, 1000, 500 };
+static const float kStepTestBefore = 0.2f, kStepTestAfter = 0.5f, kStepTestGap = 0.002f;
+
+static void SuspStepHook(uint64_t action, float dt) { SuspStepLook(g_step, g_stepBlock, action, dt); }
+
+static float SuspSize(const float v[3]) { return sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); }
+
+// The chassis's frame as the game holds it, from what TruckRead read: forward, up, left and position, four floats each.
+static void SuspChassisFrame(const TruckRaw &t, float frame[16])
+{
+    memset(frame, 0, 16 * sizeof(float));
+    memcpy(frame, t.forward, 12);
+    memcpy(frame + 4, t.up, 12);
+    memcpy(frame + 8, t.left, 12);
+    memcpy(frame + 12, t.position, 12);
+}
+
+// Each wheel's body for its height: the chassis where its constraint's attach point fits the wheel in the chassis's
+// frame, else a body of the chassis's class behind the wheel object (two levels deep, as the probe found the
+// constraints) whose frame fits it, else the chassis with the wheel's speeds marked not to be trusted. told: the bodies
+// behind each wheel are logged, with their place in the chassis's frame, to find the wheel's own body too.
+static void SuspStepBodies(SuspStepWatch &p, const TruckMemory &m, const TruckRefs &r, const TruckRaw &t, const uint64_t *constraint, uint64_t *body, bool told)
+{
+    float chassis[16];
+    SuspChassisFrame(t, chassis);
+    uint64_t vtable = 0;
+    m.get(r.chassis, vtable);
+    for (int i = 0; i < r.wheels && i < kMaxWheels; i++)
+    {
+        float attach[3] = {}, axis[3] = {};
+        const bool known = constraint[i] && m.get(constraint[i] + 0xA0, attach) && m.get(constraint[i] + 0x70, axis);
+        p.attachUp[i] = attach[1];
+        p.axisUp[i] = known ? axis[1] : 0.0f;
+        body[i] = r.chassis;
+        p.other[i] = false;
+        const bool fits = !known || SuspBodyFits(chassis, attach, t.wheelAt[i]);
+        if (fits && !told) continue;
+        SuspHit hits[16];
+        const int n = vtable ? SuspScanRoot(m, ImageSize(), r.wheel[i], i, false, vtable, hits, 0, 16) : 0;
+        uint64_t found = 0;
+        for (int k = 0; k < n; k++)
+        {
+            float frame[16], local[3];
+            if (!m.get(hits[k].at + 0x170, frame)) continue;
+            const bool fit = known && hits[k].at != r.chassis && SuspBodyFits(frame, attach, t.wheelAt[i]);
+            if (fit && !found && !fits) found = hits[k].at;
+            if (!told) continue;
+            const float d[3] = { frame[12] - t.position[0], frame[13] - t.position[1], frame[14] - t.position[2] };
+            const float *axes[3] = { t.forward, t.up, t.left };
+            for (int a = 0; a < 3; a++) local[a] = d[0] * axes[a][0] + d[1] * axes[a][1] + d[2] * axes[a][2];
+            const float off[3] = { frame[12] - t.wheelAt[i][0], frame[13] - t.wheelAt[i][1], frame[14] - t.wheelAt[i][2] };
+            char path[96];
+            SuspHitWords(hits[k], path, sizeof path);
+            Log(L"probe: step: %S a body %p at %.3f, %.3f, %.3f in the chassis's frame, %.3f m from the wheel's centre%s", path, (void *)hits[k].at, local[0], local[1],
+                local[2], SuspSize(off), hits[k].at == r.chassis ? L" (the chassis)" : fit ? L" (its constraint's attach point fits it)" : L"");
+        }
+        if (fits) continue;
+        if (found) body[i] = found;
+        p.other[i] = !found;
+        Log(L"probe: step: wheel %d's constraint is on another body (its attach point %.3f, %.3f, %.3f does not fit the chassis): %s", i, attach[0], attach[1], attach[2],
+            found ? L"measured against the body it fits" : L"measured against the chassis, its speeds not to be trusted");
+    }
+}
+
+// The ring's new entries into the history, the oldest dropped where it is full.
+static void SuspStepHistoryAdd(SuspStepWatch &p)
+{
+    static SuspStepTraceEntry fresh[kStepRing];
+    const int n = SuspStepDrain(g_step, p.tail, fresh, kStepRing);
+    if (n <= 0) return;
+    const int keep = g_stepHistoryCount + n > kStepHistory ? kStepHistory - n : g_stepHistoryCount;
+    if (keep < g_stepHistoryCount) memmove(g_stepHistory, g_stepHistory + (g_stepHistoryCount - keep), keep * sizeof *g_stepHistory);
+    memcpy(g_stepHistory + keep, fresh, n * sizeof *fresh);
+    g_stepHistoryCount = keep + n;
+}
+
+// SuspStepTest's course, before the tune's pass: the write to hand the tune (its wheel 0's value at the test's factor
+// while it holds, at 1 between), or nullptr with the test off.
+static const SuspTuneTest *SuspStepTestPass(SuspStepWatch &p, const TruckMemory &m, const TruckRefs &r, const TruckRaw &t, const GaugeSettings &s, ULONGLONG now,
+                                            SuspTuneTest &out)
+{
+    const int mode = s.probe ? s.suspStepTest : 0;
+    if (mode != p.test)
+    {
+        p.test = mode;
+        p.on = false;
+        p.report = 0;
+        p.due = now + kStepTestEvery;
+        if (mode == 1) Log(L"probe: step test 1: every 20 s wheel 0's spring at half for 1 s, with the truck standing on its handbrake");
+        if (mode == 2) Log(L"probe: step test 2: every 20 s wheel 0's damping at a tenth for 0.5 s, with the truck moving over 2 m/s");
+    }
+    if (!mode) return nullptr;
+    const int k = mode == 1 ? kSuspStrength : kSuspDamping;
+    uint64_t c = 0;
+    if (r.wheels > 0) m.get(r.wheel[0] + kSuspConstraintAt, c);
+    if (p.on && now >= p.until)
+    {
+        p.on = false;
+        p.report = now + (ULONGLONG)(kStepTestAfter * 1000.0f) + 200;
+    }
+    else if (!p.on && !p.report && now >= p.due)
+    {
+        const float speed = SuspSize(t.velocity);
+        const bool ready = c && (mode == 1 ? speed < 0.2f && t.handbrake : speed > 2.0f);
+        if (ready && m.get(c + kSuspValueAt[k], p.was))
+        {
+            p.on = true;
+            p.until = now + kStepTestHold[mode];
+            const LONG head = g_step.ringHead;
+            p.mark = head > 0 ? g_step.ring[(head - 1) % kStepRing].step : 0;
+            p.value = -1.0f;
+        }
+        else p.due = now + 1000;
+    }
+    out = SuspTuneTest{ 0, k, p.on ? kStepTestFactor[mode] : 1.0f };
+    return &out;
+}
+
+// The steps from the 0.2 s before at to the 0.5 s after it, ten a line: the step, its seconds, the field, the height
+// in mm and the speed in m/s.
+static void SuspStepTraceLog(const wchar_t *what, int at)
+{
+    const SuspStepTraceEntry *e = g_stepHistory;
+    const int n = g_stepHistoryCount;
+    int to = at;
+    for (double after = 0.0; to + 1 < n && after < kStepTestAfter; to++) after += e[to + 1].dt;
+    char line[1200];
+    int used = 0;
+    for (int i = SuspStepBack(e, at, kStepTestBefore), on = 0; i <= to; i++)
+    {
+        used += _snprintf_s(line + used, sizeof line - used, _TRUNCATE, "%s%u %.4f %g %.1f %+.3f", on ? " | " : "", e[i].step, e[i].dt, e[i].field, e[i].h * 1000.0f, e[i].v);
+        if (++on == 10 || i == to)
+        {
+            Log(L"probe: step trace (%s): %S", what, line);
+            used = on = 0;
+        }
+    }
+}
+
+// SuspStepTest's report, 0.5 s after its write ended: where the steps first read the new value, and how the wheel
+// answered (test 1: the steps until its height leaves its trend by 2 mm, there and back; test 2: the speed's swing
+// against the 0.5 s before).
+static void SuspStepTestReport(const SuspStepWatch &p)
+{
+    const SuspStepTraceEntry *e = g_stepHistory;
+    const int n = g_stepHistoryCount;
+    int from = 0;
+    while (from < n && e[from].step <= p.mark) from++;
+    const int write = p.value >= 0.0f ? SuspStepFirst(e, n, from, p.value) : -1;
+    const wchar_t *field = p.test == 1 ? L"spring" : L"damping";
+    if (write < 0)
+    {
+        Log(L"probe: step test %d: wheel 0's %s %g to %g was not seen in the steps' trace (%d steps after the write)", p.test, field, p.was, p.value, n - from);
+        return;
+    }
+    const uint32_t late = e[write].step - p.mark;
+    if (p.test == 1)
+    {
+        const int back = SuspStepFirst(e, n, write, p.was);
+        const int down = SuspStepLeave(e, n, write, kStepTestBefore, kStepTestGap), up = back >= 0 ? SuspStepLeave(e, n, back, kStepTestBefore, kStepTestGap) : -1;
+        Log(L"probe: step test 1: wheel 0's spring %g to %g read from step %u, %u steps after the write; the height left its trend by 2 mm %d steps later; back to %g "
+            L"read from step %d, the height leaving its trend %d steps later (-1: not seen)",
+            p.was, p.value, e[write].step, late, down, p.was, back >= 0 ? (int)e[back].step : -1, up);
+        SuspStepTraceLog(L"test 1, the write", write);
+        if (back >= 0) SuspStepTraceLog(L"test 1, back", back);
+        return;
+    }
+    float rmsAfter, mostAfter, rmsBefore, mostBefore;
+    int stepsAfter, stepsBefore;
+    SuspStepSwing(e, n, write, kStepTestAfter, rmsAfter, mostAfter, stepsAfter);
+    SuspStepSwing(e, n, SuspStepBack(e, write, kStepTestAfter), kStepTestAfter, rmsBefore, mostBefore, stepsBefore);
+    Log(L"probe: step test 2: wheel 0's damping %g to %g read from step %u, %u steps after the write; the speed's swing over the 0.5 s after %.3f m/s rms, %.3f most "
+        L"(%d steps), over the 0.5 s before %.3f rms, %.3f most (%d steps)",
+        p.was, p.value, e[write].step, late, rmsAfter, mostAfter, stepsAfter, rmsBefore, mostBefore, stepsBefore);
+    SuspStepTraceLog(L"test 2, the write", write);
+}
+
+// A window's lines: per wheel the steps a second, the repeats, the speeds' histogram, the range against the limits as
+// written, then the bounce in mm.
+static void SuspStepWindowLog(const SuspStepWatch &p, const TruckMemory &m, const SuspStepWin &w)
+{
+    static char bounce[kStepBounceMost * 8 + 16];
+    for (int i = 0; i < w.wheels && i < kMaxWheels; i++)
+    {
+        char bins[2][192];
+        for (int side = 0; side < 2; side++)
+        {
+            int used = 0;
+            for (int k = 0; k < kStepBins; k++)
+                used += _snprintf_s(bins[side] + used, sizeof bins[side] - used, _TRUNCATE, k < kStepBins - 1 ? "%s<%g:%d" : "%s>%g:%d", k ? " " : "",
+                                    k < kStepBins - 1 ? kStepBinTop[k] : kStepBinTop[kStepBins - 2], w.bins[i][side][k]);
+        }
+        float least = 0.0f, most = 0.0f, low = 0.0f, high = 0.0f;
+        const bool along = p.axisUp[i] != 0.0f;
+        if (along)
+        {
+            const float a = (w.least[i] - p.attachUp[i]) / p.axisUp[i], b = (w.most[i] - p.attachUp[i]) / p.axisUp[i];
+            least = fminf(a, b), most = fmaxf(a, b);
+        }
+        m.get(p.constraint[i] + kSuspValueAt[kSuspMin], low);
+        m.get(p.constraint[i] + kSuspValueAt[kSuspMax], high);
+        Log(L"probe: step: wheel %d, %.1f s of generation %u: %.1f steps a second, dt %.4f to %.4f s; %d of %d steps over 1 m/s repeat the height (%.1f %%); "
+            L"compression %S; rebound %S (m/s: steps); height %.4f to %.4f, along its axis %.3f to %.3f against the limits %g to %g%s",
+            i, w.seconds, w.generation, w.seconds > 0.0f ? w.steps / w.seconds : 0.0f, w.dtLeast, w.dtMost, w.repeats[i], w.moving[i],
+            w.moving[i] ? 100.0f * w.repeats[i] / w.moving[i] : 0.0f, bins[0], bins[1], w.least[i], w.most[i], least, most, low, high,
+            p.other[i] ? L"; on another body: not to be trusted" : along ? L"" : L"; its axis not read");
+        if (w.bounceSteps[i] <= 0) continue;
+        int used = 0;
+        for (int k = 0; k < w.bounceSteps[i] && used + 10 < (int)sizeof bounce; k++)
+            used += _snprintf_s(bounce + used, sizeof bounce - used, _TRUNCATE, k ? " %.0f" : "%.0f", w.bounce[i][k] * 1000.0f);
+        Log(L"probe: step: wheel %d's bounce from %.2f s into the window, %d steps, its height in mm: %S", i, w.bounceAt[i], w.bounceSteps[i], bounce);
+    }
+}
+
+// The block for the driven truck (none without Probe=1 or a truck), its generation, the windows logged and the test's
+// trace kept. Returns the generation, which the 20 Hz travel probe goes by too.
+static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const TruckRefs &r, const TruckRaw &t, const GaugeSettings &s, bool found, ULONGLONG now)
+{
+    if (!s.probe || !found)
+    {
+        if (p.block.serial)
+        {
+            InterlockedExchangePointer((void *volatile *)&g_stepBlock, nullptr);
+            p.block = SuspStepBlock{};
+        }
+        return p.generation;
+    }
+    const float scale[kSuspValues] = { s.springScale, s.dampingScale, s.travelMinScale, s.travelMaxScale };
+    uint64_t constraint[kMaxWheels] = {};
+    for (int i = 0; i < r.wheels && i < kMaxWheels; i++) m.get(r.wheel[i] + kSuspConstraintAt, constraint[i]);
+    const float jump[3] = { t.position[0] - p.position[0], t.position[1] - p.position[1], t.position[2] - p.position[2] };
+    const wchar_t *why = !p.block.serial ? L"a start"
+                         : r.vehicle != p.vehicle || r.wheels != p.wheels  ? L"a truck switch"
+                         : memcmp(scale, p.scale, sizeof scale)         ? L"a slider move"
+                         : memcmp(constraint, p.constraint, sizeof constraint) ? L"a constraint at a new address"
+                         : SuspSize(jump) > 3.0f                         ? L"a recovery"
+                                                                         : nullptr;
+    memcpy(p.position, t.position, sizeof p.position);
+    SuspStepBlock b = p.block;
+    if (why)
+    {
+        const bool told = r.vehicle != p.vehicle || memcmp(constraint, p.constraint, sizeof constraint) != 0;
+        p.generation++;
+        p.vehicle = r.vehicle;
+        p.wheels = r.wheels;
+        memcpy(p.scale, scale, sizeof p.scale);
+        memcpy(p.constraint, constraint, sizeof p.constraint);
+        b = SuspStepBlock{};
+        SuspStepBodies(p, m, r, t, constraint, b.body, told);
+        Log(L"probe: step: generation %u (%s), %d wheels", p.generation, why, r.wheels);
+    }
+    b.generation = p.generation;
+    b.action = r.action;
+    b.chassis = r.chassis;
+    b.wheels = r.wheels < kMaxWheels ? r.wheels : kMaxWheels;
+    memcpy(b.wheel, r.wheel, sizeof b.wheel);
+    b.traced = p.test && constraint[0] ? constraint[0] + kSuspValueAt[p.test == 1 ? kSuspStrength : kSuspDamping] : 0;
+    SuspStepBlock was = p.block;
+    b.serial = b.seal = was.serial = was.seal = 0;
+    if (!p.block.serial || memcmp(&b, &was, sizeof b))
+    {
+        SuspStepPublish(g_stepSlots, p.next, &g_stepBlock, b, p.serial);
+        p.block = b;
+        p.block.serial = p.block.seal = p.serial;
+    }
+    static SuspStepWin win;
+    if (SuspStepWindowTake(g_step, p.windows, win)) SuspStepWindowLog(p, m, win);
+    if (g_step.faults != p.faults)
+    {
+        p.faults = g_step.faults;
+        Log(L"probe: step: a read faulted on the physics thread (%ld so far): the block is dropped until the next one", (long)p.faults);
+    }
+    if (b.traced) SuspStepHistoryAdd(p);
+    if (p.report && now >= p.report)
+    {
+        SuspStepTestReport(p);
+        p.report = 0;
+        p.due = now + kStepTestEvery;
+    }
+    return p.generation;
 }
 
 static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s, bool front, TruckRaw &raw, World &world)
@@ -2636,8 +2967,18 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         else Log(L"truck: none is driven now");
     }
     if (probe && w.found) SuspProbeStep(w.susp, m, w.refs, now);
-    if (probe && w.found) SuspTravelProbe(w.travel, w.travelAt, m, w.refs, raw, now);
-    if (w.found) SuspTunePass(w.tune, m, w.refs, s);
+    SuspTuneTest stepTestNow;
+    const SuspTuneTest *stepTest = w.found ? SuspStepTestPass(w.step, m, w.refs, raw, s, now, stepTestNow) : nullptr;
+    if (w.found) SuspTunePass(w.tune, m, w.refs, s, stepTest);
+    if (w.found && w.step.on && w.step.value < 0.0f && w.refs.wheels > 0)
+    {
+        // the test's value as written, which the steps' trace looks for
+        uint64_t c = 0;
+        float v = -1.0f;
+        if (m.get(w.refs.wheel[0] + kSuspConstraintAt, c) && m.get(c + kSuspValueAt[stepTest->value], v)) w.step.value = v;
+    }
+    const uint32_t generation = SuspStepPass(w.step, m, w.refs, raw, s, w.found, now);
+    if (probe && w.found) SuspTravelProbe(w.travel, w.travelAt, m, w.refs, raw, now, generation);
     WorldRead(m, w.found ? w.refs.control : 0, world);
     // a load ended (the game's loading screen gone): the truck that drives on under the game's id it had before the
     // screen keeps its heat, so a travel between regions, a border crossing and a reload are no cold start (a tester's

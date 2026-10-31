@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- A test: with `Probe=1` each wheel's travel and speed are read every physics step and logged every 10 s (steps a second, a histogram of the speeds, the range, a bounce), and `SuspStepTest` (ini only) shows whether a spring or damping write takes on the next step. The creep's hook on the wheels' drive is now C++ and is attached for `Creep` or `Probe` (review 14, phase 1).
 - The game's closing now leaves a line in `Gauges.log` naming who closed it and from where, and the creep gives nothing on a pass the mod shifts in (the author's drive of 30 October, the game still closing on a shift into or out of N).
 - A test: Spring, Damping, Travel min and Travel max in a new Suspension section, each wheel's spring, damping and travel limits as a factor of the truck's own (`SpringScale`, `DampingScale`, `TravelMinScale`, `TravelMaxScale`, 0.5 to 2; 1 writes nothing; the author, 29 and 30 October; review 14).
 

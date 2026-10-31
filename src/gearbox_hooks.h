@@ -167,11 +167,15 @@ bool TruckUpdateHook(uintptr_t at, TruckFrameFn onFrame, char *why, size_t size)
 void TruckUpdateUnhook();
 long TruckUpdateFrames(); // the frames the hook has seen
 
-// The game's wheels' drive (game_code.h, DrivePlaceFind) detoured at address at to the stub of creep_stub.asm, in a
-// transaction of its own, the first time Creep is on with a truck driven; never taken out while the game runs. False
-// with why when Detours refused it; true at once when it is in place already.
+// The game's wheels' drive (game_code.h, DrivePlaceFind) detoured at address at to a function of its own signature, in
+// a transaction of its own, the first time Creep or Probe is on with a truck driven; never taken out while the game
+// runs. False with why when Detours refused it; true at once when it is in place already.
 bool CreepHook(uintptr_t at, char *why, size_t size);
 bool CreepHooked();
+// Called by the hook on the physics thread for every call, before the drive, with the call's action and the step's
+// seconds (suspension_step.h, SuspStepLook); nullptr for none. It must not log, lock, allocate or fault.
+typedef void (*DriveStepFn)(uint64_t action, float dt);
+void DriveStepSet(DriveStepFn step);
 // The share of the drive throttle the hook gives the truck whose action this is (models.h, CreepShare): the larger of
 // the game's and this. An action of 0 or a share of 0 lets every call pass as it came.
 void CreepGive(uint64_t action, float share);

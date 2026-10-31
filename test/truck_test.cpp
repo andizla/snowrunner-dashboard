@@ -22,6 +22,7 @@
 #include "game_globals.h"
 #include "clock_scan.h"
 #include "suspension_scan.h"
+#include "suspension_step.h"
 #include "gearbox_hooks.h"
 
 // The hooks' attach and detach (gearbox_hooks.h) on a function of the test's own: the hook counts and calls through.
@@ -65,6 +66,15 @@ __declspec(noinline) static void FakeDrive(void *action, float throttle, float d
     g_driveAction = action;
     g_driveThrottle = throttle;
     g_driveDt = dt;
+}
+
+// A stand-in for the step probe's look (suspension_step.h, SuspStepLook): what the hook handed it is kept.
+static volatile uint64_t g_lookAction = 0;
+static volatile float g_lookDt = 0.0f;
+static void FakeStepLook(uint64_t action, float dt)
+{
+    g_lookAction = action;
+    g_lookDt = dt;
 }
 
 struct Region { uint64_t at; std::vector<uint8_t> bytes; };
@@ -1704,6 +1714,203 @@ int main()
         t.waterKnown = false;
         const bool window = s.looks == 1 && s.fastest[0] == 0.0f && Near(s.least[0], -0.49f) && Near(s.most[0], -0.49f) && !SuspTravelStep(s, t, kVehicle);
         Check(frame && rise && still && window, "travel probe: a wheel's centre in a turned chassis's frame, its range and its speed by the game's clock; a standing clock adds nothing");
+    }
+
+    // the hook on the wheels' drive as a C++ function (BRIEF_suspension_step_probe.md, part 1): with no share and no
+    // step look the drive gets its three arguments as they came; the look gets the call's action and seconds before
+    // the drive; a throttle that is not a number takes the share, as the stub's maxss did
+    {
+        uint8_t truck[0x100] = {};
+        void (*volatile drive)(void *, float, float) = &FakeDrive;
+        char why[160] = "";
+        const bool hooked = CreepHook((uintptr_t)&FakeDrive, why, sizeof why);
+        CreepGive(0, 0.0f);
+        DriveStepSet(nullptr);
+        drive(truck, 0.37f, 0.0125f);
+        const bool plain = g_driveThrottle == 0.37f && g_driveDt == 0.0125f && g_driveAction == truck;
+        DriveStepSet(&FakeStepLook);
+        g_lookAction = 0;
+        drive(truck, 0.37f, 0.0125f);
+        const bool looked = g_lookAction == (uint64_t)(uintptr_t)truck && g_lookDt == 0.0125f && g_driveThrottle == 0.37f;
+        DriveStepSet(nullptr);
+        CreepGive((uint64_t)(uintptr_t)truck, 0.2f);
+        drive(truck, nanf(""), 0.0125f);
+        const bool notNumber = g_driveThrottle == 0.2f;
+        CreepGive(0, 0.0f);
+        Check(hooked && plain && looked && notNumber, "drive hook (C++): with no share and no look the drive gets its action, throttle and seconds as they came; the step look gets the "
+                                                      "action and the seconds before the drive; a throttle that is not a number takes the share, as the stub's maxss did");
+    }
+
+    // the block handed to the physics thread (suspension_step.h): a reader takes it whole or not at all; the two slots
+    // alternate; a block whose seal is not its serial (being written) is refused
+    {
+        static SuspStepBlock slots[2];
+        static SuspStepBlock *volatile slot = nullptr;
+        int next = 0;
+        uint32_t serial = 0;
+        SuspStepBlock b = {}, got = {};
+        b.action = 0x1234;
+        b.generation = 7;
+        b.wheels = 2;
+        SuspStepPublish(slots, next, &slot, b, serial);
+        const bool first = SuspStepTake(slot, got) && got.action == 0x1234 && got.generation == 7 && slot == &slots[0];
+        b.generation = 8;
+        SuspStepPublish(slots, next, &slot, b, serial);
+        const bool second = SuspStepTake(slot, got) && got.generation == 8 && slot == &slots[1] && slots[0].generation == 7;
+        slots[1].seal = 0;
+        const bool half = !SuspStepTake(slot, got) && !SuspStepTake(nullptr, got);
+        Check(first && second && half, "step block: taken whole, the two slots alternate, one being written (its seal not its serial) is refused");
+    }
+
+    // the step's figures from heights: the speed over the step's seconds, a bad step skipped, the histogram's bins, the
+    // repeats while moving, the window published at its end and a new generation dropping each wheel's state
+    {
+        static SuspStepState s;
+        memset(&s, 0, sizeof s);
+        SuspStepBlock b = {};
+        b.generation = 1;
+        b.wheels = 1;
+        const float step = 1.0f / 128.0f;          // heights and seconds a float holds exactly
+        float h = 0.125f;
+        SuspStepAdd(s, b, &h, 2.0f, 0.0f, step);
+        const bool started = s.have && s.win.steps == 0 && s.h[0] == 0.125f;
+        h = 0.125f + step;
+        SuspStepAdd(s, b, &h, 2.0f, 0.0f, step);
+        const bool speed = s.v[0] == 1.0f && s.win.steps == 1 && s.win.bins[0][0][6] == 1 && SuspStepBin(1.0f) == 6;
+        h = 0.125f;
+        SuspStepAdd(s, b, &h, 2.0f, 0.0f, 0.0f);   // no seconds: no speed
+        SuspStepAdd(s, b, &h, 2.0f, 0.0f, 0.2f);   // a pause: no speed
+        const bool skipped = s.win.steps == 1;
+        SuspStepAdd(s, b, &h, 2.0f, 0.0f, step);   // the same height while moving: a repeat
+        SuspStepAdd(s, b, &h, 0.5f, 0.0f, step);   // the same, standing: no repeat counted
+        const bool repeats = s.win.moving[0] == 2 && s.win.repeats[0] == 1 && s.win.steps == 3;
+        const bool bins = SuspStepBin(0.01f) == 0 && SuspStepBin(0.03f) == 1 && SuspStepBin(-0.15f) == 3 && SuspStepBin(2.5f) == 7;
+        const bool bounce = s.win.bounceSteps[0] >= 1 && s.win.bounce[0][0] == 0.125f + step;
+        LONG seen = 0;
+        SuspStepWin win;
+        for (int i = 0; i < 1000; i++) SuspStepAdd(s, b, &h, 0.0f, 0.0f, 0.01f);   // 10 s: the window ends
+        const bool window = SuspStepWindowTake(s, seen, win) && win.generation == 1 && win.steps >= 999 && win.seconds >= kStepWindow && !SuspStepWindowTake(s, seen, win);
+        b.generation = 2;
+        h = 0.5f;
+        for (int i = 0; i < 150; i++) SuspStepAdd(s, b, &h, 0.0f, 0.0f, 0.01f);   // 1.5 s of the new generation
+        const bool dropped = s.generation == 2 && s.v[0] == 0.0f && s.win.least[0] == 0.5f;
+        b.generation = 3;
+        SuspStepAdd(s, b, &h, 0.0f, 0.0f, 0.01f);
+        const bool cut = SuspStepWindowTake(s, seen, win) && win.generation == 2 && win.seconds >= 1.0f && win.seconds < 2.0f;
+        Check(started && speed && skipped && repeats && bins && bounce && window && dropped && cut,
+              "step figures: the speed over the step's seconds, a step with no seconds or a pause skipped, the bins, repeats counted only while moving, a bounce "
+              "taken, the window published after 10 s, and a new generation dropping each wheel's state and publishing the window it cut");
+    }
+
+    // the step's reads in this process's own memory: a wheel's centre against its body along the body's up axis; a
+    // freed object (a bad address) is a fault, counted, and the block is dropped until a new one
+    {
+        static SuspStepState s;
+        memset(&s, 0, sizeof s);
+        static float wheel[0x200 / 4], body[0x300 / 4];
+        memset(wheel, 0, sizeof wheel);
+        memset(body, 0, sizeof body);
+        const float at[3] = { 1.0f, 2.3f, 3.0f }, up[3] = { 0.0f, 1.0f, 0.0f }, pos[3] = { 0.0f, 2.0f, 0.0f }, vel[3] = { 3.0f, 0.0f, 4.0f };
+        memcpy((uint8_t *)wheel + 0x13C, at, sizeof at);
+        memcpy((uint8_t *)body + 0x180, up, sizeof up);
+        memcpy((uint8_t *)body + 0x1A0, pos, sizeof pos);
+        memcpy((uint8_t *)body + 0x230, vel, sizeof vel);
+        static SuspStepBlock slots[2];
+        static SuspStepBlock *volatile slot = nullptr;
+        int next = 0;
+        uint32_t serial = 0;
+        SuspStepBlock b = {};
+        b.action = 0x5678;
+        b.chassis = b.body[0] = (uint64_t)(uintptr_t)body;
+        b.wheel[0] = (uint64_t)(uintptr_t)wheel;
+        b.wheels = 1;
+        b.generation = 1;
+        SuspStepPublish(slots, next, &slot, b, serial);
+        float h[kMaxWheels] = {}, speed = 0.0f, field = 0.0f;
+        const bool read = SuspStepRead(*slot, h, speed, field) && Near(h[0], 0.3f) && Near(speed, 5.0f);
+        SuspStepLook(s, slot, 0x9999, 0.01f);
+        const bool other = !s.have;
+        SuspStepLook(s, slot, 0x5678, 0.01f);
+        const bool taken = s.have && Near(s.h[0], 0.3f);
+        b.wheel[0] = 0x10;
+        SuspStepPublish(slots, next, &slot, b, serial);
+        SuspStepLook(s, slot, 0x5678, 0.01f);
+        const bool fault = s.faults == 1 && !s.have;
+        SuspStepLook(s, slot, 0x5678, 0.01f);
+        const bool once = s.faults == 1;
+        Check(read && other && taken && fault && once, "step reads: the wheel's centre against its body along its up axis and the chassis's speed; another truck's call is passed by; "
+                                                       "a bad address faults once, counted, and its block is dropped until a new one");
+    }
+
+    // which body a wheel rides on: the F350's front wheel fits the chassis by its constraint's attach point (0.02 m
+    // along, 0.27 m inboard); the Arocs' front wheel 3.2 m behind its attach point does not (review 14)
+    {
+        float chassis[16] = {};
+        chassis[0] = 1.0f, chassis[5] = 1.0f, chassis[10] = 1.0f;     // forward x, up y, left z, at the origin
+        const float f350Attach[3] = { 2.2820f, -0.1350f, 0.6950f }, f350Wheel[3] = { 2.2622f, 0.0057f, 0.9650f };
+        const float arocsAttach[3] = { -0.4021f, -1.2123f, 0.864f }, arocsWheel[3] = { 2.7850f, 0.6288f, 1.1157f };
+        float cab[16];
+        memcpy(cab, chassis, sizeof cab);
+        cab[12] = 3.19f, cab[13] = 1.84f;                              // a body 3.19 m ahead and 1.84 m up
+        Check(SuspBodyFits(chassis, f350Attach, f350Wheel) && !SuspBodyFits(chassis, arocsAttach, arocsWheel) && SuspBodyFits(cab, arocsAttach, arocsWheel),
+              "step bodies: the F350's front wheel fits the chassis by its attach point, the Arocs' front wheel does not, and fits a body where its attach point is");
+    }
+
+    // SuspStepTest's report on a made-up trace at 128 steps a second: the first step that reads the new value, the steps
+    // until the height leaves its trend by 2 mm, and the speed's swing before and after
+    {
+        static SuspStepTraceEntry e[200];
+        for (int i = 0; i < 200; i++)
+        {
+            const float t = i / 128.0f;
+            e[i] = SuspStepTraceEntry{ (uint32_t)(1000 + i), 1.0f / 128.0f, i < 100 ? 0.026f : 0.013f, 0.100f + 0.001f * t, 0.001f };
+            if (i >= 103) e[i].h -= 0.0015f * (i - 102);               // sinking from three steps after the write
+            if (i >= 100) e[i].v = i % 2 ? 0.05f : -0.05f;
+        }
+        const int write = SuspStepFirst(e, 200, 0, 0.013f), none = SuspStepFirst(e, 200, 0, 0.5f);
+        const int leave = SuspStepLeave(e, 200, write, 0.2f, 0.002f);
+        float rmsAfter, mostAfter, rmsBefore, mostBefore;
+        int stepsAfter, stepsBefore;
+        SuspStepSwing(e, 200, write, 0.5f, rmsAfter, mostAfter, stepsAfter);
+        SuspStepSwing(e, 200, SuspStepBack(e, write, 0.5f), 0.5f, rmsBefore, mostBefore, stepsBefore);
+        Check(write == 100 && none == -1 && leave == 4 && Near(rmsAfter, 0.05f) && Near(rmsBefore, 0.001f) && stepsAfter == 64 && stepsBefore == 64 && SuspStepBack(e, write, 0.2f) == 74,
+              "step test report: the first step reading the new value, the steps until the height leaves its trend by more than 2 mm, the speed's swing after against before");
+    }
+
+    // SuspStepTest's write is the tune's own (review 15): wheel 0's spring at half its tuned value and back, the stock
+    // kept through it with the sliders moved, and its writes not taken for the game putting values back
+    {
+        const uint64_t vtable = kExe + 0x23d9538, wheel = 0x10470000, c = 0x10480000;
+        Block(wheel, 0x200);
+        Block(c, 0x200);
+        Put(wheel + 0x28, c);
+        Put(c, vtable);
+        Put(c + 0xC4, 0.026f);
+        Put(c + 0xC8, 0.4f);
+        Put(c + 0xB4, -0.6f);
+        Put(c + 0xB8, 0.4f);
+        TruckRefs r = {};
+        r.vehicle = kVehicle;
+        r.wheel[0] = wheel;
+        r.wheels = 1;
+        auto at = [&](uint32_t off) { float v = 0.0f; Peek(c + off, &v, sizeof v); return v; };
+        const float plain[kSuspValues] = { 1.0f, 1.0f, 1.0f, 1.0f }, moved[kSuspValues] = { 1.5f, 1.0f, 1.0f, 1.0f };
+        SuspTune tune = {};
+        const SuspTuneTest half = { 0, kSuspStrength, 0.5f }, between = { 0, kSuspStrength, 1.0f };
+        const bool on = SuspTuneStep(tune, kMemory, r, vtable, plain, nullptr, &half) == 1 && Near(at(0xC4), 0.013f) && tune.wheel[0].ours[kSuspStrength];
+        const bool off = SuspTuneStep(tune, kMemory, r, vtable, plain, nullptr, &between) == 1 && at(0xC4) == 0.026f && !tune.wheel[0].ours[kSuspStrength];
+        const bool movedOn = SuspTuneStep(tune, kMemory, r, vtable, moved, nullptr, &half) == 1 && Near(at(0xC4), 0.0195f) && tune.wheel[0].stock[kSuspStrength] == 0.026f;
+        const bool movedOff = SuspTuneStep(tune, kMemory, r, vtable, moved, nullptr, &between) == 1 && Near(at(0xC4), 0.039f) && tune.wheel[0].stock[kSuspStrength] == 0.026f;
+        for (int i = 0; i < 30; i++)
+        {
+            SuspTuneStep(tune, kMemory, r, vtable, moved, nullptr, &half);
+            SuspTuneStep(tune, kMemory, r, vtable, moved, nullptr, &between);
+        }
+        const bool counted = tune.wheel[0].writes == 0 && tune.wheel[0].stock[kSuspStrength] == 0.026f && at(0xC8) == 0.4f;
+        const bool back = SuspTuneStep(tune, kMemory, r, vtable, plain, nullptr, nullptr) == 1 && at(0xC4) == 0.026f;
+        Check(on && off && movedOn && movedOff && counted && back,
+              "step test write: the spring at half the tuned value and back, recorded as the tune's own, the stock kept through it with a slider moved, its writes not "
+              "counted as the game putting values back; the test over, the stock again");
     }
 
     RealImageTest();
