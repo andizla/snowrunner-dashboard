@@ -183,6 +183,25 @@ static const float kWarmUpRange[2] = { 0.5f, 60.0f }, kOverheatRange[2] = { 0.25
                    kKneeRange[2] = { 0.02f, 0.5f };
 static const int kDamperCurves = 3; // linear, digressive, progressive
 
+// The damper's presets (BRIEF_suspension_damper.md), for the tab's buttons and the log's names.
+struct DamperPreset { const char *name; float lowC, highC, lowR, highR, knee; int curve; };
+static const DamperPreset kDamperPresets[] = { { "Stock", 1.0f, 1.0f, 1.0f, 1.0f, 0.1f, 0 }, { "Trail", 0.8f, 0.6f, 1.4f, 1.0f, 0.1f, 1 },
+                                               { "Rock crawl", 0.6f, 0.8f, 0.9f, 0.7f, 0.08f, 2 }, { "Road", 1.4f, 0.8f, 1.8f, 1.0f, 0.1f, 1 } };
+static const int kDamperPresetCount = (int)(sizeof kDamperPresets / sizeof *kDamperPresets);
+
+// The preset all six damper settings match, -1 for none (custom).
+inline int DamperPresetOf(const GaugeSettings &s)
+{
+    for (int i = 0; i < kDamperPresetCount; i++)
+    {
+        const DamperPreset &d = kDamperPresets[i];
+        if (s.damperCurve == d.curve && s.lowCompression == d.lowC && s.highCompression == d.highC && s.lowRebound == d.lowR && s.highRebound == d.highR &&
+            s.damperKnee == d.knee)
+            return i;
+    }
+    return -1;
+}
+
 // The temperatures in C the coolant's three times are measured between: WarmUpMinutes from kTempOutside outside up
 // to kTempWarm, OverheatMinutes from kTempHot into the red zone at kTempRed, CoolDownMinutes from kTempHot down to
 // kTempCooled. The cold lamp is lit below kTempCold. HotDamagePercentPerMinute is what an engine at kTempHotDamage

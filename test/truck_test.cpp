@@ -2117,6 +2117,45 @@ int main()
               "takes it as its own; on a change of truck let go first, then the tune puts the stock back; a rebuilt constraint is not written");
     }
 
+    // the damper's presets by name (the addendum of 01:18, item 1): each preset's six settings give its name, the
+    // defaults are Stock, one setting off any preset is custom
+    {
+        GaugeSettings g;
+        SettingsDefaults(g);
+        bool named = DamperPresetOf(g) == 0;
+        for (int i = 0; i < kDamperPresetCount; i++)
+        {
+            const DamperPreset &d = kDamperPresets[i];
+            g.lowCompression = d.lowC, g.highCompression = d.highC, g.lowRebound = d.lowR, g.highRebound = d.highR, g.damperKnee = d.knee, g.damperCurve = d.curve;
+            named &= DamperPresetOf(g) == i;
+        }
+        g.damperKnee = 0.12f;
+        const bool custom = DamperPresetOf(g) == -1 && !strcmp(kDamperPresets[2].name, "Rock crawl");
+        Check(named && custom, "damper presets: each preset's six settings give its name, the defaults are Stock, a setting off every preset is custom");
+    }
+
+    // a bounce's decay (the addendum of 01:18, item 4): a damped bounce's second swing over its first; ripples under 2 mm
+    // are no swing; a bounce with one swing has no ratio
+    {
+        // a damped sine from rest: its swings half a period apart shrink by e^(-2.5 x 0.3125) = 0.46
+        static float h[90];
+        for (int i = 0; i < 90; i++)
+        {
+            const float t = i / 60.0f;
+            h[i] = 0.1f + 0.06f * expf(-2.5f * t) * sinf(2.0f * 3.14159265f * 1.6f * t);
+        }
+        float ratio = 0.0f;
+        const bool decay = SuspBounceRatio(h, 90, ratio) && fabsf(ratio - expf(-2.5f * 0.3125f)) < 0.06f;
+        static float flat[90];
+        for (int i = 0; i < 90; i++) flat[i] = 0.1f + (i % 2 ? 0.001f : -0.001f);
+        float none = 1.0f;
+        const bool ripples = !SuspBounceRatio(flat, 90, none) && none == 0.0f;
+        static float once[90];
+        for (int i = 0; i < 90; i++) once[i] = 0.1f + (i < 10 ? 0.003f * i : 0.0f);
+        const bool single = !SuspBounceRatio(once, 90, none);
+        Check(decay && ripples && single, "bounce decay: the second swing over the first of a damped bounce; ripples under 2 mm are no swing; a single swing has no ratio");
+    }
+
     RealImageTest();
 
     printf(g_failed ? "TRUCK TEST FAILED (%d)\n" : "TRUCK TEST OK\n", g_failed);

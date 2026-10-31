@@ -786,11 +786,9 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     PageTip("A test: how the damping grows above the knee. Linear: as the truck's own. Digressive: less at high speed, so bumps come through "
             "softer while the body stays calm. Progressive: more at high speed, against bottoming out. Linear with every factor at 1 = the truck's own, "
             "and the damper does not run.");
-    struct DamperPreset { const char *name; float lowC, highC, lowR, highR, knee; int curve; };
-    static const DamperPreset presets[] = { { "Stock", 1.0f, 1.0f, 1.0f, 1.0f, 0.1f, 0 }, { "Trail", 0.8f, 0.6f, 1.4f, 1.0f, 0.1f, 1 },
-                                            { "Rock crawl", 0.6f, 0.8f, 0.9f, 0.7f, 0.08f, 2 }, { "Road", 1.4f, 0.8f, 1.8f, 1.0f, 0.1f, 1 } };
+    const DamperPreset *presets = kDamperPresets;
     PageLabel("Preset", labelX);
-    for (int i = 0; i < (int)(sizeof presets / sizeof *presets); i++)
+    for (int i = 0; i < kDamperPresetCount; i++)
     {
         if (i) ImGui::SameLine();
         if (ImGui::SmallButton(presets[i].name))
@@ -801,7 +799,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         }
     }
     PageTip("Starting points: Stock is the truck's own; Trail soft at low speed with a firmer rebound; Rock crawl soft all through, progressive "
-            "to save the bump stops; Road firm at low speed, so the body stays flat.");
+            "to save the bump stops; Road firm at low speed, so the body stays flat. The game holds a wheel's damping at 1, so on a truck "
+            "whose own damping is high (the Arocs' front, 0.5) a factor above 2 cannot act in full.");
     PageLabel("Low comp", labelX);
     ImGui::SetNextItemWidth(w);
     changed(ImGui::SliderFloat("##lowcompression", &s.lowCompression, kDamperRange[0], kDamperRange[1], "x%.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic));

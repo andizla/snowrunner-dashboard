@@ -464,3 +464,35 @@ inline int SuspStepBack(const SuspStepTraceEntry *e, int at, float span)
     while (i > 0 && t < span) t += e[i--].dt;
     return i;
 }
+
+// A bounce's decay (the addendum of 01:18, item 4): its heights h (m) about where it comes to rest (the mean of its
+// last kBounceRest steps), the swings past it larger than kBounceSwing, each the other way from the one before, and
+// the second's size over the first's. False where it has fewer than two swings.
+static const int kBounceRest = 20;
+static const float kBounceSwing = 0.002f;
+inline bool SuspBounceRatio(const float *h, int n, float &ratio)
+{
+    ratio = 0.0f;
+    if (n < kBounceRest + 3) return false;
+    double rest = 0.0;
+    for (int i = n - kBounceRest; i < n; i++) rest += h[i];
+    rest /= kBounceRest;
+    float swing[2] = {};
+    int swings = 0;
+    for (int i = 1; i + 1 < n && swings < 2; i++)
+    {
+        const float e = (float)(h[i] - rest), before = (float)(h[i - 1] - rest), after = (float)(h[i + 1] - rest);
+        const bool peak = (e > before && e >= after) || (e < before && e <= after);
+        if (!peak || fabsf(e) <= kBounceSwing) continue;
+        if (swings && (e > 0.0f) == (swing[swings - 1] > 0.0f))
+        {
+            // the same way as the last: the larger of the two is the swing
+            if (fabsf(e) > fabsf(swing[swings - 1])) swing[swings - 1] = e;
+            continue;
+        }
+        swing[swings++] = e;
+    }
+    if (swings < 2) return false;
+    ratio = fabsf(swing[1]) / fabsf(swing[0]);
+    return true;
+}

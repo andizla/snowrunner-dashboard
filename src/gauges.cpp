@@ -2229,6 +2229,8 @@ struct SuspStepFrame
     uint32_t generation;
     float attachUp[kMaxWheels], axisUp[kMaxWheels], low[kMaxWheels], high[kMaxWheels];
     bool other[kMaxWheels];
+    bool damping;               // the damper ran on this generation
+    int preset;                 // its preset (kDamperPresets), -1 custom
 };
 
 // The travel read every physics step (suspension_step.h), on the mod's side: the block published for the physics
@@ -2245,6 +2247,10 @@ struct SuspStepWatch
     ULONGLONG bodiesAt;         // when the bodies not found are looked for again
     LONG windows, tail, faults, refused; // the windows, the ring's entries, the faults and the refused writes taken so far
     uint64_t testVehicle;       // the truck SuspStepTest runs on: another one waits kStepTestEvery before its first write
+    bool damping;               // the damper's state the generation began with, and its settings
+    DamperSet damper;
+    uint64_t limitVehicle;      // the truck the clamp's note was told for, and the presets it was told for (bit preset + 1)
+    unsigned limitTold;
     int test;                   // SuspStepTest as it runs
     bool on;                    // its write holds
     ULONGLONG due, until, report;
@@ -2656,6 +2662,8 @@ static SuspStepTraceEntry g_stepHistory[kStepHistory];
 static int g_stepHistoryCount = 0;
 static const ULONGLONG kStepTestEvery = 20000;
 static const wchar_t *const kDamperCurveNames[kDamperCurves] = { L"linear", L"digressive", L"progressive" };
+// A generation's damper in words: "Trail", "custom" or "off".
+static const char *DamperName(bool damping, int preset) { return !damping ? "the damper off" : preset >= 0 ? kDamperPresets[preset].name : "custom"; }
 static const float kStepTestFactor[3] = { 1.0f, 0.5f, 0.1f };
 static const ULONGLONG kStepTestHold[3] = { 0, 1000, 500 };
 static const float kStepTestBefore = 0.2f, kStepTestAfter = 0.5f, kStepTestGap = 0.002f;
@@ -2846,7 +2854,7 @@ static void SuspStepTestReport(const SuspStepWatch &p)
 
 // A window's lines: per wheel the steps a second, the repeats, the speeds' histogram, the range against the limits as
 // written, then the bounce in mm.
-static void SuspStepWindowLog(const SuspStepWatch &p, const SuspStepWin &w)
+static void SuspStepWindowLog(SuspStepWatch &p, const SuspStepWin &w)
 {
     static char bounce[kStepBounceMost * 8 + 16];
     for (int i = 0; i < w.wheels && i < kMaxWheels; i++)
@@ -2873,16 +2881,31 @@ static void SuspStepWindowLog(const SuspStepWatch &p, const SuspStepWin &w)
         if (w.written[i])
             _snprintf_s(damped, sizeof damped, _TRUNCATE, "; the damper wrote %d steps, %.4f on the mean, the clamp holding %.1f %%", w.written[i],
                         w.writtenSum[i] / w.written[i], 100.0f * w.clamped[i] / w.written[i]);
-        Log(L"probe: step: wheel %d, %.1f s of generation %u: %.1f steps a second, dt %.4f to %.4f s; %d of %d steps over 1 m/s repeat the height (%.1f %%); "
+        Log(L"probe: step: wheel %d, %.1f s of generation %u (%S): %.1f steps a second, dt %.4f to %.4f s; %d of %d steps over 1 m/s repeat the height (%.1f %%); "
             L"compression %S; rebound %S (m/s: steps); height %.4f to %.4f, along its axis %.3f to %.3f against the limits %g to %g%S%s",
-            i, w.seconds, w.generation, w.seconds > 0.0f ? w.steps / w.seconds : 0.0f, w.dtLeast, w.dtMost, w.repeats[i], w.moving[i],
+            i, w.seconds, w.generation, f ? DamperName(f->damping, f->preset) : "?", w.seconds > 0.0f ? w.steps / w.seconds : 0.0f, w.dtLeast, w.dtMost, w.repeats[i], w.moving[i],
             w.moving[i] ? 100.0f * w.repeats[i] / w.moving[i] : 0.0f, bins[0], bins[1], w.least[i], w.most[i], least, most, low, high, damped,
             !f ? L"; its generation's frame is gone" : f->other[i] ? L"; on another body: not to be trusted" : along ? L"" : L"; its axis not read");
+        if (f && f->damping && w.written[i] && w.clamped[i] * 20 > w.written[i])
+        {
+            // the game's limit: once a truck and preset (the addendum of 01:18, item 3)
+            if (p.limitVehicle != p.vehicle) p.limitVehicle = p.vehicle, p.limitTold = 0;
+            const unsigned bit = 1u << (f->preset + 1);
+            if (!(p.limitTold & bit))
+            {
+                p.limitTold |= bit;
+                Log(L"damper: wheel %d held at the game's limit in %.0f %% of a window's steps (%S on this truck): its damping cannot pass 1, so a factor above 1 "
+                    L"over the truck's own cannot act in full", i, 100.0f * w.clamped[i] / w.written[i], DamperName(true, f->preset));
+            }
+        }
         if (w.bounceSteps[i] <= 0) continue;
         int used = 0;
         for (int k = 0; k < w.bounceSteps[i] && used + 10 < (int)sizeof bounce; k++)
             used += _snprintf_s(bounce + used, sizeof bounce - used, _TRUNCATE, k ? " %.0f" : "%.0f", w.bounce[i][k] * 1000.0f);
-        Log(L"probe: step: wheel %d's bounce from %.2f s into the window, %d steps, its height in mm: %S", i, w.bounceAt[i], w.bounceSteps[i], bounce);
+        float ratio = 0.0f;
+        char decay[64] = "; fewer than two swings";
+        if (SuspBounceRatio(w.bounce[i], w.bounceSteps[i], ratio)) _snprintf_s(decay, sizeof decay, _TRUNCATE, "; the second swing %.2f of the first", ratio);
+        Log(L"probe: step: wheel %d's bounce from %.2f s into the window, %d steps%S, its height in mm: %S", i, w.bounceAt[i], w.bounceSteps[i], decay, bounce);
     }
 }
 
@@ -2950,11 +2973,13 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
     const float jump[3] = { t.position[0] - p.position[0], t.position[1] - p.position[1], t.position[2] - p.position[2] };
     bool missing = false;
     for (int i = 0; i < r.wheels && i < kMaxWheels; i++) missing |= p.frame.other[i];
+    const bool damperChanged = damping != p.damping || (damping && memcmp(&damper, &p.damper, sizeof damper) != 0);
     const wchar_t *why = !p.block.serial ? L"a start"
                          : r.vehicle != p.vehicle || r.wheels != p.wheels  ? L"a truck switch"
                          : memcmp(scale, p.scale, sizeof scale)         ? L"a slider move"
                          : memcmp(constraint, p.constraint, sizeof constraint) ? L"a constraint at a new address"
                          : SuspSize(jump) > 3.0f                         ? L"a recovery"
+                         : damperChanged                                 ? L"a damper setting change"
                          : missing && now >= p.bodiesAt                  ? L"a look for the bodies not found"
                                                                          : nullptr;
     memcpy(p.position, t.position, sizeof p.position);
@@ -2995,7 +3020,18 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
                 m.get(constraint[i] + kSuspValueAt[kSuspMax], p.frame.high[i]);
             }
             p.frame.generation = p.generation;
-            Log(L"probe: step: generation %u (%s), %d wheels", p.generation, why, r.wheels);
+            p.frame.damping = damping;
+            p.frame.preset = damping ? DamperPresetOf(s) : -1;
+            if (damperChanged || !wcscmp(why, L"a start"))
+            {
+                if (damping)
+                    Log(L"damper: %S (%s, compression x%g and x%g, rebound x%g and x%g, the knee %g m/s) for the wheels whose body is known", DamperName(true, p.frame.preset),
+                        kDamperCurveNames[damper.curve], damper.low[0], damper.high[0], damper.low[1], damper.high[1], damper.knee);
+                else if (p.damping) Log(L"damper: off");
+            }
+            p.damping = damping;
+            p.damper = damper;
+            Log(L"probe: step: generation %u (%s), %d wheels, %S", p.generation, why, r.wheels, DamperName(damping, p.frame.preset));
         }
     }
     b.generation = p.generation;
@@ -3026,9 +3062,6 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
     b.serial = b.seal = was.serial = was.seal = 0;
     if (!p.block.serial || memcmp(&b, &was, sizeof b))
     {
-        if (b.damping && !was.damping)
-            Log(L"damper: on (%s, compression x%g and x%g, rebound x%g and x%g, the knee %g m/s) for the wheels whose body is known", kDamperCurveNames[damper.curve],
-                damper.low[0], damper.high[0], damper.low[1], damper.high[1], damper.knee);
         SuspStepPublish(g_stepSlots, p.next, &g_stepBlock, b, p.serial);
         p.block = b;
         p.block.serial = p.block.seal = p.serial;
