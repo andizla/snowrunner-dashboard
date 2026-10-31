@@ -77,6 +77,11 @@ static void FakeStepLook(uint64_t action, float dt)
     g_lookDt = dt;
 }
 
+// This process's own memory as the game's, for the physics thread's code run on objects of the test's own.
+static bool NativePeek(uint64_t addr, void *out, size_t size) { memcpy(out, (const void *)(uintptr_t)addr, size); return true; }
+static bool NativePoke(uint64_t addr, const void *in, size_t size) { memcpy((void *)(uintptr_t)addr, in, size); return true; }
+static const TruckMemory kNativeMemory = { NativePeek, 0, NativePoke };
+
 struct Region { uint64_t at; std::vector<uint8_t> bytes; };
 static std::vector<Region> g_game;
 
@@ -2154,6 +2159,210 @@ int main()
         for (int i = 0; i < 90; i++) once[i] = 0.1f + (i < 10 ? 0.003f * i : 0.0f);
         const bool single = !SuspBounceRatio(once, 90, none);
         Check(decay && ripples && single, "bounce decay: the second swing over the first of a damped bounce; ripples under 2 mm are no swing; a single swing has no ratio");
+    }
+
+    // the spring's features (BRIEF_suspension_extras.md, build A): given as a rate and written as its secant f(u), so the
+    // force f(u) u is continuous at u = 0, at the bump zone's start and at dual rate's crossover, and its slope is the
+    // rate; each default gives f = 1 and nothing runs
+    {
+        SpringSet off = { 0, 2.0f, 0.5f, false, 0.08f, 4.0f, 2.0f, false, 0.7f, 1.5f, 0.1f, 0.6f };
+        bool ones = !SpringOn(off) && !ZonesOn(off);
+        for (float u = 0.0f; u <= 1.0f; u += 0.01f) ones &= SpringF(off, u, 0.3f) == 1.0f && ZoneFactor(off, u, 0.5f, 0.3f) == 1.0f;
+        SpringSet stopsSoft = off;
+        stopsSoft.bump = true, stopsSoft.bumpSpring = 1.0f, stopsSoft.bumpDamping = 1.0f;
+        ones &= !SpringOn(stopsSoft) && !ZonesOn(stopsSoft);
+        bool smooth = true, slope = true;
+        const float travel = 0.36f;
+        for (int curve = 0; curve < 3; curve++)
+            for (bool bump : { false, true })
+            {
+                SpringSet k = off;
+                k.curve = curve, k.rise = 3.0f, k.bump = bump, k.bumpSpring = 8.0f;
+                float last = 0.0f;
+                for (int n = 1; n <= 1000; n++)
+                {
+                    const float u = n / 1000.0f, force = SpringF(k, u, travel) * u;
+                    // no step in the force anywhere: from one thousandth of the travel to the next it moves by at most the
+                    // largest rate times a thousandth
+                    smooth &= force - last >= 0.0f && force - last <= (3.0f + 8.0f) / 1000.0f + 1e-5f;
+                    // and its slope is the rate
+                    if (n > 1 && n < 1000)
+                    {
+                        const float d = (SpringF(k, u + 0.0005f, travel) * (u + 0.0005f) - SpringF(k, u - 0.0005f, travel) * (u - 0.0005f)) / 0.001f;
+                        slope &= fabsf(d - SpringRate(k, u, travel)) < 0.05f;
+                    }
+                    last = force;
+                }
+                smooth &= fabsf(SpringF(k, 1e-5f, travel) - 1.0f) < 1e-3f;
+            }
+        SpringSet zones = off;
+        zones.zones = true;
+        const bool middle = Near(ZoneFactor(zones, 0.35f, 0.5f, travel), 0.7f) && Near(ZoneFactor(zones, 0.0f, -0.5f, travel), 1.5f) &&
+                            Near(ZoneFactor(zones, 0.9f, 0.5f, travel), 1.5f);
+        bool zoneSmooth = true;
+        for (int n = 1; n <= 1000; n++) zoneSmooth &= fabsf(ZoneFactor(zones, n / 1000.0f, 0.5f, travel) - ZoneFactor(zones, (n - 1) / 1000.0f, 0.5f, travel)) < 0.02f;
+        SpringSet stops = off;
+        stops.bump = true;
+        // the stop's damping on compression only, at its end x2; the zone starts 0.08 m before the end
+        const bool stopDamping = Near(ZoneFactor(stops, 1.0f, 0.5f, travel), 2.0f) && ZoneFactor(stops, 1.0f, -0.5f, travel) == 1.0f &&
+                                 ZoneFactor(stops, 1.0f - 0.08f / travel - 0.01f, 0.5f, travel) == 1.0f && Near(BumpStart(stops, travel), 1.0f - 0.08f / travel);
+        Check(ones && smooth && slope && middle && zoneSmooth && stopDamping,
+              "spring features: written as the secant of the rate, so the force is continuous at 0, at the bump zone and at the crossover and its slope is the rate; "
+              "the defaults give 1 and do not run; the zones soft in the middle and firm at the ends with no step; the bump stop's damping on compression only");
+    }
+
+    // the strength on the physics thread (in this process's memory): with a spring feature on, the tune's strength
+    // times f(u) at the place just read; with everything off nothing is written; let go writes the strength back
+    {
+        static SuspStepState s;
+        memset(&s, 0, sizeof s);
+        static uint64_t wheel[0x200 / 8], constraint[0x100 / 8];
+        static float body[0x300 / 4];
+        memset(wheel, 0, sizeof wheel);
+        memset(constraint, 0, sizeof constraint);
+        memset(body, 0, sizeof body);
+        const uint64_t vtable = 0x140000000ull + 0x23d9538;
+        constraint[0] = vtable;
+        const float up[3] = { 0.0f, 1.0f, 0.0f };
+        memcpy((uint8_t *)body + 0x180, up, sizeof up);
+        wheel[0x28 / 8] = (uint64_t)(uintptr_t)constraint;
+        float *strength = (float *)((uint8_t *)constraint + 0xC4), *damping = (float *)((uint8_t *)constraint + 0xC8),
+              *height = (float *)((uint8_t *)wheel + 0x13C + 4);
+        *strength = 0.025f;
+        *damping = 0.28f;
+        SuspStepBlock b = {};
+        b.action = 0x8888;
+        b.chassis = b.body[0] = (uint64_t)(uintptr_t)body;
+        b.wheel[0] = (uint64_t)(uintptr_t)wheel;
+        b.wheels = 1;
+        b.generation = 1;
+        b.vtable = vtable;
+        b.constraint[0] = (uint64_t)(uintptr_t)constraint;
+        b.attachUp[0] = -0.135f, b.axisUp[0] = -1.0f, b.travel[0] = 0.36f;   // the F350's front, x = -0.135 - h
+        b.spring = SpringSet{ 1, 3.0f, 0.5f, false, 0.08f, 4.0f, 2.0f, false, 0.7f, 1.5f, 0.1f, 0.6f };
+        static SuspStepBlock slots[2];
+        static SuspStepBlock *volatile slot = nullptr;
+        int next = 0;
+        uint32_t serial = 0;
+        SuspStepPublish(slots, next, &slot, b, serial);
+        const float step = 1.0f / 64.0f;
+        *height = 0.0f;
+        SuspStepLook(s, slot, 0x8888, step);
+        *height = 0.045f;                                    // x = -0.18: half the compression travel
+        SuspStepLook(s, slot, 0x8888, step);
+        const bool off = *strength == 0.025f && *damping == 0.28f && s.win.springWritten[0] == 0;
+        b.springing = true;
+        b.baseK[0] = 0.025f;
+        b.generation = 2;
+        SuspStepPublish(slots, next, &slot, b, serial);
+        SuspStepLook(s, slot, 0x8888, step);
+        *height = 0.046f;
+        SuspStepLook(s, slot, 0x8888, step);
+        const float u = (0.135f + 0.046f) / 0.36f;
+        const bool written = Near(*strength, 0.025f * SpringF(b.spring, u, 0.36f)) && *strength > 0.025f && *damping == 0.28f && s.win.springWritten[0] == 1;
+        const bool back = SuspDamperLetGo(b, kNativeMemory) == 1 && *strength == 0.025f && *damping == 0.28f;
+        Check(off && written && back, "spring step: nothing written with every feature off; with a curve on, the tune's strength times f(u) at the place just read, the damping "
+                                      "left alone; let go writes the strength back");
+    }
+
+    // who owns the strength (build A): with a spring feature on a wheel the tune keeps its strength stock however the field
+    // changes, the damping still its own; let go writes stock x SpringScale back, which the tune takes as its own
+    {
+        const uint64_t vtable = kExe + 0x23d9538, wheel = 0x104E0000, c = 0x104F0000;
+        Block(wheel, 0x200);
+        Block(c, 0x200);
+        Put(wheel + 0x28, c);
+        Put(c, vtable);
+        Put(c + 0xC4, 0.026f);
+        Put(c + 0xC8, 0.4f);
+        Put(c + 0xB4, -0.6f);
+        Put(c + 0xB8, 0.4f);
+        TruckRefs r = {};
+        r.vehicle = kVehicle;
+        r.wheel[0] = wheel;
+        r.wheels = 1;
+        auto at = [&](uint32_t off) { float v = 0.0f; Peek(c + off, &v, sizeof v); return v; };
+        const float scale[kSuspValues] = { 1.5f, 2.0f, 1.0f, 1.0f };
+        const bool owns[kMaxWheels] = { true }, none[kMaxWheels] = {};
+        SuspTune tune = {};
+        SuspTuneStep(tune, kMemory, r, vtable, scale, nullptr, nullptr, none, none);
+        const bool tuned = Near(at(0xC4), 0.039f) && Near(at(0xC8), 0.8f);
+        Put(c + 0xC4, 0.07f);                                // the spring's writes
+        SuspTuneStep(tune, kMemory, r, vtable, scale, nullptr, nullptr, none, owns);
+        Put(c + 0xC4, 0.05f);
+        Put(c + 0xC8, 0.3f);                                 // the damping is still the tune's: the game's write is taken as a new stock
+        SuspTuneStep(tune, kMemory, r, vtable, scale, nullptr, nullptr, none, owns);
+        const bool kept = at(0xC4) == 0.05f && tune.wheel[0].stock[kSuspStrength] == 0.026f && tune.wheel[0].stock[kSuspDamping] == 0.3f && Near(at(0xC8), 0.6f);
+        SuspStepBlock block = {};
+        block.wheels = 1;
+        block.wheel[0] = wheel;
+        block.constraint[0] = c;
+        block.vtable = vtable;
+        block.springing = true;
+        block.baseK[0] = fminf(1.0f, tune.wheel[0].stock[kSuspStrength] * scale[kSuspStrength]);
+        const bool back = SuspDamperLetGo(block, kMemory) == 1 && Near(at(0xC4), 0.039f) && Near(at(0xC8), 0.6f);
+        SuspTuneStep(tune, kMemory, r, vtable, scale, nullptr, nullptr, none, none);
+        const bool ownAgain = Near(at(0xC4), 0.039f) && tune.wheel[0].stock[kSuspStrength] == 0.026f;
+        Check(tuned && kept && back && ownAgain, "spring ownership: with a spring feature on a wheel the tune keeps its strength stock however the field changes, the damping "
+                                                 "still its own; let go writes stock x SpringScale back and the tune takes it as its own");
+    }
+
+    // the quarter car with the spring's features (build A's tests): 60 steps a second, the stock damping a ratio of 0.55
+    // at 1.6 Hz, gravity's sag a third of the compression travel, and the strength and the damping written a step late
+    // from the step before's place and speed. With BumpSpring x8 and SpringRise x3 (progressive and dual rate), and with
+    // the zones, each settles from a step of the ground without growing
+    {
+        const SpringSet base = { 0, 3.0f, 0.5f, false, 0.08f, 8.0f, 2.0f, false, 0.7f, 1.5f, 0.1f, 0.6f };
+        std::vector<SpringSet> cases;
+        for (int curve = 0; curve < 3; curve++)
+            for (int bump = 0; bump < 2; bump++)
+                for (int zones = 0; zones < 2; zones++)
+                {
+                    SpringSet k = base;
+                    k.curve = curve, k.bump = bump != 0, k.zones = zones != 0;
+                    cases.push_back(k);
+                }
+        const double dt = 1.0 / 60.0, omega = 2.0 * 3.14159265 * 1.6, k0 = omega * omega, c0 = 2.0 * 0.55 * omega, travel = 0.3, g = k0 * travel / 3.0;
+        const DamperSet plain = { 0, { 1.0f, 1.0f }, { 1.0f, 1.0f }, 0.1f };
+        bool all = true;
+        for (const SpringSet &k : cases)
+        {
+            // x is the wheel's place along its axis: compression negative; the ground's step pushes it 0.15 m deeper
+            double x = -g / k0, vx = 0.0, kf = 1.0, cf = 1.0, last = 0.0, peak = 1e9;
+            bool rising = false, grows = false, settled = true;
+            float lastU = SuspDepth((float)x, (float)travel), lastV = 0.0f;
+            for (int n = 0; n < 600; n++)
+            {
+                // the body's motion: x' = vx; the spring and the damper push along the axis toward 0, the load toward
+                // compression, and the ground's step is a constant push of 0.15 m worth of the stock spring
+                const double push = -g - k0 * 0.15 * (n > 0 ? 1.0 : 0.0);
+                vx = (vx + dt * (push - k0 * kf * x)) / (1.0 + dt * c0 * cf);
+                x += dt * vx;
+                const float u = SuspDepth((float)x, (float)travel), v = (float)-vx;
+                kf = SpringF(k, lastU, (float)travel);
+                // the damping as a game factor of 0.3 times the zone, held as the physics thread holds it, over the stock
+                bool clamped = false;
+                cf = DamperFactor(plain, 0.3f * ZoneFactor(k, lastU, lastV, (float)travel), lastV, clamped) / 0.3;
+                lastU = u, lastV = v;
+                const double err = fabs(vx);
+                if (err > last) rising = true;
+                else if (rising)
+                {
+                    if (last > peak * 1.001 + 1e-6) grows = true;
+                    peak = last;
+                    rising = false;
+                }
+                last = err;
+                if (n >= 480 && fabs(vx) > 0.002) settled = false;
+            }
+            if (grows || !settled)
+            {
+                all = false;
+                printf("     spring curve %d, bump stops %d, zones %d: %s\n", k.curve, k.bump, k.zones, grows ? "grows" : "not settled");
+            }
+        }
+        Check(all, "spring quarter car: at 60 steps a second, a damping ratio of 0.55 at 1.6 Hz and the strength and damping written a step late, linear, progressive "
+                   "and dual rate x3, with and without bump stops x8 and the zones, each settles from a step of the ground without growing");
     }
 
     RealImageTest();

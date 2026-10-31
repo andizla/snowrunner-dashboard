@@ -174,10 +174,12 @@ struct SuspTuneTest
 // restored: the values of the truck driven before put back on this pass (another truck is driven now).
 // test: SuspStepTest's write, nullptr for none. damper: per wheel, the damper owns its damping (suspension_step.h):
 // the tune neither writes it nor takes what it finds there for a new stock, so the damper's values never compound
-// (review 15); nullptr for none.
+// (review 15); nullptr for none. spring: the same for the strength (the spring's features, BRIEF_suspension_extras.md).
 inline int SuspTuneStep(SuspTune &t, const TruckMemory &m, const TruckRefs &r, uint64_t vtable, const float scale[kSuspValues], int *restored = nullptr,
-                        const SuspTuneTest *test = nullptr, const bool *damper = nullptr)
+                        const SuspTuneTest *test = nullptr, const bool *damper = nullptr, const bool *spring = nullptr)
 {
+    // the fields the physics thread owns on a wheel: the damping (the damper, the zones) and the strength (the spring's features)
+    auto owned = [&](int i, int k) { return (damper && damper[i] && k == kSuspDamping) || (spring && spring[i] && k == kSuspStrength); };
     if (restored) *restored = 0;
     if (t.vehicle != r.vehicle)
     {
@@ -206,7 +208,7 @@ inline int SuspTuneStep(SuspTune &t, const TruckMemory &m, const TruckRefs &r, u
         }
         else
             for (int k = 0; k < kSuspValues; k++)
-                if (!(damper && damper[i] && k == kSuspDamping) && !(w.ours[k] && now[k] == w.wrote[k]) && now[k] != w.stock[k])
+                if (!owned(i, k) && !(w.ours[k] && now[k] == w.wrote[k]) && now[k] != w.stock[k])
                 {
                     // the game wrote this one anew: its new stock (never what the tune wrote, so nothing compounds)
                     w.stock[k] = now[k];
@@ -215,7 +217,7 @@ inline int SuspTuneStep(SuspTune &t, const TruckMemory &m, const TruckRefs &r, u
                 }
         for (int k = 0; k < kSuspValues; k++)
         {
-            if (!SuspValueSane(k, w.stock[k]) || (damper && damper[i] && k == kSuspDamping)) continue; // not a value of the kind known, or the damper's: left as it is
+            if (!SuspValueSane(k, w.stock[k]) || owned(i, k)) continue; // not a value of the kind known, or the damper's: left as it is
             float want = w.stock[k] * scale[k];
             if (k == kSuspStrength || k == kSuspDamping) want = fminf(1.0f, want);
             if (scale[k] == 1.0f) want = w.stock[k];

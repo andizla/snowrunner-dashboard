@@ -61,6 +61,109 @@ inline float DamperG(const DamperSet &d, float v)
     return (L + H * (powf(u, kDamperPower[curve]) - 1.0f)) / u;
 }
 
+// ---- the spring's features and the damping by position (BRIEF_suspension_extras.md, build A) ----
+// x is a wheel's place along its constraint's axis, from its attach point, where the spring is at zero: compression is
+// negative (halving the spring raised the F350's wheel from 150 to 249 mm against the chassis, test 1 of 31 October),
+// and SuspensionMin (+ 0xB4) is the compression end. L is the compression travel |SuspensionMin| as tuned, and
+// u = -x / L, held to 0 to 1, how far into it the wheel is. Havok's spring force is the strength times x, so a
+// feature is given as a rate r(u), the slope dF/dx as a factor of the stock, and written as its secant
+// f(u) = (integral of r from 0 to u) / u: the force is then continuous at every zone's edge.
+//   - bump stops: the rate adds (BumpSpring - 1) s^2, with s the share of the BumpZone metres before the end the wheel
+//     is into, and the compression damping is times 1 + (BumpDamping - 1) s^2;
+//   - progressive: r = 1 + (SpringRise - 1) u^2; dual rate: r = 1 under SpringCross, SpringRise over it, blended over
+//     kSpringBlend;
+//   - the damping zones: ZoneSoft from ZoneFrom to ZoneTo, ZoneFirm toward either end, blended over kZoneBlend.
+// The droop side (x > 0) stays at 1.
+static const float kSpringBlend = 0.05f, kZoneBlend = 0.1f;
+static const float kSpringLeast = 0.001f; // the strength written is held to this and 1
+struct SpringSet
+{
+    int curve;                    // 0 linear, 1 progressive, 2 dual rate
+    float rise, cross;
+    bool bump;
+    float zone, bumpSpring, bumpDamping; // m before the end, factors at the end
+    bool zones;
+    float soft, firm, from, to;
+};
+
+// The strength is written each step: a curve or the bump stops.
+inline bool SpringOn(const SpringSet &k) { return k.curve != 0 || (k.bump && k.bumpSpring != 1.0f); }
+// The damping goes by position: the zones or the bump stops' damping.
+inline bool ZonesOn(const SpringSet &k) { return k.zones || (k.bump && k.bumpDamping != 1.0f); }
+
+// u from x and L.
+inline float SuspDepth(float x, float travel)
+{
+    if (!(travel > 0.0f)) return 0.0f;
+    const float u = -x / travel;
+    return u < 0.0f ? 0.0f : u > 1.0f ? 1.0f : u;
+}
+
+// Where the bump zone starts, as u, and the share s of it at u.
+inline float BumpStart(const SpringSet &k, float travel) { return travel > k.zone ? 1.0f - k.zone / travel : 0.0f; }
+inline float BumpShare(const SpringSet &k, float u, float travel)
+{
+    const float u0 = BumpStart(k, travel);
+    if (!k.bump || u <= u0) return 0.0f;
+    const float s = (u - u0) / (1.0f - u0);
+    return s > 1.0f ? 1.0f : s;
+}
+
+// The integral from 0 to u of a ramp from 0 at a to 1 at b (a <= b).
+inline float RampArea(float u, float a, float b)
+{
+    if (u <= a) return 0.0f;
+    if (b <= a) return u - a;
+    if (u <= b) return (u - a) * (u - a) / (2.0f * (b - a));
+    return (b - a) / 2.0f + (u - b);
+}
+
+// The rate at u, and its secant f(u): the factor on the strength.
+inline float SpringRate(const SpringSet &k, float u, float travel)
+{
+    float r = 1.0f;
+    if (k.curve == 1) r += (k.rise - 1.0f) * u * u;
+    if (k.curve == 2)
+    {
+        const float a = k.cross - kSpringBlend / 2.0f, b = k.cross + kSpringBlend / 2.0f;
+        r += (k.rise - 1.0f) * (u <= a ? 0.0f : u >= b ? 1.0f : (u - a) / (b - a));
+    }
+    const float s = BumpShare(k, u, travel);
+    return r + (k.bump ? (k.bumpSpring - 1.0f) * s * s : 0.0f);
+}
+inline float SpringF(const SpringSet &k, float u, float travel)
+{
+    if (u < 1e-4f) return 1.0f;
+    float area = u;
+    if (k.curve == 1) area += (k.rise - 1.0f) * u * u * u / 3.0f;
+    if (k.curve == 2) area += (k.rise - 1.0f) * RampArea(u, k.cross - kSpringBlend / 2.0f, k.cross + kSpringBlend / 2.0f);
+    if (k.bump)
+    {
+        const float u0 = BumpStart(k, travel), s = BumpShare(k, u, travel);
+        area += (k.bumpSpring - 1.0f) * (1.0f - u0) * s * s * s / 3.0f;
+    }
+    return area / u;
+}
+
+// The damping's factor by position, and the bump stops' on compression (v > 0).
+inline float ZoneFactor(const SpringSet &k, float u, float v, float travel)
+{
+    float f = 1.0f;
+    if (k.zones)
+    {
+        // 1 inside the soft part, 0 a blend's width outside it
+        const float h = kZoneBlend / 2.0f;
+        const float in = fminf(fmaxf((u - (k.from - h)) / kZoneBlend, 0.0f), 1.0f) * fminf(fmaxf(((k.to + h) - u) / kZoneBlend, 0.0f), 1.0f);
+        f = k.firm + (k.soft - k.firm) * in;
+    }
+    if (k.bump && v > 0.0f)
+    {
+        const float s = BumpShare(k, u, travel);
+        f *= 1.0f + (k.bumpDamping - 1.0f) * s * s;
+    }
+    return f;
+}
+
 // The factor written for a wheel whose damping is base (stock times DampingScale) at shaft speed v; clamped is set
 // where the clamp held.
 inline float DamperFactor(const DamperSet &d, float base, float v, bool &clamped)
@@ -85,6 +188,10 @@ struct SuspStepBlock
     uint64_t vtable;              // the constraints' class, checked before each write
     uint64_t constraint[kMaxWheels]; // [wheel + 0x28] when the block was made; 0 = the damper leaves this wheel alone
     float base[kMaxWheels];       // the wheel's damping as the tune gives it (stock times DampingScale), never the field's value
+    bool springing;               // the spring's strength is written each step (a curve or the bump stops)
+    SpringSet spring;
+    float baseK[kMaxWheels];      // the wheel's strength as the tune gives it (stock times SpringScale)
+    float attachUp[kMaxWheels], axisUp[kMaxWheels], travel[kMaxWheels]; // for x = (h - attachUp) / axisUp, and L; axisUp 0 = no place
     uint32_t seal;
 };
 
@@ -101,6 +208,11 @@ struct SuspStepWin
     float least[kMaxWheels], most[kMaxWheels];    // the height's range
     int written[kMaxWheels], clamped[kMaxWheels]; // the damper's writes, and of them those the clamp held
     float writtenSum[kMaxWheels];                 // the factors it wrote, summed
+    int springWritten[kMaxWheels];                // the strength's writes, and what they wrote, summed
+    float springSum[kMaxWheels];
+    int inZone[kMaxWheels], pastEnd[kMaxWheels];  // steps in the bump zone, and at or past the compression end
+    bool rested[kMaxWheels];                      // the rest place was taken: x at the window's first standstill
+    float rest[kMaxWheels];
     float bounceAt[kMaxWheels];                   // s into the window where the bounce began
     int bounceSteps[kMaxWheels];
     float bounce[kMaxWheels][kStepBounceMost];    // the height each step from there, in m
@@ -286,12 +398,13 @@ inline void SuspStepAdd(SuspStepState &s, const SuspStepBlock &b, const float *h
 
 // One damping write (review 16, finding 1): right before it, [wheel + 0x28] must still be the block's constraint and
 // its first word the known class, all under __try. 1 written, 0 refused (a mismatch), -1 a fault.
-inline int SuspDamperWrite(uint64_t wheel, uint64_t constraint, uint64_t vtable, float factor)
+inline int SuspDamperWrite(uint64_t wheel, uint64_t constraint, uint64_t vtable, float factor, float strength = -1.0f)
 {
     __try
     {
         if (*(const uint64_t *)(uintptr_t)(wheel + 0x28) != constraint || *(const uint64_t *)(uintptr_t)constraint != vtable) return 0;
-        *(volatile float *)(uintptr_t)(constraint + 0xC8) = factor;
+        if (factor >= 0.0f) *(volatile float *)(uintptr_t)(constraint + 0xC8) = factor;
+        if (strength >= 0.0f) *(volatile float *)(uintptr_t)(constraint + 0xC4) = strength;
         return 1;
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
@@ -300,25 +413,73 @@ inline int SuspDamperWrite(uint64_t wheel, uint64_t constraint, uint64_t vtable,
     }
 }
 
-// The damper's step, after the figures: each wheel the block names, at the speed just worked out. False where a write
-// was refused or faulted: the block is then dropped.
-inline bool SuspDamperStep(SuspStepState &s, const SuspStepBlock &b, bool timed)
+// A wheel's place x along its axis from the step's height, and whether the block knows it.
+inline bool SuspPlace(const SuspStepBlock &b, int i, float h, float &x)
 {
-    if (!b.damping || !timed || !s.have || s.generation != b.generation) return true;
+    if (b.axisUp[i] == 0.0f) return false;
+    x = (h - b.attachUp[i]) / b.axisUp[i];
+    return true;
+}
+
+// The place's figures each step (the bump zone, the compression end, the rest place), with or without a feature on.
+inline void SuspPlaceAdd(SuspStepState &s, const SuspStepBlock &b, const float *h, float speed)
+{
     for (int i = 0; i < b.wheels && i < kMaxWheels; i++)
     {
-        if (!b.constraint[i] || !(b.base[i] > 0.0f)) continue;
+        float x = 0.0f;
+        if (!SuspPlace(b, i, h[i], x) || !(b.travel[i] > 0.0f)) continue;
+        if (-x >= b.travel[i]) s.win.pastEnd[i]++;
+        else if (-x >= b.travel[i] - b.spring.zone) s.win.inZone[i]++;
+        if (!s.win.rested[i] && speed < 0.1f)
+        {
+            s.win.rested[i] = true;
+            s.win.rest[i] = x;
+        }
+    }
+}
+
+// The damper's and the spring's step, after the figures: each wheel the block names, at the speed just worked out and
+// the place just read. False where a write was refused or faulted: the block is then dropped.
+inline bool SuspDamperStep(SuspStepState &s, const SuspStepBlock &b, const float *h, bool timed)
+{
+    if ((!b.damping && !b.springing) || !timed || !s.have || s.generation != b.generation) return true;
+    for (int i = 0; i < b.wheels && i < kMaxWheels; i++)
+    {
+        if (!b.constraint[i]) continue;
+        float x = 0.0f;
+        const bool placed = SuspPlace(b, i, h[i], x) && b.travel[i] > 0.0f;
+        const float u = placed ? SuspDepth(x, b.travel[i]) : 0.0f;
         bool clamped = false;
-        const float f = DamperFactor(b.damper, b.base[i], s.v[i], clamped);
-        const int done = SuspDamperWrite(b.wheel[i], b.constraint[i], b.vtable, f);
+        float f = -1.0f, k = -1.0f;
+        if (b.damping && b.base[i] > 0.0f)
+        {
+            // stock x DampingScale x G(v) x the zone and the bump stop, held once
+            const float zone = placed && ZonesOn(b.spring) ? ZoneFactor(b.spring, u, s.v[i], b.travel[i]) : 1.0f;
+            f = DamperFactor(b.damper, b.base[i] * zone, s.v[i], clamped);
+        }
+        if (b.springing && b.baseK[i] > 0.0f && placed)
+        {
+            const float want = b.baseK[i] * SpringF(b.spring, u, b.travel[i]);
+            k = want < kSpringLeast ? kSpringLeast : want > 1.0f ? 1.0f : want;
+        }
+        if (f < 0.0f && k < 0.0f) continue;
+        const int done = SuspDamperWrite(b.wheel[i], b.constraint[i], b.vtable, f, k);
         if (done <= 0)
         {
             InterlockedIncrement(done < 0 ? &s.faults : &s.refused);
             return false;
         }
-        s.win.written[i]++;
-        s.win.clamped[i] += clamped;
-        s.win.writtenSum[i] += f;
+        if (f >= 0.0f)
+        {
+            s.win.written[i]++;
+            s.win.clamped[i] += clamped;
+            s.win.writtenSum[i] += f;
+        }
+        if (k >= 0.0f)
+        {
+            s.win.springWritten[i]++;
+            s.win.springSum[i] += k;
+        }
     }
     return true;
 }
@@ -339,7 +500,8 @@ inline void SuspStepLook(SuspStepState &s, const SuspStepBlock *published, uint6
     s.serial = b.serial;
     const bool had = s.have && s.generation == b.generation;
     SuspStepAdd(s, b, h, speed, field, dt);
-    if (!SuspDamperStep(s, b, had && dt > 0.0f && dt <= kStepDtMost))
+    if (had) SuspPlaceAdd(s, b, h, speed);
+    if (!SuspDamperStep(s, b, h, had && dt > 0.0f && dt <= kStepDtMost))
     {
         s.faultSerial = b.serial;
         s.have = false;
@@ -347,16 +509,19 @@ inline void SuspStepLook(SuspStepState &s, const SuspStepBlock *published, uint6
 }
 
 // The damper let go (the mod's thread, once the physics thread has stepped past the block that ran it): each wheel's
-// damping as the tune gives it, where the constraint is still the block's and of its class. Returns the wheels
-// written.
+// damping and strength as the tune gives them (stock times DampingScale and SpringScale), where the physics thread
+// wrote them and the constraint is still the block's and of its class. Returns the wheels written.
 inline int SuspDamperLetGo(const SuspStepBlock &b, const TruckMemory &m)
 {
     int back = 0;
     for (int i = 0; i < b.wheels && i < kMaxWheels; i++)
     {
         uint64_t c = 0, vt = 0;
-        if (!b.constraint[i] || !(b.base[i] > 0.0f) || !m.get(b.wheel[i] + 0x28, c) || c != b.constraint[i] || !m.get(c, vt) || vt != b.vtable) continue;
-        back += m.put(c + 0xC8, b.base[i]);
+        if (!b.constraint[i] || !m.get(b.wheel[i] + 0x28, c) || c != b.constraint[i] || !m.get(c, vt) || vt != b.vtable) continue;
+        bool put = false;
+        if (b.damping && b.base[i] > 0.0f) put |= m.put(c + 0xC8, b.base[i]);
+        if (b.springing && b.baseK[i] > 0.0f) put |= m.put(c + 0xC4, b.baseK[i]);
+        back += put;
     }
     return back;
 }

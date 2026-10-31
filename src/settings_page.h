@@ -773,11 +773,13 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     PageLabel("Travel min", labelX);
     ImGui::SetNextItemWidth(w);
     changed(ImGui::SliderFloat("##travelminscale", &s.travelMinScale, kSuspScaleRange[0], kSuspScaleRange[1], "x%.2f", ImGuiSliderFlags_AlwaysClamp));
-    PageTip("A test: one end of each wheel's travel, the truck file's SuspensionMin, as a factor of the truck's own. 1 = the truck's own.");
+    PageTip("A test: how far each wheel can rise into the body, the compression end of its travel (the truck file's SuspensionMin), as a factor of the truck's own. "
+            "1 = the truck's own.");
     PageLabel("Travel max", labelX);
     ImGui::SetNextItemWidth(w);
     changed(ImGui::SliderFloat("##travelmaxscale", &s.travelMaxScale, kSuspScaleRange[0], kSuspScaleRange[1], "x%.2f", ImGuiSliderFlags_AlwaysClamp));
-    PageTip("A test: the other end of each wheel's travel, the truck file's SuspensionMax, as a factor of the truck's own. 1 = the truck's own.");
+    PageTip("A test: how far each wheel can drop, the droop end of its travel (the truck file's SuspensionMax), as a factor of the truck's own. Wheels rarely "
+            "reach it, as the spring lets them hang near their zero. 1 = the truck's own.");
     // the damper (a test, BRIEF_suspension_damper.md): its curve, the four factors and the knee, or a preset of them
     PageLabel("Damper", labelX);
     static const char *const curves[kDamperCurves] = { "Linear", "Digressive", "Progressive" };
@@ -821,6 +823,64 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     ImGui::SetNextItemWidth(w);
     changed(ImGui::SliderFloat("##damperknee", &s.damperKnee, kKneeRange[0], kKneeRange[1], "%.2f m/s", ImGuiSliderFlags_AlwaysClamp));
     PageTip("A test: the wheel's speed where low speed turns into high. Standing and the body's sway stay under 0.1 m/s; rough ground is 0.1 to 1.");
+
+    // the spring's features and the damping by position (a test, BRIEF_suspension_extras.md, build A)
+    PageLabel("Spring curve", labelX);
+    static const char *const springCurves[kSpringCurves] = { "Linear", "Progressive", "Dual rate" };
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::Combo("##springcurve", &s.springCurve, springCurves, kSpringCurves));
+    PageTip("A test: how the spring stiffens as the wheel rises into the body. Linear: as the truck's own. Progressive: stiffer and stiffer toward the end. "
+            "Dual rate: one rate, then a stiffer one from the crossover on. Near rest it feels the same; deep in the travel it is firmer.");
+    ImGui::BeginDisabled(s.springCurve == 0);
+    PageLabel("Stiffest", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::SliderFloat("##springrise", &s.springRise, kSpringRiseRange[0], kSpringRiseRange[1], "x%.2f", ImGuiSliderFlags_AlwaysClamp));
+    PageTip("A test: the spring's rate at the end of the travel, as a factor of the truck's own.");
+    ImGui::EndDisabled();
+    ImGui::BeginDisabled(s.springCurve != 2);
+    PageLabel("Crossover", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::SliderFloat("##springcross", &s.springCross, kSpringCrossRange[0], kSpringCrossRange[1], "%.2f", ImGuiSliderFlags_AlwaysClamp));
+    PageTip("A test: dual rate's crossover, as a share of the travel into the body.");
+    ImGui::EndDisabled();
+    PageLabel("Bump stops", labelX);
+    changed(ImGui::Checkbox("##bumpstops", &s.bumpStops));
+    PageTip("A test: a stop that takes the last part of each wheel's travel, so a big hit ends in a cushion instead of the hard limit.");
+    ImGui::BeginDisabled(!s.bumpStops);
+    PageLabel("Stop length", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::SliderFloat("##bumpzone", &s.bumpZone, kBumpZoneRange[0], kBumpZoneRange[1], "%.2f m", ImGuiSliderFlags_AlwaysClamp));
+    PageTip("A test: how much of the travel before the end the stop takes.");
+    PageLabel("Stop spring", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::SliderFloat("##bumpspring", &s.bumpSpring, kBumpSpringRange[0], kBumpSpringRange[1], "x%.1f", ImGuiSliderFlags_AlwaysClamp));
+    PageTip("A test: the stop's spring rate at the end, as a factor of the truck's own.");
+    PageLabel("Stop damping", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::SliderFloat("##bumpdamping", &s.bumpDamping, kBumpDampingRange[0], kBumpDampingRange[1], "x%.1f", ImGuiSliderFlags_AlwaysClamp));
+    PageTip("A test: the damping as the wheel rises into the stop, at its end. The rebound is left as it is.");
+    ImGui::EndDisabled();
+    PageLabel("Damping zones", labelX);
+    changed(ImGui::Checkbox("##dampingzones", &s.dampingZones));
+    PageTip("A test: softer damping in the middle of the travel for small bumps, firmer toward both ends for the big ones, like a bypass shock.");
+    ImGui::BeginDisabled(!s.dampingZones);
+    PageLabel("Middle", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::SliderFloat("##zonesoft", &s.zoneSoft, kZoneSoftRange[0], kZoneSoftRange[1], "x%.2f", ImGuiSliderFlags_AlwaysClamp));
+    PageTip("A test: the damping in the soft middle, as a factor.");
+    PageLabel("Ends", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::SliderFloat("##zonefirm", &s.zoneFirm, kZoneFirmRange[0], kZoneFirmRange[1], "x%.2f", ImGuiSliderFlags_AlwaysClamp));
+    PageTip("A test: the damping toward the ends of the travel, as a factor.");
+    PageLabel("Middle from", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::SliderFloat("##zonefrom", &s.zoneFrom, 0.0f, s.zoneTo - 0.05f, "%.2f", ImGuiSliderFlags_AlwaysClamp));
+    PageTip("A test: where the soft middle begins, as a share of the travel into the body.");
+    PageLabel("Middle to", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::SliderFloat("##zoneto", &s.zoneTo, s.zoneFrom + 0.05f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp));
+    PageTip("A test: where the soft middle ends.");
+    ImGui::EndDisabled();
 
     ImGui::SeparatorText("Sounds");
     PageLabel("Volume", labelX);

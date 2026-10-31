@@ -514,6 +514,18 @@ static void WriteIni(const GaugeSettings &s)
     num(L"LowRebound", s.lowRebound);
     num(L"HighRebound", s.highRebound);
     num(L"DamperKnee", s.damperKnee);
+    whole(L"BumpStops", s.bumpStops ? 1 : 0);
+    num(L"BumpZone", s.bumpZone);
+    num(L"BumpSpring", s.bumpSpring);
+    num(L"BumpDamping", s.bumpDamping);
+    whole(L"SpringCurve", s.springCurve);
+    num(L"SpringRise", s.springRise);
+    num(L"SpringCross", s.springCross);
+    whole(L"DampingZones", s.dampingZones ? 1 : 0);
+    num(L"ZoneSoft", s.zoneSoft);
+    num(L"ZoneFirm", s.zoneFirm);
+    num(L"ZoneFrom", s.zoneFrom);
+    num(L"ZoneTo", s.zoneTo);
     whole(L"ToggleKey", s.toggleKey);
     WritePrivateProfileStringW(kIniSection, L"PadToggle", Wide(s.padToggle).c_str(), ini.c_str());
     whole(L"SoundVolume", s.soundVolume);
@@ -803,6 +815,9 @@ static void ReadIni(GaugeSettings &s)
                         L"; SuspensionMin and SuspensionMax) as a factor of the truck's own, 0.5 to 2 (1 = the truck's own).\n"
                         L"; DamperCurve 0 linear, 1 digressive, 2 progressive; LowCompression, HighCompression, LowRebound, HighRebound: the damping\n"
                         L"; under and over DamperKnee (m/s, 0.02 to 0.5), rising and falling, 0.25 to 4 (a test; 1 and linear = the truck's own).\n"
+                        L"; BumpStops=1: spring (BumpSpring, 1 to 8) and damping (BumpDamping, 1 to 4) rising over the last BumpZone m (0.03 to 0.2) of the\n"
+                        L"; travel. SpringCurve 0 linear, 1 progressive, 2 dual rate (SpringRise 1 to 3, SpringCross 0.2 to 0.8). DampingZones=1: ZoneSoft (0.5 to 1)\n"
+                        L"; from ZoneFrom to ZoneTo (shares of the travel), ZoneFirm (1 to 3) toward the ends. All tests, off by default.\n"
                         L"; SoundVolume (0 to 100) is how loud the turbo is heard when the pedal comes up quickly under boost: it flutters,\n"
                         L"; longer and louder the more boost there was, until the pedal goes down again. The oil warning goes by it too.\n"
                         L"; 0 = no sound. SoundsOnly=1 plays the sounds and draws no cluster.\n"
@@ -920,6 +935,18 @@ static void ReadIni(GaugeSettings &s)
     s.lowRebound = IniFloat(L"LowRebound", s.lowRebound, ini);
     s.highRebound = IniFloat(L"HighRebound", s.highRebound, ini);
     s.damperKnee = IniFloat(L"DamperKnee", s.damperKnee, ini);
+    s.bumpStops = IniInt(L"BumpStops", s.bumpStops ? 1 : 0, ini) != 0;
+    s.bumpZone = IniFloat(L"BumpZone", s.bumpZone, ini);
+    s.bumpSpring = IniFloat(L"BumpSpring", s.bumpSpring, ini);
+    s.bumpDamping = IniFloat(L"BumpDamping", s.bumpDamping, ini);
+    s.springCurve = IniInt(L"SpringCurve", s.springCurve, ini);
+    s.springRise = IniFloat(L"SpringRise", s.springRise, ini);
+    s.springCross = IniFloat(L"SpringCross", s.springCross, ini);
+    s.dampingZones = IniInt(L"DampingZones", s.dampingZones ? 1 : 0, ini) != 0;
+    s.zoneSoft = IniFloat(L"ZoneSoft", s.zoneSoft, ini);
+    s.zoneFirm = IniFloat(L"ZoneFirm", s.zoneFirm, ini);
+    s.zoneFrom = IniFloat(L"ZoneFrom", s.zoneFrom, ini);
+    s.zoneTo = IniFloat(L"ZoneTo", s.zoneTo, ini);
     s.suspStepTest = IniInt(L"SuspStepTest", s.suspStepTest, ini); // a test: read, never written
     s.toggleKey = IniInt(L"ToggleKey", s.toggleKey, ini);
     wchar_t buf[64] = {};
@@ -2098,11 +2125,11 @@ static void GearboxHooksStep(const GaugeSettings &s)
 // Creep off it gives no share (TruckPass hands it none); without Probe=1 or the damper the step probe has no block and
 // reads nothing. With all three off it is never attached, so the game's drive runs as it is.
 static void SuspStepHook(uint64_t action, float dt);
-static DamperSet DamperFrom(const GaugeSettings &s);
+static bool SuspFeaturesOn(const GaugeSettings &s);
 static void CreepHookStep(const GaugeSettings &s, bool driving)
 {
     static bool tried = false;
-    const bool damper = DamperOn(DamperFrom(s));
+    const bool damper = SuspFeaturesOn(s);
     if (tried || (!s.creep && !s.probe && !damper) || !driving || !g_drive.drive) return;
     tried = true;
     DriveStepSet(SuspStepHook);
@@ -2247,8 +2274,9 @@ struct SuspStepWatch
     ULONGLONG bodiesAt;         // when the bodies not found are looked for again
     LONG windows, tail, faults, refused; // the windows, the ring's entries, the faults and the refused writes taken so far
     uint64_t testVehicle;       // the truck SuspStepTest runs on: another one waits kStepTestEvery before its first write
-    bool damping;               // the damper's state the generation began with, and its settings
+    bool damping;               // whether the physics thread wrote on the generation, and its settings
     DamperSet damper;
+    SpringSet spring;
     uint64_t limitVehicle;      // the truck the clamp's note was told for, and the presets it was told for (bit preset + 1)
     unsigned limitTold;
     int test;                   // SuspStepTest as it runs
@@ -2572,10 +2600,11 @@ static void SuspProbeStep(SuspProbe &p, const TruckMemory &m, const TruckRefs &r
 // counted, and each wheel's values are logged once when the sliders stand still again. A wheel written kSuspWritesBack
 // times with the sliders still is one the game keeps putting back, said once.
 static const int kSuspWritesTold = 2, kSuspWritesBack = 20;
-static void SuspTunePass(SuspTune &t, const TruckMemory &m, const TruckRefs &r, const GaugeSettings &s, const SuspTuneTest *test, const bool *damperOwns)
+static void SuspTunePass(SuspTune &t, const TruckMemory &m, const TruckRefs &r, const GaugeSettings &s, const SuspTuneTest *test, const bool *damperOwns,
+                         const bool *springOwns)
 {
     const float scale[kSuspValues] = { s.springScale, s.dampingScale, s.travelMinScale, s.travelMaxScale };
-    bool tuned = test != nullptr || DamperOn(DamperFrom(s)); // the damper takes each wheel's damping stock from the tune
+    bool tuned = test != nullptr || SuspFeaturesOn(s); // the physics thread takes each wheel's stock from the tune
     for (float f : scale) tuned |= f != 1.0f;
     if (!tuned && t.vehicle != r.vehicle)
     {
@@ -2586,7 +2615,7 @@ static void SuspTunePass(SuspTune &t, const TruckMemory &m, const TruckRefs &r, 
         return;
     }
     int restored = 0;
-    SuspTuneStep(t, m, r, SuspVtable(), scale, &restored, test, damperOwns);
+    SuspTuneStep(t, m, r, SuspVtable(), scale, &restored, test, damperOwns, springOwns);
     if (restored) Log(L"suspension: the truck driven before: %d values put back to its stock", restored);
     for (int i = 0; i < r.wheels && i < kMaxWheels; i++)
     {
@@ -2662,6 +2691,7 @@ static SuspStepTraceEntry g_stepHistory[kStepHistory];
 static int g_stepHistoryCount = 0;
 static const ULONGLONG kStepTestEvery = 20000;
 static const wchar_t *const kDamperCurveNames[kDamperCurves] = { L"linear", L"digressive", L"progressive" };
+static const wchar_t *const kSpringCurveNames[kSpringCurves] = { L"linear springs", L"progressive springs", L"dual rate springs" };
 // A generation's damper in words: "Trail", "custom" or "off".
 static const char *DamperName(bool damping, int preset) { return !damping ? "the damper off" : preset >= 0 ? kDamperPresets[preset].name : "custom"; }
 static const float kStepTestFactor[3] = { 1.0f, 0.5f, 0.1f };
@@ -2877,10 +2907,16 @@ static void SuspStepWindowLog(SuspStepWatch &p, const SuspStepWin &w)
             const float a = (w.least[i] - f->attachUp[i]) / f->axisUp[i], b = (w.most[i] - f->attachUp[i]) / f->axisUp[i];
             least = fminf(a, b), most = fmaxf(a, b);
         }
-        char damped[128] = "";
+        char damped[320] = "";
+        int put = 0;
         if (w.written[i])
-            _snprintf_s(damped, sizeof damped, _TRUNCATE, "; the damper wrote %d steps, %.4f on the mean, the clamp holding %.1f %%", w.written[i],
-                        w.writtenSum[i] / w.written[i], 100.0f * w.clamped[i] / w.written[i]);
+            put += _snprintf_s(damped + put, sizeof damped - put, _TRUNCATE, "; the damper wrote %d steps, %.4f on the mean, the clamp holding %.1f %%", w.written[i],
+                               w.writtenSum[i] / w.written[i], 100.0f * w.clamped[i] / w.written[i]);
+        if (w.springWritten[i] && put >= 0)
+            put += _snprintf_s(damped + put, sizeof damped - put, _TRUNCATE, "; the spring wrote %d steps, %.4f on the mean", w.springWritten[i], w.springSum[i] / w.springWritten[i]);
+        if (put >= 0)
+            put += _snprintf_s(damped + put, sizeof damped - put, _TRUNCATE, "; %d steps in the bump zone, %d at the compression end", w.inZone[i], w.pastEnd[i]);
+        if (w.rested[i] && put >= 0) _snprintf_s(damped + put, sizeof damped - put, _TRUNCATE, "; at rest at %.3f along the axis", w.rest[i]);
         Log(L"probe: step: wheel %d, %.1f s of generation %u (%S): %.1f steps a second, dt %.4f to %.4f s; %d of %d steps over 1 m/s repeat the height (%.1f %%); "
             L"compression %S; rebound %S (m/s: steps); height %.4f to %.4f, along its axis %.3f to %.3f against the limits %g to %g%S%s",
             i, w.seconds, w.generation, f ? DamperName(f->damping, f->preset) : "?", w.seconds > 0.0f ? w.steps / w.seconds : 0.0f, w.dtLeast, w.dtMost, w.repeats[i], w.moving[i],
@@ -2915,13 +2951,27 @@ static DamperSet DamperFrom(const GaugeSettings &s)
     return DamperSet{ s.damperCurve, { s.lowCompression, s.lowRebound }, { s.highCompression, s.highRebound }, s.damperKnee };
 }
 
+// The spring's features and the damping by position (BRIEF_suspension_extras.md, build A), the same way.
+static SpringSet SpringFrom(const GaugeSettings &s)
+{
+    return SpringSet{ s.springCurve, s.springRise, s.springCross, s.bumpStops, s.bumpZone, s.bumpSpring, s.bumpDamping,
+                      s.dampingZones, s.zoneSoft, s.zoneFirm, s.zoneFrom, s.zoneTo };
+}
+
+// Anything the physics thread writes each step: the damper off its defaults, a spring feature, the zones.
+static bool SuspFeaturesOn(const GaugeSettings &s)
+{
+    const SpringSet k = SpringFrom(s);
+    return DamperOn(DamperFrom(s)) || SpringOn(k) || ZonesOn(k);
+}
+
 // The damper let go, in the order the brief sets (its part 2, the addendum's item 5): the block dropped, the physics
 // thread's drive called twice more (any truck; 100 ms at most, as a paused game steps nothing), then each wheel's
-// damping as the tune gives it written back once. The tune's pass then sees its own value again, and on a truck
-// switch puts the stock back after it (review 15). why: for the log.
+// damping and strength as the tune gives them written back once. The tune's pass then sees its own values again, and
+// on a truck switch puts the stock back after it (review 15). why: for the log.
 static void SuspDamperRelease(SuspStepWatch &p, const TruckMemory &m, const wchar_t *why)
 {
-    if (!p.block.serial || !p.block.damping) return;
+    if (!p.block.serial || (!p.block.damping && !p.block.springing)) return;
     const SuspStepBlock was = p.block;
     InterlockedExchangePointer((void *volatile *)&g_stepBlock, nullptr);
     p.block = SuspStepBlock{};
@@ -2934,20 +2984,26 @@ static void SuspDamperRelease(SuspStepWatch &p, const TruckMemory &m, const wcha
         Sleep(1);
     }
     const int back = SuspDamperLetGo(was, m);
-    Log(L"damper: let go (%s): %d wheels' damping back to the truck's own times DampingScale", why, back);
+    Log(L"damper: let go (%s): %d wheels' damping and spring back to the truck's own times DampingScale and SpringScale", why, back);
 }
 
-// Before the tune's pass: the damper let go where it should stop (its settings back at the defaults, no truck, another
-// truck), and the wheels it owns now, which the tune leaves alone.
-static void SuspDamperBefore(SuspStepWatch &p, const TruckMemory &m, const TruckRefs &r, const GaugeSettings &s, bool found, bool *owns)
+// Before the tune's pass: the physics thread let go where it should stop (every feature back at its default, no truck,
+// another truck), and the fields it owns now on each wheel, the damping (owns) and the strength (springs), which the
+// tune leaves alone.
+static void SuspDamperBefore(SuspStepWatch &p, const TruckMemory &m, const TruckRefs &r, const GaugeSettings &s, bool found, bool *owns, bool *springs)
 {
-    if (p.block.damping)
+    if (p.block.damping || p.block.springing)
     {
         if (!found) SuspDamperRelease(p, m, L"no truck driven");
         else if (r.vehicle != p.vehicle) SuspDamperRelease(p, m, L"another truck driven");
-        else if (!DamperOn(DamperFrom(s))) SuspDamperRelease(p, m, L"its settings back at the truck's own");
+        else if (!SuspFeaturesOn(s)) SuspDamperRelease(p, m, L"its settings back at the truck's own");
     }
-    for (int i = 0; i < kMaxWheels; i++) owns[i] = p.block.damping && i < r.wheels && p.block.constraint[i] != 0 && p.block.wheel[i] == r.wheel[i];
+    for (int i = 0; i < kMaxWheels; i++)
+    {
+        const bool named = i < r.wheels && p.block.constraint[i] != 0 && p.block.wheel[i] == r.wheel[i];
+        owns[i] = named && p.block.damping;
+        springs[i] = named && p.block.springing && p.block.baseK[i] > 0.0f;
+    }
 }
 
 // The block for the driven truck (with Probe=1 or the damper on, and a truck), its generation, the windows logged and
@@ -2956,8 +3012,9 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
                              ULONGLONG now)
 {
     const DamperSet damper = DamperFrom(s);
-    const bool damping = DamperOn(damper) && SuspVtable();
-    if ((!s.probe && !damping) || !found)
+    const SpringSet spring = SpringFrom(s);
+    const bool damping = (DamperOn(damper) || ZonesOn(spring)) && SuspVtable(), springing = SpringOn(spring) && SuspVtable();
+    if ((!s.probe && !damping && !springing) || !found)
     {
         SuspDamperRelease(p, m, found ? L"the damper off" : L"no truck driven");
         if (p.block.serial)
@@ -2973,7 +3030,8 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
     const float jump[3] = { t.position[0] - p.position[0], t.position[1] - p.position[1], t.position[2] - p.position[2] };
     bool missing = false;
     for (int i = 0; i < r.wheels && i < kMaxWheels; i++) missing |= p.frame.other[i];
-    const bool damperChanged = damping != p.damping || (damping && memcmp(&damper, &p.damper, sizeof damper) != 0);
+    const bool running = damping || springing;
+    const bool damperChanged = running != p.damping || (running && (memcmp(&damper, &p.damper, sizeof damper) != 0 || memcmp(&spring, &p.spring, sizeof spring) != 0));
     const wchar_t *why = !p.block.serial ? L"a start"
                          : r.vehicle != p.vehicle || r.wheels != p.wheels  ? L"a truck switch"
                          : memcmp(scale, p.scale, sizeof scale)         ? L"a slider move"
@@ -3020,18 +3078,26 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
                 m.get(constraint[i] + kSuspValueAt[kSuspMax], p.frame.high[i]);
             }
             p.frame.generation = p.generation;
-            p.frame.damping = damping;
-            p.frame.preset = damping ? DamperPresetOf(s) : -1;
+            p.frame.damping = running;
+            p.frame.preset = running ? DamperPresetOf(s) : -1;
             if (damperChanged || !wcscmp(why, L"a start"))
             {
-                if (damping)
+                if (running)
+                {
                     Log(L"damper: %S (%s, compression x%g and x%g, rebound x%g and x%g, the knee %g m/s) for the wheels whose body is known", DamperName(true, p.frame.preset),
                         kDamperCurveNames[damper.curve], damper.low[0], damper.high[0], damper.low[1], damper.high[1], damper.knee);
+                    Log(L"spring: %s%s%s", kSpringCurveNames[spring.curve], spring.bump ? L", bump stops" : L"", spring.zones ? L", damping zones" : L"");
+                    if (spring.curve) Log(L"spring: the rate x%g at the compression end%s", spring.rise, spring.curve == 2 ? L", from the crossover on" : L"");
+                    if (spring.curve == 2) Log(L"spring: the crossover at %g of the travel", spring.cross);
+                    if (spring.bump) Log(L"spring: bump stops over the last %g m, the rate x%g and the compression damping x%g at the end", spring.zone, spring.bumpSpring, spring.bumpDamping);
+                    if (spring.zones) Log(L"spring: the damping x%g from %g to %g of the travel, x%g toward its ends", spring.soft, spring.from, spring.to, spring.firm);
+                }
                 else if (p.damping) Log(L"damper: off");
             }
-            p.damping = damping;
+            p.damping = running;
             p.damper = damper;
-            Log(L"probe: step: generation %u (%s), %d wheels, %S", p.generation, why, r.wheels, DamperName(damping, p.frame.preset));
+            p.spring = spring;
+            Log(L"probe: step: generation %u (%s), %d wheels, %S", p.generation, why, r.wheels, DamperName(running, p.frame.preset));
         }
     }
     b.generation = p.generation;
@@ -3043,20 +3109,32 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
     // the damper: each wheel whose body is known, at its damping as the tune gives it (stock times DampingScale)
     b.damping = damping;
     b.damper = damping ? damper : DamperSet{};
-    b.vtable = damping ? SuspVtable() : 0;
+    b.springing = springing;
+    b.spring = spring;
+    b.vtable = running ? SuspVtable() : 0;
     for (int i = 0; i < kMaxWheels; i++)
     {
         b.constraint[i] = 0;
-        b.base[i] = 0.0f;
+        b.base[i] = b.baseK[i] = 0.0f;
+        // the place along the axis, for the figures and the features: this generation's frame
+        const bool placed = i < b.wheels && !p.frame.other[i] && p.frame.axisUp[i] != 0.0f;
+        b.attachUp[i] = placed ? p.frame.attachUp[i] : 0.0f;
+        b.axisUp[i] = placed ? p.frame.axisUp[i] : 0.0f;
+        b.travel[i] = placed && p.frame.low[i] < 0.0f ? -p.frame.low[i] : 0.0f;
         const SuspWheel &w = tune.wheel[i];
-        if (!damping || i >= b.wheels || p.frame.other[i] || !constraint[i] || w.constraint != constraint[i] || !SuspValueSane(kSuspDamping, w.stock[kSuspDamping]))
-            continue;
+        if (!running || i >= b.wheels || p.frame.other[i] || !constraint[i] || w.constraint != constraint[i]) continue;
+        const bool damped = damping && SuspValueSane(kSuspDamping, w.stock[kSuspDamping]);
+        const bool sprung = springing && SuspValueSane(kSuspStrength, w.stock[kSuspStrength]) && b.travel[i] > 0.0f;
+        if (!damped && !sprung) continue;
         b.constraint[i] = constraint[i];
-        b.base[i] = fminf(1.0f, w.stock[kSuspDamping] * s.dampingScale);
+        if (damped) b.base[i] = fminf(1.0f, w.stock[kSuspDamping] * s.dampingScale);
+        if (sprung) b.baseK[i] = fminf(1.0f, w.stock[kSuspStrength] * s.springScale);
     }
-    // a wheel the damper stops owning gets its damping back before the new block runs without it
+    // a wheel the physics thread stops owning gets its values back before the new block runs without it
     bool dropped = false;
-    for (int i = 0; i < kMaxWheels; i++) dropped |= p.block.damping && p.block.constraint[i] && p.block.constraint[i] != b.constraint[i];
+    for (int i = 0; i < kMaxWheels; i++)
+        dropped |= p.block.constraint[i] && (p.block.constraint[i] != b.constraint[i] || (p.block.base[i] > 0.0f && !(b.base[i] > 0.0f)) ||
+                                             (p.block.baseK[i] > 0.0f && !(b.baseK[i] > 0.0f)));
     if (dropped) SuspDamperRelease(p, m, L"a wheel left to the tune");
     SuspStepBlock was = p.block;
     b.serial = b.seal = was.serial = was.seal = 0;
@@ -3140,11 +3218,11 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         else Log(L"truck: none is driven now");
     }
     if (probe && w.found) SuspProbeStep(w.susp, m, w.refs, now);
-    bool damperOwns[kMaxWheels];
-    SuspDamperBefore(w.step, m, w.refs, s, w.found, damperOwns);
+    bool damperOwns[kMaxWheels], springOwns[kMaxWheels];
+    SuspDamperBefore(w.step, m, w.refs, s, w.found, damperOwns, springOwns);
     SuspTuneTest stepTestNow;
     const SuspTuneTest *stepTest = w.found ? SuspStepTestPass(w.step, m, w.refs, raw, s, now, stepTestNow) : nullptr;
-    if (w.found) SuspTunePass(w.tune, m, w.refs, s, stepTest, damperOwns);
+    if (w.found) SuspTunePass(w.tune, m, w.refs, s, stepTest, damperOwns, springOwns);
     if (w.found && w.step.on && w.step.value < 0.0f && w.refs.wheels > 0)
     {
         // the test's value as written, which the steps' trace looks for
@@ -4756,7 +4834,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 106, "ini: the help text survives a write (106 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 109, "ini: the help text survives a write (109 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());
