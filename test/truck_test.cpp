@@ -1913,6 +1913,210 @@ int main()
               "counted as the game putting values back; the test over, the stock again");
     }
 
+    // the damper's curve G(v) (suspension_step.h): the defaults give 1 at every speed and do not run; it is continuous at
+    // the knee; above it digressive is under linear and progressive over it; the sign picks compression or rebound;
+    // the factor written is held to 0.01 to 1
+    {
+        const DamperSet plain = { 0, { 1.0f, 1.0f }, { 1.0f, 1.0f }, 0.1f };
+        bool ones = !DamperOn(plain);
+        for (float v = -3.0f; v <= 3.0f; v += 0.01f) ones &= Near(DamperG(plain, v), 1.0f);
+        DamperSet kneeOnly = plain;
+        kneeOnly.knee = 0.3f;
+        ones &= !DamperOn(kneeOnly);
+        bool continuous = true, order = true;
+        for (int curve = 0; curve < 3; curve++)
+            for (float knee : { 0.02f, 0.1f, 0.5f })
+            {
+                const DamperSet d = { curve, { 0.6f, 1.4f }, { 0.8f, 1.0f }, knee };
+                continuous &= fabsf(DamperG(d, knee * 1.0001f) - DamperG(d, knee * 0.9999f)) < 0.002f && fabsf(DamperG(d, -knee * 1.0001f) - DamperG(d, -knee * 0.9999f)) < 0.002f;
+            }
+        const DamperSet linear = { 0, { 1.0f, 1.0f }, { 1.0f, 1.0f }, 0.1f }, digressive = { 1, { 1.0f, 1.0f }, { 1.0f, 1.0f }, 0.1f },
+                        progressive = { 2, { 1.0f, 1.0f }, { 1.0f, 1.0f }, 0.1f };
+        for (float v : { 0.2f, 0.5f, 1.0f, 2.0f, -0.5f })
+            order &= DamperG(digressive, v) < DamperG(linear, v) && DamperG(progressive, v) > DamperG(linear, v);
+        order &= DamperG(digressive, 0.05f) == 1.0f && DamperG(progressive, 0.05f) == 1.0f && DamperOn(digressive);
+        const DamperSet sides = { 0, { 2.0f, 0.5f }, { 3.0f, 0.25f }, 0.1f };
+        const bool sign = DamperG(sides, 0.05f) == 2.0f && DamperG(sides, -0.05f) == 0.5f && Near(DamperG(sides, 0.2f), 2.5f) && Near(DamperG(sides, -0.2f), 0.375f) &&
+                          DamperG(sides, 0.001f) == 2.0f && DamperG(sides, -0.001f) == 0.5f;
+        bool high = false, low = false;
+        const bool clamp = DamperFactor(sides, 0.9f, 0.05f, high) == 1.0f && high && DamperFactor(sides, 0.01f, -0.05f, low) == 0.01f && low &&
+                           Near(DamperFactor(sides, 0.2f, 0.05f, high), 0.4f) && !high;
+        Check(ones && continuous && order && sign && clamp, "damper curve: the defaults give 1 at every speed and do not run (the knee alone changes nothing); continuous at the knee; "
+                                                            "digressive under linear and progressive over it above the knee; the sign picks compression or rebound; the clamp holds");
+    }
+
+    // a quarter car at the game's figures (the addendum's item 8): 60 steps a second, the stock damping a ratio of 0.55
+    // at 1.6 Hz, Havok's damper implicit and its factor written one step late from the step before's speed. From a step
+    // of the ground each preset, and each factor alone and all four together at 0.25 and at 4 on each curve, settles
+    // without growing
+    {
+        struct Case { DamperSet d; const char *name; };
+        std::vector<Case> cases = { { { 0, { 1.0f, 1.0f }, { 1.0f, 1.0f }, 0.1f }, "Stock" }, { { 1, { 0.8f, 1.4f }, { 0.6f, 1.0f }, 0.1f }, "Trail" },
+                                    { { 2, { 0.6f, 0.9f }, { 0.8f, 0.7f }, 0.08f }, "Rock crawl" }, { { 1, { 1.4f, 1.8f }, { 0.8f, 1.0f }, 0.1f }, "Road" } };
+        for (int curve = 0; curve < 3; curve++)
+            for (float f : { 0.25f, 4.0f })
+            {
+                for (int which = 0; which < 5; which++)
+                {
+                    DamperSet d = { curve, { 1.0f, 1.0f }, { 1.0f, 1.0f }, 0.1f };
+                    float *factor[4] = { &d.low[0], &d.high[0], &d.low[1], &d.high[1] };
+                    for (int k = 0; k < 4; k++)
+                        if (which == 4 || which == k) *factor[k] = f;
+                    cases.push_back({ d, "a factor" });
+                }
+            }
+        const double dt = 1.0 / 60.0, omega = 2.0 * 3.14159265 * 1.6, k = omega * omega, cStock = 2.0 * 0.55 * omega, base = 0.3, ground = 0.05;
+        bool all = true;
+        for (const Case &c : cases)
+        {
+            double y = 0.0, vy = 0.0, field = base, last = 0.0, peak = 1e9;
+            bool settled = true, grows = false, rising = false;
+            float lastV = 0.0f;
+            for (int n = 0; n < 600; n++)
+            {
+                const double ce = cStock * field / base;
+                vy = (vy + dt * k * (ground - y)) / (1.0 + dt * ce);
+                y += dt * vy;
+                // the damper writes for the next step from this step's shaft speed (compression positive: the body falling
+                // towards the ground)
+                const float v = (float)-vy;
+                bool clamped = false;
+                field = DamperFactor(c.d, (float)base, lastV, clamped);
+                lastV = v;
+                const double e = fabs(y - ground);
+                if (e > last) rising = true;
+                else if (rising)
+                {
+                    // a peak of the error: never above the one before
+                    if (last > peak * 1.001 + 1e-6) grows = true;
+                    peak = last;
+                    rising = false;
+                }
+                last = e;
+                if (n >= 480 && e > 0.001) settled = false;
+            }
+            if (!settled || grows)
+            {
+                all = false;
+                printf("     %s (curve %d, compression x%g x%g, rebound x%g x%g): %s\n", c.name, c.d.curve, c.d.low[0], c.d.high[0], c.d.low[1], c.d.high[1], grows ? "grows" : "not settled");
+            }
+        }
+        Check(all, "damper quarter car: at 60 steps a second, a damping ratio of 0.55 at 1.6 Hz and the factor written a step late, each preset and each factor at 0.25 and 4 "
+                   "(alone and all four, every curve) settles from a step of the ground without growing");
+    }
+
+    // the damper on the physics thread (in this process's memory): each step it writes the wheel's damping as the tune
+    // gives it times G of the speed just read; right before, [wheel + 0x28] must still be the block's constraint and of
+    // its class (review 16, finding 1): on a mismatch nothing is written and the block is dropped
+    {
+        static SuspStepState s;
+        memset(&s, 0, sizeof s);
+        static uint64_t wheel[0x200 / 8], constraint[0x100 / 8], other[0x100 / 8];
+        static float body[0x300 / 4];
+        memset(wheel, 0, sizeof wheel);
+        memset(constraint, 0, sizeof constraint);
+        memset(body, 0, sizeof body);
+        const uint64_t vtable = 0x140000000ull + 0x23d9538;
+        constraint[0] = other[0] = vtable;
+        const float up[3] = { 0.0f, 1.0f, 0.0f }, base = 0.28f;
+        memcpy((uint8_t *)body + 0x180, up, sizeof up);
+        wheel[0x28 / 8] = (uint64_t)(uintptr_t)constraint;
+        float *field = (float *)((uint8_t *)constraint + 0xC8), *height = (float *)((uint8_t *)wheel + 0x13C + 4);
+        *field = base;
+        SuspStepBlock b = {};
+        b.action = 0x7777;
+        b.chassis = b.body[0] = (uint64_t)(uintptr_t)body;
+        b.wheel[0] = (uint64_t)(uintptr_t)wheel;
+        b.wheels = 1;
+        b.generation = 1;
+        b.damping = true;
+        b.damper = DamperSet{ 0, { 2.0f, 0.5f }, { 2.0f, 0.5f }, 0.1f };
+        b.vtable = vtable;
+        b.constraint[0] = (uint64_t)(uintptr_t)constraint;
+        b.base[0] = base;
+        static SuspStepBlock slots[2];
+        static SuspStepBlock *volatile slot = nullptr;
+        int next = 0;
+        uint32_t serial = 0;
+        SuspStepPublish(slots, next, &slot, b, serial);
+        const float step = 1.0f / 64.0f;
+        *height = 0.0f;
+        SuspStepLook(s, slot, 0x7777, step);                // the first step: no speed yet, nothing written
+        const bool first = *field == base;
+        *height = 0.03125f;                                  // rising 2 m/s: compression, over the knee
+        SuspStepLook(s, slot, 0x7777, step);
+        const bool rising = Near(*field, fminf(1.0f, base * DamperG(b.damper, 2.0f))) && s.win.written[0] == 1;
+        *height = 0.03125f - 0.0009765625f;                  // falling 0.0625 m/s: rebound, under the knee
+        SuspStepLook(s, slot, 0x7777, step);
+        const bool falling = Near(*field, base * 0.5f) && s.win.written[0] == 2;
+        wheel[0x28 / 8] = (uint64_t)(uintptr_t)other;        // the game rebuilt the wheel's constraint
+        *field = 0.123f;
+        *height = 0.0f;
+        SuspStepLook(s, slot, 0x7777, step);
+        const bool refused = *field == 0.123f && other[0xC8 / 8] == 0 && s.refused == 1 && !s.have;
+        SuspStepLook(s, slot, 0x7777, step);
+        const bool dropped = s.refused == 1 && s.win.written[0] == 2;
+        Check(first && rising && falling && refused && dropped, "damper step: nothing on the first step, then the tune's damping times G of the speed just read, compression and "
+                                                                "rebound; a wheel whose constraint changed is not written and the block is dropped");
+    }
+
+    // who owns the damping (BRIEF_suspension_damper.md, part 2): with the damper on a wheel the tune keeps its damping stock
+    // however the field changes; the damper let go writes stock times DampingScale back, which the tune takes as its own;
+    // on a change of truck, let go first and the tune then puts the stock back; let go skips a rebuilt constraint
+    {
+        const uint64_t vtable = kExe + 0x23d9538, wheelA = 0x10490000, wheelB = 0x104A0000, a = 0x104B0000, bc = 0x104C0000, rebuilt = 0x104D0000;
+        for (uint64_t at : { wheelA, wheelB, a, bc, rebuilt }) Block(at, 0x200);
+        Put(wheelA + 0x28, a);
+        Put(wheelB + 0x28, bc);
+        for (uint64_t c : { a, bc, rebuilt })
+        {
+            Put(c, vtable);
+            Put(c + 0xC4, 0.026f);
+            Put(c + 0xC8, 0.4f);
+            Put(c + 0xB4, -0.6f);
+            Put(c + 0xB8, 0.4f);
+        }
+        TruckRefs truckA = {}, truckB = {};
+        truckA.vehicle = kVehicle;
+        truckA.wheel[0] = wheelA;
+        truckA.wheels = 1;
+        truckB.vehicle = kOtherVehicle;
+        truckB.wheel[0] = wheelB;
+        truckB.wheels = 1;
+        auto at = [&](uint64_t c) { float v = 0.0f; Peek(c + 0xC8, &v, sizeof v); return v; };
+        const float scale[kSuspValues] = { 1.0f, 1.5f, 1.0f, 1.0f };
+        const bool owns[kMaxWheels] = { true }, none[kMaxWheels] = {};
+        SuspTune tune = {};
+        SuspTuneStep(tune, kMemory, truckA, vtable, scale, nullptr, nullptr, none);
+        const bool tuned = Near(at(a), 0.6f);
+        Put(a + 0xC8, 0.93f);                                // the damper's writes
+        SuspTuneStep(tune, kMemory, truckA, vtable, scale, nullptr, nullptr, owns);
+        Put(a + 0xC8, 0.17f);
+        SuspTuneStep(tune, kMemory, truckA, vtable, scale, nullptr, nullptr, owns);
+        const bool kept = at(a) == 0.17f && tune.wheel[0].stock[kSuspDamping] == 0.4f;
+        SuspStepBlock block = {};
+        block.wheels = 1;
+        block.wheel[0] = wheelA;
+        block.constraint[0] = a;
+        block.vtable = vtable;
+        block.damping = true;
+        block.base[0] = fminf(1.0f, tune.wheel[0].stock[kSuspDamping] * scale[kSuspDamping]);
+        const bool back = SuspDamperLetGo(block, kMemory) == 1 && Near(at(a), 0.6f);
+        SuspTuneStep(tune, kMemory, truckA, vtable, scale, nullptr, nullptr, none);
+        const bool ownAgain = Near(at(a), 0.6f) && tune.wheel[0].stock[kSuspDamping] == 0.4f;
+        // a change of truck: the damper's value in the field, let go first, then the tune's restore
+        Put(a + 0xC8, 0.77f);
+        SuspDamperLetGo(block, kMemory);
+        int restored = 0;
+        SuspTuneStep(tune, kMemory, truckB, vtable, scale, &restored, nullptr, none);
+        const bool switched = at(a) == 0.4f && restored >= 1;
+        Put(wheelA + 0x28, rebuilt);
+        const bool skips = SuspDamperLetGo(block, kMemory) == 0 && at(rebuilt) == 0.4f;
+        Check(tuned && kept && back && ownAgain && switched && skips,
+              "damper ownership: with the damper on a wheel the tune keeps its damping stock however the field changes; let go writes stock x DampingScale back and the tune "
+              "takes it as its own; on a change of truck let go first, then the tune puts the stock back; a rebuilt constraint is not written");
+    }
+
     RealImageTest();
 
     printf(g_failed ? "TRUCK TEST FAILED (%d)\n" : "TRUCK TEST OK\n", g_failed);

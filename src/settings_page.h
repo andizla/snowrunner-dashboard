@@ -778,6 +778,50 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     ImGui::SetNextItemWidth(w);
     changed(ImGui::SliderFloat("##travelmaxscale", &s.travelMaxScale, kSuspScaleRange[0], kSuspScaleRange[1], "x%.2f", ImGuiSliderFlags_AlwaysClamp));
     PageTip("A test: the other end of each wheel's travel, the truck file's SuspensionMax, as a factor of the truck's own. 1 = the truck's own.");
+    // the damper (a test, BRIEF_suspension_damper.md): its curve, the four factors and the knee, or a preset of them
+    PageLabel("Damper", labelX);
+    static const char *const curves[kDamperCurves] = { "Linear", "Digressive", "Progressive" };
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::Combo("##dampercurve", &s.damperCurve, curves, kDamperCurves));
+    PageTip("A test: how the damping grows above the knee. Linear: as the truck's own. Digressive: less at high speed, so bumps come through "
+            "softer while the body stays calm. Progressive: more at high speed, against bottoming out. Linear with every factor at 1 = the truck's own, "
+            "and the damper does not run.");
+    struct DamperPreset { const char *name; float lowC, highC, lowR, highR, knee; int curve; };
+    static const DamperPreset presets[] = { { "Stock", 1.0f, 1.0f, 1.0f, 1.0f, 0.1f, 0 }, { "Trail", 0.8f, 0.6f, 1.4f, 1.0f, 0.1f, 1 },
+                                            { "Rock crawl", 0.6f, 0.8f, 0.9f, 0.7f, 0.08f, 2 }, { "Road", 1.4f, 0.8f, 1.8f, 1.0f, 0.1f, 1 } };
+    PageLabel("Preset", labelX);
+    for (int i = 0; i < (int)(sizeof presets / sizeof *presets); i++)
+    {
+        if (i) ImGui::SameLine();
+        if (ImGui::SmallButton(presets[i].name))
+        {
+            const DamperPreset &d = presets[i];
+            s.lowCompression = d.lowC, s.highCompression = d.highC, s.lowRebound = d.lowR, s.highRebound = d.highR, s.damperKnee = d.knee, s.damperCurve = d.curve;
+            changed(true);
+        }
+    }
+    PageTip("Starting points: Stock is the truck's own; Trail soft at low speed with a firmer rebound; Rock crawl soft all through, progressive "
+            "to save the bump stops; Road firm at low speed, so the body stays flat.");
+    PageLabel("Low comp", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::SliderFloat("##lowcompression", &s.lowCompression, kDamperRange[0], kDamperRange[1], "x%.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic));
+    PageTip("A test: the damping as the wheel rises slowly, under the knee: body roll, squat and dive. A factor of the truck's own.");
+    PageLabel("High comp", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::SliderFloat("##highcompression", &s.highCompression, kDamperRange[0], kDamperRange[1], "x%.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic));
+    PageTip("A test: the damping as the wheel rises fast, over the knee: bumps, rocks and curbs. A factor of the truck's own.");
+    PageLabel("Low rebound", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::SliderFloat("##lowrebound", &s.lowRebound, kDamperRange[0], kDamperRange[1], "x%.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic));
+    PageTip("A test: the damping as the wheel drops slowly, under the knee: how the body comes back after a roll. A factor of the truck's own.");
+    PageLabel("High rebound", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::SliderFloat("##highrebound", &s.highRebound, kDamperRange[0], kDamperRange[1], "x%.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic));
+    PageTip("A test: the damping as the wheel drops fast, over the knee: how fast it follows the ground after a bump. A factor of the truck's own.");
+    PageLabel("Knee", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::SliderFloat("##damperknee", &s.damperKnee, kKneeRange[0], kKneeRange[1], "%.2f m/s", ImGuiSliderFlags_AlwaysClamp));
+    PageTip("A test: the wheel's speed where low speed turns into high. Standing and the body's sway stay under 0.1 m/s; rough ground is 0.1 to 1.");
 
     ImGui::SeparatorText("Sounds");
     PageLabel("Volume", labelX);

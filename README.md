@@ -82,6 +82,7 @@ The Gameplay tab of the NEXT GEN menu edits every setting while you play. F2 ope
 | A slipping clutch under load burns and costs the gearbox, with `Damage` on | `ClutchBurn` 0 or 1 | on |
 | How fast a slipping clutch heats up, percent of the model's own pace, 10 to 300 (the tab's "Clutch heat rate") | `ClutchHeatPercent` | 60 |
 | A test: each wheel's suspension spring, damping and travel limits (the truck file's SuspensionMin and SuspensionMax) as a factor of the truck's own, 0.5 to 2 (the tab's Suspension section); 1 writes nothing | `SpringScale`, `DampingScale`, `TravelMinScale`, `TravelMaxScale` | 1 |
+| A test: the damper's curve above its knee, and its damping under and over the knee as the wheel rises and as it drops, factors of the truck's own from 0.25 to 4 (the tab's Suspension section, with the presets Stock, Trail, Rock crawl and Road); linear with all four at 1 is the truck's own, and the damper does not run | `DamperCurve` 0 linear, 1 digressive, 2 progressive; `LowCompression`, `HighCompression`, `LowRebound`, `HighRebound`; `DamperKnee` 0.02 to 0.5 m/s | linear, 1, 0.1 |
 | What you drive with, for the mod's automatic: a wheel's pedals, a pad or the keyboard (see below) | `Input` 0, 1 or 2 | a wheel's pedals |
 | The truck pulls with the mod's engine and converter (see below) | `Powertrain` 0 or 1 | off |
 | How much of the mod's engine the game gets with `Powertrain=1`, from 0 to 100 percent: 0 leaves the game's own pull | `EngineShare` | 50 |

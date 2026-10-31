@@ -26,6 +26,50 @@ static const int kStepBins = 8;
 static const float kStepBinTop[kStepBins - 1] = { 0.02f, 0.05f, 0.1f, 0.2f, 0.5f, 1.0f, 2.0f }; // m/s; the last bin is over 2
 static const int kStepRing = 2048;            // steps of wheel 0's trace
 
+// ---- the damper (BRIEF_suspension_damper.md with its addendum; review 14's phase 2) ----
+// Havok's damper is linear: its force is the damping factor (constraint + 0xC8) times the shaft speed. The damper
+// writes that factor each step so the force follows a curve of its own: the truck's damping (its stock times
+// DampingScale) times G(v), v the shaft speed of the step just read, compression (rising) positive. L and H are the
+// low and high speed factors of compression for v > 0, of rebound for v < 0; with u = |v| / knee and n 1 linear, 0.6
+// digressive, 1.6 progressive:
+//   G = L for u <= 1 (and under kDamperStill);
+//   G = (L + H (u^n - 1)) / u above it: the force L knee up to the knee, then H knee (u^n - 1) on top of it, over |v|.
+// All four at 1 and linear give G = 1 at every speed, and then the damper does not run at all.
+static const float kDamperStill = 0.005f;     // m/s: under it G is L
+static const float kDamperLeast = 0.01f, kDamperMost = 1.0f; // the factor written is held to these (Havok's range, and never 0)
+static const float kDamperPower[3] = { 1.0f, 0.6f, 1.6f };
+struct DamperSet
+{
+    int curve;                    // 0 linear, 1 digressive, 2 progressive
+    float low[2], high[2];        // [0] compression, [1] rebound
+    float knee;                   // m/s
+};
+
+// Any setting off its default: the damper runs.
+inline bool DamperOn(const DamperSet &d)
+{
+    return d.curve != 0 || d.low[0] != 1.0f || d.low[1] != 1.0f || d.high[0] != 1.0f || d.high[1] != 1.0f;
+}
+
+inline float DamperG(const DamperSet &d, float v)
+{
+    const int side = v >= 0.0f ? 0 : 1;
+    const float L = d.low[side], H = d.high[side], speed = fabsf(v), knee = d.knee > 0.0f ? d.knee : 0.1f;
+    const float u = speed / knee;
+    if (speed < kDamperStill || u <= 1.0f) return L;
+    const int curve = d.curve >= 0 && d.curve < 3 ? d.curve : 0;
+    return (L + H * (powf(u, kDamperPower[curve]) - 1.0f)) / u;
+}
+
+// The factor written for a wheel whose damping is base (stock times DampingScale) at shaft speed v; clamped is set
+// where the clamp held.
+inline float DamperFactor(const DamperSet &d, float base, float v, bool &clamped)
+{
+    const float want = base * DamperG(d, v);
+    clamped = want < kDamperLeast || want > kDamperMost;
+    return want < kDamperLeast ? kDamperLeast : want > kDamperMost ? kDamperMost : want;
+}
+
 // What the mod's thread hands the physics thread, published whole (SuspStepPublish). serial and seal match when it is.
 struct SuspStepBlock
 {
@@ -36,6 +80,11 @@ struct SuspStepBlock
     uint64_t wheel[kMaxWheels];
     uint64_t body[kMaxWheels];    // the body each wheel is measured against: the chassis, or the one its constraint is on
     uint64_t traced;              // read each step for wheel 0's trace (its constraint + 0xC4 or + 0xC8), 0 = no trace
+    bool damping;                 // the damper runs on this block
+    DamperSet damper;
+    uint64_t vtable;              // the constraints' class, checked before each write
+    uint64_t constraint[kMaxWheels]; // [wheel + 0x28] when the block was made; 0 = the damper leaves this wheel alone
+    float base[kMaxWheels];       // the wheel's damping as the tune gives it (stock times DampingScale), never the field's value
     uint32_t seal;
 };
 
@@ -50,6 +99,8 @@ struct SuspStepWin
     int moving[kMaxWheels], repeats[kMaxWheels];  // steps over kStepMoving, and of them those with the last step's height
     int bins[kMaxWheels][2][kStepBins];           // [0] compression (rising, v >= 0), [1] rebound
     float least[kMaxWheels], most[kMaxWheels];    // the height's range
+    int written[kMaxWheels], clamped[kMaxWheels]; // the damper's writes, and of them those the clamp held
+    float writtenSum[kMaxWheels];                 // the factors it wrote, summed
     float bounceAt[kMaxWheels];                   // s into the window where the bounce began
     int bounceSteps[kMaxWheels];
     float bounce[kMaxWheels][kStepBounceMost];    // the height each step from there, in m
@@ -75,7 +126,8 @@ struct SuspStepState
     SuspStepTraceEntry ring[kStepRing];
     volatile LONG ringHead;        // entries written so far; the newest is ring[(ringHead - 1) % kStepRing]
     volatile LONG faults;          // looks that faulted and dropped the block
-    uint32_t faultSerial;          // the block a fault dropped: not taken again
+    volatile LONG refused;         // writes not made, the wheel's constraint no longer the block's or not of its class
+    uint32_t faultSerial;          // the block a fault or a refused write dropped: not taken again
 };
 
 // The block published: written into the slot the physics thread is not reading (the one published two passes ago),
@@ -232,6 +284,45 @@ inline void SuspStepAdd(SuspStepState &s, const SuspStepBlock &b, const float *h
     }
 }
 
+// One damping write (review 16, finding 1): right before it, [wheel + 0x28] must still be the block's constraint and
+// its first word the known class, all under __try. 1 written, 0 refused (a mismatch), -1 a fault.
+inline int SuspDamperWrite(uint64_t wheel, uint64_t constraint, uint64_t vtable, float factor)
+{
+    __try
+    {
+        if (*(const uint64_t *)(uintptr_t)(wheel + 0x28) != constraint || *(const uint64_t *)(uintptr_t)constraint != vtable) return 0;
+        *(volatile float *)(uintptr_t)(constraint + 0xC8) = factor;
+        return 1;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return -1;
+    }
+}
+
+// The damper's step, after the figures: each wheel the block names, at the speed just worked out. False where a write
+// was refused or faulted: the block is then dropped.
+inline bool SuspDamperStep(SuspStepState &s, const SuspStepBlock &b, bool timed)
+{
+    if (!b.damping || !timed || !s.have || s.generation != b.generation) return true;
+    for (int i = 0; i < b.wheels && i < kMaxWheels; i++)
+    {
+        if (!b.constraint[i] || !(b.base[i] > 0.0f)) continue;
+        bool clamped = false;
+        const float f = DamperFactor(b.damper, b.base[i], s.v[i], clamped);
+        const int done = SuspDamperWrite(b.wheel[i], b.constraint[i], b.vtable, f);
+        if (done <= 0)
+        {
+            InterlockedIncrement(done < 0 ? &s.faults : &s.refused);
+            return false;
+        }
+        s.win.written[i]++;
+        s.win.clamped[i] += clamped;
+        s.win.writtenSum[i] += f;
+    }
+    return true;
+}
+
 // One call of the wheels' drive (the physics thread): for the published block's truck only.
 inline void SuspStepLook(SuspStepState &s, const SuspStepBlock *published, uint64_t action, float dt)
 {
@@ -246,7 +337,28 @@ inline void SuspStepLook(SuspStepState &s, const SuspStepBlock *published, uint6
         return;
     }
     s.serial = b.serial;
+    const bool had = s.have && s.generation == b.generation;
     SuspStepAdd(s, b, h, speed, field, dt);
+    if (!SuspDamperStep(s, b, had && dt > 0.0f && dt <= kStepDtMost))
+    {
+        s.faultSerial = b.serial;
+        s.have = false;
+    }
+}
+
+// The damper let go (the mod's thread, once the physics thread has stepped past the block that ran it): each wheel's
+// damping as the tune gives it, where the constraint is still the block's and of its class. Returns the wheels
+// written.
+inline int SuspDamperLetGo(const SuspStepBlock &b, const TruckMemory &m)
+{
+    int back = 0;
+    for (int i = 0; i < b.wheels && i < kMaxWheels; i++)
+    {
+        uint64_t c = 0, vt = 0;
+        if (!b.constraint[i] || !(b.base[i] > 0.0f) || !m.get(b.wheel[i] + 0x28, c) || c != b.constraint[i] || !m.get(c, vt) || vt != b.vtable) continue;
+        back += m.put(c + 0xC8, b.base[i]);
+    }
+    return back;
 }
 
 // ---- on the mod's thread ----

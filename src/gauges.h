@@ -107,6 +107,9 @@ struct GaugeSettings
     float springScale;       // SpringScale: each wheel's suspension spring as a factor of the truck's own (kSuspScaleRange); 1 writes nothing (a test)
     float dampingScale;      // DampingScale: the same for its damping
     float travelMinScale, travelMaxScale; // TravelMinScale, TravelMaxScale: the same for its travel limits (the truck file's SuspensionMin and SuspensionMax)
+    int damperCurve;         // DamperCurve: the damper's curve above its knee, 0 linear, 1 digressive, 2 progressive (a test, BRIEF_suspension_damper.md)
+    float lowCompression, highCompression, lowRebound, highRebound; // LowCompression ..: the damping under and over the knee, rising and falling, as factors (kDamperRange)
+    float damperKnee;        // DamperKnee: the shaft speed in m/s where low speed turns into high (kKneeRange)
     int suspStepTest;        // SuspStepTest (ini only, a test, with Probe=1): every 20 s wheel 0's spring at half for 1 s standing (1), or its damping at a tenth for 0.5 s moving (2)
     int soundVolume;        // SoundVolume: how loud the turbo's flutter and the oil warning are, 0 to 100; 0 = no sound
     bool soundsOnly;         // SoundsOnly: the sounds are played and the cluster is not drawn
@@ -157,6 +160,8 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.clutchBurn = true;
     s.clutchHeat = 60.0f;
     s.springScale = s.dampingScale = s.travelMinScale = s.travelMaxScale = 1.0f;
+    s.lowCompression = s.highCompression = s.lowRebound = s.highRebound = 1.0f;
+    s.damperKnee = 0.1f;
     s.soundVolume = 50;
     strcpy_s(s.padToggle, "None");
     s.demo = false;
@@ -174,7 +179,9 @@ static const float kWarmUpRange[2] = { 0.5f, 60.0f }, kOverheatRange[2] = { 0.25
                    kAmbientRange[2] = { -40.0f, 50.0f }, kGearHoldRange[2] = { 1.0f, 3.0f }, kAirFullRange[2] = { 10.0f, 80.0f }, kDamageRange[2] = { 0.0f, 100.0f },
                    kOilWarmUpRange[2] = { 1.0f, 60.0f }, kOilWarnRange[2] = { 100.0f, 150.0f }, kTorqueShareRange[2] = { 0.10f, 1.00f },
                    kHotDamageFromRange[2] = { 100.0f, 124.0f }, kStallDamageRange[2] = { 0.0f, 25.0f },
-                   kClutchHeatRange[2] = { 10.0f, 300.0f }, kSuspScaleRange[2] = { 0.5f, 2.0f };
+                   kClutchHeatRange[2] = { 10.0f, 300.0f }, kSuspScaleRange[2] = { 0.5f, 2.0f }, kDamperRange[2] = { 0.25f, 4.0f },
+                   kKneeRange[2] = { 0.02f, 0.5f };
+static const int kDamperCurves = 3; // linear, digressive, progressive
 
 // The temperatures in C the coolant's three times are measured between: WarmUpMinutes from kTempOutside outside up
 // to kTempWarm, OverheatMinutes from kTempHot into the red zone at kTempRed, CoolDownMinutes from kTempHot down to
@@ -226,6 +233,12 @@ inline void SettingsClamp(GaugeSettings &s)
     s.dampingScale = SettingsRange(s.dampingScale, kSuspScaleRange[0], kSuspScaleRange[1]);
     s.travelMinScale = SettingsRange(s.travelMinScale, kSuspScaleRange[0], kSuspScaleRange[1]);
     s.travelMaxScale = SettingsRange(s.travelMaxScale, kSuspScaleRange[0], kSuspScaleRange[1]);
+    s.damperCurve = s.damperCurve < 0 || s.damperCurve >= kDamperCurves ? 0 : s.damperCurve;
+    s.lowCompression = SettingsRange(s.lowCompression, kDamperRange[0], kDamperRange[1]);
+    s.highCompression = SettingsRange(s.highCompression, kDamperRange[0], kDamperRange[1]);
+    s.lowRebound = SettingsRange(s.lowRebound, kDamperRange[0], kDamperRange[1]);
+    s.highRebound = SettingsRange(s.highRebound, kDamperRange[0], kDamperRange[1]);
+    s.damperKnee = SettingsRange(s.damperKnee, kKneeRange[0], kKneeRange[1]);
     s.toggleKey = s.toggleKey < 0 || s.toggleKey > 255 ? 0 : s.toggleKey;
     s.soundVolume = s.soundVolume < 0 ? 0 : s.soundVolume > 100 ? 100 : s.soundVolume;
     s.probe = s.probe < 0 ? 0 : s.probe;
