@@ -850,11 +850,11 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     PageLabel("Stop length", labelX);
     ImGui::SetNextItemWidth(w);
     changed(ImGui::SliderFloat("##bumpzone", &s.bumpZone, kBumpZoneRange[0], kBumpZoneRange[1], "%.2f m", ImGuiSliderFlags_AlwaysClamp));
-    PageTip("A test: how much of the travel before the end the stop takes.");
-    PageLabel("Stop spring", labelX);
+    PageTip("A test: how much of the travel before the end the stop takes, at most a third of it.");
+    PageLabel("Stop force", labelX);
     ImGui::SetNextItemWidth(w);
-    changed(ImGui::SliderFloat("##bumpspring", &s.bumpSpring, kBumpSpringRange[0], kBumpSpringRange[1], "x%.1f", ImGuiSliderFlags_AlwaysClamp));
-    PageTip("A test: the stop's spring rate at the end, as a factor of the truck's own.");
+    changed(ImGui::SliderFloat("##bumpforce", &s.bumpForce, kBumpForceRange[0], kBumpForceRange[1], "x%.1f", ImGuiSliderFlags_AlwaysClamp));
+    PageTip("A test: how hard the stop pushes back at the end of the travel, as a multiple of the spring's own force there.");
     PageLabel("Stop damping", labelX);
     ImGui::SetNextItemWidth(w);
     changed(ImGui::SliderFloat("##bumpdamping", &s.bumpDamping, kBumpDampingRange[0], kBumpDampingRange[1], "x%.1f", ImGuiSliderFlags_AlwaysClamp));

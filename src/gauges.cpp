@@ -516,7 +516,7 @@ static void WriteIni(const GaugeSettings &s)
     num(L"DamperKnee", s.damperKnee);
     whole(L"BumpStops", s.bumpStops ? 1 : 0);
     num(L"BumpZone", s.bumpZone);
-    num(L"BumpSpring", s.bumpSpring);
+    num(L"BumpForce", s.bumpForce);
     num(L"BumpDamping", s.bumpDamping);
     whole(L"SpringCurve", s.springCurve);
     num(L"SpringRise", s.springRise);
@@ -815,7 +815,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; SuspensionMin and SuspensionMax) as a factor of the truck's own, 0.5 to 2 (1 = the truck's own).\n"
                         L"; DamperCurve 0 linear, 1 digressive, 2 progressive; LowCompression, HighCompression, LowRebound, HighRebound: the damping\n"
                         L"; under and over DamperKnee (m/s, 0.02 to 0.5), rising and falling, 0.25 to 4 (a test; 1 and linear = the truck's own).\n"
-                        L"; BumpStops=1: spring (BumpSpring, 1 to 8) and damping (BumpDamping, 1 to 4) rising over the last BumpZone m (0.03 to 0.2) of the\n"
+                        L"; BumpStops=1: force (BumpForce, 1 to 6, the spring's at the end times it) and damping (BumpDamping, 1 to 4) over the last BumpZone m (0.03 to 0.2) of the\n"
                         L"; travel. SpringCurve 0 linear, 1 progressive, 2 dual rate (SpringRise 1 to 3, SpringCross 0.2 to 0.8). DampingZones=1: ZoneSoft (0.5 to 1)\n"
                         L"; from ZoneFrom to ZoneTo (shares of the travel), ZoneFirm (1 to 3) toward the ends. All tests, off by default.\n"
                         L"; SoundVolume (0 to 100) is how loud the turbo is heard when the pedal comes up quickly under boost: it flutters,\n"
@@ -937,7 +937,7 @@ static void ReadIni(GaugeSettings &s)
     s.damperKnee = IniFloat(L"DamperKnee", s.damperKnee, ini);
     s.bumpStops = IniInt(L"BumpStops", s.bumpStops ? 1 : 0, ini) != 0;
     s.bumpZone = IniFloat(L"BumpZone", s.bumpZone, ini);
-    s.bumpSpring = IniFloat(L"BumpSpring", s.bumpSpring, ini);
+    s.bumpForce = IniFloat(L"BumpForce", s.bumpForce, ini);
     s.bumpDamping = IniFloat(L"BumpDamping", s.bumpDamping, ini);
     s.springCurve = IniInt(L"SpringCurve", s.springCurve, ini);
     s.springRise = IniFloat(L"SpringRise", s.springRise, ini);
@@ -2958,7 +2958,7 @@ static SpringSet SpringFrom(const GaugeSettings &s)
     SpringSet k;
     memset(&k, 0, sizeof k);
     k.curve = s.springCurve, k.rise = s.springRise, k.cross = s.springCross;
-    k.bump = s.bumpStops, k.zone = s.bumpZone, k.bumpSpring = s.bumpSpring, k.bumpDamping = s.bumpDamping;
+    k.bump = s.bumpStops, k.zone = s.bumpZone, k.bumpForce = s.bumpForce, k.bumpDamping = s.bumpDamping;
     k.zones = s.dampingZones, k.soft = s.zoneSoft, k.firm = s.zoneFirm, k.from = s.zoneFrom, k.to = s.zoneTo;
     return k;
 }
@@ -3098,7 +3098,7 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
                     if (spring.curve == 2 && used > 0)
                         used += _snprintf_s(line + used, sizeof line - used, _TRUNCATE, " (x%g from the crossover at %g of the travel)", spring.rise, spring.cross);
                     if (spring.bump && used > 0)
-                        used += _snprintf_s(line + used, sizeof line - used, _TRUNCATE, "; bump stops over the last %g m, x%g and x%g at the end", spring.zone, spring.bumpSpring,
+                        used += _snprintf_s(line + used, sizeof line - used, _TRUNCATE, "; bump stops over the last %g m (a third of the travel at most), the force x%g and the damping x%g at the end", spring.zone, spring.bumpForce,
                                             spring.bumpDamping);
                     if (spring.zones && used > 0)
                         _snprintf_s(line + used, sizeof line - used, _TRUNCATE, "; damping zones x%g from %g to %g of the travel, x%g toward the ends", spring.soft, spring.from,
@@ -3134,6 +3134,7 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
         b.attachUp[i] = placed ? p.frame.attachUp[i] : 0.0f;
         b.axisUp[i] = placed ? p.frame.axisUp[i] : 0.0f;
         b.travel[i] = placed && p.frame.low[i] < 0.0f ? -p.frame.low[i] : 0.0f;
+        b.attachAt[i] = placed && constraint[i] ? constraint[i] + 0xA4 : 0; // the attach point along up, read each step (the addendum of 11:39)
         const SuspWheel &w = tune.wheel[i];
         if (!running || i >= b.wheels || p.frame.other[i] || !constraint[i] || w.constraint != constraint[i]) continue;
         const bool damped = damping && SuspValueSane(kSuspDamping, w.stock[kSuspDamping]);

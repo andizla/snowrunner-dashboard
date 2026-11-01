@@ -2169,7 +2169,7 @@ int main()
         bool ones = !SpringOn(off) && !ZonesOn(off);
         for (float u = 0.0f; u <= 1.0f; u += 0.01f) ones &= SpringF(off, u, 0.3f) == 1.0f && ZoneFactor(off, u, 0.5f, 0.3f) == 1.0f;
         SpringSet stopsSoft = off;
-        stopsSoft.bump = true, stopsSoft.bumpSpring = 1.0f, stopsSoft.bumpDamping = 1.0f;
+        stopsSoft.bump = true, stopsSoft.bumpForce = 1.0f, stopsSoft.bumpDamping = 1.0f;
         ones &= !SpringOn(stopsSoft) && !ZonesOn(stopsSoft);
         bool smooth = true, slope = true;
         const float travel = 0.36f;
@@ -2177,19 +2177,20 @@ int main()
             for (bool bump : { false, true })
             {
                 SpringSet k = off;
-                k.curve = curve, k.rise = 3.0f, k.bump = bump, k.bumpSpring = 8.0f;
-                float last = 0.0f;
+                k.curve = curve, k.rise = 3.0f, k.bump = bump, k.bumpForce = 6.0f;
+                float last = 0.0f, most = 0.0f;
+                for (int n = 0; n <= 1000; n++) most = fmaxf(most, SpringRate(k, n / 1000.0f, travel));
                 for (int n = 1; n <= 1000; n++)
                 {
                     const float u = n / 1000.0f, force = SpringF(k, u, travel) * u;
                     // no step in the force anywhere: from one thousandth of the travel to the next it moves by at most the
                     // largest rate times a thousandth
-                    smooth &= force - last >= 0.0f && force - last <= (3.0f + 8.0f) / 1000.0f + 1e-5f;
+                    smooth &= force - last >= 0.0f && force - last <= most / 1000.0f + 1e-4f;
                     // and its slope is the rate
                     if (n > 1 && n < 1000)
                     {
                         const float d = (SpringF(k, u + 0.0005f, travel) * (u + 0.0005f) - SpringF(k, u - 0.0005f, travel) * (u - 0.0005f)) / 0.001f;
-                        slope &= fabsf(d - SpringRate(k, u, travel)) < 0.05f;
+                        slope &= fabsf(d - SpringRate(k, u, travel)) < 0.05f * fmaxf(1.0f, SpringRate(k, u, travel));
                     }
                     last = force;
                 }
@@ -2309,10 +2310,10 @@ int main()
 
     // the quarter car with the spring's features (build A's tests): 60 steps a second, the stock damping a ratio of 0.55
     // at 1.6 Hz, gravity's sag a third of the compression travel, and the strength and the damping written a step late
-    // from the step before's place and speed. With BumpSpring x8 and SpringRise x3 (progressive and dual rate), and with
+    // from the step before's place and speed. With BumpForce x6 and SpringRise x3 (progressive and dual rate), and with
     // the zones, each settles from a step of the ground without growing
     {
-        const SpringSet base = { 0, 3.0f, 0.5f, false, 0.08f, 8.0f, 2.0f, false, 0.7f, 1.5f, 0.1f, 0.6f };
+        const SpringSet base = { 0, 3.0f, 0.5f, false, 0.12f, 6.0f, 2.0f, false, 0.7f, 1.5f, 0.1f, 0.6f };
         std::vector<SpringSet> cases;
         for (int curve = 0; curve < 3; curve++)
             for (int bump = 0; bump < 2; bump++)
@@ -2362,7 +2363,7 @@ int main()
             }
         }
         Check(all, "spring quarter car: at 60 steps a second, a damping ratio of 0.55 at 1.6 Hz and the strength and damping written a step late, linear, progressive "
-                   "and dual rate x3, with and without bump stops x8 and the zones, each settles from a step of the ground without growing");
+                   "and dual rate x3, with and without bump stops x6 and the zones, each settles from a step of the ground without growing");
     }
 
     // two spring sets alike field by field compare the same, whatever their padding holds (the drive of 1 November: a
@@ -2373,12 +2374,83 @@ int main()
         memset(&b, 0xA5, sizeof b);
         for (SpringSet *k : { &a, &b })
         {
-            k->curve = 2, k->rise = 3.0f, k->cross = 0.5f, k->bump = true, k->zone = 0.08f, k->bumpSpring = 4.0f, k->bumpDamping = 2.0f;
+            k->curve = 2, k->rise = 3.0f, k->cross = 0.5f, k->bump = true, k->zone = 0.08f, k->bumpForce = 4.0f, k->bumpDamping = 2.0f;
             k->zones = true, k->soft = 0.7f, k->firm = 1.5f, k->from = 0.1f, k->to = 0.6f;
         }
         const bool same = SpringSame(a, b) && memcmp(&a, &b, sizeof a) != 0;
         b.to = 0.61f;
         Check(same && !SpringSame(a, b), "spring sets: alike field by field compare the same whatever their padding holds; one field off does not");
+    }
+
+    // the bump stop's law of 11:39: the force at the end is BumpForce times the spring's own there, curve included; it
+    // starts with no step at the stop's start; the stop is held to a third of the travel
+    {
+        bool end = true, start = true;
+        const float travel = 0.36f;
+        for (int curve = 0; curve < 3; curve++)
+            for (float force : { 1.0f, 3.0f, 6.0f })
+            {
+                SpringSet k = { curve, 3.0f, 0.5f, true, 0.12f, force, 2.0f, false, 0.7f, 1.5f, 0.1f, 0.6f };
+                end &= fabsf(SpringF(k, 1.0f, travel) - force * CurveArea(k, 1.0f)) < 1e-4f;
+                const float u0 = BumpStart(k, travel);
+                start &= fabsf(SpringF(k, u0 + 1e-4f, travel) * (u0 + 1e-4f) - CurveArea(k, u0 + 1e-4f)) < 1e-4f && BumpArea(k, u0, travel) == 0.0f;
+            }
+        SpringSet wide = { 0, 2.0f, 0.5f, true, 0.2f, 3.0f, 2.0f, false, 0.7f, 1.5f, 0.1f, 0.6f };
+        const bool third = Near(BumpZoneOf(wide, 0.3f), 0.1f) && Near(BumpStart(wide, 0.3f), 2.0f / 3.0f) && Near(BumpZoneOf(wide, 0.9f), 0.2f);
+        Check(end && start && third, "bump stop law: the force at the end is BumpForce times the spring's own there, curve included; no step at the stop's start; "
+                                     "the stop held to a third of the travel");
+    }
+
+    // the stop where the wheel will be (the addendum of 11:39, item 3): a quarter car at 60 steps a second, gravity's
+    // sag half the compression travel, the stop at its defaults (0.12 m, x3, damping x2) written a step late, entering at
+    // 1, 2.5 and 4 m/s. With the look a step ahead the wheel goes no deeper, and at 2.5 and 4 m/s less deep; both settle
+    // without growing
+    {
+        const double dt = 1.0 / 60.0, omega = 2.0 * 3.14159265 * 1.6, k0 = omega * omega, c0 = 2.0 * 0.55 * omega, travel = 0.36, g = k0 * travel / 2.0;
+        const SpringSet k = { 0, 2.0f, 0.5f, true, 0.12f, 3.0f, 2.0f, false, 0.7f, 1.5f, 0.1f, 0.6f };
+        const DamperSet plain = { 0, { 1.0f, 1.0f }, { 1.0f, 1.0f }, 0.1f };
+        bool less = true, all = true;
+        for (double speed : { 1.0, 2.5, 4.0 })
+        {
+            double deepest[2] = {};
+            for (int ahead = 0; ahead < 2; ahead++)
+            {
+                double x = -g / k0, vx = -speed, kf = 1.0, cf = 1.0, last = 0.0, peak = 1e9, deep = 0.0;
+                bool rising = false, grows = false, settled = true;
+                float lastU = SuspDepth((float)x, (float)travel), lastAhead = lastU, lastV = (float)speed;
+                for (int n = 0; n < 600; n++)
+                {
+                    vx = (vx + dt * (-g - k0 * kf * x)) / (1.0 + dt * c0 * cf);
+                    x += dt * vx;
+                    deep = fmin(deep, x);
+                    const float u = SuspDepth((float)x, (float)travel), v = (float)-vx, next = SuspDepth((float)(x + vx * dt), (float)travel);
+                    kf = SpringF(k, lastU, (float)travel, ahead ? lastAhead : -1.0f);
+                    bool clamped = false;
+                    cf = DamperFactor(plain, 0.3f * ZoneFactor(k, lastU, lastV, (float)travel, ahead ? lastAhead : -1.0f), lastV, clamped) / 0.3;
+                    lastU = u, lastV = v, lastAhead = next;
+                    const double err = fabs(vx);
+                    if (err > last) rising = true;
+                    else if (rising)
+                    {
+                        if (last > peak * 1.001 + 1e-6) grows = true;
+                        peak = last;
+                        rising = false;
+                    }
+                    last = err;
+                    if (n >= 480 && fabs(vx) > 0.002) settled = false;
+                }
+                deepest[ahead] = deep;
+                if (grows || !settled)
+                {
+                    all = false;
+                    printf("     entering at %g m/s, %s: %s\n", speed, ahead ? "a step ahead" : "where it is", grows ? "grows" : "not settled");
+                }
+            }
+            less &= deepest[1] >= deepest[0] - 1e-6 && (speed < 2.0 || deepest[1] > deepest[0] + 0.001);
+            printf("     entering at %g m/s: deepest %.3f m where it is, %.3f m a step ahead (the end at -%.2f)\n", speed, deepest[0], deepest[1], travel);
+        }
+        Check(less && all, "bump stop a step ahead: entering at 1, 2.5 and 4 m/s, the wheel goes no deeper with the look ahead and less deep at 2.5 and 4 m/s; "
+                           "both settle without growing");
     }
 
     RealImageTest();

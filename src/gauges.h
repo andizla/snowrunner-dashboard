@@ -111,7 +111,7 @@ struct GaugeSettings
     float lowCompression, highCompression, lowRebound, highRebound; // LowCompression ..: the damping under and over the knee, rising and falling, as factors (kDamperRange)
     float damperKnee;        // DamperKnee: the shaft speed in m/s where low speed turns into high (kKneeRange)
     bool bumpStops;          // BumpStops: a rising spring and damping over the last BumpZone metres before the compression end (a test, BRIEF_suspension_extras.md)
-    float bumpZone, bumpSpring, bumpDamping; // BumpZone (kBumpZoneRange), BumpSpring and BumpDamping: the rate and the compression damping at the end, factors
+    float bumpZone, bumpForce, bumpDamping; // BumpZone (kBumpZoneRange, at most a third of the travel), BumpForce: the force at the end as a multiple of the spring's, BumpDamping: the compression damping there
     int springCurve;         // SpringCurve: 0 linear (nothing written), 1 progressive, 2 dual rate
     float springRise, springCross; // SpringRise: the rate at the compression end, a factor; SpringCross: where dual rate's second rate begins, as a share of the travel
     bool dampingZones;       // DampingZones: the damping softer in the middle of the travel (ZoneSoft, from ZoneFrom to ZoneTo) and firmer toward its ends (ZoneFirm)
@@ -168,8 +168,8 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.springScale = s.dampingScale = s.travelMinScale = s.travelMaxScale = 1.0f;
     s.lowCompression = s.highCompression = s.lowRebound = s.highRebound = 1.0f;
     s.damperKnee = 0.1f;
-    s.bumpZone = 0.08f;
-    s.bumpSpring = 4.0f;
+    s.bumpZone = 0.12f;
+    s.bumpForce = 3.0f;
     s.bumpDamping = 2.0f;
     s.springRise = 2.0f;
     s.springCross = 0.5f;
@@ -195,7 +195,7 @@ static const float kWarmUpRange[2] = { 0.5f, 60.0f }, kOverheatRange[2] = { 0.25
                    kOilWarmUpRange[2] = { 1.0f, 60.0f }, kOilWarnRange[2] = { 100.0f, 150.0f }, kTorqueShareRange[2] = { 0.10f, 1.00f },
                    kHotDamageFromRange[2] = { 100.0f, 124.0f }, kStallDamageRange[2] = { 0.0f, 25.0f },
                    kClutchHeatRange[2] = { 10.0f, 300.0f }, kSuspScaleRange[2] = { 0.5f, 2.0f }, kDamperRange[2] = { 0.25f, 4.0f },
-                   kKneeRange[2] = { 0.02f, 0.5f }, kBumpZoneRange[2] = { 0.03f, 0.2f }, kBumpSpringRange[2] = { 1.0f, 8.0f },
+                   kKneeRange[2] = { 0.02f, 0.5f }, kBumpZoneRange[2] = { 0.03f, 0.2f }, kBumpForceRange[2] = { 1.0f, 6.0f },
                    kBumpDampingRange[2] = { 1.0f, 4.0f }, kSpringRiseRange[2] = { 1.0f, 3.0f }, kSpringCrossRange[2] = { 0.2f, 0.8f },
                    kZoneSoftRange[2] = { 0.5f, 1.0f }, kZoneFirmRange[2] = { 1.0f, 3.0f };
 static const int kSpringCurves = 3; // linear, progressive, dual rate
@@ -277,7 +277,7 @@ inline void SettingsClamp(GaugeSettings &s)
     s.highRebound = SettingsRange(s.highRebound, kDamperRange[0], kDamperRange[1]);
     s.damperKnee = SettingsRange(s.damperKnee, kKneeRange[0], kKneeRange[1]);
     s.bumpZone = SettingsRange(s.bumpZone, kBumpZoneRange[0], kBumpZoneRange[1]);
-    s.bumpSpring = SettingsRange(s.bumpSpring, kBumpSpringRange[0], kBumpSpringRange[1]);
+    s.bumpForce = SettingsRange(s.bumpForce, kBumpForceRange[0], kBumpForceRange[1]);
     s.bumpDamping = SettingsRange(s.bumpDamping, kBumpDampingRange[0], kBumpDampingRange[1]);
     s.springCurve = s.springCurve < 0 || s.springCurve >= kSpringCurves ? 0 : s.springCurve;
     s.springRise = SettingsRange(s.springRise, kSpringRiseRange[0], kSpringRiseRange[1]);
