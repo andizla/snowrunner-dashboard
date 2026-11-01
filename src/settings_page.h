@@ -665,10 +665,9 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     }
     PageLabel("Creep at idle", labelX);
     changed(ImGui::Checkbox("##creep", &s.creep));
-    PageTip("An idling truck in gear moves as a real one does: an automatic to walking pace (R and the low range on the game's shifter too, through the "
-            "converter), a gear picked by hand at the gear's idle speed. It pulls away "
-            "at idle only in the low gears; rolling, it holds the idle speed in any gear on the flat. When a climb or mud pulls it under, the engine stalls "
-            "only in the mod's own gearbox, as a manual one does; on the automatic it idles on. Hold the brake to stand.");
+    PageTip("An idling truck on an automatic moves as a real one does, to walking pace through the converter: the mod's A, with the reverse and the "
+            "range it drives, and the game's own automatic. For now only with an automatic: a gear picked by hand, on either shifter and an R "
+            "included, gets no creep. Hold the brake to stand.");
     PageLabel("Pull test", labelX);
     const bool pullOn = view.pullTest == kViewPullArmed || view.pullTest == kViewPullRunning;
     if (ImGui::Button(pullOn ? "Cancel###pulltest" : "Test the engine's pull###pulltest", ImVec2(w, 0))) act |= pullOn ? kPagePullCancel : kPagePullTest;

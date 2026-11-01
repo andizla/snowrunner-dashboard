@@ -618,6 +618,64 @@ inline void GearboxKey(const TruckRaw &t, const char *name, char *out, size_t si
     if (top >= 1 && n + 16 < size) snprintf(out + n, size - n, " high %g", t.gearSpeed[top + 1]);
 }
 
+// A key of gears ("gears 3.03638 6.05623 ... high 10.0794") back into its speeds, the high gear's last; the count read,
+// 0 for a key that is a name.
+inline int GearboxKeySpeeds(const char *key, float *out, int most)
+{
+    if (strncmp(key, "gears", 5)) return 0;
+    int n = 0;
+    for (const char *p = key + 5; *p && n < most;)
+    {
+        while (*p == ' ') p++;
+        if (!strncmp(p, "high", 4)) p += 4;
+        while (*p == ' ') p++;
+        char *end = nullptr;
+        const float v = strtof(p, &end);
+        if (end == p) break;
+        out[n++] = v;
+        p = end;
+    }
+    return n;
+}
+
+// Two keys of gears for one gearbox: the same count of speeds, each within a share of the other (the speeds drift by a
+// few tenths of a per cent between takes, most likely with the wheels' radius, BRIEF_manual_creep_and_hold.md). Two
+// names, or a name and gears, never match.
+static const float kGearboxDrift = 0.02f;
+inline bool GearboxKeysMatch(const char *a, const char *b, float within = kGearboxDrift)
+{
+    float x[kMaxGears + 2], y[kMaxGears + 2];
+    const int n = GearboxKeySpeeds(a, x, kMaxGears + 2), m = GearboxKeySpeeds(b, y, kMaxGears + 2);
+    if (!n || n != m) return false;
+    for (int i = 0; i < n; i++)
+        if (!(fabsf(x[i] - y[i]) <= within * fmaxf(fabsf(x[i]), fabsf(y[i])))) return false;
+    return true;
+}
+
+// Why no gearbox name was read, for the log: the fitted's and the default's texts as they stand.
+inline void TruckGearboxWhy(const TruckMemory &m, uint64_t vehicle, char *out, size_t size)
+{
+    size_t n = 0;
+    out[0] = 0;
+    const uint32_t places[2] = { kGearboxFittedAt, kGearboxNameAt };
+    for (int k = 0; k < 2 && n + 80 < size; k++)
+    {
+        uint8_t raw[0x20] = {};
+        char text[kMaxText];
+        size_t length = 0;
+        const bool read = m.get(vehicle + places[k], raw);
+        const bool texted = read && TruckText(m, vehicle + places[k], text, length);
+        uint64_t chars = 0, count = 0, room = 0;
+        memcpy(&chars, raw, 8);
+        memcpy(&count, raw + 0x10, 8);
+        memcpy(&room, raw + 0x18, 8);
+        n += (size_t)snprintf(out + n, size - n, "%s+ 0x%x: %s", k ? "; " : "", places[k],
+                              !read ? "not readable" : !texted ? "no text" : length < 2 ? "too short" : "not a name");
+        if (read && n + 64 < size) n += (size_t)snprintf(out + n, size - n, " (size %llu, room %llu, chars %llx)", count, room, chars);
+        if (texted && length && n + kMaxText + 8 < size) n += (size_t)snprintf(out + n, size - n, " \"%s\"", text);
+    }
+}
+
 // The truck's mass in kg as its files give it (the bodies of its chassis, without addons, cargo or a trailer): a float
 // at model + 0x784, found by the probe's scan of five trucks against their files (a scout's 9007 where its bodies weigh
 // 9001, a pickup's 2212, others of 5507, 6314 and 8100). 0 where it is no likely mass.

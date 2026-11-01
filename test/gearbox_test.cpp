@@ -646,6 +646,21 @@ int main()
 
     // at Gearbox 0 and 1 the mod's orders go out only in A and a gear only forward (0.18.2: no N or R from the mod's
     // thread there)
+    // the creep only where an automatic picks the gear (BRIEF_manual_creep_and_hold.md): the mod's A, its reverse and range
+    // included; the game's automatic up; nothing in a gear picked by hand on either shifter, an R or L included, and a
+    // shift from A into a gear picked by hand drops it at once
+    {
+        bool hand = true;
+        const int byHand[] = { kPosGear, kPosN, kPosR, kPosH, kPosLowMinus, kPosLow, kPosLowPlus };
+        for (int pos : byHand) hand &= !CreepAutoPicks(true, true, pos, 1);
+        const bool modA = CreepAutoPicks(true, true, kPosA, 0) && CreepAutoPicks(true, true, kPosA, 1) && !CreepAutoPicks(true, false, kPosA, 1);
+        const bool gameAuto = CreepAutoPicks(false, false, kPosA, 1);
+        // the game's shifter in a numbered gear, in L or an R picked by hand: its automatic is off
+        const bool gameHand = !CreepAutoPicks(false, false, kPosA, 0) && !CreepAutoPicks(false, true, kPosR, 0);
+        const bool dropped = CreepAutoPicks(true, true, kPosA, 0) && !CreepAutoPicks(true, true, kPosGear, 0);
+        Check(hand && modA && gameAuto && gameHand && dropped, "creep gate: the mod's A creeps, the game's automatic creeps; no position picked by hand on the mod's gearbox, "
+                                                               "nor the game's shifter with its automatic off (a numbered gear, L, an R), and a shift from A into a hand-picked gear drops it");
+    }
     Check(GearboxOwnOrders(kPosA, 3, true) && GearboxOwnOrders(kPosA, 0, false) && !GearboxOwnOrders(kPosA, 0, true) && !GearboxOwnOrders(kPosA, -1, true) &&
               !GearboxOwnOrders(kPosN, 0, true) && !GearboxOwnOrders(kPosR, -1, true) && !GearboxOwnOrders(kPosLowMinus, 1, false),
           "gearbox (0.18.2): at Gearbox 0 and 1 the mod's orders only in A, its shifts only into a forward gear");

@@ -855,7 +855,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; shows, less with cold oil and without boost, and doubled by the converter at its stall (Gearbox=1), in place\n"
                         L"; of the game's own, which falls away toward each gear's top. The mod writes the game's torque factor for it.\n"
                         L"; EngineShare: how much of the mod's engine the game gets, 0 to 100 percent (50: half way between the two).\n"
-                        L"; Creep=1: an idling truck in gear moves, an automatic to walking pace, a manual at about the gear's idle speed; the brake holds it. Stuck at Gearbox=2 it stalls.\n"
+                        L"; Creep=1: an idling truck on an automatic moves to walking pace; the brake holds it. For now only with an automatic, not in a gear picked by hand.\n"
                         L"; Gauges\\gearboxes\\<name>.ini GearHold: seconds a gearbox holds each gear going up with Powertrain=1, 1 to 3 (the tab).\n"
                         L"; Top1, Top2 ...: each gear's top in rad/s, learned where the game's pull reaches nothing floored (2a + 5 until then).\n"
                         L"; Gauges\\engines\\<name>.ini: PeakTorqueRpm, Aspiration (0 turbo, 1 naturally aspirated), Fuel (diesel, petrol), TorqueCurve (the tab's Engine).\n"
@@ -1050,6 +1050,35 @@ static void GearHoldWrite(const char *key, float hold)
     swprintf_s(buf, L"%.1f", hold);
     SetupBegin(kSetupGearbox, Wide(key));
     WritePrivateProfileStringW(kSetupSections[kSetupGearbox], L"GearHold", buf, SetupFile(kSetupGearbox, key).c_str());
+}
+
+// A gearbox known by its gears whose file stands under another key of the same gears within kGearboxDrift (one
+// gearbox under four keys in the logs of October and November, each a new file, the hold back at the class's: the
+// author's "gearbox gear hold time resets now and then"). Into out the file's key, the one written first where more
+// match; false where none does.
+static bool GearboxFileMatch(const char *key, char *out, size_t size)
+{
+    WIN32_FIND_DATAW f;
+    const HANDLE h = FindFirstFileW((SetupFolder(kSetupGearbox) + L"\\gears *.ini").c_str(), &f);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    bool found = false;
+    FILETIME first = {};
+    do
+    {
+        char name[MAX_PATH];
+        const int n = WideCharToMultiByte(CP_UTF8, 0, f.cFileName, -1, name, sizeof name, nullptr, nullptr);
+        if (n <= 5) continue;
+        name[n - 5] = 0; // ".ini" off
+        if (!GearboxKeysMatch(key, name)) continue;
+        if (!found || CompareFileTime(&f.ftCreationTime, &first) < 0)
+        {
+            first = f.ftCreationTime;
+            strncpy_s(out, size, name, _TRUNCATE);
+            found = true;
+        }
+    } while (FindNextFileW(h, &f));
+    FindClose(h);
+    return found;
 }
 
 // Top1 .. Top<n>: each numbered gear's top in rad/s, learned where the game's own pull reaches nothing (GearTopStep), so
@@ -2366,6 +2395,7 @@ struct TruckWatch
     float gearTop[kMaxGears];   // each numbered gear's top learned where the game's pull reaches nothing (GearTopStep), 0 not yet; kept in the gearbox's file
     GearTopLearn topLearn;      // the plateau being watched
     uint64_t gearboxVehicle;
+    uint64_t gearboxWhyVehicle; // the truck the failed name read was told for (once a truck)
     int gearSpeeds;             // that gearbox's speeds as last read: another set means another gearbox (the garage)
     float gearSpeed[kMaxGears];
     ULONGLONG engineAt;         // when a record that was not found is looked for again
@@ -2437,7 +2467,9 @@ static int AutoClass(const TruckWatch &w, int tachClass)
 }
 
 // Finds the driven truck's gearbox (its name, or its gears where the name is not read) and its own hold, and says so
-// in the log when it is another than before.
+// in the log when it is another than before. A gearbox keeps its first key: the same gears within kGearboxDrift keep
+// the key in force (a name too, where one read of the name fails on the same truck), and a new key of gears takes the
+// file of an earlier key of the same gears.
 static void GearboxLook(TruckWatch &w, const TruckMemory &m, const TruckRaw &raw, int tachClass)
 {
     char name[kMaxText], stock[kMaxText];
@@ -2445,6 +2477,32 @@ static void GearboxLook(TruckWatch &w, const TruckMemory &m, const TruckRaw &raw
     const bool named = TruckGearboxName(m, w.refs.vehicle, name, at, stock);
     char key[96];
     GearboxKey(raw, named ? name : "", key, sizeof key);
+    if (!named)
+    {
+        if (w.gearboxWhyVehicle != w.refs.vehicle)
+        {
+            // why, once a truck (the Arocs shows both named and unnamed in the logs)
+            char why[512];
+            TruckGearboxWhy(m, w.refs.vehicle, why, sizeof why);
+            Log(L"gearbox: no name read: %S", why);
+            w.gearboxWhyVehicle = w.refs.vehicle;
+        }
+        char held[96] = "";
+        GearboxKey(raw, "", held, sizeof held);
+        char before[96] = "";
+        if (w.gearboxVehicle == w.refs.vehicle && w.gearboxKey[0])
+        {
+            // the key in force: its gears as they were read when it was taken
+            TruckRaw then = raw;
+            then.gearSpeeds = w.gearSpeeds;
+            memcpy(then.gearSpeed, w.gearSpeed, sizeof then.gearSpeed);
+            GearboxKey(then, "", before, sizeof before);
+        }
+        char file[96];
+        float hold = 0.0f, tops[kMaxGears];
+        if (before[0] && GearboxKeysMatch(held, before)) strcpy_s(key, w.gearboxKey);
+        else if (!GearHoldRead(key, hold) && GearTopRead(key, tops) == 0 && GearboxFileMatch(key, file, sizeof file)) strcpy_s(key, file);
+    }
     w.gearboxVehicle = w.refs.vehicle;
     w.gearSpeeds = raw.gearSpeeds;
     memcpy(w.gearSpeed, raw.gearSpeed, sizeof w.gearSpeed);
@@ -3794,14 +3852,17 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             const float grip = manual ? (w.clutch.dead ? 0.0f : w.clutch.grip) : 1.0f;
             CreepCase creepCase = {};
             bool stalls = false;
-            const bool on = s.creep && CreepHooked() && !testing;
+            // only where an automatic picks the gear, for now: the governor's path, the holding part and the stall stay in
+            // place, unreached (the author, 1 November: "manual should have no converter. but thats for another time")
+            const bool autoPicks = CreepAutoPicks(w.take.driving, w.pos.running, w.pos.pos, raw.automatic);
+            const bool on = s.creep && CreepHooked() && !testing && autoPicks;
             if (!on) w.creep = CreepModel{};
             // the holding part's most: the engine's full fuel at idle, a throttle of 1 with the engine handed to the game
             // (the factor makes it the curve's torque there), else the torque at idle of the curve it pulls by (review 13)
             const float holdMost = w.hand.on ? 1.0f : TorqueAt(curve, scale.redline > 0.0f ? scale.idle / scale.redline : 0.0f, tachTop);
             // the stalls only as a manual gearbox's: the mod's own gearbox in a position picked by hand (the author's drive
             // of BF57872B); on the automatic and the game's shifter the governor pushes and the engine idles on
-            const bool mayStall = s.gearbox == kGearboxOwn && manual;
+            const bool mayStall = s.gearbox == kGearboxOwn && manual && autoPicks; // never both, for now
             // a pass that shifts gives nothing and leaves the model as it was: the gear it reads is the one before the
             // shift, and the next pass sees the change and keeps kCreepQuiet (round 3 of the crash hotfix)
             const float share = on && !shiftAsk ? CreepStep(w.creep, raw, scale, converter, grip, dt, &creepCase, stalls, holdMost, mayStall,
@@ -5090,6 +5151,24 @@ int wmain(int argc, wchar_t **argv)
         GetPrivateProfileStringW(L"Gearbox", L"Name", L"", boxName, 32, SetupFile(kSetupGearbox, "g_test_box").c_str());
         Check(noHold && holdRead && fabsf(holdBack - 1.7f) < 0.001f && holdWild == kGearHoldRange[1] && !wcscmp(boxName, L"g_test_box"),
               "setups: a gearbox's hold in its own file with its name, read back, held to 1 to 3 seconds");
+        // a gearbox known by its gears finds the file of an earlier key of the same gears (BRIEF_manual_creep_and_hold.md):
+        // the four keys of one gearbox in the logs find the first's file; a gear more or one off by 5 % finds none
+        {
+            const char *keys[4] = { "gears 3.03638 6.05623 8.06946 14.1091 20.1488 high 10.0794", "gears 3.0269 6.04157 8.05135 14.0807 20.11 high 10.0587",
+                                    "gears 3.03574 6.05523 8.06823 14.1072 20.1462 high 10.078", "gears 3.03703 6.05722 8.07069 14.1111 20.1515 high 10.0808" };
+            for (const char *k : keys) DeleteFileW(SetupFile(kSetupGearbox, k).c_str());
+            GearHoldWrite(keys[0], 2.4f);
+            char found[96] = "";
+            bool all = true;
+            for (const char *k : keys) all &= GearboxFileMatch(k, found, sizeof found) && !strcmp(found, keys[0]);
+            const bool more = !GearboxFileMatch("gears 3.03638 6.05623 8.06946 14.1091 20.1488 25.0 high 10.0794", found, sizeof found);
+            const bool off = !GearboxFileMatch("gears 3.18820 6.05623 8.06946 14.1091 20.1488 high 10.0794", found, sizeof found);
+            float hold = 0.0f;
+            const bool own = GearboxFileMatch(keys[2], found, sizeof found) && GearHoldRead(found, hold) && fabsf(hold - 2.4f) < 0.001f;
+            DeleteFileW(SetupFile(kSetupGearbox, keys[0]).c_str());
+            Check(all && more && off && own, "setups: a gearbox known by its gears finds its file under an earlier key of the same gears within 2 % (one gearbox's four keys "
+                                             "of the logs), and keeps its hold; a gear more, or one off by 5 %, finds none");
+        }
         // an engine's profile: its peak torque's speed and aspiration into its file and back; a curve of its own taken
         // in place of the one from the peak; what is out of range held to it; none without a file
         const char *engineName = "test_engine_2";

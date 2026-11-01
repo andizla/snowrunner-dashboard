@@ -170,6 +170,16 @@ struct GearboxPosOrders
 // (never N or R from the mod's thread; 0.18.2's hotfix). pos: the position the model holds after its step.
 inline bool GearboxOwnOrders(int pos, int gear, bool setGear) { return pos == kPosA && (!setGear || gear >= 1); }
 
+// The creep goes only where an automatic picks the gear (the author, 1 November: "creep needs to be disabled in manual
+// for now. auto handles it fine"; BRIEF_manual_creep_and_hold.md): the mod's automatic in A while its gearbox has the
+// truck (the reverse and the range it drives there included), else the game's own automatic up. A gear picked by hand
+// on either shifter gets none, an R included: the game turns its automatic off to shift into R (its reverse goes
+// through AutoOffAndShift), so an R it took at a stop cannot be told from one picked by hand.
+inline bool CreepAutoPicks(bool modDrives, bool posRunning, int pos, uint8_t gameAutomatic)
+{
+    return modDrives ? posRunning && pos == kPosA : gameAutomatic != 0;
+}
+
 inline const char *GearboxPosName(int pos)
 {
     static const char *names[kPosCount] = { "A", "a numbered gear", "N", "R", "H", "L-", "L", "L+" };

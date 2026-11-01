@@ -2453,6 +2453,30 @@ int main()
                            "both settle without growing");
     }
 
+    // one gearbox's keys of gears match within 2 % (BRIEF_manual_creep_and_hold.md): the four of the logs match each
+    // other; a gear more, or one off by 5 %, does not; a name matches nothing, and the key of a named gearbox is its name
+    {
+        const char *keys[4] = { "gears 3.03638 6.05623 8.06946 14.1091 20.1488 high 10.0794", "gears 3.0269 6.04157 8.05135 14.0807 20.11 high 10.0587",
+                                "gears 3.03574 6.05523 8.06823 14.1072 20.1462 high 10.078", "gears 3.03703 6.05722 8.07069 14.1111 20.1515 high 10.0808" };
+        bool four = true;
+        for (const char *a : keys)
+            for (const char *b : keys) four &= GearboxKeysMatch(a, b);
+        float speeds[kMaxGears + 2];
+        const bool parsed = GearboxKeySpeeds(keys[0], speeds, kMaxGears + 2) == 6 && speeds[0] == 3.03638f && speeds[5] == 10.0794f;
+        const bool more = !GearboxKeysMatch(keys[0], "gears 3.03638 6.05623 8.06946 14.1091 20.1488 25 high 10.0794");
+        const bool off = !GearboxKeysMatch(keys[0], "gears 3.03638 6.05623 8.47293 14.1091 20.1488 high 10.0794");
+        const bool names = !GearboxKeysMatch("g_arocs_highrange", "g_arocs_highrange") && !GearboxKeysMatch("g_arocs_highrange", keys[0]) &&
+                           GearboxKeySpeeds("g_arocs_highrange", speeds, kMaxGears + 2) == 0;
+        TruckRaw t = {};
+        t.gearSpeeds = 4;
+        t.gearSpeed[1] = 3.0f, t.gearSpeed[2] = 6.0f, t.gearSpeed[3] = 10.0f;
+        char key[96];
+        GearboxKey(t, "g_arocs_highrange", key, sizeof key);
+        const bool named = !strcmp(key, "g_arocs_highrange");
+        Check(four && parsed && more && off && names && named, "gearbox keys: one gearbox's four keys of the logs match within 2 %; a gear more, or one off by 5 %, does not; "
+                                                               "a name matches nothing, and a named gearbox keeps its name");
+    }
+
     RealImageTest();
 
     printf(g_failed ? "TRUCK TEST FAILED (%d)\n" : "TRUCK TEST OK\n", g_failed);
