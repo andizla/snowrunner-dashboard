@@ -2365,6 +2365,22 @@ int main()
                    "and dual rate x3, with and without bump stops x8 and the zones, each settles from a step of the ground without growing");
     }
 
+    // two spring sets alike field by field compare the same, whatever their padding holds (the drive of 1 November: a
+    // memcmp made a new generation on every pass)
+    {
+        SpringSet a, b;
+        memset(&a, 0x00, sizeof a);
+        memset(&b, 0xA5, sizeof b);
+        for (SpringSet *k : { &a, &b })
+        {
+            k->curve = 2, k->rise = 3.0f, k->cross = 0.5f, k->bump = true, k->zone = 0.08f, k->bumpSpring = 4.0f, k->bumpDamping = 2.0f;
+            k->zones = true, k->soft = 0.7f, k->firm = 1.5f, k->from = 0.1f, k->to = 0.6f;
+        }
+        const bool same = SpringSame(a, b) && memcmp(&a, &b, sizeof a) != 0;
+        b.to = 0.61f;
+        Check(same && !SpringSame(a, b), "spring sets: alike field by field compare the same whatever their padding holds; one field off does not");
+    }
+
     RealImageTest();
 
     printf(g_failed ? "TRUCK TEST FAILED (%d)\n" : "TRUCK TEST OK\n", g_failed);

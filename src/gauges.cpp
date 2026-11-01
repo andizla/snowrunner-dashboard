@@ -2952,10 +2952,15 @@ static DamperSet DamperFrom(const GaugeSettings &s)
 }
 
 // The spring's features and the damping by position (BRIEF_suspension_extras.md, build A), the same way.
+// Its padding zeroed, as the block it goes into is compared whole.
 static SpringSet SpringFrom(const GaugeSettings &s)
 {
-    return SpringSet{ s.springCurve, s.springRise, s.springCross, s.bumpStops, s.bumpZone, s.bumpSpring, s.bumpDamping,
-                      s.dampingZones, s.zoneSoft, s.zoneFirm, s.zoneFrom, s.zoneTo };
+    SpringSet k;
+    memset(&k, 0, sizeof k);
+    k.curve = s.springCurve, k.rise = s.springRise, k.cross = s.springCross;
+    k.bump = s.bumpStops, k.zone = s.bumpZone, k.bumpSpring = s.bumpSpring, k.bumpDamping = s.bumpDamping;
+    k.zones = s.dampingZones, k.soft = s.zoneSoft, k.firm = s.zoneFirm, k.from = s.zoneFrom, k.to = s.zoneTo;
+    return k;
 }
 
 // Anything the physics thread writes each step: the damper off its defaults, a spring feature, the zones.
@@ -3031,7 +3036,7 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
     bool missing = false;
     for (int i = 0; i < r.wheels && i < kMaxWheels; i++) missing |= p.frame.other[i];
     const bool running = damping || springing;
-    const bool damperChanged = running != p.damping || (running && (memcmp(&damper, &p.damper, sizeof damper) != 0 || memcmp(&spring, &p.spring, sizeof spring) != 0));
+    const bool damperChanged = running != p.damping || (running && (memcmp(&damper, &p.damper, sizeof damper) != 0 || !SpringSame(spring, p.spring)));
     const wchar_t *why = !p.block.serial ? L"a start"
                          : r.vehicle != p.vehicle || r.wheels != p.wheels  ? L"a truck switch"
                          : memcmp(scale, p.scale, sizeof scale)         ? L"a slider move"
@@ -3086,11 +3091,19 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
                 {
                     Log(L"damper: %S (%s, compression x%g and x%g, rebound x%g and x%g, the knee %g m/s) for the wheels whose body is known", DamperName(true, p.frame.preset),
                         kDamperCurveNames[damper.curve], damper.low[0], damper.high[0], damper.low[1], damper.high[1], damper.knee);
-                    Log(L"spring: %s%s%s", kSpringCurveNames[spring.curve], spring.bump ? L", bump stops" : L"", spring.zones ? L", damping zones" : L"");
-                    if (spring.curve) Log(L"spring: the rate x%g at the compression end%s", spring.rise, spring.curve == 2 ? L", from the crossover on" : L"");
-                    if (spring.curve == 2) Log(L"spring: the crossover at %g of the travel", spring.cross);
-                    if (spring.bump) Log(L"spring: bump stops over the last %g m, the rate x%g and the compression damping x%g at the end", spring.zone, spring.bumpSpring, spring.bumpDamping);
-                    if (spring.zones) Log(L"spring: the damping x%g from %g to %g of the travel, x%g toward its ends", spring.soft, spring.from, spring.to, spring.firm);
+                    // one line for the spring's features
+                    char line[320];
+                    int used = _snprintf_s(line, sizeof line, _TRUNCATE, "%S", kSpringCurveNames[spring.curve]);
+                    if (spring.curve == 1 && used > 0) used += _snprintf_s(line + used, sizeof line - used, _TRUNCATE, " (x%g at the end)", spring.rise);
+                    if (spring.curve == 2 && used > 0)
+                        used += _snprintf_s(line + used, sizeof line - used, _TRUNCATE, " (x%g from the crossover at %g of the travel)", spring.rise, spring.cross);
+                    if (spring.bump && used > 0)
+                        used += _snprintf_s(line + used, sizeof line - used, _TRUNCATE, "; bump stops over the last %g m, x%g and x%g at the end", spring.zone, spring.bumpSpring,
+                                            spring.bumpDamping);
+                    if (spring.zones && used > 0)
+                        _snprintf_s(line + used, sizeof line - used, _TRUNCATE, "; damping zones x%g from %g to %g of the travel, x%g toward the ends", spring.soft, spring.from,
+                                    spring.to, spring.firm);
+                    Log(L"spring: %S", line);
                 }
                 else if (p.damping) Log(L"damper: off");
             }

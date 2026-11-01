@@ -86,6 +86,14 @@ struct SpringSet
     float soft, firm, from, to;
 };
 
+// Two sets alike, field by field: the struct has padding after its bools, which a memcmp would read (the drive of
+// 1 November, 01:53: a new generation on every pass with a feature on).
+inline bool SpringSame(const SpringSet &a, const SpringSet &b)
+{
+    return a.curve == b.curve && a.rise == b.rise && a.cross == b.cross && a.bump == b.bump && a.zone == b.zone && a.bumpSpring == b.bumpSpring &&
+           a.bumpDamping == b.bumpDamping && a.zones == b.zones && a.soft == b.soft && a.firm == b.firm && a.from == b.from && a.to == b.to;
+}
+
 // The strength is written each step: a curve or the bump stops.
 inline bool SpringOn(const SpringSet &k) { return k.curve != 0 || (k.bump && k.bumpSpring != 1.0f); }
 // The damping goes by position: the zones or the bump stops' damping.
