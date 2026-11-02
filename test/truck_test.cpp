@@ -862,6 +862,64 @@ int main()
               "stall job: posted once at a time, dealt only by a frame for its truck with the game's damage update after, its result and the game's sum "
               "read once; kept while its truck is driven, dropped once another is");
 
+        // the mod's shifts on the game's thread (review 17, step 1): a job posted once at a time, dealt only by an update
+        // for its truck, in the order flag down, ShiftGear, power; + 0x74 and + 0x70 read right after; + 0x70 watched
+        // until it follows; a refused shift starts no watch; a job no update took dropped on another truck or after a
+        // second of 30 updates
+        {
+            const uint64_t kShiftFirst = 0x10230000, kShiftOtherFirst = 0x10240000;
+            Block(kShiftFirst, 0x40);
+            Block(kShiftOtherFirst, 0x40);
+            Put(kShiftFirst + 0x20, kVehicle);
+            Put(kShiftOtherFirst + 0x20, kOtherVehicle);
+            Put(kAction + 0x38, 0.2f);
+            Put(kAction + 0x3C, (uint8_t)1);
+            Put(kAction + 0x74, 1);
+            Put(kAction + 0x70, 1);
+            static uint8_t flagAtShift = 9;
+            static float powerAtShift = -1.0f;
+            static int asked = 0;
+            auto shift = [](uint64_t vehicle, int gear) {
+                asked = gear;
+                Peek(kAction + 0x3C, &flagAtShift, 1);
+                Peek(kAction + 0x38, &powerAtShift, 4);
+                if (vehicle != kVehicle || gear == 99) return false;
+                Put(kAction + 0x74, gear);
+                return true;
+            };
+            ShiftJob sj = {};
+            EngageWatch ew = {};
+            const bool posted = ShiftJobPost(sj, kVehicle, kAction, true, 1, -1, true, true, 1.0f, 100, 5000) &&
+                                !ShiftJobPost(sj, kVehicle, kAction, true, 1, 0, false, false, 0.0f, 100, 5000);
+            const bool other = !ShiftJobFrame(sj, ew, kMemory, kShiftOtherFirst, shift, 101, 7) && sj.state == kShiftPosted;
+            const bool dealt = ShiftJobFrame(sj, ew, kMemory, kShiftFirst, shift, 102, 7) && sj.state == kShiftDealt && sj.took && sj.thread == 7 && sj.frame == 102;
+            float power = 0.0f;
+            uint8_t flag = 9;
+            Peek(kAction + 0x38, &power, 4);
+            Peek(kAction + 0x3C, &flag, 1);
+            const bool order = asked == -1 && flagAtShift == 0 && powerAtShift == 0.2f && sj.factorAtShift == 0.2f && power == 1.0f && flag == 0;
+            const bool fields = sj.gear74 == -1 && sj.gear70 == 1 && ew.on && !ew.at;
+            const bool notYet = !EngageFrame(ew, kMemory, 104);
+            Put(kAction + 0x70, -1);
+            const bool follows = EngageFrame(ew, kMemory, 105) && ew.at == 105 && !EngageFrame(ew, kMemory, 106);
+            // a refused shift: dealt, not taken, no watch
+            sj.state = kShiftIdle;
+            ew = EngageWatch{};
+            const bool refused = ShiftJobPost(sj, kVehicle, kAction, true, -1, 99, false, false, 0.0f, 200, 6000) &&
+                                 ShiftJobFrame(sj, ew, kMemory, kShiftFirst, shift, 201, 7) && !sj.took && !ew.on;
+            // dropped: kept within a second or 30 updates, dropped after both, or at once on another truck
+            sj.state = kShiftIdle;
+            ShiftJobPost(sj, kVehicle, kAction, true, 1, 2, false, false, 0.0f, 300, 7000);
+            const bool kept = !ShiftJobDrop(sj, kVehicle, 7900, 340) && !ShiftJobDrop(sj, kVehicle, 9000, 320) && sj.state == kShiftPosted;
+            const bool late = ShiftJobDrop(sj, kVehicle, 8100, 331) && sj.state == kShiftIdle;
+            ShiftJobPost(sj, kVehicle, kAction, true, 1, 2, false, false, 0.0f, 400, 8000);
+            const bool otherTruck = ShiftJobDrop(sj, kOtherVehicle, 8001, 400) && sj.state == kShiftIdle;
+            Check(posted && other && dealt && order && fields && notYet && follows && refused && kept && late && otherTruck,
+                  "shift job (review 17, step 1): one at a time, dealt only for its truck, the flag down before ShiftGear and the power after it; + 0x74 "
+                  "and + 0x70 right after, + 0x70 watched until it follows; a refused shift starts no watch; dropped after a second and 30 updates, or on "
+                  "another truck");
+        }
+
         // a frame of the truck update: its first argument an object with the vehicle at + 0x20 (StallJobFrame, what the
         // hook's callback runs); and the clutch's burn end to end, its whole points posted to the job and dealt by a frame
         // (review 10, D7)

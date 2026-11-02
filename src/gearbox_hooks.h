@@ -122,7 +122,12 @@ inline const char *GearboxDoorPos(const GearboxDoors &was, const GearboxDoors &n
 // the mod's own gearbox), the truck update's at 2 with Damage on (the stall's damage and the clutch's burn go through
 // it). At Gearbox=0 none of them; the creep's hook on the wheels' drive (CreepHook) goes by Creep alone, at every level.
 struct HooksWanted { bool shifts, truckUpdate; };
-inline HooksWanted GearboxHooksWanted(int level, bool damage) { return HooksWanted{ level >= 1, level >= 2 && damage }; }
+// The truck update also whenever the mod's gearbox may hold a truck (Gearbox 1 or 2) with ShiftOnGameThread=1: the
+// mod's shifts are dealt there (review 17, step 1).
+inline HooksWanted GearboxHooksWanted(int level, bool damage, bool shiftJobs = false)
+{
+    return HooksWanted{ level >= 1, (level >= 2 && damage) || (level >= 1 && shiftJobs) };
+}
 
 // What has been asked of the hooks so far. A hook is attached the first time a level needs it (at the finder's look,
 // or later when the tab turns it on) and never detached while the game runs: a level that no longer needs it leaves
@@ -165,7 +170,19 @@ inline int GearboxGateStep(HooksGate &g, const HooksWanted &w)
 typedef void (*TruckFrameFn)(void *first);
 bool TruckUpdateHook(uintptr_t at, TruckFrameFn onFrame, char *why, size_t size);
 void TruckUpdateUnhook();
+bool TruckUpdateHooked();
 long TruckUpdateFrames(); // the frames the hook has seen
+
+// The manual shift rebuild's probe (review 17, step 0): the thread each hook last ran on (0 none yet), by kFn..., and
+// the truck update's and the wheels' drive's.
+void GearboxThreadsGet(DWORD out[kFnCount], DWORD &truckUpdate, DWORD &drive);
+// The action's fields + 0x38 to + 0xD0 just before and after a call of the game's own ShiftGear, AutoOffAndShift,
+// SetPowerFactor or ShiftToAuto that passed through (not refused), while on: does it do more than set its field? seq
+// grows with each look; 0 none yet.
+static const int kFieldLookBytes = 0x98;
+struct GearboxFieldLook { long seq; float factor; int gear; uint8_t before[kFieldLookBytes], after[kFieldLookBytes]; };
+void GearboxFieldProbe(bool on);
+long GearboxFieldLookGet(int fn, GearboxFieldLook &out);
 
 // The game's wheels' drive (game_code.h, DrivePlaceFind) detoured at address at to a function of its own signature, in
 // a transaction of its own, the first time Creep or Probe is on with a truck driven; never taken out while the game

@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <math.h>
+#include <limits.h>
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -973,6 +974,7 @@ static void ReadIni(GaugeSettings &s)
     s.zoneFrom = IniFloat(L"ZoneFrom", s.zoneFrom, ini);
     s.zoneTo = IniFloat(L"ZoneTo", s.zoneTo, ini);
     s.suspStepTest = IniInt(L"SuspStepTest", s.suspStepTest, ini); // a test: read, never written
+    s.shiftOnGameThread = IniInt(L"ShiftOnGameThread", s.shiftOnGameThread, ini); // review 17, step 1: read, never written
     s.toggleKey = IniInt(L"ToggleKey", s.toggleKey, ini);
     wchar_t buf[64] = {};
     GetPrivateProfileStringW(kIniSection, L"PadToggle", Wide(s.padToggle).c_str(), buf, 64, ini.c_str());
@@ -2126,7 +2128,7 @@ static void GearboxHooksStep(const GaugeSettings &s)
     if (!g_hooksReady) return;
     static HooksGate gate = {};
     static bool saidNone = false, saidNoTruck = false;
-    const HooksWanted want = GearboxHooksWanted(s.gearbox, s.damage);
+    const HooksWanted want = GearboxHooksWanted(s.gearbox, s.damage, s.shiftOnGameThread != 0);
     const int act = GearboxGateStep(gate, want);
     if (!want.shifts && !gate.shifts && !saidNone)
     {
@@ -2136,7 +2138,7 @@ static void GearboxHooksStep(const GaugeSettings &s)
     if (want.shifts && !want.truckUpdate && !gate.truckUpdate && !saidNoTruck)
     {
         saidNoTruck = true;
-        Log(L"gearbox damage: the game's truck update is left alone (it is hooked only at Gearbox=2 with Damage on)");
+        Log(L"gearbox damage: the game's truck update is left alone (it is hooked at Gearbox=2 with Damage on, or with ShiftOnGameThread=1); the mod's shifts go from its own thread");
     }
     if (act & kGateAttachShifts)
     {
@@ -2160,14 +2162,16 @@ static void GearboxHooksStep(const GaugeSettings &s)
     {
         // the damage path: the game's truck update hooked so the damage is dealt on its thread, its damage update after
         char hookWhy[160] = "";
-        if (!g_pathFound) Log(L"gearbox damage: the game's damage path was not found, so a stall or the clutch's burn costs the gearbox nothing");
+        if (!g_pathFound)
+            Log(L"gearbox damage: the game's damage path was not found, so a stall or the clutch's burn costs the gearbox nothing, and the mod's shifts go from its own thread");
         else if (!TruckUpdateHook((uintptr_t)(g_base + g_path.truckUpdate), &OnTruckFrame, hookWhy, sizeof hookWhy))
-            Log(L"gearbox damage: %S, so a stall or the clutch's burn costs the gearbox nothing", hookWhy);
+            Log(L"gearbox damage: %S, so a stall or the clutch's burn costs the gearbox nothing, and the mod's shifts go from its own thread", hookWhy);
         else
         {
             g_damageUpdate = (void (*)(uint64_t))(g_base + g_path.damageUpdate);
-            Log(L"gearbox damage: dealt on the game's own thread, from its truck update at +%zx (hooked at Gearbox=2 with Damage on), with its damage update at +%zx after",
-                g_path.truckUpdate, g_path.damageUpdate);
+            Log(L"gearbox damage: dealt on the game's own thread, from its truck update at +%zx (hooked at Gearbox=2 with Damage on, or with ShiftOnGameThread=1), with its "
+                L"damage update at +%zx after; the mod's shifts are dealt there too (ShiftOnGameThread=%d)",
+                g_path.truckUpdate, g_path.damageUpdate, s.shiftOnGameThread);
         }
     }
     if (act & kGateShiftsLeft) Log(L"gearbox: Gearbox=0 needs no hooks; the gearbox hooks are left in place until the game is started again");
@@ -2267,11 +2271,21 @@ static bool PeekGame(uint64_t addr, void *out, size_t size) { return ReadProcess
 // automatic flag, and with Powertrain=1 or the pull test the game's torque factor.
 static bool PokeGame(uint64_t addr, const void *in, size_t size) { return WriteProcessMemory(GetCurrentProcess(), (void *)addr, in, size, nullptr) != 0; }
 
-// On the game's thread, every frame of its truck update: a stall's job dealt for the truck the update is for.
+// The mod's shifts on the game's thread (review 17, step 1; truck.h, ShiftJob): the job, and + 0x70 watched after a shift.
+static ShiftJob g_shiftJob = {};
+static EngageWatch g_engage = {};
+// The game's ShiftGear behind the hook, for the job (GameShiftCall: a fault turns it off for the game).
+static bool ShiftOnGame(uint64_t vehicle, int gear) { return g_shiftGear && GameShiftCall(vehicle, gear); }
+
+// On the game's thread, every frame of its truck update: a shift's job and a stall's dealt for the truck the update
+// is for, and + 0x70 watched after a shift.
 static void OnTruckFrame(void *first)
 {
-    if (g_stallJob.state != kStallJobPosted) return;
     const TruckMemory m = { PeekGame, g_base, PokeGame };
+    const long frame = TruckUpdateFrames();
+    if (g_shiftJob.state == kShiftPosted) ShiftJobFrame(g_shiftJob, g_engage, m, (uint64_t)first, ShiftOnGame, frame, GetCurrentThreadId());
+    EngageFrame(g_engage, m, frame);
+    if (g_stallJob.state != kStallJobPosted) return;
     StallJobFrame(g_stallJob, m, (uint64_t)first, g_damageUpdate);
 }
 
@@ -3442,6 +3456,52 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     }
     for (unsigned fn = 0; fresh && fn < kFnCount; fn++)
         if (fresh & (1u << fn)) Log(L"gearbox: the game asked for %s, refused: the mod's gearbox has the truck", GearboxAskName((int)fn));
+    // the manual shift rebuild's probe (review 17, step 0), with Probe=1: the thread of each of the game's gearbox calls
+    // since the last pass, refused ones too, against the truck update's, the drive's and the mod's; and the action's
+    // fields around a call that passed through, each word that changed
+    GearboxFieldProbe(probe != 0);
+    if (probe && GearboxHooked())
+    {
+        static long last[kFnCount] = {}, lastRefused[kFnCount] = {}, looked[kFnCount] = {};
+        GearboxCounts c;
+        GearboxCountsGet(c);
+        DWORD thread[kFnCount], truckThread = 0, driveThread = 0;
+        GearboxThreadsGet(thread, truckThread, driveThread);
+        const long count[kFnCount] = { c.shift, c.autoGear, c.high, c.reverse, c.neutral, 0, c.autoOff, c.power, c.vehicle };
+        char calls[512] = "";
+        size_t n = 0;
+        for (int f = 0; f < kFnCount; f++)
+        {
+            if (count[f] == last[f]) continue;
+            const int wrote = snprintf(calls + n, sizeof calls - n, "%s%s x%ld (%ld refused) on thread %lu", n ? ", " : "", kGameFunctions[f].name, count[f] - last[f],
+                                       c.refused[f] - lastRefused[f], (unsigned long)thread[f]);
+            if (wrote > 0 && (size_t)wrote < sizeof calls - n) n += (size_t)wrote;
+            last[f] = count[f];
+            lastRefused[f] = c.refused[f];
+        }
+        if (n)
+            Log(L"probe: the game's gearbox calls: %S; the truck update's thread %lu, the drive's %lu, the mod's %lu", calls, (unsigned long)truckThread,
+                (unsigned long)driveThread, GetCurrentThreadId());
+        static const int lookFns[4] = { kFnShiftGear, kFnAutoOffAndShift, kFnSetPower, kFnShiftToAuto };
+        for (const int f : lookFns)
+        {
+            static GearboxFieldLook look;
+            if (GearboxFieldLookGet(f, look) <= looked[f]) continue;
+            looked[f] = look.seq;
+            char words[600] = "";
+            size_t k = 0;
+            for (int at = 0; at + 4 <= kFieldLookBytes; at += 4)
+            {
+                uint32_t a, b;
+                memcpy(&a, look.before + at, 4);
+                memcpy(&b, look.after + at, 4);
+                if (a == b) continue;
+                const int wrote = snprintf(words + k, sizeof words - k, " +%02X %08X->%08X", 0x38 + at, a, b);
+                if (wrote > 0 && (size_t)wrote < sizeof words - k) k += (size_t)wrote;
+            }
+            Log(L"probe: the game's %S passed through (gear %d, factor %.2f): fields changed:%S", kGameFunctions[f].name, look.gear, look.factor, k ? words : " none");
+        }
+    }
     const bool was = w.found;
     bool read = w.found && TruckRead(m, w.refs, raw);
     if (!read && (w.found || now >= w.findAt))
@@ -3900,6 +3960,45 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             const bool brakeStand = w.pos.pos == kPosA && fabsf(boxTruck.speed) < kStandStill && TruckBrake(raw) > 0.05f;
             GearboxPolicy(own ? kPolicyAll : kPolicyBrakeReverse, (void *)w.refs.vehicle, brakeStand, (const volatile uint8_t *)(w.refs.action + 0x3C));
         }
+        // the mod's shifts on the game's thread (review 17, step 1): the last job's result taken back, one that no update
+        // took dropped, and + 0x70's following said; each shift has one line, always written, so the exit hook's line
+        // lands right after the last one
+        const bool viaJob = s.shiftOnGameThread && TruckUpdateHooked() && g_shiftGear;
+        if (g_shiftJob.state == kShiftDealt)
+        {
+            ShiftJob &j = g_shiftJob;
+            if (j.shift)
+            {
+                Log(L"shift %u: %d to %d %S; dealt at truck update %ld on thread %lu (the truck update's), %llu ms after posting: %s, +74 %d, +70 %d, "
+                    L"power %.2f at the shift%S", j.number, j.from, j.gear, j.context, j.frame, j.thread, (unsigned long long)(now - j.postedAt),
+                    j.took ? L"took" : L"refused", j.gear74, j.gear70, j.factorAtShift, j.power ? " (set after)" : "");
+                if (j.took) w.take.shifts++;
+                else if (GearboxPosRefused(w.pos, j.gear))
+                    Log(L"gearbox: the game did not take gear %d from the mod's gearbox, in gear %d; asked again when the position changes", j.gear, j.from);
+            }
+            InterlockedExchange(&j.state, kShiftIdle);
+        }
+        else if (ShiftJobDrop(g_shiftJob, w.refs.vehicle, now, TruckUpdateFrames()))
+        {
+            if (g_shiftJob.shift)
+            {
+                Log(L"shift %u: %d to %d dropped: %s", g_shiftJob.number, g_shiftJob.from, g_shiftJob.gear,
+                    g_shiftJob.vehicle != w.refs.vehicle ? L"another truck is driven" : L"no truck update took it within a second and 30 updates");
+                w.pos.lastSet = INT_MIN; // asked again on the next pass
+            }
+        }
+        if (g_engage.on && g_engage.at)
+        {
+            Log(L"shift: +70 showed gear %d at truck update %ld, %ld after the shift", g_engage.gear, (long)g_engage.at, (long)g_engage.at - g_engage.from);
+            InterlockedExchange(&g_engage.on, 0);
+        }
+        else if (g_engage.on && TruckUpdateFrames() - g_engage.from > 600)
+        {
+            Log(L"shift: +70 did not show gear %d in 600 truck updates", g_engage.gear);
+            InterlockedExchange(&g_engage.on, 0);
+        }
+        bool jobFlag = false, jobPower = false;
+        float jobFactor = 0.0f;
         bool shiftAsk = false, stallOrdered = false;
         int shiftTo = 0;
         if (w.take.driving && !testing)
@@ -3928,8 +4027,13 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             {
                 box.flagDown = box.setPower = box.setGear = false;
             }
-            if (box.flagDown) m.put(w.refs.action + 0x3C, (uint8_t)0);
-            if (box.setPower) m.put(w.refs.action + 0x38, box.power);
+            // with the shifts on the game's thread the flag and the power go in the same job, around the shift
+            if (viaJob) jobFlag = box.flagDown, jobPower = box.setPower, jobFactor = box.power;
+            else
+            {
+                if (box.flagDown) m.put(w.refs.action + 0x3C, (uint8_t)0);
+                if (box.setPower) m.put(w.refs.action + 0x38, box.power);
+            }
             stallOrdered = box.stall; // ramped into the game's stall seconds below (StallStep), so its notice shows
             // the stall the model ordered costs the gearbox (StallDamagePercent, with Damage), dealt on the game's thread;
             // a stall of the game's own does not
@@ -4099,10 +4203,32 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             // nothing of the creep's through the shift: its slot cleared first, and CreepStep gives nothing for
             // kCreepQuiet once the game's gear moves (0.18.2's hotfix)
             CreepGive(0, 0.0f);
+            const float creepWas = w.creep.share;
             w.creep.share = w.creep.hold = w.creep.given = 0.0f;
             w.creep.armed = false;
-            if (GameShift(w.refs.vehicle, shiftTo))
+            static unsigned shiftNumber = 0;
+            char context[192];
+            snprintf(context, sizeof context, "by %s (%s, clutch %s, %.1f m/s, creep %.2f, stall %.2f)", w.pos.byShifter ? "the game's shifter" : "the bindings",
+                     GearboxPosName(w.pos.pos), w.pos.clutch ? "down" : "up", boxTruck.speed, creepWas, raw.stall);
+            if (viaJob)
             {
+                // posted for the truck update; one still out holds this pass's shift back, and the next pass asks again
+                if (g_shiftJob.state == kShiftIdle)
+                {
+                    g_shiftJob.number = ++shiftNumber;
+                    strcpy_s(g_shiftJob.context, context);
+                    ShiftJobPost(g_shiftJob, w.refs.vehicle, w.refs.action, true, raw.gear, shiftTo, jobFlag, jobPower, jobFactor, TruckUpdateFrames(), now);
+                }
+                else w.pos.lastSet = INT_MIN;
+                jobFlag = jobPower = false;
+            }
+            else if (GameShift(w.refs.vehicle, shiftTo))
+            {
+                int g74 = INT_MIN, g70 = INT_MIN;
+                PeekGame(w.refs.action + 0x74, &g74, 4);
+                PeekGame(w.refs.action + 0x70, &g70, 4);
+                Log(L"shift %u: %d to %d %S; on the mod's thread %lu (ShiftOnGameThread=0 or no truck update hook): took, +74 %d, +70 %d", ++shiftNumber, raw.gear, shiftTo,
+                    context, GetCurrentThreadId(), g74, g70);
                 w.take.shifts++;
                 if (probe && shiftTo >= 1 && raw.gear >= 1)
                 {
@@ -4117,14 +4243,18 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                         L"(the game's pull %.2f) and %.2f of the new one's (%.2f)",
                         raw.gear, shiftTo, shiftInput, shiftRpm, foot, from, GamePull(from), into, GamePull(into));
                 }
-                else if (probe) Log(L"gearbox: %d to %d", raw.gear, shiftTo);
             }
             else
             {
+                Log(L"shift %u: %d to %d %S; on the mod's thread %lu: refused", ++shiftNumber, raw.gear, shiftTo, context, GetCurrentThreadId());
                 if (GearboxPosRefused(w.pos, shiftTo))
                     Log(L"gearbox: the game did not take gear %d from the mod's gearbox, in gear %d; asked again when the position changes", shiftTo, raw.gear);
             }
         }
+        // the flag or the power on their own (L to L+, the flag up for a moment): a job without a shift; one still out
+        // leaves them to the next pass, which reads the fields again
+        if (viaJob && (jobFlag || jobPower))
+            ShiftJobPost(g_shiftJob, w.refs.vehicle, w.refs.action, false, raw.gear, raw.gear, jobFlag, jobPower, jobFactor, TruckUpdateFrames(), now);
         if (w.oil.on != oilWas)
             Log(w.oil.on ? L"oil: %.1f C, too hot from %g C: the lamp blinks and the warning sounds" : L"oil: %.1f C, the warning is over", w.temp.oil, s.oilWarnC);
         // the engine's record, for each truck as it is first driven; one that was not found is looked for again every

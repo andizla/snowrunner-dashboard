@@ -49,6 +49,61 @@ static bool AutoFlagUp()
 }
 static volatile LONG g_refused[kFnCount] = {};
 
+// The manual shift rebuild's probe (review 17, step 0): each hook's last thread, and the fields around a call that
+// passed through.
+static volatile LONG g_thread[kFnCount] = {}, g_truckThread = 0, g_driveThread = 0, g_fieldProbe = 0;
+static GearboxFieldLook g_looks[kFnCount] = {};
+static volatile LONG g_lookSeq[kFnCount] = {};
+
+static void Seen(int fn)
+{
+    InterlockedIncrement(&g_count[fn]);
+    InterlockedExchange(&g_thread[fn], (LONG)GetCurrentThreadId());
+}
+
+// The action's fields from + 0x38, through the vehicle's action pointer at + 0x68; false where the memory is gone.
+static bool FieldsGrab(void *vehicle, uint8_t *out)
+{
+    __try
+    {
+        const uint8_t *action = *(uint8_t *const *)((const uint8_t *)vehicle + 0x68);
+        if ((uintptr_t)action < 0x10000) return false;
+        memcpy(out, action + 0x38, kFieldLookBytes);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
+// Around a call that passes through: before (true to go on and look after), and after. The record may be torn if two
+// game threads look at once; it is a probe's.
+static bool LookBefore(int fn, void *vehicle) { return g_fieldProbe && FieldsGrab(vehicle, g_looks[fn].before); }
+static void LookAfter(int fn, void *vehicle, int gear, float factor)
+{
+    if (!FieldsGrab(vehicle, g_looks[fn].after)) return;
+    g_looks[fn].gear = gear;
+    g_looks[fn].factor = factor;
+    g_looks[fn].seq = InterlockedIncrement(&g_lookSeq[fn]);
+}
+
+void GearboxThreadsGet(DWORD out[kFnCount], DWORD &truckUpdate, DWORD &drive)
+{
+    for (int f = 0; f < kFnCount; f++) out[f] = (DWORD)g_thread[f];
+    truckUpdate = (DWORD)g_truckThread;
+    drive = (DWORD)g_driveThread;
+}
+
+void GearboxFieldProbe(bool on) { InterlockedExchange(&g_fieldProbe, on ? 1 : 0); }
+
+long GearboxFieldLookGet(int fn, GearboxFieldLook &out)
+{
+    if (fn < 0 || fn >= kFnCount || !g_lookSeq[fn]) return 0;
+    out = g_looks[fn];
+    return out.seq;
+}
+
 static void Tell(LONG bit)
 {
     if (!(InterlockedOr(&g_told, bit) & bit)) InterlockedOr(&g_new, bit);
@@ -125,54 +180,64 @@ static bool Refused(int fn, void *vehicle, int32_t gear = 0, float factor = 0.0f
 
 static bool HookShiftGear(void *vehicle, int32_t gear)
 {
-    InterlockedIncrement(&g_count[kFnShiftGear]);
+    Seen(kFnShiftGear);
     InterlockedExchange(&g_shiftGear, gear);
     if (Refused(kFnShiftGear, vehicle, gear)) return false;
-    return ((ShiftFn)g_way[kFnShiftGear])(vehicle, gear);
+    const bool look = LookBefore(kFnShiftGear, vehicle);
+    const bool took = ((ShiftFn)g_way[kFnShiftGear])(vehicle, gear);
+    if (look) LookAfter(kFnShiftGear, vehicle, gear, 0.0f);
+    return took;
 }
 
 static void HookShiftToAuto(void *vehicle)
 {
-    InterlockedIncrement(&g_count[kFnShiftToAuto]);
+    Seen(kFnShiftToAuto);
     if (Refused(kFnShiftToAuto, vehicle)) return;
+    const bool look = LookBefore(kFnShiftToAuto, vehicle);
     ((AutoFn)g_way[kFnShiftToAuto])(vehicle);
+    if (look) LookAfter(kFnShiftToAuto, vehicle, 0, 0.0f);
 }
 
 static bool HookShiftToHigh(void *vehicle)
 {
-    InterlockedIncrement(&g_count[kFnShiftToHigh]);
+    Seen(kFnShiftToHigh);
     if (Refused(kFnShiftToHigh, vehicle)) return false;
     return ((VehicleFn)g_way[kFnShiftToHigh])(vehicle);
 }
 
 static bool HookShiftToReverse(void *vehicle)
 {
-    InterlockedIncrement(&g_count[kFnShiftToReverse]);
+    Seen(kFnShiftToReverse);
     if (Refused(kFnShiftToReverse, vehicle)) return false;
     return ((VehicleFn)g_way[kFnShiftToReverse])(vehicle);
 }
 
 static bool HookShiftToNeutral(void *vehicle)
 {
-    InterlockedIncrement(&g_count[kFnShiftToNeutral]);
+    Seen(kFnShiftToNeutral);
     if (Refused(kFnShiftToNeutral, vehicle)) return false;
     return ((VehicleFn)g_way[kFnShiftToNeutral])(vehicle);
 }
 
 static bool HookAutoOffAndShift(void *vehicle, int32_t gear)
 {
-    InterlockedIncrement(&g_count[kFnAutoOffAndShift]);
+    Seen(kFnAutoOffAndShift);
     InterlockedExchange(&g_autoOffGear, gear);
     if (Refused(kFnAutoOffAndShift, vehicle, gear)) return false;
-    return ((ShiftFn)g_way[kFnAutoOffAndShift])(vehicle, gear);
+    const bool look = LookBefore(kFnAutoOffAndShift, vehicle);
+    const bool took = ((ShiftFn)g_way[kFnAutoOffAndShift])(vehicle, gear);
+    if (look) LookAfter(kFnAutoOffAndShift, vehicle, gear, 0.0f);
+    return took;
 }
 
 static void HookSetPower(void *vehicle, float factor)
 {
-    InterlockedIncrement(&g_count[kFnSetPower]);
+    Seen(kFnSetPower);
     g_power = factor;
     if (Refused(kFnSetPower, vehicle, 0, factor)) return;
+    const bool look = LookBefore(kFnSetPower, vehicle);
     ((PowerFn)g_way[kFnSetPower])(vehicle, factor);
+    if (look) LookAfter(kFnSetPower, vehicle, 0, factor);
 }
 
 void GearboxPolicy(int policy, void *vehicle, bool brakeStand, const volatile uint8_t *autoFlag)
@@ -195,7 +260,7 @@ unsigned GearboxRefusedNew() { return (unsigned)InterlockedExchange(&g_new, 0); 
 
 static void HookSetVehicle(void *control, void *vehicle)
 {
-    InterlockedIncrement(&g_count[kFnSetVehicle]);
+    Seen(kFnSetVehicle);
     InterlockedExchange(&g_vehicleSet, vehicle ? 1 : 0);
     ((SetVehicleFn)g_way[kFnSetVehicle])(control, vehicle);
 }
@@ -344,6 +409,7 @@ static bool g_truckHooked = false;
 static void HookTruckUpdate(void *first, void *second, float third, float fourth)
 {
     InterlockedIncrement(&g_frames);
+    g_truckThread = (LONG)GetCurrentThreadId();
     if (const TruckFrameFn on = g_onFrame) on(first);
     ((TruckUpdateFn)g_truckWay)(first, second, third, fourth);
 }
@@ -377,6 +443,8 @@ void TruckUpdateUnhook()
 
 long TruckUpdateFrames() { return g_frames; }
 
+bool TruckUpdateHooked() { return g_truckHooked; }
+
 // ---- the game's wheels' drive (the creep, and the suspension's step probe) ----
 // In the 6ab52f5d image the drive (c41da0) reads only the action in rcx, the drive throttle in xmm1 and the step's
 // seconds in xmm2: rdx, r8, r9, xmm0 and xmm3 it writes before any read, it reads no argument from the stack (only
@@ -405,6 +473,7 @@ static bool g_creepHooked = false;
 static void CreepDrive(void *action, float throttle, float dt)
 {
     InterlockedIncrement(&g_creepCalls);
+    g_driveThread = (LONG)GetCurrentThreadId();
     const CreepSlot *slot = (const CreepSlot *)g_creepSlot;
     if (slot && (uint64_t)(uintptr_t)action == slot->action)
     {

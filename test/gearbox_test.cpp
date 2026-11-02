@@ -484,7 +484,8 @@ int main()
         const HooksWanted none = GearboxHooksWanted(0, true), one = GearboxHooksWanted(1, true), twoOff = GearboxHooksWanted(2, false),
                           twoOn = GearboxHooksWanted(2, true);
         const bool chosen = !none.shifts && !none.truckUpdate && one.shifts && !one.truckUpdate && twoOff.shifts && !twoOff.truckUpdate && twoOn.shifts &&
-                            twoOn.truckUpdate;
+                            twoOn.truckUpdate && GearboxHooksWanted(1, false, true).truckUpdate && GearboxHooksWanted(2, false, true).truckUpdate &&
+                            !GearboxHooksWanted(0, true, true).truckUpdate; // ShiftOnGameThread: the truck update at 1 and 2 (review 17, step 1)
         HooksGate g = {};
         const bool idle = GearboxGateStep(g, none) == 0 && !g.shifts;                   // Gearbox=0: nothing asked
         const bool shiftsNow = GearboxGateStep(g, one) == kGateAttachShifts;              // the tab turns 1 on mid-game

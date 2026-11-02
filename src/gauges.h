@@ -122,6 +122,7 @@ struct GaugeSettings
     bool suspDisplay;        // SuspDisplay: the suspension display, each wheel's travel, its end hits and whether it hangs, and the articulation
     bool airSuspension;      // AirSuspension: each wheel held at its rest place of the first standstill, cargo or not; BindRideUp and BindRideDown move it (a test)
     bool airHorizon;         // AirHorizon: with AirSuspension, the body's pitch and roll levelled to the horizon instead of to the wheels (a test)
+    int shiftOnGameThread;   // ShiftOnGameThread (ini only, 1 by default): the mod's shifts dealt on the game's thread in its truck update; 0 calls the game's ShiftGear from the mod's thread as before (review 17, step 1)
     int suspStepTest;        // SuspStepTest (ini only, a test, with Probe=1): every 20 s wheel 0's spring at half for 1 s standing (1), its damping at a tenth for 0.5 s moving (2), or its attach point 2 cm toward the droop for 1 s standing (3)
     int soundVolume;        // SoundVolume: how loud the turbo's flutter and the oil warning are, 0 to 100; 0 = no sound
     bool soundsOnly;         // SoundsOnly: the sounds are played and the cluster is not drawn
@@ -188,6 +189,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     strcpy_s(s.padToggle, "None");
     s.demo = false;
     s.probe = 0;
+    s.shiftOnGameThread = 1;
 }
 
 // The range of each number: what the ini and the tab hold the settings to. A tinted face stops at 0.85, as a darker
@@ -321,6 +323,7 @@ inline void SettingsClamp(GaugeSettings &s)
     s.soundVolume = s.soundVolume < 0 ? 0 : s.soundVolume > 100 ? 100 : s.soundVolume;
     s.probe = s.probe < 0 ? 0 : s.probe;
     s.suspStepTest = s.suspStepTest < 0 || s.suspStepTest > 3 ? 0 : s.suspStepTest;
+    s.shiftOnGameThread = s.shiftOnGameThread ? 1 : 0;
 }
 
 // The scales of a truck class: idle, where the red zone starts, the tachometer's top (rpm), the speedometer's top

@@ -60,6 +60,7 @@
 //                                    wheel's shifter picks the gears
 //   control + 0xD8                   (byte) the function menu is open
 #pragma once
+#include <limits.h>
 #include "gauges.h"
 
 static const uint64_t kRvaControl = 0x2a8eb78, kRvaWheelClass = 0x2258918, kRvaGame = 0x2a8eb90, kRvaMap = 0x2a8eb30, kRvaViewer = 0x2a8eb38,
@@ -946,6 +947,103 @@ inline bool StallJobDrop(StallJob &j, uint64_t vehicle)
 inline bool StallJobDropBurn(StallJob &j)
 {
     return j.state == kStallJobPosted && j.burn && InterlockedCompareExchange(&j.state, kStallJobIdle, kStallJobPosted) == kStallJobPosted;
+}
+
+// ---- the mod's shifts on the game's thread (review 17, step 1) ----
+// The mod's thread decides as before; with ShiftOnGameThread=1 and the truck update hooked it posts a job instead of
+// calling the game: the automatic flag down, then the game's ShiftGear (through the way behind the hook, never
+// refused), then the power factor, each only where the pass asks for it. The truck update deals it on the game's
+// thread for the truck it updates, before the update runs, and hands back the result and + 0x74 and + 0x70 right
+// after the shift. One job at a time: the fields are written first and the state last, so the game's thread never
+// meets a half-written one. After a shift the game's thread also watches + 0x70 until it shows the gear asked.
+enum { kShiftIdle, kShiftPosted, kShiftDealt };
+struct ShiftJob
+{
+    volatile LONG state;
+    uint64_t vehicle, action;
+    bool shift, flagDown, power; // what the pass asks for
+    int from, gear;             // the gear read and the gear asked
+    float factor;
+    long postedFrame;
+    unsigned long long postedAt;
+    unsigned number;            // the shift's number in the log
+    char context[192];          // how the pass stood when it posted, for the shift's line
+    // the result, on the game's thread
+    bool took;
+    int gear74, gear70;         // + 0x74 and + 0x70 right after the shift (INT_MIN unread)
+    long frame;                 // the truck update it was dealt in
+    unsigned long thread;
+    float factorAtShift;        // + 0x38 as ShiftGear met it: the power goes after the shift
+};
+struct EngageWatch { volatile LONG on; uint64_t action; int gear; long from; volatile LONG at; };
+
+// On the mod's thread: false while the last job is still out.
+inline bool ShiftJobPost(ShiftJob &j, uint64_t vehicle, uint64_t action, bool shift, int from, int gear, bool flagDown, bool power, float factor, long frame,
+                         unsigned long long now)
+{
+    if (j.state != kShiftIdle) return false;
+    j.vehicle = vehicle;
+    j.action = action;
+    j.shift = shift;
+    j.from = from;
+    j.gear = gear;
+    j.flagDown = flagDown;
+    j.power = power;
+    j.factor = factor;
+    j.postedFrame = frame;
+    j.postedAt = now;
+    j.took = false;
+    InterlockedExchange(&j.state, kShiftPosted);
+    return true;
+}
+
+// On the game's thread, for the truck update whose first argument is first (the vehicle at + 0x20): the job dealt
+// when it is for that truck. shift: the game's ShiftGear behind the hook. True when it was dealt.
+inline bool ShiftJobFrame(ShiftJob &j, EngageWatch &e, const TruckMemory &m, uint64_t first, bool (*shift)(uint64_t vehicle, int gear), long frame,
+                          unsigned long thread)
+{
+    uint64_t vehicle = 0;
+    if (j.state != kShiftPosted || !m.get(first + 0x20, vehicle) || vehicle != j.vehicle) return false;
+    j.thread = thread;
+    j.frame = frame;
+    if (j.flagDown) m.put(j.action + 0x3C, (uint8_t)0);
+    j.took = false;
+    j.factorAtShift = -1.0f;
+    m.get(j.action + 0x38, j.factorAtShift);
+    if (j.shift && shift) j.took = shift(vehicle, j.gear);
+    j.gear74 = j.gear70 = INT_MIN;
+    m.get(j.action + 0x74, j.gear74);
+    m.get(j.action + 0x70, j.gear70);
+    if (j.power) m.put(j.action + 0x38, j.factor);
+    if (j.shift && j.took)
+    {
+        e.action = j.action;
+        e.gear = j.gear;
+        e.from = frame;
+        InterlockedExchange(&e.at, j.gear70 == j.gear ? frame : 0);
+        InterlockedExchange(&e.on, 1);
+    }
+    InterlockedExchange(&j.state, kShiftDealt);
+    return true;
+}
+
+// On the game's thread, each truck update: + 0x70 watched after a shift; true on the update it shows the gear asked.
+inline bool EngageFrame(EngageWatch &e, const TruckMemory &m, long frame)
+{
+    if (!e.on || e.at) return false;
+    int engaged = INT_MIN;
+    if (!m.get(e.action + 0x70, engaged) || engaged != e.gear) return false;
+    InterlockedExchange(&e.at, frame);
+    return true;
+}
+
+// On the mod's thread: a job no update took dropped, once another truck is driven, or after a second in which 30
+// updates went by (a pause or a menu holds it). True when it was.
+inline bool ShiftJobDrop(ShiftJob &j, uint64_t vehicle, unsigned long long now, long frame)
+{
+    if (j.state != kShiftPosted) return false;
+    if (j.vehicle == vehicle && (now - j.postedAt <= 1000 || frame - j.postedFrame <= 30)) return false;
+    return InterlockedCompareExchange(&j.state, kShiftIdle, kShiftPosted) == kShiftPosted;
 }
 
 // What the game is showing. control: the driven truck's control object, 0 when there is none.
