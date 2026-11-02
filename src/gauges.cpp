@@ -2340,7 +2340,7 @@ struct SuspStepWatch
     LONG levelTaken;            // the air suspension's rest places taken, as seen; its next log, and what the tab shows
     ULONGLONG levelLogAt;
     bool airTaken;
-    float airLevel[2];
+    float airLevel[2], airSide;
     SuspDisplaySlot shown;
     float windowRest[kMaxWheels];
     bool windowRested[kMaxWheels];
@@ -3359,30 +3359,33 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
         }
     }
     // the air suspension (build C): its rest places said once taken, and with Probe=1 its levelling every 10 s
-    float level[2] = {}, ref[2] = {}, count[2] = {};
+    // (each wheel levels on its own: the side figure is the left wheels' mean less the right's)
+    float level[2] = {}, ref[2] = {}, count[2] = {}, side[2] = {}, sides[2] = {};
     for (int i = 0; p.block.air && g_step.level.taken && i < p.block.wheels; i++)
     {
         if (!p.block.attachC[i]) continue;
-        const int axle = p.front[i] ? 0 : 1;
+        const int axle = p.front[i] ? 0 : 1, at = p.isLeft[i] ? 0 : 1;
         level[axle] += g_step.level.level[i], ref[axle] += g_step.level.ref[i], count[axle] += 1.0f;
+        side[at] += g_step.level.level[i], sides[at] += 1.0f;
     }
     for (int a = 0; a < 2; a++)
         if (count[a] > 0.0f) level[a] /= count[a], ref[a] /= count[a];
+    const float leftOver = sides[0] > 0.0f && sides[1] > 0.0f ? side[0] / sides[0] - side[1] / sides[1] : 0.0f;
     if (g_step.levelTaken != p.levelTaken)
     {
         p.levelTaken = g_step.levelTaken;
         if (p.block.air)
-            Log(L"air suspension: each axle's rest place taken at a standstill, front %.3f m and rear %.3f m from its stock attach point (the ride height's shift left out); "
-                L"held from now on, the ride height %+d cm on top",
+            Log(L"air suspension: each wheel's rest place taken at a standstill, front %.3f m and rear %.3f m from its stock attach point on the mean (the ride height's shift "
+                L"left out); held from now on, side to side too, the ride height %+d cm on top",
                 ref[0], ref[1], airHeight);
     }
     if (s.probe && p.block.air && g_step.level.taken && now >= p.levelLogAt)
     {
         p.levelLogAt = now + 10000;
-        Log(L"air suspension: levelling front %+.3f m, rear %+.3f m, the keys' height %+d cm", level[0], level[1], airHeight);
+        Log(L"air suspension: levelling front %+.3f m, rear %+.3f m, left over right %+.3f m, the keys' height %+d cm", level[0], level[1], leftOver, airHeight);
     }
     p.airTaken = p.block.air && g_step.level.taken;
-    p.airLevel[0] = level[0] * 100.0f, p.airLevel[1] = level[1] * 100.0f;
+    p.airLevel[0] = level[0] * 100.0f, p.airLevel[1] = level[1] * 100.0f, p.airSide = leftOver * 100.0f;
     // the display's newest figures
     const LONG shown = g_step.displays;
     if (b.display && shown != p.displays)
@@ -4895,7 +4898,7 @@ static DWORD WINAPI Run(void *)
             v.air = driving && inForce.airSuspension && watch.step.block.air;
             v.airTaken = v.air && watch.step.airTaken;
             v.airHeight = watch.airHeight;
-            v.airLevel[0] = watch.step.airLevel[0], v.airLevel[1] = watch.step.airLevel[1];
+            v.airLevel[0] = watch.step.airLevel[0], v.airLevel[1] = watch.step.airLevel[1], v.airSide = watch.step.airSide;
             v.airShown = driving && inForce.airSuspension && watch.airPressedAt && GetTickCount64() - watch.airPressedAt < 3000;
             // each axle's rest place from the probe's windows or the display (cm along the axis, compression negative)
             v.rideRestKnown = false;

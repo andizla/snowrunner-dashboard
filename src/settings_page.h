@@ -828,18 +828,19 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     s.swayRear = SettingsStep(s.swayRear, kSwayStep);
     PageTip("A test: a sway bar on the rear axles. 0.1 to 0.2 works well; above 0.3 it swings, so it stops there.");
     if (view.swayOff) ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "The sway bars are disconnected.");
-    // the air suspension (a test, build C): it levels each axle on top of the ride height
+    // the air suspension (a test, build C): it levels each wheel on top of the ride height
     PageLabel("Air suspension", labelX);
     changed(ImGui::Checkbox("##airsuspension", &s.airSuspension));
-    PageTip("A test: each axle held at its rest place of the first standstill after the truck is taken, so cargo no longer makes it sag; it "
-            "settles in about 3 s while the truck stands, and an axle with a wheel hanging or on its stop keeps its height. Ride up and Ride down "
+    PageTip("A test: each wheel held at its rest place of the first standstill after the truck is taken, so cargo no longer makes it sag or "
+            "lean; it settles in about 3 s under 10 km/h, and an axle with a wheel hanging or on its stop keeps its height. Ride up and Ride down "
             "under Locks raise and lower it 2 cm a press, within 10 cm, under 20 km/h, for this truck. Turned off, it goes back over a few seconds. "
             "It stops as the ride height does.");
     if (s.airSuspension)
     {
         if (!view.air) ImGui::TextDisabled("Height %+d cm; no truck it runs on", view.airHeight);
         else if (!view.airTaken) ImGui::TextDisabled("Height %+d cm; the rest place is taken at the first standstill", view.airHeight);
-        else ImGui::TextDisabled("Height %+d cm; levelling %+.1f / %+.1f cm (front / rear)", view.airHeight, view.airLevel[0], view.airLevel[1]);
+        else ImGui::TextDisabled("Height %+d cm; levelling %+.1f / %+.1f cm (front / rear), left %+.1f cm over right", view.airHeight, view.airLevel[0],
+                                 view.airLevel[1], view.airSide);
     }
     PageLabel("Display", labelX);
     changed(ImGui::Checkbox("##suspdisplay", &s.suspDisplay));

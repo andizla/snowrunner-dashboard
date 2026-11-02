@@ -2711,7 +2711,7 @@ int main()
         for (int n = 0; n < 90 && at < 0; n++)
             if (SuspLevelStep(l, 2, partner, g, r, placed, held, 0.0f, 0.0f, 1.0f / 60.0f)) at = n;
         Check(!any && at >= 58 && at <= 61 && Near(l.ref[0], -0.2f) && Near(l.ref[1], -0.2f),
-              "air suspension: nothing is taken while moving, a move resets the second standing, and a full second standing takes the axle's mean");
+              "air suspension: nothing is taken while moving, a move resets the second standing, and a full second standing takes each wheel's place");
     }
 
     // the keys: 2 cm a press within 10 cm, only with the air suspension on and under 20 km/h
@@ -2737,7 +2737,7 @@ int main()
         SuspLevel l = {};
         const float rest[2] = { -0.2f, -0.2f };
         for (int n = 0; n < 61; n++) SuspLevelStep(l, 2, partner, rest, r, placed, free2, 0.0f, 0.0f, dt);
-        // a load put on while moving: nothing for 10 s, then levelling once standing a second
+        // a load put on while moving at 11 km/h: nothing for 10 s, then levelling once a second under 10 km/h
         const float sag[2] = { -0.25f, -0.25f };
         for (int n = 0; n < 600; n++) SuspLevelStep(l, 2, partner, sag, r, placed, free2, 0.0f, 3.0f, dt);
         const bool movingHeld = l.level[0] == 0.0f;
@@ -2789,6 +2789,34 @@ int main()
             if (SuspLevelStep(l, 4, partner, landed, r, placed, free4, 0.0f, 0.0f, dt)) at = n;
         Check(!early && at >= 58 && at <= 61 && Near(l.ref[2], -0.21f) && Near(l.ref[0], -0.2f),
               "air suspension (review R4): standing 5 s with a rear wheel hanging takes nothing; after it lands a second standing takes the landed place");
+    }
+
+    // side to side, and under 10 km/h (the author, 2 November): a load on the left sags the left wheel 4 cm and the right
+    // 1 cm; driving at 7 km/h each comes back to its own rest place within 5 mm in 15 s, so the truck is level again; at
+    // 11 km/h nothing moves
+    {
+        const float dt = 1.0f / 60.0f;
+        const int partner[2] = { 1, 0 };
+        const bool placed[2] = { true, true }, free2[2] = { false, false };
+        const float r[2] = {}, rest[2] = { -0.2f, -0.2f }, sag[2] = { 0.04f, 0.01f };
+        SuspLevel l = {}, fast = {};
+        for (int n = 0; n < 61; n++) SuspLevelStep(l, 2, partner, rest, r, placed, free2, 0.0f, 0.0f, dt);
+        fast = l;
+        float g[2] = {};
+        for (int n = 0; n < 60 * 15; n++)
+        {
+            for (int i = 0; i < 2; i++) g[i] = rest[i] - sag[i] + l.level[i];
+            SuspLevelStep(l, 2, partner, g, r, placed, free2, 0.0f, 2.0f, dt);
+        }
+        const float leftOff = g[0] - rest[0], rightOff = g[1] - rest[1];
+        for (int n = 0; n < 60 * 15; n++)
+        {
+            for (int i = 0; i < 2; i++) g[i] = rest[i] - sag[i] + fast.level[i];
+            SuspLevelStep(fast, 2, partner, g, r, placed, free2, 0.0f, 3.0f, dt);
+        }
+        printf("     air suspension side to side: 4 and 1 cm of sag end %.4f and %.4f m off at 7 km/h\n", leftOff, rightOff);
+        Check(fabsf(leftOff) < 0.005f && fabsf(rightOff) < 0.005f && l.level[0] > l.level[1] + 0.02f && fast.level[0] == 0.0f && fast.level[1] == 0.0f,
+              "air suspension: a load on one side is levelled side to side at 7 km/h, each wheel back within 5 mm in 15 s; nothing at 11 km/h");
     }
 
     RealImageTest();
