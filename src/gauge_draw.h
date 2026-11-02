@@ -1008,7 +1008,7 @@ static void HCell(ImDrawList *dl, const GaugeFonts &f, ImVec2 o, float w, float 
 // gear (the user, 2 November). Each lights in its colour of today; the oil's and the tire's blink as before; a level
 // truck's tilt lamp is off. The tire lamp only with a tire mod that publishes its state.
 struct HudLamp { const char *label; bool on; GRgb col; };
-static const char *const kHudLampLabels[] = { "GLOW", "OIL", "ENG", "TILT", "LIGHT", "TIRE" };
+static const char *const kHudLampLabels[] = { "COLD", "OIL", "ENG", "TILT", "LIGHT", "TIRE" };
 static int HudLamps(const GaugeState &st, HudLamp *out)
 {
     int n = 0;
