@@ -640,7 +640,11 @@ inline bool SuspLevelStep(SuspLevel &l, int n, const int *partner, const float *
     }
     if (!l.taken)
     {
-        if (!standing)
+        // a wheel hanging or at its end (a ditch, a log) restarts the take as moving does, so no axle takes such a place
+        // as its rest (review of build C, R4)
+        bool anyHeld = false;
+        for (int i = 0; i < n; i++) anyHeld |= placed[i] && axleHeld[i];
+        if (!standing || anyHeld)
         {
             l.stand = 0.0f;
             memset(l.count, 0, sizeof l.count);

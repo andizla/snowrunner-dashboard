@@ -2774,6 +2774,23 @@ int main()
               "after landing; the keys' height follows in steps; turned off, the shift and the keys fade by dt / 3 s a step and then end");
     }
 
+    // the review of build C, R4: a take with one axle hanging waits until it lands, and then takes the landed place
+    {
+        const float dt = 1.0f / 60.0f;
+        const int partner[4] = { 1, 0, 3, 2 };
+        const bool placed[4] = { true, true, true, true }, rearHanging[4] = { false, false, true, false }, free4[4] = { false, false, false, false };
+        const float r[4] = {};
+        const float overDitch[4] = { -0.2f, -0.2f, 0.0f, -0.1f }, landed[4] = { -0.2f, -0.2f, -0.21f, -0.21f };
+        SuspLevel l = {};
+        bool early = false;
+        for (int n = 0; n < 300; n++) early |= SuspLevelStep(l, 4, partner, overDitch, r, placed, rearHanging, 0.0f, 0.0f, dt);
+        int at = -1;
+        for (int n = 0; n < 90 && at < 0; n++)
+            if (SuspLevelStep(l, 4, partner, landed, r, placed, free4, 0.0f, 0.0f, dt)) at = n;
+        Check(!early && at >= 58 && at <= 61 && Near(l.ref[2], -0.21f) && Near(l.ref[0], -0.2f),
+              "air suspension (review R4): standing 5 s with a rear wheel hanging takes nothing; after it lands a second standing takes the landed place");
+    }
+
     RealImageTest();
 
     printf(g_failed ? "TRUCK TEST FAILED (%d)\n" : "TRUCK TEST OK\n", g_failed);
