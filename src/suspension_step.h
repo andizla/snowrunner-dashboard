@@ -627,6 +627,22 @@ inline void SuspSwayShift(float setting, float cL, float cR, float kL, float kR,
 // same time constant.
 static const float kLevelTau = 3.0f, kLevelStand = 1.0f, kLevelStill = 0.1f, kLevelDrive = 10.0f / 3.6f;
 
+// A step of the levelling's plane about its centre, dh up, dp and dr in m per m forward and to the left, held to the
+// part of it that keeps every wheel's shift and ride height within kShiftMost (a wheel already past it may only come
+// back). Each wheel's shift is the plane at its place, a held one too, so the shifts never twist the chassis (R6).
+inline void SuspLevelMove(SuspLevel &l, int n, const float *r, float dh, float dp, float dr)
+{
+    float part = 1.0f;
+    for (int i = 0; i < n; i++)
+    {
+        const float d = dh + dp * l.dx[i] + dr * l.dy[i], now = r[i] + l.keys + l.level[i];
+        if (d > 0.0f) part = fminf(part, fmaxf(0.0f, (kShiftMost - now) / d));
+        else if (d < 0.0f) part = fminf(part, fmaxf(0.0f, (-kShiftMost - now) / d));
+    }
+    l.height += part * dh, l.pitch += part * dp, l.roll += part * dr;
+    for (int i = 0; i < n; i++) l.level[i] = l.height + l.pitch * l.dx[i] + l.roll * l.dy[i];
+}
+
 // One step of the levelling. g: each wheel's place from its stock attach point (x plus all its shift), r: its ride
 // height's shift without the keys, placed: it has a place, held: it hangs or is at its compression end, keys: the
 // keys' height set (m), along and across: its place in the chassis, forward and to the left (m). An axle is a wheel and
@@ -672,6 +688,11 @@ inline bool SuspLevelStep(SuspLevel &l, int n, const int *partner, const float *
         l.taken = true;
         return true;
     }
+    const float k = dt / kLevelTau;
+    const bool horizon = tilt && isfinite(tilt[0]) && isfinite(tilt[1]);
+    // AirHorizon is for standing and crawling: over kLevelDrive the pitch and roll fade back to 0 and the height is
+    // kept, so a truck levelled on a side slope never drives on leaning the other way (review R7)
+    if (horizon && fabsf(speed) >= kLevelDrive) SuspLevelMove(l, n, r, 0.0f, -k * l.pitch, -k * l.roll);
     if (l.still < kLevelStand) return false;
     // the plane e = mean + pitch (x - x0) + roll (y - y0) through the errors of the wheels not held
     float err[kMaxWheels];
@@ -700,25 +721,15 @@ inline bool SuspLevelStep(SuspLevel &l, int n, const int *partner, const float *
     if (pitched && rolled && det > 1e-6f * sxx * syy) pitch = (sxe * syy - sye * sxy) / det, roll = (sye * sxx - sxe * sxy) / det;
     else if (pitched) pitch = sxe / sxx;
     else if (rolled) roll = sye / syy;
-    // the plane's states take the step about the centre, held to the part of it that keeps every wheel's shift and ride
-    // height within kShiftMost (a wheel already past it may only come back); each wheel's shift is the plane at its place,
-    // a held one too, so the shifts never twist the chassis (review R6)
-    const float k = dt / kLevelTau;
     const float dh = k * (ex + pitch * (l.xc - x0) + roll * (l.yc - y0));
     float dp = k * pitch, dr = k * roll;
     // AirHorizon (the author, 2 November: his car's body is level on uneven ground): the pitch and roll follow the
     // chassis's own tilt instead, a nose down raising the front and a left side up lowering it; the height stays the
     // wheels'
-    if (tilt && isfinite(tilt[0]) && isfinite(tilt[1])) dp = -k * tilt[0], dr = -k * tilt[1];
-    float part = 1.0f;
-    for (int i = 0; i < n; i++)
-    {
-        const float d = dh + dp * l.dx[i] + dr * l.dy[i], now = r[i] + l.keys + l.level[i];
-        if (d > 0.0f) part = fminf(part, fmaxf(0.0f, (kShiftMost - now) / d));
-        else if (d < 0.0f) part = fminf(part, fmaxf(0.0f, (-kShiftMost - now) / d));
-    }
-    l.height += part * dh, l.pitch += part * dp, l.roll += part * dr;
-    for (int i = 0; i < n; i++) l.level[i] = l.height + l.pitch * l.dx[i] + l.roll * l.dy[i];
+    if (horizon) dp = -k * tilt[0], dr = -k * tilt[1];
+    // the height's step first, then the pitch and roll get what is left of the 12 cm (review R7)
+    SuspLevelMove(l, n, r, dh, 0.0f, 0.0f);
+    SuspLevelMove(l, n, r, 0.0f, dp, dr);
     return false;
 }
 

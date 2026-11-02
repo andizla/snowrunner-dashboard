@@ -837,7 +837,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             "It stops as the ride height does.");
     PageLabel("Level to horizon", labelX);
     changed(ImGui::Checkbox("##airhorizon", &s.airHorizon));
-    PageTip("A test, with Air suspension: the body's lean and slope are levelled to the horizon instead of to the wheels, under 10 km/h. "
+    PageTip("A test, with Air suspension: the body's lean and slope are levelled to the horizon instead of to the wheels, under 10 km/h; over it, it goes back to the wheels. "
             "The 12 cm of shift give about 7 degrees side to side; past that it gets as close as it can.");
     if (s.airSuspension)
     {

@@ -2917,13 +2917,17 @@ int main()
         const bool placed[4] = { true, true, true, true }, free4[4] = {};
         const float r[4] = {};
         // the corners' heights: the least-squares plane through the ground plus the shifts; the tilt is its slope
-        auto stand = [&](float side, float nose, bool horizon, float &tiltF, float &tiltL, float &most) {
+        auto stand = [&](float side, float nose, bool horizon, float &tiltF, float &tiltL, float &most, bool driveOff = false) {
             SuspLevel l = {};
             float g[4], ground[4], B[4];
             for (int i = 0; i < 4; i++) ground[i] = side * kAcross4[i] + nose * kAlong4[i];
             most = 0.0f;
-            for (int k = 0; k < 60 * 21; k++)
+            for (int k = 0; k < 60 * (driveOff ? 31 : 21); k++)
             {
+                // the drive off (review R7): from 21 s on flat ground at 20 km/h
+                const bool off = driveOff && k >= 60 * 21;
+                if (off)
+                    for (int i = 0; i < 4; i++) ground[i] = 0.0f;
                 float mean = 0.0f, px = 0.0f, py = 0.0f;
                 for (int i = 0; i < 4; i++) mean += (ground[i] + l.level[i]) / 4.0f;
                 for (int i = 0; i < 4; i++)
@@ -2931,7 +2935,7 @@ int main()
                 for (int i = 0; i < 4; i++) B[i] = mean + px * kAlong4[i] + py * kAcross4[i], g[i] = B[i] - ground[i] - 0.2f;
                 tiltF = px, tiltL = py;
                 const float tilt[2] = { tiltF, tiltL };
-                SuspLevelStep(l, 4, partner, kAlong4, kAcross4, g, r, placed, free4, 0.0f, 0.0f, dt, horizon ? tilt : nullptr);
+                SuspLevelStep(l, 4, partner, kAlong4, kAcross4, g, r, placed, free4, 0.0f, off ? 20.0f / 3.6f : 0.0f, dt, horizon ? tilt : nullptr);
                 for (int i = 0; i < 4; i++) most = fmaxf(most, fabsf(l.level[i]));
             }
         };
@@ -2939,11 +2943,14 @@ int main()
         stand(0.08f, -0.04f, true, f1, l1, m1);
         stand(0.20f, 0.0f, true, f2, l2, m2);
         stand(0.08f, -0.04f, false, f3, l3, m3);
-        printf("     air suspension to the horizon: 8 %% and 4 %% end at %.4f and %.4f; 20 %% ends at %.3f with the shift at %.3f m; off it stays %.3f and %.3f\n",
-               l1, f1, l2, m2, l3, f3);
+        float f4, l4, m4;
+        stand(0.08f, 0.0f, true, f4, l4, m4, true);
+        printf("     air suspension to the horizon: 8 %% and 4 %% end at %.4f and %.4f; 20 %% ends at %.3f with the shift at %.3f m; off it stays %.3f and %.3f; "
+               "driven off onto flat ground at 20 km/h it leans %.4f after 10 s\n",
+               l1, f1, l2, m2, l3, f3, l4);
         Check(fabsf(l1) < 0.005f && fabsf(f1) < 0.005f && m2 <= kShiftMost + 1e-5f && fabsf(l2 - (0.20f - kShiftMost / 0.8f)) < 0.01f && fabsf(l3 - 0.08f) < 1e-4f &&
-                  fabsf(f3 + 0.04f) < 1e-4f,
-              "air suspension AirHorizon: a 4x4 on 8 % to a side and 4 % to its nose comes level within 0.3 degrees; on 20 % it stops at 12 cm; off it stays with the ground");
+                  fabsf(f3 + 0.04f) < 1e-4f && fabsf(l4) < 0.0087f,
+              "air suspension AirHorizon: a 4x4 on 8 % to a side and 4 % to its nose comes level within 0.3 degrees; on 20 % it stops at 12 cm; off it stays with the ground; levelled on 8 % and driven off onto flat ground at 20 km/h, within 0.5 degrees of flat in 10 s (R7)");
     }
 
     RealImageTest();
