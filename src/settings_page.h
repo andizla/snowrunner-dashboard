@@ -591,7 +591,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     // order is input_bindings.h's GearAction). The shifter's at Gearbox=2, the locks' at every level
     static const char *actions[kViewActions] = { "Gear 1", "Gear 2", "Gear 3", "Gear 4", "Gear 5", "Gear 6", "Gear 7", "Gear 8", "Gear 9", "Gear 10",
                                                  "Gear 11", "Gear 12", "H", "L-", "L", "L+", "Neutral", "Reverse", "Gear up", "Gear down", "Clutch",
-                                                 "Range high", "Range low", "A", "Diff lock", "AWD" };
+                                                 "Range high", "Range low", "A", "Diff lock", "AWD", "Sway bars" };
     auto bindingRow = [&](int a) {
         ImGui::PushID(1000 + a);
         PageLabel(actions[a], labelX);
@@ -619,7 +619,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         if (view.gearShifts || view.gearStalls) ImGui::TextDisabled("Since the truck was taken: %d shifts, %d stalls.", view.gearShifts, view.gearStalls);
     }
     ImGui::TextDisabled("Locks");
-    PageTip("The differential lock and all-wheel drive on a key, on every truck, the upgrade fitted or not; the cluster's lamps show them.");
+    PageTip("The differential lock and all-wheel drive on a key, on every truck, the upgrade fitted or not; the cluster's lamps show them. "
+            "Sway bars: connects and disconnects the sway bars of the Suspension section; a lamp shows while they are disconnected.");
     for (int a = kViewShifts; a < kViewActions; a++) bindingRow(a);
     if (view.controllers) ImGui::TextDisabled("%d wheel or shifter read through DirectInput.", view.controllers);
     static const char *inputs[kInputCount] = { "A wheel's pedals", "A pad", "The keyboard" };
@@ -798,6 +799,30 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         ImGui::TextDisabled("File %.2f / %.2f m (front / rear), now %.2f / %.2f m", f, r, f - extra, r - extra);
     }
     if (s.extraTravel > 0.0f) ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "Past the file's end a wheel can go into the body.");
+    // the attach point's features (a test, build B): the ride height and the sway bars move each wheel's spring zero
+    PageLabel("Ride front", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::SliderFloat("##ridefront", &s.rideFront, kRideRange[0], kRideRange[1], s.rideFront != 0.0f ? "%+.0f cm" : "the truck's own", ImGuiSliderFlags_AlwaysClamp));
+    PageTip("A test: the front axle's ride height in cm, above 0 higher. It moves where each wheel's spring hangs from, as the file's Height does. On a truck "
+            "whose game moves that point by itself (an active ride height) it stops, and the log says so.");
+    PageLabel("Ride rear", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::SliderFloat("##riderear", &s.rideRear, kRideRange[0], kRideRange[1], s.rideRear != 0.0f ? "%+.0f cm" : "the truck's own", ImGuiSliderFlags_AlwaysClamp));
+    PageTip("A test: the rear axles' ride height in cm, the middle axles of a long truck with them.");
+    if (view.rideRestKnown) ImGui::TextDisabled("At rest %.0f / %.0f cm into the travel (front / rear)", -view.rideRest[0], -view.rideRest[1]);
+    PageLabel("Sway front", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::SliderFloat("##swayfront", &s.swayFront, kSwayRange[0], kSwayRange[1], s.swayFront > 0.0f ? "%.2f" : "none", ImGuiSliderFlags_AlwaysClamp));
+    PageTip("A test: a sway bar on the front axle, as a share of its spring rate. It holds the body level in a turn and on a side slope, and lets less of "
+            "the wheels' twist through on a crossing. The Sway bars binding under Locks disconnects both.");
+    PageLabel("Sway rear", labelX);
+    ImGui::SetNextItemWidth(w);
+    changed(ImGui::SliderFloat("##swayrear", &s.swayRear, kSwayRange[0], kSwayRange[1], s.swayRear > 0.0f ? "%.2f" : "none", ImGuiSliderFlags_AlwaysClamp));
+    PageTip("A test: a sway bar on the rear axles.");
+    if (view.swayOff) ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "The sway bars are disconnected.");
+    PageLabel("Display", labelX);
+    changed(ImGui::Checkbox("##suspdisplay", &s.suspDisplay));
+    PageTip("The suspension display: each wheel's travel as a bar, a lamp when it hits the end, a mark while it hangs, and the articulation.");
 
     // the damper (a test, BRIEF_suspension_damper.md): its curve, the four factors and the knee, or a preset of them
     PageLabel("Damper", labelX);

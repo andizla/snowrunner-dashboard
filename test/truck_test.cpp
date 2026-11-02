@@ -2506,6 +2506,158 @@ int main()
                                              "included, and back to the file's at 0; a spring past the game's 1 held at 1, its stock kept");
     }
 
+    // the attach point's features (build B): pairs on a 4 and an 8 wheel layout; the bar's sign; the shift held to 12 cm
+    {
+        const float fwd4[4] = { 2.28f, 2.28f, -2.05f, -2.05f }, left4[4] = { 0.96f, -0.96f, 0.96f, -0.96f };
+        int partner[8];
+        bool isLeft[8], front[8], rearmost[8];
+        SuspPairs(4, fwd4, left4, partner, isLeft, front, rearmost);
+        const bool four = partner[0] == 1 && partner[1] == 0 && partner[2] == 3 && partner[3] == 2 && isLeft[0] && !isLeft[1] && front[0] && front[1] && !front[2] &&
+                          rearmost[2] && rearmost[3] && !rearmost[0];
+        const float fwd8[8] = { 2.78f, 2.78f, 1.0f, 1.0f, -1.98f, -1.98f, -3.33f, -3.33f }, left8[8] = { 1.1f, -1.1f, 1.1f, -1.1f, 1.0f, -1.0f, 1.0f, -1.0f };
+        SuspPairs(8, fwd8, left8, partner, isLeft, front, rearmost);
+        const bool eight = partner[0] == 1 && partner[2] == 3 && partner[4] == 5 && partner[7] == 6 && front[0] && !front[2] && rearmost[6] && !rearmost[4];
+        float sL = 0.0f, sR = 0.0f;
+        SuspSwayShift(1.0f, 0.3f, 0.1f, 0.03f, 0.03f, sL, sR);   // the left more compressed
+        const bool sign = sL > 0.0f && sR < 0.0f && Near(sL, 0.1f) && Near(sR, -0.1f);
+        SuspSwayShift(1.0f, 0.1f, 0.3f, 0.03f, 0.03f, sL, sR);
+        const bool other = sL < 0.0f && sR > 0.0f;
+        const bool held = SuspShiftHold(0.2f) == kShiftMost && SuspShiftHold(-0.5f) == -kShiftMost && SuspShiftHold(0.05f) == 0.05f;
+        Check(four && eight && sign && other && held, "attach point: axles paired on a 4 and an 8 wheel layout, the front and the rearmost known; the bar pushes the more compressed "
+                                                      "side toward the droop and the other toward the bump; the shift held to 12 cm");
+    }
+
+    // the attach point's write and its guard on the physics thread (in this process's memory): with everything off nothing
+    // is written; with a ride height the stock plus the shift along the axis; a field the game wrote meanwhile (neither the
+    // mod's nor the stock) stops the writes for the block and is counted once; let go puts the stock back
+    {
+        static SuspStepState s;
+        memset(&s, 0, sizeof s);
+        static uint64_t wheel[0x200 / 8], constraint[0x100 / 8];
+        static float body[0x300 / 4];
+        memset(wheel, 0, sizeof wheel);
+        memset(constraint, 0, sizeof constraint);
+        memset(body, 0, sizeof body);
+        const uint64_t vtable = 0x140000000ull + 0x23d9538;
+        constraint[0] = vtable;
+        const float up[3] = { 0.0f, 1.0f, 0.0f };
+        memcpy((uint8_t *)body + 0x180, up, sizeof up);
+        wheel[0x28 / 8] = (uint64_t)(uintptr_t)constraint;
+        float *attach = (float *)((uint8_t *)constraint + 0xA4), *height = (float *)((uint8_t *)wheel + 0x13C + 4);
+        *attach = -0.135f;
+        *height = 0.0f;
+        SuspStepBlock b = {};
+        b.action = 0x9999;
+        b.chassis = b.body[0] = (uint64_t)(uintptr_t)body;
+        b.wheel[0] = (uint64_t)(uintptr_t)wheel;
+        b.wheels = 1;
+        b.generation = 1;
+        b.vtable = vtable;
+        b.attachUp[0] = -0.135f, b.axisUp[0] = -1.0f, b.travel[0] = 0.36f;
+        b.attachAt[0] = (uint64_t)(uintptr_t)attach;
+        b.partner[0] = -1;
+        static SuspStepBlock slots[2];
+        static SuspStepBlock *volatile slot = nullptr;
+        int next = 0;
+        uint32_t serial = 0;
+        SuspStepPublish(slots, next, &slot, b, serial);
+        const float step = 1.0f / 64.0f;
+        for (int i = 0; i < 3; i++) SuspStepLook(s, slot, 0x9999, step);
+        const bool off = *attach == -0.135f;
+        b.shifting = true;
+        b.attachC[0] = (uint64_t)(uintptr_t)constraint;
+        b.attachStock[0] = -0.135f;
+        b.ride[0] = 0.05f;                                   // 5 cm up: the point 5 cm along the axis, down the body
+        b.generation = 2;
+        SuspStepPublish(slots, next, &slot, b, serial);
+        SuspStepLook(s, slot, 0x9999, step);
+        SuspStepLook(s, slot, 0x9999, step);
+        const bool ride = Near(*attach, -0.185f) && s.attachMoved == 0;
+        SuspStepLook(s, slot, 0x9999, step);
+        const bool steady = Near(*attach, -0.185f) && s.attachMoved == 0;
+        *attach = -0.15f;                                    // the game's own ride height control moves it
+        SuspStepLook(s, slot, 0x9999, step);
+        const bool moved = s.attachMoved == 1 && *attach == -0.15f;
+        SuspStepLook(s, slot, 0x9999, step);
+        const bool once = s.attachMoved == 1 && *attach == -0.15f;
+        b.ride[0] = 0.5f;                                    // held to 12 cm
+        b.generation = 3;
+        *attach = -0.135f;
+        SuspStepPublish(slots, next, &slot, b, serial);
+        SuspStepLook(s, slot, 0x9999, step);
+        SuspStepLook(s, slot, 0x9999, step);
+        const bool most = Near(*attach, -0.255f);
+        const bool back = SuspDamperLetGo(*slot, kNativeMemory) == 1 && *attach == -0.135f;
+        Check(off && ride && steady && moved && once && most && back, "attach point write: nothing with everything off; the stock plus the ride height along the axis; a field the game "
+                                                                      "moved stops the block's writes, counted once; the shift held to 12 cm; let go puts the stock back");
+    }
+
+    // a half axle in roll with the bar (build B's tests): the body's roll at 60 steps a second, the springs and dampers at
+    // the game's figures (1.6 Hz, 0.55), the bar's shift worked out from the last step's places and written a step late;
+    // at 1.5 it settles from a push without growing, and it holds the roll less than with no bar
+    {
+        const double dt = 1.0 / 60.0, omega = 2.0 * 3.14159265 * 1.6, k = omega * omega, c = 2.0 * 0.55 * omega, a = 1.0;
+        double settledRoll[2] = {};
+        bool all = true;
+        for (int bar = 0; bar < 2; bar++)
+        {
+            const float setting = bar ? 1.5f : 0.0f;
+            double th = 0.0, w = 0.0, last = 0.0, peak = 1e9;
+            float sL = 0.0f, sR = 0.0f;
+            bool rising = false, grows = false;
+            for (int n = 0; n < 600; n++)
+            {
+                // a steady roll moment (a side slope); each side's spring force k (c + s), its compression c = +/- a th
+                const double cL = a * th, cR = -a * th;
+                const double moment = 0.3 * k - a * (k * (cL + sL) - k * (cR + sR));
+                w = (w + dt * moment) / (1.0 + dt * c * 2.0 * a * a);
+                th += dt * w;
+                SuspSwayShift(setting, (float)(a * th), (float)(-a * th), 1.0f, 1.0f, sL, sR);
+                sL = SuspShiftHold(sL), sR = SuspShiftHold(sR);
+                const double err = fabs(w);
+                if (err > last) rising = true;
+                else if (rising)
+                {
+                    if (last > peak * 1.001 + 1e-6) grows = true;
+                    peak = last;
+                    rising = false;
+                }
+                last = err;
+            }
+            settledRoll[bar] = th;
+            all &= !grows && fabs(w) < 0.002;
+        }
+        printf("     roll on a side slope: %.3f with no bar, %.3f with the bar at 1.5\n", settledRoll[0], settledRoll[1]);
+        Check(all && settledRoll[1] < settledRoll[0] * 0.6, "sway bar: a half axle in roll at 60 steps a second with the shift a step late settles at 1.5 without growing, and "
+                                                           "holds the roll to less than 0.6 of the roll with no bar");
+    }
+
+    // the display's figures from fed places: the place along the axis, a hit of the compression end kept for a second,
+    // a hanging wheel at or past its spring's zero, the rest place taken standing
+    {
+        static SuspStepState s;
+        memset(&s, 0, sizeof s);
+        SuspStepBlock b = {};
+        b.wheels = 2;
+        b.display = true;
+        b.axisUp[0] = b.axisUp[1] = -1.0f, b.attachUp[0] = b.attachUp[1] = -0.135f, b.travel[0] = b.travel[1] = 0.36f, b.travelMax[0] = b.travelMax[1] = 1.0f;
+        const float attach[2] = { -0.135f, -0.135f };
+        float h[2] = { 0.3f, -0.2f };                        // wheel 0 at -0.435 (past the end), wheel 1 at +0.065 (hanging)
+        s.clock = 5.0f;
+        SuspDisplayStep(s, b, h, attach, 0.0f);
+        const SuspDisplaySlot &d = s.display[(s.displays - 1) & 1];
+        const bool first = s.displays == 1 && Near(d.x[0], -0.435f) && d.hit[0] && !d.hanging[0] && d.hanging[1] && !d.hit[1] && Near(d.rest[0], -0.435f);
+        h[0] = 0.0f;                                         // back up, moving: the rest place stays, the hit for a second
+        s.clock = 5.5f;
+        SuspDisplayStep(s, b, h, attach, 3.0f);
+        const SuspDisplaySlot &e = s.display[(s.displays - 1) & 1];
+        const bool kept = e.hit[0] && Near(e.rest[0], -0.435f) && Near(e.x[0], -0.135f);
+        s.clock = 6.2f;
+        SuspDisplayStep(s, b, h, attach, 3.0f);
+        const bool gone = !s.display[(s.displays - 1) & 1].hit[0] && s.displays == 3;
+        Check(first && kept && gone, "display figures: the place along the axis, a hit of the compression end kept for a second, a hanging wheel, the rest place taken standing");
+    }
+
     RealImageTest();
 
     printf(g_failed ? "TRUCK TEST FAILED (%d)\n" : "TRUCK TEST OK\n", g_failed);

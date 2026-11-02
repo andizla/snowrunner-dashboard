@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- A test: ride height for each axle, sway bars with a binding that disconnects them and a lamp while they are off, and a suspension display (each wheel's travel, its end hits, a hanging wheel, the articulation). The ride height and the bars move where the springs hang from, and stop on a truck whose game moves that point itself. All off by default (BRIEF_suspension_extras.md, build B).
 - The creep only with an automatic, for now: the mod's A (with the reverse and the range it drives) and the game's own automatic creep as before, and a gear picked by hand, on either shifter and an R included, gets none (the author, 1 November: "creep needs to be disabled in manual for now. auto handles it fine").
 - A gearbox whose name the game does not give keeps its gear hold: it is known by its gears, and their speeds drift a little between takes, so each drift was a new gearbox with no hold of its own and the hold fell back to the class's. The same gears within 2 % now keep the first gearbox's file (the author, 1 November: "gearbox gear hold time resets now and then").
 - A test: bump stops, spring curves (progressive or dual rate) and damping zones by the wheel's place in the Suspension section, worked out every physics step like the damper. All off by default, and then nothing runs (BRIEF_suspension_extras.md, build A). The bump stops push back at the end with a multiple of the spring's own force there (`BumpForce`, x3 by default, over the last 0.12 m), and go by where the wheel will be a step on, so a fast hit meets them in time.

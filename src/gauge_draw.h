@@ -861,6 +861,60 @@ static void GWarnBox(ImDrawList *dl, const GaugeFonts &f, ImVec2 at, float u, fl
     dl->AddRectFilled(P(12, kWarnH - 9), P(12 + (kWarnW - 12) * (float)shown / 100.0f, kWarnH), col);
 }
 
+// ---- the suspension display and the sway bars' lamp (BRIEF_suspension_extras.md, build B), on the warning boxes' stage
+// below them, in the boxes' reference pixels ----
+// One row an axle, its left wheel's bar on the left and its right wheel's on the right. A bar runs from the wheel's
+// compression end (its left) to its droop end: the bump stop's part shaded when the stops are on, a tick at the
+// spring's zero and one at the rest place, and the wheel's place as a marker, red while it hit the compression end in
+// the last second and hollow while it hangs (at or past its spring's zero, its tire carrying nothing). The articulation
+// at the top right: the front pair's difference less the rearmost's.
+static const float kSuspW = 800.0f, kSuspTop = 92.0f, kSuspRow = 56.0f, kSuspBarH = 22.0f, kSuspPad = 44.0f;
+static float GSuspHeight(const SuspDisplayView &d) { return kSuspTop + d.axles * kSuspRow + 18.0f; }
+static void GSuspDisplay(ImDrawList *dl, const GaugeFonts &f, ImVec2 at, float u, float a, const SuspDisplayView &d)
+{
+    if (d.wheels <= 0 || d.axles <= 0) return;
+    const float x0 = floorf(at.x), y0 = floorf(at.y);
+    auto P = [&](float x, float y) { return ImVec2(x0 + x * u, y0 + y * u); };
+    const ImU32 amber = GCol(236, 182, 48, a), red = GCol(225, 58, 70, a), white = GCol(255, 255, 255, a), grey = GCol(142, 150, 152, a);
+    dl->AddRectFilled(P(0, 0), P(kSuspW, GSuspHeight(d)), GCol(5, 5, 5, 0.94f * a), 3.0f * u);
+    dl->AddRectFilled(P(0, 0), P(12, GSuspHeight(d)), GCol(70, 140, 200, a), 3.0f * u, ImDrawFlags_RoundCornersLeft);
+    TextDraw(dl, f, kWsTitle, P(kSuspPad, 50), white, "SUSPENSION", -1, u);
+    if (d.articulationKnown)
+    {
+        char text[32];
+        snprintf(text, sizeof text, "%.0f cm", d.articulation);
+        TextDraw(dl, f, kWsLine, P(kSuspW - kSuspPad, 50), grey, text, 1, u);
+    }
+    const float half = (kSuspW - 2.0f * kSuspPad - 24.0f) * 0.5f;
+    for (int i = 0; i < d.wheels && i < kViewWheels; i++)
+    {
+        if (!d.placed[i] || !(d.travel[i] > 0.0f)) continue;
+        const float left = kSuspPad + (d.isLeft[i] ? 0.0f : half + 24.0f), top = kSuspTop + d.axle[i] * kSuspRow;
+        const float lo = -d.travel[i], hi = d.travelMax[i] > 0.05f ? d.travelMax[i] : 0.05f;
+        auto X = [&](float x) { const float t = (fminf(fmaxf(x, lo), hi) - lo) / (hi - lo); return left + t * half; };
+        dl->AddRectFilled(P(left, top), P(left + half, top + kSuspBarH), GCol(33, 33, 33, a));
+        if (d.stops && d.zone > 0.0f) dl->AddRectFilled(P(X(lo), top), P(X(lo + fminf(d.zone, d.travel[i] / 3.0f)), top + kSuspBarH), GCol(236, 182, 48, 0.35f * a));
+        dl->AddRectFilled(P(X(0.0f) - 1.0f, top - 4.0f), P(X(0.0f) + 1.0f, top + kSuspBarH + 4.0f), grey);
+        dl->AddRectFilled(P(X(d.rest[i]) - 1.0f, top), P(X(d.rest[i]) + 1.0f, top + kSuspBarH), GCol(255, 255, 255, 0.45f * a));
+        const ImU32 mark = d.hit[i] ? red : white;
+        if (d.hanging[i]) dl->AddRect(P(X(d.x[i]) - 5.0f, top - 3.0f), P(X(d.x[i]) + 5.0f, top + kSuspBarH + 3.0f), mark, 0.0f, 0, 2.0f * u);
+        else dl->AddRectFilled(P(X(d.x[i]) - 5.0f, top - 3.0f), P(X(d.x[i]) + 5.0f, top + kSuspBarH + 3.0f), mark);
+        if (d.hit[i]) dl->AddCircleFilled(P(left - 14.0f, top + kSuspBarH * 0.5f), 7.0f * u, red);
+    }
+    (void)amber;
+}
+
+// The sway bars' lamp, a small box while they are disconnected.
+static const float kSwayW = 420.0f, kSwayH = 72.0f;
+static void GSwayLamp(ImDrawList *dl, const GaugeFonts &f, ImVec2 at, float u, float a)
+{
+    const float x0 = floorf(at.x), y0 = floorf(at.y);
+    auto P = [&](float x, float y) { return ImVec2(x0 + x * u, y0 + y * u); };
+    dl->AddRectFilled(P(0, 0), P(kSwayW, kSwayH), GCol(5, 5, 5, 0.94f * a), 3.0f * u);
+    dl->AddRectFilled(P(0, 0), P(12, kSwayH), GCol(236, 182, 48, a), 3.0f * u, ImDrawFlags_RoundCornersLeft);
+    TextDraw(dl, f, kWsTitle, P(44, 44), GCol(255, 255, 255, a), "SWAY BARS OFF", -1, u);
+}
+
 // The cluster. origin: the strip's bottom centre (variant 0) or the block's bottom right corner (variant 1).
 static void GaugeDraw(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float u, float a, const GaugeState &st, const GaugeLayout &lay)
 {

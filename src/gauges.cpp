@@ -507,6 +507,11 @@ static void WriteIni(const GaugeSettings &s)
     num(L"SpringScale", s.springScale);
     num(L"DampingScale", s.dampingScale);
     num(L"ExtraTravel", s.extraTravel);
+    num(L"RideFront", s.rideFront);
+    num(L"RideRear", s.rideRear);
+    num(L"SwayFront", s.swayFront);
+    num(L"SwayRear", s.swayRear);
+    whole(L"SuspDisplay", s.suspDisplay ? 1 : 0);
     whole(L"DamperCurve", s.damperCurve);
     num(L"LowCompression", s.lowCompression);
     num(L"HighCompression", s.highCompression);
@@ -812,6 +817,8 @@ static void ReadIni(GaugeSettings &s)
                         L"; ClutchHeatPercent: how fast it heats up, percent of the model's own pace, 10 to 300 (60); lower gives more time to react.\n"
                         L"; SpringScale, DampingScale (a test): the suspension's spring and damping as a factor of the truck's own, 0.25 to 4 (1 = the truck's own;\n"
                         L"; the game holds each at 1). ExtraTravel: cm added past the file's compression end, 0 to 30 (0 = the file's; past it a wheel may go into the body).\n"
+                        L"; RideFront, RideRear: each axle's ride height in cm, -10 to 10; SwayFront, SwayRear: a sway bar, 0 to 1.5 of the axle's spring rate (BindSwayDisconnect\n"
+                        L"; toggles them). Both move the attach point and stop on a truck whose game moves it. SuspDisplay=1 draws each wheel's travel. All tests, off by default.\n"
                         L"; DamperCurve 0 linear, 1 digressive, 2 progressive; LowCompression, HighCompression, LowRebound, HighRebound: the damping\n"
                         L"; under and over DamperKnee (m/s, 0.02 to 0.5), rising and falling, 0.25 to 4 (a test; 1 and linear = the truck's own).\n"
                         L"; BumpStops=1: force (BumpForce, 1 to 6, the spring's at the end times it) and damping (BumpDamping, 1 to 4) over the last BumpZone m (0.03 to 0.2) of the\n"
@@ -927,6 +934,11 @@ static void ReadIni(GaugeSettings &s)
     s.springScale = IniFloat(L"SpringScale", s.springScale, ini);
     s.dampingScale = IniFloat(L"DampingScale", s.dampingScale, ini);
     s.extraTravel = IniFloat(L"ExtraTravel", s.extraTravel, ini); // TravelMinScale and TravelMaxScale are no longer read
+    s.rideFront = IniFloat(L"RideFront", s.rideFront, ini);
+    s.rideRear = IniFloat(L"RideRear", s.rideRear, ini);
+    s.swayFront = IniFloat(L"SwayFront", s.swayFront, ini);
+    s.swayRear = IniFloat(L"SwayRear", s.swayRear, ini);
+    s.suspDisplay = IniInt(L"SuspDisplay", s.suspDisplay ? 1 : 0, ini) != 0;
     s.damperCurve = IniInt(L"DamperCurve", s.damperCurve, ini);
     s.lowCompression = IniFloat(L"LowCompression", s.lowCompression, ini);
     s.highCompression = IniFloat(L"HighCompression", s.highCompression, ini);
@@ -2304,6 +2316,18 @@ struct SuspStepWatch
     bool damping;               // whether the physics thread wrote on the generation, and its settings
     DamperSet damper;
     SpringSet spring;
+    // the attach point's features (build B): each wheel's axle as read at the generation's start, the attach point's
+    // stock per constraint (kept across generations, so the mod's own shift is never taken for it), the truck the game
+    // was seen moving it on (the features stop there), the guard's count seen, and the display's newest figures
+    int partner[kMaxWheels];
+    bool isLeft[kMaxWheels], front[kMaxWheels], rearmost[kMaxWheels];
+    uint64_t attachStockC[kMaxWheels];
+    float attachStock[kMaxWheels];
+    uint64_t attachOffVehicle;
+    LONG attachMoved, displays;
+    SuspDisplaySlot shown;
+    float windowRest[kMaxWheels];
+    bool windowRested[kMaxWheels];
     uint64_t limitVehicle;      // the truck the clamp's note was told for, and the presets it was told for (bit preset + 1)
     unsigned limitTold;
     int test;                   // SuspStepTest as it runs
@@ -2411,6 +2435,7 @@ struct TruckWatch
     SuspTravel travel;          // the travel probe: each wheel's height in the chassis's frame (Probe=1)
     ULONGLONG travelAt;         // when it logs next
     SuspStepWatch step;         // the travel read every physics step, and SuspStepTest (Probe=1)
+    bool swayOff;               // the sway bars disconnected (BindSwayDisconnect), for this game; they start connected
 };
 
 // The mod's gearbox has the truck in a position of the player's own (not A): the engine runs behind its clutch.
@@ -2742,8 +2767,9 @@ static const wchar_t *const kDamperCurveNames[kDamperCurves] = { L"linear", L"di
 static const wchar_t *const kSpringCurveNames[kSpringCurves] = { L"linear springs", L"progressive springs", L"dual rate springs" };
 // A generation's damper in words: "Trail", "custom" or "off".
 static const char *DamperName(bool damping, int preset) { return !damping ? "the damper off" : preset >= 0 ? kDamperPresets[preset].name : "custom"; }
-static const float kStepTestFactor[3] = { 1.0f, 0.5f, 0.1f };
-static const ULONGLONG kStepTestHold[3] = { 0, 1000, 500 };
+static const float kStepTestFactor[4] = { 1.0f, 0.5f, 0.1f, 1.0f };
+static const ULONGLONG kStepTestHold[4] = { 0, 1000, 500, 1000 };
+static const float kStepTestShift = 0.02f; // test 3: m toward the droop
 static const float kStepTestBefore = 0.2f, kStepTestAfter = 0.5f, kStepTestGap = 0.002f;
 
 static void SuspStepHook(uint64_t action, float dt) { SuspStepLook(g_step, g_stepBlock, action, dt); }
@@ -2835,6 +2861,7 @@ static const SuspTuneTest *SuspStepTestPass(SuspStepWatch &p, const TruckMemory 
         p.due = now + kStepTestEvery;
         if (mode == 1) Log(L"probe: step test 1: every 20 s wheel 0's spring at half for 1 s, with the truck standing on its handbrake");
         if (mode == 2) Log(L"probe: step test 2: every 20 s wheel 0's damping at a tenth for 0.5 s, with the truck moving over 2 m/s");
+        if (mode == 3) Log(L"probe: step test 3: every 20 s wheel 0's attach point 2 cm toward the droop for 1 s, with the truck standing on its handbrake");
     }
     if (!mode) return nullptr;
     if (r.vehicle != p.testVehicle)
@@ -2856,17 +2883,26 @@ static const SuspTuneTest *SuspStepTestPass(SuspStepWatch &p, const TruckMemory 
     else if (!p.on && !p.report && now >= p.due)
     {
         const float speed = SuspSize(t.velocity);
-        const bool ready = c && (mode == 1 ? speed < 0.2f && t.handbrake : speed > 2.0f);
-        if (ready && m.get(c + kSuspValueAt[k], p.was))
+        const bool ready = c && (mode == 2 ? speed > 2.0f : speed < 0.2f && t.handbrake) && (mode != 3 || r.vehicle != p.attachOffVehicle);
+        // test 3: the attach point's field (along up) before, and as the physics thread will write it (stock + the shift
+        // along the axis, the ride height's included)
+        const float ride = (p.front[0] ? s.rideFront : s.rideRear) / 100.0f;
+        if (ready && mode == 3 && p.attachStockC[0] == c && p.frame.axisUp[0] != 0.0f)
+        {
+            p.was = p.attachStock[0] + SuspShiftHold(ride) * p.frame.axisUp[0];
+            p.value = p.attachStock[0] + SuspShiftHold(ride + kStepTestShift) * p.frame.axisUp[0];
+        }
+        if (ready && (mode == 3 ? p.attachStockC[0] == c : m.get(c + kSuspValueAt[k], p.was)))
         {
             p.on = true;
             p.until = now + kStepTestHold[mode];
             const LONG head = g_step.ringHead;
             p.mark = head > 0 ? g_step.ring[(head - 1) % kStepRing].step : 0;
-            p.value = -1.0f;
+            if (mode != 3) p.value = -1.0f;
         }
         else p.due = now + 1000;
     }
+    if (mode == 3) return nullptr; // the physics thread makes test 3's write, not the tune
     out = SuspTuneTest{ 0, k, p.on ? kStepTestFactor[mode] : 1.0f };
     return &out;
 }
@@ -2901,6 +2937,41 @@ static void SuspStepTestReport(const SuspStepWatch &p)
     const int n = g_stepHistoryCount;
     int from = 0;
     while (from < n && e[from].step <= p.mark) from++;
+    if (p.test == 3)
+    {
+        // the attach point (BRIEF_suspension_extras.md, test 3): read on which step, whether it held, how far the corner
+        // rose (the wheel's height against the body falls as the point moves toward the droop) and after how many steps
+        auto first = [&](int at, float value) {
+            for (int i = at < 0 ? 0 : at; i < n; i++)
+                if (fabsf(e[i].field - value) < 1e-4f) return i;
+            return -1;
+        };
+        const int write = first(from, p.value), back = write >= 0 ? first(write, p.was) : -1;
+        if (write < 0)
+        {
+            Log(L"probe: step test 3: wheel 0's attach point %g to %g was not seen in the steps' trace (%d steps after the write)", p.was, p.value, n - from);
+            return;
+        }
+        int lost = -1;
+        const int end = back >= 0 ? back : n;
+        for (int i = write; i < end && lost < 0; i++)
+            if (fabsf(e[i].field - p.value) >= 1e-4f) lost = i;
+        auto mean = [&](int a, int b) {
+            double sum = 0.0;
+            int k = 0;
+            for (int i = a < 0 ? 0 : a; i < b && i < n; i++) sum += e[i].h, k++;
+            return k ? (float)(sum / k) : 0.0f;
+        };
+        const float before = mean(write - 12, write), during = mean(end - 12, end);
+        const int leave = SuspStepLeave(e, n, write, kStepTestBefore, kStepTestGap);
+        Log(L"probe: step test 3: wheel 0's attach point %g to %g read from step %u, %u steps after the write; %s; the wheel's height against the body %+.1f mm "
+            L"(the corner %s), leaving its trend by 2 mm %d steps after the write; back to %g read from step %d",
+            p.was, p.value, e[write].step, e[write].step - p.mark, lost < 0 ? L"it held while written" : L"the game wrote another value over it", (during - before) * 1000.0f,
+            during < before ? L"rose" : L"did not rise", leave, p.was, back >= 0 ? (int)e[back].step : -1);
+        SuspStepTraceLog(L"test 3, the write", write);
+        if (back >= 0) SuspStepTraceLog(L"test 3, back", back);
+        return;
+    }
     const int write = p.value >= 0.0f ? SuspStepFirst(e, n, from, p.value) : -1;
     const wchar_t *field = p.test == 1 ? L"spring" : L"damping";
     if (write < 0)
@@ -2957,6 +3028,7 @@ static void SuspStepWindowLog(SuspStepWatch &p, const SuspStepWin &w)
         }
         char damped[320] = "";
         int put = 0;
+        if (w.rested[i] && i < kMaxWheels) p.windowRest[i] = w.rest[i], p.windowRested[i] = true;
         if (w.written[i])
             put += _snprintf_s(damped + put, sizeof damped - put, _TRUNCATE, "; the damper wrote %d steps, %.4f on the mean, the clamp holding %.1f %%", w.written[i],
                                w.writtenSum[i] / w.written[i], 100.0f * w.clamped[i] / w.written[i]);
@@ -3011,11 +3083,15 @@ static SpringSet SpringFrom(const GaugeSettings &s)
     return k;
 }
 
-// Anything the physics thread writes each step: the damper off its defaults, a spring feature, the zones.
+// The attach point's features in force: a ride height, a sway bar, test 3 (build B).
+static bool AttachFeaturesOn(const GaugeSettings &s) { return s.rideFront != 0.0f || s.rideRear != 0.0f || s.swayFront > 0.0f || s.swayRear > 0.0f || (s.probe && s.suspStepTest == 3); }
+
+// Anything the physics thread does each step: the damper off its defaults, a spring feature, the zones, the attach
+// point's features, the display.
 static bool SuspFeaturesOn(const GaugeSettings &s)
 {
     const SpringSet k = SpringFrom(s);
-    return DamperOn(DamperFrom(s)) || SpringOn(k) || ZonesOn(k);
+    return DamperOn(DamperFrom(s)) || SpringOn(k) || ZonesOn(k) || AttachFeaturesOn(s) || s.suspDisplay;
 }
 
 // The damper let go, in the order the brief sets (its part 2, the addendum's item 5): the block dropped, the physics
@@ -3024,7 +3100,7 @@ static bool SuspFeaturesOn(const GaugeSettings &s)
 // on a truck switch puts the stock back after it (review 15). why: for the log.
 static void SuspDamperRelease(SuspStepWatch &p, const TruckMemory &m, const wchar_t *why)
 {
-    if (!p.block.serial || (!p.block.damping && !p.block.springing)) return;
+    if (!p.block.serial || (!p.block.damping && !p.block.springing && !p.block.shifting)) return;
     const SuspStepBlock was = p.block;
     InterlockedExchangePointer((void *volatile *)&g_stepBlock, nullptr);
     p.block = SuspStepBlock{};
@@ -3045,7 +3121,7 @@ static void SuspDamperRelease(SuspStepWatch &p, const TruckMemory &m, const wcha
 // tune leaves alone.
 static void SuspDamperBefore(SuspStepWatch &p, const TruckMemory &m, const TruckRefs &r, const GaugeSettings &s, bool found, bool *owns, bool *springs)
 {
-    if (p.block.damping || p.block.springing)
+    if (p.block.damping || p.block.springing || p.block.shifting)
     {
         if (!found) SuspDamperRelease(p, m, L"no truck driven");
         else if (r.vehicle != p.vehicle) SuspDamperRelease(p, m, L"another truck driven");
@@ -3062,12 +3138,13 @@ static void SuspDamperBefore(SuspStepWatch &p, const TruckMemory &m, const Truck
 // The block for the driven truck (with Probe=1 or the damper on, and a truck), its generation, the windows logged and
 // the test's trace kept. Returns the generation, which the 20 Hz travel probe goes by too.
 static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const TruckRefs &r, const TruckRaw &t, const GaugeSettings &s, const SuspTune &tune, bool found,
-                             ULONGLONG now)
+                             ULONGLONG now, bool swayOff)
 {
     const DamperSet damper = DamperFrom(s);
     const SpringSet spring = SpringFrom(s);
     const bool damping = (DamperOn(damper) || ZonesOn(spring)) && SuspVtable(), springing = SpringOn(spring) && SuspVtable();
-    if ((!s.probe && !damping && !springing) || !found)
+    const bool shifting = AttachFeaturesOn(s) && r.vehicle != p.attachOffVehicle && SuspVtable();
+    if ((!s.probe && !damping && !springing && !shifting && !s.suspDisplay) || !found)
     {
         SuspDamperRelease(p, m, found ? L"the damper off" : L"no truck driven");
         if (p.block.serial)
@@ -3123,6 +3200,16 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
             memcpy(p.constraint, constraint, sizeof p.constraint);
             b = SuspStepBlock{};
             memcpy(b.body, body, sizeof b.body);
+            // the axles, by each wheel's place in the chassis's frame
+            float forward[kMaxWheels] = {}, left[kMaxWheels] = {};
+            const int n = r.wheels < kMaxWheels ? r.wheels : kMaxWheels;
+            for (int i = 0; i < n; i++)
+            {
+                float local[3];
+                SuspLocal(t, i, local);
+                forward[i] = local[0], left[i] = local[2];
+            }
+            SuspPairs(n, forward, left, p.partner, p.isLeft, p.front, p.rearmost);
             // the limits as written now, for this generation's windows (the tune has written its pass by now)
             for (int i = 0; i < r.wheels && i < kMaxWheels; i++)
             {
@@ -3166,13 +3253,19 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
     b.chassis = r.chassis;
     b.wheels = r.wheels < kMaxWheels ? r.wheels : kMaxWheels;
     memcpy(b.wheel, r.wheel, sizeof b.wheel);
-    b.traced = s.probe && p.test && constraint[0] ? constraint[0] + kSuspValueAt[p.test == 1 ? kSuspStrength : kSuspDamping] : 0;
+    b.traced = s.probe && p.test && constraint[0] ? constraint[0] + (p.test == 3 ? 0xA4 : kSuspValueAt[p.test == 1 ? kSuspStrength : kSuspDamping]) : 0;
+    // the attach point's stock, read where the constraint is new (never one the mod has written), kept for it after
+    for (int i = 0; i < b.wheels; i++)
+        if (constraint[i] && constraint[i] != p.attachStockC[i] && m.get(constraint[i] + 0xA4, p.attachStock[i])) p.attachStockC[i] = constraint[i];
     // the damper: each wheel whose body is known, at its damping as the tune gives it (stock times DampingScale)
     b.damping = damping;
     b.damper = damping ? damper : DamperSet{};
     b.springing = springing;
     b.spring = spring;
-    b.vtable = running ? SuspVtable() : 0;
+    b.vtable = running || shifting ? SuspVtable() : 0;
+    b.shifting = shifting;
+    b.testShift = shifting && p.test == 3 && p.on ? kStepTestShift : 0.0f;
+    b.display = s.suspDisplay;
     for (int i = 0; i < kMaxWheels; i++)
     {
         b.constraint[i] = 0;
@@ -3183,7 +3276,16 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
         b.axisUp[i] = placed ? p.frame.axisUp[i] : 0.0f;
         b.travel[i] = placed && p.frame.low[i] < 0.0f ? -p.frame.low[i] : 0.0f;
         b.attachAt[i] = placed && constraint[i] ? constraint[i] + 0xA4 : 0; // the attach point along up, read each step (the addendum of 11:39)
+        b.travelMax[i] = placed ? p.frame.high[i] : 0.0f;
         const SuspWheel &w = tune.wheel[i];
+        // the attach point's features: a wheel whose body is known and whose stock was read
+        b.attachC[i] = shifting && placed && constraint[i] && p.attachStockC[i] == constraint[i] ? constraint[i] : 0;
+        b.attachStock[i] = p.attachStock[i];
+        b.ride[i] = (p.front[i] ? s.rideFront : s.rideRear) / 100.0f;
+        b.partner[i] = i < b.wheels ? p.partner[i] : -1;
+        b.isLeft[i] = p.isLeft[i];
+        b.sway[i] = swayOff ? 0.0f : p.front[i] ? s.swayFront : s.swayRear;
+        b.springK[i] = w.constraint == constraint[i] && SuspValueSane(kSuspStrength, w.stock[kSuspStrength]) ? fminf(1.0f, w.stock[kSuspStrength] * s.springScale) : 0.0f;
         if (!running || i >= b.wheels || p.frame.other[i] || !constraint[i] || w.constraint != constraint[i]) continue;
         const bool damped = damping && SuspValueSane(kSuspDamping, w.stock[kSuspDamping]);
         const bool sprung = springing && SuspValueSane(kSuspStrength, w.stock[kSuspStrength]) && b.travel[i] > 0.0f;
@@ -3195,8 +3297,9 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
     // a wheel the physics thread stops owning gets its values back before the new block runs without it
     bool dropped = false;
     for (int i = 0; i < kMaxWheels; i++)
-        dropped |= p.block.constraint[i] && (p.block.constraint[i] != b.constraint[i] || (p.block.base[i] > 0.0f && !(b.base[i] > 0.0f)) ||
-                                             (p.block.baseK[i] > 0.0f && !(b.baseK[i] > 0.0f)));
+        dropped |= (p.block.constraint[i] && (p.block.constraint[i] != b.constraint[i] || (p.block.base[i] > 0.0f && !(b.base[i] > 0.0f)) ||
+                                              (p.block.baseK[i] > 0.0f && !(b.baseK[i] > 0.0f)))) ||
+                   (p.block.shifting && p.block.attachC[i] && p.block.attachC[i] != b.attachC[i]);
     if (dropped) SuspDamperRelease(p, m, L"a wheel left to the tune");
     SuspStepBlock was = p.block;
     b.serial = b.seal = was.serial = was.seal = 0;
@@ -3208,6 +3311,28 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
     }
     static SuspStepWin win;
     if (SuspStepWindowTake(g_step, p.windows, win) && s.probe) SuspStepWindowLog(p, win);
+    // the guard (build B): the game moved an attach point the mod wrote, so the features stop on this truck and the stock
+    // goes back, said once
+    if (g_step.attachMoved != p.attachMoved)
+    {
+        p.attachMoved = g_step.attachMoved;
+        if (p.block.shifting)
+        {
+            p.attachOffVehicle = p.vehicle;
+            Log(L"suspension: the game moves this truck's attach point (its own ride height control, likely): the ride height, the sway bars and test 3 "
+                L"stop on it, and its stock is put back");
+            SuspDamperRelease(p, m, L"the game moves the attach point");
+        }
+    }
+    // the display's newest figures
+    const LONG shown = g_step.displays;
+    if (b.display && shown != p.displays)
+    {
+        _ReadBarrier();
+        memcpy(&p.shown, &g_step.display[(shown - 1) & 1], sizeof p.shown);
+        p.displays = shown;
+    }
+    if (!b.display) p.shown.wheels = 0;
     if (g_step.faults != p.faults || g_step.refused != p.refused)
     {
         p.faults = g_step.faults;
@@ -3292,7 +3417,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         float v = -1.0f;
         if (m.get(w.refs.wheel[0] + kSuspConstraintAt, c) && m.get(c + kSuspValueAt[stepTest->value], v)) w.step.value = v;
     }
-    const uint32_t generation = SuspStepPass(w.step, m, w.refs, raw, s, w.tune, w.found, now);
+    const uint32_t generation = SuspStepPass(w.step, m, w.refs, raw, s, w.tune, w.found, now, w.swayOff);
     if (probe && w.found) SuspTravelProbe(w.travel, w.travelAt, m, w.refs, raw, now, generation);
     WorldRead(m, w.found ? w.refs.control : 0, world);
     // a load ended (the game's loading screen gone): the truck that drives on under the game's id it had before the
@@ -4352,6 +4477,11 @@ static DWORD WINAPI Run(void *)
             const bool locksHeard = !NgMenuOpen() && !bindCapture.active;
             watch.lockPress[kLockDiff] = locksHeard && states[kActDiffLock].pressed;
             watch.lockPress[kLockAwd] = locksHeard && states[kActAwd].pressed;
+            if (locksHeard && states[kActSway].pressed)
+            {
+                watch.swayOff = !watch.swayOff;
+                Log(L"suspension: the sway bars %s (BindSwayDisconnect)", watch.swayOff ? L"disconnected" : L"connected");
+            }
         }
         // the map: the game's save, looked for every kSaveLookMs and read when it is another or was written since
         const ULONGLONG lookNow = GetTickCount64();
@@ -4644,6 +4774,63 @@ static DWORD WINAPI Run(void *)
         v.gearHold = GearHoldOf(watch, AutoClass(watch, inForce.tachClass));
         v.gearHoldOwn = watch.gearHoldOwn;
         // the suspension's figures as the driven truck's file has them, front (wheel 0) and rear (the last wheel)
+        // the display's figures, the bars' lamp and each axle's rest place (build B)
+        {
+            const SuspDisplaySlot &d = watch.step.shown;
+            SuspDisplayView &sv = v.susp;
+            sv = SuspDisplayView{};
+            if (driving && inForce.suspDisplay && d.wheels > 0)
+            {
+                sv.wheels = d.wheels < kViewWheels ? d.wheels : kViewWheels;
+                int axle[kMaxWheels];
+                for (int i = 0; i < sv.wheels; i++) axle[i] = -1;
+                for (int i = 0; i < sv.wheels; i++)
+                {
+                    if (axle[i] >= 0) continue;
+                    axle[i] = sv.axles;
+                    const int j = watch.step.partner[i];
+                    if (j > i && j < sv.wheels) axle[j] = sv.axles;
+                    sv.axles++;
+                }
+                for (int i = 0; i < sv.wheels; i++)
+                {
+                    sv.x[i] = d.x[i], sv.travel[i] = d.travel[i], sv.travelMax[i] = d.travelMax[i], sv.rest[i] = d.rest[i];
+                    sv.hit[i] = d.hit[i], sv.hanging[i] = d.hanging[i], sv.placed[i] = d.placed[i], sv.isLeft[i] = watch.step.isLeft[i], sv.axle[i] = axle[i];
+                }
+                sv.stops = inForce.bumpStops;
+                sv.zone = inForce.bumpZone;
+                // the articulation: the front pair's difference of compression less the rearmost pair's, in cm
+                float fr = 0.0f, rr = 0.0f;
+                bool fk = false, rk = false;
+                for (int i = 0; i < sv.wheels; i++)
+                {
+                    const int j = watch.step.partner[i];
+                    if (j < 0 || j >= sv.wheels || !watch.step.isLeft[i] || !d.placed[i] || !d.placed[j]) continue;
+                    const float diff = -d.x[i] + d.x[j];
+                    if (watch.step.front[i] && !fk) fr = diff, fk = true;
+                    if (watch.step.rearmost[i] && !watch.step.front[i] && !rk) rr = diff, rk = true;
+                }
+                sv.articulationKnown = fk && rk;
+                sv.articulation = (fr - rr) * 100.0f;
+            }
+            v.swayOff = driving && watch.swayOff && (inForce.swayFront > 0.0f || inForce.swayRear > 0.0f);
+            // each axle's rest place from the probe's windows or the display (cm along the axis, compression negative)
+            v.rideRestKnown = false;
+            float sum[2] = {}, count[2] = {};
+            for (int i = 0; driving && i < watch.refs.wheels && i < kMaxWheels; i++)
+            {
+                const bool known = d.wheels > 0 && i < d.wheels && d.placed[i] ? true : watch.step.windowRested[i];
+                if (!known) continue;
+                const float rest = d.wheels > 0 && i < d.wheels && d.placed[i] ? d.rest[i] : watch.step.windowRest[i];
+                const int axle = watch.step.front[i] ? 0 : 1;
+                sum[axle] += rest * 100.0f, count[axle] += 1.0f;
+            }
+            if (count[0] > 0.0f && count[1] > 0.0f)
+            {
+                v.rideRest[0] = sum[0] / count[0], v.rideRest[1] = sum[1] / count[1];
+                v.rideRestKnown = true;
+            }
+        }
         v.suspKnown = false;
         if (driving && watch.tune.vehicle == watch.refs.vehicle && watch.refs.wheels > 0)
         {
@@ -4907,7 +5094,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 109, "ini: the help text survives a write (109 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 111, "ini: the help text survives a write (111 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());

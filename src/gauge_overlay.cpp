@@ -75,6 +75,22 @@ static void DrawWarnings(const GaugeView &view, float w, float h, float dt)
     }
 }
 
+// The suspension display and the sway bars' lamp (build B), on the warning boxes' stage below their slots; not while the
+// NEXT GEN menu is open.
+static void DrawSuspension(const GaugeView &view, float w, float h)
+{
+    if (NgMenuOpen() || (view.susp.wheels <= 0 && !view.swayOff)) return;
+    const float u = WarnUnit(w, h);
+    UpdateWarnFontTexture(u);
+    ImVec2 at = WarnOrigin(w, h, 3);
+    if (view.susp.wheels > 0)
+    {
+        GSuspDisplay(ImGui::GetBackgroundDrawList(), g_warnFonts, at, u, 1.0f, view.susp);
+        at.y += (GSuspHeight(view.susp) + kWarnGap) * u;
+    }
+    if (view.swayOff) GSwayLamp(ImGui::GetBackgroundDrawList(), g_warnFonts, at, u, 1.0f);
+}
+
 static void UpdateFontTexture(float u)
 {
     static float wanted = 0.0f;         // the size asked for on the last frame
@@ -123,6 +139,7 @@ static void OnFrame()
     UpdateFontTexture(u);
     const float dt = fminf(fmaxf(io.DeltaTime, 0.0f), 0.1f);
     DrawWarnings(view, io.DisplaySize.x, io.DisplaySize.y, dt);
+    DrawSuspension(view, io.DisplaySize.x, io.DisplaySize.y);
     alpha = fminf(fmaxf(alpha + (view.show ? dt : -dt) / 0.15f, 0.0f), 1.0f);
     // the mod's thread leaves a new state 20 times a second: the two big needles glide from one to the next
     const float speedWas = shown.speedKmh, rpmWas = shown.rpm;

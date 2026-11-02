@@ -501,6 +501,25 @@ int wmain(int argc, wchar_t **argv)
             Backdrop(bg, 1920, 1080);
             for (int i = 0; i < 3; i++) GWarnBox(bg, warnFonts, WarnOrigin(1920.0f, 1080.0f, i), wu, 1.0f, boxes[i]);
         });
+        // the suspension display below them (build B): an Arocs on a twisted crossing, its front left deep and hitting the
+        // end, its front right hanging, the bump stops on; then the sway bars' lamp
+        SuspDisplayView d = {};
+        d.wheels = 8, d.axles = 4, d.stops = true, d.zone = 0.12f;
+        const float x[8] = { -0.62f, 0.02f, -0.35f, -0.1f, -0.2f, -0.12f, -0.15f, -0.18f }, travel[8] = { 0.6f, 0.6f, 0.6f, 0.6f, 0.44f, 0.44f, 0.44f, 0.44f };
+        for (int i = 0; i < 8; i++)
+        {
+            d.x[i] = x[i], d.travel[i] = travel[i], d.travelMax[i] = 0.4f, d.rest[i] = i < 4 ? -0.32f : -0.1f;
+            d.placed[i] = true, d.isLeft[i] = i % 2 == 0, d.axle[i] = i / 2;
+        }
+        d.hit[0] = true, d.hanging[1] = true;
+        d.articulationKnown = true, d.articulation = (0.62f - (-0.02f) - (0.15f - 0.18f)) * 100.0f;
+        swprintf_s(path, L"%s\\suspension.png", out);
+        RenderPng(path, 1920, 1080, [&](ImDrawList *, ImDrawList *bg) {
+            Backdrop(bg, 1920, 1080);
+            const ImVec2 at = WarnOrigin(1920.0f, 1080.0f, 3);
+            GSuspDisplay(bg, warnFonts, at, wu, 1.0f, d);
+            GSwayLamp(bg, warnFonts, ImVec2(at.x, at.y + (GSuspHeight(d) + kWarnGap) * wu), wu, 1.0f);
+        });
         Release(warnSrv);
     }
 

@@ -117,7 +117,10 @@ struct GaugeSettings
     float springRise, springCross; // SpringRise: the rate at the compression end, a factor; SpringCross: where dual rate's second rate begins, as a share of the travel
     bool dampingZones;       // DampingZones: the damping softer in the middle of the travel (ZoneSoft, from ZoneFrom to ZoneTo) and firmer toward its ends (ZoneFirm)
     float zoneSoft, zoneFirm, zoneFrom, zoneTo;
-    int suspStepTest;        // SuspStepTest (ini only, a test, with Probe=1): every 20 s wheel 0's spring at half for 1 s standing (1), or its damping at a tenth for 0.5 s moving (2)
+    float rideFront, rideRear; // RideFront, RideRear: each axle's ride height in cm (kRideRange), its attach points shifted; middle axles go with the rear (a test)
+    float swayFront, swayRear; // SwayFront, SwayRear: each axle's sway bar as a share of its spring rate (kSwayRange), 0 none (a test)
+    bool suspDisplay;        // SuspDisplay: the suspension display, each wheel's travel, its end hits and whether it hangs, and the articulation
+    int suspStepTest;        // SuspStepTest (ini only, a test, with Probe=1): every 20 s wheel 0's spring at half for 1 s standing (1), its damping at a tenth for 0.5 s moving (2), or its attach point 2 cm toward the droop for 1 s standing (3)
     int soundVolume;        // SoundVolume: how loud the turbo's flutter and the oil warning are, 0 to 100; 0 = no sound
     bool soundsOnly;         // SoundsOnly: the sounds are played and the cluster is not drawn
     bool dieselFlutter;      // DieselFlutter: a diesel's lift flutters too; off, it is quiet, or plays the player's own turbo whistle files (review 12, finding 6)
@@ -196,7 +199,7 @@ static const float kWarmUpRange[2] = { 0.5f, 60.0f }, kOverheatRange[2] = { 0.25
                    kAmbientRange[2] = { -40.0f, 50.0f }, kGearHoldRange[2] = { 1.0f, 3.0f }, kAirFullRange[2] = { 10.0f, 80.0f }, kDamageRange[2] = { 0.0f, 100.0f },
                    kOilWarmUpRange[2] = { 1.0f, 60.0f }, kOilWarnRange[2] = { 100.0f, 150.0f }, kTorqueShareRange[2] = { 0.10f, 1.00f },
                    kHotDamageFromRange[2] = { 100.0f, 124.0f }, kStallDamageRange[2] = { 0.0f, 25.0f },
-                   kClutchHeatRange[2] = { 10.0f, 300.0f }, kSuspScaleRange[2] = { 0.25f, 4.0f }, kExtraTravelRange[2] = { 0.0f, 30.0f }, kDamperRange[2] = { 0.25f, 4.0f },
+                   kClutchHeatRange[2] = { 10.0f, 300.0f }, kSuspScaleRange[2] = { 0.25f, 4.0f }, kExtraTravelRange[2] = { 0.0f, 30.0f }, kRideRange[2] = { -10.0f, 10.0f }, kSwayRange[2] = { 0.0f, 1.5f }, kDamperRange[2] = { 0.25f, 4.0f },
                    kKneeRange[2] = { 0.02f, 0.5f }, kBumpZoneRange[2] = { 0.03f, 0.2f }, kBumpForceRange[2] = { 1.0f, 6.0f },
                    kBumpDampingRange[2] = { 1.0f, 4.0f }, kSpringRiseRange[2] = { 1.0f, 3.0f }, kSpringCrossRange[2] = { 0.2f, 0.8f },
                    kZoneSoftRange[2] = { 0.5f, 1.0f }, kZoneFirmRange[2] = { 1.0f, 3.0f };
@@ -271,6 +274,10 @@ inline void SettingsClamp(GaugeSettings &s)
     s.springScale = SettingsRange(s.springScale, kSuspScaleRange[0], kSuspScaleRange[1]);
     s.dampingScale = SettingsRange(s.dampingScale, kSuspScaleRange[0], kSuspScaleRange[1]);
     s.extraTravel = SettingsRange(s.extraTravel, kExtraTravelRange[0], kExtraTravelRange[1]);
+    s.rideFront = SettingsRange(s.rideFront, kRideRange[0], kRideRange[1]);
+    s.rideRear = SettingsRange(s.rideRear, kRideRange[0], kRideRange[1]);
+    s.swayFront = SettingsRange(s.swayFront, kSwayRange[0], kSwayRange[1]);
+    s.swayRear = SettingsRange(s.swayRear, kSwayRange[0], kSwayRange[1]);
     s.damperCurve = s.damperCurve < 0 || s.damperCurve >= kDamperCurves ? 0 : s.damperCurve;
     s.lowCompression = SettingsRange(s.lowCompression, kDamperRange[0], kDamperRange[1]);
     s.highCompression = SettingsRange(s.highCompression, kDamperRange[0], kDamperRange[1]);
@@ -291,7 +298,7 @@ inline void SettingsClamp(GaugeSettings &s)
     s.toggleKey = s.toggleKey < 0 || s.toggleKey > 255 ? 0 : s.toggleKey;
     s.soundVolume = s.soundVolume < 0 ? 0 : s.soundVolume > 100 ? 100 : s.soundVolume;
     s.probe = s.probe < 0 ? 0 : s.probe;
-    s.suspStepTest = s.suspStepTest < 0 || s.suspStepTest > 2 ? 0 : s.suspStepTest;
+    s.suspStepTest = s.suspStepTest < 0 || s.suspStepTest > 3 ? 0 : s.suspStepTest;
 }
 
 // The scales of a truck class: idle, where the red zone starts, the tachometer's top (rpm), the speedometer's top
@@ -384,7 +391,7 @@ enum { kSoundOil = kTurboTiers, kSoundPurge, kSoundWhistle, kSoundTierCount }; /
 // string that lives as long as the mod
 enum { kViewPullOff, kViewPullArmed, kViewPullRunning, kViewPullDone, kViewPullStopped };
 static const int kEnginePlot = 40; // points of the tab's torque plot
-static const int kViewActions = 26; // the gearbox's actions the view holds the bindings of (input_bindings.h's kActCount)
+static const int kViewActions = 27; // the gearbox's actions the view holds the bindings of (input_bindings.h's kActCount)
 static const int kViewShifts = 24;  // of them the shifter's, before the two locks (DiffLock, Awd)
 // The tab's asks of the gearbox's bindings: begin a capture into an action's slot, or clear it (the mod's thread does
 // both, with the snapshot of its pass).
@@ -402,12 +409,30 @@ struct WarnBox
 };
 enum { kWarnClutch, kWarnEngine, kWarnBoxes };
 
+// The suspension display's figures (build B), at most kViewWheels wheels: each wheel's place along its axis and its travel
+// (m, compression negative), its rest place, a hit of the compression end in the last second, whether it hangs (at or past
+// its spring's zero), its side and its axle (0 the front), and the articulation in cm (the front pair's difference less
+// the rearmost's). wheels 0: no figures.
+static const int kViewWheels = 8;
+struct SuspDisplayView
+{
+    int wheels, axles;
+    float x[kViewWheels], travel[kViewWheels], travelMax[kViewWheels], rest[kViewWheels];
+    bool hit[kViewWheels], hanging[kViewWheels], placed[kViewWheels], isLeft[kViewWheels];
+    int axle[kViewWheels];
+    bool stops;
+    float zone;
+    bool articulationKnown;
+    float articulation;
+};
+
 // smtInstalled: the manual transmission mod is in the game; gearboxHeld: another mod holds the game's gearbox
 // functions. Either way the mod's gearbox stands down (the tab says why). warn: the clutch's and the engine's warning
 // boxes while a truck is driven.
 struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWarnBoxes]; int engineDamage, engineCapacity; char truck[96]; bool truckOwn, smtInstalled, gearboxHeld; char map[96], mapFrom[64]; bool mapOwn; float ambientC;
                    int pullTest, pullPhase; const char *pullWhy;
                    float ambientDay, ambientNight, hour; // the map's day and night (with mapOwn), the hour of the game's day (-1 not known)
+                   SuspDisplayView susp; bool swayOff; float rideRest[2]; bool rideRestKnown; // the display's figures; the bars disconnected; each axle's rest place along its axis (front, rear; cm), from the probe
                    bool suspKnown; float suspFile[3][2]; // the driven truck's file: spring, damping and the compression end (m), [front, rear] (wheel 0 and the last)
                    char gearbox[96]; float gearHold; bool gearHoldOwn; // the driven truck's gearbox (its key, "" for none), the seconds each gear is held going up with the mod's engine, and whether its file sets them
                    int autoClass; bool autoByWeight; float massKg; // the class the automatic goes by for it, whether by its weight (no scales of its own), and that weight (0 not read)

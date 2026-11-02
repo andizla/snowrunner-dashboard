@@ -227,6 +227,18 @@ struct SuspStepBlock
     float baseK[kMaxWheels];      // the wheel's strength as the tune gives it (stock times SpringScale)
     float attachUp[kMaxWheels], axisUp[kMaxWheels], travel[kMaxWheels]; // for x = (h - attachUp) / axisUp, and L; axisUp 0 = no place
     uint64_t attachAt[kMaxWheels]; // the attach point's component along up, read each step (the game's ride height moves it), 0 = attachUp
+    // the attach point's features (build B): the physics thread writes stock + shift along the axis each step
+    bool shifting;
+    uint64_t attachC[kMaxWheels];  // the constraint whose attach point is written, 0 = this wheel's is left alone
+    float attachStock[kMaxWheels]; // its component along up as the game set it
+    float ride[kMaxWheels];        // the ride height's shift in m, toward the droop (the corner rises)
+    float testShift;               // SuspStepTest=3: wheel 0's shift on top, m
+    int partner[kMaxWheels];       // the other wheel of its axle, -1 none
+    bool isLeft[kMaxWheels];
+    float sway[kMaxWheels];        // its pair's bar as a share of the axle's spring rate, 0 none or disconnected
+    float springK[kMaxWheels];     // its strength as the tune gives it (stock times SpringScale), for the bar
+    bool display;                  // the display's figures are published each step
+    float travelMax[kMaxWheels];   // the droop end, for the display's bars
     uint32_t seal;
 };
 
@@ -259,6 +271,15 @@ struct SuspStepTraceEntry
     float dt, field, h, v;
 };
 
+// The display's figures each step (build B, item 4): each wheel's place along its axis and its travel, its rest place,
+// whether it went past the compression end in the last second and whether it hangs (at or past its spring's zero).
+struct SuspDisplaySlot
+{
+    int wheels;
+    float x[kMaxWheels], travel[kMaxWheels], travelMax[kMaxWheels], rest[kMaxWheels];
+    bool hit[kMaxWheels], hanging[kMaxWheels], placed[kMaxWheels];
+};
+
 struct SuspStepState
 {
     uint32_t serial, generation;   // of the block the last look took
@@ -275,6 +296,15 @@ struct SuspStepState
     volatile LONG faults;          // looks that faulted and dropped the block
     volatile LONG refused;         // writes not made, the wheel's constraint no longer the block's or not of its class
     uint32_t faultSerial;          // the block a fault or a refused write dropped: not taken again
+    float clock;                   // s of steps taken
+    uint64_t wroteC[kMaxWheels];   // the constraint each attach point write went to, and what it wrote (the guard's)
+    float wroteAttach[kMaxWheels];
+    volatile LONG attachMoved;     // the game moved an attach point the mod wrote: the features stop for this truck
+    uint32_t movedSerial;          // the block the guard stopped: no writes from it
+    float restX[kMaxWheels];       // each wheel's place at the last standstill, and when it last went past the end
+    float endAt[kMaxWheels];
+    SuspDisplaySlot display[2];    // the display's figures, the newest at display[(displays - 1) & 1]
+    volatile LONG displays;
 };
 
 // The block published: written into the slot the physics thread is not reading (the one published two passes ago),
@@ -521,6 +551,128 @@ inline bool SuspDamperStep(SuspStepState &s, const SuspStepBlock &b, const float
     return true;
 }
 
+// ---- the attach point's features (BRIEF_suspension_extras.md, the addendum of 2 November 13:47: build B) ----
+// The spring's zero and both travel limits are measured from the attach point (+ 0xA0 to + 0xA8, in the frame of the
+// body the constraint is on), so a shift d of it along the axis toward the droop moves the wheel's rest place and its
+// travel by d and the corner rises by about d: what the file's Height does, and the Arocs' Active ride height within
+// DeviationMax. Only its component along up is written (the axis is the body's down on every truck seen).
+static const float kShiftMost = 0.12f;            // m, the game's own DeviationMax range
+static const float kPairAlong = 0.2f;             // m along forward: two wheels of one axle
+inline float SuspShiftHold(float d) { return d > kShiftMost ? kShiftMost : d < -kShiftMost ? -kShiftMost : d; }
+
+// The axles: each wheel's partner at the same forward place within kPairAlong on the other side (left by the chassis's
+// left axis), whether it is the left one, whether its axle is the frontmost and whether it is the rearmost.
+inline void SuspPairs(int n, const float *forward, const float *left, int *partner, bool *isLeft, bool *front, bool *rearmost)
+{
+    float most = -1e9f, least = 1e9f;
+    for (int i = 0; i < n; i++) most = fmaxf(most, forward[i]), least = fminf(least, forward[i]);
+    for (int i = 0; i < n; i++)
+    {
+        partner[i] = -1;
+        isLeft[i] = left[i] > 0.0f;
+        front[i] = forward[i] > most - kPairAlong;
+        rearmost[i] = forward[i] < least + kPairAlong;
+        float best = kPairAlong;
+        for (int j = 0; j < n; j++)
+            if (j != i && (left[j] > 0.0f) != (left[i] > 0.0f) && fabsf(forward[j] - forward[i]) < best) best = fabsf(forward[j] - forward[i]), partner[i] = j;
+    }
+}
+
+// A bar's shifts on a pair, c the compression (-x) and k the strength of each side: F = K (cL - cR) with K the setting
+// times the pair's mean k; the left side shifts F / (2 kL) toward the droop and the right the same toward the bump,
+// so the more compressed side is pushed down and the body is held level.
+inline void SuspSwayShift(float setting, float cL, float cR, float kL, float kR, float &sL, float &sR)
+{
+    const float K = setting * 0.5f * (kL + kR), F = K * (cL - cR);
+    sL = kL > 0.0f ? F / (2.0f * kL) : 0.0f;
+    sR = kR > 0.0f ? -F / (2.0f * kR) : 0.0f;
+}
+
+// One attach point write: right before it, [wheel + 0x28] must still be the constraint and of its class. 1 written,
+// 0 refused, -1 a fault.
+inline int SuspAttachWrite(uint64_t wheel, uint64_t constraint, uint64_t vtable, uint64_t at, float value)
+{
+    __try
+    {
+        if (*(const uint64_t *)(uintptr_t)(wheel + 0x28) != constraint || *(const uint64_t *)(uintptr_t)constraint != vtable) return 0;
+        *(volatile float *)(uintptr_t)at = value;
+        return 1;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return -1;
+    }
+}
+
+// The attach point's step: the guard first (a field that holds neither what was written nor the stock was moved by the
+// game: the features stop for the truck, the mod's thread puts the stock back), then stock + the ride height, the test's
+// shift and the bar's, held to kShiftMost, along the axis. The bar works off the place just read. False where a write
+// was refused or faulted.
+inline bool SuspAttachStep(SuspStepState &s, const SuspStepBlock &b, const float *h, const float *attach)
+{
+    if (!b.shifting || s.movedSerial == b.serial) return true;
+    const int n = b.wheels < kMaxWheels ? b.wheels : kMaxWheels;
+    for (int i = 0; i < n; i++)
+        if (b.attachC[i] && s.wroteC[i] == b.attachC[i] && attach[i] != s.wroteAttach[i] && attach[i] != b.attachStock[i])
+        {
+            InterlockedIncrement(&s.attachMoved);
+            s.movedSerial = b.serial;
+            return true;
+        }
+    float shift[kMaxWheels];
+    for (int i = 0; i < n; i++) shift[i] = b.ride[i] + (i == 0 ? b.testShift : 0.0f);
+    for (int i = 0; i < n; i++)
+    {
+        const int j = b.partner[i];
+        if (j <= i || j >= n || !b.isLeft[i] == !b.isLeft[j] || !(b.sway[i] > 0.0f) || b.axisUp[i] == 0.0f || b.axisUp[j] == 0.0f) continue;
+        const int l = b.isLeft[i] ? i : j, r = b.isLeft[i] ? j : i;
+        const float cL = -(h[l] - attach[l]) / b.axisUp[l], cR = -(h[r] - attach[r]) / b.axisUp[r];
+        float sL = 0.0f, sR = 0.0f;
+        SuspSwayShift(b.sway[i], cL, cR, b.springK[l], b.springK[r], sL, sR);
+        shift[l] += sL, shift[r] += sR;
+    }
+    for (int i = 0; i < n; i++)
+    {
+        if (!b.attachC[i] || !b.attachAt[i] || b.axisUp[i] == 0.0f) continue;
+        const float value = b.attachStock[i] + SuspShiftHold(shift[i]) * b.axisUp[i];
+        const int done = SuspAttachWrite(b.wheel[i], b.attachC[i], b.vtable, b.attachAt[i], value);
+        if (done <= 0)
+        {
+            InterlockedIncrement(done < 0 ? &s.faults : &s.refused);
+            return false;
+        }
+        s.wroteC[i] = b.attachC[i];
+        s.wroteAttach[i] = value;
+    }
+    return true;
+}
+
+// The display's figures of this step, published whole into the slot not last published.
+inline void SuspDisplayStep(SuspStepState &s, const SuspStepBlock &b, const float *h, const float *attach, float speed)
+{
+    if (!b.display) return;
+    const int n = b.wheels < kMaxWheels ? b.wheels : kMaxWheels;
+    const LONG count = s.displays;
+    SuspDisplaySlot &d = s.display[count & 1];
+    d.wheels = n;
+    for (int i = 0; i < n; i++)
+    {
+        float x = 0.0f;
+        d.placed[i] = SuspPlace(b, i, h[i], attach[i], x) && b.travel[i] > 0.0f;
+        if (!d.placed[i]) continue;
+        if (speed < 0.1f) s.restX[i] = x;
+        if (-x >= b.travel[i]) s.endAt[i] = s.clock;
+        d.x[i] = x;
+        d.travel[i] = b.travel[i];
+        d.travelMax[i] = b.travelMax[i];
+        d.rest[i] = s.restX[i];
+        d.hit[i] = s.endAt[i] > 0.0f && s.clock - s.endAt[i] < 1.0f;
+        d.hanging[i] = x >= 0.0f;
+    }
+    _WriteBarrier();
+    InterlockedExchange(&s.displays, count + 1);
+}
+
 // One call of the wheels' drive (the physics thread): for the published block's truck only.
 inline void SuspStepLook(SuspStepState &s, const SuspStepBlock *published, uint64_t action, float dt)
 {
@@ -538,7 +690,9 @@ inline void SuspStepLook(SuspStepState &s, const SuspStepBlock *published, uint6
     const bool had = s.have && s.generation == b.generation;
     SuspStepAdd(s, b, h, speed, field, dt);
     if (had) SuspPlaceAdd(s, b, h, attach, speed);
-    if (!SuspDamperStep(s, b, h, attach, dt, had && dt > 0.0f && dt <= kStepDtMost))
+    if (dt > 0.0f && dt <= kStepDtMost) s.clock += dt;
+    if (had) SuspDisplayStep(s, b, h, attach, speed);
+    if (!SuspDamperStep(s, b, h, attach, dt, had && dt > 0.0f && dt <= kStepDtMost) || (had && !SuspAttachStep(s, b, h, attach)))
     {
         s.faultSerial = b.serial;
         s.have = false;
@@ -554,8 +708,15 @@ inline int SuspDamperLetGo(const SuspStepBlock &b, const TruckMemory &m)
     for (int i = 0; i < b.wheels && i < kMaxWheels; i++)
     {
         uint64_t c = 0, vt = 0;
-        if (!b.constraint[i] || !m.get(b.wheel[i] + 0x28, c) || c != b.constraint[i] || !m.get(c, vt) || vt != b.vtable) continue;
         bool put = false;
+        // the attach point's stock, where the physics thread wrote it
+        if (b.shifting && b.attachC[i] && b.attachAt[i] && m.get(b.wheel[i] + 0x28, c) && c == b.attachC[i] && m.get(c, vt) && vt == b.vtable)
+            put |= m.put(b.attachAt[i], b.attachStock[i]);
+        if (!b.constraint[i] || !m.get(b.wheel[i] + 0x28, c) || c != b.constraint[i] || !m.get(c, vt) || vt != b.vtable)
+        {
+            back += put;
+            continue;
+        }
         if (b.damping && b.base[i] > 0.0f) put |= m.put(c + 0xC8, b.base[i]);
         if (b.springing && b.baseK[i] > 0.0f) put |= m.put(c + 0xC4, b.baseK[i]);
         back += put;
