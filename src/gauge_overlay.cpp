@@ -194,7 +194,7 @@ static void OnFrame()
     {
         loggedW = io.DisplaySize.x;
         loggedH = io.DisplaySize.y;
-        static const wchar_t *layouts[kLayoutCount] = { L"strip", L"block", L"HUD dials", L"HUD digital" }, *styles[kFaceCount] = { L"solid", L"tinted", L"open" };
+        static const wchar_t *layouts[kLayoutCount] = { L"strip", L"block", L"Spotter dials", L"Spotter digital" }, *styles[kFaceCount] = { L"solid", L"tinted", L"open" };
         GaugeLog(L"overlay: the cluster is drawn on a %.0f x %.0f picture (%s layout, %s style, %.3f px per reference px%s)", loggedW, loggedH,
                  layouts[s.layout < 0 || s.layout >= kLayoutCount ? kLayoutStrip : s.layout],
                  GaugeOnStage(s) ? L"the HUD's" : styles[s.style < 0 || s.style >= kFaceCount ? kFaceOpen : s.style], u, view.demo ? L", demo values" : L"");

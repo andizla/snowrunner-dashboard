@@ -23,15 +23,15 @@ static const FontStyle kGaugeStyles[kGsStyleCount] = {
     { 8.0f, 1 },  // kGsGearMode: "A", "H", "L+"
     { 6.5f, 1 },  // kGsLamp: the letters inside lamp symbols
     { 7.0f, 0 },  // kGsUnit: small labels next to readouts
-    { 24.0f, 1 }, // kGsHudHead: the HUD digital layout's speed
-    { 15.0f, 1 }, // kGsHudMid: its rpm, the HUD dials' values, the gear on both HUD layouts
+    { 24.0f, 1 }, // kGsHudHead: the Spotter digital layout's speed
+    { 15.0f, 1 }, // kGsHudMid: its rpm, the Spotter dials' values, the gear on both HUD layouts
     { 10.5f, 1 }, // kGsHudCell: a HUD cell's value, the headline's units
-    { 7.5f, 1 },  // kGsHudSmall: a HUD cell's unit, the HUD dials' numbers, the lamps' labels
+    { 7.5f, 1 },  // kGsHudSmall: a HUD cell's unit, the Spotter dials' numbers, the lamps' labels
 };
 
 struct GaugeLayout
 {
-    int variant;                    // 0 = strip (bottom centre), 1 = block (bottom right), 2 = HUD dials, 3 = HUD digital (both docked left of the game's gear panel)
+    int variant;                    // 0 = strip (bottom centre), 1 = block (bottom right), 2 = Spotter dials, 3 = Spotter digital (both docked left of Spotter's gear panel)
     bool swapDials;                 // the speedometer where the tachometer is and the tachometer where the speedometer is
     bool showTemp, showBoost, showAir, showLamps, showClock, showFuelUse;
     int oilGauge;                  // the oil temperature: kOilOff, kOilNeedle (a second needle in the temperature dial), kOilDial (a dial of its own)
@@ -932,15 +932,15 @@ static void GRideBox(ImDrawList *dl, const GaugeFonts &f, ImVec2 at, float u, fl
     TextDraw(dl, f, kWsTitle, P(44, 44), GCol(255, 255, 255, a), text, -1, u);
 }
 
-// ---- the HUD layouts (BRIEF_cluster_hud_layouts.md): in the style of the game's HUD of 1 November 2026, a slate panel
+// ---- the HUD layouts (BRIEF_cluster_hud_layouts.md): in the style of Spotter's HUD (the minimap mod's), a slate panel
 // with an orange-brown outline, value cells with square corners and lamps like the game's buttons. Sizes are the
-// mockup's (design\gauge-mod\mockup\hud2026\cluster_b.html) in reference pixels, 166 high as the game's gear panel ----
+// mockup's (design\gauge-mod\mockup\hud2026\cluster_b.html) in reference pixels, 166 high as Spotter's gear panel ----
 static const GRgb kHudSlate = { 28, 38, 49 }, kHudEdge = { 168, 90, 50 }, kHudInner = { 107, 122, 136 }, kHudGrey = { 86, 98, 109 },
                   kHudOrange = { 224, 122, 62 }, kHudText = { 233, 236, 239 }, kHudDim = { 143, 153, 162 }, kHudLabel = { 174, 182, 189 },
                   kHudGreen = { 69, 190, 95 };
 static const float kHudH = 166.0f, kHudDialsW = 488.0f, kHudDigitalW = 346.0f;
 
-// Text with the small drop shadow the game's HUD text has.
+// Text with the small drop shadow Spotter's HUD text has.
 static void HText(ImDrawList *dl, const GaugeFonts &f, int style, ImVec2 at, ImU32 col, const char *s, int align, float u)
 {
     TextDraw(dl, f, style, ImVec2(at.x + 1.0f * u, at.y + 1.0f * u), GCol(0, 0, 0, 0.8f * GAlpha(col)), s, align, u);
@@ -1004,7 +1004,7 @@ static void HCell(ImDrawList *dl, const GaugeFonts &f, ImVec2 o, float w, float 
     HText(dl, f, kGsHudSmall, ImVec2(right, mid + 10.0f * u), GCol(197, 204, 210, a), c.unit, 1, u);
 }
 
-// The lamps: the mod's own only, as the game's gear panel shows the handbrake, all wheel drive, the diff lock and the
+// The lamps: the mod's own only, as Spotter's gear panel shows the handbrake, all wheel drive, the diff lock and the
 // gear (the user, 2 November). Each lights in its colour of today; the oil's and the tire's blink as before; a level
 // truck's tilt lamp is off. The tire lamp only with a tire mod that publishes its state.
 struct HudLamp { const char *label; bool on; GRgb col; };
@@ -1094,7 +1094,7 @@ static void HudSpeedScale(const GaugeState &st, float &top, float &step, float &
     v = st.mph ? st.speedKmh / 1.609f : st.speedKmh;
 }
 
-// HUD dials (Layout 2): origin is the panel's bottom right corner. The rpm and speed dials (swapped with SwapDials),
+// Spotter dials (Layout 2): origin is the panel's bottom right corner. The rpm and speed dials (swapped with SwapDials),
 // the gear in orange between them at the bottom, the cells in a 2 x 2 grid on the right and the lamps in a row under
 // them.
 static void HudDials(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float u, float a, const GaugeState &st, const GaugeLayout &lay)
@@ -1120,7 +1120,7 @@ static void HudDials(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float u
     if (lay.showLamps) HLamps(dl, f, P(282.0f, 132.0f), 198.0f * u, 4.5f * u, st, u, a);
 }
 
-// HUD digital (Layout 3), the game's fuel panel's size: the speed big and white with its unit, the gear in orange, the
+// Spotter digital (Layout 3), Spotter's fuel panel's size: the speed big and white with its unit, the gear in orange, the
 // rpm in orange with "RPM", a segmented rpm bar in the fuel bar's place, a row of cells and the lamps where the game
 // has FUNCTIONS.
 static void HudDigital(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float u, float a, const GaugeState &st, const GaugeLayout &lay)
@@ -1219,7 +1219,7 @@ static void GaugeDraw(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float 
 // ---- where the settings put the cluster (the mod and the preview place it through these) ----
 
 // The HUD layouts sit on the game's HUD stage, 1920 x 1080 fitted into the screen (as the warning boxes and the tire
-// mod's panel): the panel's bottom right corner 10 px left of the game's gear panel. The gear panel's place is taken
+// mod's panel): the panel's bottom right corner 10 px left of Spotter's gear panel. The gear panel's place is taken
 // from the user's screenshot (a crop near 1080p): its left edge at about 1560, its bottom 16 above the stage's.
 static const float kHudStageRight = 1550.0f, kHudStageBottom = 1064.0f;
 static bool GaugeOnStage(const GaugeSettings &s) { return s.layout == kLayoutHudDials || s.layout == kLayoutHudDigital; }

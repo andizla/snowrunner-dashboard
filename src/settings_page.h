@@ -99,11 +99,11 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     else if (view.hidden == kHiddenByToggle) ImGui::TextDisabled("Hidden. The toggle key or the pad buttons show it again.");
     else if (view.hidden == kHiddenSoundsOnly) ImGui::TextDisabled("Not drawn: \"Sounds only\" is ticked under Sounds.");
     else ImGui::TextDisabled("No truck is being driven. The cluster shows while you drive.");
-    static const char *layouts[kLayoutCount] = { "Strip, bottom centre", "Block, bottom right", "HUD dials", "HUD digital" };
+    static const char *layouts[kLayoutCount] = { "Strip, bottom centre", "Block, bottom right", "Spotter dials", "Spotter digital" };
     PageLabel("Layout", labelX);
     ImGui::SetNextItemWidth(w);
     changed(ImGui::Combo("##layout", &s.layout, layouts, kLayoutCount));
-    PageTip("HUD dials and HUD digital: in the game's HUD style, left of its gear panel.");
+    PageTip("Spotter dials and Spotter digital: in Spotter's HUD style, left of its gear panel.");
     ImGui::BeginDisabled(s.layout == kLayoutHudDigital);
     PageLabel("Swap dials", labelX);
     changed(ImGui::Checkbox("##swapdials", &s.swapDials));

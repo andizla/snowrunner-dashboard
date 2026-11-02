@@ -198,7 +198,7 @@ static void Screen(const wchar_t *out, const wchar_t *name, GaugeFonts &fonts, i
     RenderPng(path, w, h, [&](ImDrawList *, ImDrawList *bg) {
         Backdrop(bg, (float)w, (float)h);
         const ImVec2 o = GaugeOrigin(s, (float)w, (float)h);
-        // the HUD layouts: the game's gear panel as an outline where it stands on the stage (about 340 x 166, 10 to the right)
+        // the HUD layouts: Spotter's gear panel as an outline where it stands on the stage (about 340 x 166, 10 to the right)
         if (GaugeOnStage(s))
             bg->AddRect(ImVec2(o.x + 10.0f * u, o.y - 166.0f * u), ImVec2(o.x + 350.0f * u, o.y), IM_COL32(168, 90, 50, 200), 6.0f * u, 0, 1.2f * u);
         GaugeDraw(bg, fonts, o, u, s.opacity, st, GaugeLayoutOf(s));
