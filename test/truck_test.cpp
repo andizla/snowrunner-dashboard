@@ -2671,7 +2671,7 @@ int main()
         {
             SuspLevel l = {};
             const int partner[2] = { 1, 0 };
-            const bool placed[2] = { true, true };
+            const bool placed[2] = { true, true }, held[2] = { false, false };
             double z = -0.19, v = 0.0, shiftNow = 0.0;
             for (int n = 0; n < 60 * 50; n++)
             {
@@ -2681,7 +2681,7 @@ int main()
                 v = (v + dt * (k * (shiftNow - z) - load)) / (1.0 + dt * c);
                 z += dt * v;
                 const float g[2] = { (float)z, (float)z }, r[2] = { ride, ride };
-                if (on && SuspLevelStep(l, 2, partner, g, r, placed, 0.0f, (float)dt)) takenAt = n;
+                if (on && SuspLevelStep(l, 2, partner, g, r, placed, held, 0.0f, 0.0f, (float)dt)) takenAt = n;
                 shiftNow = ride + (on ? l.level[0] : 0.0f);
                 if (on) most = fmaxf(most, l.level[0] + ride);
                 if (on && time > 5.0 && time < 20.0) past = fmax(past, z - (-0.19));
@@ -2701,15 +2701,15 @@ int main()
     {
         SuspLevel l = {};
         const int partner[2] = { 1, 0 };
-        const bool placed[2] = { true, true };
+        const bool placed[2] = { true, true }, held[2] = { false, false };
         const float g[2] = { -0.2f, -0.2f }, r[2] = { 0.0f, 0.0f };
         bool any = false;
-        for (int n = 0; n < 120; n++) any |= SuspLevelStep(l, 2, partner, g, r, placed, 2.0f, 1.0f / 60.0f);
-        for (int n = 0; n < 30; n++) any |= SuspLevelStep(l, 2, partner, g, r, placed, 0.0f, 1.0f / 60.0f);
-        any |= SuspLevelStep(l, 2, partner, g, r, placed, 0.5f, 1.0f / 60.0f);
+        for (int n = 0; n < 120; n++) any |= SuspLevelStep(l, 2, partner, g, r, placed, held, 0.0f, 2.0f, 1.0f / 60.0f);
+        for (int n = 0; n < 30; n++) any |= SuspLevelStep(l, 2, partner, g, r, placed, held, 0.0f, 0.0f, 1.0f / 60.0f);
+        any |= SuspLevelStep(l, 2, partner, g, r, placed, held, 0.0f, 0.5f, 1.0f / 60.0f);
         int at = -1;
         for (int n = 0; n < 90 && at < 0; n++)
-            if (SuspLevelStep(l, 2, partner, g, r, placed, 0.0f, 1.0f / 60.0f)) at = n;
+            if (SuspLevelStep(l, 2, partner, g, r, placed, held, 0.0f, 0.0f, 1.0f / 60.0f)) at = n;
         Check(!any && at >= 58 && at <= 61 && Near(l.ref[0], -0.2f) && Near(l.ref[1], -0.2f),
               "air suspension: nothing is taken while moving, a move resets the second standing, and a full second standing takes the axle's mean");
     }
@@ -2725,6 +2725,53 @@ int main()
         int low = 0;
         for (int i = 0; i < 9; i++) low = AirHeightStep(low, -1, 0.0f, true);
         Check(top && down && fast && off && low == -kRideKeyMost, "air suspension keys: 2 cm a press, held to +/-10 cm; nothing at 20 km/h and over or with it off");
+    }
+
+    // the review of build C: R1, the levelling acts only standing and an axle hanging or at its end keeps its shift; R2,
+    // turned off, the shift and the keys' height fade with the time constant, never a step; the keys' height follows
+    {
+        const float dt = 1.0f / 60.0f;
+        const int partner[2] = { 1, 0 };
+        const bool placed[2] = { true, true }, free2[2] = { false, false }, hanging[2] = { true, false };
+        const float r[2] = { 0.0f, 0.0f };
+        SuspLevel l = {};
+        const float rest[2] = { -0.2f, -0.2f };
+        for (int n = 0; n < 61; n++) SuspLevelStep(l, 2, partner, rest, r, placed, free2, 0.0f, 0.0f, dt);
+        // a load put on while moving: nothing for 10 s, then levelling once standing a second
+        const float sag[2] = { -0.25f, -0.25f };
+        for (int n = 0; n < 600; n++) SuspLevelStep(l, 2, partner, sag, r, placed, free2, 0.0f, 3.0f, dt);
+        const bool movingHeld = l.level[0] == 0.0f;
+        for (int n = 0; n < 59; n++) SuspLevelStep(l, 2, partner, sag, r, placed, free2, 0.0f, 0.0f, dt);
+        const bool waits = l.level[0] == 0.0f;
+        for (int n = 0; n < 120; n++) SuspLevelStep(l, 2, partner, sag, r, placed, free2, 0.0f, 0.0f, dt);
+        const bool levels = l.level[0] > 0.01f;
+        // an axle with one wheel hanging for 5 s, standing, its droop in the error: the shift kept, and after it lands
+        const float kept = l.level[0];
+        const float droop[2] = { 0.0f, -0.05f };
+        for (int n = 0; n < 300; n++) SuspLevelStep(l, 2, partner, droop, r, placed, hanging, 0.0f, 0.0f, dt);
+        const bool hangKept = l.level[0] == kept && l.level[1] == kept;
+        SuspLevelStep(l, 2, partner, sag, r, placed, free2, 0.0f, 0.0f, dt);
+        const bool landed = fabsf(l.level[0] - kept) < 0.001f;
+        // the keys' height follows in steps of dt / 3 s of the way, never at once
+        SuspLevel k = l;
+        SuspLevelStep(k, 2, partner, sag, r, placed, free2, 0.04f, 0.0f, dt);
+        const bool follows = k.keys > 0.0f && k.keys < 0.04f * dt / kLevelTau * 1.01f;
+        // turned off with 0.08 levelled and 0.04 on the keys: each step moves each by at most dt / 3 s of it, and it ends
+        SuspLevel f = {};
+        f.action = 1, f.taken = true, f.level[0] = f.level[1] = 0.08f, f.keys = 0.04f;
+        bool gentle = true, done = false;
+        int steps = 0;
+        while (!done && steps < 60 * 30)
+        {
+            const float was0 = f.level[0], wasK = f.keys;
+            done = SuspLevelFade(f, 2, dt);
+            gentle &= fabsf(was0 - f.level[0]) <= was0 * dt / kLevelTau + 1e-7f && fabsf(wasK - f.keys) <= wasK * dt / kLevelTau + 1e-7f;
+            steps++;
+        }
+        printf("     air suspension off: 8 cm levelled and 4 cm on the keys fade out in %.1f s\n", steps * dt);
+        Check(movingHeld && waits && levels && hangKept && landed && follows && gentle && done && steps > 60 * 10,
+              "air suspension (review R1, R2): a load put on while moving waits for a second standing; a hanging axle keeps its shift for 5 s and "
+              "after landing; the keys' height follows in steps; turned off, the shift and the keys fade by dt / 3 s a step and then end");
     }
 
     RealImageTest();

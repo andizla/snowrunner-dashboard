@@ -2456,6 +2456,7 @@ struct TruckWatch
     float rest[2];
     int airHeight;              // the air suspension's height set by BindRideUp and BindRideDown (cm), for this game; it starts at 0
     ULONGLONG airPressedAt;     // the last press, for the overlay's height box
+    uint64_t airVehicle;        // the truck the height was set on
     float kmh;                  // the driven truck's speed on the last pass, 0 none
 };
 
@@ -3110,6 +3111,13 @@ static bool AttachFeaturesOn(const GaugeSettings &s)
     return s.rideFront != 0.0f || s.rideRear != 0.0f || s.swayFront > 0.0f || s.swayRear > 0.0f || (s.probe && s.suspStepTest == 3) || s.airSuspension;
 }
 
+// The air suspension turned off and still fading out on the physics thread (review of build C, R2): the block keeps
+// shifting until it is done, so the stock never comes back in one step.
+static bool AirFading(const SuspStepWatch &p, const TruckRefs &r)
+{
+    return p.block.shifting && (p.block.air || (g_step.level.action && g_step.level.action == r.action));
+}
+
 // Anything the physics thread does each step: the damper off its defaults, a spring feature, the zones, the attach
 // point's features, the display.
 static bool SuspFeaturesOn(const GaugeSettings &s)
@@ -3149,7 +3157,7 @@ static void SuspDamperBefore(SuspStepWatch &p, const TruckMemory &m, const Truck
     {
         if (!found) SuspDamperRelease(p, m, L"no truck driven");
         else if (r.vehicle != p.vehicle) SuspDamperRelease(p, m, L"another truck driven");
-        else if (!SuspFeaturesOn(s)) SuspDamperRelease(p, m, L"its settings back at the truck's own");
+        else if (!SuspFeaturesOn(s) && !AirFading(p, r)) SuspDamperRelease(p, m, L"its settings back at the truck's own");
     }
     for (int i = 0; i < kMaxWheels; i++)
     {
@@ -3167,7 +3175,7 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
     const DamperSet damper = DamperFrom(s);
     const SpringSet spring = SpringFrom(s);
     const bool damping = (DamperOn(damper) || ZonesOn(spring)) && SuspVtable(), springing = SpringOn(spring) && SuspVtable();
-    const bool shifting = AttachFeaturesOn(s) && r.vehicle != p.attachOffVehicle && SuspVtable();
+    const bool shifting = (AttachFeaturesOn(s) || (r.vehicle == p.vehicle && AirFading(p, r))) && r.vehicle != p.attachOffVehicle && SuspVtable();
     if ((!s.probe && !damping && !springing && !shifting && !s.suspDisplay) || !found)
     {
         SuspDamperRelease(p, m, found ? L"the damper off" : L"no truck driven");
@@ -3291,6 +3299,7 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
     b.testShift = shifting && p.test == 3 && p.on ? kStepTestShift : 0.0f;
     b.display = s.suspDisplay;
     b.air = shifting && s.airSuspension;
+    b.airKeys = b.air ? airHeight / 100.0f : 0.0f;
     for (int i = 0; i < kMaxWheels; i++)
     {
         b.constraint[i] = 0;
@@ -3306,7 +3315,7 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
         // the attach point's features: a wheel whose body is known and whose stock was read
         b.attachC[i] = shifting && placed && constraint[i] && p.attachStockC[i] == constraint[i] ? constraint[i] : 0;
         b.attachStock[i] = p.attachStock[i];
-        b.ride[i] = ((p.front[i] ? s.rideFront : s.rideRear) + (s.airSuspension ? (float)airHeight : 0.0f)) / 100.0f;
+        b.ride[i] = (p.front[i] ? s.rideFront : s.rideRear) / 100.0f;
         b.partner[i] = i < b.wheels ? p.partner[i] : -1;
         b.isLeft[i] = p.isLeft[i];
         b.sway[i] = swayOff ? 0.0f : p.front[i] ? s.swayFront : s.swayRear;
@@ -3499,6 +3508,14 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     }
     const bool driving = read && TruckSane(raw) && WorldDriving(world);
     w.kmh = driving ? fabsf(raw.speed) * 3.6f : 0.0f;
+    // the air suspension's height is the truck's: another truck taken starts at 0, as its rest places do (review of build C, R3)
+    if (driving && w.refs.vehicle && w.refs.vehicle != w.airVehicle)
+    {
+        if (w.airVehicle && w.airHeight) Log(L"air suspension: another truck taken, so the height set (%+d cm) is back at 0", w.airHeight);
+        w.airHeight = 0;
+        w.airPressedAt = 0;
+        w.airVehicle = w.refs.vehicle;
+    }
     if (!driving) w.drivingSince = 0;
     else if (!w.drivingSince) w.drivingSince = now;
     // the game's own clock for the truck: while it stands, the game is not simulating and the models wait
