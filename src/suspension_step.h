@@ -293,7 +293,9 @@ struct SuspLevel
     float count[kMaxWheels];
     float sum[kMaxWheels];
     float ref[kMaxWheels];         // each wheel's rest place from the stock attach point, less the ride height's shift, m
-    float level[kMaxWheels];       // the levelling's shift, m toward the droop
+    float level[kMaxWheels];       // the levelling's shift, m toward the droop: the plane below at the wheel's place
+    float height, pitch, roll;     // the levelling's plane about the wheels' centre (m, m per m forward, m per m to the left) (review R6)
+    float dx[kMaxWheels], dy[kMaxWheels]; // each wheel's place from that centre, set at the take
     float still;                   // s under kLevelDrive without a break: the levelling acts only after kLevelStand of it
     float keys;                    // the keys' height in force, m, following the one set with the same time constant
 };
@@ -616,8 +618,8 @@ inline void SuspSwayShift(float setting, float cL, float cR, float kL, float kR,
 // pitch and roll: its twist and a middle axle's place against the others are the ground's. So the errors are fitted by
 // a plane over the wheels' places in the chassis (least squares), and each wheel follows the plane at its place, never
 // its own error, so a cross-axle crawl or a hump under a middle axle never winds it up (review, R5). It acts after kLevelStand s under
-// kLevelDrive (10 km/h, the author's), and an axle with a wheel hanging or at its compression end keeps its shift, so a
-// crest, a ditch or a log never winds it up (review of build C, R1). The ride height's shift (the sliders and the keys)
+// kLevelDrive (10 km/h, the author's), and an axle with a wheel hanging or at its compression end is left out of the
+// fit, so a crest, a ditch or a log never winds it up (review of build C, R1); it moves only with the plane (R6). The ride height's shift (the sliders and the keys)
 // goes on top of the rest place, so the levelling never takes it back. The keys' height follows the one set with the
 // same time constant.
 static const float kLevelTau = 3.0f, kLevelStand = 1.0f, kLevelStill = 0.1f, kLevelDrive = 10.0f / 3.6f;
@@ -659,6 +661,10 @@ inline bool SuspLevelStep(SuspLevel &l, int n, const int *partner, const float *
             if (placed[i]) l.sum[i] += g[i] - r[i] - l.keys, l.count[i] += 1.0f;
         if (l.stand < kLevelStand) return false;
         for (int i = 0; i < n; i++) l.ref[i] = l.count[i] > 0.0f ? l.sum[i] / l.count[i] : 0.0f;
+        // the plane's centre: the wheels' mean place in the chassis
+        float xc = 0.0f, yc = 0.0f;
+        for (int i = 0; i < n; i++) xc += along[i] / n, yc += across[i] / n;
+        for (int i = 0; i < n; i++) l.dx[i] = along[i] - xc, l.dy[i] = across[i] - yc;
         l.taken = true;
         return true;
     }
@@ -690,28 +696,39 @@ inline bool SuspLevelStep(SuspLevel &l, int n, const int *partner, const float *
     if (pitched && rolled && det > 1e-6f * sxx * syy) pitch = (sxe * syy - sye * sxy) / det, roll = (sye * sxx - sxe * sxy) / det;
     else if (pitched) pitch = sxe / sxx;
     else if (rolled) roll = sye / syy;
+    // the plane's states take the step about the centre, held to the part of it that keeps every wheel's shift and ride
+    // height within kShiftMost (a wheel already past it may only come back); each wheel's shift is the plane at its place,
+    // a held one too, so the shifts never twist the chassis (review R6)
+    const float k = dt / kLevelTau;
+    const float xc = along[0] - l.dx[0], yc = across[0] - l.dy[0];
+    const float dh = k * (ex + pitch * (xc - x0) + roll * (yc - y0));
+    const float dp = k * pitch, dr = k * roll;
+    float part = 1.0f;
     for (int i = 0; i < n; i++)
     {
-        if (!in[i]) continue;
-        const float follow = ex + pitch * (along[i] - x0) + roll * (across[i] - y0);
-        const float lo = -kShiftMost - r[i] - l.keys, hi = kShiftMost - r[i] - l.keys;
-        l.level[i] = fminf(hi, fmaxf(lo, l.level[i] + follow * dt / kLevelTau));
+        const float d = dh + dp * l.dx[i] + dr * l.dy[i], now = r[i] + l.keys + l.level[i];
+        if (d > 0.0f) part = fminf(part, fmaxf(0.0f, (kShiftMost - now) / d));
+        else if (d < 0.0f) part = fminf(part, fmaxf(0.0f, (-kShiftMost - now) / d));
     }
+    l.height += part * dh, l.pitch += part * dp, l.roll += part * dr;
+    for (int i = 0; i < n; i++) l.level[i] = l.height + l.pitch * l.dx[i] + l.roll * l.dy[i];
     return false;
 }
 
-// The air suspension turned off (review of build C, R2): the levelling's shift and the keys' height go to 0 with the
-// same time constant instead of in one step. True once both are within half a millimetre of 0: then it is reset.
+// The air suspension turned off (review of build C, R2): the levelling's plane and the keys' height go to 0 with the
+// same time constant instead of in one step (the plane's three states, so the shifts stay a plane: R6). True once each
+// wheel's shift and the keys' height are within half a millimetre of 0: then it is reset.
 inline bool SuspLevelFade(SuspLevel &l, int n, float dt)
 {
     if (!(dt > 0.0f)) return false;
     const float k = dt / kLevelTau;
     bool done = fabsf(l.keys) < 0.0005f;
     l.keys -= l.keys * k;
+    l.height -= l.height * k, l.pitch -= l.pitch * k, l.roll -= l.roll * k;
     for (int i = 0; i < n; i++)
     {
         done &= fabsf(l.level[i]) < 0.0005f;
-        l.level[i] -= l.level[i] * k;
+        l.level[i] = l.height + l.pitch * l.dx[i] + l.roll * l.dy[i];
     }
     return done;
 }

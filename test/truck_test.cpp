@@ -2762,7 +2762,7 @@ int main()
         const bool follows = k.keys > 0.0f && k.keys < 0.04f * dt / kLevelTau * 1.01f;
         // turned off with 0.08 levelled and 0.04 on the keys: each step moves each by at most dt / 3 s of it, and it ends
         SuspLevel f = {};
-        f.action = 1, f.taken = true, f.level[0] = f.level[1] = 0.08f, f.keys = 0.04f;
+        f.action = 1, f.taken = true, f.height = f.level[0] = f.level[1] = 0.08f, f.keys = 0.04f;
         bool gentle = true, done = false;
         int steps = 0;
         while (!done && steps < 60 * 30)
@@ -2879,6 +2879,33 @@ int main()
         printf("     air suspension (R5): the shift at most %.4f m on a 6 cm twist and %.4f m on a 6x6 hump; a rear load ends %.4f m off\n", twisted, humped, rearOff);
         Check(twisted < 0.005f && humped < 0.005f && rearOff < 0.005f,
               "air suspension (review R5): a 6 cm diagonal twist and a 6x6 with 5 cm under its middle axle keep every shift within 5 mm for 30 s; a rear load still levels");
+    }
+
+    // review R6: the front axle held for 5 s while the rear levels a load to its left, then let go: every wheel's shift
+    // stays on one plane (within 1 mm) all the way, and the rear comes up
+    {
+        const float dt = 1.0f / 60.0f;
+        const int partner[4] = { 1, 0, 3, 2 };
+        const bool placed[4] = { true, true, true, true }, frontHeld[4] = { true, true, false, false }, free4[4] = {};
+        const float r[4] = {}, sag[4] = { 0.0f, 0.0f, 0.03f, 0.01f };
+        SuspLevel l = {};
+        float g[4];
+        for (int k = 0; k < 61; k++)
+        {
+            for (int i = 0; i < 4; i++) g[i] = -0.2f;
+            SuspLevelStep(l, 4, partner, kAlong4, kAcross4, g, r, placed, free4, 0.0f, 0.0f, dt);
+        }
+        float twist = 0.0f;
+        for (int k = 0; k < 60 * 15; k++)
+        {
+            for (int i = 0; i < 4; i++) g[i] = -0.2f - sag[i] + l.level[i];
+            SuspLevelStep(l, 4, partner, kAlong4, kAcross4, g, r, placed, k < 60 * 5 ? frontHeld : free4, 0.0f, 0.0f, dt);
+            // on a box of four corners a plane has level[0] - level[1] == level[2] - level[3]
+            twist = fmaxf(twist, fabsf((l.level[0] - l.level[1]) - (l.level[2] - l.level[3])));
+        }
+        printf("     air suspension (R6): the shifts at most %.5f m off one plane; the rear up %.4f m\n", twist, 0.5f * (l.level[2] + l.level[3]));
+        Check(twist < 0.001f && l.level[2] + l.level[3] > 0.02f,
+              "air suspension (review R6): a front axle held for 5 s while the rear levels a side load, then let go, keeps every shift within 1 mm of one plane");
     }
 
     RealImageTest();
