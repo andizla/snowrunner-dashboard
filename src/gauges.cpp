@@ -817,7 +817,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; ClutchHeatPercent: how fast it heats up, percent of the model's own pace, 10 to 300 (60); lower gives more time to react.\n"
                         L"; SpringScale, DampingScale (a test): the suspension's spring and damping as a factor of the truck's own, 0.25 to 4 (1 = the truck's own;\n"
                         L"; the game holds each at 1). ExtraTravel: cm added past the file's compression end, 0 to 30 (0 = the file's; past it a wheel may go into the body).\n"
-                        L"; RideFront, RideRear: each axle's ride height in cm, -10 to 10; SwayFront, SwayRear: a sway bar, 0 to 1.5 of the axle's spring rate (BindSwayDisconnect\n"
+                        L"; RideFront, RideRear: each axle's ride height in cm, -10 to 10; SwayFront, SwayRear: a sway bar, 0 to 0.3 of the axle's spring rate (BindSwayDisconnect\n"
                         L"; toggles them). Both move the attach point and stop on a truck whose game moves it. SuspDisplay=1 draws each wheel's travel. All tests, off by default.\n"
                         L"; DamperCurve 0 linear, 1 digressive, 2 progressive; LowCompression, HighCompression, LowRebound, HighRebound: the damping\n"
                         L"; under and over DamperKnee (m/s, 0.02 to 0.5), rising and falling, 0.25 to 4 (a test; 1 and linear = the truck's own).\n"
@@ -938,6 +938,15 @@ static void ReadIni(GaugeSettings &s)
     s.rideRear = IniFloat(L"RideRear", s.rideRear, ini);
     s.swayFront = IniFloat(L"SwayFront", s.swayFront, ini);
     s.swayRear = IniFloat(L"SwayRear", s.swayRear, ini);
+    {
+        // an ini from build B may hold up to 1.5; above 0.3 the bars swing, so it is held there (said once a start)
+        static bool said = false;
+        if (!said && (s.swayFront > kSwayRange[1] || s.swayRear > kSwayRange[1]))
+        {
+            GaugeLog(L"settings: SwayFront %.2f, SwayRear %.2f held to %.1f (above it the bars swing)", s.swayFront, s.swayRear, kSwayRange[1]);
+            said = true;
+        }
+    }
     s.suspDisplay = IniInt(L"SuspDisplay", s.suspDisplay ? 1 : 0, ini) != 0;
     s.damperCurve = IniInt(L"DamperCurve", s.damperCurve, ini);
     s.lowCompression = IniFloat(L"LowCompression", s.lowCompression, ini);
@@ -2436,6 +2445,8 @@ struct TruckWatch
     ULONGLONG travelAt;         // when it logs next
     SuspStepWatch step;         // the travel read every physics step, and SuspStepTest (Probe=1)
     bool swayOff;               // the sway bars disconnected (BindSwayDisconnect), for this game; they start connected
+    uint64_t restVehicle;       // the truck the last rest places were read on, kept while the reads stop (the ride height at 0)
+    float rest[2];
 };
 
 // The mod's gearbox has the truck in a position of the player's own (not A): the engine runs behind its clutch.
@@ -4827,7 +4838,13 @@ static DWORD WINAPI Run(void *)
             }
             if (count[0] > 0.0f && count[1] > 0.0f)
             {
-                v.rideRest[0] = sum[0] / count[0], v.rideRest[1] = sum[1] / count[1];
+                watch.rest[0] = sum[0] / count[0], watch.rest[1] = sum[1] / count[1];
+                watch.restVehicle = watch.refs.vehicle;
+            }
+            // the last figures stay while the same truck is driven, so the line does not go when the ride height comes to 0
+            if (driving && watch.restVehicle && watch.restVehicle == watch.refs.vehicle)
+            {
+                v.rideRest[0] = watch.rest[0], v.rideRest[1] = watch.rest[1];
                 v.rideRestKnown = true;
             }
         }
@@ -5155,6 +5172,31 @@ int wmain(int argc, wchar_t **argv)
         WritePrivateProfileStringW(kIniSection, L"TravelMinScale", nullptr, ini.c_str());
         WritePrivateProfileStringW(kIniSection, L"TravelMaxScale", nullptr, ini.c_str());
         Check(unread && capped, "ini: an old TravelMinScale and TravelMaxScale are no longer read; ExtraTravel is held to 0 to 30 cm");
+    }
+    // the sway bars are held to 0.3 (more swings) and on 0.01; the ride height on whole cm, near 0 exactly 0 and "0 cm"
+    {
+        WritePrivateProfileStringW(kIniSection, L"SwayFront", L"1.5", ini.c_str());
+        WritePrivateProfileStringW(kIniSection, L"SwayRear", L"0.123", ini.c_str());
+        GaugeSettings sw;
+        SettingsDefaults(sw);
+        ReadIni(sw);
+        const bool swayHeld = sw.swayFront == kSwayRange[1] && fabsf(sw.swayRear - 0.12f) < 1e-6f;
+        WritePrivateProfileStringW(kIniSection, L"SwayFront", nullptr, ini.c_str());
+        WritePrivateProfileStringW(kIniSection, L"SwayRear", nullptr, ini.c_str());
+        bool zero = true;
+        for (float v : { -0.0001f, 0.0f, 0.0001f, 0.5f * kRideStep, -0.5f * kRideStep })
+        {
+            const float r = SettingsStep(v, kRideStep);
+            char text[16];
+            snprintf(text, sizeof text, RideFormat(r), r);
+            zero &= r == 0.0f && !signbit(r) && !signbit(r / 100.0f) && strcmp(text, "0 cm") == 0;
+        }
+        char one[16];
+        const float up = SettingsStep(0.51f, kRideStep), down = SettingsStep(-2.6f, kRideStep);
+        snprintf(one, sizeof one, RideFormat(up), up);
+        Check(swayHeld && zero && up == 1.0f && down == -3.0f && strcmp(one, "+1 cm") == 0,
+              "settings: SwayFront 1.5 is held to 0.3 and 0.123 goes to 0.12; a ride height within half a step of 0 (-0.0001, 0, 0.0001, "
+              "+/-0.5) is exactly 0, shown \"0 cm\" and written as 0; 0.51 is +1 cm and -2.6 is -3");
     }
     WritePrivateProfileStringW(kIniSection, L"StallDamagePercent", L"5", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"ClutchHeatPercent", L"60", ini.c_str());

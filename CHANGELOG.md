@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- The sway bars go from 0 to 0.3, on steps of 0.01 (they were 0 to 1.5): above 0.3 they swing, and an ini value above it is held there and logged once (the author, 2 November: "anything over 0.3 causes oscillation"). The ride height goes in whole cm and shows 0 as "0 cm", so its text no longer flickers through 0, and the rest line under it stays.
 - A test: ride height for each axle, sway bars with a binding that disconnects them and a lamp while they are off, and a suspension display (each wheel's travel, its end hits, a hanging wheel, the articulation). The ride height and the bars move where the springs hang from, and stop on a truck whose game moves that point itself. All off by default (BRIEF_suspension_extras.md, build B).
 - The creep only with an automatic, for now: the mod's A (with the reverse and the range it drives) and the game's own automatic creep as before, and a gear picked by hand, on either shifter and an R included, gets none (the author, 1 November: "creep needs to be disabled in manual for now. auto handles it fine").
 - A gearbox whose name the game does not give keeps its gear hold: it is known by its gears, and their speeds drift a little between takes, so each drift was a new gearbox with no hold of its own and the hold fell back to the class's. The same gears within 2 % now keep the first gearbox's file (the author, 1 November: "gearbox gear hold time resets now and then").

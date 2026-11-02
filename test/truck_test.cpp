@@ -2594,14 +2594,14 @@ int main()
 
     // a half axle in roll with the bar (build B's tests): the body's roll at 60 steps a second, the springs and dampers at
     // the game's figures (1.6 Hz, 0.55), the bar's shift worked out from the last step's places and written a step late;
-    // at 1.5 it settles from a push without growing, and it holds the roll less than with no bar
+    // at 0.3, the top of its range, it settles without growing, and it holds the roll less than with no bar
     {
         const double dt = 1.0 / 60.0, omega = 2.0 * 3.14159265 * 1.6, k = omega * omega, c = 2.0 * 0.55 * omega, a = 1.0;
         double settledRoll[2] = {};
         bool all = true;
         for (int bar = 0; bar < 2; bar++)
         {
-            const float setting = bar ? 1.5f : 0.0f;
+            const float setting = bar ? 0.3f : 0.0f;
             double th = 0.0, w = 0.0, last = 0.0, peak = 1e9;
             float sL = 0.0f, sR = 0.0f;
             bool rising = false, grows = false;
@@ -2627,9 +2627,9 @@ int main()
             settledRoll[bar] = th;
             all &= !grows && fabs(w) < 0.002;
         }
-        printf("     roll on a side slope: %.3f with no bar, %.3f with the bar at 1.5\n", settledRoll[0], settledRoll[1]);
-        Check(all && settledRoll[1] < settledRoll[0] * 0.6, "sway bar: a half axle in roll at 60 steps a second with the shift a step late settles at 1.5 without growing, and "
-                                                           "holds the roll to less than 0.6 of the roll with no bar");
+        printf("     roll on a side slope: %.3f with no bar, %.3f with the bar at 0.3\n", settledRoll[0], settledRoll[1]);
+        Check(all && settledRoll[1] < settledRoll[0] * 0.85, "sway bar: a half axle in roll at 60 steps a second with the shift a step late settles at 0.3 without growing, and "
+                                                           "holds the roll to less than 0.85 of the roll with no bar");
     }
 
     // the display's figures from fed places: the place along the axis, a hit of the compression end kept for a second,

@@ -802,23 +802,30 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     // the attach point's features (a test, build B): the ride height and the sway bars move each wheel's spring zero
     PageLabel("Ride front", labelX);
     ImGui::SetNextItemWidth(w);
-    changed(ImGui::SliderFloat("##ridefront", &s.rideFront, kRideRange[0], kRideRange[1], s.rideFront != 0.0f ? "%+.0f cm" : "the truck's own", ImGuiSliderFlags_AlwaysClamp));
+    // on the slider's step before it is shown and written, so near 0 is exactly 0 and the text keeps one form
+    changed(ImGui::SliderFloat("##ridefront", &s.rideFront, kRideRange[0], kRideRange[1], RideFormat(s.rideFront), ImGuiSliderFlags_AlwaysClamp));
+    s.rideFront = SettingsStep(s.rideFront, kRideStep);
     PageTip("A test: the front axle's ride height in cm, above 0 higher. It moves where each wheel's spring hangs from, as the file's Height does. On a truck "
             "whose game moves that point by itself (an active ride height) it stops, and the log says so.");
     PageLabel("Ride rear", labelX);
     ImGui::SetNextItemWidth(w);
-    changed(ImGui::SliderFloat("##riderear", &s.rideRear, kRideRange[0], kRideRange[1], s.rideRear != 0.0f ? "%+.0f cm" : "the truck's own", ImGuiSliderFlags_AlwaysClamp));
-    PageTip("A test: the rear axles' ride height in cm, the middle axles of a long truck with them.");
+    changed(ImGui::SliderFloat("##riderear", &s.rideRear, kRideRange[0], kRideRange[1], RideFormat(s.rideRear), ImGuiSliderFlags_AlwaysClamp));
+    s.rideRear = SettingsStep(s.rideRear, kRideStep);
+    PageTip("A test: the rear axles' ride height in cm, the middle axles of a long truck with them. 0 is the truck's own.");
+    // always one line, so nothing below it moves while the slider passes 0
     if (view.rideRestKnown) ImGui::TextDisabled("At rest %.0f / %.0f cm into the travel (front / rear)", -view.rideRest[0], -view.rideRest[1]);
+    else ImGui::TextDisabled("At rest: not read yet on this truck");
     PageLabel("Sway front", labelX);
     ImGui::SetNextItemWidth(w);
     changed(ImGui::SliderFloat("##swayfront", &s.swayFront, kSwayRange[0], kSwayRange[1], s.swayFront > 0.0f ? "%.2f" : "none", ImGuiSliderFlags_AlwaysClamp));
+    s.swayFront = SettingsStep(s.swayFront, kSwayStep);
     PageTip("A test: a sway bar on the front axle, as a share of its spring rate. It holds the body level in a turn and on a side slope, and lets less of "
             "the wheels' twist through on a crossing. The Sway bars binding under Locks disconnects both.");
     PageLabel("Sway rear", labelX);
     ImGui::SetNextItemWidth(w);
     changed(ImGui::SliderFloat("##swayrear", &s.swayRear, kSwayRange[0], kSwayRange[1], s.swayRear > 0.0f ? "%.2f" : "none", ImGuiSliderFlags_AlwaysClamp));
-    PageTip("A test: a sway bar on the rear axles.");
+    s.swayRear = SettingsStep(s.swayRear, kSwayStep);
+    PageTip("A test: a sway bar on the rear axles. 0.1 to 0.2 works well; above 0.3 it swings, so it stops there.");
     if (view.swayOff) ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "The sway bars are disconnected.");
     PageLabel("Display", labelX);
     changed(ImGui::Checkbox("##suspdisplay", &s.suspDisplay));

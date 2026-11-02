@@ -199,7 +199,7 @@ static const float kWarmUpRange[2] = { 0.5f, 60.0f }, kOverheatRange[2] = { 0.25
                    kAmbientRange[2] = { -40.0f, 50.0f }, kGearHoldRange[2] = { 1.0f, 3.0f }, kAirFullRange[2] = { 10.0f, 80.0f }, kDamageRange[2] = { 0.0f, 100.0f },
                    kOilWarmUpRange[2] = { 1.0f, 60.0f }, kOilWarnRange[2] = { 100.0f, 150.0f }, kTorqueShareRange[2] = { 0.10f, 1.00f },
                    kHotDamageFromRange[2] = { 100.0f, 124.0f }, kStallDamageRange[2] = { 0.0f, 25.0f },
-                   kClutchHeatRange[2] = { 10.0f, 300.0f }, kSuspScaleRange[2] = { 0.25f, 4.0f }, kExtraTravelRange[2] = { 0.0f, 30.0f }, kRideRange[2] = { -10.0f, 10.0f }, kSwayRange[2] = { 0.0f, 1.5f }, kDamperRange[2] = { 0.25f, 4.0f },
+                   kClutchHeatRange[2] = { 10.0f, 300.0f }, kSuspScaleRange[2] = { 0.25f, 4.0f }, kExtraTravelRange[2] = { 0.0f, 30.0f }, kRideRange[2] = { -10.0f, 10.0f }, kSwayRange[2] = { 0.0f, 0.3f }, kDamperRange[2] = { 0.25f, 4.0f },
                    kKneeRange[2] = { 0.02f, 0.5f }, kBumpZoneRange[2] = { 0.03f, 0.2f }, kBumpForceRange[2] = { 1.0f, 6.0f },
                    kBumpDampingRange[2] = { 1.0f, 4.0f }, kSpringRiseRange[2] = { 1.0f, 3.0f }, kSpringCrossRange[2] = { 0.2f, 0.8f },
                    kZoneSoftRange[2] = { 0.5f, 1.0f }, kZoneFirmRange[2] = { 1.0f, 3.0f };
@@ -235,6 +235,17 @@ static const float kTempOutside = 15.0f, kTempWarm = 85.0f, kTempHot = 90.0f, kT
 inline float SettingsRange(float v, float lo, float hi) { return v < lo ? lo : v > hi ? hi : v; }
 // 0 (the class's own) stays 0; anything else is held to the range.
 inline float SettingsOverride(float v, const float range[2]) { return v <= 0.0f ? 0.0f : SettingsRange(v, range[0], range[1]); }
+// A value on its slider's step; within half a step of 0 it is exactly 0, never -0.
+inline float SettingsStep(float v, float step)
+{
+    const float a = fabsf(v) / step;
+    if (!(a > 0.5f)) return 0.0f;
+    const float r = floorf(a + 0.5f) * step;
+    return v < 0.0f ? -r : r;
+}
+static const float kRideStep = 1.0f, kSwayStep = 0.01f;
+// The ride height slider's text: 0 with no sign, so the label keeps one form through 0.
+inline const char *RideFormat(float v) { return v != 0.0f ? "%+.0f cm" : "0 cm"; }
 
 inline void SettingsClamp(GaugeSettings &s)
 {
@@ -274,10 +285,10 @@ inline void SettingsClamp(GaugeSettings &s)
     s.springScale = SettingsRange(s.springScale, kSuspScaleRange[0], kSuspScaleRange[1]);
     s.dampingScale = SettingsRange(s.dampingScale, kSuspScaleRange[0], kSuspScaleRange[1]);
     s.extraTravel = SettingsRange(s.extraTravel, kExtraTravelRange[0], kExtraTravelRange[1]);
-    s.rideFront = SettingsRange(s.rideFront, kRideRange[0], kRideRange[1]);
-    s.rideRear = SettingsRange(s.rideRear, kRideRange[0], kRideRange[1]);
-    s.swayFront = SettingsRange(s.swayFront, kSwayRange[0], kSwayRange[1]);
-    s.swayRear = SettingsRange(s.swayRear, kSwayRange[0], kSwayRange[1]);
+    s.rideFront = SettingsRange(SettingsStep(s.rideFront, kRideStep), kRideRange[0], kRideRange[1]);
+    s.rideRear = SettingsRange(SettingsStep(s.rideRear, kRideStep), kRideRange[0], kRideRange[1]);
+    s.swayFront = SettingsRange(SettingsStep(s.swayFront, kSwayStep), kSwayRange[0], kSwayRange[1]);
+    s.swayRear = SettingsRange(SettingsStep(s.swayRear, kSwayStep), kSwayRange[0], kSwayRange[1]);
     s.damperCurve = s.damperCurve < 0 || s.damperCurve >= kDamperCurves ? 0 : s.damperCurve;
     s.lowCompression = SettingsRange(s.lowCompression, kDamperRange[0], kDamperRange[1]);
     s.highCompression = SettingsRange(s.highCompression, kDamperRange[0], kDamperRange[1]);
