@@ -20,7 +20,7 @@ This is version 0.18.3. It reads the truck's own values for the speedometer, the
 2. Copy `Gauges.asi`, `version.dll`, `dxgi.dll` and `ReShade.ini` into the game's `Sources\Bin` folder, next to `SnowRunner.exe`. A `version.dll` already there from Next Gen Tire Inflation is the same loader: keep it; its `dxgi.dll` and `ReShade.ini` are the same files as this release's.
 3. Start the game. F2 opens the NEXT GEN menu, and its Gameplay tab has the mod's settings.
 
-Already using ReShade? Choose Skip for `dxgi.dll` and `ReShade.ini` when Windows asks, and yours stays. The mods draw without ReShade too. It is in the zip for RivaTuner users, whose game does not boot without it.
+Already using ReShade? Choose Skip for `dxgi.dll` and `ReShade.ini` when Windows asks, and yours stays. The mods draw without ReShade too. It is in the zip for RivaTuner users, whose game does not boot without it. With Spotter installed, the overlay draws through Spotter's frame hook; `NextGen.ini` `[Overlay] Spotter=0` turns it off.
 
 To update, copy the new file over the old one. A `Gauges.addon64` from a test build was loaded by ReShade: delete it when you install `Gauges.asi`. With two files of the mod in the folder only one runs, and the log says which. `Gauges.ini` keeps working.
 

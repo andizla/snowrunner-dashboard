@@ -61,3 +61,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 ## The game
 
 The cluster is drawn by the mod's own code, and its text uses the font files in the player's own SnowRunner folder, read while the game runs. This project holds no file of SnowRunner.
+
+## Spotter draw API
+
+`src/spotter_api.h` is the header of Spotter's draw API by SnowPothos, public domain (CC0). The overlay uses it to draw through Spotter's frame hook when Spotter is in the game.
