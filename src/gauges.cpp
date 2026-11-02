@@ -760,9 +760,9 @@ static void ReadIni(GaugeSettings &s)
         {
             fwprintf(f, L"; Gauges: the gauge cluster of Next Gen Gameplay for the truck being driven, drawn by the mod itself.\n"
                         L"; The Gameplay tab of the NEXT GEN menu (F2 opens it, or the key in NextGen.ini) edits everything here in the game.\n"
-                        L"; Layout: 0 = a strip along the bottom centre, 1 = a block in the bottom right corner.\n"
-                        L"; SwapDials=1 puts the speedometer where the tachometer is and the tachometer where the speedometer is, in both layouts.\n"
-                        L"; Style: 0 = solid dial faces, 1 = tinted see-through faces (FaceOpacity 0 to 0.85 sets how dark),\n"
+                        L"; Layout: 0 = a strip along the bottom centre, 1 = a block in the bottom right corner, 2 = HUD dials, 3 = HUD digital (left of the game's gear panel).\n"
+                        L"; SwapDials=1 puts the speedometer where the tachometer is and the tachometer where the speedometer is (not in HUD digital).\n"
+                        L"; Style (the strip and the block): 0 = solid dial faces, 1 = tinted see-through faces (FaceOpacity 0 to 0.85 sets how dark),\n"
                         L"; 2 = open: no faces, only the scales, numbers and needles.\n"
                         L"; OffsetX and OffsetY move the cluster from its place, in pixels of a 1080p screen (right and down).\n"
                         L"; Scale is its size (1 = as designed; it grows with the screen's height). Opacity 0.1 to 1.\n"
@@ -2206,7 +2206,7 @@ static void ClockText(const FILETIME &t, char *out, size_t size)
 
 static void LogSettings(const GaugeSettings &s)
 {
-    static const wchar_t *layouts[kLayoutCount] = { L"strip", L"block" }, *styles[kFaceCount] = { L"solid", L"tinted", L"open" },
+    static const wchar_t *layouts[kLayoutCount] = { L"strip", L"block", L"HUD dials", L"HUD digital" }, *styles[kFaceCount] = { L"solid", L"tinted", L"open" },
                          *classes[kClassCount] = { L"truck", L"scout", L"heavy" };
     const GaugeScale k = GaugeScaleOf(s);
     char key[32];
@@ -5196,6 +5196,27 @@ int wmain(int argc, wchar_t **argv)
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
     Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 113, "ini: the help text survives a write (113 comment lines)");
+    // the HUD layouts (BRIEF_cluster_hud_layouts.md): 2 and 3 load and save, 4 is held to the strip, and Style and
+    // FaceOpacity survive a trip through HUD dials
+    {
+        GaugeSettings h = c, r;
+        bool both = true;
+        for (int layout = kLayoutHudDials; layout <= kLayoutHudDigital; layout++)
+        {
+            h.layout = layout;
+            WriteIni(h);
+            ReadIni(r);
+            both &= r.layout == layout && r.style == c.style && r.faceOpacity == c.faceOpacity;
+        }
+        h.layout = kLayoutBlock;
+        WriteIni(h);
+        ReadIni(r);
+        const bool back = r.layout == kLayoutBlock && r.style == kFaceTinted && r.faceOpacity == 0.6f;
+        WritePrivateProfileStringW(kIniSection, L"Layout", L"4", ini.c_str());
+        ReadIni(r);
+        Check(both && back && r.layout == kLayoutStrip, "ini: Layout 2 and 3 load and save with Style and FaceOpacity kept for a way back; 4 is held to the strip");
+        WriteIni(c);
+    }
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());

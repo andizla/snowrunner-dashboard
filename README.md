@@ -50,9 +50,9 @@ The Gameplay tab of the NEXT GEN menu edits every setting while you play. F2 ope
 
 | Setting | In the ini | Default |
 |---|---|---|
-| Layout: a strip along the bottom centre, or a block in the bottom right corner | `Layout` 0 or 1 | strip |
-| The speedometer and the tachometer change places, in both layouts (the tab's "Swap dials") | `SwapDials` 0 or 1 | 0 |
-| Style: solid dial faces, tinted see-through faces, or open (no faces, only scales, numbers and needles) | `Style` 0, 1 or 2 | open |
+| Layout: a strip along the bottom centre, a block in the bottom right corner, or HUD dials or HUD digital in the game's HUD style, left of its gear panel | `Layout` 0, 1, 2 or 3 | strip |
+| The speedometer and the tachometer change places, except in HUD digital (the tab's "Swap dials") | `SwapDials` 0 or 1 | 0 |
+| Style of the strip and the block: solid dial faces, tinted see-through faces, or open (no faces, only scales, numbers and needles) | `Style` 0, 1 or 2 | open |
 | How dark the tinted faces are | `FaceOpacity` 0 to 0.85 | 0.35 |
 | Position, in pixels of a 1080p screen from the layout's own place | `OffsetX`, `OffsetY` | 0, 0 |
 | Size | `Scale` | 1 |

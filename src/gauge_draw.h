@@ -13,7 +13,7 @@
 #include "gauges.h"
 #include "gauge_font.h"
 
-enum GaugeTextStyle { kGsBig, kGsSmall, kGsTiny, kGsReadout, kGsGear, kGsGearMode, kGsLamp, kGsUnit, kGsStyleCount };
+enum GaugeTextStyle { kGsBig, kGsSmall, kGsTiny, kGsReadout, kGsGear, kGsGearMode, kGsLamp, kGsUnit, kGsHudHead, kGsHudMid, kGsHudCell, kGsHudSmall, kGsStyleCount };
 static const FontStyle kGaugeStyles[kGsStyleCount] = {
     { 11.0f, 1 }, // kGsBig: numbers on the big dials
     { 8.0f, 1 },  // kGsSmall: numbers on the small dials
@@ -23,11 +23,15 @@ static const FontStyle kGaugeStyles[kGsStyleCount] = {
     { 8.0f, 1 },  // kGsGearMode: "A", "H", "L+"
     { 6.5f, 1 },  // kGsLamp: the letters inside lamp symbols
     { 7.0f, 0 },  // kGsUnit: small labels next to readouts
+    { 24.0f, 1 }, // kGsHudHead: the HUD digital layout's speed
+    { 15.0f, 1 }, // kGsHudMid: its rpm, the HUD dials' values, the gear on both HUD layouts
+    { 10.5f, 1 }, // kGsHudCell: a HUD cell's value, the headline's units
+    { 7.5f, 1 },  // kGsHudSmall: a HUD cell's unit, the HUD dials' numbers, the lamps' labels
 };
 
 struct GaugeLayout
 {
-    int variant;                    // 0 = strip (bottom centre), 1 = block (bottom right)
+    int variant;                    // 0 = strip (bottom centre), 1 = block (bottom right), 2 = HUD dials, 3 = HUD digital (both docked left of the game's gear panel)
     bool swapDials;                 // the speedometer where the tachometer is and the tachometer where the speedometer is
     bool showTemp, showBoost, showAir, showLamps, showClock, showFuelUse;
     int oilGauge;                  // the oil temperature: kOilOff, kOilNeedle (a second needle in the temperature dial), kOilDial (a dial of its own)
@@ -928,12 +932,248 @@ static void GRideBox(ImDrawList *dl, const GaugeFonts &f, ImVec2 at, float u, fl
     TextDraw(dl, f, kWsTitle, P(44, 44), GCol(255, 255, 255, a), text, -1, u);
 }
 
-// The cluster. origin: the strip's bottom centre (variant 0) or the block's bottom right corner (variant 1).
+// ---- the HUD layouts (BRIEF_cluster_hud_layouts.md): in the style of the game's HUD of 1 November 2026, a slate panel
+// with an orange-brown outline, value cells with square corners and lamps like the game's buttons. Sizes are the
+// mockup's (design\gauge-mod\mockup\hud2026\cluster_b.html) in reference pixels, 166 high as the game's gear panel ----
+static const GRgb kHudSlate = { 28, 38, 49 }, kHudEdge = { 168, 90, 50 }, kHudInner = { 107, 122, 136 }, kHudGrey = { 86, 98, 109 },
+                  kHudOrange = { 224, 122, 62 }, kHudText = { 233, 236, 239 }, kHudDim = { 143, 153, 162 }, kHudLabel = { 174, 182, 189 },
+                  kHudGreen = { 69, 190, 95 };
+static const float kHudH = 166.0f, kHudDialsW = 488.0f, kHudDigitalW = 346.0f;
+
+// Text with the small drop shadow the game's HUD text has.
+static void HText(ImDrawList *dl, const GaugeFonts &f, int style, ImVec2 at, ImU32 col, const char *s, int align, float u)
+{
+    TextDraw(dl, f, style, ImVec2(at.x + 1.0f * u, at.y + 1.0f * u), GCol(0, 0, 0, 0.8f * GAlpha(col)), s, align, u);
+    TextDraw(dl, f, style, at, col, s, align, u);
+}
+
+// The panel at its top left corner o, w reference pixels wide: the slate fill, the outline, and the faint grey line
+// 3 px inside it (the user asked for that line).
+static void HPanel(ImDrawList *dl, ImVec2 o, float w, float u, float a)
+{
+    const ImVec2 b(o.x + w * u, o.y + kHudH * u);
+    dl->AddRectFilled(o, b, GCol(kHudSlate, 0.86f * a), 6.0f * u);
+    dl->AddRect(o, b, GCol(kHudEdge, a), 6.0f * u, 0, 1.2f * u);
+    dl->AddRect(ImVec2(o.x + 3.0f * u, o.y + 3.0f * u), ImVec2(b.x - 3.0f * u, b.y - 3.0f * u), GCol(kHudInner, 0.45f * a), 4.0f * u, 0, 1.0f * u);
+}
+
+// The cells shown, in order: coolant, oil, boost, air. A hidden one leaves no gap. A cell is orange on the same
+// condition as its dial's red zone: the coolant's, the oil lamp's (blinking with it), the air's low zone; boost never.
+enum { kHudTemp, kHudOil, kHudBoost, kHudAir };
+struct HudCell { int kind; char value[16]; const char *unit; bool warn; };
+static int HudCells(const GaugeLayout &lay, const GaugeState &st, HudCell *out)
+{
+    int n = 0;
+    auto add = [&](int kind, const char *fmt, float v, const char *unit, bool warn) {
+        HudCell &c = out[n++];
+        c.kind = kind;
+        sprintf_s(c.value, fmt, v);
+        c.unit = unit;
+        c.warn = warn;
+    };
+    const char *deg = st.fahrenheit ? "F" : "C";
+    const auto temp = [&](float c) { return st.fahrenheit ? c * 1.8f + 32.0f : c; };
+    if (lay.showTemp) add(kHudTemp, "%.0f", temp(st.tempC), deg, st.tempC >= kTempRed);
+    if (lay.oilGauge != kOilOff) add(kHudOil, "%.0f", temp(st.oilC), deg, st.oilHot);
+    if (lay.showBoost && !st.natural) add(kHudBoost, st.psi ? "%.0f" : "%.1f", st.psi ? st.boostBar * 14.5f : st.boostBar, st.psi ? "PSI" : "BAR", false);
+    if (lay.showAir) add(kHudAir, "%.1f", st.airBar, "BAR", st.airBar < kAirWarn);
+    return n;
+}
+
+// A cell w x h reference pixels at o: the icon in a dark ring at the left, the value over a dotted line over the unit,
+// right aligned, as in the game's cells.
+static void HCell(ImDrawList *dl, const GaugeFonts &f, ImVec2 o, float w, float h, const HudCell &c, float u, float a)
+{
+    const ImVec2 b(o.x + w * u, o.y + h * u);
+    dl->AddRectFilled(o, b, GCol(20, 28, 36, 0.55f * a));
+    dl->AddRect(o, b, c.warn ? GCol(kHudOrange, 0.9f * a) : GCol(kHudGrey, 0.8f * a), 0.0f, 0, 1.0f * u);
+    const ImVec2 ic(o.x + 16.0f * u, o.y + h * 0.5f * u);
+    dl->AddCircleFilled(ic, 11.0f * u, GCol(14, 20, 26, 0.6f * a), 32);
+    dl->AddCircle(ic, 11.0f * u, GCol(44, 56, 66, a), 32, 1.0f * u);
+    const ImU32 icol = c.warn ? GCol(kHudOrange, a) : GCol(207, 213, 218, a);
+    switch (c.kind)
+    {
+    case kHudTemp: GIconTemp(dl, ic, 12.0f * u, icol); break;
+    case kHudOil: GIconOil(dl, ic, 11.0f * u, icol); break;
+    case kHudBoost: GIconTurbo(dl, ic, 12.0f * u, icol); break;
+    default: GIconAir(dl, ic, 12.0f * u, icol); break;
+    }
+    const float right = b.x - 5.0f * u, mid = o.y + h * 0.5f * u;
+    HText(dl, f, kGsHudCell, ImVec2(right, mid - 7.5f * u), c.warn ? GCol(kHudOrange, a) : GCol(kHudText, a), c.value, 1, u);
+    for (float x = right - 25.0f * u; x < right; x += 2.0f * u) dl->AddRectFilled(ImVec2(x, mid + 1.0f * u), ImVec2(x + 1.0f * u, mid + 2.0f * u), GCol(124, 136, 147, a));
+    HText(dl, f, kGsHudSmall, ImVec2(right, mid + 10.0f * u), GCol(197, 204, 210, a), c.unit, 1, u);
+}
+
+// The lamps: the mod's own only, as the game's gear panel shows the handbrake, all wheel drive, the diff lock and the
+// gear (the user, 2 November). Each lights in its colour of today; the oil's and the tire's blink as before; a level
+// truck's tilt lamp is off. The tire lamp only with a tire mod that publishes its state.
+struct HudLamp { const char *label; bool on; GRgb col; };
+static const char *const kHudLampLabels[] = { "GLOW", "OIL", "ENG", "TILT", "LIGHT", "TIRE" };
+static int HudLamps(const GaugeState &st, HudLamp *out)
+{
+    int n = 0;
+    out[n++] = { kHudLampLabels[0], st.cold, kBlue };
+    out[n++] = { kHudLampLabels[1], st.oilHot, kRed };
+    out[n++] = { kHudLampLabels[2], st.damage, kAmber };
+    out[n++] = { kHudLampLabels[3], st.tilt > 0, st.tilt >= 2 ? kRed : kAmber };
+    out[n++] = { kHudLampLabels[4], st.headlights, kGreen };
+    if (st.tireLamp > 0) out[n++] = { kHudLampLabels[5], st.tireLit, st.tireWarn ? kRed : st.tireLamp == 4 ? kGreen : kAmber };
+    return n;
+}
+
+// A row of lamps from o, width and gap in screen pixels, each 18 reference pixels high: a dark box with end brackets,
+// grey when off, orange when lit with the label in the lamp's colour.
+static void HLamps(ImDrawList *dl, const GaugeFonts &f, ImVec2 o, float width, float gap, const GaugeState &st, float u, float a)
+{
+    HudLamp lamps[6];
+    const int n = HudLamps(st, lamps);
+    const float w = (width - (n - 1) * gap) / n, h = 18.0f * u, k = 3.0f * u;
+    for (int i = 0; i < n; i++)
+    {
+        const HudLamp &l = lamps[i];
+        const ImVec2 p(o.x + i * (w + gap), o.y), b(p.x + w, p.y + h);
+        dl->AddRectFilled(p, b, l.on ? GCol(31, 45, 58, 0.75f * a) : GCol(18, 26, 34, 0.75f * a));
+        const ImU32 c = l.on ? GCol(kHudOrange, a) : GCol(107, 119, 131, a);
+        const float t = (l.on ? 1.5f : 1.0f) * u;
+        const ImVec2 left[4] = { ImVec2(p.x + k, p.y), p, ImVec2(p.x, b.y), ImVec2(p.x + k, b.y) };
+        const ImVec2 right[4] = { ImVec2(b.x - k, p.y), ImVec2(b.x, p.y), b, ImVec2(b.x - k, b.y) };
+        dl->AddPolyline(left, 4, c, 0, t);
+        dl->AddPolyline(right, 4, c, 0, t);
+        HText(dl, f, kGsHudSmall, ImVec2((p.x + b.x) * 0.5f, p.y + h * 0.5f), l.on ? GCol(l.col, a) : GCol(93, 104, 115, a), l.label, 0, u);
+    }
+}
+
+// The gear Next Gen Gameplay has in force, as the tachometer shows it: "AUTO 4" in automatic, the gearbox's own
+// positions by their names, "R", "N" (the user, 2 November: "it should show the NGG active gear at all times").
+static void HudGear(const GaugeState &st, char *buf, size_t size)
+{
+    const bool named = st.gear > 0 && st.gearMode && st.gearMode[0] && st.gearMode[0] != 'A';
+    if (st.gear < 0) strcpy_s(buf, size, "R");
+    else if (st.gear == 0) strcpy_s(buf, size, "N");
+    else if (named) strcpy_s(buf, size, st.gearMode);
+    else if (st.gearMode && st.gearMode[0]) sprintf_s(buf, size, "AUTO %d", st.gear);
+    else sprintf_s(buf, size, "%d", st.gear);
+}
+
+// A HUD dial centred on c, 56 reference pixels in radius, 240 degrees from 0 to top: thin ticks every minor, numbers
+// every step (divided by div), the zone from red up as an orange arc (red below 0: none), an orange needle, and the
+// value in big figures under the hub with its unit below.
+static void HDial(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float u, float a, float top, float step, float minor, float red, float val, const char *big,
+                  const char *unit)
+{
+    const float R = 56.0f * u;
+    const GScale s = GSweep(0.0f, top);
+    dl->AddCircleFilled(c, R + 3.0f * u, GCol(16, 23, 30, 0.6f * a), 64);
+    dl->AddCircle(c, R + 3.0f * u, GCol(44, 56, 66, a), 64, 1.0f * u);
+    GArc(dl, c, R - 2.0f * u, 150.0f, 390.0f, 2.0f * u, GCol(255, 255, 255, 0.16f * a));
+    if (red >= 0.0f) GArc(dl, c, R - 2.0f * u, GDeg(s, red), 390.0f, 4.0f * u, GCol(kHudOrange, a));
+    char buf[16];
+    for (float v = 0.0f; v <= top + 0.001f; v += minor)
+    {
+        const bool major = fabsf(v / step - floorf(v / step + 0.5f)) < 0.001f;
+        const float d = GDeg(s, v);
+        const GRgb col = red >= 0.0f && v >= red ? kHudOrange : kHudText;
+        dl->AddLine(GPolar(c, R - 2.0f * u, d), GPolar(c, R - (major ? 10.0f : 6.0f) * u, d), GCol(col, (major ? 0.95f : 0.5f) * a), (major ? 2.0f : 1.0f) * u);
+        if (!major) continue;
+        sprintf_s(buf, "%.0f", v);
+        HText(dl, f, kGsHudSmall, GPolar(c, R - 19.0f * u, d), GCol(kHudLabel, a), buf, 0, u);
+    }
+    const float d = GDeg(s, fminf(fmaxf(val, 0.0f), top));
+    GLine(dl, GPolar(c, -9.0f * u, d), GPolar(c, R - 5.0f * u, d), GCol(kHudOrange, a), 3.0f * u);
+    dl->AddCircleFilled(c, 4.0f * u, GCol(kHudOrange, a), 16);
+    HText(dl, f, kGsHudMid, ImVec2(c.x, c.y + 26.0f * u), GCol(kHudText, a), big, 0, u);
+    HText(dl, f, kGsHudSmall, ImVec2(c.x, c.y + 42.0f * u), GCol(kHudDim, a), unit, 0, u);
+}
+
+// The speedometer's scale as GSpeedo's: the top in the unit shown, numbers every 10 up to 80, every 20 above.
+static void HudSpeedScale(const GaugeState &st, float &top, float &step, float &v)
+{
+    const float raw = st.mph ? st.speedMax / 1.609f : st.speedMax;
+    step = raw <= 80.0f ? 10.0f : 20.0f;
+    top = ceilf(raw / step - 0.01f) * step;
+    v = st.mph ? st.speedKmh / 1.609f : st.speedKmh;
+}
+
+// HUD dials (Layout 2): origin is the panel's bottom right corner. The rpm and speed dials (swapped with SwapDials),
+// the gear in orange between them at the bottom, the cells in a 2 x 2 grid on the right and the lamps in a row under
+// them.
+static void HudDials(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float u, float a, const GaugeState &st, const GaugeLayout &lay)
+{
+    const ImVec2 o(origin.x - kHudDialsW * u, origin.y - kHudH * u);
+    const auto P = [&](float x, float y) { return ImVec2(o.x + x * u, o.y + y * u); };
+    HPanel(dl, o, kHudDialsW, u, a);
+    char buf[32];
+    const ImVec2 tach = P(lay.swapDials ? 204.0f : 72.0f, 92.0f), speedo = P(lay.swapDials ? 72.0f : 204.0f, 92.0f);
+    const float rpmTop = st.rpmMax / 100.0f, rpmStep = st.rpmMax >= 5000.0f ? 10.0f : 5.0f;
+    sprintf_s(buf, "%.0f", st.rpm);
+    HDial(dl, f, tach, u, a, rpmTop, rpmStep, rpmStep * 0.5f, st.rpmRedline / 100.0f, st.rpm / 100.0f, buf, "RPM");
+    float top, step, v;
+    HudSpeedScale(st, top, step, v);
+    sprintf_s(buf, "%.0f", v);
+    HDial(dl, f, speedo, u, a, top, step, step * 0.5f, -1.0f, v, buf, st.mph ? "MPH" : "KM/H");
+    // the gear between the two dials at the bottom, where their rims leave room
+    HudGear(st, buf, sizeof buf);
+    HText(dl, f, kGsHudMid, P(138.0f, 149.0f), GCol(kHudOrange, a), buf, 0, u);
+    HudCell cells[4];
+    const int n = HudCells(lay, st, cells);
+    for (int i = 0; i < n; i++) HCell(dl, f, P(282.0f + (i % 2) * 102.0f, 14.0f + (i / 2) * 52.0f), 96.0f, 46.0f, cells[i], u, a);
+    if (lay.showLamps) HLamps(dl, f, P(282.0f, 132.0f), 198.0f * u, 4.5f * u, st, u, a);
+}
+
+// HUD digital (Layout 3), the game's fuel panel's size: the speed big and white with its unit, the gear in orange, the
+// rpm in orange with "RPM", a segmented rpm bar in the fuel bar's place, a row of cells and the lamps where the game
+// has FUNCTIONS.
+static void HudDigital(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float u, float a, const GaugeState &st, const GaugeLayout &lay)
+{
+    const float W = kHudDigitalW;
+    const ImVec2 o(origin.x - W * u, origin.y - kHudH * u);
+    const auto P = [&](float x, float y) { return ImVec2(o.x + x * u, o.y + y * u); };
+    HPanel(dl, o, W, u, a);
+    char buf[32];
+    float top, step, v;
+    HudSpeedScale(st, top, step, v);
+    // the headline on one baseline (40), each text centred on its capitals
+    sprintf_s(buf, "%.0f", v);
+    HText(dl, f, kGsHudHead, P(14.0f, 28.0f), GCol(kHudText, a), buf, -1, u);
+    const float unitX = o.x + 14.0f * u + TextWidth(f, kGsHudHead, buf, u) + 8.0f * u;
+    const char *unit = st.mph ? "MPH" : "KM/H";
+    HText(dl, f, kGsHudCell, ImVec2(unitX, o.y + 34.75f * u), GCol(185, 193, 200, a), unit, -1, u);
+    const float unitEnd = unitX + TextWidth(f, kGsHudCell, unit, u);
+    const float rpmLabelW = TextWidth(f, kGsHudCell, "RPM", u);
+    HText(dl, f, kGsHudCell, P(W - 14.0f, 34.75f), GCol(kHudOrange, a), "RPM", 1, u);
+    sprintf_s(buf, "%.0f", st.rpm);
+    const float rpmRight = o.x + (W - 14.0f) * u - rpmLabelW - 6.0f * u;
+    HText(dl, f, kGsHudMid, ImVec2(rpmRight, o.y + 32.5f * u), GCol(kHudOrange, a), buf, 1, u);
+    const float rpmLeft = rpmRight - TextWidth(f, kGsHudMid, buf, u);
+    HudGear(st, buf, sizeof buf);
+    HText(dl, f, kGsHudMid, ImVec2((unitEnd + rpmLeft) * 0.5f, o.y + 32.5f * u), GCol(kHudOrange, a), buf, 0, u);
+    // the rpm bar: 30 segments, green up to the red line and orange in the red zone when lit, dark when not
+    const int segments = 30;
+    const float sw = (W - 28.0f) / segments;
+    for (int i = 0; i < segments; i++)
+    {
+        const float at = (i + 0.5f) / segments * st.rpmMax;
+        const bool lit = at <= st.rpm, red = at >= st.rpmRedline;
+        const ImVec2 p = P(14.0f + i * sw, 50.0f);
+        dl->AddRectFilled(p, ImVec2(p.x + (sw - 2.0f) * u, p.y + 7.0f * u),
+                          lit ? GCol(red ? kHudOrange : kHudGreen, a) : red ? GCol(90, 53, 36, a) : GCol(42, 52, 62, a));
+    }
+    // the cells share the row's width, so a hidden one closes up
+    HudCell cells[4];
+    const int n = HudCells(lay, st, cells);
+    const float cw = n > 0 ? (W - 28.0f - (n - 1) * 8.0f) / n : 0.0f;
+    for (int i = 0; i < n; i++) HCell(dl, f, P(14.0f + i * (cw + 8.0f), 67.0f), cw, 46.0f, cells[i], u, a);
+    if (lay.showLamps) HLamps(dl, f, P(14.0f, 132.0f), (W - 28.0f) * u, 6.0f * u, st, u, a);
+}
+
+// The cluster. origin: the strip's bottom centre (variant 0), or the block's or a HUD panel's bottom right corner.
 static void GaugeDraw(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float u, float a, const GaugeState &st, const GaugeLayout &lay)
 {
     s_open = lay.openArc;
     s_faceAlpha = s_open ? 0.0f : lay.faceAlpha;
-    if (lay.variant == 0)
+    if (lay.variant == 2) HudDials(dl, f, origin, u, a, st, lay);
+    else if (lay.variant == 3) HudDigital(dl, f, origin, u, a, st, lay);
+    else if (lay.variant == 0)
     {
         // a strip: [oil][temp][fuel] [SPEED] lamps [TACH] [boost][air][clock], the range under the fuel dial; with swapDials
         // the two big dials change places and the rest stays
@@ -978,13 +1218,23 @@ static void GaugeDraw(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float 
 
 // ---- where the settings put the cluster (the mod and the preview place it through these) ----
 
-// Screen pixels per reference pixel: the cluster keeps its share of the screen's height, times the ini's Scale.
-static float GaugeUnit(float screenH, const GaugeSettings &s) { return screenH / 1080.0f * s.scale; }
+// The HUD layouts sit on the game's HUD stage, 1920 x 1080 fitted into the screen (as the warning boxes and the tire
+// mod's panel): the panel's bottom right corner 10 px left of the game's gear panel. The gear panel's place is taken
+// from the user's screenshot (a crop near 1080p): its left edge at about 1560, its bottom 16 above the stage's.
+static const float kHudStageRight = 1550.0f, kHudStageBottom = 1064.0f;
+static bool GaugeOnStage(const GaugeSettings &s) { return s.layout == kLayoutHudDials || s.layout == kLayoutHudDigital; }
+
+// Screen pixels per reference pixel, times the ini's Scale: the strip and the block keep their share of the screen's
+// height; the HUD layouts follow the HUD's stage, so they stand as tall as the gear panel beside them on any aspect.
+static float GaugeUnit(float screenW, float screenH, const GaugeSettings &s)
+{
+    return (GaugeOnStage(s) ? WarnStageScale(screenW, screenH) : screenH / 1080.0f) * s.scale;
+}
 
 static GaugeLayout GaugeLayoutOf(const GaugeSettings &s)
 {
     GaugeLayout lay = {};
-    lay.variant = s.layout == kLayoutBlock ? 1 : 0;
+    lay.variant = s.layout >= 0 && s.layout < kLayoutCount ? s.layout : kLayoutStrip;
     lay.swapDials = s.swapDials;
     lay.showTemp = s.showTemp;
     lay.showBoost = s.showBoost;
@@ -993,8 +1243,10 @@ static GaugeLayout GaugeLayoutOf(const GaugeSettings &s)
     lay.showClock = s.showClock;
     lay.showFuelUse = s.showFuelUse;
     lay.oilGauge = s.oilGauge;
-    lay.faceAlpha = s.style == kFaceTinted ? s.faceOpacity : 1.0f;
-    lay.openArc = s.style == kFaceOpen;
+    // Style and FaceOpacity are the strip's and the block's: the HUD layouts have their own look (kept in the ini)
+    const bool styled = !GaugeOnStage(s);
+    lay.faceAlpha = styled && s.style == kFaceTinted ? s.faceOpacity : 1.0f;
+    lay.openArc = styled && s.style == kFaceOpen;
     return lay;
 }
 
@@ -1004,6 +1256,13 @@ static GaugeLayout GaugeLayoutOf(const GaugeSettings &s)
 static ImVec2 GaugeOrigin(const GaugeSettings &s, float screenW, float screenH)
 {
     const float k = screenH / 1080.0f;
+    if (GaugeOnStage(s))
+    {
+        // the stage centred top to bottom, its right part kept at the screen's right edge on a wider screen
+        const float st = WarnStageScale(screenW, screenH), top = (screenH - st * kWarnStageH) * 0.5f;
+        const float x = screenW - st * (kWarnStageW - kHudStageRight), y = top + st * kHudStageBottom;
+        return ImVec2(floorf(x + s.offsetX * k + 0.5f), floorf(y + s.offsetY * k + 0.5f));
+    }
     const float x = s.layout == kLayoutBlock ? screenW - 24.0f * k : screenW * 0.5f;
     return ImVec2(floorf(x + s.offsetX * k + 0.5f), floorf(screenH - 16.0f * k + s.offsetY * k + 0.5f));
 }

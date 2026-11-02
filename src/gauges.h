@@ -48,7 +48,7 @@ struct GaugeState
     float outsideC;                 // the outside temperature in force, in C, in the clock's face
 };
 
-enum { kLayoutStrip, kLayoutBlock, kLayoutCount };           // GaugeSettings::layout
+enum { kLayoutStrip, kLayoutBlock, kLayoutHudDials, kLayoutHudDigital, kLayoutCount }; // GaugeSettings::layout (an older Gauges reads 2 and 3 as the strip)
 enum { kFaceSolid, kFaceTinted, kFaceOpen, kFaceCount };     // GaugeSettings::style
 enum { kClassTruck, kClassScout, kClassHeavy, kClassCount }; // GaugeSettings::tachClass
 enum { kOilOff, kOilNeedle, kOilDial, kOilGaugeCount };      // GaugeSettings::oilGauge
@@ -61,9 +61,9 @@ enum { kFuelClass, kFuelDiesel, kFuelPetrol, kFuelCount };   // an engine's prof
 // Everything in Gauges.ini ([Gauges]); the Gameplay tab of the NEXT GEN menu edits all of it.
 struct GaugeSettings
 {
-    int layout;              // Layout: 0 a strip along the bottom centre, 1 a block in the bottom right corner
-    bool swapDials;          // SwapDials: the speedometer and the tachometer change places, in both layouts
-    int style;               // Style: 0 solid dial faces, 1 tinted (see-through) faces, 2 open (no faces, the scale arcs only)
+    int layout;              // Layout: 0 a strip along the bottom centre, 1 a block in the bottom right corner, 2 HUD dials, 3 HUD digital (left of the game's gear panel)
+    bool swapDials;          // SwapDials: the speedometer and the tachometer change places, in the strip, the block and HUD dials
+    int style;               // Style: 0 solid dial faces, 1 tinted (see-through) faces, 2 open (no faces, the scale arcs only); the strip and the block only
     float faceOpacity;       // FaceOpacity: how dark the tinted faces are, 0 = clear
     float offsetX, offsetY;  // OffsetX, OffsetY: moves the cluster from its place, in pixels of a 1080p screen (right and down)
     float scale;             // Scale: the cluster's size (1 = its size on a 1080p screen; it grows with the screen's height)

@@ -140,7 +140,7 @@ static void OnFrame()
     GaugeView view;
     SettingsGet(s);
     ViewGet(view);
-    const float u = GaugeUnit(io.DisplaySize.y, s);
+    const float u = GaugeUnit(io.DisplaySize.x, io.DisplaySize.y, s);
     UpdateFontTexture(u);
     const float dt = fminf(fmaxf(io.DeltaTime, 0.0f), 0.1f);
     DrawWarnings(view, io.DisplaySize.x, io.DisplaySize.y, dt);
@@ -194,9 +194,10 @@ static void OnFrame()
     {
         loggedW = io.DisplaySize.x;
         loggedH = io.DisplaySize.y;
-        static const wchar_t *layouts[kLayoutCount] = { L"strip", L"block" }, *styles[kFaceCount] = { L"solid", L"tinted", L"open" };
+        static const wchar_t *layouts[kLayoutCount] = { L"strip", L"block", L"HUD dials", L"HUD digital" }, *styles[kFaceCount] = { L"solid", L"tinted", L"open" };
         GaugeLog(L"overlay: the cluster is drawn on a %.0f x %.0f picture (%s layout, %s style, %.3f px per reference px%s)", loggedW, loggedH,
-                 layouts[s.layout == kLayoutBlock ? 1 : 0], styles[s.style < 0 || s.style >= kFaceCount ? kFaceOpen : s.style], u, view.demo ? L", demo values" : L"");
+                 layouts[s.layout < 0 || s.layout >= kLayoutCount ? kLayoutStrip : s.layout],
+                 GaugeOnStage(s) ? L"the HUD's" : styles[s.style < 0 || s.style >= kFaceCount ? kFaceOpen : s.style], u, view.demo ? L", demo values" : L"");
     }
 }
 

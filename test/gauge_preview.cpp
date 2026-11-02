@@ -191,13 +191,17 @@ static void Backdrop(ImDrawList *bg, float w, float h)
 // The cluster on a w x h screen, placed and sized as the mod does it for these settings.
 static void Screen(const wchar_t *out, const wchar_t *name, GaugeFonts &fonts, int w, int h, const GaugeSettings &s, const GaugeState &st)
 {
-    const float u = GaugeUnit((float)h, s);
+    const float u = GaugeUnit((float)w, (float)h, s);
     if (fonts.tex) UseFonts(fonts, u);
     wchar_t path[MAX_PATH];
     swprintf_s(path, L"%s\\%s", out, name);
     RenderPng(path, w, h, [&](ImDrawList *, ImDrawList *bg) {
         Backdrop(bg, (float)w, (float)h);
-        GaugeDraw(bg, fonts, GaugeOrigin(s, (float)w, (float)h), u, s.opacity, st, GaugeLayoutOf(s));
+        const ImVec2 o = GaugeOrigin(s, (float)w, (float)h);
+        // the HUD layouts: the game's gear panel as an outline where it stands on the stage (about 340 x 166, 10 to the right)
+        if (GaugeOnStage(s))
+            bg->AddRect(ImVec2(o.x + 10.0f * u, o.y - 166.0f * u), ImVec2(o.x + 350.0f * u, o.y), IM_COL32(168, 90, 50, 200), 6.0f * u, 0, 1.2f * u);
+        GaugeDraw(bg, fonts, o, u, s.opacity, st, GaugeLayoutOf(s));
     });
 }
 
@@ -290,6 +294,73 @@ int wmain(int argc, wchar_t **argv)
         Screen(out, l.name, fonts, 1920, 1080, s, drive);
     }
     Screen(out, L"strip_2160p.png", fonts, 3840, 2160, def, drive);
+
+    // the HUD layouts (BRIEF_cluster_hud_layouts.md): docked left of the gear panel's outline at 16:9, 21:9 and 16:10,
+    // all four cells and the tire lamp shown; then each at x2.5 in the three states, to hold against the mockups
+    {
+        GaugeSettings s = def;
+        s.showAir = true;
+        s.oilGauge = kOilDial;
+        static const struct { const wchar_t *name; int w, h; } screens[3] = { { L"1920x1080", 1920, 1080 }, { L"2560x1080", 2560, 1080 }, { L"1920x1200", 1920, 1200 } };
+        GaugeState st = drive;
+        st.tireLamp = 3;
+        for (int layout = kLayoutHudDials; layout <= kLayoutHudDigital; layout++)
+        {
+            s.layout = layout;
+            for (const auto &sc : screens)
+            {
+                wchar_t name[64];
+                swprintf_s(name, L"%s_%s.png", layout == kLayoutHudDials ? L"hud_dials" : L"hud_digital", sc.name);
+                Screen(out, name, fonts, sc.w, sc.h, s, st);
+            }
+            GaugeSettings z = s;
+            z.scale = 2.5f;
+            static const wchar_t *states3[3] = { L"cold", L"drive", L"hot" };
+            for (int i = 0; i < 3; i++)
+            {
+                GaugeState zs = states[i];
+                zs.tireLamp = 3;
+                wchar_t name[64];
+                swprintf_s(name, L"%s_zoom_%s.png", layout == kLayoutHudDials ? L"hud_dials" : L"hud_digital", states3[i]);
+                Screen(out, name, fonts, 1920, 1080, z, zs);
+            }
+        }
+        // Style is the strip's and the block's: a tinted or open style changes nothing on the HUD layouts
+        {
+            GaugeSettings t = s;
+            bool ignored = true;
+            for (int style = 0; style < kFaceCount; style++)
+            {
+                t.style = style;
+                t.faceOpacity = 0.3f;
+                const GaugeLayout lay = GaugeLayoutOf(t);
+                ignored &= lay.faceAlpha == 1.0f && !lay.openArc;
+            }
+            printf("%s   HUD layouts: Style and FaceOpacity are ignored\n", ignored ? "ok" : "FAIL");
+            if (!ignored) g_failed++;
+            // the cells close up: oil off and air off leave coolant and boost, in that order; a naturally aspirated
+            // engine has no boost cell
+            GaugeSettings c2 = s;
+            c2.oilGauge = kOilOff;
+            c2.showAir = false;
+            HudCell cells[4];
+            GaugeState nat = st;
+            const int two = HudCells(GaugeLayoutOf(c2), st, cells);
+            const bool order = two == 2 && cells[0].kind == kHudTemp && cells[1].kind == kHudBoost;
+            nat.natural = true;
+            const int one = HudCells(GaugeLayoutOf(c2), nat, cells);
+            const bool closes = order && one == 1 && cells[0].kind == kHudTemp && HudCells(GaugeLayoutOf(s), st, cells) == 4;
+            printf("%s   HUD layouts: hidden cells close up (%d of 4, %d with a naturally aspirated engine)\n", closes ? "ok" : "FAIL", two, one);
+            if (!closes) g_failed++;
+        }
+        // hidden cells close up: no oil, no air
+        s.oilGauge = kOilOff;
+        s.showAir = false;
+        s.layout = kLayoutHudDials;
+        Screen(out, L"hud_dials_two_cells.png", fonts, 1920, 1080, s, st);
+        s.layout = kLayoutHudDigital;
+        Screen(out, L"hud_digital_two_cells.png", fonts, 1920, 1080, s, st);
+    }
 
     // other settings: the scout's scales, the other units, the air dial, no lamps, larger, moved up and to the left
     {
