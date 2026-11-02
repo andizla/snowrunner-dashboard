@@ -506,8 +506,7 @@ static void WriteIni(const GaugeSettings &s)
     num(L"ClutchHeatPercent", s.clutchHeat);
     num(L"SpringScale", s.springScale);
     num(L"DampingScale", s.dampingScale);
-    num(L"TravelMinScale", s.travelMinScale);
-    num(L"TravelMaxScale", s.travelMaxScale);
+    num(L"ExtraTravel", s.extraTravel);
     whole(L"DamperCurve", s.damperCurve);
     num(L"LowCompression", s.lowCompression);
     num(L"HighCompression", s.highCompression);
@@ -811,8 +810,8 @@ static void ReadIni(GaugeSettings &s)
                         L"; StallDamagePercent: what a shift without the clutch costs the gearbox, percent of what it takes, 0 to 25 (5), with Damage=1.\n"
                         L"; ClutchBurn=1: a clutch slipping under load heats up and costs the gearbox, a pedal's or the one that works by itself, with Damage=1.\n"
                         L"; ClutchHeatPercent: how fast it heats up, percent of the model's own pace, 10 to 300 (60); lower gives more time to react.\n"
-                        L"; SpringScale, DampingScale, TravelMinScale, TravelMaxScale (a test): the suspension's spring, damping and travel limits (its file's\n"
-                        L"; SuspensionMin and SuspensionMax) as a factor of the truck's own, 0.5 to 2 (1 = the truck's own).\n"
+                        L"; SpringScale, DampingScale (a test): the suspension's spring and damping as a factor of the truck's own, 0.25 to 4 (1 = the truck's own;\n"
+                        L"; the game holds each at 1). ExtraTravel: cm added past the file's compression end, 0 to 30 (0 = the file's; past it a wheel may go into the body).\n"
                         L"; DamperCurve 0 linear, 1 digressive, 2 progressive; LowCompression, HighCompression, LowRebound, HighRebound: the damping\n"
                         L"; under and over DamperKnee (m/s, 0.02 to 0.5), rising and falling, 0.25 to 4 (a test; 1 and linear = the truck's own).\n"
                         L"; BumpStops=1: force (BumpForce, 1 to 6, the spring's at the end times it) and damping (BumpDamping, 1 to 4) over the last BumpZone m (0.03 to 0.2) of the\n"
@@ -927,8 +926,7 @@ static void ReadIni(GaugeSettings &s)
     s.clutchHeat = IniFloat(L"ClutchHeatPercent", s.clutchHeat, ini);
     s.springScale = IniFloat(L"SpringScale", s.springScale, ini);
     s.dampingScale = IniFloat(L"DampingScale", s.dampingScale, ini);
-    s.travelMinScale = IniFloat(L"TravelMinScale", s.travelMinScale, ini);
-    s.travelMaxScale = IniFloat(L"TravelMaxScale", s.travelMaxScale, ini);
+    s.extraTravel = IniFloat(L"ExtraTravel", s.extraTravel, ini); // TravelMinScale and TravelMaxScale are no longer read
     s.damperCurve = IniInt(L"DamperCurve", s.damperCurve, ini);
     s.lowCompression = IniFloat(L"LowCompression", s.lowCompression, ini);
     s.highCompression = IniFloat(L"HighCompression", s.highCompression, ini);
@@ -2200,7 +2198,7 @@ static void LogSettings(const GaugeSettings &s)
     Log(L"settings: the oil warm after %g minutes of driving, too hot from %g C", s.oilWarmUpMinutes, s.oilWarnC);
     Log(L"settings: the radiator has all its air from %g km/h; engine damage %s: from %g C, %g percent a minute at 125 C, %g percent a minute for a cold engine floored at the red zone at 0 C; %g percent of the gearbox for a shift without the clutch; clutch burn %s, heating at %g percent of the model's pace",
         s.airFullKmh, s.damage ? L"on" : L"off", s.hotDamageFrom, s.hotDamage, s.coldDamage, s.stallDamage, s.clutchBurn ? L"on" : L"off", s.clutchHeat);
-    Log(L"settings: suspension spring x%g, damping x%g, travel x%g (min) and x%g (max) of the truck's own", s.springScale, s.dampingScale, s.travelMinScale, s.travelMaxScale);
+    Log(L"settings: suspension spring x%g, damping x%g of the truck's own, %g cm of travel past its compression end", s.springScale, s.dampingScale, s.extraTravel);
     Log(L"settings: sound volume %d of 100%s%s", s.soundVolume, s.soundsOnly ? L", sounds only: the cluster is not drawn" : L"",
         s.dieselFlutter ? L", a diesel's lift flutters"
                         : SoundWhistles() > 0 ? L", a diesel's lift plays the sounds\\turbo_whistle_ files" : L", a diesel's lift is quiet");
@@ -2652,8 +2650,10 @@ static void SuspProbeStep(SuspProbe &p, const TruckMemory &m, const TruckRefs &r
         else p.key = 0; // gone: the next pass scans again
 }
 
-// SpringScale, DampingScale, TravelMinScale and TravelMaxScale (a test, BRIEF_suspension_simple.md): each wheel's
-// spring, damping and travel limits as the stock times the slider (suspension_scan.h's SuspTuneStep). The stock and
+// SpringScale, DampingScale and ExtraTravel (a test, BRIEF_suspension_simple.md and the addendum of 2 November, 13:18):
+// each wheel's spring and damping as the stock times the slider, its compression end that many cm past the file's
+// (suspension_scan.h's SuspTuneStep). The stock is read on every truck, for the tab's figures, and nothing is written
+// at the defaults. The stock and
 // the first writes of each wheel are logged with what was read back right after; writes while a slider moves are not
 // counted, and each wheel's values are logged once when the sliders stand still again. A wheel written kSuspWritesBack
 // times with the sliders still is one the game keeps putting back, said once.
@@ -2661,19 +2661,9 @@ static const int kSuspWritesTold = 2, kSuspWritesBack = 20;
 static void SuspTunePass(SuspTune &t, const TruckMemory &m, const TruckRefs &r, const GaugeSettings &s, const SuspTuneTest *test, const bool *damperOwns,
                          const bool *springOwns)
 {
-    const float scale[kSuspValues] = { s.springScale, s.dampingScale, s.travelMinScale, s.travelMaxScale };
-    bool tuned = test != nullptr || SuspFeaturesOn(s); // the physics thread takes each wheel's stock from the tune
-    for (float f : scale) tuned |= f != 1.0f;
-    if (!tuned && t.vehicle != r.vehicle)
-    {
-        // nothing to write on this truck; the truck driven before (if any) gets its stock back
-        const int back = t.vehicle ? SuspTuneRestore(t, m, SuspVtable()) : 0;
-        if (back) Log(L"suspension: the truck driven before: %d values put back to its stock", back);
-        t = SuspTune{};
-        return;
-    }
+    const float scale[kSuspValues] = { s.springScale, s.dampingScale, 1.0f, 1.0f };
     int restored = 0;
-    SuspTuneStep(t, m, r, SuspVtable(), scale, &restored, test, damperOwns, springOwns);
+    SuspTuneStep(t, m, r, SuspVtable(), scale, &restored, test, damperOwns, springOwns, s.extraTravel / 100.0f);
     if (restored) Log(L"suspension: the truck driven before: %d values put back to its stock", restored);
     for (int i = 0; i < r.wheels && i < kMaxWheels; i++)
     {
@@ -2685,14 +2675,14 @@ static void SuspTunePass(SuspTune &t, const TruckMemory &m, const TruckRefs &r, 
         {
             float v[kSuspValues] = {};
             for (int k = 0; k < kSuspValues; k++) m.get(w.constraint + kSuspValueAt[k], v[k]);
-            Log(L"suspension: wheel %d at spring x%g, damping x%g, travel x%g, x%g: read back spring %g, damping %g, travel %g to %g", i, scale[0], scale[1], scale[2],
-                scale[3], v[kSuspStrength], v[kSuspDamping], v[kSuspMin], v[kSuspMax]);
+            Log(L"suspension: wheel %d at spring x%g, damping x%g, %g cm of extra travel: read back spring %g, damping %g, travel %g to %g", i, scale[0], scale[1],
+                s.extraTravel, v[kSuspStrength], v[kSuspDamping], v[kSuspMin], v[kSuspMax]);
             w.settle = false;
         }
         if (!w.wroteNow || t.moved) continue;
         if (w.writes <= kSuspWritesTold)
-            Log(L"suspension: wheel %d written (spring x%g, damping x%g, travel x%g, x%g of the stock): read back spring %g, damping %g, travel %g to %g", i, scale[0],
-                scale[1], scale[2], scale[3], w.back[kSuspStrength], w.back[kSuspDamping], w.back[kSuspMin], w.back[kSuspMax]);
+            Log(L"suspension: wheel %d written (spring x%g, damping x%g of the stock, %g cm of extra travel): read back spring %g, damping %g, travel %g to %g", i,
+                scale[0], scale[1], s.extraTravel, w.back[kSuspStrength], w.back[kSuspDamping], w.back[kSuspMin], w.back[kSuspMax]);
         else if (w.writes == kSuspWritesBack) Log(L"suspension: wheel %d written %d times with the sliders still: the game puts its values back", i, w.writes);
     }
 }
@@ -3087,7 +3077,7 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
         }
         return p.generation;
     }
-    const float scale[kSuspValues] = { s.springScale, s.dampingScale, s.travelMinScale, s.travelMaxScale };
+    const float scale[kSuspValues] = { s.springScale, s.dampingScale, s.extraTravel, 1.0f }; // a change of any is a new generation
     uint64_t constraint[kMaxWheels] = {};
     for (int i = 0; i < r.wheels && i < kMaxWheels; i++) m.get(r.wheel[i] + kSuspConstraintAt, constraint[i]);
     const float jump[3] = { t.position[0] - p.position[0], t.position[1] - p.position[1], t.position[2] - p.position[2] };
@@ -4653,6 +4643,15 @@ static DWORD WINAPI Run(void *)
         }
         v.gearHold = GearHoldOf(watch, AutoClass(watch, inForce.tachClass));
         v.gearHoldOwn = watch.gearHoldOwn;
+        // the suspension's figures as the driven truck's file has them, front (wheel 0) and rear (the last wheel)
+        v.suspKnown = false;
+        if (driving && watch.tune.vehicle == watch.refs.vehicle && watch.refs.wheels > 0)
+        {
+            const SuspWheel &front = watch.tune.wheel[0], &rear = watch.tune.wheel[(watch.refs.wheels < kMaxWheels ? watch.refs.wheels : kMaxWheels) - 1];
+            v.suspKnown = front.constraint && rear.constraint;
+            const int field[3] = { kSuspStrength, kSuspDamping, kSuspMin };
+            for (int k = 0; k < 3; k++) v.suspFile[k][0] = front.stock[field[k]], v.suspFile[k][1] = rear.stock[field[k]];
+        }
         v.autoClass = AutoClass(watch, inForce.tachClass);
         v.autoByWeight = driving && !watch.ownScales && watch.mass > 0.0f;
         v.massKg = driving ? watch.mass : 0.0f;
@@ -4781,7 +4780,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.rollWarnDeg == b.rollWarnDeg && a.rollDangerDeg == b.rollDangerDeg && a.pitchDangerDeg == b.pitchDangerDeg &&
            a.warmUpMinutes == b.warmUpMinutes && a.overheatMinutes == b.overheatMinutes && a.coolDownMinutes == b.coolDownMinutes && a.ambientC == b.ambientC &&
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
-           a.springScale == b.springScale && a.dampingScale == b.dampingScale && a.travelMinScale == b.travelMinScale && a.travelMaxScale == b.travelMaxScale &&
+           a.springScale == b.springScale && a.dampingScale == b.dampingScale && a.extraTravel == b.extraTravel &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
            a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.input == b.input && a.powertrain == b.powertrain && a.engineShare == b.engineShare && a.creep == b.creep;
 }
@@ -4813,7 +4812,7 @@ int wmain(int argc, wchar_t **argv)
     Check(d.warmUpMinutes == 3.0f && d.overheatMinutes == 1.5f && d.coolDownMinutes == 15.0f && d.ambientC == 15.0f && d.ambientByMap,
           "defaults: the coolant warm after 3 minutes, in the red zone after 1.5, cool after 15, with 15 C outside");
     Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.hotDamageFrom == kTempRed && d.coldDamage == 5.0f && d.stallDamage == 5.0f && d.clutchBurn && d.clutchHeat == 60.0f &&
-              d.springScale == 1.0f && d.dampingScale == 1.0f && d.travelMinScale == 1.0f && d.travelMaxScale == 1.0f,
+              d.springScale == 1.0f && d.dampingScale == 1.0f && d.extraTravel == 0.0f,
           "defaults: the radiator's full airflow from 30 km/h, engine damage on from the red zone, 10 percent a minute for the heat and 5 for the cold");
     Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && d.input == kInputWheel && !d.powertrain && d.engineShare == 50 && d.creep && !d.dieselFlutter,
           "defaults: the oil as a second needle, warm after 5 minutes, too hot from 120 C; the standard turbo, a diesel's lift without the flutter; the creep on");
@@ -4859,8 +4858,7 @@ int wmain(int argc, wchar_t **argv)
     c.clutchHeat = 150.0f;
     c.springScale = 1.5f;
     c.dampingScale = 0.75f;
-    c.travelMinScale = 1.25f;
-    c.travelMaxScale = 0.6f;
+    c.extraTravel = 12.0f;
     c.toggleKey = VK_F9;
     strcpy_s(c.padToggle, "RB+DPadUp");
     c.demo = true;
@@ -4885,7 +4883,7 @@ int wmain(int argc, wchar_t **argv)
                             c.speedMax != d.speedMax && c.boostMax != d.boostMax && c.rollWarnDeg != d.rollWarnDeg && c.rollDangerDeg != d.rollDangerDeg &&
                             c.pitchDangerDeg != d.pitchDangerDeg && c.warmUpMinutes != d.warmUpMinutes && c.overheatMinutes != d.overheatMinutes &&
                             c.coolDownMinutes != d.coolDownMinutes && c.ambientC != d.ambientC && c.ambientByMap != d.ambientByMap && c.airFullKmh != d.airFullKmh && c.damage != d.damage &&
-                            c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springScale != d.springScale && c.dampingScale != d.dampingScale && c.travelMinScale != d.travelMinScale && c.travelMaxScale != d.travelMaxScale && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
+                            c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springScale != d.springScale && c.dampingScale != d.dampingScale && c.extraTravel != d.extraTravel && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
                             c.demo != d.demo && c.probe != d.probe && c.soundVolume != d.soundVolume && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
                             c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.input != d.input && c.powertrain != d.powertrain && c.engineShare != d.engineShare && c.creep != d.creep;
@@ -4954,6 +4952,23 @@ int wmain(int argc, wchar_t **argv)
     const bool held = b.airFullKmh == kAirFullRange[0] && b.hotDamage == kDamageRange[1] && b.coldDamage == 0.0f && !b.damage && b.hotDamageFrom == kHotDamageFromRange[0] &&
                       b.stallDamage == kStallDamageRange[1] && b.clutchHeat == kClutchHeatRange[0] && b.springScale == kSuspScaleRange[1];
     WritePrivateProfileStringW(kIniSection, L"SpringScale", L"1", ini.c_str());
+    // an old ini's TravelMinScale and TravelMaxScale are no longer read: ExtraTravel stays as it was, and a write drops neither
+    {
+        WritePrivateProfileStringW(kIniSection, L"ExtraTravel", nullptr, ini.c_str()); // the round trip above left one
+        WritePrivateProfileStringW(kIniSection, L"TravelMinScale", L"0.6", ini.c_str());
+        WritePrivateProfileStringW(kIniSection, L"TravelMaxScale", L"2", ini.c_str());
+        GaugeSettings old;
+        SettingsDefaults(old);
+        ReadIni(old);
+        const bool unread = old.extraTravel == 0.0f;
+        WritePrivateProfileStringW(kIniSection, L"ExtraTravel", L"45", ini.c_str());
+        ReadIni(old);
+        const bool capped = old.extraTravel == kExtraTravelRange[1];
+        WritePrivateProfileStringW(kIniSection, L"ExtraTravel", nullptr, ini.c_str());
+        WritePrivateProfileStringW(kIniSection, L"TravelMinScale", nullptr, ini.c_str());
+        WritePrivateProfileStringW(kIniSection, L"TravelMaxScale", nullptr, ini.c_str());
+        Check(unread && capped, "ini: an old TravelMinScale and TravelMaxScale are no longer read; ExtraTravel is held to 0 to 30 cm");
+    }
     WritePrivateProfileStringW(kIniSection, L"StallDamagePercent", L"5", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"ClutchHeatPercent", L"60", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"HotDamageFrom", L"130", ini.c_str());

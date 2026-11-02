@@ -106,7 +106,8 @@ struct GaugeSettings
     float clutchHeat;        // ClutchHeatPercent: how fast it heats, percent of the model's own pace (kClutchHeatRange); cooling is not scaled
     float springScale;       // SpringScale: each wheel's suspension spring as a factor of the truck's own (kSuspScaleRange); 1 writes nothing (a test)
     float dampingScale;      // DampingScale: the same for its damping
-    float travelMinScale, travelMaxScale; // TravelMinScale, TravelMaxScale: the same for its travel's compression end (SuspensionMin) and droop end (SuspensionMax)
+    float extraTravel;       // ExtraTravel: cm added past the file's compression end (SuspensionMin), kExtraTravelRange; 0 = the file's, it never shortens (a test).
+                             // TravelMinScale and TravelMaxScale are no longer read: shortening did not act, and SuspensionMax does nothing in the game
     int damperCurve;         // DamperCurve: the damper's curve above its knee, 0 linear, 1 digressive, 2 progressive (a test, BRIEF_suspension_damper.md)
     float lowCompression, highCompression, lowRebound, highRebound; // LowCompression ..: the damping under and over the knee, rising and falling, as factors (kDamperRange)
     float damperKnee;        // DamperKnee: the shaft speed in m/s where low speed turns into high (kKneeRange)
@@ -165,7 +166,8 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.stallDamage = 5.0f;
     s.clutchBurn = true;
     s.clutchHeat = 60.0f;
-    s.springScale = s.dampingScale = s.travelMinScale = s.travelMaxScale = 1.0f;
+    s.springScale = s.dampingScale = 1.0f;
+    s.extraTravel = 0.0f;
     s.lowCompression = s.highCompression = s.lowRebound = s.highRebound = 1.0f;
     s.damperKnee = 0.1f;
     s.bumpZone = 0.12f;
@@ -194,7 +196,7 @@ static const float kWarmUpRange[2] = { 0.5f, 60.0f }, kOverheatRange[2] = { 0.25
                    kAmbientRange[2] = { -40.0f, 50.0f }, kGearHoldRange[2] = { 1.0f, 3.0f }, kAirFullRange[2] = { 10.0f, 80.0f }, kDamageRange[2] = { 0.0f, 100.0f },
                    kOilWarmUpRange[2] = { 1.0f, 60.0f }, kOilWarnRange[2] = { 100.0f, 150.0f }, kTorqueShareRange[2] = { 0.10f, 1.00f },
                    kHotDamageFromRange[2] = { 100.0f, 124.0f }, kStallDamageRange[2] = { 0.0f, 25.0f },
-                   kClutchHeatRange[2] = { 10.0f, 300.0f }, kSuspScaleRange[2] = { 0.5f, 2.0f }, kDamperRange[2] = { 0.25f, 4.0f },
+                   kClutchHeatRange[2] = { 10.0f, 300.0f }, kSuspScaleRange[2] = { 0.25f, 4.0f }, kExtraTravelRange[2] = { 0.0f, 30.0f }, kDamperRange[2] = { 0.25f, 4.0f },
                    kKneeRange[2] = { 0.02f, 0.5f }, kBumpZoneRange[2] = { 0.03f, 0.2f }, kBumpForceRange[2] = { 1.0f, 6.0f },
                    kBumpDampingRange[2] = { 1.0f, 4.0f }, kSpringRiseRange[2] = { 1.0f, 3.0f }, kSpringCrossRange[2] = { 0.2f, 0.8f },
                    kZoneSoftRange[2] = { 0.5f, 1.0f }, kZoneFirmRange[2] = { 1.0f, 3.0f };
@@ -268,8 +270,7 @@ inline void SettingsClamp(GaugeSettings &s)
     s.clutchHeat = SettingsRange(s.clutchHeat, kClutchHeatRange[0], kClutchHeatRange[1]);
     s.springScale = SettingsRange(s.springScale, kSuspScaleRange[0], kSuspScaleRange[1]);
     s.dampingScale = SettingsRange(s.dampingScale, kSuspScaleRange[0], kSuspScaleRange[1]);
-    s.travelMinScale = SettingsRange(s.travelMinScale, kSuspScaleRange[0], kSuspScaleRange[1]);
-    s.travelMaxScale = SettingsRange(s.travelMaxScale, kSuspScaleRange[0], kSuspScaleRange[1]);
+    s.extraTravel = SettingsRange(s.extraTravel, kExtraTravelRange[0], kExtraTravelRange[1]);
     s.damperCurve = s.damperCurve < 0 || s.damperCurve >= kDamperCurves ? 0 : s.damperCurve;
     s.lowCompression = SettingsRange(s.lowCompression, kDamperRange[0], kDamperRange[1]);
     s.highCompression = SettingsRange(s.highCompression, kDamperRange[0], kDamperRange[1]);
@@ -407,6 +408,7 @@ enum { kWarnClutch, kWarnEngine, kWarnBoxes };
 struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWarnBoxes]; int engineDamage, engineCapacity; char truck[96]; bool truckOwn, smtInstalled, gearboxHeld; char map[96], mapFrom[64]; bool mapOwn; float ambientC;
                    int pullTest, pullPhase; const char *pullWhy;
                    float ambientDay, ambientNight, hour; // the map's day and night (with mapOwn), the hour of the game's day (-1 not known)
+                   bool suspKnown; float suspFile[3][2]; // the driven truck's file: spring, damping and the compression end (m), [front, rear] (wheel 0 and the last)
                    char gearbox[96]; float gearHold; bool gearHoldOwn; // the driven truck's gearbox (its key, "" for none), the seconds each gear is held going up with the mod's engine, and whether its file sets them
                    int autoClass; bool autoByWeight; float massKg; // the class the automatic goes by for it, whether by its weight (no scales of its own), and that weight (0 not read)
                    char engine[96]; bool engineOwn, engineCustom; float enginePeakRpm; int engineAspiration, engineFuel; float engineTorque, engineFigure; // the driven truck's engine ("" not known): its own profile or not, a whole curve of its own in it, the peak torque's speed in force, turbo or not, its fuel (kFuelClass the class's), the share of its torque the truck gets (1 none set), and the engine's torque figure from the game's files (0 not read)

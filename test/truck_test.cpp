@@ -2477,6 +2477,35 @@ int main()
                                                                "a name matches nothing, and a named gearbox keeps its name");
     }
 
+    // the four sliders reworked (the addendum of 2 November, 13:18): at the defaults the tune reads each wheel's stock
+    // for the tab, front and rear apart, and writes nothing; ExtraTravel puts the compression end past the file's, from a
+    // 0.0 too, and never shortens; a spring past the game's 1 is held there
+    {
+        const uint64_t vtable = kExe + 0x23d9538, wf = 0x10500000, wr = 0x10510000, cf = 0x10520000, cr = 0x10530000;
+        for (uint64_t at : { wf, wr, cf, cr }) Block(at, 0x200);
+        Put(wf + 0x28, cf);
+        Put(wr + 0x28, cr);
+        Put(cf, vtable), Put(cr, vtable);
+        Put(cf + 0xC4, 0.026f), Put(cf + 0xC8, 0.4f), Put(cf + 0xB4, -0.6f), Put(cf + 0xB8, 0.4f);
+        Put(cr + 0xC4, 0.3f), Put(cr + 0xC8, 0.2f), Put(cr + 0xB4, 0.0f), Put(cr + 0xB8, 0.4f);   // a rear SuspensionMin of 0.0
+        TruckRefs r = {};
+        r.vehicle = kVehicle;
+        r.wheel[0] = wf, r.wheel[1] = wr;
+        r.wheels = 2;
+        auto at = [&](uint64_t c, uint32_t off) { float v = 0.0f; Peek(c + off, &v, sizeof v); return v; };
+        const float plain[kSuspValues] = { 1.0f, 1.0f, 1.0f, 1.0f };
+        SuspTune tune = {};
+        const bool none = SuspTuneStep(tune, kMemory, r, vtable, plain) == 0 && tune.wheel[0].stock[kSuspStrength] == 0.026f && tune.wheel[1].stock[kSuspStrength] == 0.3f &&
+                          tune.wheel[1].stock[kSuspMin] == 0.0f && at(cr + 0, 0xB4) == 0.0f && at(cf, 0xC4) == 0.026f;
+        const bool extra = SuspTuneStep(tune, kMemory, r, vtable, plain, nullptr, nullptr, nullptr, nullptr, 0.12f) == 2 && Near(at(cf, 0xB4), -0.72f) &&
+                           Near(at(cr, 0xB4), -0.12f) && at(cf, 0xB8) == 0.4f && tune.wheel[1].stock[kSuspMin] == 0.0f;
+        const bool back = SuspTuneStep(tune, kMemory, r, vtable, plain) == 2 && at(cf, 0xB4) == -0.6f && at(cr, 0xB4) == 0.0f;
+        const float four[kSuspValues] = { 4.0f, 1.0f, 1.0f, 1.0f };
+        const bool held = SuspTuneStep(tune, kMemory, r, vtable, four) == 2 && Near(at(cf, 0xC4), 0.104f) && at(cr, 0xC4) == 1.0f && tune.wheel[1].stock[kSuspStrength] == 0.3f;
+        Check(none && extra && back && held, "sliders: at the defaults the stock read front and rear and nothing written; ExtraTravel past the file's compression end, a 0.0 "
+                                             "included, and back to the file's at 0; a spring past the game's 1 held at 1, its stock kept");
+    }
+
     RealImageTest();
 
     printf(g_failed ? "TRUCK TEST FAILED (%d)\n" : "TRUCK TEST OK\n", g_failed);

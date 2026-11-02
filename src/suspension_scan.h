@@ -135,7 +135,7 @@ struct SuspTune
 // A value the tune may take as a stock: the spring and the damping a factor of Havok's, a limit on its side of 0.
 inline bool SuspValueSane(int k, float v)
 {
-    if (k == kSuspMin) return v < 0.0f && v > -5.0f;
+    if (k == kSuspMin) return v <= 0.0f && v > -5.0f; // a file's 0.0 is common (a modder's note, 2 November)
     if (k == kSuspMax) return v > 0.0f && v < 5.0f;
     return v > 0.0f && v <= 1.0f;
 }
@@ -170,13 +170,14 @@ struct SuspTuneTest
 };
 
 // One pass for the driven truck: vtable is the constraint's vtable in the game (0 = not known: nothing is done).
-// scale: SpringScale, DampingScale, TravelMinScale, TravelMaxScale. Returns the wheels written on this pass.
+// scale: SpringScale, DampingScale and two factors of 1 (the travel's ends go by extra). Returns the wheels written on
+// this pass. extra: metres past the file's compression end (ExtraTravel), 0 for the file's; it never shortens.
 // restored: the values of the truck driven before put back on this pass (another truck is driven now).
 // test: SuspStepTest's write, nullptr for none. damper: per wheel, the damper owns its damping (suspension_step.h):
 // the tune neither writes it nor takes what it finds there for a new stock, so the damper's values never compound
 // (review 15); nullptr for none. spring: the same for the strength (the spring's features, BRIEF_suspension_extras.md).
 inline int SuspTuneStep(SuspTune &t, const TruckMemory &m, const TruckRefs &r, uint64_t vtable, const float scale[kSuspValues], int *restored = nullptr,
-                        const SuspTuneTest *test = nullptr, const bool *damper = nullptr, const bool *spring = nullptr)
+                        const SuspTuneTest *test = nullptr, const bool *damper = nullptr, const bool *spring = nullptr, float extra = 0.0f)
 {
     // the fields the physics thread owns on a wheel: the damping (the damper, the zones) and the strength (the spring's features)
     auto owned = [&](int i, int k) { return (damper && damper[i] && k == kSuspDamping) || (spring && spring[i] && k == kSuspStrength); };
@@ -221,6 +222,7 @@ inline int SuspTuneStep(SuspTune &t, const TruckMemory &m, const TruckRefs &r, u
             float want = w.stock[k] * scale[k];
             if (k == kSuspStrength || k == kSuspDamping) want = fminf(1.0f, want);
             if (scale[k] == 1.0f) want = w.stock[k];
+            if (k == kSuspMin && extra > 0.0f) want = w.stock[k] - extra; // past the file's end, from a 0.0 too
             if (test && test->wheel == i && test->value == k && test->factor != 1.0f) want *= test->factor;
             const bool tuned = want != w.stock[k];
             if (now[k] == want || (!tuned && !w.ours[k])) continue;

@@ -761,24 +761,44 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     InterlockedExchange(&g_pageCapturing, st.capture >= 1 ? (LONG)GetTickCount() : 0);
 
     ImGui::SeparatorText("Suspension");
+    // under each slider the driven truck's file, front and rear, and what is in force now (the addendum of 2 November,
+    // 13:18): a spring or a damping the game holds at 1 is said so
+    auto fileLine = [&](int k, float factor) {
+        if (!view.suspKnown)
+        {
+            ImGui::TextDisabled("No truck driven: its file's figures show here.");
+            return;
+        }
+        const float f = view.suspFile[k][0], r = view.suspFile[k][1];
+        const float nf = fminf(1.0f, f * factor), nr = fminf(1.0f, r * factor);
+        const bool held = f * factor > 1.0f || r * factor > 1.0f;
+        ImGui::TextDisabled("File %.3g / %.3g (front / rear), now %.3g / %.3g%s", f, r, nf, nr, held ? ", held at the game's limit of 1" : "");
+    };
     PageLabel("Spring", labelX);
     ImGui::SetNextItemWidth(w);
-    changed(ImGui::SliderFloat("##springscale", &s.springScale, kSuspScaleRange[0], kSuspScaleRange[1], "x%.2f", ImGuiSliderFlags_AlwaysClamp));
-    PageTip("A test: each wheel's spring as a factor of the truck's own suspension. Above 1 stiffer and higher, below 1 softer. 1 = the truck's own.");
+    changed(ImGui::SliderFloat("##springscale", &s.springScale, kSuspScaleRange[0], kSuspScaleRange[1], "x%.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic));
+    PageTip("A test: each wheel's spring as a factor of the truck's own suspension. Above 1 stiffer and higher, below 1 softer. 1 = the truck's own. The "
+            "game holds a wheel's spring at 1, so a factor past 1 over the file's figure cannot act in full.");
+    fileLine(0, s.springScale);
     PageLabel("Damping", labelX);
     ImGui::SetNextItemWidth(w);
-    changed(ImGui::SliderFloat("##dampingscale", &s.dampingScale, kSuspScaleRange[0], kSuspScaleRange[1], "x%.2f", ImGuiSliderFlags_AlwaysClamp));
-    PageTip("A test: each wheel's damping as a factor of the truck's own. Above 1 the body settles faster, below 1 it bounces longer. 1 = the truck's own.");
-    PageLabel("Travel min", labelX);
+    changed(ImGui::SliderFloat("##dampingscale", &s.dampingScale, kSuspScaleRange[0], kSuspScaleRange[1], "x%.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic));
+    PageTip("A test: each wheel's damping as a factor of the truck's own. Above 1 the body settles faster, below 1 it bounces longer. 1 = the truck's own. "
+            "The game holds a wheel's damping at 1.");
+    fileLine(1, s.dampingScale);
+    PageLabel("Extra travel", labelX);
     ImGui::SetNextItemWidth(w);
-    changed(ImGui::SliderFloat("##travelminscale", &s.travelMinScale, kSuspScaleRange[0], kSuspScaleRange[1], "x%.2f", ImGuiSliderFlags_AlwaysClamp));
-    PageTip("A test: how far each wheel can rise into the body, the compression end of its travel (the truck file's SuspensionMin), as a factor of the truck's own. "
-            "1 = the truck's own.");
-    PageLabel("Travel max", labelX);
-    ImGui::SetNextItemWidth(w);
-    changed(ImGui::SliderFloat("##travelmaxscale", &s.travelMaxScale, kSuspScaleRange[0], kSuspScaleRange[1], "x%.2f", ImGuiSliderFlags_AlwaysClamp));
-    PageTip("A test: how far each wheel can drop, the droop end of its travel (the truck file's SuspensionMax), as a factor of the truck's own. Wheels rarely "
-            "reach it, as the spring lets them hang near their zero. 1 = the truck's own.");
+    changed(ImGui::SliderFloat("##extratravel", &s.extraTravel, kExtraTravelRange[0], kExtraTravelRange[1], s.extraTravel > 0.0f ? "%.0f cm" : "off", ImGuiSliderFlags_AlwaysClamp));
+    PageTip("A test: how much further each wheel can rise into the body, in cm past the compression end the truck's file sets (its SuspensionMin). It "
+            "works on a file that sets 0 too. It never shortens the travel; the bump stops are the way to stop a wheel earlier.");
+    if (!view.suspKnown) ImGui::TextDisabled("No truck driven: its file's figures show here.");
+    else
+    {
+        const float f = view.suspFile[2][0], r = view.suspFile[2][1], extra = s.extraTravel / 100.0f;
+        ImGui::TextDisabled("File %.2f / %.2f m (front / rear), now %.2f / %.2f m", f, r, f - extra, r - extra);
+    }
+    if (s.extraTravel > 0.0f) ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "Past the file's end a wheel can go into the body.");
+
     // the damper (a test, BRIEF_suspension_damper.md): its curve, the four factors and the knee, or a preset of them
     PageLabel("Damper", labelX);
     static const char *const curves[kDamperCurves] = { "Linear", "Digressive", "Progressive" };

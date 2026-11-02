@@ -554,6 +554,32 @@ int wmain(int argc, wchar_t **argv)
             printf("%s settings tab (%ls): three frames untouched report no change\n", act ? "FAIL" : "ok  ", tab.file);
             if (act) g_failed++;
         }
+        // the Suspension section with a truck's file read (the Arocs' front and rear): the spring past the game's 1 and
+        // travel past the file's end, so the notes show (the addendum of 2 November, 13:18)
+        {
+            GaugeSettings t = s;
+            t.springScale = 4.0f;
+            t.dampingScale = 3.0f;
+            t.extraTravel = 12.0f;
+            GaugeView v = view;
+            strcpy_s(v.truck, "arocs/1180732");
+            v.suspKnown = true;
+            const float file[3][2] = { { 0.028f, 0.032f }, { 0.5f, 0.3f }, { -0.6f, -0.44f } };
+            memcpy(v.suspFile, file, sizeof file);
+            PageState st;
+            int act = 0;
+            wchar_t path[MAX_PATH];
+            swprintf_s(path, L"%s\\settings_suspension.png", out);
+            RenderPng(path, 1100, 7000, [&](ImDrawList *, ImDrawList *) {
+                ImGui::SetNextWindowPos(ImVec2(10, 10));
+                ImGui::SetNextWindowSize(ImVec2(1080, 0));
+                ImGui::Begin("Gauges", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+                act |= SettingsPage(t, v, st, 0);
+                ImGui::End();
+            }, 3);
+            printf("%s settings tab (settings_suspension.png): three frames untouched report no change\n", act ? "FAIL" : "ok  ");
+            if (act) g_failed++;
+        }
     }
 
     ImGui_ImplDX11_Shutdown();
