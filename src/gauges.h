@@ -120,7 +120,8 @@ struct GaugeSettings
     float rideFront, rideRear; // RideFront, RideRear: each axle's ride height in cm (kRideRange), its attach points shifted; middle axles go with the rear (a test)
     float swayFront, swayRear; // SwayFront, SwayRear: each axle's sway bar as a share of its spring rate (kSwayRange), 0 none (a test)
     bool suspDisplay;        // SuspDisplay: the suspension display, each wheel's travel, its end hits and whether it hangs, and the articulation
-    bool airSuspension;      // AirSuspension: each axle held at its rest place of the first standstill, cargo or not; BindRideUp and BindRideDown move it (a test)
+    bool airSuspension;      // AirSuspension: each wheel held at its rest place of the first standstill, cargo or not; BindRideUp and BindRideDown move it (a test)
+    bool airHorizon;         // AirHorizon: with AirSuspension, the body's pitch and roll levelled to the horizon instead of to the wheels (a test)
     int suspStepTest;        // SuspStepTest (ini only, a test, with Probe=1): every 20 s wheel 0's spring at half for 1 s standing (1), its damping at a tenth for 0.5 s moving (2), or its attach point 2 cm toward the droop for 1 s standing (3)
     int soundVolume;        // SoundVolume: how loud the turbo's flutter and the oil warning are, 0 to 100; 0 = no sound
     bool soundsOnly;         // SoundsOnly: the sounds are played and the cluster is not drawn

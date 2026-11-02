@@ -835,6 +835,10 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             "lean (height, pitch and roll only, so a twist on rough ground stays); it settles in about 3 s under 10 km/h, and an axle with a wheel hanging or on its stop keeps its height. Ride up and Ride down "
             "under Locks raise and lower it 2 cm a press, within 10 cm, under 20 km/h, for this truck. Turned off, it goes back over a few seconds. "
             "It stops as the ride height does.");
+    PageLabel("Level to horizon", labelX);
+    changed(ImGui::Checkbox("##airhorizon", &s.airHorizon));
+    PageTip("A test, with Air suspension: the body's lean and slope are levelled to the horizon instead of to the wheels, under 10 km/h. "
+            "The 12 cm of shift give about 7 degrees side to side; past that it gets as close as it can.");
     if (s.airSuspension)
     {
         if (!view.air) ImGui::TextDisabled("Height %+d cm; no truck it runs on", view.airHeight);

@@ -240,6 +240,8 @@ struct SuspStepBlock
     float springK[kMaxWheels];     // its strength as the tune gives it (stock times SpringScale), for the bar
     bool air;                      // AirSuspension (build C): each axle held at its rest place, on top of the ride height
     float airKeys;                 // the keys' height set, m toward the droop (followed in 3 s; faded out with air off)
+    bool horizon;                  // AirHorizon: pitch and roll levelled to the horizon, by the chassis's tilt below
+    float tiltForward, tiltLeft;   // how far the chassis's forward and left axes point up (their y, the tilt lamp's), NaN not known
     bool display;                  // the display's figures are published each step
     float travelMax[kMaxWheels];   // the droop end, for the display's bars
     uint32_t seal;
@@ -295,7 +297,8 @@ struct SuspLevel
     float ref[kMaxWheels];         // each wheel's rest place from the stock attach point, less the ride height's shift, m
     float level[kMaxWheels];       // the levelling's shift, m toward the droop: the plane below at the wheel's place
     float height, pitch, roll;     // the levelling's plane about the wheels' centre (m, m per m forward, m per m to the left) (review R6)
-    float dx[kMaxWheels], dy[kMaxWheels]; // each wheel's place from that centre, set at the take
+    float xc, yc;                  // that centre in the chassis (m), and each wheel's place from it, set at the take
+    float dx[kMaxWheels], dy[kMaxWheels];
     float still;                   // s under kLevelDrive without a break: the levelling acts only after kLevelStand of it
     float keys;                    // the keys' height in force, m, following the one set with the same time constant
 };
@@ -629,9 +632,10 @@ static const float kLevelTau = 3.0f, kLevelStand = 1.0f, kLevelStill = 0.1f, kLe
 // keys' height set (m), along and across: its place in the chassis, forward and to the left (m). An axle is a wheel and
 // its partner, held while either is, and a held axle is left out of the plane. Where the wheels left have no spread
 // along (one axle) or across, the plane has no pitch or no roll. The shift kept is held so that it and the ride height
-// stay within kShiftMost. True on the step the rest places are taken.
+// stay within kShiftMost. tilt: none, or how far the chassis's forward and left axes point up, for AirHorizon. True on
+// the step the rest places are taken.
 inline bool SuspLevelStep(SuspLevel &l, int n, const int *partner, const float *along, const float *across, const float *g, const float *r,
-                          const bool *placed, const bool *held, float keys, float speed, float dt)
+                          const bool *placed, const bool *held, float keys, float speed, float dt, const float *tilt = nullptr)
 {
     if (!(dt > 0.0f)) return false;
     l.keys += (keys - l.keys) * dt / kLevelTau;
@@ -662,9 +666,9 @@ inline bool SuspLevelStep(SuspLevel &l, int n, const int *partner, const float *
         if (l.stand < kLevelStand) return false;
         for (int i = 0; i < n; i++) l.ref[i] = l.count[i] > 0.0f ? l.sum[i] / l.count[i] : 0.0f;
         // the plane's centre: the wheels' mean place in the chassis
-        float xc = 0.0f, yc = 0.0f;
-        for (int i = 0; i < n; i++) xc += along[i] / n, yc += across[i] / n;
-        for (int i = 0; i < n; i++) l.dx[i] = along[i] - xc, l.dy[i] = across[i] - yc;
+        l.xc = l.yc = 0.0f;
+        for (int i = 0; i < n; i++) l.xc += along[i] / n, l.yc += across[i] / n;
+        for (int i = 0; i < n; i++) l.dx[i] = along[i] - l.xc, l.dy[i] = across[i] - l.yc;
         l.taken = true;
         return true;
     }
@@ -700,9 +704,12 @@ inline bool SuspLevelStep(SuspLevel &l, int n, const int *partner, const float *
     // height within kShiftMost (a wheel already past it may only come back); each wheel's shift is the plane at its place,
     // a held one too, so the shifts never twist the chassis (review R6)
     const float k = dt / kLevelTau;
-    const float xc = along[0] - l.dx[0], yc = across[0] - l.dy[0];
-    const float dh = k * (ex + pitch * (xc - x0) + roll * (yc - y0));
-    const float dp = k * pitch, dr = k * roll;
+    const float dh = k * (ex + pitch * (l.xc - x0) + roll * (l.yc - y0));
+    float dp = k * pitch, dr = k * roll;
+    // AirHorizon (the author, 2 November: his car's body is level on uneven ground): the pitch and roll follow the
+    // chassis's own tilt instead, a nose down raising the front and a left side up lowering it; the height stays the
+    // wheels'
+    if (tilt && isfinite(tilt[0]) && isfinite(tilt[1])) dp = -k * tilt[0], dr = -k * tilt[1];
     float part = 1.0f;
     for (int i = 0; i < n; i++)
     {
@@ -794,7 +801,8 @@ inline bool SuspAttachStep(SuspStepState &s, const SuspStepBlock &b, const float
             held[i] = placed[i] && (x >= 0.0f || (b.travel[i] > 0.0f && -x >= b.travel[i]));
         }
         if (!s.level.action) s.level.action = b.action;
-        if (SuspLevelStep(s.level, n, b.partner, b.along, b.across, g, r, placed, held, b.airKeys, speed, dt)) InterlockedIncrement(&s.levelTaken);
+        const float tilt[2] = { b.tiltForward, b.tiltLeft };
+        if (SuspLevelStep(s.level, n, b.partner, b.along, b.across, g, r, placed, held, b.airKeys, speed, dt, b.horizon ? tilt : nullptr)) InterlockedIncrement(&s.levelTaken);
     }
     else if (s.level.action && SuspLevelFade(s.level, n, dt)) s.level = SuspLevel{};
     if (s.level.action)

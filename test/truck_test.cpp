@@ -2908,6 +2908,44 @@ int main()
               "air suspension (review R6): a front axle held for 5 s while the rear levels a side load, then let go, keeps every shift within 1 mm of one plane");
     }
 
+    // AirHorizon (the author, 2 November): a rigid 4x4 on springs standing on ground 8 % up to its left and 4 % down to
+    // its nose comes level to the horizon within 0.3 degrees in 20 s; on 20 % to the left the shifts stop at 12 cm and
+    // the lean is what is left; with it off the body stays with the ground
+    {
+        const float dt = 1.0f / 60.0f;
+        const int partner[4] = { 1, 0, 3, 2 };
+        const bool placed[4] = { true, true, true, true }, free4[4] = {};
+        const float r[4] = {};
+        // the corners' heights: the least-squares plane through the ground plus the shifts; the tilt is its slope
+        auto stand = [&](float side, float nose, bool horizon, float &tiltF, float &tiltL, float &most) {
+            SuspLevel l = {};
+            float g[4], ground[4], B[4];
+            for (int i = 0; i < 4; i++) ground[i] = side * kAcross4[i] + nose * kAlong4[i];
+            most = 0.0f;
+            for (int k = 0; k < 60 * 21; k++)
+            {
+                float mean = 0.0f, px = 0.0f, py = 0.0f;
+                for (int i = 0; i < 4; i++) mean += (ground[i] + l.level[i]) / 4.0f;
+                for (int i = 0; i < 4; i++)
+                    px += (ground[i] + l.level[i]) * kAlong4[i] / (4.0f * 1.5f * 1.5f), py += (ground[i] + l.level[i]) * kAcross4[i] / (4.0f * 0.8f * 0.8f);
+                for (int i = 0; i < 4; i++) B[i] = mean + px * kAlong4[i] + py * kAcross4[i], g[i] = B[i] - ground[i] - 0.2f;
+                tiltF = px, tiltL = py;
+                const float tilt[2] = { tiltF, tiltL };
+                SuspLevelStep(l, 4, partner, kAlong4, kAcross4, g, r, placed, free4, 0.0f, 0.0f, dt, horizon ? tilt : nullptr);
+                for (int i = 0; i < 4; i++) most = fmaxf(most, fabsf(l.level[i]));
+            }
+        };
+        float f1, l1, m1, f2, l2, m2, f3, l3, m3;
+        stand(0.08f, -0.04f, true, f1, l1, m1);
+        stand(0.20f, 0.0f, true, f2, l2, m2);
+        stand(0.08f, -0.04f, false, f3, l3, m3);
+        printf("     air suspension to the horizon: 8 %% and 4 %% end at %.4f and %.4f; 20 %% ends at %.3f with the shift at %.3f m; off it stays %.3f and %.3f\n",
+               l1, f1, l2, m2, l3, f3);
+        Check(fabsf(l1) < 0.005f && fabsf(f1) < 0.005f && m2 <= kShiftMost + 1e-5f && fabsf(l2 - (0.20f - kShiftMost / 0.8f)) < 0.01f && fabsf(l3 - 0.08f) < 1e-4f &&
+                  fabsf(f3 + 0.04f) < 1e-4f,
+              "air suspension AirHorizon: a 4x4 on 8 % to a side and 4 % to its nose comes level within 0.3 degrees; on 20 % it stops at 12 cm; off it stays with the ground");
+    }
+
     RealImageTest();
 
     printf(g_failed ? "TRUCK TEST FAILED (%d)\n" : "TRUCK TEST OK\n", g_failed);

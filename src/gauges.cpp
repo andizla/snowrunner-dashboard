@@ -513,6 +513,7 @@ static void WriteIni(const GaugeSettings &s)
     num(L"SwayRear", s.swayRear);
     whole(L"SuspDisplay", s.suspDisplay ? 1 : 0);
     whole(L"AirSuspension", s.airSuspension ? 1 : 0);
+    whole(L"AirHorizon", s.airHorizon ? 1 : 0);
     whole(L"DamperCurve", s.damperCurve);
     num(L"LowCompression", s.lowCompression);
     num(L"HighCompression", s.highCompression);
@@ -820,7 +821,8 @@ static void ReadIni(GaugeSettings &s)
                         L"; the game holds each at 1). ExtraTravel: cm added past the file's compression end, 0 to 30 (0 = the file's; past it a wheel may go into the body).\n"
                         L"; RideFront, RideRear: each axle's ride height in cm, -10 to 10; SwayFront, SwayRear: a sway bar, 0 to 0.3 of the axle's spring rate (BindSwayDisconnect\n"
                         L"; toggles them). Both move the attach point and stop on a truck whose game moves it. SuspDisplay=1 draws each wheel's travel. All tests, off by default.\n"
-                        L"; AirSuspension=1 holds each axle at its rest place of the first standstill, cargo or not (3 s to settle); BindRideUp, BindRideDown move it 2 cm under 20 km/h.\n"
+                        L"; AirSuspension=1 holds each wheel at its rest place of the first standstill, cargo or not (3 s to settle, under 10 km/h); AirHorizon=1 levels the body\n"
+                        L"; to the horizon instead (about 7 degrees at most). BindRideUp, BindRideDown move it 2 cm under 20 km/h.\n"
                         L"; DamperCurve 0 linear, 1 digressive, 2 progressive; LowCompression, HighCompression, LowRebound, HighRebound: the damping\n"
                         L"; under and over DamperKnee (m/s, 0.02 to 0.5), rising and falling, 0.25 to 4 (a test; 1 and linear = the truck's own).\n"
                         L"; BumpStops=1: force (BumpForce, 1 to 6, the spring's at the end times it) and damping (BumpDamping, 1 to 4) over the last BumpZone m (0.03 to 0.2) of the\n"
@@ -951,6 +953,7 @@ static void ReadIni(GaugeSettings &s)
     }
     s.suspDisplay = IniInt(L"SuspDisplay", s.suspDisplay ? 1 : 0, ini) != 0;
     s.airSuspension = IniInt(L"AirSuspension", s.airSuspension ? 1 : 0, ini) != 0;
+    s.airHorizon = IniInt(L"AirHorizon", s.airHorizon ? 1 : 0, ini) != 0;
     s.damperCurve = IniInt(L"DamperCurve", s.damperCurve, ini);
     s.lowCompression = IniFloat(L"LowCompression", s.lowCompression, ini);
     s.highCompression = IniFloat(L"HighCompression", s.highCompression, ini);
@@ -3171,7 +3174,7 @@ static void SuspDamperBefore(SuspStepWatch &p, const TruckMemory &m, const Truck
 // The block for the driven truck (with Probe=1 or the damper on, and a truck), its generation, the windows logged and
 // the test's trace kept. Returns the generation, which the 20 Hz travel probe goes by too.
 static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const TruckRefs &r, const TruckRaw &t, const GaugeSettings &s, const SuspTune &tune, bool found,
-                             ULONGLONG now, bool swayOff, int airHeight)
+                             ULONGLONG now, bool swayOff, int airHeight, const TiltModel &tilt)
 {
     const DamperSet damper = DamperFrom(s);
     const SpringSet spring = SpringFrom(s);
@@ -3303,6 +3306,8 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
     b.display = s.suspDisplay;
     b.air = shifting && s.airSuspension;
     b.airKeys = b.air ? airHeight / 100.0f : 0.0f;
+    b.horizon = b.air && s.airHorizon;
+    b.tiltForward = tilt.running ? tilt.forward : NAN, b.tiltLeft = tilt.running ? tilt.left : NAN;
     for (int i = 0; i < kMaxWheels; i++)
     {
         b.constraint[i] = 0;
@@ -3483,7 +3488,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         float v = -1.0f;
         if (m.get(w.refs.wheel[0] + kSuspConstraintAt, c) && m.get(c + kSuspValueAt[stepTest->value], v)) w.step.value = v;
     }
-    const uint32_t generation = SuspStepPass(w.step, m, w.refs, raw, s, w.tune, w.found, now, w.swayOff, w.airHeight);
+    const uint32_t generation = SuspStepPass(w.step, m, w.refs, raw, s, w.tune, w.found, now, w.swayOff, w.airHeight, w.tilt);
     if (probe && w.found) SuspTravelProbe(w.travel, w.travelAt, m, w.refs, raw, now, generation);
     WorldRead(m, w.found ? w.refs.control : 0, world);
     // a load ended (the game's loading screen gone): the truck that drives on under the game's id it had before the
@@ -5190,7 +5195,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 112, "ini: the help text survives a write (112 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 113, "ini: the help text survives a write (113 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());
