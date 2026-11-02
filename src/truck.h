@@ -956,7 +956,9 @@ inline bool StallJobDropBurn(StallJob &j)
 // thread for the truck it updates, before the update runs, and hands back the result and + 0x74 and + 0x70 right
 // after the shift. One job at a time: the fields are written first and the state last, so the game's thread never
 // meets a half-written one. After a shift the game's thread also watches + 0x70 until it shows the gear asked.
-enum { kShiftIdle, kShiftPosted, kShiftDealt };
+// Posted to dealing is claimed by an interlocked exchange on the game's thread, and only a posted job can be dropped,
+// so a drop never frees a job the game's thread is still writing (the reviewer, F1).
+enum { kShiftIdle, kShiftPosted, kShiftDealing, kShiftDealt };
 struct ShiftJob
 {
     volatile LONG state;
@@ -1004,6 +1006,7 @@ inline bool ShiftJobFrame(ShiftJob &j, EngageWatch &e, const TruckMemory &m, uin
 {
     uint64_t vehicle = 0;
     if (j.state != kShiftPosted || !m.get(first + 0x20, vehicle) || vehicle != j.vehicle) return false;
+    if (InterlockedCompareExchange(&j.state, kShiftDealing, kShiftPosted) != kShiftPosted) return false;
     j.thread = thread;
     j.frame = frame;
     if (j.flagDown) m.put(j.action + 0x3C, (uint8_t)0);

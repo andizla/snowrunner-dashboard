@@ -914,7 +914,11 @@ int main()
             const bool late = ShiftJobDrop(sj, kVehicle, 8100, 331) && sj.state == kShiftIdle;
             ShiftJobPost(sj, kVehicle, kAction, true, 1, 2, false, false, 0.0f, 400, 8000);
             const bool otherTruck = ShiftJobDrop(sj, kOtherVehicle, 8001, 400) && sj.state == kShiftIdle;
-            Check(posted && other && dealt && order && fields && notYet && follows && refused && kept && late && otherTruck,
+            // one the game's thread is dealing is never dropped, nor dealt a second time (F1)
+            sj.state = kShiftDealing;
+            const bool dealing = !ShiftJobDrop(sj, kOtherVehicle, 9000, 500) && !ShiftJobFrame(sj, ew, kMemory, kShiftFirst, shift, 501, 7) &&
+                                 sj.state == kShiftDealing && !ShiftJobPost(sj, kVehicle, kAction, true, 1, 2, false, false, 0.0f, 500, 9000);
+            Check(posted && other && dealt && order && fields && notYet && follows && refused && kept && late && otherTruck && dealing,
                   "shift job (review 17, step 1): one at a time, dealt only for its truck, the flag down before ShiftGear and the power after it; + 0x74 "
                   "and + 0x70 right after, + 0x70 watched until it follows; a refused shift starts no watch; dropped after a second and 30 updates, or on "
                   "another truck");
