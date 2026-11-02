@@ -235,7 +235,8 @@ struct SuspStepBlock
     float testShift;               // SuspStepTest=3: wheel 0's shift on top, m
     int partner[kMaxWheels];       // the other wheel of its axle, -1 none
     bool isLeft[kMaxWheels];
-    float sway[kMaxWheels];        // its pair's bar as a share of the axle's spring rate, 0 none or disconnected
+    float along[kMaxWheels], across[kMaxWheels]; // its place in the chassis's frame, forward and to the left (m), for the air suspension's plane
+    float sway[kMaxWheels];       // its pair's bar as a share of the axle's spring rate, 0 none or disconnected
     float springK[kMaxWheels];     // its strength as the tune gives it (stock times SpringScale), for the bar
     bool air;                      // AirSuspension (build C): each axle held at its rest place, on top of the ride height
     float airKeys;                 // the keys' height set, m toward the droop (followed in 3 s; faded out with air off)
@@ -609,9 +610,12 @@ inline void SuspSwayShift(float setting, float cL, float cR, float kL, float kR,
 
 // ---- the air suspension (the addendum of 2 November 13:47: build C) ----
 // At the first standstill after the truck is taken (kLevelStand s under kLevelStill m/s), each wheel's place along the
-// axis from its stock attach point, less the ride height's shift then, is its rest place. From then on each wheel's
-// levelling shift follows its own error with a time constant of kLevelTau, so cargo no longer makes the truck sag or
-// lean to a side (the author, 2 November: "it should level it side to side too"). It acts after kLevelStand s under
+// axis from its stock attach point, less the ride height's shift then, is its rest place. From then on the levelling
+// follows the wheels' errors with a time constant of kLevelTau, so cargo no longer makes the truck sag, pitch or lean to
+// a side (the author, 2 November: "it should level it side to side too"). A rigid chassis can follow only its height,
+// pitch and roll: its twist and a middle axle's place against the others are the ground's. So the errors are fitted by
+// a plane over the wheels' places in the chassis (least squares), and each wheel follows the plane at its place, never
+// its own error, so a cross-axle crawl or a hump under a middle axle never winds it up (review, R5). It acts after kLevelStand s under
 // kLevelDrive (10 km/h, the author's), and an axle with a wheel hanging or at its compression end keeps its shift, so a
 // crest, a ditch or a log never winds it up (review of build C, R1). The ride height's shift (the sliders and the keys)
 // goes on top of the rest place, so the levelling never takes it back. The keys' height follows the one set with the
@@ -620,11 +624,12 @@ static const float kLevelTau = 3.0f, kLevelStand = 1.0f, kLevelStill = 0.1f, kLe
 
 // One step of the levelling. g: each wheel's place from its stock attach point (x plus all its shift), r: its ride
 // height's shift without the keys, placed: it has a place, held: it hangs or is at its compression end, keys: the
-// keys' height set (m). Each wheel levels on its own place; an axle is a wheel and its partner, held while either is.
-// The shift kept is held so that it and the ride height stay within kShiftMost. True on the step the rest places are
-// taken.
-inline bool SuspLevelStep(SuspLevel &l, int n, const int *partner, const float *g, const float *r, const bool *placed, const bool *held, float keys,
-                          float speed, float dt)
+// keys' height set (m), along and across: its place in the chassis, forward and to the left (m). An axle is a wheel and
+// its partner, held while either is, and a held axle is left out of the plane. Where the wheels left have no spread
+// along (one axle) or across, the plane has no pitch or no roll. The shift kept is held so that it and the ride height
+// stay within kShiftMost. True on the step the rest places are taken.
+inline bool SuspLevelStep(SuspLevel &l, int n, const int *partner, const float *along, const float *across, const float *g, const float *r,
+                          const bool *placed, const bool *held, float keys, float speed, float dt)
 {
     if (!(dt > 0.0f)) return false;
     l.keys += (keys - l.keys) * dt / kLevelTau;
@@ -658,12 +663,39 @@ inline bool SuspLevelStep(SuspLevel &l, int n, const int *partner, const float *
         return true;
     }
     if (l.still < kLevelStand) return false;
+    // the plane e = mean + pitch (x - x0) + roll (y - y0) through the errors of the wheels not held
+    float err[kMaxWheels];
+    bool in[kMaxWheels];
+    float count = 0.0f, ex = 0.0f, x0 = 0.0f, y0 = 0.0f;
     for (int i = 0; i < n; i++)
     {
-        if (!placed[i] || axleHeld[i] || !(l.count[i] > 0.0f)) continue;
-        const float err = l.ref[i] + r[i] + l.keys - g[i];
+        in[i] = placed[i] && !axleHeld[i] && l.count[i] > 0.0f;
+        if (!in[i]) continue;
+        err[i] = l.ref[i] + r[i] + l.keys - g[i];
+        count += 1.0f, ex += err[i], x0 += along[i], y0 += across[i];
+    }
+    if (!(count > 0.0f)) return false;
+    ex /= count, x0 /= count, y0 /= count;
+    float sxx = 0.0f, syy = 0.0f, sxy = 0.0f, sxe = 0.0f, sye = 0.0f;
+    for (int i = 0; i < n; i++)
+    {
+        if (!in[i]) continue;
+        const float x = along[i] - x0, y = across[i] - y0, e = err[i] - ex;
+        sxx += x * x, syy += y * y, sxy += x * y, sxe += x * e, sye += y * e;
+    }
+    const float spread = 0.01f * count; // 10 cm across the wheels, squared and summed
+    float pitch = 0.0f, roll = 0.0f;
+    const bool pitched = sxx > spread, rolled = syy > spread;
+    const float det = sxx * syy - sxy * sxy;
+    if (pitched && rolled && det > 1e-6f * sxx * syy) pitch = (sxe * syy - sye * sxy) / det, roll = (sye * sxx - sxe * sxy) / det;
+    else if (pitched) pitch = sxe / sxx;
+    else if (rolled) roll = sye / syy;
+    for (int i = 0; i < n; i++)
+    {
+        if (!in[i]) continue;
+        const float follow = ex + pitch * (along[i] - x0) + roll * (across[i] - y0);
         const float lo = -kShiftMost - r[i] - l.keys, hi = kShiftMost - r[i] - l.keys;
-        l.level[i] = fminf(hi, fmaxf(lo, l.level[i] + err * dt / kLevelTau));
+        l.level[i] = fminf(hi, fmaxf(lo, l.level[i] + follow * dt / kLevelTau));
     }
     return false;
 }
@@ -745,7 +777,7 @@ inline bool SuspAttachStep(SuspStepState &s, const SuspStepBlock &b, const float
             held[i] = placed[i] && (x >= 0.0f || (b.travel[i] > 0.0f && -x >= b.travel[i]));
         }
         if (!s.level.action) s.level.action = b.action;
-        if (SuspLevelStep(s.level, n, b.partner, g, r, placed, held, b.airKeys, speed, dt)) InterlockedIncrement(&s.levelTaken);
+        if (SuspLevelStep(s.level, n, b.partner, b.along, b.across, g, r, placed, held, b.airKeys, speed, dt)) InterlockedIncrement(&s.levelTaken);
     }
     else if (s.level.action && SuspLevelFade(s.level, n, dt)) s.level = SuspLevel{};
     if (s.level.action)

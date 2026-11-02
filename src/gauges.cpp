@@ -2333,6 +2333,7 @@ struct SuspStepWatch
     // was seen moving it on (the features stop there), the guard's count seen, and the display's newest figures
     int partner[kMaxWheels];
     bool isLeft[kMaxWheels], front[kMaxWheels], rearmost[kMaxWheels];
+    float forward[kMaxWheels], left[kMaxWheels]; // each wheel's place in the chassis's frame, for the air suspension's plane
     uint64_t attachStockC[kMaxWheels];
     float attachStock[kMaxWheels];
     uint64_t attachOffVehicle;
@@ -3242,6 +3243,8 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
                 forward[i] = local[0], left[i] = local[2];
             }
             SuspPairs(n, forward, left, p.partner, p.isLeft, p.front, p.rearmost);
+            memcpy(p.forward, forward, sizeof p.forward);
+            memcpy(p.left, left, sizeof p.left);
             // the limits as written now, for this generation's windows (the tune has written its pass by now)
             for (int i = 0; i < r.wheels && i < kMaxWheels; i++)
             {
@@ -3318,6 +3321,7 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
         b.ride[i] = (p.front[i] ? s.rideFront : s.rideRear) / 100.0f;
         b.partner[i] = i < b.wheels ? p.partner[i] : -1;
         b.isLeft[i] = p.isLeft[i];
+        b.along[i] = p.forward[i], b.across[i] = p.left[i];
         b.sway[i] = swayOff ? 0.0f : p.front[i] ? s.swayFront : s.swayRear;
         b.springK[i] = w.constraint == constraint[i] && SuspValueSane(kSuspStrength, w.stock[kSuspStrength]) ? fminf(1.0f, w.stock[kSuspStrength] * s.springScale) : 0.0f;
         if (!running || i >= b.wheels || p.frame.other[i] || !constraint[i] || w.constraint != constraint[i]) continue;

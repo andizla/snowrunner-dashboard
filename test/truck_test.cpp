@@ -2658,6 +2658,10 @@ int main()
         Check(first && kept && gone, "display figures: the place along the axis, a hit of the compression end kept for a second, a hanging wheel, the rest place taken standing");
     }
 
+    // the wheels' places in the chassis for the air suspension's plane: one axle of two, and two axles of two
+    static const float kAlong2[2] = { 0.0f, 0.0f }, kAcross2[2] = { 0.8f, -0.8f };
+    static const float kAlong4[4] = { 1.5f, 1.5f, -1.5f, -1.5f }, kAcross4[4] = { 0.8f, -0.8f, 0.8f, -0.8f };
+
     // the air suspension (build C): an axle of two corners at 60 steps a second, the springs and dampers at the game's
     // figures (1.6 Hz, 0.55), the shift written a step late. The rest place is taken after 1 s standing; half as much
     // load again sags it 9.5 cm without the levelling, and with it the axle comes back within 5 mm in 15 s without
@@ -2681,7 +2685,7 @@ int main()
                 v = (v + dt * (k * (shiftNow - z) - load)) / (1.0 + dt * c);
                 z += dt * v;
                 const float g[2] = { (float)z, (float)z }, r[2] = { ride, ride };
-                if (on && SuspLevelStep(l, 2, partner, g, r, placed, held, 0.0f, 0.0f, (float)dt)) takenAt = n;
+                if (on && SuspLevelStep(l, 2, partner, kAlong2, kAcross2, g, r, placed, held, 0.0f, 0.0f, (float)dt)) takenAt = n;
                 shiftNow = ride + (on ? l.level[0] : 0.0f);
                 if (on) most = fmaxf(most, l.level[0] + ride);
                 if (on && time > 5.0 && time < 20.0) past = fmax(past, z - (-0.19));
@@ -2704,12 +2708,12 @@ int main()
         const bool placed[2] = { true, true }, held[2] = { false, false };
         const float g[2] = { -0.2f, -0.2f }, r[2] = { 0.0f, 0.0f };
         bool any = false;
-        for (int n = 0; n < 120; n++) any |= SuspLevelStep(l, 2, partner, g, r, placed, held, 0.0f, 2.0f, 1.0f / 60.0f);
-        for (int n = 0; n < 30; n++) any |= SuspLevelStep(l, 2, partner, g, r, placed, held, 0.0f, 0.0f, 1.0f / 60.0f);
-        any |= SuspLevelStep(l, 2, partner, g, r, placed, held, 0.0f, 0.5f, 1.0f / 60.0f);
+        for (int n = 0; n < 120; n++) any |= SuspLevelStep(l, 2, partner, kAlong2, kAcross2, g, r, placed, held, 0.0f, 2.0f, 1.0f / 60.0f);
+        for (int n = 0; n < 30; n++) any |= SuspLevelStep(l, 2, partner, kAlong2, kAcross2, g, r, placed, held, 0.0f, 0.0f, 1.0f / 60.0f);
+        any |= SuspLevelStep(l, 2, partner, kAlong2, kAcross2, g, r, placed, held, 0.0f, 0.5f, 1.0f / 60.0f);
         int at = -1;
         for (int n = 0; n < 90 && at < 0; n++)
-            if (SuspLevelStep(l, 2, partner, g, r, placed, held, 0.0f, 0.0f, 1.0f / 60.0f)) at = n;
+            if (SuspLevelStep(l, 2, partner, kAlong2, kAcross2, g, r, placed, held, 0.0f, 0.0f, 1.0f / 60.0f)) at = n;
         Check(!any && at >= 58 && at <= 61 && Near(l.ref[0], -0.2f) && Near(l.ref[1], -0.2f),
               "air suspension: nothing is taken while moving, a move resets the second standing, and a full second standing takes each wheel's place");
     }
@@ -2736,25 +2740,25 @@ int main()
         const float r[2] = { 0.0f, 0.0f };
         SuspLevel l = {};
         const float rest[2] = { -0.2f, -0.2f };
-        for (int n = 0; n < 61; n++) SuspLevelStep(l, 2, partner, rest, r, placed, free2, 0.0f, 0.0f, dt);
+        for (int n = 0; n < 61; n++) SuspLevelStep(l, 2, partner, kAlong2, kAcross2, rest, r, placed, free2, 0.0f, 0.0f, dt);
         // a load put on while moving at 11 km/h: nothing for 10 s, then levelling once a second under 10 km/h
         const float sag[2] = { -0.25f, -0.25f };
-        for (int n = 0; n < 600; n++) SuspLevelStep(l, 2, partner, sag, r, placed, free2, 0.0f, 3.0f, dt);
+        for (int n = 0; n < 600; n++) SuspLevelStep(l, 2, partner, kAlong2, kAcross2, sag, r, placed, free2, 0.0f, 3.0f, dt);
         const bool movingHeld = l.level[0] == 0.0f;
-        for (int n = 0; n < 59; n++) SuspLevelStep(l, 2, partner, sag, r, placed, free2, 0.0f, 0.0f, dt);
+        for (int n = 0; n < 59; n++) SuspLevelStep(l, 2, partner, kAlong2, kAcross2, sag, r, placed, free2, 0.0f, 0.0f, dt);
         const bool waits = l.level[0] == 0.0f;
-        for (int n = 0; n < 120; n++) SuspLevelStep(l, 2, partner, sag, r, placed, free2, 0.0f, 0.0f, dt);
+        for (int n = 0; n < 120; n++) SuspLevelStep(l, 2, partner, kAlong2, kAcross2, sag, r, placed, free2, 0.0f, 0.0f, dt);
         const bool levels = l.level[0] > 0.01f;
         // an axle with one wheel hanging for 5 s, standing, its droop in the error: the shift kept, and after it lands
         const float kept = l.level[0];
         const float droop[2] = { 0.0f, -0.05f };
-        for (int n = 0; n < 300; n++) SuspLevelStep(l, 2, partner, droop, r, placed, hanging, 0.0f, 0.0f, dt);
+        for (int n = 0; n < 300; n++) SuspLevelStep(l, 2, partner, kAlong2, kAcross2, droop, r, placed, hanging, 0.0f, 0.0f, dt);
         const bool hangKept = l.level[0] == kept && l.level[1] == kept;
-        SuspLevelStep(l, 2, partner, sag, r, placed, free2, 0.0f, 0.0f, dt);
+        SuspLevelStep(l, 2, partner, kAlong2, kAcross2, sag, r, placed, free2, 0.0f, 0.0f, dt);
         const bool landed = fabsf(l.level[0] - kept) < 0.001f;
         // the keys' height follows in steps of dt / 3 s of the way, never at once
         SuspLevel k = l;
-        SuspLevelStep(k, 2, partner, sag, r, placed, free2, 0.04f, 0.0f, dt);
+        SuspLevelStep(k, 2, partner, kAlong2, kAcross2, sag, r, placed, free2, 0.04f, 0.0f, dt);
         const bool follows = k.keys > 0.0f && k.keys < 0.04f * dt / kLevelTau * 1.01f;
         // turned off with 0.08 levelled and 0.04 on the keys: each step moves each by at most dt / 3 s of it, and it ends
         SuspLevel f = {};
@@ -2783,10 +2787,10 @@ int main()
         const float overDitch[4] = { -0.2f, -0.2f, 0.0f, -0.1f }, landed[4] = { -0.2f, -0.2f, -0.21f, -0.21f };
         SuspLevel l = {};
         bool early = false;
-        for (int n = 0; n < 300; n++) early |= SuspLevelStep(l, 4, partner, overDitch, r, placed, rearHanging, 0.0f, 0.0f, dt);
+        for (int n = 0; n < 300; n++) early |= SuspLevelStep(l, 4, partner, kAlong4, kAcross4, overDitch, r, placed, rearHanging, 0.0f, 0.0f, dt);
         int at = -1;
         for (int n = 0; n < 90 && at < 0; n++)
-            if (SuspLevelStep(l, 4, partner, landed, r, placed, free4, 0.0f, 0.0f, dt)) at = n;
+            if (SuspLevelStep(l, 4, partner, kAlong4, kAcross4, landed, r, placed, free4, 0.0f, 0.0f, dt)) at = n;
         Check(!early && at >= 58 && at <= 61 && Near(l.ref[2], -0.21f) && Near(l.ref[0], -0.2f),
               "air suspension (review R4): standing 5 s with a rear wheel hanging takes nothing; after it lands a second standing takes the landed place");
     }
@@ -2800,23 +2804,81 @@ int main()
         const bool placed[2] = { true, true }, free2[2] = { false, false };
         const float r[2] = {}, rest[2] = { -0.2f, -0.2f }, sag[2] = { 0.04f, 0.01f };
         SuspLevel l = {}, fast = {};
-        for (int n = 0; n < 61; n++) SuspLevelStep(l, 2, partner, rest, r, placed, free2, 0.0f, 0.0f, dt);
+        for (int n = 0; n < 61; n++) SuspLevelStep(l, 2, partner, kAlong2, kAcross2, rest, r, placed, free2, 0.0f, 0.0f, dt);
         fast = l;
         float g[2] = {};
         for (int n = 0; n < 60 * 15; n++)
         {
             for (int i = 0; i < 2; i++) g[i] = rest[i] - sag[i] + l.level[i];
-            SuspLevelStep(l, 2, partner, g, r, placed, free2, 0.0f, 2.0f, dt);
+            SuspLevelStep(l, 2, partner, kAlong2, kAcross2, g, r, placed, free2, 0.0f, 2.0f, dt);
         }
         const float leftOff = g[0] - rest[0], rightOff = g[1] - rest[1];
         for (int n = 0; n < 60 * 15; n++)
         {
             for (int i = 0; i < 2; i++) g[i] = rest[i] - sag[i] + fast.level[i];
-            SuspLevelStep(fast, 2, partner, g, r, placed, free2, 0.0f, 3.0f, dt);
+            SuspLevelStep(fast, 2, partner, kAlong2, kAcross2, g, r, placed, free2, 0.0f, 3.0f, dt);
         }
         printf("     air suspension side to side: 4 and 1 cm of sag end %.4f and %.4f m off at 7 km/h\n", leftOff, rightOff);
         Check(fabsf(leftOff) < 0.005f && fabsf(rightOff) < 0.005f && l.level[0] > l.level[1] + 0.02f && fast.level[0] == 0.0f && fast.level[1] == 0.0f,
               "air suspension: a load on one side is levelled side to side at 7 km/h, each wheel back within 5 mm in 15 s; nothing at 11 km/h");
+    }
+
+    // review R5: a rigid chassis on springs, each corner at the plane through the ground and the shifts (least squares)
+    // less a load's sag; a wheel's place from its stock attach point is that less its ground. A 6 cm diagonal twist
+    // standing and a 6x6 with 5 cm under its middle axle keep every shift within 5 mm of 0 for 30 s; a load at the rear
+    // of a 4x4 still levels within 5 mm in 15 s
+    {
+        const float dt = 1.0f / 60.0f;
+        auto plane = [](int n, const float *x, const float *y, const float *v, float *out) {
+            float c = 0, vm = 0, xm = 0, ym = 0;
+            for (int i = 0; i < n; i++) c += 1, vm += v[i], xm += x[i], ym += y[i];
+            vm /= c, xm /= c, ym /= c;
+            float sxx = 0, syy = 0, sxy = 0, sxv = 0, syv = 0;
+            for (int i = 0; i < n; i++)
+            {
+                const float a = x[i] - xm, b = y[i] - ym, e = v[i] - vm;
+                sxx += a * a, syy += b * b, sxy += a * b, sxv += a * e, syv += b * e;
+            }
+            const float det = sxx * syy - sxy * sxy, px = (sxv * syy - syv * sxy) / det, py = (syv * sxx - sxv * sxy) / det;
+            for (int i = 0; i < n; i++) out[i] = vm + px * (x[i] - xm) + py * (y[i] - ym);
+        };
+        auto run = [&](int n, const int *partner, const float *x, const float *y, const float *ground, const float *sag, float seconds, float *off) {
+            const bool placed[6] = { true, true, true, true, true, true }, free6[6] = {};
+            const float r[6] = {}, flat[6] = {};
+            SuspLevel l = {};
+            float g[6] = {}, v[6] = {}, b[6] = {};
+            for (int k = 0; k < 61; k++)
+            {
+                for (int i = 0; i < n; i++) v[i] = flat[i];
+                plane(n, x, y, v, b);
+                for (int i = 0; i < n; i++) g[i] = b[i] - 0.2f;
+                SuspLevelStep(l, n, partner, x, y, g, r, placed, free6, 0.0f, 0.0f, dt);
+            }
+            float most = 0.0f;
+            for (int k = 0; k < (int)(seconds * 60.0f); k++)
+            {
+                for (int i = 0; i < n; i++) v[i] = ground[i] + l.level[i];
+                plane(n, x, y, v, b);
+                for (int i = 0; i < n; i++) g[i] = b[i] - ground[i] - sag[i] - 0.2f;
+                SuspLevelStep(l, n, partner, x, y, g, r, placed, free6, 0.0f, 0.0f, dt);
+                for (int i = 0; i < n; i++) most = fmaxf(most, fabsf(l.level[i]));
+            }
+            for (int i = 0; i < n; i++) off[i] = g[i] + 0.2f;
+            return most;
+        };
+        const int partner4[4] = { 1, 0, 3, 2 }, partner6[6] = { 1, 0, 3, 2, 5, 4 };
+        const float none[6] = {}, twist[4] = { 0.03f, -0.03f, -0.03f, 0.03f };
+        const float x6[6] = { 2.0f, 2.0f, 0.0f, 0.0f, -2.0f, -2.0f }, y6[6] = { 0.9f, -0.9f, 0.9f, -0.9f, 0.9f, -0.9f };
+        const float hump[6] = { 0.0f, 0.0f, 0.05f, 0.05f, 0.0f, 0.0f }, rearLoad[4] = { 0.01f, 0.01f, 0.05f, 0.05f };
+        float off[6];
+        const float twisted = run(4, partner4, kAlong4, kAcross4, twist, none, 30.0f, off);
+        const float humped = run(6, partner6, x6, y6, hump, none, 30.0f, off);
+        run(4, partner4, kAlong4, kAcross4, none, rearLoad, 15.0f, off);
+        float rearOff = 0.0f;
+        for (int i = 0; i < 4; i++) rearOff = fmaxf(rearOff, fabsf(off[i]));
+        printf("     air suspension (R5): the shift at most %.4f m on a 6 cm twist and %.4f m on a 6x6 hump; a rear load ends %.4f m off\n", twisted, humped, rearOff);
+        Check(twisted < 0.005f && humped < 0.005f && rearOff < 0.005f,
+              "air suspension (review R5): a 6 cm diagonal twist and a 6x6 with 5 cm under its middle axle keep every shift within 5 mm for 30 s; a rear load still levels");
     }
 
     RealImageTest();

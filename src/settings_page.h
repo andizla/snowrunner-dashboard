@@ -832,7 +832,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     PageLabel("Air suspension", labelX);
     changed(ImGui::Checkbox("##airsuspension", &s.airSuspension));
     PageTip("A test: each wheel held at its rest place of the first standstill after the truck is taken, so cargo no longer makes it sag or "
-            "lean; it settles in about 3 s under 10 km/h, and an axle with a wheel hanging or on its stop keeps its height. Ride up and Ride down "
+            "lean (height, pitch and roll only, so a twist on rough ground stays); it settles in about 3 s under 10 km/h, and an axle with a wheel hanging or on its stop keeps its height. Ride up and Ride down "
             "under Locks raise and lower it 2 cm a press, within 10 cm, under 20 km/h, for this truck. Turned off, it goes back over a few seconds. "
             "It stops as the ride height does.");
     if (s.airSuspension)
