@@ -591,7 +591,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     // order is input_bindings.h's GearAction). The shifter's at Gearbox=2, the locks' at every level
     static const char *actions[kViewActions] = { "Gear 1", "Gear 2", "Gear 3", "Gear 4", "Gear 5", "Gear 6", "Gear 7", "Gear 8", "Gear 9", "Gear 10",
                                                  "Gear 11", "Gear 12", "H", "L-", "L", "L+", "Neutral", "Reverse", "Gear up", "Gear down", "Clutch",
-                                                 "Range high", "Range low", "A", "Diff lock", "AWD", "Sway bars" };
+                                                 "Range high", "Range low", "A", "Diff lock", "AWD", "Sway bars", "Ride up", "Ride down" };
     auto bindingRow = [&](int a) {
         ImGui::PushID(1000 + a);
         PageLabel(actions[a], labelX);
@@ -620,7 +620,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     }
     ImGui::TextDisabled("Locks");
     PageTip("The differential lock and all-wheel drive on a key, on every truck, the upgrade fitted or not; the cluster's lamps show them. "
-            "Sway bars: connects and disconnects the sway bars of the Suspension section; a lamp shows while they are disconnected.");
+            "Sway bars: connects and disconnects the sway bars of the Suspension section; a lamp shows while they are disconnected. "
+            "Ride up and Ride down: the air suspension's height, 2 cm a press under 20 km/h.");
     for (int a = kViewShifts; a < kViewActions; a++) bindingRow(a);
     if (view.controllers) ImGui::TextDisabled("%d wheel or shifter read through DirectInput.", view.controllers);
     static const char *inputs[kInputCount] = { "A wheel's pedals", "A pad", "The keyboard" };
@@ -827,6 +828,18 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     s.swayRear = SettingsStep(s.swayRear, kSwayStep);
     PageTip("A test: a sway bar on the rear axles. 0.1 to 0.2 works well; above 0.3 it swings, so it stops there.");
     if (view.swayOff) ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "The sway bars are disconnected.");
+    // the air suspension (a test, build C): it levels each axle on top of the ride height
+    PageLabel("Air suspension", labelX);
+    changed(ImGui::Checkbox("##airsuspension", &s.airSuspension));
+    PageTip("A test: each axle held at its rest place of the first standstill after the truck is taken, so cargo no longer makes it sag; it "
+            "settles in about 3 s. Ride up and Ride down under Locks raise and lower it 2 cm a press, within 10 cm, under 20 km/h. It stops as the "
+            "ride height does.");
+    if (s.airSuspension)
+    {
+        if (!view.air) ImGui::TextDisabled("Height %+d cm; no truck it runs on", view.airHeight);
+        else if (!view.airTaken) ImGui::TextDisabled("Height %+d cm; the rest place is taken at the first standstill", view.airHeight);
+        else ImGui::TextDisabled("Height %+d cm; levelling %+.1f / %+.1f cm (front / rear)", view.airHeight, view.airLevel[0], view.airLevel[1]);
+    }
     PageLabel("Display", labelX);
     changed(ImGui::Checkbox("##suspdisplay", &s.suspDisplay));
     PageTip("The suspension display: each wheel's travel as a bar, a lamp when it hits the end, a mark while it hangs, and the articulation.");

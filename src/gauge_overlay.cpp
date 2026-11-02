@@ -75,11 +75,11 @@ static void DrawWarnings(const GaugeView &view, float w, float h, float dt)
     }
 }
 
-// The suspension display and the sway bars' lamp (build B), on the warning boxes' stage below their slots; not while the
-// NEXT GEN menu is open.
+// The suspension display, the sway bars' lamp (build B) and the air suspension's height box (build C), on the warning
+// boxes' stage below their slots; not while the NEXT GEN menu is open.
 static void DrawSuspension(const GaugeView &view, float w, float h)
 {
-    if (NgMenuOpen() || (view.susp.wheels <= 0 && !view.swayOff)) return;
+    if (NgMenuOpen() || (view.susp.wheels <= 0 && !view.swayOff && !view.airShown)) return;
     const float u = WarnUnit(w, h);
     UpdateWarnFontTexture(u);
     ImVec2 at = WarnOrigin(w, h, 3);
@@ -88,7 +88,12 @@ static void DrawSuspension(const GaugeView &view, float w, float h)
         GSuspDisplay(ImGui::GetBackgroundDrawList(), g_warnFonts, at, u, 1.0f, view.susp);
         at.y += (GSuspHeight(view.susp) + kWarnGap) * u;
     }
-    if (view.swayOff) GSwayLamp(ImGui::GetBackgroundDrawList(), g_warnFonts, at, u, 1.0f);
+    if (view.swayOff)
+    {
+        GSwayLamp(ImGui::GetBackgroundDrawList(), g_warnFonts, at, u, 1.0f);
+        at.y += (kSwayH + kWarnGap) * u;
+    }
+    if (view.airShown) GRideBox(ImGui::GetBackgroundDrawList(), g_warnFonts, at, u, 1.0f, view.airHeight);
 }
 
 static void UpdateFontTexture(float u)

@@ -237,6 +237,7 @@ struct SuspStepBlock
     bool isLeft[kMaxWheels];
     float sway[kMaxWheels];        // its pair's bar as a share of the axle's spring rate, 0 none or disconnected
     float springK[kMaxWheels];     // its strength as the tune gives it (stock times SpringScale), for the bar
+    bool air;                      // AirSuspension (build C): each axle held at its rest place, on top of the ride height
     bool display;                  // the display's figures are published each step
     float travelMax[kMaxWheels];   // the droop end, for the display's bars
     uint32_t seal;
@@ -280,6 +281,18 @@ struct SuspDisplaySlot
     bool hit[kMaxWheels], hanging[kMaxWheels], placed[kMaxWheels];
 };
 
+// The air suspension's levelling (build C), kept for the truck (its action) across generations, so a recovery or a
+// constraint at a new address keeps the rest places taken.
+struct SuspLevel
+{
+    uint64_t action;               // the truck it was taken on, 0 none
+    bool taken;                    // the rest places are taken
+    float stand, count;            // s standing and steps summed, toward the take
+    float sum[kMaxWheels];
+    float ref[kMaxWheels];         // each wheel's axle's rest place from the stock attach point, less the ride height's shift, m
+    float level[kMaxWheels];       // the levelling's shift, m toward the droop
+};
+
 struct SuspStepState
 {
     uint32_t serial, generation;   // of the block the last look took
@@ -305,6 +318,8 @@ struct SuspStepState
     float endAt[kMaxWheels];
     SuspDisplaySlot display[2];    // the display's figures, the newest at display[(displays - 1) & 1]
     volatile LONG displays;
+    SuspLevel level;               // the air suspension's (read by the mod's thread for the tab and the log)
+    volatile LONG levelTaken;      // rest places taken so far
 };
 
 // The block published: written into the slot the physics thread is not reading (the one published two passes ago),
@@ -588,6 +603,52 @@ inline void SuspSwayShift(float setting, float cL, float cR, float kL, float kR,
     sR = kR > 0.0f ? -F / (2.0f * kR) : 0.0f;
 }
 
+// ---- the air suspension (the addendum of 2 November 13:47: build C) ----
+// At the first standstill after the truck is taken (kLevelStand s under kLevelStill m/s), each axle's mean place along
+// the axis from its stock attach point, less the ride height's shift then, is its rest place. From then on the levelling
+// shift follows the axle's error with a time constant of kLevelTau, so cargo no longer makes it sag. The ride height's
+// shift (the sliders and the keys) goes on top of the rest place, so the levelling never takes it back.
+static const float kLevelTau = 3.0f, kLevelStand = 1.0f, kLevelStill = 0.1f;
+
+// One step of the levelling. g: each wheel's place from its stock attach point (x plus all its shift), r: its ride
+// height's shift, placed: it has a place. An axle is a wheel and its partner, levelled on their mean. The shift kept is
+// held so that it and the ride height stay within kShiftMost. True on the step the rest places are taken.
+inline bool SuspLevelStep(SuspLevel &l, int n, const int *partner, const float *g, const float *r, const bool *placed, float speed, float dt)
+{
+    float gm[kMaxWheels], rm[kMaxWheels];
+    for (int i = 0; i < n; i++)
+    {
+        const int j = partner[i];
+        const bool pair = j >= 0 && j < n && placed[j];
+        gm[i] = pair ? 0.5f * (g[i] + g[j]) : g[i];
+        rm[i] = pair ? 0.5f * (r[i] + r[j]) : r[i];
+    }
+    if (!l.taken)
+    {
+        if (!(dt > 0.0f)) return false;
+        if (!(fabsf(speed) < kLevelStill))
+        {
+            l.stand = l.count = 0.0f;
+            memset(l.sum, 0, sizeof l.sum);
+            return false;
+        }
+        l.stand += dt, l.count += 1.0f;
+        for (int i = 0; i < n; i++) l.sum[i] += placed[i] ? gm[i] - rm[i] : 0.0f;
+        if (l.stand < kLevelStand) return false;
+        for (int i = 0; i < n; i++) l.ref[i] = l.sum[i] / l.count;
+        l.taken = true;
+        return true;
+    }
+    for (int i = 0; i < n; i++)
+    {
+        if (!placed[i]) continue;
+        const float err = l.ref[i] + rm[i] - gm[i];
+        const float lo = -kShiftMost - r[i], hi = kShiftMost - r[i];
+        l.level[i] = fminf(hi, fmaxf(lo, l.level[i] + err * dt / kLevelTau));
+    }
+    return false;
+}
+
 // One attach point write: right before it, [wheel + 0x28] must still be the constraint and of its class. 1 written,
 // 0 refused, -1 a fault.
 inline int SuspAttachWrite(uint64_t wheel, uint64_t constraint, uint64_t vtable, uint64_t at, float value)
@@ -606,10 +667,12 @@ inline int SuspAttachWrite(uint64_t wheel, uint64_t constraint, uint64_t vtable,
 
 // The attach point's step: the guard first (a field that holds neither what was written nor the stock was moved by the
 // game: the features stop for the truck, the mod's thread puts the stock back), then stock + the ride height, the test's
-// shift and the bar's, held to kShiftMost, along the axis. The bar works off the place just read. False where a write
-// was refused or faulted.
-inline bool SuspAttachStep(SuspStepState &s, const SuspStepBlock &b, const float *h, const float *attach)
+// shift, the bar's and the levelling's, held to kShiftMost, along the axis. The bar works off the place just read. False
+// where a write was refused or faulted.
+inline bool SuspAttachStep(SuspStepState &s, const SuspStepBlock &b, const float *h, const float *attach, float speed = 0.0f, float dt = 0.0f)
 {
+    // the levelling starts over when it is turned off or another truck is taken
+    if ((!b.shifting || !b.air || s.level.action != b.action) && s.level.action) s.level = SuspLevel{};
     if (!b.shifting || s.movedSerial == b.serial) return true;
     const int n = b.wheels < kMaxWheels ? b.wheels : kMaxWheels;
     for (int i = 0; i < n; i++)
@@ -630,6 +693,21 @@ inline bool SuspAttachStep(SuspStepState &s, const SuspStepBlock &b, const float
         float sL = 0.0f, sR = 0.0f;
         SuspSwayShift(b.sway[i], cL, cR, b.springK[l], b.springK[r], sL, sR);
         shift[l] += sL, shift[r] += sR;
+    }
+    if (b.air)
+    {
+        // each wheel's place from its stock attach point, all of the last step's shift in it
+        float g[kMaxWheels], r[kMaxWheels];
+        bool placed[kMaxWheels];
+        for (int i = 0; i < n; i++)
+        {
+            placed[i] = b.attachC[i] && b.axisUp[i] != 0.0f;
+            g[i] = placed[i] ? (h[i] - b.attachStock[i]) / b.axisUp[i] : 0.0f;
+            r[i] = b.ride[i];
+        }
+        if (!s.level.action) s.level.action = b.action;
+        if (SuspLevelStep(s.level, n, b.partner, g, r, placed, speed, dt)) InterlockedIncrement(&s.levelTaken);
+        for (int i = 0; i < n; i++) shift[i] += s.level.level[i];
     }
     for (int i = 0; i < n; i++)
     {
@@ -692,7 +770,7 @@ inline void SuspStepLook(SuspStepState &s, const SuspStepBlock *published, uint6
     if (had) SuspPlaceAdd(s, b, h, attach, speed);
     if (dt > 0.0f && dt <= kStepDtMost) s.clock += dt;
     if (had) SuspDisplayStep(s, b, h, attach, speed);
-    if (!SuspDamperStep(s, b, h, attach, dt, had && dt > 0.0f && dt <= kStepDtMost) || (had && !SuspAttachStep(s, b, h, attach)))
+    if (!SuspDamperStep(s, b, h, attach, dt, had && dt > 0.0f && dt <= kStepDtMost) || (had && !SuspAttachStep(s, b, h, attach, speed, dt > 0.0f && dt <= kStepDtMost ? dt : 0.0f)))
     {
         s.faultSerial = b.serial;
         s.have = false;

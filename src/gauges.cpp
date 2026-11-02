@@ -512,6 +512,7 @@ static void WriteIni(const GaugeSettings &s)
     num(L"SwayFront", s.swayFront);
     num(L"SwayRear", s.swayRear);
     whole(L"SuspDisplay", s.suspDisplay ? 1 : 0);
+    whole(L"AirSuspension", s.airSuspension ? 1 : 0);
     whole(L"DamperCurve", s.damperCurve);
     num(L"LowCompression", s.lowCompression);
     num(L"HighCompression", s.highCompression);
@@ -819,6 +820,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; the game holds each at 1). ExtraTravel: cm added past the file's compression end, 0 to 30 (0 = the file's; past it a wheel may go into the body).\n"
                         L"; RideFront, RideRear: each axle's ride height in cm, -10 to 10; SwayFront, SwayRear: a sway bar, 0 to 0.3 of the axle's spring rate (BindSwayDisconnect\n"
                         L"; toggles them). Both move the attach point and stop on a truck whose game moves it. SuspDisplay=1 draws each wheel's travel. All tests, off by default.\n"
+                        L"; AirSuspension=1 holds each axle at its rest place of the first standstill, cargo or not (3 s to settle); BindRideUp, BindRideDown move it 2 cm under 20 km/h.\n"
                         L"; DamperCurve 0 linear, 1 digressive, 2 progressive; LowCompression, HighCompression, LowRebound, HighRebound: the damping\n"
                         L"; under and over DamperKnee (m/s, 0.02 to 0.5), rising and falling, 0.25 to 4 (a test; 1 and linear = the truck's own).\n"
                         L"; BumpStops=1: force (BumpForce, 1 to 6, the spring's at the end times it) and damping (BumpDamping, 1 to 4) over the last BumpZone m (0.03 to 0.2) of the\n"
@@ -948,6 +950,7 @@ static void ReadIni(GaugeSettings &s)
         }
     }
     s.suspDisplay = IniInt(L"SuspDisplay", s.suspDisplay ? 1 : 0, ini) != 0;
+    s.airSuspension = IniInt(L"AirSuspension", s.airSuspension ? 1 : 0, ini) != 0;
     s.damperCurve = IniInt(L"DamperCurve", s.damperCurve, ini);
     s.lowCompression = IniFloat(L"LowCompression", s.lowCompression, ini);
     s.highCompression = IniFloat(L"HighCompression", s.highCompression, ini);
@@ -2334,6 +2337,10 @@ struct SuspStepWatch
     float attachStock[kMaxWheels];
     uint64_t attachOffVehicle;
     LONG attachMoved, displays;
+    LONG levelTaken;            // the air suspension's rest places taken, as seen; its next log, and what the tab shows
+    ULONGLONG levelLogAt;
+    bool airTaken;
+    float airLevel[2];
     SuspDisplaySlot shown;
     float windowRest[kMaxWheels];
     bool windowRested[kMaxWheels];
@@ -2447,6 +2454,9 @@ struct TruckWatch
     bool swayOff;               // the sway bars disconnected (BindSwayDisconnect), for this game; they start connected
     uint64_t restVehicle;       // the truck the last rest places were read on, kept while the reads stop (the ride height at 0)
     float rest[2];
+    int airHeight;              // the air suspension's height set by BindRideUp and BindRideDown (cm), for this game; it starts at 0
+    ULONGLONG airPressedAt;     // the last press, for the overlay's height box
+    float kmh;                  // the driven truck's speed on the last pass, 0 none
 };
 
 // The mod's gearbox has the truck in a position of the player's own (not A): the engine runs behind its clutch.
@@ -3094,8 +3104,11 @@ static SpringSet SpringFrom(const GaugeSettings &s)
     return k;
 }
 
-// The attach point's features in force: a ride height, a sway bar, test 3 (build B).
-static bool AttachFeaturesOn(const GaugeSettings &s) { return s.rideFront != 0.0f || s.rideRear != 0.0f || s.swayFront > 0.0f || s.swayRear > 0.0f || (s.probe && s.suspStepTest == 3); }
+// The attach point's features in force: a ride height, a sway bar, test 3 (build B), the air suspension (build C).
+static bool AttachFeaturesOn(const GaugeSettings &s)
+{
+    return s.rideFront != 0.0f || s.rideRear != 0.0f || s.swayFront > 0.0f || s.swayRear > 0.0f || (s.probe && s.suspStepTest == 3) || s.airSuspension;
+}
 
 // Anything the physics thread does each step: the damper off its defaults, a spring feature, the zones, the attach
 // point's features, the display.
@@ -3149,7 +3162,7 @@ static void SuspDamperBefore(SuspStepWatch &p, const TruckMemory &m, const Truck
 // The block for the driven truck (with Probe=1 or the damper on, and a truck), its generation, the windows logged and
 // the test's trace kept. Returns the generation, which the 20 Hz travel probe goes by too.
 static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const TruckRefs &r, const TruckRaw &t, const GaugeSettings &s, const SuspTune &tune, bool found,
-                             ULONGLONG now, bool swayOff)
+                             ULONGLONG now, bool swayOff, int airHeight)
 {
     const DamperSet damper = DamperFrom(s);
     const SpringSet spring = SpringFrom(s);
@@ -3277,6 +3290,7 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
     b.shifting = shifting;
     b.testShift = shifting && p.test == 3 && p.on ? kStepTestShift : 0.0f;
     b.display = s.suspDisplay;
+    b.air = shifting && s.airSuspension;
     for (int i = 0; i < kMaxWheels; i++)
     {
         b.constraint[i] = 0;
@@ -3292,7 +3306,7 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
         // the attach point's features: a wheel whose body is known and whose stock was read
         b.attachC[i] = shifting && placed && constraint[i] && p.attachStockC[i] == constraint[i] ? constraint[i] : 0;
         b.attachStock[i] = p.attachStock[i];
-        b.ride[i] = (p.front[i] ? s.rideFront : s.rideRear) / 100.0f;
+        b.ride[i] = ((p.front[i] ? s.rideFront : s.rideRear) + (s.airSuspension ? (float)airHeight : 0.0f)) / 100.0f;
         b.partner[i] = i < b.wheels ? p.partner[i] : -1;
         b.isLeft[i] = p.isLeft[i];
         b.sway[i] = swayOff ? 0.0f : p.front[i] ? s.swayFront : s.swayRear;
@@ -3330,11 +3344,36 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
         if (p.block.shifting)
         {
             p.attachOffVehicle = p.vehicle;
-            Log(L"suspension: the game moves this truck's attach point (its own ride height control, likely): the ride height, the sway bars and test 3 "
-                L"stop on it, and its stock is put back");
+            Log(L"suspension: the game moves this truck's attach point (its own ride height control, likely): the ride height, the sway bars, the air "
+                L"suspension and test 3 stop on it, and its stock is put back");
             SuspDamperRelease(p, m, L"the game moves the attach point");
         }
     }
+    // the air suspension (build C): its rest places said once taken, and with Probe=1 its levelling every 10 s
+    float level[2] = {}, ref[2] = {}, count[2] = {};
+    for (int i = 0; p.block.air && g_step.level.taken && i < p.block.wheels; i++)
+    {
+        if (!p.block.attachC[i]) continue;
+        const int axle = p.front[i] ? 0 : 1;
+        level[axle] += g_step.level.level[i], ref[axle] += g_step.level.ref[i], count[axle] += 1.0f;
+    }
+    for (int a = 0; a < 2; a++)
+        if (count[a] > 0.0f) level[a] /= count[a], ref[a] /= count[a];
+    if (g_step.levelTaken != p.levelTaken)
+    {
+        p.levelTaken = g_step.levelTaken;
+        if (p.block.air)
+            Log(L"air suspension: each axle's rest place taken at a standstill, front %.3f m and rear %.3f m from its stock attach point (the ride height's shift left out); "
+                L"held from now on, the ride height %+d cm on top",
+                ref[0], ref[1], airHeight);
+    }
+    if (s.probe && p.block.air && g_step.level.taken && now >= p.levelLogAt)
+    {
+        p.levelLogAt = now + 10000;
+        Log(L"air suspension: levelling front %+.3f m, rear %+.3f m, the keys' height %+d cm", level[0], level[1], airHeight);
+    }
+    p.airTaken = p.block.air && g_step.level.taken;
+    p.airLevel[0] = level[0] * 100.0f, p.airLevel[1] = level[1] * 100.0f;
     // the display's newest figures
     const LONG shown = g_step.displays;
     if (b.display && shown != p.displays)
@@ -3428,7 +3467,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         float v = -1.0f;
         if (m.get(w.refs.wheel[0] + kSuspConstraintAt, c) && m.get(c + kSuspValueAt[stepTest->value], v)) w.step.value = v;
     }
-    const uint32_t generation = SuspStepPass(w.step, m, w.refs, raw, s, w.tune, w.found, now, w.swayOff);
+    const uint32_t generation = SuspStepPass(w.step, m, w.refs, raw, s, w.tune, w.found, now, w.swayOff, w.airHeight);
     if (probe && w.found) SuspTravelProbe(w.travel, w.travelAt, m, w.refs, raw, now, generation);
     WorldRead(m, w.found ? w.refs.control : 0, world);
     // a load ended (the game's loading screen gone): the truck that drives on under the game's id it had before the
@@ -3459,6 +3498,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         Log(L"map: a load ended and no truck was driven for a minute, so every truck's engine is as cold as the air outside again (the coolant and the oil)");
     }
     const bool driving = read && TruckSane(raw) && WorldDriving(world);
+    w.kmh = driving ? fabsf(raw.speed) * 3.6f : 0.0f;
     if (!driving) w.drivingSince = 0;
     else if (!w.drivingSince) w.drivingSince = now;
     // the game's own clock for the truck: while it stands, the game is not simulating and the models wait
@@ -4493,6 +4533,15 @@ static DWORD WINAPI Run(void *)
                 watch.swayOff = !watch.swayOff;
                 Log(L"suspension: the sway bars %s (BindSwayDisconnect)", watch.swayOff ? L"disconnected" : L"connected");
             }
+            // the air suspension's height (build C): with it on and a truck under 20 km/h; a press at the end stays there
+            const int dir = locksHeard ? (states[kActRideUp].pressed ? 1 : 0) - (states[kActRideDown].pressed ? 1 : 0) : 0;
+            if (dir && watch.found)
+            {
+                const int was = watch.airHeight;
+                watch.airHeight = AirHeightStep(was, dir, watch.kmh, s.airSuspension);
+                if (s.airSuspension && watch.kmh < kRideKeyKmh) watch.airPressedAt = GetTickCount64();
+                if (watch.airHeight != was) Log(L"air suspension: the height set to %+d cm (BindRide%s)", watch.airHeight, dir > 0 ? L"Up" : L"Down");
+            }
         }
         // the map: the game's save, looked for every kSaveLookMs and read when it is another or was written since
         const ULONGLONG lookNow = GetTickCount64();
@@ -4825,6 +4874,12 @@ static DWORD WINAPI Run(void *)
                 sv.articulation = (fr - rr) * 100.0f;
             }
             v.swayOff = driving && watch.swayOff && (inForce.swayFront > 0.0f || inForce.swayRear > 0.0f);
+            // the air suspension: the tab's figures, and the overlay's height box for 3 s after a press
+            v.air = driving && inForce.airSuspension && watch.step.block.air;
+            v.airTaken = v.air && watch.step.airTaken;
+            v.airHeight = watch.airHeight;
+            v.airLevel[0] = watch.step.airLevel[0], v.airLevel[1] = watch.step.airLevel[1];
+            v.airShown = driving && inForce.airSuspension && watch.airPressedAt && GetTickCount64() - watch.airPressedAt < 3000;
             // each axle's rest place from the probe's windows or the display (cm along the axis, compression negative)
             v.rideRestKnown = false;
             float sum[2] = {}, count[2] = {};
@@ -5111,7 +5166,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 111, "ini: the help text survives a write (111 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 112, "ini: the help text survives a write (112 comment lines)");
 
     // what is no number gives the default, what is out of range is held to it
     WritePrivateProfileStringW(kIniSection, L"Scale", L"nan", ini.c_str());

@@ -120,6 +120,7 @@ struct GaugeSettings
     float rideFront, rideRear; // RideFront, RideRear: each axle's ride height in cm (kRideRange), its attach points shifted; middle axles go with the rear (a test)
     float swayFront, swayRear; // SwayFront, SwayRear: each axle's sway bar as a share of its spring rate (kSwayRange), 0 none (a test)
     bool suspDisplay;        // SuspDisplay: the suspension display, each wheel's travel, its end hits and whether it hangs, and the articulation
+    bool airSuspension;      // AirSuspension: each axle held at its rest place of the first standstill, cargo or not; BindRideUp and BindRideDown move it (a test)
     int suspStepTest;        // SuspStepTest (ini only, a test, with Probe=1): every 20 s wheel 0's spring at half for 1 s standing (1), its damping at a tenth for 0.5 s moving (2), or its attach point 2 cm toward the droop for 1 s standing (3)
     int soundVolume;        // SoundVolume: how loud the turbo's flutter and the oil warning are, 0 to 100; 0 = no sound
     bool soundsOnly;         // SoundsOnly: the sounds are played and the cluster is not drawn
@@ -244,6 +245,15 @@ inline float SettingsStep(float v, float step)
     return v < 0.0f ? -r : r;
 }
 static const float kRideStep = 1.0f, kSwayStep = 0.01f;
+// The air suspension's keys (build C): steps of kRideKeyStep cm within kRideKeyMost, under kRideKeyKmh only. dir +1 up, -1 down.
+static const int kRideKeyStep = 2, kRideKeyMost = 10;
+static const float kRideKeyKmh = 20.0f;
+inline int AirHeightStep(int cm, int dir, float kmh, bool on)
+{
+    if (!on || !(kmh < kRideKeyKmh) || !dir) return cm;
+    const int next = cm + (dir > 0 ? kRideKeyStep : -kRideKeyStep);
+    return next > kRideKeyMost ? kRideKeyMost : next < -kRideKeyMost ? -kRideKeyMost : next;
+}
 // The ride height slider's text: 0 with no sign, so the label keeps one form through 0.
 inline const char *RideFormat(float v) { return v != 0.0f ? "%+.0f cm" : "0 cm"; }
 
@@ -402,7 +412,7 @@ enum { kSoundOil = kTurboTiers, kSoundPurge, kSoundWhistle, kSoundTierCount }; /
 // string that lives as long as the mod
 enum { kViewPullOff, kViewPullArmed, kViewPullRunning, kViewPullDone, kViewPullStopped };
 static const int kEnginePlot = 40; // points of the tab's torque plot
-static const int kViewActions = 27; // the gearbox's actions the view holds the bindings of (input_bindings.h's kActCount)
+static const int kViewActions = 29; // the gearbox's actions the view holds the bindings of (input_bindings.h's kActCount)
 static const int kViewShifts = 24;  // of them the shifter's, before the two locks (DiffLock, Awd)
 // The tab's asks of the gearbox's bindings: begin a capture into an action's slot, or clear it (the mod's thread does
 // both, with the snapshot of its pass).
@@ -444,6 +454,7 @@ struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWar
                    int pullTest, pullPhase; const char *pullWhy;
                    float ambientDay, ambientNight, hour; // the map's day and night (with mapOwn), the hour of the game's day (-1 not known)
                    SuspDisplayView susp; bool swayOff; float rideRest[2]; bool rideRestKnown; // the display's figures; the bars disconnected; each axle's rest place along its axis (front, rear; cm), from the probe
+                   bool air, airTaken, airShown; int airHeight; float airLevel[2]; // the air suspension runs on the driven truck, its rest places taken, the height box shown; the keys' height (cm) and the levelling (front, rear; cm)
                    bool suspKnown; float suspFile[3][2]; // the driven truck's file: spring, damping and the compression end (m), [front, rear] (wheel 0 and the last)
                    char gearbox[96]; float gearHold; bool gearHoldOwn; // the driven truck's gearbox (its key, "" for none), the seconds each gear is held going up with the mod's engine, and whether its file sets them
                    int autoClass; bool autoByWeight; float massKg; // the class the automatic goes by for it, whether by its weight (no scales of its own), and that weight (0 not read)

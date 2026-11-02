@@ -519,6 +519,7 @@ int wmain(int argc, wchar_t **argv)
             const ImVec2 at = WarnOrigin(1920.0f, 1080.0f, 3);
             GSuspDisplay(bg, warnFonts, at, wu, 1.0f, d);
             GSwayLamp(bg, warnFonts, ImVec2(at.x, at.y + (GSuspHeight(d) + kWarnGap) * wu), wu, 1.0f);
+            GRideBox(bg, warnFonts, ImVec2(at.x, at.y + (GSuspHeight(d) + kSwayH + 2.0f * kWarnGap) * wu), wu, 1.0f, 4); // the air suspension raised 4 cm
         });
         Release(warnSrv);
     }

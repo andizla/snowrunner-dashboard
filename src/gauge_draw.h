@@ -915,6 +915,19 @@ static void GSwayLamp(ImDrawList *dl, const GaugeFonts &f, ImVec2 at, float u, f
     TextDraw(dl, f, kWsTitle, P(44, 44), GCol(255, 255, 255, a), "SWAY BARS OFF", -1, u);
 }
 
+// The air suspension's height box (build C), the sway lamp's shape in blue, for a few seconds after a press.
+static void GRideBox(ImDrawList *dl, const GaugeFonts &f, ImVec2 at, float u, float a, int cm)
+{
+    const float x0 = floorf(at.x), y0 = floorf(at.y);
+    auto P = [&](float x, float y) { return ImVec2(x0 + x * u, y0 + y * u); };
+    char text[32];
+    if (cm) snprintf(text, sizeof text, "RIDE %+d cm", cm);
+    else snprintf(text, sizeof text, "RIDE 0 cm");
+    dl->AddRectFilled(P(0, 0), P(kSwayW, kSwayH), GCol(5, 5, 5, 0.94f * a), 3.0f * u);
+    dl->AddRectFilled(P(0, 0), P(12, kSwayH), GCol(70, 140, 200, a), 3.0f * u, ImDrawFlags_RoundCornersLeft);
+    TextDraw(dl, f, kWsTitle, P(44, 44), GCol(255, 255, 255, a), text, -1, u);
+}
+
 // The cluster. origin: the strip's bottom centre (variant 0) or the block's bottom right corner (variant 1).
 static void GaugeDraw(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float u, float a, const GaugeState &st, const GaugeLayout &lay)
 {

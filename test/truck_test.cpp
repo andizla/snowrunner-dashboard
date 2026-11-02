@@ -2658,6 +2658,75 @@ int main()
         Check(first && kept && gone, "display figures: the place along the axis, a hit of the compression end kept for a second, a hanging wheel, the rest place taken standing");
     }
 
+    // the air suspension (build C): an axle of two corners at 60 steps a second, the springs and dampers at the game's
+    // figures (1.6 Hz, 0.55), the shift written a step late. The rest place is taken after 1 s standing; half as much
+    // load again sags it 9.5 cm without the levelling, and with it the axle comes back within 5 mm in 15 s without
+    // swinging past; a ride height of +2 cm on top stays (the two within 12 cm); three times the load holds the shift to 12 cm
+    {
+        const double dt = 1.0 / 60.0, omega = 2.0 * 3.14159265 * 1.6, k = omega * omega, c = 2.0 * 0.55 * omega, w1 = k * 0.19;
+        double sagged = 0.0, back = 0.0, raised = 0.0, past = 0.0;
+        int takenAt = -1;
+        float most = 0.0f;
+        for (int on = 0; on < 2; on++)
+        {
+            SuspLevel l = {};
+            const int partner[2] = { 1, 0 };
+            const bool placed[2] = { true, true };
+            double z = -0.19, v = 0.0, shiftNow = 0.0;
+            for (int n = 0; n < 60 * 50; n++)
+            {
+                const double time = n * dt;
+                const double load = time < 5.0 ? w1 : time < 38.0 ? 1.5 * w1 : 3.0 * w1;
+                const float ride = time >= 20.0 ? 0.02f : 0.0f;
+                v = (v + dt * (k * (shiftNow - z) - load)) / (1.0 + dt * c);
+                z += dt * v;
+                const float g[2] = { (float)z, (float)z }, r[2] = { ride, ride };
+                if (on && SuspLevelStep(l, 2, partner, g, r, placed, 0.0f, (float)dt)) takenAt = n;
+                shiftNow = ride + (on ? l.level[0] : 0.0f);
+                if (on) most = fmaxf(most, l.level[0] + ride);
+                if (on && time > 5.0 && time < 20.0) past = fmax(past, z - (-0.19));
+                if (n == 60 * 20 - 1) (on ? back : sagged) = z;
+                if (on && n == 60 * 37 - 1) raised = z;
+            }
+        }
+        printf("     air suspension: the load sags the axle to %.3f m with no levelling, %.3f m with it (the rest -0.190); +2 cm gives %.3f m; the shift at most %.3f m\n",
+               sagged, back, raised, most);
+        Check(takenAt >= 58 && takenAt <= 61 && sagged < -0.28 && fabs(back + 0.19) < 0.005 && past < 0.01 && fabs(raised - (-0.17)) < 0.005 &&
+                  most <= kShiftMost + 1e-6f,
+              "air suspension: the rest place taken after 1 s standing; half as much load again comes back within 5 mm in 15 s and never swings 1 cm past; "
+              "a ride height of +2 cm on top stays (9.5 and 2 within the 12 cm); three times the load holds the shift to 12 cm");
+    }
+
+    // the air suspension's take waits for a standstill: moving, nothing is taken, and a stop starts the second over
+    {
+        SuspLevel l = {};
+        const int partner[2] = { 1, 0 };
+        const bool placed[2] = { true, true };
+        const float g[2] = { -0.2f, -0.2f }, r[2] = { 0.0f, 0.0f };
+        bool any = false;
+        for (int n = 0; n < 120; n++) any |= SuspLevelStep(l, 2, partner, g, r, placed, 2.0f, 1.0f / 60.0f);
+        for (int n = 0; n < 30; n++) any |= SuspLevelStep(l, 2, partner, g, r, placed, 0.0f, 1.0f / 60.0f);
+        any |= SuspLevelStep(l, 2, partner, g, r, placed, 0.5f, 1.0f / 60.0f);
+        int at = -1;
+        for (int n = 0; n < 90 && at < 0; n++)
+            if (SuspLevelStep(l, 2, partner, g, r, placed, 0.0f, 1.0f / 60.0f)) at = n;
+        Check(!any && at >= 58 && at <= 61 && Near(l.ref[0], -0.2f) && Near(l.ref[1], -0.2f),
+              "air suspension: nothing is taken while moving, a move resets the second standing, and a full second standing takes the axle's mean");
+    }
+
+    // the keys: 2 cm a press within 10 cm, only with the air suspension on and under 20 km/h
+    {
+        int cm = 0;
+        for (int i = 0; i < 7; i++) cm = AirHeightStep(cm, 1, 5.0f, true);
+        const bool top = cm == kRideKeyMost;
+        cm = AirHeightStep(cm, -1, 5.0f, true);
+        const bool down = cm == 8;
+        const bool fast = AirHeightStep(4, 1, 25.0f, true) == 4, off = AirHeightStep(4, 1, 5.0f, false) == 4;
+        int low = 0;
+        for (int i = 0; i < 9; i++) low = AirHeightStep(low, -1, 0.0f, true);
+        Check(top && down && fast && off && low == -kRideKeyMost, "air suspension keys: 2 cm a press, held to +/-10 cm; nothing at 20 km/h and over or with it off");
+    }
+
     RealImageTest();
 
     printf(g_failed ? "TRUCK TEST FAILED (%d)\n" : "TRUCK TEST OK\n", g_failed);
