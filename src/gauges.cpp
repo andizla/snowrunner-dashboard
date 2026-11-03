@@ -844,7 +844,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; is down, a kickdown floored), the game's shifter yours, only its reverse on the brake refused. A position picked\n"
                         L"; on the shifter (L+ among them) hands the truck back until A is picked, so the automatic never shifts out of it. 2 the mod's\n"
                         L"; own gearbox takes the shifter: A, the numbered gears, N, R, H, L-, L, L+ on the bindings below (as 1 until one reaches R).\n"
-                        L"; [Gearbox] Bind<Action> and Bind<Action>2: two bindings each for Gear1 to Gear12, GearH, GearL-, GearL, GearL+, GearN,\n"
+                        L"; [Gearbox] Bind<Action> and Bind<Action>2: two bindings each for Gear1 to Gear16, GearH, GearL-, GearL, GearL+, GearN,\n"
                         L"; GearR, GearA, GearUp, GearDown, Clutch, RangeHigh, RangeLow, and at every Gearbox level DiffLock and Awd (the\n"
                         L"; differential lock and all-wheel drive flipped, on every truck, the upgrade fitted or not; none by default).\n"
                         L"; A binding is Key <name or code>, Pad <buttons with +, a stick's direction LSUp to RSRight among them>,\n"
@@ -1452,7 +1452,7 @@ static int SmtIniImport(const std::wstring &path, GearBindings &b, GaugeSettings
     struct Pair { wchar_t smt[16]; int action; };
     Pair pairs[kActCount] = {};
     int count = 0;
-    for (int g = 0; g < 12; g++)
+    for (int g = 0; g < kGearKeys; g++)
     {
         swprintf_s(pairs[count].smt, L"GEAR %d", g + 1);
         pairs[count++].action = kActGear1 + g;
@@ -1536,7 +1536,7 @@ static GearboxActions ActionsOf(const ActionState st[kActCount], const GearBindi
     GearboxActions a = {};
     a.up = st[kActUp].pressed;
     a.down = st[kActDown].pressed;
-    for (int g = 0; g < 12; g++)
+    for (int g = 0; g < kGearKeys; g++)
     {
         if (st[kActGear1 + g].pressed && !a.gearPressed) a.gearPressed = g + 1;
         if (st[kActGear1 + g].held && !a.gearHeld) a.gearHeld = g + 1;
@@ -3533,6 +3533,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     {
         if (w.found) CrashLineSet();
         if (w.found) Log(L"truck: found, %d wheels, %d gears and a high gear, a %.0f l tank", raw.wheels, TruckTopGear(raw), raw.tank);
+        if (w.found && raw.gearListLong)
+            Log(L"truck: its gearbox lists %d entries, more than the %d the mod reads: its gears are not read", raw.gearListLong, (int)kMaxGears);
         else Log(L"truck: none is driven now");
     }
     if (probe && w.found) SuspProbeStep(w.susp, m, w.refs, now);
@@ -6025,6 +6027,12 @@ int wmain(int argc, wchar_t **argv)
         const GearboxActions x = ActionsOf(rs, axis);
         Check(withKey.up && !withKey.down && withKey.gearPressed == 5 && withKey.gearHeld == 3 && withKey.r && !withKey.n && withKey.clutch && withKey.clutchTravel < 0.0f && x.clutchTravel == 0.7f,
               "gearbox: the actions from the reader's states: the edges, the gear held, the clutch's travel only from an axis");
+        ActionState high[kActCount] = {};
+        high[kActGear16].pressed = high[kActGear16].held = true;
+        const GearboxActions sixteen = ActionsOf(high, keys);
+        Check(sixteen.gearPressed == 16 && sixteen.gearHeld == 16 && !strcmp(kActionNames[kActGear16], "Gear16") && !strcmp(kActionNames[kActGearH], "GearH") &&
+                  !strcmp(kActionNames[kActRideDown], "RideDown"),
+              "gearbox: Gear16 is the 16th gear key, and the names stay with their actions after it");
 
         const GearboxActions r = ActionsResting(x);
         Check(!r.up && !r.r && !r.gearPressed && r.gearHeld == 3 && r.clutch && r.clutchTravel == 0.7f,

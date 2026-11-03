@@ -132,7 +132,7 @@ static void Drop(uint64_t at)
 
 static const uint64_t kExe = 0x140000000ull, kControl = 0x10000000, kVehicle = 0x10010000, kAction = 0x10020000, kModel = 0x10030000, kChassis = 0x10040000,
                       kWheelList = 0x10050000, kWheelModel = 0x10060000, kWheel = 0x10070000, kSpeeds = 0x10080000, kDamage = 0x10090000, kGameObject = 0x100A0000,
-                      kInput = 0x100B0000, kMap = 0x100C0000, kOtherVehicle = 0x100D0000, kTexts = 0x100E0000, kSets = 0x100F0000, kTree = 0x10100000;
+                      kInput = 0x100B0000, kMap = 0x100C0000, kOtherVehicle = 0x100D0000, kTexts = 0x100E0000, kSets = 0x100F0000, kTree = 0x10100000, kLongGears = 0x10110000;
 static const TruckMemory kMemory = { Peek, kExe, Poke };
 // The made up truck's kind and the game's id for it, as the game holds them: the kind a text at model + 0x588, the
 // id behind a pointer at vehicle + 0x48 with its length before the pointer and its room after it.
@@ -486,6 +486,37 @@ int main()
     TruckRaw bare;
     Check(TruckRead(kMemory, r, bare) && !bare.burnKnown && TruckSane(bare), "read: a truck without burn numbers is still read");
     Put(kVehicle + 0xE58, kSpeeds + 0x20 + 7 * sizeof(float));
+    // longer gearboxes: reverse, 16 gears and H (a 16-speed of a mod) in H, gear 17, with its 19 burns; 30 gears; a
+    // list of 33 entries is too long to read, so no gears are read and the log can say why
+    {
+        Block(kLongGears, 0x200);
+        auto gears = [&](int entries, int burns) {
+            for (int i = 0; i < entries; i++) Put(kLongGears + 4 * i, 1.0f + i);
+            Put(kAction + 0x58, kLongGears);
+            Put(kAction + 0x60, kLongGears + 4ull * entries);
+            for (int i = 0; i < burns; i++) Put(kLongGears + 0x100 + 4 * i, 1.0f);
+            Put(kVehicle + 0xE50, kLongGears + 0x100);
+            Put(kVehicle + 0xE58, kLongGears + 0x100 + 4ull * burns);
+        };
+        gears(18, 19);
+        Put(kAction + 0x70, 17);
+        Put(kAction + 0x74, 17);
+        TruckRaw sixteen, thirty, over;
+        const bool read16 = TruckRead(kMemory, r, sixteen) && sixteen.gearSpeeds == 18 && TruckTopGear(sixteen) == 16 && Near(sixteen.gearSpeed[17], 18.0f) &&
+                            sixteen.gearBurns == 19 && sixteen.burnKnown && sixteen.gear == 17 && !sixteen.gearListLong && TruckSane(sixteen);
+        gears(32, 33);
+        const bool read30 = TruckRead(kMemory, r, thirty) && thirty.gearSpeeds == 32 && TruckTopGear(thirty) == 30 && Near(thirty.gearSpeed[31], 32.0f) &&
+                            thirty.gearBurns == 33 && TruckSane(thirty);
+        gears(33, 34);
+        const bool tooLong = TruckRead(kMemory, r, over) && over.gearSpeeds == 0 && over.gearListLong == 33 && !over.burnKnown;
+        Check(read16 && read30 && tooLong, "read: a 16-speed's 18 entries and its burns, in H (gear 17) and sane; 30 gears; a list of 33 is not read and says how long it is");
+        Put(kAction + 0x70, 3);
+        Put(kAction + 0x74, 3);
+        Put(kAction + 0x58, kSpeeds);
+        Put(kAction + 0x60, kSpeeds + 6 * sizeof(float));
+        Put(kVehicle + 0xE50, kSpeeds + 0x20);
+        Put(kVehicle + 0xE58, kSpeeds + 0x20 + 7 * sizeof(float));
+    }
     // the game rebuilt the drive train under the truck: what was found is no longer read, so nothing is written through it
     Put(kVehicle + 0x68, kAction + 0x1000);
     TruckRaw staleRead;

@@ -119,6 +119,21 @@ int main()
         Check(staysH && toTop && inA && aToLowPlus && rangeLow && rangeHigh,
               "gearbox: up from H stays, down from H gives the top; down from A in the game's gear 1 gives L+; RangeLow from 3 gives L, RangeHigh from L the 1st");
     }
+    // the gear keys to 16: Gear16 picks a 16-speed's 16th gear; Gear13 on a six-speed picks its top, as any key over it
+    {
+        GearboxPosModel m = {};
+        GearboxTruck t = Truck(1);
+        t.top = 16;
+        GearboxActions a = {};
+        a.gearPressed = 16;
+        Pass(m, plain, a, t);
+        const bool sixteenth = t.gear == 16 && m.pos == kPosGear && m.gear == 16;
+        GearboxPosModel six = {};
+        GearboxTruck u = Truck(1);
+        a.gearPressed = 13;
+        Pass(six, plain, a, u);
+        Check(sixteenth && u.gear == 6 && six.gear == 6, "gearbox: Gear16 picks the 16th gear of a 16-speed; Gear13 on a six-speed picks its top");
+    }
     // SkipNeutral: from L- down to R and from R up to L-, past N; from the 1st down still walks L+
     {
         GearboxPosModel m = {};

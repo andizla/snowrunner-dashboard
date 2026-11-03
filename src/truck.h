@@ -73,7 +73,7 @@ struct GamePlaces
     uint64_t control, wheelClass, game, map, viewer, garage, input, engineSets;
 };
 inline GamePlaces g_places = { kRvaControl, kRvaWheelClass, kRvaGame, kRvaMap, kRvaViewer, kRvaGarage, kRvaInput, kRvaEngineSets };
-enum { kMaxWheels = 32, kMaxGears = 16 };
+enum { kMaxWheels = 32, kMaxGears = 32 }; // kMaxGears: the gearbox's list, reverse and high among it, so 30 numbered gears
 
 // Game memory: peek copies size bytes from addr and says whether it could, and poke copies size bytes to addr the
 // same way (it is left out where nothing is to be written). In the game they are ReadProcessMemory and
@@ -110,6 +110,7 @@ struct TruckRaw
     int gearEngaged;               // action + 0x70: the gear the drive train is in; it follows gear after a shift
     float actionB4, torqueFactor;  // action + 0xB4, + 0xCC
     int gearSpeeds;                // how many entries the gearbox has: reverse, the gears, high
+    int gearListLong;              // the entries of a list longer than kMaxGears, which is not read; 0 when it was read
     float gearSpeed[kMaxGears];
     float gearTop[kMaxGears];      // the mod's own, not read: each numbered gear's top learned where the game's pull reaches nothing
                                    // (GearTopStep; kept in the gearbox's file), 0 not learned. TruckGearTop goes by it
@@ -224,6 +225,8 @@ inline bool TruckRead(const TruckMemory &m, const TruckRefs &r, TruckRaw &t)
             memcpy(t.gearSpeed, speeds, (size_t)count * 4);
         }
     }
+    else if (speedsEnd > speedsBegin && (speedsEnd - speedsBegin) % 4 == 0 && speedsEnd - speedsBegin <= 1024 * 4)
+        t.gearListLong = (int)((speedsEnd - speedsBegin) / 4);
     t.waterKnown = r.wheels > 0;
     for (int i = 0; i < r.wheels; i++)
     {

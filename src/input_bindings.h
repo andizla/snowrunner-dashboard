@@ -12,6 +12,7 @@
 enum GearAction
 {
     kActGear1, kActGear2, kActGear3, kActGear4, kActGear5, kActGear6, kActGear7, kActGear8, kActGear9, kActGear10, kActGear11, kActGear12,
+    kActGear13, kActGear14, kActGear15, kActGear16,
     kActGearH, kActGearLMinus, kActGearL, kActGearLPlus, kActGearN, kActGearR, kActUp, kActDown, kActClutch, kActRangeHigh, kActRangeLow,
     kActGearA,    // A: the gear choice handed to the mod's automatic (the mod's own; SMT has none)
     kActDiffLock, // the differential lock and all-wheel drive flipped (truck.h, LocksStep), at every level of Gearbox
@@ -21,9 +22,10 @@ enum GearAction
     kActRideDown,
     kActCount
 };
+enum { kGearKeys = 16 }; // the numbered gear keys, Gear1 to Gear16
 // Their names, as the ini's keys and the log have them.
 static const char *const kActionNames[kActCount] = { "Gear1", "Gear2", "Gear3", "Gear4", "Gear5", "Gear6", "Gear7", "Gear8", "Gear9", "Gear10",
-                                                     "Gear11", "Gear12", "GearH", "GearL-", "GearL", "GearL+", "GearN", "GearR", "GearUp",
+                                                     "Gear11", "Gear12", "Gear13", "Gear14", "Gear15", "Gear16", "GearH", "GearL-", "GearL", "GearL+", "GearN", "GearR", "GearUp",
                                                      "GearDown", "Clutch", "RangeHigh", "RangeLow", "GearA", "DiffLock", "Awd", "SwayDisconnect",
                                                      "RideUp", "RideDown" };
 

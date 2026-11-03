@@ -597,7 +597,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     // the bindings: two slots an action; a click binds the next key, pad chord, button or pedal moved, x clears (the
     // order is input_bindings.h's GearAction). The shifter's at Gearbox=2, the locks' at every level
     static const char *actions[kViewActions] = { "Gear 1", "Gear 2", "Gear 3", "Gear 4", "Gear 5", "Gear 6", "Gear 7", "Gear 8", "Gear 9", "Gear 10",
-                                                 "Gear 11", "Gear 12", "H", "L-", "L", "L+", "Neutral", "Reverse", "Gear up", "Gear down", "Clutch",
+                                                 "Gear 11", "Gear 12", "Gear 13", "Gear 14", "Gear 15", "Gear 16", "H", "L-", "L", "L+", "Neutral", "Reverse", "Gear up", "Gear down", "Clutch",
                                                  "Range high", "Range low", "A", "Diff lock", "AWD", "Sway bars", "Ride up", "Ride down" };
     auto bindingRow = [&](int a) {
         ImGui::PushID(1000 + a);

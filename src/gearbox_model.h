@@ -97,8 +97,8 @@ struct GearboxAsk
 struct GearboxActions
 {
     bool up, down;
-    int gearPressed;         // 1 to 12: that gear key went down on this pass; 0 none
-    int gearHeld;            // 1 to 12: a gear key is held now (RequireGearHeld); 0 none
+    int gearPressed;         // 1 to 16: that gear key went down on this pass; 0 none
+    int gearHeld;            // 1 to 16: a gear key is held now (RequireGearHeld); 0 none
     bool a, n, r, h, lowMinus, low, lowPlus;
     bool rangeHigh, rangeLow; // for a shifter without a range of its own: between the low range and the numbered gears
     bool clutch;              // the clutch is held

@@ -416,8 +416,8 @@ enum { kSoundOil = kTurboTiers, kSoundPurge, kSoundWhistle, kSoundTierCount }; /
 // string that lives as long as the mod
 enum { kViewPullOff, kViewPullArmed, kViewPullRunning, kViewPullDone, kViewPullStopped };
 static const int kEnginePlot = 40; // points of the tab's torque plot
-static const int kViewActions = 29; // the gearbox's actions the view holds the bindings of (input_bindings.h's kActCount)
-static const int kViewShifts = 24;  // of them the shifter's, before the two locks (DiffLock, Awd)
+static const int kViewActions = 33; // the gearbox's actions the view holds the bindings of (input_bindings.h's kActCount)
+static const int kViewShifts = 28;  // of them the shifter's, before the two locks (DiffLock, Awd)
 // The tab's asks of the gearbox's bindings: begin a capture into an action's slot, or clear it (the mod's thread does
 // both, with the snapshot of its pass).
 void BindingAsk(int what, int action, int slot);
