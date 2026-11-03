@@ -53,6 +53,22 @@ struct GaugeState
 static const int kBackToADefault = 0, kBackToASequential = 10;
 inline int BackToARange(int v) { return v <= 0 ? 0 : v < 3 ? 3 : v > 30 ? 30 : v; }
 
+// The letter the cluster draws for a gearbox position: the automatic's "A" as a real automatic's "D" (the user, 4
+// November: "A should say D"); the rest as they are. Inside, gearMode, the ini keys, the bindings, the state block
+// and the log keep A, so old ini files and logs read as before; the game's own shifter says A and is not the mod's.
+inline const char *GearLetterShown(const char *mode) { return mode && mode[0] == 'A' && !mode[1] ? "D" : mode; }
+// The digital readout's gear: "D 4" in automatic, the gearbox's own positions by their names, "R", "N" (the user, 2
+// November: "it should show the NGG active gear at all times").
+inline void GearHudText(int gear, const char *mode, char *buf, size_t size)
+{
+    const bool named = gear > 0 && mode && mode[0] && mode[0] != 'A';
+    if (gear < 0) strcpy_s(buf, size, "R");
+    else if (gear == 0) strcpy_s(buf, size, "N");
+    else if (named) strcpy_s(buf, size, mode);
+    else if (mode && mode[0]) sprintf_s(buf, size, "%s %d", GearLetterShown(mode), gear);
+    else sprintf_s(buf, size, "%d", gear);
+}
+
 enum { kLayoutStrip, kLayoutBlock, kLayoutHudDials, kLayoutHudDigital, kLayoutCount }; // GaugeSettings::layout (an older Gauges reads 2 and 3 as the strip)
 enum { kFaceSolid, kFaceTinted, kFaceOpen, kFaceCount };     // GaugeSettings::style
 enum { kClassTruck, kClassScout, kClassHeavy, kClassCount }; // GaugeSettings::tachClass

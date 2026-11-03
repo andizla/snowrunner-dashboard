@@ -45,7 +45,7 @@ All values are metric, whatever the player reads. `options` says which units the
 | `speedMax` | the top of the mod's speedometer, km/h (trucks 100, scouts 120, heavy 80, or the player's setting) |
 | `rpmRedline`, `rpmMax` | the tachometer: the red zone from `rpmRedline` to the dial's end at `rpmMax` |
 | `gear` | below 0 R, 0 N, 1 and up the forward gears |
-| `gearMode` | the letter: `SRG_GEAR_NUMBER` (show the number, or N, or R), `SRG_GEAR_A`, `SRG_GEAR_H`, `SRG_GEAR_L_MINUS`, `SRG_GEAR_L`, `SRG_GEAR_L_PLUS` |
+| `gearMode` | the letter: `SRG_GEAR_NUMBER` (show the number, or N, or R), `SRG_GEAR_A` (drawn "D"), `SRG_GEAR_H`, `SRG_GEAR_L_MINUS`, `SRG_GEAR_L`, `SRG_GEAR_L_PLUS` |
 | `top` | how many forward gears the gearbox has, 0 not known. For "A 3/12". |
 | `gearboxLevel` | which gearbox drives: `SRG_GEARBOX_GAME`, `SRG_GEARBOX_AUTO` (the mod's automatic), `SRG_GEARBOX_OWN` (the mod's own gearbox) |
 | `tireLamp` | Next Gen Tire Inflation's mode: `SRG_TIRE_NONE` (no lamp), `LOW`, `REDUCED`, `NORMAL`, `INCREASED` |
@@ -64,7 +64,7 @@ No value is ever NaN or infinite. Where one can be unknown, the table says how t
 
 ## Drawing it right
 
-**The gear.** Show the letter for A, H and the low range. For "A", show the number next to it, as in "A 3" or "A 3/12" with `top`. For `SRG_GEAR_NUMBER`, show `gear` as a number, or "N" at 0, or "R" below 0. This is the gear the player is really in. It can differ from the game's own gear, so prefer it over your own read whenever the block is there.
+**The gear.** Show the letter for the automatic, H and the low range. Draw `SRG_GEAR_A` as "D", as the mod's cluster does (the game's own shifter calls it A), with the number next to it, as in "D 3" or "D 3/12" with `top`. For `SRG_GEAR_NUMBER`, show `gear` as a number, or "N" at 0, or "R" below 0. This is the gear the player is really in. It can differ from the game's own gear, so prefer it over your own read whenever the block is there.
 
 **The engine and the temperatures.** `rpm`, `coolantC`, `oilC`, `boostBar` and `airBar` are the mod's models. The game has no such values, or different ones. Use the block's values when it is there, so your dials match the mod's cluster.
 

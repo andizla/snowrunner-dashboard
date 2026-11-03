@@ -549,7 +549,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             "a kickdown when it is floored, the gear held when the foot lifts, and the first gear as the truck stops. The game's shifter stays yours: "
             "a gear picked there hands the gearbox back until A is picked again. Only the game's reverse on the brake while standing in A is refused.");
     changed(ImGui::RadioButton("The mod's own gearbox", &s.gearbox, kGearboxOwn));
-    PageTip("The mod takes the shifter: A, the numbered gears, N, R, H and the low range on the bindings below, with a clutch and the options. "
+    PageTip("The mod takes the shifter: D, the numbered gears, N, R, H and the low range on the bindings below, with a clutch and the options. "
             "The game's own shifting is refused while it has the truck. Driven with a pad or the keyboard, the game's shifter picks the position too; "
             "with a wheel's pedals only the bindings do.");
     if (s.gearbox == kGearboxOwn && (s.input == kInputWheel || s.ignoreShifter) && !view.canReverse)
@@ -576,15 +576,15 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             s.backToA = kBackToASequential;
             act |= kPageChanged;
         }
-        PageTip("Sets Require the clutch off, Require the gear held off and Back to A at 10 s: shift up and down by hand, and the gearbox goes back to A by itself.");
-        PageLabel("Back to A", labelX);
+        PageTip("Sets Require the clutch off, Require the gear held off and Back to D at 10 s: shift up and down by hand, and the gearbox goes back to D by itself.");
+        PageLabel("Back to D", labelX);
         ImGui::SetNextItemWidth(w);
         if (ImGui::SliderInt("##backtoa", &s.backToA, 0, 30, s.backToA > 0 ? "%d s" : "never", ImGuiSliderFlags_AlwaysClamp))
         {
             s.backToA = BackToARange(s.backToA);
             act |= kPageChanged;
         }
-        PageTip("Seconds after a shift by hand until the gearbox goes back to A by itself, once the wheels grip, the pedal is under 0.7 and the truck is "
+        PageTip("Seconds after a shift by hand until the gearbox goes back to D by itself, once the wheels grip, the pedal is under 0.7 and the truck is "
                 "not on a climb or a descent. Never with Require the gear held, from R, N, L or H, or for a gear picked on the game's shifter.");
         changed(ImGui::Checkbox("Ignore the game's shifter", &s.ignoreShifter));
         PageTip("A position picked on the game's shifter does nothing: only the bindings shift. The shifter still opens.");
@@ -618,7 +618,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     // order is input_bindings.h's GearAction). The shifter's at Gearbox=2, the locks' at every level
     static const char *actions[kViewActions] = { "Gear 1", "Gear 2", "Gear 3", "Gear 4", "Gear 5", "Gear 6", "Gear 7", "Gear 8", "Gear 9", "Gear 10",
                                                  "Gear 11", "Gear 12", "Gear 13", "Gear 14", "Gear 15", "Gear 16", "H", "L-", "L", "L+", "Neutral", "Reverse", "Gear up", "Gear down", "Clutch",
-                                                 "Range high", "Range low", "A", "Diff lock", "AWD", "Sway bars", "Ride up", "Ride down" };
+                                                 "Range high", "Range low", "D", "Diff lock", "AWD", "Sway bars", "Ride up", "Ride down" };
     auto bindingRow = [&](int a) {
         ImGui::PushID(1000 + a);
         PageLabel(actions[a], labelX);
@@ -694,7 +694,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     }
     PageLabel("Creep at idle", labelX);
     changed(ImGui::Checkbox("##creep", &s.creep));
-    PageTip("An idling truck on an automatic moves as a real one does, to walking pace through the converter: the mod's A, with the reverse and the "
+    PageTip("An idling truck on an automatic moves as a real one does, to walking pace through the converter: the mod's D, with the reverse and the "
             "range it drives, and the game's own automatic. For now only with an automatic: a gear picked by hand, on either shifter and an R "
             "included, gets no creep. Hold the brake to stand.");
     PageLabel("Pull test", labelX);

@@ -20,7 +20,7 @@ static const FontStyle kGaugeStyles[kGsStyleCount] = {
     { 6.5f, 0 },  // kGsTiny: captions ("km/h", "x100 rpm", "bar")
     { 13.0f, 1 }, // kGsReadout: digital speed, range
     { 20.0f, 1 }, // kGsGear: the gear in the tachometer
-    { 8.0f, 1 },  // kGsGearMode: "A", "H", "L+"
+    { 8.0f, 1 },  // kGsGearMode: "D", "H", "L+"
     { 6.5f, 1 },  // kGsLamp: the letters inside lamp symbols
     { 7.0f, 0 },  // kGsUnit: small labels next to readouts
     { 24.0f, 1 }, // kGsHudHead: the Spotter digital layout's speed
@@ -593,15 +593,16 @@ static void GTacho(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float
         GText(dl, f, kGsBig, GPolar(c, r - 21.0f * u, GDeg(s, v)), GCol(kText, a), buf, 0, u);
     }
     GText(dl, f, kGsTiny, ImVec2(c.x, c.y - r * 0.36f), GCol(kMuted, a), "x100 rpm", 0, u);
-    // the gear: "4" with "A" beside it in automatic; the gearbox's own positions by their names ("H", "L", "L+", "L-");
+    // the gear: "4" with "D" beside it in automatic (GearLetterShown); the gearbox's own positions by their names ("H", "L", "L+", "L-");
     // "R", "N"
     const bool named = st.gear > 0 && st.gearMode && st.gearMode[0] && st.gearMode[0] != 'A';
     const char *gear = st.gear < 0 ? "R" : st.gear == 0 ? "N" : named ? st.gearMode : (sprintf_s(buf, "%d", st.gear), buf);
     const bool mode = st.gear > 0 && !named && st.gearMode && st.gearMode[0];
-    const float gw = TextWidth(f, kGsGear, gear, u), mw = mode ? TextWidth(f, kGsGearMode, st.gearMode, u) + 3.0f * u : 0.0f;
+    const char *shown = GearLetterShown(st.gearMode);
+    const float gw = TextWidth(f, kGsGear, gear, u), mw = mode ? TextWidth(f, kGsGearMode, shown, u) + 3.0f * u : 0.0f;
     const float gx = c.x - (gw + mw) * 0.5f;
     GText(dl, f, kGsGear, ImVec2(gx, c.y + r * 0.5f), GCol(kText, a), gear, -1, u);
-    if (mode) GText(dl, f, kGsGearMode, ImVec2(gx + gw + 3.0f * u, c.y + r * 0.5f + 4.0f * u), GCol(kMuted, a), st.gearMode, -1, u);
+    if (mode) GText(dl, f, kGsGearMode, ImVec2(gx + gw + 3.0f * u, c.y + r * 0.5f + 4.0f * u), GCol(kMuted, a), shown, -1, u);
     // the engine speed as it is, with the engine off too: the needle runs down with a stopping engine
     GNeedle(dl, c, GDeg(s, st.rpm / 100.0f), r * 0.76f, 3.0f, 0.9f, u, a, GCol(kNeedle, a));
     GHub(dl, c, 7.5f * u, u, a);
@@ -1043,17 +1044,8 @@ static void HLamps(ImDrawList *dl, const GaugeFonts &f, ImVec2 o, float width, f
     }
 }
 
-// The gear Next Gen Gameplay has in force, as the tachometer shows it: "AUTO 4" in automatic, the gearbox's own
-// positions by their names, "R", "N" (the user, 2 November: "it should show the NGG active gear at all times").
-static void HudGear(const GaugeState &st, char *buf, size_t size)
-{
-    const bool named = st.gear > 0 && st.gearMode && st.gearMode[0] && st.gearMode[0] != 'A';
-    if (st.gear < 0) strcpy_s(buf, size, "R");
-    else if (st.gear == 0) strcpy_s(buf, size, "N");
-    else if (named) strcpy_s(buf, size, st.gearMode);
-    else if (st.gearMode && st.gearMode[0]) sprintf_s(buf, size, "AUTO %d", st.gear);
-    else sprintf_s(buf, size, "%d", st.gear);
-}
+// The gear Next Gen Gameplay has in force, as the tachometer shows it (GearHudText, gauges.h).
+static void HudGear(const GaugeState &st, char *buf, size_t size) { GearHudText(st.gear, st.gearMode, buf, size); }
 
 // A HUD dial centred on c, 56 reference pixels in radius, 240 degrees from 0 to top: thin ticks every minor, numbers
 // every step (divided by div), the zone from red up as an orange arc (red below 0: none), an orange needle, and the

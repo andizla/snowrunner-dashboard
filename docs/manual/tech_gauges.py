@@ -1231,7 +1231,8 @@ game's own stall seconds; whether the game's stalling notice shows for it is unc
 taken as 0.2 and 1.0 until a truck with them is driven at Gearbox=0; L is 0.45 as driven. On Windows 10 the NEXT GEN menu may not draw
 while ReShade loads the .asi files as add-ons: turn that off in ReShade's Add-ons tab (one player's report, under investigation).</li></ul>
 <h3>Changed in the next version</h3>
-<ul><li>A gear held by hand at Gearbox=2 with the clutch fully in gets the lift by the wheels' own speed, held to twice the
+<ul><li>The automatic's position shows as D on the cluster and in the tab ("Back to D", the D binding); the ini keys, the bindings, the state block and the log keep A (<code>GearLetterShown</code>).</li>
+<li>A gear held by hand at Gearbox=2 with the clutch fully in gets the lift by the wheels' own speed, held to twice the
 engine's torque, so spinning wheels in mud spin up toward the red zone and wheels that catch do not lurch. Back to A comes with
 the foot down when A's gear is the held one. With Back to A on, a held gear shifts up by itself at the red zone and down before a
 stall, unless RequireClutch or RequireGearHeld is on or the gear was picked on the game's shifter.</li>

@@ -541,6 +541,18 @@ int main()
     Check(Letters(-1, 1, 1.0f, false, "", false) && Letters(0, 1, 1.0f, false, "", false) && Letters(-1, 0, 1.0f, false, "", false), "gear: reverse and neutral carry no letters");
     Check(Letters(1, 1, 1.0f, false, "A", false) && Letters(4, 1, 1.0f, false, "A", false), "gear: automatic");
     Check(Letters(5, 0, 1.0f, false, "H", false), "gear: the high gear is the one above the last numbered gear");
+    // the letters drawn: the automatic's A as D, the rest as they are; the digital readout "D 3", the gearbox's own by name
+    {
+        char hud[32] = "", plainGear[32] = "", low[32] = "", rev[32] = "";
+        GearHudText(3, "A", hud, sizeof hud);
+        GearHudText(3, "", plainGear, sizeof plainGear);
+        GearHudText(1, "L+", low, sizeof low);
+        GearHudText(-1, "", rev, sizeof rev);
+        Check(!strcmp(GearLetterShown("A"), "D") && !strcmp(GearLetterShown("H"), "H") && !strcmp(GearLetterShown("L-"), "L-") && !strcmp(GearLetterShown("L"), "L") &&
+                  !strcmp(GearLetterShown("L+"), "L+") && !strcmp(GearLetterShown(""), "") && !strcmp(hud, "D 3") && !strcmp(plainGear, "3") && !strcmp(low, "L+") &&
+                  !strcmp(rev, "R"),
+              "gear: the automatic drawn as D (D beside the number, \"D 3\" in the digital readout), H, L-, L, L+ and a plain gear as they are");
+    }
     Check(Letters(1, 0, 0.45f, false, "L", true) && Letters(1, 0, 0.2f, false, "L-", true) && Letters(1, 0, 1.0f, false, "L+", true), "gear: the low range by its power factor, with the low gear lamp");
     Check(Letters(1, 0, 1.0f, true, "", false) && Letters(3, 0, 1.0f, true, "", false) && Letters(2, 0, 1.0f, false, "", false), "gear: a gear picked on a wheel's shifter is a number");
 

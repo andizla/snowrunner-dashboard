@@ -845,7 +845,8 @@ static void ReadIni(GaugeSettings &s)
                         L"; Gearbox: 0 the game's own. 1 the mod's automatic in A (a torque converter, shifts up later the further the pedal\n"
                         L"; is down, a kickdown floored), the game's shifter yours, only its reverse on the brake refused. A position picked\n"
                         L"; on the shifter (L+ among them) hands the truck back until A is picked, so the automatic never shifts out of it. 2 the mod's\n"
-                        L"; own gearbox takes the shifter: A, the numbered gears, N, R, H, L-, L, L+ on the bindings below (as 1 until one reaches R).\n"
+                        L"; own gearbox takes the shifter: D, the numbered gears, N, R, H, L-, L, L+ on the bindings below (as 1 until one reaches R).\n"
+                        L"; D is the mod's automatic, drawn so on the cluster; the game's shifter and this ini call it A (GearA, BackToA).\n"
                         L"; [Gearbox] Bind<Action> and Bind<Action>2: two bindings each for Gear1 to Gear16, GearH, GearL-, GearL, GearL+, GearN,\n"
                         L"; GearR, GearA, GearUp, GearDown, Clutch, RangeHigh, RangeLow, and at every Gearbox level DiffLock and Awd (the\n"
                         L"; differential lock and all-wheel drive flipped, on every truck, the upgrade fitted or not; none by default).\n"
@@ -863,7 +864,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; DownStaysForward=1: GearDown stops at L-, N and R only on their own keys (wins over SkipNeutral).\n"
                         L"; At Gearbox=2 with Input 1 or 2 the game's own shifter picks a position too; with Input 0 its shifts stay refused.\n"
                         L"; IgnoreShifter=1: at Gearbox=2 a position picked on the game's shifter does nothing, with any Input.\n"
-                        L"; BackToA: at Gearbox=2, seconds after a shift by hand into a numbered gear until it goes back to A by itself\n"
+                        L"; BackToA: at Gearbox=2, seconds after a shift by hand into a numbered gear until it goes back to D by itself\n"
                         L"; (0 never, else 3 to 30); never with RequireGearHeld, or for a gear picked on the game's shifter.\n"
                         L"; Input is what you drive with: 0 a wheel's pedals, 1 a pad's trigger, 2 the keyboard. The mod's automatic kicks\n"
                         L"; down by it: a trigger has to come from under three quarters, and keys kick nothing down and shift as floored.\n"
@@ -5503,7 +5504,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 116, "ini: the help text survives a write (116 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 117, "ini: the help text survives a write (117 comment lines)");
     // the HUD layouts (BRIEF_cluster_hud_layouts.md): 2 and 3 load and save, 4 is held to the strip, and Style and
     // FaceOpacity survive a trip through Spotter dials
     {
