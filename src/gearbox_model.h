@@ -247,18 +247,20 @@ inline bool BackToAStep(BackModel &m, int seconds, bool hand, const BackInputs &
     return true;
 }
 
-// ---- Sequential's own shifts (the held gear power brief, point 3) ----
+// ---- Sequential's own shifts (the held gear power brief, point 3; back to D, the sequential to D brief) ----
 // With BackToA on, not with RequireClutch or RequireGearHeld (a manual with a clutch or an H shifter never shifts by
-// itself) and never for a gear picked on the game's shifter, a held numbered gear shifts by itself, as a real
-// automatic's manual mode does: up one near the red zone (kSeqUpShare), held kSeqUpHold, not while the wheels spin and not while their
-// grip is unknown (spin cannot be told from speed then: it stays at the limiter); down one with the foot on and the
-// gearbox's input under kSeqDownIdle times idle, held kSeqDownHold. By the gearbox's input, not the engine's speed: the
-// clutch that works by itself slips at low speed and holds the engine near idle. None within a shift's stages, which
-// end kCreepQuiet after the gear engaged. The gearbox stays in the held position, and Back to A's timer restarts.
+// itself) and never for a gear picked on the game's shifter, a held numbered gear goes back to D by itself, as a real
+// automatic's manual mode does, and D picks the gear: near the red zone (kSeqUpShare) with the foot on, held
+// kSeqUpHold, not while the wheels spin and not while their grip is unknown (spin cannot be told from speed then: it
+// stays at the limiter), and never with the foot off, where a low gear held on a descent is engine braking; and before
+// a stall, the gearbox's input under kSeqDownIdle times idle, held kSeqDownHold with the foot on or off, kSeqDownBrake
+// under the brake. By the gearbox's input, not the engine's speed: the clutch that works by itself slips at low speed
+// and holds the engine near idle. They are protective, so Back to A's pedal and lock conditions do not hold them. None
+// within a shift's stages, which end kCreepQuiet after the gear engaged.
 // Up at kSeqUpShare of the red zone's speed: the input is the wheels' share of the gear's top times the red zone's
 // rpm, and with the game's pull nothing at the top a floored held gear settles near 0.95 of it; at 0.9 it gives about
 // 0.56 of the curve, and the next gear lands near 0.63 of its top at the full curve, so the shift gains pull (review F2).
-static const float kSeqUpHold = 0.3f, kSeqDownHold = 0.5f, kSeqDownIdle = 1.1f, kSeqUpShare = 0.9f;
+static const float kSeqUpHold = 0.3f, kSeqDownHold = 0.5f, kSeqDownBrake = 0.2f, kSeqDownIdle = 1.1f, kSeqUpShare = 0.9f;
 struct SeqInputs
 {
     int backToA;
@@ -266,10 +268,11 @@ struct SeqInputs
     int pos, gear, top;
     float input, redline, idle; // the gearbox's input speed, the red zone's and the idle's, rpm
     float pedal;
+    bool braking;   // the brake or the handbrake on
     bool gripKnown, spinning, busy, engineOn;
 };
 struct SeqModel { float up, down; };
-// One pass of dt seconds: +1 a shift up, -1 a shift down, 0 none.
+// One pass of dt seconds: +1 back to D at the red zone, -1 back to D before a stall, 0 none.
 inline int SequentialStep(SeqModel &m, const SeqInputs &in, float dt)
 {
     if (in.backToA <= 0 || in.requireClutch || in.requireGearHeld || in.byShifter || in.pos != kPosGear || !in.engineOn || in.busy)
@@ -277,12 +280,12 @@ inline int SequentialStep(SeqModel &m, const SeqInputs &in, float dt)
         m = SeqModel{};
         return 0;
     }
-    const bool up = in.gear < in.top && in.input >= kSeqUpShare * in.redline && in.gripKnown && !in.spinning;
-    const bool down = in.gear > 1 && in.input < kSeqDownIdle * in.idle && in.pedal >= kBackFootOff;
+    const bool up = in.gear < in.top && in.input >= kSeqUpShare * in.redline && in.pedal >= kBackFootOff && in.gripKnown && !in.spinning;
+    const bool down = in.gear > 1 && in.input < kSeqDownIdle * in.idle;
     m.up = up ? m.up + dt : 0.0f;
     m.down = down ? m.down + dt : 0.0f;
     if (m.up >= kSeqUpHold) { m = SeqModel{}; return 1; }
-    if (m.down >= kSeqDownHold) { m = SeqModel{}; return -1; }
+    if (m.down >= (in.braking ? kSeqDownBrake : kSeqDownHold)) { m = SeqModel{}; return -1; }
     return 0;
 }
 

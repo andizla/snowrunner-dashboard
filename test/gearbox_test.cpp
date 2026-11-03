@@ -309,12 +309,30 @@ int main()
         slow.gripKnown = false; // a down-shift needs no grip
         const float downAt = firstAt(slow, -1);
         c = slow; c.byShifter = true; none = none && firstAt(c, -1) < 0.0f;
-        c = slow; c.pedal = 0.0f; none = none && firstAt(c, -1) < 0.0f;
+        // the foot off: the down still comes (braking with the clutch that works by itself never stalls), 0.2 s under the
+        // brake; the up never, so a low gear held on a descent keeps its engine braking (the sequential to D brief)
+        c = slow; c.pedal = 0.0f;
+        const float footOffDown = firstAt(c, -1);
+        c.braking = true;
+        const float brakeDown = firstAt(c, -1);
+        c = in; c.pedal = 0.0f; none = none && firstAt(c, 1) < 0.0f;
+        // back to D: the position goes to A and D's gear is set in one shift, two gears down from a held 6th
+        GearboxPosModel six = {};
+        GearboxTruck st = Truck(1);
+        GearboxActions g6 = {};
+        g6.gearPressed = 6;
+        Pass(six, plain, g6, st);
+        GearboxActions toD = {};
+        toD.a = true;
+        const GearboxPosOrders o = Pass(six, plain, toD, st, 4);
+        const bool backToD = six.pos == kPosA && st.gear == 4 && o.setGear && o.gear == 4;
         c = slow; c.gear = 1; none = none && firstAt(c, -1) < 0.0f;
         char line[200];
-        snprintf(line, sizeof line, "sequential: up at the red zone after %.2f s, to 4th; a spike shifts nothing; none where it may not; down before a stall after %.2f s", upAt,
-                 downAt);
-        Check(upAt >= 0.25f && upAt <= 0.31f && toFourth && !spike && none && downAt >= 0.45f && downAt <= 0.51f, line);
+        snprintf(line, sizeof line, "sequential: up at the red zone after %.2f s with the foot on, never off; down before a stall after %.2f s, foot on or off, %.2f s "
+                                    "braking; back to D in one shift; none where it may not", upAt, downAt, brakeDown);
+        Check(upAt >= 0.25f && upAt <= 0.31f && toFourth && !spike && none && downAt >= 0.45f && downAt <= 0.51f && footOffDown >= 0.45f && footOffDown <= 0.51f &&
+                  brakeDown >= 0.15f && brakeDown <= 0.21f && backToD,
+              line);
     }
     // the gear keys to 16: Gear16 picks a 16-speed's 16th gear; Gear13 on a six-speed picks its top, as any key over it
     {

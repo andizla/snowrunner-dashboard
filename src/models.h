@@ -1282,6 +1282,10 @@ static const float kSlipUp = 1.05f;          // a shift up goes by the wheels at
 static const float kSlipShare = 1.2f, kSlipSpare = 1.0f; // wheels this much faster than the ground under them, and this many rad/s more, spin: the gearbox goes by the ground
                                                         // (floored in drives logged in the game the wheels turned within 1.13 times the learned grip nine times in ten)
 static const float kDownMost = 0.9f;         // no shift down puts the engine, at the speed the wheels turn, further than this from idle to the red zone
+// Slowing hard with the foot off: the brake on, or the truck losing kBrakeSlowing m/s a second (as the wheels' trend in
+// the ground's terms, grip times it). Then D comes down to the speed's gear in one shift, with no pause and no wait
+// before the next, and only with the grip known (wheels locked under the brake read nothing otherwise).
+static const float kBrakeSlowing = 1.5f;
 static const float kShiftUpAfter = 0.4f, kShiftDownAfter = 0.5f, kCoastDownAfter = 0.3f; // seconds a shift up, a shift down and one with the foot off has to be called for before it is made
 static const float kShiftUpAfterFloored = 0.15f; // and a shift up floored, where a short first gear is through in a second
 static const float kPedalFall = 0.5f;        // the pedal the shift points go by follows a lifted foot down this much each second: a lift is no call to shift up
@@ -1925,6 +1929,7 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     // all but standing, the first gear (the start gear) at once, whatever the pause: an automatic is in it by the time
     // the truck stops, also after a hard stop that left no time for the shifts down one by one
     const bool standing = GearboxInput(t, k, 1, fmaxf(raw, m.by)) < k.redline * kStopShift;
+    const bool slowingHard = footOff && m.grip > 0.0f && (braking || m.trend <= -kBrakeSlowing * m.grip);
     if (standing)
     {
         m.moving = 0.0f;
@@ -1978,11 +1983,13 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
         to = pedalUp ? upTo(m.gear) : m.gear + 1; // cruising or lifted: one gear
         liftUp = keys && !pedalUp && footOff;
     }
-    else if (m.pause <= 0.0f && footOff && m.wanted <= -kCoastDownAfter)
+    else if (footOff && wantDown && ((slowingHard) || (m.pause <= 0.0f && m.wanted <= -kCoastDownAfter)))
     {
-        // coasting down: as far as the engine stays under coastTo, gears at a time when the truck slows hard
+        // coasting down: as far as the engine stays under coastTo, gears at a time when the truck slows hard, and
+        // under the brake at once, with no pause or wait first; under the brake with the grip unknown one gear at a time
+        // (wheels locked by it read nothing)
         to = m.gear - 1;
-        while (to > least && GearboxInput(t, k, to, by) < coastDown && GearboxInput(t, k, to - 1, by) < coastTo && fits(to - 1)) to--;
+        while ((m.grip > 0.0f || !braking) && to > least && GearboxInput(t, k, to, by) < coastDown && GearboxInput(t, k, to - 1, by) < coastTo && fits(to - 1)) to--;
     }
     else if (m.pause <= (m.upLast ? 0.0f : kShiftPause - kShiftAgain) && !footOff && m.wanted <= -kShiftDownAfter)
         to = downTo(m.gear);

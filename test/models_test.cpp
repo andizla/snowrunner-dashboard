@@ -3694,6 +3694,87 @@ int main(int argc, char **argv)
         Check(inMud && worst <= kSpinLiftMost + 0.001f && worst > 1.0f, line);
     }
 
+    // D slowing under the brake (the sequential to D brief): from 6th at 60 km/h braked to 20 km/h in 3 s it comes down
+    // to the speed's gear (the one a long coast at 20 km/h settles in), never more than 0.5 s behind each speed's gear and
+    // with no more shifts than gears; slowing gently without
+    // the brake it still goes a gear at a time; with the grip unknown and the wheels half locked under the brake no pass
+    // drops more than one gear; and the pedal after the brake's skips finds no hunt kept
+    {
+        const float dt = 0.05f;
+        TruckRaw t = Truck();
+        t.gearSpeeds = 8;
+        static const float six[8] = { 3.0f, 6.0f, 10.0f, 15.0f, 22.0f, 30.0f, 42.0f, 20.0f };
+        memcpy(t.gearSpeed, six, sizeof six);
+        t.gear = t.gearEngaged = 6;
+        auto at = [&](float v, float pedal, float brake, float lock = 1.0f) {
+            for (int i = 0; i < t.wheels; i++) t.spin[i] = v / 0.45f * lock;
+            t.speed = v;
+            t.throttle = brake > 0.0f ? brake : -pedal;
+        };
+        const GaugeScale &k = kClassScales[kClassTruck];
+        GearboxModel m = {};
+        at(16.7f, 0.3f, 0.0f);
+        for (int i = 0; i < 80; i++) GearboxStep(m, t, k, 0.3f, 0.3f, dt);
+        m.gear = 6;
+        m.pause = m.wanted = 0.0f;
+        const GearboxModel learned = m;
+        GearboxModel ref = learned;
+        at(5.56f, 0.0f, 0.0f);
+        for (int i = 0; i < 400; i++) GearboxStep(ref, t, k, 0.0f, 0.0f, dt);
+        // the gear a long coast settles in at speed v: the speed's gear
+        auto settled = [&](float v) {
+            GearboxModel c = learned;
+            at(v, 0.0f, 0.0f);
+            for (int i = 0; i < 200; i++) GearboxStep(c, t, k, 0.0f, 0.0f, dt);
+            return c.gear;
+        };
+        const int shiftsWere = m.shifts;
+        int worstDrop = 0;
+        float behind = 0.0f, worstBehind = 0.0f;
+        for (int i = 0; i <= 70; i++)
+        {
+            const float v = i < 60 ? 16.7f - (16.7f - 5.56f) * i / 60.0f : 5.56f;
+            const int speeds = settled(v);
+            at(v, 0.0f, 0.5f);
+            const int was = m.gear;
+            GearboxStep(m, t, k, 0.0f, 0.0f, dt);
+            worstDrop = was - m.gear > worstDrop ? was - m.gear : worstDrop;
+            behind = m.gear > speeds ? behind + dt : 0.0f;
+            worstBehind = fmaxf(worstBehind, behind);
+        }
+        const int brakeShifts = m.shifts - shiftsWere;
+        const bool braked = learned.grip > 0.0f && m.gear == ref.gear && brakeShifts >= 1 && brakeShifts <= 6 - ref.gear && worstBehind <= 0.5f;
+        const int huntsWere = m.hunts;
+        at(5.56f, 0.5f, 0.0f);
+        for (int i = 0; i < 40; i++) GearboxStep(m, t, k, 0.5f, 0.5f, dt);
+        const bool noHunt = m.hunts == huntsWere && m.keepFor <= 0.0f;
+        GearboxModel gentle = learned;
+        int gentleDrop = 0;
+        for (int i = 0; i < 400; i++)
+        {
+            at(16.7f - 0.3f * i * dt, 0.0f, 0.0f);
+            const int was = gentle.gear;
+            GearboxStep(gentle, t, k, 0.0f, 0.0f, dt);
+            gentleDrop = was - gentle.gear > gentleDrop ? was - gentle.gear : gentleDrop;
+        }
+        GearboxModel blind = {};
+        at(16.7f, 0.0f, 0.5f, 0.5f);
+        GearboxStep(blind, t, k, 0.0f, 0.0f, dt);
+        blind.gear = 6;
+        int blindDrop = 0;
+        for (int i = 0; i < 60; i++)
+        {
+            at(16.7f - (16.7f - 5.56f) * i / 60.0f, 0.0f, 0.5f, 0.5f);
+            const int was = blind.gear;
+            GearboxStep(blind, t, k, 0.0f, 0.0f, dt);
+            blindDrop = was - blind.gear > blindDrop ? was - blind.gear : blindDrop;
+        }
+        char line[220];
+        snprintf(line, sizeof line, "automatic: braked from 6th at 60 to 20 km/h in 3 s it lands in %d (a coast settles in %d) in %d shifts, never %.2f s behind the speed's gear; gently a gear at a time (%d); "
+                                    "the grip unknown, at most %d a pass; no hunt after", m.gear, ref.gear, brakeShifts, worstBehind, gentleDrop, blindDrop);
+        Check(braked && noHunt && gentleDrop <= 1 && blind.grip == 0.0f && blindDrop <= 1, line);
+    }
+
     // the shift's state (review 17, step 2): asked, set, engaged and idle kCreepQuiet later, in that order; the stall of a
     // shift without the clutch comes once, on the first pass after it is set, never while it is only asked; a shift
     // not taken goes idle with its stall; one that never engages goes idle after kStageMost

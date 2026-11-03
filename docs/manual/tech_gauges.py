@@ -576,12 +576,14 @@ ground, the nose and A's gear, and "sequential: back to A after N s in gear g, A
 {table(['Condition', 'Figure', 'Why'], rows, 'Back to A: what must hold for a second')}
 <p>Sequential's own shifts (<code>SequentialStep</code>, gearbox_model.h): with <code>BackToA</code> above 0, not with
 <code>RequireClutch</code> or <code>RequireGearHeld</code>, never for a gear picked on the game's shifter and never within a
-shift's stages (which end 1.5 s after the gear engaged), a held numbered gear shifts up one when the gearbox's input
+shift's stages (which end 1.5 s after the gear engaged), a held numbered gear goes back to D (D picks the gear) near the red zone, when the gearbox's input
 (<code>ClutchModel::input</code>, the wheels and the gear) has been at 0.9 of the red zone's speed for 0.3 s (a floored held gear settles near 0.95 of its top, where the game gives nothing), below the top gear, with the grip
-known and the wheels not spinning (Back to A's own test), and down one when it has been under 1.1 times idle for 0.5 s with the
-pedal at 0.05 or more, above 1st. By the input, not the engine's speed: the clutch that works by itself slips at low speed and
-holds the engine near idle. The shift is the up or down key on that pass, so the position stays held and Back to A's timer
-restarts. The log: "sequential: up at the red zone" or "down before a stall", with the gears and the input's rpm.</p>'''
+known, the wheels not spinning (Back to A's own test) and the pedal at 0.05 or more (with the foot off a low gear held downhill is
+engine braking), and before a stall, when it has been under 1.1 times idle for 0.5 s, the foot on or off (0.2 s under the brake),
+above 1st. By the input, not the engine's speed: the clutch that works by itself slips at low speed and
+holds the engine near idle. The return is the A key on that pass, one shift job; Back to A's pedal and lock conditions do not
+hold it, as it is protective. The log: "sequential: up at the red zone" or "down before a stall", with the gear, D's gear and
+the input's rpm.</p>'''
 
 
 def s_coolant():
@@ -1231,7 +1233,9 @@ game's own stall seconds; whether the game's stalling notice shows for it is unc
 taken as 0.2 and 1.0 until a truck with them is driven at Gearbox=0; L is 0.45 as driven. On Windows 10 the NEXT GEN menu may not draw
 while ReShade loads the .asi files as add-ons: turn that off in ReShade's Add-ons tab (one player's report, under investigation).</li></ul>
 <h3>Changed in the next version</h3>
-<ul><li><code>Gauges\\logs</code> keeps the newest 20 start logs and at most 500 MB of them (<code>KeepLogs</code>, 0 keeps all); only the mod's own date-named logs are removed.</li>
+<ul><li>Sequential's own shifts go back to D, which picks the gear: near the red zone with the foot on, and before a
+stall with the foot on or off (0.2 s under the brake). Under the brake D comes down to the speed's gear at once, skipping gears.</li>
+<li><code>Gauges\\logs</code> keeps the newest 20 start logs and at most 500 MB of them (<code>KeepLogs</code>, 0 keeps all); only the mod's own date-named logs are removed.</li>
 <li>The automatic's position shows as D on the cluster and in the tab ("Back to D", the D binding); the ini keys, the bindings, the state block and the log keep A (<code>GearLetterShown</code>).</li>
 <li>A gear held by hand at Gearbox=2 with the clutch fully in gets the lift by the wheels' own speed, held to twice the
 engine's torque, so spinning wheels in mud spin up toward the red zone and wheels that catch do not lurch. Back to A comes with
@@ -1314,7 +1318,10 @@ author's own drives, 28 October; review 11 found a press from a low cruise still
 <li>In engine mode the automatic cruises where a diesel pulls cleanly (review 11): at a light foot the converter locks from 1.65 idle
 (from 1.3) and the gearbox shifts down at 1.6 idle (from 1.15). A scout without a profile cruises from about 2370 rpm instead of
 3300 (the light-foot shift-up point from the curve's 0.9 point, at most 0.45 red). On the limiter a gear going up is held 0.9 s, not the hold's 2.5
-s. When the floor lifts the game's gear past the model's held one, the model's gear follows. The coast shift down with the brake on lands low for an engine brake; it matters once the
+s. When the floor lifts the game's gear past the model's held one, the model's gear follows. The coast shift down with the brake on lands low for an engine brake, and slowing hard with the foot off and the grip known (the
+brake, or the wheels' trend in the ground's terms under -1.5 m/s² × grip, <code>kBrakeSlowing</code>) it goes as far as the
+speed's gear at once, with no <code>kShiftPause</code> and no coast wait before it; with the grip unknown under the brake, one gear
+at a time, as wheels locked by it read nothing; it matters once the
 mod has one.</li>
 <li>A binding's capture in the tab binds the first thing that changes. A control already held or a hat already pointing when the
 slot is clicked is left alone until it is let go, and Gauges.log names it. Two players could bind nothing in the tab, and only

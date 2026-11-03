@@ -4136,7 +4136,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                     w.backSaid = w.back.why;
                 }
                 if (w.back.why <= kBackTimer || w.back.why == kBackGo) w.backSaid = w.back.why;
-                // Sequential's own shifts, as a key's, so the gearbox stays in the held position
+                // Sequential's own shifts: back to D, which picks the gear (the sequential to D brief)
                 SeqInputs si = {};
                 si.backToA = s.backToA;
                 si.requireClutch = s.requireClutch;
@@ -4149,17 +4149,19 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 si.redline = scale.redline;
                 si.idle = scale.idle;
                 si.pedal = foot;
+                si.braking = TruckBrake(raw) > 0.0f || raw.handbrake;
                 si.gripKnown = bi.grip > 0.0f;
                 si.spinning = bi.grip > 0.0f && bi.spin > bi.grip * fabsf(bi.speed) * kBackSlip + kBackSlipAdd;
                 si.busy = g_shiftJob.state != kShiftIdle || w.stage.stage != kStageIdle;
                 si.engineOn = TruckEngineOn(raw) && raw.stall <= 0.0f;
                 const int seq = acts.a ? 0 : SequentialStep(w.seq, si, dt);
-                if (seq > 0) acts.up = true;
-                if (seq < 0) acts.down = true;
                 if (seq)
-                    Log(seq > 0 ? L"sequential: up at the red zone, gear %d to %d, %.0f rpm on the gearbox's input"
-                                : L"sequential: down before a stall, gear %d to %d, %.0f rpm on the gearbox's input",
-                        w.pos.gear, w.pos.gear + seq, w.clutch.input);
+                {
+                    acts.a = true;
+                    Log(seq > 0 ? L"sequential: up at the red zone, gear %d, back to D (D's gear %d), %.0f rpm on the gearbox's input"
+                                : L"sequential: down before a stall, gear %d, back to D (D's gear %d), %.0f rpm on the gearbox's input",
+                        w.pos.gear, autoGear, w.clutch.input);
+                }
             }
             else w.back = BackModel{}, w.backSaid = kBackOff, w.seq = SeqModel{};
             const int gearWas = w.pos.gear;
