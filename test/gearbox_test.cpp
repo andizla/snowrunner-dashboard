@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
+#include "gauges.h" // BackToA's default and the Sequential button's
 #include "gearbox_model.h"
 #include "gearbox_hooks.h"
 
@@ -118,6 +119,110 @@ int main()
         const bool rangeHigh = m.pos == kPosGear && m.gear == 1 && t.gear == 1 && fabsf(t.power - 1.0f) < 0.01f;
         Check(staysH && toTop && inA && aToLowPlus && rangeLow && rangeHigh,
               "gearbox: up from H stays, down from H gives the top; down from A in the game's gear 1 gives L+; RangeLow from 3 gives L, RangeHigh from L the 1st");
+    }
+    // BackToA (review 17, Sequential): the default never returns; at 10 s a shift by hand returns after the timer and a
+    // second steady, and the next shift by hand restarts it; each condition holds the return on its own; a failure
+    // inside the steady second starts it over; R, N, the low range and H never return, nor a gear held by
+    // RequireGearHeld or the game's shifter; a lock switched holds it 3 s; A's gear more than one away holds it while
+    // the truck moves, not while it stands with the foot off
+    {
+        const float dt = 0.05f;
+        BackInputs good = {};
+        good.pos = kPosGear;
+        good.heldGear = 4;
+        good.autoGear = 5;
+        good.pedal = 0.3f;
+        good.grip = 1.2f;
+        good.speed = 10.0f;
+        good.spin = 12.0f;
+        good.pitchKnown = true;
+        good.engineOn = true;
+        // seconds until the return after a shift by hand at 0, or -1 within `most`
+        auto run = [&](int seconds, const BackInputs &in, float most, BackModel *keep = nullptr, float handAgainAt = -1.0f) {
+            BackModel m = {};
+            for (int i = 0; i * dt < most; i++)
+            {
+                const float t = i * dt;
+                const bool hand = i == 0 || (handAgainAt >= 0.0f && fabsf(t - handAgainAt) < dt * 0.5f);
+                if (BackToAStep(m, seconds, hand, in, dt)) { if (keep) *keep = m; return t; }
+            }
+            if (keep) *keep = m;
+            return -1.0f;
+        };
+        const bool byDefault = run(kBackToADefault, good, 60.0f) < 0.0f && kBackToADefault == 0;
+        const float at = run(kBackToASequential, good, 60.0f);
+        const bool tenSteady = at >= 10.8f && at <= 11.15f;
+        const float again = run(10, good, 60.0f, nullptr, 5.0f);
+        const bool restarts = again >= 15.8f && again <= 16.15f;
+        bool eachHolds = true;
+        char which[96] = "";
+        auto holds = [&](BackInputs in, int why, const char *name) {
+            BackModel m = {};
+            const bool back = run(10, in, 20.0f, &m) >= 0.0f;
+            if (back || m.why != why)
+            {
+                eachHolds = false;
+                if (!which[0]) snprintf(which, sizeof which, "%s (why %d)", name, m.why);
+            }
+        };
+        BackInputs c = good;
+        c.pedal = 0.8f; holds(c, kBackPedalDown, "pedal");
+        c = good; c.grip = 0.0f; holds(c, kBackNoGrip, "grip");
+        c = good; c.spin = 30.0f; holds(c, kBackSpin, "spin");
+        c = good; c.pitchDeg = 10.0f; c.pedal = 0.5f; holds(c, kBackClimb, "climb");
+        c = good; c.climbHold = true; holds(c, kBackClimb, "climb hold");
+        c = good; c.pitchDeg = -7.0f; holds(c, kBackDescent, "descent");
+        c = good; c.speed = -1.0f; c.spin = 1.2f; holds(c, kBackRollingBack, "rolling back");
+        c = good; c.autoGear = 7; holds(c, kBackGap, "gap");
+        c = good; c.handbrake = true; holds(c, kBackHandbrake, "handbrake");
+        c = good; c.engineOn = false; holds(c, kBackEngine, "engine");
+        c = good; c.dying = true; holds(c, kBackEngine, "dying");
+        c = good; c.shiftBusy = true; holds(c, kBackShifting, "shift");
+        c = good; c.byShifter = true; holds(c, kBackHeld, "game's shifter");
+        c = good; c.gearHeldRule = true; holds(c, kBackHeld, "RequireGearHeld");
+        static const int never[] = { kPosR, kPosN, kPosLowMinus, kPosLow, kPosLowPlus, kPosH };
+        for (int pos : never)
+        {
+            c = good;
+            c.pos = pos;
+            holds(c, kBackNotHand, "R, N, the low range or H");
+        }
+        // a climb with the foot light is no climb
+        c = good; c.pitchDeg = 10.0f; c.pedal = 0.2f;
+        const bool lightClimb = run(10, c, 20.0f) > 0.0f;
+        // standing with the foot off, A's gear anywhere
+        c = good; c.autoGear = 1; c.speed = 0.0f; c.spin = 0.0f; c.pedal = 0.0f;
+        const bool standing = run(10, c, 20.0f) > 0.0f;
+        // a failure inside the steady second: the pedal down for one pass at 10.5 s, so the second starts over at 10.55
+        bool steadyAgain = false;
+        {
+            BackModel m = {};
+            float back = -1.0f;
+            for (int i = 0; i * dt < 20.0f && back < 0.0f; i++)
+            {
+                BackInputs in = good;
+                if (i == 210) in.pedal = 0.9f;
+                if (BackToAStep(m, 10, i == 0, in, dt)) back = i * dt;
+            }
+            steadyAgain = back >= 11.4f && back <= 11.7f;
+        }
+        // a lock switched just as the timer runs out holds it kBackAfterSwitch
+        bool switched = false;
+        {
+            BackModel m = {};
+            float back = -1.0f;
+            for (int i = 0; i * dt < 30.0f && back < 0.0f; i++)
+            {
+                BackInputs in = good;
+                in.diffLock = i >= 200;
+                if (BackToAStep(m, 10, i == 0, in, dt)) back = i * dt;
+            }
+            switched = back >= 13.8f && back <= 14.2f;
+        }
+        Check(byDefault && tenSteady && restarts && eachHolds && lightClimb && standing && steadyAgain && switched && BackToARange(1) == 3 && BackToARange(45) == 30 &&
+                  BackToARange(-2) == 0 && BackToARange(12) == 12,
+              which[0] ? which : "BackToA: never by default; after 10 s and a steady second, restarted by a shift by hand; each condition holds it, R, N, L and H never, "
+                                 "nor a gear held; a failure in the second starts it over; a lock switched holds it 3 s; any gap standing with the foot off");
     }
     // the gear keys to 16: Gear16 picks a 16-speed's 16th gear; Gear13 on a six-speed picks its top, as any key over it
     {

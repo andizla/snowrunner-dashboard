@@ -13,6 +13,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 enum { kPosA, kPosGear, kPosN, kPosR, kPosH, kPosLowMinus, kPosLow, kPosLowPlus, kPosCount };
 
@@ -165,6 +166,85 @@ struct GearboxPosOrders
     bool moved;           // the position changed on this pass
     const char *why;      // what happened, for the log, a string literal; "" for nothing to say
 };
+
+// ---- BackToA: the mod's own gearbox back in A by itself (review 17, Sequential) ----
+// After a shift by hand into a numbered gear (GearUp, GearDown, a gear key) and BackToA seconds without another, the
+// position goes back to A once every condition below has held for kBackSteady without a break. Never for a gear held
+// by RequireGearHeld or picked on the game's shifter, which stay where they were put, and never from R, N, the low
+// range or H. A's gear is the one the mod's automatic would ask on its first pass back (TakeoverAutoGear).
+static const float kBackSteady = 1.0f, kBackPedal = 0.7f, kBackSlip = 1.05f, kBackSlipAdd = 0.5f, kBackClimbDeg = 8.0f, kBackClimbPedal = 0.4f,
+                   kBackDescentDeg = 5.0f, kBackAfterSwitch = 3.0f, kBackFootOff = 0.05f;
+// What holds the return, in the order the conditions are checked.
+enum
+{
+    kBackOff, kBackNotHand, kBackHeld, kBackTimer, kBackPedalDown, kBackNoGrip, kBackSpin, kBackClimb, kBackDescent, kBackRollingBack,
+    kBackGap, kBackSwitch, kBackHandbrake, kBackEngine, kBackShifting, kBackSteadying, kBackGo, kBackWhyCount
+};
+static const char *const kBackWhyNames[kBackWhyCount] = { "BackToA 0", "no shift by hand into a numbered gear", "the gear held (RequireGearHeld or the game's shifter)",
+                                                          "the timer", "the pedal", "the wheels' grip not learned yet", "wheelspin", "a climb",
+                                                          "a descent", "rolling back", "A's gear too far", "a lock switched", "the handbrake",
+                                                          "the engine", "a shift", "a second steady", "nothing" };
+struct BackInputs
+{
+    int pos, heldGear, autoGear;
+    bool byShifter, gearHeldRule; // picked on the game's shifter; RequireGearHeld on
+    float pedal;
+    float grip, spin, speed;      // the wheels' rad/s for each m/s learned (0 not yet), their speed, the truck's in m/s (below 0 backwards)
+    bool pitchKnown;
+    float pitchDeg;               // above 0 the nose up
+    bool climbHold;               // the automatic's hold after a climb is running
+    bool awd, diffLock, handbrake, engineOn, dying, shiftBusy;
+};
+struct BackModel
+{
+    bool timing;     // a shift by hand into a numbered gear started the timer
+    float since;     // seconds since it
+    float steady;    // seconds every condition has held
+    bool locksSeen, awd, diffLock;
+    float switchAge; // seconds since the diff lock or AWD last changed
+    int why;         // what holds the return now (kBack...)
+};
+// One pass of dt seconds; seconds: BackToA; hand: a shift by hand into a numbered gear on the last pass. True on the
+// pass the position is to go back to A.
+inline bool BackToAStep(BackModel &m, int seconds, bool hand, const BackInputs &in, float dt)
+{
+    if (m.locksSeen && (in.awd != m.awd || in.diffLock != m.diffLock)) m.switchAge = 0.0f;
+    else m.switchAge += dt;
+    m.locksSeen = true;
+    m.awd = in.awd;
+    m.diffLock = in.diffLock;
+    auto hold = [&](int why) { m.why = why; m.steady = 0.0f; return false; };
+    if (seconds <= 0) { m.timing = false; return hold(kBackOff); }
+    if (hand) m.timing = true, m.since = 0.0f, m.steady = 0.0f;
+    if (in.pos != kPosGear) m.timing = false;
+    if (!m.timing) return hold(kBackNotHand);
+    if (in.byShifter || in.gearHeldRule) return hold(kBackHeld);
+    m.since += dt;
+    if (m.since < (float)seconds) return hold(kBackTimer);
+    const float ground = in.grip * fabsf(in.speed);
+    const bool standing = fabsf(in.speed) < kStandStill && in.pedal < kBackFootOff;
+    if (in.pedal >= kBackPedal) return hold(kBackPedalDown);
+    if (!(in.grip > 0.0f)) return hold(kBackNoGrip);
+    if (in.spin > ground * kBackSlip + kBackSlipAdd) return hold(kBackSpin);
+    if (in.climbHold || (in.pitchKnown && in.pitchDeg > kBackClimbDeg && in.pedal >= kBackClimbPedal)) return hold(kBackClimb);
+    if (in.pitchKnown && in.pitchDeg < -kBackDescentDeg && in.speed > kStandStill) return hold(kBackDescent);
+    if (in.speed < -kStandStill) return hold(kBackRollingBack);
+    if (!standing && abs(in.autoGear - in.heldGear) > 1) return hold(kBackGap);
+    if (m.switchAge < kBackAfterSwitch) return hold(kBackSwitch);
+    if (in.handbrake) return hold(kBackHandbrake);
+    if (!in.engineOn || in.dying) return hold(kBackEngine);
+    if (in.shiftBusy) return hold(kBackShifting);
+    m.steady += dt;
+    if (m.steady < kBackSteady)
+    {
+        m.why = kBackSteadying;
+        return false;
+    }
+    m.timing = false;
+    m.steady = 0.0f;
+    m.why = kBackGo;
+    return true;
+}
 
 // At Gearbox 0 and 1 the game's shifter is the player's: the mod's orders go out only in A, and a gear only forward
 // (never N or R from the mod's thread; 0.18.2's hotfix). pos: the position the model holds after its step.

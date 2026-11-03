@@ -48,6 +48,11 @@ struct GaugeState
     float outsideC;                 // the outside temperature in force, in C, in the clock's face
 };
 
+// BackToA's default in seconds (0 never, so Gearbox=2 is as it was), what the tab's Sequential button sets, and its
+// range: 0, else 3 to 30
+static const int kBackToADefault = 0, kBackToASequential = 10;
+inline int BackToARange(int v) { return v <= 0 ? 0 : v < 3 ? 3 : v > 30 ? 30 : v; }
+
 enum { kLayoutStrip, kLayoutBlock, kLayoutHudDials, kLayoutHudDigital, kLayoutCount }; // GaugeSettings::layout (an older Gauges reads 2 and 3 as the strip)
 enum { kFaceSolid, kFaceTinted, kFaceOpen, kFaceCount };     // GaugeSettings::style
 enum { kClassTruck, kClassScout, kClassHeavy, kClassCount }; // GaugeSettings::tachClass
@@ -84,6 +89,7 @@ struct GaugeSettings
     bool skipNeutral;        // SkipNeutral: from L- to reverse and back without stopping in neutral
     bool downStaysForward;   // DownStaysForward: Gear down stops at L-; wins over SkipNeutral
     bool ignoreShifter;      // IgnoreShifter: at Gearbox=2 a position picked on the game's shifter does nothing
+    int backToA;             // BackToA: at Gearbox=2, seconds after a shift by hand until the gearbox goes back to A by itself; 0 never, else 3 to 30
     int input;               // Input: what the pedal is: 0 a wheel's pedals, 1 a pad's trigger, 2 keys. The mod's automatic kicks down by it
     bool powertrain;         // Powertrain: the engine's torque (its curve, the cold oil, the boost) and the converter's handed to the game
     int engineShare;         // EngineShare: how much of the mod's engine the game gets with it, in percent: 0 the game's own pull, 100 the mod's
@@ -152,6 +158,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.boostProfile = kSpoolStandard;
     s.gearbox = kGearboxGame;
     s.requireClutch = s.requireGearHeld = s.skipNeutral = s.downStaysForward = s.ignoreShifter = false;
+    s.backToA = kBackToADefault;
     s.powertrain = false;
     s.engineShare = 50;
     s.creep = true;
@@ -325,6 +332,7 @@ inline void SettingsClamp(GaugeSettings &s)
     s.probe = s.probe < 0 ? 0 : s.probe;
     s.suspStepTest = s.suspStepTest < 0 || s.suspStepTest > 3 ? 0 : s.suspStepTest;
     s.shiftOnGameThread = s.shiftOnGameThread ? 1 : 0;
+    s.backToA = BackToARange(s.backToA);
 }
 
 // The scales of a truck class: idle, where the red zone starts, the tachometer's top (rpm), the speedometer's top

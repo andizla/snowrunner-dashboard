@@ -569,6 +569,23 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         PageTip("Up and down step from L- to reverse and back without stopping in neutral.");
         changed(ImGui::Checkbox("Down stays in forward gears", &s.downStaysForward));
         PageTip("Gear down stops at L-, the lowest forward gear. N and R only on their own keys or the game's shifter, as SMT's immersive mode did. Wins over Skip neutral.");
+        if (ImGui::Button("Sequential", ImVec2(w, 0)))
+        {
+            // a pad's sequential box: no clutch, no gear held, back to A by itself
+            s.requireClutch = s.requireGearHeld = false;
+            s.backToA = kBackToASequential;
+            act |= kPageChanged;
+        }
+        PageTip("Sets Require the clutch off, Require the gear held off and Back to A at 10 s: shift up and down by hand, and the gearbox goes back to A by itself.");
+        PageLabel("Back to A", labelX);
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::SliderInt("##backtoa", &s.backToA, 0, 30, s.backToA > 0 ? "%d s" : "never", ImGuiSliderFlags_AlwaysClamp))
+        {
+            s.backToA = BackToARange(s.backToA);
+            act |= kPageChanged;
+        }
+        PageTip("Seconds after a shift by hand until the gearbox goes back to A by itself, once the wheels grip, the pedal is under 0.7 and the truck is "
+                "not on a climb or a descent. Never with Require the gear held, from R, N, L or H, or for a gear picked on the game's shifter.");
         changed(ImGui::Checkbox("Ignore the game's shifter", &s.ignoreShifter));
         PageTip("A position picked on the game's shifter does nothing: only the bindings shift. The shifter still opens.");
         PageLabel("Stall damage", labelX);

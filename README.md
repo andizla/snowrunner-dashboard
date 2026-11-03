@@ -79,6 +79,7 @@ The Gameplay tab of the NEXT GEN menu edits every setting while you play. F2 ope
 | From L- to reverse and back without stopping in neutral | `SkipNeutral` 0 or 1 | off |
 | Gear down stops at L-, N and R only on their own keys | `DownStaysForward` 0 or 1 | off |
 | A position picked on the game's shifter does nothing | `IgnoreShifter` 0 or 1 | off |
+| Seconds after a shift by hand until the gearbox goes back to A by itself, 3 to 30 | `BackToA` | 0 (never) |
 | Percent of the gearbox a shift without the clutch costs, 0 to 25, with `Damage` on | `StallDamagePercent` | 5 |
 | A slipping clutch under load burns and costs the gearbox, with `Damage` on | `ClutchBurn` 0 or 1 | on |
 | How fast a slipping clutch heats up, percent of the model's own pace, 10 to 300 (the tab's "Clutch heat rate") | `ClutchHeatPercent` | 60 |
@@ -196,6 +197,8 @@ Five options, off by default:
 - `SkipNeutral=1`: up and down step from L- to reverse and back without stopping in N;
 - `DownStaysForward=1`: Gear down stops at L-, the lowest forward gear: from L-, N or R it does nothing, and N and R are on their own keys or the game's shifter, as SMT's immersive mode did. Up from R still goes to N and L-. With `SkipNeutral` on too, this one wins;
 - `IgnoreShifter=1`: a position picked on the game's shifter does nothing, with a pad, keys or a wheel, and only the bindings shift. The shifter still opens. Until a binding reaches R the mod's own gearbox runs as the automatic in A, as it does with a wheel's pedals.
+
+`BackToA` makes Gearbox=2 a sequential box: shift up and down by hand, and some seconds after the last shift the gearbox goes back to A by itself. It waits until, for a whole second, the pedal is under 0.7, the wheels grip (no wheelspin, and not before the mod has learned their grip), the truck is not on a climb with the foot down or on a descent, it does not roll back, A's gear is the held one or the next (standing with the foot off, any), no diff lock or AWD switch was made in the last 3 s, the handbrake is off and no shift is under way. It never goes back from R, N, L-, L, L+ or H, with `RequireGearHeld` on, or from a gear picked on the game's shifter, as those stay where they were put. A shift by hand starts the time again. `Gauges.log` says what holds it, and when it goes back. The tab's Sequential button sets `RequireClutch` off, `RequireGearHeld` off and `BackToA` 10.
 
 A stall from a shift without the clutch also costs the gearbox, with `Damage` on: `StallDamagePercent` of what it takes, 5 by default, 0 to 25 (the tab's "Stall damage"). It is dealt the way Next Gen Tire Inflation deals tire damage: on the game's own thread, on its next frame, with the game's own damage update after it. So the game's truck card comes up, a garage repairs it, and the game does the rest. A stall the game causes by itself costs nothing. `Gauges.log` says what the gearbox took and the parts' damage the game summed after it.
 
