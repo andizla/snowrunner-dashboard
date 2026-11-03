@@ -3538,10 +3538,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     if (w.found != was)
     {
         if (w.found) CrashLineSet();
-        if (w.found) Log(L"truck: found, %d wheels, %d gears and a high gear, a %.0f l tank", raw.wheels, TruckTopGear(raw), raw.tank);
-        if (w.found && raw.gearListLong)
-            Log(L"truck: its gearbox lists %d entries, more than the %d the mod reads: its gears are not read", raw.gearListLong, (int)kMaxGears);
-        else Log(L"truck: none is driven now");
+        char lines[2][160];
+        const int count = TruckFoundLines(w.found, raw, lines);
+        for (int i = 0; i < count; i++) Log(L"%S", lines[i]);
     }
     if (probe && w.found) SuspProbeStep(w.susp, m, w.refs, now);
     bool damperOwns[kMaxWheels], springOwns[kMaxWheels];
@@ -4004,7 +4003,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         if (!w.take.driving) w.stage = ShiftStage{}, w.stallWaits = false;
         const bool stallOnSet = ShiftStageStep(w.stage, engagedNow, dt);
         if (stallOnSet) Log(L"gearbox: the shift into gear %d without the clutch is set: the engine stalls now, on the new gear", w.stage.gear);
-        if (stageWas != kStageIdle && w.stage.stage == kStageIdle && w.take.driving) Log(L"shift: idle again, the creep may give from now on");
+        if (stageWas != kStageIdle && w.stage.stage == kStageIdle && w.take.driving) Log(L"shift: idle again");
         GearboxTruck boxNow = boxTruck;
         if (w.stage.stage == kStageAsked) boxNow.gear = w.stage.gear; // the gearbox decides on the gear asked, not the read before it
         if (g_engage.on && g_engage.at)
@@ -4064,7 +4063,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             if (box.stall && StallDamageShare(s) > 0.0f)
             {
                 if (!g_damageUpdate) stallCost = L"; it costs the gearbox nothing, as the game's damage path was not found";
-                else stallCost = L"; its gearbox damage goes to the game's thread";
+                else stallCost = box.setGear ? L"; its gearbox damage goes to the game's thread once the gear is set (not if the game refuses the shift)"
+                                             : L"; its gearbox damage goes to the game's thread";
             }
             if (box.moved && w.pos.pos != posWas) Log(L"gearbox: %S to %S", GearboxPosName(posWas), GearboxPosName(w.pos.pos));
             if (box.why[0] && box.stall) Log(L"gearbox: %S (%d since it took the truck)%s", box.why, w.pos.stalls, stallCost);

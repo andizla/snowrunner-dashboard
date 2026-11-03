@@ -509,6 +509,13 @@ int main()
                             thirty.gearBurns == 33 && TruckSane(thirty);
         gears(33, 34);
         const bool tooLong = TruckRead(kMemory, r, over) && over.gearSpeeds == 0 && over.gearListLong == 33 && !over.burnKnown;
+        char lines[2][160] = {};
+        const int foundLong = TruckFoundLines(true, over, lines);
+        const bool longSaid = foundLong == 2 && !strncmp(lines[0], "truck: found", 12) && strstr(lines[1], "lists 33 entries") != nullptr;
+        const int foundPlain = TruckFoundLines(true, sixteen, lines);
+        const bool plainSaid = foundPlain == 1 && strstr(lines[0], "16 gears") != nullptr && !strstr(lines[0], "none");
+        const bool noneSaid = TruckFoundLines(false, sixteen, lines) == 1 && !strcmp(lines[0], "truck: none is driven now");
+        Check(longSaid && plainSaid && noneSaid, "read: a truck found says so, and its list too long when it is; never 'none is driven' with it; none driven says only that");
         Check(read16 && read30 && tooLong, "read: a 16-speed's 18 entries and its burns, in H (gear 17) and sane; 30 gears; a list of 33 is not read and says how long it is");
         Put(kAction + 0x70, 3);
         Put(kAction + 0x74, 3);

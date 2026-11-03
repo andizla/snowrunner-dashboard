@@ -1052,6 +1052,20 @@ inline bool ShiftJobDrop(ShiftJob &j, uint64_t vehicle, unsigned long long now, 
     return InterlockedCompareExchange(&j.state, kShiftIdle, kShiftPosted) == kShiftPosted;
 }
 
+// The log's lines as a truck is found or none is driven any more: how many, into lines.
+inline int TruckFoundLines(bool found, const TruckRaw &t, char lines[2][160])
+{
+    if (!found)
+    {
+        strcpy_s(lines[0], 160, "truck: none is driven now");
+        return 1;
+    }
+    sprintf_s(lines[0], 160, "truck: found, %d wheels, %d gears and a high gear, a %.0f l tank", t.wheels, TruckTopGear(t), t.tank);
+    if (!t.gearListLong) return 1;
+    sprintf_s(lines[1], 160, "truck: its gearbox lists %d entries, more than the %d the mod reads: its gears are not read", t.gearListLong, (int)kMaxGears);
+    return 2;
+}
+
 // What the game is showing. control: the driven truck's control object, 0 when there is none.
 inline void WorldRead(const TruckMemory &m, uint64_t control, World &w)
 {
