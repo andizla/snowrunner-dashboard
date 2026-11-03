@@ -2609,6 +2609,40 @@ static const float kShiftQuiet = 1.0f;
 // creep's slot before they are made.
 static const float kCreepQuiet = 1.5f, kPowerShift = 0.01f;
 
+// The state of a shift of the mod's own (review 17, step 2): asked (the job posted, or the shift made on the mod's
+// thread), set (the game took it, so + 0x74 is the new gear), engaged (+ 0x70 followed), and idle again kCreepQuiet
+// after it engaged. The creep gives nothing while a shift is not idle, the gearbox reads the gear asked while it is
+// asked, and a shift without the clutch stalls the engine once it is set, on the new gear. A shift not taken goes
+// back to idle with its stall, and one that stays asked or set for kStageMost (+ 0x70 never followed) goes idle too.
+enum { kStageIdle, kStageAsked, kStageSet, kStageEngaged };
+static const float kStageMost = 3.0f;
+struct ShiftStage
+{
+    int stage;
+    int gear;        // the gear asked
+    float since;     // seconds in this stage
+    bool stallOwed;  // a shift without the clutch: its stall waits for the gear to be set
+};
+inline void ShiftStageAsk(ShiftStage &s, int gear, bool stall) { s = ShiftStage{ kStageAsked, gear, 0.0f, stall }; }
+// The game's answer to the shift asked: taken, or not (refused or dropped).
+inline void ShiftStageResult(ShiftStage &s, bool took)
+{
+    if (s.stage != kStageAsked) return;
+    if (!took) s = ShiftStage{};
+    else s.stage = kStageSet, s.since = 0.0f;
+}
+// One pass of dt seconds; engaged: the gear + 0x70 shows. True on the pass the owed stall is to be ordered.
+inline bool ShiftStageStep(ShiftStage &s, int engaged, float dt)
+{
+    if (s.stage == kStageIdle) return false;
+    const bool stall = s.stage != kStageAsked && s.stallOwed;
+    if (stall) s.stallOwed = false;
+    s.since += dt;
+    if (s.stage == kStageSet && engaged == s.gear) s.stage = kStageEngaged, s.since = 0.0f;
+    else if (s.stage == kStageEngaged ? s.since >= kCreepQuiet : s.since >= kStageMost) s = ShiftStage{};
+    return stall;
+}
+
 struct CreepModel
 {
     float share;     // the line's share on the last pass, paced on the way up

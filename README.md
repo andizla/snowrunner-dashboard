@@ -78,6 +78,7 @@ The Gameplay tab of the NEXT GEN menu edits every setting while you play. F2 ope
 | Neutral while no gear key is held, for an H shifter | `RequireGearHeld` 0 or 1 | off |
 | From L- to reverse and back without stopping in neutral | `SkipNeutral` 0 or 1 | off |
 | Gear down stops at L-, N and R only on their own keys | `DownStaysForward` 0 or 1 | off |
+| A position picked on the game's shifter does nothing | `IgnoreShifter` 0 or 1 | off |
 | Percent of the gearbox a shift without the clutch costs, 0 to 25, with `Damage` on | `StallDamagePercent` | 5 |
 | A slipping clutch under load burns and costs the gearbox, with `Damage` on | `ClutchBurn` 0 or 1 | on |
 | How fast a slipping clutch heats up, percent of the model's own pace, 10 to 300 (the tab's "Clutch heat rate") | `ClutchHeatPercent` | 60 |
@@ -188,12 +189,13 @@ Each action has two bindings, set in the tab by a click and then a press. A cont
 
 The differential lock and all-wheel drive work on a key at every `Gearbox` level, `0` too, on every truck, the upgrade fitted or not. Their rows are under Locks in the tab's Gearbox section, with no key by default. A press flips the truck's own switch, as SMT did, and the cluster's lamps show it. The game's own keys still work on a truck with the upgrade. Should the game switch a lock back off on a truck without the upgrade, `Gauges.log` says so once.
 
-Four options, off by default:
+Five options, off by default:
 
 - `RequireClutch=1`: a shift into a gear with the clutch not held, while the truck rolls at about 5 km/h or more, grinds and stays out: the gearbox goes to N and `Gauges.log` says so, as a running truck's gear does not go in unless the speeds match. Standing or crawling the gear is forced in and stalls the engine once. Into N nothing happens;
 - `RequireGearHeld=1`: N the moment no gear key is held, for an H shifter with every gear bound (a gear picked on the game's shifter stays, as the shifter does);
 - `SkipNeutral=1`: up and down step from L- to reverse and back without stopping in N;
-- `DownStaysForward=1`: Gear down stops at L-, the lowest forward gear: from L-, N or R it does nothing, and N and R are on their own keys or the game's shifter, as SMT's immersive mode did. Up from R still goes to N and L-. With `SkipNeutral` on too, this one wins.
+- `DownStaysForward=1`: Gear down stops at L-, the lowest forward gear: from L-, N or R it does nothing, and N and R are on their own keys or the game's shifter, as SMT's immersive mode did. Up from R still goes to N and L-. With `SkipNeutral` on too, this one wins;
+- `IgnoreShifter=1`: a position picked on the game's shifter does nothing, with a pad, keys or a wheel, and only the bindings shift. The shifter still opens. Until a binding reaches R the mod's own gearbox runs as the automatic in A, as it does with a wheel's pedals.
 
 A stall from a shift without the clutch also costs the gearbox, with `Damage` on: `StallDamagePercent` of what it takes, 5 by default, 0 to 25 (the tab's "Stall damage"). It is dealt the way Next Gen Tire Inflation deals tire damage: on the game's own thread, on its next frame, with the game's own damage update after it. So the game's truck card comes up, a garage repairs it, and the game does the rest. A stall the game causes by itself costs nothing. `Gauges.log` says what the gearbox took and the parts' damage the game summed after it.
 

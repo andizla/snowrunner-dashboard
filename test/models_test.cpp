@@ -3611,6 +3611,39 @@ int main(int argc, char **argv)
                                                  "blinking while the pressure changes, red while the tires take damage, and is not there for another truck");
     }
 
+    // the shift's state (review 17, step 2): asked, set, engaged and idle kCreepQuiet later, in that order; the stall of a
+    // shift without the clutch comes once, on the first pass after it is set, never while it is only asked; a shift
+    // not taken goes idle with its stall; one that never engages goes idle after kStageMost
+    {
+        const float dt = 0.05f;
+        ShiftStage st = {};
+        const bool idleFirst = !ShiftStageStep(st, 3, dt) && st.stage == kStageIdle;
+        ShiftStageAsk(st, 1, true);
+        const bool askedNoStall = !ShiftStageStep(st, -1, dt) && !ShiftStageStep(st, -1, dt) && st.stage == kStageAsked && st.stallOwed;
+        ShiftStageResult(st, true);
+        const bool set = st.stage == kStageSet;
+        const bool stallOnSet = ShiftStageStep(st, -1, dt) && st.stage == kStageSet && !st.stallOwed;
+        const bool once = !ShiftStageStep(st, 1, dt) && st.stage == kStageEngaged;
+        int passes = 0;
+        while (st.stage == kStageEngaged && passes < 100) ShiftStageStep(st, 1, dt), passes++;
+        const bool quiet = st.stage == kStageIdle && passes * dt >= kCreepQuiet - 0.001f && passes * dt < kCreepQuiet + dt + 0.001f;
+        ShiftStage refused = {};
+        ShiftStageAsk(refused, -1, true);
+        ShiftStageResult(refused, false);
+        const bool notTaken = refused.stage == kStageIdle && !refused.stallOwed && !ShiftStageStep(refused, 0, dt);
+        ShiftStage stuck = {};
+        ShiftStageAsk(stuck, 2, false);
+        ShiftStageResult(stuck, true);
+        passes = 0;
+        while (stuck.stage != kStageIdle && passes < 1000) ShiftStageStep(stuck, 1, dt), passes++;
+        const bool givesUp = passes * dt >= kStageMost - 0.001f && passes * dt < kStageMost + dt + 0.001f;
+        ShiftStage late = {};
+        ShiftStageResult(late, true); // an answer with nothing asked changes nothing
+        Check(idleFirst && askedNoStall && set && stallOnSet && once && quiet && notTaken && givesUp && late.stage == kStageIdle,
+              "shift state: asked, set, engaged and idle kCreepQuiet after it engaged; a clutchless shift's stall once, as it is set; a shift not taken "
+              "goes idle with its stall; one that never engages goes idle after kStageMost");
+    }
+
     // the state for other mods: written as the mod writes it, and read back through the name as another mod reads it
     {
         StateWriter writer = {};

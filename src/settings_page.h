@@ -552,10 +552,11 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     PageTip("The mod takes the shifter: A, the numbered gears, N, R, H and the low range on the bindings below, with a clutch and the options. "
             "The game's own shifting is refused while it has the truck. Driven with a pad or the keyboard, the game's shifter picks the position too; "
             "with a wheel's pedals only the bindings do.");
-    if (s.gearbox == kGearboxOwn && s.input == kInputWheel && !view.canReverse)
+    if (s.gearbox == kGearboxOwn && (s.input == kInputWheel || s.ignoreShifter) && !view.canReverse)
     {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.68f, 0.15f, 1.0f));
-        ImGui::TextWrapped("Driven with a wheel's pedals: bind at least Gear down or Reverse before the mod's own gearbox takes the shifter. Until then it runs as the mod's automatic in A.");
+        ImGui::TextWrapped(s.ignoreShifter ? "The game's shifter is ignored: bind at least Gear down or Reverse before the mod's own gearbox takes the shifter. Until then it runs as the mod's automatic in A."
+                                           : "Driven with a wheel's pedals: bind at least Gear down or Reverse before the mod's own gearbox takes the shifter. Until then it runs as the mod's automatic in A.");
         ImGui::PopStyleColor();
     }
     if (s.gearbox == kGearboxOwn)
@@ -568,6 +569,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         PageTip("Up and down step from L- to reverse and back without stopping in neutral.");
         changed(ImGui::Checkbox("Down stays in forward gears", &s.downStaysForward));
         PageTip("Gear down stops at L-, the lowest forward gear. N and R only on their own keys or the game's shifter, as SMT's immersive mode did. Wins over Skip neutral.");
+        changed(ImGui::Checkbox("Ignore the game's shifter", &s.ignoreShifter));
+        PageTip("A position picked on the game's shifter does nothing: only the bindings shift. The shifter still opens.");
         PageLabel("Stall damage", labelX);
         ImGui::SetNextItemWidth(w);
         ImGui::BeginDisabled(!s.damage);

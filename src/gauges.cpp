@@ -483,6 +483,7 @@ static void WriteIni(const GaugeSettings &s)
     whole(L"RequireGearHeld", s.requireGearHeld ? 1 : 0);
     whole(L"SkipNeutral", s.skipNeutral ? 1 : 0);
     whole(L"DownStaysForward", s.downStaysForward ? 1 : 0);
+    whole(L"IgnoreShifter", s.ignoreShifter ? 1 : 0);
     whole(L"Input", s.input);
     whole(L"Powertrain", s.powertrain ? 1 : 0);
     whole(L"EngineShare", s.engineShare);
@@ -860,6 +861,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; GearUp and GearDown walk R, N, L-, L, L+, 1, 2 and on to the top gear, on every truck.\n"
                         L"; DownStaysForward=1: GearDown stops at L-, N and R only on their own keys (wins over SkipNeutral).\n"
                         L"; At Gearbox=2 with Input 1 or 2 the game's own shifter picks a position too; with Input 0 its shifts stay refused.\n"
+                        L"; IgnoreShifter=1: at Gearbox=2 a position picked on the game's shifter does nothing, with any Input.\n"
                         L"; Input is what you drive with: 0 a wheel's pedals, 1 a pad's trigger, 2 the keyboard. The mod's automatic kicks\n"
                         L"; down by it: a trigger has to come from under three quarters, and keys kick nothing down and shift as floored.\n"
                         L"; Powertrain=1: the truck pulls with the mod's engine: its torque curve against the engine speed the needle\n"
@@ -914,6 +916,7 @@ static void ReadIni(GaugeSettings &s)
     s.requireGearHeld = IniBool(L"RequireGearHeld", s.requireGearHeld, ini);
     s.skipNeutral = IniBool(L"SkipNeutral", s.skipNeutral, ini);
     s.downStaysForward = IniBool(L"DownStaysForward", s.downStaysForward, ini);
+    s.ignoreShifter = IniBool(L"IgnoreShifter", s.ignoreShifter, ini);
     s.input = IniInt(L"Input", s.input, ini);
     s.powertrain = IniBool(L"Powertrain", s.powertrain, ini);
     s.engineShare = IniInt(L"EngineShare", s.engineShare, ini);
@@ -2234,12 +2237,13 @@ static void LogSettings(const GaugeSettings &s)
         s.dieselFlutter ? L", a diesel's lift flutters"
                         : SoundWhistles() > 0 ? L", a diesel's lift plays the sounds\\turbo_whistle_ files" : L", a diesel's lift is quiet");
     Log(L"settings: driven with %s", s.input == kInputKeys ? L"the keyboard" : s.input == kInputPad ? L"a pad" : L"a wheel's pedals");
-    Log(L"settings: gearbox %s; RequireClutch %d, RequireGearHeld %d, SkipNeutral %d, DownStaysForward %d",
-        s.gearbox == kGearboxOwn && s.input != kInputWheel ? L"the mod's own (Gearbox=2): it takes the shifter, its positions on the bindings and on the game's shifter"
+    Log(L"settings: gearbox %s; RequireClutch %d, RequireGearHeld %d, SkipNeutral %d, DownStaysForward %d, IgnoreShifter %d",
+        s.gearbox == kGearboxOwn && s.ignoreShifter ? L"the mod's own (Gearbox=2): it takes the shifter, its positions on the bindings (IgnoreShifter: the game's shifter does nothing)"
+        : s.gearbox == kGearboxOwn && s.input != kInputWheel ? L"the mod's own (Gearbox=2): it takes the shifter, its positions on the bindings and on the game's shifter"
         : s.gearbox == kGearboxOwn ? L"the mod's own (Gearbox=2): it takes the shifter, its positions on the bindings (with a wheel's pedals the game's shifter stays refused)"
         : s.gearbox == kGearboxModel ? L"the mod's automatic in A (Gearbox=1), the game's shifter yours, its reverse on the brake refused"
                                      : L"the game's own (Gearbox=1 or 2 in the tab's Gearbox section hand it to the mod)",
-        s.requireClutch, s.requireGearHeld, s.skipNeutral, s.downStaysForward);
+        s.requireClutch, s.requireGearHeld, s.skipNeutral, s.downStaysForward, s.ignoreShifter);
     if (s.powertrain) Log(L"settings: powertrain on: the truck pulls with %d percent of the mod's engine and converter, through the game's torque factor", s.engineShare);
     else Log(L"settings: powertrain off: the truck pulls with the game's own engine (Powertrain=1 hands it the mod's)");
     Log(s.creep ? L"settings: creep on: an idling truck in gear moves, through the converter to walking pace, in a gear picked by hand at the gear's idle speed"
@@ -2415,6 +2419,8 @@ struct TruckWatch
     int creepLines;             // its lines since it began
     long creepHits, creepCalls; // the hook's counts at its last line
     CreepModel creep;           // the creep's paced share and its stall (CreepStep)
+    ShiftStage stage;           // the state of the mod's last shift (review 17, step 2)
+    bool stallWaits;            // a shift without the clutch held back while the last job was out: its stall goes with the next one
     TurboChar turbo;            // the turbo's character in force on this pass (TurboOf)
     bool creepStall;            // the creep stalled a stuck truck on the last pass: handed to the game's stall seconds on this one
     AirModel air;               // and the air in its brakes' tanks
@@ -3896,7 +3902,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         // shifter picks a position too (its refused calls read as requests), so reverse is always reachable; with a wheel's
         // pedals the game's shifts stay refused and level 2 runs as 1 while no binding reaches reverse (w.canReverse), so a
         // truck can always be backed up (the user's rule, 2026-10-27). No gear is set while the pull test holds one
-        const bool shifterAsks = s.input != kInputWheel;
+        const bool shifterAsks = s.input != kInputWheel && !s.ignoreShifter; // IgnoreShifter: the refused calls are not asks either
         const int level = s.gearbox == kGearboxOwn && !shifterAsks && !w.canReverse ? kGearboxModel : s.gearbox;
         const bool own = level == kGearboxOwn;
         GearboxShifterAsks(own && shifterAsks);
@@ -3974,6 +3980,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 Log(L"shift %u: %d to %d %S; dealt at truck update %ld on thread %lu (the truck update's), %llu ms after posting: %s, +74 %d, +70 %d, "
                     L"power %.2f at the shift%S", j.number, j.from, j.gear, j.context, j.frame, j.thread, (unsigned long long)(now - j.postedAt),
                     j.took ? L"took" : L"refused", j.gear74, j.gear70, j.factorAtShift, j.power ? " (set after)" : "");
+                ShiftStageResult(w.stage, j.took);
                 if (j.took) w.take.shifts++;
                 else if (GearboxPosRefused(w.pos, j.gear))
                     Log(L"gearbox: the game did not take gear %d from the mod's gearbox, in gear %d; asked again when the position changes", j.gear, j.from);
@@ -3987,8 +3994,19 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 Log(L"shift %u: %d to %d dropped: %s", g_shiftJob.number, g_shiftJob.from, g_shiftJob.gear,
                     g_shiftJob.vehicle != w.refs.vehicle ? L"another truck is driven" : L"no truck update took it within a second and 30 updates");
                 w.pos.lastSet = INT_MIN; // asked again on the next pass
+                ShiftStageResult(w.stage, false);
             }
         }
+        // the shift's state (review 17, step 2): + 0x70 as the game's thread saw it follow, else as this pass read it; a
+        // stall owed by a shift without the clutch is ordered once the gear is set
+        const int engagedNow = g_engage.on && g_engage.at && g_engage.gear == w.stage.gear ? g_engage.gear : raw.gearEngaged;
+        const int stageWas = w.stage.stage;
+        if (!w.take.driving) w.stage = ShiftStage{}, w.stallWaits = false;
+        const bool stallOnSet = ShiftStageStep(w.stage, engagedNow, dt);
+        if (stallOnSet) Log(L"gearbox: the shift into gear %d without the clutch is set: the engine stalls now, on the new gear", w.stage.gear);
+        if (stageWas != kStageIdle && w.stage.stage == kStageIdle && w.take.driving) Log(L"shift: idle again, the creep may give from now on");
+        GearboxTruck boxNow = boxTruck;
+        if (w.stage.stage == kStageAsked) boxNow.gear = w.stage.gear; // the gearbox decides on the gear asked, not the read before it
         if (g_engage.on && g_engage.at)
         {
             Log(L"shift: +70 showed gear %d at truck update %ld, %ld after the shift", g_engage.gear, (long)g_engage.at, (long)g_engage.at - g_engage.from);
@@ -4022,7 +4040,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                     Log(L"gearbox: the game's L+ cannot be told from its first gear (the same gear, the plain power), so the shifter's L+ reads as the first gear");
                 }
             }
-            GearboxPosOrders box = GearboxPosStep(w.pos, options, acts, boxTruck, autoGear);
+            GearboxPosOrders box = GearboxPosStep(w.pos, options, acts, boxNow, autoGear);
             // at Gearbox 0 and 1 the game's shifter is the player's: the mod's automatic writes and shifts only within
             // A, never into N or R and never out of a position of the game's (0.18.2's hotfix, the reviewer's item 4)
             if (!own && !GearboxOwnOrders(w.pos.pos, box.gear, box.setGear))
@@ -4036,18 +4054,17 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 if (box.flagDown) m.put(w.refs.action + 0x3C, (uint8_t)0);
                 if (box.setPower) m.put(w.refs.action + 0x38, box.power);
             }
-            stallOrdered = box.stall; // ramped into the game's stall seconds below (StallStep), so its notice shows
+            // ramped into the game's stall seconds below (StallStep), so its notice shows; a shift's stall waits for the
+            // gear to be set (the shift's state), so it never lands on the old one
+            stallOrdered = box.stall && !box.setGear;
+            if (box.stall && box.setGear) w.stallWaits = true;
             // the stall the model ordered costs the gearbox (StallDamagePercent, with Damage), dealt on the game's thread;
             // a stall of the game's own does not
             const wchar_t *stallCost = L"";
             if (box.stall && StallDamageShare(s) > 0.0f)
             {
                 if (!g_damageUpdate) stallCost = L"; it costs the gearbox nothing, as the game's damage path was not found";
-                else
-                {
-                    w.stallsOwed++;
-                    stallCost = L"; its gearbox damage goes to the game's thread";
-                }
+                else stallCost = L"; its gearbox damage goes to the game's thread";
             }
             if (box.moved && w.pos.pos != posWas) Log(L"gearbox: %S to %S", GearboxPosName(posWas), GearboxPosName(w.pos.pos));
             if (box.why[0] && box.stall) Log(L"gearbox: %S (%d since it took the truck)%s", box.why, w.pos.stalls, stallCost);
@@ -4061,7 +4078,10 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         // dt each pass and cleared when it recovers, so the game shows its own "engine stalling" notice and kills the
         // engine by its rule (the user's hill test, 27 October)
         {
-            stallOrdered = stallOrdered || w.clutchStall || w.creepStall;
+            // the gearbox's own stall costs the gearbox once it is ordered (StallDamagePercent, with Damage)
+            const bool gearboxStall = stallOrdered || stallOnSet;
+            if (gearboxStall && StallDamageShare(s) > 0.0f && g_damageUpdate) w.stallsOwed++;
+            stallOrdered = gearboxStall || w.clutchStall || w.creepStall;
             w.clutchStall = w.creepStall = false;
             const float stallTo = StallStep(w.stallWrite, stallOrdered, w.clutch.lugging, TruckEngineOn(raw), dt);
             if (stallTo >= 0.0f) m.put(w.refs.vehicle + 0x11C, stallTo);
@@ -4166,8 +4186,20 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             const bool mayStall = s.gearbox == kGearboxOwn && manual && autoPicks; // never both, for now
             // a pass that shifts gives nothing and leaves the model as it was: the gear it reads is the one before the
             // shift, and the next pass sees the change and keeps kCreepQuiet (round 3 of the crash hotfix)
-            const float share = on && !shiftAsk ? CreepStep(w.creep, raw, scale, converter, grip, dt, &creepCase, stalls, holdMost, mayStall,
-                                               shifterLow && !w.take.driving && raw.automatic == 0) : 0.0f;
+            // and nothing from a shift asked until kCreepQuiet after it engaged (the shift's state): the model keeps the
+            // gear and the range of these passes, so it does not start a second quiet once the shift is idle
+            const bool shiftQuiet = shiftAsk || w.stage.stage != kStageIdle;
+            if (on && w.stage.stage != kStageIdle)
+            {
+                w.creep.share = w.creep.hold = w.creep.given = 0.0f;
+                w.creep.armed = false;
+                w.creep.seen = w.creep.shifted = true;
+                w.creep.gearSeen = raw.gearEngaged;
+                w.creep.powerSeen = raw.powerFactor;
+                w.creep.sinceShift = kCreepQuiet;
+            }
+            const float share = on && !shiftQuiet ? CreepStep(w.creep, raw, scale, converter, grip, dt, &creepCase, stalls, holdMost, mayStall,
+                                                 shifterLow && !w.take.driving && raw.automatic == 0) : 0.0f;
             CreepGive(share > 0.0f ? w.refs.action : 0, share);
             if (stalls)
             {
@@ -4220,12 +4252,17 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                     g_shiftJob.number = ++shiftNumber;
                     strcpy_s(g_shiftJob.context, context);
                     ShiftJobPost(g_shiftJob, w.refs.vehicle, w.refs.action, true, raw.gear, shiftTo, jobFlag, jobPower, jobFactor, TruckUpdateFrames(), now);
+                    ShiftStageAsk(w.stage, shiftTo, w.stallWaits);
+                    w.stallWaits = false;
                 }
                 else w.pos.lastSet = INT_MIN;
                 jobFlag = jobPower = false;
             }
             else if (GameShift(w.refs.vehicle, shiftTo))
             {
+                ShiftStageAsk(w.stage, shiftTo, w.stallWaits);
+                ShiftStageResult(w.stage, true);
+                w.stallWaits = false;
                 int g74 = INT_MIN, g70 = INT_MIN;
                 PeekGame(w.refs.action + 0x74, &g74, 4);
                 PeekGame(w.refs.action + 0x70, &g70, 4);
@@ -4249,6 +4286,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             else
             {
                 Log(L"shift %u: %d to %d %S; on the mod's thread %lu: refused", ++shiftNumber, raw.gear, shiftTo, context, GetCurrentThreadId());
+                w.stallWaits = false;
                 if (GearboxPosRefused(w.pos, shiftTo))
                     Log(L"gearbox: the game did not take gear %d from the mod's gearbox, in gear %d; asked again when the position changes", shiftTo, raw.gear);
             }
@@ -5202,7 +5240,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
            a.springScale == b.springScale && a.dampingScale == b.dampingScale && a.extraTravel == b.extraTravel &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
-           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.input == b.input && a.powertrain == b.powertrain && a.engineShare == b.engineShare && a.creep == b.creep;
+           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.ignoreShifter == b.ignoreShifter && a.input == b.input && a.powertrain == b.powertrain && a.engineShare == b.engineShare && a.creep == b.creep;
 }
 
 static int g_failed = 0;
@@ -5234,7 +5272,7 @@ int wmain(int argc, wchar_t **argv)
     Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.hotDamageFrom == kTempRed && d.coldDamage == 5.0f && d.stallDamage == 5.0f && d.clutchBurn && d.clutchHeat == 60.0f &&
               d.springScale == 1.0f && d.dampingScale == 1.0f && d.extraTravel == 0.0f,
           "defaults: the radiator's full airflow from 30 km/h, engine damage on from the red zone, 10 percent a minute for the heat and 5 for the cold");
-    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && d.input == kInputWheel && !d.powertrain && d.engineShare == 50 && d.creep && !d.dieselFlutter,
+    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.ignoreShifter && d.input == kInputWheel && !d.powertrain && d.engineShare == 50 && d.creep && !d.dieselFlutter,
           "defaults: the oil as a second needle, warm after 5 minutes, too hot from 120 C; the standard turbo, a diesel's lift without the flutter; the creep on");
 
     // keys the mod does not know, in its own section and in another one
@@ -5289,7 +5327,7 @@ int wmain(int argc, wchar_t **argv)
     c.oilGauge = kOilDial;
     c.boostProfile = kSpoolTwoStage;
     c.gearbox = kGearboxModel;
-    c.requireClutch = c.requireGearHeld = c.skipNeutral = c.downStaysForward = true;
+    c.requireClutch = c.requireGearHeld = c.skipNeutral = c.downStaysForward = c.ignoreShifter = true;
     c.input = kInputKeys;
     c.powertrain = true;
     c.engineShare = 80;
@@ -5306,7 +5344,7 @@ int wmain(int argc, wchar_t **argv)
                             c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springScale != d.springScale && c.dampingScale != d.dampingScale && c.extraTravel != d.extraTravel && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
                             c.demo != d.demo && c.probe != d.probe && c.soundVolume != d.soundVolume && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
-                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.input != d.input && c.powertrain != d.powertrain && c.engineShare != d.engineShare && c.creep != d.creep;
+                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.ignoreShifter != d.ignoreShifter && c.input != d.input && c.powertrain != d.powertrain && c.engineShare != d.engineShare && c.creep != d.creep;
     WriteIni(c);
     ReadIni(b);
     Check(allChanged, "ini: the test changes every setting from its default");
@@ -5327,7 +5365,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 113, "ini: the help text survives a write (113 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 114, "ini: the help text survives a write (114 comment lines)");
     // the HUD layouts (BRIEF_cluster_hud_layouts.md): 2 and 3 load and save, 4 is held to the strip, and Style and
     // FaceOpacity survive a trip through Spotter dials
     {
