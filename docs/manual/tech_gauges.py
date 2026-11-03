@@ -848,11 +848,21 @@ baked with stb_truetype). One unit is the screen height / 1080 × <code>Scale</c
 
 
 def s_shared():
-    gauges = [['0', 'u32', 'magic 0x47554147, "GAUG"'], ['4', 'u32', 'version 1'], ['8', 'u32', 'size 64'],
+    gauges = [['0', 'u32', 'magic 0x47554147, "GAUG"'], ['4', 'u32', 'version 2'], ['8', 'u32', 'size 256'],
               ['12', 'i32', 'sequence, odd while being written'], ['16', 'u64', 'tick: GetTickCount64 at the write, ms'],
               ['24', 'u64', 'vehicle (control +8), 0: none'], ['32', 'f32', 'outside temperature in force, °C (always written)'],
               ['36', 'f32', 'coolant, °C'], ['40', 'f32', 'engine speed (the needle), rpm'], ['44', 'f32', 'boost, bar'],
-              ['48', 'u32', 'flags: bit 0 vehicle, 1 temperature from a map section, 2 engine on'], ['52', 'u32 × 3', 'reserved']]
+              ['48', 'u32', 'flags: bit 0 vehicle, 1 temperature from a map section, 2 engine on'], ['52', 'u32 × 3', 'reserved'],
+              ['64', 'f32', 'speed, km/h (below 0 backwards)'], ['68', 'f32', 'the speedometer\'s top, km/h'],
+              ['72, 76', 'f32', 'the tachometer\'s red zone and its end, rpm'], ['80', 'i32', 'gear: below 0 R, 0 N, 1 and up forward'],
+              ['84', 'u8', 'the letter: 0 a number, 1 A, 2 H, 3 L-, 4 L, 5 L+'], ['85', 'u8', 'the gearbox\'s numbered gears, 0 not known'],
+              ['86', 'u8', 'the Gearbox level in force: 0 the game\'s, 1 the automatic, 2 the own gearbox'],
+              ['87', 'u8', 'the tire lamp\'s mode: 0 none, 1 Low, 2 Reduced, 3 Normal, 4 Increased'],
+              ['88, 92', 'f32', 'oil, °C, and where its red zone starts'], ['96', 'f32', 'brake air, bar'], ['100', 'f32', 'the turbo\'s most, bar'],
+              ['104', 'f32', 'fuel, 0 to 1'], ['108, 112', 'f32', 'fuel and tank, litres'], ['116', 'f32', 'burn, litres a minute (below 0 not known)'],
+              ['120', 'f32', 'range, km (below 0 not known)'], ['124', 'u32', 'lamps lit (bits 16 and 17: the tilt lamp)'],
+              ['128', 'u32', 'lamps blinking, the same bits'], ['132', 'u32', 'options: mph, psi, °F, the cluster on screen, vacuum, no boost'],
+              ['136', 'u32 × 30', 'reserved']]
     tire = [['16', 'u64', 'tick'], ['24', 'u64', 'vehicle'], ['32', 'i32', 'mode: 0 Low, 1 Reduced, 2 Normal, 3 Increased'],
             ['56', 'u32', 'flags: bit 0 vehicle, 1 changing, 2 held, 3 too fast, 4 worn']]
     smt = [['32', 'i32', 'gear (−1 R, 0 N, N+1 high)'], ['36', 'i32', 'highest gear'], ['40', 'i32', 'range (−1 low, 0 none, 1 high)'],
@@ -860,14 +870,18 @@ def s_shared():
            ['48', 'f32', 'clutch 0 to 1'], ['52', 'f32', 'power coefficient'], ['56, 60', 'u32', 'stalls, shifts']]
     return f'''
 <h2>Shared memory</h2>
-<p>Named blocks of 64 bytes, one per game process, read without locks: the writer makes the sequence odd, writes, and makes it even
+<p>Named blocks, one per game process (Gauges' of 256 bytes since version 2, the others of 64), read without locks: the writer makes the sequence odd, writes, and makes it even
 again; a reader copies the block and keeps the copy only if the sequence was even and unchanged (up to 8 tries). A tick older than
 the limit means the writer is gone. Later versions only add fields at the end.</p>
 <pre>writer:  seq += 1 (odd)   barrier   fields   barrier   seq += 1 (even)
 reader:  s = seq; if s odd, retry;   copy;   barrier;   if seq != s, retry</pre>
 {table(['Offset', 'Type', 'Field'], gauges, 'Written: Local\\SnowRunnerGauges.State.&lt;process id&gt; (state.h), every pass', 'small')}
-<p>The coolant, engine speed and boost are written only while you drive, otherwise 0. The tire mod reads the outside temperature
-from here.</p>
+<p>Every truck value is written only while you drive, otherwise 0; the block itself is written on every pass, in the menus too, so a
+stale tick means only that Gauges is gone. The values are the cluster's as it shows them, metric whatever the units picked; the lamps
+that blink (engine damage, oil, tire) are flagged in their own word, so a reader blinks them at its own rate. No value is ever NaN.
+The tire mod reads the outside temperature from here. Other mods' authors get the layout and the read rule in
+<code>docs\\SnowRunnerGauges_State.h</code> and its guide <code>SnowRunnerGauges_State.md</code> (CC0); a reader maps the whole block
+(size 0) and checks each field against the size, so it reads version 1 and 2 alike.</p>
 {table(['Offset', 'Type', 'Field'], tire, 'Read: Local\\SnowRunnerTirePressure.State.&lt;process id&gt;, the tire mod\'s (tires.h); the fields used', 'small')}
 <p>Looked for every 5 s, stale after 2 s. The tire lamp shows only while the block's vehicle is the driven one: the letter L, R, N
 or +; red while the tires are too fast or one is worn out; otherwise blinking (400 ms) while the pressure changes or waits for the
@@ -1234,7 +1248,7 @@ def s_constants():
             ['Tilt', 'smooth 0.3 s; back 2°; warn 15°, roll 25°, pitch 35°', '', '"so a bump does not light the lamp"'],
             ['Day', 'swing 10 °C; coldest 05:00, warmest 15:00', '', '"coldest just before sunrise"'],
             ['Clock search', '10 s of game time a look; 4 steady looks; pace 2.3e-5 to 0.08/s; jump 1 h; 180 s alone', '', '"a day of 5 minutes to 12 hours"'],
-            ['Shared blocks', '64 bytes; tire stale after 2 s, gearbox mod after 1 s; looked for every 5 s', '', 'the mods\' layouts'],
+            ['Shared blocks', 'Gauges\' 256 bytes, the others 64; tire stale after 2 s, gearbox mod after 1 s; looked for every 5 s', '', 'the mods\' layouts'],
             ['Sounds', 'RMS 0.1, peaks 0.6, voice × 0.45, pitch 0.25 to 2', '', '"two that ring together stay below 1"']]
     return f'<h2>Constants at a glance</h2>{table(["Constant", "Value", "Unit", "Where it comes from"], rows, "The models\' constants", "small")}'
 
