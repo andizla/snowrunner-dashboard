@@ -154,6 +154,7 @@ struct GaugeSettings
     char padToggle[32];      // PadToggle: pad buttons that do the same ("LB+DPadUp"), "None"
     bool demo;               // Demo: for work on the mod: demo values are drawn whenever no truck is driven, menus and loading screens included
     int probe;               // Probe: for work on the mod: the values read from the game go into Gauges.log (0 = off)
+    int keepLogs;            // KeepLogs: how many of the last starts' logs Gauges\logs keeps, at most 500 MB of them; 0 keeps all
 };
 
 inline void SettingsDefaults(GaugeSettings &s)
@@ -213,6 +214,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     strcpy_s(s.padToggle, "None");
     s.demo = false;
     s.probe = 0;
+    s.keepLogs = 20;
     s.shiftOnGameThread = 1;
 }
 
@@ -346,6 +348,7 @@ inline void SettingsClamp(GaugeSettings &s)
     s.toggleKey = s.toggleKey < 0 || s.toggleKey > 255 ? 0 : s.toggleKey;
     s.soundVolume = s.soundVolume < 0 ? 0 : s.soundVolume > 100 ? 100 : s.soundVolume;
     s.probe = s.probe < 0 ? 0 : s.probe;
+    s.keepLogs = s.keepLogs < 0 ? 0 : s.keepLogs > 1000 ? 1000 : s.keepLogs;
     s.suspStepTest = s.suspStepTest < 0 || s.suspStepTest > 3 ? 0 : s.suspStepTest;
     s.shiftOnGameThread = s.shiftOnGameThread ? 1 : 0;
     s.backToA = BackToARange(s.backToA);

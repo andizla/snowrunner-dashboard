@@ -124,6 +124,52 @@ static std::wstring LogKeepLast(const std::wstring &dir)
     return MoveFileExW(path.c_str(), (folder + name).c_str(), MOVEFILE_COPY_ALLOWED) ? name : L"";
 }
 
+// The kept start logs capped (KeepLogs, the log cap brief): the newest keep of them stay, and at most most bytes of
+// them, whichever is less; the newest one always stays, so the log a player is asked for is there. Older ones go,
+// oldest first, by their last write. Only the names LogKeepLast gives are touched; keep 0 removes nothing.
+static const unsigned long long kLogsMostBytes = 500ULL << 20;
+// A name LogKeepLast gives: "Gauges YYYY-MM-DD HH-MM-SS.log", or with " (N)" before ".log".
+static bool LogKeptName(const wchar_t *n)
+{
+    static const wchar_t pattern[] = L"Gauges 0000-00-00 00-00-00";
+    for (int i = 0; i < 26; i++)
+        if (pattern[i] == L'0' ? !(n[i] >= L'0' && n[i] <= L'9') : n[i] != pattern[i]) return false;
+    const wchar_t *tail = n + 26;
+    if (!wcscmp(tail, L".log")) return true;
+    if (tail[0] != L' ' || tail[1] != L'(' || !(tail[2] >= L'0' && tail[2] <= L'9')) return false;
+    const wchar_t *p = tail + 2;
+    while (*p >= L'0' && *p <= L'9') p++;
+    return !wcscmp(p, L").log");
+}
+struct LogsCapResult { int removed, kept, failed; };
+static LogsCapResult LogsCap(const std::wstring &folder, int keep, unsigned long long most)
+{
+    LogsCapResult r = {};
+    if (keep <= 0) return r;
+    struct One { std::wstring name; unsigned long long size, at; };
+    std::vector<One> logs;
+    WIN32_FIND_DATAW fd;
+    const HANDLE find = FindFirstFileW((folder + L"Gauges *.log").c_str(), &fd);
+    if (find == INVALID_HANDLE_VALUE) return r;
+    do
+    {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && LogKeptName(fd.cFileName))
+            logs.push_back({ fd.cFileName, ((unsigned long long)fd.nFileSizeHigh << 32) | fd.nFileSizeLow,
+                             ((unsigned long long)fd.ftLastWriteTime.dwHighDateTime << 32) | fd.ftLastWriteTime.dwLowDateTime });
+    } while (FindNextFileW(find, &fd));
+    FindClose(find);
+    std::sort(logs.begin(), logs.end(), [](const One &a, const One &b) { return a.at != b.at ? a.at > b.at : a.name > b.name; });
+    unsigned long long total = 0;
+    for (size_t i = 0; i < logs.size(); i++)
+    {
+        total += logs[i].size;
+        if (i == 0 || ((int)i < keep && total <= most)) r.kept++;
+        else if (DeleteFileW((folder + logs[i].name).c_str())) r.removed++;
+        else r.failed++, r.kept++;
+    }
+    return r;
+}
+
 static void LogV(const wchar_t *fmt, va_list ap)
 {
     AcquireSRWLockExclusive(&g_logLock);
@@ -542,6 +588,7 @@ static void WriteIni(const GaugeSettings &s)
     whole(L"DieselFlutter", s.dieselFlutter ? 1 : 0);
     whole(L"Demo", s.demo ? 1 : 0);
     whole(L"Probe", s.probe);
+    whole(L"KeepLogs", s.keepLogs);
 }
 
 // ---- the outside temperature by map: the sections [Map:<name>] of Gauges.ini ----
@@ -877,7 +924,8 @@ static void ReadIni(GaugeSettings &s)
                         L"; Top1, Top2 ...: each gear's top in rad/s, learned where the game's pull reaches nothing floored (2a + 5 until then).\n"
                         L"; Gauges\\engines\\<name>.ini: PeakTorqueRpm, Aspiration (0 turbo, 1 naturally aspirated), Fuel (diesel, petrol), TorqueCurve (the tab's Engine).\n"
                         L";   Torque: how much of its torque the truck gets, 10 to 100 percent (100 when not set). Lower it for an RLM-like engine with several times a stock engine's torque.\n"
-                        L"; For work on the mod: Demo=1 draws demo values whenever no truck is driven, Probe=1 logs the values read from the game.\n");
+                        L"; For work on the mod: Demo=1 draws demo values whenever no truck is driven, Probe=1 logs the values read from the game.\n"
+                        L"; KeepLogs: how many of the last starts' logs Gauges\\logs keeps (20; at most 500 MB of them; 0 keeps all).\n");
             fclose(f);
             WriteIni(s);
             MapDefaultsWrite();
@@ -994,6 +1042,7 @@ static void ReadIni(GaugeSettings &s)
     s.dieselFlutter = IniBool(L"DieselFlutter", s.dieselFlutter, ini);
     s.demo = IniBool(L"Demo", s.demo, ini);
     s.probe = IniInt(L"Probe", s.probe, ini);
+    s.keepLogs = IniInt(L"KeepLogs", s.keepLogs, ini);
     SettingsClamp(s);
 }
 
@@ -4618,6 +4667,12 @@ static DWORD WINAPI Run(void *)
         else BindingsRead(ini, binds, true);
     }
     LogSettings(s);
+    // the kept start logs capped by KeepLogs and kLogsMostBytes, once a start
+    {
+        const LogsCapResult r = LogsCap(g_dir + L"Gauges\\logs\\", s.keepLogs, kLogsMostBytes);
+        if (r.removed) Log(L"log: %d older start logs removed from Gauges\\logs, %d kept (KeepLogs %d, at most 500 MB)", r.removed, r.kept, s.keepLogs);
+        if (r.failed) Log(L"log: %d older start logs in Gauges\\logs could not be removed and are left as they are", r.failed);
+    }
     BindingsLog(binds);
     InputDevicesStart([](const wchar_t *line) { Log(L"%s", line); }, PadButtons);
     if (s.probe) PlacesHarvest(stamp);
@@ -5377,7 +5432,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.warmUpMinutes == b.warmUpMinutes && a.overheatMinutes == b.overheatMinutes && a.coolDownMinutes == b.coolDownMinutes && a.ambientC == b.ambientC &&
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
            a.springScale == b.springScale && a.dampingScale == b.dampingScale && a.extraTravel == b.extraTravel &&
-           !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
+           !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
            a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.input == b.input && a.powertrain == b.powertrain && a.engineShare == b.engineShare && a.creep == b.creep;
 }
 
@@ -5402,7 +5457,7 @@ int wmain(int argc, wchar_t **argv)
     const bool written = GetFileAttributesW(ini.c_str()) != INVALID_FILE_ATTRIBUTES;
     ReadIni(b);
     Check(gone && written && SameSettings(a, d) && SameSettings(b, d), "ini: a missing ini is written with the defaults and reads back as them");
-    Check(d.layout == kLayoutStrip && !d.swapDials && d.style == kFaceOpen && !d.showAir && d.showClock && d.showFuelUse && !d.demo && d.probe == 0 && !d.mph && !d.psi && !d.fahrenheit && d.toggleKey == 0 &&
+    Check(d.layout == kLayoutStrip && !d.swapDials && d.style == kFaceOpen && !d.showAir && d.showClock && d.showFuelUse && !d.demo && d.probe == 0 && d.keepLogs == 20 && !d.mph && !d.psi && !d.fahrenheit && d.toggleKey == 0 &&
           !strcmp(d.padToggle, "None") && d.rollWarnDeg == 15.0f && d.rollDangerDeg == 25.0f && d.pitchDangerDeg == 35.0f,
           "defaults: strip, open style, metric, the air dial off, no toggle, demo off, probe off, the tilt lamp at 15, 25 and 35 degrees");
     Check(d.warmUpMinutes == 3.0f && d.overheatMinutes == 1.5f && d.coolDownMinutes == 15.0f && d.ambientC == 15.0f && d.ambientByMap,
@@ -5459,6 +5514,7 @@ int wmain(int argc, wchar_t **argv)
     strcpy_s(c.padToggle, "RB+DPadUp");
     c.demo = true;
     c.probe = 1;
+    c.keepLogs = 5;
     c.soundVolume = 80;
     c.soundsOnly = true;
     c.dieselFlutter = true;
@@ -5481,7 +5537,7 @@ int wmain(int argc, wchar_t **argv)
                             c.pitchDangerDeg != d.pitchDangerDeg && c.warmUpMinutes != d.warmUpMinutes && c.overheatMinutes != d.overheatMinutes &&
                             c.coolDownMinutes != d.coolDownMinutes && c.ambientC != d.ambientC && c.ambientByMap != d.ambientByMap && c.airFullKmh != d.airFullKmh && c.damage != d.damage &&
                             c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springScale != d.springScale && c.dampingScale != d.dampingScale && c.extraTravel != d.extraTravel && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
-                            c.demo != d.demo && c.probe != d.probe && c.soundVolume != d.soundVolume && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
+                            c.demo != d.demo && c.probe != d.probe && c.keepLogs != d.keepLogs && c.soundVolume != d.soundVolume && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
                             c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.input != d.input && c.powertrain != d.powertrain && c.engineShare != d.engineShare && c.creep != d.creep;
     WriteIni(c);
@@ -5504,7 +5560,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 117, "ini: the help text survives a write (117 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 118, "ini: the help text survives a write (118 comment lines)");
     // the HUD layouts (BRIEF_cluster_hud_layouts.md): 2 and 3 load and save, 4 is held to the strip, and Style and
     // FaceOpacity survive a trip through Spotter dials
     {
@@ -5955,6 +6011,63 @@ int wmain(int argc, wchar_t **argv)
             DeleteFileW((root + f).c_str());
         RemoveDirectoryW(steamDir.c_str());
         RemoveDirectoryW(epicDir.c_str());
+        RemoveDirectoryW(root.c_str());
+    }
+
+    // the kept start logs capped: of 25 fitting names and two other files, the 20 newest stay, the 5 oldest go and the
+    // two others are left; 10 of 60 bytes under a cap of 480 keep the newest 8; KeepLogs 0 removes nothing; a name that
+    // only looks close is never one of the mod's
+    {
+        const std::wstring root = g_dir + L"logcaptest\\";
+        CreateDirectoryW(root.c_str(), nullptr);
+        auto make = [&](const std::wstring &name, int minute, size_t bytes) {
+            const std::wstring path = root + name;
+            FILE *f = nullptr;
+            if (_wfopen_s(&f, path.c_str(), L"wb") == 0 && f)
+            {
+                for (size_t i = 0; i < bytes; i++) fputc('x', f);
+                fclose(f);
+            }
+            SYSTEMTIME st = { 2026, 10, 0, 12, 10, (WORD)minute, 0, 0 };
+            FILETIME ft;
+            SystemTimeToFileTime(&st, &ft);
+            HANDLE h = CreateFileW(path.c_str(), FILE_WRITE_ATTRIBUTES, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+            if (h != INVALID_HANDLE_VALUE)
+            {
+                SetFileTime(h, nullptr, nullptr, &ft);
+                CloseHandle(h);
+            }
+        };
+        auto name = [](int minute, int copy) {
+            wchar_t n[64];
+            if (copy) swprintf_s(n, L"Gauges 2026-10-12 10-%02d-00 (%d).log", minute, copy);
+            else swprintf_s(n, L"Gauges 2026-10-12 10-%02d-00.log", minute);
+            return std::wstring(n);
+        };
+        auto there = [&](const std::wstring &n) { return GetFileAttributesW((root + n).c_str()) != INVALID_FILE_ATTRIBUTES; };
+        for (int i = 0; i < 25; i++) make(name(i, i == 24 ? 2 : 0), i, 10);
+        make(L"Gauges backup.log", 0, 10);
+        make(L"notes.txt", 0, 10);
+        const LogsCapResult byCount = LogsCap(root, 20, kLogsMostBytes);
+        bool newest = true, oldest = true;
+        for (int i = 5; i < 25; i++) newest = newest && there(name(i, i == 24 ? 2 : 0));
+        for (int i = 0; i < 5; i++) oldest = oldest && !there(name(i, 0));
+        const bool others = there(L"Gauges backup.log") && there(L"notes.txt");
+        const bool count = byCount.removed == 5 && byCount.kept == 20 && byCount.failed == 0 && newest && oldest && others;
+        for (int i = 0; i < 25; i++) DeleteFileW((root + name(i, i == 24 ? 2 : 0)).c_str());
+        for (int i = 0; i < 10; i++) make(name(30 + i, 0), 30 + i, 60);
+        const LogsCapResult bySize = LogsCap(root, 20, 480);
+        const bool size = bySize.kept == 8 && bySize.removed == 2 && there(name(39, 0)) && there(name(32, 0)) && !there(name(31, 0)) && !there(name(30, 0));
+        const LogsCapResult none = LogsCap(root, 0, 1);
+        const bool all = none.removed == 0 && there(name(32, 0)) && there(L"Gauges backup.log");
+        const bool names = LogKeptName(L"Gauges 2026-10-12 10-00-00.log") && LogKeptName(L"Gauges 2026-10-12 10-00-00 (12).log") &&
+                           !LogKeptName(L"Gauges backup.log") && !LogKeptName(L"Gauges 2026-10-12 10-00-00.log.bak") && !LogKeptName(L"Gauges 2026-10-12 10-00-00 ().log") &&
+                           !LogKeptName(L"Gauges.log") && !LogKeptName(L"gauges 2026-10-12 10-00-00.log");
+        Check(count && size && all && names, "log: the kept start logs capped, the newest KeepLogs (20) and at most 500 MB (480 bytes here: 8 of 60), the others left; "
+                                             "KeepLogs 0 removes nothing; only names the mod gives are ever removed");
+        for (int i = 0; i < 10; i++) DeleteFileW((root + name(30 + i, 0)).c_str());
+        DeleteFileW((root + L"Gauges backup.log").c_str());
+        DeleteFileW((root + L"notes.txt").c_str());
         RemoveDirectoryW(root.c_str());
     }
 

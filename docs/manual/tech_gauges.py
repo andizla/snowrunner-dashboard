@@ -1068,7 +1068,7 @@ truck until a truck file names it a scout). Mass is without addons, cargo or tra
 <li>On a build other than Steam's the clock is unknown until found with <code>Probe=1</code>, and the objects' offsets are taken as
 they are. A wrong clock place that still reads 0 to 24.5 is not noticed.</li>
 <li>A change of the game's engine damage that falls between the mod's read and write is lost.</li>
-<li>Probe logs run to 20 or 30 MB and the logs folder is never emptied. The pad's toggle buttons reach the game too.</li></ul>
+<li>Probe logs run to 20 or 30 MB; the logs folder keeps the newest <code>KeepLogs</code> (20) and at most 500 MB, the newest always (<code>LogsCap</code>). The pad's toggle buttons reach the game too.</li></ul>
 <h3>Fixed after this manual's first version (0.15.8)</h3>
 <ul><li>Under the mod's automatic the needle followed the converter's engine speed without a cap and could run to the dial's end with the wheels spinning; now it goes no further past the red zone than wheelspin takes it elsewhere (1.1 of the way from idle to red).</li>
 <li>The brake air dial's red zone is drawn from the model's own figure (5.5 bar, as before).</li>
@@ -1231,7 +1231,8 @@ game's own stall seconds; whether the game's stalling notice shows for it is unc
 taken as 0.2 and 1.0 until a truck with them is driven at Gearbox=0; L is 0.45 as driven. On Windows 10 the NEXT GEN menu may not draw
 while ReShade loads the .asi files as add-ons: turn that off in ReShade's Add-ons tab (one player's report, under investigation).</li></ul>
 <h3>Changed in the next version</h3>
-<ul><li>The automatic's position shows as D on the cluster and in the tab ("Back to D", the D binding); the ini keys, the bindings, the state block and the log keep A (<code>GearLetterShown</code>).</li>
+<ul><li><code>Gauges\\logs</code> keeps the newest 20 start logs and at most 500 MB of them (<code>KeepLogs</code>, 0 keeps all); only the mod's own date-named logs are removed.</li>
+<li>The automatic's position shows as D on the cluster and in the tab ("Back to D", the D binding); the ini keys, the bindings, the state block and the log keep A (<code>GearLetterShown</code>).</li>
 <li>A gear held by hand at Gearbox=2 with the clutch fully in gets the lift by the wheels' own speed, held to twice the
 engine's torque, so spinning wheels in mud spin up toward the red zone and wheels that catch do not lurch. Back to A comes with
 the foot down when A's gear is the held one. With Back to A on, a held gear shifts up by itself at the red zone and down before a
