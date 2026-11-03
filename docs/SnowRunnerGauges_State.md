@@ -23,8 +23,8 @@ The header has a complete example reader (`SrgRead`). In short:
 2. The `sequence` field is odd while the mod writes. Read `sequence`, copy the block while it is even, then read `sequence` again. Keep the copy only if it did not change. Two tries are enough. On a miss, keep using your last good copy.
 3. Check `magic` is `SRG_STATE_MAGIC`. Copy `min(size, sizeof(SrgState))` bytes into a zeroed `SrgState`.
 4. A field exists only if `size` covers it: `SRG_STATE_HAS(copy, field)`. Use this for every version 2 field. Do not go by `version` alone.
-5. If `GetTickCount64() - tick` is over 2000 ms, the mod is gone or the game sits in its menu. Treat that like no block.
-6. If `flags & SRG_FLAG_VEHICLE` is off, no truck is driven. Every truck value is 0 then. Only `ambientC` is written without a truck.
+5. If `GetTickCount64() - tick` is over 2000 ms, the mod is gone or the game hangs. Treat that like no block. The block is written all the time, in the menus too, so the age alone never tells you the player left the truck.
+6. If `flags & SRG_FLAG_VEHICLE` is off, no truck is driven: the game's menus, the map, the garage or a load. Every truck value is 0 then. Only `ambientC` is written without a truck. Fall back to your own reads while the flag is off.
 
 Read it once per frame you draw, or at any rate you like. It costs a 256-byte copy.
 
@@ -90,6 +90,8 @@ The layout only ever grows. Version 1's 64 bytes and version 2's fields keep the
 2. In your mod, log one line a second: `size`, `gear`, `gearMode`, `rpm`, `speedKmh` and the age of `tick`.
 3. Expect size 256, an age under 100 ms, and the same gear and rpm as the mod's cluster.
 4. Close the mod's cluster (its toggle key) and watch `SRG_OPT_CLUSTER` go off.
-5. Leave the truck for the menu: the age passes 2000 ms and your speedo falls back.
+5. Open the game's menu: `SRG_FLAG_VEHICLE` goes off and the truck values go to 0, while the age stays under 100 ms. Fall back to your own reads while the flag is off.
 
 `Gauges.log`, next to the game's exe, has the line "state published for other mods in Local\SnowRunnerGauges.State.<id>" when the block is made.
+
+This guide and `SnowRunnerGauges_State.h` are CC0 (public domain). Copy them into any mod as is.

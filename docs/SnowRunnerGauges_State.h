@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: CC0-1.0
+// This file is free to copy into any mod as is. No credit is needed.
+//
 // SnowRunnerGauges_State.h: how another mod reads Next Gen Gameplay's state (Gauges.asi) in SnowRunner.
 //
 // Gauges writes a block of 256 bytes of named shared memory, "Local\SnowRunnerGauges.State.<process id>", in the
@@ -13,7 +16,8 @@
 //   still the same after it. Two tries are enough; on a miss, keep the last copy.
 // - Check magic, then size: copy min(size, sizeof(SrgState)) bytes and treat the rest as zero. A field is there only
 //   if size covers it (SRG_STATE_HAS below). Version 1 is 64 bytes, version 2 is 256.
-// - A tick older than 2 seconds by GetTickCount64 means Gauges is gone, or the game is paused in its menu.
+// - A tick older than 2 seconds by GetTickCount64 means Gauges is gone. In the game's menus, the map and the garage the
+//   block stays fresh, with SRG_FLAG_VEHICLE off.
 // - Read only. A reader never writes this block. A mod that wants to tell Gauges something publishes its own block.
 //
 // All values are metric (km/h, bar, degrees C, litres). The options say which units the player reads. No value is
