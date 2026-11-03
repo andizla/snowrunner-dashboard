@@ -1275,6 +1275,9 @@ static const float kGripSteady = 0.05f;      // and the wheels within this share
 static const float kGripSpread = 0.15f;      // under kGripGain rad/s each second: no bump, no wheel off the ground, no start
 static const float kGripGain = 1.0f;
 static const float kGripFall = 2.0f, kGripRise = 20.0f; // seconds the grip takes to follow a lower reading, and a higher one
+// In a position of the player's own the grip rises only with the pedal under this (Back to A's kBackPedal): a low gear
+// floored in mud spins steadily, with no converter to slip, and that slip is no grip. It may always fall
+static const float kHeldGripPedal = 0.7f;
 static const float kSlipUp = 1.05f;          // a shift up goes by the wheels at most this much faster than the ground: wheelspin in rough ground shifts nothing up
 static const float kSlipShare = 1.2f, kSlipSpare = 1.0f; // wheels this much faster than the ground under them, and this many rad/s more, spin: the gearbox goes by the ground
                                                         // (floored in drives logged in the game the wheels turned within 1.13 times the learned grip nine times in ten)
@@ -1733,7 +1736,10 @@ inline float GearboxDownPoint(const TruckRaw &t, const GaugeScale &k, int gear, 
 // press from the foot off does not. By the input in use (hand.input): a pad's trigger kicks down only from under
 // kKickPadFrom, and keys kick nothing down, shift as floored whenever one is held, and shift up at a lift only once
 // it has lasted kLiftAfter, and none for kLiftBlock after such a shift up was taken back (a key tapped to hold the speed).
-inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k, float pedal, float power, float dt, const EngineHand &hand = EngineHand{})
+// byHand: the truck is in a position of the player's own, where the model decides nothing and only reads along (the
+// wheels' grip, the gear A would ask), and the grip rises only under kHeldGripPedal.
+inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k, float pedal, float power, float dt, const EngineHand &hand = EngineHand{},
+                        bool byHand = false)
 {
     const bool engine = hand.on;
     const int top = TruckTopGear(t);
@@ -1786,7 +1792,8 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     if (p > 0.2f && TruckBrake(t) == 0.0f && !t.handbrake && ground > kGripSpeed && raw > 1.0f && steady)
     {
         const float r = raw / ground;
-        m.grip = m.grip > 0.0f ? m.grip + (r - m.grip) * (1.0f - expf(-dt / (r < m.grip ? kGripFall : kGripRise))) : r;
+        if (!byHand || p < kHeldGripPedal || (m.grip > 0.0f && r < m.grip))
+            m.grip = m.grip > 0.0f ? m.grip + (r - m.grip) * (1.0f - expf(-dt / (r < m.grip ? kGripFall : kGripRise))) : r;
     }
     // the truck's speed in the wheels' terms (the ground's once the grip is known), and how fast it changes
     const float onGround = m.grip * ground, before = m.by;

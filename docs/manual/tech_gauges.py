@@ -341,7 +341,9 @@ def s_powertrain():
 gives 0.29.</p>
 <p>The game has no place for an engine curve, but it has a torque factor: the share of its torque a damaged engine keeps (truck
 action +0xCC). The mod writes that factor so the game's pull matches the mod's engine (<code>models.h:1160-1238</code>). With
-<i>x</i> the wheels' share of the gear's top, from the learned grip so that spinning wheels keep the game's fall:</p>
+<i>x</i> the wheels' share of the gear's top, from the learned grip so that spinning wheels keep the game's fall. The grip is learned
+in a gear held by hand at Gearbox=2 too, where it rises only with the pedal under 0.7 (steady wheelspin floored in mud is no grip)
+and may always fall; before it is learned <i>x</i> is held to 0.5:</p>
 {eq('lift = clamp( curve(<i>x</i>) · ratio · min(1, cold · boost / <i>p</i>) / GameFall(<i>x</i>), 0.05, <i>R</i> ) for <i>x</i> &lt; 1, 1 for <i>x</i> ≥ 1,    GameFall(<i>x</i>) = clamp(2.1(1 − <i>x</i>), 0, 1),    <i>R</i> = 6', 13)}
 {eq('factor = game · (1 + clamp(EngineShare/100, 0, 1) · (lift − 1))', 14)}
 <p class="where">ratio is the torque converter's multiplication while the mod's automatic holds the gears, otherwise 1. game is the game's
@@ -562,7 +564,8 @@ def s_back():
 gearbox_model.h). The timer starts on a shift by hand into a numbered gear, one that changes the position or the gear, and not
 on the game's shifter. Once it has run out, every condition of the table must hold for 1 s without a break; any failure starts
 that second over. A's gear is the one the mod's automatic would ask on its first pass back (<code>TakeoverAutoGear</code>), as
-its model keeps stepping in a held gear. The return is the A key pressed on the next pass: one job on the game's thread, with no
+its model keeps stepping in a held gear (<code>GearboxModelPass</code>: it decides nothing there and only reads along, the grip
+rising only with the pedal under 0.7). The A key pressed from a held gear asks the same gear. The return is the A key pressed on the next pass: one job on the game's thread, with no
 power write, and with <code>RequireClutch</code> no stall, as a move to A never stalls. The creep comes back once the shift is
 idle again. The log has "sequential: back to A held by" each time what holds it changes, with the pedal, the wheels against the
 ground, the nose and A's gear, and "sequential: back to A after N s in gear g, A's gear a, rpm" when it goes.</p>
@@ -1216,7 +1219,10 @@ game's own stall seconds; whether the game's stalling notice shows for it is unc
 taken as 0.2 and 1.0 until a truck with them is driven at Gearbox=0; L is 0.45 as driven. On Windows 10 the NEXT GEN menu may not draw
 while ReShade loads the .asi files as add-ons: turn that off in ReShade's Add-ons tab (one player's report, under investigation).</li></ul>
 <h3>Changed in the next version</h3>
-<ul><li>Gearboxes of up to 30 gears are read, with their reverse and high gear, so a mod's 16-speed drives in every position and shows
+<ul><li>In a gear held by hand at Gearbox=2 the mod's automatic keeps reading along: the wheels' grip stays learned, so
+Back to A goes back (it waited for the grip forever), A comes back in the gear next to the held one, not in 1st, and the lift
+pulls to the red zone instead of fading past half the gear's top. There the grip rises only with the pedal under 0.7.</li>
+<li>Gearboxes of up to 30 gears are read, with their reverse and high gear, so a mod's 16-speed drives in every position and shows
 its fuel a minute; a longer list is logged once a truck and not read. The gear keys go to Gear16 (they went to Gear14).</li>
 <li>Each of the mod's shifts goes through four stages (asked, set, engaged, idle 1.5 s later, A shift, step by step). The creep
 gives nothing until the shift is idle, and a shift without the clutch stalls once the new gear is set, so the stall never lands on

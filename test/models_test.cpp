@@ -29,6 +29,7 @@
 #include "gauges.h"
 #include "truck.h"
 #include "models.h"
+#include "gearbox_model.h"
 #include "sound.h"
 #include "state.h"
 #include "tires.h"
@@ -3609,6 +3610,58 @@ int main(int argc, char **argv)
         if (mapping) CloseHandle(mapping);
         Check(noneYet && read && lamps && gone, "tires: the tire mod's block is found once it is there and read while it is fresh and whole; the lamp shows the mode, lit away from Normal, "
                                                  "blinking while the pressure changes, red while the tires take damage, and is not there for another truck");
+    }
+
+    // the automatic's model in a position of the player's own (held): it learns the wheels' grip in a held 4th that
+    // grips, so the lift's x follows the truck's speed past kLiftBlind and the factor at 0.8 of the top is above 1 and
+    // under the roof; in a held gear floored in mud with the wheels steadily at twice the ground's speed the grip never rises (it
+    // does in A), the lift's x stays at the ground's share, and Back to A holds by the pedal, and by the wheelspin with
+    // the foot under 0.7
+    {
+        const float dt = 0.05f;
+        TruckRaw t = Truck();
+        auto drive = [&](int gear, float share, float pedal, float slip) {
+            Drive(t, gear, false, share, pedal);
+            t.speed /= slip;
+        };
+        const GaugeScale &k = kClassScales[kClassTruck];
+        GearboxModel held = {};
+        drive(4, 0.8f, 0.3f, 1.0f);
+        for (int i = 0; i < 400; i++) GearboxStep(held, t, k, 0.3f, 0.3f, dt, EngineHand{}, true);
+        const float top = TruckGearTop(t, 4), x = LiftShare(TruckDrivenSpin(t), t.speed, held.grip, top);
+        const float roof = LiftRoof(TorqueRoof(kClassTruck), 0.8f), factor = TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, 0.8f, roof);
+        const bool learned = held.grip > 0.0f && Near(held.grip, 1.0f / 0.45f, 0.05f) && x > kLiftBlind + 0.1f && factor > 1.0f && factor <= roof;
+        // the held 4th floored in mud (fast enough for the grip to be read): the wheels steadily at twice the ground's speed
+        GearboxModel mud = {}, mudA = {}, known = held;
+        drive(4, 0.9f, 1.0f, 2.0f);
+        for (int i = 0; i < 1200; i++)
+        {
+            GearboxStep(mud, t, k, 1.0f, 1.0f, dt, EngineHand{}, true);
+            GearboxStep(mudA, t, k, 1.0f, 1.0f, dt);
+            GearboxStep(known, t, k, 1.0f, 1.0f, dt, EngineHand{}, true);
+        }
+        const float ground = known.grip * t.speed * kSlipUp / TruckGearTop(t, 4), mudX = LiftShare(TruckDrivenSpin(t), t.speed, known.grip, TruckGearTop(t, 4));
+        BackInputs bi = {};
+        bi.pos = kPosGear;
+        bi.heldGear = bi.autoGear = 4;
+        bi.pedal = 1.0f;
+        bi.grip = known.grip;
+        bi.spin = known.spin;
+        bi.speed = t.speed;
+        bi.pitchKnown = bi.engineOn = true;
+        BackModel bm = {};
+        bool back = false;
+        for (int i = 0; i < 400; i++) back = back || BackToAStep(bm, 5, i == 0, bi, dt);
+        const int byPedal = bm.why;
+        bi.pedal = 0.5f;
+        bm = BackModel{};
+        for (int i = 0; i < 400; i++) back = back || BackToAStep(bm, 5, i == 0, bi, dt);
+        const bool mudHeld = mud.grip == 0.0f && mudA.grip > 0.0f && known.grip <= held.grip + 0.001f && Near(mudX, ground, 0.01f) && !back &&
+                             byPedal == kBackPedalDown && bm.why == kBackSpin;
+        printf("     held gear: grip %.3f, x %.3f factor %.3f roof %.3f | mud %.3f A %.3f known %.3f, x %.3f of %.3f, back %d, by %d then %d\n", held.grip, x, factor, roof,
+               mud.grip, mudA.grip, known.grip, mudX, ground, back, byPedal, bm.why);
+        Check(learned && mudHeld, "gearbox: in a held position the model learns the grip (the lift's x past 0.5, the factor at 0.8 of the top above 1 and under the roof); "
+                                  "steady wheelspin floored never raises it there (it does in A), and Back to A holds by the pedal and the wheelspin");
     }
 
     // the shift's state (review 17, step 2): asked, set, engaged and idle kCreepQuiet later, in that order; the stall of a

@@ -1743,6 +1743,17 @@ static bool SavePick(const std::vector<SaveFile> &saves, const FILETIME &lastWri
 }
 
 
+// The mod's own gearbox holds a position of the player's own (not A): driving, the truck taken.
+static bool GearboxHeldBy(bool driving, const GearboxPosModel &pos) { return driving && pos.running && pos.pos != kPosA; }
+
+// The automatic's model, one pass. It steps in a position of the player's own too: it decides nothing and writes
+// nothing there, but keeps the wheels' grip learned for the lift and Back to A, and the gear A would ask when it
+// comes back by Back to A or the A key (the held gear grip brief). There the grip rises only under kHeldGripPedal.
+static void GearboxModelPass(GearboxModel &m, bool driving, const GearboxPosModel &pos, const TruckRaw &raw, const GaugeScale &k, float foot, float power,
+                             float dt, const EngineHand &hand)
+{
+    GearboxStep(m, raw, k, foot, power, dt, hand, GearboxHeldBy(driving, pos));
+}
 
 #ifndef GAUGES_SETTINGS_TEST
 // The game's folder in the log at the start, and the store its path suggests: where its saves are follows from it.
@@ -2493,7 +2504,7 @@ struct TruckWatch
 };
 
 // The mod's gearbox has the truck in a position of the player's own (not A): the engine runs behind its clutch.
-static bool GearboxManual(const TruckWatch &w) { return w.take.driving && w.pos.running && w.pos.pos != kPosA; }
+static bool GearboxManual(const TruckWatch &w) { return GearboxHeldBy(w.take.driving, w.pos); }
 
 // The mod's gearbox lets the truck go: the game's own shifting passes again.
 static void GearboxLetGo(TruckWatch &w)
@@ -3795,11 +3806,18 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         // shifts is logged beside the game's gear while the game's automatic drives a numbered gear
         const int boxGear = w.gearbox.gear;
         const float foot = TruckEngineOn(raw) ? TruckPedal(raw) : 0.0f;
+        // the shift points a truck automatic's schedule while the mod's engine is handed to the game, else by the
+        // game's own pull; an engine held back (Torque) sets off as a weaker one
+        const float launch = w.engine.torque > 0.0f && w.mass > 0.0f && w.engineVehicle == w.refs.vehicle
+                                 ? w.engine.torque / w.mass * (w.profile.torque > 0.0f ? w.profile.torque : 1.0f) : 0.0f;
+        const EngineHand hand{ w.hand.on, &curve, scale.redline > 0.0f ? scale.max / scale.redline : 1.0f, s.engineShare / 100.0f, launch,
+                               GearHoldOf(w, autoClass), EngineLightFloor(curve, scale.redline), s.input, TorqueRoof(autoClass) };
+        const int huntsWere = w.gearbox.hunts;
+        GearboxModelPass(w.gearbox, w.take.driving, w.pos, raw, scale, foot, w.power.power, dt, hand);
         if (GearboxManual(w))
         {
-            // a position of the player's own: the automatic's model stands down, and the engine runs behind the
+            // a position of the player's own: the automatic's model only reads along, and the engine runs behind the
             // gearbox's clutch; a clutch on an axis is the driver's, without one (a button, or none) it works by itself
-            w.gearbox = GearboxModel{};
             // a stall with the clutch on a pedal's axis is the game's: handed to its stall seconds below, as the gearbox's
             // own; a clutch on a button works by itself and never stalls the engine
             const bool onAxis = w.actions.clutchTravel >= 0.0f;
@@ -3814,16 +3832,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         }
         else
         {
-            // the shift points a truck automatic's schedule while the mod's engine is handed to the game, else by the
-            // game's own pull; an engine held back (Torque) sets off as a weaker one
-            const float launch = w.engine.torque > 0.0f && w.mass > 0.0f && w.engineVehicle == w.refs.vehicle
-                                     ? w.engine.torque / w.mass * (w.profile.torque > 0.0f ? w.profile.torque : 1.0f) : 0.0f;
-            const EngineHand hand{ w.hand.on, &curve, scale.redline > 0.0f ? scale.max / scale.redline : 1.0f, s.engineShare / 100.0f, launch,
-                                   GearHoldOf(w, autoClass), EngineLightFloor(curve, scale.redline), s.input, TorqueRoof(autoClass) };
-            const int huntsWere = w.gearbox.hunts;
-            GearboxStep(w.gearbox, raw, scale, foot, w.power.power, dt, hand);
-            // told only while the model drives the game's gears: with the player in a position of the game's own (L+, H, L,
-            // R at Gearbox=1) the model's hunts are its own following, not the truck's (review 11)
+            // told only while the model drives the game's gears, never in a position of the player's own, where it only
+            // reads along; with the player in a position of the game's own (L+, H, L, R at Gearbox=1) the model's hunts
+            // are its own following, not the truck's (review 11)
             if (w.gearbox.hunts != huntsWere && w.take.driving)
                 Log(L"gearbox: a shift up taken back within %.0f s with the foot on (the grade or the ground), the %d%s time; no shift up past %d for %.0f s, "
                     L"the limiter's neither, then it tries again",
@@ -4420,7 +4431,13 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                             w.hand.heldBack);
         Log(L"probe: %S", eighth);
         const bool manual = GearboxManual(w);
-        if (manual) snprintf(ninth, sizeof ninth, "automatic: stands down, the gearbox is in a position of the player's own");
+        if (manual)
+        {
+            // the model as it reads along in the player's position: its grip and the gear A would ask
+            char along[sizeof ninth];
+            GearboxProbeText(raw, w.gearbox, false, along, sizeof along);
+            snprintf(ninth, sizeof ninth, "in a position of the player's own, the model reads along: %s", along);
+        }
         else GearboxProbeText(raw, w.gearbox, w.take.driving, ninth, sizeof ninth);
         Log(L"probe: %S", ninth);
         if (w.take.driving)
@@ -6157,6 +6174,36 @@ int wmain(int argc, wchar_t **argv)
         Check(sixteen.gearPressed == 16 && sixteen.gearHeld == 16 && !strcmp(kActionNames[kActGear16], "Gear16") && !strcmp(kActionNames[kActGearH], "GearH") &&
                   !strcmp(kActionNames[kActRideDown], "RideDown"),
               "gearbox: Gear16 is the 16th gear key, and the names stay with their actions after it");
+        // the wiring (the held gear grip brief): the model the readers use, stepped through the pass's own code for 10 s
+        // in a held 4th with the wheels gripping, has the grip learned and asks a gear next to the held one when A comes
+        // back by Back to A or the A key, not the 1st of a model reset each pass
+        {
+            GearboxModel model = {};
+            GearboxPosModel pos = {};
+            pos.running = true;
+            pos.pos = kPosGear;
+            pos.gear = 4;
+            TruckRaw t = {};
+            t.flags = 3;
+            t.powerFactor = 1.0f;
+            t.gearSpeeds = 6;
+            static const float speeds[6] = { 1.5f, 3.0f, 6.0f, 12.0f, 16.0f, 8.0f };
+            memcpy(t.gearSpeed, speeds, sizeof speeds);
+            t.wheels = 4;
+            t.drive[0] = t.drive[1] = t.drive[2] = t.drive[3] = 1;
+            t.gear = t.gearEngaged = 4;
+            t.throttle = -0.3f;
+            const float spin = TruckGearTop(t, 4) * 0.8f;
+            for (int i = 0; i < 4; i++) t.spin[i] = spin;
+            t.speed = spin * 0.45f;
+            const GaugeScale &k = kClassScales[kClassTruck];
+            for (int i = 0; i < 200; i++) GearboxModelPass(model, true, pos, t, k, 0.3f, 0.3f, 0.05f, EngineHand{});
+            const int aGear = TakeoverAutoGear(t, model.gear, GearboxLowestFit(model, t, k));
+            char line[200];
+            snprintf(line, sizeof line, "gearbox: the pass's model in a held 4th learns the grip (%.2f) and A's gear is next to it (%d), not a reset model's 1st",
+                     model.grip, aGear);
+            Check(GearboxHeldBy(true, pos) && model.grip > 0.0f && aGear >= 3 && aGear <= 5, line);
+        }
 
         const GearboxActions r = ActionsResting(x);
         Check(!r.up && !r.r && !r.gearPressed && r.gearHeld == 3 && r.clutch && r.clutchTravel == 0.7f,
