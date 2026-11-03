@@ -2440,6 +2440,7 @@ struct TruckWatch
     BackModel back;             // BackToA: the timer and the conditions of the return to A
     bool backHand;              // the last pass shifted by hand into a numbered gear
     int backSaid;               // the reason last logged
+    SeqModel seq;               // Sequential's own shifts at the red zone and before a stall
     TurboChar turbo;            // the turbo's character in force on this pass (TurboOf)
     bool creepStall;            // the creep stalled a stuck truck on the last pass: handed to the game's stall seconds on this one
     AirModel air;               // and the air in its brakes' tanks
@@ -4077,11 +4078,40 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                     Log(L"sequential: back to A after %.1f s in gear %d, A's gear %d, %.0f rpm", heldFor + dt, w.pos.gear, autoGear, w.tach.rpm);
                 }
                 else if (w.back.why != w.backSaid && w.back.why > kBackTimer && w.back.why != kBackSteadying)
+                {
+                    // one line for each new reason: backSaid keeps the last one told, so a condition flickering at its
+                    // edge (the pedal at 0.7) is told once (review N1)
                     Log(L"sequential: back to A held by %S (the pedal %.2f, the wheels %.1f of the ground's %.1f rad/s, the nose %.1f deg, A's gear %d in gear %d)",
                         kBackWhyNames[w.back.why], foot, bi.spin, bi.grip * fabsf(bi.speed), bi.pitchDeg, autoGear, w.pos.gear);
-                w.backSaid = w.back.why;
+                    w.backSaid = w.back.why;
+                }
+                if (w.back.why <= kBackTimer || w.back.why == kBackGo) w.backSaid = w.back.why;
+                // Sequential's own shifts, as a key's, so the gearbox stays in the held position
+                SeqInputs si = {};
+                si.backToA = s.backToA;
+                si.requireClutch = s.requireClutch;
+                si.requireGearHeld = s.requireGearHeld;
+                si.byShifter = w.pos.byShifter;
+                si.pos = w.pos.pos;
+                si.gear = w.pos.gear;
+                si.top = boxTruck.top;
+                si.input = w.clutch.input;
+                si.redline = scale.redline;
+                si.idle = scale.idle;
+                si.pedal = foot;
+                si.gripKnown = bi.grip > 0.0f;
+                si.spinning = bi.grip > 0.0f && bi.spin > bi.grip * fabsf(bi.speed) * kBackSlip + kBackSlipAdd;
+                si.busy = g_shiftJob.state != kShiftIdle || w.stage.stage != kStageIdle;
+                si.engineOn = TruckEngineOn(raw) && raw.stall <= 0.0f;
+                const int seq = acts.a ? 0 : SequentialStep(w.seq, si, dt);
+                if (seq > 0) acts.up = true;
+                if (seq < 0) acts.down = true;
+                if (seq)
+                    Log(seq > 0 ? L"sequential: up at the red zone, gear %d to %d, %.0f rpm on the gearbox's input"
+                                : L"sequential: down before a stall, gear %d to %d, %.0f rpm on the gearbox's input",
+                        w.pos.gear, w.pos.gear + seq, w.clutch.input);
             }
-            else w.back = BackModel{}, w.backSaid = kBackOff;
+            else w.back = BackModel{}, w.backSaid = kBackOff, w.seq = SeqModel{};
             const int gearWas = w.pos.gear;
             if (shifterAsked)
             {
@@ -4191,11 +4221,15 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             const bool pullBusy = w.pullTest.state == kPullArmed || w.pullTest.state == kPullRunning || pull.ended;
             const bool want = s.powertrain && TruckEngineOn(raw) && !pullBusy;
             // the wheels' share of the gear's top by the truck's speed over the ground, once the wheels' grip is known
-            // (LiftShare: before the grip is known, no more than kLiftBlind)
+            // (LiftShare: before the grip is known, no more than kLiftBlind); in a gear held by hand with the clutch fully
+            // in, the engine locked to the wheels, by the wheels' own speed, the factor held to kSpinLiftMost (SpinShare)
             const float ground = isfinite(raw.speed) && raw.speed > 0.0f ? raw.speed : 0.0f;
-            const float x = LiftShare(TruckDrivenSpin(raw), ground, w.gearbox.grip, TruckGearTop(raw, raw.gearEngaged));
+            const bool locked = GearboxManual(w) && w.clutch.connected && !w.clutch.dead && w.clutch.grip >= kGripUp && w.pos.travel <= 0.0f;
+            const float gearTop = TruckGearTop(raw, raw.gearEngaged);
+            const float x = locked ? SpinShare(TruckDrivenSpin(raw), gearTop) : LiftShare(TruckDrivenSpin(raw), ground, w.gearbox.grip, gearTop);
+            const float roofMost = locked ? fminf(TorqueRoof(autoClass), kSpinLiftMost) : TorqueRoof(autoClass);
             w.liftX = x;
-            w.liftRoof = LiftRoof(TorqueRoof(autoClass), x);
+            w.liftRoof = LiftRoof(roofMost, x);
             const float ratio = w.take.driving && !GearboxManual(w) ? w.gearbox.ratio : 1.0f;
             const bool handWas = w.hand.on;
             const float gameWas = w.hand.game;
@@ -4204,7 +4238,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             // engaged gear) at once
             TorqueGive(m, w.refs, true, TorqueHandStep(w.hand, want, w.refs.action, w.refs.vehicle, raw.torqueFactor,
                                                  TorqueHeld(TorqueBlend(TorqueLift(w.power.curve, w.power.cold * w.power.boost, TruckPedal(raw), ratio, x,
-                                                                                   TorqueRoof(autoClass)), s.engineShare / 100.0f),
+                                                                                   roofMost), s.engineShare / 100.0f),
                                                             w.profile.torque),
                                                  dt, raw.gearEngaged));
             if (w.hand.on != handWas)

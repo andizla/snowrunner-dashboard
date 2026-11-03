@@ -223,7 +223,8 @@ inline bool BackToAStep(BackModel &m, int seconds, bool hand, const BackInputs &
     if (m.since < (float)seconds) return hold(kBackTimer);
     const float ground = in.grip * fabsf(in.speed);
     const bool standing = fabsf(in.speed) < kStandStill && in.pedal < kBackFootOff;
-    if (in.pedal >= kBackPedal) return hold(kBackPedalDown);
+    // with A's gear the held one a return is no shift at all, so the foot may stay down
+    if (in.pedal >= kBackPedal && in.autoGear != in.heldGear) return hold(kBackPedalDown);
     if (!(in.grip > 0.0f)) return hold(kBackNoGrip);
     if (in.spin > ground * kBackSlip + kBackSlipAdd) return hold(kBackSpin);
     if (in.climbHold || (in.pitchKnown && in.pitchDeg > kBackClimbDeg && in.pedal >= kBackClimbPedal)) return hold(kBackClimb);
@@ -244,6 +245,42 @@ inline bool BackToAStep(BackModel &m, int seconds, bool hand, const BackInputs &
     m.steady = 0.0f;
     m.why = kBackGo;
     return true;
+}
+
+// ---- Sequential's own shifts (the held gear power brief, point 3) ----
+// With BackToA on, not with RequireClutch or RequireGearHeld (a manual with a clutch or an H shifter never shifts by
+// itself) and never for a gear picked on the game's shifter, a held numbered gear shifts by itself, as a real
+// automatic's manual mode does: up one at the red zone, held kSeqUpHold, not while the wheels spin and not while their
+// grip is unknown (spin cannot be told from speed then: it stays at the limiter); down one with the foot on and the
+// gearbox's input under kSeqDownIdle times idle, held kSeqDownHold. By the gearbox's input, not the engine's speed: the
+// clutch that works by itself slips at low speed and holds the engine near idle. None within a shift's stages, which
+// end kCreepQuiet after the gear engaged. The gearbox stays in the held position, and Back to A's timer restarts.
+static const float kSeqUpHold = 0.3f, kSeqDownHold = 0.5f, kSeqDownIdle = 1.1f;
+struct SeqInputs
+{
+    int backToA;
+    bool requireClutch, requireGearHeld, byShifter;
+    int pos, gear, top;
+    float input, redline, idle; // the gearbox's input speed, the red zone's and the idle's, rpm
+    float pedal;
+    bool gripKnown, spinning, busy, engineOn;
+};
+struct SeqModel { float up, down; };
+// One pass of dt seconds: +1 a shift up, -1 a shift down, 0 none.
+inline int SequentialStep(SeqModel &m, const SeqInputs &in, float dt)
+{
+    if (in.backToA <= 0 || in.requireClutch || in.requireGearHeld || in.byShifter || in.pos != kPosGear || !in.engineOn || in.busy)
+    {
+        m = SeqModel{};
+        return 0;
+    }
+    const bool up = in.gear < in.top && in.input >= in.redline && in.gripKnown && !in.spinning;
+    const bool down = in.gear > 1 && in.input < kSeqDownIdle * in.idle && in.pedal >= kBackFootOff;
+    m.up = up ? m.up + dt : 0.0f;
+    m.down = down ? m.down + dt : 0.0f;
+    if (m.up >= kSeqUpHold) { m = SeqModel{}; return 1; }
+    if (m.down >= kSeqDownHold) { m = SeqModel{}; return -1; }
+    return 0;
 }
 
 // At Gearbox 0 and 1 the game's shifter is the player's: the mod's orders go out only in A, and a gear only forward

@@ -3615,8 +3615,8 @@ int main(int argc, char **argv)
     // the automatic's model in a position of the player's own (held): it learns the wheels' grip in a held 4th that
     // grips, so the lift's x follows the truck's speed past kLiftBlind and the factor at 0.8 of the top is above 1 and
     // under the roof; in a held gear floored in mud with the wheels steadily at twice the ground's speed the grip never rises (it
-    // does in A), the lift's x stays at the ground's share, and Back to A holds by the pedal, and by the wheelspin with
-    // the foot under 0.7
+    // does in A), the lift's x stays at the ground's share, and Back to A holds by the wheelspin, floored or with the foot
+    // under 0.7 (A's gear the held one, so the pedal holds nothing of its own)
     {
         const float dt = 0.05f;
         TruckRaw t = Truck();
@@ -3657,11 +3657,39 @@ int main(int argc, char **argv)
         bm = BackModel{};
         for (int i = 0; i < 400; i++) back = back || BackToAStep(bm, 5, i == 0, bi, dt);
         const bool mudHeld = mud.grip == 0.0f && mudA.grip > 0.0f && known.grip <= held.grip + 0.001f && Near(mudX, ground, 0.01f) && !back &&
-                             byPedal == kBackPedalDown && bm.why == kBackSpin;
+                             byPedal == kBackSpin && bm.why == kBackSpin; // A's gear the held one: floored is no hold of its own
         printf("     held gear: grip %.3f, x %.3f factor %.3f roof %.3f | mud %.3f A %.3f known %.3f, x %.3f of %.3f, back %d, by %d then %d\n", held.grip, x, factor, roof,
                mud.grip, mudA.grip, known.grip, mudX, ground, back, byPedal, bm.why);
         Check(learned && mudHeld, "gearbox: in a held position the model learns the grip (the lift's x past 0.5, the factor at 0.8 of the top above 1 and under the roof); "
-                                  "steady wheelspin floored never raises it there (it does in A), and Back to A holds by the pedal and the wheelspin");
+                                  "steady wheelspin floored never raises it there (it does in A), and Back to A holds by the wheelspin, floored or not");
+    }
+
+    // a held gear's lift by the wheels' own speed (the held gear power brief): spinning in mud at 0.8 of the top with the
+    // ground at 0 the factor is the curve over GameFall, under LiftRoof and kSpinLiftMost, not 1; when the wheels catch
+    // (0.85 down to 0.3 of the top in 0.2 s) and in a chatter (spin and catch every second pass for 2 s) the factor
+    // written on a pass times GameFall at the next pass's x, the torque the game gives until the next write, never
+    // passes kSpinLiftMost
+    {
+        const float roofMost = fminf(TorqueRoof(kClassTruck), kSpinLiftMost);
+        const float mud = TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, SpinShare(-0.8f * 20.0f, 20.0f), roofMost);
+        const bool inMud = mud > 1.0f && mud <= kSpinLiftMost && Near(mud, fminf(1.0f / GameFall(0.8f), LiftRoof(roofMost, 0.8f)), 0.001f);
+        float worst = 0.0f;
+        auto run = [&](const float *xs, int n) {
+            for (int i = 0; i + 1 < n; i++)
+            {
+                const float written = TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, xs[i], roofMost);
+                worst = fmaxf(worst, written * GameFall(xs[i + 1]));
+            }
+        };
+        const float caught[6] = { 0.85f, 0.85f, 0.7f, 0.55f, 0.4f, 0.3f };
+        run(caught, 6);
+        float chatter[40];
+        for (int i = 0; i < 40; i++) chatter[i] = i % 2 ? 0.3f : 0.85f;
+        run(chatter, 40);
+        char line[200];
+        snprintf(line, sizeof line, "lift by spin: in mud at 0.8 of the top %.2f (not 1); the catch and the chatter give the game at most %.2f of the engine's torque "
+                                    "between writes (kSpinLiftMost %.1f)", mud, worst, kSpinLiftMost);
+        Check(inMud && worst <= kSpinLiftMost + 0.001f && worst > 1.0f, line);
     }
 
     // the shift's state (review 17, step 2): asked, set, engaged and idle kCreepQuiet later, in that order; the stall of a

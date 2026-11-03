@@ -343,7 +343,11 @@ gives 0.29.</p>
 action +0xCC). The mod writes that factor so the game's pull matches the mod's engine (<code>models.h:1160-1238</code>). With
 <i>x</i> the wheels' share of the gear's top, from the learned grip so that spinning wheels keep the game's fall. The grip is learned
 in a gear held by hand at Gearbox=2 too, where it rises only with the pedal under 0.7 (steady wheelspin floored in mud is no grip)
-and may always fall; before it is learned <i>x</i> is held to 0.5:</p>
+and may always fall; before it is learned <i>x</i> is held to 0.5. In such a gear with the clutch fully in (the clutch model
+connected, its grip at 0.99 or more, no travel) the engine is locked to the wheels, so <i>x</i> is the driven wheels' own speed over
+the gear's top (<code>SpinShare</code>) and the roof is held to <code>kSpinLiftMost</code> 2: when spinning wheels catch, the
+factor written for the spin meets them at the game's full torque until the next pass, so the kick is at most twice the engine's
+torque for one pass:</p>
 {eq('lift = clamp( curve(<i>x</i>) · ratio · min(1, cold · boost / <i>p</i>) / GameFall(<i>x</i>), 0.05, <i>R</i> ) for <i>x</i> &lt; 1, 1 for <i>x</i> ≥ 1,    GameFall(<i>x</i>) = clamp(2.1(1 − <i>x</i>), 0, 1),    <i>R</i> = 6', 13)}
 {eq('factor = game · (1 + clamp(EngineShare/100, 0, 1) · (lift − 1))', 14)}
 <p class="where">ratio is the torque converter's multiplication while the mod's automatic holds the gears, otherwise 1. game is the game's
@@ -549,7 +553,7 @@ def s_back():
     rows = [['The position', 'a numbered gear, shifted into by hand; not held by RequireGearHeld or the game\'s shifter',
              'R, N, H and the low range never return'],
             ['The timer', 'BackToA seconds since the last shift by hand', 'each shift by hand restarts it'],
-            ['The pedal', 'under 0.7', 'coasting included'],
+            ['The pedal', 'under 0.7, unless A\'s gear is the held one', 'coasting included; with A\'s gear the held one no shift happens'],
             ['The grip', 'learned, and the wheels within 1.05 times the ground\'s speed plus 0.5 rad/s', 'no return while it is not learned'],
             ['No climb', 'the nose under 8° while the pedal is at 0.4 or more, and the climb hold not running', 'a shift up on a climb bogs'],
             ['No descent', 'the nose down under 5° while moving forward', 'a low gear held for engine braking'],
@@ -569,7 +573,15 @@ rising only with the pedal under 0.7). The A key pressed from a held gear asks t
 power write, and with <code>RequireClutch</code> no stall, as a move to A never stalls. The creep comes back once the shift is
 idle again. The log has "sequential: back to A held by" each time what holds it changes, with the pedal, the wheels against the
 ground, the nose and A's gear, and "sequential: back to A after N s in gear g, A's gear a, rpm" when it goes.</p>
-{table(['Condition', 'Figure', 'Why'], rows, 'Back to A: what must hold for a second')}'''
+{table(['Condition', 'Figure', 'Why'], rows, 'Back to A: what must hold for a second')}
+<p>Sequential's own shifts (<code>SequentialStep</code>, gearbox_model.h): with <code>BackToA</code> above 0, not with
+<code>RequireClutch</code> or <code>RequireGearHeld</code>, never for a gear picked on the game's shifter and never within a
+shift's stages (which end 1.5 s after the gear engaged), a held numbered gear shifts up one when the gearbox's input
+(<code>ClutchModel::input</code>, the wheels and the gear) has been at the red zone for 0.3 s, below the top gear, with the grip
+known and the wheels not spinning (Back to A's own test), and down one when it has been under 1.1 times idle for 0.5 s with the
+pedal at 0.05 or more, above 1st. By the input, not the engine's speed: the clutch that works by itself slips at low speed and
+holds the engine near idle. The shift is the up or down key on that pass, so the position stays held and Back to A's timer
+restarts. The log: "sequential: up at the red zone" or "down before a stall", with the gears and the input's rpm.</p>'''
 
 
 def s_coolant():
@@ -1219,7 +1231,11 @@ game's own stall seconds; whether the game's stalling notice shows for it is unc
 taken as 0.2 and 1.0 until a truck with them is driven at Gearbox=0; L is 0.45 as driven. On Windows 10 the NEXT GEN menu may not draw
 while ReShade loads the .asi files as add-ons: turn that off in ReShade's Add-ons tab (one player's report, under investigation).</li></ul>
 <h3>Changed in the next version</h3>
-<ul><li>In a gear held by hand at Gearbox=2 the mod's automatic keeps reading along: the wheels' grip stays learned, so
+<ul><li>A gear held by hand at Gearbox=2 with the clutch fully in gets the lift by the wheels' own speed, held to twice the
+engine's torque, so spinning wheels in mud spin up toward the red zone and wheels that catch do not lurch. Back to A comes with
+the foot down when A's gear is the held one. With Back to A on, a held gear shifts up by itself at the red zone and down before a
+stall, unless RequireClutch or RequireGearHeld is on or the gear was picked on the game's shifter.</li>
+<li>In a gear held by hand at Gearbox=2 the mod's automatic keeps reading along: the wheels' grip stays learned, so
 Back to A goes back (it waited for the grip forever), A comes back in the gear A would pick, not in 1st (Back to A keeps it next
 to the held one), and the lift
 pulls to the red zone instead of fading past half the gear's top. There the grip rises only with the pedal under 0.7.</li>

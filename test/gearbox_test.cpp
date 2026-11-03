@@ -224,6 +224,93 @@ int main()
               which[0] ? which : "BackToA: never by default; after 10 s and a steady second, restarted by a shift by hand; each condition holds it, R, N, L and H never, "
                                  "nor a gear held; a failure in the second starts it over; a lock switched holds it 3 s; any gap standing with the foot off");
     }
+    // Back to A floored (the held gear power brief): with A's gear the held one it returns after BackToA and a second,
+    // the pedal at 1 as a key held gives it; with A's gear one off the pedal still holds it
+    {
+        const float dt = 0.05f;
+        BackInputs in = {};
+        in.pos = kPosGear;
+        in.heldGear = in.autoGear = 4;
+        in.pedal = 1.0f;
+        in.grip = 1.2f;
+        in.speed = 10.0f;
+        in.spin = 12.0f;
+        in.pitchKnown = in.engineOn = true;
+        auto backAt = [&](const BackInputs &b) {
+            BackModel m = {};
+            for (int i = 0; i * dt < 20.0f; i++)
+                if (BackToAStep(m, 5, i == 0, b, dt)) return i * dt;
+            return -1.0f;
+        };
+        const float same = backAt(in);
+        BackInputs off = in;
+        off.autoGear = 5;
+        BackModel m = {};
+        for (int i = 0; i < 300; i++) BackToAStep(m, 5, i == 0, off, dt);
+        Check(same >= 5.8f && same <= 6.15f && backAt(off) < 0.0f && m.why == kBackPedalDown,
+              "BackToA: floored, or a key held, it returns when A's gear is the held one; with A's gear one off the pedal holds it");
+    }
+    // Sequential's own shifts (the held gear power brief, point 3): a held 3rd at the red zone 0.3 s goes up to 4th
+    // through the gearbox's own up; a spike of one pass does nothing; nothing with RequireClutch, RequireGearHeld, BackToA
+    // 0, the wheels spinning, the grip unknown, a gear from the game's shifter or a shift under way; a held 4th whose
+    // gearbox input sinks under 1.1 times idle with the foot on goes down to 3rd after 0.5 s (by the input, whatever
+    // the engine shows behind a slipping clutch)
+    {
+        const float dt = 0.05f;
+        SeqInputs in = {};
+        in.backToA = 10;
+        in.pos = kPosGear;
+        in.gear = 3;
+        in.top = 6;
+        in.input = in.redline = 3000.0f;
+        in.idle = 700.0f;
+        in.pedal = 1.0f;
+        in.gripKnown = in.engineOn = true;
+        auto firstAt = [&](const SeqInputs &s, int want) {
+            SeqModel m = {};
+            for (int i = 0; i < 60; i++)
+                if (SequentialStep(m, s, dt) == want) return i * dt;
+            return -1.0f;
+        };
+        const float upAt = firstAt(in, 1);
+        GearboxPosModel pm = {};
+        GearboxTruck t = Truck(1);
+        GearboxActions a = {};
+        a.gearPressed = 3;
+        Pass(pm, plain, a, t);
+        Pass(pm, plain, Up(), t);
+        const bool toFourth = t.gear == 4 && pm.pos == kPosGear && pm.gear == 4;
+        bool spike = false;
+        {
+            SeqModel m = {};
+            SeqInputs low = in;
+            low.input = 2500.0f;
+            for (int i = 0; i < 60; i++) spike = spike || SequentialStep(m, i % 5 == 0 ? in : low, dt) != 0;
+        }
+        bool none = true;
+        SeqInputs c = in;
+        c.requireClutch = true; none = none && firstAt(c, 1) < 0.0f;
+        c = in; c.requireGearHeld = true; none = none && firstAt(c, 1) < 0.0f;
+        c = in; c.backToA = 0; none = none && firstAt(c, 1) < 0.0f;
+        c = in; c.spinning = true; none = none && firstAt(c, 1) < 0.0f;
+        c = in; c.gripKnown = false; none = none && firstAt(c, 1) < 0.0f;
+        c = in; c.byShifter = true; none = none && firstAt(c, 1) < 0.0f;
+        c = in; c.busy = true; none = none && firstAt(c, 1) < 0.0f;
+        c = in; c.gear = 6; none = none && firstAt(c, 1) < 0.0f;
+        SeqInputs slow = in;
+        slow.gear = 4;
+        slow.input = 650.0f;
+        slow.pedal = 0.3f;
+        slow.gripKnown = false; // a down-shift needs no grip
+        const float downAt = firstAt(slow, -1);
+        c = slow; c.byShifter = true; none = none && firstAt(c, -1) < 0.0f;
+        c = slow; c.pedal = 0.0f; none = none && firstAt(c, -1) < 0.0f;
+        c = slow; c.gear = 1; none = none && firstAt(c, -1) < 0.0f;
+        char line[200];
+        snprintf(line, sizeof line, "sequential: up at the red zone after %.2f s, to 4th; a spike shifts nothing; none where it may not; down before a stall after %.2f s", upAt,
+                 downAt);
+        Check(upAt >= 0.25f && upAt <= 0.31f && toFourth && !spike && none && downAt >= 0.45f && downAt <= 0.51f, line);
+    }
     // the gear keys to 16: Gear16 picks a 16-speed's 16th gear; Gear13 on a six-speed picks its top, as any key over it
     {
         GearboxPosModel m = {};

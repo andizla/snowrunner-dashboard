@@ -1436,6 +1436,15 @@ inline float LiftShare(float spin, float ground, float grip, float top)
 inline float GameFall(float x) { return isfinite(x) ? SettingsRange(kGamePullFall * (1.0f - x), 0.0f, 1.0f) : 0.0f; }
 
 // The roof of a truck's class (kClassTruck, kClassScout, kClassHeavy).
+// A gear held by hand with the clutch fully in: the engine is locked to the wheels, so the lift goes by the driven
+// wheels' own speed over the gear's top (their mean, the open diff's input), not the ground's: spinning wheels in mud
+// get the engine's curve at the speed it runs and spin up toward the red zone, and the fade takes them to 1 at the
+// top (the held gear power brief). By spin the factor is held to kSpinLiftMost: when the wheels catch, the factor
+// written for the spin meets gripping wheels at the game's full torque until the next pass writes again, so the kick
+// is at most twice the engine's torque for one pass (the reviewer's addendum)
+static const float kSpinLiftMost = 2.0f;
+inline float SpinShare(float spin, float top) { return top > 0.0f && isfinite(spin) ? fabsf(spin) / top : 0.0f; }
+
 inline float TorqueRoof(int tachClass) { return tachClass >= 0 && tachClass < kClassCount ? kTorqueRoof[tachClass] : kTorqueFactorMost; }
 
 // The roof most with the wheels at x of the gear's top: most up to kLiftFadeFrom, then in a straight line down to 1 at

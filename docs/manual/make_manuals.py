@@ -189,7 +189,7 @@ NightC=-12</pre>
 <li><b>Back to A</b> (<code>BackToA</code>, in seconds: 0 never, the default, else 3 to 30). After you shift by hand
 into a numbered gear (Gear up, Gear down or a gear key), the gearbox goes back to A by itself once that many seconds pass with
 no other shift by hand, and then only once everything below has held for a second without a break:
-<ul><li>the pedal under 0.7;</li>
+<ul><li>the pedal under 0.7, unless A's gear is the one you hold (then the return is no shift, and the foot may stay down);</li>
 <li>the wheels gripping, not spinning (the mod learns their grip in the held gear as you drive; floored, steady wheelspin does not
 count as grip);</li>
 <li>no climb under load (the nose up more than 8° with the pedal at 0.4 or more) and no slope down (the nose down more than 5°
@@ -205,7 +205,11 @@ learned yet". It never returns from R, N, H or the low range,
 never with <code>RequireGearHeld</code>, and never for a gear picked on the game's shifter, which stay where you put them. The
 <b>Sequential</b> button in the tab sets <code>RequireClutch</code> off, <code>RequireGearHeld</code> off and
 <code>BackToA</code> 10: shift up and down by hand on a pad, and the gearbox goes back to A by itself. <code>Gauges.log</code>
-says what holds the return and when it comes.</li>
+says what holds the return and when it comes. With <code>BackToA</code> on, and not with <code>RequireClutch</code> or
+<code>RequireGearHeld</code>, a held gear also shifts by itself, as a real automatic's manual mode does: up one at the red zone
+(after 0.3 s, not while the wheels spin and not before the mod knows their grip) and down one before a stall (the gearbox turning
+under 1.1 times idle with the foot on, for 0.5 s). It stays in your held position, never moves a gear picked on the game's shifter,
+and the log says "sequential: up at the red zone" or "down before a stall".</li>
 <li><b>Damage</b>, with <code>Damage</code> on: a stall from a shift without the clutch (it comes once the new gear is in, on the new gear) costs the gearbox <code>StallDamagePercent</code> of what it takes (5 by default). A clutch slipping under load heats up and, once red, costs the gearbox too (<code>ClutchBurn</code>, on by default; its pace is <code>ClutchHeatPercent</code>, 60). A box at the top left warns: amber CLUTCH HOT, then red CLUTCH DAMAGE. The clutch heats fully only at a crawl; from 15 km/h up a lugging engine stalls the game's own way instead. A repair clears the heat. A box of the same shape warns for the engine: amber ENGINE HOT, red ENGINE DAMAGE.</li>
 <li><b>For now only with an automatic</b> (the author, 1 November): the creep goes where an automatic picks the gear, the
 mod's A (with the reverse and the range it drives there) or the game's own automatic. A gear picked by hand gets none, on either
@@ -220,7 +224,9 @@ position and shows its fuel a minute. A longer list is logged once a truck, and 
 <li>Not tested on a wheel or shifter yet; the keyboard and a pad were driven. A downshift at speed does not yet over-rev the engine, and in a manual position the engine pulls by the mod's curve at the revs it is at, so a high gear at low revs pulls less than A does.</li></ul>
 
 <h2>14. The mod's engine (Powertrain=1)</h2>
-<p>The game gives all of an engine's torque with the wheels at about half the gear's top speed and less and less to nothing at the top, whatever the engine speed. With <code>Powertrain=1</code> the truck pulls with the mod's engine instead: the torque curve against the engine speed the needle shows, doubled by the converter at its stall with the automatic. Cold oil (up to 15% at 0 °C) and a turbo without boost (35% of the torque comes from it) cost torque only where the pedal asks for more than they leave. The torque holds to about 0.86 of a gear's top speed (a scout's 0.8), then falls to nothing at the top, as a diesel's governor cuts the fuel; a gear's top speed stays the game's. This holds in a gear held by hand at <code>Gearbox=2</code> too, so a held gear pulls to the red zone.</p>
+<p>The game gives all of an engine's torque with the wheels at about half the gear's top speed and less and less to nothing at the top, whatever the engine speed. With <code>Powertrain=1</code> the truck pulls with the mod's engine instead: the torque curve against the engine speed the needle shows, doubled by the converter at its stall with the automatic. Cold oil (up to 15% at 0 °C) and a turbo without boost (35% of the torque comes from it) cost torque only where the pedal asks for more than they leave. The torque holds to about 0.86 of a gear's top speed (a scout's 0.8), then falls to nothing at the top, as a diesel's governor cuts the fuel; a gear's top speed stays the game's. This holds in a gear held by hand at <code>Gearbox=2</code> too, so a held gear pulls to the red zone. There, with the clutch fully
+in, the engine is locked to the wheels and the torque goes by their own speed: spinning wheels in mud get the engine's torque and
+spin up toward the red zone. By the wheels' speed it is held to twice the engine's torque, so wheels that catch grip do not lurch.</p>
 <p><code>EngineShare</code> (50) sets how much of the mod's engine the game gets: at 50 the truck pulls half way between the game's engine and the mod's, at 100 all the mod's. With the engine handed over, the automatic shifts as a truck automatic does:</p>
 <ul><li>Floored, each gear to the red zone, or sooner where the next gear already pulls harder. At a light foot it shifts up about as far along as the pedal is down, never under 0.8 of the engine's peak torque speed.</li>
 <li>Down where the gear below comes in clear of its own point up, so it does not shift straight back.</li>
