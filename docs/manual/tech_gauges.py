@@ -462,7 +462,7 @@ pause, never locked in first; it stalled at 0.75 red (2400 at most), then at 0.6
 <p><b>For now only with an automatic</b> (the author, 1 November): the creep goes where an automatic picks the gear, the mod's A
 (with the reverse and the range it drives there) or the game's own automatic (<code>CreepAutoPicks</code>). A gear picked by hand gets
 none, on either shifter and an R included: the game turns its automatic off to shift into R (through AutoOffAndShift), so an R it took
-at a stop cannot be told from one picked by hand. The governor, the holding part and the stall below are in the code but not reached.</p>
+at a stop cannot be told from one picked by hand. The governor, the holding part and the stall below are in the code but not reached. Nothing either from one of the mod's shifts, from the moment it is asked until kCreepQuiet (1.5 s) after +0x70 shows the new gear (A shift, step by step); the creep's model keeps the gear and the power it sees then, so it starts no second quiet.</p>
 <p>Once a physics step the game makes a drive throttle and a brake from the pedal field (+0x44; d740a0 in the 6ab52f5d image) and
 hands the throttle to the wheels' drive, <code>c41da0(action, throttle, dt)</code>, called only at c41d40. The pull +0xB4 moves toward
 throttle · (1 − D4 + D4 · curve(the wheels' speed)) and each driven wheel gets min(B4, throttle) · CC · D4 · the gear's torque · its
@@ -524,7 +524,49 @@ then on calls the game's own shift function, <code>ShiftGear(vehicle, gear)</cod
 never under the lowest that fits. A gear the game picks (a tap, or A again) is put back, and so is a gear that appears within 2 s
 of such a pick. It hands the gears back on R, N or high, on a gear the player picks by hand (after 0.5 s), on a low range picked
 (the power factor 0.02 under its highest), with the setting off or the engine off.</p>
+<h3>A shift, step by step</h3>
+<p>The mod's thread decides each shift on its 50 ms pass, as before, but makes none itself. It posts a job (the truck, the gear,
+the automatic flag and the power factor) to the game's truck update, which the mod hooks. On the game's own thread, before the
+game's update, the hook puts the flag, calls <code>ShiftGear</code> through its trampoline and sets the power factor after it, the
+order the game's own calls show. The result (taken or refused, +0x74 and +0x70) comes back in the job. One job is out at a time,
+and a shift while one is out is asked again on the next pass. A job not dealt within a second and 30 updates, or for another
+truck, is dropped and logged. In the drive of 3 November all 104 of the mod's shifts and all 158 of the game's own gearbox calls
+ran on that one thread, and +0x70 followed +0x74 one update later.</p>
+<p>Each of the mod's shifts then goes through four stages (<code>ShiftStage</code>, models.h): asked (the job posted), set (the
+game took it, so +0x74 is the new gear), engaged (+0x70 shows it), and idle again kCreepQuiet (1.5 s) after it engaged. A stage
+that stays asked or set for kStageMost (3 s) goes idle, and a refusal or a drop clears it. While a shift is asked, the gearbox
+decides on the gear asked, not on the read before it. The creep gives nothing until the stage is idle. A shift without the clutch
+owes its stall until the gear is set, so the stall and its gearbox damage come on the new gear and never on the old one. Gauges.log
+has a line for the job ("shift N: a to b ... dealt at truck update ... on thread ...: took, +74, +70, power"), one when +0x70 shows
+the gear, one when the stage is idle again, and one when an owed stall is ordered.</p>
+{s_back()}
 '''
+
+
+def s_back():
+    rows = [['The position', 'a numbered gear, shifted into by hand; not held by RequireGearHeld or the game\'s shifter',
+             'R, N, H and the low range never return'],
+            ['The timer', 'BackToA seconds since the last shift by hand', 'each shift by hand restarts it'],
+            ['The pedal', 'under 0.7', 'coasting included'],
+            ['The grip', 'learned, and the wheels within 1.05 times the ground\'s speed plus 0.5 rad/s', 'no return while it is not learned'],
+            ['No climb', 'the nose under 8° while the pedal is at 0.4 or more, and the climb hold not running', 'a shift up on a climb bogs'],
+            ['No descent', 'the nose down under 5° while moving forward', 'a low gear held for engine braking'],
+            ['Not rolling back', 'speed −0.5 m/s or more', ''],
+            ['A\'s gear', 'the held one or next to it; any, standing with the pedal under 0.05', 'one shift, nothing jerks'],
+            ['The locks', 'no diff lock or AWD change within 3 s', ''],
+            ['The handbrake', 'off', ''],
+            ['The engine and the shift', 'running, not dying; no job out and no shift asked or set', 'never on top of a shift']]
+    return f'''
+<h3>Back to A (BackToA)</h3>
+<p>At Gearbox=2 the position goes back to A by itself when <code>BackToA</code> is above 0 (<code>BackToAStep</code>,
+gearbox_model.h). The timer starts on a shift by hand into a numbered gear, one that changes the position or the gear, and not
+on the game's shifter. Once it has run out, every condition of the table must hold for 1 s without a break; any failure starts
+that second over. A's gear is the one the mod's automatic would ask on its first pass back (<code>TakeoverAutoGear</code>), as
+its model keeps stepping in a held gear. The return is the A key pressed on the next pass: one job on the game's thread, with no
+power write, and with <code>RequireClutch</code> no stall, as a move to A never stalls. The creep comes back once the shift is
+idle again. The log has "sequential: back to A held by" each time what holds it changes, with the pedal, the wheels against the
+ground, the nose and A's gear, and "sequential: back to A after N s in gear g, A's gear a, rpm" when it goes.</p>
+{table(['Condition', 'Figure', 'Why'], rows, 'Back to A: what must hold for a second')}'''
 
 
 def s_coolant():
@@ -587,7 +629,7 @@ def s_damage():
                 'Engine damage, % a minute', 'Engine damage by coolant temperature, default settings.', legend='tl')
     return f'''
 <h2>Engine damage</h2>
-<p>Since 0.17.0 the gearbox takes damage too: a stall the mod's own gearbox orders for a shift without the clutch costs
+<p>Since 0.17.0 the gearbox takes damage too: a stall the mod's own gearbox orders for a shift without the clutch, once the new gear is set, costs
 StallDamagePercent of what the gearbox takes (0 to 25, 5 by default, with Damage on), dealt on the game's thread as below under
 "Changed in 0.17.0". So does a burning clutch (ClutchBurn, with Damage on): its heat q rises by
 P = max(carried, 0) · Torque · slip over kClutchHeatCapacity (1.6e7; slip in rad/s), times the speed's share (1 under 5 km/h, 0.2 from
@@ -713,6 +755,69 @@ so a bump does not light the lamp (<code>models.h:334-386</code>):</p>
 '''
 
 
+def s_suspension():
+    return f'''
+<h2>Suspension</h2>
+<p>Each wheel of a truck is a Havok wheel constraint (<code>hkpWheelConstraintData</code>, found once by its vtable,
+<code>suspension_scan.h</code>). The tune writes four of its values: the spring's strength (+0xC4), the damping (+0xC8), the
+compression end SuspensionMin (+0xB4), and the attach point the spring hangs from (+0xA0 to +0xA8, in the frame of the body
+the constraint is on). A detour in the wheels' drive reads each wheel's place <i>x</i> along the axis and its speed <i>v</i>
+every physics step and writes there, so the features act on each step, not on the mod's 50 ms pass
+(<code>suspension_step.h</code>). The stock values are read once a truck. A truck left tuned gets them back when another is
+driven, so a truck driven again is scaled once and never twice. Compression is negative <i>x</i>; <i>L</i> is the
+compression travel as tuned and <i>u</i> = −<i>x</i> / <i>L</i>, from 0 to 1, how far into it the wheel is.</p>
+<h3>Spring, damping and travel</h3>
+{eq('<i>k</i> = clamp(<i>k</i><sub>stock</sub> · SpringScale · <i>f</i>(<i>u</i>), 0.001, 1),    <i>c</i> = clamp(<i>c</i><sub>stock</sub> · DampingScale · <i>G</i>(<i>v</i>) · <i>z</i>(<i>u</i>), 0.01, 1)', 41)}
+<p class="where">The game holds both at 1, so a factor can act in full only while the stock figure times it stays under 1
+(the Arocs' front damping is 0.5: a factor above 2 is cut). <i>f</i>, <i>G</i> and <i>z</i> are 1 with their features off.
+ExtraTravel moves SuspensionMin by its cm toward the body (SuspensionMin − ExtraTravel / 100 m), from a file's 0.0 too, and
+never back.</p>
+<h3>The damper</h3>
+<p>Havok's damper is linear: its force is the damping times the shaft speed. So <i>G</i> is written each step, with
+<i>w</i> = |<i>v</i>| / knee, <i>L</i><sub>d</sub> and <i>H</i><sub>d</sub> the low and high speed factors (compression for
+<i>v</i> &gt; 0, rebound for <i>v</i> &lt; 0) and <i>n</i> 1 linear, 0.6 digressive, 1.6 progressive (<code>DamperG</code>):</p>
+{eq('<i>G</i> = <i>L</i><sub>d</sub>  for <i>w</i> ≤ 1;    <i>G</i> = (<i>L</i><sub>d</sub> + <i>H</i><sub>d</sub> (<i>w</i><sup><i>n</i></sup> − 1)) / <i>w</i>  above it', 42)}
+<p class="where">The force is <i>L</i><sub>d</sub> times the stock's up to the knee, then <i>H</i><sub>d</sub> knee
+(<i>w</i><sup><i>n</i></sup> − 1) on top. Under 0.005 m/s <i>G</i> is <i>L</i><sub>d</sub>. All four at 1 and linear give
+<i>G</i> = 1 at every speed, and the damper does not run.</p>
+<h3>Spring curves, bump stops and damping zones</h3>
+<p>Havok's spring force is the strength times <i>x</i>, so a feature is given as a rate <i>r</i>(<i>u</i>), a factor of the
+stock's slope, and written as its secant, so the force is continuous at every edge:</p>
+{eq('<i>f</i>(<i>u</i>) = (∫<sub>0</sub><sup><i>u</i></sup> <i>r</i> d<i>u</i>) / <i>u</i>;    progressive <i>r</i> = 1 + (SpringRise − 1) <i>u</i><sup>2</sup>;    dual rate <i>r</i> = 1, then SpringRise from SpringCross', 43)}
+<p class="where">Dual rate blends over 0.05 of the travel. The droop side (<i>x</i> &gt; 0) stays at 1.</p>
+{eq('bump force += (BumpForce − 1) · <i>F</i><sub>end</sub> · <i>s</i><sup>3</sup>,    compression damping × (1 + (BumpDamping − 1) <i>s</i><sup>2</sup>)', 44)}
+<p class="where"><i>s</i> is the share of the stop the wheel is into, over the last BumpZone m (at most <i>L</i> / 3), and
+<i>F</i><sub>end</sub> the spring's own force at the end, so at the end the stop pushes BumpForce times as hard. The stops go
+by where the wheel will be a step on (<i>x</i> + <i>v</i> Δ<i>t</i>), as at 2.5 m/s it crosses a stop in two steps. The
+damping zones give <i>z</i> = ZoneSoft from ZoneFrom to ZoneTo and ZoneFirm toward either end, blended over 0.1 of the
+travel.</p>
+<h3>Ride height and sway bars</h3>
+<p>The spring's zero and both travel ends are measured from the attach point, so a shift <i>d</i> of it along the body's up
+moves the wheel's rest place and its travel by <i>d</i> and the corner rises by about <i>d</i>, as the file's Height does.
+Every shift is held to ±0.12 m, the game's own DeviationMax range. RideFront moves the frontmost axle, RideRear the others.
+A sway bar works on the two wheels of an axle (within 0.2 m along), with <i>c</i> each side's compression and <i>k</i> its
+strength:</p>
+{eq('<i>F</i> = <i>K</i> (<i>c</i><sub>L</sub> − <i>c</i><sub>R</sub>),    <i>K</i> = Sway · mean(<i>k</i>);    <i>d</i><sub>L</sub> = <i>F</i> / (2 <i>k</i><sub>L</sub>) toward the droop, <i>d</i><sub>R</sub> the same toward the bump', 45)}
+<p class="where">The more compressed side is pushed down and the body is held level. Above 0.3 the bars swing, so the
+setting stops there, and a higher value in the ini is held at 0.3 with one log line.</p>
+<h3>Air suspension and Level to horizon</h3>
+<p>At the first standstill after the truck is taken (1 s under 0.1 m/s), each wheel's place, less the ride height's shift,
+is its rest place. From then on, under 10 km/h, the errors from it are fitted by a plane over the wheels' places in the
+chassis (least squares: height, pitch and roll), and each wheel follows the plane at its place with a time constant of 3 s,
+never its own error. A rigid chassis can follow only those three, so its twist and a middle axle's place are the ground's,
+and a cross-axle crawl never winds it up. An axle with a wheel hanging or at its compression end is left out of the fit.
+The ride height and the keys' height (2 cm a press, within 10 cm, under 20 km/h, back to 0 on another truck) go on top of
+the rest place, so the levelling never takes them back (<code>SuspLevelStep</code>).</p>
+<p>With <code>AirHorizon</code> the pitch and roll follow the chassis's tilt to the horizon, as the tilt lamp reads it,
+instead of the wheels' plane. The 12 cm of shift give about 7 degrees side to side; past that it gets as close as it can.
+Over 10 km/h the pitch and roll fade back to 0 and the height is kept.</p>
+<p>If the game moves an attach point the mod wrote (a truck with its own active ride height), the ride height, the sway
+bars and the air suspension stop for that truck. The log lines start with <code>suspension:</code> (each wheel's stock and
+what was written, the stock put back, the attach point moved by the game, the sway bars disconnected or connected) and
+<code>air suspension:</code> (the rest places taken, the levelling front, rear and left over right, the keys' height).</p>
+'''
+
+
 def s_lamps():
     rows = [['Handbrake', 'truck action +0x48', 'set', 'red'], ['Headlights', 'vehicle +0x768 bit 2', 'set', 'green'],
             ['All wheel drive', 'truck action +0x49', 'set', 'green'], ['Differential lock', 'truck action +0x4A', 'set', 'amber'],
@@ -814,14 +919,13 @@ a tree walk as the game's (RVA 0xc3c010), a text compare as its RVA 0x4d8230. It
 <ul><li>Every read goes through <code>ReadProcessMemory</code> and every write through <code>WriteProcessMemory</code> on the game's own
 process, and addresses below 0x10000 are refused: an object freed under the mod is a failed call, not a crash.</li>
 <li>The truck is found again every 500 ms and after any failed read; a read fails if control no longer points at the same vehicle. A
-truck must look sane: under 200 m/s, a tank under 100000 l with the fuel at most 1.01 of it, gears −1 to 16, throttle within ±2. A
+truck must look sane: under 200 m/s, a tank under 100000 l with the fuel at most 1.01 of it, gears −1 to 32, throttle within ±2. A
 new kind is taken after 2 passes.</li>
-<li>The wheels are recognised by their class pointer; at most 32 wheels and 16 gears are read.</li></ul>
+<li>The wheels are recognised by their class pointer; at most 32 wheels are read, and a gear list of 32 entries (R, 30 gears and H). A longer list is logged once a truck, and its gears are not read.</li></ul>
 <h3>What it writes and calls</h3>
 <ul><li>With <code>Damage</code> on, the driven truck's engine damage, and with the record its effect and torque factor.</li>
 <li>With <code>Gearbox=1</code>, the automatic flag (truck action +0x3C), and it calls the game's <code>ShiftGear(vehicle, gear)</code>. That
-function is found by a pattern, also when another mod has hooked its start with a jump; it is called from the mod's thread inside an
-exception guard, and a fault turns it off for the session.</li>
+function is found by a pattern, also when another mod has hooked its start with a jump; it is called on the game's own thread, from the truck update the mod hooks (A shift, step by step), inside an exception guard, and a fault turns it off for the session. With <code>ShiftOnGameThread=0</code> (ini only), or without that hook, it is called from the mod's thread as before.</li>
 <li>With <code>Powertrain=1</code> and during the pull test, the torque factor (truck action +0xCC).</li>
 <li>With <code>Creep=1</code>, nothing in the truck: the game's wheels' drive is detoured (Creep at idle), at every <code>Gearbox</code>
 level, the first time a truck is driven with it on, and left in place until the game is started again.</li>
@@ -1112,7 +1216,18 @@ game's own stall seconds; whether the game's stalling notice shows for it is unc
 taken as 0.2 and 1.0 until a truck with them is driven at Gearbox=0; L is 0.45 as driven. On Windows 10 the NEXT GEN menu may not draw
 while ReShade loads the .asi files as add-ons: turn that off in ReShade's Add-ons tab (one player's report, under investigation).</li></ul>
 <h3>Changed in the next version</h3>
-<ul><li>The mod's own gearbox shifts on the game's thread: each shift is handed to the game's truck update and made there, with the automatic flag before it and the power factor after it, instead of from the mod's own thread. <code>ShiftOnGameThread=0</code> (ini only) goes back to the old way. Each shift writes one line to the log.</li><li>Two layouts in the style of Spotter's HUD: Spotter dials (<code>Layout=2</code>, rpm and speed dials with the temperatures, boost and air in cells) and Spotter digital (<code>Layout=3</code>, the speed and rpm in figures over a segmented rpm bar). Both sit left of Spotter's gear panel at its height, show the gear Next Gen Gameplay has in force, and have the mod's own lamps only (cold, oil, engine, tilt, lights, tire), as Spotter's panel shows the handbrake, AWD and diff lock. Style and FaceOpacity are for the strip and the block.</li><li>With Spotter installed (its draw API, version 1 or later), the overlay draws through Spotter's frame hook instead of a hook of its own, where ReShade has not taken it as an add-on. <code>NextGen.ini</code> <code>[Overlay] Spotter=0</code> turns it off. While the NEXT GEN menu is open, the game gets no mouse or keys and Spotter's hotkeys rest. While Spotter's own menu or big map is open, the menu's key does nothing.</li><li>Nothing about ReShade is shown on screen any more: the notice in the NEXT GEN menu and the line at the top for 15 seconds are gone. The log says which route the overlay takes. ReShade's <code>dxgi.dll</code> and <code>ReShade.ini</code> stay in the zip for RivaTuner users, whose game does not boot without it. The mods draw without it.</li><li>A test, in the tab's Suspension section: air suspension (<code>AirSuspension</code>). Each wheel is held at its rest place of the first standstill after the truck is taken, so cargo no longer makes the truck sag or lean to a side. It levels only the height, pitch and roll, so a twist over rough ground stays the ground's. Level to horizon (<code>AirHorizon</code>) levels the body's lean and slope to the horizon instead, under 10 km/h (over it, it goes back to the wheels), about 7 degrees at most. It levels under 10 km/h (about 3 s), and an axle with a wheel hanging or on its stop keeps its height. Turned off, it goes back over a few seconds. <code>BindRideUp</code> and <code>BindRideDown</code> raise and lower it 2 cm a press, within 10 cm, under 20 km/h, for the truck driven, and a box shows the height for a few seconds. It goes on top of the ride height and the sway bars, the three held to 12 cm together, and stops on a truck whose game moves the attach point itself.</li>
+<ul><li>Gearboxes of up to 30 gears are read, with their reverse and high gear, so a mod's 16-speed drives in every position and shows
+its fuel a minute; a longer list is logged once a truck and not read. The gear keys go to Gear16 (they went to Gear14).</li>
+<li>Each of the mod's shifts goes through four stages (asked, set, engaged, idle 1.5 s later, A shift, step by step). The creep
+gives nothing until the shift is idle, and a shift without the clutch stalls once the new gear is set, so the stall never lands on
+the old gear.</li>
+<li><code>IgnoreShifter</code> (the tab's "Ignore the game's shifter", at Gearbox=2): the game's shifter picks nothing, with any
+<code>Input</code>; only the bindings shift, and until one of them reaches reverse, 2 runs as 1, as with a wheel's pedals.</li>
+<li><code>BackToA</code> (the tab's "Back to A", 0 by default) and the tab's Sequential button: after a shift by hand into a
+numbered gear the gearbox goes back to A by itself once its conditions hold (Back to A).</li>
+<li>The state for other mods is version 2: 256 bytes with everything the cluster shows, for another mod's speedo (Shared
+memory).</li>
+<li>The mod's own gearbox shifts on the game's thread: each shift is handed to the game's truck update and made there, with the automatic flag before it and the power factor after it, instead of from the mod's own thread. <code>ShiftOnGameThread=0</code> (ini only) goes back to the old way. Each shift writes one line to the log.</li><li>Two layouts in the style of Spotter's HUD: Spotter dials (<code>Layout=2</code>, rpm and speed dials with the temperatures, boost and air in cells) and Spotter digital (<code>Layout=3</code>, the speed and rpm in figures over a segmented rpm bar). Both sit left of Spotter's gear panel at its height, show the gear Next Gen Gameplay has in force, and have the mod's own lamps only (cold, oil, engine, tilt, lights, tire), as Spotter's panel shows the handbrake, AWD and diff lock. Style and FaceOpacity are for the strip and the block.</li><li>With Spotter installed (its draw API, version 1 or later), the overlay draws through Spotter's frame hook instead of a hook of its own, where ReShade has not taken it as an add-on. <code>NextGen.ini</code> <code>[Overlay] Spotter=0</code> turns it off. While the NEXT GEN menu is open, the game gets no mouse or keys and Spotter's hotkeys rest. While Spotter's own menu or big map is open, the menu's key does nothing.</li><li>Nothing about ReShade is shown on screen any more: the notice in the NEXT GEN menu and the line at the top for 15 seconds are gone. The log says which route the overlay takes. ReShade's <code>dxgi.dll</code> and <code>ReShade.ini</code> stay in the zip for RivaTuner users, whose game does not boot without it. The mods draw without it.</li><li>A test, in the tab's Suspension section: air suspension (<code>AirSuspension</code>). Each wheel is held at its rest place of the first standstill after the truck is taken, so cargo no longer makes the truck sag or lean to a side. It levels only the height, pitch and roll, so a twist over rough ground stays the ground's. Level to horizon (<code>AirHorizon</code>) levels the body's lean and slope to the horizon instead, under 10 km/h (over it, it goes back to the wheels), about 7 degrees at most. It levels under 10 km/h (about 3 s), and an axle with a wheel hanging or on its stop keeps its height. Turned off, it goes back over a few seconds. <code>BindRideUp</code> and <code>BindRideDown</code> raise and lower it 2 cm a press, within 10 cm, under 20 km/h, for the truck driven, and a box shows the height for a few seconds. It goes on top of the ride height and the sway bars, the three held to 12 cm together, and stops on a truck whose game moves the attach point itself.</li>
 <li>Tests, in the tab's Suspension section: a ride height for each axle (<code>RideFront</code>, <code>RideRear</code>, -10 to 10 cm) and a sway bar on each end (<code>SwayFront</code>, <code>SwayRear</code>, 0 to 0.3 of the axle's spring rate; above it the bars swing), with a binding that disconnects the bars and a lamp while they are off. The ride height goes in whole cm and shows 0 as "0 cm". Both move where each wheel's spring hangs from, and stop on a truck whose game moves that point itself. The suspension display (<code>SuspDisplay</code>) shows each wheel's travel, its end hits, a hanging wheel and the articulation.</li>
 <li>A test, in the tab's Suspension section: Spring and Damping as factors of the truck's own, x0.25 to x4 (<code>SpringScale</code>, <code>DampingScale</code>), with the truck's file figures front and rear and what is in force shown under each, and a note where the game's limit of 1 holds. Extra travel adds 0 to 30 cm past the file's compression end (<code>ExtraTravel</code>), from a file's 0.0 too, and never shortens; past the file's end a wheel may go into the body. SuspensionMax does nothing in the game, so it has no slider. The damper's curve, spring curves, bump stops and damping zones are there as tests too, all off by default.</li>
 <li>The creep only with an automatic, for now: the mod's A and the game's own automatic creep as before; a gear picked by hand,
@@ -1250,10 +1365,20 @@ def s_constants():
             ['Clock search', '10 s of game time a look; 4 steady looks; pace 2.3e-5 to 0.08/s; jump 1 h; 180 s alone', '', '"a day of 5 minutes to 12 hours"'],
             ['Shared blocks', 'Gauges\' 256 bytes, the others 64; tire stale after 2 s, gearbox mod after 1 s; looked for every 5 s', '', 'the mods\' layouts'],
             ['Sounds', 'RMS 0.1, peaks 0.6, voice × 0.45, pitch 0.25 to 2', '', '"two that ring together stay below 1"']]
+    rows += [['Gear list', '32 entries: R, 30 gears, H; gear keys Gear1 to Gear16', '', 'the game has R, 16 gears and H at most (the author)'],
+             ['Shift job', 'one out at a time; dropped after 1 s and 30 truck updates', '', 'review 17'],
+             ['Shift stages', 'idle 1.5 s after engaged (kCreepQuiet); 3 s at most asked or set (kStageMost)', 's', 'review 17'],
+             ['Back to A', 'BackToA 0 or 3 to 30 s (Sequential 10); steady 1 s; pedal 0.7; spin 1.05 × ground + 0.5 rad/s; climb 8° at pedal 0.4; descent 5°; locks 3 s; foot off 0.05', '', "review 17; 10 s the author's"],
+             ['Suspension values written', 'spring 0.001 to 1, damping 0.01 to 1', '', "Havok's range; the game holds both at 1"],
+             ['Damper curve', 'n 1, 0.6, 1.6; G = L under 0.005 m/s', 'm/s', 'not stated'],
+             ['Spring and zone blends', '0.05 and 0.1 of the travel', '', 'not stated'],
+             ['Attach point shift', '±0.12', 'm', "the game's DeviationMax range"],
+             ['Sway bars', "0 to 0.3 of the spring rate, steps of 0.01; an axle's two wheels within 0.2 m", '', 'above 0.3 they swing'],
+             ['Air suspension', 'rest taken after 1 s under 0.1 m/s; τ 3 s; under 10 km/h; keys 2 cm, within 10 cm, under 20 km/h', '', "the author's 10 km/h"]]
     return f'<h2>Constants at a glance</h2>{table(["Constant", "Value", "Unit", "Where it comes from"], rows, "The models\' constants", "small")}'
 
 
 def body():
     return ''.join([s_intro(), s_overview(), s_scales(), s_gears(), s_rpm(), s_torque(), s_powertrain(), s_auto(), s_coolant(),
-                    s_damage(), s_boost(), s_range_air_tilt(), s_lamps(), s_outside(), s_hooks(), s_shared(), s_files(), s_sounds(),
+                    s_damage(), s_boost(), s_range_air_tilt(), s_suspension(), s_lamps(), s_outside(), s_hooks(), s_shared(), s_files(), s_sounds(),
                     s_limits(), s_constants()])
