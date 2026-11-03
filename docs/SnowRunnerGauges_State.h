@@ -3,7 +3,8 @@
 // Gauges writes a block of 256 bytes of named shared memory, "Local\SnowRunnerGauges.State.<process id>", in the
 // game's own process, about 20 times a second. It holds the truck driven and everything its cluster shows, as the
 // cluster shows it, so a speedo of another mod and Gauges' own never disagree. This file needs only windows.h and
-// stdint.h. Gauges builds its writer on this same file.
+// stdint.h. Gauges builds its writer on this same file. SnowRunnerGauges_State.md, next to it, is the guide: what
+// each field means and how to draw it.
 //
 // The read rule:
 // - Open the mapping by its name with FILE_MAP_READ and map the whole of it (size 0). Never map sizeof(SrgState): an
