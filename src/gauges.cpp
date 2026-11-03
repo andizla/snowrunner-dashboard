@@ -2250,7 +2250,7 @@ static void LogSettings(const GaugeSettings &s)
         s.requireClutch, s.requireGearHeld, s.skipNeutral, s.downStaysForward, s.ignoreShifter, s.backToA);
     if (s.powertrain) Log(L"settings: powertrain on: the truck pulls with %d percent of the mod's engine and converter, through the game's torque factor", s.engineShare);
     else Log(L"settings: powertrain off: the truck pulls with the game's own engine (Powertrain=1 hands it the mod's)");
-    Log(s.creep ? L"settings: creep on: an idling truck in gear moves, through the converter to walking pace, in a gear picked by hand at the gear's idle speed"
+    Log(s.creep ? L"settings: creep on: an idling truck on an automatic moves, through the converter to walking pace; for now not in a gear picked by hand"
                 : L"settings: creep off: an idling truck in gear stands, as in the game");
     Log(L"settings: toggle key %S, pad %S, demo values %s, probe %d", key, s.padToggle, s.demo ? L"on" : L"off", s.probe);
 }
