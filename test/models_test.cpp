@@ -3670,14 +3670,16 @@ int main(int argc, char **argv)
     // written on a pass times GameFall at the next pass's x, the torque the game gives until the next write, never
     // passes kSpinLiftMost
     {
-        const float roofMost = fminf(TorqueRoof(kClassTruck), kSpinLiftMost);
-        const float mud = TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, SpinShare(-0.8f * 20.0f, 20.0f), roofMost);
-        const bool inMud = mud > 1.0f && mud <= kSpinLiftMost && Near(mud, fminf(1.0f / GameFall(0.8f), LiftRoof(roofMost, 0.8f)), 0.001f);
+        // the lift as the pass writes it in a held gear: the class's roof with its fade, then the cap
+        auto byspin = [&](float x) { return fminf(TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, x, TorqueRoof(kClassTruck)), kSpinLiftMost); };
+        const float mud = byspin(SpinShare(-0.8f * 20.0f, 20.0f)), mud9 = byspin(0.9f);
+        const bool inMud = Near(mud, kSpinLiftMost, 0.001f) && Near(mud9, fminf(1.0f / GameFall(0.9f), SpinRoof(TorqueRoof(kClassTruck), 0.9f)), 0.001f) &&
+                           Near(SpinRoof(TorqueRoof(kClassTruck), 0.8f), kSpinLiftMost, 0.001f) && mud9 > 1.0f;
         float worst = 0.0f;
         auto run = [&](const float *xs, int n) {
             for (int i = 0; i + 1 < n; i++)
             {
-                const float written = TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, xs[i], roofMost);
+                const float written = byspin(xs[i]);
                 worst = fmaxf(worst, written * GameFall(xs[i + 1]));
             }
         };
@@ -3687,7 +3689,7 @@ int main(int argc, char **argv)
         for (int i = 0; i < 40; i++) chatter[i] = i % 2 ? 0.3f : 0.85f;
         run(chatter, 40);
         char line[200];
-        snprintf(line, sizeof line, "lift by spin: in mud at 0.8 of the top %.2f (not 1); the catch and the chatter give the game at most %.2f of the engine's torque "
+        snprintf(line, sizeof line, "lift by spin: in mud at 0.8 of the top %.2f (the cap, not 1); the catch and the chatter give the game at most %.2f of the engine's torque "
                                     "between writes (kSpinLiftMost %.1f)", mud, worst, kSpinLiftMost);
         Check(inMud && worst <= kSpinLiftMost + 0.001f && worst > 1.0f, line);
     }

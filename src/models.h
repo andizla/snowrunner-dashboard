@@ -1455,6 +1455,10 @@ inline float LiftRoof(float most, float x)
     return 1.0f + (most - 1.0f) * SettingsRange((1.0f - x) / (1.0f - kLiftFadeFrom), 0.0f, 1.0f);
 }
 
+// The roof by spin: the class's roof with its fade, and no more than kSpinLiftMost (review F1: the cap, not a roof of 2
+// that fades from 0.7, which gave mud a third less near 0.85).
+inline float SpinRoof(float classRoof, float x) { return fminf(LiftRoof(classRoof, x), kSpinLiftMost); }
+
 // The factor over the game's own share, by the engine's torque curve at its speed (0 to 1), the share of it the cold
 // oil and the boost leave (limit), the pedal (the game asks the engine for that share of its torque, which it has as
 // far as the limit goes: at a light foot a turbo engine without boost gives what the pedal asks), the converter's

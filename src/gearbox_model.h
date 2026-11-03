@@ -250,12 +250,15 @@ inline bool BackToAStep(BackModel &m, int seconds, bool hand, const BackInputs &
 // ---- Sequential's own shifts (the held gear power brief, point 3) ----
 // With BackToA on, not with RequireClutch or RequireGearHeld (a manual with a clutch or an H shifter never shifts by
 // itself) and never for a gear picked on the game's shifter, a held numbered gear shifts by itself, as a real
-// automatic's manual mode does: up one at the red zone, held kSeqUpHold, not while the wheels spin and not while their
+// automatic's manual mode does: up one near the red zone (kSeqUpShare), held kSeqUpHold, not while the wheels spin and not while their
 // grip is unknown (spin cannot be told from speed then: it stays at the limiter); down one with the foot on and the
 // gearbox's input under kSeqDownIdle times idle, held kSeqDownHold. By the gearbox's input, not the engine's speed: the
 // clutch that works by itself slips at low speed and holds the engine near idle. None within a shift's stages, which
 // end kCreepQuiet after the gear engaged. The gearbox stays in the held position, and Back to A's timer restarts.
-static const float kSeqUpHold = 0.3f, kSeqDownHold = 0.5f, kSeqDownIdle = 1.1f;
+// Up at kSeqUpShare of the red zone's speed: the input is the wheels' share of the gear's top times the red zone's
+// rpm, and with the game's pull nothing at the top a floored held gear settles near 0.95 of it; at 0.9 it gives about
+// 0.56 of the curve, and the next gear lands near 0.63 of its top at the full curve, so the shift gains pull (review F2).
+static const float kSeqUpHold = 0.3f, kSeqDownHold = 0.5f, kSeqDownIdle = 1.1f, kSeqUpShare = 0.9f;
 struct SeqInputs
 {
     int backToA;
@@ -274,7 +277,7 @@ inline int SequentialStep(SeqModel &m, const SeqInputs &in, float dt)
         m = SeqModel{};
         return 0;
     }
-    const bool up = in.gear < in.top && in.input >= in.redline && in.gripKnown && !in.spinning;
+    const bool up = in.gear < in.top && in.input >= kSeqUpShare * in.redline && in.gripKnown && !in.spinning;
     const bool down = in.gear > 1 && in.input < kSeqDownIdle * in.idle && in.pedal >= kBackFootOff;
     m.up = up ? m.up + dt : 0.0f;
     m.down = down ? m.down + dt : 0.0f;

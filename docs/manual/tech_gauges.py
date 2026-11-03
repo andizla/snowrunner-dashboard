@@ -345,7 +345,7 @@ action +0xCC). The mod writes that factor so the game's pull matches the mod's e
 in a gear held by hand at Gearbox=2 too, where it rises only with the pedal under 0.7 (steady wheelspin floored in mud is no grip)
 and may always fall; before it is learned <i>x</i> is held to 0.5. In such a gear with the clutch fully in (the clutch model
 connected, its grip at 0.99 or more, no travel) the engine is locked to the wheels, so <i>x</i> is the driven wheels' own speed over
-the gear's top (<code>SpinShare</code>) and the roof is held to <code>kSpinLiftMost</code> 2: when spinning wheels catch, the
+the gear's top (<code>SpinShare</code>) and the lift, under the class's roof with its fade, is capped at <code>kSpinLiftMost</code> 2 (<code>SpinRoof</code>; it binds up to about 0.94 of the top): when spinning wheels catch, the
 factor written for the spin meets them at the game's full torque until the next pass, so the kick is at most twice the engine's
 torque for one pass:</p>
 {eq('lift = clamp( curve(<i>x</i>) · ratio · min(1, cold · boost / <i>p</i>) / GameFall(<i>x</i>), 0.05, <i>R</i> ) for <i>x</i> &lt; 1, 1 for <i>x</i> ≥ 1,    GameFall(<i>x</i>) = clamp(2.1(1 − <i>x</i>), 0, 1),    <i>R</i> = 6', 13)}
@@ -577,7 +577,7 @@ ground, the nose and A's gear, and "sequential: back to A after N s in gear g, A
 <p>Sequential's own shifts (<code>SequentialStep</code>, gearbox_model.h): with <code>BackToA</code> above 0, not with
 <code>RequireClutch</code> or <code>RequireGearHeld</code>, never for a gear picked on the game's shifter and never within a
 shift's stages (which end 1.5 s after the gear engaged), a held numbered gear shifts up one when the gearbox's input
-(<code>ClutchModel::input</code>, the wheels and the gear) has been at the red zone for 0.3 s, below the top gear, with the grip
+(<code>ClutchModel::input</code>, the wheels and the gear) has been at 0.9 of the red zone's speed for 0.3 s (a floored held gear settles near 0.95 of its top, where the game gives nothing), below the top gear, with the grip
 known and the wheels not spinning (Back to A's own test), and down one when it has been under 1.1 times idle for 0.5 s with the
 pedal at 0.05 or more, above 1st. By the input, not the engine's speed: the clutch that works by itself slips at low speed and
 holds the engine near idle. The shift is the up or down key on that pass, so the position stays held and Back to A's timer

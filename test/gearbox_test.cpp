@@ -262,7 +262,11 @@ int main()
         in.pos = kPosGear;
         in.gear = 3;
         in.top = 6;
-        in.input = in.redline = 3000.0f;
+        // the input as ClutchStep has it: the wheels' share of the gear's top times the red zone's rpm; a floored held gear
+        // settles near 0.95 of its top
+        auto inputAt = [](float spin, float top, float redline) { return spin / top * redline; };
+        in.redline = 3000.0f;
+        in.input = inputAt(0.95f * 12.0f, 12.0f, in.redline);
         in.idle = 700.0f;
         in.pedal = 1.0f;
         in.gripKnown = in.engineOn = true;
@@ -284,7 +288,7 @@ int main()
         {
             SeqModel m = {};
             SeqInputs low = in;
-            low.input = 2500.0f;
+            low.input = inputAt(0.8f * 12.0f, 12.0f, in.redline);
             for (int i = 0; i < 60; i++) spike = spike || SequentialStep(m, i % 5 == 0 ? in : low, dt) != 0;
         }
         bool none = true;
@@ -297,9 +301,10 @@ int main()
         c = in; c.byShifter = true; none = none && firstAt(c, 1) < 0.0f;
         c = in; c.busy = true; none = none && firstAt(c, 1) < 0.0f;
         c = in; c.gear = 6; none = none && firstAt(c, 1) < 0.0f;
+        c = in; c.input = inputAt(0.85f * 12.0f, 12.0f, in.redline); none = none && firstAt(c, 1) < 0.0f;
         SeqInputs slow = in;
         slow.gear = 4;
-        slow.input = 650.0f;
+        slow.input = inputAt(0.2f * 12.0f, 12.0f, in.redline); // 600 rpm, under 1.1 times the idle's 700
         slow.pedal = 0.3f;
         slow.gripKnown = false; // a down-shift needs no grip
         const float downAt = firstAt(slow, -1);

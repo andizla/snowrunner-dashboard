@@ -4227,9 +4227,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             const bool locked = GearboxManual(w) && w.clutch.connected && !w.clutch.dead && w.clutch.grip >= kGripUp && w.pos.travel <= 0.0f;
             const float gearTop = TruckGearTop(raw, raw.gearEngaged);
             const float x = locked ? SpinShare(TruckDrivenSpin(raw), gearTop) : LiftShare(TruckDrivenSpin(raw), ground, w.gearbox.grip, gearTop);
-            const float roofMost = locked ? fminf(TorqueRoof(autoClass), kSpinLiftMost) : TorqueRoof(autoClass);
             w.liftX = x;
-            w.liftRoof = LiftRoof(roofMost, x);
+            w.liftRoof = locked ? SpinRoof(TorqueRoof(autoClass), x) : LiftRoof(TorqueRoof(autoClass), x);
             const float ratio = w.take.driving && !GearboxManual(w) ? w.gearbox.ratio : 1.0f;
             const bool handWas = w.hand.on;
             const float gameWas = w.hand.game;
@@ -4237,8 +4236,10 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             // the gear's last three tenths (TorqueRoof, LiftRoof); a rise paced by the pass, a new gear (the game's
             // engaged gear) at once
             TorqueGive(m, w.refs, true, TorqueHandStep(w.hand, want, w.refs.action, w.refs.vehicle, raw.torqueFactor,
-                                                 TorqueHeld(TorqueBlend(TorqueLift(w.power.curve, w.power.cold * w.power.boost, TruckPedal(raw), ratio, x,
-                                                                                   roofMost), s.engineShare / 100.0f),
+                                                 TorqueHeld(TorqueBlend(fminf(TorqueLift(w.power.curve, w.power.cold * w.power.boost, TruckPedal(raw), ratio, x,
+                                                                                         TorqueRoof(autoClass)),
+                                                                              locked ? kSpinLiftMost : kTorqueFactorMost),
+                                                                        s.engineShare / 100.0f),
                                                             w.profile.torque),
                                                  dt, raw.gearEngaged));
             if (w.hand.on != handWas)
