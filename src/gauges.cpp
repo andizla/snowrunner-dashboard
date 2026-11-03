@@ -2412,6 +2412,7 @@ struct TruckWatch
     bool lockPress[kLocks];     // DiffLock and Awd pressed on this pass (at every level of Gearbox)
     LocksWatch locks;           // what the mod's keys wrote to the locks (LocksStep)
     bool canReverse;            // a binding reaches reverse (GearDown, GearR or GearN): Gearbox=2 with a wheel's pedals may take the shifter
+    int gearboxLevel;           // the Gearbox level in force on the last pass (level 2 runs as 1 without a reverse), for state.h
     bool lowPlusSaid;           // the log said once that the game's shifter's L+ reads as the first gear
     GearboxDoors doors;         // GearboxDoorsNow on the last pass
     PullTest pullTest;          // the pull test (the tab's button)
@@ -3910,6 +3911,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         // truck can always be backed up (the user's rule, 2026-10-27). No gear is set while the pull test holds one
         const bool shifterAsks = s.input != kInputWheel && !s.ignoreShifter; // IgnoreShifter: the refused calls are not asks either
         const int level = s.gearbox == kGearboxOwn && !shifterAsks && !w.canReverse ? kGearboxModel : s.gearbox;
+        w.gearboxLevel = level;
         const bool own = level == kGearboxOwn;
         GearboxShifterAsks(own && shifterAsks);
         // the game's shifter's request since the last pass, taken every pass so none waits out a pause
@@ -5164,6 +5166,7 @@ static DWORD WINAPI Run(void *)
         v.demo = !driving && s.demo;
         v.hidden = !visible ? kHiddenByToggle : s.soundsOnly ? kHiddenSoundsOnly : driving || s.demo ? kShown : kHiddenNoTruck;
         v.show = v.hidden == kShown;
+        uint32_t lampsLit = 0, lampsBlink = 0; // the lamps' steady states for state.h, set while a truck is driven
         if (driving)
         {
             TruckToState(raw, world, inForce, v.st);
@@ -5191,7 +5194,17 @@ static DWORD WINAPI Run(void *)
             const ULONGLONG ms = GetTickCount64();
             v.st.oilHot = OilLamp(watch.oil, ms);
             TiresLamp(watch.tires, watch.refs.vehicle, ms, v.st.tireLamp, v.st.tireLit, v.st.tireWarn);
-            v.st.damage = DamageLamp(v.st.damage, DamageAdding(watch.damage, s) || (watch.addedAt && ms - watch.addedAt < 2000), ms);
+            const bool damageAdding = DamageAdding(watch.damage, s) || (watch.addedAt && ms - watch.addedAt < 2000);
+            // for other mods (state.h) the blinking lamps go as lit and blinking, so a reader blinks them at its own rate
+            // and never samples the cluster's phase
+            const bool tireBlinks = v.st.tireLamp && !v.st.tireWarn && (watch.tires.changing || watch.tires.held);
+            if (v.st.damage || damageAdding) lampsLit |= SRG_LAMP_DAMAGE;
+            if (damageAdding) lampsBlink |= SRG_LAMP_DAMAGE;
+            if (watch.oil.on) lampsLit |= SRG_LAMP_OIL, lampsBlink |= SRG_LAMP_OIL;
+            if (v.st.tireLamp && (v.st.tireWarn || tireBlinks || watch.tires.mode != 2)) lampsLit |= SRG_LAMP_TIRE;
+            if (tireBlinks) lampsBlink |= SRG_LAMP_TIRE;
+            if (v.st.tireWarn) lampsLit |= SRG_LAMP_TIRE_WARN;
+            v.st.damage = DamageLamp(v.st.damage, damageAdding, ms);
             // the warning boxes, below the tire mod's: the clutch's with ClutchBurn and Damage, the engine's with Damage
             // (red while the heat's damage is dealt; a point dealt is a new write of engine damage)
             {
@@ -5226,6 +5239,33 @@ static DWORD WINAPI Run(void *)
             published.rpm = watch.tach.rpm;
             published.boostBar = watch.boost.bar;
             published.flags |= kStateVehicle | (TruckEngineOn(raw) ? kStateEngineOn : 0);
+            // version 2: what the cluster shows (v.st, this pass), the speed signed and the lamps steady
+            const GaugeState &st = v.st;
+            published.speedKmh = isfinite(raw.speed) ? raw.speed * 3.6f : 0.0f;
+            published.speedMax = st.speedMax;
+            published.rpmRedline = st.rpmRedline;
+            published.rpmMax = st.rpmMax;
+            published.gear = st.gear;
+            published.gearMode = StateGearMode(st.gearMode);
+            const int top = TruckTopGear(raw);
+            published.top = (uint8_t)(top < 0 ? 0 : top > 255 ? 255 : top);
+            published.gearboxLevel = (uint8_t)watch.gearboxLevel;
+            published.tireLamp = (uint8_t)st.tireLamp;
+            published.oilC = st.oilC;
+            published.oilWarnC = st.oilWarnC;
+            published.airBar = st.airBar;
+            published.boostTop = st.boostTop;
+            published.fuelFrac = st.fuelFrac;
+            published.fuelL = raw.fuel;
+            published.tankL = raw.tank;
+            published.burnPerMin = st.burnPerMin;
+            published.rangeKm = st.rangeKm;
+            published.lamps = lampsLit | (st.handbrake ? SRG_LAMP_HANDBRAKE : 0) | (st.diffLock ? SRG_LAMP_DIFF_LOCK : 0) | (st.awd ? SRG_LAMP_AWD : 0) |
+                              (st.lowGear ? SRG_LAMP_LOW_GEAR : 0) | (st.headlights ? SRG_LAMP_LIGHTS : 0) | (st.cold ? SRG_LAMP_COLD : 0) |
+                              ((uint32_t)(st.tilt < 0 ? 3 : st.tilt > 2 ? 2 : st.tilt) << SRG_LAMP_TILT_SHIFT);
+            published.blinks = lampsBlink;
+            published.options = (st.mph ? SRG_OPT_MPH : 0) | (st.psi ? SRG_OPT_PSI : 0) | (st.fahrenheit ? SRG_OPT_FAHRENHEIT : 0) | (v.show ? SRG_OPT_CLUSTER : 0) |
+                                (st.boostVacuum ? SRG_OPT_VACUUM : 0) | (st.natural ? SRG_OPT_NO_BOOST : 0);
         }
         StateWrite(state, published, GetTickCount64());
     }

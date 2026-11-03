@@ -3670,7 +3670,8 @@ int main(int argc, char **argv)
             auto u64 = [&](size_t at) { uint64_t v; memcpy(&v, seen + at, 8); return v; };
             auto f32 = [&](size_t at) { float v; memcpy(&v, seen + at, 4); return v; };
             const uint32_t sequence = u32(12);
-            read = u32(0) == 0x47554147u && u32(4) == 1 && u32(8) == 64 && !(sequence & 1) && u64(16) == 777000 && u64(24) == 0x1234567890ull && f32(32) == -12.5f &&
+            // version 2 and 256 bytes, which the tire mod's reader takes (version >= 1, size >= 64, 64 bytes copied)
+            read = u32(0) == 0x47554147u && u32(4) == 2 && u32(8) == 256 && !(sequence & 1) && u64(16) == 777000 && u64(24) == 0x1234567890ull && f32(32) == -12.5f &&
                    f32(36) == 88.0f && f32(40) == 1850.0f && f32(44) == 1.2f && u32(48) == 7 && u32(52) == 0 && u32(56) == 0 && u32(60) == 0;
             values = StateValues{};
             values.ambientC = 15.0f;
@@ -3682,6 +3683,62 @@ int main(int argc, char **argv)
         StateWriter none = {};
         StateWrite(none, values, 1); // a writer without a block writes nowhere
         Check(opened && read && again, "state: the block for other mods carries its magic, version and size, each write leaves the sequence even and two further, and the values stand at their places");
+
+        // version 2, read as the header's example reader does: the whole mapping (size 0), a copy while the sequence holds
+        values = StateValues{};
+        values.vehicle = 0xABCDull;
+        values.flags = kStateVehicle | kStateEngineOn;
+        values.speedKmh = -7.5f;
+        values.speedMax = 100.0f;
+        values.rpmRedline = 2400.0f;
+        values.rpmMax = 3000.0f;
+        values.gear = 3;
+        values.gearMode = StateGearMode("A");
+        values.top = 16;
+        values.gearboxLevel = 2;
+        values.tireLamp = SRG_TIRE_REDUCED;
+        values.oilC = 104.0f;
+        values.oilWarnC = 120.0f;
+        values.airBar = 6.2f;
+        values.boostTop = 2.5f;
+        values.fuelFrac = 0.5f;
+        values.fuelL = 150.0f;
+        values.tankL = 300.0f;
+        values.burnPerMin = NAN;
+        values.rangeKm = INFINITY;
+        values.coolantC = NAN;
+        values.lamps = SRG_LAMP_HANDBRAKE | SRG_LAMP_OIL | (2u << SRG_LAMP_TILT_SHIFT);
+        values.blinks = SRG_LAMP_OIL;
+        values.options = SRG_OPT_MPH | SRG_OPT_CLUSTER;
+        StateWrite(writer, values, 778000);
+        const HANDLE whole = OpenFileMappingW(FILE_MAP_READ, FALSE, name);
+        const SrgState *view = whole ? (const SrgState *)MapViewOfFile(whole, FILE_MAP_READ, 0, 0, 0) : nullptr;
+        bool v2 = false, oldBlock = false;
+        if (view)
+        {
+            SrgState copy = {};
+            const long before = view->sequence;
+            memcpy(&copy, (const void *)view, view->size < sizeof copy ? view->size : sizeof copy);
+            v2 = !(before & 1) && view->sequence == before && copy.version == 2 && copy.size == 256 && copy.vehicle == 0xABCDull && copy.speedKmh == -7.5f &&
+                 copy.speedMax == 100.0f && copy.rpmRedline == 2400.0f && copy.rpmMax == 3000.0f && copy.gear == 3 && copy.gearMode == SRG_GEAR_A &&
+                 copy.top == 16 && copy.gearboxLevel == 2 && copy.tireLamp == SRG_TIRE_REDUCED && copy.oilC == 104.0f && copy.oilWarnC == 120.0f &&
+                 copy.airBar == 6.2f && copy.boostTop == 2.5f && copy.fuelFrac == 0.5f && copy.fuelL == 150.0f && copy.tankL == 300.0f &&
+                 copy.burnPerMin == -1.0f && copy.rangeKm == -1.0f && copy.coolantC == 0.0f && SRG_LAMP_TILT(copy.lamps) == 2 &&
+                 (copy.lamps & SRG_LAMP_OIL) && (copy.blinks & SRG_LAMP_OIL) && !(copy.blinks & SRG_LAMP_HANDBRAKE) && copy.options == (SRG_OPT_MPH | SRG_OPT_CLUSTER) &&
+                 SRG_STATE_HAS(copy, options) && SRG_STATE_HAS(copy, reserved2);
+            // an older Gauges' block of 64 bytes: a version 2 reader finds the version 1 fields and none of the new ones
+            SrgState old = {};
+            memcpy(&old, (const void *)view, 64);
+            old.version = 1;
+            old.size = 64;
+            oldBlock = SRG_STATE_HAS(old, flags) && SRG_STATE_HAS(old, boostBar) && !SRG_STATE_HAS(old, speedKmh) && !SRG_STATE_HAS(old, options);
+            UnmapViewOfFile(view);
+        }
+        if (whole) CloseHandle(whole);
+        const bool modes = StateGearMode("") == SRG_GEAR_NUMBER && StateGearMode(nullptr) == SRG_GEAR_NUMBER && StateGearMode("H") == SRG_GEAR_H &&
+                           StateGearMode("L-") == SRG_GEAR_L_MINUS && StateGearMode("L") == SRG_GEAR_L && StateGearMode("L+") == SRG_GEAR_L_PLUS;
+        Check(v2 && oldBlock && modes, "state: version 2 carries what the cluster shows at the header's places, an unknown burn or range as -1 and never NaN, "
+                                       "the gear letters as codes, and a reader of version 2 sees an older 64-byte block's new fields as absent");
     }
 
     // the sounds themselves: a WAV file read, the two made by code, and every sound brought to one loudness
