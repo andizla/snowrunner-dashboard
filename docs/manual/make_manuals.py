@@ -198,7 +198,10 @@ while moving), so a low gear held for engine braking stays;</li>
 <li>A's gear the held one or next to it, so the return is one shift (standing with the foot off, any gear);</li>
 <li>no diff lock or AWD switched in the last 3 s, and the handbrake off;</li>
 <li>the engine running and no shift under way.</li></ul>
-Each shift by hand starts the time again, and the A key still goes back at once. Either way A starts in the gear next to the held one. It never returns from R, N, H or the low range,
+Each shift by hand starts the time again, and the A key still goes back at once. Either way A starts in the gear it would pick, not in 1st; Back to A keeps that next to the held one. The grip is learned while
+you drive with the pedal under 0.7, and on the keyboard a key held counts as floored: a truck taken straight into a held gear
+learns it once it has driven a moment in A, or with a pad's lighter trigger, and until then the log says "the wheels' grip not
+learned yet". It never returns from R, N, H or the low range,
 never with <code>RequireGearHeld</code>, and never for a gear picked on the game's shifter, which stay where you put them. The
 <b>Sequential</b> button in the tab sets <code>RequireClutch</code> off, <code>RequireGearHeld</code> off and
 <code>BackToA</code> 10: shift up and down by hand on a pad, and the gearbox goes back to A by itself. <code>Gauges.log</code>
@@ -217,7 +220,7 @@ position and shows its fuel a minute. A longer list is logged once a truck, and 
 <li>Not tested on a wheel or shifter yet; the keyboard and a pad were driven. A downshift at speed does not yet over-rev the engine, and in a manual position the engine pulls by the mod's curve at the revs it is at, so a high gear at low revs pulls less than A does.</li></ul>
 
 <h2>14. The mod's engine (Powertrain=1)</h2>
-<p>The game gives all of an engine's torque with the wheels at about half the gear's top speed and less and less to nothing at the top, whatever the engine speed. With <code>Powertrain=1</code> the truck pulls with the mod's engine instead: the torque curve against the engine speed the needle shows, doubled by the converter at its stall with the automatic. Cold oil (up to 15% at 0 °C) and a turbo without boost (35% of the torque comes from it) cost torque only where the pedal asks for more than they leave. The torque holds to about 0.92 of a gear's top speed, then falls to nothing at the top, as a diesel's governor cuts the fuel; a gear's top speed stays the game's. This holds in a gear held by hand at <code>Gearbox=2</code> too, so a held gear pulls to the red zone.</p>
+<p>The game gives all of an engine's torque with the wheels at about half the gear's top speed and less and less to nothing at the top, whatever the engine speed. With <code>Powertrain=1</code> the truck pulls with the mod's engine instead: the torque curve against the engine speed the needle shows, doubled by the converter at its stall with the automatic. Cold oil (up to 15% at 0 °C) and a turbo without boost (35% of the torque comes from it) cost torque only where the pedal asks for more than they leave. The torque holds to about 0.86 of a gear's top speed (a scout's 0.8), then falls to nothing at the top, as a diesel's governor cuts the fuel; a gear's top speed stays the game's. This holds in a gear held by hand at <code>Gearbox=2</code> too, so a held gear pulls to the red zone.</p>
 <p><code>EngineShare</code> (50) sets how much of the mod's engine the game gets: at 50 the truck pulls half way between the game's engine and the mod's, at 100 all the mod's. With the engine handed over, the automatic shifts as a truck automatic does:</p>
 <ul><li>Floored, each gear to the red zone, or sooner where the next gear already pulls harder. At a light foot it shifts up about as far along as the pedal is down, never under 0.8 of the engine's peak torque speed.</li>
 <li>Down where the gear below comes in clear of its own point up, so it does not shift straight back.</li>

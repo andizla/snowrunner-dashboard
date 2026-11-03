@@ -181,7 +181,7 @@ enum
     kBackGap, kBackSwitch, kBackHandbrake, kBackEngine, kBackShifting, kBackSteadying, kBackGo, kBackWhyCount
 };
 static const char *const kBackWhyNames[kBackWhyCount] = { "BackToA 0", "no shift by hand into a numbered gear", "the gear held (RequireGearHeld or the game's shifter)",
-                                                          "the timer", "the pedal", "the wheels' grip not learned yet", "wheelspin", "a climb",
+                                                          "the timer", "the pedal", "the wheels' grip not learned yet (drive a moment in A or ease the pedal)", "wheelspin", "a climb",
                                                           "a descent", "rolling back", "A's gear too far", "a lock switched", "the handbrake",
                                                           "the engine", "a shift", "a second steady", "nothing" };
 struct BackInputs

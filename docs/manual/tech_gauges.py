@@ -1220,7 +1220,8 @@ taken as 0.2 and 1.0 until a truck with them is driven at Gearbox=0; L is 0.45 a
 while ReShade loads the .asi files as add-ons: turn that off in ReShade's Add-ons tab (one player's report, under investigation).</li></ul>
 <h3>Changed in the next version</h3>
 <ul><li>In a gear held by hand at Gearbox=2 the mod's automatic keeps reading along: the wheels' grip stays learned, so
-Back to A goes back (it waited for the grip forever), A comes back in the gear next to the held one, not in 1st, and the lift
+Back to A goes back (it waited for the grip forever), A comes back in the gear A would pick, not in 1st (Back to A keeps it next
+to the held one), and the lift
 pulls to the red zone instead of fading past half the gear's top. There the grip rises only with the pedal under 0.7.</li>
 <li>Gearboxes of up to 30 gears are read, with their reverse and high gear, so a mod's 16-speed drives in every position and shows
 its fuel a minute; a longer list is logged once a truck and not read. The gear keys go to Gear16 (they went to Gear14).</li>
