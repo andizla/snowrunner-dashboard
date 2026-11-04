@@ -910,7 +910,8 @@ static void ReadIni(GaugeSettings &s)
                         L";   BindGearA=Key Num 7\n"
                         L"; RequireClutch=1 stalls the engine on a shift into a gear without the clutch, RequireGearHeld=1 goes to N while no\n"
                         L"; gear key is held (an H shifter with every gear bound), SkipNeutral=1 steps from L- to reverse and back past N.\n"
-                        L"; GearUp and GearDown walk R, N, L-, L, L+, 1, 2 and on to the top gear, on every truck.\n"
+                        L"; GearUp and GearDown walk R, N, L-, L, L+, 1, 2 and on to the top gear, on every truck. Up from L+ stays there:\n"
+                        L"; GearA, a gear key or RangeHigh leave the low range, so it never goes to A by itself.\n"
                         L"; DownStaysForward=1: GearDown stops at L-, N and R only on their own keys (wins over SkipNeutral).\n"
                         L"; At Gearbox=2 with Input 1 or 2 the game's own shifter picks a position too; with Input 0 its shifts stay refused.\n"
                         L"; IgnoreShifter=1: at Gearbox=2 a position picked on the game's shifter does nothing, with any Input.\n"
@@ -4064,12 +4065,15 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         if (w.take.driving)
         {
             // back in the world after the garage, the map or the viewer (the policy passed meanwhile): the position read
-            // again from the game (review 7, R6)
+            // again from the game (review 7, R6), unless the game still has the gear and the power the mod set: then the
+            // position stays, so L+ does not come back as a 1st nor A as a held gear (GearboxPosKeeps)
             if (!GearboxHoldingNow())
             {
-                GearboxPosTake(w.pos, boxTruck);
+                const bool keeps = GearboxPosKeeps(w.pos, boxTruck);
+                if (!keeps) GearboxPosTake(w.pos, boxTruck);
                 w.doors = GearboxDoorsNow();
-                Log(L"gearbox: back in the world, the mod's gearbox reads the truck in %S again", GearboxPosName(w.pos.pos));
+                if (keeps) Log(L"gearbox: back in the world, the mod's gearbox keeps the truck in %S", GearboxPosName(w.pos.pos));
+                else Log(L"gearbox: back in the world, the mod's gearbox reads the truck in %S again", GearboxPosName(w.pos.pos));
             }
             // level 1: the game's shifter is the player's. A position picked on it (H, N, R, the low range or a numbered
             // gear) hands the truck back by the door it came through, whatever gear it names, so L+ is told from the
@@ -4263,6 +4267,12 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                                              : L"; its gearbox damage goes to the game's thread";
             }
             if (box.moved && w.pos.pos != posWas) Log(L"gearbox: %S to %S", GearboxPosName(posWas), GearboxPosName(w.pos.pos));
+            static bool lowUpSaid = false; // once a session
+            if (box.lowUp && !lowUpSaid)
+            {
+                lowUpSaid = true;
+                Log(L"gearbox: up from L+ stays in the low range (A, a gear key or RangeHigh leave it)");
+            }
             // a shift by hand into a numbered gear starts BackToA's timer; one on the game's shifter does not
             w.backHand = w.pos.pos == kPosGear && !w.pos.byShifter && (posWas != kPosGear || gearWas != w.pos.gear);
             if (box.why[0] && box.stall) Log(L"gearbox: %S (%d since it took the truck)%s", box.why, w.pos.stalls, stallCost);
@@ -5698,7 +5708,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 122, "ini: the help text survives a write (122 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 123, "ini: the help text survives a write (123 comment lines)");
     // the HUD layouts (BRIEF_cluster_hud_layouts.md): 2 and 3 load and save, 4 is held to the strip, and Style and
     // FaceOpacity survive a trip through Spotter dials
     {

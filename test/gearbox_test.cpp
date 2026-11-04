@@ -78,14 +78,145 @@ int main()
             down = down && m.pos == row[i] && t.gear == gears[i] && fabsf(t.power - powers[i]) < 0.01f && (row[i] != kPosGear || m.gear == 1);
         }
         bool up = true;
-        for (int i = 4; i >= 0; i--)
+        for (int i = 4; i >= 1; i--)
         {
-            Pass(m, plain, Up(), t);
-            up = up && m.pos == row[i] && t.gear == gears[i] && fabsf(t.power - powers[i]) < 0.01f;
+            const GearboxPosOrders r = Pass(m, plain, Up(), t);
+            up = up && m.pos == row[i] && t.gear == gears[i] && fabsf(t.power - powers[i]) < 0.01f && !r.lowUp;
         }
-        Pass(m, plain, Up(), t);
-        up = up && m.pos == kPosGear && m.gear == 2 && t.gear == 2;
-        Check(upTop && at2 && down && up, "gearbox: up walks to the top and stops there; down from 2 walks 1, L+ (1.00), L (0.45), L- (0.20), N, R and stays; up from R walks the same row back to 2");
+        // up from L+ stays in the low range (BRIEF_low_range_never_d.md)
+        bool stays = true;
+        for (int i = 0; i < 3; i++)
+        {
+            const GearboxPosOrders r = Pass(m, plain, Up(), t);
+            stays = stays && m.pos == kPosLowPlus && t.gear == 1 && !r.moved && r.lowUp && !r.setGear;
+        }
+        Pass(m, plain, Down(), t);
+        const bool downLow = m.pos == kPosLow;
+        Check(upTop && at2 && down && up && stays && downLow,
+              "gearbox: up walks to the top and stops there; down from 2 walks 1, L+ (1.00), L (0.45), L- (0.20), N, R and stays; up from R walks back to L+ and stays there; down from L+ is L");
+    }
+    // the low range never goes to D by itself: L+ floored at the red zone with Sequential and BackToA 3 neither moves
+    // nor returns; RangeHigh from L+ gives the 1st, which Sequential takes to D as any held gear; a gear key from L gives
+    // that gear; down from a numbered 1st is L+
+    {
+        GearboxPosModel m = {};
+        GearboxTruck t = Truck(1);
+        GearboxActions l = {};
+        l.lowPlus = true;
+        Pass(m, plain, l, t);
+        SeqInputs in = {};
+        in.backToA = 3;
+        in.top = 6;
+        in.redline = 3000.0f;
+        in.input = 0.95f * in.redline;
+        in.idle = 700.0f;
+        in.pedal = 1.0f;
+        in.gripKnown = in.engineOn = true;
+        BackInputs b = {};
+        b.heldGear = 1;
+        b.autoGear = 1;
+        b.pedal = 0.3f;
+        b.grip = 1.2f;
+        b.speed = 5.0f;
+        b.spin = 6.0f;
+        b.pitchKnown = true;
+        b.engineOn = true;
+        const float dt = 0.05f;
+        SeqModel sm = {};
+        BackModel bm = {};
+        bool never = true;
+        for (int i = 0; i < 100; i++)
+        {
+            in.pos = b.pos = m.pos;
+            in.gear = m.gear;
+            never = never && SequentialStep(sm, in, dt) == 0 && !BackToAStep(bm, 3, false, b, dt);
+            Pass(m, plain, i % 20 == 0 ? Up() : None(), t);
+            never = never && m.pos == kPosLowPlus;
+        }
+        GearboxActions hi = {};
+        hi.rangeHigh = true;
+        Pass(m, plain, hi, t);
+        const bool first = m.pos == kPosGear && m.gear == 1 && t.gear == 1;
+        in.pos = m.pos;
+        in.gear = m.gear;
+        SeqModel s2 = {};
+        int seq = 0;
+        for (int i = 0; i < 20 && !seq; i++) seq = SequentialStep(s2, in, dt);
+        GearboxActions lo = {};
+        lo.low = true;
+        Pass(m, plain, lo, t);
+        GearboxActions g3 = {};
+        g3.gearPressed = 3;
+        Pass(m, plain, g3, t);
+        const bool third = m.pos == kPosGear && m.gear == 3 && t.gear == 3;
+        GearboxActions g1 = {};
+        g1.gearPressed = 1;
+        Pass(m, plain, g1, t);
+        Pass(m, plain, Down(), t);
+        const bool lowPlus = m.pos == kPosLowPlus;
+        Check(never && first && seq == 1 && third && lowPlus,
+              "gearbox: L+ floored at the red zone with Sequential and BackToA 3 stays L+; RangeHigh gives the 1st and Sequential takes it to D; a gear key 3 from L gives 3rd; down from the 1st is L+");
+    }
+    // back in the world after the map, the garage or the viewer (BRIEF_low_range_never_d.md, the Reviewer's point 1):
+    // the position stays while the game has the gear and the power the mod set (L+ stays L+, A in the game's gear 2
+    // stays A), and is read again when they changed
+    {
+        GearboxPosModel m = {};
+        GearboxTruck t = Truck(1);
+        GearboxActions l = {};
+        l.lowPlus = true;
+        Pass(m, plain, l, t);
+        const bool lowPlusKept = GearboxPosKeeps(m, t) && m.pos == kPosLowPlus;
+        GearboxActions aa = {};
+        aa.a = true;
+        Pass(m, plain, aa, t, 2);
+        const bool aKept = t.gear == 2 && GearboxPosKeeps(m, t) && m.pos == kPosA;
+        GearboxTruck changed = t;
+        changed.gear = 3;
+        GearboxTruck flagUp = t;
+        GearboxPosModel g = m;
+        GearboxActions g4 = {};
+        g4.gearPressed = 4;
+        GearboxTruck tg = t;
+        Pass(g, plain, g4, tg);
+        flagUp = tg;
+        flagUp.automatic = true;
+        GearboxTruck power = tg;
+        power.power = 0.45f;
+        const bool readAgain = !GearboxPosKeeps(m, changed) && !GearboxPosKeeps(g, flagUp) && !GearboxPosKeeps(g, power) && GearboxPosKeeps(g, tg);
+        GearboxPosModel took = m;
+        if (!GearboxPosKeeps(took, changed)) GearboxPosTake(took, changed);
+        const bool takenAgain = took.pos == kPosGear && took.gear == 3;
+        // A at a stop in the game's N (it waits for the pedal there), though the mod set the 1st last: kept as A
+        GearboxPosModel w = {};
+        GearboxTruck tw = Truck(1);
+        Pass(w, plain, aa, tw, 1);
+        tw.gear = 0;
+        tw.speed = 0.0f;
+        const bool waiting = w.pos == kPosA && w.lastSet == 1 && GearboxPosKeeps(w, tw);
+        // L+ kept stays there floored with Sequential and BackToA 3
+        GearboxPosModel lp = {};
+        GearboxTruck tl = Truck(1);
+        Pass(lp, plain, l, tl);
+        if (!GearboxPosKeeps(lp, tl)) GearboxPosTake(lp, tl);
+        SeqInputs in = {};
+        in.backToA = 3;
+        in.pos = lp.pos;
+        in.gear = lp.gear;
+        in.top = 6;
+        in.redline = 3000.0f;
+        in.input = 0.95f * in.redline;
+        in.idle = 700.0f;
+        in.pedal = 1.0f;
+        in.gripKnown = in.engineOn = true;
+        SeqModel sm = {};
+        int seq = 0;
+        for (int i = 0; i < 40; i++) seq |= SequentialStep(sm, in, 0.05f);
+        // read again, as before, the same L+ is a numbered 1st: the case the keep is for
+        GearboxPosModel re = lp;
+        GearboxPosTake(re, tl);
+        Check(lowPlusKept && aKept && readAgain && takenAgain && waiting && lp.pos == kPosLowPlus && seq == 0 && re.pos == kPosGear && re.gear == 1,
+              "gearbox: back in the world L+ and A (in the game's gear 2, or waiting in N) stay; a gear, a power or the game's automatic changed meanwhile reads the truck again");
     }
     // H by its key: up from H stays, down from H lands on the top; A at the game's gear 1, down gives L+; the range keys
     // as before (RangeLow from a gear lands in L, RangeHigh from the low range in the 1st)
