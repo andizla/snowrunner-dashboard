@@ -3801,17 +3801,119 @@ int main(int argc, char **argv)
         BaseLearn on = {};
         for (int i = 0; i < 60; i++)
         {
-            if (BaseLearnStep(l, 3, true, base * factor * pedal * GamePull(x), factor, pedal, x, 0.05f, learned)) got = learned;
-            if (BaseLearnStep(on, 3, true, base * onFactor * pedal * GamePull(x), onFactor, pedal, x, 0.05f, learned)) gotOn = learned;
+            if (BaseLearnStep(l, 3, true, base * factor * pedal * GamePull(x), factor, pedal, x, 0.0f, 9.0f, 0.05f, learned)) got = learned;
+            if (BaseLearnStep(on, 3, true, base * onFactor * pedal * GamePull(x), onFactor, pedal, x, 0.0f, 9.0f, 0.05f, learned)) gotOn = learned;
         }
         BaseLearn off = {};
         bool offLearned = false;
-        for (int i = 0; i < 60; i++) offLearned = offLearned || BaseLearnStep(off, 3, true, 1.0f, factor, 0.5f, x, 0.05f, learned);
+        for (int i = 0; i < 60; i++) offLearned = offLearned || BaseLearnStep(off, 3, true, 1.0f, factor, 0.5f, x, 0.0f, 9.0f, 0.05f, learned);
         const bool learns = Near(got, base, base * 0.05f) && Near(gotOn, got, 0.001f) && !offLearned;
         char line[220];
         snprintf(line, sizeof line, "road load: the air only, %.3f m/s2 at 100 km/h for 3515 kg; near the top %.2f under %.2f; a gear's pull learned %.3f of %.2f, %.3f with the load on",
                  at100, loaded, plain, got, base, gotOn);
         Check(air && areas && none && bounded && learns, line);
+    }
+    // the learning over visits (BRIEF_road_load_learning.md, with the Reviewer's addendum): gears 3 and 4 alternating every
+    // 1.5 s floored at x 0.5 to 0.75 both learn (each 2 s summed over visits; before, never); a visit of 0.2 s adds
+    // nothing; a 2.5° climb by the path learns within 5 %; a nose-up squat changes nothing, as the path has no pitch in
+    // it; a shift's dip in the acceleration, skipped kBaseLearnSkip from the shift's end, learns within 5 %; a truck
+    // change clears every gear's sums
+    {
+        const float dt = 0.05f, factor = 1.2f;
+        const float base[kMaxGears] = { 0, 0, 0, 1.0f, 0.8f };
+        auto accelAt = [&](int g, float x, float grade) { return base[g] * factor * GamePull(x) - kGravity * grade; };
+        // alternating: x climbs from 0.5 to 0.75 over each 1.5 s visit; a shift's end restarts settled
+        BaseLearn l = {};
+        float learnt[kMaxGears] = {}, when[kMaxGears] = {};
+        float settled = 0.0f, gathered3 = 0.0f;
+        for (int i = 0; i < 400; i++)
+        {
+            const float t = i * dt, inVisit = fmodf(t, 1.5f);
+            const int g = ((int)(t / 1.5f)) % 2 ? 4 : 3;
+            settled = inVisit < dt * 0.5f ? 0.0f : settled + dt;
+            const float x = 0.5f + 0.25f * inVisit / 1.5f;
+            float got = 0.0f, added = 0.0f;
+            const int done = BaseLearnStep(l, g, true, accelAt(g, x, 0.0f), factor, 1.0f, x, 0.0f, settled, dt, got, &added);
+            if (g == 3) gathered3 += added;
+            if (done && !learnt[done]) learnt[done] = got, when[done] = t;
+        }
+        const bool alternating = Near(learnt[3], base[3], 0.05f * base[3]) && Near(learnt[4], base[4], 0.05f * base[4]) && when[3] > 0.0f && when[3] < 7.0f &&
+                                 when[4] > 0.0f && when[4] < 8.0f;
+        // a visit of 0.2 s adds nothing
+        BaseLearn shortVisit = {};
+        float got = 0.0f, added = 0.0f, shortAdded = 0.0f;
+        for (int i = 0; i < 4; i++) BaseLearnStep(shortVisit, 3, true, accelAt(3, 0.5f, 0.0f), factor, 1.0f, 0.5f, 0.0f, 9.0f, dt, got, &added), shortAdded += added;
+        BaseLearnStep(shortVisit, 3, false, 0.0f, factor, 1.0f, 0.5f, 0.0f, 9.0f, dt, got, &added);
+        const bool shortNothing = shortAdded == 0.0f && shortVisit.time[3] == 0.0f;
+        // a 2.5° climb by the path: the game's pull lifts the truck too, and a + g sin θ gives a_base back
+        const float climb = sinf(2.5f * 3.14159265f / 180.0f);
+        BaseLearn c = {};
+        float onClimb = 0.0f;
+        for (int i = 0; i < 80 && !onClimb; i++)
+            if (BaseLearnStep(c, 3, true, accelAt(3, 0.55f, climb), factor, 1.0f, 0.55f, climb, 9.0f, dt, got)) onClimb = got;
+        // 4° by the path is no learning
+        BaseLearn steep = {};
+        bool steepLearned = false;
+        const float four = sinf(4.0f * 3.14159265f / 180.0f);
+        for (int i = 0; i < 80; i++) steepLearned |= BaseLearnStep(steep, 3, true, accelAt(3, 0.55f, four), factor, 1.0f, 0.55f, four, 9.0f, dt, got) != 0;
+        // the grade by the path: a truck at 10 m/s up 2.5° through a 0.7° nose-up squat of the chassis (no part of the
+        // path) reads 2.5°; under kGradeWay in the span it is unknown
+        GradeTrack track = {}, slow = {};
+        float grade = NAN, slowGrade = 0.0f;
+        for (int i = 0; i <= 30; i++)
+        {
+            const float t = i * dt, along = 10.0f * t;
+            const float at[3] = { along * cosf(2.5f * 3.14159265f / 180.0f), along * climb, 3.0f };
+            grade = GradeStep(track, at, t);
+            const float crawl[3] = { 0.5f * t, 0.0f, 0.0f };
+            slowGrade = GradeStep(slow, crawl, t);
+        }
+        const bool byPath = Near(grade, climb, 0.002f) && !isfinite(slowGrade) && Near(onClimb, base[3], 0.05f * base[3]) && !steepLearned;
+        // a shift's dip: the smoothed acceleration holds a share of it for a while after the shift's end; skipped
+        // kBaseLearnSkip from the end it learns within 5 %
+        BaseLearn d = {};
+        float dipLearned = 0.0f, smooth = 0.0f, set = 0.0f;
+        for (int i = 0; i < 200 && !dipLearned; i++)
+        {
+            const float t = i * dt, phase = fmodf(t, 1.5f);
+            const bool shifting = phase < 0.2f;
+            if (phase < dt * 0.5f) set = 0.0f;
+            if (!shifting) set += dt; // the shift's stage idle again after 0.2 s
+            const float raw = shifting ? 0.0f : accelAt(3, 0.6f, 0.0f);
+            smooth += (raw - smooth) * (1.0f - expf(-dt / kAccelSmooth));
+            const int done = BaseLearnStep(d, 3, !shifting, smooth, factor, 1.0f, 0.6f, 0.0f, set, dt, got);
+            if (done) dipLearned = got;
+        }
+        const bool dip = Near(dipLearned, base[3], 0.05f * base[3]);
+        // a truck change clears every gear's sums
+        BaseLearn cleared = l;
+        cleared = BaseLearn{};
+        bool empty = true;
+        for (int g = 0; g < kMaxGears; g++) empty = empty && cleared.time[g] == 0.0f && cleared.sum[g] == 0.0f;
+        char line[300];
+        snprintf(line, sizeof line, "road load learning: 3 and 4 alternating every 1.5 s learn %.3f (of %.2f, at %.1f s) and %.3f (of %.2f, at %.1f s); a 0.2 s visit adds "
+                 "nothing; a 2.5° climb by the path %.3f; 4° none; a shift's dip skipped %.3f; a truck change clears",
+                 learnt[3], base[3], when[3], learnt[4], base[4], when[4], onClimb, dipLearned);
+        Check(alternating && shortNothing && byPath && dip && empty && gathered3 > 0.0f, line);
+    }
+    // one figure per truck: two gears learned with equal a_base × top give an unlearned gear K / top; spread 20 % by
+    // gear only; one gear learned alone fills nothing
+    {
+        float base[kMaxGears] = {}, top[kMaxGears] = {}, use[kMaxGears] = {};
+        for (int g = 1; g <= 10; g++) top[g] = 2.0f * g;
+        base[4] = 1.5f;
+        base[5] = 1.2f; // 1.5 × 8 = 12 = 1.2 × 10
+        float k = 0.0f, spread = 0.0f;
+        bool folded = false;
+        const int two = BaseFold(base, top, 10, use, k, spread, folded);
+        const bool fills = two == 2 && folded && Near(k, 12.0f, 0.001f) && Near(use[10], 12.0f / 20.0f, 0.001f) && use[4] == 1.5f && use[5] == 1.2f;
+        base[5] = 1.2f * 1.2f; // 20 % apart
+        BaseFold(base, top, 10, use, k, spread, folded);
+        const bool apart = !folded && spread > 0.15f && use[10] == 0.0f && use[4] == 1.5f;
+        base[5] = 0.0f;
+        BaseFold(base, top, 10, use, k, spread, folded);
+        const bool alone = !folded && use[10] == 0.0f && use[4] == 1.5f;
+        Check(fills && apart && alone, "road load fold: two gears with the same a_base × top give the others K / top; 20 % apart, or one gear alone, by gear only");
     }
     // part 1's probe: a synthetic acceleration of the game's own pull shape gives its most where the pull peaks and
     // its fall past it about kGamePullFall

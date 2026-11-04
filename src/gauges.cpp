@@ -2574,7 +2574,12 @@ struct TruckWatch
     float gearBase[kMaxGears];  // each numbered gear's acceleration at the game's own pull, floored (BaseLearnStep), 0 not yet; kept in the truck's file by engine
     char baseTruck[kMaxText], baseEngine[kMaxText]; // the truck and engine gearBase is for
     BaseLearn baseLearn;
-    float accel, speedWas;      // the truck's acceleration over the ground, smoothed over kAccelSmooth, and the speed it goes from
+    float baseUse[kMaxGears];   // the a_base each gear goes by: its own, or the truck's figure over its top (BaseFold)
+    GradeTrack grade;           // the path's rise over its way in the last second, for the learning's grade
+    float baseSettled;          // seconds since the last shift's end (the stage idle, the engaged gear unchanged)
+    int baseGearWas;
+    ULONGLONG baseSaidAt[kMaxGears]; // when "road load: gear g learning" was last said (probe only, every 10 s at most)
+    float accel, speedWas;     // the truck's acceleration over the ground, smoothed over kAccelSmooth, and the speed it goes from
     bool accelSeen;
     float roadShare, roadLoadA; // the road load taken off on the last pass, as a share of the pull and as m/s², for the probe
     PullBins pull;              // part 1's probe: the game's own pull by x in the gear being measured
@@ -4332,35 +4337,73 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             const float top = g >= 1 ? TruckGearTop(raw, g) : 0.0f, groundX = top > 0.0f && w.gearbox.grip > 0.0f ? w.gearbox.grip * fmaxf(v, 0.0f) / top : 0.0f;
             const float pedalNow = TruckPedal(raw);
             const bool gripping = w.gearbox.grip > 0.0f && TruckDrivenSpin(raw) <= w.gearbox.grip * fmaxf(v, 0.0f) * kSlipShare + kSlipSpare;
-            const bool flat = w.tilt.running && fabsf(w.tilt.pitchDeg) <= kBaseLearnPitch;
-            const bool clean = g >= 1 && g < kMaxGears && TruckEngineOn(raw) && gripping && flat && TruckBrake(raw) <= 0.0f && !raw.handbrake && v > 1.0f && !testing;
-            // each gear's pull is the truck's, by its engine: read again when either changes, learned only with both known
+            // the grade by the truck's path, not the chassis's pitch, which squats under power (the Reviewer's point 3)
+            const float gradeSin = GradeStep(w.grade, raw.position, (float)(GetTickCount64() % 100000000ULL) / 1000.0f);
+            // the seconds since the last shift's end: the mod's stage idle again (at Gearbox=2 the clutch slips through the
+            // stages) and the engaged gear unchanged (the game's own shifts)
+            if (g != w.baseGearWas || w.stage.stage != kStageIdle) w.baseSettled = 0.0f;
+            else w.baseSettled += dt;
+            w.baseGearWas = g;
+            const bool clean = g >= 1 && g < kMaxGears && TruckEngineOn(raw) && gripping && TruckBrake(raw) <= 0.0f && !raw.handbrake && v > 1.0f && !testing;
+            // each gear's pull is the truck's, by its engine: read again when either changes, learned only with both known;
+            // the sums of every gear start over then
             const char *baseTruck = w.who.taken.key, *baseEngine = w.engine.found && w.engineVehicle == w.refs.vehicle ? w.engine.name : "";
+            bool fold = false;
             if (strcmp(baseTruck, w.baseTruck) || strcmp(baseEngine, w.baseEngine))
             {
                 strcpy_s(w.baseTruck, baseTruck);
                 strcpy_s(w.baseEngine, baseEngine);
                 w.baseLearn = BaseLearn{};
+                memset(w.baseSaidAt, 0, sizeof w.baseSaidAt);
                 const int bases = GearBaseRead(baseTruck, baseEngine, w.gearBase);
                 if (bases) Log(L"road load: %d of this truck's gears' pull with %S learned before (its file in Gauges\\trucks)", bases, baseEngine);
+                fold = true;
             }
-            float learned = 0.0f;
-            if (baseTruck[0] && baseEngine[0] && BaseLearnStep(w.baseLearn, g, clean, w.accel, raw.torqueFactor, pedalNow, groundX, dt, learned))
+            float learned = 0.0f, added = 0.0f;
+            const int done = baseTruck[0] && baseEngine[0]
+                                 ? BaseLearnStep(w.baseLearn, g, clean, w.accel, raw.torqueFactor, pedalNow, groundX, gradeSin, w.baseSettled, dt, learned, &added)
+                                 : 0;
+            if (probe && added > 0.0f && !done && g >= 1 && g < kMaxGears && GetTickCount64() - w.baseSaidAt[g] >= 10000)
             {
-                const float was = w.gearBase[g];
-                w.gearBase[g] = was > 0.0f ? was + (learned - was) * 0.3f : learned;
-                if (!(was > 0.0f) || fabsf(w.gearBase[g] - was) > 0.05f * was)
+                w.baseSaidAt[g] = GetTickCount64();
+                Log(L"road load: gear %d learning, %.1f of %.1f s gathered", g, w.baseLearn.time[g], kBaseLearnFor);
+            }
+            if (done)
+            {
+                const float was = w.gearBase[done];
+                w.gearBase[done] = was > 0.0f ? was + (learned - was) * 0.3f : learned;
+                if (!(was > 0.0f) || fabsf(w.gearBase[done] - was) > 0.05f * was)
                 {
-                    GearBaseWrite(baseTruck, baseEngine, g, w.gearBase[g]);
-                    Log(L"road load: gear %d's pull at the game's own torque with %S, floored: %.3f m/s2 (from %.3f; the truck's file in Gauges\\trucks)", g,
-                        baseEngine, w.gearBase[g], was);
+                    GearBaseWrite(baseTruck, baseEngine, done, w.gearBase[done]);
+                    Log(L"road load: gear %d's pull at the game's own torque with %S, floored: %.3f m/s2 (from %.3f; the truck's file in Gauges\\trucks)", done,
+                        baseEngine, w.gearBase[done], was);
+                }
+                fold = true;
+            }
+            // one figure per truck: a gear with none learned goes by the learned gears' a_base × top over its own top
+            if (fold)
+            {
+                const int gears = TruckTopGear(raw);
+                float tops[kMaxGears] = {};
+                for (int i = 1; i <= gears && i < kMaxGears; i++) tops[i] = TruckGearTop(raw, i);
+                float k = 0.0f, spread = 0.0f;
+                bool folded = false;
+                const int learnedGears = BaseFold(w.gearBase, tops, gears, w.baseUse, k, spread, folded);
+                if (learnedGears >= 2)
+                {
+                    char row[400] = "";
+                    for (int i = 1; i <= gears && i < kMaxGears; i++)
+                        if (w.gearBase[i] > 0.0f && tops[i] > 0.0f) snprintf(row + strlen(row), sizeof row - strlen(row), " %d: %.2f,", i, w.gearBase[i] * tops[i]);
+                    Log(L"road load: the learned gears' pull × top:%S spread %.0f %%: %s", row, spread * 100.0f,
+                        folded ? L"the gears not learned go by their mean over their own top" : L"over 15 %, so each gear goes by its own only");
                 }
             }
             // part 1's probe: the game's own pull (no hand) floored in a numbered gear; one line once the gear has gone
             // past kPullDoneAt, or when it changes with enough bins filled
             if (probe)
             {
-                const bool measuring = clean && !w.hand.on && pedalNow >= kBaseLearnPedal;
+                // the nose within kPullPitch, as before: the probe's shape by x takes no grade out
+                const bool measuring = clean && w.tilt.running && fabsf(w.tilt.pitchDeg) <= kPullPitch && !w.hand.on && pedalNow >= kBaseLearnPedal;
                 if (g != w.pull.gear || (measuring && groundX >= kPullDoneAt))
                 {
                     float most = 0.0f, mostX = 0.0f, fall = 0.0f;
@@ -4405,7 +4448,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             const float roadPedal = TruckPedal(raw);
             w.roadLoadA = s.roadLoad && w.mass > 0.0f ? RoadLoadAccel(RoadCdA(w.mass, s.roadCdA), ground, w.mass) : 0.0f;
             w.roadShare = s.roadLoad && roadGear >= 1 && roadGear < kMaxGears && ground >= kStandStill
-                              ? RoadLoadShare(w.roadLoadA, roadPedal, w.gearBase[roadGear]) : 0.0f;
+                              ? RoadLoadShare(w.roadLoadA, roadPedal, w.baseUse[roadGear]) : 0.0f;
             if (!want || !(w.roadShare > 0.0f)) w.roadShare = w.roadLoadA = 0.0f; // none taken off
             const bool handWas = w.hand.on;
             const float gameWas = w.hand.game;
