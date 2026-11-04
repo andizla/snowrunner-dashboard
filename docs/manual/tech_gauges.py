@@ -1157,7 +1157,7 @@ a stall of it with the clutch on an axis goes to the game's stall seconds as the
 stalls), a stall for a shift without it standing or crawling, under 1.5 m/s (RequireClutch: 5 written into the truck's stall
 seconds; at 1.5 m/s or more the gear grinds and stays out, N, with a log line; review 11), a held-gear mode for H shifters with every gear bound (RequireGearHeld) and
 a choice to skip neutral (SkipNeutral, from L- to R), and down stopping at L- (DownStaysForward, SMT's immersive mode; it wins over
-SkipNeutral). Up and down walk an index: R -1, N 0, L- 1, L 2, L+ 3, gear g at g + 3, A at the game's gear + 3, H at the top + 4. At 2 the game's own ShiftGear, ShiftToAutoGear, ShiftToHigh, ShiftToReverse, ShiftToNeutral,
+SkipNeutral). Up and down walk an index: R -1, N 0, L- 1, L 2, L+ 3, gear g at g + 3, A at the game's gear + 3, H at the top + 4. Up stops at L+ as at H, so only a key leaves the low range (lowUp, a log line once a session). Back in the world after the map, the garage or the viewer, <code>GearboxPosKeeps</code> keeps the position while the game's gear is the one the mod set last and its power the position's; otherwise <code>GearboxPosTake</code> reads it again (review 7, R6): read again, L+ is a first gear, and A, which runs with the game's automatic flag down, a held gear. At 2 the game's own ShiftGear, ShiftToAutoGear, ShiftToHigh, ShiftToReverse, ShiftToNeutral,
 AutoOffAndShift and SetPowerFactor are refused for the held truck (SetCurrentVehicle passes, and everything passes out of the world).
 Driven with a pad or the keyboard (Input 1 or 2) the first call of each door is read as a request for a position (R, N, H, A, gear g,
 or the low range once a SetPowerFactor under 0.725 follows a first gear; L+ reads as the first gear): the hook packs it into an atomic
@@ -1233,7 +1233,9 @@ game's own stall seconds; whether the game's stalling notice shows for it is unc
 taken as 0.2 and 1.0 until a truck with them is driven at Gearbox=0; L is 0.45 as driven. On Windows 10 the NEXT GEN menu may not draw
 while ReShade loads the .asi files as add-ons: turn that off in ReShade's Add-ons tab (one player's report, under investigation).</li></ul>
 <h3>Changed in the next version</h3>
-<ul><li>Sequential's own shifts go back to D, which picks the gear: near the red zone with the foot on, and before a
+<ul><li>Up from L+ stays in the low range; A, a gear key or RangeHigh leave it, so the low range never goes to D by itself.
+Back from the map, the garage or the viewer the gearbox keeps its position (L+ came back as a 1st, D as a held gear).</li>
+<li>Sequential's own shifts go back to D, which picks the gear: near the red zone with the foot on, and before a
 stall with the foot on or off (0.2 s under the brake). Under the brake D comes down to the speed's gear at once, skipping gears.</li>
 <li><code>Gauges\\logs</code> keeps the newest 20 start logs and at most 500 MB of them (<code>KeepLogs</code>, 0 keeps all); only the mod's own date-named logs are removed.</li>
 <li>The automatic's position shows as D on the cluster and in the tab ("Back to D", the D binding); the ini keys, the bindings, the state block and the log keep A (<code>GearLetterShown</code>).</li>

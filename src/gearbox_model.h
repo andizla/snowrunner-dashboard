@@ -164,7 +164,8 @@ struct GearboxPosOrders
     bool stall;           // write kStallSeconds into the stall seconds
     bool flagDown;        // put the game's automatic flag down
     bool moved;           // the position changed on this pass
-    const char *why;      // what happened, for the log, a string literal; "" for nothing to say
+    bool lowUp;           // an up in L+ that stayed there
+    const char *why;     // what happened, for the log, a string literal; "" for nothing to say
 };
 
 // ---- BackToA: the mod's own gearbox back in A by itself (review 17, Sequential) ----
@@ -340,6 +341,21 @@ inline void GearboxPosTake(GearboxPosModel &m, const GearboxTruck &t)
     }
 }
 
+inline float GearboxPosPower(const GearboxPosModel &m);
+
+// Back in the world after the map, the garage or the viewer: the position stays when the game still has the gear the
+// mod set last at the power the position asks, and a held gear within the truck's top. Read again (GearboxPosTake),
+// L+ came back as a 1st and the mod's A, which runs with the game's automatic flag down, as a held gear (the 09:20
+// drive of 4 November); a garage that changed the gear or the power reads again as before (review 7, R6).
+inline bool GearboxPosKeeps(const GearboxPosModel &m, const GearboxTruck &t)
+{
+    // A waiting in N for the pedal, or a gear waiting for the truck to stop rolling back, has the game's N without setting it
+    const bool waitsInN = t.gear == 0 && (m.pos == kPosA || m.waitBack);
+    if (!m.running || (t.gear != m.lastSet && !waitsInN) || fabsf(t.power - GearboxPosPower(m)) > kPowerStep) return false;
+    if (t.automatic && m.pos != kPosA) return false;
+    return m.pos != kPosGear || (m.gear >= 1 && m.gear <= t.top);
+}
+
 // The gear a position asks of the game. autoGear: the automatic's (A only).
 inline int GearboxPosGear(const GearboxPosModel &m, const GearboxTruck &t, int autoGear)
 {
@@ -420,7 +436,10 @@ inline GearboxPosOrders GearboxPosStep(GearboxPosModel &m, const GearboxOptions 
     else if (a.low) m.pos = kPosLow;
     else if (a.lowPlus) m.pos = kPosLowPlus;
     else if (a.gearPressed >= 1) GearboxPosToGear(m, a.gearPressed > top ? top : a.gearPressed);
-    else if ((a.up || a.down) && !(a.up && m.pos == kPosH) && // up from H stays in H
+    // up from H stays in H, and up from L+ stays in the low range: L+ and the 1st are the same gear at the same power, so
+    // a walk on into the 1st left the low range unseen and Sequential and BackToA took it on to D (the user, 4 November:
+    // "It should never go to D from low range"). A, a gear key, N, R, H or RangeHigh leave it
+    else if ((a.up || a.down) && !(a.up && (m.pos == kPosH || m.pos == kPosLowPlus)) &&
              !(a.down && o.downStaysForward && GearboxPosWalk(m, t) <= kWalkLowMinus)) // DownStaysForward: down from L-, N or R does nothing
     {
         const int i = GearboxPosWalk(m, t), last = top + 3;
@@ -431,6 +450,7 @@ inline GearboxPosOrders GearboxPosStep(GearboxPosModel &m, const GearboxOptions 
     }
     else if (a.rangeLow && !(m.pos >= kPosLowMinus && m.pos <= kPosLowPlus)) m.pos = kPosLow;
     else if (a.rangeHigh && m.pos >= kPosLowMinus && m.pos <= kPosLowPlus) GearboxPosToGear(m, 1);
+    r.lowUp = a.up && was == kPosLowPlus && m.pos == kPosLowPlus;
     // the game's shifter stays where it was put, so a gear picked there is held; a key's position is not
     if (a.shifter) m.byShifter = true;
     else if (m.pos != was || m.gear != wasGear) m.byShifter = false;
