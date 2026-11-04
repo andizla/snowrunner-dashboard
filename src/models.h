@@ -1494,25 +1494,120 @@ inline float RoadLoadAccel(float cda, float speed, float mass)
 // a_base not learned or the foot off.
 inline float RoadLoadShare(float aLoad, float pedal, float aBase) { return aBase > 0.0f && pedal >= kFootOff ? aLoad / (pedal * aBase) : 0.0f; }
 
-// a_base(g), learned in ordinary driving: floored (kBaseLearnPedal), on flat ground (the nose within 1°), the grip
-// known and the wheels not spinning, no brake, the wheels at kBaseLearnFrom to kBaseLearnTo of the gear's top. There
-// the game's acceleration is a_base × the factor in the game × the pedal × its pull's rise; the game has no drag, and
-// the load the mod takes off is in the factor already, so each pass gives a_base = a / (factor × pedal × GamePull(x))
-// (review F1); kBaseLearnFor seconds of them in one gear make the mean.
-static const float kBaseLearnPedal = 0.9f, kBaseLearnFrom = 0.3f, kBaseLearnTo = 0.6f, kBaseLearnFor = 2.0f, kBaseLearnPitch = 1.0f;
-struct BaseLearn { int gear; float sum, time; };
-// One pass: ok the conditions hold. True when a gear's a_base is done, into learned.
-inline bool BaseLearnStep(BaseLearn &l, int gear, bool ok, float accel, float factor, float pedal, float x, float dt, float &learned)
+// The grade by the truck's path (BRIEF_road_load_learning.md, the Reviewer's point 3): the rise over the way gone in
+// the last kGradeSpan seconds, the world's y up. The chassis's pitch squats nose up under power and swings on rough
+// ground (0.5 to 1° within a second of flooring in the 4 November drive, g × sin 1° = 0.17 m/s²), which the path does
+// not. NAN until kGradeWay metres have gone within the span.
+static const float kGradeSpan = 1.0f, kGradeWay = 2.0f;
+static const int kGradeRing = 48; // at 20 passes a second, over 2 s
+struct GradeTrack { float at[kGradeRing], pos[kGradeRing][3]; int next, count; };
+inline float GradeStep(GradeTrack &g, const float pos[3], float now)
 {
-    if (gear != l.gear) l = BaseLearn{ gear, 0.0f, 0.0f };
+    if (!isfinite(pos[0]) || !isfinite(pos[1]) || !isfinite(pos[2]) || !isfinite(now)) return NAN;
+    g.at[g.next] = now;
+    memcpy(g.pos[g.next], pos, sizeof g.pos[0]);
+    g.next = (g.next + 1) % kGradeRing;
+    if (g.count < kGradeRing) g.count++;
+    // the newest sample at least kGradeSpan old
+    for (int k = 1; k < g.count; k++)
+    {
+        const int i = (g.next - 1 - k + 2 * kGradeRing) % kGradeRing;
+        if (now - g.at[i] < kGradeSpan) continue;
+        const float dx = pos[0] - g.pos[i][0], dy = pos[1] - g.pos[i][1], dz = pos[2] - g.pos[i][2];
+        const float way = sqrtf(dx * dx + dy * dy + dz * dz);
+        return way >= kGradeWay ? dy / way : NAN;
+    }
+    return NAN;
+}
+
+// a_base(g), learned in ordinary driving: floored (kBaseLearnPedal), the grade by the path within kBaseLearnGrade and
+// taken out (a + g sin θ: on a climb the game's pull also lifts the truck), the grip known and the wheels not
+// spinning, no brake, the wheels at kBaseLearnFrom to kBaseLearnTo of the gear's top. There the game's acceleration
+// is a_base × the factor in the game × the pedal × its pull's rise; the game has no drag, and the load the mod takes
+// off is in the factor already, so each pass gives a / (factor × pedal) = a_base × GamePull(x) (review F1). The mean is
+// weighted by the pull, Σ a/(f p) over Σ GamePull, so the low-pull passes near 0.8 count less in the noise.
+// To 0.8 and not further (the Reviewer, 11:25): an error in a gear's learned top grows the error of GamePull past it,
+// 10 % at 0.8, 20 % at 0.9; the fit's slope cancels, as the use divides by the same fit.
+// Summed per gear over visits (BRIEF_road_load_learning.md): the 10-speed's close ratios put x high right after each
+// up-shift, so 2 s in one visit never came. A visit is the passes in one gear the conditions hold without a break; one
+// shorter than kBaseLearnVisit adds nothing, and kBaseLearnSkip after a shift's end (its stage idle again, the gear
+// changed) counts for nothing, as the 0.2 s smoothing of the acceleration still holds the shift's dip.
+static const float kBaseLearnPedal = 0.9f, kBaseLearnFrom = 0.3f, kBaseLearnTo = 0.8f, kBaseLearnFor = 2.0f, kBaseLearnGrade = 3.0f,
+                   kBaseLearnSkip = 0.5f, kBaseLearnVisit = 0.3f, kGravity = 9.81f;
+struct BaseLearn
+{
+    int gear;                                  // the visit's gear
+    float visitSum, visitPull, visitTime;      // the visit's passes until it is kBaseLearnVisit long
+    float sum[kMaxGears], pull[kMaxGears], time[kMaxGears]; // each gear's gathered passes
+};
+// One pass: ok the conditions hold, settled the seconds since the last shift's end, gradeSin the path's (NAN unknown).
+// Returns the gear whose a_base is done, into learned, else 0; added: the seconds this pass added to its gear.
+inline int BaseLearnStep(BaseLearn &l, int gear, bool ok, float accel, float factor, float pedal, float x, float gradeSin, float settled, float dt,
+                         float &learned, float *added = nullptr)
+{
+    if (added) *added = 0.0f;
+    if (gear != l.gear) l.gear = gear, l.visitSum = l.visitPull = l.visitTime = 0.0f;
     const float pull = GamePull(x);
-    if (!ok || !(factor > 0.0f) || pedal < kBaseLearnPedal || x < kBaseLearnFrom || x > kBaseLearnTo || !(pull > 0.2f) || !isfinite(accel)) return false;
-    l.sum += accel / (factor * pedal * pull) * dt;
-    l.time += dt;
-    if (l.time < kBaseLearnFor) return false;
-    learned = l.sum / l.time;
-    l.sum = l.time = 0.0f;
-    return learned > 0.0f;
+    const bool pass = ok && gear >= 1 && gear < kMaxGears && factor > 0.0f && pedal >= kBaseLearnPedal && x >= kBaseLearnFrom && x <= kBaseLearnTo && pull > 0.2f &&
+                      isfinite(accel) && isfinite(gradeSin) && fabsf(gradeSin) <= sinf(kBaseLearnGrade * 3.14159265f / 180.0f) && settled >= kBaseLearnSkip;
+    if (!pass)
+    {
+        l.visitSum = l.visitPull = l.visitTime = 0.0f; // the visit ends; one under kBaseLearnVisit is dropped
+        return 0;
+    }
+    const float sample = (accel + kGravity * gradeSin) / (factor * pedal) * dt, weight = pull * dt;
+    if (l.visitTime < kBaseLearnVisit)
+    {
+        l.visitSum += sample;
+        l.visitPull += weight;
+        l.visitTime += dt;
+        if (l.visitTime < kBaseLearnVisit) return 0;
+        // the visit is long enough: its passes so far count
+        l.sum[gear] += l.visitSum;
+        l.pull[gear] += l.visitPull;
+        l.time[gear] += l.visitTime;
+        if (added) *added = l.visitTime;
+    }
+    else
+    {
+        l.sum[gear] += sample;
+        l.pull[gear] += weight;
+        l.time[gear] += dt;
+        if (added) *added = dt;
+    }
+    if (l.time[gear] < kBaseLearnFor - 1e-3f) return 0; // the passes' dt summed may fall a hair short of 2 s
+    learned = l.pull[gear] > 0.0f ? l.sum[gear] / l.pull[gear] : 0.0f;
+    l.sum[gear] = l.pull[gear] = l.time[gear] = 0.0f;
+    return learned > 0.0f ? gear : 0;
+}
+
+// One figure per truck (the Reviewer's point 2): the game multiplies the torque as a gear's top is lower, so
+// a_base(g) × top(g) is the truck's own, and a gear with none learned (the top gears, floored at speed nearly always
+// over 0.8) gets K / top(g), K the mean of the learned gears' a_base × top. With fewer than two learned, or their
+// products spread over kBaseFoldSpread of K, by gear only. use: the a_base each gear goes by (its own where learned).
+// Returns the gears learned; spread: the products' (most − least) / K.
+static const float kBaseFoldSpread = 0.15f;
+inline int BaseFold(const float base[kMaxGears], const float top[kMaxGears], int gears, float use[kMaxGears], float &k, float &spread, bool &folded)
+{
+    int learned = 0;
+    float sum = 0.0f, most = 0.0f, least = 0.0f;
+    for (int g = 0; g < kMaxGears; g++) use[g] = base[g] > 0.0f ? base[g] : 0.0f;
+    for (int g = 1; g <= gears && g < kMaxGears; g++)
+        if (base[g] > 0.0f && top[g] > 0.0f)
+        {
+            const float p = base[g] * top[g];
+            most = learned ? fmaxf(most, p) : p;
+            least = learned ? fminf(least, p) : p;
+            sum += p;
+            learned++;
+        }
+    k = learned ? sum / learned : 0.0f;
+    spread = k > 0.0f ? (most - least) / k : 0.0f;
+    folded = learned >= 2 && spread <= kBaseFoldSpread;
+    if (folded)
+        for (int g = 1; g <= gears && g < kMaxGears; g++)
+            if (!(base[g] > 0.0f) && top[g] > 0.0f) use[g] = k / top[g];
+    return learned;
 }
 
 // ---- the game's own pull measured (part 1's probe) ----
@@ -1523,6 +1618,7 @@ inline bool BaseLearnStep(BaseLearn &l, int gear, bool ok, float accel, float fa
 enum { kPullBins = 14 };
 static const float kPullBinFrom = 0.30f, kPullBinWidth = 0.05f, kPullDoneAt = 0.98f;
 struct PullBins { int gear; float sum[kPullBins], time[kPullBins]; };
+static const float kPullPitch = 1.0f; // degrees of the nose the probe measures within
 inline void PullBinsAdd(PullBins &b, float x, float accel, float dt)
 {
     if (!(x >= kPullBinFrom) || !isfinite(accel)) return;

@@ -379,15 +379,23 @@ cargo or a trailer, so a loaded truck's air part is overstated and a trailer's o
 3.5 under 10 t, else 6, unless <code>RoadCdA</code> sets it in <code>[Gauges]</code> or a truck's file. Nothing standing, in reverse,
 with the foot off (the game's coasting stays) or before <i>a</i><sub>base</sub>(<i>g</i>) is learned. Only the air: Gameplay reads no
 surface, and rolling resistance is Tire Inflation's. <i>a</i><sub>base</sub>(<i>g</i>) is learned in ordinary driving
-(<code>BaseLearnStep</code>): floored (0.9), the nose within 1°, the grip known and the wheels not spinning, no brake, the wheels at 0.3 to
-0.6 of the gear's top; each pass gives <i>a</i> / (factor · <i>p</i> · GamePull(<i>x</i>)), with <i>a</i> the truck's acceleration over
+(<code>BaseLearnStep</code>): floored (0.9), the grade by the truck's path within 3° and taken out (<i>a</i> + <i>g</i> sin θ; the path's rise
+over its way in the last second, <code>GradeStep</code>, as the chassis squats nose up under power), the grip known and the wheels not
+spinning, no brake, the wheels at 0.3 to 0.8 of the gear's top (past it a top's error grows: 10 % at 0.8, 20 % at 0.9), not within 0.5 s
+of a shift's end (its stage idle again); each pass gives <i>a</i> / (factor · <i>p</i>), and the mean is weighted by the pull,
+Σ <i>a</i>/(factor · <i>p</i>) over Σ GamePull(<i>x</i>), with <i>a</i> the truck's acceleration over
 the ground smoothed over 0.2 s and the factor as the game has it (the load is in it already, and the game has no drag of its own), and
-2 s of them make the mean, kept as <code>Base1.&lt;engine&gt;</code>, <code>Base2.&lt;engine&gt;</code> ... in the truck's file (it is the
-truck's, and an engine upgrade starts over) and followed at 0.3 a time when it moves more than 5 %. A loaded truck learns its slower
+2 s of them, gathered per gear over visits (a visit under 0.3 s counts for nothing; the sums start over with another truck or engine),
+make the mean, kept as <code>Base1.&lt;engine&gt;</code>, <code>Base2.&lt;engine&gt;</code> ... in the truck's file (it is the
+truck's, and an engine upgrade starts over) and followed at 0.3 a time when it moves more than 5 %. The game multiplies the torque as a gear's top is lower, so
+<i>a</i><sub>base</sub> × top is one figure per truck (<code>BaseFold</code>): with two gears or more learned and their products within 15 %
+of their mean K, a gear with none of its own goes by K / top, which gives the top gears, floored at speed nearly always past 0.8, their
+load; spread wider, each gear by its own only. The log gives the learned products side by side, and with the probe each gear's seconds
+gathered, every 10 s at most. A loaded truck learns its slower
 pull while the air part still goes by its own weight, so with a load the air part is overstated. For the F350 at 3,515 kg and 100 km/h,
 <i>a</i><sub>load</sub> is 0.145 m/s² (0.51 kN).</p>
 <p>The probe's "pull:" line (<code>PullBins</code>): with <code>Probe=1</code>, Powertrain off, floored in a numbered gear under the
-same conditions, the acceleration in bins of 0.05 of the gear's top from 0.30, logged once the gear passes 0.98 or changes with eight
+same conditions with the nose within 1° (the probe takes no grade out), the acceleration in bins of 0.05 of the gear's top from 0.30, logged once the gear passes 0.98 or changes with eight
 bins filled, with the engine's MaxDeltaAngVel, the most and where it is, the fall past it fitted as <code>kGamePullFall</code> is, and
 the peaks of every gear measured so far, which tell whether the game multiplies the torque by the gear.</p>
 <h3>The pull test</h3>
@@ -1258,7 +1266,7 @@ game's own stall seconds; whether the game's stalling notice shows for it is unc
 taken as 0.2 and 1.0 until a truck with them is driven at Gearbox=0; L is 0.45 as driven. On Windows 10 the NEXT GEN menu may not draw
 while ReShade loads the .asi files as add-ons: turn that off in ReShade's Add-ons tab (one player's report, under investigation).</li></ul>
 <h3>Changed in the next version</h3>
-<ul><li>Air drag (<code>RoadLoad</code>, off by default): the air's drag taken off the engine's pull against each gear's learned pull at the game's own torque; rolling resistance is Tire Inflation's. With the probe, a "pull:" line measures the game's own pull by x.</li>
+<ul><li>Air drag (<code>RoadLoad</code>, off by default): the air's drag taken off the engine's pull against each gear's learned pull at the game's own torque; rolling resistance is Tire Inflation's. Each gear's pull is learned floored up to 0.8 of its top, on grades up to 3° by the path, over several visits; the gears not learned go by the learned ones once two agree within 15 %. With the probe, a "pull:" line measures the game's own pull by x.</li>
 <li>Creep in a hand-picked gear (<code>CreepManual</code>, off by default): the governor, the holding part and at Gearbox=2 the stall are reached again, R and the low range on the game's shifter through the converter; in Sequential the gearbox goes back to D first.</li>
 <li>The log stays open and is written out every half second, so <code>Probe=1</code> no longer opens the file 70 times a second:
 one append handle that shares writing (so CrashLineOut's own handle still gets in), a 64 KB buffer flushed on every line that is not a probe line
