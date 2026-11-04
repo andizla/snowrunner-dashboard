@@ -205,23 +205,26 @@ static bool LogWriteAll(HANDLE f, const char *data, size_t size)
 }
 
 // Under g_logLock: the buffer to the file.
+// Under g_logLock: data to the file through the handle kept open, or where there is none (it failed, or this start's
+// first line came before it, as the second copy's does: review F1) through an open, an append and a close, which from
+// then on every line takes.
+static void LogOut(const char *data, size_t size)
+{
+    if (g_logFile != INVALID_HANDLE_VALUE && LogWriteAll(g_logFile, data, size)) return;
+    if (g_logFile != INVALID_HANDLE_VALUE) CloseHandle(g_logFile);
+    g_logFile = INVALID_HANDLE_VALUE;
+    g_logOneByOne = true;
+    const HANDLE f = LogOpenAppend();
+    if (f == INVALID_HANDLE_VALUE) return;
+    LogWriteAll(f, data, size);
+    CloseHandle(f);
+}
+
+// Under g_logLock: the buffer to the file.
 static void LogFlushHeld()
 {
     g_logFlushedAt = GetTickCount64();
-    if (!g_logUsed) return;
-    if (g_logFile != INVALID_HANDLE_VALUE && !LogWriteAll(g_logFile, g_logBuf, g_logUsed))
-    {
-        CloseHandle(g_logFile);
-        g_logFile = INVALID_HANDLE_VALUE;
-        g_logOneByOne = true;
-        // the lines that did not go out are tried once more the old way
-        const HANDLE f = LogOpenAppend();
-        if (f != INVALID_HANDLE_VALUE)
-        {
-            LogWriteAll(f, g_logBuf, g_logUsed);
-            CloseHandle(f);
-        }
-    }
+    if (g_logUsed) LogOut(g_logBuf, g_logUsed);
     g_logUsed = 0;
 }
 
@@ -271,7 +274,9 @@ static void LogV(const wchar_t *fmt, va_list ap)
         std::wstring big;
         int n = _snwprintf_s(room, _countof(room), _TRUNCATE, L"%02u:%02u:%02u ", t.wHour, t.wMinute, t.wSecond);
         const int head = n < 0 ? 0 : n;
-        va_list again;
+        // a copy of the arguments for each further pass over them (review N1)
+        va_list count, again;
+        va_copy(count, ap);
         va_copy(again, ap);
         n = _vsnwprintf_s(room + head, _countof(room) - head - 2, _TRUNCATE, fmt, ap);
         const wchar_t *text = room;
@@ -280,13 +285,14 @@ static void LogV(const wchar_t *fmt, va_list ap)
         else
         {
             // longer than the stack's room
-            const int need = _vscwprintf(fmt, again);
+            const int need = _vscwprintf(fmt, count);
             big.assign(room, head);
             big.resize(head + (need > 0 ? need : 0) + 1);
             if (need > 0) _vsnwprintf_s(&big[head], need + 1, _TRUNCATE, fmt, again);
             length = head + (need > 0 ? need : 0);
             text = big.c_str();
         }
+        va_end(count);
         va_end(again);
         char line[6144];
         std::string wide;
@@ -302,27 +308,13 @@ static void LogV(const wchar_t *fmt, va_list ap)
         if (bytes < 0) bytes = 0;
         out[bytes++] = '\r';
         out[bytes++] = '\n';
-        if (g_logOneByOne)
-        {
-            const HANDLE f = LogOpenAppend();
-            if (f != INVALID_HANDLE_VALUE)
-            {
-                LogWriteAll(f, out, (size_t)bytes);
-                CloseHandle(f);
-            }
-        }
+        if (!g_logOneByOne && g_logUsed + (size_t)bytes > kLogBuffer) LogFlushHeld();
+        // one by one (a pre-flush that failed included), or longer than the buffer: straight out
+        if (g_logOneByOne || g_logFile == INVALID_HANDLE_VALUE || (size_t)bytes > kLogBuffer) LogOut(out, (size_t)bytes);
         else
         {
-            if (g_logUsed + (size_t)bytes > kLogBuffer) LogFlushHeld();
-            if ((size_t)bytes > kLogBuffer)
-            {
-                if (g_logFile != INVALID_HANDLE_VALUE) LogWriteAll(g_logFile, out, (size_t)bytes);
-            }
-            else
-            {
-                memcpy(g_logBuf + g_logUsed, out, (size_t)bytes);
-                g_logUsed += (size_t)bytes;
-            }
+            memcpy(g_logBuf + g_logUsed, out, (size_t)bytes);
+            g_logUsed += (size_t)bytes;
             // a line that is not a probe line goes out at once, so a crash or an exit after it never loses it
             if (wcsncmp(fmt, L"probe:", 6) || GetTickCount64() - g_logFlushedAt >= kLogFlushMs) LogFlushHeld();
         }
@@ -6381,15 +6373,40 @@ int wmain(int argc, wchar_t **argv)
         Log(L"log test: one by one");
         text = file();
         const bool oneByOne = fellBack && text.find("log test: a failed write\r\n") != std::string::npos && text.find("log test: one by one\r\n") != std::string::npos;
+        // started with no handle, as the second copy is (its Run sets g_logStarted before its one line; review F1): the
+        // line lands, a line at a time
+        AcquireSRWLockExclusive(&g_logLock);
+        g_logFile = INVALID_HANDLE_VALUE;
+        g_logOneByOne = false;
+        ReleaseSRWLockExclusive(&g_logLock);
+        Log(L"log test: no handle, as the second copy");
+        Log(L"probe: log test no handle");
+        text = file();
+        const bool noHandle = g_logOneByOne && text.find("log test: no handle, as the second copy\r\n") != std::string::npos &&
+                              text.find("probe: log test no handle\r\n") != std::string::npos;
         AcquireSRWLockExclusive(&g_logLock);
         g_logFile = good;
         g_logOneByOne = false;
         ReleaseSRWLockExclusive(&g_logLock);
-        Check(fresh && inOrder && soon && inPlace && held && heldThen && oneByOne,
+        // a line over the 2048 characters of the stack's room, and one over the 64 KB buffer, whole (review N2)
+        std::wstring longText(3000, L'x'), hugeText(70000, L'y');
+        longText += L" end of the long line";
+        hugeText += L" end of the huge line";
+        Log(L"log test long: %s", longText.c_str());
+        Log(L"probe: log test huge %s", hugeText.c_str());
+        Log(L"log test: after the long lines");
+        text = file();
+        const std::string longWant = "log test long: " + std::string(3000, 'x') + " end of the long line\r\n",
+                          hugeWant = "probe: log test huge " + std::string(70000, 'y') + " end of the huge line\r\n";
+        const size_t longAt = text.find(longWant), hugeAt = text.find(hugeWant), afterLong = text.find("log test: after the long lines\r\n");
+        const bool longLines = longAt != std::string::npos && hugeAt != std::string::npos && afterLong != std::string::npos && longAt < hugeAt && hugeAt < afterLong;
+        Check(fresh && inOrder && soon && inPlace && held && heldThen && oneByOne && noHandle && longLines,
               "log: kept open, the first line truncates; 10 000 probe lines and an ordinary one on disk in order once it returns; a probe line alone out within "
-              "0.6 s by the tick; a crash line in its place after the probe lines, and with the lock held before them; a failed write goes a line at a time");
-        if (!(fresh && inOrder && soon && inPlace && held && heldThen && oneByOne))
-            printf("     log parts: fresh %d, in order %d, soon %d, in place %d, held %d then %d, one by one %d\n", fresh, inOrder, soon, inPlace, held, heldThen, oneByOne);
+              "0.6 s by the tick; a crash line in its place after the probe lines, and with the lock held before them; a failed write, or no handle (the "
+              "second copy), goes a line at a time; lines over 2048 characters and over 64 KB whole and in order");
+        if (!(fresh && inOrder && soon && inPlace && held && heldThen && oneByOne && noHandle && longLines))
+            printf("     log parts: fresh %d, in order %d, soon %d, in place %d, held %d then %d, one by one %d, no handle %d, long lines %d\n", fresh, inOrder, soon, inPlace,
+                   held, heldThen, oneByOne, noHandle, longLines);
     }
 
     // the maps' sections: the regions' written into an ini that has none; a map takes its own section, else its
