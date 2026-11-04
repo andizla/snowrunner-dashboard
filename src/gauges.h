@@ -111,6 +111,7 @@ struct GaugeSettings
     bool roadLoad;           // RoadLoad: with Powertrain, the air's drag taken off the torque handed to the game (models.h, road load)
     float roadCdA;           // RoadCdA: the drag's area in m², 0 by the truck's mass (1.1 under 4 t, 3.5 under 10 t, else 6); a truck's file may set its own
     int engineShare;         // EngineShare: how much of the mod's engine the game gets with it, in percent: 0 the game's own pull, 100 the mod's
+    bool creepManual;        // CreepManual: the creep in a gear picked by hand too (off: only where an automatic picks the gear)
     bool creep;              // Creep: an idling truck in gear moves, an automatic to walking pace, a manual at the gear's idle speed (models.h, CreepShare)
     float rollWarnDeg, rollDangerDeg; // RollWarnDeg, RollDangerDeg: degrees of lean to the side from which the tilt lamp is amber, and red
     float pitchDangerDeg;    // PitchDangerDeg: degrees up or down a slope from which the tilt lamp is red
@@ -183,6 +184,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.roadLoad = false;
     s.roadCdA = 0.0f;
     s.creep = true;
+    s.creepManual = false;
     s.rollWarnDeg = 15.0f;
     s.rollDangerDeg = 25.0f;
     s.pitchDangerDeg = 35.0f;

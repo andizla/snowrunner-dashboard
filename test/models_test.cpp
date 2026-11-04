@@ -515,6 +515,7 @@ struct LoopTruck
     float holdMost = 1.0f; // the creep's holding part's most: 1, the engine handed to the game as the loop has it
     bool mayStall = true;  // the creep may stall the engine: the mod's own gearbox in a position picked by hand (else Gearbox 0 or 1)
     bool shifterConverter = false; // R or the low range on the game's shifter: the creep through the converter, calmed (CreepStep's calm)
+    bool spinLift = false; // a held gear with the clutch in: the lift by the wheels' own speed, capped at kSpinLiftMost, as gauges.cpp has it since eeb2ffa
 };
 struct LoopState
 {
@@ -565,11 +566,13 @@ static void LoopStep(const LoopTruck &c, LoopState &s, const TorqueCurve &curve,
     const EngineHand hand{ true, &curve, c.k.max / c.k.redline, 1.0f, 0.0f, 0.0f, EngineLightFloor(curve, c.k.redline), kInputPad, TorqueRoof(c.cls) };
     GearboxStep(s.box, t, c.k, pedal, s.power.power, dt, hand);
     // the factor, as gauges.cpp hands it
-    const float x = LiftShare(TruckDrivenSpin(t), s.v, s.box.grip, TruckGearTop(t, t.gearEngaged));
+    const bool spinning = c.fixedGear && c.spinLift;
+    const float x = spinning ? SpinShare(TruckDrivenSpin(t), TruckGearTop(t, t.gearEngaged)) : LiftShare(TruckDrivenSpin(t), s.v, s.box.grip, TruckGearTop(t, t.gearEngaged));
     const float ratio = driving ? s.box.ratio : 1.0f;
     const float limit = s.power.cold * s.power.boost;
     const float lift = before ? LiftBefore(s.power.curve, limit, TruckPedal(t), ratio, x, TorqueRoof(c.cls))
-                              : TorqueLift(s.power.curve, limit, TruckPedal(t), ratio, x, TorqueRoof(c.cls));
+                              : spinning ? fminf(TorqueLift(s.power.curve, limit, TruckPedal(t), ratio, x, TorqueRoof(c.cls)), kSpinLiftMost)
+                                         : TorqueLift(s.power.curve, limit, TruckPedal(t), ratio, x, TorqueRoof(c.cls));
     const float wanted = s.hand.game * lift;
     TorqueHandStep(s.hand, true, 0x5000, 0x4000, t.torqueFactor, lift, before ? 0.0f : dt, t.gearEngaged);
     s.paced = s.hand.written < wanted - kTorqueFactorStep;
@@ -4376,6 +4379,56 @@ int main(int argc, char **argv)
                   "loop: a heavy truck in first at zero pedal creeps in A under the gear's idle speed and holds it, the needle at idle, stops on the brake; "
                   "in first by hand from a standstill it holds the gear's idle speed with no overshoot past 1.3 of it (review 13's holding part); with Creep "
                   "off it stands");
+
+            // CreepManual (the gearbox rebuild's step 4): off, a gear picked by hand gets no creep and R on the game's
+            // shifter neither (its automatic flag is down); on, both, and A as ever. A held 4th rolling at idle on the
+            // flat under today's lift by spin holds the gear's idle speed; on a grade past what the holding part gives it
+            // lugs and stalls at Gearbox=2 and idles on at Gearbox 1; in Sequential the down to D comes first
+            {
+                const bool gateOff = !CreepGoes(false, false, false, kPosA, 0) && !CreepGoes(false, true, true, kPosGear, 0) && CreepGoes(false, true, true, kPosA, 0) &&
+                                     CreepGoes(false, false, false, kPosA, 1);
+                const bool gateOn = CreepGoes(true, false, false, kPosA, 0) && CreepGoes(true, true, true, kPosGear, 0) && CreepGoes(true, true, true, kPosLow, 0);
+                LoopTruck fourth = crawl;
+                fourth.fixedGear = 4;
+                fourth.spinLift = true;
+                TruckRaw at4 = fourth.t;
+                at4.gear = at4.gearEngaged = 4;
+                const float idle4 = fourth.k.idle / fourth.k.redline * TruckGearTop(at4, 4) / fourth.grip; // m/s at the 4th gear's idle speed
+                LoopState fs;
+                fs.v = idle4;
+                LoopDrive(fourth, fs, hc, 0.0f, 10.0f, false, false);
+                const LoopSpan rolling = LoopDrive(fourth, fs, hc, 0.0f, 10.0f, false);
+                LoopTruck uphill = fourth;
+                uphill.grade = 0.8f;
+                LoopState us;
+                us.v = idle4;
+                LoopDrive(uphill, us, hc, 0.0f, 20.0f, false, false);
+                LoopTruck uphill1 = uphill;
+                uphill1.mayStall = false;
+                LoopState u1;
+                u1.v = idle4;
+                LoopDrive(uphill1, u1, hc, 0.0f, 20.0f, false, false);
+                // Sequential's down before a stall, by the gearbox's input stuck under 1.1 idle with the foot off
+                SeqInputs si = {};
+                si.backToA = 5;
+                si.pos = kPosGear;
+                si.gear = 4;
+                si.top = 6;
+                si.input = 0.5f * fourth.k.idle;
+                si.redline = fourth.k.redline;
+                si.idle = fourth.k.idle;
+                si.engineOn = true;
+                SeqModel sm = {};
+                float seqAt = -1.0f;
+                for (int i = 0; i < 60 && seqAt < 0.0f; i++)
+                    if (SequentialStep(sm, si, kDt) < 0) seqAt = i * kDt;
+                printf("     creep by hand: a held 4th at idle on the flat %.3f to %.3f of its idle speed; up a grade it stalls at %.1f s (Gearbox 1: %.1f); "
+                       "Sequential goes to D after %.2f s\n", rolling.vLo / idle4, rolling.vHi / idle4, us.stallAt, u1.stallAt, seqAt);
+                Check(gateOff && gateOn && rolling.vLo > 0.98f * idle4 && rolling.vHi < 1.03f * idle4 && us.stallAt > 0.0f && u1.stallAt < 0.0f && seqAt >= 0.0f &&
+                          seqAt < 1.0f,
+                      "creep in a hand-picked gear: off, none by hand and none for R on the game's shifter; on, both; a held 4th holds its idle speed under the "
+                      "lift by spin, stalls stuck up a grade at Gearbox 2 and not at 1; in Sequential the down to D comes before the creep's stall");
+            }
 
             // the brief's part 1, kept as a guard: the hook never writes the pedal field, so creeping at a standstill in A
             // (stuck: a grade nothing climbs) the needle stays at idle, the powertrain's pedal at 0 and nothing stalls; a
