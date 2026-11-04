@@ -672,6 +672,11 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         changed(ImGui::SliderInt("##engineshare", &s.engineShare, 0, 100, "%d %%", ImGuiSliderFlags_AlwaysClamp));
         PageTip("How much of the mod's engine the game gets: 0 leaves the game's own pull, 100 hands it all of the mod's engine, and between the "
                 "two the truck pulls between them. Lower it where a truck pulls too hard.");
+        PageLabel("Air drag", labelX);
+        changed(ImGui::Checkbox("##roadload", &s.roadLoad));
+        PageTip("The game has no air drag. This takes it off the engine's pull, more the faster the truck goes, so a light truck no longer "
+                "runs to its gear's top as if in a vacuum. It starts in each gear once the mod has measured that gear floored on flat ground. "
+                "Rolling resistance is Tire Inflation's, which knows the ground.");
         // the driven truck's gearbox: how long each gear is held going up, kept for that gearbox
         if (view.gearbox[0] && s.gearbox >= kGearboxModel)
         {

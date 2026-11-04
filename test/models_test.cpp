@@ -3775,6 +3775,49 @@ int main(int argc, char **argv)
         Check(braked && noHunt && gentleDrop <= 1 && blind.grip == 0.0f && blindDrop <= 1, line);
     }
 
+    // road load (the game pull and road load brief, part 2): the air's drag only, nothing standing and none rolling;
+    // four times at twice the speed; the F350 at 3515 kg and 100 km/h about 0.15 m/s2 (0.51 kN); CdA by the mass read;
+    // nothing with a gear's pull not learned or the foot off; taken off before the fall's make-up, so near a gear's top
+    // the lift stays bounded (under the roof, at least the least) and a load past the pull leaves the least; a gear's
+    // pull learned from a synthetic run within 5 %
+    {
+        const float cda = RoadCdA(3515.0f, 0.0f);
+        const float at100 = RoadLoadAccel(cda, 27.8f, 3515.0f), at50 = RoadLoadAccel(cda, 13.9f, 3515.0f);
+        const bool air = RoadLoadAccel(cda, 0.0f, 3515.0f) == 0.0f && RoadLoadAccel(cda, 0.5f, 3515.0f) < 0.001f && Near(at100 / at50, 4.0f, 0.01f) &&
+                         Near(at100 * 3515.0f, 510.0f, 15.0f) && RoadLoadAccel(cda, 20.0f, 0.0f) == 0.0f;
+        const bool areas = cda == 1.1f && RoadCdA(8000.0f, 0.0f) == 3.5f && RoadCdA(15000.0f, 0.0f) == 6.0f && RoadCdA(3515.0f, 2.0f) == 2.0f;
+        const bool none = RoadLoadShare(0.2f, 1.0f, 0.0f) == 0.0f && RoadLoadShare(0.2f, 0.0f, 1.0f) == 0.0f && Near(RoadLoadShare(0.2f, 0.5f, 1.0f), 0.4f, 0.001f);
+        const float roof = TorqueRoof(kClassTruck);
+        const float plain = TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, 0.95f, roof), loaded = TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, 0.95f, roof, 0.3f);
+        const float past = TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, 0.5f, roof, 1.5f), mid = TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, 0.5f, roof, 0.2f);
+        const bool bounded = loaded <= plain && loaded <= LiftRoof(roof, 0.95f) && loaded >= kTorqueFactorLeast && past == kTorqueFactorLeast &&
+                             Near(mid, 0.8f / GameFall(0.5f), 0.001f);
+        BaseLearn l = {};
+        float learned = 0.0f, got = 0.0f;
+        const float base = 1.2f, factor = 1.3f, pedal = 1.0f, x = 0.5f, aLoad = 0.1f;
+        for (int i = 0; i < 60; i++)
+            if (BaseLearnStep(l, 3, true, base * factor * pedal * GamePull(x) - aLoad, factor, pedal, x, aLoad, 0.05f, learned)) got = learned;
+        BaseLearn off = {};
+        bool offLearned = false;
+        for (int i = 0; i < 60; i++) offLearned = offLearned || BaseLearnStep(off, 3, true, 1.0f, factor, 0.5f, x, 0.0f, 0.05f, learned);
+        const bool learns = Near(got, base, base * 0.05f) && !offLearned;
+        char line[220];
+        snprintf(line, sizeof line, "road load: the air only, %.3f m/s2 at 100 km/h for 3515 kg; near the top %.2f under %.2f; a gear's pull learned %.3f of %.2f",
+                 at100, loaded, plain, got, base);
+        Check(air && areas && none && bounded && learns, line);
+    }
+    // part 1's probe: a synthetic acceleration of the game's own pull shape gives its most where the pull peaks and
+    // its fall past it about kGamePullFall
+    {
+        PullBins b = {};
+        for (float x = 0.30f; x < 0.98f; x += 0.005f) PullBinsAdd(b, x, 1.5f * GamePull(x), 0.05f);
+        float most = 0.0f, mostX = 0.0f, fall = 0.0f;
+        const int bins = PullBinsFit(b, most, mostX, fall);
+        char line[160];
+        snprintf(line, sizeof line, "pull probe: %d bins, the most %.2f at %.2f, the fall fitted %.2f (the curve's %.1f)", bins, most, mostX, fall, kGamePullFall);
+        Check(bins == kPullBins && Near(most, 1.5f, 0.02f) && mostX >= 0.4f && mostX <= 0.55f && Near(fall, kGamePullFall, 0.15f), line);
+    }
+
     // the shift's state (review 17, step 2): asked, set, engaged and idle kCreepQuiet later, in that order; the stall of a
     // shift without the clutch comes once, on the first pass after it is set, never while it is only asked; a shift
     // not taken goes idle with its stall; one that never engages goes idle after kStageMost

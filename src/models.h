@@ -1468,11 +1468,91 @@ inline float SpinRoof(float classRoof, float x) { return fminf(LiftRoof(classRoo
 // far as the limit goes: at a light foot a turbo engine without boost gives what the pedal asks), the converter's
 // ratio, over GameFall at x, at most the roof (most, the truck's class's: TorqueRoof; kTorqueFactorMost says why) as it
 // fades over the gear's last three tenths (LiftRoof); 1 (the game's own) with the wheels at the gear's top or past it.
-inline float TorqueLift(float curve, float limit, float pedal, float ratio, float x, float most = kTorqueFactorMost)
+// load: the road load as a share of the game's pull at this pedal (RoadLoadShare), taken off before the fall's make-up.
+inline float TorqueLift(float curve, float limit, float pedal, float ratio, float x, float most = kTorqueFactorMost, float load = 0.0f)
 {
     if (isfinite(x) && x >= 1.0f) return 1.0f;
-    const float lift = curve * ratio * fminf(1.0f, limit / fmaxf(pedal, 1e-3f)) / fmaxf(GameFall(x), 1e-3f);
+    const float lift = (curve * ratio * fminf(1.0f, limit / fmaxf(pedal, 1e-3f)) - load) / fmaxf(GameFall(x), 1e-3f);
     return SettingsRange(isfinite(lift) ? lift : 1.0f, kTorqueFactorLeast, fmaxf(LiftRoof(most, x), kTorqueFactorLeast));
+}
+
+// ---- road load (the game pull and road load brief, part 2, with the reviewer's addendum) ----
+// The game models no air drag. With RoadLoad on the mod takes the air's drag off the torque it hands the game: as a
+// deceleration a_load = ½ ρ CdA v² / m, over the game's own acceleration at factor 1 and full pedal in that gear
+// (a_base, learned), times the pedal, taken off before the lift's make-up for the game's fall so that it scales with
+// the pull it is taken from. Only the air: Gameplay reads no surface, and a rolling part everywhere would add to the
+// game's own mud resistance. The mass is the truck's by its files, without cargo or a trailer, so the air part is
+// overstated for a loaded truck and a trailer's own drag is missing. CdA by that mass unless RoadCdA sets it.
+static const float kAirDensity = 1.2f, kAccelSmooth = 0.2f; // kg/m³; seconds the truck's acceleration is smoothed over
+inline float RoadCdA(float mass, float own) { return own > 0.0f ? own : mass < 4000.0f ? 1.1f : mass < 10000.0f ? 3.5f : 6.0f; }
+// The air's drag as a deceleration in m/s², 0 where the mass or the speed is not there.
+inline float RoadLoadAccel(float cda, float speed, float mass)
+{
+    return mass > 0.0f && isfinite(speed) && speed > 0.0f ? 0.5f * kAirDensity * cda * speed * speed / mass : 0.0f;
+}
+// The load as a share of the game's pull at this pedal: what the lift takes off before it makes up the fall. 0 with
+// a_base not learned or the foot off.
+inline float RoadLoadShare(float aLoad, float pedal, float aBase) { return aBase > 0.0f && pedal >= kFootOff ? aLoad / (pedal * aBase) : 0.0f; }
+
+// a_base(g), learned in ordinary driving: floored (kBaseLearnPedal), on flat ground (the nose within 1°), the grip
+// known and the wheels not spinning, no brake, the wheels at kBaseLearnFrom to kBaseLearnTo of the gear's top. There
+// the game's acceleration is a_base × the factor in the game × the pedal × its pull's rise, less the load the mod took
+// off, so each pass gives a_base = (a + a_load) / (factor × pedal × GamePull(x)); kBaseLearnFor seconds of them in one
+// gear make the mean.
+static const float kBaseLearnPedal = 0.9f, kBaseLearnFrom = 0.3f, kBaseLearnTo = 0.6f, kBaseLearnFor = 2.0f, kBaseLearnPitch = 1.0f;
+struct BaseLearn { int gear; float sum, time; };
+// One pass: ok the conditions hold. True when a gear's a_base is done, into learned.
+inline bool BaseLearnStep(BaseLearn &l, int gear, bool ok, float accel, float factor, float pedal, float x, float aLoad, float dt, float &learned)
+{
+    if (gear != l.gear) l = BaseLearn{ gear, 0.0f, 0.0f };
+    const float pull = GamePull(x);
+    if (!ok || !(factor > 0.0f) || pedal < kBaseLearnPedal || x < kBaseLearnFrom || x > kBaseLearnTo || !(pull > 0.2f) || !isfinite(accel)) return false;
+    l.sum += (accel + aLoad) / (factor * pedal * pull) * dt;
+    l.time += dt;
+    if (l.time < kBaseLearnFor) return false;
+    learned = l.sum / l.time;
+    l.sum = l.time = 0.0f;
+    return learned > 0.0f;
+}
+
+// ---- the game's own pull measured (part 1's probe) ----
+// With Probe=1 and the game's own pull (Powertrain off), floored in a numbered gear, the grip known and the wheels not
+// spinning, no brake, the nose within 1°: the truck's acceleration by the wheels' share of the gear's top, in bins of
+// 0.05 from 0.30. The shape over x is the game's pull share (it models no drag); the line gives the most, where it is,
+// and the fall past it fitted as kGamePullFall is (a / most = fall × (1 − x)).
+enum { kPullBins = 14 };
+static const float kPullBinFrom = 0.30f, kPullBinWidth = 0.05f, kPullDoneAt = 0.98f;
+struct PullBins { int gear; float sum[kPullBins], time[kPullBins]; };
+inline void PullBinsAdd(PullBins &b, float x, float accel, float dt)
+{
+    if (!(x >= kPullBinFrom) || !isfinite(accel)) return;
+    const int i = (int)((x - kPullBinFrom) / kPullBinWidth);
+    if (i < 0 || i >= kPullBins) return;
+    b.sum[i] += accel * dt;
+    b.time[i] += dt;
+}
+// The bins filled, the most acceleration and its x, and the fall fitted past it.
+inline int PullBinsFit(const PullBins &b, float &most, float &mostX, float &fall)
+{
+    int n = 0;
+    most = mostX = fall = 0.0f;
+    for (int i = 0; i < kPullBins; i++)
+        if (b.time[i] > 0.0f)
+        {
+            n++;
+            const float a = b.sum[i] / b.time[i];
+            if (a > most) most = a, mostX = kPullBinFrom + (i + 0.5f) * kPullBinWidth;
+        }
+    float top = 0.0f, bottom = 0.0f;
+    for (int i = 0; i < kPullBins && most > 0.0f; i++)
+    {
+        const float x = kPullBinFrom + (i + 0.5f) * kPullBinWidth;
+        if (b.time[i] <= 0.0f || x <= mostX) continue;
+        top += b.sum[i] / b.time[i] / most * (1.0f - x);
+        bottom += (1.0f - x) * (1.0f - x);
+    }
+    fall = bottom > 0.0f ? top / bottom : 0.0f;
+    return n;
 }
 
 // The lift as far as the setting hands the mod's engine to the game (EngineShare, 0 to 1): 0 leaves the game's own, 1

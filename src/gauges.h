@@ -108,6 +108,8 @@ struct GaugeSettings
     int backToA;             // BackToA: at Gearbox=2, seconds after a shift by hand until the gearbox goes back to A by itself; 0 never, else 3 to 30
     int input;               // Input: what the pedal is: 0 a wheel's pedals, 1 a pad's trigger, 2 keys. The mod's automatic kicks down by it
     bool powertrain;         // Powertrain: the engine's torque (its curve, the cold oil, the boost) and the converter's handed to the game
+    bool roadLoad;           // RoadLoad: with Powertrain, the air's drag taken off the torque handed to the game (models.h, road load)
+    float roadCdA;           // RoadCdA: the drag's area in m², 0 by the truck's mass (1.1 under 4 t, 3.5 under 10 t, else 6); a truck's file may set its own
     int engineShare;         // EngineShare: how much of the mod's engine the game gets with it, in percent: 0 the game's own pull, 100 the mod's
     bool creep;              // Creep: an idling truck in gear moves, an automatic to walking pace, a manual at the gear's idle speed (models.h, CreepShare)
     float rollWarnDeg, rollDangerDeg; // RollWarnDeg, RollDangerDeg: degrees of lean to the side from which the tilt lamp is amber, and red
@@ -178,6 +180,8 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.backToA = kBackToADefault;
     s.powertrain = false;
     s.engineShare = 50;
+    s.roadLoad = false;
+    s.roadCdA = 0.0f;
     s.creep = true;
     s.rollWarnDeg = 15.0f;
     s.rollDangerDeg = 25.0f;
@@ -303,6 +307,7 @@ inline void SettingsClamp(GaugeSettings &s)
     s.boostMax = SettingsOverride(s.boostMax, kBoostRange);
     s.boostProfile = s.boostProfile < 0 || s.boostProfile >= kSpoolCount ? kSpoolStandard : s.boostProfile;
     s.engineShare = s.engineShare < 0 ? 0 : s.engineShare > 100 ? 100 : s.engineShare;
+    s.roadCdA = isfinite(s.roadCdA) ? (s.roadCdA <= 0.0f ? 0.0f : s.roadCdA < 0.3f ? 0.3f : s.roadCdA > 20.0f ? 20.0f : s.roadCdA) : 0.0f;
     s.gearbox = s.gearbox < 0 || s.gearbox >= kGearboxCount ? kGearboxGame : s.gearbox;
     s.input = s.input < 0 || s.input >= kInputCount ? kInputWheel : s.input;
     s.oilGauge = s.oilGauge < 0 || s.oilGauge >= kOilGaugeCount ? kOilNeedle : s.oilGauge;

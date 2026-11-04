@@ -368,6 +368,26 @@ gear (2026-10-25). With the wheels at the
 gear's top or past it (rolling downhill) the factor is the game's own: the division would be by nothing. Below about half a gear's
 top GameFall is 1 and nothing is divided out. The game's own share goes back once when the setting goes off, the engine stops, the pull test is armed, or another truck is
 driven (and to the old truck only if its action is still its own).</p>
+<h3>Air drag (RoadLoad)</h3>
+<p>The game models no air drag. With <code>RoadLoad=1</code> and the engine handed to the game, the mod takes it off the lift
+(<code>RoadLoadAccel</code>, <code>RoadLoadShare</code>, models.h) as a deceleration over the game's own acceleration in that gear at
+factor 1 and full pedal, <i>a</i><sub>base</sub>(<i>g</i>), times the pedal, before the fall's make-up, so it scales with the pull it is
+taken from and stays bounded near a gear's top:</p>
+{eq('<i>a</i><sub>load</sub> = ½ ρ CdA <i>v</i>² / <i>m</i>,    lift = (curve · ratio · min(1, cold · boost / <i>p</i>) − <i>a</i><sub>load</sub> / (<i>p</i> · <i>a</i><sub>base</sub>(<i>g</i>))) / GameFall(<i>x</i>),    ρ = 1.2', 15)}
+<p class="where">The roof, its fade and the least come after it, as without the load. <i>m</i> is the truck's mass by its files, without
+cargo or a trailer, so a loaded truck's air part is overstated and a trailer's own drag is missing. CdA by that mass, 1.1 m² under 4 t,
+3.5 under 10 t, else 6, unless <code>RoadCdA</code> sets it in <code>[Gauges]</code> or a truck's file. Nothing standing, in reverse,
+with the foot off (the game's coasting stays) or before <i>a</i><sub>base</sub>(<i>g</i>) is learned. Only the air: Gameplay reads no
+surface, and rolling resistance is Tire Inflation's. <i>a</i><sub>base</sub>(<i>g</i>) is learned in ordinary driving
+(<code>BaseLearnStep</code>): floored (0.9), the nose within 1°, the grip known and the wheels not spinning, no brake, the wheels at 0.3 to
+0.6 of the gear's top; each pass gives (<i>a</i> + <i>a</i><sub>load</sub>) / (factor · <i>p</i> · GamePull(<i>x</i>)), with <i>a</i> the
+truck's acceleration over the ground smoothed over 0.2 s, and 2 s of them make the mean, kept as <code>Base1</code>, <code>Base2</code> ...
+in the gearbox's file and followed at 0.3 a time when it moves more than 5 %. For the F350 at 3,515 kg and 100 km/h,
+<i>a</i><sub>load</sub> is 0.145 m/s² (0.51 kN).</p>
+<p>The probe's "pull:" line (<code>PullBins</code>): with <code>Probe=1</code>, Powertrain off, floored in a numbered gear under the
+same conditions, the acceleration in bins of 0.05 of the gear's top from 0.30, logged once the gear passes 0.98 or changes with eight
+bins filled, with the engine's MaxDeltaAngVel, the most and where it is, the fall past it fitted as <code>kGamePullFall</code> is, and
+the peaks of every gear measured so far, which tell whether the game multiplies the torque by the gear.</p>
 <h3>The pull test</h3>
 <p>On a long flat road in fourth gear or higher (the game's automatic off), floored, no brakes, at 1 m/s or more and the wheels
 under 0.55 of the gear's top, the test holds the gear and runs seven phases of a second each, with the factor × 1, 0.5, 1, 1.5, 1,
@@ -1233,7 +1253,8 @@ game's own stall seconds; whether the game's stalling notice shows for it is unc
 taken as 0.2 and 1.0 until a truck with them is driven at Gearbox=0; L is 0.45 as driven. On Windows 10 the NEXT GEN menu may not draw
 while ReShade loads the .asi files as add-ons: turn that off in ReShade's Add-ons tab (one player's report, under investigation).</li></ul>
 <h3>Changed in the next version</h3>
-<ul><li>Sequential's own shifts go back to D, which picks the gear: near the red zone with the foot on, and before a
+<ul><li>Air drag (<code>RoadLoad</code>, off by default): the air's drag taken off the engine's pull against each gear's learned pull at the game's own torque; rolling resistance is Tire Inflation's. With the probe, a "pull:" line measures the game's own pull by x.</li>
+<li>Sequential's own shifts go back to D, which picks the gear: near the red zone with the foot on, and before a
 stall with the foot on or off (0.2 s under the brake). Under the brake D comes down to the speed's gear at once, skipping gears.</li>
 <li><code>Gauges\\logs</code> keeps the newest 20 start logs and at most 500 MB of them (<code>KeepLogs</code>, 0 keeps all); only the mod's own date-named logs are removed.</li>
 <li>The automatic's position shows as D on the cluster and in the tab ("Back to D", the D binding); the ini keys, the bindings, the state block and the log keep A (<code>GearLetterShown</code>).</li>

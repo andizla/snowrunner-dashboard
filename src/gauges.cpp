@@ -533,6 +533,8 @@ static void WriteIni(const GaugeSettings &s)
     whole(L"BackToA", s.backToA);
     whole(L"Input", s.input);
     whole(L"Powertrain", s.powertrain ? 1 : 0);
+    whole(L"RoadLoad", s.roadLoad ? 1 : 0);
+    num(L"RoadCdA", s.roadCdA);
     whole(L"EngineShare", s.engineShare);
     whole(L"Creep", s.creep ? 1 : 0);
     num(L"RollWarnDeg", s.rollWarnDeg);
@@ -919,6 +921,9 @@ static void ReadIni(GaugeSettings &s)
                         L"; shows, less with cold oil and without boost, and doubled by the converter at its stall (Gearbox=1), in place\n"
                         L"; of the game's own, which falls away toward each gear's top. The mod writes the game's torque factor for it.\n"
                         L"; EngineShare: how much of the mod's engine the game gets, 0 to 100 percent (50: half way between the two).\n"
+                        L"; RoadLoad=1 (with Powertrain): the air's drag taken off, once each gear's pull is learned floored on flat ground.\n"
+                        L";   RoadCdA: the drag's area in m2, 0 by the truck's mass (1.1 under 4 t, 3.5 under 10 t, else 6); a truck's file may set it.\n"
+                        L";   Base1, Base2 ... in a gearbox's file: each gear's acceleration at the game's own pull, floored, learned (m/s2).\n"
                         L"; Creep=1: an idling truck on an automatic moves to walking pace; the brake holds it. For now only with an automatic, not in a gear picked by hand.\n"
                         L"; Gauges\\gearboxes\\<name>.ini GearHold: seconds a gearbox holds each gear going up with Powertrain=1, 1 to 3 (the tab).\n"
                         L"; Top1, Top2 ...: each gear's top in rad/s, learned where the game's pull reaches nothing floored (2a + 5 until then).\n"
@@ -972,6 +977,8 @@ static void ReadIni(GaugeSettings &s)
     s.backToA = IniInt(L"BackToA", s.backToA, ini);
     s.input = IniInt(L"Input", s.input, ini);
     s.powertrain = IniBool(L"Powertrain", s.powertrain, ini);
+    s.roadLoad = IniBool(L"RoadLoad", s.roadLoad, ini);
+    s.roadCdA = IniFloat(L"RoadCdA", s.roadCdA, ini);
     s.engineShare = IniInt(L"EngineShare", s.engineShare, ini);
     s.creep = IniBool(L"Creep", s.creep, ini);
     s.rollWarnDeg = IniFloat(L"RollWarnDeg", s.rollWarnDeg, ini);
@@ -1183,6 +1190,34 @@ static int GearTopRead(const char *key, float tops[kMaxGears])
     return n;
 }
 
+// Base1 .. Base<n>: each numbered gear's acceleration at the game's own pull, floored, at its pull's peak, in m/s²
+// (BaseLearnStep), for the road load; 0 for a gear without one. The number read.
+static int GearBaseRead(const char *key, float bases[kMaxGears])
+{
+    int n = 0;
+    for (int g = 0; g < kMaxGears; g++) bases[g] = 0.0f;
+    if (!key[0]) return 0;
+    for (int g = 1; g < kMaxGears; g++)
+    {
+        wchar_t name[16], buf[24] = {};
+        swprintf_s(name, L"Base%d", g);
+        if (GetPrivateProfileStringW(kSetupSections[kSetupGearbox], name, L"", buf, 24, SetupFile(kSetupGearbox, key).c_str()) == 0) continue;
+        const float v = (float)_wtof(buf);
+        if (isfinite(v) && v > 0.0f && v < 100.0f) bases[g] = v, n++;
+    }
+    return n;
+}
+
+static void GearBaseWrite(const char *key, int gear, float base)
+{
+    if (!key[0] || gear < 1 || gear >= kMaxGears) return;
+    wchar_t name[16], buf[24];
+    swprintf_s(name, L"Base%d", gear);
+    swprintf_s(buf, L"%.3f", base);
+    SetupBegin(kSetupGearbox, Wide(key));
+    WritePrivateProfileStringW(kSetupSections[kSetupGearbox], name, buf, SetupFile(kSetupGearbox, key).c_str());
+}
+
 static void GearTopWrite(const char *key, int gear, float top)
 {
     if (!key[0] || gear < 1 || gear >= kMaxGears) return;
@@ -1290,6 +1325,15 @@ static bool ReadTruckIni(const char *key, GaugeSettings &s)
     if (has(L"SpeedMax")) s.speedMax = IniFloatIn(section.c_str(), L"SpeedMax", s.speedMax, ini);
     if (has(L"BoostMax")) s.boostMax = IniFloatIn(section.c_str(), L"BoostMax", s.boostMax, ini);
     if (has(L"BoostProfile")) s.boostProfile = (int)GetPrivateProfileIntW(section.c_str(), L"BoostProfile", s.boostProfile, ini.c_str());
+    // the truck's own drag area, by hand in its file: not one of the scales, so it does not make them the truck's own
+    {
+        wchar_t buf[16] = {};
+        if (GetPrivateProfileStringW(section.c_str(), L"RoadCdA", L"", buf, 16, ini.c_str()) > 0)
+        {
+            const float v = (float)_wtof(buf);
+            if (isfinite(v) && v > 0.0f) s.roadCdA = v < 0.3f ? 0.3f : v > 20.0f ? 20.0f : v;
+        }
+    }
     if (any) SettingsClamp(s);
     return any;
 }
@@ -2309,7 +2353,8 @@ static void LogSettings(const GaugeSettings &s)
         : s.gearbox == kGearboxModel ? L"the mod's automatic in A (Gearbox=1), the game's shifter yours, its reverse on the brake refused"
                                      : L"the game's own (Gearbox=1 or 2 in the tab's Gearbox section hand it to the mod)",
         s.requireClutch, s.requireGearHeld, s.skipNeutral, s.downStaysForward, s.ignoreShifter, s.backToA);
-    if (s.powertrain) Log(L"settings: powertrain on: the truck pulls with %d percent of the mod's engine and converter, through the game's torque factor", s.engineShare);
+    if (s.powertrain) Log(L"settings: powertrain on: the truck pulls with %d percent of the mod's engine and converter, through the game's torque factor; road load %s",
+                          s.engineShare, s.roadLoad ? L"on (the air's drag, once each gear's pull is learned)" : L"off");
     else Log(L"settings: powertrain off: the truck pulls with the game's own engine (Powertrain=1 hands it the mod's)");
     Log(s.creep ? L"settings: creep on: an idling truck on an automatic moves, through the converter to walking pace; for now not in a gear picked by hand"
                 : L"settings: creep off: an idling truck in gear stands, as in the game");
@@ -2525,6 +2570,13 @@ struct TruckWatch
     bool gearHoldOwn;           // [Gearbox:<key>] holds GearHold, which is gearHold; else the truck's class has it
     float gearHold;
     float gearTop[kMaxGears];   // each numbered gear's top learned where the game's pull reaches nothing (GearTopStep), 0 not yet; kept in the gearbox's file
+    float gearBase[kMaxGears];  // each numbered gear's acceleration at the game's own pull, floored (BaseLearnStep), 0 not yet; kept in the gearbox's file
+    BaseLearn baseLearn;
+    float accel, speedWas;      // the truck's acceleration over the ground, smoothed over kAccelSmooth, and the speed it goes from
+    bool accelSeen;
+    float roadShare, roadLoadA; // the road load taken off on the last pass, as a share of the pull and as m/s², for the probe
+    PullBins pull;              // part 1's probe: the game's own pull by x in the gear being measured
+    float pullPeak[kMaxGears];  // the most acceleration measured in each gear this start
     GearTopLearn topLearn;      // the plateau being watched
     uint64_t gearboxVehicle;
     uint64_t gearboxWhyVehicle; // the truck the failed name read was told for (once a truck)
@@ -2650,6 +2702,9 @@ static void GearboxLook(TruckWatch &w, const TruckMemory &m, const TruckRaw &raw
     w.gearHoldOwn = GearHoldRead(key, w.gearHold);
     w.topLearn = GearTopLearn{};
     const int tops = GearTopRead(key, w.gearTop);
+    const int bases = GearBaseRead(key, w.gearBase);
+    w.baseLearn = BaseLearn{};
+    if (bases) Log(L"gearbox: %d of its gears' pull at the game's own torque learned before (its file in Gauges\\gearboxes): the road load goes by them", bases);
     if (tops) Log(L"gearbox: %d of its gears' tops learned before (its file in Gauges\\gearboxes): the limiter and the floored points go by them", tops);
     wchar_t whose[96];
     if (w.gearHoldOwn) wcscpy_s(whose, L"its own (its file in Gauges\\gearboxes)");
@@ -4266,6 +4321,58 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 if (lockSaid[i] == kLockOn || lockSaid[i] == kLockOff) Log(L"locks: %s %s by the mod's key", lockName[i], lockSaid[i] == kLockOn ? L"on" : L"off");
                 else if (lockSaid[i] == kLockCleared) Log(L"locks: the game cleared %s on this truck; it may not have the upgrade", lockName[i]);
         }
+        // the road load's ground (the game pull and road load brief): the truck's acceleration over the ground, each
+        // gear's pull at the game's own torque learned floored on flat ground, and with the probe the game's pull by x
+        {
+            const float v = isfinite(raw.speed) ? raw.speed : 0.0f;
+            if (w.accelSeen && dt > 0.0f) w.accel += ((v - w.speedWas) / dt - w.accel) * (1.0f - expf(-dt / kAccelSmooth));
+            else w.accel = 0.0f;
+            w.speedWas = v;
+            w.accelSeen = true;
+            const int g = raw.gearEngaged;
+            const float top = g >= 1 ? TruckGearTop(raw, g) : 0.0f, groundX = top > 0.0f && w.gearbox.grip > 0.0f ? w.gearbox.grip * fmaxf(v, 0.0f) / top : 0.0f;
+            const float pedalNow = TruckPedal(raw);
+            const bool gripping = w.gearbox.grip > 0.0f && TruckDrivenSpin(raw) <= w.gearbox.grip * fmaxf(v, 0.0f) * kSlipShare + kSlipSpare;
+            const bool flat = w.tilt.running && fabsf(w.tilt.pitchDeg) <= kBaseLearnPitch;
+            const bool clean = g >= 1 && g < kMaxGears && TruckEngineOn(raw) && gripping && flat && TruckBrake(raw) <= 0.0f && !raw.handbrake && v > 1.0f && !testing;
+            float learned = 0.0f;
+            if (w.gearboxKey[0] && BaseLearnStep(w.baseLearn, g, clean, w.accel, raw.torqueFactor, pedalNow, groundX, w.roadLoadA, dt, learned))
+            {
+                const float was = w.gearBase[g];
+                w.gearBase[g] = was > 0.0f ? was + (learned - was) * 0.3f : learned;
+                if (!(was > 0.0f) || fabsf(w.gearBase[g] - was) > 0.05f * was)
+                {
+                    GearBaseWrite(w.gearboxKey, g, w.gearBase[g]);
+                    Log(L"road load: gear %d's pull at the game's own torque, floored: %.3f m/s2 (from %.3f; its file in Gauges\\gearboxes)", g, w.gearBase[g], was);
+                }
+            }
+            // part 1's probe: the game's own pull (no hand) floored in a numbered gear; one line once the gear has gone
+            // past kPullDoneAt, or when it changes with enough bins filled
+            if (probe)
+            {
+                const bool measuring = clean && !w.hand.on && pedalNow >= kBaseLearnPedal;
+                if (g != w.pull.gear || (measuring && groundX >= kPullDoneAt))
+                {
+                    float most = 0.0f, mostX = 0.0f, fall = 0.0f;
+                    const int bins = PullBinsFit(w.pull, most, mostX, fall);
+                    if (bins >= 8 && w.pull.gear >= 1 && w.pull.gear < kMaxGears)
+                    {
+                        w.pullPeak[w.pull.gear] = fmaxf(w.pullPeak[w.pull.gear], most);
+                        char row[400] = "", peaks[400] = "";
+                        for (int i = 0; i < kPullBins; i++)
+                            if (w.pull.time[i] > 0.0f)
+                                snprintf(row + strlen(row), sizeof row - strlen(row), " %.2f %.2f,", kPullBinFrom + i * kPullBinWidth, w.pull.sum[i] / w.pull.time[i]);
+                        for (int i = 1; i < kMaxGears; i++)
+                            if (w.pullPeak[i] > 0.0f) snprintf(peaks + strlen(peaks), sizeof peaks - strlen(peaks), " %d: %.2f", i, w.pullPeak[i]);
+                        Log(L"pull: gear %d, MaxDeltaAngVel %.3f, acceleration by x:%S (the most %.2f m/s2 at %.2f); the fall past it fitted %.2f (kGamePullFall %.1f); "
+                            L"the peaks so far by gear:%S", w.pull.gear, w.engine.deltaAngVel, row, most, mostX, fall, kGamePullFall, peaks);
+                    }
+                    w.pull = PullBins{};
+                    w.pull.gear = g;
+                }
+                if (measuring) PullBinsAdd(w.pull, groundX, w.accel, dt);
+            }
+        }
         // the engine's torque handed to the game (Powertrain): the torque factor for the engine's torque at the needle's
         // speed and the converter's ratio over the game's curve at the wheels' share of the gear's top, while the engine
         // runs and no pull test is armed or running; the game's own share given back once it stops
@@ -4282,6 +4389,14 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             w.liftX = x;
             w.liftRoof = locked ? SpinRoof(TorqueRoof(autoClass), x) : LiftRoof(TorqueRoof(autoClass), x);
             const float ratio = w.take.driving && !GearboxManual(w) ? w.gearbox.ratio : 1.0f;
+            // the road load (RoadLoad): the air's drag over this gear's learned pull at this pedal, taken off before the
+            // fall's make-up; nothing standing, in reverse, with the foot off, or before the gear's pull is learned
+            const int roadGear = raw.gearEngaged;
+            const float roadPedal = TruckPedal(raw);
+            w.roadLoadA = s.roadLoad && w.mass > 0.0f ? RoadLoadAccel(RoadCdA(w.mass, s.roadCdA), ground, w.mass) : 0.0f;
+            w.roadShare = s.roadLoad && roadGear >= 1 && roadGear < kMaxGears && ground >= kStandStill
+                              ? RoadLoadShare(w.roadLoadA, roadPedal, w.gearBase[roadGear]) : 0.0f;
+            if (!want || !(w.roadShare > 0.0f)) w.roadShare = w.roadLoadA = 0.0f; // none taken off: none to add back when learning
             const bool handWas = w.hand.on;
             const float gameWas = w.hand.game;
             // held back to the engine's Torque share where one is set; the lift's roof is the truck's class's, fading over
@@ -4289,7 +4404,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             // engaged gear) at once
             TorqueGive(m, w.refs, true, TorqueHandStep(w.hand, want, w.refs.action, w.refs.vehicle, raw.torqueFactor,
                                                  TorqueHeld(TorqueBlend(fminf(TorqueLift(w.power.curve, w.power.cold * w.power.boost, TruckPedal(raw), ratio, x,
-                                                                                         TorqueRoof(autoClass)),
+                                                                                         TorqueRoof(autoClass), w.roadShare),
                                                                               locked ? kSpinLiftMost : kTorqueFactorMost),
                                                                         s.engineShare / 100.0f),
                                                             w.profile.torque),
@@ -4497,7 +4612,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                   TempZone(w.temp) != w.probedZone || DamageAdding(w.damage, s) != w.probedAdding ||
                   w.boost.flutters + w.boost.blowOffs != w.probedLifts))
     {
-        char first[640], second[1024], third[512], fourth[256], fifth[640], sixth[1024], seventh[400], eighth[640], ninth[1024], tenth[400], eleventh[320], twelfth[256];
+        char first[640], second[1024], third[512], fourth[256], fifth[640], sixth[1024], seventh[400], eighth[900], ninth[1024], tenth[400], eleventh[320], twelfth[256];
         // while the mod's gearbox has the truck the letter is the model's, as the cluster's (the flag is down, so the
         // game's own rule would read the first gear's factor as L+)
         TruckProbeText(raw, world, w.byWay, first, sizeof first, second, sizeof second, w.take.driving && w.pos.running ? GearboxPosLetter(w.pos.pos) : nullptr);
@@ -4516,6 +4631,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         Log(L"probe: %S", seventh);
         PowertrainProbeText(raw, w.power, w.tach.rpm, w.hand.on, w.hand.written, w.hand.game, eighth, sizeof eighth, w.hand.on ? w.liftX : -1.0f, w.liftRoof,
                             w.hand.heldBack);
+        if (s.roadLoad)
+            snprintf(eighth + strlen(eighth), sizeof eighth - strlen(eighth), " | road load %.2f of the pull (%.3f m/s2, CdA %.1f, gear %d's pull %.3f)", w.roadShare,
+                      w.roadLoadA, RoadCdA(w.mass, s.roadCdA), raw.gearEngaged, raw.gearEngaged >= 1 && raw.gearEngaged < kMaxGears ? w.gearBase[raw.gearEngaged] : 0.0f);
         Log(L"probe: %S", eighth);
         const bool manual = GearboxManual(w);
         if (manual)
@@ -5435,7 +5553,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
            a.springScale == b.springScale && a.dampingScale == b.dampingScale && a.extraTravel == b.extraTravel &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
-           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.input == b.input && a.powertrain == b.powertrain && a.engineShare == b.engineShare && a.creep == b.creep;
+           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep;
 }
 
 static int g_failed = 0;
@@ -5467,7 +5585,7 @@ int wmain(int argc, wchar_t **argv)
     Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.hotDamageFrom == kTempRed && d.coldDamage == 5.0f && d.stallDamage == 5.0f && d.clutchBurn && d.clutchHeat == 60.0f &&
               d.springScale == 1.0f && d.dampingScale == 1.0f && d.extraTravel == 0.0f,
           "defaults: the radiator's full airflow from 30 km/h, engine damage on from the red zone, 10 percent a minute for the heat and 5 for the cold");
-    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.ignoreShifter && d.backToA == 0 && d.input == kInputWheel && !d.powertrain && d.engineShare == 50 && d.creep && !d.dieselFlutter,
+    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.ignoreShifter && d.backToA == 0 && d.input == kInputWheel && !d.powertrain && !d.roadLoad && d.roadCdA == 0.0f && d.engineShare == 50 && d.creep && !d.dieselFlutter,
           "defaults: the oil as a second needle, warm after 5 minutes, too hot from 120 C; the standard turbo, a diesel's lift without the flutter; the creep on");
 
     // keys the mod does not know, in its own section and in another one
@@ -5527,6 +5645,8 @@ int wmain(int argc, wchar_t **argv)
     c.backToA = 12;
     c.input = kInputKeys;
     c.powertrain = true;
+    c.roadLoad = true;
+    c.roadCdA = 2.5f;
     c.engineShare = 80;
     c.creep = false;
     c.oilWarmUpMinutes = 12.5f;
@@ -5541,7 +5661,7 @@ int wmain(int argc, wchar_t **argv)
                             c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springScale != d.springScale && c.dampingScale != d.dampingScale && c.extraTravel != d.extraTravel && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
                             c.demo != d.demo && c.probe != d.probe && c.keepLogs != d.keepLogs && c.soundVolume != d.soundVolume && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
-                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.input != d.input && c.powertrain != d.powertrain && c.engineShare != d.engineShare && c.creep != d.creep;
+                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep;
     WriteIni(c);
     ReadIni(b);
     Check(allChanged, "ini: the test changes every setting from its default");
@@ -5562,7 +5682,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 118, "ini: the help text survives a write (118 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 121, "ini: the help text survives a write (121 comment lines)");
     // the HUD layouts (BRIEF_cluster_hud_layouts.md): 2 and 3 load and save, 4 is held to the strip, and Style and
     // FaceOpacity survive a trip through Spotter dials
     {
