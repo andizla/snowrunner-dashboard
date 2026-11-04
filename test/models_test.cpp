@@ -3913,7 +3913,15 @@ int main(int argc, char **argv)
         base[5] = 0.0f;
         BaseFold(base, top, 10, use, k, spread, folded);
         const bool alone = !folded && use[10] == 0.0f && use[4] == 1.5f;
-        Check(fills && apart && alone, "road load fold: two gears with the same a_base × top give the others K / top; 20 % apart, or one gear alone, by gear only");
+        // L- and L floored (the game's gear 1 at 0.20 and 0.45) add nothing to gear 1; L+ and the 1st (1.00) do (review F1)
+        const bool plain = !BaseLearnPlainPower(1, 0.2f) && !BaseLearnPlainPower(1, 0.45f) && BaseLearnPlainPower(1, 1.0f) && BaseLearnPlainPower(1, 0.0f) &&
+                           BaseLearnPlainPower(2, 0.2f);
+        BaseLearn low = {};
+        float lowGot = 0.0f, lowAdded = 0.0f, lowSum = 0.0f;
+        for (int i = 0; i < 80; i++)
+            BaseLearnStep(low, 1, BaseLearnPlainPower(1, 0.2f), 0.5f * 1.2f * GamePull(0.5f), 1.2f, 1.0f, 0.5f, 0.0f, 9.0f, 0.05f, lowGot, &lowAdded), lowSum += lowAdded;
+        const bool lowNothing = lowSum == 0.0f && low.time[1] == 0.0f;
+        Check(fills && apart && alone && plain && lowNothing, "road load fold: two gears with the same a_base × top give the others K / top; 20 % apart, or one gear alone, by gear only; L- floored adds nothing to gear 1");
     }
     // part 1's probe: a synthetic acceleration of the game's own pull shape gives its most where the pull peaks and
     // its fall past it about kGamePullFall

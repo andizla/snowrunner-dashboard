@@ -4361,7 +4361,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             }
             float learned = 0.0f, added = 0.0f;
             const int done = baseTruck[0] && baseEngine[0]
-                                 ? BaseLearnStep(w.baseLearn, g, clean, w.accel, raw.torqueFactor, pedalNow, groundX, gradeSin, w.baseSettled, dt, learned, &added)
+                                 ? BaseLearnStep(w.baseLearn, g, clean && BaseLearnPlainPower(g, raw.powerFactor), w.accel, raw.torqueFactor, pedalNow, groundX, gradeSin, w.baseSettled, dt, learned, &added)
                                  : 0;
             if (probe && added > 0.0f && !done && g >= 1 && g < kMaxGears && GetTickCount64() - w.baseSaidAt[g] >= 10000)
             {
@@ -4383,7 +4383,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             // one figure per truck: a gear with none learned goes by the learned gears' a_base × top over its own top
             if (fold)
             {
-                const int gears = TruckTopGear(raw);
+                // H too, the gear over the top numbered one, where the game gives it a top: on a highway the drag is there (review N1)
+                const int gears = TruckTopGear(raw) + 1 < kMaxGears && TruckGearTop(raw, TruckTopGear(raw) + 1) > 0.0f ? TruckTopGear(raw) + 1 : TruckTopGear(raw);
                 float tops[kMaxGears] = {};
                 for (int i = 1; i <= gears && i < kMaxGears; i++) tops[i] = TruckGearTop(raw, i);
                 float k = 0.0f, spread = 0.0f;
@@ -4394,7 +4395,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                     char row[400] = "";
                     for (int i = 1; i <= gears && i < kMaxGears; i++)
                         if (w.gearBase[i] > 0.0f && tops[i] > 0.0f) snprintf(row + strlen(row), sizeof row - strlen(row), " %d: %.2f,", i, w.gearBase[i] * tops[i]);
-                    Log(L"road load: the learned gears' pull × top:%S spread %.0f %%: %s", row, spread * 100.0f,
+                    Log(L"road load: the learned gears' pull x top:%S spread %.0f %%: %s", row, spread * 100.0f,
                         folded ? L"the gears not learned go by their mean over their own top" : L"over 15 %, so each gear goes by its own only");
                 }
             }

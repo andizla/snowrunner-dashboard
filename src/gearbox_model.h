@@ -23,6 +23,10 @@ enum { kPosA, kPosGear, kPosN, kPosR, kPosH, kPosLowMinus, kPosLow, kPosLowPlus,
 // drive through L- and L+ with Gearbox=0 confirms them in the probe's SetPowerFactor line (review 7, R8).
 static const float kLowRangePower[3] = { 0.20f, 0.45f, 1.00f };
 static const float kLowMinusUnder = 0.325f, kLowUnder = 0.725f; // a factor in gear 1 under these is L-, and L (truck.h)
+// The road load learns gear 1 only at the plain power: L and L- are the game's gear 1 at 0.45 and 0.20, with another
+// pull and top, and in gear 1's sums they would skew its a_base and, through the fold, K (review F1). The test
+// GearboxPosTake uses.
+inline bool BaseLearnPlainPower(int gear, float power) { return gear != 1 || !(power > 0.0f && power < kLowUnder); }
 // What a shift without the clutch brings the truck's stall seconds to (vehicle + 0x11C): the game kills an engine there
 // from 1.4 on (SMT writes 5 at once).
 static const float kStallSeconds = 1.5f;
