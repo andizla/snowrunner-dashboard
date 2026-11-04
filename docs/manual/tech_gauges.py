@@ -1233,7 +1233,11 @@ game's own stall seconds; whether the game's stalling notice shows for it is unc
 taken as 0.2 and 1.0 until a truck with them is driven at Gearbox=0; L is 0.45 as driven. On Windows 10 the NEXT GEN menu may not draw
 while ReShade loads the .asi files as add-ons: turn that off in ReShade's Add-ons tab (one player's report, under investigation).</li></ul>
 <h3>Changed in the next version</h3>
-<ul><li>Up from L+ stays in the low range; A, a gear key or RangeHigh leave it, so the low range never goes to D by itself.
+<ul><li>The log stays open and is written out every half second, so <code>Probe=1</code> no longer opens the file 70 times a second:
+one append handle that shares writing (so CrashLineOut's own handle still gets in), a 64 KB buffer flushed on every line that is not a probe line
+and from the mod's loop half a second after the last flush; the crash and exit writers flush first where the lock is free. An outside kill loses
+at most half a second of probe lines.</li>
+<li>Up from L+ stays in the low range; A, a gear key or RangeHigh leave it, so the low range never goes to D by itself.
 Back from the map, the garage or the viewer the gearbox keeps its position (L+ came back as a 1st, D as a held gear).</li>
 <li>Sequential's own shifts go back to D, which picks the gear: near the red zone with the foot on, and before a
 stall with the foot on or off (0.2 s under the brake). Under the brake D comes down to the speed's gear at once, skipping gears.</li>
