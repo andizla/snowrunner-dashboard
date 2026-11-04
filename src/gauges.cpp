@@ -70,8 +70,8 @@ static volatile LONG g_engineTorqueAsked = 0, g_engineTorquePercent = 0; // the 
 static SRWLOCK g_viewLock = SRWLOCK_INIT;
 static GaugeView g_view = {};
 
-// The log is rewritten at each game start. The mod's thread and the game's render thread (the overlay) both write it: one at a time,
-// as the file is opened for one writer and a second open would fail and lose its line.
+// The log is rewritten at each game start. The mod's thread and the game's threads (the overlay, the truck update) all
+// write it: one at a time, into one buffer and one handle (LogV).
 static SRWLOCK g_logLock = SRWLOCK_INIT;
 static bool g_logStarted = false; // true once this start's first line is in
 static std::wstring g_logKept;    // where the last start's log was kept, "" for nowhere
@@ -170,24 +170,182 @@ static LogsCapResult LogsCap(const std::wstring &folder, int keep, unsigned long
     return r;
 }
 
+// The log kept open (BRIEF_log_kept_open.md): with Probe=1 the mod logs about 70 lines a second, and an open, a write
+// and a close for each, in Program Files where a scanner may look at each close, is the likeliest hitch of the 4
+// November drive. The first line truncates as before; then one handle appends (FILE_APPEND_DATA, so another handle's
+// line is never written over) and shares writing, so CrashLineOut's own handle still gets in (the Reviewer's point 1).
+// Lines gather in a 64 KB buffer: a line that is not a probe line goes out at once, probe lines at the latest
+// kLogFlushMs later, from LogV or the mod's loop (LogTick). A write that fails closes the handle, and each line after
+// it opens, appends and closes as before. What an outside kill or a fault inside LogV loses: at most kLogFlushMs of
+// probe lines.
+static const size_t kLogBuffer = 64 * 1024;
+static const ULONGLONG kLogFlushMs = 500;
+static HANDLE g_logFile = INVALID_HANDLE_VALUE;
+static char g_logBuf[kLogBuffer];
+static size_t g_logUsed = 0;
+static ULONGLONG g_logFlushedAt = 0;
+static bool g_logOneByOne = false; // a write failed: open, append and close for each line
+
+static HANDLE LogOpenAppend()
+{
+    return CreateFileW((g_dir + L"Gauges.log").c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS,
+                       FILE_ATTRIBUTE_NORMAL, nullptr);
+}
+
+static bool LogWriteAll(HANDLE f, const char *data, size_t size)
+{
+    while (size)
+    {
+        DWORD wrote = 0;
+        if (!WriteFile(f, data, (DWORD)size, &wrote, nullptr) || wrote == 0) return false;
+        data += wrote;
+        size -= wrote;
+    }
+    return true;
+}
+
+// Under g_logLock: the buffer to the file.
+// Under g_logLock: data to the file through the handle kept open, or where there is none (it failed, or this start's
+// first line came before it, as the second copy's does: review F1) through an open, an append and a close, which from
+// then on every line takes.
+static void LogOut(const char *data, size_t size)
+{
+    if (g_logFile != INVALID_HANDLE_VALUE && LogWriteAll(g_logFile, data, size)) return;
+    if (g_logFile != INVALID_HANDLE_VALUE) CloseHandle(g_logFile);
+    g_logFile = INVALID_HANDLE_VALUE;
+    g_logOneByOne = true;
+    const HANDLE f = LogOpenAppend();
+    if (f == INVALID_HANDLE_VALUE) return;
+    LogWriteAll(f, data, size);
+    CloseHandle(f);
+}
+
+// Under g_logLock: the buffer to the file.
+static void LogFlushHeld()
+{
+    g_logFlushedAt = GetTickCount64();
+    if (g_logUsed) LogOut(g_logBuf, g_logUsed);
+    g_logUsed = 0;
+}
+
+// The buffer out where the lock is free, for the crash, fault and exit lines and the unload: a fault inside LogV, or
+// a thread ended holding the lock, must not hang them. Held, nothing is flushed, and the line still lands.
+static void LogFlushTry()
+{
+    if (!TryAcquireSRWLockExclusive(&g_logLock)) return;
+    LogFlushHeld();
+    ReleaseSRWLockExclusive(&g_logLock);
+}
+
+// From the mod's loop (every 50 ms): probe lines followed by silence (a menu, the map) go out kLogFlushMs later.
+static void LogTick()
+{
+    AcquireSRWLockExclusive(&g_logLock);
+    if (g_logUsed && GetTickCount64() - g_logFlushedAt >= kLogFlushMs) LogFlushHeld();
+    ReleaseSRWLockExclusive(&g_logLock);
+}
+
 static void LogV(const wchar_t *fmt, va_list ap)
 {
     AcquireSRWLockExclusive(&g_logLock);
 #ifndef GAUGES_SETTINGS_TEST
     if (!g_logStarted) g_logKept = LogKeepLast(g_dir);
 #endif
-    FILE *f = nullptr;
-    if (_wfopen_s(&f, (g_dir + L"Gauges.log").c_str(), g_logStarted ? L"a, ccs=UTF-8" : L"w, ccs=UTF-8") == 0 && f)
+    if (!g_logStarted)
     {
-        g_logStarted = true;
+        // a fresh log each start, with the byte order mark as the "w, ccs=UTF-8" open wrote it
+        const HANDLE f = CreateFileW((g_dir + L"Gauges.log").c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, CREATE_ALWAYS,
+                                     FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (f != INVALID_HANDLE_VALUE)
+        {
+            LogWriteAll(f, "\xEF\xBB\xBF", 3);
+            CloseHandle(f);
+            g_logStarted = true;
+            g_logFile = LogOpenAppend();
+            g_logOneByOne = g_logFile == INVALID_HANDLE_VALUE;
+            g_logFlushedAt = GetTickCount64();
+        }
+    }
+    if (g_logStarted)
+    {
         SYSTEMTIME t;
         GetLocalTime(&t);
-        fwprintf(f, L"%02u:%02u:%02u ", t.wHour, t.wMinute, t.wSecond);
-        vfwprintf(f, fmt, ap);
-        fputwc(L'\n', f);
-        fclose(f);
+        wchar_t room[2048];
+        std::wstring big;
+        int n = _snwprintf_s(room, _countof(room), _TRUNCATE, L"%02u:%02u:%02u ", t.wHour, t.wMinute, t.wSecond);
+        const int head = n < 0 ? 0 : n;
+        // a copy of the arguments for each further pass over them (review N1)
+        va_list count, again;
+        va_copy(count, ap);
+        va_copy(again, ap);
+        n = _vsnwprintf_s(room + head, _countof(room) - head - 2, _TRUNCATE, fmt, ap);
+        const wchar_t *text = room;
+        int length = 0;
+        if (n >= 0) length = head + n;
+        else
+        {
+            // longer than the stack's room
+            const int need = _vscwprintf(fmt, count);
+            big.assign(room, head);
+            big.resize(head + (need > 0 ? need : 0) + 1);
+            if (need > 0) _vsnwprintf_s(&big[head], need + 1, _TRUNCATE, fmt, again);
+            length = head + (need > 0 ? need : 0);
+            text = big.c_str();
+        }
+        va_end(count);
+        va_end(again);
+        char line[6144];
+        std::string wide;
+        char *out = line;
+        int bytes = WideCharToMultiByte(CP_UTF8, 0, text, length, line, (int)sizeof line - 2, nullptr, nullptr);
+        if (bytes <= 0 && length > 0)
+        {
+            const int need = WideCharToMultiByte(CP_UTF8, 0, text, length, nullptr, 0, nullptr, nullptr);
+            wide.resize((size_t)(need > 0 ? need : 0) + 2);
+            bytes = need > 0 ? WideCharToMultiByte(CP_UTF8, 0, text, length, &wide[0], need, nullptr, nullptr) : 0;
+            out = &wide[0];
+        }
+        if (bytes < 0) bytes = 0;
+        out[bytes++] = '\r';
+        out[bytes++] = '\n';
+        if (!g_logOneByOne && g_logUsed + (size_t)bytes > kLogBuffer) LogFlushHeld();
+        // one by one (a pre-flush that failed included), or longer than the buffer: straight out
+        if (g_logOneByOne || g_logFile == INVALID_HANDLE_VALUE || (size_t)bytes > kLogBuffer) LogOut(out, (size_t)bytes);
+        else
+        {
+            memcpy(g_logBuf + g_logUsed, out, (size_t)bytes);
+            g_logUsed += (size_t)bytes;
+            // a line that is not a probe line goes out at once, so a crash or an exit after it never loses it
+            if (wcsncmp(fmt, L"probe:", 6) || GetTickCount64() - g_logFlushedAt >= kLogFlushMs) LogFlushHeld();
+        }
     }
     ReleaseSRWLockExclusive(&g_logLock);
+}
+
+// The crash, fault and exit lines' file (CrashLineSet), and their writer. CrashLineOut's handle shares writing with
+// the log's own, which stays open.
+static wchar_t g_crashLog[MAX_PATH + 16];
+// One line into Gauges.log, written with no heap and no lock: the time, then text.
+static void CrashLineOut(const char *text)
+{
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    char line[1400];
+    const int n = _snprintf_s(line, sizeof line, _TRUNCATE, "%02u:%02u:%02u %s\r\n", st.wHour, st.wMinute, st.wSecond, text);
+    const HANDLE f = CreateFileW(g_crashLog, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, 0, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return;
+    DWORD wrote = 0;
+    if (n > 0) WriteFile(f, line, (DWORD)n, &wrote, nullptr);
+    FlushFileBuffers(f);
+    CloseHandle(f);
+}
+
+// A crash, fault or exit line after the probe lines still in the buffer, where the log's lock is free (the Reviewer's
+// point 3): held, the line lands first and the probe lines after it.
+static void CrashLineFlushed(const char *text)
+{
+    LogFlushTry();
+    CrashLineOut(text);
 }
 
 void GaugeLog(const wchar_t *fmt, ...)
@@ -212,7 +370,6 @@ void GaugeLog(const wchar_t *fmt, ...)
 // handler also names C++ throws (0xE06D7363) and fast fails (0xC0000409). A game may throw as part of its work, so each
 // throw's return addresses are kept (the last one only, in static memory) and an exit line names the last throw too.
 static LPTOP_LEVEL_EXCEPTION_FILTER g_crashBefore = nullptr;
-static wchar_t g_crashLog[MAX_PATH + 16];
 static DWORD g_crashModThread = 0;
 static const LONG kFaultLines = 3;
 static const int kExitFrames = 8;
@@ -245,21 +402,6 @@ static int CrashFrames(void *const *frames, int count, char *out, size_t size, i
     return used;
 }
 
-// One line into Gauges.log, written with no heap and no lock: the time, then text.
-static void CrashLineOut(const char *text)
-{
-    SYSTEMTIME st;
-    GetLocalTime(&st);
-    char line[1400];
-    const int n = _snprintf_s(line, sizeof line, _TRUNCATE, "%02u:%02u:%02u %s\r\n", st.wHour, st.wMinute, st.wSecond, text);
-    const HANDLE f = CreateFileW(g_crashLog, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, 0, nullptr);
-    if (f == INVALID_HANDLE_VALUE) return;
-    DWORD wrote = 0;
-    if (n > 0) WriteFile(f, line, (DWORD)n, &wrote, nullptr);
-    FlushFileBuffers(f);
-    CloseHandle(f);
-}
-
 static const char *CrashThreadWord(DWORD thread) { return thread == g_crashModThread ? " (the mod's thread)" : ""; }
 
 // A fault's line. what: "crash" or "fault"; the place it was raised at, its thread and its callers.
@@ -273,7 +415,7 @@ static void CrashWrite(const EXCEPTION_POINTERS *e, const char *what, const char
                            CrashThreadWord(thread), after);
     if (used < 0) used = (int)strlen(text);
     CrashFrames(frames, CaptureStackBackTrace(1, kExitFrames, frames, nullptr), text, sizeof text, used);
-    CrashLineOut(text);
+    CrashLineFlushed(text);
 }
 
 // An exit's line: the call, its code, its callers, and the last C++ throw's callers where there was one.
@@ -293,7 +435,7 @@ static void ExitWrite(const char *call, DWORD code)
         const int n = _snprintf_s(text + used, sizeof text - used, _TRUNCATE, "; the last of %ld C++ throws, thread %lu, from ", (long)g_throws, (unsigned long)g_lastThrowThread);
         if (n > 0) CrashFrames(g_lastThrow, (int)thrown, text, sizeof text, used + n);
     }
-    CrashLineOut(text);
+    CrashLineFlushed(text);
 }
 
 static LONG WINAPI CrashLine(EXCEPTION_POINTERS *e)
@@ -4879,6 +5021,7 @@ static DWORD WINAPI Run(void *)
     for (;;)
     {
         Sleep(50);
+        LogTick(); // probe lines followed by silence go out within half a second
         // the settings tab: edits count on this pass and go into the ini once they have rested a second; "read the
         // ini again" takes the file as it is
         bool edited = false;
@@ -5529,6 +5672,7 @@ static DWORD WINAPI Run(void *)
 // does not register with it, and the gearbox hooks must outlive any unload.
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
 {
+    if (reason == DLL_PROCESS_DETACH) LogFlushTry(); // the ExitProcess hook's flush is the one that counts
     if (reason != DLL_PROCESS_ATTACH) return TRUE;
     DisableThreadLibraryCalls(inst);
     wchar_t path[MAX_PATH] = {};
@@ -6259,6 +6403,146 @@ int wmain(int argc, wchar_t **argv)
         RemoveDirectoryW(kept.c_str());
         RemoveDirectoryW((root + L"Gauges").c_str());
         RemoveDirectoryW(root.c_str());
+    }
+
+    // the log kept open (BRIEF_log_kept_open.md, with the Reviewer's addendum): the first line truncates; 10 000 probe
+    // lines and an ordinary one are all on disk in order once it returns; a probe line alone is out within 0.6 s by the
+    // loop's tick; a crash line through its own handle lands in its place after the probe lines, and still lands with
+    // the lock held; a failed write falls back to a line at a time. The time of 10 000 lines, kept open and as before
+    {
+        const std::wstring path = g_dir + L"Gauges.log";
+        auto file = [&]() {
+            std::string text;
+            const HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+            if (f == INVALID_HANDLE_VALUE) return text;
+            static char chunk[65536];
+            DWORD got = 0;
+            while (ReadFile(f, chunk, sizeof chunk, &got, nullptr) && got) text.append(chunk, got);
+            CloseHandle(f);
+            return text;
+        };
+        // a new start: the log closed and its first line not in yet
+        AcquireSRWLockExclusive(&g_logLock);
+        LogFlushHeld();
+        if (g_logFile != INVALID_HANDLE_VALUE) CloseHandle(g_logFile);
+        g_logFile = INVALID_HANDLE_VALUE;
+        g_logStarted = g_logOneByOne = false;
+        ReleaseSRWLockExclusive(&g_logLock);
+        Log(L"log test: the first line");
+        const std::string first = file();
+        const bool fresh = !first.compare(0, 3, "\xEF\xBB\xBF") && first.size() >= 26 && first.find("log test: the first line\r\n") == first.size() - 26 &&
+                           first.find('\n') == first.size() - 1 && g_logFile != INVALID_HANDLE_VALUE;
+        const ULONGLONG at = GetTickCount64();
+        LARGE_INTEGER freq, t0, t1, t2;
+        QueryPerformanceFrequency(&freq);
+        QueryPerformanceCounter(&t0);
+        for (int i = 0; i < 10000; i++) Log(L"probe: log test line %d", i);
+        Log(L"log test: after the probe lines");
+        QueryPerformanceCounter(&t1);
+        const std::string all = file();
+        bool inOrder = true;
+        size_t from = 0;
+        for (int i = 0; i < 10000 && inOrder; i++)
+        {
+            char want[48];
+            snprintf(want, sizeof want, "probe: log test line %d\r\n", i);
+            const size_t found = all.find(want, from);
+            inOrder = found != std::string::npos;
+            from = found + strlen(want);
+        }
+        inOrder = inOrder && all.find("log test: after the probe lines\r\n", from) != std::string::npos;
+        (void)at;
+        // 1 000 of the lines as before, an open, a write and a close for each (10 000 took the test nearly a minute here)
+        const std::wstring old = g_dir + L"logtimetest.log";
+        for (int i = 0; i < 1000; i++)
+        {
+            FILE *f = nullptr;
+            if (_wfopen_s(&f, old.c_str(), i ? L"a, ccs=UTF-8" : L"w, ccs=UTF-8") == 0 && f)
+            {
+                fwprintf(f, L"00:00:00 probe: log test line %d\n", i);
+                fclose(f);
+            }
+        }
+        QueryPerformanceCounter(&t2);
+        DeleteFileW(old.c_str());
+        const double keptMs = 1000.0 * (t1.QuadPart - t0.QuadPart) / freq.QuadPart, beforeMs = 1000.0 * (t2.QuadPart - t1.QuadPart) / freq.QuadPart;
+        printf("     log: 10 000 lines in %.0f ms kept open; 1 000 in %.0f ms opened and closed for each (%.2f ms a line)\n", keptMs, beforeMs, beforeMs / 1000.0);
+        // a probe line alone, then silence: not out at once, out within 0.6 s by the tick
+        Log(L"log test: flushed");
+        Log(L"probe: log test alone");
+        const bool notYet = file().find("probe: log test alone") == std::string::npos;
+        const ULONGLONG alone = GetTickCount64();
+        bool out = false;
+        while (!out && GetTickCount64() - alone < 600)
+        {
+            Sleep(50);
+            LogTick();
+            out = file().find("probe: log test alone\r\n") != std::string::npos;
+        }
+        const bool soon = notYet && out && GetTickCount64() - alone <= 600;
+        // a crash line in its place: after the probe lines in the buffer, before the next line
+        wcsncpy_s(g_crashLog, path.c_str(), _TRUNCATE);
+        Log(L"probe: log test before the crash");
+        CrashLineFlushed("crash: log test line");
+        Log(L"log test: after the crash");
+        std::string text = file();
+        const size_t before = text.find("probe: log test before the crash\r\n"), crash = text.find("crash: log test line\r\n"), after = text.find("log test: after the crash\r\n");
+        const bool inPlace = before != std::string::npos && crash != std::string::npos && after != std::string::npos && before < crash && crash < after;
+        // with the lock held (a fault inside LogV) the crash line lands anyway, and the probe line after it
+        Log(L"probe: log test held");
+        AcquireSRWLockExclusive(&g_logLock);
+        CrashLineFlushed("crash: log test line held");
+        ReleaseSRWLockExclusive(&g_logLock);
+        text = file();
+        const bool held = text.find("crash: log test line held\r\n") != std::string::npos && text.find("probe: log test held") == std::string::npos;
+        Log(L"log test: after held");
+        text = file();
+        const size_t heldProbe = text.find("probe: log test held\r\n");
+        const bool heldThen = heldProbe != std::string::npos && heldProbe > text.find("crash: log test line held\r\n");
+        // a write that fails (a handle that cannot write): closed, the line tried the old way, and each line after it so
+        AcquireSRWLockExclusive(&g_logLock);
+        const HANDLE good = g_logFile;
+        g_logFile = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+        ReleaseSRWLockExclusive(&g_logLock);
+        Log(L"log test: a failed write");
+        const bool fellBack = g_logOneByOne && g_logFile == INVALID_HANDLE_VALUE;
+        Log(L"log test: one by one");
+        text = file();
+        const bool oneByOne = fellBack && text.find("log test: a failed write\r\n") != std::string::npos && text.find("log test: one by one\r\n") != std::string::npos;
+        // started with no handle, as the second copy is (its Run sets g_logStarted before its one line; review F1): the
+        // line lands, a line at a time
+        AcquireSRWLockExclusive(&g_logLock);
+        g_logFile = INVALID_HANDLE_VALUE;
+        g_logOneByOne = false;
+        ReleaseSRWLockExclusive(&g_logLock);
+        Log(L"log test: no handle, as the second copy");
+        Log(L"probe: log test no handle");
+        text = file();
+        const bool noHandle = g_logOneByOne && text.find("log test: no handle, as the second copy\r\n") != std::string::npos &&
+                              text.find("probe: log test no handle\r\n") != std::string::npos;
+        AcquireSRWLockExclusive(&g_logLock);
+        g_logFile = good;
+        g_logOneByOne = false;
+        ReleaseSRWLockExclusive(&g_logLock);
+        // a line over the 2048 characters of the stack's room, and one over the 64 KB buffer, whole (review N2)
+        std::wstring longText(3000, L'x'), hugeText(70000, L'y');
+        longText += L" end of the long line";
+        hugeText += L" end of the huge line";
+        Log(L"log test long: %s", longText.c_str());
+        Log(L"probe: log test huge %s", hugeText.c_str());
+        Log(L"log test: after the long lines");
+        text = file();
+        const std::string longWant = "log test long: " + std::string(3000, 'x') + " end of the long line\r\n",
+                          hugeWant = "probe: log test huge " + std::string(70000, 'y') + " end of the huge line\r\n";
+        const size_t longAt = text.find(longWant), hugeAt = text.find(hugeWant), afterLong = text.find("log test: after the long lines\r\n");
+        const bool longLines = longAt != std::string::npos && hugeAt != std::string::npos && afterLong != std::string::npos && longAt < hugeAt && hugeAt < afterLong;
+        Check(fresh && inOrder && soon && inPlace && held && heldThen && oneByOne && noHandle && longLines,
+              "log: kept open, the first line truncates; 10 000 probe lines and an ordinary one on disk in order once it returns; a probe line alone out within "
+              "0.6 s by the tick; a crash line in its place after the probe lines, and with the lock held before them; a failed write, or no handle (the "
+              "second copy), goes a line at a time; lines over 2048 characters and over 64 KB whole and in order");
+        if (!(fresh && inOrder && soon && inPlace && held && heldThen && oneByOne && noHandle && longLines))
+            printf("     log parts: fresh %d, in order %d, soon %d, in place %d, held %d then %d, one by one %d, no handle %d, long lines %d\n", fresh, inOrder, soon, inPlace,
+                   held, heldThen, oneByOne, noHandle, longLines);
     }
 
     // the maps' sections: the regions' written into an ini that has none; a map takes its own section, else its

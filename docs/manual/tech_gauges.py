@@ -1260,6 +1260,10 @@ while ReShade loads the .asi files as add-ons: turn that off in ReShade's Add-on
 <h3>Changed in the next version</h3>
 <ul><li>Air drag (<code>RoadLoad</code>, off by default): the air's drag taken off the engine's pull against each gear's learned pull at the game's own torque; rolling resistance is Tire Inflation's. With the probe, a "pull:" line measures the game's own pull by x.</li>
 <li>Creep in a hand-picked gear (<code>CreepManual</code>, off by default): the governor, the holding part and at Gearbox=2 the stall are reached again, R and the low range on the game's shifter through the converter; in Sequential the gearbox goes back to D first.</li>
+<li>The log stays open and is written out every half second, so <code>Probe=1</code> no longer opens the file 70 times a second:
+one append handle that shares writing (so CrashLineOut's own handle still gets in), a 64 KB buffer flushed on every line that is not a probe line
+and from the mod's loop half a second after the last flush; the crash and exit writers flush first where the lock is free. An outside kill loses
+at most half a second of probe lines.</li>
 <li>Up from L+ stays in the low range; A, a gear key or RangeHigh leave it, so the low range never goes to D by itself.
 Back from the map, the garage or the viewer the gearbox keeps its position (L+ came back as a 1st, D as a held gear).</li>
 <li>Sequential's own shifts go back to D, which picks the gear: near the red zone with the foot on, and before a
