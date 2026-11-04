@@ -106,6 +106,7 @@ The Gameplay tab of the NEXT GEN menu edits every setting while you play. F2 ope
 | Pad buttons that do the same | `PadToggle`, as `LB+DPadUp` | None |
 | For work on the mod: demo values whenever no truck is driven, in menus and on loading screens too | `Demo` | off |
 | For work on the mod: a log of the values read from the game | `Probe` | off |
+| How many of the last starts' logs `Gauges\logs` keeps, at most 500 MB of them; 0 keeps all | `KeepLogs` | 20 |
 
 The scales by class:
 
@@ -271,7 +272,7 @@ Delete `Gauges.asi`, `Gauges.ini`, `Gauges.log` and the folder `Gauges` (the set
 - `Damage` has not been tried in co-op. Leave it off there.
 - On a PC whose Windows proxy settings are on automatic detection the first frame can come late by half a minute: ReShade checks for its own update at the start and waits on that lookup.
 - When another program holds the game's swap chain in a way the mod cannot draw on, `Gauges.log` names that program.
-- If something does not work, `Gauges.log` in `Sources\Bin` says what the mod found and did. `GrabDumps.bat` from the zip, run in `Sources\Bin` with the game closed, gathers the logs, the ini files and the crash dump into one zip beside itself, for a report. It is the log of the game's last start; at each start the one before moves into `Gauges\logs`, named by the date and time that start began (`Gauges 2026-10-12 21-29-11.log`), so none is lost. With `Probe=1` a long drive's log runs to 20 or 30 MB, and the folder is never emptied by the mod.
+- If something does not work, `Gauges.log` in `Sources\Bin` says what the mod found and did. `GrabDumps.bat` from the zip, run in `Sources\Bin` with the game closed, gathers the logs, the ini files and the crash dump into one zip beside itself, for a report. It is the log of the game's last start; at each start the one before moves into `Gauges\logs`, named by the date and time that start began (`Gauges 2026-10-12 21-29-11.log`). The folder keeps the newest 20 of them and at most 500 MB (`KeepLogs`, 0 keeps all); older ones go at the next start, and only the mod's own date-named logs are ever removed. With `Probe=1` a long drive's log runs to 20 or 30 MB.
 - The game's own HUD stays as it is. Its "Immersive Mode" option hides it while it is not in use.
 - Support, discussion and ideas: the author's channel on EnthusiastRunner's Discord, https://discord.com/invite/MssDb2Pvcj, or an issue on GitHub for a bug report.
 
