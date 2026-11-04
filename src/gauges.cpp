@@ -923,7 +923,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; EngineShare: how much of the mod's engine the game gets, 0 to 100 percent (50: half way between the two).\n"
                         L"; RoadLoad=1 (with Powertrain): the air's drag taken off, once each gear's pull is learned floored on flat ground.\n"
                         L";   RoadCdA: the drag's area in m2, 0 by the truck's mass (1.1 under 4 t, 3.5 under 10 t, else 6); a truck's file may set it.\n"
-                        L";   Base1, Base2 ... in a gearbox's file: each gear's acceleration at the game's own pull, floored, learned (m/s2).\n"
+                        L";   Base1.<engine>, Base2.<engine> ... in a truck's file: each gear's acceleration at the game's own pull, floored, learned.\n"
                         L"; Creep=1: an idling truck on an automatic moves to walking pace; the brake holds it. For now only with an automatic, not in a gear picked by hand.\n"
                         L"; Gauges\\gearboxes\\<name>.ini GearHold: seconds a gearbox holds each gear going up with Powertrain=1, 1 to 3 (the tab).\n"
                         L"; Top1, Top2 ...: each gear's top in rad/s, learned where the game's pull reaches nothing floored (2a + 5 until then).\n"
@@ -1190,32 +1190,33 @@ static int GearTopRead(const char *key, float tops[kMaxGears])
     return n;
 }
 
-// Base1 .. Base<n>: each numbered gear's acceleration at the game's own pull, floored, at its pull's peak, in m/s²
-// (BaseLearnStep), for the road load; 0 for a gear without one. The number read.
-static int GearBaseRead(const char *key, float bases[kMaxGears])
+// Base<n>.<engine>: each numbered gear's acceleration at the game's own pull, floored, at its pull's peak, in m/s²
+// (BaseLearnStep), for the road load, in the truck's file by the engine fitted, as it is the truck's (engine, mass,
+// wheels, gearbox) and an engine upgrade starts over (review F2); 0 for a gear without one. The number read.
+static int GearBaseRead(const char *truck, const char *engine, float bases[kMaxGears])
 {
     int n = 0;
     for (int g = 0; g < kMaxGears; g++) bases[g] = 0.0f;
-    if (!key[0]) return 0;
+    if (!truck[0] || !engine[0]) return 0;
     for (int g = 1; g < kMaxGears; g++)
     {
-        wchar_t name[16], buf[24] = {};
-        swprintf_s(name, L"Base%d", g);
-        if (GetPrivateProfileStringW(kSetupSections[kSetupGearbox], name, L"", buf, 24, SetupFile(kSetupGearbox, key).c_str()) == 0) continue;
+        wchar_t name[kMaxText + 16], buf[24] = {};
+        swprintf_s(name, L"Base%d.%S", g, engine);
+        if (GetPrivateProfileStringW(kSetupSections[kSetupTruck], name, L"", buf, 24, SetupFile(kSetupTruck, truck).c_str()) == 0) continue;
         const float v = (float)_wtof(buf);
         if (isfinite(v) && v > 0.0f && v < 100.0f) bases[g] = v, n++;
     }
     return n;
 }
 
-static void GearBaseWrite(const char *key, int gear, float base)
+static void GearBaseWrite(const char *truck, const char *engine, int gear, float base)
 {
-    if (!key[0] || gear < 1 || gear >= kMaxGears) return;
-    wchar_t name[16], buf[24];
-    swprintf_s(name, L"Base%d", gear);
+    if (!truck[0] || !engine[0] || gear < 1 || gear >= kMaxGears) return;
+    wchar_t name[kMaxText + 16], buf[24];
+    swprintf_s(name, L"Base%d.%S", gear, engine);
     swprintf_s(buf, L"%.3f", base);
-    SetupBegin(kSetupGearbox, Wide(key));
-    WritePrivateProfileStringW(kSetupSections[kSetupGearbox], name, buf, SetupFile(kSetupGearbox, key).c_str());
+    SetupBegin(kSetupTruck, Wide(truck));
+    WritePrivateProfileStringW(kSetupSections[kSetupTruck], name, buf, SetupFile(kSetupTruck, truck).c_str());
 }
 
 static void GearTopWrite(const char *key, int gear, float top)
@@ -2570,7 +2571,8 @@ struct TruckWatch
     bool gearHoldOwn;           // [Gearbox:<key>] holds GearHold, which is gearHold; else the truck's class has it
     float gearHold;
     float gearTop[kMaxGears];   // each numbered gear's top learned where the game's pull reaches nothing (GearTopStep), 0 not yet; kept in the gearbox's file
-    float gearBase[kMaxGears];  // each numbered gear's acceleration at the game's own pull, floored (BaseLearnStep), 0 not yet; kept in the gearbox's file
+    float gearBase[kMaxGears];  // each numbered gear's acceleration at the game's own pull, floored (BaseLearnStep), 0 not yet; kept in the truck's file by engine
+    char baseTruck[kMaxText], baseEngine[kMaxText]; // the truck and engine gearBase is for
     BaseLearn baseLearn;
     float accel, speedWas;      // the truck's acceleration over the ground, smoothed over kAccelSmooth, and the speed it goes from
     bool accelSeen;
@@ -2702,9 +2704,6 @@ static void GearboxLook(TruckWatch &w, const TruckMemory &m, const TruckRaw &raw
     w.gearHoldOwn = GearHoldRead(key, w.gearHold);
     w.topLearn = GearTopLearn{};
     const int tops = GearTopRead(key, w.gearTop);
-    const int bases = GearBaseRead(key, w.gearBase);
-    w.baseLearn = BaseLearn{};
-    if (bases) Log(L"gearbox: %d of its gears' pull at the game's own torque learned before (its file in Gauges\\gearboxes): the road load goes by them", bases);
     if (tops) Log(L"gearbox: %d of its gears' tops learned before (its file in Gauges\\gearboxes): the limiter and the floored points go by them", tops);
     wchar_t whose[96];
     if (w.gearHoldOwn) wcscpy_s(whose, L"its own (its file in Gauges\\gearboxes)");
@@ -4335,15 +4334,26 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             const bool gripping = w.gearbox.grip > 0.0f && TruckDrivenSpin(raw) <= w.gearbox.grip * fmaxf(v, 0.0f) * kSlipShare + kSlipSpare;
             const bool flat = w.tilt.running && fabsf(w.tilt.pitchDeg) <= kBaseLearnPitch;
             const bool clean = g >= 1 && g < kMaxGears && TruckEngineOn(raw) && gripping && flat && TruckBrake(raw) <= 0.0f && !raw.handbrake && v > 1.0f && !testing;
+            // each gear's pull is the truck's, by its engine: read again when either changes, learned only with both known
+            const char *baseTruck = w.who.taken.key, *baseEngine = w.engine.found && w.engineVehicle == w.refs.vehicle ? w.engine.name : "";
+            if (strcmp(baseTruck, w.baseTruck) || strcmp(baseEngine, w.baseEngine))
+            {
+                strcpy_s(w.baseTruck, baseTruck);
+                strcpy_s(w.baseEngine, baseEngine);
+                w.baseLearn = BaseLearn{};
+                const int bases = GearBaseRead(baseTruck, baseEngine, w.gearBase);
+                if (bases) Log(L"road load: %d of this truck's gears' pull with %S learned before (its file in Gauges\\trucks)", bases, baseEngine);
+            }
             float learned = 0.0f;
-            if (w.gearboxKey[0] && BaseLearnStep(w.baseLearn, g, clean, w.accel, raw.torqueFactor, pedalNow, groundX, w.roadLoadA, dt, learned))
+            if (baseTruck[0] && baseEngine[0] && BaseLearnStep(w.baseLearn, g, clean, w.accel, raw.torqueFactor, pedalNow, groundX, dt, learned))
             {
                 const float was = w.gearBase[g];
                 w.gearBase[g] = was > 0.0f ? was + (learned - was) * 0.3f : learned;
                 if (!(was > 0.0f) || fabsf(w.gearBase[g] - was) > 0.05f * was)
                 {
-                    GearBaseWrite(w.gearboxKey, g, w.gearBase[g]);
-                    Log(L"road load: gear %d's pull at the game's own torque, floored: %.3f m/s2 (from %.3f; its file in Gauges\\gearboxes)", g, w.gearBase[g], was);
+                    GearBaseWrite(baseTruck, baseEngine, g, w.gearBase[g]);
+                    Log(L"road load: gear %d's pull at the game's own torque with %S, floored: %.3f m/s2 (from %.3f; the truck's file in Gauges\\trucks)", g,
+                        baseEngine, w.gearBase[g], was);
                 }
             }
             // part 1's probe: the game's own pull (no hand) floored in a numbered gear; one line once the gear has gone
@@ -4396,7 +4406,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             w.roadLoadA = s.roadLoad && w.mass > 0.0f ? RoadLoadAccel(RoadCdA(w.mass, s.roadCdA), ground, w.mass) : 0.0f;
             w.roadShare = s.roadLoad && roadGear >= 1 && roadGear < kMaxGears && ground >= kStandStill
                               ? RoadLoadShare(w.roadLoadA, roadPedal, w.gearBase[roadGear]) : 0.0f;
-            if (!want || !(w.roadShare > 0.0f)) w.roadShare = w.roadLoadA = 0.0f; // none taken off: none to add back when learning
+            if (!want || !(w.roadShare > 0.0f)) w.roadShare = w.roadLoadA = 0.0f; // none taken off
             const bool handWas = w.hand.on;
             const float gameWas = w.hand.game;
             // held back to the engine's Torque share where one is set; the lift's roof is the truck's class's, fading over

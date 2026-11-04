@@ -3794,16 +3794,23 @@ int main(int argc, char **argv)
                              Near(mid, 0.8f / GameFall(0.5f), 0.001f);
         BaseLearn l = {};
         float learned = 0.0f, got = 0.0f;
-        const float base = 1.2f, factor = 1.3f, pedal = 1.0f, x = 0.5f, aLoad = 0.1f;
+        // the game's acceleration is a_base × the factor in the game × pedal × its pull: with the road load on, the factor
+        // is lower by the load's share and the truck slower by as much, and the same a_base is learned (review F1)
+        const float base = 1.2f, factor = 1.3f, pedal = 1.0f, x = 0.5f, onFactor = factor - RoadLoadShare(0.1f, pedal, base);
+        float gotOn = 0.0f;
+        BaseLearn on = {};
         for (int i = 0; i < 60; i++)
-            if (BaseLearnStep(l, 3, true, base * factor * pedal * GamePull(x) - aLoad, factor, pedal, x, aLoad, 0.05f, learned)) got = learned;
+        {
+            if (BaseLearnStep(l, 3, true, base * factor * pedal * GamePull(x), factor, pedal, x, 0.05f, learned)) got = learned;
+            if (BaseLearnStep(on, 3, true, base * onFactor * pedal * GamePull(x), onFactor, pedal, x, 0.05f, learned)) gotOn = learned;
+        }
         BaseLearn off = {};
         bool offLearned = false;
-        for (int i = 0; i < 60; i++) offLearned = offLearned || BaseLearnStep(off, 3, true, 1.0f, factor, 0.5f, x, 0.0f, 0.05f, learned);
-        const bool learns = Near(got, base, base * 0.05f) && !offLearned;
+        for (int i = 0; i < 60; i++) offLearned = offLearned || BaseLearnStep(off, 3, true, 1.0f, factor, 0.5f, x, 0.05f, learned);
+        const bool learns = Near(got, base, base * 0.05f) && Near(gotOn, got, 0.001f) && !offLearned;
         char line[220];
-        snprintf(line, sizeof line, "road load: the air only, %.3f m/s2 at 100 km/h for 3515 kg; near the top %.2f under %.2f; a gear's pull learned %.3f of %.2f",
-                 at100, loaded, plain, got, base);
+        snprintf(line, sizeof line, "road load: the air only, %.3f m/s2 at 100 km/h for 3515 kg; near the top %.2f under %.2f; a gear's pull learned %.3f of %.2f, %.3f with the load on",
+                 at100, loaded, plain, got, base, gotOn);
         Check(air && areas && none && bounded && learns, line);
     }
     // part 1's probe: a synthetic acceleration of the game's own pull shape gives its most where the pull peaks and

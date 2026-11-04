@@ -235,7 +235,7 @@ so a light truck runs to its gear's top as if in a vacuum. With this on the mod 
 faster the truck goes: about 0.5 kN at 100 km/h for a pickup. It needs each gear's pull at the game's own torque, which the mod learns
 by itself when you drive that gear floored on flat ground for a couple of seconds; until then that gear has none. The drag's area goes
 by the truck's weight (1.1 m² under 4 t, 3.5 under 10 t, else 6) unless <code>RoadCdA</code> sets it, in <code>[Gauges]</code> or a
-truck's file. The weight is the truck's own, without cargo or a trailer. Rolling resistance is Tire Inflation's, which knows the ground.</p>
+truck's file. The weight is the truck's own, without cargo or a trailer, so with a load the drag taken off is too much. Rolling resistance is Tire Inflation's, which knows the ground.</p>
 <p><code>EngineShare</code> (50) sets how much of the mod's engine the game gets: at 50 the truck pulls half way between the game's engine and the mod's, at 100 all the mod's. With the engine handed over, the automatic shifts as a truck automatic does:</p>
 <ul><li>Floored, each gear to the red zone, or sooner where the next gear already pulls harder. At a light foot it shifts up about as far along as the pedal is down, never under 0.8 of the engine's peak torque speed.</li>
 <li>Down where the gear below comes in clear of its own point up, so it does not shift straight back.</li>

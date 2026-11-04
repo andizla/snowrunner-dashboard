@@ -1496,18 +1496,18 @@ inline float RoadLoadShare(float aLoad, float pedal, float aBase) { return aBase
 
 // a_base(g), learned in ordinary driving: floored (kBaseLearnPedal), on flat ground (the nose within 1°), the grip
 // known and the wheels not spinning, no brake, the wheels at kBaseLearnFrom to kBaseLearnTo of the gear's top. There
-// the game's acceleration is a_base × the factor in the game × the pedal × its pull's rise, less the load the mod took
-// off, so each pass gives a_base = (a + a_load) / (factor × pedal × GamePull(x)); kBaseLearnFor seconds of them in one
-// gear make the mean.
+// the game's acceleration is a_base × the factor in the game × the pedal × its pull's rise; the game has no drag, and
+// the load the mod takes off is in the factor already, so each pass gives a_base = a / (factor × pedal × GamePull(x))
+// (review F1); kBaseLearnFor seconds of them in one gear make the mean.
 static const float kBaseLearnPedal = 0.9f, kBaseLearnFrom = 0.3f, kBaseLearnTo = 0.6f, kBaseLearnFor = 2.0f, kBaseLearnPitch = 1.0f;
 struct BaseLearn { int gear; float sum, time; };
 // One pass: ok the conditions hold. True when a gear's a_base is done, into learned.
-inline bool BaseLearnStep(BaseLearn &l, int gear, bool ok, float accel, float factor, float pedal, float x, float aLoad, float dt, float &learned)
+inline bool BaseLearnStep(BaseLearn &l, int gear, bool ok, float accel, float factor, float pedal, float x, float dt, float &learned)
 {
     if (gear != l.gear) l = BaseLearn{ gear, 0.0f, 0.0f };
     const float pull = GamePull(x);
     if (!ok || !(factor > 0.0f) || pedal < kBaseLearnPedal || x < kBaseLearnFrom || x > kBaseLearnTo || !(pull > 0.2f) || !isfinite(accel)) return false;
-    l.sum += (accel + aLoad) / (factor * pedal * pull) * dt;
+    l.sum += accel / (factor * pedal * pull) * dt;
     l.time += dt;
     if (l.time < kBaseLearnFor) return false;
     learned = l.sum / l.time;
