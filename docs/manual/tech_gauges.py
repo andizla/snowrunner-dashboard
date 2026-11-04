@@ -468,7 +468,10 @@ pause, never locked in first; it stalled at 0.75 red (2400 at most), then at 0.6
 <p><b>For now only with an automatic</b> (the author, 1 November): the creep goes where an automatic picks the gear, the mod's A
 (with the reverse and the range it drives there) or the game's own automatic (<code>CreepAutoPicks</code>). A gear picked by hand gets
 none, on either shifter and an R included: the game turns its automatic off to shift into R (through AutoOffAndShift), so an R it took
-at a stop cannot be told from one picked by hand. The governor, the holding part and the stall below are in the code but not reached. Nothing either from one of the mod's shifts, from the moment it is asked until kCreepQuiet (1.5 s) after +0x70 shows the new gear (A shift, step by step); the creep's model keeps the gear and the power it sees then, so it starts no second quiet.</p>
+at a stop cannot be told from one picked by hand. With <code>CreepManual=1</code> (<code>CreepGoes</code>, off by default) the governor,
+the holding part and the stall below are reached again, as before 53f526d: a gear picked by hand on either shifter, R and the low range
+on the game's shifter through the converter. In Sequential the down to D before a stall (0.5 s under 1.1 idle) comes before the
+creep's stall (a second stuck), so it stalls only with BackToA 0. Nothing either from one of the mod's shifts, from the moment it is asked until kCreepQuiet (1.5 s) after +0x70 shows the new gear (A shift, step by step); the creep's model keeps the gear and the power it sees then, so it starts no second quiet.</p>
 <p>Once a physics step the game makes a drive throttle and a brake from the pedal field (+0x44; d740a0 in the 6ab52f5d image) and
 hands the throttle to the wheels' drive, <code>c41da0(action, throttle, dt)</code>, called only at c41d40. The pull +0xB4 moves toward
 throttle · (1 − D4 + D4 · curve(the wheels' speed)) and each driven wheel gets min(B4, throttle) · CC · D4 · the gear's torque · its
@@ -1233,7 +1236,8 @@ game's own stall seconds; whether the game's stalling notice shows for it is unc
 taken as 0.2 and 1.0 until a truck with them is driven at Gearbox=0; L is 0.45 as driven. On Windows 10 the NEXT GEN menu may not draw
 while ReShade loads the .asi files as add-ons: turn that off in ReShade's Add-ons tab (one player's report, under investigation).</li></ul>
 <h3>Changed in the next version</h3>
-<ul><li>Sequential's own shifts go back to D, which picks the gear: near the red zone with the foot on, and before a
+<ul><li>Creep in a hand-picked gear (<code>CreepManual</code>, off by default): the governor, the holding part and at Gearbox=2 the stall are reached again, R and the low range on the game's shifter through the converter; in Sequential the gearbox goes back to D first.</li>
+<li>Sequential's own shifts go back to D, which picks the gear: near the red zone with the foot on, and before a
 stall with the foot on or off (0.2 s under the brake). Under the brake D comes down to the speed's gear at once, skipping gears.</li>
 <li><code>Gauges\\logs</code> keeps the newest 20 start logs and at most 500 MB of them (<code>KeepLogs</code>, 0 keeps all); only the mod's own date-named logs are removed.</li>
 <li>The automatic's position shows as D on the cluster and in the tab ("Back to D", the D binding); the ini keys, the bindings, the state block and the log keep A (<code>GearLetterShown</code>).</li>

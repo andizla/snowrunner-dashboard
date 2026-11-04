@@ -303,6 +303,14 @@ inline bool CreepAutoPicks(bool modDrives, bool posRunning, int pos, uint8_t gam
     return modDrives ? posRunning && pos == kPosA : gameAutomatic != 0;
 }
 
+// The creep's gate: where an automatic picks the gear, and with CreepManual (the gearbox rebuild's step 4, the creep
+// hand gear brief) in a gear picked by hand too, on either shifter, as before 53f526d: the governor by the clutch's
+// grip, the holding part, and at Gearbox=2 the stall; R and the low range on the game's shifter through the converter.
+inline bool CreepGoes(bool creepManual, bool modDrives, bool posRunning, int pos, uint8_t gameAutomatic)
+{
+    return creepManual || CreepAutoPicks(modDrives, posRunning, pos, gameAutomatic);
+}
+
 inline const char *GearboxPosName(int pos)
 {
     static const char *names[kPosCount] = { "A", "a numbered gear", "N", "R", "H", "L-", "L", "L+" };

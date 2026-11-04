@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Creep in a hand-picked gear (`CreepManual`, the tab's box under "Creep at idle", off by default): a gear picked by hand creeps too, at its idle speed, as before 1 November, with R and the low range on the game's shifter through the converter. Stuck in the mod's own gearbox the engine stalls as a manual one does; in Sequential the gearbox goes back to D first. Off, nothing changes.
 - Sequential's own shifts go back to D, and D picks the gear: near the red zone with the foot on, and before a stall with the foot on or off (0.2 s under the brake, so braking in a held 6th drops straight to the speed's gear). With the foot off at the red zone nothing happens, so a low gear held down a hill keeps its engine braking. Under the brake D comes down to the speed's gear at once, skipping gears, with no pause between the shifts; slowing gently it still goes a gear at a time.
 - `Gauges\logs` keeps the newest 20 start logs and at most 500 MB of them (`KeepLogs`, ini only; 0 keeps all). Older ones go, oldest first, at the next start, and the log says how many. Only the mod's own date-named logs are ever removed.
 - The automatic's position shows as D, as a real automatic's drive does: "D" beside the gear's number on the cluster, "D 4" in the digital readout, and "Back to D" and the D binding in the tab. The ini keys (`GearA`, `BackToA`), saved bindings, the state block and the log keep A, so old files read as before; the game's own shifter still says A.

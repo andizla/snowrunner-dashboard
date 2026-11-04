@@ -695,8 +695,15 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     PageLabel("Creep at idle", labelX);
     changed(ImGui::Checkbox("##creep", &s.creep));
     PageTip("An idling truck on an automatic moves as a real one does, to walking pace through the converter: the mod's D, with the reverse and the "
-            "range it drives, and the game's own automatic. For now only with an automatic: a gear picked by hand, on either shifter and an R "
-            "included, gets no creep. Hold the brake to stand.");
+            "range it drives, and the game's own automatic. A gear picked by hand creeps only with the box below. Hold the brake to stand.");
+    if (s.creep)
+    {
+        PageLabel("Creep in a hand-picked gear", labelX);
+        changed(ImGui::Checkbox("##creepmanual", &s.creepManual));
+        PageTip("A gear picked by hand creeps too, at its idle speed as a manual's clutch let up does; R and the low range on the game's shifter "
+                "through the converter. Stuck in the mod's own gearbox (Gearbox 2) the engine stalls, as a manual one does; in Sequential it goes back "
+                "to D first. Off by default while it is tried out.");
+    }
     PageLabel("Pull test", labelX);
     const bool pullOn = view.pullTest == kViewPullArmed || view.pullTest == kViewPullRunning;
     if (ImGui::Button(pullOn ? "Cancel###pulltest" : "Test the engine's pull###pulltest", ImVec2(w, 0))) act |= pullOn ? kPagePullCancel : kPagePullTest;

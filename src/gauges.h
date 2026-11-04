@@ -109,6 +109,7 @@ struct GaugeSettings
     int input;               // Input: what the pedal is: 0 a wheel's pedals, 1 a pad's trigger, 2 keys. The mod's automatic kicks down by it
     bool powertrain;         // Powertrain: the engine's torque (its curve, the cold oil, the boost) and the converter's handed to the game
     int engineShare;         // EngineShare: how much of the mod's engine the game gets with it, in percent: 0 the game's own pull, 100 the mod's
+    bool creepManual;        // CreepManual: the creep in a gear picked by hand too (off: only where an automatic picks the gear)
     bool creep;              // Creep: an idling truck in gear moves, an automatic to walking pace, a manual at the gear's idle speed (models.h, CreepShare)
     float rollWarnDeg, rollDangerDeg; // RollWarnDeg, RollDangerDeg: degrees of lean to the side from which the tilt lamp is amber, and red
     float pitchDangerDeg;    // PitchDangerDeg: degrees up or down a slope from which the tilt lamp is red
@@ -179,6 +180,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.powertrain = false;
     s.engineShare = 50;
     s.creep = true;
+    s.creepManual = false;
     s.rollWarnDeg = 15.0f;
     s.rollDangerDeg = 25.0f;
     s.pitchDangerDeg = 35.0f;
