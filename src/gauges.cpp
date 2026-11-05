@@ -1668,17 +1668,13 @@ static void SettingsFor(SettingsState &st, const char *key)
 }
 
 // An edit from the tab, in. A scale changed while a truck is driven makes the seven scales that truck's own, and
-// they stay out of the plain ones from then on. So does a suspension setting for the truck's suspension (the box ticks
-// itself, and a set kept with Own=0 is written over by what the tab shows). Everything else on the tab is every
-// truck's.
+// they stay out of the plain ones from then on. So does a suspension setting for the truck's suspension, the box
+// ticking itself, unless the truck has a set kept with Own=0: then the change edits the default and the kept set stays
+// as it is (review F1, the lead's call). Everything else on the tab is every truck's.
 static void SettingsTake(SettingsState &st, const GaugeSettings &in)
 {
     if (st.key[0] && !ScalesSame(in, st.s)) st.own = st.changed = true;
-    if (st.key[0] && !SuspSame(in, st.s))
-    {
-        st.suspOwn = st.suspChanged = true;
-        st.suspKept = false;
-    }
+    if (st.key[0] && !st.suspKept && !SuspSame(in, st.s)) st.suspOwn = st.suspChanged = true;
     const GaugeSettings before = st.plain;
     st.plain = in;
     if (st.own) ScalesCopy(st.plain, before);
@@ -6461,6 +6457,26 @@ int wmain(int argc, wchar_t **argv)
             SettingsFor(su, "susp_hx");
             Check(offDefault && offAfterReload && back && su.suspOwn && su.s.springScale == 2.0f,
                   "suspension: the box off keeps the set with Own=0 and the default in force, on again brings the set back");
+            // a change while the set is kept edits the default: the file's set and Own=0 stay, [Gauges] takes it (review F1)
+            SettingsSuspOwn(su, false);
+            ed = su.s;
+            ed.springScale = 0.5f;
+            SettingsTake(su, ed);
+            SettingsWrite(su);
+            wchar_t keptSpring[16] = {};
+            GetPrivateProfileStringW(L"Suspension", L"Own", L"", own, 8, truckFile("susp_hx").c_str());
+            GetPrivateProfileStringW(L"Suspension", L"SpringScale", L"", keptSpring, 16, truckFile("susp_hx").c_str());
+            GaugeSettings fromIniKept;
+            ReadIni(fromIniKept);
+            const bool keptStays = !su.suspOwn && su.suspKept && !wcscmp(own, L"0") && !wcscmp(keptSpring, L"2") && fromIniKept.springScale == 0.5f && su.plain.springScale == 0.5f;
+            SettingsSuspOwn(su, true);
+            Check(keptStays && su.suspOwn && su.s.springScale == 2.0f && su.plain.springScale == 0.5f,
+                  "suspension: a change while the set is kept edits the default, the box stays off, and the file's set and Own=0 stay as they were");
+            ed = su.plain;
+            ed.springScale = 1.25f;
+            su.plain = ed;
+            WriteIni(su.plain);
+            SettingsFor(su, "susp_hx");
             // the box on with nothing kept makes the default shown the kind's own
             DeleteFileW(truckFile("susp_old").c_str());
             SettingsFor(su, "susp_old");

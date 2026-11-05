@@ -781,7 +781,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 if (ImGui::SmallButton("Make these the default")) act |= kPageSuspDefault;
                 PageTip("Copies this truck's suspension into the default, for every truck without its own. This truck keeps its own.");
             }
-            else if (view.suspKept) ImGui::TextDisabled("Kept, not in use.");
+            else if (view.suspKept) ImGui::TextDisabled("Kept, not in use. Changes here edit the default.");
         }
         // under each slider the driven truck's file, front and rear, and what is in force now (the addendum of 2 November,
         // 13:18): a spring or a damping the game holds at 1 is said so
