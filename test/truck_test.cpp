@@ -646,6 +646,15 @@ int main()
     Put(kControl + 0xD8, (uint8_t)1);
     WorldRead(kMemory, r.control, w);
     Check(w.functionMenu && WorldDriving(w), "world: the function menu leaves the cluster on screen");
+    const bool fnUp = GameMenuUp(w);
+    Put(kControl + 0xD8, (uint8_t)0);
+    Put(kInput + 0x1D8, (uint8_t)1);
+    WorldRead(kMemory, r.control, w);
+    const bool inputUp = GameMenuUp(w);
+    Put(kInput + 0x1D8, (uint8_t)0);
+    WorldRead(kMemory, r.control, w);
+    Check(fnUp && inputUp && !GameMenuUp(w), "world: the game's menu is up with the function menu, or with the menu input alone (the bindings wait in either)");
+    Put(kControl + 0xD8, (uint8_t)1);
     Put(kExe + kRvaInput, (uint64_t)0);
     WorldRead(kMemory, r.control, w);
     const bool inputGone = !w.menusKnown;

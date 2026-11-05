@@ -154,6 +154,10 @@ struct World
     bool menusKnown;     // menuInput and functionMenu were both read: a 0 in them then means that no menu is up
 };
 
+// The game's function menu or its menu input is up. Both the bindings (GameMenuGate) and the engine damage write
+// stand aside then.
+inline bool GameMenuUp(const World &w) { return w.functionMenu != 0 || w.menuInput != 0; }
+
 inline bool TruckEngineOn(const TruckRaw &t) { return (t.flags & 1) != 0; }
 inline bool TruckHeadlights(const TruckRaw &t) { return (t.flags & 4) != 0; }
 // The highest numbered gear: the gearbox's entries less reverse and high.

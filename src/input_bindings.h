@@ -494,3 +494,30 @@ inline bool BindingCaptureHeld(const InputCapture &c, const InputSnapshot &s, ch
     }
     return out[0] != 0;
 }
+
+// ---- the game's function menu: the bindings stand aside ----
+// The game's function menu (Recover, the winch, the map) is worked with the d-pad and pad A, and A is also GearDown
+// by default: picking Recover walked the gearbox down (the log of 2026-11-05 19:39). While the menu or the game's
+// menu input is up, and for kGameMenuHoldMs after both read 0, no binding acts. The A that picks an entry closes the
+// menu within a game frame, so the pass that first sees A down can read the menu closed already. The reader steps
+// on through it, so a button held over the menu gives no press until it is let go and pressed again. The keys and
+// the pad are left to the game, not hidden from it.
+static const unsigned long long kGameMenuHoldMs = 250;
+struct GameMenuGate
+{
+    bool up;                   // the game's flags said a menu is up on the last pass
+    unsigned long long downAt; // when they first read 0 again; 0 before any menu
+};
+// One pass with what the game's flags say now. True on the pass a menu comes up (the caller logs it once a menu).
+inline bool GameMenuGateSeen(GameMenuGate &g, bool up, unsigned long long now)
+{
+    const bool began = up && !g.up;
+    if (!up && g.up) g.downAt = now ? now : 1;
+    g.up = up;
+    return began;
+}
+// The bindings wait: a menu is up, or it closed less than kGameMenuHoldMs ago.
+inline bool GameMenuGateHolds(const GameMenuGate &g, unsigned long long now)
+{
+    return g.up || (g.downAt && now - g.downAt < kGameMenuHoldMs);
+}

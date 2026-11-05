@@ -417,6 +417,54 @@ int main()
               "ini's text in any case; LB then RS up captured as Pad LB+RSUp, a stick alone as its direction; the chord one press with the stick alone "
               "resting under it; a flick between passes kept by the latch");
     }
+    // the game's function menu: GearDown on Pad A walks nothing while the menu is up, nor for kGameMenuHoldMs after it
+    // closes, and a held A gives no press until it is let go. The pass as the mod runs it: the gate from the last
+    // pass's flags, the reader stepped on every pass, then the gate takes this pass's flags.
+    {
+        GearBindings b = {};
+        b.slot[kActDown][0] = Parsed("Pad A");
+        InputReader r = {};
+        GameMenuGate g = {};
+        unsigned long long now = 1000;
+        // one pass of 50 ms: the pad as given, the game's flag as given; true when GearDown acted
+        auto pass = [&](uint32_t pad, bool menu) {
+            InputSnapshot s = {};
+            s.front = true;
+            s.pad = pad;
+            const bool gate = GameMenuGateHolds(g, now);
+            ActionState st[kActCount];
+            InputStep(r, b, s, st);
+            const bool walk = !gate && st[kActDown].pressed;
+            GameMenuGateSeen(g, menu, now);
+            now += 50;
+            return walk;
+        };
+        const uint32_t A = XINPUT_GAMEPAD_A;
+        bool before = pass(0, false) == false && pass(A, false) && !pass(0, false); // no menu: A walks
+        pass(0, true); // the menu comes up
+        const bool inMenu = !pass(A, true) && !pass(0, true) && !pass(A, true); // A in the menu: no walk
+        // the menu closes with A still held: no walk while held, nor after the hold-over
+        bool held = true;
+        for (int i = 0; i < 10; i++) held = held && !pass(A, false);
+        const bool again = !pass(0, false) && pass(A, false); // let go and pressed again: it walks
+        // A's edge in the first pass that reads the menu closed (the A that picked Recover): no walk
+        pass(0, true);
+        const bool picked = !pass(A, false) && !pass(0, false);
+        // after the hold-over a new press of A walks
+        pass(0, false);
+        pass(0, false);
+        pass(0, false);
+        const bool later = pass(A, false);
+        Check(before && inMenu && held && again && picked && later,
+              "function menu: GearDown on Pad A walks nothing while the game's function menu is up; a held A after it closes gives no press until let go "
+              "and pressed again; A's edge on the first pass the menu reads closed is no press; a new press after 250 ms walks");
+        GameMenuGate h = {};
+        const bool fresh = !GameMenuGateHolds(h, 5);
+        const bool seen = GameMenuGateSeen(h, true, 10) && !GameMenuGateSeen(h, true, 60);
+        GameMenuGateSeen(h, false, 110);
+        Check(fresh && seen && GameMenuGateHolds(h, 110) && GameMenuGateHolds(h, 359) && !GameMenuGateHolds(h, 360),
+              "function menu: nothing waits before any menu; a menu is seen once as it comes up; the bindings wait 250 ms after it closes");
+    }
     // a pad binding with an unknown button in the ini: refused with its reason cut to the caller's room, not ended there
     {
         Binding b;

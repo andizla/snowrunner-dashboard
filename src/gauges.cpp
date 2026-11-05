@@ -4806,7 +4806,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         // game in front and none of its menus up (and the two menu flags read, so that a 0 in them means that), and at
         // most once a second. The engine's record is looked up again for each write: an engine can change under a
         // truck that stays.
-        if (w.owed + w.asked > 0 && front && world.menusKnown && world.menu == 0 && !world.functionMenu && !world.menuInput && now - w.drivingSince >= 500 &&
+        if (w.owed + w.asked > 0 && front && world.menusKnown && world.menu == 0 && !GameMenuUp(world) && now - w.drivingSince >= 500 &&
             now >= w.writeAt)
         {
             DamageWrite d;
@@ -5043,6 +5043,7 @@ static DWORD WINAPI Run(void *)
     TruckWatch watch = {};
     InputReader bindReader = {};   // the bindings' states from pass to pass
     InputCapture bindCapture = {}; // a capture the tab began
+    GameMenuGate gameMenu = {};    // the game's function menu, from the last pass's World: the bindings wait in it
     const TruckMemory memory = { PeekGame, g_base, PokeGame };
     // the map the truck drives on, the game's id for it from its save, and the outside temperature of its section,
     // its region's or its own, where the ini has one (mapOwn, from the section mapFrom). Without a save map stays ""
@@ -5149,15 +5150,19 @@ static DWORD WINAPI Run(void *)
         // the toggle: the key, or the pad buttons all down that were not all down on the last pass; only while the
         // game's window is in front, and the pad not while the tab waits for buttons to bind
         const bool front = GameInFront();
-        const bool keyNow = front && s.toggleKey && !NgMenuOpen() && (GetAsyncKeyState(s.toggleKey) & 0x8000); // not while the NEXT GEN menu has the keys
-        bool toggle = keyNow && !keyDown;
+        // the bindings and the toggle stand aside while the NEXT GEN menu has the keys and the pad, and while the game's
+        // function menu is up and a moment after (GameMenuGate)
+        const bool menuGate = NgMenuOpen() || GameMenuGateHolds(gameMenu, GetTickCount64());
+        // the key's own state is kept through a menu, so a key held as it closes is no press
+        const bool keyNow = front && s.toggleKey && (GetAsyncKeyState(s.toggleKey) & 0x8000);
+        bool toggle = keyNow && !keyDown && !menuGate;
         keyDown = keyNow;
         const LONG capture = g_pageCapturing;
         const bool capturing = capture && GetTickCount() - (DWORD)capture < 500;
         const uint32_t padHeld = padMask && front && !capturing ? PadButtons() : 0;
-        // not while the NEXT GEN menu has the pad. What is held then still counts as held on the last pass, so a toggle
-        // held as the menu opens or closes is no press when it closes
-        const uint32_t pad = NgMenuOpen() ? 0 : padHeld;
+        // not while a menu has the pad. What is held then still counts as held on the last pass, so a toggle held as
+        // the menu opens or closes is no press when it closes
+        const uint32_t pad = menuGate ? 0 : padHeld;
         if (padMask && (pad & padMask) == padMask && (padPrev & padMask) != padMask) toggle = true;
         padPrev = padHeld;
         if (toggle)
@@ -5233,9 +5238,9 @@ static DWORD WINAPI Run(void *)
             InputStep(bindReader, binds, seen, states);
             watch.canReverse = BindingsCanReverse(binds, snap, PadPresent());
             if (s.gearbox != kGearboxOwn || (s.input == kInputWheel && !watch.canReverse)) watch.actions = GearboxActions{};
-            else watch.actions = NgMenuOpen() || bindCapture.active ? ActionsResting(watch.actions) : ActionsOf(states, binds);
+            else watch.actions = menuGate || bindCapture.active ? ActionsResting(watch.actions) : ActionsOf(states, binds);
             // the locks at every level: a press while no truck is driven is gone, not kept for later
-            const bool locksHeard = !NgMenuOpen() && !bindCapture.active;
+            const bool locksHeard = !menuGate && !bindCapture.active;
             watch.lockPress[kLockDiff] = locksHeard && states[kActDiffLock].pressed;
             watch.lockPress[kLockAwd] = locksHeard && states[kActAwd].pressed;
             if (locksHeard && states[kActSway].pressed)
@@ -5423,6 +5428,7 @@ static DWORD WINAPI Run(void *)
         watch.ownScales = set.own;
         const bool driving = TruckPass(watch, memory, inForce, front, raw, world);
         wasDriving = driving;
+        if (GameMenuGateSeen(gameMenu, GameMenuUp(world), GetTickCount64())) Log(L"input: the game's function menu is up, the bindings wait");
         if (watch.found && !codeLooked)
         {
             codeLooked = true;
