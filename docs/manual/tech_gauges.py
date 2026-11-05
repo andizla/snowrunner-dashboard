@@ -392,7 +392,7 @@ truck's, and an engine upgrade starts over) and followed at 0.3 a time when it m
 of their mean K, a gear with none of its own goes by K / top, which gives the top gears, floored at speed nearly always past 0.8, their
 load; spread wider, each gear by its own only. The log gives the learned products side by side, and with the probe each gear's seconds
 gathered, every 10 s at most. A loaded truck learns its slower
-pull while the air part still goes by its own weight, so with a load the air part is overstated. For the F350 at 3,515 kg and 100 km/h,
+pull while the air part still goes by its own weight, so with a load the air part is overstated. For a 3.5 t truck at 100 km/h,
 <i>a</i><sub>load</sub> is 0.145 m/s² (0.51 kN).</p>
 <p>The probe's "pull:" line (<code>PullBins</code>): with <code>Probe=1</code>, Powertrain off, floored in a numbered gear under the
 same conditions with the nose within 1° (the probe takes no grade out), the acceleration in bins of 0.05 of the gear's top from 0.30, logged once the gear passes 0.98 or changes with eight
