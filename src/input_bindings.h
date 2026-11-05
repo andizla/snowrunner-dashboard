@@ -496,7 +496,7 @@ inline bool BindingCaptureHeld(const InputCapture &c, const InputSnapshot &s, ch
 }
 
 // ---- the game's function menu: the bindings stand aside ----
-// The game's function menu (Recover, the winch, the map) is worked with the d-pad and pad A, and A is also GearDown
+// The game's function menu (where Recover is) is worked with the d-pad and pad A, and A is also GearDown
 // by default: picking Recover walked the gearbox down (the log of 2026-11-05 19:39). While the menu or the game's
 // menu input is up, and for kGameMenuHoldMs after both read 0, no binding acts. The A that picks an entry closes the
 // menu within a game frame, so the pass that first sees A down can read the menu closed already. The reader steps

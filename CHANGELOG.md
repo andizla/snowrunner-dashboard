@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- The gear keys and the other bindings wait while the game's function menu is up, so picking Recover with Pad A no longer shifts down.
+- The crash line in `Gauges.log` also names an invalid parameter in the C runtime and abort, which end the game at once (0xC0000409).
 - The ASI loader starts on Linux (Proton and the Steam Deck) with the launch option `WINEDLLOVERRIDES="version=n,b" %command%`. Before, the mods never loaded there, and with that option the game would not start.
 - The Gameplay tab is split into eight tabs, and its settings have shorter names. The ini keys are unchanged. The tabs are Display, Engine, Gearbox, Power, Suspension, Controls, Sounds and Mod work, each with its own scroll; the menu opens on the one open last (`Tab` in the ini). Every binding is on Controls with Driven with. Each help text says what the setting does and its default.
 - Air drag learns each gear's pull in ordinary driving. Floored with the wheels up to 0.8 of the gear's top (it was 0.6), on a grade up to 3° by the truck's path (it was 1° by the chassis, which squats under power), gathered over several visits to the gear (it was 2 s in one go, which the 4 November drive never had: nothing was learned). The first half second after each shift counts for nothing. Once two gears are learned and agree within 15 % (their pull times their top), the gears not learned go by them, so the top gears get air drag too. With `Probe=1` the log says how much each gear has gathered.
