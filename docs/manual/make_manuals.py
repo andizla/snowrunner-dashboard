@@ -236,7 +236,7 @@ position and shows its fuel a minute. A longer list is logged once a truck, and 
 in, the engine is locked to the wheels and the torque goes by their own speed: spinning wheels in mud get the engine's torque and
 spin up toward the red zone. By the wheels' speed it is held to twice the engine's torque, so wheels that catch grip do not lurch.</p>
 <p><b>Air drag</b> (<code>RoadLoad</code>, the Power tab's "Air drag", off by default, with <code>Powertrain=1</code>). The game already slows
-a rolling truck by itself: in N on a paved road, about 1.5 m/s² plus a part that rises with speed (measured on the F350, one truck, two coasts in N, 2026-11-05). Air drag adds the air's share on top of that. It is off by default. With this on the mod takes the air's drag off the engine's pull, more the
+a rolling truck by itself, more the faster it goes. Air drag adds the air's share on top of that. It is off by default. With this on the mod takes the air's drag off the engine's pull, more the
 faster the truck goes: about 0.5 kN at 100 km/h for a pickup. It needs each gear's pull at the game's own torque, which the mod learns
 by itself when you drive that gear floored for a couple of seconds in all, over as many visits as it takes, with the wheels up to 0.8 of
 the gear's top and on grades up to 3°. Until then that gear has none, unless two learned gears agree within 15 % (their pull times

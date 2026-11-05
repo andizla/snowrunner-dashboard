@@ -369,7 +369,7 @@ gear's top or past it (rolling downhill) the factor is the game's own: the divis
 top GameFall is 1 and nothing is divided out. The game's own share goes back once when the setting goes off, the engine stops, the pull test is armed, or another truck is
 driven (and to the old truck only if its action is still its own).</p>
 <h3>Air drag (RoadLoad)</h3>
-<p>The game already slows a rolling truck by itself: in N on a paved road, about 1.5 m/s² plus a part that rises with speed (measured on the F350, one truck, two coasts in N, 2026-11-05). The air's drag goes on top of that. With <code>RoadLoad=1</code> and the engine handed to the game, the mod takes it off the lift
+<p>The game already slows a rolling truck by itself, more the faster it goes. The air's drag goes on top of that. With <code>RoadLoad=1</code> and the engine handed to the game, the mod takes it off the lift
 (<code>RoadLoadAccel</code>, <code>RoadLoadShare</code>, models.h) as a deceleration over the game's own acceleration in that gear at
 factor 1 and full pedal, <i>a</i><sub>base</sub>(<i>g</i>), times the pedal, before the fall's make-up, so it scales with the pull it is
 taken from and stays bounded near a gear's top:</p>
