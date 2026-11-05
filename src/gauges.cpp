@@ -60,6 +60,7 @@ static SRWLOCK g_setLock = SRWLOCK_INIT;
 static GaugeSettings g_set;
 static LONG g_setTurn = 0;
 static volatile LONG g_setDirty = 0, g_reloadAsked = 0, g_truckDropAsked = 0, g_resetAsked = 0;
+static volatile LONG g_suspOwnAsked = 0, g_suspDefaultAsked = 0; // the Suspension tab's box (1 on, 2 off) and its button
 static volatile LONG g_pullTestAsked = 0; // 1 arm the pull test, 2 cancel it
 static volatile LONG g_mapAmbientAsked = 0, g_mapAmbientTenths = 0; // the tab set the map's outside temperature, in tenths of a degree C
 static volatile LONG g_gearHoldAsked = 0, g_gearHoldTenths = 0;     // the tab set the driven gearbox's hold, in tenths of a second
@@ -1263,6 +1264,8 @@ static void SettingsPublish(const GaugeSettings &s)
 
 void SettingsReload() { InterlockedExchange(&g_reloadAsked, 1); }
 void SettingsTruckDrop() { InterlockedExchange(&g_truckDropAsked, 1); }
+void SettingsSuspOwn(bool on) { InterlockedExchange(&g_suspOwnAsked, on ? 1 : 2); }
+void SettingsSuspToDefault() { InterlockedExchange(&g_suspDefaultAsked, 1); }
 void SettingsReset() { InterlockedExchange(&g_resetAsked, 1); }
 void PullTestAsk(bool run) { InterlockedExchange(&g_pullTestAsked, run ? 1 : 2); }
 void MapAmbientSet(float c)
@@ -1535,8 +1538,10 @@ static void DropTruckIni(const char *key)
     if (GetFileAttributesW(ini.c_str()) == INVALID_FILE_ATTRIBUTES) return;
     for (const wchar_t *name : { L"TachClass", L"IdleRpm", L"RedlineRpm", L"MaxRpm", L"SpeedMax", L"BoostMax", L"BoostProfile", L"Kind" })
         WritePrivateProfileStringW(section.c_str(), name, nullptr, ini.c_str());
-    wchar_t rest[8] = {};
-    if (!GetPrivateProfileSectionW(section.c_str(), rest, 8, ini.c_str())) DeleteFileW(ini.c_str());
+    wchar_t rest[8] = {}, susp[8] = {};
+    // the file goes only when [Truck] is empty and no [Suspension] is in it (a kind's own suspension stays)
+    if (!GetPrivateProfileSectionW(section.c_str(), rest, 8, ini.c_str()) && !GetPrivateProfileSectionW(L"Suspension", susp, 8, ini.c_str()))
+        DeleteFileW(ini.c_str());
     else SetupBegin(kSetupTruck, Wide(key)); // something else stays: the kind with it
 }
 
@@ -1558,29 +1563,126 @@ static bool ScalesSame(const GaugeSettings &a, const GaugeSettings &b)
            a.boostMax == b.boostMax && a.boostProfile == b.boostProfile;
 }
 
-// The settings as the mod's thread keeps them. plain is what [Gauges] holds. s is what is in force: plain, with the
-// driven truck's own scales in the place of the plain ones where it has some (own). key is the driven truck's, ""
-// while none is driven. changed: the truck's scales were changed on the tab and are not in the ini yet. The five
-// functions below are all that changes a state once the ini is read into plain.
-struct SettingsState { GaugeSettings plain, s; char key[kMaxText]; bool own, changed; };
+// ---- a truck's own suspension: [Suspension] in the same file (BRIEF_suspension_per_truck.md step 1) ----
+// Every setting of the Suspension tab but SuspDisplay (a display choice) and SuspStepTest (a test): the springs, the
+// damping, the travel, the ride, the bars, the air suspension, the damper's curve, the bump stops, the spring's curve
+// and the damping zones. Own=1 puts them in force for that kind of truck; Own=0 keeps them, not in use, so ticking the
+// box again brings them back. A section without Own is taken as in force (written by hand). The names are the ini's.
+static const wchar_t *const kSuspSection = L"Suspension";
+static const struct { const wchar_t *name; float GaugeSettings::*v; } kSuspSetFloats[] = {
+    { L"SpringScale", &GaugeSettings::springScale },     { L"DampingScale", &GaugeSettings::dampingScale },
+    { L"ExtraTravel", &GaugeSettings::extraTravel },     { L"RideFront", &GaugeSettings::rideFront },
+    { L"RideRear", &GaugeSettings::rideRear },           { L"SwayFront", &GaugeSettings::swayFront },
+    { L"SwayRear", &GaugeSettings::swayRear },           { L"LowCompression", &GaugeSettings::lowCompression },
+    { L"HighCompression", &GaugeSettings::highCompression }, { L"LowRebound", &GaugeSettings::lowRebound },
+    { L"HighRebound", &GaugeSettings::highRebound },     { L"DamperKnee", &GaugeSettings::damperKnee },
+    { L"BumpZone", &GaugeSettings::bumpZone },           { L"BumpForce", &GaugeSettings::bumpForce },
+    { L"BumpDamping", &GaugeSettings::bumpDamping },     { L"SpringRise", &GaugeSettings::springRise },
+    { L"SpringCross", &GaugeSettings::springCross },     { L"ZoneSoft", &GaugeSettings::zoneSoft },
+    { L"ZoneFirm", &GaugeSettings::zoneFirm },           { L"ZoneFrom", &GaugeSettings::zoneFrom },
+    { L"ZoneTo", &GaugeSettings::zoneTo },
+};
+static const struct { const wchar_t *name; int GaugeSettings::*v; } kSuspSetInts[] = {
+    { L"DamperCurve", &GaugeSettings::damperCurve }, { L"SpringCurve", &GaugeSettings::springCurve },
+};
+static const struct { const wchar_t *name; bool GaugeSettings::*v; } kSuspSetBools[] = {
+    { L"AirSuspension", &GaugeSettings::airSuspension }, { L"AirHorizon", &GaugeSettings::airHorizon },
+    { L"BumpStops", &GaugeSettings::bumpStops },         { L"DampingZones", &GaugeSettings::dampingZones },
+};
 
-// The settings in force for a truck (key "" for none), from the plain ones and the ini.
+static void SuspCopy(GaugeSettings &to, const GaugeSettings &from)
+{
+    for (const auto &k : kSuspSetFloats) to.*k.v = from.*k.v;
+    for (const auto &k : kSuspSetInts) to.*k.v = from.*k.v;
+    for (const auto &k : kSuspSetBools) to.*k.v = from.*k.v;
+}
+
+static bool SuspSame(const GaugeSettings &a, const GaugeSettings &b)
+{
+    for (const auto &k : kSuspSetFloats)
+        if (a.*k.v != b.*k.v) return false;
+    for (const auto &k : kSuspSetInts)
+        if (a.*k.v != b.*k.v) return false;
+    for (const auto &k : kSuspSetBools)
+        if (a.*k.v != b.*k.v) return false;
+    return true;
+}
+
+// The truck's [Suspension]: none (no value there), kept (Own=0) or in force. Its values are laid over s where the
+// section holds them, whichever it is; one it does not hold stays as in s.
+enum { kSuspNone, kSuspKept, kSuspInForce };
+static int ReadTruckSusp(const char *key, GaugeSettings &s)
+{
+    const std::wstring ini = SetupFile(kSetupTruck, key);
+    bool any = false;
+    auto has = [&](const wchar_t *name) {
+        wchar_t buf[8] = {};
+        const bool there = GetPrivateProfileStringW(kSuspSection, name, L"", buf, 8, ini.c_str()) > 0;
+        any = any || there;
+        return there;
+    };
+    for (const auto &k : kSuspSetFloats)
+        if (has(k.name)) s.*k.v = IniFloatIn(kSuspSection, k.name, s.*k.v, ini);
+    for (const auto &k : kSuspSetInts)
+        if (has(k.name)) s.*k.v = (int)GetPrivateProfileIntW(kSuspSection, k.name, s.*k.v, ini.c_str());
+    for (const auto &k : kSuspSetBools)
+        if (has(k.name)) s.*k.v = GetPrivateProfileIntW(kSuspSection, k.name, s.*k.v ? 1 : 0, ini.c_str()) != 0;
+    if (!any) return kSuspNone;
+    SettingsClamp(s);
+    return GetPrivateProfileIntW(kSuspSection, L"Own", 1, ini.c_str()) ? kSuspInForce : kSuspKept;
+}
+
+// The truck's [Suspension] written: Own and every value of s. Key by key through the profile API, never the file
+// whole, as the learned pulls go into the same file from the mod's thread (the addendum's point 5).
+static void WriteTruckSusp(const char *key, const GaugeSettings &s, bool own)
+{
+    const std::wstring ini = SetupFile(kSetupTruck, key);
+    SetupBegin(kSetupTruck, Wide(key));
+    IniPutInt(kSuspSection, L"Own", own ? 1 : 0, ini);
+    for (const auto &k : kSuspSetFloats) IniPutFloat(kSuspSection, k.name, s.*k.v, ini);
+    for (const auto &k : kSuspSetInts) IniPutInt(kSuspSection, k.name, s.*k.v, ini);
+    for (const auto &k : kSuspSetBools) IniPutInt(kSuspSection, k.name, s.*k.v ? 1 : 0, ini);
+}
+
+// The settings as the mod's thread keeps them. plain is what [Gauges] holds. s is what is in force: plain, with the
+// driven truck's own scales in the place of the plain ones where it has some (own), and its own suspension in the
+// place of the plain one where it is in force (suspOwn). suspKept: the truck's [Suspension] is there with Own=0, not in
+// use. key is the driven truck's, "" while none is driven. changed and suspChanged: the truck's scales or suspension
+// were changed on the tab and are not in the ini yet. The functions below are all that changes a state once the ini is
+// read into plain.
+struct SettingsState { GaugeSettings plain, s; char key[kMaxText]; bool own, changed, suspOwn, suspKept, suspChanged; };
+
+// The settings in force for a truck (key "" for none), from the plain ones and the ini. Each truck's set goes in over
+// the plain one, never over the last truck's (the game's values are the stock times the set, the addendum's point 4).
 static void SettingsFor(SettingsState &st, const char *key)
 {
     strcpy_s(st.key, key);
     st.s = st.plain;
     st.own = key[0] && ReadTruckIni(key, st.s);
-    st.changed = false;
+    st.changed = st.suspChanged = false;
+    GaugeSettings susp = st.s;
+    const int got = key[0] ? ReadTruckSusp(key, susp) : kSuspNone;
+    st.suspOwn = got == kSuspInForce;
+    st.suspKept = got == kSuspKept;
+    if (st.suspOwn) SuspCopy(st.s, susp);
 }
 
 // An edit from the tab, in. A scale changed while a truck is driven makes the seven scales that truck's own, and
-// they stay out of the plain ones from then on. Everything else on the tab is every truck's.
+// they stay out of the plain ones from then on. So does a suspension setting for the truck's suspension (the box ticks
+// itself, and a set kept with Own=0 is written over by what the tab shows). Everything else on the tab is every
+// truck's.
 static void SettingsTake(SettingsState &st, const GaugeSettings &in)
 {
     if (st.key[0] && !ScalesSame(in, st.s)) st.own = st.changed = true;
+    if (st.key[0] && !SuspSame(in, st.s))
+    {
+        st.suspOwn = st.suspChanged = true;
+        st.suspKept = false;
+    }
     const GaugeSettings before = st.plain;
     st.plain = in;
     if (st.own) ScalesCopy(st.plain, before);
+    if (st.suspOwn) SuspCopy(st.plain, before);
     st.s = in;
 }
 
@@ -1592,22 +1694,56 @@ static void SettingsDrop(SettingsState &st)
     st.own = st.changed = false;
 }
 
-// Every setting back to its default. The driven truck gives up its own scales; other trucks keep theirs.
+// The tab's box "Own settings for this truck". Off: the truck's set stays in its file with Own=0 and the plain one is
+// in force (a change not yet written goes in first, so nothing is lost). On: a kept set is in force again; with none
+// kept, the plain one shown becomes the truck's own.
+static void SettingsSuspOwn(SettingsState &st, bool on)
+{
+    if (!st.key[0]) return;
+    if (!on)
+    {
+        if (!st.suspOwn) return;
+        WriteTruckSusp(st.key, st.s, false);
+        SuspCopy(st.s, st.plain);
+        st.suspOwn = st.suspChanged = false;
+        st.suspKept = true;
+        return;
+    }
+    if (st.suspOwn) return;
+    GaugeSettings susp = st.s;
+    if (st.suspKept && ReadTruckSusp(st.key, susp) != kSuspNone) SuspCopy(st.s, susp);
+    WriteTruckSusp(st.key, st.s, true);
+    st.suspOwn = true;
+    st.suspKept = st.suspChanged = false;
+}
+
+// The tab's button "Make these the default": the driven truck's suspension into the plain one, which [Gauges] then
+// holds. The truck's own set stays as it is.
+static void SettingsSuspToDefault(SettingsState &st)
+{
+    SuspCopy(st.plain, st.s);
+}
+
+// Every setting back to its default. The driven truck gives up its own scales, and its own suspension is kept with
+// Own=0 (not thrown away); other trucks keep theirs.
 static void SettingsToDefaults(SettingsState &st)
 {
     if (st.own) DropTruckIni(st.key);
+    if (st.suspOwn) WriteTruckSusp(st.key, st.s, false);
     SettingsDefaults(st.plain);
     st.s = st.plain;
-    st.own = st.changed = false;
+    st.suspKept = st.suspKept || st.suspOwn;
+    st.own = st.changed = st.suspOwn = st.suspChanged = false;
 }
 
-// Into the ini: the plain settings, and the driven truck's own scales into its section when they were changed. A
-// truck's section that the tab did not change stays as it is, with what it leaves to [Gauges].
+// Into the ini: the plain settings, and the driven truck's own scales and suspension into its sections when they were
+// changed. A truck's section that the tab did not change stays as it is, with what it leaves to [Gauges].
 static void SettingsWrite(SettingsState &st)
 {
     WriteIni(st.plain);
     if (st.own && st.changed) WriteTruckIni(st.key, st.s);
-    st.changed = false;
+    if (st.suspOwn && st.suspChanged) WriteTruckSusp(st.key, st.s, true);
+    st.changed = st.suspChanged = false;
 }
 
 // ---- the gearbox's bindings: the [Gearbox] section of Gauges.ini ----
@@ -2542,7 +2678,8 @@ static void LogSettings(const GaugeSettings &s)
 static void SettingsSave(SettingsState &st)
 {
     if (st.own && st.changed) Log(L"settings: saved, the truck's scales in Gauges\\trucks\\%s.ini", SetupFileName(Wide(st.key)).c_str());
-    else Log(L"settings: saved to Gauges.ini");
+    if (st.suspOwn && st.suspChanged) Log(L"settings: saved, the truck's suspension in Gauges\\trucks\\%s.ini", SetupFileName(Wide(st.key)).c_str());
+    if (!(st.own && st.changed) && !(st.suspOwn && st.suspChanged)) Log(L"settings: saved to Gauges.ini");
     SettingsWrite(st);
     LogSettings(st.s);
 }
@@ -5117,11 +5254,12 @@ static DWORD WINAPI Run(void *)
         }
         if (InterlockedExchange(&g_setDirty, 0))
         {
-            const bool ownBefore = set.own;
+            const bool ownBefore = set.own, suspBefore = set.suspOwn;
             GaugeSettings in;
             SettingsGet(in);
             SettingsTake(set, in);
             if (set.own && !ownBefore) Log(L"truck: %S has scales of its own from now on, kept in Gauges\\trucks\\%s.ini", set.key, SetupFileName(Wide(set.key)).c_str());
+            if (set.suspOwn && !suspBefore) Log(L"suspension: %S has its own settings from now on, kept in Gauges\\trucks\\%s.ini", set.key, SetupFileName(Wide(set.key)).c_str());
             saveAt = GetTickCount64() + 1000;
             edited = true;
         }
@@ -5132,6 +5270,27 @@ static DWORD WINAPI Run(void *)
             SettingsPublish(s);
             Log(L"truck: %S gave up its own scales and takes the plain ones", set.key);
             LogSettings(s);
+            edited = true;
+        }
+        if (const LONG ask = InterlockedExchange(&g_suspOwnAsked, 0))
+        {
+            // the Suspension tab's box: off keeps the truck's set with Own=0, on brings it back (or makes the shown one its own)
+            if (set.key[0])
+            {
+                SettingsSuspOwn(set, ask == 1);
+                SettingsPublish(s);
+                Log(ask == 1 ? L"suspension: %S's own settings, in force (Gauges\\trucks\\%s.ini)"
+                             : L"suspension: %S's own settings kept, not in use (Own=0 in Gauges\\trucks\\%s.ini); the default settings",
+                    set.key, SetupFileName(Wide(set.key)).c_str());
+                edited = true;
+            }
+        }
+        if (InterlockedExchange(&g_suspDefaultAsked, 0) && set.key[0] && set.suspOwn)
+        {
+            // the Suspension tab's button: this truck's set becomes the default, its own stays as it is
+            SettingsSuspToDefault(set);
+            Log(L"suspension: %S's settings made the default (Gauges.ini)", set.key);
+            saveAt = GetTickCount64() + 1000;
             edited = true;
         }
         if (InterlockedExchange(&g_resetAsked, 0))
@@ -5508,6 +5667,10 @@ static DWORD WINAPI Run(void *)
                     set.own ? L"it has scales of its own" : L"it has no scales of its own and takes the plain ones", k.idle, k.redline, k.max, k.speedMax,
                     kClassWords[autoClass], set.own ? L", its scales'" : watch.mass > 0.0f ? L", its weight's" : L", the plain scales' (its weight not read)",
                     TorqueRoof(autoClass));
+            if (truck.key[0])
+                Log(set.suspOwn ? L"suspension: %S's own settings" : set.suspKept ? L"suspension: the default settings (%S's own are kept, not in use)"
+                                                                    : L"suspension: the default settings (%S has none of its own)",
+                    truck.key);
         }
         else if (strcmp(now.id, truck.id))
         {
@@ -5518,6 +5681,8 @@ static DWORD WINAPI Run(void *)
         GaugeView v = {};
         strcpy_s(v.truck, truck.key);
         v.truckOwn = set.own;
+        v.suspOwn = set.suspOwn;
+        v.suspKept = set.suspKept;
         if (map[0]) MapTitle(map, v.map, sizeof v.map);
         else v.map[0] = 0;
         strcpy_s(v.mapFrom, mapFrom);
@@ -6236,6 +6401,130 @@ int wmain(int argc, wchar_t **argv)
         GetPrivateProfileStringW(L"Truck", L"RedlineRpm", L"", kept, 16, truckFile("someone_elses").c_str());
         Check(halfOwn && !next.own && SameSettings(next.s, defaults) && SameSettings(fromIni, defaults) && !halfMax[0] && !wcscmp(kept, L"1800"),
               "trucks: the defaults take the plain settings and the driven truck's own scales, and leave the other trucks' files as they were");
+        // a truck kind's own suspension (BRIEF_suspension_per_truck.md step 1): [Suspension] beside [Truck] in its file
+        {
+            for (const char *key : { "susp_hx", "susp_ww", "susp_old" }) DeleteFileW(truckFile(key).c_str());
+            DeleteFileW(ini.c_str());
+            SettingsState su = {};
+            ReadIni(su.plain);
+            su.plain.springScale = 1.25f;
+            WriteIni(su.plain);
+            // a kind with no section uses the default; with no truck driven a change is the default's
+            SettingsFor(su, "susp_hx");
+            const bool hxPlain = !su.suspOwn && !su.suspKept && su.s.springScale == 1.25f;
+            SettingsFor(su, "");
+            GaugeSettings ed = su.s;
+            ed.dampingScale = 1.5f;
+            SettingsTake(su, ed);
+            const bool noTruckDefault = !su.suspOwn && su.plain.dampingScale == 1.5f;
+            // a change while a kind is driven makes the whole set its own, the bump keys with it; the default stays
+            SettingsFor(su, "susp_hx");
+            ed = su.s;
+            ed.springScale = 2.0f;
+            ed.bumpStops = true;
+            ed.bumpZone = 0.12f;
+            ed.bumpForce = 3.0f;
+            ed.bumpDamping = 2.5f;
+            SettingsTake(su, ed);
+            SettingsWrite(su);
+            wchar_t own[8] = {}, zone[16] = {};
+            GetPrivateProfileStringW(L"Suspension", L"Own", L"", own, 8, truckFile("susp_hx").c_str());
+            GetPrivateProfileStringW(L"Suspension", L"BumpZone", L"", zone, 16, truckFile("susp_hx").c_str());
+            GaugeSettings fromIni2;
+            ReadIni(fromIni2);
+            Check(hxPlain && noTruckDefault && su.suspOwn && !wcscmp(own, L"1") && !wcscmp(zone, L"0.12") && su.plain.springScale == 1.25f &&
+                      fromIni2.springScale == 1.25f && fromIni2.dampingScale == 1.5f && !fromIni2.bumpStops,
+                  "suspension: a kind with no section uses the default, a change while it is driven makes the whole set its own with the bump keys, and the default stays");
+            // two kinds in turn each get their own; A, then B, then A again gives A's set over the default, no climb
+            SettingsFor(su, "susp_ww");
+            ed = su.s;
+            const bool wwStartsPlain = !su.suspOwn && ed.springScale == 1.25f && !ed.bumpStops;
+            ed.springScale = 0.75f;
+            SettingsTake(su, ed);
+            SettingsWrite(su);
+            SettingsFor(su, "susp_hx");
+            const GaugeSettings hxFirst = su.s;
+            SettingsFor(su, "susp_ww");
+            const bool wwOwn = su.suspOwn && su.s.springScale == 0.75f && !su.s.bumpStops;
+            SettingsFor(su, "susp_hx");
+            Check(wwStartsPlain && wwOwn && su.suspOwn && su.s.springScale == 2.0f && su.s.bumpForce == 3.0f && SuspSame(su.s, hxFirst) &&
+                      su.s.dampingScale == 1.5f,
+                  "suspension: two kinds in turn each get their own set, and A to B to A gives A's set as it was, on the default, not on B's");
+            // the box off keeps the values with Own=0 and the default is in force; on again brings them back
+            SettingsSuspOwn(su, false);
+            GetPrivateProfileStringW(L"Suspension", L"Own", L"", own, 8, truckFile("susp_hx").c_str());
+            const bool offDefault = !su.suspOwn && su.suspKept && su.s.springScale == 1.25f && !su.s.bumpStops && !wcscmp(own, L"0");
+            SettingsFor(su, "susp_hx");
+            const bool offAfterReload = !su.suspOwn && su.suspKept && su.s.springScale == 1.25f;
+            SettingsSuspOwn(su, true);
+            const bool back = su.suspOwn && !su.suspKept && su.s.springScale == 2.0f && su.s.bumpZone == 0.12f;
+            SettingsFor(su, "susp_hx");
+            Check(offDefault && offAfterReload && back && su.suspOwn && su.s.springScale == 2.0f,
+                  "suspension: the box off keeps the set with Own=0 and the default in force, on again brings the set back");
+            // the box on with nothing kept makes the default shown the kind's own
+            DeleteFileW(truckFile("susp_old").c_str());
+            SettingsFor(su, "susp_old");
+            SettingsSuspOwn(su, true);
+            GetPrivateProfileStringW(L"Suspension", L"Own", L"", own, 8, truckFile("susp_old").c_str());
+            const bool onFresh = su.suspOwn && su.s.springScale == 1.25f && !wcscmp(own, L"1");
+            DeleteFileW(truckFile("susp_old").c_str());
+            // "Make these the default": Gauges.ini takes the truck's set, the truck keeps its own
+            SettingsFor(su, "susp_hx");
+            SettingsSuspToDefault(su);
+            SettingsWrite(su);
+            GaugeSettings fromIni3;
+            ReadIni(fromIni3);
+            SettingsFor(su, "susp_hx");
+            GetPrivateProfileStringW(L"Suspension", L"Own", L"", own, 8, truckFile("susp_hx").c_str());
+            Check(onFresh && fromIni3.springScale == 2.0f && fromIni3.bumpStops && fromIni3.bumpZone == 0.12f && su.suspOwn && su.s.springScale == 2.0f && !wcscmp(own, L"1"),
+                  "suspension: the box on with nothing kept takes the default shown, and Make these the default writes Gauges.ini and leaves the truck's own");
+            // giving up the scales leaves the suspension and its file; the defaults button keeps the set with Own=0
+            ed = su.s;
+            ed.redlineRpm = 3900.0f;
+            SettingsTake(su, ed);
+            SettingsWrite(su);
+            SettingsDrop(su);
+            const bool fileStays = GetFileAttributesW(truckFile("susp_hx").c_str()) != INVALID_FILE_ATTRIBUTES;
+            SettingsFor(su, "susp_hx");
+            const bool suspStays = fileStays && !su.own && su.suspOwn && su.s.springScale == 2.0f;
+            SettingsToDefaults(su);
+            SettingsWrite(su);
+            SettingsFor(su, "susp_hx");
+            GaugeSettings defaults2;
+            SettingsDefaults(defaults2);
+            Check(suspStays && !su.suspOwn && su.suspKept && SuspSame(su.s, defaults2),
+                  "suspension: the truck giving up its scales keeps its suspension and its file, and the defaults keep the set with Own=0");
+            // a section written by hand without Own is in force; a value out of range is held as [Gauges]' are
+            WritePrivateProfileStringW(L"Suspension", L"SpringScale", L"9", truckFile("susp_old").c_str());
+            SettingsFor(su, "susp_old");
+            Check(su.suspOwn && su.s.springScale == kSuspScaleRange[1], "suspension: a section without Own is in force, its values held to their ranges");
+            DeleteFileW(truckFile("susp_old").c_str());
+            // a pull learned on the mod's thread while the tab writes the suspension into the same file: neither is lost
+            struct Both { GaugeSettings s; } both = { su.s };
+            both.s.springScale = 1.75f;
+            HANDLE writers[2];
+            writers[0] = CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
+                for (int k = 0; k < 200; k++) GearBaseWrite("susp_ww", "e_test", 1 + k % 8, 1.0f + k * 0.01f);
+                return 0;
+            }, nullptr, 0, nullptr);
+            writers[1] = CreateThread(nullptr, 0, [](LPVOID p) -> DWORD {
+                for (int k = 0; k < 200; k++) WriteTruckSusp("susp_ww", ((Both *)p)->s, true);
+                return 0;
+            }, &both, 0, nullptr);
+            WaitForMultipleObjects(2, writers, TRUE, INFINITE);
+            CloseHandle(writers[0]);
+            CloseHandle(writers[1]);
+            float bases[kMaxGears] = {};
+            const int learned = GearBaseRead("susp_ww", "e_test", bases);
+            SettingsFor(su, "susp_ww");
+            Check(learned == 8 && fabsf(bases[8] - 2.99f) < 0.001f && su.suspOwn && su.s.springScale == 1.75f,
+                  "suspension: the learned pulls and the tab's suspension written into one file at once both stay");
+            // an old Gauges.ini: no truck file has [Suspension], so every truck has the values of [Gauges] as before
+            for (const char *key : { "susp_hx", "susp_ww" }) DeleteFileW(truckFile(key).c_str());
+            SettingsFor(su, "susp_hx");
+            Check(!su.suspOwn && !su.suspKept && SameSettings(su.s, su.plain), "suspension: with no [Suspension] in a truck's file the truck has every value of [Gauges]");
+            DeleteFileW(ini.c_str());
+        }
             // the files' names: a modded truck's stroke as "@", what no file's name may hold as "_"
         Check(SetupFileName(L"mod_suv/1000001") == L"mod_suv@1000001" && SetupFileName(L"a:b*c?") == L"a_b_c_" &&
                   SetupFileName(L"gears 1.5 4 high 2") == L"gears 1.5 4 high 2" && truckFile("mod_suv/1000001").find(L"Gauges\\trucks\\mod_suv@1000001.ini") != std::wstring::npos,

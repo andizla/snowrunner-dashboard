@@ -233,6 +233,9 @@ static void OnPage()
     if (act & kPageTab) PageTabWrite(kPageTabIds[st.tab]);
     if (act & kPageChanged) SettingsPut(s, turn);
     if (act & kPageTruckDrop) SettingsTruckDrop();
+    if (act & kPageSuspOn) SettingsSuspOwn(true);
+    if (act & kPageSuspOff) SettingsSuspOwn(false);
+    if (act & kPageSuspDefault) SettingsSuspToDefault();
     if (act & kPagePullTest) PullTestAsk(true);
     if (act & kPagePullCancel) PullTestAsk(false);
     if (act & kPageMapAmbient) MapAmbientSet(st.mapAmbientC);

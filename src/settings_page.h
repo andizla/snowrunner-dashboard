@@ -27,7 +27,7 @@ struct PageState
 static const unsigned long long kPageCaptureMs = 8000;
 enum { kPageChanged = 1, kPageReload = 2, kPageTruckDrop = 4, kPageDefaults = 8, kPageHearHigh = 16, kPageHearMid = 32, kPageHearLow = 64, kPageHearOil = 128,
        kPagePullTest = 256, kPagePullCancel = 512, kPageMapAmbient = 1024, kPageGearHold = 2048, kPageEngineSet = 4096,
-       kPageEngineDrop = 8192, kPageTab = 16384, kPageEngineTorque = 32768 };
+       kPageEngineDrop = 8192, kPageTab = 16384, kPageEngineTorque = 32768, kPageSuspOn = 65536, kPageSuspOff = 131072, kPageSuspDefault = 262144 };
 
 // The Dear ImGui key as a virtual key, for the keys the toggle key can be; 0 for others.
 static int PageVirtualKey(int k)
@@ -765,6 +765,24 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     else if (open && tab == kTabSuspension)
     {
         ImGui::SeparatorText("Suspension");
+        // whose suspension this is (BRIEF_suspension_per_truck.md step 1): the driven kind's own, or the default
+        if (!view.truck[0]) ImGui::TextWrapped("No truck is driven. These are the default settings, which every truck without its own uses.");
+        else
+        {
+            ImGui::TextWrapped("Settings for: %s", view.truck);
+            PageLabel("Own settings", labelX);
+            bool own = view.suspOwn;
+            if (ImGui::Checkbox("##suspown", &own)) act |= own ? kPageSuspOn : kPageSuspOff;
+            PageTip("This kind of truck keeps its own suspension in its file in Gauges\\trucks. Ticks itself when a setting here is changed while it is driven. Off: "
+                    "the default is in force and its own are kept.");
+            if (view.suspOwn)
+            {
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Make these the default")) act |= kPageSuspDefault;
+                PageTip("Copies this truck's suspension into the default, for every truck without its own. This truck keeps its own.");
+            }
+            else if (view.suspKept) ImGui::TextDisabled("Kept, not in use.");
+        }
         // under each slider the driven truck's file, front and rear, and what is in force now (the addendum of 2 November,
         // 13:18): a spring or a damping the game holds at 1 is said so
         auto fileLine = [&](int k, float factor) {
