@@ -267,7 +267,7 @@ off by default. Set a slider back and the truck has the game's suspension again.
 now.</p>
 <p><b>Per truck.</b> The top line names the truck the settings are for. Change one while you drive and that kind of truck keeps
 the whole set as its own: <b>Own settings</b> ticks itself. Untick it and the default is in force again, and the set is kept
-(the tab says Kept, not in use) until you tick it again. <b>Make these the default</b> copies the set to every truck without
+(the tab says Kept, not in use) until you tick it again. Changes made meanwhile edit the default. <b>Make these the default</b> copies the set to every truck without
 its own. With no truck driven the tab sets the default. The set is kept in a <code>[Suspension]</code> section of the truck's
 file in <code>Gauges\trucks</code>, beside its scales, with <code>Own=0</code> while it is not in use.</p>
 <ul><li><b>Spring and Damping</b> (<code>SpringScale</code>, <code>DampingScale</code>, x0.25 to x4): the truck's own spring

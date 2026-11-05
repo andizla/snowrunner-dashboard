@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- The suspension settings can be kept per truck: tick Own settings in the Suspension tab. A truck without its own uses the default. It ticks itself when you change a setting there while you drive. Unticked, the truck's set is kept for later, and Make these the default copies it to every truck without its own.
+- The suspension settings can be kept per truck: tick Own settings in the Suspension tab. A truck without its own uses the default. It ticks itself when you change a setting there while you drive. Unticked, the truck's set is kept for later and changes edit the default, and Make these the default copies it to every truck without its own.
 - The gear keys and the other bindings wait while the game's function menu is up, so picking Recover with Pad A no longer shifts down.
 - The crash line in `Gauges.log` also names an invalid parameter in the C runtime and abort, which can end the game at once (0xC0000409).
 - The ASI loader starts on Linux (Proton and the Steam Deck) with the launch option `WINEDLLOVERRIDES="version=n,b" %command%`. Before, the mods never loaded there, and with that option the game would not start.
