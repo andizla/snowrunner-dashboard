@@ -1268,7 +1268,7 @@ taken as 0.2 and 1.0 until a truck with them is driven at Gearbox=0; L is 0.45 a
 while ReShade loads the .asi files as add-ons: turn that off in ReShade's Add-ons tab (one player's report, under investigation).</li></ul>
 <h3>Changed in the next version</h3>
 <ul><li>The gear keys and the other bindings wait while the game's function menu is up, so picking Recover with Pad A no longer shifts down.</li>
-<li>The crash line in <code>Gauges.log</code> also names an invalid parameter in the C runtime and abort, which end the game at once (0xC0000409).</li>
+<li>The crash line in <code>Gauges.log</code> also names an invalid parameter in the C runtime and abort, which can end the game at once (0xC0000409).</li>
 <li>The ASI loader starts on Linux (Proton and the Steam Deck) with the launch option <code>WINEDLLOVERRIDES="version=n,b" %command%</code>. Before, the mods never loaded there, and with that option the game would not start.</li>
 <li>The Gameplay tab in eight tabs (Display, Engine, Gearbox, Power, Suspension, Controls, Sounds, Mod work), the open one kept in <code>Tab</code>; Driven with and every binding on Controls. The settings have shorter names, and each help text says what it does and its default. The ini keys are unchanged.</li>
 <li>Air drag (<code>RoadLoad</code>, off by default): the air's drag taken off the engine's pull against each gear's learned pull at the game's own torque; rolling resistance is the game's on soft ground, and on firm ground the game has next to none. Each gear's pull is learned floored up to 0.8 of its top, on grades up to 3° by the path, over several visits; the gears not learned go by the learned ones once two agree within 15 %. With the probe, a "pull:" line measures the game's own pull by x.</li>
