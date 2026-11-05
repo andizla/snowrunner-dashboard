@@ -751,7 +751,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             PageTip("How much of the mod's engine the game gets: 0 is the game's own pull and 100 all of the mod's. Engine torque on the Engine tab sets the engine's own torque. Default 50 %.");
             PageLabel("Air drag", labelX);
             changed(ImGui::Checkbox("##roadload", &s.roadLoad));
-            PageTip("The game has no air drag. This takes it off the engine's pull, more the faster the truck goes, in each gear once it is measured floored on flat ground. Off by default.");
+            PageTip("The game already slows a rolling truck by itself, more the faster it goes. This adds the air's share on top, taken off the engine's pull in each gear once it is measured floored on flat ground. Off by default.");
         }
         PageLabel("Pull test", labelX);
         const bool pullOn = view.pullTest == kViewPullArmed || view.pullTest == kViewPullRunning;

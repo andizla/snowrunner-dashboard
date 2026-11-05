@@ -235,14 +235,14 @@ position and shows its fuel a minute. A longer list is logged once a truck, and 
 <p>The game gives all of an engine's torque with the wheels at about half the gear's top speed and less and less to nothing at the top, whatever the engine speed. With <code>Powertrain=1</code> the truck pulls with the mod's engine instead: the torque curve against the engine speed the needle shows, doubled by the converter at its stall with the automatic. Cold oil (up to 15% at 0 °C) and a turbo without boost (35% of the torque comes from it) cost torque only where the pedal asks for more than they leave. The torque holds to about 0.86 of a gear's top speed (a scout's 0.8), then falls to nothing at the top, as a diesel's governor cuts the fuel; a gear's top speed stays the game's. This holds in a gear held by hand at <code>Gearbox=2</code> too, so a held gear pulls to the red zone. There, with the clutch fully
 in, the engine is locked to the wheels and the torque goes by their own speed: spinning wheels in mud get the engine's torque and
 spin up toward the red zone. By the wheels' speed it is held to twice the engine's torque, so wheels that catch grip do not lurch.</p>
-<p><b>Air drag</b> (<code>RoadLoad</code>, the Power tab's "Air drag", off by default, with <code>Powertrain=1</code>). The game has no air drag,
-so a light truck runs to its gear's top as if in a vacuum. With this on the mod takes the air's drag off the engine's pull, more the
+<p><b>Air drag</b> (<code>RoadLoad</code>, the Power tab's "Air drag", off by default, with <code>Powertrain=1</code>). The game already slows
+a rolling truck by itself: in N on a paved road, about 1.5 m/s² plus a part that rises with speed (measured on the F350, one truck, two coasts in N, 2026-11-05). Air drag adds the air's share on top of that. It is off by default. With this on the mod takes the air's drag off the engine's pull, more the
 faster the truck goes: about 0.5 kN at 100 km/h for a pickup. It needs each gear's pull at the game's own torque, which the mod learns
 by itself when you drive that gear floored for a couple of seconds in all, over as many visits as it takes, with the wheels up to 0.8 of
 the gear's top and on grades up to 3°. Until then that gear has none, unless two learned gears agree within 15 % (their pull times
 their top): then it goes by them, which gives the top gears their drag. The drag's area goes
 by the truck's weight (1.1 m² under 4 t, 3.5 under 10 t, else 6) unless <code>RoadCdA</code> sets it, in <code>[Gauges]</code> or a
-truck's file. The weight is the truck's own, without cargo or a trailer, so with a load the drag taken off is too much. Rolling resistance is the game's on soft ground, and on firm ground the game has next to none.</p>
+truck's file. The weight is the truck's own, without cargo or a trailer, so with a load the drag taken off is too much. The game has its own rolling resistance.</p>
 <p><code>EngineShare</code> (50) sets how much of the mod's engine the game gets: at 50 the truck pulls half way between the game's engine and the mod's, at 100 all the mod's. With the engine handed over, the automatic shifts as a truck automatic does:</p>
 <ul><li>Floored, each gear to the red zone, or sooner where the next gear already pulls harder. At a light foot it shifts up about as far along as the pedal is down, never under 0.8 of the engine's peak torque speed.</li>
 <li>Down where the gear below comes in clear of its own point up, so it does not shift straight back.</li>

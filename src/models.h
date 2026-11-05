@@ -1477,7 +1477,8 @@ inline float TorqueLift(float curve, float limit, float pedal, float ratio, floa
 }
 
 // ---- road load (the game pull and road load brief, part 2, with the reviewer's addendum) ----
-// The game models no air drag. With RoadLoad on the mod takes the air's drag off the torque it hands the game: as a
+// The game slows a rolling truck by itself, more the faster it goes; the air's drag goes on top of that.
+// With RoadLoad on the mod takes the air's drag off the torque it hands the game: as a
 // deceleration a_load = ½ ρ CdA v² / m, over the game's own acceleration at factor 1 and full pedal in that gear
 // (a_base, learned), times the pedal, taken off before the lift's make-up for the game's fall so that it scales with
 // the pull it is taken from. Only the air: Gameplay reads no surface, and a rolling part everywhere would add to the
@@ -1613,7 +1614,7 @@ inline int BaseFold(const float base[kMaxGears], const float top[kMaxGears], int
 // ---- the game's own pull measured (part 1's probe) ----
 // With Probe=1 and the game's own pull (Powertrain off), floored in a numbered gear, the grip known and the wheels not
 // spinning, no brake, the nose within 1°: the truck's acceleration by the wheels' share of the gear's top, in bins of
-// 0.05 from 0.30. The shape over x is the game's pull share (it models no drag); the line gives the most, where it is,
+// 0.05 from 0.30. The shape over x is the game's pull share (with the game's own slowing in it); the line gives the most, where it is,
 // and the fall past it fitted as kGamePullFall is (a / most = fall × (1 − x)).
 enum { kPullBins = 14 };
 static const float kPullBinFrom = 0.30f, kPullBinWidth = 0.05f, kPullDoneAt = 0.98f;

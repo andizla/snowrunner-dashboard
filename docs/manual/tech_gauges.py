@@ -369,7 +369,7 @@ gear's top or past it (rolling downhill) the factor is the game's own: the divis
 top GameFall is 1 and nothing is divided out. The game's own share goes back once when the setting goes off, the engine stops, the pull test is armed, or another truck is
 driven (and to the old truck only if its action is still its own).</p>
 <h3>Air drag (RoadLoad)</h3>
-<p>The game models no air drag. With <code>RoadLoad=1</code> and the engine handed to the game, the mod takes it off the lift
+<p>The game already slows a rolling truck by itself: in N on a paved road, about 1.5 m/s² plus a part that rises with speed (measured on the F350, one truck, two coasts in N, 2026-11-05). The air's drag goes on top of that. With <code>RoadLoad=1</code> and the engine handed to the game, the mod takes it off the lift
 (<code>RoadLoadAccel</code>, <code>RoadLoadShare</code>, models.h) as a deceleration over the game's own acceleration in that gear at
 factor 1 and full pedal, <i>a</i><sub>base</sub>(<i>g</i>), times the pedal, before the fall's make-up, so it scales with the pull it is
 taken from and stays bounded near a gear's top:</p>
@@ -378,7 +378,7 @@ taken from and stays bounded near a gear's top:</p>
 cargo or a trailer, so a loaded truck's air part is overstated and a trailer's own drag is missing. CdA by that mass, 1.1 m² under 4 t,
 3.5 under 10 t, else 6, unless <code>RoadCdA</code> sets it in <code>[Gauges]</code> or a truck's file. Nothing standing, in reverse,
 with the foot off (the game's coasting stays) or before <i>a</i><sub>base</sub>(<i>g</i>) is learned. Only the air: Gameplay reads no
-surface, and rolling resistance is the game's on soft ground, and on firm ground the game has next to none. <i>a</i><sub>base</sub>(<i>g</i>) is learned in ordinary driving
+surface, and the game has its own rolling resistance. <i>a</i><sub>base</sub>(<i>g</i>) is learned in ordinary driving
 (<code>BaseLearnStep</code>): floored (0.9), the grade by the truck's path within 3° and taken out (<i>a</i> + <i>g</i> sin θ; the path's rise
 over its way in the last second, <code>GradeStep</code>, as the chassis squats nose up under power), the grip known and the wheels not
 spinning, no brake, the wheels at 0.3 to 0.8 of the gear's top (past it a top's error grows: 10 % at 0.8, 20 % at 0.9), not within 0.5 s
@@ -1271,7 +1271,7 @@ while ReShade loads the .asi files as add-ons: turn that off in ReShade's Add-on
 <li>The crash line in <code>Gauges.log</code> also names an invalid parameter in the C runtime and abort, which can end the game at once (0xC0000409).</li>
 <li>The ASI loader starts on Linux (Proton and the Steam Deck) with the launch option <code>WINEDLLOVERRIDES="version=n,b" %command%</code>. Before, the mods never loaded there, and with that option the game would not start.</li>
 <li>The Gameplay tab in eight tabs (Display, Engine, Gearbox, Power, Suspension, Controls, Sounds, Mod work), the open one kept in <code>Tab</code>; Driven with and every binding on Controls. The settings have shorter names, and each help text says what it does and its default. The ini keys are unchanged.</li>
-<li>Air drag (<code>RoadLoad</code>, off by default): the air's drag taken off the engine's pull against each gear's learned pull at the game's own torque; rolling resistance is the game's on soft ground, and on firm ground the game has next to none. Each gear's pull is learned floored up to 0.8 of its top, on grades up to 3° by the path, over several visits; the gears not learned go by the learned ones once two agree within 15 %. With the probe, a "pull:" line measures the game's own pull by x.</li>
+<li>Air drag (<code>RoadLoad</code>, off by default): the air's drag taken off the engine's pull against each gear's learned pull at the game's own torque, on top of the game's own slowing, which grows with speed. Each gear's pull is learned floored up to 0.8 of its top, on grades up to 3° by the path, over several visits; the gears not learned go by the learned ones once two agree within 15 %. With the probe, a "pull:" line measures the game's own pull by x.</li>
 <li>Creep in a hand-picked gear (<code>CreepManual</code>, off by default): the governor, the holding part and at Gearbox=2 the stall are reached again, R and the low range on the game's shifter through the converter; in Sequential the gearbox goes back to D first.</li>
 <li>The log stays open and is written out every half second, so <code>Probe=1</code> no longer opens the file 70 times a second:
 one append handle that shares writing (so CrashLineOut's own handle still gets in), a 64 KB buffer flushed on every line that is not a probe line
