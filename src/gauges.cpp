@@ -369,6 +369,12 @@ void GaugeLog(const wchar_t *fmt, ...)
 // RaiseFailFastException are hooked, and each call writes an exit line with kExitFrames return addresses. The vectored
 // handler also names C++ throws (0xE06D7363) and fast fails (0xC0000409). A game may throw as part of its work, so each
 // throw's return addresses are kept (the last one only, in static memory) and an exit line names the last throw too.
+// Round 4: the game ended 0xC0000409 at 19:39:07 on 2026-11-05 and no line named it: a fast fail goes past the
+// vectored handler and the filter. The C runtime's invalid-parameter handler and SIGABRT are set in the game's
+// ucrtbase.dll (Gauges owns those; Tire Inflation sets them only without Gauges) and in the mod's own runtime
+// (crt_line.h). A /GS failure ends the same way but runs no code of the process: it cannot be caught here, only a
+// dump names it.
+#include "crt_line.h"
 static LPTOP_LEVEL_EXCEPTION_FILTER g_crashBefore = nullptr;
 static DWORD g_crashModThread = 0;
 static const LONG kFaultLines = 3;
@@ -498,6 +504,10 @@ static void CrashLineSet()
     void **targets[3] = { (void **)&g_exitProcess, (void **)&g_terminateProcess, (void **)&g_failFast };
     void *const hooks[3] = { (void *)ExitProcessHook, (void *)TerminateProcessHook, (void *)FailFastHook };
     const long hooked = GearboxAttach(targets, hooks, 3);
+    // the C runtime's handlers, after the game set its own: the earlier ones are read now and called after the line
+    wchar_t crt[320];
+    crtline::Set(CrashLineFlushed, true, crt, sizeof crt / sizeof crt[0]);
+    Log(L"crash line: %s", crt);
     Log(L"crash line: a fault nothing handles will be named in this log, then passed on to %s; %s; %s", g_crashBefore ? L"the game's own handler" : L"Windows",
         first ? L"the first three faults and C++ throws of any thread are named as they are raised" : L"the line for faults as they are raised could not be added",
         hooked == NO_ERROR ? L"ExitProcess, TerminateProcess and RaiseFailFastException name their caller" : L"the exit calls could not be hooked");
