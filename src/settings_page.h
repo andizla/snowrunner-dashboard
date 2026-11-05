@@ -676,7 +676,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         changed(ImGui::Checkbox("##roadload", &s.roadLoad));
         PageTip("The game has no air drag. This takes it off the engine's pull, more the faster the truck goes, so a light truck no longer "
                 "runs to its gear's top as if in a vacuum. It starts in each gear once the mod has measured that gear floored on flat ground. "
-                "Rolling resistance is Tire Inflation's, which knows the ground.");
+                "Rolling resistance is the game's on soft ground, and on firm ground the game has next to none.");
         // the driven truck's gearbox: how long each gear is held going up, kept for that gearbox
         if (view.gearbox[0] && s.gearbox >= kGearboxModel)
         {

@@ -378,7 +378,7 @@ taken from and stays bounded near a gear's top:</p>
 cargo or a trailer, so a loaded truck's air part is overstated and a trailer's own drag is missing. CdA by that mass, 1.1 m² under 4 t,
 3.5 under 10 t, else 6, unless <code>RoadCdA</code> sets it in <code>[Gauges]</code> or a truck's file. Nothing standing, in reverse,
 with the foot off (the game's coasting stays) or before <i>a</i><sub>base</sub>(<i>g</i>) is learned. Only the air: Gameplay reads no
-surface, and rolling resistance is Tire Inflation's. <i>a</i><sub>base</sub>(<i>g</i>) is learned in ordinary driving
+surface, and rolling resistance is the game's on soft ground, and on firm ground the game has next to none. <i>a</i><sub>base</sub>(<i>g</i>) is learned in ordinary driving
 (<code>BaseLearnStep</code>): floored (0.9), the grade by the truck's path within 3° and taken out (<i>a</i> + <i>g</i> sin θ; the path's rise
 over its way in the last second, <code>GradeStep</code>, as the chassis squats nose up under power), the grip known and the wheels not
 spinning, no brake, the wheels at 0.3 to 0.8 of the gear's top (past it a top's error grows: 10 % at 0.8, 20 % at 0.9), not within 0.5 s
@@ -1266,7 +1266,7 @@ game's own stall seconds; whether the game's stalling notice shows for it is unc
 taken as 0.2 and 1.0 until a truck with them is driven at Gearbox=0; L is 0.45 as driven. On Windows 10 the NEXT GEN menu may not draw
 while ReShade loads the .asi files as add-ons: turn that off in ReShade's Add-ons tab (one player's report, under investigation).</li></ul>
 <h3>Changed in the next version</h3>
-<ul><li>Air drag (<code>RoadLoad</code>, off by default): the air's drag taken off the engine's pull against each gear's learned pull at the game's own torque; rolling resistance is Tire Inflation's. Each gear's pull is learned floored up to 0.8 of its top, on grades up to 3° by the path, over several visits; the gears not learned go by the learned ones once two agree within 15 %. With the probe, a "pull:" line measures the game's own pull by x.</li>
+<ul><li>Air drag (<code>RoadLoad</code>, off by default): the air's drag taken off the engine's pull against each gear's learned pull at the game's own torque; rolling resistance is the game's on soft ground, and on firm ground the game has next to none. Each gear's pull is learned floored up to 0.8 of its top, on grades up to 3° by the path, over several visits; the gears not learned go by the learned ones once two agree within 15 %. With the probe, a "pull:" line measures the game's own pull by x.</li>
 <li>Creep in a hand-picked gear (<code>CreepManual</code>, off by default): the governor, the holding part and at Gearbox=2 the stall are reached again, R and the low range on the game's shifter through the converter; in Sequential the gearbox goes back to D first.</li>
 <li>The log stays open and is written out every half second, so <code>Probe=1</code> no longer opens the file 70 times a second:
 one append handle that shares writing (so CrashLineOut's own handle still gets in), a 64 KB buffer flushed on every line that is not a probe line
