@@ -1052,8 +1052,8 @@ static void ReadIni(GaugeSettings &s)
                         L";   BindGearA=Key Num 7\n"
                         L"; RequireClutch=1 stalls the engine on a shift into a gear without the clutch, RequireGearHeld=1 goes to N while no\n"
                         L"; gear key is held (an H shifter with every gear bound), SkipNeutral=1 steps from L- to reverse and back past N.\n"
-                        L"; GearUp and GearDown walk R, N, L-, L, L+, 1, 2 and on to the top gear, on every truck. Up from L+ stays there:\n"
-                        L"; GearA, a gear key or RangeHigh leave the low range, so it never goes to A by itself.\n"
+                        L"; GearUp and GearDown walk R, N, L-, L, L+, 1, 2 and on to the top gear, on every truck. Up from L+ goes to 1\n"
+                        L"; a second after an up press got there. A 1st from the low range stays held until the next shift (never to D).\n"
                         L"; DownStaysForward=1: GearDown stops at L-, N and R only on their own keys (wins over SkipNeutral).\n"
                         L"; At Gearbox=2 with Input 1 or 2 the game's own shifter picks a position too; with Input 0 its shifts stay refused.\n"
                         L"; IgnoreShifter=1: at Gearbox=2 a position picked on the game's shifter does nothing, with any Input.\n"
@@ -4315,7 +4315,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 bi.pos = w.pos.pos;
                 bi.heldGear = w.pos.gear;
                 bi.autoGear = autoGear;
-                bi.byShifter = w.pos.byShifter;
+                bi.byShifter = GearboxPosHeld(w.pos); // the shifter's gear, or a 1st from the low range until the next shift
                 bi.gearHeldRule = s.requireGearHeld;
                 bi.pedal = foot;
                 bi.grip = w.gearbox.grip;
@@ -4350,7 +4350,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 si.backToA = s.backToA;
                 si.requireClutch = s.requireClutch;
                 si.requireGearHeld = s.requireGearHeld;
-                si.byShifter = w.pos.byShifter;
+                si.byShifter = GearboxPosHeld(w.pos);
                 si.pos = w.pos.pos;
                 si.gear = w.pos.gear;
                 si.top = boxTruck.top;
@@ -4386,7 +4386,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                     Log(L"gearbox: the game's L+ cannot be told from its first gear (the same gear, the plain power), so the shifter's L+ reads as the first gear");
                 }
             }
-            GearboxPosOrders box = GearboxPosStep(w.pos, options, acts, boxNow, autoGear);
+            GearboxPosOrders box = GearboxPosStep(w.pos, options, acts, boxNow, autoGear, dt);
             // at Gearbox 0 and 1 the game's shifter is the player's: the mod's automatic writes and shifts only within
             // A, never into N or R and never out of a position of the game's (0.18.2's hotfix, the reviewer's item 4)
             if (!own && !GearboxOwnOrders(w.pos.pos, box.gear, box.setGear))
@@ -4414,12 +4414,11 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                                              : L"; its gearbox damage goes to the game's thread";
             }
             if (box.moved && w.pos.pos != posWas) Log(L"gearbox: %S to %S", GearboxPosName(posWas), GearboxPosName(w.pos.pos));
-            static bool lowUpSaid = false; // once a session
-            if (box.lowUp && !lowUpSaid)
-            {
-                lowUpSaid = true;
-                Log(L"gearbox: up from L+ stays in the low range (A, a gear key or RangeHigh leave it)");
-            }
+            // up from L+ refused within the hold after the walk: once a visit to L+, so a run of presses shows its refusal
+            if (box.lowUpSay)
+                Log(L"gearbox: up from L+ refused %.1f s after the walk got there (press again to go to 1st)", box.lowUpAfter);
+            if (box.lowToFirst && w.pos.heldFromLow)
+                Log(L"gearbox: %S to 1st by hand: held, no back to D until the next shift", GearboxPosName(posWas));
             // a shift by hand into a numbered gear starts BackToA's timer; one on the game's shifter does not
             w.backHand = w.pos.pos == kPosGear && !w.pos.byShifter && (posWas != kPosGear || gearWas != w.pos.gear);
             if (box.why[0] && box.stall) Log(L"gearbox: %S (%d since it took the truck)%s", box.why, w.pos.stalls, stallCost);

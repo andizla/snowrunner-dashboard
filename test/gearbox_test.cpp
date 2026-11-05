@@ -27,10 +27,10 @@ static GearboxTruck Truck(int g)
     return t;
 }
 
-// One pass with these actions; the game takes the gear set.
-static GearboxPosOrders Pass(GearboxPosModel &m, const GearboxOptions &o, GearboxActions a, GearboxTruck &t, int autoGear = 1)
+// One pass of dt seconds with these actions; the game takes the gear set.
+static GearboxPosOrders Pass(GearboxPosModel &m, const GearboxOptions &o, GearboxActions a, GearboxTruck &t, int autoGear = 1, float dt = 0.05f)
 {
-    const GearboxPosOrders r = GearboxPosStep(m, o, a, t, autoGear);
+    const GearboxPosOrders r = GearboxPosStep(m, o, a, t, autoGear, dt);
     if (r.setGear) t.gear = r.gear;
     if (r.setPower) t.power = r.power;
     return r;
@@ -39,6 +39,58 @@ static GearboxPosOrders Pass(GearboxPosModel &m, const GearboxOptions &o, Gearbo
 static GearboxActions Up() { GearboxActions a = {}; a.up = true; return a; }
 static GearboxActions Down() { GearboxActions a = {}; a.down = true; return a; }
 static GearboxActions None() { return GearboxActions{}; }
+
+// Floored at the red zone for seconds with Sequential and BackToA 3, both fed as gauges.cpp feeds them (GearboxPosHeld),
+// A's gear the held one, so the foot down holds no return; the position just shifted by hand. True once either took it
+// back to A (D).
+static bool FloorToD(GearboxPosModel &m, GearboxTruck &t, float seconds)
+{
+    const float dt = 0.05f;
+    SeqModel sm = {};
+    BackModel bm = {};
+    bool hand = true;
+    for (float at = 0.0f; at < seconds; at += dt)
+    {
+        SeqInputs in = {};
+        in.backToA = 3;
+        in.pos = m.pos;
+        in.gear = m.gear;
+        in.top = t.top;
+        in.byShifter = GearboxPosHeld(m);
+        in.redline = 3000.0f;
+        in.input = 0.95f * in.redline;
+        in.idle = 700.0f;
+        in.pedal = 1.0f;
+        in.gripKnown = in.engineOn = true;
+        BackInputs b = {};
+        b.pos = m.pos;
+        b.heldGear = m.gear;
+        b.autoGear = m.gear < 1 ? 1 : m.gear;
+        b.byShifter = GearboxPosHeld(m);
+        b.pedal = 1.0f;
+        b.grip = 1.2f;
+        b.speed = 5.0f;
+        b.spin = 6.0f;
+        b.pitchKnown = b.engineOn = true;
+        const bool back = BackToAStep(bm, 3, hand, b, dt);
+        const int seq = back ? 0 : SequentialStep(sm, in, dt);
+        hand = false;
+        GearboxActions a = {};
+        a.a = back || seq != 0;
+        Pass(m, GearboxOptions{}, a, t, m.gear < 1 ? 1 : m.gear, dt);
+        if (m.pos == kPosA) return true;
+    }
+    return false;
+}
+
+// The truck walked up from L into L+ (the hold starts), from a 1st in the game.
+static void WalkToLowPlus(GearboxPosModel &m, GearboxTruck &t)
+{
+    GearboxActions l = {};
+    l.low = true;
+    Pass(m, GearboxOptions{}, l, t);
+    Pass(m, GearboxOptions{}, Up(), t, 1, 0.05f);
+}
 
 // ---- the hooks' policy, on functions with the game's signatures ----
 static volatile int g_ran[kFnCount] = {};
@@ -83,79 +135,148 @@ int main()
             const GearboxPosOrders r = Pass(m, plain, Up(), t);
             up = up && m.pos == row[i] && t.gear == gears[i] && fabsf(t.power - powers[i]) < 0.01f && !r.lowUp;
         }
-        // up from L+ stays in the low range (BRIEF_low_range_never_d.md)
+        // up from L+ stays in the low range within a second of the walk getting there (BRIEF_low_range_up_to_1.md), the
+        // refusal told once a visit; a press after it goes to the 1st, held
         bool stays = true;
+        int said = 0;
         for (int i = 0; i < 3; i++)
         {
             const GearboxPosOrders r = Pass(m, plain, Up(), t);
             stays = stays && m.pos == kPosLowPlus && t.gear == 1 && !r.moved && r.lowUp && !r.setGear;
+            said += r.lowUpSay;
         }
+        for (int i = 0; i < 17; i++) Pass(m, plain, None(), t);
+        const GearboxPosOrders go = Pass(m, plain, Up(), t);
+        const bool first = m.pos == kPosGear && m.gear == 1 && t.gear == 1 && go.lowToFirst && m.heldFromLow && GearboxPosHeld(m);
+        Pass(m, plain, Down(), t);
+        const bool backLowPlus = m.pos == kPosLowPlus && !m.heldFromLow;
         Pass(m, plain, Down(), t);
         const bool downLow = m.pos == kPosLow;
-        Check(upTop && at2 && down && up && stays && downLow,
-              "gearbox: up walks to the top and stops there; down from 2 walks 1, L+ (1.00), L (0.45), L- (0.20), N, R and stays; up from R walks back to L+ and stays there; down from L+ is L");
+        Check(upTop && at2 && down && up && stays && said == 1 && first && backLowPlus && downLow,
+              "gearbox: up walks to the top and stops there; down from 2 walks 1, L+ (1.00), L (0.45), L- (0.20), N, R and stays; up from R walks back to L+, "
+              "where up stays within a second (told once) and then goes to a held 1st; down from it is L+, then L");
     }
-    // the low range never goes to D by itself: L+ floored at the red zone with Sequential and BackToA 3 neither moves
-    // nor returns; RangeHigh from L+ gives the 1st, which Sequential takes to D as any held gear; a gear key from L gives
-    // that gear; down from a numbered 1st is L+
+    // the low range never goes to D by itself: L+ floored at the red zone with Sequential and BackToA 3 stays L+; a 1st
+    // reached from the low range (up from L+ after the hold, RangeHigh from L, the key 1 from L-) stays held floored 5 s
+    // with them, and up from it gives a 2nd that Sequential takes to D at the red zone as any held gear; a gear key 3
+    // from L gives an ordinary 3rd; down from a numbered 1st is L+ (BRIEF_low_range_up_to_1.md, the lead's calls)
     {
         GearboxPosModel m = {};
         GearboxTruck t = Truck(1);
-        GearboxActions l = {};
-        l.lowPlus = true;
-        Pass(m, plain, l, t);
-        SeqInputs in = {};
-        in.backToA = 3;
-        in.top = 6;
-        in.redline = 3000.0f;
-        in.input = 0.95f * in.redline;
-        in.idle = 700.0f;
-        in.pedal = 1.0f;
-        in.gripKnown = in.engineOn = true;
-        BackInputs b = {};
-        b.heldGear = 1;
-        b.autoGear = 1;
-        b.pedal = 0.3f;
-        b.grip = 1.2f;
-        b.speed = 5.0f;
-        b.spin = 6.0f;
-        b.pitchKnown = true;
-        b.engineOn = true;
-        const float dt = 0.05f;
-        SeqModel sm = {};
-        BackModel bm = {};
-        bool never = true;
-        for (int i = 0; i < 100; i++)
-        {
-            in.pos = b.pos = m.pos;
-            in.gear = m.gear;
-            never = never && SequentialStep(sm, in, dt) == 0 && !BackToAStep(bm, 3, false, b, dt);
-            Pass(m, plain, i % 20 == 0 ? Up() : None(), t);
-            never = never && m.pos == kPosLowPlus;
-        }
-        GearboxActions hi = {};
-        hi.rangeHigh = true;
-        Pass(m, plain, hi, t);
-        const bool first = m.pos == kPosGear && m.gear == 1 && t.gear == 1;
-        in.pos = m.pos;
-        in.gear = m.gear;
-        SeqModel s2 = {};
-        int seq = 0;
-        for (int i = 0; i < 20 && !seq; i++) seq = SequentialStep(s2, in, dt);
+        WalkToLowPlus(m, t);
+        const bool lowStays = !FloorToD(m, t, 5.0f) && m.pos == kPosLowPlus;
+        // floored 5 s in L+ counts: up goes now, to a held 1st
+        Pass(m, plain, Up(), t);
+        const bool upHeld = m.pos == kPosGear && m.gear == 1 && !FloorToD(m, t, 5.0f) && m.pos == kPosGear && m.gear == 1;
+        Pass(m, plain, Up(), t);
+        const bool second = m.pos == kPosGear && m.gear == 2 && !m.heldFromLow && FloorToD(m, t, 5.0f);
+        GearboxPosModel r = {};
+        GearboxTruck tr = Truck(1);
         GearboxActions lo = {};
         lo.low = true;
-        Pass(m, plain, lo, t);
-        GearboxActions g3 = {};
-        g3.gearPressed = 3;
-        Pass(m, plain, g3, t);
-        const bool third = m.pos == kPosGear && m.gear == 3 && t.gear == 3;
+        Pass(r, plain, lo, tr);
+        GearboxActions hi = {};
+        hi.rangeHigh = true;
+        Pass(r, plain, hi, tr);
+        const bool rangeHeld = r.pos == kPosGear && r.gear == 1 && r.heldFromLow && !FloorToD(r, tr, 5.0f) && r.pos == kPosGear && r.gear == 1;
+        GearboxPosModel k = {};
+        GearboxTruck tk = Truck(1);
+        GearboxActions lm = {};
+        lm.lowMinus = true;
+        Pass(k, plain, lm, tk);
         GearboxActions g1 = {};
         g1.gearPressed = 1;
-        Pass(m, plain, g1, t);
-        Pass(m, plain, Down(), t);
-        const bool lowPlus = m.pos == kPosLowPlus;
-        Check(never && first && seq == 1 && third && lowPlus,
-              "gearbox: L+ floored at the red zone with Sequential and BackToA 3 stays L+; RangeHigh gives the 1st and Sequential takes it to D; a gear key 3 from L gives 3rd; down from the 1st is L+");
+        Pass(k, plain, g1, tk);
+        const bool keyHeld = k.pos == kPosGear && k.gear == 1 && k.heldFromLow && !FloorToD(k, tk, 5.0f) && k.pos == kPosGear && k.gear == 1;
+        GearboxPosModel g = {};
+        GearboxTruck tg = Truck(1);
+        Pass(g, plain, lo, tg);
+        GearboxActions g3 = {};
+        g3.gearPressed = 3;
+        Pass(g, plain, g3, tg);
+        const bool third = g.pos == kPosGear && g.gear == 3 && tg.gear == 3 && !g.heldFromLow && FloorToD(g, tg, 5.0f);
+        GearboxPosModel d = {};
+        GearboxTruck td = Truck(1);
+        Pass(d, plain, g1, td);
+        Pass(d, plain, Down(), td);
+        const bool lowPlus = d.pos == kPosLowPlus;
+        Check(lowStays && upHeld && second && rangeHeld && keyHeld && third && lowPlus,
+              "gearbox: L+ floored at the red zone with Sequential and BackToA 3 stays L+; a 1st by up from L+, RangeHigh from L or the key 1 from L- stays held "
+              "there 5 s; up from it gives a 2nd that goes to D; a gear key 3 from L gives an ordinary 3rd that goes to D; down from the 1st is L+");
+    }
+    // the hold on up from L+ (BRIEF_low_range_up_to_1.md and the Reviewer's addendum): it starts only when an up press
+    // brought the truck to L+, a refused press does not restart it, and the time away on the map counts for nothing
+    {
+        // up from R pressed 0.3 s apart: the 5th refused (0.3 s in L+), told; the 6th and 7th refused untold; the 8th,
+        // 1.2 s in L+, goes to the 1st
+        GearboxPosModel m = {};
+        GearboxTruck t = Truck(-1);
+        t.speed = 0.0f;
+        GearboxActions rr = {};
+        rr.r = true;
+        Pass(m, plain, rr, t);
+        int presses = 0;
+        bool fifth = false, untold = true, eighth = false;
+        float refusedAt = -1.0f;
+        for (presses = 1; presses <= 8; presses++)
+        {
+            const GearboxPosOrders o = Pass(m, plain, Up(), t, 1, 0.3f);
+            if (presses == 5) fifth = m.pos == kPosLowPlus && o.lowUp && o.lowUpSay, refusedAt = o.lowUpAfter;
+            if (presses == 6 || presses == 7) untold = untold && m.pos == kPosLowPlus && o.lowUp && !o.lowUpSay;
+            if (presses == 8) eighth = m.pos == kPosGear && m.gear == 1 && o.lowToFirst && m.heldFromLow;
+        }
+        // in L+ 0.5 s, then up: stays; 0.6 s later up again: the 1st
+        GearboxPosModel h = {};
+        GearboxTruck th = Truck(1);
+        WalkToLowPlus(h, th);
+        Pass(h, plain, None(), th, 1, 0.25f);
+        Pass(h, plain, Up(), th, 1, 0.25f);
+        const bool halfStays = h.pos == kPosLowPlus;
+        Pass(h, plain, None(), th, 1, 0.3f);
+        Pass(h, plain, Up(), th, 1, 0.3f);
+        const bool againGoes = h.pos == kPosGear && h.gear == 1;
+        // down from the 1st into L+, up 0.2 s later: the 1st
+        GearboxPosModel dn = {};
+        GearboxTruck td = Truck(1);
+        GearboxActions g1 = {};
+        g1.gearPressed = 1;
+        Pass(dn, plain, g1, td);
+        Pass(dn, plain, Down(), td);
+        Pass(dn, plain, Up(), td, 1, 0.2f);
+        const bool downUp = dn.pos == kPosGear && dn.gear == 1;
+        // the L+ key, up 0.2 s later: the 1st
+        GearboxPosModel ky = {};
+        GearboxTruck tk = Truck(1);
+        GearboxActions lp = {};
+        lp.lowPlus = true;
+        Pass(ky, plain, lp, tk);
+        Pass(ky, plain, Up(), tk, 1, 0.2f);
+        const bool keyUp = ky.pos == kPosGear && ky.gear == 1;
+        // a second walk into L+ tells its refusal again
+        GearboxActions lo = {};
+        lo.low = true;
+        Pass(ky, plain, lo, tk);
+        Pass(ky, plain, Up(), tk);
+        const bool toldAgain = ky.pos == kPosLowPlus && Pass(ky, plain, Up(), tk).lowUpSay;
+        // L+ kept through a map pass with 0.6 s counted, then up 0.5 s after the return: the 1st
+        GearboxPosModel mp = {};
+        GearboxTruck tm = Truck(1);
+        WalkToLowPlus(mp, tm);
+        Pass(mp, plain, None(), tm, 1, 0.6f);
+        const bool kept = GearboxPosKeeps(mp, tm); // the map: no pass while away
+        Pass(mp, plain, None(), tm, 1, 0.3f);
+        Pass(mp, plain, Up(), tm, 1, 0.2f);
+        const bool mapUp = kept && mp.pos == kPosGear && mp.gear == 1;
+        // the held 1st kept through a map pass stays held; read again (a gear changed while away) it is not
+        const bool heldKept = GearboxPosKeeps(mp, tm) && mp.heldFromLow;
+        GearboxTruck changed = tm;
+        changed.gear = 2;
+        GearboxPosModel re = mp;
+        if (!GearboxPosKeeps(re, changed)) GearboxPosTake(re, changed);
+        const bool readAgain = re.pos == kPosGear && re.gear == 2 && !re.heldFromLow && !GearboxPosHeld(re);
+        Check(fifth && refusedAt > 0.29f && refusedAt < 0.31f && untold && eighth && halfStays && againGoes && downUp && keyUp && toldAgain && mapUp && heldKept && readAgain,
+              "gearbox: up from L+ waits a second after an up press got there: from R 0.3 s apart the 5th is refused (told once a visit), the 8th goes to a held 1st; "
+              "0.5 s refused, 0.6 s later goes; down from the 1st or the L+ key let up go at once; the map keeps the time and the held 1st, a read again does not");
     }
     // back in the world after the map, the garage or the viewer (BRIEF_low_range_never_d.md, the Reviewer's point 1):
     // the position stays while the game has the gear and the power the mod set (L+ stays L+, A in the game's gear 2
@@ -656,13 +777,13 @@ int main()
     {
         GearboxPosModel atSpeed = {};
         GearboxTruck ts = Truck(2);
-        GearboxPosStep(atSpeed, clutch, None(), ts, 1);
+        GearboxPosStep(atSpeed, clutch, None(), ts, 1, 0.05f);
         const GearboxPosOrders grind = Pass(atSpeed, clutch, Up(), ts);
         const bool out = !grind.stall && atSpeed.pos == kPosN && ts.gear == 0 && atSpeed.stalls == 0 && grind.why[0];
         GearboxPosModel m = {};
         GearboxTruck t = Truck(2);
         t.speed = 0.5f * kGrindSpeed;
-        GearboxPosStep(m, clutch, None(), t, 1);
+        GearboxPosStep(m, clutch, None(), t, 1, 0.05f);
         const GearboxPosOrders noClutch = Pass(m, clutch, Up(), t);
         const bool stalled = noClutch.stall && noClutch.setGear && t.gear == 3 && m.stalls == 1 && noClutch.why[0];
         const GearboxPosOrders again = Pass(m, clutch, None(), t);
@@ -743,12 +864,12 @@ int main()
         GearboxPosModel m = {};
         GearboxTruck t = Truck(2);
         Pass(m, plain, None(), t);
-        const GearboxPosOrders first = GearboxPosStep(m, plain, Up(), t, 1); // not taken: t stays in 2
+        const GearboxPosOrders first = GearboxPosStep(m, plain, Up(), t, 1, 0.05f); // not taken: t stays in 2
         const bool sayFirst = GearboxPosRefused(m, first.gear);
         int asked = 0;
-        for (int i = 0; i < 20; i++) asked += GearboxPosStep(m, plain, None(), t, 1).setGear;
+        for (int i = 0; i < 20; i++) asked += GearboxPosStep(m, plain, None(), t, 1, 0.05f).setGear;
         const bool sayAgain = GearboxPosRefused(m, first.gear);
-        const GearboxPosOrders next = GearboxPosStep(m, plain, Up(), t, 1);
+        const GearboxPosOrders next = GearboxPosStep(m, plain, Up(), t, 1, 0.05f);
         Check(first.setGear && first.gear == 3 && sayFirst && asked == 0 && !sayAgain && next.setGear && next.gear == 4 && GearboxPosRefused(m, 4),
               "gearbox: a gear the game did not take is not asked on every pass after, the refusal told once a position; the next position asks again");
     }
@@ -810,7 +931,7 @@ int main()
         GearboxActions a = {};
         GearboxPosModel m = {};
         GearboxTruck t = Truck(2);
-        GearboxPosStep(m, plain, a, t, 1);
+        GearboxPosStep(m, plain, a, t, 1, 0.05f);
         Check(a.clutchTravel < 0.0f && m.travel == 0.0f && !m.clutch, "gearbox: actions read no clutch axis unless one is given");
     }
 

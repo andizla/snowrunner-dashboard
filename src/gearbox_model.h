@@ -79,6 +79,9 @@ static const float kPowerStep = 0.005f;   // a power factor this close to the on
 static const float kStandStill = 0.5f;    // m/s under which the truck stands, for the setting off in A
 static const float kGrindSpeed = 1.5f;    // m/s (about 5 km/h) from which a gear picked without the clutch stays out instead of stalling the engine
 static const float kSetOffPedal = 0.1f;   // the pedal over which a truck standing in N in A sets off in the first gear
+// Up from L+ goes to the 1st only once the truck has been in L+ this long since an up press brought it there, so a run
+// of presses up from R stops in the low range (BRIEF_low_range_up_to_1.md). L+ reached any other way lets up go at once.
+static const float kLowRangeUpHold = 1.0f;
 
 struct GearboxOptions
 {
@@ -157,7 +160,14 @@ struct GearboxPosModel
     bool refusedSaid;     // a refusal of the game's was told since the position last changed
     bool waitBack;        // A or a gear picked from R while the truck still rolled back: N until it stands
     bool byShifter;       // the position was picked on the game's shifter, which stays where it was put: RequireGearHeld lets it be
+    float lowPlusFor;     // seconds in L+: 0 when an up press walked there, kLowRangeUpHold when it came any other way
+    bool lowRefusedSaid;  // an up refused in L+ was told on this visit to L+
+    bool heldFromLow;     // a 1st reached from the low range: held, no Back to A and no Sequential back to D, until the next shift
 };
+
+// A numbered gear that Back to A and Sequential leave where it is: picked on the game's shifter, or a 1st reached from
+// the low range until the next shift (heldFromLow). gauges.cpp feeds both by it, as the tests do.
+inline bool GearboxPosHeld(const GearboxPosModel &m) { return m.byShifter || m.heldFromLow; }
 
 struct GearboxPosOrders
 {
@@ -168,7 +178,10 @@ struct GearboxPosOrders
     bool stall;           // write kStallSeconds into the stall seconds
     bool flagDown;        // put the game's automatic flag down
     bool moved;           // the position changed on this pass
-    bool lowUp;           // an up in L+ that stayed there
+    bool lowUp;           // an up in L+ refused, as an up press brought the truck there under kLowRangeUpHold ago
+    bool lowUpSay;        // the first refusal on this visit to L+: told in the log
+    float lowUpAfter;     // the seconds in L+ at the refusal
+    bool lowToFirst;      // the low range went to the 1st, which is held (heldFromLow)
     const char *why;     // what happened, for the log, a string literal; "" for nothing to say
 };
 
@@ -185,7 +198,7 @@ enum
     kBackOff, kBackNotHand, kBackHeld, kBackTimer, kBackPedalDown, kBackNoGrip, kBackSpin, kBackClimb, kBackDescent, kBackRollingBack,
     kBackGap, kBackSwitch, kBackHandbrake, kBackEngine, kBackShifting, kBackSteadying, kBackGo, kBackWhyCount
 };
-static const char *const kBackWhyNames[kBackWhyCount] = { "BackToA 0", "no shift by hand into a numbered gear", "the gear held (RequireGearHeld or the game's shifter)",
+static const char *const kBackWhyNames[kBackWhyCount] = { "BackToA 0", "no shift by hand into a numbered gear", "the gear held (RequireGearHeld, the game's shifter or a 1st from the low range)",
                                                           "the timer", "the pedal", "the wheels' grip not learned yet (drive a moment in A or ease the pedal)", "wheelspin", "a climb",
                                                           "a descent", "rolling back", "A's gear too far", "a lock switched", "the handbrake",
                                                           "the engine", "a shift", "a second steady", "nothing" };
@@ -429,8 +442,9 @@ inline void GearboxPosToGear(GearboxPosModel &m, int g)
     }
 }
 
-// One pass. autoGear: the gear the mod's automatic wants (A's gear).
-inline GearboxPosOrders GearboxPosStep(GearboxPosModel &m, const GearboxOptions &o, const GearboxActions &a, const GearboxTruck &t, int autoGear)
+// One pass of dt seconds since the last one (the time in L+ counts by it). autoGear: the gear the mod's automatic wants
+// (A's gear).
+inline GearboxPosOrders GearboxPosStep(GearboxPosModel &m, const GearboxOptions &o, const GearboxActions &a, const GearboxTruck &t, int autoGear, float dt)
 {
     GearboxPosOrders r = {};
     r.why = "";
@@ -438,6 +452,10 @@ inline GearboxPosOrders GearboxPosStep(GearboxPosModel &m, const GearboxOptions 
     const int top = t.top < 1 ? 1 : t.top;
     m.clutch = a.clutch || (a.clutchTravel >= 0.5f);
     m.travel = a.clutchTravel >= 0.0f ? (a.clutchTravel > 1.0f ? 1.0f : a.clutchTravel) : (a.clutch ? 1.0f : 0.0f);
+    // the time since the last pass counts as time in L+ if the truck was there
+    if (m.pos == kPosLowPlus) m.lowPlusFor += dt;
+    // up from L+ goes to the 1st once the truck has been in L+ kLowRangeUpHold (a hair under, for the sum of the passes)
+    const bool lowUpWaits = m.pos == kPosLowPlus && m.lowPlusFor < kLowRangeUpHold - 1e-4f;
     // the position the actions pick: a position key first, then a gear key, then up or down, then the range keys
     const int was = m.pos, wasGear = m.gear;
     if (a.a) m.pos = kPosA;
@@ -448,10 +466,11 @@ inline GearboxPosOrders GearboxPosStep(GearboxPosModel &m, const GearboxOptions 
     else if (a.low) m.pos = kPosLow;
     else if (a.lowPlus) m.pos = kPosLowPlus;
     else if (a.gearPressed >= 1) GearboxPosToGear(m, a.gearPressed > top ? top : a.gearPressed);
-    // up from H stays in H, and up from L+ stays in the low range: L+ and the 1st are the same gear at the same power, so
-    // a walk on into the 1st left the low range unseen and Sequential and BackToA took it on to D (the user, 4 November:
-    // "It should never go to D from low range"). A, a gear key, N, R, H or RangeHigh leave it
-    else if ((a.up || a.down) && !(a.up && (m.pos == kPosH || m.pos == kPosLowPlus)) &&
+    // up from H stays in H, and up from L+ stays in the low range for kLowRangeUpHold after an up press brought it there:
+    // L+ and the 1st are the same gear at the same power, so a quick run of presses walked on into the 1st unseen
+    // (the user, 4 November: "It should never go to D from low range"). A press of its own goes to the 1st (the user,
+    // 5 November: "i cant shift out of L+ into 1"); a refused press does not restart the hold
+    else if ((a.up || a.down) && !(a.up && (m.pos == kPosH || lowUpWaits)) &&
              !(a.down && o.downStaysForward && GearboxPosWalk(m, t) <= kWalkLowMinus)) // DownStaysForward: down from L-, N or R does nothing
     {
         const int i = GearboxPosWalk(m, t), last = top + 3;
@@ -463,6 +482,21 @@ inline GearboxPosOrders GearboxPosStep(GearboxPosModel &m, const GearboxOptions 
     else if (a.rangeLow && !(m.pos >= kPosLowMinus && m.pos <= kPosLowPlus)) m.pos = kPosLow;
     else if (a.rangeHigh && m.pos >= kPosLowMinus && m.pos <= kPosLowPlus) GearboxPosToGear(m, 1);
     r.lowUp = a.up && was == kPosLowPlus && m.pos == kPosLowPlus;
+    r.lowUpSay = r.lowUp && !m.lowRefusedSaid;
+    r.lowUpAfter = m.lowPlusFor;
+    if (r.lowUp) m.lowRefusedSaid = true;
+    // into L+: the hold starts on an up press from L, else up goes at once (down from the 1st, the L+ key, the shifter)
+    if (m.pos == kPosLowPlus && was != kPosLowPlus)
+    {
+        m.lowPlusFor = a.up && was == kPosLow ? 0.0f : kLowRangeUpHold;
+        m.lowRefusedSaid = false;
+    }
+    // a 1st reached from the low range (up from L+, RangeHigh or the key 1) stays held until the player's next shift:
+    // up, down, A, a gear key or any other move end it (the lead's calls on BRIEF_low_range_up_to_1.md, so the low range
+    // never goes on to D by itself). A gear key above 1 from the low range gives an ordinary held gear
+    r.lowToFirst = was >= kPosLowMinus && was <= kPosLowPlus && m.pos == kPosGear && m.gear == 1;
+    if (r.lowToFirst) m.heldFromLow = true;
+    else if (a.up || a.down || a.a || a.gearPressed >= 1 || m.pos != was || m.gear != wasGear) m.heldFromLow = false;
     // the game's shifter stays where it was put, so a gear picked there is held; a key's position is not
     if (a.shifter) m.byShifter = true;
     else if (m.pos != was || m.gear != wasGear) m.byShifter = false;
@@ -504,6 +538,7 @@ inline GearboxPosOrders GearboxPosStep(GearboxPosModel &m, const GearboxOptions 
         r.setPower = true;
         r.power = power;
     }
+    if (m.pos != kPosGear) m.heldFromLow = false; // a grind to N or RequireGearHeld's N ends it too
     r.flagDown = t.automatic;
     // a shift by the player into a gear without the clutch, standing or crawling, stalls the engine once, not into
     // neutral, and not when the engine is already dying or off
