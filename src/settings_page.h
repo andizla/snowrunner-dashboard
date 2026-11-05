@@ -50,12 +50,15 @@ static int PageVirtualKey(int k)
     }
 }
 
-// The row's name in the left column (PageLabel) was hovered: the row's next PageTip shows over it as over the widget.
+// The row's name in the left column (PageLabel) was hovered, and the line it is on: the row's PageTip shows over it as
+// over the widget, only for an item on that line, so a row with no tip of its own does not lend its name to the next.
 static bool g_pageLabelHovered = false;
+static float g_pageLabelY = 0.0f;
 
 static void PageTip(const char *text)
 {
-    if (g_pageLabelHovered || ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", text);
+    const bool label = g_pageLabelHovered && fabsf(ImGui::GetItemRectMin().y - g_pageLabelY) < ImGui::GetFrameHeight() * 0.5f;
+    if (label || ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", text);
     g_pageLabelHovered = false;
 }
 
@@ -72,6 +75,7 @@ static void PageLabel(const char *text, float x)
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(text);
     g_pageLabelHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled);
+    g_pageLabelY = ImGui::GetItemRectMin().y - ImGui::GetStyle().FramePadding.y; // the line's top, where the widget after it starts
     ImGui::SameLine(x);
 }
 
@@ -159,6 +163,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     const unsigned long long now = GetTickCount64();
     if (now - st.last > 1000) st.capture = -1; // the overlay was closed in between
     st.last = now;
+    g_pageLabelHovered = false;
     const float em = ImGui::GetFontSize(), labelX = em * 12.0f, w = em * 14.0f;
     char buf[64];
 
