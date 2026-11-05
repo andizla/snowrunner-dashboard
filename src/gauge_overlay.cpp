@@ -220,9 +220,17 @@ static void OnPage()
     GaugeView view;
     const LONG turn = SettingsGet(s);
     ViewGet(view);
+    // the tab it opens on: the one Gauges.ini keeps
+    if (st.tab < 0)
+    {
+        char id[32];
+        PageTabRead(id, sizeof id);
+        st.tab = PageTabFromId(id);
+    }
     // the pad is read on every frame of the tab: the frame the binding's button is pressed on has to know that the
     // pad's A, which pressed it, is still down
     const int act = SettingsPage(s, view, st, PadButtons());
+    if (act & kPageTab) PageTabWrite(kPageTabIds[st.tab]);
     if (act & kPageChanged) SettingsPut(s, turn);
     if (act & kPageTruckDrop) SettingsTruckDrop();
     if (act & kPagePullTest) PullTestAsk(true);

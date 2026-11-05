@@ -10,7 +10,7 @@ rem no brackets around this check: a folder name with brackets in it would end t
 if not exist "%IMGUI_SRC%\imgui.cpp" goto nosources
 if not exist out\obj\preview mkdir out\obj\preview
 if not exist out\test mkdir out\test
-cl /nologo /O2 /W3 /EHsc /std:c++17 /utf-8 /MT /I "%IMGUI_SRC%" /I "%IMGUI_SRC%\backends" /I deps\stb /I src /Fo:out\obj\preview\ /Fe:out\test\gauge_preview.exe test\gauge_preview.cpp "%IMGUI_SRC%\imgui.cpp" "%IMGUI_SRC%\imgui_draw.cpp" "%IMGUI_SRC%\imgui_tables.cpp" "%IMGUI_SRC%\imgui_widgets.cpp" "%IMGUI_SRC%\backends\imgui_impl_dx11.cpp" /link d3d11.lib d3dcompiler.lib windowscodecs.lib ole32.lib || (echo PREVIEW BUILD FAILED & exit /b 1)
+cl /nologo /O2 /W3 /EHsc /std:c++17 /utf-8 /MT /DIMGUI_ENABLE_TEST_ENGINE /I "%IMGUI_SRC%" /I "%IMGUI_SRC%\backends" /I deps\stb /I src /Fo:out\obj\preview\ /Fe:out\test\gauge_preview.exe test\gauge_preview.cpp "%IMGUI_SRC%\imgui.cpp" "%IMGUI_SRC%\imgui_draw.cpp" "%IMGUI_SRC%\imgui_tables.cpp" "%IMGUI_SRC%\imgui_widgets.cpp" "%IMGUI_SRC%\backends\imgui_impl_dx11.cpp" /link d3d11.lib d3dcompiler.lib windowscodecs.lib ole32.lib || (echo PREVIEW BUILD FAILED & exit /b 1)
 echo BUILD OK: out\test\gauge_preview.exe
 exit /b 0
 :nosources

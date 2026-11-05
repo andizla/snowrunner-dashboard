@@ -562,6 +562,24 @@ static void IniPutInt(const wchar_t *section, const wchar_t *key, int v, const s
     WritePrivateProfileStringW(section, key, b, ini.c_str());
 }
 
+// The Gameplay tab's open tab, its fixed id in [Gauges] Tab: read and written on its own, not with the settings, so a
+// tab picked is no setting edit and Defaults leaves it (the Reviewer's point 4 on BRIEF_overlay_tabs_and_text.md).
+static void IniTabPut(const char *id, const std::wstring &ini) { WritePrivateProfileStringW(kIniSection, L"Tab", Wide(id).c_str(), ini.c_str()); }
+void PageTabRead(char *out, size_t size)
+{
+    wchar_t b[32] = {};
+    GetPrivateProfileStringW(kIniSection, L"Tab", L"", b, 32, IniPath().c_str());
+    if (!size || !WideCharToMultiByte(CP_UTF8, 0, b, -1, out, (int)size, nullptr, nullptr)) out[0] = 0;
+}
+// the write goes to the mod's thread, where the settings are saved, so the two never write the ini at once
+static char g_tabPut[32] = {};
+static volatile LONG g_tabPutAsked = 0;
+void PageTabWrite(const char *id)
+{
+    strcpy_s(g_tabPut, id);
+    InterlockedExchange(&g_tabPutAsked, 1);
+}
+
 // ---- setups of their own: a file each in the folder Gauges\ beside Gauges.ini ----
 // A truck's own scales stand in Gauges\trucks\<kind>.ini, a gearbox's own hold in Gauges\gearboxes\<name>.ini, each
 // under one section ([Truck], [Gearbox]) with the kind or the name written in it: a file for each, so that a setup
@@ -955,6 +973,7 @@ static void ReadIni(GaugeSettings &s)
         {
             fwprintf(f, L"; Gauges: the gauge cluster of Next Gen Gameplay for the truck being driven, drawn by the mod itself.\n"
                         L"; The Gameplay tab of the NEXT GEN menu (F2 opens it, or the key in NextGen.ini) edits everything here in the game.\n"
+                        L"; Tab: the tab it opens on, the one open last (display, engine, gearbox, power, suspension, controls, sounds, modwork).\n"
                         L"; Layout: 0 = a strip along the bottom centre, 1 = a block in the bottom right corner, 2 = Spotter dials, 3 = Spotter digital (left of Spotter's gear panel).\n"
                         L"; SwapDials=1 puts the speedometer where the tachometer is and the tachometer where the speedometer is (not in Spotter digital).\n"
                         L"; Style (the strip and the block): 0 = solid dial faces, 1 = tinted see-through faces (FaceOpacity 0 to 0.85 sets how dark),\n"
@@ -5113,6 +5132,12 @@ static DWORD WINAPI Run(void *)
             saveAt = GetTickCount64() + 1000;
             edited = true;
         }
+        if (InterlockedExchange(&g_tabPutAsked, 0))
+        {
+            char id[32];
+            strcpy_s(id, g_tabPut);
+            IniTabPut(id, IniPath());
+        }
         // a key just bound on the tab is still down: it toggles from its next press on
         if (s.toggleKey != keyBefore) keyDown = true;
         if (saveAt && GetTickCount64() >= saveAt)
@@ -5895,7 +5920,18 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 123, "ini: the help text survives a write (123 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 124, "ini: the help text survives a write (124 comment lines)");
+    // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
+    {
+        char none[32] = "x", tab[32] = {}, kept[32] = {};
+        PageTabRead(none, sizeof none);
+        IniTabPut("power", ini);
+        PageTabRead(tab, sizeof tab);
+        WriteIni(c);
+        WriteIni(d);
+        PageTabRead(kept, sizeof kept);
+        Check(!none[0] && !strcmp(tab, "power") && !strcmp(kept, "power"), "ini: Tab reads \"\" when not set, then the id written; a write of the settings or the defaults keeps it");
+    }
     // the HUD layouts (BRIEF_cluster_hud_layouts.md): 2 and 3 load and save, 4 is held to the strip, and Style and
     // FaceOpacity survive a trip through Spotter dials
     {

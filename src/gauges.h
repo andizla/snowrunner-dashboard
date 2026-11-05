@@ -515,6 +515,8 @@ void MapAmbientSet(float c);                 // the tab's slider: the outside te
 void GearHoldSet(float seconds);            // the tab's slider: the seconds each gear of the driven truck's gearbox is held going up
 void EngineProfileSet(float peakRpm, int aspiration, int fuel); // the tab's Engine section: the driven truck's engine's profile into its file
 void EngineProfileDrop();                   // the tab's button: the driven truck's engine gives its profile up
+void PageTabRead(char *out, size_t size);   // the Gameplay tab's open tab, its id as Gauges.ini keeps it ("" for none)
+void PageTabWrite(const char *id);           // the tab picked: into Gauges.ini on the mod's thread, on its own
 void EngineTorqueSet(int percent);          // the tab's slider: how much of its torque the driven truck's engine gives the truck (Torque), in percent
 void DamageTestAsk(int points);             // the tab's test buttons: the mod adds this much to the driven truck's engine damage on its next pass
 void ViewGet(GaugeView &out);               // what to draw (any thread)

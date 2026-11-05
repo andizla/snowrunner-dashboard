@@ -1,0 +1,255 @@
+##airfull
+##airhorizon
+##airsuspension
+##ambient
+##ambientbymap
+##aspiration
+##backtoa
+##boost
+##bumpdamping
+##bumpforce
+##bumpstops
+##bumpzone
+##class
+##clutchheat
+##colddamage
+##cooldown
+##creep
+##creepmanual
+##dampercurve
+##damperknee
+##dampingscale
+##dampingzones
+##engineshare
+##extratravel
+##face
+##fuel
+##gearhold
+##highcompression
+##highrebound
+##hotdamage
+##hotdamagefrom
+##input
+##layout
+##lowcompression
+##lowrebound
+##oilgauge
+##oilwarmup
+##oilwarn
+##opacity
+##overheat
+##peakrpm
+##pitchdanger
+##powertrain
+##ridefront
+##riderear
+##roadload
+##rolldanger
+##rollwarn
+##scale
+##scale
+##scale
+##scale
+##scale
+##soundvolume
+##spool
+##springcross
+##springcurve
+##springrise
+##springscale
+##stalldamage
+##style
+##suspdisplay
+##swapdials
+##swayfront
+##swayrear
+##torquecurve
+##torqueshare
+##warmup
+##x
+##y
+##zonefirm
+##zonefrom
+##zonesoft
+##zoneto
+Add 1 engine damage###test1
+Add 10###test10
+Back to the class's curve
+Back to the plain scales
+Back###origin
+Boost pressure
+Brake air pressure
+Class###own
+Class###own
+Class###own
+Class###own
+Class###ownboost
+Clock
+Clutch burns
+Coolant temperature
+Defaults
+Demo values
+Down stays in forward gears
+Fahrenheit
+Flutter on a diesel
+Fuel use
+Full boost
+Half
+Ignore the game's shifter
+Lamps
+Little
+Miles per hour
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###bind
+None###key
+None###nokey
+None###nopad
+Oil warning
+Pounds per square inch
+Probe log
+Read the ini again
+Require the clutch
+Require the gear held
+Road
+Rock crawl
+Sequential
+Skip neutral
+Sounds only
+Stock
+Test the engine's pull###pulltest
+The game's own
+The mod's automatic in A
+The mod's own gearbox
+The temperature costs the engine
+Trail
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x
+x

@@ -29,6 +29,58 @@
 #include "gauges.h"
 #include "gauge_draw.h"
 #include "settings_page.h"
+#include "imgui_internal.h"
+#include <string>
+#include <algorithm>
+#include <iterator>
+
+// Dear ImGui's test engine hooks (the preview is built with IMGUI_ENABLE_TEST_ENGINE): each widget's label as it is
+// drawn, kept while g_items is set, for the list of the Gameplay tab's settings
+static std::vector<std::string> *g_items = nullptr;
+// a combo and the plot tell no label to the hooks, only their id: it is matched against their labels (settings_page.h's)
+// under the ID stack in force when they are added
+void ImGuiTestEngineHook_ItemAdd(ImGuiContext *ctx, ImGuiID id, const ImRect &, const ImGuiLastItemData *)
+{
+    static const char *const quiet[] = { "##aspiration", "##class", "##dampercurve", "##fuel", "##input", "##layout", "##oilgauge", "##spool", "##springcurve", "##style", "##torquecurve" };
+    if (!g_items || !ctx->CurrentWindow || ctx->CurrentWindow->IDStack.Size == 0) return;
+    for (const char *l : quiet)
+        if (ctx->CurrentWindow->GetID(l) == id) g_items->push_back(l);
+}
+void ImGuiTestEngineHook_ItemInfo(ImGuiContext *, ImGuiID, const char *label, ImGuiItemStatusFlags)
+{
+    if (g_items && label) g_items->push_back(label);
+}
+void ImGuiTestEngineHook_Log(ImGuiContext *, const char *, ...) {}
+const char *ImGuiTestEngine_FindItemDebugLabel(ImGuiContext *, ImGuiID) { return nullptr; }
+
+// The settings and the view that draw every row the Gameplay tab has: the mod's own gearbox, Damage and the clutch's
+// heat, the engine handed over, an engine of its own with a curve of its own, a gearbox, the creep in a held gear, the
+// air suspension and the probe (the Reviewer's point 6 on BRIEF_overlay_tabs_and_text.md)
+static void PageWidest(GaugeSettings &s, GaugeView &v)
+{
+    SettingsDefaults(s);
+    s.style = kFaceTinted;
+    s.damage = s.clutchBurn = s.powertrain = s.roadLoad = s.creep = s.creepManual = s.airSuspension = true;
+    s.gearbox = kGearboxOwn;
+    s.probe = 1;
+    s.soundVolume = 60;
+    v = GaugeView{};
+    v.show = true;
+    strcpy_s(v.truck, "mod_suv/1000001");
+    v.truckOwn = true;
+    strcpy_s(v.engine, "us_scout_old");
+    v.engineOwn = v.engineCustom = true;
+    v.enginePeakRpm = 2000.0f;
+    v.engineIdle = 800.0f;
+    v.engineRedline = 5500.0f;
+    v.engineTorque = 1.0f;
+    strcpy_s(v.gearbox, "g_scout_highrange");
+    v.gearHold = 1.5f;
+    v.engineCapacity = 150;
+    v.canReverse = true;
+    v.captureAction = v.captureSlot = -1;
+    for (int a = 0; a < kViewActions; a++) strcpy_s(v.bindText[a][0], "None"), strcpy_s(v.bindText[a][1], "None");
+}
 
 volatile LONG g_pageCapturing = 0; // gauge_overlay.cpp's, which is not part of this program
 void DamageTestAsk(int) {}         // gauges.cpp's: the tab's test buttons write nothing here
@@ -658,6 +710,8 @@ int wmain(int argc, wchar_t **argv)
             const float file[3][2] = { { 0.028f, 0.032f }, { 0.5f, 0.3f }, { -0.6f, -0.44f } };
             memcpy(v.suspFile, file, sizeof file);
             PageState st;
+            st.tabAsk = kTabSuspension;
+            st.wholeTab = true;
             int act = 0;
             wchar_t path[MAX_PATH];
             swprintf_s(path, L"%s\\settings_suspension.png", out);
@@ -671,6 +725,80 @@ int wmain(int argc, wchar_t **argv)
             printf("%s settings tab (settings_suspension.png): three frames untouched report no change\n", act ? "FAIL" : "ok  ");
             if (act) g_failed++;
         }
+    }
+
+    // the Gameplay tab in its tabs (BRIEF_overlay_tabs_and_text.md): each tab whole with the widest settings, as a
+    // picture (settings_tab_<id>.png), and every setting the one page drew before the tabs (test\page_items.txt, its
+    // labels) drawn on exactly one tab: the labels of all the tabs together are that list, none twice and none missing
+    {
+        GaugeSettings s;
+        GaugeView v;
+        PageWidest(s, v);
+        std::vector<std::string> all;
+        bool quiet = true;
+        for (int t = 0; t < kTabCount; t++)
+        {
+            std::vector<std::string> items;
+            float height = 0.0f;
+            wchar_t path[MAX_PATH];
+            swprintf_s(path, L"%s\\settings_tab_%S.png", out, kPageTabIds[t]);
+            // the first pass measures the tab and takes its labels, the second draws it at its height
+            for (int pass = 0; pass < 2; pass++)
+            {
+                PageState st;
+                st.tabAsk = t;
+                st.wholeTab = true;
+                int frame = 0, act = 0;
+                RenderPng(path, 1100, pass ? (int)height + 20 : 9000, [&](ImDrawList *, ImDrawList *) {
+                    ImGui::SetNextWindowPos(ImVec2(10, 10));
+                    ImGui::SetNextWindowSize(ImVec2(1080, 0));
+                    ImGui::Begin("Gauges", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+                    g_items = pass == 0 && ++frame == 4 ? &items : nullptr;
+                    ImGui::GetCurrentContext()->TestEngineHookItems = g_items != nullptr;
+                    act |= SettingsPage(s, v, st, 0);
+                    g_items = nullptr;
+                    ImGui::GetCurrentContext()->TestEngineHookItems = false;
+                    height = ImGui::GetWindowHeight();
+                    ImGui::End();
+                }, 4);
+                if (act) quiet = false;
+            }
+            for (const std::string &i : items)
+            {
+                bool tabName = i == "Gauges" || i.find("##tab_") != std::string::npos;
+                for (const char *n : kPageTabNames) tabName = tabName || i == n;
+                if (!tabName) all.push_back(i);
+            }
+        }
+        std::sort(all.begin(), all.end());
+        std::vector<std::string> before;
+        FILE *f = nullptr;
+        if (!fopen_s(&f, "test\\page_items.txt", "rb") && f)
+        {
+            char line[256];
+            while (fgets(line, sizeof line, f))
+            {
+                line[strcspn(line, "\r\n")] = 0;
+                if (line[0]) before.push_back(line);
+            }
+            fclose(f);
+        }
+        std::sort(before.begin(), before.end());
+        std::vector<std::string> twice, missing;
+        std::set_difference(all.begin(), all.end(), before.begin(), before.end(), std::back_inserter(twice));
+        std::set_difference(before.begin(), before.end(), all.begin(), all.end(), std::back_inserter(missing));
+        for (const std::string &i : twice) printf("     on a tab more than the page had it, or new: %s\n", i.c_str());
+        for (const std::string &i : missing) printf("     on no tab: %s\n", i.c_str());
+        const bool same = !before.empty() && twice.empty() && missing.empty();
+        printf("%s settings tabs: the %d settings the one page drew are each on exactly one of the eight tabs (%d labels on the tabs)\n", same ? "ok  " : "FAIL",
+               (int)before.size(), (int)all.size());
+        if (!same) g_failed++;
+        printf("%s settings tabs: each tab drawn untouched reports no change\n", quiet ? "ok  " : "FAIL");
+        if (!quiet) g_failed++;
+        const bool ids = PageTabFromId("power") == kTabPower && PageTabFromId("modwork") == kTabModWork && PageTabFromId("Power") == kTabDisplay &&
+                         PageTabFromId("") == kTabDisplay && PageTabFromId(nullptr) == kTabDisplay && PageTabFromId("tyres") == kTabDisplay;
+        printf("%s settings tabs: an id opens its tab; an unknown one, another case or none opens Display\n", ids ? "ok  " : "FAIL");
+        if (!ids) g_failed++;
     }
 
     ImGui_ImplDX11_Shutdown();
