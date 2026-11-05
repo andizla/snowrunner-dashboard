@@ -1063,7 +1063,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; differential lock and all-wheel drive flipped, on every truck, the upgrade fitted or not; none by default).\n"
                         L"; A binding is Key <name or code>, Pad <buttons with +, a stick's direction LSUp to RSRight among them>,\n"
                         L"; Wheel <n> Button <n>, Wheel <n> POV [<n>] Up/Right/Down/Left, Wheel <n> Axis <n> [inverted] (the clutch), or None.\n"
-                        L"; The tab's Gearbox section binds them by a press. Without a key in the ini the defaults below hold:\n"
+                        L"; The Controls tab binds them by a press. Without a key in the ini the defaults below hold:\n"
                         L";   BindGearUp=Key Num 8\n"
                         L";   BindGearDown=Key Num 2\n"
                         L";   BindGearN=Key Num 5\n"
@@ -1089,11 +1089,11 @@ static void ReadIni(GaugeSettings &s)
                         L";   Base1.<engine>, Base2.<engine> ... in a truck's file: each gear's acceleration at the game's own pull, floored, learned.\n"
                         L"; Creep=1: an idling truck on an automatic moves to walking pace; the brake holds it. For now only with an automatic, not in a gear picked by hand.\n"
                         L"; CreepManual=1: the creep in a gear picked by hand too (the gear's idle speed; stuck at Gearbox=2 it stalls; R and L on the game's shifter through the converter).\n"
-                        L"; Gauges\\gearboxes\\<name>.ini GearHold: seconds a gearbox holds each gear going up with Powertrain=1, 1 to 3 (the tab).\n"
+                        L"; Gauges\\gearboxes\\<name>.ini GearHold: seconds a gearbox holds each gear going up with Powertrain=1, 1 to 3 (Upshift delay).\n"
                         L"; Top1, Top2 ...: each gear's top in rad/s, learned where the game's pull reaches nothing floored (2a + 5 until then).\n"
-                        L"; Gauges\\engines\\<name>.ini: PeakTorqueRpm, Aspiration (0 turbo, 1 naturally aspirated), Fuel (diesel, petrol), TorqueCurve (the tab's Engine).\n"
+                        L"; Gauges\\engines\\<name>.ini: PeakTorqueRpm, Aspiration (0 turbo, 1 naturally aspirated), Fuel (diesel, petrol), TorqueCurve (the Engine tab).\n"
                         L";   Torque: how much of its torque the truck gets, 10 to 100 percent (100 when not set). Lower it for an RLM-like engine with several times a stock engine's torque.\n"
-                        L"; For work on the mod: Demo=1 draws demo values whenever no truck is driven, Probe=1 logs the values read from the game.\n"
+                        L"; Mod work: Demo=1 draws demo values whenever no truck is driven, Probe=1 logs the values read from the game.\n"
                         L"; KeepLogs: how many of the last starts' logs Gauges\\logs keeps (20; at most 500 MB of them; 0 keeps all).\n");
             fclose(f);
             WriteIni(s);
@@ -2517,7 +2517,7 @@ static void LogSettings(const GaugeSettings &s)
         : s.gearbox == kGearboxOwn && s.input != kInputWheel ? L"the mod's own (Gearbox=2): it takes the shifter, its positions on the bindings and on the game's shifter"
         : s.gearbox == kGearboxOwn ? L"the mod's own (Gearbox=2): it takes the shifter, its positions on the bindings (with a wheel's pedals the game's shifter stays refused)"
         : s.gearbox == kGearboxModel ? L"the mod's automatic in A (Gearbox=1), the game's shifter yours, its reverse on the brake refused"
-                                     : L"the game's own (Gearbox=1 or 2 in the tab's Gearbox section hand it to the mod)",
+                                     : L"the game's own (Gearbox=1 or 2 on the Gearbox tab hand it to the mod)",
         s.requireClutch, s.requireGearHeld, s.skipNeutral, s.downStaysForward, s.ignoreShifter, s.backToA);
     if (s.powertrain) Log(L"settings: powertrain on: the truck pulls with %d percent of the mod's engine and converter, through the game's torque factor; road load %s",
                           s.engineShare, s.roadLoad ? L"on (the air's drag, once each gear's pull is learned)" : L"off");
