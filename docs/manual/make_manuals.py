@@ -263,9 +263,13 @@ truck's file. The weight is the truck's own, without cargo or a trailer, so with
 
 <h2>Suspension (tests)</h2>
 <p>The Suspension tab changes how each wheel's spring and damper work, while you drive. Everything in it is a test:
-off by default, for every truck at once (not per truck). Set a slider back, or drive another truck, and the truck has its own
-suspension again. Under the sliders the tab shows the truck's own figures from its file, front and rear, and what is in force
+off by default. Set a slider back and the truck has the game's suspension again. Under the sliders the tab shows the truck's own figures from its file, front and rear, and what is in force
 now.</p>
+<p><b>Per truck.</b> The top line names the truck the settings are for. Change one while you drive and that kind of truck keeps
+the whole set as its own: <b>Own settings</b> ticks itself. Untick it and the default is in force again, and the set is kept
+(the tab says Kept, not in use) until you tick it again. <b>Make these the default</b> copies the set to every truck without
+its own. With no truck driven the tab sets the default. The set is kept in a <code>[Suspension]</code> section of the truck's
+file in <code>Gauges\trucks</code>, beside its scales, with <code>Own=0</code> while it is not in use.</p>
 <ul><li><b>Spring and Damping</b> (<code>SpringScale</code>, <code>DampingScale</code>, x0.25 to x4): the truck's own spring
 and damping times a factor. Above 1 the spring is stiffer and the truck sits higher, below 1 softer and lower. More damping
 settles the body sooner, less lets it bounce longer. The game takes a wheel's spring and damping only up to 1, so where a

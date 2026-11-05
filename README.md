@@ -139,7 +139,7 @@ BoostMax=0
 BoostProfile=2
 ```
 
-`Gauges.log` names the truck each time you take another one. A file can be written by hand as well, and a key it leaves out is taken from `[Gauges]`. Every other setting is the same for all trucks. A `Gauges.ini` from a test build may still hold a truck's scales as a section such as `[Truck:chevrolet_ck1500]`: the first start moves them into their files.
+`Gauges.log` names the truck each time you take another one. A file can be written by hand as well, and a key it leaves out is taken from `[Gauges]`. The Suspension tab works the same way: change a setting there while you drive, and that kind of truck keeps the whole set as its own in a `[Suspension]` section of the same file (the box Own settings ticks itself). Untick it and the default from `[Gauges]` is in force again, while the set stays with `Own=0` until you tick it again. Make these the default copies the set into `[Gauges]`. Every other setting is the same for all trucks. A `Gauges.ini` from a test build may still hold a truck's scales as a section such as `[Truck:chevrolet_ck1500]`: the first start moves them into their files.
 
 A region can have an outside temperature of its own, in a section named after it, and a map can have one apart from its region's:
 
