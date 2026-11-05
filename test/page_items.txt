@@ -11,28 +11,36 @@
 ##bumpstops
 ##bumpzone
 ##class
+##clutchburn
 ##clutchheat
 ##colddamage
 ##cooldown
 ##creep
 ##creepmanual
+##damage
 ##dampercurve
 ##damperknee
 ##dampingscale
 ##dampingzones
+##demo
+##dieselflutter
+##downstaysforward
 ##engineshare
 ##extratravel
 ##face
+##fahrenheit
 ##fuel
 ##gearhold
 ##highcompression
 ##highrebound
 ##hotdamage
 ##hotdamagefrom
+##ignoreshifter
 ##input
 ##layout
 ##lowcompression
 ##lowrebound
+##mph
 ##oilgauge
 ##oilwarmup
 ##oilwarn
@@ -41,6 +49,10 @@
 ##peakrpm
 ##pitchdanger
 ##powertrain
+##probe
+##psi
+##requireclutch
+##requiregearheld
 ##ridefront
 ##riderear
 ##roadload
@@ -51,6 +63,14 @@
 ##scale
 ##scale
 ##scale
+##showair
+##showboost
+##showclock
+##showfueluse
+##showlamps
+##showtemp
+##skipneutral
+##soundsonly
 ##soundvolume
 ##spool
 ##springcross
@@ -74,32 +94,17 @@
 ##zoneto
 Add 1 engine damage###test1
 Add 10###test10
-Boost pressure
-Brake air pressure
 Class curve
 Class###own
 Class###own
 Class###own
 Class###own
 Class###ownboost
-Clock
-Clutch burns
-Coolant temperature
-Damage
 Defaults
-Demo values
-Diesel flutter
-Down stays forward
-Fahrenheit
-Fuel use
 Full boost
 Game's gearbox
-H shifter
 Half
-Ignore shifter
-Lamps
 Little
-Miles per hour
 Mod automatic
 Mod gearbox
 None###bind
@@ -173,17 +178,12 @@ None###key
 None###nokey
 None###nopad
 Oil warning
-PSI
 Plain scales
-Probe log
 Reload ini
-Require clutch
 Reset###origin
 Road
 Rock crawl
 Sequential
-Skip neutral
-Sounds only
 Start###pulltest
 Stock
 Trail

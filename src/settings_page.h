@@ -50,12 +50,15 @@ static int PageVirtualKey(int k)
     }
 }
 
+// The row's name in the left column (PageLabel) was hovered: the row's next PageTip shows over it as over the widget.
+static bool g_pageLabelHovered = false;
+
 static void PageTip(const char *text)
 {
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", text);
+    if (g_pageLabelHovered || ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", text);
+    g_pageLabelHovered = false;
 }
 
-// A label in the left column, the widget after it.
 // A class's name in the tab's text (GaugeSettings::tachClass).
 static const char *PageClassWord(int tachClass)
 {
@@ -63,10 +66,12 @@ static const char *PageClassWord(int tachClass)
     return words[tachClass < 0 || tachClass >= kClassCount ? kClassTruck : tachClass];
 }
 
+// A label in the left column, the widget after it.
 static void PageLabel(const char *text, float x)
 {
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(text);
+    g_pageLabelHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled);
     ImGui::SameLine(x);
 }
 
@@ -160,6 +165,12 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     // the tab bar, a line on the open tab, and the tab in a child of its own that keeps its own scroll (the host draws
     // the page in a scrolling child, which the bar would scroll away with)
     const int tab = PageTabs(st, act);
+    // a capture left armed on another tab would bind the next key or button unseen (the Reviewer's N4)
+    if (act & kPageTab)
+    {
+        st.capture = -1;
+        if (view.captureAction >= 0) BindingAsk(kBindAskCancel, view.captureAction, view.captureSlot);
+    }
     ImGui::PushTextWrapPos(0.0f);
     ImGui::TextDisabled("%s", kPageTabHelp[tab]);
     ImGui::PopTextWrapPos();
@@ -194,7 +205,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         PageLabel("Style", labelX);
         ImGui::SetNextItemWidth(w);
         changed(ImGui::Combo("##style", &s.style, styles, kFaceCount));
-        PageTip("Solid: dark faces with a bezel. Tinted: see-through faces. Open: only the scales, numbers and needles (default). The strip and the block only.");
+        PageTip("Solid: dark faces with a bezel. Tinted: see-through faces. Open: only the scales, numbers and needles. The strip and the block only. Default: Open.");
         ImGui::EndDisabled();
         ImGui::BeginDisabled(hud || s.style != kFaceTinted);
         PageLabel("Face tint", labelX);
@@ -213,11 +224,11 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         PageLabel("Position", labelX);
         ImGui::SetNextItemWidth(w * 0.5f - ImGui::GetStyle().ItemInnerSpacing.x * 0.5f);
         changed(ImGui::DragFloat("##x", &s.offsetX, 1.0f, -kOffsetMax, kOffsetMax, "%.0f right", ImGuiSliderFlags_AlwaysClamp));
-        PageTip("Moves the cluster from its place in pixels of a 1080p screen. Drag or double-click to type.");
+        PageTip("Moves the cluster from its place in pixels of a 1080p screen. Drag or double-click to type. Default 0, 0.");
         ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
         ImGui::SetNextItemWidth(w * 0.5f - ImGui::GetStyle().ItemInnerSpacing.x * 0.5f);
         changed(ImGui::DragFloat("##y", &s.offsetY, 1.0f, -kOffsetMax, kOffsetMax, "%.0f down", ImGuiSliderFlags_AlwaysClamp));
-        PageTip("Moves the cluster from its place in pixels of a 1080p screen. Drag or double-click to type.");
+        PageTip("Moves the cluster from its place in pixels of a 1080p screen. Drag or double-click to type. Default 0, 0.");
         ImGui::SameLine();
         if (ImGui::SmallButton("Reset###origin"))
         {
@@ -227,23 +238,29 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         PageTip("Back to the layout's own place.");
 
         ImGui::SeparatorText("Dials");
-        changed(ImGui::Checkbox("Coolant temperature", &s.showTemp));
+        PageLabel("Coolant temperature", labelX);
+        changed(ImGui::Checkbox("##showtemp", &s.showTemp));
         PageTip("The coolant temperature dial. On by default.");
-        changed(ImGui::Checkbox("Boost pressure", &s.showBoost));
+        PageLabel("Boost pressure", labelX);
+        changed(ImGui::Checkbox("##showboost", &s.showBoost));
         PageTip("The turbo's boost dial. On by default.");
-        changed(ImGui::Checkbox("Brake air pressure", &s.showAir));
+        PageLabel("Brake air pressure", labelX);
+        changed(ImGui::Checkbox("##showair", &s.showAir));
         PageTip("The air in the brake tanks: filled up to 8.2 bar and red under 5.5. Not drawn for scouts. Off by default.");
-        changed(ImGui::Checkbox("Clock", &s.showClock));
+        PageLabel("Clock", labelX);
+        changed(ImGui::Checkbox("##showclock", &s.showClock));
         PageTip("The game's time of day with the outside temperature in its face. On by default.");
-        changed(ImGui::Checkbox("Fuel use", &s.showFuelUse));
-        PageTip("The fuel used a minute under the fuel dial's range. On by default.");
-        changed(ImGui::Checkbox("Lamps", &s.showLamps));
+        PageLabel("Fuel use", labelX);
+        changed(ImGui::Checkbox("##showfueluse", &s.showFuelUse));
+        PageTip(s.mph ? "The fuel used in gallons an hour, under the fuel dial's range. On by default." : "The fuel used in litres a minute, under the fuel dial's range. On by default.");
+        PageLabel("Lamps", labelX);
+        changed(ImGui::Checkbox("##showlamps", &s.showLamps));
         PageTip("Handbrake, lights, AWD, diff lock, low gear, engine damage, cold engine, tilt and oil. On by default.");
         static const char *oils[kOilGaugeCount] = { "Not shown", "Second needle", "Own dial" };
         PageLabel("Oil gauge", labelX);
         ImGui::SetNextItemWidth(w);
         changed(ImGui::Combo("##oilgauge", &s.oilGauge, oils, kOilGaugeCount));
-        PageTip("Second needle (default): an amber needle in the coolant dial. Own dial: a small dial beside it. The oil lamp shows either way.");
+        PageTip("Second needle: an amber needle in the coolant dial. Own dial: a small dial beside it. The oil lamp shows either way. Default: Second needle.");
 
         ImGui::SeparatorText("Tilt lamp");
         {
@@ -277,11 +294,14 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         }
 
         ImGui::SeparatorText("Units");
-        changed(ImGui::Checkbox("Miles per hour", &s.mph));
+        PageLabel("Miles per hour", labelX);
+        changed(ImGui::Checkbox("##mph", &s.mph));
         PageTip("Speed in mph and the range in miles. Off (default): km/h and km.");
-        changed(ImGui::Checkbox("PSI", &s.psi));
+        PageLabel("PSI", labelX);
+        changed(ImGui::Checkbox("##psi", &s.psi));
         PageTip("Boost in psi. Off (default): bar.");
-        changed(ImGui::Checkbox("Fahrenheit", &s.fahrenheit));
+        PageLabel("Fahrenheit", labelX);
+        changed(ImGui::Checkbox("##fahrenheit", &s.fahrenheit));
         PageTip("Every temperature in Fahrenheit. Off (default): Celsius.");
     }
     else if (open && tab == kTabEngine)
@@ -304,7 +324,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             if (ImGui::SliderFloat("##peakrpm", &peak, view.engineIdle, view.engineRedline, "%.0f rpm", ImGuiSliderFlags_AlwaysClamp)) set = true;
             if (view.engineCustom) ImGui::EndDisabled();
             PageTip(view.engineCustom ? "Its file has a torque curve of its own (TorqueCurve), which is used instead."
-                                  : "The engine speed of its peak torque, as its maker gives it. The curve is built around it. Until it is set the engine pulls by its class's curve.");
+                                  : "The engine speed of its peak torque, as its maker gives it; the curve and the mod's automatic's shifts are built around it. Default: the class's curve.");
             static const char *aspirations[kAspCount] = { "Turbo", "Naturally aspirated" };
             PageLabel("Aspiration", labelX);
             ImGui::SetNextItemWidth(w);
@@ -324,7 +344,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 st.engineTorque = torquePercent;
                 act |= kPageEngineTorque;
             }
-            PageTip("The share of this engine's torque the truck gets with Real engine on. Lower it for an engine that pulls far too hard. Engine share on the Power tab mixes the result with the game's pull. Default 100 %.");
+            PageTip("Percent of this engine's torque the truck gets with Real engine on; lower it for an engine that pulls far too hard. Engine share on the Power tab mixes the result with the game's pull. Default 100 %.");
             if (set)
             {
                 st.enginePeak = floorf(peak / 50.0f + 0.5f) * 50.0f;
@@ -362,7 +382,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             ScalesClassChange(s, classWas);
             act |= kPageChanged;
         }
-        PageTip("Sets the idle, the red zone, both dials' tops and the boost for a truck, a scout or a heavy truck. A number set by hand stays; Class beside it gives it back. Default: Truck.");
+        PageTip("Sets the idle, the red zone, both dials' tops and the boost for a truck, a scout or a heavy truck. The mod's automatic shifts by the class of a truck with scales of its own, else by its weight. Class beside a number set by hand gives it back. Default: Truck.");
         {
             const GaugeScale own = kClassScales[s.tachClass < 0 || s.tachClass >= kClassCount ? kClassTruck : s.tachClass];
             // each number is the class's own until it is changed here; "Class" gives it back to the class
@@ -480,7 +500,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 }
             }
             degrees(kTempCold, to, sizeof to);
-            sprintf_s(tip, "How cold a truck that stood long is. In colder air the engine warms up slower. The cold lamp lights under %s. Default %s.", to, (degrees(15.0f, from, sizeof from), from));
+            sprintf_s(tip, "How cold a truck that stood long is; in colder air the engine warms up slower. The cold lamp lights under %s. Default %s.", to, (degrees(15.0f, from, sizeof from), from));
             PageTip(tip);
             // dimmed and wrapped: a map's name can be long
             ImGui::BeginDisabled();
@@ -511,7 +531,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 s.airFullKmh = SettingsRange(s.mph ? full * 1.609f : full, kAirFullRange[0], kAirFullRange[1]);
                 act |= kPageChanged;
             }
-            PageTip("The radiator gets all its air from this speed on. Lower keeps a slow hard-pulling engine cooler. Default 30 km/h.");
+            PageTip(s.mph ? "The radiator gets all its air from this speed on. Lower keeps a slow hard-pulling engine cooler. Default 19 mph."
+                       : "The radiator gets all its air from this speed on. Lower keeps a slow hard-pulling engine cooler. Default 30 km/h.");
         }
 
         ImGui::SeparatorText("Oil");
@@ -545,7 +566,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         ImGui::SeparatorText("Engine damage");
         {
             char at[16], from[16], tip[320];
-            changed(ImGui::Checkbox("Damage", &s.damage));
+            PageLabel("Damage", labelX);
+            changed(ImGui::Checkbox("##damage", &s.damage));
             PageTip("Overheating and working a cold engine hard cost the game's engine damage, and the stalls and the clutch the gearbox's. A garage repairs it. On by default; leave it off in co-op.");
             ImGui::BeginDisabled(!s.damage);
             // where the hot damage starts, shown in the units in force, kept in C
@@ -582,7 +604,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             }
             degrees(0.0f, at, sizeof at);
             degrees(kTempCold, from, sizeof from);
-            sprintf_s(tip, "The share lost each minute floored at the red zone at %s. Less when warmer or working lighter, none from %s. 0 is none. Default 5 %%.", at, from);
+            sprintf_s(tip, "The share lost each minute floored at the red zone at %s; less when warmer or working lighter, none from %s. 0 is none. Default 5 %%.", at, from);
             PageTip(tip);
             ImGui::EndDisabled();
             if (view.engineCapacity > 0) ImGui::TextDisabled("This truck's engine has %d of %d left.", view.engineCapacity - view.engineDamage, view.engineCapacity);
@@ -608,7 +630,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         changed(ImGui::RadioButton("Game's gearbox", &s.gearbox, kGearboxGame));
         PageTip("The game's own gearbox and automatic, as without the mod. Default.");
         changed(ImGui::RadioButton("Mod automatic", &s.gearbox, kGearboxModel));
-        PageTip("The mod's automatic shifts while the game's shifter is in D: a torque converter, later shifts the further the pedal is down and a kickdown floored. A gear picked on the game's shifter takes over until D again.");
+        PageTip("The mod's automatic shifts while the game's shifter is in A, shown as D: a torque converter, later shifts the further the pedal is down and a kickdown floored. A gear picked on the game's shifter takes over until A again. The game's reverse on the brake while standing is refused.");
         changed(ImGui::RadioButton("Mod gearbox", &s.gearbox, kGearboxOwn));
         PageTip("The mod takes the shifter: D, the gears, N, R, H and the low range on the Controls tab's bindings, with a clutch and the options below. Driven with a pad or the keyboard the game's shifter picks too.");
         if (s.gearbox == kGearboxOwn && (s.input == kInputWheel || s.ignoreShifter) && !view.canReverse)
@@ -620,14 +642,18 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         }
         if (s.gearbox == kGearboxOwn)
         {
-            changed(ImGui::Checkbox("Require clutch", &s.requireClutch));
-            PageTip("A shift into a gear without the clutch stalls the engine once. Not into N. Off by default.");
-            changed(ImGui::Checkbox("H shifter", &s.requireGearHeld));
+            PageLabel("Require clutch", labelX);
+            changed(ImGui::Checkbox("##requireclutch", &s.requireClutch));
+            PageTip("A shift into a gear without the clutch: standing it stalls the engine once, rolling it grinds out to N. Off by default.");
+            PageLabel("H shifter", labelX);
+            changed(ImGui::Checkbox("##requiregearheld", &s.requireGearHeld));
             PageTip("N the moment no gear key is held, as an H shifter with every gear bound. Off by default.");
-            changed(ImGui::Checkbox("Skip neutral", &s.skipNeutral));
+            PageLabel("Skip neutral", labelX);
+            changed(ImGui::Checkbox("##skipneutral", &s.skipNeutral));
             PageTip("Up and down step between L- and R past N. Off by default.");
-            changed(ImGui::Checkbox("Down stays forward", &s.downStaysForward));
-            PageTip("Gear down stops at L-. N and R only on their own keys or the game's shifter. Wins over Skip neutral. Off by default.");
+            PageLabel("Down stays forward", labelX);
+            changed(ImGui::Checkbox("##downstaysforward", &s.downStaysForward));
+            PageTip("Gear down stops at L-; N and R only on their own keys or the game's shifter. Wins over Skip neutral. Off by default.");
             if (ImGui::Button("Sequential", ImVec2(w, 0)))
             {
                 // a pad's sequential box: no clutch, no gear held, back to A by itself
@@ -643,8 +669,9 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 s.backToA = BackToARange(s.backToA);
                 act |= kPageChanged;
             }
-            PageTip("Seconds after a shift by hand until the gearbox goes back to D, once the wheels grip and the foot is light. Not with H shifter, or from R, N, L or H. Default never.");
-            changed(ImGui::Checkbox("Ignore shifter", &s.ignoreShifter));
+            PageTip("Seconds after a shift by hand until the gearbox goes back to D, once the wheels grip and the foot is light. Not with H shifter, for a gear picked on the game's shifter or a 1st from the low range, or from R, N, the low range or H. Default never.");
+            PageLabel("Ignore shifter", labelX);
+            changed(ImGui::Checkbox("##ignoreshifter", &s.ignoreShifter));
             PageTip("A position picked on the game's shifter does nothing; only the bindings shift. Off by default.");
             PageLabel("Stall damage", labelX);
             ImGui::SetNextItemWidth(w);
@@ -657,7 +684,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             ImGui::EndDisabled();
             PageTip("What a shift without the clutch costs the gearbox. Needs Damage. Default 5 %.");
             ImGui::BeginDisabled(!s.damage);
-            changed(ImGui::Checkbox("Clutch burns", &s.clutchBurn));
+            PageLabel("Clutch burns", labelX);
+            changed(ImGui::Checkbox("##clutchburn", &s.clutchBurn));
             ImGui::EndDisabled();
             PageTip("A clutch slipping under load heats up and costs the gearbox. Needs Damage. On by default.");
             PageLabel("Clutch heat", labelX);
@@ -669,7 +697,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 act |= kPageChanged;
             }
             ImGui::EndDisabled();
-            PageTip("How fast a slipping clutch heats up. Lower gives more time to react. Default 60 %.");
+            PageTip("How fast a slipping clutch heats up; 100 is the model's own pace. Lower gives more time to react. Default 60 %.");
             if (view.gearShifts || view.gearStalls) ImGui::TextDisabled("Since the truck was taken: %d shifts, %d stalls.", view.gearShifts, view.gearStalls);
         }
         PageLabel("Creep", labelX);
@@ -681,11 +709,12 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             changed(ImGui::Checkbox("##creepmanual", &s.creepManual));
             PageTip("A gear picked by hand creeps too. Stuck in the mod gearbox the engine stalls; in Sequential it goes back to D first. Off by default.");
         }
-        if (s.powertrain)
+        // the driven truck's gearbox: how long each gear is held going up, kept for that gearbox; it works with Real engine
+        // on, a switch of the Power tab, so here it is greyed without it (the Reviewer's N5)
         {
-            // the driven truck's gearbox: how long each gear is held going up, kept for that gearbox
             if (view.gearbox[0] && s.gearbox >= kGearboxModel)
             {
+                ImGui::BeginDisabled(!s.powertrain);
                 float hold = view.gearHold;
                 PageLabel("Upshift delay", labelX);
                 ImGui::SetNextItemWidth(w);
@@ -698,7 +727,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 if (!view.gearHoldOwn)
                     sprintf_s(whose, " Until it is moved: the %s class's%s, a scout 1.5 s and the others 2.5 s.", PageClassWord(view.autoClass),
                           view.autoByWeight ? " (by the truck's weight)" : "");
-                sprintf_s(gearTip, "Going up, the mod's automatic holds each gear at least this long. Kept for this gearbox (%s).%s", view.gearbox, whose);
+                sprintf_s(gearTip, "Going up, the mod's automatic waits in each gear at least this long. Kept for this gearbox (%s).%s Needs Real engine (Power tab).", view.gearbox, whose);
+                ImGui::EndDisabled();
                 PageTip(gearTip);
             }
         }
@@ -707,13 +737,13 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     {
         PageLabel("Real engine", labelX);
         changed(ImGui::Checkbox("##powertrain", &s.powertrain));
-        PageTip("The truck pulls with the mod's engine: its torque curve at the engine speed shown, so a gear revved high pulls as a real engine's does. Off by default.");
+        PageTip("The truck pulls with the mod's engine: its torque curve at the engine speed shown, and the mod's automatic shifts by it. Off by default.");
         if (s.powertrain)
         {
             PageLabel("Engine share", labelX);
             ImGui::SetNextItemWidth(w);
             changed(ImGui::SliderInt("##engineshare", &s.engineShare, 0, 100, "%d %%", ImGuiSliderFlags_AlwaysClamp));
-            PageTip("How much of the mod's engine the game gets: 0 is the game's own pull and 100 all of the mod's. Engine torque on the Engine tab scales the engine itself. Default 50 %.");
+            PageTip("How much of the mod's engine the game gets: 0 is the game's own pull and 100 all of the mod's. Engine torque on the Engine tab sets the engine's own torque. Default 50 %.");
             PageLabel("Air drag", labelX);
             changed(ImGui::Checkbox("##roadload", &s.roadLoad));
             PageTip("The game has no air drag. This takes it off the engine's pull, more the faster the truck goes, in each gear once it is measured floored on flat ground. Off by default.");
@@ -721,7 +751,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         PageLabel("Pull test", labelX);
         const bool pullOn = view.pullTest == kViewPullArmed || view.pullTest == kViewPullRunning;
         if (ImGui::Button(pullOn ? "Cancel###pulltest" : "Start###pulltest", ImVec2(w, 0))) act |= pullOn ? kPagePullCancel : kPagePullTest;
-        PageTip("Measures how the game's torque factor changes the pull. Press it, then floor it in 4th or higher on a long flat road for seven seconds. Gauges.log gets the numbers.");
+        PageTip("Measures how the game's torque factor changes the pull. Press Start, then floor it in 4th or higher on a long flat road for seven seconds; Gauges.log gets the numbers.");
         if (view.pullTest == kViewPullArmed) ImGui::TextDisabled("Armed: floor it in the fourth gear or higher on a long flat road.");
         else if (view.pullTest == kViewPullRunning) ImGui::TextDisabled("Running, step %d of 7: keep it floored.", view.pullPhase + 1);
         else if (view.pullTest == kViewPullDone) ImGui::TextDisabled("Done: the numbers are in Gauges.log.");
@@ -756,7 +786,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         PageLabel("Extra travel", labelX);
         ImGui::SetNextItemWidth(w);
         changed(ImGui::SliderFloat("##extratravel", &s.extraTravel, kExtraTravelRange[0], kExtraTravelRange[1], s.extraTravel > 0.0f ? "%.0f cm" : "off", ImGuiSliderFlags_AlwaysClamp));
-        PageTip("A test: how much further each wheel can rise into the body past its file's end. Default off.");
+        PageTip("A test: how much further each wheel can rise into the body past its file's end. Off by default.");
         if (!view.suspKnown) ImGui::TextDisabled("No truck driven: its file's figures show here.");
         else
         {
@@ -770,12 +800,12 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         // on the slider's step before it is shown and written, so near 0 is exactly 0 and the text keeps one form
         changed(ImGui::SliderFloat("##ridefront", &s.rideFront, kRideRange[0], kRideRange[1], RideFormat(s.rideFront), ImGuiSliderFlags_AlwaysClamp));
         s.rideFront = SettingsStep(s.rideFront, kRideStep);
-        PageTip("A test: the front axle's ride height in cm, above 0 higher. Default 0.");
+        PageTip("A test: the front axle's ride height in cm, above 0 higher. It stops on a truck with an active ride height. Default 0.");
         PageLabel("Ride rear", labelX);
         ImGui::SetNextItemWidth(w);
         changed(ImGui::SliderFloat("##riderear", &s.rideRear, kRideRange[0], kRideRange[1], RideFormat(s.rideRear), ImGuiSliderFlags_AlwaysClamp));
         s.rideRear = SettingsStep(s.rideRear, kRideStep);
-        PageTip("A test: the rear axles' ride height in cm, above 0 higher. Default 0.");
+        PageTip("A test: the rear axles' ride height in cm, above 0 higher. It stops on a truck with an active ride height. Default 0.");
         // always one line, so nothing below it moves while the slider passes 0
         if (view.rideRestKnown) ImGui::TextDisabled("At rest %.0f / %.0f cm into the travel (front / rear)", -view.rideRest[0], -view.rideRest[1]);
         else ImGui::TextDisabled("At rest: not read yet on this truck");
@@ -783,17 +813,17 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         ImGui::SetNextItemWidth(w);
         changed(ImGui::SliderFloat("##swayfront", &s.swayFront, kSwayRange[0], kSwayRange[1], s.swayFront > 0.0f ? "%.2f" : "none", ImGuiSliderFlags_AlwaysClamp));
         s.swayFront = SettingsStep(s.swayFront, kSwayStep);
-        PageTip("A test: a front sway bar as a share of the spring rate. It holds the body level in turns. Default none.");
+        PageTip("A test: a front sway bar as a share of the spring rate, to keep the body level in turns. It stops on a truck with an active ride height. Default none.");
         PageLabel("Sway rear", labelX);
         ImGui::SetNextItemWidth(w);
         changed(ImGui::SliderFloat("##swayrear", &s.swayRear, kSwayRange[0], kSwayRange[1], s.swayRear > 0.0f ? "%.2f" : "none", ImGuiSliderFlags_AlwaysClamp));
         s.swayRear = SettingsStep(s.swayRear, kSwayStep);
-        PageTip("A test: a rear sway bar. 0.1 to 0.2 works well; it stops at 0.3. Default none.");
+        PageTip("A test: a rear sway bar; 0.1 to 0.2 works well, and it ends at 0.3. It stops on a truck with an active ride height. Default none.");
         if (view.swayOff) ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "The sway bars are disconnected.");
         // the air suspension (a test, build C): it levels each wheel on top of the ride height
         PageLabel("Air suspension", labelX);
         changed(ImGui::Checkbox("##airsuspension", &s.airSuspension));
-        PageTip("A test: each wheel held at its rest height, so cargo no longer makes the truck sag or lean. Ride up and Ride down move it. Off by default.");
+        PageTip("A test: each wheel held at its rest height, so cargo no longer makes the truck sag or lean. Ride up and Ride down move it 2 cm a press under 20 km/h. Off by default.");
         PageLabel("Level to horizon", labelX);
         changed(ImGui::Checkbox("##airhorizon", &s.airHorizon));
         PageTip("A test with Air suspension: under 10 km/h the body is levelled to the horizon, not the wheels. Off by default.");
@@ -1020,7 +1050,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         ImGui::PopTextWrapPos();
         if (s.gearbox == kGearboxOwn) for (int a = 0; a < kViewShifts; a++) bindingRow(a);
         ImGui::TextDisabled("Locks and ride");
-        PageTip("The diff lock and AWD on a key on every truck. Sway bars disconnects them; Ride up and Ride down move the air suspension 2 cm a press.");
+        PageTip("The diff lock and AWD on a key on every truck. Sway bars connects and disconnects the sway bars. Ride up and Ride down move the air suspension 2 cm a press under 20 km/h.");
         for (int a = kViewShifts; a < kViewActions; a++) bindingRow(a);
         if (view.controllers) ImGui::TextDisabled("%d wheel or shifter read through DirectInput.", view.controllers);
     }
@@ -1043,18 +1073,22 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         if (ImGui::Button("Oil warning")) act |= kPageHearOil;
         PageTip("Plays the oil warning.");
         ImGui::EndDisabled();
-        changed(ImGui::Checkbox("Diesel flutter", &s.dieselFlutter));
+        PageLabel("Diesel flutter", labelX);
+        changed(ImGui::Checkbox("##dieselflutter", &s.dieselFlutter));
         PageTip("A diesel's lift is quiet. On: it flutters and blows off as a petrol engine does. Off by default.");
-        changed(ImGui::Checkbox("Sounds only", &s.soundsOnly));
+        PageLabel("Sounds only", labelX);
+        changed(ImGui::Checkbox("##soundsonly", &s.soundsOnly));
         PageTip("Plays the sounds and draws no cluster. Off by default.");
     }
     else if (open && tab == kTabModWork)
     {
         ImGui::SeparatorText("Mod work");
-        changed(ImGui::Checkbox("Demo values", &s.demo));
+        PageLabel("Demo values", labelX);
+        changed(ImGui::Checkbox("##demo", &s.demo));
         PageTip("Draws the cluster with made-up values whenever no truck is driven. Off by default.");
         bool probe = s.probe != 0;
-        if (ImGui::Checkbox("Probe log", &probe))
+        PageLabel("Probe log", labelX);
+        if (ImGui::Checkbox("##probe", &probe))
         {
             s.probe = probe ? 1 : 0;
             act |= kPageChanged;
