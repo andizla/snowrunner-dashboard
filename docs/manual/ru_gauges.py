@@ -169,7 +169,7 @@ def part1():
 рядом с <code>SnowRunner.exe</code>. Если там уже лежит <code>version.dll</code> от Next Gen Tire Inflation, это тот же загрузчик:
 оставьте его; его <code>dxgi.dll</code> и <code>ReShade.ini</code> те же файлы, что и в этом комплекте.</li>
 <li>Запустите игру. Клавиша F2 открывает меню NEXT GEN, в нём есть вкладка Gameplay.</li></ol>
-<p>На Linux (Proton, Steam Deck) задайте в Steam параметры запуска SnowRunner (правый клик, «Свойства», «Общие»): <code>WINEDLLOVERRIDES="version=n,b" %command%</code>. Тогда игра берёт этот <code>version.dll</code>, а не собственный файл Wine. Оверлей там игроки пока не проверяли.</p>
+<p>На Linux (Proton, Steam Deck) задайте в Steam параметры запуска SnowRunner (правый клик, «Свойства», «Общие»): <code>WINEDLLOVERRIDES="version=n,b" %command%</code>. Тогда игра берёт этот <code>version.dll</code>, а не собственный файл Wine. Мод там игроки пока не проверяли.</p>
 <div class="box"><b>Уже стоит ReShade?</b> Когда Windows спросит, заменить ли <code>dxgi.dll</code> и <code>ReShade.ini</code>, выберите «Пропустить», и ваш ReShade останется. Моды рисуют и без ReShade. Он в архиве для тех, у кого RivaTuner: без него их игра не запускается. Если стоит Spotter, оверлей рисует через его перехват кадра; <code>NextGen.ini</code> <code>[Overlay] Spotter=0</code> это выключает. Чтобы обновить мод, скопируйте новый файл поверх старого. До версии 0.15.11 включительно мод был файлом
 <code>Gauges.addon64</code>, который загружал ReShade: при установке <code>Gauges.asi</code> удалите его; если файлов мода два,
 работает только один, и лог пишет, какой. Прежний <code>Gauges.ini</code> работает и дальше.</div>
