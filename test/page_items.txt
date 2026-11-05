@@ -74,11 +74,9 @@
 ##zoneto
 Add 1 engine damage###test1
 Add 10###test10
-Back to the class's curve
-Back to the plain scales
-Back###origin
 Boost pressure
 Brake air pressure
+Class curve
 Class###own
 Class###own
 Class###own
@@ -87,18 +85,23 @@ Class###ownboost
 Clock
 Clutch burns
 Coolant temperature
+Damage
 Defaults
 Demo values
-Down stays in forward gears
+Diesel flutter
+Down stays forward
 Fahrenheit
-Flutter on a diesel
 Fuel use
 Full boost
+Game's gearbox
+H shifter
 Half
-Ignore the game's shifter
+Ignore shifter
 Lamps
 Little
 Miles per hour
+Mod automatic
+Mod gearbox
 None###bind
 None###bind
 None###bind
@@ -170,22 +173,19 @@ None###key
 None###nokey
 None###nopad
 Oil warning
-Pounds per square inch
+PSI
+Plain scales
 Probe log
-Read the ini again
-Require the clutch
-Require the gear held
+Reload ini
+Require clutch
+Reset###origin
 Road
 Rock crawl
 Sequential
 Skip neutral
 Sounds only
+Start###pulltest
 Stock
-Test the engine's pull###pulltest
-The game's own
-The mod's automatic in A
-The mod's own gearbox
-The temperature costs the engine
 Trail
 x
 x
