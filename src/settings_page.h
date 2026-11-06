@@ -790,7 +790,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 char every[128];
                 snprintf(every, sizeof every, "Every %s###suspkind", view.truck);
                 if (ImGui::RadioButton(every, view.suspLevel == 1) && view.suspLevel != 1) act |= kPageSuspKind;
-                PageTip("Every truck of this kind keeps the set. This truck's own set, if it had one, goes.");
+                PageTip(view.suspKindSet ? "Every truck of this kind uses the kind's set. This truck's own set is kept, not in use: This truck only brings it back."
+                                         : "Every truck of this kind keeps this set. The kind has no set yet, so this truck's goes up to it.");
             }
             else if (view.suspKept) ImGui::TextDisabled("Kept, not in use. Changes here edit the default.");
             if (view.suspOwn && view.suspLevel != 2 && view.suspTruckKept) ImGui::TextDisabled("This truck's own set is kept, not in use: This truck only brings it back.");
