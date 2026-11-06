@@ -1939,10 +1939,11 @@ static void EngineFor(EngineState &e, const char *key, const char *id, const cha
 // An edit from the tab, by the suspension's rules (the addendum's point 4): into the level in force, this truck's
 // before the kind's; with neither it makes the kind's own (the box ticks itself), unless a set is kept with Own=0 at
 // either level: then it edits the engine's default and the kept set stays as it is (F1's rule). torque 0 or hold 0:
-// that one is not edited. True where the kind's set was made by it.
+// that one is not edited. True where the kind's set was made by it. An edit whose engine (torque) or gearbox (hold) is
+// not known yet writes nothing, so it never ticks an empty set (review N1 of engine per truck).
 static bool EngineTake(EngineState &e, int torque, float hold)
 {
-    if (!e.key[0]) return false;
+    if (!e.key[0] || (torque > 0 && !e.engine[0]) || (hold > 0.0f && !e.gearbox[0])) return false;
     bool made = false;
     const char *engine = torque > 0 ? e.engine : "", *gearbox = hold > 0.0f ? e.gearbox : "";
     if (e.truckOwn) WriteTruckEngine(e.key, e.id, true, engine, torque, gearbox, hold);
@@ -7718,6 +7719,15 @@ int wmain(int argc, wchar_t **argv)
                 const bool pruned = !has(SectionOf(kEngineSection, ids[0])) && has(SectionOf(kEngineSection, ids[1])) && has(SuspSectionOf(id3));
                 Check(tookEngine && cleared && pruned,
                       "engine: a rebuild takes over an engine set with no suspension set, the old id driven again clears its mark, its own prune drops the 11th marked engine section and leaves the suspension's");
+            }
+            // an edit with the engine's or the gearbox's name not known writes nothing (review N1)
+            {
+                EngineFor(o, kind5, id1, "", g1);
+                const bool noEngine = !EngineTake(o, 55, 0.0f) && !o.kindOwn;
+                EngineFor(o, kind5, id1, e1, "");
+                const bool noBox = !EngineTake(o, 0, 1.5f) && !o.kindOwn;
+                Check(noEngine && noBox && GetFileAttributesW(truckFile(kind5).c_str()) == INVALID_FILE_ATTRIBUTES,
+                      "engine: an edit with the engine's or the gearbox's name not known yet writes nothing and ticks no set");
             }
             // DropTruckIni keeps the file while [Engine] is in it
             {
