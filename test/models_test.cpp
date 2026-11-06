@@ -26,6 +26,7 @@
 #include <string.h>
 #include <string>
 #include <vector>
+#include <map>
 #include "gauges.h"
 #include "truck.h"
 #include "models.h"
@@ -51,6 +52,24 @@ static void Check(bool ok, const char *what)
 }
 
 static bool Near(float a, float b, float by) { return fabsf(a - b) <= by; }
+
+// A made-up game memory for the wheels' drag reads: bytes put at addresses, a read of any byte not put fails.
+static std::map<uint64_t, uint8_t> g_memBytes;
+static bool MemPeek(uint64_t addr, void *out, size_t size)
+{
+    for (size_t i = 0; i < size; i++)
+    {
+        const auto it = g_memBytes.find(addr + i);
+        if (it == g_memBytes.end()) return false;
+        ((uint8_t *)out)[i] = it->second;
+    }
+    return true;
+}
+template <typename T> static void MemPut(uint64_t addr, const T &v)
+{
+    for (size_t i = 0; i < sizeof v; i++) g_memBytes[addr + i] = ((const uint8_t *)&v)[i];
+}
+static const TruckMemory g_mem = { MemPeek, 0x140000000ull, nullptr };
 
 static const float kDt = 0.05f;
 
@@ -3804,17 +3823,97 @@ int main(int argc, char **argv)
         BaseLearn on = {};
         for (int i = 0; i < 60; i++)
         {
-            if (BaseLearnStep(l, 3, true, base * factor * pedal * GamePull(x), factor, pedal, x, 0.0f, 9.0f, 0.05f, learned)) got = learned;
-            if (BaseLearnStep(on, 3, true, base * onFactor * pedal * GamePull(x), onFactor, pedal, x, 0.0f, 9.0f, 0.05f, learned)) gotOn = learned;
+            if (BaseLearnStep(l, 3, true, base * factor * pedal * GamePull(x), 0.0f, factor, pedal, x, 0.0f, 9.0f, 0.05f, learned)) got = learned;
+            if (BaseLearnStep(on, 3, true, base * onFactor * pedal * GamePull(x), 0.0f, onFactor, pedal, x, 0.0f, 9.0f, 0.05f, learned)) gotOn = learned;
         }
         BaseLearn off = {};
         bool offLearned = false;
-        for (int i = 0; i < 60; i++) offLearned = offLearned || BaseLearnStep(off, 3, true, 1.0f, factor, 0.5f, x, 0.0f, 9.0f, 0.05f, learned);
+        for (int i = 0; i < 60; i++) offLearned = offLearned || BaseLearnStep(off, 3, true, 1.0f, 0.0f, factor, 0.5f, x, 0.0f, 9.0f, 0.05f, learned);
         const bool learns = Near(got, base, base * 0.05f) && Near(gotOn, got, 0.001f) && !offLearned;
         char line[220];
         snprintf(line, sizeof line, "road load: the air only, %.3f m/s2 at 100 km/h for 3515 kg; near the top %.2f under %.2f; a gear's pull learned %.3f of %.2f, %.3f with the load on",
                  at100, loaded, plain, got, base, gotOn);
         Check(air && areas && none && bounded && learns, line);
+    }
+    // the wheels' drag added back (BRIEF_air_drag_wheel_damping.md with the Reviewer's addendum): a_damp 0 learns
+    // today's figure; a_damp 0.2 at a = 0.8 learns 1.0 / (f p) per pull; NAN is no pass; the sum over four wheels with a
+    // known I, c, ω and r over the mass with the wheels' own; a wheel off the ground left out with the pass still on; a
+    // failed read and fewer wheels than models no pass; a_damp's mean given with the learned gear
+    {
+        const float factor = 1.25f, pedal = 1.0f, x = 0.5f, dt = 0.05f;
+        auto learnWith = [&](float accel, float damp, float *mean = nullptr) {
+            BaseLearn l = {};
+            float learned = 0.0f, got = 0.0f, m = 0.0f;
+            for (int i = 0; i < 60; i++)
+                if (BaseLearnStep(l, 3, true, accel * GamePull(x), damp * GamePull(x), factor, pedal, x, 0.0f, 9.0f, dt, learned, nullptr, &m)) got = learned, mean ? *mean = m : 0.0f;
+            return got;
+        };
+        float mean = 0.0f;
+        const bool zero = Near(learnWith(0.8f, 0.0f), 0.8f / (factor * pedal), 1e-4f);
+        const bool added = Near(learnWith(0.8f, 0.2f, &mean), 1.0f / (factor * pedal), 1e-4f) && Near(mean, 0.2f * GamePull(x), 1e-4f);
+        BaseLearn nan = {};
+        float learned = 0.0f;
+        bool nanLearned = false;
+        for (int i = 0; i < 80; i++) nanLearned |= BaseLearnStep(nan, 3, true, 0.8f, NAN, factor, pedal, x, 0.0f, 9.0f, dt, learned) != 0;
+        // four wheels: a cylinder's inertia 40 about its axle (body x), 25 across; the axle along the world's x; spinning
+        // 10 rad/s about it; c 0.5 (a half: 0x3F00); r 0.5; each 100 kg; the truck's bodies 4000 kg
+        WheelDamp ws[4] = {};
+        for (WheelDamp &wd : ws)
+        {
+            wd.ok = wd.grounded = true;
+            wd.damping = 0x3F00;
+            wd.inv[0] = 1.0f / 40.0f, wd.inv[1] = wd.inv[2] = 1.0f / 25.0f, wd.inv[3] = 1.0f / 100.0f;
+            wd.cols[0][0] = wd.cols[1][1] = wd.cols[2][2] = 1.0f;
+            wd.angular[0] = -10.0f;
+            wd.radius = 0.5f;
+        }
+        int grounded = 0;
+        const float four = WheelDampAccel(ws, 4, 4000.0f, &grounded); // 4 × 40 × 0.5 × 10 / 0.5 = 1600 N over 4400 kg
+        const bool sum = Near(four, 1600.0f / 4400.0f, 1e-5f) && grounded == 4 && Near(WheelDampMass(ws, 4, 4000.0f), 4400.0f, 0.01f);
+        WheelDamp up[4];
+        memcpy(up, ws, sizeof up);
+        up[3].grounded = false;
+        up[3].damping = 0x7F80; // an airborne wheel's figures are not looked at (infinity here)
+        const bool airborne = Near(WheelDampAccel(up, 4, 4000.0f, &grounded), 1200.0f / 4400.0f, 1e-5f) && grounded == 3;
+        WheelDamp bad[4];
+        memcpy(bad, ws, sizeof bad);
+        bad[2].ok = false;
+        WheelDamp wild[4];
+        memcpy(wild, ws, sizeof wild);
+        wild[1].damping = 0x4500; // 2048, over the 1000 a damping may be
+        WheelDamp round[4];
+        memcpy(round, ws, sizeof round);
+        round[0].inv[0] = round[0].inv[1] = round[0].inv[2] = 1.0f / 25.0f; // a sphere: no axle
+        const bool refused = isnan(WheelDampAccel(bad, 4, 4000.0f)) && isnan(WheelDampAccel(wild, 4, 4000.0f)) && isnan(WheelDampAccel(round, 4, 4000.0f)) &&
+                             isnan(WheelDampAccel(ws, 4, 0.0f));
+        // through the game's memory: the reads as the layout gives them, and a wheel the class check left out
+        const uint64_t cyl = 0x7000;
+        TruckRefs r = {};
+        r.wheels = r.models = 4;
+        for (int i = 0; i < 4; i++)
+        {
+            const uint64_t wheel = 0x20000000ull + (uint64_t)i * 0x1000, body = wheel + 0x400, shape = wheel + 0x800;
+            r.wheel[i] = wheel;
+            MemPut(wheel + 0x18, body);
+            MemPut(body + 0x20, shape);
+            MemPut(shape, cyl);
+            MemPut(wheel + 0x1A4, (uint8_t)1);
+            MemPut(wheel + 0x94, 0.5f);
+            MemPut(body + 0x216, (uint16_t)0x3F00);
+            MemPut(body + 0x220, ws[0].inv);
+            MemPut(body + 0x170, ws[0].cols);
+            MemPut(body + 0x240, ws[0].angular);
+        }
+        float mass = 0.0f;
+        const float read = TruckWheelDamp(g_mem, r, cyl, 4000.0f, &grounded, &mass);
+        TruckRefs short_ = r;
+        short_.models = 5;
+        const bool memory = Near(read, four, 1e-6f) && Near(mass, 4400.0f, 0.01f) && isnan(TruckWheelDamp(g_mem, short_, cyl, 4000.0f)) &&
+                            isnan(TruckWheelDamp(g_mem, r, cyl + 8, 4000.0f)) && isnan(TruckWheelDamp(g_mem, r, 0, 4000.0f));
+        char line[260];
+        snprintf(line, sizeof line, "wheels' drag: added back, a_damp 0 learns %.3f, 0.2 at 0.8 learns %.3f; four wheels %.4f m/s2; one off the ground %.4f; a bad read, a wild damping, "
+                 "a sphere, fewer wheels than models: no pass", learnWith(0.8f, 0.0f), learnWith(0.8f, 0.2f), four, WheelDampAccel(up, 4, 4000.0f));
+        Check(zero && added && !nanLearned && sum && airborne && refused && memory, line);
     }
     // the learning over visits (BRIEF_road_load_learning.md, with the Reviewer's addendum): gears 3 and 4 alternating every
     // 1.5 s floored at x 0.5 to 0.75 both learn (each 2 s summed over visits; before, never); a visit of 0.2 s adds
@@ -3836,7 +3935,7 @@ int main(int argc, char **argv)
             settled = inVisit < dt * 0.5f ? 0.0f : settled + dt;
             const float x = 0.5f + 0.25f * inVisit / 1.5f;
             float got = 0.0f, added = 0.0f;
-            const int done = BaseLearnStep(l, g, true, accelAt(g, x, 0.0f), factor, 1.0f, x, 0.0f, settled, dt, got, &added);
+            const int done = BaseLearnStep(l, g, true, accelAt(g, x, 0.0f), 0.0f, factor, 1.0f, x, 0.0f, settled, dt, got, &added);
             if (g == 3) gathered3 += added;
             if (done && !learnt[done]) learnt[done] = got, when[done] = t;
         }
@@ -3845,20 +3944,20 @@ int main(int argc, char **argv)
         // a visit of 0.2 s adds nothing
         BaseLearn shortVisit = {};
         float got = 0.0f, added = 0.0f, shortAdded = 0.0f;
-        for (int i = 0; i < 4; i++) BaseLearnStep(shortVisit, 3, true, accelAt(3, 0.5f, 0.0f), factor, 1.0f, 0.5f, 0.0f, 9.0f, dt, got, &added), shortAdded += added;
-        BaseLearnStep(shortVisit, 3, false, 0.0f, factor, 1.0f, 0.5f, 0.0f, 9.0f, dt, got, &added);
+        for (int i = 0; i < 4; i++) BaseLearnStep(shortVisit, 3, true, accelAt(3, 0.5f, 0.0f), 0.0f, factor, 1.0f, 0.5f, 0.0f, 9.0f, dt, got, &added), shortAdded += added;
+        BaseLearnStep(shortVisit, 3, false, 0.0f, 0.0f, factor, 1.0f, 0.5f, 0.0f, 9.0f, dt, got, &added);
         const bool shortNothing = shortAdded == 0.0f && shortVisit.time[3] == 0.0f;
         // a 2.5° climb by the path: the game's pull lifts the truck too, and a + g sin θ gives a_base back
         const float climb = sinf(2.5f * 3.14159265f / 180.0f);
         BaseLearn c = {};
         float onClimb = 0.0f;
         for (int i = 0; i < 80 && !onClimb; i++)
-            if (BaseLearnStep(c, 3, true, accelAt(3, 0.55f, climb), factor, 1.0f, 0.55f, climb, 9.0f, dt, got)) onClimb = got;
+            if (BaseLearnStep(c, 3, true, accelAt(3, 0.55f, climb), 0.0f, factor, 1.0f, 0.55f, climb, 9.0f, dt, got)) onClimb = got;
         // 4° by the path is no learning
         BaseLearn steep = {};
         bool steepLearned = false;
         const float four = sinf(4.0f * 3.14159265f / 180.0f);
-        for (int i = 0; i < 80; i++) steepLearned |= BaseLearnStep(steep, 3, true, accelAt(3, 0.55f, four), factor, 1.0f, 0.55f, four, 9.0f, dt, got) != 0;
+        for (int i = 0; i < 80; i++) steepLearned |= BaseLearnStep(steep, 3, true, accelAt(3, 0.55f, four), 0.0f, factor, 1.0f, 0.55f, four, 9.0f, dt, got) != 0;
         // the grade by the path: a truck at 10 m/s up 2.5° through a 0.7° nose-up squat of the chassis (no part of the
         // path) reads 2.5°; under kGradeWay in the span it is unknown
         GradeTrack track = {}, slow = {};
@@ -3884,7 +3983,7 @@ int main(int argc, char **argv)
             if (!shifting) set += dt; // the shift's stage idle again after 0.2 s
             const float raw = shifting ? 0.0f : accelAt(3, 0.6f, 0.0f);
             smooth += (raw - smooth) * (1.0f - expf(-dt / kAccelSmooth));
-            const int done = BaseLearnStep(d, 3, !shifting, smooth, factor, 1.0f, 0.6f, 0.0f, set, dt, got);
+            const int done = BaseLearnStep(d, 3, !shifting, smooth, 0.0f, factor, 1.0f, 0.6f, 0.0f, set, dt, got);
             if (done) dipLearned = got;
         }
         const bool dip = Near(dipLearned, base[3], 0.05f * base[3]);
@@ -3922,7 +4021,7 @@ int main(int argc, char **argv)
         BaseLearn low = {};
         float lowGot = 0.0f, lowAdded = 0.0f, lowSum = 0.0f;
         for (int i = 0; i < 80; i++)
-            BaseLearnStep(low, 1, BaseLearnPlainPower(1, 0.2f), 0.5f * 1.2f * GamePull(0.5f), 1.2f, 1.0f, 0.5f, 0.0f, 9.0f, 0.05f, lowGot, &lowAdded), lowSum += lowAdded;
+            BaseLearnStep(low, 1, BaseLearnPlainPower(1, 0.2f), 0.5f * 1.2f * GamePull(0.5f), 0.0f, 1.2f, 1.0f, 0.5f, 0.0f, 9.0f, 0.05f, lowGot, &lowAdded), lowSum += lowAdded;
         const bool lowNothing = lowSum == 0.0f && low.time[1] == 0.0f;
         Check(fills && apart && alone && plain && lowNothing, "road load fold: two gears with the same a_base × top give the others K / top; 20 % apart, or one gear alone, by gear only; L- floored adds nothing to gear 1");
     }

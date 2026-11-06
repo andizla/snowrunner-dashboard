@@ -1096,7 +1096,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; shows, less with cold oil and without boost, and doubled by the converter at its stall (Gearbox=1), in place\n"
                         L"; of the game's own, which falls away toward each gear's top. The mod writes the game's torque factor for it.\n"
                         L"; EngineShare: how much of the mod's engine the game gets, 0 to 100 percent (50: half way between the two).\n"
-                        L"; RoadLoad=1 (with Powertrain, on by default): the air's drag taken off, once each gear's pull is learned floored on flat ground.\n"
+                        L"; RoadLoad=1 (with Powertrain, on by default): the air's drag taken off, once each gear's pull is learned floored on flat ground with the wheels' drag left out.\n"
                         L";   RoadCdA: the drag's area in m2, 0 by the truck's mass (1.1 under 4 t, 3.5 under 10 t, else 6); a truck's file may set it.\n"
                         L";   Base1.<engine>, Base2.<engine> ... in a truck's file: each gear's acceleration at the game's own pull, floored, learned.\n"
                         L"; Creep=1: an idling truck on an automatic moves to walking pace; the brake holds it. For now only with an automatic, not in a gear picked by hand.\n"
@@ -1373,22 +1373,59 @@ static int GearTopRead(const char *key, float tops[kMaxGears])
 // Base<n>.<engine>: each numbered gear's acceleration at the game's own pull, floored, at its pull's peak, in m/s²
 // (BaseLearnStep), for the road load, in the truck's file by the engine fitted, as it is the truck's (engine, mass,
 // wheels, gearbox) and an engine upgrade starts over (review F2); 0 for a gear without one. The number read.
-static int GearBaseRead(const char *truck, const char *engine, float bases[kMaxGears])
+// BaseDamp.<engine>=1 beside them marks figures learned with the wheels' drag added back (BRIEF_air_drag_wheel_damping.md).
+// Without the mark the engine's Base<n> are the old ones, learned with the drag in them: the read deletes them all, then
+// writes the mark, in that one step (the Reviewer's point 5), so no old figure ever sits under the mark. A crash between
+// the two leaves no mark, and the next read deletes again. dropped: the old figures deleted.
+static bool GearBaseMarked(const char *truck, const char *engine)
+{
+    wchar_t name[kMaxText + 16], buf[8] = {};
+    swprintf_s(name, L"BaseDamp.%S", engine);
+    return GetPrivateProfileStringW(kSetupSections[kSetupTruck], name, L"", buf, 8, SetupFile(kSetupTruck, truck).c_str()) > 0 && _wtoi(buf) == 1;
+}
+static void GearBaseMark(const char *truck, const char *engine)
+{
+    wchar_t name[kMaxText + 16];
+    swprintf_s(name, L"BaseDamp.%S", engine);
+    SetupBegin(kSetupTruck, Wide(truck));
+    WritePrivateProfileStringW(kSetupSections[kSetupTruck], name, L"1", SetupFile(kSetupTruck, truck).c_str());
+}
+static int GearBaseRead(const char *truck, const char *engine, float bases[kMaxGears], int *dropped = nullptr)
 {
     int n = 0;
+    if (dropped) *dropped = 0;
     for (int g = 0; g < kMaxGears; g++) bases[g] = 0.0f;
     if (!truck[0] || !engine[0]) return 0;
+    const std::wstring file = SetupFile(kSetupTruck, truck);
+    if (!GearBaseMarked(truck, engine))
+    {
+        int old = 0;
+        for (int g = 1; g < kMaxGears; g++)
+        {
+            wchar_t name[kMaxText + 16], buf[24] = {};
+            swprintf_s(name, L"Base%d.%S", g, engine);
+            if (GetPrivateProfileStringW(kSetupSections[kSetupTruck], name, L"", buf, 24, file.c_str()) == 0) continue;
+            WritePrivateProfileStringW(kSetupSections[kSetupTruck], name, nullptr, file.c_str());
+            old++;
+        }
+        // no file is made for a truck with nothing to drop: GearBaseWrite marks the first figure's file
+        if (old) GearBaseMark(truck, engine);
+        if (dropped) *dropped = old;
+        return 0;
+    }
     for (int g = 1; g < kMaxGears; g++)
     {
         wchar_t name[kMaxText + 16], buf[24] = {};
         swprintf_s(name, L"Base%d.%S", g, engine);
-        if (GetPrivateProfileStringW(kSetupSections[kSetupTruck], name, L"", buf, 24, SetupFile(kSetupTruck, truck).c_str()) == 0) continue;
+        if (GetPrivateProfileStringW(kSetupSections[kSetupTruck], name, L"", buf, 24, file.c_str()) == 0) continue;
         const float v = (float)_wtof(buf);
         if (isfinite(v) && v > 0.0f && v < 100.0f) bases[g] = v, n++;
     }
     return n;
 }
 
+// A figure, and the mark beside it: the read before it found the mark or deleted every old figure, so all the
+// engine's figures in the file are new ones.
 static void GearBaseWrite(const char *truck, const char *engine, int gear, float base)
 {
     if (!truck[0] || !engine[0] || gear < 1 || gear >= kMaxGears) return;
@@ -1397,6 +1434,7 @@ static void GearBaseWrite(const char *truck, const char *engine, int gear, float
     swprintf_s(buf, L"%.3f", base);
     SetupBegin(kSetupTruck, Wide(truck));
     WritePrivateProfileStringW(kSetupSections[kSetupTruck], name, buf, SetupFile(kSetupTruck, truck).c_str());
+    GearBaseMark(truck, engine);
 }
 
 static void GearTopWrite(const char *key, int gear, float top)
@@ -2933,6 +2971,24 @@ static uint64_t SuspVtable()
     return vtable;
 }
 
+// The wheel's collision shape's vtable (hkpCylinderShape), by its RTTI name as the tire mod finds it, looked for once:
+// 0 where it is not found, and then the wheels' drag is not read and Air drag learns nothing.
+static const char *const kWheelCylinderName = ".?AVhkpCylinderShape@@";
+static uint64_t WheelCylinderVtable()
+{
+    static bool looked = false;
+    static uint64_t vtable = 0;
+    if (looked) return vtable;
+    looked = true;
+    size_t from = 0, to = 0;
+    std::vector<uint8_t> image;
+    const uint64_t rva = CodeCopy(image, from, to, true) ? VtableByName(image.data(), image.size(), g_base, kWheelCylinderName) : 0;
+    vtable = rva ? g_base + rva : 0;
+    if (rva) Log(L"road load: hkpCylinderShape's vtable at +%llx (the wheels' drag is read by it)", rva);
+    else Log(L"road load: hkpCylinderShape's vtable not found: the wheels' drag is not read, and the gears' pull is not learned");
+    return vtable;
+}
+
 // The probe's scan for each wheel's suspension constraint (suspension_scan.h), read only.
 struct SuspProbe
 {
@@ -3093,6 +3149,9 @@ struct TruckWatch
     ULONGLONG baseSaidAt[kMaxGears]; // when "road load: gear g learning" was last said (probe only, every 10 s at most)
     float accel, speedWas;     // the truck's acceleration over the ground, smoothed over kAccelSmooth, and the speed it goes from
     bool accelSeen;
+    float damp;                // the wheels' drag as the truck's acceleration (TruckWheelDamp), smoothed as accel is
+    bool dampSeen;             // damp holds a reading: false after a pass it could not be read, so it starts afresh
+    uint64_t dampSaidFor, dampFailFor; // the vehicles the wheels' good read and failed read were last logged for
     float roadShare, roadLoadA; // the road load taken off on the last pass, as a share of the pull and as m/s², for the probe
     PullBins pull;              // part 1's probe: the game's own pull by x in the gear being measured
     float pullPeak[kMaxGears];  // the most acceleration measured in each gear this start
@@ -4860,6 +4919,27 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             else w.accel = 0.0f;
             w.speedWas = v;
             w.accelSeen = true;
+            // the wheels' drag, added back to what the gears' pull learns (BRIEF_air_drag_wheel_damping.md), through the
+            // same 0.2 s filter as the acceleration so both describe one moment (the Reviewer's point 4); NAN unread
+            int dampGrounded = 0;
+            float dampMass = 0.0f;
+            const float dampFiles = TruckMass(m, w.refs.model);
+            const float dampRaw = TruckWheelDamp(m, w.refs, WheelCylinderVtable(), dampFiles, &dampGrounded, &dampMass);
+            if (!isfinite(dampRaw)) w.dampSeen = false;
+            else if (w.dampSeen && dt > 0.0f) w.damp += (dampRaw - w.damp) * (1.0f - expf(-dt / kAccelSmooth));
+            else w.damp = dampRaw, w.dampSeen = true;
+            const float damp = w.dampSeen ? w.damp : NAN;
+            // once per truck: the first good read, and the first failed one
+            if (isfinite(dampRaw) ? w.dampSaidFor != w.refs.vehicle : w.dampFailFor != w.refs.vehicle)
+            {
+                (isfinite(dampRaw) ? w.dampSaidFor : w.dampFailFor) = w.refs.vehicle;
+                if (isfinite(dampRaw))
+                    Log(L"road load: the wheels' drag read from %d wheels (%d on the ground), the mass taken %.0f kg (the truck's bodies %.0f, the wheels' %.0f): %.3f m/s2 now",
+                        w.refs.wheels, dampGrounded, dampMass, dampFiles, dampMass - dampFiles, dampRaw);
+                else
+                    Log(L"road load: the wheels' drag not read (%d of %d wheel models found, the shape's vtable %s): the gears' pull is not learned until they are read",
+                        w.refs.wheels, w.refs.models, WheelCylinderVtable() ? L"found" : L"not found");
+            }
             const int g = raw.gearEngaged;
             const float top = g >= 1 ? TruckGearTop(raw, g) : 0.0f, groundX = top > 0.0f && w.gearbox.grip > 0.0f ? w.gearbox.grip * fmaxf(v, 0.0f) / top : 0.0f;
             const float pedalNow = TruckPedal(raw);
@@ -4882,13 +4962,18 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 strcpy_s(w.baseEngine, baseEngine);
                 w.baseLearn = BaseLearn{};
                 memset(w.baseSaidAt, 0, sizeof w.baseSaidAt);
-                const int bases = GearBaseRead(baseTruck, baseEngine, w.gearBase);
+                int dropped = 0;
+                const int bases = GearBaseRead(baseTruck, baseEngine, w.gearBase, &dropped);
                 if (bases) Log(L"road load: %d of this truck's gears' pull with %S learned before (its file in Gauges\\trucks)", bases, baseEngine);
+                if (dropped)
+                    Log(L"road load: %d of this truck's gears' pull with %S were learned with the wheels' drag in them: dropped, to be learned again (BaseDamp.%S=1 now marks the new ones)",
+                        dropped, baseEngine, baseEngine);
                 fold = true;
             }
-            float learned = 0.0f, added = 0.0f;
+            float learned = 0.0f, added = 0.0f, dampMean = 0.0f;
             const int done = baseTruck[0] && baseEngine[0]
-                                 ? BaseLearnStep(w.baseLearn, g, clean && BaseLearnPlainPower(g, raw.powerFactor), w.accel, raw.torqueFactor, pedalNow, groundX, gradeSin, w.baseSettled, dt, learned, &added)
+                                 ? BaseLearnStep(w.baseLearn, g, clean && BaseLearnPlainPower(g, raw.powerFactor), w.accel, damp, raw.torqueFactor, pedalNow, groundX, gradeSin,
+                                                 w.baseSettled, dt, learned, &added, &dampMean)
                                  : 0;
             if (probe && added > 0.0f && !done && g >= 1 && g < kMaxGears && GetTickCount64() - w.baseSaidAt[g] >= 10000)
             {
@@ -4899,12 +4984,11 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             {
                 const float was = w.gearBase[done];
                 w.gearBase[done] = was > 0.0f ? was + (learned - was) * 0.3f : learned;
-                if (!(was > 0.0f) || fabsf(w.gearBase[done] - was) > 0.05f * was)
-                {
-                    GearBaseWrite(baseTruck, baseEngine, done, w.gearBase[done]);
-                    Log(L"road load: gear %d's pull at the game's own torque with %S, floored: %.3f m/s2 (from %.3f; the truck's file in Gauges\\trucks)", done,
-                        baseEngine, w.gearBase[done], was);
-                }
+                const bool moved = !(was > 0.0f) || fabsf(w.gearBase[done] - was) > 0.05f * was;
+                if (moved) GearBaseWrite(baseTruck, baseEngine, done, w.gearBase[done]);
+                // every learned gear (the Reviewer's point 6), so a drive shows the wheels' drag beside each figure
+                Log(L"road load: gear %d's pull at the game's own torque with %S, floored: learned %.3f m/s2 with the wheels' drag %.3f m/s2 added back, kept %.3f (from %.3f%s)",
+                    done, baseEngine, learned, dampMean, w.gearBase[done], was, moved ? L"; the truck's file in Gauges\\trucks" : L"; within 5 %, not written");
                 fold = true;
             }
             // one figure per truck: a gear with none learned goes by the learned gears' a_base × top over its own top
@@ -6809,6 +6893,37 @@ int wmain(int argc, wchar_t **argv)
             SettingsFor(su, "susp_ww");
             Check(learned == 8 && fabsf(bases[8] - 2.99f) < 0.001f && su.suspOwn && su.s.springScale == 1.75f,
                   "suspension: the learned pulls and the tab's suspension written into one file at once both stay");
+            // the wheels' drag mark (the Reviewer's point 5): old figures for gears 2 and 3 without BaseDamp, the read drops
+            // both and marks; gear 2 learned again; read again: gear 2 the new one, gear 3 is 0. A truck with no figures
+            // gets no file from the read.
+            {
+                const std::wstring oldFile = truckFile("base_old");
+                DeleteFileW(oldFile.c_str());
+                SetupBegin(kSetupTruck, L"base_old");
+                WritePrivateProfileStringW(kSetupSections[kSetupTruck], L"Base2.e_old", L"1.500", oldFile.c_str());
+                WritePrivateProfileStringW(kSetupSections[kSetupTruck], L"Base3.e_old", L"1.700", oldFile.c_str());
+                WritePrivateProfileStringW(kSetupSections[kSetupTruck], L"Base3.e_other", L"1.900", oldFile.c_str());
+                float b1[kMaxGears] = {}, b2[kMaxGears] = {};
+                int dropped1 = -1, dropped2 = -1;
+                const int first = GearBaseRead("base_old", "e_old", b1, &dropped1);
+                wchar_t left[24] = {};
+                const bool gone = GetPrivateProfileStringW(kSetupSections[kSetupTruck], L"Base2.e_old", L"", left, 24, oldFile.c_str()) == 0 &&
+                                  GetPrivateProfileStringW(kSetupSections[kSetupTruck], L"Base3.e_old", L"", left, 24, oldFile.c_str()) == 0 &&
+                                  GearBaseMarked("base_old", "e_old") && !GearBaseMarked("base_old", "e_other") &&
+                                  GetPrivateProfileStringW(kSetupSections[kSetupTruck], L"Base3.e_other", L"", left, 24, oldFile.c_str()) > 0 && !wcscmp(left, L"1.900");
+                GearBaseWrite("base_old", "e_old", 2, 1.8f);
+                const int second = GearBaseRead("base_old", "e_old", b2, &dropped2);
+                float b3[kMaxGears] = {};
+                int dropped3 = -1;
+                const std::wstring noneFile = truckFile("base_none");
+                DeleteFileW(noneFile.c_str());
+                const int none = GearBaseRead("base_none", "e_old", b3, &dropped3);
+                const bool noFile = GetFileAttributesW(noneFile.c_str()) == INVALID_FILE_ATTRIBUTES;
+                Check(first == 0 && dropped1 == 2 && b1[2] == 0.0f && b1[3] == 0.0f && gone && second == 1 && dropped2 == 0 && fabsf(b2[2] - 1.8f) < 0.001f && b2[3] == 0.0f &&
+                          none == 0 && dropped3 == 0 && noFile,
+                      "road load: figures without BaseDamp are dropped and the mark written at the read; one learned again is read, the one not learned again is 0; another engine's keys stay");
+                DeleteFileW(oldFile.c_str());
+            }
             // an old Gauges.ini: no truck file has [Suspension], so every truck has the values of [Gauges] as before
             for (const char *key : { "susp_hx", "susp_ww" }) DeleteFileW(truckFile(key).c_str());
             SettingsFor(su, "susp_hx");

@@ -95,6 +95,7 @@ struct TruckRefs
     uint64_t control, vehicle, action, model, chassis;
     uint64_t wheel[kMaxWheels];
     int wheels;
+    int models; // the wheel models the vehicle lists ((end - begin) / 8): wheels is fewer where one's class did not match
 };
 
 // The truck's values as the game holds them. The probe log prints them as they are.
@@ -186,6 +187,7 @@ inline bool TruckFind(const TruckMemory &m, TruckRefs &r)
         return false;
     if (!r.action || !r.chassis || end <= begin || (end - begin) % 8 || end - begin > kMaxWheels * 8) return false;
     const int count = (int)((end - begin) / 8);
+    r.models = count;
     for (int i = 0; i < count; i++)
     {
         uint64_t model = 0, wheel = 0, cls = 0;

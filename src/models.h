@@ -1521,11 +1521,125 @@ inline float GradeStep(GradeTrack &g, const float pos[3], float now)
     return NAN;
 }
 
+// The wheels' drag (BRIEF_air_drag_wheel_damping.md): each wheel body's angular damping c (body + 0x216, a Havok half:
+// the float's top 16 bits) slows its spin by c·ω a second, so the wheel takes I·c·|ω| off at the hub and I·c·|ω| / r at
+// the ground. The game's stock damping does this, a flat tire's more, and the tire mod's Rolling drag most. Read from
+// the game only, as the tire mod reads it: the wheel's body at wheel + 0x18, its cylinder shape at body + 0x20 (by the
+// shape's vtable), the rotation's columns at body + 0x170, the inverse inertia's diagonal at body + 0x220 and the
+// inverse mass at + 0x22C, the angular velocity at body + 0x240 (the world's axes), the radius at wheel + 0x94, and
+// wheel + 0x1A4 set while it touches the ground.
+struct WheelDamp
+{
+    bool ok;          // every read made
+    bool grounded;    // wheel + 0x1A4
+    uint16_t damping; // body + 0x216
+    float inv[4];     // body + 0x220: the inverse inertia about the body's x, y, z, then the inverse mass
+    float cols[3][4]; // body + 0x170: the body's axes in the world
+    float angular[3]; // body + 0x240
+    float radius;     // wheel + 0x94
+};
+inline float WheelHalf(uint16_t half)
+{
+    const uint32_t bits = (uint32_t)half << 16;
+    float f = 0.0f;
+    memcpy(&f, &bits, sizeof f);
+    return f;
+}
+// The axle among a body's three axes, as the tire mod's RollAxle picks it: the axis whose inertia stands apart from the
+// other two (a cylinder's ½mr² about its axle, the two across it alike). -1 where one is no inverse, and where all
+// three lie within 2 % (a sphere's inertia: no axle shows).
+inline int WheelAxle(const float inv[3])
+{
+    float in[3];
+    for (int i = 0; i < 3; i++)
+    {
+        if (!(inv[i] > 0.0f && inv[i] < 1.0e30f)) return -1;
+        in[i] = 1.0f / inv[i];
+    }
+    const float most = fmaxf(in[0], fmaxf(in[1], in[2])), least = fminf(in[0], fminf(in[1], in[2]));
+    if (most - least <= 0.02f * most) return -1;
+    const float d01 = fabsf(in[0] - in[1]), d02 = fabsf(in[0] - in[2]), d12 = fabsf(in[1] - in[2]);
+    return d01 <= d02 && d01 <= d12 ? 2 : d02 <= d12 ? 1 : 0;
+}
+// A wheel body's mass, 1 over its inverse mass, as the tire mod's DragBodyMass: 0 where it is no mass a wheel can have.
+inline float WheelBodyMass(const WheelDamp &w)
+{
+    const float m = w.inv[3] > 0.0f ? 1.0f / w.inv[3] : 0.0f;
+    return isfinite(m) && m > 0.01f && m < 1.0e5f ? m : 0.0f;
+}
+// The mass the physics moves (the Reviewer's point 3): the game's sum of the truck's bodies but the wheels
+// (model + 0x784, TruckMass) and each wheel body's own. 0 where one is not known.
+inline float WheelDampMass(const WheelDamp *w, int n, float files)
+{
+    if (!(files > 0.0f) || n <= 0) return 0.0f;
+    float mass = files;
+    for (int i = 0; i < n; i++)
+    {
+        const float m = w[i].ok ? WheelBodyMass(w[i]) : 0.0f;
+        if (!(m > 0.0f)) return 0.0f;
+        mass += m;
+    }
+    return mass;
+}
+// The wheels' drag as an acceleration of the truck: Σ I·c·|ω| / r over the wheels on the ground, driven or not, over
+// the mass (WheelDampMass). A wheel off the ground slows only its own spin and is left out. NAN where a wheel was not
+// read or one on the ground gives no sound figure (c outside 0 to 1000, no axle, I or r not above 0, not finite), so a
+// half read never teaches. grounded: the wheels summed, where given.
+static const float kWheelDampMost = 1000.0f;
+inline float WheelDampAccel(const WheelDamp *w, int n, float files, int *grounded = nullptr)
+{
+    if (grounded) *grounded = 0;
+    const float mass = WheelDampMass(w, n, files);
+    if (!(mass > 0.0f)) return NAN;
+    float sum = 0.0f;
+    for (int i = 0; i < n; i++)
+    {
+        if (!w[i].grounded) continue;
+        const float c = WheelHalf(w[i].damping);
+        const int axle = WheelAxle(w[i].inv);
+        if (!isfinite(c) || c < 0.0f || c > kWheelDampMost || axle < 0 || !(w[i].radius > 0.0f) || !isfinite(w[i].radius)) return NAN;
+        const float inertia = 1.0f / w[i].inv[axle];
+        const float spin = w[i].angular[0] * w[i].cols[axle][0] + w[i].angular[1] * w[i].cols[axle][1] + w[i].angular[2] * w[i].cols[axle][2];
+        if (!isfinite(inertia) || !(inertia > 0.0f) || !isfinite(spin)) return NAN;
+        sum += inertia * c * fabsf(spin) / w[i].radius;
+        if (grounded) ++*grounded;
+    }
+    const float a = sum / mass;
+    return isfinite(a) ? a : NAN;
+}
+// One wheel's reads (the layout above), the body's shape checked by the cylinder's vtable (0: not found, no read).
+inline bool WheelDampRead(const TruckMemory &m, uint64_t wheel, uint64_t cylinderVtable, WheelDamp &w)
+{
+    w = WheelDamp{};
+    uint64_t body = 0, shape = 0, vt = 0;
+    uint8_t contact = 0;
+    w.ok = cylinderVtable && wheel && m.get(wheel + 0x18, body) && body && m.get(body + 0x20, shape) && shape && m.get(shape, vt) && vt == cylinderVtable &&
+           m.get(wheel + 0x1A4, contact) && m.get(wheel + 0x94, w.radius) && m.get(body + 0x216, w.damping) && m.get(body + 0x220, w.inv) &&
+           m.get(body + 0x170, w.cols) && m.get(body + 0x240, w.angular);
+    w.grounded = w.ok && contact != 0;
+    return w.ok;
+}
+// The truck's wheels' drag (WheelDampAccel) over every wheel the vehicle lists: NAN where the wheel list is short of
+// the models' count (TruckFind left one out, the Reviewer's point 2) or a wheel is not read. files: TruckMass.
+// grounded and mass, where given: the wheels summed and the mass taken, for the log.
+inline float TruckWheelDamp(const TruckMemory &m, const TruckRefs &r, uint64_t cylinderVtable, float files, int *grounded = nullptr, float *mass = nullptr)
+{
+    if (grounded) *grounded = 0;
+    if (mass) *mass = 0.0f;
+    if (r.wheels <= 0 || r.wheels < r.models || r.wheels > kMaxWheels) return NAN;
+    WheelDamp w[kMaxWheels];
+    for (int i = 0; i < r.wheels; i++)
+        if (!WheelDampRead(m, r.wheel[i], cylinderVtable, w[i])) return NAN;
+    if (mass) *mass = WheelDampMass(w, r.wheels, files);
+    return WheelDampAccel(w, r.wheels, files, grounded);
+}
+
 // a_base(g), learned in ordinary driving: floored (kBaseLearnPedal), the grade by the path within kBaseLearnGrade and
 // taken out (a + g sin θ: on a climb the game's pull also lifts the truck), the grip known and the wheels not
 // spinning, no brake, the wheels at kBaseLearnFrom to kBaseLearnTo of the gear's top. There the game's acceleration
-// is a_base × the factor in the game × the pedal × its pull's rise; the game has no drag, and the load the mod takes
-// off is in the factor already, so each pass gives a / (factor × pedal) = a_base × GamePull(x) (review F1). The mean is
+// is a_base × the factor in the game × the pedal × its pull's rise, less the wheels' drag (WheelDampAccel), which is
+// added back; the load the mod takes off is in the factor already, so each pass gives (a + a_damp) / (factor × pedal)
+// = a_base × GamePull(x) (review F1; BRIEF_air_drag_wheel_damping.md). The mean is
 // weighted by the pull, Σ a/(f p) over Σ GamePull, so the low-pull passes near 0.8 count less in the noise.
 // To 0.8 and not further (the Reviewer, 11:25): an error in a gear's learned top grows the error of GamePull past it,
 // 10 % at 0.8, 20 % at 0.9; the fit's slope cancels, as the use divides by the same fit.
@@ -1539,33 +1653,40 @@ struct BaseLearn
 {
     int gear;                                  // the visit's gear
     float visitSum, visitPull, visitTime;      // the visit's passes until it is kBaseLearnVisit long
+    float visitDamp;                           // the visit's a_damp × dt
     float sum[kMaxGears], pull[kMaxGears], time[kMaxGears]; // each gear's gathered passes
+    float damp[kMaxGears];                     // each gear's a_damp × dt over the same passes
 };
-// One pass: ok the conditions hold, settled the seconds since the last shift's end, gradeSin the path's (NAN unknown).
-// Returns the gear whose a_base is done, into learned, else 0; added: the seconds this pass added to its gear.
-inline int BaseLearnStep(BaseLearn &l, int gear, bool ok, float accel, float factor, float pedal, float x, float gradeSin, float settled, float dt,
-                         float &learned, float *added = nullptr)
+// One pass: ok the conditions hold, settled the seconds since the last shift's end, gradeSin the path's (NAN unknown),
+// damp the wheels' drag (WheelDampAccel, smoothed as accel is; NAN not read: no pass). Returns the gear whose a_base is
+// done, into learned, else 0; added: the seconds this pass added to its gear; dampMean: a_damp's mean over the done
+// gear's passes, for the log.
+inline int BaseLearnStep(BaseLearn &l, int gear, bool ok, float accel, float damp, float factor, float pedal, float x, float gradeSin, float settled, float dt,
+                         float &learned, float *added = nullptr, float *dampMean = nullptr)
 {
     if (added) *added = 0.0f;
-    if (gear != l.gear) l.gear = gear, l.visitSum = l.visitPull = l.visitTime = 0.0f;
+    if (gear != l.gear) l.gear = gear, l.visitSum = l.visitPull = l.visitTime = l.visitDamp = 0.0f;
     const float pull = GamePull(x);
     const bool pass = ok && gear >= 1 && gear < kMaxGears && factor > 0.0f && pedal >= kBaseLearnPedal && x >= kBaseLearnFrom && x <= kBaseLearnTo && pull > 0.2f &&
-                      isfinite(accel) && isfinite(gradeSin) && fabsf(gradeSin) <= sinf(kBaseLearnGrade * 3.14159265f / 180.0f) && settled >= kBaseLearnSkip;
+                      isfinite(accel) && isfinite(damp) && damp >= 0.0f && isfinite(gradeSin) && fabsf(gradeSin) <= sinf(kBaseLearnGrade * 3.14159265f / 180.0f) &&
+                      settled >= kBaseLearnSkip;
     if (!pass)
     {
-        l.visitSum = l.visitPull = l.visitTime = 0.0f; // the visit ends; one under kBaseLearnVisit is dropped
+        l.visitSum = l.visitPull = l.visitTime = l.visitDamp = 0.0f; // the visit ends; one under kBaseLearnVisit is dropped
         return 0;
     }
-    const float sample = (accel + kGravity * gradeSin) / (factor * pedal) * dt, weight = pull * dt;
+    const float sample = (accel + damp + kGravity * gradeSin) / (factor * pedal) * dt, weight = pull * dt;
     if (l.visitTime < kBaseLearnVisit)
     {
         l.visitSum += sample;
         l.visitPull += weight;
+        l.visitDamp += damp * dt;
         l.visitTime += dt;
         if (l.visitTime < kBaseLearnVisit) return 0;
         // the visit is long enough: its passes so far count
         l.sum[gear] += l.visitSum;
         l.pull[gear] += l.visitPull;
+        l.damp[gear] += l.visitDamp;
         l.time[gear] += l.visitTime;
         if (added) *added = l.visitTime;
     }
@@ -1573,12 +1694,14 @@ inline int BaseLearnStep(BaseLearn &l, int gear, bool ok, float accel, float fac
     {
         l.sum[gear] += sample;
         l.pull[gear] += weight;
+        l.damp[gear] += damp * dt;
         l.time[gear] += dt;
         if (added) *added = dt;
     }
     if (l.time[gear] < kBaseLearnFor - 1e-3f) return 0; // the passes' dt summed may fall a hair short of 2 s
     learned = l.pull[gear] > 0.0f ? l.sum[gear] / l.pull[gear] : 0.0f;
-    l.sum[gear] = l.pull[gear] = l.time[gear] = 0.0f;
+    if (dampMean) *dampMean = l.time[gear] > 0.0f ? l.damp[gear] / l.time[gear] : 0.0f;
+    l.sum[gear] = l.pull[gear] = l.time[gear] = l.damp[gear] = 0.0f;
     return learned > 0.0f ? gear : 0;
 }
 

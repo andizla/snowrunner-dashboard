@@ -240,7 +240,8 @@ a rolling truck by itself, more the faster it goes. Air drag adds the air's shar
 faster the truck goes: about 0.5 kN at 100 km/h for a pickup. It needs each gear's pull at the game's own torque, which the mod learns
 by itself when you drive that gear floored for a couple of seconds in all, over as many visits as it takes, with the wheels up to 0.8 of
 the gear's top and on grades up to 3°. Until then that gear has none, unless two learned gears agree within 15 % (their pull times
-their top): then it goes by them, which gives the top gears their drag. The drag's area goes
+their top): then it goes by them, which gives the top gears their drag. That pull is learned with the wheels' own drag left out, so Rolling drag
+and a flat tire don't make Air drag stronger. The drag's area goes
 by the truck's weight (1.1 m² under 4 t, 3.5 under 10 t, else 6) unless <code>RoadCdA</code> sets it, in <code>[Gauges]</code> or a
 truck's file. The weight is the truck's own, without cargo or a trailer, so with a load the drag taken off is too much. The game has its own rolling resistance.</p>
 <p><code>EngineShare</code> (50) sets how much of the mod's engine the game gets: at 50 the truck pulls half way between the game's engine and the mod's, at 100 all the mod's. With the engine handed over, the automatic shifts as a truck automatic does:</p>
