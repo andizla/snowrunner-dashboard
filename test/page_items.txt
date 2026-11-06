@@ -1,4 +1,6 @@
 ##airfull
+##airheight
+##airsync
 ##airhorizon
 ##airsuspension
 ##ambient
@@ -95,6 +97,8 @@
 ##zonesoft
 ##zoneto
 Add 1 engine damage###test1
+Air##airfront
+Air##airrear
 Add 10###test10
 Class curve
 Class###own

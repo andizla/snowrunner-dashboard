@@ -150,6 +150,10 @@ struct GaugeSettings
     bool suspDisplay;        // SuspDisplay: the suspension display, each wheel's travel, its end hits and whether it hangs, and the articulation
     bool airSuspension;      // AirSuspension: each wheel held at its rest place of the first standstill, cargo or not; BindRideUp and BindRideDown move it (a test)
     bool airHorizon;         // AirHorizon: with AirSuspension, the body's pitch and roll levelled to the horizon instead of to the wheels (a test)
+    int airAxleMask;         // AirAxleMask: the ends with air the player ticked (air_axles.h: bit 0 the front axle, bit 1 every other), -1 none ticked (the start order
+                             // gives one). Only in a truck's [Suspension] and [Suspension:<id>], never in Gauges.ini; written once the player ticks
+    int airMaskFrom;         // not a setting: the level airAxleMask came from (kAirFromKind, kAirFromTruck, kAirFromTicked)
+    bool airSync;            // AirSync: the Suspension tab shows the row with the air's height slider (a view setting)
     int shiftOnGameThread;   // ShiftOnGameThread (ini only, 1 by default): the mod's shifts dealt on the game's thread in its truck update; 0 calls the game's ShiftGear from the mod's thread as before (review 17, step 1)
     int suspStepTest;        // SuspStepTest (ini only, a test, with Probe=1): every 20 s wheel 0's spring at half for 1 s standing (1), its damping at a tenth for 0.5 s moving (2), or its attach point 2 cm toward the droop for 1 s standing (3)
     int soundVolume;        // SoundVolume: how loud the turbo's flutter and the oil warning are, 0 to 100; 0 = no sound
@@ -207,6 +211,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.clutchHeat = 60.0f;
     s.springScale = s.dampingScale = 1.0f;
     s.frameFlex = s.twistRange = 1.0f;
+    s.airAxleMask = -1;
     s.extraTravel = 0.0f;
     s.lowCompression = s.highCompression = s.lowRebound = s.highRebound = 1.0f;
     s.damperKnee = 0.1f;
@@ -292,6 +297,13 @@ inline int AirHeightStep(int cm, int dir, float kmh, bool on)
     const int next = cm + (dir > 0 ? kRideKeyStep : -kRideKeyStep);
     return next > kRideKeyMost ? kRideKeyMost : next < -kRideKeyMost ? -kRideKeyMost : next;
 }
+// The Suspension tab's height slider (BRIEF_air_axle_ticks.md): the keys' own figure set to cm, within kRideKeyMost and
+// under kRideKeyKmh as the keys are.
+inline int AirHeightSet(int cm, int to, float kmh, bool on)
+{
+    if (!on || !(kmh < kRideKeyKmh)) return cm;
+    return to > kRideKeyMost ? kRideKeyMost : to < -kRideKeyMost ? -kRideKeyMost : to;
+}
 // The ride height slider's text: 0 with no sign, so the label keeps one form through 0.
 inline const char *RideFormat(float v) { return v != 0.0f ? "%+.0f cm" : "0 cm"; }
 
@@ -335,6 +347,7 @@ inline void SettingsClamp(GaugeSettings &s)
     s.dampingScale = SettingsRange(s.dampingScale, kSuspScaleRange[0], kSuspScaleRange[1]);
     s.frameFlex = SettingsRange(s.frameFlex, kFrameFlexRange[0], kFrameFlexRange[1]);
     s.twistRange = SettingsRange(s.twistRange, kTwistRange[0], kTwistRange[1]);
+    s.airAxleMask = s.airAxleMask < 0 ? -1 : s.airAxleMask & 3; // its two bits (air_axles.h)
     s.extraTravel = SettingsRange(s.extraTravel, kExtraTravelRange[0], kExtraTravelRange[1]);
     s.rideFront = SettingsRange(SettingsStep(s.rideFront, kRideStep), kRideRange[0], kRideRange[1]);
     s.rideRear = SettingsRange(SettingsStep(s.rideRear, kRideStep), kRideRange[0], kRideRange[1]);
@@ -498,7 +511,7 @@ struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWar
                    int pullTest, pullPhase; const char *pullWhy;
                    float ambientDay, ambientNight, hour; // the map's day and night (with mapOwn), the hour of the game's day (-1 not known)
                    SuspDisplayView susp; bool swayOff; float rideRest[2]; bool rideRestKnown; // the display's figures; the bars disconnected; each axle's rest place along its axis (front, rear; cm), from the probe
-                   bool air, airTaken, airShown; int airHeight; float airLevel[2], airSide; bool airKnown; int airAxles, airFrom; // airKnown: a truck is driven and its air axles (air_axles.h) and their source are read // the air suspension runs on the driven truck, its rest places taken, the height box shown; the keys' height (cm) and the levelling (front, rear, left over right; cm)
+                   bool air, airTaken, airShown; int airHeight; float airLevel[2], airSide; bool airKnown; int airAxles, airFrom; // airKnown: a truck is driven and its air mask (air_axles.h: kAirMaskFront, kAirMaskRear) and its source are read // the air suspension runs on the driven truck, its rest places taken, the height box shown; the keys' height (cm) and the levelling (front, rear, left over right; cm)
                    bool frameKnown, frameRigid; float frameFile[4], frameMost; // the driven truck's frame joint (frame_flex.h): its stock spring, damping and limits in degrees; or none (a rigid frame)
                    bool suspKnown; float suspFile[3][2]; // the driven truck's file: spring, damping and the compression end (m), [front, rear] (wheel 0 and the last)
                    char gearbox[96]; float gearHold; bool gearHoldOwn; // the driven truck's gearbox (its key, "" for none), the seconds each gear is held going up with the mod's engine, and whether its file sets them
@@ -518,6 +531,7 @@ void SettingsTruckDrop();                   // the tab's button: the driven truc
 void SettingsSuspOwn(bool on);              // the Suspension tab's box: the driven truck's own suspension in force, or kept with Own=0
 void SettingsSuspToDefault();               // the Suspension tab's button: the driven truck's suspension becomes the default
 void SettingsSuspLevel(bool truckOnly);     // the Suspension tab's choice: this truck only, or every truck of its kind
+void AirHeightAsk(int cm);                  // the Suspension tab's height slider: the air's height (what BindRideUp and BindRideDown step) set to cm
 void EngineOwnAsk(bool on);                 // the Engine tab's box Own settings (BRIEF_engine_per_truck.md)
 void EngineToDefaultAsk();                  // the Engine tab's button Make this the engine's default
 void EngineLevelAsk(bool truckOnly);        // the Engine tab's choice: this truck only, or every truck of its kind

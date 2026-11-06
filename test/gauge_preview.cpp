@@ -60,7 +60,7 @@ static void PageWidest(GaugeSettings &s, GaugeView &v)
 {
     SettingsDefaults(s);
     s.style = kFaceTinted;
-    s.damage = s.clutchBurn = s.powertrain = s.roadLoad = s.creep = s.creepManual = s.airSuspension = true;
+    s.damage = s.clutchBurn = s.powertrain = s.roadLoad = s.creep = s.creepManual = s.airSuspension = s.airSync = true;
     s.gearbox = kGearboxOwn;
     s.probe = 1;
     s.soundVolume = 60;

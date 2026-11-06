@@ -871,14 +871,23 @@ never its own error. A rigid chassis can follow only those three, so its twist a
 and a cross-axle crawl never winds it up. An axle with a wheel hanging or at its compression end is left out of the fit.
 The ride height and the keys' height (2 cm a press, within 10 cm, under 20 km/h, back to 0 on another truck) go on top of
 the rest place, so the levelling never takes them back (<code>SuspLevelStep</code>).</p>
-<p>Only the axles with air are fitted and shifted (<code>air_axles.h</code>): the truck's <code>AirAxles</code> in
-<code>[Truck]</code> of its file, else the mod's table of vanilla trucks by kind (none 13, rear 19, all 4; the sources are the
-team's, not in the repo), else all. Rear is every axle but the front one, by place, the split RideFront and RideRear use. With
+<p>Only the ends ticked Air are fitted and shifted (<code>air_axles.h</code>). The ticks are a mask, <code>AirAxleMask</code>
+(bit 0 the front axle, bit 1 every other), kept with the suspension set in <code>[Suspension]</code> or
+<code>[Suspension:&lt;id&gt;]</code> of the truck's file and never in Gauges.ini. It is written only once the player ticks. A set
+saved for any other reason carries it only where it has one, so a table fixed later still reaches a truck never ticked, and
+Defaults takes it out. Without one the start order gives it: this truck's ticks, else the kind's, else <code>AirAxles</code> in
+<code>[Truck]</code> of its file (all, rear, none, front), else the mod's table of vanilla trucks by kind (none 13, rear 19, all 4;
+the sources are the team's, not in the repo), else none. It is read again when the kind or the truck's id changes, and the
+ticks come with the set in force. Rear is every axle but the front one, by place, the split RideFront and RideRear use. With
 leaf axles beside air ones the plane is held at 0 at the leaf wheels' mean place: the fit goes through that point, and the
 height moves with the pitch and roll, so a 4x2 with one air axle still levels its pitch about the front. A leaf axle gets
 neither the levelling nor the keys' height. RideFront, RideRear, the sway bars, the springs and the dampers stay on every axle.
-The log says once per truck "suspension: air on every axle but the front one (rear)", "suspension: air on every axle (all; ...)" or
-"suspension: no air suspension on this truck, leaf on every axle", with where it came from. Swing axles (101, read only for now): a wheel's
+A tick changed under a level goes the way AirSuspension off and on goes: the plane and the keys' height fade out with the wheels
+the level began with (<code>SuspLevelFade</code>), then the rest places are taken again, so no wheel snaps back or jumps to the
+keys' height. The log says once per truck, and again when the mask or its source changes, "suspension: air on every axle but
+the front one (rear)", "suspension: air on the front axle only (front)", "suspension: air on every axle (front and rear; ...)" or
+"suspension: no axle ticked Air, leaf on every axle", with where it came from. Sync all enabled (<code>AirSync</code>, a view
+setting) shows a slider for the keys' own figure, set by the keys' rules; it is never saved and is back at 0 on another truck. Swing axles (101, read only for now): a wheel's
 CamberSuspensionMultiplier at wheel + 0x8C over 1 with its CamberAnglePhysics at + 0x88 at 0, as the five swing trucks have
 it; "suspension: swing axles, the camber follows the travel" says so once per truck.</p>
 <p>With <code>AirHorizon</code> the pitch and roll follow the chassis's tilt to the horizon, as the tilt lamp reads it,
@@ -1292,12 +1301,13 @@ while ReShade loads the .asi files as add-ons: turn that off in ReShade's Add-on
 <h3>Changed in 0.18.4</h3>
 <ul><li>Each gear's top is learned for each truck kind as a share of the game's gear speed, and kept in the truck's file. Before, it was kept per gearbox and shared by every truck with that gearbox's name, so another truck's figure could hold the automatic in a gear at the game's own limit. A learned top far off the one kept replaces it, and none is learned on a slope. Floored in A at the game's limit, the automatic now shifts up. When the wheels' drag can't be read, the log names the wheel and the figure, and it says when the read works again.</li>
 <li>Air drag learns each gear's pull with the wheels' own drag left out, so Rolling drag and a flat tire don't make it stronger.</li>
-<li>Air suspension and Level to horizon act only on the axles that have air. Many trucks have air at the rear only, with the front axle
-on springs; some have none. The mod knows this for the vanilla trucks whose real models settle it. Every other truck, mod trucks too,
-keeps air on every axle as before. <code>AirAxles=all</code>, <code>rear</code> (every axle but the front one) or <code>none</code> in
-<code>[Truck]</code> of the truck's file in <code>Gauges\\trucks</code> sets it, and wins over the mod's. On a truck with none the two settings
-are greyed and the Ride up and Ride down keys do nothing. The Suspension tab and the log say which axles have air, and where that came
-from.</li>
+<li>Air suspension and Level to horizon act only on the ends you tick. The game's airbags are only a look, so the Suspension tab asks:
+a tick Air beside Ride front (the front axle) and beside Ride rear (every other axle). The ticks are kept with the suspension set, per
+kind or per truck. Until a truck has ticks they come from <code>AirAxles=all</code>, <code>rear</code>, <code>front</code> or
+<code>none</code> in <code>[Truck]</code> of its file in <code>Gauges\\trucks</code>, then from the mod's table, else none. So a truck the
+mod knows nothing about, mod trucks too, starts with none ticked: if it had air before, tick its ends. With none ticked the two settings
+are greyed and Ride up and Ride down do nothing. A tick changed while you drive fades the levelling out first. Sync all enabled shows one
+slider for the air's height. Defaults takes the ticks out. The tab and the log say where the ticks came from.</li>
 <li>Engine torque and Upshift delay can be kept per truck, as the suspension is. One scout's slider no longer moves every scout with
 that engine. The Engine tab has Own settings, Make this the engine's default and For, as the Suspension tab has. A truck keeps a figure
 for each engine and gearbox fitted. A figure it has none for comes from the engine's or the gearbox's default, then 100 % and the

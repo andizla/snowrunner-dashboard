@@ -14,6 +14,7 @@ struct PageState
     unsigned long long began = 0; // GetTickCount64 when the capture began (it gives up after kPageCaptureMs)
     unsigned long long last = 0;  // GetTickCount64 of the last frame the tab was drawn
     float mapAmbientC = 0.0f;     // the outside temperature the slider set for the map's section in force (kPageMapAmbient)
+    int airHeight = 0;            // the air's height the Suspension tab's slider set, cm (kPageAirHeight)
     float gearHold = 0.0f;        // the seconds the slider set for the driven truck's gearbox (kPageGearHold)
     float enginePeak = 0.0f;      // the driven truck's engine's profile as the Engine section set it (kPageEngineSet)
     int engineAspiration = 0;
@@ -29,7 +30,7 @@ static const unsigned long long kPageCaptureMs = 8000;
 enum { kPageChanged = 1, kPageReload = 2, kPageTruckDrop = 4, kPageDefaults = 8, kPageHearHigh = 16, kPageHearMid = 32, kPageHearLow = 64, kPageHearOil = 128,
        kPagePullTest = 256, kPagePullCancel = 512, kPageMapAmbient = 1024, kPageGearHold = 2048, kPageEngineSet = 4096,
        kPageEngineDrop = 8192, kPageTab = 16384, kPageEngineTorque = 32768, kPageSuspOn = 65536, kPageSuspOff = 131072, kPageSuspDefault = 262144, kPageSuspTruck = 524288, kPageSuspKind = 1048576,
-       kPageEngOn = 2097152, kPageEngOff = 4194304, kPageEngDefault = 8388608, kPageEngTruck = 16777216, kPageEngKind = 33554432 };
+       kPageEngOn = 2097152, kPageEngOff = 4194304, kPageEngDefault = 8388608, kPageEngTruck = 16777216, kPageEngKind = 33554432, kPageAirHeight = 67108864 };
 
 // The Dear ImGui key as a virtual key, for the keys the toggle key can be; 0 for others.
 static int PageVirtualKey(int k)
@@ -899,6 +900,41 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             ImGui::TextDisabled("File %.2f / %.2f m (front / rear), now %.2f / %.2f m", f, r, f - extra, r - extra);
         }
         if (s.extraTravel > 0.0f) ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "Past the file's end a wheel can go into the body.");
+        // the air's ends (BRIEF_air_axle_ticks.md, 8jk3's layout): a tick "Air" beside Ride front and beside Ride rear, the
+        // mask in force shown (the truck's own or the kind's ticks, else the start order's), and above them the air's
+        // height for every ticked end, the keys' own figure
+        const int airMask = s.airAxleMask >= 0 ? s.airAxleMask : view.airKnown ? view.airAxles : 0;
+        const bool airTicks = view.airKnown && s.airSuspension;
+        PageLabel("Sync all enabled", labelX);
+        changed(ImGui::Checkbox("##airsync", &s.airSync));
+        PageTip("Shows one slider for the air's height: every end ticked Air moves together, as Ride up and Ride down move it. The keys work without it. Off by default.");
+        if (s.airSync)
+        {
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(w - ImGui::GetFrameHeight() - ImGui::GetStyle().ItemSpacing.x);
+            int height = view.airHeight;
+            ImGui::BeginDisabled(!airTicks || !airMask);
+            if (ImGui::SliderInt("##airheight", &height, -kRideKeyMost, kRideKeyMost, height ? "%+d cm" : "0 cm", ImGuiSliderFlags_AlwaysClamp) && height != view.airHeight)
+            {
+                st.airHeight = height;
+                act |= kPageAirHeight;
+            }
+            ImGui::EndDisabled();
+            PageTip("The air's height on every end ticked Air, -10 to +10 cm, under 20 km/h. Back at 0 when another truck is taken.");
+        }
+        // a tick beside a slider: the end's air, edited as the whole mask
+        auto airTick = [&](const char *id, int bit, const char *tip) {
+            ImGui::SameLine();
+            bool on = (airMask & bit) != 0;
+            ImGui::BeginDisabled(!view.airKnown);
+            if (ImGui::Checkbox(id, &on))
+            {
+                s.airAxleMask = on ? airMask | bit : airMask & ~bit;
+                act |= kPageChanged;
+            }
+            ImGui::EndDisabled();
+            PageTip(tip);
+        };
         // the attach point's features (a test, build B): the ride height and the sway bars move each wheel's spring zero
         PageLabel("Ride front", labelX);
         ImGui::SetNextItemWidth(w);
@@ -906,11 +942,21 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         changed(ImGui::SliderFloat("##ridefront", &s.rideFront, kRideRange[0], kRideRange[1], RideFormat(s.rideFront), ImGuiSliderFlags_AlwaysClamp));
         s.rideFront = SettingsStep(s.rideFront, kRideStep);
         PageTip("A test: the front axle's ride height in cm, above 0 higher. It stops on a truck with an active ride height. Default 0.");
+        airTick("Air##airfront", kAirMaskFront, "The front axle alone has air. The game's airbags are only a look, so the mod asks. Only ticked ends level and move with the air's height.");
         PageLabel("Ride rear", labelX);
         ImGui::SetNextItemWidth(w);
         changed(ImGui::SliderFloat("##riderear", &s.rideRear, kRideRange[0], kRideRange[1], RideFormat(s.rideRear), ImGuiSliderFlags_AlwaysClamp));
         s.rideRear = SettingsStep(s.rideRear, kRideStep);
         PageTip("A test: the rear axles' ride height in cm, above 0 higher. It stops on a truck with an active ride height. Default 0.");
+        airTick("Air##airrear", kAirMaskRear, "Every axle but the front one has air. The game's airbags are only a look, so the mod asks. Only ticked ends level and move with the air's height.");
+        if (view.airKnown)
+        {
+            const char *from = view.airFrom == kAirFromTruck ? "this truck's own ticks" : view.airFrom == kAirFromKind ? "the kind's ticks"
+                             : view.airFrom == kAirFromTicked ? "ticked, not kept: no suspension set in force" : view.airFrom == kAirFromKey ? "the truck's AirAxles"
+                             : view.airFrom == kAirFromTable ? "the mod's table" : "not in the mod's table";
+            const char *ends = airMask == kAirMaskAll ? "front and rear" : airMask == kAirMaskRear ? "rear, every axle but the front one" : airMask == kAirMaskFront ? "front axle only" : "none ticked";
+            ImGui::TextDisabled("Air: %s (%s).", ends, from);
+        }
         // always one line, so nothing below it moves while the slider passes 0
         if (view.rideRestKnown) ImGui::TextDisabled("At rest %.0f / %.0f cm into the travel (front / rear)", -view.rideRest[0], -view.rideRest[1]);
         else ImGui::TextDisabled("At rest: not read yet on this truck");
@@ -925,21 +971,14 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         s.swayRear = SettingsStep(s.swayRear, kSwayStep);
         PageTip("A test: a rear sway bar; 0.1 to 0.2 works well, and it ends at 0.3. It stops on a truck with an active ride height. Default none.");
         if (view.swayOff) ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "The sway bars are disconnected.");
-        // the air suspension (a test, build C): it levels each wheel on top of the ride height, on the axles with air
-        // only (BRIEF_air_axles.md part 2); a truck with none has it greyed
-        const bool noAir = view.airKnown && view.airAxles == kAirNone;
-        if (view.airKnown)
-        {
-            const char *from = view.airFrom == kAirFromKey ? "the truck's AirAxles" : view.airFrom == kAirFromTable ? "the mod's table" : "not in the mod's table";
-            if (noAir) ImGui::TextDisabled("This truck has no air suspension (%s).", from);
-            else if (view.airAxles == kAirRear) ImGui::TextDisabled("Air axles: rear, every axle but the front one (%s).", from);
-            else ImGui::TextDisabled("Air axles: all (%s).", from);
-            if (view.airFrom == kAirFromNotListed) ImGui::TextDisabled("AirAxles=rear or none in the truck's file changes it.");
-        }
+        // the air suspension (a test, build C): it levels each wheel on top of the ride height, on the ends ticked Air
+        // only (BRIEF_air_axle_ticks.md); a truck with none ticked has it greyed
+        const bool noAir = view.airKnown && airMask == 0;
+        if (noAir) ImGui::TextDisabled("No end ticked Air: tick Air beside Ride front or Ride rear.");
         if (noAir) ImGui::BeginDisabled();
         PageLabel("Air suspension", labelX);
         changed(ImGui::Checkbox("##airsuspension", &s.airSuspension));
-        PageTip("A test: each axle with air held at its rest height, so cargo no longer makes the truck sag or lean. Ride up and Ride down move it 2 cm a press under 20 km/h. A truck with air at the rear only keeps the front axle on its springs. Off by default.");
+        PageTip("A test: each axle with air held at its rest height, so cargo no longer makes the truck sag or lean. Ride up and Ride down move it 2 cm a press under 20 km/h. Only the ends ticked Air level; the others stay on their springs. Off by default.");
         PageLabel("Level to horizon", labelX);
         changed(ImGui::Checkbox("##airhorizon", &s.airHorizon));
         PageTip("A test with Air suspension: under 10 km/h the body is levelled to the horizon, not the wheels. Off by default.");

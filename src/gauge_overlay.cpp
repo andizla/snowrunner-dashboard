@@ -246,6 +246,7 @@ static void OnPage()
     if (act & kPagePullTest) PullTestAsk(true);
     if (act & kPagePullCancel) PullTestAsk(false);
     if (act & kPageMapAmbient) MapAmbientSet(st.mapAmbientC);
+    if (act & kPageAirHeight) AirHeightAsk(st.airHeight);
     if (act & kPageGearHold) GearHoldSet(st.gearHold);
     if (act & kPageEngineSet) EngineProfileSet(st.enginePeak, st.engineAspiration, st.engineFuel);
     if (act & kPageEngineDrop) EngineProfileDrop();

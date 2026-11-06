@@ -64,6 +64,7 @@ static LONG g_setTurn = 0;
 static volatile LONG g_setDirty = 0, g_reloadAsked = 0, g_truckDropAsked = 0, g_resetAsked = 0;
 static volatile LONG g_suspOwnAsked = 0, g_suspDefaultAsked = 0; // the Suspension tab's box (1 on, 2 off) and its button
 static volatile LONG g_suspLevelAsked = 0; // the Suspension tab's choice: 1 this truck only, 2 every truck of the kind
+static volatile LONG g_airHeightAsked = 0, g_airHeightTo = 0; // the Suspension tab's height slider set the air's height, in cm
 static volatile LONG g_engOwnAsked = 0, g_engDefaultAsked = 0, g_engLevelAsked = 0; // the Engine tab's box (1 on, 2 off), its button, its choice (1 this truck, 2 every kind)
 static volatile LONG g_pullTestAsked = 0; // 1 arm the pull test, 2 cancel it
 static volatile LONG g_mapAmbientAsked = 0, g_mapAmbientTenths = 0; // the tab set the map's outside temperature, in tenths of a degree C
@@ -743,6 +744,7 @@ static void WriteIni(const GaugeSettings &s)
     whole(L"SuspDisplay", s.suspDisplay ? 1 : 0);
     whole(L"AirSuspension", s.airSuspension ? 1 : 0);
     whole(L"AirHorizon", s.airHorizon ? 1 : 0);
+    whole(L"AirSync", s.airSync ? 1 : 0);
     whole(L"DamperCurve", s.damperCurve);
     num(L"LowCompression", s.lowCompression);
     num(L"HighCompression", s.highCompression);
@@ -1056,7 +1058,8 @@ static void ReadIni(GaugeSettings &s)
                         L"; toggles them). Both move the attach point and stop on a truck whose game moves it. SuspDisplay=1 draws each wheel's travel. All tests, off by default.\n"
                         L"; AirSuspension=1 holds each wheel at its rest place of the first standstill, cargo or not (3 s to settle, under 10 km/h); AirHorizon=1 levels the body\n"
                         L"; to the horizon instead (about 7 degrees at most). BindRideUp, BindRideDown move it 2 cm under 20 km/h.\n"
-                        L"; Only the axles with air follow them: by the mod's table, or AirAxles=all, rear (every axle but the front one) or none in [Truck] of the truck's file.\n"
+                        L"; Only the ends ticked Air on the Suspension tab follow them (AirAxleMask in [Suspension] of the truck's file: 1 front, 2 rear, 3 both).\n"
+                        L"; Not ticked yet: AirAxles=all, rear (every axle but the front one), front or none in [Truck] of its file, else the mod's table, else none. AirSync=1 shows the height's slider.\n"
                         L"; DamperCurve 0 linear, 1 digressive, 2 progressive; LowCompression, HighCompression, LowRebound, HighRebound: the damping\n"
                         L"; under and over DamperKnee (m/s, 0.02 to 0.5), rising and falling, 0.25 to 4 (a test; 1 and linear = the truck's own).\n"
                         L"; BumpStops=1: force (BumpForce, 1 to 6, the spring's at the end times it) and damping (BumpDamping, 1 to 4) over the last BumpZone m (0.03 to 0.2) of the\n"
@@ -1206,6 +1209,7 @@ static void ReadIni(GaugeSettings &s)
     s.suspDisplay = IniInt(L"SuspDisplay", s.suspDisplay ? 1 : 0, ini) != 0;
     s.airSuspension = IniInt(L"AirSuspension", s.airSuspension ? 1 : 0, ini) != 0;
     s.airHorizon = IniInt(L"AirHorizon", s.airHorizon ? 1 : 0, ini) != 0;
+    s.airSync = IniInt(L"AirSync", s.airSync ? 1 : 0, ini) != 0;
     s.damperCurve = IniInt(L"DamperCurve", s.damperCurve, ini);
     s.lowCompression = IniFloat(L"LowCompression", s.lowCompression, ini);
     s.highCompression = IniFloat(L"HighCompression", s.highCompression, ini);
@@ -1279,6 +1283,11 @@ void SettingsTruckDrop() { InterlockedExchange(&g_truckDropAsked, 1); }
 void SettingsSuspOwn(bool on) { InterlockedExchange(&g_suspOwnAsked, on ? 1 : 2); }
 void SettingsSuspToDefault() { InterlockedExchange(&g_suspDefaultAsked, 1); }
 void SettingsSuspLevel(bool truckOnly) { InterlockedExchange(&g_suspLevelAsked, truckOnly ? 1 : 2); }
+void AirHeightAsk(int cm)
+{
+    InterlockedExchange(&g_airHeightTo, cm);
+    InterlockedExchange(&g_airHeightAsked, 1);
+}
 void EngineOwnAsk(bool on) { InterlockedExchange(&g_engOwnAsked, on ? 1 : 2); }
 void EngineToDefaultAsk() { InterlockedExchange(&g_engDefaultAsked, 1); }
 void EngineLevelAsk(bool truckOnly) { InterlockedExchange(&g_engLevelAsked, truckOnly ? 1 : 2); }
@@ -1692,8 +1701,12 @@ static const struct { const wchar_t *name; float GaugeSettings::*v; } kSuspSetFl
     { L"ZoneTo", &GaugeSettings::zoneTo },             { L"FrameFlex", &GaugeSettings::frameFlex },
     { L"TwistRange", &GaugeSettings::twistRange },
 };
+// AirAxleMask (BRIEF_air_axle_ticks.md): the ends with air the player ticked, -1 none ticked. An int below 0 is never
+// written, so a set saved for any other reason carries the mask only where it has one (the Reviewer's point 2, the
+// lead's 16:30): a table fixed later or an edited AirAxles= still reaches a truck whose ends were never ticked.
 static const struct { const wchar_t *name; int GaugeSettings::*v; } kSuspSetInts[] = {
     { L"DamperCurve", &GaugeSettings::damperCurve }, { L"SpringCurve", &GaugeSettings::springCurve },
+    { L"AirAxleMask", &GaugeSettings::airAxleMask },
 };
 static const struct { const wchar_t *name; bool GaugeSettings::*v; } kSuspSetBools[] = {
     { L"AirSuspension", &GaugeSettings::airSuspension }, { L"AirHorizon", &GaugeSettings::airHorizon },
@@ -1705,6 +1718,7 @@ static void SuspCopy(GaugeSettings &to, const GaugeSettings &from)
     for (const auto &k : kSuspSetFloats) to.*k.v = from.*k.v;
     for (const auto &k : kSuspSetInts) to.*k.v = from.*k.v;
     for (const auto &k : kSuspSetBools) to.*k.v = from.*k.v;
+    to.airMaskFrom = from.airMaskFrom;
 }
 
 static bool SuspSame(const GaugeSettings &a, const GaugeSettings &b)
@@ -1760,8 +1774,27 @@ static void WriteTruckSusp(const char *key, const GaugeSettings &s, bool own, co
     SetupBegin(kSetupTruck, Wide(key));
     IniPutInt(section, L"Own", own ? 1 : 0, ini);
     for (const auto &k : kSuspSetFloats) IniPutFloat(section, k.name, s.*k.v, ini);
-    for (const auto &k : kSuspSetInts) IniPutInt(section, k.name, s.*k.v, ini);
+    for (const auto &k : kSuspSetInts)
+        if (s.*k.v >= 0) IniPutInt(section, k.name, s.*k.v, ini); // AirAxleMask -1: none ticked, nothing written
     for (const auto &k : kSuspSetBools) IniPutInt(section, k.name, s.*k.v ? 1 : 0, ini);
+}
+
+// Whether a truck's suspension section (id "" the kind's) holds a key.
+static bool SuspKeyThere(const char *key, const char *id, const wchar_t *name)
+{
+    wchar_t buf[8] = {};
+    return key[0] && GetPrivateProfileStringW(SuspSectionOf(id).c_str(), name, L"", buf, 8, SetupFile(kSetupTruck, key).c_str()) > 0;
+}
+
+// A kind's AirAxles in [Truck] of its file (air_axles.h: kAirAll to kAirFront), -1 where it has none or one that is no kind.
+static int AirFileKind(const char *key)
+{
+    if (!key[0]) return -1;
+    wchar_t buf[16] = {};
+    if (GetPrivateProfileStringW(kSetupSections[kSetupTruck], L"AirAxles", L"", buf, 16, SetupFile(kSetupTruck, key).c_str()) == 0) return -1;
+    char text[16] = {};
+    WideCharToMultiByte(CP_UTF8, 0, buf, -1, text, sizeof text, nullptr, nullptr);
+    return AirKindOf(text);
 }
 
 // An owned truck's section out of the kind's file (its set went to the kind's level).
@@ -2100,19 +2133,30 @@ enum { kSuspLevelDefault, kSuspLevelKind, kSuspLevelTruck };
 static int SuspLevel(const SettingsState &st) { return st.truckOwn ? kSuspLevelTruck : st.suspOwn ? kSuspLevelKind : kSuspLevelDefault; }
 
 // The suspension in force from the files: the plain one, then the kind's where in force, then the truck's.
+// The air's ticks (AirAxleMask) are never the default's: a section without them leaves none ticked, so the start order
+// gives the truck its mask, never the last truck's (the Reviewer's point 1 on BRIEF_air_axle_ticks.md).
 static void SuspFromFiles(SettingsState &st)
 {
     SuspCopy(st.s, st.plain);
+    st.s.airAxleMask = -1, st.s.airMaskFrom = kAirFromNone;
     GaugeSettings susp = st.s;
     const int kind = st.key[0] ? ReadTruckSusp(st.key, susp) : kSuspNone;
     st.suspOwn = kind == kSuspInForce;
     st.suspKept = kind == kSuspKept;
-    if (st.suspOwn) SuspCopy(st.s, susp);
+    if (st.suspOwn)
+    {
+        SuspCopy(st.s, susp);
+        if (st.s.airAxleMask >= 0) st.s.airMaskFrom = kAirFromKind;
+    }
     GaugeSettings mine = st.s;
     const int truck = st.key[0] && st.id[0] ? ReadTruckSusp(st.key, mine, st.id) : kSuspNone;
     st.truckOwn = truck == kSuspInForce;
     st.truckKept = truck == kSuspKept;
-    if (st.truckOwn) SuspCopy(st.s, mine);
+    if (st.truckOwn)
+    {
+        SuspCopy(st.s, mine);
+        if (SuspKeyThere(st.key, st.id, L"AirAxleMask")) st.s.airMaskFrom = kAirFromTruck;
+    }
     st.suspChanged = st.truckChanged = false;
 }
 
@@ -2136,8 +2180,11 @@ static void SettingsFor(SettingsState &st, const char *key, const char *id = "")
 // the kind's. With neither in force it makes the set the kind's own, the box ticking itself, unless a set is kept with
 // Own=0 at either level: then the change edits the default and the kept set stays as it is (review F1, the lead's
 // call). Everything else on the tab is every truck's.
+// The air's ticks go with the set to the level in force; with none in force and a set kept they hold for this truck
+// until it is left, not saved (the default never holds a mask).
 static void SettingsTake(SettingsState &st, const GaugeSettings &in)
 {
+    const bool ticked = st.key[0] && in.airAxleMask != st.s.airAxleMask;
     if (st.key[0] && !ScalesSame(in, st.s)) st.own = st.changed = true;
     if (st.key[0] && !SuspSame(in, st.s))
     {
@@ -2149,7 +2196,10 @@ static void SettingsTake(SettingsState &st, const GaugeSettings &in)
     st.plain = in;
     if (st.own) ScalesCopy(st.plain, before);
     if (st.suspOwn || st.truckOwn) SuspCopy(st.plain, before);
+    st.plain.airAxleMask = -1, st.plain.airMaskFrom = kAirFromNone;
     st.s = in;
+    if (!st.key[0]) st.s.airAxleMask = -1, st.s.airMaskFrom = kAirFromNone;
+    else if (ticked) st.s.airMaskFrom = st.truckOwn ? kAirFromTruck : st.suspOwn ? kAirFromKind : kAirFromTicked;
 }
 
 // The driven truck gives up its own scales: they go out of the ini, and the plain ones are in force for it again.
@@ -2240,6 +2290,7 @@ static int SettingsTakeOver(SettingsState &st, const char *newId)
 static void SettingsSuspToDefault(SettingsState &st)
 {
     SuspCopy(st.plain, st.s);
+    st.plain.airAxleMask = -1, st.plain.airMaskFrom = kAirFromNone; // the air's ticks are the truck's, never the default's
 }
 
 // Every setting back to its default. The driven truck gives up its own scales, and its own suspension, at either
@@ -2253,6 +2304,13 @@ static void SettingsToDefaults(SettingsState &st)
         GaugeSettings kind = st.s;
         if (st.truckOwn) ReadTruckSusp(st.key, kind); // the kind's own values, not this truck's
         WriteTruckSusp(st.key, kind, false);
+    }
+    // the air's ticks go out of the driven truck's sections, so the start order gives its mask again (the lead, 16:30)
+    if (st.key[0])
+    {
+        const std::wstring ini = SetupFile(kSetupTruck, st.key);
+        if (SuspKeyThere(st.key, "", L"AirAxleMask")) WritePrivateProfileStringW(kSuspSection, L"AirAxleMask", nullptr, ini.c_str());
+        if (st.id[0] && SuspKeyThere(st.key, st.id, L"AirAxleMask")) WritePrivateProfileStringW(SuspSectionOf(st.id).c_str(), L"AirAxleMask", nullptr, ini.c_str());
     }
     SettingsDefaults(st.plain);
     st.s = st.plain;
@@ -3490,8 +3548,10 @@ struct TruckWatch
     uint64_t restVehicle;       // the truck the last rest places were read on, kept while the reads stop (the ride height at 0)
     float rest[2];
     int airHeight;              // the air suspension's height set by BindRideUp and BindRideDown (cm), for this game; it starts at 0
-    int airAxles, airFrom;      // the driven kind's air axles (air_axles.h: kAirAll, kAirRear, kAirNone) and where that came from
-    char airFor[kMaxText];      // the kind they were read for ("" none yet)
+    int airAxles, airFrom;      // the driven truck's air mask (air_axles.h: kAirMaskFront, kAirMaskRear) and where it came from
+    char airFor[kMaxText];      // the kind its file's AirAxles was read for ("" none yet), the truck's id, and that AirAxles (-1 none)
+    char airForId[40];
+    int airFileKind;
     uint64_t airSaidFor;        // the vehicle the air axles' and the swing axles' lines were logged for
     ULONGLONG airPressedAt;     // the last press, for the overlay's height box
     uint64_t airVehicle;        // the truck the height was set on
@@ -4291,34 +4351,25 @@ static void SuspDamperBefore(SuspStepWatch &p, const TruckMemory &m, const Truck
 
 // The block for the driven truck (with Probe=1 or the damper on, and a truck), its generation, the windows logged and
 // the test's trace kept. Returns the generation, which the 20 Hz travel probe goes by too.
-// A kind's air axles (air_axles.h): AirAxles in [Truck] of its file wins, then the mod's table, then all. from: where.
-static int AirAxlesRead(const char *key, int &from)
-{
-    char own[16] = {};
-    if (key[0])
-    {
-        wchar_t buf[16] = {};
-        if (GetPrivateProfileStringW(kSetupSections[kSetupTruck], L"AirAxles", L"", buf, 16, SetupFile(kSetupTruck, key).c_str()) > 0)
-            WideCharToMultiByte(CP_UTF8, 0, buf, -1, own, sizeof own, nullptr, nullptr);
-    }
-    return AirAxlesOf(key, own, from);
-}
-
 static const wchar_t *AirFromText(int from)
 {
-    return from == kAirFromKey ? L"the truck's AirAxles" : from == kAirFromTable ? L"the mod's table" : L"not in the mod's table; AirAxles=rear or none in its file in Gauges\\trucks changes it";
+    return from == kAirFromTruck ? L"this truck's own ticks" : from == kAirFromKind ? L"the kind's ticks" : from == kAirFromTicked ? L"ticked, not kept: no suspension set in force"
+         : from == kAirFromKey ? L"the truck's AirAxles" : from == kAirFromTable ? L"the mod's table" : L"not in the mod's table: tick Air on the Suspension tab";
 }
 
-// Once per truck: which axles have air and from where (the Reviewer's note 8).
-static void AirAxlesLog(int kind, int from, const SuspStepWatch &p, const TruckRefs &r)
+// Once per truck, and again when its mask or the mask's source changes: which axles have air and from where (the
+// Reviewer's note 8; BRIEF_air_axle_ticks.md point 7).
+static void AirAxlesLog(int mask, int from, const SuspStepWatch &p, const TruckRefs &r)
 {
     int fronts = 0;
     for (int i = 0; i < p.wheels && i < kMaxWheels; i++) fronts += p.front[i] ? 1 : 0;
-    if (kind == kAirRear)
+    if (mask == kAirMaskRear)
         Log(L"suspension: air on every axle but the front one (rear), leaf at the front (%d of %d wheels; %s)", fronts, r.wheels, AirFromText(from));
-    else if (kind == kAirNone)
-        Log(L"suspension: no air suspension on this truck, leaf on every axle (%s): AirSuspension, AirHorizon and the air's height keys do nothing on it", AirFromText(from));
-    else Log(L"suspension: air on every axle (all; %s)", AirFromText(from));
+    else if (mask == kAirMaskFront)
+        Log(L"suspension: air on the front axle only (front), leaf on every other axle (%d of %d wheels at the front; %s)", fronts, r.wheels, AirFromText(from));
+    else if (!mask)
+        Log(L"suspension: no axle ticked Air, leaf on every axle (%s): AirSuspension, AirHorizon and the air's height keys do nothing on it", AirFromText(from));
+    else Log(L"suspension: air on every axle (front and rear; %s)", AirFromText(from));
 }
 
 // Once per truck: the swing axles' mark (101, tonight's part: read and said, nothing changed by it).
@@ -4337,7 +4388,7 @@ static void SwingLog(const TruckMemory &m, const TruckRefs &r)
 }
 
 static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const TruckRefs &r, const TruckRaw &t, const GaugeSettings &s, const SuspTune &tune, bool found,
-                             ULONGLONG now, bool swayOff, int airHeight, const TiltModel &tilt, int airAxles)
+                             ULONGLONG now, bool swayOff, int airHeight, const TiltModel &tilt, int airMask)
 {
     const DamperSet damper = DamperFrom(s);
     const SpringSet spring = SpringFrom(s);
@@ -4467,12 +4518,12 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
     b.shifting = shifting;
     b.testShift = shifting && p.test == 3 && p.on ? kStepTestShift : 0.0f;
     b.display = s.suspDisplay;
-    // only the axles with air follow the levelling, AirHorizon and the keys' height (BRIEF_air_axles.md part 2): none
-    // has no air suspension at all, rear keeps the front axle on the game's own
-    b.air = shifting && s.airSuspension && airAxles != kAirNone;
+    // only the ends ticked Air follow the levelling, AirHorizon and the keys' height (BRIEF_air_axle_ticks.md): none
+    // ticked has no air suspension at all, an end not ticked keeps the game's own
+    b.air = shifting && s.airSuspension && airMask != 0;
     b.airKeys = b.air ? airHeight / 100.0f : 0.0f;
     bool airWheel[kMaxWheels] = {};
-    AirAxleWheels(b.wheels, p.front, airAxles, airWheel);
+    AirAxleWheels(b.wheels, p.front, airMask, airWheel);
     for (int i = 0; i < kMaxWheels; i++) b.leafAxle[i] = i < b.wheels && !airWheel[i];
     b.horizon = b.air && s.airHorizon;
     b.tiltForward = tilt.running ? tilt.forward : NAN, b.tiltLeft = tilt.running ? tilt.left : NAN;
@@ -4704,12 +4755,20 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         float v = -1.0f;
         if (m.get(w.refs.wheel[0] + kSuspConstraintAt, c) && m.get(c + kSuspValueAt[stepTest->value], v)) w.step.value = v;
     }
-    // the kind's air axles: its file's AirAxles, else the mod's table, else all; read again when the kind changes
-    if (strcmp(w.airFor, w.who.taken.key))
+    // the air's mask (BRIEF_air_axle_ticks.md): this truck's own ticks, else the kind's, else its file's AirAxles, else
+    // the mod's table, else none. The file is read again when the kind or the truck's id changes (the Reviewer's point
+    // 7); the ticks come with the set in force on each pass, so a tick, a level, a take-over or Defaults is in at once
+    if (strcmp(w.airFor, w.who.taken.key) || strcmp(w.airForId, w.who.taken.id))
     {
         strcpy_s(w.airFor, w.who.taken.key);
-        w.airAxles = AirAxlesRead(w.airFor, w.airFrom);
+        strcpy_s(w.airForId, w.who.taken.id);
+        w.airFileKind = AirFileKind(w.airFor);
         w.airSaidFor = 0;
+    }
+    {
+        int from = kAirFromNone;
+        const int mask = w.airFor[0] ? AirMaskOf(w.airFor, w.airFileKind, s.airAxleMask, s.airMaskFrom, from) : 0;
+        if (mask != w.airAxles || from != w.airFrom) w.airAxles = mask, w.airFrom = from, w.airSaidFor = 0;
     }
     if (w.found && w.refs.vehicle && w.airFor[0] && w.airSaidFor != w.refs.vehicle && w.step.wheels > 0 && w.step.vehicle == w.refs.vehicle)
     {
@@ -6253,12 +6312,19 @@ static DWORD WINAPI Run(void *)
             if (dir && watch.found)
             {
                 const int was = watch.airHeight;
-                // a truck with no air axle: the keys do nothing on it (the Reviewer's note 5)
-                const bool airOn = s.airSuspension && watch.airAxles != kAirNone;
+                // a truck with no end ticked Air: the keys do nothing on it (the Reviewer's note 5)
+                const bool airOn = s.airSuspension && watch.airAxles != 0;
                 watch.airHeight = AirHeightStep(was, dir, watch.kmh, airOn);
                 if (airOn && watch.kmh < kRideKeyKmh) watch.airPressedAt = GetTickCount64();
                 if (watch.airHeight != was) Log(L"air suspension: the height set to %+d cm (BindRide%s)", watch.airHeight, dir > 0 ? L"Up" : L"Down");
             }
+        }
+        // the Suspension tab's height slider (BRIEF_air_axle_ticks.md): the keys' own figure, by the keys' rules
+        if (InterlockedExchange(&g_airHeightAsked, 0) && watch.found)
+        {
+            const int was = watch.airHeight;
+            watch.airHeight = AirHeightSet(was, (int)g_airHeightTo, watch.kmh, s.airSuspension && watch.airAxles != 0);
+            if (watch.airHeight != was) Log(L"air suspension: the height set to %+d cm (the tab's slider)", watch.airHeight);
         }
         // the map: the game's save, looked for every kSaveLookMs and read when it is another or was written since
         const ULONGLONG lookNow = GetTickCount64();
@@ -6864,7 +6930,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.rollWarnDeg == b.rollWarnDeg && a.rollDangerDeg == b.rollDangerDeg && a.pitchDangerDeg == b.pitchDangerDeg &&
            a.warmUpMinutes == b.warmUpMinutes && a.overheatMinutes == b.overheatMinutes && a.coolDownMinutes == b.coolDownMinutes && a.ambientC == b.ambientC &&
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
-           a.springScale == b.springScale && a.dampingScale == b.dampingScale && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange &&
+           a.springScale == b.springScale && a.dampingScale == b.dampingScale && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange && a.airSync == b.airSync &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
            a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual;
 }
@@ -6932,6 +6998,7 @@ int wmain(int argc, wchar_t **argv)
     c.mph = c.psi = c.fahrenheit = true;
     c.showTemp = c.showBoost = c.showLamps = false;
     c.showAir = true;
+    c.airSync = true;
     c.showClock = false;
     c.showFuelUse = false;
     c.tachClass = kClassHeavy;
@@ -7014,7 +7081,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 128, "ini: the help text survives a write (128 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 129, "ini: the help text survives a write (129 comment lines)");
     // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
     {
         char none[32] = "x", tab[32] = {}, kept[32] = {};
@@ -7628,6 +7695,111 @@ int wmain(int argc, wchar_t **argv)
                     Check(atKind.frameFlex == 0.5f && atKind.twistRange == 2.0f && atTruck.frameFlex == 3.0f && atTruck.twistRange == 0.5f && !wcscmp(keyText, L"0.5") &&
                               back.frameFlex == 1.0f && back.twistRange == 1.0f,
                           "suspension: FrameFlex and TwistRange are kept at the kind's level and the truck's, and a section without them reads 1");
+                }
+                // the air's ticks (BRIEF_air_axle_ticks.md): AirAxleMask kept with the set at the kind's level and the
+                // truck's, never in Gauges.ini, never the last truck's; written only once ticked; Defaults takes it out;
+                // the take-over carries it; the start order's five sources
+                {
+                    const char *air_ax = "air_x", *air_ay = "air_y", *air_az = "air_z", *air_ak = "air_k", *air_table = "western_star_6900xd", *air_plainKind = "air_plain";
+                    const char *air_idA = "{A1111111-1111-1111-1111-111111111111}", *air_idB = "{A2222222-2222-2222-2222-222222222222}",
+                               *air_idC = "{A3333333-3333-3333-3333-333333333333}";
+                    for (const char *air_k : { air_ax, air_ay, air_az, air_ak, air_table, air_plainKind }) DeleteFileW(truckFile(air_k).c_str());
+                    auto air_mask = [&](SettingsState &st, int &from) { return AirMaskOf(st.key, AirFileKind(st.key), st.s.airAxleMask, st.s.airMaskFrom, from); };
+                    auto air_tick = [&](SettingsState &st, int m) {
+                        GaugeSettings air_t = st.s;
+                        air_t.airAxleMask = m;
+                        SettingsTake(st, air_t);
+                        SettingsWrite(st);
+                    };
+                    auto air_there = [&](const char *k, const char *id) { return SuspKeyThere(k, id, L"AirAxleMask"); };
+                    int air_f1 = -1, air_f2 = -1, air_f3 = -1, air_f4 = -1, air_f5 = -1;
+                    // the five sources: none for a kind the mod knows nothing about, the table, AirAxles=, the kind's, the truck's
+                    SettingsFor(su, air_plainKind, air_idA);
+                    const bool air_none = air_mask(su, air_f1) == 0 && air_f1 == kAirFromNone;
+                    SettingsFor(su, air_table, air_idA);
+                    const bool air_byTable = air_mask(su, air_f2) == kAirMaskRear && air_f2 == kAirFromTable;
+                    WritePrivateProfileStringW(kSetupSections[kSetupTruck], L"AirAxles", L"Front ", truckFile(air_ay).c_str());
+                    SettingsFor(su, air_ay, air_idA);
+                    const bool air_byKey = air_mask(su, air_f3) == kAirMaskFront && air_f3 == kAirFromKey;
+                    SettingsFor(su, air_ax, air_idA);
+                    air_tick(su, kAirMaskFront);
+                    SettingsFor(su, air_ax, air_idA);
+                    const bool air_byKind = air_mask(su, air_f4) == kAirMaskFront && air_f4 == kAirFromKind && air_there(air_ax, "") && SuspLevel(su) == kSuspLevelKind;
+                    SettingsSuspLevel(su, true);
+                    air_tick(su, kAirMaskRear);
+                    SettingsFor(su, air_ax, air_idA);
+                    const bool air_byTruck = air_mask(su, air_f5) == kAirMaskRear && air_f5 == kAirFromTruck && air_there(air_ax, air_idA);
+                    Check(air_none && air_byTable && air_byKey && air_byKind && air_byTruck,
+                          "air ticks: the start order's five sources: none on a kind the mod knows nothing about, the table's rear, AirAxles=Front, the kind's ticks, this truck's own");
+                    // A to B to A: each truck keeps its own; B has none, so the kind's
+                    int air_fa = -1, air_fb = -1, air_fa2 = -1;
+                    SettingsFor(su, air_ax, air_idB);
+                    const bool air_b1 = air_mask(su, air_fb) == kAirMaskFront && air_fb == kAirFromKind;
+                    SettingsFor(su, air_ax, air_idA);
+                    const bool air_a2 = air_mask(su, air_fa2) == kAirMaskRear && air_fa2 == kAirFromTruck;
+                    // the Reviewer's point 1: kind X ticked front only, then a truck of kind Y with nothing saved starts from its own
+                    // AirAxles=, the table or none, never the last truck's
+                    SettingsFor(su, air_ax, air_idB);
+                    SettingsFor(su, air_ay, air_idB);
+                    const bool air_y = su.s.airAxleMask < 0 && air_mask(su, air_fa) == kAirMaskFront && air_fa == kAirFromKey;
+                    SettingsFor(su, air_ax, air_idB);
+                    SettingsFor(su, air_plainKind, air_idB);
+                    int air_fp = -1;
+                    const bool air_p = su.s.airAxleMask < 0 && air_mask(su, air_fp) == 0 && air_fp == kAirFromNone;
+                    SettingsFor(su, air_ax, air_idA);
+                    SettingsFor(su, air_table, air_idB);
+                    int air_ft = -1;
+                    const bool air_t = su.s.airAxleMask < 0 && air_mask(su, air_ft) == kAirMaskRear && air_ft == kAirFromTable;
+                    Check(air_b1 && air_a2 && air_y && air_p && air_t,
+                          "air ticks: a mask per kind and per truck reads back (A to B to A); after kind X ticked, a truck of kind Y with nothing saved starts from its own AirAxles=, the table or none");
+                    // the Reviewer's point 2, the lead's 16:30: a slider saved leaves the mask unwritten; a tick writes it; a set
+                    // written for any other reason carries it only where it was; Defaults takes it out
+                    SettingsFor(su, air_az, air_idA);
+                    GaugeSettings air_slide = su.s;
+                    air_slide.springScale = 0.8f;
+                    SettingsTake(su, air_slide);
+                    SettingsWrite(su);
+                    const bool air_notWritten = SuspLevel(su) == kSuspLevelKind && !air_there(air_az, "") && IniFloatIn(kSuspSection, L"SpringScale", 0.0f, truckFile(air_az)) == 0.8f;
+                    SettingsSuspLevel(su, true);
+                    const bool air_notCarried = !air_there(air_az, air_idA) && !air_there(air_az, "");
+                    air_tick(su, 0); // both unticked: a saved 0, none ticked by the player
+                    const bool air_zeroWritten = air_there(air_az, air_idA) && GetPrivateProfileIntW(SuspSectionOf(air_idA).c_str(), L"AirAxleMask", -1, truckFile(air_az).c_str()) == 0;
+                    air_slide = su.s;
+                    air_slide.dampingScale = 1.3f;
+                    SettingsTake(su, air_slide);
+                    SettingsWrite(su);
+                    int air_fz = -1;
+                    SettingsFor(su, air_az, air_idA);
+                    const bool air_kept = air_mask(su, air_fz) == 0 && air_fz == kAirFromTruck && su.s.dampingScale == 1.3f;
+                    SettingsToDefaults(su);
+                    SettingsWrite(su);
+                    int air_fd = -1;
+                    SettingsFor(su, air_az, air_idA);
+                    const bool air_defaults = !air_there(air_az, air_idA) && !air_there(air_az, "") && su.s.airAxleMask < 0 && air_mask(su, air_fd) == 0 && air_fd == kAirFromNone;
+                    Check(air_notWritten && air_notCarried && air_zeroWritten && air_kept && air_defaults,
+                          "air ticks: a slider saved leaves the mask unwritten, This truck only carries none; a tick writes it (both unticked a 0); a later save keeps it; Defaults takes it out");
+                    // the take-over carries the mask with the set; the default never holds one, nor Gauges.ini
+                    SettingsFor(su, air_ax, air_idA);
+                    int air_fc = -1;
+                    const bool air_taken = SettingsTakeOver(su, air_idC) && air_mask(su, air_fc) == kAirMaskRear && air_fc == kAirFromTruck;
+                    SettingsSuspToDefault(su);
+                    WriteIni(su.plain);
+                    wchar_t air_inIni[8] = {};
+                    GetPrivateProfileStringW(kIniSection, L"AirAxleMask", L"", air_inIni, 8, ini.c_str());
+                    const bool air_plainNone = su.plain.airAxleMask < 0 && !air_inIni[0];
+                    // no level in force and a set kept: the tick holds for this truck, not saved, never in the default
+                    SettingsFor(su, air_ak, air_idA);
+                    air_slide = su.s;
+                    air_slide.springScale = 0.9f;
+                    SettingsTake(su, air_slide);
+                    SettingsWrite(su);
+                    SettingsSuspOwn(su, false);
+                    air_tick(su, kAirMaskAll);
+                    int air_fk = -1;
+                    const bool air_ticked = su.suspKept && air_mask(su, air_fk) == kAirMaskAll && air_fk == kAirFromTicked && !air_there(air_ak, "") && su.plain.airAxleMask < 0;
+                    Check(air_taken && air_plainNone && air_ticked,
+                          "air ticks: the take-over carries the mask; the default and Gauges.ini never hold one; with a set kept and none in force a tick holds for this truck, not saved");
+                    for (const char *air_k : { air_ax, air_ay, air_az, air_ak, air_table, air_plainKind }) DeleteFileW(truckFile(air_k).c_str());
                 }
                 // the take-over while driven (review F1): only on the vehicle the old id was taken with
                 Check(SuspAgainTakeOver(id1, 0x1000, id2, 0x1000) && !SuspAgainTakeOver(id1, 0x1000, id2, 0x2000) && !SuspAgainTakeOver(id1, 0, id2, 0) &&

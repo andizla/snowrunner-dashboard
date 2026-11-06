@@ -3256,29 +3256,40 @@ int main()
               "air suspension AirHorizon: a 4x4 on 8 % to a side and 4 % to its nose comes level within 0.3 degrees; on 20 % it stops at 12 cm; off it stays with the ground; levelled on 8 % and driven off onto flat ground at 20 km/h, within 0.5 degrees of flat in 10 s (R7)");
     }
 
-    // the air axles (BRIEF_air_axles.md part 2, the Reviewer's note 9): the rule from a set of wheels; the table and the
-    // truck's key, the key winning; a truck not in the table gets all; one name from each list; the levelling leaves a
-    // leaf axle alone; N2's 4x2 with rear air, nose down 3° with AirHorizon: the rear goes down, the front's shift stays
-    // 0; none: the keys do nothing; the swing mark
+    // the air axles (BRIEF_air_axles.md part 2, the Reviewer's note 9; BRIEF_air_axle_ticks.md): the masks from a set of
+    // wheels, front only among them; the start order's five sources and the four words of AirAxles=; the table's rear
+    // is every axle but the front; a truck not in the table starts with none; one name from each list; the levelling
+    // leaves a leaf axle alone; N2's 4x2 with rear air, nose down 3° with AirHorizon: the rear goes down, the front's
+    // shift stays 0; none: the keys do nothing; the tab's slider by the keys' rules; the swing mark
     {
         // a 6x4: the front axle at 2 m, two rear at -1.5 and -2.9; SuspPairs' front is the frontmost only
         const float forward6[6] = { 2.0f, 2.0f, -1.5f, -1.5f, -2.9f, -2.9f }, left6[6] = { 0.9f, -0.9f, 0.9f, -0.9f, 0.9f, -0.9f };
         int partner6[6];
-        bool isLeft6[6], front6[6], rearmost6[6], all6[6], rear6[6], none6[6];
+        bool isLeft6[6], front6[6], rearmost6[6], all6[6], rear6[6], none6[6], fronts6[6], tableRear6[6];
         SuspPairs(6, forward6, left6, partner6, isLeft6, front6, rearmost6);
-        AirAxleWheels(6, front6, kAirAll, all6);
-        AirAxleWheels(6, front6, kAirRear, rear6);
-        AirAxleWheels(6, front6, kAirNone, none6);
-        bool rule = true;
-        for (int i = 0; i < 6; i++) rule &= all6[i] && rear6[i] == (i >= 2) && !none6[i];
-        // the table and the key
-        int from = -1, from2 = -1, from3 = -1, from4 = -1, from5 = -1, from6 = -1;
-        const bool table = AirAxlesOf("chevrolet_ck1500", nullptr, from) == kAirNone && from == kAirFromTable &&
-                           AirAxlesOf("chevrolet_ck1500", "rear", from2) == kAirRear && from2 == kAirFromKey &&
-                           AirAxlesOf("cat_ct680", " All ", from3) == kAirAll && from3 == kAirFromKey &&
-                           AirAxlesOf("cat_ct680", "leaf", from4) == kAirRear && from4 == kAirFromTable &&
-                           AirAxlesOf("mod_suv/1000001", "", from5) == kAirAll && from5 == kAirFromNotListed &&
-                           AirAxlesOf("mod_suv/1000001", "none", from6) == kAirNone && from6 == kAirFromKey;
+        AirAxleWheels(6, front6, kAirMaskAll, all6);
+        AirAxleWheels(6, front6, kAirMaskRear, rear6);
+        AirAxleWheels(6, front6, 0, none6);
+        AirAxleWheels(6, front6, kAirMaskFront, fronts6);
+        int fromTable = -1;
+        AirAxleWheels(6, front6, AirMaskOf("western_star_6900xd", -1, -1, kAirFromNone, fromTable), tableRear6);
+        bool rule = fromTable == kAirFromTable;
+        for (int i = 0; i < 6; i++) rule &= all6[i] && rear6[i] == (i >= 2) && !none6[i] && fronts6[i] == (i < 2) && tableRear6[i] == (i >= 2);
+        // the start order: this truck's own ticks, the kind's, AirAxles=, the table, none; a saved 0 is none ticked by
+        // the player, which wins over the table
+        int f[8];
+        const bool table = AirMaskOf("cat_ct680", kAirFront, kAirMaskAll, kAirFromTruck, f[0]) == kAirMaskAll && f[0] == kAirFromTruck &&
+                           AirMaskOf("cat_ct680", kAirFront, kAirMaskFront, kAirFromKind, f[1]) == kAirMaskFront && f[1] == kAirFromKind &&
+                           AirMaskOf("cat_ct680", kAirFront, -1, kAirFromNone, f[2]) == kAirMaskFront && f[2] == kAirFromKey &&
+                           AirMaskOf("cat_ct680", -1, -1, kAirFromNone, f[3]) == kAirMaskRear && f[3] == kAirFromTable &&
+                           AirMaskOf("mod_suv/1000001", -1, -1, kAirFromNone, f[4]) == 0 && f[4] == kAirFromNone &&
+                           AirMaskOf("chevrolet_ck1500", -1, -1, kAirFromNone, f[5]) == 0 && f[5] == kAirFromTable &&
+                           AirMaskOf("tatra_phoenix", -1, 0, kAirFromKind, f[6]) == 0 && f[6] == kAirFromKind &&
+                           AirMaskOf("mod_suv/1000001", kAirAll, -1, kAirFromNone, f[7]) == kAirMaskAll && f[7] == kAirFromKey;
+        // the four words, in any case and with spaces, as masks; another word is no key
+        const bool words = AirKindOf("all") == kAirAll && AirKindOf("Rear ") == kAirRear && AirKindOf(" NONE") == kAirNone && AirKindOf("front") == kAirFront &&
+                           AirKindOf("Front ") == kAirFront && AirKindOf("leaf") < 0 && AirKindOf("") < 0 && AirMaskOfKind(kAirAll) == kAirMaskAll &&
+                           AirMaskOfKind(kAirRear) == kAirMaskRear && AirMaskOfKind(kAirNone) == 0 && AirMaskOfKind(kAirFront) == kAirMaskFront;
         // one from each list, the counts of the lead's call, and the table sorted with no key twice
         int counts[kAirKinds] = {};
         bool sorted = true;
@@ -3321,15 +3332,114 @@ int main()
                         nose.level[2] >= -kShiftMost - 1e-4f;
         // none: AirSuspension off on the truck, so the keys do nothing (AirHeightStep with it off keeps the height)
         const bool keys = AirHeightStep(0, 1, 5.0f, false) == 0 && AirHeightStep(0, 1, 5.0f, true) != 0;
+        // the tab's slider: the keys' figure set within -10 to +10, under 20 km/h and with air on only
+        const bool slider = AirHeightSet(4, 7, 5.0f, true) == 7 && AirHeightSet(4, 15, 5.0f, true) == kRideKeyMost && AirHeightSet(4, -12, 5.0f, true) == -kRideKeyMost &&
+                            AirHeightSet(4, 7, 25.0f, true) == 4 && AirHeightSet(4, 7, 5.0f, false) == 4 && AirHeightStep(AirHeightSet(0, 7, 5.0f, true), 1, 5.0f, true) == 9;
         // the swing mark: the Tatras' 1.8 and the Savior's 1.15 with physics 0 are swing; the Mamute's 0.30 with 1° isn't
         const bool swing = SwingMark(1.8f, 0.0f) && SwingMark(1.15f, 0.0f) && !SwingMark(0.30f, 0.0174533f) && !SwingMark(1.8f, 0.0174533f) && !SwingMark(1.0f, 0.0f) &&
                            !SwingMark(NAN, 0.0f);
         printf("     air axles: the 4x2's rear with 3 cm of cargo levels to %.4f and %.4f, the front %.5f; nose down 3 degrees the rear goes to %.4f, the front %.5f\n",
                cargo.level[2], cargo.level[3], cargo.level[0], nose.level[2], nose.level[0]);
-        Check(rule && table && lists && leafAlone && n2 && keys && swing,
-              "air axles: all, rear (every axle but the front one) and none from a 6x4's wheels; the truck's key wins over the table, a truck not in the table has all; "
-              "none 13, rear 19, all 4; the levelling leaves the leaf front alone; a 4x2 with rear air nose down 3 degrees: the rear goes down, the front stays 0 (N2); "
-              "none's keys do nothing; the swing mark: 1.8 and 1.15 with physics 0, not the Mamute's 0.30 with 1 degree");
+        Check(rule && table && words && lists && leafAlone && n2 && keys && slider && swing,
+              "air axles: both, rear (every axle but the front one), front only and none from a 6x4's wheels, the table's rear every axle but the front; the start order "
+              "this truck's ticks, the kind's, AirAxles= (all, rear, none, front in any case), the table, none for a truck not in it; none 13, rear 19, all 4; the "
+              "levelling leaves the leaf front alone; a 4x2 with rear air nose down 3 degrees: the rear goes down, the front stays 0 (N2); none's keys do nothing; the "
+              "tab's slider within 10 cm under 20 km/h, the keys stepping from it; the swing mark: 1.8 and 1.15 with physics 0, not the Mamute's 0.30 with 1 degree");
+    }
+
+    // the ticks through the attach point's step (BRIEF_air_axle_ticks.md, the Reviewer's points 3 and 4), in this
+    // process's memory: each wheel at a compression its load sets, its place g the shift plus that compression
+    {
+        struct Rig
+        {
+            SuspStepState s;
+            uint64_t wheel[6][0x40 / 8], constraint[6][0x100 / 8];
+            SuspStepBlock b;
+            float sag[6], jump;
+            void init(int n, const float *along, const float *across)
+            {
+                memset(this, 0, sizeof *this);
+                const uint64_t vtable = 0x140000000ull + 0x23d9538;
+                bool isLeft[6], front[6], rearmost[6];
+                SuspPairs(n, along, across, b.partner, isLeft, front, rearmost);
+                b.action = 0x7777, b.serial = 1, b.wheels = n, b.vtable = vtable, b.shifting = b.air = true;
+                for (int i = 0; i < n; i++)
+                {
+                    constraint[i][0] = vtable;
+                    wheel[i][0x28 / 8] = (uint64_t)(uintptr_t)constraint[i];
+                    float *at = (float *)((uint8_t *)constraint[i] + 0xA4);
+                    *at = -0.135f;
+                    b.wheel[i] = (uint64_t)(uintptr_t)wheel[i];
+                    b.attachC[i] = (uint64_t)(uintptr_t)constraint[i];
+                    b.attachAt[i] = (uint64_t)(uintptr_t)at;
+                    b.attachStock[i] = b.attachUp[i] = -0.135f, b.axisUp[i] = -1.0f, b.travel[i] = 0.36f;
+                    b.isLeft[i] = isLeft[i];
+                    b.along[i] = along[i], b.across[i] = across[i];
+                }
+            }
+            float attach(int i) const { return *(const float *)((const uint8_t *)constraint[i] + 0xA4); }
+            float shift(int i) const { return b.attachStock[i] - attach(i); } // stock + shift along the axis (up -1)
+            void run(float seconds, bool measure)
+            {
+                const float dt = 1.0f / 60.0f;
+                for (int k = 0; k < (int)(seconds * 60.0f + 0.5f); k++)
+                {
+                    float h[6], a[6];
+                    for (int i = 0; i < b.wheels; i++) a[i] = attach(i), h[i] = a[i] - (-0.15f + sag[i]);
+                    SuspAttachStep(s, b, h, a, 0.0f, dt);
+                    if (measure)
+                        for (int i = 0; i < b.wheels; i++) jump = fmaxf(jump, fabsf(attach(i) - a[i]));
+                }
+            }
+        };
+        static Rig rig;
+        // a 4x4 levelled with 4 cm on its front, then the front unticked: no wheel moves more than one fade step (0.22 mm
+        // at 60 steps a second) or the half millimetre the fade ends at; the front goes back to its stock, the rest
+        // places are taken again, and the front stays on its springs with more load
+        rig.init(4, kAlong4, kAcross4);
+        rig.run(2.0f, false);
+        rig.sag[0] = rig.sag[1] = 0.04f;
+        rig.run(25.0f, false);
+        const float levelled = rig.shift(0);
+        const LONG takes = rig.s.levelTaken;
+        rig.b.leafAxle[0] = rig.b.leafAxle[1] = true;
+        rig.jump = 0.0f;
+        rig.run(40.0f, true);
+        const float jumpUntick = rig.jump;
+        rig.sag[0] = rig.sag[1] = 0.06f;
+        rig.run(10.0f, false);
+        const bool untick = levelled < -0.035f && rig.s.levelTaken == takes + 1 && fabsf(rig.shift(0)) < 1e-6f && fabsf(rig.shift(1)) < 1e-6f && fabsf(rig.shift(2)) < 0.001f;
+        // the keys' 4 cm move the rear alone; then the front ticked: it fades with the rear and comes up with the keys, never
+        // jumping to their height
+        rig.b.airKeys = 0.04f;
+        rig.run(20.0f, false);
+        const float rearKeys = rig.shift(2), frontKeys = rig.shift(0);
+        const bool keysRear = fabsf(rearKeys - 0.04f) < 0.002f && fabsf(rig.shift(3) - 0.04f) < 0.002f && fabsf(frontKeys) < 1e-6f;
+        rig.b.leafAxle[0] = rig.b.leafAxle[1] = false;
+        rig.jump = 0.0f;
+        rig.run(45.0f, true);
+        const float jumpTick = rig.jump;
+        const float frontTicked = rig.shift(0);
+        const bool tick = fabsf(frontTicked - 0.04f) < 0.003f && fabsf(rig.shift(2) - 0.04f) < 0.003f && rig.s.levelTaken == takes + 2;
+        // the Reviewer's point 4: a 6x4 with the front alone ticked: no shift on the four rear wheels, the front follows
+        // its own error (3 cm of load on it)
+        const float forward6[6] = { 2.0f, 2.0f, -1.5f, -1.5f, -2.9f, -2.9f }, left6[6] = { 0.9f, -0.9f, 0.9f, -0.9f, 0.9f, -0.9f };
+        rig.init(6, forward6, left6);
+        for (int i = 2; i < 6; i++) rig.b.leafAxle[i] = true;
+        rig.run(2.0f, false);
+        rig.sag[0] = rig.sag[1] = 0.03f;
+        rig.sag[4] = 0.02f; // and some on the last axle, which keeps its springs
+        rig.run(25.0f, false);
+        bool rearNone = true;
+        for (int i = 2; i < 6; i++) rearNone &= fabsf(rig.shift(i)) < 1e-6f;
+        const bool frontOnly = rearNone && fabsf(rig.shift(0) + 0.03f) < 0.002f && fabsf(rig.shift(1) + 0.03f) < 0.002f;
+        printf("     air ticks: the front levelled %.4f m; unticked, the most a wheel moved in a step %.5f m; the keys' 4 cm on the rear %.4f, the front %.5f; "
+               "the front ticked, the most in a step %.5f m, the front then %.4f; a 6x4 front only: the front %.4f, the rear %.6f\n",
+               levelled, jumpUntick, rearKeys, frontKeys, jumpTick, frontTicked, rig.shift(0), rig.shift(2));
+        Check(untick && keysRear && tick && frontOnly && jumpUntick < 0.0011f && jumpTick < 0.0011f,
+              "air ticks: an end unticked in the middle of a level fades out (no wheel more than one fade step or the fade's last half millimetre), the rest places "
+              "taken again, the end then on its springs; the keys' height only on the ticked end; an end ticked comes up with the keys, never jumping; a 6x4 with "
+              "the front alone ticked: no shift on the four rear wheels, the front follows its own error");
     }
 
     RealImageTest();

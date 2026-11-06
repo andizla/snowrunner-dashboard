@@ -1,23 +1,33 @@
-// Which axles have air (BRIEF_air_axles.md part 2, PLANNED 100) and the swing axles' mark (101, tonight's part).
+// Which axles have air (BRIEF_air_axles.md part 2, PLANNED 100; BRIEF_air_axle_ticks.md) and the swing axles' mark
+// (101, tonight's part).
 //
 // The game's files carry no air mark (review\air_axles_part1.md): a suspension set gives only a template and a menu
-// name, and its lines split only by front and rear. So the mod keeps its own table of the vanilla trucks whose real
-// models have air at the rear only or none at all, by the truck's kind (the key Gauges\trucks\<kind>.ini uses). The
-// reasons and their sources are in review\, not here. A truck the table doesn't list (every mod truck, and every
-// vanilla truck no source settled) has air on every axle, as before. AirAxles=all|rear|none in [Truck] of the
-// truck's file wins over the table.
+// name, and its lines split only by front and rear. The game's airbags are only a look. So the player ticks the ends
+// with air on the Suspension tab: "Air" beside Ride front (the front axle) and beside Ride rear (every other axle).
+// The ticks are a mask, AirAxleMask (bit 0 the front, bit 1 the rear), kept with the suspension set in the truck's
+// [Suspension] or [Suspension:<id>] in Gauges\trucks, never in Gauges.ini. Until a truck has a mask of its own, the
+// start order gives one: the truck's own saved mask, else the kind's, else AirAxles=all|rear|none|front in [Truck] of
+// the truck's file, else the mod's table of the vanilla trucks whose real models have air at the rear only or none at
+// all (the reasons and their sources are in review\, not here), else none ticked: on a truck the mod knows nothing
+// about, nothing moves until the player ticks it.
 //
 // Rear means every axle but the front one, by place (SuspPairs' front[i], the split RideFront and RideRear use):
 // pushers and middle axles count as rear. Only the levelling (AirSuspension), AirHorizon and the air's height keys
-// follow it; RideFront, RideRear, the sway bars, the springs and the dampers stay on every axle.
+// follow the mask; RideFront, RideRear, the sway bars, the springs and the dampers stay on every axle.
 #pragma once
 #include <math.h>
 #include <string.h>
 
-enum { kAirAll, kAirRear, kAirNone, kAirKinds };
-static const char *const kAirKindNames[kAirKinds] = { "all", "rear", "none" };
-// where a truck's figure came from
-enum { kAirFromNotListed, kAirFromTable, kAirFromKey };
+enum { kAirAll, kAirRear, kAirNone, kAirFront, kAirKinds };
+static const char *const kAirKindNames[kAirKinds] = { "all", "rear", "none", "front" };
+// the mask's bits: the front axle, every other axle
+enum { kAirMaskFront = 1, kAirMaskRear = 2, kAirMaskAll = 3 };
+// where a truck's mask came from: the start order's five sources (none ticked, the table, AirAxles=, the kind's saved
+// mask, this truck's), and a tick not saved (no suspension set in force to keep it in)
+enum { kAirFromNone, kAirFromTable, kAirFromKey, kAirFromKind, kAirFromTruck, kAirFromTicked };
+
+// A kind's mask: all both bits, rear the rear's, front the front's, none 0.
+inline int AirMaskOfKind(int kind) { return kind == kAirAll ? kAirMaskAll : kind == kAirRear ? kAirMaskRear : kind == kAirFront ? kAirMaskFront : 0; }
 
 struct AirAxleRow { const char *key; int kind; };
 // review\air_axles_part1.md with the lead's call of 09:48 (the Kodiak C70 and the TerraPro to rear): none 13, rear 19,
@@ -62,7 +72,7 @@ static const AirAxleRow kAirAxleTable[] = {
 };
 static const int kAirAxleRows = (int)(sizeof kAirAxleTable / sizeof kAirAxleTable[0]);
 
-// all, rear or none from a key's text, in any case and with spaces around ("Rear " is rear); -1 where it is none of them.
+// all, rear, none or front from a key's text, in any case and with spaces around ("Rear " is rear); -1 where it is none of them.
 inline int AirKindOf(const char *text)
 {
     if (!text) return -1;
@@ -86,21 +96,23 @@ inline int AirTableKind(const char *key)
     return -1;
 }
 
-// A truck's air axles: its key's (fileKey, the AirAxles text from its file, nullptr or "" where it has none, and one
-// that is no kind is no key), else the table's, else all. from: where it came from.
-inline int AirAxlesOf(const char *key, const char *fileKey, int &from)
+// A truck's mask by the start order: the saved one (saved, -1 none; savedFrom kAirFromTruck, kAirFromKind or
+// kAirFromTicked), else its file's AirAxles (fileKind, AirKindOf of its text, -1 where it has none or one that is no
+// kind), else the table's, else none ticked. from: where it came from.
+inline int AirMaskOf(const char *key, int fileKind, int saved, int savedFrom, int &from)
 {
-    const int own = fileKey && fileKey[0] ? AirKindOf(fileKey) : -1;
-    if (own >= 0) return from = kAirFromKey, own;
+    if (saved >= 0) return from = savedFrom == kAirFromTruck || savedFrom == kAirFromTicked ? savedFrom : kAirFromKind, saved & kAirMaskAll;
+    if (fileKind >= 0 && fileKind < kAirKinds) return from = kAirFromKey, AirMaskOfKind(fileKind);
     const int listed = AirTableKind(key);
-    if (listed >= 0) return from = kAirFromTable, listed;
-    return from = kAirFromNotListed, kAirAll;
+    if (listed >= 0) return from = kAirFromTable, AirMaskOfKind(listed);
+    return from = kAirFromNone, 0;
 }
 
-// Each wheel's air by the kind: all, every wheel but the front axle's (front: SuspPairs' frontmost axle), or none.
-inline void AirAxleWheels(int n, const bool *front, int kind, bool *air)
+// Each wheel's air by the mask: the front axle's wheels (SuspPairs' frontmost axle) by its front bit, every other by
+// its rear bit.
+inline void AirAxleWheels(int n, const bool *front, int mask, bool *air)
 {
-    for (int i = 0; i < n; i++) air[i] = kind == kAirAll || (kind == kAirRear && !front[i]);
+    for (int i = 0; i < n; i++) air[i] = (mask & (front[i] ? kAirMaskFront : kAirMaskRear)) != 0;
 }
 
 // The swing axle's mark (101): the wheel's CamberSuspensionMultiplier (wheel object + 0x8C) over 1 with its

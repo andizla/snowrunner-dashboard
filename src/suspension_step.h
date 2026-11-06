@@ -304,6 +304,7 @@ struct SuspLevel
     float keys;                    // the keys' height in force, m, following the one set with the same time constant
     bool leaf;                     // some axles have no air (air at the rear only): the plane is held at 0 at their place
     float leafDx, leafDy;          // that place from the centre (the leaf wheels' mean), set at the take (review N2)
+    uint32_t leafBits;             // the leaf wheels it began with, a bit a wheel: the ticks changed under it, it fades out and is taken again
 };
 
 struct SuspStepState
@@ -822,7 +823,14 @@ inline bool SuspAttachStep(SuspStepState &s, const SuspStepBlock &b, const float
         SuspSwayShift(b.sway[i], cL, cR, b.springK[l], b.springK[r], sL, sR);
         shift[l] += sL, shift[r] += sR;
     }
-    if (b.air)
+    // the ticks (BRIEF_air_axle_ticks.md, the Reviewer's point 3): a change of the leaf wheels under a level goes the way
+    // AirSuspension off and on goes, faded out with the wheels it began with, then the rest places taken again, so no
+    // wheel snaps back or jumps to the keys' height and the plane never turns about the old place
+    uint32_t leafBits = 0;
+    for (int i = 0; i < n && i < 32; i++)
+        if (b.leafAxle[i]) leafBits |= 1u << i;
+    const bool reticked = s.level.action && s.level.leafBits != leafBits;
+    if (b.air && !reticked)
     {
         // each wheel's place from its stock attach point, all of the last step's shift in it; held while it hangs or is
         // at its compression end, by its place from the live attach point
@@ -836,16 +844,16 @@ inline bool SuspAttachStep(SuspStepState &s, const SuspStepBlock &b, const float
             r[i] = b.ride[i];
             held[i] = placed[i] && (x >= 0.0f || (b.travel[i] > 0.0f && -x >= b.travel[i]));
         }
-        if (!s.level.action) s.level.action = b.action;
+        if (!s.level.action) s.level.action = b.action, s.level.leafBits = leafBits;
         const float tilt[2] = { b.tiltForward, b.tiltLeft };
         if (SuspLevelStep(s.level, n, b.partner, b.along, b.across, g, r, placed, held, b.airKeys, speed, dt, b.horizon ? tilt : nullptr, b.leafAxle))
             InterlockedIncrement(&s.levelTaken);
     }
     else if (s.level.action && SuspLevelFade(s.level, n, dt)) s.level = SuspLevel{};
-    // the levelling and the keys' height only on the axles with air; a leaf axle keeps the game's own
+    // the levelling and the keys' height only on the axles with air it began with; a leaf axle keeps the game's own
     if (s.level.action)
         for (int i = 0; i < n; i++)
-            if (!b.leafAxle[i]) shift[i] += s.level.keys + s.level.level[i];
+            if (!(i < 32 && (s.level.leafBits >> i & 1u))) shift[i] += s.level.keys + s.level.level[i];
     for (int i = 0; i < n; i++)
     {
         if (!b.attachC[i] || !b.attachAt[i] || b.axisUp[i] == 0.0f) continue;
