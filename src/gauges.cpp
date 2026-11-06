@@ -63,6 +63,7 @@ static LONG g_setTurn = 0;
 static volatile LONG g_setDirty = 0, g_reloadAsked = 0, g_truckDropAsked = 0, g_resetAsked = 0;
 static volatile LONG g_suspOwnAsked = 0, g_suspDefaultAsked = 0; // the Suspension tab's box (1 on, 2 off) and its button
 static volatile LONG g_suspLevelAsked = 0; // the Suspension tab's choice: 1 this truck only, 2 every truck of the kind
+static volatile LONG g_engOwnAsked = 0, g_engDefaultAsked = 0, g_engLevelAsked = 0; // the Engine tab's box (1 on, 2 off), its button, its choice (1 this truck, 2 every kind)
 static volatile LONG g_pullTestAsked = 0; // 1 arm the pull test, 2 cancel it
 static volatile LONG g_mapAmbientAsked = 0, g_mapAmbientTenths = 0; // the tab set the map's outside temperature, in tenths of a degree C
 static volatile LONG g_gearHoldAsked = 0, g_gearHoldTenths = 0;     // the tab set the driven gearbox's hold, in tenths of a second
@@ -1107,6 +1108,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; Top1, Top2 ...: each gear's top in rad/s, learned where the game's pull reaches nothing floored (2a + 5 until then).\n"
                         L"; Gauges\\engines\\<name>.ini: PeakTorqueRpm, Aspiration (0 turbo, 1 naturally aspirated), Fuel (diesel, petrol), TorqueCurve (the Engine tab).\n"
                         L";   Torque: how much of its torque the truck gets, 10 to 100 percent (100 when not set). Lower it for an RLM-like engine with several times a stock engine's torque.\n"
+                        L"; A truck's own Torque.<engine> and GearHold.<gearbox>: [Engine] of its file in Gauges\\trucks (every truck of the kind) or [Engine:<id>] (one truck), with Own; before the two files above.\n"
                         L"; Mod work: Demo=1 draws demo values whenever no truck is driven, Probe=1 logs the values read from the game.\n"
                         L"; KeepLogs: how many of the last starts' logs Gauges\\logs keeps (20; at most 500 MB of them; 0 keeps all).\n");
             fclose(f);
@@ -1270,6 +1272,9 @@ void SettingsTruckDrop() { InterlockedExchange(&g_truckDropAsked, 1); }
 void SettingsSuspOwn(bool on) { InterlockedExchange(&g_suspOwnAsked, on ? 1 : 2); }
 void SettingsSuspToDefault() { InterlockedExchange(&g_suspDefaultAsked, 1); }
 void SettingsSuspLevel(bool truckOnly) { InterlockedExchange(&g_suspLevelAsked, truckOnly ? 1 : 2); }
+void EngineOwnAsk(bool on) { InterlockedExchange(&g_engOwnAsked, on ? 1 : 2); }
+void EngineToDefaultAsk() { InterlockedExchange(&g_engDefaultAsked, 1); }
+void EngineLevelAsk(bool truckOnly) { InterlockedExchange(&g_engLevelAsked, truckOnly ? 1 : 2); }
 void SettingsReset() { InterlockedExchange(&g_resetAsked, 1); }
 void PullTestAsk(bool run) { InterlockedExchange(&g_pullTestAsked, run ? 1 : 2); }
 void MapAmbientSet(float c)
@@ -1580,9 +1585,12 @@ static void DropTruckIni(const char *key)
     if (GetFileAttributesW(ini.c_str()) == INVALID_FILE_ATTRIBUTES) return;
     for (const wchar_t *name : { L"TachClass", L"IdleRpm", L"RedlineRpm", L"MaxRpm", L"SpeedMax", L"BoostMax", L"BoostProfile", L"Kind" })
         WritePrivateProfileStringW(section.c_str(), name, nullptr, ini.c_str());
-    wchar_t rest[8] = {}, susp[8] = {};
-    // the file goes only when [Truck] is empty and no [Suspension] is in it (a kind's own suspension stays)
-    if (!GetPrivateProfileSectionW(section.c_str(), rest, 8, ini.c_str()) && !GetPrivateProfileSectionW(L"Suspension", susp, 8, ini.c_str()))
+    wchar_t rest[8] = {}, names[64] = {};
+    // the file goes only when [Truck] is empty and no other section is in it: a kind's own suspension or engine, and an
+    // owned truck's ([Suspension:<id>], [Engine:<id>]), stay
+    const DWORD named = GetPrivateProfileSectionNamesW(names, 64, ini.c_str());
+    const bool truckOnly = !named || (!_wcsicmp(names, section.c_str()) && !names[wcslen(names) + 1]);
+    if (!GetPrivateProfileSectionW(section.c_str(), rest, 8, ini.c_str()) && truckOnly)
         DeleteFileW(ini.c_str());
     else SetupBegin(kSetupTruck, Wide(key)); // something else stays: the kind with it
 }
@@ -1652,7 +1660,11 @@ static bool SuspSame(const GaugeSettings &a, const GaugeSettings &b)
 
 // Step 2 (per owned truck): the same keys in [Suspension:<id>] of the kind's file, the id the game's own of the truck
 // ([vehicle + 0x48], BRIEF_truck_id.md, the lead's rule of 01:16). Its section's name; id "" is the kind's.
-static std::wstring SuspSectionOf(const char *id) { return id && id[0] ? std::wstring(kSuspSection) + L":" + Wide(id) : std::wstring(kSuspSection); }
+static std::wstring SectionOf(const wchar_t *base, const char *id) { return id && id[0] ? std::wstring(base) + L":" + Wide(id) : std::wstring(base); }
+static std::wstring SuspSectionOf(const char *id) { return SectionOf(kSuspSection, id); }
+// The engine's settings per truck (BRIEF_engine_per_truck.md): [Engine] of the kind's file and [Engine:<id>] of an owned
+// truck, beside the suspension's, each with its own Own and its own take-over (the Reviewer, 09:58).
+static const wchar_t *const kEngineSection = L"Engine";
 
 // A truck's suspension section (the kind's, or with an id the owned truck's): none (no value there), kept (Own=0) or
 // in force. Its values are laid over s where the section holds them, whichever it is; one it does not hold stays.
@@ -1707,11 +1719,13 @@ static void DropTruckSusp(const char *key, const char *id)
 // when the old id is driven again (TruckSuspSeen), and only the newest kSuspTakenKept marked sections of a file are kept
 // (TruckSuspPrune, after each take-over and at a save, review F3); an unmarked section is never dropped.
 static const int kSuspTakenKept = 10;
-static int TruckSuspPrune(const char *key);
-static bool TruckSuspTakeOver(const char *key, const char *oldId, const char *newId, unsigned long long at = 0)
+// base: the sections' name before the colon, kSuspSection or kEngineSection; each runs on its own, with its own marks
+// and its own newest kSuspTakenKept (the Reviewer, 09:58: a truck with only an engine set keeps it at a rebuild).
+static int TruckSuspPrune(const char *key, const wchar_t *base = kSuspSection);
+static bool TruckSuspTakeOver(const char *key, const char *oldId, const char *newId, unsigned long long at = 0, const wchar_t *base = kSuspSection)
 {
     if (!key[0] || !oldId[0] || !newId[0] || !strcmp(oldId, newId)) return false;
-    const std::wstring ini = SetupFile(kSetupTruck, key), from = SuspSectionOf(oldId), to = SuspSectionOf(newId);
+    const std::wstring ini = SetupFile(kSetupTruck, key), from = SectionOf(base, oldId), to = SectionOf(base, newId);
     std::vector<wchar_t> keys(32768, L'\0'), mine(64, L'\0');
     if (!GetPrivateProfileSectionW(from.c_str(), keys.data(), (DWORD)keys.size(), ini.c_str())) return false;
     if (GetPrivateProfileSectionW(to.c_str(), mine.data(), (DWORD)mine.size(), ini.c_str())) return false;
@@ -1729,15 +1743,15 @@ static bool TruckSuspTakeOver(const char *key, const char *oldId, const char *ne
     swprintf_s(when, L"%llu", at);
     WritePrivateProfileStringW(from.c_str(), L"TakenBy", Wide(newId).c_str(), ini.c_str());
     WritePrivateProfileStringW(from.c_str(), L"TakenAt", when, ini.c_str());
-    TruckSuspPrune(key); // a truck only driven, never edited, still keeps no more than the newest marked (review F3)
+    TruckSuspPrune(key, base); // a truck only driven, never edited, still keeps no more than the newest marked (review F3)
     return true;
 }
 
 // An id driven again: its section's take-over mark goes (it is a truck in use, not a left-over).
-static void TruckSuspSeen(const char *key, const char *id)
+static void TruckSuspSeen(const char *key, const char *id, const wchar_t *base = kSuspSection)
 {
     if (!key[0] || !id[0]) return;
-    const std::wstring ini = SetupFile(kSetupTruck, key), sec = SuspSectionOf(id);
+    const std::wstring ini = SetupFile(kSetupTruck, key), sec = SectionOf(base, id);
     wchar_t by[48] = {};
     if (!GetPrivateProfileStringW(sec.c_str(), L"TakenBy", L"", by, 48, ini.c_str())) return;
     WritePrivateProfileStringW(sec.c_str(), L"TakenBy", nullptr, ini.c_str());
@@ -1745,10 +1759,10 @@ static void TruckSuspSeen(const char *key, const char *id)
 }
 
 // The marked sections beyond the newest kSuspTakenKept go out of the kind's file. The count dropped.
-static int TruckSuspPrune(const char *key)
+static int TruckSuspPrune(const char *key, const wchar_t *base)
 {
     if (!key[0]) return 0;
-    const std::wstring ini = SetupFile(kSetupTruck, key), prefix = std::wstring(kSuspSection) + L":";
+    const std::wstring ini = SetupFile(kSetupTruck, key), prefix = std::wstring(base) + L":";
     std::vector<wchar_t> names(65536, L'\0');
     if (!GetPrivateProfileSectionNamesW(names.data(), (DWORD)names.size(), ini.c_str())) return 0;
     std::vector<std::pair<unsigned long long, std::wstring>> marked;
@@ -1795,6 +1809,222 @@ static bool SuspTrack(SuspTracker &t, const TruckIdentity &was, const TruckIdent
     return due;
 }
 
+// ---- the engine's settings per truck (BRIEF_engine_per_truck.md, the user's word of 09:57: as the suspension's) ----
+// Two settings move: the Engine torque slider (Torque, percent) and the Upshift delay (GearHold, seconds). Each is kept
+// by the engine or gearbox fitted, Torque.<engine>= and GearHold.<gearbox>=, in a level's section:
+// - this owned truck: [Engine:<id>] of the kind's file, with Own;
+// - every truck of the kind: [Engine] of the kind's file, with Own;
+// - the engine's default: Torque= in Gauges\engines\<engine>.ini and GearHold= in Gauges\gearboxes\<gearbox>.ini, as
+//   before (an old file's figure is that default, so nothing is lost);
+// - else 100 % and the truck class's hold.
+// The most specific section in force that holds a key for the engine (or gearbox) fitted gives that figure; one in
+// force without it falls through to the next level for that engine, and the tab names the level the figure came from.
+// The box, the For choice, Own=0's "kept, not in use" and the take-over are the suspension's.
+enum { kEngLevelNone, kEngLevelDefault, kEngLevelKind, kEngLevelTruck };
+// An engine's or a gearbox's name as a key's part: as SetupFileName cleans a file name, and what would break an ini's
+// key (=, ;, [ and ]) too.
+static std::wstring EngineKeyOf(const wchar_t *what, const char *name)
+{
+    std::wstring part = SetupFileName(Wide(name));
+    for (wchar_t &c : part)
+        if (c == L'=' || c == L';' || c == L'[' || c == L']') c = L'_';
+    return std::wstring(what) + L"." + part;
+}
+
+// One level's section: none (no key and no Own in it), kept (Own=0) or in force; and its figures for the engine and the
+// gearbox fitted, 0 where it holds none.
+static int ReadTruckEngine(const char *key, const char *id, const char *engine, const char *gearbox, int &torque, float &hold)
+{
+    torque = 0, hold = 0.0f;
+    if (!key[0]) return kSuspNone;
+    const std::wstring ini = SetupFile(kSetupTruck, key), sec = SectionOf(kEngineSection, id);
+    wchar_t probe[8] = {};
+    if (!GetPrivateProfileSectionW(sec.c_str(), probe, 8, ini.c_str())) return kSuspNone;
+    wchar_t buf[24] = {};
+    if (engine[0] && GetPrivateProfileStringW(sec.c_str(), EngineKeyOf(L"Torque", engine).c_str(), L"", buf, 24, ini.c_str()) > 0)
+    {
+        const float v = (float)_wtof(buf);
+        if (isfinite(v) && v > 0.0f) torque = (int)lroundf(SettingsRange(v, kTorqueShareRange[0] * 100.0f, kTorqueShareRange[1] * 100.0f));
+    }
+    if (gearbox[0] && GetPrivateProfileStringW(sec.c_str(), EngineKeyOf(L"GearHold", gearbox).c_str(), L"", buf, 24, ini.c_str()) > 0)
+    {
+        const float v = (float)_wtof(buf);
+        if (isfinite(v) && v > 0.0f) hold = SettingsRange(v, kGearHoldRange[0], kGearHoldRange[1]);
+    }
+    return GetPrivateProfileIntW(sec.c_str(), L"Own", 1, ini.c_str()) ? kSuspInForce : kSuspKept;
+}
+
+// A level's section written: Own, and the figures given (a 0 leaves its key as it is). Key by key, as the suspension's.
+static void WriteTruckEngine(const char *key, const char *id, bool own, const char *engine, int torque, const char *gearbox, float hold)
+{
+    if (!key[0]) return;
+    const std::wstring ini = SetupFile(kSetupTruck, key), sec = SectionOf(kEngineSection, id);
+    SetupBegin(kSetupTruck, Wide(key));
+    IniPutInt(sec.c_str(), L"Own", own ? 1 : 0, ini);
+    if (engine[0] && torque > 0) IniPutInt(sec.c_str(), EngineKeyOf(L"Torque", engine).c_str(), torque, ini);
+    if (gearbox[0] && hold > 0.0f)
+    {
+        wchar_t buf[16];
+        swprintf_s(buf, L"%.1f", hold);
+        WritePrivateProfileStringW(sec.c_str(), EngineKeyOf(L"GearHold", gearbox).c_str(), buf, ini.c_str());
+    }
+}
+
+static void EngineSectionOwn(const char *key, const char *id, bool own) { IniPutInt(SectionOf(kEngineSection, id).c_str(), L"Own", own ? 1 : 0, SetupFile(kSetupTruck, key)); }
+
+// The engine's default: the engine file's Torque (percent, 0 none) and the gearbox file's GearHold (0 none).
+static int EngineTorqueRead(const char *engine)
+{
+    if (!engine[0]) return 0;
+    wchar_t buf[24] = {};
+    if (GetPrivateProfileStringW(kSetupSections[kSetupEngine], L"Torque", L"", buf, 24, SetupFile(kSetupEngine, engine).c_str()) == 0) return 0;
+    const float v = (float)_wtof(buf);
+    return isfinite(v) && v > 0.0f ? (int)lroundf(SettingsRange(v, kTorqueShareRange[0] * 100.0f, kTorqueShareRange[1] * 100.0f)) : 0;
+}
+
+// The driven truck's engine settings as the mod's thread keeps them: its kind (key), its game id, the engine and the
+// gearbox fitted; each level's section state; and the figures in force with the level each came from.
+struct EngineState
+{
+    char key[kMaxText], id[40], engine[kMaxText], gearbox[kMaxText];
+    bool kindOwn, kindKept, truckOwn, truckKept;
+    int torque, torqueFrom;     // percent in force (100 where no level has one), and its level (kEngLevel..., None: 100)
+    float hold; int holdFrom;   // seconds in force (0 where no level has one: the class's), and its level
+};
+
+// The level whose section is in force: this truck's, the kind's, or none (the default).
+static int EngineLevel(const EngineState &e) { return e.truckOwn ? kEngLevelTruck : e.kindOwn ? kEngLevelKind : kEngLevelDefault; }
+
+// The figures in force from the files: this truck's section where in force and it holds the key, else the kind's, else
+// the engine's default, else 100 and the class's.
+static void EngineFromFiles(EngineState &e)
+{
+    int kt = 0, tt = 0;
+    float kh = 0.0f, th = 0.0f;
+    const int kind = ReadTruckEngine(e.key, "", e.engine, e.gearbox, kt, kh);
+    const int truck = e.id[0] ? ReadTruckEngine(e.key, e.id, e.engine, e.gearbox, tt, th) : kSuspNone;
+    e.kindOwn = kind == kSuspInForce, e.kindKept = kind == kSuspKept;
+    e.truckOwn = truck == kSuspInForce, e.truckKept = truck == kSuspKept;
+    const int dt = EngineTorqueRead(e.engine);
+    float dh = 0.0f;
+    const bool dhOwn = e.gearbox[0] && GearHoldRead(e.gearbox, dh);
+    if (e.truckOwn && tt) e.torque = tt, e.torqueFrom = kEngLevelTruck;
+    else if (e.kindOwn && kt) e.torque = kt, e.torqueFrom = kEngLevelKind;
+    else if (dt) e.torque = dt, e.torqueFrom = kEngLevelDefault;
+    else e.torque = 100, e.torqueFrom = kEngLevelNone;
+    if (e.truckOwn && th > 0.0f) e.hold = th, e.holdFrom = kEngLevelTruck;
+    else if (e.kindOwn && kh > 0.0f) e.hold = kh, e.holdFrom = kEngLevelKind;
+    else if (dhOwn) e.hold = dh, e.holdFrom = kEngLevelDefault;
+    else e.hold = 0.0f, e.holdFrom = kEngLevelNone;
+}
+
+// The state for a truck, its engine and its gearbox (any "" while not known).
+static void EngineFor(EngineState &e, const char *key, const char *id, const char *engine, const char *gearbox)
+{
+    strcpy_s(e.key, key);
+    strcpy_s(e.id, key[0] ? id : "");
+    strcpy_s(e.engine, key[0] ? engine : "");
+    strcpy_s(e.gearbox, key[0] ? gearbox : "");
+    EngineFromFiles(e);
+}
+
+// An edit from the tab, by the suspension's rules (the addendum's point 4): into the level in force, this truck's
+// before the kind's; with neither it makes the kind's own (the box ticks itself), unless a set is kept with Own=0 at
+// either level: then it edits the engine's default and the kept set stays as it is (F1's rule). torque 0 or hold 0:
+// that one is not edited. True where the kind's set was made by it.
+static bool EngineTake(EngineState &e, int torque, float hold)
+{
+    if (!e.key[0]) return false;
+    bool made = false;
+    const char *engine = torque > 0 ? e.engine : "", *gearbox = hold > 0.0f ? e.gearbox : "";
+    if (e.truckOwn) WriteTruckEngine(e.key, e.id, true, engine, torque, gearbox, hold);
+    else if (e.kindOwn) WriteTruckEngine(e.key, "", true, engine, torque, gearbox, hold);
+    else if (!e.kindKept && !e.truckKept) WriteTruckEngine(e.key, "", true, engine, torque, gearbox, hold), made = true;
+    else
+    {
+        if (torque > 0 && e.engine[0]) EngineTorqueWrite(e.engine, torque);
+        if (hold > 0.0f && e.gearbox[0]) GearHoldWrite(e.gearbox, hold);
+    }
+    EngineFromFiles(e);
+    return made;
+}
+
+// The Engine tab's box "Own settings": as SettingsSuspOwn. Off: the level in force keeps its set with Own=0. On: a kept
+// set is in force again, this truck's before the kind's; with none kept, the figures shown become the kind's own.
+static void EngineOwnSet(EngineState &e, bool on)
+{
+    if (!e.key[0]) return;
+    if (!on)
+    {
+        if (e.truckOwn) EngineSectionOwn(e.key, e.id, false);
+        else if (e.kindOwn) EngineSectionOwn(e.key, "", false);
+        EngineFromFiles(e);
+        return;
+    }
+    if (e.truckOwn || e.kindOwn) return;
+    if (e.truckKept) EngineSectionOwn(e.key, e.id, true);
+    else if (e.kindKept) EngineSectionOwn(e.key, "", true);
+    else WriteTruckEngine(e.key, "", true, e.engine, e.torque, e.gearbox, e.hold);
+    EngineFromFiles(e);
+}
+
+// The tab's choice under the box, as SettingsSuspLevel: This truck only puts the figures in force into this truck's
+// section in force (or brings back the one it kept); Every <kind> with no set for the kind moves this truck's section up
+// to the kind's whole; with a set for the kind it puts the kind's in force and keeps this truck's with Own=0 (F2).
+static void EngineLevelSet(EngineState &e, bool truckOnly)
+{
+    if (!e.key[0] || (truckOnly ? EngineLevel(e) == kEngLevelTruck : EngineLevel(e) != kEngLevelTruck)) return;
+    const std::wstring ini = SetupFile(kSetupTruck, e.key);
+    if (truckOnly)
+    {
+        if (!e.id[0]) return;
+        if (e.truckKept) EngineSectionOwn(e.key, e.id, true);
+        else WriteTruckEngine(e.key, e.id, true, e.engine, e.torque, e.gearbox, e.hold);
+    }
+    else if (!e.kindOwn && !e.kindKept)
+    {
+        // no set for the kind yet: this truck's goes up to it, every engine's and gearbox's key with it
+        std::vector<wchar_t> keys(32768, L'\0');
+        const std::wstring mine = SectionOf(kEngineSection, e.id);
+        if (GetPrivateProfileSectionW(mine.c_str(), keys.data(), (DWORD)keys.size(), ini.c_str())) WritePrivateProfileSectionW(kEngineSection, keys.data(), ini.c_str());
+        for (const wchar_t *mark : { L"TakenBy", L"TakenAt" }) WritePrivateProfileStringW(kEngineSection, mark, nullptr, ini.c_str());
+        EngineSectionOwn(e.key, "", true);
+        WritePrivateProfileStringW(mine.c_str(), nullptr, nullptr, ini.c_str());
+    }
+    else
+    {
+        EngineSectionOwn(e.key, e.id, false);
+        EngineSectionOwn(e.key, "", true);
+    }
+    EngineFromFiles(e);
+}
+
+// The tab's button "Make this the engine's default": the figures in force into the engine's and the gearbox's own
+// files, for every truck without a set of its own. The truck's set stays as it is.
+static void EngineToDefault(EngineState &e)
+{
+    if (e.engine[0] && e.torque > 0) EngineTorqueWrite(e.engine, e.torque);
+    if (e.gearbox[0] && e.hold > 0.0f) GearHoldWrite(e.gearbox, e.hold);
+    EngineFromFiles(e);
+}
+
+// The tab's Defaults: 100 % and the class's hold. The sections in force are kept with Own=0 (not thrown away), and the
+// engine's and the gearbox's own figures go out of their files.
+static void EngineDefaults(EngineState &e)
+{
+    if (!e.key[0]) return;
+    if (e.truckOwn) EngineSectionOwn(e.key, e.id, false);
+    if (e.kindOwn) EngineSectionOwn(e.key, "", false);
+    if (e.engine[0]) WritePrivateProfileStringW(kSetupSections[kSetupEngine], L"Torque", nullptr, SetupFile(kSetupEngine, e.engine).c_str());
+    if (e.gearbox[0]) WritePrivateProfileStringW(kSetupSections[kSetupGearbox], L"GearHold", nullptr, SetupFile(kSetupGearbox, e.gearbox).c_str());
+    EngineFromFiles(e);
+}
+
+static const wchar_t *EngineLevelWords(int level)
+{
+    return level == kEngLevelTruck ? L"this engine in this truck" : level == kEngLevelKind ? L"this engine in every " : level == kEngLevelDefault ? L"this engine's default" : L"none set";
+}
+
 // The settings as the mod's thread keeps them. plain is what [Gauges] holds. s is what is in force: plain, with the
 // driven truck's own scales in the place of the plain ones where it has some (own), and the most specific suspension
 // in force in the place of the plain one: the owned truck's [Suspension:<id>] (truckOwn), else the kind's [Suspension]
@@ -1836,6 +2066,7 @@ static void SettingsFor(SettingsState &st, const char *key, const char *id = "")
     st.own = key[0] && ReadTruckIni(key, st.s);
     st.changed = false;
     TruckSuspSeen(st.key, st.id);
+    TruckSuspSeen(st.key, st.id, kEngineSection);
     SuspFromFiles(st);
 }
 
@@ -1922,10 +2153,20 @@ static void SettingsSuspLevel(SettingsState &st, bool truckOnly)
     SuspFromFiles(st);
 }
 
-// The driven truck is the same kind under a new id (the game made it anew): its sections follow it.
-static bool SettingsTakeOver(SettingsState &st, const char *newId)
+// The driven truck is the same kind under a new id (the game made it anew): its sections follow it, the suspension's
+// and the engine's each on its own. Which were taken: kTakenSusp and kTakenEngine.
+enum { kTakenSusp = 1, kTakenEngine = 2 };
+static int TakeOverBoth(const char *key, const char *oldId, const char *newId)
 {
-    const bool taken = TruckSuspTakeOver(st.key, st.id, newId);
+    return (TruckSuspTakeOver(key, oldId, newId) ? kTakenSusp : 0) | (TruckSuspTakeOver(key, oldId, newId, 0, kEngineSection) ? kTakenEngine : 0);
+}
+static const wchar_t *TakenWords(int taken)
+{
+    return taken == (kTakenSusp | kTakenEngine) ? L"the suspension's and the engine's settings" : taken == kTakenEngine ? L"the engine's settings" : L"the suspension's settings";
+}
+static int SettingsTakeOver(SettingsState &st, const char *newId)
+{
+    const int taken = TakeOverBoth(st.key, st.id, newId);
     strcpy_s(st.id, newId);
     const GaugeSettings scales = st.s;
     SuspFromFiles(st);
@@ -1966,7 +2207,7 @@ static void SettingsWrite(SettingsState &st)
     if (st.own && st.changed) WriteTruckIni(st.key, st.s);
     if (st.truckOwn && st.truckChanged) WriteTruckSusp(st.key, st.s, true, st.id);
     else if (st.suspOwn && st.suspChanged) WriteTruckSusp(st.key, st.s, true);
-    if (st.key[0]) TruckSuspPrune(st.key);
+    if (st.key[0]) TruckSuspPrune(st.key), TruckSuspPrune(st.key, kEngineSection);
     st.changed = st.suspChanged = st.truckChanged = false;
 }
 
@@ -3230,6 +3471,35 @@ static const wchar_t *GearboxAskName(int fn)
 static float GearHoldOf(const TruckWatch &w, int tachClass)
 {
     return w.gearHoldOwn ? w.gearHold : tachClass == kClassScout ? kEngineGearHoldScout : kEngineGearHold;
+}
+
+// The engine's settings per truck (EngineState) in force on the watch: the torque share for the engine fitted and the
+// hold for the gearbox fitted, by the most specific level that has them. A level's figure for another engine or gearbox
+// (the state not caught up yet) is not put in.
+static void EngineApply(const EngineState &e, TruckWatch &w)
+{
+    if (e.key[0] && e.engine[0] && !strcmp(e.engine, w.profileFor)) w.profile.torque = e.torqueFrom != kEngLevelNone ? e.torque / 100.0f : 0.0f;
+    if (e.key[0] && e.gearbox[0] && !strcmp(e.gearbox, w.gearboxKey))
+    {
+        w.gearHoldOwn = e.hold > 0.0f;
+        if (w.gearHoldOwn) w.gearHold = e.hold;
+    }
+}
+
+// The log, once per truck and engine and at each change (the addendum's point 6): the level each figure comes from.
+static void EngineLevelLog(const EngineState &e, const wchar_t *why)
+{
+    if (!e.key[0]) return;
+    if (e.engine[0])
+        Log(L"engine torque: %s%S, %d %% for %S (%s)", EngineLevelWords(e.torqueFrom), e.torqueFrom == kEngLevelKind ? e.key : "", e.torque, e.engine,
+            e.torqueFrom == kEngLevelNone ? L"none set, so 100 %" : why);
+    if (e.gearbox[0])
+    {
+        if (e.holdFrom == kEngLevelNone) Log(L"gearbox hold: none set for %S, the truck class's (%s)", e.gearbox, why);
+        else
+            Log(L"gearbox hold: %s%S, %.1f s for %S (%s)", e.holdFrom == kEngLevelTruck ? L"this gearbox in this truck" : e.holdFrom == kEngLevelKind ? L"this gearbox in every " : L"this gearbox's default",
+                e.holdFrom == kEngLevelKind ? e.key : "", e.hold, e.gearbox, why);
+    }
 }
 
 static const wchar_t *const kClassWords[kClassCount] = { L"truck", L"scout", L"heavy" };
@@ -5493,6 +5763,7 @@ static DWORD WINAPI Run(void *)
     // the settings: what [Gauges] holds, and with it what is in force (s), which has the driven truck's own scales
     // in the place of the plain ones where the truck has some. truck is the truck they are for.
     SettingsState set = {};
+    EngineState eng = {}; // the engine's settings per truck (BRIEF_engine_per_truck.md)
     ReadIni(set.plain);
     SettingsFor(set, "");
     const GaugeSettings &s = set.s;
@@ -5604,6 +5875,8 @@ static DWORD WINAPI Run(void *)
             // the driven engine's profile and gearbox's hold read again too, as a file edited by hand may have changed them
             if (watch.profileFor[0]) EngineProfileRead(watch.profileFor, watch.profile);
             if (watch.gearboxKey[0]) watch.gearHoldOwn = GearHoldRead(watch.gearboxKey, watch.gearHold);
+            EngineFromFiles(eng);
+            EngineApply(eng, watch);
             BindingsDefault(binds);
             BindingsRead(IniPath(), binds, true);
             Log(L"settings: Gauges.ini read again, and the driven truck's engine and gearbox files");
@@ -5665,9 +5938,45 @@ static DWORD WINAPI Run(void *)
             saveAt = GetTickCount64() + 1000;
             edited = true;
         }
+        if (const LONG ask = InterlockedExchange(&g_engOwnAsked, 0))
+        {
+            // the Engine tab's box, as the Suspension tab's
+            if (eng.key[0])
+            {
+                EngineOwnSet(eng, ask == 1);
+                EngineApply(eng, watch);
+                Log(ask == 1 ? L"engine: the box ticked, own engine settings in force (Gauges\\trucks\\%s.ini)"
+                             : L"engine: the box unticked, that level's engine settings kept, not in use (Own=0 in Gauges\\trucks\\%s.ini)",
+                    SetupFileName(Wide(eng.key)).c_str());
+                EngineLevelLog(eng, L"the box");
+                edited = true;
+            }
+        }
+        if (const LONG ask = InterlockedExchange(&g_engLevelAsked, 0))
+        {
+            // the Engine tab's choice under the box: this truck only, or every truck of the kind
+            if (eng.key[0])
+            {
+                EngineLevelSet(eng, ask == 1);
+                EngineApply(eng, watch);
+                EngineLevelLog(eng, ask == 1 ? L"This truck only" : L"Every truck of its kind");
+                edited = true;
+            }
+        }
+        if (InterlockedExchange(&g_engDefaultAsked, 0) && eng.key[0] && EngineLevel(eng) != kEngLevelDefault)
+        {
+            // the Engine tab's button: the figures in force become the engine's and the gearbox's default
+            EngineToDefault(eng);
+            EngineApply(eng, watch);
+            Log(L"engine: %S's torque %d %% made %S's default (Gauges\\engines)%s", eng.key, eng.torque, eng.engine[0] ? eng.engine : "no engine",
+                eng.gearbox[0] && eng.hold > 0.0f ? L", and its hold the gearbox's (Gauges\\gearboxes)" : L"");
+            edited = true;
+        }
         if (InterlockedExchange(&g_resetAsked, 0))
         {
             // the tab's defaults button
+            EngineDefaults(eng);
+            EngineApply(eng, watch);
             SettingsToDefaults(set);
             SettingsPublish(s);
             Log(L"settings: back to the defaults");
@@ -5886,9 +6195,9 @@ static DWORD WINAPI Run(void *)
             const float hold = SettingsRange(g_gearHoldTenths / 10.0f, kGearHoldRange[0], kGearHoldRange[1]);
             if (!watch.gearHoldOwn || fabsf(hold - watch.gearHold) >= 0.05f)
             {
-                watch.gearHold = hold;
-                watch.gearHoldOwn = true;
-                GearHoldWrite(watch.gearboxKey, hold);
+                // to the level in force (BRIEF_engine_per_truck.md, the suspension's rules)
+                if (EngineTake(eng, 0, hold)) Log(L"engine: every %S has its own engine settings from now on, kept in Gauges\\trucks\\%s.ini", eng.key, SetupFileName(Wide(eng.key)).c_str());
+                EngineApply(eng, watch);
                 gearHoldLogAt = GetTickCount64() + 1000;
             }
         }
@@ -5911,14 +6220,14 @@ static DWORD WINAPI Run(void *)
         // the engine's torque share from the tab's slider: into its file, in force at once
         if (InterlockedExchange(&g_engineTorqueAsked, 0) && watch.profileFor[0])
         {
-            EngineTorqueWrite(watch.profileFor, (int)g_engineTorquePercent);
-            EngineProfileRead(watch.profileFor, watch.profile);
+            const int percent = (int)lroundf(SettingsRange((float)g_engineTorquePercent, kTorqueShareRange[0] * 100.0f, kTorqueShareRange[1] * 100.0f));
+            if (EngineTake(eng, percent, 0.0f)) Log(L"engine: every %S has its own engine settings from now on, kept in Gauges\\trucks\\%s.ini", eng.key, SetupFileName(Wide(eng.key)).c_str());
+            EngineApply(eng, watch);
             torqueLogAt = GetTickCount64() + 1000;
         }
         if (torqueLogAt && GetTickCount64() >= torqueLogAt)
         {
-            Log(L"engine: %S set from the tab: the truck gets %.0f percent of its torque (Gauges\\engines\\%s.ini)", watch.profileFor,
-                (watch.profile.torque > 0.0f ? watch.profile.torque : 1.0f) * 100.0f, SetupFileName(Wide(watch.profileFor)).c_str());
+            EngineLevelLog(eng, L"set from the tab");
             torqueLogAt = 0;
         }
         if (engineLogAt && GetTickCount64() >= engineLogAt)
@@ -5930,8 +6239,7 @@ static DWORD WINAPI Run(void *)
         }
         if (gearHoldLogAt && GetTickCount64() >= gearHoldLogAt)
         {
-            Log(L"gearbox: %S set from the tab: each gear held %.1f s going up (Gauges\\gearboxes\\%s.ini)", watch.gearboxKey, watch.gearHold,
-                SetupFileName(Wide(watch.gearboxKey)).c_str());
+            EngineLevelLog(eng, L"set from the tab");
             gearHoldLogAt = 0;
         }
         if (mapAmbientLogAt && GetTickCount64() >= mapAmbientLogAt)
@@ -5969,6 +6277,17 @@ static DWORD WINAPI Run(void *)
         TruckRaw raw;
         World world;
         watch.ownScales = set.own;
+        // the engine's settings for the truck, engine and gearbox fitted: read again when any of them changes (an
+        // engine changed in the garage goes by the next level until an edit writes its own key), in force each pass
+        // (the engine's and the gearbox's names only once they are this vehicle's, not the truck's driven before)
+        const char *engNow = truck.key[0] && watch.engine.found && watch.engineVehicle == watch.refs.vehicle ? watch.profileFor : "",
+                   *boxNow = truck.key[0] && watch.gearboxVehicle == watch.refs.vehicle ? watch.gearboxKey : "";
+        if (strcmp(eng.key, truck.key) || strcmp(eng.id, truck.key[0] ? truck.id : "") || strcmp(eng.engine, engNow) || strcmp(eng.gearbox, boxNow))
+        {
+            EngineFor(eng, truck.key, truck.id, engNow, boxNow);
+            EngineLevelLog(eng, L"the truck, engine or gearbox taken");
+        }
+        EngineApply(eng, watch);
         const bool driving = TruckPass(watch, memory, inForce, front, raw, world);
         wasDriving = driving;
         if (GameMenuGateSeen(gameMenu, GameMenuUp(world), GetTickCount64())) Log(L"input: the game's function menu is up, the bindings wait");
@@ -6036,11 +6355,11 @@ static DWORD WINAPI Run(void *)
             const bool takeOver = SuspTrack(suspWatch, truck, now, GetTickCount64(), oldId);
             truck = now;
             truckVehicle = watch.idVehicle;
-            bool taken = false;
+            int taken = 0;
             if (takeOver)
             {
                 strcpy_s(set.key, truck.key);
-                taken = TruckSuspTakeOver(truck.key, oldId, truck.id);
+                taken = TakeOverBoth(truck.key, oldId, truck.id);
             }
             SettingsFor(set, truck.key, truck.id);
             SettingsPublish(s);
@@ -6055,8 +6374,8 @@ static DWORD WINAPI Run(void *)
                     kClassWords[autoClass], set.own ? L", its scales'" : watch.mass > 0.0f ? L", its weight's" : L", the plain scales' (its weight not read)",
                     TorqueRoof(autoClass));
             if (taken)
-                Log(L"suspension: the take-over: %S under its new id %S (vehicle %p) takes over the settings of %S (back %.0f s after it went)", truck.key, truck.id,
-                    (void *)truckVehicle, oldId, (GetTickCount64() - goneAt) / 1000.0);
+                Log(L"suspension: the take-over: %S under its new id %S (vehicle %p) takes over %s of %S (back %.0f s after it went)", truck.key, truck.id,
+                    (void *)truckVehicle, TakenWords(taken), oldId, (GetTickCount64() - goneAt) / 1000.0);
             if (truck.key[0]) SuspLevelLog(set, truck.id[0] && !set.truckOwn && !set.truckKept && !taken && !takeOver);
         }
         else if (strcmp(now.id, truck.id))
@@ -6074,12 +6393,12 @@ static DWORD WINAPI Run(void *)
             Log(L"truck: %S again, the game's id for it now %S (vehicle %p, the old id's %p)", truck.key, truck.id, (void *)truckVehicle, (void *)oldVehicle);
             // a take-over only on the vehicle the old id was taken with (review F1); another vehicle is another truck
             const bool sameTruck = SuspAgainTakeOver(oldId, oldVehicle, truck.id, truckVehicle);
-            const bool taken = sameTruck && SettingsTakeOver(set, truck.id);
+            const int taken = sameTruck ? SettingsTakeOver(set, truck.id) : 0;
             if (!taken) SettingsFor(set, truck.key, truck.id);
             SettingsPublish(s);
             if (taken)
-                Log(L"suspension: the take-over: %S under its new id %S (vehicle %p) takes over the settings of %S (while driven, the same vehicle)", truck.key, truck.id,
-                    (void *)truckVehicle, oldId);
+                Log(L"suspension: the take-over: %S under its new id %S (vehicle %p) takes over %s of %S (while driven, the same vehicle)", truck.key, truck.id,
+                    (void *)truckVehicle, TakenWords(taken), oldId);
             SuspLevelLog(set, !set.truckOwn && !set.truckKept && !taken && truck.id[0]);
         }
         GaugeView v = {};
@@ -6132,6 +6451,13 @@ static DWORD WINAPI Run(void *)
         }
         v.gearHold = GearHoldOf(watch, AutoClass(watch, inForce.tachClass));
         v.gearHoldOwn = watch.gearHoldOwn;
+        // the engine's settings per truck, for the Engine tab's box (as the Suspension tab's)
+        v.engSetOwn = eng.kindOwn || eng.truckOwn;
+        v.engSetKept = eng.kindKept || eng.truckKept;
+        v.engSetTruckKept = eng.truckKept;
+        v.engSetKindSet = eng.kindOwn || eng.kindKept;
+        v.engSetLevel = eng.key[0] ? EngineLevel(eng) : kEngLevelNone;
+        v.engTorqueFrom = eng.torqueFrom, v.engHoldFrom = eng.holdFrom;
         // the suspension's figures as the driven truck's file has them, front (wheel 0) and rear (the last wheel)
         // the display's figures, the bars' lamp and each axle's rest place (build B)
         {
@@ -7162,6 +7488,145 @@ int wmain(int argc, wchar_t **argv)
                 DeleteFileW(truckFile(kind).c_str());
             }
             DeleteFileW(ini.c_str());
+        }
+        // the engine's settings per truck (BRIEF_engine_per_truck.md): the levels, the box, the For choice, the
+        // button, Defaults and the take-over, on made up kinds, engines and ids
+        {
+            const char *kind = "eng_kind", *kind2 = "eng_kind2", *kind3 = "eng_kind3", *kind4 = "eng_kind4", *kind5 = "eng_kind5";
+            const char *e1 = "e_eng_test.v8", *e2 = "e_eng test two", *g1 = "g_eng_box";
+            const char *id1 = "{E1111111-1111-1111-1111-111111111111}", *id2 = "{E2222222-2222-2222-2222-222222222222}",
+                       *id3 = "{E3333333-3333-3333-3333-333333333333}";
+            char tens[10][24];
+            for (int i = 0; i < 10; i++) sprintf_s(tens[i], "e_ten_%d", i);
+            auto clean = [&]() {
+                for (const char *k : { kind, kind2, kind3, kind4, kind5 }) DeleteFileW(truckFile(k).c_str());
+                for (const char *n : { e1, e2 }) DeleteFileW(SetupFile(kSetupEngine, n).c_str());
+                for (const char *n : tens) DeleteFileW(SetupFile(kSetupEngine, n).c_str());
+                DeleteFileW(SetupFile(kSetupGearbox, g1).c_str());
+            };
+            clean();
+            EngineState e = {}, o = {};
+            // nothing set: 100 % and the class's hold; an old file's Torque= and GearHold= are the defaults
+            EngineFor(e, kind, id1, e1, g1);
+            const bool none = e.torque == 100 && e.torqueFrom == kEngLevelNone && e.hold == 0.0f && e.holdFrom == kEngLevelNone && !e.kindOwn && !e.truckOwn &&
+                              EngineLevel(e) == kEngLevelDefault;
+            EngineTorqueWrite(e1, 80);
+            GearHoldWrite(g1, 2.0f);
+            EngineFor(e, kind, id1, e1, g1);
+            const bool old = e.torque == 80 && e.torqueFrom == kEngLevelDefault && fabsf(e.hold - 2.0f) < 0.001f && e.holdFrom == kEngLevelDefault;
+            Check(none && old, "engine: nothing set gives 100 % and the class's hold, an old Torque= and GearHold= read as the engine's and the gearbox's default");
+            // the first edit makes the kind's own (the box ticks itself); another kind with the same engine keeps the default
+            const bool made = EngineTake(e, 60, 0.0f);
+            const bool kindLevel = e.kindOwn && e.torque == 60 && e.torqueFrom == kEngLevelKind && e.holdFrom == kEngLevelDefault && EngineTorqueRead(e1) == 80;
+            EngineFor(o, kind2, id3, e1, g1);
+            const bool otherDefault = o.torque == 80 && o.torqueFrom == kEngLevelDefault && !o.kindOwn;
+            Check(made && kindLevel && otherDefault,
+                  "engine: two kinds share one engine: the first edit makes one kind's own, the engine's default stays for the other kind");
+            // an engine changed with the box ticked falls through to the next level for that engine
+            EngineFor(e, kind, id1, e2, g1);
+            const bool through = e.kindOwn && e.torque == 100 && e.torqueFrom == kEngLevelNone && e.holdFrom == kEngLevelDefault;
+            EngineTake(e, 70, 0.0f);
+            const bool spaced = e.torque == 70 && e.torqueFrom == kEngLevelKind;
+            EngineFor(e, kind, id1, e1, g1);
+            const bool firstKept = e.torque == 60 && e.torqueFrom == kEngLevelKind;
+            Check(through && spaced && firstKept && EngineKeyOf(L"Torque", "a=b;c[d]") == L"Torque.a_b_c_d_" && EngineKeyOf(L"Torque", e2) == L"Torque.e_eng test two",
+                  "engine: another engine in a kind with a set falls through to its own default, an engine's name with a space or a dot is a key, = ; [ ] go to _");
+            // ten engines keep ten values in one kind's file
+            bool ten = true;
+            for (int i = 0; i < 10; i++) EngineFor(o, kind2, "", tens[i], ""), EngineTake(o, 50 + i, 0.0f);
+            for (int i = 0; i < 10; i++) EngineFor(o, kind2, "", tens[i], ""), ten = ten && o.torque == 50 + i && o.torqueFrom == kEngLevelKind;
+            Check(ten, "engine: ten engines keep ten values in one kind's file");
+            // This truck only: the truck's level by its id; another truck of the kind keeps the kind's; A to B to A
+            EngineFor(e, kind, id1, e1, g1);
+            EngineLevelSet(e, true);
+            EngineTake(e, 40, 1.5f);
+            const bool truckLevel = EngineLevel(e) == kEngLevelTruck && e.torque == 40 && e.torqueFrom == kEngLevelTruck && fabsf(e.hold - 1.5f) < 0.001f &&
+                                    e.holdFrom == kEngLevelTruck;
+            EngineFor(o, kind, id3, e1, g1);
+            const bool othersKind = o.torque == 60 && o.torqueFrom == kEngLevelKind && fabsf(o.hold - 2.0f) < 0.001f && o.holdFrom == kEngLevelDefault;
+            EngineFor(o, kind2, id2, e1, g1);
+            EngineFor(e, kind, id1, e1, g1);
+            const bool aba = o.torque == 80 && e.torque == 40 && e.torqueFrom == kEngLevelTruck;
+            Check(truckLevel && othersKind && aba,
+                  "engine: This truck only puts both figures at the truck's level, another truck of the kind keeps the kind's, A to B to A gives A's as it was");
+            // Every kind with a set for the kind: the kind's in force, the truck's kept (F2); This truck only brings it back
+            EngineLevelSet(e, false);
+            const bool f2 = EngineLevel(e) == kEngLevelKind && e.truckKept && !e.truckOwn && e.torque == 60;
+            EngineLevelSet(e, true);
+            const bool back = EngineLevel(e) == kEngLevelTruck && e.torque == 40;
+            // Every kind with no set for the kind: the truck's whole section goes up to it
+            EngineFor(o, kind3, id2, e1, g1);
+            EngineLevelSet(o, true);
+            EngineTake(o, 30, 0.0f);
+            EngineLevelSet(o, false);
+            wchar_t probe[8] = {};
+            const bool up = EngineLevel(o) == kEngLevelKind && !o.truckKept && o.torque == 30 && fabsf(o.hold - 2.0f) < 0.001f &&
+                            !GetPrivateProfileSectionW(SectionOf(kEngineSection, id2).c_str(), probe, 8, truckFile(kind3).c_str());
+            Check(f2 && back && up,
+                  "engine: Every kind with the kind's set keeps the truck's with Own=0 and This truck only brings it back, with none it moves the truck's up whole");
+            // the box: off keeps the set with Own=0, an edit then goes to the default (F1), on brings the set back
+            EngineOwnSet(o, false);
+            const bool off = o.kindKept && !o.kindOwn && o.torque == 80 && o.torqueFrom == kEngLevelDefault;
+            EngineTake(o, 90, 0.0f);
+            const bool toDefault = EngineTorqueRead(e1) == 90 && o.kindKept && GetPrivateProfileIntW(kEngineSection, L"Torque.e_eng_test.v8", 0, truckFile(kind3).c_str()) == 30;
+            EngineOwnSet(o, true);
+            const bool on = o.kindOwn && o.torque == 30;
+            Check(off && toDefault && on, "engine: the box off keeps the set with Own=0 and an edit goes to the engine's default, the box on brings the set back");
+            // the button writes both defaults; the truck keeps its own
+            EngineFor(e, kind, id1, e1, g1);
+            EngineToDefault(e);
+            float dh = 0.0f;
+            const bool button = EngineTorqueRead(e1) == 40 && GearHoldRead(g1, dh) && fabsf(dh - 1.5f) < 0.001f && EngineLevel(e) == kEngLevelTruck;
+            Check(button, "engine: Make this the engine's default writes the torque to the engine's file and the hold to the gearbox's");
+            // Defaults: 100 % and the class's hold, the sets kept with Own=0
+            EngineDefaults(e);
+            const bool defaults = e.torque == 100 && e.torqueFrom == kEngLevelNone && e.hold == 0.0f && e.holdFrom == kEngLevelNone && e.truckKept && e.kindKept;
+            Check(defaults, "engine: Defaults gives 100 % and the class's hold and keeps the sets with Own=0");
+            // the take-over at a rebuild with no suspension set, and its own prune of the marked sections
+            {
+                const std::wstring kf = truckFile(kind4);
+                EngineFor(e, kind4, id1, e1, g1);
+                EngineLevelSet(e, true);
+                EngineTake(e, 45, 0.0f);
+                const int taken = TakeOverBoth(kind4, id1, id2);
+                EngineFor(e, kind4, id2, e1, g1);
+                wchar_t by[48] = {};
+                GetPrivateProfileStringW(SectionOf(kEngineSection, id1).c_str(), L"TakenBy", L"", by, 48, kf.c_str());
+                const bool tookEngine = taken == kTakenEngine && e.truckOwn && e.torque == 45 && Wide(id2) == by && !wcscmp(TakenWords(taken), L"the engine's settings");
+                // the old id driven again clears its engine mark
+                TruckSuspSeen(kind4, id1, kEngineSection);
+                wchar_t after[48] = {};
+                GetPrivateProfileStringW(SectionOf(kEngineSection, id1).c_str(), L"TakenBy", L"", after, 48, kf.c_str());
+                const bool cleared = !after[0];
+                // a marked suspension section, older than all, stays through the engine's prune
+                WritePrivateProfileStringW(SuspSectionOf(id3).c_str(), L"TakenAt", L"1", kf.c_str());
+                auto has = [&](const std::wstring &sec) { wchar_t b[16] = {}; return GetPrivateProfileSectionW(sec.c_str(), b, 16, kf.c_str()) != 0; };
+                char ids[11][40];
+                for (int i = 0; i < 11; i++)
+                {
+                    sprintf_s(ids[i], "{B%07d-0000-0000-0000-000000000000}", i);
+                    WritePrivateProfileStringW(SectionOf(kEngineSection, ids[i]).c_str(), L"Own", L"1", kf.c_str());
+                    TruckSuspTakeOver(kind4, ids[i], "{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}", 1000 + i, kEngineSection);
+                    WritePrivateProfileStringW(SectionOf(kEngineSection, "{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}").c_str(), nullptr, nullptr, kf.c_str());
+                }
+                const bool pruned = !has(SectionOf(kEngineSection, ids[0])) && has(SectionOf(kEngineSection, ids[1])) && has(SuspSectionOf(id3));
+                Check(tookEngine && cleared && pruned,
+                      "engine: a rebuild takes over an engine set with no suspension set, the old id driven again clears its mark, its own prune drops the 11th marked engine section and leaves the suspension's");
+            }
+            // DropTruckIni keeps the file while [Engine] is in it
+            {
+                const std::wstring kf = truckFile(kind5);
+                SetupBegin(kSetupTruck, Wide(kind5));
+                WritePrivateProfileStringW(kSetupSections[kSetupTruck], L"TachClass", L"1", kf.c_str());
+                WritePrivateProfileStringW(kEngineSection, L"Own", L"1", kf.c_str());
+                DropTruckIni(kind5);
+                const bool kept = GetFileAttributesW(kf.c_str()) != INVALID_FILE_ATTRIBUTES;
+                WritePrivateProfileStringW(kEngineSection, nullptr, nullptr, kf.c_str());
+                DropTruckIni(kind5);
+                const bool gone = GetFileAttributesW(kf.c_str()) == INVALID_FILE_ATTRIBUTES;
+                Check(kept && gone, "engine: a truck's file with [Engine] in it stays when its scales go, with only [Truck] it goes");
+            }
+            clean();
         }
             // the files' names: a modded truck's stroke as "@", what no file's name may hold as "_"
         Check(SetupFileName(L"mod_suv/1000001") == L"mod_suv@1000001" && SetupFileName(L"a:b*c?") == L"a_b_c_" &&

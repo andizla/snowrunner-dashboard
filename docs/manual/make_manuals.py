@@ -94,7 +94,7 @@ GAUGES = f'''
 <h2>5. The settings worth knowing</h2>
 <p>All in the Gameplay tab of the NEXT GEN menu, in eight tabs, and they save themselves into <code>Gauges.ini</code>. F2 opens and closes the menu; to give it another key, click the key's name at the menu's top right and press the new one. The key is kept in <code>NextGen.ini</code>, which the Next Gen mods share, and while the menu is open the game gets no mouse and no keys, and the cluster's toggle key and pad toggle rest. With Next Gen Graphics installed the menu also has a Graphics tab. It switches Graphics' effects while you play. Its F keys are off then; KeysWithMenu=1 in SnowRunnerShadows.ini keeps them.</p>
 <ul><li><b>Display</b>: the cluster's layout, style, size and opacity, which dials show, the tilt lamp's angles and the units (km/h or mph, bar or psi, Celsius or Fahrenheit).</li>
-<li><b>Engine</b>: this engine's profile and Engine torque; the Truck class and the scales (truck, scout or heavy), kept for this kind of truck when set while driving it, with Class beside a number to give it back; the coolant and the oil; Map climate, which makes the temperature follow the map and the hour of the game's day; and Damage, on by default: overheating or working a cold engine hard adds to the game's own engine damage. Switch it off to only watch.</li>
+<li><b>Engine</b>: this engine's profile and Engine torque, with Own settings, Make this the engine's default and For for it and the Upshift delay, as on the Suspension tab; the Truck class and the scales (truck, scout or heavy), kept for this kind of truck when set while driving it, with Class beside a number to give it back; the coolant and the oil; Map climate, which makes the temperature follow the map and the hour of the game's day; and Damage, on by default: overheating or working a cold engine hard adds to the game's own engine damage. Switch it off to only watch.</li>
 <li><b>Gearbox</b> (<code>Gearbox</code>, Game's gearbox by default): Mod automatic is smarter shifting with a torque converter and a kickdown. Mod gearbox is the mod's own gearbox on the keyboard, a pad, a wheel or a shifter, with a clutch if you want one (section 14). Creep (<code>Creep=1</code>, on by default): an idling truck in D or the game's automatic moves at walking pace; hold the brake to stand. A gear picked by hand creeps only with Creep in held gear (<code>CreepManual=1</code>, off by default).</li>
 <li><b>Power</b>: Real engine (<code>Powertrain=1</code>, off by default) makes the truck pull with the mod's engine. Engine share sets how much; lower it if a truck pulls too hard. Air drag and the pull test are here too.</li>
 <li><b>Suspension</b>: tests of the springs, the dampers, the ride height and the sway bars.</li>
@@ -247,7 +247,7 @@ truck's file. The weight is the truck's own, without cargo or a trailer, so with
 <p><code>EngineShare</code> (50) sets how much of the mod's engine the game gets: at 50 the truck pulls half way between the game's engine and the mod's, at 100 all the mod's. With the engine handed over, the automatic shifts as a truck automatic does:</p>
 <ul><li>Floored, each gear to the red zone, or sooner where the next gear already pulls harder. At a light foot it shifts up about as far along as the pedal is down, never under 0.8 of the engine's peak torque speed.</li>
 <li>Down where the gear below comes in clear of its own point up, so it does not shift straight back.</li>
-<li>One gear up at a time, each held at least 2.5 seconds of moving (a scout 1.5). The Gearbox tab's "Upshift delay" slider (1 to 3 s) sets it per gearbox, in <code>Gauges\\gearboxes\\&lt;name&gt;.ini</code>. If a truck accelerates too hard, raise it, and check the truck's class.</li>
+<li>One gear up at a time, each held at least 2.5 seconds of moving (a scout 1.5). The Gearbox tab's "Upshift delay" slider (1 to 3 s) sets it per gearbox, in <code>Gauges\\gearboxes\\&lt;name&gt;.ini</code>, or per truck (below). If a truck accelerates too hard, raise it, and check the truck's class.</li>
 <li>It sets off in the lowest gear with at least a seventh of the top gear's speed, lower where the engine is weak for the truck's mass, and takes the crawling gears only when stuck.</li>
 <li>A shift up that the next gear cannot hold, up a grade or through mud, is not tried again for eight seconds, then each failed try doubles the wait, up to 30.</li></ul>
 <p>It works through the game's torque factor, the share of torque the game leaves a damaged engine: written every pass, at most six times the game's own (the game's own with the wheels at a gear's top or past it), times the engine's Torque share where one is set, and handed back when the setting goes off, the engine stops or another truck is driven. A damaged engine still pulls less.</p>
@@ -281,6 +281,13 @@ warehouse gets a new id and starts on its kind's settings; pick This truck only 
 truck's level keeps its set and puts the kind's in force; This truck only brings it back. Every with no set for the kind
 moves the truck's set up to the kind. With a set for the kind it puts that one in force and keeps the truck's, which This
 truck only brings back.</p>
+<p><b>Engine per truck.</b> The Engine tab's Engine torque and the Gearbox tab's Upshift delay are kept the same way, so one
+scout's slider does not move every scout with that engine. The Engine tab has its own <b>Own settings</b>, <b>Make this the
+engine's default</b> and <b>For</b>. A truck keeps a figure for each engine and gearbox fitted, in an <code>[Engine]</code>
+section of its file (<code>[Engine:&lt;id&gt;]</code> for one truck), as <code>Torque.&lt;engine&gt;</code> and
+<code>GearHold.&lt;gearbox&gt;</code>. A figure it has none for comes from the engine's file, or the gearbox's, then 100 % and
+the class's hold. The line In force under each slider says which. The button writes both figures into those two files. When
+the game rebuilds the truck, its engine set follows it as the suspension's does.</p>
 <ul><li><b>Spring and Damping</b> (<code>SpringScale</code>, <code>DampingScale</code>, x0.25 to x4): the truck's own spring
 and damping times a factor. Above 1 the spring is stiffer and the truck sits higher, below 1 softer and lower. More damping
 settles the body sooner, less lets it bounce longer. The game takes a wheel's spring and damping only up to 1, so where a

@@ -238,6 +238,11 @@ static void OnPage()
     if (act & kPageSuspDefault) SettingsSuspToDefault();
     if (act & kPageSuspTruck) SettingsSuspLevel(true);
     if (act & kPageSuspKind) SettingsSuspLevel(false);
+    if (act & kPageEngOn) EngineOwnAsk(true);
+    if (act & kPageEngOff) EngineOwnAsk(false);
+    if (act & kPageEngDefault) EngineToDefaultAsk();
+    if (act & kPageEngTruck) EngineLevelAsk(true);
+    if (act & kPageEngKind) EngineLevelAsk(false);
     if (act & kPagePullTest) PullTestAsk(true);
     if (act & kPagePullCancel) PullTestAsk(false);
     if (act & kPageMapAmbient) MapAmbientSet(st.mapAmbientC);
