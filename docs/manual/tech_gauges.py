@@ -254,8 +254,12 @@ number <i>a</i> into the gear's top wheel speed (<code>TruckGearTop</code>, <cod
 {eq('top(<i>g</i>) = 2<i>a</i> + 5 rad/s,    top(high) = <i>a</i> + 2', 1)}
 <p class="where">A numbered gear's top is learned where the game's own pull reaches nothing (review 11, <code>GearTopStep</code>): a
 floored plateau, the pedal at 0.9 or more, +0xB4 at 0.02 or under, the power factor 1, the wheels between 0.85 and 1.15 of 2<i>a</i> + 5
-and within 1% of their mean for a second, gives the wheels' mean as the gear's top, kept in the gearbox's file (Top<i>g</i>) and
-averaged with the next plateau's; until then 2<i>a</i> + 5. The high gear's <i>a</i> + 2 holds (an HX 520 sat at 15.8 to 16.3 rad/s
+and within 1% of their mean for a second, on ground within 2° by the path, gives the wheels' mean as the gear's top. It is kept as
+its share of 2<i>a</i> + 5, for each truck kind and gearbox in the truck's file (<code>TopShare</code><i>g</i><code>.&lt;gearbox&gt;</code>),
+as one gearbox's name comes with other gear speeds on another truck. A share is used only within 0.85 to 1.15, averaged with the next
+plateau's within 15 % and replaced by it past that; until then 2<i>a</i> + 5. A <code>Top</code><i>g</i> in rad/s of an older build in
+the gearbox's file is not read. Floored in A at the game's limit (+0xB4 at 0.02 or under, the wheels gaining under 1% for 1.2 s, the
+gear's hold past), the automatic shifts up one, whatever the mod takes the top for. The high gear's <i>a</i> + 2 holds (an HX 520 sat at 15.8 to 16.3 rad/s
 in H against 16 in 11 floored plateaus). The testers' logs of 0.17.0 at hand had plateaus at the top of the first gear (0.92 to 1.03
 of 2<i>a</i> + 5) and of H (1.03) only; the review read 0.90 to 0.99 in some gears from the pull's fall.</p>
 <p class="where">In first gear with the automatic off, the low range scales it: top = 1 + (top − 1) · clamp(power factor, 0, 1), with the
@@ -1285,7 +1289,8 @@ game's own stall seconds; whether the game's stalling notice shows for it is unc
 taken as 0.2 and 1.0 until a truck with them is driven at Gearbox=0; L is 0.45 as driven. On Windows 10 the NEXT GEN menu may not draw
 while ReShade loads the .asi files as add-ons: turn that off in ReShade's Add-ons tab (one player's report, under investigation).</li></ul>
 <h3>Changed in 0.18.4</h3>
-<ul><li>Air drag learns each gear's pull with the wheels' own drag left out, so Rolling drag and a flat tire don't make it stronger.</li>
+<ul><li>Each gear's top is learned for each truck kind as a share of the game's gear speed, and kept in the truck's file. Before, it was kept per gearbox and shared by every truck with that gearbox's name, so another truck's figure could hold the automatic in a gear at the game's own limit. A learned top far off the one kept replaces it, and none is learned on a slope. Floored in A at the game's limit, the automatic now shifts up. When the wheels' drag can't be read, the log names the wheel and the figure, and it says when the read works again.</li>
+<li>Air drag learns each gear's pull with the wheels' own drag left out, so Rolling drag and a flat tire don't make it stronger.</li>
 <li>Air suspension and Level to horizon act only on the axles that have air. Many trucks have air at the rear only, with the front axle
 on springs; some have none. The mod knows this for the vanilla trucks whose real models settle it. Every other truck, mod trucks too,
 keeps air on every axle as before. <code>AirAxles=all</code>, <code>rear</code> (every axle but the front one) or <code>none</code> in
@@ -1457,7 +1462,7 @@ until a binding reaches reverse (asked for in the comments and seen in the autho
 def s_constants():
     rows = [['Pass', '50 ms sleep; Δt 0.001 to 0.2 s', '', 'the mod'],
             ['Class scales', 'truck 650/2200/3000 rpm, 100 km/h, 1.8 bar; scout 800/5500/7000, 120, 1.0; heavy 600/1900/2500, 80, 2.0', '', 'not stated'],
-            ['Gear top', '2a + 5 rad/s, or learned on a floored plateau (pedal 0.9, B4 0.02, wheels 0.85 to 1.15 of it, 1% for 1 s); high a + 2', '', 'the game\'s, as read; review 11'],
+            ['Gear top', '2a + 5 rad/s, or its share learned per truck kind on a floored plateau (pedal 0.9, B4 0.02, wheels 0.85 to 1.15 of it, 1% for 1 s, the grade within 2°); high a + 2', '', 'the game\'s, as read; review 11'],
             ['Game pull', 'rise 2.8x − 0.25, fall 2.1(1 − x)', '', 'action +0xB4, floored, two trucks'],
             ['Shift gain', '5% more pull', '', 'not stated'],
             ['Needle', 'floored standing 0.65, neutral 0.9, overrun 1.1; lag 0.18/0.25/0.4 s; dip 0.85 for 0.3 s', '', 'not stated'],
