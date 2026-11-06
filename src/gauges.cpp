@@ -1664,9 +1664,10 @@ static void DropTruckSusp(const char *key, const char *id)
 // kind, which keeps its set). The old section stays: were it in fact another truck of the kind, it keeps its set.
 // True when a set was taken over.
 // The old section is then marked TakenBy=<new id> and TakenAt=<when, in 100 ns since 1601> (review N1): the mark goes
-// when the old id is driven again (TruckSuspSeen), and a save keeps only the newest kSuspTakenKept marked sections of a
-// file (TruckSuspPrune); an unmarked section is never dropped.
+// when the old id is driven again (TruckSuspSeen), and only the newest kSuspTakenKept marked sections of a file are kept
+// (TruckSuspPrune, after each take-over and at a save, review F3); an unmarked section is never dropped.
 static const int kSuspTakenKept = 10;
+static int TruckSuspPrune(const char *key);
 static bool TruckSuspTakeOver(const char *key, const char *oldId, const char *newId, unsigned long long at = 0)
 {
     if (!key[0] || !oldId[0] || !newId[0] || !strcmp(oldId, newId)) return false;
@@ -1688,6 +1689,7 @@ static bool TruckSuspTakeOver(const char *key, const char *oldId, const char *ne
     swprintf_s(when, L"%llu", at);
     WritePrivateProfileStringW(from.c_str(), L"TakenBy", Wide(newId).c_str(), ini.c_str());
     WritePrivateProfileStringW(from.c_str(), L"TakenAt", when, ini.c_str());
+    TruckSuspPrune(key); // a truck only driven, never edited, still keeps no more than the newest marked (review F3)
     return true;
 }
 
@@ -6950,6 +6952,8 @@ int wmain(int argc, wchar_t **argv)
                     GetPrivateProfileStringW(SuspSectionOf(id1).c_str(), L"TakenBy", L"", after, 48, kf.c_str());
                     const bool cleared = !after[0] && SuspLevel(su) == kSuspLevelTruck;
                     // eleven marked sections, oldest first, and id1 unmarked
+                    auto has = [&](const char *id) { wchar_t b[16] = {}; return GetPrivateProfileSectionW(SuspSectionOf(id).c_str(), b, 16, kf.c_str()) != 0; };
+                    bool tenKept = false;
                     char ids[11][40];
                     for (int i = 0; i < 11; i++)
                     {
@@ -6957,15 +6961,16 @@ int wmain(int argc, wchar_t **argv)
                         WritePrivateProfileStringW(SuspSectionOf(ids[i]).c_str(), L"Own", L"1", kf.c_str());
                         TruckSuspTakeOver(kind, ids[i], "{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}", 1000 + i);
                         WritePrivateProfileStringW(SuspSectionOf("{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}").c_str(), nullptr, nullptr, kf.c_str());
+                        if (i == 9) tenKept = has(ids[0]);
                     }
+                    const bool noSave = !has(ids[0]) && has(ids[1]); // the 11th take-over dropped the oldest with no save (review F3)
                     SettingsFor(su, kind, id1);
                     su.truckChanged = true;
                     SettingsWrite(su);
-                    auto has = [&](const char *id) { wchar_t b[16] = {}; return GetPrivateProfileSectionW(SuspSectionOf(id).c_str(), b, 16, kf.c_str()) != 0; };
                     bool newest = true;
                     for (int i = 1; i < 11; i++) newest = newest && has(ids[i]);
-                    Check(marked && cleared && !has(ids[0]) && newest && has(id1) && has(id2),
-                          "suspension: a take-over marks the old section, the old id driven again clears it, a save drops the 11th oldest marked and keeps the unmarked");
+                    Check(marked && cleared && tenKept && noSave && !has(ids[0]) && newest && has(id1) && has(id2),
+                          "suspension: a take-over marks the old section, the old id driven again clears it, ten marked stay, the 11th take-over drops the oldest with no save, a save keeps the newest 10 and the unmarked");
                 }
                 DeleteFileW(truckFile(kind).c_str());
             }
