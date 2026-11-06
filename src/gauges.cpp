@@ -1110,7 +1110,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; Creep=1: an idling truck on an automatic moves to walking pace; the brake holds it. For now only with an automatic, not in a gear picked by hand.\n"
                         L"; CreepManual=1: the creep in a gear picked by hand too (the gear's idle speed; stuck at Gearbox=2 it stalls; R and L on the game's shifter through the converter).\n"
                         L"; Gauges\\gearboxes\\<name>.ini GearHold: seconds a gearbox holds each gear going up with Powertrain=1, 1 to 3 (Upshift delay).\n"
-                        L"; Top1, Top2 ...: each gear's top in rad/s, learned where the game's pull reaches nothing floored (2a + 5 until then).\n"
+                        L"; TopShare<n>.<gearbox> in a truck's file: each gear's top as a share of 2a + 5, learned where the game's pull reaches nothing floored.\n"
                         L"; Gauges\\engines\\<name>.ini: PeakTorqueRpm, Aspiration (0 turbo, 1 naturally aspirated), Fuel (diesel, petrol), TorqueCurve (the Engine tab).\n"
                         L";   Torque: how much of its torque the truck gets, 10 to 100 percent (100 when not set). Lower it for an RLM-like engine with several times a stock engine's torque.\n"
                         L"; A truck's own Torque.<engine> and GearHold.<gearbox>: [Engine] of its file in Gauges\\trucks (every truck of the kind) or [Engine:<id>] (one truck), with Own; before the two files above.\n"
@@ -1366,8 +1366,9 @@ static bool GearboxFileMatch(const char *key, char *out, size_t size)
     return found;
 }
 
-// Top1 .. Top<n>: each numbered gear's top in rad/s, learned where the game's own pull reaches nothing (GearTopStep), so
-// a truck's gears are learned once (review 11). Into tops, 0 for a gear without one; the number read.
+// Top1 .. Top<n> of a gearbox's file: each numbered gear's top in rad/s, as builds before 0.18.4 learned it (review 11).
+// Not used for a truck any more (TopShare below): only counted, for the log's note and for finding a gearbox's file by
+// its gears (GearboxFileMatch). Into tops, 0 for a gear without one; the number read.
 static int GearTopRead(const char *key, float tops[kMaxGears])
 {
     int n = 0;
@@ -1451,14 +1452,65 @@ static void GearBaseWrite(const char *truck, const char *engine, int gear, float
     GearBaseMark(truck, engine);
 }
 
-static void GearTopWrite(const char *key, int gear, float top)
+// TopShare<n>.<gearbox> in [Truck] of the truck kind's file (BRIEF_gear_tops_per_truck.md, the Reviewer's point 1):
+// each numbered gear's top as its share of 2 a + 5, learned (GearTopStep), per kind and gearbox. A share, as one
+// gearbox's name comes with other gear speeds on another truck, and the name new, so an old absolute Top<n> is never
+// read as one. The gearbox's key goes in as SetupFileName cleans a name, with = ; [ ] as _.
+static std::wstring GearTopShareName(int gear, const char *gearbox)
 {
-    if (!key[0] || gear < 1 || gear >= kMaxGears) return;
-    wchar_t name[16], buf[24];
-    swprintf_s(name, L"Top%d", gear);
-    swprintf_s(buf, L"%.2f", top);
-    SetupBegin(kSetupGearbox, Wide(key));
-    WritePrivateProfileStringW(kSetupSections[kSetupGearbox], name, buf, SetupFile(kSetupGearbox, key).c_str());
+    std::wstring part = SetupFileName(Wide(gearbox));
+    for (wchar_t &c : part)
+        if (c == L'=' || c == L';' || c == L'[' || c == L']') c = L'_';
+    wchar_t head[24];
+    swprintf_s(head, L"TopShare%d.", gear);
+    return head + part;
+}
+// Into shares, 0 for a gear without a usable one (GearTopShareUsable); the number read. outside: shares there but out
+// of the plateau's window, not used.
+static int GearTopShareRead(const char *truck, const char *gearbox, float shares[kMaxGears], int *outside = nullptr)
+{
+    int n = 0;
+    if (outside) *outside = 0;
+    for (int g = 0; g < kMaxGears; g++) shares[g] = 0.0f;
+    if (!truck[0] || !gearbox[0]) return 0;
+    const std::wstring file = SetupFile(kSetupTruck, truck);
+    for (int g = 1; g < kMaxGears; g++)
+    {
+        wchar_t buf[24] = {};
+        if (GetPrivateProfileStringW(kSetupSections[kSetupTruck], GearTopShareName(g, gearbox).c_str(), L"", buf, 24, file.c_str()) == 0) continue;
+        const float v = (float)_wtof(buf);
+        if (GearTopShareUsable(v)) shares[g] = v, n++;
+        else if (outside) ++*outside;
+    }
+    return n;
+}
+static void GearTopShareWrite(const char *truck, const char *gearbox, int gear, float share)
+{
+    if (!truck[0] || !gearbox[0] || gear < 1 || gear >= kMaxGears) return;
+    wchar_t buf[24];
+    swprintf_s(buf, L"%.4f", share);
+    SetupBegin(kSetupTruck, Wide(truck));
+    WritePrivateProfileStringW(kSetupSections[kSetupTruck], GearTopShareName(gear, gearbox).c_str(), buf, SetupFile(kSetupTruck, truck).c_str());
+}
+
+// A failed drag read's reason for the log (WheelDampWhy): the figure and its value, the wheel counted from 1.
+static std::wstring DampWhyText(const WheelDampWhy &y, int wheels)
+{
+    wchar_t t[160];
+    const int n = y.wheel + 1;
+    switch (y.what)
+    {
+    case kDampNoList: swprintf_s(t, L"the wheel list short: %d wheels read of %.0f models", wheels, y.value); break;
+    case kDampNotRead: swprintf_s(t, L"wheel %d of %d: its body not read (or not a cylinder)", n, wheels); break;
+    case kDampNoBodies: swprintf_s(t, L"the truck's bodies' mass %.0f kg", y.value); break;
+    case kDampMass: swprintf_s(t, L"wheel %d of %d: inverse mass %.6f", n, wheels, y.value); break;
+    case kDampDamping: swprintf_s(t, L"wheel %d of %d: damping %.1f", n, wheels, y.value); break;
+    case kDampAxle: swprintf_s(t, L"wheel %d of %d: no axle (inertia %.1f, %.1f, %.1f)", n, wheels, y.inertia[0], y.inertia[1], y.inertia[2]); break;
+    case kDampRadius: swprintf_s(t, L"wheel %d of %d: radius %.3f", n, wheels, y.value); break;
+    case kDampSpin: swprintf_s(t, L"wheel %d of %d: spin %.3f", n, wheels, y.value); break;
+    default: swprintf_s(t, L"read"); break;
+    }
+    return t;
 }
 
 // ---- an engine's own profile: its file Gauges\engines\<name>.ini ----
@@ -3390,7 +3442,11 @@ struct TruckWatch
     char gearboxKey[96];        // the gearbox of the truck at gearboxVehicle: its key (GearboxKey), "" before one is known
     bool gearHoldOwn;           // [Gearbox:<key>] holds GearHold, which is gearHold; else the truck's class has it
     float gearHold;
-    float gearTop[kMaxGears];   // each numbered gear's top learned where the game's pull reaches nothing (GearTopStep), 0 not yet; kept in the gearbox's file
+    float gearTop[kMaxGears];   // each numbered gear's top as a share of 2a + 5, learned where the game's pull reaches nothing (GearTopStep), 0 not yet;
+                                // kept in the truck kind's file by the gearbox (TopShare<n>.<gearbox>)
+    char topTruck[kMaxText], topBox[96]; // the kind and gearbox gearTop is for
+    uint32_t topUpSaid;         // the gears the stuck rule's shift up was logged from, for this kind and gearbox
+    float gradeSinLast;         // the path's grade of the last pass (GradeStep), for the plateau; NAN unknown
     float gearBase[kMaxGears];  // each numbered gear's acceleration at the game's own pull, floored (BaseLearnStep), 0 not yet; kept in the truck's file by engine
     char baseTruck[kMaxText], baseEngine[kMaxText]; // the truck and engine gearBase is for
     BaseLearn baseLearn;
@@ -3403,7 +3459,7 @@ struct TruckWatch
     bool accelSeen;
     float damp;                // the wheels' drag as the truck's acceleration (TruckWheelDamp), smoothed as accel is
     bool dampSeen;             // damp holds a reading: false after a pass it could not be read, so it starts afresh
-    uint64_t dampSaidFor, dampFailFor; // the vehicles the wheels' good read and failed read were last logged for
+    DampSay dampSay;           // when the drag read goes into the log (DampSayStep)
     float roadShare, roadLoadA; // the road load taken off on the last pass, as a share of the pull and as m/s², for the probe
     PullBins pull;              // part 1's probe: the game's own pull by x in the gear being measured
     float pullPeak[kMaxGears];  // the most acceleration measured in each gear this start
@@ -3565,9 +3621,9 @@ static void GearboxLook(TruckWatch &w, const TruckMemory &m, const TruckRaw &raw
     if (!strcmp(key, w.gearboxKey)) return;
     strcpy_s(w.gearboxKey, key);
     w.gearHoldOwn = GearHoldRead(key, w.gearHold);
-    w.topLearn = GearTopLearn{};
-    const int tops = GearTopRead(key, w.gearTop);
-    if (tops) Log(L"gearbox: %d of its gears' tops learned before (its file in Gauges\\gearboxes): the limiter and the floored points go by them", tops);
+    float oldTops[kMaxGears];
+    if (const int old = GearTopRead(key, oldTops))
+        Log(L"gearbox: its file in Gauges\\gearboxes has %d gears' tops of an older build (Top<n>, rad/s): not used, each truck kind learns its own as a share of the game's gear speed", old);
     wchar_t whose[96];
     if (w.gearHoldOwn) wcscpy_s(whose, L"its own (its file in Gauges\\gearboxes)");
     else swprintf_s(whose, L"the %s class's%s", kClassWords[tachClass < 0 || tachClass >= kClassCount ? kClassTruck : tachClass],
@@ -4819,19 +4875,33 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         const float dt = w.modelAt && now - w.modelAt < 1000 ? SettingsRange((now - w.modelAt) / 1000.0f, 0.001f, 0.2f) : 0.05f;
         // each gear's top as learned for this gearbox (TruckGearTop goes by it), and a floored plateau watched for: the
         // game's pull at nothing with the wheels steady is where it governs the gear (review 11)
-        const bool sameBox = w.gearboxVehicle == w.refs.vehicle && raw.gearSpeeds == w.gearSpeeds && !memcmp(raw.gearSpeed, w.gearSpeed, sizeof w.gearSpeed);
+        // per truck kind and gearbox (BRIEF_gear_tops_per_truck.md), as shares of 2a + 5: read again when either changes
+        const char *topTruck = w.who.taken.key, *topBox = w.gearboxVehicle == w.refs.vehicle ? w.gearboxKey : "";
+        if (strcmp(topTruck, w.topTruck) || strcmp(topBox, w.topBox))
+        {
+            strcpy_s(w.topTruck, topTruck);
+            strcpy_s(w.topBox, topBox);
+            w.topLearn = GearTopLearn{};
+            w.topUpSaid = 0;
+            int outside = 0;
+            const int tops = GearTopShareRead(topTruck, topBox, w.gearTop, &outside);
+            if (tops) Log(L"gearbox: %d of %S's gears' tops with %S learned before (its file in Gauges\\trucks): the limiter and the floored points go by them", tops, topTruck, topBox);
+            if (outside) Log(L"gearbox: %d of %S's kept tops with %S lie outside 0.85 to 1.15 of the game's gear speed: not used, 2a + 5 until learned again", outside, topTruck, topBox);
+        }
+        const bool sameBox = topBox[0] && raw.gearSpeeds == w.gearSpeeds && !memcmp(raw.gearSpeed, w.gearSpeed, sizeof w.gearSpeed);
         if (sameBox) memcpy(raw.gearTop, w.gearTop, sizeof raw.gearTop);
         int plateauGear = 0;
         float plateauTop = 0.0f;
-        if (sameBox && GearTopStep(w.topLearn, raw, dt, plateauGear, plateauTop))
+        if (sameBox && topTruck[0] && GearTopStep(w.topLearn, raw, dt, w.gradeSinLast, plateauGear, plateauTop))
         {
-            const float formula = TruckGearFormulaTop(raw, plateauGear), was = w.gearTop[plateauGear];
-            w.gearTop[plateauGear] = GearTopMerge(was, plateauTop);
+            const float formula = TruckGearFormulaTop(raw, plateauGear), was = w.gearTop[plateauGear], share = formula > 0.0f ? plateauTop / formula : 0.0f;
+            const bool farOff = GearTopShareUsable(was) && GearTopFar(was, share);
+            w.gearTop[plateauGear] = GearTopMerge(was, share);
             raw.gearTop[plateauGear] = w.gearTop[plateauGear];
-            GearTopWrite(w.gearboxKey, plateauGear, w.gearTop[plateauGear]);
-            Log(L"gearbox: a floored plateau in gear %d, the game's pull %.3f: the wheels at %.2f rad/s, 2a + 5 gives %.2f (x%.3f); the gear's top %.2f%s, kept in its file",
-                plateauGear, raw.actionB4, plateauTop, formula, formula > 0.0f ? plateauTop / formula : 0.0f, w.gearTop[plateauGear],
-                was > 0.0f ? L" (the mean with the one kept)" : L" (learned)");
+            GearTopShareWrite(topTruck, topBox, plateauGear, w.gearTop[plateauGear]);
+            Log(L"gearbox: a floored plateau in gear %d, the game's pull %.3f, the grade %.1f%%: the wheels at %.2f rad/s, 2a + 5 gives %.2f (x%.3f); the gear's top x%.3f%s, kept in %S's file",
+                plateauGear, raw.actionB4, w.gradeSinLast * 100.0f, plateauTop, formula, share, w.gearTop[plateauGear],
+                farOff ? L" (the one kept was more than 15 % off: replaced)" : GearTopShareUsable(was) ? L" (the mean with the one kept)" : L" (learned)", topTruck);
         }
         // the needle: while the mod's gearbox is in A, its converter's engine speed (of the last pass); in a position of
         // its own, the clutch model's, so the needle and the torque curve the game gets go by the one engine the clutch
@@ -4904,8 +4974,19 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                                  ? w.engine.torque / w.mass * (w.profile.torque > 0.0f ? w.profile.torque : 1.0f) : 0.0f;
         const EngineHand hand{ w.hand.on, &curve, scale.redline > 0.0f ? scale.max / scale.redline : 1.0f, s.engineShare / 100.0f, launch,
                                GearHoldOf(w, autoClass), EngineLightFloor(curve, scale.redline), s.input, TorqueRoof(autoClass) };
-        const int huntsWere = w.gearbox.hunts;
+        const int huntsWere = w.gearbox.hunts, topUpsWere = w.gearbox.topUps;
         GearboxModelPass(w.gearbox, w.take.driving, w.pos, raw, scale, foot, w.power.power, dt, hand);
+        if (w.gearbox.topUps != topUpsWere && w.take.driving && !GearboxManual(w))
+        {
+            // the stuck rule shifted up: once per gear for this kind and gearbox (BRIEF_gear_tops_per_truck.md point 3)
+            const int from = w.gearbox.topUpFrom;
+            if (from >= 1 && from < 32 && !(w.topUpSaid & (1u << from)))
+            {
+                w.topUpSaid |= 1u << from;
+                Log(L"gearbox: floored in gear %d with the game's pull at nothing and the wheels not gaining for %.1f s: the game holds it at its top (%.2f rad/s, the mod's top %.2f), so up to %d",
+                    from, kTopStuckFor, TruckDrivenSpin(raw), TruckGearTop(raw, from), from + 1);
+            }
+        }
         if (GearboxManual(w))
         {
             // a position of the player's own: the automatic's model only reads along, and the engine runs behind the
@@ -5327,34 +5408,32 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             // same 0.2 s filter as the acceleration so both describe one moment (the Reviewer's point 4); NAN unread
             int dampGrounded = 0;
             float dampMass = 0.0f;
+            WheelDampWhy dampWhy = {};
             const float dampFiles = TruckMass(m, w.refs.model);
-            const float dampRaw = TruckWheelDamp(m, w.refs, WheelCylinderVtable(), dampFiles, &dampGrounded, &dampMass);
+            const float dampRaw = TruckWheelDamp(m, w.refs, WheelCylinderVtable(), dampFiles, &dampGrounded, &dampMass, &dampWhy);
+            if (!isfinite(dampRaw) && dampWhy.what == kDampOk) dampWhy.what = kDampSpin; // a NAN with no reason given: the sum's
             if (!isfinite(dampRaw)) w.dampSeen = false;
             else if (w.dampSeen && dt > 0.0f) w.damp += (dampRaw - w.damp) * (1.0f - expf(-dt / kAccelSmooth));
             else w.damp = dampRaw, w.dampSeen = true;
             const float damp = w.dampSeen ? w.damp : NAN;
-            // once per truck: the first good read, and the first failed one
-            if (isfinite(dampRaw) ? w.dampSaidFor != w.refs.vehicle : w.dampFailFor != w.refs.vehicle)
-            {
-                (isfinite(dampRaw) ? w.dampSaidFor : w.dampFailFor) = w.refs.vehicle;
-                if (isfinite(dampRaw))
-                    Log(L"road load: the wheels' drag read from %d wheels (%d on the ground), the mass taken %.0f kg (the truck's bodies %.0f, the wheels' %.0f): %.3f m/s2 now",
-                        w.refs.wheels, dampGrounded, dampMass, dampFiles, dampMass - dampFiles, dampRaw);
-                else
-                {
-                    // with every model and the vtable found, a wheel's own figures were out of bounds (review N1)
-                    const bool allFound = w.refs.wheels > 0 && w.refs.models == w.refs.wheels && WheelCylinderVtable();
-                    Log(L"road load: the wheels' drag not read (%d of %d wheel models found, the shape's vtable %s%s): the gears' pull is not learned until they are read",
-                        w.refs.wheels, w.refs.models, WheelCylinderVtable() ? L"found" : L"not found",
-                        allFound ? L", a wheel's figures out of bounds: mass, damping, axle or radius" : L"");
-                }
-            }
+            // read every pass; logged as DampSayStep says (the Reviewer's point 5): the first good read of a truck, a
+            // failure and each change of its reason, the first good read after one with the seconds it took, 10 s apart at least
+            const float sayNow = (float)(GetTickCount64() % 100000000ULL) / 1000.0f, failedFor = sayNow - w.dampSay.failSince;
+            const int say = DampSayStep(w.dampSay, w.refs.vehicle, isfinite(dampRaw) ? WheelDampWhy{ kDampOk, -1, 0.0f, {} } : dampWhy, sayNow);
+            if (say == kDampSayGood || say == kDampSayBack)
+                Log(L"road load: the wheels' drag read from %d wheels (%d on the ground), the mass taken %.0f kg (the truck's bodies %.0f, the wheels' %.0f): %.3f m/s2 now%s",
+                    w.refs.wheels, dampGrounded, dampMass, dampFiles, dampMass - dampFiles, dampRaw,
+                    say == kDampSayBack ? (L", read again after " + std::to_wstring((int)lroundf(failedFor)) + L" s not read").c_str() : L"");
+            else if (say == kDampSayFail)
+                Log(L"road load: the wheels' drag not read (%d of %d wheel models found, the shape's vtable %s; %s): the gears' pull is not learned until they are read",
+                    w.refs.wheels, w.refs.models, WheelCylinderVtable() ? L"found" : L"not found", DampWhyText(dampWhy, w.refs.wheels).c_str());
             const int g = raw.gearEngaged;
             const float top = g >= 1 ? TruckGearTop(raw, g) : 0.0f, groundX = top > 0.0f && w.gearbox.grip > 0.0f ? w.gearbox.grip * fmaxf(v, 0.0f) / top : 0.0f;
             const float pedalNow = TruckPedal(raw);
             const bool gripping = w.gearbox.grip > 0.0f && TruckDrivenSpin(raw) <= w.gearbox.grip * fmaxf(v, 0.0f) * kSlipShare + kSlipSpare;
             // the grade by the truck's path, not the chassis's pitch, which squats under power (the Reviewer's point 3)
             const float gradeSin = GradeStep(w.grade, raw.position, (float)(GetTickCount64() % 100000000ULL) / 1000.0f);
+            w.gradeSinLast = gradeSin; // for the next pass's plateau (BRIEF_gear_tops_per_truck.md, the Reviewer's point 3)
             // the seconds since the last shift's end: the mod's stage idle again (at Gearbox=2 the clutch slips through the
             // stages) and the engaged gear unchanged (the game's own shifts)
             if (g != w.baseGearWas || w.stage.stage != kStageIdle) w.baseSettled = 0.0f;
@@ -7748,6 +7827,32 @@ int wmain(int argc, wchar_t **argv)
         Check(SetupFileName(L"mod_suv/1000001") == L"mod_suv@1000001" && SetupFileName(L"a:b*c?") == L"a_b_c_" &&
                   SetupFileName(L"gears 1.5 4 high 2") == L"gears 1.5 4 high 2" && truckFile("mod_suv/1000001").find(L"Gauges\\trucks\\mod_suv@1000001.ini") != std::wstring::npos,
               "setups: a file's name from the truck's kind or the gearbox's name");
+        // the learned tops per truck kind and gearbox (BRIEF_gear_tops_per_truck.md): TopShare<n>.<gearbox> in the kind's
+        // file, two kinds with one gearbox's name each their own, an old Top4 in the gearbox's file not read as one, a
+        // share outside 0.85 to 1.15 counted and not used, a gearbox's name with = ; [ ] as _
+        {
+            const char *k1 = "top_kind_a", *k2 = "top_kind_b", *box = "g_top_test", *odd = "g=top;[x]";
+            for (const char *k : { k1, k2 }) DeleteFileW(truckFile(k).c_str());
+            DeleteFileW(SetupFile(kSetupGearbox, box).c_str());
+            SetupBegin(kSetupGearbox, Wide(box));
+            WritePrivateProfileStringW(kSetupSections[kSetupGearbox], L"Top4", L"21.10", SetupFile(kSetupGearbox, box).c_str());
+            float s1[kMaxGears], s2[kMaxGears], old[kMaxGears];
+            const bool oldOnly = GearTopShareRead(k1, box, s1) == 0 && GearTopRead(box, old) == 1 && s1[4] == 0.0f;
+            GearTopShareWrite(k1, box, 4, 1.005f);
+            GearTopShareWrite(k2, box, 4, 0.92f);
+            GearTopShareWrite(k2, odd, 3, 0.95f);
+            const bool each = GearTopShareRead(k1, box, s1) == 1 && fabsf(s1[4] - 1.005f) < 0.0001f && GearTopShareRead(k2, box, s2) == 1 && fabsf(s2[4] - 0.92f) < 0.0001f;
+            float s3[kMaxGears];
+            const bool cleaned = GearTopShareRead(k2, odd, s3) == 1 && fabsf(s3[3] - 0.95f) < 0.0001f && GearTopShareName(3, odd) == L"TopShare3.g_top__x_";
+            WritePrivateProfileStringW(kSetupSections[kSetupTruck], L"TopShare5.g_top_test", L"1.99", truckFile(k1).c_str());
+            int outside = 0;
+            const bool wild = GearTopShareRead(k1, box, s1, &outside) == 1 && outside == 1 && s1[5] == 0.0f;
+            Check(oldOnly && each && cleaned && wild,
+                  "gear tops: kept per truck kind and gearbox as TopShare<n>.<gearbox>, two kinds of one gearbox each their own; an old Top4=21.10 of the gearbox's file not read; "
+                  "a share outside 0.85 to 1.15 counted and not used; = ; [ ] in a gearbox's name as _");
+            for (const char *k : { k1, k2 }) DeleteFileW(truckFile(k).c_str());
+            DeleteFileW(SetupFile(kSetupGearbox, box).c_str());
+        }
         // a gearbox's hold into its file and back, held to its range
         DeleteFileW(SetupFile(kSetupGearbox, "g_test_box").c_str());
         float holdBack = 0.0f, holdWild = 0.0f;

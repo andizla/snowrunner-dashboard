@@ -131,15 +131,25 @@ inline float TruckGearFormulaTop(const TruckRaw &t, int gear)
     return gear == TruckTopGear(t) + 1 ? a + 2.0f : 2.0f * a + 5.0f;
 }
 
-// The wheel speed in rad/s the game governs a gear to: a numbered gear's own top where it is learned (t.gearTop, from
-// where the game's pull reaches nothing: GearTopStep; review 11 read 0.90 to 0.99 of 2 a + 5 in some gears), else
-// TruckGearFormulaTop. The high gear's a + 2 holds (an HX 520 sat at 15.8 to 16.3 rad/s in H against 16 in 11 floored
-// plateaus). The low range is the first gear held to a share of that by the power factor.
+// A floored plateau's window (GearTopStep below): the wheels between kPlateauFrom and kPlateauTo of 2 a + 5.
+static const float kPlateauPedal = 0.9f, kPlateauPull = 0.02f, kPlateauFrom = 0.85f, kPlateauTo = 1.15f, kPlateauSteady = 0.01f, kPlateauFor = 1.0f;
+// A learned top's share of 2 a + 5 (t.gearTop) the mod uses: only inside the plateau's own window, as a plateau gives
+// no other, so a share from a hand-edited file or another truck's gear speeds is never used (BRIEF_gear_tops_per_truck.md,
+// the Reviewer's point 2). 0, NAN and anything outside it: not usable.
+inline bool GearTopShareUsable(float share) { return isfinite(share) && share >= kPlateauFrom && share <= kPlateauTo; }
+
+// The wheel speed in rad/s the game governs a gear to: a numbered gear's learned share of 2 a + 5 times it, where the
+// share is learned (t.gearTop, from where the game's pull reaches nothing: GearTopStep; review 11 read 0.90 to 0.99 of
+// 2 a + 5 in some gears) and usable (GearTopShareUsable), else TruckGearFormulaTop. A share, not rad/s: one gearbox's
+// name comes with other gear speeds on another truck, and a truck's gear speeds drift by a few percent within a drive
+// (BRIEF_gear_tops_per_truck.md: 2 a + 5 of one gear was 21.0 on one truck and 10.6 on another of the same gearbox's
+// name). The high gear's a + 2 holds (an HX 520 sat at 15.8 to 16.3 rad/s in H against 16 in 11 floored plateaus).
+// The low range is the first gear held to a share of that by the power factor.
 inline float TruckGearTop(const TruckRaw &t, int gear)
 {
     float top = TruckGearFormulaTop(t, gear);
     if (!(top > 0.0f)) return 0.0f;
-    if (gear >= 1 && gear <= TruckTopGear(t) && gear < kMaxGears && t.gearTop[gear] > 0.0f && isfinite(t.gearTop[gear])) top = t.gearTop[gear];
+    if (gear >= 1 && gear <= TruckTopGear(t) && gear < kMaxGears && GearTopShareUsable(t.gearTop[gear])) top *= t.gearTop[gear];
     if (gear == 1 && !t.automatic) top = 1.0f + (top - 1.0f) * SettingsRange(t.powerFactor, 0.0f, 1.0f);
     return top;
 }
@@ -155,10 +165,13 @@ inline float TruckPedal(const TruckRaw &t)
 // ---- each gear's top, learned (review 11, finding 8) ----
 // A floored plateau: the pedal at kPlateauPedal or more, the game's own pull (action + 0xB4) at kPlateauPull or under,
 // the power factor whole (not the low range), the wheels between kPlateauFrom and kPlateauTo of 2 a + 5 and steady
-// within kPlateauSteady of their mean for kPlateauFor, in a numbered gear (the high gear's a + 2 holds). The wheels' mean
-// over that second is where the game governs the gear: its top. Each plateau gives one; a gear's top learned again is
-// the mean of the old and the new.
-static const float kPlateauPedal = 0.9f, kPlateauPull = 0.02f, kPlateauFrom = 0.85f, kPlateauTo = 1.15f, kPlateauSteady = 0.01f, kPlateauFor = 1.0f;
+// within kPlateauSteady of their mean for kPlateauFor, in a numbered gear (the high gear's a + 2 holds), on ground
+// within kPlateauGrade by the truck's path (GradeStep; unknown: none). The wheels' mean over that second is where the
+// game governs the gear: its top. Each plateau gives one; a gear's top learned again is the mean of the old and the new
+// within kTopFar of each other, the new one alone past it (GearTopMerge). The grade: down a slope a truck at the game's
+// limit overruns it steadily, the pull at nothing and the wheels within 1 %, and taught a top 4 % high (a tester's
+// drive, BRIEF_gear_tops_per_truck.md, the Reviewer's point 3); on the flat it cannot overrun.
+static const float kPlateauGrade = 0.0349f; // sin 2°
 struct GearTopLearn
 {
     int gear;        // the gear of the plateau being watched, 0 none
@@ -168,12 +181,14 @@ struct GearTopLearn
     bool done;       // this plateau has given its top: no other until it ends
 };
 // One pass: true when a plateau has just completed, with the gear and the wheels' mean in gear and top.
-inline bool GearTopStep(GearTopLearn &l, const TruckRaw &t, float dt, int &gear, float &top)
+// gradeSin: the path's (GradeStep), NAN unknown.
+inline bool GearTopStep(GearTopLearn &l, const TruckRaw &t, float dt, float gradeSin, int &gear, float &top)
 {
     const int g = t.gearEngaged;
     const float spin = TruckDrivenSpin(t), formula = g >= 1 && g <= TruckTopGear(t) ? TruckGearFormulaTop(t, g) : 0.0f;
     const bool plateau = TruckEngineOn(t) && formula > 0.0f && g == t.gear && TruckPedal(t) >= kPlateauPedal && isfinite(t.actionB4) &&
-                         t.actionB4 <= kPlateauPull && t.powerFactor >= 0.99f && isfinite(spin) && spin >= kPlateauFrom * formula && spin <= kPlateauTo * formula;
+                         t.actionB4 <= kPlateauPull && t.powerFactor >= 0.99f && isfinite(spin) && spin >= kPlateauFrom * formula && spin <= kPlateauTo * formula &&
+                         isfinite(gradeSin) && fabsf(gradeSin) <= kPlateauGrade;
     if (!plateau || g != l.gear)
     {
         l = GearTopLearn{};
@@ -205,8 +220,12 @@ inline bool GearTopStep(GearTopLearn &l, const TruckRaw &t, float dt, int &gear,
     return true;
 }
 
-// A gear's top learned again: the mean of the one kept and the new plateau's (the first plateau as it is).
-inline float GearTopMerge(float kept, float plateau) { return kept > 0.0f && isfinite(kept) ? 0.5f * (kept + plateau) : plateau; }
+// A gear's share learned again (shares of 2 a + 5): the mean of the one kept and the new plateau's within kTopFar of
+// each other; past it, or with none usable kept, the plateau's as it is (BRIEF_gear_tops_per_truck.md point 2: halving
+// the gap took three plateaus from a top twice too high, and the automatic sat under it meanwhile).
+static const float kTopFar = 0.15f;
+inline bool GearTopFar(float kept, float plateau) { return !GearTopShareUsable(kept) || fabsf(plateau / kept - 1.0f) > kTopFar; }
+inline float GearTopMerge(float kept, float plateau) { return GearTopFar(kept, plateau) ? plateau : 0.5f * (kept + plateau); }
 
 // The share of its top speed the engaged gear's wheels turn at, 0 in neutral.
 inline float TachWheelShare(const TruckRaw &t)
@@ -1367,6 +1386,9 @@ struct GearboxModel
     int liftUpFrom;    // the gear that shift up came from
     float liftBlock;   // seconds lifts still shift nothing up (kLiftBlock)
     float liftBlockWait; // seconds the last block lasted: the next is twice as long, up to kLiftBlockMost; 0 after a lift's shift up that held
+    float topRef, topFor; // the wheels' speed the stuck rule (kTopStuckFor) measures the gain from, and its seconds so far
+    int topUps, topUpFrom; // shifts up the stuck rule made, and the gear the last came from (for the log)
+    bool pullSeen;     // the game's pull (action + 0xB4) has read over kTopPullSeen since the model began: the stuck rule is armed
 };
 
 // The hunt guard let go: a lift of the foot, a stop, a kickdown, or the gears taken anew.
@@ -1561,6 +1583,10 @@ inline int WheelAxle(const float inv[3])
     const float d01 = fabsf(in[0] - in[1]), d02 = fabsf(in[0] - in[2]), d12 = fabsf(in[1] - in[2]);
     return d01 <= d02 && d01 <= d12 ? 2 : d02 <= d12 ? 1 : 0;
 }
+// Why the wheels' drag was not read (BRIEF_gear_tops_per_truck.md point 4): the first figure that failed, the wheel
+// (0 up; -1 none) and its value, and with no axle the three inertias. kDampOk: read.
+enum { kDampOk, kDampNoList, kDampNotRead, kDampNoBodies, kDampMass, kDampDamping, kDampAxle, kDampRadius, kDampSpin };
+struct WheelDampWhy { int what, wheel; float value; float inertia[3]; };
 // A wheel body's mass, 1 over its inverse mass, as the tire mod's DragBodyMass: 0 where it is no mass a wheel can have.
 inline float WheelBodyMass(const WheelDamp &w)
 {
@@ -1581,31 +1607,71 @@ inline float WheelDampMass(const WheelDamp *w, int n, float files)
     }
     return mass;
 }
+// A body whose three inertias lie within 2 % of each other (a sphere's, WheelAxle gives -1): I is the same about any
+// axis, so the axle is not needed and the spin is |ω| (the Reviewer's point 5). Their mean, 0 where it is no such body.
+inline float WheelSphereInertia(const float inv[3])
+{
+    float in[3];
+    for (int i = 0; i < 3; i++)
+    {
+        if (!(inv[i] > 0.0f && inv[i] < 1.0e30f)) return 0.0f;
+        in[i] = 1.0f / inv[i];
+    }
+    const float most = fmaxf(in[0], fmaxf(in[1], in[2])), least = fminf(in[0], fminf(in[1], in[2]));
+    return isfinite(most) && most - least <= 0.02f * most ? (in[0] + in[1] + in[2]) / 3.0f : 0.0f;
+}
 // The wheels' drag as an acceleration of the truck: Σ I·c·|ω| / r over the wheels on the ground, driven or not, over
-// the mass (WheelDampMass). A wheel off the ground slows only its own spin and is left out. NAN where a wheel was not
-// read or one on the ground gives no sound figure (c outside 0 to 1000, no axle, I or r not above 0, not finite), so a
-// half read never teaches. grounded: the wheels summed, where given.
+// the mass (WheelDampMass). A wheel off the ground slows only its own spin and is left out. A sphere-like wheel goes by
+// its mean inertia and |ω| (WheelSphereInertia). NAN where a wheel was not read or one on the ground gives no sound
+// figure (c outside 0 to 1000, no axle and no sphere, I or r not above 0, not finite), so a half read never teaches.
+// grounded: the wheels summed, where given; why: the first figure that failed, where given.
 static const float kWheelDampMost = 1000.0f;
-inline float WheelDampAccel(const WheelDamp *w, int n, float files, int *grounded = nullptr)
+inline float WheelDampAccel(const WheelDamp *w, int n, float files, int *grounded = nullptr, WheelDampWhy *why = nullptr)
 {
     if (grounded) *grounded = 0;
+    WheelDampWhy no = {};
+    WheelDampWhy &y = why ? *why : no;
+    y = WheelDampWhy{ kDampOk, -1, 0.0f, {} };
+    auto fail = [&](int what, int wheel, float value) {
+        y.what = what, y.wheel = wheel, y.value = value;
+        return NAN;
+    };
     const float mass = WheelDampMass(w, n, files);
-    if (!(mass > 0.0f)) return NAN;
+    if (!(mass > 0.0f))
+    {
+        if (!(files > 0.0f) || n <= 0) return fail(kDampNoBodies, -1, files);
+        for (int i = 0; i < n; i++)
+            if (!(WheelBodyMass(w[i]) > 0.0f)) return fail(kDampMass, i, w[i].inv[3]);
+        return fail(kDampMass, -1, 0.0f);
+    }
     float sum = 0.0f;
     for (int i = 0; i < n; i++)
     {
         if (!w[i].grounded) continue;
         const float c = WheelHalf(w[i].damping);
+        if (!isfinite(c) || c < 0.0f || c > kWheelDampMost) return fail(kDampDamping, i, c);
+        if (!(w[i].radius > 0.0f) || !isfinite(w[i].radius)) return fail(kDampRadius, i, w[i].radius);
         const int axle = WheelAxle(w[i].inv);
-        if (!isfinite(c) || c < 0.0f || c > kWheelDampMost || axle < 0 || !(w[i].radius > 0.0f) || !isfinite(w[i].radius)) return NAN;
-        const float inertia = 1.0f / w[i].inv[axle];
-        const float spin = w[i].angular[0] * w[i].cols[axle][0] + w[i].angular[1] * w[i].cols[axle][1] + w[i].angular[2] * w[i].cols[axle][2];
-        if (!isfinite(inertia) || !(inertia > 0.0f) || !isfinite(spin)) return NAN;
+        float inertia = 0.0f, spin = NAN;
+        if (axle >= 0)
+        {
+            inertia = 1.0f / w[i].inv[axle];
+            spin = w[i].angular[0] * w[i].cols[axle][0] + w[i].angular[1] * w[i].cols[axle][1] + w[i].angular[2] * w[i].cols[axle][2];
+        }
+        else if ((inertia = WheelSphereInertia(w[i].inv)) > 0.0f)
+            spin = sqrtf(w[i].angular[0] * w[i].angular[0] + w[i].angular[1] * w[i].angular[1] + w[i].angular[2] * w[i].angular[2]);
+        else
+        {
+            for (int a = 0; a < 3; a++) y.inertia[a] = w[i].inv[a] > 0.0f ? 1.0f / w[i].inv[a] : 0.0f;
+            return fail(kDampAxle, i, 0.0f);
+        }
+        if (!isfinite(inertia) || !(inertia > 0.0f)) return fail(kDampAxle, i, inertia);
+        if (!isfinite(spin)) return fail(kDampSpin, i, spin);
         sum += inertia * c * fabsf(spin) / w[i].radius;
         if (grounded) ++*grounded;
     }
     const float a = sum / mass;
-    return isfinite(a) ? a : NAN;
+    return isfinite(a) ? a : fail(kDampSpin, -1, a);
 }
 // One wheel's reads (the layout above), the body's shape checked by the cylinder's vtable (0: not found, no read).
 inline bool WheelDampRead(const TruckMemory &m, uint64_t wheel, uint64_t cylinderVtable, WheelDamp &w)
@@ -1622,16 +1688,61 @@ inline bool WheelDampRead(const TruckMemory &m, uint64_t wheel, uint64_t cylinde
 // The truck's wheels' drag (WheelDampAccel) over every wheel the vehicle lists: NAN where the wheel list is short of
 // the models' count (TruckFind left one out, the Reviewer's point 2) or a wheel is not read. files: TruckMass.
 // grounded and mass, where given: the wheels summed and the mass taken, for the log.
-inline float TruckWheelDamp(const TruckMemory &m, const TruckRefs &r, uint64_t cylinderVtable, float files, int *grounded = nullptr, float *mass = nullptr)
+inline float TruckWheelDamp(const TruckMemory &m, const TruckRefs &r, uint64_t cylinderVtable, float files, int *grounded = nullptr, float *mass = nullptr,
+                            WheelDampWhy *why = nullptr)
 {
     if (grounded) *grounded = 0;
     if (mass) *mass = 0.0f;
-    if (r.wheels <= 0 || r.wheels < r.models || r.wheels > kMaxWheels) return NAN;
+    if (why) *why = WheelDampWhy{ kDampOk, -1, 0.0f, {} };
+    if (r.wheels <= 0 || r.wheels < r.models || r.wheels > kMaxWheels)
+    {
+        if (why) why->what = kDampNoList, why->value = (float)r.models;
+        return NAN;
+    }
     WheelDamp w[kMaxWheels];
     for (int i = 0; i < r.wheels; i++)
-        if (!WheelDampRead(m, r.wheel[i], cylinderVtable, w[i])) return NAN;
+        if (!WheelDampRead(m, r.wheel[i], cylinderVtable, w[i]))
+        {
+            if (why) why->what = kDampNotRead, why->wheel = i;
+            return NAN;
+        }
     if (mass) *mass = WheelDampMass(w, r.wheels, files);
-    return WheelDampAccel(w, r.wheels, files, grounded);
+    return WheelDampAccel(w, r.wheels, files, grounded, why);
+}
+
+// When the drag read goes into the log (the Reviewer's point 5): the first good read of a truck; a failure, and again
+// whenever its reason (the figure and the wheel) changes; the first good read after a failure with the seconds it took;
+// at most one line each kDampSayGap. The step's answer: kDampSayNone, Good, Back (good again after failing) or Fail.
+static const float kDampSayGap = 10.0f;
+enum { kDampSayNone, kDampSayGood, kDampSayBack, kDampSayFail };
+struct DampSay { uint64_t vehicle; bool good, failing; int saidWhat, saidWheel; float saidAt, failSince; };
+inline int DampSayStep(DampSay &s, uint64_t vehicle, const WheelDampWhy &why, float now)
+{
+    if (s.vehicle != vehicle || s.saidAt > now)
+    {
+        s = DampSay{};
+        s.vehicle = vehicle;
+        s.saidWhat = s.saidWheel = -1;
+        s.saidAt = now - 2.0f * kDampSayGap;
+    }
+    const bool room = now - s.saidAt >= kDampSayGap;
+    if (why.what == kDampOk)
+    {
+        const int say = s.failing ? (room ? kDampSayBack : kDampSayNone) : s.good ? kDampSayNone : kDampSayGood;
+        if (say != kDampSayNone)
+        {
+            s.good = true, s.failing = false;
+            s.saidWhat = kDampOk, s.saidWheel = -1, s.saidAt = now;
+        }
+        return say;
+    }
+    if (!s.failing) s.failing = true, s.failSince = now;
+    if ((why.what != s.saidWhat || why.wheel != s.saidWheel) && room)
+    {
+        s.saidWhat = why.what, s.saidWheel = why.wheel, s.saidAt = now;
+        return kDampSayFail;
+    }
+    return kDampSayNone;
 }
 
 // a_base(g), learned in ordinary driving: floored (kBaseLearnPedal), the grade by the path within kBaseLearnGrade and
@@ -1879,6 +1990,8 @@ static const float kEngineKickTo = 0.85f;   // the kickdown goes to the lowest g
 static const float kKickRoom = 0.92f;       // and under this share of the gear's floored point up, so it is not left again at once
 static const float kEngineLimit = 0.98f;    // past this the engine is on the limiter: up at once, after kLimiterHold of the gear's hold
 static const float kLimiterHold = 0.9f;     // seconds of moving a gear is held on the limiter at the least (review 11: the rest of the hold sat a light truck on the governor)
+static const float kTopStuckFor = 1.2f;     // seconds at the game's top, floored, before the stuck rule shifts up (GearboxStep)
+static const float kTopPullSeen = 0.1f;     // the game's pull the stuck rule must have seen once: a figure never off 0 is no reading
 
 // The engine speed in rpm a light foot does not shift up under (EngineHand::least): kLightPeak of where the curve first
 // reaches kLightReach of its most, at the most kLightMost of the red zone (a truck's class curve 880 rpm, a scout's 2370).
@@ -2262,6 +2375,23 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     if (standing) m.liftUpFor = m.liftBlock = m.liftBlockWait = 0.0f;
     const bool kept = engine && m.keepFor > 0.0f && m.gear >= m.keep;
     const bool overRed = GearboxInput(t, k, m.gear, fmaxf(by, byUp)) >= (k.redline + fmaxf(k.max, k.redline)) * 0.5f;
+    // the net under a wrong top (BRIEF_gear_tops_per_truck.md point 3, the Reviewer's point 4): in A, a numbered gear
+    // below the top one, the power factor whole, no shift in its pause, floored, the game's pull at nothing and the
+    // wheels gaining under kPlateauSteady over kTopStuckFor: the game holds the gear at its top, whatever the mod takes
+    // the top for, so up one, once the gear's hold is past and no hunt keeps it. kTopStuckFor is longer than a plateau's
+    // kPlateauFor, so a plateau in the window is learned first (GearTopStep runs before this in the pass)
+    // It is armed once the game's pull has read over kTopPullSeen: a build where action + 0xB4 holds no pull reads 0
+    // throughout, and a truck at its top reads 0 only after pulling to it.
+    if (isfinite(t.actionB4) && t.actionB4 > kTopPullSeen) m.pullSeen = true;
+    const bool topCase = m.pullSeen && !byHand && m.gear < top && t.powerFactor >= 0.99f && m.pause <= 0.0f && pedalNow >= kPlateauPedal &&
+                         isfinite(t.actionB4) && t.actionB4 <= kPlateauPull && raw > 1.0f;
+    if (!topCase || !(m.topRef > 0.0f) || raw > m.topRef * (1.0f + kPlateauSteady))
+    {
+        m.topRef = topCase ? raw : 0.0f;
+        m.topFor = 0.0f;
+    }
+    else m.topFor += dt;
+    const bool topStuck = topCase && m.topFor >= kTopStuckFor && !held && !kept;
     if (m.gear != least && standing)
         to = least;
     else if (m.kick > 0.0f && m.gear > least && fits(m.gear - 1) &&
@@ -2277,6 +2407,12 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     }
     else if (pastIt && (!held || m.moving >= kLimiterHold) && (!kept || overRed))
         to = upTo(m.gear); // past the red zone or what the engine can take: up at once, whatever the pause
+    else if (topStuck)
+    {
+        to = m.gear + 1; // at the game's top though the mod's top is higher: up one
+        m.topUps++;
+        m.topUpFrom = m.gear;
+    }
     else if (!held && !kept && m.pause <= (m.upLast && !engine ? kShiftPause - kShiftAgain : 0.0f) &&
              m.wanted >= kShiftUpAfter + (kShiftUpAfterFloored - kShiftUpAfter) * feel)
     {
@@ -2873,7 +3009,7 @@ inline float CreepShare(const TruckRaw &t, const GaugeScale &k, bool converter, 
     c.live = true;
     // the first gear's top without the low range's share (TruckGearTop holds the first gear to it)
     float first = TruckGearFormulaTop(t, 1);
-    if (TruckTopGear(t) >= 1 && t.gearTop[1] > 0.0f && isfinite(t.gearTop[1])) first = t.gearTop[1];
+    if (TruckTopGear(t) >= 1 && GearTopShareUsable(t.gearTop[1])) first *= t.gearTop[1];
     c.low = first > 0.0f ? SettingsRange(top / first, 0.0f, 1.0f) : 1.0f;
     float share;
     if (converter)

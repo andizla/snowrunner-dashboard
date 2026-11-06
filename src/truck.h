@@ -113,8 +113,9 @@ struct TruckRaw
     int gearSpeeds;                // how many entries the gearbox has: reverse, the gears, high
     int gearListLong;              // the entries of a list longer than kMaxGears, which is not read; 0 when it was read
     float gearSpeed[kMaxGears];
-    float gearTop[kMaxGears];      // the mod's own, not read: each numbered gear's top learned where the game's pull reaches nothing
-                                   // (GearTopStep; kept in the gearbox's file), 0 not learned. TruckGearTop goes by it
+    float gearTop[kMaxGears];      // the mod's own, not read: each numbered gear's top as a share of 2 a + 5, learned where the game's pull
+                                   // reaches nothing (GearTopStep; kept in the truck kind's file by the gearbox), 0 not learned.
+                                   // TruckGearTop goes by it where GearTopShareUsable
     int wheels;
     int drive[kMaxWheels];         // 0 not driven, 1 driven, 2 driven with all wheel drive
     float spin[kMaxWheels];

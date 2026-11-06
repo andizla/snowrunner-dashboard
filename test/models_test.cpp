@@ -3883,8 +3883,8 @@ int main(int argc, char **argv)
         wild[1].damping = 0x4500; // 2048, over the 1000 a damping may be
         WheelDamp round[4];
         memcpy(round, ws, sizeof round);
-        round[0].inv[0] = round[0].inv[1] = round[0].inv[2] = 1.0f / 25.0f; // a sphere: no axle
-        const bool refused = isnan(WheelDampAccel(bad, 4, 4000.0f)) && isnan(WheelDampAccel(wild, 4, 4000.0f)) && isnan(WheelDampAccel(round, 4, 4000.0f)) &&
+        round[0].inv[0] = round[0].inv[1] = round[0].inv[2] = 1.0f / 25.0f; // a sphere: no axle, read by |w| (BRIEF_gear_tops_per_truck.md)
+        const bool refused = isnan(WheelDampAccel(bad, 4, 4000.0f)) && isnan(WheelDampAccel(wild, 4, 4000.0f)) && isfinite(WheelDampAccel(round, 4, 4000.0f)) &&
                              isnan(WheelDampAccel(ws, 4, 0.0f));
         // through the game's memory: the reads as the layout gives them, and a wheel the class check left out
         const uint64_t cyl = 0x7000;
@@ -3912,7 +3912,7 @@ int main(int argc, char **argv)
                             isnan(TruckWheelDamp(g_mem, r, cyl + 8, 4000.0f)) && isnan(TruckWheelDamp(g_mem, r, 0, 4000.0f));
         char line[260];
         snprintf(line, sizeof line, "wheels' drag: added back, a_damp 0 learns %.3f, 0.2 at 0.8 learns %.3f; four wheels %.4f m/s2; one off the ground %.4f; a bad read, a wild damping, "
-                 "a sphere, fewer wheels than models: no pass", learnWith(0.8f, 0.0f), learnWith(0.8f, 0.2f), four, WheelDampAccel(up, 4, 4000.0f));
+                 "fewer wheels than models: no pass; a sphere reads", learnWith(0.8f, 0.0f), learnWith(0.8f, 0.2f), four, WheelDampAccel(up, 4, 4000.0f));
         Check(zero && added && !nanLearned && sum && airborne && refused && memory, line);
     }
     // the learning over visits (BRIEF_road_load_learning.md, with the Reviewer's addendum): gears 3 and 4 alternating every
@@ -5185,7 +5185,7 @@ int main(int argc, char **argv)
                 GearTopLearn l = {};
                 for (int i = 0; i < t.wheels; i++) t.spin[i] = share * formula;
                 bool got = false;
-                for (float at = 0.0f; at < seconds && !got; at += kDt) got = GearTopStep(l, t, kDt, gear, top);
+                for (float at = 0.0f; at < seconds && !got; at += kDt) got = GearTopStep(l, t, kDt, 0.0f, gear, top);
                 return got;
             };
             int gear = 0;
@@ -5202,14 +5202,128 @@ int main(int argc, char **argv)
             const bool refused = !plateauAt(pulling, 0.93f, 1.5f, g2, t2) && !plateauAt(light, 0.93f, 1.5f, g2, t2) && !plateauAt(low, 0.93f, 1.5f, g2, t2) &&
                                  !plateauAt(high, 0.95f, 1.5f, g2, t2) && !plateauAt(pt, 0.93f, 0.9f, g2, t2);
             TruckRaw learned = pt;
-            learned.gearTop[3] = top;
+            learned.gearTop[3] = top / formula; // kept as its share of 2a + 5 (BRIEF_gear_tops_per_truck.md)
             const float upBefore = GearboxUpPoint(pt, tk, 3, 1.0f, handOf(kInputPad)), upAfter = GearboxUpPoint(learned, tk, 3, 1.0f, handOf(kInputPad));
             const bool used = Near(TruckGearTop(learned, 3), top, 0.001f) && Near(TruckGearTop(learned, 2), TruckGearTop(pt, 2), 0.001f) && upAfter != upBefore &&
-                              Near(GearTopMerge(top, 0.97f * formula), 0.95f * formula, 0.01f) && Near(GearTopMerge(0.0f, 20.0f), 20.0f, 0.001f);
+                              Near(GearTopMerge(0.93f, 0.97f), 0.95f, 0.001f) && Near(GearTopMerge(0.0f, 0.97f), 0.97f, 0.001f);
             printf("     finding 8: a plateau in third at %.2f rad/s (2a + 5 gives %.2f): learned; the floored point up from %.0f to %.0f rpm\n", top, formula, upBefore, upAfter);
             Check(seen && refused && used,
                   "gearbox: a floored plateau gives a gear's top, which the limiter and the floored points go by; none with the pull on, a light pedal, the low range, "
                   "in H or under a second; a second plateau gives the mean");
+        }
+
+        // BRIEF_gear_tops_per_truck.md: a top kept as its share of 2a + 5, used only inside 0.85 to 1.15; a plateau far from
+        // the kept share replaces it, near it the mean; none down a slope; the stuck rule; the drag read's reasons
+        {
+            TruckRaw ga = lt, gb = lt;
+            ga.gearSpeed[4] = 8.0f;  // one truck's gear 4 (2a + 5 = 21.0)
+            gb.gearSpeed[4] = 2.8f;  // another's of the same gearbox name (10.6)
+            ga.gearTop[4] = gb.gearTop[4] = 1.005f;
+            const bool byShare = Near(TruckGearTop(ga, 4), 21.105f, 0.01f) && Near(TruckGearTop(gb, 4), 10.653f, 0.01f);
+            TruckRaw wild = gb;
+            wild.gearTop[4] = 1.99f; // 21.1 over 10.6, as an absolute top read as a share would be
+            const bool notUsed = Near(TruckGearTop(wild, 4), 10.6f, 0.001f) && !GearTopShareUsable(1.99f) && !GearTopShareUsable(0.0f) &&
+                                 !GearTopShareUsable(nanf("")) && GearTopShareUsable(0.85f) && GearTopShareUsable(1.15f);
+            Check(byShare && notUsed,
+                  "gear tops: a share learned at a = 8.0 (x1.005) gives 10.65 rad/s at a = 2.8, not 21.1; a share outside 0.85 to 1.15 (1.99) is not used: 2a + 5");
+            // the merge by shares: 21.1 kept against an 11.0 plateau at 2a + 5 = 10.6 gives 11.0; within 15 % the mean
+            const float kept = 21.1f / 10.6f, plateau = 11.0f / 10.6f;
+            const bool replaced = Near(GearTopMerge(kept, plateau) * 10.6f, 11.0f, 0.001f) && GearTopFar(1.10f, 0.90f) &&
+                                  Near(GearTopMerge(1.10f, 0.90f), 0.90f, 0.0001f);
+            const bool meaned = !GearTopFar(1.00f, 1.10f) && Near(GearTopMerge(1.00f, 1.10f), 1.05f, 0.0001f) && Near(GearTopMerge(0.0f, 0.97f), 0.97f, 0.0001f);
+            Check(replaced && meaned, "gear tops: a plateau more than 15 % from the kept share replaces it (21.1 kept, 11.0 found: 11.0), within 15 % the mean, the first as it is");
+        }
+        {
+            // the plateau's grade: on the flat it learns, down or up a 3 % slope and with the grade unknown it does not
+            TruckRaw pt = lt;
+            pt.flags = 3;
+            pt.gear = pt.gearEngaged = 3;
+            pt.throttle = -1.0f;
+            pt.actionB4 = 0.0f;
+            const float formula = TruckGearFormulaTop(pt, 3);
+            for (int i = 0; i < pt.wheels; i++) pt.spin[i] = 1.03f * formula;
+            auto learns = [&](float grade) {
+                GearTopLearn l = {};
+                int gear = 0;
+                float top = 0.0f;
+                bool got = false;
+                for (float at = 0.0f; at < 1.5f && !got; at += kDt) got = GearTopStep(l, pt, kDt, grade, gear, top);
+                return got;
+            };
+            Check(learns(0.0f) && learns(0.03f) && !learns(-0.05f) && !learns(0.05f) && !learns(nanf("")),
+                  "gear tops: a plateau is learned on ground within 2 degrees by the path, not down or up a steeper slope and not with the grade unknown");
+        }
+        {
+            // the stuck rule: in A, floored in 3rd, the game's pull at nothing and the wheels steady at 0.8 of what the mod
+            // takes the top for (a wrong top), it goes up one after kTopStuckFor; not with the pull on, not under the gear's
+            // hold, not in the top gear
+            const EngineHand h = handOf(kInputPad);
+            auto stuckRun = [&](int gear, float pull, float moving, float seconds, int &ups, bool armed = true) {
+                TruckRaw st = lt;
+                st.flags = 3;
+                st.gear = st.gearEngaged = gear;
+                st.throttle = -1.0f;
+                st.actionB4 = pull;
+                const float spin = 0.8f * TruckGearTop(st, gear);
+                for (int i = 0; i < st.wheels; i++) st.spin[i] = spin;
+                st.speed = spin / 2.0f;
+                GearboxModel b = boxIn(gear, spin, 1.0f);
+                b.moving = moving;
+                b.holdUp = true;
+                b.pullSeen = armed;
+                for (float at = 0.0f; at < seconds && b.gear == gear; at += kDt) GearboxStep(b, st, tk, 1.0f, 1.0f, kDt, h);
+                ups = b.topUps;
+                return b.gear;
+            };
+            int u1 = 0, u2 = 0, u3 = 0, u4 = 0, u5 = 0, u6 = 0;
+            const int up = stuckRun(3, 0.0f, 10.0f, 3.0f, u1), early = stuckRun(3, 0.0f, 10.0f, 1.0f, u2), pulling = stuckRun(3, 0.3f, 10.0f, 3.0f, u3);
+            const int heldGear = stuckRun(3, 0.0f, 0.0f, 1.5f, u4), topGear = stuckRun(TruckTopGear(lt), 0.0f, 10.0f, 3.0f, u5);
+            const int unarmed = stuckRun(3, 0.0f, 10.0f, 3.0f, u6, false);
+            printf("     stuck rule: up %d (%d), early %d (%d), pulling %d (%d), held %d (%d), top gear %d of %d (%d), unarmed %d (%d)\n", up, u1, early, u2, pulling, u3,
+                   heldGear, u4, topGear, TruckTopGear(lt), u5, unarmed, u6);
+            Check(up == 4 && u1 == 1 && early == 3 && pulling == 3 && u3 == 0 && heldGear == 3 && u4 == 0 && topGear == TruckTopGear(lt) && u5 == 0 && unarmed == 3 && u6 == 0,
+                  "gear tops: floored in A at the game's top (its pull at nothing, the wheels not gaining) under a wrong top, the automatic goes up one after 1.2 s; "
+                  "not sooner, not with the pull on, not within the gear's hold, not in the top gear, not before the game's pull has read over 0.1 once");
+        }
+        {
+            // the drag read's reasons, one per figure, and a sphere-like wheel read by |w|
+            WheelDamp ok = {};
+            ok.ok = ok.grounded = true;
+            ok.damping = 0x3F00; // 0.5
+            ok.inv[0] = 1.0f / 40.0f, ok.inv[1] = 1.0f / 25.0f, ok.inv[2] = 1.0f / 25.0f, ok.inv[3] = 1.0f / 100.0f;
+            ok.cols[0][0] = 1.0f, ok.cols[1][1] = 1.0f, ok.cols[2][2] = 1.0f;
+            ok.angular[0] = 10.0f;
+            ok.radius = 0.5f;
+            auto why = [&](WheelDamp w1) {
+                WheelDamp ws[2] = { ok, w1 };
+                WheelDampWhy y = {};
+                const float a = WheelDampAccel(ws, 2, 5000.0f, nullptr, &y);
+                return std::make_pair(a, y);
+            };
+            WheelDamp damping = ok, radius = ok, mass = ok, axle = ok, sphere = ok;
+            damping.damping = 0x449A;  // 1232
+            radius.radius = 0.0f;
+            mass.inv[3] = 0.0f;
+            axle.inv[1] = 0.0f;        // no inverse: neither an axle nor a sphere
+            sphere.inv[0] = 1.0f / 41.2f, sphere.inv[1] = 1.0f / 41.5f, sphere.inv[2] = 1.0f / 41.3f;
+            sphere.angular[0] = 6.0f, sphere.angular[1] = 8.0f; // |w| 10
+            const auto good = why(ok), d = why(damping), r = why(radius), m = why(mass), x = why(axle), s = why(sphere);
+            const float sphereA = (40.0f * 0.5f * 10.0f / 0.5f + 41.3333f * 0.5f * 10.0f / 0.5f) / 5200.0f;
+            Check(isfinite(good.first) && good.second.what == kDampOk && d.second.what == kDampDamping && d.second.wheel == 1 && Near(d.second.value, 1232.0f, 1.0f) &&
+                      r.second.what == kDampRadius && m.second.what == kDampMass && m.second.wheel == 1 && x.second.what == kDampAxle && Near(x.second.inertia[0], 40.0f, 0.01f) &&
+                      isfinite(s.first) && Near(s.first, sphereA, 0.002f) && !isfinite(d.first) && !isfinite(r.first) && !isfinite(m.first) && !isfinite(x.first),
+                  "drag read: the failed figure named, one reason per figure (damping 1232, radius, mass, no axle with its inertias); a sphere-like wheel read by its mean inertia and |w|");
+            // when it is logged: the first good read, a failure, a changed reason 10 s on, nothing more in between, the
+            // first good read after a failure with its seconds; a new truck starts over
+            DampSay say = {};
+            const WheelDampWhy fine = { kDampOk, -1, 0.0f, {} }, bad3 = { kDampDamping, 3, 1232.0f, {} }, bad2 = { kDampRadius, 2, 0.0f, {} };
+            const int a1 = DampSayStep(say, 1, bad3, 100.0f), a2 = DampSayStep(say, 1, bad3, 101.0f), a3 = DampSayStep(say, 1, bad2, 105.0f),
+                      a4 = DampSayStep(say, 1, bad2, 111.0f), a5 = DampSayStep(say, 1, fine, 115.0f);
+            const float took = 121.5f - say.failSince; // as the log takes it, before the step
+            const int a6 = DampSayStep(say, 1, fine, 121.5f), a7 = DampSayStep(say, 1, fine, 140.0f), a8 = DampSayStep(say, 2, fine, 141.0f);
+            Check(a1 == kDampSayFail && a2 == kDampSayNone && a3 == kDampSayNone && a4 == kDampSayFail && a5 == kDampSayNone && a6 == kDampSayBack && Near(took, 21.5f, 0.01f) &&
+                      a7 == kDampSayNone && a8 == kDampSayGood,
+                  "drag read: logged at a failure, again when its reason changes (10 s apart at least), and at the first good read after with the seconds it took; a new truck starts over");
         }
         // the probe texts carry what they say they do
         {
