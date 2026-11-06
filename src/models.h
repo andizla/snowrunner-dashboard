@@ -1389,16 +1389,17 @@ struct GearboxModel
     float topRef, topFor; // the wheels' speed the stuck rule (kTopStuckFor) measures the gain from, and its seconds so far
     int topUps, topUpFrom; // shifts up the stuck rule made, and the gear the last came from (for the log)
     bool pullSeen;     // the game's pull (action + 0xB4) has read over kTopPullSeen since the model began: the stuck rule is armed
-    float taperFor;    // seconds floored at kTaperShare of the gear's top or more, the game still pulling, not gaining (the taper rule)
-    bool taperWatching; // a shift up by the taper rule is watched kTaperWatch
+    float taperFor;    // seconds gathered floored at kTaperShare of the gear's top or more, the game still pulling (the taper rule)
+    float taperSum;    // the trend over them, rad/s each second times seconds: the second's mean is taperSum / taperFor
+    bool taperWatching; // a shift up by the taper rule is watched from kTaperWatchFrom to kTaperWatchTo
     float taperWatch;  // seconds of that watch so far
     int taperFrom;     // the gear it came from
-    float taperBy0, taperTrend0; // the truck's speed (rad/s of the wheels) at the shift, and how fast it changed in the gear it left
+    float taperBy1, taperTrend0; // the truck's speed (rad/s of the wheels) kTaperWatchFrom after the shift, and the gear it left's mean trend
     float taperShare, taperPull; // the wheels' share of the gear's top and the game's pull at the shift (for the log)
-    float taperRate;   // rad/s each second the new gear made over the watch (for the log)
+    float taperRate;   // rad/s each second the new gear made from kTaperWatchFrom to kTaperWatchTo (for the log)
     int taperBlockGear; // the gear a shift up taken back holds the rule off from, while taperBlock lasts
     float taperBlock;
-    int taperUps, taperBacks; // shifts up the taper rule made and took back
+    int taperUps, taperBacks, taperWatches; // shifts up the taper rule made, took back, and watched to the end
 };
 
 // The hunt guard let go: a lift of the foot, a stop, a kickdown, or the gears taken anew.
@@ -2019,11 +2020,14 @@ static const float kTopPullSeen = 0.1f;     // the game's pull the stuck rule mu
 // The taper rule (BRIEF_auto_stuck_under_taper.md F1, the Reviewer's point 11): the game's own pull tapers off from
 // about 0.7 of a gear's top, so a truck a few percent heavier settles under the point up there and never shifts up.
 // In A, floored, the game still pulling (+ 0xB4 over kPlateauPull, the stuck rule's below it), the wheels at kTaperShare
-// of the gear's top or more and not gaining (the smoothed trend at 0 or under) for kTaperFor, past the gear's hold,
-// with the next gear over its own point down: up one. Then kTaperWatch: where the new gear lost speed faster than the
-// old one did, back down, and no shift up by this rule from that gear for kTaperBlock (a lift of the foot or a stop
-// lets it go). No model of the game's pull: on some trucks + 0xB4 does not follow GamePull.
-static const float kTaperShare = 0.65f, kTaperFor = 1.0f, kTaperWatch = 2.0f, kTaperBlock = 30.0f;
+// of the gear's top or more: the smoothed trend is gathered over kTaperFor whatever its sign, and where that second's
+// mean is at 0 or under (not gaining), past the gear's hold, with the next gear over its own point down: up one; else
+// a new second. A single pass's trend swings from -2.4 to +1.4 rad/s each second on such a road (the drive of
+// 2026-11-06 23:54), so neither the arming nor the comparison goes by one. Then the new gear is measured from
+// kTaperWatchFrom to kTaperWatchTo after the shift, past the shift's pause and the game's own gap: where it lost speed
+// faster than the old gear's mean, back down, and no shift up by this rule from that gear for kTaperBlock (a lift of
+// the foot or a stop lets it go). No model of the game's pull: on some trucks + 0xB4 does not follow GamePull.
+static const float kTaperShare = 0.65f, kTaperFor = 1.0f, kTaperWatchFrom = 1.0f, kTaperWatchTo = 3.0f, kTaperBlock = 30.0f;
 
 // The engine speed in rpm a light foot does not shift up under (EngineHand::least): kLightPeak of where the curve first
 // reaches kLightReach of its most, at the most kLightMost of the red zone (a truck's class curve 880 rpm, a scout's 2370).
@@ -2430,22 +2434,38 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     bool taperBack = false;
     if (m.taperWatching)
     {
+        const float was = m.taperWatch;
         m.taperWatch += dt;
         if (footOff || standing || byHand || m.gear != m.taperFrom + 1) m.taperWatching = false;
-        else if (m.taperWatch >= kTaperWatch)
+        else if (was < kTaperWatchFrom && m.taperWatch >= kTaperWatchFrom) m.taperBy1 = m.by;
+        else if (m.taperWatch >= kTaperWatchTo)
         {
-            m.taperRate = (m.by - m.taperBy0) / m.taperWatch;
+            m.taperRate = (m.by - m.taperBy1) / (m.taperWatch - kTaperWatchFrom);
             taperBack = m.taperRate < m.taperTrend0;
             m.taperWatching = false;
+            m.taperWatches++;
         }
     }
     const float gearTop = TruckGearTop(t, m.gear);
     const float share = gearTop > 0.0f ? by / gearTop : 0.0f;
     const bool taperCase = !byHand && !footOff && m.gear < top && t.powerFactor >= 0.99f && pedalNow >= kPlateauPedal && isfinite(t.actionB4) &&
-                           t.actionB4 > kPlateauPull && isfinite(share) && share >= kTaperShare && m.trend <= 0.0f;
-    m.taperFor = taperCase ? m.taperFor + dt : 0.0f;
+                           t.actionB4 > kPlateauPull && isfinite(share) && share >= kTaperShare && isfinite(m.trend);
+    bool taperSecond = false;
+    float taperMean = 0.0f;
+    if (!taperCase) m.taperFor = m.taperSum = 0.0f;
+    else
+    {
+        m.taperFor += dt;
+        m.taperSum += m.trend * dt;
+        if (m.taperFor >= kTaperFor)
+        {
+            taperSecond = true;
+            taperMean = m.taperSum / m.taperFor;
+            m.taperFor = m.taperSum = 0.0f; // a new second, whatever this one gave
+        }
+    }
     const float holdTime = hand.hold > 0.0f ? hand.hold : kEngineGearHold;
-    const bool taperUp = taperCase && m.taperFor >= kTaperFor && !held && !kept && m.moving >= holdTime && m.pause <= 0.0f && !m.taperWatching &&
+    const bool taperUp = taperSecond && taperMean <= 0.0f && !held && !kept && m.moving >= holdTime && m.pause <= 0.0f && !m.taperWatching &&
                          !(m.taperBlock > 0.0f && m.taperBlockGear == m.gear) && GearboxInput(t, k, m.gear + 1, by) > GearboxDownPoint(t, k, m.gear + 1, feel, hand);
     if (m.gear != least && standing)
         to = least;
@@ -2477,12 +2497,12 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     }
     else if (taperUp)
     {
-        to = m.gear + 1; // held under the game's taper, not gaining: up one, watched kTaperWatch
+        to = m.gear + 1; // held under the game's taper, not gaining: up one, watched from kTaperWatchFrom to kTaperWatchTo
         m.taperWatching = true;
         m.taperWatch = 0.0f;
         m.taperFrom = m.gear;
-        m.taperBy0 = m.by;
-        m.taperTrend0 = m.trend;
+        m.taperBy1 = m.by;
+        m.taperTrend0 = taperMean;
         m.taperShare = share;
         m.taperPull = t.actionB4;
         m.taperUps++;

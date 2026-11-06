@@ -5161,18 +5161,21 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                                  ? w.engine.torque / w.mass * (w.profile.torque > 0.0f ? w.profile.torque : 1.0f) : 0.0f;
         const EngineHand hand{ w.hand.on, &curve, scale.redline > 0.0f ? scale.max / scale.redline : 1.0f, s.engineShare / 100.0f, launch,
                                GearHoldOf(w, autoClass), EngineLightFloor(curve, scale.redline), s.input, TorqueRoof(autoClass) };
-        const int huntsWere = w.gearbox.hunts, topUpsWere = w.gearbox.topUps, taperUpsWere = w.gearbox.taperUps, taperBacksWere = w.gearbox.taperBacks;
+        const int huntsWere = w.gearbox.hunts, topUpsWere = w.gearbox.topUps, taperUpsWere = w.gearbox.taperUps, taperWatchesWere = w.gearbox.taperWatches;
         GearboxModelPass(w.gearbox, w.take.driving, w.pos, raw, scale, foot, w.power.power, dt, hand);
         if (w.take.driving && !GearboxManual(w))
         {
-            // the taper rule (BRIEF_auto_stuck_under_taper.md F1): each shift up and each one taken back
+            // the taper rule (BRIEF_auto_stuck_under_taper.md F1): each shift up, and each watch's end with both rates
+            // compared (the review's N2)
             const GearboxModel &g = w.gearbox;
             if (g.taperUps != taperUpsWere)
-                Log(L"gearbox: floored in gear %d at %.2f of its top, the game's pull %.2f, not gaining (%.2f rad/s each second) for %.0f s: up to %d, watched %.0f s",
-                    g.taperFrom, g.taperShare, g.taperPull, g.taperTrend0, kTaperFor, g.taperFrom + 1, kTaperWatch);
-            if (g.taperBacks != taperBacksWere)
-                Log(L"gearbox: gear %d lost speed faster (%.2f rad/s each second against %.2f in gear %d): back to %d, that shift up held off %.0f s", g.taperFrom + 1,
-                    g.taperRate, g.taperTrend0, g.taperFrom, g.taperFrom, kTaperBlock);
+                Log(L"gearbox: floored in gear %d at %.2f of its top, the game's pull %.2f, not gaining (%.2f rad/s each second, the mean over %.0f s): up to %d, "
+                    L"watched from %.0f s to %.0f s",
+                    g.taperFrom, g.taperShare, g.taperPull, g.taperTrend0, kTaperFor, g.taperFrom + 1, kTaperWatchFrom, kTaperWatchTo);
+            if (g.taperWatches != taperWatchesWere)
+                Log(L"gearbox: gear %d made %.2f rad/s each second from %.0f s to %.0f s after the shift, against gear %d's %.2f over its last second: %s", g.taperFrom + 1,
+                    g.taperRate, kTaperWatchFrom, kTaperWatchTo, g.taperFrom, g.taperTrend0,
+                    g.taperRate < g.taperTrend0 ? L"lost speed faster, back down, that shift up held off 30 s" : L"kept");
         }
         if (w.gearbox.topUps != topUpsWere && w.take.driving && !GearboxManual(w))
         {

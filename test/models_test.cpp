@@ -5313,66 +5313,85 @@ int main(int argc, char **argv)
             (void)pulling;
         }
         {
-            // the taper rule (BRIEF_auto_stuck_under_taper.md F1, the Reviewer's point 11): in A, floored in 3rd at 0.80 of
-            // its top, the game pulling 0.58, not gaining: up one after a second, past the gear's hold. Holding its speed
-            // in 4th it stays there (no hunting); losing speed faster in 4th (a grade) it comes back after 2 s and is
-            // held off 30 s; gaining, at part throttle, within the hold after a shift down or under 0.65 of the top: none.
-            // At 0.74 this fixture's 4th lands at 2,204 rpm, under its floored point down (2,292): it stays, as it would
-            // come straight back down (the drive's truck had 1,731 there, so it goes up)
+            // the taper rule (BRIEF_auto_stuck_under_taper.md F1, the Reviewer's point 11 and R1): in A, floored in 3rd at
+            // 0.80 of its top, the game pulling 0.58: the trend gathered over a second whatever its sign, up one where its
+            // mean is at 0 or under, past the gear's hold. The new gear measured from 1 s to 3 s after the shift: holding its
+            // speed it stays (no hunting), and the shift's own loss in the first second does not count; losing faster than
+            // the old gear's mean (a grade) it comes back and is held off 30 s. None with a mean over 0, at part throttle,
+            // within the hold after a shift down, under 0.65 of the top, or where the next gear lands under its point down
+            // (at 0.74 this fixture's 4th lands at 2,204 rpm, under its floored 2,292; the drive's truck had 1,731)
             const EngineHand h = handOf(kInputPad);
             // the drive's engine: 2,800 rpm at 0.74 of 3rd's top, so its red zone near 3,800 (the scale the gears go by)
             GaugeScale tq = tk;
             tq.idle = 700.0f;
             tq.redline = 3800.0f;
             tq.max = 4200.0f;
-            // rise: rad/s each second in 3rd; fall: rad/s each second lost in 4th
-            auto taperRun = [&](float share, float pedal, float rise, float fall, float moving, bool holdUp, float seconds, int &ups, int &backs, int &most) {
+            struct Run { int gear, ups, backs, watches, most; float trend0, rate; };
+            // in3(at): rad/s each second in 3rd at the run's time; in4(since): in 4th since the shift
+            auto taperRun = [&](float share, float pedal, float moving, bool holdUp, float seconds, auto in3, auto in4) {
                 TruckRaw st = lt;
                 st.flags = 3;
                 st.throttle = -pedal;
                 st.actionB4 = 0.58f;
-                float spin = share * TruckGearTop(st, 3);
+                float spin = share * TruckGearTop(st, 3), since = 0.0f;
                 GearboxModel b = boxIn(3, spin, pedal);
                 b.moving = moving;
                 b.holdUp = holdUp;
                 b.pullSeen = true;
-                most = 3;
+                Run r = { 3, 0, 0, 0, 3, 0.0f, 0.0f };
                 for (float at = 0.0f; at < seconds; at += kDt)
                 {
-                    spin += (b.gear == 4 ? -fall : b.gear == 3 ? rise : 0.0f) * kDt;
+                    spin += (b.gear == 4 ? in4(since) : b.gear == 3 ? in3(at) : 0.0f) * kDt;
+                    since = b.gear == 4 ? since + kDt : 0.0f;
                     st.gear = st.gearEngaged = b.gear;
                     for (int i = 0; i < st.wheels; i++) st.spin[i] = spin;
                     st.speed = spin / 2.0f;
                     GearboxStep(b, st, tq, pedal, 1.0f, kDt, h);
-                    if (b.gear > most) most = b.gear;
+                    if (b.gear > r.most) r.most = b.gear;
                 }
-                ups = b.taperUps;
-                backs = b.taperBacks;
-                return b.gear;
+                r.gear = b.gear;
+                r.ups = b.taperUps;
+                r.backs = b.taperBacks;
+                r.watches = b.taperWatches;
+                r.trend0 = b.taperTrend0;
+                r.rate = b.taperRate;
+                return r;
             };
-            int u1, b1, m1, u2, b2, m2, u3, b3, m3, u4, b4, m4, u5, b5, m5, u6, b6, m6;
-            int u7, b7, m7;
-            const int holds = taperRun(0.80f, 1.0f, 0.0f, 0.0f, 10.0f, true, 12.0f, u1, b1, m1);
-            const int grade = taperRun(0.80f, 1.0f, 0.0f, 0.2f, 10.0f, true, 25.0f, u2, b2, m2);
-            const int gaining = taperRun(0.80f, 1.0f, 0.3f, 0.0f, 10.0f, true, 3.0f, u3, b3, m3);
-            const int part = taperRun(0.80f, 0.6f, 0.0f, 0.0f, 10.0f, true, 3.0f, u4, b4, m4);
-            const int afterDown = taperRun(0.80f, 1.0f, 0.0f, 0.0f, 0.0f, false, 2.0f, u5, b5, m5);
-            const int under = taperRun(0.60f, 1.0f, 0.0f, 0.0f, 10.0f, true, 3.0f, u6, b6, m6);
-            const int nextLow = taperRun(0.74f, 1.0f, 0.0f, 0.0f, 10.0f, true, 3.0f, u7, b7, m7);
-            const float t3 = TruckGearTop(lt, 3), t4 = TruckGearTop(lt, 4);
-            printf("     taper rule: 3rd's top %.2f, 4th's %.2f, 4th at %.3f of its top after; holds %d (ups %d, backs %d, most %d), grade %d (%d, %d, %d), "
-                   "gaining %d (%d), part %d (%d), after a shift down %d (%d), under 0.65 %d (%d); 4th's input %.0f rpm, its point down %.0f\n", t3, t4, 0.74f * t3 / t4,
-                   holds, u1, b1, m1, grade, u2, b2, m2, gaining, u3, part, u4, afterDown, u5, under, u6, GearboxInput(lt, tq, 4, 0.74f * t3),
-                   GearboxDownPoint(lt, tq, 4, 1.0f, h));
-            Check(nextLow == 3 && u7 == 0, "taper rule: none where the next gear would land under its own point down");
-            Check(holds == 4 && u1 == 1 && b1 == 0 && m1 == 4, "taper rule: floored at 0.80 of 3rd's top, the game still pulling, not gaining: up to 4th after a second, "
-                                                               "and holding its speed there it stays in 4th (no hunting)");
-            Check(grade == 3 && u2 == 1 && b2 == 1 && m2 == 4, "taper rule: 4th losing speed faster than 3rd did (a grade): back to 3rd after 2 s, and no shift up by "
-                                                               "the rule from 3rd for 30 s");
-            (void)part;
-            Check(gaining == 3 && u3 == 0 && u4 == 0 && afterDown == 3 && u5 == 0 && under == 3 && u6 == 0,
-                  "taper rule: none while gaining, at part throttle (the light foot's own points decide there), within the gear's hold after a shift down, or "
-                  "under 0.65 of the gear's top");
+            auto flat = [](float) { return 0.0f; };
+            auto alternating = [](float at) { return fmodf(at, 1.0f) < 0.5f ? 1.0f : -1.2f; }; // a bumpy flat road: mean -0.1
+            auto gapThen = [](float since) { return since < 0.8f ? -0.6f : 0.1f; };           // the shift's own loss, then gaining a little
+            auto grade = [](float) { return -0.2f; };
+            auto plus = [](float at) { return fmodf(at, 1.0f) < 0.5f ? 1.0f : -0.9f; };       // mean +0.05
+            auto gaining = [](float) { return 0.3f; };
+            const Run holds = taperRun(0.80f, 1.0f, 10.0f, true, 12.0f, flat, flat);
+            const Run bumpy = taperRun(0.80f, 1.0f, 10.0f, true, 6.0f, alternating, flat);
+            const Run gap = taperRun(0.80f, 1.0f, 10.0f, true, 8.0f, flat, gapThen);
+            const Run climb = taperRun(0.80f, 1.0f, 10.0f, true, 30.0f, flat, grade);
+            const Run over = taperRun(0.80f, 1.0f, 10.0f, true, 4.0f, plus, flat);
+            const Run gains = taperRun(0.80f, 1.0f, 10.0f, true, 3.0f, gaining, flat);
+            const Run part = taperRun(0.80f, 0.6f, 10.0f, true, 3.0f, flat, flat);
+            const Run afterDown = taperRun(0.80f, 1.0f, 0.0f, false, 2.0f, flat, flat);
+            const Run under = taperRun(0.60f, 1.0f, 10.0f, true, 3.0f, flat, flat);
+            const Run nextLow = taperRun(0.74f, 1.0f, 10.0f, true, 3.0f, flat, flat);
+            printf("     taper rule: holds %d (ups %d, backs %d), bumpy %d (%d, mean %.2f), gap %d (%d, %d, rate %.2f), climb %d (%d, %d, most %d, rate %.2f), "
+                   "mean over 0 %d (%d), gaining %d (%d), part (%d), after a shift down %d (%d), under 0.65 %d (%d), next under its point down %d (%d)\n",
+                   holds.gear, holds.ups, holds.backs, bumpy.gear, bumpy.ups, bumpy.trend0, gap.gear, gap.ups, gap.backs, gap.rate, climb.gear, climb.ups, climb.backs,
+                   climb.most, climb.rate, over.gear, over.ups, gains.gear, gains.ups, part.ups, afterDown.gear, afterDown.ups, under.gear, under.ups, nextLow.gear,
+                   nextLow.ups);
+            Check(holds.gear == 4 && holds.ups == 1 && holds.backs == 0 && holds.watches == 1 && holds.most == 4,
+                  "taper rule: floored at 0.80 of 3rd's top, the game still pulling, not gaining over a second: up to 4th, and holding its speed there it stays "
+                  "(no hunting)");
+            Check(bumpy.ups == 1 && bumpy.most == 4 && bumpy.trend0 < 0.0f && bumpy.trend0 > -0.5f,
+                  "taper rule: the trend alternating +1 and -1.2 rad/s each second (a mean of -0.1): up, by the second's mean, not one pass");
+            Check(gap.gear == 4 && gap.ups == 1 && gap.backs == 0 && gap.watches == 1,
+                  "taper rule: the shift's own loss in the first 0.8 s, then gaining a little: kept, the watch going from 1 s to 3 s");
+            Check(climb.gear == 3 && climb.ups == 1 && climb.backs == 1 && climb.most == 4,
+                  "taper rule: 4th losing speed faster than 3rd's mean (a grade): back to 3rd at 3 s, and no shift up by the rule from 3rd for 30 s");
+            Check(over.gear == 3 && over.ups == 0, "taper rule: a second's mean of +0.05 rad/s each second: no shift");
+            Check(gains.gear == 3 && gains.ups == 0 && part.ups == 0 && afterDown.gear == 3 && afterDown.ups == 0 && under.gear == 3 && under.ups == 0 &&
+                      nextLow.gear == 3 && nextLow.ups == 0,
+                  "taper rule: none while gaining, at part throttle (the light foot's own points decide there), within the gear's hold after a shift down, "
+                  "under 0.65 of the gear's top, or where the next gear would land under its own point down");
         }
         {
             // the drag read's reasons, one per figure, and a sphere-like wheel read by |w|
