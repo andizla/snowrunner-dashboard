@@ -1096,7 +1096,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; shows, less with cold oil and without boost, and doubled by the converter at its stall (Gearbox=1), in place\n"
                         L"; of the game's own, which falls away toward each gear's top. The mod writes the game's torque factor for it.\n"
                         L"; EngineShare: how much of the mod's engine the game gets, 0 to 100 percent (50: half way between the two).\n"
-                        L"; RoadLoad=1 (with Powertrain, on by default): the air's drag taken off, once each gear's pull is learned floored on flat ground.\n"
+                        L"; RoadLoad=1 (with Powertrain, on by default): the air's drag taken off, once each gear's pull is learned floored on flat ground with the wheels' drag left out.\n"
                         L";   RoadCdA: the drag's area in m2, 0 by the truck's mass (1.1 under 4 t, 3.5 under 10 t, else 6); a truck's file may set it.\n"
                         L";   Base1.<engine>, Base2.<engine> ... in a truck's file: each gear's acceleration at the game's own pull, floored, learned.\n"
                         L"; Creep=1: an idling truck on an automatic moves to walking pace; the brake holds it. For now only with an automatic, not in a gear picked by hand.\n"

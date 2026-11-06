@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Air drag learns each gear's pull with the wheels' own drag left out, so Rolling drag and a flat tire don't make it stronger. Each gear's figure learned before this is dropped once and learned again (`BaseDamp.<engine>=1` in the truck's file marks the new ones).
 - The suspension settings can be kept per truck: tick Own settings in the Suspension tab. A truck without its own uses the default. It ticks itself when you change a setting there while you drive. Unticked, the truck's set is kept for later, and changes meanwhile edit the default. Make these the default copies the truck's set to every truck without its own. Under the box, For picks This truck only (this one truck, by the game's id of it) or every truck of its kind; the tab says which is in force. When the game rebuilds the truck it keeps its set. Every truck of its kind keeps the truck's own set aside when the kind has one, and This truck only brings it back. A truck taken out of the warehouse starts on its kind's settings.
 - The gear keys and the other bindings wait while the game's function menu is up, so picking Recover with Pad A no longer shifts down.
 - The crash line in `Gauges.log` also names an invalid parameter in the C runtime and abort, which can end the game at once (0xC0000409).

@@ -382,9 +382,17 @@ surface, and the game has its own rolling resistance. <i>a</i><sub>base</sub>(<i
 (<code>BaseLearnStep</code>): floored (0.9), the grade by the truck's path within 3° and taken out (<i>a</i> + <i>g</i> sin θ; the path's rise
 over its way in the last second, <code>GradeStep</code>, as the chassis squats nose up under power), the grip known and the wheels not
 spinning, no brake, the wheels at 0.3 to 0.8 of the gear's top (past it a top's error grows: 10 % at 0.8, 20 % at 0.9), not within 0.5 s
-of a shift's end (its stage idle again); each pass gives <i>a</i> / (factor · <i>p</i>), and the mean is weighted by the pull,
-Σ <i>a</i>/(factor · <i>p</i>) over Σ GamePull(<i>x</i>), with <i>a</i> the truck's acceleration over
-the ground smoothed over 0.2 s and the factor as the game has it (the load is in it already, and the game has no drag of its own), and
+of a shift's end (its stage idle again); each pass gives (<i>a</i> + <i>a</i><sub>damp</sub>) / (factor · <i>p</i>), and the mean is weighted by the pull,
+Σ (<i>a</i> + <i>a</i><sub>damp</sub>)/(factor · <i>p</i>) over Σ GamePull(<i>x</i>), with <i>a</i> the truck's acceleration over
+the ground smoothed over 0.2 s and the factor as the game has it (the load is in it already). <i>a</i><sub>damp</sub> is the wheels' own
+drag added back (<code>TruckWheelDamp</code>): Σ <i>I</i> · <i>c</i> · |ω| / <i>r</i> over every wheel on the ground, driven or not, over the
+mass the physics moves (model + 0x784 and each wheel body's 1/<i>w</i> at body + 0x22C), with <i>c</i> the body's angular damping
+(body + 0x216, a Havok half), <i>I</i> and ω about the axle (body + 0x220 and + 0x240 by the columns at + 0x170), <i>r</i> at wheel + 0x94,
+smoothed by the same 0.2 s filter. The game's stock damping, a flat tire's and the tire mod's Rolling drag all slow the truck that way.
+A wheel off the ground (wheel + 0x1A4) is left out; a wheel not read, or fewer wheels than the vehicle's models, is no pass. Figures
+learned before have no <code>BaseDamp.&lt;engine&gt;=1</code> beside them: the read deletes them and writes the mark in one step. Once
+per truck the log says "road load: the wheels' drag read from" so many wheels, with the mass taken,
+or "road load: the wheels' drag not read (...)" with why; at each learned gear it gives the raw figure, the mean <i>a</i><sub>damp</sub> and the kept one; and
 2 s of them, gathered per gear over visits (a visit under 0.3 s counts for nothing; the sums start over with another truck or engine),
 make the mean, kept as <code>Base1.&lt;engine&gt;</code>, <code>Base2.&lt;engine&gt;</code> ... in the truck's file (it is the
 truck's, and an engine upgrade starts over) and followed at 0.3 a time when it moves more than 5 %. The game multiplies the torque as a gear's top is lower, so
