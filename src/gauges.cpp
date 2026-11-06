@@ -1912,23 +1912,35 @@ static bool SuspAgainTakeOver(const char *oldId, uint64_t oldVehicle, const char
 
 static const ULONGLONG kSuspTakeOverMs = 20000; // the take-over's window: the same kind back under a new id within 20 s
 
-// The take-over's watch (step 2): the truck that went last with none driven since, and when. At each change of the
-// driven truck's kind (or to none), SuspTrack says whether the truck now driven takes over the one that went: the same
-// kind under another id within 20 s, no other truck driven between. oldId gets the id that went.
-struct SuspTracker { TruckIdentity gone; ULONGLONG goneAt; };
-static bool SuspTrack(SuspTracker &t, const TruckIdentity &was, const TruckIdentity &now, ULONGLONG at, char (&oldId)[40])
+// The take-over's watch (step 2): the truck that went last with none driven since, when, and the vehicle object its
+// id was last read on. At each change of the driven truck's kind (or to none), SuspTrack says whether the truck now
+// driven takes over the one that went: the same kind under another id, no other truck driven between (any truck
+// driven clears gone), and either within 20 s (a recovery builds a new vehicle) or on the same vehicle object with no
+// load between, however long the gap (a garage visit with an upgrade took 21 s, the drive of 2026-11-06 22:37).
+// wasVehicle and nowVehicle: the vehicle each id was read on; loads: how many loading screens began so far. oldId
+// gets the id that went; byVehicle, where given, says the same-vehicle rule took it (over 20 s).
+struct SuspTracker { TruckIdentity gone; ULONGLONG goneAt; uint64_t goneVehicle; unsigned goneLoads; };
+static bool SuspTrack(SuspTracker &t, const TruckIdentity &was, const TruckIdentity &now, ULONGLONG at, char (&oldId)[40], uint64_t wasVehicle = 0,
+                      uint64_t nowVehicle = 0, unsigned loads = 0, bool *byVehicle = nullptr)
 {
     oldId[0] = 0;
+    if (byVehicle) *byVehicle = false;
     if (was.key[0] && !now.key[0])
     {
         t.gone = was;
         t.goneAt = at;
+        t.goneVehicle = wasVehicle;
+        t.goneLoads = loads;
         return false;
     }
     if (!now.key[0]) return false;
-    const bool due = t.gone.key[0] && !strcmp(t.gone.key, now.key) && t.gone.id[0] && now.id[0] && strcmp(t.gone.id, now.id) && at - t.goneAt <= kSuspTakeOverMs;
+    const bool kind = t.gone.key[0] && !strcmp(t.gone.key, now.key) && t.gone.id[0] && now.id[0] && strcmp(t.gone.id, now.id);
+    const bool soon = at - t.goneAt <= kSuspTakeOverMs;
+    const bool sameVehicle = t.goneVehicle && t.goneVehicle == nowVehicle && t.goneLoads == loads;
+    const bool due = kind && (soon || sameVehicle);
     if (due) strncpy_s(oldId, t.gone.id, _TRUNCATE);
-    t.gone = TruckIdentity{};
+    if (due && byVehicle) *byVehicle = !soon;
+    t = SuspTracker{};
     return due;
 }
 
@@ -3518,6 +3530,7 @@ struct TruckWatch
     char loadId[40];            // lastId as the last loading screen came up
     bool loadPending;           // a load ended and whether the same truck drives on is not decided yet (LoadTruckAfter)
     uint64_t loadEndedAt;       // when it ended
+    unsigned loads;             // loading screens begun since the start (the take-over's same-vehicle rule holds only without one between)
     OilWarning oil;             // the oil warning: on while the driven truck's oil is too hot
     int probedZone;             // where the coolant stood when the probe wrote last (TempZone)
     DamageModel damage;         // what the temperature costs the engine of the truck at modelVehicle
@@ -4887,6 +4900,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     const bool loading = world.known && world.loading;
     if (!w.loadingWas && loading)
     {
+        w.loads++;
         memcpy(w.loadId, w.lastId, sizeof w.loadId);
         w.loadPending = false;
     }
@@ -6713,7 +6727,8 @@ static DWORD WINAPI Run(void *)
             // one's suspension over. A truck driven between, or a longer gap, is none.
             char oldId[40];
             const ULONGLONG goneAt = suspWatch.goneAt;
-            const bool takeOver = SuspTrack(suspWatch, truck, now, GetTickCount64(), oldId);
+            bool byVehicle = false;
+            const bool takeOver = SuspTrack(suspWatch, truck, now, GetTickCount64(), oldId, truckVehicle, watch.idVehicle, watch.loads, &byVehicle);
             truck = now;
             truckVehicle = watch.idVehicle;
             int taken = 0;
@@ -6735,8 +6750,8 @@ static DWORD WINAPI Run(void *)
                     kClassWords[autoClass], set.own ? L", its scales'" : watch.mass > 0.0f ? L", its weight's" : L", the plain scales' (its weight not read)",
                     TorqueRoof(autoClass));
             if (taken)
-                Log(L"suspension: the take-over: %S under its new id %S (vehicle %p) takes over %s of %S (back %.0f s after it went)", truck.key, truck.id,
-                    (void *)truckVehicle, TakenWords(taken), oldId, (GetTickCount64() - goneAt) / 1000.0);
+                Log(L"suspension: the take-over: %S under its new id %S (vehicle %p) takes over %s of %S (back %.0f s after it went%s)", truck.key, truck.id,
+                    (void *)truckVehicle, TakenWords(taken), oldId, (GetTickCount64() - goneAt) / 1000.0, byVehicle ? L", on the same vehicle" : L"");
             if (truck.key[0]) SuspLevelLog(set, truck.id[0] && !set.truckOwn && !set.truckKept && !taken && !takeOver);
         }
         else if (strcmp(now.id, truck.id))
@@ -7809,6 +7824,38 @@ int wmain(int argc, wchar_t **argv)
                 SettingsFor(su, kind, id3);
                 Check(viaB && late && same && direct && notOver && su.s.springScale == 0.75f,
                       "suspension: no take-over after a switch to another truck and back, a gap over 20 s, the same id back, or onto an id with a set of its own");
+                // the same vehicle object back under a new id is the same truck, however long the gap (a garage visit took
+                // 21 s, the drive of 2026-11-06 22:37); another vehicle only within 20 s; the same pointer with another
+                // kind, another truck driven between, or a load between is none; and an id with its own set keeps it
+                {
+                    const uint64_t va = 0x1000, vb = 0x2000;
+                    auto back = [&](uint64_t goneOn, const TruckIdentity &who, uint64_t on, ULONGLONG after, unsigned loadsThen, bool *byVehicle) {
+                        SuspTracker k = {};
+                        SuspTrack(k, a1, none, 1000, gone, goneOn, 0, 0);
+                        return SuspTrack(k, none, who, 1000 + after, gone, 0, on, loadsThen, byVehicle);
+                    };
+                    bool by21 = false, by120 = false, by600 = false, bySoon = true;
+                    const bool same21 = back(va, a2, va, 21000, 0, &by21) && by21 && !strcmp(gone, id1);
+                    const bool same120 = back(va, a2, va, 120000, 0, &by120) && by120;
+                    const bool same600 = back(va, a2, va, 600000, 0, &by600) && by600;
+                    const bool soonOther = back(va, a2, vb, 5000, 0, &bySoon) && !bySoon;
+                    const bool other21 = !back(va, a2, vb, 21000, 0, nullptr);
+                    const bool kindOther = !back(va, b1, va, 21000, 0, nullptr);
+                    const bool loaded = !back(va, a2, va, 21000, 1, nullptr) && back(va, a2, va, 5000, 1, nullptr);
+                    const bool noVehicle = !back(0, a2, 0, 21000, 0, nullptr);
+                    SuspTracker k = {};
+                    SuspTrack(k, a1, none, 0, gone, va, 0, 0);
+                    SuspTrack(k, none, b1, 2000, gone, 0, vb, 0);
+                    SuspTrack(k, b1, none, 3000, gone, vb, 0, 0);
+                    const bool between = !SuspTrack(k, none, a2, 40000, gone, 0, va, 0);
+                    // the same pointer and kind, the new id already holding a set of its own: due, but nothing copied
+                    const bool dueOwn = back(va, a3, va, 30000, 0, nullptr);
+                    const bool ownKept = dueOwn && !TruckSuspTakeOver(kind, gone, id3);
+                    SettingsFor(su, kind, id3);
+                    Check(same21 && same120 && same600 && soonOther && other21 && kindOther && loaded && noVehicle && between && ownKept && su.s.springScale == 0.75f,
+                          "suspension: the take-over on the same vehicle object after 21 s, 120 s and 10 min; another vehicle only within 20 s; none for the same "
+                          "pointer with another kind, another truck between or a load between; an id with a set of its own keeps it on the same pointer");
+                }
                 // while driven, a new id (the game made the truck anew under the driver) takes the set over
                 SettingsFor(su, kind, id1);
                 const char *id4 = "{44444444-4444-4444-4444-444444444444}";

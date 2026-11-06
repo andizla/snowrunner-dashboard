@@ -274,8 +274,9 @@ file in <code>Gauges\\trucks</code>, beside its scales, with <code>Own=0</code> 
 <p><b>One truck or every truck of its kind.</b> Under the box, <b>For</b> picks <b>This truck only</b> or <b>Every</b> truck of
 its kind, and the line under it says which is in force: this truck, every truck of the kind, or the default. One truck's set
 goes in a <code>[Suspension:&lt;id&gt;]</code> section of the kind's file, by the game's own id of that truck, and wins over the
-kind's. When the game rebuilds the truck it gives it another id: when the same kind comes back within 20 seconds with no
-other truck driven between, or the new id comes on the same truck while you drive, the new id takes the set over, and the log
+kind's. When the game rebuilds the truck it gives it another id: when the same kind comes back with no other truck driven
+between, within 20 seconds or on the same truck with no loading screen between (a visit to the garage, however long), or
+the new id comes on the same truck while you drive, the new id takes the set over, and the log
 says so. The old section is marked <code>TakenBy</code> and <code>TakenAt</code>, and only the newest 10 marked sections of a file are kept. A truck taken out of the
 warehouse gets a new id and starts on its kind's settings; pick This truck only again for its own. Unticking the box at the
 truck's level keeps its set and puts the kind's in force; This truck only brings it back. Every with no set for the kind
