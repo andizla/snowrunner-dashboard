@@ -1058,8 +1058,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; toggles them). Both move the attach point and stop on a truck whose game moves it. SuspDisplay=1 draws each wheel's travel. All tests, off by default.\n"
                         L"; AirSuspension=1 holds each wheel at its rest place of the first standstill, cargo or not (3 s to settle, under 10 km/h); AirHorizon=1 levels the body\n"
                         L"; to the horizon instead (about 7 degrees at most). BindRideUp, BindRideDown move it 2 cm under 20 km/h.\n"
-                        L"; Only the ends ticked Air on the Suspension tab follow them (AirAxleMask in [Suspension] of the truck's file: 1 front, 2 rear, 3 both).\n"
-                        L"; Not ticked yet: AirAxles=all, rear (every axle but the front one), front or none in [Truck] of its file, else the mod's table, else none. AirSync=1 shows the height's slider.\n"
+                        L"; Only the ends ticked Air follow them (AirAxleMask in the truck's [Suspension]: 1 front, 2 rear, 3 both); unticked, AirAxles=all, rear, front or none in [Truck], else the mod's table, else none. AirSync=1 shows the height's slider.\n"
                         L"; DamperCurve 0 linear, 1 digressive, 2 progressive; LowCompression, HighCompression, LowRebound, HighRebound: the damping\n"
                         L"; under and over DamperKnee (m/s, 0.02 to 0.5), rising and falling, 0.25 to 4 (a test; 1 and linear = the truck's own).\n"
                         L"; BumpStops=1: force (BumpForce, 1 to 6, the spring's at the end times it) and damping (BumpDamping, 1 to 4) over the last BumpZone m (0.03 to 0.2) of the\n"
@@ -6945,9 +6944,9 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.rollWarnDeg == b.rollWarnDeg && a.rollDangerDeg == b.rollDangerDeg && a.pitchDangerDeg == b.pitchDangerDeg &&
            a.warmUpMinutes == b.warmUpMinutes && a.overheatMinutes == b.overheatMinutes && a.coolDownMinutes == b.coolDownMinutes && a.ambientC == b.ambientC &&
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
-           a.springScale == b.springScale && a.dampingScale == b.dampingScale && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange && a.airSync == b.airSync &&
+           a.springScale == b.springScale && a.dampingScale == b.dampingScale && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
-           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual;
+           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync;
 }
 
 static int g_failed = 0;
@@ -7096,7 +7095,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 129, "ini: the help text survives a write (129 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 128, "ini: the help text survives a write (128 comment lines)");
     // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
     {
         char none[32] = "x", tab[32] = {}, kept[32] = {};
@@ -7732,6 +7731,48 @@ int wmain(int argc, wchar_t **argv)
                               back.frameFlex == 1.0f && back.twistRange == 1.0f,
                           "suspension: FrameFlex and TwistRange are kept at the kind's level and the truck's, and a section without them reads 1");
                 }
+                // the take-over while driven (review F1): only on the vehicle the old id was taken with
+                Check(SuspAgainTakeOver(id1, 0x1000, id2, 0x1000) && !SuspAgainTakeOver(id1, 0x1000, id2, 0x2000) && !SuspAgainTakeOver(id1, 0, id2, 0) &&
+                          !SuspAgainTakeOver(id1, 0x1000, id1, 0x1000) && !SuspAgainTakeOver("", 0x1000, id2, 0x1000),
+                      "suspension: a new id while driven is a take-over on the same vehicle only; a new id on a new vehicle is another truck");
+                // the take-over mark (review N1): written on the old section, cleared when the old id is driven again,
+                // the marked sections beyond the newest 10 dropped at a save, an unmarked one kept
+                {
+                    const std::wstring kf = truckFile(kind);
+                    DeleteFileW(kf.c_str());
+                    SettingsFor(su, kind, id1);
+                    SettingsSuspLevel(su, true);
+                    SettingsWrite(su);
+                    const bool took = TruckSuspTakeOver(kind, id1, id2, 100);
+                    wchar_t by[48] = {}, byNew[48] = {};
+                    GetPrivateProfileStringW(SuspSectionOf(id1).c_str(), L"TakenBy", L"", by, 48, kf.c_str());
+                    GetPrivateProfileStringW(SuspSectionOf(id2).c_str(), L"TakenBy", L"", byNew, 48, kf.c_str());
+                    const bool marked = took && Wide(id2) == by && !byNew[0];
+                    SettingsFor(su, kind, id1);
+                    wchar_t after[48] = {};
+                    GetPrivateProfileStringW(SuspSectionOf(id1).c_str(), L"TakenBy", L"", after, 48, kf.c_str());
+                    const bool cleared = !after[0] && SuspLevel(su) == kSuspLevelTruck;
+                    // eleven marked sections, oldest first, and id1 unmarked
+                    auto has = [&](const char *id) { wchar_t b[16] = {}; return GetPrivateProfileSectionW(SuspSectionOf(id).c_str(), b, 16, kf.c_str()) != 0; };
+                    bool tenKept = false;
+                    char ids[11][40];
+                    for (int i = 0; i < 11; i++)
+                    {
+                        sprintf_s(ids[i], "{A%07d-0000-0000-0000-000000000000}", i);
+                        WritePrivateProfileStringW(SuspSectionOf(ids[i]).c_str(), L"Own", L"1", kf.c_str());
+                        TruckSuspTakeOver(kind, ids[i], "{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}", 1000 + i);
+                        WritePrivateProfileStringW(SuspSectionOf("{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}").c_str(), nullptr, nullptr, kf.c_str());
+                        if (i == 9) tenKept = has(ids[0]);
+                    }
+                    const bool noSave = !has(ids[0]) && has(ids[1]); // the 11th take-over dropped the oldest with no save (review F3)
+                    SettingsFor(su, kind, id1);
+                    su.truckChanged = true;
+                    SettingsWrite(su);
+                    bool newest = true;
+                    for (int i = 1; i < 11; i++) newest = newest && has(ids[i]);
+                    Check(marked && cleared && tenKept && noSave && !has(ids[0]) && newest && has(id1) && has(id2),
+                          "suspension: a take-over marks the old section, the old id driven again clears it, ten marked stay, the 11th take-over drops the oldest with no save, a save keeps the newest 10 and the unmarked");
+                }
                 // the air's ticks (BRIEF_air_axle_ticks.md): AirAxleMask kept with the set at the kind's level and the
                 // truck's, never in Gauges.ini, never the last truck's; written only once ticked; Defaults takes it out;
                 // the take-over carries it; the start order's five sources
@@ -7836,48 +7877,6 @@ int wmain(int argc, wchar_t **argv)
                     Check(air_taken && air_plainNone && air_ticked,
                           "air ticks: the take-over carries the mask; the default and Gauges.ini never hold one; with a set kept and none in force a tick holds for this truck, not saved");
                     for (const char *air_k : { air_ax, air_ay, air_az, air_ak, air_table, air_plainKind }) DeleteFileW(truckFile(air_k).c_str());
-                }
-                // the take-over while driven (review F1): only on the vehicle the old id was taken with
-                Check(SuspAgainTakeOver(id1, 0x1000, id2, 0x1000) && !SuspAgainTakeOver(id1, 0x1000, id2, 0x2000) && !SuspAgainTakeOver(id1, 0, id2, 0) &&
-                          !SuspAgainTakeOver(id1, 0x1000, id1, 0x1000) && !SuspAgainTakeOver("", 0x1000, id2, 0x1000),
-                      "suspension: a new id while driven is a take-over on the same vehicle only; a new id on a new vehicle is another truck");
-                // the take-over mark (review N1): written on the old section, cleared when the old id is driven again,
-                // the marked sections beyond the newest 10 dropped at a save, an unmarked one kept
-                {
-                    const std::wstring kf = truckFile(kind);
-                    DeleteFileW(kf.c_str());
-                    SettingsFor(su, kind, id1);
-                    SettingsSuspLevel(su, true);
-                    SettingsWrite(su);
-                    const bool took = TruckSuspTakeOver(kind, id1, id2, 100);
-                    wchar_t by[48] = {}, byNew[48] = {};
-                    GetPrivateProfileStringW(SuspSectionOf(id1).c_str(), L"TakenBy", L"", by, 48, kf.c_str());
-                    GetPrivateProfileStringW(SuspSectionOf(id2).c_str(), L"TakenBy", L"", byNew, 48, kf.c_str());
-                    const bool marked = took && Wide(id2) == by && !byNew[0];
-                    SettingsFor(su, kind, id1);
-                    wchar_t after[48] = {};
-                    GetPrivateProfileStringW(SuspSectionOf(id1).c_str(), L"TakenBy", L"", after, 48, kf.c_str());
-                    const bool cleared = !after[0] && SuspLevel(su) == kSuspLevelTruck;
-                    // eleven marked sections, oldest first, and id1 unmarked
-                    auto has = [&](const char *id) { wchar_t b[16] = {}; return GetPrivateProfileSectionW(SuspSectionOf(id).c_str(), b, 16, kf.c_str()) != 0; };
-                    bool tenKept = false;
-                    char ids[11][40];
-                    for (int i = 0; i < 11; i++)
-                    {
-                        sprintf_s(ids[i], "{A%07d-0000-0000-0000-000000000000}", i);
-                        WritePrivateProfileStringW(SuspSectionOf(ids[i]).c_str(), L"Own", L"1", kf.c_str());
-                        TruckSuspTakeOver(kind, ids[i], "{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}", 1000 + i);
-                        WritePrivateProfileStringW(SuspSectionOf("{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}").c_str(), nullptr, nullptr, kf.c_str());
-                        if (i == 9) tenKept = has(ids[0]);
-                    }
-                    const bool noSave = !has(ids[0]) && has(ids[1]); // the 11th take-over dropped the oldest with no save (review F3)
-                    SettingsFor(su, kind, id1);
-                    su.truckChanged = true;
-                    SettingsWrite(su);
-                    bool newest = true;
-                    for (int i = 1; i < 11; i++) newest = newest && has(ids[i]);
-                    Check(marked && cleared && tenKept && noSave && !has(ids[0]) && newest && has(id1) && has(id2),
-                          "suspension: a take-over marks the old section, the old id driven again clears it, ten marked stay, the 11th take-over drops the oldest with no save, a save keeps the newest 10 and the unmarked");
                 }
                 DeleteFileW(truckFile(kind).c_str());
             }

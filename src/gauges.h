@@ -211,10 +211,10 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.clutchHeat = 60.0f;
     s.springScale = s.dampingScale = 1.0f;
     s.frameFlex = s.twistRange = 1.0f;
-    s.airAxleMask = -1;
     s.extraTravel = 0.0f;
     s.lowCompression = s.highCompression = s.lowRebound = s.highRebound = 1.0f;
     s.damperKnee = 0.1f;
+    s.airAxleMask = -1;
     s.bumpZone = 0.12f;
     s.bumpForce = 3.0f;
     s.bumpDamping = 2.0f;
@@ -347,10 +347,10 @@ inline void SettingsClamp(GaugeSettings &s)
     s.dampingScale = SettingsRange(s.dampingScale, kSuspScaleRange[0], kSuspScaleRange[1]);
     s.frameFlex = SettingsRange(s.frameFlex, kFrameFlexRange[0], kFrameFlexRange[1]);
     s.twistRange = SettingsRange(s.twistRange, kTwistRange[0], kTwistRange[1]);
-    s.airAxleMask = s.airAxleMask < 0 ? -1 : s.airAxleMask & 3; // its two bits (air_axles.h)
     s.extraTravel = SettingsRange(s.extraTravel, kExtraTravelRange[0], kExtraTravelRange[1]);
     s.rideFront = SettingsRange(SettingsStep(s.rideFront, kRideStep), kRideRange[0], kRideRange[1]);
     s.rideRear = SettingsRange(SettingsStep(s.rideRear, kRideStep), kRideRange[0], kRideRange[1]);
+    s.airAxleMask = s.airAxleMask < 0 ? -1 : s.airAxleMask & 3; // its two bits (air_axles.h)
     s.swayFront = SettingsRange(SettingsStep(s.swayFront, kSwayStep), kSwayRange[0], kSwayRange[1]);
     s.swayRear = SettingsRange(SettingsStep(s.swayRear, kSwayStep), kSwayRange[0], kSwayRange[1]);
     s.damperCurve = s.damperCurve < 0 || s.damperCurve >= kDamperCurves ? 0 : s.damperCurve;
@@ -511,7 +511,7 @@ struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWar
                    int pullTest, pullPhase; const char *pullWhy;
                    float ambientDay, ambientNight, hour; // the map's day and night (with mapOwn), the hour of the game's day (-1 not known)
                    SuspDisplayView susp; bool swayOff; float rideRest[2]; bool rideRestKnown; // the display's figures; the bars disconnected; each axle's rest place along its axis (front, rear; cm), from the probe
-                   bool air, airTaken, airShown; int airHeight; float airLevel[2], airSide; bool airKnown; int airAxles, airFrom; // airKnown: a truck is driven and its air mask (air_axles.h: kAirMaskFront, kAirMaskRear) and its source are read // the air suspension runs on the driven truck, its rest places taken, the height box shown; the keys' height (cm) and the levelling (front, rear, left over right; cm)
+                   bool air, airTaken, airShown; int airHeight; float airLevel[2], airSide; bool airKnown; int airAxles, airFrom; // airKnown: a truck is driven and its air axles (air_axles.h) and their source are read // the air suspension runs on the driven truck, its rest places taken, the height box shown; the keys' height (cm) and the levelling (front, rear, left over right; cm)
                    bool frameKnown, frameRigid; float frameFile[4], frameMost; // the driven truck's frame joint (frame_flex.h): its stock spring, damping and limits in degrees; or none (a rigid frame)
                    bool suspKnown; float suspFile[3][2]; // the driven truck's file: spring, damping and the compression end (m), [front, rear] (wheel 0 and the last)
                    char gearbox[96]; float gearHold; bool gearHoldOwn; // the driven truck's gearbox (its key, "" for none), the seconds each gear is held going up with the mod's engine, and whether its file sets them
