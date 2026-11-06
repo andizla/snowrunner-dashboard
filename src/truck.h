@@ -1009,13 +1009,19 @@ inline bool ShiftJobPost(ShiftJob &j, uint64_t vehicle, uint64_t action, bool sh
     return true;
 }
 
+// A posted shift lives a second at most: older, the game's thread does not deal it and the mod's thread drops it
+// (the drive of 2026-11-06 20:52, F1: a shift posted as the truck switch began was dealt 50 s later).
+static const unsigned long long kShiftJobMs = 1000;
+
 // On the game's thread, for the truck update whose first argument is first (the vehicle at + 0x20): the job dealt
-// when it is for that truck. shift: the game's ShiftGear behind the hook. True when it was dealt.
+// when it is for that truck and less than kShiftJobMs old (now: GetTickCount64, as at posting). shift: the game's
+// ShiftGear behind the hook. True when it was dealt.
 inline bool ShiftJobFrame(ShiftJob &j, EngageWatch &e, const TruckMemory &m, uint64_t first, bool (*shift)(uint64_t vehicle, int gear), long frame,
-                          unsigned long thread)
+                          unsigned long thread, unsigned long long now)
 {
     uint64_t vehicle = 0;
     if (j.state != kShiftPosted || !m.get(first + 0x20, vehicle) || vehicle != j.vehicle) return false;
+    if (now - j.postedAt > kShiftJobMs) return false;
     if (InterlockedCompareExchange(&j.state, kShiftDealing, kShiftPosted) != kShiftPosted) return false;
     j.thread = thread;
     j.frame = frame;
@@ -1050,13 +1056,64 @@ inline bool EngageFrame(EngageWatch &e, const TruckMemory &m, long frame)
     return true;
 }
 
-// On the mod's thread: a job no update took dropped, once another truck is driven, or after a second in which 30
-// updates went by (a pause or a menu holds it). True when it was.
-inline bool ShiftJobDrop(ShiftJob &j, uint64_t vehicle, unsigned long long now, long frame)
+// On the mod's thread: a job no update took dropped at once when no truck is driven (vehicle 0) or another one is,
+// and after kShiftJobMs whatever the updates did (a pause, a menu or a truck switch stops them). True when it was.
+inline bool ShiftJobDrop(ShiftJob &j, uint64_t vehicle, unsigned long long now)
 {
     if (j.state != kShiftPosted) return false;
-    if (j.vehicle == vehicle && (now - j.postedAt <= 1000 || frame - j.postedFrame <= 30)) return false;
+    if (vehicle && j.vehicle == vehicle && now - j.postedAt <= kShiftJobMs) return false;
     return InterlockedCompareExchange(&j.state, kShiftIdle, kShiftPosted) == kShiftPosted;
+}
+// Why ShiftJobDrop dropped it, for the shift's line.
+inline const wchar_t *ShiftJobDropWhy(const ShiftJob &j, uint64_t vehicle)
+{
+    if (!vehicle) return L"no truck is driven, the truck went before it was dealt";
+    if (j.vehicle != vehicle) return L"another truck is driven, the truck went before it was dealt";
+    return L"not dealt within a second (the truck's updates stopped)";
+}
+
+// ---- the words beside the game's menu fields (Probe=1; the drive of 2026-11-06 20:52, F1) ----
+// A pad A 0.8 s after the function menu closed reached the gearbox while every menu flag the mod reads was 0: the
+// truck switch's own screen. From the function menu's close until the game sets a truck (or kMenuWordsMs), the probe
+// logs the words around the flags World reads, each one that changes, so the next drive shows which word marks
+// that screen.
+static const int kMenuWordsGame = 32, kMenuWordsInput = 16, kMenuWordsControl = 16;
+static const unsigned long long kMenuWordsMs = 15000;
+struct MenuWords
+{
+    bool game, input, control;
+    uint32_t g[kMenuWordsGame];    // game + 0x00 .. + 0x80 (the menu at + 0x30, loading at + 0x4A)
+    uint32_t in[kMenuWordsInput];  // input + 0x1C0 .. + 0x200 (the menu input at + 0x1D8)
+    uint32_t c[kMenuWordsControl]; // control + 0xC0 .. + 0x100 (the function menu at + 0xD8)
+};
+inline void MenuWordsRead(const TruckMemory &m, uint64_t control, MenuWords &w)
+{
+    w = MenuWords{};
+    uint64_t game = 0, input = 0;
+    w.game = g_places.game && m.get(m.base + g_places.game, game) && m.get(game, w.g);
+    w.input = g_places.input && m.get(m.base + g_places.input, input) && m.get(input + 0x1C0, w.in);
+    w.control = control && m.get(control + 0xC0, w.c);
+}
+// One line: every word when was is nullptr, else only those that changed. How many words went in.
+inline int MenuWordsLine(const MenuWords &now, const MenuWords *was, char *out, size_t size)
+{
+    int n = 0;
+    size_t k = 0;
+    out[0] = 0;
+    auto add = [&](const char *what, int at, uint32_t a, uint32_t b, bool full) {
+        const int wrote = full ? snprintf(out + k, size - k, " %s+%X %08X", what, at, b) : snprintf(out + k, size - k, " %s+%X %08X->%08X", what, at, a, b);
+        if (wrote > 0 && (size_t)wrote < size - k) k += (size_t)wrote, n++;
+    };
+    auto block = [&](const char *what, bool known, bool knownWas, int from, const uint32_t *v, const uint32_t *vWas, int count) {
+        if (!known) return;
+        for (int i = 0; i < count; i++)
+            if (!was || !knownWas) add(what, from + 4 * i, 0, v[i], true);
+            else if (v[i] != vWas[i]) add(what, from + 4 * i, vWas[i], v[i], false);
+    };
+    block("game", now.game, was && was->game, 0, now.g, was ? was->g : nullptr, kMenuWordsGame);
+    block("input", now.input, was && was->input, 0x1C0, now.in, was ? was->in : nullptr, kMenuWordsInput);
+    block("control", now.control, was && was->control, 0xC0, now.c, was ? was->c : nullptr, kMenuWordsControl);
+    return n;
 }
 
 // The log's lines as a truck is found or none is driven any more: how many, into lines.

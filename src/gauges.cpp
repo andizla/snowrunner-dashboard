@@ -3330,7 +3330,7 @@ static void OnTruckFrame(void *first)
 {
     const TruckMemory m = { PeekGame, g_base, PokeGame };
     const long frame = TruckUpdateFrames();
-    if (g_shiftJob.state == kShiftPosted) ShiftJobFrame(g_shiftJob, g_engage, m, (uint64_t)first, ShiftOnGame, frame, GetCurrentThreadId());
+    if (g_shiftJob.state == kShiftPosted) ShiftJobFrame(g_shiftJob, g_engage, m, (uint64_t)first, ShiftOnGame, frame, GetCurrentThreadId(), GetTickCount64());
     EngageFrame(g_engage, m, frame);
     if (g_stallJob.state != kStallJobPosted) return;
     StallJobFrame(g_stallJob, m, (uint64_t)first, g_damageUpdate);
@@ -4934,6 +4934,13 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         w.creeping = false;
         w.creep = CreepModel{};
         w.creepStall = false;
+        // a shift posted for the truck that went is dropped now, not dealt when its updates come back (the drive of
+        // 2026-11-06 20:52, F1)
+        if (ShiftJobDrop(g_shiftJob, 0, now) && g_shiftJob.shift)
+        {
+            Log(L"shift %u: %d to %d dropped: %s", g_shiftJob.number, g_shiftJob.from, g_shiftJob.gear, ShiftJobDropWhy(g_shiftJob, 0));
+            w.pos.lastSet = INT_MIN;
+        }
         return false;
     }
     // which truck this is (TruckWhoStep). While another truck than the one taken is read, the models wait: on the
@@ -5318,9 +5325,10 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             ShiftJob &j = g_shiftJob;
             if (j.shift)
             {
-                Log(L"shift %u: %d to %d %S; dealt at truck update %ld on thread %lu (the truck update's), %llu ms after posting: %s, +74 %d, +70 %d, "
-                    L"power %.2f at the shift%S", j.number, j.from, j.gear, j.context, j.frame, j.thread, (unsigned long long)(now - j.postedAt),
-                    j.took ? L"took" : L"refused", j.gear74, j.gear70, j.factorAtShift, j.power ? " (set after)" : "");
+                Log(L"shift %u: %d to %d %S; dealt at truck update %ld on thread %lu (the truck update's), %llu ms after posting, on vehicle %p (%s): %s, "
+                    L"+74 %d, +70 %d, power %.2f at the shift%S", j.number, j.from, j.gear, j.context, j.frame, j.thread, (unsigned long long)(now - j.postedAt),
+                    (void *)j.vehicle, j.vehicle == w.refs.vehicle ? L"the truck driven" : L"not the truck driven now", j.took ? L"took" : L"refused", j.gear74,
+                    j.gear70, j.factorAtShift, j.power ? " (set after)" : "");
                 ShiftStageResult(w.stage, j.took);
                 if (j.took) w.take.shifts++;
                 else if (GearboxPosRefused(w.pos, j.gear))
@@ -5328,12 +5336,11 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             }
             InterlockedExchange(&j.state, kShiftIdle);
         }
-        else if (ShiftJobDrop(g_shiftJob, w.refs.vehicle, now, TruckUpdateFrames()))
+        else if (ShiftJobDrop(g_shiftJob, w.refs.vehicle, now))
         {
             if (g_shiftJob.shift)
             {
-                Log(L"shift %u: %d to %d dropped: %s", g_shiftJob.number, g_shiftJob.from, g_shiftJob.gear,
-                    g_shiftJob.vehicle != w.refs.vehicle ? L"another truck is driven" : L"no truck update took it within a second and 30 updates");
+                Log(L"shift %u: %d to %d dropped: %s", g_shiftJob.number, g_shiftJob.from, g_shiftJob.gear, ShiftJobDropWhy(g_shiftJob, w.refs.vehicle));
                 w.pos.lastSet = INT_MIN; // asked again on the next pass
                 ShiftStageResult(w.stage, false);
             }
@@ -6597,7 +6604,44 @@ static DWORD WINAPI Run(void *)
         EngineApply(eng, watch);
         const bool driving = TruckPass(watch, memory, inForce, front, raw, world);
         wasDriving = driving;
+        const bool menuUpWas = gameMenu.up;
         if (GameMenuGateSeen(gameMenu, GameMenuUp(world), GetTickCount64())) Log(L"input: the game's function menu is up, the bindings wait");
+        // Probe=1: the words around the game's menu flags from the function menu's close until the game sets a truck
+        // (truck.h, MenuWords), so the next drive shows the word that marks the truck switch's own screen
+        if (s.probe)
+        {
+            static unsigned long long wordsUntil = 0;
+            static long wordsVehicleSets = 0;
+            static int wordsLines = 0;
+            static MenuWords wordsWas;
+            GearboxCounts wc;
+            GearboxCountsGet(wc);
+            const unsigned long long wordsNow = GetTickCount64();
+            if (menuUpWas && !gameMenu.up)
+            {
+                wordsUntil = wordsNow + kMenuWordsMs;
+                wordsVehicleSets = wc.vehicle;
+                wordsLines = 0;
+            }
+            if (wordsUntil)
+            {
+                MenuWords words;
+                MenuWordsRead(memory, watch.found ? watch.refs.control : 0, words);
+                char line[1400];
+                const bool first = !wordsLines;
+                if (MenuWordsLine(words, first ? nullptr : &wordsWas, line, sizeof line) && wordsLines < 40)
+                {
+                    Log(L"probe: menu words %S the function menu closed (%llu ms):%S", first ? "as" : "since", wordsNow - (wordsUntil - kMenuWordsMs), line);
+                    wordsLines++;
+                }
+                wordsWas = words;
+                if (wc.vehicle != wordsVehicleSets || wordsNow >= wordsUntil)
+                {
+                    Log(L"probe: menu words: the watch ends, %s", wc.vehicle != wordsVehicleSets ? L"the game set a truck" : L"15 s gone");
+                    wordsUntil = 0;
+                }
+            }
+        }
         if (watch.found && !codeLooked)
         {
             codeLooked = true;
@@ -6697,7 +6741,10 @@ static DWORD WINAPI Run(void *)
             const uint64_t oldVehicle = truckVehicle;
             truck = now;
             truckVehicle = watch.idVehicle; // recorded on the pass the new id was read with
-            Log(L"truck: %S again, the game's id for it now %S (vehicle %p, the old id's %p)", truck.key, truck.id, (void *)truckVehicle, (void *)oldVehicle);
+            if (oldVehicle && truckVehicle != oldVehicle)
+                Log(L"truck: another truck of the kind: %S, the game's id %S (vehicle %p, the last one's %p)", truck.key, truck.id, (void *)truckVehicle, (void *)oldVehicle);
+            else
+                Log(L"truck: %S again, the game's id for it now %S (vehicle %p, the old id's %p)", truck.key, truck.id, (void *)truckVehicle, (void *)oldVehicle);
             // a take-over only on the vehicle the old id was taken with (review F1); another vehicle is another truck
             const bool sameTruck = SuspAgainTakeOver(oldId, oldVehicle, truck.id, truckVehicle);
             const int taken = sameTruck ? SettingsTakeOver(set, truck.id) : 0;

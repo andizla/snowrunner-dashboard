@@ -953,8 +953,8 @@ int main()
             EngageWatch ew = {};
             const bool posted = ShiftJobPost(sj, kVehicle, kAction, true, 1, -1, true, true, 1.0f, 100, 5000) &&
                                 !ShiftJobPost(sj, kVehicle, kAction, true, 1, 0, false, false, 0.0f, 100, 5000);
-            const bool other = !ShiftJobFrame(sj, ew, kMemory, kShiftOtherFirst, shift, 101, 7) && sj.state == kShiftPosted;
-            const bool dealt = ShiftJobFrame(sj, ew, kMemory, kShiftFirst, shift, 102, 7) && sj.state == kShiftDealt && sj.took && sj.thread == 7 && sj.frame == 102;
+            const bool other = !ShiftJobFrame(sj, ew, kMemory, kShiftOtherFirst, shift, 101, 7, 5001) && sj.state == kShiftPosted;
+            const bool dealt = ShiftJobFrame(sj, ew, kMemory, kShiftFirst, shift, 102, 7, 5002) && sj.state == kShiftDealt && sj.took && sj.thread == 7 && sj.frame == 102;
             float power = 0.0f;
             uint8_t flag = 9;
             Peek(kAction + 0x38, &power, 4);
@@ -968,22 +968,47 @@ int main()
             sj.state = kShiftIdle;
             ew = EngageWatch{};
             const bool refused = ShiftJobPost(sj, kVehicle, kAction, true, -1, 99, false, false, 0.0f, 200, 6000) &&
-                                 ShiftJobFrame(sj, ew, kMemory, kShiftFirst, shift, 201, 7) && !sj.took && !ew.on;
-            // dropped: kept within a second or 30 updates, dropped after both, or at once on another truck
+                                 ShiftJobFrame(sj, ew, kMemory, kShiftFirst, shift, 201, 7, 6001) && !sj.took && !ew.on;
+            // dropped: kept within a second, dropped after it whatever the updates did, or at once on another truck
             sj.state = kShiftIdle;
             ShiftJobPost(sj, kVehicle, kAction, true, 1, 2, false, false, 0.0f, 300, 7000);
-            const bool kept = !ShiftJobDrop(sj, kVehicle, 7900, 340) && !ShiftJobDrop(sj, kVehicle, 9000, 320) && sj.state == kShiftPosted;
-            const bool late = ShiftJobDrop(sj, kVehicle, 8100, 331) && sj.state == kShiftIdle;
+            const bool kept = !ShiftJobDrop(sj, kVehicle, 7900) && !ShiftJobDrop(sj, kVehicle, 8000) && sj.state == kShiftPosted;
+            const bool late = ShiftJobDrop(sj, kVehicle, 8001) && sj.state == kShiftIdle && !wcsncmp(ShiftJobDropWhy(sj, kVehicle), L"not dealt within", 16);
             ShiftJobPost(sj, kVehicle, kAction, true, 1, 2, false, false, 0.0f, 400, 8000);
-            const bool otherTruck = ShiftJobDrop(sj, kOtherVehicle, 8001, 400) && sj.state == kShiftIdle;
+            const bool otherTruck = ShiftJobDrop(sj, kOtherVehicle, 8001) && sj.state == kShiftIdle && !wcsncmp(ShiftJobDropWhy(sj, kOtherVehicle), L"another truck", 13);
+            // the drive of 2026-11-06 20:52 (F1): posted, then no truck is driven on the next pass: dropped at once
+            ShiftJobPost(sj, kVehicle, kAction, true, 2, 1, false, false, 0.0f, 914, 10000);
+            const bool noTruck = ShiftJobDrop(sj, 0, 10050) && sj.state == kShiftIdle && !wcsncmp(ShiftJobDropWhy(sj, 0), L"no truck is driven", 18);
+            // posted, the updates stopped 2 s, then an update of the same vehicle: the game's thread does not deal it, the
+            // mod's thread drops it (and the pass asks again)
+            ShiftJobPost(sj, kVehicle, kAction, true, 2, 1, false, false, 0.0f, 914, 20000);
+            const bool stale = !ShiftJobFrame(sj, ew, kMemory, kShiftFirst, shift, 1165, 7, 22000) && sj.state == kShiftPosted &&
+                               ShiftJobDrop(sj, kVehicle, 22000) && sj.state == kShiftIdle;
+            ShiftJobPost(sj, kVehicle, kAction, true, 2, 1, false, false, 0.0f, 914, 30000);
+            const bool inTime = ShiftJobFrame(sj, ew, kMemory, kShiftFirst, shift, 915, 7, 31000) && sj.state == kShiftDealt;
             // one the game's thread is dealing is never dropped, nor dealt a second time (F1)
             sj.state = kShiftDealing;
-            const bool dealing = !ShiftJobDrop(sj, kOtherVehicle, 9000, 500) && !ShiftJobFrame(sj, ew, kMemory, kShiftFirst, shift, 501, 7) &&
+            const bool dealing = !ShiftJobDrop(sj, kOtherVehicle, 9000) && !ShiftJobDrop(sj, 0, 9000) && !ShiftJobFrame(sj, ew, kMemory, kShiftFirst, shift, 501, 7, 9000) &&
                                  sj.state == kShiftDealing && !ShiftJobPost(sj, kVehicle, kAction, true, 1, 2, false, false, 0.0f, 500, 9000);
-            Check(posted && other && dealt && order && fields && notYet && follows && refused && kept && late && otherTruck && dealing,
+            Check(posted && other && dealt && order && fields && notYet && follows && refused && kept && late && otherTruck && noTruck && stale && inTime && dealing,
                   "shift job (review 17, step 1): one at a time, dealt only for its truck, the flag down before ShiftGear and the power after it; + 0x74 "
-                  "and + 0x70 right after, + 0x70 watched until it follows; a refused shift starts no watch; dropped after a second and 30 updates, or on "
-                  "another truck");
+                  "and + 0x70 right after, + 0x70 watched until it follows; a refused shift starts no watch; dropped after a second whatever the updates, "
+                  "at once on another truck or with none driven; a job over a second old is not dealt (the drive of 2026-11-06 20:52, F1)");
+        }
+        {
+            // the menu words' line (Probe=1): every word first, then only those that changed
+            MenuWords a = {}, b = {};
+            a.game = b.game = true;
+            a.g[12] = 1;
+            b.g[12] = 1;
+            b.g[13] = 7;
+            char line[1400];
+            const int all = MenuWordsLine(a, nullptr, line, sizeof line);
+            const bool allOk = all == kMenuWordsGame && strstr(line, " game+30 00000001");
+            const int changed = MenuWordsLine(b, &a, line, sizeof line);
+            const bool changedOk = changed == 1 && !strcmp(line, " game+34 00000000->00000007");
+            const bool sameOk = MenuWordsLine(b, &b, line, sizeof line) == 0;
+            Check(allOk && changedOk && sameOk, "menu words (Probe=1, the drive of 2026-11-06 20:52, F1): all the words first, then each one that changed");
         }
 
         // a frame of the truck update: its first argument an object with the vehicle at + 0x20 (StallJobFrame, what the
