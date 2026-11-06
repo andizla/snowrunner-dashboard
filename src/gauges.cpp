@@ -1049,7 +1049,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; SpringScale, DampingScale (a test): the suspension's spring and damping as a factor of the truck's own, 0.25 to 4 (1 = the truck's own;\n"
                         L"; the game holds each at 1). ExtraTravel: cm added past the file's compression end, 0 to 30 (0 = the file's; past it a wheel may go into the body).\n"
                         L"; FrameFlex: the frame's twist spring as a factor of the truck's own, 0.1 to 7 (its damping by the square root); TwistRange: how far the frame\n"
-                        L"; twists, 0.25 to 8 of the truck's own limits, at most 175 degrees. 1 = the truck's own. Only a truck whose frame twists has them.\n"
+                        L"; twists, 0.25 to 8 of the truck's own limits, at most 22 degrees (175 on an articulated truck's roll). 1 = the truck's own. Only a truck whose frame twists has them.\n"
                         L"; RideFront, RideRear: each axle's ride height in cm, -10 to 10; SwayFront, SwayRear: a sway bar, 0 to 0.3 of the axle's spring rate (BindSwayDisconnect\n"
                         L"; toggles them). Both move the attach point and stop on a truck whose game moves it. SuspDisplay=1 draws each wheel's travel. All tests, off by default.\n"
                         L"; AirSuspension=1 holds each wheel at its rest place of the first standstill, cargo or not (3 s to settle, under 10 km/h); AirHorizon=1 levels the body\n"
@@ -3413,8 +3413,8 @@ static void FrameFlexPass(FrameTune &t, const TruckMemory &m, const TruckRefs &r
     if (t.looked && (!lookedBefore || keyBefore != t.key))
     {
         if (t.found)
-            Log(L"frame flex: the joint found: wheel %d's body hangs on %p, its hinge %p (data %p, motor %p) to %p, axis %.2f %.2f %.2f; %d of %d wheels' constraints found, %d spring hinges refused; %d of %d master entries hold their instance's bodies",
-                j.wheel, (void *)j.front, (void *)j.instance, (void *)j.data, (void *)j.motor, (void *)j.other, j.axis[0], j.axis[1], j.axis[2], j.hung, r.wheels, j.refused,
+            Log(L"frame flex: the joint found: wheel %d's body hangs on %p, its hinge %p (data %p, motor %p) to %p, axis %.2f %.2f %.2f%s; %d of %d wheels' constraints found, %d spring hinges refused; %d of %d master entries hold their instance's bodies",
+                j.wheel, (void *)j.front, (void *)j.instance, (void *)j.data, (void *)j.motor, (void *)j.other, j.axis[0], j.axis[1], j.axis[2], j.articulated ? L" (an articulated truck's roll)" : L"", j.hung, r.wheels, j.refused,
                 j.masterMatch, j.masterSeen);
         else
             Log(L"frame flex: none on this truck, the frame is rigid (%d of %d wheels' constraints found, %d hang on the chassis, %d spring hinges refused; %d of %d master entries hold their instance's bodies)",
@@ -6120,6 +6120,7 @@ static DWORD WINAPI Run(void *)
             v.frameRigid = !watch.frame.found;
             v.frameFile[0] = watch.frame.stock[kFrameSpring], v.frameFile[1] = watch.frame.stock[kFrameDamping];
             v.frameFile[2] = FrameDeg(watch.frame.stock[kFrameMin]), v.frameFile[3] = FrameDeg(watch.frame.stock[kFrameMax]);
+            v.frameMost = FrameDeg(FrameLimitMost(watch.frame.joint));
         }
         v.suspKnown = false;
         if (driving && watch.tune.vehicle == watch.refs.vehicle && watch.refs.wheels > 0)

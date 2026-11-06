@@ -1859,9 +1859,17 @@ int main()
         const bool scaled = FrameTuneStep(t, kMemory, refs, vt, 2.0f, 2.0f) && f(motor + 0x20) == 800000.0f && Near(f(motor + 0x24), 30000.0f * sqrtf(2.0f)) &&
                             Near(f(frameData + 0xF8), -2.0f * fiveDeg) && Near(f(frameData + 0xFC), 2.0f * fiveDeg) && !t.fresh && t.stock[kFrameSpring] == 400000.0f;
         const bool steady = !FrameTuneStep(t, kMemory, refs, vt, 2.0f, 2.0f) && t.stock[kFrameSpring] == 400000.0f && t.stock[kFrameDamping] == 30000.0f;
-        const bool held = Near(FrameWant(kFrameMax, 30.0f * 3.14159265f / 180.0f, 1.0f, 8.0f), kFrameLimitMost) &&
-                          Near(FrameWant(kFrameMin, -30.0f * 3.14159265f / 180.0f, 1.0f, 8.0f), -kFrameLimitMost) &&
-                          FrameWant(kFrameMax, 3.1f, 1.0f, 2.0f) == 3.1f && FrameWant(kFrameSpring, 2e8f, 7.0f, 1.0f) == 1e9f;
+        // review F1 of part 2: a frame held at 22 degrees, an articulated roll at 175, a file wider than the clamp kept;
+        // the frame here held at 22 through the tune too
+        const float deg = 3.14159265f / 180.0f;
+        const bool held = Near(FrameWant(kFrameMax, 10.0f * deg, 1.0f, 8.0f, kFrameLimitFrame), 22.0f * deg) &&
+                          Near(FrameWant(kFrameMin, -10.0f * deg, 1.0f, 8.0f, kFrameLimitFrame), -22.0f * deg) &&
+                          Near(FrameWant(kFrameMax, 30.0f * deg, 1.0f, 8.0f, kFrameLimitArticulated), 175.0f * deg) &&
+                          Near(FrameWant(kFrameMax, 35.0f * deg, 1.0f, 2.0f, kFrameLimitFrame), 35.0f * deg) &&
+                          Near(FrameWant(kFrameMin, -35.0f * deg, 1.0f, 0.5f, kFrameLimitFrame), -17.5f * deg) &&
+                          FrameWant(kFrameSpring, 2e8f, 7.0f, 1.0f, kFrameLimitFrame) == 1e9f && !j.articulated && roll.articulated &&
+                          FrameLimitMost(j) == kFrameLimitFrame && FrameLimitMost(roll) == kFrameLimitArticulated;
+        const bool frameHeld = FrameTuneStep(t, kMemory, refs, vt, 2.0f, 8.0f) && Near(f(frameData + 0xFC), 22.0f * deg) && Near(f(frameData + 0xF8), -22.0f * deg);
         const bool back = FrameTuneStep(t, kMemory, refs, vt, 1.0f, 1.0f) && f(motor + 0x20) == 400000.0f && f(motor + 0x24) == 30000.0f && f(frameData + 0xFC) == fiveDeg &&
                           !FrameTuneStep(t, kMemory, refs, vt, 1.0f, 1.0f);
         Put(motor + 0x20, 350000.0f); // the game wrote the spring anew
@@ -1887,8 +1895,8 @@ int main()
         // another class there: nothing written
         Put(motor2, kExe + 0x100);
         const bool other = !FrameTuneStep(t, kMemory, refs, vt, 3.0f, 1.0f) && f(motor2 + 0x20) == 820000.0f;
-        Check(atOne && scaled && steady && held && back && anew && toB && toA && rebuilt && other,
-              "frame flex: at 1 only read; the spring x2 and the damping x1.41 from the stock, the limits x2; held at 175 degrees, never under the file's; back to the stock at 1; "
+        Check(atOne && scaled && steady && held && frameHeld && back && anew && toB && toA && rebuilt && other,
+              "frame flex: at 1 only read; the spring x2 and the damping x1.41 from the stock, the limits x2; held at 22 degrees on a frame and 175 on an articulated roll, never under the file's; back to the stock at 1; "
               "the game's write a new stock; A to B to A from the stock; a rebuild looked for again and put in again; another class never written");
     }
 

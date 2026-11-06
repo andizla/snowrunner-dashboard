@@ -827,10 +827,10 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             else if (!limits) ImGui::TextDisabled("File %.0f, now %.0f", view.frameFile[0], view.frameFile[0] * factor);
             else
             {
-                const float most = fmaxf(175.0f, fmaxf(-view.frameFile[2], view.frameFile[3]));
+                const float most = fmaxf(view.frameMost, fmaxf(-view.frameFile[2], view.frameFile[3]));
                 const float lo = fmaxf(-most, view.frameFile[2] * factor), hi = fminf(most, view.frameFile[3] * factor);
                 ImGui::TextDisabled("File %.1f to %.1f degrees, now %.1f to %.1f%s", view.frameFile[2], view.frameFile[3], lo, hi,
-                                    lo != view.frameFile[2] * factor || hi != view.frameFile[3] * factor ? ", held at 175" : "");
+                                    lo != view.frameFile[2] * factor || hi != view.frameFile[3] * factor ? ", held at the widest" : "");
             }
         };
         PageLabel("Frame flex", labelX);

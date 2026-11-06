@@ -33,9 +33,10 @@ static const uint32_t kFrameHingeAxis = 0x30, kFrameHingeMotor = 0xC8, kFrameHin
 static const uint32_t kFrameMotorType = 0x10, kFrameMotorSpring = 0x20, kFrameMotorDamping = 0x24;
 static const uint8_t kFrameSpringDamper = 3;
 static const int kFrameListMost = 64; // constraints read of one body's two lists
-// The widest twist a slider may give: 175 degrees, the widest absolute limit in RLM's spread (the user's word allows
-// the range), as no hinge may reach 180. A file's own wider limit is never cut.
-static const float kFrameLimitMost = 175.0f * 3.14159265f / 180.0f;
+// The widest twist a slider may give, by the class of the joint, from the widest absolute limit in RLM's spread (the
+// user's word allows the range; review F1 of part 2): 22 degrees on a frame, 175 on an articulated truck's roll
+// hinge, which rolls nearly free. A file's own wider limit is never cut.
+static const float kFrameLimitFrame = 22.0f * 3.14159265f / 180.0f, kFrameLimitArticulated = 175.0f * 3.14159265f / 180.0f;
 
 struct FrameVtables { uint64_t wheelData, hinge, motor; };
 
@@ -94,6 +95,8 @@ struct FrameJoint
     int frontOnChassis;          // of them, the wheels that hang on the chassis itself
     int refused;                 // spring hinges on a wheel's body that were not the frame's (an axis not along, or no wheels beyond)
     int masterSeen, masterMatch; // master elements read, and those whose bodies are their instance's (the layout's probe)
+    bool articulated;            // the hinge's other body carries no wheels itself but is joined to one that does: the roll
+                                 // hinge of an articulated truck, beside its steering pivot
 };
 
 // The axis along the truck: the hinge's first column within kFrameAxisMostDeg of x, the long axis of the game's truck
@@ -138,17 +141,18 @@ inline bool FrameJointFind(const TruckMemory &m, const TruckRefs &r, const Frame
             if (hang[i] == b) return true;
         return false;
     };
-    // a body carries wheels: it holds some, or it is joined to one that does (other than through the section asked from)
+    // a body carries wheels: 1 where it holds some, 2 where it is joined to one that does (other than through the
+    // section asked from: an articulated truck's pivot body), 0 where neither
     auto carries = [&](uint64_t b, uint64_t from) {
-        if (carrier(b)) return true;
+        if (carrier(b)) return 1;
         uint64_t joined[kFrameListMost];
         const int n = FrameBodyConstraints(m, b, joined, kFrameListMost);
         for (int k = 0; k < n; k++)
         {
             const uint64_t o = FrameOtherBody(m, joined[k], b);
-            if (o && o != from && carrier(o)) return true;
+            if (o && o != from && carrier(o)) return 2;
         }
-        return false;
+        return 0;
     };
     for (int i = 0; i < wheels; i++)
     {
@@ -166,12 +170,14 @@ inline bool FrameJointFind(const TruckMemory &m, const TruckRefs &r, const Frame
             if (!m.get(data + kFrameHingeMotor, motor) || !m.get(motor, v) || v != vt.motor || !m.get(motor + kFrameMotorType, type) || type != kFrameSpringDamper) continue;
             float axis[3] = {};
             const uint64_t o = FrameOtherBody(m, list[k], h);
-            if (!o || !m.get(data + kFrameHingeAxis, axis) || !FrameAxisAlong(axis) || !carries(o, h))
+            const int beyond = o ? carries(o, h) : 0;
+            if (!o || !m.get(data + kFrameHingeAxis, axis) || !FrameAxisAlong(axis) || !beyond)
             {
                 j.refused++;
                 continue;
             }
             j.instance = list[k], j.data = data, j.motor = motor, j.front = h, j.other = o, j.wheel = i;
+            j.articulated = beyond == 2;
             memcpy(j.axis, axis, sizeof axis);
             return true;
         }
@@ -212,15 +218,16 @@ inline bool FrameValueSane(int k, float v)
 inline bool FrameSameWord(float a, float b) { return !memcmp(&a, &b, sizeof a); }
 
 // What the sliders give for a stock: the spring times flex, the damping times its square root, each limit times range
-// and held to kFrameLimitMost, never below the stock's own width.
-inline float FrameWant(int k, float stock, float flex, float range)
+// and held to most (kFrameLimitFrame or kFrameLimitArticulated), never below the stock's own width.
+inline float FrameLimitMost(const FrameJoint &j) { return j.articulated ? kFrameLimitArticulated : kFrameLimitFrame; }
+inline float FrameWant(int k, float stock, float flex, float range, float most)
 {
     if (k == kFrameSpring) return flex == 1.0f ? stock : fminf(1e9f, stock * flex);
     if (k == kFrameDamping) return flex == 1.0f ? stock : fminf(1e9f, stock * sqrtf(flex));
     if (range == 1.0f) return stock;
-    const float most = fmaxf(kFrameLimitMost, fabsf(stock));
+    const float widest = fmaxf(most, fabsf(stock));
     const float v = stock * range;
-    return k == kFrameMin ? fmaxf(-most, v) : fminf(most, v);
+    return k == kFrameMin ? fmaxf(-widest, v) : fminf(widest, v);
 }
 
 // The stock put back where the tune wrote, where the joint is still that class and the value still the tune's.
@@ -300,7 +307,7 @@ inline bool FrameTuneStep(FrameTune &t, const TruckMemory &m, const TruckRefs &r
     for (int k = 0; k < kFrameValues; k++)
     {
         if (!FrameValueSane(k, t.stock[k])) continue;
-        const float want = FrameWant(k, t.stock[k], flex, range);
+        const float want = FrameWant(k, t.stock[k], flex, range, FrameLimitMost(t.joint));
         const bool tuned = !FrameSameWord(want, t.stock[k]);
         if (FrameSameWord(now[k], want) || (!tuned && !t.ours[k])) continue;
         if (!m.get(motor, v) || v != vt.motor || !m.get(data, v) || v != vt.hinge) break;
