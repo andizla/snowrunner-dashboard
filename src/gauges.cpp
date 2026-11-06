@@ -1095,7 +1095,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; shows, less with cold oil and without boost, and doubled by the converter at its stall (Gearbox=1), in place\n"
                         L"; of the game's own, which falls away toward each gear's top. The mod writes the game's torque factor for it.\n"
                         L"; EngineShare: how much of the mod's engine the game gets, 0 to 100 percent (50: half way between the two).\n"
-                        L"; RoadLoad=1 (with Powertrain): the air's drag taken off, once each gear's pull is learned floored on flat ground.\n"
+                        L"; RoadLoad=1 (with Powertrain, on by default): the air's drag taken off, once each gear's pull is learned floored on flat ground.\n"
                         L";   RoadCdA: the drag's area in m2, 0 by the truck's mass (1.1 under 4 t, 3.5 under 10 t, else 6); a truck's file may set it.\n"
                         L";   Base1.<engine>, Base2.<engine> ... in a truck's file: each gear's acceleration at the game's own pull, floored, learned.\n"
                         L"; Creep=1: an idling truck on an automatic moves to walking pace; the brake holds it. For now only with an automatic, not in a gear picked by hand.\n"
@@ -2662,7 +2662,7 @@ static void LogSettings(const GaugeSettings &s)
                                      : L"the game's own (Gearbox=1 or 2 on the Gearbox tab hand it to the mod)",
         s.requireClutch, s.requireGearHeld, s.skipNeutral, s.downStaysForward, s.ignoreShifter, s.backToA);
     if (s.powertrain) Log(L"settings: powertrain on: the truck pulls with %d percent of the mod's engine and converter, through the game's torque factor; road load %s",
-                          s.engineShare, s.roadLoad ? L"on (the air's drag, once each gear's pull is learned)" : L"off");
+                          s.engineShare, !s.roadLoad ? L"off" : s.powertrain ? L"on (the air's drag, once each gear's pull is learned)" : L"on, acts with Powertrain on");
     else Log(L"settings: powertrain off: the truck pulls with the game's own engine (Powertrain=1 hands it the mod's)");
     Log(s.creep && s.creepManual ? L"settings: creep on, in a gear picked by hand too (CreepManual): an automatic through the converter to walking pace, a gear picked by hand at its idle speed"
         : s.creep ? L"settings: creep on: an idling truck on an automatic moves, through the converter to walking pace; not in a gear picked by hand (CreepManual=1 adds it)"
@@ -5999,9 +5999,25 @@ int wmain(int argc, wchar_t **argv)
     Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.hotDamageFrom == kTempRed && d.coldDamage == 5.0f && d.stallDamage == 5.0f && d.clutchBurn && d.clutchHeat == 60.0f &&
               d.springScale == 1.0f && d.dampingScale == 1.0f && d.extraTravel == 0.0f,
           "defaults: the radiator's full airflow from 30 km/h, engine damage on from the red zone, 10 percent a minute for the heat and 5 for the cold");
-    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.ignoreShifter && d.backToA == 0 && d.input == kInputWheel && !d.powertrain && !d.roadLoad && d.roadCdA == 0.0f && d.engineShare == 50 && d.creep && !d.creepManual && !d.dieselFlutter,
+    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.ignoreShifter && d.backToA == 0 && d.input == kInputWheel && !d.powertrain && d.roadLoad && d.roadCdA == 0.0f && d.engineShare == 50 && d.creep && !d.creepManual && !d.dieselFlutter,
           "defaults: the oil as a second needle, warm after 5 minutes, too hot from 120 C; the standard turbo, a diesel's lift without the flutter; the creep on");
 
+    // Air drag on by default (BRIEF_defaults_on.md): a missing key gives 1, an explicit 0 stays 0, the defaults give 1
+    {
+        GaugeSettings r;
+        SettingsDefaults(r);
+        WriteIni(r);
+        WritePrivateProfileStringW(kIniSection, L"RoadLoad", nullptr, ini.c_str());
+        GaugeSettings missing;
+        ReadIni(missing);
+        WritePrivateProfileStringW(kIniSection, L"RoadLoad", L"0", ini.c_str());
+        GaugeSettings zero;
+        ReadIni(zero);
+        GaugeSettings back;
+        SettingsDefaults(back);
+        Check(missing.roadLoad && !zero.roadLoad && back.roadLoad, "defaults: Air drag on with the key missing, an explicit RoadLoad=0 stays off, and the defaults give it on");
+        WriteIni(back); // the ini as the tests below find it, with its help text
+    }
     // keys the mod does not know, in its own section and in another one
     WritePrivateProfileStringW(kIniSection, L"FromALaterVersion", L"7", ini.c_str());
     WritePrivateProfileStringW(L"Other", L"Kept", L"yes", ini.c_str());
@@ -6059,7 +6075,7 @@ int wmain(int argc, wchar_t **argv)
     c.backToA = 12;
     c.input = kInputKeys;
     c.powertrain = true;
-    c.roadLoad = true;
+    c.roadLoad = false;
     c.roadCdA = 2.5f;
     c.engineShare = 80;
     c.creep = false;
