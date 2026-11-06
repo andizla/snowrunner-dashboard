@@ -270,6 +270,13 @@ the whole set as its own: <b>Own settings</b> ticks itself. Untick it and the de
 (the tab says Kept, not in use) until you tick it again. Changes made meanwhile edit the default. <b>Make these the default</b> copies the set to every truck without
 its own. With no truck driven the tab sets the default. The set is kept in a <code>[Suspension]</code> section of the truck's
 file in <code>Gauges\trucks</code>, beside its scales, with <code>Own=0</code> while it is not in use.</p>
+<p><b>One truck or every truck of its kind.</b> Under the box, <b>For</b> picks <b>This truck only</b> or <b>Every</b> truck of
+its kind, and the line under it says which is in force: this truck, every truck of the kind, or the default. One truck's set
+goes in a <code>[Suspension:&lt;id&gt;]</code> section of the kind's file, by the game's own id of that truck, and wins over the
+kind's. The game makes a truck anew under another id at a recovery or in a garage: when the same kind comes back within 20
+seconds with no other truck driven between, the new id takes the set over, and the log says so. A truck taken out of the
+warehouse gets a new id and starts on its kind's settings; pick This truck only again for its own. Unticking the box at the
+truck's level keeps its set and puts the kind's in force; This truck only brings it back.</p>
 <ul><li><b>Spring and Damping</b> (<code>SpringScale</code>, <code>DampingScale</code>, x0.25 to x4): the truck's own spring
 and damping times a factor. Above 1 the spring is stiffer and the truck sits higher, below 1 softer and lower. More damping
 settles the body sooner, less lets it bounce longer. The game takes a wheel's spring and damping only up to 1, so where a
