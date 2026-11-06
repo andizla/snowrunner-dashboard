@@ -287,7 +287,8 @@ truck's own figure is 0.5 (the Arocs' front damping), a factor above 2 cannot ac
 <li><b>Frame flex and Twist range</b> (<code>FrameFlex</code>, x0.1 to x7; <code>TwistRange</code>, x0.25 to x8): on a truck
 whose frame twists, the frame's twist spring and how far it twists, as factors of the truck's own. Below 1 Frame flex lets the
 frame twist more easily, so all the wheels keep the ground longer. Its damping follows by the square root, so the frame settles
-as the file's does. Twist range widens or narrows the twist, up to 175 degrees. The ranges cover realistic frames. About two in
+as the file's does. Twist range widens or narrows the twist, up to 22 degrees on a frame and 175 on
+an articulated truck's roll, never under the truck's own. The ranges cover realistic frames. About two in
 three of the game's trucks have a frame that twists. A truck with a rigid frame has nothing to twist, and the tab says the
 sliders take effect only on trucks with a flexing frame. Under each slider are the truck's own figures and what is in force.
 After a garage or a recovery the mod puts them in again. <code>Gauges.log</code> says "frame flex: the joint found: wheel 0's body
