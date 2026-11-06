@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Frame flex and Twist range in the Suspension tab: how stiff the frame is against twisting and how far it twists, as factors of the truck's own. They act on trucks whose frame twists, about two in three of the game's. Below 1 Frame flex lets the frame twist more easily, so the wheels keep the ground longer. They are kept with the suspension set, per kind or per truck. `Gauges.log` names the truck's own figures once a truck.
 - The suspension settings can be kept per truck: tick Own settings in the Suspension tab. A truck without its own uses the default. It ticks itself when you change a setting there while you drive. Unticked, the truck's set is kept for later, and changes meanwhile edit the default. Make these the default copies the truck's set to every truck without its own. Under the box, For picks This truck only (this one truck, by the game's id of it) or every truck of its kind; the tab says which is in force. When the game rebuilds the truck it keeps its set. Every truck of its kind keeps the truck's own set aside when the kind has one, and This truck only brings it back. A truck taken out of the warehouse starts on its kind's settings.
 - The gear keys and the other bindings wait while the game's function menu is up, so picking Recover with Pad A no longer shifts down.
 - The crash line in `Gauges.log` also names an invalid parameter in the C runtime and abort, which can end the game at once (0xC0000409).
