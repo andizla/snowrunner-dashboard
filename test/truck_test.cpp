@@ -23,6 +23,7 @@
 #include "clock_scan.h"
 #include "suspension_scan.h"
 #include "suspension_step.h"
+#include "air_axles.h"
 #include "gearbox_hooks.h"
 
 // The hooks' attach and detach (gearbox_hooks.h) on a function of the test's own: the hook counts and calls through.
@@ -3072,6 +3073,82 @@ int main()
         Check(fabsf(l1) < 0.005f && fabsf(f1) < 0.005f && m2 <= kShiftMost + 1e-5f && fabsf(l2 - (0.20f - kShiftMost / 0.8f)) < 0.01f && fabsf(l3 - 0.08f) < 1e-4f &&
                   fabsf(f3 + 0.04f) < 1e-4f && fabsf(l4) < 0.0087f,
               "air suspension AirHorizon: a 4x4 on 8 % to a side and 4 % to its nose comes level within 0.3 degrees; on 20 % it stops at 12 cm; off it stays with the ground; levelled on 8 % and driven off onto flat ground at 20 km/h, within 0.5 degrees of flat in 10 s (R7)");
+    }
+
+    // the air axles (BRIEF_air_axles.md part 2, the Reviewer's note 9): the rule from a set of wheels; the table and the
+    // truck's key, the key winning; a truck not in the table gets all; one name from each list; the levelling leaves a
+    // leaf axle alone; N2's 4x2 with rear air, nose down 3° with AirHorizon: the rear goes down, the front's shift stays
+    // 0; none: the keys do nothing; the swing mark
+    {
+        // a 6x4: the front axle at 2 m, two rear at -1.5 and -2.9; SuspPairs' front is the frontmost only
+        const float forward6[6] = { 2.0f, 2.0f, -1.5f, -1.5f, -2.9f, -2.9f }, left6[6] = { 0.9f, -0.9f, 0.9f, -0.9f, 0.9f, -0.9f };
+        int partner6[6];
+        bool isLeft6[6], front6[6], rearmost6[6], all6[6], rear6[6], none6[6];
+        SuspPairs(6, forward6, left6, partner6, isLeft6, front6, rearmost6);
+        AirAxleWheels(6, front6, kAirAll, all6);
+        AirAxleWheels(6, front6, kAirRear, rear6);
+        AirAxleWheels(6, front6, kAirNone, none6);
+        bool rule = true;
+        for (int i = 0; i < 6; i++) rule &= all6[i] && rear6[i] == (i >= 2) && !none6[i];
+        // the table and the key
+        int from = -1, from2 = -1, from3 = -1, from4 = -1, from5 = -1, from6 = -1;
+        const bool table = AirAxlesOf("chevrolet_ck1500", nullptr, from) == kAirNone && from == kAirFromTable &&
+                           AirAxlesOf("chevrolet_ck1500", "rear", from2) == kAirRear && from2 == kAirFromKey &&
+                           AirAxlesOf("cat_ct680", " All ", from3) == kAirAll && from3 == kAirFromKey &&
+                           AirAxlesOf("cat_ct680", "leaf", from4) == kAirRear && from4 == kAirFromTable &&
+                           AirAxlesOf("mod_suv/1000001", "", from5) == kAirAll && from5 == kAirFromNotListed &&
+                           AirAxlesOf("mod_suv/1000001", "none", from6) == kAirNone && from6 == kAirFromKey;
+        // one from each list, the counts of the lead's call, and the table sorted with no key twice
+        int counts[kAirKinds] = {};
+        bool sorted = true;
+        for (int i = 0; i < kAirAxleRows; i++)
+        {
+            counts[kAirAxleTable[i].kind]++;
+            if (i && strcmp(kAirAxleTable[i - 1].key, kAirAxleTable[i].key) >= 0) sorted = false;
+        }
+        const bool lists = AirTableKind("cat_745c") == kAirNone && AirTableKind("mack_terra_pro") == kAirRear && AirTableKind("chevrolet_kodiakc70") == kAirRear &&
+                           AirTableKind("tatra_phoenix") == kAirAll && AirTableKind("azov_5319") < 0 && counts[kAirNone] == 13 && counts[kAirRear] == 19 && counts[kAirAll] == 4 && sorted;
+        // the levelling with rear air on a 4x2 (the 4x4's places, the front axle leaf): rest at 0, then 3 cm of cargo
+        // on the rear: the rear rises 3 cm, the front keeps 0
+        const int partner[4] = { 1, 0, 3, 2 };
+        const bool placed[4] = { true, true, true, true }, free4[4] = {}, leaf[4] = { true, true, false, false };
+        const float r0[4] = {};
+        const float dt = 1.0f / 60.0f;
+        SuspLevel cargo = {};
+        float g[4] = {};
+        for (int k = 0; k < 60 * 2; k++) SuspLevelStep(cargo, 4, partner, kAlong4, kAcross4, g, r0, placed, free4, 0.0f, 0.0f, dt, nullptr, leaf);
+        for (int k = 0; k < 60 * 20; k++)
+        {
+            // the place from the stock attach point, as the R6 test models it: rest less the sag plus the shift; the
+            // front's leaf springs take none of the cargo here
+            for (int i = 0; i < 4; i++) g[i] = leaf[i] ? 0.0f : -0.03f + cargo.level[i];
+            SuspLevelStep(cargo, 4, partner, kAlong4, kAcross4, g, r0, placed, free4, 0.0f, 0.0f, dt, nullptr, leaf);
+        }
+        const bool leafAlone = cargo.leaf && fabsf(cargo.level[0]) < 1e-4f && fabsf(cargo.level[1]) < 1e-4f && fabsf(cargo.level[2] - 0.03f) < 0.002f && fabsf(cargo.level[3] - 0.03f) < 0.002f;
+        // N2: nose down 3° with AirHorizon on: the rear goes down, the front's plane stays at 0
+        SuspLevel nose = {};
+        float gn[4] = {};
+        for (int k = 0; k < 60 * 2; k++) SuspLevelStep(nose, 4, partner, kAlong4, kAcross4, gn, r0, placed, free4, 0.0f, 0.0f, dt, nullptr, leaf);
+        const float down = sinf(3.0f * 3.14159265f / 180.0f);
+        for (int k = 0; k < 60 * 20; k++)
+        {
+            // the forward axis points down by the ground's 3° less what the rear's shift takes back over the 3 m
+            const float tilt[2] = { -down - (nose.level[2] + nose.level[3]) * 0.5f / 3.0f, 0.0f };
+            SuspLevelStep(nose, 4, partner, kAlong4, kAcross4, gn, r0, placed, free4, 0.0f, 0.0f, dt, tilt, leaf);
+        }
+        const bool n2 = fabsf(nose.level[0]) < 1e-4f && fabsf(nose.level[1]) < 1e-4f && nose.level[2] < -0.1f && nose.level[3] < -0.1f &&
+                        nose.level[2] >= -kShiftMost - 1e-4f;
+        // none: AirSuspension off on the truck, so the keys do nothing (AirHeightStep with it off keeps the height)
+        const bool keys = AirHeightStep(0, 1, 5.0f, false) == 0 && AirHeightStep(0, 1, 5.0f, true) != 0;
+        // the swing mark: the Tatras' 1.8 and the Savior's 1.15 with physics 0 are swing; the Mamute's 0.30 with 1° isn't
+        const bool swing = SwingMark(1.8f, 0.0f) && SwingMark(1.15f, 0.0f) && !SwingMark(0.30f, 0.0174533f) && !SwingMark(1.8f, 0.0174533f) && !SwingMark(1.0f, 0.0f) &&
+                           !SwingMark(NAN, 0.0f);
+        printf("     air axles: the 4x2's rear with 3 cm of cargo levels to %.4f and %.4f, the front %.5f; nose down 3 degrees the rear goes to %.4f, the front %.5f\n",
+               cargo.level[2], cargo.level[3], cargo.level[0], nose.level[2], nose.level[0]);
+        Check(rule && table && lists && leafAlone && n2 && keys && swing,
+              "air axles: all, rear (every axle but the front one) and none from a 6x4's wheels; the truck's key wins over the table, a truck not in the table has all; "
+              "none 13, rear 19, all 4; the levelling leaves the leaf front alone; a 4x2 with rear air nose down 3 degrees: the rear goes down, the front stays 0 (N2); "
+              "none's keys do nothing; the swing mark: 1.8 and 1.15 with physics 0, not the Mamute's 0.30 with 1 degree");
     }
 
     RealImageTest();

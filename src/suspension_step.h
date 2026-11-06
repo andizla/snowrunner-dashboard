@@ -239,6 +239,7 @@ struct SuspStepBlock
     float sway[kMaxWheels];       // its pair's bar as a share of the axle's spring rate, 0 none or disconnected
     float springK[kMaxWheels];     // its strength as the tune gives it (stock times SpringScale), for the bar
     bool air;                      // AirSuspension (build C): each axle held at its rest place, on top of the ride height
+    bool leafAxle[kMaxWheels];     // the wheel's axle has no air (air_axles.h): it keeps the game's own, out of the levelling and the keys' height
     float airKeys;                 // the keys' height set, m toward the droop (followed in 3 s; faded out with air off)
     bool horizon;                  // AirHorizon: pitch and roll levelled to the horizon, by the chassis's tilt below
     float tiltForward, tiltLeft;   // how far the chassis's forward and left axes point up (their y, the tilt lamp's), NaN not known
@@ -301,6 +302,8 @@ struct SuspLevel
     float dx[kMaxWheels], dy[kMaxWheels];
     float still;                   // s under kLevelDrive without a break: the levelling acts only after kLevelStand of it
     float keys;                    // the keys' height in force, m, following the one set with the same time constant
+    bool leaf;                     // some axles have no air (air at the rear only): the plane is held at 0 at their place
+    float leafDx, leafDy;          // that place from the centre (the leaf wheels' mean), set at the take (review N2)
 };
 
 struct SuspStepState
@@ -630,11 +633,13 @@ static const float kLevelTau = 3.0f, kLevelStand = 1.0f, kLevelStill = 0.1f, kLe
 // A step of the levelling's plane about its centre, dh up, dp and dr in m per m forward and to the left, held to the
 // part of it that keeps every wheel's shift and ride height within kShiftMost (a wheel already past it may only come
 // back). Each wheel's shift is the plane at its place, a held one too, so the shifts never twist the chassis (R6).
-inline void SuspLevelMove(SuspLevel &l, int n, const float *r, float dh, float dp, float dr)
+// leafAxle: each wheel's axle has no air (nullptr none); a leaf wheel gets no shift, so it holds back nothing.
+inline void SuspLevelMove(SuspLevel &l, int n, const float *r, float dh, float dp, float dr, const bool *leafAxle = nullptr)
 {
     float part = 1.0f;
     for (int i = 0; i < n; i++)
     {
+        if (leafAxle && leafAxle[i]) continue;
         const float d = dh + dp * l.dx[i] + dr * l.dy[i], now = r[i] + l.keys + l.level[i];
         if (d > 0.0f) part = fminf(part, fmaxf(0.0f, (kShiftMost - now) / d));
         else if (d < 0.0f) part = fminf(part, fmaxf(0.0f, (-kShiftMost - now) / d));
@@ -649,9 +654,12 @@ inline void SuspLevelMove(SuspLevel &l, int n, const float *r, float dh, float d
 // its partner, held while either is, and a held axle is left out of the plane. Where the wheels left have no spread
 // along (one axle) or across, the plane has no pitch or no roll. The shift kept is held so that it and the ride height
 // stay within kShiftMost. tilt: none, or how far the chassis's forward and left axes point up, for AirHorizon. True on
-// the step the rest places are taken.
+// the step the rest places are taken. leafAxle: each wheel's axle has no air (air_axles.h; nullptr none). Only the others are
+// fitted and shifted; with leaf axles beside them (air at the rear only) the plane is held at 0 at the leaf wheels'
+// mean place, so the pitch and roll level about it by the air axles alone (review N2): a 4x2 with one air axle keeps
+// its pitch.
 inline bool SuspLevelStep(SuspLevel &l, int n, const int *partner, const float *along, const float *across, const float *g, const float *r,
-                          const bool *placed, const bool *held, float keys, float speed, float dt, const float *tilt = nullptr)
+                          const bool *placed, const bool *held, float keys, float speed, float dt, const float *tilt = nullptr, const bool *leafAxle = nullptr)
 {
     if (!(dt > 0.0f)) return false;
     l.keys += (keys - l.keys) * dt / kLevelTau;
@@ -685,28 +693,38 @@ inline bool SuspLevelStep(SuspLevel &l, int n, const int *partner, const float *
         l.xc = l.yc = 0.0f;
         for (int i = 0; i < n; i++) l.xc += along[i] / n, l.yc += across[i] / n;
         for (int i = 0; i < n; i++) l.dx[i] = along[i] - l.xc, l.dy[i] = across[i] - l.yc;
+        // the leaf axles' place: the plane goes through 0 there (review N2)
+        float leafs = 0.0f, lx = 0.0f, ly = 0.0f;
+        for (int i = 0; i < n; i++)
+            if (leafAxle && leafAxle[i]) leafs += 1.0f, lx += l.dx[i], ly += l.dy[i];
+        l.leaf = leafs > 0.0f;
+        l.leafDx = l.leaf ? lx / leafs : 0.0f, l.leafDy = l.leaf ? ly / leafs : 0.0f;
         l.taken = true;
         return true;
     }
     const float k = dt / kLevelTau;
     const bool horizon = tilt && isfinite(tilt[0]) && isfinite(tilt[1]);
+    // with leaf axles the height goes with the pitch and roll, so the plane stays at 0 at their place
+    auto hold = [&](float dp, float dr) { return -(l.height + (l.pitch + dp) * l.leafDx + (l.roll + dr) * l.leafDy); };
     // AirHorizon is for standing and crawling: over kLevelDrive the pitch and roll fade back to 0 and the height is
     // kept, so a truck levelled on a side slope never drives on leaning the other way (review R7)
-    if (horizon && fabsf(speed) >= kLevelDrive) SuspLevelMove(l, n, r, 0.0f, -k * l.pitch, -k * l.roll);
+    if (horizon && fabsf(speed) >= kLevelDrive) SuspLevelMove(l, n, r, l.leaf ? hold(-k * l.pitch, -k * l.roll) : 0.0f, -k * l.pitch, -k * l.roll, leafAxle);
     if (l.still < kLevelStand) return false;
-    // the plane e = mean + pitch (x - x0) + roll (y - y0) through the errors of the wheels not held
+    // the plane e = mean + pitch (x - x0) + roll (y - y0) through the errors of the air wheels not held; with leaf
+    // axles it goes through 0 at their place instead of the mean, so x0, y0 is that place and the mean is 0
     float err[kMaxWheels];
     bool in[kMaxWheels];
     float count = 0.0f, ex = 0.0f, x0 = 0.0f, y0 = 0.0f;
     for (int i = 0; i < n; i++)
     {
-        in[i] = placed[i] && !axleHeld[i] && l.count[i] > 0.0f;
+        in[i] = placed[i] && !axleHeld[i] && l.count[i] > 0.0f && !(leafAxle && leafAxle[i]);
         if (!in[i]) continue;
         err[i] = l.ref[i] + r[i] + l.keys - g[i];
         count += 1.0f, ex += err[i], x0 += along[i], y0 += across[i];
     }
     if (!(count > 0.0f)) return false;
     ex /= count, x0 /= count, y0 /= count;
+    if (l.leaf) ex = 0.0f, x0 = l.xc + l.leafDx, y0 = l.yc + l.leafDy;
     float sxx = 0.0f, syy = 0.0f, sxy = 0.0f, sxe = 0.0f, sye = 0.0f;
     for (int i = 0; i < n; i++)
     {
@@ -727,9 +745,16 @@ inline bool SuspLevelStep(SuspLevel &l, int n, const int *partner, const float *
     // chassis's own tilt instead, a nose down raising the front and a left side up lowering it; the height stays the
     // wheels'
     if (horizon) dp = -k * tilt[0], dr = -k * tilt[1];
+    // with leaf axles the plane turns about their place: the height in the same step as the pitch and roll, so it
+    // stays at 0 there (and any drift there is taken back)
+    if (l.leaf)
+    {
+        SuspLevelMove(l, n, r, hold(dp, dr), dp, dr, leafAxle);
+        return false;
+    }
     // the height's step first, then the pitch and roll get what is left of the 12 cm (review R7)
-    SuspLevelMove(l, n, r, dh, 0.0f, 0.0f);
-    SuspLevelMove(l, n, r, 0.0f, dp, dr);
+    SuspLevelMove(l, n, r, dh, 0.0f, 0.0f, leafAxle);
+    SuspLevelMove(l, n, r, 0.0f, dp, dr, leafAxle);
     return false;
 }
 
@@ -813,11 +838,14 @@ inline bool SuspAttachStep(SuspStepState &s, const SuspStepBlock &b, const float
         }
         if (!s.level.action) s.level.action = b.action;
         const float tilt[2] = { b.tiltForward, b.tiltLeft };
-        if (SuspLevelStep(s.level, n, b.partner, b.along, b.across, g, r, placed, held, b.airKeys, speed, dt, b.horizon ? tilt : nullptr)) InterlockedIncrement(&s.levelTaken);
+        if (SuspLevelStep(s.level, n, b.partner, b.along, b.across, g, r, placed, held, b.airKeys, speed, dt, b.horizon ? tilt : nullptr, b.leafAxle))
+            InterlockedIncrement(&s.levelTaken);
     }
     else if (s.level.action && SuspLevelFade(s.level, n, dt)) s.level = SuspLevel{};
+    // the levelling and the keys' height only on the axles with air; a leaf axle keeps the game's own
     if (s.level.action)
-        for (int i = 0; i < n; i++) shift[i] += s.level.keys + s.level.level[i];
+        for (int i = 0; i < n; i++)
+            if (!b.leafAxle[i]) shift[i] += s.level.keys + s.level.level[i];
     for (int i = 0; i < n; i++)
     {
         if (!b.attachC[i] || !b.attachAt[i] || b.axisUp[i] == 0.0f) continue;

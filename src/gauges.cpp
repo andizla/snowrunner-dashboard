@@ -39,6 +39,7 @@ int NgMenuKeyFromIni(); // the menu's key, which a capture never binds
 #include "clock_scan.h"
 #include "suspension_scan.h"
 #include "suspension_step.h"
+#include "air_axles.h"
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "shell32.lib")
 #ifndef GAUGES_SETTINGS_TEST
@@ -1049,6 +1050,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; toggles them). Both move the attach point and stop on a truck whose game moves it. SuspDisplay=1 draws each wheel's travel. All tests, off by default.\n"
                         L"; AirSuspension=1 holds each wheel at its rest place of the first standstill, cargo or not (3 s to settle, under 10 km/h); AirHorizon=1 levels the body\n"
                         L"; to the horizon instead (about 7 degrees at most). BindRideUp, BindRideDown move it 2 cm under 20 km/h.\n"
+                        L"; Only the axles with air follow them: by the mod's table, or AirAxles=all, rear (every axle but the front one) or none in [Truck] of the truck's file.\n"
                         L"; DamperCurve 0 linear, 1 digressive, 2 progressive; LowCompression, HighCompression, LowRebound, HighRebound: the damping\n"
                         L"; under and over DamperKnee (m/s, 0.02 to 0.5), rising and falling, 0.25 to 4 (a test; 1 and linear = the truck's own).\n"
                         L"; BumpStops=1: force (BumpForce, 1 to 6, the spring's at the end times it) and damping (BumpDamping, 1 to 4) over the last BumpZone m (0.03 to 0.2) of the\n"
@@ -3181,6 +3183,9 @@ struct TruckWatch
     uint64_t restVehicle;       // the truck the last rest places were read on, kept while the reads stop (the ride height at 0)
     float rest[2];
     int airHeight;              // the air suspension's height set by BindRideUp and BindRideDown (cm), for this game; it starts at 0
+    int airAxles, airFrom;      // the driven kind's air axles (air_axles.h: kAirAll, kAirRear, kAirNone) and where that came from
+    char airFor[kMaxText];      // the kind they were read for ("" none yet)
+    uint64_t airSaidFor;        // the vehicle the air axles' and the swing axles' lines were logged for
     ULONGLONG airPressedAt;     // the last press, for the overlay's height box
     uint64_t airVehicle;        // the truck the height was set on
     float kmh;                  // the driven truck's speed on the last pass, 0 none
@@ -3895,8 +3900,53 @@ static void SuspDamperBefore(SuspStepWatch &p, const TruckMemory &m, const Truck
 
 // The block for the driven truck (with Probe=1 or the damper on, and a truck), its generation, the windows logged and
 // the test's trace kept. Returns the generation, which the 20 Hz travel probe goes by too.
+// A kind's air axles (air_axles.h): AirAxles in [Truck] of its file wins, then the mod's table, then all. from: where.
+static int AirAxlesRead(const char *key, int &from)
+{
+    char own[16] = {};
+    if (key[0])
+    {
+        wchar_t buf[16] = {};
+        if (GetPrivateProfileStringW(kSetupSections[kSetupTruck], L"AirAxles", L"", buf, 16, SetupFile(kSetupTruck, key).c_str()) > 0)
+            WideCharToMultiByte(CP_UTF8, 0, buf, -1, own, sizeof own, nullptr, nullptr);
+    }
+    return AirAxlesOf(key, own, from);
+}
+
+static const wchar_t *AirFromText(int from)
+{
+    return from == kAirFromKey ? L"the truck's AirAxles" : from == kAirFromTable ? L"the mod's table" : L"not in the mod's table; AirAxles=rear or none in its file in Gauges\\trucks changes it";
+}
+
+// Once per truck: which axles have air and from where (the Reviewer's note 8).
+static void AirAxlesLog(int kind, int from, const SuspStepWatch &p, const TruckRefs &r)
+{
+    int fronts = 0;
+    for (int i = 0; i < p.wheels && i < kMaxWheels; i++) fronts += p.front[i] ? 1 : 0;
+    if (kind == kAirRear)
+        Log(L"suspension: air on every axle but the front one (rear), leaf at the front (%d of %d wheels; %s)", fronts, r.wheels, AirFromText(from));
+    else if (kind == kAirNone)
+        Log(L"suspension: no air suspension on this truck, leaf on every axle (%s): AirSuspension, AirHorizon and the air's height keys do nothing on it", AirFromText(from));
+    else Log(L"suspension: air on every axle (all; %s)", AirFromText(from));
+}
+
+// Once per truck: the swing axles' mark (101, tonight's part: read and said, nothing changed by it).
+static void SwingLog(const TruckMemory &m, const TruckRefs &r)
+{
+    int swing = 0;
+    float most = 0.0f;
+    for (int i = 0; i < r.wheels && i < kMaxWheels; i++)
+    {
+        float multiplier = 0.0f, physics = 0.0f;
+        if (!m.get(r.wheel[i] + kWheelCamberMultiplier, multiplier) || !m.get(r.wheel[i] + kWheelCamberPhysics, physics) || !SwingMark(multiplier, physics)) continue;
+        swing++;
+        most = fmaxf(most, multiplier);
+    }
+    if (swing) Log(L"suspension: swing axles, the camber follows the travel x%g (the look only; %d of %d wheels)", most, swing, r.wheels);
+}
+
 static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const TruckRefs &r, const TruckRaw &t, const GaugeSettings &s, const SuspTune &tune, bool found,
-                             ULONGLONG now, bool swayOff, int airHeight, const TiltModel &tilt)
+                             ULONGLONG now, bool swayOff, int airHeight, const TiltModel &tilt, int airAxles)
 {
     const DamperSet damper = DamperFrom(s);
     const SpringSet spring = SpringFrom(s);
@@ -4026,8 +4076,13 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
     b.shifting = shifting;
     b.testShift = shifting && p.test == 3 && p.on ? kStepTestShift : 0.0f;
     b.display = s.suspDisplay;
-    b.air = shifting && s.airSuspension;
+    // only the axles with air follow the levelling, AirHorizon and the keys' height (BRIEF_air_axles.md part 2): none
+    // has no air suspension at all, rear keeps the front axle on the game's own
+    b.air = shifting && s.airSuspension && airAxles != kAirNone;
     b.airKeys = b.air ? airHeight / 100.0f : 0.0f;
+    bool airWheel[kMaxWheels] = {};
+    AirAxleWheels(b.wheels, p.front, airAxles, airWheel);
+    for (int i = 0; i < kMaxWheels; i++) b.leafAxle[i] = i < b.wheels && !airWheel[i];
     b.horizon = b.air && s.airHorizon;
     b.tiltForward = tilt.running ? tilt.forward : NAN, b.tiltLeft = tilt.running ? tilt.left : NAN;
     for (int i = 0; i < kMaxWheels; i++)
@@ -4257,7 +4312,20 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         float v = -1.0f;
         if (m.get(w.refs.wheel[0] + kSuspConstraintAt, c) && m.get(c + kSuspValueAt[stepTest->value], v)) w.step.value = v;
     }
-    const uint32_t generation = SuspStepPass(w.step, m, w.refs, raw, s, w.tune, w.found, now, w.swayOff, w.airHeight, w.tilt);
+    // the kind's air axles: its file's AirAxles, else the mod's table, else all; read again when the kind changes
+    if (strcmp(w.airFor, w.who.taken.key))
+    {
+        strcpy_s(w.airFor, w.who.taken.key);
+        w.airAxles = AirAxlesRead(w.airFor, w.airFrom);
+        w.airSaidFor = 0;
+    }
+    if (w.found && w.refs.vehicle && w.airFor[0] && w.airSaidFor != w.refs.vehicle && w.step.wheels > 0 && w.step.vehicle == w.refs.vehicle)
+    {
+        w.airSaidFor = w.refs.vehicle;
+        AirAxlesLog(w.airAxles, w.airFrom, w.step, w.refs);
+        SwingLog(m, w.refs);
+    }
+    const uint32_t generation = SuspStepPass(w.step, m, w.refs, raw, s, w.tune, w.found, now, w.swayOff, w.airHeight, w.tilt, w.airAxles);
     if (probe && w.found) SuspTravelProbe(w.travel, w.travelAt, m, w.refs, raw, now, generation);
     WorldRead(m, w.found ? w.refs.control : 0, world);
     // a load ended (the game's loading screen gone): the truck that drives on under the game's id it had before the
@@ -5726,8 +5794,10 @@ static DWORD WINAPI Run(void *)
             if (dir && watch.found)
             {
                 const int was = watch.airHeight;
-                watch.airHeight = AirHeightStep(was, dir, watch.kmh, s.airSuspension);
-                if (s.airSuspension && watch.kmh < kRideKeyKmh) watch.airPressedAt = GetTickCount64();
+                // a truck with no air axle: the keys do nothing on it (the Reviewer's note 5)
+                const bool airOn = s.airSuspension && watch.airAxles != kAirNone;
+                watch.airHeight = AirHeightStep(was, dir, watch.kmh, airOn);
+                if (airOn && watch.kmh < kRideKeyKmh) watch.airPressedAt = GetTickCount64();
                 if (watch.airHeight != was) Log(L"air suspension: the height set to %+d cm (BindRide%s)", watch.airHeight, dir > 0 ? L"Up" : L"Down");
             }
         }
@@ -6107,6 +6177,8 @@ static DWORD WINAPI Run(void *)
             v.air = driving && inForce.airSuspension && watch.step.block.air;
             v.airTaken = v.air && watch.step.airTaken;
             v.airHeight = watch.airHeight;
+            v.airKnown = driving && watch.airFor[0];
+            v.airAxles = watch.airAxles, v.airFrom = watch.airFrom;
             v.airLevel[0] = watch.step.airLevel[0], v.airLevel[1] = watch.step.airLevel[1], v.airSide = watch.step.airSide;
             v.airShown = driving && inForce.airSuspension && watch.airPressedAt && GetTickCount64() - watch.airPressedAt < 3000;
             // each axle's rest place from the probe's windows or the display (cm along the axis, compression negative)
@@ -6455,7 +6527,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 124, "ini: the help text survives a write (124 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 125, "ini: the help text survives a write (125 comment lines)");
     // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
     {
         char none[32] = "x", tab[32] = {}, kept[32] = {};
