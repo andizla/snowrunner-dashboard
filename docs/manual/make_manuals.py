@@ -270,7 +270,7 @@ now.</p>
 the whole set as its own: <b>Own settings</b> ticks itself. Untick it and the default is in force again, and the set is kept
 (the tab says Kept, not in use) until you tick it again. Changes made meanwhile edit the default. <b>Make these the default</b> copies the set to every truck without
 its own. With no truck driven the tab sets the default. The set is kept in a <code>[Suspension]</code> section of the truck's
-file in <code>Gauges\trucks</code>, beside its scales, with <code>Own=0</code> while it is not in use.</p>
+file in <code>Gauges\\trucks</code>, beside its scales, with <code>Own=0</code> while it is not in use.</p>
 <p><b>One truck or every truck of its kind.</b> Under the box, <b>For</b> picks <b>This truck only</b> or <b>Every</b> truck of
 its kind, and the line under it says which is in force: this truck, every truck of the kind, or the default. One truck's set
 goes in a <code>[Suspension:&lt;id&gt;]</code> section of the kind's file, by the game's own id of that truck, and wins over the
@@ -321,7 +321,7 @@ under 20 km/h; the height goes back to 0 when you take another truck. Turned off
 Only the axles with air follow it. Many trucks have air at the rear only, with the front axle on springs: the front then keeps
 the game's own and the body levels about it. The mod knows this for the vanilla trucks whose real models settle it; every
 other truck, mod trucks too, has air on every axle. <code>AirAxles=all</code>, <code>rear</code> (every axle but the front one)
-or <code>none</code> in <code>[Truck]</code> of the truck's file in <code>Gauges\trucks</code> sets it, and wins over the mod's. With
+or <code>none</code> in <code>[Truck]</code> of the truck's file in <code>Gauges\\trucks</code> sets it, and wins over the mod's. With
 none, Air suspension and Level to horizon are greyed and Ride up and Ride down do nothing. The tab says which axles have air.</li>
 <li><b>Level to horizon</b> (<code>AirHorizon</code>, with the air suspension): the body is levelled to the horizon instead
 of to the wheels, standing and crawling under 10 km/h, at most about 7 degrees side to side. Over 10 km/h it goes back to the
