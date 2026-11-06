@@ -944,7 +944,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         changed(ImGui::Checkbox("##airhorizon", &s.airHorizon));
         PageTip("A test with Air suspension: under 10 km/h the body is levelled to the horizon, not the wheels. Off by default.");
         if (noAir) ImGui::EndDisabled();
-        if (s.airSuspension)
+        if (s.airSuspension && !noAir) // a truck with no air: the greyed text above says why (review N1)
         {
             if (!view.air) ImGui::TextDisabled("Height %+d cm; no truck it runs on", view.airHeight);
             else if (!view.airTaken) ImGui::TextDisabled("Height %+d cm; the rest place is taken at the first standstill", view.airHeight);
