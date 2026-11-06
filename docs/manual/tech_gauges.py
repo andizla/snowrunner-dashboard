@@ -259,7 +259,8 @@ its share of 2<i>a</i> + 5, for each truck kind and gearbox in the truck's file 
 as one gearbox's name comes with other gear speeds on another truck. A share is used only within 0.85 to 1.15, averaged with the next
 plateau's within 15 % and replaced by it past that; until then 2<i>a</i> + 5. A <code>Top</code><i>g</i> in rad/s of an older build in
 the gearbox's file is not read. Floored in A at the game's limit (+0xB4 at 0.02 or under, the wheels gaining under 1% for 1.2 s, the
-gear's hold past), the automatic shifts up one, whatever the mod takes the top for. The high gear's <i>a</i> + 2 holds (an HX 520 sat at 15.8 to 16.3 rad/s
+gear's hold past, no hunt guard keeping the gear), the automatic shifts up one, whatever the mod takes the top for. The rule is armed
+only once +0xB4 has read over 0.1 since the automatic's model began: a build where it holds no pull reads 0 throughout. The high gear's <i>a</i> + 2 holds (an HX 520 sat at 15.8 to 16.3 rad/s
 in H against 16 in 11 floored plateaus). The testers' logs of 0.17.0 at hand had plateaus at the top of the first gear (0.92 to 1.03
 of 2<i>a</i> + 5) and of H (1.03) only; the review read 0.90 to 0.99 in some gears from the pull's fall.</p>
 <p class="where">In first gear with the automatic off, the low range scales it: top = 1 + (top − 1) · clamp(power factor, 0, 1), with the
