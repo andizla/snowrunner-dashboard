@@ -1802,7 +1802,17 @@ int main()
         // the steering pivot on the front section is refused by its axis; but it leads to a body joined to the chassis,
         // so the finder must not take it: the radio's by its body, the pivot's by its axis
         const bool found = FrameJointFind(kMemory, refs, vt, j) && j.instance == frameInst && j.data == frameData && j.motor == motor && j.front == front &&
-                           j.other == chassis && j.wheel == 0 && j.hung == 2 && j.frontOnChassis == 1 && j.refused == 2;
+                           j.other == chassis && j.wheel == 0 && j.hung == 2 && j.frontOnChassis == 1 && j.refused == 2 && j.masterSeen > 0 && j.masterMatch == j.masterSeen;
+        // the axis: 5 degrees off the long axis is taken, 15 is not, a yaw hinge never (review F1)
+        const float a5[3] = { cosf(0.0873f), sinf(0.0873f), 0.0f }, a15[3] = { cosf(0.2618f), 0.0f, sinf(0.2618f) }, yaw[3] = { 0.0f, 1.0f, 0.0f };
+        const bool axes = FrameAxisAlong(a5) && !FrameAxisAlong(a15) && !FrameAxisAlong(yaw);
+        // a list over 64 is not read
+        const uint64_t crowded = obj(0x200), crowdedList = obj(0x2000);
+        Put(crowded + 0x108, crowdedList);
+        Put(crowded + 0x110, 65);
+        Put(crowdedList, frameInst);
+        uint64_t got[kFrameListMost];
+        const bool skipped = FrameBodyConstraints(kMemory, crowded, got, kFrameListMost) == 0;
         // a rigid truck: both wheels on the chassis
         const uint64_t chassis2 = obj(0x200), cab = obj(0x200);
         TruckRefs rigid = refs;
@@ -1825,8 +1835,19 @@ int main()
         join(pivot, rear, rollData);
         FrameJoint roll;
         const bool articulated = FrameJointFind(kMemory, art, vt, roll) && roll.data == rollData && roll.front == rear && roll.other == pivot;
-        Check(found && isRigid && articulated,
-              "frame flex: the joint is the long-axis spring hinge between two bodies that carry wheels; a steering pivot, a radio's hinge and a cab mount are refused, a rigid truck has none, an articulated truck's roll hinge is taken");
+        // a truck whose only spring hinge between two wheel bodies turns about the up axis (a pivot with a spring): none
+        const uint64_t chassis4 = obj(0x200), half = obj(0x200);
+        TruckRefs yawOnly = refs;
+        yawOnly.vehicle = kVehicle + 0x3000;
+        yawOnly.chassis = chassis4;
+        yawOnly.wheel[0] = wheel(chassis4);
+        yawOnly.wheel[1] = wheel(half);
+        join(chassis4, half, hinge(0.0f, 1.0f, 0.0f, 1400.0f, 800.0f, 35.0f));
+        FrameJoint pivotOnly;
+        const bool yawRefused = !FrameJointFind(kMemory, yawOnly, vt, pivotOnly) && pivotOnly.refused == 1;
+        Check(found && isRigid && articulated && axes && skipped && yawRefused,
+              "frame flex: the joint is the long-axis spring hinge between two bodies that carry wheels; a steering pivot, a radio's hinge and a cab mount are refused, a rigid truck has none, "
+              "an articulated truck's roll hinge is taken; the axis within 8 degrees; a yaw hinge with a spring refused; a list over 64 not read; the master entries checked");
 
         // the tune: nothing written at 1; the spring times flex and the damping times its square root; the limits times
         // range, held to 175 degrees but never under the file's own; back at 1 the stock; the game's own write a new stock

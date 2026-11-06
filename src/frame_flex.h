@@ -39,8 +39,10 @@ static const float kFrameLimitMost = 175.0f * 3.14159265f / 180.0f;
 
 struct FrameVtables { uint64_t wheelData, hinge, motor; };
 
-// The constraint instances in a body's two lists, each once. Returns how many.
-inline int FrameBodyConstraints(const TruckMemory &m, uint64_t body, uint64_t *out, int most)
+// The constraint instances in a body's two lists, each once. Returns how many. A list longer than kFrameListMost is
+// not read. seen and match (for the log, the probe of the layout): the master elements read, and those whose bodies at
+// + 8 and + 0x10 are the two bodies of the instance at + 0 (so + 0 is the instance, as Havok lays it out).
+inline int FrameBodyConstraints(const TruckMemory &m, uint64_t body, uint64_t *out, int most, int *seen = nullptr, int *match = nullptr)
 {
     int n = 0;
     uint64_t list = 0;
@@ -55,8 +57,14 @@ inline int FrameBodyConstraints(const TruckMemory &m, uint64_t body, uint64_t *o
     if (m.get(body + kFrameMaster, list) && m.get(body + kFrameMasterCount, masters) && masters <= kFrameListMost)
         for (int i = 0; i < masters; i++)
         {
-            uint64_t inst = 0;
-            if (m.get(list + (uint64_t)i * kFrameMasterStep, inst)) add(inst);
+            uint64_t inst = 0, e0 = 0, e1 = 0, a = 0, b = 0;
+            const uint64_t at = list + (uint64_t)i * kFrameMasterStep;
+            if (!m.get(at, inst)) continue;
+            add(inst);
+            if (seen) ++*seen;
+            if (match && m.get(at + 8, e0) && m.get(at + 0x10, e1) && m.get(inst + kFrameInstBodyA, a) && m.get(inst + kFrameInstBodyB, b) &&
+                ((e0 == a && e1 == b) || (e0 == b && e1 == a)))
+                ++*match;
         }
     if (m.get(body + kFrameSlave, list) && m.get(body + kFrameSlaveCount, slaves) && slaves >= 0 && slaves <= kFrameListMost)
         for (int i = 0; i < slaves; i++)
@@ -85,13 +93,16 @@ struct FrameJoint
     int hung;                    // wheels whose own constraint was found
     int frontOnChassis;          // of them, the wheels that hang on the chassis itself
     int refused;                 // spring hinges on a wheel's body that were not the frame's (an axis not along, or no wheels beyond)
+    int masterSeen, masterMatch; // master elements read, and those whose bodies are their instance's (the layout's probe)
 };
 
-// The axis along the truck: the hinge's first column mostly x (the long axis of the game's truck frames).
+// The axis along the truck: the hinge's first column within kFrameAxisMostDeg of x, the long axis of the game's truck
+// frames (review F1: a steering pivot's axis is up, a walking beam's across, and neither comes near).
+static const float kFrameAxisMostDeg = 8.0f;
 inline bool FrameAxisAlong(const float a[3])
 {
     const float len = sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
-    return len > 0.5f && len < 2.0f && fabsf(a[0]) >= 0.7f * len;
+    return len > 0.5f && len < 2.0f && fabsf(a[0]) >= cosf(kFrameAxisMostDeg * 3.14159265f / 180.0f) * len;
 }
 
 // The driven truck's frame joint. False where it has none (a rigid frame) or a step is not there; j says how far it got.
@@ -107,7 +118,7 @@ inline bool FrameJointFind(const TruckMemory &m, const TruckRefs &r, const Frame
     {
         uint64_t body = 0, data = 0, v = 0;
         if (!m.get(r.wheel[i] + kFrameWheelBody, body) || !m.get(r.wheel[i] + kFrameWheelData, data) || !m.get(data, v) || v != vt.wheelData) continue;
-        const int n = FrameBodyConstraints(m, body, list, kFrameListMost);
+        const int n = FrameBodyConstraints(m, body, list, kFrameListMost, &j.masterSeen, &j.masterMatch);
         for (int k = 0; k < n; k++)
         {
             uint64_t d = 0;
@@ -146,7 +157,7 @@ inline bool FrameJointFind(const TruckMemory &m, const TruckRefs &r, const Frame
         bool seen = false;
         for (int k = 0; k < i; k++) seen = seen || hang[k] == h;
         if (seen) continue;
-        const int n = FrameBodyConstraints(m, h, list, kFrameListMost);
+        const int n = FrameBodyConstraints(m, h, list, kFrameListMost, &j.masterSeen, &j.masterMatch);
         for (int k = 0; k < n; k++)
         {
             uint64_t data = 0, motor = 0, v = 0;

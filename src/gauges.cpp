@@ -3413,11 +3413,12 @@ static void FrameFlexPass(FrameTune &t, const TruckMemory &m, const TruckRefs &r
     if (t.looked && (!lookedBefore || keyBefore != t.key))
     {
         if (t.found)
-            Log(L"frame flex: the joint found: wheel %d's body hangs on %p, its hinge %p (data %p, motor %p) to %p, axis %.2f %.2f %.2f; %d of %d wheels' constraints found, %d spring hinges refused",
-                j.wheel, (void *)j.front, (void *)j.instance, (void *)j.data, (void *)j.motor, (void *)j.other, j.axis[0], j.axis[1], j.axis[2], j.hung, r.wheels, j.refused);
+            Log(L"frame flex: the joint found: wheel %d's body hangs on %p, its hinge %p (data %p, motor %p) to %p, axis %.2f %.2f %.2f; %d of %d wheels' constraints found, %d spring hinges refused; %d of %d master entries hold their instance's bodies",
+                j.wheel, (void *)j.front, (void *)j.instance, (void *)j.data, (void *)j.motor, (void *)j.other, j.axis[0], j.axis[1], j.axis[2], j.hung, r.wheels, j.refused,
+                j.masterMatch, j.masterSeen);
         else
-            Log(L"frame flex: none on this truck, the frame is rigid (%d of %d wheels' constraints found, %d hang on the chassis, %d spring hinges refused)", j.hung, r.wheels,
-                j.frontOnChassis, j.refused);
+            Log(L"frame flex: none on this truck, the frame is rigid (%d of %d wheels' constraints found, %d hang on the chassis, %d spring hinges refused; %d of %d master entries hold their instance's bodies)",
+                j.hung, r.wheels, j.frontOnChassis, j.refused, j.masterMatch, j.masterSeen);
     }
     if (t.fresh)
         Log(L"frame flex: file %.0f, damping %.0f, twist %.1f to %.1f degrees; now x%.2f, twist x%.2f", t.stock[kFrameSpring], t.stock[kFrameDamping], FrameDeg(t.stock[kFrameMin]),
