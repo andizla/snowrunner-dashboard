@@ -896,7 +896,9 @@ keeps, so a gain of x0 written there still marks a swing axle.</p>
 CamberAnglePhysics at + 0x88 in radians, and CamberSuspensionMultiplier at + 0x8C as written (found in the code of 6ab52f5d and
 6a607c05). The look's code reads + 0x84 and + 0x8C from the wheel object on each call and turns the tilt to the wheel's side
 itself, so one figure serves both sides. The parser fills the wheel object itself, so the stock is the first read of each wheel
-object, kept by its address. A value equal to the word the mod last wrote there is the mod's: a rebuild that leaves it never
+object, kept by its address. Of the 128 places kept, one is given up only once its object holds nothing the mod wrote; with
+none to give up a new wheel is neither kept nor written, and "camber: all 128 kept wheels still hold values the mod wrote" says
+so once. A value equal to the word the mod last wrote there is the mod's: a rebuild that leaves it never
 becomes a stock, and a gain of x2 stays x2 of the file. Any other value is a new stock. A new truck, new wheel objects or new
 constraints start a generation. The gain multiplies the stock multiplier. The offset goes onto the stock angle with the stock's
 own sign, within the parser's 30 degrees. The front is the front axle, as RideFront splits. At x1 and +0 nothing is written, and

@@ -9,7 +9,9 @@
 // parser fills the wheel object itself (the same function reads the wheel's Havok body at + 0x18), so no record of
 // the file's figures the mod never writes was found.
 //
-// So the stock is the first read of each wheel object, kept by the object's address. A value that is the word the mod
+// So the stock is the first read of each wheel object, kept by the object's address in 128 places; a place is given
+// up only once its object holds nothing the mod wrote (the review's F1), and with none to give up a new wheel is
+// neither kept nor written. A value that is the word the mod
 // last wrote to that object is the mod's, so a rebuild that keeps the object and leaves the written value in it never
 // becomes a stock (the Reviewer's point 2 on the brief: x2 of the file, never x4). Any other value is the game's new
 // stock, read again. A new truck or a new set of wheel objects is a new generation (its wheels' constraints too, as
@@ -61,6 +63,8 @@ struct CamberTune
     bool fresh;                   // a stock was read on this pass
     int wroteNow;                 // values written on this pass
     int putBack;                  // values the game put back at the stock the pass after a write
+    int unkept;                   // wheels on this pass with no place to keep (every place holds the mod's word)
+    bool saidFull;                // that was logged
 };
 
 inline bool CamberSame(float a, float b) { return !memcmp(&a, &b, sizeof a); }
@@ -83,24 +87,47 @@ inline float CamberWant(int k, float stock, float gain, float restDeg)
     return fmaxf(-kCamberRenderMost, fminf(kCamberRenderMost, v));
 }
 
-// The kept place of a wheel object, a new one (the oldest given up) where it has none.
-inline int CamberPlace(CamberTune &t, uint64_t object, bool &isNew)
+// Whether a kept place's object still holds the mod's word: still the wheel class, and a value the mod wrote still
+// there. Such a place is never given up, or the word would be read as a stock when the truck is driven again (the
+// review's F1: x2 left on a truck, 128 other wheels, then x4).
+inline bool CamberHolds(const CamberWheel &w, const TruckMemory &m, uint64_t wheelClass)
 {
-    int oldest = 0;
+    if (!w.ours[kCamberRender] && !w.ours[kCamberGain]) return false;
+    uint64_t cls = 0;
+    if (!m.get(w.object, cls) || cls != wheelClass) return false;
+    for (int k = 0; k < kCamberValues; k++)
+    {
+        float now = 0.0f;
+        if (w.ours[k] && m.get(w.object + kCamberAt[k], now) && CamberSame(now, w.wrote[k])) return true;
+    }
+    return false;
+}
+
+// The kept place of a wheel object. Where it has none: a free place, else the oldest place not seen on this pass whose
+// object holds nothing of the mod's. -1 where every place still holds the mod's word: the wheel is then neither kept
+// nor written.
+inline int CamberPlace(CamberTune &t, const TruckMemory &m, uint64_t wheelClass, uint64_t object, bool &isNew)
+{
+    isNew = false;
+    int free = -1, oldest = -1;
     for (int i = 0; i < kCamberKept; i++)
     {
-        if (t.kept[i].object == object)
+        const CamberWheel &w = t.kept[i];
+        if (w.object == object) return i;
+        if (!w.object)
         {
-            isNew = false;
-            return i;
+            if (free < 0) free = i;
+            continue;
         }
-        if (!t.kept[i].object || t.kept[i].used < t.kept[oldest].used) oldest = i;
-        if (!t.kept[i].object) break;
+        if (w.used == t.pass || (oldest >= 0 && w.used >= t.kept[oldest].used) || CamberHolds(w, m, wheelClass)) continue;
+        oldest = i;
     }
+    const int at = free >= 0 ? free : oldest;
+    if (at < 0) return -1;
     isNew = true;
-    t.kept[oldest] = CamberWheel{};
-    t.kept[oldest].object = object;
-    return oldest;
+    t.kept[at] = CamberWheel{};
+    t.kept[at].object = object;
+    return at;
 }
 
 // The stock of a driven wheel (k kCamberRender or kCamberGain), false where it is not read. The swing mark reads this,
@@ -132,7 +159,7 @@ inline int CamberTuneStep(CamberTune &t, const TruckMemory &m, const TruckRefs &
 {
     t.pass++;
     t.fresh = t.newGeneration = false;
-    t.wroteNow = t.putBack = 0;
+    t.wroteNow = t.putBack = t.unkept = 0;
     const uint64_t key = CamberKey(m, r);
     if (t.vehicle != r.vehicle || t.key != key)
     {
@@ -158,7 +185,12 @@ inline int CamberTuneStep(CamberTune &t, const TruckMemory &m, const TruckRefs &
             !m.get(r.wheel[i] + kWheelCamberMultiplier, now[kCamberGain]) || !m.get(r.wheel[i] + kWheelCamberPhysics, physics))
             continue;
         bool isNew = false;
-        const int at = CamberPlace(t, r.wheel[i], isNew);
+        const int at = CamberPlace(t, m, wheelClass, r.wheel[i], isNew);
+        if (at < 0)
+        {
+            t.unkept++; // nowhere to keep its stock: neither read as one nor written
+            continue;
+        }
         t.at[i] = at;
         CamberWheel &w = t.kept[at];
         w.used = t.pass;

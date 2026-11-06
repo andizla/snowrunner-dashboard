@@ -3537,6 +3537,59 @@ int main()
               "written again until a rebuild; no gain where the file has none; another truck and back keeps the stock; a foreign object is never touched");
     }
 
+    // the review's F1 (review_swing_camber.md): truck A left at x2, then 32 other four-wheel trucks (128 wheel objects);
+    // back in A at x2 it is x2 of the file, never x4, and x1 gives the file back. With every place holding the mod's word
+    // a new truck's wheels are neither kept nor written
+    {
+        static uint8_t fo[33 * 4 + 4][0x100];
+        static CamberTune ft;
+        const uint64_t fcls = 0x7123450;
+        auto fput = [&](int i, uint32_t at, float x) { memcpy(fo[i] + at, &x, sizeof x); };
+        auto fget = [&](int i, uint32_t at) { float x = 0.0f; memcpy(&x, fo[i] + at, sizeof x); return x; };
+        auto truck = [&](int first, uint64_t vehicle) {
+            TruckRefs tr = {};
+            tr.vehicle = vehicle;
+            tr.wheels = 4;
+            for (int i = 0; i < 4; i++)
+            {
+                const uint64_t c = 0xA00000 + (uint64_t)(first + i);
+                memcpy(fo[first + i], &fcls, sizeof fcls);
+                memcpy(fo[first + i] + kSuspConstraintAt, &c, sizeof c);
+                tr.wheel[i] = (uint64_t)(uintptr_t)fo[first + i];
+            }
+            return tr;
+        };
+        for (int i = 0; i < 33 * 4 + 4; i++)
+        {
+            memset(fo[i], 0, sizeof fo[i]);
+            fput(i, 0x84, 6.0f * kCamberRad);
+            fput(i, 0x8C, 1.8f);
+        }
+        const bool ffront[4] = { true, true, false, false };
+        const float fx1[2] = { 1.0f, 1.0f }, fx2[2] = { 2.0f, 2.0f }, frest[2] = { 0.0f, 0.0f };
+        const TruckRefs fa = truck(0, 0x6000000);
+        const bool aAt2 = CamberTuneStep(ft, kNativeMemory, fa, ffront, fx2, frest, fcls) == 4 && fget(0, 0x8C) == 1.8f * 2.0f;
+        for (int k = 1; k <= 32; k++) CamberTuneStep(ft, kNativeMemory, truck(k * 4, 0x6000000 + (uint64_t)k * 0x1000), ffront, fx1, frest, fcls);
+        const bool aStill = CamberTuneStep(ft, kNativeMemory, fa, ffront, fx2, frest, fcls) == 0 && fget(0, 0x8C) == 1.8f * 2.0f && fget(3, 0x8C) == 1.8f * 2.0f && ft.unkept == 0;
+        const float fAfter = fget(0, 0x8C);
+        const bool aBack = CamberTuneStep(ft, kNativeMemory, fa, ffront, fx1, frest, fcls) == 4 && fget(0, 0x8C) == 1.8f && fget(3, 0x8C) == 1.8f;
+        printf("     camber F1: A at x2 %.2f, after 32 other trucks at x2 %.2f, at x1 %.2f (file 1.80)\n", 1.8f * 2.0f, fAfter, fget(0, 0x8C));
+        // every place holding the mod's word: 32 trucks written x2, then a 33rd truck has none to take
+        static CamberTune fg;
+        for (int i = 0; i < 33 * 4; i++) fput(i, 0x8C, 1.8f);
+        for (int k = 0; k < 32; k++) CamberTuneStep(fg, kNativeMemory, truck(k * 4, 0x7000000 + (uint64_t)k * 0x1000), ffront, fx2, frest, fcls);
+        const TruckRefs fn = truck(32 * 4, 0x7100000);
+        const bool fFull = CamberTuneStep(fg, kNativeMemory, fn, ffront, fx2, frest, fcls) == 0 && fg.unkept == 4 && fg.at[0] < 0 && fget(32 * 4, 0x8C) == 1.8f &&
+                          fget(0, 0x8C) == 1.8f * 2.0f;
+        // one of them put back at the file by the game: its place is given up, and the new truck's first wheel is kept
+        fput(0, 0x8C, 1.8f);
+        fput(0, 0x84, 6.0f * kCamberRad);
+        const bool freed = CamberTuneStep(fg, kNativeMemory, fn, ffront, fx2, frest, fcls) == 1 && fg.unkept == 3 && fg.at[0] >= 0 && fget(32 * 4, 0x8C) == 1.8f * 2.0f;
+        Check(aAt2 && aStill && aBack && fFull && freed,
+              "camber (review F1): a truck left at x2 and 32 other four-wheel trucks after it: back at x2 it is x2 of the file, not x4, and x1 gives the file; "
+              "a place is given up only once its object holds nothing the mod wrote; with every place holding the mod's word a new wheel is neither kept nor written");
+    }
+
     RealImageTest();
 
     printf(g_failed ? "TRUCK TEST FAILED (%d)\n" : "TRUCK TEST OK\n", g_failed);

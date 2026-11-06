@@ -4433,6 +4433,11 @@ static void CamberPass(CamberTune &t, const TruckMemory &m, const TruckRefs &r, 
         line[used < (int)sizeof line ? used : (int)sizeof line - 1] = 0;
         Log(L"camber: generation %u, per wheel the render and physics camber in degrees and the multiplier as read: %S", t.generation, line);
     }
+    if (t.unkept && !t.saidFull)
+    {
+        t.saidFull = true;
+        Log(L"camber: all %d kept wheels still hold values the mod wrote: %d wheels of this truck are neither kept nor written (said once)", kCamberKept, t.unkept);
+    }
     if (t.putBack) Log(L"camber: %d values back at the file's the pass after the write: the game sets them from elsewhere, not written again until a rebuild", t.putBack);
     if (t.wroteNow)
     {
