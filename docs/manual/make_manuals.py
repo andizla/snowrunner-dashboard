@@ -273,10 +273,13 @@ file in <code>Gauges\trucks</code>, beside its scales, with <code>Own=0</code> w
 <p><b>One truck or every truck of its kind.</b> Under the box, <b>For</b> picks <b>This truck only</b> or <b>Every</b> truck of
 its kind, and the line under it says which is in force: this truck, every truck of the kind, or the default. One truck's set
 goes in a <code>[Suspension:&lt;id&gt;]</code> section of the kind's file, by the game's own id of that truck, and wins over the
-kind's. The game makes a truck anew under another id at a recovery or in a garage: when the same kind comes back within 20
-seconds with no other truck driven between, the new id takes the set over, and the log says so. A truck taken out of the
+kind's. When the game rebuilds the truck it gives it another id: when the same kind comes back within 20 seconds with no
+other truck driven between, or the new id comes on the same truck while you drive, the new id takes the set over, and the log
+says so. The old section is marked <code>TakenBy</code> and <code>TakenAt</code>, and a save keeps only the newest 10 marked sections of a file. A truck taken out of the
 warehouse gets a new id and starts on its kind's settings; pick This truck only again for its own. Unticking the box at the
-truck's level keeps its set and puts the kind's in force; This truck only brings it back.</p>
+truck's level keeps its set and puts the kind's in force; This truck only brings it back. Every with no set for the kind
+moves the truck's set up to the kind. With a set for the kind it puts that one in force and keeps the truck's, which This
+truck only brings back.</p>
 <ul><li><b>Spring and Damping</b> (<code>SpringScale</code>, <code>DampingScale</code>, x0.25 to x4): the truck's own spring
 and damping times a factor. Above 1 the spring is stiffer and the truck sits higher, below 1 softer and lower. More damping
 settles the body sooner, less lets it bounce longer. The game takes a wheel's spring and damping only up to 1, so where a
