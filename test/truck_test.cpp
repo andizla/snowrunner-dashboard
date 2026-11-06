@@ -3615,6 +3615,56 @@ int main()
               "a place is given up only once its object holds nothing the mod wrote; with every place holding the mod's word a new wheel is neither kept nor written");
     }
 
+    // the take-over's check (BRIEF_takeover_other_truck.md): the old truck counts as there only with its id and kind,
+    // a chassis body of the new one's class and a truck's mass, in the new truck's world (not 0)
+    {
+        const uint64_t base = 0x9000000, v1 = base, m1 = base + 0x1000, b1 = base + 0x1800, i1 = base + 0x1C00, v2 = base + 0x2000, m2 = base + 0x3000,
+                       b2 = base + 0x3800, vt = kExe + 0x1234560, world = 0x9100000;
+        g_game.push_back(Region{ base, std::vector<uint8_t>(0x4000, 0) });
+        const char *oldId = "{11111111-2222-3333-4444-555555555555}";
+        for (int i = 0; i <= 38; i++) Put(i1 + i, oldId[i]);
+        Put(v1 + 0x48, i1);
+        Put(v1 + 0x60, m1);
+        PutText(m1 + 0x588, "test_kind", 0);
+        Put(m1 + 0x230, b1);
+        Put(b1, vt);
+        Put(b1 + 0x22C, 1.0f / 3000.0f);
+        Put(b1 + 0x10, world);
+        Put(v2 + 0x60, m2);
+        PutText(m2 + 0x588, "test_kind", 0);
+        Put(m2 + 0x230, b2);
+        Put(b2, vt);
+        Put(b2 + 0x22C, 1.0f / 3500.0f);
+        Put(b2 + 0x10, world);
+        TruckIdentity old = {};
+        strncpy_s(old.key, "test_kind", _TRUNCATE);
+        strncpy_s(old.id, oldId, _TRUNCATE);
+        old.named = true;
+        TruckThere o = {};
+        const bool there = TruckStillThere(kMemory, v1, old, v2, o) && o.body == b1 && o.world == world && o.newWorld == world && !strcmp(o.id, oldId) &&
+                           !strcmp(o.kind, "test_kind");
+        Put(i1 + 1, '9');
+        const bool otherId = !TruckStillThere(kMemory, v1, old, v2, o) && o.id[1] == '9';
+        Put(i1 + 1, '1');
+        const bool unread = !TruckStillThere(kMemory, 0x9800000, old, v2, o) && !o.id[0] && !o.body;
+        Put(b1 + 0x10, (uint64_t)0);
+        const bool outOfWorld = !TruckStillThere(kMemory, v1, old, v2, o) && !strcmp(o.id, oldId);
+        Put(b1 + 0x10, world + 0x1000);
+        const bool otherWorld = !TruckStillThere(kMemory, v1, old, v2, o);
+        Put(b1 + 0x10, world);
+        PutText(m1 + 0x588, "test_other", 0);
+        const bool otherKind = !TruckStillThere(kMemory, v1, old, v2, o);
+        PutText(m1 + 0x588, "test_kind", 0);
+        Put(b1, vt + 8);
+        const bool otherClass = !TruckStillThere(kMemory, v1, old, v2, o);
+        Put(b1, vt);
+        const bool again = TruckStillThere(kMemory, v1, old, v2, o);
+        g_game.pop_back();
+        Check(there && otherId && unread && outOfWorld && otherWorld && otherKind && otherClass && again,
+              "take-over check: the old truck is there with its id and kind and its chassis in the new truck's world; another id, no vehicle, a body out of "
+              "the world (0) or in another, another kind or another body class is gone");
+    }
+
     RealImageTest();
 
     printf(g_failed ? "TRUCK TEST FAILED (%d)\n" : "TRUCK TEST OK\n", g_failed);

@@ -399,6 +399,13 @@ inline void TruckBuildKey(const TruckRaw &t, char (&key)[kMaxText])
     _snprintf_s(key, _TRUNCATE, "tank%g_wheels%d_gearbox%d_engine%d", t.tank, t.wheels, t.gearSpeeds, t.damageKnown ? t.damageCapacity : 0);
 }
 
+// The key names a section of the ini: what would end the name there, or does not print, is replaced.
+inline void TruckKeyClean(char *key)
+{
+    for (char *c = key; *c; c++)
+        if ((unsigned char)*c <= 0x20 || (unsigned char)*c > 0x7E || *c == '[' || *c == ']') *c = '_';
+}
+
 // The identity of the truck in r, whose values are t.
 inline void TruckKey(const TruckMemory &m, const TruckRefs &r, const TruckRaw &t, TruckIdentity &id)
 {
@@ -406,15 +413,56 @@ inline void TruckKey(const TruckMemory &m, const TruckRefs &r, const TruckRaw &t
     size_t length = 0;
     if (TruckText(m, r.model + 0x588, id.key, length) && length && id.key[0])
     {
-        // the key names a section of the ini: what would end the name there, or does not print, is replaced
-        for (char *c = id.key; *c; c++)
-            if ((unsigned char)*c <= 0x20 || (unsigned char)*c > 0x7E || *c == '[' || *c == ']') *c = '_';
+        TruckKeyClean(id.key);
         id.named = true;
     }
     else TruckBuildKey(t, id.key);
     uint64_t chars = 0;
     char text[39];
     if (m.get(r.vehicle + 0x48, chars) && chars >= 0x10000 && m.peek(chars, text, sizeof text) && !text[38] && TruckIdText(text, 38)) memcpy(id.id, text, sizeof text);
+}
+
+// A vehicle's chassis body (model + 0x230, the model at vehicle + 0x60), the body's vtable, its inverse mass
+// (+ 0x22C) and its world: hkpWorldObject's m_world at + 0x10 in Havok's layout (not confirmed in this game yet; the
+// once-a-truck line gives the chassis's and the first wheel body's). False where a read fails.
+inline bool TruckChassisWorld(const TruckMemory &m, uint64_t vehicle, uint64_t &body, uint64_t &vtable, float &inverseMass, uint64_t &world)
+{
+    uint64_t model = 0;
+    body = vtable = world = 0;
+    inverseMass = 0.0f;
+    return m.get(vehicle + 0x60, model) && m.get(model + 0x230, body) && m.get(body, vtable) && m.get(body + 0x22C, inverseMass) && m.get(body + 0x10, world);
+}
+
+// The take-over's check on another vehicle within 20 s (BRIEF_takeover_other_truck.md and the Reviewer's addendum):
+// whether the truck that went is still in the game. A switch to another truck of the kind through the map goes through
+// "none is driven" as a rebuild does, and a freed vehicle block can still read its old id. So the old truck counts as
+// there only when all hold: its vehicle reads the old id (vehicle + 0x48) and the old kind by name (model + 0x588); its
+// chassis body has the new truck's chassis's vtable and the inverse mass of 10 kg to 1000 t; and that body's world is
+// not 0 and is the new chassis's. A destroyed truck's bodies leave the world before they are freed; a truck left
+// through the map stays in it. Anything else (a read fails, another id or kind, another world, or none) is gone.
+struct TruckThere
+{
+    char id[40];                              // what the old vehicle reads now ("" not read)
+    char kind[kMaxText];
+    uint64_t body, world, newBody, newWorld;  // the old and the new chassis body and their worlds (0 not read)
+    bool there;
+};
+inline bool TruckStillThere(const TruckMemory &m, uint64_t oldVehicle, const TruckIdentity &old, uint64_t newVehicle, TruckThere &o)
+{
+    o = TruckThere{};
+    uint64_t chars = 0, model = 0, vtable = 0, newVtable = 0;
+    char text[39];
+    if (m.get(oldVehicle + 0x48, chars) && chars >= 0x10000 && m.peek(chars, text, sizeof text) && !text[38] && TruckIdText(text, 38)) memcpy(o.id, text, sizeof text);
+    size_t length = 0;
+    if (m.get(oldVehicle + 0x60, model) && TruckText(m, model + 0x588, o.kind, length) && length) TruckKeyClean(o.kind);
+    else o.kind[0] = 0;
+    float inverse = 0.0f, newInverse = 0.0f;
+    const bool body = TruckChassisWorld(m, oldVehicle, o.body, vtable, inverse, o.world);
+    const bool newBody = TruckChassisWorld(m, newVehicle, o.newBody, newVtable, newInverse, o.newWorld);
+    const float mass = inverse > 0.0f ? 1.0f / inverse : 0.0f;
+    o.there = old.named && old.id[0] && !strcmp(o.id, old.id) && !strcmp(o.kind, old.key) && body && newBody && vtable && vtable == newVtable && o.body != o.newBody &&
+              isfinite(mass) && mass >= 10.0f && mass <= 1.0e6f && o.world && o.world == o.newWorld;
+    return o.there;
 }
 
 // The driven truck from pass to pass. taken is the truck the mod goes by, its key "" while none is read. Another
