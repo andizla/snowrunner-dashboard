@@ -52,7 +52,7 @@ struct GearBindings { Binding slot[kActCount][kBindingSlots]; };
 inline void KeyText(int vk, char *out, size_t size)
 {
     KeyName(vk, out, size);
-    if (!strncmp(out, "Key ", 4)) sprintf_s(out, size, "%d", vk);
+    if (!strncmp(out, "Key ", 4)) _snprintf_s(out, size, _TRUNCATE, "%d", vk);
 }
 
 // A key from its text: a name KeyName gives, or a virtual key code (1 to 254). 0 where it is neither.
@@ -77,15 +77,15 @@ inline void BindingText(const Binding &b, char *out, size_t size)
     char part[64];
     switch (b.kind)
     {
-    case kBindKey: KeyText((int)b.code, part, sizeof part); sprintf_s(out, size, "Key %s", part); break;
-    case kBindPad: PadName(b.code, part, sizeof part); sprintf_s(out, size, "Pad %s", part); break;
-    case kBindButton: sprintf_s(out, size, "Wheel %d Button %u", b.device, b.code); break;
+    case kBindKey: KeyText((int)b.code, part, sizeof part); _snprintf_s(out, size, _TRUNCATE, "Key %s", part); break;
+    case kBindPad: PadName(b.code, part, sizeof part); _snprintf_s(out, size, _TRUNCATE, "Pad %s", part); break;
+    case kBindButton: _snprintf_s(out, size, _TRUNCATE, "Wheel %d Button %u", b.device, b.code); break;
     case kBindPov:
-        if (b.code > 1) sprintf_s(out, size, "Wheel %d POV %u %s", b.device, b.code, kPovNames[b.direction & 3]);
-        else sprintf_s(out, size, "Wheel %d POV %s", b.device, kPovNames[b.direction & 3]);
+        if (b.code > 1) _snprintf_s(out, size, _TRUNCATE, "Wheel %d POV %u %s", b.device, b.code, kPovNames[b.direction & 3]);
+        else _snprintf_s(out, size, _TRUNCATE, "Wheel %d POV %s", b.device, kPovNames[b.direction & 3]);
         break;
-    case kBindAxis: sprintf_s(out, size, "Wheel %d Axis %u%s", b.device, b.code, b.inverted ? " inverted" : ""); break;
-    default: strcpy_s(out, size, "None");
+    case kBindAxis: _snprintf_s(out, size, _TRUNCATE, "Wheel %d Axis %u%s", b.device, b.code, b.inverted ? " inverted" : ""); break;
+    default: strncpy_s(out, size, "None", _TRUNCATE);
     }
 }
 
@@ -116,8 +116,8 @@ inline bool BindingParse(const char *text, Binding &out, char *why, size_t whySi
         char name[64] = "";
         for (int i = 1; i < words; i++)
         {
-            if (i > 1) strcat_s(name, " ");
-            strcat_s(name, word[i]);
+            if (i > 1) strncat_s(name, " ", _TRUNCATE);
+            strncat_s(name, word[i], _TRUNCATE);
         }
         const int vk = KeyFromText(name);
         if (!vk) return refuse("no such key (a name as the tab shows it, or a code from 1 to 254)");
@@ -462,8 +462,8 @@ inline bool BindingCaptureHeld(const InputCapture &c, const InputSnapshot &s, ch
     out[0] = 0;
     auto add = [&](const char *part) {
         if (strlen(out) + strlen(part) + 3 > size) return;
-        if (out[0]) strcat_s(out, size, ", ");
-        strcat_s(out, size, part);
+        if (out[0]) strncat_s(out, size, ", ", _TRUNCATE);
+        strncat_s(out, size, part, _TRUNCATE);
     };
     char part[64];
     if (c.padHeld)
@@ -488,7 +488,7 @@ inline bool BindingCaptureHeld(const InputCapture &c, const InputSnapshot &s, ch
         for (int i = 0; i < kInputPovsMost; i++)
             if (c.povHeld[d][i])
             {
-                sprintf_s(part, "Wheel %d POV %d pointing at %u degrees", d + 1, i + 1, s.device[d].pov[i] / 100);
+                _snprintf_s(part, _TRUNCATE, "Wheel %d POV %d pointing at %u degrees", d + 1, i + 1, s.device[d].pov[i] / 100);
                 add(part);
             }
     }

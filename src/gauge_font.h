@@ -66,7 +66,7 @@ static bool FontsLoad(GaugeFonts &f, const wchar_t *dir, const FontStyle *styles
     for (int i = 0; i < 2; i++)
     {
         wchar_t path[MAX_PATH];
-        swprintf_s(path, L"%s\\%s", dir, names[i]);
+        _snwprintf_s(path, _TRUNCATE, L"%s\\%s", dir, names[i]);
         f.file[i] = FontReadFile(path);
         int x0, y0, x1, y1;
         if (!f.file[i] || !stbtt_InitFont(&f.info[i], f.file[i], stbtt_GetFontOffsetForIndex(f.file[i], 0)) ||

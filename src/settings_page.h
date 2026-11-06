@@ -195,11 +195,11 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     ImGui::TextDisabled("%s", kPageTabHelp[tab]);
     ImGui::PopTextWrapPos();
     char child[32];
-    sprintf_s(child, "##tab_%s", kPageTabIds[tab]);
+    _snprintf_s(child, _TRUNCATE, "##tab_%s", kPageTabIds[tab]);
     const bool open = ImGui::BeginChild(child, ImVec2(0.0f, 0.0f), ImGuiChildFlags_NavFlattened | (st.wholeTab ? ImGuiChildFlags_AutoResizeY : 0));
 
     // the tips name temperatures in the unit the dial shows
-    auto degrees = [&](float c, char *out, size_t size) { sprintf_s(out, size, s.fahrenheit ? "%.0f F" : "%.0f C", s.fahrenheit ? c * 1.8f + 32.0f : c); };
+    auto degrees = [&](float c, char *out, size_t size) { _snprintf_s(out, size, _TRUNCATE, s.fahrenheit ? "%.0f F" : "%.0f C", s.fahrenheit ? c * 1.8f + 32.0f : c); };
 
     if (open && tab == kTabDisplay)
     {
@@ -446,7 +446,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             {
                 const Row &r = rows[i];
                 float shown = *r.value > 0.0f ? *r.value : r.own;
-                sprintf_s(buf, *r.value > 0.0f ? "%%.0f %s" : "%%.0f %s (class)", r.unit);
+                _snprintf_s(buf, _TRUNCATE, *r.value > 0.0f ? "%%.0f %s" : "%%.0f %s (class)", r.unit);
                 ImGui::PushID(i);
                 PageLabel(r.label, labelX);
                 ImGui::SetNextItemWidth(w);
@@ -499,7 +499,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             }
             degrees(kTempOutside, from, sizeof from);
             degrees(kTempWarm, to, sizeof to);
-            sprintf_s(tip, "The time a cold engine takes from %s to %s driven as usual. Idling takes much longer. Default 3 minutes.", from, to);
+            _snprintf_s(tip, _TRUNCATE, "The time a cold engine takes from %s to %s driven as usual. Idling takes much longer. Default 3 minutes.", from, to);
             PageTip(tip);
             PageLabel("Overheat", labelX);
             ImGui::SetNextItemWidth(w);
@@ -510,7 +510,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             }
             degrees(kTempHot, from, sizeof from);
             degrees(kTempRed, to, sizeof to);
-            sprintf_s(tip, "The time from %s into the red zone at %s floored with the wheels spinning at a standstill. Driving faster cools it. Default 1.5 minutes.", from, to);
+            _snprintf_s(tip, _TRUNCATE, "The time from %s into the red zone at %s floored with the wheels spinning at a standstill. Driving faster cools it. Default 1.5 minutes.", from, to);
             PageTip(tip);
             PageLabel("Cool-down", labelX);
             ImGui::SetNextItemWidth(w);
@@ -520,7 +520,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 act |= kPageChanged;
             }
             degrees(kTempCooled, to, sizeof to);
-            sprintf_s(tip, "The time a stopped engine takes from %s down to %s. Default 15 minutes.", from, to);
+            _snprintf_s(tip, _TRUNCATE, "The time a stopped engine takes from %s down to %s. Default 15 minutes.", from, to);
             PageTip(tip);
             // the outside temperature: by the map (the default), the slider shows and sets the temperature of the map's
             // section in force, its own or its region's; where none is, and with the map left out, it sets AmbientC. The
@@ -550,7 +550,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 }
             }
             degrees(kTempCold, to, sizeof to);
-            sprintf_s(tip, "How cold a truck that stood long is; in colder air the engine warms up slower. The cold lamp lights under %s. Default %s.", to, (degrees(15.0f, from, sizeof from), from));
+            _snprintf_s(tip, _TRUNCATE, "How cold a truck that stood long is; in colder air the engine warms up slower. The cold lamp lights under %s. Default %s.", to, (degrees(15.0f, from, sizeof from), from));
             PageTip(tip);
             // dimmed and wrapped: a map's name can be long
             ImGui::BeginDisabled();
@@ -597,7 +597,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             }
             degrees(kTempOutside, from, sizeof from);
             degrees(kTempWarm, to, sizeof to);
-            sprintf_s(tip, "The time the oil takes from %s to %s driven as usual, at least a minute after the coolant. Default 5 minutes.", from, to);
+            _snprintf_s(tip, _TRUNCATE, "The time the oil takes from %s to %s driven as usual, at least a minute after the coolant. Default 5 minutes.", from, to);
             PageTip(tip);
             // the ini holds the temperature in C; the slider shows it in the unit the dial shows
             float warn = s.fahrenheit ? s.oilWarnC * 1.8f + 32.0f : s.oilWarnC;
@@ -610,7 +610,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 s.oilWarnC = SettingsRange(s.fahrenheit ? (warn - 32.0f) / 1.8f : warn, kOilWarnRange[0], kOilWarnRange[1]);
                 act |= kPageChanged;
             }
-            PageTip((degrees(120.0f, to, sizeof to), sprintf_s(tip, "From this oil temperature the oil lamp blinks and a warning sounds. Default %s.", to), tip));
+            PageTip((degrees(120.0f, to, sizeof to), _snprintf_s(tip, _TRUNCATE, "From this oil temperature the oil lamp blinks and a warning sounds. Default %s.", to), tip));
         }
 
         ImGui::SeparatorText("Engine damage");
@@ -632,7 +632,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 act |= kPageChanged;
             }
             degrees(kTempHotDamage, at, sizeof at);
-            sprintf_s(tip, "Where the hot damage starts. Default %s, the red zone.", (degrees(118.0f, from, sizeof from), from));
+            _snprintf_s(tip, _TRUNCATE, "Where the hot damage starts. Default %s, the red zone.", (degrees(118.0f, from, sizeof from), from));
             PageTip(tip);
             PageLabel("Hot damage", labelX);
             ImGui::SetNextItemWidth(w);
@@ -643,7 +643,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             }
             degrees(kTempHotDamage, at, sizeof at);
             degrees(s.hotDamageFrom, from, sizeof from);
-            sprintf_s(tip, "The share of the engine lost each minute at %s, none under %s (Damage start). 0 is none. Default 10 %%.", at, from);
+            _snprintf_s(tip, _TRUNCATE, "The share of the engine lost each minute at %s, none under %s (Damage start). 0 is none. Default 10 %%.", at, from);
             PageTip(tip);
             PageLabel("Cold damage", labelX);
             ImGui::SetNextItemWidth(w);
@@ -654,7 +654,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             }
             degrees(0.0f, at, sizeof at);
             degrees(kTempCold, from, sizeof from);
-            sprintf_s(tip, "The share lost each minute floored at the red zone at %s; less when warmer or working lighter, none from %s. 0 is none. Default 5 %%.", at, from);
+            _snprintf_s(tip, _TRUNCATE, "The share lost each minute floored at the red zone at %s; less when warmer or working lighter, none from %s. 0 is none. Default 5 %%.", at, from);
             PageTip(tip);
             ImGui::EndDisabled();
             if (view.engineCapacity > 0) ImGui::TextDisabled("This truck's engine has %d of %d left.", view.engineCapacity - view.engineDamage, view.engineCapacity);
@@ -775,9 +775,9 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 }
                 char gearTip[400], whose[160] = "";
                 if (!view.gearHoldOwn)
-                    sprintf_s(whose, " Until it is moved: the %s class's%s, a scout 1.5 s and the others 2.5 s.", PageClassWord(view.autoClass),
+                    _snprintf_s(whose, _TRUNCATE, " Until it is moved: the %s class's%s, a scout 1.5 s and the others 2.5 s.", PageClassWord(view.autoClass),
                           view.autoByWeight ? " (by the truck's weight)" : "");
-                sprintf_s(gearTip, "Going up, the mod's automatic waits in each gear at least this long. Kept for this gearbox (%s) by the Engine tab's Own settings.%s Needs Real engine (Power tab).", view.gearbox, whose);
+                _snprintf_s(gearTip, _TRUNCATE, "Going up, the mod's automatic waits in each gear at least this long. Kept for this gearbox (%s) by the Engine tab's Own settings.%s Needs Real engine (Power tab).", view.gearbox, whose);
                 ImGui::EndDisabled();
                 if (view.engHoldFrom) ImGui::TextDisabled("In force: %s%s", PageEngLevel(view.engHoldFrom, "gearbox"), view.engHoldFrom == 2 ? view.truck : "");
                 PageTip(gearTip);
@@ -1143,7 +1143,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         ImGui::SeparatorText("Controls");
         PageLabel("Toggle key", labelX);
         KeyName(s.toggleKey, buf, sizeof buf);
-        if (ImGui::Button(st.capture == 0 ? "Press a key (Esc: keep)###key" : (strcat_s(buf, "###key"), buf), ImVec2(w, 0)))
+        if (ImGui::Button(st.capture == 0 ? "Press a key (Esc: keep)###key" : (strncat_s(buf, "###key", _TRUNCATE), buf), ImVec2(w, 0)))
             st.capture = st.capture == 0 ? -1 : 0;
         PageTip("Hides the cluster and shows it again. None by default.");
         ImGui::SameLine();
@@ -1165,7 +1165,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         }
         bool beganNow = false;
         PageLabel("Pad toggle", labelX);
-        sprintf_s(buf, "%s###bind", s.padToggle);
+        _snprintf_s(buf, _TRUNCATE, "%s###bind", s.padToggle);
         if (ImGui::Button(buf, ImVec2(w, 0)) && st.capture < 1)
         {
             st.capture = 1;
@@ -1178,7 +1178,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         ImGui::SameLine();
         if (ImGui::SmallButton("None###nopad"))
         {
-            strcpy_s(s.padToggle, "None");
+            strncpy_s(s.padToggle, "None", _TRUNCATE);
             act |= kPageChanged;
         }
         if (st.capture >= 1)
@@ -1239,7 +1239,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 if (slot) ImGui::SameLine();
                 const bool waiting = view.captureAction == a && view.captureSlot == slot;
                 char text[64];
-                sprintf_s(text, "%s###bind", waiting ? "press a key, a button or move the pedal..." : view.bindText[a][slot]);
+                _snprintf_s(text, _TRUNCATE, "%s###bind", waiting ? "press a key, a button or move the pedal..." : view.bindText[a][slot]);
                 if (ImGui::Button(text, ImVec2(w * 0.42f, 0.0f))) BindingAsk(waiting ? kBindAskCancel : kBindAskCapture, a, slot);
                 ImGui::SameLine();
                 if (ImGui::SmallButton("x")) BindingAsk(kBindAskClear, a, slot);

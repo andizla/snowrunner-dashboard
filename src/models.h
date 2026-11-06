@@ -483,7 +483,7 @@ inline void TiltStep(TiltModel &m, const TruckRaw &t, const GaugeSettings &s, fl
 inline void TiltProbeText(const TruckRaw &t, const TiltModel &m, char *out, size_t size)
 {
     static const char *lamps[4] = { "dark", "green", "amber", "red" };
-    sprintf_s(out, size, "tilt: nose %s %.1f deg, leaning %s %.1f deg, lamp %s | y of the chassis axes as read: forward %.3f, up %.3f, left %.3f",
+    _snprintf_s(out, size, _TRUNCATE, "tilt: nose %s %.1f deg, leaning %s %.1f deg, lamp %s | y of the chassis axes as read: forward %.3f, up %.3f, left %.3f",
               m.pitchDeg < 0.0f ? "down" : "up", fabsf(m.pitchDeg), m.rollDeg < 0.0f ? "left" : "right", fabsf(m.rollDeg), lamps[m.lamp < 0 || m.lamp > 2 ? 0 : m.lamp + 1],
               t.forward[1], t.up[1], t.left[1]);
 }
@@ -788,11 +788,11 @@ inline void TempProbeText(const TruckRaw &t, const TempModel &m, const GaugeSett
 {
     if (!m.known)
     {
-        sprintf_s(out, size, "coolant not known yet: no truck was driven since the game started | %.0f C outside", s.ambientC);
+        _snprintf_s(out, size, _TRUNCATE, "coolant not known yet: no truck was driven since the game started | %.0f C outside", s.ambientC);
         return;
     }
     const float kmh = fabsf(t.speed) * 3.6f;
-    sprintf_s(out, size, "coolant %.1f C, %+.2f C/s, cold lamp %s%s | oil %.1f C, heading for %.1f%s | heat %.2f of a full load's (load %.2f), %.2f taken away (thermostat %.2f, air %.2f at %.1f km/h, fan %.2f, water %.2f at %.2f m%s) | %.0f C outside",
+    _snprintf_s(out, size, _TRUNCATE, "coolant %.1f C, %+.2f C/s, cold lamp %s%s | oil %.1f C, heading for %.1f%s | heat %.2f of a full load's (load %.2f), %.2f taken away (thermostat %.2f, air %.2f at %.1f km/h, fan %.2f, water %.2f at %.2f m%s) | %.0f C outside",
               m.temp, m.perSecond, TempCold(m) ? "on" : "off", TempZone(m) == 2 ? ", in the red zone" : "", m.oil, m.oilTarget, m.oil >= s.oilWarnC ? ", too hot" : "",
               m.heat, m.load, m.cooling, TempThermostat(m.temp), TempAirflow(m.temp, kmh, s.airFullKmh) - kFan * TempFan(m.temp), kmh, TempFan(m.temp), m.water, m.depth,
               t.waterKnown ? "" : " (not read)", s.ambientC);
@@ -1058,8 +1058,8 @@ inline float LiftChance(uint32_t &seed)
 inline void BoostProbeText(const TruckRaw &t, const BoostModel &m, const TurboChar &k, char *out, size_t size)
 {
     char last[96] = "none yet";
-    if (m.last != kLiftNone) sprintf_s(last, "the last a %s at %.2f bar, %.2f of its full sound", m.last == kLiftBlowOff ? "blow-off" : "flutter", m.lastBar, m.lastVolume);
-    sprintf_s(out, size, "boost %.2f bar of the turbo's %.2f, heading for %.2f | the rotor %.2f, heading for %.2f | n %.2f of the red zone's rpm, pedal %.2f, fuel %.2f, "
+    if (m.last != kLiftNone) _snprintf_s(last, _TRUNCATE, "the last a %s at %.2f bar, %.2f of its full sound", m.last == kLiftBlowOff ? "blow-off" : "flutter", m.lastBar, m.lastVolume);
+    _snprintf_s(out, size, _TRUNCATE, "boost %.2f bar of the turbo's %.2f, heading for %.2f | the rotor %.2f, heading for %.2f | n %.2f of the red zone's rpm, pedal %.2f, fuel %.2f, "
                          "full load %.2f bar there | the limit %.2f | a %s turbo, %s (n %.2f to %.2f, spool %.3f s) | lifts: %d blow-offs, %d flutters, %s",
               m.bar, k.most, m.target, m.rotor, m.want, m.n, TruckPedal(t), m.q, m.full, m.limit, kTurboNames[k.profile], k.petrol ? "petrol" : "diesel", k.n0, k.n1,
               k.tauRed, m.blowOffs, m.flutters, last);
@@ -1236,8 +1236,8 @@ inline void PowertrainProbeText(const TruckRaw &t, const PowertrainModel &m, flo
                                 float roof = 0.0f, bool heldBack = false)
 {
     char hand[96], terms[128] = "";
-    if (handed) sprintf_s(hand, "handed to the game: the torque factor %.2f, the game's own %.2f", written, game);
-    else strcpy_s(hand, "not handed to the game");
+    if (handed) _snprintf_s(hand, _TRUNCATE, "handed to the game: the torque factor %.2f, the game's own %.2f", written, game);
+    else strncpy_s(hand, "not handed to the game", _TRUNCATE);
     if (x >= 0.0f) snprintf(terms, sizeof terms, " | the factor's terms: the game's pedal, the wheels at %.2f of the gear's top, the roof %.2f there, the rise %s", x, roof, heldBack ? "paced" : "free");
     snprintf(out, size, "powertrain (%s): pedal %.2f, shaped %.2f | torque %.2f of the most at %.0f rpm (curve %.2f, cold x%.2f, boost x%.2f) | "
                          "power %.2f, fuel %.2f of floored at the red zone (the model's own, by the shaped pedal)%s",
@@ -2567,7 +2567,7 @@ inline void GearboxProbeText(const TruckRaw &t, const GearboxModel &m, bool driv
     const float top = TruckGearTop(t, t.gearEngaged), x = top > 0.0f ? m.by / top : 0.0f;
     const float ownTop = TruckGearTop(t, m.gear), ownX = ownTop > 0.0f ? m.by / ownTop : 0.0f;
     char kept[96] = "";
-    if (m.keepFor > 0.0f) sprintf_s(kept, sizeof kept, "kept in gear %d or under for %.0f s more (the grade), ", m.keep, m.keepFor);
+    if (m.keepFor > 0.0f) _snprintf_s(kept, sizeof kept, _TRUNCATE, "kept in gear %d or under for %.0f s more (the grade), ", m.keep, m.keepFor);
     char rules[400];
     snprintf(rules, sizeof rules, " | rules: feel %.2f, up at %.0f rpm, down at %.0f, lock at %.0f, unlock at %.0f, pause %.1f s, wanted %.2f s, %s (%.1f s moving), "
                      "kickdown armed %.1f s (window %.1f), cruise %.1f s, lift %.1f s, stuck %.1f s, start gear %d, the wheels at %.2f of the model's gear's top",
@@ -2957,11 +2957,11 @@ inline void ClutchProbeText(const ClutchModel &m, float travel, char *out, size_
 {
     if (m.dead)
     {
-        sprintf_s(out, size, "clutch (the needle's engine; a stall on a pedal is the game's): the engine stalled, %s, %d stalls",
+        _snprintf_s(out, size, _TRUNCATE, "clutch (the needle's engine; a stall on a pedal is the game's): the engine stalled, %s, %d stalls",
                   m.stalled > 0.0f ? "resting" : "waiting for the clutch pressed or neutral to start again", m.stalls);
         return;
     }
-    sprintf_s(out, size, "clutch (the needle's engine; a stall on a pedal is the game's): %s %.2f, grip %.2f, %s | engine %.0f rpm, gearbox %.0f rpm | torque %.2f, through the clutch %.2f | %d stalls",
+    _snprintf_s(out, size, _TRUNCATE, "clutch (the needle's engine; a stall on a pedal is the game's): %s %.2f, grip %.2f, %s | engine %.0f rpm, gearbox %.0f rpm | torque %.2f, through the clutch %.2f | %d stalls",
               m.automatic ? "works by itself, button" : "pedal", travel, m.grip, !m.connected ? "no gear in" : m.locked ? "locked" : m.grip > 0.0f ? "slipping" : "free",
               m.rpm, m.input, m.torque, m.carried, m.stalls);
 }
@@ -3274,15 +3274,15 @@ inline float CreepStep(CreepModel &m, const TruckRaw &t, const GaugeScale &k, bo
 // m, the holding part (armed or not, its share, its most) and the stall's case and seconds.
 inline void CreepProbeText(const TruckRaw &t, float share, const CreepCase &c, long hits, long calls, char *out, size_t size, const CreepModel *m = nullptr)
 {
-    char hold[160] = "";
+    char hold[256] = "";
     if (m && !c.converter)
     {
         const float wheels = c.idleSpin > 0.0f ? TruckDrivenSpin(t) / c.idleSpin : 0.0f;
         if (!m->mayStall)
-            sprintf_s(hold, " | holding %s, %.3f of its most %.3f, the line %.3f | the stall none here (the game's gears or A)", m->armed ? "armed" : "unarmed",
+            _snprintf_s(hold, _TRUNCATE, " | holding %s, %.3f of its most %.3f, the line %.3f | the stall none here (the game's gears or A)", m->armed ? "armed" : "unarmed",
                       m->hold, m->holdMost, m->share);
         else
-            sprintf_s(hold, " | holding %s, %.3f of its most %.3f, the line %.3f | the stall %s, under %.2f of the idle speed, stuck %.2f s%s%s",
+            _snprintf_s(hold, _TRUNCATE, " | holding %s, %.3f of its most %.3f, the line %.3f | the stall %s, under %.2f of the idle speed, stuck %.2f s%s%s",
                       m->armed ? "armed" : "unarmed", m->hold, m->holdMost, m->share, m->armed ? "armed" : "unarmed (pulling away)",
                       m->armed ? kHoldStall : kCreepStuck, m->stuck, wheels < (m->armed ? kHoldStall : kCreepStuck) ? " (under it)" : "",
                       m->sinceShift < kShiftQuiet ? ", a shift just now" : "");
@@ -3519,7 +3519,7 @@ inline int ClutchBurnPost(ClutchHeat &h, StallJob &j, const TruckRefs &r, int ca
 inline void ClutchHeatProbeText(const ClutchHeat &h, char *out, size_t size)
 {
     static const char *const lamp[] = { "none", "amber", "red", "red: the gearbox pays" };
-    sprintf_s(out, size, " | heat %.2f, %.0f %% of the burn point, %.2f a second, the warning %s", h.q, h.q / kClutchBurnFrom * 100.0f, h.power, lamp[ClutchLamp(h)]);
+    _snprintf_s(out, size, _TRUNCATE, " | heat %.2f, %.0f %% of the burn point, %.2f a second, the warning %s", h.q, h.q / kClutchBurnFrom * 100.0f, h.power, lamp[ClutchLamp(h)]);
 }
 
 // ---- the brake air ----
@@ -3587,7 +3587,7 @@ inline bool AirStep(AirModel &m, const TruckRaw &t, float speed, float dt)
 // The brake air in a line of text for the probe log.
 inline void AirProbeText(const TruckRaw &t, const AirModel &m, char *out, size_t size)
 {
-    sprintf_s(out, size, "brake air: %.2f bar, the compressor %s (cut-in %.1f, cut-out %.1f bar) | brake %.2f, handbrake %d | %d cut-outs",
+    _snprintf_s(out, size, _TRUNCATE, "brake air: %.2f bar, the compressor %s (cut-in %.1f, cut-out %.1f bar) | brake %.2f, handbrake %d | %d cut-outs",
               m.bar, m.pumping ? (TruckEngineOn(t) ? "running" : "waiting for the engine") : "resting", kAirCutIn, kAirCutOut, m.brake, t.handbrake, m.cutOuts);
 }
 
@@ -3686,20 +3686,20 @@ inline void DamageProbeText(const TruckRaw &t, const EngineRecord &e, const Dama
 {
     if (!t.damageKnown)
     {
-        sprintf_s(out, size, "engine damage: nothing behind the engine's handle");
+        _snprintf_s(out, size, _TRUNCATE, "engine damage: nothing behind the engine's handle");
         return;
     }
     float effect = 0.0f, torque = 1.0f;
     TruckEngineEffect(t.damage, t.damageCapacity, e, effect, torque);
     const bool same = fabsf(effect - t.damageEffect) < 0.0005f && fabsf(torque - t.torqueFactor) < 0.0005f;
     char record[256];
-    if (e.found) sprintf_s(record, "record %.80s: takes %d, the torque falls past %.2f of it, from x%.2f to x%.2f", e.name, e.capacity, e.threshold, e.torqueMin, e.torqueMax);
-    else if (!e.name[0]) sprintf_s(record, "the engine's record is looked up once the truck is driven");
-    else sprintf_s(record, "no record of the engine \"%.80s\"", e.name);
+    if (e.found) _snprintf_s(record, _TRUNCATE, "record %.80s: takes %d, the torque falls past %.2f of it, from x%.2f to x%.2f", e.name, e.capacity, e.threshold, e.torqueMin, e.torqueMax);
+    else if (!e.name[0]) _snprintf_s(record, _TRUNCATE, "the engine's record is looked up once the truck is driven");
+    else _snprintf_s(record, _TRUNCATE, "no record of the engine \"%.80s\"", e.name);
     char gearbox[64];
-    if (t.gearboxKnown) sprintf_s(gearbox, "gearbox damage %d of %d, effect %.3f", t.gearboxDamage, t.gearboxCapacity, t.gearboxEffect);
-    else sprintf_s(gearbox, "gearbox damage not read");
-    sprintf_s(out, size,
+    if (t.gearboxKnown) _snprintf_s(gearbox, _TRUNCATE, "gearbox damage %d of %d, effect %.3f", t.gearboxDamage, t.gearboxCapacity, t.gearboxEffect);
+    else _snprintf_s(gearbox, _TRUNCATE, "gearbox damage not read");
+    _snprintf_s(out, size, _TRUNCATE,
               "engine damage %d of %d, effect %.3f, torque x%.3f; by the game's rule effect %.3f and torque x%.3f (%s) | %s | all parts %d of %d | %s | "
               "the model: %.2f %% a minute from the heat, %.2f from the cold, %.2f of a point owed, Damage %s",
               t.damage, t.damageCapacity, t.damageEffect, t.torqueFactor, effect, torque, !e.found ? "a guess without the record" : same ? "as read" : "NOT as read",
@@ -3710,8 +3710,8 @@ inline void DamageProbeText(const TruckRaw &t, const EngineRecord &e, const Dama
 inline void ModelProbeText(const TruckRaw &t, const TachModel &tach, const RangeModel &range, const GaugeScale &k, char *out, size_t size)
 {
     char km[32] = "none yet";
-    if (range.rangeKm >= 0.0f) sprintf_s(km, "%.1f km", range.rangeKm);
-    sprintf_s(out, size,
+    if (range.rangeKm >= 0.0f) _snprintf_s(km, _TRUNCATE, "%.1f km", range.rangeKm);
+    _snprintf_s(out, size, _TRUNCATE,
               "engine speed %.0f rpm, heading for %.0f (pedal %.2f, wheels %.2f rad/s of the gear's %.2f) | range %s: %.3f l/km over %.0f m, %.2f l burned on %.0f m driven | "
               "burn %.2f l/min by the game's rule, %.2f l/min measured standing",
               tach.rpm, TachTarget(t, k), TruckPedal(t), TruckDrivenSpin(t), TruckGearTop(t, t.gearEngaged), km, range.perKm, range.way - range.mark[0].way, range.used,

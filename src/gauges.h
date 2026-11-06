@@ -62,11 +62,11 @@ inline const char *GearLetterShown(const char *mode) { return mode && mode[0] ==
 inline void GearHudText(int gear, const char *mode, char *buf, size_t size)
 {
     const bool named = gear > 0 && mode && mode[0] && mode[0] != 'A';
-    if (gear < 0) strcpy_s(buf, size, "R");
-    else if (gear == 0) strcpy_s(buf, size, "N");
-    else if (named) strcpy_s(buf, size, mode);
-    else if (mode && mode[0]) sprintf_s(buf, size, "%s %d", GearLetterShown(mode), gear);
-    else sprintf_s(buf, size, "%d", gear);
+    if (gear < 0) strncpy_s(buf, size, "R", _TRUNCATE);
+    else if (gear == 0) strncpy_s(buf, size, "N", _TRUNCATE);
+    else if (named) strncpy_s(buf, size, mode, _TRUNCATE);
+    else if (mode && mode[0]) _snprintf_s(buf, size, _TRUNCATE, "%s %d", GearLetterShown(mode), gear);
+    else _snprintf_s(buf, size, _TRUNCATE, "%d", gear);
 }
 
 enum { kLayoutStrip, kLayoutBlock, kLayoutHudDials, kLayoutHudDigital, kLayoutCount }; // GaugeSettings::layout (an older Gauges reads 2 and 3 as the strip)
@@ -229,7 +229,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.zoneFrom = 0.1f;
     s.zoneTo = 0.6f;
     s.soundVolume = 50;
-    strcpy_s(s.padToggle, "None");
+    strncpy_s(s.padToggle, "None", _TRUNCATE);
     s.demo = false;
     s.probe = 0;
     s.keepLogs = 20;
@@ -623,10 +623,10 @@ inline void PadName(uint32_t mask, char *out, size_t size)
     for (int i : order)
         if ((mask & kPadButtons[i].mask) && strlen(out) + strlen(kPadButtons[i].name) + 2 <= size) // a name that does not fit is left out
         {
-            if (out[0]) strcat_s(out, size, "+");
-            strcat_s(out, size, kPadButtons[i].name);
+            if (out[0]) strncat_s(out, size, "+", _TRUNCATE);
+            strncat_s(out, size, kPadButtons[i].name, _TRUNCATE);
         }
-    if (!out[0]) strcpy_s(out, size, "None");
+    if (!out[0]) strncpy_s(out, size, "None", _TRUNCATE);
 }
 
 // A virtual key's name as the tab shows it; "None" for 0.
@@ -637,13 +637,13 @@ inline void KeyName(int vk, char *out, size_t size)
         { VK_NEXT, "Page Down" }, { VK_UP, "Up" }, { VK_DOWN, "Down" }, { VK_LEFT, "Left" }, { VK_RIGHT, "Right" },
         { VK_PAUSE, "Pause" }, { VK_SCROLL, "Scroll Lock" }, { VK_TAB, "Tab" }, { VK_SPACE, "Space" }, { VK_BACK, "Backspace" },
         { VK_RETURN, "Enter" }, { VK_ADD, "Num +" }, { VK_SUBTRACT, "Num -" }, { VK_MULTIPLY, "Num *" }, { VK_DIVIDE, "Num /" }, { VK_DECIMAL, "Num ." } };
-    if (vk <= 0) strcpy_s(out, size, "None");
-    else if (vk >= VK_F1 && vk <= VK_F24) sprintf_s(out, size, "F%d", vk - VK_F1 + 1);
-    else if ((vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z')) sprintf_s(out, size, "%c", (char)vk);
-    else if (vk >= VK_NUMPAD0 && vk <= VK_NUMPAD9) sprintf_s(out, size, "Num %d", vk - VK_NUMPAD0);
+    if (vk <= 0) strncpy_s(out, size, "None", _TRUNCATE);
+    else if (vk >= VK_F1 && vk <= VK_F24) _snprintf_s(out, size, _TRUNCATE, "F%d", vk - VK_F1 + 1);
+    else if ((vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z')) _snprintf_s(out, size, _TRUNCATE, "%c", (char)vk);
+    else if (vk >= VK_NUMPAD0 && vk <= VK_NUMPAD9) _snprintf_s(out, size, _TRUNCATE, "Num %d", vk - VK_NUMPAD0);
     else
     {
-        sprintf_s(out, size, "Key %d", vk);
-        for (const auto &n : names) if (n.vk == vk) strcpy_s(out, size, n.name);
+        _snprintf_s(out, size, _TRUNCATE, "Key %d", vk);
+        for (const auto &n : names) if (n.vk == vk) strncpy_s(out, size, n.name, _TRUNCATE);
     }
 }

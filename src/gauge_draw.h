@@ -568,11 +568,11 @@ static void GSpeedo(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, floa
     char buf[32];
     for (float v = 0.0f; v <= top + 0.5f; v += step)
     {
-        sprintf_s(buf, "%.0f", v);
+        _snprintf_s(buf, _TRUNCATE, "%.0f", v);
         GText(dl, f, kGsBig, GPolar(c, r - 21.0f * u, GDeg(s, v)), GCol(kText, a), buf, 0, u);
     }
     const float v = st.mph ? st.speedKmh / 1.609f : st.speedKmh;
-    sprintf_s(buf, "%.0f", v);
+    _snprintf_s(buf, _TRUNCATE, "%.0f", v);
     GText(dl, f, kGsReadout, ImVec2(c.x, c.y + r * 0.46f), GCol(kText, a), buf, 0, u);
     GText(dl, f, kGsTiny, ImVec2(c.x, c.y + r * 0.66f), GCol(kMuted, a), st.mph ? "mph" : "km/h", 0, u);
     GNeedle(dl, c, GDeg(s, v), r * 0.76f, 3.0f, 0.9f, u, a, GCol(kNeedle, a));
@@ -589,14 +589,14 @@ static void GTacho(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float
     char buf[32];
     for (float v = 0.0f; v <= top + 0.5f; v += step)
     {
-        sprintf_s(buf, "%.0f", v);
+        _snprintf_s(buf, _TRUNCATE, "%.0f", v);
         GText(dl, f, kGsBig, GPolar(c, r - 21.0f * u, GDeg(s, v)), GCol(kText, a), buf, 0, u);
     }
     GText(dl, f, kGsTiny, ImVec2(c.x, c.y - r * 0.36f), GCol(kMuted, a), "x100 rpm", 0, u);
     // the gear: "4" with "D" beside it in automatic (GearLetterShown); the gearbox's own positions by their names ("H", "L", "L+", "L-");
     // "R", "N"
     const bool named = st.gear > 0 && st.gearMode && st.gearMode[0] && st.gearMode[0] != 'A';
-    const char *gear = st.gear < 0 ? "R" : st.gear == 0 ? "N" : named ? st.gearMode : (sprintf_s(buf, "%d", st.gear), buf);
+    const char *gear = st.gear < 0 ? "R" : st.gear == 0 ? "N" : named ? st.gearMode : (_snprintf_s(buf, _TRUNCATE, "%d", st.gear), buf);
     const bool mode = st.gear > 0 && !named && st.gearMode && st.gearMode[0];
     const char *shown = GearLetterShown(st.gearMode);
     const float gw = TextWidth(f, kGsGear, gear, u), mw = mode ? TextWidth(f, kGsGearMode, shown, u) + 3.0f * u : 0.0f;
@@ -649,7 +649,7 @@ static void GTemp(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float 
     char buf[16];
     for (float v = 50.0f; v <= 130.5f; v += 40.0f)
     {
-        sprintf_s(buf, "%.0f", st.fahrenheit ? v * 1.8f + 32.0f : v);
+        _snprintf_s(buf, _TRUNCATE, "%.0f", st.fahrenheit ? v * 1.8f + 32.0f : v);
         GText(dl, f, kGsSmall, GPolar(c, r - 15.0f * u, GDeg(s, v)), GCol(kText, a), buf, 0, u);
     }
     if (!oilNeedle)
@@ -674,7 +674,7 @@ static void GOil(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float u
     char buf[16];
     for (float v = 50.0f; v <= 150.5f; v += 50.0f)
     {
-        sprintf_s(buf, "%.0f", st.fahrenheit ? v * 1.8f + 32.0f : v);
+        _snprintf_s(buf, _TRUNCATE, "%.0f", st.fahrenheit ? v * 1.8f + 32.0f : v);
         GText(dl, f, kGsSmall, GPolar(c, r - 15.0f * u, GDeg(s, v)), GCol(kText, a), buf, 0, u);
     }
     GDialIcon(ImVec2(c.x, c.y + r * 0.42f), u, GCol(kText, a), [&](ImVec2 q, ImU32 col) { GIconOil(dl, q, 10.5f * u, col); });
@@ -694,7 +694,7 @@ static void GBoost(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float
     char buf[16];
     for (float v = bottom; v <= top + 0.5f; v += step)
     {
-        sprintf_s(buf, "%.0f", v);
+        _snprintf_s(buf, _TRUNCATE, "%.0f", v);
         GText(dl, f, kGsSmall, GPolar(c, r - 15.0f * u, GDeg(s, v)), GCol(kText, a), buf, 0, u);
     }
     GDialIcon(ImVec2(c.x, c.y + r * 0.42f), u, GCol(kText, a), [&](ImVec2 q, ImU32 col) { GIconTurbo(dl, q, 10.5f * u, col); });
@@ -711,7 +711,7 @@ static void GAir(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float u
     char buf[16];
     for (float v = 0.0f; v <= 10.5f; v += 5.0f)
     {
-        sprintf_s(buf, "%.0f", v);
+        _snprintf_s(buf, _TRUNCATE, "%.0f", v);
         GText(dl, f, kGsSmall, GPolar(c, r - 15.0f * u, GDeg(s, v)), GCol(kText, a), buf, 0, u);
     }
     GDialIcon(ImVec2(c.x, c.y + r * 0.42f), u, GCol(kText, a), [&](ImVec2 q, ImU32 col) { GIconAir(dl, q, 10.5f * u, col); });
@@ -737,7 +737,7 @@ static void GClock(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float
     GTicks(dl, c, r - 2.5f * u, s, 1.0f, 1, 4.0f, 4.0f, u, a);
     GTicks(dl, c, r - 2.5f * u, s, 3.0f, 1, 8.0f, 8.0f, u, a);
     char buf[16];
-    sprintf_s(buf, "%.0f %s", st.fahrenheit ? st.outsideC * 1.8f + 32.0f : st.outsideC, st.fahrenheit ? "F" : "C");
+    _snprintf_s(buf, _TRUNCATE, "%.0f %s", st.fahrenheit ? st.outsideC * 1.8f + 32.0f : st.outsideC, st.fahrenheit ? "F" : "C");
     GText(dl, f, kGsSmall, ImVec2(c.x, c.y + r * 0.42f), GCol(kText, a), buf, 0, u);
     if (!(st.hour >= 0.0f)) return;
     const float h = fmodf(st.hour, 12.0f), minutes = (st.hour - floorf(st.hour)) * 60.0f;
@@ -756,18 +756,18 @@ static void GClock(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, float
 static void GRange(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float u, float a, const GaugeState &st, bool burn)
 {
     char buf[64];
-    if (st.rangeKm < 0.0f) sprintf_s(buf, "--- %s", st.mph ? "mi" : "km");
+    if (st.rangeKm < 0.0f) _snprintf_s(buf, _TRUNCATE, "--- %s", st.mph ? "mi" : "km");
     else
     {
         const float range = st.mph ? st.rangeKm / 1.609f : st.rangeKm;
-        sprintf_s(buf, range < 9.95f ? "%.1f %s" : "%.0f %s", range, st.mph ? "mi" : "km");
+        _snprintf_s(buf, _TRUNCATE, range < 9.95f ? "%.1f %s" : "%.0f %s", range, st.mph ? "mi" : "km");
     }
     if (burn)
     {
         char more[32];
-        if (st.burnPerMin < 0.0f) sprintf_s(more, "  --- %s", st.mph ? "gal/h" : "l/min");
-        else sprintf_s(more, "  %.1f %s", st.mph ? st.burnPerMin * 60.0f / 3.785f : st.burnPerMin, st.mph ? "gal/h" : "l/min");
-        strcat_s(buf, more);
+        if (st.burnPerMin < 0.0f) _snprintf_s(more, _TRUNCATE, "  --- %s", st.mph ? "gal/h" : "l/min");
+        else _snprintf_s(more, _TRUNCATE, "  %.1f %s", st.mph ? st.burnPerMin * 60.0f / 3.785f : st.burnPerMin, st.mph ? "gal/h" : "l/min");
+        strncat_s(buf, more, _TRUNCATE);
     }
     const float w = TextWidth(f, kGsReadout, buf, u), ih = 11.0f * u;
     const float x0 = c.x - (w + ih + 4.0f * u) * 0.5f;
@@ -968,7 +968,7 @@ static int HudCells(const GaugeLayout &lay, const GaugeState &st, HudCell *out)
     auto add = [&](int kind, const char *fmt, float v, const char *unit, bool warn) {
         HudCell &c = out[n++];
         c.kind = kind;
-        sprintf_s(c.value, fmt, v);
+        _snprintf_s(c.value, _TRUNCATE, fmt, v);
         c.unit = unit;
         c.warn = warn;
     };
@@ -1067,7 +1067,7 @@ static void HDial(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float u, float 
         const GRgb col = red >= 0.0f && v >= red ? kHudOrange : kHudText;
         dl->AddLine(GPolar(c, R - 2.0f * u, d), GPolar(c, R - (major ? 10.0f : 6.0f) * u, d), GCol(col, (major ? 0.95f : 0.5f) * a), (major ? 2.0f : 1.0f) * u);
         if (!major) continue;
-        sprintf_s(buf, "%.0f", v);
+        _snprintf_s(buf, _TRUNCATE, "%.0f", v);
         HText(dl, f, kGsHudSmall, GPolar(c, R - 19.0f * u, d), GCol(kHudLabel, a), buf, 0, u);
     }
     const float d = GDeg(s, fminf(fmaxf(val, 0.0f), top));
@@ -1097,11 +1097,11 @@ static void HudDials(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float u
     char buf[32];
     const ImVec2 tach = P(lay.swapDials ? 204.0f : 72.0f, 92.0f), speedo = P(lay.swapDials ? 72.0f : 204.0f, 92.0f);
     const float rpmTop = st.rpmMax / 100.0f, rpmStep = st.rpmMax >= 5000.0f ? 10.0f : 5.0f;
-    sprintf_s(buf, "%.0f", st.rpm);
+    _snprintf_s(buf, _TRUNCATE, "%.0f", st.rpm);
     HDial(dl, f, tach, u, a, rpmTop, rpmStep, rpmStep * 0.5f, st.rpmRedline / 100.0f, st.rpm / 100.0f, buf, "RPM");
     float top, step, v;
     HudSpeedScale(st, top, step, v);
-    sprintf_s(buf, "%.0f", v);
+    _snprintf_s(buf, _TRUNCATE, "%.0f", v);
     HDial(dl, f, speedo, u, a, top, step, step * 0.5f, -1.0f, v, buf, st.mph ? "MPH" : "KM/H");
     // the gear between the two dials at the bottom, where their rims leave room
     HudGear(st, buf, sizeof buf);
@@ -1125,7 +1125,7 @@ static void HudDigital(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float
     float top, step, v;
     HudSpeedScale(st, top, step, v);
     // the headline on one baseline (40), each text centred on its capitals
-    sprintf_s(buf, "%.0f", v);
+    _snprintf_s(buf, _TRUNCATE, "%.0f", v);
     HText(dl, f, kGsHudHead, P(14.0f, 28.0f), GCol(kHudText, a), buf, -1, u);
     const float unitX = o.x + 14.0f * u + TextWidth(f, kGsHudHead, buf, u) + 8.0f * u;
     const char *unit = st.mph ? "MPH" : "KM/H";
@@ -1133,7 +1133,7 @@ static void HudDigital(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float
     const float unitEnd = unitX + TextWidth(f, kGsHudCell, unit, u);
     const float rpmLabelW = TextWidth(f, kGsHudCell, "RPM", u);
     HText(dl, f, kGsHudCell, P(W - 14.0f, 34.75f), GCol(kHudOrange, a), "RPM", 1, u);
-    sprintf_s(buf, "%.0f", st.rpm);
+    _snprintf_s(buf, _TRUNCATE, "%.0f", st.rpm);
     const float rpmRight = o.x + (W - 14.0f) * u - rpmLabelW - 6.0f * u;
     HText(dl, f, kGsHudMid, ImVec2(rpmRight, o.y + 32.5f * u), GCol(kHudOrange, a), buf, 1, u);
     const float rpmLeft = rpmRight - TextWidth(f, kGsHudMid, buf, u);

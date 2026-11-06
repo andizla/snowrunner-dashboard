@@ -396,7 +396,7 @@ inline bool TruckIdText(const char *text, size_t length)
 // of the gearbox's entries, and the damage the engine takes.
 inline void TruckBuildKey(const TruckRaw &t, char (&key)[kMaxText])
 {
-    sprintf_s(key, "tank%g_wheels%d_gearbox%d_engine%d", t.tank, t.wheels, t.gearSpeeds, t.damageKnown ? t.damageCapacity : 0);
+    _snprintf_s(key, _TRUNCATE, "tank%g_wheels%d_gearbox%d_engine%d", t.tank, t.wheels, t.gearSpeeds, t.damageKnown ? t.damageCapacity : 0);
 }
 
 // The identity of the truck in r, whose values are t.
@@ -600,7 +600,7 @@ inline bool TruckGearboxName(const TruckMemory &m, uint64_t vehicle, char (&out)
     }
     if (stock[0])
     {
-        strcpy_s(out, stock);
+        strncpy_s(out, stock, _TRUNCATE);
         at = kGearboxNameAt;
         return true;
     }
@@ -1121,12 +1121,12 @@ inline int TruckFoundLines(bool found, const TruckRaw &t, char lines[2][160])
 {
     if (!found)
     {
-        strcpy_s(lines[0], 160, "truck: none is driven now");
+        strncpy_s(lines[0], 160, "truck: none is driven now", _TRUNCATE);
         return 1;
     }
-    sprintf_s(lines[0], 160, "truck: found, %d wheels, %d gears and a high gear, a %.0f l tank", t.wheels, TruckTopGear(t), t.tank);
+    _snprintf_s(lines[0], 160, _TRUNCATE, "truck: found, %d wheels, %d gears and a high gear, a %.0f l tank", t.wheels, TruckTopGear(t), t.tank);
     if (!t.gearListLong) return 1;
-    sprintf_s(lines[1], 160, "truck: its gearbox lists %d entries, more than the %d the mod reads: its gears are not read", t.gearListLong, (int)kMaxGears);
+    _snprintf_s(lines[1], 160, _TRUNCATE, "truck: its gearbox lists %d entries, more than the %d the mod reads: its gears are not read", t.gearListLong, (int)kMaxGears);
     return 2;
 }
 
@@ -1244,10 +1244,10 @@ inline void TruckProbeText(const TruckRaw &t, const World &w, float byPosition, 
                            const char *letter = nullptr)
 {
     char number[16] = "";
-    sprintf_s(number, "%d", t.gear);
+    _snprintf_s(number, _TRUNCATE, "%d", t.gear);
     const char *mode = TruckGearMode(t, w.shifter != 0);
     const char *named = letter ? (letter[0] ? letter : number) : (mode[0] ? mode : "a numbered gear");
-    sprintf_s(first, firstSize,
+    _snprintf_s(first, firstSize, _TRUNCATE,
               "flags %02X (engine %d, running %d, lights %d) stall %.3f start %.2f | handbrake %d awd %d diff %d | gear %d (engaged %d) automatic %d power %.3f = %s%s | "
               "throttle %.3f | speed %.2f m/s = %.1f km/h (%.2f m/s by the way gone) | fuel %.2f of %.2f l | engine damage %d of %d, effect %.3f, torque x%.3f%s | B4 %.3f",
               t.flags, t.flags & 1, (t.flags >> 1) & 1, (t.flags >> 2) & 1, t.stall, t.startTimer, t.handbrake, t.awd, t.diffLock, t.gear, t.gearEngaged, t.automatic, t.powerFactor,
@@ -1255,9 +1255,9 @@ inline void TruckProbeText(const TruckRaw &t, const World &w, float byPosition, 
               t.throttle, t.speed, t.speed * 3.6f, byPosition, t.fuel, t.tank, t.damage, t.damageCapacity, t.damageEffect, t.torqueFactor,
               t.damageKnown ? "" : " (no damage data)", t.actionB4);
     char wheels[kMaxWheels * 16] = "", speeds[kMaxGears * 12] = "";
-    for (int i = 0; i < t.wheels; i++) sprintf_s(wheels + strlen(wheels), sizeof wheels - strlen(wheels), " %d:%.2f", t.drive[i], t.spin[i]);
-    for (int i = 0; i < t.gearSpeeds; i++) sprintf_s(speeds + strlen(speeds), sizeof speeds - strlen(speeds), " %.3f", t.gearSpeed[i]);
-    sprintf_s(second, secondSize,
+    for (int i = 0; i < t.wheels; i++) _snprintf_s(wheels + strlen(wheels), sizeof wheels - strlen(wheels), _TRUNCATE, " %d:%.2f", t.drive[i], t.spin[i]);
+    for (int i = 0; i < t.gearSpeeds; i++) _snprintf_s(speeds + strlen(speeds), sizeof speeds - strlen(speeds), _TRUNCATE, " %.3f", t.gearSpeed[i]);
+    _snprintf_s(second, secondSize, _TRUNCATE,
               "wheels (drive:rad/s)%s | gear speeds%s | game: menu %d loading %d map %d open %d viewer %d garage %d menu input %d shifter %d function menu %d", wheels, speeds,
               w.menu, w.loading, w.mapThere, w.mapOpen, w.viewer, w.garage, w.menuInput, w.shifter, w.functionMenu);
 }

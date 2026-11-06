@@ -302,14 +302,14 @@ inline void SoundLoad(int tier, const std::wstring &dir, SoundSet &set)
             SoundClip clip;
             if (!own)
             {
-                swprintf_s(name, L"sounds\\%s_%d.wav", k.file, v);
+                _snwprintf_s(name, _TRUNCATE, L"sounds\\%s_%d.wav", k.file, v);
                 if (GetFileAttributesW((dir + name).c_str()) == INVALID_FILE_ATTRIBUTES) continue;
                 if (!SoundFile(dir + name, file, why) || !SoundDecode(file, clip, why)) { GaugeLog(L"sound: %s is not used (%s)", name, why.c_str()); continue; }
                 GaugeLog(L"sound: %s = %s (%.2f s, %u Hz)", k.what, name, (double)clip.x.size() / clip.rate, clip.rate);
             }
             else
             {
-                swprintf_s(name, L"%s_%d", k.carried, v);
+                _snwprintf_s(name, _TRUNCATE, L"%s_%d", k.carried, v);
                 if (!SoundCarried(name, file)) continue;
                 if (!SoundDecode(file, clip, why)) { GaugeLog(L"sound: the mod's own recording %s could not be read (%s)", name, why.c_str()); continue; }
             }

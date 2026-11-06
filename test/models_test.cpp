@@ -30,6 +30,7 @@
 #include "gauges.h"
 #include "truck.h"
 #include "models.h"
+#include "text_cut.h"
 #include "gearbox_model.h"
 #include "sound.h"
 #include "state.h"
@@ -5384,6 +5385,49 @@ int main(int argc, char **argv)
                   "probe: the automatic's and the powertrain's lines carry the gear, the lock, the keep, the factor and the engine speed, the factor's own terms and "
                   "what the rules decide by, after the fields the log tools read");
         }
+    }
+
+    // the creep's line at its longest (the fast fail of 2026-11-06 21:41, F0 of BRIEF_drive_2052_fixes.md): every text at
+    // its longest ("unarmed (pulling away)", " (under it)", ", a shift just now") and each float at 1e6, into the real
+    // 512 of gauges.cpp: cut and ended, never fatal; the holding part whole in a buffer with room
+    {
+        TruckRaw t = {};
+        t.gearEngaged = 1000000;
+        t.speed = 1.0e6f;
+        t.actionB4 = t.torqueFactor = t.throttle = 1.0e6f;
+        t.handbrake = 1;
+        CreepCase c = {};
+        c.converter = false;
+        c.ratio = c.input = 1.0e6f;
+        c.idleSpin = 1.0e6f; // the wheels at 0 of it: under the stuck mark
+        CreepModel m = {};
+        m.armed = false;
+        m.mayStall = true;
+        m.hold = m.holdMost = m.share = m.stuck = 1.0e6f;
+        m.sinceShift = 0.0f;
+        char real[512], wide[2048];
+        memset(real, 'x', sizeof real);
+        CreepProbeText(t, 1.0e6f, c, 2147483647L, -2147483647L - 1, real, sizeof real, &m);
+        CreepProbeText(t, 1.0e6f, c, 2147483647L, -2147483647L - 1, wide, sizeof wide, &m);
+        const size_t cut = strnlen(real, sizeof real), whole = strlen(wide);
+        const bool ended = cut < sizeof real && !strncmp(real, wide, cut);
+        const char *hold = strstr(wide, " | holding unarmed");
+        const bool holdWhole = hold && strstr(hold, "unarmed (pulling away)") && strstr(hold, " (under it)") && whole >= 18 &&
+                               !strcmp(wide + whole - 18, ", a shift just now");
+        Check(ended && holdWhole, "creep line: at its longest (every text, each float 1e6) cut and ended in the real 512, the holding part whole where there is room, no fatal call");
+    }
+
+    // FmtCut (text_cut.h): a line built piece by piece from a game text longer than its buffer stays in it, the length
+    // never -1, and a whole text gives its length
+    {
+        char line[48];
+        int used = 0;
+        const char *name = "a_truck_kind_name_of_eighty_characters_as_a_mod_can_give_it_to_the_game_0123456";
+        for (int i = 0; i < 4; i++) used += FmtCut(line + used, sizeof line - used, "%s%s", i ? " | " : "", name);
+        wchar_t wline[16];
+        const int wn = FmtCut(wline, 16, L"%S", name);
+        const bool ok = used == (int)sizeof line - 1 && strlen(line) == sizeof line - 1 && wn == 15 && wcslen(wline) == 15 && FmtCut(line, sizeof line, "%d", 42) == 2;
+        Check(ok, "FmtCut: a line of game texts longer than its buffer is cut, its length the buffer's less one and never -1; a whole one gives its length");
     }
 
     printf(g_failed ? "MODELS TEST FAILED (%d)\n" : "MODELS TEST OK\n", g_failed);

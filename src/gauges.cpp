@@ -42,6 +42,7 @@ int NgMenuKeyFromIni(); // the menu's key, which a capture never binds
 #include "suspension_step.h"
 #include "air_axles.h"
 #include "frame_flex.h"
+#include "text_cut.h"
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "shell32.lib")
 #ifndef GAUGES_SETTINGS_TEST
@@ -124,7 +125,7 @@ static std::wstring LogKeepLast(const std::wstring &dir)
     CreateDirectoryW((dir + L"Gauges").c_str(), nullptr);
     CreateDirectoryW(folder.c_str(), nullptr);
     wchar_t stem[48];
-    swprintf_s(stem, L"Gauges %04u-%02u-%02u %02u-%02u-%02u", began.wYear, began.wMonth, began.wDay, began.wHour, began.wMinute, began.wSecond);
+    _snwprintf_s(stem, _TRUNCATE, L"Gauges %04u-%02u-%02u %02u-%02u-%02u", began.wYear, began.wMonth, began.wDay, began.wHour, began.wMinute, began.wSecond);
     std::wstring name = std::wstring(stem) + L".log";
     for (int i = 2; i < 100 && GetFileAttributesW((folder + name).c_str()) != INVALID_FILE_ATTRIBUTES; i++)
         name = std::wstring(stem) + L" (" + std::to_wstring(i) + L").log";
@@ -567,15 +568,15 @@ static std::wstring Wide(const char *s)
 static void IniPutFloat(const wchar_t *section, const wchar_t *key, float v, const std::wstring &ini)
 {
     wchar_t b[32];
-    swprintf_s(b, L"%g", v);
-    for (int digits = 7; digits <= 9 && (float)_wtof(b) != v; digits++) swprintf_s(b, L"%.*g", digits, v);
+    _snwprintf_s(b, _TRUNCATE, L"%g", v);
+    for (int digits = 7; digits <= 9 && (float)_wtof(b) != v; digits++) _snwprintf_s(b, _TRUNCATE, L"%.*g", digits, v);
     WritePrivateProfileStringW(section, key, b, ini.c_str());
 }
 
 static void IniPutInt(const wchar_t *section, const wchar_t *key, int v, const std::wstring &ini)
 {
     wchar_t b[16];
-    swprintf_s(b, L"%d", v);
+    _snwprintf_s(b, _TRUNCATE, L"%d", v);
     WritePrivateProfileStringW(section, key, b, ini.c_str());
 }
 
@@ -593,7 +594,7 @@ static char g_tabPut[32] = {};
 static volatile LONG g_tabPutAsked = 0;
 void PageTabWrite(const char *id)
 {
-    strcpy_s(g_tabPut, id);
+    strncpy_s(g_tabPut, id, _TRUNCATE);
     InterlockedExchange(&g_tabPutAsked, 1);
 }
 
@@ -889,7 +890,7 @@ static void ClockSave(DWORD stamp, const ClockPath &p)
 {
     const std::wstring ini = IniPath();
     wchar_t exe[16];
-    swprintf_s(exe, L"%08lx", stamp);
+    _snwprintf_s(exe, _TRUNCATE, L"%08lx", stamp);
     char text[64];
     ClockPathText(p, text, sizeof text);
     WritePrivateProfileStringW(L"Clock", L"Exe", exe, ini.c_str());
@@ -1349,7 +1350,7 @@ static bool GearHoldRead(const char *key, float &hold)
 static void GearHoldWrite(const char *key, float hold)
 {
     wchar_t buf[16];
-    swprintf_s(buf, L"%.1f", hold);
+    _snwprintf_s(buf, _TRUNCATE, L"%.1f", hold);
     SetupBegin(kSetupGearbox, Wide(key));
     WritePrivateProfileStringW(kSetupSections[kSetupGearbox], L"GearHold", buf, SetupFile(kSetupGearbox, key).c_str());
 }
@@ -1394,7 +1395,7 @@ static int GearTopRead(const char *key, float tops[kMaxGears])
     for (int g = 1; g < kMaxGears; g++)
     {
         wchar_t name[16], buf[24] = {};
-        swprintf_s(name, L"Top%d", g);
+        _snwprintf_s(name, _TRUNCATE, L"Top%d", g);
         if (GetPrivateProfileStringW(kSetupSections[kSetupGearbox], name, L"", buf, 24, SetupFile(kSetupGearbox, key).c_str()) == 0) continue;
         const float v = (float)_wtof(buf);
         if (isfinite(v) && v > 0.0f && v < 1000.0f) tops[g] = v, n++;
@@ -1412,13 +1413,13 @@ static int GearTopRead(const char *key, float tops[kMaxGears])
 static bool GearBaseMarked(const char *truck, const char *engine)
 {
     wchar_t name[kMaxText + 16], buf[8] = {};
-    swprintf_s(name, L"BaseDamp.%S", engine);
+    _snwprintf_s(name, _TRUNCATE, L"BaseDamp.%S", engine);
     return GetPrivateProfileStringW(kSetupSections[kSetupTruck], name, L"", buf, 8, SetupFile(kSetupTruck, truck).c_str()) > 0 && _wtoi(buf) == 1;
 }
 static void GearBaseMark(const char *truck, const char *engine)
 {
     wchar_t name[kMaxText + 16];
-    swprintf_s(name, L"BaseDamp.%S", engine);
+    _snwprintf_s(name, _TRUNCATE, L"BaseDamp.%S", engine);
     SetupBegin(kSetupTruck, Wide(truck));
     WritePrivateProfileStringW(kSetupSections[kSetupTruck], name, L"1", SetupFile(kSetupTruck, truck).c_str());
 }
@@ -1435,7 +1436,7 @@ static int GearBaseRead(const char *truck, const char *engine, float bases[kMaxG
         for (int g = 1; g < kMaxGears; g++)
         {
             wchar_t name[kMaxText + 16], buf[24] = {};
-            swprintf_s(name, L"Base%d.%S", g, engine);
+            _snwprintf_s(name, _TRUNCATE, L"Base%d.%S", g, engine);
             if (GetPrivateProfileStringW(kSetupSections[kSetupTruck], name, L"", buf, 24, file.c_str()) == 0) continue;
             WritePrivateProfileStringW(kSetupSections[kSetupTruck], name, nullptr, file.c_str());
             old++;
@@ -1448,7 +1449,7 @@ static int GearBaseRead(const char *truck, const char *engine, float bases[kMaxG
     for (int g = 1; g < kMaxGears; g++)
     {
         wchar_t name[kMaxText + 16], buf[24] = {};
-        swprintf_s(name, L"Base%d.%S", g, engine);
+        _snwprintf_s(name, _TRUNCATE, L"Base%d.%S", g, engine);
         if (GetPrivateProfileStringW(kSetupSections[kSetupTruck], name, L"", buf, 24, file.c_str()) == 0) continue;
         const float v = (float)_wtof(buf);
         if (isfinite(v) && v > 0.0f && v < 100.0f) bases[g] = v, n++;
@@ -1462,8 +1463,8 @@ static void GearBaseWrite(const char *truck, const char *engine, int gear, float
 {
     if (!truck[0] || !engine[0] || gear < 1 || gear >= kMaxGears) return;
     wchar_t name[kMaxText + 16], buf[24];
-    swprintf_s(name, L"Base%d.%S", gear, engine);
-    swprintf_s(buf, L"%.3f", base);
+    _snwprintf_s(name, _TRUNCATE, L"Base%d.%S", gear, engine);
+    _snwprintf_s(buf, _TRUNCATE, L"%.3f", base);
     SetupBegin(kSetupTruck, Wide(truck));
     WritePrivateProfileStringW(kSetupSections[kSetupTruck], name, buf, SetupFile(kSetupTruck, truck).c_str());
     GearBaseMark(truck, engine);
@@ -1489,7 +1490,7 @@ static std::wstring GearTopShareName(int gear, const char *gearbox)
     for (wchar_t &c : part)
         if (c == L'=' || c == L';' || c == L'[' || c == L']') c = L'_';
     wchar_t head[24];
-    swprintf_s(head, L"TopShare%d.", gear);
+    _snwprintf_s(head, _TRUNCATE, L"TopShare%d.", gear);
     return head + part;
 }
 // Into shares, 0 for a gear without a usable one (GearTopShareUsable); the number read. outside: shares there but out
@@ -1515,7 +1516,7 @@ static void GearTopShareWrite(const char *truck, const char *gearbox, int gear, 
 {
     if (!truck[0] || !gearbox[0] || gear < 1 || gear >= kMaxGears) return;
     wchar_t buf[24];
-    swprintf_s(buf, L"%.4f", share);
+    _snwprintf_s(buf, _TRUNCATE, L"%.4f", share);
     SetupBegin(kSetupTruck, Wide(truck));
     WritePrivateProfileStringW(kSetupSections[kSetupTruck], GearTopShareName(gear, gearbox).c_str(), buf, SetupFile(kSetupTruck, truck).c_str());
 }
@@ -1527,15 +1528,15 @@ static std::wstring DampWhyText(const WheelDampWhy &y, int wheels)
     const int n = y.wheel + 1;
     switch (y.what)
     {
-    case kDampNoList: swprintf_s(t, L"the wheel list short: %d wheels read of %.0f models", wheels, y.value); break;
-    case kDampNotRead: swprintf_s(t, L"wheel %d of %d: its body not read (or not a cylinder)", n, wheels); break;
-    case kDampNoBodies: swprintf_s(t, L"the truck's bodies' mass %.0f kg", y.value); break;
-    case kDampMass: swprintf_s(t, L"wheel %d of %d: inverse mass %.6f", n, wheels, y.value); break;
-    case kDampDamping: swprintf_s(t, L"wheel %d of %d: damping %.1f", n, wheels, y.value); break;
-    case kDampAxle: swprintf_s(t, L"wheel %d of %d: no axle (inertia %.1f, %.1f, %.1f)", n, wheels, y.inertia[0], y.inertia[1], y.inertia[2]); break;
-    case kDampRadius: swprintf_s(t, L"wheel %d of %d: radius %.3f", n, wheels, y.value); break;
-    case kDampSpin: swprintf_s(t, L"wheel %d of %d: spin %.3f", n, wheels, y.value); break;
-    default: swprintf_s(t, L"read"); break;
+    case kDampNoList: _snwprintf_s(t, _TRUNCATE, L"the wheel list short: %d wheels read of %.0f models", wheels, y.value); break;
+    case kDampNotRead: _snwprintf_s(t, _TRUNCATE, L"wheel %d of %d: its body not read (or not a cylinder)", n, wheels); break;
+    case kDampNoBodies: _snwprintf_s(t, _TRUNCATE, L"the truck's bodies' mass %.0f kg", y.value); break;
+    case kDampMass: _snwprintf_s(t, _TRUNCATE, L"wheel %d of %d: inverse mass %.6f", n, wheels, y.value); break;
+    case kDampDamping: _snwprintf_s(t, _TRUNCATE, L"wheel %d of %d: damping %.1f", n, wheels, y.value); break;
+    case kDampAxle: _snwprintf_s(t, _TRUNCATE, L"wheel %d of %d: no axle (inertia %.1f, %.1f, %.1f)", n, wheels, y.inertia[0], y.inertia[1], y.inertia[2]); break;
+    case kDampRadius: _snwprintf_s(t, _TRUNCATE, L"wheel %d of %d: radius %.3f", n, wheels, y.value); break;
+    case kDampSpin: _snwprintf_s(t, _TRUNCATE, L"wheel %d of %d: spin %.3f", n, wheels, y.value); break;
+    default: _snwprintf_s(t, _TRUNCATE, L"read"); break;
     }
     return t;
 }
@@ -1853,7 +1854,7 @@ static bool TruckSuspTakeOver(const char *key, const char *oldId, const char *ne
         at = ((unsigned long long)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
     }
     wchar_t when[32];
-    swprintf_s(when, L"%llu", at);
+    _snwprintf_s(when, _TRUNCATE, L"%llu", at);
     WritePrivateProfileStringW(from.c_str(), L"TakenBy", Wide(newId).c_str(), ini.c_str());
     WritePrivateProfileStringW(from.c_str(), L"TakenAt", when, ini.c_str());
     TruckSuspPrune(key, base); // a truck only driven, never edited, still keeps no more than the newest marked (review F3)
@@ -1917,7 +1918,7 @@ static bool SuspTrack(SuspTracker &t, const TruckIdentity &was, const TruckIdent
     }
     if (!now.key[0]) return false;
     const bool due = t.gone.key[0] && !strcmp(t.gone.key, now.key) && t.gone.id[0] && now.id[0] && strcmp(t.gone.id, now.id) && at - t.goneAt <= kSuspTakeOverMs;
-    if (due) strcpy_s(oldId, t.gone.id);
+    if (due) strncpy_s(oldId, t.gone.id, _TRUNCATE);
     t.gone = TruckIdentity{};
     return due;
 }
@@ -1978,7 +1979,7 @@ static void WriteTruckEngine(const char *key, const char *id, bool own, const ch
     if (gearbox[0] && hold > 0.0f)
     {
         wchar_t buf[16];
-        swprintf_s(buf, L"%.1f", hold);
+        _snwprintf_s(buf, _TRUNCATE, L"%.1f", hold);
         WritePrivateProfileStringW(sec.c_str(), EngineKeyOf(L"GearHold", gearbox).c_str(), buf, ini.c_str());
     }
 }
@@ -2034,10 +2035,10 @@ static void EngineFromFiles(EngineState &e)
 // The state for a truck, its engine and its gearbox (any "" while not known).
 static void EngineFor(EngineState &e, const char *key, const char *id, const char *engine, const char *gearbox)
 {
-    strcpy_s(e.key, key);
-    strcpy_s(e.id, key[0] ? id : "");
-    strcpy_s(e.engine, key[0] ? engine : "");
-    strcpy_s(e.gearbox, key[0] ? gearbox : "");
+    strncpy_s(e.key, key, _TRUNCATE);
+    strncpy_s(e.id, key[0] ? id : "", _TRUNCATE);
+    strncpy_s(e.engine, key[0] ? engine : "", _TRUNCATE);
+    strncpy_s(e.gearbox, key[0] ? gearbox : "", _TRUNCATE);
     EngineFromFiles(e);
 }
 
@@ -2185,8 +2186,8 @@ static void SuspFromFiles(SettingsState &st)
 // the addendum's point 4).
 static void SettingsFor(SettingsState &st, const char *key, const char *id = "")
 {
-    strcpy_s(st.key, key);
-    strcpy_s(st.id, key[0] ? id : "");
+    strncpy_s(st.key, key, _TRUNCATE);
+    strncpy_s(st.id, key[0] ? id : "", _TRUNCATE);
     st.s = st.plain;
     st.own = key[0] && ReadTruckIni(key, st.s);
     st.changed = false;
@@ -2298,7 +2299,7 @@ static const wchar_t *TakenWords(int taken)
 static int SettingsTakeOver(SettingsState &st, const char *newId)
 {
     const int taken = TakeOverBoth(st.key, st.id, newId);
-    strcpy_s(st.id, newId);
+    strncpy_s(st.id, newId, _TRUNCATE);
     const GaugeSettings scales = st.s;
     SuspFromFiles(st);
     ScalesCopy(st.s, scales);
@@ -2367,7 +2368,7 @@ static void BindingsDefault(GearBindings &b)
     for (const auto &k : keys) b.slot[k.action][0] = Binding{ kBindKey, 0, (uint32_t)k.vk, 0, false };
 }
 
-static void BindingKey(int action, int slot, wchar_t *out, size_t size) { swprintf_s(out, size, L"Bind%S%s", kActionNames[action], slot ? L"2" : L""); }
+static void BindingKey(int action, int slot, wchar_t *out, size_t size) { _snwprintf_s(out, size, _TRUNCATE, L"Bind%S%s", kActionNames[action], slot ? L"2" : L""); }
 
 // Whether the ini holds a binding key yet.
 static bool BindingsInIni(const std::wstring &ini)
@@ -2471,7 +2472,7 @@ static int SmtIniImport(const std::wstring &path, GearBindings &b, GaugeSettings
     int count = 0;
     for (int g = 0; g < kGearKeys; g++)
     {
-        swprintf_s(pairs[count].smt, L"GEAR %d", g + 1);
+        _snwprintf_s(pairs[count].smt, _TRUNCATE, L"GEAR %d", g + 1);
         pairs[count++].action = kActGear1 + g;
     }
     static const struct { const wchar_t *smt; int action; } named[] = { { L"GEAR H", kActGearH }, { L"GEAR L-", kActGearLMinus }, { L"GEAR L", kActGearL },
@@ -2481,7 +2482,7 @@ static int SmtIniImport(const std::wstring &path, GearBindings &b, GaugeSettings
                                                                          { L"DIFF LOCK", kActDiffLock }, { L"AWD", kActAwd } };
     for (const auto &n : named)
     {
-        wcscpy_s(pairs[count].smt, n.smt);
+        wcsncpy_s(pairs[count].smt, n.smt, _TRUNCATE);
         pairs[count++].action = n.action;
     }
     // the numpad's codes 0x47 to 0x53: Windows maps them to the arrows, Home, End and the rest of that block, which
@@ -2508,12 +2509,12 @@ static int SmtIniImport(const std::wstring &path, GearBindings &b, GaugeSettings
             b.slot[pairs[i].action][0] = Binding{ kBindKey, 0, vk, 0, false };
             took[pairs[i].action] = true;
             bound++;
-            swprintf_s(line, L"%s%s", taken.empty() ? L"" : L", ", pairs[i].smt);
+            _snwprintf_s(line, _TRUNCATE, L"%s%s", taken.empty() ? L"" : L", ", pairs[i].smt);
             taken += line;
         }
         else
         {
-            swprintf_s(line, L"%s%s (%s)", left.empty() ? L"" : L", ", pairs[i].smt, value);
+            _snwprintf_s(line, _TRUNCATE, L"%s%s (%s)", left.empty() ? L"" : L", ", pairs[i].smt, value);
             left += line;
         }
     }
@@ -2528,7 +2529,7 @@ static int SmtIniImport(const std::wstring &path, GearBindings &b, GaugeSettings
                     char key[32];
                     KeyText((int)d.code, key, sizeof key);
                     wchar_t line[96];
-                    swprintf_s(line, L"%sthe default of %S (%S, now %S's)", left.empty() ? L"" : L", ", kActionNames[a], key, kActionNames[t]);
+                    _snwprintf_s(line, _TRUNCATE, L"%sthe default of %S (%S, now %S's)", left.empty() ? L"" : L", ", kActionNames[a], key, kActionNames[t]);
                     left += line;
                     b.slot[a][slot] = Binding{};
                     break;
@@ -3020,7 +3021,7 @@ static void PlacesHarvest(DWORD stamp)
     if (stamp != kGaugesExeStamp) return;
     const std::wstring path = g_dir + L"Gauges.signatures.txt";
     char head[64], first[64] = "";
-    sprintf_s(head, "// harvested from exe %08lx, harvest %d", stamp, kHarvestVersion);
+    _snprintf_s(head, _TRUNCATE, "// harvested from exe %08lx, harvest %d", stamp, kHarvestVersion);
     FILE *f = nullptr;
     if (_wfopen_s(&f, path.c_str(), L"r") == 0 && f)
     {
@@ -3069,7 +3070,7 @@ static int GearboxBlocked(const FunctionFind finds[kFnCount])
 {
     if (GetModuleHandleW(L"SMT.addon64") || GetModuleHandleW(L"SMT.asi")) return kGearboxSmt;
     wchar_t name[64];
-    swprintf_s(name, L"Local\\SnowRunnerMT.State.%lu", GetCurrentProcessId());
+    _snwprintf_s(name, _TRUNCATE, L"Local\\SnowRunnerMT.State.%lu", GetCurrentProcessId());
     const HANDLE map = OpenFileMappingW(FILE_MAP_READ, FALSE, name);
     if (map)
     {
@@ -3694,25 +3695,25 @@ static void GearboxLook(TruckWatch &w, const TruckMemory &m, const TruckRaw &raw
         }
         char file[96];
         float hold = 0.0f, tops[kMaxGears];
-        if (before[0] && GearboxKeysMatch(held, before)) strcpy_s(key, w.gearboxKey);
-        else if (!GearHoldRead(key, hold) && GearTopRead(key, tops) == 0 && GearboxFileMatch(key, file, sizeof file)) strcpy_s(key, file);
+        if (before[0] && GearboxKeysMatch(held, before)) strncpy_s(key, w.gearboxKey, _TRUNCATE);
+        else if (!GearHoldRead(key, hold) && GearTopRead(key, tops) == 0 && GearboxFileMatch(key, file, sizeof file)) strncpy_s(key, file, _TRUNCATE);
     }
     w.gearboxVehicle = w.refs.vehicle;
     w.gearSpeeds = raw.gearSpeeds;
     memcpy(w.gearSpeed, raw.gearSpeed, sizeof w.gearSpeed);
     if (!strcmp(key, w.gearboxKey)) return;
-    strcpy_s(w.gearboxKey, key);
+    strncpy_s(w.gearboxKey, key, _TRUNCATE);
     w.gearHoldOwn = GearHoldRead(key, w.gearHold);
     float oldTops[kMaxGears];
     if (const int old = GearTopRead(key, oldTops))
         Log(L"gearbox: its file in Gauges\\gearboxes has %d gears' tops of an older build (Top<n>, rad/s): not used, each truck kind learns its own as a share of the game's gear speed", old);
     wchar_t whose[96];
-    if (w.gearHoldOwn) wcscpy_s(whose, L"its own (its file in Gauges\\gearboxes)");
-    else swprintf_s(whose, L"the %s class's%s", kClassWords[tachClass < 0 || tachClass >= kClassCount ? kClassTruck : tachClass],
+    if (w.gearHoldOwn) wcsncpy_s(whose, L"its own (its file in Gauges\\gearboxes)", _TRUNCATE);
+    else _snwprintf_s(whose, _TRUNCATE, L"the %s class's%s", kClassWords[tachClass < 0 || tachClass >= kClassCount ? kClassTruck : tachClass],
                     w.ownScales || !(w.mass > 0.0f) ? L"" : L", the class of the truck's weight");
     // the gearbox fitted, and the truck's default where it is another (an upgrade fitted)
     char other[kMaxText + 40] = "";
-    if (stock[0] && strcmp(stock, name)) sprintf_s(other, " (the truck's default is %s)", stock);
+    if (stock[0] && strcmp(stock, name)) _snprintf_s(other, _TRUNCATE, " (the truck's default is %s)", stock);
     if (named) Log(L"gearbox: %S fitted%S; each gear held going up %.1f s, %s", key, other, GearHoldOf(w, tachClass), whose);
     else Log(L"gearbox: its name not read, so it goes by its gears (%S); each gear held going up %.1f s, %s", key, GearHoldOf(w, tachClass), whose);
 }
@@ -3765,7 +3766,7 @@ static void EngineLook(TruckWatch &w, const TruckMemory &m, ULONGLONG now, bool 
     // the engine's own profile, for each engine as it is first known
     if (e.name[0] && strcmp(e.name, w.profileFor))
     {
-        strcpy_s(w.profileFor, e.name);
+        strncpy_s(w.profileFor, e.name, _TRUNCATE);
         if (EngineProfileRead(e.name, w.profile))
             Log(L"engine: %S has a profile of its own (Gauges\\engines\\%s.ini): %s%s%s", e.name, SetupFileName(Wide(e.name)).c_str(),
                 w.profile.custom ? L"a torque curve of its own" : w.profile.peakRpm > 0.0f ? L"its torque curve from its peak torque's speed" : L"the class's torque curve",
@@ -3972,7 +3973,7 @@ static void SuspTravelProbe(SuspTravel &p, ULONGLONG &at, const TruckMemory &m, 
     wchar_t line[1600];
     int used = 0;
     for (int i = 0; i < t.wheels && i < kMaxWheels && used < 1500; i++)
-        used += swprintf_s(line + used, 1600 - used, L"%s%d: %.4f (%.4f to %.4f) %+.3f m/s", i ? L" | " : L"", i, p.last[i], p.least[i], p.most[i], p.fastest[i]);
+        used += FmtCut(line + used, 1600 - used, L"%s%d: %.4f (%.4f to %.4f) %+.3f m/s", i ? L" | " : L"", i, p.last[i], p.least[i], p.most[i], p.fastest[i]);
     Log(L"probe: travel: %s", line);
     SuspTravelWindow(p, t.wheels);
 }
@@ -4145,7 +4146,7 @@ static void SuspStepTraceLog(const wchar_t *what, int at)
     int used = 0;
     for (int i = SuspStepBack(e, at, kStepTestBefore), on = 0; i <= to; i++)
     {
-        used += _snprintf_s(line + used, sizeof line - used, _TRUNCATE, "%s%u %.4f %g %.1f %+.3f", on ? " | " : "", e[i].step, e[i].dt, e[i].field, e[i].h * 1000.0f, e[i].v);
+        used += FmtCut(line + used, sizeof line - used, "%s%u %.4f %g %.1f %+.3f", on ? " | " : "", e[i].step, e[i].dt, e[i].field, e[i].h * 1000.0f, e[i].v);
         if (++on == 10 || i == to)
         {
             Log(L"probe: step trace (%s): %S", what, line);
@@ -4239,7 +4240,7 @@ static void SuspStepWindowLog(SuspStepWatch &p, const SuspStepWin &w)
         {
             int used = 0;
             for (int k = 0; k < kStepBins; k++)
-                used += _snprintf_s(bins[side] + used, sizeof bins[side] - used, _TRUNCATE, k < kStepBins - 1 ? "%s<%g:%d" : "%s>%g:%d", k ? " " : "",
+                used += FmtCut(bins[side] + used, sizeof bins[side] - used, k < kStepBins - 1 ? "%s<%g:%d" : "%s>%g:%d", k ? " " : "",
                                     k < kStepBins - 1 ? kStepBinTop[k] : kStepBinTop[kStepBins - 2], w.bins[i][side][k]);
         }
         // the frame of the window's own generation: a window a truck switch cut is logged by the truck it was of
@@ -4256,12 +4257,12 @@ static void SuspStepWindowLog(SuspStepWatch &p, const SuspStepWin &w)
         int put = 0;
         if (w.rested[i] && i < kMaxWheels) p.windowRest[i] = w.rest[i], p.windowRested[i] = true;
         if (w.written[i])
-            put += _snprintf_s(damped + put, sizeof damped - put, _TRUNCATE, "; the damper wrote %d steps, %.4f on the mean, the clamp holding %.1f %%", w.written[i],
+            put += FmtCut(damped + put, sizeof damped - put, "; the damper wrote %d steps, %.4f on the mean, the clamp holding %.1f %%", w.written[i],
                                w.writtenSum[i] / w.written[i], 100.0f * w.clamped[i] / w.written[i]);
         if (w.springWritten[i] && put >= 0)
-            put += _snprintf_s(damped + put, sizeof damped - put, _TRUNCATE, "; the spring wrote %d steps, %.4f on the mean", w.springWritten[i], w.springSum[i] / w.springWritten[i]);
+            put += FmtCut(damped + put, sizeof damped - put, "; the spring wrote %d steps, %.4f on the mean", w.springWritten[i], w.springSum[i] / w.springWritten[i]);
         if (put >= 0)
-            put += _snprintf_s(damped + put, sizeof damped - put, _TRUNCATE, "; %d steps in the bump zone, %d at the compression end", w.inZone[i], w.pastEnd[i]);
+            put += FmtCut(damped + put, sizeof damped - put, "; %d steps in the bump zone, %d at the compression end", w.inZone[i], w.pastEnd[i]);
         if (w.rested[i] && put >= 0) _snprintf_s(damped + put, sizeof damped - put, _TRUNCATE, "; at rest at %.3f along the axis", w.rest[i]);
         Log(L"probe: step: wheel %d, %.1f s of generation %u (%S): %.1f steps a second, dt %.4f to %.4f s; %d of %d steps over 1 m/s repeat the height (%.1f %%); "
             L"compression %S; rebound %S (m/s: steps); height %.4f to %.4f, along its axis %.3f to %.3f against the limits %g to %g%S%s",
@@ -4283,7 +4284,7 @@ static void SuspStepWindowLog(SuspStepWatch &p, const SuspStepWin &w)
         if (w.bounceSteps[i] <= 0) continue;
         int used = 0;
         for (int k = 0; k < w.bounceSteps[i] && used + 10 < (int)sizeof bounce; k++)
-            used += _snprintf_s(bounce + used, sizeof bounce - used, _TRUNCATE, k ? " %.0f" : "%.0f", w.bounce[i][k] * 1000.0f);
+            used += FmtCut(bounce + used, sizeof bounce - used, k ? " %.0f" : "%.0f", w.bounce[i][k] * 1000.0f);
         float ratio = 0.0f;
         char decay[64] = "; fewer than two swings";
         if (SuspBounceRatio(w.bounce[i], w.bounceSteps[i], ratio)) _snprintf_s(decay, sizeof decay, _TRUNCATE, "; the second swing %.2f of the first", ratio);
@@ -4422,11 +4423,11 @@ static void CamberPass(CamberTune &t, const TruckMemory &m, const TruckRefs &r, 
         {
             if (t.at[i] < 0)
             {
-                used += _snprintf_s(line + used, sizeof line - used, _TRUNCATE, "%s%d not a wheel object", i ? "; " : "", i);
+                used += FmtCut(line + used, sizeof line - used, "%s%d not a wheel object", i ? "; " : "", i);
                 continue;
             }
             const CamberWheel &c = t.kept[t.at[i]];
-            used += _snprintf_s(line + used, sizeof line - used, _TRUNCATE, "%s%d %s %s %.2f, %.2f, x%.2f", i ? "; " : "", i, front[i] ? "front" : "rear", isLeft[i] ? "left" : "right",
+            used += FmtCut(line + used, sizeof line - used, "%s%d %s %s %.2f, %.2f, x%.2f", i ? "; " : "", i, front[i] ? "front" : "rear", isLeft[i] ? "left" : "right",
                                 c.stock[kCamberRender] / kCamberRad, c.physics / kCamberRad, c.stock[kCamberGain]);
         }
         if (used < 0) used = 0;
@@ -4566,12 +4567,12 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
                         kDamperCurveNames[damper.curve], damper.low[0], damper.high[0], damper.low[1], damper.high[1], damper.knee);
                     // one line for the spring's features
                     char line[320];
-                    int used = _snprintf_s(line, sizeof line, _TRUNCATE, "%S", kSpringCurveNames[spring.curve]);
-                    if (spring.curve == 1 && used > 0) used += _snprintf_s(line + used, sizeof line - used, _TRUNCATE, " (x%g at the end)", spring.rise);
+                    int used = FmtCut(line, sizeof line, "%S", kSpringCurveNames[spring.curve]);
+                    if (spring.curve == 1 && used > 0) used += FmtCut(line + used, sizeof line - used, " (x%g at the end)", spring.rise);
                     if (spring.curve == 2 && used > 0)
-                        used += _snprintf_s(line + used, sizeof line - used, _TRUNCATE, " (x%g from the crossover at %g of the travel)", spring.rise, spring.cross);
+                        used += FmtCut(line + used, sizeof line - used, " (x%g from the crossover at %g of the travel)", spring.rise, spring.cross);
                     if (spring.bump && used > 0)
-                        used += _snprintf_s(line + used, sizeof line - used, _TRUNCATE, "; bump stops over the last %g m (a third of the travel at most), the force x%g and the damping x%g at the end", spring.zone, spring.bumpForce,
+                        used += FmtCut(line + used, sizeof line - used, "; bump stops over the last %g m (a third of the travel at most), the force x%g and the damping x%g at the end", spring.zone, spring.bumpForce,
                                             spring.bumpDamping);
                     if (spring.zones && used > 0)
                         _snprintf_s(line + used, sizeof line - used, _TRUNCATE, "; damping zones x%g from %g to %g of the travel, x%g toward the ends", spring.soft, spring.from,
@@ -4847,8 +4848,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     // 7); the ticks come with the set in force on each pass, so a tick, a level, a take-over or Defaults is in at once
     if (strcmp(w.airFor, w.who.taken.key) || strcmp(w.airForId, w.who.taken.id))
     {
-        strcpy_s(w.airFor, w.who.taken.key);
-        strcpy_s(w.airForId, w.who.taken.id);
+        strncpy_s(w.airFor, w.who.taken.key, _TRUNCATE);
+        strncpy_s(w.airForId, w.who.taken.id, _TRUNCATE);
         w.airFileKind = AirFileKind(w.airFor);
         w.airSaidFor = 0;
     }
@@ -5032,8 +5033,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         const char *topTruck = w.who.taken.key, *topBox = w.gearboxVehicle == w.refs.vehicle ? w.gearboxKey : "";
         if (strcmp(topTruck, w.topTruck) || strcmp(topBox, w.topBox))
         {
-            strcpy_s(w.topTruck, topTruck);
-            strcpy_s(w.topBox, topBox);
+            strncpy_s(w.topTruck, topTruck, _TRUNCATE);
+            strncpy_s(w.topBox, topBox, _TRUNCATE);
             w.topLearn = GearTopLearn{};
             w.topUpSaid = 0;
             int outside = 0;
@@ -5599,8 +5600,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             bool fold = false;
             if (strcmp(baseTruck, w.baseTruck) || strcmp(baseEngine, w.baseEngine))
             {
-                strcpy_s(w.baseTruck, baseTruck);
-                strcpy_s(w.baseEngine, baseEngine);
+                strncpy_s(w.baseTruck, baseTruck, _TRUNCATE);
+                strncpy_s(w.baseEngine, baseEngine, _TRUNCATE);
                 w.baseLearn = BaseLearn{};
                 memset(w.baseSaidAt, 0, sizeof w.baseSaidAt);
                 int dropped = 0;
@@ -5628,8 +5629,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 const bool written = GearBaseStep(w.gearBase[done], w.gearBaseFile[done], learned);
                 if (written) GearBaseWrite(baseTruck, baseEngine, done, w.gearBase[done]);
                 wchar_t fileText[48];
-                if (file > 0.0f) swprintf_s(fileText, L"the file's %.3f", file);
-                else wcscpy_s(fileText, L"none in the file");
+                if (file > 0.0f) _snwprintf_s(fileText, _TRUNCATE, L"the file's %.3f", file);
+                else wcsncpy_s(fileText, L"none in the file", _TRUNCATE);
                 // every learned gear (the Reviewer's point 6), so a drive shows the wheels' drag beside each figure
                 Log(L"road load: gear %d's pull at the game's own torque with %S, floored: learned %.3f m/s2 with the wheels' drag %.3f m/s2 added back, kept %.3f (from %.3f), %s: %s",
                     done, baseEngine, learned, dampMean, w.gearBase[done], was, fileText,
@@ -5821,7 +5822,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 if (g_shiftJob.state == kShiftIdle)
                 {
                     g_shiftJob.number = ++shiftNumber;
-                    strcpy_s(g_shiftJob.context, context);
+                    strncpy_s(g_shiftJob.context, context, _TRUNCATE);
                     ShiftJobPost(g_shiftJob, w.refs.vehicle, w.refs.action, true, raw.gear, shiftTo, jobFlag, jobPower, jobFactor, TruckUpdateFrames(), now);
                     ShiftStageAsk(w.stage, shiftTo, w.stallWaits);
                     w.stallWaits = false;
@@ -5897,14 +5898,14 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             if (TruckDamageAdd(m, w.refs, w.owed + w.asked, w.engine, d))
             {
                 char cause[128], effect[256], after[64] = ""; // the effect and the torque factor are the game's: room for numbers of any size
-                if (test) strcpy_s(cause, "the tab's test");
+                if (test) strncpy_s(cause, "the tab's test", _TRUNCATE);
                 else
-                    sprintf_s(cause, w.cause == 2 ? "a cold engine worked hard at %.1f C (%.1f percent a minute)" : "the heat at %.1f C (%.1f percent a minute)", w.temp.temp,
+                    _snprintf_s(cause, _TRUNCATE, w.cause == 2 ? "a cold engine worked hard at %.1f C (%.1f percent a minute)" : "the heat at %.1f C (%.1f percent a minute)", w.temp.temp,
                               w.damage.hot + w.damage.cold);
                 if (d.effectAfter != d.effectBefore || d.torqueAfter != d.torqueBefore)
-                    sprintf_s(effect, "effect %.3f to %.3f, torque x%.3f to x%.3f", d.effectBefore, d.effectAfter, d.torqueBefore, d.torqueAfter);
-                else sprintf_s(effect, "effect %.3f, torque x%.3f", d.effectAfter, d.torqueAfter);
-                if (d.after != d.wrote) sprintf_s(after, "; the game held %d right after", d.after);
+                    _snprintf_s(effect, _TRUNCATE, "effect %.3f to %.3f, torque x%.3f to x%.3f", d.effectBefore, d.effectAfter, d.torqueBefore, d.torqueAfter);
+                else _snprintf_s(effect, _TRUNCATE, "effect %.3f, torque x%.3f", d.effectAfter, d.torqueAfter);
+                if (d.after != d.wrote) _snprintf_s(after, _TRUNCATE, "; the game held %d right after", d.after);
                 Log(L"engine damage: %d to %d of %d, from %S; %S%S", d.before, d.wrote, d.capacity, cause, effect, after);
                 w.addedAt = now;
                 w.refused = "";
@@ -6293,7 +6294,7 @@ static DWORD WINAPI Run(void *)
         if (InterlockedExchange(&g_tabPutAsked, 0))
         {
             char id[32];
-            strcpy_s(id, g_tabPut);
+            strncpy_s(id, g_tabPut, _TRUNCATE);
             IniTabPut(id, IniPath());
         }
         // a key just bound on the tab is still down: it toggles from its next press on
@@ -6463,7 +6464,7 @@ static DWORD WINAPI Run(void *)
                     ClockText(picked.second, at, sizeof at);
                     MapTitle(level, title, sizeof title);
                     Log(L"map: %s (%S), the map loaded last as the game's save of %S says (%s)", Wide(title).c_str(), level, at, PathForLog(picked.first).c_str());
-                    strcpy_s(map, level);
+                    strncpy_s(map, level, _TRUNCATE);
                 }
             }
             else if (!unread.empty() && unread != saveUnread)
@@ -6577,7 +6578,7 @@ static DWORD WINAPI Run(void *)
                 else if (mapOwn) Log(L"map: %s, %g C outside (AmbientC: AmbientByMap=0 leaves [Map:%s] out)", Wide(title).c_str(), s.ambientC, Wide(mapFrom).c_str());
                 else if (map[0]) Log(L"map: %s has no section in Gauges.ini, nor has its region, so it is %g C outside (AmbientC)", Wide(title).c_str(), s.ambientC);
             }
-            strcpy_s(mapRead, map);
+            strncpy_s(mapRead, map, _TRUNCATE);
             mapAsk = false;
         }
         GaugeSettings inForce = s;
@@ -6709,7 +6710,7 @@ static DWORD WINAPI Run(void *)
             int taken = 0;
             if (takeOver)
             {
-                strcpy_s(set.key, truck.key);
+                strncpy_s(set.key, truck.key, _TRUNCATE);
                 taken = TakeOverBoth(truck.key, oldId, truck.id);
             }
             SettingsFor(set, truck.key, truck.id);
@@ -6737,7 +6738,7 @@ static DWORD WINAPI Run(void *)
             if (saveAt) SettingsSave(set);
             saveAt = 0;
             char oldId[40];
-            strcpy_s(oldId, truck.id);
+            strncpy_s(oldId, truck.id, _TRUNCATE);
             const uint64_t oldVehicle = truckVehicle;
             truck = now;
             truckVehicle = watch.idVehicle; // recorded on the pass the new id was read with
@@ -6756,7 +6757,7 @@ static DWORD WINAPI Run(void *)
             SuspLevelLog(set, !set.truckOwn && !set.truckKept && !taken && truck.id[0]);
         }
         GaugeView v = {};
-        strcpy_s(v.truck, truck.key);
+        strncpy_s(v.truck, truck.key, _TRUNCATE);
         v.truckOwn = set.own;
         v.suspOwn = set.suspOwn || set.truckOwn;
         v.suspKept = set.suspKept || set.truckKept;
@@ -6766,7 +6767,7 @@ static DWORD WINAPI Run(void *)
         v.suspIdKnown = set.id[0] != 0;
         if (map[0]) MapTitle(map, v.map, sizeof v.map);
         else v.map[0] = 0;
-        strcpy_s(v.mapFrom, mapFrom);
+        strncpy_s(v.mapFrom, mapFrom, _TRUNCATE);
         v.mapOwn = mapOwn && s.ambientByMap;
         v.ambientC = inForce.ambientC;
         v.ambientDay = mapAir.day;
@@ -6784,7 +6785,7 @@ static DWORD WINAPI Run(void *)
         v.controllers = InputDevicesFound();
         v.gearStalls = watch.take.driving ? watch.pos.stalls : 0;
         v.gearShifts = watch.take.driving ? watch.take.shifts : 0;
-        strcpy_s(v.gearbox, driving ? watch.gearboxKey : "");
+        strncpy_s(v.gearbox, driving ? watch.gearboxKey : "", _TRUNCATE);
         // the engine and its curve in force, for the tab's Engine section and its plot
         if (driving && watch.profileFor[0])
         {
@@ -7042,7 +7043,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
     // One copy of the mod per game: a second file of it (Gauges.asi beside Gauges.addon64, or a copy left under
     // another name) would draw a second cluster and write the same ini. The mutex is the process's.
     wchar_t once[64];
-    swprintf_s(once, L"Local\\SnowRunnerGauges-%lu", GetCurrentProcessId());
+    _snwprintf_s(once, _TRUNCATE, L"Local\\SnowRunnerGauges-%lu", GetCurrentProcessId());
     const HANDLE mutex = CreateMutexW(nullptr, FALSE, once);
     g_second = mutex && GetLastError() == ERROR_ALREADY_EXISTS;
     // pinned in every case: the gearbox hooks live as long as the game, so no unload path exists (review 6, G3)
@@ -7172,7 +7173,7 @@ int wmain(int argc, wchar_t **argv)
     c.frameFlex = 2.5f;
     c.twistRange = 0.5f;
     c.toggleKey = VK_F9;
-    strcpy_s(c.padToggle, "RB+DPadUp");
+    strncpy_s(c.padToggle, "RB+DPadUp", _TRUNCATE);
     c.demo = true;
     c.probe = 1;
     c.keepLogs = 5;
@@ -7760,10 +7761,10 @@ int wmain(int argc, wchar_t **argv)
                 // the take-over: gone, back as the same kind under a new id within 20 s with none between
                 SuspTracker t = {};
                 TruckIdentity a1 = {}, a2 = {}, none = {}, b1 = {}, a3 = {};
-                strcpy_s(a1.key, kind); strcpy_s(a1.id, id1);
-                strcpy_s(a2.key, kind); strcpy_s(a2.id, id2);
-                strcpy_s(a3.key, kind); strcpy_s(a3.id, id3);
-                strcpy_s(b1.key, other); strcpy_s(b1.id, idB);
+                strncpy_s(a1.key, kind, _TRUNCATE); strncpy_s(a1.id, id1, _TRUNCATE);
+                strncpy_s(a2.key, kind, _TRUNCATE); strncpy_s(a2.id, id2, _TRUNCATE);
+                strncpy_s(a3.key, kind, _TRUNCATE); strncpy_s(a3.id, id3, _TRUNCATE);
+                strncpy_s(b1.key, other, _TRUNCATE); strncpy_s(b1.id, idB, _TRUNCATE);
                 char gone[40];
                 const bool away = !SuspTrack(t, a1, none, 1000, gone);
                 const bool due = SuspTrack(t, none, a2, 6000, gone) && !strcmp(gone, id1);
@@ -7887,7 +7888,7 @@ int wmain(int argc, wchar_t **argv)
                     char ids[11][40];
                     for (int i = 0; i < 11; i++)
                     {
-                        sprintf_s(ids[i], "{A%07d-0000-0000-0000-000000000000}", i);
+                        _snprintf_s(ids[i], _TRUNCATE, "{A%07d-0000-0000-0000-000000000000}", i);
                         WritePrivateProfileStringW(SuspSectionOf(ids[i]).c_str(), L"Own", L"1", kf.c_str());
                         TruckSuspTakeOver(kind, ids[i], "{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}", 1000 + i);
                         WritePrivateProfileStringW(SuspSectionOf("{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}").c_str(), nullptr, nullptr, kf.c_str());
@@ -8073,7 +8074,7 @@ int wmain(int argc, wchar_t **argv)
             const char *id1 = "{E1111111-1111-1111-1111-111111111111}", *id2 = "{E2222222-2222-2222-2222-222222222222}",
                        *id3 = "{E3333333-3333-3333-3333-333333333333}";
             char tens[10][24];
-            for (int i = 0; i < 10; i++) sprintf_s(tens[i], "e_ten_%d", i);
+            for (int i = 0; i < 10; i++) _snprintf_s(tens[i], _TRUNCATE, "e_ten_%d", i);
             auto clean = [&]() {
                 for (const char *k : { kind, kind2, kind3, kind4, kind5 }) DeleteFileW(truckFile(k).c_str());
                 for (const char *n : { e1, e2 }) DeleteFileW(SetupFile(kSetupEngine, n).c_str());
@@ -8180,7 +8181,7 @@ int wmain(int argc, wchar_t **argv)
                 char ids[11][40];
                 for (int i = 0; i < 11; i++)
                 {
-                    sprintf_s(ids[i], "{B%07d-0000-0000-0000-000000000000}", i);
+                    _snprintf_s(ids[i], _TRUNCATE, "{B%07d-0000-0000-0000-000000000000}", i);
                     WritePrivateProfileStringW(SectionOf(kEngineSection, ids[i]).c_str(), L"Own", L"1", kf.c_str());
                     TruckSuspTakeOver(kind4, ids[i], "{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}", 1000 + i, kEngineSection);
                     WritePrivateProfileStringW(SectionOf(kEngineSection, "{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}").c_str(), nullptr, nullptr, kf.c_str());
@@ -8430,8 +8431,8 @@ int wmain(int argc, wchar_t **argv)
         };
         auto name = [](int minute, int copy) {
             wchar_t n[64];
-            if (copy) swprintf_s(n, L"Gauges 2026-10-12 10-%02d-00 (%d).log", minute, copy);
-            else swprintf_s(n, L"Gauges 2026-10-12 10-%02d-00.log", minute);
+            if (copy) _snwprintf_s(n, _TRUNCATE, L"Gauges 2026-10-12 10-%02d-00 (%d).log", minute, copy);
+            else _snwprintf_s(n, _TRUNCATE, L"Gauges 2026-10-12 10-%02d-00.log", minute);
             return std::wstring(n);
         };
         auto there = [&](const std::wstring &n) { return GetFileAttributesW((root + n).c_str()) != INVALID_FILE_ATTRIBUTES; };
