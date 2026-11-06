@@ -5359,8 +5359,10 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             ShiftJob &j = g_shiftJob;
             if (j.shift)
             {
-                Log(L"shift %u: %d to %d %S; dealt at truck update %ld on thread %lu (the truck update's), %llu ms after posting, on vehicle %p (%s): %s, "
-                    L"+74 %d, +70 %d, power %.2f at the shift%S", j.number, j.from, j.gear, j.context, j.frame, j.thread, (unsigned long long)(now - j.postedAt),
+                char dealt[80];
+                ShiftJobDealtWords(j, now, dealt, sizeof dealt);
+                Log(L"shift %u: %d to %d %S; dealt at truck update %ld on thread %lu (the truck update's), %S, on vehicle %p (%s): %s, "
+                    L"+74 %d, +70 %d, power %.2f at the shift%S", j.number, j.from, j.gear, j.context, j.frame, j.thread, dealt,
                     (void *)j.vehicle, j.vehicle == w.refs.vehicle ? L"the truck driven" : L"not the truck driven now", j.took ? L"took" : L"refused", j.gear74,
                     j.gear70, j.factorAtShift, j.power ? " (set after)" : "");
                 ShiftStageResult(w.stage, j.took);
@@ -6639,7 +6641,7 @@ static DWORD WINAPI Run(void *)
         const bool driving = TruckPass(watch, memory, inForce, front, raw, world);
         wasDriving = driving;
         const bool menuUpWas = gameMenu.up;
-        if (GameMenuGateSeen(gameMenu, GameMenuUp(world), GetTickCount64())) Log(L"input: the game's function menu is up, the bindings wait");
+        if (GameMenuGateSeen(gameMenu, GameMenuUp(world), GetTickCount64(), world.functionMenu != 0)) Log(L"input: the game's function menu is up, the bindings wait");
         // Probe=1: the words around the game's menu flags from the function menu's close until the game sets a truck
         // (truck.h, MenuWords), so the next drive shows the word that marks the truck switch's own screen
         if (s.probe)

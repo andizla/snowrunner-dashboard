@@ -986,10 +986,25 @@ int main()
                                ShiftJobDrop(sj, kVehicle, 22000) && sj.state == kShiftIdle;
             ShiftJobPost(sj, kVehicle, kAction, true, 2, 1, false, false, 0.0f, 914, 30000);
             const bool inTime = ShiftJobFrame(sj, ew, kMemory, kShiftFirst, shift, 915, 7, 31000) && sj.state == kShiftDealt;
+            // the drive of 2026-11-06 23:48 (F2): dealt 50 ms after posting, the line written on the pass 345 s later says
+            // the deal's own figure and how much later it is said; posted and no update for 345 s, then one: dropped
+            sj.state = kShiftIdle;
+            ShiftJobPost(sj, kVehicle, kAction, true, 2, 1, false, false, 0.0f, 914, 40000);
+            ShiftJobFrame(sj, ew, kMemory, kShiftFirst, shift, 916, 7, 40050);
+            char late345[80], soon50[80];
+            ShiftJobDealtWords(sj, 40050 + 345000, late345, sizeof late345);
+            ShiftJobDealtWords(sj, 40100, soon50, sizeof soon50);
+            const bool saidLate = sj.dealtAt == 40050 && !strcmp(late345, "50 ms after posting, said 345 s later") && !strcmp(soon50, "50 ms after posting");
+            sj.state = kShiftIdle;
+            ShiftJobPost(sj, kVehicle, kAction, true, 2, 1, false, false, 0.0f, 914, 50000);
+            const bool stale345 = !ShiftJobFrame(sj, ew, kMemory, kShiftFirst, shift, 2000, 7, 395000) && ShiftJobDrop(sj, kVehicle, 395000) && sj.state == kShiftIdle;
+            sj.state = kShiftDealt;
             // one the game's thread is dealing is never dropped, nor dealt a second time (F1)
             sj.state = kShiftDealing;
             const bool dealing = !ShiftJobDrop(sj, kOtherVehicle, 9000) && !ShiftJobDrop(sj, 0, 9000) && !ShiftJobFrame(sj, ew, kMemory, kShiftFirst, shift, 501, 7, 9000) &&
                                  sj.state == kShiftDealing && !ShiftJobPost(sj, kVehicle, kAction, true, 1, 2, false, false, 0.0f, 500, 9000);
+            Check(saidLate && stale345, "shift job (F2 of 2026-11-06 23:48): the line says the deal's own time, and \"said 345 s later\" when written 345 s after it; "
+                                        "a job with no update for 345 s is dropped, not dealt");
             Check(posted && other && dealt && order && fields && notYet && follows && refused && kept && late && otherTruck && noTruck && stale && inTime && dealing,
                   "shift job (review 17, step 1): one at a time, dealt only for its truck, the flag down before ShiftGear and the power after it; + 0x74 "
                   "and + 0x70 right after, + 0x70 watched until it follows; a refused shift starts no watch; dropped after a second whatever the updates, "

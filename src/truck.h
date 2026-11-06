@@ -1033,6 +1033,7 @@ struct ShiftJob
     int gear74, gear70;         // + 0x74 and + 0x70 right after the shift (INT_MIN unread)
     long frame;                 // the truck update it was dealt in
     unsigned long thread;
+    unsigned long long dealtAt; // when it was dealt, GetTickCount64 on the game's thread (the line is written on the mod's next pass)
     float factorAtShift;        // + 0x38 as ShiftGear met it: the power goes after the shift
 };
 struct EngageWatch { volatile LONG on; uint64_t action; int gear; long from; volatile LONG at; };
@@ -1073,6 +1074,7 @@ inline bool ShiftJobFrame(ShiftJob &j, EngageWatch &e, const TruckMemory &m, uin
     if (InterlockedCompareExchange(&j.state, kShiftDealing, kShiftPosted) != kShiftPosted) return false;
     j.thread = thread;
     j.frame = frame;
+    j.dealtAt = now;
     if (j.flagDown) m.put(j.action + 0x3C, (uint8_t)0);
     j.took = false;
     j.factorAtShift = -1.0f;
@@ -1092,6 +1094,16 @@ inline bool ShiftJobFrame(ShiftJob &j, EngageWatch &e, const TruckMemory &m, uin
     }
     InterlockedExchange(&j.state, kShiftDealt);
     return true;
+}
+
+// The deal's time for the shift's line (the drive of 2026-11-06 23:48, the Reviewer's F2 point 1): milliseconds from
+// posting to the deal, and where the line comes more than a second after the deal (the mod's thread writes it on its
+// next driving pass, and the garage held that off 345 s), how much later it is said.
+inline void ShiftJobDealtWords(const ShiftJob &j, unsigned long long now, char *out, size_t size)
+{
+    const unsigned long long after = j.dealtAt >= j.postedAt ? j.dealtAt - j.postedAt : 0;
+    if (now > j.dealtAt + 1000) _snprintf_s(out, size, _TRUNCATE, "%llu ms after posting, said %.0f s later", after, (now - j.dealtAt) / 1000.0);
+    else _snprintf_s(out, size, _TRUNCATE, "%llu ms after posting", after);
 }
 
 // On the game's thread, each truck update: + 0x70 watched after a shift; true on the update it shows the gear asked.

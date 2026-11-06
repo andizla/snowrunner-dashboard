@@ -502,22 +502,34 @@ inline bool BindingCaptureHeld(const InputCapture &c, const InputSnapshot &s, ch
 // menu within a game frame, so the pass that first sees A down can read the menu closed already. The reader steps
 // on through it, so a button held over the menu gives no press until it is let go and pressed again. The keys and
 // the pad are left to the game, not hidden from it.
-static const unsigned long long kGameMenuHoldMs = 250;
+// After the function menu itself the wait is kFunctionMenuHoldMs: a pad press 0.4 s and 0.8 s after it closed reached
+// the gearbox in the screen that follows it, which no flag the mod reads marks (the drives of 2026-11-06 20:52 and
+// 23:48, the Reviewer's F2 point 2).
+static const unsigned long long kGameMenuHoldMs = 250, kFunctionMenuHoldMs = 1500;
 struct GameMenuGate
 {
     bool up;                   // the game's flags said a menu is up on the last pass
     unsigned long long downAt; // when they first read 0 again; 0 before any menu
+    bool function;             // the function menu was up in the menu still up
+    bool afterFunction;        // the menu that closed at downAt had the function menu up
 };
-// One pass with what the game's flags say now. True on the pass a menu comes up (the caller logs it once a menu).
-inline bool GameMenuGateSeen(GameMenuGate &g, bool up, unsigned long long now)
+// One pass with what the game's flags say now (function: the function menu's own flag). True on the pass a menu comes
+// up (the caller logs it once a menu).
+inline bool GameMenuGateSeen(GameMenuGate &g, bool up, unsigned long long now, bool function = false)
 {
     const bool began = up && !g.up;
-    if (!up && g.up) g.downAt = now ? now : 1;
+    if (up && function) g.function = true;
+    if (!up && g.up)
+    {
+        g.downAt = now ? now : 1;
+        g.afterFunction = g.function;
+        g.function = false;
+    }
     g.up = up;
     return began;
 }
-// The bindings wait: a menu is up, or it closed less than kGameMenuHoldMs ago.
+// The bindings wait: a menu is up, or it closed less than kGameMenuHoldMs ago (kFunctionMenuHoldMs after the function menu).
 inline bool GameMenuGateHolds(const GameMenuGate &g, unsigned long long now)
 {
-    return g.up || (g.downAt && now - g.downAt < kGameMenuHoldMs);
+    return g.up || (g.downAt && now - g.downAt < (g.afterFunction ? kFunctionMenuHoldMs : kGameMenuHoldMs));
 }

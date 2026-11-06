@@ -464,6 +464,16 @@ int main()
         GameMenuGateSeen(h, false, 110);
         Check(fresh && seen && GameMenuGateHolds(h, 110) && GameMenuGateHolds(h, 359) && !GameMenuGateHolds(h, 360),
               "function menu: nothing waits before any menu; a menu is seen once as it comes up; the bindings wait 250 ms after it closes");
+        // after the function menu itself 1.5 s (the drive of 2026-11-06 23:48, F2): a press 0.8 s after the close does
+        // nothing, one at 1.6 s acts; the next menu without the function menu waits 250 ms again
+        GameMenuGate f = {};
+        GameMenuGateSeen(f, true, 1000, true);
+        GameMenuGateSeen(f, false, 2000, false);
+        const bool fnWait = GameMenuGateHolds(f, 2800) && GameMenuGateHolds(f, 3499) && !GameMenuGateHolds(f, 3600);
+        GameMenuGateSeen(f, true, 5000, false);
+        GameMenuGateSeen(f, false, 5100, false);
+        const bool plainAgain = GameMenuGateHolds(f, 5349) && !GameMenuGateHolds(f, 5350);
+        Check(fnWait && plainAgain, "function menu: after the function menu the bindings wait 1.5 s (a press at 0.8 s does nothing, at 1.6 s it acts); after another menu 250 ms");
     }
     // a pad binding with an unknown button in the ini: refused with its reason cut to the caller's room, not ended there
     {
