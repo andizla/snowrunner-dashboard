@@ -66,7 +66,7 @@ def page(title, body):
 # ---------------------------------------------------------------- gauges manual
 def gt(cols, rows, cap=''): return table(cols, rows, cap)
 GAUGES = f'''
-<div class="cover"><h1>Next Gen Gameplay</h1><p class="sub">Manual for version 0.18.0 (beta), October 2026</p></div>
+<div class="cover"><h1>Next Gen Gameplay</h1><p class="sub">Manual for version 0.18.4 (beta), November 2026</p></div>
 <!--TOC-->
 
 <p class="intro">Part 1, for dummies, says what the mod does and how to use it, first the basics and then feature by feature. Part 2, the technical reference, gives the models behind it: the formulas and constants and where each number comes from, how the mod gets into the game and reads and writes its memory, and what it cannot do.</p>

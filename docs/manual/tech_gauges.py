@@ -180,7 +180,7 @@ def s_intro():
 <p class="intro">This part is for readers who want the workings. The game keeps no engine speed, no temperatures, no boost, no
 brake air and no range, so most of the cluster is models: this part gives each one as the code has it, with its formulas, every
 constant, and where a number comes from when the code says so; then how the mod finds the truck in the game's memory, what it
-reads and writes there, and what it cannot do. The numbers are those of version 0.18.0; file and line references
+reads and writes there, and what it cannot do. The numbers are those of version 0.18.4; file and line references
 (<code>models.h:153</code>) point into its source. "The Steam build" is the game build of 22 July 2026 (time stamp
 <code>6a607c05</code>); an RVA is an offset from the start of <code>SnowRunner.exe</code> in memory, in that build. The charts are
 the models re-run with their default settings.</p>
@@ -1284,7 +1284,7 @@ the revs over the red zone: no engine braking from it and no over-rev damage. Lu
 game's own stall seconds; whether the game's stalling notice shows for it is unconfirmed. The low range's L- and L+ power factors are
 taken as 0.2 and 1.0 until a truck with them is driven at Gearbox=0; L is 0.45 as driven. On Windows 10 the NEXT GEN menu may not draw
 while ReShade loads the .asi files as add-ons: turn that off in ReShade's Add-ons tab (one player's report, under investigation).</li></ul>
-<h3>Changed in the next version</h3>
+<h3>Changed in 0.18.4</h3>
 <ul><li>The gear keys and the other bindings wait while the game's function menu is up, so picking Recover with Pad A no longer shifts down.</li>
 <li>The crash line in <code>Gauges.log</code> also names an invalid parameter in the C runtime and abort, which can end the game at once (0xC0000409).</li>
 <li>The ASI loader starts on Linux (Proton and the Steam Deck) with the launch option <code>WINEDLLOVERRIDES="version=n,b" %command%</code>. Before, the mods never loaded there, and with that option the game would not start.</li>
@@ -1325,8 +1325,9 @@ memory).</li>
 <li>A test, on the Suspension tab: Spring and Damping as factors of the truck's own, x0.25 to x4 (<code>SpringScale</code>, <code>DampingScale</code>), with the truck's file figures front and rear and what is in force shown under each, and a note where the game's limit of 1 holds. Extra travel adds 0 to 30 cm past the file's compression end (<code>ExtraTravel</code>), from a file's 0.0 too, and never shortens; past the file's end a wheel may go into the body. SuspensionMax does nothing in the game, so it has no slider. The damper's curve, spring curves, bump stops and damping zones are there as tests too, all off by default.</li>
 <li>The creep only with an automatic, for now: the mod's A and the game's own automatic creep as before; a gear picked by hand,
 on either shifter and an R included, gets none (the author, 1 November). A gearbox whose name is not read keeps its gear hold: the
-same gears within 2 % keep the first gearbox's file, where each small drift of the speeds was a new gearbox before.</li>
-<li>The creep holds the gear's idle speed once the truck rolls in a gear picked by hand, up to the engine's torque at idle
+same gears within 2 % keep the first gearbox's file, where each small drift of the speeds was a new gearbox before.</li></ul>
+<h3>Changed in 0.18.1</h3>
+<ul><li>The creep holds the gear's idle speed once the truck rolls in a gear picked by hand, up to the engine's torque at idle
 (review 13; the author, 29 October): in 4th or 5th on a flat road the truck rolls on at idle. A load past the idle torque lugs it, and in the mod's
 own gearbox (Gearbox=2) under 0.6 of the idle speed it stalls a second later, the needle following the clutch's engine down. On the
 automatic and the game's shifter, in A and within a second of a shift no stall comes and the engine idles on (the author's drive of

@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.18.4]
 
 - Air drag learns each gear's pull with the wheels' own drag left out, so Rolling drag and a flat tire don't make it stronger.
 - Air suspension and Level to horizon act only on the axles that have air. Many trucks have air at the rear only, with the front axle on springs; some have none. The mod knows this for the vanilla trucks whose real models settle it. Every other truck, mod trucks too, keeps air on every axle as before. `AirAxles=all`, `rear` (every axle but the front one) or `none` in `[Truck]` of the truck's file in `Gauges\trucks` sets it, and wins over the mod's. On a truck with none the two settings are greyed and the Ride up and Ride down keys do nothing. The Suspension tab and the log say which axles have air, and where that came from.
