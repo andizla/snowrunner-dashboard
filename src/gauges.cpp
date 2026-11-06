@@ -1050,6 +1050,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; toggles them). Both move the attach point and stop on a truck whose game moves it. SuspDisplay=1 draws each wheel's travel. All tests, off by default.\n"
                         L"; AirSuspension=1 holds each wheel at its rest place of the first standstill, cargo or not (3 s to settle, under 10 km/h); AirHorizon=1 levels the body\n"
                         L"; to the horizon instead (about 7 degrees at most). BindRideUp, BindRideDown move it 2 cm under 20 km/h.\n"
+                        L"; Only the axles with air follow them: by the mod's table, or AirAxles=all, rear (every axle but the front one) or none in [Truck] of the truck's file.\n"
                         L"; DamperCurve 0 linear, 1 digressive, 2 progressive; LowCompression, HighCompression, LowRebound, HighRebound: the damping\n"
                         L"; under and over DamperKnee (m/s, 0.02 to 0.5), rising and falling, 0.25 to 4 (a test; 1 and linear = the truck's own).\n"
                         L"; BumpStops=1: force (BumpForce, 1 to 6, the spring's at the end times it) and damping (BumpDamping, 1 to 4) over the last BumpZone m (0.03 to 0.2) of the\n"
@@ -6442,7 +6443,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 124, "ini: the help text survives a write (124 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 125, "ini: the help text survives a write (125 comment lines)");
     // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
     {
         char none[32] = "x", tab[32] = {}, kept[32] = {};

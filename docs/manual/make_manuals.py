@@ -298,7 +298,12 @@ crawl, and a lamp shows while they are off.</li>
 is kept as its rest place, so cargo no longer makes the truck sag or lean. It levels only the height, the pitch and the roll,
 so a twist over rough ground stays the ground's. It works under 10 km/h and settles in about 3 s. An axle with a wheel
 hanging or on its stop keeps its height. Ride up and Ride down (under Locks) raise and lower it 2 cm a press, within 10 cm,
-under 20 km/h; the height goes back to 0 when you take another truck. Turned off, it eases back over a few seconds.</li>
+under 20 km/h; the height goes back to 0 when you take another truck. Turned off, it eases back over a few seconds.
+Only the axles with air follow it. Many trucks have air at the rear only, with the front axle on springs: the front then keeps
+the game's own and the body levels about it. The mod knows this for the vanilla trucks whose real models settle it; every
+other truck, mod trucks too, has air on every axle. <code>AirAxles=all</code>, <code>rear</code> (every axle but the front one)
+or <code>none</code> in <code>[Truck]</code> of the truck's file in <code>Gauges\trucks</code> sets it, and wins over the mod's. With
+none, Air suspension and Level to horizon are greyed and Ride up and Ride down do nothing. The tab says which axles have air.</li>
 <li><b>Level to horizon</b> (<code>AirHorizon</code>, with the air suspension): the body is levelled to the horizon instead
 of to the wheels, standing and crawling under 10 km/h, at most about 7 degrees side to side. Over 10 km/h it goes back to the
 wheels and keeps the height.</li>

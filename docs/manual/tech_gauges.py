@@ -858,6 +858,16 @@ never its own error. A rigid chassis can follow only those three, so its twist a
 and a cross-axle crawl never winds it up. An axle with a wheel hanging or at its compression end is left out of the fit.
 The ride height and the keys' height (2 cm a press, within 10 cm, under 20 km/h, back to 0 on another truck) go on top of
 the rest place, so the levelling never takes them back (<code>SuspLevelStep</code>).</p>
+<p>Only the axles with air are fitted and shifted (<code>air_axles.h</code>): the truck's <code>AirAxles</code> in
+<code>[Truck]</code> of its file, else the mod's table of vanilla trucks by kind (none 13, rear 19, all 4; the sources are the
+team's, not in the repo), else all. Rear is every axle but the front one, by place, the split RideFront and RideRear use. With
+leaf axles beside air ones the plane is held at 0 at the leaf wheels' mean place: the fit goes through that point, and the
+height moves with the pitch and roll, so a 4x2 with one air axle still levels its pitch about the front. A leaf axle gets
+neither the levelling nor the keys' height. RideFront, RideRear, the sway bars, the springs and the dampers stay on every axle.
+The log says once per truck "suspension: air on every axle but the front one (rear)", "suspension: air on every axle (all; ...)" or
+"suspension: no air suspension on this truck, leaf on every axle", with where it came from. Swing axles (101, read only for now): a wheel's
+CamberSuspensionMultiplier at wheel + 0x8C over 1 with its CamberAnglePhysics at + 0x88 at 0, as the five swing trucks have
+it; "suspension: swing axles, the camber follows the travel" says so once per truck.</p>
 <p>With <code>AirHorizon</code> the pitch and roll follow the chassis's tilt to the horizon, as the tilt lamp reads it,
 instead of the wheels' plane. The 12 cm of shift give about 7 degrees side to side; past that it gets as close as it can.
 Over 10 km/h the pitch and roll fade back to 0 and the height is kept.</p>
