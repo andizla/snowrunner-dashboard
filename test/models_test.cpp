@@ -3998,6 +3998,30 @@ int main(int argc, char **argv)
                  learnt[3], base[3], when[3], learnt[4], base[4], when[4], onClimb, dipLearned);
         Check(alternating && shortNothing && byPath && dip && empty && gathered3 > 0.0f, line);
     }
+    // the kept pull saved against the file's figure (BRIEF_air_drag_save.md): passes 10 % below a kept 2.0 that is the
+    // file's write whenever the kept figure is more than 2 % off the last written, four times, then stop for good (the old
+    // rule, a single 30 % step over 5 %, wrote none of them); a pass within 2 % writes nothing; a gear with none in the
+    // file writes on its first pass
+    {
+        float kept = 2.0f, file = 2.0f;
+        int writes = 0, lastWrite = -1;
+        bool rule = true;
+        for (int i = 0; i < 100; i++)
+        {
+            const float fileBefore = file;
+            const bool wrote = GearBaseStep(kept, file, 1.8f);
+            rule &= wrote == (fabsf(kept - fileBefore) > 0.02f * fileBefore) && (!wrote || file == kept) && (wrote || file == fileBefore);
+            if (wrote) writes++, lastWrite = i;
+        }
+        float kept2 = 2.0f, file2 = 2.0f;
+        const bool within = !GearBaseStep(kept2, file2, 1.9f) && Near(kept2, 1.97f, 1e-4f) && file2 == 2.0f;
+        float kept3 = 0.0f, file3 = 0.0f;
+        const bool firstPass = GearBaseStep(kept3, file3, 1.6f) && kept3 == 1.6f && file3 == 1.6f;
+        char line[300];
+        snprintf(line, sizeof line, "air drag saved: passes 10 %% below a kept 2.0 write %d times (the last on pass %d), the file then %.3f with the kept %.3f; "
+                 "within 2 %% nothing; none in the file writes on the first pass", writes, lastWrite + 1, file, kept);
+        Check(rule && writes == 4 && lastWrite == 8 && fabsf(file - kept) <= 0.02f * file && within && firstPass, line);
+    }
     // one figure per truck: two gears learned with equal a_base × top give an unlearned gear K / top; spread 20 % by
     // gear only; one gear learned alone fills nothing
     {

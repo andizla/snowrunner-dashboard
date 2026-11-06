@@ -1816,6 +1816,20 @@ inline int BaseLearnStep(BaseLearn &l, int gear, bool ok, float accel, float dam
     return learned > 0.0f ? gear : 0;
 }
 
+// A learned gear's pull kept and saved (BRIEF_air_drag_save.md): the kept figure moves kBaseKeepStep toward the one
+// learned (takes it, with none kept), and is written when the file has none for the gear (file 0: dropped, or never
+// learned) or it is more than kBaseWriteShare off the figure last written or read, whatever the one step moved. So a
+// small change, a truck's new mass among them, is saved once the kept figure has gone past it. file: the figure last
+// written, set to the kept one when it is written. True when it is to be written.
+static const float kBaseKeepStep = 0.3f, kBaseWriteShare = 0.02f;
+inline bool GearBaseStep(float &kept, float &file, float learned)
+{
+    kept = kept > 0.0f ? kept + (learned - kept) * kBaseKeepStep : learned;
+    const bool write = !(file > 0.0f) || fabsf(kept - file) > kBaseWriteShare * file;
+    if (write) file = kept;
+    return write;
+}
+
 // One figure per truck (the Reviewer's point 2): the game multiplies the torque as a gear's top is lower, so
 // a_base(g) × top(g) is the truck's own, and a gear with none learned (the top gears, floored at speed nearly always
 // over 0.8) gets K / top(g), K the mean of the learned gears' a_base × top. With fewer than two learned, or their

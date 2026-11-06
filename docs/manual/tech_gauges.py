@@ -397,10 +397,11 @@ smoothed by the same 0.2 s filter. The game's stock damping, a flat tire's and t
 A wheel off the ground (wheel + 0x1A4) is left out; a wheel not read, or fewer wheels than the vehicle's models, is no pass. Figures
 learned before have no <code>BaseDamp.&lt;engine&gt;=1</code> beside them: the read deletes them and writes the mark in one step. Once
 per truck the log says "road load: the wheels' drag read from" so many wheels, with the mass taken,
-or "road load: the wheels' drag not read (...)" with why; at each learned gear it gives the raw figure, the mean <i>a</i><sub>damp</sub> and the kept one; and
+or "road load: the wheels' drag not read (...)" with why; at each learned gear it gives the raw figure, the mean <i>a</i><sub>damp</sub>, the kept one and the file's, "written" or "within 2 % of the file's, not written"; and
 2 s of them, gathered per gear over visits (a visit under 0.3 s counts for nothing; the sums start over with another truck or engine),
 make the mean, kept as <code>Base1.&lt;engine&gt;</code>, <code>Base2.&lt;engine&gt;</code> ... in the truck's file (it is the
-truck's, and an engine upgrade starts over) and followed at 0.3 a time when it moves more than 5 %. The game multiplies the torque as a gear's top is lower, so
+truck's, and an engine upgrade starts over) and followed at 0.3 a time. It is written once the kept figure is more than 2 % off the one last
+written or read from the file, whatever one step moved it (<code>GearBaseStep</code>), so a small change, a new mass among them, is saved too. The game multiplies the torque as a gear's top is lower, so
 <i>a</i><sub>base</sub> × top is one figure per truck (<code>BaseFold</code>): with two gears or more learned and their products within 15 %
 of their mean K, a gear with none of its own goes by K / top, which gives the top gears, floored at speed nearly always past 0.8, their
 load; spread wider, each gear by its own only. The log gives the learned products side by side, and with the probe each gear's seconds
@@ -1301,6 +1302,8 @@ while ReShade loads the .asi files as add-ons: turn that off in ReShade's Add-on
 <h3>Changed in 0.18.4</h3>
 <ul><li>Each gear's top is learned for each truck kind as a share of the game's gear speed, and kept in the truck's file. Before, it was kept per gearbox and shared by every truck with that gearbox's name, so another truck's figure could hold the automatic in a gear at the game's own limit. A learned top far off the one kept replaces it, and none is learned on a slope. Floored in A at the game's limit, the automatic now shifts up. When the wheels' drag can't be read, the log names the wheel and the figure, and it says when the read works again.</li>
 <li>Air drag learns each gear's pull with the wheels' own drag left out, so Rolling drag and a flat tire don't make it stronger.</li>
+<li>Air drag saves a gear's pull once it is more than 2 % off the figure in the truck's file. Before, one learned step had to move it over 5 %,
+so a smaller change, a truck's new mass among them, was learned again every drive and never saved.</li>
 <li>Air suspension and Level to horizon act only on the ends you tick. The game's airbags are only a look, so the Suspension tab asks:
 a tick Air beside Ride front (the front axle) and beside Ride rear (every other axle). The ticks are kept with the suspension set, per
 kind or per truck. Until a truck has ticks they come from <code>AirAxles=all</code>, <code>rear</code>, <code>front</code> or

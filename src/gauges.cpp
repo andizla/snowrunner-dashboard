@@ -1461,6 +1461,16 @@ static void GearBaseWrite(const char *truck, const char *engine, int gear, float
     GearBaseMark(truck, engine);
 }
 
+// The truck's figures read at the fold, on a truck or an engine change, and each one read the last written (file),
+// which the next write goes by (BRIEF_air_drag_save.md, the Reviewer's point 1): a gear dropped or never learned has
+// none, so its first pass writes.
+static int GearBaseLoad(const char *truck, const char *engine, float kept[kMaxGears], float file[kMaxGears], int *dropped = nullptr)
+{
+    const int n = GearBaseRead(truck, engine, kept, dropped);
+    memcpy(file, kept, sizeof(float) * kMaxGears);
+    return n;
+}
+
 // TopShare<n>.<gearbox> in [Truck] of the truck kind's file (BRIEF_gear_tops_per_truck.md, the Reviewer's point 1):
 // each numbered gear's top as its share of 2 a + 5, learned (GearTopStep), per kind and gearbox. A share, as one
 // gearbox's name comes with other gear speeds on another truck, and the name new, so an old absolute Top<n> is never
@@ -3506,6 +3516,7 @@ struct TruckWatch
     uint32_t topUpSaid;         // the gears the stuck rule's shift up was logged from, for this kind and gearbox
     float gradeSinLast;         // the path's grade of the last pass (GradeStep), for the plateau; NAN unknown
     float gearBase[kMaxGears];  // each numbered gear's acceleration at the game's own pull, floored (BaseLearnStep), 0 not yet; kept in the truck's file by engine
+    float gearBaseFile[kMaxGears]; // each one as last written or read from the file, 0 none (BRIEF_air_drag_save.md)
     char baseTruck[kMaxText], baseEngine[kMaxText]; // the truck and engine gearBase is for
     BaseLearn baseLearn;
     float baseUse[kMaxGears];   // the a_base each gear goes by: its own, or the truck's figure over its top (BaseFold)
@@ -5510,7 +5521,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 w.baseLearn = BaseLearn{};
                 memset(w.baseSaidAt, 0, sizeof w.baseSaidAt);
                 int dropped = 0;
-                const int bases = GearBaseRead(baseTruck, baseEngine, w.gearBase, &dropped);
+                const int bases = GearBaseLoad(baseTruck, baseEngine, w.gearBase, w.gearBaseFile, &dropped);
                 if (bases) Log(L"road load: %d of this truck's gears' pull with %S learned before (its file in Gauges\\trucks)", bases, baseEngine);
                 if (dropped)
                     Log(L"road load: %d of this truck's gears' pull with %S were learned with the wheels' drag in them: dropped, to be learned again (BaseDamp.%S=1 now marks the new ones)",
@@ -5529,13 +5540,17 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             }
             if (done)
             {
-                const float was = w.gearBase[done];
-                w.gearBase[done] = was > 0.0f ? was + (learned - was) * 0.3f : learned;
-                const bool moved = !(was > 0.0f) || fabsf(w.gearBase[done] - was) > 0.05f * was;
-                if (moved) GearBaseWrite(baseTruck, baseEngine, done, w.gearBase[done]);
+                // written once the kept figure is more than 2 % off the file's (BRIEF_air_drag_save.md), whatever one step moved it
+                const float was = w.gearBase[done], file = w.gearBaseFile[done];
+                const bool written = GearBaseStep(w.gearBase[done], w.gearBaseFile[done], learned);
+                if (written) GearBaseWrite(baseTruck, baseEngine, done, w.gearBase[done]);
+                wchar_t fileText[48];
+                if (file > 0.0f) swprintf_s(fileText, L"the file's %.3f", file);
+                else wcscpy_s(fileText, L"none in the file");
                 // every learned gear (the Reviewer's point 6), so a drive shows the wheels' drag beside each figure
-                Log(L"road load: gear %d's pull at the game's own torque with %S, floored: learned %.3f m/s2 with the wheels' drag %.3f m/s2 added back, kept %.3f (from %.3f%s)",
-                    done, baseEngine, learned, dampMean, w.gearBase[done], was, moved ? L"; the truck's file in Gauges\\trucks" : L"; within 5 %, not written");
+                Log(L"road load: gear %d's pull at the game's own torque with %S, floored: learned %.3f m/s2 with the wheels' drag %.3f m/s2 added back, kept %.3f (from %.3f), %s: %s",
+                    done, baseEngine, learned, dampMean, w.gearBase[done], was, fileText,
+                    written ? L"written (the truck's file in Gauges\\trucks)" : L"within 2 % of the file's, not written");
                 fold = true;
             }
             // one figure per truck: a gear with none learned goes by the learned gears' a_base × top over its own top
@@ -7554,6 +7569,27 @@ int wmain(int argc, wchar_t **argv)
                           none == 0 && dropped3 == 0 && noFile,
                       "road load: figures without BaseDamp are dropped and the mark written at the read; one learned again is read, the one not learned again is 0; another engine's keys stay");
                 DeleteFileW(oldFile.c_str());
+            }
+            // the last written figure (BRIEF_air_drag_save.md, the Reviewer's point 1): the load at the fold makes the file's
+            // figures the last written, for the engine fitted; an engine change makes that engine's the last written; a pass
+            // within 2 % of the file's writes nothing; a gear with none in the file writes on its first pass
+            {
+                const std::wstring loadFile = truckFile("base_load");
+                DeleteFileW(loadFile.c_str());
+                GearBaseWrite("base_load", "e_a", 3, 2.0f);
+                GearBaseWrite("base_load", "e_b", 3, 1.5f);
+                GearBaseWrite("base_load", "e_b", 4, 1.2f);
+                float keptBase[kMaxGears], fileBase[kMaxGears];
+                const int onA = GearBaseLoad("base_load", "e_a", keptBase, fileBase);
+                const bool engineA = onA == 1 && fabsf(fileBase[3] - 2.0f) < 0.001f && fileBase[3] == keptBase[3] && fileBase[4] == 0.0f;
+                const int onB = GearBaseLoad("base_load", "e_b", keptBase, fileBase);
+                const bool engineB = onB == 2 && fabsf(fileBase[3] - 1.5f) < 0.001f && fabsf(fileBase[4] - 1.2f) < 0.001f;
+                const bool quiet = !GearBaseStep(keptBase[3], fileBase[3], 1.49f) && fabsf(fileBase[3] - 1.5f) < 0.001f;
+                const bool fresh = GearBaseStep(keptBase[5], fileBase[5], 1.0f) && fileBase[5] == 1.0f;
+                Check(engineA && engineB && quiet && fresh,
+                      "road load: the figures read at the fold are the last written, by the engine fitted, and another engine's after a change; within 2 % of the file's "
+                      "nothing is written; a gear with none in the file writes on its first pass");
+                DeleteFileW(loadFile.c_str());
             }
             // an old Gauges.ini: no truck file has [Suspension], so every truck has the values of [Gauges] as before
             for (const char *key : { "susp_hx", "susp_ww" }) DeleteFileW(truckFile(key).c_str());
