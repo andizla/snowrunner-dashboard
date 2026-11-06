@@ -27,7 +27,7 @@ struct PageState
 static const unsigned long long kPageCaptureMs = 8000;
 enum { kPageChanged = 1, kPageReload = 2, kPageTruckDrop = 4, kPageDefaults = 8, kPageHearHigh = 16, kPageHearMid = 32, kPageHearLow = 64, kPageHearOil = 128,
        kPagePullTest = 256, kPagePullCancel = 512, kPageMapAmbient = 1024, kPageGearHold = 2048, kPageEngineSet = 4096,
-       kPageEngineDrop = 8192, kPageTab = 16384, kPageEngineTorque = 32768, kPageSuspOn = 65536, kPageSuspOff = 131072, kPageSuspDefault = 262144 };
+       kPageEngineDrop = 8192, kPageTab = 16384, kPageEngineTorque = 32768, kPageSuspOn = 65536, kPageSuspOff = 131072, kPageSuspDefault = 262144, kPageSuspTruck = 524288, kPageSuspKind = 1048576 };
 
 // The Dear ImGui key as a virtual key, for the keys the toggle key can be; 0 for others.
 static int PageVirtualKey(int k)
@@ -780,8 +780,21 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 ImGui::SameLine();
                 if (ImGui::SmallButton("Make these the default")) act |= kPageSuspDefault;
                 PageTip("Copies this truck's suspension into the default, for every truck without its own. This truck keeps its own.");
+                // which level: this owned truck (by the game's id of it), or every truck of its kind (step 2)
+                PageLabel("For", labelX);
+                ImGui::BeginDisabled(!view.suspIdKnown);
+                if (ImGui::RadioButton("This truck only", view.suspLevel == 2) && view.suspLevel != 2) act |= kPageSuspTruck;
+                ImGui::EndDisabled();
+                PageTip("This truck alone keeps the set, by the game's id of it. A truck taken out of the warehouse gets a new id and starts on its kind's settings.");
+                ImGui::SameLine();
+                char every[128];
+                snprintf(every, sizeof every, "Every %s###suspkind", view.truck);
+                if (ImGui::RadioButton(every, view.suspLevel == 1) && view.suspLevel != 1) act |= kPageSuspKind;
+                PageTip("Every truck of this kind keeps the set. This truck's own set, if it had one, goes.");
             }
             else if (view.suspKept) ImGui::TextDisabled("Kept, not in use. Changes here edit the default.");
+            if (view.suspOwn && view.suspLevel != 2 && view.suspTruckKept) ImGui::TextDisabled("This truck's own set is kept, not in use: This truck only brings it back.");
+            ImGui::TextDisabled("In force: %s%s", view.suspLevel == 2 ? "this truck" : view.suspLevel == 1 ? "every " : "the default", view.suspLevel == 1 ? view.truck : "");
         }
         // under each slider the driven truck's file, front and rear, and what is in force now (the addendum of 2 November,
         // 13:18): a spring or a damping the game holds at 1 is said so

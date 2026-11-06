@@ -489,7 +489,7 @@ struct SuspDisplayView
 // smtInstalled: the manual transmission mod is in the game; gearboxHeld: another mod holds the game's gearbox
 // functions. Either way the mod's gearbox stands down (the tab says why). warn: the clutch's and the engine's warning
 // boxes while a truck is driven.
-struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWarnBoxes]; int engineDamage, engineCapacity; char truck[96]; bool truckOwn, suspOwn, suspKept, smtInstalled, gearboxHeld; char map[96], mapFrom[64]; bool mapOwn; float ambientC;
+struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWarnBoxes]; int engineDamage, engineCapacity; char truck[96]; bool truckOwn, suspOwn, suspKept, suspIdKnown, suspTruckKept, smtInstalled, gearboxHeld; int suspLevel; char map[96], mapFrom[64]; bool mapOwn; float ambientC;
                    int pullTest, pullPhase; const char *pullWhy;
                    float ambientDay, ambientNight, hour; // the map's day and night (with mapOwn), the hour of the game's day (-1 not known)
                    SuspDisplayView susp; bool swayOff; float rideRest[2]; bool rideRestKnown; // the display's figures; the bars disconnected; each axle's rest place along its axis (front, rear; cm), from the probe
@@ -511,6 +511,7 @@ void SettingsReload();                      // read the ini again (the tab's but
 void SettingsTruckDrop();                   // the tab's button: the driven truck gives up its own scales and takes the plain ones
 void SettingsSuspOwn(bool on);              // the Suspension tab's box: the driven truck's own suspension in force, or kept with Own=0
 void SettingsSuspToDefault();               // the Suspension tab's button: the driven truck's suspension becomes the default
+void SettingsSuspLevel(bool truckOnly);     // the Suspension tab's choice: this truck only, or every truck of its kind
 void SettingsReset();                       // the tab's button: every setting back to its default, the driven truck's own scales too
 void PullTestAsk(bool run);                  // the tab's button: arm the pull test, or cancel it
 void MapAmbientSet(float c);                 // the tab's slider: the outside temperature of the map's section in force

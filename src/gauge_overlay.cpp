@@ -236,6 +236,8 @@ static void OnPage()
     if (act & kPageSuspOn) SettingsSuspOwn(true);
     if (act & kPageSuspOff) SettingsSuspOwn(false);
     if (act & kPageSuspDefault) SettingsSuspToDefault();
+    if (act & kPageSuspTruck) SettingsSuspLevel(true);
+    if (act & kPageSuspKind) SettingsSuspLevel(false);
     if (act & kPagePullTest) PullTestAsk(true);
     if (act & kPagePullCancel) PullTestAsk(false);
     if (act & kPageMapAmbient) MapAmbientSet(st.mapAmbientC);

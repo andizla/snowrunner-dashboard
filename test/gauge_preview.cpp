@@ -707,6 +707,8 @@ int wmain(int argc, wchar_t **argv)
             GaugeView v = view;
             strcpy_s(v.truck, "arocs/1180732");
             v.suspOwn = true; // its own suspension: the box ticked and the button beside it
+            v.suspLevel = 1;    // at its kind's level, the choice under the box
+            v.suspIdKnown = true;
             v.suspKnown = true;
             const float file[3][2] = { { 0.028f, 0.032f }, { 0.5f, 0.3f }, { -0.6f, -0.44f } };
             memcpy(v.suspFile, file, sizeof file);

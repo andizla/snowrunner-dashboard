@@ -61,6 +61,7 @@ static GaugeSettings g_set;
 static LONG g_setTurn = 0;
 static volatile LONG g_setDirty = 0, g_reloadAsked = 0, g_truckDropAsked = 0, g_resetAsked = 0;
 static volatile LONG g_suspOwnAsked = 0, g_suspDefaultAsked = 0; // the Suspension tab's box (1 on, 2 off) and its button
+static volatile LONG g_suspLevelAsked = 0; // the Suspension tab's choice: 1 this truck only, 2 every truck of the kind
 static volatile LONG g_pullTestAsked = 0; // 1 arm the pull test, 2 cancel it
 static volatile LONG g_mapAmbientAsked = 0, g_mapAmbientTenths = 0; // the tab set the map's outside temperature, in tenths of a degree C
 static volatile LONG g_gearHoldAsked = 0, g_gearHoldTenths = 0;     // the tab set the driven gearbox's hold, in tenths of a second
@@ -1266,6 +1267,7 @@ void SettingsReload() { InterlockedExchange(&g_reloadAsked, 1); }
 void SettingsTruckDrop() { InterlockedExchange(&g_truckDropAsked, 1); }
 void SettingsSuspOwn(bool on) { InterlockedExchange(&g_suspOwnAsked, on ? 1 : 2); }
 void SettingsSuspToDefault() { InterlockedExchange(&g_suspDefaultAsked, 1); }
+void SettingsSuspLevel(bool truckOnly) { InterlockedExchange(&g_suspLevelAsked, truckOnly ? 1 : 2); }
 void SettingsReset() { InterlockedExchange(&g_resetAsked, 1); }
 void PullTestAsk(bool run) { InterlockedExchange(&g_pullTestAsked, run ? 1 : 2); }
 void MapAmbientSet(float c)
@@ -1608,77 +1610,152 @@ static bool SuspSame(const GaugeSettings &a, const GaugeSettings &b)
     return true;
 }
 
-// The truck's [Suspension]: none (no value there), kept (Own=0) or in force. Its values are laid over s where the
-// section holds them, whichever it is; one it does not hold stays as in s.
+// Step 2 (per owned truck): the same keys in [Suspension:<id>] of the kind's file, the id the game's own of the truck
+// ([vehicle + 0x48], BRIEF_truck_id.md, the lead's rule of 01:16). Its section's name; id "" is the kind's.
+static std::wstring SuspSectionOf(const char *id) { return id && id[0] ? std::wstring(kSuspSection) + L":" + Wide(id) : std::wstring(kSuspSection); }
+
+// A truck's suspension section (the kind's, or with an id the owned truck's): none (no value there), kept (Own=0) or
+// in force. Its values are laid over s where the section holds them, whichever it is; one it does not hold stays.
 enum { kSuspNone, kSuspKept, kSuspInForce };
-static int ReadTruckSusp(const char *key, GaugeSettings &s)
+static int ReadTruckSusp(const char *key, GaugeSettings &s, const char *id = "")
 {
-    const std::wstring ini = SetupFile(kSetupTruck, key);
+    const std::wstring ini = SetupFile(kSetupTruck, key), sec = SuspSectionOf(id);
+    const wchar_t *section = sec.c_str();
     bool any = false;
     auto has = [&](const wchar_t *name) {
         wchar_t buf[8] = {};
-        const bool there = GetPrivateProfileStringW(kSuspSection, name, L"", buf, 8, ini.c_str()) > 0;
+        const bool there = GetPrivateProfileStringW(section, name, L"", buf, 8, ini.c_str()) > 0;
         any = any || there;
         return there;
     };
     for (const auto &k : kSuspSetFloats)
-        if (has(k.name)) s.*k.v = IniFloatIn(kSuspSection, k.name, s.*k.v, ini);
+        if (has(k.name)) s.*k.v = IniFloatIn(section, k.name, s.*k.v, ini);
     for (const auto &k : kSuspSetInts)
-        if (has(k.name)) s.*k.v = (int)GetPrivateProfileIntW(kSuspSection, k.name, s.*k.v, ini.c_str());
+        if (has(k.name)) s.*k.v = (int)GetPrivateProfileIntW(section, k.name, s.*k.v, ini.c_str());
     for (const auto &k : kSuspSetBools)
-        if (has(k.name)) s.*k.v = GetPrivateProfileIntW(kSuspSection, k.name, s.*k.v ? 1 : 0, ini.c_str()) != 0;
+        if (has(k.name)) s.*k.v = GetPrivateProfileIntW(section, k.name, s.*k.v ? 1 : 0, ini.c_str()) != 0;
     if (!any) return kSuspNone;
     SettingsClamp(s);
-    return GetPrivateProfileIntW(kSuspSection, L"Own", 1, ini.c_str()) ? kSuspInForce : kSuspKept;
+    return GetPrivateProfileIntW(section, L"Own", 1, ini.c_str()) ? kSuspInForce : kSuspKept;
 }
 
-// The truck's [Suspension] written: Own and every value of s. Key by key through the profile API, never the file
+// A truck's suspension section written: Own and every value of s. Key by key through the profile API, never the file
 // whole, as the learned pulls go into the same file from the mod's thread (the addendum's point 5).
-static void WriteTruckSusp(const char *key, const GaugeSettings &s, bool own)
+static void WriteTruckSusp(const char *key, const GaugeSettings &s, bool own, const char *id = "")
 {
-    const std::wstring ini = SetupFile(kSetupTruck, key);
+    const std::wstring ini = SetupFile(kSetupTruck, key), sec = SuspSectionOf(id);
+    const wchar_t *section = sec.c_str();
     SetupBegin(kSetupTruck, Wide(key));
-    IniPutInt(kSuspSection, L"Own", own ? 1 : 0, ini);
-    for (const auto &k : kSuspSetFloats) IniPutFloat(kSuspSection, k.name, s.*k.v, ini);
-    for (const auto &k : kSuspSetInts) IniPutInt(kSuspSection, k.name, s.*k.v, ini);
-    for (const auto &k : kSuspSetBools) IniPutInt(kSuspSection, k.name, s.*k.v ? 1 : 0, ini);
+    IniPutInt(section, L"Own", own ? 1 : 0, ini);
+    for (const auto &k : kSuspSetFloats) IniPutFloat(section, k.name, s.*k.v, ini);
+    for (const auto &k : kSuspSetInts) IniPutInt(section, k.name, s.*k.v, ini);
+    for (const auto &k : kSuspSetBools) IniPutInt(section, k.name, s.*k.v ? 1 : 0, ini);
+}
+
+// An owned truck's section out of the kind's file (its set went to the kind's level).
+static void DropTruckSusp(const char *key, const char *id)
+{
+    if (!id[0]) return;
+    WritePrivateProfileStringW(SuspSectionOf(id).c_str(), nullptr, nullptr, SetupFile(kSetupTruck, key).c_str());
+}
+
+// The take-over (BRIEF_suspension_per_truck.md step 2): the game made the driven truck anew under another id. The old
+// id's section is copied to the new id when the new one has none of its own (one it has means another truck of the
+// kind, which keeps its set). The old section stays: were it in fact another truck of the kind, it keeps its set.
+// True when a set was taken over.
+static bool TruckSuspTakeOver(const char *key, const char *oldId, const char *newId)
+{
+    if (!key[0] || !oldId[0] || !newId[0] || !strcmp(oldId, newId)) return false;
+    const std::wstring ini = SetupFile(kSetupTruck, key), from = SuspSectionOf(oldId), to = SuspSectionOf(newId);
+    std::vector<wchar_t> keys(32768, L'\0'), mine(64, L'\0');
+    if (!GetPrivateProfileSectionW(from.c_str(), keys.data(), (DWORD)keys.size(), ini.c_str())) return false;
+    if (GetPrivateProfileSectionW(to.c_str(), mine.data(), (DWORD)mine.size(), ini.c_str())) return false;
+    return WritePrivateProfileSectionW(to.c_str(), keys.data(), ini.c_str()) != 0;
+}
+
+static const ULONGLONG kSuspTakeOverMs = 20000; // the take-over's window: the same kind back under a new id within 20 s
+
+// The take-over's watch (step 2): the truck that went last with none driven since, and when. At each change of the
+// driven truck's kind (or to none), SuspTrack says whether the truck now driven takes over the one that went: the same
+// kind under another id within 20 s, no other truck driven between. oldId gets the id that went.
+struct SuspTracker { TruckIdentity gone; ULONGLONG goneAt; };
+static bool SuspTrack(SuspTracker &t, const TruckIdentity &was, const TruckIdentity &now, ULONGLONG at, char (&oldId)[40])
+{
+    oldId[0] = 0;
+    if (was.key[0] && !now.key[0])
+    {
+        t.gone = was;
+        t.goneAt = at;
+        return false;
+    }
+    if (!now.key[0]) return false;
+    const bool due = t.gone.key[0] && !strcmp(t.gone.key, now.key) && t.gone.id[0] && now.id[0] && strcmp(t.gone.id, now.id) && at - t.goneAt <= kSuspTakeOverMs;
+    if (due) strcpy_s(oldId, t.gone.id);
+    t.gone = TruckIdentity{};
+    return due;
 }
 
 // The settings as the mod's thread keeps them. plain is what [Gauges] holds. s is what is in force: plain, with the
-// driven truck's own scales in the place of the plain ones where it has some (own), and its own suspension in the
-// place of the plain one where it is in force (suspOwn). suspKept: the truck's [Suspension] is there with Own=0, not in
-// use. key is the driven truck's, "" while none is driven. changed and suspChanged: the truck's scales or suspension
-// were changed on the tab and are not in the ini yet. The functions below are all that changes a state once the ini is
-// read into plain.
-struct SettingsState { GaugeSettings plain, s; char key[kMaxText]; bool own, changed, suspOwn, suspKept, suspChanged; };
+// driven truck's own scales in the place of the plain ones where it has some (own), and the most specific suspension
+// in force in the place of the plain one: the owned truck's [Suspension:<id>] (truckOwn), else the kind's [Suspension]
+// (suspOwn). suspKept and truckKept: that level's section is there with Own=0, not in use. key is the driven truck's
+// kind and id its game id ("" while none is driven or the id is not read). changed, suspChanged and truckChanged: the
+// scales, the kind's or the truck's suspension were changed on the tab and are not in the ini yet. The functions below
+// are all that changes a state once the ini is read into plain.
+struct SettingsState { GaugeSettings plain, s; char key[kMaxText], id[40]; bool own, changed, suspOwn, suspKept, suspChanged, truckOwn, truckKept, truckChanged; };
 
-// The settings in force for a truck (key "" for none), from the plain ones and the ini. Each truck's set goes in over
-// the plain one, never over the last truck's (the game's values are the stock times the set, the addendum's point 4).
-static void SettingsFor(SettingsState &st, const char *key)
+// The suspension level in force: the default, the kind's, this owned truck's.
+enum { kSuspLevelDefault, kSuspLevelKind, kSuspLevelTruck };
+static int SuspLevel(const SettingsState &st) { return st.truckOwn ? kSuspLevelTruck : st.suspOwn ? kSuspLevelKind : kSuspLevelDefault; }
+
+// The suspension in force from the files: the plain one, then the kind's where in force, then the truck's.
+static void SuspFromFiles(SettingsState &st)
+{
+    SuspCopy(st.s, st.plain);
+    GaugeSettings susp = st.s;
+    const int kind = st.key[0] ? ReadTruckSusp(st.key, susp) : kSuspNone;
+    st.suspOwn = kind == kSuspInForce;
+    st.suspKept = kind == kSuspKept;
+    if (st.suspOwn) SuspCopy(st.s, susp);
+    GaugeSettings mine = st.s;
+    const int truck = st.key[0] && st.id[0] ? ReadTruckSusp(st.key, mine, st.id) : kSuspNone;
+    st.truckOwn = truck == kSuspInForce;
+    st.truckKept = truck == kSuspKept;
+    if (st.truckOwn) SuspCopy(st.s, mine);
+    st.suspChanged = st.truckChanged = false;
+}
+
+// The settings in force for a truck (key "" for none, id "" while not read), from the plain ones and the ini. Each
+// truck's set goes in over the plain one, never over the last truck's (the game's values are the stock times the set,
+// the addendum's point 4).
+static void SettingsFor(SettingsState &st, const char *key, const char *id = "")
 {
     strcpy_s(st.key, key);
+    strcpy_s(st.id, key[0] ? id : "");
     st.s = st.plain;
     st.own = key[0] && ReadTruckIni(key, st.s);
-    st.changed = st.suspChanged = false;
-    GaugeSettings susp = st.s;
-    const int got = key[0] ? ReadTruckSusp(key, susp) : kSuspNone;
-    st.suspOwn = got == kSuspInForce;
-    st.suspKept = got == kSuspKept;
-    if (st.suspOwn) SuspCopy(st.s, susp);
+    st.changed = false;
+    SuspFromFiles(st);
 }
 
 // An edit from the tab, in. A scale changed while a truck is driven makes the seven scales that truck's own, and
-// they stay out of the plain ones from then on. So does a suspension setting for the truck's suspension, the box
-// ticking itself, unless the truck has a set kept with Own=0: then the change edits the default and the kept set stays
-// as it is (review F1, the lead's call). Everything else on the tab is every truck's.
+// they stay out of the plain ones from then on. A suspension setting goes to the level in force: this truck's, else
+// the kind's. With neither in force it makes the set the kind's own, the box ticking itself, unless a set is kept with
+// Own=0 at either level: then the change edits the default and the kept set stays as it is (review F1, the lead's
+// call). Everything else on the tab is every truck's.
 static void SettingsTake(SettingsState &st, const GaugeSettings &in)
 {
     if (st.key[0] && !ScalesSame(in, st.s)) st.own = st.changed = true;
-    if (st.key[0] && !st.suspKept && !SuspSame(in, st.s)) st.suspOwn = st.suspChanged = true;
+    if (st.key[0] && !SuspSame(in, st.s))
+    {
+        if (st.truckOwn) st.truckChanged = true;
+        else if (st.suspOwn) st.suspChanged = true;
+        else if (!st.suspKept && !st.truckKept) st.suspOwn = st.suspChanged = true;
+    }
     const GaugeSettings before = st.plain;
     st.plain = in;
     if (st.own) ScalesCopy(st.plain, before);
-    if (st.suspOwn) SuspCopy(st.plain, before);
+    if (st.suspOwn || st.truckOwn) SuspCopy(st.plain, before);
     st.s = in;
 }
 
@@ -1690,27 +1767,60 @@ static void SettingsDrop(SettingsState &st)
     st.own = st.changed = false;
 }
 
-// The tab's box "Own settings for this truck". Off: the truck's set stays in its file with Own=0 and the plain one is
-// in force (a change not yet written goes in first, so nothing is lost). On: a kept set is in force again; with none
-// kept, the plain one shown becomes the truck's own.
+// The tab's box "Own settings". Off: the level in force keeps its set with Own=0 (a change not yet written goes in
+// first, so nothing is lost), and the level under it is in force. On: a kept set is in force again, this truck's
+// before the kind's; with none kept, the set shown becomes the kind's own.
 static void SettingsSuspOwn(SettingsState &st, bool on)
 {
     if (!st.key[0]) return;
     if (!on)
     {
-        if (!st.suspOwn) return;
-        WriteTruckSusp(st.key, st.s, false);
-        SuspCopy(st.s, st.plain);
-        st.suspOwn = st.suspChanged = false;
-        st.suspKept = true;
+        if (st.truckOwn) WriteTruckSusp(st.key, st.s, false, st.id);
+        else if (st.suspOwn) WriteTruckSusp(st.key, st.s, false);
+        else return;
+        SuspFromFiles(st);
         return;
     }
-    if (st.suspOwn) return;
-    GaugeSettings susp = st.s;
-    if (st.suspKept && ReadTruckSusp(st.key, susp) != kSuspNone) SuspCopy(st.s, susp);
-    WriteTruckSusp(st.key, st.s, true);
-    st.suspOwn = true;
-    st.suspKept = st.suspChanged = false;
+    if (st.truckOwn || st.suspOwn) return;
+    GaugeSettings kept = st.s;
+    if (st.truckKept && ReadTruckSusp(st.key, kept, st.id) != kSuspNone) WriteTruckSusp(st.key, kept, true, st.id);
+    else if (st.suspKept && ReadTruckSusp(st.key, kept) != kSuspNone) WriteTruckSusp(st.key, kept, true);
+    else WriteTruckSusp(st.key, st.s, true);
+    SuspFromFiles(st);
+}
+
+// The tab's choice under the box: "This truck only" puts the set in force into this truck's section, in force there
+// (the kind's level stays as it is for the other trucks of the kind), or brings back the set it kept with Own=0; "Every <kind>" puts it into the kind's section
+// and takes this truck's section out, so the kind's is in force for it. Nothing for a truck whose id is not read.
+static void SettingsSuspLevel(SettingsState &st, bool truckOnly)
+{
+    // only a move between the levels: "Every <kind>" from this truck's, "This truck only" from the kind's or the default
+    if (!st.key[0] || (truckOnly ? SuspLevel(st) == kSuspLevelTruck : SuspLevel(st) != kSuspLevelTruck)) return;
+    if (truckOnly)
+    {
+        if (!st.id[0]) return;
+        // a set this truck kept with Own=0 comes back; else the set shown becomes its own
+        GaugeSettings kept = st.s;
+        if (st.truckKept && ReadTruckSusp(st.key, kept, st.id) != kSuspNone) WriteTruckSusp(st.key, kept, true, st.id);
+        else WriteTruckSusp(st.key, st.s, true, st.id);
+    }
+    else
+    {
+        WriteTruckSusp(st.key, st.s, true);
+        DropTruckSusp(st.key, st.id);
+    }
+    SuspFromFiles(st);
+}
+
+// The driven truck is the same kind under a new id (the game made it anew): its sections follow it.
+static bool SettingsTakeOver(SettingsState &st, const char *newId)
+{
+    const bool taken = TruckSuspTakeOver(st.key, st.id, newId);
+    strcpy_s(st.id, newId);
+    const GaugeSettings scales = st.s;
+    SuspFromFiles(st);
+    ScalesCopy(st.s, scales);
+    return taken;
 }
 
 // The tab's button "Make these the default": the driven truck's suspension into the plain one, which [Gauges] then
@@ -1720,26 +1830,33 @@ static void SettingsSuspToDefault(SettingsState &st)
     SuspCopy(st.plain, st.s);
 }
 
-// Every setting back to its default. The driven truck gives up its own scales, and its own suspension is kept with
-// Own=0 (not thrown away); other trucks keep theirs.
+// Every setting back to its default. The driven truck gives up its own scales, and its own suspension, at either
+// level, is kept with Own=0 (not thrown away); other trucks keep theirs.
 static void SettingsToDefaults(SettingsState &st)
 {
     if (st.own) DropTruckIni(st.key);
-    if (st.suspOwn) WriteTruckSusp(st.key, st.s, false);
+    if (st.truckOwn) WriteTruckSusp(st.key, st.s, false, st.id);
+    if (st.suspOwn)
+    {
+        GaugeSettings kind = st.s;
+        if (st.truckOwn) ReadTruckSusp(st.key, kind); // the kind's own values, not this truck's
+        WriteTruckSusp(st.key, kind, false);
+    }
     SettingsDefaults(st.plain);
     st.s = st.plain;
-    st.suspKept = st.suspKept || st.suspOwn;
-    st.own = st.changed = st.suspOwn = st.suspChanged = false;
+    st.own = st.changed = false;
+    SuspFromFiles(st);
 }
 
-// Into the ini: the plain settings, and the driven truck's own scales and suspension into its sections when they were
-// changed. A truck's section that the tab did not change stays as it is, with what it leaves to [Gauges].
+// Into the ini: the plain settings, and the driven truck's own scales and suspension into their sections when they
+// were changed. A truck's section that the tab did not change stays as it is, with what it leaves to [Gauges].
 static void SettingsWrite(SettingsState &st)
 {
     WriteIni(st.plain);
     if (st.own && st.changed) WriteTruckIni(st.key, st.s);
-    if (st.suspOwn && st.suspChanged) WriteTruckSusp(st.key, st.s, true);
-    st.changed = st.suspChanged = false;
+    if (st.truckOwn && st.truckChanged) WriteTruckSusp(st.key, st.s, true, st.id);
+    else if (st.suspOwn && st.suspChanged) WriteTruckSusp(st.key, st.s, true);
+    st.changed = st.suspChanged = st.truckChanged = false;
 }
 
 // ---- the gearbox's bindings: the [Gearbox] section of Gauges.ini ----
@@ -2670,12 +2787,27 @@ static void LogSettings(const GaugeSettings &s)
     Log(L"settings: toggle key %S, pad %S, demo values %s, probe %d", key, s.padToggle, s.demo ? L"on" : L"off", s.probe);
 }
 
+// The suspension level in force for the driven truck, in the log.
+static void SuspLevelLog(const SettingsState &st, bool newToMod)
+{
+    if (!st.key[0]) return;
+    const int level = SuspLevel(st);
+    if (level == kSuspLevelTruck) Log(L"suspension: this truck's own settings (%S, [Suspension:%S])", st.key, st.id);
+    else
+        Log(L"suspension: %s%s%s", level == kSuspLevelKind ? L"every " : L"the default settings",
+            level == kSuspLevelKind ? Wide(st.key).c_str() : L"",
+            !st.id[0] ? L" (the truck's id not read, so no level of its own)"
+            : newToMod ? L" (its id is new to the mod: a truck out of the warehouse or a new one; tick This truck only for its own)"
+            : st.truckKept ? L" (this truck's own are kept, not in use)" : st.suspKept && level == kSuspLevelDefault ? L" (the kind's own are kept, not in use)" : L"");
+}
+
 // Saves the ini and says so in the log.
 static void SettingsSave(SettingsState &st)
 {
     if (st.own && st.changed) Log(L"settings: saved, the truck's scales in Gauges\\trucks\\%s.ini", SetupFileName(Wide(st.key)).c_str());
-    if (st.suspOwn && st.suspChanged) Log(L"settings: saved, the truck's suspension in Gauges\\trucks\\%s.ini", SetupFileName(Wide(st.key)).c_str());
-    if (!(st.own && st.changed) && !(st.suspOwn && st.suspChanged)) Log(L"settings: saved to Gauges.ini");
+    if (st.truckOwn && st.truckChanged) Log(L"settings: saved, this truck's suspension in [Suspension:%S] of Gauges\\trucks\\%s.ini", st.id, SetupFileName(Wide(st.key)).c_str());
+    else if (st.suspOwn && st.suspChanged) Log(L"settings: saved, the truck's suspension in Gauges\\trucks\\%s.ini", SetupFileName(Wide(st.key)).c_str());
+    if (!(st.own && st.changed) && !(st.suspOwn && st.suspChanged) && !(st.truckOwn && st.truckChanged)) Log(L"settings: saved to Gauges.ini");
     SettingsWrite(st);
     LogSettings(st.s);
 }
@@ -5224,6 +5356,7 @@ static DWORD WINAPI Run(void *)
     FILETIME saveWritten = {}; // when the save read last was written
     ULONGLONG saveLookAt = 0;
     bool codeLooked = false; // the gearbox functions were looked for, once a truck was found
+    SuspTracker suspWatch = {}; // the truck that went last with none driven since, and when (the take-over)
     for (;;)
     {
         Sleep(50);
@@ -5235,7 +5368,7 @@ static DWORD WINAPI Run(void *)
         if (InterlockedExchange(&g_reloadAsked, 0))
         {
             ReadIni(set.plain);
-            SettingsFor(set, truck.key);
+            SettingsFor(set, truck.key, truck.id);
             SettingsPublish(s);
             // the driven engine's profile and gearbox's hold read again too, as a file edited by hand may have changed them
             if (watch.profileFor[0]) EngineProfileRead(watch.profileFor, watch.profile);
@@ -5255,7 +5388,7 @@ static DWORD WINAPI Run(void *)
             SettingsGet(in);
             SettingsTake(set, in);
             if (set.own && !ownBefore) Log(L"truck: %S has scales of its own from now on, kept in Gauges\\trucks\\%s.ini", set.key, SetupFileName(Wide(set.key)).c_str());
-            if (set.suspOwn && !suspBefore) Log(L"suspension: %S has its own settings from now on, kept in Gauges\\trucks\\%s.ini", set.key, SetupFileName(Wide(set.key)).c_str());
+            if (set.suspOwn && !suspBefore) Log(L"suspension: every %S has its own settings from now on, kept in Gauges\\trucks\\%s.ini", set.key, SetupFileName(Wide(set.key)).c_str());
             saveAt = GetTickCount64() + 1000;
             edited = true;
         }
@@ -5275,9 +5408,21 @@ static DWORD WINAPI Run(void *)
             {
                 SettingsSuspOwn(set, ask == 1);
                 SettingsPublish(s);
-                Log(ask == 1 ? L"suspension: %S's own settings, in force (Gauges\\trucks\\%s.ini)"
-                             : L"suspension: %S's own settings kept, not in use (Own=0 in Gauges\\trucks\\%s.ini); the default settings",
-                    set.key, SetupFileName(Wide(set.key)).c_str());
+                Log(ask == 1 ? L"suspension: the box ticked, own settings in force (Gauges\\trucks\\%s.ini)"
+                             : L"suspension: the box unticked, that level's settings kept, not in use (Own=0 in Gauges\\trucks\\%s.ini)",
+                    SetupFileName(Wide(set.key)).c_str());
+                SuspLevelLog(set, false);
+                edited = true;
+            }
+        }
+        if (const LONG ask = InterlockedExchange(&g_suspLevelAsked, 0))
+        {
+            // the Suspension tab's choice under the box: this truck only, or every truck of the kind
+            if (set.key[0])
+            {
+                SettingsSuspLevel(set, ask == 1);
+                SettingsPublish(s);
+                SuspLevelLog(set, false);
                 edited = true;
             }
         }
@@ -5650,8 +5795,20 @@ static DWORD WINAPI Run(void *)
             // force, with the new truck's own in their place where it has some.
             if (saveAt) SettingsSave(set);
             saveAt = 0;
+            // the take-over (step 2): the driven truck went, and the same kind is back under another id within 20 s with
+            // no other truck driven between: the game made it anew (a recovery, a garage), and the new id takes the old
+            // one's suspension over. A truck driven between, or a longer gap, is none.
+            char oldId[40];
+            const ULONGLONG goneAt = suspWatch.goneAt;
+            const bool takeOver = SuspTrack(suspWatch, truck, now, GetTickCount64(), oldId);
             truck = now;
-            SettingsFor(set, truck.key);
+            bool taken = false;
+            if (takeOver)
+            {
+                strcpy_s(set.key, truck.key);
+                taken = TruckSuspTakeOver(truck.key, oldId, truck.id);
+            }
+            SettingsFor(set, truck.key, truck.id);
             SettingsPublish(s);
             const GaugeScale k = GaugeScaleOf(s);
             watch.ownScales = set.own;
@@ -5663,22 +5820,37 @@ static DWORD WINAPI Run(void *)
                     set.own ? L"it has scales of its own" : L"it has no scales of its own and takes the plain ones", k.idle, k.redline, k.max, k.speedMax,
                     kClassWords[autoClass], set.own ? L", its scales'" : watch.mass > 0.0f ? L", its weight's" : L", the plain scales' (its weight not read)",
                     TorqueRoof(autoClass));
-            if (truck.key[0])
-                Log(set.suspOwn ? L"suspension: %S's own settings" : set.suspKept ? L"suspension: the default settings (%S's own are kept, not in use)"
-                                                                    : L"suspension: the default settings (%S has none of its own)",
-                    truck.key);
+            if (taken)
+                Log(L"suspension: the take-over: %S under its new id %S takes over the settings of %S (back %.0f s after it went)", truck.key, truck.id, oldId,
+                    (GetTickCount64() - goneAt) / 1000.0);
+            if (truck.key[0]) SuspLevelLog(set, truck.id[0] && !set.truckOwn && !set.truckKept && !taken && !takeOver);
         }
         else if (strcmp(now.id, truck.id))
         {
-            // the same kind under another id: the game made the truck anew, or this is another truck of the kind
+            // the same kind under another id while driven: the game made the truck anew, or this is another truck of the
+            // kind. A first read of the id is no take-over; else the new id takes the old one's suspension over when it
+            // has none of its own (TruckSuspTakeOver)
+            if (saveAt) SettingsSave(set);
+            saveAt = 0;
+            const bool first = !truck.id[0];
+            char oldId[40];
+            strcpy_s(oldId, truck.id);
             truck = now;
             Log(L"truck: %S again, the game's id for it now %S", truck.key, truck.id);
+            const bool taken = !first && SettingsTakeOver(set, truck.id);
+            if (first) SettingsFor(set, truck.key, truck.id);
+            SettingsPublish(s);
+            if (taken) Log(L"suspension: the take-over: %S under its new id %S takes over the settings of %S (while driven)", truck.key, truck.id, oldId);
+            SuspLevelLog(set, !set.truckOwn && !set.truckKept && !taken && truck.id[0]);
         }
         GaugeView v = {};
         strcpy_s(v.truck, truck.key);
         v.truckOwn = set.own;
-        v.suspOwn = set.suspOwn;
-        v.suspKept = set.suspKept;
+        v.suspOwn = set.suspOwn || set.truckOwn;
+        v.suspKept = set.suspKept || set.truckKept;
+        v.suspLevel = SuspLevel(set);
+        v.suspTruckKept = set.truckKept;
+        v.suspIdKnown = set.id[0] != 0;
         if (map[0]) MapTitle(map, v.map, sizeof v.map);
         else v.map[0] = 0;
         strcpy_s(v.mapFrom, mapFrom);
@@ -6555,6 +6727,110 @@ int wmain(int argc, wchar_t **argv)
             for (const char *key : { "susp_hx", "susp_ww" }) DeleteFileW(truckFile(key).c_str());
             SettingsFor(su, "susp_hx");
             Check(!su.suspOwn && !su.suspKept && SameSettings(su.s, su.plain), "suspension: with no [Suspension] in a truck's file the truck has every value of [Gauges]");
+            DeleteFileW(ini.c_str());
+            // step 2: the owned truck's level, [Suspension:<id>] in the kind's file, by the game's id of the truck (made up ids)
+            {
+                const char *kind = "susp_own", *id1 = "{11111111-1111-1111-1111-111111111111}", *id2 = "{22222222-2222-2222-2222-222222222222}",
+                           *id3 = "{33333333-3333-3333-3333-333333333333}", *other = "susp_other", *idB = "{BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB}";
+                DeleteFileW(truckFile(kind).c_str());
+                ReadIni(su.plain);
+                // the kind's own set, then this truck only: the truck's level in force, the kind's stays for the others
+                SettingsFor(su, kind, id1);
+                ed = su.s;
+                ed.springScale = 1.5f;
+                SettingsTake(su, ed);
+                SettingsWrite(su);
+                const bool kindFirst = SuspLevel(su) == kSuspLevelKind && su.suspOwn && !su.truckOwn;
+                SettingsSuspLevel(su, true);
+                ed = su.s;
+                ed.springScale = 2.5f;
+                ed.bumpStops = true;
+                SettingsTake(su, ed);
+                SettingsWrite(su);
+                SettingsFor(su, kind, id1);
+                const bool truckLevel = SuspLevel(su) == kSuspLevelTruck && su.s.springScale == 2.5f && su.s.bumpStops;
+                SettingsFor(su, kind, id3);
+                const bool othersKind = SuspLevel(su) == kSuspLevelKind && su.s.springScale == 1.5f && !su.s.bumpStops;
+                Check(kindFirst && truckLevel && othersKind,
+                      "suspension: This truck only puts the set at the truck's level by its id, in force for it, and the kind's stays for another truck of the kind");
+                // a new id takes the kind's level (a truck out of the warehouse), and A to B to A gives A's set from the default, no climb
+                SettingsFor(su, kind, id1);
+                const GaugeSettings aFirst = su.s;
+                SettingsFor(su, other, idB);
+                const bool bPlain = SuspLevel(su) == kSuspLevelDefault && su.s.springScale == su.plain.springScale;
+                SettingsFor(su, kind, id1);
+                Check(bPlain && SuspSame(su.s, aFirst) && su.s.springScale == 2.5f,
+                      "suspension: A to B to A gives the truck's own set as it was, on the default, not on B's");
+                // the take-over: gone, back as the same kind under a new id within 20 s with none between
+                SuspTracker t = {};
+                TruckIdentity a1 = {}, a2 = {}, none = {}, b1 = {}, a3 = {};
+                strcpy_s(a1.key, kind); strcpy_s(a1.id, id1);
+                strcpy_s(a2.key, kind); strcpy_s(a2.id, id2);
+                strcpy_s(a3.key, kind); strcpy_s(a3.id, id3);
+                strcpy_s(b1.key, other); strcpy_s(b1.id, idB);
+                char gone[40];
+                const bool away = !SuspTrack(t, a1, none, 1000, gone);
+                const bool due = SuspTrack(t, none, a2, 6000, gone) && !strcmp(gone, id1);
+                const bool copied = TruckSuspTakeOver(kind, gone, id2);
+                SettingsFor(su, kind, id2);
+                const bool takenOver = SuspLevel(su) == kSuspLevelTruck && su.s.springScale == 2.5f && su.s.bumpStops;
+                SettingsFor(su, kind, id1);
+                const bool oldKept = SuspLevel(su) == kSuspLevelTruck && su.s.springScale == 2.5f;
+                Check(away && due && copied && takenOver && oldKept,
+                      "suspension: the take-over: the same kind back under a new id 5 s after it went takes the set over, and the old id keeps its own");
+                // a switch to another truck and back is none, nor a gap over 20 s, nor the same id back
+                SuspTracker u = {};
+                SuspTrack(u, a1, none, 0, gone);
+                SuspTrack(u, none, b1, 2000, gone);
+                SuspTrack(u, b1, none, 3000, gone);
+                const bool viaB = !SuspTrack(u, none, a2, 4000, gone);
+                SuspTracker w = {};
+                SuspTrack(w, a1, none, 0, gone);
+                const bool late = !SuspTrack(w, none, a2, 25000, gone);
+                SuspTracker x = {};
+                SuspTrack(x, a1, none, 0, gone);
+                const bool same = !SuspTrack(x, none, a1, 3000, gone);
+                SuspTracker y = {};
+                const bool direct = !SuspTrack(y, a1, b1, 0, gone) && !SuspTrack(y, b1, a2, 1000, gone);
+                // a new id that has a set of its own is another truck of the kind: no take-over writes over it
+                SettingsFor(su, kind, id3);
+                SettingsSuspLevel(su, true);
+                ed = su.s;
+                ed.springScale = 0.75f;
+                SettingsTake(su, ed);
+                SettingsWrite(su);
+                const bool notOver = !TruckSuspTakeOver(kind, id1, id3);
+                SettingsFor(su, kind, id3);
+                Check(viaB && late && same && direct && notOver && su.s.springScale == 0.75f,
+                      "suspension: no take-over after a switch to another truck and back, a gap over 20 s, the same id back, or onto an id with a set of its own");
+                // while driven, a new id (the game made the truck anew under the driver) takes the set over
+                SettingsFor(su, kind, id1);
+                const char *id4 = "{44444444-4444-4444-4444-444444444444}";
+                const bool whileDriven = SettingsTakeOver(su, id4) && !strcmp(su.id, id4) && SuspLevel(su) == kSuspLevelTruck && su.s.springScale == 2.5f;
+                // Own=0 at the truck's level keeps its set there, and the kind's is in force for it; ticked again it is back
+                SettingsSuspOwn(su, false);
+                wchar_t own[8] = {};
+                GetPrivateProfileStringW(SuspSectionOf(id4).c_str(), L"Own", L"", own, 8, truckFile(kind).c_str());
+                const bool keptTruck = !su.truckOwn && su.truckKept && SuspLevel(su) == kSuspLevelKind && su.s.springScale == 1.5f && !wcscmp(own, L"0");
+                SettingsFor(su, kind, id4);
+                const bool keptRead = su.truckKept && SuspLevel(su) == kSuspLevelKind;
+                SettingsSuspLevel(su, true);
+                Check(whileDriven && keptTruck && keptRead && SuspLevel(su) == kSuspLevelTruck && su.s.springScale == 2.5f,
+                      "suspension: a new id while driven takes the set over; Own=0 at the truck's level keeps it, the kind's in force, and This truck only brings it back");
+                // Every <kind>: the truck's set goes to the kind's level and its own section goes
+                SettingsSuspLevel(su, false);
+                wchar_t mine[16] = {};
+                GetPrivateProfileSectionW(SuspSectionOf(id4).c_str(), mine, 16, truckFile(kind).c_str());
+                SettingsFor(su, kind, id3);
+                const bool kindNow = SuspLevel(su) == kSuspLevelTruck; // id3 keeps its own
+                SettingsFor(su, kind, "{55555555-5555-5555-5555-555555555555}");
+                Check(!mine[0] && kindNow && SuspLevel(su) == kSuspLevelKind && su.s.springScale == 2.5f,
+                      "suspension: Every <kind> puts the truck's set at the kind's level and takes the truck's own section out; another truck's own stays");
+                // with the id not read the truck has the kind's level only
+                SettingsFor(su, kind, "");
+                Check(SuspLevel(su) == kSuspLevelKind && !su.truckOwn && !su.truckKept, "suspension: a truck whose id is not read has the kind's level only");
+                DeleteFileW(truckFile(kind).c_str());
+            }
             DeleteFileW(ini.c_str());
         }
             // the files' names: a modded truck's stroke as "@", what no file's name may hold as "_"
