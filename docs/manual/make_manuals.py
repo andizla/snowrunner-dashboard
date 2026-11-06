@@ -292,6 +292,17 @@ the game rebuilds the truck, its engine set follows it as the suspension's does.
 and damping times a factor. Above 1 the spring is stiffer and the truck sits higher, below 1 softer and lower. More damping
 settles the body sooner, less lets it bounce longer. The game takes a wheel's spring and damping only up to 1, so where a
 truck's own figure is 0.5 (the Arocs' front damping), a factor above 2 cannot act in full. The tab says so.</li>
+<li><b>Frame flex and Twist range</b> (<code>FrameFlex</code>, x0.1 to x7; <code>TwistRange</code>, x0.25 to x8): on a truck
+whose frame twists, the frame's twist spring and how far it twists, as factors of the truck's own. Below 1 Frame flex lets the
+frame twist more easily, so all the wheels keep the ground longer. Its damping follows by the square root, so the frame settles
+as the file's does. Twist range widens or narrows the twist, up to 22 degrees on a frame and 175 on
+an articulated truck's roll, never under the truck's own. The ranges cover realistic frames. About two in
+three of the game's trucks have a frame that twists. A truck with a rigid frame has nothing to twist, and the tab says the
+sliders take effect only on trucks with a flexing frame. Under each slider are the truck's own figures and what is in force.
+After a garage or a recovery the mod puts them in again. <code>Gauges.log</code> says "frame flex: the joint found: wheel 0's body
+hangs on ..." with the way to it, or "frame flex: none on this truck, the frame is rigid". Then "frame flex: file" gives the
+truck's own figures, "frame flex: written x1.50, twist x1.00: read back ..." each change, and "frame flex: the truck driven
+before: 4 values put back" when another truck is taken and the last one gets its own figures back.</li>
 <li><b>Extra travel</b> (<code>ExtraTravel</code>, 0 to 30 cm): each wheel can rise further into the body than the truck's
 file lets it (its SuspensionMin), on a file that sets 0 too. It never shortens the travel; the bump stops do that. Past the
 file's end a wheel can go into the body, and the tab warns.</li>

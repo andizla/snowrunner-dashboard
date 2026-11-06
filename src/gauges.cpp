@@ -40,6 +40,7 @@ int NgMenuKeyFromIni(); // the menu's key, which a capture never binds
 #include "suspension_scan.h"
 #include "suspension_step.h"
 #include "air_axles.h"
+#include "frame_flex.h"
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "shell32.lib")
 #ifndef GAUGES_SETTINGS_TEST
@@ -732,6 +733,8 @@ static void WriteIni(const GaugeSettings &s)
     num(L"ClutchHeatPercent", s.clutchHeat);
     num(L"SpringScale", s.springScale);
     num(L"DampingScale", s.dampingScale);
+    num(L"FrameFlex", s.frameFlex);
+    num(L"TwistRange", s.twistRange);
     num(L"ExtraTravel", s.extraTravel);
     num(L"RideFront", s.rideFront);
     num(L"RideRear", s.rideRear);
@@ -1047,6 +1050,8 @@ static void ReadIni(GaugeSettings &s)
                         L"; ClutchHeatPercent: how fast it heats up, percent of the model's own pace, 10 to 300 (60); lower gives more time to react.\n"
                         L"; SpringScale, DampingScale (a test): the suspension's spring and damping as a factor of the truck's own, 0.25 to 4 (1 = the truck's own;\n"
                         L"; the game holds each at 1). ExtraTravel: cm added past the file's compression end, 0 to 30 (0 = the file's; past it a wheel may go into the body).\n"
+                        L"; FrameFlex: the frame's twist spring as a factor of the truck's own, 0.1 to 7 (its damping by the square root); TwistRange: how far the frame\n"
+                        L"; twists, 0.25 to 8 of the truck's own limits, at most 22 degrees (175 on an articulated truck's roll). 1 = the truck's own. Only a truck whose frame twists has them.\n"
                         L"; RideFront, RideRear: each axle's ride height in cm, -10 to 10; SwayFront, SwayRear: a sway bar, 0 to 0.3 of the axle's spring rate (BindSwayDisconnect\n"
                         L"; toggles them). Both move the attach point and stop on a truck whose game moves it. SuspDisplay=1 draws each wheel's travel. All tests, off by default.\n"
                         L"; AirSuspension=1 holds each wheel at its rest place of the first standstill, cargo or not (3 s to settle, under 10 km/h); AirHorizon=1 levels the body\n"
@@ -1182,6 +1187,8 @@ static void ReadIni(GaugeSettings &s)
     s.clutchHeat = IniFloat(L"ClutchHeatPercent", s.clutchHeat, ini);
     s.springScale = IniFloat(L"SpringScale", s.springScale, ini);
     s.dampingScale = IniFloat(L"DampingScale", s.dampingScale, ini);
+    s.frameFlex = IniFloat(L"FrameFlex", s.frameFlex, ini);
+    s.twistRange = IniFloat(L"TwistRange", s.twistRange, ini);
     s.extraTravel = IniFloat(L"ExtraTravel", s.extraTravel, ini); // TravelMinScale and TravelMaxScale are no longer read
     s.rideFront = IniFloat(L"RideFront", s.rideFront, ini);
     s.rideRear = IniFloat(L"RideRear", s.rideRear, ini);
@@ -1630,7 +1637,8 @@ static const struct { const wchar_t *name; float GaugeSettings::*v; } kSuspSetFl
     { L"BumpDamping", &GaugeSettings::bumpDamping },     { L"SpringRise", &GaugeSettings::springRise },
     { L"SpringCross", &GaugeSettings::springCross },     { L"ZoneSoft", &GaugeSettings::zoneSoft },
     { L"ZoneFirm", &GaugeSettings::zoneFirm },           { L"ZoneFrom", &GaugeSettings::zoneFrom },
-    { L"ZoneTo", &GaugeSettings::zoneTo },
+    { L"ZoneTo", &GaugeSettings::zoneTo },             { L"FrameFlex", &GaugeSettings::frameFlex },
+    { L"TwistRange", &GaugeSettings::twistRange },
 };
 static const struct { const wchar_t *name; int GaugeSettings::*v; } kSuspSetInts[] = {
     { L"DamperCurve", &GaugeSettings::damperCurve }, { L"SpringCurve", &GaugeSettings::springCurve },
@@ -3417,6 +3425,7 @@ struct TruckWatch
     uint64_t idVehicle;
     SuspProbe susp;             // the probe's scan for each wheel's suspension constraint (Probe=1)
     SuspTune tune;              // what SpringScale and DampingScale wrote into each wheel's constraint
+    FrameTune frame;            // the frame's joint and what FrameFlex and TwistRange wrote into it (frame_flex.h)
     SuspTravel travel;          // the travel probe: each wheel's height in the chassis's frame (Probe=1)
     ULONGLONG travelAt;         // when it logs next
     SuspStepWatch step;         // the travel read every physics step, and SuspStepTest (Probe=1)
@@ -3696,6 +3705,61 @@ static void SuspProbeStep(SuspProbe &p, const TruckMemory &m, const TruckRefs &r
     for (int i = 0; i < p.count && i < 2; i++)
         if (SuspFloatsText(m, p.hits[i].at, p.vtable, text, sizeof text)) Log(L"probe: suspension %d: %S", i, text);
         else p.key = 0; // gone: the next pass scans again
+}
+
+// The vtables frame_flex.h checks the joint by, by their RTTI names, looked for once: 0 where one is not found (then
+// the frame's joint is not looked for, and nothing is written).
+static const FrameVtables &FrameFlexVtables()
+{
+    static bool looked = false;
+    static FrameVtables vt = {};
+    if (looked) return vt;
+    looked = true;
+    size_t from = 0, to = 0;
+    std::vector<uint8_t> image;
+    if (CodeCopy(image, from, to, true))
+    {
+        const uint64_t hinge = VtableByName(image.data(), image.size(), g_base, kFrameHingeName), motor = VtableByName(image.data(), image.size(), g_base, kFrameMotorName);
+        vt.hinge = hinge ? g_base + hinge : 0;
+        vt.motor = motor ? g_base + motor : 0;
+    }
+    vt.wheelData = SuspVtable();
+    if (vt.hinge && vt.motor && vt.wheelData) Log(L"frame flex: the hinge's vtable at +%llx, its motor's at +%llx", vt.hinge - g_base, vt.motor - g_base);
+    else Log(L"frame flex: a vtable was not found (hinge %llx, motor %llx, wheel %llx): the frame's joint is not looked for", vt.hinge, vt.motor, vt.wheelData);
+    return vt;
+}
+
+static float FrameDeg(float rad) { return rad * 180.0f / 3.14159265f; }
+
+// FrameFlex and TwistRange (BRIEF_frame_flex.md part 2, frame_flex.h): the frame's twist spring and limits as the stock
+// times the sliders. The joint is looked for on each new truck and after each rebuild, and logged with the way to it
+// whether the sliders are at 1 or not (so a drive at 1 is the probe of the chain, with nothing written). At 1 and 1
+// nothing is written; the stock goes back where the mod wrote.
+static void FrameFlexPass(FrameTune &t, const TruckMemory &m, const TruckRefs &r, const GaugeSettings &s)
+{
+    const FrameVtables &vt = FrameFlexVtables();
+    const bool lookedBefore = t.looked && t.vehicle == r.vehicle;
+    const uint64_t keyBefore = t.key;
+    int restored = 0;
+    FrameTuneStep(t, m, r, vt, s.frameFlex, s.twistRange, &restored);
+    if (restored) Log(L"frame flex: the truck driven before: %d values put back to its stock", restored);
+    const FrameJoint &j = t.joint;
+    if (t.looked && (!lookedBefore || keyBefore != t.key))
+    {
+        if (t.found)
+            Log(L"frame flex: the joint found: wheel %d's body hangs on %p, its hinge %p (data %p, motor %p) to %p, axis %.2f %.2f %.2f%s; %d of %d wheels' constraints found, %d spring hinges refused; %d of %d master entries hold their instance's bodies",
+                j.wheel, (void *)j.front, (void *)j.instance, (void *)j.data, (void *)j.motor, (void *)j.other, j.axis[0], j.axis[1], j.axis[2], j.articulated ? L" (an articulated truck's roll)" : L"", j.hung, r.wheels, j.refused,
+                j.masterMatch, j.masterSeen);
+        else
+            Log(L"frame flex: none on this truck, the frame is rigid (%d of %d wheels' constraints found, %d hang on the chassis, %d spring hinges refused; %d of %d master entries hold their instance's bodies)",
+                j.hung, r.wheels, j.frontOnChassis, j.refused, j.masterMatch, j.masterSeen);
+    }
+    if (t.fresh)
+        Log(L"frame flex: file %.0f, damping %.0f, twist %.1f to %.1f degrees; now x%.2f, twist x%.2f", t.stock[kFrameSpring], t.stock[kFrameDamping], FrameDeg(t.stock[kFrameMin]),
+            FrameDeg(t.stock[kFrameMax]), s.frameFlex, s.twistRange);
+    if (t.wroteNow)
+        Log(L"frame flex: written x%.2f, twist x%.2f: read back %.0f, damping %.0f, twist %.1f to %.1f degrees", s.frameFlex, s.twistRange, t.back[kFrameSpring], t.back[kFrameDamping],
+            FrameDeg(t.back[kFrameMin]), FrameDeg(t.back[kFrameMax]));
 }
 
 // SpringScale, DampingScale and ExtraTravel (a test, BRIEF_suspension_simple.md and the addendum of 2 November, 13:18):
@@ -4575,6 +4639,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     SuspTuneTest stepTestNow;
     const SuspTuneTest *stepTest = w.found ? SuspStepTestPass(w.step, m, w.refs, raw, s, now, stepTestNow) : nullptr;
     if (w.found) SuspTunePass(w.tune, m, w.refs, s, stepTest, damperOwns, springOwns);
+    if (w.found) FrameFlexPass(w.frame, m, w.refs, s);
     if (w.found && w.step.on && w.step.value < 0.0f && w.refs.wheels > 0)
     {
         // the test's value as written, which the steps' trace looks for
@@ -6530,6 +6595,15 @@ static DWORD WINAPI Run(void *)
                 v.rideRestKnown = true;
             }
         }
+        v.frameKnown = v.frameRigid = false;
+        if (driving && watch.frame.vehicle == watch.refs.vehicle && watch.frame.looked)
+        {
+            v.frameKnown = watch.frame.found && watch.frame.motor;
+            v.frameRigid = !watch.frame.found;
+            v.frameFile[0] = watch.frame.stock[kFrameSpring], v.frameFile[1] = watch.frame.stock[kFrameDamping];
+            v.frameFile[2] = FrameDeg(watch.frame.stock[kFrameMin]), v.frameFile[3] = FrameDeg(watch.frame.stock[kFrameMax]);
+            v.frameMost = FrameDeg(FrameLimitMost(watch.frame.joint));
+        }
         v.suspKnown = false;
         if (driving && watch.tune.vehicle == watch.refs.vehicle && watch.refs.wheels > 0)
         {
@@ -6705,7 +6779,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.rollWarnDeg == b.rollWarnDeg && a.rollDangerDeg == b.rollDangerDeg && a.pitchDangerDeg == b.pitchDangerDeg &&
            a.warmUpMinutes == b.warmUpMinutes && a.overheatMinutes == b.overheatMinutes && a.coolDownMinutes == b.coolDownMinutes && a.ambientC == b.ambientC &&
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
-           a.springScale == b.springScale && a.dampingScale == b.dampingScale && a.extraTravel == b.extraTravel &&
+           a.springScale == b.springScale && a.dampingScale == b.dampingScale && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
            a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual;
 }
@@ -6737,7 +6811,7 @@ int wmain(int argc, wchar_t **argv)
     Check(d.warmUpMinutes == 3.0f && d.overheatMinutes == 1.5f && d.coolDownMinutes == 15.0f && d.ambientC == 15.0f && d.ambientByMap,
           "defaults: the coolant warm after 3 minutes, in the red zone after 1.5, cool after 15, with 15 C outside");
     Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.hotDamageFrom == kTempRed && d.coldDamage == 5.0f && d.stallDamage == 5.0f && d.clutchBurn && d.clutchHeat == 60.0f &&
-              d.springScale == 1.0f && d.dampingScale == 1.0f && d.extraTravel == 0.0f,
+              d.springScale == 1.0f && d.dampingScale == 1.0f && d.extraTravel == 0.0f && d.frameFlex == 1.0f && d.twistRange == 1.0f,
           "defaults: the radiator's full airflow from 30 km/h, engine damage on from the red zone, 10 percent a minute for the heat and 5 for the cold");
     Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.ignoreShifter && d.backToA == 0 && d.input == kInputWheel && !d.powertrain && d.roadLoad && d.roadCdA == 0.0f && d.engineShare == 50 && d.creep && !d.creepManual && !d.dieselFlutter,
           "defaults: the oil as a second needle, warm after 5 minutes, too hot from 120 C; the standard turbo, a diesel's lift without the flutter; the creep on");
@@ -6800,6 +6874,8 @@ int wmain(int argc, wchar_t **argv)
     c.springScale = 1.5f;
     c.dampingScale = 0.75f;
     c.extraTravel = 12.0f;
+    c.frameFlex = 2.5f;
+    c.twistRange = 0.5f;
     c.toggleKey = VK_F9;
     strcpy_s(c.padToggle, "RB+DPadUp");
     c.demo = true;
@@ -6829,7 +6905,7 @@ int wmain(int argc, wchar_t **argv)
                             c.speedMax != d.speedMax && c.boostMax != d.boostMax && c.rollWarnDeg != d.rollWarnDeg && c.rollDangerDeg != d.rollDangerDeg &&
                             c.pitchDangerDeg != d.pitchDangerDeg && c.warmUpMinutes != d.warmUpMinutes && c.overheatMinutes != d.overheatMinutes &&
                             c.coolDownMinutes != d.coolDownMinutes && c.ambientC != d.ambientC && c.ambientByMap != d.ambientByMap && c.airFullKmh != d.airFullKmh && c.damage != d.damage &&
-                            c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springScale != d.springScale && c.dampingScale != d.dampingScale && c.extraTravel != d.extraTravel && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
+                            c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springScale != d.springScale && c.dampingScale != d.dampingScale && c.extraTravel != d.extraTravel && c.frameFlex != d.frameFlex && c.twistRange != d.twistRange && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
                             c.demo != d.demo && c.probe != d.probe && c.keepLogs != d.keepLogs && c.soundVolume != d.soundVolume && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
                             c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
@@ -6853,7 +6929,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 125, "ini: the help text survives a write (125 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 128, "ini: the help text survives a write (128 comment lines)");
     // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
     {
         char none[32] = "x", tab[32] = {}, kept[32] = {};
@@ -6926,10 +7002,15 @@ int wmain(int argc, wchar_t **argv)
     WritePrivateProfileStringW(kIniSection, L"StallDamagePercent", L"40", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"ClutchHeatPercent", L"5", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"SpringScale", L"9", ini.c_str());
+    WritePrivateProfileStringW(kIniSection, L"FrameFlex", L"20", ini.c_str());
+    WritePrivateProfileStringW(kIniSection, L"TwistRange", L"0.01", ini.c_str());
     ReadIni(b);
     const bool held = b.airFullKmh == kAirFullRange[0] && b.hotDamage == kDamageRange[1] && b.coldDamage == 0.0f && !b.damage && b.hotDamageFrom == kHotDamageFromRange[0] &&
-                      b.stallDamage == kStallDamageRange[1] && b.clutchHeat == kClutchHeatRange[0] && b.springScale == kSuspScaleRange[1];
+                      b.stallDamage == kStallDamageRange[1] && b.clutchHeat == kClutchHeatRange[0] && b.springScale == kSuspScaleRange[1] && b.frameFlex == kFrameFlexRange[1] &&
+                      b.twistRange == kTwistRange[0];
     WritePrivateProfileStringW(kIniSection, L"SpringScale", L"1", ini.c_str());
+    WritePrivateProfileStringW(kIniSection, L"FrameFlex", L"1", ini.c_str());
+    WritePrivateProfileStringW(kIniSection, L"TwistRange", L"1", ini.c_str());
     // an old ini's TravelMinScale and TravelMaxScale are no longer read: ExtraTravel stays as it was, and a write drops neither
     {
         WritePrivateProfileStringW(kIniSection, L"ExtraTravel", nullptr, ini.c_str()); // the round trip above left one
@@ -7443,6 +7524,26 @@ int wmain(int argc, wchar_t **argv)
                 // with the id not read the truck has the kind's level only
                 SettingsFor(su, kind, "");
                 Check(SuspLevel(su) == kSuspLevelKind && !su.truckOwn && !su.truckKept, "suspension: a truck whose id is not read has the kind's level only");
+                // FrameFlex and TwistRange go with the suspension set at both levels (BRIEF_frame_flex.md part 2); a section without them reads 1
+                {
+                    GaugeSettings flex = su.plain, back = su.plain;
+                    flex.frameFlex = 0.5f, flex.twistRange = 2.0f;
+                    WriteTruckSusp(kind, flex, true);
+                    flex.frameFlex = 3.0f, flex.twistRange = 0.5f;
+                    WriteTruckSusp(kind, flex, true, id1);
+                    GaugeSettings atKind = su.plain, atTruck = su.plain;
+                    ReadTruckSusp(kind, atKind);
+                    ReadTruckSusp(kind, atTruck, id1);
+                    wchar_t keyText[16] = {};
+                    GetPrivateProfileStringW(SuspSectionOf(id1).c_str(), L"TwistRange", L"", keyText, 16, truckFile(kind).c_str());
+                    WritePrivateProfileStringW(kSuspSection, L"FrameFlex", nullptr, truckFile(kind).c_str());
+                    WritePrivateProfileStringW(kSuspSection, L"TwistRange", nullptr, truckFile(kind).c_str());
+                    back.frameFlex = back.twistRange = 1.0f;
+                    ReadTruckSusp(kind, back);
+                    Check(atKind.frameFlex == 0.5f && atKind.twistRange == 2.0f && atTruck.frameFlex == 3.0f && atTruck.twistRange == 0.5f && !wcscmp(keyText, L"0.5") &&
+                              back.frameFlex == 1.0f && back.twistRange == 1.0f,
+                          "suspension: FrameFlex and TwistRange are kept at the kind's level and the truck's, and a section without them reads 1");
+                }
                 // the take-over while driven (review F1): only on the vehicle the old id was taken with
                 Check(SuspAgainTakeOver(id1, 0x1000, id2, 0x1000) && !SuspAgainTakeOver(id1, 0x1000, id2, 0x2000) && !SuspAgainTakeOver(id1, 0, id2, 0) &&
                           !SuspAgainTakeOver(id1, 0x1000, id1, 0x1000) && !SuspAgainTakeOver("", 0x1000, id2, 0x1000),

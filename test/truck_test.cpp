@@ -22,6 +22,7 @@
 #include "game_globals.h"
 #include "clock_scan.h"
 #include "suspension_scan.h"
+#include "frame_flex.h"
 #include "suspension_step.h"
 #include "air_axles.h"
 #include "gearbox_hooks.h"
@@ -1718,6 +1719,186 @@ int main()
                            hits[1].at == inModel && hits[1].depth == 1 && hits[1].off[0] == 0x60 && hits[1].fromModel && !strcmp(path, "wheel 0's object [[+0x18]+0x40]");
         const bool text = SuspFloatsText(kMemory, inBody, vtable, floats, sizeof floats) && strstr(floats, "| +30 1.5 0.25 ") && !SuspFloatsText(kMemory, decoy, vtable, floats, sizeof floats);
         Check(found && text, "suspension probe: a constraint two pointers from the wheel and one in its model, each once, with its path and floats; a decoy left out");
+    }
+
+    // frame flex (frame_flex.h, BRIEF_frame_flex.md part 2): a made up truck. Its front wheel hangs on the frame's front
+    // section, its rear wheel on the chassis; on the front section a steering pivot (an axis up) and a radio's spring
+    // hinge (no wheels beyond) come before the frame's hinge. A rigid truck (both wheels on the chassis) has none, and an
+    // articulated truck's roll hinge is to a body joined to the chassis by its pivot.
+    {
+        const FrameVtables vt = { kExe + 0x23d9538, kExe + 0x23d9898, kExe + 0x23da178 };
+        uint64_t next = 0x30000000;
+        auto obj = [&](size_t size) { const uint64_t at = next; next += 0x10000; Block(at, size); return at; };
+        // a constraint instance between a and b with data d, in a's master list and b's slave list, as Havok keeps it
+        auto join = [&](uint64_t a, uint64_t b, uint64_t d) {
+            const uint64_t inst = obj(0x80);
+            Put(inst + 0x18, d);
+            Put(inst + 0x28, a);
+            Put(inst + 0x30, b);
+            uint64_t list = 0;
+            Peek(a + 0xF8, &list, sizeof list);
+            if (!list)
+            {
+                list = obj(0x1000);
+                Put(a + 0xF8, list);
+            }
+            uint16_t n = 0;
+            Peek(a + 0x100, &n, sizeof n);
+            Put(list + n * 0x50, inst);
+            Put(list + n * 0x50 + 8, a);
+            Put(list + n * 0x50 + 0x10, b);
+            Put(a + 0x100, (uint16_t)(n + 1));
+            list = 0;
+            Peek(b + 0x108, &list, sizeof list);
+            if (!list)
+            {
+                list = obj(0x1000);
+                Put(b + 0x108, list);
+            }
+            int k = 0;
+            Peek(b + 0x110, &k, sizeof k);
+            Put(list + k * 8, inst);
+            Put(b + 0x110, k + 1);
+            return inst;
+        };
+        auto hinge = [&](float ax, float ay, float az, float spring, float damping, float limitDeg) {
+            const uint64_t d = obj(0x200), motor = obj(0x40);
+            Put(d, vt.hinge);
+            Put(d + 0x30, ax);
+            Put(d + 0x34, ay);
+            Put(d + 0x38, az);
+            Put(d + 0xC8, motor);
+            Put(d + 0xF8, -limitDeg * 3.14159265f / 180.0f);
+            Put(d + 0xFC, limitDeg * 3.14159265f / 180.0f);
+            Put(motor, vt.motor);
+            Put(motor + 0x10, (uint8_t)3);
+            Put(motor + 0x20, spring);
+            Put(motor + 0x24, damping);
+            return d;
+        };
+        auto wheel = [&](uint64_t hangsOn) {
+            const uint64_t w = obj(0x100), body = obj(0x200), data = obj(0x100);
+            Put(w + 0x18, body);
+            Put(w + 0x28, data);
+            Put(data, vt.wheelData);
+            join(body, hangsOn, data);
+            return w;
+        };
+        const uint64_t chassis = obj(0x200), front = obj(0x200), radio = obj(0x200), steer = obj(0x200);
+        const uint64_t w0 = wheel(front), w1 = wheel(chassis);
+        join(front, steer, hinge(0.0f, 1.0f, 0.0f, 9000.0f, 900.0f, 30.0f));   // a pivot: the axis is up
+        join(front, radio, hinge(1.0f, 0.0f, 0.0f, 0.5f, 0.02f, 13.0f));        // a radio: no wheels beyond
+        join(steer, chassis, hinge(0.0f, 1.0f, 0.0f, 9000.0f, 900.0f, 30.0f)); // the pivot's other end, on the chassis
+        const uint64_t frameData = hinge(1.0f, 0.0f, 0.0f, 400000.0f, 30000.0f, 5.0f);
+        const uint64_t frameInst = join(chassis, front, frameData);           // in the front section's slave list
+        TruckRefs refs = {};
+        refs.vehicle = kVehicle;
+        refs.chassis = chassis;
+        refs.wheel[0] = w0;
+        refs.wheel[1] = w1;
+        refs.wheels = 2;
+        FrameJoint j;
+        uint64_t motor = 0;
+        Peek(frameData + 0xC8, &motor, sizeof motor);
+        // the steering pivot on the front section is refused by its axis; but it leads to a body joined to the chassis,
+        // so the finder must not take it: the radio's by its body, the pivot's by its axis
+        const bool found = FrameJointFind(kMemory, refs, vt, j) && j.instance == frameInst && j.data == frameData && j.motor == motor && j.front == front &&
+                           j.other == chassis && j.wheel == 0 && j.hung == 2 && j.frontOnChassis == 1 && j.refused == 2 && j.masterSeen > 0 && j.masterMatch == j.masterSeen;
+        // the axis: 5 degrees off the long axis is taken, 15 is not, a yaw hinge never (review F1)
+        const float a5[3] = { cosf(0.0873f), sinf(0.0873f), 0.0f }, a15[3] = { cosf(0.2618f), 0.0f, sinf(0.2618f) }, yaw[3] = { 0.0f, 1.0f, 0.0f };
+        const bool axes = FrameAxisAlong(a5) && !FrameAxisAlong(a15) && !FrameAxisAlong(yaw);
+        // a list over 64 is not read
+        const uint64_t crowded = obj(0x200), crowdedList = obj(0x2000);
+        Put(crowded + 0x108, crowdedList);
+        Put(crowded + 0x110, 65);
+        Put(crowdedList, frameInst);
+        uint64_t got[kFrameListMost];
+        const bool skipped = FrameBodyConstraints(kMemory, crowded, got, kFrameListMost) == 0;
+        // a rigid truck: both wheels on the chassis
+        const uint64_t chassis2 = obj(0x200), cab = obj(0x200);
+        TruckRefs rigid = refs;
+        rigid.vehicle = kVehicle + 0x1000;
+        rigid.chassis = chassis2;
+        rigid.wheel[0] = wheel(chassis2);
+        rigid.wheel[1] = wheel(chassis2);
+        join(chassis2, cab, hinge(1.0f, 0.0f, 0.0f, 200000.0f, 20000.0f, 4.0f)); // the cab's mount: no wheels on the cab
+        FrameJoint none;
+        const bool isRigid = !FrameJointFind(kMemory, rigid, vt, none) && none.hung == 2 && none.frontOnChassis == 2;
+        // an articulated truck: the rear half hangs a wheel and rolls against the pivot's body, which the chassis turns
+        const uint64_t chassis3 = obj(0x200), pivot = obj(0x200), rear = obj(0x200);
+        TruckRefs art = refs;
+        art.vehicle = kVehicle + 0x2000;
+        art.chassis = chassis3;
+        art.wheel[0] = wheel(chassis3);
+        art.wheel[1] = wheel(rear);
+        join(chassis3, pivot, hinge(0.0f, 1.0f, 0.0f, 1.0e6f, 1.0e5f, 40.0f));
+        const uint64_t rollData = hinge(1.0f, 0.0f, 0.0f, 1400.0f, 800.0f, 14.0f);
+        join(pivot, rear, rollData);
+        FrameJoint roll;
+        const bool articulated = FrameJointFind(kMemory, art, vt, roll) && roll.data == rollData && roll.front == rear && roll.other == pivot;
+        // a truck whose only spring hinge between two wheel bodies turns about the up axis (a pivot with a spring): none
+        const uint64_t chassis4 = obj(0x200), half = obj(0x200);
+        TruckRefs yawOnly = refs;
+        yawOnly.vehicle = kVehicle + 0x3000;
+        yawOnly.chassis = chassis4;
+        yawOnly.wheel[0] = wheel(chassis4);
+        yawOnly.wheel[1] = wheel(half);
+        join(chassis4, half, hinge(0.0f, 1.0f, 0.0f, 1400.0f, 800.0f, 35.0f));
+        FrameJoint pivotOnly;
+        const bool yawRefused = !FrameJointFind(kMemory, yawOnly, vt, pivotOnly) && pivotOnly.refused == 1;
+        Check(found && isRigid && articulated && axes && skipped && yawRefused,
+              "frame flex: the joint is the long-axis spring hinge between two bodies that carry wheels; a steering pivot, a radio's hinge and a cab mount are refused, a rigid truck has none, "
+              "an articulated truck's roll hinge is taken; the axis within 8 degrees; a yaw hinge with a spring refused; a list over 64 not read; the master entries checked");
+
+        // the tune: nothing written at 1; the spring times flex and the damping times its square root; the limits times
+        // range, held to 175 degrees but never under the file's own; back at 1 the stock; the game's own write a new stock
+        auto f = [&](uint64_t at) { float v = 0.0f; Peek(at, &v, sizeof v); return v; };
+        const float fiveDeg = 5.0f * 3.14159265f / 180.0f;
+        FrameTune t = {};
+        const bool atOne = !FrameTuneStep(t, kMemory, refs, vt, 1.0f, 1.0f) && t.found && t.fresh && t.stock[kFrameSpring] == 400000.0f && f(motor + 0x20) == 400000.0f &&
+                           f(motor + 0x24) == 30000.0f && f(frameData + 0xFC) == fiveDeg;
+        const bool scaled = FrameTuneStep(t, kMemory, refs, vt, 2.0f, 2.0f) && f(motor + 0x20) == 800000.0f && Near(f(motor + 0x24), 30000.0f * sqrtf(2.0f)) &&
+                            Near(f(frameData + 0xF8), -2.0f * fiveDeg) && Near(f(frameData + 0xFC), 2.0f * fiveDeg) && !t.fresh && t.stock[kFrameSpring] == 400000.0f;
+        const bool steady = !FrameTuneStep(t, kMemory, refs, vt, 2.0f, 2.0f) && t.stock[kFrameSpring] == 400000.0f && t.stock[kFrameDamping] == 30000.0f;
+        // review F1 of part 2: a frame held at 22 degrees, an articulated roll at 175, a file wider than the clamp kept;
+        // the frame here held at 22 through the tune too
+        const float deg = 3.14159265f / 180.0f;
+        const bool held = Near(FrameWant(kFrameMax, 10.0f * deg, 1.0f, 8.0f, kFrameLimitFrame), 22.0f * deg) &&
+                          Near(FrameWant(kFrameMin, -10.0f * deg, 1.0f, 8.0f, kFrameLimitFrame), -22.0f * deg) &&
+                          Near(FrameWant(kFrameMax, 30.0f * deg, 1.0f, 8.0f, kFrameLimitArticulated), 175.0f * deg) &&
+                          Near(FrameWant(kFrameMax, 35.0f * deg, 1.0f, 2.0f, kFrameLimitFrame), 35.0f * deg) &&
+                          Near(FrameWant(kFrameMin, -35.0f * deg, 1.0f, 0.5f, kFrameLimitFrame), -17.5f * deg) &&
+                          FrameWant(kFrameSpring, 2e8f, 7.0f, 1.0f, kFrameLimitFrame) == 1e9f && !j.articulated && roll.articulated &&
+                          FrameLimitMost(j) == kFrameLimitFrame && FrameLimitMost(roll) == kFrameLimitArticulated;
+        const bool frameHeld = FrameTuneStep(t, kMemory, refs, vt, 2.0f, 8.0f) && Near(f(frameData + 0xFC), 22.0f * deg) && Near(f(frameData + 0xF8), -22.0f * deg);
+        const bool back = FrameTuneStep(t, kMemory, refs, vt, 1.0f, 1.0f) && f(motor + 0x20) == 400000.0f && f(motor + 0x24) == 30000.0f && f(frameData + 0xFC) == fiveDeg &&
+                          !FrameTuneStep(t, kMemory, refs, vt, 1.0f, 1.0f);
+        Put(motor + 0x20, 350000.0f); // the game wrote the spring anew
+        const bool anew = FrameTuneStep(t, kMemory, refs, vt, 2.0f, 1.0f) && t.stock[kFrameSpring] == 350000.0f && f(motor + 0x20) == 700000.0f;
+        // A to B to A: the truck before gets its stock back, and A comes back scaled from its stock, not from what was written
+        int restored = 0;
+        FrameTuneStep(t, kMemory, rigid, vt, 2.0f, 1.0f, &restored);
+        const bool toB = restored == 2 && f(motor + 0x20) == 350000.0f && f(motor + 0x24) == 30000.0f && !t.found;
+        const bool toA = FrameTuneStep(t, kMemory, refs, vt, 2.0f, 1.0f, &restored) && restored == 0 && t.stock[kFrameSpring] == 350000.0f && f(motor + 0x20) == 700000.0f;
+        // a rebuild: new wheel constraints and a new joint; looked for again, its stock read fresh and the sliders put in again
+        const uint64_t frameData2 = hinge(1.0f, 0.0f, 0.0f, 410000.0f, 31000.0f, 5.0f), newData = obj(0x100);
+        uint64_t motor2 = 0, body0 = 0;
+        Peek(frameData2 + 0xC8, &motor2, sizeof motor2);
+        Peek(w0 + 0x18, &body0, sizeof body0);
+        Put(newData, vt.wheelData);
+        Put(w0 + 0x28, newData);
+        join(body0, front, newData);
+        uint64_t instData = 0;
+        Peek(frameInst + 0x18, &instData, sizeof instData);
+        Put(frameInst + 0x18, frameData2);
+        Put(frameData, (uint64_t)0); // the old one is gone
+        const bool rebuilt = FrameTuneStep(t, kMemory, refs, vt, 2.0f, 1.0f) && t.joint.data == frameData2 && t.stock[kFrameSpring] == 410000.0f && f(motor2 + 0x20) == 820000.0f;
+        // another class there: nothing written
+        Put(motor2, kExe + 0x100);
+        const bool other = !FrameTuneStep(t, kMemory, refs, vt, 3.0f, 1.0f) && f(motor2 + 0x20) == 820000.0f;
+        Check(atOne && scaled && steady && held && frameHeld && back && anew && toB && toA && rebuilt && other,
+              "frame flex: at 1 only read; the spring x2 and the damping x1.41 from the stock, the limits x2; held at 22 degrees on a frame and 175 on an articulated roll, never under the file's; back to the stock at 1; "
+              "the game's write a new stock; A to B to A from the stock; a rebuild looked for again and put in again; another class never written");
     }
 
     // the suspension tune (suspension_scan.h): a made up wheel whose constraint at + 0x28 holds the Arocs' front
