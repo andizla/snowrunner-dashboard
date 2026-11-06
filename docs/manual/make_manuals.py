@@ -275,7 +275,7 @@ its kind, and the line under it says which is in force: this truck, every truck 
 goes in a <code>[Suspension:&lt;id&gt;]</code> section of the kind's file, by the game's own id of that truck, and wins over the
 kind's. When the game rebuilds the truck it gives it another id: when the same kind comes back within 20 seconds with no
 other truck driven between, or the new id comes on the same truck while you drive, the new id takes the set over, and the log
-says so. The old section is marked <code>TakenBy</code> and <code>TakenAt</code>, and a save keeps only the newest 10 marked sections of a file. A truck taken out of the
+says so. The old section is marked <code>TakenBy</code> and <code>TakenAt</code>, and only the newest 10 marked sections of a file are kept. A truck taken out of the
 warehouse gets a new id and starts on its kind's settings; pick This truck only again for its own. Unticking the box at the
 truck's level keeps its set and puts the kind's in force; This truck only brings it back. Every with no set for the kind
 moves the truck's set up to the kind. With a set for the kind it puts that one in force and keeps the truck's, which This
