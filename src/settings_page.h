@@ -4,6 +4,7 @@
 // hands every key to Dear ImGui while it is open, so a new toggle key is read from there.
 #pragma once
 #include "gauges.h"
+#include "air_axles.h"
 
 struct PageState
 {
@@ -857,13 +858,25 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         s.swayRear = SettingsStep(s.swayRear, kSwayStep);
         PageTip("A test: a rear sway bar; 0.1 to 0.2 works well, and it ends at 0.3. It stops on a truck with an active ride height. Default none.");
         if (view.swayOff) ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "The sway bars are disconnected.");
-        // the air suspension (a test, build C): it levels each wheel on top of the ride height
+        // the air suspension (a test, build C): it levels each wheel on top of the ride height, on the axles with air
+        // only (BRIEF_air_axles.md part 2); a truck with none has it greyed
+        const bool noAir = view.airKnown && view.airAxles == kAirNone;
+        if (view.airKnown)
+        {
+            const char *from = view.airFrom == kAirFromKey ? "the truck's AirAxles" : view.airFrom == kAirFromTable ? "the mod's table" : "not in the mod's table";
+            if (noAir) ImGui::TextDisabled("This truck has no air suspension (%s).", from);
+            else if (view.airAxles == kAirRear) ImGui::TextDisabled("Air axles: rear, every axle but the front one (%s).", from);
+            else ImGui::TextDisabled("Air axles: all (%s).", from);
+            if (view.airFrom == kAirFromNotListed) ImGui::TextDisabled("AirAxles=rear or none in the truck's file changes it.");
+        }
+        if (noAir) ImGui::BeginDisabled();
         PageLabel("Air suspension", labelX);
         changed(ImGui::Checkbox("##airsuspension", &s.airSuspension));
-        PageTip("A test: each wheel held at its rest height, so cargo no longer makes the truck sag or lean. Ride up and Ride down move it 2 cm a press under 20 km/h. Off by default.");
+        PageTip("A test: each axle with air held at its rest height, so cargo no longer makes the truck sag or lean. Ride up and Ride down move it 2 cm a press under 20 km/h. A truck with air at the rear only keeps the front axle on its springs. Off by default.");
         PageLabel("Level to horizon", labelX);
         changed(ImGui::Checkbox("##airhorizon", &s.airHorizon));
         PageTip("A test with Air suspension: under 10 km/h the body is levelled to the horizon, not the wheels. Off by default.");
+        if (noAir) ImGui::EndDisabled();
         if (s.airSuspension)
         {
             if (!view.air) ImGui::TextDisabled("Height %+d cm; no truck it runs on", view.airHeight);
