@@ -24,6 +24,7 @@
 #include "gauges.h"
 #include "truck.h"
 #include "models.h"
+#include "text_cut.h"
 #include "gearbox_hooks.h"
 #include "gearbox_model.h"
 #include "input_bindings.h"
@@ -42,7 +43,6 @@ int NgMenuKeyFromIni(); // the menu's key, which a capture never binds
 #include "suspension_step.h"
 #include "air_axles.h"
 #include "frame_flex.h"
-#include "text_cut.h"
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "shell32.lib")
 #ifndef GAUGES_SETTINGS_TEST
@@ -339,7 +339,16 @@ static void CrashLineOut(const char *text)
     SYSTEMTIME st;
     GetLocalTime(&st);
     char line[1400];
-    const int n = _snprintf_s(line, sizeof line, _TRUNCATE, "%02u:%02u:%02u %s\r\n", st.wHour, st.wMinute, st.wSecond, text);
+    int n = _snprintf_s(line, sizeof line, _TRUNCATE, "%02u:%02u:%02u %s\r\n", st.wHour, st.wMinute, st.wSecond, text);
+    if (n < 0)
+    {
+        // too long: the line lands cut, ended by its line end in the last two places (review N3)
+        n = (int)strnlen(line, sizeof line);
+        if (n > (int)sizeof line - 3) n = (int)sizeof line - 3;
+        line[n++] = '\r';
+        line[n++] = '\n';
+        line[n] = 0;
+    }
     const HANDLE f = CreateFileW(g_crashLog, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, 0, nullptr);
     if (f == INVALID_HANDLE_VALUE) return;
     DWORD wrote = 0;
