@@ -497,7 +497,7 @@ struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWar
                    bool suspKnown; float suspFile[3][2]; // the driven truck's file: spring, damping and the compression end (m), [front, rear] (wheel 0 and the last)
                    char gearbox[96]; float gearHold; bool gearHoldOwn; // the driven truck's gearbox (its key, "" for none), the seconds each gear is held going up with the mod's engine, and whether its file sets them
                    int autoClass; bool autoByWeight; float massKg; // the class the automatic goes by for it, whether by its weight (no scales of its own), and that weight (0 not read)
-                   char engine[96]; bool engineOwn, engineCustom; float enginePeakRpm; int engineAspiration, engineFuel; float engineTorque, engineFigure; // the driven truck's engine ("" not known): its own profile or not, a whole curve of its own in it, the peak torque's speed in force, turbo or not, its fuel (kFuelClass the class's), the share of its torque the truck gets (1 none set), and the engine's torque figure from the game's files (0 not read)
+                   char engine[96]; bool engineOwn, engineCustom; float enginePeakRpm; int engineAspiration, engineFuel; float engineTorque, engineFigure; bool engSetOwn, engSetKept, engSetTruckKept, engSetKindSet; int engSetLevel, engTorqueFrom, engHoldFrom; // the engine's settings per truck: a level in force or kept, this truck's kept, the kind's there, the level in force (0 none, 1 the default, 2 the kind's, 3 this truck's), and the level each figure came from // the driven truck's engine ("" not known): its own profile or not, a whole curve of its own in it, the peak torque's speed in force, turbo or not, its fuel (kFuelClass the class's), the share of its torque the truck gets (1 none set), and the engine's torque figure from the game's files (0 not read)
                    float engineIdle, engineRedline; float engineCurve[kEnginePlot]; // the slider's range, and the torque in force from idle to the tachometer's top, for the tab's plot
                    // the gearbox's bindings as text (input_bindings.h, kActCount actions, two slots), the capture the tab
                    // asked for (-1 none), whether a binding reaches reverse (Gearbox=2 may take the shifter), the
@@ -512,6 +512,9 @@ void SettingsTruckDrop();                   // the tab's button: the driven truc
 void SettingsSuspOwn(bool on);              // the Suspension tab's box: the driven truck's own suspension in force, or kept with Own=0
 void SettingsSuspToDefault();               // the Suspension tab's button: the driven truck's suspension becomes the default
 void SettingsSuspLevel(bool truckOnly);     // the Suspension tab's choice: this truck only, or every truck of its kind
+void EngineOwnAsk(bool on);                 // the Engine tab's box Own settings (BRIEF_engine_per_truck.md)
+void EngineToDefaultAsk();                  // the Engine tab's button Make this the engine's default
+void EngineLevelAsk(bool truckOnly);        // the Engine tab's choice: this truck only, or every truck of its kind
 void SettingsReset();                       // the tab's button: every setting back to its default, the driven truck's own scales too
 void PullTestAsk(bool run);                  // the tab's button: arm the pull test, or cancel it
 void MapAmbientSet(float c);                 // the tab's slider: the outside temperature of the map's section in force

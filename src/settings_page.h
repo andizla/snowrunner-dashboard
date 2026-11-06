@@ -27,7 +27,8 @@ struct PageState
 static const unsigned long long kPageCaptureMs = 8000;
 enum { kPageChanged = 1, kPageReload = 2, kPageTruckDrop = 4, kPageDefaults = 8, kPageHearHigh = 16, kPageHearMid = 32, kPageHearLow = 64, kPageHearOil = 128,
        kPagePullTest = 256, kPagePullCancel = 512, kPageMapAmbient = 1024, kPageGearHold = 2048, kPageEngineSet = 4096,
-       kPageEngineDrop = 8192, kPageTab = 16384, kPageEngineTorque = 32768, kPageSuspOn = 65536, kPageSuspOff = 131072, kPageSuspDefault = 262144, kPageSuspTruck = 524288, kPageSuspKind = 1048576 };
+       kPageEngineDrop = 8192, kPageTab = 16384, kPageEngineTorque = 32768, kPageSuspOn = 65536, kPageSuspOff = 131072, kPageSuspDefault = 262144, kPageSuspTruck = 524288, kPageSuspKind = 1048576,
+       kPageEngOn = 2097152, kPageEngOff = 4194304, kPageEngDefault = 8388608, kPageEngTruck = 16777216, kPageEngKind = 33554432 };
 
 // The Dear ImGui key as a virtual key, for the keys the toggle key can be; 0 for others.
 static int PageVirtualKey(int k)
@@ -67,6 +68,18 @@ static const char *PageClassWord(int tachClass)
 {
     static const char *const words[kClassCount] = { "truck", "scout", "heavy" };
     return words[tachClass < 0 || tachClass >= kClassCount ? kClassTruck : tachClass];
+}
+
+// Whose engine or gearbox figure is in force (GaugeView::engTorqueFrom, engHoldFrom: 0 none, 1 the default, 2 the kind's, 3 this truck's).
+// The kind's level is followed by the truck's name.
+static const char *PageEngLevel(int from, const char *what)
+{
+    static char text[64];
+    if (from == 3) snprintf(text, sizeof text, "this %s in this truck", what);
+    else if (from == 2) snprintf(text, sizeof text, "this %s in every ", what);
+    else if (from == 1) snprintf(text, sizeof text, "this %s's default", what);
+    else snprintf(text, sizeof text, "none set, the stock figure");
+    return text;
 }
 
 // A label in the left column, the widget after it.
@@ -320,6 +333,35 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             else ImGui::TextWrapped("Engine %s. It pulls by the %s class's torque curve%s. Set its peak torque here and this engine keeps a profile of its own.", view.engine,
                                     PageClassWord(view.autoClass), view.autoByWeight ? " (the class of the truck's weight)" : "");
             if (view.engineFigure > 0.0f) ImGui::TextWrapped("Its torque in the game's files: %.0f (a stock scout's engine reads about 195000).", view.engineFigure);
+            // whose Engine torque and Upshift delay these are (BRIEF_engine_per_truck.md): this truck's, the kind's, or
+            // the engine's default; the box, the For choice and the kept texts are the Suspension tab's
+            if (view.truck[0])
+            {
+                PageLabel("Own settings", labelX);
+                bool own = view.engSetOwn;
+                if (ImGui::Checkbox("##engown", &own)) act |= own ? kPageEngOn : kPageEngOff;
+                PageTip("This kind of truck keeps its own Engine torque and Upshift delay in its file in Gauges\\trucks, by the engine and gearbox fitted. Ticks itself when one is "
+                        "changed while it is driven. Off: the engine's default is in force and its own are kept.");
+                if (view.engSetOwn)
+                {
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("Make this the engine's default")) act |= kPageEngDefault;
+                    PageTip("Copies this truck's Engine torque into the engine's own file and its Upshift delay into the gearbox's, for every truck without its own. This truck keeps its own.");
+                    PageLabel("For", labelX);
+                    ImGui::BeginDisabled(!view.suspIdKnown);
+                    if (ImGui::RadioButton("This truck only###engtruck", view.engSetLevel == 3) && view.engSetLevel != 3) act |= kPageEngTruck;
+                    ImGui::EndDisabled();
+                    PageTip("This truck alone keeps the set, by the game's id of it. A truck taken out of the warehouse gets a new id and starts on its kind's settings.");
+                    ImGui::SameLine();
+                    char every[128];
+                    snprintf(every, sizeof every, "Every %s###engkind", view.truck);
+                    if (ImGui::RadioButton(every, view.engSetLevel == 2) && view.engSetLevel != 2) act |= kPageEngKind;
+                    PageTip(view.engSetKindSet ? "Every truck of this kind uses the kind's set. This truck's own set is kept, not in use: This truck only brings it back."
+                                               : "Every truck of this kind keeps this set. The kind has no set yet, so this truck's goes up to it.");
+                }
+                else if (view.engSetKept) ImGui::TextDisabled("Kept, not in use. Changes here edit the engine's default.");
+                if (view.engSetOwn && view.engSetLevel != 3 && view.engSetTruckKept) ImGui::TextDisabled("This truck's own set is kept, not in use: This truck only brings it back.");
+            }
             float peak = view.enginePeakRpm;
             int aspiration = view.engineAspiration, fuel = view.engineFuel;
             bool set = false;
@@ -350,6 +392,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 act |= kPageEngineTorque;
             }
             PageTip("Percent of this engine's torque the truck gets with Real engine on; lower it for an engine that pulls far too hard. Engine share on the Power tab mixes the result with the game's pull. Default 100 %.");
+            ImGui::TextDisabled("In force: %s%s", PageEngLevel(view.engTorqueFrom, "engine"), view.engTorqueFrom == 2 ? view.truck : "");
             if (set)
             {
                 st.enginePeak = floorf(peak / 50.0f + 0.5f) * 50.0f;
@@ -732,8 +775,9 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 if (!view.gearHoldOwn)
                     sprintf_s(whose, " Until it is moved: the %s class's%s, a scout 1.5 s and the others 2.5 s.", PageClassWord(view.autoClass),
                           view.autoByWeight ? " (by the truck's weight)" : "");
-                sprintf_s(gearTip, "Going up, the mod's automatic waits in each gear at least this long. Kept for this gearbox (%s).%s Needs Real engine (Power tab).", view.gearbox, whose);
+                sprintf_s(gearTip, "Going up, the mod's automatic waits in each gear at least this long. Kept for this gearbox (%s) by the Engine tab's Own settings.%s Needs Real engine (Power tab).", view.gearbox, whose);
                 ImGui::EndDisabled();
+                if (view.engHoldFrom) ImGui::TextDisabled("In force: %s%s", PageEngLevel(view.engHoldFrom, "gearbox"), view.engHoldFrom == 2 ? view.truck : "");
                 PageTip(gearTip);
             }
         }
