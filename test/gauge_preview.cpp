@@ -712,6 +712,12 @@ int wmain(int argc, wchar_t **argv)
             v.suspKnown = true;
             const float file[3][2] = { { 0.028f, 0.032f }, { 0.5f, 0.3f }, { -0.6f, -0.44f } };
             memcpy(v.suspFile, file, sizeof file);
+            // the camber's lines with made up figures: a gain and an offset on each end (BRIEF_swing_camber.md)
+            t.camberGainFront = 2.0f;
+            t.camberRestRear = 1.5f;
+            v.camberKnown = v.camberEnd[0] = v.camberEnd[1] = true;
+            const float camber[2][2] = { { 4.0f, 1.5f }, { 4.0f, 0.0f } };
+            memcpy(v.camberFile, camber, sizeof camber);
             PageState st;
             st.tabAsk = kTabSuspension;
             st.wholeTab = true;

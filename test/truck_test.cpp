@@ -25,6 +25,7 @@
 #include "frame_flex.h"
 #include "suspension_step.h"
 #include "air_axles.h"
+#include "camber.h"
 #include "gearbox_hooks.h"
 
 // The hooks' attach and detach (gearbox_hooks.h) on a function of the test's own: the hook counts and calls through.
@@ -3440,6 +3441,100 @@ int main()
               "air ticks: an end unticked in the middle of a level fades out (no wheel more than one fade step or the fade's last half millimetre), the rest places "
               "taken again, the end then on its springs; the keys' height only on the ticked end; an end ticked comes up with the keys, never jumping; a 6x4 with "
               "the front alone ticked: no shift on the four rear wheels, the front follows its own error");
+    }
+
+    // Camber gain and Camber at rest (BRIEF_swing_camber.md, camber.h, the Reviewer's addendum): four wheel objects of the
+    // test's own, the front pair and the rear pair, as the parser leaves them (6 degrees, physics 0, x1.8)
+    {
+        static uint8_t wo[5][0x100];
+        static CamberTune ct;
+        const uint64_t cls = 0x7123450;
+        const float six = 6.0f * kCamberRad;
+        auto put = [&](int i, uint32_t at, float cv) { memcpy(wo[i] + at, &cv, sizeof cv); };
+        auto get = [&](int i, uint32_t at) { float cv = 0.0f; memcpy(&cv, wo[i] + at, sizeof cv); return cv; };
+        auto build = [&](int i, uint64_t constraint) {
+            memcpy(wo[i], &cls, sizeof cls);
+            memcpy(wo[i] + kSuspConstraintAt, &constraint, sizeof constraint);
+        };
+        for (int i = 0; i < 4; i++)
+        {
+            memset(wo[i], 0, sizeof wo[i]);
+            build(i, 0x900000 + i);
+            put(i, 0x84, i == 3 ? -six : six); // the last one held negative, as a game holding a side's sign would
+            put(i, 0x88, 0.0f);
+            put(i, 0x8C, 1.8f);
+        }
+        TruckRefs cr = {};
+        cr.vehicle = 0x5550000;
+        cr.wheels = 4;
+        for (int i = 0; i < 4; i++) cr.wheel[i] = (uint64_t)(uintptr_t)wo[i];
+        const bool front[4] = { true, true, false, false };
+        const float cOne[2] = { 1.0f, 1.0f }, zero[2] = { 0.0f, 0.0f }, twoFront[2] = { 2.0f, 1.0f }, restRear[2] = { 0.0f, 2.0f };
+        const float x2 = 1.8f * 2.0f;
+        float cv = 0.0f;
+        // nothing written at x1 and +0; the stock from the fresh read
+        const bool cNone = CamberTuneStep(ct, kNativeMemory, cr, front, cOne, zero, cls) == 0 && ct.fresh && ct.newGeneration && get(0, 0x8C) == 1.8f && get(0, 0x84) == six &&
+                          CamberStock(ct, 0, kCamberGain, cv) && cv == 1.8f;
+        // x2 on the front: the front's multiplier only, the factor on the stock
+        const bool cGain = CamberTuneStep(ct, kNativeMemory, cr, front, twoFront, zero, cls) == 2 && get(0, 0x8C) == x2 && get(1, 0x8C) == x2 && get(2, 0x8C) == 1.8f &&
+                          get(0, 0x84) == six;
+        // the pass after: read back, still the mod's, nothing written again, no stock taken
+        const bool cHeld = CamberTuneStep(ct, kNativeMemory, cr, front, twoFront, zero, cls) == 0 && ct.putBack == 0 && !ct.fresh && !ct.newGeneration;
+        // a rebuild in place (new constraints, the same objects) with the written value left in them, then x2 twice: x2 of the file, not x4
+        for (int i = 0; i < 4; i++) build(i, 0x910000 + i);
+        const bool inPlace = CamberTuneStep(ct, kNativeMemory, cr, front, twoFront, zero, cls) == 0 && ct.newGeneration && !ct.fresh && get(0, 0x8C) == x2 &&
+                             CamberStock(ct, 0, kCamberGain, cv) && cv == 1.8f && CamberTuneStep(ct, kNativeMemory, cr, front, twoFront, zero, cls) == 0 && get(0, 0x8C) == x2;
+        // the swing mark reads the stock: a written x0 is still 1.8 there
+        const float noGain[2] = { 0.0f, 1.0f };
+        const bool zeroGain = CamberTuneStep(ct, kNativeMemory, cr, front, noGain, zero, cls) == 2 && get(0, 0x8C) == 0.0f && CamberStock(ct, 0, kCamberGain, cv) &&
+                              SwingMark(cv, get(0, 0x88));
+        // a rebuild that parses the file again: the stock read anew, the gain applied to it again
+        for (int i = 0; i < 4; i++) build(i, 0x920000 + i), put(i, 0x8C, 1.8f);
+        const bool reparsed = CamberTuneStep(ct, kNativeMemory, cr, front, twoFront, zero, cls) == 2 && get(0, 0x8C) == x2 && CamberStock(ct, 0, kCamberGain, cv) && cv == 1.8f;
+        // a changed file (2.0): its new stock, x2 of it
+        for (int i = 0; i < 4; i++) build(i, 0x930000 + i), put(i, 0x8C, 2.0f);
+        const bool changedFile = CamberTuneStep(ct, kNativeMemory, cr, front, twoFront, zero, cls) == 2 && get(0, 0x8C) == 4.0f && get(2, 0x8C) == 2.0f;
+        // back at x1: the stock back, then nothing written
+        const bool cBack = CamberTuneStep(ct, kNativeMemory, cr, front, cOne, zero, cls) == 2 && get(0, 0x8C) == 2.0f && CamberTuneStep(ct, kNativeMemory, cr, front, cOne, zero, cls) == 0;
+        // Camber at rest +2 degrees on the rear: 8 degrees, the negative one -8 (its own sign), the front untouched
+        const bool cRest = CamberTuneStep(ct, kNativeMemory, cr, front, cOne, restRear, cls) == 2 && Near(get(2, 0x84) / kCamberRad, 8.0f) && Near(get(3, 0x84) / kCamberRad, -8.0f) &&
+                          get(0, 0x84) == six && CamberStock(ct, 3, kCamberRender, cv) && cv == -six;
+        // the read back the pass after a write: the game put the stock back, so it is said and not written again until a rebuild
+        put(2, 0x84, six);
+        const bool putBack = CamberTuneStep(ct, kNativeMemory, cr, front, cOne, restRear, cls) == 0 && ct.putBack == 1 && get(2, 0x84) == six && get(3, 0x84) != -six &&
+                             CamberTuneStep(ct, kNativeMemory, cr, front, cOne, restRear, cls) == 0;
+        for (int i = 0; i < 4; i++) build(i, 0x940000 + i);
+        const bool cAgain = CamberTuneStep(ct, kNativeMemory, cr, front, cOne, restRear, cls) == 1 && Near(get(2, 0x84) / kCamberRad, 8.0f);
+        // a wheel whose file has no multiplier: the gain does nothing there, the angle still moves
+        put(1, 0x8C, 0.0f);
+        for (int i = 0; i < 4; i++) build(i, 0x950000 + i);
+        const float restBoth[2] = { 2.0f, 2.0f };
+        CamberTuneStep(ct, kNativeMemory, cr, front, cOne, zero, cls);
+        const float gainBoth[2] = { 3.0f, 3.0f };
+        CamberTuneStep(ct, kNativeMemory, cr, front, gainBoth, restBoth, cls);
+        const bool fileNone = get(1, 0x8C) == 0.0f && get(0, 0x8C) == 6.0f && Near(get(1, 0x84) / kCamberRad, 8.0f);
+        // another truck, then this one again with the values left: the kept stock, never compounded
+        memcpy(wo[4], wo[0], sizeof wo[4]);
+        TruckRefs cOther = cr;
+        cOther.vehicle = 0x5560000;
+        cOther.wheels = 1;
+        cOther.wheel[0] = (uint64_t)(uintptr_t)wo[4];
+        CamberTuneStep(ct, kNativeMemory, cOther, front, cOne, zero, cls);
+        const bool switched = CamberTuneStep(ct, kNativeMemory, cr, front, gainBoth, restBoth, cls) == 0 && get(0, 0x8C) == 6.0f && CamberStock(ct, 0, kCamberGain, cv) && cv == 2.0f;
+        // a wheel whose first word is not the wheel class is never touched
+        const uint64_t notWheel = 0x1234;
+        memcpy(wo[2], &notWheel, sizeof notWheel);
+        const float cBefore = get(2, 0x8C);
+        CamberTuneStep(ct, kNativeMemory, cr, front, cOne, zero, cls);
+        const bool foreign = get(2, 0x8C) == cBefore && ct.at[2] < 0;
+        // the tab's figures: the front's stock
+        float deg = 0.0f, mult = 0.0f;
+        const bool cTab = CamberEndFile(ct, 0, deg, mult) && Near(deg, 6.0f) && mult == 2.0f;
+        Check(cNone && cGain && cHeld && inPlace && zeroGain && reparsed && changedFile && cBack && cRest && putBack && cAgain && fileNone && switched && foreign && cTab,
+              "camber: nothing written at x1 and +0; the gain on the stock multiplier of its end only; a rebuild in place with the written value left, then x2 twice, "
+              "gives x2 of the file, not x4; a written x0 still reads 1.8 for the swing mark; a rebuild that parses again or a changed file gives a new stock, "
+              "the gain on it; x1 puts the stock back; +2 degrees at rest with each wheel's sign; a value the game put back the pass after the write is not "
+              "written again until a rebuild; no gain where the file has none; another truck and back keeps the stock; a foreign object is never touched");
     }
 
     RealImageTest();

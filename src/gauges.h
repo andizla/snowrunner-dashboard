@@ -147,6 +147,8 @@ struct GaugeSettings
     float zoneSoft, zoneFirm, zoneFrom, zoneTo;
     float rideFront, rideRear; // RideFront, RideRear: each axle's ride height in cm (kRideRange), its attach points shifted; middle axles go with the rear (a test)
     float swayFront, swayRear; // SwayFront, SwayRear: each axle's sway bar as a share of its spring rate (kSwayRange), 0 none (a test)
+    float camberGainFront, camberGainRear; // CamberGainFront, CamberGainRear: the wheels' camber multiplier as a factor of the file's (kCamberGainRange), the front axle and every other; 1 writes nothing (camber.h)
+    float camberRestFront, camberRestRear; // CamberRestFront, CamberRestRear: degrees added to the file's render camber (kCamberRestRange), an offset, never the angle; 0 writes nothing
     bool suspDisplay;        // SuspDisplay: the suspension display, each wheel's travel, its end hits and whether it hangs, and the articulation
     bool airSuspension;      // AirSuspension: each wheel held at its rest place of the first standstill, cargo or not; BindRideUp and BindRideDown move it (a test)
     bool airHorizon;         // AirHorizon: with AirSuspension, the body's pitch and roll levelled to the horizon instead of to the wheels (a test)
@@ -219,6 +221,8 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.bumpForce = 3.0f;
     s.bumpDamping = 2.0f;
     s.springRise = 2.0f;
+    s.camberGainFront = s.camberGainRear = 1.0f;
+    s.camberRestFront = s.camberRestRear = 0.0f;
     s.springCross = 0.5f;
     s.zoneSoft = 0.7f;
     s.zoneFirm = 1.5f;
@@ -288,6 +292,8 @@ inline float SettingsStep(float v, float step)
     return v < 0.0f ? -r : r;
 }
 static const float kRideStep = 1.0f, kSwayStep = 0.01f;
+// Camber gain and Camber at rest (BRIEF_swing_camber.md): x0 to x3 of the file's multiplier, the file's angle plus or minus 10 degrees
+static const float kCamberGainRange[2] = { 0.0f, 3.0f }, kCamberRestRange[2] = { -10.0f, 10.0f }, kCamberGainStep = 0.05f, kCamberRestStep = 0.5f;
 // The air suspension's keys (build C): steps of kRideKeyStep cm within kRideKeyMost, under kRideKeyKmh only. dir +1 up, -1 down.
 static const int kRideKeyStep = 2, kRideKeyMost = 10;
 static const float kRideKeyKmh = 20.0f;
@@ -353,6 +359,11 @@ inline void SettingsClamp(GaugeSettings &s)
     s.airAxleMask = s.airAxleMask < 0 ? -1 : s.airAxleMask & 3; // its two bits (air_axles.h)
     s.swayFront = SettingsRange(SettingsStep(s.swayFront, kSwayStep), kSwayRange[0], kSwayRange[1]);
     s.swayRear = SettingsRange(SettingsStep(s.swayRear, kSwayStep), kSwayRange[0], kSwayRange[1]);
+    // on the sliders' steps, so x1 and +0 are exactly 1 and 0 and write nothing
+    s.camberGainFront = SettingsRange(SettingsStep(s.camberGainFront, kCamberGainStep), kCamberGainRange[0], kCamberGainRange[1]);
+    s.camberGainRear = SettingsRange(SettingsStep(s.camberGainRear, kCamberGainStep), kCamberGainRange[0], kCamberGainRange[1]);
+    s.camberRestFront = SettingsRange(SettingsStep(s.camberRestFront, kCamberRestStep), kCamberRestRange[0], kCamberRestRange[1]);
+    s.camberRestRear = SettingsRange(SettingsStep(s.camberRestRear, kCamberRestStep), kCamberRestRange[0], kCamberRestRange[1]);
     s.damperCurve = s.damperCurve < 0 || s.damperCurve >= kDamperCurves ? 0 : s.damperCurve;
     s.lowCompression = SettingsRange(s.lowCompression, kDamperRange[0], kDamperRange[1]);
     s.highCompression = SettingsRange(s.highCompression, kDamperRange[0], kDamperRange[1]);
@@ -516,6 +527,7 @@ struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWar
                    bool suspKnown; float suspFile[3][2]; // the driven truck's file: spring, damping and the compression end (m), [front, rear] (wheel 0 and the last)
                    char gearbox[96]; float gearHold; bool gearHoldOwn; // the driven truck's gearbox (its key, "" for none), the seconds each gear is held going up with the mod's engine, and whether its file sets them
                    int autoClass; bool autoByWeight; float massKg; // the class the automatic goes by for it, whether by its weight (no scales of its own), and that weight (0 not read)
+                   bool camberKnown; bool camberEnd[2]; float camberFile[2][2]; // the driven truck's camber (camber.h) is read; each end has a wheel; its file's render angle (degrees) and multiplier, [front, rear]
                    char engine[96]; bool engineOwn, engineCustom; float enginePeakRpm; int engineAspiration, engineFuel; float engineTorque, engineFigure; bool engSetOwn, engSetKept, engSetTruckKept, engSetKindSet; int engSetLevel, engTorqueFrom, engHoldFrom; // the engine's settings per truck: a level in force or kept, this truck's kept, the kind's there, the level in force (0 none, 1 the default, 2 the kind's, 3 this truck's), and the level each figure came from // the driven truck's engine ("" not known): its own profile or not, a whole curve of its own in it, the peak torque's speed in force, turbo or not, its fuel (kFuelClass the class's), the share of its torque the truck gets (1 none set), and the engine's torque figure from the game's files (0 not read)
                    float engineIdle, engineRedline; float engineCurve[kEnginePlot]; // the slider's range, and the torque in force from idle to the tachometer's top, for the tab's plot
                    // the gearbox's bindings as text (input_bindings.h, kActCount actions, two slots), the capture the tab

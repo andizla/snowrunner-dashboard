@@ -38,6 +38,7 @@ int NgMenuKeyFromIni(); // the menu's key, which a capture never binds
 #include "game_globals.h"
 #include "clock_scan.h"
 #include "suspension_scan.h"
+#include "camber.h"
 #include "suspension_step.h"
 #include "air_axles.h"
 #include "frame_flex.h"
@@ -741,6 +742,10 @@ static void WriteIni(const GaugeSettings &s)
     num(L"RideRear", s.rideRear);
     num(L"SwayFront", s.swayFront);
     num(L"SwayRear", s.swayRear);
+    num(L"CamberGainFront", s.camberGainFront);
+    num(L"CamberGainRear", s.camberGainRear);
+    num(L"CamberRestFront", s.camberRestFront);
+    num(L"CamberRestRear", s.camberRestRear);
     whole(L"SuspDisplay", s.suspDisplay ? 1 : 0);
     whole(L"AirSuspension", s.airSuspension ? 1 : 0);
     whole(L"AirHorizon", s.airHorizon ? 1 : 0);
@@ -1063,7 +1068,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; under and over DamperKnee (m/s, 0.02 to 0.5), rising and falling, 0.25 to 4 (a test; 1 and linear = the truck's own).\n"
                         L"; BumpStops=1: force (BumpForce, 1 to 6, the spring's at the end times it) and damping (BumpDamping, 1 to 4) over the last BumpZone m (0.03 to 0.2) of the\n"
                         L"; travel. SpringCurve 0 linear, 1 progressive, 2 dual rate (SpringRise 1 to 3, SpringCross 0.2 to 0.8). DampingZones=1: ZoneSoft (0.5 to 1)\n"
-                        L"; from ZoneFrom to ZoneTo (shares of the travel), ZoneFirm (1 to 3) toward the ends. All tests, off by default.\n"
+                        L"; from ZoneFrom to ZoneTo (shares of the travel), ZoneFirm (1 to 3) toward the ends. All tests, off by default. CamberGainFront, CamberGainRear: the wheels' camber multiplier, 0 to 3 of the file's; CamberRestFront, CamberRestRear: degrees on the file's camber, -10 to 10 (the look only; 1 and 0 = the file's).\n"
                         L"; SoundVolume (0 to 100) is how loud the turbo is heard when the pedal comes up quickly under boost: it flutters,\n"
                         L"; longer and louder the more boost there was, until the pedal goes down again. The oil warning goes by it too.\n"
                         L"; 0 = no sound. SoundsOnly=1 plays the sounds and draws no cluster.\n"
@@ -1196,6 +1201,10 @@ static void ReadIni(GaugeSettings &s)
     s.rideRear = IniFloat(L"RideRear", s.rideRear, ini);
     s.swayFront = IniFloat(L"SwayFront", s.swayFront, ini);
     s.swayRear = IniFloat(L"SwayRear", s.swayRear, ini);
+    s.camberGainFront = IniFloat(L"CamberGainFront", s.camberGainFront, ini);
+    s.camberGainRear = IniFloat(L"CamberGainRear", s.camberGainRear, ini);
+    s.camberRestFront = IniFloat(L"CamberRestFront", s.camberRestFront, ini);
+    s.camberRestRear = IniFloat(L"CamberRestRear", s.camberRestRear, ini);
     {
         // an ini from build B may hold up to 1.5; above 0.3 the bars swing, so it is held there (said once a start)
         static bool said = false;
@@ -1700,6 +1709,8 @@ static const struct { const wchar_t *name; float GaugeSettings::*v; } kSuspSetFl
     { L"SpringScale", &GaugeSettings::springScale },     { L"DampingScale", &GaugeSettings::dampingScale },
     { L"ExtraTravel", &GaugeSettings::extraTravel },     { L"RideFront", &GaugeSettings::rideFront },
     { L"RideRear", &GaugeSettings::rideRear },           { L"SwayFront", &GaugeSettings::swayFront },
+    { L"CamberGainFront", &GaugeSettings::camberGainFront }, { L"CamberGainRear", &GaugeSettings::camberGainRear },
+    { L"CamberRestFront", &GaugeSettings::camberRestFront }, { L"CamberRestRear", &GaugeSettings::camberRestRear },
     { L"SwayRear", &GaugeSettings::swayRear },           { L"LowCompression", &GaugeSettings::lowCompression },
     { L"HighCompression", &GaugeSettings::highCompression }, { L"LowRebound", &GaugeSettings::lowRebound },
     { L"HighRebound", &GaugeSettings::highRebound },     { L"DamperKnee", &GaugeSettings::damperKnee },
@@ -3563,6 +3574,7 @@ struct TruckWatch
     char airForId[40];
     int airFileKind;
     uint64_t airSaidFor;        // the vehicle the air axles' and the swing axles' lines were logged for
+    CamberTune camber;          // each wheel's camber stock and what Camber gain and Camber at rest wrote (camber.h)
     ULONGLONG airPressedAt;     // the last press, for the overlay's height box
     uint64_t airVehicle;        // the truck the height was set on
     float kmh;                  // the driven truck's speed on the last pass, 0 none
@@ -4382,15 +4394,74 @@ static void AirAxlesLog(int mask, int from, const SuspStepWatch &p, const TruckR
     else Log(L"suspension: air on every axle (front and rear; %s)", AirFromText(from));
 }
 
-// Once per truck: the swing axles' mark (101, tonight's part: read and said, nothing changed by it).
-static void SwingLog(const TruckMemory &m, const TruckRefs &r)
+// Camber gain and Camber at rest (BRIEF_swing_camber.md, camber.h): each wheel's render camber and its multiplier from
+// the stock and the sliders, the front axle by SuspPairs' split as RideFront takes it. Written only where a slider is
+// off x1 and +0. The file's three figures of each wheel are logged once per generation (the brief's point 1), each
+// write with what is read back, and a value the game put back the pass after a write.
+static void CamberPass(CamberTune &t, const TruckMemory &m, const TruckRefs &r, const TruckRaw &raw, const GaugeSettings &s)
+{
+    const int n = r.wheels < kMaxWheels ? r.wheels : kMaxWheels;
+    float forward[kMaxWheels] = {}, left[kMaxWheels] = {};
+    for (int i = 0; i < n && i < raw.wheels; i++)
+    {
+        float local[3];
+        SuspLocal(raw, i, local);
+        forward[i] = local[0], left[i] = local[2];
+    }
+    int partner[kMaxWheels];
+    bool isLeft[kMaxWheels], front[kMaxWheels], rearmost[kMaxWheels];
+    SuspPairs(n, forward, left, partner, isLeft, front, rearmost);
+    const float gain[2] = { s.camberGainFront, s.camberGainRear }, rest[2] = { s.camberRestFront, s.camberRestRear };
+    CamberTuneStep(t, m, r, front, gain, rest, m.base + g_places.wheelClass);
+    if (t.newGeneration)
+    {
+        // one line: each wheel's end and side, its render and physics camber in degrees and its multiplier as read
+        char line[1400];
+        int used = 0;
+        for (int i = 0; i < t.wheels && used >= 0 && used < (int)sizeof line - 80; i++)
+        {
+            if (t.at[i] < 0)
+            {
+                used += _snprintf_s(line + used, sizeof line - used, _TRUNCATE, "%s%d not a wheel object", i ? "; " : "", i);
+                continue;
+            }
+            const CamberWheel &c = t.kept[t.at[i]];
+            used += _snprintf_s(line + used, sizeof line - used, _TRUNCATE, "%s%d %s %s %.2f, %.2f, x%.2f", i ? "; " : "", i, front[i] ? "front" : "rear", isLeft[i] ? "left" : "right",
+                                c.stock[kCamberRender] / kCamberRad, c.physics / kCamberRad, c.stock[kCamberGain]);
+        }
+        if (used < 0) used = 0;
+        line[used < (int)sizeof line ? used : (int)sizeof line - 1] = 0;
+        Log(L"camber: generation %u, per wheel the render and physics camber in degrees and the multiplier as read: %S", t.generation, line);
+    }
+    if (t.putBack) Log(L"camber: %d values back at the file's the pass after the write: the game sets them from elsewhere, not written again until a rebuild", t.putBack);
+    if (t.wroteNow)
+    {
+        float back[2][kCamberValues] = {};
+        for (int e = 0; e < 2; e++)
+            for (int i = 0; i < t.wheels; i++)
+                if ((front[i] ? 0 : 1) == e && t.at[i] >= 0)
+                {
+                    m.get(r.wheel[i] + kWheelCamberRender, back[e][kCamberRender]);
+                    m.get(r.wheel[i] + kWheelCamberMultiplier, back[e][kCamberGain]);
+                    break;
+                }
+        Log(L"camber: %d values written, front x%.2f %+.1f degrees, rear x%.2f %+.1f degrees; read back %.2f degrees x%.2f (front), %.2f degrees x%.2f (rear)", t.wroteNow,
+            gain[0], rest[0], gain[1], rest[1], back[0][kCamberRender] / kCamberRad, back[0][kCamberGain], back[1][kCamberRender] / kCamberRad, back[1][kCamberGain]);
+    }
+}
+
+// Once per truck: the swing axles' mark (101: read and said, nothing changed by it). The multiplier is the stock
+// camber.h keeps, never the live value, so a gain the mod wrote (x0 among them) never hides a swing axle (the
+// Reviewer's point 4 on BRIEF_swing_camber.md).
+static void SwingLog(const TruckMemory &m, const TruckRefs &r, const CamberTune &c)
 {
     int swing = 0;
     float most = 0.0f;
     for (int i = 0; i < r.wheels && i < kMaxWheels; i++)
     {
         float multiplier = 0.0f, physics = 0.0f;
-        if (!m.get(r.wheel[i] + kWheelCamberMultiplier, multiplier) || !m.get(r.wheel[i] + kWheelCamberPhysics, physics) || !SwingMark(multiplier, physics)) continue;
+        const bool kept = c.vehicle == r.vehicle && CamberStock(c, i, kCamberGain, multiplier);
+        if ((!kept && !m.get(r.wheel[i] + kWheelCamberMultiplier, multiplier)) || !m.get(r.wheel[i] + kWheelCamberPhysics, physics) || !SwingMark(multiplier, physics)) continue;
         swing++;
         most = fmaxf(most, multiplier);
     }
@@ -4765,6 +4836,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         float v = -1.0f;
         if (m.get(w.refs.wheel[0] + kSuspConstraintAt, c) && m.get(c + kSuspValueAt[stepTest->value], v)) w.step.value = v;
     }
+    if (w.found) CamberPass(w.camber, m, w.refs, raw, s);
     // the air's mask (BRIEF_air_axle_ticks.md): this truck's own ticks, else the kind's, else its file's AirAxles, else
     // the mod's table, else none. The file is read again when the kind or the truck's id changes (the Reviewer's point
     // 7); the ticks come with the set in force on each pass, so a tick, a level, a take-over or Defaults is in at once
@@ -4784,7 +4856,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     {
         w.airSaidFor = w.refs.vehicle;
         AirAxlesLog(w.airAxles, w.airFrom, w.step, w.refs);
-        SwingLog(m, w.refs);
+        SwingLog(m, w.refs, w.camber);
     }
     const uint32_t generation = SuspStepPass(w.step, m, w.refs, raw, s, w.tune, w.found, now, w.swayOff, w.airHeight, w.tilt, w.airAxles);
     if (probe && w.found) SuspTravelProbe(w.travel, w.travelAt, m, w.refs, raw, now, generation);
@@ -6777,6 +6849,10 @@ static DWORD WINAPI Run(void *)
             const int field[3] = { kSuspStrength, kSuspDamping, kSuspMin };
             for (int k = 0; k < 3; k++) v.suspFile[k][0] = front.stock[field[k]], v.suspFile[k][1] = rear.stock[field[k]];
         }
+        // the camber's file figures per end (camber.h): the stock, never a value the mod wrote
+        v.camberKnown = driving && watch.camber.vehicle == watch.refs.vehicle && watch.camber.wheels > 0;
+        for (int e = 0; e < 2; e++)
+            v.camberEnd[e] = v.camberKnown && CamberEndFile(watch.camber, e, v.camberFile[e][0], v.camberFile[e][1]);
         v.autoClass = AutoClass(watch, inForce.tachClass);
         v.autoByWeight = driving && !watch.ownScales && watch.mass > 0.0f;
         v.massKg = driving ? watch.mass : 0.0f;
@@ -6946,7 +7022,8 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
            a.springScale == b.springScale && a.dampingScale == b.dampingScale && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
-           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync;
+           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
+           a.camberGainFront == b.camberGainFront && a.camberGainRear == b.camberGainRear && a.camberRestFront == b.camberRestFront && a.camberRestRear == b.camberRestRear;
 }
 
 static int g_failed = 0;
@@ -7772,6 +7849,60 @@ int wmain(int argc, wchar_t **argv)
                     for (int i = 1; i < 11; i++) newest = newest && has(ids[i]);
                     Check(marked && cleared && tenKept && noSave && !has(ids[0]) && newest && has(id1) && has(id2),
                           "suspension: a take-over marks the old section, the old id driven again clears it, ten marked stay, the 11th take-over drops the oldest with no save, a save keeps the newest 10 and the unmarked");
+                }
+                // the camber (BRIEF_swing_camber.md point 3): CamberGainFront, CamberGainRear, CamberRestFront and
+                // CamberRestRear kept with the set at the kind's level and the truck's; a slider moved makes the set the kind's
+                // own; This truck only and the take-over carry them; a section without them reads the file's (x1 and +0)
+                {
+                    const char *cam_k = "camber_x", *cam_id = "{C1111111-1111-1111-1111-111111111111}", *cam_new = "{C2222222-2222-2222-2222-222222222222}";
+                    DeleteFileW(truckFile(cam_k).c_str());
+                    SettingsState cam = {};
+                    SettingsDefaults(cam.plain);
+                    SettingsFor(cam, cam_k, cam_id);
+                    const bool cam_start = cam.s.camberGainFront == 1.0f && cam.s.camberGainRear == 1.0f && cam.s.camberRestFront == 0.0f && cam.s.camberRestRear == 0.0f &&
+                                           SuspLevel(cam) == kSuspLevelDefault;
+                    GaugeSettings cam_in = cam.s;
+                    cam_in.camberGainFront = 2.0f, cam_in.camberRestRear = -1.5f;
+                    SettingsTake(cam, cam_in);
+                    SettingsWrite(cam);
+                    GaugeSettings cam_kind = cam.plain;
+                    const int cam_kindRead = ReadTruckSusp(cam_k, cam_kind);
+                    const bool cam_toKind = SuspLevel(cam) == kSuspLevelKind && cam_kindRead == kSuspInForce && cam_kind.camberGainFront == 2.0f && cam_kind.camberRestRear == -1.5f &&
+                                            cam.plain.camberGainFront == 1.0f;
+                    // This truck only, then the truck's own figures
+                    SettingsSuspLevel(cam, true);
+                    cam_in = cam.s;
+                    cam_in.camberGainRear = 0.0f, cam_in.camberRestFront = 3.0f;
+                    SettingsTake(cam, cam_in);
+                    SettingsWrite(cam);
+                    GaugeSettings cam_truck = cam.plain, cam_kind2 = cam.plain;
+                    ReadTruckSusp(cam_k, cam_truck, cam_id);
+                    ReadTruckSusp(cam_k, cam_kind2);
+                    const bool cam_levels = SuspLevel(cam) == kSuspLevelTruck && cam_truck.camberGainFront == 2.0f && cam_truck.camberGainRear == 0.0f && cam_truck.camberRestFront == 3.0f &&
+                                            cam_truck.camberRestRear == -1.5f && cam_kind2.camberGainRear == 1.0f && cam_kind2.camberRestFront == 0.0f;
+                    // the take-over: the new id has them, read back through SettingsFor
+                    TruckSuspTakeOver(cam_k, cam_id, cam_new);
+                    SettingsFor(cam, cam_k, cam_new);
+                    const bool cam_taken = SuspLevel(cam) == kSuspLevelTruck && cam.s.camberGainRear == 0.0f && cam.s.camberRestFront == 3.0f;
+                    // old sections without the keys: the truck's takes the kind's, and with neither holding them x1 and +0
+                    for (const wchar_t *cam_key : { L"CamberGainFront", L"CamberGainRear", L"CamberRestFront", L"CamberRestRear" })
+                        WritePrivateProfileStringW(SuspSectionOf(cam_new).c_str(), cam_key, nullptr, truckFile(cam_k).c_str());
+                    SettingsFor(cam, cam_k, cam_new);
+                    const bool cam_underKind = SuspLevel(cam) == kSuspLevelTruck && cam.s.camberGainFront == 2.0f && cam.s.camberGainRear == 1.0f && cam.s.camberRestRear == -1.5f;
+                    for (const wchar_t *cam_key : { L"CamberGainFront", L"CamberGainRear", L"CamberRestFront", L"CamberRestRear" })
+                        WritePrivateProfileStringW(kSuspSection, cam_key, nullptr, truckFile(cam_k).c_str());
+                    SettingsFor(cam, cam_k, cam_new);
+                    const bool cam_old = cam_underKind && SuspLevel(cam) == kSuspLevelTruck && cam.s.camberGainFront == 1.0f && cam.s.camberGainRear == 1.0f &&
+                                         cam.s.camberRestFront == 0.0f && cam.s.camberRestRear == 0.0f;
+                    // the ini's figures held to the ranges and steps
+                    GaugeSettings cam_c = cam.plain;
+                    cam_c.camberGainFront = 9.0f, cam_c.camberGainRear = 1.01f, cam_c.camberRestFront = -20.0f, cam_c.camberRestRear = 0.2f;
+                    SettingsClamp(cam_c);
+                    const bool cam_clamp = cam_c.camberGainFront == 3.0f && cam_c.camberGainRear == 1.0f && cam_c.camberRestFront == -10.0f && cam_c.camberRestRear == 0.0f;
+                    DeleteFileW(truckFile(cam_k).c_str());
+                    Check(cam_start && cam_toKind && cam_levels && cam_taken && cam_old && cam_clamp,
+                          "camber: x1 and +0 to start; a slider moved makes the set the kind's own, the default untouched; This truck only keeps its own figures beside the kind's; "
+                          "the take-over carries them; a truck's section without the keys takes the kind's, and with neither x1 and +0; the figures held to x0 to x3 and -10 to +10 on their steps");
                 }
                 // the air's ticks (BRIEF_air_axle_ticks.md): AirAxleMask kept with the set at the kind's level and the
                 // truck's, never in Gauges.ini, never the last truck's; written only once ticked; Defaults takes it out;

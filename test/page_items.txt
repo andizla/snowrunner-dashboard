@@ -1,6 +1,10 @@
 ##airfull
 ##airheight
 ##airsync
+##cambergainfront
+##cambergainrear
+##camberrestfront
+##camberrestrear
 ##airhorizon
 ##airsuspension
 ##ambient

@@ -888,9 +888,23 @@ the level began with (<code>SuspLevelFade</code>), then the rest places are take
 keys' height. The log says once per truck, and again when the mask or its source changes, "suspension: air on every axle but
 the front one (rear)", "suspension: air on the front axle only (front)", "suspension: air on every axle (front and rear; ...)" or
 "suspension: no axle ticked Air, leaf on every axle", with where it came from. Sync all enabled (<code>AirSync</code>, a view
-setting) shows a slider for the keys' own figure, set by the keys' rules; it is never saved and is back at 0 on another truck. Swing axles (101, read only for now): a wheel's
+setting) shows a slider for the keys' own figure, set by the keys' rules; it is never saved and is back at 0 on another truck. Swing axles (101): a wheel's
 CamberSuspensionMultiplier at wheel + 0x8C over 1 with its CamberAnglePhysics at + 0x88 at 0, as the five swing trucks have
-it; "suspension: swing axles, the camber follows the travel" says so once per truck.</p>
+it; "suspension: swing axles, the camber follows the travel" says so once per truck. It reads the stock <code>camber.h</code>
+keeps, so a gain of x0 written there still marks a swing axle.</p>
+<p>Camber gain and Camber at rest (<code>camber.h</code>). The game's wheel parser stores CamberAngleRender at wheel + 0x84 and
+CamberAnglePhysics at + 0x88 in radians, and CamberSuspensionMultiplier at + 0x8C as written (found in the code of 6ab52f5d and
+6a607c05). The look's code reads + 0x84 and + 0x8C from the wheel object on each call and turns the tilt to the wheel's side
+itself, so one figure serves both sides. The parser fills the wheel object itself, so the stock is the first read of each wheel
+object, kept by its address. A value equal to the word the mod last wrote there is the mod's: a rebuild that leaves it never
+becomes a stock, and a gain of x2 stays x2 of the file. Any other value is a new stock. A new truck, new wheel objects or new
+constraints start a generation. The gain multiplies the stock multiplier. The offset goes onto the stock angle with the stock's
+own sign, within the parser's 30 degrees. The front is the front axle, as RideFront splits. At x1 and +0 nothing is written, and
+a value the mod wrote goes back to the stock. On the pass after a write the value is read again. One back at the stock is logged
+("camber: n values back at the file's the pass after the write") and not written again until a rebuild. Once per generation
+"camber: generation n, per wheel the render and physics camber in degrees and the multiplier as read" lists every wheel, and each
+write logs "camber: n values written" with what is read back. CamberAnglePhysics is never written. A truck left keeps what its set
+wrote.</p>
 <p>With <code>AirHorizon</code> the pitch and roll follow the chassis's tilt to the horizon, as the tilt lamp reads it,
 instead of the wheels' plane. The 12 cm of shift give about 7 degrees side to side; past that it gets as close as it can.
 Over 10 km/h the pitch and roll fade back to 0 and the height is kept.</p>
@@ -1311,6 +1325,11 @@ kind or per truck. Until a truck has ticks they come from <code>AirAxles=all</co
 mod knows nothing about, mod trucks too, starts with none ticked: if it had air before, tick its ends. With none ticked the two settings
 are greyed and Ride up and Ride down do nothing. A tick changed while you drive fades the levelling out first. Sync all enabled shows one
 slider for the air's height. Defaults takes the ticks out. The tab and the log say where the ticks came from.</li>
+<li>Camber gain and Camber at rest in the Suspension tab, for the front axle and every other. Camber gain scales how much each wheel
+tilts as it travels, x0 to x3 of its file's figure. Camber at rest adds -10 to +10 degrees to the wheel's tilt in its file. On a swing
+axle they line the drawn wheel up with the half-axle. Only the look changes: the physics wheel stays as the game has it. They are kept
+with the suspension set, per kind or per truck. At x1 and +0 nothing is written. <code>Gauges.log</code> names each wheel's three
+camber figures once a truck.</li>
 <li>Engine torque and Upshift delay can be kept per truck, as the suspension is. One scout's slider no longer moves every scout with
 that engine. The Engine tab has Own settings, Make this the engine's default and For, as the Suspension tab has. A truck keeps a figure
 for each engine and gearbox fitted. A figure it has none for comes from the engine's or the gearbox's default, then 100 % and the
@@ -1518,6 +1537,7 @@ def s_constants():
              ['Spring and zone blends', '0.05 and 0.1 of the travel', '', 'not stated'],
              ['Attach point shift', '±0.12', 'm', "the game's DeviationMax range"],
              ['Sway bars', "0 to 0.3 of the spring rate, steps of 0.01; an axle's two wheels within 0.2 m", '', 'above 0.3 they swing'],
+             ['Camber', 'gain x0 to x3, steps of 0.05; at rest -10 to 10 degrees, steps of 0.5, held to ±30', '', "the game's parser holds the angle to ±30"],
              ['Air suspension', 'rest taken after 1 s under 0.1 m/s; τ 3 s; under 10 km/h; keys 2 cm, within 10 cm, under 20 km/h', '', "the author's 10 km/h"]]
     return f'<h2>Constants at a glance</h2>{table(["Constant", "Value", "Unit", "Where it comes from"], rows, "The models\' constants", "small")}'
 

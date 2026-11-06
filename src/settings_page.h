@@ -942,13 +942,13 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         changed(ImGui::SliderFloat("##ridefront", &s.rideFront, kRideRange[0], kRideRange[1], RideFormat(s.rideFront), ImGuiSliderFlags_AlwaysClamp));
         s.rideFront = SettingsStep(s.rideFront, kRideStep);
         PageTip("A test: the front axle's ride height in cm, above 0 higher. It stops on a truck with an active ride height. Default 0.");
-        airTick("Air##airfront", kAirMaskFront, "The front axle alone has air. The game's airbags are only a look, so the mod asks. Only ticked ends level and move with the air's height.");
+        airTick("Air##airfront", kAirMaskFront, "Tick: the front axle gets air. The game's airbags are only a look, so the mod asks. Only ticked ends level and move with the air's height.");
         PageLabel("Ride rear", labelX);
         ImGui::SetNextItemWidth(w);
         changed(ImGui::SliderFloat("##riderear", &s.rideRear, kRideRange[0], kRideRange[1], RideFormat(s.rideRear), ImGuiSliderFlags_AlwaysClamp));
         s.rideRear = SettingsStep(s.rideRear, kRideStep);
         PageTip("A test: the rear axles' ride height in cm, above 0 higher. It stops on a truck with an active ride height. Default 0.");
-        airTick("Air##airrear", kAirMaskRear, "Every axle but the front one has air. The game's airbags are only a look, so the mod asks. Only ticked ends level and move with the air's height.");
+        airTick("Air##airrear", kAirMaskRear, "Tick: every axle but the front one gets air. The game's airbags are only a look, so the mod asks. Only ticked ends level and move with the air's height.");
         if (view.airKnown)
         {
             const char *from = view.airFrom == kAirFromTruck ? "this truck's own ticks" : view.airFrom == kAirFromKind ? "the kind's ticks"
@@ -971,6 +971,53 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         s.swayRear = SettingsStep(s.swayRear, kSwayStep);
         PageTip("A test: a rear sway bar; 0.1 to 0.2 works well, and it ends at 0.3. It stops on a truck with an active ride height. Default none.");
         if (view.swayOff) ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "The sway bars are disconnected.");
+        // the camber (BRIEF_swing_camber.md, camber.h): a gain on the file's multiplier and an offset on the file's render
+        // angle, for the front axle and every other, each with the file's figure and the one in force. The look only
+        auto camberPair = [&](const char *idF, const char *idR, float *f, float *r, const float range[2], float step, const char *fmtF, const char *fmtR, const char *tip) {
+            const float half = (w - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+            ImGui::SetNextItemWidth(half);
+            changed(ImGui::SliderFloat(idF, f, range[0], range[1], fmtF, ImGuiSliderFlags_AlwaysClamp));
+            *f = SettingsStep(*f, step);
+            PageTip(tip);
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(half);
+            changed(ImGui::SliderFloat(idR, r, range[0], range[1], fmtR, ImGuiSliderFlags_AlwaysClamp));
+            *r = SettingsStep(*r, step);
+            PageTip(tip);
+        };
+        // an end's file figure and the one in force, as text ("-" for an end with no wheel read)
+        auto camberNow = [&](int end, bool rest, float v, char *file, char *now, size_t size) {
+            if (!view.camberEnd[end])
+            {
+                snprintf(file, size, "-");
+                snprintf(now, size, "-");
+                return;
+            }
+            const float f = view.camberFile[end][rest ? 0 : 1];
+            const float n = rest ? fmaxf(-30.0f, fminf(30.0f, f + (f < 0.0f ? -v : v))) : f * v;
+            snprintf(file, size, rest ? "%.1f" : "x%.2f", f);
+            snprintf(now, size, rest ? "%.1f" : "x%.2f", n);
+        };
+        auto camberLine = [&](bool rest, float front, float rear) {
+            if (!view.camberKnown)
+            {
+                ImGui::TextDisabled("No truck driven: its file's figures show here.");
+                return;
+            }
+            char f0[16], n0[16], f1[16], n1[16];
+            camberNow(0, rest, front, f0, n0, sizeof f0);
+            camberNow(1, rest, rear, f1, n1, sizeof f1);
+            ImGui::TextDisabled("File %s / %s%s, now %s / %s (front / rear)", f0, f1, rest ? " degrees" : "", n0, n1);
+        };
+        PageLabel("Camber gain", labelX);
+        camberPair("##cambergainfront", "##cambergainrear", &s.camberGainFront, &s.camberGainRear, kCamberGainRange, kCamberGainStep, "front x%.2f", "rear x%.2f",
+                   "How much each wheel tilts as it travels, as a factor of its file's. 0 keeps the tilt at rest. An end at File x0 has nothing to scale. Default x1.");
+        camberLine(false, s.camberGainFront, s.camberGainRear);
+        PageLabel("Camber at rest", labelX);
+        camberPair("##camberrestfront", "##camberrestrear", &s.camberRestFront, &s.camberRestRear, kCamberRestRange, kCamberRestStep, "front %+.1f", "rear %+.1f",
+                   "The wheel's tilt at rest, in degrees added to its file's. Default +0.");
+        camberLine(true, s.camberRestFront, s.camberRestRear);
+        ImGui::TextDisabled("Swing axles: match the wheel's tilt to the half-axle's. The look only.");
         // the air suspension (a test, build C): it levels each wheel on top of the ride height, on the ends ticked Air
         // only (BRIEF_air_axle_ticks.md); a truck with none ticked has it greyed
         const bool noAir = view.airKnown && airMask == 0;
