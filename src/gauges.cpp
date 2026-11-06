@@ -5340,8 +5340,13 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                     Log(L"road load: the wheels' drag read from %d wheels (%d on the ground), the mass taken %.0f kg (the truck's bodies %.0f, the wheels' %.0f): %.3f m/s2 now",
                         w.refs.wheels, dampGrounded, dampMass, dampFiles, dampMass - dampFiles, dampRaw);
                 else
-                    Log(L"road load: the wheels' drag not read (%d of %d wheel models found, the shape's vtable %s): the gears' pull is not learned until they are read",
-                        w.refs.wheels, w.refs.models, WheelCylinderVtable() ? L"found" : L"not found");
+                {
+                    // with every model and the vtable found, a wheel's own figures were out of bounds (review N1)
+                    const bool allFound = w.refs.wheels > 0 && w.refs.models == w.refs.wheels && WheelCylinderVtable();
+                    Log(L"road load: the wheels' drag not read (%d of %d wheel models found, the shape's vtable %s%s): the gears' pull is not learned until they are read",
+                        w.refs.wheels, w.refs.models, WheelCylinderVtable() ? L"found" : L"not found",
+                        allFound ? L", a wheel's figures out of bounds: mass, damping, axle or radius" : L"");
+                }
             }
             const int g = raw.gearEngaged;
             const float top = g >= 1 ? TruckGearTop(raw, g) : 0.0f, groundX = top > 0.0f && w.gearbox.grip > 0.0f ? w.gearbox.grip * fmaxf(v, 0.0f) / top : 0.0f;
