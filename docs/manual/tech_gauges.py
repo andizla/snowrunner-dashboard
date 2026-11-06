@@ -582,8 +582,13 @@ of such a pick. It hands the gears back on R, N or high, on a gear the player pi
 the automatic flag and the power factor) to the game's truck update, which the mod hooks. On the game's own thread, before the
 game's update, the hook puts the flag, calls <code>ShiftGear</code> through its trampoline and sets the power factor after it, the
 order the game's own calls show. The result (taken or refused, +0x74 and +0x70) comes back in the job. One job is out at a time,
-and a shift while one is out is asked again on the next pass. A job not dealt within a second and 30 updates, or for another
-truck, is dropped and logged. In the drive of 3 November all 104 of the mod's shifts and all 158 of the game's own gearbox calls
+and a shift while one is out is asked again on the next pass. A job not dealt within a second is dropped and logged whatever
+the updates did, and so is one for another truck or with none driven. The game's thread deals none older than a second (the drive
+of 6 November 20:52: a shift posted as a truck switch began was dealt 50 s later). The shift's line names the vehicle it was dealt
+on. With Probe=1, from the function menu's close until the game sets a truck (15 s at most), <code>probe: menu words</code> lines
+give the words around the menu flags the mod reads, each one that changed, and <code>probe: menu words: the watch ends,</code> says
+why it ended. The truck switch's own screen sets no flag the mod reads yet, and these lines are to find one. A switch to another
+truck of the same kind logs <code>truck: another truck of the kind:</code>, not "again". In the drive of 3 November all 104 of the mod's shifts and all 158 of the game's own gearbox calls
 ran on that one thread, and +0x70 followed +0x74 one update later.</p>
 <p>Each of the mod's shifts then goes through four stages (<code>ShiftStage</code>, models.h): asked (the job posted), set (the
 game took it, so +0x74 is the new gear), engaged (+0x70 shows it), and idle again kCreepQuiet (1.5 s) after it engaged. A stage
@@ -1350,6 +1355,7 @@ back. A truck taken out of the warehouse starts on its kind's settings.</li>
 <li>The game's closing now leaves a line in <code>Gauges.log</code> naming who closed it and from where, and the creep gives nothing on a
 pass the mod shifts in (the author's drive of 30 October, the game still closing on a shift into or out of N).</li>
 <li>The gear keys and the other bindings wait while the game's function menu is up, so picking Recover with Pad A no longer shifts down.</li>
+<li>A shift the mod's gearbox asks for lives a second at most and goes with its truck, so picking another truck with Pad A no longer shifts down 50 s later.</li>
 <li>The crash line in <code>Gauges.log</code> also names an invalid parameter in the C runtime and abort, which can end the game at once (0xC0000409).</li>
 <li>The ASI loader starts on Linux (Proton and the Steam Deck) with the launch option <code>WINEDLLOVERRIDES="version=n,b" %command%</code>. Before, the mods never loaded there, and with that option the game would not start.</li>
 <li>The Gameplay tab in eight tabs (Display, Engine, Gearbox, Power, Suspension, Controls, Sounds, Mod work), the open one kept in <code>Tab</code>; Driven with and every binding on Controls. The settings have shorter names, and each help text says what it does and its default. The ini keys are unchanged.</li>
@@ -1531,7 +1537,7 @@ def s_constants():
             ['Shared blocks', 'Gauges\' 256 bytes, the others 64; tire stale after 2 s, gearbox mod after 1 s; looked for every 5 s', '', 'the mods\' layouts'],
             ['Sounds', 'RMS 0.1, peaks 0.6, voice × 0.45, pitch 0.25 to 2', '', '"two that ring together stay below 1"']]
     rows += [['Gear list', '32 entries: R, 30 gears, H; gear keys Gear1 to Gear16', '', 'the game has R, 16 gears and H at most (the author)'],
-             ['Shift job', 'one out at a time; dropped after 1 s and 30 truck updates', '', 'review 17'],
+             ['Shift job', 'one out at a time; dropped after 1 s, at once on another truck or none', '', 'review 17'],
              ['Shift stages', 'idle 1.5 s after engaged (kCreepQuiet); 3 s at most asked or set (kStageMost)', 's', 'review 17'],
              ['Back to A', 'BackToA 0 or 3 to 30 s (Sequential 10); steady 1 s; pedal 0.7; spin 1.05 × ground + 0.5 rad/s; climb 8° at pedal 0.4; descent 5°; locks 3 s; foot off 0.05', '', "review 17; 10 s the author's"],
              ['Suspension values written', 'spring 0.001 to 1, damping 0.01 to 1', '', "Havok's range; the game holds both at 1"],
