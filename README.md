@@ -287,15 +287,19 @@ Delete `Gauges.asi`, `Gauges.ini`, `Gauges.log` and the folder `Gauges` (the set
 
 ## Planned
 
-- An odometer per truck, with a choice of starting at zero or by the truck's age, and hours instead of kilometres for special machinery.
-- A downshift at speed that lets the revs over the red zone, so the engine brakes the truck and over-revving costs the engine.
-- Shareable truck setups: the files of the trucks' scales, gearboxes and engines on a platform of their own, with an upload and a download button in the Gameplay tab.
-- Brakes that hold the truck when the air is low, as spring brakes do, and brakes that weaken after long braking.
-- The winch: it stays attached when the engine stalls, it overheats after sustained use, and it can be reeled out.
-- Engine sound by the mod's engine speed.
-- Clearer names for the settings.
-- A setting that has the mod ignore the game's own shifter, so an LB clutch on a pad no longer puts the truck in A.
-- A Sounds tab, with each sound set on its own.
+- Hide the cluster while a game window is open.
+- Mouse side buttons in the key capture.
+- Quick winch off while driving.
+- Odometer per vehicle, and hours for special machinery.
+- Warm-up at idle and a penalty for driving off cold.
+- Engines over-revving when you downshift at speed.
+- Each sound on its own in the Sounds tab, and a low fuel warning.
+- Proper turbo sounds.
+- Engine sound that follows engine speed.
+- Brakes that fade after long braking and hold on low air.
+- Winch changes: stays attached when the engine stalls, overheats, can be reeled out.
+- A shifter of our own, replacing the game's, with a splitter and low range as a modifier.
+- Sharing truck, gearbox and engine setups.
 
 ## Build
 

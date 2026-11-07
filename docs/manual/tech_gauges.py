@@ -1352,9 +1352,11 @@ edit the default. Make these the default copies the truck's set to every truck w
 only (this one truck, by the game's id of it) or every truck of its kind; the tab says which is in force. When the game rebuilds the
 truck it keeps its set. Every truck of its kind keeps the truck's own set aside when the kind has one, and This truck only brings it
 back. A truck taken out of the warehouse starts on its kind's settings.</li>
+<li>A truck back from the garage keeps its own suspension set however long the visit took. The game gives it a new id there. On the same truck with no loading screen between, the new id takes the set over. Before, a visit over 20 s lost it. A switch through the map to another truck of the kind takes nothing over while the first is still in the game, so each keeps its own.</li>
+<li>Floored in A where the game's own pull tapers off, from about 0.7 of a gear's top, a truck that stops gaining short of its point up gets the next gear after a second. Before, a truck a little heavier stayed in its gear. The next gear has to land over its own point down. It is watched from 1 s to 3 s after the shift: if it loses speed faster than the gear it left, the automatic goes back and keeps that gear for 30 s. <code>Gauges.log</code> has a line for each.</li>
 <li>The game's closing now leaves a line in <code>Gauges.log</code> naming who closed it and from where, and the creep gives nothing on a
 pass the mod shifts in (the author's drive of 30 October, the game still closing on a shift into or out of N).</li>
-<li>The gear keys and the other bindings wait while the game's function menu is up, so picking Recover with Pad A no longer shifts down.</li>
+<li>The gear keys and the other bindings wait while the game's function menu is up and 1.5 s after it closes, so picking Recover or the garage with Pad A no longer shifts down. A shift's line in <code>Gauges.log</code> gives the time it was dealt, and says how much later the line came where the game held the mod's pass off.</li>
 <li>A shift the mod's gearbox asks for lives a second at most and goes with its truck, so picking another truck with Pad A no longer shifts down 50 s later.</li>
 <li>The crash line in <code>Gauges.log</code> also names an invalid parameter in the C runtime and abort, which can end the game at once (0xC0000409).</li>
 <li>The ASI loader starts on Linux (Proton and the Steam Deck) with the launch option <code>WINEDLLOVERRIDES="version=n,b" %command%</code>. Before, the mods never loaded there, and with that option the game would not start.</li>
