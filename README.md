@@ -288,6 +288,7 @@ Delete `Gauges.asi`, `Gauges.ini`, `Gauges.log` and the folder `Gauges` (the set
 ## Planned
 
 - Hide the cluster while a game window is open.
+- H pulls like a numbered gear with its speed.
 - Mouse side buttons in the key capture.
 - Quick winch off while driving.
 - Odometer per vehicle, and hours for special machinery.
