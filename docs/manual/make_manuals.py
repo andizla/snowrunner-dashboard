@@ -235,7 +235,9 @@ position and shows its fuel a minute. A longer list is logged once a truck, and 
 <h2>14. The mod's engine (Powertrain=1)</h2>
 <p>The game gives all of an engine's torque with the wheels at about half the gear's top speed and less and less to nothing at the top, whatever the engine speed. With <code>Powertrain=1</code> the truck pulls with the mod's engine instead: the torque curve against the engine speed the needle shows, doubled by the converter at its stall with the automatic. Cold oil (up to 15% at 0 °C) and a turbo without boost (35% of the torque comes from it) cost torque only where the pedal asks for more than they leave. The torque holds to about 0.86 of a gear's top speed (a scout's 0.8), then falls to nothing at the top, as a diesel's governor cuts the fuel; a gear's top speed stays the game's. This holds in a gear held by hand at <code>Gearbox=2</code> too, so a held gear pulls to the red zone. There, with the clutch fully
 in, the engine is locked to the wheels and the torque goes by their own speed: spinning wheels in mud get the engine's torque and
-spin up toward the red zone. By the wheels' speed it is held to twice the engine's torque, so wheels that catch grip do not lurch.</p>
+spin up toward the red zone. By the wheels' speed it is held to twice the engine's torque, so wheels that catch grip do not lurch.
+The wheels' spin is averaged over a quarter second, and the torque eases off over the last bit of a gear's top speed. A low gear
+such as L- has a small top, so without this the spin's own noise made the pull jerk there.</p>
 <p><b>Air drag</b> (<code>RoadLoad</code>, the Power tab's "Air drag", on by default, acts with <code>Powertrain=1</code>; untick it to turn it off). The game already slows
 a rolling truck by itself, more the faster it goes. Air drag adds the air's share on top of that. With this on the mod takes the air's drag off the engine's pull, more the
 faster the truck goes: about 0.5 kN at 100 km/h for a pickup. It needs each gear's pull at the game's own torque, which the mod learns

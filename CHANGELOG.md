@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- L- and other low gears held by hand no longer jerk near their top speed. With the clutch fully in, the mod's pull goes by the wheels' own spin, and that spin is noisy. Over a low gear's small top speed the noise was enough to cut the pull in and out many times a second. The spin is now averaged over a quarter second, and the pull eases off over the top's last 0.8 rad/s of wheel speed instead of its last 6 %. Higher gears keep the pull as before.
+
 ## [0.18.4]
 
 - Each gear's top is learned for each truck kind as a share of the game's gear speed, and kept in the truck's file. Before, it was kept per gearbox and shared by every truck with that gearbox's name, so another truck's figure could hold the automatic in a gear at the game's own limit. A learned top far off the one kept replaces it, and none is learned on a slope. Floored in A at the game's limit, the automatic now shifts up. When the wheels' drag can't be read, the log names the wheel and the figure, and it says when the read works again.
