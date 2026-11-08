@@ -331,9 +331,10 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         if (!view.engine[0]) ImGui::TextWrapped("No truck is driven, or its engine is not known yet.");
         else
         {
-            if (view.engineOwn) ImGui::TextWrapped("Engine %s. Its own profile, kept in Gauges\\engines.", view.engine);
-            else ImGui::TextWrapped("Engine %s. It pulls by the %s class's torque curve%s. Set its peak torque here and this engine keeps a profile of its own.", view.engine,
-                                    PageClassWord(view.autoClass), view.autoByWeight ? " (the class of the truck's weight)" : "");
+            // the profile's level is in the "In force:" line under Fuel (BRIEF_engine_profile_per_truck.md)
+            if (view.engineOwn) ImGui::TextWrapped("Engine %s. It has a profile of its own.", view.engine);
+            else ImGui::TextWrapped("Engine %s. It pulls by the %s class's torque curve%s.%s", view.engine, PageClassWord(view.autoClass),
+                                    view.autoByWeight ? " (the class of the truck's weight)" : "", view.engProfileFrom ? "" : " Set its peak torque here to give it a profile of its own.");
             if (view.engineFigure > 0.0f) ImGui::TextWrapped("Its torque in the game's files: %.0f (a stock scout's engine reads about 195000).", view.engineFigure);
             // whose Engine torque and Upshift delay these are (BRIEF_engine_per_truck.md): this truck's, the kind's, or
             // the engine's default; the box, the For choice and the kept texts are the Suspension tab's
@@ -342,18 +343,20 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 PageLabel("Own settings", labelX);
                 bool own = view.engSetOwn;
                 if (ImGui::Checkbox("##engown", &own)) act |= own ? kPageEngOn : kPageEngOff;
-                PageTip("This kind of truck keeps its own Engine torque and Upshift delay in its file in Gauges\\trucks, by the engine and gearbox fitted. Ticks itself when one is "
-                        "changed while it is driven. Off: the engine's default is in force and its own are kept.");
+                PageTip("This kind of truck keeps its own engine profile, Engine torque and Upshift delay in its file in Gauges\\trucks, by the engine and gearbox fitted. Ticks itself "
+                        "when one is changed while it is driven. Off: the engine's default is in force and its own are kept.");
                 if (view.engSetOwn)
                 {
                     ImGui::SameLine();
                     if (ImGui::SmallButton("Make this the engine's default")) act |= kPageEngDefault;
-                    PageTip("Copies this truck's Engine torque into the engine's own file and its Upshift delay into the gearbox's, for every truck without its own. This truck keeps its own.");
+                    PageTip("Copies this truck's engine profile and Engine torque into the engine's own file and its Upshift delay into the gearbox's, for every truck without "
+                            "its own. This truck keeps its own.");
                     PageLabel("For", labelX);
                     ImGui::BeginDisabled(!view.suspIdKnown);
                     if (ImGui::RadioButton("This truck only###engtruck", view.engSetLevel == 3) && view.engSetLevel != 3) act |= kPageEngTruck;
                     ImGui::EndDisabled();
-                    PageTip("This truck alone keeps the set, by the game's id of it. A truck taken out of the warehouse gets a new id and starts on its kind's settings.");
+                    PageTip("This truck alone keeps the set, by the game's id of it. A truck taken out of the warehouse gets a new id and starts on its kind's settings. "
+                            "The id can also change at a load. Then the truck loses its set until the mod gives trucks an id of its own.");
                     ImGui::SameLine();
                     char every[128];
                     snprintf(every, sizeof every, "Every %s###engkind", view.truck);
@@ -384,6 +387,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             ImGui::SetNextItemWidth(w);
             if (ImGui::Combo("##fuel", &fuel, fuels, kFuelCount)) set = true;
             PageTip("A diesel's boost rises from nothing at idle. A petrol engine's dial reads under 0 at idle and a light foot. Default: the class's, petrol for scouts and diesel for the rest.");
+            ImGui::TextDisabled("In force: %s%s", PageEngLevel(view.engProfileFrom, "engine"), view.engProfileFrom == 2 ? view.truck : "");
             // how much of its torque the truck gets, kept in percent
             int torquePercent = (int)lroundf(view.engineTorque * 100.0f);
             PageLabel("Engine torque", labelX);
@@ -408,7 +412,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             if (view.engineOwn)
             {
                 if (ImGui::SmallButton("Class curve")) act |= kPageEngineDrop;
-                PageTip("This engine gives up its own profile and pulls by its class's curve again.");
+                PageTip("This engine pulls by its class's curve again, at the level in force: this truck, every truck of its kind, or the engine's default.");
             }
         }
 
@@ -1314,7 +1318,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             st.capture = -1;
             act |= kPageDefaults;
         }
-        PageTip("Every setting back to its default. The truck you drive gives up its own scales.");
+        PageTip("Every setting back to its default. The truck you drive gives up its own scales. An engine's profile stays: Class curve on the Engine tab resets it.");
         ImGui::SameLine();
         if (ImGui::Button("Reload ini")) act |= kPageReload;
         PageTip("Reads Gauges.ini again, after an edit by hand.");

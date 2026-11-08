@@ -1560,59 +1560,111 @@ static std::wstring DampWhyText(const WheelDampWhy &y, int wheels)
 // The key is the engine's name in the game's files (EngineRecord::name).
 static const float kPeakRpmRange[2] = { 100.0f, 20000.0f };
 
-// The engine's profile, into p; false where its file holds none of them.
-static bool EngineProfileRead(const char *name, EngineProfile &p)
+static std::wstring EngineKeyOf(const wchar_t *what, const char *name);
+
+// The profile's four keys in one section: plain (PeakTorqueRpm=, the engine's own file) where engine is null, else
+// named by the engine fitted (PeakTorqueRpm.<engine>=, a level's section of the kind's file; BRIEF_engine_profile_per_truck.md).
+static std::wstring ProfileKey(const wchar_t *what, const char *engine) { return engine ? EngineKeyOf(what, engine) : std::wstring(what); }
+
+// A section's profile into p, from the stock one (no peak, turbo, the class's fuel, no curve of its own): a key it
+// lacks keeps the stock value, never another level's (the addendum's point 2). curve: the TorqueCurve text as written,
+// "" for none. True where it holds any of the four. A PeakTorqueRpm of 0 is a profile of the class's curve.
+static bool ProfileKeysRead(const wchar_t *section, const std::wstring &file, const char *engine, EngineProfile &p, wchar_t (&curve)[256])
 {
     p = EngineProfile{};
-    if (!name[0]) return false;
-    const std::wstring file = SetupFile(kSetupEngine, name);
-    if (GetFileAttributesW(file.c_str()) == INVALID_FILE_ATTRIBUTES) return false;
-    const wchar_t *section = kSetupSections[kSetupEngine];
+    curve[0] = 0;
     wchar_t buf[256] = {};
-    if (GetPrivateProfileStringW(section, L"PeakTorqueRpm", L"", buf, 256, file.c_str()) > 0)
+    if (GetPrivateProfileStringW(section, ProfileKey(L"PeakTorqueRpm", engine).c_str(), L"", buf, 256, file.c_str()) > 0)
     {
         const float v = (float)_wtof(buf);
         p.peakRpm = isfinite(v) && v > 0.0f ? SettingsRange(v, kPeakRpmRange[0], kPeakRpmRange[1]) : 0.0f;
         p.own = true;
     }
-    if (GetPrivateProfileStringW(section, L"Aspiration", L"", buf, 256, file.c_str()) > 0)
+    if (GetPrivateProfileStringW(section, ProfileKey(L"Aspiration", engine).c_str(), L"", buf, 256, file.c_str()) > 0)
     {
         const int a = _wtoi(buf);
         p.aspiration = a >= 0 && a < kAspCount ? a : kAspTurbo;
         p.own = true;
     }
-    if (GetPrivateProfileStringW(section, L"Fuel", L"", buf, 256, file.c_str()) > 0)
+    if (GetPrivateProfileStringW(section, ProfileKey(L"Fuel", engine).c_str(), L"", buf, 256, file.c_str()) > 0)
     {
         p.fuel = !_wcsicmp(buf, L"diesel") ? kFuelDiesel : !_wcsicmp(buf, L"petrol") ? kFuelPetrol : kFuelClass;
         p.own = true;
     }
-    if (GetPrivateProfileStringW(section, L"TorqueCurve", L"", buf, 256, file.c_str()) > 0)
+    if (GetPrivateProfileStringW(section, ProfileKey(L"TorqueCurve", engine).c_str(), L"", buf, 256, file.c_str()) > 0)
     {
         char text[256];
         size_t n = 0;
         for (; buf[n] && n + 1 < sizeof text; n++) text[n] = buf[n] < 128 ? (char)buf[n] : '?';
         text[n] = 0;
         p.custom = TorqueCurveParse(text, p.curve);
-        p.own = true;
-    }
-    if (GetPrivateProfileStringW(section, L"Torque", L"", buf, 256, file.c_str()) > 0)
-    {
-        const float v = (float)_wtof(buf);
-        p.torque = isfinite(v) && v > 0.0f ? SettingsRange(v / 100.0f, kTorqueShareRange[0], kTorqueShareRange[1]) : 0.0f;
+        wcsncpy_s(curve, buf, _TRUNCATE);
         p.own = true;
     }
     return p.own;
 }
 
-// The tab's Engine section into the engine's file: the peak torque's speed, the aspiration and the fuel (none
-// written for the class's).
-static void EngineProfileWrite(const char *name, float peakRpm, int aspiration, int fuel)
+// A profile into a section as one unit: all four keys, the peak 0 for the class's curve, no Fuel for the class's,
+// and the TorqueCurve text given (none where "").
+static void ProfileKeysWrite(const wchar_t *section, const std::wstring &file, const char *engine, const EngineProfile &p, const wchar_t *curve)
+{
+    IniPutFloat(section, ProfileKey(L"PeakTorqueRpm", engine).c_str(), p.peakRpm > 0.0f ? roundf(SettingsRange(p.peakRpm, kPeakRpmRange[0], kPeakRpmRange[1])) : 0.0f, file);
+    IniPutInt(section, ProfileKey(L"Aspiration", engine).c_str(), p.aspiration >= 0 && p.aspiration < kAspCount ? p.aspiration : kAspTurbo, file);
+    WritePrivateProfileStringW(section, ProfileKey(L"Fuel", engine).c_str(), p.fuel == kFuelDiesel ? L"diesel" : p.fuel == kFuelPetrol ? L"petrol" : nullptr, file.c_str());
+    WritePrivateProfileStringW(section, ProfileKey(L"TorqueCurve", engine).c_str(), curve && curve[0] ? curve : nullptr, file.c_str());
+}
+
+// "Class curve" (the addendum's point 4): at a truck's or a kind's level the peak goes to 0 and the other three out, so
+// that level says "the class's curve" and stops the fall-through; at the default (engine null) all four go out of the
+// engine's file and its Torque= and Name= stay.
+static void ProfileKeysDrop(const wchar_t *section, const std::wstring &file, const char *engine)
+{
+    if (engine) IniPutFloat(section, ProfileKey(L"PeakTorqueRpm", engine).c_str(), 0.0f, file);
+    else WritePrivateProfileStringW(section, L"PeakTorqueRpm", nullptr, file.c_str());
+    for (const wchar_t *what : { L"Aspiration", L"Fuel", L"TorqueCurve" }) WritePrivateProfileStringW(section, ProfileKey(what, engine).c_str(), nullptr, file.c_str());
+}
+
+// The engine's default profile, its own file's, into p with its Torque share; false where the file holds none of the
+// four profile keys (a Torque= alone is no profile). curve as ProfileKeysRead.
+static bool EngineProfileRead(const char *name, EngineProfile &p, wchar_t (&curve)[256])
+{
+    p = EngineProfile{};
+    curve[0] = 0;
+    if (!name[0]) return false;
+    const std::wstring file = SetupFile(kSetupEngine, name);
+    if (GetFileAttributesW(file.c_str()) == INVALID_FILE_ATTRIBUTES) return false;
+    const wchar_t *section = kSetupSections[kSetupEngine];
+    ProfileKeysRead(section, file, nullptr, p, curve);
+    wchar_t buf[24] = {};
+    if (GetPrivateProfileStringW(section, L"Torque", L"", buf, 24, file.c_str()) > 0)
+    {
+        const float v = (float)_wtof(buf);
+        p.torque = isfinite(v) && v > 0.0f ? SettingsRange(v / 100.0f, kTorqueShareRange[0], kTorqueShareRange[1]) : 0.0f;
+    }
+    return p.own;
+}
+static bool EngineProfileRead(const char *name, EngineProfile &p)
+{
+    wchar_t curve[256];
+    return EngineProfileRead(name, p, curve);
+}
+
+// A profile into the engine's file as its default, as one unit (the tab at the default level, and "Make this the
+// engine's default").
+static void EngineProfileWrite(const char *name, const EngineProfile &p, const wchar_t *curve)
 {
     const std::wstring file = SetupFile(kSetupEngine, name);
     SetupBegin(kSetupEngine, Wide(name));
-    IniPutFloat(kSetupSections[kSetupEngine], L"PeakTorqueRpm", roundf(SettingsRange(peakRpm, kPeakRpmRange[0], kPeakRpmRange[1])), file);
-    IniPutInt(kSetupSections[kSetupEngine], L"Aspiration", aspiration >= 0 && aspiration < kAspCount ? aspiration : kAspTurbo, file);
-    WritePrivateProfileStringW(kSetupSections[kSetupEngine], L"Fuel", fuel == kFuelDiesel ? L"diesel" : fuel == kFuelPetrol ? L"petrol" : nullptr, file.c_str());
+    ProfileKeysWrite(kSetupSections[kSetupEngine], file, nullptr, p, curve);
+}
+// The tab's three into the engine's file, the rest of its profile as it is (the tests of the file's own read).
+static void EngineProfileWrite(const char *name, float peakRpm, int aspiration, int fuel)
+{
+    EngineProfile p;
+    wchar_t curve[256];
+    EngineProfileRead(name, p, curve);
+    p.peakRpm = SettingsRange(peakRpm, kPeakRpmRange[0], kPeakRpmRange[1]), p.aspiration = aspiration, p.fuel = fuel;
+    EngineProfileWrite(name, p, curve);
 }
 
 // The tab's slider into the engine's file: how much of its torque the truck gets, in percent.
@@ -1977,10 +2029,12 @@ static std::wstring EngineKeyOf(const wchar_t *what, const char *name)
 }
 
 // One level's section: none (no key and no Own in it), kept (Own=0) or in force; and its figures for the engine and the
-// gearbox fitted, 0 where it holds none.
-static int ReadTruckEngine(const char *key, const char *id, const char *engine, const char *gearbox, int &torque, float &hold)
+// gearbox fitted, 0 where it holds none; and its profile for the engine fitted (profile.own: it holds one).
+static int ReadTruckEngine(const char *key, const char *id, const char *engine, const char *gearbox, int &torque, float &hold, EngineProfile &profile,
+                           wchar_t (&curve)[256])
 {
     torque = 0, hold = 0.0f;
+    profile = EngineProfile{}, curve[0] = 0;
     if (!key[0]) return kSuspNone;
     const std::wstring ini = SetupFile(kSetupTruck, key), sec = SectionOf(kEngineSection, id);
     wchar_t probe[8] = {};
@@ -1996,16 +2050,20 @@ static int ReadTruckEngine(const char *key, const char *id, const char *engine, 
         const float v = (float)_wtof(buf);
         if (isfinite(v) && v > 0.0f) hold = SettingsRange(v, kGearHoldRange[0], kGearHoldRange[1]);
     }
+    if (engine[0]) ProfileKeysRead(sec.c_str(), ini, engine, profile, curve);
     return GetPrivateProfileIntW(sec.c_str(), L"Own", 1, ini.c_str()) ? kSuspInForce : kSuspKept;
 }
 
-// A level's section written: Own, and the figures given (a 0 leaves its key as it is). Key by key, as the suspension's.
-static void WriteTruckEngine(const char *key, const char *id, bool own, const char *engine, int torque, const char *gearbox, float hold)
+// A level's section written: Own, and the figures given (a 0 leaves its key as it is). Key by key, as the suspension's;
+// a profile given (not null) goes in whole for the engine named.
+static void WriteTruckEngine(const char *key, const char *id, bool own, const char *engine, int torque, const char *gearbox, float hold,
+                             const EngineProfile *profile = nullptr, const wchar_t *curve = nullptr)
 {
     if (!key[0]) return;
     const std::wstring ini = SetupFile(kSetupTruck, key), sec = SectionOf(kEngineSection, id);
     SetupBegin(kSetupTruck, Wide(key));
     IniPutInt(sec.c_str(), L"Own", own ? 1 : 0, ini);
+    if (engine[0] && profile) ProfileKeysWrite(sec.c_str(), ini, engine, *profile, curve);
     if (engine[0] && torque > 0) IniPutInt(sec.c_str(), EngineKeyOf(L"Torque", engine).c_str(), torque, ini);
     if (gearbox[0] && hold > 0.0f)
     {
@@ -2035,21 +2093,36 @@ struct EngineState
     bool kindOwn, kindKept, truckOwn, truckKept;
     int torque, torqueFrom;     // percent in force (100 where no level has one), and its level (kEngLevel..., None: 100)
     float hold; int holdFrom;   // seconds in force (0 where no level has one: the class's), and its level
+    EngineProfile profile;      // the profile in force, whole from one level (its torque unused: torque above), the stock one where none has one
+    int profileFrom;            // its level (kEngLevel..., None: the stock one)
+    wchar_t curve[256];         // its TorqueCurve text as written, "" for none
 };
+
+// A profile other than the stock one: a peak, a curve of its own, naturally aspirated or a fuel of its own.
+static bool ProfileNotStock(const EngineProfile &p) { return p.peakRpm > 0.0f || p.custom || p.aspiration != kAspTurbo || p.fuel != kFuelClass; }
 
 // The level whose section is in force: this truck's, the kind's, or none (the default).
 static int EngineLevel(const EngineState &e) { return e.truckOwn ? kEngLevelTruck : e.kindOwn ? kEngLevelKind : kEngLevelDefault; }
 
 // The figures in force from the files: this truck's section where in force and it holds the key, else the kind's, else
-// the engine's default, else 100 and the class's.
+// the engine's default, else 100 and the class's. The profile comes whole from the most specific level in force that
+// holds any of its keys for the engine fitted (the addendum's point 2), else the engine's file, else the stock one.
 static void EngineFromFiles(EngineState &e)
 {
     int kt = 0, tt = 0;
     float kh = 0.0f, th = 0.0f;
-    const int kind = ReadTruckEngine(e.key, "", e.engine, e.gearbox, kt, kh);
-    const int truck = e.id[0] ? ReadTruckEngine(e.key, e.id, e.engine, e.gearbox, tt, th) : kSuspNone;
+    EngineProfile kp = {}, tp = {}, dp = {};
+    wchar_t kc[256] = {}, tc[256] = {}, dc[256] = {};
+    const int kind = ReadTruckEngine(e.key, "", e.engine, e.gearbox, kt, kh, kp, kc);
+    const int truck = e.id[0] ? ReadTruckEngine(e.key, e.id, e.engine, e.gearbox, tt, th, tp, tc) : kSuspNone;
     e.kindOwn = kind == kSuspInForce, e.kindKept = kind == kSuspKept;
     e.truckOwn = truck == kSuspInForce, e.truckKept = truck == kSuspKept;
+    const bool dpOwn = EngineProfileRead(e.engine, dp, dc);
+    if (e.truckOwn && tp.own) e.profile = tp, e.profileFrom = kEngLevelTruck, wcsncpy_s(e.curve, tc, _TRUNCATE);
+    else if (e.kindOwn && kp.own) e.profile = kp, e.profileFrom = kEngLevelKind, wcsncpy_s(e.curve, kc, _TRUNCATE);
+    else if (dpOwn) e.profile = dp, e.profileFrom = kEngLevelDefault, wcsncpy_s(e.curve, dc, _TRUNCATE);
+    else e.profile = EngineProfile{}, e.profileFrom = kEngLevelNone, e.curve[0] = 0;
+    e.profile.torque = 0.0f;
     const int dt = EngineTorqueRead(e.engine);
     float dh = 0.0f;
     const bool dhOwn = e.gearbox[0] && GearHoldRead(e.gearbox, dh);
@@ -2061,6 +2134,16 @@ static void EngineFromFiles(EngineState &e)
     else if (e.kindOwn && kh > 0.0f) e.hold = kh, e.holdFrom = kEngLevelKind;
     else if (dhOwn) e.hold = dh, e.holdFrom = kEngLevelDefault;
     else e.hold = 0.0f, e.holdFrom = kEngLevelNone;
+}
+
+// The state's profile and torque share onto a watch's profile, for the engine it is for (profileFor): the profile rides
+// on the state (the addendum's point 1), so two kinds with one engine each get their own. A state for another engine
+// (not caught up yet) puts nothing in. EngineApply's part, apart for the tests.
+static void EngineProfileApply(const EngineState &e, const char *profileFor, EngineProfile &profile)
+{
+    if (!e.key[0] || !e.engine[0] || strcmp(e.engine, profileFor)) return;
+    profile = e.profile;
+    profile.torque = e.torqueFrom != kEngLevelNone ? e.torque / 100.0f : 0.0f;
 }
 
 // The state for a truck, its engine and its gearbox (any "" while not known).
@@ -2095,6 +2178,38 @@ static bool EngineTake(EngineState &e, int torque, float hold)
     return made;
 }
 
+// The profile's edit from the tab (peak, aspiration, fuel), by EngineTake's rules (the addendum's point 6): the level in
+// force, else the kind's made, else (a set kept) the engine's default. The level gets the whole profile, the curve of
+// its own in force kept with it. True where the kind's set was made by it; nothing written before the engine is known.
+static bool EngineProfileTake(EngineState &e, float peakRpm, int aspiration, int fuel)
+{
+    if (!e.key[0] || !e.engine[0]) return false;
+    EngineProfile p = e.profile;
+    p.peakRpm = SettingsRange(peakRpm, kPeakRpmRange[0], kPeakRpmRange[1]), p.aspiration = aspiration, p.fuel = fuel, p.own = true;
+    wchar_t curve[256];
+    wcsncpy_s(curve, e.curve, _TRUNCATE);
+    bool made = false;
+    if (e.truckOwn) WriteTruckEngine(e.key, e.id, true, e.engine, 0, "", 0.0f, &p, curve);
+    else if (e.kindOwn) WriteTruckEngine(e.key, "", true, e.engine, 0, "", 0.0f, &p, curve);
+    else if (!e.kindKept && !e.truckKept) WriteTruckEngine(e.key, "", true, e.engine, 0, "", 0.0f, &p, curve), made = true;
+    else EngineProfileWrite(e.engine, p, curve);
+    EngineFromFiles(e);
+    return made;
+}
+
+// The tab's "Class curve" (the addendum's point 4), at the level the profile came from: a truck's or a kind's says the
+// class's curve (PeakTorqueRpm.<engine>=0, the rest out), the default's four keys go out of the engine's file. The
+// file itself stays, with its Torque=.
+static void EngineProfileDrop(EngineState &e)
+{
+    if (!e.key[0] || !e.engine[0]) return;
+    const std::wstring ini = SetupFile(kSetupTruck, e.key);
+    if (e.profileFrom == kEngLevelTruck) ProfileKeysDrop(SectionOf(kEngineSection, e.id).c_str(), ini, e.engine);
+    else if (e.profileFrom == kEngLevelKind) ProfileKeysDrop(kEngineSection, ini, e.engine);
+    else if (e.profileFrom == kEngLevelDefault) ProfileKeysDrop(kSetupSections[kSetupEngine], SetupFile(kSetupEngine, e.engine), nullptr);
+    EngineFromFiles(e);
+}
+
 // The Engine tab's box "Own settings": as SettingsSuspOwn. Off: the level in force keeps its set with Own=0. On: a kept
 // set is in force again, this truck's before the kind's; with none kept, the figures shown become the kind's own.
 static void EngineOwnSet(EngineState &e, bool on)
@@ -2110,7 +2225,7 @@ static void EngineOwnSet(EngineState &e, bool on)
     if (e.truckOwn || e.kindOwn) return;
     if (e.truckKept) EngineSectionOwn(e.key, e.id, true);
     else if (e.kindKept) EngineSectionOwn(e.key, "", true);
-    else WriteTruckEngine(e.key, "", true, e.engine, e.torque, e.gearbox, e.hold);
+    else WriteTruckEngine(e.key, "", true, e.engine, e.torque, e.gearbox, e.hold, e.profileFrom != kEngLevelNone ? &e.profile : nullptr, e.curve);
     EngineFromFiles(e);
 }
 
@@ -2125,7 +2240,7 @@ static void EngineLevelSet(EngineState &e, bool truckOnly)
     {
         if (!e.id[0]) return;
         if (e.truckKept) EngineSectionOwn(e.key, e.id, true);
-        else WriteTruckEngine(e.key, e.id, true, e.engine, e.torque, e.gearbox, e.hold);
+        else WriteTruckEngine(e.key, e.id, true, e.engine, e.torque, e.gearbox, e.hold, e.profileFrom != kEngLevelNone ? &e.profile : nullptr, e.curve);
     }
     else if (!e.kindOwn && !e.kindKept)
     {
@@ -2146,16 +2261,19 @@ static void EngineLevelSet(EngineState &e, bool truckOnly)
 }
 
 // The tab's button "Make this the engine's default": the figures in force into the engine's and the gearbox's own
-// files, for every truck without a set of its own. The truck's set stays as it is.
+// files, for every truck without a set of its own, the profile in force with them as one unit (the addendum's point 5).
+// The truck's set stays as it is.
 static void EngineToDefault(EngineState &e)
 {
+    if (e.engine[0] && (e.profileFrom == kEngLevelTruck || e.profileFrom == kEngLevelKind)) EngineProfileWrite(e.engine, e.profile, e.curve);
     if (e.engine[0] && e.torque > 0) EngineTorqueWrite(e.engine, e.torque);
     if (e.gearbox[0] && e.hold > 0.0f) GearHoldWrite(e.gearbox, e.hold);
     EngineFromFiles(e);
 }
 
 // The tab's Defaults: 100 % and the class's hold. The sections in force are kept with Own=0 (not thrown away), and the
-// engine's and the gearbox's own figures go out of their files.
+// engine's and the gearbox's own figures go out of their files. The engine file's profile stays: "Class curve" is its
+// own reset (the addendum's point 5).
 static void EngineDefaults(EngineState &e)
 {
     if (!e.key[0]) return;
@@ -3659,7 +3777,7 @@ static float GearHoldOf(const TruckWatch &w, int tachClass)
 // (the state not caught up yet) is not put in.
 static void EngineApply(const EngineState &e, TruckWatch &w)
 {
-    if (e.key[0] && e.engine[0] && !strcmp(e.engine, w.profileFor)) w.profile.torque = e.torqueFrom != kEngLevelNone ? e.torque / 100.0f : 0.0f;
+    EngineProfileApply(e, w.profileFor, w.profile);
     if (e.key[0] && e.gearbox[0] && !strcmp(e.gearbox, w.gearboxKey))
     {
         w.gearHoldOwn = e.hold > 0.0f;
@@ -3672,8 +3790,18 @@ static void EngineLevelLog(const EngineState &e, const wchar_t *why)
 {
     if (!e.key[0]) return;
     if (e.engine[0])
+    {
         Log(L"engine torque: %s%S, %d %% for %S (%s)", EngineLevelWords(e.torqueFrom), e.torqueFrom == kEngLevelKind ? e.key : "", e.torque, e.engine,
             e.torqueFrom == kEngLevelNone ? L"none set, so 100 %" : why);
+        const EngineProfile &p = e.profile;
+        wchar_t curve[64];
+        if (p.custom) _snwprintf_s(curve, _TRUNCATE, L"a torque curve of its own");
+        else if (p.peakRpm > 0.0f) _snwprintf_s(curve, _TRUNCATE, L"peak torque at %.0f rpm", p.peakRpm);
+        else _snwprintf_s(curve, _TRUNCATE, L"the class's torque curve");
+        Log(L"engine profile: %s%S, %s, %s%s for %S (%s)", EngineLevelWords(e.profileFrom), e.profileFrom == kEngLevelKind ? e.key : "", curve,
+            p.aspiration == kAspNatural ? L"naturally aspirated" : L"turbocharged", p.fuel == kFuelDiesel ? L", a diesel" : p.fuel == kFuelPetrol ? L", a petrol engine" : L"",
+            e.engine, e.profileFrom == kEngLevelNone ? L"none set, the stock one" : why);
+    }
     if (e.gearbox[0])
     {
         if (e.holdFrom == kEngLevelNone) Log(L"gearbox hold: none set for %S, the truck class's (%s)", e.gearbox, why);
@@ -3795,18 +3923,12 @@ static void EngineLook(TruckWatch &w, const TruckMemory &m, ULONGLONG now, bool 
     }
     w.engine = e;
     w.engineVehicle = w.refs.vehicle;
-    // the engine's own profile, for each engine as it is first known
+    // the engine fitted, as it is first known: the engine's default profile until the thread's state (EngineApply) puts
+    // the level's in force; the state's log names the level (EngineLevelLog)
     if (e.name[0] && strcmp(e.name, w.profileFor))
     {
         strncpy_s(w.profileFor, e.name, _TRUNCATE);
-        if (EngineProfileRead(e.name, w.profile))
-            Log(L"engine: %S has a profile of its own (Gauges\\engines\\%s.ini): %s%s%s", e.name, SetupFileName(Wide(e.name)).c_str(),
-                w.profile.custom ? L"a torque curve of its own" : w.profile.peakRpm > 0.0f ? L"its torque curve from its peak torque's speed" : L"the class's torque curve",
-                w.profile.aspiration == kAspNatural ? L", naturally aspirated" : L", turbocharged",
-                w.profile.fuel == kFuelDiesel ? L", a diesel" : w.profile.fuel == kFuelPetrol ? L", a petrol engine" : L"");
-        else Log(L"engine: %S has no profile of its own: the class's torque curve, turbocharged", e.name);
-        if (w.profile.peakRpm > 0.0f) Log(L"engine: its peak torque at %.0f rpm", w.profile.peakRpm);
-        if (w.profile.torque > 0.0f) Log(L"engine: the truck gets %.0f percent of its torque (Torque)", w.profile.torque * 100.0f);
+        EngineProfileRead(e.name, w.profile);
     }
     w.engineAt = now + 5000;
 }
@@ -6230,7 +6352,7 @@ static DWORD WINAPI Run(void *)
             SettingsFor(set, truck.key, truck.id);
             SettingsPublish(s);
             // the driven engine's profile and gearbox's hold read again too, as a file edited by hand may have changed them
-            if (watch.profileFor[0]) EngineProfileRead(watch.profileFor, watch.profile);
+            // (the profile through the state's levels)
             if (watch.gearboxKey[0]) watch.gearHoldOwn = GearHoldRead(watch.gearboxKey, watch.gearHold);
             EngineFromFiles(eng);
             EngineApply(eng, watch);
@@ -6325,8 +6447,8 @@ static DWORD WINAPI Run(void *)
             // the Engine tab's button: the figures in force become the engine's and the gearbox's default
             EngineToDefault(eng);
             EngineApply(eng, watch);
-            Log(L"engine: %S's torque %d %% made %S's default (Gauges\\engines)%s", eng.key, eng.torque, eng.engine[0] ? eng.engine : "no engine",
-                eng.gearbox[0] && eng.hold > 0.0f ? L", and its hold the gearbox's (Gauges\\gearboxes)" : L"");
+            Log(L"engine: %S's torque %d %%%s made %S's default (Gauges\\engines)%s", eng.key, eng.torque, eng.profileFrom != kEngLevelNone ? L" and its profile" : L"",
+                eng.engine[0] ? eng.engine : "no engine", eng.gearbox[0] && eng.hold > 0.0f ? L", and its hold the gearbox's (Gauges\\gearboxes)" : L"");
             edited = true;
         }
         if (InterlockedExchange(&g_resetAsked, 0))
@@ -6565,21 +6687,23 @@ static DWORD WINAPI Run(void *)
                 gearHoldLogAt = GetTickCount64() + 1000;
             }
         }
-        // the engine's profile from the tab: into its file, in force at once; or given up, the file gone
+        // the engine's profile from the tab: to the level by EngineTake's rules, whole, in force at once; or the class's
+        // curve at the level it came from (BRIEF_engine_profile_per_truck.md)
         const LONG engineAsk = InterlockedExchange(&g_engineAsked, 0);
-        if (engineAsk && watch.profileFor[0])
+        if (engineAsk && eng.engine[0])
         {
             if (engineAsk == 1)
             {
-                EngineProfileWrite(watch.profileFor, (float)g_enginePeak, (int)g_engineAspiration, (int)g_engineFuel);
+                if (EngineProfileTake(eng, (float)g_enginePeak, (int)g_engineAspiration, (int)g_engineFuel))
+                    Log(L"engine: every %S has its own engine settings from now on, kept in Gauges\\trucks\\%s.ini", eng.key, SetupFileName(Wide(eng.key)).c_str());
                 engineLogAt = GetTickCount64() + 1000;
             }
             else
             {
-                DeleteFileW(SetupFile(kSetupEngine, watch.profileFor).c_str());
-                Log(L"engine: %S gave its profile up: the class's torque curve, turbocharged", watch.profileFor);
+                EngineProfileDrop(eng);
+                EngineLevelLog(eng, L"Class curve");
             }
-            EngineProfileRead(watch.profileFor, watch.profile);
+            EngineApply(eng, watch);
         }
         // the engine's torque share from the tab's slider: into its file, in force at once
         if (InterlockedExchange(&g_engineTorqueAsked, 0) && watch.profileFor[0])
@@ -6596,9 +6720,7 @@ static DWORD WINAPI Run(void *)
         }
         if (engineLogAt && GetTickCount64() >= engineLogAt)
         {
-            Log(L"engine: %S set from the tab: its peak torque at %.0f rpm, %s, %s (Gauges\\engines\\%s.ini)", watch.profileFor, watch.profile.peakRpm,
-                watch.profile.aspiration == kAspNatural ? L"naturally aspirated" : L"turbocharged",
-                watch.profile.fuel == kFuelDiesel ? L"a diesel" : watch.profile.fuel == kFuelPetrol ? L"a petrol engine" : L"the class's fuel", SetupFileName(Wide(watch.profileFor)).c_str());
+            EngineLevelLog(eng, L"set from the tab");
             engineLogAt = 0;
         }
         if (gearHoldLogAt && GetTickCount64() >= gearHoldLogAt)
@@ -6866,7 +6988,7 @@ static DWORD WINAPI Run(void *)
             const GaugeScale es = GaugeScaleOf(inForce);
             const TorqueCurve ec = EngineCurveOf(watch.profile, kClassCurves[AutoClass(watch, inForce.tachClass)], es.redline);
             strncpy_s(v.engine, watch.profileFor, _TRUNCATE);
-            v.engineOwn = watch.profile.own;
+            v.engineOwn = watch.profile.own && ProfileNotStock(watch.profile);
             v.engineCustom = watch.profile.custom;
             v.engineAspiration = watch.profile.aspiration;
             v.engineFuel = watch.profile.fuel;
@@ -6887,6 +7009,7 @@ static DWORD WINAPI Run(void *)
         v.engSetKindSet = eng.kindOwn || eng.kindKept;
         v.engSetLevel = eng.key[0] ? EngineLevel(eng) : kEngLevelNone;
         v.engTorqueFrom = eng.torqueFrom, v.engHoldFrom = eng.holdFrom;
+        v.engProfileFrom = eng.key[0] && eng.engine[0] ? eng.profileFrom : watch.profile.own ? kEngLevelDefault : kEngLevelNone;
         // the suspension's figures as the driven truck's file has them, front (wheel 0) and rear (the last wheel)
         // the display's figures, the bars' lamp and each axle's rest place (build B)
         {
@@ -8330,6 +8453,121 @@ int wmain(int argc, wchar_t **argv)
                 const bool noBox = !EngineTake(o, 0, 1.5f) && !o.kindOwn;
                 Check(noEngine && noBox && GetFileAttributesW(truckFile(kind5).c_str()) == INVALID_FILE_ATTRIBUTES,
                       "engine: an edit with the engine's or the gearbox's name not known yet writes nothing and ticks no set");
+            }
+            // the engine's profile by truck and kind (BRIEF_engine_profile_per_truck.md and its addendum)
+            {
+                const char *ka = "eng_prof_a", *kb = "eng_prof_b", *kc = "eng_prof_c", *kd = "eng_prof_d", *ep = "e_prof_engine_3";
+                auto cleanP = [&]() {
+                    for (const char *k : { ka, kb, kc, kd }) DeleteFileW(truckFile(k).c_str());
+                    DeleteFileW(SetupFile(kSetupEngine, ep).c_str());
+                };
+                cleanP();
+                const std::wstring ef = SetupFile(kSetupEngine, ep);
+                // the user's case: the engine's default holds 950 and Torque=; two kinds with that engine
+                EngineProfileWrite(ep, 950.0f, kAspTurbo, kFuelClass);
+                EngineTorqueWrite(ep, 90);
+                EngineState a = {}, b = {};
+                EngineFor(a, ka, id1, ep, g1);
+                const bool fromDefault = a.profileFrom == kEngLevelDefault && a.profile.peakRpm == 950.0f && a.torque == 90;
+                // each kind's first edit makes its own; the engine's default stays 950 (point 6)
+                const bool madeA = EngineProfileTake(a, 1200.0f, kAspTurbo, kFuelClass);
+                EngineFor(b, kb, id2, ep, g1);
+                const bool bDefault = b.profileFrom == kEngLevelDefault && b.profile.peakRpm == 950.0f;
+                const bool madeB = EngineProfileTake(b, 1450.0f, kAspNatural, kFuelDiesel);
+                EngineProfile dflt;
+                EngineProfileRead(ep, dflt);
+                const bool defaultStays = dflt.peakRpm == 950.0f && dflt.aspiration == kAspTurbo && EngineTorqueRead(ep) == 90;
+                // A, B, A through EngineFor and EngineApply's part on one watch's profile, as the thread does (point 1); a
+                // state for another engine puts nothing in
+                EngineProfile wp;
+                EngineProfileRead(ep, wp);
+                EngineState s = {};
+                EngineFor(s, ka, id1, ep, g1), EngineProfileApply(s, ep, wp);
+                const bool onA = wp.peakRpm == 1200.0f && wp.aspiration == kAspTurbo && fabsf(wp.torque - 0.9f) < 0.001f;
+                EngineFor(s, kb, id2, ep, g1), EngineProfileApply(s, ep, wp);
+                const bool onB = wp.peakRpm == 1450.0f && wp.aspiration == kAspNatural && wp.fuel == kFuelDiesel;
+                EngineFor(s, ka, id1, e2, g1), EngineProfileApply(s, ep, wp);
+                const bool otherEngine = wp.peakRpm == 1450.0f;
+                EngineFor(s, ka, id1, ep, g1), EngineProfileApply(s, ep, wp);
+                const bool backA = wp.peakRpm == 1200.0f && wp.aspiration == kAspTurbo && wp.fuel == kFuelClass && s.profileFrom == kEngLevelKind;
+                Check(fromDefault && madeA && bDefault && madeB && defaultStays && onA && onB && otherEngine && backA,
+                      "engine profile: two kinds with one engine keep two profiles, the first edit of each makes its own, A to B to A on one watch puts each one's back, "
+                      "a state for another engine puts nothing in, the default stays");
+                // whole from one level (point 2): a truck's peak over a default's TorqueCurve gives the truck's peak;
+                // a kind's class fuel over a default's diesel gives the class's
+                WritePrivateProfileStringW(L"Engine", L"TorqueCurve", L"0.3:0.7,0.5:1,1:0.75", ef.c_str());
+                WritePrivateProfileStringW(L"Engine", L"Fuel", L"diesel", ef.c_str());
+                EngineFor(a, ka, id1, ep, g1);
+                EngineLevelSet(a, true);
+                EngineProfileTake(a, 1300.0f, kAspTurbo, kFuelClass);
+                EngineFor(a, ka, id1, ep, g1);
+                const TorqueCurve ac = EngineCurveOf(a.profile, kClassCurves[kClassTruck], 2000.0f);
+                const bool truckPeak = a.profileFrom == kEngLevelTruck && !a.profile.custom && a.profile.peakRpm == 1300.0f && fabsf(CurvePeak(ac) - CurvePeak(EngineCurveFromPeak(1300.0f / 2000.0f, false))) < 0.001f;
+                EngineFor(o, ka, id3, ep, g1);
+                const bool kindClassFuel = o.profileFrom == kEngLevelKind && o.profile.fuel == kFuelClass && !o.profile.custom;
+                // a level holding Torque only falls through whole to the default, its curve and fuel with it
+                EngineFor(o, kc, id1, ep, g1);
+                EngineTake(o, 70, 0.0f);
+                const bool torqueOnly = o.kindOwn && o.profileFrom == kEngLevelDefault && o.profile.custom && o.profile.fuel == kFuelDiesel && o.torque == 70;
+                Check(truckPeak && kindClassFuel && torqueOnly,
+                      "engine profile: whole from one level, a truck's peak over the default's TorqueCurve gives the peak, a kind's class fuel over the default's diesel gives "
+                      "the class's, a level with Torque only takes the default's profile whole");
+                // the profile edit keeps a curve of its own in force with it at a level (and its text)
+                EngineProfileTake(o, 1500.0f, kAspNatural, kFuelPetrol);
+                wchar_t kept[256] = {};
+                GetPrivateProfileStringW(kEngineSection, EngineKeyOf(L"TorqueCurve", ep).c_str(), L"", kept, 256, truckFile(kc).c_str());
+                const bool curveKept = o.profileFrom == kEngLevelKind && o.profile.custom && o.profile.fuel == kFuelPetrol && !wcscmp(kept, L"0.3:0.7,0.5:1,1:0.75");
+                // Class curve at the kind's level: the class's curve there, the default untouched (point 4)
+                EngineProfileDrop(o);
+                EngineProfile after;
+                EngineProfileRead(ep, after);
+                const bool dropKind = o.profileFrom == kEngLevelKind && o.profile.own && !ProfileNotStock(o.profile) &&
+                                      EngineCurveOf(o.profile, kClassCurves[kClassTruck], 2000.0f).n == kClassCurves[kClassTruck].n && after.custom && after.peakRpm == 950.0f &&
+                                      GetFileAttributesW(ef.c_str()) != INVALID_FILE_ATTRIBUTES;
+                Check(curveKept && dropKind, "engine profile: an edit at a level keeps the curve of its own in force, Class curve at the kind's level gives the class's curve "
+                                             "there and leaves the default as it is");
+                // Make this the engine's default copies the profile whole; Class curve at the default level keeps Torque=
+                EngineFor(a, ka, id1, ep, g1);
+                EngineToDefault(a);
+                EngineProfile copied;
+                wchar_t copiedCurve[256];
+                EngineProfileRead(ep, copied, copiedCurve);
+                const bool toDefault = copied.peakRpm == 1300.0f && copied.fuel == kFuelClass && !copied.custom && !copiedCurve[0];
+                EngineFor(b, kb, id2, ep, g1);
+                EngineOwnSet(b, false);
+                const bool bOff = b.profileFrom == kEngLevelDefault && b.profile.peakRpm == 1300.0f;
+                EngineProfileDrop(b);
+                EngineProfile gone;
+                const bool dropDefault = !EngineProfileRead(ep, gone) && EngineTorqueRead(ep) > 0 && GetFileAttributesW(ef.c_str()) != INVALID_FILE_ATTRIBUTES &&
+                                         b.profileFrom == kEngLevelNone && b.kindKept;
+                // Defaults leaves the engine file's profile alone (point 5)
+                EngineProfileWrite(ep, 1100.0f, kAspTurbo, kFuelClass);
+                EngineDefaults(b);
+                EngineProfile still;
+                const bool defaultsKeep = EngineProfileRead(ep, still) && still.peakRpm == 1100.0f;
+                Check(toDefault && bOff && dropDefault && defaultsKeep,
+                      "engine profile: Make this the engine's default copies the profile whole, Class curve at the default level takes the four keys out and keeps Torque= "
+                      "and the file, Defaults leaves the engine file's profile");
+                // This truck only and Every kind carry the profile keys with Torque (EngineLevelSet, the take-over's sections)
+                EngineFor(o, kc, id2, ep, g1);
+                EngineLevelSet(o, true);
+                EngineProfileTake(o, 1700.0f, kAspTurbo, kFuelClass);
+                const bool truckOwn = o.profileFrom == kEngLevelTruck && o.profile.peakRpm == 1700.0f;
+                // Every kind with the kind's set: the kind's (Class curve's marker) in force, the truck's kept; This truck only brings it back
+                EngineLevelSet(o, false);
+                const bool kindKeepsKind = o.profileFrom == kEngLevelKind && o.profile.own && o.profile.peakRpm == 0.0f && o.truckKept;
+                EngineLevelSet(o, true);
+                const bool truckBack = o.profileFrom == kEngLevelTruck && o.profile.peakRpm == 1700.0f;
+                // Every kind with no set for the kind: the truck's section goes up whole, its profile with it
+                EngineFor(o, kd, id1, ep, g1);
+                EngineLevelSet(o, true);
+                EngineProfileTake(o, 1800.0f, kAspNatural, kFuelClass);
+                EngineLevelSet(o, false);
+                wchar_t probeD[8] = {};
+                const bool movedUp = o.profileFrom == kEngLevelKind && o.profile.peakRpm == 1800.0f && o.profile.aspiration == kAspNatural && !o.truckKept &&
+                                     !GetPrivateProfileSectionW(SectionOf(kEngineSection, id1).c_str(), probeD, 8, truckFile(kd).c_str());
+                Check(truckOwn && kindKeepsKind && truckBack && movedUp, "engine profile: This truck only and Every kind move the profile with the level, as Torque");
+                cleanP();
             }
             // DropTruckIni keeps the file while [Engine] is in it
             {
