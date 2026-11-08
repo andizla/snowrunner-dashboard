@@ -1097,11 +1097,10 @@ inline const wchar_t *ShiftJobDropWhy(const ShiftJob &j, uint64_t vehicle)
 
 // ---- the words beside the game's menu fields (Probe=1; the drive of 2026-11-06 20:52, F1) ----
 // A pad A 0.8 s after the function menu closed reached the gearbox while every menu flag the mod reads was 0: the
-// truck switch's own screen. From the function menu's close until the game sets a truck (or kMenuWordsMs), the probe
-// logs the words around the flags World reads, each one that changes, so the next drive shows which word marks
-// that screen.
+// truck switch's own screen. That drive found only a running count after the function menu's close. Now the probe
+// logs the words around the flags World reads while a truck is read (MenuWordsStep), each one that changes, so a drive
+// shows which word, if any, marks each of the game's windows over the HUD (BRIEF_cluster_under_windows.md).
 static const int kMenuWordsGame = 32, kMenuWordsInput = 16, kMenuWordsControl = 16;
-static const unsigned long long kMenuWordsMs = 15000;
 struct MenuWords
 {
     bool game, input, control;
@@ -1137,6 +1136,63 @@ inline int MenuWordsLine(const MenuWords &now, const MenuWords *was, char *out, 
     block("input", now.input, was && was->input, 0x1C0, now.in, was ? was->in : nullptr, kMenuWordsInput);
     block("control", now.control, was && was->control, 0xC0, now.c, was ? was->c : nullptr, kMenuWordsControl);
     return n;
+}
+
+// The watch of the menu words while Probe=1 and a truck is read (BRIEF_cluster_under_windows.md, the Reviewer's M2):
+// armed from the start, not only after a menu's close, so one drive shows the word that marks each of the game's
+// windows. A word that changed on more than half of its last kMenuWordsRun passes is a running count: one line says it
+// is left out, and it is never in a line again. At most kMenuWordsCap lines of changed words a session.
+static const int kMenuWordsAll = kMenuWordsGame + kMenuWordsInput + kMenuWordsControl;
+static const int kMenuWordsRun = 20, kMenuWordsCap = 200;
+struct MenuWordsWatch
+{
+    bool have;                        // was holds the last pass's words
+    MenuWords was;
+    uint32_t history[kMenuWordsAll];  // a bit a pass, the newest lowest: the word changed on that pass
+    int passes;
+    bool out[kMenuWordsAll];          // left out as a running count
+    int lines;                        // lines of changed words written
+};
+
+// One pass. line: every word on the first pass, else the words that changed and are not left out, "" for none or past
+// the cap. runs: the words left out on this pass, as "game+68 input+1D4", "" for none. Returns true where line holds words.
+inline bool MenuWordsStep(MenuWordsWatch &w, const MenuWords &now, char *line, size_t size, char *runs, size_t runsSize)
+{
+    line[0] = runs[0] = 0;
+    const MenuWords *was = w.have ? &w.was : nullptr;
+    const bool known[3] = { now.game && (!was || was->game), now.input && (!was || was->input), now.control && (!was || was->control) };
+    const char *names[3] = { "game", "input", "control" };
+    const int from[3] = { 0, 0x1C0, 0xC0 }, count[3] = { kMenuWordsGame, kMenuWordsInput, kMenuWordsControl };
+    const uint32_t *v[3] = { now.g, now.in, now.c }, *vWas[3] = { was ? was->g : nullptr, was ? was->in : nullptr, was ? was->c : nullptr };
+    size_t k = 0, r = 0;
+    int words = 0;
+    for (int b = 0, i0 = 0; b < 3; i0 += count[b], b++)
+        for (int i = 0; i < count[b]; i++)
+        {
+            const int at = i0 + i;
+            const bool changed = was && known[b] && v[b][i] != vWas[b][i];
+            w.history[at] = (w.history[at] << 1 | (changed ? 1u : 0u)) & ((1u << kMenuWordsRun) - 1u);
+            int runsOf = 0;
+            for (uint32_t h = w.history[at]; h; h &= h - 1) runsOf++;
+            if (!w.out[at] && runsOf * 2 > kMenuWordsRun)
+            {
+                w.out[at] = true;
+                const int wrote = snprintf(runs + r, runsSize - r, "%s%s+%X", r ? " " : "", names[b], from[b] + 4 * i);
+                if (wrote > 0 && (size_t)wrote < runsSize - r) r += (size_t)wrote;
+                continue;
+            }
+            if (w.out[at] || !known[b] || w.lines >= kMenuWordsCap) continue;
+            int wrote = 0;
+            if (!was) wrote = snprintf(line + k, size - k, " %s+%X %08X", names[b], from[b] + 4 * i, v[b][i]);
+            else if (changed) wrote = snprintf(line + k, size - k, " %s+%X %08X->%08X", names[b], from[b] + 4 * i, vWas[b][i], v[b][i]);
+            if (wrote > 0 && (size_t)wrote < size - k) k += (size_t)wrote, words++;
+        }
+    w.was = now;
+    w.have = true;
+    w.passes++;
+    if (!words) line[0] = 0;
+    else w.lines++;
+    return words > 0;
 }
 
 // The log's lines as a truck is found or none is driven any more: how many, into lines.

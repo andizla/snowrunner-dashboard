@@ -3596,6 +3596,9 @@ struct SuspStepWatch
     LONG windows, tail, faults, refused; // the windows, the ring's entries, the faults and the refused writes taken so far
     LONG gameValues;            // the wheels left for the game's own values, as seen, and each wheel's count taken
     LONG gameSeen[kMaxWheels];
+    uint64_t gameToldVehicle;   // the truck the game's value lines were said for, and which wheel and field (S2)
+    bool gameTold[kMaxWheels][2];
+    bool testWaitSaid;          // the step test's wait for the hook's field said (S3)
     uint64_t walkTold;          // the truck the walk's line was said for
     uint64_t testVehicle;       // the truck SuspStepTest runs on: another one waits kStepTestEvery before its first write
     bool damping;               // whether the physics thread wrote on the generation, and its settings
@@ -4195,7 +4198,7 @@ static const ULONGLONG kStepTestHold[4] = { 0, 1000, 500, 1000 };
 static const float kStepTestShift = 0.02f; // test 3: m toward the droop
 static const float kStepTestBefore = 0.2f, kStepTestAfter = 0.5f, kStepTestGap = 0.002f;
 
-static void SuspStepHook(uint64_t action, float dt) { SuspStepLook(g_step, g_stepBlock, action, dt); }
+static void SuspStepHook(uint64_t action, float dt) { SuspStepLookAt(g_step, &g_stepBlock, action, dt); }
 
 static float SuspSize(const float v[3]) { return sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); }
 
@@ -4270,6 +4273,15 @@ static void SuspStepHistoryAdd(SuspStepWatch &p)
     g_stepHistoryCount = keep + n;
 }
 
+// Whether the block has the physics thread write wheel i's damping (k kSuspDamping) or strength (kSuspStrength): the
+// damper or the spring's features where its body is known, or the tune on the step.
+static bool BlockOwns(const SuspStepBlock &b, const TruckRefs &r, int i, int k)
+{
+    if (i >= r.wheels || i >= kMaxWheels || !b.constraint[i] || b.wheel[i] != r.wheel[i]) return false;
+    if (k == kSuspDamping) return b.base[i] > 0.0f && ((b.damping && !b.bare[i]) || b.tuneD);
+    return b.baseK[i] > 0.0f && ((b.springing && !b.bare[i] && b.travel[i] > 0.0f) || b.tuneK);
+}
+
 // SuspStepTest's course, before the tune's pass: the write to hand the tune (its wheel 0's value at the test's factor
 // while it holds, at 1 between), or nullptr with the test off.
 static const SuspTuneTest *SuspStepTestPass(SuspStepWatch &p, const TruckMemory &m, const TruckRefs &r, const TruckRaw &t, const GaugeSettings &s, ULONGLONG now,
@@ -4298,6 +4310,22 @@ static const SuspTuneTest *SuspStepTestPass(SuspStepWatch &p, const TruckMemory 
     const int k = mode == 1 ? kSuspStrength : kSuspDamping;
     uint64_t c = 0;
     if (r.wheels > 0) m.get(r.wheel[0] + kSuspConstraintAt, c);
+    // S3: where the step hook writes wheel 0's field every step, a write from here would last a step and measure
+    // nothing: the test waits, says so once, and reports nothing for a write it did not make
+    if (mode != 3 && BlockOwns(p.block, r, 0, k))
+    {
+        if (!p.testWaitSaid)
+            Log(L"probe: step test %d waits: the step hook writes wheel 0's %s (%s); set it back for the test", mode, k == kSuspStrength ? L"spring" : L"damping",
+                k == kSuspStrength ? L"Spring off 1, or a spring curve or the bump stops" : L"Damping off 1, or the damper or the zones");
+        p.testWaitSaid = true;
+        p.on = false;
+        p.report = 0;
+        p.due = now + 1000;
+        out = SuspTuneTest{ 0, k, 1.0f };
+        return &out;
+    }
+    if (p.testWaitSaid && mode != 3) Log(L"probe: step test %d: wheel 0's %s is the tune's again, the test goes on", mode, k == kSuspStrength ? L"spring" : L"damping");
+    p.testWaitSaid = false;
     if (p.on && now >= p.until)
     {
         p.on = false;
@@ -4543,15 +4571,14 @@ static void SuspDamperRelease(SuspStepWatch &p, const TruckMemory &m, const wcha
     const SuspStepBlock was = p.block;
     InterlockedExchangePointer((void *volatile *)&g_stepBlock, nullptr);
     p.block = SuspStepBlock{};
-    long hits = 0, before = 0, calls = 0;
-    CreepCounts(hits, before);
-    for (int i = 0; i < 100; i++)
-    {
-        CreepCounts(hits, calls);
-        if (calls - before >= 2) break;
-        Sleep(1);
-    }
+    // every look that may hold the old block has ended (S1: inside counts only the block's truck's looks, from before
+    // their second read of the slot), or 100 ms, as a paused game steps nothing
+    for (int i = 0; i < 100 && g_step.inside; i++) Sleep(1);
+    g_step.wordsSerial = g_step.wordsSerial + 1;
+    _WriteBarrier();
     const int back = SuspDamperLetGo(was, m, &g_step.words);
+    _WriteBarrier();
+    g_step.wordsSerial = g_step.wordsSerial + 1;
     Log(L"damper: let go (%s): %d wheels' damping and spring back to the truck's own times DampingScale and SpringScale", why, back);
 }
 
@@ -4566,10 +4593,20 @@ static void SuspGameTake(SuspStepWatch &p, SuspTune &t)
         p.gameSeen[i] = count;
         _ReadBarrier();
         const SuspGameSet g = g_step.game[i];
+        // said once a wheel and field a truck (S2); after that the probe line's count carries it
+        if (p.gameToldVehicle != p.block.vehicle)
+        {
+            p.gameToldVehicle = p.block.vehicle;
+            memset(p.gameTold, 0, sizeof p.gameTold);
+        }
         for (int k = 0; k < 2; k++)
-            if (g.has[k] && SuspTuneTake(t, p.block.vehicle, i, g.c, k, g.value[k]))
-                Log(L"suspension: wheel %d's %s was set by the game to %g (an upgrade or a repair, likely): taken as its stock, the sliders go on from it", i,
-                    k == kSuspStrength ? L"spring" : L"damping", g.value[k]);
+            if (g.has[k] && SuspTuneTake(t, p.block.vehicle, i, g.c, k, g.value[k]) && !p.gameTold[i][k])
+            {
+                p.gameTold[i][k] = true;
+                Log(L"suspension: wheel %d's %s was set by the game to %g (an upgrade or a repair, likely): taken as its stock, the sliders go on from it (said once a "
+                    L"wheel this truck)",
+                    i, k == kSuspStrength ? L"spring" : L"damping", g.value[k]);
+            }
     }
 }
 
@@ -4587,9 +4624,8 @@ static void SuspDamperBefore(SuspStepWatch &p, const TruckMemory &m, const Truck
     // one writer per field (the Reviewer's must 5): what the block has the physics thread write, the tune leaves
     for (int i = 0; i < kMaxWheels; i++)
     {
-        const bool named = i < r.wheels && p.block.constraint[i] != 0 && p.block.wheel[i] == r.wheel[i];
-        owns[i] = named && p.block.base[i] > 0.0f && ((p.block.damping && !p.block.bare[i]) || p.block.tuneD);
-        springs[i] = named && p.block.baseK[i] > 0.0f && ((p.block.springing && !p.block.bare[i] && p.block.travel[i] > 0.0f) || p.block.tuneK);
+        owns[i] = BlockOwns(p.block, r, i, kSuspDamping);
+        springs[i] = BlockOwns(p.block, r, i, kSuspStrength);
     }
 }
 
@@ -5112,7 +5148,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     SuspTuneTest stepTestNow;
     const SuspTuneTest *stepTest = w.found ? SuspStepTestPass(w.step, m, w.refs, raw, s, now, stepTestNow) : nullptr;
     if (w.found) SuspGameTake(w.step, w.tune);
-    const SuspModWords words = g_step.words;
+    SuspModWords words;
+    SuspWordsCopy(g_step, words);
     if (w.found) SuspTunePass(w.tune, m, w.refs, s, stepTest, damperOwns, springOwns, &words);
     if (w.found) FrameFlexPass(w.frame, m, w.refs, s);
     if (w.found && w.step.on && w.step.value < 0.0f && w.refs.wheels > 0)
@@ -7013,42 +7050,32 @@ static DWORD WINAPI Run(void *)
         EngineApply(eng, watch);
         const bool driving = TruckPass(watch, memory, inForce, front, raw, world);
         wasDriving = driving;
-        const bool menuUpWas = gameMenu.up;
-        if (GameMenuGateSeen(gameMenu, GameMenuUp(world), GetTickCount64(), world.functionMenu != 0)) Log(L"input: the game's function menu is up, the bindings wait");
-        // Probe=1: the words around the game's menu flags from the function menu's close until the game sets a truck
-        // (truck.h, MenuWords), so the next drive shows the word that marks the truck switch's own screen
-        if (s.probe)
+        // the flag that rose names itself (the Reviewer's should 6 on BRIEF_cluster_under_windows.md)
+        if (GameMenuGateSeen(gameMenu, GameMenuUp(world), GetTickCount64(), world.functionMenu != 0))
+            Log(L"input: %s, the bindings wait", world.functionMenu ? L"the function menu is up" : L"the game's menus have the input");
+        // Probe=1: the words around the game's menu flags while a truck is read, from the start (truck.h, MenuWordsStep;
+        // the Reviewer's M2), and the cursor's state, so one drive shows what marks each of the game's windows over the HUD
+        if (s.probe && watch.found)
         {
-            static unsigned long long wordsUntil = 0;
-            static long wordsVehicleSets = 0;
-            static int wordsLines = 0;
-            static MenuWords wordsWas;
-            GearboxCounts wc;
-            GearboxCountsGet(wc);
-            const unsigned long long wordsNow = GetTickCount64();
-            if (menuUpWas && !gameMenu.up)
+            static MenuWordsWatch menuWords;
+            MenuWords words;
+            MenuWordsRead(memory, watch.refs.control, words);
+            char line[1400], runs[400];
+            const bool first = !menuWords.have;
+            if (MenuWordsStep(menuWords, words, line, sizeof line, runs, sizeof runs))
+                Log(L"probe: menu words%S:%S%S", first ? " as they are" : " changed", line, menuWords.lines == kMenuWordsCap ? " (the last line of 200 this start)" : "");
+            if (runs[0]) Log(L"probe: menu words: %S run (changed on more than half of the last 20 passes), left out", runs);
+            // the cursor: shown or not, and where it is held (two calls a pass, one line at each change)
+            static bool cursorKnown = false, cursorShown = false;
+            static RECT cursorClip = {};
+            CURSORINFO ci = { sizeof ci };
+            RECT clip = {};
+            if (GetCursorInfo(&ci) && GetClipCursor(&clip))
             {
-                wordsUntil = wordsNow + kMenuWordsMs;
-                wordsVehicleSets = wc.vehicle;
-                wordsLines = 0;
-            }
-            if (wordsUntil)
-            {
-                MenuWords words;
-                MenuWordsRead(memory, watch.found ? watch.refs.control : 0, words);
-                char line[1400];
-                const bool first = !wordsLines;
-                if (MenuWordsLine(words, first ? nullptr : &wordsWas, line, sizeof line) && wordsLines < 40)
-                {
-                    Log(L"probe: menu words %S the function menu closed (%llu ms):%S", first ? "as" : "since", wordsNow - (wordsUntil - kMenuWordsMs), line);
-                    wordsLines++;
-                }
-                wordsWas = words;
-                if (wc.vehicle != wordsVehicleSets || wordsNow >= wordsUntil)
-                {
-                    Log(L"probe: menu words: the watch ends, %s", wc.vehicle != wordsVehicleSets ? L"the game set a truck" : L"15 s gone");
-                    wordsUntil = 0;
-                }
+                const bool shown = (ci.flags & CURSOR_SHOWING) != 0;
+                if (!cursorKnown || shown != cursorShown || memcmp(&clip, &cursorClip, sizeof clip))
+                    Log(L"probe: cursor: %s, held to %ld, %ld to %ld, %ld", shown ? L"shown" : L"hidden", clip.left, clip.top, clip.right, clip.bottom);
+                cursorKnown = true, cursorShown = shown, cursorClip = clip;
             }
         }
         if (watch.found && !codeLooked)

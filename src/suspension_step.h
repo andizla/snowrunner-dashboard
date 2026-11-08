@@ -371,7 +371,25 @@ struct SuspStepState
     volatile LONG gameCount[kMaxWheels];
     volatile LONG gameValues;      // wheels left for the game's own values so far, for the probe's line
     uint32_t leftSerial[kMaxWheels]; // the block whose writes leave this wheel (the game's value is there)
+    volatile LONG inside;          // looks under way on the block's truck (S1 of review_step_hook_writes.md): the release waits for 0
+    volatile LONG wordsSerial;     // odd while words is being written (S4): a copy is whole where it is even and the same before and after
 };
+
+// The words copied whole (S4): read while the serial is even and the same before and after, a few tries. True where it
+// was; a torn copy can only be a pass where a slider move and a rebuild meet, and the next pass's is whole.
+inline bool SuspWordsCopy(const SuspStepState &s, SuspModWords &out)
+{
+    for (int i = 0; i < 8; i++)
+    {
+        const LONG before = s.wordsSerial;
+        _ReadBarrier();
+        memcpy(&out, (const void *)&s.words, sizeof out);
+        _ReadBarrier();
+        if (!(before & 1) && s.wordsSerial == before) return true;
+        YieldProcessor();
+    }
+    return false;
+}
 
 // The block published: written into the slot the physics thread is not reading (the one published two passes ago),
 // sealed, then swapped in.
@@ -700,6 +718,9 @@ inline bool SuspDamperStep(SuspStepState &s, const SuspStepBlock &b, const float
             InterlockedIncrement(done < 0 ? &s.faults : &s.refused);
             return false;
         }
+        // the words under the serial, odd while they change (S4)
+        s.wordsSerial = s.wordsSerial + 1;
+        _WriteBarrier();
         if (s.words.vehicle != b.vehicle)
         {
             memset(&s.words, 0, sizeof s.words);
@@ -712,6 +733,8 @@ inline bool SuspDamperStep(SuspStepState &s, const SuspStepBlock &b, const float
         }
         if (k >= 0.0f) s.words.word[i][0] = k, s.words.has[i][0] = true;
         if (f >= 0.0f) s.words.word[i][1] = f, s.words.has[i][1] = true;
+        _WriteBarrier();
+        s.wordsSerial = s.wordsSerial + 1;
         // the window's counts are the features' writes, not the tune's
         if (f >= 0.0f && damper)
         {
@@ -1084,6 +1107,19 @@ inline void SuspStepLook(SuspStepState &s, const SuspStepBlock *published, uint6
         s.faultSerial = b.serial;
         s.have = false;
     }
+}
+
+// One call of the wheels' drive with the slot itself (S1 of review_step_hook_writes.md): for any truck but the block's
+// one compare, as before; for the block's, counted in inside before the slot is read again, so a release that nulls the
+// slot and then sees inside at 0 knows no look still holds the old block.
+inline void SuspStepLookAt(SuspStepState &s, SuspStepBlock *const volatile *slot, uint64_t action, float dt)
+{
+    const SuspStepBlock *p = *slot;
+    if (!p || p->action != action) return;
+    InterlockedIncrement(&s.inside);
+    p = *slot;
+    if (p && p->action == action) SuspStepLook(s, p, action, dt);
+    InterlockedDecrement(&s.inside);
 }
 
 // The damper let go (the mod's thread, once the physics thread has stepped past the block that ran it): each wheel's

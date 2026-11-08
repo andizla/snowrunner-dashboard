@@ -1025,6 +1025,44 @@ int main()
             const bool sameOk = MenuWordsLine(b, &b, line, sizeof line) == 0;
             Check(allOk && changedOk && sameOk, "menu words (Probe=1, the drive of 2026-11-06 20:52, F1): all the words first, then each one that changed");
         }
+        {
+            // the menu words' watch (BRIEF_cluster_under_windows.md, the Reviewer's M2): every word on the first pass, then
+            // only the changed ones; a word that changed on more than half of its last 20 passes is said once as a run and
+            // left out after; at most 200 lines of changed words
+            static MenuWordsWatch w;
+            memset(&w, 0, sizeof w);
+            MenuWords now = {};
+            now.game = true;
+            char line[1400], runs[400];
+            const bool first = MenuWordsStep(w, now, line, sizeof line, runs, sizeof runs) && strstr(line, " game+0 00000000") && strstr(line, " game+7C 00000000") &&
+                               !runs[0];
+            const bool quiet = !MenuWordsStep(w, now, line, sizeof line, runs, sizeof runs) && !line[0] && !runs[0];
+            now.g[2] = 5;
+            const bool once = MenuWordsStep(w, now, line, sizeof line, runs, sizeof runs) && !strcmp(line, " game+8 00000000->00000005");
+            // game+C runs: a new value every pass; its 11th change makes more than half of 20
+            bool ranOut = false, saidBefore = false;
+            int said = 0;
+            for (int i = 0; i < 11; i++)
+            {
+                now.g[3] = (uint32_t)(i + 1);
+                MenuWordsStep(w, now, line, sizeof line, runs, sizeof runs);
+                if (strstr(line, "game+C ")) said++;
+                if (runs[0]) ranOut = !strcmp(runs, "game+C") && i == 10, saidBefore = said == 10;
+            }
+            now.g[3] = 99;
+            const bool leftOut = !MenuWordsStep(w, now, line, sizeof line, runs, sizeof runs) && !runs[0];
+            // the cap: a word that changes every other pass never runs, and its lines stop at 200
+            int lines = w.lines;
+            for (int i = 0; i < 500; i++)
+            {
+                now.g[4] = (uint32_t)(i / 2);
+                if (MenuWordsStep(w, now, line, sizeof line, runs, sizeof runs)) lines++;
+            }
+            const bool capped = lines == kMenuWordsCap && w.lines == kMenuWordsCap && !w.out[4];
+            Check(first && quiet && once && ranOut && saidBefore && leftOut && capped,
+                  "menu words' watch (the Reviewer's M2): all the words on the first pass, then only those that changed; a word that changed on more than half "
+                  "of its last 20 passes is named once as a run and left out after; at most 200 lines a start");
+        }
 
         // a frame of the truck update: its first argument an object with the vehicle at + 0x20 (StallJobFrame, what the
         // hook's callback runs); and the clutch's burn end to end, its whole points posted to the job and dealt by a frame
@@ -2187,8 +2225,24 @@ int main()
         const bool fault = s.faults == 1 && !s.have;
         SuspStepLook(s, slot, 0x5678, 0.01f);
         const bool once = s.faults == 1;
-        Check(read && other && taken && fault && once, "step reads: the wheel's centre against its body along its up axis and the chassis's speed; another truck's call is passed by; "
-                                                       "a bad address faults once, counted, and its block is dropped until a new one");
+        // S1 of review_step_hook_writes.md: the look through the slot itself counts the block's truck's looks in inside,
+        // back to 0 once each has ended; another truck's call and an empty slot are passed by without a count
+        memset(&s, 0, sizeof s);
+        b.wheel[0] = (uint64_t)(uintptr_t)wheel;
+        SuspStepPublish(slots, next, &slot, b, serial);
+        SuspStepLookAt(s, &slot, 0x9999, 0.01f);
+        const bool atOther = !s.have && s.inside == 0;
+        SuspStepLookAt(s, &slot, 0x5678, 0.01f);
+        const bool atOwn = s.have && Near(s.h[0], 0.3f) && s.inside == 0;
+        SuspStepBlock *const kept = slot;
+        slot = nullptr;
+        s.have = false;
+        SuspStepLookAt(s, &slot, 0x5678, 0.01f);
+        const bool atNone = !s.have && s.inside == 0;
+        slot = kept;
+        Check(read && other && taken && fault && once && atOther && atOwn && atNone, "step reads: the wheel's centre against its body along its up axis and the chassis's speed; another truck's call is passed by; "
+                                                       "a bad address faults once, counted, and its block is dropped until a new one; the look through the slot "
+                                                       "counts the block's truck's looks and is back at 0 after each, another truck's call and an empty slot uncounted");
     }
 
     // which body a wheel rides on: the F350's front wheel fits the chassis by its constraint's attach point (0.02 m
@@ -2405,8 +2459,17 @@ int main()
         const bool refused = *field == 0.123f && other[0xC8 / 8] == 0 && s.refused == 1 && !s.have;
         SuspStepLook(s, slot, 0x7777, step);
         const bool dropped = s.refused == 1 && s.win.written[0] == 2;
-        Check(first && rising && falling && refused && dropped, "damper step: nothing on the first step, then the tune's damping times G of the speed just read, compression and "
-                                                                "rebound; a wheel whose constraint changed is not written and the block is dropped");
+        // S4: the words written under the serial, even again after each write; a copy at an even serial is whole and one
+        // at an odd serial (a write under way) is refused
+        const bool serialEven = s.wordsSerial >= 4 && !(s.wordsSerial & 1);
+        SuspModWords copy = {};
+        const bool whole = SuspWordsCopy(s, copy) && !memcmp(&copy, (const void *)&s.words, sizeof copy) && copy.has[0][1];
+        s.wordsSerial++;
+        const bool torn = !SuspWordsCopy(s, copy);
+        s.wordsSerial++;
+        Check(first && rising && falling && refused && dropped && serialEven && whole && torn, "damper step: nothing on the first step, then the tune's damping times G of the speed just read, compression and "
+                                                                "rebound; a wheel whose constraint changed is not written and the block is dropped; the words under an even "
+                                                                "serial after each write, copied whole, a copy during a write refused");
     }
 
     // who owns the damping (BRIEF_suspension_damper.md, part 2): with the damper on a wheel the tune keeps its damping stock
