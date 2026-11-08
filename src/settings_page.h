@@ -284,7 +284,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         PageTip("Handbrake, lights, AWD, diff lock, low gear, engine damage, cold engine, tilt and oil. On by default.");
         PageLabel("Odometer", labelX);
         changed(ImGui::Checkbox("##showodometer", &s.showOdometer));
-        PageTip(s.mph ? "Miles driven under the speed. Each truck keeps its own count. On by default." : "Kilometres driven under the speed. Each truck keeps its own count. On by default.");
+        PageTip(s.mph ? "Miles driven under the speed, or engine hours where Counts says Hours. Each truck keeps its own count. On by default."
+                      : "Kilometres driven under the speed, or engine hours where Counts says Hours. Each truck keeps its own count. On by default.");
         static const char *oils[kOilGaugeCount] = { "Not shown", "Second needle", "Own dial" };
         PageLabel("Oil gauge", labelX);
         ImGui::SetNextItemWidth(w);

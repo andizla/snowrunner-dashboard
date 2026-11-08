@@ -6709,9 +6709,11 @@ static DWORD WINAPI Run(void *)
             char shown[24], hours[24];
             OdoText(shown, sizeof shown, odo.metres, odo.seconds, false, s.mph);
             OdoText(hours, sizeof hours, odo.metres, odo.seconds, true, false);
+            // "its count from" only where a section was loaded: a match from a truck without one gave no count (the Reviewer's N2)
+            const bool from = odoFrom[0] && loaded;
             Log(L"odometer: %S, id %S: %S and %S (%s shown), %s%S%s", truck.key, truck.id[0] ? truckid::Short(truck.id).c_str() : "not read", shown, hours,
-                odoHours ? L"hours" : L"distance", !truck.id[0] ? L"counted for this drive only, not saved" : odoFrom[0] ? L"its count from " : loaded ? L"from [Odometer:<id>]" : L"no section yet",
-                odoFrom[0] ? truckid::Short(odoFrom).c_str() : "", odoFrom[0] ? L" (out of the warehouse)" : L"");
+                odoHours ? L"hours" : L"distance", !truck.id[0] ? L"counted for this drive only, not saved" : from ? L"its count from " : loaded ? L"from [Odometer:<id>]" : L"no section yet",
+                from ? truckid::Short(odoFrom).c_str() : "", from ? L" (out of the warehouse)" : L"");
             odoFrom[0] = 0;
         }
         if (!truck.id[0]) return;
