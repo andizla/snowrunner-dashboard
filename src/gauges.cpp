@@ -377,8 +377,8 @@ void GaugeLog(const wchar_t *fmt, ...)
 #ifndef GAUGES_SETTINGS_TEST
 // A crash's line (0.18.2's hotfix, the reviewer's item 5): a fault nothing handled writes one line to Gauges.log, its
 // code, its place as module + RVA and its thread, then goes on to the filter that was there before (the game's crash
-// reporter). Set once a truck is first driven, after the game set its own. The line is written without the log's lock
-// and without the heap, as the fault may have come while either was held.
+// reporter). Set at the mod's start and again at the first truck, after the game set its own (CrashLineAgain). The
+// line is written without the log's lock and without the heap, as the fault may have come while either was held.
 // Round 2: the game closed with no such line, so the fault, if any, is handled inside the game. A vectored handler,
 // first in the chain, also names the first kFaultLines faults of the kinds that end a program on any thread, as they
 // are raised, and lets them go on as they would (EXCEPTION_CONTINUE_SEARCH): it changes nothing.
@@ -461,16 +461,24 @@ static void ExitWrite(const char *call, DWORD code)
     CrashLineFlushed(text);
 }
 
+// The filter set before ours at the start, kept beside the one taken at the first truck: a filter set between the two
+// that passes on to ours calls ours again on the same thread, and the guard sends that call here (review M1).
+static LPTOP_LEVEL_EXCEPTION_FILTER g_crashStart = nullptr;
+static crtline::Inside g_crashInside = {};
 static LONG WINAPI CrashLine(EXCEPTION_POINTERS *e)
 {
+    crtline::Guard guard(g_crashInside);
+    if (guard.again) return g_crashStart && g_crashStart != CrashLine ? g_crashStart(e) : EXCEPTION_CONTINUE_SEARCH;
     static volatile LONG once = 0;
     if (e && e->ExceptionRecord && InterlockedExchange(&once, 1) == 0) CrashWrite(e, "crash", "passed on to the game's handler");
     return g_crashBefore ? g_crashBefore(e) : EXCEPTION_CONTINUE_SEARCH;
 }
 
+// The lines named so far of each kind (the first kFaultLines), counted again from the first truck; and the faults
+// raised in all, for the first truck's count of the boot.
+static volatile LONG g_faultLines = 0, g_throwLines = 0, g_faults = 0;
 static LONG WINAPI FaultLine(EXCEPTION_POINTERS *e)
 {
-    static volatile LONG lines = 0, throwLines = 0;
     if (!e || !e->ExceptionRecord) return EXCEPTION_CONTINUE_SEARCH;
     const DWORD code = e->ExceptionRecord->ExceptionCode;
     if (code == kCodeCppThrow)
@@ -480,13 +488,14 @@ static LONG WINAPI FaultLine(EXCEPTION_POINTERS *e)
         g_lastThrowFrames = 0;
         g_lastThrowFrames = CaptureStackBackTrace(1, kExitFrames, g_lastThrow, nullptr);
         g_lastThrowThread = GetCurrentThreadId();
-        if (InterlockedIncrement(&throwLines) <= kFaultLines) CrashWrite(e, "fault", "a C++ throw, before any catch (it may be caught)");
+        if (InterlockedIncrement(&g_throwLines) <= kFaultLines) CrashWrite(e, "fault", "a C++ throw, before any catch (it may be caught)");
         return EXCEPTION_CONTINUE_SEARCH;
     }
     if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION && code != EXCEPTION_INT_DIVIDE_BY_ZERO && code != EXCEPTION_STACK_OVERFLOW &&
         code != kCodeFastFail)
         return EXCEPTION_CONTINUE_SEARCH;
-    if (InterlockedIncrement(&lines) <= kFaultLines) CrashWrite(e, "fault", "as raised, before any handler (it may be handled)");
+    InterlockedIncrement(&g_faults);
+    if (InterlockedIncrement(&g_faultLines) <= kFaultLines) CrashWrite(e, "fault", "as raised, before any handler (it may be handled)");
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
@@ -509,6 +518,12 @@ static VOID WINAPI FailFastHook(PEXCEPTION_RECORD record, PCONTEXT context, DWOR
     g_failFast(record, context, flags);
 }
 
+// Armed at the mod's start (BRIEF_crash_line_early.md), right after the first lines, so a fault, a fast fail or an
+// exit at the game's boot is named too. It needs only g_dir, the log's first line (which starts the file anew),
+// GetModuleHandleEx, CaptureStackBackTrace and Detours on three kernel32 functions: nothing of the game's. The exit
+// calls go in with no other thread suspended (no other thread runs their first bytes while the mod starts, but a
+// loading thread suspended while it holds the heap's lock would hang the boot).
+static PVOID g_faultHandler = nullptr;
 static void CrashLineSet()
 {
     static bool set = false;
@@ -516,18 +531,55 @@ static void CrashLineSet()
     set = true;
     wcsncpy_s(g_crashLog, (g_dir + L"Gauges.log").c_str(), _TRUNCATE);
     g_crashModThread = GetCurrentThreadId();
-    g_crashBefore = SetUnhandledExceptionFilter(CrashLine);
-    const bool first = AddVectoredExceptionHandler(1, FaultLine) != nullptr;
+    g_crashBefore = g_crashStart = SetUnhandledExceptionFilter(CrashLine);
+    g_faultHandler = AddVectoredExceptionHandler(1, FaultLine);
     void **targets[3] = { (void **)&g_exitProcess, (void **)&g_terminateProcess, (void **)&g_failFast };
     void *const hooks[3] = { (void *)ExitProcessHook, (void *)TerminateProcessHook, (void *)FailFastHook };
-    const long hooked = GearboxAttach(targets, hooks, 3);
-    // the C runtime's handlers, after the game set its own: the earlier ones are read now and called after the line
+    const long hooked = GearboxAttachAlone(targets, hooks, 3);
+    // the C runtime's handlers: the earlier ones are read now and called after the line
     wchar_t crt[320];
     crtline::Set(CrashLineFlushed, true, crt, sizeof crt / sizeof crt[0]);
     Log(L"crash line: %s", crt);
     Log(L"crash line: a fault nothing handles will be named in this log, then passed on to %s; %s; %s", g_crashBefore ? L"the game's own handler" : L"Windows",
-        first ? L"the first three faults and C++ throws of any thread are named as they are raised" : L"the line for faults as they are raised could not be added",
+        g_faultHandler ? L"the first three faults and C++ throws of any thread are named as they are raised" : L"the line for faults as they are raised could not be added",
         hooked == NO_ERROR ? L"ExitProcess, TerminateProcess and RaiseFailFastException name their caller" : L"the exit calls could not be hooked");
+    Log(L"crash line: armed at the start; armed again at the first truck, after the game has set its own handlers");
+}
+
+// Armed again at the first truck. The game sets its own filter, a vectored handler first in the chain and ucrtbase's
+// invalid-parameter handler after the mod starts: the filter and that handler replace ours, and its vectored handler
+// goes in front of ours. So the filter is set again (the one it gives back is passed on to unless it is ours), ours
+// goes first in the chain again, and ucrtbase's two are set again (crtline::Again). The counts of the lines start anew.
+static void CrashLineAgain()
+{
+    static bool again = false;
+    if (again) return;
+    again = true;
+    const LPTOP_LEVEL_EXCEPTION_FILTER was = SetUnhandledExceptionFilter(CrashLine);
+    const bool filterOurs = was == CrashLine;
+    if (!filterOurs) g_crashBefore = was;
+    bool first = false;
+    if (g_faultHandler)
+    {
+        // the new one first, then the old one out: a fault in between is named twice at most, never missed (review N1)
+        const PVOID added = AddVectoredExceptionHandler(1, FaultLine);
+        if (added)
+        {
+            RemoveVectoredExceptionHandler(g_faultHandler);
+            g_faultHandler = added;
+        }
+        first = added != nullptr;
+    }
+    const LONG faults = g_faults, throws = g_throws;
+    InterlockedExchange(&g_faultLines, 0);
+    InterlockedExchange(&g_throwLines, 0);
+    wchar_t crt[400];
+    crtline::Again(CrashLineFlushed, true, crt, sizeof crt / sizeof crt[0]);
+    Log(L"crash line: before the first truck, %ld faults and %ld C++ throws were raised (the first three of each named above); the counts start again now",
+        (long)faults, (long)throws);
+    Log(L"crash line: at the first truck the filter set at the start %s; %s; %s", filterOurs ? L"was still ours" :
+        was ? L"had been replaced by the game's own, ours is back in front and passes on to it" : L"had been taken out, ours is back and passes on to Windows",
+        first ? L"ours is first in the vectored chain again" : g_faultHandler ? L"ours stays where it was in the vectored chain" : L"the line for faults as they are raised is not in", crt);
 }
 
 // Says where the last start's log went, once this start's first line is in.
@@ -4978,7 +5030,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     if (!read) w.found = false;
     if (w.found != was)
     {
-        if (w.found) CrashLineSet();
+        if (w.found) CrashLineAgain();
         char lines[2][160];
         const int count = TruckFoundLines(w.found, raw, lines);
         for (int i = 0; i < count; i++) Log(L"%S", lines[i]);
@@ -6217,6 +6269,7 @@ static DWORD WINAPI Run(void *)
     Log(L"Next Gen Gameplay " GAUGES_VERSION L" (Gauges): exe stamp %08lx, loaded %s", stamp,
         g_addon ? L"by ReShade as Gauges.addon64, the name from before 0.16 (the mod needs no ReShade now: keep it as Gauges.asi)" : L"by an ASI loader");
     LogKeptSay();
+    CrashLineSet(); // before the overlay and the places' looks, which can take 60 s (BRIEF_crash_line_early.md)
     LogGameFolder();
     SettingsDefaults(g_set); // what the tab shows until the ini is read
     g_overlayOk = OverlayInit(g_self);
@@ -6239,7 +6292,7 @@ static DWORD WINAPI Run(void *)
     }
     if (!placesOk)
     {
-        Log(L"places: the mod cannot find the driven truck in this build of the game, %d looks over %.0f s: standing down, nothing in the game is changed and "
+        Log(L"places: the mod cannot find the driven truck in this build of the game, %d looks over %.0f s: standing down, nothing in the game is changed (the crash line stays armed) and "
             L"no cluster is drawn (the Gameplay tab says the mod is not running). "
             L"Gauges.log above says what is missing", kPlacesLooks, (kPlacesLooks - 1) * kPlacesRetryMs / 1000.0);
         InterlockedExchange(&g_modOff, 1);
