@@ -1943,113 +1943,53 @@ static void DropTruckSusp(const char *key, const char *id)
 // kind, which keeps its set). The old section stays: were it in fact another truck of the kind, it keeps its set.
 // True when a set was taken over.
 // The old section is then marked TakenBy=<new id> and TakenAt=<when, in 100 ns since 1601> (review N1): the mark goes
-// when the old id is driven again (TruckSuspSeen), and only the newest kSuspTakenKept marked sections of a file are kept
+// when the old id is driven again (SuspMarkClear), and only the newest kSuspTakenKept marked sections of a file are kept
 // (TruckSuspPrune, after each take-over and at a save, review F3); an unmarked section is never dropped.
-static const int kSuspTakenKept = 10;
+// The marks, the prune and the take-over's watch are truck_id.h's (BRIEF_truck_id_part2.md), the same file as Tire
+// Inflation's: these names are Gameplay's for them, with its sections in the kind's file.
+static const int kSuspTakenKept = truckid::kTakenKept;
 // base: the sections' name before the colon, kSuspSection or kEngineSection; each runs on its own, with its own marks
 // and its own newest kSuspTakenKept (the Reviewer, 09:58: a truck with only an engine set keeps it at a rebuild).
-static int TruckSuspPrune(const char *key, const wchar_t *base = kSuspSection);
-static bool TruckSuspTakeOver(const char *key, const char *oldId, const char *newId, unsigned long long at = 0, const wchar_t *base = kSuspSection)
+static std::wstring SectionsOf(const wchar_t *base) { return std::wstring(base) + L":"; }
+static int TruckSuspPrune(const char *key, const wchar_t *base = kSuspSection) { return key[0] ? truckid::Prune(SetupFile(kSetupTruck, key), SectionsOf(base)) : 0; }
+// how: "warehouse" for a warehouse match's mark (never pruned), nullptr for a take-over.
+static bool TruckSuspTakeOver(const char *key, const char *oldId, const char *newId, unsigned long long at = 0, const wchar_t *base = kSuspSection,
+                              const wchar_t *how = nullptr)
 {
     if (!key[0] || !oldId[0] || !newId[0] || !strcmp(oldId, newId)) return false;
-    const std::wstring ini = SetupFile(kSetupTruck, key), from = SectionOf(base, oldId), to = SectionOf(base, newId);
-    std::vector<wchar_t> keys(32768, L'\0'), mine(64, L'\0');
-    if (!GetPrivateProfileSectionW(from.c_str(), keys.data(), (DWORD)keys.size(), ini.c_str())) return false;
-    if (GetPrivateProfileSectionW(to.c_str(), mine.data(), (DWORD)mine.size(), ini.c_str())) return false;
-    if (!WritePrivateProfileSectionW(to.c_str(), keys.data(), ini.c_str())) return false;
-    // the new section is the truck's own now, unmarked; the old one is marked as taken
-    WritePrivateProfileStringW(to.c_str(), L"TakenBy", nullptr, ini.c_str());
-    WritePrivateProfileStringW(to.c_str(), L"TakenAt", nullptr, ini.c_str());
-    if (!at)
-    {
-        FILETIME ft;
-        GetSystemTimeAsFileTime(&ft);
-        at = ((unsigned long long)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
-    }
-    wchar_t when[32];
-    _snwprintf_s(when, _TRUNCATE, L"%llu", at);
-    WritePrivateProfileStringW(from.c_str(), L"TakenBy", Wide(newId).c_str(), ini.c_str());
-    WritePrivateProfileStringW(from.c_str(), L"TakenAt", when, ini.c_str());
-    TruckSuspPrune(key, base); // a truck only driven, never edited, still keeps no more than the newest marked (review F3)
-    return true;
+    return truckid::TakeOver(SetupFile(kSetupTruck, key), SectionOf(base, oldId), SectionOf(base, newId), newId, at, how, SectionsOf(base));
 }
 
 // An id driven again: its section's take-over mark goes (it is a truck in use, not a left-over).
-static void TruckSuspSeen(const char *key, const char *id, const wchar_t *base = kSuspSection)
+static void SuspMarkClear(const char *key, const char *id, const wchar_t *base = kSuspSection)
 {
-    if (!key[0] || !id[0]) return;
-    const std::wstring ini = SetupFile(kSetupTruck, key), sec = SectionOf(base, id);
-    wchar_t by[48] = {};
-    if (!GetPrivateProfileStringW(sec.c_str(), L"TakenBy", L"", by, 48, ini.c_str())) return;
-    WritePrivateProfileStringW(sec.c_str(), L"TakenBy", nullptr, ini.c_str());
-    WritePrivateProfileStringW(sec.c_str(), L"TakenAt", nullptr, ini.c_str());
+    if (key[0] && id[0]) truckid::MarkClear(SetupFile(kSetupTruck, key), SectionOf(base, id));
 }
 
-// The marked sections beyond the newest kSuspTakenKept go out of the kind's file. The count dropped.
-static int TruckSuspPrune(const char *key, const wchar_t *base)
-{
-    if (!key[0]) return 0;
-    const std::wstring ini = SetupFile(kSetupTruck, key), prefix = std::wstring(base) + L":";
-    std::vector<wchar_t> names(65536, L'\0');
-    if (!GetPrivateProfileSectionNamesW(names.data(), (DWORD)names.size(), ini.c_str())) return 0;
-    std::vector<std::pair<unsigned long long, std::wstring>> marked;
-    for (const wchar_t *n = names.data(); *n; n += wcslen(n) + 1)
-    {
-        if (_wcsnicmp(n, prefix.c_str(), prefix.size())) continue;
-        wchar_t at[32] = {};
-        if (!GetPrivateProfileStringW(n, L"TakenAt", L"", at, 32, ini.c_str())) continue;
-        marked.push_back({ _wcstoui64(at, nullptr, 10), n });
-    }
-    if ((int)marked.size() <= kSuspTakenKept) return 0;
-    std::sort(marked.begin(), marked.end(), [](const auto &a, const auto &b) { return a.first > b.first; });
-    int dropped = 0;
-    for (size_t i = kSuspTakenKept; i < marked.size(); i++, dropped++) WritePrivateProfileStringW(marked[i].second.c_str(), nullptr, nullptr, ini.c_str());
-    return dropped;
-}
-
-// F1 of step 2's review: the same kind under a new id while driven (no "none" between) is a take-over only on the
-// vehicle the old id was taken with. A new id on another vehicle is another truck of the kind.
+// F1 of step 2's review: the same kind under a new id while driven is a take-over only on the old id's vehicle.
 static bool SuspAgainTakeOver(const char *oldId, uint64_t oldVehicle, const char *newId, uint64_t newVehicle)
 {
-    return oldId[0] && newId[0] && strcmp(oldId, newId) && oldVehicle && oldVehicle == newVehicle;
+    return truckid::AgainTakeOver(oldId, oldVehicle, newId, newVehicle);
 }
 
-static const ULONGLONG kSuspTakeOverMs = 20000; // the take-over's window: the same kind back under a new id within 20 s
+static const ULONGLONG kSuspTakeOverMs = truckid::kTakeOverMs;
 
-// The take-over's watch (step 2): the truck that went last with none driven since, when, and the vehicle object its
-// id was last read on. At each change of the driven truck's kind (or to none), SuspTrack says whether the truck now
-// driven takes over the one that went: the same kind under another id, no other truck driven between (any truck
-// driven clears gone), and either within 20 s (a recovery builds a new vehicle) or on the same vehicle object with no
-// load between, however long the gap (a garage visit with an upgrade took 21 s, the drive of 2026-11-06 22:37).
-// wasVehicle and nowVehicle: the vehicle each id was read on; loads: how many loading screens began so far. oldId
-// gets the id that went; byVehicle, where given, says the same-vehicle rule took it (over 20 s). On another vehicle
-// within 20 s, there(gone, goneVehicle) asks whether the old truck is still in the game (truck.h TruckStillThere): a
-// switch to another truck of the kind through the map, which is no take-over (BRIEF_takeover_other_truck.md).
-struct SuspTracker { TruckIdentity gone; ULONGLONG goneAt; uint64_t goneVehicle; unsigned goneLoads; };
+// The take-over's watch (truck_id.h TrackWith) with Gameplay's identities: loads, the loading screens begun so far,
+// voids the same-vehicle rule across a load. there(gone, goneVehicle) as before.
+typedef truckid::Tracker SuspTracker;
+static truckid::Who WhoOfIdentity(const TruckIdentity &t) { return truckid::WhoOf(t.key, t.id, t.named); }
 template <class There>
 static bool SuspTrackWith(SuspTracker &t, const TruckIdentity &was, const TruckIdentity &now, ULONGLONG at, char (&oldId)[40], uint64_t wasVehicle, uint64_t nowVehicle,
                           unsigned loads, bool *byVehicle, There there)
 {
-    oldId[0] = 0;
-    if (byVehicle) *byVehicle = false;
-    if (was.key[0] && !now.key[0])
-    {
-        t.gone = was;
-        t.goneAt = at;
-        t.goneVehicle = wasVehicle;
-        t.goneLoads = loads;
-        return false;
-    }
-    if (!now.key[0]) return false;
-    const bool kind = t.gone.key[0] && !strcmp(t.gone.key, now.key) && t.gone.id[0] && now.id[0] && strcmp(t.gone.id, now.id);
-    const bool soon = at - t.goneAt <= kSuspTakeOverMs;
-    const bool sameVehicle = t.goneVehicle && t.goneVehicle == nowVehicle && t.goneLoads == loads;
-    const bool otherVehicle = t.goneVehicle != nowVehicle;
-    const bool due = kind && (sameVehicle || (soon && !(otherVehicle && there(t.gone, t.goneVehicle))));
-    if (due) strncpy_s(oldId, t.gone.id, _TRUNCATE);
-    if (due && byVehicle) *byVehicle = !soon;
-    t = SuspTracker{};
-    return due;
+    return truckid::TrackWith(t, WhoOfIdentity(was), WhoOfIdentity(now), at, oldId, wasVehicle, nowVehicle, loads, byVehicle,
+                              [&](const truckid::Who &gone, uint64_t goneVehicle) {
+                                  TruckIdentity g = {};
+                                  strncpy_s(g.key, gone.kind, _TRUNCATE);
+                                  strncpy_s(g.id, gone.id, _TRUNCATE);
+                                  g.named = !gone.unnamed;
+                                  return there(g, goneVehicle);
+                              });
 }
 // As SuspTrackWith with the old truck never there (the tests of the rules before the check).
 static bool SuspTrack(SuspTracker &t, const TruckIdentity &was, const TruckIdentity &now, ULONGLONG at, char (&oldId)[40], uint64_t wasVehicle = 0,
@@ -2072,12 +2012,53 @@ static bool SuspTrack(SuspTracker &t, const TruckIdentity &was, const TruckIdent
 enum { kEngLevelNone, kEngLevelDefault, kEngLevelKind, kEngLevelTruck };
 // An engine's or a gearbox's name as a key's part: as SetupFileName cleans a file name, and what would break an ini's
 // key (=, ;, [ and ]) too.
-static std::wstring EngineKeyOf(const wchar_t *what, const char *name)
+static std::wstring EnginePartOf(const char *name)
 {
     std::wstring part = SetupFileName(Wide(name));
     for (wchar_t &c : part)
         if (c == L'=' || c == L';' || c == L'[' || c == L']') c = L'_';
-    return std::wstring(what) + L"." + part;
+    return part;
+}
+static std::wstring EngineKeyOf(const wchar_t *what, const char *name) { return std::wstring(what) + L"." + EnginePartOf(name); }
+
+// ---- the truck's id beyond the take-over (BRIEF_truck_id_part2.md): [Seen], the parts and the warehouse match ----
+// The parts the match goes by: Engine= and Gearbox=, the engine's and the gearbox's names as a key's part cleans them,
+// in each section of the id that exists ([Suspension:<id>] and [Engine:<id>]). Empty where a name is not read.
+static truckid::Parts TruckPartsOf(const char *engine, const char *gearbox)
+{
+    truckid::Parts p;
+    if (engine[0] && gearbox[0]) p = { { L"Engine", EnginePartOf(engine) }, { L"Gearbox", EnginePartOf(gearbox) } };
+    return p;
+}
+static const std::vector<std::wstring> &TruckIdPrefixes()
+{
+    static const std::vector<std::wstring> p = { std::wstring(kSuspSection) + L":", std::wstring(kEngineSection) + L":" };
+    return p;
+}
+// The parts written into the id's sections where they exist. True when one changed.
+static bool TruckPartsPut(const char *key, const char *id, const truckid::Parts &parts)
+{
+    if (!key[0] || !id[0] || parts.empty()) return false;
+    const std::wstring ini = SetupFile(kSetupTruck, key);
+    bool changed = false;
+    for (const auto &pre : TruckIdPrefixes()) changed = truckid::PartsPut(ini, pre + Wide(id), parts) || changed;
+    return changed;
+}
+// Whether the id has a section of either kind, and whether one is in force (Own not 0).
+static bool TruckIdSections(const char *key, const char *id, bool *inForce = nullptr)
+{
+    if (inForce) *inForce = false;
+    if (!key[0] || !id[0]) return false;
+    const std::wstring ini = SetupFile(kSetupTruck, key);
+    bool any = false;
+    for (const auto &pre : TruckIdPrefixes())
+    {
+        const std::wstring sec = pre + Wide(id);
+        if (!truckid::SectionThere(ini, sec)) continue;
+        any = true;
+        if (inForce && GetPrivateProfileIntW(sec.c_str(), L"Own", 1, ini.c_str())) *inForce = true;
+    }
+    return any;
 }
 
 // One level's section: none (no key and no Own in it), kept (Own=0) or in force; and its figures for the engine and the
@@ -2392,8 +2373,8 @@ static void SettingsFor(SettingsState &st, const char *key, const char *id = "")
     st.s = st.plain;
     st.own = key[0] && ReadTruckIni(key, st.s);
     st.changed = false;
-    TruckSuspSeen(st.key, st.id);
-    TruckSuspSeen(st.key, st.id, kEngineSection);
+    SuspMarkClear(st.key, st.id);
+    SuspMarkClear(st.key, st.id, kEngineSection);
     SuspFromFiles(st);
 }
 
@@ -3490,7 +3471,7 @@ static void SuspLevelLog(const SettingsState &st, bool newToMod)
         Log(L"suspension: %s%s%s", level == kSuspLevelKind ? L"every " : L"the default settings",
             level == kSuspLevelKind ? Wide(st.key).c_str() : L"",
             !st.id[0] ? L" (the truck's id not read, so no level of its own)"
-            : newToMod ? L" (its id is new to the mod: a truck out of the warehouse or a new one; tick This truck only for its own)"
+            : newToMod ? L" (its id is new to the mod: out of the warehouse or new; the warehouse match follows in the truck: line)"
             : st.truckKept ? L" (this truck's own are kept, not in use)" : st.suspKept && level == kSuspLevelDefault ? L" (the kind's own are kept, not in use)" : L"");
 }
 
@@ -6396,7 +6377,110 @@ static DWORD WINAPI Run(void *)
     ULONGLONG saveLookAt = 0;
     bool codeLooked = false; // the gearbox functions were looked for, once a truck was found
     SuspTracker suspWatch = {}; // the truck that went last with none driven since, and when (the take-over)
+    // the truck's id beyond the take-over (BRIEF_truck_id_part2.md): this start's when, the ids driven this start with
+    // their vehicle and the loads then (the match's "driven this start, its vehicle gone"), the match waiting for the
+    // engine's and the gearbox's names, the drive's line once a truck, and the parts last written
+    const unsigned long long idStart = truckid::Now();
+    struct DrivenId { char id[40]; uint64_t vehicle; unsigned loads; };
+    std::vector<DrivenId> drivenIds;
+    struct IdPending { bool on; ULONGLONG since; int line; char fromId[40]; const wchar_t *rule; const wchar_t *why; unsigned long long lastSeen; } idPending = {};
+    wchar_t idWords[96] = L"";   // what the tabs say of the id (the match or why none)
+    std::wstring partsWritten;   // the driven truck's parts as last written, "id|Engine|Gearbox"
+    ULONGLONG partsLookAt = 0;
     uint64_t truckVehicle = 0;   // the vehicle the driven truck's id was taken with (review F1 of step 2)
+    // the truck that leaves: its vehicle and the loads now, for the match's "driven this start" (the Reviewer's should 2)
+    auto idLeaves = [&]() {
+        if (!truck.key[0] || !truck.id[0]) return;
+        for (auto &d : drivenIds)
+            if (!strcmp(d.id, truck.id)) { d.vehicle = truckVehicle, d.loads = watch.loads; return; }
+        DrivenId d = {};
+        strncpy_s(d.id, truck.id, _TRUNCATE);
+        d.vehicle = truckVehicle, d.loads = watch.loads;
+        if (drivenIds.size() < 256) drivenIds.push_back(d);
+    };
+    // an id driven this start counts as waiting where no load came since its truck was last driven and its vehicle is gone
+    auto idDrivenGone = [&](const char *id) {
+        for (const auto &d : drivenIds)
+            if (!strcmp(d.id, id))
+            {
+                if (d.loads != watch.loads || !d.vehicle) return false;
+                TruckIdentity old = {};
+                strncpy_s(old.key, truck.key, _TRUNCATE);
+                strncpy_s(old.id, id, _TRUNCATE);
+                old.named = true;
+                TruckThere o = {};
+                return !TruckStillThere(memory, d.vehicle, old, watch.idVehicle, o);
+            }
+        return false;
+    };
+    // the drive's one line, and the id's [Seen] line once a start (after the take-over and the match have decided)
+    auto idDecided = [&](int line, const char *fromId, const wchar_t *rule, const wchar_t *why, unsigned long long lastSeen) {
+        wchar_t text[512];
+        truckid::DriveLine(text, 512, truck.key, truck.id[0] ? truck.id : "", line, lastSeen, fromId, rule, why);
+        Log(L"%s", text);
+        if (!truck.id[0]) return;
+        const std::wstring ini = SetupFile(kSetupTruck, truck.key);
+        unsigned long long seen = 0;
+        if (!truckid::SeenGet(ini, truck.id, seen) || seen < idStart)
+        {
+            SetupBegin(kSetupTruck, Wide(truck.key));
+            truckid::SeenPut(ini, truck.id, truckid::Now());
+        }
+    };
+    // the match waiting for the engine's and the gearbox's names (they come a pass or more after the truck), decided:
+    // exactly one waiting truck of the kind with the same parts gives its sections, copied and marked How=warehouse
+    auto idResolve = [&]() {
+        idPending.on = false;
+        const bool known = !strcmp(eng.key, truck.key) && !strcmp(eng.id, truck.id) && eng.engine[0] && eng.gearbox[0];
+        const truckid::Parts parts = known ? TruckPartsOf(eng.engine, eng.gearbox) : truckid::Parts();
+        const std::wstring ini = SetupFile(kSetupTruck, truck.key);
+        const truckid::Match m = truckid::MatchFind(ini, TruckIdPrefixes(), truck.id, parts, truck.named, idStart, idDrivenGone);
+        if (m.why == truckid::kMatchOne && truckid::MatchTake(ini, TruckIdPrefixes(), TruckIdPrefixes(), m.id, truck.id) > 0)
+        {
+            if (saveAt) SettingsSave(set);
+            saveAt = 0;
+            SettingsFor(set, truck.key, truck.id);
+            SettingsPublish(set.s);
+            char e[kMaxText], g[kMaxText];
+            strncpy_s(e, eng.engine, _TRUNCATE);
+            strncpy_s(g, eng.gearbox, _TRUNCATE);
+            EngineFor(eng, truck.key, truck.id, e, g);
+            EngineLevelLog(eng, L"matched out of the warehouse");
+            SuspLevelLog(set, false);
+            _snwprintf_s(idWords, _TRUNCATE, L"Out of the warehouse: matched by its engine and gearbox");
+            idDecided(truckid::kLineMatched, m.id, L"", L"", idPending.lastSeen);
+        }
+        else
+        {
+            _snwprintf_s(idWords, _TRUNCATE, L"%s", m.why == truckid::kMatchTwo ? L"Out of the warehouse or new: two waiting sets match, none taken"
+                                                    : m.why == truckid::kMatchNone ? L"Out of the warehouse or new: no waiting set matched its parts"
+                                                                                   : L"New to the mod: its parts not read, no match");
+            idDecided(truckid::kLineKind, "", L"", truckid::MatchWords(m.why), idPending.lastSeen);
+        }
+    };
+    // after a change of the driven truck: the take-over's line, or the match to wait for, or the level's line
+    auto idChanged = [&](int taken, bool takeOver, const char *oldId, const wchar_t *rule) {
+        idWords[0] = 0;
+        if (!truck.key[0]) return;
+        const std::wstring ini = SetupFile(kSetupTruck, truck.key);
+        unsigned long long seen = 0;
+        const bool listed = truckid::SeenGet(ini, truck.id, seen);
+        const unsigned long long lastSeen = listed && seen < idStart ? seen : 0;
+        bool inForce = false;
+        const bool sections = TruckIdSections(truck.key, truck.id, &inForce);
+        if (taken) idDecided(truckid::kLineTaken, oldId, rule, L"", lastSeen);
+        else if (truck.id[0] && !sections && !takeOver && !listed)
+        {
+            idPending = {};
+            idPending.on = true;
+            idPending.since = GetTickCount64();
+            idPending.lastSeen = lastSeen;
+        }
+        else
+            idDecided(inForce ? truckid::kLineOwn : truckid::kLineKind, "", L"", !truck.id[0] ? L"its id not read" : sections ? L"its own are kept, not in use"
+                                                                                       : L"it has no set of its own",
+                      lastSeen);
+    };
     for (;;)
     {
         Sleep(50);
@@ -6949,6 +7033,8 @@ static DWORD WINAPI Run(void *)
                 Log(L"suspension: the take-over check: the old truck %S's vehicle %p reads %S (kind %S), its chassis body %p in world %p (the new truck's %p): %s",
                     thereId, (void *)thereVehicle, there.id[0] ? there.id : "no id", there.kind[0] ? there.kind : "none", (void *)there.body, (void *)there.world,
                     (void *)there.newWorld, there.there ? L"another truck, not taken over" : L"gone, taken over");
+            if (idPending.on) idResolve();
+            idLeaves();
             truck = now;
             truckVehicle = watch.idVehicle;
             int taken = 0;
@@ -6984,6 +7070,7 @@ static DWORD WINAPI Run(void *)
                 Log(L"suspension: the take-over: %S under its new id %S (vehicle %p) takes over %s of %S (back %.0f s after it went%s)", truck.key, truck.id,
                     (void *)truckVehicle, TakenWords(taken), oldId, (GetTickCount64() - goneAt) / 1000.0, byVehicle ? L", on the same vehicle" : L"");
             if (truck.key[0]) SuspLevelLog(set, truck.id[0] && !set.truckOwn && !set.truckKept && !taken && !takeOver);
+            idChanged(taken, takeOver, oldId, byVehicle ? L"the same vehicle after more than 20 s" : L"back within 20 s");
         }
         else if (strcmp(now.id, truck.id))
         {
@@ -6995,6 +7082,8 @@ static DWORD WINAPI Run(void *)
             char oldId[40];
             strncpy_s(oldId, truck.id, _TRUNCATE);
             const uint64_t oldVehicle = truckVehicle;
+            if (idPending.on) idResolve();
+            idLeaves();
             truck = now;
             truckVehicle = watch.idVehicle; // recorded on the pass the new id was read with
             if (oldVehicle && truckVehicle != oldVehicle)
@@ -7010,6 +7099,23 @@ static DWORD WINAPI Run(void *)
                 Log(L"suspension: the take-over: %S under its new id %S (vehicle %p) takes over %s of %S (while driven, the same vehicle)", truck.key, truck.id,
                     (void *)truckVehicle, TakenWords(taken), oldId);
             SuspLevelLog(set, !set.truckOwn && !set.truckKept && !taken && truck.id[0]);
+            idChanged(taken, sameTruck, oldId, L"a new id on the same vehicle while driven");
+        }
+        // the match once the engine's and the gearbox's names are this truck's, or after 10 s without them
+        if (idPending.on && truck.key[0] &&
+            ((!strcmp(eng.key, truck.key) && !strcmp(eng.id, truck.id) && eng.engine[0] && eng.gearbox[0]) || GetTickCount64() - idPending.since > 10000))
+            idResolve();
+        // the parts into the driven truck's own sections where it has some: at its first drive, at a change of engine
+        // or gearbox, and once a set of its own is made (looked at every 2 s)
+        if (!idPending.on && truck.id[0] && GetTickCount64() - partsLookAt >= 2000 && !strcmp(eng.key, truck.key) && !strcmp(eng.id, truck.id) && eng.engine[0] &&
+            eng.gearbox[0])
+        {
+            partsLookAt = GetTickCount64();
+            const std::wstring parts = Wide(truck.id) + L"|" + Wide(eng.engine) + L"|" + Wide(eng.gearbox) + (TruckIdSections(truck.key, truck.id) ? L"|s" : L"");
+            if (parts != partsWritten && TruckPartsPut(truck.key, truck.id, TruckPartsOf(eng.engine, eng.gearbox)))
+                Log(L"truck: %S, id %S: its engine %S and gearbox %S written in its own sections (the warehouse match goes by them)", truck.key, truckid::Short(truck.id).c_str(),
+                    eng.engine, eng.gearbox);
+            partsWritten = parts;
         }
         GaugeView v = {};
         strncpy_s(v.truck, truck.key, _TRUNCATE);
@@ -7020,6 +7126,7 @@ static DWORD WINAPI Run(void *)
         v.suspTruckKept = set.truckKept;
         v.suspKindSet = set.suspOwn || set.suspKept;
         v.suspIdKnown = set.id[0] != 0;
+        WideCharToMultiByte(CP_UTF8, 0, idWords, -1, v.idWords, sizeof v.idWords, nullptr, nullptr);
         if (map[0]) MapTitle(map, v.map, sizeof v.map);
         else v.map[0] = 0;
         strncpy_s(v.mapFrom, mapFrom, _TRUNCATE);
@@ -8485,7 +8592,7 @@ int wmain(int argc, wchar_t **argv)
                 GetPrivateProfileStringW(SectionOf(kEngineSection, id1).c_str(), L"TakenBy", L"", by, 48, kf.c_str());
                 const bool tookEngine = taken == kTakenEngine && e.truckOwn && e.torque == 45 && Wide(id2) == by && !wcscmp(TakenWords(taken), L"the engine's settings");
                 // the old id driven again clears its engine mark
-                TruckSuspSeen(kind4, id1, kEngineSection);
+                SuspMarkClear(kind4, id1, kEngineSection);
                 wchar_t after[48] = {};
                 GetPrivateProfileStringW(SectionOf(kEngineSection, id1).c_str(), L"TakenBy", L"", after, 48, kf.c_str());
                 const bool cleared = !after[0];
