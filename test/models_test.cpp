@@ -536,6 +536,7 @@ struct LoopTruck
     bool mayStall = true;  // the creep may stall the engine: the mod's own gearbox in a position picked by hand (else Gearbox 0 or 1)
     bool shifterConverter = false; // R or the low range on the game's shifter: the creep through the converter, calmed (CreepStep's calm)
     bool spinLift = false; // a held gear with the clutch in: the lift by the wheels' own speed, capped at kSpinLiftMost, as gauges.cpp has it since eeb2ffa
+    bool spinCalm = true;  // SpinCalm: the two calms of low-minus (SpinLiftStep); the L- tests run with it on, off is 0.18.4's
 };
 struct LoopState
 {
@@ -590,11 +591,12 @@ static void LoopStep(const LoopTruck &c, LoopState &s, const TorqueCurve &curve,
     const bool spinning = c.fixedGear && c.spinLift;
     const float liftTop = TruckGearTop(t, t.gearEngaged);
     if (!spinning) s.spin.n = 0, s.spin.at = 0;
-    const float x = spinning ? SpinShare(SpinMeanStep(s.spin, TruckDrivenSpin(t), t.gearEngaged, 0x5000), liftTop) : LiftShare(TruckDrivenSpin(t), s.v, s.box.grip, liftTop);
+    const SpinLift byspin = spinning ? SpinLiftStep(s.spin, c.spinCalm, TruckDrivenSpin(t), liftTop, t.gearEngaged, 0x5000) : SpinLift{ 0.0f, kTorqueFactorMost };
+    const float x = spinning ? byspin.x : LiftShare(TruckDrivenSpin(t), s.v, s.box.grip, liftTop);
     const float ratio = driving ? s.box.ratio : 1.0f;
     const float limit = s.power.cold * s.power.boost;
     const float lift = before ? LiftBefore(s.power.curve, limit, TruckPedal(t), ratio, x, TorqueRoof(c.cls))
-                              : spinning ? fminf(TorqueLift(s.power.curve, limit, TruckPedal(t), ratio, x, TorqueRoof(c.cls)), SpinLiftMost(x, liftTop))
+                              : spinning ? fminf(TorqueLift(s.power.curve, limit, TruckPedal(t), ratio, x, TorqueRoof(c.cls)), byspin.cap)
                                          : TorqueLift(s.power.curve, limit, TruckPedal(t), ratio, x, TorqueRoof(c.cls));
     const float wanted = s.hand.game * lift;
     TorqueHandStep(s.hand, true, 0x5000, 0x4000, t.torqueFactor, lift, before ? 0.0f : dt, t.gearEngaged);
@@ -3782,6 +3784,37 @@ int main(int argc, char **argv)
                                     "a 15 rad/s top is today's, a 10 rad/s top within 0.05 outside its last 0.08; a catch gives at most %.2f; a change of range keeps the factor at its spin (%.2f); a new gear or truck starts the mean over",
                  j95, j100, t95, t100, caughtWorst, afterRange);
         Check(j95 < 0.15f && j100 < 0.15f && t95 > 0.5f && same15 && near10 && caughtWorst <= kSpinLiftMost + 0.001f && gearNew && rangeSteady, line);
+
+        // SpinCalm (BRIEF_low_minus_worse.md part 0): through SpinLiftStep as gauges.cpp has it. On, the same noisy L-
+        // trace gives the calm's figures above; off (the default), 0.18.4's: x is this pass's spin, the cap is 2, every
+        // pass's factor is today's, and its jumps are today's again
+        auto stepped = [&](bool on, float centre, float &worstStep, bool &asWanted) {
+            uint32_t seed = 12345u;
+            SpinMean m = {};
+            float last = -1.0f;
+            worstStep = 0.0f;
+            asWanted = true;
+            for (int i = 0; i < 2000; i++)
+            {
+                seed = seed * 1664525u + 1013904223u;
+                const float spin = centre * 2.24f + ((float)(seed >> 8) / 16777216.0f * 2.0f - 1.0f) * 0.15f;
+                const SpinLift l = SpinLiftStep(m, on, spin, 2.24f, 1, 0x5000);
+                const float f = fminf(TorqueLift(curve, 1.0f, 1.0f, 1.0f, l.x, TorqueRoof(kClassTruck)), l.cap);
+                if (!on) asWanted = asWanted && Near(l.x, SpinShare(spin, 2.24f), 0.00001f) && l.cap == kSpinLiftMost && Near(f, today(l.x), 0.00001f) && m.n == 0;
+                if (last >= 0.0f) worstStep = fmaxf(worstStep, fabsf(f - last));
+                last = f;
+            }
+        };
+        float on95 = 0.0f, off95 = 0.0f, off100 = 0.0f;
+        bool onSame = true, offSame = true, off100Same = true;
+        stepped(true, 0.95f, on95, onSame);
+        stepped(false, 0.95f, off95, offSame);
+        stepped(false, 1.0f, off100, off100Same);
+        GaugeSettings defaults;
+        SettingsDefaults(defaults);
+        snprintf(line, sizeof line, "SpinCalm: off by default; off, the noisy L- trace is 0.18.4's (this pass's spin, cap 2, jumps %.2f and %.2f as today's %.2f and %.2f); on, the calm's (%.2f)",
+                 off95, off100, t95, t100, on95);
+        Check(!defaults.spinCalm && offSame && off100Same && Near(off95, t95, 0.0001f) && Near(off100, t100, 0.0001f) && Near(on95, j95, 0.0001f), line);
     }
 
     // D slowing under the brake (the sequential to D brief): from 6th at 60 km/h braked to 20 km/h in 3 s it comes down

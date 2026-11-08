@@ -1235,6 +1235,7 @@ static void ReadIni(GaugeSettings &s)
     s.roadCdA = IniFloat(L"RoadCdA", s.roadCdA, ini);
     s.engineShare = IniInt(L"EngineShare", s.engineShare, ini);
     s.creep = IniBool(L"Creep", s.creep, ini);
+    s.spinCalm = IniBool(L"SpinCalm", s.spinCalm, ini); // read only: WriteIni leaves it as the file has it
     s.creepManual = IniBool(L"CreepManual", s.creepManual, ini);
     s.rollWarnDeg = IniFloat(L"RollWarnDeg", s.rollWarnDeg, ini);
     s.rollDangerDeg = IniFloat(L"RollDangerDeg", s.rollDangerDeg, ini);
@@ -3435,6 +3436,9 @@ static void LogSettings(const GaugeSettings &s)
     Log(L"settings: %s scales: idle %.0f rpm, red zone from %.0f of %.0f, speedometer to %.0f km/h, boost to %g bar, a %s turbo; units %s, %s, %s", classes[s.tachClass], k.idle,
         k.redline, k.max, k.speedMax, k.boost, profiles[s.boostProfile], s.mph ? L"mph" : L"km/h", s.psi ? L"psi" : L"bar", s.fahrenheit ? L"F" : L"C");
     Log(L"settings: tilt lamp amber from %g degrees to a side, red from %g, red from %g up or down a slope", s.rollWarnDeg, s.rollDangerDeg, s.pitchDangerDeg);
+    Log(L"settings: SpinCalm=%d: in a gear held by hand the lift goes by %s", s.spinCalm ? 1 : 0,
+        s.spinCalm ? L"the wheels' spin over the last 5 passes, its cap fading over the top's last 0.8 rad/s (the calm of 8C793544)"
+                   : L"this pass's spin, its cap fading over the top's last 0.06 (as 0.18.4)");
     Log(L"settings: coolant warm after %g minutes of driving, in the red zone after %g minutes floored with the wheels spinning at a standstill, cool %g minutes after the engine stops, %g C outside%s",
         s.warmUpMinutes, s.overheatMinutes, s.coolDownMinutes, s.ambientC, s.ambientByMap ? L" where the map's temperature is not known" : L" on every map");
     Log(L"settings: the oil warm after %g minutes of driving, too hot from %g C", s.oilWarmUpMinutes, s.oilWarnC);
@@ -5901,12 +5905,13 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             const float ground = isfinite(raw.speed) && raw.speed > 0.0f ? raw.speed : 0.0f;
             const bool locked = GearboxManual(w) && w.clutch.connected && !w.clutch.dead && w.clutch.grip >= kGripUp && w.pos.travel <= 0.0f;
             const float gearTop = TruckGearTop(raw, raw.gearEngaged);
-            // by spin, the mean of the last passes and a cap that fades over the top's last 0.8 rad/s at least, as the spin's
-            // noise is a big share of a low top such as L-'s (BRIEF_low_minus_jerky.md); the ground path as it was
+            // by spin: with SpinCalm=1 the mean of the last passes and a cap that fades over the top's last 0.8 rad/s at
+            // least (BRIEF_low_minus_jerky.md); by default 0.18.4's, this pass's spin and the cap of 2, as the calm made
+            // L- worse (BRIEF_low_minus_worse.md part 0); the ground path as it was
             if (!locked) w.spinMean.n = 0, w.spinMean.at = 0;
-            const float x = locked ? SpinShare(SpinMeanStep(w.spinMean, TruckDrivenSpin(raw), raw.gearEngaged, w.refs.vehicle), gearTop)
-                                   : LiftShare(TruckDrivenSpin(raw), ground, w.gearbox.grip, gearTop);
-            const float spinMost = locked ? SpinLiftMost(x, gearTop) : kTorqueFactorMost;
+            const SpinLift byspin = locked ? SpinLiftStep(w.spinMean, s.spinCalm, TruckDrivenSpin(raw), gearTop, raw.gearEngaged, w.refs.vehicle) : SpinLift{ 0.0f, kTorqueFactorMost };
+            const float x = locked ? byspin.x : LiftShare(TruckDrivenSpin(raw), ground, w.gearbox.grip, gearTop);
+            const float spinMost = byspin.cap;
             w.liftX = x;
             w.liftRoof = locked ? fminf(SpinRoof(TorqueRoof(autoClass), x), spinMost) : LiftRoof(TorqueRoof(autoClass), x);
             const float ratio = w.take.driving && !GearboxManual(w) ? w.gearbox.ratio : 1.0f;

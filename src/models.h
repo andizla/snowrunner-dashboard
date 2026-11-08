@@ -1538,6 +1538,31 @@ inline float SpinLiftMost(float x, float top)
     return fminf(kSpinLiftMost, 1.0f + (1.0f - x) * top / kSpinFadeRad);
 }
 
+// The locked path's x and cap by spin for one pass. SpinCalm (Gauges.ini, BRIEF_low_minus_worse.md part 0): calm gives
+// the two calms above (x from the mean of the last passes, the cap SpinLiftMost); off, 0.18.4's path: x from this
+// pass's own spin and the cap kSpinLiftMost, so the roof fades only as LiftRoof does, over the top's last 0.06. The
+// mean starts over while off, so turning it on mixes no old passes.
+struct SpinLift
+{
+    float x, cap;
+};
+inline SpinLift SpinLiftStep(SpinMean &m, bool calm, float spin, float top, int gear, uint64_t vehicle)
+{
+    SpinLift r;
+    if (calm)
+    {
+        r.x = SpinShare(SpinMeanStep(m, spin, gear, vehicle), top);
+        r.cap = SpinLiftMost(r.x, top);
+    }
+    else
+    {
+        m.n = 0, m.at = 0;
+        r.x = SpinShare(spin, top);
+        r.cap = kSpinLiftMost;
+    }
+    return r;
+}
+
 // The factor over the game's own share, by the engine's torque curve at its speed (0 to 1), the share of it the cold
 // oil and the boost leave (limit), the pedal (the game asks the engine for that share of its torque, which it has as
 // far as the limit goes: at a light foot a turbo engine without boost gives what the pedal asks), the converter's
