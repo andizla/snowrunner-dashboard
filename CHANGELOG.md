@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- The crash line in `Gauges.log` is armed as the mod starts, so a fault, a fast fail or an exit at the game's boot is named too. Before, it was armed only at the first truck. It is armed again there, after the game has set its own handlers, so they do not push it out. At the first truck the log counts the faults and C++ throws of the boot, and the first three of each are named again from there.
+
 - The engine's profile (peak torque, aspiration, fuel and a curve of its own) can be kept per truck and per kind, as Engine torque is. Two kinds with the same engine no longer share one curve: each kind's first change makes its own, and the engine's file stays the default. A level gives the whole profile, so a truck's own peak is never hidden by the default's curve. The Engine tab's line In force under Fuel says whose profile it is. Class curve works at that level and no longer deletes the engine's file. Make this the engine's default copies the profile too. Defaults leaves the engine's file alone. `Gauges.log` names the level and the profile at each truck.
 - L- and other low gears held by hand no longer jerk near their top speed. With the clutch fully in, the mod's pull goes by the wheels' own spin, and that spin is noisy. Over a low gear's small top speed the noise was enough to cut the pull in and out many times a second. The spin is now averaged over a quarter second, and the pull eases off over the top's last 0.8 rad/s of wheel speed instead of its last 6 %. Gears with a top over about 13 rad/s of wheel speed, from about 3rd up on most trucks, keep the pull as before. L- and L pull a little less near their top than before, in mud too.
 

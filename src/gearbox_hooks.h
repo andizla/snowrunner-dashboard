@@ -23,6 +23,9 @@ struct GearboxCounts
 // Attaches n detours in one transaction: each targets[i] (a function's address, set to the way through to it on
 // success) to hooks[i]. NO_ERROR, or the error of the first that failed, and then none is attached.
 long GearboxAttach(void **targets[], void *const hooks[], int n);
+// The same with no other thread suspended: for functions no other thread runs while the mod starts (the exit calls,
+// BRIEF_crash_line_early.md), as a thread suspended while it holds the heap's lock would hang the game at its boot.
+long GearboxAttachAlone(void **targets[], void *const hooks[], int n);
 // Detaches them in one transaction; each targets[i] holds the function's own address again.
 long GearboxDetach(void **targets[], void *const hooks[], int n);
 

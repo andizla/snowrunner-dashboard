@@ -292,8 +292,9 @@ static int OtherThreads(HANDLE out[kMostThreads])
     return n;
 }
 
-// One transaction of attaches (attach) or detaches, every other thread suspended for its commit.
-static long Transact(bool attach, void **targets[], void *const hooks[], int n)
+// One transaction of attaches (attach) or detaches, every other thread suspended for its commit; others false: none
+// suspended (GearboxAttachAlone).
+static long Transact(bool attach, void **targets[], void *const hooks[], int n, bool others = true)
 {
     LONG error = DetourTransactionBegin();
     if (error != NO_ERROR) return error;
@@ -305,7 +306,7 @@ static long Transact(bool attach, void **targets[], void *const hooks[], int n)
         return error;
     }
     static HANDLE threads[kMostThreads];
-    const int count = OtherThreads(threads);
+    const int count = others ? OtherThreads(threads) : 0;
     for (int i = 0; i < count; i++) DetourUpdateThread(threads[i]);
     error = DetourTransactionCommit();
     for (int i = 0; i < count; i++) CloseHandle(threads[i]);
@@ -313,6 +314,8 @@ static long Transact(bool attach, void **targets[], void *const hooks[], int n)
 }
 
 long GearboxAttach(void **targets[], void *const hooks[], int n) { return Transact(true, targets, hooks, n); }
+
+long GearboxAttachAlone(void **targets[], void *const hooks[], int n) { return Transact(true, targets, hooks, n, false); }
 
 long GearboxDetach(void **targets[], void *const hooks[], int n) { return Transact(false, targets, hooks, n); }
 
