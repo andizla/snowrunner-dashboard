@@ -259,6 +259,12 @@ truck's file. The weight is the truck's own, without cargo or a trailer, so with
  ['Aspiration', '0 turbo, 1 naturally aspirated: no boost, all of its torque at once'], ['Fuel', 'diesel or petrol in place of the class\'s (trucks diesel, scouts petrol): a petrol engine\'s boost dial shows vacuum'], ['TorqueCurve', 'A whole curve as x:y points, x the engine speed over the red zone\'s, y the torque over its most, such as 0.3:0.7,0.5:1,1:0.75'],
  ['Torque', "How much of its torque the truck gets with the engine handed to the game, the game's own pull included, 10 to 100 percent (100 when not set; the Engine tab's Engine torque slider). For an RLM-like engine with several times a stock engine's torque: at 25 an engine with four times the torque pulls like the stock one"]], 'Table 5. Engine profile keys')}
 <p>The profile goes with the engine, so a truck fitted with another engine in the garage pulls by that one's. The mod also reads the engine's own record from the game: torque, responsiveness, its fastest rev change and its fuel consumption.</p>
+<p>This file is the engine's default. A kind of truck, or one truck, can keep its own profile for that engine, as Engine torque is
+kept (Engine per truck, under Suspension). Two kinds with the same engine then pull by their own curves. The first change on the
+tab with no set for the truck or its kind makes the kind's own, and this file stays as it is. The line In force under Fuel names
+the level. A level gives the whole profile: a key it lacks is the stock one, not the next level's. <b>Class curve</b> gives the
+class's curve at that level, and at the default it takes the four keys out of this file and keeps Torque. Defaults leaves the
+profile here alone.</p>
 
 <h2>16. The pull test</h2>
 <p>The Power tab's Pull test has a Start button: on a long flat road, in fourth gear or higher, floor the pedal for seven seconds. The mod holds the gear, changes the torque factor for a second at a time (halved, raised by half, at three quarters), measures the pull and puts the factor back. Lifting the foot, braking or another gear stops it. The numbers go into the log.</p>
@@ -289,7 +295,10 @@ engine's default</b> and <b>For</b>. A truck keeps a figure for each engine and 
 section of its file (<code>[Engine:&lt;id&gt;]</code> for one truck), as <code>Torque.&lt;engine&gt;</code> and
 <code>GearHold.&lt;gearbox&gt;</code>. A figure it has none for comes from the engine's file, or the gearbox's, then 100 % and
 the class's hold. The line In force under each slider says which. The button writes both figures into those two files. When
-the game rebuilds the truck, its engine set follows it as the suspension's does.</p>
+the game rebuilds the truck, its engine set follows it as the suspension's does. The engine's profile is kept there too, whole,
+as <code>PeakTorqueRpm.&lt;engine&gt;</code>, <code>Aspiration.&lt;engine&gt;</code>, <code>Fuel.&lt;engine&gt;</code> and
+<code>TorqueCurve.&lt;engine&gt;</code>, and the button copies it to the engine's file (section 15). One truck's set goes by the
+game's id, which can change at a load. Until the mod gives trucks an id of its own, that truck can lose its set. The kind's set keeps.</p>
 <ul><li><b>Spring and Damping</b> (<code>SpringScale</code>, <code>DampingScale</code>, x0.25 to x4): the truck's own spring
 and damping times a factor. Above 1 the spring is stiffer and the truck sits higher, below 1 softer and lower. More damping
 settles the body sooner, less lets it bounce longer. The game takes a wheel's spring and damping only up to 1, so where a

@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- The engine's profile (peak torque, aspiration, fuel and a curve of its own) can be kept per truck and per kind, as Engine torque is. Two kinds with the same engine no longer share one curve: each kind's first change makes its own, and the engine's file stays the default. A level gives the whole profile, so a truck's own peak is never hidden by the default's curve. The Engine tab's line In force under Fuel says whose profile it is. Class curve works at that level and no longer deletes the engine's file. Make this the engine's default copies the profile too. Defaults leaves the engine's file alone. `Gauges.log` names the level and the profile at each truck.
+
 ## [0.18.4]
 
 - Each gear's top is learned for each truck kind as a share of the game's gear speed, and kept in the truck's file. Before, it was kept per gearbox and shared by every truck with that gearbox's name, so another truck's figure could hold the automatic in a gear at the game's own limit. A learned top far off the one kept replaces it, and none is learned on a slope. Floored in A at the game's limit, the automatic now shifts up. When the wheels' drag can't be read, the log names the wheel and the figure, and it says when the read works again.

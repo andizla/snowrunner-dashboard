@@ -1112,7 +1112,9 @@ is driven. The kind is the game's (model +0x588).</li>
 <li><code>Gauges\\gearboxes\\&lt;name&gt;.ini</code>, <code>[Gearbox]</code>: <code>GearHold</code>, 1 to 3 s. The name is the gearbox
 fitted (vehicle +0x9C0), the truck's default (+0x9A0) only when none is read there.</li>
 <li><code>Gauges\\engines\\&lt;name&gt;.ini</code>, <code>[Engine]</code>: <code>PeakTorqueRpm</code> (100 to 20000), <code>Aspiration</code>,
-<code>Fuel</code> (diesel or petrol), <code>TorqueCurve</code>.</li>
+<code>Fuel</code> (diesel or petrol), <code>TorqueCurve</code>: the default. The truck's file holds the same four as
+<code>PeakTorqueRpm.&lt;engine&gt;</code> and so on, in <code>[Engine]</code> for the kind and <code>[Engine:&lt;id&gt;]</code> for one
+truck. The most specific section in force that holds any of them gives all four (EngineFromFiles), a missing key the stock one.</li>
 <li><code>[Map:...]</code> and <code>[Clock]</code> in <code>Gauges.ini</code>. Old <code>[Truck:...]</code>, <code>[Gearbox:...]</code> and
 <code>[Engine:...]</code> sections are moved into the files at load.</li></ul>
 <p>Scales: truck file over <code>[Gauges]</code>. The automatic's class: the truck file's if it sets a scale, else by mass. Gear hold: the
