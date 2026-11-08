@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- L- and other low gears held by hand no longer jerk near their top speed. With the clutch fully in, the mod's pull goes by the wheels' own spin, and that spin is noisy. Over a low gear's small top speed the noise was enough to cut the pull in and out many times a second. The spin is now averaged over a quarter second, and the pull eases off over the top's last 0.8 rad/s of wheel speed instead of its last 6 %. Higher gears keep the pull as before.
+- L- and other low gears held by hand no longer jerk near their top speed. With the clutch fully in, the mod's pull goes by the wheels' own spin, and that spin is noisy. Over a low gear's small top speed the noise was enough to cut the pull in and out many times a second. The spin is now averaged over a quarter second, and the pull eases off over the top's last 0.8 rad/s of wheel speed instead of its last 6 %. Gears with a top over about 13 rad/s of wheel speed, from about 3rd up on most trucks, keep the pull as before. L- and L pull a little less near their top than before, in mud too.
 
 ## [0.18.4]
 
