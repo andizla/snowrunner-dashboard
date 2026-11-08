@@ -5,6 +5,7 @@
 #pragma once
 #include "gauges.h"
 #include "air_axles.h"
+#include "odometer.h"
 
 struct PageState
 {
@@ -20,6 +21,10 @@ struct PageState
     int engineAspiration = 0;
     int engineFuel = kFuelClass;
     int engineTorque = 100;       // and how much of its torque the truck gets, in percent, as the slider set it (kPageEngineTorque)
+    bool odoHours = false;        // the Display tab's Counts picked hours (kPageOdoHours), and Set's figure in hours (kPageOdoSet)
+    double odoValue = 0.0;        // Set's figure: metres, or seconds with hours
+    char odoText[24] = "";        // Set's field as typed, and the word under it where it was refused
+    const char *odoWord = "";
     int tab = -1;                 // the open tab (kTab...): the host sets the one Gauges.ini keeps before the first frame, else Display
     int tabAsk = -1;              // a tab to open on the next frame (the previews)
     int tabSettle = 0;            // frames until an asked tab is the shown one
@@ -30,7 +35,8 @@ static const unsigned long long kPageCaptureMs = 8000;
 enum { kPageChanged = 1, kPageReload = 2, kPageTruckDrop = 4, kPageDefaults = 8, kPageHearHigh = 16, kPageHearMid = 32, kPageHearLow = 64, kPageHearOil = 128,
        kPagePullTest = 256, kPagePullCancel = 512, kPageMapAmbient = 1024, kPageGearHold = 2048, kPageEngineSet = 4096,
        kPageEngineDrop = 8192, kPageTab = 16384, kPageEngineTorque = 32768, kPageSuspOn = 65536, kPageSuspOff = 131072, kPageSuspDefault = 262144, kPageSuspTruck = 524288, kPageSuspKind = 1048576,
-       kPageEngOn = 2097152, kPageEngOff = 4194304, kPageEngDefault = 8388608, kPageEngTruck = 16777216, kPageEngKind = 33554432, kPageAirHeight = 67108864 };
+       kPageEngOn = 2097152, kPageEngOff = 4194304, kPageEngDefault = 8388608, kPageEngTruck = 16777216, kPageEngKind = 33554432, kPageAirHeight = 67108864,
+       kPageOdoSet = 134217728, kPageOdoHours = 268435456 };
 
 // The Dear ImGui key as a virtual key, for the keys the toggle key can be; 0 for others.
 static int PageVirtualKey(int k)
@@ -276,11 +282,51 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         PageLabel("Lamps", labelX);
         changed(ImGui::Checkbox("##showlamps", &s.showLamps));
         PageTip("Handbrake, lights, AWD, diff lock, low gear, engine damage, cold engine, tilt and oil. On by default.");
+        PageLabel("Odometer", labelX);
+        changed(ImGui::Checkbox("##showodometer", &s.showOdometer));
+        PageTip(s.mph ? "Miles driven under the speed. Each truck keeps its own count. On by default." : "Kilometres driven under the speed. Each truck keeps its own count. On by default.");
         static const char *oils[kOilGaugeCount] = { "Not shown", "Second needle", "Own dial" };
         PageLabel("Oil gauge", labelX);
         ImGui::SetNextItemWidth(w);
         changed(ImGui::Combo("##oilgauge", &s.oilGauge, oils, kOilGaugeCount));
         PageTip("Second needle: an amber needle in the coolant dial. Own dial: a small dial beside it. The oil lamp shows either way. Default: Second needle.");
+
+        ImGui::SeparatorText("Odometer");
+        {
+            // the driven truck's count (BRIEF_odometer.md): the kind's choice of hours, and Set to for this truck only
+            if (!view.odoKnown) ImGui::TextDisabled("No truck is being driven, or its id is still being looked up.");
+            else ImGui::Text("This truck: %s", view.odoText);
+            static const char *counts[2] = { "Distance", "Hours" };
+            int count = view.odoHours ? 1 : 0;
+            PageLabel("Counts", labelX);
+            ImGui::SetNextItemWidth(w);
+            ImGui::BeginDisabled(!view.odoKnown);
+            if (ImGui::Combo("##odocounts", &count, counts, 2))
+            {
+                st.odoHours = count == 1;
+                act |= kPageOdoHours;
+            }
+            ImGui::EndDisabled();
+            PageTip("Hours: the engine's running hours instead of the distance, for machinery that works standing. Kept for this kind of truck.");
+            PageLabel("Set to", labelX);
+            ImGui::BeginDisabled(!view.odoCanSet);
+            ImGui::SetNextItemWidth(w * 0.5f);
+            ImGui::InputText("##odoset", st.odoText, sizeof st.odoText);
+            PageTip("Writes this figure as this truck's count. For a truck bought used. 0 starts it anew.");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Set###odosetbutton"))
+            {
+                if (OdoSetValue(st.odoText, view.odoHours, s.mph, st.odoValue))
+                {
+                    st.odoHours = view.odoHours;
+                    st.odoWord = "";
+                    act |= kPageOdoSet;
+                }
+                else st.odoWord = view.odoHours ? "Not set: a number from 0 to 1 000 000 h." : s.mph ? "Not set: a number from 0 to 10 000 000 mi." : "Not set: a number from 0 to 10 000 000 km.";
+            }
+            ImGui::EndDisabled();
+            if (st.odoWord[0]) ImGui::TextDisabled("%s", st.odoWord);
+        }
 
         ImGui::SeparatorText("Tilt lamp");
         {

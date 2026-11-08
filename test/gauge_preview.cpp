@@ -298,6 +298,7 @@ int wmain(int argc, wchar_t **argv)
     // three states: a cold start in the yard, the mod's demo values (cruising), and an overheating engine on a slope
     GaugeState drive;
     GaugeDemo(drive, def);
+    strcpy_s(drive.odometer, "123456 km"); // the widest figure (the Reviewer's point 8 on BRIEF_odometer.md)
     GaugeState cold = drive;
     cold.speedKmh = 0.0f;
     cold.rpm = 720.0f;
@@ -320,6 +321,7 @@ int wmain(int argc, wchar_t **argv)
     hot.lowGear = true;
     hot.fuelFrac = 0.18f;
     hot.rangeKm = 90.0f;
+    strcpy_s(hot.odometer, "99999.9 h");
     hot.tempC = 121.0f;
     hot.oilC = 131.0f;
     hot.oilHot = true;

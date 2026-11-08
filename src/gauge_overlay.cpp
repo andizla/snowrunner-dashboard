@@ -251,6 +251,8 @@ static void OnPage()
     if (act & kPageEngineSet) EngineProfileSet(st.enginePeak, st.engineAspiration, st.engineFuel);
     if (act & kPageEngineDrop) EngineProfileDrop();
     if (act & kPageEngineTorque) EngineTorqueSet(st.engineTorque);
+    if (act & kPageOdoHours) OdometerHoursAsk(st.odoHours);
+    if (act & kPageOdoSet) OdometerSetAsk(st.odoHours, st.odoValue);
     if (act & kPageDefaults) SettingsReset();
     if (act & kPageReload) SettingsReload();
     if (act & kPageHearHigh) SoundHear(kTurboHigh);

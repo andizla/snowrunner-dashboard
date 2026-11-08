@@ -43,6 +43,7 @@ int NgMenuKeyFromIni(); // the menu's key, which a capture never binds
 #include "suspension_step.h"
 #include "air_axles.h"
 #include "frame_flex.h"
+#include "odometer.h"
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "shell32.lib")
 #ifndef GAUGES_SETTINGS_TEST
@@ -73,6 +74,8 @@ static volatile LONG g_mapAmbientAsked = 0, g_mapAmbientTenths = 0; // the tab s
 static volatile LONG g_gearHoldAsked = 0, g_gearHoldTenths = 0;     // the tab set the driven gearbox's hold, in tenths of a second
 static volatile LONG g_engineAsked = 0, g_enginePeak = 0, g_engineAspiration = 0, g_engineFuel = 0; // the tab set (1) or dropped (2) the driven engine's profile: the peak torque's rpm, the aspiration, the fuel
 static volatile LONG g_engineTorqueAsked = 0, g_engineTorquePercent = 0; // the tab set the driven engine's torque share, in percent
+static volatile LONG g_odoSetAsked = 0, g_odoHoursAsked = 0;             // the Display tab's Set (1 distance, 2 hours) and Counts (1 hours, 2 distance)
+static volatile LONG64 g_odoSetValue = 0;                                // Set's figure: whole metres, or whole seconds
 
 // What the cluster shows, written by the mod's thread and read by the render thread.
 static SRWLOCK g_viewLock = SRWLOCK_INIT;
@@ -753,6 +756,7 @@ static void WriteIni(const GaugeSettings &s)
     whole(L"ShowBoost", s.showBoost ? 1 : 0);
     whole(L"ShowAir", s.showAir ? 1 : 0);
     whole(L"ShowClock", s.showClock ? 1 : 0);
+    whole(L"ShowOdometer", s.showOdometer ? 1 : 0);
     whole(L"ShowFuelUse", s.showFuelUse ? 1 : 0);
     whole(L"ShowLamps", s.showLamps ? 1 : 0);
     whole(L"OilGauge", s.oilGauge);
@@ -1069,6 +1073,8 @@ static void ReadIni(GaugeSettings &s)
                         L"; Mph=1: speed in mph and range in miles. Psi=1: boost in psi. Fahrenheit=1: temperature in F.\n"
                         L"; ShowTemp, ShowBoost, ShowAir and ShowLamps switch the small dials and the lamps on (1) or off (0).\n"
                         L"; ShowClock=1 draws a clock dial with the game's time of day, the outside temperature in its face.\n"
+                        L"; ShowOdometer=1 shows the driven truck's count under the speed: km (miles with Mph), or engine hours where its kind's\n"
+                        L"; file has OdometerHours=1 in [Truck]. Each truck's count is kept in [Odometer:<id>] of its kind's file, Metres= and Seconds=.\n"
                         L"; ShowFuelUse=1 draws the fuel used a minute, after the range under the fuel dial (litres a minute, gallons an hour with Mph).\n"
                         L"; OilGauge shows the oil temperature: 1 = a second needle (amber) in the temperature dial, 2 = a dial of its\n"
                         L"; own left of the temperature dial, 0 = not at all. The oil lamp is in the lamps either way.\n"
@@ -1212,6 +1218,7 @@ static void ReadIni(GaugeSettings &s)
     s.showBoost = IniBool(L"ShowBoost", s.showBoost, ini);
     s.showAir = IniBool(L"ShowAir", s.showAir, ini);
     s.showClock = IniBool(L"ShowClock", s.showClock, ini);
+    s.showOdometer = IniBool(L"ShowOdometer", s.showOdometer, ini);
     s.showFuelUse = IniBool(L"ShowFuelUse", s.showFuelUse, ini);
     s.showLamps = IniBool(L"ShowLamps", s.showLamps, ini);
     s.oilGauge = IniInt(L"OilGauge", s.oilGauge, ini);
@@ -1363,6 +1370,12 @@ void EngineOwnAsk(bool on) { InterlockedExchange(&g_engOwnAsked, on ? 1 : 2); }
 void EngineToDefaultAsk() { InterlockedExchange(&g_engDefaultAsked, 1); }
 void EngineLevelAsk(bool truckOnly) { InterlockedExchange(&g_engLevelAsked, truckOnly ? 1 : 2); }
 void SettingsReset() { InterlockedExchange(&g_resetAsked, 1); }
+void OdometerSetAsk(bool hours, double value)
+{
+    InterlockedExchange64(&g_odoSetValue, (LONG64)llround(value));
+    InterlockedExchange(&g_odoSetAsked, hours ? 2 : 1);
+}
+void OdometerHoursAsk(bool hours) { InterlockedExchange(&g_odoHoursAsked, hours ? 1 : 2); }
 void PullTestAsk(bool run) { InterlockedExchange(&g_pullTestAsked, run ? 1 : 2); }
 void MapAmbientSet(float c)
 {
@@ -2031,9 +2044,23 @@ static truckid::Parts TruckPartsOf(const char *engine, const char *gearbox)
     if (engine[0] && gearbox[0]) p = { { L"Engine", EnginePartOf(engine) }, { L"Gearbox", EnginePartOf(gearbox) } };
     return p;
 }
+// The sections that hold settings: the match's first tier and the levels go by these.
 static const std::vector<std::wstring> &TruckIdPrefixes()
 {
     static const std::vector<std::wstring> p = { std::wstring(kSuspSection) + L":", std::wstring(kEngineSection) + L":" };
+    return p;
+}
+// Every section that follows the truck: the settings' and the odometer's (BRIEF_odometer.md). The parts go into each,
+// and a match takes each.
+static const wchar_t *const kOdoSection = L"Odometer";
+static const std::vector<std::wstring> &TruckIdAllPrefixes()
+{
+    static const std::vector<std::wstring> p = { std::wstring(kSuspSection) + L":", std::wstring(kEngineSection) + L":", std::wstring(kOdoSection) + L":" };
+    return p;
+}
+static const std::vector<std::wstring> &OdoPrefixes()
+{
+    static const std::vector<std::wstring> p = { std::wstring(kOdoSection) + L":" };
     return p;
 }
 // The parts written into the id's sections where they exist. True when one changed.
@@ -2042,8 +2069,104 @@ static bool TruckPartsPut(const char *key, const char *id, const truckid::Parts 
     if (!key[0] || !id[0] || parts.empty()) return false;
     const std::wstring ini = SetupFile(kSetupTruck, key);
     bool changed = false;
-    for (const auto &pre : TruckIdPrefixes()) changed = truckid::PartsPut(ini, pre + Wide(id), parts) || changed;
+    for (const auto &pre : TruckIdAllPrefixes()) changed = truckid::PartsPut(ini, pre + Wide(id), parts) || changed;
     return changed;
+}
+// Whether the id has any section that follows the truck, the odometer's too (the parts look: a section made after the
+// first drive gets the parts).
+static bool TruckIdAny(const char *key, const char *id)
+{
+    if (!key[0] || !id[0]) return false;
+    const std::wstring ini = SetupFile(kSetupTruck, key);
+    for (const auto &pre : TruckIdAllPrefixes())
+        if (truckid::SectionThere(ini, pre + Wide(id))) return true;
+    return false;
+}
+
+// ---- the odometer's store (BRIEF_odometer.md): [Odometer:<id>] with Metres= and Seconds= as whole numbers ----
+static bool OdoRead(const char *key, const char *id, double &metres, double &seconds)
+{
+    metres = seconds = 0.0;
+    if (!key[0] || !id[0]) return false;
+    const std::wstring ini = SetupFile(kSetupTruck, key), sec = SectionOf(kOdoSection, id);
+    if (!truckid::SectionThere(ini, sec)) return false;
+    wchar_t buf[32] = {};
+    GetPrivateProfileStringW(sec.c_str(), L"Metres", L"0", buf, 32, ini.c_str());
+    metres = (double)_wcstoui64(buf, nullptr, 10);
+    GetPrivateProfileStringW(sec.c_str(), L"Seconds", L"0", buf, 32, ini.c_str());
+    seconds = (double)_wcstoui64(buf, nullptr, 10);
+    return true;
+}
+static void OdoWrite(const char *key, const char *id, double metres, double seconds)
+{
+    if (!key[0] || !id[0]) return;
+    const std::wstring ini = SetupFile(kSetupTruck, key), sec = SectionOf(kOdoSection, id);
+    SetupBegin(kSetupTruck, Wide(key));
+    wchar_t buf[32];
+    _snwprintf_s(buf, _TRUNCATE, L"%llu", (unsigned long long)llround(fmax(metres, 0.0)));
+    WritePrivateProfileStringW(sec.c_str(), L"Metres", buf, ini.c_str());
+    _snwprintf_s(buf, _TRUNCATE, L"%llu", (unsigned long long)llround(fmax(seconds, 0.0)));
+    WritePrivateProfileStringW(sec.c_str(), L"Seconds", buf, ini.c_str());
+}
+// OdometerHours=1 in the kind's [Truck]: this kind shows engine hours.
+static bool OdoHoursOf(const char *key) { return key[0] && GetPrivateProfileIntW(kSetupSections[kSetupTruck], L"OdometerHours", 0, SetupFile(kSetupTruck, key).c_str()) != 0; }
+static void OdoHoursPut(const char *key, bool hours)
+{
+    if (!key[0]) return;
+    SetupBegin(kSetupTruck, Wide(key));
+    WritePrivateProfileStringW(kSetupSections[kSetupTruck], L"OdometerHours", hours ? L"1" : nullptr, SetupFile(kSetupTruck, key).c_str());
+}
+
+// The match's second tier (the Reviewer's must 1): only where the first, over the settings, found none. The waiting ids
+// with a count of their own and no settings section, by the same rules as truckid::MatchFind (not marked, the parts
+// recorded and the same, waiting), so a parked truck with only its count never stops a truck with settings being
+// matched, and its count still follows it out of the warehouse.
+template <class Gone>
+static truckid::Match OdoMatchFind(const std::wstring &file, const char *newId, const truckid::Parts &parts, bool named, unsigned long long start, Gone drivenGone)
+{
+    truckid::Match m = {};
+    m.why = truckid::kMatchNone;
+    if (!named) { m.why = truckid::kMatchUnnamed; return m; }
+    if (parts.empty()) { m.why = truckid::kMatchNoParts; return m; }
+    for (const auto &p : parts)
+        if (p.second.empty()) { m.why = truckid::kMatchNoParts; return m; }
+    std::vector<wchar_t> names(65536, L'\0');
+    if (!GetPrivateProfileSectionNamesW(names.data(), (DWORD)names.size(), file.c_str())) return m;
+    const std::wstring pre = std::wstring(kOdoSection) + L":", mine = Wide(newId);
+    for (const wchar_t *n = names.data(); *n; n += wcslen(n) + 1)
+    {
+        if (wcslen(n) <= pre.size() || _wcsnicmp(n, pre.c_str(), pre.size())) continue;
+        const std::wstring id = n + pre.size();
+        if (id.find(L':') != std::wstring::npos || !_wcsicmp(id.c_str(), mine.c_str())) continue;
+        bool settings = false;
+        for (const auto &s : TruckIdPrefixes()) settings = settings || truckid::SectionThere(file, s + id);
+        if (settings) continue;
+        bool marked = false, own = false, partsAll = true, partsSame = true;
+        const auto keys = truckid::Keys(file, pre + id);
+        for (const auto &k : keys)
+        {
+            if (truckid::KeyIs(k.first, L"TakenBy")) marked = true;
+            own = own || truckid::KeyIs(k.first, L"Metres") || truckid::KeyIs(k.first, L"Seconds");
+        }
+        for (const auto &p : parts)
+        {
+            const auto it = std::find_if(keys.begin(), keys.end(), [&](const auto &k) { return truckid::KeyIs(k.first, p.first.c_str()); });
+            if (it == keys.end()) partsAll = false;
+            else if (it->second != p.second) partsSame = false;
+        }
+        if (marked || !own) continue;
+        char idText[40] = {};
+        WideCharToMultiByte(CP_ACP, 0, id.c_str(), -1, idText, sizeof idText, nullptr, nullptr);
+        unsigned long long seen = 0;
+        const bool listed = truckid::SeenGet(file, idText, seen);
+        if (listed && seen >= start && !drivenGone(idText)) continue;
+        m.waiting++;
+        if (!partsAll || !partsSame) continue;
+        if (++m.candidates == 1) strncpy_s(m.id, idText, _TRUNCATE);
+    }
+    m.why = m.candidates == 1 ? truckid::kMatchOne : m.candidates > 1 ? truckid::kMatchTwo : truckid::kMatchNone;
+    if (m.why != truckid::kMatchOne) m.id[0] = 0;
+    return m;
 }
 // Whether the id has a section of either kind, and whether one is in force (Own not 0).
 static bool TruckIdSections(const char *key, const char *id, bool *inForce = nullptr)
@@ -2376,6 +2499,7 @@ static void SettingsFor(SettingsState &st, const char *key, const char *id = "")
     st.changed = false;
     SuspMarkClear(st.key, st.id);
     SuspMarkClear(st.key, st.id, kEngineSection);
+    SuspMarkClear(st.key, st.id, kOdoSection); // the Reviewer's must 5: a count driven again is no left-over
     SuspFromFiles(st);
 }
 
@@ -2470,14 +2594,22 @@ static void SettingsSuspLevel(SettingsState &st, bool truckOnly)
 
 // The driven truck is the same kind under a new id (the game made it anew): its sections follow it, the suspension's
 // and the engine's each on its own. Which were taken: kTakenSusp and kTakenEngine.
-enum { kTakenSusp = 1, kTakenEngine = 2 };
+// And the odometer's count (kTakenOdo, the Reviewer's must 2), so a recovery or a garage visit keeps it.
+enum { kTakenSusp = 1, kTakenEngine = 2, kTakenOdo = 4 };
 static int TakeOverBoth(const char *key, const char *oldId, const char *newId)
 {
-    return (TruckSuspTakeOver(key, oldId, newId) ? kTakenSusp : 0) | (TruckSuspTakeOver(key, oldId, newId, 0, kEngineSection) ? kTakenEngine : 0);
+    return (TruckSuspTakeOver(key, oldId, newId) ? kTakenSusp : 0) | (TruckSuspTakeOver(key, oldId, newId, 0, kEngineSection) ? kTakenEngine : 0) |
+           (TruckSuspTakeOver(key, oldId, newId, 0, kOdoSection) ? kTakenOdo : 0);
 }
 static const wchar_t *TakenWords(int taken)
 {
-    return taken == (kTakenSusp | kTakenEngine) ? L"the suspension's and the engine's settings" : taken == kTakenEngine ? L"the engine's settings" : L"the suspension's settings";
+    const int settings = taken & (kTakenSusp | kTakenEngine);
+    if (taken & kTakenOdo)
+        return settings == (kTakenSusp | kTakenEngine) ? L"the suspension's and the engine's settings and its count"
+               : settings == kTakenEngine              ? L"the engine's settings and its count"
+               : settings == kTakenSusp                ? L"the suspension's settings and its count"
+                                                       : L"its count";
+    return settings == (kTakenSusp | kTakenEngine) ? L"the suspension's and the engine's settings" : settings == kTakenEngine ? L"the engine's settings" : L"the suspension's settings";
 }
 static int SettingsTakeOver(SettingsState &st, const char *newId)
 {
@@ -3430,10 +3562,10 @@ static void LogSettings(const GaugeSettings &s)
     KeyName(s.toggleKey, key, sizeof key);
     static const wchar_t *oils[kOilGaugeCount] = { L"", L", the oil as a second needle in the temperature dial", L", the oil in a dial of its own" },
                          *profiles[kSpoolCount] = { L"standard", L"small and quick", L"big and slow", L"two stages" };
-    Log(L"settings: %s layout%s, %s style, size x%g, opacity %g, offset %g / %g, dials:%s%s%s%s%s%s%s", layouts[s.layout],
+    Log(L"settings: %s layout%s, %s style, size x%g, opacity %g, offset %g / %g, dials:%s%s%s%s%s%s%s%s", layouts[s.layout],
         s.swapDials ? L" with the speedometer and the tachometer swapped" : L"", styles[s.style], s.scale, s.opacity, s.offsetX,
         s.offsetY, s.showTemp ? L" temperature" : L"", s.showBoost ? L" boost" : L"", s.showAir ? L" air" : L"", s.showClock ? L" clock" : L"",
-        s.showFuelUse ? L" fuel use" : L"", s.showLamps ? L" lamps" : L"", oils[s.oilGauge]);
+        s.showFuelUse ? L" fuel use" : L"", s.showLamps ? L" lamps" : L"", oils[s.oilGauge], s.showOdometer ? L"; the odometer under the speed" : L"");
     Log(L"settings: %s scales: idle %.0f rpm, red zone from %.0f of %.0f, speedometer to %.0f km/h, boost to %g bar, a %s turbo; units %s, %s, %s", classes[s.tachClass], k.idle,
         k.redline, k.max, k.speedMax, k.boost, profiles[s.boostProfile], s.mph ? L"mph" : L"km/h", s.psi ? L"psi" : L"bar", s.fahrenheit ? L"F" : L"C");
     Log(L"settings: tilt lamp amber from %g degrees to a side, red from %g, red from %g up or down a slope", s.rollWarnDeg, s.rollDangerDeg, s.pitchDangerDeg);
@@ -3693,6 +3825,8 @@ struct TruckWatch
     bool pedalDown;             // the pedal was more than half down on the last step
     uint64_t modelVehicle;
     RangeModel range;           // the range of the truck with the tank it holds
+    double odoMetres, odoSeconds; // the odometer's count since the mod's thread last took it (odometer.h), and on this pass:
+    bool odoMoving, odoStepped;   // above kOdoMoving, and whether the models stepped
     float burn;                 // the game's fuel burn in litres a minute, smoothed over about a second (the cluster's readout)
     bool burnKnown;             // burn holds a truck's
     TiltModel tilt;             // how the truck stands, and the tilt lamp
@@ -5322,6 +5456,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         w.creep = CreepModel{};
         w.creepStall = false;
     }
+    w.odoStepped = driving && !held && same;
+    w.odoMoving = false;
     if (driving && !held && same)
     {
         if (w.refs.vehicle != w.modelVehicle)
@@ -5418,6 +5554,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         if (pedalDown && !w.pedalDown) SoundQuiet();
         w.pedalDown = pedalDown;
         RangeStep(w.range, kind, raw, dt);
+        // the odometer (BRIEF_odometer.md, the Reviewer's should 6): inside the models' gate, real seconds
+        OdoCount(w.odoMetres, w.odoSeconds, raw.speed, dt, TruckEngineOn(raw));
+        w.odoMoving = fabsf(raw.speed) >= kOdoMoving;
         // the burn for the readout: the game's rule, nothing with the engine off, smoothed so it does not flicker with the pedal
         // (the rule's numbers not read: not known)
         const float burnNow = TruckFuelRate(raw);
@@ -6519,6 +6658,16 @@ static DWORD WINAPI Run(void *)
     std::wstring partsWritten;   // the driven truck's parts as last written, "id|Engine|Gearbox"
     ULONGLONG partsLookAt = 0;
     uint64_t truckVehicle = 0;   // the vehicle the driven truck's id was taken with (review F1 of step 2)
+    // the odometer (BRIEF_odometer.md): the driven truck's count, its kind's choice of hours, and where a tier 2 match
+    // took it from (for its line)
+    OdoState odo = {};
+    bool odoHours = false;
+    char odoFrom[40] = "";
+    auto odoWrite = [&](const wchar_t *why) {
+        OdoWrite(truck.key, truck.id, odo.metres, odo.seconds);
+        OdoWritten(odo, GetTickCount64());
+        if (s.probe) Log(L"odometer: %S, id %S: %.0f m and %.0f s written (%s)", truck.key, truckid::Short(truck.id).c_str(), odo.metres, odo.seconds, why);
+    };
     // the truck that leaves: its vehicle and the loads now, for the match's "driven this start" (the Reviewer's should 2)
     auto idLeaves = [&]() {
         if (!truck.key[0] || !truck.id[0]) return;
@@ -6549,6 +6698,22 @@ static DWORD WINAPI Run(void *)
         wchar_t text[512];
         truckid::DriveLine(text, 512, truck.key, truck.id[0] ? truck.id : "", line, lastSeen, fromId, rule, why);
         Log(L"%s", text);
+        // the odometer's figure, only now the take-over and the match have decided (the Reviewer's must 3): the copied
+        // section is read, and what was counted since the change goes on top of it
+        if (truck.key[0] && !odo.decided)
+        {
+            double metres = 0.0, seconds = 0.0;
+            const bool loaded = OdoRead(truck.key, truck.id, metres, seconds);
+            OdoDecide(odo, truck.id[0] != 0, loaded, metres, seconds, GetTickCount64());
+            odoHours = OdoHoursOf(truck.key);
+            char shown[24], hours[24];
+            OdoText(shown, sizeof shown, odo.metres, odo.seconds, false, s.mph);
+            OdoText(hours, sizeof hours, odo.metres, odo.seconds, true, false);
+            Log(L"odometer: %S, id %S: %S and %S (%s shown), %s%S%s", truck.key, truck.id[0] ? truckid::Short(truck.id).c_str() : "not read", shown, hours,
+                odoHours ? L"hours" : L"distance", !truck.id[0] ? L"counted for this drive only, not saved" : odoFrom[0] ? L"its count from " : loaded ? L"from [Odometer:<id>]" : L"no section yet",
+                odoFrom[0] ? truckid::Short(odoFrom).c_str() : "", odoFrom[0] ? L" (out of the warehouse)" : L"");
+            odoFrom[0] = 0;
+        }
         if (!truck.id[0]) return;
         const std::wstring ini = SetupFile(kSetupTruck, truck.key);
         unsigned long long seen = 0;
@@ -6565,9 +6730,17 @@ static DWORD WINAPI Run(void *)
         const bool known = !strcmp(eng.key, truck.key) && !strcmp(eng.id, truck.id) && eng.engine[0] && eng.gearbox[0];
         const truckid::Parts parts = known ? TruckPartsOf(eng.engine, eng.gearbox) : truckid::Parts();
         const std::wstring ini = SetupFile(kSetupTruck, truck.key);
+        // tier 1 over the settings, taking the count along; tier 2 over the counts alone only where tier 1 found none
+        // (the Reviewer's must 1)
         const truckid::Match m = truckid::MatchFind(ini, TruckIdPrefixes(), truck.id, parts, truck.named, idStart, idDrivenGone);
-        if (m.why == truckid::kMatchOne && truckid::MatchTake(ini, TruckIdPrefixes(), TruckIdPrefixes(), m.id, truck.id) > 0)
+        if (m.why == truckid::kMatchNone)
         {
+            const truckid::Match c = OdoMatchFind(ini, truck.id, parts, truck.named, idStart, idDrivenGone);
+            if (c.why == truckid::kMatchOne && truckid::MatchTake(ini, OdoPrefixes(), OdoPrefixes(), c.id, truck.id) > 0) strncpy_s(odoFrom, c.id, _TRUNCATE);
+        }
+        if (m.why == truckid::kMatchOne && truckid::MatchTake(ini, TruckIdAllPrefixes(), TruckIdAllPrefixes(), m.id, truck.id) > 0)
+        {
+            strncpy_s(odoFrom, m.id, _TRUNCATE);
             if (saveAt) SettingsSave(set);
             saveAt = 0;
             SettingsFor(set, truck.key, truck.id);
@@ -7129,6 +7302,29 @@ static DWORD WINAPI Run(void *)
                 clockSaid = true;
             }
         }
+        // the odometer's count of this pass, the old truck's still at a change below: the writes it is owed
+        {
+            const double metres = watch.odoMetres, seconds = watch.odoSeconds;
+            watch.odoMetres = watch.odoSeconds = 0.0;
+            const int due = OdoPass(odo, metres, seconds, watch.odoMoving, watch.odoStepped, GetTickCount64());
+            if (due != kOdoNoWrite) odoWrite(due == kOdoMinute ? L"a minute" : due == kOdoStop ? L"a stop" : L"the game held");
+            const LONG setAsk = InterlockedExchange(&g_odoSetAsked, 0);
+            if (setAsk && odo.decided && odo.saves && !idPending.on)
+            {
+                OdoSet(odo, setAsk == 2, (double)g_odoSetValue);
+                char shown[24];
+                OdoText(shown, sizeof shown, odo.metres, odo.seconds, setAsk == 2, s.mph);
+                Log(L"odometer: %S, id %S: set to %S from the tab", truck.key, truckid::Short(truck.id).c_str(), shown);
+                odoWrite(L"set from the tab");
+            }
+            const LONG hoursAsk = InterlockedExchange(&g_odoHoursAsked, 0);
+            if (hoursAsk && truck.key[0])
+            {
+                odoHours = hoursAsk == 1;
+                OdoHoursPut(truck.key, odoHours);
+                Log(L"odometer: every %S shows %s from now on (OdometerHours in its file's [Truck])", truck.key, odoHours ? L"its engine hours" : L"the distance");
+            }
+        }
         const TruckIdentity &now = watch.who.taken;
         if (strcmp(now.key, truck.key))
         {
@@ -7157,6 +7353,8 @@ static DWORD WINAPI Run(void *)
                     thereId, (void *)thereVehicle, there.id[0] ? there.id : "no id", there.kind[0] ? there.kind : "none", (void *)there.body, (void *)there.world,
                     (void *)there.newWorld, there.there ? L"another truck, not taken over" : L"gone, taken over");
             if (idPending.on) idResolve();
+            if (OdoOwed(odo)) odoWrite(L"another truck driven");
+            OdoChange(odo);
             idLeaves();
             truck = now;
             truckVehicle = watch.idVehicle;
@@ -7206,6 +7404,8 @@ static DWORD WINAPI Run(void *)
             strncpy_s(oldId, truck.id, _TRUNCATE);
             const uint64_t oldVehicle = truckVehicle;
             if (idPending.on) idResolve();
+            if (OdoOwed(odo)) odoWrite(L"a new id");
+            OdoChange(odo);
             idLeaves();
             truck = now;
             truckVehicle = watch.idVehicle; // recorded on the pass the new id was read with
@@ -7234,7 +7434,7 @@ static DWORD WINAPI Run(void *)
             eng.gearbox[0])
         {
             partsLookAt = GetTickCount64();
-            const std::wstring parts = Wide(truck.id) + L"|" + Wide(eng.engine) + L"|" + Wide(eng.gearbox) + (TruckIdSections(truck.key, truck.id) ? L"|s" : L"");
+            const std::wstring parts = Wide(truck.id) + L"|" + Wide(eng.engine) + L"|" + Wide(eng.gearbox) + (TruckIdAny(truck.key, truck.id) ? L"|s" : L"");
             if (parts != partsWritten && TruckPartsPut(truck.key, truck.id, TruckPartsOf(eng.engine, eng.gearbox)))
                 Log(L"truck: %S, id %S: its engine %S and gearbox %S written in its own sections (the warehouse match goes by them)", truck.key, truckid::Short(truck.id).c_str(),
                     eng.engine, eng.gearbox);
@@ -7250,6 +7450,10 @@ static DWORD WINAPI Run(void *)
         v.suspKindSet = set.suspOwn || set.suspKept;
         v.suspIdKnown = set.id[0] != 0;
         WideCharToMultiByte(CP_UTF8, 0, idWords, -1, v.idWords, sizeof v.idWords, nullptr, nullptr);
+        v.odoKnown = odo.decided && truck.key[0];
+        v.odoCanSet = v.odoKnown && odo.saves && !idPending.on;
+        v.odoHours = odoHours;
+        if (v.odoKnown) OdoText(v.odoText, sizeof v.odoText, odo.metres, odo.seconds, odoHours, s.mph);
         if (map[0]) MapTitle(map, v.map, sizeof v.map);
         else v.map[0] = 0;
         strncpy_s(v.mapFrom, mapFrom, _TRUNCATE);
@@ -7418,6 +7622,7 @@ static DWORD WINAPI Run(void *)
             v.st.natural = watch.profile.aspiration == kAspNatural;
             v.st.airBar = watch.air.bar;
             v.st.rangeKm = watch.range.rangeKm;
+            if (s.showOdometer && v.odoKnown) strncpy_s(v.st.odometer, v.odoText, _TRUNCATE);
             v.st.burnPerMin = watch.burnKnown ? watch.burn : -1.0f;
             v.st.tilt = watch.tilt.running ? watch.tilt.lamp : -1;
             v.st.rollDeg = watch.tilt.rollDeg;
@@ -7554,7 +7759,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
 {
     return a.layout == b.layout && a.swapDials == b.swapDials && a.style == b.style && a.faceOpacity == b.faceOpacity && a.offsetX == b.offsetX && a.offsetY == b.offsetY &&
            a.scale == b.scale && a.opacity == b.opacity && a.mph == b.mph && a.psi == b.psi && a.fahrenheit == b.fahrenheit && a.showTemp == b.showTemp &&
-           a.showBoost == b.showBoost && a.showAir == b.showAir && a.showClock == b.showClock && a.showFuelUse == b.showFuelUse && a.showLamps == b.showLamps && a.tachClass == b.tachClass && a.idleRpm == b.idleRpm &&
+           a.showBoost == b.showBoost && a.showAir == b.showAir && a.showClock == b.showClock && a.showOdometer == b.showOdometer && a.showFuelUse == b.showFuelUse && a.showLamps == b.showLamps && a.tachClass == b.tachClass && a.idleRpm == b.idleRpm &&
            a.redlineRpm == b.redlineRpm && a.maxRpm == b.maxRpm && a.speedMax == b.speedMax && a.boostMax == b.boostMax && a.toggleKey == b.toggleKey &&
            a.rollWarnDeg == b.rollWarnDeg && a.rollDangerDeg == b.rollDangerDeg && a.pitchDangerDeg == b.pitchDangerDeg &&
            a.warmUpMinutes == b.warmUpMinutes && a.overheatMinutes == b.overheatMinutes && a.coolDownMinutes == b.coolDownMinutes && a.ambientC == b.ambientC &&
@@ -7586,7 +7791,7 @@ int wmain(int argc, wchar_t **argv)
     const bool written = GetFileAttributesW(ini.c_str()) != INVALID_FILE_ATTRIBUTES;
     ReadIni(b);
     Check(gone && written && SameSettings(a, d) && SameSettings(b, d), "ini: a missing ini is written with the defaults and reads back as them");
-    Check(d.layout == kLayoutStrip && !d.swapDials && d.style == kFaceOpen && !d.showAir && d.showClock && d.showFuelUse && !d.demo && d.probe == 0 && d.keepLogs == 20 && !d.mph && !d.psi && !d.fahrenheit && d.toggleKey == 0 &&
+    Check(d.layout == kLayoutStrip && !d.swapDials && d.style == kFaceOpen && !d.showAir && d.showClock && d.showOdometer && d.showFuelUse && !d.demo && d.probe == 0 && d.keepLogs == 20 && !d.mph && !d.psi && !d.fahrenheit && d.toggleKey == 0 &&
           !strcmp(d.padToggle, "None") && d.rollWarnDeg == 15.0f && d.rollDangerDeg == 25.0f && d.pitchDangerDeg == 35.0f,
           "defaults: strip, open style, metric, the air dial off, no toggle, demo off, probe off, the tilt lamp at 15, 25 and 35 degrees");
     Check(d.warmUpMinutes == 3.0f && d.overheatMinutes == 1.5f && d.coolDownMinutes == 15.0f && d.ambientC == 15.0f && d.ambientByMap,
@@ -7630,6 +7835,7 @@ int wmain(int argc, wchar_t **argv)
     c.showAir = true;
     c.airSync = true;
     c.showClock = false;
+    c.showOdometer = false;
     c.showFuelUse = false;
     c.tachClass = kClassHeavy;
     c.idleRpm = 700.0f;
@@ -7682,7 +7888,7 @@ int wmain(int argc, wchar_t **argv)
     c.oilWarnC = 132.0f;
     const bool allChanged = c.layout != d.layout && c.swapDials != d.swapDials && c.style != d.style && c.faceOpacity != d.faceOpacity && c.offsetX != d.offsetX && c.offsetY != d.offsetY &&
                             c.scale != d.scale && c.opacity != d.opacity && c.mph != d.mph && c.psi != d.psi && c.fahrenheit != d.fahrenheit &&
-                            c.showTemp != d.showTemp && c.showBoost != d.showBoost && c.showAir != d.showAir && c.showClock != d.showClock && c.showFuelUse != d.showFuelUse && c.showLamps != d.showLamps &&
+                            c.showTemp != d.showTemp && c.showBoost != d.showBoost && c.showAir != d.showAir && c.showClock != d.showClock && c.showOdometer != d.showOdometer && c.showFuelUse != d.showFuelUse && c.showLamps != d.showLamps &&
                             c.tachClass != d.tachClass && c.idleRpm != d.idleRpm && c.redlineRpm != d.redlineRpm && c.maxRpm != d.maxRpm &&
                             c.speedMax != d.speedMax && c.boostMax != d.boostMax && c.rollWarnDeg != d.rollWarnDeg && c.rollDangerDeg != d.rollDangerDeg &&
                             c.pitchDangerDeg != d.pitchDangerDeg && c.warmUpMinutes != d.warmUpMinutes && c.overheatMinutes != d.overheatMinutes &&
@@ -7711,7 +7917,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 128, "ini: the help text survives a write (128 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 130, "ini: the help text survives a write (130 comment lines)");
     // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
     {
         char none[32] = "x", tab[32] = {}, kept[32] = {};
@@ -9589,6 +9795,94 @@ int wmain(int argc, wchar_t **argv)
                   wcsstr(left.c_str(), L"the default of GearDown") && wcsstr(taken.c_str(), L"GEAR UP"),
               "gearbox: SMT.ini's keyboard bindings taken over by their scan codes (an extended key and the number pad too), a default on a key "
               "it took dropped, a combination left, its controller section and menu key left, its diff lock and AWD keys taken, its options taken");
+    }
+    // the odometer's store (BRIEF_odometer.md with the Reviewer's addendum): [Odometer:<id>] written and read back; the
+    // take-over carries it with the other two; the parts go into it and the parts look sees it; TruckIdSections leaves it
+    // out, so the levels and "new to the mod" stay as they were; the match's two tiers; the mark cleared on it; a
+    // take-over's mark pruned past 10 newer ones, a warehouse match's kept; OdometerHours per kind
+    {
+        const char *kind = "odo_test_kind";
+        const char *a = "{0D000000-0000-0000-0000-00000000000A}", *b = "{0D000000-0000-0000-0000-00000000000B}", *n = "{0D000000-0000-0000-0000-00000000000C}",
+                   *r = "{0D000000-0000-0000-0000-00000000000D}";
+        const std::wstring kf = SetupFile(kSetupTruck, kind);
+        DeleteFileW(kf.c_str());
+        auto never = [](const char *) { return false; };
+        const truckid::Parts parts = TruckPartsOf("e_odo.v8", "g_odo_box");
+        double m = 0.0, sec = 0.0;
+        const bool none = !OdoRead(kind, a, m, sec) && m == 0.0 && sec == 0.0;
+        OdoWrite(kind, a, 12345.6, 789.4);
+        const bool back = OdoRead(kind, a, m, sec) && m == 12346.0 && sec == 789.0;
+        bool inForce = true;
+        const bool notSettings = !TruckIdSections(kind, a, &inForce) && !inForce && TruckIdAny(kind, a);
+        const bool parted = TruckPartsPut(kind, a, parts) && truckid::Keys(kf, SectionOf(kOdoSection, a)).size() == 4;
+        Check(none && back && notSettings && parted,
+              "odometer store: none before a write; Metres= and Seconds= whole and read back; an odometer section alone is no settings section (no level, not "
+              "in force) but is one of the truck's, and the parts go into it");
+        // the take-over: a recovery's new id takes the count with the other two
+        WritePrivateProfileStringW(SuspSectionOf(r).c_str(), L"Own", L"1", kf.c_str());
+        OdoWrite(kind, r, 5000.0, 60.0);
+        const int taken = TakeOverBoth(kind, r, n);
+        const bool carried = (taken & kTakenOdo) && (taken & kTakenSusp) && OdoRead(kind, n, m, sec) && m == 5000.0 &&
+                             !wcscmp(TakenWords(taken), L"the suspension's settings and its count") && !wcscmp(TakenWords(kTakenOdo), L"its count") &&
+                             !wcscmp(TakenWords(kTakenEngine), L"the engine's settings");
+        // the old id driven again: the mark on its count goes too (the Reviewer's must 5)
+        wchar_t by[48] = {};
+        GetPrivateProfileStringW(SectionOf(kOdoSection, r).c_str(), L"TakenBy", L"", by, 48, kf.c_str());
+        const bool marked = by[0] != 0;
+        SuspMarkClear(kind, r, kOdoSection);
+        GetPrivateProfileStringW(SectionOf(kOdoSection, r).c_str(), L"TakenBy", L"", by, 48, kf.c_str());
+        Check(carried && marked && !by[0], "odometer take-over: a new id takes [Odometer:] with the suspension's, said as its count; the old one marked, the mark gone when it is driven again");
+        // prune: a take-over's mark past 10 newer ones goes, a warehouse match's stays
+        {
+            char ids[12][40];
+            for (int i = 0; i < 12; i++)
+            {
+                _snprintf_s(ids[i], _TRUNCATE, "{0E%06d-0000-0000-0000-000000000000}", i);
+                OdoWrite(kind, ids[i], 1.0, 1.0);
+            }
+            truckid::MatchTake(kf, OdoPrefixes(), OdoPrefixes(), ids[0], "{0F000000-0000-0000-0000-000000000000}", 500);
+            for (int i = 1; i < 12; i++)
+            {
+                TruckSuspTakeOver(kind, ids[i], "{0FFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}", 1000 + i, kOdoSection);
+                WritePrivateProfileStringW(SectionOf(kOdoSection, "{0FFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}").c_str(), nullptr, nullptr, kf.c_str());
+            }
+            const bool warehouseKept = truckid::SectionThere(kf, SectionOf(kOdoSection, ids[0]));
+            const bool oldestGone = !truckid::SectionThere(kf, SectionOf(kOdoSection, ids[1])) && truckid::SectionThere(kf, SectionOf(kOdoSection, ids[2]));
+            Check(warehouseKept && oldestGone, "odometer prune: of 11 take-over marks on [Odometer:] the oldest goes past 10, a warehouse match's mark is kept");
+            for (int i = 0; i < 12; i++) WritePrivateProfileStringW(SectionOf(kOdoSection, ids[i]).c_str(), nullptr, nullptr, kf.c_str());
+            WritePrivateProfileStringW(SectionOf(kOdoSection, "{0F000000-0000-0000-0000-000000000000}").c_str(), nullptr, nullptr, kf.c_str());
+        }
+        // the match in two tiers (the Reviewer's must 1): A in the warehouse with settings and its count, B parked with a count only, the same parts
+        DeleteFileW(kf.c_str());
+        WritePrivateProfileStringW(SuspSectionOf(a).c_str(), L"Own", L"1", kf.c_str());
+        WritePrivateProfileStringW(SuspSectionOf(a).c_str(), L"SpringScale", L"1.5", kf.c_str());
+        OdoWrite(kind, a, 1000.0, 10.0);
+        TruckPartsPut(kind, a, parts);
+        OdoWrite(kind, b, 2000.0, 20.0);
+        TruckPartsPut(kind, b, parts);
+        const truckid::Match t1 = truckid::MatchFind(kf, TruckIdPrefixes(), n, parts, true, truckid::Now(), never);
+        const bool tier1 = t1.why == truckid::kMatchOne && !strcmp(t1.id, a) && truckid::MatchTake(kf, TruckIdAllPrefixes(), TruckIdAllPrefixes(), t1.id, n) == 2 &&
+                           OdoRead(kind, n, m, sec) && m == 1000.0;
+        // tier 2 never gives an id with a settings section; with A's sets gone it gives B
+        const truckid::Match t2a = OdoMatchFind(kf, "{0D000000-0000-0000-0000-0000000000EE}", parts, true, truckid::Now(), never);
+        const bool notA = t2a.why == truckid::kMatchOne && !strcmp(t2a.id, b);
+        // A's and the new id's settings gone, A's mark cleared: three counts alone wait, so tier 1 finds none and tier 2 takes none
+        WritePrivateProfileStringW(SuspSectionOf(a).c_str(), nullptr, nullptr, kf.c_str());
+        WritePrivateProfileStringW(SuspSectionOf(n).c_str(), nullptr, nullptr, kf.c_str());
+        SuspMarkClear(kind, a, kOdoSection);
+        const truckid::Match two = OdoMatchFind(kf, "{0D000000-0000-0000-0000-0000000000EE}", parts, true, truckid::Now(), never);
+        const truckid::Match first = truckid::MatchFind(kf, TruckIdPrefixes(), "{0D000000-0000-0000-0000-0000000000EE}", parts, true, truckid::Now(), never);
+        const bool counts = first.why == truckid::kMatchNone && two.why == truckid::kMatchTwo && two.candidates == 3;
+        Check(tier1 && notA && counts,
+              "odometer match: A with settings in the warehouse and B parked with a count only: tier 1 matches A and takes its count too, not two; tier 2 never "
+              "takes an id with a settings section, and with two counts alone it takes none");
+        // OdometerHours per kind
+        const bool hoursOff = !OdoHoursOf(kind);
+        OdoHoursPut(kind, true);
+        const bool hoursOn = OdoHoursOf(kind);
+        OdoHoursPut(kind, false);
+        Check(hoursOff && hoursOn && !OdoHoursOf(kind), "odometer: OdometerHours=1 in the kind's [Truck] shows hours, off takes the key out");
+        DeleteFileW(kf.c_str());
     }
     printf(g_failed ? "SETTINGS TEST FAILED (%d)\n" : "SETTINGS TEST OK\n", g_failed);
     return g_failed ? 1 : 0;

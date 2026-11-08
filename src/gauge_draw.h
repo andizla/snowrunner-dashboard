@@ -575,6 +575,8 @@ static void GSpeedo(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float r, floa
     _snprintf_s(buf, _TRUNCATE, "%.0f", v);
     GText(dl, f, kGsReadout, ImVec2(c.x, c.y + r * 0.46f), GCol(kText, a), buf, 0, u);
     GText(dl, f, kGsTiny, ImVec2(c.x, c.y + r * 0.66f), GCol(kMuted, a), st.mph ? "mph" : "km/h", 0, u);
+    // the odometer under the unit (BRIEF_odometer.md), inside the face below the scale's end labels and the needle's sweep
+    if (st.odometer[0]) GText(dl, f, kGsTiny, ImVec2(c.x, c.y + r * 0.84f), GCol(kMuted, a), st.odometer, 0, u);
     GNeedle(dl, c, GDeg(s, v), r * 0.76f, 3.0f, 0.9f, u, a, GCol(kNeedle, a));
     GHub(dl, c, 7.5f * u, u, a);
 }
@@ -1050,8 +1052,9 @@ static void HudGear(const GaugeState &st, char *buf, size_t size) { GearHudText(
 // A HUD dial centred on c, 56 reference pixels in radius, 240 degrees from 0 to top: thin ticks every minor, numbers
 // every step (divided by div), the zone from red up as an orange arc (red below 0: none), an orange needle, and the
 // value in big figures under the hub with its unit below.
+// sub: a line under the unit (the odometer), nullptr or "" for none.
 static void HDial(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float u, float a, float top, float step, float minor, float red, float val, const char *big,
-                  const char *unit)
+                  const char *unit, const char *sub = nullptr)
 {
     const float R = 56.0f * u;
     const GScale s = GSweep(0.0f, top);
@@ -1075,6 +1078,7 @@ static void HDial(ImDrawList *dl, const GaugeFonts &f, ImVec2 c, float u, float 
     dl->AddCircleFilled(c, 4.0f * u, GCol(kHudOrange, a), 16);
     HText(dl, f, kGsHudMid, ImVec2(c.x, c.y + 26.0f * u), GCol(kHudText, a), big, 0, u);
     HText(dl, f, kGsHudSmall, ImVec2(c.x, c.y + 42.0f * u), GCol(kHudDim, a), unit, 0, u);
+    if (sub && sub[0]) HText(dl, f, kGsHudSmall, ImVec2(c.x, c.y + 53.0f * u), GCol(kHudDim, a), sub, 0, u);
 }
 
 // The speedometer's scale as GSpeedo's: the top in the unit shown, numbers every 10 up to 80, every 20 above.
@@ -1102,7 +1106,7 @@ static void HudDials(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float u
     float top, step, v;
     HudSpeedScale(st, top, step, v);
     _snprintf_s(buf, _TRUNCATE, "%.0f", v);
-    HDial(dl, f, speedo, u, a, top, step, step * 0.5f, -1.0f, v, buf, st.mph ? "MPH" : "KM/H");
+    HDial(dl, f, speedo, u, a, top, step, step * 0.5f, -1.0f, v, buf, st.mph ? "MPH" : "KM/H", st.odometer);
     // the gear between the two dials at the bottom, where their rims leave room
     HudGear(st, buf, sizeof buf);
     HText(dl, f, kGsHudMid, P(138.0f, 149.0f), GCol(kHudOrange, a), buf, 0, u);
@@ -1155,6 +1159,8 @@ static void HudDigital(ImDrawList *dl, const GaugeFonts &f, ImVec2 origin, float
     const int n = HudCells(lay, st, cells);
     const float cw = n > 0 ? (W - 28.0f - (n - 1) * 8.0f) / n : 0.0f;
     for (int i = 0; i < n; i++) HCell(dl, f, P(14.0f + i * (cw + 8.0f), 67.0f), cw, 46.0f, cells[i], u, a);
+    // the odometer between the cells and the lamps, at the right
+    if (st.odometer[0]) HText(dl, f, kGsHudSmall, P(W - 14.0f, 122.0f), GCol(kHudDim, a), st.odometer, 1, u);
     if (lay.showLamps) HLamps(dl, f, P(14.0f, 132.0f), (W - 28.0f) * u, 6.0f * u, st, u, a);
 }
 

@@ -30,6 +30,7 @@
 #include "gauges.h"
 #include "truck.h"
 #include "models.h"
+#include "odometer.h"
 #include "text_cut.h"
 #include "gearbox_model.h"
 #include "sound.h"
@@ -5611,6 +5612,89 @@ int main(int argc, char **argv)
         const int wn = FmtCut(wline, 16, L"%S", name);
         const bool ok = used == (int)sizeof line - 1 && strlen(line) == sizeof line - 1 && wn == 15 && wcslen(wline) == 15 && FmtCut(line, sizeof line, "%d", 42) == 2;
         Check(ok, "FmtCut: a line of game texts longer than its buffer is cut, its length the buffer's less one and never -1; a whole one gives its length");
+    }
+
+    // the odometer (BRIEF_odometer.md): metres above 0.5 m/s only, reverse too, and real seconds with the engine on only;
+    // the readout's text; Set's figure
+    {
+        double m = 0.0, sec = 0.0;
+        OdoCount(m, sec, 0.4f, 1.0f, true);                 // the physics' jitter: no metres, the engine's second
+        OdoCount(m, sec, 0.5f, 2.0f, false);                // at the threshold, engine off: no second
+        OdoCount(m, sec, -10.0f, 0.5f, true);               // reverse counts
+        OdoCount(m, sec, 20.0f, 0.0f, true);                // no seconds passed: nothing
+        const bool count = fabs(m - 6.0) < 1e-6 && fabs(sec - 1.5) < 1e-6;
+        char t[6][24];
+        OdoText(t[0], 24, 0.0, 0.0, false, false);
+        OdoText(t[1], 24, 99900.0, 0.0, false, false);
+        OdoText(t[2], 24, 100000.0, 0.0, false, false);
+        OdoText(t[3], 24, 123456000.0, 0.0, false, false);
+        OdoText(t[4], 24, 16093.44, 0.0, false, true);
+        OdoText(t[5], 24, 0.0, 12.3 * 3600.0, true, true);
+        const bool text = !strcmp(t[0], "0.0 km") && !strcmp(t[1], "99.9 km") && !strcmp(t[2], "100 km") && !strcmp(t[3], "123456 km") && !strcmp(t[4], "10.0 mi") &&
+                          !strcmp(t[5], "12.3 h");
+        double v = 0.0;
+        const bool set = OdoSetValue("12.5", false, false, v) && v == 12500.0 && OdoSetValue(" 0 ", false, true, v) && v == 0.0 && OdoSetValue("2", true, false, v) &&
+                         v == 7200.0 && OdoSetValue("1", false, true, v) && fabs(v - kOdoMile) < 1e-9 && !OdoSetValue("", false, false, v) &&
+                         !OdoSetValue("abc", false, false, v) && !OdoSetValue("12 km", false, false, v) && !OdoSetValue("-1", false, false, v) &&
+                         !OdoSetValue("10000001", false, false, v) && OdoSetValue("10000000", false, false, v) && !OdoSetValue("1000001", true, false, v) &&
+                         !OdoSetValue("nan", false, false, v) && !OdoSetValue("inf", false, false, v);
+        Check(count && text && set, "odometer: metres above 0.5 m/s, reverse too, seconds with the engine on; 0.0 km, 99.9 km, 100 km, 123456 km, mi with Mph, 12.3 h; "
+                                    "Set's figure in km, mi or h within its range, anything else refused");
+    }
+
+    // the odometer's writes by a made-up clock (the Reviewer's musts 3 and 4, should 6): nothing before the decision and
+    // the count then on top of the figure loaded; a minute; a stop after 2 s standing, at most one every 10 s; when the
+    // models stop stepping; nothing while nothing moved; the owed write at a change
+    {
+        OdoState o = {};
+        unsigned long long now = 1000;
+        bool early = true;
+        for (int i = 0; i < 200; i++, now += 50) early &= OdoPass(o, 1.0, 0.05, true, true, now) == kOdoNoWrite;  // 10 s in the match's wait
+        const bool pending = early && fabs(o.metres - 200.0) < 1e-6 && !OdoOwed(o);
+        OdoDecide(o, true, true, 5000.0, 100.0, now);
+        const bool decided = fabs(o.metres - 5200.0) < 1e-6 && fabs(o.seconds - 110.0) < 1e-6 && OdoOwed(o);
+        // driving on: the minute's write
+        int due = kOdoNoWrite;
+        unsigned long long minuteAt = 0;
+        for (int i = 0; i < 1300 && due == kOdoNoWrite; i++, now += 50)
+            if ((due = OdoPass(o, 1.0, 0.05, true, true, now)) != kOdoNoWrite) minuteAt = now;
+        const bool minute = due == kOdoMinute && minuteAt - 10950 >= kOdoEvery - 100 && minuteAt - 10950 <= kOdoEvery + 100;
+        OdoWritten(o, now);
+        // a stop: moving, then 2 s standing (the engine idles: its seconds change)
+        int stopAt = -1;
+        for (int i = 0; i < 60; i++, now += 50)
+            if (OdoPass(o, 0.0, 0.05, false, true, now) == kOdoStop && stopAt < 0) stopAt = i;
+        const bool stop = stopAt >= 39 && stopAt <= 41;
+        OdoWritten(o, now);
+        // stop and go: a second stop 5 s later writes nothing, the next after 10 s does
+        int stops = 0;
+        for (int round = 0; round < 3; round++)
+        {
+            for (int i = 0; i < 20; i++, now += 50) stops += OdoPass(o, 1.0, 0.05, true, true, now) == kOdoStop;
+            for (int i = 0; i < 60; i++, now += 50) stops += OdoPass(o, 0.0, 0.05, false, true, now) == kOdoStop;
+        }
+        const bool gap = stops == 1;
+        // the game held (a menu): one write, then nothing while nothing steps
+        OdoPass(o, 1.0, 0.05, true, true, now);
+        now += 50;
+        const bool held = OdoPass(o, 0.0, 0.0, false, false, now) == kOdoHeld;
+        OdoWritten(o, now);
+        bool still = true;
+        for (int i = 0; i < 2000; i++, now += 50) still &= OdoPass(o, 0.0, 0.0, false, false, now) == kOdoNoWrite;
+        // a truck with no id: counted, never written
+        OdoState x = {};
+        OdoDecide(x, false, false, 0.0, 0.0, now);
+        bool unsaved = true;
+        for (int i = 0; i < 2000; i++, now += 50) unsaved &= OdoPass(x, 1.0, 0.05, true, true, now) == kOdoNoWrite;
+        unsaved &= !OdoOwed(x) && x.metres > 1999.0;
+        // Set to: the figure, the other kept
+        OdoSet(o, false, 0.0);
+        const bool setZero = o.metres == 0.0 && o.seconds > 0.0 && OdoOwed(o);
+        OdoChange(o);
+        const bool changed = !o.decided && o.metres == 0.0 && !OdoOwed(o);
+        Check(pending && decided && minute && stop && gap && held && still && unsaved && setZero && changed,
+              "odometer writes: nothing before the decision and the count added to the figure loaded; a write a minute; one at a stop after 2 s standing, at most one "
+              "every 10 s; one when the game holds the models, then none; an id not read never written; Set to keeps the other figure; another truck starts over");
     }
 
     printf(g_failed ? "MODELS TEST FAILED (%d)\n" : "MODELS TEST OK\n", g_failed);

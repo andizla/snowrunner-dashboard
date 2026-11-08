@@ -117,6 +117,11 @@ GAUGES = f'''
 <ul><li><b>Speed</b>, forwards and backwards.</li>
 <li><b>Gear</b>: its number with a D in automatic, H for the high gear, L, L+ and L- for the low range, R and N.</li>
 <li><b>Engine speed.</b> Worked out from the driven wheels, the gear and the pedal. The needle climbs through each gear to the red zone and falls at the shift, rises under the pedal when the truck is stuck, revs freely in neutral, and spinning wheels take it into the red zone. It rises from 0 while the engine starts and runs down when it stalls or stops.</li>
+<li><b>Odometer</b> under the speed: the kilometres this truck has driven (miles with Mph), or its engine hours where its kind
+counts hours (Counts in the Display tab, <code>OdometerHours=1</code> in <code>[Truck]</code> of its file). Each truck keeps its own
+count in <code>[Odometer:&lt;id&gt;]</code> of its kind's file. Only driving counts: nothing while the game is held, on the map or
+in the garage, and hours are real running time. It is saved every minute, at a stop and when a menu opens. Set to writes a
+figure for this truck, for one bought used; 0 starts it anew. <code>ShowOdometer</code>, the tab's Odometer.</li>
 <li><b>Fuel</b> as a share of the tank, and the <b>range</b>: how far the fuel goes at the litres per kilometre burned over the last three kilometres. It shows <code>---</code> until the truck has driven half a kilometre; fuel burned standing still comes off the range without spoiling the rate. SnowRunner's trucks are thirsty: a scout burning 10 litres a kilometre off road gets about 7 km from a 75 litre tank. After the range the <b>fuel use</b>: the litres a minute the game burns now, smoothed over a second (gallons an hour with Mph; <code>ShowFuelUse</code>, the tab's Fuel use).</li>
 <li><b>Coolant and oil</b> (section 9), <b>boost</b> (section 10), and <b>brake air</b>: the engine's compressor fills the tanks to 8.2 bar and starts again at 6.9; each press of the brake and letting the handbrake go draw from them. Scouts brake by hydraulics: the air dial is hidden on scout scales.</li></ul>
 <figure><img src="{GAUGE_IMG}/closeup_open.png"><figcaption>A close look at the open style.</figcaption></figure>
@@ -293,7 +298,10 @@ stay marked <code>How=warehouse</code>, which the count of 10 never drops. A tru
 as one waiting truck gets a copy of that set too, and the other keeps its own. A waiting truck of another save slot can match as
 well. With two such trucks or none it starts on its kind's settings, and the log says why. <code>[Seen]</code> in the kind's file
 lists each truck driven by its id, so a truck that never had a set of its own never takes another's. A truck's own sections
-hold <code>Engine=</code> and <code>Gearbox=</code> for the match. Unticking the box at the
+hold <code>Engine=</code> and <code>Gearbox=</code> for the match. The odometer's count in <code>[Odometer:&lt;id&gt;]</code> follows
+the truck the same way. A match takes it with the set. Where no waiting truck with a set matches, one waiting truck with only a
+count, of the same kind, engine and gearbox, gives its count. A truck bought new can take a parked truck's count that way: Set
+to puts it right. Unticking the box at the
 truck's level keeps its set and puts the kind's in force; This truck only brings it back. Every with no set for the kind
 moves the truck's set up to the kind. With a set for the kind it puts that one in force and keeps the truck's, which This
 truck only brings back.</p>
@@ -388,7 +396,7 @@ bars and the air suspension stop for that truck, and the log says so.</li></ul>
  ['Layout: strip along the bottom, block in the corner, Spotter dials or Spotter digital (left of Spotter\'s gear panel)', 'Layout 0 to 3', 'strip'], ['The speedometer and the tachometer change places, except in Spotter digital (Swap dials)', 'SwapDials 0 or 1', '0'],['Style of the strip and the block: solid, tinted, or open', 'Style 0, 1 or 2', 'open'],
  ['How dark tinted faces are', 'FaceOpacity 0 to 0.85', '0.35'], ['Position in 1080p pixels from the layout\'s place', 'OffsetX, OffsetY', '0, 0'],
  ['Size, opacity', 'Scale, Opacity 0.1 to 1', '1, 1'], ['mph, psi, Fahrenheit', 'Mph, Psi, Fahrenheit', 'off'],
- ['Temperature, boost, air dials, lamps', 'ShowTemp, ShowBoost, ShowAir, ShowLamps', 'on, on, off, on'], ['Clock with the outside temperature (Clock)', 'ShowClock', 'on'], ['Fuel used a minute after the range (Fuel use)', 'ShowFuelUse', 'on'],['Oil: none, second needle, own dial', 'OilGauge 0, 1 or 2', 'second needle'],
+ ['Temperature, boost, air dials, lamps', 'ShowTemp, ShowBoost, ShowAir, ShowLamps', 'on, on, off, on'], ['Clock with the outside temperature (Clock)', 'ShowClock', 'on'], ['Odometer under the speed (Odometer)', 'ShowOdometer', 'on'], ['Fuel used a minute after the range (Fuel use)', 'ShowFuelUse', 'on'],['Oil: none, second needle, own dial', 'OilGauge 0, 1 or 2', 'second needle'],
  ['Truck class', 'TachClass 0 truck, 1 scout, 2 heavy', 'truck'], ['Own idle, red zone, tach top, speedo top', 'IdleRpm, RedlineRpm, MaxRpm, SpeedMax', '0: the class\'s'],
  ['Boost reached, 0.3 to 3 bar', 'BoostMax', '0: the class\'s'], ['Turbo profile', 'BoostProfile 0 to 3', 'standard'],
  ['Tilt lamp angles', 'RollWarnDeg, RollDangerDeg, PitchDangerDeg', '15, 25, 35'], ['Coolant times', 'WarmUpMinutes, OverheatMinutes, CoolDownMinutes', '3, 1.5, 15'],

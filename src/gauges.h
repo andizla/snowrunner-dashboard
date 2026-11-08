@@ -18,6 +18,7 @@ static const DWORD kGaugesExeStamp = 0x6a607c05;
 // Everything the cluster shows, as the mod's thread leaves it for the render thread.
 struct GaugeState
 {
+    char odometer[24];              // the driven truck's count as shown under the speed ("" none)
     bool engineOn;
     float speedKmh;                 // |forward speed| in km/h
     float speedMax;                 // the speedometer's top in km/h (trucks 100, scouts 120, heavy 80)
@@ -92,6 +93,7 @@ struct GaugeSettings
     bool mph, psi, fahrenheit;                    // Mph, Psi, Fahrenheit
     bool showTemp, showBoost, showAir, showLamps; // ShowTemp, ShowBoost, ShowAir, ShowLamps
     bool showClock;          // ShowClock: a clock dial with the game's time of day, the outside temperature in its face
+    bool showOdometer;       // ShowOdometer: the driven truck's count under the speed (odometer.h)
     bool showFuelUse;           // ShowFuelUse: the fuel used a minute, after the range under the fuel dial
     int oilGauge;            // OilGauge: the oil temperature: 0 not shown, 1 a second needle in the temperature dial, 2 a dial of its own left of it
     int tachClass;           // TachClass: 0 truck, 1 scout, 2 heavy: the scales of the tachometer and the speedometer
@@ -181,6 +183,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.showTemp = s.showBoost = s.showLamps = true;
     s.showAir = false;
     s.showClock = true;
+    s.showOdometer = true;
     s.showFuelUse = true;
     s.oilGauge = kOilNeedle;
     s.tachClass = kClassTruck;
@@ -446,6 +449,7 @@ inline void GaugeDemo(GaugeState &st, const GaugeSettings &s)
     const GaugeScale k = GaugeScaleOf(s);
     st = GaugeState{};
     GaugeStateSettings(st, s);
+    if (s.showOdometer) strcpy_s(st.odometer, s.mph ? "7671 mi" : "12345 km");
     st.engineOn = true;
     st.speedKmh = 46.0f;
     st.rpm = k.idle + (k.redline - k.idle) * 0.77f;
@@ -535,7 +539,9 @@ struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWar
                    // the gearbox's bindings as text (input_bindings.h, kActCount actions, two slots), the capture the tab
                    // asked for (-1 none), whether a binding reaches reverse (Gearbox=2 may take the shifter), the
                    // controllers read, and the stalls and shifts since the truck was taken
-                   char bindText[kViewActions][2][40]; int captureAction, captureSlot; bool canReverse; int controllers, gearStalls, gearShifts; };
+                   char bindText[kViewActions][2][40]; int captureAction, captureSlot; bool canReverse; int controllers, gearStalls, gearShifts;
+                   bool odoKnown, odoCanSet, odoHours; char odoText[24]; // the driven truck's count: decided, Set to open (its id read, the match not waiting), hours shown, the figure
+                   };
 
 LONG SettingsGet(GaugeSettings &out);       // the settings in force (any thread); returns their turn, for SettingsPut
 void SettingsPut(const GaugeSettings &in, LONG turn); // settings edited from those of a turn: the mod takes them at once and saves the ini a
@@ -557,6 +563,8 @@ void EngineProfileSet(float peakRpm, int aspiration, int fuel); // the tab's Eng
 void EngineProfileDrop();                   // the tab's button: the driven truck's engine gives its profile up
 void PageTabRead(char *out, size_t size);   // the Gameplay tab's open tab, its id as Gauges.ini keeps it ("" for none)
 void PageTabWrite(const char *id);           // the tab picked: into Gauges.ini on the mod's thread, on its own
+void OdometerSetAsk(bool hours, double value); // the Display tab's Set: the driven truck's count is value (metres, or seconds with hours)
+void OdometerHoursAsk(bool hours);          // the Display tab's Counts: this kind shows engine hours (OdometerHours=1 in [Truck]) or the distance
 void EngineTorqueSet(int percent);          // the tab's slider: how much of its torque the driven truck's engine gives the truck (Torque), in percent
 void DamageTestAsk(int points);             // the tab's test buttons: the mod adds this much to the driven truck's engine damage on its next pass
 void ViewGet(GaugeView &out);               // what to draw (any thread)
