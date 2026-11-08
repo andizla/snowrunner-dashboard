@@ -7064,17 +7064,19 @@ static DWORD WINAPI Run(void *)
             const bool first = !menuWords.have;
             if (MenuWordsStep(menuWords, words, line, sizeof line, runs, sizeof runs))
                 Log(L"probe: menu words%S:%S%S", first ? " as they are" : " changed", line, menuWords.lines == kMenuWordsCap ? " (the last line of 200 this start)" : "");
-            if (runs[0]) Log(L"probe: menu words: %S run (changed on more than half of the last 20 passes), left out", runs);
+            if (runs[0]) Log(L"probe: menu words: %S %S", runs, kMenuWordsRunText);
             // the cursor: shown or not, and where it is held (two calls a pass, one line at each change)
             static bool cursorKnown = false, cursorShown = false;
+            static int cursorLines = 0; // at most kCursorLinesCap a start (the Reviewer's should on probe and shoulds)
             static RECT cursorClip = {};
             CURSORINFO ci = { sizeof ci };
             RECT clip = {};
             if (GetCursorInfo(&ci) && GetClipCursor(&clip))
             {
                 const bool shown = (ci.flags & CURSOR_SHOWING) != 0;
-                if (!cursorKnown || shown != cursorShown || memcmp(&clip, &cursorClip, sizeof clip))
-                    Log(L"probe: cursor: %s, held to %ld, %ld to %ld, %ld", shown ? L"shown" : L"hidden", clip.left, clip.top, clip.right, clip.bottom);
+                if ((!cursorKnown || shown != cursorShown || memcmp(&clip, &cursorClip, sizeof clip)) && cursorLines < kCursorLinesCap)
+                    Log(L"probe: cursor: %s, held to %ld, %ld to %ld, %ld%s", shown ? L"shown" : L"hidden", clip.left, clip.top, clip.right, clip.bottom,
+                        ++cursorLines == kCursorLinesCap ? L" (the last cursor line of 100 this start)" : L"");
                 cursorKnown = true, cursorShown = shown, cursorClip = clip;
             }
         }

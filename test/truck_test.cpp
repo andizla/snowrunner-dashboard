@@ -1027,7 +1027,7 @@ int main()
         }
         {
             // the menu words' watch (BRIEF_cluster_under_windows.md, the Reviewer's M2): every word on the first pass, then
-            // only the changed ones; a word that changed on more than half of its last 20 passes is said once as a run and
+            // only the changed ones; a word that changed 4 or more times in its last 20 passes is said once as a run and
             // left out after; at most 200 lines of changed words
             static MenuWordsWatch w;
             memset(&w, 0, sizeof w);
@@ -1039,29 +1039,40 @@ int main()
             const bool quiet = !MenuWordsStep(w, now, line, sizeof line, runs, sizeof runs) && !line[0] && !runs[0];
             now.g[2] = 5;
             const bool once = MenuWordsStep(w, now, line, sizeof line, runs, sizeof runs) && !strcmp(line, " game+8 00000000->00000005");
-            // game+C runs: a new value every pass; its 11th change makes more than half of 20
+            // game+C runs: a new value every other pass (as a pedal word at 20 Hz may), named as a run at its 4th change
             bool ranOut = false, saidBefore = false;
             int said = 0;
-            for (int i = 0; i < 11; i++)
+            for (int i = 0; i < 8; i++)
             {
-                now.g[3] = (uint32_t)(i + 1);
+                if (!(i & 1)) now.g[3] = (uint32_t)(i + 1);
                 MenuWordsStep(w, now, line, sizeof line, runs, sizeof runs);
                 if (strstr(line, "game+C ")) said++;
-                if (runs[0]) ranOut = !strcmp(runs, "game+C") && i == 10, saidBefore = said == 10;
+                if (runs[0]) ranOut = !strcmp(runs, "game+C") && i == 6, saidBefore = said == 3;
             }
             now.g[3] = 99;
             const bool leftOut = !MenuWordsStep(w, now, line, sizeof line, runs, sizeof runs) && !runs[0];
-            // the cap: a word that changes every other pass never runs, and its lines stop at 200
-            int lines = w.lines;
-            for (int i = 0; i < 500; i++)
+            // twice in 20 passes stays: every change of game+14 has its line
+            int twice = 0;
+            for (int i = 0; i < 60; i++)
             {
-                now.g[4] = (uint32_t)(i / 2);
+                if (i % 10 == 0) now.g[5] = (uint32_t)(i + 7);
+                MenuWordsStep(w, now, line, sizeof line, runs, sizeof runs);
+                if (strstr(line, "game+14 ")) twice++;
+            }
+            const bool stays = twice == 6 && !w.out[5];
+            // the cap: a word that changes every 7th pass (3 in any 20) never runs, and the lines stop at 200
+            int lines = w.lines;
+            for (int i = 0; i < 2000; i++)
+            {
+                if (i % 7 == 0) now.g[4] = (uint32_t)(i + 1);
                 if (MenuWordsStep(w, now, line, sizeof line, runs, sizeof runs)) lines++;
             }
             const bool capped = lines == kMenuWordsCap && w.lines == kMenuWordsCap && !w.out[4];
-            Check(first && quiet && once && ranOut && saidBefore && leftOut && capped,
-                  "menu words' watch (the Reviewer's M2): all the words on the first pass, then only those that changed; a word that changed on more than half "
-                  "of its last 20 passes is named once as a run and left out after; at most 200 lines a start");
+            const bool text = strstr(kMenuWordsRunText, "4 or more times in the last 20 passes") != nullptr;
+            Check(first && quiet && once && ranOut && saidBefore && leftOut && stays && capped && text,
+                  "menu words' watch (the Reviewer's M2 and M1): all the words on the first pass, then only those that changed; a word that changed 4 or more "
+                  "times in its last 20 passes is named once as a run and left out after (every other pass at its 4th change), twice in 20 stays; at most 200 "
+                  "lines a start; the run line says the rule");
         }
 
         // a frame of the truck update: its first argument an object with the vehicle at + 0x20 (StallJobFrame, what the

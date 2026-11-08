@@ -1140,10 +1140,12 @@ inline int MenuWordsLine(const MenuWords &now, const MenuWords *was, char *out, 
 
 // The watch of the menu words while Probe=1 and a truck is read (BRIEF_cluster_under_windows.md, the Reviewer's M2):
 // armed from the start, not only after a menu's close, so one drive shows the word that marks each of the game's
-// windows. A word that changed on more than half of its last kMenuWordsRun passes is a running count: one line says it
+// windows. A word that changed kMenuWordsRunAt times or more in its last kMenuWordsRun passes is a running count (a
+// pedal or steering word changes on far fewer than half the passes; review_probe_and_shoulds.md M1): one line says it
 // is left out, and it is never in a line again. At most kMenuWordsCap lines of changed words a session.
 static const int kMenuWordsAll = kMenuWordsGame + kMenuWordsInput + kMenuWordsControl;
-static const int kMenuWordsRun = 20, kMenuWordsCap = 200;
+static const int kMenuWordsRun = 20, kMenuWordsRunAt = 4, kMenuWordsCap = 200, kCursorLinesCap = 100;
+static const char *const kMenuWordsRunText = "run (changed 4 or more times in the last 20 passes), left out";
 struct MenuWordsWatch
 {
     bool have;                        // was holds the last pass's words
@@ -1174,7 +1176,7 @@ inline bool MenuWordsStep(MenuWordsWatch &w, const MenuWords &now, char *line, s
             w.history[at] = (w.history[at] << 1 | (changed ? 1u : 0u)) & ((1u << kMenuWordsRun) - 1u);
             int runsOf = 0;
             for (uint32_t h = w.history[at]; h; h &= h - 1) runsOf++;
-            if (!w.out[at] && runsOf * 2 > kMenuWordsRun)
+            if (!w.out[at] && runsOf >= kMenuWordsRunAt)
             {
                 w.out[at] = true;
                 const int wrote = snprintf(runs + r, runsSize - r, "%s%s+%X", r ? " " : "", names[b], from[b] + 4 * i);
