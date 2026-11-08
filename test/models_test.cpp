@@ -550,6 +550,7 @@ struct LoopState
     int gear = 1;        // the game's gear
     int shifts = 0;      // the game's gear changes
     bool paced = false;  // the last write was held back by the pace
+    SpinMean spin = {};  // the held gear's x by spin, its mean (SpinMeanStep), as gauges.cpp keeps it
     float brake = 0.0f;  // the brake held, 0 to 1 (the pedal then 0)
     float share = 0.0f;  // the creep's share on the last pass
     CreepModel creep = {}; // the creep's pace and stall
@@ -587,11 +588,13 @@ static void LoopStep(const LoopTruck &c, LoopState &s, const TorqueCurve &curve,
     GearboxStep(s.box, t, c.k, pedal, s.power.power, dt, hand);
     // the factor, as gauges.cpp hands it
     const bool spinning = c.fixedGear && c.spinLift;
-    const float x = spinning ? SpinShare(TruckDrivenSpin(t), TruckGearTop(t, t.gearEngaged)) : LiftShare(TruckDrivenSpin(t), s.v, s.box.grip, TruckGearTop(t, t.gearEngaged));
+    const float liftTop = TruckGearTop(t, t.gearEngaged);
+    if (!spinning) s.spin.n = 0, s.spin.at = 0;
+    const float x = spinning ? SpinMeanStep(s.spin, SpinShare(TruckDrivenSpin(t), liftTop), t.gearEngaged, 0x5000) : LiftShare(TruckDrivenSpin(t), s.v, s.box.grip, liftTop);
     const float ratio = driving ? s.box.ratio : 1.0f;
     const float limit = s.power.cold * s.power.boost;
     const float lift = before ? LiftBefore(s.power.curve, limit, TruckPedal(t), ratio, x, TorqueRoof(c.cls))
-                              : spinning ? fminf(TorqueLift(s.power.curve, limit, TruckPedal(t), ratio, x, TorqueRoof(c.cls)), kSpinLiftMost)
+                              : spinning ? fminf(TorqueLift(s.power.curve, limit, TruckPedal(t), ratio, x, TorqueRoof(c.cls)), SpinLiftMost(x, liftTop))
                                          : TorqueLift(s.power.curve, limit, TruckPedal(t), ratio, x, TorqueRoof(c.cls));
     const float wanted = s.hand.game * lift;
     TorqueHandStep(s.hand, true, 0x5000, 0x4000, t.torqueFactor, lift, before ? 0.0f : dt, t.gearEngaged);
@@ -3715,6 +3718,64 @@ int main(int argc, char **argv)
         snprintf(line, sizeof line, "lift by spin: in mud at 0.8 of the top %.2f (the cap, not 1); the catch and the chatter give the game at most %.2f of the engine's torque "
                                     "between writes (kSpinLiftMost %.1f)", mud, worst, kSpinLiftMost);
         Check(inMud && worst <= kSpinLiftMost + 0.001f && worst > 1.0f, line);
+    }
+
+    // L- is jerky (BRIEF_low_minus_jerky.md): by spin, the mean of the last passes and the cap's fade over the top's last
+    // 0.8 rad/s at least. A trace with +-0.15 rad/s of noise around 0.95 (and 1.0) of L-'s 2.24 rad/s top keeps the
+    // factor's change from one pass to the next under 0.15 (today's jumps by up to 1); a top of 15 rad/s keeps today's
+    // factor exactly and one of 10 within 0.05 outside its last 0.08; a catch from 2 to 0.5 of the top in one pass stays
+    // under kSpinLiftMost; a new gear or truck starts the mean over
+    {
+        const float curve = 0.9f;
+        auto today = [&](float x) { return fminf(TorqueLift(curve, 1.0f, 1.0f, 1.0f, x, TorqueRoof(kClassTruck)), kSpinLiftMost); };
+        auto calm = [&](float x, float top) { return fminf(TorqueLift(curve, 1.0f, 1.0f, 1.0f, x, TorqueRoof(kClassTruck)), SpinLiftMost(x, top)); };
+        auto noisy = [&](float top, float centre, float &worstToday) {
+            uint32_t seed = 12345u;
+            SpinMean m = {};
+            float worst = 0.0f, last = -1.0f, lastToday = -1.0f;
+            worstToday = 0.0f;
+            for (int i = 0; i < 2000; i++)
+            {
+                seed = seed * 1664525u + 1013904223u;
+                const float spin = centre * top + ((float)(seed >> 8) / 16777216.0f * 2.0f - 1.0f) * 0.15f;
+                const float f = calm(SpinMeanStep(m, SpinShare(spin, top), 1, 0x5000), top), ft = today(SpinShare(spin, top));
+                if (last >= 0.0f) worst = fmaxf(worst, fabsf(f - last)), worstToday = fmaxf(worstToday, fabsf(ft - lastToday));
+                last = f, lastToday = ft;
+            }
+            return worst;
+        };
+        float t95 = 0.0f, t100 = 0.0f;
+        const float j95 = noisy(2.24f, 0.95f, t95), j100 = noisy(2.24f, 1.0f, t100);
+        // noise free: a top of 15 rad/s is today's, one of 10 within 0.05 outside its last 0.08 (and never above today's)
+        bool same15 = true, near10 = true;
+        for (int i = 0; i <= 600; i++)
+        {
+            const float x = i * 0.002f;
+            same15 = same15 && Near(calm(x, 15.0f), today(x), 0.0001f);
+            const float d = today(x) - calm(x, 10.0f);
+            near10 = near10 && d >= -0.0001f && ((x > 0.92f && x < 1.0f) || d <= 0.05f);
+        }
+        // a catch: 2 of the top for five passes, then 0.5 of it each pass after: what is written, and what the game gives
+        // with it at the next pass's spin, stays under kSpinLiftMost
+        SpinMean m = {};
+        float caughtWorst = 0.0f, written = 1.0f;
+        for (int i = 0; i < 20; i++)
+        {
+            const float raw = i < 5 ? 2.0f : 0.5f;
+            if (i > 0) caughtWorst = fmaxf(caughtWorst, written * GameFall(raw));
+            written = calm(SpinMeanStep(m, raw, 1, 0x5000), 2.24f);
+            caughtWorst = fmaxf(caughtWorst, written);
+        }
+        // a new gear, or another truck, starts the mean over
+        SpinMean r = {};
+        SpinMeanStep(r, 0.2f, 1, 0x5000), SpinMeanStep(r, 0.2f, 1, 0x5000);
+        const bool gearNew = Near(SpinMeanStep(r, 0.9f, 2, 0x5000), 0.9f, 0.0001f) && Near(SpinMeanStep(r, 0.5f, 2, 0x6000), 0.5f, 0.0001f) &&
+                             Near(SpinMeanStep(r, 0.7f, 2, 0x6000), 0.6f, 0.0001f);
+        char line[300];
+        snprintf(line, sizeof line, "lift by spin in L-: +-0.15 rad/s of noise at 0.95 and 1.0 of a 2.24 rad/s top moves the factor at most %.2f and %.2f a pass (today's %.2f and %.2f); "
+                                    "a 15 rad/s top is today's, a 10 rad/s top within 0.05 outside its last 0.08; a catch gives at most %.2f; a new gear or truck starts the mean over",
+                 j95, j100, t95, t100, caughtWorst);
+        Check(j95 < 0.15f && j100 < 0.15f && t95 > 0.5f && same15 && near10 && caughtWorst <= kSpinLiftMost + 0.001f && gearNew, line);
     }
 
     // D slowing under the brake (the sequential to D brief): from 6th at 60 km/h braked to 20 km/h in 3 s it comes down

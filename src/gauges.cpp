@@ -3508,6 +3508,7 @@ struct TruckWatch
     uint64_t pullVehicle, pullAction; // the truck whose torque factor a running pull test changed
     TorqueHand hand;            // the engine's torque handed to the game (Powertrain)
     float liftX, liftRoof;      // the lift's x and the roof there on the last pass, for the probe (review 11)
+    SpinMean spinMean;          // the locked path's x by spin, its mean over the last passes (SpinMeanStep)
     bool creeping;              // the creep's share was above 0 on the last pass (models.h, CreepShare)
     float creepFor;             // seconds until its next line in the log
     int creepLines;             // its lines since it began
@@ -5745,9 +5746,14 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             const float ground = isfinite(raw.speed) && raw.speed > 0.0f ? raw.speed : 0.0f;
             const bool locked = GearboxManual(w) && w.clutch.connected && !w.clutch.dead && w.clutch.grip >= kGripUp && w.pos.travel <= 0.0f;
             const float gearTop = TruckGearTop(raw, raw.gearEngaged);
-            const float x = locked ? SpinShare(TruckDrivenSpin(raw), gearTop) : LiftShare(TruckDrivenSpin(raw), ground, w.gearbox.grip, gearTop);
+            // by spin, the mean of the last passes and a cap that fades over the top's last 0.8 rad/s at least, as the spin's
+            // noise is a big share of a low top such as L-'s (BRIEF_low_minus_jerky.md); the ground path as it was
+            if (!locked) w.spinMean.n = 0, w.spinMean.at = 0;
+            const float x = locked ? SpinMeanStep(w.spinMean, SpinShare(TruckDrivenSpin(raw), gearTop), raw.gearEngaged, w.refs.vehicle)
+                                   : LiftShare(TruckDrivenSpin(raw), ground, w.gearbox.grip, gearTop);
+            const float spinMost = locked ? SpinLiftMost(x, gearTop) : kTorqueFactorMost;
             w.liftX = x;
-            w.liftRoof = locked ? SpinRoof(TorqueRoof(autoClass), x) : LiftRoof(TorqueRoof(autoClass), x);
+            w.liftRoof = locked ? fminf(SpinRoof(TorqueRoof(autoClass), x), spinMost) : LiftRoof(TorqueRoof(autoClass), x);
             const float ratio = w.take.driving && !GearboxManual(w) ? w.gearbox.ratio : 1.0f;
             // the road load (RoadLoad): the air's drag over this gear's learned pull at this pedal, taken off before the
             // fall's make-up; nothing standing, in reverse, with the foot off, or before the gear's pull is learned
@@ -5765,7 +5771,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             TorqueGive(m, w.refs, true, TorqueHandStep(w.hand, want, w.refs.action, w.refs.vehicle, raw.torqueFactor,
                                                  TorqueHeld(TorqueBlend(fminf(TorqueLift(w.power.curve, w.power.cold * w.power.boost, TruckPedal(raw), ratio, x,
                                                                                          TorqueRoof(autoClass), w.roadShare),
-                                                                              locked ? kSpinLiftMost : kTorqueFactorMost),
+                                                                              spinMost),
                                                                         s.engineShare / 100.0f),
                                                             w.profile.torque),
                                                  dt, raw.gearEngaged));
