@@ -355,7 +355,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                     ImGui::BeginDisabled(!view.suspIdKnown);
                     if (ImGui::RadioButton("This truck only###engtruck", view.engSetLevel == 3) && view.engSetLevel != 3) act |= kPageEngTruck;
                     ImGui::EndDisabled();
-                    PageTip("This truck alone keeps the set, by the game's id of it. A truck taken out of the warehouse gets a new id and starts on its kind's settings. "
+                    PageTip("This truck alone keeps the set, by the game's id of it. A truck taken out of the warehouse gets a new id. It gets its set back where exactly "
+                            "one waiting truck of the kind has the same engine and gearbox. "
                             "The id can also change at a load. Then the truck loses its set until the mod gives trucks an id of its own.");
                     ImGui::SameLine();
                     char every[128];
@@ -366,6 +367,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 }
                 else if (view.engSetKept) ImGui::TextDisabled("Kept, not in use. Changes here edit the engine's default.");
                 if (view.engSetOwn && view.engSetLevel != 3 && view.engSetTruckKept) ImGui::TextDisabled("This truck's own set is kept, not in use: This truck only brings it back.");
+                if (view.idWords[0]) ImGui::TextDisabled("%s", view.idWords);
             }
             float peak = view.enginePeakRpm;
             int aspiration = view.engineAspiration, fuel = view.engineFuel;
@@ -835,7 +837,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 ImGui::BeginDisabled(!view.suspIdKnown);
                 if (ImGui::RadioButton("This truck only", view.suspLevel == 2) && view.suspLevel != 2) act |= kPageSuspTruck;
                 ImGui::EndDisabled();
-                PageTip("This truck alone keeps the set, by the game's id of it. A truck taken out of the warehouse gets a new id and starts on its kind's settings.");
+                PageTip("This truck alone keeps the set, by the game's id of it. A truck taken out of the warehouse gets a new id. It gets its set back where exactly one "
+                        "waiting truck of the kind has the same engine and gearbox. Else it starts on its kind's settings.");
                 ImGui::SameLine();
                 char every[128];
                 snprintf(every, sizeof every, "Every %s###suspkind", view.truck);
@@ -843,6 +846,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 PageTip(view.suspKindSet ? "Every truck of this kind uses the kind's set. This truck's own set is kept, not in use: This truck only brings it back."
                                          : "Every truck of this kind keeps this set. The kind has no set yet, so this truck's goes up to it.");
             }
+            if (view.idWords[0]) ImGui::TextDisabled("%s", view.idWords);
             else if (view.suspKept) ImGui::TextDisabled("Kept, not in use. Changes here edit the default.");
             if (view.suspOwn && view.suspLevel != 2 && view.suspTruckKept) ImGui::TextDisabled("This truck's own set is kept, not in use: This truck only brings it back.");
             ImGui::TextDisabled("In force: %s%s", view.suspLevel == 2 ? "this truck" : view.suspLevel == 1 ? "every " : "the default", view.suspLevel == 1 ? view.truck : "");

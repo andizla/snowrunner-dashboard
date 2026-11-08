@@ -287,7 +287,13 @@ kind's. When the game rebuilds the truck it gives it another id: when the same k
 between, within 20 seconds or on the same truck with no loading screen between (a visit to the garage, however long), or
 the new id comes on the same truck while you drive, the new id takes the set over, and the log
 says so. A switch through the map to another truck of the kind still in the game takes nothing over: each keeps its own. The old section is marked <code>TakenBy</code> and <code>TakenAt</code>, and only the newest 10 marked sections of a file are kept. A truck taken out of the
-warehouse gets a new id and starts on its kind's settings; pick This truck only again for its own. Unticking the box at the
+warehouse gets a new id. It gets its set back where exactly one waiting truck of its kind has the same engine and gearbox.
+Waiting means not driven this start, or put away since with no loading screen between. Its sections are copied, and the old ones
+stay marked <code>How=warehouse</code>, which the count of 10 never drops. A truck bought new with the same engine and gearbox
+as one waiting truck gets a copy of that set too, and the other keeps its own. A waiting truck of another save slot can match as
+well. With two such trucks or none it starts on its kind's settings, and the log says why. <code>[Seen]</code> in the kind's file
+lists each truck driven by its id, so a truck that never had a set of its own never takes another's. A truck's own sections
+hold <code>Engine=</code> and <code>Gearbox=</code> for the match. Unticking the box at the
 truck's level keeps its set and puts the kind's in force; This truck only brings it back. Every with no set for the kind
 moves the truck's set up to the kind. With a set for the kind it puts that one in force and keeps the truck's, which This
 truck only brings back.</p>

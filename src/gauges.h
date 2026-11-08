@@ -518,7 +518,7 @@ struct SuspDisplayView
 // smtInstalled: the manual transmission mod is in the game; gearboxHeld: another mod holds the game's gearbox
 // functions. Either way the mod's gearbox stands down (the tab says why). warn: the clutch's and the engine's warning
 // boxes while a truck is driven.
-struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWarnBoxes]; int engineDamage, engineCapacity; char truck[96]; bool truckOwn, suspOwn, suspKept, suspIdKnown, suspTruckKept, suspKindSet, smtInstalled, gearboxHeld; int suspLevel; char map[96], mapFrom[64]; bool mapOwn; float ambientC;
+struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWarnBoxes]; int engineDamage, engineCapacity; char truck[96]; char idWords[96]; bool truckOwn, suspOwn, suspKept, suspIdKnown, suspTruckKept, suspKindSet, smtInstalled, gearboxHeld; int suspLevel; char map[96], mapFrom[64]; bool mapOwn; float ambientC;
                    int pullTest, pullPhase; const char *pullWhy;
                    float ambientDay, ambientNight, hour; // the map's day and night (with mapOwn), the hour of the game's day (-1 not known)
                    SuspDisplayView susp; bool swayOff; float rideRest[2]; bool rideRestKnown; // the display's figures; the bars disconnected; each axle's rest place along its axis (front, rear; cm), from the probe

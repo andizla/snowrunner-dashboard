@@ -46,6 +46,7 @@ rem this machine has through DirectInput (src\input_devices.cpp; DirectInput com
 cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I src /Fo:out\obj\ /Fe:out\test\input_test.exe test\input_test.cpp src\input_devices.cpp /link user32.lib dinput8.lib dxguid.lib || goto fail
 rem the crash line's C runtime handlers (src\crt_line.h): an invalid parameter and abort, each in a child process
 cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I src /Fo:out\obj\crt_test.obj /Fe:out\test\crt_test.exe test\crt_test.cpp || goto fail
+cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I src /Fo:out\obj\truck_id_test.obj /Fe:out\test\truck_id_test.exe test\truck_id_test.cpp || goto fail
 rem the loader
 ml64 /nologo /c /Fo out\obj\version_stubs.obj tools\version_stubs.asm || goto fail
 cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /Fo:out\obj\loader.obj tools\loader.cpp || goto fail

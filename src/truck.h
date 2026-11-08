@@ -60,6 +60,7 @@
 //                                    wheel's shifter picks the gears
 //   control + 0xD8                   (byte) the function menu is open
 #pragma once
+#include "truck_id.h"
 #include <limits.h>
 #include "gauges.h"
 
@@ -379,18 +380,8 @@ struct TruckIdentity
     bool named;      // key is the kind's name, not the build
 };
 
-// The shape of the game's id of a truck: 38 characters, braces around hex digits in groups of 8, 4, 4, 4 and 12.
-inline bool TruckIdText(const char *text, size_t length)
-{
-    if (length != 38 || text[0] != '{' || text[37] != '}') return false;
-    for (size_t i = 1; i < 37; i++)
-    {
-        const char c = text[i];
-        const bool dash = i == 9 || i == 14 || i == 19 || i == 24;
-        if (dash ? c != '-' : !((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f'))) return false;
-    }
-    return true;
-}
+// The shape of the game's id of a truck (truck_id.h IdText, the same file as Tire Inflation's).
+inline bool TruckIdText(const char *text, size_t length) { return truckid::IdText(text, length); }
 
 // The key of a truck whose kind's name is not read: its build, which is the tank's size, the number of wheels and
 // of the gearbox's entries, and the damage the engine takes.
@@ -422,46 +413,18 @@ inline void TruckKey(const TruckMemory &m, const TruckRefs &r, const TruckRaw &t
     if (m.get(r.vehicle + 0x48, chars) && chars >= 0x10000 && m.peek(chars, text, sizeof text) && !text[38] && TruckIdText(text, 38)) memcpy(id.id, text, sizeof text);
 }
 
-// A vehicle's chassis body (model + 0x230, the model at vehicle + 0x60), the body's vtable, its inverse mass
-// (+ 0x22C) and its world: hkpWorldObject's m_world at + 0x10 in Havok's layout (not confirmed in this game yet; the
-// once-a-truck line gives the chassis's and the first wheel body's). False where a read fails.
+// The chassis body, its vtable, inverse mass and world, and the take-over's check on another vehicle within 20 s:
+// truck_id.h ChassisWorld and StillThere (BRIEF_truck_id_part2.md), read through m. The old truck is never there where
+// its kind's name was not read (its key is the build's).
 inline bool TruckChassisWorld(const TruckMemory &m, uint64_t vehicle, uint64_t &body, uint64_t &vtable, float &inverseMass, uint64_t &world)
 {
-    uint64_t model = 0;
-    body = vtable = world = 0;
-    inverseMass = 0.0f;
-    return m.get(vehicle + 0x60, model) && m.get(model + 0x230, body) && m.get(body, vtable) && m.get(body + 0x22C, inverseMass) && m.get(body + 0x10, world);
+    return truckid::ChassisWorld([&m](uint64_t at, void *out, size_t size) { return m.peek(at, out, size); }, vehicle, body, vtable, inverseMass, world);
 }
-
-// The take-over's check on another vehicle within 20 s (BRIEF_takeover_other_truck.md and the Reviewer's addendum):
-// whether the truck that went is still in the game. A switch to another truck of the kind through the map goes through
-// "none is driven" as a rebuild does, and a freed vehicle block can still read its old id. So the old truck counts as
-// there only when all hold: its vehicle reads the old id (vehicle + 0x48) and the old kind by name (model + 0x588); its
-// chassis body has the new truck's chassis's vtable and the inverse mass of 10 kg to 1000 t; and that body's world is
-// not 0 and is the new chassis's. A destroyed truck's bodies leave the world before they are freed; a truck left
-// through the map stays in it. Anything else (a read fails, another id or kind, another world, or none) is gone.
-struct TruckThere
-{
-    char id[40];                              // what the old vehicle reads now ("" not read)
-    char kind[kMaxText];
-    uint64_t body, world, newBody, newWorld;  // the old and the new chassis body and their worlds (0 not read)
-    bool there;
-};
+typedef truckid::There TruckThere;
 inline bool TruckStillThere(const TruckMemory &m, uint64_t oldVehicle, const TruckIdentity &old, uint64_t newVehicle, TruckThere &o)
 {
-    o = TruckThere{};
-    uint64_t chars = 0, model = 0, vtable = 0, newVtable = 0;
-    char text[39];
-    if (m.get(oldVehicle + 0x48, chars) && chars >= 0x10000 && m.peek(chars, text, sizeof text) && !text[38] && TruckIdText(text, 38)) memcpy(o.id, text, sizeof text);
-    size_t length = 0;
-    if (m.get(oldVehicle + 0x60, model) && TruckText(m, model + 0x588, o.kind, length) && length) TruckKeyClean(o.kind);
-    else o.kind[0] = 0;
-    float inverse = 0.0f, newInverse = 0.0f;
-    const bool body = TruckChassisWorld(m, oldVehicle, o.body, vtable, inverse, o.world);
-    const bool newBody = TruckChassisWorld(m, newVehicle, o.newBody, newVtable, newInverse, o.newWorld);
-    const float mass = inverse > 0.0f ? 1.0f / inverse : 0.0f;
-    o.there = old.named && old.id[0] && !strcmp(o.id, old.id) && !strcmp(o.kind, old.key) && body && newBody && vtable && vtable == newVtable && o.body != o.newBody &&
-              isfinite(mass) && mass >= 10.0f && mass <= 1.0e6f && o.world && o.world == o.newWorld;
+    truckid::StillThere([&m](uint64_t at, void *out, size_t size) { return m.peek(at, out, size); }, oldVehicle, old.key, old.id, newVehicle, o);
+    o.there = o.there && old.named;
     return o.there;
 }
 
