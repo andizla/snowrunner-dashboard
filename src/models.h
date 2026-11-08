@@ -1499,8 +1499,9 @@ inline float SpinRoof(float classRoof, float x) { return fminf(LiftRoof(classRoo
 // L- is jerky (BRIEF_low_minus_jerky.md and its addendum): the wheels' spin is noisy by about 0.15 rad/s a pass, and over
 // a low top (L-'s 2.24 rad/s) that is a big share of it, so x by spin jumps and the factor follows it steeply. Two calms,
 // in the locked path only:
-// - x is the mean of the last kSpinMeanPasses passes' spin share (about 0.25 s), started over at a new gear, truck or
-//   path (SpinMeanStep);
+// - x is the share of the gear's top of the wheels' spin in rad/s, its mean over the last kSpinMeanPasses passes (about
+//   0.25 s), started over at a new gear, truck or path (SpinMeanStep): the mean in rad/s, as L-, L, L+ and 1st by hand
+//   are all the game's gear 1 with other tops, and the wheels' speed doesn't jump at a change of range (review M1);
 // - the factor's cap by spin fades from 2 to 1 over at least the top's last kSpinFadeRad rad/s, not only its last 0.06
 //   (SpinLiftMost). A top over 13.3 rad/s (0.8 / 0.06) keeps today's fade exactly; a scout's over 5.3 (its fade is 0.15
 //   wide). The mean alone left a third of the passes at 0.95 of L-'s top jumping over 0.15 on a noisy trace; with the
@@ -1509,22 +1510,23 @@ static const int kSpinMeanPasses = 5;
 static const float kSpinFadeRad = 0.8f;
 struct SpinMean
 {
-    float x[kSpinMeanPasses];
+    float spin[kSpinMeanPasses]; // the driven wheels' mean spin, rad/s
     int n, at;          // samples held (up to kSpinMeanPasses), the next one's place
     int gear;           // the gear and the truck they are for: another starts it over
     uint64_t vehicle;
 };
-// One pass: x into the mean, the mean back. A gear or truck other than the samples' starts it over.
-inline float SpinMeanStep(SpinMean &m, float x, int gear, uint64_t vehicle)
+// One pass: the wheels' spin (rad/s, its sign dropped) into the mean, the mean back. A gear or truck other than the
+// samples' starts it over.
+inline float SpinMeanStep(SpinMean &m, float spin, int gear, uint64_t vehicle)
 {
-    if (!isfinite(x)) x = 0.0f;
+    const float x = isfinite(spin) ? fabsf(spin) : 0.0f;
     if (m.n > 0 && (gear != m.gear || vehicle != m.vehicle)) m.n = 0, m.at = 0;
     m.gear = gear, m.vehicle = vehicle;
-    m.x[m.at] = x;
+    m.spin[m.at] = x;
     m.at = (m.at + 1) % kSpinMeanPasses;
     if (m.n < kSpinMeanPasses) m.n++;
     float sum = 0.0f;
-    for (int i = 0; i < m.n; i++) sum += m.x[i];
+    for (int i = 0; i < m.n; i++) sum += m.spin[i];
     return sum / (float)m.n;
 }
 // The factor's cap by spin with the wheels at x of a top of top rad/s: kSpinLiftMost, fading in a straight line to 1

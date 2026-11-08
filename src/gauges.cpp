@@ -3508,7 +3508,7 @@ struct TruckWatch
     uint64_t pullVehicle, pullAction; // the truck whose torque factor a running pull test changed
     TorqueHand hand;            // the engine's torque handed to the game (Powertrain)
     float liftX, liftRoof;      // the lift's x and the roof there on the last pass, for the probe (review 11)
-    SpinMean spinMean;          // the locked path's x by spin, its mean over the last passes (SpinMeanStep)
+    SpinMean spinMean;          // the locked path's wheel spin, its mean over the last passes in rad/s (SpinMeanStep)
     bool creeping;              // the creep's share was above 0 on the last pass (models.h, CreepShare)
     float creepFor;             // seconds until its next line in the log
     int creepLines;             // its lines since it began
@@ -5749,7 +5749,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             // by spin, the mean of the last passes and a cap that fades over the top's last 0.8 rad/s at least, as the spin's
             // noise is a big share of a low top such as L-'s (BRIEF_low_minus_jerky.md); the ground path as it was
             if (!locked) w.spinMean.n = 0, w.spinMean.at = 0;
-            const float x = locked ? SpinMeanStep(w.spinMean, SpinShare(TruckDrivenSpin(raw), gearTop), raw.gearEngaged, w.refs.vehicle)
+            const float x = locked ? SpinShare(SpinMeanStep(w.spinMean, TruckDrivenSpin(raw), raw.gearEngaged, w.refs.vehicle), gearTop)
                                    : LiftShare(TruckDrivenSpin(raw), ground, w.gearbox.grip, gearTop);
             const float spinMost = locked ? SpinLiftMost(x, gearTop) : kTorqueFactorMost;
             w.liftX = x;
