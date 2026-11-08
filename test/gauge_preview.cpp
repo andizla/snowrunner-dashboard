@@ -41,7 +41,7 @@ static std::vector<std::string> *g_items = nullptr;
 // under the ID stack in force when they are added
 void ImGuiTestEngineHook_ItemAdd(ImGuiContext *ctx, ImGuiID id, const ImRect &, const ImGuiLastItemData *)
 {
-    static const char *const quiet[] = { "##aspiration", "##class", "##dampercurve", "##fuel", "##input", "##layout", "##oilgauge", "##spool", "##springcurve", "##style", "##torquecurve" };
+    static const char *const quiet[] = { "##aspiration", "##class", "##dampercurve", "##fuel", "##gamegeardisplay", "##input", "##layout", "##oilgauge", "##spool", "##springcurve", "##style", "##torquecurve" };
     if (!g_items || !ctx->CurrentWindow || ctx->CurrentWindow->IDStack.Size == 0) return;
     for (const char *l : quiet)
         if (ctx->CurrentWindow->GetID(l) == id) g_items->push_back(l);

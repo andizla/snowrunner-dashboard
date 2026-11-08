@@ -14,6 +14,7 @@
 #include <string.h>
 #include <string>
 #include <vector>
+#include <algorithm>
 #include "gauges.h"
 #include "truck.h"
 #include "models.h"
@@ -27,6 +28,7 @@
 #include "air_axles.h"
 #include "camber.h"
 #include "gearbox_hooks.h"
+#include "game_script.h"
 
 // The hooks' attach and detach (gearbox_hooks.h) on a function of the test's own: the hook counts and calls through.
 static volatile int g_hookSaw = 0;
@@ -393,6 +395,16 @@ static void RealImageTest()
              steam ? ", the Steam build of 22 July" : update ? ", the update of 20 October" : ", a build the test has no numbers for", from, to, right, kGlobCount, inData,
              shift.at, *wrong ? "; wrong:" : "", wrong);
     Check(right == kGlobCount && inData == kGlobCount && shiftRight, line);
+    // the gear display's places (game_script.h): the class registry, the string pool and the engine's allocate, where
+    // the Researcher read them in 6adb8627 and the same code stands in 6ab52f5d
+    SslPlaces sp;
+    const bool spFound = SslPlacesFind(image.data(), from, to, sp);
+    const bool now = stamp == 0x6adb8627, before = stamp == 0x6ab52f5d;
+    const bool spRight = now ? sp.classes == 0x2b23cd0 && sp.pool == 0x2b38e58 && sp.alloc == 0x1770dc0
+                       : before ? sp.classes == 0x2b22f90 && sp.pool == 0x2b38108 && sp.alloc == 0x1770640 : true;
+    snprintf(line, sizeof line, "gear display's places in a real image (stamp %08x): the class registry at %llx, the string pool at %llx, the engine's allocate at %llx%s%s",
+             stamp, (unsigned long long)sp.classes, (unsigned long long)sp.pool, (unsigned long long)sp.alloc, *sp.why ? "; " : "", sp.why);
+    Check(spRight && (spFound || (!now && !before)), line);
     // the damage path the tire mod uses: the truck update and the damage update (in the Steam build of 22 July where the
     // tire mod has them, in another build found once)
     DamagePath path;
@@ -459,6 +471,227 @@ static void RealImageTest()
     // pass of review 14)
     const uint64_t constraint = VtableByName(image.data(), image.size(), imageBase, kSuspConstraintName);
     Check(update ? constraint == 0x23d9538 : constraint != 0, "places: hkpWheelConstraintData's vtable by its RTTI name, for the suspension probe");
+}
+
+// The game's gear display (game_script.h, BRIEF_shifter_no_gear.md part B): a made-up script engine with a class
+// registry, three modules, three classes, two function objects and their code arrays, all in the test's memory
+static std::vector<uint64_t> g_stores;
+static uint64_t g_bump = 0, g_bumpEnd = 0;
+static bool g_allocFails = false;
+static uint64_t TestAlloc(uint64_t bytes)
+{
+    if (g_allocFails || g_bump + bytes > g_bumpEnd) return 0;
+    const uint64_t at = g_bump;
+    g_bump += (bytes + 15) & ~15ull;
+    return at;
+}
+static bool TestStore64(uint64_t at, uint64_t v)
+{
+    g_stores.push_back(at);
+    return Poke(at, &v, sizeof v);
+}
+static uint32_t TestStr(uint64_t pool, uint32_t &next, const char *s)
+{
+    const uint32_t at = next;
+    for (size_t i = 0; i <= strlen(s); i++) Put(pool + at + i, s[i]);
+    next += (uint32_t)strlen(s) + 1;
+    return at;
+}
+static uint32_t TestWord(uint64_t code, int k)
+{
+    uint32_t w = 0;
+    Peek(code + 4ull * k, &w, 4);
+    return w;
+}
+static void GearDisplayTest()
+{
+    const uint64_t poolG = 0x17000000, regG = 0x17000008, pool = 0x17010000, reg = 0x17020000, list = 0x17020400, modules = 0x17021000, pairs = 0x17022000;
+    const uint64_t view = 0x17030000, lib = 0x17031000, base = 0x17032000, fnStatus = 0x17050000, fnRunner = 0x17050100, fnStatus2 = 0x17050200;
+    const uint64_t stockStatus = 0x17051000, stockRunner = 0x17051100, stockStatus2 = 0x17051200;
+    Block(poolG, 0x10);
+    Block(pool, 0x4000);
+    Block(reg, 0x200);
+    Block(list, 0x40);
+    Block(modules, 0x200);
+    Block(pairs, 0x100);
+    for (uint64_t c : { view, lib, base }) Block(c, 0x1000);
+    for (int k = 0; k < 3; k++) Block(0x17023000 + 0x100ull * k, 0x100), Block(0x17040000 + 0x2000ull * k, 0x2000);
+    Block(fnStatus, 0x300);
+    Block(stockStatus, 0x300);
+    Block(0x17060000, 0x2000);
+    g_bump = 0x17060000, g_bumpEnd = 0x17062000;
+    Put(poolG, pool);
+    Put(regG, reg);
+    uint32_t next = 1;
+    Put(pool, (char)0);
+    Put(reg + kSslModules, list);
+    // the three modules, sorted by name as strcmp sorts, each with one class
+    const char *moduleNames[3] = { "ui.autogen_libs.ui_hud_lib", "ui.hud.hud_viewes.hud_transmission_ui_view", "ui.ui_gfx" };
+    const char *classNames[3] = { "UiHudLibHudtransmission", "HudTransmissionUiView", "UiDisplayObjectBase" };
+    const uint64_t classOf[3] = { lib, view, base };
+    uint32_t moduleOff[3];
+    std::vector<std::pair<uint32_t, uint32_t>> classPairs;
+    for (int k = 0; k < 3; k++)
+    {
+        moduleOff[k] = TestStr(pool, next, moduleNames[k]);
+        const uint64_t mod = modules + kSslModuleSize * (uint64_t)k, classes = 0x17023000 + 0x100ull * k;
+        Put(mod, moduleOff[k]);
+        Put(mod + kSslModuleClasses, classes);
+        Put(mod + kSslModuleClassCount, (uint32_t)1);
+        Put(classes, SslOat(classNames[k]));
+        Put(classes + 8, classOf[k]);
+        classPairs.push_back({ SslOat(classNames[k]), moduleOff[k] });
+    }
+    std::sort(classPairs.begin(), classPairs.end());
+    for (size_t k = 0; k < classPairs.size(); k++) Put(pairs + 8 * k, classPairs[k].first), Put(pairs + 8 * k + 4, classPairs[k].second);
+    Put(list + kSslModuleArray, modules);
+    Put(list + kSslModuleCount, (uint32_t)3);
+    Put(list + kSslPairs, pairs);
+    Put(list + kSslPairCount, (uint32_t)classPairs.size());
+    // the classes' members: the view's container and its two functions, the container's status and runner, the base's
+    // visible; the lib's base is the base class, as status and runner derive from it
+    struct Member { uint64_t cls; const char *name; int index, kind; uint64_t obj; };
+    const Member members[] = { { view, "container", kSslContainer, 4, 0 }, { view, "UpdateStatusText", 46, kSslKindScript, fnStatus },
+                               { view, "UpdateRunnerAnimation", 45, kSslKindScript, fnRunner }, { lib, "status", kSslStatus, 4, 0 },
+                               { lib, "runner", kSslRunner, 4, 0 }, { base, "visible", kSslVisible, 4, 0 } };
+    for (int k = 0; k < 3; k++)
+    {
+        const uint64_t c = classOf[k], table = 0x17040000 + 0x2000ull * k;
+        std::vector<std::pair<uint32_t, int32_t>> mp;
+        for (const Member &e : members)
+            if (e.cls == c)
+            {
+                mp.push_back({ SslOat(e.name), e.index });
+                const uint64_t entry = table + (uint64_t)e.index * kSslEntrySize;
+                Put(entry, TestStr(pool, next, e.name));
+                Put(entry + 4, (uint8_t)e.kind);
+                Put(entry + 8, e.obj);
+            }
+        std::sort(mp.begin(), mp.end());
+        for (size_t i = 0; i < mp.size(); i++) Put(c + 0x800 + 8 * i, mp[i].first), Put(c + 0x800 + 8 * i + 4, mp[i].second);
+        Put(c + kSslMemberPairs, c + 0x800);
+        Put(c + kSslMemberPairCount, (uint32_t)mp.size());
+        Put(c + kSslMembers, table);
+        Put(c + kSslMemberCount, (int32_t)200);
+    }
+    Put(lib + kSslClassBase, base);
+    // made-up stock words: each word the check reads, two jumps in each, the rest words of no meaning
+    uint32_t sw[41], rw[18];
+    for (uint32_t &w : sw) w = SslWord(kSslPop, 0);
+    for (uint32_t &w : rw) w = SslWord(4, 0);
+    sw[10] = SslWord(22, 32), sw[20] = SslWord(26, 32), sw[33] = SslWord(kSslLocal, 0), sw[34] = SslWord(kSslGetField, kSslContainer);
+    sw[35] = SslWord(kSslGetField, kSslStatus), sw[38] = SslWord(kSslSetField, 97), sw[40] = SslWord(kSslRet, 4);
+    rw[1] = SslWord(kSslLocal, 1), rw[2] = SslWord(22, 5), rw[4] = SslWord(26, 6), rw[11] = SslWord(kSslLocal, 0), rw[13] = SslWord(kSslCall, 32);
+    rw[16] = SslWord(kSslPop, 0), rw[17] = SslWord(kSslRet, 2);
+    auto putStock = [&](uint64_t fn, uint64_t code, const uint32_t *w, uint32_t n) {
+        for (uint32_t k = 0; k < n; k++) Put(code + 4ull * k, w[k]);
+        Put(fn + kSslCode, code);
+        Put(fn + kSslCodeCount, (uint64_t)n | (uint64_t)n << 32);
+    };
+    putStock(fnStatus, stockStatus, sw, 41);
+    putStock(fnRunner, stockRunner, rw, 18);
+    const SslHost h = { kMemory, regG, poolG, TestAlloc, TestStore64 };
+    auto codeOf = [&](uint64_t fn) { uint64_t c = 0; Peek(fn + kSslCode, &c, 8); return c; };
+    auto countOf = [&](uint64_t fn) { uint64_t c = 0; Peek(fn + kSslCodeCount, &c, 8); return c; };
+    char line[400];
+
+    // the hash as the engine's natives list has it (SetGear C4C3AF6B), and the class found by name
+    const bool hash = SslOat("SetGear") == 0xC4C3AF6Bu && SslClassFind(h, "HudTransmissionUiView") == view && SslClassFind(h, "UiDisplayObjectBase") == base &&
+                      !SslClassFind(h, "NoSuchClass") && SslMemberIndex(h, lib, SslOat("visible")) == kSslVisible;
+
+    // GameGearDisplay=0 from the start: nothing swapped, nothing made
+    GearDisplay none = {};
+    const bool untouched = GearDisplayStep(h, none, kGearDisplayLight, line, sizeof line) == kGearDisplayGame && !line[0] && !none.made && g_stores.empty() &&
+                           codeOf(fnStatus) == stockStatus;
+
+    // dark: the status's 7 words, the runner's 6 words then the stock moved by 6; the order of the stores
+    GearDisplay g = {};
+    const bool dark = GearDisplayStep(h, g, kGearDisplayDark, line, sizeof line) == kGearDisplayDark && strstr(line, "gear display: dark") && g.made == 4;
+    const uint64_t darkStatus = codeOf(fnStatus), darkRunner = codeOf(fnRunner);
+    const bool statusWords = countOf(fnStatus) == (7ull | 7ull << 32) && TestWord(darkStatus, 0) == SslWord(kSslBool, 0) && TestWord(darkStatus, 3) == SslWord(kSslGetField, kSslStatus) &&
+                             TestWord(darkStatus, 4) == SslWord(kSslSetField, kSslVisible) && TestWord(darkStatus, 6) == SslWord(kSslRet, 4);
+    const bool runnerWords = countOf(fnRunner) == (24ull | 24ull << 32) && TestWord(darkRunner, 0) == SslWord(kSslLocal, 1) &&
+                             TestWord(darkRunner, 3) == SslWord(kSslGetField, kSslRunner) && TestWord(darkRunner, 8) == SslWord(22, 11) &&
+                             TestWord(darkRunner, 10) == SslWord(26, 12) && TestWord(darkRunner, 19) == SslWord(kSslCall, 32) && TestWord(darkRunner, 23) == SslWord(kSslRet, 2);
+    // shrinking (the status, 41 to 7): the count first; growing (the runner, 18 to 24): the pointer first
+    const bool order = g_stores.size() == 4 && g_stores[0] == fnStatus + kSslCodeCount && g_stores[1] == fnStatus + kSslCode && g_stores[2] == fnRunner + kSslCode &&
+                       g_stores[3] == fnRunner + kSslCodeCount;
+    const bool stockKept = TestWord(stockStatus, 35) == SslWord(kSslGetField, kSslStatus) && g.fn[0].stock == stockStatus;
+    // the same look again: nothing written
+    g_stores.clear();
+    const bool still = GearDisplayStep(h, g, kGearDisplayDark, line, sizeof line) == kGearDisplayDark && !line[0] && g_stores.empty();
+
+    // light: visible = true then the stock words, the runner's dot shown with LB up (bool 1, not isActive); no new array
+    const bool light = GearDisplayStep(h, g, kGearDisplayLight, line, sizeof line) == kGearDisplayLight && strstr(line, "the game's again") && g.made == 4;
+    const uint64_t lightStatus = codeOf(fnStatus), lightRunner = codeOf(fnRunner);
+    const bool lightWords = countOf(fnStatus) == (47ull | 47ull << 32) && TestWord(lightStatus, 0) == SslWord(kSslBool, 1) && TestWord(lightStatus, 16) == SslWord(22, 38) &&
+                            TestWord(lightStatus, 46) == SslWord(kSslRet, 4) && TestWord(lightRunner, 0) == SslWord(kSslBool, 1) && countOf(fnRunner) == (24ull | 24ull << 32);
+    // dark, light, dark: the same arrays, none made
+    const bool cycle = GearDisplayStep(h, g, kGearDisplayDark, line, sizeof line) == kGearDisplayDark && codeOf(fnStatus) == darkStatus && codeOf(fnRunner) == darkRunner &&
+                       g.made == 4 && GearDisplayStep(h, g, kGearDisplayLight, line, sizeof line) == kGearDisplayLight && codeOf(fnStatus) == lightStatus && g.made == 4;
+
+    // a reload: a new function object with the same stock words is swapped again with the arrays made; one whose code
+    // is neither the stock seen nor ours is taken as new
+    putStock(fnStatus2, stockStatus2, sw, 41);
+    const uint64_t statusEntry = 0x17040000 + 0x2000ull * 1 + 46ull * kSslEntrySize;
+    Put(statusEntry + 8, fnStatus2);
+    const bool reload = GearDisplayStep(h, g, kGearDisplayDark, line, sizeof line) == kGearDisplayDark && codeOf(fnStatus2) == darkStatus && g.made == 4 &&
+                        g.fn[0].obj == fnStatus2 && g.fn[0].stock == stockStatus2;
+
+    // refused, said once, nothing written: a checked word that differs, a count other than 41, a member's name, no room
+    GearDisplay r = {};
+    putStock(fnRunner, stockRunner, rw, 18);
+    g_stores.clear();
+    putStock(fnStatus2, stockStatus2, sw, 41);
+    Put(stockStatus2 + 4 * 35, SslWord(kSslGetField, 154));
+    const bool wordRefused = GearDisplayStep(h, r, kGearDisplayDark, line, sizeof line) == -1 && strstr(line, "word 35 is 10 154, not 10 153") && g_stores.empty();
+    const bool saidOnce = GearDisplayStep(h, r, kGearDisplayDark, line, sizeof line) == -1 && !line[0];
+    Put(stockStatus2 + 4 * 35, SslWord(kSslGetField, kSslStatus));
+    Put(fnStatus2 + kSslCodeCount, 40ull | 41ull << 32);
+    const bool countRefused = GearDisplayStep(h, r, kGearDisplayDark, line, sizeof line) == -1 && strstr(line, "has 40 words, not 41") && g_stores.empty();
+    Put(fnStatus2 + kSslCodeCount, 41ull | 41ull << 32);
+    const uint64_t runnerEntry = 0x17040000 + 0x2000ull * 0 + (uint64_t)kSslRunner * kSslEntrySize;
+    uint32_t runnerName = 0;
+    Peek(runnerEntry, &runnerName, 4);
+    Put(runnerEntry, TestStr(pool, next, "runners"));
+    const bool nameRefused = GearDisplayStep(h, r, kGearDisplayDark, line, sizeof line) == -1 && strstr(line, "member 143 is not named runner") && g_stores.empty();
+    Put(runnerEntry, runnerName);
+    g_allocFails = true;
+    const bool roomRefused = GearDisplayStep(h, r, kGearDisplayDark, line, sizeof line) == -1 && strstr(line, "no room") && g_stores.empty();
+    g_allocFails = false;
+    const bool afterAll = GearDisplayStep(h, r, kGearDisplayDark, line, sizeof line) == kGearDisplayDark && codeOf(fnStatus2) != stockStatus2;
+
+    Check(hash && untouched && dark && statusWords && runnerWords && order && stockKept && still && light && lightWords && cycle && reload && wordRefused && saidOnce &&
+              countRefused && nameRefused && roomRefused && afterAll,
+          "gear display (BRIEF_shifter_no_gear.md part B): the classes and members by name, each name read back; nothing with GameGearDisplay=0 from the start; dark: "
+          "the text's 7 words and the dot's 6 before the stock words with their jumps moved by 6, the count first when shrinking and the pointer first when growing; "
+          "light: visible set, then the stock words, the dot shown with LB up; dark, light, dark on the same arrays; a reloaded function swapped again; a word, a "
+          "count, a name or no room refuses, said once, nothing written");
+
+    // the opcodes against sslkit's table, where the SSL fork is on this PC
+    FILE *ops = nullptr;
+    if (fopen_s(&ops, "C:\\Games\\snowrunner-ssl\\sslkit\\ops.py", "rb") == 0 && ops)
+    {
+        char text[16384] = "";
+        const size_t n = fread(text, 1, sizeof text - 1, ops);
+        fclose(ops);
+        text[n] = 0;
+        struct { int op; const char *name; } want[] = { { kSslPop, "pop" }, { kSslBool, "bool" }, { kSslLocal, "local" }, { kSslGetField, "getfield" }, { kSslCall, "call" },
+                                                        { kSslRet, "ret" }, { kSslSetField, "setfield" }, { 22, "jz" }, { 23, "jnz" }, { 24, "jz.keep" }, { 25, "jnz.keep" },
+                                                        { 26, "jmp" } };
+        bool all = true;
+        for (const auto &w : want)
+        {
+            char key[48];
+            snprintf(key, sizeof key, "%d: ('%s',", w.op, w.name);
+            char spaced[48];
+            snprintf(spaced, sizeof spaced, "%d:  ('%s',", w.op, w.name);
+            if (!strstr(text, key) && !strstr(text, spaced)) all = false;
+        }
+        const bool targets = strstr(text, "'target'") != nullptr;
+        Check(all && targets, "gear display: the opcodes and the five jumps are sslkit's (ops.py)");
+    }
+    else printf("     gear display's opcodes against sslkit's table: no C:\\Games\\snowrunner-ssl here, not tested\n");
 }
 
 int main()
@@ -3882,6 +4115,7 @@ int main()
     }
 
     RealImageTest();
+    GearDisplayTest();
 
     printf(g_failed ? "TRUCK TEST FAILED (%d)\n" : "TRUCK TEST OK\n", g_failed);
     return g_failed ? 1 : 0;

@@ -661,6 +661,25 @@ def s_coolant():
     eqs[-1][1] = 'none: rises to the 140 °C cap'
     lag = oil_lag()
     return f'''
+<h3>The game's gear display (GameGearDisplay)</h3>
+<p>The display is the game's script view HudTransmissionUiView. Its UpdateStatusText writes the mode's text, and its
+UpdateRunnerAnimation animates the lit dot. The script engine runs a function from the code array its function object holds at
++0x60, read once at each call's start. So one aligned pointer store swaps a function from its next call on (game_script.h).
+Each function gets two arrays of ours, made once a start with the engine's own allocate on the mod's thread. Dark: the text's
+<code>visible</code> false, then return; the dot's <code>visible</code> set to isActive (LB held), then the stock words. Light:
+<code>visible</code> true, then the stock words. The stock array stays the engine's. Light stays in place for the rest of the
+start, so the game's display is as it was. At the game's exit the function object's destructor frees whichever array is in
+place, so nothing is put back then.</p>
+<p>Everything is found by name, as the engine finds it. The class registry and the string pool come from signatures of the code
+that loads them, and the allocate from its first bytes and the call to it in the code array's reserve. The classes and members
+come by the hash of their names, and each name is read back. Before any write the words are checked: UpdateStatusText has 41,
+with words 33 to 35 the container's status and word 38 the store into its text. UpdateRunnerAnimation has 18, with its call of
+GetRunner at word 13. Our jumps move by the six words we put in front. The count and the pointer are stored in the order that
+never pairs a count with a shorter array. A look comes at each truck change and each change of the setting or of Gearbox, and
+every 30 s while one was refused. The log says <code>gear display: the script engine's class registry at</code> at the start,
+<code>settings: the game's gear display</code> with the setting, one line when the arrays go in or out with the mod's thread,
+and one when a check refuses.</p>
+
 <h2>Coolant and oil</h2>
 <p>A real engine's coolant takes about a quarter to a third of the fuel's heat, and the fuel goes with the pedal and the engine speed
 together. The model counts heat and cooling in one measure, 1 being a full load's heat (<code>models.h:397-647</code>):</p>

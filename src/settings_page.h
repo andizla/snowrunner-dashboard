@@ -736,6 +736,14 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         PageTip("The mod's automatic shifts while the game's shifter is in A, shown as D: a torque converter, later shifts the further the pedal is down and a kickdown floored. A gear picked on the game's shifter takes over until A again. The game's reverse on the brake while standing is refused.");
         changed(ImGui::RadioButton("Mod gearbox", &s.gearbox, kGearboxOwn));
         PageTip("The mod takes the shifter: D, the gears, N, R, H and the low range on the Controls tab's bindings, with a clutch and the options below. Driven with a pad or the keyboard the game's shifter picks too.");
+        PageLabel("Game's gear display", labelX);
+        {
+            static const char *const displays[3] = { "The game's", "Off at Mod gearbox", "Off always" };
+            ImGui::SetNextItemWidth(w);
+            changed(ImGui::Combo("##gamegeardisplay", &s.gameGearDisplay, displays, 3));
+        }
+        PageTip("The game's gear display at the bottom right. Off at Mod gearbox: it lights nothing while Gearbox is the mod's own, since the cluster shows the gear. "
+                "The shifter's dot still shows while LB is held, so the stick can pick a gear. Default.");
         if (s.gearbox == kGearboxOwn && (s.input == kInputWheel || s.ignoreShifter) && !view.canReverse)
         {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.68f, 0.15f, 1.0f));

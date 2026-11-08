@@ -52,6 +52,10 @@ struct GaugeState
 // BackToA's default in seconds (0 never, so Gearbox=2 is as it was), what the tab's Sequential button sets, and its
 // range: 0, else 3 to 30
 static const int kBackToADefault = 0, kBackToASequential = 10;
+// GameGearDisplay: the game's gear display left as it is, off while the mod's own gearbox drives (the default), or off
+// always (game_script.h)
+enum { kGameGearGame, kGameGearOffOwn, kGameGearOff };
+static const int kGameGearDisplayDefault = kGameGearOffOwn;
 inline int BackToARange(int v) { return v <= 0 ? 0 : v < 3 ? 3 : v > 30 ? 30 : v; }
 
 // The letter the cluster draws for a gearbox position: the automatic's "A" as a real automatic's "D" (the user, 4
@@ -108,6 +112,7 @@ struct GaugeSettings
     bool downStaysForward;   // DownStaysForward: Gear down stops at L-; wins over SkipNeutral
     bool ignoreShifter;      // IgnoreShifter: at Gearbox=2 a position picked on the game's shifter does nothing
     int backToA;             // BackToA: at Gearbox=2, seconds after a shift by hand until the gearbox goes back to A by itself; 0 never, else 3 to 30
+    int gameGearDisplay;     // GameGearDisplay: the game's gear display at the bottom right; 0 the game's, 1 off with the mod's gearbox, 2 off always
     int input;               // Input: what the pedal is: 0 a wheel's pedals, 1 a pad's trigger, 2 keys. The mod's automatic kicks down by it
     bool powertrain;         // Powertrain: the engine's torque (its curve, the cold oil, the boost) and the converter's handed to the game
     bool roadLoad;           // RoadLoad: with Powertrain, the air's drag taken off the torque handed to the game (models.h, road load); on by default
@@ -191,6 +196,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.gearbox = kGearboxGame;
     s.requireClutch = s.requireGearHeld = s.skipNeutral = s.downStaysForward = s.ignoreShifter = false;
     s.backToA = kBackToADefault;
+    s.gameGearDisplay = kGameGearDisplayDefault;
     s.powertrain = false;
     s.engineShare = 50;
     s.roadLoad = true; // on by default (BRIEF_defaults_on.md); an explicit 0 in the ini stays 0
@@ -393,6 +399,7 @@ inline void SettingsClamp(GaugeSettings &s)
     s.suspStepTest = s.suspStepTest < 0 || s.suspStepTest > 3 ? 0 : s.suspStepTest;
     s.shiftOnGameThread = s.shiftOnGameThread ? 1 : 0;
     s.backToA = BackToARange(s.backToA);
+    s.gameGearDisplay = s.gameGearDisplay < 0 || s.gameGearDisplay > 2 ? kGameGearDisplayDefault : s.gameGearDisplay;
 }
 
 // The scales of a truck class: idle, where the red zone starts, the tachometer's top (rpm), the speedometer's top
