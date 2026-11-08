@@ -3396,16 +3396,17 @@ static void GearboxHooksStep(const GaugeSettings &s)
 // reads nothing. With all three off it is never attached, so the game's drive runs as it is.
 static void SuspStepHook(uint64_t action, float dt);
 static bool SuspFeaturesOn(const GaugeSettings &s);
+static bool TuneOff(const GaugeSettings &s);
 static void CreepHookStep(const GaugeSettings &s, bool driving)
 {
     static bool tried = false;
-    const bool damper = SuspFeaturesOn(s);
+    const bool damper = SuspFeaturesOn(s) || TuneOff(s);
     if (tried || (!s.creep && !s.probe && !damper) || !driving || !g_drive.drive) return;
     tried = true;
     DriveStepSet(SuspStepHook);
     char why[160] = "";
     if (CreepHook((uintptr_t)(g_base + g_drive.drive), why, sizeof why))
-        Log(L"creep: the game's wheels' drive hooked (%s): %s", s.creep ? L"Creep=1" : s.probe ? L"Probe=1" : L"the damper on",
+        Log(L"creep: the game's wheels' drive hooked (%s): %s", s.creep ? L"Creep=1" : s.probe ? L"Probe=1" : L"the suspension's settings",
             s.creep ? L"an idling truck in gear moves, and each wheel's travel is read every physics step for the probe and the damper" : L"each wheel's travel is read every physics step");
     else Log(L"creep: %S, so an idling truck stands as in the game and the travel is not read every step", why);
 }
@@ -3593,6 +3594,9 @@ struct SuspStepWatch
     SuspStepFrame frame, last;  // this generation's and the one before (a window a new generation cut is logged by its own)
     ULONGLONG bodiesAt;         // when the bodies not found are looked for again
     LONG windows, tail, faults, refused; // the windows, the ring's entries, the faults and the refused writes taken so far
+    LONG gameValues;            // the wheels left for the game's own values, as seen, and each wheel's count taken
+    LONG gameSeen[kMaxWheels];
+    uint64_t walkTold;          // the truck the walk's line was said for
     uint64_t testVehicle;       // the truck SuspStepTest runs on: another one waits kStepTestEvery before its first write
     bool damping;               // whether the physics thread wrote on the generation, and its settings
     DamperSet damper;
@@ -4103,11 +4107,11 @@ static void FrameFlexPass(FrameTune &t, const TruckMemory &m, const TruckRefs &r
 // times with the sliders still is one the game keeps putting back, said once.
 static const int kSuspWritesTold = 2, kSuspWritesBack = 20;
 static void SuspTunePass(SuspTune &t, const TruckMemory &m, const TruckRefs &r, const GaugeSettings &s, const SuspTuneTest *test, const bool *damperOwns,
-                         const bool *springOwns)
+                         const bool *springOwns, const SuspModWords *words)
 {
     const float scale[kSuspValues] = { s.springScale, s.dampingScale, 1.0f, 1.0f };
     int restored = 0;
-    SuspTuneStep(t, m, r, SuspVtable(), scale, &restored, test, damperOwns, springOwns, s.extraTravel / 100.0f);
+    SuspTuneStep(t, m, r, SuspVtable(), scale, &restored, test, damperOwns, springOwns, s.extraTravel / 100.0f, words);
     if (restored) Log(L"suspension: the truck driven before: %d values put back to its stock", restored);
     for (int i = 0; i < r.wheels && i < kMaxWheels; i++)
     {
@@ -4515,6 +4519,12 @@ static bool AirFading(const SuspStepWatch &p, const TruckRefs &r)
     return p.block.shifting && (p.block.air || (g_step.level.action && g_step.level.action == r.action));
 }
 
+// SpringScale or DampingScale off 1: with the drive's hook in, the step writes them (BRIEF_step_hook_writes.md).
+static bool TuneOff(const GaugeSettings &s) { return s.springScale != 1.0f || s.dampingScale != 1.0f; }
+
+// The block writes a wheel's spring or damping each step: the damper, a spring feature or the tune.
+static bool BlockWrites(const SuspStepBlock &b) { return b.damping || b.springing || b.tuneK || b.tuneD; }
+
 // Anything the physics thread does each step: the damper off its defaults, a spring feature, the zones, the attach
 // point's features, the display.
 static bool SuspFeaturesOn(const GaugeSettings &s)
@@ -4529,7 +4539,7 @@ static bool SuspFeaturesOn(const GaugeSettings &s)
 // on a truck switch puts the stock back after it (review 15). why: for the log.
 static void SuspDamperRelease(SuspStepWatch &p, const TruckMemory &m, const wchar_t *why)
 {
-    if (!p.block.serial || (!p.block.damping && !p.block.springing && !p.block.shifting)) return;
+    if (!p.block.serial || (!BlockWrites(p.block) && !p.block.shifting)) return;
     const SuspStepBlock was = p.block;
     InterlockedExchangePointer((void *volatile *)&g_stepBlock, nullptr);
     p.block = SuspStepBlock{};
@@ -4541,8 +4551,26 @@ static void SuspDamperRelease(SuspStepWatch &p, const TruckMemory &m, const wcha
         if (calls - before >= 2) break;
         Sleep(1);
     }
-    const int back = SuspDamperLetGo(was, m);
+    const int back = SuspDamperLetGo(was, m, &g_step.words);
     Log(L"damper: let go (%s): %d wheels' damping and spring back to the truck's own times DampingScale and SpringScale", why, back);
+}
+
+// The game's own spring or damping the hook found in a wheel it writes (the Reviewer's must 2): taken as the wheel's
+// new stock, so the next block wants the slider times it, said for each wheel.
+static void SuspGameTake(SuspStepWatch &p, SuspTune &t)
+{
+    for (int i = 0; i < kMaxWheels; i++)
+    {
+        const LONG count = g_step.gameCount[i];
+        if (count == p.gameSeen[i]) continue;
+        p.gameSeen[i] = count;
+        _ReadBarrier();
+        const SuspGameSet g = g_step.game[i];
+        for (int k = 0; k < 2; k++)
+            if (g.has[k] && SuspTuneTake(t, p.block.vehicle, i, g.c, k, g.value[k]))
+                Log(L"suspension: wheel %d's %s was set by the game to %g (an upgrade or a repair, likely): taken as its stock, the sliders go on from it", i,
+                    k == kSuspStrength ? L"spring" : L"damping", g.value[k]);
+    }
 }
 
 // Before the tune's pass: the physics thread let go where it should stop (every feature back at its default, no truck,
@@ -4550,17 +4578,18 @@ static void SuspDamperRelease(SuspStepWatch &p, const TruckMemory &m, const wcha
 // tune leaves alone.
 static void SuspDamperBefore(SuspStepWatch &p, const TruckMemory &m, const TruckRefs &r, const GaugeSettings &s, bool found, bool *owns, bool *springs)
 {
-    if (p.block.damping || p.block.springing || p.block.shifting)
+    if (BlockWrites(p.block) || p.block.shifting)
     {
         if (!found) SuspDamperRelease(p, m, L"no truck driven");
         else if (r.vehicle != p.vehicle) SuspDamperRelease(p, m, L"another truck driven");
-        else if (!SuspFeaturesOn(s) && !AirFading(p, r)) SuspDamperRelease(p, m, L"its settings back at the truck's own");
+        else if (!SuspFeaturesOn(s) && !(TuneOff(s) && CreepHooked()) && !AirFading(p, r)) SuspDamperRelease(p, m, L"its settings back at the truck's own");
     }
+    // one writer per field (the Reviewer's must 5): what the block has the physics thread write, the tune leaves
     for (int i = 0; i < kMaxWheels; i++)
     {
         const bool named = i < r.wheels && p.block.constraint[i] != 0 && p.block.wheel[i] == r.wheel[i];
-        owns[i] = named && p.block.damping;
-        springs[i] = named && p.block.springing && p.block.baseK[i] > 0.0f;
+        owns[i] = named && p.block.base[i] > 0.0f && ((p.block.damping && !p.block.bare[i]) || p.block.tuneD);
+        springs[i] = named && p.block.baseK[i] > 0.0f && ((p.block.springing && !p.block.bare[i] && p.block.travel[i] > 0.0f) || p.block.tuneK);
     }
 }
 
@@ -4673,7 +4702,10 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
     const SpringSet spring = SpringFrom(s);
     const bool damping = (DamperOn(damper) || ZonesOn(spring)) && SuspVtable(), springing = SpringOn(spring) && SuspVtable();
     const bool shifting = (AttachFeaturesOn(s) || (r.vehicle == p.vehicle && AirFading(p, r))) && r.vehicle != p.attachOffVehicle && SuspVtable();
-    if ((!s.probe && !damping && !springing && !shifting && !s.suspDisplay) || !found)
+    // the tune on the step (BRIEF_step_hook_writes.md): only with the drive's hook in, else the mod's thread writes it
+    const bool tuneK = s.springScale != 1.0f && CreepHooked() && SuspVtable(), tuneD = s.dampingScale != 1.0f && CreepHooked() && SuspVtable();
+    const bool tuning = tuneK || tuneD;
+    if ((!s.probe && !damping && !springing && !shifting && !s.suspDisplay && !tuning) || !found)
     {
         SuspDamperRelease(p, m, found ? L"the damper off" : L"no truck driven");
         if (p.block.serial)
@@ -4793,7 +4825,20 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
     b.damper = damping ? damper : DamperSet{};
     b.springing = springing;
     b.spring = spring;
-    b.vtable = running || shifting ? SuspVtable() : 0;
+    b.vtable = running || shifting || tuning ? SuspVtable() : 0;
+    b.tuneK = tuneK, b.tuneD = tuneD;
+    b.vehicle = r.vehicle;
+    b.wheelClass = m.base + g_places.wheelClass;
+    // the walk (the Reviewer's must 4): where the action's + 0x30 is this truck, the hook takes each wheel from it at the
+    // write; said once a truck
+    uint64_t walkTruck = 0;
+    b.walk = (running || shifting || tuning) && m.get(r.action + 0x30, walkTruck) && walkTruck == r.vehicle;
+    if ((running || shifting || tuning) && p.walkTold != r.vehicle)
+    {
+        p.walkTold = r.vehicle;
+        Log(b.walk ? L"suspension: the step's writes take each wheel from the truck's action as the game walks them, and write it only where it is the block's"
+                   : L"suspension: the truck's action does not lead to the truck at + 0x30: the step's writes go to the wheels the mod's thread found, as before");
+    }
     b.shifting = shifting;
     b.testShift = shifting && p.test == 3 && p.on ? kStepTestShift : 0.0f;
     b.display = s.suspDisplay;
@@ -4827,11 +4872,17 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
         b.along[i] = p.forward[i], b.across[i] = p.left[i];
         b.sway[i] = swayOff ? 0.0f : p.front[i] ? s.swayFront : s.swayRear;
         b.springK[i] = w.constraint == constraint[i] && SuspValueSane(kSuspStrength, w.stock[kSuspStrength]) ? fminf(1.0f, w.stock[kSuspStrength] * s.springScale) : 0.0f;
-        if (!running || i >= b.wheels || p.frame.other[i] || !constraint[i] || w.constraint != constraint[i]) continue;
-        const bool damped = damping && SuspValueSane(kSuspDamping, w.stock[kSuspDamping]);
-        const bool sprung = springing && SuspValueSane(kSuspStrength, w.stock[kSuspStrength]) && b.travel[i] > 0.0f;
+        b.stockK[i] = b.stockD[i] = 0.0f;
+        b.bare[i] = false;
+        if ((!running && !tuning) || i >= b.wheels || !constraint[i] || w.constraint != constraint[i]) continue;
+        // the damper and the spring's features need the wheel's body; the tune does not
+        const bool bodied = !p.frame.other[i];
+        const bool damped = SuspValueSane(kSuspDamping, w.stock[kSuspDamping]) && ((damping && bodied) || tuneD);
+        const bool sprung = SuspValueSane(kSuspStrength, w.stock[kSuspStrength]) && ((springing && bodied && b.travel[i] > 0.0f) || tuneK);
         if (!damped && !sprung) continue;
         b.constraint[i] = constraint[i];
+        b.bare[i] = !bodied;
+        b.stockK[i] = w.stock[kSuspStrength], b.stockD[i] = w.stock[kSuspDamping];
         if (damped) b.base[i] = fminf(1.0f, w.stock[kSuspDamping] * s.dampingScale);
         if (sprung) b.baseK[i] = fminf(1.0f, w.stock[kSuspStrength] * s.springScale);
     }
@@ -4902,12 +4953,15 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
         p.displays = shown;
     }
     if (!b.display) p.shown.wheels = 0;
-    if (g_step.faults != p.faults || g_step.refused != p.refused)
+    if (g_step.faults != p.faults || g_step.refused != p.refused || g_step.gameValues != p.gameValues)
     {
+        const bool blockDropped = g_step.faults != p.faults || g_step.refused != p.refused;
         p.faults = g_step.faults;
         p.refused = g_step.refused;
-        Log(L"probe: step: the physics thread dropped its block (%ld faults, %ld writes refused as a wheel's constraint changed, so far) until the next one",
-            (long)p.faults, (long)p.refused);
+        p.gameValues = g_step.gameValues;
+        Log(L"probe: step: %s so far %ld faults and %ld writes refused (a wheel or its constraint no longer the block's: the block is dropped until the next one); %ld "
+            L"times a wheel held the game's own spring or damping (left until the next block, which takes it as the stock)",
+            blockDropped ? L"the physics thread dropped its block;" : L"a wheel left for the game's own value;", (long)p.faults, (long)p.refused, (long)p.gameValues);
     }
     if (b.traced) SuspStepHistoryAdd(p);
     if (p.report && now >= p.report)
@@ -4917,6 +4971,38 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
         p.due = now + kStepTestEvery;
     }
     return p.generation;
+}
+
+// Once, with a truck driven and the drive's hook in for kStepThreadsCalls calls (BRIEF_step_hook_writes.md point 3, the
+// Reviewer's addendum 1): the threads the truck's action was applied on, as a set, and whether the truck update's is
+// among them. Nothing in the step hook may take them for one thread.
+static const long kStepThreadsCalls = 600;
+static void StepThreadsLog()
+{
+    static bool told = false;
+    long hits = 0, calls = 0;
+    if (told || !CreepHooked()) return;
+    CreepCounts(hits, calls);
+    if (calls < kStepThreadsCalls) return;
+    told = true;
+    DWORD ids[32], fns[kFnCount], truckThread = 0, driveThread = 0;
+    bool full = false;
+    const int n = DriveThreadsGet(ids, 32, full);
+    GearboxThreadsGet(fns, truckThread, driveThread);
+    char list[400] = "";
+    int used = 0;
+    bool among = false;
+    for (int i = 0; i < n && used >= 0 && used < (int)sizeof list - 16; i++)
+    {
+        used += FmtCut(list + used, sizeof list - used, "%s%lu", i ? ", " : "", (unsigned long)ids[i]);
+        among |= truckThread && ids[i] == truckThread;
+    }
+    if (!truckThread)
+        Log(L"steps: the wheels' drive ran on %d%s threads in its first %ld calls (%S); the truck update is not hooked, so its thread is not known", n,
+            full ? L" or more" : L"", calls, list);
+    else
+        Log(L"steps: the wheels' drive ran on %d%s threads in its first %ld calls (%S); the truck update's thread %lu is %s", n, full ? L" or more" : L"", calls, list,
+            (unsigned long)truckThread, among ? L"among them" : L"not among them");
 }
 
 static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s, bool front, TruckRaw &raw, World &world)
@@ -5025,7 +5111,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     SuspDamperBefore(w.step, m, w.refs, s, w.found, damperOwns, springOwns);
     SuspTuneTest stepTestNow;
     const SuspTuneTest *stepTest = w.found ? SuspStepTestPass(w.step, m, w.refs, raw, s, now, stepTestNow) : nullptr;
-    if (w.found) SuspTunePass(w.tune, m, w.refs, s, stepTest, damperOwns, springOwns);
+    if (w.found) SuspGameTake(w.step, w.tune);
+    const SuspModWords words = g_step.words;
+    if (w.found) SuspTunePass(w.tune, m, w.refs, s, stepTest, damperOwns, springOwns, &words);
     if (w.found) FrameFlexPass(w.frame, m, w.refs, s);
     if (w.found && w.step.on && w.step.value < 0.0f && w.refs.wheels > 0)
     {
@@ -5057,6 +5145,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         SwingLog(m, w.refs, w.camber);
     }
     const uint32_t generation = SuspStepPass(w.step, m, w.refs, raw, s, w.tune, w.found, now, w.swayOff, w.airHeight, w.tilt, w.airAxles);
+    if (w.found) StepThreadsLog();
     if (probe && w.found) SuspTravelProbe(w.travel, w.travelAt, m, w.refs, raw, now, generation);
     WorldRead(m, w.found ? w.refs.control : 0, world);
     // a load ended (the game's loading screen gone): the truck that drives on under the game's id it had before the

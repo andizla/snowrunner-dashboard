@@ -836,7 +836,14 @@ def s_suspension():
 compression end SuspensionMin (+0xB4), and the attach point the spring hangs from (+0xA0 to +0xA8, in the frame of the body
 the constraint is on). A detour in the wheels' drive reads each wheel's place <i>x</i> along the axis and its speed <i>v</i>
 every physics step and writes there, so the features act on each step, not on the mod's 50 ms pass
-(<code>suspension_step.h</code>). The stock values are read once a truck. A truck left tuned gets them back when another is
+(<code>suspension_step.h</code>). With that hook in, SpringScale and DampingScale are written there too, so a wheel's spring
+and damping land in the same step. The hook takes each wheel from the truck's action as the game walks it (the truck at
++0x30, its wheel models from +0x200) and writes only where that wheel, its constraint and the constraint's class are the
+ones the mod's thread handed it. Before each write it reads the field. A word the mod wrote there, or the stock, it writes
+over. Any other word is the game's own, from an upgrade or a repair: the wheel is left, and the mod's thread takes that word
+as the new stock. A constraint at a new address that holds the mod's last word keeps the old stock, so a tune is never
+applied twice. The camber, the torque factor and the power stay on the mod's thread: the solve does not read the camber,
+and the other two are single words. The stock values are read once a truck. A truck left tuned gets them back when another is
 driven, so a truck driven again is scaled once and never twice. Compression is negative <i>x</i>; <i>L</i> is the
 compression travel as tuned and <i>u</i> = −<i>x</i> / <i>L</i>, from 0 to 1, how far into it the wheel is.</p>
 <h3>Spring, damping and travel</h3>

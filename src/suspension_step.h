@@ -207,6 +207,29 @@ inline float DamperFactor(const DamperSet &d, float base, float v, bool &clamped
     return want < kDamperLeast ? kDamperLeast : want > kDamperMost ? kDamperMost : want;
 }
 
+// Two floats alike bit for bit, as camber.h's CamberSame: a word is the mod's only where it is the very word written.
+inline bool SuspSame(float a, float b) { return memcmp(&a, &b, sizeof a) == 0; }
+
+// The words the mod last wrote into each wheel's strength ([0], + 0xC4) and damping ([1], + 0xC8): the step hook's,
+// and the let go's after it (BRIEF_step_hook_writes.md, the Reviewer's musts 2 and 3). The mod's thread reads them, so
+// a field holding one of them is the mod's and never a new stock, in place or at a new address.
+struct SuspModWords
+{
+    uint64_t vehicle;
+    uint64_t c[kMaxWheels];        // the constraint the words went to
+    float word[kMaxWheels][2];
+    bool has[kMaxWheels][2];
+};
+
+// A wheel's fields as the hook found them where one held a word not the mod's (the game's own, an upgrade or a repair
+// in place): handed to the mod's thread, which takes them as the new stock.
+struct SuspGameSet
+{
+    uint64_t c;
+    float value[2];
+    bool has[2];
+};
+
 // What the mod's thread hands the physics thread, published whole (SuspStepPublish). serial and seal match when it is.
 struct SuspStepBlock
 {
@@ -245,6 +268,15 @@ struct SuspStepBlock
     float tiltForward, tiltLeft;   // how far the chassis's forward and left axes point up (their y, the tilt lamp's), NaN not known
     bool display;                  // the display's figures are published each step
     float travelMax[kMaxWheels];   // the droop end, for the display's bars
+    // the tune on the step (BRIEF_step_hook_writes.md): SpringScale and DampingScale written here each step, base and
+    // baseK, wherever no feature writes the field; the mod's thread then never writes them
+    bool tuneK, tuneD;
+    float stockK[kMaxWheels], stockD[kMaxWheels]; // the stock the mod's thread holds: a field at it is no word of the game's
+    bool bare[kMaxWheels];         // its body is not known: the damper and the spring's features leave it, only the tune writes it
+    // the walk (the Reviewer's must 4): each wheel taken from the action at the write, as the game's applyAction walks
+    // them (SuspWalk); off, the block's wheels are written as before
+    bool walk;
+    uint64_t vehicle, wheelClass;
     uint32_t seal;
 };
 
@@ -334,6 +366,11 @@ struct SuspStepState
     volatile LONG displays;
     SuspLevel level;               // the air suspension's (read by the mod's thread for the tab and the log)
     volatile LONG levelTaken;      // rest places taken so far
+    SuspModWords words;            // the hook's last words (and the let go's), read by the mod's thread
+    SuspGameSet game[kMaxWheels];  // the game's own values found in a wheel's fields, each published by its count
+    volatile LONG gameCount[kMaxWheels];
+    volatile LONG gameValues;      // wheels left for the game's own values so far, for the probe's line
+    uint32_t leftSerial[kMaxWheels]; // the block whose writes leave this wheel (the game's value is there)
 };
 
 // The block published: written into the slot the physics thread is not reading (the one published two passes ago),
@@ -508,6 +545,75 @@ inline int SuspDamperWrite(uint64_t wheel, uint64_t constraint, uint64_t vtable,
     }
 }
 
+// The wheels as the game's applyAction (c41640 in 6ab52f5d, review\ssl_prestep_coop.md part A) walks them: the truck
+// at action + 0x30, its wheel models from + 0x200 to + 0x208, each model's wheel at + 0x2C8. A wheel not of the wheel
+// class is skipped, as TruckFind skips it, so the indexes are the block's (the Reviewer's must 4). All under __try.
+// Returns how many, -1 where the truck there is not the block's or its list is not one, -2 on a fault.
+inline int SuspWalk(uint64_t action, uint64_t vehicle, uint64_t wheelClass, uint64_t *out)
+{
+    __try
+    {
+        const uint64_t truck = *(const uint64_t *)(uintptr_t)(action + 0x30);
+        if (!truck || truck != vehicle) return -1;
+        const uint64_t begin = *(const uint64_t *)(uintptr_t)(truck + 0x200), end = *(const uint64_t *)(uintptr_t)(truck + 0x208);
+        if (end <= begin || (end - begin) % 8 || end - begin > kMaxWheels * 8) return -1;
+        int n = 0;
+        for (uint64_t at = begin; at < end; at += 8)
+        {
+            const uint64_t model = *(const uint64_t *)(uintptr_t)at;
+            if (!model) continue;
+            const uint64_t wheel = *(const uint64_t *)(uintptr_t)(model + 0x2C8);
+            if (wheel && *(const uint64_t *)(uintptr_t)wheel == wheelClass) out[n++] = wheel;
+        }
+        return n;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return -2;
+    }
+}
+
+// The words a field may hold for the hook to write it: its own last word for that constraint (has), the block's stock,
+// or the value the block wants there.
+struct SuspWords
+{
+    bool has;
+    float last, stock, want;
+};
+inline bool SuspOurs(float now, const SuspWords &w) { return (w.has && SuspSame(now, w.last)) || SuspSame(now, w.stock) || SuspSame(now, w.want); }
+
+// One step's write of a wheel's strength and damping (the Reviewer's musts 2 and 4): right before it, the walk's wheel
+// must be the block's, [wheel + 0x28] the block's constraint, its first word the known class, and each field to be
+// written must hold one of the mod's words (check: [0] the strength, [1] the damping). Any other word is the game's
+// own: neither field is written, and seen and theirs say what they held. Both fields are read before either is
+// written, so a wheel's pair lands in one step. A negative value is not written. All under __try. 1 written, 0 refused,
+// 2 the game's own value there, -1 a fault.
+inline int SuspFieldWrite(uint64_t walked, uint64_t wheel, uint64_t constraint, uint64_t vtable, float strength, float factor, const SuspWords check[2], float seen[2],
+                          bool theirs[2])
+{
+    __try
+    {
+        if (walked != wheel || *(const uint64_t *)(uintptr_t)(wheel + 0x28) != constraint || *(const uint64_t *)(uintptr_t)constraint != vtable) return 0;
+        volatile float *const field[2] = { (volatile float *)(uintptr_t)(constraint + 0xC4), (volatile float *)(uintptr_t)(constraint + 0xC8) };
+        const float want[2] = { strength, factor };
+        bool game = false;
+        for (int k = 0; k < 2; k++)
+        {
+            seen[k] = *field[k];
+            theirs[k] = want[k] >= 0.0f && !SuspOurs(seen[k], check[k]);
+            game |= theirs[k];
+        }
+        if (game) return 2;
+        for (int k = 0; k < 2; k++)
+            if (want[k] >= 0.0f) *field[k] = want[k];
+        return 1;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return -1;
+    }
+}
+
 // A wheel's place x along its axis from the step's height, and whether the block knows it.
 inline bool SuspPlace(const SuspStepBlock &b, int i, float h, float attach, float &x)
 {
@@ -533,45 +639,87 @@ inline void SuspPlaceAdd(SuspStepState &s, const SuspStepBlock &b, const float *
     }
 }
 
-// The damper's and the spring's step, after the figures: each wheel the block names, at the speed just worked out and
-// the place just read. False where a write was refused or faulted: the block is then dropped.
-inline bool SuspDamperStep(SuspStepState &s, const SuspStepBlock &b, const float *h, const float *attach, float dt, bool timed)
+// The damper's, the spring's and the tune's step, after the figures: each wheel the block names, at the speed just
+// worked out and the place just read. The damper and the spring's features need this generation's speed (timed, and a
+// step of it before); the tune writes the wheel's damping and strength as the tune gives them from the first step,
+// wherever no feature has the field. walked: the wheels the walk found (SuspWalk), else the block's. A wheel whose
+// field holds a word not the mod's is left for this block, its values published (the Reviewer's must 2). False where
+// a write was refused or faulted: the block is then dropped.
+inline bool SuspDamperStep(SuspStepState &s, const SuspStepBlock &b, const float *h, const float *attach, float dt, bool timed, const uint64_t *walked = nullptr)
 {
-    if ((!b.damping && !b.springing) || !timed || !s.have || s.generation != b.generation) return true;
+    if (!b.damping && !b.springing && !b.tuneK && !b.tuneD) return true;
+    const bool moving = timed && s.have && s.generation == b.generation;
     for (int i = 0; i < b.wheels && i < kMaxWheels; i++)
     {
-        if (!b.constraint[i]) continue;
+        if (!b.constraint[i] || s.leftSerial[i] == b.serial) continue;
         float x = 0.0f;
         float next = 0.0f;
-        const bool placed = SuspPlace(b, i, h[i], attach[i], x) && b.travel[i] > 0.0f && SuspPlace(b, i, h[i] + s.v[i] * dt, attach[i], next);
+        const bool placed = moving && SuspPlace(b, i, h[i], attach[i], x) && b.travel[i] > 0.0f && SuspPlace(b, i, h[i] + s.v[i] * dt, attach[i], next);
         const float u = placed ? SuspDepth(x, b.travel[i]) : 0.0f, ahead = placed ? SuspDepth(next, b.travel[i]) : 0.0f;
         bool clamped = false;
         float f = -1.0f, k = -1.0f;
-        if (b.damping && b.base[i] > 0.0f)
+        const bool damper = b.damping && !b.bare[i], spring = b.springing && !b.bare[i] && b.travel[i] > 0.0f;
+        if (damper)
         {
             // stock x DampingScale x G(v) x the zone and the bump stop, held once
-            const float zone = placed && ZonesOn(b.spring) ? ZoneFactor(b.spring, u, s.v[i], b.travel[i], ahead) : 1.0f;
-            f = DamperFactor(b.damper, b.base[i] * zone, s.v[i], clamped);
+            if (moving && b.base[i] > 0.0f)
+            {
+                const float zone = placed && ZonesOn(b.spring) ? ZoneFactor(b.spring, u, s.v[i], b.travel[i], ahead) : 1.0f;
+                f = DamperFactor(b.damper, b.base[i] * zone, s.v[i], clamped);
+            }
         }
-        if (b.springing && b.baseK[i] > 0.0f && placed)
+        else if (b.tuneD && b.base[i] > 0.0f) f = b.base[i];
+        if (spring && moving && placed && b.baseK[i] > 0.0f)
         {
             const float want = b.baseK[i] * SpringF(b.spring, u, b.travel[i], ahead);
             k = want < kSpringLeast ? kSpringLeast : want > 1.0f ? 1.0f : want;
         }
+        else if (b.tuneK && b.baseK[i] > 0.0f && !(spring && !moving)) k = b.baseK[i];
         if (f < 0.0f && k < 0.0f) continue;
-        const int done = SuspDamperWrite(b.wheel[i], b.constraint[i], b.vtable, f, k);
+        const uint64_t c = b.constraint[i];
+        const bool mine = s.words.vehicle == b.vehicle && s.words.c[i] == c;
+        const SuspWords check[2] = { { mine && s.words.has[i][0], s.words.word[i][0], b.stockK[i], b.baseK[i] },
+                                     { mine && s.words.has[i][1], s.words.word[i][1], b.stockD[i], b.base[i] } };
+        float seen[2] = {};
+        bool theirs[2] = {};
+        const int done = SuspFieldWrite(walked ? walked[i] : b.wheel[i], b.wheel[i], c, b.vtable, k, f, check, seen, theirs);
+        if (done == 2)
+        {
+            // the game's own value: this wheel is left until the next block, which takes it as the stock
+            SuspGameSet &g = s.game[i];
+            g.c = c;
+            for (int n = 0; n < 2; n++) g.value[n] = seen[n], g.has[n] = theirs[n];
+            _WriteBarrier();
+            InterlockedIncrement(&s.gameCount[i]);
+            InterlockedIncrement(&s.gameValues);
+            s.leftSerial[i] = b.serial;
+            continue;
+        }
         if (done <= 0)
         {
             InterlockedIncrement(done < 0 ? &s.faults : &s.refused);
             return false;
         }
-        if (f >= 0.0f)
+        if (s.words.vehicle != b.vehicle)
+        {
+            memset(&s.words, 0, sizeof s.words);
+            s.words.vehicle = b.vehicle;
+        }
+        if (!mine)
+        {
+            s.words.has[i][0] = s.words.has[i][1] = false;
+            s.words.c[i] = c;
+        }
+        if (k >= 0.0f) s.words.word[i][0] = k, s.words.has[i][0] = true;
+        if (f >= 0.0f) s.words.word[i][1] = f, s.words.has[i][1] = true;
+        // the window's counts are the features' writes, not the tune's
+        if (f >= 0.0f && damper)
         {
             s.win.written[i]++;
             s.win.clamped[i] += clamped;
             s.win.writtenSum[i] += f;
         }
-        if (k >= 0.0f)
+        if (k >= 0.0f && spring && placed)
         {
             s.win.springWritten[i]++;
             s.win.springSum[i] += k;
@@ -797,7 +945,7 @@ inline int SuspAttachWrite(uint64_t wheel, uint64_t constraint, uint64_t vtable,
 // game: the features stop for the truck, the mod's thread puts the stock back), then stock + the ride height, the test's
 // shift, the bar's and the levelling's, held to kShiftMost, along the axis. The bar works off the place just read. False
 // where a write was refused or faulted.
-inline bool SuspAttachStep(SuspStepState &s, const SuspStepBlock &b, const float *h, const float *attach, float speed = 0.0f, float dt = 0.0f)
+inline bool SuspAttachStep(SuspStepState &s, const SuspStepBlock &b, const float *h, const float *attach, float speed = 0.0f, float dt = 0.0f, const uint64_t *walked = nullptr)
 {
     // the levelling starts over at once when another truck is taken or the block stops shifting (the guard); turned off,
     // it fades out first (below)
@@ -858,7 +1006,7 @@ inline bool SuspAttachStep(SuspStepState &s, const SuspStepBlock &b, const float
     {
         if (!b.attachC[i] || !b.attachAt[i] || b.axisUp[i] == 0.0f) continue;
         const float value = b.attachStock[i] + SuspShiftHold(shift[i]) * b.axisUp[i];
-        const int done = SuspAttachWrite(b.wheel[i], b.attachC[i], b.vtable, b.attachAt[i], value);
+        const int done = walked && walked[i] != b.wheel[i] ? 0 : SuspAttachWrite(b.wheel[i], b.attachC[i], b.vtable, b.attachAt[i], value);
         if (done <= 0)
         {
             InterlockedIncrement(done < 0 ? &s.faults : &s.refused);
@@ -915,7 +1063,23 @@ inline void SuspStepLook(SuspStepState &s, const SuspStepBlock *published, uint6
     if (had) SuspPlaceAdd(s, b, h, attach, speed);
     if (dt > 0.0f && dt <= kStepDtMost) s.clock += dt;
     if (had) SuspDisplayStep(s, b, h, attach, speed);
-    if (!SuspDamperStep(s, b, h, attach, dt, had && dt > 0.0f && dt <= kStepDtMost) || (had && !SuspAttachStep(s, b, h, attach, speed, dt > 0.0f && dt <= kStepDtMost ? dt : 0.0f)))
+    // the wheels from the action at the write (the Reviewer's must 4), where the block has writes and the walk is in
+    uint64_t walked[kMaxWheels] = {};
+    const bool writes = b.damping || b.springing || b.tuneK || b.tuneD || b.shifting;
+    if (writes && b.walk)
+    {
+        const int n = SuspWalk(action, b.vehicle, b.wheelClass, walked);
+        if (n < 0)
+        {
+            InterlockedIncrement(n == -2 ? &s.faults : &s.refused);
+            s.faultSerial = b.serial;
+            s.have = false;
+            return;
+        }
+    }
+    const uint64_t *const wheels = writes && b.walk ? walked : nullptr;
+    if (!SuspDamperStep(s, b, h, attach, dt, had && dt > 0.0f && dt <= kStepDtMost, wheels) ||
+        (had && !SuspAttachStep(s, b, h, attach, speed, dt > 0.0f && dt <= kStepDtMost ? dt : 0.0f, wheels)))
     {
         s.faultSerial = b.serial;
         s.have = false;
@@ -924,10 +1088,31 @@ inline void SuspStepLook(SuspStepState &s, const SuspStepBlock *published, uint6
 
 // The damper let go (the mod's thread, once the physics thread has stepped past the block that ran it): each wheel's
 // damping and strength as the tune gives them (stock times DampingScale and SpringScale), where the physics thread
-// wrote them and the constraint is still the block's and of its class. Returns the wheels written.
-inline int SuspDamperLetGo(const SuspStepBlock &b, const TruckMemory &m)
+// wrote them and the constraint is still the block's and of its class. Returns the wheels written. words: the mod's
+// last words (the hook's), nullptr for no check. With them a field is put back only where it holds a word of the
+// mod's, so a value the game set itself stays, and each value put back becomes the mod's word there.
+inline int SuspDamperLetGo(const SuspStepBlock &b, const TruckMemory &m, SuspModWords *words = nullptr)
 {
     int back = 0;
+    if (words && words->vehicle != b.vehicle) words = nullptr; // another truck's words: no check by them, none kept
+    // one field put back where it holds a word of the mod's; k: 0 the strength, 1 the damping
+    auto putBack = [&](int i, uint64_t c, int k, float value) {
+        const uint64_t at = c + (k ? 0xC8 : 0xC4);
+        if (words)
+        {
+            float now = 0.0f;
+            const bool mine = words->c[i] == c && words->has[i][k];
+            const SuspWords check = { mine, words->word[i][k], k ? b.stockD[i] : b.stockK[i], value };
+            if (!m.get(at, now) || !SuspOurs(now, check)) return false;
+        }
+        if (!m.put(at, value)) return false;
+        if (words)
+        {
+            if (words->c[i] != c) words->has[i][0] = words->has[i][1] = false, words->c[i] = c;
+            words->word[i][k] = value, words->has[i][k] = true;
+        }
+        return true;
+    };
     for (int i = 0; i < b.wheels && i < kMaxWheels; i++)
     {
         uint64_t c = 0, vt = 0;
@@ -940,8 +1125,8 @@ inline int SuspDamperLetGo(const SuspStepBlock &b, const TruckMemory &m)
             back += put;
             continue;
         }
-        if (b.damping && b.base[i] > 0.0f) put |= m.put(c + 0xC8, b.base[i]);
-        if (b.springing && b.baseK[i] > 0.0f) put |= m.put(c + 0xC4, b.baseK[i]);
+        if ((b.damping || b.tuneD) && b.base[i] > 0.0f) put |= putBack(i, c, 1, b.base[i]);
+        if ((b.springing || b.tuneK) && b.baseK[i] > 0.0f) put |= putBack(i, c, 0, b.baseK[i]);
         back += put;
     }
     return back;

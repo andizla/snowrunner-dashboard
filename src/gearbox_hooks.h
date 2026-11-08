@@ -201,3 +201,5 @@ void DriveStepSet(DriveStepFn step);
 void CreepGive(uint64_t action, float share);
 // The hook's calls so far: for the action given (hits) and all of them.
 void CreepCounts(long &hits, long &calls);
+// The threads the drive was called on so far, at most most of them; full where more were seen than are kept.
+int DriveThreadsGet(DWORD *out, int most, bool &full);

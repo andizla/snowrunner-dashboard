@@ -471,12 +471,41 @@ static CreepSlot g_creepSlots[2];
 static int g_creepNext = 0;
 static bool g_creepHooked = false;
 
+// Each thread the drive was called on, kept in a slot of its own (the Reviewer's addendum 1 to
+// BRIEF_step_hook_writes.md: the truck's action is applied on Havok's worker threads, not on one stepping thread).
+// Lock free: a slot is taken with a compare and swap; past kDriveThreads the set is marked full.
+static const int kDriveThreads = 32;
+static volatile LONG g_driveThreads[kDriveThreads] = {}, g_driveThreadsFull = 0;
+static void DriveThreadNote(LONG id)
+{
+    for (int i = 0; i < kDriveThreads; i++)
+    {
+        const LONG at = g_driveThreads[i];
+        if (at == id) return;
+        if (at) continue;
+        const LONG was = InterlockedCompareExchange(&g_driveThreads[i], id, 0);
+        if (!was || was == id) return;
+    }
+    g_driveThreadsFull = 1;
+}
+
+int DriveThreadsGet(DWORD *out, int most, bool &full)
+{
+    int n = 0;
+    for (int i = 0; i < kDriveThreads && n < most; i++)
+        if (const LONG id = g_driveThreads[i]) out[n++] = (DWORD)id;
+    full = g_driveThreadsFull != 0;
+    return n;
+}
+
 // The creep's larger of the two throttles, as the stub's maxss had it (the share where the game's is not a number),
 // then the step probe's look, then on into the drive with the step's seconds as they came.
 static void CreepDrive(void *action, float throttle, float dt)
 {
     InterlockedIncrement(&g_creepCalls);
-    g_driveThread = (LONG)GetCurrentThreadId();
+    const LONG thread = (LONG)GetCurrentThreadId();
+    if (thread != g_driveThread) DriveThreadNote(thread);
+    g_driveThread = thread;
     const CreepSlot *slot = (const CreepSlot *)g_creepSlot;
     if (slot && (uint64_t)(uintptr_t)action == slot->action)
     {

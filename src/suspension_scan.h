@@ -10,6 +10,7 @@
 #include <string.h>
 #include "truck.h"
 #include "clock_scan.h"
+#include "suspension_step.h"
 
 static const char *const kSuspConstraintName = ".?AVhkpWheelConstraintData@@";
 static const uint32_t kSuspFirst = 0x800, kSuspSecond = 0x400; // bytes read of a wheel object or model, and of an object it points to
@@ -175,10 +176,22 @@ struct SuspTuneTest
 // restored: the values of the truck driven before put back on this pass (another truck is driven now).
 // test: SuspStepTest's write, nullptr for none. damper: per wheel, the damper owns its damping (suspension_step.h):
 // the tune neither writes it nor takes what it finds there for a new stock, so the damper's values never compound
-// (review 15); nullptr for none. spring: the same for the strength (the spring's features, BRIEF_suspension_extras.md).
+// (review 15); nullptr for none. spring: the same for the strength (the spring's features, BRIEF_suspension_extras.md),
+// and both for the tune on the step (BRIEF_step_hook_writes.md). words: the mod's last words in each wheel's strength
+// and damping (the step hook's and the let go's), nullptr for none: each is taken as the tune's own write, so it puts
+// the stock back on a truck switch and is never a new stock, in place or at a new address (the Reviewer's must 3).
 inline int SuspTuneStep(SuspTune &t, const TruckMemory &m, const TruckRefs &r, uint64_t vtable, const float scale[kSuspValues], int *restored = nullptr,
-                        const SuspTuneTest *test = nullptr, const bool *damper = nullptr, const bool *spring = nullptr, float extra = 0.0f)
+                        const SuspTuneTest *test = nullptr, const bool *damper = nullptr, const bool *spring = nullptr, float extra = 0.0f,
+                        const SuspModWords *words = nullptr)
 {
+    if (words && words->vehicle && words->vehicle == t.vehicle)
+        for (int i = 0; i < kMaxWheels; i++)
+        {
+            SuspWheel &w = t.wheel[i];
+            if (!w.constraint || words->c[i] != w.constraint) continue;
+            for (int k = 0; k < 2; k++)
+                if (words->has[i][k]) w.wrote[k] = words->word[i][k], w.ours[k] = !SuspSame(w.wrote[k], w.stock[k]);
+        }
     // the fields the physics thread owns on a wheel: the damping (the damper, the zones) and the strength (the spring's features)
     auto owned = [&](int i, int k) { return (damper && damper[i] && k == kSuspDamping) || (spring && spring[i] && k == kSuspStrength); };
     if (restored) *restored = 0;
@@ -203,8 +216,17 @@ inline int SuspTuneStep(SuspTune &t, const TruckMemory &m, const TruckRefs &r, u
         if (!read) continue;
         if (w.constraint != c)
         {
+            // a constraint at a new address: a value that is the word the mod last wrote for this wheel is the mod's, so
+            // the stock stays (the game copied the tuned values over: x2 never becomes x4, review 1 F1); any other is
+            // the game's new stock
+            const SuspWheel old = w;
             w = SuspWheel{ c };
-            memcpy(w.stock, now, sizeof w.stock);
+            for (int k = 0; k < kSuspValues; k++)
+            {
+                const bool mine = old.constraint && old.ours[k] && SuspSame(now[k], old.wrote[k]);
+                w.stock[k] = mine ? old.stock[k] : now[k];
+                if (mine) w.wrote[k] = now[k], w.ours[k] = true;
+            }
             w.fresh = true;
         }
         else
@@ -242,6 +264,19 @@ inline int SuspTuneStep(SuspTune &t, const TruckMemory &m, const TruckRefs &r, u
         }
     }
     return written;
+}
+
+// A value the step hook found the game had set itself in a field the hook writes (suspension_step.h, SuspGameSet): the
+// wheel's new stock, where the tune is still on that truck (vehicle, the block's) and the wheel's constraint is c. k:
+// kSuspStrength or kSuspDamping. True where taken; the next block then wants the slider times it.
+inline bool SuspTuneTake(SuspTune &t, uint64_t vehicle, int i, uint64_t c, int k, float value)
+{
+    if (t.vehicle != vehicle || i < 0 || i >= kMaxWheels || (k != kSuspStrength && k != kSuspDamping) || !c || t.wheel[i].constraint != c) return false;
+    SuspWheel &w = t.wheel[i];
+    w.stock[k] = value;
+    w.ours[k] = false;
+    w.fresh = true;
+    return true;
 }
 
 // ---- the travel probe (review 14: constraint + 0xA4 is the attach point the game's deviation moves, not the travel) ----

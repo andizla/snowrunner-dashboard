@@ -2651,6 +2651,133 @@ int main()
         Check(tuned && kept && back && ownAgain, "spring ownership: with a spring feature on a wheel the tune keeps its strength stock however the field changes, the damping "
                                                  "still its own; let go writes stock x SpringScale back and the tune takes it as its own");
     }
+    // the tune on the step (BRIEF_step_hook_writes.md, in this process's memory): the walk from the action finds each
+    // wheel as the game's applyAction walks them, past a model whose wheel is not of the wheel class, and none for another
+    // truck; each wheel's spring and damping land in one step together; a slider move writes over the hook's own word; a
+    // field holding a word not the mod's is the game's: neither field written, its value published once, the wheel left
+    // until the next block, which takes it as the stock; a walk's wheel not the block's is a refusal, never a write
+    {
+        static SuspStepState s;
+        memset(&s, 0, sizeof s);
+        const uint64_t vtable = 0x140000000ull + 0x23d9538, wheelClass = 0x140000000ull + 0x2222220;
+        static uint64_t truck[0x300 / 8], action[0x40 / 8], models[3], modelA[0x2D0 / 8], modelB[0x2D0 / 8], modelC[0x2D0 / 8], wheelA[0x200 / 8], other[0x200 / 8],
+            wheelC[0x200 / 8], cA[0x100 / 8], cC[0x100 / 8];
+        static float body[0x300 / 4];
+        memset(truck, 0, sizeof truck), memset(action, 0, sizeof action), memset(modelA, 0, sizeof modelA), memset(modelB, 0, sizeof modelB);
+        memset(modelC, 0, sizeof modelC), memset(wheelA, 0, sizeof wheelA), memset(other, 0, sizeof other), memset(wheelC, 0, sizeof wheelC);
+        memset(cA, 0, sizeof cA), memset(cC, 0, sizeof cC), memset(body, 0, sizeof body);
+        auto addr = [](const void *p) { return (uint64_t)(uintptr_t)p; };
+        wheelA[0] = wheelC[0] = wheelClass;
+        other[0] = 0x1234;                                   // a wheel model whose wheel is not of the wheel class
+        modelA[0x2C8 / 8] = addr(wheelA), modelB[0x2C8 / 8] = addr(other), modelC[0x2C8 / 8] = addr(wheelC);
+        models[0] = addr(modelA), models[1] = addr(modelB), models[2] = addr(modelC);
+        truck[0x200 / 8] = addr(models), truck[0x208 / 8] = addr(models + 3);
+        action[0x30 / 8] = addr(truck);
+        wheelA[0x28 / 8] = addr(cA), wheelC[0x28 / 8] = addr(cC);
+        cA[0] = cC[0] = vtable;
+        float *kA = (float *)((uint8_t *)cA + 0xC4), *dA = (float *)((uint8_t *)cA + 0xC8), *kC = (float *)((uint8_t *)cC + 0xC4), *dC = (float *)((uint8_t *)cC + 0xC8);
+        *kA = 0.026f, *dA = 0.4f, *kC = 0.03f, *dC = 0.5f;
+        uint64_t walked[kMaxWheels] = {};
+        const bool walk = SuspWalk(addr(action), addr(truck), wheelClass, walked) == 2 && walked[0] == addr(wheelA) && walked[1] == addr(wheelC) &&
+                          SuspWalk(addr(action), 0x999, wheelClass, walked) == -1;
+        SuspStepBlock b = {};
+        b.action = addr(action), b.vehicle = addr(truck), b.wheelClass = wheelClass, b.walk = true;
+        b.chassis = b.body[0] = b.body[1] = addr(body);
+        b.wheels = 2, b.wheel[0] = addr(wheelA), b.wheel[1] = addr(wheelC), b.generation = 1, b.vtable = vtable;
+        b.tuneK = b.tuneD = true;
+        b.constraint[0] = addr(cA), b.constraint[1] = addr(cC);
+        b.stockK[0] = 0.026f, b.stockD[0] = 0.4f, b.baseK[0] = 0.052f, b.base[0] = 0.2f; // SpringScale 2, DampingScale 0.5
+        b.stockK[1] = 0.03f, b.stockD[1] = 0.5f, b.baseK[1] = 0.06f, b.base[1] = 0.25f;
+        static SuspStepBlock slots[2];
+        static SuspStepBlock *volatile slot = nullptr;
+        int next = 0;
+        uint32_t serial = 0;
+        const float step = 1.0f / 64.0f;
+        SuspStepPublish(slots, next, &slot, b, serial);
+        SuspStepLook(s, slot, addr(action), step);
+        const bool pair = *kA == 0.052f && *dA == 0.2f && *kC == 0.06f && *dC == 0.25f && s.words.vehicle == addr(truck) && s.words.has[0][0] && s.words.word[0][1] == 0.2f &&
+                          s.win.written[0] == 0 && s.win.springWritten[0] == 0;
+        b.baseK[0] = 0.078f;                                  // SpringScale 3: the field holds the hook's own word
+        SuspStepPublish(slots, next, &slot, b, serial);
+        SuspStepLook(s, slot, addr(action), step);
+        const bool moved = *kA == 0.078f;
+        *kC = 0.045f;                                         // the game sets wheel 1's spring itself (an upgrade)
+        SuspStepLook(s, slot, addr(action), step);
+        const bool left = *kC == 0.045f && *dC == 0.25f && s.gameCount[1] == 1 && s.gameValues == 1 && s.game[1].c == addr(cC) && s.game[1].has[0] && !s.game[1].has[1] &&
+                          s.game[1].value[0] == 0.045f && s.refused == 0 && s.faults == 0 && *kA == 0.078f;
+        SuspStepLook(s, slot, addr(action), step);
+        const bool once = s.gameCount[1] == 1 && *kC == 0.045f;
+        b.stockK[1] = 0.045f, b.baseK[1] = 0.09f;             // the mod's thread took it as the stock: the next block wants x2 of it
+        SuspStepPublish(slots, next, &slot, b, serial);
+        SuspStepLook(s, slot, addr(action), step);
+        const bool taken = *kC == 0.09f;
+        b.wheel[0] = addr(other);                             // the walk's wheel 0 is not the block's
+        b.baseK[1] = 0.12f;
+        SuspStepPublish(slots, next, &slot, b, serial);
+        SuspStepLook(s, slot, addr(action), step);
+        const bool refused = s.refused == 1 && *kA == 0.078f && *kC == 0.09f;
+        Check(walk && pair && moved && left && once && taken && refused,
+              "step tune: the walk from the action skips a model whose wheel is not of the wheel class and finds none for another truck; a wheel's spring and damping land "
+              "in one step; a slider move writes over the hook's own word; the game's own word is left, published once and taken on the next block; a walk's wheel not "
+              "the block's is refused, never written");
+    }
+
+    // the mod's words on the mod's thread (the Reviewer's musts 3 and 5): a field the hook writes is never written by the
+    // tune, nor taken for a stock; a new constraint holding the mod's last word keeps the stock (x2 never becomes x4), one
+    // holding another value is the game's new stock; the let go leaves a value the game set itself and puts one back
+    // over the mod's word, which becomes the mod's; the game's value the hook found is taken as the stock
+    {
+        const uint64_t vtable = kExe + 0x23d9538, wheel = 0x10500000, c = 0x10510000, c2 = 0x10520000, c3 = 0x10530000;
+        Block(wheel, 0x200);
+        for (const uint64_t at : { c, c2, c3 })
+        {
+            Block(at, 0x200);
+            Put(at, vtable);
+            Put(at + 0xC8, 0.4f);
+            Put(at + 0xB4, -0.6f);
+            Put(at + 0xB8, 0.4f);
+        }
+        Put(wheel + 0x28, c);
+        Put(c + 0xC4, 0.026f);
+        TruckRefs r = {};
+        r.vehicle = kVehicle;
+        r.wheel[0] = wheel;
+        r.wheels = 1;
+        auto at = [&](uint64_t where, uint32_t off) { float v = 0.0f; Peek(where + off, &v, sizeof v); return v; };
+        const float x2[kSuspValues] = { 2.0f, 1.0f, 1.0f, 1.0f }, x3[kSuspValues] = { 3.0f, 1.0f, 1.0f, 1.0f };
+        const bool owns[kMaxWheels] = { true }, none[kMaxWheels] = {};
+        SuspTune tune = {};
+        SuspTuneStep(tune, kMemory, r, vtable, x2, nullptr, nullptr, none, none);
+        const bool thread = Near(at(c, 0xC4), 0.052f);
+        Put(c + 0xC4, 0.06f);                                // the hook's word
+        SuspModWords words = {};
+        words.vehicle = kVehicle, words.c[0] = c, words.word[0][0] = 0.06f, words.has[0][0] = true;
+        SuspTuneStep(tune, kMemory, r, vtable, x3, nullptr, nullptr, none, owns, 0.0f, &words);
+        const bool left = at(c, 0xC4) == 0.06f && tune.wheel[0].stock[kSuspStrength] == 0.026f;
+        Put(c2 + 0xC4, 0.06f);                               // rebuilt at a new address with the tuned value copied over
+        Put(wheel + 0x28, c2);
+        SuspTuneStep(tune, kMemory, r, vtable, x2, nullptr, nullptr, none, none, 0.0f, &words);
+        const bool kept = tune.wheel[0].constraint == c2 && tune.wheel[0].stock[kSuspStrength] == 0.026f && Near(at(c2, 0xC4), 0.052f);
+        Put(c3 + 0xC4, 0.03f);                               // rebuilt with values of its own
+        Put(wheel + 0x28, c3);
+        SuspTuneStep(tune, kMemory, r, vtable, x2, nullptr, nullptr, none, none, 0.0f, &words);
+        const bool anew = tune.wheel[0].constraint == c3 && tune.wheel[0].stock[kSuspStrength] == 0.03f && Near(at(c3, 0xC4), 0.06f);
+        SuspStepBlock lb = {};
+        lb.vehicle = kVehicle, lb.wheels = 1, lb.wheel[0] = wheel, lb.constraint[0] = c3, lb.vtable = vtable, lb.tuneK = true;
+        lb.stockK[0] = 0.03f, lb.baseK[0] = 0.045f;
+        SuspModWords hook = {};
+        hook.vehicle = kVehicle, hook.c[0] = c3, hook.word[0][0] = 0.06f, hook.has[0][0] = true;
+        Put(c3 + 0xC4, 0.07f);                               // the game's own value
+        const bool theirs = SuspDamperLetGo(lb, kMemory, &hook) == 0 && at(c3, 0xC4) == 0.07f;
+        Put(c3 + 0xC4, 0.06f);                               // the hook's last word
+        const bool back = SuspDamperLetGo(lb, kMemory, &hook) == 1 && Near(at(c3, 0xC4), 0.045f) && hook.word[0][0] == lb.baseK[0];
+        const bool take = SuspTuneTake(tune, kVehicle, 0, c3, kSuspStrength, 0.05f) && tune.wheel[0].stock[kSuspStrength] == 0.05f && tune.wheel[0].fresh &&
+                          !SuspTuneTake(tune, kVehicle, 0, c2, kSuspStrength, 0.07f) && !SuspTuneTake(tune, kVehicle + 8, 0, c3, kSuspStrength, 0.07f) &&
+                          tune.wheel[0].stock[kSuspStrength] == 0.05f;
+        Check(thread && left && kept && anew && theirs && back && take,
+              "mod's words: the tune never writes a field the hook writes nor takes it for a stock; a new constraint holding the mod's word keeps the stock (x2, not x4), "
+              "one with its own value is the new stock; the let go leaves the game's own value and puts one back over the mod's word; the game's value is taken as the stock");
+    }
 
     // the quarter car with the spring's features (build A's tests): 60 steps a second, the stock damping a ratio of 0.55
     // at 1.6 Hz, gravity's sag a third of the compression travel, and the strength and the damping written a step late
