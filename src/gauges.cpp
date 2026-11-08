@@ -461,8 +461,14 @@ static void ExitWrite(const char *call, DWORD code)
     CrashLineFlushed(text);
 }
 
+// The filter set before ours at the start, kept beside the one taken at the first truck: a filter set between the two
+// that passes on to ours calls ours again on the same thread, and the guard sends that call here (review M1).
+static LPTOP_LEVEL_EXCEPTION_FILTER g_crashStart = nullptr;
+static crtline::Inside g_crashInside = {};
 static LONG WINAPI CrashLine(EXCEPTION_POINTERS *e)
 {
+    crtline::Guard guard(g_crashInside);
+    if (guard.again) return g_crashStart && g_crashStart != CrashLine ? g_crashStart(e) : EXCEPTION_CONTINUE_SEARCH;
     static volatile LONG once = 0;
     if (e && e->ExceptionRecord && InterlockedExchange(&once, 1) == 0) CrashWrite(e, "crash", "passed on to the game's handler");
     return g_crashBefore ? g_crashBefore(e) : EXCEPTION_CONTINUE_SEARCH;
@@ -525,7 +531,7 @@ static void CrashLineSet()
     set = true;
     wcsncpy_s(g_crashLog, (g_dir + L"Gauges.log").c_str(), _TRUNCATE);
     g_crashModThread = GetCurrentThreadId();
-    g_crashBefore = SetUnhandledExceptionFilter(CrashLine);
+    g_crashBefore = g_crashStart = SetUnhandledExceptionFilter(CrashLine);
     g_faultHandler = AddVectoredExceptionHandler(1, FaultLine);
     void **targets[3] = { (void **)&g_exitProcess, (void **)&g_terminateProcess, (void **)&g_failFast };
     void *const hooks[3] = { (void *)ExitProcessHook, (void *)TerminateProcessHook, (void *)FailFastHook };
@@ -555,9 +561,14 @@ static void CrashLineAgain()
     bool first = false;
     if (g_faultHandler)
     {
-        RemoveVectoredExceptionHandler(g_faultHandler);
-        g_faultHandler = AddVectoredExceptionHandler(1, FaultLine);
-        first = g_faultHandler != nullptr;
+        // the new one first, then the old one out: a fault in between is named twice at most, never missed (review N1)
+        const PVOID added = AddVectoredExceptionHandler(1, FaultLine);
+        if (added)
+        {
+            RemoveVectoredExceptionHandler(g_faultHandler);
+            g_faultHandler = added;
+        }
+        first = added != nullptr;
     }
     const LONG faults = g_faults, throws = g_throws;
     InterlockedExchange(&g_faultLines, 0);
@@ -568,7 +579,7 @@ static void CrashLineAgain()
         (long)faults, (long)throws);
     Log(L"crash line: at the first truck the filter set at the start %s; %s; %s", filterOurs ? L"was still ours" :
         was ? L"had been replaced by the game's own, ours is back in front and passes on to it" : L"had been taken out, ours is back and passes on to Windows",
-        first ? L"ours is first in the vectored chain again" : L"the line for faults as they are raised is not in", crt);
+        first ? L"ours is first in the vectored chain again" : g_faultHandler ? L"ours stays where it was in the vectored chain" : L"the line for faults as they are raised is not in", crt);
 }
 
 // Says where the last start's log went, once this start's first line is in.
