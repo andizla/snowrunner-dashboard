@@ -591,7 +591,9 @@ the updates did, and so is one for another truck or with none driven. The game's
 of 6 November 20:52: a shift posted as a truck switch began was dealt 50 s later). The shift's line names the vehicle it was dealt
 on. With Probe=1, from the function menu's close until the game sets a truck (15 s at most), <code>probe: menu words</code> lines
 give the words around the menu flags the mod reads, each one that changed, and <code>probe: menu words: the watch ends,</code> says
-why it ended. The truck switch's own screen sets no flag the mod reads yet, and these lines are to find one. A switch to another
+why it ended. The truck switch's own screen sets no flag the mod reads yet, and these lines are to find one. While no truck is read,
+<code>game: no truck read:</code> gives the game's words at each change, the garage's pointer as read beside its flag, 100
+lines a start at most. A switch to another
 truck of the same kind logs <code>truck: another truck of the kind:</code>, not "again". In the drive of 3 November all 104 of the mod's shifts and all 158 of the game's own gearbox calls
 ran on that one thread, and +0x70 followed +0x74 one update later.</p>
 <p>Each of the mod's shifts then goes through four stages (<code>ShiftStage</code>, models.h): asked (the job posted), set (the

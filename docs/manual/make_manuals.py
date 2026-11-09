@@ -308,7 +308,10 @@ lists each truck driven by its id, so a truck that never had a set of its own ne
 hold <code>Engine=</code> and <code>Gearbox=</code> for the match. The odometer's count in <code>[Odometer:&lt;id&gt;]</code> follows
 the truck the same way. A match takes it with the set. Where no waiting truck with a set matches, one waiting truck with only a
 count, of the same kind, engine and gearbox, gives its count. A truck bought new can take a parked truck's count that way: Set
-to puts it right. Unticking the box at the
+to puts it right. Before both, the truck that went last comes first: of the same kind, no other truck driven and no loading
+screen between, its truck gone, none of its sections marked, and its engine and gearbox recorded the same. Then it takes all
+its sections, the set and the count, however long the visit to the garage took. The log writes one <code>match:</code> line at
+each match, with what each truck of the kind has and why it was taken or not. Unticking the box at the
 truck's level keeps its set and puts the kind's in force; This truck only brings it back. Every with no set for the kind
 moves the truck's set up to the kind. With a set for the kind it puts that one in force and keeps the truck's, which This
 truck only brings back.</p>

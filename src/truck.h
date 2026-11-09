@@ -151,6 +151,7 @@ struct World
     bool mapThere;       // the map object exists
     uint8_t mapOpen;     // map + 0x148
     bool viewer, garage; // the truck viewer and the garage exist
+    uint64_t garageAt;   // the garage's pointer as read ([exe + its place]), 0 none or not read
     uint8_t menuInput;   // input + 0x1D8
     uint8_t shifter;     // input + 0x1DA and + 0x1DC are both set
     uint8_t functionMenu; // control + 0xD8
@@ -1221,6 +1222,7 @@ inline void WorldRead(const TruckMemory &m, uint64_t control, World &w)
     if (g_places.map && m.get(m.base + g_places.map, map) && map) w.mapThere = m.get(map + 0x148, w.mapOpen);
     w.viewer = g_places.viewer && m.get(m.base + g_places.viewer, viewer) && viewer;
     w.garage = g_places.garage && m.get(m.base + g_places.garage, garage) && garage;
+    w.garageAt = w.garage ? garage : 0;
     const bool inputRead = g_places.input && m.get(m.base + g_places.input, input) && m.get(input + 0x1D8, wheel);
     if (inputRead)
     {
@@ -1228,6 +1230,20 @@ inline void WorldRead(const TruckMemory &m, uint64_t control, World &w)
         w.shifter = wheel[2] && wheel[4];
     }
     w.menusKnown = control && m.get(control + 0xD8, w.functionMenu) && inputRead;
+}
+
+// The game's words in a line (Probe=1 with no truck read, the Reviewer's S2 on the drive of 2026-11-09), the garage's
+// pointer as read beside its flag; and whether two reads hold the same words. At most kWorldLinesCap lines a start.
+static const int kWorldLinesCap = 100;
+inline void WorldWords(const World &w, char *out, size_t size)
+{
+    _snprintf_s(out, size, _TRUNCATE, "known %d menu %d loading %d map %d open %d viewer %d garage %d (its pointer %p) menu input %d shifter %d function menu %d", w.known,
+                w.menu, w.loading, w.mapThere, w.mapOpen, w.viewer, w.garage, (void *)w.garageAt, w.menuInput, w.shifter, w.functionMenu);
+}
+inline bool WorldSame(const World &a, const World &b)
+{
+    return a.known == b.known && a.menu == b.menu && a.loading == b.loading && a.mapThere == b.mapThere && a.mapOpen == b.mapOpen && a.viewer == b.viewer &&
+           a.garage == b.garage && a.garageAt == b.garageAt && a.menuInput == b.menuInput && a.shifter == b.shifter && a.functionMenu == b.functionMenu;
 }
 
 // A truck is being driven in the world: no level is loading, no menu holds the game, the map is shut, and the truck

@@ -19,6 +19,11 @@
 //   its own, its parts recorded and the same as the new truck's, and not driven this start (or driven this start, with
 //   no load since and its vehicle gone). Counted by id: exactly one takes over, marked How=warehouse. A truck bought new
 //   with the same parts as one waiting is matched the same way: it gets a copy, and the old keeps its own.
+// - The truck that went last (the user's rule, the Reviewer's M2 on the drive of 2026-11-09): before the warehouse
+//   match, the id that went last with no truck taken since, of the same kind, no load since, its vehicle gone, none of
+//   its sections marked, and its parts recorded and the same, takes over with all its sections, however long the gap
+//   (LastFind). A garage visit gives the truck a new id on a new vehicle object.
+// - The match's line: each id of the kind looked at, in words (Look, LookWords, ThereWords), so a drive tells why.
 // "When" is a count of 100 ns since 1601 (FILETIME), for TakenAt and Seen alike: a plain date cannot say "before this
 // start" when the last start was the same day.
 #pragma once
@@ -127,6 +132,8 @@ struct There
     char id[40];                              // what the old vehicle reads now ("" not read)
     char kind[kKindMax];
     uint64_t body, world, newBody, newWorld;  // the old and the new chassis body and their worlds (0 not read)
+    uint64_t vtable, newVtable;               // the two bodies' vtables (0 not read)
+    float mass;                               // the old body's mass in kg (0 not read)
     bool there;
 };
 template <class Peek> inline bool StillThere(Peek peek, uint64_t oldVehicle, const char *oldKind, const char *oldId, uint64_t newVehicle, There &o)
@@ -134,13 +141,13 @@ template <class Peek> inline bool StillThere(Peek peek, uint64_t oldVehicle, con
     o = There{};
     IdOf(peek, oldVehicle, o.id);
     KindOf(peek, oldVehicle, o.kind);
-    uint64_t vtable = 0, newVtable = 0;
     float inverse = 0.0f, newInverse = 0.0f;
-    const bool body = ChassisWorld(peek, oldVehicle, o.body, vtable, inverse, o.world);
-    const bool newBody = ChassisWorld(peek, newVehicle, o.newBody, newVtable, newInverse, o.newWorld);
+    const bool body = ChassisWorld(peek, oldVehicle, o.body, o.vtable, inverse, o.world);
+    const bool newBody = ChassisWorld(peek, newVehicle, o.newBody, o.newVtable, newInverse, o.newWorld);
     const float mass = inverse > 0.0f ? 1.0f / inverse : 0.0f;
-    o.there = oldId[0] && !strcmp(o.id, oldId) && oldKind[0] && !strcmp(o.kind, oldKind) && body && newBody && vtable && vtable == newVtable && o.body != o.newBody &&
-              isfinite(mass) && mass >= 10.0f && mass <= 1.0e6f && o.world && o.world == o.newWorld;
+    o.mass = isfinite(mass) ? mass : 0.0f;
+    o.there = oldId[0] && !strcmp(o.id, oldId) && oldKind[0] && !strcmp(o.kind, oldKind) && body && newBody && o.vtable && o.vtable == o.newVtable &&
+              o.body != o.newBody && isfinite(mass) && mass >= 10.0f && mass <= 1.0e6f && o.world && o.world == o.newWorld;
     return o.there;
 }
 
@@ -436,6 +443,75 @@ struct Match
 // every section of it with the parts recorded and the same as parts; and waiting: its [Seen] line before start, or no
 // line, or driven this start with drivenGone(id) true (no load since its truck was last driven, and its vehicle gone).
 // Counted by id. It takes nothing over: Take does, on kMatchOne.
+// The ids of the sections named prefix + <id> for each of prefixes, each once, in the file's order.
+inline std::vector<std::wstring> KindIds(const std::wstring &file, const std::vector<std::wstring> &prefixes)
+{
+    std::vector<std::wstring> ids;
+    std::vector<wchar_t> names(65536, L'\0');
+    if (!GetPrivateProfileSectionNamesW(names.data(), (DWORD)names.size(), file.c_str())) return ids;
+    for (const wchar_t *n = names.data(); *n; n += wcslen(n) + 1)
+        for (const auto &pre : prefixes)
+        {
+            if (wcslen(n) <= pre.size() || _wcsnicmp(n, pre.c_str(), pre.size())) continue;
+            const std::wstring id = n + pre.size();
+            if (id.find(L':') != std::wstring::npos) continue;
+            if (std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);
+        }
+    return ids;
+}
+
+// What one id's sections hold, one bit for each of prefixes (bit i for prefixes[i]): the section is there; it holds a
+// key of its own (not a mark, not a part); it is marked (TakenBy); a part is not recorded in it; a part in it is another
+// (other: the first such, "Engine e_x"). listed and seen: its [Seen] line.
+struct Look
+{
+    std::wstring id;
+    char idText[40];
+    unsigned sections, own, marked, partsNone, partsOther;
+    std::wstring other;
+    bool listed;
+    unsigned long long seen;
+};
+inline Look LookAt(const std::wstring &file, const std::vector<std::wstring> &prefixes, const std::wstring &id, const Parts &parts)
+{
+    Look l = {};
+    l.id = id;
+    WideCharToMultiByte(CP_ACP, 0, id.c_str(), -1, l.idText, sizeof l.idText, nullptr, nullptr);
+    for (size_t i = 0; i < prefixes.size() && i < 32; i++)
+    {
+        const unsigned bit = 1u << i;
+        const auto keys = Keys(file, prefixes[i] + id);
+        if (keys.empty()) continue;
+        l.sections |= bit;
+        for (const auto &k : keys)
+        {
+            if (KeyIs(k.first, L"TakenBy")) l.marked |= bit;
+            bool part = false;
+            for (const auto &p : parts) part = part || KeyIs(k.first, p.first.c_str());
+            if (!MarkKey(k.first) && !part) l.own |= bit;
+        }
+        for (const auto &p : parts)
+        {
+            const auto it = std::find_if(keys.begin(), keys.end(), [&](const auto &k) { return KeyIs(k.first, p.first.c_str()); });
+            if (it == keys.end()) l.partsNone |= bit;
+            else if (it->second != p.second)
+            {
+                l.partsOther |= bit;
+                if (l.other.empty()) l.other = p.first + L" " + it->second;
+            }
+        }
+    }
+    l.listed = SeenGet(file, l.idText, l.seen);
+    return l;
+}
+// A candidate on the sections of mask: one is there, none is marked, one holds something of its own, and each there
+// records the parts, the same.
+inline bool LookCandidate(const Look &l, unsigned mask)
+{
+    const unsigned there = l.sections & mask;
+    return there && !(l.marked & mask) && (l.own & mask) && !((l.partsNone | l.partsOther) & there);
+}
+
 template <class Gone> inline Match MatchFind(const std::wstring &file, const std::vector<std::wstring> &prefixes, const char *newId, const Parts &parts, bool named,
                                              unsigned long long start, Gone drivenGone)
 {
@@ -445,52 +521,17 @@ template <class Gone> inline Match MatchFind(const std::wstring &file, const std
     if (parts.empty()) { m.why = kMatchNoParts; return m; }
     for (const auto &p : parts)
         if (p.second.empty()) { m.why = kMatchNoParts; return m; }
-    std::vector<wchar_t> names(65536, L'\0');
-    if (!GetPrivateProfileSectionNamesW(names.data(), (DWORD)names.size(), file.c_str())) return m;
-    // the ids of the kind's sections, each once
-    std::vector<std::wstring> ids;
-    for (const wchar_t *n = names.data(); *n; n += wcslen(n) + 1)
-        for (const auto &pre : prefixes)
-        {
-            if (wcslen(n) <= pre.size() || _wcsnicmp(n, pre.c_str(), pre.size())) continue;
-            const std::wstring id = n + pre.size();
-            if (id.find(L':') != std::wstring::npos) continue;
-            if (std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);
-        }
     const std::wstring mine = Wide(newId);
-    for (const auto &id : ids)
+    for (const auto &id : KindIds(file, prefixes))
     {
         if (!_wcsicmp(id.c_str(), mine.c_str())) continue;
-        bool marked = false, own = false, partsAll = true, partsSame = true, any = false;
-        for (const auto &pre : prefixes)
-        {
-            const auto keys = Keys(file, pre + id);
-            if (keys.empty()) continue;
-            any = true;
-            for (const auto &k : keys)
-            {
-                if (KeyIs(k.first, L"TakenBy")) marked = true;
-                bool part = false;
-                for (const auto &p : parts) part = part || KeyIs(k.first, p.first.c_str());
-                own = own || (!MarkKey(k.first) && !part);
-            }
-            for (const auto &p : parts)
-            {
-                const auto it = std::find_if(keys.begin(), keys.end(), [&](const auto &k) { return KeyIs(k.first, p.first.c_str()); });
-                if (it == keys.end()) partsAll = false;
-                else if (it->second != p.second) partsSame = false;
-            }
-        }
-        if (!any || marked || !own) continue;
-        char idText[40] = {};
-        WideCharToMultiByte(CP_ACP, 0, id.c_str(), -1, idText, sizeof idText, nullptr, nullptr);
-        unsigned long long seen = 0;
-        const bool listed = SeenGet(file, idText, seen);
-        const bool waiting = !listed || seen < start || drivenGone(idText);
+        const Look l = LookAt(file, prefixes, id, parts);
+        if (!l.sections || l.marked || !l.own) continue;
+        const bool waiting = !l.listed || l.seen < start || drivenGone(l.idText);
         if (!waiting) continue;
         m.waiting++;
-        if (!partsAll || !partsSame) continue;
-        if (++m.candidates == 1) strncpy_s(m.id, idText, _TRUNCATE);
+        if ((l.partsNone | l.partsOther) & l.sections) continue;
+        if (++m.candidates == 1) strncpy_s(m.id, l.idText, _TRUNCATE);
     }
     m.why = m.candidates == 1 ? kMatchOne : m.candidates > 1 ? kMatchTwo : kMatchNone;
     if (m.why != kMatchOne) m.id[0] = 0;
@@ -499,20 +540,134 @@ template <class Gone> inline Match MatchFind(const std::wstring &file, const std
 
 // The match's take-over: each section of oldId copied to newId and marked How=warehouse (never pruned). prunePrefix
 // gives each prefix the prefix Prune goes by (the same, or "" for the whole file). The count of sections taken.
+// how: the mark's How= ("warehouse" by default; LastFind's take gives "last", pruned as a take-over is).
 inline int MatchTake(const std::wstring &file, const std::vector<std::wstring> &prefixes, const std::vector<std::wstring> &prunePrefixes, const char *oldId,
-                     const char *newId, unsigned long long at = 0)
+                     const char *newId, unsigned long long at = 0, const wchar_t *how = L"warehouse")
 {
     int taken = 0;
     for (size_t i = 0; i < prefixes.size(); i++)
-        taken += TakeOver(file, prefixes[i] + Wide(oldId), prefixes[i] + Wide(newId), newId, at, L"warehouse", i < prunePrefixes.size() ? prunePrefixes[i] : prefixes[i]) ? 1 : 0;
+        taken += TakeOver(file, prefixes[i] + Wide(oldId), prefixes[i] + Wide(newId), newId, at, how, i < prunePrefixes.size() ? prunePrefixes[i] : prefixes[i]) ? 1 : 0;
     return taken;
 }
 
+// ---- the truck that went last (the Reviewer's M2 on the drive of 2026-11-09) ----
+
+// The id that went last and when (Now()), set as each truck leaves (LastLeft); a truck taken (any, of any kind, its id
+// read or not) hands it to its match and clears it (LastTaken), so "no truck between" holds for what is handed.
+struct Last
+{
+    char kind[kKindMax];
+    char id[40];
+    unsigned long long leftAt;
+    bool on;
+};
+inline void LastLeft(Last &l, const char *kind, const char *id)
+{
+    l = Last{};
+    if (!kind || !kind[0] || !id || !id[0]) return;
+    strncpy_s(l.kind, kind, _TRUNCATE);
+    strncpy_s(l.id, id, _TRUNCATE);
+    l.leftAt = Now();
+    l.on = true;
+}
+inline Last LastTaken(Last &l)
+{
+    const Last was = l;
+    l = Last{};
+    return was;
+}
+
+enum { kLastTaken, kLastNone, kLastOtherKind, kLastNoParts, kLastLoad, kLastNoSection, kLastMarked, kLastOtherParts, kLastPartsNotRecorded, kLastThere };
+inline const wchar_t *LastWords(int why)
+{
+    return why == kLastTaken              ? L"taken"
+           : why == kLastOtherKind        ? L"another kind, or the new truck's kind not read by name"
+           : why == kLastNoParts          ? L"the new truck's parts not read"
+           : why == kLastLoad             ? L"a load came between"
+           : why == kLastNoSection        ? L"it has no section"
+           : why == kLastMarked           ? L"a section of it is marked"
+           : why == kLastOtherParts       ? L"other parts recorded"
+           : why == kLastPartsNotRecorded ? L"no section of it records the parts"
+           : why == kLastThere            ? L"its vehicle still there"
+                                          : L"none went since a truck was taken";
+}
+// Whether last takes over newId, a truck new to the mod: last is on and of newId's kind (named), the parts read; no
+// load since it went (loadSince false); its sections (prefix + <id> for each of prefixes) there, none marked, none
+// with other parts, one at least with the parts; and there() false (its vehicle gone). A kLast... The take is
+// MatchTake(file, prefixes, ..., last.id, newId, 0, L"last"): all its sections.
+template <class There_> inline int LastFind(const std::wstring &file, const std::vector<std::wstring> &prefixes, const Last &last, const char *kind, const char *newId,
+                                            const Parts &parts, bool named, bool loadSince, There_ there)
+{
+    if (!last.on || !last.id[0] || !newId || !strcmp(last.id, newId)) return kLastNone;
+    if (!named || !kind || strcmp(last.kind, kind)) return kLastOtherKind;
+    if (parts.empty()) return kLastNoParts;
+    for (const auto &p : parts)
+        if (p.second.empty()) return kLastNoParts;
+    if (loadSince) return kLastLoad;
+    const Look l = LookAt(file, prefixes, Wide(last.id), parts);
+    if (!l.sections) return kLastNoSection;
+    if (l.marked) return kLastMarked;
+    if (l.partsOther) return kLastOtherParts;
+    if (!(l.sections & ~l.partsNone)) return kLastPartsNotRecorded;
+    if (there()) return kLastThere;
+    return kLastTaken;
+}
+
+// ---- the match's line in words ----
+
+// A when as a local "10:43"; "?" for 0.
+inline void ClockText(unsigned long long when, wchar_t *out, size_t size)
+{
+    wchar_t date[32];
+    DateText(when, date, 32);
+    _snwprintf_s(out, size, _TRUNCATE, L"%s", wcslen(date) == 16 ? date + 11 : date);
+}
+// The section names of the bits in mask, "engine and odometer" (names[i] for bit i).
+inline std::wstring BitsWords(unsigned mask, const std::vector<std::wstring> &names)
+{
+    std::vector<std::wstring> on;
+    for (size_t i = 0; i < names.size() && i < 32; i++)
+        if (mask & (1u << i)) on.push_back(names[i]);
+    std::wstring w;
+    for (size_t i = 0; i < on.size(); i++) w += (i ? (i + 1 == on.size() ? L" and " : L", ") : L"") + on[i];
+    return w;
+}
+// What one id's sections hold: "engine and odometer, not marked, something of its own, the parts not in its engine
+// section". names[i] names prefixes[i].
+inline std::wstring LookWords(const Look &l, const std::vector<std::wstring> &names)
+{
+    if (!l.sections) return L"no section";
+    std::wstring w = BitsWords(l.sections, names);
+    w += l.marked ? L", marked in its " + BitsWords(l.marked, names) : std::wstring(L", not marked");
+    w += l.own ? L", something of its own in its " + BitsWords(l.own, names) : std::wstring(L", nothing of its own");
+    const unsigned none = l.partsNone & l.sections & ~l.partsOther;
+    if (!l.partsOther && !none) w += L", the parts the same";
+    if (l.partsOther) w += L", other parts in its " + BitsWords(l.partsOther, names) + L" (" + l.other + L")";
+    if (none) w += L", the parts not in its " + BitsWords(none, names);
+    return w;
+}
+// What StillThere read of the old vehicle, in words: "reads its id, its kind, the chassis vtables the same, 3412 kg,
+// the worlds the same, the bodies different: there".
+inline std::wstring ThereWords(const There &o, const char *oldId, const char *oldKind)
+{
+    const bool idSame = oldId && oldId[0] && !strcmp(o.id, oldId), kindSame = oldKind && oldKind[0] && !strcmp(o.kind, oldKind);
+    wchar_t mass[32], t[400];
+    if (o.mass > 0.0f) _snwprintf_s(mass, _TRUNCATE, L"%.0f kg", o.mass);
+    else _snwprintf_s(mass, _TRUNCATE, L"no mass read");
+    const std::wstring other = Wide(Short(o.id).c_str()), kind = Wide(o.kind);
+    _snwprintf_s(t, _TRUNCATE, L"reads %s%s, %s%s, the chassis vtables %s, %s, the worlds %s, the bodies %s: %s", !o.id[0] ? L"no id" : idSame ? L"its id" : L"another id ",
+                 o.id[0] && !idSame ? other.c_str() : L"", !o.kind[0] ? L"no kind" : kindSame ? L"its kind" : L"another kind ", o.kind[0] && !kindSame ? kind.c_str() : L"",
+                 !o.vtable || !o.newVtable ? L"not read" : o.vtable == o.newVtable ? L"the same" : L"different", mass,
+                 !o.world || !o.newWorld ? L"not read or 0" : o.world == o.newWorld ? L"the same" : L"different",
+                 !o.body || !o.newBody ? L"not read" : o.body != o.newBody ? L"different" : L"the same", o.there ? L"there" : L"gone");
+    return t;
+}
+
 // ---- the one log line a drive, the same words in both mods ----
-enum { kLineOwn, kLineKind, kLineTaken, kLineMatched };
+enum { kLineOwn, kLineKind, kLineTaken, kLineMatched, kLineLast };
 // "truck: <kind>, id <first 8>, ..." into out. lastSeen: the id's [Seen] line before this start (0 none); fromId: the
-// id taken over or matched; rule: the take-over's rule in words; why: for kLineKind, why the kind's (a MatchWords text
-// or another), "" none.
+// id taken over or matched; rule: the take-over's rule in words, and for kLineLast the gap ("9 min before, no truck and
+// no load between"); why: for kLineKind, why the kind's (a MatchWords text or another), "" none.
 inline void DriveLine(wchar_t *out, size_t size, const char *kind, const char *id, int what, unsigned long long lastSeen, const char *fromId, const wchar_t *rule,
                       const wchar_t *why)
 {
@@ -524,6 +679,8 @@ inline void DriveLine(wchar_t *out, size_t size, const char *kind, const char *i
                      lastSeen ? date : L"");
     else if (what == kLineTaken)
         _snwprintf_s(out, size, _TRUNCATE, L"truck: %s, id %s, taken over from %s (%s)", k.c_str(), me.c_str(), from.c_str(), rule && rule[0] ? rule : L"a take-over");
+    else if (what == kLineLast)
+        _snwprintf_s(out, size, _TRUNCATE, L"truck: %s, id %s, matched: the truck that went last, %s, %s", k.c_str(), me.c_str(), from.c_str(), rule && rule[0] ? rule : L"");
     else if (what == kLineMatched)
         _snwprintf_s(out, size, _TRUNCATE, L"truck: %s, id %s, matched out of the warehouse by its parts: the settings of %s (a truck bought new with the same parts is "
                                             L"matched the same way; the other keeps its own)",

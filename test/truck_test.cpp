@@ -4098,7 +4098,9 @@ int main()
         old.named = true;
         TruckThere o = {};
         const bool there = TruckStillThere(kMemory, v1, old, v2, o) && o.body == b1 && o.world == world && o.newWorld == world && !strcmp(o.id, oldId) &&
-                           !strcmp(o.kind, "test_kind");
+                           !strcmp(o.kind, "test_kind") && o.vtable == vt && o.newVtable == vt && fabsf(o.mass - 3000.0f) < 1.0f &&
+                           truckid::ThereWords(o, oldId, "test_kind") ==
+                               L"reads its id, its kind, the chassis vtables the same, 3000 kg, the worlds the same, the bodies different: there";
         Put(i1 + 1, '9');
         const bool otherId = !TruckStillThere(kMemory, v1, old, v2, o) && o.id[1] == '9';
         Put(i1 + 1, '1');
@@ -4112,13 +4114,31 @@ int main()
         const bool otherKind = !TruckStillThere(kMemory, v1, old, v2, o);
         PutText(m1 + 0x588, "test_kind", 0);
         Put(b1, vt + 8);
-        const bool otherClass = !TruckStillThere(kMemory, v1, old, v2, o);
+        const bool otherClass = !TruckStillThere(kMemory, v1, old, v2, o) && truckid::ThereWords(o, oldId, "test_kind").find(L"vtables different") != std::wstring::npos &&
+                                truckid::ThereWords(o, oldId, "test_kind").find(L": gone") != std::wstring::npos;
         Put(b1, vt);
         const bool again = TruckStillThere(kMemory, v1, old, v2, o);
         g_game.pop_back();
         Check(there && otherId && unread && outOfWorld && otherWorld && otherKind && otherClass && again,
               "take-over check: the old truck is there with its id and kind and its chassis in the new truck's world; another id, no vehicle, a body out of "
-              "the world (0) or in another, another kind or another body class is gone");
+              "the world (0) or in another, another kind or another body class is gone; its reads in the match line's words");
+    }
+    // Probe=1 with no truck read: the game's words with the garage pointer's raw value, one line at each change (the
+    // Reviewer's S2 on the drive of 2026-11-09)
+    {
+        World a = {}, b = {};
+        a.known = b.known = true;
+        a.garage = b.garage = true;
+        a.garageAt = 0x24F401F31E0;
+        b.garageAt = 0x24F404C7F10;
+        char words[320];
+        WorldWords(a, words, sizeof words);
+        const bool said = strstr(words, "garage 1 (its pointer 0000024F401F31E0)") && strstr(words, "known 1 menu 0") && strstr(words, "function menu 0");
+        const bool change = WorldSame(a, a) && !WorldSame(a, b);
+        b.garageAt = a.garageAt;
+        b.functionMenu = 1;
+        Check(said && change && !WorldSame(a, b) && kWorldLinesCap == 100,
+              "game words with no truck: the garage's flag and its pointer as read in one line; another pointer or another flag is a change; at most 100 lines");
     }
 
     RealImageTest();

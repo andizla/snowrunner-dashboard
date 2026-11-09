@@ -252,6 +252,92 @@ static void Matching()
     }
 }
 
+// the truck that went last (the Reviewer's M2 on the drive of 2026-11-09), and the match line's words (M3)
+static void LastTruck()
+{
+    using namespace truckid;
+    const std::vector<std::wstring> pre = { L"Suspension:", L"Engine:", L"Odometer:" };
+    const std::vector<std::wstring> names = { L"suspension", L"engine", L"odometer" };
+    const Parts parts = { { L"Engine", L"eng_a" }, { L"Gearbox", L"box_a" } };
+    auto put = [](const std::wstring &f, const std::wstring &sec, const wchar_t *key, const wchar_t *v) { WritePrivateProfileStringW(sec.c_str(), key, v, f.c_str()); };
+    auto gone = []() { return false; };
+    auto there = []() { return true; };
+    auto never = [](const char *) { return false; };
+    const unsigned long long start = 1000;
+    // the garage case: A1 went last (its engine section made after its parts were written, its count with them), A2
+    // waits with the same parts too. The warehouse match sees two; the last one is taken, all its sections
+    {
+        const std::wstring f = Fresh(L"truck_id_test_last1.ini");
+        const std::wstring e1 = L"Engine:" + Wide(kA1), o1 = L"Odometer:" + Wide(kA1), s2 = L"Suspension:" + Wide(kA2);
+        put(f, e1, L"Own", L"1"), put(f, e1, L"Engine", L"eng_a"), put(f, e1, L"Gearbox", L"box_a");
+        put(f, o1, L"Metres", L"327"), put(f, o1, L"Engine", L"eng_a"), put(f, o1, L"Gearbox", L"box_a");
+        put(f, s2, L"Own", L"1"), put(f, s2, L"Engine", L"eng_a"), put(f, s2, L"Gearbox", L"box_a");
+        SeenPut(f, kA1, 500), SeenPut(f, kA2, 400);
+        Last l = {};
+        LastLeft(l, "kind_a", kA1);
+        const Last handed = LastTaken(l);
+        const bool cleared = !l.on && handed.on && !strcmp(handed.id, kA1) && handed.leftAt;
+        const bool two = MatchFind(f, { L"Suspension:", L"Engine:" }, kNew, parts, true, start, never).why == kMatchTwo;
+        const int why = LastFind(f, pre, handed, "kind_a", kNew, parts, true, false, gone);
+        const int taken = why == kLastTaken ? MatchTake(f, pre, pre, handed.id, kNew, 0, L"last") : 0;
+        Check(cleared && two && why == kLastTaken && taken == 2 && Get(f, L"Odometer:" + Wide(kNew), L"Metres") == L"327" && Get(f, e1, L"How") == L"last" &&
+                  Get(f, L"Engine:" + Wide(kNew), L"Own") == L"1" && !wcscmp(LastWords(why), L"taken"),
+              "last truck: a garage visit with a second waiting truck of the same parts: the one that went last takes over, all its sections, marked How=last");
+        // the same file with its engine section's parts gone (the drive's file): one section with the parts is enough
+        const std::wstring f2 = Fresh(L"truck_id_test_last2.ini");
+        put(f2, e1, L"Own", L"1"), put(f2, e1, L"Torque", L"1.2");
+        put(f2, o1, L"Metres", L"327"), put(f2, o1, L"Engine", L"eng_a"), put(f2, o1, L"Gearbox", L"box_a");
+        SeenPut(f2, kA1, 2000);
+        const bool partly = LastFind(f2, pre, handed, "kind_a", kNew, parts, true, false, gone) == kLastTaken;
+        const Look look = LookAt(f2, pre, Wide(kA1), parts);
+        const std::wstring words = LookWords(look, names);
+        Check(partly && words == L"engine and odometer, not marked, something of its own in its engine and odometer, the parts not in its engine" &&
+                  !LookCandidate(look, 3) && LookCandidate(look, 4),
+              "last truck: its engine section without the parts and its count with them: taken; the match line's words for it");
+    }
+    // not taken: a truck of the kind driven between, a load between, its vehicle still there, other parts, a mark,
+    // another kind, no section with the parts
+    {
+        const std::wstring f = Fresh(L"truck_id_test_last3.ini");
+        const std::wstring s1 = L"Suspension:" + Wide(kA1);
+        put(f, s1, L"Own", L"1"), put(f, s1, L"Engine", L"eng_a"), put(f, s1, L"Gearbox", L"box_a");
+        Last l = {};
+        LastLeft(l, "kind_a", kA1);
+        LastTaken(l);                // A2 of the kind taken: A1 handed to its match, none left
+        LastLeft(l, "kind_a", kA2);  // A2 goes
+        const Last between = LastTaken(l);
+        const int viaA2 = LastFind(f, pre, between, "kind_a", kNew, parts, true, false, gone);
+        const int none = LastFind(f, pre, LastTaken(l), "kind_a", kNew, parts, true, false, gone);
+        Last a1 = {};
+        LastLeft(a1, "kind_a", kA1);
+        const int load = LastFind(f, pre, a1, "kind_a", kNew, parts, true, true, gone);
+        const int still = LastFind(f, pre, a1, "kind_a", kNew, parts, true, false, there);
+        const int kind = LastFind(f, pre, a1, "kind_b", kNew, parts, true, false, gone);
+        const int unnamed = LastFind(f, pre, a1, "kind_a", kNew, parts, false, false, gone);
+        const int noParts = LastFind(f, pre, a1, "kind_a", kNew, {}, true, false, gone);
+        const int other = LastFind(f, pre, a1, "kind_a", kNew, { { L"Engine", L"eng_b" }, { L"Gearbox", L"box_a" } }, true, false, gone);
+        put(f, s1, L"TakenBy", Wide(kB1).c_str());
+        const int marked = LastFind(f, pre, a1, "kind_a", kNew, parts, true, false, gone);
+        put(f, s1, L"TakenBy", nullptr);
+        put(f, s1, L"Engine", nullptr), put(f, s1, L"Gearbox", nullptr);
+        const int notRecorded = LastFind(f, pre, a1, "kind_a", kNew, parts, true, false, gone);
+        const Look look = LookAt(f, pre, Wide(kA1), { { L"Engine", L"eng_b" }, { L"Gearbox", L"box_a" } });
+        Check(viaA2 == kLastNoSection && strcmp(between.id, kA1) && none == kLastNone && load == kLastLoad && still == kLastThere && kind == kLastOtherKind &&
+                  unnamed == kLastOtherKind && noParts == kLastNoParts && other == kLastOtherParts && marked == kLastMarked && notRecorded == kLastPartsNotRecorded &&
+                  !wcscmp(LastWords(load), L"a load came between") && !wcscmp(LastWords(still), L"its vehicle still there"),
+              "last truck: not taken with a truck of the kind driven between, a load between, its vehicle still there, another kind or one not named, its parts "
+              "not read or other, a mark, or no section with the parts");
+        put(f, s1, L"Engine", L"eng_a");
+        const Look otherLook = LookAt(f, pre, Wide(kA1), { { L"Engine", L"eng_b" }, { L"Gearbox", L"box_a" } });
+        Check(LookWords(otherLook, names) == L"suspension, not marked, something of its own in its suspension, other parts in its suspension (Engine eng_a)" &&
+                  LookWords(look, names).find(L"the parts not in its suspension") != std::wstring::npos && BitsWords(7, names) == L"suspension, engine and odometer",
+              "match line: other parts named with the first one; the parts not recorded; three sections in words");
+    }
+    wchar_t clock[16];
+    ClockText(Now(), clock, 16);
+    Check(wcslen(clock) == 5 && clock[2] == L':', "match line: a when as the local hh:mm");
+}
+
 static void Lines()
 {
     using namespace truckid;
@@ -266,7 +352,9 @@ static void Lines()
     const bool matched = wcsstr(t, L"truck: kind_a, id CCCCCCCC, matched out of the warehouse by its parts: the settings of AAAAAAAA") == t;
     DriveLine(t, 512, "kind_a", kNew, kLineKind, 0, "", L"", MatchWords(kMatchNone));
     const bool kind = !wcscmp(t, L"truck: kind_a, id CCCCCCCC, on the kind's settings (no waiting truck of the kind has its parts)");
-    Check(own && ownSeen && taken && matched && kind, "the drive's line: its own (last driven or not listed), taken over, matched, the kind's with why");
+    DriveLine(t, 512, "kind_a", kNew, kLineLast, 0, kA1, L"9 min before, no truck and no load between", L"");
+    const bool last = !wcscmp(t, L"truck: kind_a, id CCCCCCCC, matched: the truck that went last, AAAAAAAA, 9 min before, no truck and no load between");
+    Check(own && ownSeen && taken && matched && kind && last, "the drive's line: its own (last driven or not listed), taken over, matched, the kind's with why, the truck that went last");
 }
 
 int wmain()
@@ -279,6 +367,7 @@ int wmain()
     Marks();
     Seen();
     Matching();
+    LastTruck();
     Lines();
     printf("truck id: %d ok, %d failed\n", g_ok, g_failed);
     return g_failed ? 1 : 0;

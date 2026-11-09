@@ -2068,17 +2068,27 @@ static const std::vector<std::wstring> &OdoPrefixes()
     static const std::vector<std::wstring> p = { std::wstring(kOdoSection) + L":" };
     return p;
 }
-// The parts written into the id's sections where they exist. True when one changed.
-static bool TruckPartsPut(const char *key, const char *id, const truckid::Parts &parts)
+// The words for TruckIdAllPrefixes' sections, in its order (the match's line).
+static const std::vector<std::wstring> &TruckIdNames()
 {
-    if (!key[0] || !id[0] || parts.empty()) return false;
+    static const std::vector<std::wstring> n = { L"suspension", L"engine", L"odometer" };
+    return n;
+}
+static const unsigned kIdSettingsBits = 3, kIdOdoBits = 4; // TruckIdAllPrefixes' bits: the settings' two, the odometer's
+// The parts written into the id's sections where they exist: the bits of the sections changed (bit i for
+// TruckIdAllPrefixes()[i]).
+static unsigned TruckPartsPutBits(const char *key, const char *id, const truckid::Parts &parts)
+{
+    if (!key[0] || !id[0] || parts.empty()) return 0;
     const std::wstring ini = SetupFile(kSetupTruck, key);
-    bool changed = false;
-    for (const auto &pre : TruckIdAllPrefixes()) changed = truckid::PartsPut(ini, pre + Wide(id), parts) || changed;
+    unsigned changed = 0;
+    for (size_t i = 0; i < TruckIdAllPrefixes().size(); i++)
+        if (truckid::PartsPut(ini, TruckIdAllPrefixes()[i] + Wide(id), parts)) changed |= 1u << i;
     return changed;
 }
-// Whether the id has any section that follows the truck, the odometer's too (the parts look: a section made after the
-// first drive gets the parts).
+// The parts written into the id's sections where they exist. True when one changed.
+static bool TruckPartsPut(const char *key, const char *id, const truckid::Parts &parts) { return TruckPartsPutBits(key, id, parts) != 0; }
+// Whether the id has any section that follows the truck, the odometer's too.
 static bool TruckIdAny(const char *key, const char *id)
 {
     if (!key[0] || !id[0]) return false;
@@ -2086,6 +2096,20 @@ static bool TruckIdAny(const char *key, const char *id)
     for (const auto &pre : TruckIdAllPrefixes())
         if (truckid::SectionThere(ini, pre + Wide(id))) return true;
     return false;
+}
+// The parts look (the Reviewer's M1 on the drive of 2026-11-09): its key is "id|engine|gearbox|" and one mark for each
+// of the id's sections there or not ("101"), so a section made after another (the engine's after the odometer's at the
+// first stop) changes the key and gets the parts on the next look. written: the key last looked at. The bits of the
+// sections the parts were written into now (0 none).
+static unsigned PartsLook(const char *key, const char *id, const char *engine, const char *gearbox, std::wstring &written)
+{
+    if (!key[0] || !id[0] || !engine[0] || !gearbox[0]) return 0;
+    const std::wstring ini = SetupFile(kSetupTruck, key);
+    std::wstring look = Wide(id) + L"|" + Wide(engine) + L"|" + Wide(gearbox) + L"|";
+    for (const auto &pre : TruckIdAllPrefixes()) look += truckid::SectionThere(ini, pre + Wide(id)) ? L'1' : L'0';
+    if (look == written) return 0;
+    written = look;
+    return TruckPartsPutBits(key, id, TruckPartsOf(engine, gearbox));
 }
 
 // ---- the odometer's store (BRIEF_odometer.md): [Odometer:<id>] with Metres= and Seconds= as whole numbers ----
@@ -6717,11 +6741,16 @@ static DWORD WINAPI Run(void *)
     // their vehicle and the loads then (the match's "driven this start, its vehicle gone"), the match waiting for the
     // engine's and the gearbox's names, the drive's line once a truck, and the parts last written
     const unsigned long long idStart = truckid::Now();
-    struct DrivenId { char id[40]; uint64_t vehicle; unsigned loads; };
+    struct DrivenId { char id[40]; uint64_t vehicle; unsigned loads; unsigned long long leftAt; };
     std::vector<DrivenId> drivenIds;
+    // the truck that went last, and the one handed to the match of the truck taken now (the Reviewer's M2); the
+    // still-there reads of this match, each once, for its line (M3)
+    truckid::Last lastGone = {}, lastForMatch = {};
+    struct GoneRead { char id[40]; TruckThere o; bool gone; };
+    std::vector<GoneRead> goneReads;
     struct IdPending { bool on; ULONGLONG since; int line; char fromId[40]; const wchar_t *rule; const wchar_t *why; unsigned long long lastSeen; } idPending = {};
     wchar_t idWords[96] = L"";   // what the tabs say of the id (the match or why none)
-    std::wstring partsWritten;   // the driven truck's parts as last written, "id|Engine|Gearbox"
+    std::wstring partsWritten;   // the parts look's key last looked at (PartsLook)
     ULONGLONG partsLookAt = 0;
     uint64_t truckVehicle = 0;   // the vehicle the driven truck's id was taken with (review F1 of step 2)
     // the odometer (BRIEF_odometer.md): the driven truck's count, its kind's choice of hours, and where a tier 2 match
@@ -6729,6 +6758,7 @@ static DWORD WINAPI Run(void *)
     OdoState odo = {};
     bool odoHours = false;
     char odoFrom[40] = "";
+    const wchar_t *odoFromWords = L"";
     auto odoWrite = [&](const wchar_t *why) {
         OdoWrite(truck.key, truck.id, odo.metres, odo.seconds);
         OdoWritten(odo, GetTickCount64());
@@ -6737,27 +6767,35 @@ static DWORD WINAPI Run(void *)
     // the truck that leaves: its vehicle and the loads now, for the match's "driven this start" (the Reviewer's should 2)
     auto idLeaves = [&]() {
         if (!truck.key[0] || !truck.id[0]) return;
+        truckid::LastLeft(lastGone, truck.key, truck.id);
         for (auto &d : drivenIds)
-            if (!strcmp(d.id, truck.id)) { d.vehicle = truckVehicle, d.loads = watch.loads; return; }
+            if (!strcmp(d.id, truck.id)) { d.vehicle = truckVehicle, d.loads = watch.loads, d.leftAt = lastGone.leftAt; return; }
         DrivenId d = {};
         strncpy_s(d.id, truck.id, _TRUNCATE);
-        d.vehicle = truckVehicle, d.loads = watch.loads;
+        d.vehicle = truckVehicle, d.loads = watch.loads, d.leftAt = lastGone.leftAt;
         if (drivenIds.size() < 256) drivenIds.push_back(d);
     };
-    // an id driven this start counts as waiting where no load came since its truck was last driven and its vehicle is gone
-    auto idDrivenGone = [&](const char *id) {
+    auto drivenOf = [&](const char *id) -> const DrivenId * {
         for (const auto &d : drivenIds)
-            if (!strcmp(d.id, id))
-            {
-                if (d.loads != watch.loads || !d.vehicle) return false;
-                TruckIdentity old = {};
-                strncpy_s(old.key, truck.key, _TRUNCATE);
-                strncpy_s(old.id, id, _TRUNCATE);
-                old.named = true;
-                TruckThere o = {};
-                return !TruckStillThere(memory, d.vehicle, old, watch.idVehicle, o);
-            }
-        return false;
+            if (!strcmp(d.id, id)) return &d;
+        return nullptr;
+    };
+    // an id driven this start counts as waiting where no load came since its truck was last driven and its vehicle is
+    // gone; the read is kept for the match's line (goneReads, cleared at each match), and read once a match
+    auto idDrivenGone = [&](const char *id) {
+        for (const auto &g : goneReads)
+            if (!strcmp(g.id, id)) return g.gone;
+        const DrivenId *d = drivenOf(id);
+        if (!d || d->loads != watch.loads || !d->vehicle) return false;
+        TruckIdentity old = {};
+        strncpy_s(old.key, truck.key, _TRUNCATE);
+        strncpy_s(old.id, id, _TRUNCATE);
+        old.named = true;
+        GoneRead g = {};
+        strncpy_s(g.id, id, _TRUNCATE);
+        g.gone = !TruckStillThere(memory, d->vehicle, old, watch.idVehicle, g.o);
+        if (goneReads.size() < 64) goneReads.push_back(g);
+        return g.gone;
     };
     // the drive's one line, and the id's [Seen] line once a start (after the take-over and the match have decided)
     auto idDecided = [&](int line, const char *fromId, const wchar_t *rule, const wchar_t *why, unsigned long long lastSeen) {
@@ -6779,8 +6817,9 @@ static DWORD WINAPI Run(void *)
             const bool from = odoFrom[0] && loaded;
             Log(L"odometer: %S, id %S: %S and %S (%s shown), %s%S%s", truck.key, truck.id[0] ? truckid::Short(truck.id).c_str() : "not read", shown, hours,
                 odoHours ? L"hours" : L"distance", !truck.id[0] ? L"counted for this drive only, not saved" : from ? L"its count from " : loaded ? L"from [Odometer:<id>]" : L"no section yet",
-                from ? truckid::Short(odoFrom).c_str() : "", from ? L" (out of the warehouse)" : L"");
+                from ? truckid::Short(odoFrom).c_str() : "", from ? odoFromWords : L"");
             odoFrom[0] = 0;
+            odoFromWords = L"";
         }
         if (!truck.id[0]) return;
         const std::wstring ini = SetupFile(kSetupTruck, truck.key);
@@ -6795,20 +6834,91 @@ static DWORD WINAPI Run(void *)
     // exactly one waiting truck of the kind with the same parts gives its sections, copied and marked How=warehouse
     auto idResolve = [&]() {
         idPending.on = false;
+        goneReads.clear();
         const bool known = !strcmp(eng.key, truck.key) && !strcmp(eng.id, truck.id) && eng.engine[0] && eng.gearbox[0];
         const truckid::Parts parts = known ? TruckPartsOf(eng.engine, eng.gearbox) : truckid::Parts();
-        const std::wstring ini = SetupFile(kSetupTruck, truck.key);
-        // tier 1 over the settings, taking the count along; tier 2 over the counts alone only where tier 1 found none
-        // (the Reviewer's must 1)
-        const truckid::Match m = truckid::MatchFind(ini, TruckIdPrefixes(), truck.id, parts, truck.named, idStart, idDrivenGone);
-        if (m.why == truckid::kMatchNone)
+        const std::wstring ini = SetupFile(kSetupTruck, truck.key), mine = Wide(truck.id);
+        // every id of the kind as it is before anything is taken, at most 8, for the match's line (the Reviewer's M3)
+        std::vector<truckid::Look> looks;
+        int more = 0;
+        for (const auto &id : truckid::KindIds(ini, TruckIdAllPrefixes()))
         {
-            const truckid::Match c = OdoMatchFind(ini, truck.id, parts, truck.named, idStart, idDrivenGone);
-            if (c.why == truckid::kMatchOne && truckid::MatchTake(ini, OdoPrefixes(), OdoPrefixes(), c.id, truck.id) > 0) strncpy_s(odoFrom, c.id, _TRUNCATE);
+            if (!_wcsicmp(id.c_str(), mine.c_str())) continue;
+            if (looks.size() < 8) looks.push_back(truckid::LookAt(ini, TruckIdAllPrefixes(), id, parts));
+            else more++;
         }
-        if (m.why == truckid::kMatchOne && truckid::MatchTake(ini, TruckIdAllPrefixes(), TruckIdAllPrefixes(), m.id, truck.id) > 0)
+        // first the truck that went last, with no truck taken and no load since, all its sections (the user's rule, the
+        // Reviewer's M2); else tier 1 over the settings, taking the count along; tier 2 over the counts alone only where
+        // tier 1 found none (the Reviewer's must 1 on the odometer)
+        const DrivenId *lastDriven = lastForMatch.on ? drivenOf(lastForMatch.id) : nullptr;
+        const int lastWhy = truckid::LastFind(ini, TruckIdAllPrefixes(), lastForMatch, truck.key, truck.id, parts, truck.named,
+                                              lastDriven && lastDriven->loads != watch.loads, [&]() { return !lastDriven || !idDrivenGone(lastForMatch.id); });
+        enum { kTookNone, kTookLast, kTookTier1, kTookTier2 };
+        int took = kTookNone;
+        char takenId[40] = "";
+        truckid::Match m = {};
+        m.why = truckid::kMatchNone;
+        if (lastWhy == truckid::kLastTaken && truckid::MatchTake(ini, TruckIdAllPrefixes(), TruckIdAllPrefixes(), lastForMatch.id, truck.id, 0, L"last") > 0)
+            took = kTookLast, strncpy_s(takenId, lastForMatch.id, _TRUNCATE);
+        if (took == kTookNone)
         {
-            strncpy_s(odoFrom, m.id, _TRUNCATE);
+            m = truckid::MatchFind(ini, TruckIdPrefixes(), truck.id, parts, truck.named, idStart, idDrivenGone);
+            if (m.why == truckid::kMatchOne && truckid::MatchTake(ini, TruckIdAllPrefixes(), TruckIdAllPrefixes(), m.id, truck.id) > 0)
+                took = kTookTier1, strncpy_s(takenId, m.id, _TRUNCATE);
+            else if (m.why == truckid::kMatchNone)
+            {
+                const truckid::Match c = OdoMatchFind(ini, truck.id, parts, truck.named, idStart, idDrivenGone);
+                if (c.why == truckid::kMatchOne && truckid::MatchTake(ini, OdoPrefixes(), OdoPrefixes(), c.id, truck.id) > 0)
+                    took = kTookTier2, strncpy_s(takenId, c.id, _TRUNCATE);
+            }
+        }
+        // the match's line, always: the last truck's outcome, then a clause for each id of the kind (M3)
+        {
+            const std::wstring lastText = lastForMatch.on ? Wide(truckid::Short(lastForMatch.id).c_str()) + L" " : std::wstring();
+            std::wstring line = L"match: " + Wide(truck.key) + L", id " + Wide(truckid::Short(truck.id).c_str()) + L": the truck that went last " + lastText +
+                                (took == kTookLast ? std::wstring(L"taken") : std::wstring(L"not taken (") + truckid::LastWords(lastWhy) + L")");
+            if (looks.empty()) line += L"; no other id of the kind";
+            for (const auto &l : looks)
+            {
+                line += L"; " + Wide(truckid::Short(l.idText).c_str()) + L": " + truckid::LookWords(l, TruckIdNames());
+                wchar_t t[64];
+                const DrivenId *d = drivenOf(l.idText);
+                if (!l.listed) line += L", not listed as driven";
+                else if (l.seen < idStart)
+                {
+                    truckid::DateText(l.seen, t, 64);
+                    line += std::wstring(L", seen before this start (") + t + L")";
+                }
+                else
+                {
+                    truckid::ClockText(l.seen, t, 64);
+                    line += std::wstring(L", driven this start from ") + t;
+                    if (d)
+                    {
+                        truckid::ClockText(d->leftAt, t, 64);
+                        line += std::wstring(L", left ") + t;
+                        _snwprintf_s(t, _TRUNCATE, L", %u load%s since", watch.loads - d->loads, watch.loads - d->loads == 1 ? L"" : L"s");
+                        line += t;
+                    }
+                }
+                const bool waiting = !l.listed || l.seen < idStart || idDrivenGone(l.idText);
+                for (const auto &g : goneReads)
+                    if (!strcmp(g.id, l.idText)) line += L", its vehicle " + truckid::ThereWords(g.o, l.idText, truck.key);
+                const bool candidate = truckid::LookCandidate(l, kIdSettingsBits) || (!(l.sections & kIdSettingsBits) && truckid::LookCandidate(l, kIdOdoBits));
+                line += !strcmp(l.idText, takenId) ? L": taken" : !waiting ? L": not waiting" : candidate ? L": a candidate" : L": no candidate";
+            }
+            if (more)
+            {
+                wchar_t t[32];
+                _snwprintf_s(t, _TRUNCATE, L"; and %d more", more);
+                line += t;
+            }
+            Log(L"%s", line.c_str());
+        }
+        if (took == kTookLast || took == kTookTier1)
+        {
+            strncpy_s(odoFrom, takenId, _TRUNCATE);
+            odoFromWords = took == kTookLast ? L" (the truck that went last)" : L" (out of the warehouse)";
             if (saveAt) SettingsSave(set);
             saveAt = 0;
             SettingsFor(set, truck.key, truck.id);
@@ -6817,10 +6927,33 @@ static DWORD WINAPI Run(void *)
             strncpy_s(e, eng.engine, _TRUNCATE);
             strncpy_s(g, eng.gearbox, _TRUNCATE);
             EngineFor(eng, truck.key, truck.id, e, g);
-            EngineLevelLog(eng, L"matched out of the warehouse");
+            EngineLevelLog(eng, took == kTookLast ? L"the truck that went last" : L"matched out of the warehouse");
             SuspLevelLog(set, false);
-            _snwprintf_s(idWords, _TRUNCATE, L"Out of the warehouse: matched by its engine and gearbox");
-            idDecided(truckid::kLineMatched, m.id, L"", L"", idPending.lastSeen);
+            if (took == kTookLast)
+            {
+                // the gap in words (S1): "9 min before, no truck and no load between"
+                const double gap = (truckid::Now() - lastForMatch.leftAt) / 1.0e7;
+                wchar_t rule[96];
+                if (gap < 120.0) _snwprintf_s(rule, _TRUNCATE, L"%.0f s before, no truck and no load between", gap);
+                else _snwprintf_s(rule, _TRUNCATE, L"%.0f min before, no truck and no load between", gap / 60.0);
+                _snwprintf_s(idWords, _TRUNCATE, L"The truck that went last: its settings and count kept");
+                idDecided(truckid::kLineLast, takenId, rule, L"", idPending.lastSeen);
+            }
+            else
+            {
+                _snwprintf_s(idWords, _TRUNCATE, L"Out of the warehouse: matched by its engine and gearbox");
+                idDecided(truckid::kLineMatched, takenId, L"", L"", idPending.lastSeen);
+            }
+        }
+        else if (took == kTookTier2)
+        {
+            // the words from what was taken (S1): a count without settings
+            strncpy_s(odoFrom, takenId, _TRUNCATE);
+            odoFromWords = L" (out of the warehouse)";
+            wchar_t why[128];
+            _snwprintf_s(why, _TRUNCATE, L"the waiting truck %S has no settings of its own; its count is carried", truckid::Short(takenId).c_str());
+            _snwprintf_s(idWords, _TRUNCATE, L"Out of the warehouse: the count of %S carried, no settings of its own", truckid::Short(takenId).c_str());
+            idDecided(truckid::kLineKind, "", L"", why, idPending.lastSeen);
         }
         else
         {
@@ -6829,6 +6962,7 @@ static DWORD WINAPI Run(void *)
                                                                                    : L"New to the mod: its parts not read, no match");
             idDecided(truckid::kLineKind, "", L"", truckid::MatchWords(m.why), idPending.lastSeen);
         }
+        lastForMatch = truckid::Last{};
     };
     // after a change of the driven truck: the take-over's line, or the match to wait for, or the level's line
     auto idChanged = [&](int taken, bool takeOver, const char *oldId, const wchar_t *rule) {
@@ -7297,6 +7431,21 @@ static DWORD WINAPI Run(void *)
             Log(L"input: %s, the bindings wait", world.functionMenu ? L"the function menu is up" : L"the game's menus have the input");
         // Probe=1: the words around the game's menu flags while a truck is read, from the start (truck.h, MenuWordsStep;
         // the Reviewer's M2), and the cursor's state, so one drive shows what marks each of the game's windows over the HUD
+        // Probe=1 with no truck read: the game's words at each change, with the garage pointer's raw value, at most 100 a
+        // start (the Reviewer's S2 on the drive of 2026-11-09: a garage visit wrote nothing for 9 minutes)
+        {
+            static World worldSaid = {};
+            static bool worldHave = false;
+            static int worldLines = 0;
+            if (watch.found) worldHave = false;
+            else if (s.probe && (!worldHave || !WorldSame(world, worldSaid)) && worldLines < kWorldLinesCap)
+            {
+                char words[320];
+                WorldWords(world, words, sizeof words);
+                Log(L"game: no truck read: %S%s", words, ++worldLines == kWorldLinesCap ? L" (the last such line of 100 this start)" : L"");
+                worldSaid = world, worldHave = true;
+            }
+        }
         if (s.probe && watch.found)
         {
             static MenuWordsWatch menuWords;
@@ -7425,6 +7574,8 @@ static DWORD WINAPI Run(void *)
             if (OdoOwed(odo)) odoWrite(L"another truck driven");
             OdoChange(odo);
             idLeaves();
+            // any truck taken (its id read or not) takes the one that went last for its match, and none is left (M2)
+            if (now.key[0]) lastForMatch = truckid::LastTaken(lastGone);
             truck = now;
             truckVehicle = watch.idVehicle;
             int taken = 0;
@@ -7476,6 +7627,7 @@ static DWORD WINAPI Run(void *)
             if (OdoOwed(odo)) odoWrite(L"a new id");
             OdoChange(odo);
             idLeaves();
+            lastForMatch = truckid::LastTaken(lastGone);
             truck = now;
             truckVehicle = watch.idVehicle; // recorded on the pass the new id was read with
             if (oldVehicle && truckVehicle != oldVehicle)
@@ -7503,11 +7655,10 @@ static DWORD WINAPI Run(void *)
             eng.gearbox[0])
         {
             partsLookAt = GetTickCount64();
-            const std::wstring parts = Wide(truck.id) + L"|" + Wide(eng.engine) + L"|" + Wide(eng.gearbox) + (TruckIdAny(truck.key, truck.id) ? L"|s" : L"");
-            if (parts != partsWritten && TruckPartsPut(truck.key, truck.id, TruckPartsOf(eng.engine, eng.gearbox)))
-                Log(L"truck: %S, id %S: its engine %S and gearbox %S written in its own sections (the warehouse match goes by them)", truck.key, truckid::Short(truck.id).c_str(),
-                    eng.engine, eng.gearbox);
-            partsWritten = parts;
+            const unsigned put = PartsLook(truck.key, truck.id, eng.engine, eng.gearbox, partsWritten);
+            if (put)
+                Log(L"truck: %S, id %S: its engine %S and gearbox %S written in its %s section%s (the warehouse match goes by them)", truck.key,
+                    truckid::Short(truck.id).c_str(), eng.engine, eng.gearbox, truckid::BitsWords(put, TruckIdNames()).c_str(), (put & (put - 1)) ? L"s" : L"");
         }
         GaugeView v = {};
         strncpy_s(v.truck, truck.key, _TRUNCATE);
@@ -9888,6 +10039,25 @@ int wmain(int argc, wchar_t **argv)
         Check(none && back && notSettings && parted,
               "odometer store: none before a write; Metres= and Seconds= whole and read back; an odometer section alone is no settings section (no level, not "
               "in force) but is one of the truck's, and the parts go into it");
+        // the parts look (the Reviewer's M1 on the drive of 2026-11-09): the odometer's section first, then the engine's
+        // box ticked, then a suspension section: each section made later gets the parts on the next look, said once
+        {
+            const char *p = "{0D000000-0000-0000-0000-0000000000F1}";
+            std::wstring written;
+            OdoWrite(kind, p, 100.0, 10.0);
+            const unsigned first = PartsLook(kind, p, "e_odo.v8", "g_odo_box", written), still = PartsLook(kind, p, "e_odo.v8", "g_odo_box", written);
+            WritePrivateProfileStringW(SectionOf(kEngineSection, p).c_str(), L"Own", L"1", kf.c_str());
+            const unsigned engine = PartsLook(kind, p, "e_odo.v8", "g_odo_box", written), engineStill = PartsLook(kind, p, "e_odo.v8", "g_odo_box", written);
+            WritePrivateProfileStringW(SuspSectionOf(p).c_str(), L"Own", L"1", kf.c_str());
+            const unsigned susp = PartsLook(kind, p, "e_odo.v8", "g_odo_box", written);
+            wchar_t e[64] = {}, g[64] = {};
+            GetPrivateProfileStringW(SectionOf(kEngineSection, p).c_str(), L"Engine", L"", e, 64, kf.c_str());
+            GetPrivateProfileStringW(SuspSectionOf(p).c_str(), L"Gearbox", L"", g, 64, kf.c_str());
+            Check(first == kIdOdoBits && !still && engine == 2 && !engineStill && susp == 1 && e[0] && g[0] && truckid::BitsWords(engine, TruckIdNames()) == L"engine",
+                  "parts look: the odometer's section gets the parts, then an engine section made later gets them on the next look, then a suspension section; "
+                  "once each, the line naming the new section");
+            for (const wchar_t *sec : { kSuspSection, kEngineSection, kOdoSection }) WritePrivateProfileStringW(SectionOf(sec, p).c_str(), nullptr, nullptr, kf.c_str());
+        }
         // the take-over: a recovery's new id takes the count with the other two
         WritePrivateProfileStringW(SuspSectionOf(r).c_str(), L"Own", L"1", kf.c_str());
         OdoWrite(kind, r, 5000.0, 60.0);
