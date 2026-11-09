@@ -1585,9 +1585,7 @@ static const float kCrawlTo = 0.95f;
 static const float kCrawlLeast = kTorqueFactorLeast;
 static const float kCrawlLead = 0.6f;     // seconds the rising rate looks ahead
 static const float kCrawlRateKeep = 0.3f; // the share of each new pass in the smoothed rate
-// Where the hold acts: the setting on and a gear held by hand with the clutch in (the locked path). One condition, so
-// the scope can be narrowed in one place (the Reviewer's addendum 4 would take it to the low range only).
-inline bool CrawlHoldActs(bool on, bool locked) { return on && locked; }
+// Where the hold acts: CrawlHoldActs in gearbox_model.h, by the mod gearbox's position.
 inline float CrawlHoldLine(float xp)
 {
     if (!isfinite(xp) || xp < kCrawlFrom) return kTorqueFactorMost;

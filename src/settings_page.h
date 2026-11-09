@@ -861,7 +861,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             PageTip("The game already slows a rolling truck by itself, more the faster it goes. This adds the share of the air on top, taken off the engine pull in each gear once it is measured floored on flat ground. The drag of the wheels is left out of that measure, so Rolling drag and a flat tire do not make it stronger. Acts with Real engine on. On by default.");
             PageLabel("Crawl hold", labelX);
             changed(ImGui::Checkbox("##crawlhold", &s.crawlHold));
-            PageTip("Holds a gear picked by hand just under its top speed, so the game does not cut and surge there. Off: the game does as it does. On by default.");
+            PageTip("Holds L-, L and L+ of the mod gearbox just under their top speed, so the game does not cut and surge there. Off: the game does as it does. On by default.");
         }
         PageLabel("Pull test", labelX);
         const bool pullOn = view.pullTest == kViewPullArmed || view.pullTest == kViewPullRunning;

@@ -1189,7 +1189,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; EngineShare: how much of the mod's engine the game gets, 0 to 100 percent (50: half way between the two).\n"
                         L"; RoadLoad=1 (with Powertrain, on by default): the air's drag taken off, once each gear's pull is learned floored on flat ground with the wheels' drag left out.\n"
                         L";   RoadCdA: the drag's area in m2, 0 by the truck's mass (1.1 under 4 t, 3.5 under 10 t, else 6); a truck's file may set it.\n"
-                        L"; CrawlHold=1 (with Powertrain, on by default): a gear held by hand is held just under its top, so the game does not cut its pull there and surge.\n"
+                        L"; CrawlHold=1 (with Powertrain, on by default): L-, L and L+ of the mod gearbox are held just under their top, so the game does not cut its pull there and surge.\n"
                         L";   Base1.<engine>, Base2.<engine> ... in a truck's file: each gear's acceleration at the game's own pull, floored, learned.\n"
                         L"; Creep=1: an idling truck on an automatic moves to walking pace; the brake holds it. For now only with an automatic, not in a gear picked by hand.\n"
                         L"; CreepManual=1: the creep in a gear picked by hand too (the gear's idle speed; stuck at Gearbox=2 it stalls; R and L on the game's shifter through the converter).\n"
@@ -3705,7 +3705,7 @@ static void LogSettings(const GaugeSettings &s)
                                                                     : L"off while the mod's own gearbox drives", s.gameGearDisplay);
     if (s.powertrain) Log(L"settings: powertrain on: the truck pulls with %d percent of the mod's engine and converter, through the game's torque factor; road load %s; crawl hold %s",
                           s.engineShare, !s.roadLoad ? L"off" : s.powertrain ? L"on (the air's drag, once each gear's pull is learned)" : L"on, acts with Powertrain on",
-                          s.crawlHold ? L"on (a gear held by hand held under its top, from 0.70 of it to 0.05 of the factor at 0.95)" : L"off");
+                          s.crawlHold ? L"on (L-, L and L+ held by hand held under their top, from 0.70 of it to 0.05 of the factor at 0.95)" : L"off");
     else Log(L"settings: powertrain off: the truck pulls with the game's own engine (Powertrain=1 hands it the mod's)");
     Log(s.creep && s.creepManual ? L"settings: creep on, in a gear picked by hand too (CreepManual): an automatic through the converter to walking pace, a gear picked by hand at its idle speed"
         : s.creep ? L"settings: creep on: an idling truck on an automatic moves, through the converter to walking pace; not in a gear picked by hand (CreepManual=1 adds it)"
@@ -6304,9 +6304,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             const SpinLift byspin = locked ? SpinLiftStep(w.spinMean, TruckDrivenSpin(raw), gearTop, raw.gearEngaged, w.refs.vehicle) : SpinLift{ 0.0f, kTorqueFactorMost, false };
             const float x = locked ? byspin.x : LiftShare(TruckDrivenSpin(raw), ground, w.gearbox.grip, gearTop);
             const float spinMost = byspin.cap;
-            // Crawl hold (THE VERDICT of BRIEF_low_gear_sway.md): in a gear held by hand the factor at most H at the mean's
+            // Crawl hold (THE VERDICT of BRIEF_low_gear_sway.md): in L-, L and L+ held by hand the factor at most H at the mean's
             // x led by its rising rate, so the truck settles under the game's cut at the top; the probe's roof shows it
-            const bool crawl = CrawlHoldActs(s.crawlHold, locked);
+            const bool crawl = CrawlHoldActs(s.crawlHold, locked, w.pos.pos);
             if (!crawl) w.crawl.had = false;
             const float hold = crawl ? CrawlHoldStep(w.crawl, byspin.x, dt, raw.gearEngaged, w.refs.vehicle) : kTorqueFactorMost;
             w.liftX = x;

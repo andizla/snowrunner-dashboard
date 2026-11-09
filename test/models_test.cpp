@@ -542,6 +542,7 @@ struct LoopTruck
     bool gameCut = false;   // the game's pull as THE VERDICT of BRIEF_low_gear_sway.md reads it: flat at the throttle, cut at the top and back only under cutBack of it
     float cutBack = 0.55f;
     bool crawlHold = false; // the mod's Crawl hold on the locked path (CrawlHoldStep)
+    int pos = kPosLowMinus; // the mod gearbox's position held, for the hold's scope (CrawlHoldActs)
 };
 struct LoopState
 {
@@ -612,7 +613,7 @@ static void LoopStep(const LoopTruck &c, LoopState &s, const TorqueCurve &curve,
     const float x = spinning ? byspin.x : LiftShare(TruckDrivenSpin(t), s.v, s.box.grip, liftTop);
     const float ratio = driving ? s.box.ratio : 1.0f;
     const float limit = s.power.cold * s.power.boost;
-    const bool crawl = CrawlHoldActs(c.crawlHold, spinning && !c.oldSpin);
+    const bool crawl = CrawlHoldActs(c.crawlHold, spinning && !c.oldSpin, c.pos);
     if (!crawl) s.crawl.had = false;
     const float hold = crawl ? CrawlHoldStep(s.crawl, byspin.x, before ? 0.0f : dt, t.gearEngaged, 0x5000) : kTorqueFactorMost;
     const float lift = before ? LiftBefore(s.power.curve, limit, TruckPedal(t), ratio, x, TorqueRoof(c.cls))
@@ -727,9 +728,10 @@ static SwayStats SwayRun(bool oldSpin, int gear, float powerFactor, float gearA,
 // second x was more than 0.03 off that mean.
 struct CrawlStats { float xLo, xHi, sd, mean, settle, period, top, reach, climbFactor; int cuts; };
 static LoopTruck LoopHeavy();
-static CrawlStats CrawlRun(bool hold, int gear, float powerFactor, float gearA, float drag, float x0, float seconds)
+static CrawlStats CrawlRun(bool hold, int gear, float powerFactor, float gearA, float drag, float x0, float seconds, int pos = kPosLowMinus)
 {
     LoopTruck c = LoopHeavy();
+    c.pos = pos;
     c.fixedGear = gear;
     c.spinLift = true;
     c.gameCut = true;
@@ -3922,8 +3924,8 @@ int main(int argc, char **argv)
 
     // Crawl hold (BRIEF_low_gear_sway.md, THE VERDICT and the Reviewer's addendum 4): H falls in a straight line from 2
     // at 0.70 of the top to 0.05 at 0.95 and stays there, nothing below 0.70; xp leads x by its rising rate times
-    // 0.6 s, a falling x takes nothing off; another gear or truck starts the rate over; it acts only with the setting on
-    // and the gear held by hand
+    // 0.6 s, a falling x takes nothing off; another gear or truck starts the rate over; it acts only with the setting on,
+    // the gear held by hand and the mod gearbox in L-, L or L+ (the lead's scope), not in a numbered gear
     {
         CrawlHold h = {};
         const float atFrom = CrawlHoldLine(0.70f), mid = CrawlHoldLine(0.825f), atTo = CrawlHoldLine(0.95f), past = CrawlHoldLine(1.1f), under = CrawlHoldLine(0.5f);
@@ -3940,7 +3942,9 @@ int main(int argc, char **argv)
                                     "falling to 0.85 %.3f, a new gear %.3f", atFrom, mid, atTo, rising, falling, fresh);
         Check(Near(atFrom, 2.0f, 1e-4f) && Near(mid, 1.025f, 1e-3f) && Near(atTo, 0.05f, 1e-4f) && past == kCrawlLeast && under == kTorqueFactorMost &&
                   Near(rising, CrawlHoldLine(0.85f + 0.1f * 0.6f), 0.06f) && rising < CrawlHoldLine(0.85f) - 0.3f && Near(falling, CrawlHoldLine(0.85f), 1e-3f) &&
-                  Near(fresh, CrawlHoldLine(0.85f), 1e-3f) && CrawlHoldActs(true, true) && !CrawlHoldActs(false, true) && !CrawlHoldActs(true, false),
+                  Near(fresh, CrawlHoldLine(0.85f), 1e-3f) && CrawlHoldActs(true, true, kPosLowMinus) && CrawlHoldActs(true, true, kPosLow) &&
+                  CrawlHoldActs(true, true, kPosLowPlus) && !CrawlHoldActs(true, true, kPosGear) && !CrawlHoldActs(true, true, kPosA) &&
+                  !CrawlHoldActs(false, true, kPosLowMinus) && !CrawlHoldActs(true, false, kPosLowMinus),
               line);
     }
     // Crawl hold in the closed loop: with the hold off the truck surges (the game cuts at the top and the truck sags to
@@ -3950,7 +3954,8 @@ int main(int argc, char **argv)
     // last 20 s, under the top, settled within 4 s of reaching 0.70, from the surge's own trough (0.55 of the top) and
     // from a deeper one (0.3). Under 0.70 the climb is today's lift, which the hold leaves alone: in this loop it is
     // under 1 there (the class curve at a low engine speed), so in mud that climb alone takes seconds; the line says
-    // both. The same with a 10 rad/s top in mud and on a road
+    // both. L and L+ (the plain factor of 1 in gear 1) hold the same in mud. A numbered gear held by hand (a 10 rad/s
+    // top) is out of the hold's scope: with it on it runs exactly as with it off, surge and all
     {
         const float drags[4] = { 0.68f, 0.4f, 0.2f, 0.05f };
         const char *names[4] = { "mud", "soft", "firm", "road" };
@@ -3968,13 +3973,22 @@ int main(int argc, char **argv)
             ok = ok && off.cuts >= (d < 2 ? 4 : 2) && (off.cuts < 2 || off.period >= 2.0f) && off.xHi - off.xLo > 0.4f && !on.cuts && on.settle - on.reach <= 4.0f && on.sd < 0.02f && on.xHi < 1.0f &&
                  !deep.cuts && deep.settle - deep.reach <= 4.0f && deep.sd < 0.02f;
         }
+        const float lowPower[2] = { 0.45f, 1.0f };
+        const int lowPos[2] = { kPosLow, kPosLowPlus };
+        for (int l = 0; l < 2; l++)
+        {
+            const CrawlStats off = CrawlRun(false, 1, lowPower[l], 0.0f, 0.68f, 0.55f, 30.0f, lowPos[l]), on = CrawlRun(true, 1, lowPower[l], 0.0f, 0.68f, 0.55f, 30.0f, lowPos[l]);
+            len += snprintf(line + len, sizeof line - len, " %s (a %.2f rad/s top) in mud: off %d cuts; on %d cuts, x %.3f to %.3f (sd %.4f), settled %.2f s after 0.70;",
+                            l ? "L+" : "L", on.top, off.cuts, on.cuts, on.xLo, on.xHi, on.sd, on.settle - on.reach);
+            ok = ok && off.cuts >= 4 && !on.cuts && on.settle - on.reach <= 4.0f && on.sd < 0.02f && on.xHi < 1.0f;
+        }
         const float tenDrags[2] = { 0.68f, 0.05f };
         for (int d = 0; d < 2; d++)
         {
-            const CrawlStats off = CrawlRun(false, 2, 1.0f, 2.5f, tenDrags[d], 0.55f, 30.0f), on = CrawlRun(true, 2, 1.0f, 2.5f, tenDrags[d], 0.55f, 30.0f);
-            len += snprintf(line + len, sizeof line - len, " a %.0f rad/s top, %s: off %d cuts, x %.2f to %.2f; on %d cuts, x %.3f to %.3f (sd %.4f), settled %.2f s after 0.70;",
-                            on.top, d ? "road" : "mud", off.cuts, off.xLo, off.xHi, on.cuts, on.xLo, on.xHi, on.sd, on.settle - on.reach);
-            ok = ok && off.cuts >= 2 && off.xHi - off.xLo > 0.4f && !on.cuts && on.settle - on.reach <= 4.0f && on.sd < 0.02f && on.xHi < 1.0f;
+            const CrawlStats off = CrawlRun(false, 2, 1.0f, 2.5f, tenDrags[d], 0.55f, 30.0f, kPosGear), on = CrawlRun(true, 2, 1.0f, 2.5f, tenDrags[d], 0.55f, 30.0f, kPosGear);
+            len += snprintf(line + len, sizeof line - len, " a numbered gear (a %.0f rad/s top), %s: off %d cuts, x %.3f to %.3f; on the same, %d cuts, x %.3f to %.3f;",
+                            on.top, d ? "road" : "mud", off.cuts, off.xLo, off.xHi, on.cuts, on.xLo, on.xHi);
+            ok = ok && off.cuts >= 2 && on.cuts == off.cuts && on.xLo == off.xLo && on.xHi == off.xHi && on.sd == off.sd;
         }
         Check(ok, line);
     }

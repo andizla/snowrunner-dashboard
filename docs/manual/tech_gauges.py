@@ -361,7 +361,7 @@ second: the factor fell to 1 at the top, the truck sagged, and the rise back was
 rise is now paced only after the wheels break loose: the mean's <i>x</i> up by more than 0.2 or the spin up by more than 1 rad/s
 in one pass (<code>kSpinLooseX</code>, <code>kSpinLooseRad</code>), for <code>kLiftCutWindow</code>. A fall along the fade opens nothing. The
 ground path keeps its cut rule. <code>SpinCalm</code> in Gauges.ini is read no more, and the log says so once.
-Crawl hold (<code>CrawlHold=1</code>, the default) acts on this path alone (<code>CrawlHoldActs</code>, one condition). The game's own L- surges too: it
+Crawl hold (<code>CrawlHold=1</code>, the default) acts on this path in L-, L and L+ of the mod gearbox alone, by its position, since L+ has the plain power factor of 1 (<code>CrawlHoldActs</code>, one condition; a numbered gear can be added there). The game's own L- surges too: it
 cuts its pull at the top and gives it back only under about 0.55 of it, and the truck sags and climbs every few seconds. So the factor
 is at most <i>H</i>(<i>x</i><sub>p</sub>), a straight line from 2 at 0.70 of the top to 0.05 at 0.95 and 0.05 above (<code>CrawlHoldLine</code>,
 <code>kCrawlFrom</code>, <code>kCrawlTo</code>, <code>kCrawlLeast</code>), where <i>x</i><sub>p</sub> is the mean's <i>x</i> plus its rising rate times
