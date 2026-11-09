@@ -665,7 +665,7 @@ def s_coolant():
 <p>The display is the game's script view HudTransmissionUiView. Its UpdateStatusText writes the mode's text, and its
 UpdateRunnerAnimation animates the lit dot. The script engine runs a function from the code array its function object holds at
 +0x60, read once at each call's start. So one aligned pointer store swaps a function from its next call on (game_script.h).
-Each function gets two arrays of ours, made once a start with the engine's own allocate on the mod's thread. Dark: the text's
+Each function object gets two arrays of its own, never shared with another object, made with the engine's own allocate on the mod's thread. Dark: the text's
 <code>visible</code> false, then return; the dot's <code>visible</code> set to isActive (LB held), then the stock words. Light:
 <code>visible</code> true, then the stock words. The stock array stays the engine's. Light stays in place for the rest of the
 start, so the game's display is as it was. At the game's exit the function object's destructor frees whichever array is in

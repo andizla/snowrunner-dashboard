@@ -5,7 +5,8 @@
 // array its function object holds at + 0x60 and reads that pointer once at each call's start. So one aligned pointer
 // write swaps a function from its next call on, and a call in flight ends on the old array.
 //
-// Each function gets two arrays of ours, made once a session with the engine's own allocator, so that the function
+// Each function object gets two arrays of its own (never shared with another object: each destructor frees what its
+// + 0x60 holds; the Reviewer's M1 on part B), made with the engine's own allocator, so that the function
 // object's destructor frees them at the runtime's teardown as its own:
 // - dark: the text hidden (status.visible = false, then return), and the dot shown only while LB is held
 //   (runner.visible = isActive, then the stock words);
@@ -23,7 +24,7 @@
 #include "truck.h"
 #include "game_globals.h"
 
-// ---- the script engine's words (C:\Games\snowrunner-ssl\sslkit\ops.py, read from the interpreter in 6adb8627) ----
+// ---- the script engine's words (the SSL fork's sslkit/ops.py, read from the interpreter in 6adb8627) ----
 // A word is a uint32: the opcode in the low byte, the operand above it biased by 2^23.
 enum { kSslPop = 2, kSslBool = 5, kSslLocal = 7, kSslGetField = 10, kSslCall = 13, kSslRet = 19, kSslSetField = 60 };
 static const int kSslJumpFirst = 22, kSslJumpLast = 26; // jz, jnz, jz.keep, jnz.keep, jmp: the operand an absolute word
@@ -411,17 +412,16 @@ inline int GearDisplayStep(const SslHost &h, GearDisplay &g, int want, char *lin
             if (!h.m.get(at[i] + 4ull * k, words[i][k])) return refuse("a function's words are not read");
         if (!SslStockCheck(kSslFunctionsOf[i], words[i], count[i], why, sizeof why)) return refuse(why);
     }
-    // a new stock: the arrays made from it, once a session, again only where its words differ
+    // a new object (a reload, or the first look): arrays of its own, made below, whatever its words. Another object's
+    // are never handed to it, as both destructors would free them; the old ones stay with the old object.
     for (int i = 0; i < kSslFunctions; i++)
     {
         if (!fresh[i]) continue;
         SslFunctionState &f = g.fn[i];
-        const bool same = f.dark.at && f.count == count[i] && !memcmp(f.words, words[i], 4ull * count[i]);
         f.obj = obj[i];
         f.stock = at[i];
         f.stockSize = sizeNow[i];
         f.now = kGearDisplayGame;
-        if (same) continue;
         f.dark = f.light = SslArray{};
         f.count = count[i];
         memcpy(f.words, words[i], 4ull * count[i]);

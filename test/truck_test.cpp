@@ -630,13 +630,18 @@ static void GearDisplayTest()
     const bool cycle = GearDisplayStep(h, g, kGearDisplayDark, line, sizeof line) == kGearDisplayDark && codeOf(fnStatus) == darkStatus && codeOf(fnRunner) == darkRunner &&
                        g.made == 4 && GearDisplayStep(h, g, kGearDisplayLight, line, sizeof line) == kGearDisplayLight && codeOf(fnStatus) == lightStatus && g.made == 4;
 
-    // a reload: a new function object with the same stock words is swapped again with the arrays made; one whose code
-    // is neither the stock seen nor ours is taken as new
+    // a reload: a new function object with the same stock words gets arrays of its own (the Reviewer's M1), none of the
+    // old object's, which stays on its own; the runner's object, unchanged, keeps its arrays
     putStock(fnStatus2, stockStatus2, sw, 41);
     const uint64_t statusEntry = 0x17040000 + 0x2000ull * 1 + 46ull * kSslEntrySize;
     Put(statusEntry + 8, fnStatus2);
-    const bool reload = GearDisplayStep(h, g, kGearDisplayDark, line, sizeof line) == kGearDisplayDark && codeOf(fnStatus2) == darkStatus && g.made == 4 &&
-                        g.fn[0].obj == fnStatus2 && g.fn[0].stock == stockStatus2;
+    const uint64_t oldDark[2] = { darkStatus, lightStatus };
+    const bool reload = GearDisplayStep(h, g, kGearDisplayDark, line, sizeof line) == kGearDisplayDark && codeOf(fnStatus2) != oldDark[0] &&
+                        codeOf(fnStatus2) != oldDark[1] && codeOf(fnStatus2) != stockStatus2 && g.made == 6 && g.fn[0].obj == fnStatus2 &&
+                        g.fn[0].stock == stockStatus2 && TestWord(codeOf(fnStatus2), 6) == SslWord(kSslRet, 4) && codeOf(fnStatus) == lightStatus &&
+                        codeOf(fnRunner) == darkRunner;
+    // the cap of 8 arrays a start: one more reload of both is made, past that it refuses
+    const bool capOk = g.made + 4 > kSslMostMade;
 
     // refused, said once, nothing written: a checked word that differs, a count other than 41, a member's name, no room
     GearDisplay r = {};
@@ -661,16 +666,18 @@ static void GearDisplayTest()
     g_allocFails = false;
     const bool afterAll = GearDisplayStep(h, r, kGearDisplayDark, line, sizeof line) == kGearDisplayDark && codeOf(fnStatus2) != stockStatus2;
 
-    Check(hash && untouched && dark && statusWords && runnerWords && order && stockKept && still && light && lightWords && cycle && reload && wordRefused && saidOnce &&
+    Check(hash && untouched && dark && statusWords && runnerWords && order && stockKept && still && light && lightWords && cycle && reload && capOk && wordRefused && saidOnce &&
               countRefused && nameRefused && roomRefused && afterAll,
           "gear display (BRIEF_shifter_no_gear.md part B): the classes and members by name, each name read back; nothing with GameGearDisplay=0 from the start; dark: "
           "the text's 7 words and the dot's 6 before the stock words with their jumps moved by 6, the count first when shrinking and the pointer first when growing; "
-          "light: visible set, then the stock words, the dot shown with LB up; dark, light, dark on the same arrays; a reloaded function swapped again; a word, a "
+          "light: visible set, then the stock words, the dot shown with LB up; dark, light, dark on the same arrays; a reloaded function gets arrays of its own; a word, a "
           "count, a name or no room refuses, said once, nothing written");
 
-    // the opcodes against sslkit's table, where the SSL fork is on this PC
+    // the opcodes against sslkit's table, where SSL_OPS names the SSL fork's ops.py (no path of it in the repo)
+    char opsFile[MAX_PATH] = "";
+    GetEnvironmentVariableA("SSL_OPS", opsFile, MAX_PATH);
     FILE *ops = nullptr;
-    if (fopen_s(&ops, "C:\\Games\\snowrunner-ssl\\sslkit\\ops.py", "rb") == 0 && ops)
+    if (*opsFile && fopen_s(&ops, opsFile, "rb") == 0 && ops)
     {
         char text[16384] = "";
         const size_t n = fread(text, 1, sizeof text - 1, ops);
@@ -691,7 +698,7 @@ static void GearDisplayTest()
         const bool targets = strstr(text, "'target'") != nullptr;
         Check(all && targets, "gear display: the opcodes and the five jumps are sslkit's (ops.py)");
     }
-    else printf("     gear display's opcodes against sslkit's table: no C:\\Games\\snowrunner-ssl here, not tested\n");
+    else printf("     gear display's opcodes against sslkit's table: no SSL_OPS names its ops.py, not tested\n");
 }
 
 int main()
