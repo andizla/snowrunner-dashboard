@@ -2090,6 +2090,22 @@ int main()
                                             "once with the pedal up; the curve's top %.2f (1.1 x the top over pf), a one step under it, start -1e9",
                  rise1.torque, rise2.torque, paceRate, rise1.top);
         Check(paced, paceLine);
+        // S1: a take-over paces from the game's own pull at that step (B4 0.9 at a floored pedal), not from 0; no B4, 0
+        TorqueCutPublish(nullptr);
+        slot.pedal = slot.map.pedal = 1.0f;
+        slot.gamePull = TorqueCutGamePull(0.9f, 1.0f);
+        TorqueCutPublish(&slot);
+        spin(5.0f);
+        const TorqueGot take1 = TorqueFromDrive(fn, vehicle, 1), take2 = TorqueFromDrive(fn, vehicle, 1);
+        const float took1 = CutRise(0.9f, 1.0f, paceRate), took2 = CutRise(took1, 1.0f, paceRate);
+        const bool seeded = Near(take1.torque, 2.0f * took1) && Near(take2.torque, 2.0f * took2) && TorqueCutGamePull(0.0f, 1.0f) == 0.0f &&
+                            TorqueCutGamePull(NAN, 1.0f) == 0.0f && TorqueCutGamePull(1.0f, 0.4f) == 0.4f && TorqueCutGamePull(1.3f, 1.0f) == 1.0f;
+        char takeLine[300];
+        snprintf(takeLine, sizeof takeLine, "torque cut's take-over (S1): from the game's pull 0.9 the drive's call answered %.3f, then %.3f at %.2f a step; at B4 0 or "
+                                            "none from 0, B4 held to the pedal",
+                 take1.torque, take2.torque, paceRate);
+        Check(seeded, takeLine);
+        slot.gamePull = 0.0f;
         TorqueCutPublish(nullptr);
         putF(act, 0xC4, 1.0f);
         putF(act, 0x38, 1.0f);

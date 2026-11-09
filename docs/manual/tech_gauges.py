@@ -391,7 +391,8 @@ start −10<sup>9</sup>, a one float step under the top and the top at the gover
 drive's own scaling by pf the curve is 1 under the governor's end, and the game's own overspeed brake acts on each wheel above that top less 0.5, as in the stock
 (BRIEF_drive_2108_findings.md F1: with top 10<sup>9</sup> a free wheel ran away to tens of rad/s). used is the bracket paced as the game's B4 rose: used + <i>r</i> ·
 (bracket − used) away from 0, with <i>r</i> = EngineResponsiveness (+0xC4) · pf, and at once toward 0 (<code>CutRise</code>, F1b; one step's kick on a free wheel is about
-30 times the brake's most). The engine brake is tapered by the slowest driven wheel in the gear's direction, whole from twice the gear's idle speed and 0 at it
+30 times the brake's most). A take-over paces from the game's own pull at that step, clamp01(min(B4, pedal)) read on the mod's pass before the first publish, and from 0
+where B4 is no number (<code>TorqueCutGamePull</code>, S1). The engine brake is tapered by the slowest driven wheel in the gear's direction, whole from twice the gear's idle speed and 0 at it
 (<code>TorqueCutBrakeTaper</code>, F3), and the cut waits for the game's gear to agree in sign with the position (<code>GearboxPosAgrees</code>, F2). The needle in a
 locked gear goes by the driven wheels' signed mean in the gear's direction, floored at 0 (<code>TruckDrivenSpinGeared</code>, F4). The mod's thread publishes the slot once a pass (<code>TorqueCutSlotOf</code>) with
 Powertrain=1, ModEngineSpeed=1 (else every engine speed reader but the fuel's and the stall's would read B4 = 1), Gearbox=2, a gear held by hand, EngineShare above 0 and the game's gear not 0. The detour reads <i>s</i> from the vehicle's own wheels: the mean of

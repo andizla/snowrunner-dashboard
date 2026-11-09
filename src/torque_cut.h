@@ -170,7 +170,9 @@ inline float TorqueCutBlend(float share, float pedal, float stockCurve, float ou
 // torque through the clutch (ClutchModel::carried), the mod engine's own inertia there taking a pass's delay. floor: the
 // creep's push with CreepManual (CreepStep's share), the least F; 0 none. pedal: the raw pedal (TruckPedal), for the
 // game's shape in the blend and B4s. sLast: the wheels' speed the mod's thread read, for a step whose read failed.
-// listTop: the game's gear's list top by d73170's rule (TruckGearFormulaTop), for the stall's wheels' term.
+// listTop: the game's gear's list top by d73170's rule (TruckGearFormulaTop), for the stall's wheels' term. gamePull:
+// the game's own pull at the take-over (TorqueCutGamePull, read on the pass before the first publish), where the
+// detour's pace starts for a vehicle it has not paced since a clear (S1 of review_drive_2108_findings.md).
 enum { kCutMap, kCutScalar };
 static const uint64_t kTorqueFresh = 1000; // ms: a slot older than this passes every call
 struct TorqueCutSlot
@@ -178,7 +180,7 @@ struct TorqueCutSlot
     uint64_t vehicle, action;
     uint64_t at;    // GetTickCount64 at the publish
     int mode;
-    float scalar, floor, share, pedal, sLast, listTop;
+    float scalar, floor, share, pedal, sLast, listTop, gamePull;
     TorqueCutMap map;
 };
 
@@ -244,6 +246,14 @@ inline float TorqueCutBrakeTaper(float least, const TorqueCutMap &m)
 // toward 0 at once: a cut of the pull is whole in the step, the brake's onset with the foot off is paced too, its
 // fall back toward 0 is not. From one side of 0 to the other it drops to 0 at once and paces from there. rate is held to
 // 0 to 1; a rate that is no number is 1.
+// The game's own pull at a take-over: B4 held to the pedal, as the game pulled until that step (B4 follows its target
+// through a shift and is zeroed only with the engine dead or stalled); 0 where B4 is no number.
+inline float TorqueCutGamePull(float b4, float pedal)
+{
+    if (!isfinite(b4)) return 0.0f;
+    return CutClamp01(fminf(b4, isfinite(pedal) ? pedal : 0.0f));
+}
+
 inline float CutRise(float used, float bracket, float rate)
 {
     if (!isfinite(bracket)) return 0.0f;

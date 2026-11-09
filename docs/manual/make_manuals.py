@@ -263,8 +263,8 @@ is held by the game's own brake past the gear's top, and the pull comes back at 
 engine speed of its own to keep: it works one out each time from the pedal and its pull, and with the foot off it is idle. So the cockpit's
 needles stayed at idle while the mod's engine turned. Now the game reads the mod's needle while the mod drives the truck:
 idle is the game's idle and the redline its floored mark (<code>EngineSpeedTop</code> moves that top, 1 by default). The cockpit's needles,
-the steering wheel's rev lights, the effects and the exhaust follow the mod's engine. The fuel burn
-and the stall check keep the game's own figure for now, so fuel use stays as before. Untick it, or turn Real engine off, for the game's own.</p>
+the steering wheel's rev lights, the effects and the exhaust follow the mod's engine. Fuel use
+and the stall keep the game rules, and in a gear held by hand they follow the pull of the mod engine. Untick it, or turn Real engine off, for the game's own.</p>
 <p><b>Air drag</b> (<code>RoadLoad</code>, the Power tab's "Air drag", on by default, acts with <code>Powertrain=1</code>; untick it to turn it off). The game already slows
 a rolling truck by itself, more the faster it goes. Air drag adds the air's share on top of that. With this on the mod takes the air's drag off the engine's pull, more the
 faster the truck goes: about 0.5 kN at 100 km/h for a pickup. It needs each gear's pull at the game's own torque, which the mod learns

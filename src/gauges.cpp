@@ -3998,6 +3998,7 @@ struct TruckWatch
     TorqueHand hand;            // the engine's torque handed to the game (Powertrain)
     float liftX, liftRoof;      // the lift's x and the roof there on the last pass, for the probe (review 11)
     SpinMean spinMean;          // the locked path's wheel spin, its mean over the last passes in rad/s (SpinMeanStep)
+    float cutGamePull;          // the game's own pull read on the take-over's pass (TorqueCutGamePull), kept while the cut acts
     bool cutActs;               // the torque cut acted on the last pass (BRIEF_drivetrain_2_torque_cut.md): the learners rest, the fuel reads the stand-in (TorqueCutStandIn)
     float cutFloor;             // the creep's share on the last pass: the cut's least F while it acts (CreepManual)
     ULONGLONG cutProbeAt;       // the cut's probe line, once a second
@@ -6475,7 +6476,10 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                                  w.refs.action != 0;
             if (cutActs)
             {
-                const TorqueCutSlot slot = TorqueCutSlotOf(w, raw, s, scale, curve, tachTop, locked, gearTop);
+                // S1: B4 is the game's own until the first publish (the drive's hook writes it 1 only while a slot is out)
+                if (!w.cutActs) w.cutGamePull = TorqueCutGamePull(raw.actionB4, TruckPedal(raw));
+                TorqueCutSlot slot = TorqueCutSlotOf(w, raw, s, scale, curve, tachTop, locked, gearTop);
+                slot.gamePull = w.cutGamePull;
                 TorqueCutPublish(&slot);
             }
             else TorqueCutPublish(nullptr);

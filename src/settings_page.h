@@ -865,7 +865,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             PageTip("How hard the engine holds the truck back with the foot off in a gear held by hand, as a share of the gear torque at the redline. 0 lets it roll. Needs the mod gearbox. Default 15 %.");
             PageLabel("Mod engine speed", labelX);
             changed(ImGui::Checkbox("##modenginespeed", &s.modEngineSpeed));
-            PageTip("The game tachometer, cockpit needles, rev lights, effects and exhaust follow the mod engine while Real engine is on. Fuel use and the stall stay as in the game for now. Off: the game computes its own, and the mod engine never pulls alone in a gear held by hand, as that needs this on. On by default.");
+            PageTip("The game tachometer, cockpit needles, rev lights, effects and exhaust follow the mod engine while Real engine is on. Fuel use and the stall keep the game rules, and in a gear held by hand they follow the pull of the mod engine. Off: the game computes its own, and the mod engine never pulls alone in a gear held by hand, as that needs this on. On by default.");
         }
         PageLabel("Pull test", labelX);
         const bool pullOn = view.pullTest == kViewPullArmed || view.pullTest == kViewPullRunning;

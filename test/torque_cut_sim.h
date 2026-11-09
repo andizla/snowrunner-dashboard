@@ -51,6 +51,7 @@ struct SimSetup
     float inertia;         // a wheel's, kg m^2, for the overspeed brake's impulse; 0 no brake
     bool cutTop;           // the cut answers with the finite top (F1); false: top 1e9
     float rise;            // the bracket's pace a step (F1b, EngineResponsiveness x pf); 0 whole at once
+    float used0;           // where the pace starts (S1: the game's own pull at a take-over); 0 from 0
     int freeWheels;        // the first ones without grip
 };
 struct SimResult
@@ -80,7 +81,7 @@ inline SimResult SimRun(const SimSetup &u)
     float w[8], d118[8] = {}, share[8], noise[8] = {};
     int whole[8] = {};
     for (int i = 0; i < n; i++) w[i] = u.s0 * (1.0f + 0.02f * (float)(i - n / 2)), share[i] = 1.0f, whole[i] = (int)fmaxf(w[i], 0.0f);
-    float v = u.v0, b4 = 0.0f, held = 0.0f, nextPass = 0.0f, lastBracket = 0.0f, used = 0.0f;
+    float v = u.v0, b4 = 0.0f, held = 0.0f, nextPass = 0.0f, lastBracket = 0.0f, used = CutClamp01(u.used0);
     int pinnedSteps = 0, countedSteps = 0;
     float wMax = 0.0f;
     uint32_t seed = u.seed ? u.seed : 1u;

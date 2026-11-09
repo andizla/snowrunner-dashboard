@@ -778,7 +778,8 @@ static volatile LONG g_cutS = 0, g_cutF = 0, g_cutBracket = 0, g_cutStock = 0, g
 // mod's thread
 static volatile LONG64 g_b4sVehicle = 0, g_b4sAt = 0;
 static volatile LONG g_b4sBits = 0, g_cutWBits = 0, g_cutPedalBits = 0;
-// the bracket the drive got last step, per vehicle (F1b: CutRise paces it); 0 for a new vehicle or after a clear
+// the bracket the drive got last step, per vehicle (F1b: CutRise paces it); none for a new vehicle or after a clear, where
+// the pace starts from the slot's gamePull
 static volatile LONG64 g_riseVehicle = 0;
 static volatile LONG g_riseBits = 0, g_cutUsed = 0, g_cutRate = 0;
 
@@ -837,9 +838,10 @@ __declspec(noinline) static bool HookGearTorque(void *vehicle, int gear, float *
         if (CutWheelsRead(vehicle, omega, driven, n, pf, d4, response)) sp = TorqueCutSpeeds(omega, driven, n, gear < 0 ? -1 : 1);
         if (!sp.ok) InterlockedIncrement(&g_cutFaults);
         TorqueCutAnswer r = TorqueCutAnswerOf(slot, t, st, aa, tp, pf, d4, sp);
-        // F1b: the bracket paced at the game's own B4 rate, from the last step's for this vehicle
+        // F1b: the bracket paced at the game's own B4 rate, from the last step's for this vehicle; at a take-over from
+        // the game's own pull at that step (S1)
         const float rate = response * pf;
-        const float usedBefore = (uint64_t)g_riseVehicle == (uint64_t)(uintptr_t)vehicle ? BitsFloat(g_riseBits) : 0.0f;
+        const float usedBefore = (uint64_t)g_riseVehicle == (uint64_t)(uintptr_t)vehicle ? BitsFloat(g_riseBits) : CutClamp01(slot.gamePull);
         TorqueCutAnswerPaced(r, t, usedBefore, rate);
         InterlockedExchange(&g_riseBits, FloatBits(r.used));
         InterlockedExchange64(&g_riseVehicle, (LONG64)(uintptr_t)vehicle);
@@ -905,7 +907,7 @@ void TorqueCutPublish(const TorqueCutSlot *slot)
     if (!slot || !slot->vehicle || !slot->action)
     {
         InterlockedExchangePointer(&g_cutSlot, nullptr);
-        InterlockedExchange64(&g_riseVehicle, 0); // the next take-over paces up from 0, as B4 after a shift
+        InterlockedExchange64(&g_riseVehicle, 0); // the next take-over paces from the game's own pull at that step (gamePull)
         InterlockedExchange(&g_riseBits, 0);
         return;
     }

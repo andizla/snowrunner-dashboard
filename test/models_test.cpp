@@ -4182,18 +4182,18 @@ int main(int argc, char **argv)
                 g.ground = grounds[gk];
                 g.s0 = from ? 0.55f * 2.74f : 0.0f;
                 g.v0 = from ? 0.3f : 0.0f;
+                g.used0 = from ? 1.0f : 0.0f; // S1: rolling, the take-over starts at the game's own pull, floored 1
                 const SimResult c = SimRun(g);
                 SimSetup flatSetup = g;
                 flatSetup.mode = kSimFlat;
                 flatSetup.rise = 0.0f;
                 flatSetup.flat = (c.fMin + c.fMax) * 0.5f;
                 const SimResult flat = SimRun(flatSetup);
-                len += snprintf(line + len, sizeof line - len, " %s from %.2f with both: settled %.2f s (the lead's 8 s %s), x %.3f, sd %.4f of the top (F held flat %.4f), falls %d "
-                                                               "after;", names[gk], from ? 0.55f : 0.0f, c.settledAt, c.settledAt >= 0.0f && c.settledAt <= 8.0f ? "met" : "missed",
+                len += snprintf(line + len, sizeof line - len, " %s from %.2f%s with both: settled %.2f s (the lead's 8 s %s), x %.3f, sd %.4f of the top (F held flat %.4f), falls %d "
+                                                               "after;", names[gk], from ? 0.55f : 0.0f, from ? " (the pace from the game's pull)" : "", c.settledAt, c.settledAt >= 0.0f && c.settledAt <= 8.0f ? "met" : "missed",
                                 c.mean / 2.74f, c.sd / 2.74f, flat.sd / 2.74f, c.cutsAfter);
-                // the spread's bound and no falls; the settle is said against the lead's 8 s, not held to it: the pace
-                // drains a start at 0.55 of the top slowly in firm mud, the lead's to judge
-                ok = ok && c.cutsAfter == 0 && c.settledAt >= 0.0f && c.sd <= 1.25f * flat.sd + 0.002f * 2.74f;
+                // the lead's bounds: no falls, settled within 8 s, the spread
+                ok = ok && c.cutsAfter == 0 && c.settledAt >= 0.0f && c.settledAt <= 8.0f && c.sd <= 1.25f * flat.sd + 0.002f * 2.74f;
             }
         Check(ok, line);
     }
