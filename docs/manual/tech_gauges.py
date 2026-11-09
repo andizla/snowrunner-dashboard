@@ -386,8 +386,14 @@ driven (and to the old truck only if its action is still its own).</p>
 <p>The game's torque per gear is one function, <code>bool(vehicle, int gear, float* torque, float* start, float* a, float* top, float* gearSpeed)</code>, found by
 its first bytes once (<code>kGearTorquePattern</code>), and the drive's call of it is the first call in the wheels' drive that lands there (<code>GearTorqueFind</code>,
 within 0x400 bytes). Its other callers (the stall, the input, the automatic) keep the game's own. The detour is attached with the other threads held
-(<code>GearboxAttach</code>). It makes the stock call, then on the drive's call for the published truck answers torque = <i>T</i><sub>stock</sub> · bracket with
-start −1, a 0 and top 10<sup>9</sup>, so the drive's own curve is flat at 1. The mod's thread publishes the slot once a pass (<code>TorqueCutSlotOf</code>) with
+(<code>GearboxAttach</code>). It makes the stock call, then on the drive's call for the published truck answers torque = <i>T</i><sub>stock</sub> · used with
+start −10<sup>9</sup>, a one float step under the top and the top at the governor's end over the power factor, 1.1 · top/pf (<code>TorqueCutCurveOut</code>), so after the
+drive's own scaling by pf the curve is 1 under the governor's end, and the game's own overspeed brake acts on each wheel above that top less 0.5, as in the stock
+(BRIEF_drive_2108_findings.md F1: with top 10<sup>9</sup> a free wheel ran away to tens of rad/s). used is the bracket paced as the game's B4 rose: used + <i>r</i> ·
+(bracket − used) away from 0, with <i>r</i> = EngineResponsiveness (+0xC4) · pf, and at once toward 0 (<code>CutRise</code>, F1b; one step's kick on a free wheel is about
+30 times the brake's most). The engine brake is tapered by the slowest driven wheel in the gear's direction, whole from twice the gear's idle speed and 0 at it
+(<code>TorqueCutBrakeTaper</code>, F3), and the cut waits for the game's gear to agree in sign with the position (<code>GearboxPosAgrees</code>, F2). The needle in a
+locked gear goes by the driven wheels' signed mean in the gear's direction, floored at 0 (<code>TruckDrivenSpinGeared</code>, F4). The mod's thread publishes the slot once a pass (<code>TorqueCutSlotOf</code>) with
 Powertrain=1, ModEngineSpeed=1 (else every engine speed reader but the fuel's and the stall's would read B4 = 1), Gearbox=2, a gear held by hand, EngineShare above 0 and the game's gear not 0. The detour reads <i>s</i> from the vehicle's own wheels: the mean of
 the driven wheels' float ω in the gear's direction, floored at 0 (<code>TorqueCutSpeeds</code>). A failed read takes the slot's last <i>s</i>.</p>
 <p>With rpm = max(<i>s</i>, 0)/top · redline: <i>F</i> = <i>p</i> · (E(rpm) · min(1, limit/<i>p</i>) − load) · held − (1 − <i>p</i>) · brake · clamp((rpm − idle)/(redline − idle), 0, 1).

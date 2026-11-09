@@ -1922,6 +1922,7 @@ int main()
         vehicle[0x768] = 1;
         putF(act, 0x38, 1.0f);
         putF(act, 0xD4, 1.0f);
+        putF(act, 0xC4, 1.0f); // EngineResponsiveness 1: the bracket whole at once (F1b), its pace tested below
         putF(act, 0xB4, 1.0f);
         for (int i = 0; i < 4; i++)
         {
@@ -1961,7 +1962,7 @@ int main()
         slot.map = TorqueCutMap{ 1.0f, 1.0f, 0.0f, 1.0f, 0.15f, 10.0f, 800.0f, 2000.0f, 1.6f, { 2, { 0.1f, 1.5f }, { 1.0f, 1.0f } }, CutGovernBand(10.0f, 1.1f).from, CutGovernBand(10.0f, 1.1f).to };
         TorqueCutPublish(&slot);
         const TorqueGot ours = TorqueFromDrive(fn, vehicle, 1);
-        const bool answered = ours.took && Near(ours.torque, 2.0f) && ours.start == -1.0f && ours.a == 0.0f && ours.top == 1e9f;
+        const bool answered = ours.took && Near(ours.torque, 2.0f) && ours.start == -1e9f && ours.a == nextafterf(11.0f, 0.0f) && ours.top == 11.0f;
         // the stand-in for the fuel and the stall: the cut's own pull (1 here), the stall's wheels' term (the wheels at
         // a whole 5 rad/s over a list top of 13) and the pedal kept for the vehicle alone; the fuel's call scaled by the
         // stand-in, the stall's by the game's formula with it
@@ -2062,6 +2063,36 @@ int main()
               line);
         if (!hooked) printf("     %s\n", why);
         if (!counts) printf("     counts: answered %ld passed %ld others %ld falls %ld\n", c1.answered - c0.answered, c1.passed - c0.passed, c1.others - c0.others, c1.falls - c0.falls);
+        // F1b: after a clear the bracket starts from 0 and rises by EngineResponsiveness x pf a step (0.25 x 0.8 here),
+        // falls at once; the curve's top lands at the governor's end over pf (1.1 x 10 / 0.8)
+        putF(act, 0xC4, 0.25f);
+        putF(act, 0x38, 0.8f);
+        slot.at = 0;
+        slot.mode = kCutMap;
+        slot.pedal = slot.map.pedal = 1.0f;
+        slot.share = 1.0f;
+        slot.floor = 0.0f;
+        TorqueCutPublish(&slot);
+        spin(5.0f);
+        const TorqueGot rise1 = TorqueFromDrive(fn, vehicle, 1), rise2 = TorqueFromDrive(fn, vehicle, 1);
+        slot.pedal = slot.map.pedal = 0.0f;
+        TorqueCutPublish(&slot);
+        spin(4.0f); // at the idle speed: F 0, no brake
+        const TorqueGot dropped = TorqueFromDrive(fn, vehicle, 1);
+        TorqueCutCounts cr = {};
+        TorqueCutCountsGet(cr);
+        const float paceRate = 0.25f * 0.8f;
+        const bool paced = Near(rise1.torque, 2.0f * paceRate) && Near(rise2.torque, 2.0f * (paceRate + paceRate * (1.0f - paceRate))) && dropped.torque == 0.0f &&
+                           Near(cr.rate, paceRate) &&
+                           rise1.start == -1e9f && Near(rise1.top, 1.1f * 10.0f / 0.8f) && rise1.a < rise1.top;
+        char paceLine[400];
+        snprintf(paceLine, sizeof paceLine, "torque cut's pace (F1b): from a clear the drive's call answered %.3f, then %.3f at %.2f a step (EngineResponsiveness x pf), 0 at "
+                                            "once with the pedal up; the curve's top %.2f (1.1 x the top over pf), a one step under it, start -1e9",
+                 rise1.torque, rise2.torque, paceRate, rise1.top);
+        Check(paced, paceLine);
+        TorqueCutPublish(nullptr);
+        putF(act, 0xC4, 1.0f);
+        putF(act, 0x38, 1.0f);
     }
 
     // the gear torque's places in made-up code: the function's bytes once, the drive's first call that lands on it; not

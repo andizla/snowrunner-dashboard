@@ -778,11 +778,15 @@ static volatile LONG g_cutS = 0, g_cutF = 0, g_cutBracket = 0, g_cutStock = 0, g
 // mod's thread
 static volatile LONG64 g_b4sVehicle = 0, g_b4sAt = 0;
 static volatile LONG g_b4sBits = 0, g_cutWBits = 0, g_cutPedalBits = 0;
+// the bracket the drive got last step, per vehicle (F1b: CutRise paces it); 0 for a new vehicle or after a clear
+static volatile LONG64 g_riseVehicle = 0;
+static volatile LONG g_riseBits = 0, g_cutUsed = 0, g_cutRate = 0;
 
 static const int kCutWheels = 16;
-// The vehicle's driven wheels' speeds, its power factor (action + 0x38) and its game clutch (action + 0xD4), read as the
-// drive reads them; false where a read faults or the list is out of bounds.
-static bool CutWheelsRead(const void *vehicle, float *omega, bool *driven, int &n, float &pf, float &d4)
+// The vehicle's driven wheels' speeds, its power factor (action + 0x38), its game clutch (action + 0xD4) and its
+// EngineResponsiveness (action + 0xC4, B4's rate a step over the power factor), read as the drive reads them; false where
+// a read faults or the list is out of bounds.
+static bool CutWheelsRead(const void *vehicle, float *omega, bool *driven, int &n, float &pf, float &d4, float &response)
 {
     n = 0;
     __try
@@ -792,6 +796,7 @@ static bool CutWheelsRead(const void *vehicle, float *omega, bool *driven, int &
         if ((uintptr_t)action < 0x10000) return false;
         pf = *(const volatile float *)(action + 0x38);
         d4 = *(const volatile float *)(action + 0xD4);
+        response = *(const volatile float *)(action + 0xC4);
         const bool awd = *(const volatile uint8_t *)(action + 0x49) != 0;
         const uintptr_t begin = *(const uintptr_t *)(v + 0x200), end = *(const uintptr_t *)(v + 0x208);
         if (end < begin || (end - begin) / 8 > (uintptr_t)kCutWheels) return false;
@@ -827,19 +832,29 @@ __declspec(noinline) static bool HookGearTorque(void *vehicle, int gear, float *
         float omega[kCutWheels];
         bool driven[kCutWheels];
         int n = 0;
-        float pf = 1.0f, d4 = 1.0f;
-        CutSpeeds sp = { 0.0f, 0.0f, false };
-        if (CutWheelsRead(vehicle, omega, driven, n, pf, d4)) sp = TorqueCutSpeeds(omega, driven, n, gear < 0 ? -1 : 1);
+        float pf = 1.0f, d4 = 1.0f, response = 1.0f;
+        CutSpeeds sp = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, false };
+        if (CutWheelsRead(vehicle, omega, driven, n, pf, d4, response)) sp = TorqueCutSpeeds(omega, driven, n, gear < 0 ? -1 : 1);
         if (!sp.ok) InterlockedIncrement(&g_cutFaults);
-        const TorqueCutAnswer r = TorqueCutAnswerOf(slot, t, st, aa, tp, pf, d4, sp);
+        TorqueCutAnswer r = TorqueCutAnswerOf(slot, t, st, aa, tp, pf, d4, sp);
+        // F1b: the bracket paced at the game's own B4 rate, from the last step's for this vehicle
+        const float rate = response * pf;
+        const float usedBefore = (uint64_t)g_riseVehicle == (uint64_t)(uintptr_t)vehicle ? BitsFloat(g_riseBits) : 0.0f;
+        TorqueCutAnswerPaced(r, t, usedBefore, rate);
+        InterlockedExchange(&g_riseBits, FloatBits(r.used));
+        InterlockedExchange64(&g_riseVehicle, (LONG64)(uintptr_t)vehicle);
+        // F1: the curve flat under a finite top at the governor's end, so the game's own overspeed brake acts above it
+        const CutCurveOut curve = TorqueCutCurveOut(slot.map, pf);
         if (torque) *torque = r.torque;
-        if (start) *start = -1.0f;
-        if (a) *a = 0.0f;
-        if (top) *top = 1e9f;
+        if (start) *start = curve.start;
+        if (a) *a = curve.a;
+        if (top) *top = curve.top;
         if (gearSpeed) *gearSpeed = gs;
         InterlockedIncrement(&g_cutAnswered);
-        if (BitsFloat(g_cutLastBracket) - r.bracket >= 0.3f) InterlockedIncrement(&g_cutFalls);
-        InterlockedExchange(&g_cutLastBracket, FloatBits(r.bracket));
+        if (BitsFloat(g_cutLastBracket) - r.used >= 0.3f) InterlockedIncrement(&g_cutFalls);
+        InterlockedExchange(&g_cutLastBracket, FloatBits(r.used));
+        InterlockedExchange(&g_cutUsed, FloatBits(r.used));
+        InterlockedExchange(&g_cutRate, FloatBits(rate));
         InterlockedExchange(&g_cutS, FloatBits(r.s));
         InterlockedExchange(&g_cutF, FloatBits(r.f));
         InterlockedExchange(&g_cutBracket, FloatBits(r.bracket));
@@ -890,6 +905,8 @@ void TorqueCutPublish(const TorqueCutSlot *slot)
     if (!slot || !slot->vehicle || !slot->action)
     {
         InterlockedExchangePointer(&g_cutSlot, nullptr);
+        InterlockedExchange64(&g_riseVehicle, 0); // the next take-over paces up from 0, as B4 after a shift
+        InterlockedExchange(&g_riseBits, 0);
         return;
     }
     TorqueCutSlot &next = g_cutSlots[g_cutNext];
@@ -927,6 +944,8 @@ void TorqueCutCountsGet(TorqueCutCounts &out)
     out.stockCurve = BitsFloat(g_cutCurve);
     out.standIn = BitsFloat(g_b4sBits);
     out.w = BitsFloat(g_cutWBits);
+    out.used = BitsFloat(g_cutUsed);
+    out.rate = BitsFloat(g_cutRate);
 }
 
 long GearboxKicks() { return g_kicks; }

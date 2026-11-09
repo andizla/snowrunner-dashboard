@@ -82,8 +82,9 @@ inline float TorqueCutRpm(const TorqueCutMap &m, float s)
 // F at the wheels' speed s: the pedal's share of the engine's torque at the speed the needle shows (its curve, the
 // governor, the cold and the boost, the road load taken off, the engine held back), less the engine's braking with the
 // foot off. No lift by the wheels' spin, no make-up for the game's fall, no roof and no pacing: the game's curve is out
-// of the drive. 0 for a speed or a map that is no number.
-inline float TorqueCutF(const TorqueCutMap &m, float s)
+// of the drive. 0 for a speed or a map that is no number. brakeShare (0 to 1) scales the braking alone (the taper by
+// the slowest driven wheel, TorqueCutBrakeTaper).
+inline float TorqueCutF(const TorqueCutMap &m, float s, float brakeShare = 1.0f)
 {
     if (!(m.redline > m.idle) || !(m.idle >= 0.0f)) return 0.0f;
     const float rpm = TorqueCutRpm(m, isfinite(s) ? s : 0.0f), speed = rpm / m.redline;
@@ -93,7 +94,7 @@ inline float TorqueCutF(const TorqueCutMap &m, float s)
     float drive = pedal * (e * limit - (isfinite(m.load) && m.load > 0.0f ? m.load : 0.0f));
     if (!(drive > 0.0f)) drive = 0.0f;
     if (m.held > 0.0f && m.held < 1.0f) drive *= m.held;
-    const float brake = (1.0f - pedal) * CutClamp01(m.brake) * CutClamp01((rpm - m.idle) / (m.redline - m.idle));
+    const float brake = (1.0f - pedal) * CutClamp01(m.brake) * CutClamp01((rpm - m.idle) / (m.redline - m.idle)) * CutClamp01(brakeShare);
     const float f = drive - brake;
     return isfinite(f) ? f : 0.0f;
 }
@@ -192,15 +193,17 @@ inline bool TorqueCutOurs(uintptr_t back, uintptr_t driveBack, const TorqueCutSl
 // float mean the needle and the governor go by (S1, as TruckDrivenSpin, but signed: M2); mid, (max + min) / 2 of each
 // wheel floored at 0, the game's own s without its cut to whole rad/s (S3); wholeMean and wholeMax, each wheel cut to
 // whole rad/s in the gear's direction and floored at 0, for the stall's wheels' term. ok false with no driven wheel.
+// least: the slowest driven wheel in the gear's direction, not floored (below 0 turning against the gear), for the
+// engine brake's taper.
 struct CutSpeeds
 {
-    float mean, mid, wholeMean, wholeMax;
+    float mean, mid, wholeMean, wholeMax, least;
     bool ok;
 };
 inline CutSpeeds TorqueCutSpeeds(const float *omega, const bool *driven, int n, int dir)
 {
-    CutSpeeds r = { 0.0f, 0.0f, 0.0f, 0.0f, false };
-    float sum = 0.0f, lo = 0.0f, hi = 0.0f, wholeSum = 0.0f, wholeHi = 0.0f;
+    CutSpeeds r = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, false };
+    float sum = 0.0f, lo = 0.0f, hi = 0.0f, wholeSum = 0.0f, wholeHi = 0.0f, least = 0.0f;
     int k = 0;
     for (int i = 0; i < n; i++)
     {
@@ -211,6 +214,7 @@ inline CutSpeeds TorqueCutSpeeds(const float *omega, const bool *driven, int n, 
         hi = k ? fmaxf(hi, f) : f;
         wholeSum += whole;
         wholeHi = fmaxf(wholeHi, whole);
+        least = k ? fminf(least, w) : w;
         k++;
     }
     if (!k) return r;
@@ -218,8 +222,58 @@ inline CutSpeeds TorqueCutSpeeds(const float *omega, const bool *driven, int n, 
     r.mid = 0.5f * (lo + hi);
     r.wholeMean = wholeSum / (float)k;
     r.wholeMax = wholeHi;
+    r.least = least;
     r.ok = true;
     return r;
+}
+
+// The engine brake's taper by the slowest driven wheel (F3 of BRIEF_drive_2108_findings.md): a real engine's drag only
+// slows the driveline toward idle, it never turns a wheel against the gear. Whole while every driven wheel turns in the
+// gear's direction at twice the gear's idle speed (idle over redline times the gear's top) or more, falling in a straight
+// line to 0 at the idle speed, 0 under it: a wheel stopped, turning against the gear or in the air slow keeps the brake off.
+inline float TorqueCutBrakeTaper(float least, const TorqueCutMap &m)
+{
+    if (!(m.redline > 0.0f) || !(m.top > 0.0f) || !(m.idle > 0.0f)) return 0.0f;
+    const float idleSpeed = m.idle / m.redline * m.top;
+    return CutClamp01((least - idleSpeed) / idleSpeed);
+}
+
+// The bracket's pace (F1b, the Reviewer's addendum): the game's own B4 rose toward its target by EngineResponsiveness
+// (action + 0xC4) x the power factor a step, and that rise is what held a free wheel's kick in the game; the cut's B4 = 1
+// took it out. So the bracket the drive gets (used) moves away from 0 at that rate, used + rate x (bracket - used), and
+// toward 0 at once: a cut of the pull is whole in the step, the brake's onset with the foot off is paced too, its
+// fall back toward 0 is not. From one side of 0 to the other it drops to 0 at once and paces from there. rate is held to
+// 0 to 1; a rate that is no number is 1.
+inline float CutRise(float used, float bracket, float rate)
+{
+    if (!isfinite(bracket)) return 0.0f;
+    const float r = isfinite(rate) ? CutClamp01(rate) : 1.0f;
+    const float u = isfinite(used) ? used : 0.0f;
+    if (bracket >= 0.0f)
+    {
+        const float base = u > 0.0f ? u : 0.0f;
+        return bracket <= base ? bracket : base + r * (bracket - base);
+    }
+    const float base = u < 0.0f ? u : 0.0f;
+    return bracket >= base ? bracket : base + r * (bracket - base);
+}
+
+// The curve's outputs to the drive's call (F1): start -1e9 and a one float step under the top, so the drive's own curve
+// is 1 at every speed under the top (its rise's u is exactly 1 in float32: 1e9 + s rounds to 1e9), and the top at the
+// governor's end, governTo x the gear's top over the power factor, so that after the drive scales them by the power factor
+// (start += (pf - 1) a, a *= pf, top *= pf) the top lands at the governor's end in the drive's units. The game's own
+// overspeed brake per wheel acts above that top less 0.5, as in the stock, and stops a free wheel that runs past it. With
+// no top or power factor, the old outputs: -1, 0 and 1e9 (the curve 1 everywhere, the brake out of reach).
+struct CutCurveOut
+{
+    float start, a, top;
+};
+inline CutCurveOut TorqueCutCurveOut(const TorqueCutMap &m, float pf)
+{
+    if (!(m.top > 0.0f) || !(m.governTo > 0.0f) || !(pf > 0.0f) || !isfinite(pf)) return { -1.0f, 0.0f, 1e9f };
+    const float top = m.governTo * m.top / pf;
+    if (!isfinite(top) || !(top > 0.0f)) return { -1.0f, 0.0f, 1e9f };
+    return { -1e9f, nextafterf(top, 0.0f), top };
 }
 
 // The answer to the drive's call: the torque to give (the game's own for the gear times the bracket), the bracket (F
@@ -229,7 +283,7 @@ inline CutSpeeds TorqueCutSpeeds(const float *omega, const bool *driven, int n, 
 // wheels' speeds this step (a failed read takes the slot's sLast).
 struct TorqueCutAnswer
 {
-    float torque, bracket, f, b4s, stockCurve, s, standIn, w;
+    float torque, bracket, f, b4s, stockCurve, s, standIn, w, used, taper;
 };
 inline TorqueCutAnswer TorqueCutAnswerOf(const TorqueCutSlot &slot, float stock, float start, float a, float top, float pf, float d4, CutSpeeds sp)
 {
@@ -238,12 +292,23 @@ inline TorqueCutAnswer TorqueCutAnswerOf(const TorqueCutSlot &slot, float stock,
     if (!sp.ok) sp.wholeMean = sp.wholeMax = truncf(sp.mean);
     r.s = sp.mean;
     r.stockCurve = TorqueCutStockCurve(start, a, top, pf, sp.mid);
-    r.f = slot.mode == kCutMap ? TorqueCutF(slot.map, sp.mean) : (isfinite(slot.scalar) ? slot.scalar : 0.0f);
+    r.taper = sp.ok ? TorqueCutBrakeTaper(sp.least, slot.map) : 0.0f;
+    r.f = slot.mode == kCutMap ? TorqueCutF(slot.map, sp.mean, r.taper) : (isfinite(slot.scalar) ? slot.scalar : 0.0f);
     r.bracket = TorqueCutBlend(slot.share, slot.pedal, r.stockCurve, r.f);
     if (slot.floor > 0.0f && r.bracket < slot.floor) r.bracket = slot.floor;
+    r.used = r.bracket;
     r.torque = isfinite(stock) ? stock * r.bracket : 0.0f;
     r.b4s = TorqueCutB4s(slot.pedal, d4, r.stockCurve);
     r.standIn = TorqueCutStandIn(r.bracket);
     r.w = TorqueCutStallWheels(sp.wholeMean, sp.wholeMax, slot.listTop);
     return r;
+}
+
+// The answer paced (F1b): the bracket used from the last step's (CutRise at rate), the torque the stock times it, the
+// stand-in for B4's readers the same.
+inline void TorqueCutAnswerPaced(TorqueCutAnswer &r, float stock, float usedBefore, float rate)
+{
+    r.used = CutRise(usedBefore, r.bracket, rate);
+    r.torque = isfinite(stock) ? stock * r.used : 0.0f;
+    r.standIn = TorqueCutStandIn(r.used);
 }

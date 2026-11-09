@@ -273,7 +273,7 @@ bool TorqueCutPullGet(uint64_t vehicle, TorqueCutPull &out);
 struct TorqueCutCounts
 {
     long answered, passed, others, faults, falls; // the drive's calls answered and passed, the other callers', the wheels' reads that failed, the falls of the bracket by 0.3 or more in one step
-    float s, f, bracket, stock, torque, d4, b4s, stockCurve, standIn, w; // the last answer's (b4s the game's settled pull, for the probe; standIn what B4's readers get)
+    float s, f, bracket, stock, torque, d4, b4s, stockCurve, standIn, w, used, rate; // the last answer's (used the bracket paced, rate its pace a step) (b4s the game's settled pull, for the probe; standIn what B4's readers get)
 };
 void TorqueCutCountsGet(TorqueCutCounts &out);
 // The game's own ShiftGear(0) refused for the held truck at kPolicyAll so far: the gearbox damage's kick to N

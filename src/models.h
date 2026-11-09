@@ -103,6 +103,21 @@ inline float TruckDrivenSpin(const TruckRaw &t)
     return n ? sum / n : t.wheels ? all / t.wheels : 0.0f;
 }
 
+// The driven wheels' signed mean in the engaged gear's direction, floored at 0 (F4 of BRIEF_drive_2108_findings.md): the
+// engine behind an open differential turns with the carrier, the mean of its wheels with their signs, so a pair at -75
+// and +81 rad/s reads about +3, not 78. What the needle goes by in a locked gear, as the torque cut's s (torque_cut.h).
+// In neutral by the reverse gear's sign of none: forward. 0 with no driven wheel read.
+inline float TruckDrivenSpinGeared(const TruckRaw &t)
+{
+    const float dir = t.gearEngaged < 0 ? -1.0f : 1.0f;
+    float sum = 0.0f;
+    int n = 0;
+    for (int i = 0; i < t.wheels; i++)
+        if (t.drive[i] == 1 || (t.drive[i] == 2 && t.awd)) { sum += t.spin[i] * dir; n++; }
+    const float m = n ? sum / (float)n : 0.0f;
+    return isfinite(m) && m > 0.0f ? m : 0.0f;
+}
+
 // How far the driven wheels' speeds lie apart, the fastest less the slowest as a share of their mean; 0 for one wheel
 // or none turning.
 inline float TruckDrivenSpread(const TruckRaw &t)
@@ -231,7 +246,7 @@ inline float GearTopMerge(float kept, float plateau) { return GearTopFar(kept, p
 inline float TachWheelShare(const TruckRaw &t)
 {
     const float top = TruckGearTop(t, t.gearEngaged);
-    return top > 0.0f ? SettingsRange(TruckDrivenSpin(t) / top, 0.0f, kTachOverrun) : 0.0f;
+    return top > 0.0f ? SettingsRange(TruckDrivenSpinGeared(t) / top, 0.0f, kTachOverrun) : 0.0f;
 }
 
 // The engine speed the needle heads for, before the lag. It sets the needle in the game's own positions, where no
@@ -3024,7 +3039,7 @@ inline bool ClutchStep(ClutchModel &m, const TruckRaw &t, const GaugeScale &k, c
     }
     const float range = k.redline - k.idle;
     const int gear = t.gearEngaged;
-    const float top = gear ? TruckGearTop(t, gear) : 0.0f, spin = TruckDrivenSpin(t);
+    const float top = gear ? TruckGearTop(t, gear) : 0.0f, spin = TruckDrivenSpinGeared(t); // F4: the carrier's signed speed
     m.connected = top > 0.0f && isfinite(spin);
     m.input = m.connected ? spin / top * k.redline : 0.0f;
     m.automatic = automatic;

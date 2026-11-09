@@ -3149,7 +3149,7 @@ static void GearboxModelPass(GearboxModel &m, bool driving, const GearboxPosMode
 static bool TorqueCutWanted(const GaugeSettings &s) { return s.powertrain && s.modEngineSpeed && s.gearbox == kGearboxOwn && s.engineShare > 0; }
 
 // Why the torque cut does not act, for its log line (the first that holds).
-static const wchar_t *TorqueCutWhyNot(const GaugeSettings &s, bool want, bool held, bool hooks, int gear, float top)
+static const wchar_t *TorqueCutWhyNot(const GaugeSettings &s, bool want, bool held, bool hooks, int gear, float top, bool agrees = true)
 {
     if (!s.powertrain) return L"Powertrain is off";
     if (!want) return L"the engine is off or the pull test is armed";
@@ -3159,6 +3159,7 @@ static const wchar_t *TorqueCutWhyNot(const GaugeSettings &s, bool want, bool he
     if (!held) return L"no gear held by hand (A drives, or the mod's gearbox does not have the truck)";
     if (!hooks) return L"its hooks are not all in (the gear torque, the engine speed and the wheels' drive)";
     if (gear == 0) return L"in neutral";
+    if (!agrees) return L"the game's gear does not yet agree with the position (a shift landing)";
     if (!(top > 0.0f)) return L"the gear has no top";
     return L"the truck is not read";
 }
@@ -6469,7 +6470,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             // its fuel and the stall read by the cut's own pull (TorqueCutStandIn). The torque factor is not written meanwhile: the game's
             // own share is given back once, so engine damage's own cut still acts through it
             const bool cutHooks = GearTorqueHooked() && EngineSpeedHooked() && CreepHooked();
-            const bool cutActs = want && own && GearboxManual(w) && TorqueCutWanted(s) && cutHooks && raw.gearEngaged != 0 && gearTop > 0.0f && w.refs.action != 0;
+            const bool cutAgrees = GearboxPosAgrees(w.pos, raw.gearEngaged);
+            const bool cutActs = want && own && GearboxManual(w) && TorqueCutWanted(s) && cutHooks && raw.gearEngaged != 0 && cutAgrees && gearTop > 0.0f &&
+                                 w.refs.action != 0;
             if (cutActs)
             {
                 const TorqueCutSlot slot = TorqueCutSlotOf(w, raw, s, scale, curve, tachTop, locked, gearTop);
@@ -6479,7 +6482,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             if (cutActs != w.cutActs)
             {
                 if (cutActs) Log(L"torque cut: acting in %S (the game's gear %d): the truck pulls with the mod engine alone, %d percent of it", GearboxPosName(w.pos.pos), raw.gearEngaged, s.engineShare);
-                else Log(L"torque cut: off, %s; the game's own torque again", TorqueCutWhyNot(s, want, own && GearboxManual(w), cutHooks, raw.gearEngaged, gearTop));
+                else Log(L"torque cut: off, %s; the game's own torque again", TorqueCutWhyNot(s, want, own && GearboxManual(w), cutHooks, raw.gearEngaged, gearTop, cutAgrees));
             }
             w.cutActs = cutActs;
             const bool handWas = w.hand.on;
@@ -6540,11 +6543,11 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 TorqueCutCountsGet(c);
                 const TorqueCutCounts &before = w.cutWas;
                 const float sTop = gearTop > 0.0f ? c.s / gearTop : 0.0f;
-                Log(L"probe: torque cut: %s; s %.2f rad/s (%.2f of the top %.2f, %.0f rpm), F %.3f, the bracket %.3f (the least %.3f), the scalar %.3f, the share %.2f; "
+                Log(L"probe: torque cut: %s; s %.2f rad/s (%.2f of the top %.2f, %.0f rpm), F %.3f, the bracket %.3f (the least %.3f, used %.3f at %.3f a step), the scalar %.3f, the share %.2f; "
                     L"the game's T %.3f, answered %.3f; D4 %.2f, B4s %.3f, the stand-in %.3f, the stall's wheels %.3f; calls answered %ld, passed %ld, the other callers' %ld, reads failed %ld; falls of 0.3 or more "
                     L"in one step %ld; the throttle held at 1 %s",
-                    cutActs ? L"acting" : TorqueCutWhyNot(s, want, own && GearboxManual(w), cutHooks, raw.gearEngaged, gearTop), c.s, sTop, gearTop, sTop * scale.redline,
-                    c.f, c.bracket, w.cutFloor, locked ? 0.0f : SettingsRange(w.clutch.carried, -1.0f, kClutchHold), s.engineShare / 100.0f, c.stock, c.torque, c.d4, c.b4s, c.standIn, c.w,
+                    cutActs ? L"acting" : TorqueCutWhyNot(s, want, own && GearboxManual(w), cutHooks, raw.gearEngaged, gearTop, cutAgrees), c.s, sTop, gearTop, sTop * scale.redline,
+                    c.f, c.bracket, w.cutFloor, c.used, c.rate, locked ? 0.0f : SettingsRange(w.clutch.carried, -1.0f, kClutchHold), s.engineShare / 100.0f, c.stock, c.torque, c.d4, c.b4s, c.standIn, c.w,
                     c.answered - before.answered, c.passed - before.passed, c.others - before.others, c.faults - before.faults, c.falls - before.falls, cutActs ? L"on" : L"off");
                 w.cutWas = c;
             }

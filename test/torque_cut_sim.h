@@ -10,8 +10,14 @@
 // - B4: 1 under the cut (the throttle held at 1, B4 written 1 before the drive); in the game's own, its stock rule
 //   (target (1 - D4 + D4 x curve) x throttle at the integers' (max + min) / 2, rate EngineResponsiveness x pf a step);
 // - the torque per wheel: min(B4, throttle) x T x clamp x share over the wheels.
+// - the overspeed brake per wheel (c42c5b to c42d75, BRIEF_drive_2108_findings.md): above min(the fastest whole speed -
+//   0.5, the curve's top - 0.5), floored at 0, min((w - that) x 0.2, 1)^2 x 1024 / 60 of angular impulse a step against
+//   the gear, over the wheel's inertia (inertia 0 leaves the brake out). The cut's top: the governor's end with F1
+//   (cutTop), 1e9 without (the old outputs, so only the fastest - 0.5 binds);
+// - the cut's bracket paced as the game's B4 rose (F1b, CutRise at rise a step; 0 leaves it whole at once).
 // The answer F is the detour's (torque_cut.h) from this step's wheels, or in the counter-case held from a pass of the
-// mod's thread every 100 ms (or 50 to 120 ms), as the factor reached the game before.
+// mod's thread every 100 ms (or 50 to 120 ms), as the factor reached the game before. freeWheels of the wheels (the first
+// ones) have no grip and little drag: a wheel lifted or in a slurry.
 #pragma once
 #include "torque_cut.h"
 #include <math.h>
@@ -42,6 +48,10 @@ struct SimSetup
     TorqueCutSlot slot;    // what the mod's thread published (mode kCutMap)
     SimGround ground;
     uint32_t seed;
+    float inertia;         // a wheel's, kg m^2, for the overspeed brake's impulse; 0 no brake
+    bool cutTop;           // the cut answers with the finite top (F1); false: top 1e9
+    float rise;            // the bracket's pace a step (F1b, EngineResponsiveness x pf); 0 whole at once
+    int freeWheels;        // the first ones without grip
 };
 struct SimResult
 {
@@ -53,6 +63,8 @@ struct SimResult
     float period;         // the mean seconds between cuts (0 none)
     float vEnd, sEnd;     // the ground's and the wheels' speed at the end
     float fMin, fMax;     // the bracket over the measured span
+    float pinned;         // the share of the steps after the first second with s at or over the needle's stop (1.1 of the top)
+    float wMax;           // the fastest wheel after the first second, rad/s
 };
 
 inline float SimRand(uint32_t &s)
@@ -68,7 +80,9 @@ inline SimResult SimRun(const SimSetup &u)
     float w[8], d118[8] = {}, share[8], noise[8] = {};
     int whole[8] = {};
     for (int i = 0; i < n; i++) w[i] = u.s0 * (1.0f + 0.02f * (float)(i - n / 2)), share[i] = 1.0f, whole[i] = (int)fmaxf(w[i], 0.0f);
-    float v = u.v0, b4 = 0.0f, held = 0.0f, nextPass = 0.0f, lastBracket = 0.0f;
+    float v = u.v0, b4 = 0.0f, held = 0.0f, nextPass = 0.0f, lastBracket = 0.0f, used = 0.0f;
+    int pinnedSteps = 0, countedSteps = 0;
+    float wMax = 0.0f;
     uint32_t seed = u.seed ? u.seed : 1u;
     const int steps = (int)(u.seconds / dt);
     // the s trace, for the settle and the spread
@@ -113,6 +127,7 @@ inline SimResult SimRun(const SimSetup &u)
                 bracket = held;
             }
             else bracket = TorqueCutAnswerOf(u.slot, 1.0f, -1.0f, 0.0f, 1e9f, 1.0f, 1.0f, sp).bracket;
+            if (u.rise > 0.0f) bracket = used = CutRise(used, bracket, u.rise);
         }
         if (k > 0 && lastBracket - bracket >= 0.3f)
         {
@@ -121,6 +136,8 @@ inline SimResult SimRun(const SimSetup &u)
             lastCut = k;
         }
         lastBracket = bracket;
+        // the drive's curve top for the brake, in its units: the game's own scaled by pf, the cut's at the governor's end
+        const float curveTop = u.mode == kSimGame ? u.gameTop * u.pf : u.cutTop ? u.slot.map.governTo * u.slot.map.top : 1e9f;
         // the drive's terms per wheel, once a step: the torque it hands the physics for the whole step
         float torque[8], grip[8];
         for (int i = 0; i < n; i++)
@@ -134,7 +151,18 @@ inline SimResult SimRun(const SimSetup &u)
             torque[i] = bracket * u.drive * clamp * share[i];
             // the ground's grip with noise, low passed
             noise[i] += (1.0f - expf(-dt / kSimNoiseLag)) * ((SimRand(seed) * 2.0f - 1.0f) * 1.732f - noise[i]);
-            grip[i] = u.ground.grip * fmaxf(0.0f, 1.0f + u.ground.noise * noise[i] * 2.5f);
+            grip[i] = i < u.freeWheels ? 0.0f : u.ground.grip * fmaxf(0.0f, 1.0f + u.ground.noise * noise[i] * 2.5f);
+        }
+        // the overspeed brake, an impulse this step, applied with the drive's torque before the physics
+        if (u.inertia > 0.0f)
+        {
+            const float threshold = fmaxf(fminf((float)hi - 0.5f, curveTop - 0.5f), 0.0f);
+            for (int i = 0; i < n; i++)
+                if (w[i] > threshold)
+                {
+                    const float x = fminf((w[i] - threshold) * 0.2f, 1.0f);
+                    w[i] -= fminf(x * x * 1024.0f / 60.0f / u.inertia, w[i] - threshold);
+                }
         }
         // the physics (Havok's own solver, stable where the ground couples the wheel to the truck stiffly): ten small
         // steps inside the drive's one, the drive's torque held through them
@@ -145,7 +173,7 @@ inline SimResult SimRun(const SimSetup &u)
             for (int i = 0; i < n; i++)
             {
                 const float ground = grip[i] * tanhf((w[i] - v) / 0.3f);
-                w[i] += (torque[i] - ground - u.ground.drag * w[i]) * h;
+                w[i] += (torque[i] - ground - (i < u.freeWheels ? 0.2f : u.ground.drag) * w[i]) * h;
                 pushSum += ground;
             }
             // the truck: the wheels' push over its mass (a wheel's push moves it a tenth as much), the ground's hold, the grade
@@ -155,6 +183,13 @@ inline SimResult SimRun(const SimSetup &u)
         }
         trace[k] = sp.mean;
         brackets[k] = bracket;
+        if (t >= 1.0f)
+        {
+            countedSteps++;
+            const float topNow = u.slot.map.top > 0.0f ? u.slot.map.top : 1.0f;
+            if (sp.mean >= 1.1f * topNow) pinnedSteps++;
+            for (int i = 0; i < n; i++) wMax = fmaxf(wMax, w[i]);
+        }
     }
     SimResult r = {};
     const int total = steps < 60 * 60 ? steps : 60 * 60;
@@ -184,6 +219,8 @@ inline SimResult SimRun(const SimSetup &u)
     r.cutsPerSecond = cuts / (total * dt);
     r.period = cuts > 1 ? (lastCut - firstCut) * dt / (float)(cuts - 1) : 0.0f;
     r.vEnd = v;
+    r.pinned = countedSteps ? (float)pinnedSteps / (float)countedSteps : 0.0f;
+    r.wMax = wMax;
     r.sEnd = trace[total > 0 ? total - 1 : 0];
     return r;
 }

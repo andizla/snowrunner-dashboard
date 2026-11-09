@@ -395,6 +395,15 @@ inline int GearboxPosGear(const GearboxPosModel &m, const GearboxTruck &t, int a
     }
 }
 
+// Whether the game's gear agrees in sign with a position (F2 of BRIEF_drive_2108_findings.md): R and a gear below 0, a
+// forward position (A, a numbered gear, H, the low range) and a gear above 0. N and the game's neutral never agree, so
+// the steps while a shift lands pass the game's own torque.
+inline bool GearboxPosAgrees(const GearboxPosModel &m, int gameGear)
+{
+    if (m.pos == kPosN || gameGear == 0) return false;
+    return m.pos == kPosR ? gameGear < 0 : gameGear > 0;
+}
+
 inline float GearboxPosPower(const GearboxPosModel &m)
 {
     return m.pos >= kPosLowMinus && m.pos <= kPosLowPlus ? kLowRangePower[m.pos - kPosLowMinus] : m.power;

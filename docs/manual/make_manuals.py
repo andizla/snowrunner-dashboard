@@ -257,7 +257,8 @@ engine's curve at the engine speed the needle shows, and the game's fall is gone
 pull off near the redline, to nothing at 1.1 of it where the needle stops; in the low range it starts a little under the redline. It needs Mod engine speed on. The pedal is the fuel, as the game has it: half way down gives half the pull. Engine share mixes
 the game's curve back in: at 100 the mod engine pulls alone. With the foot off the engine brakes: <b>Engine braking</b> (<code>EngineBrake</code>, the Power tab's
 "Engine braking", 0 to 30 percent of the gear's torque at the redline, 15 by default). It brakes less toward idle and not at all at idle, so a standing truck is
-never pushed. The fuel follows the mod engine's pull, so floored near a gear's top the truck burns what it pulls. When the game's damage throws the gearbox out, the mod gearbox goes to N too.</p>
+never pushed, and it brakes only while every driven wheel turns with the gear. In deep mud a wheel that breaks loose
+is held by the game's own brake past the gear's top, and the pull comes back at the pace of the engine's response, so the low range pulls a little softer there. The fuel follows the mod engine's pull, so floored near a gear's top the truck burns what it pulls. When the game's damage throws the gearbox out, the mod gearbox goes to N too.</p>
 <p><b>Mod engine speed</b> (<code>ModEngineSpeed</code>, the Power tab's "Mod engine speed", on by default, acts with <code>Powertrain=1</code>). The game has no
 engine speed of its own to keep: it works one out each time from the pedal and its pull, and with the foot off it is idle. So the cockpit's
 needles stayed at idle while the mod's engine turned. Now the game reads the mod's needle while the mod drives the truck:

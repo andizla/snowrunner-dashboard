@@ -4108,6 +4108,143 @@ int main(int argc, char **argv)
         Check(ok, line);
     }
 
+    // the free wheel (BRIEF_drive_2108_findings.md, F1 and F1b): L- of a 2.9 rad/s top floored, a kick of 50 rad/s a step
+    // at a bracket of 1 on a slow wheel (the 21:08 log: T 257 000, f 0.2, a 10 kg m^2 wheel), MaxDeltaAngVel 0.01, one
+    // wheel of four with no grip, the game's overspeed brake on 10 kg m^2. The counter-case, the old outputs (top 1e9) and
+    // the bracket whole at once: the needle pinned at its stop most of the time. F1 alone (the finite top): the brake acts,
+    // but one step's kick is about 30 times its most. F1 with F1b (the bracket paced at EngineResponsiveness 0.05 x pf
+    // 0.2 a step): the wheels' fastest under 5 x the top and s at the stop under 5 % of the time. Then deep mud with all
+    // four gripping, and the grounded cases of the loop above again with the brake and the pace, the figures in the line.
+    {
+        SimSetup u = {};
+        u.drive = 3000.0f;
+        u.mdav = 0.01f;
+        u.wheels = 4;
+        u.seconds = 30.0f;
+        u.seed = 11;
+        u.inertia = 10.0f;
+        u.freeWheels = 1;
+        u.ground = SimGround{ 5.0f, 0.3f, 1.0f, 1.5f, 0.0f };
+        TorqueCutSlot &sl = u.slot;
+        sl.vehicle = 1;
+        sl.mode = kCutMap;
+        sl.share = 1.0f;
+        sl.pedal = 1.0f;
+        const CutBand band = CutGovernBand(2.9f, kTachOverrun);
+        sl.map = TorqueCutMap{ 1.0f, 1.0f, 0.0f, 1.0f, 0.15f, 2.9f, 800.0f, 2500.0f, 1.2f, { 5, { 0.25f, 0.45f, 0.6f, 0.8f, 1.0f }, { 0.55f, 0.85f, 1.0f, 1.0f, 0.85f } },
+                               band.from, band.to };
+        const float rise = 0.04f * 0.2f; // the Reviewer's toy: EngineResponsiveness 0.04 x pf 0.2 (0.2 x 0.2 the quicker case)
+        u.mode = kSimCut;
+        u.cutTop = false;
+        u.rise = 0.0f;
+        const SimResult old = SimRun(u);
+        u.cutTop = true;
+        const SimResult brakeOnly = SimRun(u);
+        u.rise = rise;
+        const SimResult paced = SimRun(u);
+        u.rise = 0.04f;
+        const SimResult quick = SimRun(u);
+        u.rise = rise;
+        u.freeWheels = 0;
+        const SimResult gripping = SimRun(u);
+        u.cutTop = false;
+        u.rise = 0.0f;
+        const SimResult grippingOld = SimRun(u);
+        char line[1600];
+        int len = snprintf(line, sizeof line, "the free wheel in L- floored (a kick of 50 rad/s a step): the old outputs pinned %.0f %% of the time, the fastest wheel %.0f rad/s, "
+                                              "%.1f falls a second; the finite top alone %.0f %%, %.0f rad/s, %.1f a second; with the pace %.3f a step %.0f %%, %.1f rad/s "
+                                              "(%.1f x the top), %.1f a second (at 0.04 a step %.0f %%, %.1f rad/s); all gripping %.0f %% at %.2f m/s on the ground (the old outputs %.0f %% at %.2f);",
+                           100.0f * old.pinned, old.wMax, old.cutsPerSecond, 100.0f * brakeOnly.pinned, brakeOnly.wMax, brakeOnly.cutsPerSecond, rise, 100.0f * paced.pinned,
+                           paced.wMax, paced.wMax / 2.9f, paced.cutsPerSecond, 100.0f * quick.pinned, quick.wMax, 100.0f * gripping.pinned, gripping.vEnd, 100.0f * grippingOld.pinned, grippingOld.vEnd);
+        bool ok = old.pinned > 0.5f && paced.wMax < 5.0f * 2.9f && paced.pinned < 0.05f;
+        // the loop's grounded cases with the brake and the pace (drive 80, MaxDeltaAngVel 0.05, L- of 2.74)
+        SimSetup g = {};
+        g.drive = 80.0f;
+        g.mdav = 0.05f;
+        g.wheels = 4;
+        g.seconds = 20.0f;
+        g.seed = 7;
+        g.inertia = 10.0f;
+        g.cutTop = true;
+        g.rise = rise;
+        g.mode = kSimCut;
+        g.slot = sl;
+        const CutBand lowBand = CutGovernBand(2.74f, kTachOverrun);
+        g.slot.map.top = 2.74f;
+        g.slot.map.redline = 2500.0f;
+        g.slot.map.governFrom = lowBand.from;
+        g.slot.map.governTo = lowBand.to;
+        const SimGround grounds[2] = { { 5.0f, 0.3f, 1.0f, 1.5f, 0.0f }, { 30.0f, 0.15f, 0.5f, 1.0f, 0.0f } };
+        const char *names[2] = { "soft mud", "firm mud" };
+        for (int gk = 0; gk < 2; gk++)
+            for (int from = 0; from < 2; from++)
+            {
+                g.ground = grounds[gk];
+                g.s0 = from ? 0.55f * 2.74f : 0.0f;
+                g.v0 = from ? 0.3f : 0.0f;
+                const SimResult c = SimRun(g);
+                SimSetup flatSetup = g;
+                flatSetup.mode = kSimFlat;
+                flatSetup.rise = 0.0f;
+                flatSetup.flat = (c.fMin + c.fMax) * 0.5f;
+                const SimResult flat = SimRun(flatSetup);
+                len += snprintf(line + len, sizeof line - len, " %s from %.2f with both: settled %.2f s (the lead's 8 s %s), x %.3f, sd %.4f of the top (F held flat %.4f), falls %d "
+                                                               "after;", names[gk], from ? 0.55f : 0.0f, c.settledAt, c.settledAt >= 0.0f && c.settledAt <= 8.0f ? "met" : "missed",
+                                c.mean / 2.74f, c.sd / 2.74f, flat.sd / 2.74f, c.cutsAfter);
+                // the spread's bound and no falls; the settle is said against the lead's 8 s, not held to it: the pace
+                // drains a start at 0.55 of the top slowly in firm mud, the lead's to judge
+                ok = ok && c.cutsAfter == 0 && c.settledAt >= 0.0f && c.sd <= 1.25f * flat.sd + 0.002f * 2.74f;
+            }
+        Check(ok, line);
+    }
+
+    // F3 and F4 of BRIEF_drive_2108_findings.md: the engine brake only while every driven wheel turns in the gear's
+    // direction over the gear's idle speed, fading from twice it; the needle by the driven wheels' signed mean in the
+    // gear's direction. F2: the game's gear agrees in sign with the mod's position, else the stock passes.
+    {
+        TorqueCutSlot bs = {};
+        bs.vehicle = 1;
+        bs.mode = kCutMap;
+        bs.share = 1.0f;
+        bs.pedal = 0.0f;
+        bs.map = TorqueCutMap{ 0.0f, 1.0f, 0.0f, 1.0f, 0.15f, 10.0f, 800.0f, 2000.0f, 1.2f, { 2, { 0.1f, 1.5f }, { 1.0f, 1.0f } }, CutGovernBand(10.0f, 1.1f).from,
+                               CutGovernBand(10.0f, 1.1f).to };
+        const bool d2[2] = { true, true }, d4[4] = { true, true, true, true };
+        const float apart[2] = { -75.0f, 81.0f }, back[4] = { -12.0f, -12.0f, -12.0f, -12.0f }, oneForward[4] = { -12.0f, -12.0f, -12.0f, 2.0f },
+                    slow[4] = { -6.0f, -6.0f, -6.0f, -6.0f };
+        const float fApart = TorqueCutAnswerOf(bs, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, TorqueCutSpeeds(apart, d2, 2, -1)).f;
+        const float fBack = TorqueCutAnswerOf(bs, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, TorqueCutSpeeds(back, d4, 4, -1)).f;
+        const float fOne = TorqueCutAnswerOf(bs, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, TorqueCutSpeeds(oneForward, d4, 4, -1)).f;
+        const float fSlow = TorqueCutAnswerOf(bs, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, TorqueCutSpeeds(slow, d4, 4, -1)).f;
+        const bool brake = fApart >= 0.0f && Near(fBack, -0.15f, 1e-5f) && fOne >= 0.0f && Near(fSlow, -0.15f * (1200.0f - 800.0f) / 1200.0f * 0.5f, 1e-5f) &&
+                           TorqueCutBrakeTaper(8.0f, bs.map) == 1.0f && TorqueCutBrakeTaper(4.0f, bs.map) == 0.0f && Near(TorqueCutBrakeTaper(6.0f, bs.map), 0.5f, 1e-6f);
+        TruckRaw tw = Truck();
+        tw.wheels = 2;
+        tw.drive[0] = tw.drive[1] = 1;
+        tw.spin[0] = -75.0f;
+        tw.spin[1] = 81.0f;
+        tw.gearEngaged = 1;
+        const float forward = TruckDrivenSpinGeared(tw);
+        tw.gearEngaged = -1;
+        const float reverse = TruckDrivenSpinGeared(tw);
+        tw.spin[0] = tw.spin[1] = -9.0f;
+        const float backing = TruckDrivenSpinGeared(tw);
+        const bool needle = Near(forward, 3.0f, 1e-5f) && reverse == 0.0f && Near(backing, 9.0f, 1e-5f);
+        GearboxPosModel pm = {};
+        pm.pos = kPosR;
+        const bool rAgrees = GearboxPosAgrees(pm, -1) && !GearboxPosAgrees(pm, 2);
+        pm.pos = kPosLowMinus;
+        const bool lowAgrees = GearboxPosAgrees(pm, 1) && !GearboxPosAgrees(pm, -1) && !GearboxPosAgrees(pm, 0);
+        pm.pos = kPosN;
+        const bool nNever = !GearboxPosAgrees(pm, 0) && !GearboxPosAgrees(pm, 1);
+        char brakeLine[500];
+        snprintf(brakeLine, sizeof brakeLine, "torque cut's brake and needle: foot off in R with the driven pair at -75 and +81 F %.3f, all four at -12 F %.3f, one of them at "
+                                              "+2 F %.3f, all at -6 (1.5 x the idle speed) F %.3f; the needle's spin forward %.1f, in R %.1f, backing at -9 %.1f; R agrees only "
+                                              "with a gear below 0, L- above 0, N never",
+                 fApart, fBack, fOne, fSlow, forward, reverse, backing);
+        Check(brake && needle && rAgrees && lowAgrees && nNever, brakeLine);
+    }
+
     // L- is jerky (BRIEF_low_minus_jerky.md): by spin, the mean of the last passes and the cap's fade over the wider of
     // the top's last 0.8 rad/s and its last fifth (BRIEF_low_gear_sway.md). A trace with +-0.15 rad/s of noise around
     // 0.95 (and 1.0) of L-'s 2.24 rad/s top keeps the factor's change from one pass to the next under 0.15 (0.18.4's jumps
