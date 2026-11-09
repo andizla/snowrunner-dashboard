@@ -260,9 +260,9 @@ the game's curve back in: at 100 the mod engine pulls alone. With the foot off t
 never pushed. The fuel burns as the game's own at the same pedal and wheel speed. When the game's damage throws the gearbox out, the mod gearbox goes to N too.</p>
 <p><b>Mod engine speed</b> (<code>ModEngineSpeed</code>, the Power tab's "Mod engine speed", on by default, acts with <code>Powertrain=1</code>). The game has no
 engine speed of its own to keep: it works one out each time from the pedal and its pull, and with the foot off it is idle. So the cockpit's
-needles and the engine sound stayed at idle while the mod's engine turned. Now the game reads the mod's needle while the mod drives the truck:
+needles stayed at idle while the mod's engine turned. Now the game reads the mod's needle while the mod drives the truck:
 idle is the game's idle and the redline its floored mark (<code>EngineSpeedTop</code> moves that top, 1 by default). The cockpit's needles,
-the steering wheel's rev lights and the effects follow the mod's engine. The engine sound should follow it too; a drive will confirm it. The fuel burn
+the steering wheel's rev lights, the effects and the exhaust follow the mod's engine. The fuel burn
 and the stall check keep the game's own figure for now, so fuel use stays as before. Untick it, or turn Real engine off, for the game's own.</p>
 <p><b>Air drag</b> (<code>RoadLoad</code>, the Power tab's "Air drag", on by default, acts with <code>Powertrain=1</code>; untick it to turn it off). The game already slows
 a rolling truck by itself, more the faster it goes. Air drag adds the air's share on top of that. With this on the mod takes the air's drag off the engine's pull, more the
