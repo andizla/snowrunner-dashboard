@@ -4326,6 +4326,31 @@ int main(int argc, char **argv)
                             cap.vEnd, cap.kept, cap.cutsAfter);
             ok = ok && cap.wIn <= 2.9f * guard + 1e-4f && cap.cutsAfter == 0;
         }
+        // floored up a grade on hard ground (the Reviewer's note: the guard's margin at the top is (WheelCap - 100) % x the
+        // top x the wheels' inertia; at 110 a grade sags there): today, the guard at 110 and at 150
+        SimSetup climb = u;
+        climb.drive = 3000.0f;
+        climb.freeWheels = 0;
+        climb.seconds = 30.0f;
+        float climbV[3] = {}, climbX[3] = {};
+        const float climbCaps[3] = { 0.0f, 1.1f, guard };
+        const float grades[2] = { -0.3f, -0.6f };
+        for (int g2 = 0; g2 < 2; g2++)
+        {
+            climb.ground = SimGround{ 60.0f, 0.1f, 0.05f, 0.05f, grades[g2] };
+            for (int k = 0; k < 3; k++)
+            {
+                climb.cap = climbCaps[k];
+                climb.governTruck = k > 0;
+                const SimResult r = SimRun(climb);
+                climbV[k] = r.vEnd / 2.9f;
+                climbX[k] = r.mean / 2.9f;
+                ok = ok && (k == 0 || r.cutsAfter == 0);
+            }
+            len += snprintf(line + len, sizeof line - len, " the scout floored up a grade of %.1f: the truck at %.2f of the top today (x %.2f), %.2f with the guard at 110 (x %.2f), %.2f at 150 "
+                                                           "(x %.2f);",
+                            -grades[g2], climbV[0], climbX[0], climbV[1], climbX[1], climbV[2], climbX[2]);
+        }
         // the foot off down a grade, entered at the top
         SimSetup hill = u;
         hill.drive = 360.0f;
