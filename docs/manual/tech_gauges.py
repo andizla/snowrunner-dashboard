@@ -360,7 +360,14 @@ from 2 to 1 in a straight line over the wider of the top's last 0.8 rad/s and it
 second: the factor fell to 1 at the top, the truck sagged, and the rise back was paced at <code>kLiftRise</code>. On this path a
 rise is now paced only after the wheels break loose: the mean's <i>x</i> up by more than 0.2 or the spin up by more than 1 rad/s
 in one pass (<code>kSpinLooseX</code>, <code>kSpinLooseRad</code>), for <code>kLiftCutWindow</code>. A fall along the fade opens nothing. The
-ground path keeps its cut rule. <code>SpinCalm</code> in Gauges.ini is read no more, and the log says so once. The probe's <i>x</i> is the mean:</p>
+ground path keeps its cut rule. <code>SpinCalm</code> in Gauges.ini is read no more, and the log says so once.
+Crawl hold (<code>CrawlHold=1</code>, the default) acts on this path alone (<code>CrawlHoldActs</code>, one condition). The game's own L- surges too: it
+cuts its pull at the top and gives it back only under about 0.55 of it, and the truck sags and climbs every few seconds. So the factor
+is at most <i>H</i>(<i>x</i><sub>p</sub>), a straight line from 2 at 0.70 of the top to 0.05 at 0.95 and 0.05 above (<code>CrawlHoldLine</code>,
+<code>kCrawlFrom</code>, <code>kCrawlTo</code>, <code>kCrawlLeast</code>), where <i>x</i><sub>p</sub> is the mean's <i>x</i> plus its rising rate times
+0.6 s (<code>kCrawlLead</code>; the rate is a pass's change over dt, 0.3 of each new pass kept, <code>CrawlHoldStep</code>; a falling <i>x</i> takes
+nothing off). The floor is under a road's drag, so the truck settles where <i>H</i> meets the drag: about 0.85 of the top in mud, 0.93 on
+firm ground. Its falls and climbs open no pace. The probe's roof is min(roof, <i>H</i>). The probe's <i>x</i> is the mean:</p>
 {eq('lift = clamp( curve(<i>x</i>) · ratio · min(1, cold · boost / <i>p</i>) / GameFall(<i>x</i>), 0.05, <i>R</i> ) for <i>x</i> &lt; 1, 1 for <i>x</i> ≥ 1,    GameFall(<i>x</i>) = clamp(2.1(1 − <i>x</i>), 0, 1),    <i>R</i> = 6', 13)}
 {eq('factor = game · (1 + clamp(EngineShare/100, 0, 1) · (lift − 1))', 14)}
 <p class="where">ratio is the torque converter's multiplication while the mod's automatic holds the gears, otherwise 1. game is the game's

@@ -539,6 +539,9 @@ struct LoopTruck
     bool spinLift = false; // a held gear with the clutch in: the lift by the wheels' own speed, capped at kSpinLiftMost, as gauges.cpp has it since eeb2ffa
     bool oldSpin = false;  // 0.18.4's locked path, to show the sway (BRIEF_low_gear_sway.md): this pass's spin, the cap of 2, a rise paced after any cut
     float spinNoise = 0.0f; // the wheels' spin read with +- this many rad/s of noise a pass, as the game's frames give it (about 0.15)
+    bool gameCut = false;   // the game's pull as THE VERDICT of BRIEF_low_gear_sway.md reads it: flat at the throttle, cut at the top and back only under cutBack of it
+    float cutBack = 0.55f;
+    bool crawlHold = false; // the mod's Crawl hold on the locked path (CrawlHoldStep)
 };
 struct LoopState
 {
@@ -560,6 +563,9 @@ struct LoopState
     float pull = 0.0f;   // the game's pull (action + 0xB4)
     float stallAt = -1.0f; // seconds into the drive the creep stalled the engine, which is off from then on
     uint32_t seed = 12345u; // the spin noise's
+    bool cut = false;    // the game's pull is cut (gameCut)
+    int cuts = 0;        // the times it was cut
+    CrawlHold crawl = {}; // the crawl hold's rate, as gauges.cpp keeps it
 };
 
 // The lift as it was before c9c99ea: the roof fading from 0.8 of the gear's top, written at once.
@@ -606,8 +612,11 @@ static void LoopStep(const LoopTruck &c, LoopState &s, const TorqueCurve &curve,
     const float x = spinning ? byspin.x : LiftShare(TruckDrivenSpin(t), s.v, s.box.grip, liftTop);
     const float ratio = driving ? s.box.ratio : 1.0f;
     const float limit = s.power.cold * s.power.boost;
+    const bool crawl = CrawlHoldActs(c.crawlHold, spinning && !c.oldSpin);
+    if (!crawl) s.crawl.had = false;
+    const float hold = crawl ? CrawlHoldStep(s.crawl, byspin.x, before ? 0.0f : dt, t.gearEngaged, 0x5000) : kTorqueFactorMost;
     const float lift = before ? LiftBefore(s.power.curve, limit, TruckPedal(t), ratio, x, TorqueRoof(c.cls))
-                              : spinning ? fminf(TorqueLift(s.power.curve, limit, TruckPedal(t), ratio, x, TorqueRoof(c.cls)), byspin.cap)
+                              : spinning ? fminf(fminf(TorqueLift(s.power.curve, limit, TruckPedal(t), ratio, x, TorqueRoof(c.cls)), byspin.cap), hold)
                                          : TorqueLift(s.power.curve, limit, TruckPedal(t), ratio, x, TorqueRoof(c.cls));
     const float wanted = s.hand.game * lift;
     TorqueHandStep(s.hand, true, 0x5000, 0x4000, t.torqueFactor, lift, before ? 0.0f : dt, t.gearEngaged, spinning && !c.oldSpin, byspin.loose);
@@ -627,7 +636,12 @@ static void LoopStep(const LoopTruck &c, LoopState &s, const TorqueCurve &curve,
     s.share = c.creep ? CreepStep(s.creep, t, c.k, driving || c.shifterConverter, c.clutchGrip, dt, nullptr, stalls, c.holdMost, c.mayStall, c.shifterConverter) : 0.0f;
     if (stalls) s.stallAt = s.at;
     const float throttle = s.brake > 0.0f || !TruckEngineOn(t) ? 0.0f : fmaxf(pedal, s.share);
-    const float target = throttle * (c.lowPull + (1.0f - c.lowPull) * GamePull(share));
+    if (c.gameCut)
+    {
+        if (share >= 1.0f && !s.cut) s.cut = true, s.cuts++;
+        else if (share < c.cutBack) s.cut = false;
+    }
+    const float target = c.gameCut ? (s.cut ? 0.0f : throttle) : throttle * (c.lowPull + (1.0f - c.lowPull) * GamePull(share));
     s.pull = c.pullLag > 0.0f ? s.pull + (target - s.pull) * (1.0f - expf(-dt / c.pullLag)) : target;
     const float pushNow = top > 0.0f ? c.push * s.pull * s.applied * first / top : 0.0f;
     const float ground = c.grade + c.bumps * sinf(6.2831853f * s.at / c.bumpPeriod);
@@ -700,6 +714,68 @@ static SwayStats SwayRun(bool oldSpin, int gear, float powerFactor, float gearA,
         last = f;
         r.lastSpin = spin;
     }
+    return r;
+}
+
+// Crawl hold's closed loop (BRIEF_low_gear_sway.md, THE VERDICT and the Reviewer's addenda 2 and 4): a heavy truck held
+// by hand at full pedal, the game's pull flat up to the gear's top, cut there and back only under 0.55 of it; the
+// factor applied after 0.1 s of dead time and a 0.3 s lag, the wheels read with +- 0.03 of the top of noise a pass. The
+// push is set so a factor of 1 gains 0.37 of the top a second without drag: a factor of 1.5 in mud then climbs about
+// 0.3 a second, and with the pull cut mud takes 0.25 a second off, the refuting read's rates. The drag is a share of
+// that push: mud 0.68, soft 0.4, firm 0.2, a road 0.05. From x0 of the top, over seconds: the cuts, the wheels' x
+// least and most and their sd over the last 20 s as shares of the top, the mean there, and the settle: the last
+// second x was more than 0.03 off that mean.
+struct CrawlStats { float xLo, xHi, sd, mean, settle, period, top, reach, climbFactor; int cuts; };
+static LoopTruck LoopHeavy();
+static CrawlStats CrawlRun(bool hold, int gear, float powerFactor, float gearA, float drag, float x0, float seconds)
+{
+    LoopTruck c = LoopHeavy();
+    c.fixedGear = gear;
+    c.spinLift = true;
+    c.gameCut = true;
+    c.crawlHold = hold;
+    c.t.powerFactor = powerFactor;
+    if (gearA > 0.0f) c.t.gearSpeed[gear] = gearA;
+    c.dead = 0.1f;
+    c.lag = 0.3f;
+    TruckRaw at = c.t;
+    at.gear = at.gearEngaged = gear;
+    TruckRaw plain = c.t;
+    plain.powerFactor = 1.0f;
+    const float top = TruckGearTop(at, gear), first = TruckGearTop(plain, 1), rate = 0.37f;
+    c.push = rate * top * top / (c.grip * first); // push x first / top x grip / top = rate
+    c.drag0 = drag * rate * top / c.grip;
+    c.drag2 = 0.0f;
+    c.spinNoise = 0.03f * top;
+    const TorqueCurve curve = kClassCurves[kClassHeavy];
+    LoopState s;
+    s.v = x0 * top / c.grip;
+    const int n = (int)(seconds / kDt + 0.5f);
+    static float xs[2000];
+    int firstCut = -1, lastCut = -1, cutsWas = 0, reachAt = -1, climbPasses = 0;
+    double climbSum = 0.0;
+    for (int i = 0; i < n && i < 2000; i++)
+    {
+        LoopStep(c, s, curve, 1.0f, kDt, false);
+        xs[i] = c.grip * s.v / top;
+        if (reachAt < 0 && xs[i] >= kCrawlFrom) reachAt = i;
+        if (reachAt < 0) climbSum += s.hand.written, climbPasses++;
+        if (s.cuts != cutsWas)
+        {
+            if (firstCut < 0) firstCut = i;
+            lastCut = i;
+            cutsWas = s.cuts;
+        }
+    }
+    CrawlStats r = { 1e9f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, top, (reachAt + 1) * kDt, climbPasses ? (float)(climbSum / climbPasses) : 0.0f, s.cuts };
+    const int from = n - (int)(20.0f / kDt + 0.5f);
+    double sum = 0.0, sq = 0.0;
+    for (int i = from; i < n; i++) sum += xs[i], sq += (double)xs[i] * xs[i], r.xLo = fminf(r.xLo, xs[i]), r.xHi = fmaxf(r.xHi, xs[i]);
+    r.mean = (float)(sum / (n - from));
+    r.sd = (float)sqrt(fmax(0.0, sq / (n - from) - (double)r.mean * r.mean));
+    for (int i = 0; i < n; i++)
+        if (fabsf(xs[i] - r.mean) > 0.03f) r.settle = (i + 1) * kDt;
+    r.period = s.cuts > 1 ? (lastCut - firstCut) * kDt / (s.cuts - 1) : 0.0f;
     return r;
 }
 
@@ -3844,6 +3920,64 @@ int main(int argc, char **argv)
         Check(caught && !creptHeld && creptRise > kLiftRise * dt + 0.01f && ground, line);
     }
 
+    // Crawl hold (BRIEF_low_gear_sway.md, THE VERDICT and the Reviewer's addendum 4): H falls in a straight line from 2
+    // at 0.70 of the top to 0.05 at 0.95 and stays there, nothing below 0.70; xp leads x by its rising rate times
+    // 0.6 s, a falling x takes nothing off; another gear or truck starts the rate over; it acts only with the setting on
+    // and the gear held by hand
+    {
+        CrawlHold h = {};
+        const float atFrom = CrawlHoldLine(0.70f), mid = CrawlHoldLine(0.825f), atTo = CrawlHoldLine(0.95f), past = CrawlHoldLine(1.1f), under = CrawlHoldLine(0.5f);
+        CrawlHoldStep(h, 0.75f, 0.05f, 1, 0x5000);
+        float rising = 0.0f;
+        for (int i = 1; i <= 20; i++) rising = CrawlHoldStep(h, 0.75f + 0.005f * i, 0.05f, 1, 0x5000); // 0.1 a second up, to 0.85
+        CrawlHold f = {};
+        CrawlHoldStep(f, 0.90f, 0.05f, 1, 0x5000);
+        float falling = 0.0f;
+        for (int i = 1; i <= 10; i++) falling = CrawlHoldStep(f, 0.90f - 0.005f * i, 0.05f, 1, 0x5000); // down to 0.85
+        const float fresh = CrawlHoldStep(h, 0.85f, 0.05f, 2, 0x5000);
+        char line[300];
+        snprintf(line, sizeof line, "crawl hold: H %.2f at 0.70, %.3f at 0.825, %.2f at 0.95 and past, none under 0.70; rising 0.1 a second to 0.85 it holds %.3f (xp about 0.91), "
+                                    "falling to 0.85 %.3f, a new gear %.3f", atFrom, mid, atTo, rising, falling, fresh);
+        Check(Near(atFrom, 2.0f, 1e-4f) && Near(mid, 1.025f, 1e-3f) && Near(atTo, 0.05f, 1e-4f) && past == kCrawlLeast && under == kTorqueFactorMost &&
+                  Near(rising, CrawlHoldLine(0.85f + 0.1f * 0.6f), 0.06f) && rising < CrawlHoldLine(0.85f) - 0.3f && Near(falling, CrawlHoldLine(0.85f), 1e-3f) &&
+                  Near(fresh, CrawlHoldLine(0.85f), 1e-3f) && CrawlHoldActs(true, true) && !CrawlHoldActs(false, true) && !CrawlHoldActs(true, false),
+              line);
+    }
+    // Crawl hold in the closed loop: with the hold off the truck surges (the game cuts at the top and the truck sags to
+    // 0.55 of it every few seconds; in L- with a 1900 rpm redline a swing of about 850 rpm, on the log's own scale over
+    // 2500) on all four drags over 30 s (mud and soft 4 cuts or more, firm and a road, where the sag is slow, 2 or more);
+    // with it on no cut on any of them, the wheels' sd under 0.02 of the top over the
+    // last 20 s, under the top, settled within 4 s of reaching 0.70, from the surge's own trough (0.55 of the top) and
+    // from a deeper one (0.3). Under 0.70 the climb is today's lift, which the hold leaves alone: in this loop it is
+    // under 1 there (the class curve at a low engine speed), so in mud that climb alone takes seconds; the line says
+    // both. The same with a 10 rad/s top in mud and on a road
+    {
+        const float drags[4] = { 0.68f, 0.4f, 0.2f, 0.05f };
+        const char *names[4] = { "mud", "soft", "firm", "road" };
+        char line[1800];
+        int len = snprintf(line, sizeof line, "crawl hold in the loop, L-, 30 s:");
+        bool ok = true;
+        for (int d = 0; d < 4; d++)
+        {
+            const CrawlStats off = CrawlRun(false, 1, 0.133f, 0.0f, drags[d], 0.55f, 30.0f), on = CrawlRun(true, 1, 0.133f, 0.0f, drags[d], 0.55f, 30.0f),
+                             deep = CrawlRun(true, 1, 0.133f, 0.0f, drags[d], 0.3f, 30.0f);
+            len += snprintf(line + len, sizeof line - len, " %s off %d cuts (one in %.1f s), x %.2f to %.2f; on %d cuts, x %.3f to %.3f (sd %.4f), at %.3f; from 0.55 0.70 at "
+                                                           "%.2f s, settled %.2f s after; from 0.3 %d cuts, 0.70 at %.2f s (the lift %.2f), settled %.2f s after;",
+                            names[d], off.cuts, off.period, off.xLo, off.xHi, on.cuts, on.xLo, on.xHi, on.sd, on.mean, on.reach, on.settle - on.reach, deep.cuts, deep.reach,
+                            deep.climbFactor, deep.settle - deep.reach);
+            ok = ok && off.cuts >= (d < 2 ? 4 : 2) && (off.cuts < 2 || off.period >= 2.0f) && off.xHi - off.xLo > 0.4f && !on.cuts && on.settle - on.reach <= 4.0f && on.sd < 0.02f && on.xHi < 1.0f &&
+                 !deep.cuts && deep.settle - deep.reach <= 4.0f && deep.sd < 0.02f;
+        }
+        const float tenDrags[2] = { 0.68f, 0.05f };
+        for (int d = 0; d < 2; d++)
+        {
+            const CrawlStats off = CrawlRun(false, 2, 1.0f, 2.5f, tenDrags[d], 0.55f, 30.0f), on = CrawlRun(true, 2, 1.0f, 2.5f, tenDrags[d], 0.55f, 30.0f);
+            len += snprintf(line + len, sizeof line - len, " a %.0f rad/s top, %s: off %d cuts, x %.2f to %.2f; on %d cuts, x %.3f to %.3f (sd %.4f), settled %.2f s after 0.70;",
+                            on.top, d ? "road" : "mud", off.cuts, off.xLo, off.xHi, on.cuts, on.xLo, on.xHi, on.sd, on.settle - on.reach);
+            ok = ok && off.cuts >= 2 && off.xHi - off.xLo > 0.4f && !on.cuts && on.settle - on.reach <= 4.0f && on.sd < 0.02f && on.xHi < 1.0f;
+        }
+        Check(ok, line);
+    }
     // L- is jerky (BRIEF_low_minus_jerky.md): by spin, the mean of the last passes and the cap's fade over the wider of
     // the top's last 0.8 rad/s and its last fifth (BRIEF_low_gear_sway.md). A trace with +-0.15 rad/s of noise around
     // 0.95 (and 1.0) of L-'s 2.24 rad/s top keeps the factor's change from one pass to the next under 0.15 (0.18.4's jumps

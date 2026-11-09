@@ -1570,6 +1570,50 @@ inline SpinLift SpinLiftStep(SpinMean &m, float spin, float top, int gear, uint6
     return r;
 }
 
+// Crawl hold (BRIEF_low_gear_sway.md, THE VERDICT of 2026-11-09, the Reviewer's addenda 2 and 4): the game's own L-
+// surges too. Floored, the truck climbs to the gear's top, the game cuts its pull there and gives it back only well
+// under it (about 0.55 of the top), so the truck sags and climbs again every few seconds, whoever holds the gear. In a
+// gear held by hand the factor is held under the top so the truck never reaches the cut: min(the factor, H(xp)), H a
+// straight line from kSpinLiftMost at kCrawlFrom of the top to kCrawlLeast at kCrawlTo, and kCrawlLeast from there.
+// xp is the mean's x plus its rising rate times kCrawlLead seconds (the rate a pass's change over dt, smoothed by
+// kCrawlRateKeep of each new pass; a falling x takes nothing off), so the factor falls before the dead time and the
+// game's lag carry the truck over. The floor is under the lightest drag (a road), so the truck settles on the line:
+// about 0.85 of the top in mud, 0.93 on firm ground. Below kCrawlFrom (the class roof's kLiftFadeFrom) nothing changes.
+// Its own falls and climbs open no pace (TorqueHandStep's byLoose).
+static const float kCrawlFrom = 0.70f;
+static const float kCrawlTo = 0.95f;
+static const float kCrawlLeast = kTorqueFactorLeast;
+static const float kCrawlLead = 0.6f;     // seconds the rising rate looks ahead
+static const float kCrawlRateKeep = 0.3f; // the share of each new pass in the smoothed rate
+// Where the hold acts: the setting on and a gear held by hand with the clutch in (the locked path). One condition, so
+// the scope can be narrowed in one place (the Reviewer's addendum 4 would take it to the low range only).
+inline bool CrawlHoldActs(bool on, bool locked) { return on && locked; }
+inline float CrawlHoldLine(float xp)
+{
+    if (!isfinite(xp) || xp < kCrawlFrom) return kTorqueFactorMost;
+    if (xp >= kCrawlTo) return kCrawlLeast;
+    return kCrawlLeast + (kSpinLiftMost - kCrawlLeast) * (kCrawlTo - xp) / (kCrawlTo - kCrawlFrom);
+}
+struct CrawlHold
+{
+    float lastX, rate; // the last pass's x (by the mean) and the smoothed rate of x a second
+    int gear;          // the gear and the truck they are for: another starts it over
+    uint64_t vehicle;
+    bool had;
+};
+// One pass: x by the mean, the pass's dt, the gear and the truck; H at xp back (kTorqueFactorMost where it holds nothing).
+inline float CrawlHoldStep(CrawlHold &h, float x, float dt, int gear, uint64_t vehicle)
+{
+    if (!isfinite(x)) x = 0.0f;
+    if (!h.had || gear != h.gear || vehicle != h.vehicle) h = CrawlHold{ x, 0.0f, gear, vehicle, true };
+    else if (dt > 0.0f)
+    {
+        h.rate += kCrawlRateKeep * ((x - h.lastX) / dt - h.rate);
+        h.lastX = x;
+    }
+    return CrawlHoldLine(x + fmaxf(0.0f, h.rate) * kCrawlLead);
+}
+
 // The factor over the game's own share, by the engine's torque curve at its speed (0 to 1), the share of it the cold
 // oil and the boost leave (limit), the pedal (the game asks the engine for that share of its torque, which it has as
 // far as the limit goes: at a light foot a turbo engine without boost gives what the pedal asks), the converter's

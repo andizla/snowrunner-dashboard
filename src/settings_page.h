@@ -849,7 +849,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     {
         PageLabel("Real engine", labelX);
         changed(ImGui::Checkbox("##powertrain", &s.powertrain));
-        PageTip("The truck pulls with the mod's engine: its torque curve at the engine speed shown, and the mod's automatic shifts by it. Off by default.");
+        PageTip("The truck pulls with the mod's engine: its torque curve at the engine speed shown, and the mod's automatic shifts by it. Crawl hold goes with it. Off by default.");
         if (s.powertrain)
         {
             PageLabel("Engine share", labelX);
@@ -859,6 +859,9 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             PageLabel("Air drag", labelX);
             changed(ImGui::Checkbox("##roadload", &s.roadLoad));
             PageTip("The game already slows a rolling truck by itself, more the faster it goes. This adds the air's share on top, taken off the engine's pull in each gear once it is measured floored on flat ground. The wheels' own drag is left out of that measure, so Rolling drag and a flat tire don't make it stronger. Acts with Real engine on. On by default.");
+            PageLabel("Crawl hold", labelX);
+            changed(ImGui::Checkbox("##crawlhold", &s.crawlHold));
+            PageTip("Holds a gear picked by hand just under its top speed, so the game does not cut and surge there. Off: the game does as it does. On by default.");
         }
         PageLabel("Pull test", labelX);
         const bool pullOn = view.pullTest == kViewPullArmed || view.pullTest == kViewPullRunning;

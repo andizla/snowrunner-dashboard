@@ -63,6 +63,7 @@
 ##ridefront
 ##riderear
 ##roadload
+##crawlhold
 ##rolldanger
 ##rollwarn
 ##scale
