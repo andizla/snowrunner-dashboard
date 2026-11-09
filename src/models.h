@@ -2921,8 +2921,8 @@ inline PullOrders PullTestStep(PullTest &m, const TruckRaw &t, float pedal, floa
         m = PullTest{ kPullRunning, 0, 0.0f, t.torqueFactor, t.gear, t.speed, t.speed, share };
         m.why = "";
     }
-    const char *stop = !engine ? "the engine stopped" : t.automatic ? "the game's automatic took the gears" : t.gear != m.gear ? "another gear was put in" :
-                       pedal < kPullPedal ? "the pedal was lifted" : braking ? "the brake was put on" : share > kPullTopEnd ? "the wheels reached the gear's top" : nullptr;
+    const char *stop = !engine ? "the engine stopped" : t.automatic ? "the game automatic took the gears" : t.gear != m.gear ? "another gear was put in" :
+                       pedal < kPullPedal ? "the pedal was lifted" : braking ? "the brake was put on" : share > kPullTopEnd ? "the wheels reached the top of the gear" : nullptr;
     if (stop)
     {
         m.state = kPullStopped;

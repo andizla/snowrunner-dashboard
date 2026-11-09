@@ -113,7 +113,7 @@ Class###own
 Class###ownboost
 Defaults
 Full boost
-Game's gearbox
+Game gearbox
 Half
 Little
 Mod automatic
