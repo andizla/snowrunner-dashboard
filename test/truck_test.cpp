@@ -1957,7 +1957,7 @@ int main()
         slot.share = 1.0f;
         slot.pedal = 1.0f;
         slot.sLast = 3.0f;
-        slot.map = TorqueCutMap{ 1.0f, 1.0f, 0.0f, 1.0f, 0.15f, 10.0f, 800.0f, 2000.0f, 1.6f, { 2, { 0.1f, 1.5f }, { 1.0f, 1.0f } }, kGovernFrom, kGovernTo };
+        slot.map = TorqueCutMap{ 1.0f, 1.0f, 0.0f, 1.0f, 0.15f, 10.0f, 800.0f, 2000.0f, 1.6f, { 2, { 0.1f, 1.5f }, { 1.0f, 1.0f } }, CutGovernBand(10.0f, 1.1f).from, CutGovernBand(10.0f, 1.1f).to };
         TorqueCutPublish(&slot);
         const TorqueGot ours = TorqueFromDrive(fn, vehicle, 1);
         const bool answered = ours.took && Near(ours.torque, 2.0f) && ours.start == -1.0f && ours.a == 0.0f && ours.top == 1e9f;
@@ -1971,17 +1971,17 @@ int main()
         putF(act, 0xB4, 0.0f);
         const float fuelAtNoPull = SpeedFromFuel(sfn, vehicle);
         putF(act, 0xB4, 1.0f);
-        const bool fuel = Near(fuelScaled, 0.25f * b4s) && fuelAtNoPull == 0.0f && SpeedFromFuel(sfn, otherVehicle) == 0.25f && SpeedFromCockpit(sfn, vehicle) == 0.25f;
+        const bool fuel = Near(fuelScaled, 0.25f * b4s) && Near(SpeedFromStall(sfn, vehicle), 0.25f * b4s) && fuelAtNoPull == 0.0f && SpeedFromFuel(sfn, otherVehicle) == 0.25f && SpeedFromCockpit(sfn, vehicle) == 0.25f;
         const TorqueGot stall = TorqueFromStall(fn, vehicle, 1), input = TorqueFromInput(fn, vehicle, 1);
         const bool othersStock = stall.took && stall.start == 0.25f && input.took && input.top == 13.0f;
         const TorqueGot otherV = TorqueFromDrive(fn, otherVehicle, 1);
         const bool otherStock = otherV.took && otherV.torque == 2.0f && otherV.start == 0.25f && otherV.top == 13.0f;
         const TorqueGot neutral = TorqueFromDrive(fn, vehicle, 0);
         const bool neutralStock = !neutral.took && neutral.torque == 0.0f && neutral.start == 0.0f && neutral.top == 0.0f;
-        // the governor: the wheels at 1.2 of the top, F (1.25 - 1.2) / 0.35 of the curve's
-        spin(12.0f);
+        // the governor: the wheels at 1.05 of the top, half way through the band of 1.0 to 1.1 (a 10 rad/s top)
+        spin(10.5f);
         const TorqueGot governed = TorqueFromDrive(fn, vehicle, 1);
-        const bool governor = Near(governed.torque, 2.0f * (kGovernTo - 1.2f) / (kGovernTo - kGovernFrom));
+        const bool governor = Near(governed.torque, 2.0f * 0.5f);
         // the foot off at the redline: the engine holds back by 0.15 of the gear's torque, at idle by nothing
         slot.pedal = slot.map.pedal = 0.0f;
         TorqueCutPublish(&slot);
@@ -2044,14 +2044,14 @@ int main()
         TorqueCutCountsGet(c1);
         // answered: ours, governed, two brakes, three reverse, the blend, two scalars, the fault (11); passed: unpublished,
         // the other vehicle, neutral, stale, cleared (5); the others: the stall and the input (2); the bracket falling by
-        // 0.3 or more in one step: 1 to 0.14 at the governor, 0.4 to 0 at the floor's slot
-        const bool counts = c1.answered - c0.answered == 11 && c1.passed - c0.passed == 5 && c1.others - c0.others == 2 && c1.falls - c0.falls == 2;
+        // 0.3 or more in one step: 1 to 0.5 at the governor, 0.5 to -0.15 as the foot comes off, 0.4 to 0 at the floor's slot
+        const bool counts = c1.answered - c0.answered == 11 && c1.passed - c0.passed == 5 && c1.others - c0.others == 2 && c1.falls - c0.falls == 3;
         const bool twice = GearTorqueHook((uintptr_t)&FakeGearTorque, driveBack, why, sizeof why);
         char line[700];
         snprintf(line, sizeof line, "torque cut's detour: through Detours on a function of the gear torque's signature, the drive's call answered %.3f with the flat curve, "
-                                    "the governor %.3f at 1.2 of the top, the foot off %.3f at the redline and %.3f at idle, R rolling forward %.3f and back %.3f, the "
+                                    "the governor %.3f at 1.05 of the top, the foot off %.3f at the redline and %.3f at idle, R rolling forward %.3f and back %.3f, the "
                                     "blend at half %.3f, the scalar %.3f and the creep's least %.3f; the stall's, the input's, another vehicle's, gear 0 and a stale "
-                                    "slot the game's own; a failed read the slot's speed; B4s %.3f, the fuel's call %.3f and 0 with no pull",
+                                    "slot the game's own; a failed read the slot's speed; B4s %.3f, the fuel's and the stall's calls %.3f and 0 with no pull",
                  ours.torque, governed.torque, brakeTop, brakeIdle, rForward, rBackward, halfTorque, scalar, floor, b4s, fuelScaled);
         Check(distinct && hooked && unpublished && answered && b4sKept && fuel && othersStock && otherStock && neutralStock && governor && braking && reverse && blend &&
                   scalars && fault && staleStock && clearedStock && counts && twice && GearTorqueHooked(),

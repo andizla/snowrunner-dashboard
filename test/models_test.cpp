@@ -3891,13 +3891,14 @@ int main(int argc, char **argv)
     }
 
     // the torque cut's map (BRIEF_drivetrain_2_torque_cut.md): F over the wheels' speed with the clutch fully in. At idle
-    // and floored the curve's own there; at the peak E times the limit; the governor from kGovernFrom of the redline to
-    // nothing at kGovernTo; the foot off the brake, 0 at idle and under it, the whole share at the redline; the road load
+    // and floored the curve's own there; at the peak E times the limit; the governor from the band's start (1.0 of the
+    // redline at a 10 rad/s top) to nothing at the needle's stop (1.1), L- of 2.74 rad/s from 0.81; the foot off the brake, 0 at idle and under it, the whole share at the redline; the road load
     // taken off; the engine held back; rolling against the gear 0 rpm (M2); the game's curve and B4s by the research's C.1
     {
         TorqueCutMap cm = { 1.0f, 1.0f, 0.0f, 1.0f, 0.15f, 10.0f, 800.0f, 2000.0f, 1.2f, { 5, { 0.25f, 0.45f, 0.6f, 0.8f, 1.0f }, { 0.55f, 0.85f, 1.0f, 1.0f, 0.85f } },
-                           kGovernFrom, kGovernTo };
-        const float atIdle = TorqueCutF(cm, 4.0f), atPeak = TorqueCutF(cm, 7.0f), atFrom = TorqueCutF(cm, 10.0f * kGovernFrom), atTo = TorqueCutF(cm, 10.0f * kGovernTo),
+                           CutGovernBand(10.0f, kTachOverrun).from, CutGovernBand(10.0f, kTachOverrun).to };
+        const CutBand lowBand = CutGovernBand(2.74f, kTachOverrun), road = CutGovernBand(15.0f, kTachOverrun);
+        const float atIdle = TorqueCutF(cm, 4.0f), atPeak = TorqueCutF(cm, 7.0f), atFrom = TorqueCutF(cm, 10.0f * cm.governFrom), atHalf = TorqueCutF(cm, 10.5f), atTo = TorqueCutF(cm, 10.0f * cm.governTo),
                     past = TorqueCutF(cm, 14.0f);
         TorqueCutMap cold = cm;
         cold.limit = 0.6f;
@@ -3916,7 +3917,8 @@ int main(int argc, char **argv)
         TorqueCutMap heldBack = cm;
         heldBack.held = 0.5f;
         const bool map = Near(atIdle, CutCurveAt(cm.curve, 0.4f, 1.2f), 1e-5f) &&
-                         Near(atPeak, 1.0f, 1e-5f) && Near(atFrom, CutCurveAt(cm.curve, kGovernFrom, 1.2f), 1e-5f) && atTo == 0.0f && past == 0.0f &&
+                         Near(atPeak, 1.0f, 1e-5f) && Near(atFrom, CutCurveAt(cm.curve, 1.0f, 1.2f), 1e-5f) && Near(atHalf, 0.5f * CutCurveAt(cm.curve, 1.05f, 1.2f), 1e-5f) && atTo == 0.0f && past == 0.0f &&
+                         Near(cm.governFrom, 1.0f, 1e-6f) && Near(cm.governTo, 1.1f, 1e-6f) && Near(lowBand.from, 1.1f - kGovernWidth / 2.74f, 1e-6f) && road.from == 1.0f &&
                          Near(limited, 0.6f, 1e-5f) && Near(partLimited, 0.5f - 0.5f * 0.15f * 0.5f, 1e-5f) && Near(brakeTop, -0.15f, 1e-5f) && brakeIdle == 0.0f && brakeUnder == 0.0f &&
                          Near(brakeHalf, -0.15f * (1400.0f - 800.0f) / 1200.0f, 1e-5f) && against == 0.0f && Near(TorqueCutF(loaded, 7.0f), 0.8f, 1e-5f) &&
                          Near(TorqueCutF(heldBack, 7.0f), 0.5f, 1e-5f) && TorqueCutRpm(cm, -3.0f) == 0.0f && Near(TorqueCutRpm(cm, 5.0f), 1000.0f, 1e-3f) &&
@@ -3968,10 +3970,10 @@ int main(int argc, char **argv)
             snprintf(fuelText + strlen(fuelText), sizeof fuelText - strlen(fuelText), " %.1f: %.3f, held %.3f;", pedal, TruckFuelRate(cut), TruckFuelRate(held));
         }
         char line[600];
-        snprintf(line, sizeof line, "torque cut's map: idle %.3f, the peak %.3f, the governor %.3f at %.2f and 0 at %.2f of the redline, the cold %.3f, the foot off %.3f at the "
+        snprintf(line, sizeof line, "torque cut's map: idle %.3f, the peak %.3f, the governor %.3f at %.2f and 0 at %.2f of the redline (L- from %.3f), the cold %.3f, the foot off %.3f at the "
                                     "redline and %.3f at idle; R rolling forward F %.3f, 2nd rolling back %.3f; the game's curve by C.1; B4s and the blend at 0, 50, 100; the "
                                     "fuel by B4s as the game's settled pull, by the pedal:%s",
-                 atIdle, atPeak, atFrom, kGovernFrom, kGovernTo, limited, brakeTop, brakeIdle, aF.f, aB.f, fuelText);
+                 atIdle, atPeak, atFrom, cm.governFrom, cm.governTo, lowBand.from, limited, brakeTop, brakeIdle, aF.f, aB.f, fuelText);
         Check(map && stock && b4s && blend && direction && fuel, line);
     }
 
@@ -4002,7 +4004,7 @@ int main(int argc, char **argv)
         sl.share = 1.0f;
         sl.pedal = 1.0f;
         sl.map = TorqueCutMap{ 1.0f, 1.0f, 0.0f, 1.0f, 0.15f, 2.74f, 800.0f, 2500.0f, 1.2f, { 5, { 0.25f, 0.45f, 0.6f, 0.8f, 1.0f }, { 0.55f, 0.85f, 1.0f, 1.0f, 0.85f } },
-                               kGovernFrom, kGovernTo };
+                               CutGovernBand(2.74f, kTachOverrun).from, CutGovernBand(2.74f, kTachOverrun).to };
         const SimGround grounds[2] = { { 5.0f, 0.3f, 1.0f, 1.5f, 0.0f }, { 30.0f, 0.15f, 0.5f, 1.0f, 0.0f } };
         const char *groundNames[2] = { "soft mud", "firm mud" };
         char line[2400];
@@ -4021,10 +4023,10 @@ int main(int argc, char **argv)
                 const SimResult flat = SimRun(u);
                 u.mode = kSimGame;
                 const SimResult game = SimRun(u);
-                len += snprintf(line + len, sizeof line - len, " %s from %.2f: settled %.2f s, x %.3f, sd %.4f of the top (F held flat %.4f, the game's own %.4f at x %.3f), "
-                                                               "falls %d after;",
-                                groundNames[g], from ? 0.55f : 0.0f, cut.settledAt, cut.mean / 2.74f, cut.sd / 2.74f, flat.sd / 2.74f, game.sd / 2.74f, game.mean / 2.74f,
-                                cut.cutsAfter);
+                len += snprintf(line + len, sizeof line - len, " %s from %.2f: settled %.2f s (F held flat %.2f s), x %.3f, sd %.4f of the top (F held flat %.4f, the game's own %.4f at x %.3f), "
+                                                               "falls %d after, the brief's 0.02 of the top %s;",
+                                groundNames[g], from ? 0.55f : 0.0f, cut.settledAt, flat.settledAt, cut.mean / 2.74f, cut.sd / 2.74f, flat.sd / 2.74f, game.sd / 2.74f, game.mean / 2.74f,
+                                cut.cutsAfter, cut.sd / 2.74f < 0.02f ? "met" : "missed");
                 ok = ok && cut.settledAt >= 0.0f && cut.settledAt <= 8.0f && cut.cutsAfter == 0 && cut.sd <= 1.25f * flat.sd + 0.002f * 2.74f;
             }
         // the counter-cases, soft mud from 0.55: the narrow governor of the needle's overrun, in the step and fed late
@@ -4056,16 +4058,20 @@ int main(int argc, char **argv)
         road.s0 = road.v0 = 2.0f;
         road.ground = SimGround{ 60.0f, 0.05f, 0.05f, 0.3f, 0.0f };
         road.slot.map.top = 15.0f;
+        road.slot.map.governFrom = CutGovernBand(15.0f, kTachOverrun).from;
+        road.slot.map.governTo = CutGovernBand(15.0f, kTachOverrun).to;
         road.seconds = 30.0f;
         const SimResult third = SimRun(road);
         len += snprintf(line + len, sizeof line - len, " 3rd on a road: x %.3f at the end, %.3f over the last 10 s (sd %.4f), falls %d after;", third.sEnd / 15.0f,
                         third.mean / 15.0f, third.sd / 15.0f, third.cutsAfter);
-        ok = ok && third.mean / 15.0f >= kGovernFrom && third.mean / 15.0f <= kGovernTo && third.cutsAfter == 0;
+        ok = ok && third.mean / 15.0f >= 1.0f && third.mean / 15.0f <= kTachOverrun && third.sEnd / 15.0f <= kTachOverrun && third.cutsAfter == 0;
         // the foot off down a 10 % grade in 2nd (an 8 rad/s top) from 0.8 of its top: held back, slowing or holding
         SimSetup hill = road;
         hill.slot.pedal = 0.0f;
         hill.slot.map.pedal = 0.0f;
         hill.slot.map.top = 8.0f;
+        hill.slot.map.governFrom = CutGovernBand(8.0f, kTachOverrun).from;
+        hill.slot.map.governTo = CutGovernBand(8.0f, kTachOverrun).to;
         hill.s0 = hill.v0 = 6.4f;
         hill.ground = SimGround{ 60.0f, 0.05f, 0.05f, 0.3f, 0.6f };
         hill.seconds = 15.0f;

@@ -35,13 +35,24 @@ inline float CutCurveAt(const CutCurve &c, float speed, float top)
     return top > last ? c.y[n - 1] * CutClamp01(1.0f - (speed - last) / (top - last)) : 0.0f;
 }
 
-// The governor: the engine's torque whole up to kGovernFrom of the redline's speed, falling in a straight line to nothing
-// at kGovernTo. The Reviewer's M4: at 60 steps a second a fall as narrow as the needle's overrun (the redline to 1.1 of
-// it, 0.27 rad/s of L-'s wheel speed) chatters step to step, as one step moves the wheels by 0.17 to 0.5 rad/s there. The
-// band is an rpm figure, so it scales with the gear's top: in L- (a top of 2.7 rad/s) it is about 1 rad/s wide, at
-// least 2 x the wheels' rise a step, and the closed loop (models_test) holds L- floored in mud with it.
-static const float kGovernFrom = 0.9f, kGovernTo = 1.25f;
-inline float CutGovernor(float speed, float from = kGovernFrom, float to = kGovernTo) { return to > from ? CutClamp01((to - speed) / (to - from)) : speed <= from ? 1.0f : 0.0f; }
+// The governor: the engine's torque whole up to from (a share of the redline's speed), falling in a straight line to
+// nothing at to. Its zero is the needle's stop (kTachOverrun, 1.1 of the redline), so a gear floored on a road holds
+// between the redline and the stop, never past it. Its width is the needle's overrun or kGovernWidth rad/s of the wheels'
+// speed, the wider: at 60 steps a second a fall as narrow as the overrun in L- (0.27 rad/s at a top of 2.74) chatters step
+// to step, as one step moves the wheels by 0.17 to 0.5 rad/s there (the Reviewer's M4). The closed loop at 60 Hz
+// (models_test) set the figure: at 0.6 rad/s L- floored in soft mud chatters (136 falls in 10 s), at 1.0 it takes
+// 9.4 s to settle at 0.85 of its top, as the fall starts at 0.735; at 0.8 it settles in 2.1 s at 0.93, with no fall. So
+// L- 0.81 to 1.1, L about 0.95 to 1.1, 1st and up 1.0 to 1.1 (the Reviewer's M1 of the review).
+static const float kGovernWidth = 0.8f;
+struct CutBand { float from, to; };
+inline CutBand CutGovernBand(float top, float overrun)
+{
+    const float to = overrun > 1.0f ? overrun : 1.0f;
+    float width = to - 1.0f;
+    if (top > 0.0f && kGovernWidth / top > width) width = kGovernWidth / top;
+    return { to - width, to };
+}
+inline float CutGovernor(float speed, float from, float to) { return to > from ? CutClamp01((to - speed) / (to - from)) : speed <= from ? 1.0f : 0.0f; }
 
 // Engine braking (EngineBrake, percent): the share of the gear's torque the engine holds the truck back with at the
 // redline with the foot off, nothing at idle and under it, so a standing truck is never pushed.
@@ -52,7 +63,7 @@ static const float kEngineBrakeMost = 30.0f, kEngineBrakeDefault = 15.0f;
 // share of the pull at this pedal (RoadLoadShare); held: the engine held back (Torque, TorqueHeld), 1 for all of it;
 // brake: EngineBrake over 100; top: the gear's top in rad/s (TruckGearTop), the wheels' speed at the redline; idle and
 // redline in rpm; tachTop the tachometer's top over the redline's; governFrom and governTo the governor's band
-// (kGovernFrom, kGovernTo; the tests narrow it).
+// (CutGovernBand by the gear's top; the tests narrow it).
 struct TorqueCutMap
 {
     float pedal, limit, load, held, brake;

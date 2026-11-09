@@ -3142,6 +3142,27 @@ static void GearboxModelPass(GearboxModel &m, bool driving, const GearboxPosMode
     GearboxStep(m, raw, k, foot, power, dt, hand, GearboxHeldBy(driving, pos));
 }
 
+// The settings the torque cut needs (BRIEF_drivetrain_2_torque_cut.md): Powertrain on, the mod's own gearbox
+// (Gearbox=2) and some of the mod's engine (EngineShare above 0). It acts in a gear held by hand (the torque block).
+// The cut needs the mod's engine speed too (the Reviewer's M2): with the throttle held at 1 every one of the game's
+// own engine speed readers but the fuel's and the stall's would read a floored pedal.
+static bool TorqueCutWanted(const GaugeSettings &s) { return s.powertrain && s.modEngineSpeed && s.gearbox == kGearboxOwn && s.engineShare > 0; }
+
+// Why the torque cut does not act, for its log line (the first that holds).
+static const wchar_t *TorqueCutWhyNot(const GaugeSettings &s, bool want, bool held, bool hooks, int gear, float top)
+{
+    if (!s.powertrain) return L"Powertrain is off";
+    if (!want) return L"the engine is off or the pull test is armed";
+    if (s.gearbox != kGearboxOwn) return L"the gearbox is not the mod's own (Gearbox=2)";
+    if (s.engineShare <= 0) return L"EngineShare is 0";
+    if (!s.modEngineSpeed) return L"ModEngineSpeed is 0";
+    if (!held) return L"no gear held by hand (A drives, or the mod's gearbox does not have the truck)";
+    if (!hooks) return L"its hooks are not all in (the gear torque, the engine speed and the wheels' drive)";
+    if (gear == 0) return L"in neutral";
+    if (!(top > 0.0f)) return L"the gear has no top";
+    return L"the truck is not read";
+}
+
 #ifndef GAUGES_SETTINGS_TEST
 // The game's folder in the log at the start, and the store its path suggests: where its saves are follows from it.
 static void LogGameFolder()
@@ -3653,9 +3674,6 @@ static void GearboxHooksStep(const GaugeSettings &s)
     if (act & kGateTruckLeft) Log(L"gearbox damage: the truck update's hook is not needed now; left in place until the game is started again");
 }
 
-// The settings the torque cut needs (BRIEF_drivetrain_2_torque_cut.md): Powertrain on, the mod's own gearbox
-// (Gearbox=2) and some of the mod's engine (EngineShare above 0). It acts in a gear held by hand (the torque block).
-static bool TorqueCutWanted(const GaugeSettings &s) { return s.powertrain && s.gearbox == kGearboxOwn && s.engineShare > 0; }
 
 // The hook on the game's wheels' drive (gearbox_hooks.cpp, CreepHook): attached the first time Creep, Probe or the
 // damper is on with a truck driven, at any level of Gearbox, and left in place until the game is started again. With
@@ -3763,8 +3781,8 @@ static void LogSettings(const GaugeSettings &s)
     if (s.powertrain) Log(L"settings: powertrain on: the truck pulls with %d percent of the mod's engine and converter, through the game's torque factor; road load %s; %s; "
                           L"the game's engine speed %s",
                           s.engineShare, !s.roadLoad ? L"off" : s.powertrain ? L"on (the air's drag, once each gear's pull is learned)" : L"on, acts with Powertrain on",
-                          TorqueCutWanted(s) ? L"in a gear held by hand the torque cut: the mod engine alone, no cut at the gear's top" : L"no torque cut (it needs Gearbox=2 and EngineShare above 0)",
-                          s.modEngineSpeed ? L"the mod engine's (ModEngineSpeed=1; the fuel's and the stall's calls keep the game's own)" : L"its own (ModEngineSpeed=0)");
+                          TorqueCutWanted(s) ? L"in a gear held by hand the torque cut: the mod engine alone, no cut at the gear's top" : L"no torque cut (it needs Gearbox=2, EngineShare above 0 and ModEngineSpeed=1)",
+                          s.modEngineSpeed ? L"the mod engine's (ModEngineSpeed=1; the fuel's and the stall's calls keep the game's own, by the game's pull under the cut)" : L"its own (ModEngineSpeed=0)");
     else Log(L"settings: powertrain off: the truck pulls with the game's own engine (Powertrain=1 hands it the mod's)");
     Log(s.creep && s.creepManual ? L"settings: creep on, in a gear picked by hand too (CreepManual): an automatic through the converter to walking pace, a gear picked by hand at its idle speed"
         : s.creep ? L"settings: creep on: an idling truck on an automatic moves, through the converter to walking pace; not in a gear picked by hand (CreepManual=1 adds it)"
@@ -4130,24 +4148,12 @@ static TorqueCutSlot TorqueCutSlotOf(const TruckWatch &w, const TruckRaw &raw, c
     m.tachTop = tachTop;
     m.curve.n = curve.n < kCutPoints ? curve.n : kCutPoints;
     for (int i = 0; i < m.curve.n; i++) m.curve.x[i] = curve.x[i], m.curve.y[i] = curve.y[i];
-    m.governFrom = kGovernFrom;
-    m.governTo = kGovernTo;
+    const CutBand band = CutGovernBand(gearTop, kTachOverrun);
+    m.governFrom = band.from;
+    m.governTo = band.to;
     return c;
 }
 
-// Why the torque cut does not act, for its log line (the first that holds).
-static const wchar_t *TorqueCutWhyNot(const GaugeSettings &s, bool want, bool held, bool hooks, int gear, float top)
-{
-    if (!s.powertrain) return L"Powertrain is off";
-    if (!want) return L"the engine is off or the pull test is armed";
-    if (s.gearbox != kGearboxOwn) return L"the gearbox is not the mod's own (Gearbox=2)";
-    if (s.engineShare <= 0) return L"EngineShare is 0";
-    if (!held) return L"no gear held by hand (A drives, or the mod's gearbox does not have the truck)";
-    if (!hooks) return L"its hooks are not all in (the gear torque, the engine speed and the wheels' drive)";
-    if (gear == 0) return L"in neutral";
-    if (!(top > 0.0f)) return L"the gear has no top";
-    return L"the truck is not read";
-}
 
 // The mod's gearbox lets the truck go: the game's own shifting passes again.
 static void GearboxLetGo(TruckWatch &w)
@@ -8319,6 +8325,23 @@ int wmain(int argc, wchar_t **argv)
         Check(old.engineBrake == 22.0f && !wcscmp(kept, L"none") && high.engineBrake == 30.0f && back.engineBrake == 15.0f,
               "settings: an old CrawlHold= is ignored and dropped at the next write; EngineBrake 22 read back, 80 held to 30, 15 by default");
         WriteIni(back);
+    }
+    // the torque cut wants Powertrain, Gearbox=2, EngineShare above 0 and ModEngineSpeed (the Reviewer's M2): with the
+    // game's own engine speed it is not published, so the throttle and B4 pass as they came
+    {
+        GaugeSettings cs = {};
+        SettingsDefaults(cs);
+        cs.powertrain = true;
+        cs.gearbox = kGearboxOwn;
+        cs.engineShare = 100;
+        cs.modEngineSpeed = true;
+        const bool on = TorqueCutWanted(cs);
+        cs.modEngineSpeed = false;
+        const bool offSpeed = !TorqueCutWanted(cs) && !wcscmp(TorqueCutWhyNot(cs, true, true, true, 1, 2.0f), L"ModEngineSpeed is 0");
+        cs.modEngineSpeed = true;
+        cs.engineShare = 0;
+        const bool offShare = !TorqueCutWanted(cs);
+        Check(on && offSpeed && offShare, "torque cut: wanted with Powertrain, Gearbox=2, EngineShare above 0 and ModEngineSpeed=1; not with ModEngineSpeed=0 (said so) or EngineShare 0");
     }
     // keys the mod does not know, in its own section and in another one
     WritePrivateProfileStringW(kIniSection, L"FromALaterVersion", L"7", ini.c_str());

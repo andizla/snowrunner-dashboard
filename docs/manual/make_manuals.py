@@ -250,11 +250,11 @@ in, the engine is locked to the wheels and the torque goes by their own speed: s
 spin up toward the red zone. By the wheels' speed it is held to twice the engine's torque, so wheels that catch grip do not lurch.
 The wheels' spin is averaged over a quarter second, and the torque eases off over the last bit of a gear's top speed. A low gear
 such as L- has a small top, so without this the spin's own noise made the pull jerk there.</p>
-<p><b>The mod engine alone in a gear held by hand</b> (with <code>Powertrain=1</code> and the mod gearbox at <code>Gearbox=2</code>). The game gives its torque by how far the wheels are toward
+<p><b>The mod engine alone in a gear held by hand</b> (with <code>Powertrain=1</code>, <code>ModEngineSpeed=1</code> and the mod gearbox at <code>Gearbox=2</code>). The game gives its torque by how far the wheels are toward
 the gear's top: all of it at about half and nothing at the top. It cut its pull there and gave it back only well under it, so floored in L- the truck climbed to the top,
 sagged and climbed again every few seconds. In a gear of the mod gearbox held by hand the mod now answers the game's own torque call: the truck pulls with the mod
 engine's curve at the engine speed the needle shows, and the game's fall is gone. Floored in L- the needle climbs to the redline and holds. A governor takes the
-pull off from 0.9 of the redline to nothing at 1.25 of it. The pedal is the fuel, as the game has it: half way down gives half the pull. Engine share mixes
+pull off near the redline, to nothing at 1.1 of it where the needle stops; in the low range it starts a little under the redline. It needs Mod engine speed on. The pedal is the fuel, as the game has it: half way down gives half the pull. Engine share mixes
 the game's curve back in: at 100 the mod engine pulls alone. With the foot off the engine brakes: <b>Engine braking</b> (<code>EngineBrake</code>, the Power tab's
 "Engine braking", 0 to 30 percent of the gear's torque at the redline, 15 by default). It brakes less toward idle and not at all at idle, so a standing truck is
 never pushed. The fuel burns as the game's own at the same pedal and wheel speed. When the game's damage throws the gearbox out, the mod gearbox goes to N too.</p>

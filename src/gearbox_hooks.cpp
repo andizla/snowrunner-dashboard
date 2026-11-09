@@ -677,10 +677,11 @@ __declspec(noinline) static float HookEngineSpeed(void *vehicle, bool withWheels
         stock = own(vehicle, withWheels, withMinThrottle);
         SpeedNote(back, stock);
     }
-    // the fuel's call under the torque cut (the Reviewer's M3): the game's own value is linear in B4 there, so it is
-    // scaled to the pull the game would have without the throttle held at 1
+    // the fuel's and the stall's calls under the torque cut (the Reviewer's M3 and S1): the game's own value is linear
+    // in B4 there (the stall's in its base term, the larger at part pedal), so it is scaled to the pull the game would
+    // have without the throttle held at 1
     float b4s = 0.0f;
-    if (back == g_fuelBack && TorqueCutB4sGet((uint64_t)(uintptr_t)vehicle, b4s))
+    if ((back == g_fuelBack || back == g_stallBack) && TorqueCutB4sGet((uint64_t)(uintptr_t)vehicle, b4s))
     {
         if (!probe) stock = own(vehicle, withWheels, withMinThrottle);
         const float b4 = SpeedPull(vehicle);

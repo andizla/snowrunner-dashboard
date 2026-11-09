@@ -388,15 +388,15 @@ its first bytes once (<code>kGearTorquePattern</code>), and the drive's call of 
 within 0x400 bytes). Its other callers (the stall, the input, the automatic) keep the game's own. The detour is attached with the other threads held
 (<code>GearboxAttach</code>). It makes the stock call, then on the drive's call for the published truck answers torque = <i>T</i><sub>stock</sub> · bracket with
 start −1, a 0 and top 10<sup>9</sup>, so the drive's own curve is flat at 1. The mod's thread publishes the slot once a pass (<code>TorqueCutSlotOf</code>) with
-Powertrain=1, Gearbox=2, a gear held by hand, EngineShare above 0 and the game's gear not 0. The detour reads <i>s</i> from the vehicle's own wheels: the mean of
+Powertrain=1, ModEngineSpeed=1 (else every engine speed reader but the fuel's and the stall's would read B4 = 1), Gearbox=2, a gear held by hand, EngineShare above 0 and the game's gear not 0. The detour reads <i>s</i> from the vehicle's own wheels: the mean of
 the driven wheels' float ω in the gear's direction, floored at 0 (<code>TorqueCutSpeeds</code>). A failed read takes the slot's last <i>s</i>.</p>
 <p>With rpm = max(<i>s</i>, 0)/top · redline: <i>F</i> = <i>p</i> · (E(rpm) · min(1, limit/<i>p</i>) − load) · held − (1 − <i>p</i>) · brake · clamp((rpm − idle)/(redline − idle), 0, 1).
-Here <i>p</i> is the raw pedal (TruckPedal, linear as the game's pull) and E the curve times the governor: 1 up to 0.9 of the redline, then a straight line to 0 at 1.25 (<code>kGovernFrom</code>,
-<code>kGovernTo</code>; at 60 steps a second the needle's band of the redline to 1.1 chattered in the closed loop). brake is <code>EngineBrake</code>/100. With the
+Here <i>p</i> is the raw pedal (TruckPedal, linear as the game's pull) and E the curve times the governor: 1 up to 1.1 − max(0.1, <code>kGovernWidth</code>/top) of the redline, then a straight line to 0 at 1.1, the needle's stop
+(<code>CutGovernBand</code>, <code>kTachOverrun</code>; <code>kGovernWidth</code> 0.8 rad/s by the closed loop at 60 Hz: 0.6 chatters in L- floored in soft mud, 1.0 settles there in 9.4 s at 0.85 of the top, 0.8 in 2.1 s at 0.93; so L- 0.81 to 1.1, 1st and up 1.0 to 1.1). brake is <code>EngineBrake</code>/100. With the
 clutch slipping the bracket is the clutch model's torque through it as a share of the gear's (the scalar, held to −1 to 1.5); the creep's share is a floor.
 bracket = (1 − share) · pedal · curve<sub>stock</sub>(<i>s</i>) + share · <i>F</i>, with curve<sub>stock</sub> the game's smoothstep from start to a, falling to top,
-scaled by the power factor at +0x38. B4 (+0xB4) is written 1 in the hook on the wheels' drive before the call, so the game's pull lag is out. The fuel's call of
-the engine speed then answers stock · B4s/B4, with B4s = pedal · (1 − D4 + D4 · curve<sub>stock</sub>(<i>s</i>)) the game's settled pull, and the range reads B4s.
+scaled by the power factor at +0x38. B4 (+0xB4) is written 1 in the hook on the wheels' drive before the call, so the game's pull lag is out. The fuel's and the stall's calls of
+the engine speed then answer stock · B4s/B4, with B4s = pedal · (1 − D4 + D4 · curve<sub>stock</sub>(<i>s</i>)) the game's settled pull, and the range reads B4s.
 While the cut acts the factor at +0xCC is not written, the gear's top and Air drag's base learn nothing, and a refused ShiftGear(0) from the game (the damage
 kick) puts the mod gearbox in N. The detour counts the steps where the bracket falls by 0.3 or more.</p>
 <p>The log: <code>torque cut: the game's gear torque at +…, the drive's call returning to +…</code> at the first truck, or why not; <code>torque cut: the game's gear
