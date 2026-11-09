@@ -4338,14 +4338,14 @@ int main(int argc, char **argv)
         for (int g2 = 0; g2 < 2; g2++)
         {
             climb.ground = SimGround{ 60.0f, 0.1f, 0.05f, 0.05f, grades[g2] };
-            for (int k = 0; k < 3; k++)
+            for (int ck = 0; ck < 3; ck++)
             {
-                climb.cap = climbCaps[k];
-                climb.governTruck = k > 0;
-                const SimResult r = SimRun(climb);
-                climbV[k] = r.vEnd / 2.9f;
-                climbX[k] = r.mean / 2.9f;
-                ok = ok && (k == 0 || r.cutsAfter == 0);
+                climb.cap = climbCaps[ck];
+                climb.governTruck = ck > 0;
+                const SimResult cr = SimRun(climb);
+                climbV[ck] = cr.vEnd / 2.9f;
+                climbX[ck] = cr.mean / 2.9f;
+                ok = ok && (ck == 0 || cr.cutsAfter == 0);
             }
             len += snprintf(line + len, sizeof line - len, " the scout floored up a grade of %.1f: the truck at %.2f of the top today (x %.2f), %.2f with the guard at 110 (x %.2f), %.2f at 150 "
                                                            "(x %.2f);",
