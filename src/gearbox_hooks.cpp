@@ -10,6 +10,7 @@
 #include <tlhelp32.h>
 #include <stdio.h>
 #include <xmmintrin.h>
+#include <intrin.h>
 
 typedef bool (*ShiftFn)(void *vehicle, int32_t gear);
 typedef bool (*VehicleFn)(void *vehicle);
@@ -556,4 +557,141 @@ void CreepCounts(long &hits, long &calls)
 {
     hits = g_creepHits;
     calls = g_creepCalls;
+}
+
+// ---- the game's engine speed ----
+// float(vehicle rcx, bool dl, bool r8b), no argument on the stack (its first bytes keep rbp in its own home slot and
+// read none of the caller's), the answer in xmm0: a C++ function of the same three arguments forwards all it takes.
+// Detours enters the hook by a jump, so _ReturnAddress is the game's caller's.
+typedef float (*EngineSpeedFn)(void *vehicle, bool withWheels, bool withMinThrottle);
+static void *g_speedWay = nullptr;
+static bool g_speedHooked = false;
+static uintptr_t g_fuelBack = 0, g_stallBack = 0;
+static EngineSpeedSlot g_speedSlots[2];
+static int g_speedNext = 0;
+static void *volatile g_speedSlot = nullptr;
+static volatile LONG g_speedProbe = 0, g_speedAnswered = 0, g_speedLast = 0, g_speedFull = 0;
+static volatile LONG64 g_speedBack[kSpeedCallers] = {};
+static volatile LONG g_speedCalls[kSpeedCallers] = {}, g_speedStock[kSpeedCallers] = {};
+
+// vehicle + 0x768 bit 0, the engine on, as the game's own first bytes test it; false where the memory is gone.
+static bool SpeedEngineOn(const void *vehicle)
+{
+    __try
+    {
+        return (*((const volatile uint8_t *)vehicle + 0x768) & 1) != 0;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
+static LONG FloatBits(float f)
+{
+    LONG bits;
+    memcpy(&bits, &f, sizeof bits);
+    return bits;
+}
+
+static float BitsFloat(LONG bits)
+{
+    float f;
+    memcpy(&f, &bits, sizeof f);
+    return f;
+}
+
+// The probe's record of one call: its caller's slot taken with a compare and swap, as DriveThreadNote takes one.
+static void SpeedNote(uintptr_t back, float stock)
+{
+    for (int i = 0; i < kSpeedCallers; i++)
+    {
+        LONG64 at = g_speedBack[i];
+        if (!at) at = InterlockedCompareExchange64(&g_speedBack[i], (LONG64)back, 0);
+        if (!at || at == (LONG64)back)
+        {
+            InterlockedIncrement(&g_speedCalls[i]);
+            InterlockedExchange(&g_speedStock[i], FloatBits(stock));
+            return;
+        }
+    }
+    g_speedFull = 1;
+}
+
+__declspec(noinline) static float HookEngineSpeed(void *vehicle, bool withWheels, bool withMinThrottle)
+{
+    const uintptr_t back = (uintptr_t)_ReturnAddress();
+    const EngineSpeedFn own = (EngineSpeedFn)g_speedWay;
+    const bool probe = g_speedProbe != 0;
+    float stock = 0.0f;
+    if (probe)
+    {
+        stock = own(vehicle, withWheels, withMinThrottle);
+        SpeedNote(back, stock);
+    }
+    const EngineSpeedSlot *slot = (const EngineSpeedSlot *)g_speedSlot;
+    // the cheap tests first, so the call of another vehicle, of the fuel or of the stall reads nothing more
+    if (slot && slot->vehicle == vehicle && back != g_fuelBack && back != g_stallBack &&
+        EngineSpeedOurs(back, g_fuelBack, g_stallBack, slot, vehicle, SpeedEngineOn(vehicle), GetTickCount64()))
+    {
+        const float share = slot->share;
+        InterlockedIncrement(&g_speedAnswered);
+        InterlockedExchange(&g_speedLast, FloatBits(share));
+        return share;
+    }
+    return probe ? stock : own(vehicle, withWheels, withMinThrottle);
+}
+
+bool EngineSpeedHook(uintptr_t at, uintptr_t fuelBack, uintptr_t stallBack, char *why, size_t size)
+{
+    why[0] = 0;
+    if (g_speedHooked) return true;
+    g_fuelBack = fuelBack;
+    g_stallBack = stallBack;
+    g_speedWay = (void *)at;
+    void **targets[1] = { &g_speedWay };
+    void *const hooks[1] = { (void *)&HookEngineSpeed };
+    const long error = GearboxAttach(targets, hooks, 1);
+    if (error != NO_ERROR)
+    {
+        snprintf(why, size, "Detours could not attach the engine speed's hook (error %ld)", error);
+        g_speedWay = nullptr;
+        return false;
+    }
+    g_speedHooked = true;
+    return true;
+}
+
+bool EngineSpeedHooked() { return g_speedHooked; }
+
+void EngineSpeedPublish(const void *vehicle, float share, uint64_t at)
+{
+    if (!vehicle || !(share >= 0.0f))
+    {
+        InterlockedExchangePointer(&g_speedSlot, nullptr);
+        return;
+    }
+    EngineSpeedSlot &slot = g_speedSlots[g_speedNext];
+    g_speedNext ^= 1;
+    slot.vehicle = vehicle;
+    slot.share = share > 1.0f ? 1.0f : share;
+    slot.at = at ? at : GetTickCount64();
+    InterlockedExchangePointer(&g_speedSlot, &slot);
+}
+
+void EngineSpeedProbe(bool on) { InterlockedExchange(&g_speedProbe, on ? 1 : 0); }
+
+int EngineSpeedCallersGet(EngineSpeedCaller *out, int most, bool &full)
+{
+    int n = 0;
+    for (int i = 0; i < kSpeedCallers && n < most; i++)
+        if (const LONG64 back = g_speedBack[i]) out[n++] = EngineSpeedCaller{ (uintptr_t)back, g_speedCalls[i], BitsFloat(g_speedStock[i]) };
+    full = g_speedFull != 0;
+    return n;
+}
+
+void EngineSpeedAnswers(long &answered, float &last)
+{
+    answered = g_speedAnswered;
+    last = BitsFloat(g_speedLast);
 }

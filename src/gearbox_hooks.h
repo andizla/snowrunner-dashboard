@@ -203,3 +203,39 @@ void CreepGive(uint64_t action, float share);
 void CreepCounts(long &hits, long &calls);
 // The threads the drive was called on so far, at most most of them; full where more were seen than are kept.
 int DriveThreadsGet(DWORD *out, int most, bool &full);
+
+// ---- the game's engine speed (game_code.h, EngineSpeedFind; BRIEF_drivetrain_1_engine_speed.md) ----
+// The mod's thread publishes one value, the engine speed share 0 to 1 for one vehicle (models.h, EngineSpeedShare), in
+// one of two slots, as the creep's share is published. The hook, on whatever thread the game calls from, answers with it
+// only when all of these hold (EngineSpeedOurs): the call is not the fuel's or the stall's (they keep the game's own,
+// the Reviewer's M1 and M2), a slot is published, for this vehicle, its engine is on (vehicle + 0x768 bit 0, read by the
+// hook itself, as the game's first bytes read it) and the slot is at most kEngineSpeedFresh ms old. Else it calls the
+// game's own through, so a cleared slot, a stale one or another vehicle gets exactly the game's value.
+static const uint64_t kEngineSpeedFresh = 1000;
+struct EngineSpeedSlot
+{
+    const void *vehicle;
+    float share;
+    uint32_t spare;
+    uint64_t at; // GetTickCount64 at the publish
+};
+inline bool EngineSpeedOurs(uintptr_t back, uintptr_t fuelBack, uintptr_t stallBack, const EngineSpeedSlot *slot, const void *vehicle, bool engineOn, uint64_t now)
+{
+    return slot && vehicle && slot->vehicle == vehicle && engineOn && back != fuelBack && back != stallBack && now >= slot->at && now - slot->at <= kEngineSpeedFresh;
+}
+// Hooks the game's engine speed at address at (all other threads suspended, GearboxAttach), the calls returning to
+// fuelBack and stallBack passed through. Never taken out while the game runs: with nothing published the hook calls
+// through. False with why when Detours refused it; true at once when it is in place already.
+bool EngineSpeedHook(uintptr_t at, uintptr_t fuelBack, uintptr_t stallBack, char *why, size_t size);
+bool EngineSpeedHooked();
+// The share for vehicle (nullptr clears the slot: a truck switch, Powertrain off, the mod not driving it). at: the
+// publish's tick, 0 for now (a test gives an old one).
+void EngineSpeedPublish(const void *vehicle, float share, uint64_t at = 0);
+// With the probe on, the hook calls the game's own first on every call and keeps, by the address each call returns
+// to, the count and the last value the game gave (the Reviewer's S3). At most kSpeedCallers callers; full past them.
+void EngineSpeedProbe(bool on);
+static const int kSpeedCallers = 24;
+struct EngineSpeedCaller { uintptr_t back; long calls; float stock; };
+int EngineSpeedCallersGet(EngineSpeedCaller *out, int most, bool &full);
+// The calls answered with the mod's value so far, and the last value answered.
+void EngineSpeedAnswers(long &answered, float &last);

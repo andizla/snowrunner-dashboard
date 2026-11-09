@@ -862,6 +862,9 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             PageLabel("Crawl hold", labelX);
             changed(ImGui::Checkbox("##crawlhold", &s.crawlHold));
             PageTip("Holds L-, L and L+ of the mod gearbox just under their top speed, so the game does not cut and surge there. Off: the game does as it does. On by default.");
+            PageLabel("Mod engine speed", labelX);
+            changed(ImGui::Checkbox("##modenginespeed", &s.modEngineSpeed));
+            PageTip("The game tachometer, cockpit needles, engine sound and effects follow the mod engine while Real engine is on. Fuel use and the stall stay as in the game for now. Off: the game computes its own. On by default.");
         }
         PageLabel("Pull test", labelX);
         const bool pullOn = view.pullTest == kViewPullArmed || view.pullTest == kViewPullRunning;

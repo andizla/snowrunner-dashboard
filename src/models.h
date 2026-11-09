@@ -264,6 +264,7 @@ struct TachModel
     float rpm;     // what the needle shows
     int gear;      // the gear engaged on the last step
     float dip;     // seconds left of a gear change's dip
+    float live;    // TachFollow's needle without the stall's dip in it, with the same lag: what the game's engine speed gets
 };
 
 // One step of dt seconds. The first step on a truck puts the needle where it belongs without a lag.
@@ -280,12 +281,14 @@ inline void TachStep(TachModel &m, const TruckRaw &t, const GaugeScale &k, float
     if (!m.running)
     {
         m.rpm = target >= 0.0f ? target : 0.0f; // 0 too for a target that is no number
+        m.live = m.rpm;
         m.running = true;
         return;
     }
     const float tau = !TruckEngineOn(t) ? kTachOff : target > m.rpm ? kTachUp : kTachDown;
     m.rpm += (target - m.rpm) * (1.0f - expf(-dt / tau));
     if (!(m.rpm >= 0.0f)) m.rpm = 0.0f;
+    m.live = m.rpm; // not handed to the game from here; TachFollow goes on from it
 }
 
 // One step of the needle towards an engine speed worked out elsewhere (the converter of the mod's automatic, while it
@@ -295,19 +298,41 @@ inline void TachFollow(TachModel &m, const TruckRaw &t, const GaugeScale &k, flo
 {
     float target = !TruckEngineOn(t) ? 0.0f : t.startTimer > 0.0f && !(t.flags & 2) ? TachTarget(t, k) : rpm;
     const float alive = SettingsRange(1.0f - kStallRate * t.stall, 0.0f, 1.0f);
+    // the game's engine speed has no stall term, and its Truck.rpm multiplies one in again, so the share the game gets
+    // goes by the needle before the stall's dip (the Reviewer's S1); a start's TachTarget has the dip in it already
+    float live = t.startTimer > 0.0f && !(t.flags & 2) && alive > 0.1f ? target / (alive * alive) : target;
     target *= alive * alive;
-    target = fminf(target, k.idle + (k.redline - k.idle) * kTachOverrun);
+    const float overrun = k.idle + (k.redline - k.idle) * kTachOverrun;
+    target = fminf(target, overrun);
+    live = fminf(live, overrun);
     m.gear = t.gearEngaged;
     m.dip = 0.0f;
     if (!m.running || !(target >= 0.0f))
     {
         m.rpm = target >= 0.0f ? target : 0.0f;
+        m.live = live >= 0.0f ? live : 0.0f;
         m.running = true;
         return;
     }
     const float tau = !TruckEngineOn(t) ? kTachOff : target > m.rpm ? kTachUp : kTachDown;
     m.rpm += (target - m.rpm) * (1.0f - expf(-dt / tau));
     if (!(m.rpm >= 0.0f)) m.rpm = 0.0f;
+    const float liveTau = !TruckEngineOn(t) ? kTachOff : live > m.live ? kTachUp : kTachDown;
+    m.live += (live - m.live) * (1.0f - expf(-dt / liveTau));
+    if (!(m.live >= 0.0f)) m.live = 0.0f;
+}
+
+// ---- the game's engine speed from the mod's engine (BRIEF_drivetrain_1_engine_speed.md) ----
+// The share 0 to 1 the game reads as its engine speed: 0 at idle, so a released pedal sounds and reads as the game's
+// released pedal (its own is 0 there), 1 at top, the redline times EngineSpeedTop (1 by default; the listen may move it
+// toward the max). The game's cockpit needle maps it onto 0.19 + 0.5 x of its dial, so 0 is where the game idles and 1
+// its floored mark (the Reviewer's N1). 0 for a speed or a range that is no number.
+inline float EngineSpeedShare(float rpm, float idle, float top)
+{
+    const float range = top - idle;
+    if (!(range > 0.0f)) return 0.0f;
+    const float share = (rpm - idle) / range;
+    return share > 0.0f ? fminf(share, 1.0f) : 0.0f;
 }
 
 // How far the needle stands on the way from idle to the red zone, 0 to 1.

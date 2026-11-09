@@ -2988,6 +2988,42 @@ int main(int argc, char **argv)
             Check(followPlaced && followLagging && followThere && followCapped && Near(gearBefore, 2000.0f, 5.0f) && follow.rpm < 50.0f,
                   "automatic in the game: the needle follows the converter's engine speed with its lag, no further past the red zone than wheelspin takes it, and falls "
                   "with the engine off");
+            // the game's engine speed (BRIEF_drivetrain_1_engine_speed.md): the share 0 at idle, 1 at the top, a straight
+            // line between, held to 0 and 1 outside; the needle's live value has no stall term (the Reviewer's S1), with
+            // the same lag, and falls to 0 with the engine off
+            {
+                const float top = k.redline * 1.25f;
+                const bool line = EngineSpeedShare(k.idle, k.idle, k.redline) == 0.0f && EngineSpeedShare(k.redline, k.idle, k.redline) == 1.0f &&
+                                  Near(EngineSpeedShare(0.5f * (k.idle + k.redline), k.idle, k.redline), 0.5f, 1e-5f) &&
+                                  EngineSpeedShare(k.idle * 0.5f, k.idle, k.redline) == 0.0f && EngineSpeedShare(k.max * 2.0f, k.idle, k.redline) == 1.0f &&
+                                  Near(EngineSpeedShare(k.redline, k.idle, top), (k.redline - k.idle) / (top - k.idle), 1e-5f) &&
+                                  EngineSpeedShare(NAN, k.idle, k.redline) == 0.0f && EngineSpeedShare(1000.0f, 900.0f, 900.0f) == 0.0f;
+                TruckRaw stalling = g;
+                stalling.stall = 0.5f;
+                TachModel clean = {}, dipped = {};
+                for (float at = 0.0f; at < 3.0f; at += kDt)
+                {
+                    TachFollow(clean, g, k, 1800.0f, kDt);
+                    TachFollow(dipped, stalling, k, 1800.0f, kDt);
+                }
+                const float alive = 1.0f - kStallRate * 0.5f;
+                const bool noStall = Near(clean.live, clean.rpm, 0.5f) && Near(dipped.live, clean.live, 0.5f) && Near(dipped.rpm, clean.rpm * alive * alive, 1.0f) &&
+                                     EngineSpeedShare(dipped.live, k.idle, k.redline) == EngineSpeedShare(clean.live, k.idle, k.redline);
+                TachModel lagged = clean;
+                for (float at = 0.0f; at < 0.1f; at += kDt) TachFollow(lagged, g, k, k.redline, kDt);
+                const bool lags = lagged.live > clean.live + 1.0f && lagged.live < k.redline - 1.0f && Near(lagged.live, lagged.rpm, 0.5f);
+                TruckRaw off = g;
+                off.flags = 0;
+                TachModel stopped2 = dipped;
+                for (float at = 0.0f; at < 5.0f; at += kDt) TachFollow(stopped2, off, k, 1800.0f, kDt);
+                TachModel stepped = {};
+                TachStep(stepped, g, k, kDt);
+                char text[300];
+                snprintf(text, sizeof text, "the game's engine speed: the share 0 at idle and 1 at the top, a straight line between; the needle's live value %.0f rpm at a stall of 0.5 where the needle "
+                         "shows %.0f (the same without a stall: %.0f), the same lag, under 50 rpm with the engine off; TachStep keeps it with the needle",
+                         dipped.live, dipped.rpm, clean.live);
+                Check(line && noStall && lags && stopped2.live < 50.0f && EngineSpeedShare(stopped2.live, k.idle, k.redline) == 0.0f && stepped.live == stepped.rpm, text);
+            }
         }
         TruckRaw stopped = g;
         stopped.flags = 0;

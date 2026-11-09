@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <intrin.h>
 #include "gauges.h"
 #include "truck.h"
 #include "models.h"
@@ -71,6 +72,41 @@ __declspec(noinline) static void FakeDrive(void *action, float throttle, float d
     g_driveAction = action;
     g_driveThrottle = throttle;
     g_driveDt = dt;
+}
+
+// A stand-in for the game's engine speed (the hook of BRIEF_drivetrain_1_engine_speed.md): it answers g_speedStock,
+// counts its calls and keeps where its last call returns to, so a caller's place can be learned before the hook is in.
+static volatile float g_speedStock = 0.25f;
+static volatile LONG g_speedFakeCalls = 0;
+static volatile uintptr_t g_speedFakeBack = 0;
+static volatile float g_speedSink = 0.0f;
+__declspec(noinline) static float FakeEngineSpeed(void *vehicle, bool withWheels, bool withMinThrottle)
+{
+    InterlockedIncrement(&g_speedFakeCalls);
+    g_speedFakeBack = (uintptr_t)_ReturnAddress();
+    (void)vehicle, (void)withWheels, (void)withMinThrottle;
+    return g_speedStock;
+}
+// Three callers, each its own call site; the store after the call keeps it a call (not a jump), and the flags differ
+// so the linker does not fold two of them into one.
+typedef float (*SpeedFn)(void *, bool, bool);
+__declspec(noinline) static float SpeedFromFuel(SpeedFn fn, void *vehicle)
+{
+    const float r = fn(vehicle, false, true);
+    g_speedSink = r;
+    return r;
+}
+__declspec(noinline) static float SpeedFromStall(SpeedFn fn, void *vehicle)
+{
+    const float r = fn(vehicle, true, false);
+    g_speedSink = r;
+    return r;
+}
+__declspec(noinline) static float SpeedFromCockpit(SpeedFn fn, void *vehicle)
+{
+    const float r = fn(vehicle, false, false);
+    g_speedSink = r;
+    return r;
 }
 
 // A stand-in for the step probe's look (suspension_step.h, SuspStepLook): what the hook handed it is kept.
@@ -420,6 +456,14 @@ static void RealImageTest()
     const bool driveRight = driveFound && (!steam || (drive.call == 0xc40270 && drive.drive == 0xc402d0)) && (!update || (drive.call == 0xc41d40 && drive.drive == 0xc41da0));
     snprintf(line, sizeof line, "places in a real image of the game's exe: the wheels' drive at %zx, called at %zx%s%s", drive.drive, drive.call, driveFound ? "" : "; ", drive.why);
     Check(driveRight, line);
+    // the game's engine speed and its fuel's and stall's calls (the Researcher's and the Reviewer's places on both images)
+    EngineSpeedPlace speed;
+    const bool speedFound = EngineSpeedFind(image.data(), from, to, speed);
+    const bool speedRight = now ? speedFound && speed.speed == 0xd73170 && speed.fuelBack == 0xd68b04 && speed.stallBack == 0xa5bfa9
+                          : before ? speedFound && speed.speed == 0xd73200 && speed.fuelBack == 0xd68b94 && speed.stallBack == 0xa5c039 : true;
+    snprintf(line, sizeof line, "places in a real image (stamp %08x): the game's engine speed at %zx, its fuel's call back at %zx, its stall's at %zx%s%s", stamp, speed.speed,
+             speed.fuelBack, speed.stallBack, speedFound ? "" : "; ", speed.why);
+    Check(speedRight, line);
 
     // the places the mod cannot do without, by each of their ways alone (game_globals.h): on a build the test has
     // numbers for, every way a place has must give it there; on another the line tells which ways found what, so a
@@ -1645,6 +1689,121 @@ int main()
               "creep hook: through Detours on a function with the wheels' drive's signature, the driven truck's throttle is the larger of its own and the "
               "share, the seconds pass as they came, another truck's throttle and every call without a share pass; the counts follow");
         if (!hooked) printf("     %s\n", why);
+    }
+
+    // the game's engine speed (BRIEF_drivetrain_1_engine_speed.md, the Reviewer's addendum): the hook on a function of its
+    // signature answers the published share for the published vehicle with its engine on, the fuel's and the stall's
+    // callers (by where their calls return) get the game's own, and so do another vehicle, the engine off, a cleared
+    // slot and a stale one; with the probe on the game's own is called first and kept by caller
+    {
+        static uint8_t truck[0x800] = {}, other[0x800] = {};
+        truck[0x768] = other[0x768] = 1;
+        SpeedFn volatile fn = &FakeEngineSpeed;
+        SpeedFromFuel(fn, truck);
+        const uintptr_t fuelBack = g_speedFakeBack;
+        SpeedFromStall(fn, truck);
+        const uintptr_t stallBack = g_speedFakeBack;
+        SpeedFromCockpit(fn, truck);
+        const uintptr_t cockpitBack = g_speedFakeBack;
+        const bool distinct = fuelBack && stallBack && cockpitBack && fuelBack != stallBack && fuelBack != cockpitBack && stallBack != cockpitBack;
+        char why[160] = "";
+        const bool hooked = EngineSpeedHook((uintptr_t)&FakeEngineSpeed, fuelBack, stallBack, why, sizeof why);
+        const bool unpublished = SpeedFromCockpit(fn, truck) == 0.25f;
+        EngineSpeedPublish(truck, 0.6f);
+        LONG calls0 = g_speedFakeCalls;
+        const bool ours = SpeedFromCockpit(fn, truck) == 0.6f && g_speedFakeCalls == calls0;
+        const bool fuelStock = SpeedFromFuel(fn, truck) == 0.25f, stallStock = SpeedFromStall(fn, truck) == 0.25f;
+        const bool otherStock = SpeedFromCockpit(fn, other) == 0.25f;
+        truck[0x768] = 0;
+        const bool offStock = SpeedFromCockpit(fn, truck) == 0.25f;
+        truck[0x768] = 1;
+        EngineSpeedPublish(truck, 1.7f);
+        const bool held = SpeedFromCockpit(fn, truck) == 1.0f;
+        EngineSpeedPublish(nullptr, 0.0f);
+        const bool clearedStock = SpeedFromCockpit(fn, truck) == 0.25f;
+        EngineSpeedPublish(truck, 0.6f, GetTickCount64() - 2 * kEngineSpeedFresh);
+        const bool staleStock = SpeedFromCockpit(fn, truck) == 0.25f;
+        // the probe: the game's own first on every call, kept by caller, and still our answer
+        EngineSpeedPublish(truck, 0.4f);
+        EngineSpeedProbe(true);
+        g_speedStock = 0.31f;
+        calls0 = g_speedFakeCalls;
+        const bool probedOurs = SpeedFromCockpit(fn, truck) == 0.4f && g_speedFakeCalls == calls0 + 1;
+        g_speedStock = 0.17f;
+        const bool probedFuel = SpeedFromFuel(fn, truck) == 0.17f && g_speedFakeCalls == calls0 + 2;
+        EngineSpeedProbe(false);
+        g_speedStock = 0.25f;
+        EngineSpeedCaller callers[kSpeedCallers];
+        bool full = true;
+        const int n = EngineSpeedCallersGet(callers, kSpeedCallers, full);
+        bool cockpitKept = false, fuelKept = false;
+        for (int i = 0; i < n; i++)
+        {
+            if (callers[i].back == cockpitBack) cockpitKept = callers[i].calls == 1 && callers[i].stock == 0.31f;
+            if (callers[i].back == fuelBack) fuelKept = callers[i].calls == 1 && callers[i].stock == 0.17f;
+        }
+        long answered = 0;
+        float last = 0.0f;
+        EngineSpeedAnswers(answered, last);
+        EngineSpeedPublish(nullptr, 0.0f);
+        const bool twice = EngineSpeedHook((uintptr_t)&FakeEngineSpeed, fuelBack, stallBack, why, sizeof why);
+        // the rule itself: the slot's vehicle, the engine on, not the fuel's or the stall's place, at most a second old
+        const EngineSpeedSlot slot = { truck, 0.5f, 0, 10000 };
+        const bool rule = EngineSpeedOurs(3, 1, 2, &slot, truck, true, 10500) && !EngineSpeedOurs(1, 1, 2, &slot, truck, true, 10500) &&
+                          !EngineSpeedOurs(2, 1, 2, &slot, truck, true, 10500) && !EngineSpeedOurs(3, 1, 2, &slot, other, true, 10500) &&
+                          !EngineSpeedOurs(3, 1, 2, &slot, truck, false, 10500) && !EngineSpeedOurs(3, 1, 2, nullptr, truck, true, 10500) &&
+                          !EngineSpeedOurs(3, 1, 2, &slot, truck, true, 10000 + kEngineSpeedFresh + 1) && EngineSpeedOurs(3, 1, 2, &slot, truck, true, 10000 + kEngineSpeedFresh) &&
+                          !EngineSpeedOurs(3, 1, 2, &slot, truck, true, 9000);
+        Check(distinct && hooked && unpublished && ours && fuelStock && stallStock && otherStock && offStock && held && clearedStock && staleStock && probedOurs &&
+                  probedFuel && cockpitKept && fuelKept && !full && answered == 3 && last == 0.4f && twice && EngineSpeedHooked() && rule,
+              "engine speed hook: through Detours on a function of its signature, the published share for its vehicle with the engine on (at most 1), not "
+              "touching the game's own; the fuel's and the stall's callers, another vehicle, the engine off, a cleared slot and a stale one get the game's "
+              "own; the probe calls the game's own first and keeps its value by caller");
+        if (!hooked) printf("     %s\n", why);
+    }
+
+    // the engine speed's places in made-up code: the function's bytes once, the fuel's and the stall's calls once each
+    // and landing on it; not taken where a call goes elsewhere, the function stands twice, or another mod holds it
+    {
+        auto put = [](std::vector<uint8_t> &code, size_t at, const char *pattern) {
+            uint8_t bytes[kPatternMax], mask[kPatternMax];
+            const int length = PatternParse(pattern, bytes, mask);
+            for (int i = 0; i < length; i++) code[at + i] = mask[i] ? bytes[i] : 0x00;
+            return length;
+        };
+        auto aim = [](std::vector<uint8_t> &code, size_t call, size_t target) {
+            const int32_t distance = (int32_t)target - (int32_t)(call + 5);
+            memcpy(code.data() + call + 1, &distance, 4);
+        };
+        std::vector<uint8_t> code(0x800, 0x90);
+        const size_t speedAt = 0x400, fuelAt = 0x100, stallAt = 0x200;
+        put(code, speedAt, kEngineSpeedPattern);
+        put(code, fuelAt, kEngineFuelCallPattern);
+        put(code, stallAt, kEngineStallCallPattern);
+        aim(code, fuelAt + kEngineFuelCallAt, speedAt);
+        aim(code, stallAt + kEngineStallCallAt, speedAt);
+        EngineSpeedPlace place;
+        const bool found = EngineSpeedFind(code.data(), 0x10, code.size(), place) && place.speed == speedAt && place.fuelBack == fuelAt + kEngineFuelCallAt + 5 &&
+                           place.stallBack == stallAt + kEngineStallCallAt + 5 && !*place.why;
+        std::vector<uint8_t> away = code;
+        aim(away, stallAt + kEngineStallCallAt, 0x600);
+        EngineSpeedPlace awayPlace;
+        const bool awayNot = !EngineSpeedFind(away.data(), 0x10, away.size(), awayPlace) && strstr(awayPlace.why, "stall") && !awayPlace.speed && !awayPlace.fuelBack;
+        std::vector<uint8_t> twiceCode = code;
+        put(twiceCode, 0x600, kEngineSpeedPattern);
+        EngineSpeedPlace twicePlace;
+        const bool twiceNot = !EngineSpeedFind(twiceCode.data(), 0x10, twiceCode.size(), twicePlace) && strstr(twicePlace.why, "more than once");
+        std::vector<uint8_t> held = code;
+        held[speedAt] = 0xE9;
+        EngineSpeedPlace heldPlace;
+        const bool heldNot = !EngineSpeedFind(held.data(), 0x10, held.size(), heldPlace) && strstr(heldPlace.why, "another mod");
+        std::vector<uint8_t> noFuel = code;
+        noFuel[fuelAt] = 0x90;
+        EngineSpeedPlace noFuelPlace;
+        const bool noFuelNot = !EngineSpeedFind(noFuel.data(), 0x10, noFuel.size(), noFuelPlace) && strstr(noFuelPlace.why, "fuel");
+        Check(found && awayNot && twiceNot && heldNot && noFuelNot,
+              "engine speed place: the function by its bytes, the fuel's and the stall's calls by theirs and landing on it, each once; not where a call goes "
+              "elsewhere or is missing, the function stands twice or another mod holds it");
     }
 
     // the wheels' drive found by its call in made-up code: int3 padding, the drive's first bytes, the call's bytes once;

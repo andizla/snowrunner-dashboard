@@ -315,6 +315,86 @@ inline bool DrivePlaceFind(const uint8_t *code, size_t from, size_t to, DrivePla
     return true;
 }
 
+// ---- the game's engine speed, for the mod's own (BRIEF_drivetrain_1_engine_speed.md) ----
+// float(vehicle, bool withWheels, bool withMinThrottle): the engine speed 0 to 1 the game works out on each call from
+// the pedal, its pull (action + 0xB4) and the driven wheels, stored nowhere (review\own_drivetrain_research.md B; RVA
+// d73170 in 6adb8627, d73200 in 6ab52f5d). Eleven callers read it. Two of them keep the game's own value (the Reviewer's
+// addendum, M1 and M2): the fuel burn, where it is the engine's load, and the stall's near-dead check. The hook tells
+// them by the address their call returns to, from the bytes around each call; each call has to land on the function.
+static const char *const kEngineSpeedPattern = "48 89 6C 24 18 56 48 81 EC 80 00 00 00 F6 81 68 07 00 00 01 0F B6 F2 48 8B E9 75 14 0F 57 C0 "
+                                               "48 8B AC 24 A0 00 00 00 48 81 C4 80 00 00 00 5E C3";
+static const char *const kEngineFuelCallPattern = "41 B0 01 F3 44 0F 10 9B 1C 01 00 00 33 D2 F3 44 0F 59 1D ? ? ? ? 48 8B CB 44 0F 29 64 24 20 E8 ? ? ? ? 48 8D 8B 50 01 00 00";
+static const char *const kEngineStallCallPattern = "45 33 C0 B2 01 48 8B 4E 20 E8 ? ? ? ? 0F 28 F8 0F 57 F6 48 8B CF E8";
+static const size_t kEngineFuelCallAt = 0x20, kEngineStallCallAt = 9; // the call's place in each pattern
+
+struct EngineSpeedPlace
+{
+    size_t speed;              // the function's offset in the code, 0 = not found
+    size_t fuelBack, stallBack; // where the fuel's call and the stall's call return to (the byte after each call)
+    const char *why;           // what was not found (a string literal), "" when all three were
+};
+
+// The place a call at code[call] (E8 and its distance) goes to, or SIZE_MAX outside from to to.
+inline size_t CallTarget(const uint8_t *code, size_t from, size_t to, size_t call)
+{
+    if (code[call] != 0xE8) return SIZE_MAX;
+    int32_t distance = 0;
+    memcpy(&distance, code + call + 1, sizeof distance);
+    const int64_t target = (int64_t)call + 5 + distance;
+    return target > (int64_t)from && target < (int64_t)to ? (size_t)target : SIZE_MAX;
+}
+
+inline bool EngineSpeedFind(const uint8_t *code, size_t from, size_t to, EngineSpeedPlace &out)
+{
+    out = EngineSpeedPlace{};
+    out.why = "";
+    uint8_t bytes[kPatternMax], mask[kPatternMax];
+    size_t at = 0;
+    int count = 0;
+    int length = PatternParse(kEngineSpeedPattern, bytes, mask);
+    if (!PatternFind(code, from, to, bytes, mask, length, at, count) || count != 1)
+    {
+        if (count > 1)
+        {
+            out.why = "the engine speed's bytes stand more than once";
+            return false;
+        }
+        // behind a jump: the rest of its bytes, after the span a hook covers
+        uint8_t rest[kPatternMax];
+        memcpy(rest, mask, sizeof rest);
+        memset(rest, 0, (size_t)kHookSpan);
+        out.why = PatternFind(code, from, to, bytes, rest, length, at, count) && count == 1 && (code[at] == 0xE9 || (code[at] == 0xFF && code[at + 1] == 0x25))
+                      ? "another mod holds the engine speed" : "the engine speed was not found";
+        return false;
+    }
+    const size_t speed = at;
+    struct Site { const char *pattern; size_t callAt; size_t *back; const char *missing, *twice, *elsewhere; };
+    const Site sites[2] = {
+        { kEngineFuelCallPattern, kEngineFuelCallAt, &out.fuelBack, "the fuel's call of the engine speed was not found", "the fuel's call of the engine speed stands more than once",
+          "the fuel's call does not go to the engine speed" },
+        { kEngineStallCallPattern, kEngineStallCallAt, &out.stallBack, "the stall's call of the engine speed was not found", "the stall's call of the engine speed stands more than once",
+          "the stall's call does not go to the engine speed" } };
+    for (const Site &site : sites)
+    {
+        length = PatternParse(site.pattern, bytes, mask);
+        if (!PatternFind(code, from, to, bytes, mask, length, at, count) || count != 1)
+        {
+            out.why = count > 1 ? site.twice : site.missing;
+            out.fuelBack = out.stallBack = 0;
+            return false;
+        }
+        if (CallTarget(code, from, to, at + site.callAt) != speed)
+        {
+            out.why = site.elsewhere;
+            out.fuelBack = out.stallBack = 0;
+            return false;
+        }
+        *site.back = at + site.callAt + 5;
+    }
+    out.speed = speed;
+    return true;
+}
+
 // The finds in a line of text for the log.
 inline void GameFunctionsText(const FunctionFind finds[kFnCount], char *out, size_t size)
 {

@@ -116,6 +116,8 @@ struct GaugeSettings
     int input;               // Input: what the pedal is: 0 a wheel's pedals, 1 a pad's trigger, 2 keys. The mod's automatic kicks down by it
     bool powertrain;         // Powertrain: the engine's torque (its curve, the cold oil, the boost) and the converter's handed to the game
     bool roadLoad;           // RoadLoad: with Powertrain, the air's drag taken off the torque handed to the game (models.h, road load); on by default
+    bool modEngineSpeed;     // ModEngineSpeed: with Powertrain, the game's engine speed (its tachometer, sound and effects) is the mod engine's (gearbox_hooks.h, EngineSpeedHook); on by default
+    float engineSpeedTop;    // EngineSpeedTop: the mod engine's speed the game reads as its 1, as a share of the redline, 0.5 to 1.5 (1: the redline)
     bool crawlHold;          // CrawlHold: with Powertrain, a gear held by hand held just under its top so the game does not cut and surge there (models.h, CrawlHoldStep); on by default
     float roadCdA;           // RoadCdA: the drag's area in m², 0 by the truck's mass (1.1 under 4 t, 3.5 under 10 t, else 6); a truck's file may set its own
     int engineShare;         // EngineShare: how much of the mod's engine the game gets with it, in percent: 0 the game's own pull, 100 the mod's
@@ -201,6 +203,8 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.engineShare = 50;
     s.roadLoad = true; // on by default (BRIEF_defaults_on.md); an explicit 0 in the ini stays 0
     s.crawlHold = true; // on by default (BRIEF_low_gear_sway.md, THE VERDICT); an explicit 0 stays 0
+    s.modEngineSpeed = true; // on by default (BRIEF_drivetrain_1_engine_speed.md); an explicit 0 stays 0
+    s.engineSpeedTop = 1.0f;
     s.roadCdA = 0.0f;
     s.creep = true;
     s.creepManual = false;
@@ -341,6 +345,7 @@ inline void SettingsClamp(GaugeSettings &s)
     s.boostMax = SettingsOverride(s.boostMax, kBoostRange);
     s.boostProfile = s.boostProfile < 0 || s.boostProfile >= kSpoolCount ? kSpoolStandard : s.boostProfile;
     s.engineShare = s.engineShare < 0 ? 0 : s.engineShare > 100 ? 100 : s.engineShare;
+    s.engineSpeedTop = isfinite(s.engineSpeedTop) ? SettingsRange(s.engineSpeedTop, 0.5f, 1.5f) : 1.0f;
     s.roadCdA = isfinite(s.roadCdA) ? (s.roadCdA <= 0.0f ? 0.0f : s.roadCdA < 0.3f ? 0.3f : s.roadCdA > 20.0f ? 20.0f : s.roadCdA) : 0.0f;
     s.gearbox = s.gearbox < 0 || s.gearbox >= kGearboxCount ? kGearboxGame : s.gearbox;
     s.input = s.input < 0 || s.input >= kInputCount ? kInputWheel : s.input;

@@ -388,6 +388,23 @@ gear (2026-10-25). With the wheels at the
 gear's top or past it (rolling downhill) the factor is the game's own: the division would be by nothing. Below about half a gear's
 top GameFall is 1 and nothing is divided out. The game's own share goes back once when the setting goes off, the engine stops, the pull test is armed, or another truck is
 driven (and to the old truck only if its action is still its own).</p>
+<h3>The game's engine speed (ModEngineSpeed)</h3>
+<p>The game's engine speed is one function, <code>float(vehicle, bool withWheels, bool withMinThrottle)</code>, found by its first bytes
+(RVA d73170 in 6adb8627, d73200 in 6ab52f5d). It is worked out on each call from the pedal, the pull at action + 0xB4 and the driven
+wheels, 0 to 1, stored nowhere, and 0 with the engine off or the pedal released. Eleven callers read it: the fuel burn, Truck.rpm (the
+cockpit's needles), the player update, the stall's near-dead check, a HUD vec4, GetTruckInput, the mud and terrain effects, the lights and an
+event. A Detours hook (all other threads suspended) answers with the mod's share <i>s</i> = clamp((rpm − idle) / (top − idle), 0, 1), top the
+redline times <code>EngineSpeedTop</code> (<code>EngineSpeedShare</code>). The rpm is the needle's before the stall's dip (<code>TachModel::live</code>, the same
+lag), as Truck.rpm multiplies its own stall term in. The mod's thread publishes <i>s</i> with its vehicle in one of two slots each pass; the hook
+answers only for that vehicle, with its engine bit (vehicle + 0x768 bit 0) set, a slot at most 1 s old, and a caller other than the fuel's and the
+stall's. Those two are told by their return addresses, from the bytes around each call, and each call must land on the function; they keep
+the game's value, as both read it as a load (the burn goes from the idle rate to the gear's FuelModifier by it). Otherwise the hook calls the
+game's own. A slot is published only while Powertrain hands the torque by its rule and the needle follows the mod's engine (the converter in A,
+the clutch in a position of its own); it is cleared out of the world. With <code>Probe=1</code> the hook calls the game's own first on every call and keeps
+its last value and count by return address. Gauges.log says "engine speed: the game's engine speed at +..." at the first truck with the
+three places (or why it was not found, "so the game's engine speed stays its own"), "engine speed: the game's engine speed hooked at +..."
+once hooked, and with the probe "probe: engine speed: the mod's ..." once a second, each caller by its return address with its calls and
+the game's last value.</p>
 <h3>Air drag (RoadLoad)</h3>
 <p>The game already slows a rolling truck by itself, more the faster it goes. The air's drag goes on top of that. With <code>RoadLoad=1</code> and the engine handed to the game, the mod takes it off the lift
 (<code>RoadLoadAccel</code>, <code>RoadLoadShare</code>, models.h) as a deceleration over the game's own acceleration in that gear at
