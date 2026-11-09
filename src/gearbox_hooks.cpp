@@ -1025,20 +1025,23 @@ static bool CutWheelsRead(const void *vehicle, float *omega, bool *driven, int &
             driven[n] = type == 1 || (type == 2 && awd);
             if (driven[n])
             {
-                // M5: the driven wheels' radius (+ 0x94) and the truck's forward speed from the first one's parent body
-                // (+ 0x10), its linear velocity (+ 0x230) along its rotation's first column (+ 0x170), as the drive's d73120
+                // M5: the driven wheels' radius (+ 0x94)
                 const float r = *(const volatile float *)(wheel + 0x94);
                 if (isfinite(r) && r > 0.0f) radiusSum += r, radiusN++;
-                const uint8_t *parent = *(const uint8_t *const *)(wheel + 0x10);
-                if (!isfinite(forward) && (uintptr_t)parent >= 0x10000)
-                {
-                    const volatile float *vel = (const volatile float *)(parent + 0x230), *f = (const volatile float *)(parent + 0x170);
-                    forward = vel[0] * f[0] + vel[1] * f[1] + vel[2] * f[2];
-                }
             }
             n++;
         }
         if (radiusN) radius = radiusSum / (float)radiusN;
+        // the truck's forward speed from its main body, as the drive's d73120: [[vehicle + 0x60] + 0x230], its linear
+        // velocity (+ 0x230) along its rotation's first column (+ 0x170); a wheel's parent can be a rocker or a frame bone
+        // with a swing of its own (the review of bc224bf, S1)
+        const uint8_t *model = *(const uint8_t *const *)(v + 0x60);
+        const uint8_t *body = (uintptr_t)model >= 0x10000 ? *(const uint8_t *const *)(model + 0x230) : nullptr;
+        if ((uintptr_t)body >= 0x10000)
+        {
+            const volatile float *vel = (const volatile float *)(body + 0x230), *f = (const volatile float *)(body + 0x170);
+            forward = vel[0] * f[0] + vel[1] * f[1] + vel[2] * f[2];
+        }
         return true;
     }
     __except (EXCEPTION_EXECUTE_HANDLER)

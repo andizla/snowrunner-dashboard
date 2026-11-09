@@ -96,6 +96,8 @@ inline SimResult SimRun(const SimSetup &u)
     float wMax = 0.0f, wIn = 0.0f, vHalf = u.v0;
     CapArm arm = { 0x7FFFFFFF, false };
     const float capV = u.cap > 0.0f ? u.cap * u.slot.map.top : 0.0f;
+    TorqueCutSlot slotNow = u.slot; // the slot as the mod publishes it, its cap with it
+    slotNow.cap = capV;
     bool armed = false;
     static float needles[60 * 60], keeps[60 * 60];
     uint32_t seed = u.seed ? u.seed : 1u;
@@ -138,12 +140,12 @@ inline SimResult SimRun(const SimSetup &u)
             {
                 if (t >= nextPass)
                 {
-                    held = TorqueCutAnswerOf(u.slot, 1.0f, -1.0f, 0.0f, 1e9f, 1.0f, 1.0f, sp).bracket;
+                    held = TorqueCutAnswerOf(slotNow, 1.0f, -1.0f, 0.0f, 1e9f, 1.0f, 1.0f, sp).bracket;
                     nextPass = t + u.passFrom + (u.passTo - u.passFrom) * SimRand(seed);
                 }
                 bracket = held;
             }
-            else bracket = TorqueCutAnswerOf(u.slot, 1.0f, -1.0f, 0.0f, 1e9f, 1.0f, 1.0f, sp).bracket;
+            else bracket = TorqueCutAnswerOf(slotNow, 1.0f, -1.0f, 0.0f, 1e9f, 1.0f, 1.0f, sp).bracket;
             if (u.rise > 0.0f) bracket = used = CutRise(used, bracket, u.rise);
         }
         if (k > 0 && lastBracket - bracket >= 0.3f)

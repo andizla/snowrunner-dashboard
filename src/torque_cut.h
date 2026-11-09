@@ -84,17 +84,18 @@ inline float TorqueCutRpm(const TorqueCutMap &m, float s)
 // foot off. No lift by the wheels' spin, no make-up for the game's fall, no roof and no pacing: the game's curve is out
 // of the drive. 0 for a speed or a map that is no number. brakeShare (0 to 1) scales the braking alone (the taper by
 // the slowest driven wheel, TorqueCutBrakeTaper). governS: the speed the governor's fade goes by, the truck's own (M5);
-// no number: s. With it, the curve E is read at the wheels' speed held to the redline at most: past the redline its own
-// tail (to 0 at the needle's top) would be a fall in the wheels' speed again, and a wheel running up to the guard would
-// swing on it (the sketch: the heavy with a wheel free fell by 0.3 in a step 4 times in 10 s). Past the redline the
-// governor on the truck's speed decides alone.
-inline float TorqueCutF(const TorqueCutMap &m, float s, float brakeShare = 1.0f, float governS = NAN)
+// no number: s. holdCurve (where the wheel guard acts, the slot's cap above 0): the curve E is read at the wheels' speed
+// held to the redline at most, as its own tail (to 0 at the needle's top) would be a fall in the wheels' speed under the
+// guard, and a wheel running up to the guard swung on it (the sketch: the heavy with a wheel free fell by 0.3 in a step 4
+// times in 10 s). Where the guard does not act (a numbered gear), E keeps its tail: it is the one limit on a wheel that
+// runs free there (the review of bc224bf, M1).
+inline float TorqueCutF(const TorqueCutMap &m, float s, float brakeShare = 1.0f, float governS = NAN, bool holdCurve = false)
 {
     if (!(m.redline > m.idle) || !(m.idle >= 0.0f)) return 0.0f;
     const float rpm = TorqueCutRpm(m, isfinite(s) ? s : 0.0f), speed = rpm / m.redline;
     const float governSpeed = isfinite(governS) ? TorqueCutRpm(m, governS) / m.redline : speed;
     const float pedal = CutClamp01(m.pedal);
-    const float e = CutCurveAt(m.curve, isfinite(governS) ? fminf(speed, 1.0f) : speed, m.tachTop) * CutGovernor(governSpeed, m.governFrom, m.governTo);
+    const float e = CutCurveAt(m.curve, holdCurve ? fminf(speed, 1.0f) : speed, m.tachTop) * CutGovernor(governSpeed, m.governFrom, m.governTo);
     const float limit = isfinite(m.limit) ? CutClamp01(m.limit / (pedal > 1e-3f ? pedal : 1e-3f)) : 1.0f;
     float drive = pedal * (e * limit - (isfinite(m.load) && m.load > 0.0f ? m.load : 0.0f));
     if (!(drive > 0.0f)) drive = 0.0f;
@@ -203,7 +204,7 @@ inline bool TorqueCutOurs(uintptr_t back, uintptr_t driveBack, const TorqueCutSl
 // wheel floored at 0, the game's own s without its cut to whole rad/s (S3); wholeMean and wholeMax, each wheel cut to
 // whole rad/s in the gear's direction and floored at 0, for the stall's wheels' term. ok false with no driven wheel.
 // least: the slowest driven wheel in the gear's direction, not floored (below 0 turning against the gear), for the
-// engine brake's taper. truck: the truck's own speed in the wheels' measure, in the gear's direction, its forward speed
+// engine brake's taper. truck: the truck's own speed in the wheels' measure, in the gear's direction, the main body's forward speed
 // over the driven wheels' mean radius (CutSpeedsTruck; M5 of the wheel cap's addendum: the governor's fade goes by it,
 // so no wheel's kick or backspin enters that loop); truckOk false where it was not read (the governor by mean then).
 struct CutSpeeds
@@ -240,7 +241,7 @@ inline CutSpeeds TorqueCutSpeeds(const float *omega, const bool *driven, int n, 
     return r;
 }
 
-// The truck's own speed into the speeds: forward (m/s along the chassis's forward axis, the drive's own d73120) over the
+// The truck's own speed into the speeds: forward (m/s along the main body's forward axis, the drive's own d73120) over the
 // driven wheels' mean radius (wheel + 0x94), in the gear's direction (dir +1 or -1). Nothing where either is no number
 // or the radius not above 0.
 inline void CutSpeedsTruck(CutSpeeds &sp, float forward, float radius, int dir)
@@ -318,7 +319,8 @@ struct TorqueCutAnswer
 {
     float torque, bracket, f, b4s, stockCurve, s, standIn, w, used, taper;
 };
-// The governor's fade goes by the truck's own speed where it was read (M5), else by the wheels' mean.
+// The governor's fade goes by the truck's own speed where it was read (M5), else by the wheels' mean; the curve held to
+// the redline only where the guard acts (slot.cap above 0).
 inline TorqueCutAnswer TorqueCutAnswerOf(const TorqueCutSlot &slot, float stock, float start, float a, float top, float pf, float d4, CutSpeeds sp)
 {
     TorqueCutAnswer r = {};
@@ -328,7 +330,7 @@ inline TorqueCutAnswer TorqueCutAnswerOf(const TorqueCutSlot &slot, float stock,
     r.s = sp.mean;
     r.stockCurve = TorqueCutStockCurve(start, a, top, pf, sp.mid);
     r.taper = sp.ok ? TorqueCutBrakeTaper(sp.least, map) : 0.0f;
-    r.f = slot.mode == kCutMap ? TorqueCutF(map, sp.mean, r.taper, sp.truckOk ? sp.truck : NAN) : (isfinite(slot.scalar) ? slot.scalar : 0.0f);
+    r.f = slot.mode == kCutMap ? TorqueCutF(map, sp.mean, r.taper, sp.truckOk ? sp.truck : NAN, slot.cap > 0.0f) : (isfinite(slot.scalar) ? slot.scalar : 0.0f);
     r.bracket = TorqueCutBlend(slot.share, slot.pedal, r.stockCurve, r.f);
     if (slot.floor > 0.0f && r.bracket < slot.floor) r.bracket = slot.floor;
     r.used = r.bracket;

@@ -392,10 +392,10 @@ drive's own scaling by pf the curve is 1 under the governor's end, and the game'
 (BRIEF_drive_2108_findings.md F1: with top 10<sup>9</sup> a free wheel ran away to tens of rad/s). used is the bracket paced as the game's B4 rose: used + <i>r</i> ·
 (bracket − used) away from 0, with <i>r</i> = EngineResponsiveness (+0xC4) · pf, and at once toward 0 (<code>CutRise</code>, F1b; one step's kick on a free wheel is about
 30 times the brake's most). A take-over paces from the game's own pull at that step, clamp01(min(B4, pedal)) read on the mod's pass before the first publish, and from 0
-where B4 is no number (<code>TorqueCutGamePull</code>, S1). The governor's fade goes by the truck's own speed: the forward speed of the first driven wheel's parent body (wheel + 0x10, its + 0x230 along its
+where B4 is no number (<code>TorqueCutGamePull</code>, S1). The governor's fade goes by the truck's own speed: the forward speed of the main body ([[vehicle + 0x60] + 0x230], its + 0x230 along its
 rotation's first column at + 0x170, as the drive's d73120) over the driven wheels' mean radius (wheel + 0x94), in the gear's direction (<code>CutSpeedsTruck</code>,
-M5 of the wheel cap's addendum); with it the curve is read at the wheels' speed held to the redline, as its tail past the redline would be a fall in the wheels' speed
-again. The wheel cap is the runaway guard (BRIEF_drivetrain_2c_wheel_cap.md): after the original drive returns, each driven wheel's speed in the game's measure,
+M5 of the wheel cap's addendum); where the guard acts the curve is read at the wheels' speed held to the redline, as its tail past the redline would be a fall in the
+wheels' speed under the guard; in a numbered gear it keeps its tail, the one limit on a wheel that runs free there. The wheel cap is the runaway guard (BRIEF_drivetrain_2c_wheel_cap.md): after the original drive returns, each driven wheel's speed in the game's measure,
 w = dot(body + 0x240, wheel + 0x154) in the gear's direction (wheel + 0x18 the body, used as activate checks it: + 0x10 set, + 0x160 not 5), is held to
 <code>WheelCap</code> percent of the gear's top (150) by omega += (cap - w) · axle / |axle|², so only the spin about the axle changes and the axle need not be a unit
 (<code>CapMove</code>). It acts in L-, L, L+ and R alone, not in a numbered gear held by hand (<code>GearboxPosCapped</code>, one condition), arms after a take-over or a shift once the driven

@@ -4263,13 +4263,25 @@ int main(int argc, char **argv)
         // the gate, one condition (the user: "L gears and R"): R and the low range; not a numbered gear, A, N or H
         const bool gate = !GearboxPosCapped(kPosGear) && GearboxPosCapped(kPosR) && GearboxPosCapped(kPosLowMinus) && GearboxPosCapped(kPosLow) && GearboxPosCapped(kPosLowPlus) &&
                           !GearboxPosCapped(kPosA) && !GearboxPosCapped(kPosN) && !GearboxPosCapped(kPosH);
-        char capLine[700];
+        // the curve's tail (the review of bc224bf, M1): the wheels at 1.55 of the top, half way down the tail from the
+        // curve's last point (1.5) to the needle's top (1.6), the truck slow: with no guard (a numbered gear) F 0.5, the tail
+        // kept; with the guard in the slot F 1, the curve held to the redline
+        const float tailWheels[4] = { 15.5f, 15.5f, 15.5f, 15.5f };
+        CutSpeeds tailSp = TorqueCutSpeeds(tailWheels, d4, 4, 1);
+        CutSpeedsTruck(tailSp, 4.5f, 0.5f, 1);
+        const float tailNoGuard = TorqueCutAnswerOf(cs, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, tailSp).f;
+        TorqueCutSlot guarded = cs;
+        guarded.cap = 15.0f;
+        const float tailGuard = TorqueCutAnswerOf(guarded, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, tailSp).f;
+        const bool tail = nearly(tailNoGuard, 0.5f) && nearly(tailGuard, 1.0f);
+        char capLine[800];
         snprintf(capLine, sizeof capLine, "wheel cap: an axle of length 2 and a unit one both from 4.2 to 3 in the game's measure, the parts across them kept, R by the sign; held wheels "
                                           "3 and 3, the third 2.75 with the spread (2 without), kept %.3f (%.3f), nothing to a wheel pushed against the gear; a downshift at 2 x the "
                                           "cap waits until the guard, a shift waits again; the wheels at 1.05 of the top: F %.2f by them, %.2f with the truck at 0.9, %.2f at 1.05; "
-                                          "the stand-in %.2f at kept 0.25; the guard in R and the low range alone, not a numbered gear",
-                 sp.kept, no.kept, governed, capped.f, truckFast, capped.standIn);
-        Check(axle && reverseAxle && spread && held && waits && answer && gate, capLine);
+                                          "the stand-in %.2f at kept 0.25; the guard in R and the low range alone, not a numbered gear; the wheels on the curve's tail F %.2f "
+                                          "with no guard, %.2f with it",
+                 sp.kept, no.kept, governed, capped.f, truckFast, capped.standIn, tailNoGuard, tailGuard);
+        Check(axle && reverseAxle && spread && held && waits && answer && gate && tail, capLine);
 
         // R4, the sketch: L- with a top of 2.9 floored, the brake (F1) and the pace (F1b) as above, today (the governor by
         // the wheels, no cap) against M5 (the governor by the truck's own speed, the guard at 1.5); the scout (a kick of 50 rad/s a step) with a wheel free, in deep mud, on a road; the heavy (6 a step) with a
@@ -4324,6 +4336,30 @@ int main(int argc, char **argv)
                             cases[c].name, today.wMax / 2.9f, today.mean / 2.9f, today.sd / 2.9f, today.vEnd, fadeOnly.wMax / 2.9f, cap.wIn / 2.9f, cap.mean / 2.9f, cap.sd / 2.9f,
                             cap.vEnd, cap.kept, cap.cutsAfter);
             ok = ok && cap.wIn <= 2.9f * guard + 1e-4f && cap.cutsAfter == 0;
+        }
+        // a numbered gear (no guard), a free wheel, floored, the fade on the truck's speed: the curve's tail is the limit
+        // (the review of bc224bf, M1). 2nd with a top of 10 rad/s and the scout's kick; against the governor on the wheels
+        // (618410d's). The bound: no worse than 618410d by a tenth, no falls; the review's 1.2 x the needle's stop is said
+        // met or missed (the scout's one-step kick runs a free wheel past it in this sketch with either governor: the peak
+        // before the game's brake takes it back)
+        {
+            SimSetup num = u;
+            num.drive = 3000.0f;
+            num.freeWheels = 1;
+            num.ground = mud;
+            num.cap = 0.0f;
+            const CutBand numBand = CutGovernBand(10.0f, kTachOverrun);
+            num.slot.map.top = 10.0f;
+            num.slot.map.governFrom = numBand.from;
+            num.slot.map.governTo = numBand.to;
+            num.governTruck = false;
+            const SimResult wheelsGov = SimRun(num);
+            num.governTruck = true;
+            const SimResult nr = SimRun(num);
+            len += snprintf(line + len, sizeof line - len, " 2nd (a top of 10) with a wheel free, no guard: the fastest wheel %.2f of the top with the tail kept (the governor on the wheels "
+                                                           "%.2f; 1.2 x the needle's stop %s), x %.2f (%.2f), falls %d;",
+                            nr.wMax / 10.0f, wheelsGov.wMax / 10.0f, nr.wMax < 1.2f * kTachOverrun * 10.0f ? "met" : "missed", nr.mean / 10.0f, wheelsGov.mean / 10.0f, nr.cutsAfter);
+            ok = ok && nr.wMax <= 1.1f * wheelsGov.wMax && nr.cutsAfter == 0;
         }
         // floored up a grade on hard ground (the Reviewer's note: the guard's margin at the top is (WheelCap - 100) % x the
         // top x the wheels' inertia; at 110 a grade sags there): today, the guard at 110 and at 150
