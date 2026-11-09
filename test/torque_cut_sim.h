@@ -15,6 +15,9 @@
 //   the gear, over the wheel's inertia (inertia 0 leaves the brake out). The cut's top: the governor's end with F1
 //   (cutTop), 1e9 without (the old outputs, so only the fastest - 0.5 binds);
 // - the cut's bracket paced as the game's B4 rose (F1b, CutRise at rise a step; 0 leaves it whole at once).
+// - the wheel speed cap (BRIEF_drivetrain_2c_wheel_cap.md, cap above 0): the drive's impulse at once, the overspeed brake,
+//   then CapStep (the cap, the spread to the other wheels, the kept share) on the wheels' speeds before the ground, and F
+//   without the governor's fall while armed (CapArmStep, M3; capAtOnce arms from the first step, the counter-case).
 // The answer F is the detour's (torque_cut.h) from this step's wheels, or in the counter-case held from a pass of the
 // mod's thread every 100 ms (or 50 to 120 ms), as the factor reached the game before. freeWheels of the wheels (the first
 // ones) have no grip and little drag: a wheel lifted or in a slurry.
@@ -53,6 +56,9 @@ struct SimSetup
     float rise;            // the bracket's pace a step (F1b, EngineResponsiveness x pf); 0 whole at once
     float used0;           // where the pace starts (S1: the game's own pull at a take-over); 0 from 0
     int freeWheels;        // the first ones without grip
+    float cap;             // the wheel speed cap over the gear's top (WheelCap over 100: the guard), 0 none
+    bool capAtOnce;        // the cap armed from the first step (without M3's wait)
+    bool governTruck;      // the governor's fade by the truck's own speed (M5): the ground's speed, in the wheels' units here
 };
 struct SimResult
 {
@@ -66,6 +72,10 @@ struct SimResult
     float fMin, fMax;     // the bracket over the measured span
     float pinned;         // the share of the steps after the first second with s at or over the needle's stop (1.1 of the top)
     float wMax;           // the fastest wheel after the first second, rad/s
+    float wIn;            // the cap: the fastest wheel handed to the ground after the cap, after the first second, rad/s
+    float needle;         // the cap: the needle's mean over the measured span (a wheel held at the cap reads it, M2)
+    float kept;           // the cap: the mean kept share over the measured span (M1)
+    float vHalf;          // the ground's speed at 0.5 s
 };
 
 inline float SimRand(uint32_t &s)
@@ -83,7 +93,11 @@ inline SimResult SimRun(const SimSetup &u)
     for (int i = 0; i < n; i++) w[i] = u.s0 * (1.0f + 0.02f * (float)(i - n / 2)), share[i] = 1.0f, whole[i] = (int)fmaxf(w[i], 0.0f);
     float v = u.v0, b4 = 0.0f, held = 0.0f, nextPass = 0.0f, lastBracket = 0.0f, used = CutClamp01(u.used0);
     int pinnedSteps = 0, countedSteps = 0;
-    float wMax = 0.0f;
+    float wMax = 0.0f, wIn = 0.0f, vHalf = u.v0;
+    CapArm arm = { 0x7FFFFFFF, false };
+    const float capV = u.cap > 0.0f ? u.cap * u.slot.map.top : 0.0f;
+    bool armed = false;
+    static float needles[60 * 60], keeps[60 * 60];
     uint32_t seed = u.seed ? u.seed : 1u;
     const int steps = (int)(u.seconds / dt);
     // the s trace, for the settle and the spread
@@ -106,7 +120,9 @@ inline SimResult SimRun(const SimSetup &u)
         const float mid = 0.5f * (float)(lo + hi), meanInt = (float)sum / (float)n;
         // the detour's answer, or the game's own
         float bracket;
-        const CutSpeeds sp = TorqueCutSpeeds(w, driven, n, 1);
+        CutSpeeds sp = TorqueCutSpeeds(w, driven, n, 1);
+        if (u.governTruck) CutSpeedsTruck(sp, v, 1.0f, 1);
+        if (capV > 0.0f) armed = u.capAtOnce || CapArmStep(arm, 1, sp.mean, sp.ok, capV);
         if (u.mode == kSimFlat) bracket = u.flat;
         else if (u.mode == kSimGame)
         {
@@ -165,6 +181,23 @@ inline SimResult SimRun(const SimSetup &u)
                     w[i] -= fminf(x * x * 1024.0f / 60.0f / u.inertia, w[i] - threshold);
                 }
         }
+        // the cap: the drive's impulse at once, then the cap and the spread over the speeds the ground gets (equal wheels:
+        // gain 1); the ground's sub steps then without the drive's torque
+        float needleNow = sp.mean, keptNow = 1.0f;
+        if (armed)
+        {
+            float pre[8], post[8], gain[8];
+            bool ok[8];
+            for (int i = 0; i < n; i++) pre[i] = w[i], post[i] = w[i] + torque[i] * dt, gain[i] = 1.0f, ok[i] = true, torque[i] = 0.0f;
+            const CapStepOut o = CapStep(pre, post, gain, ok, n, capV, true);
+            for (int i = 0; i < n; i++) w[i] = o.final[i];
+            keptNow = o.kept;
+            for (int i = 0; i < n; i++)
+                if (t >= 1.0f) wIn = fmaxf(wIn, w[i]);
+        }
+        bool clampedNow[8] = {};
+        if (armed)
+            for (int i = 0; i < n; i++) clampedNow[i] = w[i] >= capV - 1e-5f;
         // the physics (Havok's own solver, stable where the ground couples the wheel to the truck stiffly): ten small
         // steps inside the drive's one, the drive's torque held through them
         for (int sub = 0; sub < 10; sub++)
@@ -184,6 +217,16 @@ inline SimResult SimRun(const SimSetup &u)
         }
         trace[k] = sp.mean;
         brackets[k] = bracket;
+        if (armed)
+        {
+            // M2: the needle after the solve, a wheel held at the cap this step reading the cap
+            float nsum = 0.0f;
+            for (int i = 0; i < n; i++) nsum += clampedNow[i] ? capV : fmaxf(w[i], 0.0f);
+            needleNow = nsum / (float)n;
+        }
+        needles[k] = needleNow;
+        keeps[k] = keptNow;
+        if (k == 30) vHalf = v;
         if (t >= 1.0f)
         {
             countedSteps++;
@@ -214,6 +257,12 @@ inline SimResult SimRun(const SimSetup &u)
     for (int k = from; k < to; k++) q += (trace[k] - m) * (trace[k] - m);
     r.mean = m;
     r.sd = sqrtf(q / (float)(to - from > 0 ? to - from : 1));
+    float nm = 0.0f, km = 0.0f;
+    for (int k = from; k < to; k++) nm += needles[k], km += keeps[k];
+    r.needle = nm / (float)(to - from > 0 ? to - from : 1);
+    r.kept = km / (float)(to - from > 0 ? to - from : 1);
+    r.wIn = wIn;
+    r.vHalf = vHalf;
     r.cuts = cuts;
     for (int k = from + 1; k < to; k++)
         if (brackets[k - 1] - brackets[k] >= 0.3f) r.cutsAfter++;

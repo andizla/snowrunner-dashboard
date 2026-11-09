@@ -4198,6 +4198,171 @@ int main(int argc, char **argv)
         Check(ok, line);
     }
 
+    // the wheel speed cap (BRIEF_drivetrain_2c_wheel_cap.md, the Reviewer's addendum, the lead's S1): the pieces, then the
+    // sketch (R4)
+    {
+        auto nearly = [](float x, float y) { return fabsf(x - y) <= 1e-4f * fmaxf(1.0f, fabsf(y)); };
+        // the axle: one of length 2 and a unit one, each wheel's spin about it in the game's measure (dot(omega, axle), as
+        // + 0x174) brought to the cap 3 from 4.2: both by the same 1.2, the parts across the axle as they were
+        CapVec o1 = { 4.2f, 0.3f, -0.2f }, o2 = { 2.1f, 0.3f, -0.2f };
+        const CapVec a1 = { 1.0f, 0.0f, 0.0f }, a2 = { 2.0f, 0.0f, 0.0f };
+        const float b1 = CapSpeed(o1, a1, 1.0f), b2 = CapSpeed(o2, a2, 1.0f);
+        const bool moved = CapMove(o1, a1, 1.0f, 3.0f - b1) && CapMove(o2, a2, 1.0f, 3.0f - b2);
+        const bool axle = moved && nearly(b1, 4.2f) && nearly(b2, 4.2f) && nearly(CapSpeed(o1, a1, 1.0f), 3.0f) && nearly(CapSpeed(o2, a2, 1.0f), 3.0f) && o1.y == 0.3f && o1.z == -0.2f &&
+                          o2.y == 0.3f && o2.z == -0.2f && nearly(o2.x, 1.5f) && !CapMove(o1, CapVec{ 0.0f, 0.0f, 0.0f }, 1.0f, 1.0f);
+        // R: the gear's direction is the sign
+        CapVec r1 = { -4.2f, 0.0f, 0.0f };
+        CapMove(r1, a1, -1.0f, 3.0f - CapSpeed(r1, a1, -1.0f));
+        const bool reverseAxle = nearly(r1.x, -3.0f);
+        // CapStep (M1 and S1): two wheels over the cap 3 after a push of 1 each, one under it; the spread hands the two's
+        // excess impulse (0.5 / 0.2 + 0.5 / 0.1) to the third through its gain 0.1: 2.75. Without the spread the third
+        // keeps 2. A wheel the drive pushed back (against the gear) takes nothing
+        const float pre[3] = { 2.5f, 2.5f, 1.0f }, post[3] = { 3.5f, 3.5f, 2.0f }, gain[3] = { 0.2f, 0.1f, 0.1f };
+        const bool all[3] = { true, true, true };
+        const CapStepOut sp = CapStep(pre, post, gain, all, 3, 3.0f, true), no = CapStep(pre, post, gain, all, 3, 3.0f, false);
+        const float preB[3] = { 2.5f, 1.0f, 1.0f }, postB[3] = { 3.5f, 0.5f, 2.0f };
+        const CapStepOut against = CapStep(preB, postB, gain, all, 3, 3.0f, true);
+        // no wheel pushed with the gear: nothing spread to those pushed back
+        const float preD[3] = { 2.5f, 1.0f, 1.0f }, postD[3] = { 3.5f, 0.5f, 0.5f };
+        const CapStepOut noTaker = CapStep(preD, postD, gain, all, 3, 3.0f, true);
+        const bool spread = noTaker.final[1] == 0.5f && noTaker.final[2] == 0.5f && noTaker.spread == 0.0f && sp.final[0] == 3.0f && sp.final[1] == 3.0f && nearly(sp.final[2], 2.75f) && sp.clamped[0] && sp.clamped[1] && !sp.clamped[2] && nearly(sp.kept, 2.75f / 3.0f) &&
+                            nearly(sp.keptEach[0], 0.5f) && sp.keptEach[2] == 1.0f && nearly(sp.excess, 0.5f) && no.final[2] == 2.0f && nearly(no.kept, 2.0f / 3.0f) &&
+                            against.final[1] == 0.5f && nearly(against.final[2], 2.25f);
+        // a wheel the spread would push past the cap is held at it; with no push the kept share is 1
+        const float preC[2] = { 2.5f, 2.9f }, postC[2] = { 4.5f, 2.95f }, gainC[2] = { 0.1f, 0.1f };
+        const CapStepOut over = CapStep(preC, postC, gainC, all, 2, 3.0f, true);
+        const float still[2] = { 2.0f, 2.0f };
+        const bool held = over.final[0] == 3.0f && over.final[1] == 3.0f && over.clamped[1] && CapStep(still, still, gainC, all, 2, 3.0f, true).kept == 1.0f;
+        // M3: a downshift at 2 x the cap waits, arms at the guard, stays armed, and waits again after a shift
+        CapArm arm = { 0x7FFFFFFF, false };
+        const bool waits = !CapArmStep(arm, 1, 6.0f, true, 3.0f) && !CapArmStep(arm, 1, 3.2f, true, 3.0f) && CapArmStep(arm, 1, 3.0f, true, 3.0f) && CapArmStep(arm, 1, 6.0f, true, 3.0f) &&
+                           !CapArmStep(arm, 2, 6.0f, true, 3.0f) && !CapArmStep(arm, 2, 1.0f, false, 3.0f) && !CapArmStep(arm, 0, 1.0f, true, 3.0f);
+        // M5: the governor's fade by the truck's own speed: the wheels at 1.05 of the top with the truck at 0.9 of it pull
+        // whole, the truck at 1.05 too gets the governed 0.5, no truck read goes by the wheels; the stand-in by what the
+        // wheels kept (M1)
+        TorqueCutSlot cs = {};
+        cs.vehicle = 1;
+        cs.mode = kCutMap;
+        cs.share = 1.0f;
+        cs.pedal = 1.0f;
+        cs.map = TorqueCutMap{ 1.0f, 1.0f, 0.0f, 1.0f, 0.15f, 10.0f, 800.0f, 2000.0f, 1.6f, { 2, { 0.1f, 1.5f }, { 1.0f, 1.0f } }, 1.0f, 1.1f };
+        const bool d4[4] = { true, true, true, true };
+        const float fast[4] = { 10.5f, 10.5f, 10.5f, 10.5f };
+        const float governed = TorqueCutAnswerOf(cs, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, TorqueCutSpeeds(fast, d4, 4, 1)).f;
+        CutSpeeds slowTruck = TorqueCutSpeeds(fast, d4, 4, 1), fastTruck = slowTruck, backTruck = slowTruck, noTruck = slowTruck;
+        CutSpeedsTruck(slowTruck, 4.5f, 0.5f, 1);  // 9 rad/s, 0.9 of the top
+        CutSpeedsTruck(fastTruck, 5.25f, 0.5f, 1); // 10.5
+        CutSpeedsTruck(backTruck, 4.5f, 0.5f, -1); // -9 in R's direction: under the top
+        CutSpeedsTruck(noTruck, NAN, 0.5f, 1);
+        TorqueCutAnswer capped = TorqueCutAnswerOf(cs, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, slowTruck);
+        const float truckFast = TorqueCutAnswerOf(cs, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, fastTruck).f;
+        const float truckNone = TorqueCutAnswerOf(cs, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, noTruck).f;
+        TorqueCutAnswerPaced(capped, 2.0f, 1.0f, 1.0f, 0.25f);
+        const bool answer = nearly(governed, 0.5f) && nearly(capped.f, 1.0f) && nearly(truckFast, 0.5f) && nearly(truckNone, 0.5f) && !noTruck.truckOk && nearly(backTruck.truck, -9.0f) &&
+                            nearly(capped.torque, 2.0f) && nearly(capped.standIn, 0.25f) && nearly(CapKeptSmooth(1.0f, 0.5f), 0.9f);
+        // the gate, one condition (for now every gear held by hand, the Reviewer's part 3): numbered gears, R and the
+        // low range; not A, N or H
+        const bool gate = GearboxPosCapped(kPosGear) && GearboxPosCapped(kPosR) && GearboxPosCapped(kPosLowMinus) && GearboxPosCapped(kPosLow) && GearboxPosCapped(kPosLowPlus) &&
+                          !GearboxPosCapped(kPosA) && !GearboxPosCapped(kPosN) && !GearboxPosCapped(kPosH);
+        char capLine[700];
+        snprintf(capLine, sizeof capLine, "wheel cap: an axle of length 2 and a unit one both from 4.2 to 3 in the game's measure, the parts across them kept, R by the sign; held wheels "
+                                          "3 and 3, the third 2.75 with the spread (2 without), kept %.3f (%.3f), nothing to a wheel pushed against the gear; a downshift at 2 x the "
+                                          "cap waits until the guard, a shift waits again; the wheels at 1.05 of the top: F %.2f by them, %.2f with the truck at 0.9, %.2f at 1.05; "
+                                          "the stand-in %.2f at kept 0.25; the guard in every held gear, R and the low range",
+                 sp.kept, no.kept, governed, capped.f, truckFast, capped.standIn);
+        Check(axle && reverseAxle && spread && held && waits && answer && gate, capLine);
+
+        // R4, the sketch: L- with a top of 2.9 floored, the brake (F1) and the pace (F1b) as above, today (the governor by
+        // the wheels, no cap) against M5 (the governor by the truck's own speed, the guard at 1.5); the scout (a kick of 50 rad/s a step) with a wheel free, in deep mud, on a road; the heavy (6 a step) with a
+        // wheel free; the foot off down a grade entered at the top; a downshift floored on a road at 2 x the new top with
+        // M3, with the cap armed at once (the counter-case) and today
+        SimSetup u = {};
+        u.mdav = 0.01f;
+        u.wheels = 4;
+        u.seconds = 30.0f;
+        u.seed = 11;
+        u.inertia = 10.0f;
+        u.cutTop = true;
+        u.rise = 0.04f * 0.2f;
+        u.mode = kSimCut;
+        u.governTruck = true;
+        TorqueCutSlot &sl = u.slot;
+        sl.vehicle = 1;
+        sl.mode = kCutMap;
+        sl.share = 1.0f;
+        sl.pedal = 1.0f;
+        const CutBand band = CutGovernBand(2.9f, kTachOverrun);
+        const float guard = (float)kCapDefault / 100.0f;
+        sl.map = TorqueCutMap{ 1.0f, 1.0f, 0.0f, 1.0f, 0.15f, 2.9f, 800.0f, 2500.0f, 1.2f, { 5, { 0.25f, 0.45f, 0.6f, 0.8f, 1.0f }, { 0.55f, 0.85f, 1.0f, 1.0f, 0.85f } },
+                               band.from, band.to };
+        const SimGround mud = { 5.0f, 0.3f, 1.0f, 1.5f, 0.0f }, road = { 60.0f, 0.1f, 0.05f, 0.05f, 0.0f };
+        struct Case
+        {
+            const char *name;
+            float drive;
+            int free;
+            SimGround ground;
+        };
+        const Case cases[4] = { { "the scout with a wheel free", 3000.0f, 1, mud }, { "the scout in deep mud", 3000.0f, 0, mud }, { "the scout on a road", 3000.0f, 0, road },
+                                { "the heavy with a wheel free", 360.0f, 1, mud } };
+        char line[2400];
+        int len = snprintf(line, sizeof line, "wheel cap, the sketch (x the top 2.9, the last 20 s of 30):");
+        bool ok = true;
+        for (int c = 0; c < 4; c++)
+        {
+            u.drive = cases[c].drive;
+            u.freeWheels = cases[c].free;
+            u.ground = cases[c].ground;
+            u.cap = 0.0f;
+            u.governTruck = false;
+            const SimResult today = SimRun(u);
+            u.governTruck = true;
+            const SimResult fadeOnly = SimRun(u);
+            u.cap = guard;
+            const SimResult cap = SimRun(u);
+            len += snprintf(line + len, sizeof line - len, " %s: today the fastest wheel %.2f, x %.2f, sd %.3f, the truck %.2f; the fade on the truck alone: the fastest %.2f; with the "
+                                                           "guard: into the ground at most %.3f, x %.2f, sd %.3f, the truck %.2f, kept %.2f, falls %d;",
+                            cases[c].name, today.wMax / 2.9f, today.mean / 2.9f, today.sd / 2.9f, today.vEnd, fadeOnly.wMax / 2.9f, cap.wIn / 2.9f, cap.mean / 2.9f, cap.sd / 2.9f,
+                            cap.vEnd, cap.kept, cap.cutsAfter);
+            ok = ok && cap.wIn <= 2.9f * guard + 1e-4f && cap.cutsAfter == 0;
+        }
+        // the foot off down a grade, entered at the top
+        SimSetup hill = u;
+        hill.drive = 360.0f;
+        hill.freeWheels = 0;
+        hill.ground = SimGround{ 60.0f, 0.1f, 0.05f, 0.05f, 0.6f };
+        hill.slot.pedal = hill.slot.map.pedal = 0.0f;
+        hill.s0 = hill.v0 = 2.9f;
+        hill.seconds = 20.0f;
+        hill.cap = 0.0f;
+        hill.governTruck = false;
+        const SimResult hillToday = SimRun(hill);
+        hill.governTruck = true;
+        hill.cap = guard;
+        const SimResult hillCap = SimRun(hill);
+        // a downshift floored on a road at 2 x the new top
+        SimSetup down = u;
+        down.drive = 360.0f;
+        down.freeWheels = 0;
+        down.ground = road;
+        down.s0 = down.v0 = 2.0f * 2.9f;
+        down.seconds = 5.0f;
+        down.s0 = down.v0 = 2.0f * guard * 2.9f;
+        down.cap = 0.0f;
+        down.governTruck = false;
+        const SimResult downToday = SimRun(down);
+        down.governTruck = true;
+        down.cap = guard;
+        const SimResult downWait = SimRun(down);
+        down.capAtOnce = true;
+        const SimResult downOnce = SimRun(down);
+        len += snprintf(line + len, sizeof line - len, " the heavy foot off down a grade from the top: %.2f today, %.2f with M5; a downshift at 2 x the guard, the truck at 0.5 s %.2f "
+                                                       "today, %.2f with the guard waiting (M3), %.2f armed at once",
+                        hillToday.vEnd / 2.9f, hillCap.vEnd / 2.9f, downToday.vHalf, downWait.vHalf, downOnce.vHalf);
+        ok = ok && hillCap.vEnd <= hillToday.vEnd + 0.05f && downWait.vHalf > downOnce.vHalf;
+        Check(ok, line);
+    }
+
     // F3 and F4 of BRIEF_drive_2108_findings.md: the engine brake only while every driven wheel turns in the gear's
     // direction over the gear's idle speed, fading from twice it; the needle by the driven wheels' signed mean in the
     // gear's direction. F2: the game's gear agrees in sign with the mod's position, else the stock passes.

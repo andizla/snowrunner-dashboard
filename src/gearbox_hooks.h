@@ -273,9 +273,21 @@ bool TorqueCutPullGet(uint64_t vehicle, TorqueCutPull &out);
 struct TorqueCutCounts
 {
     long answered, passed, others, faults, falls; // the drive's calls answered and passed, the other callers', the wheels' reads that failed, the falls of the bracket by 0.3 or more in one step
-    float s, f, bracket, stock, torque, d4, b4s, stockCurve, standIn, w, used, rate; // the last answer's (used the bracket paced, rate its pace a step) (b4s the game's settled pull, for the probe; standIn what B4's readers get)
+    float s, f, bracket, stock, torque, d4, b4s, stockCurve, standIn, w, used, rate, truck; // the last answer's (truck the truck's own speed the governor went by, NaN not read) (used the bracket paced, rate its pace a step) (b4s the game's settled pull, for the probe; standIn what B4's readers get)
 };
 void TorqueCutCountsGet(TorqueCutCounts &out);
+// The wheel speed cap (BRIEF_drivetrain_2c_wheel_cap.md), in the wheels' drive's hook while the cut acts with a cap in
+// its slot: the counters since the start (clamps: wheels held at the cap; steps capped; bodies refused; steps armed and
+// waiting, M3; reads that faulted), the wheels clamped in the last step, armed in it, the kept share smoothed (M1), the
+// speed spread to the other wheels, summed (rad/s), and the largest excess over the cap after the drive and before it
+// (the solver's push after the last clamp) since the last read.
+struct WheelCapCounts
+{
+    long clamps, steps, refused, armedSteps, waitSteps, faults, clampedNow;
+    bool armed;
+    float kept, spread, excessMost, preMost;
+};
+void WheelCapCountsGet(WheelCapCounts &out);
 // The game's own ShiftGear(0) refused for the held truck at kPolicyAll so far: the gearbox damage's kick to N
 // (review\own_drivetrain_research.md C.5); the player's N comes through ShiftToNeutral or AutoOffAndShift, refused at its
 // own door, so it never reaches ShiftGear.

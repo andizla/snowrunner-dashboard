@@ -67,11 +67,15 @@ static void FakeOnFrame(void *first) { g_frameFirst = (LONG64)first; }
 // the game passes them; what it got is kept.
 static volatile float g_driveThrottle = 0.0f, g_driveDt = 0.0f;
 static void *volatile g_driveAction = nullptr;
+static void (*volatile g_driveDoes)(void *action) = nullptr; // what the stand-in does to the wheels, the wheel cap's test
+uint8_t *g_capTestBodies[4] = {};
+uint8_t *g_capTestChassis = nullptr;
 __declspec(noinline) static void FakeDrive(void *action, float throttle, float dt)
 {
     g_driveAction = action;
     g_driveThrottle = throttle;
     g_driveDt = dt;
+    if (g_driveDoes) g_driveDoes(action);
 }
 
 // A stand-in for the game's engine speed (the hook of BRIEF_drivetrain_1_engine_speed.md): it answers g_speedStock,
@@ -1899,6 +1903,160 @@ int main()
         Check(CreepHooked() && heldNow && otherPasses && staleCreeps && clearedPasses,
               "torque cut's throttle hold: for the published action the drive's throttle is 1 and B4 is written 1 before it runs, over the creep's share; "
               "another action passes, a stale slot gives the creep its share again, a cleared one leaves the throttle and B4 as they came");
+    }
+
+    // the wheel speed cap in the wheels' drive's hook (BRIEF_drivetrain_2c_wheel_cap.md with the Reviewer's addendum, its
+    // part 2 and the lead's S1): four wheels of bodies the stand-in drive pushes by 1 rad/s about their axles (the first's
+    // of length 2); the fourth not driven. A downshift at 2 x the cap writes nothing until the wheels are at the guard
+    // (M3); then only the driven wheels' spin about the axle is held to the cap, the parts across it kept; a wheel under
+    // the cap gets what the held ones could not take (S1); the kept share (M1); a fixed body refused; nothing after a
+    // shift, with no cap in the slot or with the cut cleared
+    {
+        static uint8_t vehicle[0x800] = {}, act[0x100] = {}, models[4][0x300] = {}, wheels[4][0x200] = {}, bodies[4][0x300] = {}, chassis[0x300] = {}, desc[0x200] = {},
+                       world[0x10] = {};
+        static uint64_t list[5] = {};
+        auto putF = [](uint8_t *p, size_t at, float v) { memcpy(p + at, &v, 4); };
+        auto getF = [](const uint8_t *p, size_t at) {
+            float v;
+            memcpy(&v, p + at, 4);
+            return v;
+        };
+        auto putP = [](uint8_t *p, size_t at, const void *v) {
+            const uint64_t x = (uint64_t)(uintptr_t)v;
+            memcpy(p + at, &x, 8);
+        };
+        auto putV = [&](uint8_t *p, size_t at, float x, float y, float z) { putF(p, at, x), putF(p, at + 4, y), putF(p, at + 8, z); };
+        auto axleOf = [](int i) { return i == 0 ? 2.0f : 1.0f; };
+        // a wheel's speed in the game's measure, dot(body + 0x240, axle)
+        auto speed = [&](int i) { return getF(bodies[i], 0x240) * axleOf(i); };
+        auto setSpeed = [&](int i, float s) { putV(bodies[i], 0x240, s / axleOf(i), 0.3f, -0.2f); };
+        putP(vehicle, 0x68, act);
+        int gear = 1;
+        memcpy(act + 0x74, &gear, 4);
+        putV(desc, 0x100, 1.0f, 0.0f, 0.0f);
+        putV(desc, 0xA0, 0.0f, 1.0f, 0.0f);
+        for (int i = 0; i < 4; i++)
+        {
+            list[i] = (uint64_t)(uintptr_t)models[i];
+            putP(models[i], 0x2C8, wheels[i]);
+            const int driven = i < 3 ? 1 : 0;
+            memcpy(wheels[i] + 0xE8, &driven, 4);
+            putP(wheels[i], 0x18, bodies[i]);
+            putP(wheels[i], 0x10, chassis);
+            putP(wheels[i], 0x28, desc);
+            putV(wheels[i], 0x154, axleOf(i), 0.0f, 0.0f);
+            putF(wheels[i], 0x128, 1.0f);
+            wheels[i][0x1A4] = 1;
+            putP(bodies[i], 0x10, world);
+            putV(bodies[i], 0x220, 0.1f, 0.1f, 0.1f);
+        }
+        putP(vehicle, 0x200, &list[0]);
+        putP(vehicle, 0x208, &list[4]);
+        putP(chassis, 0x10, world);
+        putV(chassis, 0x170, 1.0f, 0.0f, 0.0f);
+        putV(chassis, 0x180, 0.0f, 1.0f, 0.0f);
+        putV(chassis, 0x190, 0.0f, 0.0f, 1.0f);
+        putV(chassis, 0x220, 0.01f, 0.01f, 0.01f);
+        putF(chassis, 0x22C, 0.001f);
+        g_driveDoes = [](void *a) {
+            // the stand-in drive: 1 rad/s more about each driven wheel's axle (in the game's measure), 0.5 m/s on the chassis
+            const uint8_t *v = (const uint8_t *)a;
+            (void)v;
+            static const float lens[4] = { 2.0f, 1.0f, 1.0f, 1.0f };
+            extern uint8_t *g_capTestBodies[4];
+            extern uint8_t *g_capTestChassis;
+            for (int i = 0; i < 3; i++)
+            {
+                float x;
+                memcpy(&x, g_capTestBodies[i] + 0x240, 4);
+                x += 1.0f / lens[i];
+                memcpy(g_capTestBodies[i] + 0x240, &x, 4);
+            }
+            float cv;
+            memcpy(&cv, g_capTestChassis + 0x230, 4);
+            cv += 0.5f;
+            memcpy(g_capTestChassis + 0x230, &cv, 4);
+        };
+        for (int i = 0; i < 4; i++) g_capTestBodies[i] = bodies[i];
+        g_capTestChassis = chassis;
+        void (*volatile drive)(void *, float, float) = &FakeDrive;
+        TorqueCutSlot slot = {};
+        slot.vehicle = (uint64_t)(uintptr_t)vehicle;
+        slot.action = (uint64_t)(uintptr_t)act;
+        slot.cap = 3.0f;
+        TorqueCutPublish(nullptr);
+        TorqueCutPublish(&slot);
+        WheelCapCounts c0 = {};
+        WheelCapCountsGet(c0);
+        // M3: at 2 x the cap nothing is written
+        for (int i = 0; i < 4; i++) setSpeed(i, 6.0f);
+        drive(act, 0.5f, 0.016f);
+        const bool waited = Near(speed(0), 7.0f) && Near(speed(1), 7.0f) && Near(speed(3), 6.0f);
+        // armed under 1.1 x the cap: two driven wheels at 2.5 pushed to 3.5 and held at 3; the third at 1.0 pushed to 2.0
+        // takes the two's excess impulse (0.5 / 0.2 + 0.5 / 0.1) through its gain 0.1: 2.75; the undriven one stays
+        setSpeed(0, 2.5f), setSpeed(1, 2.5f), setSpeed(2, 1.0f), setSpeed(3, 5.0f);
+        drive(act, 0.5f, 0.016f);
+        const float speedHeld0 = speed(0), speedHeld1 = speed(1), speedSpread = speed(2);
+        const bool capped = Near(speed(0), 3.0f) && Near(speed(1), 3.0f) && Near(speed(2), 2.75f) && speed(3) == 5.0f && getF(bodies[0], 0x244) == 0.3f && getF(bodies[0], 0x248) == -0.2f &&
+                            Near(getF(bodies[0], 0x240), 1.5f);
+        WheelCapCounts c1 = {};
+        WheelCapCountsGet(c1);
+        // M1: kept 2.75 / 3, smoothed from 1 (0.8 old)
+        const float kept = 0.8f + 0.2f * (2.75f / 3.0f);
+        const bool counts = c1.armed && c1.clampedNow == 2 && c1.clamps - c0.clamps == 2 && c1.waitSteps - c0.waitSteps == 1 && c1.steps - c0.steps == 1 && Near(c1.kept, kept) &&
+                            Near(c1.excessMost, 0.5f) && c1.refused == c0.refused;
+        // armed already, wheels the ground pushed over the cap: held there with no push left
+        setSpeed(0, 3.25f), setSpeed(1, 3.25f), setSpeed(2, 3.25f);
+        drive(act, 0.5f, 0.016f);
+        const bool downhill = Near(speed(0), 3.0f) && Near(speed(2), 3.0f);
+        // a refused body (a fixed motion) is counted and left
+        bodies[2][0x160] = 5;
+        setSpeed(2, 2.0f);
+        drive(act, 0.5f, 0.016f);
+        WheelCapCounts c2 = {};
+        WheelCapCountsGet(c2);
+        const bool refused = c2.refused - c1.refused == 1 && Near(speed(2), 3.0f);
+        bodies[2][0x160] = 0;
+        // a shift waits again
+        gear = 2;
+        memcpy(act + 0x74, &gear, 4);
+        setSpeed(0, 6.0f), setSpeed(1, 6.0f), setSpeed(2, 6.0f);
+        drive(act, 0.5f, 0.016f);
+        const bool shiftWaits = Near(speed(0), 7.0f);
+        // R: the cap in the gear's direction
+        gear = -1;
+        memcpy(act + 0x74, &gear, 4);
+        setSpeed(0, -2.0f), setSpeed(1, -2.0f), setSpeed(2, -2.0f); // arms at 2, under the cap in R
+        drive(act, 0.5f, 0.016f);
+        setSpeed(1, -4.5f);
+        drive(act, 0.5f, 0.016f); // the stand-in pushes forward, against R: -3.5, held to -3
+        const bool reverse = Near(speed(1), -3.0f) && Near(speed(0), 0.0f) && Near(speed(2), 0.0f); // the others pushed against R take none of the spread
+        gear = 1;
+        memcpy(act + 0x74, &gear, 4);
+        // no cap in the slot, and the cut cleared: nothing written
+        slot.cap = 0.0f;
+        slot.at = 0;
+        TorqueCutPublish(&slot);
+        setSpeed(0, 2.5f);
+        drive(act, 0.5f, 0.016f);
+        const bool noCap = Near(speed(0), 3.5f);
+        slot.cap = 3.0f;
+        slot.at = 0;
+        TorqueCutPublish(&slot);
+        TorqueCutPublish(nullptr);
+        setSpeed(0, 2.5f);
+        drive(act, 0.5f, 0.016f);
+        const bool cleared = Near(speed(0), 3.5f);
+        g_driveDoes = nullptr;
+        char line[600];
+        snprintf(line, sizeof line, "wheel cap in the drive's hook: a downshift at 2 x the cap waits (M3); armed, two driven wheels held at %.3f and %.3f (an axle of length 2 and a unit one, "
+                                    "the parts across kept), the third %.3f with the spread, the undriven one %.1f as it was; kept %.3f, %ld held; held at the cap with no push "
+                                    "left; a fixed body refused; a shift waits again; R, the others pushed against it take none; no cap or a clear writes nothing",
+                 speedHeld0, speedHeld1, speedSpread, 5.0f, c1.kept, c1.clampedNow);
+        Check(CreepHooked() && waited && capped && counts && downhill && refused && shiftWaits && reverse && noCap && cleared, line);
+        if (!(waited && capped && counts && downhill && refused && shiftWaits && reverse && noCap && cleared))
+            printf("     %d %d %d %d %d %d %d %d %d; speeds %.3f %.3f %.3f %.3f; kept %.3f clamped %ld excess %.3f\n", waited, capped, counts, downhill, refused, shiftWaits, reverse,
+                   noCap, cleared, speed(0), speed(1), speed(2), speed(3), c1.kept, c1.clampedNow, c1.excessMost);
     }
 
     // the torque cut's detour on a function of the gear torque's signature (BRIEF_drivetrain_2_torque_cut.md and the

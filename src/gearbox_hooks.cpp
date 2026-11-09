@@ -523,6 +523,208 @@ static void CutPullOne(void *action)
     }
 }
 
+static LONG FloatBits(float f);
+static float BitsFloat(LONG bits);
+// ---- the wheel speed cap (BRIEF_drivetrain_2c_wheel_cap.md; torque_cut.h, CapStep) ----
+// Read on the physics thread around the original drive, one call per vehicle a step: the driven wheels' bodies (wheel
+// + 0x18, their angular velocity at + 0x240, world), their axles (wheel + 0x154, world, not normalised), the desc's
+// local axle (+ 0x100) and the inverse inertia (body + 0x220), for the spread's gain. A body is used as activate checks
+// it: in a world (body + 0x10) and not a fixed motion (body + 0x160 == 5); the drive has activated every wheel by the
+// time it returns, so no activate of our own (the Researcher's R1). No lock, no heap, no log.
+struct CapWheelRead
+{
+    uint8_t *wheel, *body;
+    CapVec axle, localAxle, invI;
+    float pre, gain, alen;
+    bool ok;
+};
+struct CapTruckRead
+{
+    CapWheelRead w[kCapWheels];
+    int n, refused;
+    int gear;
+    float sign;
+};
+static void CapGet3(const uint8_t *p, CapVec &v)
+{
+    v.x = *(const volatile float *)p;
+    v.y = *(const volatile float *)(p + 4);
+    v.z = *(const volatile float *)(p + 8);
+}
+static bool CapBodyOk(const uint8_t *body)
+{
+    return (uintptr_t)body >= 0x10000 && *(void *const volatile *)(body + 0x10) != nullptr && *(const volatile uint8_t *)(body + 0x160) != 5;
+}
+static bool CapReadBefore(const void *vehicle, const void *action, CapTruckRead &t)
+{
+    t.n = t.refused = 0;
+    __try
+    {
+        const uint8_t *v = (const uint8_t *)vehicle;
+        if (*(const void *const volatile *)(v + 0x68) != action) return false;
+        const uint8_t *a = (const uint8_t *)action;
+        const bool awd = *(const volatile uint8_t *)(a + 0x49) != 0;
+        t.gear = *(const volatile int *)(a + 0x74);
+        t.sign = t.gear < 0 ? -1.0f : 1.0f;
+        const uintptr_t begin = *(const uintptr_t *)(v + 0x200), end = *(const uintptr_t *)(v + 0x208);
+        if (end < begin || (end - begin) / 8 > (uintptr_t)kCapWheels) return false;
+        for (uintptr_t p = begin; p < end; p += 8)
+        {
+            const uint8_t *model = *(const uint8_t *const *)p;
+            if ((uintptr_t)model < 0x10000) continue;
+            uint8_t *wheel = *(uint8_t *const *)(model + 0x2C8);
+            if ((uintptr_t)wheel < 0x10000) continue;
+            const int type = *(const volatile int *)(wheel + 0xE8);
+            if (!(type == 1 || (type == 2 && awd))) continue;
+            CapWheelRead &r = t.w[t.n];
+            r = CapWheelRead{};
+            r.wheel = wheel;
+            uint8_t *body = *(uint8_t *const *)(wheel + 0x18);
+            if (!CapBodyOk(body))
+            {
+                t.refused++;
+                continue;
+            }
+            r.body = body;
+            CapVec omega;
+            CapGet3(wheel + 0x154, r.axle);
+            CapGet3(body + 0x240, omega);
+            r.alen = sqrtf(CapDot(r.axle, r.axle));
+            r.pre = CapSpeed(omega, r.axle, t.sign);
+            const uint8_t *desc = *(const uint8_t *const *)(wheel + 0x28);
+            if ((uintptr_t)desc >= 0x10000) CapGet3(desc + 0x100, r.localAxle);
+            CapGet3(body + 0x220, r.invI);
+            r.gain = CapGain(r.localAxle, r.invI, r.alen);
+            r.ok = r.alen > 1e-6f && isfinite(r.alen);
+            t.n++;
+        }
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        t.n = 0;
+        return false;
+    }
+}
+// After the drive: each wheel's speed again (post); false where a read faults.
+static bool CapReadAfter(const CapTruckRead &t, float *post)
+{
+    __try
+    {
+        for (int i = 0; i < t.n; i++)
+        {
+            if (!t.w[i].ok) continue;
+            CapVec omega;
+            CapGet3(t.w[i].body + 0x240, omega);
+            post[i] = CapSpeed(omega, t.w[i].axle, t.sign);
+        }
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+// The writes: each wheel moved about its axle by final - post (CapMove, three floats at body + 0x240, the w lane left).
+// The game's own setter is one store of body + 0x240: the same here, with no call into the game.
+static bool CapWrite(const CapTruckRead &t, const float *post, const CapStepOut &o)
+{
+    __try
+    {
+        for (int i = 0; i < t.n; i++)
+        {
+            if (!t.w[i].ok || o.final[i] == post[i]) continue;
+            CapVec omega;
+            CapGet3(t.w[i].body + 0x240, omega);
+            if (!CapMove(omega, t.w[i].axle, t.sign, o.final[i] - post[i])) continue;
+            volatile float *at = (volatile float *)(t.w[i].body + 0x240);
+            at[0] = omega.x;
+            at[1] = omega.y;
+            at[2] = omega.z;
+        }
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
+// The cap's state, the physics thread's own (one vehicle under the cut): the arming, the kept share smoothed. A clear
+// asks for a reset through g_capReset. For the detour on the same thread inside the drive: the kept share. For the mod's
+// thread: the counters.
+static uint64_t g_capVehicle = 0;
+static CapArm g_capArm = { 0x7FFFFFFF, false };
+static float g_capKept = 1.0f;
+static volatile LONG g_capReset = 1;
+static volatile LONG64 g_capKeptVehicle = 0;
+static volatile LONG g_capKeptBits = 0x3F800000; // 1.0f
+static volatile LONG g_capClamps = 0, g_capSteps = 0, g_capRefused = 0, g_capArmedSteps = 0, g_capWaitSteps = 0, g_capFaults = 0, g_capClampedNow = 0, g_capArmedNow = 0;
+static volatile LONG g_capExcessMost = 0, g_capPreMost = 0, g_capSpreadBits = 0;
+static void CapMost(volatile LONG &bits, float x)
+{
+    if (isfinite(x) && x > BitsFloat(bits)) InterlockedExchange(&bits, FloatBits(x));
+}
+static void CapAdd(volatile LONG &bits, float x)
+{
+    if (isfinite(x) && x > 0.0f) InterlockedExchange(&bits, FloatBits(BitsFloat(bits) + x));
+}
+
+// The drive with the cap around it: the wheels read before, the arming (M3), the original drive, the wheels after, the
+// cap with the spread (CapStep), the writes and the kept share for the stand-in (M1). A read that faults leaves the
+// drive's own result.
+static void CapStepAround(const TorqueCutSlot *cut, void *action, float throttle, float dt)
+{
+    const uint64_t vehicle = cut->vehicle;
+    const float cap = cut->cap;
+    if (g_capVehicle != vehicle)
+    {
+        g_capVehicle = vehicle;
+        g_capArm = CapArm{ 0x7FFFFFFF, false };
+        g_capKept = 1.0f;
+    }
+    static CapTruckRead t; // the physics thread's own: one vehicle under the cut, one call at a time
+    const bool readOk = CapReadBefore((const void *)(uintptr_t)vehicle, action, t);
+    if (!readOk) InterlockedIncrement(&g_capFaults);
+    if (t.refused) InterlockedExchangeAdd(&g_capRefused, t.refused);
+    float mean = 0.0f, preMost = 0.0f;
+    int m = 0;
+    for (int i = 0; i < t.n; i++)
+        if (t.w[i].ok) mean += t.w[i].pre, m++, preMost = fmaxf(preMost, t.w[i].pre - cap);
+    if (m) mean /= (float)m;
+    const bool armed = readOk && CapArmStep(g_capArm, t.gear, mean, m > 0, cap);
+    InterlockedExchange64(&g_capKeptVehicle, (LONG64)vehicle);
+    InterlockedExchange(&g_capArmedNow, armed ? 1 : 0);
+    ((DriveFn)g_creepWay)(action, throttle, dt);
+    if (!armed)
+    {
+        InterlockedIncrement(&g_capWaitSteps);
+        InterlockedExchange(&g_capClampedNow, 0);
+        g_capKept = CapKeptSmooth(g_capKept, 1.0f);
+        InterlockedExchange(&g_capKeptBits, FloatBits(g_capKept));
+        return;
+    }
+    InterlockedIncrement(&g_capArmedSteps);
+    CapMost(g_capPreMost, preMost);
+    float pre[kCapWheels], post[kCapWheels], gain[kCapWheels];
+    bool ok[kCapWheels];
+    for (int i = 0; i < t.n; i++) pre[i] = t.w[i].pre, post[i] = t.w[i].pre, gain[i] = t.w[i].gain, ok[i] = t.w[i].ok;
+    if (!CapReadAfter(t, post))
+    {
+        InterlockedIncrement(&g_capFaults);
+        return;
+    }
+    const CapStepOut o = CapStep(pre, post, gain, ok, t.n, cap, true);
+    if (!CapWrite(t, post, o)) InterlockedIncrement(&g_capFaults);
+    InterlockedIncrement(&g_capSteps);
+    if (o.clamps) InterlockedExchangeAdd(&g_capClamps, o.clamps);
+    CapMost(g_capExcessMost, o.excess);
+    CapAdd(g_capSpreadBits, o.spread);
+    InterlockedExchange(&g_capClampedNow, o.clamps);
+    g_capKept = CapKeptSmooth(g_capKept, o.kept);
+    InterlockedExchange(&g_capKeptBits, FloatBits(g_capKept));
+}
+
 // The creep's larger of the two throttles, as the stub's maxss had it (the share where the game's is not a number),
 // then the step probe's look, then on into the drive with the step's seconds as they came. While the torque cut has the
 // action, its throttle is 1 and B4 is written 1 instead (the Reviewer's S2).
@@ -535,11 +737,14 @@ static void CreepDrive(void *action, float throttle, float dt)
     const TorqueCutSlot *cut = (const TorqueCutSlot *)g_cutSlot;
     const CreepSlot *slot = (const CreepSlot *)g_creepSlot;
     uint64_t now = 0;
+    bool capOn = false;
+    if (InterlockedExchange(&g_capReset, 0)) g_capVehicle = 0;
     if (cut && (uint64_t)(uintptr_t)action == cut->action && (now = GetTickCount64()) >= cut->at && now - cut->at <= kTorqueFresh)
     {
         InterlockedIncrement(&g_cutHolds);
         throttle = 1.0f;
         CutPullOne(action);
+        capOn = cut->cap > 0.0f && isfinite(cut->cap);
     }
     else if (slot && (uint64_t)(uintptr_t)action == slot->action)
     {
@@ -547,7 +752,12 @@ static void CreepDrive(void *action, float throttle, float dt)
         throttle = _mm_cvtss_f32(_mm_max_ss(_mm_set_ss(throttle), _mm_set_ss(slot->share))); // maxss itself: a ?: may be built with its operands swapped
     }
     if (const DriveStepFn step = g_driveStep) step((uint64_t)(uintptr_t)action, dt);
-    ((DriveFn)g_creepWay)(action, throttle, dt);
+    if (!capOn)
+    {
+        ((DriveFn)g_creepWay)(action, throttle, dt);
+        return;
+    }
+    CapStepAround(cut, action, throttle, dt);
 }
 
 void DriveStepSet(DriveStepFn step) { g_driveStep = step; }
@@ -781,20 +991,23 @@ static volatile LONG g_b4sBits = 0, g_cutWBits = 0, g_cutPedalBits = 0;
 // the bracket the drive got last step, per vehicle (F1b: CutRise paces it); none for a new vehicle or after a clear, where
 // the pace starts from the slot's gamePull
 static volatile LONG64 g_riseVehicle = 0;
-static volatile LONG g_riseBits = 0, g_cutUsed = 0, g_cutRate = 0;
+static volatile LONG g_riseBits = 0, g_cutUsed = 0, g_cutRate = 0, g_cutTruck = 0x7FC00000; // a quiet NaN: not read
 
 static const int kCutWheels = 16;
 // The vehicle's driven wheels' speeds, its power factor (action + 0x38), its game clutch (action + 0xD4) and its
 // EngineResponsiveness (action + 0xC4, B4's rate a step over the power factor), read as the drive reads them; false where
 // a read faults or the list is out of bounds.
-static bool CutWheelsRead(const void *vehicle, float *omega, bool *driven, int &n, float &pf, float &d4, float &response)
+static bool CutWheelsRead(const void *vehicle, float *omega, bool *driven, int &n, float &pf, float &d4, float &response, float &forward, float &radius)
 {
     n = 0;
+    forward = radius = NAN;
     __try
     {
         const uint8_t *v = (const uint8_t *)vehicle;
         const uint8_t *action = *(const uint8_t *const *)(v + 0x68);
         if ((uintptr_t)action < 0x10000) return false;
+        float radiusSum = 0.0f;
+        int radiusN = 0;
         pf = *(const volatile float *)(action + 0x38);
         d4 = *(const volatile float *)(action + 0xD4);
         response = *(const volatile float *)(action + 0xC4);
@@ -810,8 +1023,22 @@ static bool CutWheelsRead(const void *vehicle, float *omega, bool *driven, int &
             const int type = *(const volatile int *)(wheel + 0xE8);
             omega[n] = *(const volatile float *)(wheel + 0x16C);
             driven[n] = type == 1 || (type == 2 && awd);
+            if (driven[n])
+            {
+                // M5: the driven wheels' radius (+ 0x94) and the truck's forward speed from the first one's parent body
+                // (+ 0x10), its linear velocity (+ 0x230) along its rotation's first column (+ 0x170), as the drive's d73120
+                const float r = *(const volatile float *)(wheel + 0x94);
+                if (isfinite(r) && r > 0.0f) radiusSum += r, radiusN++;
+                const uint8_t *parent = *(const uint8_t *const *)(wheel + 0x10);
+                if (!isfinite(forward) && (uintptr_t)parent >= 0x10000)
+                {
+                    const volatile float *vel = (const volatile float *)(parent + 0x230), *f = (const volatile float *)(parent + 0x170);
+                    forward = vel[0] * f[0] + vel[1] * f[1] + vel[2] * f[2];
+                }
+            }
             n++;
         }
+        if (radiusN) radius = radiusSum / (float)radiusN;
         return true;
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
@@ -833,16 +1060,21 @@ __declspec(noinline) static bool HookGearTorque(void *vehicle, int gear, float *
         float omega[kCutWheels];
         bool driven[kCutWheels];
         int n = 0;
-        float pf = 1.0f, d4 = 1.0f, response = 1.0f;
+        float pf = 1.0f, d4 = 1.0f, response = 1.0f, forward = NAN, radius = NAN;
         CutSpeeds sp = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, false };
-        if (CutWheelsRead(vehicle, omega, driven, n, pf, d4, response)) sp = TorqueCutSpeeds(omega, driven, n, gear < 0 ? -1 : 1);
+        if (CutWheelsRead(vehicle, omega, driven, n, pf, d4, response, forward, radius))
+        {
+            sp = TorqueCutSpeeds(omega, driven, n, gear < 0 ? -1 : 1);
+            CutSpeedsTruck(sp, forward, radius, gear < 0 ? -1 : 1);
+        }
         if (!sp.ok) InterlockedIncrement(&g_cutFaults);
         TorqueCutAnswer r = TorqueCutAnswerOf(slot, t, st, aa, tp, pf, d4, sp);
+        const float kept = (uint64_t)g_capKeptVehicle == (uint64_t)(uintptr_t)vehicle ? BitsFloat(g_capKeptBits) : 1.0f;
         // F1b: the bracket paced at the game's own B4 rate, from the last step's for this vehicle; at a take-over from
         // the game's own pull at that step (S1)
         const float rate = response * pf;
         const float usedBefore = (uint64_t)g_riseVehicle == (uint64_t)(uintptr_t)vehicle ? BitsFloat(g_riseBits) : CutClamp01(slot.gamePull);
-        TorqueCutAnswerPaced(r, t, usedBefore, rate);
+        TorqueCutAnswerPaced(r, t, usedBefore, rate, kept);
         InterlockedExchange(&g_riseBits, FloatBits(r.used));
         InterlockedExchange64(&g_riseVehicle, (LONG64)(uintptr_t)vehicle);
         // F1: the curve flat under a finite top at the governor's end, so the game's own overspeed brake acts above it
@@ -858,6 +1090,7 @@ __declspec(noinline) static bool HookGearTorque(void *vehicle, int gear, float *
         InterlockedExchange(&g_cutUsed, FloatBits(r.used));
         InterlockedExchange(&g_cutRate, FloatBits(rate));
         InterlockedExchange(&g_cutS, FloatBits(r.s));
+        InterlockedExchange(&g_cutTruck, FloatBits(sp.truckOk ? sp.truck : NAN));
         InterlockedExchange(&g_cutF, FloatBits(r.f));
         InterlockedExchange(&g_cutBracket, FloatBits(r.bracket));
         InterlockedExchange(&g_cutStock, FloatBits(t));
@@ -909,6 +1142,8 @@ void TorqueCutPublish(const TorqueCutSlot *slot)
         InterlockedExchangePointer(&g_cutSlot, nullptr);
         InterlockedExchange64(&g_riseVehicle, 0); // the next take-over paces from the game's own pull at that step (gamePull)
         InterlockedExchange(&g_riseBits, 0);
+        InterlockedExchange(&g_capReset, 1); // the cap waits again (M3) and its kept share starts at 1
+        InterlockedExchange64(&g_capKeptVehicle, 0);
         return;
     }
     TorqueCutSlot &next = g_cutSlots[g_cutNext];
@@ -948,6 +1183,23 @@ void TorqueCutCountsGet(TorqueCutCounts &out)
     out.w = BitsFloat(g_cutWBits);
     out.used = BitsFloat(g_cutUsed);
     out.rate = BitsFloat(g_cutRate);
+    out.truck = BitsFloat(g_cutTruck);
+}
+
+void WheelCapCountsGet(WheelCapCounts &out)
+{
+    out.clamps = g_capClamps;
+    out.steps = g_capSteps;
+    out.refused = g_capRefused;
+    out.armedSteps = g_capArmedSteps;
+    out.waitSteps = g_capWaitSteps;
+    out.faults = g_capFaults;
+    out.clampedNow = g_capClampedNow;
+    out.armed = g_capArmedNow != 0;
+    out.kept = BitsFloat(g_capKeptBits);
+    out.spread = BitsFloat(g_capSpreadBits);
+    out.excessMost = BitsFloat(InterlockedExchange(&g_capExcessMost, 0)); // the largest since the last read
+    out.preMost = BitsFloat(InterlockedExchange(&g_capPreMost, 0));
 }
 
 long GearboxKicks() { return g_kicks; }

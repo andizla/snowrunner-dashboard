@@ -83,13 +83,18 @@ inline float TorqueCutRpm(const TorqueCutMap &m, float s)
 // governor, the cold and the boost, the road load taken off, the engine held back), less the engine's braking with the
 // foot off. No lift by the wheels' spin, no make-up for the game's fall, no roof and no pacing: the game's curve is out
 // of the drive. 0 for a speed or a map that is no number. brakeShare (0 to 1) scales the braking alone (the taper by
-// the slowest driven wheel, TorqueCutBrakeTaper).
-inline float TorqueCutF(const TorqueCutMap &m, float s, float brakeShare = 1.0f)
+// the slowest driven wheel, TorqueCutBrakeTaper). governS: the speed the governor's fade goes by, the truck's own (M5);
+// no number: s. With it, the curve E is read at the wheels' speed held to the redline at most: past the redline its own
+// tail (to 0 at the needle's top) would be a fall in the wheels' speed again, and a wheel running up to the guard would
+// swing on it (the sketch: the heavy with a wheel free fell by 0.3 in a step 4 times in 10 s). Past the redline the
+// governor on the truck's speed decides alone.
+inline float TorqueCutF(const TorqueCutMap &m, float s, float brakeShare = 1.0f, float governS = NAN)
 {
     if (!(m.redline > m.idle) || !(m.idle >= 0.0f)) return 0.0f;
     const float rpm = TorqueCutRpm(m, isfinite(s) ? s : 0.0f), speed = rpm / m.redline;
+    const float governSpeed = isfinite(governS) ? TorqueCutRpm(m, governS) / m.redline : speed;
     const float pedal = CutClamp01(m.pedal);
-    const float e = CutCurveAt(m.curve, speed, m.tachTop) * CutGovernor(speed, m.governFrom, m.governTo);
+    const float e = CutCurveAt(m.curve, isfinite(governS) ? fminf(speed, 1.0f) : speed, m.tachTop) * CutGovernor(governSpeed, m.governFrom, m.governTo);
     const float limit = isfinite(m.limit) ? CutClamp01(m.limit / (pedal > 1e-3f ? pedal : 1e-3f)) : 1.0f;
     float drive = pedal * (e * limit - (isfinite(m.load) && m.load > 0.0f ? m.load : 0.0f));
     if (!(drive > 0.0f)) drive = 0.0f;
@@ -172,7 +177,9 @@ inline float TorqueCutBlend(float share, float pedal, float stockCurve, float ou
 // game's shape in the blend and B4s. sLast: the wheels' speed the mod's thread read, for a step whose read failed.
 // listTop: the game's gear's list top by d73170's rule (TruckGearFormulaTop), for the stall's wheels' term. gamePull:
 // the game's own pull at the take-over (TorqueCutGamePull, read on the pass before the first publish), where the
-// detour's pace starts for a vehicle it has not paced since a clear (S1 of review_drive_2108_findings.md).
+// detour's pace starts for a vehicle it has not paced since a clear (S1 of review_drive_2108_findings.md). cap: the
+// wheel speed cap, the runaway guard, in the wheels' own measure (WheelCap percent of the gear's top,
+// BRIEF_drivetrain_2c_wheel_cap.md with M5), 0 none.
 enum { kCutMap, kCutScalar };
 static const uint64_t kTorqueFresh = 1000; // ms: a slot older than this passes every call
 struct TorqueCutSlot
@@ -180,7 +187,7 @@ struct TorqueCutSlot
     uint64_t vehicle, action;
     uint64_t at;    // GetTickCount64 at the publish
     int mode;
-    float scalar, floor, share, pedal, sLast, listTop, gamePull;
+    float scalar, floor, share, pedal, sLast, listTop, gamePull, cap;
     TorqueCutMap map;
 };
 
@@ -196,11 +203,15 @@ inline bool TorqueCutOurs(uintptr_t back, uintptr_t driveBack, const TorqueCutSl
 // wheel floored at 0, the game's own s without its cut to whole rad/s (S3); wholeMean and wholeMax, each wheel cut to
 // whole rad/s in the gear's direction and floored at 0, for the stall's wheels' term. ok false with no driven wheel.
 // least: the slowest driven wheel in the gear's direction, not floored (below 0 turning against the gear), for the
-// engine brake's taper.
+// engine brake's taper. truck: the truck's own speed in the wheels' measure, in the gear's direction, its forward speed
+// over the driven wheels' mean radius (CutSpeedsTruck; M5 of the wheel cap's addendum: the governor's fade goes by it,
+// so no wheel's kick or backspin enters that loop); truckOk false where it was not read (the governor by mean then).
 struct CutSpeeds
 {
     float mean, mid, wholeMean, wholeMax, least;
     bool ok;
+    float truck;
+    bool truckOk;
 };
 inline CutSpeeds TorqueCutSpeeds(const float *omega, const bool *driven, int n, int dir)
 {
@@ -227,6 +238,18 @@ inline CutSpeeds TorqueCutSpeeds(const float *omega, const bool *driven, int n, 
     r.least = least;
     r.ok = true;
     return r;
+}
+
+// The truck's own speed into the speeds: forward (m/s along the chassis's forward axis, the drive's own d73120) over the
+// driven wheels' mean radius (wheel + 0x94), in the gear's direction (dir +1 or -1). Nothing where either is no number
+// or the radius not above 0.
+inline void CutSpeedsTruck(CutSpeeds &sp, float forward, float radius, int dir)
+{
+    if (!isfinite(forward) || !(radius > 0.0f) || !isfinite(radius)) return;
+    const float s = forward / radius * (dir < 0 ? -1.0f : 1.0f);
+    if (!isfinite(s)) return;
+    sp.truck = s;
+    sp.truckOk = true;
 }
 
 // The engine brake's taper by the slowest driven wheel (F3 of BRIEF_drive_2108_findings.md): a real engine's drag only
@@ -295,15 +318,17 @@ struct TorqueCutAnswer
 {
     float torque, bracket, f, b4s, stockCurve, s, standIn, w, used, taper;
 };
+// The governor's fade goes by the truck's own speed where it was read (M5), else by the wheels' mean.
 inline TorqueCutAnswer TorqueCutAnswerOf(const TorqueCutSlot &slot, float stock, float start, float a, float top, float pf, float d4, CutSpeeds sp)
 {
     TorqueCutAnswer r = {};
+    const TorqueCutMap &map = slot.map;
     if (!sp.ok) sp.mean = sp.mid = sp.wholeMean = sp.wholeMax = slot.sLast > 0.0f ? slot.sLast : 0.0f;
     if (!sp.ok) sp.wholeMean = sp.wholeMax = truncf(sp.mean);
     r.s = sp.mean;
     r.stockCurve = TorqueCutStockCurve(start, a, top, pf, sp.mid);
-    r.taper = sp.ok ? TorqueCutBrakeTaper(sp.least, slot.map) : 0.0f;
-    r.f = slot.mode == kCutMap ? TorqueCutF(slot.map, sp.mean, r.taper) : (isfinite(slot.scalar) ? slot.scalar : 0.0f);
+    r.taper = sp.ok ? TorqueCutBrakeTaper(sp.least, map) : 0.0f;
+    r.f = slot.mode == kCutMap ? TorqueCutF(map, sp.mean, r.taper, sp.truckOk ? sp.truck : NAN) : (isfinite(slot.scalar) ? slot.scalar : 0.0f);
     r.bracket = TorqueCutBlend(slot.share, slot.pedal, r.stockCurve, r.f);
     if (slot.floor > 0.0f && r.bracket < slot.floor) r.bracket = slot.floor;
     r.used = r.bracket;
@@ -315,10 +340,169 @@ inline TorqueCutAnswer TorqueCutAnswerOf(const TorqueCutSlot &slot, float stock,
 }
 
 // The answer paced (F1b): the bracket used from the last step's (CutRise at rate), the torque the stock times it, the
-// stand-in for B4's readers the same.
-inline void TorqueCutAnswerPaced(TorqueCutAnswer &r, float stock, float usedBefore, float rate)
+// stand-in for B4's readers the same times kept, the share of the drive's push the wheels kept under the cap (M1 of the
+// wheel cap's addendum: at a gear's top F stays at the pedal while the cap takes most of the push away, so the burn goes
+// by what the wheels keep; 1 with no cap).
+inline void TorqueCutAnswerPaced(TorqueCutAnswer &r, float stock, float usedBefore, float rate, float kept = 1.0f)
 {
     r.used = CutRise(usedBefore, r.bracket, rate);
     r.torque = isfinite(stock) ? stock * r.used : 0.0f;
-    r.standIn = TorqueCutStandIn(r.used);
+    r.standIn = TorqueCutStandIn(r.used) * (isfinite(kept) ? CutClamp01(kept) : 1.0f);
+}
+
+// ---- the wheel speed cap (BRIEF_drivetrain_2c_wheel_cap.md, the Reviewer's addendum and the Researcher's follow-up 4) ----
+// The lead's decision on M5: the governor holds the truck at the gear's top by the truck's own speed (CutSpeedsTruck),
+// and the cap is the runaway guard at WheelCap percent of the top (150 by default, 110 to 200), so it binds only where the
+// wheels run well past the truck: mud, a free wheel, a hop. A cap at the top itself could pass the ground only I x (cap -
+// the ground's speed) a step and cost the pull at the top under load (the Reviewer's part 2).
+// While the cut acts in a gear held by hand, after the game's drive has put this step's impulses into the wheel bodies'
+// angular velocity (body + 0x240, world frame), each driven wheel's spin about its axle (wheel + 0x154, world frame, not
+// normalised) is held to the cap: only that component changes, so the body's turn with the chassis stays. The speed is
+// the game's own measure, dot(omega, axle), as c27950 builds + 0x174 and + 0x16C from it; so a wheel at the cap reads
+// the cap there from the next step, whatever the axle's length.
+// kCapDefault, kCapLeast and kCapMost: WheelCap in percent of the gear's top. kCapArm: the cap arms once the driven
+// wheels' mean is at or under this times the cap, at the guard (M3: a downshift at speed comes down by the game's brake
+// and the engine brake, not by a clamp in one step). kCapKeptOld: the kept share's smoothing, old part.
+static const int kCapDefault = 150, kCapLeast = 110, kCapMost = 200;
+static const float kCapArm = 1.0f, kCapKeptOld = 0.8f;
+static const int kCapWheels = 16;
+
+struct CapVec
+{
+    float x, y, z;
+};
+inline float CapDot(const CapVec &a, const CapVec &b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+
+// The wheel's speed about its axle in the gear's direction (sign +1 or -1), the game's measure; 0 for an axle of no
+// length or a value that is no number.
+inline float CapSpeed(const CapVec &omega, const CapVec &axle, float sign)
+{
+    const float w = sign * CapDot(omega, axle);
+    return isfinite(w) ? w : 0.0f;
+}
+
+// omega moved about the axle alone so its speed (CapSpeed) changes by delta in the gear's direction: omega += sign x
+// delta x axle / |axle|^2, so dot(omega, axle) moves by exactly sign x delta for any length of axle and the parts of omega
+// across the axle stay. False (omega as it was) for an axle of no length or a value that is no number.
+inline bool CapMove(CapVec &omega, const CapVec &axle, float sign, float delta)
+{
+    const float aa = CapDot(axle, axle);
+    if (!(aa > 1e-12f) || !isfinite(aa) || !isfinite(delta) || !isfinite(sign)) return false;
+    const float k = sign * delta / aa;
+    const CapVec o = { omega.x + k * axle.x, omega.y + k * axle.y, omega.z + k * axle.z };
+    if (!isfinite(o.x) || !isfinite(o.y) || !isfinite(o.z)) return false;
+    omega = o;
+    return true;
+}
+
+// The speed change about the axle, the game's measure, that a unit of angular impulse along it gives (S1's spread): the
+// world impulse along u = axle / |axle| is taken into the body frame and scaled by the inverse inertia's diagonal there
+// (motion + 0xD0 = body + 0x220, as the box and the sphere motions do), so along the wheel's own local axle (its desc's
+// + 0x100, local) it is |axle| x sum(invI_k x u_k^2). 0 where it is no number or not above 0: such a wheel neither gives
+// nor takes the spread.
+inline float CapGain(const CapVec &localAxle, const CapVec &invInertia, float axleLength)
+{
+    const float ll = CapDot(localAxle, localAxle);
+    if (!(ll > 1e-12f) || !isfinite(ll) || !(axleLength > 0.0f) || !isfinite(axleLength)) return 0.0f;
+    const float g = axleLength * (invInertia.x * localAxle.x * localAxle.x + invInertia.y * localAxle.y * localAxle.y + invInertia.z * localAxle.z * localAxle.z) / ll;
+    return isfinite(g) && g > 0.0f ? g : 0.0f;
+}
+
+// One step of the cap over a truck's wheels, in the gear's direction and the game's measure: pre and post each wheel's
+// speed before and after the game's drive, gain its CapGain (0 unknown), ok a driven wheel read whole. Out: final, the
+// speed each wheel is set to; clamped, held at the cap this step; keptEach, each wheel's share of
+// its push kept (1 with no push); kept, the truck's share (M1: the sum of what each kept over the sum of the pushes, 1
+// where the pushes sum to about 0; M1, the burn by what the wheels keep); excess, the largest speed over the cap after the
+// drive; spread, the speed handed on.
+// spread (S1, the lead's call): what a clamped wheel could not take, as an impulse (its excess over its gain), goes to
+// the driven wheels not clamped and not pushed against the gear, by their own push's impulse (equal where none pushed),
+// through each one's gain, and each is capped again; nothing to a clamped wheel and nothing to one the drive pushed back.
+struct CapStepOut
+{
+    float final[kCapWheels], keptEach[kCapWheels];
+    bool clamped[kCapWheels];
+    float kept, excess, spread;
+    int clamps;
+};
+inline CapStepOut CapStep(const float *pre, const float *post, const float *gain, const bool *ok, int n, float cap, bool spread)
+{
+    CapStepOut o = {};
+    o.kept = 1.0f;
+    if (n > kCapWheels) n = kCapWheels;
+    if (n < 0) n = 0;
+    float impulse = 0.0f;
+    for (int i = 0; i < n; i++)
+    {
+        o.final[i] = post[i];
+        o.keptEach[i] = 1.0f;
+        if (!ok[i] || !(cap > 0.0f) || !isfinite(post[i]) || post[i] <= cap) continue;
+        const float e = post[i] - cap;
+        o.excess = fmaxf(o.excess, e);
+        o.final[i] = cap;
+        o.clamped[i] = true;
+        o.clamps++;
+        if (gain[i] > 0.0f) impulse += e / gain[i];
+    }
+    if (spread && impulse > 0.0f && isfinite(impulse))
+    {
+        float weight[kCapWheels] = {}, sum = 0.0f;
+        int takers = 0;
+        for (int i = 0; i < n; i++)
+            if (ok[i] && !o.clamped[i] && gain[i] > 0.0f && isfinite(pre[i]) && isfinite(post[i]) && post[i] >= pre[i])
+            {
+                weight[i] = post[i] > pre[i] ? (post[i] - pre[i]) / gain[i] : 0.0f;
+                sum += weight[i];
+                takers++;
+            }
+        for (int i = 0; i < n && takers; i++)
+        {
+            if (!ok[i] || o.clamped[i] || !(gain[i] > 0.0f) || !isfinite(pre[i]) || !isfinite(post[i]) || post[i] < pre[i]) continue;
+            const float share = sum > 1e-9f ? weight[i] / sum : 1.0f / (float)takers;
+            const float add = impulse * share * gain[i];
+            if (!(add > 0.0f) || !isfinite(add)) continue;
+            float to = o.final[i] + add;
+            if (to > cap)
+            {
+                to = o.final[i] > cap ? o.final[i] : cap;
+                o.clamped[i] = true;
+                o.clamps++;
+            }
+            o.spread += to - o.final[i];
+            o.final[i] = to;
+        }
+    }
+    float keptSum = 0.0f, pushSum = 0.0f;
+    for (int i = 0; i < n; i++)
+    {
+        if (!ok[i] || !isfinite(pre[i]) || !isfinite(post[i])) continue;
+        const float push = post[i] - pre[i];
+        const float gained = o.final[i] - pre[i];
+        if (push > 0.0f) pushSum += push;
+        if (gained > 0.0f) keptSum += gained;
+        o.keptEach[i] = push > 1e-6f ? CutClamp01(gained / push) : 1.0f;
+    }
+    o.kept = pushSum > 1e-4f ? CutClamp01(keptSum / pushSum) : 1.0f;
+    return o;
+}
+
+// The cap's arming (M3, at the guard): after a take-over (a clear) or a shift (the drive's gear changes), the cap waits
+// until the driven wheels' mean is at or under kCapArm x the cap, then stays armed while the cut acts. Until then nothing
+// is written. mean: this step's before the drive, the gear's direction; ok false (no wheel read) never arms.
+struct CapArm
+{
+    int gear;
+    bool armed;
+};
+inline bool CapArmStep(CapArm &a, int gear, float mean, bool ok, float cap)
+{
+    if (gear != a.gear) a.gear = gear, a.armed = false;
+    if (!a.armed && ok && cap > 0.0f && gear != 0 && isfinite(mean) && mean <= kCapArm * cap) a.armed = true;
+    return a.armed;
+}
+
+// The kept share smoothed over steps, kCapKeptOld old; a value that is no number counts as 1.
+inline float CapKeptSmooth(float before, float now)
+{
+    const float b = isfinite(before) ? CutClamp01(before) : 1.0f, k = isfinite(now) ? CutClamp01(now) : 1.0f;
+    return kCapKeptOld * b + (1.0f - kCapKeptOld) * k;
 }
