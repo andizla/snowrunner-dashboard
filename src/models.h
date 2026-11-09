@@ -1453,7 +1453,7 @@ inline float GamePull(float x) { return isfinite(x) ? SettingsRange(fminf(kGameP
 static const float kTorqueFactorMost = 6.0f;    // the factor written at the most (the largest roof), for the game's own share of 1
 static const float kLiftFadeFrom = 0.7f;        // the share of a gear's top from which the roof fades to 1 at the top
 static const float kLiftRise = 1.0f;            // the factor a second a rising write may climb within a gear after a cut (TorqueHandStep): 1.0 to 2.4 in 1.4 s
-static const float kLiftCutWindow = 2.0f;       // seconds after a cut (a write lower than the one before) a rise is paced
+static const float kLiftCutWindow = 2.0f;       // seconds after a cut (a write lower than the one before; on the locked path the wheels broke loose) a rise is paced
 static const float kTorqueRoof[kClassCount] = { 6.0f, 3.0f, 6.0f }; // the roof by the truck's class: truck, scout, heavy
 static const float kTorqueFactorLeast = 0.05f;  // and at the least
 static const float kTorqueFactorStep = 0.005f;  // a change of the factor smaller than this is not written
@@ -1502,18 +1502,27 @@ inline float SpinRoof(float classRoof, float x) { return fminf(LiftRoof(classRoo
 // - x is the share of the gear's top of the wheels' spin in rad/s, its mean over the last kSpinMeanPasses passes (about
 //   0.25 s), started over at a new gear, truck or path (SpinMeanStep): the mean in rad/s, as L-, L, L+ and 1st by hand
 //   are all the game's gear 1 with other tops, and the wheels' speed doesn't jump at a change of range (review M1);
-// - the factor's cap by spin fades from 2 to 1 over at least the top's last kSpinFadeRad rad/s, not only its last 0.06
-//   (SpinLiftMost). A top over 13.3 rad/s (0.8 / 0.06) keeps today's fade exactly; a scout's over 5.3 (its fade is 0.15
-//   wide). The mean alone left a third of the passes at 0.95 of L-'s top jumping over 0.15 on a noisy trace; with the
-//   wider fade none do.
+// - the factor's cap by spin fades from 2 to 1 in a straight line over the wider of the top's last fifth and its last
+//   kSpinFadeRad rad/s (SpinLiftMost). The mean alone left a third of the passes at 0.95 of L-'s top jumping over 0.15
+//   on a noisy trace; with the wider fade none do.
+// The rpm sway in a held low gear (BRIEF_low_gear_sway.md and the Reviewer's addendum of 2026-11-09): with 0.18.4's cap
+// of 2 the roof's fade was cut to the top's last 0.06, a cliff inside the wheels' noise. The factor fell to 1 at the top,
+// the truck sagged, and the rise back was paced at kLiftRise after the cut, so it surged back to the top about once a
+// second, the needle swaying with the wheels. Both calms are now always on (SpinCalm is read no more), the fade at least
+// a fifth of the top wide (kSpinFadeShare: 2 rad/s of a 10 rad/s top), and on this path a rise is paced only after the
+// wheels broke loose (SpinLift's loose; TorqueHandStep's byLoose), never after a fall along the fade.
 static const int kSpinMeanPasses = 5;
 static const float kSpinFadeRad = 0.8f;
+static const float kSpinFadeShare = 0.2f;   // the fade's least width as a share of the top
+static const float kSpinLooseX = 0.2f;      // the wheels broke loose: the mean's x up by more than this in one pass,
+static const float kSpinLooseRad = 1.0f;    // or this pass's spin up by more than this many rad/s
 struct SpinMean
 {
     float spin[kSpinMeanPasses]; // the driven wheels' mean spin, rad/s
     int n, at;          // samples held (up to kSpinMeanPasses), the next one's place
     int gear;           // the gear and the truck they are for: another starts it over
     uint64_t vehicle;
+    float lastX, lastSpin; // the last pass's x by the mean and its own spin (rad/s), for the break loose
 };
 // One pass: the wheels' spin (rad/s, its sign dropped) into the mean, the mean back. A gear or truck other than the
 // samples' starts it over.
@@ -1529,37 +1538,35 @@ inline float SpinMeanStep(SpinMean &m, float spin, int gear, uint64_t vehicle)
     for (int i = 0; i < m.n; i++) sum += m.spin[i];
     return sum / (float)m.n;
 }
-// The factor's cap by spin with the wheels at x of a top of top rad/s: kSpinLiftMost, fading in a straight line to 1
-// over the top's last kSpinFadeRad rad/s; 1 at the top or past it.
+// The factor's cap by spin with the wheels at x of a top of top rad/s: min(kSpinLiftMost, 1 + (1 - x) / w), a straight
+// line to 1 at the top, w the wider of kSpinFadeShare and kSpinFadeRad over the top (L-'s 0.8 rad/s, a 10 rad/s top's
+// 2); 1 at the top or past it. The factor stays min(TorqueLift, cap): the push is min(1, GameFall x cap) times the
+// game's, flat to about 0.7 of an L- top and then falling without a step to nothing at the top.
+inline float SpinFadeWidth(float top) { return top > 0.0f ? fmaxf(kSpinFadeShare, kSpinFadeRad / top) : kSpinFadeShare; }
 inline float SpinLiftMost(float x, float top)
 {
     if (!isfinite(x) || x >= 1.0f) return 1.0f;
-    if (!(top > 0.0f)) return kSpinLiftMost;
-    return fminf(kSpinLiftMost, 1.0f + (1.0f - x) * top / kSpinFadeRad);
+    return fminf(kSpinLiftMost, 1.0f + (1.0f - x) / SpinFadeWidth(top));
 }
 
-// The locked path's x and cap by spin for one pass. SpinCalm (Gauges.ini, BRIEF_low_minus_worse.md part 0): calm gives
-// the two calms above (x from the mean of the last passes, the cap SpinLiftMost); off, 0.18.4's path: x from this
-// pass's own spin and the cap kSpinLiftMost, so the roof fades only as LiftRoof does, over the top's last 0.06. The
-// mean starts over while off, so turning it on mixes no old passes.
+// The locked path's x and cap by spin for one pass: x from the mean of the last passes, the cap SpinLiftMost, and
+// loose where the wheels broke loose on this pass (the mean's x up by more than kSpinLooseX, or this pass's spin up by
+// more than kSpinLooseRad rad/s, against the last pass of the same gear and truck): the rise after the catch is paced
+// from then (TorqueHandStep's byLoose).
 struct SpinLift
 {
     float x, cap;
+    bool loose;
 };
-inline SpinLift SpinLiftStep(SpinMean &m, bool calm, float spin, float top, int gear, uint64_t vehicle)
+inline SpinLift SpinLiftStep(SpinMean &m, float spin, float top, int gear, uint64_t vehicle)
 {
+    const bool had = m.n > 0 && m.gear == gear && m.vehicle == vehicle;
+    const float lastX = m.lastX, lastSpin = m.lastSpin, now = isfinite(spin) ? fabsf(spin) : 0.0f;
     SpinLift r;
-    if (calm)
-    {
-        r.x = SpinShare(SpinMeanStep(m, spin, gear, vehicle), top);
-        r.cap = SpinLiftMost(r.x, top);
-    }
-    else
-    {
-        m.n = 0, m.at = 0;
-        r.x = SpinShare(spin, top);
-        r.cap = kSpinLiftMost;
-    }
+    r.x = SpinShare(SpinMeanStep(m, spin, gear, vehicle), top);
+    r.cap = SpinLiftMost(r.x, top);
+    r.loose = had && (r.x - lastX > kSpinLooseX || now - lastSpin > kSpinLooseRad);
+    m.lastX = r.x, m.lastSpin = now;
     return r;
 }
 
@@ -2014,8 +2021,12 @@ struct TorqueOrders
 // kTorqueFactorStep a pass, so it is written), so after an overshoot into the fade the push comes back gradually and the
 // truck settles where it matches the drag; an ordinary rise through a gear, with no cut before it, is written at once
 // (review 11: the pace held a quick truck's rising lift back late in each short gear), as are a lower one, a new gear's
-// and the first write after the hand takes the truck. dt 0 writes every factor at once.
-inline TorqueOrders TorqueHandStep(TorqueHand &h, bool want, uint64_t action, uint64_t vehicle, float read, float lift, float dt = 0.0f, int gear = 0)
+// and the first write after the hand takes the truck. dt 0 writes every factor at once. byLoose: the locked path's rule
+// (BRIEF_low_gear_sway.md, the Reviewer's addendum point 3): the window opens on a pass the wheels broke loose (loose,
+// SpinLiftStep), so the rise as they catch is paced, and a fall along the fade opens nothing; the ground path keeps the
+// cut (the surge fix of 28 October).
+inline TorqueOrders TorqueHandStep(TorqueHand &h, bool want, uint64_t action, uint64_t vehicle, float read, float lift, float dt = 0.0f, int gear = 0,
+                                   bool byLoose = false, bool loose = false)
 {
     TorqueOrders o = {};
     const float share = isfinite(read) && read > 0.0f ? fminf(read, 1.0f) : 1.0f;
@@ -2036,6 +2047,7 @@ inline TorqueOrders TorqueHandStep(TorqueHand &h, bool want, uint64_t action, ui
     const bool newGear = gear != h.gear;
     h.gear = gear;
     if (h.cutFor > 0.0f) h.cutFor -= dt;
+    if (byLoose && loose && h.paced && !newGear) h.cutFor = kLiftCutWindow;
     h.heldBack = false;
     if (dt > 0.0f && h.paced && h.cutFor > 0.0f && !newGear && factor > h.written)
     {
@@ -2045,7 +2057,7 @@ inline TorqueOrders TorqueHandStep(TorqueHand &h, bool want, uint64_t action, ui
     }
     if (!o.write && fabsf(factor - h.written) >= kTorqueFactorStep)
     {
-        if (h.paced && factor < h.written && !newGear) h.cutFor = kLiftCutWindow;
+        if (!byLoose && h.paced && factor < h.written && !newGear) h.cutFor = kLiftCutWindow;
         o = TorqueOrders{ true, action, vehicle, factor };
         h.written = factor;
         h.paced = true;

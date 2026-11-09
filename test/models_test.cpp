@@ -537,7 +537,8 @@ struct LoopTruck
     bool mayStall = true;  // the creep may stall the engine: the mod's own gearbox in a position picked by hand (else Gearbox 0 or 1)
     bool shifterConverter = false; // R or the low range on the game's shifter: the creep through the converter, calmed (CreepStep's calm)
     bool spinLift = false; // a held gear with the clutch in: the lift by the wheels' own speed, capped at kSpinLiftMost, as gauges.cpp has it since eeb2ffa
-    bool spinCalm = true;  // SpinCalm: the two calms of low-minus (SpinLiftStep); the L- tests run with it on, off is 0.18.4's
+    bool oldSpin = false;  // 0.18.4's locked path, to show the sway (BRIEF_low_gear_sway.md): this pass's spin, the cap of 2, a rise paced after any cut
+    float spinNoise = 0.0f; // the wheels' spin read with +- this many rad/s of noise a pass, as the game's frames give it (about 0.15)
 };
 struct LoopState
 {
@@ -558,6 +559,7 @@ struct LoopState
     CreepModel creep = {}; // the creep's pace and stall
     float pull = 0.0f;   // the game's pull (action + 0xB4)
     float stallAt = -1.0f; // seconds into the drive the creep stalled the engine, which is off from then on
+    uint32_t seed = 12345u; // the spin noise's
 };
 
 // The lift as it was before c9c99ea: the roof fading from 0.8 of the gear's top, written at once.
@@ -578,7 +580,13 @@ static void LoopStep(const LoopTruck &c, LoopState &s, const TorqueCurve &curve,
     t.gear = t.gearEngaged = c.fixedGear ? c.fixedGear : s.gear;
     t.throttle = s.brake > 0.0f ? s.brake : -pedal;
     t.speed = s.v;
-    for (int i = 0; i < t.wheels; i++) t.spin[i] = c.grip * s.v;
+    float noise = 0.0f;
+    if (c.spinNoise > 0.0f)
+    {
+        s.seed = s.seed * 1664525u + 1013904223u;
+        noise = ((float)(s.seed >> 8) / 16777216.0f * 2.0f - 1.0f) * c.spinNoise;
+    }
+    for (int i = 0; i < t.wheels; i++) t.spin[i] = c.grip * s.v + noise;
     t.torqueFactor = s.hand.on ? s.hand.written : 1.0f;
     const bool driving = !c.fixedGear;
     if (driving) TachFollow(s.tach, t, c.k, s.box.rpm, dt);
@@ -592,7 +600,9 @@ static void LoopStep(const LoopTruck &c, LoopState &s, const TorqueCurve &curve,
     const bool spinning = c.fixedGear && c.spinLift;
     const float liftTop = TruckGearTop(t, t.gearEngaged);
     if (!spinning) s.spin.n = 0, s.spin.at = 0;
-    const SpinLift byspin = spinning ? SpinLiftStep(s.spin, c.spinCalm, TruckDrivenSpin(t), liftTop, t.gearEngaged, 0x5000) : SpinLift{ 0.0f, kTorqueFactorMost };
+    SpinLift byspin = { 0.0f, kTorqueFactorMost, false };
+    if (spinning && c.oldSpin) byspin = SpinLift{ SpinShare(TruckDrivenSpin(t), liftTop), kSpinLiftMost, false };
+    else if (spinning) byspin = SpinLiftStep(s.spin, TruckDrivenSpin(t), liftTop, t.gearEngaged, 0x5000);
     const float x = spinning ? byspin.x : LiftShare(TruckDrivenSpin(t), s.v, s.box.grip, liftTop);
     const float ratio = driving ? s.box.ratio : 1.0f;
     const float limit = s.power.cold * s.power.boost;
@@ -600,7 +610,7 @@ static void LoopStep(const LoopTruck &c, LoopState &s, const TorqueCurve &curve,
                               : spinning ? fminf(TorqueLift(s.power.curve, limit, TruckPedal(t), ratio, x, TorqueRoof(c.cls)), byspin.cap)
                                          : TorqueLift(s.power.curve, limit, TruckPedal(t), ratio, x, TorqueRoof(c.cls));
     const float wanted = s.hand.game * lift;
-    TorqueHandStep(s.hand, true, 0x5000, 0x4000, t.torqueFactor, lift, before ? 0.0f : dt, t.gearEngaged);
+    TorqueHandStep(s.hand, true, 0x5000, 0x4000, t.torqueFactor, lift, before ? 0.0f : dt, t.gearEngaged, spinning && !c.oldSpin, byspin.loose);
     s.paced = s.hand.written < wanted - kTorqueFactorStep;
     // the game: the factor after the dead time and the lag, the push on the speed
     const int delay = (int)(c.dead / dt + 0.5f) < 63 ? (int)(c.dead / dt + 0.5f) : 63;
@@ -650,6 +660,47 @@ static LoopSpan LoopDrive(const LoopTruck &c, LoopState &s, const TorqueCurve &c
         span.pacedPasses += s.paced;
     }
     return span;
+}
+
+// The rpm sway in a held low gear (BRIEF_low_gear_sway.md): a heavy truck held in gear by hand at full pedal, the lift
+// by spin, a drag that rises with speed; after warm seconds, the written factor's and the wheels' spin's least and most
+// over seconds, and the cycles (a fall of the factor over 0.2 after a rise), as 0.18.4 had it (oldSpin) or now.
+struct SwayStats { float factorLo, factorHi, spinLo, spinHi, top; int cycles; float lastSpin, step; };
+static LoopTruck LoopHeavy();
+static SwayStats SwayRun(bool oldSpin, int gear, float powerFactor, float gearA, float drag0, float drag2, float warm, float seconds, float noise = 0.15f)
+{
+    LoopTruck c = LoopHeavy();
+    c.spinNoise = noise;
+    c.fixedGear = gear;
+    c.spinLift = true;
+    c.oldSpin = oldSpin;
+    c.t.powerFactor = powerFactor;
+    if (gearA > 0.0f) c.t.gearSpeed[gear] = gearA;
+    c.drag0 = drag0;
+    c.drag2 = drag2;
+    const TorqueCurve curve = kClassCurves[kClassHeavy];
+    SwayStats r = { 1e9f, 0.0f, 1e9f, 0.0f, 0.0f, 0, 0.0f, 0.0f };
+    TruckRaw at = c.t;
+    at.gear = at.gearEngaged = gear;
+    r.top = TruckGearTop(at, gear);
+    LoopState s;
+    s.v = 0.6f * r.top / c.grip; // rolling at 0.6 of the top: the game's pull begins past a standstill
+    LoopDrive(c, s, curve, 1.0f, warm, false, false);
+    float last = s.hand.written;
+    bool rising = false;
+    for (float t = 0.0f; t < seconds; t += kDt)
+    {
+        LoopStep(c, s, curve, 1.0f, kDt, false);
+        const float f = s.hand.written, spin = c.grip * s.v;
+        r.factorLo = fminf(r.factorLo, f), r.factorHi = fmaxf(r.factorHi, f);
+        r.spinLo = fminf(r.spinLo, spin), r.spinHi = fmaxf(r.spinHi, spin);
+        r.step = fmaxf(r.step, fabsf(f - last));
+        if (f > last + 1e-4f) rising = true;
+        else if (f < last - 0.2f && rising) r.cycles++, rising = false;
+        last = f;
+        r.lastSpin = spin;
+    }
+    return r;
 }
 
 // A heavy truck with the gears of a tester's International HX 520 (0.7 1 3 8 14 14: tops 7, 11, 21 and 33 rad/s, its
@@ -3723,11 +3774,81 @@ int main(int argc, char **argv)
         Check(inMud && worst <= kSpinLiftMost + 0.001f && worst > 1.0f, line);
     }
 
-    // L- is jerky (BRIEF_low_minus_jerky.md): by spin, the mean of the last passes and the cap's fade over the top's last
-    // 0.8 rad/s at least. A trace with +-0.15 rad/s of noise around 0.95 (and 1.0) of L-'s 2.24 rad/s top keeps the
-    // factor's change from one pass to the next under 0.15 (today's jumps by up to 1); a top of 15 rad/s keeps today's
-    // factor exactly and one of 10 within 0.05 outside its last 0.08; a catch from 2 to 0.5 of the top in one pass stays
-    // under kSpinLiftMost; a new gear or truck starts the mean over
+    // the rpm sway in a held low gear (BRIEF_low_gear_sway.md with the Reviewer's addendum): a heavy truck held by hand
+    // at full pedal against a drag that rises with speed, the wheels read with +-0.15 rad/s of noise a pass. 0.18.4's
+    // locked path (this pass's spin, the cap of 2 cut over the top's last 0.06, a rise paced after any cut) cycles near
+    // a second with the factor swinging over 0.8; now (the mean, the cap fading over the wider of the top's last fifth and
+    // 0.8 rad/s, the pace only after a break loose) no cycle, a pass's change under 0.1, the wheels within 0.05 rad/s and
+    // under the top; without the noise, settled, the factor holds within 0.1. The same in a gear with a 10 rad/s top
+    {
+        const SwayStats oldLow = SwayRun(true, 1, 0.133f, 0.0f, 1.5f, 0.02f, 10.0f, 6.0f), nowLow = SwayRun(false, 1, 0.133f, 0.0f, 1.5f, 0.02f, 10.0f, 6.0f),
+                        quietLow = SwayRun(false, 1, 0.133f, 0.0f, 1.5f, 0.02f, 10.0f, 6.0f, 0.0f);
+        const SwayStats oldTen = SwayRun(true, 2, 1.0f, 2.5f, 0.02f, 0.002f, 10.0f, 6.0f), nowTen = SwayRun(false, 2, 1.0f, 2.5f, 0.02f, 0.002f, 10.0f, 6.0f),
+                        quietTen = SwayRun(false, 2, 1.0f, 2.5f, 0.02f, 0.002f, 10.0f, 6.0f, 0.0f);
+        char line[600];
+        snprintf(line, sizeof line,
+                 "sway: L- (a %.2f rad/s top) held at full pedal: 0.18.4's factor %.2f to %.2f with %d cuts in 6 s (a pass's change up to %.2f); now %.2f to %.2f, "
+                 "no cut, a pass's change up to %.3f, the wheels %.3f to %.3f rad/s; without noise %.3f to %.3f. A 10 rad/s top: 0.18.4's %.2f to %.2f with %d "
+                 "cuts, now %.2f to %.2f, no cut, up to %.3f a pass; without noise %.3f to %.3f",
+                 oldLow.top, oldLow.factorLo, oldLow.factorHi, oldLow.cycles, oldLow.step, nowLow.factorLo, nowLow.factorHi, nowLow.step, nowLow.spinLo, nowLow.spinHi,
+                 quietLow.factorLo, quietLow.factorHi, oldTen.factorLo, oldTen.factorHi, oldTen.cycles, nowTen.factorLo, nowTen.factorHi, nowTen.step, quietTen.factorLo,
+                 quietTen.factorHi);
+        Check(oldLow.cycles >= 4 && oldLow.factorHi - oldLow.factorLo > 0.8f && !nowLow.cycles && nowLow.step < 0.1f && nowLow.spinHi - nowLow.spinLo < 0.05f &&
+                  nowLow.spinHi < nowLow.top && quietLow.factorHi - quietLow.factorLo < 0.1f && oldTen.cycles >= 2 && !nowTen.cycles && nowTen.step < 0.1f &&
+                  nowTen.spinHi - nowTen.spinLo < 0.05f && nowTen.spinHi < nowTen.top && quietTen.factorHi - quietTen.factorLo < 0.1f,
+              line);
+    }
+    // the locked path's pace (the Reviewer's addendum point 3): the wheels at 0.9 of an L- top, then broken loose at twice
+    // the top for three passes, then caught at half of it: the break loose opens the window, the fall is written at once
+    // and the rise as they catch climbs at kLiftRise; a fall along the fade (the wheels creeping to 0.99 of the top) opens
+    // nothing, so the climb back is written at once; the ground path's cut rule is unchanged
+    {
+        const float top = 1.8f, dt = 0.05f;
+        auto liftAt = [&](const SpinLift &l) { return fminf(TorqueLift(0.9f, 1.0f, 1.0f, 1.0f, l.x, TorqueRoof(kClassHeavy)), l.cap); };
+        SpinMean m = {};
+        TorqueHand h = {};
+        int looseAt = -1;
+        float fallAt = 0.0f, worstRise = 0.0f;
+        bool held = false;
+        for (int i = 0; i < 60; i++)
+        {
+            const float spin = i < 20 ? 0.9f * top : i < 23 ? 2.0f * top : 0.5f * top;
+            const SpinLift l = SpinLiftStep(m, spin, top, 1, 0x5000);
+            const float before = h.written;
+            TorqueHandStep(h, true, 0x5000, 0x4000, h.on ? h.written : 1.0f, liftAt(l), dt, 1, true, l.loose);
+            if (l.loose && looseAt < 0) looseAt = i, fallAt = h.written;
+            if (i > 23) worstRise = fmaxf(worstRise, h.written - before), held = held || h.heldBack;
+        }
+        const bool caught = looseAt == 20 && Near(fallAt, 1.0f, 0.01f) && held && worstRise <= kLiftRise * dt + 0.0001f;
+        SpinMean fm = {};
+        TorqueHand fh = {};
+        bool creptHeld = false;
+        float creptRise = 0.0f;
+        for (int i = 0; i < 80; i++)
+        {
+            const float share = i < 20 ? 0.8f : i < 40 ? 0.8f + 0.19f * (i - 20) / 20.0f : 0.75f;
+            const SpinLift l = SpinLiftStep(fm, share * top, top, 1, 0x5000);
+            const float before = fh.written;
+            TorqueHandStep(fh, true, 0x5000, 0x4000, fh.on ? fh.written : 1.0f, liftAt(l), dt, 1, true, l.loose);
+            creptHeld = creptHeld || fh.heldBack || l.loose;
+            if (i >= 40) creptRise = fmaxf(creptRise, fh.written - before);
+        }
+        TorqueHand gh = {};
+        TorqueHandStep(gh, true, 0x5000, 0x4000, 1.0f, 2.0f, dt, 3);
+        TorqueHandStep(gh, true, 0x5000, 0x4000, gh.written, 1.2f, dt, 3);
+        const TorqueOrders groundRise = TorqueHandStep(gh, true, 0x5000, 0x4000, gh.written, 2.0f, dt, 3);
+        const bool ground = gh.heldBack && Near(groundRise.factor, 1.2f + kLiftRise * dt, 0.0001f);
+        char line[300];
+        snprintf(line, sizeof line, "sway: a break loose at pass %d opens the pace, the fall to %.2f at once, the catch's rise at most %.3f a pass; a creep along the "
+                                    "fade opens none (a rise back of %.2f at once); the ground path's cut still paces", looseAt, fallAt, worstRise, creptRise);
+        Check(caught && !creptHeld && creptRise > kLiftRise * dt + 0.01f && ground, line);
+    }
+
+    // L- is jerky (BRIEF_low_minus_jerky.md): by spin, the mean of the last passes and the cap's fade over the wider of
+    // the top's last 0.8 rad/s and its last fifth (BRIEF_low_gear_sway.md). A trace with +-0.15 rad/s of noise around
+    // 0.95 (and 1.0) of L-'s 2.24 rad/s top keeps the factor's change from one pass to the next under 0.15 (0.18.4's jumps
+    // by up to 1); a 15 and a 10 rad/s top fade over their last fifth (2 at 0.8, 1.5 at 0.9, 1 at the top); a catch from 2
+    // to 0.5 of the top in one pass stays under kSpinLiftMost; a new gear or truck starts the mean over
     {
         const float curve = 0.9f;
         auto today = [&](float x) { return fminf(TorqueLift(curve, 1.0f, 1.0f, 1.0f, x, TorqueRoof(kClassTruck)), kSpinLiftMost); };
@@ -3749,15 +3870,16 @@ int main(int argc, char **argv)
         };
         float t95 = 0.0f, t100 = 0.0f;
         const float j95 = noisy(2.24f, 0.95f, t95), j100 = noisy(2.24f, 1.0f, t100);
-        // noise free: a top of 15 rad/s is today's, one of 10 within 0.05 outside its last 0.08 (and never above today's)
+        // noise free: a top of 15 and of 10 rad/s fade over their last fifth, a straight line; under 0.8 they are 0.18.4's
         bool same15 = true, near10 = true;
         for (int i = 0; i <= 600; i++)
         {
             const float x = i * 0.002f;
-            same15 = same15 && Near(calm(x, 15.0f), today(x), 0.0001f);
-            const float d = today(x) - calm(x, 10.0f);
-            near10 = near10 && d >= -0.0001f && ((x > 0.92f && x < 1.0f) || d <= 0.05f);
+            const float line15 = fminf(TorqueLift(curve, 1.0f, 1.0f, 1.0f, x, TorqueRoof(kClassTruck)), fminf(2.0f, x >= 1.0f ? 1.0f : 1.0f + (1.0f - x) / 0.2f));
+            same15 = same15 && Near(calm(x, 15.0f), line15, 0.0001f) && Near(calm(x, 10.0f), line15, 0.0001f) && (x > 0.8f || Near(calm(x, 15.0f), today(x), 0.0001f));
         }
+        near10 = Near(SpinLiftMost(0.8f, 10.0f), 2.0f, 0.0001f) && Near(SpinLiftMost(0.9f, 10.0f), 1.5f, 0.0001f) && SpinLiftMost(1.0f, 10.0f) == 1.0f &&
+                 Near(SpinLiftMost(0.9f, 2.24f), 1.0f + 0.1f * 2.24f / 0.8f, 0.0001f);
         // a catch: 2 of the top for five passes, then 0.5 of it each pass after: what is written, and what the game gives
         // with it at the next pass's spin, stays under kSpinLiftMost
         SpinMean m = {};
@@ -3782,40 +3904,37 @@ int main(int argc, char **argv)
         const bool rangeSteady = Near(afterRange, calm(SpinShare(0.95f * 2.24f, 7.2f), 7.2f), 0.05f);
         char line[300];
         snprintf(line, sizeof line, "lift by spin in L-: +-0.15 rad/s of noise at 0.95 and 1.0 of a 2.24 rad/s top moves the factor at most %.2f and %.2f a pass (today's %.2f and %.2f); "
-                                    "a 15 rad/s top is today's, a 10 rad/s top within 0.05 outside its last 0.08; a catch gives at most %.2f; a change of range keeps the factor at its spin (%.2f); a new gear or truck starts the mean over",
+                                    "a 15 and a 10 rad/s top fade over their last fifth; a catch gives at most %.2f; a change of range keeps the factor at its spin (%.2f); a new gear or truck starts the mean over",
                  j95, j100, t95, t100, caughtWorst, afterRange);
         Check(j95 < 0.15f && j100 < 0.15f && t95 > 0.5f && same15 && near10 && caughtWorst <= kSpinLiftMost + 0.001f && gearNew && rangeSteady, line);
 
-        // SpinCalm (BRIEF_low_minus_worse.md part 0): through SpinLiftStep as gauges.cpp has it. On, the same noisy L-
-        // trace gives the calm's figures above; off (the default), 0.18.4's: x is this pass's spin, the cap is 2, every
-        // pass's factor is today's, and its jumps are today's again
-        auto stepped = [&](bool on, float centre, float &worstStep, bool &asWanted) {
+        // SpinLiftStep as gauges.cpp has it, always (SpinCalm is read no more, BRIEF_low_gear_sway.md): the same noisy L-
+        // trace gives the calm's figures above, with no break loose on it; a noisy trace (+-0.15 rad/s) around 0.95 of a
+        // 1.8 rad/s top keeps the factor's change from one pass to the next under 0.1 without more than the mean
+        auto stepped = [&](float top, float centre, float &worstStep, int &looses) {
             uint32_t seed = 12345u;
             SpinMean m = {};
             float last = -1.0f;
             worstStep = 0.0f;
-            asWanted = true;
+            looses = 0;
             for (int i = 0; i < 2000; i++)
             {
                 seed = seed * 1664525u + 1013904223u;
-                const float spin = centre * 2.24f + ((float)(seed >> 8) / 16777216.0f * 2.0f - 1.0f) * 0.15f;
-                const SpinLift l = SpinLiftStep(m, on, spin, 2.24f, 1, 0x5000);
+                const float spin = centre * top + ((float)(seed >> 8) / 16777216.0f * 2.0f - 1.0f) * 0.15f;
+                const SpinLift l = SpinLiftStep(m, spin, top, 1, 0x5000);
                 const float f = fminf(TorqueLift(curve, 1.0f, 1.0f, 1.0f, l.x, TorqueRoof(kClassTruck)), l.cap);
-                if (!on) asWanted = asWanted && Near(l.x, SpinShare(spin, 2.24f), 0.00001f) && l.cap == kSpinLiftMost && Near(f, today(l.x), 0.00001f) && m.n == 0;
                 if (last >= 0.0f) worstStep = fmaxf(worstStep, fabsf(f - last));
                 last = f;
+                looses += l.loose;
             }
         };
-        float on95 = 0.0f, off95 = 0.0f, off100 = 0.0f;
-        bool onSame = true, offSame = true, off100Same = true;
-        stepped(true, 0.95f, on95, onSame);
-        stepped(false, 0.95f, off95, offSame);
-        stepped(false, 1.0f, off100, off100Same);
-        GaugeSettings defaults;
-        SettingsDefaults(defaults);
-        snprintf(line, sizeof line, "SpinCalm: on by default; off, the noisy L- trace is 0.18.4's (this pass's spin, cap 2, jumps %.2f and %.2f as today's %.2f and %.2f); on, the calm's (%.2f)",
-                 off95, off100, t95, t100, on95);
-        Check(defaults.spinCalm && offSame && off100Same && Near(off95, t95, 0.0001f) && Near(off100, t100, 0.0001f) && Near(on95, j95, 0.0001f), line);
+        float on95 = 0.0f, low95 = 0.0f;
+        int loose95 = 0, looseLow = 0;
+        stepped(2.24f, 0.95f, on95, loose95);
+        stepped(1.8f, 0.95f, low95, looseLow);
+        snprintf(line, sizeof line, "lift by spin, always the calm: the noisy L- trace is the calm's (%.2f a pass), no break loose on it; around 0.95 of a 1.8 rad/s top at most %.2f a pass",
+                 on95, low95);
+        Check(Near(on95, j95, 0.0001f) && !loose95 && !looseLow && low95 < 0.1f, line);
     }
 
     // D slowing under the brake (the sequential to D brief): from 6th at 60 km/h braked to 20 km/h in 3 s it comes down
