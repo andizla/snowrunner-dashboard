@@ -335,11 +335,10 @@ inline const char *GearboxPosName(int pos)
     return pos >= 0 && pos < kPosCount ? names[pos] : "?";
 }
 
-// The positions the wheel cap guards, one condition in one place (the lead, 23:3x): for now every gear held by hand, a
-// numbered one, R and the low range L-, L and L+, as the Reviewer's part 3 has it (1st held in deep mud ran to 5.5 to
-// 9.2 tops with the governor on the truck's speed). The user's "the cap is for L gears" would be the low range and R
-// alone: pos == kPosR || (pos >= kPosLowMinus && pos <= kPosLowPlus).
-inline bool GearboxPosCapped(int pos) { return pos == kPosGear || pos == kPosR || (pos >= kPosLowMinus && pos <= kPosLowPlus); }
+// The positions the wheel cap guards, one condition in one place: the low range L-, L and L+ and R, whose tops are as
+// low (the user, 2026-11-10: "L gears and R"). Not a numbered gear held by hand, where the governor on the truck's speed
+// and the engine curve are the whole limit. Every held gear, as the Reviewer's part 3 had it, would add pos == kPosGear.
+inline bool GearboxPosCapped(int pos) { return pos == kPosR || (pos >= kPosLowMinus && pos <= kPosLowPlus); }
 
 // The letter the cluster shows for it ("" for a numbered gear, which shows its number).
 inline const char *GearboxPosLetter(int pos)

@@ -398,7 +398,7 @@ M5 of the wheel cap's addendum); with it the curve is read at the wheels' speed 
 again. The wheel cap is the runaway guard (BRIEF_drivetrain_2c_wheel_cap.md): after the original drive returns, each driven wheel's speed in the game's measure,
 w = dot(body + 0x240, wheel + 0x154) in the gear's direction (wheel + 0x18 the body, used as activate checks it: + 0x10 set, + 0x160 not 5), is held to
 <code>WheelCap</code> percent of the gear's top (150) by omega += (cap - w) · axle / |axle|², so only the spin about the axle changes and the axle need not be a unit
-(<code>CapMove</code>). It acts in every gear held by hand for now (<code>GearboxPosCapped</code>, one condition), arms after a take-over or a shift once the driven
+(<code>CapMove</code>). It acts in L-, L, L+ and R alone, not in a numbered gear held by hand (<code>GearboxPosCapped</code>, one condition), arms after a take-over or a shift once the driven
 wheels' mean is at the guard (<code>CapArmStep</code>, M3), and hands what a held wheel could not take, as an impulse, to the driven wheels not held and not pushed
 against the gear, by their own push, through each one's inverse inertia about the axle (body + 0x220 along the desc's local axle at + 0x100; <code>CapStep</code>,
 S1). The stand-in is the paced bracket times the share of the drive's push the driven wheels kept, smoothed 0.8 old (M1). The engine brake is tapered by the slowest driven wheel in the gear's direction, whole from twice the gear's idle speed and 0 at it

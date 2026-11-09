@@ -4260,15 +4260,14 @@ int main(int argc, char **argv)
         TorqueCutAnswerPaced(capped, 2.0f, 1.0f, 1.0f, 0.25f);
         const bool answer = nearly(governed, 0.5f) && nearly(capped.f, 1.0f) && nearly(truckFast, 0.5f) && nearly(truckNone, 0.5f) && !noTruck.truckOk && nearly(backTruck.truck, -9.0f) &&
                             nearly(capped.torque, 2.0f) && nearly(capped.standIn, 0.25f) && nearly(CapKeptSmooth(1.0f, 0.5f), 0.9f);
-        // the gate, one condition (for now every gear held by hand, the Reviewer's part 3): numbered gears, R and the
-        // low range; not A, N or H
-        const bool gate = GearboxPosCapped(kPosGear) && GearboxPosCapped(kPosR) && GearboxPosCapped(kPosLowMinus) && GearboxPosCapped(kPosLow) && GearboxPosCapped(kPosLowPlus) &&
+        // the gate, one condition (the user: "L gears and R"): R and the low range; not a numbered gear, A, N or H
+        const bool gate = !GearboxPosCapped(kPosGear) && GearboxPosCapped(kPosR) && GearboxPosCapped(kPosLowMinus) && GearboxPosCapped(kPosLow) && GearboxPosCapped(kPosLowPlus) &&
                           !GearboxPosCapped(kPosA) && !GearboxPosCapped(kPosN) && !GearboxPosCapped(kPosH);
         char capLine[700];
         snprintf(capLine, sizeof capLine, "wheel cap: an axle of length 2 and a unit one both from 4.2 to 3 in the game's measure, the parts across them kept, R by the sign; held wheels "
                                           "3 and 3, the third 2.75 with the spread (2 without), kept %.3f (%.3f), nothing to a wheel pushed against the gear; a downshift at 2 x the "
                                           "cap waits until the guard, a shift waits again; the wheels at 1.05 of the top: F %.2f by them, %.2f with the truck at 0.9, %.2f at 1.05; "
-                                          "the stand-in %.2f at kept 0.25; the guard in every held gear, R and the low range",
+                                          "the stand-in %.2f at kept 0.25; the guard in R and the low range alone, not a numbered gear",
                  sp.kept, no.kept, governed, capped.f, truckFast, capped.standIn);
         Check(axle && reverseAxle && spread && held && waits && answer && gate, capLine);
 
