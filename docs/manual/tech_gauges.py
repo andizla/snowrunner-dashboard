@@ -356,7 +356,7 @@ torque for one pass. The spin is noisy by about 0.15 rad/s a pass, a big share o
 is the mean of the last 5 passes in rad/s (about 0.25 s, <code>SpinMeanStep</code>, started over at a new gear or truck), <i>x</i> its share of
 this pass's top, so a change within the low range mixes no tops, and the cap fades
 from 2 to 1 over the top's last 0.8 rad/s at least (<code>SpinLiftMost</code>), not only its last 0.06. A top over 13.3 rad/s keeps the
-narrow fade. The probe's <i>x</i> is the mean:</p>
+narrow fade. Both calms are <code>SpinCalm=1</code> in <code>[Gauges]</code>, the default; 0 gives 0.18.4's spin of this pass and its narrow fade. The probe's <i>x</i> is the mean:</p>
 {eq('lift = clamp( curve(<i>x</i>) · ratio · min(1, cold · boost / <i>p</i>) / GameFall(<i>x</i>), 0.05, <i>R</i> ) for <i>x</i> &lt; 1, 1 for <i>x</i> ≥ 1,    GameFall(<i>x</i>) = clamp(2.1(1 − <i>x</i>), 0, 1),    <i>R</i> = 6', 13)}
 {eq('factor = game · (1 + clamp(EngineShare/100, 0, 1) · (lift − 1))', 14)}
 <p class="where">ratio is the torque converter's multiplication while the mod's automatic holds the gears, otherwise 1. game is the game's

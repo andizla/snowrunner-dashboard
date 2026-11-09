@@ -311,7 +311,9 @@ count, of the same kind, engine and gearbox, gives its count. A truck bought new
 to puts it right. Before both, the truck that went last comes first: of the same kind, no other truck driven and no loading
 screen between, its truck gone, none of its sections marked, and its engine and gearbox recorded the same. Then it takes all
 its sections, the set and the count, however long the visit to the garage took. The log writes one <code>match:</code> line at
-each match, with what each truck of the kind has and why it was taken or not. Unticking the box at the
+each match, with what each truck of the kind has and why it was taken or not. A gearbox whose gears Next Gen Tire Inflation
+moved is the same gearbox: its gears' tops stand in one ratio, the tire's roll. A gearbox recorded by its gears matches its
+name read later where those gears are the truck's. Unticking the box at the
 truck's level keeps its set and puts the kind's in force; This truck only brings it back. Every with no set for the kind
 moves the truck's set up to the kind. With a set for the kind it puts that one in force and keeps the truck's, which This
 truck only brings back.</p>

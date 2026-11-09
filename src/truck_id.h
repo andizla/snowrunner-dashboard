@@ -460,9 +460,17 @@ inline std::vector<std::wstring> KindIds(const std::wstring &file, const std::ve
     return ids;
 }
 
+// The parts compare: the text's equality by default (Tire Inflation's calls). Gameplay passes its own, which takes a
+// gearbox's gears moved by a tire's roll as the same (the Reviewer's F5b on the drive of 2026-11-09).
+struct SameText
+{
+    bool operator()(const std::wstring &, const std::wstring &recorded, const std::wstring &now) const { return recorded == now; }
+};
+
 // What one id's sections hold, one bit for each of prefixes (bit i for prefixes[i]): the section is there; it holds a
 // key of its own (not a mark, not a part); it is marked (TakenBy); a part is not recorded in it; a part in it is another
-// (other: the first such, "Engine e_x"). listed and seen: its [Seen] line.
+// (other: the first such, "Engine e_x"; same(key, recorded, now) says whether a part is the same). listed and seen:
+// its [Seen] line.
 struct Look
 {
     std::wstring id;
@@ -472,7 +480,8 @@ struct Look
     bool listed;
     unsigned long long seen;
 };
-inline Look LookAt(const std::wstring &file, const std::vector<std::wstring> &prefixes, const std::wstring &id, const Parts &parts)
+template <class Same = SameText>
+inline Look LookAt(const std::wstring &file, const std::vector<std::wstring> &prefixes, const std::wstring &id, const Parts &parts, Same same = Same())
 {
     Look l = {};
     l.id = id;
@@ -494,7 +503,7 @@ inline Look LookAt(const std::wstring &file, const std::vector<std::wstring> &pr
         {
             const auto it = std::find_if(keys.begin(), keys.end(), [&](const auto &k) { return KeyIs(k.first, p.first.c_str()); });
             if (it == keys.end()) l.partsNone |= bit;
-            else if (it->second != p.second)
+            else if (!same(p.first, it->second, p.second))
             {
                 l.partsOther |= bit;
                 if (l.other.empty()) l.other = p.first + L" " + it->second;
@@ -512,8 +521,9 @@ inline bool LookCandidate(const Look &l, unsigned mask)
     return there && !(l.marked & mask) && (l.own & mask) && !((l.partsNone | l.partsOther) & there);
 }
 
-template <class Gone> inline Match MatchFind(const std::wstring &file, const std::vector<std::wstring> &prefixes, const char *newId, const Parts &parts, bool named,
-                                             unsigned long long start, Gone drivenGone)
+template <class Gone, class Same = SameText>
+inline Match MatchFind(const std::wstring &file, const std::vector<std::wstring> &prefixes, const char *newId, const Parts &parts, bool named, unsigned long long start,
+                       Gone drivenGone, Same same = Same())
 {
     Match m = {};
     m.why = kMatchNone;
@@ -525,7 +535,7 @@ template <class Gone> inline Match MatchFind(const std::wstring &file, const std
     for (const auto &id : KindIds(file, prefixes))
     {
         if (!_wcsicmp(id.c_str(), mine.c_str())) continue;
-        const Look l = LookAt(file, prefixes, id, parts);
+        const Look l = LookAt(file, prefixes, id, parts, same);
         if (!l.sections || l.marked || !l.own) continue;
         const bool waiting = !l.listed || l.seen < start || drivenGone(l.idText);
         if (!waiting) continue;
@@ -595,8 +605,9 @@ inline const wchar_t *LastWords(int why)
 // load since it went (loadSince false); its sections (prefix + <id> for each of prefixes) there, none marked, none
 // with other parts, one at least with the parts; and there() false (its vehicle gone). A kLast... The take is
 // MatchTake(file, prefixes, ..., last.id, newId, 0, L"last"): all its sections.
-template <class There_> inline int LastFind(const std::wstring &file, const std::vector<std::wstring> &prefixes, const Last &last, const char *kind, const char *newId,
-                                            const Parts &parts, bool named, bool loadSince, There_ there)
+template <class There_, class Same = SameText>
+inline int LastFind(const std::wstring &file, const std::vector<std::wstring> &prefixes, const Last &last, const char *kind, const char *newId, const Parts &parts,
+                    bool named, bool loadSince, There_ there, Same same = Same())
 {
     if (!last.on || !last.id[0] || !newId || !strcmp(last.id, newId)) return kLastNone;
     if (!named || !kind || strcmp(last.kind, kind)) return kLastOtherKind;
@@ -604,7 +615,7 @@ template <class There_> inline int LastFind(const std::wstring &file, const std:
     for (const auto &p : parts)
         if (p.second.empty()) return kLastNoParts;
     if (loadSince) return kLastLoad;
-    const Look l = LookAt(file, prefixes, Wide(last.id), parts);
+    const Look l = LookAt(file, prefixes, Wide(last.id), parts, same);
     if (!l.sections) return kLastNoSection;
     if (l.marked) return kLastMarked;
     if (l.partsOther) return kLastOtherParts;

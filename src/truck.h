@@ -582,16 +582,21 @@ inline bool TruckEngineRecord(const TruckMemory &m, uint64_t vehicle, EngineReco
 // trucks on their stock gearboxes), so a truck with an upgraded gearbox was read as its stock one: a d110 on its
 // highway gearbox read "g_lrd_110_default". A name at + 0x9c0 is taken whatever it begins with; where none is, the
 // default at + 0x9a0; where neither is, the texts from + 0x900 to + 0xC00 are looked through for the first that begins
-// with "g_". A name: letters, digits, "_" and "-". at: where it stood, from the vehicle, for the log; stock: the
-// truck's default gearbox where it was read, else "". False where no name is.
+// with "g_". A name: letters, digits, "_" and "-". At the two fixed places a name may hold spaces and other signs too
+// (spaced: a mod's gearbox named "Box of a mod 6-Speed", the Reviewer's F5a on the drive of 2026-11-09), a space never
+// first or last, and never "[", "]", "=", ";" or a control character, which would break a section or a key. The scan
+// keeps the plain rule and "g_". at: where it stood, from the vehicle, for the log; stock: the truck's default gearbox
+// where it was read, else "". False where no name is.
 static const uint32_t kGearboxFittedAt = 0x9c0, kGearboxNameAt = 0x9a0, kGearboxNameFrom = 0x900, kGearboxNameTo = 0xC00;
-inline bool TruckNameText(const TruckMemory &m, uint64_t at, char (&out)[kMaxText], size_t &length)
+inline bool TruckNameText(const TruckMemory &m, uint64_t at, char (&out)[kMaxText], size_t &length, bool spaced = false)
 {
     if (!TruckText(m, at, out, length) || length < 2) return false;
     for (size_t i = 0; i < length; i++)
     {
-        const char c = out[i];
-        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-')) return false;
+        const unsigned char c = (unsigned char)out[i];
+        const bool plain = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-';
+        const bool sign = spaced && c >= 0x20 && c != 0x7F && c != '[' && c != ']' && c != '=' && c != ';' && !(c == ' ' && (i == 0 || i + 1 == length));
+        if (!plain && !sign) return false;
     }
     return true;
 }
@@ -603,8 +608,8 @@ inline bool TruckGearboxName(const TruckMemory &m, uint64_t vehicle, char (&out)
     if (!vehicle) return false;
     char text[kMaxText];
     size_t length = 0;
-    if (TruckNameText(m, vehicle + kGearboxNameAt, text, length)) memcpy(stock, text, length + 1);
-    if (TruckNameText(m, vehicle + kGearboxFittedAt, text, length))
+    if (TruckNameText(m, vehicle + kGearboxNameAt, text, length, true)) memcpy(stock, text, length + 1);
+    if (TruckNameText(m, vehicle + kGearboxFittedAt, text, length, true))
     {
         memcpy(out, text, length + 1);
         at = kGearboxFittedAt;
@@ -661,18 +666,33 @@ inline int GearboxKeySpeeds(const char *key, float *out, int most)
     return n;
 }
 
-// Two keys of gears for one gearbox: the same count of speeds, each within a share of the other (the speeds drift by a
-// few tenths of a per cent between takes, most likely with the wheels' radius, BRIEF_manual_creep_and_hold.md). Two
-// names, or a name and gears, never match.
+// Two keys of gears for one gearbox: the same count of speeds, the high gear in both or neither, and their tops in one
+// ratio r: (b + 2.5) = r * (a + 2.5) for each gear, (b + 2) = r * (a + 2) for the high one, every gear's ratio within
+// kGearboxDrift of the others and r from 0.8 to 1.25. Tire Inflation moves the gears that way (a tire's roll: each top
+// times the roll, the Reviewer's F5b on the drive of 2026-11-09), and the speeds drift by a few tenths of a per cent
+// between takes, most likely with the wheels' radius (BRIEF_manual_creep_and_hold.md). Two unnamed gearboxes of one
+// kind whose tops stand in one such ratio read as one gearbox: accepted, as no read tells them apart. Two names, or a
+// name and gears, never match.
 static const float kGearboxDrift = 0.02f;
+static const float kGearboxRatioLeast = 0.8f, kGearboxRatioMost = 1.25f;
 inline bool GearboxKeysMatch(const char *a, const char *b, float within = kGearboxDrift)
 {
     float x[kMaxGears + 2], y[kMaxGears + 2];
     const int n = GearboxKeySpeeds(a, x, kMaxGears + 2), m = GearboxKeySpeeds(b, y, kMaxGears + 2);
-    if (!n || n != m) return false;
+    const bool highA = strstr(a, " high ") != nullptr, highB = strstr(b, " high ") != nullptr;
+    if (!n || n != m || highA != highB) return false;
+    float least = 0.0f, most = 0.0f;
     for (int i = 0; i < n; i++)
-        if (!(fabsf(x[i] - y[i]) <= within * fmaxf(fabsf(x[i]), fabsf(y[i])))) return false;
-    return true;
+    {
+        const float lift = highA && i == n - 1 ? 2.0f : 2.5f;
+        if (!(x[i] + lift > 0.0f) || !(y[i] + lift > 0.0f)) return false;
+        const float r = (y[i] + lift) / (x[i] + lift);
+        if (!isfinite(r)) return false;
+        least = i ? fminf(least, r) : r;
+        most = i ? fmaxf(most, r) : r;
+    }
+    const float r = sqrtf(least * most);
+    return r >= kGearboxRatioLeast && r <= kGearboxRatioMost && most <= least * (1.0f + within);
 }
 
 // Why no gearbox name was read, for the log: the fitted's and the default's texts as they stand.

@@ -3813,9 +3813,9 @@ int main(int argc, char **argv)
         stepped(false, 1.0f, off100, off100Same);
         GaugeSettings defaults;
         SettingsDefaults(defaults);
-        snprintf(line, sizeof line, "SpinCalm: off by default; off, the noisy L- trace is 0.18.4's (this pass's spin, cap 2, jumps %.2f and %.2f as today's %.2f and %.2f); on, the calm's (%.2f)",
+        snprintf(line, sizeof line, "SpinCalm: on by default; off, the noisy L- trace is 0.18.4's (this pass's spin, cap 2, jumps %.2f and %.2f as today's %.2f and %.2f); on, the calm's (%.2f)",
                  off95, off100, t95, t100, on95);
-        Check(!defaults.spinCalm && offSame && off100Same && Near(off95, t95, 0.0001f) && Near(off100, t100, 0.0001f) && Near(on95, j95, 0.0001f), line);
+        Check(defaults.spinCalm && offSame && off100Same && Near(off95, t95, 0.0001f) && Near(off100, t100, 0.0001f) && Near(on95, j95, 0.0001f), line);
     }
 
     // D slowing under the brake (the sequential to D brief): from 6th at 60 km/h braked to 20 km/h in 3 s it comes down

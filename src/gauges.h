@@ -120,7 +120,7 @@ struct GaugeSettings
     int engineShare;         // EngineShare: how much of the mod's engine the game gets with it, in percent: 0 the game's own pull, 100 the mod's
     bool creepManual;        // CreepManual: the creep in a gear picked by hand too (off: only where an automatic picks the gear)
     bool creep;              // Creep: an idling truck in gear moves, an automatic to walking pace, a manual at the gear's idle speed (models.h, CreepShare)
-    bool spinCalm;           // SpinCalm: in a gear held by hand, the lift by spin with low-minus's two calms (models.h, SpinLiftStep); off by default, read only, no tab control
+    bool spinCalm;           // SpinCalm: in a gear held by hand, the lift by spin with low-minus's two calms (models.h, SpinLiftStep); on by default, read only, no tab control
     float rollWarnDeg, rollDangerDeg; // RollWarnDeg, RollDangerDeg: degrees of lean to the side from which the tilt lamp is amber, and red
     float pitchDangerDeg;    // PitchDangerDeg: degrees up or down a slope from which the tilt lamp is red
     float warmUpMinutes;     // WarmUpMinutes: minutes a cold engine takes from 15 C to 85 C when it is driven as usual
@@ -202,7 +202,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.roadLoad = true; // on by default (BRIEF_defaults_on.md); an explicit 0 in the ini stays 0
     s.roadCdA = 0.0f;
     s.creep = true;
-    s.spinCalm = false; // 0.18.4's lift by spin (BRIEF_low_minus_worse.md part 0)
+    s.spinCalm = true; // the two calms of low-minus by default (the Reviewer's addendum 2 on the drive of 2026-11-09); 0 is 0.18.4's lift by spin
     s.creepManual = false;
     s.rollWarnDeg = 15.0f;
     s.rollDangerDeg = 25.0f;

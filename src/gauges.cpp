@@ -2150,8 +2150,9 @@ static void OdoHoursPut(const char *key, bool hours)
 // with a count of their own and no settings section, by the same rules as truckid::MatchFind (not marked, the parts
 // recorded and the same, waiting), so a parked truck with only its count never stops a truck with settings being
 // matched, and its count still follows it out of the warehouse.
-template <class Gone>
-static truckid::Match OdoMatchFind(const std::wstring &file, const char *newId, const truckid::Parts &parts, bool named, unsigned long long start, Gone drivenGone)
+template <class Gone, class Same = truckid::SameText>
+static truckid::Match OdoMatchFind(const std::wstring &file, const char *newId, const truckid::Parts &parts, bool named, unsigned long long start, Gone drivenGone,
+                                   Same same = Same())
 {
     truckid::Match m = {};
     m.why = truckid::kMatchNone;
@@ -2181,7 +2182,7 @@ static truckid::Match OdoMatchFind(const std::wstring &file, const char *newId, 
         {
             const auto it = std::find_if(keys.begin(), keys.end(), [&](const auto &k) { return truckid::KeyIs(k.first, p.first.c_str()); });
             if (it == keys.end()) partsAll = false;
-            else if (it->second != p.second) partsSame = false;
+            else if (!same(p.first, it->second, p.second)) partsSame = false;
         }
         if (marked || !own) continue;
         char idText[40] = {};
@@ -2196,6 +2197,23 @@ static truckid::Match OdoMatchFind(const std::wstring &file, const char *newId, 
     m.why = m.candidates == 1 ? truckid::kMatchOne : m.candidates > 1 ? truckid::kMatchTwo : truckid::kMatchNone;
     if (m.why != truckid::kMatchOne) m.id[0] = 0;
     return m;
+}
+// The match's parts compare (the Reviewer's F5b on the drive of 2026-11-09): the text's equality, and for Gearbox= one
+// gearbox by GearboxKeysMatch's ratio rule. Two gear lists in one ratio are the same (Tire Inflation moved the gears
+// between the two reads); a recorded list against a name now is the same where the list matches the truck's gears as
+// read now (gearsNow, "" not read), so the records turn from a list to the name within a start without a lost match.
+static bool PartSame(const std::wstring &key, const std::wstring &recorded, const std::wstring &now, const char *gearsNow)
+{
+    if (recorded == now) return true;
+    if (!truckid::KeyIs(key, L"Gearbox")) return false;
+    char r[160] = "", n[160] = "";
+    if (!WideCharToMultiByte(CP_UTF8, 0, recorded.c_str(), -1, r, sizeof r, nullptr, nullptr)) r[0] = 0;
+    if (!WideCharToMultiByte(CP_UTF8, 0, now.c_str(), -1, n, sizeof n, nullptr, nullptr)) n[0] = 0;
+    float speeds[kMaxGears + 2];
+    const bool listed = GearboxKeySpeeds(r, speeds, kMaxGears + 2) > 0, listNow = GearboxKeySpeeds(n, speeds, kMaxGears + 2) > 0;
+    if (listed && listNow) return GearboxKeysMatch(r, n);
+    if (listed && n[0] && gearsNow && gearsNow[0]) return GearboxKeysMatch(r, gearsNow);
+    return false;
 }
 // Whether the id has a section of either kind, and whether one is in force (Own not 0).
 static bool TruckIdSections(const char *key, const char *id, bool *inForce = nullptr)
@@ -4088,6 +4106,17 @@ static const wchar_t *const kClassWords[kClassCount] = { L"truck", L"scout", L"h
 static int AutoClass(const TruckWatch &w, int tachClass)
 {
     return w.ownScales ? tachClass : ClassByMass(w.mass, tachClass);
+}
+
+// The driven truck's gears as read last, as a key of gears ("" where they are not this vehicle's).
+static void GearsNowKey(const TruckWatch &w, char *out, size_t size)
+{
+    out[0] = 0;
+    if (!w.found || !w.gearboxVehicle || w.gearboxVehicle != w.refs.vehicle || w.gearSpeeds < 3) return;
+    TruckRaw t = {};
+    t.gearSpeeds = w.gearSpeeds;
+    memcpy(t.gearSpeed, w.gearSpeed, sizeof t.gearSpeed);
+    GearboxKey(t, "", out, size);
 }
 
 // Finds the driven truck's gearbox (its name, or its gears where the name is not read) and its own hold, and says so
@@ -6838,13 +6867,18 @@ static DWORD WINAPI Run(void *)
         const bool known = !strcmp(eng.key, truck.key) && !strcmp(eng.id, truck.id) && eng.engine[0] && eng.gearbox[0];
         const truckid::Parts parts = known ? TruckPartsOf(eng.engine, eng.gearbox) : truckid::Parts();
         const std::wstring ini = SetupFile(kSetupTruck, truck.key), mine = Wide(truck.id);
+        // the parts compare: a gearbox's gears moved by a tire's roll, or a recorded list against a name now, are the same
+        // gearbox (the Reviewer's F5b)
+        char gearsNow[96];
+        GearsNowKey(watch, gearsNow, sizeof gearsNow);
+        auto same = [&gearsNow](const std::wstring &key, const std::wstring &recorded, const std::wstring &now) { return PartSame(key, recorded, now, gearsNow); };
         // every id of the kind as it is before anything is taken, at most 8, for the match's line (the Reviewer's M3)
         std::vector<truckid::Look> looks;
         int more = 0;
         for (const auto &id : truckid::KindIds(ini, TruckIdAllPrefixes()))
         {
             if (!_wcsicmp(id.c_str(), mine.c_str())) continue;
-            if (looks.size() < 8) looks.push_back(truckid::LookAt(ini, TruckIdAllPrefixes(), id, parts));
+            if (looks.size() < 8) looks.push_back(truckid::LookAt(ini, TruckIdAllPrefixes(), id, parts, same));
             else more++;
         }
         // first the truck that went last, with no truck taken and no load since, all its sections (the user's rule, the
@@ -6852,7 +6886,7 @@ static DWORD WINAPI Run(void *)
         // tier 1 found none (the Reviewer's must 1 on the odometer)
         const DrivenId *lastDriven = lastForMatch.on ? drivenOf(lastForMatch.id) : nullptr;
         const int lastWhy = truckid::LastFind(ini, TruckIdAllPrefixes(), lastForMatch, truck.key, truck.id, parts, truck.named,
-                                              lastDriven && lastDriven->loads != watch.loads, [&]() { return !lastDriven || !idDrivenGone(lastForMatch.id); });
+                                              lastDriven && lastDriven->loads != watch.loads, [&]() { return !lastDriven || !idDrivenGone(lastForMatch.id); }, same);
         enum { kTookNone, kTookLast, kTookTier1, kTookTier2 };
         int took = kTookNone;
         char takenId[40] = "";
@@ -6862,12 +6896,12 @@ static DWORD WINAPI Run(void *)
             took = kTookLast, strncpy_s(takenId, lastForMatch.id, _TRUNCATE);
         if (took == kTookNone)
         {
-            m = truckid::MatchFind(ini, TruckIdPrefixes(), truck.id, parts, truck.named, idStart, idDrivenGone);
+            m = truckid::MatchFind(ini, TruckIdPrefixes(), truck.id, parts, truck.named, idStart, idDrivenGone, same);
             if (m.why == truckid::kMatchOne && truckid::MatchTake(ini, TruckIdAllPrefixes(), TruckIdAllPrefixes(), m.id, truck.id) > 0)
                 took = kTookTier1, strncpy_s(takenId, m.id, _TRUNCATE);
             else if (m.why == truckid::kMatchNone)
             {
-                const truckid::Match c = OdoMatchFind(ini, truck.id, parts, truck.named, idStart, idDrivenGone);
+                const truckid::Match c = OdoMatchFind(ini, truck.id, parts, truck.named, idStart, idDrivenGone, same);
                 if (c.why == truckid::kMatchOne && truckid::MatchTake(ini, OdoPrefixes(), OdoPrefixes(), c.id, truck.id) > 0)
                     took = kTookTier2, strncpy_s(takenId, c.id, _TRUNCATE);
             }
@@ -10116,6 +10150,41 @@ int wmain(int argc, wchar_t **argv)
         Check(tier1 && notA && counts,
               "odometer match: A with settings in the warehouse and B parked with a count only: tier 1 matches A and takes its count too, not two; tier 2 never "
               "takes an id with a settings section, and with two counts alone it takes none");
+        // the gearbox's gears moved by a tire's roll (the Reviewer's F5b on the drive of 2026-11-09): the parts compare
+        // takes the moved list as the same, and a recorded list against a name now where it matches the gears read now;
+        // the last truck and the warehouse match take a truck recorded with the moved list while the stock one is read
+        {
+            const char *stockList = "gears 1 3.5 6 9.5 14 21 high 4", *rolledList = "gears 1.42 4.22 7.02 10.94 15.98 23.82 high 4.72",
+                       *otherList = "gears 1.2 3.5 6 9.5 14 21 high 4";
+            const bool lists = PartSame(L"Gearbox", Wide(rolledList), Wide(stockList), "") && PartSame(L"Gearbox", Wide(stockList), Wide(rolledList), "") &&
+                               !PartSame(L"Gearbox", Wide(otherList), Wide(stockList), "");
+            const bool toName = PartSame(L"Gearbox", Wide(rolledList), L"Box of a mod 6-Speed", stockList) &&
+                                !PartSame(L"Gearbox", Wide(otherList), L"Box of a mod 6-Speed", rolledList) && !PartSame(L"Gearbox", Wide(rolledList), L"Box of a mod 6-Speed", "") &&
+                                !PartSame(L"Gearbox", L"Box of a mod 6-Speed", Wide(stockList), stockList);
+            const bool engine = !PartSame(L"Engine", Wide(rolledList), Wide(stockList), "") && PartSame(L"Engine", L"e_x", L"e_x", "");
+            const std::wstring gf = SetupFile(kSetupTruck, "gears_test_kind");
+            DeleteFileW(gf.c_str());
+            const char *was = "{0D000000-0000-0000-0000-0000000000A1}", *now = "{0D000000-0000-0000-0000-0000000000A2}";
+            WritePrivateProfileStringW(SectionOf(kEngineSection, was).c_str(), L"Own", L"1", gf.c_str());
+            TruckPartsPut("gears_test_kind", was, TruckPartsOf("e_x", rolledList));
+            OdoWrite("gears_test_kind", was, 2000.0, 100.0);
+            TruckPartsPut("gears_test_kind", was, TruckPartsOf("e_x", rolledList));
+            const truckid::Parts stockParts = TruckPartsOf("e_x", stockList);
+            auto same = [](const std::wstring &k, const std::wstring &r, const std::wstring &n) { return PartSame(k, r, n, ""); };
+            auto gone = []() { return false; };
+            auto never = [](const char *) { return false; };
+            truckid::Last last = {};
+            truckid::LastLeft(last, "gears_test_kind", was);
+            const int lastText = truckid::LastFind(gf, TruckIdAllPrefixes(), last, "gears_test_kind", now, stockParts, true, false, gone);
+            const int lastSame = truckid::LastFind(gf, TruckIdAllPrefixes(), last, "gears_test_kind", now, stockParts, true, false, gone, same);
+            const truckid::Match textMatch = truckid::MatchFind(gf, TruckIdPrefixes(), now, stockParts, true, truckid::Now(), never);
+            const truckid::Match sameMatch = truckid::MatchFind(gf, TruckIdPrefixes(), now, stockParts, true, truckid::Now(), never, same);
+            DeleteFileW(gf.c_str());
+            Check(lists && toName && engine && lastText == truckid::kLastOtherParts && lastSame == truckid::kLastTaken && textMatch.why == truckid::kMatchNone &&
+                      sameMatch.why == truckid::kMatchOne && !strcmp(sameMatch.id, was),
+                  "parts compare: a gearbox's gear list moved by a tire's roll is the same, another is not; a recorded list against a name now is the same only "
+                  "where it matches the gears read now; other keys go by their text; the last truck and the match take the moved list with the stock one read");
+        }
         // OdometerHours per kind
         const bool hoursOff = !OdoHoursOf(kind);
         OdoHoursPut(kind, true);

@@ -997,6 +997,29 @@ int main()
         Check(noName && named && atDefault && fitted && !strcmp(gearboxKey, "g_scout_highway_long") && !strcmp(gearsKey, "gears 3 6 12 16 high 8"),
               "gearbox: the name of the gearbox fitted at + 0x9c0, the truck's default at + 0x9a0 only while none is fitted, whatever they begin "
               "with, else the first name with g_ near them, a text that is no name passed over; without a name it goes by its gears");
+        // a name with spaces at the two fixed places (the Reviewer's F5a on the drive of 2026-11-09); "=", a control
+        // character or a space at an end is none there; the scan still takes "g_" names without spaces ("g_ab cd" above)
+        {
+            PutText(kVehicle + 0x9c0, "Box of a mod 6-Speed", kTexts + 0x3c0);
+            const bool spaced = TruckGearboxName(kMemory, kVehicle, atName, atAt, atStock) && !strcmp(atName, "Box of a mod 6-Speed") && atAt == 0x9c0;
+            PutText(kVehicle + 0x9a0, "Box (mod) 5.1", 0);
+            const bool stockSpaced = TruckGearboxName(kMemory, kVehicle, atName, atAt, atStock) && !strcmp(atStock, "Box (mod) 5.1");
+            bool refused = true;
+            for (const char *bad : { "Box=mod", "Box\tmod", " Box mod", "Box mod ", "Box;mod", "[Box]" })
+            {
+                PutText(kVehicle + 0x9c0, bad, 0);
+                refused &= TruckGearboxName(kMemory, kVehicle, atName, atAt, atStock) && atAt == 0x9a0 && !strcmp(atName, "Box (mod) 5.1");
+            }
+            char plain[kMaxText];
+            size_t plainLength = 0;
+            PutText(kVehicle + 0x9c0, "Box of a mod", 0);
+            const bool scanRule = !TruckNameText(kMemory, kVehicle + 0x9c0, plain, plainLength) && TruckNameText(kMemory, kVehicle + 0x9c0, plain, plainLength, true);
+            PutText(kVehicle + 0x9a0, "box-of_a_mod", 0);
+            PutText(kVehicle + 0x9c0, "g_lrd_110_highway", kTexts + 0x3c0);
+            Check(spaced && stockSpaced && refused && scanRule,
+                  "gearbox: a name with spaces and signs at + 0x9c0 and + 0x9a0; one with =, ;, a bracket, a control character or a space at an end is "
+                  "none there; the plain rule without spaces stays for the scan");
+        }
         Put(kModel + 0x784, 9007.0f);
         const float massRead = TruckMass(kMemory, kModel);
         Put(kModel + 0x784, 5.0f);
@@ -3260,6 +3283,28 @@ int main()
         const bool named = !strcmp(key, "g_arocs_highrange");
         Check(four && parsed && more && off && names && named, "gearbox keys: one gearbox's four keys of the logs match within 2 %; a gear more, or one off by 5 %, does not; "
                                                                "a name matches nothing, and a named gearbox keeps its name");
+        // one ratio of the tops (the Reviewer's F5b): each gear's (a + 2.5) and the high gear's (a + 2) times a tire's
+        // roll, as Tire Inflation moves them, is the same gearbox from 0.8 to 1.25; another shape or 1.3 is not
+        auto movedKey = [](const float *g, int top, float high, float roll, float oneMore, char *out, size_t size) {
+            TruckRaw r = {};
+            r.gearSpeeds = top + 2;
+            for (int i = 1; i <= top; i++) r.gearSpeed[i] = roll * g[i - 1] + (roll - 1.0f) * 2.5f;
+            r.gearSpeed[1] *= oneMore;
+            r.gearSpeed[top + 1] = roll * high + (roll - 1.0f) * 2.0f;
+            GearboxKey(r, "", out, size);
+        };
+        const float g6[6] = { 1.0f, 3.5f, 6.0f, 9.5f, 14.0f, 21.0f };
+        char stockKey[128], rolled[128], tooFar[128], odd[128], down[128];
+        movedKey(g6, 6, 4.0f, 1.0f, 1.0f, stockKey, sizeof stockKey);
+        movedKey(g6, 6, 4.0f, 1.12f, 1.0f, rolled, sizeof rolled);
+        movedKey(g6, 6, 4.0f, 1.3f, 1.0f, tooFar, sizeof tooFar);
+        movedKey(g6, 6, 4.0f, 1.12f, 1.2f, odd, sizeof odd);
+        movedKey(g6, 6, 4.0f, 0.85f, 1.0f, down, sizeof down);
+        Check(GearboxKeysMatch(stockKey, rolled) && GearboxKeysMatch(rolled, stockKey) && GearboxKeysMatch(stockKey, down) && !GearboxKeysMatch(stockKey, tooFar) &&
+                  !GearboxKeysMatch(stockKey, odd) && GearboxKeysMatch(stockKey, "gears 1 3.5 6 9.5 14 21 high 4.0") &&
+                  !GearboxKeysMatch(stockKey, "gears 1 3.5 6 9.5 14 21 4"),
+              "gearbox keys: tops in one ratio (x1.12 and x0.85, the high gear's by + 2) are one gearbox; x1.3, one gear off the ratio, or a list without "
+              "its high gear is not");
     }
 
     // the four sliders reworked (the addendum of 2 November, 13:18): at the defaults the tune reads each wheel's stock
