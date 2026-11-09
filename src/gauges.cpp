@@ -779,7 +779,8 @@ static void WriteIni(const GaugeSettings &s)
     whole(L"Input", s.input);
     whole(L"Powertrain", s.powertrain ? 1 : 0);
     whole(L"RoadLoad", s.roadLoad ? 1 : 0);
-    whole(L"CrawlHold", s.crawlHold ? 1 : 0);
+    WritePrivateProfileStringW(kIniSection, L"CrawlHold", nullptr, ini.c_str()); // the Crawl hold went with the torque cut: its key dropped
+    num(L"EngineBrake", s.engineBrake);
     whole(L"ModEngineSpeed", s.modEngineSpeed ? 1 : 0);
     num(L"EngineSpeedTop", s.engineSpeedTop);
     num(L"RoadCdA", s.roadCdA);
@@ -1191,7 +1192,8 @@ static void ReadIni(GaugeSettings &s)
                         L"; EngineShare: how much of the mod's engine the game gets, 0 to 100 percent (50: half way between the two).\n"
                         L"; RoadLoad=1 (with Powertrain, on by default): the air's drag taken off, once each gear's pull is learned floored on flat ground with the wheels' drag left out.\n"
                         L";   RoadCdA: the drag's area in m2, 0 by the truck's mass (1.1 under 4 t, 3.5 under 10 t, else 6); a truck's file may set it.\n"
-                        L"; CrawlHold=1 (with Powertrain, on by default): L-, L and L+ of the mod gearbox are held just under their top, so the game does not cut its pull there and surge.\n"
+                        L"; EngineBrake (with Powertrain at Gearbox=2): in a gear held by hand the truck pulls with the mod engine alone, no cut at the gear's top;\n"
+                        L";   with the foot off the engine holds it back by this share of the gear's torque at the redline, in percent, 0 to 30 (15; 0 lets it roll).\n"
                         L"; ModEngineSpeed=1 (with Powertrain, on by default): the game tachometer, sound and effects follow the mod engine; its fuel burn and stall check keep the game's own.\n"
                         L";   EngineSpeedTop: the mod engine speed the game reads as its top, as a share of the redline, 0.5 to 1.5 (1: the redline; idle is its 0).\n"
                         L";   Base1.<engine>, Base2.<engine> ... in a truck's file: each gear's acceleration at the game's own pull, floored, learned.\n"
@@ -1253,7 +1255,7 @@ static void ReadIni(GaugeSettings &s)
     s.input = IniInt(L"Input", s.input, ini);
     s.powertrain = IniBool(L"Powertrain", s.powertrain, ini);
     s.roadLoad = IniBool(L"RoadLoad", s.roadLoad, ini);
-    s.crawlHold = IniBool(L"CrawlHold", s.crawlHold, ini);
+    s.engineBrake = IniFloat(L"EngineBrake", s.engineBrake, ini); // CrawlHold= is read no more: the torque cut took its place
     s.modEngineSpeed = IniBool(L"ModEngineSpeed", s.modEngineSpeed, ini);
     s.engineSpeedTop = IniFloat(L"EngineSpeedTop", s.engineSpeedTop, ini);
     s.roadCdA = IniFloat(L"RoadCdA", s.roadCdA, ini);
@@ -3523,6 +3525,7 @@ static DamagePath g_path = {};
 static bool g_pathFound = false, g_hooksReady = false;
 static DrivePlace g_drive = {}; // the game's wheels' drive, for the creep (g_drive.drive 0: not found)
 static EngineSpeedPlace g_speed = {}; // the game's engine speed and its fuel's and stall's calls (g_speed.speed 0: not found)
+static GearTorquePlace g_torque = {}; // the game's gear torque and the drive's call of it, for the torque cut (g_torque.torque 0: not found)
 
 // The game's gearbox functions in its code (game_code.h), looked for once a truck is driven, so a manual transmission
 // mod has hooked its own by then: where each one is, or that another mod holds it. Without SMT in the game, the places
@@ -3557,8 +3560,13 @@ static void GameCodeLook()
     else Log(L"creep: %S, so an idling truck stands as in the game", g_drive.why);
     if (EngineSpeedFind(code.data(), from, to, g_speed))
         Log(L"engine speed: the game's engine speed at +%zx, its fuel's call returning to +%zx and its stall's to +%zx (both keep the game's own); "
-            L"hooked once Powertrain and ModEngineSpeed are on with a truck driven", g_speed.speed, g_speed.fuelBack, g_speed.stallBack);
+            L"hooked once Powertrain is on with a truck driven and ModEngineSpeed on or Gearbox=2", g_speed.speed, g_speed.fuelBack, g_speed.stallBack);
     else Log(L"engine speed: %S, so the game's engine speed stays its own", g_speed.why);
+    // the gear torque and the drive's call of it, for the torque cut (BRIEF_drivetrain_2_torque_cut.md)
+    if (GearTorqueFind(code.data(), from, to, g_drive.drive, g_torque))
+        Log(L"torque cut: the game's gear torque at +%zx, the drive's call returning to +%zx (the drive at +%zx); the other calls keep the game's own; "
+            L"hooked once Powertrain is on at Gearbox=2 with a truck driven", g_torque.torque, g_torque.driveBack, g_drive.drive);
+    else Log(L"torque cut: %S, so the game's torque stays its own", g_torque.why);
     const FunctionFind &shift = finds[kFnShiftGear];
     // one place only, also behind another mod's jump
     if ((shift.state == kFnFound || shift.state == kFnHeld) && shift.count == 1) g_shiftGear = (GameShiftFn)(g_base + shift.at);
@@ -3645,6 +3653,10 @@ static void GearboxHooksStep(const GaugeSettings &s)
     if (act & kGateTruckLeft) Log(L"gearbox damage: the truck update's hook is not needed now; left in place until the game is started again");
 }
 
+// The settings the torque cut needs (BRIEF_drivetrain_2_torque_cut.md): Powertrain on, the mod's own gearbox
+// (Gearbox=2) and some of the mod's engine (EngineShare above 0). It acts in a gear held by hand (the torque block).
+static bool TorqueCutWanted(const GaugeSettings &s) { return s.powertrain && s.gearbox == kGearboxOwn && s.engineShare > 0; }
+
 // The hook on the game's wheels' drive (gearbox_hooks.cpp, CreepHook): attached the first time Creep, Probe or the
 // damper is on with a truck driven, at any level of Gearbox, and left in place until the game is started again. With
 // Creep off it gives no share (TruckPass hands it none); without Probe=1 or the damper the step probe has no block and
@@ -3656,12 +3668,13 @@ static void CreepHookStep(const GaugeSettings &s, bool driving)
 {
     static bool tried = false;
     const bool damper = SuspFeaturesOn(s) || TuneOff(s);
-    if (tried || (!s.creep && !s.probe && !damper) || !driving || !g_drive.drive) return;
+    const bool cut = TorqueCutWanted(s); // the torque cut holds the drive's throttle at 1 through this hook
+    if (tried || (!s.creep && !s.probe && !damper && !cut) || !driving || !g_drive.drive) return;
     tried = true;
     DriveStepSet(SuspStepHook);
     char why[160] = "";
     if (CreepHook((uintptr_t)(g_base + g_drive.drive), why, sizeof why))
-        Log(L"creep: the game's wheels' drive hooked (%s): %s", s.creep ? L"Creep=1" : s.probe ? L"Probe=1" : L"the suspension's settings",
+        Log(L"creep: the game's wheels' drive hooked (%s): %s", s.creep ? L"Creep=1" : s.probe ? L"Probe=1" : cut ? L"the torque cut" : L"the suspension's settings",
             s.creep ? L"an idling truck in gear moves, and each wheel's travel is read every physics step for the probe and the damper" : L"each wheel's travel is read every physics step");
     else Log(L"creep: %S, so an idling truck stands as in the game and the travel is not read every step", why);
 }
@@ -3669,16 +3682,34 @@ static void CreepHookStep(const GaugeSettings &s, bool driving)
 // The hook on the game's engine speed (gearbox_hooks.cpp, EngineSpeedHook): attached the first time Powertrain and
 // ModEngineSpeed are on with a truck driven, with every other thread suspended (the Reviewer's S4), and left in place
 // until the game is started again; unticked, nothing is published and it calls the game's own through.
+// Also for the torque cut, whose fuel answer goes through this hook (the Reviewer's M3): with ModEngineSpeed off it
+// publishes nothing there and every other call passes.
 static void EngineSpeedHookStep(const GaugeSettings &s, bool driving)
 {
     static bool tried = false;
-    if (tried || !s.powertrain || !s.modEngineSpeed || !driving || !g_speed.speed) return;
+    if (tried || !s.powertrain || !(s.modEngineSpeed || TorqueCutWanted(s)) || !driving || !g_speed.speed) return;
     tried = true;
     char why[160] = "";
     if (EngineSpeedHook((uintptr_t)(g_base + g_speed.speed), (uintptr_t)(g_base + g_speed.fuelBack), (uintptr_t)(g_base + g_speed.stallBack), why, sizeof why))
         Log(L"engine speed: the game's engine speed hooked at +%zx: while Powertrain drives the truck its tachometer, sound and effects read the mod engine, "
-            L"0 at idle to 1 at %.2f of the redline (EngineSpeedTop); the fuel's and the stall's calls keep the game's own", g_speed.speed, s.engineSpeedTop);
-    else Log(L"engine speed: %S, so the game's engine speed stays its own", why);
+            L"0 at idle to 1 at %.2f of the redline (EngineSpeedTop), with ModEngineSpeed on; the fuel's and the stall's calls keep the game's own, the fuel's "
+            L"scaled to the game's pull while the torque cut holds the throttle", g_speed.speed, s.engineSpeedTop);
+    else Log(L"engine speed: %S, so the game's engine speed stays its own%s", why, TorqueCutWanted(s) ? L" and the torque cut stays off" : L"");
+}
+
+// The hook on the game's gear torque (gearbox_hooks.cpp, GearTorqueHook) for the torque cut: attached the first time
+// Powertrain is on at Gearbox=2 with a truck driven, every other thread suspended (the Reviewer's S5), and left in place
+// until the game is started again; with no slot published every call gets the game's own.
+static void GearTorqueHookStep(const GaugeSettings &s, bool driving)
+{
+    static bool tried = false;
+    if (tried || !TorqueCutWanted(s) || !driving || !g_torque.torque || !g_torque.driveBack) return;
+    tried = true;
+    char why[160] = "";
+    if (GearTorqueHook((uintptr_t)(g_base + g_torque.torque), (uintptr_t)(g_base + g_torque.driveBack), why, sizeof why))
+        Log(L"torque cut: the game's gear torque hooked at +%zx: in a gear held by hand the truck pulls with the mod engine alone, the speed part worked out "
+            L"in the drive's own step; engine braking %.0f %% at the redline", g_torque.torque, s.engineBrake);
+    else Log(L"torque cut: %S, so the game's torque stays its own", why);
 }
 
 // A file's time as the clock on the wall shows it, hh:mm:ss.
@@ -3729,10 +3760,10 @@ static void LogSettings(const GaugeSettings &s)
         s.requireClutch, s.requireGearHeld, s.skipNeutral, s.downStaysForward, s.ignoreShifter, s.backToA);
     Log(L"settings: the game's gear display %s (GameGearDisplay %d)", s.gameGearDisplay == kGameGearGame ? L"as the game has it" : s.gameGearDisplay == kGameGearOff ? L"off always"
                                                                     : L"off while the mod's own gearbox drives", s.gameGearDisplay);
-    if (s.powertrain) Log(L"settings: powertrain on: the truck pulls with %d percent of the mod's engine and converter, through the game's torque factor; road load %s; crawl hold %s; "
+    if (s.powertrain) Log(L"settings: powertrain on: the truck pulls with %d percent of the mod's engine and converter, through the game's torque factor; road load %s; %s; "
                           L"the game's engine speed %s",
                           s.engineShare, !s.roadLoad ? L"off" : s.powertrain ? L"on (the air's drag, once each gear's pull is learned)" : L"on, acts with Powertrain on",
-                          s.crawlHold ? L"on (L-, L and L+ held by hand held under their top, from 0.70 of it to 0.05 of the factor at 0.95)" : L"off",
+                          TorqueCutWanted(s) ? L"in a gear held by hand the torque cut: the mod engine alone, no cut at the gear's top" : L"no torque cut (it needs Gearbox=2 and EngineShare above 0)",
                           s.modEngineSpeed ? L"the mod engine's (ModEngineSpeed=1; the fuel's and the stall's calls keep the game's own)" : L"its own (ModEngineSpeed=0)");
     else Log(L"settings: powertrain off: the truck pulls with the game's own engine (Powertrain=1 hands it the mod's)");
     Log(s.creep && s.creepManual ? L"settings: creep on, in a gear picked by hand too (CreepManual): an automatic through the converter to walking pace, a gear picked by hand at its idle speed"
@@ -3948,7 +3979,12 @@ struct TruckWatch
     TorqueHand hand;            // the engine's torque handed to the game (Powertrain)
     float liftX, liftRoof;      // the lift's x and the roof there on the last pass, for the probe (review 11)
     SpinMean spinMean;          // the locked path's wheel spin, its mean over the last passes in rad/s (SpinMeanStep)
-    CrawlHold crawl;            // the crawl hold's last x and rising rate (CrawlHoldStep)
+    bool cutActs;               // the torque cut acted on the last pass (BRIEF_drivetrain_2_torque_cut.md): the learners rest, the fuel reads B4s
+    float cutFloor;             // the creep's share on the last pass: the cut's least F while it acts (CreepManual)
+    ULONGLONG cutProbeAt;       // the cut's probe line, once a second
+    TorqueCutCounts cutWas;     // the detour's counts at the last probe line
+    bool kicksKnown;            // kicksSeen holds GearboxKicks as of a pass
+    long kicksSeen;
     bool creeping;              // the creep's share was above 0 on the last pass (models.h, CreepShare)
     float creepFor;             // seconds until its next line in the log
     int creepLines;             // its lines since it began
@@ -4058,6 +4094,60 @@ struct TruckWatch
 
 // The mod's gearbox has the truck in a position of the player's own (not A): the engine runs behind its clutch.
 static bool GearboxManual(const TruckWatch &w) { return GearboxHeldBy(w.take.driving, w.pos); }
+
+// The torque cut's slot for this pass (torque_cut.h): the map with the clutch fully in (locked), else the torque through
+// the clutch as the scalar (the mod engine's own inertia is in it, so a pass's delay does no harm there); the creep's
+// share of the last pass as the least F; the engine held back (Torque) on what it pushes, not on its braking.
+static TorqueCutSlot TorqueCutSlotOf(const TruckWatch &w, const TruckRaw &raw, const GaugeSettings &s, const GaugeScale &scale, const TorqueCurve &curve, float tachTop,
+                                     bool locked, float gearTop)
+{
+    TorqueCutSlot c = {};
+    c.vehicle = w.refs.vehicle;
+    c.action = w.refs.action;
+    c.mode = locked ? kCutMap : kCutScalar;
+    const float held = w.profile.torque > 0.0f && w.profile.torque < 1.0f ? w.profile.torque : 1.0f;
+    const float carried = isfinite(w.clutch.carried) && !w.clutch.dead ? w.clutch.carried : 0.0f;
+    c.scalar = SettingsRange(carried > 0.0f ? carried * held : carried, -1.0f, kClutchHold);
+    c.floor = w.cutFloor > 0.0f ? w.cutFloor : 0.0f;
+    c.share = SettingsRange(s.engineShare / 100.0f, 0.0f, 1.0f);
+    c.pedal = TruckPedal(raw);
+    // the wheels' speed as this pass read it, in the gear's direction, for a step whose own read fails
+    const float dir = raw.gearEngaged < 0 ? -1.0f : 1.0f;
+    float sum = 0.0f;
+    int n = 0;
+    for (int i = 0; i < raw.wheels; i++)
+        if (raw.drive[i] == 1 || (raw.drive[i] == 2 && raw.awd)) sum += raw.spin[i] * dir, n++;
+    c.sLast = n && isfinite(sum) ? fmaxf(sum / (float)n, 0.0f) : 0.0f;
+    TorqueCutMap &m = c.map;
+    m.pedal = c.pedal; // the lead's N1: the raw pedal, linear as the game's pull (the game's script already smooths + 0x44)
+    m.limit = w.power.cold * w.power.boost;
+    m.load = w.roadShare;
+    m.held = held;
+    m.brake = s.engineBrake / 100.0f;
+    m.top = gearTop;
+    m.idle = scale.idle;
+    m.redline = scale.redline;
+    m.tachTop = tachTop;
+    m.curve.n = curve.n < kCutPoints ? curve.n : kCutPoints;
+    for (int i = 0; i < m.curve.n; i++) m.curve.x[i] = curve.x[i], m.curve.y[i] = curve.y[i];
+    m.governFrom = kGovernFrom;
+    m.governTo = kGovernTo;
+    return c;
+}
+
+// Why the torque cut does not act, for its log line (the first that holds).
+static const wchar_t *TorqueCutWhyNot(const GaugeSettings &s, bool want, bool held, bool hooks, int gear, float top)
+{
+    if (!s.powertrain) return L"Powertrain is off";
+    if (!want) return L"the engine is off or the pull test is armed";
+    if (s.gearbox != kGearboxOwn) return L"the gearbox is not the mod's own (Gearbox=2)";
+    if (s.engineShare <= 0) return L"EngineShare is 0";
+    if (!held) return L"no gear held by hand (A drives, or the mod's gearbox does not have the truck)";
+    if (!hooks) return L"its hooks are not all in (the gear torque, the engine speed and the wheels' drive)";
+    if (gear == 0) return L"in neutral";
+    if (!(top > 0.0f)) return L"the gear has no top";
+    return L"the truck is not read";
+}
 
 // The mod's gearbox lets the truck go: the game's own shifting passes again.
 static void GearboxLetGo(TruckWatch &w)
@@ -5542,6 +5632,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         // the engine's torque the mod handed to the game: the game's own share back, where the truck still is
         TorqueGive(m, w.refs, false, TorqueHandStep(w.hand, false, 0, 0, 0.0f, 1.0f));
         CreepGive(0, 0.0f);
+        TorqueCutPublish(nullptr);
+        w.cutActs = false;
         w.creeping = false;
         w.creep = CreepModel{};
         w.creepStall = false;
@@ -5610,6 +5702,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     {
         CreepGive(0, 0.0f);
         EngineSpeedPublish(nullptr, 0.0f);
+        TorqueCutPublish(nullptr); // the torque cut's too: every call of the gear torque passes until the truck is driven again
+        w.cutActs = false;
         w.creeping = false;
         w.creep = CreepModel{};
         w.creepStall = false;
@@ -5659,7 +5753,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         if (sameBox) memcpy(raw.gearTop, w.gearTop, sizeof raw.gearTop);
         int plateauGear = 0;
         float plateauTop = 0.0f;
-        if (sameBox && topTruck[0] && GearTopStep(w.topLearn, raw, dt, w.gradeSinLast, plateauGear, plateauTop))
+        if (sameBox && topTruck[0] && !w.cutActs && GearTopStep(w.topLearn, raw, dt, w.gradeSinLast, plateauGear, plateauTop))
         {
             const float formula = TruckGearFormulaTop(raw, plateauGear), was = w.gearTop[plateauGear], share = formula > 0.0f ? plateauTop / formula : 0.0f;
             const bool farOff = GearTopShareUsable(was) && GearTopFar(was, share);
@@ -5711,13 +5805,18 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         const bool pedalDown = TruckPedal(raw) > 0.5f;
         if (pedalDown && !w.pedalDown) SoundQuiet();
         w.pedalDown = pedalDown;
-        RangeStep(w.range, kind, raw, dt);
+        // the game's burn goes by B4, which the torque cut holds at 1 at any pedal: the range and the burn read the
+        // game's pull without its lag (B4s, the detour's) while the cut has the truck (the Reviewer's M3)
+        TruckRaw fuelRaw = raw;
+        float b4s = 0.0f;
+        if (TorqueCutB4sGet(w.refs.vehicle, b4s)) fuelRaw.actionB4 = b4s;
+        RangeStep(w.range, kind, fuelRaw, dt);
         // the odometer (BRIEF_odometer.md, the Reviewer's should 6): inside the models' gate, real seconds
         OdoCount(w.odoMetres, w.odoSeconds, raw.speed, dt, TruckEngineOn(raw));
         w.odoMoving = fabsf(raw.speed) >= kOdoMoving;
         // the burn for the readout: the game's rule, nothing with the engine off, smoothed so it does not flicker with the pedal
         // (the rule's numbers not read: not known)
-        const float burnNow = TruckFuelRate(raw);
+        const float burnNow = TruckFuelRate(fuelRaw);
         if (!(burnNow >= 0.0f)) w.burnKnown = false;
         else
         {
@@ -6088,6 +6187,17 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                     Log(L"gearbox: the game's L+ cannot be told from its first gear (the same gear, the plain power), so the shifter's L+ reads as the first gear");
                 }
             }
+            // the gearbox damage's kick to N (review\own_drivetrain_research.md C.5): the game's own ShiftGear(0), refused
+            // while the mod gearbox holds a gear by hand (GearboxKicks), puts the mod gearbox in N as the player's N would;
+            // the game's gear 0 then gets the game's own answer from the torque cut's detour, so the truck stops pulling
+            const long kicks = GearboxKicks();
+            if (own && w.kicksKnown && kicks != w.kicksSeen && GearboxManual(w) && w.pos.pos != kPosN)
+            {
+                if (!(shifterAsked && ask.kind == kAskN)) GearboxActionsAsk(acts, GearboxAsk{ kAskN, 0 }, boxTruck.top);
+                Log(L"gearbox damage: the game kicked the gearbox to N");
+            }
+            w.kicksSeen = kicks;
+            w.kicksKnown = true;
             GearboxPosOrders box = GearboxPosStep(w.pos, options, acts, boxNow, autoGear, dt);
             // at Gearbox 0 and 1 the game's shifter is the player's: the mod's automatic writes and shifts only within
             // A, never into N or R and never out of a position of the game's (0.18.2's hotfix, the reviewer's item 4)
@@ -6246,7 +6356,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             }
             float learned = 0.0f, added = 0.0f, dampMean = 0.0f;
             const int done = baseTruck[0] && baseEngine[0]
-                                 ? BaseLearnStep(w.baseLearn, g, clean && BaseLearnPlainPower(g, raw.powerFactor), w.accel, damp, raw.torqueFactor, pedalNow, groundX, gradeSin,
+                                 ? BaseLearnStep(w.baseLearn, g, clean && BaseLearnPlainPower(g, raw.powerFactor) && !w.cutActs, w.accel, damp, raw.torqueFactor, pedalNow, groundX, gradeSin,
                                                  w.baseSettled, dt, learned, &added, &dampMean)
                                  : 0;
             if (probe && added > 0.0f && !done && g >= 1 && g < kMaxGears && GetTickCount64() - w.baseSaidAt[g] >= 10000)
@@ -6335,13 +6445,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             const SpinLift byspin = locked ? SpinLiftStep(w.spinMean, TruckDrivenSpin(raw), gearTop, raw.gearEngaged, w.refs.vehicle) : SpinLift{ 0.0f, kTorqueFactorMost, false };
             const float x = locked ? byspin.x : LiftShare(TruckDrivenSpin(raw), ground, w.gearbox.grip, gearTop);
             const float spinMost = byspin.cap;
-            // Crawl hold (THE VERDICT of BRIEF_low_gear_sway.md): in L-, L and L+ held by hand the factor at most H at the mean's
-            // x led by its rising rate, so the truck settles under the game's cut at the top; the probe's roof shows it
-            const bool crawl = CrawlHoldActs(s.crawlHold, locked, w.pos.pos);
-            if (!crawl) w.crawl.had = false;
-            const float hold = crawl ? CrawlHoldStep(w.crawl, byspin.x, dt, raw.gearEngaged, w.refs.vehicle) : kTorqueFactorMost;
             w.liftX = x;
-            w.liftRoof = fminf(locked ? fminf(SpinRoof(TorqueRoof(autoClass), x), spinMost) : LiftRoof(TorqueRoof(autoClass), x), hold);
+            w.liftRoof = locked ? fminf(SpinRoof(TorqueRoof(autoClass), x), spinMost) : LiftRoof(TorqueRoof(autoClass), x);
             const float ratio = w.take.driving && !GearboxManual(w) ? w.gearbox.ratio : 1.0f;
             // the road load (RoadLoad): the air's drag over this gear's learned pull at this pedal, taken off before the
             // fall's make-up; nothing standing, in reverse, with the foot off, or before the gear's pull is learned
@@ -6351,18 +6456,36 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             w.roadShare = s.roadLoad && roadGear >= 1 && roadGear < kMaxGears && ground >= kStandStill
                               ? RoadLoadShare(w.roadLoadA, roadPedal, w.baseUse[roadGear]) : 0.0f;
             if (!want || !(w.roadShare > 0.0f)) w.roadShare = w.roadLoadA = 0.0f; // none taken off
+            // the torque cut (BRIEF_drivetrain_2_torque_cut.md): in a gear held by hand of the mod's own gearbox the drive's
+            // call of the game's gear torque is answered with the mod engine alone, its speed part worked out in the drive's
+            // own step (torque_cut.h), the pedal, the clutch and the creep from this pass; the drive's throttle held at 1 and
+            // its fuel read by the game's pull without its lag (B4s). The torque factor is not written meanwhile: the game's
+            // own share is given back once, so engine damage's own cut still acts through it
+            const bool cutHooks = GearTorqueHooked() && EngineSpeedHooked() && CreepHooked();
+            const bool cutActs = want && own && GearboxManual(w) && TorqueCutWanted(s) && cutHooks && raw.gearEngaged != 0 && gearTop > 0.0f && w.refs.action != 0;
+            if (cutActs)
+            {
+                const TorqueCutSlot slot = TorqueCutSlotOf(w, raw, s, scale, curve, tachTop, locked, gearTop);
+                TorqueCutPublish(&slot);
+            }
+            else TorqueCutPublish(nullptr);
+            if (cutActs != w.cutActs)
+            {
+                if (cutActs) Log(L"torque cut: acting in %S (the game's gear %d): the truck pulls with the mod engine alone, %d percent of it", GearboxPosName(w.pos.pos), raw.gearEngaged, s.engineShare);
+                else Log(L"torque cut: off, %s; the game's own torque again", TorqueCutWhyNot(s, want, own && GearboxManual(w), cutHooks, raw.gearEngaged, gearTop));
+            }
+            w.cutActs = cutActs;
             const bool handWas = w.hand.on;
             const float gameWas = w.hand.game;
             // held back to the engine's Torque share where one is set; the lift's roof is the truck's class's, fading over
             // the gear's last three tenths (TorqueRoof, LiftRoof); a rise paced by the pass, a new gear (the game's
             // engaged gear) at once
-            TorqueGive(m, w.refs, true, TorqueHandStep(w.hand, want, w.refs.action, w.refs.vehicle, raw.torqueFactor,
-                                                 fminf(TorqueHeld(TorqueBlend(fminf(TorqueLift(w.power.curve, w.power.cold * w.power.boost, TruckPedal(raw), ratio, x,
-                                                                                               TorqueRoof(autoClass), w.roadShare),
-                                                                                    spinMost),
-                                                                              s.engineShare / 100.0f),
-                                                                  w.profile.torque),
-                                                       hold),
+            TorqueGive(m, w.refs, true, TorqueHandStep(w.hand, want && !cutActs, w.refs.action, w.refs.vehicle, raw.torqueFactor,
+                                                 TorqueHeld(TorqueBlend(fminf(TorqueLift(w.power.curve, w.power.cold * w.power.boost, TruckPedal(raw), ratio, x,
+                                                                                         TorqueRoof(autoClass), w.roadShare),
+                                                                              spinMost),
+                                                                        s.engineShare / 100.0f),
+                                                            w.profile.torque),
                                                  dt, raw.gearEngaged, locked, byspin.loose));
             if (w.hand.on != handWas)
                 Log(w.hand.on ? L"powertrain: the engine's torque handed to the game, the game's own torque factor %.3f" : L"powertrain: the game's own torque factor %.3f given back",
@@ -6397,6 +6520,26 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 }
                 Log(L"probe: engine speed: the mod's %.3f (%s), %ld calls answered so far, the last %.3f; the game's own by caller:%S%s", w.speedShare < 0.0f ? 0.0f : w.speedShare,
                     speedOurs ? L"handed" : L"not handed", answered, last, n ? line : " none yet", full ? " (more callers than kept)" : "");
+            }
+            // the torque cut's probe (Probe=1), once a second: acting or why not; the detour's last answer (the wheels'
+            // speed s, its share of the gear's top and the rpm there, F, the bracket after the blend and the least F, the
+            // game's T and the T answered, D4 and B4s); the slot's scalar and share; the calls answered and passed since the
+            // last line, the other callers' (the stall's among them) and the reads that failed; the steps where the answered
+            // bracket fell by 0.3 or more since the last line, the 60 Hz chatter a line a second cannot show (the Reviewer's S6)
+            if (probe && GearTorqueHooked() && now >= w.cutProbeAt)
+            {
+                w.cutProbeAt = now + 1000;
+                TorqueCutCounts c = {};
+                TorqueCutCountsGet(c);
+                const TorqueCutCounts &before = w.cutWas;
+                const float sTop = gearTop > 0.0f ? c.s / gearTop : 0.0f;
+                Log(L"probe: torque cut: %s; s %.2f rad/s (%.2f of the top %.2f, %.0f rpm), F %.3f, the bracket %.3f (the least %.3f), the scalar %.3f, the share %.2f; "
+                    L"the game's T %.3f, answered %.3f; D4 %.2f, B4s %.3f; calls answered %ld, passed %ld, the other callers' %ld, reads failed %ld; falls of 0.3 or more "
+                    L"in one step %ld; the throttle held at 1 %s",
+                    cutActs ? L"acting" : TorqueCutWhyNot(s, want, own && GearboxManual(w), cutHooks, raw.gearEngaged, gearTop), c.s, sTop, gearTop, sTop * scale.redline,
+                    c.f, c.bracket, w.cutFloor, locked ? 0.0f : SettingsRange(w.clutch.carried, -1.0f, kClutchHold), s.engineShare / 100.0f, c.stock, c.torque, c.d4, c.b4s,
+                    c.answered - before.answered, c.passed - before.passed, c.others - before.others, c.faults - before.faults, c.falls - before.falls, cutActs ? L"on" : L"off");
+                w.cutWas = c;
             }
         }
         // the creep (review 11's addendum): an idling truck in gear moves, its drive throttle raised for this truck alone
@@ -6446,8 +6589,11 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 w.creep.sinceShift = kCreepQuiet;
             }
             const float share = on && !shiftQuiet ? CreepStep(w.creep, raw, scale, converter, grip, dt, &creepCase, stalls, holdMost, mayStall,
-                                                 shifterLow && !w.take.driving && raw.automatic == 0) : 0.0f;
-            CreepGive(share > 0.0f ? w.refs.action : 0, share);
+                                                 shifterLow && !w.take.driving && raw.automatic == 0, w.cutActs) : 0.0f;
+            // while the torque cut acts the drive's throttle is held at 1 anyway: the creep's share reaches the game as the
+            // cut's least F instead (the brief's point 3)
+            w.cutFloor = w.cutActs ? share : 0.0f;
+            CreepGive(share > 0.0f && !w.cutActs ? w.refs.action : 0, w.cutActs ? 0.0f : share);
             if (stalls)
             {
                 w.creepStall = true;
@@ -7590,6 +7736,7 @@ static DWORD WINAPI Run(void *)
         GearboxHooksStep(s);
         CreepHookStep(s, driving);
         EngineSpeedHookStep(s, driving);
+        GearTorqueHookStep(s, driving);
         // the search for the game's clock (Probe=1, while its place is not known): begun once a truck is driven
         if (!clockOwn && s.probe && driving && raw.clockKnown)
         {
@@ -8097,7 +8244,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
            a.springScale == b.springScale && a.dampingScale == b.dampingScale && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
-           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.crawlHold == b.crawlHold && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
+           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.engineBrake == b.engineBrake && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
            a.camberGainFront == b.camberGainFront && a.camberGainRear == b.camberGainRear && a.camberRestFront == b.camberRestFront && a.camberRestRear == b.camberRestRear;
 }
 
@@ -8130,7 +8277,7 @@ int wmain(int argc, wchar_t **argv)
     Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.hotDamageFrom == kTempRed && d.coldDamage == 5.0f && d.stallDamage == 5.0f && d.clutchBurn && d.clutchHeat == 60.0f &&
               d.springScale == 1.0f && d.dampingScale == 1.0f && d.extraTravel == 0.0f && d.frameFlex == 1.0f && d.twistRange == 1.0f,
           "defaults: the radiator's full airflow from 30 km/h, engine damage on from the red zone, 10 percent a minute for the heat and 5 for the cold");
-    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.ignoreShifter && d.backToA == 0 && d.gameGearDisplay == kGameGearOffOwn && d.input == kInputWheel && !d.powertrain && d.roadLoad && d.crawlHold && d.modEngineSpeed && d.engineSpeedTop == 1.0f && d.roadCdA == 0.0f && d.engineShare == 50 && d.creep && !d.creepManual && !d.dieselFlutter,
+    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.ignoreShifter && d.backToA == 0 && d.gameGearDisplay == kGameGearOffOwn && d.input == kInputWheel && !d.powertrain && d.roadLoad && d.engineBrake == 15.0f && d.modEngineSpeed && d.engineSpeedTop == 1.0f && d.roadCdA == 0.0f && d.engineShare == 50 && d.creep && !d.creepManual && !d.dieselFlutter,
           "defaults: the oil as a second needle, warm after 5 minutes, too hot from 120 C; the standard turbo, a diesel's lift without the flutter; the creep on");
 
     // Air drag on by default (BRIEF_defaults_on.md): a missing key gives 1, an explicit 0 stays 0, the defaults give 1
@@ -8148,6 +8295,30 @@ int wmain(int argc, wchar_t **argv)
         SettingsDefaults(back);
         Check(missing.roadLoad && !zero.roadLoad && back.roadLoad, "defaults: Air drag on with the key missing, an explicit RoadLoad=0 stays off, and the defaults give it on");
         WriteIni(back); // the ini as the tests below find it, with its help text
+    }
+    // the Crawl hold went with the torque cut (BRIEF_drivetrain_2_torque_cut.md): an old CrawlHold= is read as nothing and
+    // dropped at the next write; EngineBrake round trips and is held to 0 to 30
+    {
+        GaugeSettings r;
+        SettingsDefaults(r);
+        WriteIni(r);
+        WritePrivateProfileStringW(kIniSection, L"CrawlHold", L"0", ini.c_str());
+        WritePrivateProfileStringW(kIniSection, L"EngineBrake", L"22", ini.c_str());
+        GaugeSettings old;
+        ReadIni(old);
+        SettingsClamp(old);
+        WriteIni(old);
+        wchar_t kept[16] = L"";
+        GetPrivateProfileStringW(kIniSection, L"CrawlHold", L"none", kept, 16, ini.c_str());
+        WritePrivateProfileStringW(kIniSection, L"EngineBrake", L"80", ini.c_str());
+        GaugeSettings high;
+        ReadIni(high);
+        SettingsClamp(high);
+        GaugeSettings back;
+        SettingsDefaults(back);
+        Check(old.engineBrake == 22.0f && !wcscmp(kept, L"none") && high.engineBrake == 30.0f && back.engineBrake == 15.0f,
+              "settings: an old CrawlHold= is ignored and dropped at the next write; EngineBrake 22 read back, 80 held to 30, 15 by default");
+        WriteIni(back);
     }
     // keys the mod does not know, in its own section and in another one
     WritePrivateProfileStringW(kIniSection, L"FromALaterVersion", L"7", ini.c_str());
@@ -8212,7 +8383,7 @@ int wmain(int argc, wchar_t **argv)
     c.input = kInputKeys;
     c.powertrain = true;
     c.roadLoad = false;
-    c.crawlHold = false;
+    c.engineBrake = 7.0f;
     c.modEngineSpeed = false;
     c.engineSpeedTop = 1.25f;
     c.roadCdA = 2.5f;
@@ -8231,7 +8402,7 @@ int wmain(int argc, wchar_t **argv)
                             c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springScale != d.springScale && c.dampingScale != d.dampingScale && c.extraTravel != d.extraTravel && c.frameFlex != d.frameFlex && c.twistRange != d.twistRange && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
                             c.demo != d.demo && c.probe != d.probe && c.keepLogs != d.keepLogs && c.soundVolume != d.soundVolume && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
-                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.crawlHold != d.crawlHold && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
+                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
     WriteIni(c);
     ReadIni(b);
     Check(allChanged, "ini: the test changes every setting from its default");
@@ -8252,7 +8423,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 135, "ini: the help text survives a write (135 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 136, "ini: the help text survives a write (136 comment lines)");
     // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
     {
         char none[32] = "x", tab[32] = {}, kept[32] = {};

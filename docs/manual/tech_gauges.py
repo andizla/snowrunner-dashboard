@@ -361,13 +361,7 @@ second: the factor fell to 1 at the top, the truck sagged, and the rise back was
 rise is now paced only after the wheels break loose: the mean's <i>x</i> up by more than 0.2 or the spin up by more than 1 rad/s
 in one pass (<code>kSpinLooseX</code>, <code>kSpinLooseRad</code>), for <code>kLiftCutWindow</code>. A fall along the fade opens nothing. The
 ground path keeps its cut rule. <code>SpinCalm</code> in Gauges.ini is read no more, and the log says so once.
-Crawl hold (<code>CrawlHold=1</code>, the default) acts on this path in L-, L and L+ of the mod gearbox alone, by its position, since L+ has the plain power factor of 1 (<code>CrawlHoldActs</code>, one condition; a numbered gear can be added there). The game's own L- surges too: it
-cuts its pull at the top and gives it back only under about 0.55 of it, and the truck sags and climbs every few seconds. So the factor
-is at most <i>H</i>(<i>x</i><sub>p</sub>), a straight line from 2 at 0.70 of the top to 0.05 at 0.95 and 0.05 above (<code>CrawlHoldLine</code>,
-<code>kCrawlFrom</code>, <code>kCrawlTo</code>, <code>kCrawlLeast</code>), where <i>x</i><sub>p</sub> is the mean's <i>x</i> plus its rising rate times
-0.6 s (<code>kCrawlLead</code>; the rate is a pass's change over dt, 0.3 of each new pass kept, <code>CrawlHoldStep</code>; a falling <i>x</i> takes
-nothing off). The floor is under a road's drag, so the truck settles where <i>H</i> meets the drag: about 0.85 of the top in mud, 0.93 on
-firm ground. Its falls and climbs open no pace. The probe's roof is min(roof, <i>H</i>). The probe's <i>x</i> is the mean:</p>
+While the torque cut acts (below) this path writes nothing. The probe's <i>x</i> is the mean:</p>
 {eq('lift = clamp( curve(<i>x</i>) · ratio · min(1, cold · boost / <i>p</i>) / GameFall(<i>x</i>), 0.05, <i>R</i> ) for <i>x</i> &lt; 1, 1 for <i>x</i> ≥ 1,    GameFall(<i>x</i>) = clamp(2.1(1 − <i>x</i>), 0, 1),    <i>R</i> = 6', 13)}
 {eq('factor = game · (1 + clamp(EngineShare/100, 0, 1) · (lift − 1))', 14)}
 <p class="where">ratio is the torque converter's multiplication while the mod's automatic holds the gears, otherwise 1. game is the game's
@@ -388,6 +382,27 @@ gear (2026-10-25). With the wheels at the
 gear's top or past it (rolling downhill) the factor is the game's own: the division would be by nothing. Below about half a gear's
 top GameFall is 1 and nothing is divided out. The game's own share goes back once when the setting goes off, the engine stops, the pull test is armed, or another truck is
 driven (and to the old truck only if its action is still its own).</p>
+<h3>The torque cut (a gear held by hand)</h3>
+<p>The game's torque per gear is one function, <code>bool(vehicle, int gear, float* torque, float* start, float* a, float* top, float* gearSpeed)</code>, found by
+its first bytes once (<code>kGearTorquePattern</code>), and the drive's call of it is the first call in the wheels' drive that lands there (<code>GearTorqueFind</code>,
+within 0x400 bytes). Its other callers (the stall, the input, the automatic) keep the game's own. The detour is attached with the other threads held
+(<code>GearboxAttach</code>). It makes the stock call, then on the drive's call for the published truck answers torque = <i>T</i><sub>stock</sub> · bracket with
+start −1, a 0 and top 10<sup>9</sup>, so the drive's own curve is flat at 1. The mod's thread publishes the slot once a pass (<code>TorqueCutSlotOf</code>) with
+Powertrain=1, Gearbox=2, a gear held by hand, EngineShare above 0 and the game's gear not 0. The detour reads <i>s</i> from the vehicle's own wheels: the mean of
+the driven wheels' float ω in the gear's direction, floored at 0 (<code>TorqueCutSpeeds</code>). A failed read takes the slot's last <i>s</i>.</p>
+<p>With rpm = max(<i>s</i>, 0)/top · redline: <i>F</i> = <i>p</i> · (E(rpm) · min(1, limit/<i>p</i>) − load) · held − (1 − <i>p</i>) · brake · clamp((rpm − idle)/(redline − idle), 0, 1).
+Here <i>p</i> is the raw pedal (TruckPedal, linear as the game's pull) and E the curve times the governor: 1 up to 0.9 of the redline, then a straight line to 0 at 1.25 (<code>kGovernFrom</code>,
+<code>kGovernTo</code>; at 60 steps a second the needle's band of the redline to 1.1 chattered in the closed loop). brake is <code>EngineBrake</code>/100. With the
+clutch slipping the bracket is the clutch model's torque through it as a share of the gear's (the scalar, held to −1 to 1.5); the creep's share is a floor.
+bracket = (1 − share) · pedal · curve<sub>stock</sub>(<i>s</i>) + share · <i>F</i>, with curve<sub>stock</sub> the game's smoothstep from start to a, falling to top,
+scaled by the power factor at +0x38. B4 (+0xB4) is written 1 in the hook on the wheels' drive before the call, so the game's pull lag is out. The fuel's call of
+the engine speed then answers stock · B4s/B4, with B4s = pedal · (1 − D4 + D4 · curve<sub>stock</sub>(<i>s</i>)) the game's settled pull, and the range reads B4s.
+While the cut acts the factor at +0xCC is not written, the gear's top and Air drag's base learn nothing, and a refused ShiftGear(0) from the game (the damage
+kick) puts the mod gearbox in N. The detour counts the steps where the bracket falls by 0.3 or more.</p>
+<p>The log: <code>torque cut: the game's gear torque at +…, the drive's call returning to +…</code> at the first truck, or why not; <code>torque cut: the game's gear
+torque hooked at +…</code> once the detour is in; <code>torque cut: acting in …</code> and <code>torque cut: off, …</code> at each change; <code>gearbox damage: the game
+kicked the gearbox to N</code>. With Probe=1 a line a second, <code>probe: torque cut: …</code>: <i>s</i> and its share of the top, rpm, <i>F</i>, the bracket and its
+least, the scalar, the share, the game's <i>T</i> and the answer, D4, B4s, the calls answered and passed, the other callers', failed reads and falls.</p>
 <h3>The game's engine speed (ModEngineSpeed)</h3>
 <p>The game's engine speed is one function, <code>float(vehicle, bool withWheels, bool withMinThrottle)</code>, found by its first bytes
 (RVA d73170 in 6adb8627, d73200 in 6ab52f5d). It is worked out on each call from the pedal, the pull at action + 0xB4 and the driven

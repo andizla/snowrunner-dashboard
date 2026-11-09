@@ -109,6 +109,58 @@ __declspec(noinline) static float SpeedFromCockpit(SpeedFn fn, void *vehicle)
     return r;
 }
 
+// A stand-in for the game's gear torque (the torque cut, BRIEF_drivetrain_2_torque_cut.md): every output zeroed first,
+// any pointer may be null, false for gear 0; else the torque 2 (3 in reverse), the start 0.25, a 4, the top 13 and the
+// gear speed 3. Its last caller's return address is kept, so a caller's place can be learned before the hook is in.
+static volatile LONG g_torqueFakeCalls = 0;
+static volatile uintptr_t g_torqueFakeBack = 0;
+__declspec(noinline) static bool FakeGearTorque(void *vehicle, int gear, float *torque, float *start, float *a, float *top, float *gearSpeed)
+{
+    InterlockedIncrement(&g_torqueFakeCalls);
+    g_torqueFakeBack = (uintptr_t)_ReturnAddress();
+    (void)vehicle;
+    float *outs[5] = { torque, start, a, top, gearSpeed };
+    for (float *o : outs)
+        if (o) *o = 0.0f;
+    if (gear == 0) return false;
+    if (torque) *torque = gear < 0 ? 3.0f : 2.0f;
+    if (start) *start = 0.25f;
+    if (a) *a = 4.0f;
+    if (top) *top = 13.0f;
+    if (gearSpeed) *gearSpeed = 3.0f;
+    return true;
+}
+// Three callers as the game's: the drive's (all but the gear speed), the stall's (the start alone) and GetTruckInput's
+// (the top alone); what each got is kept.
+typedef bool (*GearTorqueCall)(void *, int, float *, float *, float *, float *, float *);
+struct TorqueGot
+{
+    bool took;
+    float torque, start, a, top;
+};
+static volatile float g_torqueSink = 0.0f;
+__declspec(noinline) static TorqueGot TorqueFromDrive(GearTorqueCall fn, void *vehicle, int gear)
+{
+    TorqueGot g = {};
+    g.took = fn(vehicle, gear, &g.torque, &g.start, &g.a, &g.top, nullptr);
+    g_torqueSink = g.torque;
+    return g;
+}
+__declspec(noinline) static TorqueGot TorqueFromStall(GearTorqueCall fn, void *vehicle, int gear)
+{
+    TorqueGot g = {};
+    g.took = fn(vehicle, gear, nullptr, &g.start, nullptr, nullptr, nullptr);
+    g_torqueSink = g.start;
+    return g;
+}
+__declspec(noinline) static TorqueGot TorqueFromInput(GearTorqueCall fn, void *vehicle, int gear)
+{
+    TorqueGot g = {};
+    g.took = fn(vehicle, gear, nullptr, nullptr, nullptr, &g.top, nullptr);
+    g_torqueSink = g.top;
+    return g;
+}
+
 // A stand-in for the step probe's look (suspension_step.h, SuspStepLook): what the hook handed it is kept.
 static volatile uint64_t g_lookAction = 0;
 static volatile float g_lookDt = 0.0f;
@@ -464,6 +516,15 @@ static void RealImageTest()
     snprintf(line, sizeof line, "places in a real image (stamp %08x): the game's engine speed at %zx, its fuel's call back at %zx, its stall's at %zx%s%s", stamp, speed.speed,
              speed.fuelBack, speed.stallBack, speedFound ? "" : "; ", speed.why);
     Check(speedRight, line);
+    // the gear torque and the drive's call of it, for the torque cut (the research's d73dc0 and the drive's start + 0xCA on
+    // 6adb8627, d73e50 on 6ab52f5d); on another build found once
+    GearTorquePlace gearTorque;
+    const bool torqueFound = GearTorqueFind(image.data(), from, to, drive.drive, gearTorque);
+    const bool torqueRight = now ? torqueFound && gearTorque.torque == 0xd73dc0 && gearTorque.driveBack == 0xc41d10 + 0xCA && drive.drive == 0xc41d10
+                           : before ? torqueFound && gearTorque.torque == 0xd73e50 && gearTorque.driveBack == drive.drive + 0xCA : torqueFound;
+    snprintf(line, sizeof line, "places in a real image (stamp %08x): the game's gear torque at %zx, the drive's call back at %zx (the drive at %zx, + %zx)%s%s", stamp,
+             gearTorque.torque, gearTorque.driveBack, drive.drive, gearTorque.driveBack ? gearTorque.driveBack - drive.drive : (size_t)0, torqueFound ? "" : "; ", gearTorque.why);
+    Check(torqueRight, line);
 
     // the places the mod cannot do without, by each of their ways alone (game_globals.h): on a build the test has
     // numbers for, every way a place has must give it there; on another the line tells which ways found what, so a
@@ -1804,6 +1865,241 @@ int main()
         Check(found && awayNot && twiceNot && heldNot && noFuelNot,
               "engine speed place: the function by its bytes, the fuel's and the stall's calls by theirs and landing on it, each once; not where a call goes "
               "elsewhere or is missing, the function stands twice or another mod holds it");
+    }
+
+    // the torque cut's throttle hold through the wheels' drive's hook (the Reviewer's S2): for the slot's action the
+    // drive's throttle is 1 and B4 is written 1 before the drive runs, whatever the creep's share; another action passes,
+    // a stale slot gives the creep's share again, and a cleared one leaves the throttle and B4 as they came
+    {
+        static uint8_t action[0x100] = {}, otherAction[0x100] = {};
+        void (*volatile drive)(void *, float, float) = &FakeDrive;
+        const float b4 = 0.3f;
+        memcpy(action + 0xB4, &b4, 4);
+        TorqueCutSlot slot = {};
+        slot.vehicle = 0x777;
+        slot.action = (uint64_t)(uintptr_t)action;
+        TorqueCutPublish(&slot);
+        CreepGive((uint64_t)(uintptr_t)action, 0.2f);
+        drive(action, 0.05f, 0.033f);
+        float b4After = 0.0f;
+        memcpy(&b4After, action + 0xB4, 4);
+        const bool heldNow = g_driveThrottle == 1.0f && b4After == 1.0f && g_driveDt == 0.033f && g_driveAction == action;
+        drive(otherAction, 0.05f, 0.033f);
+        const bool otherPasses = g_driveThrottle == 0.05f;
+        slot.at = GetTickCount64() - 2 * kTorqueFresh;
+        TorqueCutPublish(&slot);
+        drive(action, 0.05f, 0.033f);
+        const bool staleCreeps = g_driveThrottle == 0.2f;
+        TorqueCutPublish(nullptr);
+        CreepGive(0, 0.0f);
+        memcpy(action + 0xB4, &b4, 4);
+        drive(action, 0.05f, 0.033f);
+        memcpy(&b4After, action + 0xB4, 4);
+        const bool clearedPasses = g_driveThrottle == 0.05f && b4After == 0.3f;
+        Check(CreepHooked() && heldNow && otherPasses && staleCreeps && clearedPasses,
+              "torque cut's throttle hold: for the published action the drive's throttle is 1 and B4 is written 1 before it runs, over the creep's share; "
+              "another action passes, a stale slot gives the creep its share again, a cleared one leaves the throttle and B4 as they came");
+    }
+
+    // the torque cut's detour on a function of the gear torque's signature (BRIEF_drivetrain_2_torque_cut.md and the
+    // Reviewer's addendum): the drive's call (by where it returns) answered with the game's torque times F and the flat
+    // curve while a slot is published for its vehicle; the stall's and GetTruckInput's calls, another vehicle, a stale
+    // slot and gear 0 get the game's own; the wheels read from the vehicle's own list in the gear's direction (M2); the
+    // governor, the engine braking and the blend; a failed read takes the slot's speed; B4s kept for the fuel's call,
+    // which the engine speed's hook scales by it (M3)
+    {
+        static uint8_t vehicle[0x800] = {}, otherVehicle[0x800] = {}, act[0x100] = {}, models[4][0x300] = {}, wheels[4][0x200] = {};
+        static uint64_t list[5] = {};
+        auto putF = [](uint8_t *p, size_t at, float v) { memcpy(p + at, &v, 4); };
+        auto putP = [](uint8_t *p, size_t at, const void *v) {
+            const uint64_t x = (uint64_t)(uintptr_t)v;
+            memcpy(p + at, &x, 8);
+        };
+        auto spin = [&](float w) {
+            for (int i = 0; i < 4; i++) putF(wheels[i], 0x16C, w);
+        };
+        putP(vehicle, 0x68, act);
+        vehicle[0x768] = 1;
+        putF(act, 0x38, 1.0f);
+        putF(act, 0xD4, 1.0f);
+        putF(act, 0xB4, 1.0f);
+        for (int i = 0; i < 4; i++)
+        {
+            list[i] = (uint64_t)(uintptr_t)models[i];
+            putP(models[i], 0x2C8, wheels[i]);
+            const int driven = 1;
+            memcpy(wheels[i] + 0xE8, &driven, 4);
+        }
+        spin(5.0f);
+        putP(vehicle, 0x200, &list[0]);
+        putP(vehicle, 0x208, &list[4]);
+        memcpy(otherVehicle, vehicle, sizeof vehicle);
+        GearTorqueCall volatile fn = &FakeGearTorque;
+        TorqueFromDrive(fn, vehicle, 1);
+        const uintptr_t driveBack = g_torqueFakeBack;
+        TorqueFromStall(fn, vehicle, 1);
+        const uintptr_t stallBack = g_torqueFakeBack;
+        TorqueFromInput(fn, vehicle, 1);
+        const uintptr_t inputBack = g_torqueFakeBack;
+        const bool distinct = driveBack && stallBack && inputBack && driveBack != stallBack && driveBack != inputBack && stallBack != inputBack;
+        char why[160] = "";
+        const bool hooked = GearTorqueHook((uintptr_t)&FakeGearTorque, driveBack, why, sizeof why);
+        TorqueCutCounts c0 = {};
+        TorqueCutCountsGet(c0);
+        const TorqueGot plain = TorqueFromDrive(fn, vehicle, 1);
+        const bool unpublished = plain.took && plain.torque == 2.0f && plain.start == 0.25f && plain.a == 4.0f && plain.top == 13.0f;
+        // the map with the clutch fully in: a flat curve, a top of 10 rad/s, idle 800 and a redline of 2000, all of the
+        // mod engine floored
+        TorqueCutSlot slot = {};
+        slot.vehicle = (uint64_t)(uintptr_t)vehicle;
+        slot.action = (uint64_t)(uintptr_t)act;
+        slot.mode = kCutMap;
+        slot.share = 1.0f;
+        slot.pedal = 1.0f;
+        slot.sLast = 3.0f;
+        slot.map = TorqueCutMap{ 1.0f, 1.0f, 0.0f, 1.0f, 0.15f, 10.0f, 800.0f, 2000.0f, 1.6f, { 2, { 0.1f, 1.5f }, { 1.0f, 1.0f } }, kGovernFrom, kGovernTo };
+        TorqueCutPublish(&slot);
+        const TorqueGot ours = TorqueFromDrive(fn, vehicle, 1);
+        const bool answered = ours.took && Near(ours.torque, 2.0f) && ours.start == -1.0f && ours.a == 0.0f && ours.top == 1e9f;
+        // B4s for the fuel: the raw pedal times the game's curve at s (no lag), and the fuel's call scaled by it
+        float b4s = -1.0f;
+        const bool b4sKept = TorqueCutB4sGet((uint64_t)(uintptr_t)vehicle, b4s) && Near(b4s, TorqueCutStockCurve(0.25f, 4.0f, 13.0f, 1.0f, 5.0f)) &&
+                             !TorqueCutB4sGet((uint64_t)(uintptr_t)otherVehicle, b4s);
+        TorqueCutB4sGet((uint64_t)(uintptr_t)vehicle, b4s);
+        SpeedFn volatile sfn = &FakeEngineSpeed;
+        const float fuelScaled = SpeedFromFuel(sfn, vehicle);
+        putF(act, 0xB4, 0.0f);
+        const float fuelAtNoPull = SpeedFromFuel(sfn, vehicle);
+        putF(act, 0xB4, 1.0f);
+        const bool fuel = Near(fuelScaled, 0.25f * b4s) && fuelAtNoPull == 0.0f && SpeedFromFuel(sfn, otherVehicle) == 0.25f && SpeedFromCockpit(sfn, vehicle) == 0.25f;
+        const TorqueGot stall = TorqueFromStall(fn, vehicle, 1), input = TorqueFromInput(fn, vehicle, 1);
+        const bool othersStock = stall.took && stall.start == 0.25f && input.took && input.top == 13.0f;
+        const TorqueGot otherV = TorqueFromDrive(fn, otherVehicle, 1);
+        const bool otherStock = otherV.took && otherV.torque == 2.0f && otherV.start == 0.25f && otherV.top == 13.0f;
+        const TorqueGot neutral = TorqueFromDrive(fn, vehicle, 0);
+        const bool neutralStock = !neutral.took && neutral.torque == 0.0f && neutral.start == 0.0f && neutral.top == 0.0f;
+        // the governor: the wheels at 1.2 of the top, F (1.25 - 1.2) / 0.35 of the curve's
+        spin(12.0f);
+        const TorqueGot governed = TorqueFromDrive(fn, vehicle, 1);
+        const bool governor = Near(governed.torque, 2.0f * (kGovernTo - 1.2f) / (kGovernTo - kGovernFrom));
+        // the foot off at the redline: the engine holds back by 0.15 of the gear's torque, at idle by nothing
+        slot.pedal = slot.map.pedal = 0.0f;
+        TorqueCutPublish(&slot);
+        spin(10.0f);
+        const float brakeTop = TorqueFromDrive(fn, vehicle, 1).torque;
+        spin(4.0f);
+        const float brakeIdle = TorqueFromDrive(fn, vehicle, 1).torque;
+        // M2: in R (the game's gear below 0) wheels turning forward roll against the gear: no brake, never a push with the
+        // roll; turning backward at its top: the brake; a forward gear rolling back the same
+        spin(5.0f);
+        const float rForward = TorqueFromDrive(fn, vehicle, -1).torque;
+        spin(-10.0f);
+        const float rBackward = TorqueFromDrive(fn, vehicle, -1).torque;
+        spin(-5.0f);
+        const float secondBack = TorqueFromDrive(fn, vehicle, 2).torque;
+        const bool reverse = rForward == 0.0f && Near(rBackward, -3.0f * 0.15f) && secondBack == 0.0f;
+        const bool braking = Near(brakeTop, -2.0f * 0.15f) && brakeIdle == 0.0f;
+        // the blend at halfTorque the mod engine: halfTorque the game's curve at s with the raw pedal, halfTorque F
+        slot.pedal = slot.map.pedal = 1.0f;
+        slot.share = 0.5f;
+        TorqueCutPublish(&slot);
+        spin(5.0f);
+        const float halfTorque = TorqueFromDrive(fn, vehicle, 1).torque;
+        const bool blend = Near(halfTorque, 2.0f * (0.5f * TorqueCutStockCurve(0.25f, 4.0f, 13.0f, 1.0f, 5.0f) + 0.5f));
+        // the creep's least F, and the scalar of a slipping clutch
+        slot.share = 1.0f;
+        slot.mode = kCutScalar;
+        slot.scalar = 0.4f;
+        slot.floor = 0.0f;
+        TorqueCutPublish(&slot);
+        const float scalar = TorqueFromDrive(fn, vehicle, 1).torque;
+        slot.scalar = 0.0f;
+        slot.floor = 0.12f;
+        TorqueCutPublish(&slot);
+        const float floor = TorqueFromDrive(fn, vehicle, 1).torque;
+        const bool scalars = Near(scalar, 0.8f) && Near(floor, 0.24f);
+        // a failed read of the wheels (the list's end before its start): the slot's own speed, counted
+        slot.mode = kCutMap;
+        slot.floor = 0.0f;
+        TorqueCutPublish(&slot);
+        putP(vehicle, 0x208, &list[0]);
+        putP(vehicle, 0x200, &list[4]);
+        TorqueCutCounts cf = {};
+        TorqueCutCountsGet(cf);
+        const TorqueGot faulted = TorqueFromDrive(fn, vehicle, 1);
+        TorqueCutCounts cg = {};
+        TorqueCutCountsGet(cg);
+        const bool fault = faulted.took && Near(faulted.torque, 2.0f) && Near(cg.s, 3.0f) && cg.faults == cf.faults + 1;
+        putP(vehicle, 0x200, &list[0]);
+        putP(vehicle, 0x208, &list[4]);
+        // a stale slot: the game's own
+        slot.at = GetTickCount64() - 2 * kTorqueFresh;
+        TorqueCutPublish(&slot);
+        const TorqueGot stale = TorqueFromDrive(fn, vehicle, 1);
+        const bool staleStock = stale.torque == 2.0f && stale.start == 0.25f && stale.top == 13.0f;
+        TorqueCutPublish(nullptr);
+        const TorqueGot cleared = TorqueFromDrive(fn, vehicle, 1);
+        const bool clearedStock = cleared.torque == 2.0f && cleared.start == 0.25f;
+        TorqueCutCounts c1 = {};
+        TorqueCutCountsGet(c1);
+        // answered: ours, governed, two brakes, three reverse, the blend, two scalars, the fault (11); passed: unpublished,
+        // the other vehicle, neutral, stale, cleared (5); the others: the stall and the input (2); the bracket falling by
+        // 0.3 or more in one step: 1 to 0.14 at the governor, 0.4 to 0 at the floor's slot
+        const bool counts = c1.answered - c0.answered == 11 && c1.passed - c0.passed == 5 && c1.others - c0.others == 2 && c1.falls - c0.falls == 2;
+        const bool twice = GearTorqueHook((uintptr_t)&FakeGearTorque, driveBack, why, sizeof why);
+        char line[700];
+        snprintf(line, sizeof line, "torque cut's detour: through Detours on a function of the gear torque's signature, the drive's call answered %.3f with the flat curve, "
+                                    "the governor %.3f at 1.2 of the top, the foot off %.3f at the redline and %.3f at idle, R rolling forward %.3f and back %.3f, the "
+                                    "blend at half %.3f, the scalar %.3f and the creep's least %.3f; the stall's, the input's, another vehicle's, gear 0 and a stale "
+                                    "slot the game's own; a failed read the slot's speed; B4s %.3f, the fuel's call %.3f and 0 with no pull",
+                 ours.torque, governed.torque, brakeTop, brakeIdle, rForward, rBackward, halfTorque, scalar, floor, b4s, fuelScaled);
+        Check(distinct && hooked && unpublished && answered && b4sKept && fuel && othersStock && otherStock && neutralStock && governor && braking && reverse && blend &&
+                  scalars && fault && staleStock && clearedStock && counts && twice && GearTorqueHooked(),
+              line);
+        if (!hooked) printf("     %s\n", why);
+        if (!counts) printf("     counts: answered %ld passed %ld others %ld falls %ld\n", c1.answered - c0.answered, c1.passed - c0.passed, c1.others - c0.others, c1.falls - c0.falls);
+    }
+
+    // the gear torque's places in made-up code: the function's bytes once, the drive's first call that lands on it; not
+    // taken where the function stands twice, another mod holds it, the drive was not found, or no call of the drive
+    // lands on it
+    {
+        auto put = [](std::vector<uint8_t> &code, size_t at, const char *pattern) {
+            uint8_t bytes[kPatternMax], mask[kPatternMax];
+            const int length = PatternParse(pattern, bytes, mask);
+            for (int i = 0; i < length; i++) code[at + i] = mask[i] ? bytes[i] : 0x00;
+            return length;
+        };
+        auto aim = [](std::vector<uint8_t> &code, size_t call, size_t target) {
+            code[call] = 0xE8;
+            const int32_t distance = (int32_t)target - (int32_t)(call + 5);
+            memcpy(code.data() + call + 1, &distance, 4);
+        };
+        std::vector<uint8_t> code(0x1000, 0x90);
+        const size_t torqueAt = 0x800, driveAt = 0x100, otherAt = 0x600;
+        put(code, torqueAt, kGearTorquePattern);
+        aim(code, driveAt + 0x20, otherAt); // an earlier call of the drive's, elsewhere
+        aim(code, driveAt + 0xC5, torqueAt);
+        aim(code, driveAt + 0x180, torqueAt); // a later one: the first is the drive's
+        GearTorquePlace place;
+        const bool found = GearTorqueFind(code.data(), 0x10, code.size(), driveAt, place) && place.torque == torqueAt && place.driveBack == driveAt + 0xCA && !*place.why;
+        std::vector<uint8_t> twiceCode = code;
+        put(twiceCode, 0xC00, kGearTorquePattern);
+        GearTorquePlace twicePlace;
+        const bool twiceNot = !GearTorqueFind(twiceCode.data(), 0x10, twiceCode.size(), driveAt, twicePlace) && strstr(twicePlace.why, "more than once");
+        std::vector<uint8_t> heldCode = code;
+        heldCode[torqueAt] = 0xE9;
+        GearTorquePlace heldPlace;
+        const bool heldNot = !GearTorqueFind(heldCode.data(), 0x10, heldCode.size(), driveAt, heldPlace) && strstr(heldPlace.why, "another mod");
+        GearTorquePlace noDrivePlace;
+        const bool noDriveNot = !GearTorqueFind(code.data(), 0x10, code.size(), 0, noDrivePlace) && strstr(noDrivePlace.why, "drive was not found") && !noDrivePlace.torque;
+        std::vector<uint8_t> noCall = code;
+        noCall[driveAt + 0xC5] = noCall[driveAt + 0x180] = 0x90;
+        GearTorquePlace noCallPlace;
+        const bool noCallNot = !GearTorqueFind(noCall.data(), 0x10, noCall.size(), driveAt, noCallPlace) && strstr(noCallPlace.why, "drive's call") && !noCallPlace.driveBack;
+        Check(found && twiceNot && heldNot && noDriveNot && noCallNot,
+              "gear torque place: the function by its bytes once, the drive's first call landing on it; not where the function stands twice or another mod "
+              "holds it, the drive was not found, or no call of the drive lands on it");
     }
 
     // the wheels' drive found by its call in made-up code: int3 padding, the drive's first bytes, the call's bytes once;

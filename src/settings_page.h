@@ -849,7 +849,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     {
         PageLabel("Real engine", labelX);
         changed(ImGui::Checkbox("##powertrain", &s.powertrain));
-        PageTip("The truck pulls with the mod engine: its torque curve at the engine speed shown, and the mod automatic shifts by it. Crawl hold goes with it. Off by default.");
+        PageTip("The truck pulls with the mod engine: its torque curve at the engine speed shown, and the mod automatic shifts by it. In a gear held by hand the truck pulls with the mod engine alone: no cut at the top, engine braking with the foot off. The pedal is the fuel, as the game has it. Off by default.");
         if (s.powertrain)
         {
             PageLabel("Engine share", labelX);
@@ -859,9 +859,10 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             PageLabel("Air drag", labelX);
             changed(ImGui::Checkbox("##roadload", &s.roadLoad));
             PageTip("The game already slows a rolling truck by itself, more the faster it goes. This adds the share of the air on top, taken off the engine pull in each gear once it is measured floored on flat ground. The drag of the wheels is left out of that measure, so Rolling drag and a flat tire do not make it stronger. Acts with Real engine on. On by default.");
-            PageLabel("Crawl hold", labelX);
-            changed(ImGui::Checkbox("##crawlhold", &s.crawlHold));
-            PageTip("Holds L-, L and L+ of the mod gearbox just under their top speed, so the game does not cut and surge there. Off: the game does as it does. On by default.");
+            PageLabel("Engine braking", labelX);
+            ImGui::SetNextItemWidth(w);
+            changed(ImGui::SliderFloat("##enginebrake", &s.engineBrake, 0.0f, 30.0f, "%.0f %%", ImGuiSliderFlags_AlwaysClamp));
+            PageTip("How hard the engine holds the truck back with the foot off in a gear held by hand, as a share of the gear torque at the redline. 0 lets it roll. Needs the mod gearbox. Default 15 %.");
             PageLabel("Mod engine speed", labelX);
             changed(ImGui::Checkbox("##modenginespeed", &s.modEngineSpeed));
             PageTip("The game tachometer, cockpit needles, engine sound and effects follow the mod engine while Real engine is on. Fuel use and the stall stay as in the game for now. Off: the game computes its own. On by default.");

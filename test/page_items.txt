@@ -63,7 +63,7 @@
 ##ridefront
 ##riderear
 ##roadload
-##crawlhold
+##enginebrake
 ##modenginespeed
 ##rolldanger
 ##rollwarn

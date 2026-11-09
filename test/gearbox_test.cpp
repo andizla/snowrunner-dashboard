@@ -1050,9 +1050,21 @@ int main()
         const bool own = ((Shift)GearboxOriginal(kFnShiftGear))(nullptr, 4) && g_ran[kFnShiftGear] == 2;
         // another vehicle's call passes while the held truck's are refused (review 7, R5)
         const bool other = FakeShift((void *)0x1234, 3) && g_ran[kFnShiftGear] == 3 && !FakeShift(nullptr, 3) && g_ran[kFnShiftGear] == 3;
+        // the gearbox damage's kick (GearboxKicks, BRIEF_drivetrain_2_torque_cut.md): a bare ShiftGear(0) refused for the
+        // held truck counts; a gear other than 0 and a neutral refused at its own door do not
+        const long kicks0 = GearboxKicks();
+        const bool kickRefused = !FakeShift(nullptr, 0);
+        const long kicks1 = GearboxKicks();
+        FakeShift(nullptr, 2);
+        FakeNeutral(nullptr);
+        const bool kicked = kickRefused && kicks1 == kicks0 + 1 && GearboxKicks() == kicks1 && g_ran[kFnShiftGear] == 3;
         GearboxPolicy(kPolicyPass, nullptr, false);
         const bool passAgain = FakeHigh(nullptr) && g_ran[kFnShiftToHigh] == 1;
+        const bool passKick = FakeShift(nullptr, 0) && GearboxKicks() == kicks1;
+        g_ran[kFnShiftGear] = g_ran[kFnShiftGear] - 1;
         GearboxUnhook();
+        Check(kicked && passKick, "gearbox hooks: the game's own ShiftGear(0) refused for the held truck counts as the damage kick to N, once; another gear, a "
+                                  "neutral refused at its own door and a ShiftGear(0) that passes do not");
         Check(hooked && other && passOff && refShift && refHigh && refReverse && refNeutral && refOff && bodies && counted && own && passAgain &&
                   (firsts & (1u << kFnShiftToReverse)) && (firsts & (1u << kFnSetPower)) && !(firsts & (1u << kFnSetVehicle)) && none == 0,
               "gearbox hooks: while the gearbox has the truck the game's six shifts and its power factor are refused and counted, each kind told once, the "

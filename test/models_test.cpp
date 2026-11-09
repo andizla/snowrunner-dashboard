@@ -36,6 +36,7 @@
 #include "sound.h"
 #include "state.h"
 #include "tires.h"
+#include "torque_cut_sim.h"
 
 void GaugeLog(const wchar_t *, ...) {} // the sounds say in the mod's log where each comes from; here that goes nowhere
 
@@ -541,8 +542,6 @@ struct LoopTruck
     float spinNoise = 0.0f; // the wheels' spin read with +- this many rad/s of noise a pass, as the game's frames give it (about 0.15)
     bool gameCut = false;   // the game's pull as THE VERDICT of BRIEF_low_gear_sway.md reads it: flat at the throttle, cut at the top and back only under cutBack of it
     float cutBack = 0.55f;
-    bool crawlHold = false; // the mod's Crawl hold on the locked path (CrawlHoldStep)
-    int pos = kPosLowMinus; // the mod gearbox's position held, for the hold's scope (CrawlHoldActs)
 };
 struct LoopState
 {
@@ -566,7 +565,6 @@ struct LoopState
     uint32_t seed = 12345u; // the spin noise's
     bool cut = false;    // the game's pull is cut (gameCut)
     int cuts = 0;        // the times it was cut
-    CrawlHold crawl = {}; // the crawl hold's rate, as gauges.cpp keeps it
 };
 
 // The lift as it was before c9c99ea: the roof fading from 0.8 of the gear's top, written at once.
@@ -613,11 +611,8 @@ static void LoopStep(const LoopTruck &c, LoopState &s, const TorqueCurve &curve,
     const float x = spinning ? byspin.x : LiftShare(TruckDrivenSpin(t), s.v, s.box.grip, liftTop);
     const float ratio = driving ? s.box.ratio : 1.0f;
     const float limit = s.power.cold * s.power.boost;
-    const bool crawl = CrawlHoldActs(c.crawlHold, spinning && !c.oldSpin, c.pos);
-    if (!crawl) s.crawl.had = false;
-    const float hold = crawl ? CrawlHoldStep(s.crawl, byspin.x, before ? 0.0f : dt, t.gearEngaged, 0x5000) : kTorqueFactorMost;
     const float lift = before ? LiftBefore(s.power.curve, limit, TruckPedal(t), ratio, x, TorqueRoof(c.cls))
-                              : spinning ? fminf(fminf(TorqueLift(s.power.curve, limit, TruckPedal(t), ratio, x, TorqueRoof(c.cls)), byspin.cap), hold)
+                              : spinning ? fminf(TorqueLift(s.power.curve, limit, TruckPedal(t), ratio, x, TorqueRoof(c.cls)), byspin.cap)
                                          : TorqueLift(s.power.curve, limit, TruckPedal(t), ratio, x, TorqueRoof(c.cls));
     const float wanted = s.hand.game * lift;
     TorqueHandStep(s.hand, true, 0x5000, 0x4000, t.torqueFactor, lift, before ? 0.0f : dt, t.gearEngaged, spinning && !c.oldSpin, byspin.loose);
@@ -715,69 +710,6 @@ static SwayStats SwayRun(bool oldSpin, int gear, float powerFactor, float gearA,
         last = f;
         r.lastSpin = spin;
     }
-    return r;
-}
-
-// Crawl hold's closed loop (BRIEF_low_gear_sway.md, THE VERDICT and the Reviewer's addenda 2 and 4): a heavy truck held
-// by hand at full pedal, the game's pull flat up to the gear's top, cut there and back only under 0.55 of it; the
-// factor applied after 0.1 s of dead time and a 0.3 s lag, the wheels read with +- 0.03 of the top of noise a pass. The
-// push is set so a factor of 1 gains 0.37 of the top a second without drag: a factor of 1.5 in mud then climbs about
-// 0.3 a second, and with the pull cut mud takes 0.25 a second off, the refuting read's rates. The drag is a share of
-// that push: mud 0.68, soft 0.4, firm 0.2, a road 0.05. From x0 of the top, over seconds: the cuts, the wheels' x
-// least and most and their sd over the last 20 s as shares of the top, the mean there, and the settle: the last
-// second x was more than 0.03 off that mean.
-struct CrawlStats { float xLo, xHi, sd, mean, settle, period, top, reach, climbFactor; int cuts; };
-static LoopTruck LoopHeavy();
-static CrawlStats CrawlRun(bool hold, int gear, float powerFactor, float gearA, float drag, float x0, float seconds, int pos = kPosLowMinus)
-{
-    LoopTruck c = LoopHeavy();
-    c.pos = pos;
-    c.fixedGear = gear;
-    c.spinLift = true;
-    c.gameCut = true;
-    c.crawlHold = hold;
-    c.t.powerFactor = powerFactor;
-    if (gearA > 0.0f) c.t.gearSpeed[gear] = gearA;
-    c.dead = 0.1f;
-    c.lag = 0.3f;
-    TruckRaw at = c.t;
-    at.gear = at.gearEngaged = gear;
-    TruckRaw plain = c.t;
-    plain.powerFactor = 1.0f;
-    const float top = TruckGearTop(at, gear), first = TruckGearTop(plain, 1), rate = 0.37f;
-    c.push = rate * top * top / (c.grip * first); // push x first / top x grip / top = rate
-    c.drag0 = drag * rate * top / c.grip;
-    c.drag2 = 0.0f;
-    c.spinNoise = 0.03f * top;
-    const TorqueCurve curve = kClassCurves[kClassHeavy];
-    LoopState s;
-    s.v = x0 * top / c.grip;
-    const int n = (int)(seconds / kDt + 0.5f);
-    static float xs[2000];
-    int firstCut = -1, lastCut = -1, cutsWas = 0, reachAt = -1, climbPasses = 0;
-    double climbSum = 0.0;
-    for (int i = 0; i < n && i < 2000; i++)
-    {
-        LoopStep(c, s, curve, 1.0f, kDt, false);
-        xs[i] = c.grip * s.v / top;
-        if (reachAt < 0 && xs[i] >= kCrawlFrom) reachAt = i;
-        if (reachAt < 0) climbSum += s.hand.written, climbPasses++;
-        if (s.cuts != cutsWas)
-        {
-            if (firstCut < 0) firstCut = i;
-            lastCut = i;
-            cutsWas = s.cuts;
-        }
-    }
-    CrawlStats r = { 1e9f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, top, (reachAt + 1) * kDt, climbPasses ? (float)(climbSum / climbPasses) : 0.0f, s.cuts };
-    const int from = n - (int)(20.0f / kDt + 0.5f);
-    double sum = 0.0, sq = 0.0;
-    for (int i = from; i < n; i++) sum += xs[i], sq += (double)xs[i] * xs[i], r.xLo = fminf(r.xLo, xs[i]), r.xHi = fmaxf(r.xHi, xs[i]);
-    r.mean = (float)(sum / (n - from));
-    r.sd = (float)sqrt(fmax(0.0, sq / (n - from) - (double)r.mean * r.mean));
-    for (int i = 0; i < n; i++)
-        if (fabsf(xs[i] - r.mean) > 0.03f) r.settle = (i + 1) * kDt;
-    r.period = s.cuts > 1 ? (lastCut - firstCut) * kDt / (s.cuts - 1) : 0.0f;
     return r;
 }
 
@@ -3958,76 +3890,194 @@ int main(int argc, char **argv)
         Check(caught && !creptHeld && creptRise > kLiftRise * dt + 0.01f && ground, line);
     }
 
-    // Crawl hold (BRIEF_low_gear_sway.md, THE VERDICT and the Reviewer's addendum 4): H falls in a straight line from 2
-    // at 0.70 of the top to 0.05 at 0.95 and stays there, nothing below 0.70; xp leads x by its rising rate times
-    // 0.6 s, a falling x takes nothing off; another gear or truck starts the rate over; it acts only with the setting on,
-    // the gear held by hand and the mod gearbox in L-, L or L+ (the lead's scope), not in a numbered gear
+    // the torque cut's map (BRIEF_drivetrain_2_torque_cut.md): F over the wheels' speed with the clutch fully in. At idle
+    // and floored the curve's own there; at the peak E times the limit; the governor from kGovernFrom of the redline to
+    // nothing at kGovernTo; the foot off the brake, 0 at idle and under it, the whole share at the redline; the road load
+    // taken off; the engine held back; rolling against the gear 0 rpm (M2); the game's curve and B4s by the research's C.1
     {
-        CrawlHold h = {};
-        const float atFrom = CrawlHoldLine(0.70f), mid = CrawlHoldLine(0.825f), atTo = CrawlHoldLine(0.95f), past = CrawlHoldLine(1.1f), under = CrawlHoldLine(0.5f);
-        CrawlHoldStep(h, 0.75f, 0.05f, 1, 0x5000);
-        float rising = 0.0f;
-        for (int i = 1; i <= 20; i++) rising = CrawlHoldStep(h, 0.75f + 0.005f * i, 0.05f, 1, 0x5000); // 0.1 a second up, to 0.85
-        CrawlHold f = {};
-        CrawlHoldStep(f, 0.90f, 0.05f, 1, 0x5000);
-        float falling = 0.0f;
-        for (int i = 1; i <= 10; i++) falling = CrawlHoldStep(f, 0.90f - 0.005f * i, 0.05f, 1, 0x5000); // down to 0.85
-        const float fresh = CrawlHoldStep(h, 0.85f, 0.05f, 2, 0x5000);
-        char line[300];
-        snprintf(line, sizeof line, "crawl hold: H %.2f at 0.70, %.3f at 0.825, %.2f at 0.95 and past, none under 0.70; rising 0.1 a second to 0.85 it holds %.3f (xp about 0.91), "
-                                    "falling to 0.85 %.3f, a new gear %.3f", atFrom, mid, atTo, rising, falling, fresh);
-        Check(Near(atFrom, 2.0f, 1e-4f) && Near(mid, 1.025f, 1e-3f) && Near(atTo, 0.05f, 1e-4f) && past == kCrawlLeast && under == kTorqueFactorMost &&
-                  Near(rising, CrawlHoldLine(0.85f + 0.1f * 0.6f), 0.06f) && rising < CrawlHoldLine(0.85f) - 0.3f && Near(falling, CrawlHoldLine(0.85f), 1e-3f) &&
-                  Near(fresh, CrawlHoldLine(0.85f), 1e-3f) && CrawlHoldActs(true, true, kPosLowMinus) && CrawlHoldActs(true, true, kPosLow) &&
-                  CrawlHoldActs(true, true, kPosLowPlus) && !CrawlHoldActs(true, true, kPosGear) && !CrawlHoldActs(true, true, kPosA) &&
-                  !CrawlHoldActs(false, true, kPosLowMinus) && !CrawlHoldActs(true, false, kPosLowMinus),
-              line);
+        TorqueCutMap cm = { 1.0f, 1.0f, 0.0f, 1.0f, 0.15f, 10.0f, 800.0f, 2000.0f, 1.2f, { 5, { 0.25f, 0.45f, 0.6f, 0.8f, 1.0f }, { 0.55f, 0.85f, 1.0f, 1.0f, 0.85f } },
+                           kGovernFrom, kGovernTo };
+        const float atIdle = TorqueCutF(cm, 4.0f), atPeak = TorqueCutF(cm, 7.0f), atFrom = TorqueCutF(cm, 10.0f * kGovernFrom), atTo = TorqueCutF(cm, 10.0f * kGovernTo),
+                    past = TorqueCutF(cm, 14.0f);
+        TorqueCutMap cold = cm;
+        cold.limit = 0.6f;
+        const float limited = TorqueCutF(cold, 7.0f);
+        TorqueCutMap part = cm;
+        part.pedal = 0.5f;
+        part.limit = 0.6f;
+        const float partLimited = TorqueCutF(part, 7.0f); // the turbo without boost gives what a light foot asks, less the
+                                                            // half foot footOff: 0.5 x 0.15 x (1400 - 800) / 1200
+        TorqueCutMap footOff = cm;
+        footOff.pedal = 0.0f;
+        const float brakeTop = TorqueCutF(footOff, 10.0f), brakeIdle = TorqueCutF(footOff, 4.0f), brakeUnder = TorqueCutF(footOff, 2.0f), brakeHalf = TorqueCutF(footOff, 7.0f),
+                    against = TorqueCutF(footOff, -6.0f);
+        TorqueCutMap loaded = cm;
+        loaded.load = 0.2f;
+        TorqueCutMap heldBack = cm;
+        heldBack.held = 0.5f;
+        const bool map = Near(atIdle, CutCurveAt(cm.curve, 0.4f, 1.2f), 1e-5f) &&
+                         Near(atPeak, 1.0f, 1e-5f) && Near(atFrom, CutCurveAt(cm.curve, kGovernFrom, 1.2f), 1e-5f) && atTo == 0.0f && past == 0.0f &&
+                         Near(limited, 0.6f, 1e-5f) && Near(partLimited, 0.5f - 0.5f * 0.15f * 0.5f, 1e-5f) && Near(brakeTop, -0.15f, 1e-5f) && brakeIdle == 0.0f && brakeUnder == 0.0f &&
+                         Near(brakeHalf, -0.15f * (1400.0f - 800.0f) / 1200.0f, 1e-5f) && against == 0.0f && Near(TorqueCutF(loaded, 7.0f), 0.8f, 1e-5f) &&
+                         Near(TorqueCutF(heldBack, 7.0f), 0.5f, 1e-5f) && TorqueCutRpm(cm, -3.0f) == 0.0f && Near(TorqueCutRpm(cm, 5.0f), 1000.0f, 1e-3f) &&
+                         TorqueCutF(cm, NAN) == TorqueCutF(cm, 0.0f);
+        // the game's curve, as the drive scales it by the power factor: 0 below the start, 1 at a, falling to 0 at the top
+        const bool stock = TorqueCutStockCurve(0.25f, 4.0f, 13.0f, 1.0f, 0.1f) == 0.0f && TorqueCutStockCurve(0.25f, 4.0f, 13.0f, 1.0f, 4.0f) == 1.0f &&
+                           Near(TorqueCutStockCurve(0.25f, 4.0f, 13.0f, 1.0f, 8.5f), 0.5f, 1e-5f) && TorqueCutStockCurve(0.25f, 4.0f, 13.0f, 1.0f, 13.5f) == 0.0f &&
+                           TorqueCutStockCurve(0.25f, 4.0f, 13.0f, 0.2f, 2.6f) == 0.0f && TorqueCutStockCurve(0.25f, 4.0f, 13.0f, 0.2f, 0.8f) == 1.0f &&
+                           TorqueCutStockCurve(-1.0f, 0.0f, 1e9f, 0.2f, 3.0f) > 0.999f;
+        // B4s, the blend at 0, 50 and 100 (S3: the raw pedal, the game's curve at the float s), and the answer's floor
+        const float curveAt = TorqueCutStockCurve(0.25f, 4.0f, 13.0f, 1.0f, 9.0f);
+        const bool b4s = Near(TorqueCutB4s(0.3f, 1.0f, curveAt), 0.3f * curveAt, 1e-6f) && Near(TorqueCutB4s(0.3f, 0.5f, curveAt), 0.3f * (0.5f + 0.5f * curveAt), 1e-6f) &&
+                         TorqueCutB4s(0.0f, 1.0f, 1.0f) == 0.0f;
+        const bool blend = Near(TorqueCutBlend(0.0f, 0.4f, curveAt, 0.9f), 0.4f * curveAt, 1e-6f) && Near(TorqueCutBlend(0.5f, 0.4f, curveAt, 0.9f), 0.2f * curveAt + 0.45f, 1e-6f) &&
+                           Near(TorqueCutBlend(1.0f, 0.4f, curveAt, 0.9f), 0.9f, 1e-6f) && Near(TorqueCutBlend(1.0f, 0.0f, 0.0f, -0.1f), -0.1f, 1e-6f);
+        // M2: R (the gear's direction -1) rolling forward and 2nd rolling back read 0 rpm, so the foot footOff never pushes with the roll
+        const float omegaF[4] = { 5.0f, 5.2f, 4.8f, 5.0f }, omegaB[4] = { -5.0f, -5.2f, -4.8f, -5.0f };
+        const bool driven[4] = { true, true, false, true };
+        const CutSpeeds rForward = TorqueCutSpeeds(omegaF, driven, 4, -1), secondBack = TorqueCutSpeeds(omegaB, driven, 4, 1), rBack = TorqueCutSpeeds(omegaB, driven, 4, -1);
+        TorqueCutSlot slot = {};
+        slot.mode = kCutMap;
+        slot.share = 1.0f;
+        slot.map = footOff;
+        const TorqueCutAnswer aF = TorqueCutAnswerOf(slot, 3.0f, 0.25f, 4.0f, 13.0f, 1.0f, 1.0f, rForward), aB = TorqueCutAnswerOf(slot, 2.0f, 0.25f, 4.0f, 13.0f, 1.0f, 1.0f, secondBack);
+        const bool direction = rForward.ok && Near(rForward.mean, -5.0667f, 1e-3f) && rForward.mid == 0.0f && Near(rBack.mean, 5.0667f, 1e-3f) &&
+                               Near(rBack.mid, 5.1f, 1e-5f) && aF.f >= 0.0f && aF.torque >= 0.0f && aB.f >= 0.0f && aB.torque >= 0.0f;
+        // M3: under the hold the fuel goes by B4s; at the same s and pedal, TruckFuelRate with B4 at the game's settled
+        // pull (its target, the lag run out) and with B4s are the same at a pedal of 0.3 and of 1
+        TruckRaw ft = Truck();
+        ft.burnKnown = true;
+        ft.burnIdle = 1.0f;
+        ft.gearBurns = 3;
+        ft.gearBurn[0] = ft.gearBurn[1] = ft.gearBurn[2] = 4.0f;
+        ft.burnShare[0] = 1.0f;
+        ft.burnShare[1] = 0.0f;
+        ft.damageEffect = ft.gearboxEffect = ft.tankEffect = 0.0f;
+        ft.awd = 0;
+        ft.burnAwd = 1.0f;
+        bool fuel = true;
+        char fuelText[160] = "";
+        for (float pedal : { 0.3f, 1.0f })
+        {
+            ft.throttle = -pedal;
+            TruckRaw today = ft, cut = ft, held = ft;
+            today.actionB4 = pedal * curveAt;        // the game's own pull, settled
+            held.actionB4 = 1.0f;                     // under the hold, read as it is
+            cut.actionB4 = TorqueCutB4s(pedal, 1.0f, curveAt);
+            fuel = fuel && Near(TruckFuelRate(cut), TruckFuelRate(today), 1e-5f) && TruckFuelRate(held) >= TruckFuelRate(today);
+            snprintf(fuelText + strlen(fuelText), sizeof fuelText - strlen(fuelText), " %.1f: %.3f, held %.3f;", pedal, TruckFuelRate(cut), TruckFuelRate(held));
+        }
+        char line[600];
+        snprintf(line, sizeof line, "torque cut's map: idle %.3f, the peak %.3f, the governor %.3f at %.2f and 0 at %.2f of the redline, the cold %.3f, the foot off %.3f at the "
+                                    "redline and %.3f at idle; R rolling forward F %.3f, 2nd rolling back %.3f; the game's curve by C.1; B4s and the blend at 0, 50, 100; the "
+                                    "fuel by B4s as the game's settled pull, by the pedal:%s",
+                 atIdle, atPeak, atFrom, kGovernFrom, kGovernTo, limited, brakeTop, brakeIdle, aF.f, aB.f, fuelText);
+        Check(map && stock && b4s && blend && direction && fuel, line);
     }
-    // Crawl hold in the closed loop: with the hold off the truck surges (the game cuts at the top and the truck sags to
-    // 0.55 of it every few seconds; in L- with a 1900 rpm redline a swing of about 850 rpm, on the log's own scale over
-    // 2500) on all four drags over 30 s (mud and soft 4 cuts or more, firm and a road, where the sag is slow, 2 or more);
-    // with it on no cut on any of them, the wheels' sd under 0.02 of the top over the
-    // last 20 s, under the top, settled within 4 s of reaching 0.70, from the surge's own trough (0.55 of the top) and
-    // from a deeper one (0.3). Under 0.70 the climb is today's lift, which the hold leaves alone: in this loop it is
-    // under 1 there (the class curve at a low engine speed), so in mud that climb alone takes seconds; the line says
-    // both. L and L+ (the plain factor of 1 in gear 1) hold the same in mud. A numbered gear held by hand (a 10 rad/s
-    // top) is out of the hold's scope: with it on it runs exactly as with it off, surge and all
+
+    // the torque cut in the closed loop (the Reviewer's M4, test\torque_cut_sim.h): the game's drive sketched at its 60
+    // steps a second with its own terms (the cut to whole rad/s, w + 0x118, the clamp, the share), L- of a 2.74 rad/s top
+    // floored in soft and in firmer mud, MaxDeltaAngVel 0.05 (the 18:21 log has 0.02 and 0.05), a wheel's push of 80
+    // rad/s^2 at a bracket of 1 (the log's 10 to 30 at the hold's factors of 0.05 to 0.5). From rest and from 0.55 of the
+    // top: no fall of 0.3 or more in one step once settled, and s no more spread than with F held flat at its mean (the
+    // game's own terms and the mud alone; the Reviewer's last point: their own spread is said with the figure). The
+    // counter-cases document the design: the needle's narrow governor (the redline to 1.1 of it) chatters step to step at
+    // 60 Hz in the cut, and fed from the mod's thread every 100 ms (and 50 to 120 ms) cycles; the game's own drive (the
+    // stock curve and B4) the control. Then 3rd on a road to the redline and held, and the foot off down a grade in 2nd.
     {
-        const float drags[4] = { 0.68f, 0.4f, 0.2f, 0.05f };
-        const char *names[4] = { "mud", "soft", "firm", "road" };
-        char line[1800];
-        int len = snprintf(line, sizeof line, "crawl hold in the loop, L-, 30 s:");
+        SimSetup u = {};
+        u.drive = 80.0f;
+        u.mdav = 0.05f;
+        u.pf = 0.2f;
+        u.gameA = 2.35f;
+        u.gameStart = 0.25f * 2.35f - 2.0f;
+        u.gameTop = 2.0f * 2.35f + 5.0f;
+        u.response = 0.05f;
+        u.wheels = 4;
+        u.seconds = 20.0f;
+        u.seed = 7;
+        TorqueCutSlot &sl = u.slot;
+        sl.vehicle = 1;
+        sl.mode = kCutMap;
+        sl.share = 1.0f;
+        sl.pedal = 1.0f;
+        sl.map = TorqueCutMap{ 1.0f, 1.0f, 0.0f, 1.0f, 0.15f, 2.74f, 800.0f, 2500.0f, 1.2f, { 5, { 0.25f, 0.45f, 0.6f, 0.8f, 1.0f }, { 0.55f, 0.85f, 1.0f, 1.0f, 0.85f } },
+                               kGovernFrom, kGovernTo };
+        const SimGround grounds[2] = { { 5.0f, 0.3f, 1.0f, 1.5f, 0.0f }, { 30.0f, 0.15f, 0.5f, 1.0f, 0.0f } };
+        const char *groundNames[2] = { "soft mud", "firm mud" };
+        char line[2400];
+        int len = snprintf(line, sizeof line, "torque cut in the loop at 60 Hz, L- floored:");
         bool ok = true;
-        for (int d = 0; d < 4; d++)
-        {
-            const CrawlStats off = CrawlRun(false, 1, 0.133f, 0.0f, drags[d], 0.55f, 30.0f), on = CrawlRun(true, 1, 0.133f, 0.0f, drags[d], 0.55f, 30.0f),
-                             deep = CrawlRun(true, 1, 0.133f, 0.0f, drags[d], 0.3f, 30.0f);
-            len += snprintf(line + len, sizeof line - len, " %s off %d cuts (one in %.1f s), x %.2f to %.2f; on %d cuts, x %.3f to %.3f (sd %.4f), at %.3f; from 0.55 0.70 at "
-                                                           "%.2f s, settled %.2f s after; from 0.3 %d cuts, 0.70 at %.2f s (the lift %.2f), settled %.2f s after;",
-                            names[d], off.cuts, off.period, off.xLo, off.xHi, on.cuts, on.xLo, on.xHi, on.sd, on.mean, on.reach, on.settle - on.reach, deep.cuts, deep.reach,
-                            deep.climbFactor, deep.settle - deep.reach);
-            ok = ok && off.cuts >= (d < 2 ? 4 : 2) && (off.cuts < 2 || off.period >= 2.0f) && off.xHi - off.xLo > 0.4f && !on.cuts && on.settle - on.reach <= 4.0f && on.sd < 0.02f && on.xHi < 1.0f &&
-                 !deep.cuts && deep.settle - deep.reach <= 4.0f && deep.sd < 0.02f;
-        }
-        const float lowPower[2] = { 0.45f, 1.0f };
-        const int lowPos[2] = { kPosLow, kPosLowPlus };
-        for (int l = 0; l < 2; l++)
-        {
-            const CrawlStats off = CrawlRun(false, 1, lowPower[l], 0.0f, 0.68f, 0.55f, 30.0f, lowPos[l]), on = CrawlRun(true, 1, lowPower[l], 0.0f, 0.68f, 0.55f, 30.0f, lowPos[l]);
-            len += snprintf(line + len, sizeof line - len, " %s (a %.2f rad/s top) in mud: off %d cuts; on %d cuts, x %.3f to %.3f (sd %.4f), settled %.2f s after 0.70;",
-                            l ? "L+" : "L", on.top, off.cuts, on.cuts, on.xLo, on.xHi, on.sd, on.settle - on.reach);
-            ok = ok && off.cuts >= 4 && !on.cuts && on.settle - on.reach <= 4.0f && on.sd < 0.02f && on.xHi < 1.0f;
-        }
-        const float tenDrags[2] = { 0.68f, 0.05f };
-        for (int d = 0; d < 2; d++)
-        {
-            const CrawlStats off = CrawlRun(false, 2, 1.0f, 2.5f, tenDrags[d], 0.55f, 30.0f, kPosGear), on = CrawlRun(true, 2, 1.0f, 2.5f, tenDrags[d], 0.55f, 30.0f, kPosGear);
-            len += snprintf(line + len, sizeof line - len, " a numbered gear (a %.0f rad/s top), %s: off %d cuts, x %.3f to %.3f; on the same, %d cuts, x %.3f to %.3f;",
-                            on.top, d ? "road" : "mud", off.cuts, off.xLo, off.xHi, on.cuts, on.xLo, on.xHi);
-            ok = ok && off.cuts >= 2 && on.cuts == off.cuts && on.xLo == off.xLo && on.xHi == off.xHi && on.sd == off.sd;
-        }
+        for (int g = 0; g < 2; g++)
+            for (int from = 0; from < 2; from++)
+            {
+                u.ground = grounds[g];
+                u.s0 = from ? 0.55f * 2.74f : 0.0f;
+                u.v0 = from ? 0.3f : 0.0f;
+                u.mode = kSimCut;
+                const SimResult cut = SimRun(u);
+                u.mode = kSimFlat;
+                u.flat = (cut.fMin + cut.fMax) * 0.5f;
+                const SimResult flat = SimRun(u);
+                u.mode = kSimGame;
+                const SimResult game = SimRun(u);
+                len += snprintf(line + len, sizeof line - len, " %s from %.2f: settled %.2f s, x %.3f, sd %.4f of the top (F held flat %.4f, the game's own %.4f at x %.3f), "
+                                                               "falls %d after;",
+                                groundNames[g], from ? 0.55f : 0.0f, cut.settledAt, cut.mean / 2.74f, cut.sd / 2.74f, flat.sd / 2.74f, game.sd / 2.74f, game.mean / 2.74f,
+                                cut.cutsAfter);
+                ok = ok && cut.settledAt >= 0.0f && cut.settledAt <= 8.0f && cut.cutsAfter == 0 && cut.sd <= 1.25f * flat.sd + 0.002f * 2.74f;
+            }
+        // the counter-cases, soft mud from 0.55: the narrow governor of the needle's overrun, in the step and fed late
+        u.ground = grounds[0];
+        u.s0 = 0.55f * 2.74f;
+        u.v0 = 0.3f;
+        TorqueCutSlot wide = sl;
+        sl.map.governFrom = 1.0f;
+        sl.map.governTo = kTachOverrun;
+        u.mode = kSimCut;
+        const SimResult narrow = SimRun(u);
+        u.mode = kSimHeld;
+        u.passFrom = u.passTo = 0.1f;
+        const SimResult late = SimRun(u);
+        u.passFrom = 0.05f;
+        u.passTo = 0.12f;
+        const SimResult jitter = SimRun(u);
+        sl = wide;
+        u.passFrom = u.passTo = 0.1f;
+        const SimResult wideLate = SimRun(u);
+        len += snprintf(line + len, sizeof line - len, " the narrow governor in the step %.1f falls a second, fed every 100 ms %.1f a second (one every %.2f s), every 50 to "
+                                                       "120 ms %.1f (%.2f s); the wide one fed every 100 ms %.1f a second;",
+                        narrow.cutsPerSecond, late.cutsPerSecond, late.period, jitter.cutsPerSecond, jitter.period, wideLate.cutsPerSecond);
+        ok = ok && narrow.cutsPerSecond >= 1.0f && late.cutsPerSecond >= 1.0f && jitter.cutsPerSecond >= 1.0f;
+        // 3rd on a road floored: a 15 rad/s top, the clamp's + 0x170 term whole, the truck free to run
+        SimSetup road = u;
+        road.mode = kSimCut;
+        road.w170 = 12.0f;
+        road.s0 = road.v0 = 2.0f;
+        road.ground = SimGround{ 60.0f, 0.05f, 0.05f, 0.3f, 0.0f };
+        road.slot.map.top = 15.0f;
+        road.seconds = 30.0f;
+        const SimResult third = SimRun(road);
+        len += snprintf(line + len, sizeof line - len, " 3rd on a road: x %.3f at the end, %.3f over the last 10 s (sd %.4f), falls %d after;", third.sEnd / 15.0f,
+                        third.mean / 15.0f, third.sd / 15.0f, third.cutsAfter);
+        ok = ok && third.mean / 15.0f >= kGovernFrom && third.mean / 15.0f <= kGovernTo && third.cutsAfter == 0;
+        // the foot off down a 10 % grade in 2nd (an 8 rad/s top) from 0.8 of its top: held back, slowing or holding
+        SimSetup hill = road;
+        hill.slot.pedal = 0.0f;
+        hill.slot.map.pedal = 0.0f;
+        hill.slot.map.top = 8.0f;
+        hill.s0 = hill.v0 = 6.4f;
+        hill.ground = SimGround{ 60.0f, 0.05f, 0.05f, 0.3f, 0.6f };
+        hill.seconds = 15.0f;
+        const SimResult held = SimRun(hill);
+        SimSetup rolls = hill;
+        rolls.slot.map.brake = 0.0f;
+        const SimResult free = SimRun(rolls);
+        len += snprintf(line + len, sizeof line - len, " the foot off down the grade in 2nd: from %.2f rad/s to %.2f held, to %.2f with EngineBrake 0", hill.v0, held.vEnd, free.vEnd);
+        ok = ok && held.vEnd <= hill.v0 + 0.05f && free.vEnd > held.vEnd + 1.0f;
         Check(ok, line);
     }
+
     // L- is jerky (BRIEF_low_minus_jerky.md): by spin, the mean of the last passes and the cap's fade over the wider of
     // the top's last 0.8 rad/s and its last fifth (BRIEF_low_gear_sway.md). A trace with +-0.15 rad/s of noise around
     // 0.95 (and 1.0) of L-'s 2.24 rad/s top keeps the factor's change from one pass to the next under 0.15 (0.18.4's jumps

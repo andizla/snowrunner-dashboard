@@ -49,6 +49,7 @@ static bool AutoFlagUp()
     }
 }
 static volatile LONG g_refused[kFnCount] = {};
+static volatile LONG g_kicks = 0; // the game's ShiftGear(0) refused for the held truck (GearboxKicks)
 
 // The manual shift rebuild's probe (review 17, step 0): each hook's last thread, and the fields around a call that
 // passed through.
@@ -183,7 +184,12 @@ static bool HookShiftGear(void *vehicle, int32_t gear)
 {
     Seen(kFnShiftGear);
     InterlockedExchange(&g_shiftGear, gear);
-    if (Refused(kFnShiftGear, vehicle, gear)) return false;
+    if (Refused(kFnShiftGear, vehicle, gear))
+    {
+        // a bare ShiftGear(0) refused for the held truck is the gearbox damage's kick to N (GearboxKicks)
+        if (gear == 0 && g_policy == kPolicyAll) InterlockedIncrement(&g_kicks);
+        return false;
+    }
     const bool look = LookBefore(kFnShiftGear, vehicle);
     const bool took = ((ShiftFn)g_way[kFnShiftGear])(vehicle, gear);
     if (look) LookAfter(kFnShiftGear, vehicle, gear, 0.0f);
@@ -499,16 +505,43 @@ int DriveThreadsGet(DWORD *out, int most, bool &full)
     return n;
 }
 
+// The torque cut's slot (TorqueCutPublish), read by the drive's hook below and by the gear torque's detour.
+static TorqueCutSlot g_cutSlots[2];
+static int g_cutNext = 0;
+static void *volatile g_cutSlot = nullptr;
+static volatile LONG g_cutHolds = 0; // the drive's calls whose throttle the cut held at 1
+
+// B4 (action + 0xB4) written 1 before the drive runs; nothing where the memory is gone.
+static void CutPullOne(void *action)
+{
+    __try
+    {
+        *(volatile float *)((uint8_t *)action + 0xB4) = 1.0f;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+}
+
 // The creep's larger of the two throttles, as the stub's maxss had it (the share where the game's is not a number),
-// then the step probe's look, then on into the drive with the step's seconds as they came.
+// then the step probe's look, then on into the drive with the step's seconds as they came. While the torque cut has the
+// action, its throttle is 1 and B4 is written 1 instead (the Reviewer's S2).
 static void CreepDrive(void *action, float throttle, float dt)
 {
     InterlockedIncrement(&g_creepCalls);
     const LONG thread = (LONG)GetCurrentThreadId();
     if (thread != g_driveThread) DriveThreadNote(thread);
     g_driveThread = thread;
+    const TorqueCutSlot *cut = (const TorqueCutSlot *)g_cutSlot;
     const CreepSlot *slot = (const CreepSlot *)g_creepSlot;
-    if (slot && (uint64_t)(uintptr_t)action == slot->action)
+    uint64_t now = 0;
+    if (cut && (uint64_t)(uintptr_t)action == cut->action && (now = GetTickCount64()) >= cut->at && now - cut->at <= kTorqueFresh)
+    {
+        InterlockedIncrement(&g_cutHolds);
+        throttle = 1.0f;
+        CutPullOne(action);
+    }
+    else if (slot && (uint64_t)(uintptr_t)action == slot->action)
     {
         InterlockedIncrement(&g_creepHits);
         throttle = _mm_cvtss_f32(_mm_max_ss(_mm_set_ss(throttle), _mm_set_ss(slot->share))); // maxss itself: a ?: may be built with its operands swapped
@@ -618,6 +651,21 @@ static void SpeedNote(uintptr_t back, float stock)
     g_speedFull = 1;
 }
 
+// B4 at the vehicle's action ([vehicle + 0x68] + 0xB4); below 0 where the memory is gone.
+static float SpeedPull(const void *vehicle)
+{
+    __try
+    {
+        const uint8_t *action = *(const uint8_t *const *)((const uint8_t *)vehicle + 0x68);
+        if ((uintptr_t)action < 0x10000) return -1.0f;
+        return *(const volatile float *)(action + 0xB4);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return -1.0f;
+    }
+}
+
 __declspec(noinline) static float HookEngineSpeed(void *vehicle, bool withWheels, bool withMinThrottle)
 {
     const uintptr_t back = (uintptr_t)_ReturnAddress();
@@ -628,6 +676,16 @@ __declspec(noinline) static float HookEngineSpeed(void *vehicle, bool withWheels
     {
         stock = own(vehicle, withWheels, withMinThrottle);
         SpeedNote(back, stock);
+    }
+    // the fuel's call under the torque cut (the Reviewer's M3): the game's own value is linear in B4 there, so it is
+    // scaled to the pull the game would have without the throttle held at 1
+    float b4s = 0.0f;
+    if (back == g_fuelBack && TorqueCutB4sGet((uint64_t)(uintptr_t)vehicle, b4s))
+    {
+        if (!probe) stock = own(vehicle, withWheels, withMinThrottle);
+        const float b4 = SpeedPull(vehicle);
+        if (b4 < 0.0f || !isfinite(b4)) return stock;
+        return b4 > 0.0f ? stock * b4s / b4 : 0.0f;
     }
     const EngineSpeedSlot *slot = (const EngineSpeedSlot *)g_speedSlot;
     // the cheap tests first, so the call of another vehicle, of the fuel or of the stall reads nothing more
@@ -695,3 +753,165 @@ void EngineSpeedAnswers(long &answered, float &last)
     answered = g_speedAnswered;
     last = BitsFloat(g_speedLast);
 }
+
+// ---- the torque cut: the game's gear torque ----
+// bool(vehicle rcx, int gear edx, float *torque r8, float *start r9, float *a, float *top, float *gearSpeed on the
+// stack), every output zeroed first and any pointer may be null (review\own_drivetrain_research.md A). None of its seven
+// calls reads a scratch register after it before writing it (the Reviewer's N2), so a C++ function of the same seven
+// arguments stands in. The game's own is called with the detour's own locals for every output (the drive passes no
+// gearSpeed, the stall only the start), then the caller's pointers get the answer.
+typedef bool (*GearTorqueFn)(void *vehicle, int gear, float *torque, float *start, float *a, float *top, float *gearSpeed);
+static void *g_torqueWay = nullptr;
+static bool g_torqueHooked = false;
+static uintptr_t g_driveBack = 0;
+static volatile LONG g_cutAnswered = 0, g_cutPassed = 0, g_cutOthers = 0, g_cutFaults = 0, g_cutFalls = 0;
+static volatile LONG g_cutS = 0, g_cutF = 0, g_cutBracket = 0, g_cutStock = 0, g_cutTorque = 0, g_cutD4 = 0, g_cutB4sLast = 0, g_cutCurve = 0, g_cutLastBracket = 0;
+// the B4s of the last answer, for the fuel's call and the mod's thread
+static volatile LONG64 g_b4sVehicle = 0, g_b4sAt = 0;
+static volatile LONG g_b4sBits = 0;
+
+static const int kCutWheels = 16;
+// The vehicle's driven wheels' speeds, its power factor (action + 0x38) and its game clutch (action + 0xD4), read as the
+// drive reads them; false where a read faults or the list is out of bounds.
+static bool CutWheelsRead(const void *vehicle, float *omega, bool *driven, int &n, float &pf, float &d4)
+{
+    n = 0;
+    __try
+    {
+        const uint8_t *v = (const uint8_t *)vehicle;
+        const uint8_t *action = *(const uint8_t *const *)(v + 0x68);
+        if ((uintptr_t)action < 0x10000) return false;
+        pf = *(const volatile float *)(action + 0x38);
+        d4 = *(const volatile float *)(action + 0xD4);
+        const bool awd = *(const volatile uint8_t *)(action + 0x49) != 0;
+        const uintptr_t begin = *(const uintptr_t *)(v + 0x200), end = *(const uintptr_t *)(v + 0x208);
+        if (end < begin || (end - begin) / 8 > (uintptr_t)kCutWheels) return false;
+        for (uintptr_t p = begin; p < end; p += 8)
+        {
+            const uint8_t *model = *(const uint8_t *const *)p;
+            if ((uintptr_t)model < 0x10000) continue;
+            const uint8_t *wheel = *(const uint8_t *const *)(model + 0x2C8);
+            if ((uintptr_t)wheel < 0x10000) continue;
+            const int type = *(const volatile int *)(wheel + 0xE8);
+            omega[n] = *(const volatile float *)(wheel + 0x16C);
+            driven[n] = type == 1 || (type == 2 && awd);
+            n++;
+        }
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        n = 0;
+        return false;
+    }
+}
+
+__declspec(noinline) static bool HookGearTorque(void *vehicle, int gear, float *torque, float *start, float *a, float *top, float *gearSpeed)
+{
+    const uintptr_t back = (uintptr_t)_ReturnAddress();
+    float t = 0.0f, st = 0.0f, aa = 0.0f, tp = 0.0f, gs = 0.0f;
+    const bool took = ((GearTorqueFn)g_torqueWay)(vehicle, gear, &t, &st, &aa, &tp, &gs);
+    const TorqueCutSlot *published = back == g_driveBack ? (const TorqueCutSlot *)g_cutSlot : nullptr;
+    if (published && TorqueCutOurs(back, g_driveBack, published, (uint64_t)(uintptr_t)vehicle, took, GetTickCount64()))
+    {
+        const TorqueCutSlot slot = *published; // read whole: the one it points to is written again two passes later
+        float omega[kCutWheels];
+        bool driven[kCutWheels];
+        int n = 0;
+        float pf = 1.0f, d4 = 1.0f;
+        CutSpeeds sp = { 0.0f, 0.0f, false };
+        if (CutWheelsRead(vehicle, omega, driven, n, pf, d4)) sp = TorqueCutSpeeds(omega, driven, n, gear < 0 ? -1 : 1);
+        if (!sp.ok) InterlockedIncrement(&g_cutFaults);
+        const TorqueCutAnswer r = TorqueCutAnswerOf(slot, t, st, aa, tp, pf, d4, sp);
+        if (torque) *torque = r.torque;
+        if (start) *start = -1.0f;
+        if (a) *a = 0.0f;
+        if (top) *top = 1e9f;
+        if (gearSpeed) *gearSpeed = gs;
+        InterlockedIncrement(&g_cutAnswered);
+        if (BitsFloat(g_cutLastBracket) - r.bracket >= 0.3f) InterlockedIncrement(&g_cutFalls);
+        InterlockedExchange(&g_cutLastBracket, FloatBits(r.bracket));
+        InterlockedExchange(&g_cutS, FloatBits(r.s));
+        InterlockedExchange(&g_cutF, FloatBits(r.f));
+        InterlockedExchange(&g_cutBracket, FloatBits(r.bracket));
+        InterlockedExchange(&g_cutStock, FloatBits(t));
+        InterlockedExchange(&g_cutTorque, FloatBits(r.torque));
+        InterlockedExchange(&g_cutD4, FloatBits(d4));
+        InterlockedExchange(&g_cutCurve, FloatBits(r.stockCurve));
+        InterlockedExchange(&g_cutB4sLast, FloatBits(r.b4s));
+        InterlockedExchange(&g_b4sBits, FloatBits(r.b4s));
+        InterlockedExchange64(&g_b4sAt, (LONG64)GetTickCount64());
+        InterlockedExchange64(&g_b4sVehicle, (LONG64)(uintptr_t)vehicle);
+        return true;
+    }
+    InterlockedIncrement(back == g_driveBack ? &g_cutPassed : &g_cutOthers);
+    if (torque) *torque = t;
+    if (start) *start = st;
+    if (a) *a = aa;
+    if (top) *top = tp;
+    if (gearSpeed) *gearSpeed = gs;
+    return took;
+}
+
+bool GearTorqueHook(uintptr_t at, uintptr_t driveBack, char *why, size_t size)
+{
+    why[0] = 0;
+    if (g_torqueHooked) return true;
+    g_driveBack = driveBack;
+    g_torqueWay = (void *)at;
+    void **targets[1] = { &g_torqueWay };
+    void *const hooks[1] = { (void *)&HookGearTorque };
+    const long error = GearboxAttach(targets, hooks, 1);
+    if (error != NO_ERROR)
+    {
+        snprintf(why, size, "Detours could not attach the gear torque's hook (error %ld)", error);
+        g_torqueWay = nullptr;
+        return false;
+    }
+    g_torqueHooked = true;
+    return true;
+}
+
+bool GearTorqueHooked() { return g_torqueHooked; }
+
+void TorqueCutPublish(const TorqueCutSlot *slot)
+{
+    if (!slot || !slot->vehicle || !slot->action)
+    {
+        InterlockedExchangePointer(&g_cutSlot, nullptr);
+        return;
+    }
+    TorqueCutSlot &next = g_cutSlots[g_cutNext];
+    g_cutNext ^= 1;
+    next = *slot;
+    if (!next.at) next.at = GetTickCount64();
+    InterlockedExchangePointer(&g_cutSlot, &next);
+}
+
+bool TorqueCutB4sGet(uint64_t vehicle, float &b4s)
+{
+    if (!vehicle || (uint64_t)g_b4sVehicle != vehicle) return false;
+    const uint64_t at = (uint64_t)g_b4sAt, now = GetTickCount64();
+    if (now < at || now - at > kTorqueFresh) return false;
+    b4s = BitsFloat(g_b4sBits);
+    return isfinite(b4s);
+}
+
+void TorqueCutCountsGet(TorqueCutCounts &out)
+{
+    out.answered = g_cutAnswered;
+    out.passed = g_cutPassed;
+    out.others = g_cutOthers;
+    out.faults = g_cutFaults;
+    out.falls = g_cutFalls;
+    out.s = BitsFloat(g_cutS);
+    out.f = BitsFloat(g_cutF);
+    out.bracket = BitsFloat(g_cutBracket);
+    out.stock = BitsFloat(g_cutStock);
+    out.torque = BitsFloat(g_cutTorque);
+    out.d4 = BitsFloat(g_cutD4);
+    out.b4s = BitsFloat(g_cutB4sLast);
+    out.stockCurve = BitsFloat(g_cutCurve);
+}
+
+long GearboxKicks() { return g_kicks; }

@@ -27,11 +27,6 @@ static const float kLowMinusUnder = 0.325f, kLowUnder = 0.725f; // a factor in g
 // pull and top, and in gear 1's sums they would skew its a_base and, through the fold, K (review F1). The test
 // GearboxPosTake uses.
 inline bool BaseLearnPlainPower(int gear, float power) { return gear != 1 || !(power > 0.0f && power < kLowUnder); }
-// Crawl hold's scope (models.h, CrawlHoldStep; the lead's word on BRIEF_low_gear_sway.md): the setting on, the gear held
-// by hand with the clutch fully in (locked: the mod gearbox), and the mod gearbox in L-, L or L+. L+ is the game's first
-// gear at the plain power factor of 1, so the position tells it, not the factor. One condition: a numbered gear is
-// added here if one shows the surge at its top.
-inline bool CrawlHoldActs(bool on, bool locked, int pos) { return on && locked && pos >= kPosLowMinus && pos <= kPosLowPlus; }
 // What a shift without the clutch brings the truck's stall seconds to (vehicle + 0x11C): the game kills an engine there
 // from 1.4 on (SMT writes 5 at once).
 static const float kStallSeconds = 1.5f;

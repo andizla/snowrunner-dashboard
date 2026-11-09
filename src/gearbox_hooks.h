@@ -9,6 +9,7 @@
 #include <stddef.h>
 #include "game_code.h"
 #include "gearbox_model.h"
+#include "torque_cut.h"
 
 // The calls each hook has seen since the attach, and the last arguments of those that have some.
 struct GearboxCounts
@@ -197,7 +198,11 @@ bool CreepHooked();
 typedef void (*DriveStepFn)(uint64_t action, float dt);
 void DriveStepSet(DriveStepFn step);
 // The share of the drive throttle the hook gives the truck whose action this is (models.h, CreepShare): the larger of
-// the game's and this. An action of 0 or a share of 0 lets every call pass as it came.
+// the game's and this. An action of 0 or a share of 0 lets every call pass as it came. While the torque cut has a slot
+// published for an action (TorqueCutPublish, at most kTorqueFresh old), the hook gives that action's drive a throttle
+// of 1 and writes its B4 (action + 0xB4) as 1 before the drive runs, on the physics thread in the same step (the
+// Reviewer's S2): the cut's torque carries the pedal, the sign and the size, and the drive's own update keeps B4 at 1
+// (its target is the throttle once the curve is flat), zeroed as ever while + 0xD8 is up.
 void CreepGive(uint64_t action, float share);
 // The hook's calls so far: for the action given (hits) and all of them.
 void CreepCounts(long &hits, long &calls);
@@ -239,3 +244,32 @@ struct EngineSpeedCaller { uintptr_t back; long calls; float stock; };
 int EngineSpeedCallersGet(EngineSpeedCaller *out, int most, bool &full);
 // The calls answered with the mod's value so far, and the last value answered.
 void EngineSpeedAnswers(long &answered, float &last);
+// While the torque cut holds the drive's throttle at 1 the game's B4 sits at 1 at any pedal, and its fuel burn reads B4
+// through the fuel's call (the Reviewer's M3): that call is answered with the game's own value times B4s / B4 (0 where B4
+// is 0), B4s the stock pull without its lag that the cut's detour keeps for the vehicle (TorqueCutB4sGet), whether or not
+// ModEngineSpeed hands the game the mod's engine speed.
+
+// ---- the torque cut (game_code.h, GearTorqueFind; torque_cut.h; BRIEF_drivetrain_2_torque_cut.md) ----
+// A detour on the game's gear torque, attached once (all other threads suspended) and never taken out: the drive's call
+// (returning to driveBack) answered by TorqueCutAnswerOf while a slot is published for its vehicle (TorqueCutOurs), the
+// wheels read in the detour from the vehicle's own list ([[vehicle + 0x200] + i x 8] + 0x2C8: the type at + 0xE8, driven
+// at 1, or 2 with all wheel drive at action + 0x49; the speed at + 0x16C) under __try, so the speed part is this step's.
+// Every other caller (the stall's, GetTruckInput's, the automatic's), another vehicle, a stale slot and the game's own
+// false get the game's own outputs. No log, lock or heap in the detour; counters and the last figures for the probe.
+bool GearTorqueHook(uintptr_t at, uintptr_t driveBack, char *why, size_t size);
+bool GearTorqueHooked();
+// The slot for the driven truck, copied into one of two and published whole; nullptr clears it (every call passes, the
+// throttle hold off). slot->at 0 stamps it now.
+void TorqueCutPublish(const TorqueCutSlot *slot);
+// The last B4s the detour worked out for vehicle, when at most kTorqueFresh old.
+bool TorqueCutB4sGet(uint64_t vehicle, float &b4s);
+struct TorqueCutCounts
+{
+    long answered, passed, others, faults, falls; // the drive's calls answered and passed, the other callers', the wheels' reads that failed, the falls of the bracket by 0.3 or more in one step
+    float s, f, bracket, stock, torque, d4, b4s, stockCurve; // the last answer's
+};
+void TorqueCutCountsGet(TorqueCutCounts &out);
+// The game's own ShiftGear(0) refused for the held truck at kPolicyAll so far: the gearbox damage's kick to N
+// (review\own_drivetrain_research.md C.5); the player's N comes through ShiftToNeutral or AutoOffAndShift, refused at its
+// own door, so it never reaches ShiftGear.
+long GearboxKicks();
