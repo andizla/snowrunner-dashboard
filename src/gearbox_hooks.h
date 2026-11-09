@@ -244,10 +244,11 @@ struct EngineSpeedCaller { uintptr_t back; long calls; float stock; };
 int EngineSpeedCallersGet(EngineSpeedCaller *out, int most, bool &full);
 // The calls answered with the mod's value so far, and the last value answered.
 void EngineSpeedAnswers(long &answered, float &last);
-// While the torque cut holds the drive's throttle at 1 the game's B4 sits at 1 at any pedal, and its fuel burn reads B4
-// through the fuel's call (the Reviewer's M3): that call is answered with the game's own value times B4s / B4 (0 where B4
-// is 0), B4s the stock pull without its lag that the cut's detour keeps for the vehicle (TorqueCutB4sGet), whether or not
-// ModEngineSpeed hands the game the mod's engine speed.
+// While the torque cut holds the drive's throttle at 1 the game's B4 sits at 1 at any pedal, and its fuel burn and its
+// damaged gearbox's stall read B4 through the fuel's and the stall's calls: the fuel's is answered with the game's own
+// value times the stand-in / B4 (0 where B4 is 0), the stall's by the game's own formula with the stand-in in B4's place
+// (TorqueCutStallAnswer). The stand-in (TorqueCutStandIn, the cut's own pull) and the stall's wheels' term are what the
+// cut's detour keeps for the vehicle (TorqueCutPullGet).
 
 // ---- the torque cut (game_code.h, GearTorqueFind; torque_cut.h; BRIEF_drivetrain_2_torque_cut.md) ----
 // A detour on the game's gear torque, attached once (all other threads suspended) and never taken out: the drive's call
@@ -262,11 +263,17 @@ bool GearTorqueHooked();
 // throttle hold off). slot->at 0 stamps it now.
 void TorqueCutPublish(const TorqueCutSlot *slot);
 // The last B4s the detour worked out for vehicle, when at most kTorqueFresh old.
-bool TorqueCutB4sGet(uint64_t vehicle, float &b4s);
+// The stand-in for B4 (TorqueCutStandIn), the stall's wheels' term and the pedal of the cut's last answer for the vehicle,
+// at most kTorqueFresh old; false otherwise.
+struct TorqueCutPull
+{
+    float standIn, w, pedal;
+};
+bool TorqueCutPullGet(uint64_t vehicle, TorqueCutPull &out);
 struct TorqueCutCounts
 {
     long answered, passed, others, faults, falls; // the drive's calls answered and passed, the other callers', the wheels' reads that failed, the falls of the bracket by 0.3 or more in one step
-    float s, f, bracket, stock, torque, d4, b4s, stockCurve; // the last answer's
+    float s, f, bracket, stock, torque, d4, b4s, stockCurve, standIn, w; // the last answer's (b4s the game's settled pull, for the probe; standIn what B4's readers get)
 };
 void TorqueCutCountsGet(TorqueCutCounts &out);
 // The game's own ShiftGear(0) refused for the held truck at kPolicyAll so far: the gearbox damage's kick to N

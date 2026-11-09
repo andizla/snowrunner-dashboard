@@ -677,16 +677,23 @@ __declspec(noinline) static float HookEngineSpeed(void *vehicle, bool withWheels
         stock = own(vehicle, withWheels, withMinThrottle);
         SpeedNote(back, stock);
     }
-    // the fuel's and the stall's calls under the torque cut (the Reviewer's M3 and S1): the game's own value is linear
-    // in B4 there (the stall's in its base term, the larger at part pedal), so it is scaled to the pull the game would
-    // have without the throttle held at 1
-    float b4s = 0.0f;
-    if ((back == g_fuelBack || back == g_stallBack) && TorqueCutB4sGet((uint64_t)(uintptr_t)vehicle, b4s))
+    // the fuel's and the stall's calls under the torque cut: B4 is held at 1 there, so the stand-in (TorqueCutStandIn,
+    // the cut's own pull) takes its place. The fuel's value is linear in B4 (the Reviewer's M3): stock x standIn / B4.
+    // The stall's adds a wheels' term that is not (the second review's M1): the game's own formula with the stand-in,
+    // its base from the game's own call without the wheels, w kept from the drive's step so this reads no wheels.
+    TorqueCutPull pull = {};
+    if ((back == g_fuelBack || back == g_stallBack) && TorqueCutPullGet((uint64_t)(uintptr_t)vehicle, pull))
     {
-        if (!probe) stock = own(vehicle, withWheels, withMinThrottle);
         const float b4 = SpeedPull(vehicle);
+        if (back == g_stallBack)
+        {
+            const float noWheels = own(vehicle, false, false);
+            if (b4 < 0.0f || !isfinite(b4)) return probe ? stock : own(vehicle, withWheels, withMinThrottle);
+            return TorqueCutStallAnswer(pull.pedal, pull.w, pull.standIn, noWheels, b4);
+        }
+        if (!probe) stock = own(vehicle, withWheels, withMinThrottle);
         if (b4 < 0.0f || !isfinite(b4)) return stock;
-        return b4 > 0.0f ? stock * b4s / b4 : 0.0f;
+        return b4 > 0.0f ? stock * pull.standIn / b4 : 0.0f;
     }
     const EngineSpeedSlot *slot = (const EngineSpeedSlot *)g_speedSlot;
     // the cheap tests first, so the call of another vehicle, of the fuel or of the stall reads nothing more
@@ -767,9 +774,10 @@ static bool g_torqueHooked = false;
 static uintptr_t g_driveBack = 0;
 static volatile LONG g_cutAnswered = 0, g_cutPassed = 0, g_cutOthers = 0, g_cutFaults = 0, g_cutFalls = 0;
 static volatile LONG g_cutS = 0, g_cutF = 0, g_cutBracket = 0, g_cutStock = 0, g_cutTorque = 0, g_cutD4 = 0, g_cutB4sLast = 0, g_cutCurve = 0, g_cutLastBracket = 0;
-// the B4s of the last answer, for the fuel's call and the mod's thread
+// the stand-in for B4, the stall's wheels' term and the pedal of the last answer, for the engine speed's calls and the
+// mod's thread
 static volatile LONG64 g_b4sVehicle = 0, g_b4sAt = 0;
-static volatile LONG g_b4sBits = 0;
+static volatile LONG g_b4sBits = 0, g_cutWBits = 0, g_cutPedalBits = 0;
 
 static const int kCutWheels = 16;
 // The vehicle's driven wheels' speeds, its power factor (action + 0x38) and its game clutch (action + 0xD4), read as the
@@ -840,7 +848,9 @@ __declspec(noinline) static bool HookGearTorque(void *vehicle, int gear, float *
         InterlockedExchange(&g_cutD4, FloatBits(d4));
         InterlockedExchange(&g_cutCurve, FloatBits(r.stockCurve));
         InterlockedExchange(&g_cutB4sLast, FloatBits(r.b4s));
-        InterlockedExchange(&g_b4sBits, FloatBits(r.b4s));
+        InterlockedExchange(&g_b4sBits, FloatBits(r.standIn));
+        InterlockedExchange(&g_cutWBits, FloatBits(r.w));
+        InterlockedExchange(&g_cutPedalBits, FloatBits(slot.pedal));
         InterlockedExchange64(&g_b4sAt, (LONG64)GetTickCount64());
         InterlockedExchange64(&g_b4sVehicle, (LONG64)(uintptr_t)vehicle);
         return true;
@@ -889,13 +899,15 @@ void TorqueCutPublish(const TorqueCutSlot *slot)
     InterlockedExchangePointer(&g_cutSlot, &next);
 }
 
-bool TorqueCutB4sGet(uint64_t vehicle, float &b4s)
+bool TorqueCutPullGet(uint64_t vehicle, TorqueCutPull &out)
 {
     if (!vehicle || (uint64_t)g_b4sVehicle != vehicle) return false;
     const uint64_t at = (uint64_t)g_b4sAt, now = GetTickCount64();
     if (now < at || now - at > kTorqueFresh) return false;
-    b4s = BitsFloat(g_b4sBits);
-    return isfinite(b4s);
+    out.standIn = BitsFloat(g_b4sBits);
+    out.w = BitsFloat(g_cutWBits);
+    out.pedal = BitsFloat(g_cutPedalBits);
+    return isfinite(out.standIn) && isfinite(out.w) && isfinite(out.pedal);
 }
 
 void TorqueCutCountsGet(TorqueCutCounts &out)
@@ -913,6 +925,8 @@ void TorqueCutCountsGet(TorqueCutCounts &out)
     out.d4 = BitsFloat(g_cutD4);
     out.b4s = BitsFloat(g_cutB4sLast);
     out.stockCurve = BitsFloat(g_cutCurve);
+    out.standIn = BitsFloat(g_b4sBits);
+    out.w = BitsFloat(g_cutWBits);
 }
 
 long GearboxKicks() { return g_kicks; }

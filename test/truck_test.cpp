@@ -1957,21 +1957,25 @@ int main()
         slot.share = 1.0f;
         slot.pedal = 1.0f;
         slot.sLast = 3.0f;
+        slot.listTop = 13.0f;
         slot.map = TorqueCutMap{ 1.0f, 1.0f, 0.0f, 1.0f, 0.15f, 10.0f, 800.0f, 2000.0f, 1.6f, { 2, { 0.1f, 1.5f }, { 1.0f, 1.0f } }, CutGovernBand(10.0f, 1.1f).from, CutGovernBand(10.0f, 1.1f).to };
         TorqueCutPublish(&slot);
         const TorqueGot ours = TorqueFromDrive(fn, vehicle, 1);
         const bool answered = ours.took && Near(ours.torque, 2.0f) && ours.start == -1.0f && ours.a == 0.0f && ours.top == 1e9f;
-        // B4s for the fuel: the raw pedal times the game's curve at s (no lag), and the fuel's call scaled by it
-        float b4s = -1.0f;
-        const bool b4sKept = TorqueCutB4sGet((uint64_t)(uintptr_t)vehicle, b4s) && Near(b4s, TorqueCutStockCurve(0.25f, 4.0f, 13.0f, 1.0f, 5.0f)) &&
-                             !TorqueCutB4sGet((uint64_t)(uintptr_t)otherVehicle, b4s);
-        TorqueCutB4sGet((uint64_t)(uintptr_t)vehicle, b4s);
+        // the stand-in for the fuel and the stall: the cut's own pull (1 here), the stall's wheels' term (the wheels at
+        // a whole 5 rad/s over a list top of 13) and the pedal kept for the vehicle alone; the fuel's call scaled by the
+        // stand-in, the stall's by the game's formula with it
+        TorqueCutPull pull = {}, otherPull = {};
+        const bool pullKept = TorqueCutPullGet((uint64_t)(uintptr_t)vehicle, pull) && pull.standIn == 1.0f && Near(pull.w, 0.75f * 5.0f / 13.0f) &&
+                              pull.pedal == 1.0f && !TorqueCutPullGet((uint64_t)(uintptr_t)otherVehicle, otherPull);
+        const float b4s = pull.standIn;
         SpeedFn volatile sfn = &FakeEngineSpeed;
         const float fuelScaled = SpeedFromFuel(sfn, vehicle);
         putF(act, 0xB4, 0.0f);
         const float fuelAtNoPull = SpeedFromFuel(sfn, vehicle);
         putF(act, 0xB4, 1.0f);
-        const bool fuel = Near(fuelScaled, 0.25f * b4s) && Near(SpeedFromStall(sfn, vehicle), 0.25f * b4s) && fuelAtNoPull == 0.0f && SpeedFromFuel(sfn, otherVehicle) == 0.25f && SpeedFromCockpit(sfn, vehicle) == 0.25f;
+        const float stallAnswer = SpeedFromStall(sfn, vehicle);
+        const bool fuel = Near(fuelScaled, 0.25f * b4s) && Near(stallAnswer, fmaxf(CutClamp01(pull.w + 0.25f * b4s), 0.25f * b4s)) && fuelAtNoPull == 0.0f && SpeedFromFuel(sfn, otherVehicle) == 0.25f && SpeedFromCockpit(sfn, vehicle) == 0.25f;
         const TorqueGot stall = TorqueFromStall(fn, vehicle, 1), input = TorqueFromInput(fn, vehicle, 1);
         const bool othersStock = stall.took && stall.start == 0.25f && input.took && input.top == 13.0f;
         const TorqueGot otherV = TorqueFromDrive(fn, otherVehicle, 1);
@@ -2051,9 +2055,9 @@ int main()
         snprintf(line, sizeof line, "torque cut's detour: through Detours on a function of the gear torque's signature, the drive's call answered %.3f with the flat curve, "
                                     "the governor %.3f at 1.05 of the top, the foot off %.3f at the redline and %.3f at idle, R rolling forward %.3f and back %.3f, the "
                                     "blend at half %.3f, the scalar %.3f and the creep's least %.3f; the stall's, the input's, another vehicle's, gear 0 and a stale "
-                                    "slot the game's own; a failed read the slot's speed; B4s %.3f, the fuel's and the stall's calls %.3f and 0 with no pull",
-                 ours.torque, governed.torque, brakeTop, brakeIdle, rForward, rBackward, halfTorque, scalar, floor, b4s, fuelScaled);
-        Check(distinct && hooked && unpublished && answered && b4sKept && fuel && othersStock && otherStock && neutralStock && governor && braking && reverse && blend &&
+                                    "slot the game's own; a failed read the slot's speed; the stand-in %.3f, the fuel's call %.3f and 0 with no pull, the stall's %.3f",
+                 ours.torque, governed.torque, brakeTop, brakeIdle, rForward, rBackward, halfTorque, scalar, floor, b4s, fuelScaled, stallAnswer);
+        Check(distinct && hooked && unpublished && answered && pullKept && fuel && othersStock && otherStock && neutralStock && governor && braking && reverse && blend &&
                   scalars && fault && staleStock && clearedStock && counts && twice && GearTorqueHooked(),
               line);
         if (!hooked) printf("     %s\n", why);

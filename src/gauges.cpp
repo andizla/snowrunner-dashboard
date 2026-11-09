@@ -3782,7 +3782,7 @@ static void LogSettings(const GaugeSettings &s)
                           L"the game's engine speed %s",
                           s.engineShare, !s.roadLoad ? L"off" : s.powertrain ? L"on (the air's drag, once each gear's pull is learned)" : L"on, acts with Powertrain on",
                           TorqueCutWanted(s) ? L"in a gear held by hand the torque cut: the mod engine alone, no cut at the gear's top" : L"no torque cut (it needs Gearbox=2, EngineShare above 0 and ModEngineSpeed=1)",
-                          s.modEngineSpeed ? L"the mod engine's (ModEngineSpeed=1; the fuel's and the stall's calls keep the game's own, by the game's pull under the cut)" : L"its own (ModEngineSpeed=0)");
+                          s.modEngineSpeed ? L"the mod engine's (ModEngineSpeed=1; the fuel's and the stall's calls keep the game's own, by the cut's own pull under the cut)" : L"its own (ModEngineSpeed=0)");
     else Log(L"settings: powertrain off: the truck pulls with the game's own engine (Powertrain=1 hands it the mod's)");
     Log(s.creep && s.creepManual ? L"settings: creep on, in a gear picked by hand too (CreepManual): an automatic through the converter to walking pace, a gear picked by hand at its idle speed"
         : s.creep ? L"settings: creep on: an idling truck on an automatic moves, through the converter to walking pace; not in a gear picked by hand (CreepManual=1 adds it)"
@@ -3997,7 +3997,7 @@ struct TruckWatch
     TorqueHand hand;            // the engine's torque handed to the game (Powertrain)
     float liftX, liftRoof;      // the lift's x and the roof there on the last pass, for the probe (review 11)
     SpinMean spinMean;          // the locked path's wheel spin, its mean over the last passes in rad/s (SpinMeanStep)
-    bool cutActs;               // the torque cut acted on the last pass (BRIEF_drivetrain_2_torque_cut.md): the learners rest, the fuel reads B4s
+    bool cutActs;               // the torque cut acted on the last pass (BRIEF_drivetrain_2_torque_cut.md): the learners rest, the fuel reads the stand-in (TorqueCutStandIn)
     float cutFloor;             // the creep's share on the last pass: the cut's least F while it acts (CreepManual)
     ULONGLONG cutProbeAt;       // the cut's probe line, once a second
     TorqueCutCounts cutWas;     // the detour's counts at the last probe line
@@ -4129,6 +4129,7 @@ static TorqueCutSlot TorqueCutSlotOf(const TruckWatch &w, const TruckRaw &raw, c
     c.floor = w.cutFloor > 0.0f ? w.cutFloor : 0.0f;
     c.share = SettingsRange(s.engineShare / 100.0f, 0.0f, 1.0f);
     c.pedal = TruckPedal(raw);
+    c.listTop = TruckGearFormulaTop(raw, raw.gearEngaged);
     // the wheels' speed as this pass read it, in the gear's direction, for a step whose own read fails
     const float dir = raw.gearEngaged < 0 ? -1.0f : 1.0f;
     float sum = 0.0f;
@@ -5812,10 +5813,10 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         if (pedalDown && !w.pedalDown) SoundQuiet();
         w.pedalDown = pedalDown;
         // the game's burn goes by B4, which the torque cut holds at 1 at any pedal: the range and the burn read the
-        // game's pull without its lag (B4s, the detour's) while the cut has the truck (the Reviewer's M3)
+        // stand-in (TorqueCutStandIn, the cut's own pull, the detour's) while the cut has the truck
         TruckRaw fuelRaw = raw;
-        float b4s = 0.0f;
-        if (TorqueCutB4sGet(w.refs.vehicle, b4s)) fuelRaw.actionB4 = b4s;
+        TorqueCutPull cutPull = {};
+        if (TorqueCutPullGet(w.refs.vehicle, cutPull)) fuelRaw.actionB4 = cutPull.standIn;
         RangeStep(w.range, kind, fuelRaw, dt);
         // the odometer (BRIEF_odometer.md, the Reviewer's should 6): inside the models' gate, real seconds
         OdoCount(w.odoMetres, w.odoSeconds, raw.speed, dt, TruckEngineOn(raw));
@@ -6465,7 +6466,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             // the torque cut (BRIEF_drivetrain_2_torque_cut.md): in a gear held by hand of the mod's own gearbox the drive's
             // call of the game's gear torque is answered with the mod engine alone, its speed part worked out in the drive's
             // own step (torque_cut.h), the pedal, the clutch and the creep from this pass; the drive's throttle held at 1 and
-            // its fuel read by the game's pull without its lag (B4s). The torque factor is not written meanwhile: the game's
+            // its fuel and the stall read by the cut's own pull (TorqueCutStandIn). The torque factor is not written meanwhile: the game's
             // own share is given back once, so engine damage's own cut still acts through it
             const bool cutHooks = GearTorqueHooked() && EngineSpeedHooked() && CreepHooked();
             const bool cutActs = want && own && GearboxManual(w) && TorqueCutWanted(s) && cutHooks && raw.gearEngaged != 0 && gearTop > 0.0f && w.refs.action != 0;
@@ -6540,10 +6541,10 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 const TorqueCutCounts &before = w.cutWas;
                 const float sTop = gearTop > 0.0f ? c.s / gearTop : 0.0f;
                 Log(L"probe: torque cut: %s; s %.2f rad/s (%.2f of the top %.2f, %.0f rpm), F %.3f, the bracket %.3f (the least %.3f), the scalar %.3f, the share %.2f; "
-                    L"the game's T %.3f, answered %.3f; D4 %.2f, B4s %.3f; calls answered %ld, passed %ld, the other callers' %ld, reads failed %ld; falls of 0.3 or more "
+                    L"the game's T %.3f, answered %.3f; D4 %.2f, B4s %.3f, the stand-in %.3f, the stall's wheels %.3f; calls answered %ld, passed %ld, the other callers' %ld, reads failed %ld; falls of 0.3 or more "
                     L"in one step %ld; the throttle held at 1 %s",
                     cutActs ? L"acting" : TorqueCutWhyNot(s, want, own && GearboxManual(w), cutHooks, raw.gearEngaged, gearTop), c.s, sTop, gearTop, sTop * scale.redline,
-                    c.f, c.bracket, w.cutFloor, locked ? 0.0f : SettingsRange(w.clutch.carried, -1.0f, kClutchHold), s.engineShare / 100.0f, c.stock, c.torque, c.d4, c.b4s,
+                    c.f, c.bracket, w.cutFloor, locked ? 0.0f : SettingsRange(w.clutch.carried, -1.0f, kClutchHold), s.engineShare / 100.0f, c.stock, c.torque, c.d4, c.b4s, c.standIn, c.w,
                     c.answered - before.answered, c.passed - before.passed, c.others - before.others, c.faults - before.faults, c.falls - before.falls, cutActs ? L"on" : L"off");
                 w.cutWas = c;
             }

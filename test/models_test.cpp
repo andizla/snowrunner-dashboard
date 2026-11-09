@@ -3945,8 +3945,10 @@ int main(int argc, char **argv)
         const TorqueCutAnswer aF = TorqueCutAnswerOf(slot, 3.0f, 0.25f, 4.0f, 13.0f, 1.0f, 1.0f, rForward), aB = TorqueCutAnswerOf(slot, 2.0f, 0.25f, 4.0f, 13.0f, 1.0f, 1.0f, secondBack);
         const bool direction = rForward.ok && Near(rForward.mean, -5.0667f, 1e-3f) && rForward.mid == 0.0f && Near(rBack.mean, 5.0667f, 1e-3f) &&
                                Near(rBack.mid, 5.1f, 1e-5f) && aF.f >= 0.0f && aF.torque >= 0.0f && aB.f >= 0.0f && aB.torque >= 0.0f;
-        // M3: under the hold the fuel goes by B4s; at the same s and pedal, TruckFuelRate with B4 at the game's settled
-        // pull (its target, the lag run out) and with B4s are the same at a pedal of 0.3 and of 1
+        // the burn under the hold goes by the stand-in, the cut's own pull (the lead's decision of the second review): in
+        // the middle of a gear, where the game's curve is whole, the same as the game's settled pull at that pedal; near
+        // the gear's top (0.92 of it) floored, the pull's own burn, where the game's settled pull, and its burn, fall
+        // toward idle
         TruckRaw ft = Truck();
         ft.burnKnown = true;
         ft.burnIdle = 1.0f;
@@ -3957,24 +3959,46 @@ int main(int argc, char **argv)
         ft.damageEffect = ft.gearboxEffect = ft.tankEffect = 0.0f;
         ft.awd = 0;
         ft.burnAwd = 1.0f;
-        bool fuel = true;
-        char fuelText[160] = "";
+        bool fuel = TorqueCutStandIn(1.4f) == 1.0f && TorqueCutStandIn(-0.2f) == 0.0f && Near(TorqueCutStandIn(0.37f), 0.37f, 1e-6f);
+        char fuelText[200] = "";
+        const float midCurve = TorqueCutStockCurve(0.25f, 4.0f, 13.0f, 1.0f, 4.0f), nearTop = TorqueCutStockCurve(0.25f, 4.0f, 13.0f, 1.0f, 12.0f);
         for (float pedal : { 0.3f, 1.0f })
         {
             ft.throttle = -pedal;
-            TruckRaw today = ft, cut = ft, held = ft;
-            today.actionB4 = pedal * curveAt;        // the game's own pull, settled
-            held.actionB4 = 1.0f;                     // under the hold, read as it is
-            cut.actionB4 = TorqueCutB4s(pedal, 1.0f, curveAt);
-            fuel = fuel && Near(TruckFuelRate(cut), TruckFuelRate(today), 1e-5f) && TruckFuelRate(held) >= TruckFuelRate(today);
-            snprintf(fuelText + strlen(fuelText), sizeof fuelText - strlen(fuelText), " %.1f: %.3f, held %.3f;", pedal, TruckFuelRate(cut), TruckFuelRate(held));
+            TruckRaw game = ft, cut = ft;
+            game.actionB4 = pedal * midCurve; // the game's own pull, settled, in the middle of the gear
+            cut.actionB4 = TorqueCutStandIn(pedal);
+            fuel = fuel && Near(TruckFuelRate(cut), TruckFuelRate(game), 1e-5f);
+            snprintf(fuelText + strlen(fuelText), sizeof fuelText - strlen(fuelText), " mid gear %.1f: %.3f;", pedal, TruckFuelRate(cut));
         }
-        char line[600];
+        ft.throttle = -1.0f;
+        TruckRaw gameTop = ft, cutTop = ft;
+        gameTop.actionB4 = nearTop;
+        cutTop.actionB4 = TorqueCutStandIn(1.0f);
+        fuel = fuel && TruckFuelRate(cutTop) > TruckFuelRate(gameTop) + 0.5f;
+        snprintf(fuelText + strlen(fuelText), sizeof fuelText - strlen(fuelText), " floored at 0.92 of the top %.3f, the game's %.3f;", TruckFuelRate(cutTop), TruckFuelRate(gameTop));
+        // the stall's call (the second review's M1): the game's own formula with the stand-in in B4's place. The wheels'
+        // term by whole rad/s over the gear's list top (13 for an entry of 4); the base the game's no-wheels value
+        // (min(p^0.25 + 0.25, 1) x B4, B4 1 under the hold) x the stand-in
+        const float whole[3] = { 13.7f, 12.2f, 13.9f };
+        const bool wholeDriven[3] = { true, true, true };
+        const CutSpeeds wh = TorqueCutSpeeds(whole, wholeDriven, 3, 1);
+        auto noWheels = [](float p) { return fminf(powf(p, 0.25f) + 0.25f, 1.0f); };
+        const float atTop = TorqueCutStallAnswer(1.0f, TorqueCutStallWheels(13.0f, 13.0f, 13.0f), 0.0f, noWheels(1.0f), 1.0f);
+        const float midStall = TorqueCutStallAnswer(0.5f, TorqueCutStallWheels(6.0f, 6.0f, 13.0f), 0.5f, noWheels(0.5f), 1.0f);
+        const float lowStall = TorqueCutStallAnswer(1.0f, TorqueCutStallWheels(2.0f, 2.0f, 13.0f), 0.5f, noWheels(1.0f), 1.0f);
+        const float tiny = TorqueCutStallAnswer(0.005f, 0.75f, 1.0f, noWheels(0.005f), 1.0f);
+        const bool stall = wh.wholeMean == 13.0f - 1.0f / 3.0f && wh.wholeMax == 13.0f && Near(TorqueCutStallWheels(12.0f, 13.0f, 13.0f), 0.75f * (3.0f + 9.75f) / 13.0f, 1e-6f) &&
+                           TorqueCutStallWheels(5.0f, 5.0f, 0.0f) == 0.0f && Near(atTop, 0.75f, 1e-6f) && Near(midStall, noWheels(0.5f) * 0.5f, 1e-6f) &&
+                           Near(lowStall, noWheels(1.0f) * 0.5f, 1e-6f) && tiny == 0.0f && TorqueCutStallAnswer(1.0f, 0.2f, 0.4f, 1.0f, 0.0f) == CutClamp01(0.2f + 0.1f);
+        snprintf(fuelText + strlen(fuelText), sizeof fuelText - strlen(fuelText), " the stall's call at a gear's top floored %.3f, mid gear at 0.5 %.3f (the base), L- at its top %.3f (the base), at 0.005 %.3f",
+                 atTop, midStall, lowStall, tiny);
+        char line[1400];
         snprintf(line, sizeof line, "torque cut's map: idle %.3f, the peak %.3f, the governor %.3f at %.2f and 0 at %.2f of the redline (L- from %.3f), the cold %.3f, the foot off %.3f at the "
                                     "redline and %.3f at idle; R rolling forward F %.3f, 2nd rolling back %.3f; the game's curve by C.1; B4s and the blend at 0, 50, 100; the "
-                                    "fuel by B4s as the game's settled pull, by the pedal:%s",
+                                    "burn by the cut's pull:%s",
                  atIdle, atPeak, atFrom, cm.governFrom, cm.governTo, lowBand.from, limited, brakeTop, brakeIdle, aF.f, aB.f, fuelText);
-        Check(map && stock && b4s && blend && direction && fuel, line);
+        Check(map && stock && b4s && blend && direction && fuel && stall, line);
     }
 
     // the torque cut in the closed loop (the Reviewer's M4, test\torque_cut_sim.h): the game's drive sketched at its 60

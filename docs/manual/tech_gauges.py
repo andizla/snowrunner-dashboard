@@ -395,8 +395,12 @@ Here <i>p</i> is the raw pedal (TruckPedal, linear as the game's pull) and E the
 (<code>CutGovernBand</code>, <code>kTachOverrun</code>; <code>kGovernWidth</code> 0.8 rad/s by the closed loop at 60 Hz: 0.6 chatters in L- floored in soft mud, 1.0 settles there in 9.4 s at 0.85 of the top, 0.8 in 2.1 s at 0.93; so L- 0.81 to 1.1, 1st and up 1.0 to 1.1). brake is <code>EngineBrake</code>/100. With the
 clutch slipping the bracket is the clutch model's torque through it as a share of the gear's (the scalar, held to −1 to 1.5); the creep's share is a floor.
 bracket = (1 − share) · pedal · curve<sub>stock</sub>(<i>s</i>) + share · <i>F</i>, with curve<sub>stock</sub> the game's smoothstep from start to a, falling to top,
-scaled by the power factor at +0x38. B4 (+0xB4) is written 1 in the hook on the wheels' drive before the call, so the game's pull lag is out. The fuel's and the stall's calls of
-the engine speed then answer stock · B4s/B4, with B4s = pedal · (1 − D4 + D4 · curve<sub>stock</sub>(<i>s</i>)) the game's settled pull, and the range reads B4s.
+scaled by the power factor at +0x38. B4 (+0xB4) is written 1 in the hook on the wheels' drive before the call, so the game's pull lag is out. B4's readers get a stand-in instead, the cut's own pull, the bracket held to 0 to 1 (<code>TorqueCutStandIn</code>, one function): the fuel's call of
+the engine speed answers stock · stand-in/B4, and the range reads the stand-in. The stall's call adds a wheels' term that is not linear in B4, so it gets the
+game's own formula with the stand-in: <i>e</i> = max(<i>p</i> · clamp(<i>w</i> + 0.25 · stand-in, 0, 1), own(vehicle, false, false) · stand-in/B4), 0 at <i>p</i> ≤ 0.01, with
+<i>w</i> = 0.75 · (0.25 · mean + 0.75 · max of the driven wheels' whole rad/s in the gear's direction)/the gear's list top (2 × entry + 5, entry + 2 in the high gear),
+kept from the drive's step (<code>TorqueCutStallAnswer</code>, <code>TorqueCutStallWheels</code>). B4s = pedal · (1 − D4 + D4 · curve<sub>stock</sub>(<i>s</i>)), the game's
+settled pull, is for the probe.
 While the cut acts the factor at +0xCC is not written, the gear's top and Air drag's base learn nothing, and a refused ShiftGear(0) from the game (the damage
 kick) puts the mod gearbox in N. The detour counts the steps where the bracket falls by 0.3 or more.</p>
 <p>The log: <code>torque cut: the game's gear torque at +…, the drive's call returning to +…</code> at the first truck, or why not; <code>torque cut: the game's gear

@@ -120,12 +120,39 @@ inline float TorqueCutStockCurve(float start, float a, float top, float pf, floa
 }
 
 // The game's own pull without its lag, the stock target of B4 (the Reviewer's M3 and S3): the raw pedal times
-// (1 - D4 + D4 x the stock curve). The fuel's call and TruckGameRevs read it in place of B4 while the cut acts, as the
-// drive's throttle is held at 1 and B4 with it.
+// (1 - D4 + D4 x the stock curve). For the probe: what the game would pull at this wheel speed.
 inline float TorqueCutB4s(float pedal, float d4, float stockCurve)
 {
     const float c = CutClamp01(d4);
     return CutClamp01(pedal) * (1.0f - c + c * CutClamp01(stockCurve));
+}
+
+// The stand-in for B4 while the cut holds the drive's throttle and B4 at 1: what the fuel's and the stall's calls of
+// the engine speed, TruckGameRevs and the range read in B4's place. The lead's decision (the second review): the cut's
+// own pull, the bracket held to 0 to 1, as it sits where B4 sits in the drive. So floored near a gear's top the truck
+// burns its pull, where the game burned near idle because it pulled nothing there. One function, so the rule is in one
+// place.
+inline float TorqueCutStandIn(float bracket) { return CutClamp01(bracket); }
+
+// The wheels' term of the game's engine speed for the stall's call (d73170 with wheels, the second review's M1): 0.75 x
+// (0.25 x the mean + 0.75 x the max of the driven wheels' whole speeds in the gear's direction, each floored at 0) over
+// the gear's list top (2 x its entry + 5, the entry + 2 in the high gear: TruckGearFormulaTop). 0 without a list top.
+inline float TorqueCutStallWheels(float wholeMean, float wholeMax, float listTop)
+{
+    if (!(listTop > 0.0f)) return 0.0f;
+    const float w = 0.75f * (0.25f * wholeMean + 0.75f * wholeMax) / listTop;
+    return isfinite(w) && w > 0.0f ? w : 0.0f;
+}
+
+// The stall's call answered under the cut: the game's own formula with the stand-in in B4's place, max(p x clamp(w +
+// 0.25 x standIn, 0, 1), noWheels x standIn / b4), 0 at a pedal of 0.01 or less as the game's. noWheels is the game's
+// own call without the wheels (linear in B4, as the fuel's is), b4 the B4 it read (1 under the hold); p the raw pedal.
+inline float TorqueCutStallAnswer(float pedal, float w, float standIn, float noWheels, float b4)
+{
+    if (!(pedal > 0.01f)) return 0.0f;
+    const float base = b4 > 0.0f && isfinite(noWheels) ? noWheels * standIn / b4 : 0.0f;
+    const float wheels = CutClamp01(pedal) * CutClamp01(w + 0.25f * standIn);
+    return wheels > base ? wheels : base;
 }
 
 // EngineShare (0 to 1) between the game's shape and the cut (S3): (1 - share) x the raw pedal x the stock curve at the
@@ -142,6 +169,7 @@ inline float TorqueCutBlend(float share, float pedal, float stockCurve, float ou
 // torque through the clutch (ClutchModel::carried), the mod engine's own inertia there taking a pass's delay. floor: the
 // creep's push with CreepManual (CreepStep's share), the least F; 0 none. pedal: the raw pedal (TruckPedal), for the
 // game's shape in the blend and B4s. sLast: the wheels' speed the mod's thread read, for a step whose read failed.
+// listTop: the game's gear's list top by d73170's rule (TruckGearFormulaTop), for the stall's wheels' term.
 enum { kCutMap, kCutScalar };
 static const uint64_t kTorqueFresh = 1000; // ms: a slot older than this passes every call
 struct TorqueCutSlot
@@ -149,7 +177,7 @@ struct TorqueCutSlot
     uint64_t vehicle, action;
     uint64_t at;    // GetTickCount64 at the publish
     int mode;
-    float scalar, floor, share, pedal, sLast;
+    float scalar, floor, share, pedal, sLast, listTop;
     TorqueCutMap map;
 };
 
@@ -162,45 +190,52 @@ inline bool TorqueCutOurs(uintptr_t back, uintptr_t driveBack, const TorqueCutSl
 
 // The driven wheels' speeds in one step, in the game's gear's direction (dir +1 or -1, from the gear's sign): mean, the
 // float mean the needle and the governor go by (S1, as TruckDrivenSpin, but signed: M2); mid, (max + min) / 2 of each
-// wheel floored at 0, the game's own s without its cut to whole rad/s (S3). ok false with no driven wheel.
+// wheel floored at 0, the game's own s without its cut to whole rad/s (S3); wholeMean and wholeMax, each wheel cut to
+// whole rad/s in the gear's direction and floored at 0, for the stall's wheels' term. ok false with no driven wheel.
 struct CutSpeeds
 {
-    float mean, mid;
+    float mean, mid, wholeMean, wholeMax;
     bool ok;
 };
 inline CutSpeeds TorqueCutSpeeds(const float *omega, const bool *driven, int n, int dir)
 {
-    CutSpeeds r = { 0.0f, 0.0f, false };
-    float sum = 0.0f, lo = 0.0f, hi = 0.0f;
+    CutSpeeds r = { 0.0f, 0.0f, 0.0f, 0.0f, false };
+    float sum = 0.0f, lo = 0.0f, hi = 0.0f, wholeSum = 0.0f, wholeHi = 0.0f;
     int k = 0;
     for (int i = 0; i < n; i++)
     {
         if (!driven[i] || !isfinite(omega[i])) continue;
-        const float w = omega[i] * (dir < 0 ? -1.0f : 1.0f), f = w > 0.0f ? w : 0.0f;
+        const float w = omega[i] * (dir < 0 ? -1.0f : 1.0f), f = w > 0.0f ? w : 0.0f, whole = truncf(f);
         sum += w;
         lo = k ? fminf(lo, f) : f;
         hi = k ? fmaxf(hi, f) : f;
+        wholeSum += whole;
+        wholeHi = fmaxf(wholeHi, whole);
         k++;
     }
     if (!k) return r;
     r.mean = sum / (float)k;
     r.mid = 0.5f * (lo + hi);
+    r.wholeMean = wholeSum / (float)k;
+    r.wholeMax = wholeHi;
     r.ok = true;
     return r;
 }
 
 // The answer to the drive's call: the torque to give (the game's own for the gear times the bracket), the bracket (F
-// blended, at least the floor), F, B4s and the stock curve, for the probe. stock: the game's gear torque for this gear;
+// blended, at least the floor), F, B4s and the stock curve, for the probe; the stand-in for B4 and the stall's wheels'
+// term w, for the engine speed's calls. stock: the game's gear torque for this gear;
 // start, a, top: its curve's outputs; pf the power factor (action + 0x38); d4 the game's clutch (action + 0xD4); sp the
 // wheels' speeds this step (a failed read takes the slot's sLast).
 struct TorqueCutAnswer
 {
-    float torque, bracket, f, b4s, stockCurve, s;
+    float torque, bracket, f, b4s, stockCurve, s, standIn, w;
 };
 inline TorqueCutAnswer TorqueCutAnswerOf(const TorqueCutSlot &slot, float stock, float start, float a, float top, float pf, float d4, CutSpeeds sp)
 {
     TorqueCutAnswer r = {};
-    if (!sp.ok) sp.mean = sp.mid = slot.sLast > 0.0f ? slot.sLast : 0.0f;
+    if (!sp.ok) sp.mean = sp.mid = sp.wholeMean = sp.wholeMax = slot.sLast > 0.0f ? slot.sLast : 0.0f;
+    if (!sp.ok) sp.wholeMean = sp.wholeMax = truncf(sp.mean);
     r.s = sp.mean;
     r.stockCurve = TorqueCutStockCurve(start, a, top, pf, sp.mid);
     r.f = slot.mode == kCutMap ? TorqueCutF(slot.map, sp.mean) : (isfinite(slot.scalar) ? slot.scalar : 0.0f);
@@ -208,5 +243,7 @@ inline TorqueCutAnswer TorqueCutAnswerOf(const TorqueCutSlot &slot, float stock,
     if (slot.floor > 0.0f && r.bracket < slot.floor) r.bracket = slot.floor;
     r.torque = isfinite(stock) ? stock * r.bracket : 0.0f;
     r.b4s = TorqueCutB4s(slot.pedal, d4, r.stockCurve);
+    r.standIn = TorqueCutStandIn(r.bracket);
+    r.w = TorqueCutStallWheels(sp.wholeMean, sp.wholeMax, slot.listTop);
     return r;
 }
