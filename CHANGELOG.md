@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- A settings save no longer stops the mod for up to a second. Gauges.ini is written by a thread of its own, one save at a time with the newest values, so the needles, the torque cut and the engine speed go on meanwhile. Reload ini waits for a running save. The bindings go the same way.
 - The texts of the menu tabs and the cluster carry no apostrophe and no contraction: "Game gearbox", "does not". A test keeps them so.
 - The Graphics tab's text no longer says how Next Gen Graphics' keys behave beside it; the DLL's own lines in the tab say it.
 - The crash line in `Gauges.log` is armed as the mod starts, so a fault, a fast fail or an exit at the game's boot is named too. Before, it was armed only at the first truck. It is armed again there, after the game has set its own handlers, so they do not push it out. At the first truck the log counts the faults and C++ throws of the boot, and the first three of each are named again from there. A handler set in between that passes on to the mod's never calls it in a loop: the second call goes to the handler from the start, or ends there.

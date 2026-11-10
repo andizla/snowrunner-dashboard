@@ -21,6 +21,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <type_traits>
 #include "gauges.h"
 #include "truck.h"
 #include "models.h"
@@ -2744,14 +2745,20 @@ static void SettingsToDefaults(SettingsState &st)
 
 // Into the ini: the plain settings, and the driven truck's own scales and suspension into their sections when they
 // were changed. A truck's section that the tab did not change stays as it is, with what it leaves to [Gauges].
-static void SettingsWrite(SettingsState &st)
+// The driven truck's part of a save: its scales and suspension into its file, and the prunes. On the pass thread, as
+// the take-over and the next truck read those files on the same pass (the hand-back of 114 says why S1 is not taken).
+static void SettingsWriteTruck(SettingsState &st)
 {
-    WriteIni(st.plain);
     if (st.own && st.changed) WriteTruckIni(st.key, st.s);
     if (st.truckOwn && st.truckChanged) WriteTruckSusp(st.key, st.s, true, st.id);
     else if (st.suspOwn && st.suspChanged) WriteTruckSusp(st.key, st.s, true);
     if (st.key[0]) TruckSuspPrune(st.key), TruckSuspPrune(st.key, kEngineSection);
     st.changed = st.suspChanged = st.truckChanged = false;
+}
+static void SettingsWrite(SettingsState &st)
+{
+    WriteIni(st.plain);
+    SettingsWriteTruck(st);
 }
 
 // ---- the gearbox's bindings: the [Gearbox] section of Gauges.ini ----
@@ -2815,6 +2822,98 @@ static void BindingsWrite(const std::wstring &ini, const GearBindings &b)
             BindingText(b.slot[a][slot], text, sizeof text);
             WritePrivateProfileStringW(kBindSection, key, Wide(text).c_str(), ini.c_str());
         }
+}
+
+// ---- Gauges.ini written off the pass thread (BRIEF_full_pass_gameplay.md part 1, FR2, with the Reviewer's addendum) ----
+// WriteIni makes over 100 puts and each rewrites the file: about a second for a 25 KB ini, in which no pass ran. The
+// pass thread hands a copy (the plain settings and, where they changed, the bindings, both by value: M3) to one worker,
+// which makes the same puts in the same order through the same functions (M2), so Windows keeps the comments, the order
+// and the keys of other versions. One slot waits and the newest wins (S2): a hand-over during a save replaces the waiting
+// copy, the bindings kept where the newer has none. Nothing waits for it (M1): a reload asked during a save runs on the
+// first pass after (IniSaveBusy), and the game's end has no wait. A thread that cannot be started: the save runs where it
+// was handed, as before, with one line. g_iniSaveWrite is the test's seam (S5).
+struct IniSaveJob
+{
+    GaugeSettings plain;
+    GearBindings binds;
+    bool settings, bindings;
+};
+static_assert(std::is_trivially_copyable<GaugeSettings>::value && std::is_trivially_copyable<GearBindings>::value,
+              "the save's copy is taken by value: a pointer or a string in the settings would need more");
+static void IniSaveWriteJob(const IniSaveJob &job)
+{
+    if (job.bindings) BindingsWrite(IniPath(), job.binds);
+    if (job.settings) WriteIni(job.plain);
+}
+static void (*volatile g_iniSaveWrite)(const IniSaveJob &) = IniSaveWriteJob;
+static SRWLOCK g_iniSaveLock = SRWLOCK_INIT;
+static CONDITION_VARIABLE g_iniSaveWake = CONDITION_VARIABLE_INIT;
+static IniSaveJob g_iniSaveWaiting;
+static bool g_iniSaveHas = false, g_iniSaveRunning = false, g_iniSaveStarted = false, g_iniSaveNoThread = false;
+static volatile LONG g_iniSaves = 0; // saves the worker finished, for the test
+
+static DWORD WINAPI IniSaveThread(void *)
+{
+    for (;;)
+    {
+        AcquireSRWLockExclusive(&g_iniSaveLock);
+        while (!g_iniSaveHas) SleepConditionVariableSRW(&g_iniSaveWake, &g_iniSaveLock, INFINITE, 0);
+        const IniSaveJob job = g_iniSaveWaiting;
+        g_iniSaveHas = false;
+        g_iniSaveRunning = true;
+        ReleaseSRWLockExclusive(&g_iniSaveLock);
+        const ULONGLONG from = GetTickCount64();
+        g_iniSaveWrite(job);
+        Log(L"settings: Gauges.ini written off the pass thread in %llu ms (%s)", GetTickCount64() - from,
+            job.settings && job.bindings ? L"the settings and the bindings" : job.bindings ? L"the bindings" : L"the settings");
+        AcquireSRWLockExclusive(&g_iniSaveLock);
+        g_iniSaveRunning = false;
+        InterlockedIncrement(&g_iniSaves);
+        ReleaseSRWLockExclusive(&g_iniSaveLock);
+    }
+}
+
+// Hands a save to the worker: the settings (plain, may be null) and the bindings (may be null).
+static void IniSaveHand(const GaugeSettings *plain, const GearBindings *binds)
+{
+    if (!plain && !binds) return;
+    IniSaveJob job = {};
+    if (plain) job.plain = *plain, job.settings = true;
+    if (binds) job.binds = *binds, job.bindings = true;
+    bool here = false, tell = false;
+    AcquireSRWLockExclusive(&g_iniSaveLock);
+    if (!g_iniSaveStarted)
+    {
+        g_iniSaveStarted = true;
+        const HANDLE t = CreateThread(nullptr, 0, IniSaveThread, nullptr, 0, nullptr);
+        if (t) CloseHandle(t);
+        else g_iniSaveNoThread = tell = true;
+    }
+    if (g_iniSaveNoThread) here = true;
+    else if (g_iniSaveHas)
+    {
+        // the newest wins; what the waiting copy has and the newer does not stays
+        if (job.settings) g_iniSaveWaiting.plain = job.plain, g_iniSaveWaiting.settings = true;
+        if (job.bindings) g_iniSaveWaiting.binds = job.binds, g_iniSaveWaiting.bindings = true;
+    }
+    else
+    {
+        g_iniSaveWaiting = job;
+        g_iniSaveHas = true;
+        WakeConditionVariable(&g_iniSaveWake);
+    }
+    ReleaseSRWLockExclusive(&g_iniSaveLock);
+    if (tell) Log(L"settings: the save's thread could not be started (error %lu): Gauges.ini is written on the pass thread, as before", GetLastError());
+    if (here) g_iniSaveWrite(job);
+}
+
+// Whether a save runs or waits: a reload waits for the first pass without one (M1).
+static bool IniSaveBusy()
+{
+    AcquireSRWLockShared(&g_iniSaveLock);
+    const bool busy = g_iniSaveHas || g_iniSaveRunning;
+    ReleaseSRWLockShared(&g_iniSaveLock);
+    return busy;
 }
 
 // Whether a binding that can be pressed now reaches reverse (Gear down, Reverse, or Neutral on the way): the mod's own
@@ -3920,7 +4019,8 @@ static void SettingsSave(SettingsState &st)
     if (st.truckOwn && st.truckChanged) Log(L"settings: saved, this truck's suspension in [Suspension:%S] of Gauges\\trucks\\%s.ini", st.id, SetupFileName(Wide(st.key)).c_str());
     else if (st.suspOwn && st.suspChanged) Log(L"settings: saved, the truck's suspension in Gauges\\trucks\\%s.ini", SetupFileName(Wide(st.key)).c_str());
     if (!(st.own && st.changed) && !(st.suspOwn && st.suspChanged) && !(st.truckOwn && st.truckChanged)) Log(L"settings: saved to Gauges.ini");
-    SettingsWrite(st);
+    IniSaveHand(&st.plain, nullptr); // Gauges.ini by the worker (FR2), the truck's file here
+    SettingsWriteTruck(st);
     LogSettings(st.s);
 }
 
@@ -7608,7 +7708,8 @@ static DWORD WINAPI Run(void *)
         // ini again" takes the file as it is
         bool edited = false;
         const int keyBefore = s.toggleKey;
-        if (InterlockedExchange(&g_reloadAsked, 0))
+        // a reload asked during a save waits for the first pass after it (FR2, M1: the pass never waits for the save)
+        if (g_reloadAsked && !IniSaveBusy() && InterlockedExchange(&g_reloadAsked, 0))
         {
             ReadIni(set.plain);
             SettingsFor(set, truck.key, truck.id);
@@ -7819,7 +7920,7 @@ static DWORD WINAPI Run(void *)
             }
             if (bindsChanged)
             {
-                BindingsWrite(IniPath(), binds);
+                IniSaveHand(nullptr, &binds); // by the worker, as the settings (FR2): 2 puts an action
                 Log(L"gearbox: the bindings set from the tab, written to Gauges.ini:");
                 BindingsLog(binds);
             }
@@ -10825,6 +10926,52 @@ int wmain(int argc, wchar_t **argv)
         OdoHoursPut(kind, false);
         Check(hoursOff && hoursOn && !OdoHoursOf(kind), "odometer: OdometerHours=1 in the kind's [Truck] shows hours, off takes the key out");
         DeleteFileW(kf.c_str());
+    }
+    // the save off the pass thread (BRIEF_full_pass_gameplay.md part 1, S5): a slow write handed in by the seam. A save
+    // running, two edits during it: one more save after it with the newest values, the bindings of the first kept;
+    // busy while either runs or waits, so a reload asked then runs after; the hand-over itself returns at once
+    {
+        static GaugeSettings seen[8];
+        static bool seenBinds[8];
+        static volatile LONG seenN = 0;
+        g_iniSaveWrite = [](const IniSaveJob &job) {
+            const LONG at = InterlockedIncrement(&seenN) - 1;
+            if (at < 8) seen[at] = job.plain, seenBinds[at] = job.bindings;
+            Sleep(300);
+        };
+        const LONG savesBefore = g_iniSaves;
+        GaugeSettings saveOne, saveTwo, saveThree;
+        SettingsDefaults(saveOne);
+        saveTwo = saveThree = saveOne;
+        saveOne.scale = 1.1f;
+        saveTwo.scale = 1.2f;
+        saveThree.scale = 1.3f;
+        GearBindings someBinds;
+        BindingsDefault(someBinds);
+        LARGE_INTEGER qf, q0, q1, q2, q3;
+        QueryPerformanceFrequency(&qf);
+        QueryPerformanceCounter(&q0);
+        IniSaveHand(&saveOne, nullptr);
+        QueryPerformanceCounter(&q1);
+        Sleep(50); // the worker has the first
+        QueryPerformanceCounter(&q2);
+        IniSaveHand(&saveTwo, &someBinds);
+        IniSaveHand(&saveThree, nullptr);
+        QueryPerformanceCounter(&q3);
+        const ULONGLONG handMs = (ULONGLONG)((q1.QuadPart - q0.QuadPart + q3.QuadPart - q2.QuadPart) * 1000 / qf.QuadPart);
+        const bool busyDuring = IniSaveBusy();
+        for (int i = 0; i < 100 && g_iniSaves - savesBefore < 2; i++) Sleep(20);
+        Sleep(50);
+        const bool busyAfter = IniSaveBusy();
+        const bool two = g_iniSaves - savesBefore == 2 && seenN == 2;
+        const bool newest = seen[0].scale == 1.1f && !seenBinds[0] && seen[1].scale == 1.3f && seenBinds[1];
+        g_iniSaveWrite = IniSaveWriteJob;
+        if (!(two && newest && busyDuring && !busyAfter && handMs < 100))
+            printf("     save: %d %d %d %d %llu ms; saves %ld, seen %ld, %g %d %g %d\n", two, newest, busyDuring, busyAfter, handMs, g_iniSaves - savesBefore, seenN, seen[0].scale, seenBinds[0], seen[1].scale, seenBinds[1]);
+        // the copy is by value: the waiting copy does not follow a change of the caller's settings after the hand-over
+        Check(two && newest && busyDuring && !busyAfter && handMs < 100,
+              "settings save: off the pass thread, the hand-over returns at once; two edits during a save give one more save with the newest values and the "
+              "bindings of the one between; busy while it runs or waits (a reload waits for the pass after), not after");
     }
     printf(g_failed ? "SETTINGS TEST FAILED (%d)\n" : "SETTINGS TEST OK\n", g_failed);
     return g_failed ? 1 : 0;
