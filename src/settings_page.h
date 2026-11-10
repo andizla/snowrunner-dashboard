@@ -64,10 +64,21 @@ static int PageVirtualKey(int k)
 static bool g_pageLabelHovered = false;
 static float g_pageLabelY = 0.0f;
 
+// A tip drawn wrapped at kPageTipWrap font heights (BRIEF_full_pass_gameplay.md part 2, FR7: a plain tooltip has no wrap,
+// so a long tip was cut at the screen edge). A short one stays as narrow as its text. Tire's tab wraps at the same width.
+static const float kPageTipWrap = 35.0f;
+static void PageTipShow(const char *text)
+{
+    if (!ImGui::BeginTooltip()) return;
+    ImGui::PushTextWrapPos(ImGui::GetFontSize() * kPageTipWrap);
+    ImGui::TextUnformatted(text);
+    ImGui::PopTextWrapPos();
+    ImGui::EndTooltip();
+}
 static void PageTip(const char *text)
 {
     const bool label = g_pageLabelHovered && fabsf(ImGui::GetItemRectMin().y - g_pageLabelY) < ImGui::GetFrameHeight() * 0.5f;
-    if (label || ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", text);
+    if (label || ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled)) PageTipShow(text);
     g_pageLabelHovered = false;
 }
 

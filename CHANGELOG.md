@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- A long tip on the Gameplay tab is wrapped and stays inside the screen. Before, a line ran past the screen edge and was cut.
 - A settings save no longer stops the mod for up to a second. Gauges.ini is written by a thread of its own, one save at a time with the newest values, so the needles, the torque cut and the engine speed go on meanwhile. Reload ini waits for a running save. The bindings go the same way.
 - The texts of the menu tabs and the cluster carry no apostrophe and no contraction: "Game gearbox", "does not". A test keeps them so.
 - The Graphics tab's text no longer says how Next Gen Graphics' keys behave beside it; the DLL's own lines in the tab say it.

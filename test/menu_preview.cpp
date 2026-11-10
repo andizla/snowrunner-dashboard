@@ -136,7 +136,7 @@ static void Frame()
                                 IM_COL32(170, 176, 170, 255), IM_COL32(170, 176, 170, 255));
     bg->AddRectFilledMultiColor(ImVec2(0, io.DisplaySize.y * 0.55f), io.DisplaySize, IM_COL32(86, 92, 64, 255), IM_COL32(86, 92, 64, 255), IM_COL32(58, 52, 40, 255),
                                 IM_COL32(58, 52, 40, 255));
-    const float u = GaugeUnit(io.DisplaySize.y, g_set);
+    const float u = GaugeUnit(io.DisplaySize.x, io.DisplaySize.y, g_set);
     if (g_fontFiles && (!g_fonts.tex || fabsf(g_fonts.u - u) > 0.001f))
     {
         NgTextureFree(g_fonts.tex);
@@ -149,6 +149,15 @@ static void Frame()
         }
     }
     GaugeDraw(bg, g_fonts, GaugeOrigin(g_set, io.DisplaySize.x, io.DisplaySize.y), u, g_set.opacity, g_viewDemo.st, GaugeLayoutOf(g_set));
+    // MENU_PREVIEW_TIP=1: the longest tip of the tab (Real engine's, 421 characters) drawn by PageTipShow as a hover
+    // near the right edge would draw it, for the capture of BRIEF_full_pass_gameplay.md part 2
+    if (GetEnvironmentVariableW(L"MENU_PREVIEW_TIP", nullptr, 0))
+    {
+        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - ImGui::GetFontSize() * kPageTipWrap - 60.0f, io.DisplaySize.y * 0.30f)); // as far right as a hover keeps it
+        PageTipShow("The truck pulls with the mod engine: its torque curve at the engine speed shown, and the mod automatic shifts by it. In a gear held by hand the truck pulls "
+                    "with the mod engine alone: no cut at the top, engine braking with the foot off. The engine holds the truck at the top speed of the gear. In L-, L, L+ and R no "
+                    "driven wheel runs more than half again past it. The pedal is the fuel, as the game has it. Off by default.");
+    }
 }
 
 static void Page() { g_act |= SettingsPage(g_set, g_viewDemo, g_page, 0); }
