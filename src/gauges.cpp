@@ -773,6 +773,7 @@ static void WriteIni(const GaugeSettings &s)
     whole(L"RequireGearHeld", s.requireGearHeld ? 1 : 0);
     whole(L"SkipNeutral", s.skipNeutral ? 1 : 0);
     whole(L"DownStaysForward", s.downStaysForward ? 1 : 0);
+    whole(L"WalkSkipsLow", s.walkSkipsLow ? 1 : 0);
     whole(L"IgnoreShifter", s.ignoreShifter ? 1 : 0);
     whole(L"BackToA", s.backToA);
     whole(L"GameGearDisplay", s.gameGearDisplay);
@@ -1176,10 +1177,12 @@ static void ReadIni(GaugeSettings &s)
                         L";   BindGearR=Key Num 0\n"
                         L";   BindGearA=Key Num 7\n"
                         L"; RequireClutch=1 stalls the engine on a shift into a gear without the clutch, RequireGearHeld=1 goes to N while no\n"
-                        L"; gear key is held (an H shifter with every gear bound), SkipNeutral=1 steps from L- to reverse and back past N.\n"
+                        L"; gear key is held (an H shifter with every gear bound), SkipNeutral=1 steps between R and the lowest forward place past N.\n"
                         L"; GearUp and GearDown walk R, N, L-, L, L+, 1, 2 and on to the top gear, on every truck. Up from L+ goes to 1\n"
                         L"; a second after an up press got there. A 1st from the low range stays held until the next shift (never to D).\n"
-                        L"; DownStaysForward=1: GearDown stops at L-, N and R only on their own keys (wins over SkipNeutral).\n"
+                        L"; DownStaysForward=1: GearDown stops at the lowest forward place (L-, or 1 with WalkSkipsLow), N and R only on their own\n"
+                        L"; keys (wins over SkipNeutral). WalkSkipsLow=1: GearUp and GearDown walk R, N, 1, 2 and on; L-, L and L+ only on\n"
+                        L"; their own keys, RangeLow or the game shifter, and inside the low range up and down still step it.\n"
                         L"; At Gearbox=2 with Input 1 or 2 the game's own shifter picks a position too; with Input 0 its shifts stay refused.\n"
                         L"; IgnoreShifter=1: at Gearbox=2 a position picked on the game's shifter does nothing, with any Input.\n"
                         L"; BackToA: at Gearbox=2, seconds after a shift by hand into a numbered gear until it goes back to D by itself\n"
@@ -1253,6 +1256,7 @@ static void ReadIni(GaugeSettings &s)
     s.requireGearHeld = IniBool(L"RequireGearHeld", s.requireGearHeld, ini);
     s.skipNeutral = IniBool(L"SkipNeutral", s.skipNeutral, ini);
     s.downStaysForward = IniBool(L"DownStaysForward", s.downStaysForward, ini);
+    s.walkSkipsLow = IniBool(L"WalkSkipsLow", s.walkSkipsLow, ini);
     s.ignoreShifter = IniBool(L"IgnoreShifter", s.ignoreShifter, ini);
     s.backToA = IniInt(L"BackToA", s.backToA, ini);
     s.gameGearDisplay = IniInt(L"GameGearDisplay", s.gameGearDisplay, ini);
@@ -3797,13 +3801,13 @@ static void LogSettings(const GaugeSettings &s)
         s.dieselFlutter ? L", a diesel's lift flutters"
                         : SoundWhistles() > 0 ? L", a diesel's lift plays the sounds\\turbo_whistle_ files" : L", a diesel's lift is quiet");
     Log(L"settings: driven with %s", s.input == kInputKeys ? L"the keyboard" : s.input == kInputPad ? L"a pad" : L"a wheel's pedals");
-    Log(L"settings: gearbox %s; RequireClutch %d, RequireGearHeld %d, SkipNeutral %d, DownStaysForward %d, IgnoreShifter %d, BackToA %d",
+    Log(L"settings: gearbox %s; RequireClutch %d, RequireGearHeld %d, SkipNeutral %d, DownStaysForward %d, WalkSkipsLow %d, IgnoreShifter %d, BackToA %d",
         s.gearbox == kGearboxOwn && s.ignoreShifter ? L"the mod's own (Gearbox=2): it takes the shifter, its positions on the bindings (IgnoreShifter: the game's shifter does nothing)"
         : s.gearbox == kGearboxOwn && s.input != kInputWheel ? L"the mod's own (Gearbox=2): it takes the shifter, its positions on the bindings and on the game's shifter"
         : s.gearbox == kGearboxOwn ? L"the mod's own (Gearbox=2): it takes the shifter, its positions on the bindings (with a wheel's pedals the game's shifter stays refused)"
         : s.gearbox == kGearboxModel ? L"the mod's automatic in A (Gearbox=1), the game's shifter yours, its reverse on the brake refused"
                                      : L"the game's own (Gearbox=1 or 2 on the Gearbox tab hand it to the mod)",
-        s.requireClutch, s.requireGearHeld, s.skipNeutral, s.downStaysForward, s.ignoreShifter, s.backToA);
+        s.requireClutch, s.requireGearHeld, s.skipNeutral, s.downStaysForward, s.walkSkipsLow, s.ignoreShifter, s.backToA);
     Log(L"settings: the game's gear display %s (GameGearDisplay %d)", s.gameGearDisplay == kGameGearGame ? L"as the game has it" : s.gameGearDisplay == kGameGearOff ? L"off always"
                                                                     : L"off while the mod's own gearbox drives", s.gameGearDisplay);
     if (s.powertrain) Log(L"settings: powertrain on: the truck pulls with %d percent of the mod's engine and converter, through the game's torque factor; road load %s; %s; "
@@ -6147,7 +6151,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         int shiftTo = 0;
         if (w.take.driving && !testing)
         {
-            const GearboxOptions options{ s.requireClutch, s.requireGearHeld, s.skipNeutral, s.downStaysForward };
+            const GearboxOptions options{ s.requireClutch, s.requireGearHeld, s.skipNeutral, s.downStaysForward, s.walkSkipsLow };
             const int autoGear = TakeoverAutoGear(raw, w.gearbox.gear, GearboxLowestFit(w.gearbox, raw, scale, w.hand.on));
             if (!own || w.pos.pos == kPosA) GearboxFollowFloor(w.gearbox, autoGear); // in A the model's gear goes where the floor lifts the game's
             const int posWas = w.pos.pos;
@@ -6880,7 +6884,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         Log(L"probe: %S", ninth);
         if (w.take.driving)
         {
-            GearboxPosProbeText(w.pos, GearboxOptions{ s.requireClutch, s.requireGearHeld, s.skipNeutral, s.downStaysForward }, raw.gear, tenth, sizeof tenth);
+            GearboxPosProbeText(w.pos, GearboxOptions{ s.requireClutch, s.requireGearHeld, s.skipNeutral, s.downStaysForward, s.walkSkipsLow }, raw.gear, tenth, sizeof tenth);
             Log(L"probe: %S", tenth);
         }
         if (manual)
@@ -8345,7 +8349,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
            a.springScale == b.springScale && a.dampingScale == b.dampingScale && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
-           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.engineBrake == b.engineBrake && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
+           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.engineBrake == b.engineBrake && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
            a.camberGainFront == b.camberGainFront && a.camberGainRear == b.camberGainRear && a.camberRestFront == b.camberRestFront && a.camberRestRear == b.camberRestRear;
 }
 
@@ -8378,7 +8382,7 @@ int wmain(int argc, wchar_t **argv)
     Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.hotDamageFrom == kTempRed && d.coldDamage == 5.0f && d.stallDamage == 5.0f && d.clutchBurn && d.clutchHeat == 60.0f &&
               d.springScale == 1.0f && d.dampingScale == 1.0f && d.extraTravel == 0.0f && d.frameFlex == 1.0f && d.twistRange == 1.0f,
           "defaults: the radiator's full airflow from 30 km/h, engine damage on from the red zone, 10 percent a minute for the heat and 5 for the cold");
-    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.ignoreShifter && d.backToA == 0 && d.gameGearDisplay == kGameGearOffOwn && d.input == kInputWheel && !d.powertrain && d.roadLoad && d.wheelCap == 150 && d.pushShare == 0 && d.engineBrake == 15.0f && d.modEngineSpeed && d.engineSpeedTop == 1.0f && d.roadCdA == 0.0f && d.engineShare == 50 && d.creep && !d.creepManual && !d.dieselFlutter,
+    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.walkSkipsLow && !d.ignoreShifter && d.backToA == 0 && d.gameGearDisplay == kGameGearOffOwn && d.input == kInputWheel && !d.powertrain && d.roadLoad && d.wheelCap == 150 && d.pushShare == 0 && d.engineBrake == 15.0f && d.modEngineSpeed && d.engineSpeedTop == 1.0f && d.roadCdA == 0.0f && d.engineShare == 50 && d.creep && !d.creepManual && !d.dieselFlutter,
           "defaults: the oil as a second needle, warm after 5 minutes, too hot from 120 C; the standard turbo, a diesel's lift without the flutter; the creep on");
 
     // Air drag on by default (BRIEF_defaults_on.md): a missing key gives 1, an explicit 0 stays 0, the defaults give 1
@@ -8495,7 +8499,7 @@ int wmain(int argc, wchar_t **argv)
     c.oilGauge = kOilDial;
     c.boostProfile = kSpoolTwoStage;
     c.gearbox = kGearboxModel;
-    c.requireClutch = c.requireGearHeld = c.skipNeutral = c.downStaysForward = c.ignoreShifter = true;
+    c.requireClutch = c.requireGearHeld = c.skipNeutral = c.downStaysForward = c.walkSkipsLow = c.ignoreShifter = true;
     c.backToA = 12;
     c.gameGearDisplay = kGameGearOff;
     c.input = kInputKeys;
@@ -8522,7 +8526,7 @@ int wmain(int argc, wchar_t **argv)
                             c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springScale != d.springScale && c.dampingScale != d.dampingScale && c.extraTravel != d.extraTravel && c.frameFlex != d.frameFlex && c.twistRange != d.twistRange && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
                             c.demo != d.demo && c.probe != d.probe && c.keepLogs != d.keepLogs && c.soundVolume != d.soundVolume && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
-                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
+                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
     WriteIni(c);
     ReadIni(b);
     Check(allChanged, "ini: the test changes every setting from its default");
@@ -8543,7 +8547,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 138, "ini: the help text survives a write (138 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 140, "ini: the help text survives a write (140 comment lines)");
     // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
     {
         char none[32] = "x", tab[32] = {}, kept[32] = {};

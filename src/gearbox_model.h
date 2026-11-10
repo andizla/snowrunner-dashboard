@@ -6,8 +6,9 @@
 // to put down. The rules follow the manual transmission mod's (SMT, by drafty46; the game's functions found by
 // Ferrster): up and down walk R, N, L-, L, L+ and the numbered gears, a gear key sets its gear, a shift without the
 // clutch under RequireClutch stalls the engine, RequireGearHeld goes to neutral while no gear key is held, as an H
-// shifter does, SkipNeutral steps from L- to reverse and back without stopping in neutral, and DownStaysForward stops
-// down at L-, as SMT's immersive mode did. A position the game's own shifter asked for (GearboxAsk) counts as its key.
+// shifter does, SkipNeutral steps from the lowest forward place to reverse and back without stopping in neutral,
+// DownStaysForward stops down at the lowest forward place, as SMT's immersive mode did, and WalkSkipsLow walks R, N, 1
+// and on, leaving the low range but never entering it. A position the game's own shifter asked for (GearboxAsk) counts as its key.
 #pragma once
 #include <stdint.h>
 #include <math.h>
@@ -88,7 +89,8 @@ struct GearboxOptions
     bool requireClutch;   // RequireClutch: a shift into a gear with the clutch not held stalls the engine
     bool requireGearHeld; // RequireGearHeld: neutral while no gear key is held, as an H shifter
     bool skipNeutral;     // SkipNeutral: up and down step from L- to reverse and back past neutral
-    bool downStaysForward; // DownStaysForward: down stops at L- (N and R on their own keys); wins over SkipNeutral
+    bool downStaysForward; // DownStaysForward: down stops at the lowest forward place (N and R on their own keys); wins over SkipNeutral
+    bool walkSkipsLow;    // WalkSkipsLow: up and down walk R, N, 1, 2 and on; they leave the low range but never enter it
 };
 
 // A position the game's own shifter asked for at Gearbox 2, read by the hooks from the door its call came through
@@ -445,6 +447,25 @@ inline void GearboxPosFromWalk(GearboxPosModel &m, int i, int top)
     }
 }
 
+// Whether the walk stops at place i on a press from the position fromPos: R, the gears and H always, N unless
+// SkipNeutral, a low place unless WalkSkipsLow and the press came from outside the low range (BRIEF_sequential_no_low.md).
+// PLANNED 108 adds one clause here: or the truck has no such position.
+inline bool GearboxWalkStops(int i, int fromPos, const GearboxOptions &o)
+{
+    if (i == 0) return !o.skipNeutral;
+    if (i >= kWalkLowMinus && i < kWalkFirst) return !o.walkSkipsLow || (fromPos >= kPosLowMinus && fromPos <= kPosLowPlus);
+    return true;
+}
+
+// The place one press moves to from place i (dir 1 up, -1 down), past the places the walk does not stop at, held to R
+// and the top gear.
+inline int GearboxWalkNext(int i, int dir, int fromPos, const GearboxOptions &o, int last)
+{
+    int to = i;
+    do to += dir; while (to > -1 && to < kWalkFirst && !GearboxWalkStops(to, fromPos, o));
+    return to < -1 ? -1 : to > last ? last : to;
+}
+
 inline void GearboxPosToGear(GearboxPosModel &m, int g)
 {
     if (g < 0) m.pos = kPosR;
@@ -472,6 +493,18 @@ inline GearboxPosOrders GearboxPosStep(GearboxPosModel &m, const GearboxOptions 
     const bool lowUpWaits = m.pos == kPosLowPlus && m.lowPlusFor < kLowRangeUpHold - 1e-4f;
     // the position the actions pick: a position key first, then a gear key, then up or down, then the range keys
     const int was = m.pos, wasGear = m.gear;
+    // where up or down would go, worked out first so a refused press still falls through to the range keys
+    const int walkAt = GearboxPosWalk(m, t), last = top + 3;
+    int walkTo = GearboxWalkNext(walkAt, a.up ? 1 : -1, m.pos, o, last);
+    // down from A never lands on N or R: with WalkSkipsLow A in the 1st shares the 1st's place, and a down press in D
+    // asks for a lower gear held, so it gives the 1st held (review S1; with the option off A never reaches N this way)
+    if (!a.up && m.pos == kPosA && walkTo <= 0) walkTo = kWalkFirst;
+    // up from H stays in H, and up from L+ stays in the low range for kLowRangeUpHold after an up press brought it there:
+    // L+ and the 1st are the same gear at the same power, so a quick run of presses walked on into the 1st unseen
+    // (the user, 4 November: "It should never go to D from low range"). A press of its own goes to the 1st (the user,
+    // 5 November: "i cant shift out of L+ into 1"); a refused press does not restart the hold. DownStaysForward: a down
+    // press that would land on N or R does nothing
+    const bool walkRefused = a.up ? (m.pos == kPosH || lowUpWaits) : (o.downStaysForward && walkTo <= 0);
     if (a.a) m.pos = kPosA;
     else if (a.n) m.pos = kPosN;
     else if (a.r) m.pos = kPosR;
@@ -480,19 +513,7 @@ inline GearboxPosOrders GearboxPosStep(GearboxPosModel &m, const GearboxOptions 
     else if (a.low) m.pos = kPosLow;
     else if (a.lowPlus) m.pos = kPosLowPlus;
     else if (a.gearPressed >= 1) GearboxPosToGear(m, a.gearPressed > top ? top : a.gearPressed);
-    // up from H stays in H, and up from L+ stays in the low range for kLowRangeUpHold after an up press brought it there:
-    // L+ and the 1st are the same gear at the same power, so a quick run of presses walked on into the 1st unseen
-    // (the user, 4 November: "It should never go to D from low range"). A press of its own goes to the 1st (the user,
-    // 5 November: "i cant shift out of L+ into 1"); a refused press does not restart the hold
-    else if ((a.up || a.down) && !(a.up && (m.pos == kPosH || lowUpWaits)) &&
-             !(a.down && o.downStaysForward && GearboxPosWalk(m, t) <= kWalkLowMinus)) // DownStaysForward: down from L-, N or R does nothing
-    {
-        const int i = GearboxPosWalk(m, t), last = top + 3;
-        int to = i;
-        if (a.up) to = i >= last ? last : i == -1 && o.skipNeutral ? kWalkLowMinus : i + 1;
-        else to = i <= -1 ? -1 : i == kWalkLowMinus && o.skipNeutral ? -1 : i - 1;
-        GearboxPosFromWalk(m, to > last ? last : to, top);
-    }
+    else if ((a.up || a.down) && !walkRefused) GearboxPosFromWalk(m, walkTo, top);
     else if (a.rangeLow && !(m.pos >= kPosLowMinus && m.pos <= kPosLowPlus)) m.pos = kPosLow;
     else if (a.rangeHigh && m.pos >= kPosLowMinus && m.pos <= kPosLowPlus) GearboxPosToGear(m, 1);
     r.lowUp = a.up && was == kPosLowPlus && m.pos == kPosLowPlus;
@@ -570,9 +591,9 @@ inline void GearboxPosProbeText(const GearboxPosModel &m, const GearboxOptions &
 {
     char at[24] = "";
     if (m.pos == kPosGear) snprintf(at, sizeof at, " %d", m.gear);
-    snprintf(out, size, "gearbox: %s%s (the game's gear %d), clutch %s at %.2f, %d shifts, %d stalls | RequireClutch %d, RequireGearHeld %d, SkipNeutral %d, DownStaysForward %d",
+    snprintf(out, size, "gearbox: %s%s (the game's gear %d), clutch %s at %.2f, %d shifts, %d stalls | RequireClutch %d, RequireGearHeld %d, SkipNeutral %d, DownStaysForward %d, WalkSkipsLow %d",
              GearboxPosName(m.pos), at, gear, m.clutch ? "held" : "let up", m.travel, m.shifts, m.stalls, o.requireClutch, o.requireGearHeld, o.skipNeutral,
-             o.downStaysForward);
+             o.downStaysForward, o.walkSkipsLow);
 }
 
 // The game did not take the gear the mod set: it counts as asked, so the mod asks again when the position (or A's
