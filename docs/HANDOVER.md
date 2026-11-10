@@ -9,11 +9,9 @@ The cloud session that built Gauges from 0.11 to 0.15.4 ends here, on the user's
 - For the tester, in `C:\Games\tester`: Gauges.addon64 0.15.4 (MSVC, 4B033E44), TirePressure.asi 1.2.0 and `fallback_1.1.1\TirePressure.asi`. The user picks which tire mod goes out.
 - The user's own drive on 0.15.3 (lrd_90, a wheel, the manual transmission mod loaded): clean. The hunt guard fired 7 times: 3 for a gear that could not hold, 4 when the truck lost most of its speed in a second or two (harmless). The other quick back and forth all came after a lift and a fresh floor, which kicks down by the rule.
 
-## The branch and update.bat
+## The branch and the install
 
-`update.bat` on the PC: switches to `main`, fetches, and stops if `main` holds commits the branch lacks (it names them and pushes `main`, so the cloud session could take them in). Otherwise it fast-forwards `main` to `origin/claude/vibrant-darwin-anbhqw` with `--autostash` (a file the branch also changed is left as the branch has it, the local edit kept in git's stash), pushes `main`, runs `build.bat` into `out\build.log` and `test.bat` into `out\test.log`, and installs `out\Gauges.addon64` into the game's `Sources\Bin` with the one it replaces in `out\rollback`. It refuses to install while the game runs. It runs from a copy in `%TEMP%`, so a change to it takes effect from the next run.
-
-With the cloud session gone nobody moves the branch. Either push each commit to it as well (`git push origin main:claude/vibrant-darwin-anbhqw`), or set `BRANCH=main` in `update.bat` in one commit: from the next run it brings `main` up to `origin/main`, and commits made here are pushed before it runs.
+`update.bat` is gone from the repo (2026-11-11). A build goes into the game by the board's install steps: the reviewed file by its hash, with a claim. Git keeps the old script.
 
 The git flow agreed between the sessions (in the board's rules): before a commit here, bring `main` up first, commit on it, push, and tell the user. One writer at a time in this repo; the overseer takes it for the PC's sessions.
 
@@ -63,7 +61,7 @@ For a test of a change against the behaviour before it, the cloud session built 
 
 ## Uploaded from the cloud server
 
-- `tools\cloud\`: the MinGW shims, the update.bat test harness, the save and map fixtures and the probe programs (`tools\cloud\README.md`).
+- `tools\cloud\`: the MinGW shims, the save and map fixtures and the probe programs (`tools\cloud\README.md`).
 - `tools\analysis\`: the log analysis scripts (`tools\analysis\README.md`). `tools\log2drive.py` was already in the repo.
 
 Left on the server, and why:

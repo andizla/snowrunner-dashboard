@@ -9,7 +9,6 @@ Setup on Ubuntu: `apt-get install g++-mingw-w64-x86-64-posix wine python3` (the 
 - `msvc_shim.h`, `winmacros.h`: forced includes (`-include`), so the sources compile with MinGW as they do with MSVC. The first puts the std headers before `windows.h` and adds MSVC's `min` and `max`. The second defines what the Windows SDK defines and MinGW leaves out (`small`, `hyper`, `near`, `far`, `interface`), so a name clash shows here as it would with MSVC: a lambda named `near` broke an MSVC build once.
 - `inc/Windows.h`: a capitalised `windows.h` for sources that include it so (the file system is case sensitive).
 - `smtinc/`: the same for building the manual transmission fork. `detours.h` points at the fork's Detours headers by an absolute path: change it to your clone.
-- `updtest/`: a stand-in project for running `update.bat` under Wine. `build.bat` and `test.bat` only echo, `src/gauges.h` has a version line, and `run.bat` calls `update.bat` with a fake game folder. Copy `update.bat` beside them; `probes/gitstub.c` builds a `git.exe` that only prints its arguments.
 - `fixtures/`: fake game folders for the save and map reading (a Steam `userdata` tree with `CompleteSave*.cfg`). Their `.pak` files and the empty `SnowRunner.exe` stand-ins are left out by the repo's `*.pak` and `*.exe` rules: such a `.pak` is a small zip holding a level's name, made by hand.
 - `probes/`: one-off programs over the models and the game code.
   - `sim.cpp`: a rough truck on a gearbox, to see where the model shifts.
