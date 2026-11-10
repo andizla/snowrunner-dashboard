@@ -1424,28 +1424,61 @@ static volatile LONG g_b4sBits = 0, g_cutWBits = 0, g_cutPedalBits = 0;
 // the pace starts from the slot's gamePull
 static volatile LONG64 g_riseVehicle = 0;
 static volatile LONG g_riseBits = 0, g_cutUsed = 0, g_cutRate = 0, g_cutTruck = 0x7FC00000; // a quiet NaN: not read
+// the last answer's rolling radius (BRIEF_cut_radius_cylinder.md, M2: the hook does not log; the mod's thread does): the
+// radius used and the driven wheels' + 0x94 by the same mean, and the driven wheels by their kind (WheelRollRadius)
+static volatile LONG g_cutRadius = 0x7FC00000, g_cutRadius94 = 0x7FC00000, g_cutRollCylinder = 0, g_cutRollNone = 0, g_cutRollOut = 0;
 
-static const int kCutWheels = 16;
+// One wheel's collision cylinder's radius (shape + 0x28, the shape at [wheel + 0x18] + 0x20 by its vtable), under its own
+// guard so a fault here leaves the rest of the read (the Reviewer's S1); false with no vtable, another one, a pointer
+// under 0x10000 or a fault.
+__declspec(noinline) static bool CutCylinderRead(const uint8_t *wheel, uint64_t vtable, float &cylinder)
+{
+    cylinder = NAN;
+    if (!vtable) return false;
+    __try
+    {
+        const uint8_t *body = *(const uint8_t *const *)(wheel + 0x18);
+        if ((uintptr_t)body < 0x10000) return false;
+        const uint8_t *shape = *(const uint8_t *const *)(body + 0x20);
+        if ((uintptr_t)shape < 0x10000 || *(const uint64_t *)shape != vtable) return false;
+        cylinder = *(const volatile float *)(shape + 0x28);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        cylinder = NAN;
+        return false;
+    }
+}
+
+// The driven wheels' rolling radius as one read found it: the radius used (RollMeanOf), + 0x94 by the same mean, and
+// the driven wheels by their kind.
+struct CutRadii
+{
+    float radius, radius94;
+    int cylinder, none, out;
+};
 // The vehicle's driven wheels' speeds, its power factor (action + 0x38), its game clutch (action + 0xD4) and its
 // EngineResponsiveness (action + 0xC4, B4's rate a step over the power factor), read as the drive reads them; false where
-// a read faults or the list is out of bounds.
-static bool CutWheelsRead(const void *vehicle, float *omega, bool *driven, int &n, float &pf, float &d4, float &response, float &forward, float &radius)
+// a read faults or the list is out of bounds. cylinderVtable: the slot's (M1), for each driven wheel's rolling radius.
+static bool CutWheelsRead(const void *vehicle, uint64_t cylinderVtable, float *omega, bool *driven, int &n, float &pf, float &d4, float &response, float &forward,
+                          CutRadii &radii)
 {
     n = 0;
-    forward = radius = NAN;
+    forward = NAN;
+    radii = CutRadii{ NAN, NAN, 0, 0, 0 };
     __try
     {
         const uint8_t *v = (const uint8_t *)vehicle;
         const uint8_t *action = *(const uint8_t *const *)(v + 0x68);
         if ((uintptr_t)action < 0x10000) return false;
-        float radiusSum = 0.0f;
-        int radiusN = 0;
+        RollMean used = {}, plain = {};
         pf = *(const volatile float *)(action + 0x38);
         d4 = *(const volatile float *)(action + 0xD4);
         response = *(const volatile float *)(action + 0xC4);
         const bool awd = *(const volatile uint8_t *)(action + 0x49) != 0;
         const uintptr_t begin = *(const uintptr_t *)(v + 0x200), end = *(const uintptr_t *)(v + 0x208);
-        if (end < begin || (end - begin) / 8 > (uintptr_t)kCutWheels) return false;
+        if (end < begin || (end - begin) / 8 > (uintptr_t)kCapWheels) return false;
         for (uintptr_t p = begin; p < end; p += 8)
         {
             const uint8_t *model = *(const uint8_t *const *)p;
@@ -1457,13 +1490,21 @@ static bool CutWheelsRead(const void *vehicle, float *omega, bool *driven, int &
             driven[n] = type == 1 || (type == 2 && awd);
             if (driven[n])
             {
-                // M5: the driven wheels' radius (+ 0x94)
-                const float r = *(const volatile float *)(wheel + 0x94);
-                if (isfinite(r) && r > 0.0f) radiusSum += r, radiusN++;
+                // M5: the driven wheels' rolling radius, the cylinder where it is good, else + 0x94 (BRIEF_cut_radius_cylinder.md)
+                const float r94 = *(const volatile float *)(wheel + 0x94);
+                float cylinder = NAN;
+                const bool read = CutCylinderRead(wheel, cylinderVtable, cylinder);
+                const RollRadius rr = WheelRollRadius(r94, cylinder, read);
+                RollMeanAdd(used, rr.r);
+                RollMeanAdd(plain, r94);
+                if (rr.kind == kRollCylinder) radii.cylinder++;
+                else if (rr.kind == kRollNoCylinder) radii.none++;
+                else radii.out++;
             }
             n++;
         }
-        if (radiusN) radius = radiusSum / (float)radiusN;
+        radii.radius = RollMeanOf(used);
+        radii.radius94 = RollMeanOf(plain);
         // the truck's forward speed from its main body, as the drive's d73120: [[vehicle + 0x60] + 0x230], its linear
         // velocity (+ 0x230) along its rotation's first column (+ 0x170); a wheel's parent can be a rocker or a frame bone
         // with a swing of its own (the review of bc224bf, S1)
@@ -1492,15 +1533,16 @@ __declspec(noinline) static bool HookGearTorque(void *vehicle, int gear, float *
     if (published && TorqueCutOurs(back, g_driveBack, published, (uint64_t)(uintptr_t)vehicle, took, GetTickCount64()))
     {
         const TorqueCutSlot slot = *published; // read whole: the one it points to is written again two passes later
-        float omega[kCutWheels];
-        bool driven[kCutWheels];
+        float omega[kCapWheels];
+        bool driven[kCapWheels];
         int n = 0;
-        float pf = 1.0f, d4 = 1.0f, response = 1.0f, forward = NAN, radius = NAN;
+        float pf = 1.0f, d4 = 1.0f, response = 1.0f, forward = NAN;
         CutSpeeds sp = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, false };
-        if (CutWheelsRead(vehicle, omega, driven, n, pf, d4, response, forward, radius))
+        CutRadii radii = { NAN, NAN, 0, 0, 0 };
+        if (CutWheelsRead(vehicle, slot.cylinderVtable, omega, driven, n, pf, d4, response, forward, radii))
         {
             sp = TorqueCutSpeeds(omega, driven, n, gear < 0 ? -1 : 1);
-            CutSpeedsTruck(sp, forward, radius, gear < 0 ? -1 : 1);
+            CutSpeedsTruck(sp, forward, radii.radius, gear < 0 ? -1 : 1);
         }
         if (!sp.ok) InterlockedIncrement(&g_cutFaults);
         TorqueCutAnswer r = TorqueCutAnswerOf(slot, t, st, aa, tp, pf, d4, sp);
@@ -1526,6 +1568,11 @@ __declspec(noinline) static bool HookGearTorque(void *vehicle, int gear, float *
         InterlockedExchange(&g_cutRate, FloatBits(rate));
         InterlockedExchange(&g_cutS, FloatBits(r.s));
         InterlockedExchange(&g_cutTruck, FloatBits(sp.truckOk ? sp.truck : NAN));
+        InterlockedExchange(&g_cutRadius, FloatBits(radii.radius));
+        InterlockedExchange(&g_cutRadius94, FloatBits(radii.radius94));
+        InterlockedExchange(&g_cutRollCylinder, radii.cylinder);
+        InterlockedExchange(&g_cutRollNone, radii.none);
+        InterlockedExchange(&g_cutRollOut, radii.out);
         InterlockedExchange(&g_cutF, FloatBits(r.f));
         InterlockedExchange(&g_cutBracket, FloatBits(r.bracket));
         InterlockedExchange(&g_cutStock, FloatBits(t));
@@ -1619,6 +1666,11 @@ void TorqueCutCountsGet(TorqueCutCounts &out)
     out.used = BitsFloat(g_cutUsed);
     out.rate = BitsFloat(g_cutRate);
     out.truck = BitsFloat(g_cutTruck);
+    out.radius = BitsFloat(g_cutRadius);
+    out.radius94 = BitsFloat(g_cutRadius94);
+    out.rollCylinder = g_cutRollCylinder;
+    out.rollNone = g_cutRollNone;
+    out.rollOut = g_cutRollOut;
 }
 
 void WheelCapCountsGet(WheelCapCounts &out)

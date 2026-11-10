@@ -72,6 +72,9 @@ static void (*volatile g_driveDoes)(void *action) = nullptr; // what the stand-i
 uint8_t *g_capTestBodies[4] = {};
 uint8_t *g_capTestChassis = nullptr;
 uint8_t *g_pushTestBodies[3] = {};
+// the wide truck's test (BRIEF_cut_radius_cylinder.md, the rider): its wheels' bodies and how many the stand-in drive turns
+static uint8_t g_wideBodies[33][0x300] = {};
+static int g_wideN = 0;
 __declspec(noinline) static void FakeDrive(void *action, float throttle, float dt)
 {
     g_driveAction = action;
@@ -2620,6 +2623,133 @@ int main()
               "AWD off leaves a type 2 wheel out; a wheel with no inertia skipped and counted; with the cap locked first, then held at the cap together, "
               "the kept share 1 under the cap and the third wheel's 0.2 of 3.02 over it, all three clamped");
     }
+    // a wide truck (BRIEF_cut_radius_cylinder.md, the rider, the Reviewer's S3): 17, 32 and 33 driven wheels of equal
+    // inertia, each pushed by 1 rad/s by the stand-in drive. At 17 and 32 the lock ties them, the cap holds them and the
+    // chassis push reads; at 33 each is refused, its fault counted, and the drive's result stands
+    {
+        static uint8_t vehicle[0x800] = {}, act[0x100] = {}, models[33][0x300] = {}, wheels[33][0x200] = {}, chassis[0x300] = {}, desc[0x200] = {}, world[0x10] = {};
+        static uint64_t list[34] = {};
+        auto putF = [](uint8_t *p, size_t at, float v) { memcpy(p + at, &v, 4); };
+        auto getF = [](const uint8_t *p, size_t at) {
+            float v;
+            memcpy(&v, p + at, 4);
+            return v;
+        };
+        auto putP = [](uint8_t *p, size_t at, const void *v) {
+            const uint64_t x = (uint64_t)(uintptr_t)v;
+            memcpy(p + at, &x, 8);
+        };
+        auto putV = [&](uint8_t *p, size_t at, float x, float y, float z) { putF(p, at, x), putF(p, at + 4, y), putF(p, at + 8, z); };
+        putP(vehicle, 0x68, act);
+        int gear = 1;
+        memcpy(act + 0x74, &gear, 4);
+        memcpy(act + 0x70, &gear, 4);
+        putV(desc, 0x100, 1.0f, 0.0f, 0.0f);
+        putP(chassis, 0x10, world);
+        putV(chassis, 0x170, 1.0f, 0.0f, 0.0f);
+        putV(chassis, 0x180, 0.0f, 1.0f, 0.0f);
+        putV(chassis, 0x190, 0.0f, 0.0f, 1.0f);
+        putV(chassis, 0x220, 0.01f, 0.01f, 0.01f);
+        putF(chassis, 0x22C, 0.001f);
+        for (int i = 0; i < 33; i++)
+        {
+            list[i] = (uint64_t)(uintptr_t)models[i];
+            putP(models[i], 0x2C8, wheels[i]);
+            const int driven = 1;
+            memcpy(wheels[i] + 0xE8, &driven, 4);
+            putP(wheels[i], 0x18, g_wideBodies[i]);
+            putP(wheels[i], 0x10, chassis);
+            putP(wheels[i], 0x28, desc);
+            putV(wheels[i], 0x154, 1.0f, 0.0f, 0.0f);
+            putF(wheels[i], 0x128, 1.0f);
+            wheels[i][0x1A4] = 1;
+            putP(g_wideBodies[i], 0x10, world);
+            putV(g_wideBodies[i], 0x220, 0.1f, 0.1f, 0.1f);
+        }
+        g_driveDoes = [](void *) {
+            for (int i = 0; i < g_wideN; i++)
+            {
+                float x;
+                memcpy(&x, g_wideBodies[i] + 0x240, 4);
+                x += 1.0f;
+                memcpy(g_wideBodies[i] + 0x240, &x, 4);
+            }
+        };
+        void (*volatile drive)(void *, float, float) = &FakeDrive;
+        const uint64_t v = (uint64_t)(uintptr_t)vehicle, a = (uint64_t)(uintptr_t)act;
+        auto setSpeeds = [&](int n, float base) {
+            for (int i = 0; i < n; i++) putV(g_wideBodies[i], 0x240, base + (i % 2 ? 0.2f : 0.0f), 0.0f, 0.0f);
+        };
+        auto speed = [&](int i) { return getF(g_wideBodies[i], 0x240); };
+        auto allAt = [&](int n, float want) {
+            for (int i = 0; i < n; i++)
+                if (!Near(speed(i), want)) return false;
+            return true;
+        };
+        auto asDriven = [&](int n, float base) {
+            for (int i = 0; i < n; i++)
+                if (!Near(speed(i), base + 1.0f + (i % 2 ? 0.2f : 0.0f))) return false;
+            return true;
+        };
+        char wideLine[400] = "";
+        bool wideOk = true;
+        const int sizes[3] = { 17, 32, 33 };
+        for (int k = 0; k < 3; k++)
+        {
+            const int n = sizes[k];
+            g_wideN = n;
+            putP(vehicle, 0x200, &list[0]);
+            putP(vehicle, 0x208, &list[n]);
+            const bool fits = n <= kCapWheels;
+            const float mean = 2.0f + 0.2f * (float)(n / 2) / (float)n; // after the drive: half at 2.0, half at 2.2
+            // the lock alone
+            TorqueCutPublish(nullptr);
+            PushGive(0, 0, 0.0f, 1.0f, 0.0f);
+            act[0x4A] = 1;
+            LockGive(a, v, 100, 0);
+            LockCounts l0 = {}, l1 = {};
+            LockCountsGet(l0);
+            setSpeeds(n, 1.0f);
+            drive(act, 0.5f, 1.0f / 60.0f);
+            LockCountsGet(l1);
+            const bool lockOk = fits ? allAt(n, mean) && l1.faults == l0.faults && l1.wheels == n : asDriven(n, 1.0f) && l1.faults == l0.faults + 1;
+            // the cap at 3 with the lock: armed under it, then over it held at 3 together
+            TorqueCutSlot cs = {};
+            cs.vehicle = v;
+            cs.action = a;
+            cs.cap = 3.0f;
+            TorqueCutPublish(&cs);
+            WheelCapCounts c0 = {}, c1 = {};
+            WheelCapCountsGet(c0);
+            setSpeeds(n, 1.0f);
+            drive(act, 0.5f, 1.0f / 60.0f);
+            setSpeeds(n, 3.0f);
+            drive(act, 0.5f, 1.0f / 60.0f);
+            WheelCapCountsGet(c1);
+            const bool capOk = fits ? allAt(n, 3.0f) && c1.faults == c0.faults && c1.clampedNow == n : asDriven(n, 3.0f) && c1.faults == c0.faults + 2;
+            TorqueCutPublish(nullptr);
+            LockGive(0, 0, 0, 0);
+            act[0x4A] = 0;
+            // the chassis push's read
+            PushGive(a, v, 1.0f, 2.0f, 0.5f);
+            PushCounts p0 = {}, p1 = {};
+            PushCountsGet(p0);
+            setSpeeds(n, 1.0f);
+            drive(act, 0.5f, 1.0f / 60.0f);
+            PushCountsGet(p1);
+            PushGive(0, 0, 0.0f, 1.0f, 0.0f);
+            const bool pushOk = fits ? p1.faults == p0.faults : p1.faults == p0.faults + 1 && asDriven(n, 1.0f);
+            snprintf(wideLine + strlen(wideLine), sizeof wideLine - strlen(wideLine), "%s %d wheels: the lock %s, the cap %s, the push read %s", k ? ";" : "", n,
+                     lockOk ? "right" : "WRONG", capOk ? "right" : "WRONG", pushOk ? "right" : "WRONG");
+            wideOk = wideOk && lockOk && capOk && pushOk;
+        }
+        g_driveDoes = nullptr;
+        g_wideN = 0;
+        char line[600];
+        snprintf(line, sizeof line, "a wide truck: up to kCapWheels %d wheels the lock, the cap and the chassis push read and act, a longer list is refused with its fault "
+                                    "counted and the drive's result left (%s)", kCapWheels, wideLine);
+        Check(kCapWheels == kMaxWheels && wideOk, line);
+    }
     // the diff lock's setter's place in made-up code: its bytes once; not taken twice or where they are not
     {
         uint8_t bytes[kPatternMax], mask[kPatternMax];
@@ -2925,6 +3055,72 @@ int main()
         // 0.3 or more in one step: 1 to 0.5 at the governor, 0.5 to -0.15 as the foot comes off, 0.4 to 0 at the floor's slot
         const bool counts = c1.answered - c0.answered == 11 && c1.passed - c0.passed == 5 && c1.others - c0.others == 2 && c1.falls - c0.falls == 3;
         const bool twice = GearTorqueHook((uintptr_t)&FakeGearTorque, driveBack, why, sizeof why);
+        // the rolling radius (BRIEF_cut_radius_cylinder.md): the truck at 10 m/s forward on its main body, each wheel's
+        // + 0x94 0.51 and its cylinder 0.45 (the slot's vtable), the wheels spinning at 10 / 0.45 rad/s: the truck's speed
+        // by the cylinder is the wheels' own, by + 0x94 it read 0.88 of it; no vtable: + 0x94 and four without one; a
+        // cylinder of 0.2 out of bounds; a second vtable no cylinder
+        static uint8_t mainModel[0x300] = {}, mainBody[0x300] = {}, wheelBodies[4][0x100] = {}, shapes[4][0x40] = {};
+        const uint64_t fakeCylinder = 0x7FF612345678ull;
+        putP(vehicle, 0x60, mainModel);
+        putP(mainModel, 0x230, mainBody);
+        putF(mainBody, 0x230, 10.0f);
+        putF(mainBody, 0x170, 1.0f);
+        for (int i = 0; i < 4; i++)
+        {
+            putF(wheels[i], 0x94, 0.51f);
+            putP(wheels[i], 0x18, wheelBodies[i]);
+            putP(wheelBodies[i], 0x20, shapes[i]);
+            memcpy(shapes[i], &fakeCylinder, 8);
+            putF(shapes[i], 0x28, 0.45f);
+        }
+        slot.at = 0;
+        slot.mode = kCutMap;
+        slot.cylinderVtable = fakeCylinder;
+        TorqueCutPublish(&slot);
+        spin(10.0f / 0.45f);
+        TorqueFromDrive(fn, vehicle, 1);
+        TorqueCutCounts rc = {};
+        TorqueCutCountsGet(rc);
+        const bool byCylinder = Near(rc.radius, 0.45f) && Near(rc.radius94, 0.51f) && rc.rollCylinder == 4 && rc.rollNone == 0 && rc.rollOut == 0 && Near(rc.truck, rc.s) &&
+                                Near(OverRevShare(rc.s, rc.truck, 10.0f), rc.s / 10.0f);
+        slot.cylinderVtable = 0;
+        TorqueCutPublish(&slot);
+        TorqueFromDrive(fn, vehicle, 1);
+        TorqueCutCountsGet(rc);
+        const bool noVtable = Near(rc.radius, 0.51f) && rc.rollNone == 4 && rc.rollCylinder == 0 && Near(rc.truck, 10.0f / 0.51f);
+        slot.cylinderVtable = fakeCylinder;
+        TorqueCutPublish(&slot);
+        putF(shapes[0], 0x28, 0.2f);
+        memcpy(shapes[1], &driveBack, 8); // another shape
+        TorqueFromDrive(fn, vehicle, 1);
+        TorqueCutCountsGet(rc);
+        const float mixed = 4.0f / (2.0f / 0.51f + 2.0f / 0.45f);
+        const bool fallbacks = rc.rollCylinder == 2 && rc.rollNone == 1 && rc.rollOut == 1 && Near(rc.radius, mixed);
+        putF(shapes[0], 0x28, 0.45f);
+        memcpy(shapes[1], &fakeCylinder, 8);
+        // the wide lists: 17 and 32 driven wheels read, 33 refused with a fault (the rider)
+        static uint64_t wide[34] = {};
+        for (int i = 0; i < 34; i++) wide[i] = (uint64_t)(uintptr_t)models[i % 4];
+        bool wideCut = true;
+        const int sizes[3] = { 17, 32, 33 };
+        for (int k = 0; k < 3; k++)
+        {
+            putP(vehicle, 0x200, &wide[0]);
+            putP(vehicle, 0x208, &wide[sizes[k]]);
+            TorqueCutCounts w0 = {}, w1 = {};
+            TorqueCutCountsGet(w0);
+            TorqueFromDrive(fn, vehicle, 1);
+            TorqueCutCountsGet(w1);
+            wideCut = wideCut && (sizes[k] <= kCapWheels ? w1.faults == w0.faults && w1.rollCylinder == sizes[k] : w1.faults == w0.faults + 1);
+        }
+        putP(vehicle, 0x200, &list[0]);
+        putP(vehicle, 0x208, &list[4]);
+        putP(vehicle, 0x60, nullptr); // the truck's speed not read again, as the tests after this one expect
+        spin(5.0f);
+        TorqueCutPublish(nullptr);
+        Check(byCylinder && noVtable && fallbacks && wideCut,
+              "torque cut's rolling radius: the truck's speed by each driven wheel's collision cylinder equals the wheels' own (it read 0.88 of it by wheel + 0x94); "
+              "no vtable gives + 0x94; a cylinder out of bounds and another shape fall back each, counted by kind; 17 and 32 wheels read, 33 refused with a fault");
         char line[700];
         snprintf(line, sizeof line, "torque cut's detour: through Detours on a function of the gear torque's signature, the drive's call answered %.3f with the flat curve, "
                                     "the governor %.3f at 1.05 of the top, the foot off %.3f at the redline and %.3f at idle, R rolling forward %.3f and back %.3f, the "

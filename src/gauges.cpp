@@ -4202,6 +4202,8 @@ struct TruckWatch
     int causeRpm, causePos;     // over-revving: the engine speed the share gives and the position then
     float overShare, overStop;  // this pass's over-rev share and the governor's end (OverRevShare, the map's governTo); no number where it does not count
     long overAnswered;          // the cut's answers as counted at the last pass (TorqueCutCounts answered): a share counts only on a pass where they rose
+    uint64_t rollVehicle;       // the truck the rolling radius line was written for, and the fallbacks it counted (BRIEF_cut_radius_cylinder.md)
+    long rollNone, rollOut;
     float overRedline;          // the map's redline then, for the rpm
     ULONGLONG overProbeAt;      // the over-rev's probe line, once a second
     ULONGLONG writeAt;          // when the next write may go out
@@ -4240,12 +4242,14 @@ static bool GearboxManual(const TruckWatch &w) { return GearboxHeldBy(w.take.dri
 // The torque cut's slot for this pass (torque_cut.h): the map with the clutch fully in (locked), else the torque through
 // the clutch as the scalar (the mod engine's own inertia is in it, so a pass's delay does no harm there); the creep's
 // share of the last pass as the least F; the engine held back (Torque) on what it pushes, not on its braking.
+static_assert(kCapWheels == kMaxWheels, "the cut, the cap, the lock and the chassis push read as many wheels as the rest of the mod");
 static TorqueCutSlot TorqueCutSlotOf(const TruckWatch &w, const TruckRaw &raw, const GaugeSettings &s, const GaugeScale &scale, const TorqueCurve &curve, float tachTop,
                                      bool locked, float gearTop)
 {
     TorqueCutSlot c = {};
     c.vehicle = w.refs.vehicle;
     c.action = w.refs.action;
+    c.cylinderVtable = WheelCylinderVtable(); // on the mod's thread, never in the hook (the review of 113, M1)
     c.mode = locked ? kCutMap : kCutScalar;
     const float held = w.profile.torque > 0.0f && w.profile.torque < 1.0f ? w.profile.torque : 1.0f;
     const float carried = isfinite(w.clutch.carried) && !w.clutch.dead ? w.clutch.carried : 0.0f;
@@ -6731,6 +6735,19 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 const bool overFresh = oc.answered != w.overAnswered;
                 w.overAnswered = oc.answered;
                 w.overShare = slot.mode == kCutMap && overFresh ? OverRevShare(oc.s, oc.truck, slot.map.top) : NAN;
+                // the rolling radius (BRIEF_cut_radius_cylinder.md): a line a truck, and again when the count of either
+                // fallback changes (S5), not on each change of the radius, which the tire mod moves in play
+                const long rollRead = oc.rollCylinder + oc.rollNone + oc.rollOut;
+                if (overFresh && rollRead > 0 && (w.rollVehicle != w.refs.vehicle || oc.rollNone != w.rollNone || oc.rollOut != w.rollOut))
+                {
+                    w.rollVehicle = w.refs.vehicle;
+                    w.rollNone = oc.rollNone;
+                    w.rollOut = oc.rollOut;
+                    Log(L"torque cut: the truck's speed by the rolling radius %.3f m against %.3f m of wheel + 0x94: %ld driven wheels by the collision cylinder, %ld without one "
+                        L"(%s), %ld with one out of %.2f to %.2f of + 0x94 (both on + 0x94)",
+                        oc.radius, oc.radius94, oc.rollCylinder, oc.rollNone, slot.cylinderVtable ? L"another shape, a pointer or a fault" : L"hkpCylinderShape's vtable not found",
+                        oc.rollOut, kRollRadiusLeast, kRollRadiusMost);
+                }
                 w.overStop = slot.map.governTo;
                 w.overRedline = slot.map.redline;
                 static int capTold = 0;
@@ -6739,7 +6756,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                     capTold = s.wheelCap;
                     Log(L"wheel cap: in L-, L, L+ and R each driven wheel's spin about its axle (wheel + 0x154, world) is held to %d percent of the gear's top (WheelCap) in its "
                         L"body's angular velocity (wheel + 0x18, body + 0x240) after the drive, once the wheels' mean is under it; what a held wheel could not take goes to the "
-                        L"others; the governor goes by the truck's own speed (the chassis's forward speed over the driven wheels' radius, wheel + 0x94)",
+                        L"others; the governor goes by the truck's own speed (the chassis's forward speed over the driven wheels' rolling radius, each one's collision cylinder or wheel + 0x94)",
                         s.wheelCap);
                 }
             }
@@ -6862,12 +6879,12 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 const float sTop = gearTop > 0.0f ? c.s / gearTop : 0.0f;
                 Log(L"probe: torque cut: %s; s %.2f rad/s (%.2f of the top %.2f, %.0f rpm), F %.3f, the bracket %.3f (the least %.3f, used %.3f at %.3f a step), the scalar %.3f, the share %.2f; "
                     L"the game's T %.3f, answered %.3f; D4 %.2f, B4s %.3f, the stand-in %.3f, the stall's wheels %.3f; calls answered %ld, passed %ld, the other callers' %ld, reads failed %ld; falls of 0.3 or more "
-                    L"in one step %ld; the throttle held at 1 %s; the governor by the truck's speed %.2f rad/s; the wheel cap %s: clamps %ld (%ld in the last step), the largest excess %.2f rad/s "
+                    L"in one step %ld; the throttle held at 1 %s; the governor by the truck's speed %.2f rad/s (the rolling radius %.3f m, wheel + 0x94 %.3f m; %ld by the cylinder, %ld without, %ld out of bounds); the wheel cap %s: clamps %ld (%ld in the last step), the largest excess %.2f rad/s "
                     L"after the drive and %.2f before it, bodies refused %ld, steps waiting %ld, kept %.3f, spread %.2f rad/s, faults %ld",
                     cutActs ? L"acting" : TorqueCutWhyNot(s, want, own && GearboxManual(w), cutHooks, raw.gearEngaged, gearTop, cutAgrees), c.s, sTop, gearTop, sTop * scale.redline,
                     c.f, c.bracket, w.cutFloor, c.used, c.rate, locked ? 0.0f : SettingsRange(w.clutch.carried, -1.0f, kClutchHold), s.engineShare / 100.0f, c.stock, c.torque, c.d4, c.b4s, c.standIn, c.w,
                     c.answered - before.answered, c.passed - before.passed, c.others - before.others, c.faults - before.faults, c.falls - before.falls, cutActs ? L"on" : L"off",
-                    c.truck, !GearboxPosCapped(w.pos.pos) ? L"not in this gear" : cap.armed ? L"armed" : L"waiting", cap.clamps - w.capWas.clamps, cap.clampedNow, cap.excessMost,
+                    c.truck, c.radius, c.radius94, c.rollCylinder, c.rollNone, c.rollOut, !GearboxPosCapped(w.pos.pos) ? L"not in this gear" : cap.armed ? L"armed" : L"waiting", cap.clamps - w.capWas.clamps, cap.clampedNow, cap.excessMost,
                     cap.preMost, cap.refused - w.capWas.refused, cap.waitSteps - w.capWas.waitSteps, cap.kept, cap.spread - w.capWas.spread, cap.faults - w.capWas.faults);
                 w.cutWas = c;
                 w.capWas = cap;

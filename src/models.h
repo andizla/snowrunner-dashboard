@@ -78,6 +78,7 @@
 // and it never stalls the engine. Worked out and logged the same way, while the manual transmission mod drives.
 #pragma once
 #include "truck.h"
+#include "torque_cut.h" // WheelRollRadius, shared with the cut's hook
 
 // ---- the engine speed ----
 
@@ -1673,7 +1674,8 @@ inline float GradeStep(GradeTrack &g, const float pos[3], float now)
 // the ground. The game's stock damping does this, a flat tire's more, and the tire mod's Rolling drag most. Read from
 // the game only, as the tire mod reads it: the wheel's body at wheel + 0x18, its cylinder shape at body + 0x20 (by the
 // shape's vtable), the rotation's columns at body + 0x170, the inverse inertia's diagonal at body + 0x220 and the
-// inverse mass at + 0x22C, the angular velocity at body + 0x240 (the world's axes), the radius at wheel + 0x94, and
+// inverse mass at + 0x22C, the angular velocity at body + 0x240 (the world's axes), the rolling radius (the cylinder's at
+// shape + 0x28 within its bounds of wheel + 0x94, else + 0x94: WheelRollRadius, BRIEF_cut_radius_cylinder.md part 2), and
 // wheel + 0x1A4 set while it touches the ground.
 struct WheelDamp
 {
@@ -1683,7 +1685,9 @@ struct WheelDamp
     float inv[4];     // body + 0x220: the inverse inertia about the body's x, y, z, then the inverse mass
     float cols[3][4]; // body + 0x170: the body's axes in the world
     float angular[3]; // body + 0x240
-    float radius;     // wheel + 0x94
+    float radius;     // the rolling radius the drag goes by (WheelRollRadius)
+    float radius94;   // wheel + 0x94
+    int rollKind;     // kRollCylinder, kRollNoCylinder or kRollOutOfBounds
 };
 inline float WheelHalf(uint16_t half)
 {
@@ -1805,8 +1809,12 @@ inline bool WheelDampRead(const TruckMemory &m, uint64_t wheel, uint64_t cylinde
     uint64_t body = 0, shape = 0, vt = 0;
     uint8_t contact = 0;
     w.ok = cylinderVtable && wheel && m.get(wheel + 0x18, body) && body && m.get(body + 0x20, shape) && shape && m.get(shape, vt) && vt == cylinderVtable &&
-           m.get(wheel + 0x1A4, contact) && m.get(wheel + 0x94, w.radius) && m.get(body + 0x216, w.damping) && m.get(body + 0x220, w.inv) &&
+           m.get(wheel + 0x1A4, contact) && m.get(wheel + 0x94, w.radius94) && m.get(body + 0x216, w.damping) && m.get(body + 0x220, w.inv) &&
            m.get(body + 0x170, w.cols) && m.get(body + 0x240, w.angular);
+    float cylinder = NAN;
+    const RollRadius rr = WheelRollRadius(w.radius94, cylinder, w.ok && m.get(shape + 0x28, cylinder));
+    w.radius = rr.r;
+    w.rollKind = rr.kind;
     w.grounded = w.ok && contact != 0;
     return w.ok;
 }

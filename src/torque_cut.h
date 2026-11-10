@@ -199,10 +199,45 @@ inline float TorqueCutBlend(float share, float pedal, float stockCurve, float ou
 // BRIEF_drivetrain_2c_wheel_cap.md with M5), 0 none.
 enum { kCutMap, kCutScalar };
 static const uint64_t kTorqueFresh = 1000; // ms: a slot older than this passes every call
+// The rolling radius (BRIEF_cut_radius_cylinder.md): a wheel rolls on its collision cylinder (shape + 0x28, the shape
+// at [wheel + 0x18] + 0x20 by hkpCylinderShape's vtable), which the tire mod writes with the pressure, not on
+// wheel + 0x94, which the game writes only when a wheel breaks or is mended. The cylinder where it was read and lies
+// within kRollRadiusLeast to kRollRadiusMost of that wheel's + 0x94 (the lead's bounds, the Reviewer's A1: the tire mod's
+// deepest flat is 0.70 of the radius, a broken wheel under it 0.53), else + 0x94. kind: kRollCylinder, kRollNoCylinder
+// (no vtable, another, a pointer or a fault) or kRollOutOfBounds (a radius that is no number, not above 0 or outside).
+static const float kRollRadiusLeast = 0.5f, kRollRadiusMost = 1.25f;
+enum { kRollCylinder, kRollNoCylinder, kRollOutOfBounds };
+struct RollRadius
+{
+    float r;
+    int kind;
+};
+inline RollRadius WheelRollRadius(float radius94, float cylinder, bool cylinderRead)
+{
+    if (!cylinderRead) return { radius94, kRollNoCylinder };
+    if (!isfinite(cylinder) || !(cylinder > 0.0f) || !isfinite(radius94) || !(radius94 > 0.0f) || cylinder < kRollRadiusLeast * radius94 || cylinder > kRollRadiusMost * radius94)
+        return { radius94, kRollOutOfBounds };
+    return { cylinder, kRollCylinder };
+}
+// The driven wheels' radius for the truck's speed in their measure (the Reviewer's S2): n over the sum of 1 / r, so
+// wheels of two sizes rolling without slip spin at v x mean(1 / r), the wheels' mean. Radii that are no number or not
+// above 0 are left out; no number with none left.
+struct RollMean
+{
+    float inv;
+    int n;
+};
+inline void RollMeanAdd(RollMean &m, float r)
+{
+    if (isfinite(r) && r > 0.0f) m.inv += 1.0f / r, m.n++;
+}
+inline float RollMeanOf(const RollMean &m) { return m.n && m.inv > 0.0f ? (float)m.n / m.inv : NAN; }
+
 struct TorqueCutSlot
 {
     uint64_t vehicle, action;
     uint64_t at;    // GetTickCount64 at the publish
+    uint64_t cylinderVtable; // hkpCylinderShape's vtable (gauges.cpp WheelCylinderVtable, on the mod's thread: M1), 0 not found, for the rolling radius
     int mode;
     float scalar, floor, share, pedal, sLast, listTop, gamePull, cap, pushBack; // pushBack: 1 - PushShare / 100, for the cap's part of the chassis push
     TorqueCutMap map;
@@ -221,7 +256,7 @@ inline bool TorqueCutOurs(uintptr_t back, uintptr_t driveBack, const TorqueCutSl
 // whole rad/s in the gear's direction and floored at 0, for the stall's wheels' term. ok false with no driven wheel.
 // least: the slowest driven wheel in the gear's direction, not floored (below 0 turning against the gear), for the
 // engine brake's taper. truck: the truck's own speed in the wheels' measure, in the gear's direction, the main body's forward speed
-// over the driven wheels' mean radius (CutSpeedsTruck; M5 of the wheel cap's addendum: the governor's fade goes by it,
+// over the driven wheels' rolling radius (RollMeanOf of WheelRollRadius; CutSpeedsTruck; M5 of the wheel cap's addendum: the governor's fade goes by it,
 // so no wheel's kick or backspin enters that loop); truckOk false where it was not read (the governor by mean then).
 struct CutSpeeds
 {
@@ -258,8 +293,8 @@ inline CutSpeeds TorqueCutSpeeds(const float *omega, const bool *driven, int n, 
 }
 
 // The truck's own speed into the speeds: forward (m/s along the main body's forward axis, the drive's own d73120) over the
-// driven wheels' mean radius (wheel + 0x94), in the gear's direction (dir +1 or -1). Nothing where either is no number
-// or the radius not above 0.
+// driven wheels' rolling radius (RollMeanOf over WheelRollRadius: each wheel's cylinder, else its + 0x94), in the gear's
+// direction (dir +1 or -1). Nothing where either is no number or the radius not above 0.
 inline void CutSpeedsTruck(CutSpeeds &sp, float forward, float radius, int dir)
 {
     if (!isfinite(forward) || !(radius > 0.0f) || !isfinite(radius)) return;
@@ -383,7 +418,10 @@ inline void TorqueCutAnswerPaced(TorqueCutAnswer &r, float stock, float usedBefo
 // and the engine brake, not by a clamp in one step). kCapKeptOld: the kept share's smoothing, old part.
 static const int kCapDefault = 150, kCapLeast = 110, kCapMost = 200;
 static const float kCapArm = 1.0f, kCapKeptOld = 0.8f;
-static const int kCapWheels = 16;
+// kCapWheels: the wheels a truck may list (vehicle + 0x200), as kMaxWheels (truck.h, which this header does not see; a
+// static_assert in gauges.cpp holds them equal, the review of 113, M3). The cut, the cap, the lock and the chassis
+// push read a truck of up to this many and refuse a longer list.
+static const int kCapWheels = 32;
 
 struct CapVec
 {

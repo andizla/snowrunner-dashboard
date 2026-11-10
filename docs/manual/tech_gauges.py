@@ -424,7 +424,7 @@ drive's own scaling by pf the curve is 1 under the governor's end, and the game'
 (bracket − used) away from 0, with <i>r</i> = EngineResponsiveness (+0xC4) · pf, and at once toward 0 (<code>CutRise</code>, F1b; one step's kick on a free wheel is about
 30 times the brake's most). A take-over paces from the game's own pull at that step, clamp01(min(B4, pedal)) read on the mod's pass before the first publish, and from 0
 where B4 is no number (<code>TorqueCutGamePull</code>, S1). The governor's fade goes by the truck's own speed: the forward speed of the main body ([[vehicle + 0x60] + 0x230], its + 0x230 along its
-rotation's first column at + 0x170, as the drive's d73120) over the driven wheels' mean radius (wheel + 0x94), in the gear's direction (<code>CutSpeedsTruck</code>,
+rotation's first column at + 0x170, as the drive's d73120) over the driven wheels' rolling radius, n over the sum of 1/<i>r</i>, each wheel's collision cylinder ([[wheel + 0x18] + 0x20] + 0x28 by hkpCylinderShape's vtable, which the tire mod writes with the pressure) where it lies within 0.5 to 1.25 of wheel + 0x94, else + 0x94 (<code>WheelRollRadius</code>, BRIEF_cut_radius_cylinder.md; the vtable rides in the slot, the hook neither looks it up nor logs; "torque cut: the truck's speed by the rolling radius ..." a truck and when a fallback count changes), in the gear's direction (<code>CutSpeedsTruck</code>,
 M5 of the wheel cap's addendum); where the guard acts the curve is read at the wheels' speed held to the redline, as its tail past the redline would be a fall in the
 wheels' speed under the guard; in a numbered gear it keeps its tail, the one limit on a wheel that runs free there. The wheel cap is the runaway guard (BRIEF_drivetrain_2c_wheel_cap.md): after the original drive returns, each driven wheel's speed in the game's measure,
 w = dot(body + 0x240, wheel + 0x154) in the gear's direction (wheel + 0x18 the body, used as activate checks it: + 0x10 set, + 0x160 not 5), is held to
@@ -501,7 +501,7 @@ of a shift's end (its stage idle again); each pass gives (<i>a</i> + <i>a</i><su
 the ground smoothed over 0.2 s and the factor as the game has it (the load is in it already). <i>a</i><sub>damp</sub> is the wheels' own
 drag added back (<code>TruckWheelDamp</code>): Σ <i>I</i> · <i>c</i> · |ω| / <i>r</i> over every wheel on the ground, driven or not, over the
 mass the physics moves (model + 0x784 and each wheel body's 1/<i>w</i> at body + 0x22C), with <i>c</i> the body's angular damping
-(body + 0x216, a Havok half), <i>I</i> and ω about the axle (body + 0x220 and + 0x240 by the columns at + 0x170), <i>r</i> at wheel + 0x94,
+(body + 0x216, a Havok half), <i>I</i> and ω about the axle (body + 0x220 and + 0x240 by the columns at + 0x170), <i>r</i> the rolling radius (the cylinder within 0.5 to 1.25 of wheel + 0x94, else + 0x94, <code>WheelRollRadius</code>),
 smoothed by the same 0.2 s filter. The game's stock damping, a flat tire's and the tire mod's Rolling drag all slow the truck that way.
 A wheel off the ground (wheel + 0x1A4) is left out; a wheel not read, or fewer wheels than the vehicle's models, is no pass. Figures
 learned before have no <code>BaseDamp.&lt;engine&gt;=1</code> beside them: the read deletes them and writes the mark in one step. Once

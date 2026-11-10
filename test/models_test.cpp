@@ -5032,10 +5032,54 @@ int main(int argc, char **argv)
         short_.models = 5;
         const bool memory = Near(read, four, 1e-6f) && Near(mass, 4400.0f, 0.01f) && isnan(TruckWheelDamp(g_mem, short_, cyl, 4000.0f)) &&
                             isnan(TruckWheelDamp(g_mem, r, cyl + 8, 4000.0f)) && isnan(TruckWheelDamp(g_mem, r, 0, 4000.0f));
+        // part 2 of BRIEF_cut_radius_cylinder.md: the drag at the ground over the rolling radius, the cylinder of 0.4 under
+        // + 0x94 of 0.5 (the force goes by 1 over it: 1.25 times); one out of bounds (0.2, under half) keeps + 0x94
+        for (int i = 0; i < 4; i++) MemPut(0x20000000ull + (uint64_t)i * 0x1000 + 0x800 + 0x28, 0.4f);
+        const float byCylinder = TruckWheelDamp(g_mem, r, cyl, 4000.0f);
+        for (int i = 0; i < 4; i++) MemPut(0x20000000ull + (uint64_t)i * 0x1000 + 0x800 + 0x28, 0.2f);
+        const float outOfBounds = TruckWheelDamp(g_mem, r, cyl, 4000.0f);
+        for (int i = 0; i < 4; i++) MemPut(0x20000000ull + (uint64_t)i * 0x1000 + 0x800 + 0x28, 0.0f);
+        const bool rolling = Near(byCylinder, four * 0.5f / 0.4f, 1e-5f) && Near(outOfBounds, four, 1e-6f);
         char line[260];
         snprintf(line, sizeof line, "wheels' drag: added back, a_damp 0 learns %.3f, 0.2 at 0.8 learns %.3f; four wheels %.4f m/s2; one off the ground %.4f; a bad read, a wild damping, "
                  "fewer wheels than models: no pass; a sphere reads", learnWith(0.8f, 0.0f), learnWith(0.8f, 0.2f), four, WheelDampAccel(up, 4, 4000.0f));
-        Check(zero && added && !nanLearned && sum && airborne && refused && memory, line);
+        Check(zero && added && !nanLearned && sum && airborne && refused && memory && rolling, line);
+    }
+    // the rolling radius (BRIEF_cut_radius_cylinder.md with the Reviewer's addendum): the cylinder where it is read and
+    // within 0.5 to 1.25 of + 0x94, else + 0x94 by its kind; a broken wheel with both equal as before, under the tire
+    // mod's flat the cylinder; the truck's speed by it equals the wheels' mean and the over-rev share their mean over the
+    // top; two sizes by n over the sum of 1 / r (S2)
+    {
+        const RollRadius good = WheelRollRadius(0.51f, 0.45f, true), notRead = WheelRollRadius(0.51f, 0.45f, false), nan = WheelRollRadius(0.51f, NAN, true),
+                         zero = WheelRollRadius(0.51f, 0.0f, true), under = WheelRollRadius(0.51f, 0.25f, true), over = WheelRollRadius(0.51f, 0.64f, true),
+                         edgeLow = WheelRollRadius(0.5f, 0.25f, true), edgeHigh = WheelRollRadius(0.5f, 0.625f, true), broken = WheelRollRadius(0.3f, 0.3f, true),
+                         brokenFlat = WheelRollRadius(0.3f, 0.22f, true), noRadius = WheelRollRadius(NAN, 0.45f, true);
+        const bool choice = good.kind == kRollCylinder && good.r == 0.45f && notRead.kind == kRollNoCylinder && notRead.r == 0.51f && nan.kind == kRollOutOfBounds && nan.r == 0.51f &&
+                            zero.kind == kRollOutOfBounds && under.kind == kRollOutOfBounds && under.r == 0.51f && over.kind == kRollOutOfBounds && over.r == 0.51f &&
+                            edgeLow.kind == kRollCylinder && edgeHigh.kind == kRollCylinder && broken.kind == kRollCylinder && broken.r == 0.3f && brokenFlat.r == 0.22f &&
+                            noRadius.kind == kRollOutOfBounds;
+        // a truck at 10 m/s on cylinders of 0.45 under + 0x94 of 0.51, the wheels at 10 / 0.45 rad/s, a top of 20
+        const float spins[4] = { 10.0f / 0.45f, 10.0f / 0.45f, 10.0f / 0.45f, 10.0f / 0.45f };
+        const bool all[4] = { true, true, true, true };
+        RollMean used = {}, plain = {};
+        for (int i = 0; i < 4; i++) RollMeanAdd(used, WheelRollRadius(0.51f, 0.45f, true).r), RollMeanAdd(plain, 0.51f);
+        CutSpeeds sp = TorqueCutSpeeds(spins, all, 4, 1), old = sp;
+        CutSpeedsTruck(sp, 10.0f, RollMeanOf(used), 1);
+        CutSpeedsTruck(old, 10.0f, RollMeanOf(plain), 1);
+        const bool truck = Near(sp.truck, sp.mean, 1e-4f) && Near(OverRevShare(sp.mean, sp.truck, 20.0f), sp.mean / 20.0f, 1e-5f) && Near(old.truck / old.mean, 0.45f / 0.51f, 1e-4f);
+        // two sizes, 0.5 and 0.6, rolling without slip at 10 m/s
+        const float two[4] = { 20.0f, 20.0f, 10.0f / 0.6f, 10.0f / 0.6f };
+        RollMean sizes = {};
+        RollMeanAdd(sizes, 0.5f), RollMeanAdd(sizes, 0.5f), RollMeanAdd(sizes, 0.6f), RollMeanAdd(sizes, 0.6f), RollMeanAdd(sizes, NAN), RollMeanAdd(sizes, 0.0f);
+        CutSpeeds sp2 = TorqueCutSpeeds(two, all, 4, 1);
+        CutSpeedsTruck(sp2, 10.0f, RollMeanOf(sizes), 1);
+        const RollMean empty = {};
+        const bool twoSizes = sizes.n == 4 && Near(sp2.truck, sp2.mean, 1e-4f) && isnan(RollMeanOf(empty));
+        char line[300];
+        snprintf(line, sizeof line, "rolling radius: the cylinder where read and within 0.5 to 1.25 of + 0x94, else + 0x94 by its kind; the truck by it %.3f against the wheels' %.3f "
+                                    "(by + 0x94 %.3f); two sizes by n over the sum of 1 / r %.3f against %.3f",
+                 sp.truck, sp.mean, old.truck, sp2.truck, sp2.mean);
+        Check(choice && truck && twoSizes, line);
     }
     // the learning over visits (BRIEF_road_load_learning.md, with the Reviewer's addendum): gears 3 and 4 alternating every
     // 1.5 s floored at x 0.5 to 0.75 both learn (each 2 s summed over visits; before, never); a visit of 0.2 s adds
