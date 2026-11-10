@@ -70,6 +70,7 @@ static void *volatile g_driveAction = nullptr;
 static void (*volatile g_driveDoes)(void *action) = nullptr; // what the stand-in does to the wheels, the wheel cap's test
 uint8_t *g_capTestBodies[4] = {};
 uint8_t *g_capTestChassis = nullptr;
+uint8_t *g_pushTestBodies[3] = {};
 __declspec(noinline) static void FakeDrive(void *action, float throttle, float dt)
 {
     g_driveAction = action;
@@ -2057,6 +2058,126 @@ int main()
         if (!(waited && capped && counts && downhill && refused && shiftWaits && reverse && noCap && cleared))
             printf("     %d %d %d %d %d %d %d %d %d; speeds %.3f %.3f %.3f %.3f; kept %.3f clamped %ld excess %.3f\n", waited, capped, counts, downhill, refused, shiftWaits, reverse,
                    noCap, cleared, speed(0), speed(1), speed(2), speed(3), c1.kept, c1.clampedNow, c1.excessMost);
+    }
+
+    // the chassis push in the wheels' drive's hook (BRIEF_chassis_push.md): four driven wheels, two on the chassis, one on a
+    // rocker, one on a fixed body (an inverse mass of 0); the stand-in drive pushes each parent by 1 m/s forward and 0.5
+    // rad/s of turn. With the factor's assumption published (PushGive): the shove (B4 0.9 over an assumed 0.25, F 3: k 2/3,
+    // the floor of the game's own push), steady (B4 at the assumption: nothing), the kick path at 2 m/s (the same k,
+    // counted), a damaged engine (F 1.5), each parent by its own change, the fixed body skipped; under the cut nothing; a
+    // stale publish or PushShare 100 nothing
+    {
+        static uint8_t vehicle[0x800] = {}, act[0x100] = {}, models[4][0x300] = {}, wheels[4][0x200] = {}, chassis[0x300] = {}, rocker[0x300] = {}, fixedBody[0x300] = {},
+                       mainModel[0x300] = {};
+        static uint64_t list[5] = {};
+        auto putF = [](uint8_t *p, size_t at, float v) { memcpy(p + at, &v, 4); };
+        auto getF = [](const uint8_t *p, size_t at) {
+            float v;
+            memcpy(&v, p + at, 4);
+            return v;
+        };
+        auto putP = [](uint8_t *p, size_t at, const void *v) {
+            const uint64_t x = (uint64_t)(uintptr_t)v;
+            memcpy(p + at, &x, 8);
+        };
+        uint8_t *parents[4] = { chassis, chassis, rocker, fixedBody };
+        putP(vehicle, 0x68, act);
+        putP(vehicle, 0x60, mainModel);
+        putP(mainModel, 0x230, chassis);
+        putF(chassis, 0x170, 1.0f); // its forward axis: x
+        int gear = 3;
+        memcpy(act + 0x74, &gear, 4);
+        for (int i = 0; i < 4; i++)
+        {
+            list[i] = (uint64_t)(uintptr_t)models[i];
+            putP(models[i], 0x2C8, wheels[i]);
+            const int driven = 1;
+            memcpy(wheels[i] + 0xE8, &driven, 4);
+            putP(wheels[i], 0x10, parents[i]);
+        }
+        putP(vehicle, 0x200, &list[0]);
+        putP(vehicle, 0x208, &list[4]);
+        putF(chassis, 0x22C, 0.001f);
+        putF(rocker, 0x22C, 0.01f);
+        putF(fixedBody, 0x22C, 0.0f);
+        g_pushTestBodies[0] = chassis, g_pushTestBodies[1] = rocker, g_pushTestBodies[2] = fixedBody;
+        g_driveDoes = [](void *) {
+            for (int i = 0; i < 3; i++)
+            {
+                float x, w;
+                memcpy(&x, g_pushTestBodies[i] + 0x230, 4);
+                memcpy(&w, g_pushTestBodies[i] + 0x244, 4);
+                x += 1.0f, w += 0.5f;
+                memcpy(g_pushTestBodies[i] + 0x230, &x, 4);
+                memcpy(g_pushTestBodies[i] + 0x244, &w, 4);
+            }
+        };
+        auto reset = [&](float speed) {
+            for (uint8_t *b : { chassis, rocker, fixedBody })
+                putF(b, 0x230, speed), putF(b, 0x244, 0.0f);
+        };
+        void (*volatile drive)(void *, float, float) = &FakeDrive;
+        TorqueCutPublish(nullptr);
+        CreepGive(0, 0.0f);
+        PushCounts p0 = {};
+        PushCountsGet(p0);
+        // the shove at 10 m/s
+        putF(act, 0xB4, 0.9f);
+        PushGive((uint64_t)(uintptr_t)act, (uint64_t)(uintptr_t)vehicle, 0.25f, 3.0f, 1.0f);
+        reset(10.0f);
+        drive(act, 1.0f, 0.016f);
+        const float k = 1.0f - 1.0f / 3.0f;
+        const bool shove = Near(getF(chassis, 0x230), 11.0f - k) && Near(getF(chassis, 0x244), 0.5f * (1.0f - k)) && Near(getF(rocker, 0x230), 11.0f - k) &&
+                           getF(fixedBody, 0x230) == 11.0f;
+        PushCounts p1 = {};
+        PushCountsGet(p1);
+        const bool shoveCounts = p1.backs - p0.backs == 1 && p1.skipped - p0.skipped == 1 && Near(p1.k, k) && Near(p1.fx, 3.6f) && p1.kicks == p0.kicks && Near(p1.speed, 10.0f) &&
+                                 Near(p1.given - p0.given, 1000.0f + 100.0f) && Near(p1.back - p0.back, k * 1100.0f);
+        // steady: B4 at the factor's assumption
+        putF(act, 0xB4, 0.25f);
+        reset(10.0f);
+        drive(act, 1.0f, 0.016f);
+        const bool steady = getF(chassis, 0x230) == 11.0f && getF(rocker, 0x230) == 11.0f;
+        // the kick path at 2 m/s: the push measured whatever the speed
+        putF(act, 0xB4, 0.9f);
+        reset(2.0f);
+        drive(act, 1.0f, 0.016f);
+        PushCounts p2 = {};
+        PushCountsGet(p2);
+        const bool kick = Near(getF(chassis, 0x230), 3.0f - k) && p2.kicks - p1.kicks == 1;
+        // a damaged engine: the game's own share 0.5, the factor written 0.75: F 1.5
+        PushGive((uint64_t)(uintptr_t)act, (uint64_t)(uintptr_t)vehicle, 0.25f, 0.75f / 0.5f, 1.0f);
+        reset(10.0f);
+        drive(act, 1.0f, 0.016f);
+        const bool damaged = Near(getF(chassis, 0x230), 11.0f - (1.0f - 1.0f / 1.5f));
+        // under the cut (a numbered gear held by hand, no guard): nothing, whatever is published
+        TorqueCutSlot cs = {};
+        cs.vehicle = (uint64_t)(uintptr_t)vehicle;
+        cs.action = (uint64_t)(uintptr_t)act;
+        cs.pushBack = 1.0f;
+        TorqueCutPublish(&cs);
+        PushGive((uint64_t)(uintptr_t)act, (uint64_t)(uintptr_t)vehicle, 0.25f, 3.0f, 1.0f);
+        putF(act, 0xB4, 0.9f);
+        reset(10.0f);
+        drive(act, 1.0f, 0.016f);
+        const bool heldGear = getF(chassis, 0x230) == 11.0f;
+        TorqueCutPublish(nullptr);
+        // PushShare 100 (back 0) clears it; a stale publish passes
+        PushGive((uint64_t)(uintptr_t)act, (uint64_t)(uintptr_t)vehicle, 0.25f, 3.0f, 0.0f);
+        putF(act, 0xB4, 0.9f);
+        reset(10.0f);
+        drive(act, 1.0f, 0.016f);
+        const bool shareAll = getF(chassis, 0x230) == 11.0f;
+        g_driveDoes = nullptr;
+        PushGive(0, 0, 0.0f, 1.0f, 0.0f);
+        char line[500];
+        snprintf(line, sizeof line, "chassis push in the drive's hook: the shove at 10 m/s (B4 0.9 over 0.25, F 3) k %.3f on the chassis and the rocker, their turn with it, the fixed body skipped; "
+                                    "steady nothing; the kick path at 2 m/s the same k, counted; a damaged engine k %.3f; under the cut nothing; PushShare 100 nothing",
+                 p1.k, 1.0f - 1.0f / 1.5f);
+        Check(CreepHooked() && shove && shoveCounts && steady && kick && damaged && heldGear && shareAll, line);
+        if (!(shove && shoveCounts && steady && kick && damaged && heldGear && shareAll))
+            printf("     %d %d %d %d %d %d %d; chassis %.3f rocker %.3f; k %.3f fx %.3f given %.1f back %.1f kicks %ld\n", shove, shoveCounts, steady, kick, damaged, heldGear, shareAll,
+                   getF(chassis, 0x230), getF(rocker, 0x230), p1.k, p1.fx, p1.given - p0.given, p1.back - p0.back, p2.kicks - p1.kicks);
     }
 
     // the torque cut's detour on a function of the gear torque's signature (BRIEF_drivetrain_2_torque_cut.md and the

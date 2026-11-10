@@ -204,6 +204,20 @@ void DriveStepSet(DriveStepFn step);
 // Reviewer's S2): the cut's torque carries the pedal, the sign and the size, and the drive's own update keeps B4 at 1
 // (its target is the throttle once the curve is flat), zeroed as ever while + 0xD8 is up.
 void CreepGive(uint64_t action, float share);
+// The chassis push (BRIEF_chassis_push.md): while the mod writes the torque factor for this action (not under the cut),
+// the game's pull the factor assumed (GameFall at its x times the pedal), the factor over the game's own share and
+// 1 - PushShare / 100; the drive's hook takes back k of each parent body's change across the drive (PushTakeBack).
+// back 0 or no action clears it; a publish older than kTorqueFresh passes.
+void PushGive(uint64_t action, uint64_t vehicle, float assumed, float factorOver, float back);
+// Its counters since the start: the drive's steps measured, those with a take-back, the steps whose push came under 3 m/s
+// (the kick path), faults, bodies skipped (an inverse mass of 0); the push given and taken back summed (N s); the last
+// step's k, F_excess, F, B4 and forward speed (m/s).
+struct PushCounts
+{
+    long steps, backs, kicks, faults, skipped;
+    float given, back, k, fx, f, b4, speed;
+};
+void PushCountsGet(PushCounts &out);
 // The hook's calls so far: for the action given (hits) and all of them.
 void CreepCounts(long &hits, long &calls);
 // The threads the drive was called on so far, at most most of them; full where more were seen than are kept.

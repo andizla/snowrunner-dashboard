@@ -188,7 +188,7 @@ struct TorqueCutSlot
     uint64_t vehicle, action;
     uint64_t at;    // GetTickCount64 at the publish
     int mode;
-    float scalar, floor, share, pedal, sLast, listTop, gamePull, cap;
+    float scalar, floor, share, pedal, sLast, listTop, gamePull, cap, pushBack; // pushBack: 1 - PushShare / 100, for the cap's part of the chassis push
     TorqueCutMap map;
 };
 
@@ -507,4 +507,64 @@ inline float CapKeptSmooth(float before, float now)
 {
     const float b = isfinite(before) ? CutClamp01(before) : 1.0f, k = isfinite(now) ? CutClamp01(now) : 1.0f;
     return kCapKeptOld * b + (1.0f - kCapKeptOld) * k;
+}
+
+// ---- the chassis push (BRIEF_chassis_push.md, the Reviewer's addendum and the lead's of 2026-11-10 09:58) ----
+// At road speed the game's drive pays a share s of each driven wheel's torque as a push straight on the wheel's parent
+// body along the ground (c42b8a, applyPointImpulse), sized by min(B4, throttle) x the torque factor at + 0xCC with no tyre
+// between (the Researcher's follow-ups 5 and 6). The mod's factor is made for the game's pull it assumed, GameFall at
+// the factor's own x times the pedal (TorqueLift); where B4 runs above that (it goes by the wheels' speed and lags, the
+// factor by the truck's), the push carries the factor times the surplus: the sudden surge at speed. Taken back: across
+// the original drive each distinct parent body's linear and angular velocity change (the push alone: the drive touches
+// a parent body only there, the kick path included), and a share k of it off, v -= k dv and omega -= k domega, which keeps
+// the pitch moment in proportion.
+// PushTakeBack: k for a step. pull = min(B4, throttle) the drive's, assumed the game's pull the factor was written for,
+// factorOver the factor over the game's own share (F, the Reviewer's S2: the raw value carries engine damage), back
+// 1 - PushShare / 100. F_excess = pull / assumed; nothing where it is not above 1 (the factor's own assumption) or where F
+// is not above 1 (the factor at the game's own: no mod part in the push). k = 1 - max(1 / F_excess, 1 / F): the push down
+// to the mod's own pull, but never under the game's own push for the game's torque (the lead: the game's own push stays
+// whole at every speed; with F_excess above F that floor binds), times back.
+struct PushSlot
+{
+    uint64_t action, vehicle;
+    uint64_t at;          // GetTickCount64 at the publish
+    float assumed;        // GameFall at the factor's x times the pedal
+    float factorOver;     // the factor written over the game's own share
+    float back;           // 1 - PushShare / 100
+};
+inline float PushExcess(float b4, float throttle, float assumed)
+{
+    if (!isfinite(b4) || !isfinite(throttle)) return 0.0f; // fminf drops a NaN: a bad B4 read takes nothing back
+    const float pull = fminf(b4, throttle);
+    if (!(pull > 0.0f)) return 0.0f;
+    if (!(assumed > 1e-4f) || !isfinite(assumed)) return 1e9f;
+    return pull / assumed;
+}
+inline float PushTakeBack(float b4, float throttle, float assumed, float factorOver, float back)
+{
+    if (!(back > 0.0f) || !isfinite(back) || !(factorOver > 1.0f) || !isfinite(factorOver)) return 0.0f;
+    const float fx = PushExcess(b4, throttle, assumed);
+    if (!(fx > 1.0f)) return 0.0f;
+    const float k = 1.0f - fmaxf(1.0f / fx, 1.0f / factorOver);
+    return isfinite(k) ? CutClamp01(k) * CutClamp01(back) : 0.0f;
+}
+// The cap's part (its M4, folded in here): where the guard bound this step, (1 - kept) of the push of each parent body
+// that carries a clamped wheel, times back; nothing where none bound.
+inline float PushCapBack(bool clamped, float kept, float back)
+{
+    if (!clamped || !(back > 0.0f) || !isfinite(back)) return 0.0f;
+    return (1.0f - (isfinite(kept) ? CutClamp01(kept) : 1.0f)) * CutClamp01(back);
+}
+// One parent body's velocities moved back by k of their change across the drive.
+struct PushBody
+{
+    CapVec v0, w0, v1, w1; // before and after the drive: linear (+ 0x230) and angular (+ 0x240)
+    float invMass;         // + 0x22C; 0: a fixed body, skipped
+};
+inline bool PushBodyBack(const PushBody &b, float k, CapVec &v, CapVec &w)
+{
+    if (!(k > 0.0f) || !(b.invMass > 0.0f) || !isfinite(b.invMass)) return false;
+    v = { b.v1.x - k * (b.v1.x - b.v0.x), b.v1.y - k * (b.v1.y - b.v0.y), b.v1.z - k * (b.v1.z - b.v0.z) };
+    w = { b.w1.x - k * (b.w1.x - b.w0.x), b.w1.y - k * (b.w1.y - b.w0.y), b.w1.z - k * (b.w1.z - b.w0.z) };
+    return isfinite(v.x) && isfinite(v.y) && isfinite(v.z) && isfinite(w.x) && isfinite(w.y) && isfinite(w.z);
 }

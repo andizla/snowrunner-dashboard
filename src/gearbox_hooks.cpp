@@ -511,6 +511,19 @@ static int g_cutNext = 0;
 static void *volatile g_cutSlot = nullptr;
 static volatile LONG g_cutHolds = 0; // the drive's calls whose throttle the cut held at 1
 
+// B4 (action + 0xB4) as the game has it before the drive runs (the chassis push's F_excess); NaN where it faults.
+static float CutB4Read(const void *action)
+{
+    __try
+    {
+        return *(const volatile float *)((const uint8_t *)action + 0xB4);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return NAN;
+    }
+}
+
 // B4 (action + 0xB4) written 1 before the drive runs; nothing where the memory is gone.
 static void CutPullOne(void *action)
 {
@@ -673,8 +686,18 @@ static void CapAdd(volatile LONG &bits, float x)
 // The drive with the cap around it: the wheels read before, the arming (M3), the original drive, the wheels after, the
 // cap with the spread (CapStep), the writes and the kept share for the stand-in (M1). A read that faults leaves the
 // drive's own result.
-static void CapStepAround(const TorqueCutSlot *cut, void *action, float throttle, float dt)
+struct CapAround
 {
+    int clamps;
+    float kept;
+    bool clamped[kCapWheels];
+    uint8_t *wheel[kCapWheels];
+    int n;
+};
+static CapAround CapStepAround(const TorqueCutSlot *cut, void *action, float throttle, float dt)
+{
+    CapAround out = {};
+    out.kept = 1.0f;
     const uint64_t vehicle = cut->vehicle;
     const float cap = cut->cap;
     if (g_capVehicle != vehicle)
@@ -702,7 +725,7 @@ static void CapStepAround(const TorqueCutSlot *cut, void *action, float throttle
         InterlockedExchange(&g_capClampedNow, 0);
         g_capKept = CapKeptSmooth(g_capKept, 1.0f);
         InterlockedExchange(&g_capKeptBits, FloatBits(g_capKept));
-        return;
+        return out;
     }
     InterlockedIncrement(&g_capArmedSteps);
     CapMost(g_capPreMost, preMost);
@@ -712,7 +735,7 @@ static void CapStepAround(const TorqueCutSlot *cut, void *action, float throttle
     if (!CapReadAfter(t, post))
     {
         InterlockedIncrement(&g_capFaults);
-        return;
+        return out;
     }
     const CapStepOut o = CapStep(pre, post, gain, ok, t.n, cap, true);
     if (!CapWrite(t, post, o)) InterlockedIncrement(&g_capFaults);
@@ -723,6 +746,133 @@ static void CapStepAround(const TorqueCutSlot *cut, void *action, float throttle
     InterlockedExchange(&g_capClampedNow, o.clamps);
     g_capKept = CapKeptSmooth(g_capKept, o.kept);
     InterlockedExchange(&g_capKeptBits, FloatBits(g_capKept));
+    out.clamps = o.clamps;
+    out.kept = o.kept;
+    out.n = t.n;
+    for (int i = 0; i < t.n; i++) out.clamped[i] = o.clamped[i], out.wheel[i] = t.w[i].wheel;
+    return out;
+}
+
+// ---- the chassis push taken back (BRIEF_chassis_push.md; torque_cut.h, PushTakeBack) ----
+// The mod's thread publishes the factor's assumption for the driven truck's action (PushGive) while it writes the torque
+// factor. Around the original drive the distinct parent bodies of the driven wheels (wheel + 0x10) are read before and
+// after, and k of their change taken back before the game's brakes (which touch only the wheels). A parent with an
+// inverse mass of 0 is skipped. No lock, no heap, no log.
+static PushSlot g_pushSlots[2];
+static int g_pushNext = 0;
+static void *volatile g_pushSlot = nullptr;
+static volatile LONG g_pushSteps = 0, g_pushBacks = 0, g_pushKicks = 0, g_pushFaults = 0, g_pushSkipped = 0;
+static volatile LONG g_pushGivenBits = 0, g_pushBackBits = 0, g_pushK = 0, g_pushFx = 0, g_pushF = 0, g_pushB4 = 0, g_pushSpeed = 0;
+static const int kPushBodies = 8;
+struct PushRead
+{
+    uint8_t *body[kPushBodies];
+    PushBody b[kPushBodies];
+    bool capWheel[kPushBodies]; // the body carries a wheel the cap held this step
+    int n;
+    float forward; // the truck's forward speed, m/s (the main body, as d73120)
+};
+static bool PushReadBefore(const void *vehicle, const void *action, PushRead &r)
+{
+    r.n = 0;
+    r.forward = NAN;
+    __try
+    {
+        const uint8_t *v = (const uint8_t *)vehicle;
+        if (*(const void *const volatile *)(v + 0x68) != action) return false;
+        const bool awd = *(const volatile uint8_t *)((const uint8_t *)action + 0x49) != 0;
+        const uintptr_t begin = *(const uintptr_t *)(v + 0x200), end = *(const uintptr_t *)(v + 0x208);
+        if (end < begin || (end - begin) / 8 > (uintptr_t)kCapWheels) return false;
+        for (uintptr_t p = begin; p < end; p += 8)
+        {
+            const uint8_t *model = *(const uint8_t *const *)p;
+            if ((uintptr_t)model < 0x10000) continue;
+            const uint8_t *wheel = *(const uint8_t *const *)(model + 0x2C8);
+            if ((uintptr_t)wheel < 0x10000) continue;
+            const int type = *(const volatile int *)(wheel + 0xE8);
+            if (!(type == 1 || (type == 2 && awd))) continue;
+            uint8_t *parent = *(uint8_t *const *)(wheel + 0x10);
+            if ((uintptr_t)parent < 0x10000) continue;
+            bool seen = false;
+            for (int i = 0; i < r.n; i++) seen = seen || r.body[i] == parent;
+            if (seen || r.n >= kPushBodies) continue;
+            PushBody &b = r.b[r.n];
+            b = PushBody{};
+            CapGet3(parent + 0x230, b.v0);
+            CapGet3(parent + 0x240, b.w0);
+            b.invMass = *(const volatile float *)(parent + 0x22C);
+            r.capWheel[r.n] = false;
+            r.body[r.n++] = parent;
+        }
+        const uint8_t *model = *(const uint8_t *const *)(v + 0x60);
+        const uint8_t *main = (uintptr_t)model >= 0x10000 ? *(const uint8_t *const *)(model + 0x230) : nullptr;
+        if ((uintptr_t)main >= 0x10000)
+        {
+            CapVec vel, f;
+            CapGet3(main + 0x230, vel);
+            CapGet3(main + 0x170, f);
+            r.forward = CapDot(vel, f);
+        }
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        r.n = 0;
+        return false;
+    }
+}
+static bool PushReadAfter(PushRead &r)
+{
+    __try
+    {
+        for (int i = 0; i < r.n; i++)
+        {
+            CapGet3(r.body[i] + 0x230, r.b[i].v1);
+            CapGet3(r.body[i] + 0x240, r.b[i].w1);
+        }
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+// k for each body (kAll for all, or the cap's for a body with a held wheel), written; the counters.
+static void PushTake(PushRead &r, float kAll, float kCap)
+{
+    float given = 0.0f, taken = 0.0f;
+    bool any = false;
+    __try
+    {
+        for (int i = 0; i < r.n; i++)
+        {
+            const PushBody &b = r.b[i];
+            const CapVec dv = { b.v1.x - b.v0.x, b.v1.y - b.v0.y, b.v1.z - b.v0.z };
+            const float j = b.invMass > 0.0f ? sqrtf(CapDot(dv, dv)) / b.invMass : 0.0f;
+            if (isfinite(j)) given += j;
+            if (!(b.invMass > 0.0f)) InterlockedIncrement(&g_pushSkipped);
+            const float k = fmaxf(kAll, r.capWheel[i] ? kCap : 0.0f);
+            CapVec v, w;
+            if (!PushBodyBack(b, k, v, w)) continue;
+            volatile float *pv = (volatile float *)(r.body[i] + 0x230), *pw = (volatile float *)(r.body[i] + 0x240);
+            pv[0] = v.x, pv[1] = v.y, pv[2] = v.z;
+            pw[0] = w.x, pw[1] = w.y, pw[2] = w.z;
+            if (isfinite(j)) taken += k * j;
+            any = true;
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        InterlockedIncrement(&g_pushFaults);
+    }
+    InterlockedIncrement(&g_pushSteps);
+    if (any) InterlockedIncrement(&g_pushBacks);
+    // the kick path pushes at any speed: a push measured under 3 m/s, where s is 0, is the kick's
+    if (given > 0.0f && isfinite(r.forward) && fabsf(r.forward) < 3.0f) InterlockedIncrement(&g_pushKicks);
+    CapAdd(g_pushGivenBits, given);
+    CapAdd(g_pushBackBits, taken);
+    InterlockedExchange(&g_pushK, FloatBits(fmaxf(kAll, kCap)));
+    InterlockedExchange(&g_pushSpeed, FloatBits(r.forward));
 }
 
 // The creep's larger of the two throttles, as the stub's maxss had it (the share where the game's is not a number),
@@ -752,12 +902,80 @@ static void CreepDrive(void *action, float throttle, float dt)
         throttle = _mm_cvtss_f32(_mm_max_ss(_mm_set_ss(throttle), _mm_set_ss(slot->share))); // maxss itself: a ?: may be built with its operands swapped
     }
     if (const DriveStepFn step = g_driveStep) step((uint64_t)(uintptr_t)action, dt);
+    // the chassis push: the factor's assumption for this action (D, the factor written), or the cap's part (a held gear)
+    const PushSlot *push = (const PushSlot *)g_pushSlot;
+    const bool cutHere = cut && (uint64_t)(uintptr_t)action == cut->action && now && now >= cut->at && now - cut->at <= kTorqueFresh;
+    uint64_t at = 0;
+    const bool pushOn = !cutHere && push && (uint64_t)(uintptr_t)action == push->action && push->back > 0.0f && (at = GetTickCount64()) >= push->at && at - push->at <= kTorqueFresh;
+    const bool capPush = capOn && cut->pushBack > 0.0f;
+    static PushRead pr; // the physics thread's own: one driven truck, one call at a time
+    const uint64_t pushVehicle = pushOn ? push->vehicle : capPush ? cut->vehicle : 0;
+    const bool pushRead = pushVehicle && PushReadBefore((const void *)(uintptr_t)pushVehicle, action, pr);
+    if (pushVehicle && !pushRead) InterlockedIncrement(&g_pushFaults);
+    float b4 = NAN;
+    if (pushOn && pushRead) b4 = CutB4Read(action);
     if (!capOn)
     {
         ((DriveFn)g_creepWay)(action, throttle, dt);
+        if (pushOn && pushRead && PushReadAfter(pr))
+        {
+            const float fx = PushExcess(b4, throttle, push->assumed);
+            InterlockedExchange(&g_pushFx, FloatBits(fx));
+            InterlockedExchange(&g_pushF, FloatBits(push->factorOver));
+            InterlockedExchange(&g_pushB4, FloatBits(b4));
+            PushTake(pr, PushTakeBack(b4, throttle, push->assumed, push->factorOver, push->back), 0.0f);
+        }
         return;
     }
-    CapStepAround(cut, action, throttle, dt);
+    const CapAround around = CapStepAround(cut, action, throttle, dt);
+    if (capPush && pushRead && PushReadAfter(pr))
+    {
+        // a parent carries a held wheel when one of the wheels the cap held this step hangs on it
+        for (int i = 0; i < pr.n; i++)
+        {
+            bool held = false;
+            __try
+            {
+                for (int k = 0; k < around.n; k++)
+                    held = held || (around.clamped[k] && *(uint8_t *const *)(around.wheel[k] + 0x10) == pr.body[i]);
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                held = false;
+            }
+            pr.capWheel[i] = held;
+        }
+        PushTake(pr, 0.0f, PushCapBack(around.clamps > 0, around.kept, cut->pushBack));
+    }
+}
+
+void PushGive(uint64_t action, uint64_t vehicle, float assumed, float factorOver, float back)
+{
+    if (!action || !vehicle || !(back > 0.0f))
+    {
+        InterlockedExchangePointer(&g_pushSlot, nullptr);
+        return;
+    }
+    PushSlot &slot = g_pushSlots[g_pushNext];
+    g_pushNext ^= 1;
+    slot = PushSlot{ action, vehicle, GetTickCount64(), assumed, factorOver, back };
+    InterlockedExchangePointer(&g_pushSlot, &slot);
+}
+
+void PushCountsGet(PushCounts &out)
+{
+    out.steps = g_pushSteps;
+    out.backs = g_pushBacks;
+    out.kicks = g_pushKicks;
+    out.faults = g_pushFaults;
+    out.skipped = g_pushSkipped;
+    out.given = BitsFloat(g_pushGivenBits);
+    out.back = BitsFloat(g_pushBackBits);
+    out.k = BitsFloat(g_pushK);
+    out.fx = BitsFloat(g_pushFx);
+    out.f = BitsFloat(g_pushF);
+    out.b4 = BitsFloat(g_pushB4);
+    out.speed = BitsFloat(g_pushSpeed);
 }
 
 void DriveStepSet(DriveStepFn step) { g_driveStep = step; }

@@ -382,6 +382,19 @@ gear (2026-10-25). With the wheels at the
 gear's top or past it (rolling downhill) the factor is the game's own: the division would be by nothing. Below about half a gear's
 top GameFall is 1 and nothing is divided out. The game's own share goes back once when the setting goes off, the engine stops, the pull test is armed, or another truck is
 driven (and to the old truck only if its action is still its own).</p>
+<p><b>The chassis push</b> (BRIEF_chassis_push.md). At c42b8a the drive gives a share s of each driven wheel's torque as a direct impulse
+on the wheel's parent body along the ground, s = clamp((mean wheel speed − 4)/6, 0.01, 1) · clamp((|forward| − 3)/6, 0, 1), and on the
+kick path all of it. That push carries the factor one for one with no tyre between, so the factor times a B4 higher than the one it was
+written for shoved the chassis: the wheels catching after a slip, or the factor stepping while B4 was still high. CreepDrive reads each
+distinct parent body of the driven wheels (wheel + 0x10) before and after the original drive, its velocity at + 0x230 and its turn at
++ 0x240, skipping an inverse mass of 0 (+ 0x22C), and moves both back by k of their change: v −= k Δv and ω −= k Δω, so the pitch
+moment comes off in the same share. F_excess = min(B4, throttle) / assumed, with B4 at action + 0xB4 before the drive and assumed
+GameFall at the factor's own x times the pedal; F is the factor over the game's own share, so engine damage is not read as the mod's
+part; k = (1 − max(1/F_excess, 1/F)) · (1 − <code>PushShare</code>/100), and 0 where F_excess or F is not above 1
+(<code>PushTakeBack</code>). The floor 1/F keeps the game's own push for the game's torque whole. In a held gear B4 is written 1 and the
+cut's answer is at most the stock, so nothing comes off there unless the guard bound: then (1 − kept) of the push of each parent that
+carries a clamped wheel (<code>PushCapBack</code>). Every call is measured, the kick path under 3 m/s too. The probe gives a second's
+push and the share taken back, k, F_excess, F, B4, the forward speed and the kick path's steps.</p>
 <h3>The torque cut (a gear held by hand)</h3>
 <p>The game's torque per gear is one function, <code>bool(vehicle, int gear, float* torque, float* start, float* a, float* top, float* gearSpeed)</code>, found by
 its first bytes once (<code>kGearTorquePattern</code>), and the drive's call of it is the first call in the wheels' drive that lands there (<code>GearTorqueFind</code>,

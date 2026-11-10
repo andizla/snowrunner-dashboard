@@ -118,6 +118,7 @@ struct GaugeSettings
     bool roadLoad;           // RoadLoad: with Powertrain, the air's drag taken off the torque handed to the game (models.h, road load); on by default
     bool modEngineSpeed;     // ModEngineSpeed: with Powertrain, the game's engine speed (its tachometer, sound and effects) is the mod engine's (gearbox_hooks.h, EngineSpeedHook); on by default
     float engineSpeedTop;    // EngineSpeedTop: the mod engine's speed the game reads as its 1, as a share of the redline, 0.5 to 1.5 (1: the redline)
+    int pushShare;           // PushShare: with Powertrain, the share in percent of the game's chassis push at speed that carries the mod's surplus over its own pull (BRIEF_chassis_push.md), 0 to 100, 0 (taken back); no box, for the A/B: 100 today's
     int wheelCap;            // WheelCap: with the torque cut in L-, L, L+ and R, no driven wheel runs faster than this percent of the gear's top (BRIEF_drivetrain_2c_wheel_cap.md), 110 to 200, 150; no box, for the A/B
     float engineBrake;       // EngineBrake: with Powertrain in a gear held by hand at Gearbox=2 (the torque cut), the share of the gear's torque in percent the engine holds the truck back with at the redline with the foot off, 0 to 30 (torque_cut.h)
     float roadCdA;           // RoadCdA: the drag's area in m², 0 by the truck's mass (1.1 under 4 t, 3.5 under 10 t, else 6); a truck's file may set its own
@@ -206,6 +207,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.engineBrake = 15.0f; // kEngineBrakeDefault (BRIEF_drivetrain_2_torque_cut.md)
     s.modEngineSpeed = true; // on by default (BRIEF_drivetrain_1_engine_speed.md); an explicit 0 stays 0
     s.wheelCap = 150; // kCapDefault (BRIEF_drivetrain_2c_wheel_cap.md with M5)
+    s.pushShare = 0; // the surplus taken back (BRIEF_chassis_push.md)
     s.engineSpeedTop = 1.0f;
     s.roadCdA = 0.0f;
     s.creep = true;
@@ -350,6 +352,7 @@ inline void SettingsClamp(GaugeSettings &s)
     s.engineSpeedTop = isfinite(s.engineSpeedTop) ? SettingsRange(s.engineSpeedTop, 0.5f, 1.5f) : 1.0f;
     s.engineBrake = isfinite(s.engineBrake) ? SettingsRange(s.engineBrake, 0.0f, 30.0f) : 15.0f;
     s.wheelCap = s.wheelCap < 110 ? 110 : s.wheelCap > 200 ? 200 : s.wheelCap;
+    s.pushShare = s.pushShare < 0 ? 0 : s.pushShare > 100 ? 100 : s.pushShare;
     s.roadCdA = isfinite(s.roadCdA) ? (s.roadCdA <= 0.0f ? 0.0f : s.roadCdA < 0.3f ? 0.3f : s.roadCdA > 20.0f ? 20.0f : s.roadCdA) : 0.0f;
     s.gearbox = s.gearbox < 0 || s.gearbox >= kGearboxCount ? kGearboxGame : s.gearbox;
     s.input = s.input < 0 || s.input >= kInputCount ? kInputWheel : s.input;

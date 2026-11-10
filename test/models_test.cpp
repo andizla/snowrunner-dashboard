@@ -4423,6 +4423,81 @@ int main(int argc, char **argv)
         Check(ok, line);
     }
 
+    // the chassis push (BRIEF_chassis_push.md with the Reviewer's addendum and the lead's): k = 1 - max(1 / F_excess, 1 / F)
+    // where F_excess = min(B4, throttle) over the pull the factor assumed is above 1 and F (the factor over the game's own
+    // share) above 1; the push of a factor stepping from 1 to 3 at a GameFall of 0.4 with B4 still 0.9 held to the mod's
+    // pull (0.4 x 3 = 1.2, not 2.7); steady, nothing; the game's own push the floor; the raw factor of a damaged engine
+    // not read as F; PushShare's back scales it; the cap's part by (1 - kept)
+    {
+        auto nearly = [](float a, float b) { return fabsf(a - b) <= 1e-4f * fmaxf(1.0f, fabsf(b)); };
+        const float shove = PushTakeBack(0.9f, 1.0f, 0.4f, 3.0f, 1.0f);
+        const float pushAfter = 0.9f * 3.0f * (1.0f - shove);
+        const float pSteady = PushTakeBack(0.4f, 1.0f, 0.4f, 3.0f, 1.0f);
+        const float floorBinds = PushTakeBack(0.9f, 1.0f, 0.25f, 3.0f, 1.0f); // F_excess 3.6 above F 3: down to the game's own push 0.9
+        const float leadsK = PushTakeBack(0.9f, 1.0f, 0.25f, 6.0f, 1.0f);    // F 6: 1 - 1 / 3.6
+        const float pDamaged = PushTakeBack(0.9f, 1.0f, 0.25f, 0.75f / 0.5f, 1.0f); // own share 0.5 written 0.75: F 1.5
+        const float atOwn = PushTakeBack(0.9f, 1.0f, 0.25f, 1.0f, 1.0f);
+        const float half = PushTakeBack(0.9f, 1.0f, 0.4f, 3.0f, 0.5f);
+        const float none = PushTakeBack(0.9f, 1.0f, 0.4f, 3.0f, 0.0f);
+        const float throttleLow = PushTakeBack(0.9f, 0.4f, 0.4f, 3.0f, 1.0f); // min(B4, throttle) 0.4: pSteady
+        PushBody fixedBody = {};
+        fixedBody.v1 = { 1.0f, 0.0f, 0.0f };
+        CapVec pv, pw;
+        const bool skipped = !PushBodyBack(fixedBody, 0.5f, pv, pw);
+        PushBody body = {};
+        body.v0 = { 10.0f, 0.0f, 0.0f };
+        body.v1 = { 11.0f, 0.0f, 0.2f };
+        body.w0 = { 0.0f, 0.0f, 0.0f };
+        body.w1 = { 0.0f, 0.5f, 0.0f };
+        body.invMass = 0.001f;
+        const bool moved = PushBodyBack(body, 0.25f, pv, pw) && nearly(pv.x, 10.75f) && nearly(pv.z, 0.15f) && nearly(pw.y, 0.375f);
+        const bool ok = nearly(shove, 1.0f - 1.0f / 2.25f) && nearly(pushAfter, 1.2f) && pSteady == 0.0f && nearly(floorBinds, 1.0f - 1.0f / 3.0f) &&
+                        nearly(0.9f * 3.0f * (1.0f - floorBinds), 0.9f) && nearly(leadsK, 1.0f - 1.0f / 3.6f) && nearly(pDamaged, 1.0f - 1.0f / 1.5f) && atOwn == 0.0f &&
+                        nearly(half, 0.5f * shove) && none == 0.0f && throttleLow == 0.0f && PushTakeBack(NAN, 1.0f, 0.4f, 3.0f, 1.0f) == 0.0f &&
+                        nearly(PushCapBack(true, 0.25f, 1.0f), 0.75f) && PushCapBack(false, 0.25f, 1.0f) == 0.0f && nearly(PushCapBack(true, 0.25f, 0.5f), 0.375f) && skipped && moved;
+        char line[600];
+        snprintf(line, sizeof line, "chassis push: the factor stepping to 3 at a GameFall of 0.4 with B4 0.9: k %.3f, the push %.2f (the mod's pull 1.20, not 2.70); pSteady k %.1f; F_excess 3.6 "
+                                    "over F 3: k %.3f, down to the game's own push 0.90; F 6: k %.3f (1 - 1 / 3.6); a pDamaged engine's 0.75 over 0.5: k %.3f; at the game's own 0; "
+                                    "PushShare 50 halves it; the cap's part 0.75 at kept 0.25; a fixed body skipped; v and the turn moved back by k",
+                 shove, pushAfter, pSteady, floorBinds, leadsK, pDamaged);
+        Check(ok, line);
+    }
+
+    // the brief's sketch of the push (60 Hz): the Researcher's share s = clamp((wheels - 4) / 6, 0.01, 1) x clamp((|v| - 3)
+    // / 6, 0, 1) of the drive's pull min(B4, throttle) x the factor goes to the chassis; the factor steps from 1 to 3 at 10
+    // m/s while B4 falls from 0.9 to the factor's assumption of 0.4 by 0.1 a step. Today the chassis gets 2.25 times the
+    // mod's steady pull at once; with the take-back never more than the mod's pull, and the steady end the same. At 2 m/s s
+    // is 0: nothing to take back either way
+    {
+        auto sketch = [](float v0, float pushShare, float &peak, float &end) {
+            float v = v0, b4 = 0.9f;
+            const float assumed = 0.4f, factor = 3.0f, radius = 0.5f, dt = 1.0f / 60.0f;
+            peak = 0.0f, end = 0.0f;
+            for (int i = 0; i < 60; i++)
+            {
+                const float wheels = v / radius;
+                const float s = fminf(fmaxf((wheels - 4.0f) / 6.0f, 0.01f), 1.0f) * fminf(fmaxf((fabsf(v) - 3.0f) / 6.0f, 0.0f), 1.0f);
+                const float push = s * fminf(b4, 1.0f) * factor;
+                const float k = PushTakeBack(b4, 1.0f, assumed, factor, 1.0f - pushShare / 100.0f);
+                const float a = push * (1.0f - k);
+                peak = fmaxf(peak, a), end = a;
+                v += a * dt;
+                b4 = fmaxf(b4 - 0.1f, assumed);
+            }
+        };
+        float todayPeak, todayEnd, backPeak, backEnd, slowToday, slowEnd, slowBack, slowBackEnd;
+        sketch(10.0f, 100.0f, todayPeak, todayEnd);
+        sketch(10.0f, 0.0f, backPeak, backEnd);
+        sketch(2.0f, 100.0f, slowToday, slowEnd);
+        sketch(2.0f, 0.0f, slowBack, slowBackEnd);
+        const bool sk = todayPeak > 2.0f * todayEnd && backPeak <= backEnd * 1.0001f + 1e-6f && Near(todayEnd, backEnd, 1e-4f) && slowToday == 0.0f && slowBack == 0.0f;
+        char line[400];
+        snprintf(line, sizeof line, "the push sketch: the factor stepping 1 to 3 at 10 m/s, B4 falling 0.9 to 0.4: the chassis's push peaks at %.2f against a steady %.2f today (PushShare 100), "
+                                    "%.2f against %.2f with the take-back; at 2 m/s %.2f and %.2f",
+                 todayPeak, todayEnd, backPeak, backEnd, slowToday, slowBack);
+        Check(sk, line);
+    }
+
     // F3 and F4 of BRIEF_drive_2108_findings.md: the engine brake only while every driven wheel turns in the gear's
     // direction over the gear's idle speed, fading from twice it; the needle by the driven wheels' signed mean in the
     // gear's direction. F2: the game's gear agrees in sign with the mod's position, else the stock passes.
