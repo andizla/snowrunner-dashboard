@@ -586,8 +586,9 @@ inline GearboxPosOrders GearboxPosStep(GearboxPosModel &m, const GearboxOptions 
     if (r.moved) m.refusedSaid = false;
     // with RequireClutch a gear picked without the clutch while the truck rolls at kGrindSpeed or more does not go in: it
     // grinds and stays out, as a running truck's does unless the speeds match (review 11: it stalled the engine at any
-    // speed). Standing or crawling the gear is forced in and stalls the engine (below)
-    const bool clutchless = o.requireClutch && r.moved && m.pos != kPosN && m.pos != kPosA && !m.clutch && t.engineOn && !(t.stall > 0.0f);
+    // speed). Standing or crawling the gear is forced in and stalls the engine (below). A fit (a position the gearbox
+    // lacks, moved to the nearest it has) is not the player's shift and goes in as it is (the review of 108, S1)
+    const bool clutchless = o.requireClutch && r.moved && !r.fitted && m.pos != kPosN && m.pos != kPosA && !m.clutch && t.engineOn && !(t.stall > 0.0f);
     if (clutchless && fabsf(t.speed) >= kGrindSpeed)
     {
         m.pos = kPosN;

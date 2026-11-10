@@ -3824,11 +3824,18 @@ inline bool ClockStands(ClockWatch &c, const TruckRaw &t, unsigned long long ms)
 static const float kDamageLoad = 0.5f;  // how hard a cold engine has to work (TruckLoad) before it suffers from it
 static const int kDamageBlinkMs = 250;  // the damage lamp's blink: this long lit, then this long dark
 
+// Over-revving (BRIEF_overrev_downshift.md): a gear held by hand driven past the governor's end costs the engine, from
+// nothing at the end to the settings' OverRevDamagePercentPerMinute kOverRevFull of the gear's top over it, after
+// kOverRevGrace seconds over it without a break.
+static const float kOverRevFull = 0.2f, kOverRevGrace = 0.5f;
+
 struct DamageModel
 {
     uint64_t id;      // the game's object for the truck the owed share belongs to
     float owed;       // the share of a point of engine damage that has come together and is not handed over yet
     float hot, cold;  // percent of the engine a minute on the last step: from the heat, and from working a cold engine hard
+    float over;       // the same from over-revving (0 during the grace)
+    float overFor;    // seconds over the governor's end without a break, for the grace
 };
 
 // Percent of what the engine takes that it loses a minute when hot: nothing at the settings' HotDamageFrom (kTempRed
@@ -3849,24 +3856,54 @@ inline float DamageCold(float temp, float load, const GaugeSettings &s)
     return s.coldDamage * (kTempCold - temp) / kTempCold * hard * hard;
 }
 
+// The same for over-revving: share is the speed the governor went by over the gear's top (OverRevShare), stop the
+// governor's end in the same measure (the map's governTo). Nothing at the end or under it, the settings'
+// OverRevDamagePercentPerMinute kOverRevFull over it and above; nothing for a share or a stop that is no number.
+inline float DamageOverRev(float share, float stop, const GaugeSettings &s)
+{
+    if (!(stop > 0.0f) || !(share > stop) || !isfinite(share) || !(s.overRevDamage > 0.0f)) return 0.0f;
+    return s.overRevDamage * fminf((share - stop) / kOverRevFull, 1.0f);
+}
+
 // One step of dt seconds for the truck the game holds in the object id; speed is TachSpeed. Returns the whole points
 // of the game's engine damage that have come together since the last step; the rest of a point is kept for the next
-// one. Only a running engine wears. With the settings' Damage off nothing comes together, and the two rates are
-// still worked out, so the probe shows what the temperature would cost.
-inline int DamageStep(DamageModel &m, uint64_t id, const TruckRaw &t, const TempModel &temp, float speed, const GaugeSettings &s, float dt)
+// one. Only a running engine wears. With the settings' Damage off nothing comes together, and the rates are still
+// worked out, so the probe shows what the temperature and the revs would cost. overShare and overStop (DamageOverRev):
+// no number where the over-rev does not count on this step (no map of the torque cut went out, no fresh answer); the
+// grace's clock falls to 0 at once there. The heat's and the cold's rates need the temperature, the over-rev's does not;
+// of a step that ends the grace only the part past it counts.
+inline int DamageStep(DamageModel &m, uint64_t id, const TruckRaw &t, const TempModel &temp, float speed, const GaugeSettings &s, float dt, float overShare = NAN,
+                      float overStop = NAN)
 {
     if (m.id != id)
     {
         m = DamageModel{};
         m.id = id;
     }
-    m.hot = m.cold = 0.0f;
+    m.hot = m.cold = m.over = 0.0f;
     if (!s.damage) m.owed = 0.0f;
-    if (!temp.known || !TruckEngineOn(t) || !t.damageKnown) return 0;
-    m.hot = DamageHot(temp.temp, s);
-    m.cold = DamageCold(temp.temp, TruckLoad(t, speed), s);
+    if (!TruckEngineOn(t) || !t.damageKnown)
+    {
+        m.overFor = 0.0f;
+        return 0;
+    }
+    const float overRate = DamageOverRev(overShare, overStop, s);
+    float overSeconds = 0.0f;
+    if (overRate > 0.0f)
+    {
+        const float before = m.overFor, step = dt > 0.0f && dt < 60.0f ? dt : 0.0f;
+        m.overFor = before + step;
+        overSeconds = fmaxf(m.overFor - fmaxf(before, kOverRevGrace), 0.0f);
+        if (m.overFor > kOverRevGrace) m.over = overRate;
+    }
+    else m.overFor = 0.0f;
+    if (temp.known)
+    {
+        m.hot = DamageHot(temp.temp, s);
+        m.cold = DamageCold(temp.temp, TruckLoad(t, speed), s);
+    }
     if (!s.damage) return 0;
-    const float points = (m.hot + m.cold) / 100.0f * (float)t.damageCapacity * dt / 60.0f;
+    const float points = ((m.hot + m.cold) * dt + m.over * overSeconds) / 100.0f * (float)t.damageCapacity / 60.0f;
     if (points > 0.0f && points < 100000.0f) m.owed += points; // nothing for a rate that is no number
     const int whole = (int)m.owed;
     m.owed -= (float)whole;
@@ -3874,7 +3911,25 @@ inline int DamageStep(DamageModel &m, uint64_t id, const TruckRaw &t, const Temp
 }
 
 // Whether the model is adding to the engine's damage now.
-inline bool DamageAdding(const DamageModel &m, const GaugeSettings &s) { return s.damage && m.hot + m.cold > 0.0f; }
+inline bool DamageAdding(const DamageModel &m, const GaugeSettings &s) { return s.damage && m.hot + m.cold + m.over > 0.0f; }
+
+// The cause of damage that came together: the largest of the three rates (1 the heat, 2 a cold engine worked hard, 3
+// over-revving); 0 with none.
+inline int DamageCause(const DamageModel &m)
+{
+    if (!(m.hot + m.cold + m.over > 0.0f)) return 0;
+    if (m.over > m.hot && m.over > m.cold) return 3;
+    return m.hot >= m.cold ? 1 : 2;
+}
+
+// The cause in the damage line's words: temp the coolant in C, rate the three rates summed, rpm and pos (a position's
+// name) for over-revving.
+inline void DamageCauseText(int cause, float temp, float rate, int rpm, const char *pos, char *out, size_t size)
+{
+    if (cause == 3) _snprintf_s(out, size, _TRUNCATE, "over-revving at %d rpm in %s (%.1f percent a minute)", rpm, pos ? pos : "?", rate);
+    else if (cause == 2) _snprintf_s(out, size, _TRUNCATE, "a cold engine worked hard at %.1f C (%.1f percent a minute)", temp, rate);
+    else _snprintf_s(out, size, _TRUNCATE, "the heat at %.1f C (%.1f percent a minute)", temp, rate);
+}
 
 // The damage lamp at a time in milliseconds: lit while the engine's damage is above half of what it takes (steady),
 // and blinking while damage is being added.
@@ -3902,9 +3957,9 @@ inline void DamageProbeText(const TruckRaw &t, const EngineRecord &e, const Dama
     else _snprintf_s(gearbox, _TRUNCATE, "gearbox damage not read");
     _snprintf_s(out, size, _TRUNCATE,
               "engine damage %d of %d, effect %.3f, torque x%.3f; by the game's rule effect %.3f and torque x%.3f (%s) | %s | all parts %d of %d | %s | "
-              "the model: %.2f %% a minute from the heat, %.2f from the cold, %.2f of a point owed, Damage %s",
+              "the model: %.2f %% a minute from the heat, %.2f from the cold, %.2f from over-revving, %.2f of a point owed, Damage %s",
               t.damage, t.damageCapacity, t.damageEffect, t.torqueFactor, effect, torque, !e.found ? "a guess without the record" : same ? "as read" : "NOT as read",
-              gearbox, t.damageSum, t.damageSumCapacity, record, m.hot, m.cold, m.owed, s.damage ? "on" : "off");
+              gearbox, t.damageSum, t.damageSumCapacity, record, m.hot, m.cold, m.over, m.owed, s.damage ? "on" : "off");
 }
 
 // The models' numbers in a line of text for the probe log.

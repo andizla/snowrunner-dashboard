@@ -57,6 +57,10 @@ inline float CutGovernor(float speed, float from, float to) { return to > from ?
 // Engine braking (EngineBrake, percent): the share of the gear's torque the engine holds the truck back with at the
 // redline with the foot off, nothing at idle and under it, so a standing truck is never pushed.
 static const float kEngineBrakeMost = 30.0f, kEngineBrakeDefault = 15.0f;
+// Above the redline the braking keeps rising with the engine speed, as below it, up to its value at this share of the
+// redline (BRIEF_overrev_downshift.md, point 5): an engine over-revved by the road holds the truck harder than one at the
+// redline. At idle a quarter of the redline that is 1.4 times the braking at the redline.
+static const float kEngineBrakeOverTop = 1.3f;
 
 // The map: F over the wheels' speed with the clutch fully in (the engine locked to the wheels), for one pass of the mod's
 // thread. pedal: the raw pedal (TruckPedal, linear as the game's own pull is; the lead's N1); limit: the share of its torque the cold oil and the boost leave; load: the road load as a
@@ -100,9 +104,21 @@ inline float TorqueCutF(const TorqueCutMap &m, float s, float brakeShare = 1.0f,
     float drive = pedal * (e * limit - (isfinite(m.load) && m.load > 0.0f ? m.load : 0.0f));
     if (!(drive > 0.0f)) drive = 0.0f;
     if (m.held > 0.0f && m.held < 1.0f) drive *= m.held;
-    const float brake = (1.0f - pedal) * CutClamp01(m.brake) * CutClamp01((rpm - m.idle) / (m.redline - m.idle)) * CutClamp01(brakeShare);
+    const float brakeMost = (kEngineBrakeOverTop * m.redline - m.idle) / (m.redline - m.idle);
+    const float brake = (1.0f - pedal) * CutClamp01(m.brake) * fminf(fmaxf((rpm - m.idle) / (m.redline - m.idle), 0.0f), brakeMost) * CutClamp01(brakeShare);
     const float f = drive - brake;
     return isfinite(f) ? f : 0.0f;
+}
+
+// The over-rev's share (BRIEF_overrev_downshift.md, the Reviewer's M1): the speed the governor went by over the gear's
+// top, held to the wheels' own: min(the truck's own speed, the wheels' mean) over top, both from the cut's last answer
+// (TorqueCutCounts s and truck). Where the truck's speed was not read (no number) the governor went by the wheels' mean,
+// and so does the share. No number for a top or a mean that is no number or not above 0.
+inline float OverRevShare(float mean, float truck, float top)
+{
+    if (!(top > 0.0f) || !isfinite(top) || !isfinite(mean)) return NAN;
+    const float v = isfinite(truck) ? fminf(truck, mean) : mean;
+    return v / top;
 }
 
 // 3u^2 - 2u^3 on u held to 0 to 1.
@@ -588,7 +604,7 @@ struct LockSlot
 // setter's pattern found once at the start, the kind read, and the kind not 2 unless DiffLockBiteAlways.
 inline bool LockPublishes(bool patternFound, bool kindRead, int kind, bool always)
 {
-    return patternFound && kindRead && (kind != 2 || always);
+    return patternFound && kindRead && (kind == 0 || kind == 1 || (kind == 2 && always)); // a kind not known publishes nothing (the review of 105)
 }
 // Whether the wheels' drive's hook is asked for (gauges.cpp, CreepHookStep): Creep, Probe, the damper's settings, the
 // torque cut, or the diff lock's bite (Powertrain on and DiffLockBite above 0; the Reviewer's R4).

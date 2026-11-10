@@ -809,6 +809,7 @@ static void WriteIni(const GaugeSettings &s)
     num(L"HotDamagePercentPerMinute", s.hotDamage);
     num(L"HotDamageFrom", s.hotDamageFrom);
     num(L"ColdDamagePercentPerMinute", s.coldDamage);
+    num(L"OverRevDamagePercentPerMinute", s.overRevDamage);
     num(L"StallDamagePercent", s.stallDamage);
     whole(L"ClutchBurn", s.clutchBurn ? 1 : 0);
     num(L"ClutchHeatPercent", s.clutchHeat);
@@ -1136,6 +1137,9 @@ static void ReadIni(GaugeSettings &s)
                         L"; and the lighter the work. A garage repairs this like any engine damage.\n"
                         L"; Damage=0: the temperature is only shown.\n"
                         L"; ColdDamagePercentPerMinute=0 switches the cold part off. Damage has not been tried in co-op: leave it at 0 there.\n"
+                        L"; OverRevDamagePercentPerMinute: a gear held by hand driven past the red zone, as after a downshift at speed or down a grade,\n"
+                        L"; costs this percent a minute at 0.2 of the gear top past the governor end, less nearer it, after half a second (10).\n"
+                        L"; 0 is off. With Engine braking at 0 the engine does not hold the truck and a descent in a held gear over-revs.\n"
                         L"; StallDamagePercent: what a shift without the clutch costs the gearbox, percent of what it takes, 0 to 25 (5), with Damage=1.\n"
                         L"; ClutchBurn=1: a clutch slipping under load heats up and costs the gearbox, a pedal's or the one that works by itself, with Damage=1.\n"
                         L"; ClutchHeatPercent: how fast it heats up, percent of the model's own pace, 10 to 300 (60); lower gives more time to react.\n"
@@ -1182,8 +1186,9 @@ static void ReadIni(GaugeSettings &s)
                         L";   BindGearA=Key Num 7\n"
                         L"; RequireClutch=1 stalls the engine on a shift into a gear without the clutch, RequireGearHeld=1 goes to N while no\n"
                         L"; gear key is held (an H shifter with every gear bound), SkipNeutral=1 steps between R and the lowest forward place past N.\n"
-                        L"; GearUp and GearDown walk R, N, L-, L, L+, 1, 2 and on to the top gear, on every truck. Up from L+ goes to 1\n"
-                        L"; a second after an up press got there. A 1st from the low range stays held until the next shift (never to D).\n"
+                        L"; GearUp and GearDown walk R, N, L-, L, L+, 1, 2 and on to the top gear. With PositionsByGearbox=1 the row has only\n"
+                        L"; the positions the fitted gearbox has. Up from L+ goes to 1 a second after an up press got there.\n"
+                        L"; A 1st from the low range stays held until the next shift (never to D).\n"
                         L"; DownStaysForward=1: GearDown stops at the lowest forward place (the lowest of the low range the gearbox has, or 1\n"
                         L"; with WalkSkipsLow), N and R only on their own\n"
                         L"; keys (wins over SkipNeutral). WalkSkipsLow=1: GearUp and GearDown walk R, N, 1, 2 and on; L-, L and L+ only on\n"
@@ -1299,6 +1304,7 @@ static void ReadIni(GaugeSettings &s)
     s.hotDamage = IniFloat(L"HotDamagePercentPerMinute", s.hotDamage, ini);
     s.hotDamageFrom = IniFloat(L"HotDamageFrom", s.hotDamageFrom, ini);
     s.coldDamage = IniFloat(L"ColdDamagePercentPerMinute", s.coldDamage, ini);
+    s.overRevDamage = IniFloat(L"OverRevDamagePercentPerMinute", s.overRevDamage, ini);
     s.stallDamage = IniFloat(L"StallDamagePercent", s.stallDamage, ini);
     s.clutchBurn = IniBool(L"ClutchBurn", s.clutchBurn, ini);
     s.clutchHeat = IniFloat(L"ClutchHeatPercent", s.clutchHeat, ini);
@@ -3608,7 +3614,7 @@ static GearTorquePlace g_torque = {}; // the game's gear torque and the drive's 
 // mod has hooked its own by then: where each one is, or that another mod holds it. Without SMT in the game, the places
 // are kept for the gate, which hooks only what the level needs (GearboxHooksStep): the eight gearbox functions,
 // calling through, and the game's truck update, for the gearbox's damage on the game's thread.
-static void GameCodeLook()
+static void GameCodeLook(const GaugeSettings &s)
 {
     size_t from = 0, to = 0;
     std::vector<uint8_t> code;
@@ -3633,8 +3639,9 @@ static void GameCodeLook()
             (unsigned long long)g_ssl.pool, (unsigned long long)g_ssl.alloc);
     else Log(L"gear display: %S, so the game's gear display stays as it is", g_ssl.why);
     if (DrivePlaceFind(code.data(), from, to, g_drive))
-        Log(L"creep: the game's wheels' drive at +%zx, called at +%zx; hooked once Creep or Probe is on with a truck driven", g_drive.drive, g_drive.call);
-    else Log(L"creep: %S, so an idling truck stands as in the game", g_drive.why);
+        Log(L"creep: the game's wheels' drive at +%zx, called at +%zx; hooked once Creep, Probe, the suspension's settings, the torque cut or the diff lock bite "
+            L"is on with a truck driven", g_drive.drive, g_drive.call);
+    else Log(L"creep: %S, so an idling truck stands as in the game%s", g_drive.why, s.powertrain && s.diffLockBite > 0 ? L" and the diff lock bite does not act" : L"");
     if (EngineSpeedFind(code.data(), from, to, g_speed))
         Log(L"engine speed: the game's engine speed at +%zx, its fuel's call returning to +%zx and its stall's to +%zx (both keep the game's own); "
             L"hooked once Powertrain is on with a truck driven and ModEngineSpeed on or Gearbox=2", g_speed.speed, g_speed.fuelBack, g_speed.stallBack);
@@ -3754,10 +3761,11 @@ static void GearboxHooksStep(const GaugeSettings &s)
 }
 
 
-// The hook on the game's wheels' drive (gearbox_hooks.cpp, CreepHook): attached the first time Creep, Probe or the
-// damper is on with a truck driven, at any level of Gearbox, and left in place until the game is started again. With
-// Creep off it gives no share (TruckPass hands it none); without Probe=1 or the damper the step probe has no block and
-// reads nothing. With all three off it is never attached, so the game's drive runs as it is.
+// The hook on the game's wheels' drive (gearbox_hooks.cpp, CreepHook): attached the first time Creep, Probe, the
+// damper, the torque cut or the diff lock's bite is on with a truck driven (DriveHookWanted), at any level of Gearbox,
+// and left in place until the game is started again. With Creep off it gives no share (TruckPass hands it none);
+// without Probe=1 or the damper the step probe has no block and reads nothing. With all five off it is never attached,
+// so the game's drive runs as it is.
 static void SuspStepHook(uint64_t action, float dt);
 static bool SuspFeaturesOn(const GaugeSettings &s);
 static bool TuneOff(const GaugeSettings &s);
@@ -3775,7 +3783,7 @@ static void CreepHookStep(const GaugeSettings &s, bool driving)
         Log(L"creep: the game's wheels' drive hooked (%s): %s",
             s.creep ? L"Creep=1" : s.probe ? L"Probe=1" : cut ? L"the torque cut" : bite ? L"the diff lock's bite" : L"the suspension's settings",
             s.creep ? L"an idling truck in gear moves, and each wheel's travel is read every physics step for the probe and the damper" : L"each wheel's travel is read every physics step");
-    else Log(L"creep: %S, so an idling truck stands as in the game and the travel is not read every step", why);
+    else Log(L"creep: %S, so an idling truck stands as in the game and the travel is not read every step%s", why, bite ? L"; the diff lock bite does not act" : L"");
 }
 
 // The hook on the game's engine speed (gearbox_hooks.cpp, EngineSpeedHook): attached the first time Powertrain and
@@ -3859,8 +3867,8 @@ static void LogSettings(const GaugeSettings &s)
     Log(L"settings: coolant warm after %g minutes of driving, in the red zone after %g minutes floored with the wheels spinning at a standstill, cool %g minutes after the engine stops, %g C outside%s",
         s.warmUpMinutes, s.overheatMinutes, s.coolDownMinutes, s.ambientC, s.ambientByMap ? L" where the map's temperature is not known" : L" on every map");
     Log(L"settings: the oil warm after %g minutes of driving, too hot from %g C", s.oilWarmUpMinutes, s.oilWarnC);
-    Log(L"settings: the radiator has all its air from %g km/h; engine damage %s: from %g C, %g percent a minute at 125 C, %g percent a minute for a cold engine floored at the red zone at 0 C; %g percent of the gearbox for a shift without the clutch; clutch burn %s, heating at %g percent of the model's pace",
-        s.airFullKmh, s.damage ? L"on" : L"off", s.hotDamageFrom, s.hotDamage, s.coldDamage, s.stallDamage, s.clutchBurn ? L"on" : L"off", s.clutchHeat);
+    Log(L"settings: the radiator has all its air from %g km/h; engine damage %s: from %g C, %g percent a minute at 125 C, %g percent a minute for a cold engine floored at the red zone at 0 C, %g percent a minute over-revving; %g percent of the gearbox for a shift without the clutch; clutch burn %s, heating at %g percent of the model's pace",
+        s.airFullKmh, s.damage ? L"on" : L"off", s.hotDamageFrom, s.hotDamage, s.coldDamage, s.overRevDamage, s.stallDamage, s.clutchBurn ? L"on" : L"off", s.clutchHeat);
     Log(L"settings: suspension spring x%g, damping x%g of the truck's own, %g cm of travel past its compression end", s.springScale, s.dampingScale, s.extraTravel);
     Log(L"settings: sound volume %d of 100%s%s", s.soundVolume, s.soundsOnly ? L", sounds only: the cluster is not drawn" : L"",
         s.dieselFlutter ? L", a diesel's lift flutters"
@@ -3875,12 +3883,15 @@ static void LogSettings(const GaugeSettings &s)
         s.requireClutch, s.requireGearHeld, s.skipNeutral, s.downStaysForward, s.walkSkipsLow, s.positionsByGearbox, s.ignoreShifter, s.backToA);
     Log(L"settings: the game's gear display %s (GameGearDisplay %d)", s.gameGearDisplay == kGameGearGame ? L"as the game has it" : s.gameGearDisplay == kGameGearOff ? L"off always"
                                                                     : L"off while the mod's own gearbox drives", s.gameGearDisplay);
-    if (s.powertrain) Log(L"settings: powertrain on: the truck pulls with %d percent of the mod's engine and converter, through the game's torque factor; road load %s; %s; "
+    if (s.powertrain)
+    {
+        Log(L"settings: powertrain on: the truck pulls with %d percent of the mod's engine and converter, through the game's torque factor; road load %s; %s; "
                           L"the game's engine speed %s",
                           s.engineShare, !s.roadLoad ? L"off" : s.powertrain ? L"on (the air's drag, once each gear's pull is learned)" : L"on, acts with Powertrain on",
                           TorqueCutWanted(s) ? L"in a gear held by hand the torque cut: the mod engine alone, no cut at the gear's top" : L"no torque cut (it needs Gearbox=2, EngineShare above 0 and ModEngineSpeed=1)",
                           s.modEngineSpeed ? L"the mod engine's (ModEngineSpeed=1; the fuel's and the stall's calls keep the game's own, by the cut's own pull under the cut)" : L"its own (ModEngineSpeed=0)");
-    if (s.powertrain) Log(L"settings: diff lock bite %d (DiffLockBite; 0 the game's lock, 100 one shaft), DiffLockBiteAlways %d", s.diffLockBite, s.diffLockBiteAlways);
+        Log(L"settings: diff lock bite %d (DiffLockBite; 0 the game's lock, 100 one shaft), DiffLockBiteAlways %d", s.diffLockBite, s.diffLockBiteAlways);
+    }
     else Log(L"settings: powertrain off: the truck pulls with the game's own engine (Powertrain=1 hands it the mod's)");
     Log(s.creep && s.creepManual ? L"settings: creep on, in a gear picked by hand too (CreepManual): an automatic through the converter to walking pace, a gear picked by hand at its idle speed"
         : s.creep ? L"settings: creep on: an idling truck on an automatic moves, through the converter to walking pace; not in a gear picked by hand (CreepManual=1 adds it)"
@@ -4186,7 +4197,13 @@ struct TruckWatch
     float gearSpeed[kMaxGears];
     ULONGLONG engineAt;         // when a record that was not found is looked for again
     int owed, asked;            // whole points of engine damage that wait to be written: the model's, and the tab's test buttons'
-    int cause;                  // what the model's points came from: 1 the heat, 2 a cold engine worked hard
+    int cause;                  // what the model's points came from: 1 the heat, 2 a cold engine worked hard, 3 over-revving (DamageCause)
+    float causeRate;            // the three rates summed when the last points came together, for the damage line
+    int causeRpm, causePos;     // over-revving: the engine speed the share gives and the position then
+    float overShare, overStop;  // this pass's over-rev share and the governor's end (OverRevShare, the map's governTo); no number where it does not count
+    long overAnswered;          // the cut's answers as counted at the last pass (TorqueCutCounts answered): a share counts only on a pass where they rose
+    float overRedline;          // the map's redline then, for the rpm
+    ULONGLONG overProbeAt;      // the over-rev's probe line, once a second
     ULONGLONG writeAt;          // when the next write may go out
     ULONGLONG addedAt;          // when damage was last written, 0 = never: the damage lamp blinks for two seconds after
     const char *refused;        // why the last write did not go out, a string literal; a reason is logged once
@@ -4380,6 +4397,12 @@ static void LockPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s
     {
         w.lockRestSaid = w.refs.vehicle;
         Log(L"diff lock bite: rests on this truck: its diff lock is always on (kind 2 at vehicle + 0xE8), so it keeps the game lock (DiffLockBiteAlways=1 gives it the bite)");
+    }
+    // a kind the research does not know publishes nothing (the review of 105): one line for the truck
+    if (want && kindRead && g_lockPattern && kind != 0 && kind != 1 && kind != 2 && w.lockRestSaid != w.refs.vehicle)
+    {
+        w.lockRestSaid = w.refs.vehicle;
+        Log(L"diff lock bite: rests on this truck: kind %d at vehicle + 0xE8 is not one the mod knows, so it keeps the game lock", kind);
     }
     if (!give) return;
     LockCounts lc = {};
@@ -6701,6 +6724,15 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 TorqueCutSlot slot = TorqueCutSlotOf(w, raw, s, scale, curve, tachTop, locked, gearTop);
                 slot.gamePull = w.cutGamePull;
                 TorqueCutPublish(&slot);
+                // the over-rev's share (BRIEF_overrev_downshift.md, M1 and M2): only where the map went out (the engine on
+                // the wheels, the clutch in) and the drive answered since the last pass, by the speeds that answer used
+                TorqueCutCounts oc = {};
+                TorqueCutCountsGet(oc);
+                const bool overFresh = oc.answered != w.overAnswered;
+                w.overAnswered = oc.answered;
+                w.overShare = slot.mode == kCutMap && overFresh ? OverRevShare(oc.s, oc.truck, slot.map.top) : NAN;
+                w.overStop = slot.map.governTo;
+                w.overRedline = slot.map.redline;
                 static int capTold = 0;
                 if (capTold != s.wheelCap)
                 {
@@ -6711,7 +6743,11 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                         s.wheelCap);
                 }
             }
-            else TorqueCutPublish(nullptr);
+            else
+            {
+                TorqueCutPublish(nullptr);
+                w.overShare = NAN;
+            }
             if (cutActs != w.cutActs)
             {
                 if (cutActs) Log(L"torque cut: acting in %S (the game's gear %d): the truck pulls with the mod engine alone, %d percent of it", GearboxPosName(w.pos.pos), raw.gearEngaged, s.engineShare);
@@ -6785,6 +6821,16 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                         ic.stock, ic.ours, ic.gear, ic.calls - inputWas.calls, ic.written - inputWas.written, ic.notOurs - inputWas.notOurs, ic.failed - inputWas.failed);
                     inputWas = ic;
                 }
+            }
+            // the over-rev's probe (Probe=1), once a second while the share is over the governor's end: the share, the rate
+            // (0 during the grace) and the points owed
+            if (probe && cutActs && w.overShare > w.overStop && now >= w.overProbeAt)
+            {
+                w.overProbeAt = now + 1000;
+                Log(L"probe: over-rev: %.3f of the gear's top, the governor's end %.3f, %.0f rpm in %S; %.2f percent a minute after %.2f s over (grace %.1f s), "
+                    L"%.2f of a point owed, %d points waiting; Damage %s, OverRevDamagePercentPerMinute %g",
+                    w.overShare, w.overStop, w.overShare * w.overRedline, GearboxPosName(w.pos.pos), w.damage.over, w.damage.overFor, kOverRevGrace, w.damage.owed, w.owed,
+                    s.damage ? L"on" : L"off", s.overRevDamage);
             }
             // the chassis push's probe (Probe=1), once a second: the drive's steps measured and taken back, the push given and
             // taken back (N s), the last k, F_excess, F, B4, the forward speed, the kick path's steps (a push under 3 m/s)
@@ -6983,11 +7029,21 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             GearboxLook(w, m, raw, AutoClass(w, s.tachClass));
         // what the temperature costs the engine: the whole points wait in owed until they are written. Nothing comes
         // together while the game's window is not in front, as the game may stand still then with its last values.
-        const int points = DamageStep(w.damage, w.refs.vehicle, raw, w.temp, TachSpeed(w.tach, scale), s, front ? dt : 0.0f);
+        // over-revving (BRIEF_overrev_downshift.md): this pass's share, taken once
+        const float overShare = w.overShare;
+        w.overShare = NAN;
+        const int points = DamageStep(w.damage, w.refs.vehicle, raw, w.temp, TachSpeed(w.tach, scale), s, front ? dt : 0.0f, overShare, w.overStop);
         if (points > 0)
         {
             w.owed = w.owed + points < 1000000 ? w.owed + points : 1000000; // more than any engine takes
-            w.cause = w.damage.hot > 0.0f ? 1 : 2;
+            w.cause = DamageCause(w.damage);
+            w.causeRate = w.damage.hot + w.damage.cold + w.damage.over;
+            if (w.cause == 3)
+            {
+                const float rpm = overShare * w.overRedline;
+                w.causeRpm = rpm > 0.0f && rpm < 1e6f ? (int)(rpm + 0.5f) : 0;
+                w.causePos = w.pos.pos;
+            }
         }
         if (!s.damage) w.owed = 0;
         if (asked > 0) w.asked = w.asked + asked < 1000000 ? w.asked + asked : 1000000;
@@ -7005,9 +7061,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             {
                 char cause[128], effect[256], after[64] = ""; // the effect and the torque factor are the game's: room for numbers of any size
                 if (test) strncpy_s(cause, "the tab's test", _TRUNCATE);
-                else
-                    _snprintf_s(cause, _TRUNCATE, w.cause == 2 ? "a cold engine worked hard at %.1f C (%.1f percent a minute)" : "the heat at %.1f C (%.1f percent a minute)", w.temp.temp,
-                              w.damage.hot + w.damage.cold);
+                else DamageCauseText(w.cause, w.temp.temp, w.causeRate, w.causeRpm, GearboxPosName(w.causePos), cause, sizeof cause);
                 if (d.effectAfter != d.effectBefore || d.torqueAfter != d.torqueBefore)
                     _snprintf_s(effect, _TRUNCATE, "effect %.3f to %.3f, torque x%.3f to x%.3f", d.effectBefore, d.effectAfter, d.torqueBefore, d.torqueAfter);
                 else _snprintf_s(effect, _TRUNCATE, "effect %.3f, torque x%.3f", d.effectAfter, d.torqueAfter);
@@ -8016,7 +8070,7 @@ static DWORD WINAPI Run(void *)
         if (watch.found && !codeLooked)
         {
             codeLooked = true;
-            GameCodeLook();
+            GameCodeLook(s);
         }
         // the hooks a level needs, attached the first time it needs them (also when the tab turns them on mid-game)
         GearboxHooksStep(s);
@@ -8528,7 +8582,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.redlineRpm == b.redlineRpm && a.maxRpm == b.maxRpm && a.speedMax == b.speedMax && a.boostMax == b.boostMax && a.toggleKey == b.toggleKey &&
            a.rollWarnDeg == b.rollWarnDeg && a.rollDangerDeg == b.rollDangerDeg && a.pitchDangerDeg == b.pitchDangerDeg &&
            a.warmUpMinutes == b.warmUpMinutes && a.overheatMinutes == b.overheatMinutes && a.coolDownMinutes == b.coolDownMinutes && a.ambientC == b.ambientC &&
-           a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
+           a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.overRevDamage == b.overRevDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
            a.springScale == b.springScale && a.dampingScale == b.dampingScale && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
            a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.diffLockBiteAlways == b.diffLockBiteAlways && a.engineBrake == b.engineBrake && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
@@ -8561,7 +8615,7 @@ int wmain(int argc, wchar_t **argv)
           "defaults: strip, open style, metric, the air dial off, no toggle, demo off, probe off, the tilt lamp at 15, 25 and 35 degrees");
     Check(d.warmUpMinutes == 3.0f && d.overheatMinutes == 1.5f && d.coolDownMinutes == 15.0f && d.ambientC == 15.0f && d.ambientByMap,
           "defaults: the coolant warm after 3 minutes, in the red zone after 1.5, cool after 15, with 15 C outside");
-    Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.hotDamageFrom == kTempRed && d.coldDamage == 5.0f && d.stallDamage == 5.0f && d.clutchBurn && d.clutchHeat == 60.0f &&
+    Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.hotDamageFrom == kTempRed && d.coldDamage == 5.0f && d.overRevDamage == 10.0f && d.stallDamage == 5.0f && d.clutchBurn && d.clutchHeat == 60.0f &&
               d.springScale == 1.0f && d.dampingScale == 1.0f && d.extraTravel == 0.0f && d.frameFlex == 1.0f && d.twistRange == 1.0f,
           "defaults: the radiator's full airflow from 30 km/h, engine damage on from the red zone, 10 percent a minute for the heat and 5 for the cold");
     Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.walkSkipsLow && d.positionsByGearbox && !d.ignoreShifter && d.backToA == 0 && d.gameGearDisplay == kGameGearOffOwn && d.input == kInputWheel && !d.powertrain && d.roadLoad && d.wheelCap == 150 && d.pushShare == 0 && d.diffLockBite == 0 && !d.diffLockBiteAlways && d.engineBrake == 15.0f && d.modEngineSpeed && d.engineSpeedTop == 1.0f && d.roadCdA == 0.0f && d.engineShare == 50 && d.creep && !d.creepManual && !d.dieselFlutter,
@@ -8662,6 +8716,7 @@ int wmain(int argc, wchar_t **argv)
     c.hotDamage = 22.5f;
     c.hotDamageFrom = 110.5f;
     c.coldDamage = 7.5f;
+    c.overRevDamage = 12.5f;
     c.stallDamage = 12.0f;
     c.clutchBurn = false;
     c.clutchHeat = 150.0f;
@@ -8708,7 +8763,7 @@ int wmain(int argc, wchar_t **argv)
                             c.speedMax != d.speedMax && c.boostMax != d.boostMax && c.rollWarnDeg != d.rollWarnDeg && c.rollDangerDeg != d.rollDangerDeg &&
                             c.pitchDangerDeg != d.pitchDangerDeg && c.warmUpMinutes != d.warmUpMinutes && c.overheatMinutes != d.overheatMinutes &&
                             c.coolDownMinutes != d.coolDownMinutes && c.ambientC != d.ambientC && c.ambientByMap != d.ambientByMap && c.airFullKmh != d.airFullKmh && c.damage != d.damage &&
-                            c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springScale != d.springScale && c.dampingScale != d.dampingScale && c.extraTravel != d.extraTravel && c.frameFlex != d.frameFlex && c.twistRange != d.twistRange && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
+                            c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.overRevDamage != d.overRevDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springScale != d.springScale && c.dampingScale != d.dampingScale && c.extraTravel != d.extraTravel && c.frameFlex != d.frameFlex && c.twistRange != d.twistRange && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
                             c.demo != d.demo && c.probe != d.probe && c.keepLogs != d.keepLogs && c.soundVolume != d.soundVolume && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
                             c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.diffLockBite != d.diffLockBite && c.diffLockBiteAlways != d.diffLockBiteAlways && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
@@ -8732,7 +8787,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 144, "ini: the help text survives a write (144 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 148, "ini: the help text survives a write (148 comment lines)");
     // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
     {
         char none[32] = "x", tab[32] = {}, kept[32] = {};
@@ -8800,6 +8855,7 @@ int wmain(int argc, wchar_t **argv)
     WritePrivateProfileStringW(kIniSection, L"AirFullKmh", L"5", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"HotDamagePercentPerMinute", L"500", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"ColdDamagePercentPerMinute", L"-3", ini.c_str());
+    WritePrivateProfileStringW(kIniSection, L"OverRevDamagePercentPerMinute", L"700", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"Damage", L"0", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"HotDamageFrom", L"90", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"StallDamagePercent", L"40", ini.c_str());
@@ -8808,7 +8864,7 @@ int wmain(int argc, wchar_t **argv)
     WritePrivateProfileStringW(kIniSection, L"FrameFlex", L"20", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"TwistRange", L"0.01", ini.c_str());
     ReadIni(b);
-    const bool held = b.airFullKmh == kAirFullRange[0] && b.hotDamage == kDamageRange[1] && b.coldDamage == 0.0f && !b.damage && b.hotDamageFrom == kHotDamageFromRange[0] &&
+    const bool held = b.airFullKmh == kAirFullRange[0] && b.hotDamage == kDamageRange[1] && b.coldDamage == 0.0f && b.overRevDamage == kDamageRange[1] && !b.damage && b.hotDamageFrom == kHotDamageFromRange[0] &&
                       b.stallDamage == kStallDamageRange[1] && b.clutchHeat == kClutchHeatRange[0] && b.springScale == kSuspScaleRange[1] && b.frameFlex == kFrameFlexRange[1] &&
                       b.twistRange == kTwistRange[0];
     WritePrivateProfileStringW(kIniSection, L"SpringScale", L"1", ini.c_str());

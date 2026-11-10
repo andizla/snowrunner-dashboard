@@ -709,6 +709,15 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             degrees(kTempCold, from, sizeof from);
             _snprintf_s(tip, _TRUNCATE, "The share lost each minute floored at the red zone at %s; less when warmer or working lighter, none from %s. 0 is none. Default 5 %%.", at, from);
             PageTip(tip);
+            PageLabel("Over-rev damage", labelX);
+            ImGui::SetNextItemWidth(w);
+            if (ImGui::SliderFloat("##overrevdamage", &s.overRevDamage, 0.0f, 60.0f, "%.0f percent a minute", ImGuiSliderFlags_AlwaysClamp))
+            {
+                s.overRevDamage = floorf(s.overRevDamage + 0.5f);
+                act |= kPageChanged;
+            }
+            PageTip("Damage a minute while a held gear is driven far over the red zone, as after a downshift at speed or a descent in a low gear. 0 is off. Needs Damage. "
+                    "With Engine braking at 0 the engine does not hold the truck and a descent in a held gear over-revs. Default 10 %.");
             ImGui::EndDisabled();
             if (view.engineCapacity > 0) ImGui::TextDisabled("The engine of this truck has %d of %d left.", view.engineCapacity - view.engineDamage, view.engineCapacity);
         }

@@ -66,6 +66,8 @@ struct SimResult
     float mean, sd;       // s over the 10 s after it settled (or the last 10 s)
     int cuts;             // steps where the bracket fell by 0.3 or more in one step
     int cutsAfter;        // of them, in the measured span
+    int smallFalls;       // steps in the measured span where the bracket fell by 0.15 or more (BRIEF_overrev_downshift.md, R2)
+    float sMin;           // the least s over the measured span
     float cutsPerSecond;
     float period;         // the mean seconds between cuts (0 none)
     float vEnd, sEnd;     // the ground's and the wheels' speed at the end
@@ -266,8 +268,13 @@ inline SimResult SimRun(const SimSetup &u)
     r.wIn = wIn;
     r.vHalf = vHalf;
     r.cuts = cuts;
+    r.sMin = 1e9f;
+    for (int k = from; k < to; k++) r.sMin = fminf(r.sMin, trace[k]);
     for (int k = from + 1; k < to; k++)
+    {
         if (brackets[k - 1] - brackets[k] >= 0.3f) r.cutsAfter++;
+        if (brackets[k - 1] - brackets[k] >= 0.15f) r.smallFalls++;
+    }
     r.cutsPerSecond = cuts / (total * dt);
     r.period = cuts > 1 ? (lastCut - firstCut) * dt / (float)(cuts - 1) : 0.0f;
     r.vEnd = v;

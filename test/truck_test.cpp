@@ -2587,11 +2587,19 @@ int main()
         cs.cap = 3.0f;
         TorqueCutPublish(&cs);
         setSpeeds(1.0f, 1.3f, 0.8f, 7.0f); // under the cap, so it arms (M3)
+        WheelCapCounts k0 = {}, k1 = {}, k2 = {};
+        WheelCapCountsGet(k0);
         drive(act, 0.5f, 1.0f / 60.0f); // 2.0, 2.3, 1.8: locked at (10 + 23 + 18) / 25 = 2.04, under the cap
+        WheelCapCountsGet(k1);
         const bool underCap = Near(speed(0), 2.04f) && Near(speed(1), 2.04f) && Near(speed(2), 2.04f);
+        // the kept share with the lock (the review of 105, its should): under the cap each wheel keeps its whole push
+        const bool keptUnder = k1.armed && k1.clampedNow == 0 && Near(k1.kept, 1.0f); // a new truck under the cap: the share starts at 1 and stays
         setSpeeds(3.0f, 3.3f, 2.8f, 7.0f);
         drive(act, 0.5f, 1.0f / 60.0f);
+        WheelCapCountsGet(k2);
         const bool atCap = Near(speed(0), 3.0f) && Near(speed(1), 3.0f) && Near(speed(2), 3.0f);
+        // over it all three clamped: the pushes to 4.04 are 1.04, 0.74 and 1.24, of which only the third wheel keeps 0.2
+        const bool keptOver = k2.armed && k2.clampedNow == 3 && Near(k2.kept, CapKeptSmooth(k1.kept, 0.2f / 3.02f));
         TorqueCutPublish(nullptr);
         // a stale slot: older than kTorqueFresh
         LockGive(a, v, 100, 0);
@@ -2602,14 +2610,15 @@ int main()
         LockGive(0, 0, 0, 0);
         act[0x4A] = 0;
         g_driveDoes = nullptr;
-        const bool all = shaft && counted && halfStep && lockOff && handbrake && otherAction && cleared && still && awdOff && awdOn && noInertia && atCap && underCap && stale;
+        const bool all = shaft && counted && halfStep && lockOff && handbrake && otherAction && cleared && still && awdOff && awdOn && noInertia && atCap && underCap && keptUnder && keptOver && stale;
         if (!all)
-            printf("     lock: %d %d %d %d %d %d %d %d %d %d %d %d %d %d; speeds %.3f %.3f %.3f %.3f\n", shaft, counted, halfStep, lockOff, handbrake, otherAction, cleared, still, awdOff,
-                   awdOn, noInertia, atCap, underCap, stale, speed(0), speed(1), speed(2), speed(3));
+            printf("     lock: %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d; speeds %.3f %.3f %.3f %.3f; kept %.4f %.4f %.4f\n", shaft, counted, halfStep, lockOff, handbrake, otherAction,
+                   cleared, still, awdOff, awdOn, noInertia, atCap, underCap, keptUnder, keptOver, stale, speed(0), speed(1), speed(2), speed(3), k0.kept, k1.kept, k2.kept);
         Check(CreepHooked() && all,
               "diff lock bite in the drive's hook: at 100 the driven wheels on their inertia-weighted mean, the momentum about their axles kept, the parts across the axle "
               "and the undriven wheel left; at 50 a step of k; nothing with the lock off, the handbrake on, another action, a cleared or stale slot or a spread under 0.01; "
-              "AWD off leaves a type 2 wheel out; a wheel with no inertia skipped and counted; with the cap locked first, then held at the cap together");
+              "AWD off leaves a type 2 wheel out; a wheel with no inertia skipped and counted; with the cap locked first, then held at the cap together, "
+              "the kept share 1 under the cap and the third wheel's 0.2 of 3.02 over it, all three clamped");
     }
     // the diff lock's setter's place in made-up code: its bytes once; not taken twice or where they are not
     {

@@ -143,6 +143,7 @@ struct GaugeSettings
     float hotDamage;         // HotDamagePercentPerMinute: percent of what the engine takes that it loses a minute at 125 C
     float hotDamageFrom;     // HotDamageFrom: the coolant temperature in C where the hot damage starts (kHotDamageFromRange)
     float coldDamage;        // ColdDamagePercentPerMinute: the same for a cold engine floored at the red zone at 0 C
+    float overRevDamage;     // OverRevDamagePercentPerMinute: the same for a held gear driven 0.2 of its top past the governor's end (BRIEF_overrev_downshift.md)
     float stallDamage;       // StallDamagePercent: percent of what the gearbox takes that a shift without the clutch costs it (with Damage)
     bool clutchBurn;         // ClutchBurn: a slipping clutch under load heats up and costs the gearbox (with Damage)
     float clutchHeat;        // ClutchHeatPercent: how fast it heats, percent of the model's own pace (kClutchHeatRange); cooling is not scaled
@@ -234,6 +235,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.hotDamage = 10.0f;
     s.hotDamageFrom = 118.0f;
     s.coldDamage = 5.0f;
+    s.overRevDamage = 10.0f;
     s.stallDamage = 5.0f;
     s.clutchBurn = true;
     s.clutchHeat = 60.0f;
@@ -378,6 +380,7 @@ inline void SettingsClamp(GaugeSettings &s)
     s.hotDamage = SettingsRange(s.hotDamage, kDamageRange[0], kDamageRange[1]);
     s.hotDamageFrom = SettingsRange(s.hotDamageFrom, kHotDamageFromRange[0], kHotDamageFromRange[1]);
     s.coldDamage = SettingsRange(s.coldDamage, kDamageRange[0], kDamageRange[1]);
+    s.overRevDamage = SettingsRange(s.overRevDamage, kDamageRange[0], kDamageRange[1]);
     s.stallDamage = SettingsRange(s.stallDamage, kStallDamageRange[0], kStallDamageRange[1]);
     s.clutchHeat = SettingsRange(s.clutchHeat, kClutchHeatRange[0], kClutchHeatRange[1]);
     s.springScale = SettingsRange(s.springScale, kSuspScaleRange[0], kSuspScaleRange[1]);

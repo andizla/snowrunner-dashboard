@@ -3397,6 +3397,92 @@ int main(int argc, char **argv)
         DamageStep(wear, 2, c, temp, 1.0f, set, 0.0f);
         Check(wear.id == 2 && wear.owed == 0.0f, "damage: the share of a point that is owed stays with its truck");
 
+        // over-revving (BRIEF_overrev_downshift.md): the rate over the governor's end at 1.1, the full one 0.2 over it
+        {
+            const float stop = 1.1f;
+            Check(DamageOverRev(1.05f, stop, set) == 0.0f && DamageOverRev(1.1f, stop, set) == 0.0f && Near(DamageOverRev(1.2f, stop, set), 5.0f, 1e-4f) &&
+                      Near(DamageOverRev(1.3f, stop, set), 10.0f, 1e-4f) && Near(DamageOverRev(1.6f, stop, set), 10.0f, 1e-4f) && DamageOverRev(NAN, stop, set) == 0.0f &&
+                      DamageOverRev(1.3f, NAN, set) == 0.0f && DamageOverRev(1.3f, 0.0f, set) == 0.0f && DamageOverRev(INFINITY, stop, set) == 0.0f,
+                  "over-rev: nothing at 1.05 or at the governor's end 1.1, half the rate at 1.2, the whole at 1.3 and 1.6, nothing for a share or an end that is no number");
+            GaugeSettings revOff = set;
+            revOff.overRevDamage = 0.0f;
+            Check(DamageOverRev(1.3f, stop, revOff) == 0.0f, "over-rev: OverRevDamagePercentPerMinute 0 is off");
+            // the grace: 0.4 s at 1.3 nothing, 0.6 s gives 0.1 s of points; a coolant not known does not stop it (S1)
+            TempModel unknown = {};
+            auto overFor = [&](float seconds, const GaugeSettings &g, const TempModel &tm, float share, float &owedOut, DamageModel &mOut) {
+                DamageModel om = {};
+                om.id = 1;
+                int pts = 0;
+                const int n = (int)(seconds / kDt + 0.5f);
+                for (int step = 0; step < n; step++) pts += DamageStep(om, 1, c, tm, 1.0f, g, kDt, share, stop);
+                owedOut = (float)pts + om.owed;
+                mOut = om;
+            };
+            float owed4 = 0.0f, owed6 = 0.0f, owedMinute = 0.0f;
+            DamageModel m4 = {}, m6 = {}, mMinute = {};
+            overFor(0.4f, set, unknown, 1.3f, owed4, m4);
+            overFor(0.6f, set, unknown, 1.3f, owed6, m6);
+            overFor(60.5f, set, unknown, 1.3f, owedMinute, mMinute);
+            const float perSecond = 10.0f / 100.0f * 150.0f / 60.0f; // an engine that takes 150 at 10 percent a minute
+            Check(owed4 == 0.0f && m4.over == 0.0f && !DamageAdding(m4, set) && Near(owed6, 0.1f * perSecond, 0.002f) && Near(m6.over, 10.0f, 1e-4f) && DamageAdding(m6, set) &&
+                      Near(owedMinute, 15.0f, 0.05f) && m6.hot == 0.0f,
+                  "over-rev: none in the first half second at 1.3, 0.6 s gives 0.1 s of points, a minute past the grace costs 15 of 150; the coolant need not be known");
+            // the clock falls to 0 at once: 0.4 s over, one step under, 0.4 s over again costs nothing
+            DamageModel broken = {};
+            broken.id = 1;
+            int brokenPts = 0;
+            for (int step = 0; step < 8; step++) brokenPts += DamageStep(broken, 1, c, unknown, 1.0f, set, kDt, 1.3f, stop);
+            brokenPts += DamageStep(broken, 1, c, unknown, 1.0f, set, kDt, 1.05f, stop);
+            const bool reset = broken.overFor == 0.0f;
+            for (int step = 0; step < 8; step++) brokenPts += DamageStep(broken, 1, c, unknown, 1.0f, set, kDt, 1.3f, stop);
+            Check(reset && brokenPts == 0 && broken.owed == 0.0f, "over-rev: the grace starts again after a step under the end, so two short overshoots cost nothing");
+            // nothing where it does not count: no share (the clutch held, N, the cut not acting, A: no map went out), Damage
+            // off, the setting at 0, the engine off
+            float owedNone = 0.0f, owedOff = 0.0f, owedZero = 0.0f, owedStopped = 0.0f;
+            DamageModel mNone = {}, mOff = {}, mZero = {}, mStopped = {};
+            overFor(5.0f, set, unknown, NAN, owedNone, mNone);
+            GaugeSettings damageOff = set;
+            damageOff.damage = false;
+            overFor(5.0f, damageOff, unknown, 1.3f, owedOff, mOff);
+            overFor(5.0f, revOff, unknown, 1.3f, owedZero, mZero);
+            {
+                DamageModel om = {};
+                om.id = 1;
+                int pts = 0;
+                for (int step = 0; step < 300; step++) pts += DamageStep(om, 1, stopped, unknown, 1.0f, set, kDt, 1.3f, stop);
+                owedStopped = (float)pts + om.owed;
+                mStopped = om;
+            }
+            Check(owedNone == 0.0f && mNone.overFor == 0.0f && owedOff == 0.0f && Near(mOff.over, 10.0f, 1e-4f) && !DamageAdding(mOff, damageOff) && owedZero == 0.0f &&
+                      owedStopped == 0.0f && mStopped.overFor == 0.0f,
+                  "over-rev: nothing without a share, with Damage off (the rate still worked out), at 0, or with the engine off");
+            // the share (M1): the truck's own speed held to the wheels' mean; the low range with the wheels at 1.5 of the
+            // top and the truck at 0.9 costs nothing, the truck at 1.3 the full rate; without the truck's speed the mean
+            const float top = 2.74f;
+            const float lowSpin = OverRevShare(1.5f * top, 0.9f * top, top), lowRun = OverRevShare(1.5f * top, 1.3f * top, top), dragged = OverRevShare(1.0f * top, 1.4f * top, top),
+                        noTruck = OverRevShare(1.25f * top, NAN, top);
+            Check(Near(lowSpin, 0.9f, 1e-5f) && DamageOverRev(lowSpin, stop, set) == 0.0f && Near(lowRun, 1.3f, 1e-5f) && Near(DamageOverRev(lowRun, stop, set), 10.0f, 1e-3f) &&
+                      Near(dragged, 1.0f, 1e-5f) && Near(noTruck, 1.25f, 1e-5f) && isnan(OverRevShare(3.0f, 3.0f, 0.0f)) && isnan(OverRevShare(NAN, 3.0f, top)),
+                  "over-rev: the share is the truck's own speed held to the wheels' mean, so wheels spinning at 1.5 of the top under a truck at 0.9 cost nothing and a truck run to 1.3 the whole rate; "
+                  "wheels dragged under the truck go by the wheels; without the truck's speed the mean");
+            // the cause: the largest of the three rates, and its words
+            DamageModel mixed = {};
+            mixed.hot = 2.0f;
+            mixed.over = 10.0f;
+            DamageModel hotter = mixed;
+            hotter.hot = 12.0f;
+            DamageModel coldOnly = {};
+            coldOnly.cold = 1.0f;
+            char said[160], heat[160], cold[160];
+            DamageCauseText(3, 90.0f, 12.0f, 3120, "L-", said, sizeof said);
+            DamageCauseText(1, 121.5f, 3.0f, 0, nullptr, heat, sizeof heat);
+            DamageCauseText(2, 10.0f, 1.5f, 0, nullptr, cold, sizeof cold);
+            Check(DamageCause(mixed) == 3 && DamageCause(hotter) == 1 && DamageCause(coldOnly) == 2 && DamageCause(DamageModel{}) == 0 &&
+                      !strcmp(said, "over-revving at 3120 rpm in L- (12.0 percent a minute)") && !strcmp(heat, "the heat at 121.5 C (3.0 percent a minute)") &&
+                      !strcmp(cold, "a cold engine worked hard at 10.0 C (1.5 percent a minute)"),
+                  "over-rev: the cause is the largest of the three rates, over-revving said with its rpm and position");
+        }
+
         // a cold start at 15 km/h: the needle at the red zone, and half way to it; the pedal floored in both, as on a keyboard
         auto coldStart = [&](float revs, float &coldFor) {
             TempModel coolant = {};
@@ -3923,6 +4009,12 @@ int main(int argc, char **argv)
                          Near(brakeHalf, -0.15f * (1400.0f - 800.0f) / 1200.0f, 1e-5f) && against == 0.0f && Near(TorqueCutF(loaded, 7.0f), 0.8f, 1e-5f) &&
                          Near(TorqueCutF(heldBack, 7.0f), 0.5f, 1e-5f) && TorqueCutRpm(cm, -3.0f) == 0.0f && Near(TorqueCutRpm(cm, 5.0f), 1000.0f, 1e-3f) &&
                          TorqueCutF(cm, NAN) == TorqueCutF(cm, 0.0f);
+        // the engine braking above the redline (BRIEF_overrev_downshift.md, point 5): rising to 1.3 of the top, flat above;
+        // the pull 0 above the governor's end with the pedal floored
+        const float brake100 = TorqueCutF(footOff, 10.0f), brake115 = TorqueCutF(footOff, 11.5f), brake130 = TorqueCutF(footOff, 13.0f), brake160 = TorqueCutF(footOff, 16.0f);
+        const bool overBrake = brake115 < brake100 && brake130 < brake115 && Near(brake130, -0.15f * (2600.0f - 800.0f) / 1200.0f, 1e-5f) && brake160 == brake130 &&
+                               TorqueCutF(cm, 12.0f) == 0.0f && TorqueCutF(cm, 16.0f) == 0.0f;
+        Check(overBrake, "torque cut: the engine braking keeps rising above the redline to its value at 1.3 of the top (1.5 x at the redline here), flat above; the pull 0 above the governor's end");
         // the game's curve, as the drive scales it by the power factor: 0 below the start, 1 at a, falling to 0 at the top
         const bool stock = TorqueCutStockCurve(0.25f, 4.0f, 13.0f, 1.0f, 0.1f) == 0.0f && TorqueCutStockCurve(0.25f, 4.0f, 13.0f, 1.0f, 4.0f) == 1.0f &&
                            Near(TorqueCutStockCurve(0.25f, 4.0f, 13.0f, 1.0f, 8.5f), 0.5f, 1e-5f) && TorqueCutStockCurve(0.25f, 4.0f, 13.0f, 1.0f, 13.5f) == 0.0f &&
@@ -4105,6 +4197,23 @@ int main(int argc, char **argv)
         const SimResult free = SimRun(rolls);
         len += snprintf(line + len, sizeof line - len, " the foot off down the grade in 2nd: from %.2f rad/s to %.2f held, to %.2f with EngineBrake 0", hill.v0, held.vEnd, free.vEnd);
         ok = ok && held.vEnd <= hill.v0 + 0.05f && free.vEnd > held.vEnd + 1.0f;
+        // over-revving down a grade (BRIEF_overrev_downshift.md, R2): L- of 2.74 rad/s with the foot off at EngineBrake 30,
+        // the truck pushed past the top by a grade, the brake rising to its value at 1.3 of the top; the guard at 150 and
+        // the governor by the truck's speed as in the game: no fall of F by 0.15 or more in a step over 10 s
+        SimSetup steep = hill;
+        steep.slot.map.brake = kEngineBrakeMost / 100.0f;
+        steep.slot.map.top = 2.74f;
+        steep.slot.map.governFrom = CutGovernBand(2.74f, kTachOverrun).from;
+        steep.slot.map.governTo = CutGovernBand(2.74f, kTachOverrun).to;
+        steep.cap = 1.5f;
+        steep.governTruck = true;
+        steep.s0 = steep.v0 = 1.1f * 2.74f;
+        steep.ground = SimGround{ 60.0f, 0.05f, 0.05f, 0.3f, 3.8f };
+        steep.seconds = 12.0f;
+        const SimResult down = SimRun(steep);
+        len += snprintf(line + len, sizeof line - len, "; L- foot off down a grade at EngineBrake 30 from 1.1 of the top: s %.3f of the top (least %.3f), F %.3f to %.3f, falls of 0.15 in a step %d",
+                        down.mean / 2.74f, down.sMin / 2.74f, down.fMin, down.fMax, down.smallFalls);
+        ok = ok && down.smallFalls == 0 && down.mean / 2.74f > 1.3f;
         Check(ok, line);
     }
 
@@ -4455,7 +4564,8 @@ int main(int argc, char **argv)
         // who publishes (the lead's addendum): kinds 0 and 1, kind 2 only with DiffLockBiteAlways, never without the read or the pattern
         const bool publishes = LockPublishes(true, true, 0, false) && LockPublishes(true, true, 1, false) && !LockPublishes(true, true, 2, false) &&
                                LockPublishes(true, true, 2, true) && !LockPublishes(true, false, 0, false) && !LockPublishes(false, true, 0, false) &&
-                               !LockPublishes(false, true, 1, true) && !LockPublishes(false, true, 2, true);
+                               !LockPublishes(false, true, 1, true) && !LockPublishes(false, true, 2, true) && !LockPublishes(true, true, 3, false) && !LockPublishes(true, true, 3, true) &&
+                               !LockPublishes(true, true, -1, true);
         // the drive's hook: the bite alone asks for it (Powertrain on, DiffLockBite above 0), at 0 or with Powertrain off it does not
         const bool hook = DriveHookWanted(false, false, false, false, true, 50) && !DriveHookWanted(false, false, false, false, true, 0) &&
                           !DriveHookWanted(false, false, false, false, false, 50) && DriveHookWanted(true, false, false, false, false, 0);
@@ -4605,7 +4715,8 @@ int main(int argc, char **argv)
         const float fBack = TorqueCutAnswerOf(bs, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, TorqueCutSpeeds(back, d4, 4, -1)).f;
         const float fOne = TorqueCutAnswerOf(bs, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, TorqueCutSpeeds(oneForward, d4, 4, -1)).f;
         const float fSlow = TorqueCutAnswerOf(bs, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, TorqueCutSpeeds(slow, d4, 4, -1)).f;
-        const bool brake = fApart >= 0.0f && Near(fBack, -0.15f, 1e-5f) && fOne >= 0.0f && Near(fSlow, -0.15f * (1200.0f - 800.0f) / 1200.0f * 0.5f, 1e-5f) &&
+        const bool brake = fApart >= 0.0f && Near(fBack, -0.15f * (2400.0f - 800.0f) / 1200.0f, 1e-5f) && // 1.2 of the top: over the redline the braking still rises (PLANNED 67)
+                            fOne >= 0.0f && Near(fSlow, -0.15f * (1200.0f - 800.0f) / 1200.0f * 0.5f, 1e-5f) &&
                            TorqueCutBrakeTaper(8.0f, bs.map) == 1.0f && TorqueCutBrakeTaper(4.0f, bs.map) == 0.0f && Near(TorqueCutBrakeTaper(6.0f, bs.map), 0.5f, 1e-6f);
         TruckRaw tw = Truck();
         tw.wheels = 2;

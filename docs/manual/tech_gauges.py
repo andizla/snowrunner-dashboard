@@ -403,7 +403,7 @@ push and the share taken back, k, F_excess, F, B4, the forward speed and the kic
 with width clamp(0.05 fastest, 0.05, 0.5), smoothed 0.8 old; nothing ties the speeds. The mod's thread publishes the driven truck's action,
 vehicle and DiffLockBite p (<code>LockGive</code>) while Powertrain is on and p is above 0, at every Gearbox level, with the setter's
 pattern (<code>kLockSetterPattern</code>, d7d470 on 6adb8627: it writes + 0x4A only while vehicle + 0xE8 is 0) found once at the start
-and the kind at vehicle + 0xE8 read and not 2, always on (<code>LockPublishes</code>; DiffLockBiteAlways=1 takes kind 2 too). In the
+and the kind at vehicle + 0xE8 read and 0 or 1 (<code>LockPublishes</code>; 2 is always on and takes the bite only with DiffLockBiteAlways=1, any other kind none). In the
 drive's hook, which the bite asks for by itself (<code>DriveHookWanted</code>), after the original drive and while + 0x4A is set and the
 handbrake + 0x48 is not: each driven wheel's spin about its axle w (as the wheel cap reads it) moves to w + k (mean − w), the mean
 weighted by each wheel's inertia about its axle (1 / <code>CapGain</code>), so the momentum about the axles stays (<code>LockStep</code>);
@@ -411,7 +411,7 @@ k = 1 − exp(−dt / tau), tau = 10^(−p / 50) s, 1 at p 100, 0 for a dt that 
 under a spread of 0.01 rad/s, with fewer than two wheels, or for a wheel with no inertia (skipped, counted). With the wheel cap on the
 lock comes first and the cap works on the locked speeds, one write a wheel against the drive's result. Gauges.log has
 "settings: diff lock bite ..." with the settings, "diff lock bite: the game's diff lock setter at +..." at the code look, "diff lock bite:
-rests on this truck: its diff lock is always on ..." for kind 2, "diff lock bite: acts on this truck (kind ...)" at the first write,
+rests on this truck: its diff lock is always on ..." for kind 2, "diff lock bite: rests on this truck: kind ..." for a kind not known (it publishes nothing), "diff lock bite: acts on this truck (kind ...)" at the first write,
 and with Probe=1 "probe: diff lock bite: kind ..." a second.</p>
 <h3>The torque cut (a gear held by hand)</h3>
 <p>The game's torque per gear is one function, <code>bool(vehicle, int gear, float* torque, float* start, float* a, float* top, float* gearSpeed)</code>, found by
@@ -847,6 +847,15 @@ after; three times the torque 0.50 s. From the end of a red slip the box is ambe
 <p class="where">At the defaults (10 and 5): 10% a minute at 125 °C, 31% at the 140 °C cap; a cold engine floored at the red zone at
 0 °C loses 5% a minute, and nothing at moderate revs, as it burns little fuel there. Fractions are carried over and whole points
 written; nothing counts while the game window is in the background.</p>
+<p><b>Over-revving</b> (BRIEF_overrev_downshift.md). A third rate, over = OverRevDamagePercentPerMinute · min((share − governTo)/0.2, 1) for
+share &gt; governTo, with share = min(the truck's speed, the driven wheels' mean)/the gear's top from the torque cut's last answer
+(<code>OverRevShare</code>; without the truck's speed the wheels' mean) and governTo the map's governor end. Only on a pass where the map
+went out (<code>kCutMap</code>: the cut acting, the clutch in, a gear engaged) and the drive's answers rose; never in A. Half a second
+(<code>kOverRevGrace</code>) costs nothing and is not owed after; the clock falls to 0 on the first pass out of the conditions. It needs no
+coolant temperature. Points: (hot + cold)·Δ<i>t</i> + over·(the time past the half second), then /100 · capacity/60. The cause in the
+log line is the largest of the three rates: "over-revving at ... rpm in ..." with the rpm share · redline. The engine braking in
+<code>TorqueCutF</code> keeps rising above the redline to its value at 1.3 of the top (<code>kEngineBrakeOverTop</code>). With Probe=1,
+once a second while the share is over the end, "probe: over-rev: ...".</p>
 {fig}
 <p>The damage goes into the game's own engine damage (the block behind vehicle +0x150; the handle with its second byte cleared, its
 flags at +0x10 with bit 0 set and bit 2 clear, data at +0x38: damage, capacity, effect). A write goes out at most once a second,

@@ -913,6 +913,37 @@ int main()
         const bool zeroKeeps = !r.fitted && m.pos == kPosLowMinus;
         Check(toL && plusToL && toFirst && toTop && zeroKeeps,
               "gearbox: positions by gearbox, a truck in L- or L+ the gearbox lacks goes to L, with no low range to the 1st held, in H the gearbox lacks to the top; mask zero keeps L-");
+        // the fit under RequireClutch (the review of 108, S1): the pick with the clutch held, then the clutch up, then the
+        // read lands; the fit is no shift of the player, so no stall standing and no N at speed; off, the same
+        auto fit = [&](bool requireClutch, GearboxActions key, int miss, float speed, GearboxPosOrders &out, GearboxPosModel &mm) {
+            GearboxOptions oc = {};
+            oc.requireClutch = requireClutch;
+            mm = GearboxPosModel{};
+            GearboxTruck tt = Truck(1);
+            tt.speed = speed;
+            GearboxActions held = key;
+            held.clutch = true;
+            Pass(mm, oc, held, tt);
+            Pass(mm, oc, None(), tt);
+            Pass(mm, oc, None(), tt);
+            tt.missing = miss;
+            out = Pass(mm, oc, None(), tt);
+        };
+        bool fitsClean = true;
+        for (int rc = 0; rc < 2; rc++)
+        {
+            GearboxPosOrders fo = {};
+            GearboxPosModel fm = {};
+            fit(rc != 0, lm, kHasLowMinus, 0.0f, fo, fm);
+            fitsClean = fitsClean && fo.fitted && !fo.stall && fm.pos == kPosLow;
+            fit(rc != 0, lm, kHasPositions, 0.0f, fo, fm);
+            fitsClean = fitsClean && fo.fitted && !fo.stall && fm.pos == kPosGear && fm.gear == 1;
+            fit(rc != 0, lp, kHasLowPlus | kHasLowMinus, 3.0f, fo, fm);
+            fitsClean = fitsClean && fo.fitted && !fo.stall && fm.pos == kPosLow;
+            fit(rc != 0, h, kHasH, 12.0f, fo, fm);
+            fitsClean = fitsClean && fo.fitted && !fo.stall && fm.pos == kPosGear && fm.gear == 6;
+        }
+        Check(fitsClean, "gearbox: a fit of a position the gearbox lacks is not a shift without the clutch: with RequireClutch on or off no stall standing and no N at speed");
     }
     // the probe's words for the positions
     {
