@@ -48,16 +48,23 @@ struct Binding
 enum { kBindingSlots = 2 };
 struct GearBindings { Binding slot[kActCount][kBindingSlots]; };
 
-// A key's text: its name as the tab shows it (KeyName), or its code where it has none.
+// Whether a virtual key is the mouse's (its buttons): never bound, as the tab's button that begins a capture is clicked.
+inline bool KeyIsMouse(int vk) { return vk == VK_LBUTTON || vk == VK_RBUTTON || vk == VK_MBUTTON || vk == VK_XBUTTON1 || vk == VK_XBUTTON2; }
+
+// A key's text: its name as the tab shows it (KeyName), or its code where it has none. A code under 10 has two digits
+// ("03"), as one digit alone is the top row's digit key (KeyFromText).
 inline void KeyText(int vk, char *out, size_t size)
 {
     KeyName(vk, out, size);
-    if (!strncmp(out, "Key ", 4)) _snprintf_s(out, size, _TRUNCATE, "%d", vk);
+    if (!strncmp(out, "Key ", 4)) _snprintf_s(out, size, _TRUNCATE, vk < 10 ? "%02d" : "%d", vk);
 }
 
-// A key from its text: a name KeyName gives, or a virtual key code (1 to 254). 0 where it is neither.
+// A key from its text: a name KeyName gives, or a virtual key code (1 to 254). 0 where it is neither. One digit alone
+// is the top row's digit key, as KeyName names it, so "Key 1" is the 1 key (0x31): 0.18.4 wrote it so and read it as
+// code 1, the left mouse button (BRIEF_full_pass_2_gameplay.md part 1). Two digits or more are a code.
 inline int KeyFromText(const char *text)
 {
+    if (text[0] >= '0' && text[0] <= '9' && !text[1]) return '0' + (text[0] - '0');
     char *end = nullptr;
     const long n = strtol(text, &end, 10);
     if (end != text && !*end) return n >= 1 && n <= 254 ? (int)n : 0;
@@ -121,6 +128,7 @@ inline bool BindingParse(const char *text, Binding &out, char *why, size_t whySi
         }
         const int vk = KeyFromText(name);
         if (!vk) return refuse("no such key (a name as the tab shows it, or a code from 1 to 254)");
+        if (KeyIsMouse(vk)) return refuse("a mouse button cannot be bound (the codes 1, 2, 4, 5 and 6)");
         out.kind = kBindKey;
         out.code = (uint32_t)vk;
         return true;
@@ -348,8 +356,6 @@ inline void BindingCaptureBegin(InputCapture &c, int action, int slot, unsigned 
     c.began = now;
 }
 
-// Whether a virtual key is the mouse's (its buttons): never bound, as the tab's button that begins a capture is clicked.
-inline bool KeyIsMouse(int vk) { return vk == VK_LBUTTON || vk == VK_RBUTTON || vk == VK_MBUTTON || vk == VK_XBUTTON1 || vk == VK_XBUTTON2; }
 
 // The directions a POV reading points in, as bits (1 << kPov..): a diagonal gives two.
 inline uint8_t PovDirections(uint32_t reading)

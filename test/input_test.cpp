@@ -76,7 +76,7 @@ int main()
     }
     // bad texts: refused, each with its reason
     {
-        static const char *const bad[] = { "", "Key", "Key Nothing", "Key 0", "Key 300", "Pad", "Pad LB+Nothing", "Wheel", "Wheel 0 Button 1", "Wheel 9 Button 1",
+        static const char *const bad[] = { "", "Key", "Key Nothing", "Key 01", "Key 02", "Key 04", "Key 05", "Key 06", "Key 300", "Pad", "Pad LB+Nothing", "Wheel", "Wheel 0 Button 1", "Wheel 9 Button 1",
                                            "Wheel 1", "Wheel 1 Button", "Wheel 1 Button 0", "Wheel 1 Button 129", "Wheel 1 POV", "Wheel 1 POV Sideways",
                                            "Wheel 1 POV 5 Up", "Wheel 1 Axis 9", "Wheel 1 Axis 3 backwards", "None at all", "Mouse 1" };
         bool refused = true;
@@ -96,6 +96,41 @@ int main()
         BindingParse("Wheel 1 Button 0", b, why, sizeof why);
         printf("     for example \"Wheel 1 Button 0\": %s\n", why);
         Check(refused, "bindings: nonsense is refused with a reason, and leaves none");
+    }
+    // the digit keys and the codes (BRIEF_full_pass_2_gameplay.md part 1, S3): every key from 1 to 254 but the mouse's
+    // five goes to its text and back to the same key, and no two share a text; Key 0 to Key 9 are the digit keys
+    {
+        bool round = true, distinct = true;
+        static char texts[256][96];
+        for (int vk = 1; vk <= 254; vk++)
+        {
+            texts[vk][0] = 0;
+            if (KeyIsMouse(vk)) continue;
+            Binding b = { kBindKey, 0, (uint32_t)vk, 0, false }, back;
+            char why[160] = "";
+            BindingText(b, texts[vk], sizeof texts[vk]);
+            if (!BindingParse(texts[vk], back, why, sizeof why) || back.kind != kBindKey || back.code != (uint32_t)vk)
+            {
+                printf("     %d: \"%s\" reads back as %u (%s)\n", vk, texts[vk], back.code, why);
+                round = false;
+            }
+            for (int other = 1; other < vk; other++)
+                if (texts[other][0] && !strcmp(texts[other], texts[vk])) distinct = false;
+        }
+        bool digits = true;
+        for (int d = 0; d <= 9; d++)
+        {
+            char t[8];
+            _snprintf_s(t, sizeof t, _TRUNCATE, "Key %d", d);
+            const Binding b = Parsed(t);
+            digits = digits && b.kind == kBindKey && b.code == (uint32_t)('0' + d);
+        }
+        char one[96], three[96];
+        BindingText(Binding{ kBindKey, 0, '1', 0, false }, one, sizeof one);
+        BindingText(Binding{ kBindKey, 0, 3, 0, false }, three, sizeof three);
+        Check(round && distinct && digits && !strcmp(one, "Key 1") && !strcmp(three, "Key 03"),
+              "bindings: every key but the mouse buttons round trips by its text and no two share one; Key 0 to Key 9 are the digit keys, the 1 key "
+              "written Key 1 as before, a code under 10 with two digits");
     }
     // the reader: one press per push, chords, the larger chord over the smaller one, a wheel's button and POV
     {
