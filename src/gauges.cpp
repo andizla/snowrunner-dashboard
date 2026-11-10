@@ -1174,7 +1174,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; on the shifter (L+ among them) hands the truck back until A is picked, so the automatic never shifts out of it. 2 the mod's\n"
                         L"; own gearbox takes the shifter: D, the numbered gears, N, R, H, L-, L, L+ on the bindings below (as 1 until one reaches R).\n"
                         L"; D is the mod's automatic, drawn so on the cluster; the game's shifter and this ini call it A (GearA, BackToA).\n"
-                        L"; [Gearbox] Bind<Action> and Bind<Action>2: two bindings each for Gear1 to Gear16, GearH, GearL-, GearL, GearL+, GearN,\n"
+                        L"; [Gearbox] Bind<Action> and Bind<Action>2 (Gear1's second: BindGear1Second): two bindings each for Gear1 to Gear16, GearH, GearL-, GearL, GearL+, GearN,\n"
                         L"; GearR, GearA, GearUp, GearDown, Clutch, RangeHigh, RangeLow, and at every Gearbox level DiffLock and Awd (the\n"
                         L"; differential lock and all-wheel drive flipped, on every truck, the upgrade fitted or not; none by default).\n"
                         L"; A binding is Key <name or code>, Pad <buttons with +, a stick's direction LSUp to RSRight among them>,\n"
@@ -2778,7 +2778,14 @@ static void BindingsDefault(GearBindings &b)
     for (const auto &k : keys) b.slot[k.action][0] = Binding{ kBindKey, 0, (uint32_t)k.vk, 0, false };
 }
 
-static void BindingKey(int action, int slot, wchar_t *out, size_t size) { _snwprintf_s(out, size, _TRUNCATE, L"Bind%S%s", kActionNames[action], slot ? L"2" : L""); }
+// Gear 1's second slot has a key of its own: Bind, Gear1 and 2 is BindGear12, Gear 12's first slot
+// (BRIEF_full_pass_2_gameplay.md part 2). The file's BindGear12 is Gear 12's alone: 0.18.4 wrote Gear 12 last, so that is
+// what every old ini holds, and no ini ever had it as Gear 1's alone (M2). No action's name ends in Second.
+static void BindingKey(int action, int slot, wchar_t *out, size_t size)
+{
+    if (action == kActGear1 && slot == 1) wcsncpy_s(out, size, L"BindGear1Second", _TRUNCATE);
+    else _snwprintf_s(out, size, _TRUNCATE, L"Bind%S%s", kActionNames[action], slot ? L"2" : L"");
+}
 
 // Whether the ini holds a binding key yet.
 static bool BindingsInIni(const std::wstring &ini)
@@ -2811,17 +2818,20 @@ static void BindingsRead(const std::wstring &ini, GearBindings &b, bool say)
         }
 }
 
+// One action's slot into the ini: one put.
+static void BindingWriteOne(const std::wstring &ini, const GearBindings &b, int a, int slot)
+{
+    wchar_t key[48];
+    char text[96];
+    BindingKey(a, slot, key, 48);
+    BindingText(b.slot[a][slot], text, sizeof text);
+    WritePrivateProfileStringW(kBindSection, key, Wide(text).c_str(), ini.c_str());
+}
+
 static void BindingsWrite(const std::wstring &ini, const GearBindings &b)
 {
     for (int a = 0; a < kActCount; a++)
-        for (int slot = 0; slot < kBindingSlots; slot++)
-        {
-            wchar_t key[48];
-            char text[96];
-            BindingKey(a, slot, key, 48);
-            BindingText(b.slot[a][slot], text, sizeof text);
-            WritePrivateProfileStringW(kBindSection, key, Wide(text).c_str(), ini.c_str());
-        }
+        for (int slot = 0; slot < kBindingSlots; slot++) BindingWriteOne(ini, b, a, slot);
 }
 
 // ---- Gauges.ini written off the pass thread (BRIEF_full_pass_gameplay.md part 1, FR2, with the Reviewer's addendum) ----
@@ -2832,17 +2842,24 @@ static void BindingsWrite(const std::wstring &ini, const GearBindings &b)
 // copy, the bindings kept where the newer has none. Nothing waits for it (M1): a reload asked during a save runs on the
 // first pass after (IniSaveBusy), and the game's end has no wait. A thread that cannot be started: the save runs where it
 // was handed, as before, with one line. g_iniSaveWrite is the test's seam (S5).
+// The bindings go by the slots marked: a change on the tab writes its one slot (BRIEF_full_pass_2_gameplay.md S1), one
+// put where all 66 were. It goes by the worker all the same, so one thread writes Gauges.ini and a slot is never put
+// while the settings' puts run.
 struct IniSaveJob
 {
     GaugeSettings plain;
     GearBindings binds;
     bool settings, bindings;
+    bool marked[kActCount][kBindingSlots];
 };
 static_assert(std::is_trivially_copyable<GaugeSettings>::value && std::is_trivially_copyable<GearBindings>::value,
               "the save's copy is taken by value: a pointer or a string in the settings would need more");
 static void IniSaveWriteJob(const IniSaveJob &job)
 {
-    if (job.bindings) BindingsWrite(IniPath(), job.binds);
+    if (job.bindings)
+        for (int a = 0; a < kActCount; a++)
+            for (int slot = 0; slot < kBindingSlots; slot++)
+                if (job.marked[a][slot]) BindingWriteOne(IniPath(), job.binds, a, slot);
     if (job.settings) WriteIni(job.plain);
 }
 static void (*volatile g_iniSaveWrite)(const IniSaveJob &) = IniSaveWriteJob;
@@ -2873,13 +2890,19 @@ static DWORD WINAPI IniSaveThread(void *)
     }
 }
 
-// Hands a save to the worker: the settings (plain, may be null) and the bindings (may be null).
-static void IniSaveHand(const GaugeSettings *plain, const GearBindings *binds)
+// Hands a save to the worker: the settings (plain, may be null) and the bindings (may be null), these by the one slot
+// changed (action and slot) or all where action is -1.
+static void IniSaveHand(const GaugeSettings *plain, const GearBindings *binds, int action = -1, int slot = -1)
 {
     if (!plain && !binds) return;
     IniSaveJob job = {};
     if (plain) job.plain = *plain, job.settings = true;
-    if (binds) job.binds = *binds, job.bindings = true;
+    if (binds)
+    {
+        job.binds = *binds, job.bindings = true;
+        for (int a = 0; a < kActCount; a++)
+            for (int sl = 0; sl < kBindingSlots; sl++) job.marked[a][sl] = action < 0 || (a == action && sl == slot);
+    }
     bool here = false, tell = false;
     AcquireSRWLockExclusive(&g_iniSaveLock);
     if (!g_iniSaveStarted)
@@ -2894,7 +2917,12 @@ static void IniSaveHand(const GaugeSettings *plain, const GearBindings *binds)
     {
         // the newest wins; what the waiting copy has and the newer does not stays
         if (job.settings) g_iniSaveWaiting.plain = job.plain, g_iniSaveWaiting.settings = true;
-        if (job.bindings) g_iniSaveWaiting.binds = job.binds, g_iniSaveWaiting.bindings = true;
+        if (job.bindings)
+        {
+            g_iniSaveWaiting.binds = job.binds, g_iniSaveWaiting.bindings = true;
+            for (int a = 0; a < kActCount; a++)
+                for (int sl = 0; sl < kBindingSlots; sl++) g_iniSaveWaiting.marked[a][sl] = g_iniSaveWaiting.marked[a][sl] || job.marked[a][sl];
+        }
     }
     else
     {
@@ -7888,6 +7916,7 @@ static DWORD WINAPI Run(void *)
                 else if (askWhat == kBindAskClear)
                 {
                     binds.slot[askAction][askSlot] = Binding{};
+                    IniSaveHand(nullptr, &binds, askAction, askSlot); // its one slot, by the worker (S1)
                     bindsChanged = true;
                 }
             }
@@ -7919,6 +7948,7 @@ static DWORD WINAPI Run(void *)
                 else if (step == kCaptureBound)
                 {
                     binds.slot[bindCapture.action][bindCapture.slot] = caught;
+                    IniSaveHand(nullptr, &binds, bindCapture.action, bindCapture.slot); // its one slot, by the worker (S1)
                     // held as it is bound: a press only once it was let go
                     bindReader.latched[bindCapture.action][bindCapture.slot] = true;
                     bindsChanged = true;
@@ -7927,7 +7957,6 @@ static DWORD WINAPI Run(void *)
             }
             if (bindsChanged)
             {
-                IniSaveHand(nullptr, &binds); // by the worker, as the settings (FR2): 2 puts an action
                 Log(L"gearbox: the bindings set from the tab, written to Gauges.ini:");
                 BindingsLog(binds);
             }
@@ -10653,13 +10682,16 @@ int wmain(int argc, wchar_t **argv)
         b.slot[kActClutch][1] = Binding{ kBindAxis, 1, 3, 0, true };
         b.slot[kActGear3][0] = Binding{ kBindButton, 2, 5, 0, false };
         b.slot[kActUp][0] = Binding{};
+        b.slot[kActGear1][1] = Binding{ kBindKey, 0, 'Q', 0, false };
+        b.slot[kActGear12][0] = Binding{ kBindButton, 1, 9, 0, false };
         BindingsWrite(bindIni, b);
         GearBindings back;
         BindingsDefault(back);
         BindingsRead(bindIni, back, false);
         const bool round = BindingsInIni(bindIni) && back.slot[kActClutch][1].kind == kBindAxis && back.slot[kActClutch][1].device == 1 &&
                            back.slot[kActClutch][1].code == 3 && back.slot[kActClutch][1].inverted && back.slot[kActGear3][0].kind == kBindButton &&
-                           back.slot[kActGear3][0].code == 5 && !back.slot[kActUp][0].kind;
+                           back.slot[kActGear3][0].code == 5 && !back.slot[kActUp][0].kind && back.slot[kActGear1][1].kind == kBindKey &&
+                           back.slot[kActGear1][1].code == 'Q' && back.slot[kActGear12][0].kind == kBindButton && back.slot[kActGear12][0].code == 9;
         WritePrivateProfileStringW(kBindSection, L"BindGearH", L"Wheel nine", bindIni.c_str());
         back.slot[kActGearH][0] = Binding{ kBindKey, 0, 'H', 0, false };
         BindingsRead(bindIni, back, false);
@@ -10669,8 +10701,67 @@ int wmain(int argc, wchar_t **argv)
         bare.slot[kActGearR][1] = Binding{ kBindKey, 0, 'R', 0, false };
         DeleteFileW(bindIni.c_str());
         Check(none && defaults && named && round && kept && fallback && BindingsCanReverse(bare, InputSnapshot{}, false),
-              "gearbox: bindings default to Num 8, Num 2, Num 5, Num 0 and Num 7, the number pad's operators by name, round trip through the ini, None "
-              "clears, no binding leaves a slot; the shifter is taken only with one that reaches reverse");
+              "gearbox: bindings default to Num 8, Num 2, Num 5, Num 0 and Num 7, the number pad's operators by name, round trip through the ini (Gear 1's "
+              "second slot and Gear 12's first apart), None clears, no binding leaves a slot; the shifter is taken only with one that reaches reverse");
+    }
+    // one key per action and slot (BRIEF_full_pass_2_gameplay.md part 2, S4): no two build the same, and none is a key
+    // the settings put in the same [Gearbox] section
+    {
+        // on the test's own Gauges.ini, as WriteIni and the save's job write there; kept aside and put back after
+        const std::wstring keyIni = IniPath(), keyKeep = g_dir + L"Gauges.keys_keep.ini";
+        const bool hadIni = CopyFileW(keyIni.c_str(), keyKeep.c_str(), FALSE) != 0;
+        DeleteFileW(keyIni.c_str());
+        GaugeSettings plainDefaults;
+        SettingsDefaults(plainDefaults);
+        WriteIni(plainDefaults);
+        static wchar_t section[16384];
+        const DWORD got = GetPrivateProfileSectionW(kBindSection, section, 16384, keyIni.c_str());
+        static wchar_t keys[kActCount * kBindingSlots][48];
+        int n = 0, clashes = 0, settingsKeys = 0;
+        for (int act = 0; act < kActCount; act++)
+            for (int slot = 0; slot < kBindingSlots; slot++)
+            {
+                BindingKey(act, slot, keys[n], 48);
+                for (int i = 0; i < n; i++)
+                    if (!_wcsicmp(keys[i], keys[n])) clashes++, printf("     %S is built twice\n", keys[n]);
+                n++;
+            }
+        for (const wchar_t *p = section; *p; p += wcslen(p) + 1)
+        {
+            settingsKeys++;
+            const wchar_t *eq = wcschr(p, L'=');
+            const size_t len = eq ? (size_t)(eq - p) : wcslen(p);
+            for (int i = 0; i < n; i++)
+                if (wcslen(keys[i]) == len && !_wcsnicmp(keys[i], p, len)) clashes++, printf("     %S is a settings key too\n", keys[i]);
+        }
+        printf("     %d binding keys against %d keys the settings put in [Gearbox] (they go to their own section)\n", n, settingsKeys);
+        // a change on the tab writes its one slot: every other line of the file as it was, a foreign one among them
+        GearBindings all;
+        BindingsDefault(all);
+        BindingsWrite(keyIni, all);
+        WritePrivateProfileStringW(kBindSection, L"BindSomethingElse", L"kept", keyIni.c_str());
+        static wchar_t before[16384], after[16384];
+        GetPrivateProfileSectionW(kBindSection, before, 16384, keyIni.c_str());
+        all.slot[kActGearH][1] = Binding{ kBindKey, 0, 'J', 0, false };
+        IniSaveJob one = {};
+        one.binds = all;
+        one.bindings = true;
+        one.marked[kActGearH][1] = true;
+        IniSaveWriteJob(one);
+        GetPrivateProfileSectionW(kBindSection, after, 16384, keyIni.c_str());
+        int changed = 0;
+        bool onlyIt = true;
+        for (const wchar_t *p = before, *q = after; *p || *q; p += wcslen(p) + 1, q += wcslen(q) + 1)
+        {
+            if (!*p || !*q) { onlyIt = false; break; }
+            if (wcscmp(p, q)) changed++, onlyIt = onlyIt && !wcsncmp(q, L"BindGearH2=Key J", 16);
+        }
+        DeleteFileW(keyIni.c_str());
+        if (hadIni) MoveFileExW(keyKeep.c_str(), keyIni.c_str(), MOVEFILE_REPLACE_EXISTING);
+        (void)got;
+        Check(!clashes && changed == 1 && onlyIt,
+              "gearbox: every action and slot has a key of its own, none a settings key of [Gearbox]; a change on the tab puts its one slot, the rest of "
+              "the file as it was, a foreign key among it");
     }
     // review 8: reverse reached only by what can be pressed now (W5), what a capture may not bind (W1, W9), the actions
     // from the reader's states, the actions resting while the menu is open (W2), the snapshot out of front (W7)
