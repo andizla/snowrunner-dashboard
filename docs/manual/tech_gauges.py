@@ -1408,7 +1408,7 @@ AutoOffAndShift(1), then ShiftGear(1), with no Shift-To function of its own; A i
 SetPowerFactor, 0.450 in L and 1.000 in A, H, N and R (L- and L+ wait for a truck that has them). With the game's automatic flag down
 the game makes no gearbox call at a standstill on the brake (8 s held, every count 0), so the brake-reverse is the game's automatic's and
 can only come while the flag is up; the shifter's R comes through the same door, which is why the flag and not the door tells them apart.
-Two bindings an action in Gauges.ini's [Gearbox] (Bind&lt;Action&gt;, Bind&lt;Action&gt;2: a key,
+Two bindings an action in Gauges.ini's [Gearbox] (Bind&lt;Action&gt;, Bind&lt;Action&gt;2, for Gear1 the second is BindGear1Second: a key,
 a pad chord, a wheel's button or POV, or an axis for the clutch), bound in the tab by a press: the capture's first pass takes a snapshot
 of every control and it binds the first thing that changes from it, a control held or a POV pointing at the start left alone until let
 go and named in the log (closing the menu ends a capture; the
