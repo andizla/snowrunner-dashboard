@@ -30,6 +30,7 @@
 #include "camber.h"
 #include "gearbox_hooks.h"
 #include "game_script.h"
+#include "gearbox_positions.h"
 
 // The hooks' attach and detach (gearbox_hooks.h) on a function of the test's own: the hook counts and calls through.
 static volatile int g_hookSaw = 0;
@@ -562,6 +563,14 @@ static void RealImageTest()
     snprintf(line, sizeof line, "places in a real image (stamp %08x): the game's truck input at %zx, its handle helper at %zx%s%s", stamp, input.input, input.helper,
              inputFound ? "" : "; ", input.why);
     Check(inputRight, line);
+    // the fitted gearbox's lookup, for the positions by gearbox (the research's d7d550 on 6adb8627, d7d5e0 on 6ab52f5d,
+    // d7bc50 on 6a607c05); found once on any build
+    size_t descAt = 0;
+    const char *descWhy = "";
+    const bool descFound = GearboxDescFind(image.data(), from, to, descAt, descWhy);
+    const bool descRight = now ? descFound && descAt == 0xd7d550 : before ? descFound && descAt == 0xd7d5e0 : descFound;
+    snprintf(line, sizeof line, "places in a real image (stamp %08x): the game's gearbox lookup at %zx%s%s", stamp, descAt, descFound ? "" : "; ", descWhy);
+    Check(descRight, line);
     // the gear torque and the drive's call of it, for the torque cut (the research's d73dc0 and the drive's start + 0xCA on
     // 6adb8627, d73e50 on 6ab52f5d); on another build found once
     GearTorquePlace gearTorque;
@@ -1978,6 +1987,183 @@ int main()
         Check(found && twiceNot && heldNot && noCallNot && awayNot,
               "truck input's places in made-up code: its bytes once and the helper as the target of its call at + 0x8F2; not taken twice, behind another mod's jump, "
               "with no call there or a call out of the code");
+    }
+
+    // the fitted gearbox's positions (gearbox_positions.h, BRIEF_positions_by_gearbox.md): the mask from the flags by the
+    // brief's table, the missing attribute and node, the manual low gearboxes (review R3) and the six groups (N3)
+    {
+        auto flags = [](bool params, bool low, bool lowPlus, bool lowMinus, bool high, bool manual) { return GearboxFlags{ params, low, lowPlus, lowMinus, high, manual, 0 }; };
+        const bool rows = GearboxHasFromFlags(flags(true, true, true, true, true, false)) == kHasPositions &&
+                          GearboxHasFromFlags(flags(true, false, true, true, true, false)) == kHasH &&            // no L: no L+ and no L- either
+                          GearboxHasFromFlags(flags(true, true, false, true, true, false)) == (kHasL | kHasLowMinus | kHasH) &&
+                          GearboxHasFromFlags(flags(true, true, true, false, true, false)) == (kHasL | kHasLowPlus | kHasH) &&
+                          GearboxHasFromFlags(flags(true, true, true, true, false, false)) == (kHasL | kHasLowPlus | kHasLowMinus);
+        const bool noNode = GearboxHasFromFlags(flags(false, true, true, true, true, false)) == 0 && GearboxMissingFromHas(0) == kHasPositions;
+        const bool manual = (GearboxHasFromFlags(flags(true, true, true, true, true, true)) & kHasPositions) == kHasPositions &&
+                            (GearboxHasFromFlags(flags(true, true, true, true, true, true)) & kHasManual);
+        // the six groups of the game's gearboxes: H and L; H with all three; L alone; H, L and L-; H, L and L+; all three without H
+        const bool groups = GearboxMissingFromHas(GearboxHasFromFlags(flags(true, true, false, false, true, false))) == (kHasLowPlus | kHasLowMinus) &&
+                            GearboxMissingFromHas(GearboxHasFromFlags(flags(true, true, true, true, true, false))) == 0 &&
+                            GearboxMissingFromHas(GearboxHasFromFlags(flags(true, true, false, false, false, false))) == (kHasLowPlus | kHasLowMinus | kHasH) &&
+                            GearboxMissingFromHas(GearboxHasFromFlags(flags(true, true, false, true, true, false))) == kHasLowPlus &&
+                            GearboxMissingFromHas(GearboxHasFromFlags(flags(true, true, true, false, true, false))) == kHasLowMinus &&
+                            GearboxMissingFromHas(GearboxHasFromFlags(flags(true, true, true, true, false, true))) == kHasH;
+        Check(rows && noNode && manual && groups,
+              "gearbox positions: the mask by the table (L+ and L- only with L), no GearboxParams none, the manual low flag takes nothing, the six groups of the game");
+    }
+    // the read over a made-up pugixml tree in this build's layout, peeked through ReadProcessMemory as the mod's own peek is
+    {
+        auto peek = [](uint64_t addr, void *out, size_t size) { return ReadProcessMemory(GetCurrentProcess(), (const void *)(uintptr_t)addr, out, size, nullptr) != 0; };
+        static uint8_t nodes[4][0x40], attrs[6][0x28], desc[0x80], obj[0x40], native[0x10];
+        static uint64_t ref = 0;
+        static char text[0x1000];
+        size_t textAt = 0;
+        auto str = [&](const char *s) { char *p = text + textAt; strcpy_s(p, sizeof text - textAt, s); textAt += strlen(s) + 1; return p; };
+        auto put = [](void *base, size_t off, const void *p) { const uint64_t v = (uint64_t)(uintptr_t)p; memcpy((uint8_t *)base + off, &v, 8); };
+        // GameData with a child Other, then GearboxParams with five attributes
+        auto build = [&](const char *root, bool params) {
+            memset(nodes, 0, sizeof nodes);
+            memset(attrs, 0, sizeof attrs);
+            textAt = 0;
+            put(nodes[0], 0x10, str(root));
+            put(nodes[0], 0x20, nodes[1]);
+            put(nodes[1], 0x10, str("Other"));
+            if (params) put(nodes[1], 0x30, nodes[2]);
+            put(nodes[2], 0x10, str("GearboxParams"));
+            put(nodes[2], 0x38, attrs[0]);
+            const char *names[5] = { "IsLowerGearExists", "IsLowerPlusGearExists", "IsLowerMinusGearExists", "IsHighGearExists", "Endpoint" };
+            const char *values[5] = { "true", "FALSE", "True", "yes", "1" };
+            for (int i = 0; i < 5; i++)
+            {
+                put(attrs[i], 0x08, str(names[i]));
+                put(attrs[i], 0x10, str(values[i]));
+                if (i < 4) put(attrs[i], 0x20, attrs[i + 1]);
+            }
+            memset(desc, 0, sizeof desc);
+            memset(obj, 0, sizeof obj);
+            const uint64_t tagged = (uint64_t)(uintptr_t)obj | 0x0012000000000000ull;
+            memcpy(desc + 0x58, &tagged, 8);
+            obj[0x10] = 1;
+            put(obj, 0x38, native);
+            put(native, 8, &ref);
+            ref = (uint64_t)(uintptr_t)nodes[0];
+        };
+        GearboxFlags f = {};
+        uint64_t node = 0;
+        build("GameData", true);
+        const bool atNode = GearboxNodeOfDesc(peek, (uint64_t)(uintptr_t)desc, node) == kReadOk && node == (uint64_t)(uintptr_t)nodes[0];
+        const bool read = GearboxFlagsOfNode(peek, node, f) == kReadOk && f.params && f.low && !f.lowPlus && f.lowMinus && f.high && !f.manual &&
+                          f.defaulted == (kHasH | kHasManual); // "yes" keeps the default, IsManualLowGear is not there
+        const bool readMask = GearboxMissingFromHas(GearboxHasFromFlags(f)) == kHasLowPlus;
+        build("GameData", false);
+        const bool noParams = GearboxFlagsOfNode(peek, (uint64_t)(uintptr_t)nodes[0], f) == kReadOk && !f.params && GearboxHasFromFlags(f) == 0;
+        build("gamedata", true);
+        const bool wrongRoot = GearboxNodeOfDesc(peek, (uint64_t)(uintptr_t)desc, node) == kReadNotGameData;
+        build("GameData", true);
+        memset(desc + 0x58, 0, 8);
+        const bool noRef = GearboxNodeOfDesc(peek, (uint64_t)(uintptr_t)desc, node) == kReadRef;
+        build("GameData", true);
+        obj[0x10] = 0;
+        const bool notNative = GearboxNodeOfDesc(peek, (uint64_t)(uintptr_t)desc, node) == kReadNative;
+        build("GameData", true);
+        put(native, 8, nullptr);
+        const bool noNative = GearboxNodeOfDesc(peek, (uint64_t)(uintptr_t)desc, node) == kReadNative;
+        build("GameData", true);
+        ref = 0;
+        const bool noNode = GearboxNodeOfDesc(peek, (uint64_t)(uintptr_t)desc, node) == kReadNode;
+        build("GameData", true);
+        put(nodes[0], 0x20, nullptr);
+        const bool noChild = GearboxFlagsOfNode(peek, (uint64_t)(uintptr_t)nodes[0], f) == kReadOk && !f.params;
+        build("GameData", true);
+        put(attrs[1], 0x08, nullptr);
+        const bool nullName = GearboxFlagsOfNode(peek, (uint64_t)(uintptr_t)nodes[0], f) == kReadOk && f.lowPlus && (f.defaulted & kHasLowPlus);
+        build("GameData", true);
+        put(nodes[1], 0x30, (const void *)(uintptr_t)0x100); // a sibling link into nothing
+        const bool badLink = GearboxFlagsOfNode(peek, (uint64_t)(uintptr_t)nodes[0], f) == kReadWalk;
+        build("GameData", true);
+        put(nodes[1], 0x30, nodes[1]); // a sibling ring: the walk ends
+        const bool ring = GearboxFlagsOfNode(peek, (uint64_t)(uintptr_t)nodes[0], f) == kReadWalk;
+        Check(atNode && read && readMask && noParams && wrongRoot && noRef && notNative && noNative && noNode && noChild && nullName && badLink && ring,
+              "gearbox positions: the walk over a made-up tree: true, FALSE and True read, a value that is neither the default; no GearboxParams none; a wrong root, "
+              "a null ref, an object not native, a null native or node not read; a null child, a null name, a bad link and a ring each end the walk");
+
+        // the job: posted on the mod's thread, dealt in the frame for its truck on the game's thread, taken for that
+        // vehicle and the name the mod's peek reads now
+        static uint8_t vehicle[0xA00], first[0x40], types[0x40];
+        memset(vehicle, 0, sizeof vehicle);
+        const char name[] = "gb_test";
+        memcpy(vehicle + kGearboxFittedAt, name, sizeof name);
+        const uint64_t size = 7, room = 15;
+        memcpy(vehicle + kGearboxFittedAt + 0x10, &size, 8);
+        memcpy(vehicle + kGearboxFittedAt + 0x18, &room, 8);
+        put(vehicle, 0x988, types);
+        put(vehicle, 0x990, types + 0x40);
+        put(first, 0x20, vehicle);
+        const TruckMemory mem = { peek, 0, nullptr };
+        static int lookups = 0;
+        static uint64_t lookupDesc = 0;
+        lookupDesc = (uint64_t)(uintptr_t)desc;
+        auto lookup = [](uint64_t, uint64_t, uint64_t &d) { lookups++; d = lookupDesc; return true; };
+        auto faults = [](uint64_t, uint64_t, uint64_t &d) { d = 0; return false; };
+        build("GameData", true);
+        const uint64_t v = (uint64_t)(uintptr_t)vehicle, fp = (uint64_t)(uintptr_t)first;
+        PositionsJob j = {};
+        PositionsState ps = {};
+        PositionsNewVehicle(ps, v);
+        int step = -1;
+        GearboxFlags got = {};
+        const bool posted = PositionsJobPost(j, v, 1000) && !PositionsJobPost(j, v, 1000);
+        static uint8_t otherFirst[0x40];
+        const bool otherFrame = !PositionsJobFrame(j, mem, (uint64_t)(uintptr_t)otherFirst, lookup, 1100);
+        const bool stale = !PositionsJobFrame(j, mem, fp, lookup, 2100);
+        const bool dealt = PositionsJobFrame(j, mem, fp, lookup, 1500) && lookups == 1 && j.step == kReadOk;
+        const bool taken = PositionsJobTake(j, ps, "gb_test", step, got) && step == kReadOk && ps.missing == kHasLowPlus && !strcmp(ps.name, "gb_test") &&
+                           j.state == kPosJobIdle;
+        PositionsJobPost(j, v, 3000);
+        PositionsJobFrame(j, mem, fp, lookup, 3000);
+        const bool otherName = !PositionsJobTake(j, ps, "gb_other", step, got) && j.state == kPosJobIdle;
+        PositionsJobPost(j, v, 4000);
+        PositionsJobFrame(j, mem, fp, faults, 4000);
+        const bool fault = j.step == kReadFault;
+        PositionsJobTake(j, ps, "gb_test", step, got);
+        const bool faultZero = ps.missing == 0;
+        put(vehicle, 0x990, types + 0x30); // not a multiple of 0x20: no call
+        PositionsJobPost(j, v, 5000);
+        const int before = lookups;
+        PositionsJobFrame(j, mem, fp, lookup, 5000);
+        const bool socket = j.step == kReadSocket && lookups == before;
+        PositionsJobTake(j, ps, "gb_test", step, got);
+        put(vehicle, 0x990, types + 0x40);
+        memset(vehicle + kGearboxFittedAt + 0x10, 0, 8); // an empty name: no call
+        PositionsJobPost(j, v, 6000);
+        PositionsJobFrame(j, mem, fp, lookup, 6000);
+        const bool empty = j.step == kReadName && lookups == before;
+        PositionsJobTake(j, ps, "gb_test", step, got);
+        PositionsJobPost(j, v, 7000);
+        const bool dropped = !PositionsJobDrop(j, v, 7500) && PositionsJobDrop(j, v, 8100) && j.state == kPosJobIdle;
+        PositionsJobPost(j, v, 9000);
+        const bool droppedOther = PositionsJobDrop(j, v + 8, 9000);
+        PositionsNewVehicle(ps, v + 8);
+        const bool fresh = ps.missing == 0 && !ps.name[0] && ps.vehicle == v + 8;
+        Check(posted && otherFrame && stale && dealt && taken && otherName && fault && faultZero && socket && empty && dropped && droppedOther && fresh,
+              "gearbox positions' job: one at a time, dealt only for its truck within a second, taken only for its vehicle and the name read now; a fault, a bad socket "
+              "and an empty name give no mask, the last two with no call; dropped after a second or for another truck; a new vehicle starts at zero");
+    }
+    // the gearbox lookup in made-up code: its bytes once; not taken twice or where they are not
+    {
+        uint8_t bytes[kPatternMax], mask[kPatternMax];
+        const int length = PatternParse(kGearboxDescPattern, bytes, mask);
+        std::vector<uint8_t> code(0x4000, 0xCC);
+        for (int i = 0; i < length; i++) code[0x1230 + i] = mask[i] ? bytes[i] : 0x11;
+        size_t at = 0;
+        const char *why = "";
+        const bool found = GearboxDescFind(code.data(), 0x10, code.size(), at, why) && at == 0x1230 && !*why;
+        std::vector<uint8_t> twice = code;
+        for (int i = 0; i < length; i++) twice[0x2230 + i] = mask[i] ? bytes[i] : 0x22;
+        const bool twiceNot = !GearboxDescFind(twice.data(), 0x10, twice.size(), at, why) && strstr(why, "more than once") && !at;
+        std::vector<uint8_t> empty(0x4000, 0xCC);
+        const bool noneNot = !GearboxDescFind(empty.data(), 0x10, empty.size(), at, why) && strstr(why, "not found");
+        Check(found && twiceNot && noneNot, "gearbox lookup's place in made-up code: its bytes once; not taken twice or where they are not");
     }
 
     // the engine speed's places in made-up code: the function's bytes once, the fuel's and the stall's calls once each

@@ -443,6 +443,29 @@ inline bool TruckInputFind(const uint8_t *code, size_t from, size_t to, TruckInp
     return true;
 }
 
+// ---- the fitted gearbox's desc, for the positions by gearbox (BRIEF_positions_by_gearbox.md) ----
+// const void *(vehicle, const std::string *name): the gearbox desc of that name among the vehicle's socket types, the
+// lookup Truck.SetGearbox makes (review\research_low_range_fitted.md; d7d550 on 6adb8627, d7d5e0 on 6ab52f5d, d7bc50
+// on 6a607c05), found once by its first bytes, which hold vehicle + 0x988. Only called, never hooked.
+static const char *const kGearboxDescPattern = "40 57 48 83 EC 50 48 C7 44 24 20 FE FF FF FF 48 89 5C 24 60 48 89 6C 24 68 48 89 74 24 70 48 8B EA "
+                                               "48 8D 05 ? ? ? ? 48 89 44 24 28 48 8D 05 ? ? ? ? 48 89 44 24 40 33 FF 48 8B 99 88 09 00 00";
+inline bool GearboxDescFind(const uint8_t *code, size_t from, size_t to, size_t &out, const char *&why)
+{
+    out = 0;
+    why = "";
+    uint8_t bytes[kPatternMax], mask[kPatternMax];
+    size_t at = 0;
+    int count = 0;
+    const int length = PatternParse(kGearboxDescPattern, bytes, mask);
+    if (!PatternFind(code, from, to, bytes, mask, length, at, count) || count != 1)
+    {
+        why = count > 1 ? "the gearbox lookup's bytes stand more than once" : "the gearbox lookup was not found";
+        return false;
+    }
+    out = at;
+    return true;
+}
+
 // ---- the game's gear torque, for the torque cut (BRIEF_drivetrain_2_torque_cut.md) ----
 // bool(vehicle, int gear, float *torque, float *start, float *a, float *top, float *gearSpeed): the gear's torque and
 // its curve (review\own_drivetrain_research.md A; RVA d73dc0 in 6adb8627, d73e50 in 6ab52f5d), found by its first

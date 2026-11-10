@@ -127,10 +127,11 @@ inline const char *GearboxDoorPos(const GearboxDoors &was, const GearboxDoors &n
 // it). At Gearbox=0 none of them; the creep's hook on the wheels' drive (CreepHook) goes by Creep alone, at every level.
 struct HooksWanted { bool shifts, truckUpdate; };
 // The truck update also whenever the mod's gearbox may hold a truck (Gearbox 1 or 2) with ShiftOnGameThread=1: the
-// mod's shifts are dealt there (review 17, step 1).
-inline HooksWanted GearboxHooksWanted(int level, bool damage, bool shiftJobs = false)
+// mod's shifts are dealt there (review 17, step 1); and at Gearbox=2 with PositionsByGearbox, whose read of the fitted
+// gearbox is a job there (BRIEF_positions_by_gearbox.md, review M1).
+inline HooksWanted GearboxHooksWanted(int level, bool damage, bool shiftJobs = false, bool positions = false)
 {
-    return HooksWanted{ level >= 1, (level >= 2 && damage) || (level >= 1 && shiftJobs) };
+    return HooksWanted{ level >= 1, (level >= 2 && (damage || positions)) || (level >= 1 && shiftJobs) };
 }
 
 // What has been asked of the hooks so far. A hook is attached the first time a level needs it (at the finder's look,

@@ -764,10 +764,13 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             PageTip("Up and down step between R and the lowest forward place past N. Off by default.");
             PageLabel("Down stays forward", labelX);
             changed(ImGui::Checkbox("##downstaysforward", &s.downStaysForward));
-            PageTip("Gear down stops at the lowest forward place: L-, or 1 with Skip low range. N and R only on their own keys or the game shifter. Wins over Skip neutral. Off by default.");
+            PageTip("Gear down stops at the lowest forward place: the lowest of the low range the gearbox has, or 1 with Skip low range. N and R only on their own keys or the game shifter. Wins over Skip neutral. Off by default.");
             PageLabel("Skip low range", labelX);
             changed(ImGui::Checkbox("##walkskipslow", &s.walkSkipsLow));
             PageTip("Gear up and Gear down step R, N, 1, 2 and on. L-, L and L+ come only from their own bindings, Range low or the game shifter. Off by default.");
+            PageLabel("Positions by gearbox", labelX);
+            changed(ImGui::Checkbox("##positionsbygearbox", &s.positionsByGearbox));
+            PageTip("L-, L, L+ and H are there only when the fitted gearbox has them in the game. Off: every gearbox has all four. On by default.");
             if (ImGui::Button("Sequential", ImVec2(w, 0)))
             {
                 // a pad's sequential box: no clutch, no gear held, back to A by itself

@@ -18,6 +18,15 @@
 
 enum { kPosA, kPosGear, kPosN, kPosR, kPosH, kPosLowMinus, kPosLow, kPosLowPlus, kPosCount };
 
+// The positions a gearbox may lack, as bits (BRIEF_positions_by_gearbox.md): what the fitted gearbox has in the game
+// (gearbox_positions.h reads it) and, on GearboxTruck::missing, what it lacks. kHasManual is read for the log alone.
+enum { kHasL = 1, kHasLowPlus = 2, kHasLowMinus = 4, kHasH = 8, kHasPositions = 15, kHasManual = 16 };
+// The bit of a position that a gearbox may lack; 0 for one every gearbox has.
+inline int GearboxPosHasBit(int pos)
+{
+    return pos == kPosLow ? kHasL : pos == kPosLowPlus ? kHasLowPlus : pos == kPosLowMinus ? kHasLowMinus : pos == kPosH ? kHasH : 0;
+}
+
 // The power factor of the low range, L-, L and L+, which the game gives a truck in its first gear: the figures truck.h
 // has (TruckGearMode reads the letters by them). L's 0.45 is confirmed by a drive (2026-10-26, the d110 with Gearbox=0:
 // SetPowerFactor 0.450 in L; A, H, N and R 1.000). The d110 has no L- or L+, so 0.2 and 1.0 stand until a heavy truck's
@@ -88,7 +97,7 @@ struct GearboxOptions
 {
     bool requireClutch;   // RequireClutch: a shift into a gear with the clutch not held stalls the engine
     bool requireGearHeld; // RequireGearHeld: neutral while no gear key is held, as an H shifter
-    bool skipNeutral;     // SkipNeutral: up and down step from L- to reverse and back past neutral
+    bool skipNeutral;     // SkipNeutral: up and down step from the lowest forward place to reverse and back past neutral
     bool downStaysForward; // DownStaysForward: down stops at the lowest forward place (N and R on their own keys); wins over SkipNeutral
     bool walkSkipsLow;    // WalkSkipsLow: up and down walk R, N, 1, 2 and on; they leave the low range but never enter it
 };
@@ -147,6 +156,7 @@ struct GearboxTruck
     float power;          // the power factor (action + 0x38)
     bool automatic;       // the game's automatic flag (action + 0x3C)
     float pedal;          // the pedal, 0 to 1
+    int missing;          // kHas... bits of the positions the fitted gearbox lacks (gearbox_positions.h); 0 every position there
 };
 
 struct GearboxPosModel
@@ -184,6 +194,11 @@ struct GearboxPosOrders
     bool lowUpSay;        // the first refusal on this visit to L+: told in the log
     float lowUpAfter;     // the seconds in L+ at the refusal
     bool lowToFirst;      // the low range went to the 1st, which is held (heldFromLow)
+    bool keyRefused;      // a key asked for refusedPos, which the gearbox lacks: nothing done
+    bool shifterMissing;  // the game's shifter gave refusedPos, which the read says the gearbox lacks: taken, the read is wrong
+    int refusedPos;       // kPos...
+    bool fitted;          // the truck stood in fittedFrom, which the gearbox lacks, and went to the nearest it has
+    int fittedFrom;       // kPos...
     const char *why;     // what happened, for the log, a string literal; "" for nothing to say
 };
 
@@ -448,21 +463,23 @@ inline void GearboxPosFromWalk(GearboxPosModel &m, int i, int top)
 }
 
 // Whether the walk stops at place i on a press from the position fromPos: R, the gears and H always, N unless
-// SkipNeutral, a low place unless WalkSkipsLow and the press came from outside the low range (BRIEF_sequential_no_low.md).
-// PLANNED 108 adds one clause here: or the truck has no such position.
-inline bool GearboxWalkStops(int i, int fromPos, const GearboxOptions &o)
+// SkipNeutral, a low place unless WalkSkipsLow and the press came from outside the low range (BRIEF_sequential_no_low.md)
+// or the truck has no such position (missing, kHas... bits; BRIEF_positions_by_gearbox.md).
+inline bool GearboxWalkStops(int i, int fromPos, const GearboxOptions &o, int missing = 0)
 {
+    static const int has[3] = { kHasLowMinus, kHasL, kHasLowPlus };
     if (i == 0) return !o.skipNeutral;
-    if (i >= kWalkLowMinus && i < kWalkFirst) return !o.walkSkipsLow || (fromPos >= kPosLowMinus && fromPos <= kPosLowPlus);
+    if (i >= kWalkLowMinus && i < kWalkFirst)
+        return !(missing & has[i - kWalkLowMinus]) && (!o.walkSkipsLow || (fromPos >= kPosLowMinus && fromPos <= kPosLowPlus));
     return true;
 }
 
 // The place one press moves to from place i (dir 1 up, -1 down), past the places the walk does not stop at, held to R
 // and the top gear.
-inline int GearboxWalkNext(int i, int dir, int fromPos, const GearboxOptions &o, int last)
+inline int GearboxWalkNext(int i, int dir, int fromPos, const GearboxOptions &o, int last, int missing = 0)
 {
     int to = i;
-    do to += dir; while (to > -1 && to < kWalkFirst && !GearboxWalkStops(to, fromPos, o));
+    do to += dir; while (to > -1 && to < kWalkFirst && !GearboxWalkStops(to, fromPos, o, missing));
     return to < -1 ? -1 : to > last ? last : to;
 }
 
@@ -495,7 +512,7 @@ inline GearboxPosOrders GearboxPosStep(GearboxPosModel &m, const GearboxOptions 
     const int was = m.pos, wasGear = m.gear;
     // where up or down would go, worked out first so a refused press still falls through to the range keys
     const int walkAt = GearboxPosWalk(m, t), last = top + 3;
-    int walkTo = GearboxWalkNext(walkAt, a.up ? 1 : -1, m.pos, o, last);
+    int walkTo = GearboxWalkNext(walkAt, a.up ? 1 : -1, m.pos, o, last, t.missing);
     // down from A never lands on N or R: with WalkSkipsLow A in the 1st shares the 1st's place, and a down press in D
     // asks for a lower gear held, so it gives the 1st held (review S1; with the option off A never reaches N this way)
     if (!a.up && m.pos == kPosA && walkTo <= 0) walkTo = kWalkFirst;
@@ -505,17 +522,45 @@ inline GearboxPosOrders GearboxPosStep(GearboxPosModel &m, const GearboxOptions 
     // 5 November: "i cant shift out of L+ into 1"); a refused press does not restart the hold. DownStaysForward: a down
     // press that would land on N or R does nothing
     const bool walkRefused = a.up ? (m.pos == kPosH || lowUpWaits) : (o.downStaysForward && walkTo <= 0);
+    // a key for a position the gearbox lacks does nothing, and Range low needs L (BRIEF_positions_by_gearbox.md); the
+    // game's shifter is never refused: it can give only what the game's gearbox has, so a position of its own that the
+    // read lacks says the read is wrong for this truck (review S4)
+    auto pick = [&](int pos) {
+        if (t.missing & GearboxPosHasBit(pos))
+        {
+            if (!a.shifter)
+            {
+                r.keyRefused = true;
+                r.refusedPos = pos;
+                return;
+            }
+            r.shifterMissing = true;
+            r.refusedPos = pos;
+        }
+        m.pos = pos;
+    };
     if (a.a) m.pos = kPosA;
     else if (a.n) m.pos = kPosN;
     else if (a.r) m.pos = kPosR;
-    else if (a.h) m.pos = kPosH;
-    else if (a.lowMinus) m.pos = kPosLowMinus;
-    else if (a.low) m.pos = kPosLow;
-    else if (a.lowPlus) m.pos = kPosLowPlus;
+    else if (a.h) pick(kPosH);
+    else if (a.lowMinus) pick(kPosLowMinus);
+    else if (a.low) pick(kPosLow);
+    else if (a.lowPlus) pick(kPosLowPlus);
     else if (a.gearPressed >= 1) GearboxPosToGear(m, a.gearPressed > top ? top : a.gearPressed);
     else if ((a.up || a.down) && !walkRefused) GearboxPosFromWalk(m, walkTo, top);
-    else if (a.rangeLow && !(m.pos >= kPosLowMinus && m.pos <= kPosLowPlus)) m.pos = kPosLow;
+    else if (a.rangeLow && !(m.pos >= kPosLowMinus && m.pos <= kPosLowPlus)) pick(kPosLow);
     else if (a.rangeHigh && m.pos >= kPosLowMinus && m.pos <= kPosLowPlus) GearboxPosToGear(m, 1);
+    // standing in a position the gearbox lacks (the box ticked while there, a read that came late, a truck parked in
+    // the mod's L- before the update): L- and L+ go to L where it is there, else to the 1st held, L to the 1st held and
+    // H to the top gear. Never a position the game's shifter gave (review S4)
+    if ((t.missing & GearboxPosHasBit(m.pos)) && !m.byShifter && !a.shifter)
+    {
+        r.fittedFrom = m.pos;
+        r.fitted = true;
+        if ((m.pos == kPosLowMinus || m.pos == kPosLowPlus) && !(t.missing & kHasL)) m.pos = kPosLow;
+        else if (m.pos == kPosH) GearboxPosToGear(m, top);
+        else GearboxPosToGear(m, 1);
+    }
     r.lowUp = a.up && was == kPosLowPlus && m.pos == kPosLowPlus;
     r.lowUpSay = r.lowUp && !m.lowRefusedSaid;
     r.lowUpAfter = m.lowPlusFor;
@@ -586,14 +631,31 @@ inline GearboxPosOrders GearboxPosStep(GearboxPosModel &m, const GearboxOptions 
     return r;
 }
 
-// The gearbox in a line of text for the probe log.
-inline void GearboxPosProbeText(const GearboxPosModel &m, const GearboxOptions &o, int gear, char *out, size_t size)
+// The positions of a gearbox that lacks the kHas... bits missing, in words: "L-, L, L+ and H", "L and H", "none".
+inline void GearboxPosHasText(int missing, char *out, size_t size)
 {
-    char at[24] = "";
+    const char *names[4];
+    int n = 0;
+    if (!(missing & kHasLowMinus) && !(missing & kHasL)) names[n++] = "L-";
+    if (!(missing & kHasL)) names[n++] = "L";
+    if (!(missing & kHasLowPlus) && !(missing & kHasL)) names[n++] = "L+";
+    if (!(missing & kHasH)) names[n++] = "H";
+    if (!n) snprintf(out, size, "none of L-, L, L+ and H");
+    else if (n == 1) snprintf(out, size, "%s", names[0]);
+    else if (n == 2) snprintf(out, size, "%s and %s", names[0], names[1]);
+    else if (n == 3) snprintf(out, size, "%s, %s and %s", names[0], names[1], names[2]);
+    else snprintf(out, size, "%s, %s, %s and %s", names[0], names[1], names[2], names[3]);
+}
+
+// The gearbox in a line of text for the probe log. missing: the positions the fitted gearbox lacks (kHas... bits).
+inline void GearboxPosProbeText(const GearboxPosModel &m, const GearboxOptions &o, int gear, char *out, size_t size, int missing = 0)
+{
+    char at[24] = "", has[40];
     if (m.pos == kPosGear) snprintf(at, sizeof at, " %d", m.gear);
-    snprintf(out, size, "gearbox: %s%s (the game's gear %d), clutch %s at %.2f, %d shifts, %d stalls | RequireClutch %d, RequireGearHeld %d, SkipNeutral %d, DownStaysForward %d, WalkSkipsLow %d",
+    GearboxPosHasText(missing, has, sizeof has);
+    snprintf(out, size, "gearbox: %s%s (the game's gear %d), clutch %s at %.2f, %d shifts, %d stalls | RequireClutch %d, RequireGearHeld %d, SkipNeutral %d, DownStaysForward %d, WalkSkipsLow %d | has %s",
              GearboxPosName(m.pos), at, gear, m.clutch ? "held" : "let up", m.travel, m.shifts, m.stalls, o.requireClutch, o.requireGearHeld, o.skipNeutral,
-             o.downStaysForward, o.walkSkipsLow);
+             o.downStaysForward, o.walkSkipsLow, has);
 }
 
 // The game did not take the gear the mod set: it counts as asked, so the mod asks again when the position (or A's

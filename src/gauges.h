@@ -108,9 +108,10 @@ struct GaugeSettings
                              // 2 the mod's own gearbox (gearbox_model.h): the shifter taken, its positions from the bindings
     bool requireClutch;      // RequireClutch: a shift into a gear without the clutch stalls the engine
     bool requireGearHeld;    // RequireGearHeld: neutral while no gear key is held, as an H shifter
-    bool skipNeutral;        // SkipNeutral: from L- to reverse and back without stopping in neutral
+    bool skipNeutral;        // SkipNeutral: from the lowest forward place to reverse and back without stopping in neutral
     bool downStaysForward;   // DownStaysForward: Gear down stops at the lowest forward place; wins over SkipNeutral
     bool walkSkipsLow;       // WalkSkipsLow: Gear up and Gear down walk R, N, 1, 2 and on; the low range only on its own keys
+    bool positionsByGearbox; // PositionsByGearbox: at Gearbox=2, L-, L, L+ and H only where the fitted gearbox has them in the game
     bool ignoreShifter;      // IgnoreShifter: at Gearbox=2 a position picked on the game's shifter does nothing
     int backToA;             // BackToA: at Gearbox=2, seconds after a shift by hand until the gearbox goes back to A by itself; 0 never, else 3 to 30
     int gameGearDisplay;     // GameGearDisplay: the game's gear display at the bottom right; 0 the game's, 1 off with the mod's gearbox, 2 off always
@@ -200,6 +201,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.boostProfile = kSpoolStandard;
     s.gearbox = kGearboxGame;
     s.requireClutch = s.requireGearHeld = s.skipNeutral = s.downStaysForward = s.walkSkipsLow = s.ignoreShifter = false;
+    s.positionsByGearbox = true;
     s.backToA = kBackToADefault;
     s.gameGearDisplay = kGameGearDisplayDefault;
     s.powertrain = false;

@@ -27,6 +27,7 @@
 #include "text_cut.h"
 #include "gearbox_hooks.h"
 #include "gearbox_model.h"
+#include "gearbox_positions.h"
 #include "input_bindings.h"
 #ifndef GAUGES_SETTINGS_TEST
 #include "input_devices.h"
@@ -774,6 +775,7 @@ static void WriteIni(const GaugeSettings &s)
     whole(L"SkipNeutral", s.skipNeutral ? 1 : 0);
     whole(L"DownStaysForward", s.downStaysForward ? 1 : 0);
     whole(L"WalkSkipsLow", s.walkSkipsLow ? 1 : 0);
+    whole(L"PositionsByGearbox", s.positionsByGearbox ? 1 : 0);
     whole(L"IgnoreShifter", s.ignoreShifter ? 1 : 0);
     whole(L"BackToA", s.backToA);
     whole(L"GameGearDisplay", s.gameGearDisplay);
@@ -1180,9 +1182,11 @@ static void ReadIni(GaugeSettings &s)
                         L"; gear key is held (an H shifter with every gear bound), SkipNeutral=1 steps between R and the lowest forward place past N.\n"
                         L"; GearUp and GearDown walk R, N, L-, L, L+, 1, 2 and on to the top gear, on every truck. Up from L+ goes to 1\n"
                         L"; a second after an up press got there. A 1st from the low range stays held until the next shift (never to D).\n"
-                        L"; DownStaysForward=1: GearDown stops at the lowest forward place (L-, or 1 with WalkSkipsLow), N and R only on their own\n"
+                        L"; DownStaysForward=1: GearDown stops at the lowest forward place (the lowest of the low range the gearbox has, or 1\n"
+                        L"; with WalkSkipsLow), N and R only on their own\n"
                         L"; keys (wins over SkipNeutral). WalkSkipsLow=1: GearUp and GearDown walk R, N, 1, 2 and on; L-, L and L+ only on\n"
                         L"; their own keys, RangeLow or the game shifter, and inside the low range up and down still step it.\n"
+                        L"; PositionsByGearbox=1 (the default): L-, L, L+ and H only where the fitted gearbox has them in the game.\n"
                         L"; At Gearbox=2 with Input 1 or 2 the game's own shifter picks a position too; with Input 0 its shifts stay refused.\n"
                         L"; IgnoreShifter=1: at Gearbox=2 a position picked on the game's shifter does nothing, with any Input.\n"
                         L"; BackToA: at Gearbox=2, seconds after a shift by hand into a numbered gear until it goes back to D by itself\n"
@@ -1204,7 +1208,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; ModEngineSpeed=1 (with Powertrain, on by default): the game tachometer, sound and effects follow the mod engine; its fuel burn and stall check keep the game's own.\n"
                         L";   EngineSpeedTop: the mod engine speed the game reads as its top, as a share of the redline, 0.5 to 1.5 (1: the redline; idle is its 0).\n"
                         L";   Base1.<engine>, Base2.<engine> ... in a truck's file: each gear's acceleration at the game's own pull, floored, learned.\n"
-                        L"; Creep=1: an idling truck on an automatic moves to walking pace; the brake holds it. For now only with an automatic, not in a gear picked by hand.\n"
+                        L"; Creep=1: an idling truck on an automatic moves to walking pace; the brake holds it. By default only where an automatic picks the gear.\n"
                         L"; CreepManual=1: the creep in a gear picked by hand too (the gear's idle speed; stuck at Gearbox=2 it stalls; R and L on the game's shifter through the converter).\n"
                         L"; Gauges\\gearboxes\\<name>.ini GearHold: seconds a gearbox holds each gear going up with Powertrain=1, 1 to 3 (Upshift delay).\n"
                         L"; TopShare<n>.<gearbox> in a truck's file: each gear's top as a share of 2a + 5, learned where the game's pull reaches nothing floored.\n"
@@ -1257,6 +1261,7 @@ static void ReadIni(GaugeSettings &s)
     s.skipNeutral = IniBool(L"SkipNeutral", s.skipNeutral, ini);
     s.downStaysForward = IniBool(L"DownStaysForward", s.downStaysForward, ini);
     s.walkSkipsLow = IniBool(L"WalkSkipsLow", s.walkSkipsLow, ini);
+    s.positionsByGearbox = IniBool(L"PositionsByGearbox", s.positionsByGearbox, ini);
     s.ignoreShifter = IniBool(L"IgnoreShifter", s.ignoreShifter, ini);
     s.backToA = IniInt(L"BackToA", s.backToA, ini);
     s.gameGearDisplay = IniInt(L"GameGearDisplay", s.gameGearDisplay, ini);
@@ -3549,6 +3554,38 @@ static int GearboxBlocked(const FunctionFind finds[kFnCount])
 static StallJob g_stallJob = {};
 static void (*g_damageUpdate)(uint64_t) = nullptr;
 static void OnTruckFrame(void *first);
+static bool g_truckFrames = false; // the truck update is hooked: its jobs are dealt
+
+// The fitted gearbox's positions (gearbox_positions.h, BRIEF_positions_by_gearbox.md): the game's lookup of a gearbox's
+// desc (0 until found), the job, and the feature off for the session (g_positionsOff: why, for the line said once).
+typedef const void *(*GearboxDescFn)(void *vehicle, const void *name);
+static GearboxDescFn g_gearboxDesc = nullptr;
+static size_t g_gearboxDescAt = 0;
+static PositionsJob g_positionsJob = {};
+static volatile LONG g_positionsFault = 0;
+static const wchar_t *g_positionsOff = nullptr;
+
+// The lookup on the game's thread, its own plain function under __try as GameShiftCall is (review S1): a fault turns
+// the read off for the session, and the mod's thread says so.
+static bool GearboxDescCall(uint64_t vehicle, uint64_t name, uint64_t &desc)
+{
+#ifdef _MSC_VER
+    __try
+    {
+        desc = (uint64_t)g_gearboxDesc((void *)vehicle, (const void *)name);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        InterlockedExchange(&g_positionsFault, 1);
+        desc = 0;
+        return false;
+    }
+#else
+    desc = (uint64_t)g_gearboxDesc((void *)vehicle, (const void *)name);
+    return true;
+#endif
+}
 
 // The places of the hooks, from the finder's look, for the gate (GearboxHooksStep): the gearbox functions, and the
 // game's truck update and damage update. g_hooksReady: looked, and no other mod holds the gearbox functions.
@@ -3595,6 +3632,15 @@ static void GameCodeLook()
         Log(L"engine speed: the game's engine speed at +%zx, its fuel's call returning to +%zx and its stall's to +%zx (both keep the game's own); "
             L"hooked once Powertrain is on with a truck driven and ModEngineSpeed on or Gearbox=2", g_speed.speed, g_speed.fuelBack, g_speed.stallBack);
     else Log(L"engine speed: %S, so the game's engine speed stays its own", g_speed.why);
+    {
+        const char *why = "";
+        if (GearboxDescFind(code.data(), from, to, g_gearboxDescAt, why))
+        {
+            g_gearboxDesc = (GearboxDescFn)(g_base + g_gearboxDescAt);
+            Log(L"gearbox positions: the game's gearbox lookup at +%zx; the fitted gearbox is read on the game's thread at Gearbox=2 with Positions by gearbox on", g_gearboxDescAt);
+        }
+        else Log(L"gearbox positions: %S, so every truck has all positions", why);
+    }
     if (TruckInputFind(code.data(), from, to, g_input))
         Log(L"engine sound: the game's truck input at +%zx, its handle helper at +%zx; hooked once Powertrain and ModEngineSpeed are on with a truck driven", g_input.input,
             g_input.helper);
@@ -3640,7 +3686,7 @@ static void GearboxHooksStep(const GaugeSettings &s)
     if (!g_hooksReady) return;
     static HooksGate gate = {};
     static bool saidNone = false, saidNoTruck = false;
-    const HooksWanted want = GearboxHooksWanted(s.gearbox, s.damage, s.shiftOnGameThread != 0);
+    const HooksWanted want = GearboxHooksWanted(s.gearbox, s.damage, s.shiftOnGameThread != 0, s.positionsByGearbox);
     const int act = GearboxGateStep(gate, want);
     if (!want.shifts && !gate.shifts && !saidNone)
     {
@@ -3680,12 +3726,15 @@ static void GearboxHooksStep(const GaugeSettings &s)
             Log(L"gearbox damage: %S, so a stall or the clutch's burn costs the gearbox nothing, and the mod's shifts go from its own thread", hookWhy);
         else
         {
+            g_truckFrames = true;
+            g_positionsOff = nullptr;
             g_damageUpdate = (void (*)(uint64_t))(g_base + g_path.damageUpdate);
             Log(L"gearbox damage: dealt on the game's own thread, from its truck update at +%zx (hooked at Gearbox=2 with Damage on, or with ShiftOnGameThread=1), with its "
                 L"damage update at +%zx after; the mod's shifts are dealt there too (ShiftOnGameThread=%d)",
                 g_path.truckUpdate, g_path.damageUpdate, s.shiftOnGameThread);
         }
     }
+    if ((act & kGateAttachTruck) && !g_truckFrames) g_positionsOff = L"the game's truck update is not hooked";
     if (act & kGateShiftsLeft) Log(L"gearbox: Gearbox=0 needs no hooks; the gearbox hooks are left in place until the game is started again");
     if (act & kGateTruckLeft) Log(L"gearbox damage: the truck update's hook is not needed now; left in place until the game is started again");
 }
@@ -3801,13 +3850,13 @@ static void LogSettings(const GaugeSettings &s)
         s.dieselFlutter ? L", a diesel's lift flutters"
                         : SoundWhistles() > 0 ? L", a diesel's lift plays the sounds\\turbo_whistle_ files" : L", a diesel's lift is quiet");
     Log(L"settings: driven with %s", s.input == kInputKeys ? L"the keyboard" : s.input == kInputPad ? L"a pad" : L"a wheel's pedals");
-    Log(L"settings: gearbox %s; RequireClutch %d, RequireGearHeld %d, SkipNeutral %d, DownStaysForward %d, WalkSkipsLow %d, IgnoreShifter %d, BackToA %d",
+    Log(L"settings: gearbox %s; RequireClutch %d, RequireGearHeld %d, SkipNeutral %d, DownStaysForward %d, WalkSkipsLow %d, PositionsByGearbox %d, IgnoreShifter %d, BackToA %d",
         s.gearbox == kGearboxOwn && s.ignoreShifter ? L"the mod's own (Gearbox=2): it takes the shifter, its positions on the bindings (IgnoreShifter: the game's shifter does nothing)"
         : s.gearbox == kGearboxOwn && s.input != kInputWheel ? L"the mod's own (Gearbox=2): it takes the shifter, its positions on the bindings and on the game's shifter"
         : s.gearbox == kGearboxOwn ? L"the mod's own (Gearbox=2): it takes the shifter, its positions on the bindings (with a wheel's pedals the game's shifter stays refused)"
         : s.gearbox == kGearboxModel ? L"the mod's automatic in A (Gearbox=1), the game's shifter yours, its reverse on the brake refused"
                                      : L"the game's own (Gearbox=1 or 2 on the Gearbox tab hand it to the mod)",
-        s.requireClutch, s.requireGearHeld, s.skipNeutral, s.downStaysForward, s.walkSkipsLow, s.ignoreShifter, s.backToA);
+        s.requireClutch, s.requireGearHeld, s.skipNeutral, s.downStaysForward, s.walkSkipsLow, s.positionsByGearbox, s.ignoreShifter, s.backToA);
     Log(L"settings: the game's gear display %s (GameGearDisplay %d)", s.gameGearDisplay == kGameGearGame ? L"as the game has it" : s.gameGearDisplay == kGameGearOff ? L"off always"
                                                                     : L"off while the mod's own gearbox drives", s.gameGearDisplay);
     if (s.powertrain) Log(L"settings: powertrain on: the truck pulls with %d percent of the mod's engine and converter, through the game's torque factor; road load %s; %s; "
@@ -3876,6 +3925,8 @@ static void OnTruckFrame(void *first)
     const long frame = TruckUpdateFrames();
     if (g_shiftJob.state == kShiftPosted) ShiftJobFrame(g_shiftJob, g_engage, m, (uint64_t)first, ShiftOnGame, frame, GetCurrentThreadId(), GetTickCount64());
     EngageFrame(g_engage, m, frame);
+    if (g_positionsJob.state == kPosJobPosted && g_gearboxDesc && !g_positionsFault)
+        PositionsJobFrame(g_positionsJob, m, (uint64_t)first, GearboxDescCall, GetTickCount64());
     if (g_stallJob.state != kStallJobPosted) return;
     StallJobFrame(g_stallJob, m, (uint64_t)first, g_damageUpdate);
 }
@@ -4023,6 +4074,7 @@ struct TruckWatch
     bool canReverse;            // a binding reaches reverse (GearDown, GearR or GearN): Gearbox=2 with a wheel's pedals may take the shifter
     int gearboxLevel;           // the Gearbox level in force on the last pass (level 2 runs as 1 without a reverse), for state.h
     bool lowPlusSaid;           // the log said once that the game's shifter's L+ reads as the first gear
+    PositionsState positions;   // the fitted gearbox's positions for the driven truck (PositionsStep)
     GearboxDoors doors;         // GearboxDoorsNow on the last pass
     PullTest pullTest;          // the pull test (the tab's button)
     uint64_t pullVehicle, pullAction; // the truck whose torque factor a running pull test changed
@@ -4293,6 +4345,58 @@ static void GearsNowKey(const TruckWatch &w, char *out, size_t size)
     t.gearSpeeds = w.gearSpeeds;
     memcpy(t.gearSpeed, w.gearSpeed, sizeof t.gearSpeed);
     GearboxKey(t, "", out, size);
+}
+
+// The fitted gearbox's positions for the driven truck (BRIEF_positions_by_gearbox.md): the mask of those it lacks, 0
+// for every position there. At Gearbox=2 with the box on: a new vehicle starts at 0, its fitted name is peeked once a
+// second, and a name the last read was not for posts a read to the game's thread (gearbox_positions.h); the result counts
+// only for this vehicle and the name the peek reads now (review M2). Off, at another level or without the hook: 0.
+static int PositionsStep(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s, bool own, unsigned long long now)
+{
+    PositionsState &st = w.positions;
+    static bool offSaid = false;
+    if (g_positionsFault && !g_positionsOff) g_positionsOff = L"the game's gearbox lookup faulted";
+    if (!s.positionsByGearbox || !own || !w.refs.vehicle || !g_gearboxDesc || !g_truckFrames || g_positionsOff)
+    {
+        if (g_positionsOff && s.positionsByGearbox && own && !offSaid)
+        {
+            offSaid = true;
+            Log(L"gearbox positions: %s, so every truck has all positions in this game", g_positionsOff);
+        }
+        PositionsJobDrop(g_positionsJob, 0, now);
+        return 0;
+    }
+    if (st.vehicle != w.refs.vehicle) PositionsNewVehicle(st, w.refs.vehicle);
+    char nameNow[kMaxText];
+    size_t length = 0;
+    const bool named = TruckNameText(m, st.vehicle + kGearboxFittedAt, nameNow, length, true);
+    int step = kReadOk;
+    GearboxFlags flags = {};
+    if (PositionsJobTake(g_positionsJob, st, named ? nameNow : nullptr, step, flags))
+    {
+        char has[40];
+        GearboxPosHasText(st.missing, has, sizeof has);
+        if (step != kReadOk) Log(L"gearbox positions: the read of %S failed at %S, so the truck has all positions", st.name, kReadSteps[step]);
+        else if (!flags.params) Log(L"gearbox positions: %S has no GearboxParams in its GameData, as the game shifter shows: the truck has %S", st.name, has);
+        else
+        {
+            char defaults[128] = "";
+            static const char *const flagName[5] = { "IsLowerGearExists", "IsLowerPlusGearExists", "IsLowerMinusGearExists", "IsHighGearExists", "IsManualLowGear" };
+            static const int flagBit[5] = { kHasL, kHasLowPlus, kHasLowMinus, kHasH, kHasManual };
+            int at = 0;
+            for (int i = 0; i < 5; i++)
+                if (flags.defaulted & flagBit[i]) at += FmtCut(defaults + at, sizeof defaults - at, "%s%s", at ? ", " : "", flagName[i]);
+            Log(L"gearbox positions: %S reads IsLowerGearExists %d, IsLowerPlusGearExists %d, IsLowerMinusGearExists %d, IsHighGearExists %d, IsManualLowGear %d "
+                L"(by default: %S): the truck has %S", st.name, flags.low, flags.lowPlus, flags.lowMinus, flags.high, flags.manual, defaults[0] ? defaults : "none", has);
+        }
+        st.refusedSaid = 0;
+        st.shifterSaid = false;
+    }
+    PositionsJobDrop(g_positionsJob, st.vehicle, now);
+    // a fitted name other than the one read: 0 until it is read (N1), posted at the next peek
+    if (named && strcmp(nameNow, st.name)) st.missing = 0;
+    if (named && now - st.peekAt >= 1000 && strcmp(nameNow, st.name) && PositionsJobPost(g_positionsJob, st.vehicle, now)) st.peekAt = now;
+    return st.missing;
 }
 
 // Finds the driven truck's gearbox (its name, or its gears where the name is not read) and its own hold, and says so
@@ -6034,7 +6138,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         const bool shifterAsked = GearboxAskTake(ask) && own && shifterAsks;
         const TakeoverOrders orders = TakeoverStep(w.take, raw, level >= kGearboxModel && g_shiftGear != nullptr && GearboxHooked(), !own);
         const GearboxTruck boxTruck{ raw.gear, TruckTopGear(raw), isfinite(raw.speed) ? raw.speed : 0.0f, TruckEngineOn(raw), raw.stall,
-                                     raw.powerFactor, raw.automatic != 0, foot };
+                                     raw.powerFactor, raw.automatic != 0, foot, PositionsStep(w, m, s, own, GetTickCount64()) };
         if (orders.took)
         {
             GearboxPosTake(w.pos, boxTruck);
@@ -6279,6 +6383,23 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 Log(L"gearbox: up from L+ refused %.1f s after the walk got there (press again to go to 1st)", box.lowUpAfter);
             if (box.lowToFirst && w.pos.heldFromLow)
                 Log(L"gearbox: %S to 1st by hand: held, no back to D until the next shift", GearboxPosName(posWas));
+            // the positions the fitted gearbox lacks (BRIEF_positions_by_gearbox.md): a refused key once for each position
+            // and truck (review S5), a position it stood in, and the game's shifter giving one the read lacks (review S4)
+            const int refusedBit = GearboxPosHasBit(box.refusedPos);
+            if (box.keyRefused && !(w.positions.refusedSaid & refusedBit))
+            {
+                w.positions.refusedSaid |= refusedBit;
+                Log(L"gearbox: %S asked, this gearbox has no %S (Positions by gearbox)", GearboxPosName(box.refusedPos), GearboxPosName(box.refusedPos));
+            }
+            if (box.fitted) Log(L"gearbox: this gearbox has no %S, so %S (Positions by gearbox)", GearboxPosName(box.fittedFrom), GearboxPosName(w.pos.pos));
+            if (box.shifterMissing)
+            {
+                w.positions.missing = 0;
+                if (!w.positions.shifterSaid)
+                    Log(L"gearbox: the game shifter gave %S, which the read of this gearbox lacks, so the truck has all positions until its gearbox changes (Positions by gearbox)",
+                        GearboxPosName(box.refusedPos));
+                w.positions.shifterSaid = true;
+            }
             // a shift by hand into a numbered gear starts BackToA's timer; one on the game's shifter does not
             w.backHand = w.pos.pos == kPosGear && !w.pos.byShifter && (posWas != kPosGear || gearWas != w.pos.gear);
             if (box.why[0] && box.stall) Log(L"gearbox: %S (%d since it took the truck)%s", box.why, w.pos.stalls, stallCost);
@@ -6884,7 +7005,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         Log(L"probe: %S", ninth);
         if (w.take.driving)
         {
-            GearboxPosProbeText(w.pos, GearboxOptions{ s.requireClutch, s.requireGearHeld, s.skipNeutral, s.downStaysForward, s.walkSkipsLow }, raw.gear, tenth, sizeof tenth);
+            GearboxPosProbeText(w.pos, GearboxOptions{ s.requireClutch, s.requireGearHeld, s.skipNeutral, s.downStaysForward, s.walkSkipsLow }, raw.gear, tenth, sizeof tenth,
+                                w.positions.vehicle == w.refs.vehicle ? w.positions.missing : 0);
             Log(L"probe: %S", tenth);
         }
         if (manual)
@@ -8349,7 +8471,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
            a.springScale == b.springScale && a.dampingScale == b.dampingScale && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
-           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.engineBrake == b.engineBrake && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
+           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.engineBrake == b.engineBrake && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
            a.camberGainFront == b.camberGainFront && a.camberGainRear == b.camberGainRear && a.camberRestFront == b.camberRestFront && a.camberRestRear == b.camberRestRear;
 }
 
@@ -8382,7 +8504,7 @@ int wmain(int argc, wchar_t **argv)
     Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.hotDamageFrom == kTempRed && d.coldDamage == 5.0f && d.stallDamage == 5.0f && d.clutchBurn && d.clutchHeat == 60.0f &&
               d.springScale == 1.0f && d.dampingScale == 1.0f && d.extraTravel == 0.0f && d.frameFlex == 1.0f && d.twistRange == 1.0f,
           "defaults: the radiator's full airflow from 30 km/h, engine damage on from the red zone, 10 percent a minute for the heat and 5 for the cold");
-    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.walkSkipsLow && !d.ignoreShifter && d.backToA == 0 && d.gameGearDisplay == kGameGearOffOwn && d.input == kInputWheel && !d.powertrain && d.roadLoad && d.wheelCap == 150 && d.pushShare == 0 && d.engineBrake == 15.0f && d.modEngineSpeed && d.engineSpeedTop == 1.0f && d.roadCdA == 0.0f && d.engineShare == 50 && d.creep && !d.creepManual && !d.dieselFlutter,
+    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.walkSkipsLow && d.positionsByGearbox && !d.ignoreShifter && d.backToA == 0 && d.gameGearDisplay == kGameGearOffOwn && d.input == kInputWheel && !d.powertrain && d.roadLoad && d.wheelCap == 150 && d.pushShare == 0 && d.engineBrake == 15.0f && d.modEngineSpeed && d.engineSpeedTop == 1.0f && d.roadCdA == 0.0f && d.engineShare == 50 && d.creep && !d.creepManual && !d.dieselFlutter,
           "defaults: the oil as a second needle, warm after 5 minutes, too hot from 120 C; the standard turbo, a diesel's lift without the flutter; the creep on");
 
     // Air drag on by default (BRIEF_defaults_on.md): a missing key gives 1, an explicit 0 stays 0, the defaults give 1
@@ -8500,6 +8622,7 @@ int wmain(int argc, wchar_t **argv)
     c.boostProfile = kSpoolTwoStage;
     c.gearbox = kGearboxModel;
     c.requireClutch = c.requireGearHeld = c.skipNeutral = c.downStaysForward = c.walkSkipsLow = c.ignoreShifter = true;
+    c.positionsByGearbox = false;
     c.backToA = 12;
     c.gameGearDisplay = kGameGearOff;
     c.input = kInputKeys;
@@ -8526,7 +8649,7 @@ int wmain(int argc, wchar_t **argv)
                             c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springScale != d.springScale && c.dampingScale != d.dampingScale && c.extraTravel != d.extraTravel && c.frameFlex != d.frameFlex && c.twistRange != d.twistRange && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
                             c.demo != d.demo && c.probe != d.probe && c.keepLogs != d.keepLogs && c.soundVolume != d.soundVolume && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
-                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
+                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
     WriteIni(c);
     ReadIni(b);
     Check(allChanged, "ini: the test changes every setting from its default");
@@ -8547,7 +8670,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 140, "ini: the help text survives a write (140 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 142, "ini: the help text survives a write (142 comment lines)");
     // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
     {
         char none[32] = "x", tab[32] = {}, kept[32] = {};

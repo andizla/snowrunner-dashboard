@@ -784,6 +784,146 @@ int main()
         const bool fromH = k.pos == kPosGear && k.gear == 6;
         Check(first && standing && third && fromH, "gearbox: WalkSkipsLow, down from D in the 1st or standing gives the 1st held in each mix; from D in the 3rd the 2nd; from H the top");
     }
+    // positions by gearbox (BRIEF_positions_by_gearbox.md): the walk for the masks H and L only, L only, none and all,
+    // with Skip low range off and on and each mix of Skip neutral and Down stays forward, from R, N, L and the 1st, up
+    // and down, against the row as a list: R, N unless Skip neutral, each low position the gearbox has (with Skip low
+    // range only from inside the low range), then 1; Down stays forward refuses a down press onto N or R
+    {
+        const int masks[4] = { kHasLowPlus | kHasLowMinus, kHasLowPlus | kHasLowMinus | kHasH, kHasPositions, 0 };
+        int failures = 0;
+        for (int mi = 0; mi < 4; mi++)
+            for (int c = 0; c < 8; c++)
+            {
+                const int miss = masks[mi];
+                const GearboxOptions o = { false, false, (c & 1) != 0, (c & 2) != 0, (c & 4) != 0 };
+                const int starts[4] = { kPosR, kPosN, kPosLow, kPosGear };
+                for (int si = 0; si < 4; si++)
+                {
+                    const int start = starts[si];
+                    if (start == kPosLow && (miss & kHasL)) continue;
+                    for (int dir = -1; dir <= 1; dir += 2)
+                    {
+                        // the row as a list from this start
+                        const bool inside = start == kPosLow;
+                        int row[6], n = 0;
+                        row[n++] = kPosR;
+                        if (!o.skipNeutral) row[n++] = kPosN;
+                        const int lows[3] = { kPosLowMinus, kPosLow, kPosLowPlus };
+                        for (int l : lows)
+                            if (!(miss & GearboxPosHasBit(l)) && (!o.walkSkipsLow || inside)) row[n++] = l;
+                        row[n++] = kPosGear;
+                        int k = 0;
+                        while (k < n && row[k] != start) k++;
+                        if (k == n) // a start the row skips (N with Skip neutral): its neighbours by the row's order
+                        {
+                            k = 0;
+                            while (k < n && row[k] != kPosR) k++;
+                        }
+                        int want = start == kPosN && o.skipNeutral ? (dir > 0 ? row[1] : kPosR) : row[k + dir < 0 ? 0 : k + dir >= n ? n - 1 : k + dir];
+                        if (start == kPosGear && dir > 0) want = kPosGear; // up from the 1st is the 2nd
+                        if (dir < 0 && o.downStaysForward && (want == kPosN || want == kPosR)) want = start;
+                        GearboxPosModel m = {};
+                        GearboxTruck t = Truck(1);
+                        t.missing = miss;
+                        GearboxActions key = {};
+                        if (start == kPosR) key.r = true;
+                        else if (start == kPosN) key.n = true;
+                        else if (start == kPosLow) key.low = true;
+                        else key.gearPressed = 1;
+                        Pass(m, o, key, t);
+                        Pass(m, o, dir > 0 ? Up() : Down(), t);
+                        const bool ok = m.pos == want && (want != kPosGear || m.gear == (start == kPosGear && dir > 0 ? 2 : 1));
+                        if (!ok)
+                        {
+                            failures++;
+                            printf("     positions: missing %d, SkipNeutral %d, DownStaysForward %d, WalkSkipsLow %d: %s from %s gives %s %d, the row %s\n", miss, o.skipNeutral,
+                                   o.downStaysForward, o.walkSkipsLow, dir > 0 ? "up" : "down", GearboxPosName(start), GearboxPosName(m.pos), m.gear, GearboxPosName(want));
+                        }
+                    }
+                }
+            }
+        Check(!failures, "gearbox: positions by gearbox, the walk for H and L only, L only, none and all, with Skip low range, Skip neutral and Down stays forward, as the row of the positions the gearbox has");
+    }
+    // the keys for a missing position do nothing and say so; Range low needs L; the game's shifter is taken and says the
+    // read is wrong; up from L without L+ goes to the 1st at once, held
+    {
+        const GearboxOptions o = {};
+        GearboxPosModel m = {};
+        GearboxTruck t = Truck(1);
+        t.missing = kHasLowPlus | kHasLowMinus | kHasH;
+        GearboxActions g1 = {}, lm = {}, h = {}, rl = {}, l = {};
+        g1.gearPressed = 1;
+        lm.lowMinus = true;
+        h.h = true;
+        rl.rangeLow = true;
+        l.low = true;
+        Pass(m, o, g1, t);
+        const GearboxPosOrders noLm = Pass(m, o, lm, t);
+        const bool lmRefused = noLm.keyRefused && noLm.refusedPos == kPosLowMinus && !noLm.moved && m.pos == kPosGear;
+        const GearboxPosOrders noH = Pass(m, o, h, t);
+        const bool hRefused = noH.keyRefused && noH.refusedPos == kPosH && m.pos == kPosGear && t.gear == 1;
+        Pass(m, o, l, t);
+        const GearboxPosOrders up = Pass(m, o, Up(), t);
+        const bool upFirst = m.pos == kPosGear && m.gear == 1 && up.lowToFirst && m.heldFromLow;
+        GearboxPosModel k = {};
+        GearboxTruck u = Truck(1);
+        u.missing = kHasPositions;
+        Pass(k, o, g1, u);
+        const GearboxPosOrders noRange = Pass(k, o, rl, u);
+        const bool rangeRefused = noRange.keyRefused && noRange.refusedPos == kPosLow && k.pos == kPosGear;
+        GearboxPosModel q = {};
+        GearboxTruck v = Truck(1);
+        v.missing = kHasLowMinus;
+        GearboxActions ask = {};
+        GearboxActionsAsk(ask, GearboxAsk{ kAskLowMinus, 0 }, v.top);
+        const GearboxPosOrders shifter = Pass(q, o, ask, v);
+        const bool shifterTaken = shifter.shifterMissing && shifter.refusedPos == kPosLowMinus && q.pos == kPosLowMinus;
+        const GearboxPosOrders after = Pass(q, o, None(), v);
+        const bool shifterStays = q.pos == kPosLowMinus && !after.fitted; // the shifter wins: not bounced (review S4)
+        Check(lmRefused && hRefused && upFirst && rangeRefused && shifterTaken && shifterStays,
+              "gearbox: positions by gearbox, the L- and H keys of a gearbox without them do nothing and say so, Range low needs L, up from L without L+ is the 1st at once and held, "
+              "the game shifter's L- is taken and says the read is wrong, and stays");
+    }
+    // standing in a position that turns missing: L- and L+ go to L where it is there, else the 1st held; H to the top
+    {
+        const GearboxOptions o = {};
+        auto stand = [&](GearboxActions key, int miss, GearboxPosOrders &r, GearboxPosModel &m, GearboxTruck &t) {
+            m = GearboxPosModel{};
+            t = Truck(1);
+            Pass(m, o, key, t);
+            t.missing = miss;
+            r = Pass(m, o, None(), t);
+        };
+        GearboxActions lm = {}, lp = {}, h = {};
+        lm.lowMinus = true;
+        lp.lowPlus = true;
+        h.h = true;
+        GearboxPosOrders r = {};
+        GearboxPosModel m = {};
+        GearboxTruck t = {};
+        stand(lm, kHasLowMinus, r, m, t);
+        const bool toL = r.fitted && r.fittedFrom == kPosLowMinus && m.pos == kPosLow && fabsf(t.power - 0.45f) < 0.01f;
+        stand(lp, kHasLowPlus | kHasLowMinus, r, m, t);
+        const bool plusToL = r.fitted && m.pos == kPosLow;
+        stand(lm, kHasPositions, r, m, t);
+        const bool toFirst = r.fitted && m.pos == kPosGear && m.gear == 1 && m.heldFromLow && fabsf(t.power - 1.0f) < 0.01f;
+        stand(h, kHasH, r, m, t);
+        const bool toTop = r.fitted && m.pos == kPosGear && m.gear == 6 && t.gear == 6;
+        stand(lm, 0, r, m, t);
+        const bool zeroKeeps = !r.fitted && m.pos == kPosLowMinus;
+        Check(toL && plusToL && toFirst && toTop && zeroKeeps,
+              "gearbox: positions by gearbox, a truck in L- or L+ the gearbox lacks goes to L, with no low range to the 1st held, in H the gearbox lacks to the top; mask zero keeps L-");
+    }
+    // the probe's words for the positions
+    {
+        char a[40], b[40], c[40], d[40];
+        GearboxPosHasText(0, a, sizeof a);
+        GearboxPosHasText(kHasLowPlus | kHasLowMinus, b, sizeof b);
+        GearboxPosHasText(kHasPositions, c, sizeof c);
+        GearboxPosHasText(kHasL | kHasLowPlus | kHasLowMinus, d, sizeof d);
+        Check(!strcmp(a, "L-, L, L+ and H") && !strcmp(b, "L and H") && !strcmp(c, "none of L-, L, L+ and H") && !strcmp(d, "H"),
+              "gearbox: the positions in words for the log and the probe");
+    }
     // the game's shifter's request (Gearbox=2 with a pad or the keyboard) as that pass's action: R, N, H, A, a gear (past
     // the top H) and L; under RequireClutch it stalls as a key would; DownStaysForward does not hold it back; a gear it
     // picked stays under RequireGearHeld, as the shifter stays where it was put
@@ -1094,7 +1234,9 @@ int main()
                           twoOn = GearboxHooksWanted(2, true);
         const bool chosen = !none.shifts && !none.truckUpdate && one.shifts && !one.truckUpdate && twoOff.shifts && !twoOff.truckUpdate && twoOn.shifts &&
                             twoOn.truckUpdate && GearboxHooksWanted(1, false, true).truckUpdate && GearboxHooksWanted(2, false, true).truckUpdate &&
-                            !GearboxHooksWanted(0, true, true).truckUpdate; // ShiftOnGameThread: the truck update at 1 and 2 (review 17, step 1)
+                            !GearboxHooksWanted(0, true, true).truckUpdate && // ShiftOnGameThread: the truck update at 1 and 2 (review 17, step 1)
+                            GearboxHooksWanted(2, false, false, true).truckUpdate && !GearboxHooksWanted(1, false, false, true).truckUpdate &&
+                            !GearboxHooksWanted(0, false, false, true).truckUpdate; // PositionsByGearbox: the truck update at 2 (review M1)
         HooksGate g = {};
         const bool idle = GearboxGateStep(g, none) == 0 && !g.shifts;                   // Gearbox=0: nothing asked
         const bool shiftsNow = GearboxGateStep(g, one) == kGateAttachShifts;              // the tab turns 1 on mid-game
