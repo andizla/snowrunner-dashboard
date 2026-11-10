@@ -2048,6 +2048,45 @@ int main()
         setSpeed(0, 2.5f);
         drive(act, 0.5f, 0.016f);
         const bool cleared = Near(speed(0), 3.5f);
+        // the cap's part of the chassis push (the review of 46c52dd, M1): with the main body the chassis and PushShare 0,
+        // the wheels held at the cap; at 2 m/s nothing comes off the chassis's 0.5 m/s (the kick's, counted); at 10 m/s
+        // (1 - kept) of it does; at 10 m/s on a call that starts with + 0x70 apart from + 0x74 nothing
+        static uint8_t mainModel[0x300] = {};
+        putP(vehicle, 0x60, mainModel);
+        putP(mainModel, 0x230, chassis);
+        memcpy(act + 0x70, &gear, 4);
+        slot.cap = 3.0f;
+        slot.pushBack = 1.0f;
+        slot.at = 0;
+        TorqueCutPublish(&slot);
+        PushCounts q0 = {};
+        PushCountsGet(q0);
+        for (int i = 0; i < 3; i++) setSpeed(i, 2.5f);
+        putF(chassis, 0x230, 2.0f);
+        drive(act, 0.5f, 0.016f);
+        PushCounts q1 = {};
+        PushCountsGet(q1);
+        const float capSlow = getF(chassis, 0x230);
+        const bool capSlowWhole = Near(capSlow, 2.5f) && q1.kicks - q0.kicks == 1 && Near(speed(0), 3.0f);
+        for (int i = 0; i < 3; i++) setSpeed(i, 2.5f);
+        putF(chassis, 0x230, 10.0f);
+        drive(act, 0.5f, 0.016f);
+        const float capFast = getF(chassis, 0x230);
+        const bool capFastBack = capFast < 10.5f - 1e-3f && capFast >= 10.0f - 1e-4f;
+        const int otherGear = 0;
+        memcpy(act + 0x70, &otherGear, 4);
+        for (int i = 0; i < 3; i++) setSpeed(i, 2.5f);
+        putF(chassis, 0x230, 10.0f);
+        drive(act, 0.5f, 0.016f);
+        const bool capClunkWhole = Near(getF(chassis, 0x230), 10.5f);
+        memcpy(act + 0x70, &gear, 4);
+        slot.pushBack = 0.0f;
+        TorqueCutPublish(nullptr);
+        putP(vehicle, 0x60, nullptr);
+        if (!(capSlowWhole && capFastBack && capClunkWhole))
+            printf("     the cap's part of the push: at 2 m/s the chassis %.3f (whole 2.5), at 10 m/s %.3f (some off 10.5), the clunk at 10 m/s whole: %d\n", capSlow, capFast,
+               capClunkWhole);
+        Check(capSlowWhole && capFastBack && capClunkWhole, "the cap's part of the chassis push: nothing at 2 m/s (the kick's push, counted), (1 - kept) at 10 m/s, nothing on the clunk of engaging a gear");
         g_driveDoes = nullptr;
         char line[600];
         snprintf(line, sizeof line, "wheel cap in the drive's hook: a downshift at 2 x the cap waits (M3); armed, two driven wheels held at %.3f and %.3f (an axle of length 2 and a unit one, "
@@ -2063,8 +2102,8 @@ int main()
     // the chassis push in the wheels' drive's hook (BRIEF_chassis_push.md): four driven wheels, two on the chassis, one on a
     // rocker, one on a fixed body (an inverse mass of 0); the stand-in drive pushes each parent by 1 m/s forward and 0.5
     // rad/s of turn. With the factor's assumption published (PushGive): the shove (B4 0.9 over an assumed 0.25, F 3: k 2/3,
-    // the floor of the game's own push), steady (B4 at the assumption: nothing), the kick path at 2 m/s (the same k,
-    // counted), a damaged engine (F 1.5), each parent by its own change, the fixed body skipped; under the cut nothing; a
+    // the floor of the game's own push), steady (B4 at the assumption: nothing), the kick path at 2 m/s, the clunk and
+    // the stutter at 10 m/s (whole, counted: the kick carries no factor), a damaged engine (F 1.5), each parent by its own change, the fixed body skipped; under the cut nothing; a
     // stale publish or PushShare 100 nothing
     {
         static uint8_t vehicle[0x800] = {}, act[0x100] = {}, models[4][0x300] = {}, wheels[4][0x200] = {}, chassis[0x300] = {}, rocker[0x300] = {}, fixedBody[0x300] = {},
@@ -2087,6 +2126,7 @@ int main()
         putF(chassis, 0x170, 1.0f); // its forward axis: x
         int gear = 3;
         memcpy(act + 0x74, &gear, 4);
+        memcpy(act + 0x70, &gear, 4);
         for (int i = 0; i < 4; i++)
         {
             list[i] = (uint64_t)(uintptr_t)models[i];
@@ -2144,7 +2184,23 @@ int main()
         drive(act, 1.0f, 0.016f);
         PushCounts p2 = {};
         PushCountsGet(p2);
-        const bool kick = Near(getF(chassis, 0x230), 3.0f - k) && p2.kicks - p1.kicks == 1;
+        const bool kick = getF(chassis, 0x230) == 3.0f && p2.kicks - p1.kicks == 1;
+        // at 10 m/s, a call that starts with + 0x70 apart from + 0x74 (the clunk of engaging 1st or R) or with + 0xB8 over
+        // 1e-4 (the stutter): the kick path's push, whole, counted
+        const int clunkGear = 1;
+        memcpy(act + 0x70, &clunkGear, 4);
+        reset(10.0f);
+        drive(act, 1.0f, 0.016f);
+        const bool clunk = getF(chassis, 0x230) == 11.0f;
+        memcpy(act + 0x70, &gear, 4);
+        putF(act, 0xB8, 0.5f);
+        reset(10.0f);
+        drive(act, 1.0f, 0.016f);
+        PushCounts p3 = {};
+        PushCountsGet(p3);
+        const bool stutter = getF(chassis, 0x230) == 11.0f && p3.kicks - p2.kicks == 2;
+        putF(act, 0xB8, 0.0f);
+        const bool kicks = kick && clunk && stutter;
         // a damaged engine: the game's own share 0.5, the factor written 0.75: F 1.5
         PushGive((uint64_t)(uintptr_t)act, (uint64_t)(uintptr_t)vehicle, 0.25f, 0.75f / 0.5f, 1.0f);
         reset(10.0f);
@@ -2172,11 +2228,11 @@ int main()
         PushGive(0, 0, 0.0f, 1.0f, 0.0f);
         char line[500];
         snprintf(line, sizeof line, "chassis push in the drive's hook: the shove at 10 m/s (B4 0.9 over 0.25, F 3) k %.3f on the chassis and the rocker, their turn with it, the fixed body skipped; "
-                                    "steady nothing; the kick path at 2 m/s the same k, counted; a damaged engine k %.3f; under the cut nothing; PushShare 100 nothing",
+                                    "steady nothing; the kick path at 2 m/s, the clunk and the stutter at 10 m/s whole, counted; a damaged engine k %.3f; under the cut nothing; PushShare 100 nothing",
                  p1.k, 1.0f - 1.0f / 1.5f);
-        Check(CreepHooked() && shove && shoveCounts && steady && kick && damaged && heldGear && shareAll, line);
-        if (!(shove && shoveCounts && steady && kick && damaged && heldGear && shareAll))
-            printf("     %d %d %d %d %d %d %d; chassis %.3f rocker %.3f; k %.3f fx %.3f given %.1f back %.1f kicks %ld\n", shove, shoveCounts, steady, kick, damaged, heldGear, shareAll,
+        Check(CreepHooked() && shove && shoveCounts && steady && kicks && damaged && heldGear && shareAll, line);
+        if (!(shove && shoveCounts && steady && kicks && damaged && heldGear && shareAll))
+            printf("     %d %d %d %d %d %d %d; chassis %.3f rocker %.3f; k %.3f fx %.3f given %.1f back %.1f kicks %ld\n", shove, shoveCounts, steady, kicks, damaged, heldGear, shareAll,
                    getF(chassis, 0x230), getF(rocker, 0x230), p1.k, p1.fx, p1.given - p0.given, p1.back - p0.back, p2.kicks - p1.kicks);
     }
 

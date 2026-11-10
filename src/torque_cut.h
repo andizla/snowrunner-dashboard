@@ -548,6 +548,15 @@ inline float PushTakeBack(float b4, float throttle, float assumed, float factorO
     const float k = 1.0f - fmaxf(1.0f / fx, 1.0f / factorOver);
     return isfinite(k) ? CutClamp01(k) * CutClamp01(back) : 0.0f;
 }
+// Whether a step's push may be taken back at all (the Reviewer's M1 of the review of 46c52dd): the kick path's torque
+// carries no factor (c42859: no + 0xCC, no B4), so its push is the game's own and stays whole. Nothing at a forward speed
+// of 3 m/s or under (s is 0 there: the only push is the kick's) or where it is not read; nothing on a call that starts
+// with action + 0x70 apart from + 0x74 (the clunk on engaging 1st or R, c41f03) or with + 0xB8 above 1e-4 (c41e35: every
+// call there takes the kick path).
+inline bool PushMayTake(float forward, int engagedWas, int gear, float stutter)
+{
+    return isfinite(forward) && fabsf(forward) > 3.0f && engagedWas == gear && isfinite(stutter) && !(stutter > 1e-4f);
+}
 // The cap's part (its M4, folded in here): where the guard bound this step, (1 - kept) of the push of each parent body
 // that carries a clamped wheel, times back; nothing where none bound.
 inline float PushCapBack(bool clamped, float kept, float back)

@@ -393,7 +393,10 @@ GameFall at the factor's own x times the pedal; F is the factor over the game's 
 part; k = (1 − max(1/F_excess, 1/F)) · (1 − <code>PushShare</code>/100), and 0 where F_excess or F is not above 1
 (<code>PushTakeBack</code>). The floor 1/F keeps the game's own push for the game's torque whole. In a held gear B4 is written 1 and the
 cut's answer is at most the stock, so nothing comes off there unless the guard bound: then (1 − kept) of the push of each parent that
-carries a clamped wheel (<code>PushCapBack</code>). Every call is measured, the kick path under 3 m/s too. The probe gives a second's
+carries a clamped wheel (<code>PushCapBack</code>). The kick path's torque has no factor in it (c42859: no + 0xCC and no B4), so its push
+is the game's own and stays whole: nothing comes off at a forward speed of 3 m/s or under, where s is 0 and the only push is the kick's,
+nor on a call that starts with action + 0x70 apart from + 0x74 (the clunk of engaging 1st or R, c41f03) or with + 0xB8 above 1e-4
+(c41e35, the kick path on every call); those steps are counted as kicks (<code>PushMayTake</code>). The probe gives a second's
 push and the share taken back, k, F_excess, F, B4, the forward speed and the kick path's steps.</p>
 <h3>The torque cut (a gear held by hand)</h3>
 <p>The game's torque per gear is one function, <code>bool(vehicle, int gear, float* torque, float* start, float* a, float* top, float* gearSpeed)</code>, found by

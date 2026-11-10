@@ -771,11 +771,13 @@ struct PushRead
     bool capWheel[kPushBodies]; // the body carries a wheel the cap held this step
     int n;
     float forward; // the truck's forward speed, m/s (the main body, as d73120)
+    bool may;      // PushMayTake at the call's start: over 3 m/s, no clunk (+ 0x70 = + 0x74), no stutter (+ 0xB8)
 };
 static bool PushReadBefore(const void *vehicle, const void *action, PushRead &r)
 {
     r.n = 0;
     r.forward = NAN;
+    r.may = false;
     __try
     {
         const uint8_t *v = (const uint8_t *)vehicle;
@@ -813,6 +815,8 @@ static bool PushReadBefore(const void *vehicle, const void *action, PushRead &r)
             CapGet3(main + 0x170, f);
             r.forward = CapDot(vel, f);
         }
+        const uint8_t *a = (const uint8_t *)action;
+        r.may = PushMayTake(r.forward, *(const volatile int *)(a + 0x70), *(const volatile int *)(a + 0x74), *(const volatile float *)(a + 0xB8));
         return true;
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
@@ -842,6 +846,7 @@ static void PushTake(PushRead &r, float kAll, float kCap)
 {
     float given = 0.0f, taken = 0.0f;
     bool any = false;
+    if (!r.may) kAll = kCap = 0.0f; // the kick path's push carries no factor: the game's own, whole
     __try
     {
         for (int i = 0; i < r.n; i++)
@@ -867,8 +872,9 @@ static void PushTake(PushRead &r, float kAll, float kCap)
     }
     InterlockedIncrement(&g_pushSteps);
     if (any) InterlockedIncrement(&g_pushBacks);
-    // the kick path pushes at any speed: a push measured under 3 m/s, where s is 0, is the kick's
-    if (given > 0.0f && isfinite(r.forward) && fabsf(r.forward) < 3.0f) InterlockedIncrement(&g_pushKicks);
+    // the kick path pushes at any speed: a push measured at 3 m/s or under, where s is 0, is the kick's, and so is one on
+    // a call that started with the clunk or the stutter; counted, never taken back
+    if (given > 0.0f && !r.may) InterlockedIncrement(&g_pushKicks);
     CapAdd(g_pushGivenBits, given);
     CapAdd(g_pushBackBits, taken);
     InterlockedExchange(&g_pushK, FloatBits(fmaxf(kAll, kCap)));

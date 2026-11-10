@@ -4451,14 +4451,16 @@ int main(int argc, char **argv)
         body.w1 = { 0.0f, 0.5f, 0.0f };
         body.invMass = 0.001f;
         const bool moved = PushBodyBack(body, 0.25f, pv, pw) && nearly(pv.x, 10.75f) && nearly(pv.z, 0.15f) && nearly(pw.y, 0.375f);
-        const bool ok = nearly(shove, 1.0f - 1.0f / 2.25f) && nearly(pushAfter, 1.2f) && pSteady == 0.0f && nearly(floorBinds, 1.0f - 1.0f / 3.0f) &&
+        const bool gate = PushMayTake(10.0f, 3, 3, 0.0f) && PushMayTake(-10.0f, -1, -1, 0.0f) && !PushMayTake(3.0f, 3, 3, 0.0f) && !PushMayTake(2.0f, 3, 3, 0.0f) &&
+                          !PushMayTake(NAN, 3, 3, 0.0f) && !PushMayTake(10.0f, 1, 3, 0.0f) && !PushMayTake(10.0f, 3, 3, 0.5f) && !PushMayTake(10.0f, 3, 3, NAN);
+        const bool ok = gate && nearly(shove, 1.0f - 1.0f / 2.25f) && nearly(pushAfter, 1.2f) && pSteady == 0.0f && nearly(floorBinds, 1.0f - 1.0f / 3.0f) &&
                         nearly(0.9f * 3.0f * (1.0f - floorBinds), 0.9f) && nearly(leadsK, 1.0f - 1.0f / 3.6f) && nearly(pDamaged, 1.0f - 1.0f / 1.5f) && atOwn == 0.0f &&
                         nearly(half, 0.5f * shove) && none == 0.0f && throttleLow == 0.0f && PushTakeBack(NAN, 1.0f, 0.4f, 3.0f, 1.0f) == 0.0f &&
                         nearly(PushCapBack(true, 0.25f, 1.0f), 0.75f) && PushCapBack(false, 0.25f, 1.0f) == 0.0f && nearly(PushCapBack(true, 0.25f, 0.5f), 0.375f) && skipped && moved;
         char line[600];
-        snprintf(line, sizeof line, "chassis push: the factor stepping to 3 at a GameFall of 0.4 with B4 0.9: k %.3f, the push %.2f (the mod's pull 1.20, not 2.70); pSteady k %.1f; F_excess 3.6 "
-                                    "over F 3: k %.3f, down to the game's own push 0.90; F 6: k %.3f (1 - 1 / 3.6); a pDamaged engine's 0.75 over 0.5: k %.3f; at the game's own 0; "
-                                    "PushShare 50 halves it; the cap's part 0.75 at kept 0.25; a fixed body skipped; v and the turn moved back by k",
+        snprintf(line, sizeof line, "chassis push: the factor stepping to 3 at a GameFall of 0.4 with B4 0.9: k %.3f, the push %.2f (the mod's pull 1.20, not 2.70); steady k %.1f; F_excess 3.6 "
+                                    "over F 3: k %.3f, down to the game's own push 0.90; F 6: k %.3f (1 - 1 / 3.6); a damaged engine's 0.75 over 0.5: k %.3f; at the game's own 0; "
+                                    "PushShare 50 halves it; the cap's part 0.75 at kept 0.25; a fixed body skipped; v and the turn moved back by k; nothing at 3 m/s or under, on the clunk or the stutter",
                  shove, pushAfter, pSteady, floorBinds, leadsK, pDamaged);
         Check(ok, line);
     }
