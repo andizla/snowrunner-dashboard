@@ -1729,7 +1729,9 @@ static void SPOTTER_CDECL SpotterFrame(const SpotterPresentInfo *info, void *)
                info->size >= offsetof(SpotterPresentInfo, flags) ? info->rtvFormat : 0u);
     }
     FrameGuarded((IDXGISwapChain *)info->swapChain);
-    SpotterInputFollow();
+    // a fault in that frame gave the claim back (FrameLetGo): it is not taken again for a menu that no longer draws
+    // (the review of 114, F1)
+    if (!g_broken) SpotterInputFollow();
 }
 
 // The overlay draws on its own route again, and why.
