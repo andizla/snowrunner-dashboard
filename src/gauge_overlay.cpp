@@ -145,7 +145,10 @@ static void OnFrame()
     const float dt = fminf(fmaxf(io.DeltaTime, 0.0f), 0.1f);
     DrawWarnings(view, io.DisplaySize.x, io.DisplaySize.y, dt);
     DrawSuspension(view, io.DisplaySize.x, io.DisplaySize.y);
-    alpha = fminf(fmaxf(alpha + (view.show ? dt : -dt) / 0.15f, 0.0f), 1.0f);
+    // hidden while the menu shows a tab this mod does not draw (BRIEF_full_pass_gameplay.md part 3): it would lie over
+    // that tab where the two overlap; on the Gameplay tabs it stays, so Size and the layout show as they are set
+    const bool shows = view.show && !NgOtherTabShown();
+    alpha = fminf(fmaxf(alpha + (shows ? dt : -dt) / 0.15f, 0.0f), 1.0f);
     // the mod's thread leaves a new state 20 times a second: the two big needles glide from one to the next
     const float speedWas = shown.speedKmh, rpmWas = shown.rpm;
     const bool wasShown = alpha > 0.0f;

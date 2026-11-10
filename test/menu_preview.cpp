@@ -178,7 +178,9 @@ static void Log(const wchar_t *fmt, ...)
     wprintf(L"\n");
 }
 
-static bool Run(const wchar_t *out, int w, int h)
+// One swap chain of w x h, 8 frames presented, the last one's picture in <out>\menu_<h>p<tag>.png. resized: where given,
+// the swap chain's ResizeBuffers result after the frames (the fault test: refused while the overlay keeps a reference).
+static bool Run(const wchar_t *out, int w, int h, const wchar_t *tag = L"", HRESULT *resized = nullptr)
 {
     const HWND wnd = CreateWindowExW(0, L"STATIC", L"menu preview", WS_OVERLAPPEDWINDOW, 0, 0, w, h, nullptr, nullptr, nullptr, nullptr);
     DXGI_SWAP_CHAIN_DESC sd = {};
@@ -213,11 +215,12 @@ static bool Run(const wchar_t *out, int w, int h)
     for (int i = 0; i < 8; i++)
     {
         wchar_t path[MAX_PATH];
-        swprintf_s(path, L"%s\\menu_%dp.png", out, h);
+        swprintf_s(path, L"%s\\menu_%dp%s.png", out, h, tag);
         if (i == 7) g_shotPath = path;
         sc->Present(0, 0);
         Sleep(20);
     }
+    if (resized) *resized = sc->ResizeBuffers(0, 0, 0, DXGI_FORMAT_UNKNOWN, 0);
     ctx->Release();
     dev->Release();
     sc->Release();
@@ -312,7 +315,51 @@ int wmain(int argc, wchar_t **argv)
     strcpy_s(sh->slots[1].tab, "Tire Inflation");
     sh->slots[1].ready = 1;
     sh->open = 1;
+#ifdef NG_FAULT_TEST
+    // menu_preview_fault.exe <out dir> <font dir> 1|2: a fault forced in the client's frame (1) or with the overlay's
+    // target bound (2); after it the overlay is broken and the swap chain resizes, as the game does on a window change
+    // (the review of 114, M4: ResizeBuffers is refused while the overlay keeps a reference to the back buffer)
+    if (argc > 3)
+    {
+        const int where = _wtoi(argv[3]);
+        NgFaultArm(where);
+        HRESULT resized = E_FAIL;
+        Run(argv[1], 1920, 1080, where == 1 ? L"_fault1" : L"_fault2", &resized);
+        const bool ok = NgOverlayBroken() && SUCCEEDED(resized);
+        printf("%s a fault at point %d: the overlay stops (%d) and the swap chain resizes after it (%08lx)\n", ok ? "ok  " : "FAIL", where,
+               NgOverlayBroken() ? 1 : 0, (unsigned long)resized);
+        printf(ok ? "MENU PREVIEW OK\n" : "MENU PREVIEW FAILED (1)\n");
+        CoUninitialize();
+        return ok ? 0 : 1;
+    }
+#endif
     Run(argv[1], 1920, 1080);
+    // the cluster hides under a tab this mod does not draw (BRIEF_full_pass_gameplay.md part 3, S7): the menu closed,
+    // on this mod's tab, on another mod's tab, and open with no tab chosen yet
+    {
+        int own = -1;
+        for (int i = 0; i < 8; i++)
+            if (sh->slots[i].used && !strcmp(sh->slots[i].tab, "Gameplay")) own = i;
+        const LONG chosenWas = sh->chosen;
+        sh->open = 0;
+        sh->chosen = 1;
+        const bool closed = !NgOtherTabShown();
+        sh->open = 1;
+        sh->chosen = own;
+        const bool ours = own >= 0 && !NgOtherTabShown();
+        sh->chosen = 1;
+        const bool other = NgOtherTabShown();
+        Run(argv[1], 1920, 1080, L"_other_tab"); // the cluster faded out under the other tab
+        sh->chosen = -1;
+        const bool none = !NgOtherTabShown();
+        sh->chosen = chosenWas;
+        const bool ok = closed && ours && other && none;
+        printf("%s the other-tab test: closed %d, own tab %d, another tab %d, no tab chosen %d (1 is right)\n", ok ? "ok  " : "FAIL", closed, ours, other, none);
+        if (!ok) g_failed++;
+        const bool stamped = NgLastFrameDrawn() != 0 && GetTickCount64() - NgLastFrameDrawn() < 1000 && !NgOverlayBroken();
+        printf("%s the last frame drawn is stamped and the overlay is not broken\n", stamped ? "ok  " : "FAIL");
+        if (!stamped) g_failed++;
+    }
     // the window's place is the shared one: a new size starts it in the middle again. The overlay keeps to the swap
     // chain it drew on until that one has not presented for 3 s, as when the game makes its own anew
     Sleep(3100);

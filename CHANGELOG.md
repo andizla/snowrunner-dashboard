@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- The cluster hides while the NEXT GEN menu shows another mod's tab, so it no longer lies over that tab. On the Gameplay tabs and the Graphics tab it stays, so a change to Size or the layout shows at once.
+- A fault in the menu's drawing now gives back what the overlay held: the game's render targets and its back buffer, and the mouse and keys claimed through Spotter. Before, the next window change could fail with the overlay stopped, and Spotter kept the input for the closed menu.
 - A long tip on the Gameplay tab is wrapped and stays inside the screen. Before, a line ran past the screen edge and was cut.
 - A settings save no longer stops the mod for up to a second. Gauges.ini is written by a thread of its own, one save at a time with the newest values, so the needles, the torque cut and the engine speed go on meanwhile. Reload ini waits for a running save. The bindings go the same way.
 - The texts of the menu tabs and the cluster carry no apostrophe and no contraction: "Game gearbox", "does not". A test keeps them so.
