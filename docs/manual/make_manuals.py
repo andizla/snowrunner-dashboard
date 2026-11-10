@@ -264,7 +264,7 @@ as a governor does. In L-, L, L+ and R no driven wheel can run more than half ag
 engine speed of its own to keep: it works one out each time from the pedal and its pull, and with the foot off it is idle. So the cockpit's
 needles stayed at idle while the mod's engine turned. Now the game reads the mod's needle while the mod drives the truck:
 idle is the game's idle and the redline its floored mark (<code>EngineSpeedTop</code> moves that top, 1 by default). The cockpit's needles,
-the steering wheel's rev lights, the effects and the exhaust follow the mod's engine. Fuel use
+the steering wheel's rev lights, the engine sound, the effects and the exhaust follow the mod's engine. The engine sound of the game goes partly by the engine speed and partly by how long the pedal has been held in the gear: the engine speed gives about two thirds of the rise of the sound in 1st, R and N, 40 percent in 2nd and a quarter from 3rd up. So from 3rd up the sound moves less than the needle, and keeps rising for a moment after the needle holds. Fuel use
 and the stall keep the game rules, and in a gear held by hand they follow the pull of the mod engine. Untick it, or turn Real engine off, for the game's own.</p>
 <p><b>Air drag</b> (<code>RoadLoad</code>, the Power tab's "Air drag", on by default, acts with <code>Powertrain=1</code>; untick it to turn it off). The game already slows
 a rolling truck by itself, more the faster it goes. Air drag adds the air's share on top of that. With this on the mod takes the air's drag off the engine's pull, more the

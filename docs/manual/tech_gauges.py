@@ -456,6 +456,17 @@ its last value and count by return address. Gauges.log says "engine speed: the g
 three places (or why it was not found, "so the game's engine speed stays its own"), "engine speed: the game's engine speed hooked at +..."
 once hooked, and with the probe "probe: engine speed: the mod's ..." once a second, each caller by its return address with its calls and
 the game's last value.</p>
+<p><b>The engine sound</b> (BRIEF_drivetrain_1b_sound.md). The sound's script reads TruckInput.velocityFactor (the data block + 0x48),
+which the C++ behind Truck.GetTruckInput (b23fa0 on 6adb8627, found once by its first bytes, <code>TruckInputFind</code>) fills from
+the chassis speed's place in the stock gear band, and 0.5 in N. A Detours hook, attached with every other thread suspended once Powertrain
+and ModEngineSpeed are on with a truck driven, calls the game's own. Then, while the engine speed's slot names the vehicle, is fresh and
+the engine is on, it resolves the handle in *out through the game's own helper (the target of the call at + 0x8F2; it knows the object's
+kinds, so the mod uses no mask of its own) and writes <code>SoundVelocityFactor</code>: the share × (1 − 0.714 stall)², with the stall
+seconds at vehicle + 0x11C, and 0.5 + 0.5 × that in N (the data block's gear 0), so N idles at the game's own 0.5. The spline's x is
+G + w T + (1 − w) velocityFactor with w = clamp(0.25 G + 0.35, 0, 0.75), so the share carries 65% of the stretch in 1st, N, R and H
+(which the game reports as 1), 40% in 2nd and 25% from 3rd up; the time on the gear T stays the game's. Gauges.log names the function
+and the helper at the first truck and the hook once it is in; the probe gives the game's velocityFactor beside the mod's, the gear,
+and a second's calls, writes, calls not ours and handles not resolved.</p>
 <h3>Air drag (RoadLoad)</h3>
 <p>The game already slows a rolling truck by itself, more the faster it goes. The air's drag goes on top of that. With <code>RoadLoad=1</code> and the engine handed to the game, the mod takes it off the lift
 (<code>RoadLoadAccel</code>, <code>RoadLoadShare</code>, models.h) as a deceleration over the game's own acceleration in that gear at

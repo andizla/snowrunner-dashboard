@@ -395,6 +395,54 @@ inline bool EngineSpeedFind(const uint8_t *code, size_t from, size_t to, EngineS
     return true;
 }
 
+// ---- the game's truck input, for the engine sound (BRIEF_drivetrain_1b_sound.md) ----
+// Handle *(vehicle rcx, Handle *out rdx): the C++ behind Truck.GetTruckInput (b23fa0 in 6adb8627, b24030 in 6ab52f5d),
+// found once by its first bytes. The helper that resolves a handle to its data block (b62290 and b62320) stands in five
+// copies of one template, so its place is the target of the function's call at + 0x8F2, the same on both images.
+static const char *const kTruckInputPattern = "48 8B C4 48 89 50 10 55 53 56 57 41 54 41 55 41 56 41 57 48 8D 6C 24 98 48 81 EC 68 01 00 00 48 C7 45 E8 FE FF FF FF "
+                                              "0F 29 70 A8 0F 29 78 98 44 0F 29 40 88 4C 8B E2 48 8B F9 33 F6 89 74 24 48";
+static const size_t kTruckInputHelperAt = 0x8F2;
+struct TruckInputPlace
+{
+    size_t input;    // the function's offset in the code, 0 = not found
+    size_t helper;   // the handle's helper, the target of the call at input + kTruckInputHelperAt
+    const char *why; // what was not found (a string literal), "" when both were
+};
+inline bool TruckInputFind(const uint8_t *code, size_t from, size_t to, TruckInputPlace &out)
+{
+    out = TruckInputPlace{};
+    out.why = "";
+    uint8_t bytes[kPatternMax], mask[kPatternMax];
+    size_t at = 0;
+    int count = 0;
+    const int length = PatternParse(kTruckInputPattern, bytes, mask);
+    if (!PatternFind(code, from, to, bytes, mask, length, at, count) || count != 1)
+    {
+        if (count > 1)
+        {
+            out.why = "the truck input's bytes stand more than once";
+            return false;
+        }
+        // behind a jump: the rest of its bytes, after the span a hook covers
+        uint8_t rest[kPatternMax];
+        memcpy(rest, mask, sizeof rest);
+        memset(rest, 0, (size_t)kHookSpan);
+        out.why = PatternFind(code, from, to, bytes, rest, length, at, count) && count == 1 && (code[at] == 0xE9 || (code[at] == 0xFF && code[at + 1] == 0x25))
+                      ? "another mod holds the truck input" : "the truck input was not found";
+        return false;
+    }
+    const size_t call = at + kTruckInputHelperAt;
+    const size_t helper = call + 5 <= to ? CallTarget(code, from, to, call) : SIZE_MAX;
+    if (helper == SIZE_MAX)
+    {
+        out.why = "the truck input's call of its handle helper was not found";
+        return false;
+    }
+    out.input = at;
+    out.helper = helper;
+    return true;
+}
+
 // ---- the game's gear torque, for the torque cut (BRIEF_drivetrain_2_torque_cut.md) ----
 // bool(vehicle, int gear, float *torque, float *start, float *a, float *top, float *gearSpeed): the gear's torque and
 // its curve (review\own_drivetrain_research.md A; RVA d73dc0 in 6adb8627, d73e50 in 6ab52f5d), found by its first

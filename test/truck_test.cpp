@@ -114,6 +114,38 @@ __declspec(noinline) static float SpeedFromCockpit(SpeedFn fn, void *vehicle)
     return r;
 }
 
+// A stand-in for Truck.GetTruckInput (the engine sound, BRIEF_drivetrain_1b_sound.md): a fresh data block with the gear
+// g_inputFakeGear and velocityFactor 0.3, its handle tagged in *out; and for its helper, which masks the tag off and gives
+// the object + 8, or null while g_helperNull is set.
+alignas(16) static uint8_t g_inputObj[0x100] = {};
+static volatile int g_inputFakeGear = 3;
+static volatile bool g_helperNull = false;
+__declspec(noinline) static void **FakeTruckInput(void *vehicle, void **out)
+{
+    (void)vehicle;
+    const int gear = g_inputFakeGear;
+    const float vf = 0.3f;
+    memcpy(g_inputObj + 8, &gear, 4);
+    memcpy(g_inputObj + 8 + 0x48, &vf, 4);
+    *out = (void *)((uintptr_t)g_inputObj | 1);
+    return out;
+}
+__declspec(noinline) static uint8_t *FakeHandleData(void **handle)
+{
+    if (g_helperNull) return nullptr;
+    return (uint8_t *)((uintptr_t)*handle & ~(uintptr_t)0xF) + 8;
+}
+typedef void **(*InputFn)(void *, void **);
+__declspec(noinline) static float InputFromScript(InputFn fn, void *vehicle)
+{
+    void *handle = nullptr;
+    fn(vehicle, &handle);
+    float vf;
+    memcpy(&vf, g_inputObj + 8 + 0x48, 4);
+    g_speedSink = vf;
+    return vf;
+}
+
 // A stand-in for the game's gear torque (the torque cut, BRIEF_drivetrain_2_torque_cut.md): every output zeroed first,
 // any pointer may be null, false for gear 0; else the torque 2 (3 in reverse), the start 0.25, a 4, the top 13 and the
 // gear speed 3. Its last caller's return address is kept, so a caller's place can be learned before the hook is in.
@@ -521,6 +553,15 @@ static void RealImageTest()
     snprintf(line, sizeof line, "places in a real image (stamp %08x): the game's engine speed at %zx, its fuel's call back at %zx, its stall's at %zx%s%s", stamp, speed.speed,
              speed.fuelBack, speed.stallBack, speedFound ? "" : "; ", speed.why);
     Check(speedRight, line);
+    // Truck.GetTruckInput and its handle helper, the target of its call at + 0x8F2, for the engine sound (the Researcher's
+    // b23fa0 and b62290 on 6adb8627, b24030 and b62320 on 6ab52f5d)
+    TruckInputPlace input;
+    const bool inputFound = TruckInputFind(image.data(), from, to, input);
+    const bool inputRight = now ? inputFound && input.input == 0xb23fa0 && input.helper == 0xb62290
+                          : before ? inputFound && input.input == 0xb24030 && input.helper == 0xb62320 : true;
+    snprintf(line, sizeof line, "places in a real image (stamp %08x): the game's truck input at %zx, its handle helper at %zx%s%s", stamp, input.input, input.helper,
+             inputFound ? "" : "; ", input.why);
+    Check(inputRight, line);
     // the gear torque and the drive's call of it, for the torque cut (the research's d73dc0 and the drive's start + 0xCA on
     // 6adb8627, d73e50 on 6ab52f5d); on another build found once
     GearTorquePlace gearTorque;
@@ -1826,6 +1867,117 @@ int main()
               "touching the game's own; the fuel's and the stall's callers, another vehicle, the engine off, a cleared slot and a stale one get the game's "
               "own; the probe calls the game's own first and keeps its value by caller");
         if (!hooked) printf("     %s\n", why);
+    }
+
+    // the engine sound (BRIEF_drivetrain_1b_sound.md with the Reviewer's addenda): the hook on a function of
+    // GetTruckInput's signature writes velocityFactor for the published vehicle with its engine on, the share in a gear
+    // (1st, 3rd and R alike), 0.5 + 0.5 x it in N, with the stall's dip; the gear stays the game's; another vehicle, the
+    // engine off, no slot and a stale one keep the game's 0.3; a null from the helper writes nothing and is counted
+    {
+        static uint8_t truck[0x800] = {}, soundOther[0x800] = {};
+        truck[0x768] = soundOther[0x768] = 1;
+        auto putF = [](uint8_t *p, size_t at, float v) { memcpy(p + at, &v, 4); };
+        auto gearNow = []() {
+            int g;
+            memcpy(&g, g_inputObj + 8, 4);
+            return g;
+        };
+        InputFn volatile fn = &FakeTruckInput;
+        char why[160] = "";
+        const bool hooked = TruckInputHook((uintptr_t)&FakeTruckInput, (uintptr_t)&FakeHandleData, why, sizeof why);
+        EngineSpeedPublish(nullptr, 0.0f);
+        TruckInputCounts c0 = {};
+        TruckInputCountsGet(c0);
+        const bool unpublished = InputFromScript(fn, truck) == 0.3f;
+        EngineSpeedPublish(truck, 0.6f);
+        g_inputFakeGear = 3;
+        const bool ours = InputFromScript(fn, truck) == 0.6f && gearNow() == 3;
+        g_inputFakeGear = 0;
+        const float neutralRev = InputFromScript(fn, truck);
+        EngineSpeedPublish(truck, 0.0f);
+        const bool neutralIdle = InputFromScript(fn, truck) == 0.5f && gearNow() == 0;
+        EngineSpeedPublish(truck, 0.6f);
+        g_inputFakeGear = 1;
+        const bool first = InputFromScript(fn, truck) == 0.6f;
+        g_inputFakeGear = -1;
+        const bool reverse = InputFromScript(fn, truck) == 0.6f && gearNow() == -1;
+        g_inputFakeGear = 3;
+        putF(truck, 0x11C, 0.5f);
+        const float dipped = InputFromScript(fn, truck);
+        putF(truck, 0x11C, 0.0f);
+        const bool otherStock = InputFromScript(fn, soundOther) == 0.3f;
+        truck[0x768] = 0;
+        const bool offStock = InputFromScript(fn, truck) == 0.3f;
+        truck[0x768] = 1;
+        EngineSpeedPublish(truck, 0.6f, GetTickCount64() - 2 * kEngineSpeedFresh);
+        const bool staleStock = InputFromScript(fn, truck) == 0.3f;
+        EngineSpeedPublish(truck, 0.6f);
+        g_helperNull = true;
+        const bool nullStock = InputFromScript(fn, truck) == 0.3f;
+        g_helperNull = false;
+        TruckInputCounts c1 = {};
+        TruckInputCountsGet(c1);
+        EngineSpeedPublish(nullptr, 0.0f);
+        const bool counts = c1.calls - c0.calls == 11 && c1.written - c0.written == 6 && c1.notOurs - c0.notOurs == 4 && c1.failed - c0.failed == 1 && c1.stock == 0.3f &&
+                            c1.gear == 3;
+        const float dipWant = 0.6f * (1.0f - 0.357f) * (1.0f - 0.357f);
+        const bool pure = SoundVelocityFactor(0.0f, 0, 0.0f) == 0.5f && SoundVelocityFactor(1.0f, 0, 0.0f) == 1.0f && SoundVelocityFactor(0.6f, 2, 0.0f) == 0.6f &&
+                          SoundVelocityFactor(2.0f, 3, 0.0f) == 1.0f && SoundVelocityFactor(NAN, 3, 0.0f) == 0.0f && SoundVelocityFactor(0.6f, 3, 2.0f) == 0.0f &&
+                          SoundVelocityFactor(0.6f, 0, 2.0f) == 0.5f && SoundVelocityFactor(0.6f, 3, NAN) == 0.6f;
+        const bool twice = TruckInputHook((uintptr_t)&FakeTruckInput, (uintptr_t)&FakeHandleData, why, sizeof why);
+        char line[500];
+        snprintf(line, sizeof line, "engine sound hook: through Detours on a function of GetTruckInput's signature, velocityFactor written by the game's helper: 0.600 in 3rd, 1st and R, "
+                                    "%.3f for a rev in N and 0.500 at its idle, %.3f at a stall of 0.5, the gear the game's; another vehicle, the engine off, no slot, a stale one and "
+                                    "a null handle keep the game's 0.300; the counts follow",
+                 neutralRev, dipped);
+        Check(hooked && unpublished && ours && Near(neutralRev, 0.8f) && neutralIdle && first && reverse && Near(dipped, dipWant) && otherStock && offStock && staleStock && nullStock &&
+                  counts && pure && twice && TruckInputHooked(),
+              line);
+        if (!hooked) printf("     %s\n", why);
+        if (!(counts && pure))
+            printf("     counts %d pure %d: calls %ld written %ld not ours %ld failed %ld stock %.3f gear %d\n", counts, pure, c1.calls - c0.calls, c1.written - c0.written,
+                   c1.notOurs - c0.notOurs, c1.failed - c0.failed, c1.stock, c1.gear);
+    }
+
+    // the truck input's places in made-up code: its bytes once and the call at + 0x8F2 landing inside the code; not taken
+    // where the bytes stand twice, another mod holds them or the call is not there
+    {
+        auto put = [](std::vector<uint8_t> &code, size_t at, const char *pattern) {
+            uint8_t bytes[kPatternMax], mask[kPatternMax];
+            const int length = PatternParse(pattern, bytes, mask);
+            for (int i = 0; i < length; i++) code[at + i] = mask[i] ? bytes[i] : 0x00;
+            return length;
+        };
+        auto aim = [](std::vector<uint8_t> &code, size_t call, size_t target) {
+            code[call] = 0xE8;
+            const int32_t distance = (int32_t)target - (int32_t)(call + 5);
+            memcpy(code.data() + call + 1, &distance, 4);
+        };
+        std::vector<uint8_t> code(0x1400, 0x90);
+        const size_t inputAt = 0x200, helperAt = 0x1100;
+        put(code, inputAt, kTruckInputPattern);
+        aim(code, inputAt + kTruckInputHelperAt, helperAt);
+        TruckInputPlace place;
+        const bool found = TruckInputFind(code.data(), 0x10, code.size(), place) && place.input == inputAt && place.helper == helperAt && !*place.why;
+        std::vector<uint8_t> twiceCode = code;
+        put(twiceCode, 0x800, kTruckInputPattern);
+        TruckInputPlace twicePlace;
+        const bool twiceNot = !TruckInputFind(twiceCode.data(), 0x10, twiceCode.size(), twicePlace) && strstr(twicePlace.why, "more than once");
+        std::vector<uint8_t> heldCode = code;
+        heldCode[inputAt] = 0xE9;
+        TruckInputPlace heldPlace;
+        const bool heldNot = !TruckInputFind(heldCode.data(), 0x10, heldCode.size(), heldPlace) && strstr(heldPlace.why, "another mod");
+        std::vector<uint8_t> noCall = code;
+        noCall[inputAt + kTruckInputHelperAt] = 0x90;
+        TruckInputPlace noCallPlace;
+        const bool noCallNot = !TruckInputFind(noCall.data(), 0x10, noCall.size(), noCallPlace) && strstr(noCallPlace.why, "helper") && !noCallPlace.input;
+        std::vector<uint8_t> away = code;
+        aim(away, inputAt + kTruckInputHelperAt, 0x5000);
+        TruckInputPlace awayPlace;
+        const bool awayNot = !TruckInputFind(away.data(), 0x10, away.size(), awayPlace) && strstr(awayPlace.why, "helper");
+        Check(found && twiceNot && heldNot && noCallNot && awayNot,
+              "truck input's places in made-up code: its bytes once and the helper as the target of its call at + 0x8F2; not taken twice, behind another mod's jump, "
+              "with no call there or a call out of the code");
     }
 
     // the engine speed's places in made-up code: the function's bytes once, the fuel's and the stall's calls once each

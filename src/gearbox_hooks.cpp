@@ -1196,6 +1196,90 @@ void EngineSpeedAnswers(long &answered, float &last)
     last = BitsFloat(g_speedLast);
 }
 
+// ---- the engine sound: Truck.GetTruckInput (BRIEF_drivetrain_1b_sound.md) ----
+// Handle *(vehicle rcx, Handle *out rdx); its one caller, the script binding, keeps no scratch register across the call
+// (the Reviewer's read), so a C++ function of the same two arguments forwards all it takes. The helper takes the
+// handle's address and gives the data block or null, as the game's own calls of it do right before the function returns.
+typedef void **(*TruckInputFn)(void *vehicle, void **out);
+typedef uint8_t *(*HandleDataFn)(void **handle);
+static void *g_inputWay = nullptr;
+static HandleDataFn g_inputHelper = nullptr;
+static bool g_inputHooked = false;
+static volatile LONG g_inputCalls = 0, g_inputWritten = 0, g_inputNotOurs = 0, g_inputFailed = 0, g_inputStock = 0, g_inputOurs = 0, g_inputGear = 0;
+
+// The write itself, under __try: the data block by the game's helper, its gear, the stall seconds, then velocityFactor.
+static bool InputWrite(void *vehicle, void **out, float share)
+{
+    __try
+    {
+        uint8_t *data = g_inputHelper(out);
+        if (!data) return false;
+        const int gear = *(const volatile int *)data;
+        const float stall = *(const volatile float *)((const uint8_t *)vehicle + 0x11C);
+        volatile float *vf = (volatile float *)(data + 0x48);
+        const float stock = *vf;
+        const float ours = SoundVelocityFactor(share, gear, stall);
+        *vf = ours;
+        InterlockedExchange(&g_inputStock, FloatBits(stock));
+        InterlockedExchange(&g_inputOurs, FloatBits(ours));
+        InterlockedExchange(&g_inputGear, gear);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
+__declspec(noinline) static void **HookTruckInput(void *vehicle, void **out)
+{
+    void **const answer = ((TruckInputFn)g_inputWay)(vehicle, out);
+    InterlockedIncrement(&g_inputCalls);
+    const EngineSpeedSlot *slot = (const EngineSpeedSlot *)g_speedSlot;
+    // the cheap tests first, so another vehicle's call reads nothing more; the places 0, 1 and 2 only make the rule's
+    // fuel and stall tests pass (this call is neither)
+    if (!(out && slot && slot->vehicle == vehicle && EngineSpeedOurs(0, 1, 2, slot, vehicle, SpeedEngineOn(vehicle), GetTickCount64())))
+    {
+        InterlockedIncrement(&g_inputNotOurs);
+        return answer;
+    }
+    if (InputWrite(vehicle, out, slot->share)) InterlockedIncrement(&g_inputWritten);
+    else InterlockedIncrement(&g_inputFailed);
+    return answer;
+}
+
+bool TruckInputHook(uintptr_t at, uintptr_t helper, char *why, size_t size)
+{
+    why[0] = 0;
+    if (g_inputHooked) return true;
+    g_inputHelper = (HandleDataFn)helper;
+    g_inputWay = (void *)at;
+    void **targets[1] = { &g_inputWay };
+    void *const hooks[1] = { (void *)&HookTruckInput };
+    const long error = GearboxAttach(targets, hooks, 1);
+    if (error != NO_ERROR)
+    {
+        snprintf(why, size, "Detours could not attach the truck input's hook (error %ld)", error);
+        g_inputWay = nullptr;
+        return false;
+    }
+    g_inputHooked = true;
+    return true;
+}
+
+bool TruckInputHooked() { return g_inputHooked; }
+
+void TruckInputCountsGet(TruckInputCounts &out)
+{
+    out.calls = g_inputCalls;
+    out.written = g_inputWritten;
+    out.notOurs = g_inputNotOurs;
+    out.failed = g_inputFailed;
+    out.stock = BitsFloat(g_inputStock);
+    out.ours = BitsFloat(g_inputOurs);
+    out.gear = g_inputGear;
+}
+
 // ---- the torque cut: the game's gear torque ----
 // bool(vehicle rcx, int gear edx, float *torque r8, float *start r9, float *a, float *top, float *gearSpeed on the
 // stack), every output zeroed first and any pointer may be null (review\own_drivetrain_research.md A). None of its seven

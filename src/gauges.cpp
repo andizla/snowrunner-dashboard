@@ -3552,6 +3552,7 @@ static FunctionFind g_finds[kFnCount] = {};
 static DamagePath g_path = {};
 static bool g_pathFound = false, g_hooksReady = false;
 static DrivePlace g_drive = {}; // the game's wheels' drive, for the creep (g_drive.drive 0: not found)
+static TruckInputPlace g_input = {}; // Truck.GetTruckInput and its handle helper, for the engine sound (g_input.input 0: not found)
 static EngineSpeedPlace g_speed = {}; // the game's engine speed and its fuel's and stall's calls (g_speed.speed 0: not found)
 static GearTorquePlace g_torque = {}; // the game's gear torque and the drive's call of it, for the torque cut (g_torque.torque 0: not found)
 
@@ -3590,6 +3591,10 @@ static void GameCodeLook()
         Log(L"engine speed: the game's engine speed at +%zx, its fuel's call returning to +%zx and its stall's to +%zx (both keep the game's own); "
             L"hooked once Powertrain is on with a truck driven and ModEngineSpeed on or Gearbox=2", g_speed.speed, g_speed.fuelBack, g_speed.stallBack);
     else Log(L"engine speed: %S, so the game's engine speed stays its own", g_speed.why);
+    if (TruckInputFind(code.data(), from, to, g_input))
+        Log(L"engine sound: the game's truck input at +%zx, its handle helper at +%zx; hooked once Powertrain and ModEngineSpeed are on with a truck driven", g_input.input,
+            g_input.helper);
+    else Log(L"engine sound: %S, so the game's engine sound stays its own", g_input.why);
     // the gear torque and the drive's call of it, for the torque cut (BRIEF_drivetrain_2_torque_cut.md)
     if (GearTorqueFind(code.data(), from, to, g_drive.drive, g_torque))
         Log(L"torque cut: the game's gear torque at +%zx, the drive's call returning to +%zx (the drive at +%zx); the other calls keep the game's own; "
@@ -3720,6 +3725,22 @@ static void EngineSpeedHookStep(const GaugeSettings &s, bool driving)
             L"0 at idle to 1 at %.2f of the redline (EngineSpeedTop), with ModEngineSpeed on; the fuel's and the stall's calls keep the game's own, the fuel's "
             L"scaled to the game's pull while the torque cut holds the throttle", g_speed.speed, s.engineSpeedTop);
     else Log(L"engine speed: %S, so the game's engine speed stays its own%s", why, TorqueCutWanted(s) ? L" and the torque cut stays off" : L"");
+}
+
+// The hook on Truck.GetTruckInput (gearbox_hooks.cpp, TruckInputHook) for the engine sound: attached the first time
+// Powertrain and ModEngineSpeed are on with a truck driven, every other thread suspended (the Reviewer's S1), and left in
+// place until the game is started again; it writes only while the engine speed's slot is published.
+static void TruckInputHookStep(const GaugeSettings &s, bool driving)
+{
+    static bool tried = false;
+    if (tried || !s.powertrain || !s.modEngineSpeed || !driving || !g_input.input) return;
+    tried = true;
+    char why[160] = "";
+    if (TruckInputHook((uintptr_t)(g_base + g_input.input), (uintptr_t)(g_base + g_input.helper), why, sizeof why))
+        Log(L"engine sound: the game's truck input hooked at +%zx, its handles resolved by the helper at +%zx: while Powertrain drives the truck the engine sound "
+            L"reads the mod engine (velocityFactor, data + 0x48: the engine speed share with the stall's dip, 0.5 + 0.5 x it in N), with ModEngineSpeed on",
+            g_input.input, g_input.helper);
+    else Log(L"engine sound: %S, so the game's engine sound stays its own", why);
 }
 
 // The hook on the game's gear torque (gearbox_hooks.cpp, GearTorqueHook) for the torque cut: attached the first time
@@ -6568,6 +6589,17 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 }
                 Log(L"probe: engine speed: the mod's %.3f (%s), %ld calls answered so far, the last %.3f; the game's own by caller:%S%s", w.speedShare < 0.0f ? 0.0f : w.speedShare,
                     speedOurs ? L"handed" : L"not handed", answered, last, n ? line : " none yet", full ? " (more callers than kept)" : "");
+                // the engine sound's (the brief's point 5): the game's velocityFactor beside the mod's, the gear seen, the
+                // calls and writes a second, the handles not resolved
+                if (TruckInputHooked())
+                {
+                    static TruckInputCounts inputWas = {};
+                    TruckInputCounts ic = {};
+                    TruckInputCountsGet(ic);
+                    Log(L"probe: engine sound: the game's velocityFactor %.3f, the mod's %.3f, gear %d; a second: %ld calls, %ld written, %ld not ours, %ld handles not resolved",
+                        ic.stock, ic.ours, ic.gear, ic.calls - inputWas.calls, ic.written - inputWas.written, ic.notOurs - inputWas.notOurs, ic.failed - inputWas.failed);
+                    inputWas = ic;
+                }
             }
             // the chassis push's probe (Probe=1), once a second: the drive's steps measured and taken back, the push given and
             // taken back (N s), the last k, F_excess, F, B4, the forward speed, the kick path's steps (a push under 3 m/s)
@@ -7804,6 +7836,7 @@ static DWORD WINAPI Run(void *)
         GearboxHooksStep(s);
         CreepHookStep(s, driving);
         EngineSpeedHookStep(s, driving);
+        TruckInputHookStep(s, driving);
         GearTorqueHookStep(s, driving);
         // the search for the game's clock (Probe=1, while its place is not known): begun once a truck is driven
         if (!clockOwn && s.probe && driving && raw.clockKnown)

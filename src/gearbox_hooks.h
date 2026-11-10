@@ -258,6 +258,38 @@ struct EngineSpeedCaller { uintptr_t back; long calls; float stock; };
 int EngineSpeedCallersGet(EngineSpeedCaller *out, int most, bool &full);
 // The calls answered with the mod's value so far, and the last value answered.
 void EngineSpeedAnswers(long &answered, float &last);
+
+// ---- the engine sound (game_code.h, TruckInputFind; BRIEF_drivetrain_1b_sound.md with the Reviewer's addenda) ----
+// The game's engine sound reads TruckInput.velocityFactor (the data block + 0x48), which the game fills from the chassis
+// speed's place in its stock gear band: 0 at a gear's bottom, 1 at its top, 0.5 in N. A detour on Truck.GetTruckInput
+// calls the game's own, then, while the engine speed's slot (EngineSpeedPublish) names this vehicle, is fresh and its
+// engine is on, resolves the handle in *out through the game's own helper (never a mask of its own: the helper knows
+// the object's kinds) and writes SoundVelocityFactor there. Nothing else is written; gear stays the game's.
+// SoundVelocityFactor: the engine speed share (0 at idle, 1 at the redline x EngineSpeedTop, before the stall's dip)
+// with the dip the needle gets, (1 - 0.714 x stall)^2 (models.h kStallRate; the stall seconds at vehicle + 0x11C), and
+// in N (the data block's gear 0) 0.5 + 0.5 x it, so N idles at the game's own 0.5 and a rev rises to 1 at the redline.
+inline float SoundVelocityFactor(float share, int gear, float stall)
+{
+    float s = isfinite(share) ? fminf(fmaxf(share, 0.0f), 1.0f) : 0.0f;
+    const float alive = isfinite(stall) ? fminf(fmaxf(1.0f - 0.714f * stall, 0.0f), 1.0f) : 1.0f;
+    s *= alive * alive;
+    return gear == 0 ? 0.5f + 0.5f * s : s;
+}
+// Hooks Truck.GetTruckInput at address at (all other threads suspended, GearboxAttach), its handles resolved by the
+// helper at helper. Never taken out while the game runs: with nothing published every call keeps the game's own. False
+// with why when Detours refused it; true at once when it is in place already.
+bool TruckInputHook(uintptr_t at, uintptr_t helper, char *why, size_t size);
+bool TruckInputHooked();
+// The calls so far, those written, those not ours (another vehicle, no slot, a stale one, the engine off) and those whose
+// handle the helper did not resolve (or whose memory faulted); the last value the game gave, the last written and the
+// gear seen with them.
+struct TruckInputCounts
+{
+    long calls, written, notOurs, failed;
+    float stock, ours;
+    int gear;
+};
+void TruckInputCountsGet(TruckInputCounts &out);
 // While the torque cut holds the drive's throttle at 1 the game's B4 sits at 1 at any pedal, and its fuel burn and its
 // damaged gearbox's stall read B4 through the fuel's and the stall's calls: the fuel's is answered with the game's own
 // value times the stand-in / B4 (0 where B4 is 0), the stall's by the game's own formula with the stand-in in B4's place
