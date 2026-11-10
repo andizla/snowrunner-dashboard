@@ -2342,7 +2342,7 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     if (!m.running)
     {
         m = GearboxModel{ true };
-        m.spin = m.by = raw;
+        m.spin = m.by = isfinite(raw) ? raw : 0.0f; // a spin that is no number would stay in the smoothing for good
         m.pedal = m.held = p;
     }
     // a drop of the pedal counts once it has lasted kFootGap: the game's throttle cut at a shift is no lift
@@ -2374,6 +2374,11 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
         return;
     }
     if (m.gear < 1 || m.gear > top) m.gear = 1;
+    // a model that took a spin that is no number heals from this pass's good one (BRIEF_full_pass_2_gameplay.md part
+    // 3, M3): the spin, the speed it goes by and that speed's trend, each kept by its own smoothing
+    if (!isfinite(m.spin)) m.spin = raw;
+    if (!isfinite(m.by)) m.by = raw;
+    if (!isfinite(m.trend)) m.trend = 0.0f;
     // the wheels' speed smoothed
     m.spin += (raw - m.spin) * (1.0f - expf(-dt / kShiftSmooth));
     // the wheels' speed against the ground's, learned where they cannot turn slower than the ground goes and turn

@@ -1725,6 +1725,26 @@ int main(int argc, char **argv)
                   "automatic: a truck's converter stalls at 0.8 of the red zone, at most 2600 rpm, on the diesels' plateau; a floored launch lifts the "
                   "engine from the stall and the lock drops it no more than its speed ratio allows");
         }
+        // a spin that is no number on the first pass (BRIEF_full_pass_2_gameplay.md part 3): the good passes after it
+        // give a model whose spin, speed and trend are numbers, and that shifts up
+        {
+            GearboxModel nan = {};
+            wheels(NAN);
+            GearboxStep(nan, g, k, 1.0f, 1.0f, kDt);
+            GearboxModel poisoned = nan;
+            poisoned.trend = NAN; // as one that came in through by
+            float spin = 0.0f;
+            int topReached = 0;
+            for (float at = 0.0f; at < 20.0f; at += kDt)
+            {
+                wheels(spin);
+                GearboxStep(poisoned, g, k, 1.0f, 1.0f, kDt);
+                topReached = topReached > poisoned.gear ? topReached : poisoned.gear;
+                spin = fminf(spin + 0.5f * TruckGearTop(g, 1) * kDt, TruckGearTop(g, TruckTopGear(g)));
+            }
+            Check(isfinite(poisoned.spin) && isfinite(poisoned.by) && isfinite(poisoned.trend) && topReached > 1 && isfinite(nan.spin),
+                  "automatic: a wheel spin that is no number on the first pass, or a trend that is none, heals with the good passes after it, and the box shifts up");
+        }
         // a floored pull from a standstill to the top gear's top in 40 seconds, and the same at a light foot
         auto pull = [&](float pedal, float &firstShiftAt, float &shortestPause, bool &lockedOnce) {
             GearboxModel b = {};
