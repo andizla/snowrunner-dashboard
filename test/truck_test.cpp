@@ -1736,6 +1736,37 @@ int main()
         const bool stillNot = !early && !strcmp(who.taken.key, ck.key);
         const bool atLast = !TruckWhoStep(who, built, taking) && taking && !strcmp(who.taken.key, built.key);
         Check(notYet && interrupted && stillNot && atLast, "identity: a truck that goes by its build is taken only after twenty passes in a row read that build");
+        // the set's gate (BRIEF_full_pass_gameplay.md part 4): a pass writes the set in force only into the truck the last
+        // step found its own; the set comes in after the step, as the loop's SettingsFor does. A truck with a set (2) is
+        // left for one without (1, the default), named and by its build: the second never gets the first's set
+        {
+            const uint64_t carA = 0x1000, carB = 0x2000;
+            bool clean = true, ownA = false, ownB = false;
+            for (const TruckIdentity *to : { &ck, &built })
+            {
+                TruckWho sw = {};
+                TruckSetGate gate = {};
+                bool tk = false;
+                float inForce = 1.0f, wroteA = 0.0f, wroteB = 0.0f;
+                for (int pass = 0; pass < 30; pass++)
+                {
+                    const bool onA = pass < 5;
+                    const uint64_t car = onA ? carA : carB;
+                    if (TruckSetOpen(gate, true, car)) (onA ? wroteA : wroteB) = inForce;
+                    clean = clean && wroteB != 2.0f;
+                    const bool sm = TruckWhoStep(sw, onA ? modded : *to, tk);
+                    TruckSetAfter(gate, sm, tk, car);
+                    if (tk) inForce = onA ? 2.0f : 1.0f;
+                }
+                ownA = wroteA == 2.0f;
+                ownB = ownB || wroteB == 1.0f;
+                ownB = ownB && wroteB == 1.0f;
+            }
+            TruckSetGate shut = {};
+            Check(clean && ownA && ownB && !TruckSetOpen(shut, true, carA) && !TruckSetOpen(TruckSetGate{ carA }, false, carA),
+                  "set gate: after a switch, named and by its build, nothing of the last truck's set is written into the new one, which gets its own after its "
+                  "take-over; shut with no truck found and before the first step");
+        }
         // after a load the truck that drives on under its id keeps its heat; another, none before, or none for a minute is cold
         Check(LoadTruckAfter(kId, kId, 500) == kLoadSame && LoadTruckAfter(kId, otherId.id, 500) == kLoadOther && LoadTruckAfter("", kId, 500) == kLoadOther &&
                   LoadTruckAfter(kId, nullptr, 59000) == kLoadWait && LoadTruckAfter(kId, "", kLoadWaitMs) == kLoadNone,

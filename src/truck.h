@@ -457,6 +457,14 @@ inline bool TruckWhoStep(TruckWho &w, const TruckIdentity &id, bool &taking)
     return false;
 }
 
+// The gate of the passes that write the set in force into the truck (BRIEF_full_pass_gameplay.md part 4, M5): open only
+// on the vehicle that the last pass's TruckWhoStep found to be the one taken (same and not taking). The set in force
+// comes in after the step, so on the taking pass it is still the last truck's. Held, a pass runs as with no truck.
+// A new truck that the game puts where the last one was gets two passes before its id or key turns the gate.
+struct TruckSetGate { uint64_t vehicle; };
+inline bool TruckSetOpen(const TruckSetGate &g, bool found, uint64_t vehicle) { return found && g.vehicle && vehicle == g.vehicle; }
+inline void TruckSetAfter(TruckSetGate &g, bool same, bool taking, uint64_t vehicle) { g.vehicle = same && !taking ? vehicle : 0; }
+
 // After a loading screen: whether the truck that drives on is the one driven before it, by the game's id for it
 // (before: the id as the screen came up, "" for none; after: the id read now, "" or nullptr while none is read;
 // waited: milliseconds since the load ended). kLoadSame keeps its heat; kLoadOther (another truck, or none before)

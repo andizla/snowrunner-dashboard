@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- A truck just switched to no longer gets the last truck's suspension for a moment. Before, the damping, the spring, the frame flex and the camber of the last truck went into the new one for two passes, and for up to twenty on a truck known by its build only. Now they wait until the new truck's own settings are in force.
 - The cluster hides while the NEXT GEN menu shows another mod's tab, so it no longer lies over that tab. On the Gameplay tabs and the Graphics tab it stays, so a change to Size or the layout shows at once.
 - A fault in the menu's drawing now gives back what the overlay held: the game's render targets and its back buffer, and the mouse and keys claimed through Spotter. Before, the next window change could fail with the overlay stopped, and Spotter kept the input for the closed menu.
 - A long tip on the Gameplay tab is wrapped and stays inside the screen. Before, a line ran past the screen edge and was cut.

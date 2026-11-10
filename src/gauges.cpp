@@ -4330,6 +4330,7 @@ struct TruckWatch
     char airForId[40];
     int airFileKind;
     uint64_t airSaidFor;        // the vehicle the air axles' and the swing axles' lines were logged for
+    TruckSetGate setGate;       // the vehicle whose own set is in force: the six passes below write only into it
     CamberTune camber;          // each wheel's camber stock and what Camber gain and Camber at rest wrote (camber.h)
     ULONGLONG airPressedAt;     // the last press, for the overlay's height box
     uint64_t airVehicle;        // the truck the height was set on
@@ -5861,23 +5862,27 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         for (int i = 0; i < count; i++) Log(L"%S", lines[i]);
     }
     if (probe && w.found) SuspProbeStep(w.susp, m, w.refs, now);
+    // the passes that write the set in force run only on the truck whose own set it is (BRIEF_full_pass_gameplay.md part
+    // 4, M5). Right after a switch s is still the last truck's: two passes on a named truck, up to twenty on one that
+    // goes by its build. Held, they run as with no truck, which writes nothing into the new vehicle
+    const bool setIn = TruckSetOpen(w.setGate, w.found, w.refs.vehicle);
     bool damperOwns[kMaxWheels], springOwns[kMaxWheels];
-    SuspDamperBefore(w.step, m, w.refs, s, w.found, damperOwns, springOwns);
+    SuspDamperBefore(w.step, m, w.refs, s, setIn, damperOwns, springOwns);
     SuspTuneTest stepTestNow;
-    const SuspTuneTest *stepTest = w.found ? SuspStepTestPass(w.step, m, w.refs, raw, s, now, stepTestNow) : nullptr;
+    const SuspTuneTest *stepTest = setIn ? SuspStepTestPass(w.step, m, w.refs, raw, s, now, stepTestNow) : nullptr;
     if (w.found) SuspGameTake(w.step, w.tune);
     SuspModWords words;
     SuspWordsCopy(g_step, words);
-    if (w.found) SuspTunePass(w.tune, m, w.refs, s, stepTest, damperOwns, springOwns, &words);
-    if (w.found) FrameFlexPass(w.frame, m, w.refs, s);
-    if (w.found && w.step.on && w.step.value < 0.0f && w.refs.wheels > 0)
+    if (setIn) SuspTunePass(w.tune, m, w.refs, s, stepTest, damperOwns, springOwns, &words);
+    if (setIn) FrameFlexPass(w.frame, m, w.refs, s);
+    if (setIn && w.step.on && w.step.value < 0.0f && w.refs.wheels > 0)
     {
         // the test's value as written, which the steps' trace looks for
         uint64_t c = 0;
         float v = -1.0f;
         if (m.get(w.refs.wheel[0] + kSuspConstraintAt, c) && m.get(c + kSuspValueAt[stepTest->value], v)) w.step.value = v;
     }
-    if (w.found) CamberPass(w.camber, m, w.refs, raw, s);
+    if (setIn) CamberPass(w.camber, m, w.refs, raw, s);
     // the air's mask (BRIEF_air_axle_ticks.md): this truck's own ticks, else the kind's, else its file's AirAxles, else
     // the mod's table, else none. The file is read again when the kind or the truck's id changes (the Reviewer's point
     // 7); the ticks come with the set in force on each pass, so a tick, a level, a take-over or Defaults is in at once
@@ -5893,13 +5898,13 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         const int mask = w.airFor[0] ? AirMaskOf(w.airFor, w.airFileKind, s.airAxleMask, s.airMaskFrom, from) : 0;
         if (mask != w.airAxles || from != w.airFrom) w.airAxles = mask, w.airFrom = from, w.airSaidFor = 0;
     }
-    if (w.found && w.refs.vehicle && w.airFor[0] && w.airSaidFor != w.refs.vehicle && w.step.wheels > 0 && w.step.vehicle == w.refs.vehicle)
+    if (setIn && w.refs.vehicle && w.airFor[0] && w.airSaidFor != w.refs.vehicle && w.step.wheels > 0 && w.step.vehicle == w.refs.vehicle)
     {
         w.airSaidFor = w.refs.vehicle;
         AirAxlesLog(w.airAxles, w.airFrom, w.step, w.refs);
         SwingLog(m, w.refs, w.camber);
     }
-    const uint32_t generation = SuspStepPass(w.step, m, w.refs, raw, s, w.tune, w.found, now, w.swayOff, w.airHeight, w.tilt, w.airAxles);
+    const uint32_t generation = SuspStepPass(w.step, m, w.refs, raw, s, w.tune, setIn, now, w.swayOff, w.airHeight, w.tilt, w.airAxles);
     if (w.found) StepThreadsLog();
     if (probe && w.found) SuspTravelProbe(w.travel, w.travelAt, m, w.refs, raw, now, generation);
     WorldRead(m, w.found ? w.refs.control : 0, world);
@@ -5958,6 +5963,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         w.engineVehicle = 0;
         w.clock = ClockWatch{};
         w.who = TruckWho{};
+        w.setGate = TruckSetGate{};
         w.burnKnown = false;
         if (w.take.driving)
         {
@@ -5991,6 +5997,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     bool taking = false;
     TruckKey(m, w.refs, raw, id);
     const bool same = TruckWhoStep(w.who, id, taking);
+    TruckSetAfter(w.setGate, same, taking, w.refs.vehicle);
     if (taking) w.modelVehicle = 0;
     if (strcmp(w.who.taken.id, w.idFor) || taking)
     {
