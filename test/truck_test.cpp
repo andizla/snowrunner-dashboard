@@ -563,6 +563,14 @@ static void RealImageTest()
     snprintf(line, sizeof line, "places in a real image (stamp %08x): the game's truck input at %zx, its handle helper at %zx%s%s", stamp, input.input, input.helper,
              inputFound ? "" : "; ", input.why);
     Check(inputRight, line);
+    // the diff lock's setter, for the bite's kind (the research's d7d470 on 6adb8627, d7d500 on 6ab52f5d, d7bb70 on
+    // 6a607c05); found once on any build
+    size_t lockAt = 0;
+    const char *lockWhy = "";
+    const bool lockFound = LockSetterFind(image.data(), from, to, lockAt, lockWhy);
+    const bool lockRight = now ? lockFound && lockAt == 0xd7d470 : before ? lockFound && lockAt == 0xd7d500 : lockFound;
+    snprintf(line, sizeof line, "places in a real image (stamp %08x): the game's diff lock setter at %zx%s%s", stamp, lockAt, lockFound ? "" : "; ", lockWhy);
+    Check(lockRight, line);
     // the fitted gearbox's lookup, for the positions by gearbox (the research's d7d550 on 6adb8627, d7d5e0 on 6ab52f5d,
     // d7bc50 on 6a607c05); found once on any build
     size_t descAt = 0;
@@ -2435,6 +2443,189 @@ int main()
         if (!(waited && capped && counts && downhill && refused && shiftWaits && reverse && noCap && cleared))
             printf("     %d %d %d %d %d %d %d %d %d; speeds %.3f %.3f %.3f %.3f; kept %.3f clamped %ld excess %.3f\n", waited, capped, counts, downhill, refused, shiftWaits, reverse,
                    noCap, cleared, speed(0), speed(1), speed(2), speed(3), c1.kept, c1.clampedNow, c1.excessMost);
+    }
+
+    // the diff lock's bite in the wheels' drive's hook (BRIEF_diff_lock_bite.md with the Reviewer's addendum and the
+    // lead's of 14:09): three driven wheels (an axle of length 2, so a gain of 0.2, and two of 0.1: inertias 5, 10 and 10)
+    // and an undriven one; the stand-in drive adds 1 rad/s to each driven wheel. With the lock byte set and the slot
+    // published: at 100 every driven wheel on the inertia-weighted mean, the momentum kept; at 50 a step of k; the lock off,
+    // the handbrake, another action, a cleared slot, a stale one and a spread under 0.01 write nothing; AWD off leaves a
+    // type 2 wheel out; a body with no inertia skipped and counted; with the cap: locked, then held at the cap together
+    {
+        static uint8_t vehicle[0x800] = {}, act[0x100] = {}, otherAct[0x100] = {}, models[4][0x300] = {}, wheels[4][0x200] = {}, bodies[4][0x300] = {}, chassis[0x300] = {},
+                       desc[0x200] = {}, world[0x10] = {};
+        static uint64_t list[5] = {};
+        auto putF = [](uint8_t *p, size_t at, float v) { memcpy(p + at, &v, 4); };
+        auto getF = [](const uint8_t *p, size_t at) {
+            float v;
+            memcpy(&v, p + at, 4);
+            return v;
+        };
+        auto putP = [](uint8_t *p, size_t at, const void *v) {
+            const uint64_t x = (uint64_t)(uintptr_t)v;
+            memcpy(p + at, &x, 8);
+        };
+        auto putV = [&](uint8_t *p, size_t at, float x, float y, float z) { putF(p, at, x), putF(p, at + 4, y), putF(p, at + 8, z); };
+        auto axleOf = [](int i) { return i == 0 ? 2.0f : 1.0f; };
+        auto speed = [&](int i) { return getF(bodies[i], 0x240) * axleOf(i); };
+        auto setSpeeds = [&](float a, float b, float c, float d) {
+            const float s[4] = { a, b, c, d };
+            for (int i = 0; i < 4; i++) putV(bodies[i], 0x240, s[i] / axleOf(i), 0.3f, -0.2f);
+        };
+        putP(vehicle, 0x68, act);
+        int gear = 1;
+        memcpy(act + 0x74, &gear, 4);
+        memcpy(act + 0x70, &gear, 4);
+        putV(desc, 0x100, 1.0f, 0.0f, 0.0f);
+        for (int i = 0; i < 4; i++)
+        {
+            list[i] = (uint64_t)(uintptr_t)models[i];
+            putP(models[i], 0x2C8, wheels[i]);
+            const int driven = i < 3 ? 1 : 0;
+            memcpy(wheels[i] + 0xE8, &driven, 4);
+            putP(wheels[i], 0x18, bodies[i]);
+            putP(wheels[i], 0x10, chassis);
+            putP(wheels[i], 0x28, desc);
+            putV(wheels[i], 0x154, axleOf(i), 0.0f, 0.0f);
+            putP(bodies[i], 0x10, world);
+            putV(bodies[i], 0x220, 0.1f, 0.1f, 0.1f);
+        }
+        putP(vehicle, 0x200, &list[0]);
+        putP(vehicle, 0x208, &list[4]);
+        g_driveDoes = [](void *) {
+            extern uint8_t *g_capTestBodies[4];
+            static const float lens[3] = { 2.0f, 1.0f, 1.0f };
+            for (int i = 0; i < 3; i++)
+            {
+                float x;
+                memcpy(&x, g_capTestBodies[i] + 0x240, 4);
+                x += 1.0f / lens[i];
+                memcpy(g_capTestBodies[i] + 0x240, &x, 4);
+            }
+        };
+        for (int i = 0; i < 4; i++) g_capTestBodies[i] = bodies[i];
+        void (*volatile drive)(void *, float, float) = &FakeDrive;
+        TorqueCutPublish(nullptr);
+        PushGive(0, 0, 0.0f, 1.0f, 0.0f);
+        const uint64_t v = (uint64_t)(uintptr_t)vehicle, a = (uint64_t)(uintptr_t)act;
+        act[0x4A] = 1;
+        LockCounts l0 = {};
+        LockCountsGet(l0);
+        // 100: 11, 21 and 31 after the drive, the mean (5 x 11 + 10 x 21 + 10 x 31) / 25 = 23
+        LockGive(a, v, 100, 0);
+        setSpeeds(10.0f, 20.0f, 30.0f, 7.0f);
+        drive(act, 0.5f, 1.0f / 60.0f);
+        const float momentum = 5.0f * speed(0) + 10.0f * speed(1) + 10.0f * speed(2);
+        const bool shaft = Near(speed(0), 23.0f) && Near(speed(1), 23.0f) && Near(speed(2), 23.0f) && speed(3) == 7.0f && fabsf(momentum - 575.0f) < 1e-3f &&
+                           getF(bodies[0], 0x244) == 0.3f && getF(bodies[0], 0x248) == -0.2f;
+        LockCounts l1 = {};
+        LockCountsGet(l1);
+        const bool counted = l1.writes - l0.writes == 1 && l1.wheels == 3 && Near(l1.spreadBefore, 20.0f) && l1.spreadAfter < 1e-3f && l1.vehicle == v && l1.k == 1.0f;
+        // 50 at 1/60 s: k 0.1535
+        LockGive(a, v, 50, 0);
+        setSpeeds(10.0f, 20.0f, 30.0f, 7.0f);
+        drive(act, 0.5f, 1.0f / 60.0f);
+        const float k50 = LockK(50, 1.0f / 60.0f);
+        const bool halfStep = Near(speed(0), 11.0f + k50 * 12.0f) && Near(speed(1), 21.0f + k50 * 2.0f) && Near(speed(2), 31.0f - k50 * 8.0f);
+        // nothing written: the lock off, the handbrake, another action, a cleared slot, a spread under 0.01
+        auto asDriven = [&]() { return Near(speed(0), 11.0f) && Near(speed(1), 21.0f) && Near(speed(2), 31.0f); };
+        LockGive(a, v, 100, 0);
+        act[0x4A] = 0;
+        setSpeeds(10.0f, 20.0f, 30.0f, 7.0f);
+        drive(act, 0.5f, 1.0f / 60.0f);
+        const bool lockOff = asDriven();
+        act[0x4A] = 1;
+        act[0x48] = 1;
+        setSpeeds(10.0f, 20.0f, 30.0f, 7.0f);
+        drive(act, 0.5f, 1.0f / 60.0f);
+        const bool handbrake = asDriven();
+        act[0x48] = 0;
+        LockGive((uint64_t)(uintptr_t)otherAct, v, 100, 0);
+        setSpeeds(10.0f, 20.0f, 30.0f, 7.0f);
+        drive(act, 0.5f, 1.0f / 60.0f);
+        const bool otherAction = asDriven();
+        LockGive(a, v, 0, 0);
+        setSpeeds(10.0f, 20.0f, 30.0f, 7.0f);
+        drive(act, 0.5f, 1.0f / 60.0f);
+        const bool cleared = asDriven();
+        LockGive(a, v, 100, 0);
+        LockCounts l2 = {};
+        LockCountsGet(l2);
+        setSpeeds(10.0f, 10.005f, 10.0f, 7.0f);
+        drive(act, 0.5f, 1.0f / 60.0f);
+        LockCounts l3 = {};
+        LockCountsGet(l3);
+        const bool still = l3.writes == l2.writes && Near(speed(1), 11.005f);
+        // AWD off: a type 2 wheel stays out of the mean; on, it is in
+        const int two = 2;
+        memcpy(wheels[2] + 0xE8, &two, 4);
+        setSpeeds(10.0f, 20.0f, 30.0f, 7.0f);
+        drive(act, 0.5f, 1.0f / 60.0f); // the stand-in still pushes the third: 11, 21, 31, the first two locked at (55 + 210) / 15
+        const bool awdOff = Near(speed(0), 265.0f / 15.0f) && Near(speed(1), 265.0f / 15.0f) && Near(speed(2), 31.0f);
+        act[0x49] = 1;
+        setSpeeds(10.0f, 20.0f, 30.0f, 7.0f);
+        drive(act, 0.5f, 1.0f / 60.0f);
+        const bool awdOn = Near(speed(2), 23.0f);
+        act[0x49] = 0;
+        const int typeOne = 1;
+        memcpy(wheels[2] + 0xE8, &typeOne, 4);
+        // a body with no inertia about its axle: skipped and counted, the other two locked
+        putV(bodies[2], 0x220, 0.0f, 0.0f, 0.0f);
+        LockCounts l4 = {};
+        LockCountsGet(l4);
+        setSpeeds(10.0f, 20.0f, 30.0f, 7.0f);
+        drive(act, 0.5f, 1.0f / 60.0f);
+        LockCounts l5 = {};
+        LockCountsGet(l5);
+        const bool noInertia = l5.skipped - l4.skipped == 1 && Near(speed(0), 265.0f / 15.0f) && Near(speed(2), 31.0f);
+        putV(bodies[2], 0x220, 0.1f, 0.1f, 0.1f);
+        // with the cap at 3 (the cut's slot, armed under 1.1 x the cap): 3.0, 3.3 and 2.8 pushed to 4.0, 4.3 and 3.8, locked
+        // at (20 + 43 + 38) / 25 = 4.04, all held at the cap together; under it the locked speeds as they are
+        TorqueCutSlot cs = {};
+        cs.vehicle = v;
+        cs.action = a;
+        cs.cap = 3.0f;
+        TorqueCutPublish(&cs);
+        setSpeeds(1.0f, 1.3f, 0.8f, 7.0f); // under the cap, so it arms (M3)
+        drive(act, 0.5f, 1.0f / 60.0f); // 2.0, 2.3, 1.8: locked at (10 + 23 + 18) / 25 = 2.04, under the cap
+        const bool underCap = Near(speed(0), 2.04f) && Near(speed(1), 2.04f) && Near(speed(2), 2.04f);
+        setSpeeds(3.0f, 3.3f, 2.8f, 7.0f);
+        drive(act, 0.5f, 1.0f / 60.0f);
+        const bool atCap = Near(speed(0), 3.0f) && Near(speed(1), 3.0f) && Near(speed(2), 3.0f);
+        TorqueCutPublish(nullptr);
+        // a stale slot: older than kTorqueFresh
+        LockGive(a, v, 100, 0);
+        Sleep((DWORD)kTorqueFresh + 100);
+        setSpeeds(10.0f, 20.0f, 30.0f, 7.0f);
+        drive(act, 0.5f, 1.0f / 60.0f);
+        const bool stale = asDriven();
+        LockGive(0, 0, 0, 0);
+        act[0x4A] = 0;
+        g_driveDoes = nullptr;
+        const bool all = shaft && counted && halfStep && lockOff && handbrake && otherAction && cleared && still && awdOff && awdOn && noInertia && atCap && underCap && stale;
+        if (!all)
+            printf("     lock: %d %d %d %d %d %d %d %d %d %d %d %d %d %d; speeds %.3f %.3f %.3f %.3f\n", shaft, counted, halfStep, lockOff, handbrake, otherAction, cleared, still, awdOff,
+                   awdOn, noInertia, atCap, underCap, stale, speed(0), speed(1), speed(2), speed(3));
+        Check(CreepHooked() && all,
+              "diff lock bite in the drive's hook: at 100 the driven wheels on their inertia-weighted mean, the momentum about their axles kept, the parts across the axle "
+              "and the undriven wheel left; at 50 a step of k; nothing with the lock off, the handbrake on, another action, a cleared or stale slot or a spread under 0.01; "
+              "AWD off leaves a type 2 wheel out; a wheel with no inertia skipped and counted; with the cap locked first, then held at the cap together");
+    }
+    // the diff lock's setter's place in made-up code: its bytes once; not taken twice or where they are not
+    {
+        uint8_t bytes[kPatternMax], mask[kPatternMax];
+        const int length = PatternParse(kLockSetterPattern, bytes, mask);
+        std::vector<uint8_t> code(0x4000, 0xCC);
+        for (int i = 0; i < length; i++) code[0x1100 + i] = bytes[i];
+        size_t at = 0;
+        const char *why = "";
+        const bool found = LockSetterFind(code.data(), 0x10, code.size(), at, why) && at == 0x1100 && !*why;
+        std::vector<uint8_t> twice = code;
+        for (int i = 0; i < length; i++) twice[0x2100 + i] = bytes[i];
+        const bool twiceNot = !LockSetterFind(twice.data(), 0x10, twice.size(), at, why) && strstr(why, "more than once");
+        std::vector<uint8_t> empty(0x4000, 0xCC);
+        const bool noneNot = !LockSetterFind(empty.data(), 0x10, empty.size(), at, why) && strstr(why, "not found");
+        Check(found && twiceNot && noneNot, "diff lock setter's place in made-up code: its bytes once; not taken twice or where they are not");
     }
 
     // the chassis push in the wheels' drive's hook (BRIEF_chassis_push.md): four driven wheels, two on the chassis, one on a

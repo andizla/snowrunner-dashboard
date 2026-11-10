@@ -398,6 +398,21 @@ is the game's own and stays whole: nothing comes off at a forward speed of 3 m/s
 nor on a call that starts with action + 0x70 apart from + 0x74 (the clunk of engaging 1st or R, c41f03) or with + 0xB8 above 1e-4
 (c41e35, the kick path on every call); those steps are counted as kicks (<code>PushMayTake</code>). The probe gives a second's
 push and the share taken back, k, F_excess, F, B4, the forward speed and the kick path's steps.</p>
+<p><b>The diff lock's bite</b> (BRIEF_diff_lock_bite.md). The game's lock (action + 0x4A, one byte for the truck) is a rule in the drive
+(c423a4): on each driven wheel's speed cut to whole rad/s, a share max(1 − max(w + 0.5 a − (0.9 slowest + 0.1 mean + 0.01), 0) / width, 0.01)
+with width clamp(0.05 fastest, 0.05, 0.5), smoothed 0.8 old; nothing ties the speeds. The mod's thread publishes the driven truck's action,
+vehicle and DiffLockBite p (<code>LockGive</code>) while Powertrain is on and p is above 0, at every Gearbox level, with the setter's
+pattern (<code>kLockSetterPattern</code>, d7d470 on 6adb8627: it writes + 0x4A only while vehicle + 0xE8 is 0) found once at the start
+and the kind at vehicle + 0xE8 read and not 2, always on (<code>LockPublishes</code>; DiffLockBiteAlways=1 takes kind 2 too). In the
+drive's hook, which the bite asks for by itself (<code>DriveHookWanted</code>), after the original drive and while + 0x4A is set and the
+handbrake + 0x48 is not: each driven wheel's spin about its axle w (as the wheel cap reads it) moves to w + k (mean − w), the mean
+weighted by each wheel's inertia about its axle (1 / <code>CapGain</code>), so the momentum about the axles stays (<code>LockStep</code>);
+k = 1 − exp(−dt / tau), tau = 10^(−p / 50) s, 1 at p 100, 0 for a dt that is no number or not above 0 (<code>LockK</code>). Nothing
+under a spread of 0.01 rad/s, with fewer than two wheels, or for a wheel with no inertia (skipped, counted). With the wheel cap on the
+lock comes first and the cap works on the locked speeds, one write a wheel against the drive's result. Gauges.log has
+"settings: diff lock bite ..." with the settings, "diff lock bite: the game's diff lock setter at +..." at the code look, "diff lock bite:
+rests on this truck: its diff lock is always on ..." for kind 2, "diff lock bite: acts on this truck (kind ...)" at the first write,
+and with Probe=1 "probe: diff lock bite: kind ..." a second.</p>
 <h3>The torque cut (a gear held by hand)</h3>
 <p>The game's torque per gear is one function, <code>bool(vehicle, int gear, float* torque, float* start, float* a, float* top, float* gearSpeed)</code>, found by
 its first bytes once (<code>kGearTorquePattern</code>), and the drive's call of it is the first call in the wheels' drive that lands there (<code>GearTorqueFind</code>,

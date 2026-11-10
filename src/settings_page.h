@@ -869,6 +869,10 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             ImGui::SetNextItemWidth(w);
             changed(ImGui::SliderFloat("##enginebrake", &s.engineBrake, 0.0f, 30.0f, "%.0f %%", ImGuiSliderFlags_AlwaysClamp));
             PageTip("How hard the engine holds the truck back with the foot off in a gear held by hand, as a share of the gear torque at the redline. 0 lets it roll. Needs the mod gearbox. Default 15 %.");
+            PageLabel("Diff lock bite", labelX);
+            ImGui::SetNextItemWidth(w);
+            changed(ImGui::SliderInt("##difflockbite", &s.diffLockBite, 0, 100, s.diffLockBite > 0 ? "%d %%" : "game lock", ImGuiSliderFlags_AlwaysClamp));
+            PageTip("How firmly the diff lock ties the driven wheels together. 0 leaves the game lock as it is. 100 turns them as one shaft. A locked truck then scrubs in a turn on hard ground, as a real one does. A truck whose lock is always on keeps the game lock.");
             PageLabel("Mod engine speed", labelX);
             changed(ImGui::Checkbox("##modenginespeed", &s.modEngineSpeed));
             PageTip("The game tachometer, cockpit needles, rev lights, engine sound, effects and exhaust follow the mod engine while Real engine is on. Fuel use and the stall keep the game rules, and in a gear held by hand they follow the pull of the mod engine. Off: the game computes its own, and the mod engine never pulls alone in a gear held by hand, as that needs this on. On by default.");

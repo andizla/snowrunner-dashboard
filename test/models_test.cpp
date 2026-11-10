@@ -4423,6 +4423,93 @@ int main(int argc, char **argv)
         Check(ok, line);
     }
 
+    // the diff lock's bite, pure (BRIEF_diff_lock_bite.md with the Reviewer's addendum and the lead's of 14:09): k from the
+    // setting and the step's seconds; the step on the inertia-weighted mean with the momentum kept; what writes nothing;
+    // who publishes; the drive's hook asked for by the bite alone
+    {
+        auto nearly = [](float a, float b, float e) { return fabsf(a - b) <= e; };
+        const float k50 = LockK(50, 1.0f / 60.0f), kHalf = LockK(50, 1.0f / 120.0f);
+        const bool ks = LockK(0, 1.0f / 60.0f) == 0.0f && LockK(100, 1.0f / 60.0f) == 1.0f && nearly(k50, 0.1535f, 1e-4f) &&
+                        nearly((1.0f - kHalf) * (1.0f - kHalf), 1.0f - k50, 1e-5f) && LockK(50, 0.0f) == 0.0f && LockK(50, -0.01f) == 0.0f && LockK(50, NAN) == 0.0f &&
+                        LockK(100, NAN) == 0.0f && LockK(100, 0.0f) == 0.0f; // no step, no write, at any setting
+        const bool okAll[kCapWheels] = { true, true, true, true };
+        const float equal[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+        const float two[2] = { 10.0f, 20.0f };
+        const LockStepOut s1 = LockStep(two, equal, okAll, 2, 1.0f), sh = LockStep(two, equal, okAll, 2, 0.5f);
+        const bool pairs = s1.final[0] == 15.0f && s1.final[1] == 15.0f && s1.wrote && s1.spreadBefore == 10.0f && s1.spreadAfter == 0.0f && sh.final[0] == 12.5f &&
+                           sh.final[1] == 17.5f && nearly(sh.spreadAfter, 5.0f, 1e-5f);
+        // unequal inertia (gains 0.1 and 0.2: 10 and 5): the mean (100 + 200) / 15 = 20, the momentum the same at any k
+        const float speeds[2] = { 10.0f, 40.0f }, gains[2] = { 0.1f, 0.2f };
+        const LockStepOut u = LockStep(speeds, gains, okAll, 2, 0.3f), u1 = LockStep(speeds, gains, okAll, 2, 1.0f);
+        const bool weighted = nearly(u1.final[0], 20.0f, 1e-4f) && nearly(u1.final[1], 20.0f, 1e-4f) && nearly(10.0f * u.final[0] + 5.0f * u.final[1], 300.0f, 1e-4f) &&
+                              nearly(u.final[0], 13.0f, 1e-4f);
+        // four wheels, one free at 60: one mean
+        const float four[4] = { 60.0f, 10.0f, 10.0f, 10.0f };
+        const LockStepOut f = LockStep(four, equal, okAll, 4, 1.0f);
+        const bool oneMean = f.final[0] == 22.5f && f.final[1] == 22.5f && f.final[3] == 22.5f && f.used == 4;
+        // nothing: a gain of 0 skipped and counted, one wheel left; a spread under 0.01; no k; a NaN k
+        const float noGain[2] = { 0.0f, 1.0f }, close[2] = { 10.0f, 10.005f };
+        const LockStepOut g = LockStep(two, noGain, okAll, 2, 1.0f), c = LockStep(close, equal, okAll, 2, 1.0f), z = LockStep(two, equal, okAll, 2, 0.0f),
+                          nk = LockStep(two, equal, okAll, 2, NAN);
+        const bool nothing = !g.wrote && g.skipped == 1 && g.final[1] == 20.0f && !c.wrote && c.final[1] == 10.005f && !z.wrote && !nk.wrote && nk.final[0] == 10.0f;
+        // who publishes (the lead's addendum): kinds 0 and 1, kind 2 only with DiffLockBiteAlways, never without the read or the pattern
+        const bool publishes = LockPublishes(true, true, 0, false) && LockPublishes(true, true, 1, false) && !LockPublishes(true, true, 2, false) &&
+                               LockPublishes(true, true, 2, true) && !LockPublishes(true, false, 0, false) && !LockPublishes(false, true, 0, false) &&
+                               !LockPublishes(false, true, 1, true) && !LockPublishes(false, true, 2, true);
+        // the drive's hook: the bite alone asks for it (Powertrain on, DiffLockBite above 0), at 0 or with Powertrain off it does not
+        const bool hook = DriveHookWanted(false, false, false, false, true, 50) && !DriveHookWanted(false, false, false, false, true, 0) &&
+                          !DriveHookWanted(false, false, false, false, false, 50) && DriveHookWanted(true, false, false, false, false, 0);
+        if (!(ks && pairs && weighted && oneMean && nothing && publishes && hook))
+            printf("     lock pure: k %d (k50 %.5f), pairs %d, weighted %d (%.4f %.4f), one mean %d, nothing %d, publishes %d, hook %d\n", ks, k50, pairs, weighted, u.final[0],
+                   u.final[1], oneMean, nothing, publishes, hook);
+        Check(ks && pairs && weighted && oneMean && nothing && publishes && hook,
+              "diff lock bite: k is 0 at 0 and 1 at 100, 0.1535 at 50 for 1/60 s and the same over two half steps, 0 for no step; the wheels on their inertia-weighted mean "
+              "with the momentum kept; a wheel with no inertia skipped, a spread under 0.01 or no k writes nothing; published at kinds 0 and 1, at 2 only with "
+              "DiffLockBiteAlways, never without the read or the setter's pattern; the bite alone asks for the drive's hook");
+    }
+    // the sketch at 60 Hz (the brief's): one driven wheel on ice and one on grip, floored for 5 s, the game's locked rule
+    // (the Reviewer's reading of c423a4: whole speeds, the threshold over the slowest, the share smoothed 0.8 old) alone
+    // against the bite at 50, 75 and 100: the spread of the two and the truck's speed at the end
+    {
+        struct Run { float spread, speed; };
+        auto run = [](int bite) {
+            const float dt = 1.0f / 60.0f, inertia = 20.0f, radius = 0.5f, mass = 2000.0f, torque = 800.0f, load = 10000.0f, stiff = 2000.0f;
+            const float mu[2] = { 0.05f, 0.8f };
+            float w[2] = { 0.0f, 0.0f }, share[2] = { 1.0f, 1.0f }, accel[2] = { 0.0f, 0.0f }, v = 0.0f, spreadSum = 0.0f;
+            int counted = 0;
+            for (int step = 0; step < 300; step++)
+            {
+                // the game's rule on the speeds as they came into the step
+                const float lo = fminf(floorf(w[0]), floorf(w[1])), hi = fmaxf(floorf(w[0]), floorf(w[1])), mean = (floorf(w[0]) + floorf(w[1])) / 2.0f;
+                const float threshold = 0.9f * lo + 0.1f * mean + 0.01f, width = fminf(fmaxf(0.05f * hi, 0.05f), 0.5f);
+                float force = 0.0f, was[2] = { w[0], w[1] };
+                for (int i = 0; i < 2; i++)
+                {
+                    const float target = fmaxf(1.0f - fmaxf(floorf(w[i]) + 0.5f * accel[i] - threshold, 0.0f) / width, 0.01f);
+                    share[i] = 0.8f * share[i] + 0.2f * target;
+                    const float slip = w[i] * radius - v, f = fminf(fmaxf(stiff * slip, -mu[i] * load), mu[i] * load);
+                    w[i] += (torque / 2.0f * share[i] - f * radius) / inertia * dt;
+                    force += f;
+                }
+                v += force / mass * dt;
+                // the bite after the drive
+                const float gain[2] = { 1.0f / inertia, 1.0f / inertia };
+                const bool ok[2] = { true, true };
+                const LockStepOut o = LockStep(w, gain, ok, 2, LockK(bite, dt));
+                w[0] = o.final[0], w[1] = o.final[1];
+                for (int i = 0; i < 2; i++) accel[i] = 0.8f * accel[i] + 0.2f * (w[i] - was[i]);
+                if (step >= 60) spreadSum += fabsf(w[0] - w[1]), counted++;
+            }
+            return Run{ spreadSum / (float)counted, v };
+        };
+        const Run game = run(0), halfway = run(50), firm = run(75), shaft = run(100);
+        char line[400];
+        snprintf(line, sizeof line, "diff lock bite, the sketch: ice and grip floored 5 s at 60 Hz; the spread over the last 4 s %.2f rad/s by the game rule alone, %.2f at 50, %.2f at 75, "
+                                    "%.3f at 100; the truck at %.2f, %.2f, %.2f and %.2f m/s",
+                 game.spread, halfway.spread, firm.spread, shaft.spread, game.speed, halfway.speed, firm.speed, shaft.speed);
+        Check(shaft.spread < 0.01f && firm.spread < halfway.spread && halfway.spread < game.spread && shaft.speed > game.speed, line);
+    }
+
     // the chassis push (BRIEF_chassis_push.md with the Reviewer's addendum and the lead's): k = 1 - max(1 / F_excess, 1 / F)
     // where F_excess = min(B4, throttle) over the pull the factor assumed is above 1 and F (the factor over the game's own
     // share) above 1; the push of a factor stepping from 1 to 3 at a GameFall of 0.4 with B4 still 0.9 held to the mod's

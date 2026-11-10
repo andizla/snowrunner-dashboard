@@ -509,6 +509,94 @@ inline float CapKeptSmooth(float before, float now)
     return kCapKeptOld * b + (1.0f - kCapKeptOld) * k;
 }
 
+// ---- the diff lock's bite (BRIEF_diff_lock_bite.md, the Reviewer's addendum and the lead's of 14:09) ----
+// The game's lock is a torque rule: a driven wheel over the slowest loses its torque, and nothing ties the speeds. With
+// the lock byte set (action + 0x4A) the mod moves each driven wheel's spin about its axle toward the driven wheels' mean,
+// weighted by each one's inertia about its axle (1 / CapGain), after the game's drive: final = w + k (mean - w), so the
+// wheels' angular momentum about their axles stays and the lock adds no drive and no brake of its own.
+// k from DiffLockBite p and the step's own seconds: a time constant tau = 10^(-p / 50) s (the Reviewer's R2), k = 1 -
+// exp(-dt / tau); 0 at p 0 (the game's own lock), 1 at p 100 (one shaft); 0 for a dt that is no number or not above 0.
+inline float LockK(int p, float dt)
+{
+    if (p <= 0 || !(dt > 0.0f) || !isfinite(dt)) return 0.0f;
+    if (p >= 100) return 1.0f;
+    const float tau = powf(10.0f, -(float)p / 50.0f);
+    const float k = 1.0f - expf(-dt / tau);
+    return isfinite(k) ? CutClamp01(k) : 0.0f;
+}
+// Under this spread (the fastest minus the slowest, rad/s) nothing is written, so a standing truck is never written and
+// no resting body is woken (the Reviewer's R5).
+static const float kLockSpreadMin = 0.01f;
+struct LockStepOut
+{
+    float final[kCapWheels];
+    float spreadBefore, spreadAfter; // the fastest minus the slowest of the wheels used, after the drive and after the lock
+    int used, skipped;               // wheels in the mean, and driven wheels read whole but with no inertia (gain 0)
+    bool wrote;                      // final differs from post
+};
+// One step of the lock over a truck's driven wheels: post each one's speed after the drive (the gear's direction, the
+// game's measure), gain its CapGain, ok read whole. Fewer than two wheels with a gain, a spread under kLockSpreadMin, no
+// k or a value that is no number: final is post.
+inline LockStepOut LockStep(const float *post, const float *gain, const bool *ok, int n, float k)
+{
+    LockStepOut o = {};
+    if (n > kCapWheels) n = kCapWheels;
+    if (n < 0) n = 0;
+    float sumI = 0.0f, sumIw = 0.0f, lo = 0.0f, hi = 0.0f;
+    for (int i = 0; i < n; i++)
+    {
+        o.final[i] = post[i];
+        if (!ok[i]) continue;
+        if (!(gain[i] > 0.0f) || !isfinite(gain[i]) || !isfinite(post[i]))
+        {
+            o.skipped++;
+            continue;
+        }
+        const float inertia = 1.0f / gain[i];
+        sumI += inertia;
+        sumIw += inertia * post[i];
+        lo = o.used ? fminf(lo, post[i]) : post[i];
+        hi = o.used ? fmaxf(hi, post[i]) : post[i];
+        o.used++;
+    }
+    o.spreadBefore = o.spreadAfter = o.used ? hi - lo : 0.0f;
+    if (o.used < 2 || !(k > 0.0f) || !isfinite(k) || o.spreadBefore < kLockSpreadMin || !(sumI > 0.0f) || !isfinite(sumI) || !isfinite(sumIw)) return o;
+    const float mean = sumIw / sumI, kk = CutClamp01(k);
+    if (!isfinite(mean)) return o;
+    lo = hi = mean;
+    for (int i = 0; i < n; i++)
+    {
+        if (!ok[i] || !(gain[i] > 0.0f) || !isfinite(gain[i]) || !isfinite(post[i])) continue;
+        o.final[i] = kk >= 1.0f ? mean : post[i] + kk * (mean - post[i]);
+        lo = fminf(lo, o.final[i]);
+        hi = fmaxf(hi, o.final[i]);
+        if (o.final[i] != post[i]) o.wrote = true;
+    }
+    o.spreadAfter = hi - lo;
+    return o;
+}
+// What the mod's thread publishes for the driven truck: its action and vehicle and DiffLockBite, while Powertrain is on,
+// the setting above 0 and the truck's lock kind not always on (vehicle + 0xE8 is not 2, or DiffLockBiteAlways).
+struct LockSlot
+{
+    uint64_t action, vehicle;
+    uint64_t at; // GetTickCount64 at the publish
+    int bite;    // DiffLockBite, 1 to 100
+    int kind;    // vehicle + 0xE8: 0 a lock fitted, 1 none, 2 always on
+};
+// Whether the mod's thread publishes the bite for a truck of this lock kind (the lead's addendum of 14:09): only with the
+// setter's pattern found once at the start, the kind read, and the kind not 2 unless DiffLockBiteAlways.
+inline bool LockPublishes(bool patternFound, bool kindRead, int kind, bool always)
+{
+    return patternFound && kindRead && (kind != 2 || always);
+}
+// Whether the wheels' drive's hook is asked for (gauges.cpp, CreepHookStep): Creep, Probe, the damper's settings, the
+// torque cut, or the diff lock's bite (Powertrain on and DiffLockBite above 0; the Reviewer's R4).
+inline bool DriveHookWanted(bool creep, bool probe, bool damper, bool cut, bool powertrain, int bite)
+{
+    return creep || probe || damper || cut || (powertrain && bite > 0);
+}
+
 // ---- the chassis push (BRIEF_chassis_push.md, the Reviewer's addendum and the lead's of 2026-11-10 09:58) ----
 // At road speed the game's drive pays a share s of each driven wheel's torque as a push straight on the wheel's parent
 // body along the ground (c42b8a, applyPointImpulse), sized by min(B4, throttle) x the torque factor at + 0xCC with no tyre

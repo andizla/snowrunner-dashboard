@@ -219,6 +219,23 @@ struct PushCounts
     float given, back, k, fx, f, b4, speed;
 };
 void PushCountsGet(PushCounts &out);
+// The diff lock's bite (BRIEF_diff_lock_bite.md; torque_cut.h, LockStep): the driven truck's action and vehicle,
+// DiffLockBite (1 to 100) and the lock kind read (vehicle + 0xE8), published while it may bite; bite 0 or no action
+// clears it; a publish older than kTorqueFresh passes. In the drive's hook, while the lock byte (action + 0x4A) is set and
+// the handbrake (action + 0x48) is not, the driven wheels' spins about their axles move toward their mean after the drive,
+// before the wheel cap.
+void LockGive(uint64_t action, uint64_t vehicle, int bite, int kind);
+// Its counters since the start: the steps the slot named the action, those with the lock byte off, those held by the
+// handbrake, those written, faults, wheels skipped (no inertia); the last written step's wheels, k and spread after the
+// drive and after the lock (rad/s), and the vehicle it was for.
+struct LockCounts
+{
+    long calls, off, handbrake, writes, faults, skipped;
+    int wheels;
+    float k, spreadBefore, spreadAfter;
+    uint64_t vehicle;
+};
+void LockCountsGet(LockCounts &out);
 // The hook's calls so far: for the action given (hits) and all of them.
 void CreepCounts(long &hits, long &calls);
 // The threads the drive was called on so far, at most most of them; full where more were seen than are kept.

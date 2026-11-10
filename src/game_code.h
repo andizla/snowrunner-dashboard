@@ -443,6 +443,28 @@ inline bool TruckInputFind(const uint8_t *code, size_t from, size_t to, TruckInp
     return true;
 }
 
+// ---- the diff lock's setter, for the bite (BRIEF_diff_lock_bite.md, the lead's addendum of 14:09) ----
+// The script's isDiffLockEnabled setter (review\research_diff_lock_kind.md; d7d470 on 6adb8627, d7d500 on 6ab52f5d,
+// d7bb70 on 6a607c05): it writes action + 0x4A only while vehicle + 0xE8 is 0. Its bytes hold both offsets and the 0
+// test, so found once they say the lock kind sits at vehicle + 0xE8 on this build. Never called, never hooked.
+static const char *const kLockSetterPattern = "83 B9 E8 00 00 00 00 75 0C 48 8B 41 68 38 50 4A 74 03 88 50 4A C3";
+inline bool LockSetterFind(const uint8_t *code, size_t from, size_t to, size_t &out, const char *&why)
+{
+    out = 0;
+    why = "";
+    uint8_t bytes[kPatternMax], mask[kPatternMax];
+    size_t at = 0;
+    int count = 0;
+    const int length = PatternParse(kLockSetterPattern, bytes, mask);
+    if (!PatternFind(code, from, to, bytes, mask, length, at, count) || count != 1)
+    {
+        why = count > 1 ? "the diff lock's setter's bytes stand more than once" : "the diff lock's setter was not found";
+        return false;
+    }
+    out = at;
+    return true;
+}
+
 // ---- the fitted gearbox's desc, for the positions by gearbox (BRIEF_positions_by_gearbox.md) ----
 // const void *(vehicle, const std::string *name): the gearbox desc of that name among the vehicle's socket types, the
 // lookup Truck.SetGearbox makes (review\research_low_range_fitted.md; d7d550 on 6adb8627, d7d5e0 on 6ab52f5d, d7bc50

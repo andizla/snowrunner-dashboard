@@ -640,16 +640,16 @@ static bool CapReadAfter(const CapTruckRead &t, float *post)
 }
 // The writes: each wheel moved about its axle by final - post (CapMove, three floats at body + 0x240, the w lane left).
 // The game's own setter is one store of body + 0x240: the same here, with no call into the game.
-static bool CapWrite(const CapTruckRead &t, const float *post, const CapStepOut &o)
+static bool CapWriteFinal(const CapTruckRead &t, const float *post, const float *final)
 {
     __try
     {
         for (int i = 0; i < t.n; i++)
         {
-            if (!t.w[i].ok || o.final[i] == post[i]) continue;
+            if (!t.w[i].ok || final[i] == post[i]) continue;
             CapVec omega;
             CapGet3(t.w[i].body + 0x240, omega);
-            if (!CapMove(omega, t.w[i].axle, t.sign, o.final[i] - post[i])) continue;
+            if (!CapMove(omega, t.w[i].axle, t.sign, final[i] - post[i])) continue;
             volatile float *at = (volatile float *)(t.w[i].body + 0x240);
             at[0] = omega.x;
             at[1] = omega.y;
@@ -661,6 +661,60 @@ static bool CapWrite(const CapTruckRead &t, const float *post, const CapStepOut 
     {
         return false;
     }
+}
+
+static bool CapWrite(const CapTruckRead &t, const float *post, const CapStepOut &o) { return CapWriteFinal(t, post, o.final); }
+
+// ---- the diff lock's bite (BRIEF_diff_lock_bite.md; torque_cut.h, LockStep) ----
+// The mod's thread publishes the driven truck's action, vehicle and DiffLockBite (LockGive). In the drive's hook, after
+// the drive: the lock byte and the handbrake read, then LockStep on the driven wheels' speeds the drive left, then the
+// cap (when it is on) on the locked ones, one write a wheel. No lock, no heap, no log.
+static LockSlot g_lockSlots[2];
+static int g_lockNext = 0;
+static void *volatile g_lockSlot = nullptr;
+static volatile LONG g_lockCalls = 0, g_lockOff = 0, g_lockHand = 0, g_lockWrites = 0, g_lockFaults = 0, g_lockSkipped = 0, g_lockWheels = 0;
+static volatile LONG g_lockKBits = 0, g_lockBeforeBits = 0, g_lockAfterBits = 0;
+static volatile LONG64 g_lockVehicle = 0;
+// The lock byte set and the handbrake not (R6): k for this step; 0 otherwise or where the read faults.
+static float LockKNow(const void *action, int bite, float dt)
+{
+    __try
+    {
+        const uint8_t *a = (const uint8_t *)action;
+        if (!*(const volatile uint8_t *)(a + 0x4A))
+        {
+            InterlockedIncrement(&g_lockOff);
+            return 0.0f;
+        }
+        if (*(const volatile uint8_t *)(a + 0x48))
+        {
+            InterlockedIncrement(&g_lockHand);
+            return 0.0f;
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        InterlockedIncrement(&g_lockFaults);
+        return 0.0f;
+    }
+    return LockK(bite, dt);
+}
+// LockStep over a read truck, counted; locked gets the speeds to write (post where nothing moves).
+static void LockOver(const CapTruckRead &t, const float *post, float k, float *locked, uint64_t vehicle)
+{
+    float gain[kCapWheels];
+    bool ok[kCapWheels];
+    for (int i = 0; i < t.n; i++) gain[i] = t.w[i].gain, ok[i] = t.w[i].ok;
+    const LockStepOut o = LockStep(post, gain, ok, t.n, k);
+    for (int i = 0; i < t.n; i++) locked[i] = o.final[i];
+    if (o.skipped) InterlockedExchangeAdd(&g_lockSkipped, o.skipped);
+    if (!o.wrote) return;
+    InterlockedIncrement(&g_lockWrites);
+    InterlockedExchange(&g_lockWheels, o.used);
+    InterlockedExchange(&g_lockKBits, FloatBits(k));
+    InterlockedExchange(&g_lockBeforeBits, FloatBits(o.spreadBefore));
+    InterlockedExchange(&g_lockAfterBits, FloatBits(o.spreadAfter));
+    InterlockedExchange64(&g_lockVehicle, (LONG64)vehicle);
 }
 
 // The cap's state, the physics thread's own (one vehicle under the cut): the arming, the kept share smoothed. A clear
@@ -694,7 +748,7 @@ struct CapAround
     uint8_t *wheel[kCapWheels];
     int n;
 };
-static CapAround CapStepAround(const TorqueCutSlot *cut, void *action, float throttle, float dt)
+static CapAround CapStepAround(const TorqueCutSlot *cut, void *action, float throttle, float dt, float lockK)
 {
     CapAround out = {};
     out.kept = 1.0f;
@@ -725,6 +779,18 @@ static CapAround CapStepAround(const TorqueCutSlot *cut, void *action, float thr
         InterlockedExchange(&g_capClampedNow, 0);
         g_capKept = CapKeptSmooth(g_capKept, 1.0f);
         InterlockedExchange(&g_capKeptBits, FloatBits(g_capKept));
+        // the lock acts with the cap waiting too: the locked speeds against the drive's
+        if (lockK > 0.0f && readOk)
+        {
+            float post[kCapWheels], locked[kCapWheels];
+            for (int i = 0; i < t.n; i++) post[i] = t.w[i].pre;
+            if (!CapReadAfter(t, post)) InterlockedIncrement(&g_lockFaults);
+            else
+            {
+                LockOver(t, post, lockK, locked, vehicle);
+                if (!CapWriteFinal(t, post, locked)) InterlockedIncrement(&g_lockFaults);
+            }
+        }
         return out;
     }
     InterlockedIncrement(&g_capArmedSteps);
@@ -737,7 +803,11 @@ static CapAround CapStepAround(const TorqueCutSlot *cut, void *action, float thr
         InterlockedIncrement(&g_capFaults);
         return out;
     }
-    const CapStepOut o = CapStep(pre, post, gain, ok, t.n, cap, true);
+    // the lock on what the drive left, then the cap on the locked speeds (the brief's point 4); the write against post
+    float locked[kCapWheels];
+    for (int i = 0; i < t.n; i++) locked[i] = post[i];
+    if (lockK > 0.0f) LockOver(t, post, lockK, locked, vehicle);
+    const CapStepOut o = CapStep(pre, locked, gain, ok, t.n, cap, true);
     if (!CapWrite(t, post, o)) InterlockedIncrement(&g_capFaults);
     InterlockedIncrement(&g_capSteps);
     if (o.clamps) InterlockedExchangeAdd(&g_capClamps, o.clamps);
@@ -908,6 +978,17 @@ static void CreepDrive(void *action, float throttle, float dt)
         throttle = _mm_cvtss_f32(_mm_max_ss(_mm_set_ss(throttle), _mm_set_ss(slot->share))); // maxss itself: a ?: may be built with its operands swapped
     }
     if (const DriveStepFn step = g_driveStep) step((uint64_t)(uintptr_t)action, dt);
+    // the diff lock's bite: its slot for this action, fresh; k from the setting and this step's seconds while the lock
+    // byte is set and the handbrake is not
+    const LockSlot *lock = (const LockSlot *)g_lockSlot;
+    uint64_t lockAt = 0;
+    const bool lockHere = lock && (uint64_t)(uintptr_t)action == lock->action && lock->bite > 0 && (lockAt = GetTickCount64()) >= lock->at && lockAt - lock->at <= kTorqueFresh;
+    float lockK = 0.0f;
+    if (lockHere)
+    {
+        InterlockedIncrement(&g_lockCalls);
+        lockK = LockKNow(action, lock->bite, dt);
+    }
     // the chassis push: the factor's assumption for this action (D, the factor written), or the cap's part (a held gear)
     const PushSlot *push = (const PushSlot *)g_pushSlot;
     const bool cutHere = cut && (uint64_t)(uintptr_t)action == cut->action && now && now >= cut->at && now - cut->at <= kTorqueFresh;
@@ -922,7 +1003,22 @@ static void CreepDrive(void *action, float throttle, float dt)
     if (pushOn && pushRead) b4 = CutB4Read(action);
     if (!capOn)
     {
+        // the lock without the cap: its own read block (one driven truck, one call at a time)
+        static CapTruckRead lr;
+        const bool lockRead = lockK > 0.0f && CapReadBefore((const void *)(uintptr_t)lock->vehicle, action, lr);
+        if (lockK > 0.0f && !lockRead) InterlockedIncrement(&g_lockFaults);
         ((DriveFn)g_creepWay)(action, throttle, dt);
+        if (lockRead)
+        {
+            float post[kCapWheels], locked[kCapWheels];
+            for (int i = 0; i < lr.n; i++) post[i] = lr.w[i].pre;
+            if (!CapReadAfter(lr, post)) InterlockedIncrement(&g_lockFaults);
+            else
+            {
+                LockOver(lr, post, lockK, locked, lock->vehicle);
+                if (!CapWriteFinal(lr, post, locked)) InterlockedIncrement(&g_lockFaults);
+            }
+        }
         if (pushOn && pushRead && PushReadAfter(pr))
         {
             const float fx = PushExcess(b4, throttle, push->assumed);
@@ -933,7 +1029,7 @@ static void CreepDrive(void *action, float throttle, float dt)
         }
         return;
     }
-    const CapAround around = CapStepAround(cut, action, throttle, dt);
+    const CapAround around = CapStepAround(cut, action, throttle, dt, lockHere && lock->vehicle == cut->vehicle ? lockK : 0.0f);
     if (capPush && pushRead && PushReadAfter(pr))
     {
         // a parent carries a held wheel when one of the wheels the cap held this step hangs on it
@@ -966,6 +1062,34 @@ void PushGive(uint64_t action, uint64_t vehicle, float assumed, float factorOver
     g_pushNext ^= 1;
     slot = PushSlot{ action, vehicle, GetTickCount64(), assumed, factorOver, back };
     InterlockedExchangePointer(&g_pushSlot, &slot);
+}
+
+void LockGive(uint64_t action, uint64_t vehicle, int bite, int kind)
+{
+    if (!action || !vehicle || bite <= 0)
+    {
+        InterlockedExchangePointer(&g_lockSlot, nullptr);
+        return;
+    }
+    LockSlot &slot = g_lockSlots[g_lockNext];
+    g_lockNext ^= 1;
+    slot = LockSlot{ action, vehicle, GetTickCount64(), bite > 100 ? 100 : bite, kind };
+    InterlockedExchangePointer(&g_lockSlot, &slot);
+}
+
+void LockCountsGet(LockCounts &out)
+{
+    out.calls = g_lockCalls;
+    out.off = g_lockOff;
+    out.handbrake = g_lockHand;
+    out.writes = g_lockWrites;
+    out.faults = g_lockFaults;
+    out.skipped = g_lockSkipped;
+    out.wheels = (int)g_lockWheels;
+    out.k = BitsFloat(g_lockKBits);
+    out.spreadBefore = BitsFloat(g_lockBeforeBits);
+    out.spreadAfter = BitsFloat(g_lockAfterBits);
+    out.vehicle = (uint64_t)g_lockVehicle;
 }
 
 void PushCountsGet(PushCounts &out)
