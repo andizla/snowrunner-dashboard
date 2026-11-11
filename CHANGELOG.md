@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Spring and Damping are set apart for the front and the rear: Spring front, Spring rear, Damping front and Damping rear (`SpringFront`, `SpringRear`, `DampingFront`, `DampingRear`). Front is the first axle, rear every axle behind it, a second steered axle too. A trailer is not touched. Settings from before carry over: `SpringScale` and `DampingScale` read as both ends, in `Gauges.ini` and in every truck's file, so nothing changes at the update. A save writes the new keys. It keeps the old key while both ends are alike and removes it once they differ. `Gauges.log` names each truck's front and rear wheels once.
 - The physics rate's test mode (`PhysicsRate=120`) takes a world's first step as good within 20 percent of 1/120 s. Before, it had to be 1/120 s to the last bit, and the world's own figure is a hair off, so the line in capitals and the tab's note came on a world that did run at 120. The iterations are still checked exactly, and the log line gives the step's bits.
 - A key of the top row bound to an action is the same key after a restart. Before, the 1 key was written `Key 1` and read back as the left mouse button, so a click selected 1st gear. `Key 0` was refused. An ini written so heals by itself. A mouse button in the ini is refused with one line in `Gauges.log`, as the tab never binds one.
 - Gear 1's second binding has a key of its own, `BindGear1Second`. Before, it shared `BindGear12` with Gear 12's first, and after a restart both held Gear 12's control. Set Gear 1's second binding once more on the tab where it had one.

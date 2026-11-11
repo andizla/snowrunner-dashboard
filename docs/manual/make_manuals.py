@@ -344,8 +344,11 @@ the game rebuilds the truck, its engine set follows it as the suspension's does.
 as <code>PeakTorqueRpm.&lt;engine&gt;</code>, <code>Aspiration.&lt;engine&gt;</code>, <code>Fuel.&lt;engine&gt;</code> and
 <code>TorqueCurve.&lt;engine&gt;</code>, and the button copies it to the engine's file (section 15). One truck's set goes by the
 game's id, which can change at a load. Until the mod gives trucks an id of its own, that truck can lose its set. The kind's set keeps.</p>
-<ul><li><b>Spring and Damping</b> (<code>SpringScale</code>, <code>DampingScale</code>, x0.25 to x4): the truck's own spring
-and damping times a factor. Above 1 the spring is stiffer and the truck sits higher, below 1 softer and lower. More damping
+<ul><li><b>Spring front, Spring rear, Damping front and Damping rear</b> (<code>SpringFront</code>, <code>SpringRear</code>,
+<code>DampingFront</code>, <code>DampingRear</code>, x0.25 to x4): each wheel's own spring and damping times the factor of its
+end. Front is the first axle, rear every axle behind it. A trailer is not touched. Settings from before,
+<code>SpringScale</code> and <code>DampingScale</code>, read as both ends, so nothing changes at the update.
+Above 1 the spring is stiffer and that end sits higher, below 1 softer and lower. More damping
 settles the body sooner, less lets it bounce longer. The game takes a wheel's spring and damping only up to 1, so where a
 truck's own figure is 0.5 (the Arocs' front damping), a factor above 2 cannot act in full. The tab says so.</li>
 <li><b>Frame flex and Twist range</b> (<code>FrameFlex</code>, x0.1 to x7; <code>TwistRange</code>, x0.25 to x8): on a truck

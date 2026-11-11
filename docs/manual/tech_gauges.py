@@ -1016,7 +1016,7 @@ def s_suspension():
 compression end SuspensionMin (+0xB4), and the attach point the spring hangs from (+0xA0 to +0xA8, in the frame of the body
 the constraint is on). A detour in the wheels' drive reads each wheel's place <i>x</i> along the axis and its speed <i>v</i>
 every physics step and writes there, so the features act on each step, not on the mod's 50 ms pass
-(<code>suspension_step.h</code>). With that hook in, SpringScale and DampingScale are written there too, so a wheel's spring
+(<code>suspension_step.h</code>). With that hook in, the spring and damping factors are written there too, so a wheel's spring
 and damping land in the same step. The hook takes each wheel from the truck's action as the game walks it (the truck at
 +0x30, its wheel models from +0x200) and writes only where that wheel, its constraint and the constraint's class are the
 ones the mod's thread handed it. Before each write it reads the field. A word the mod wrote there, or the stock, it writes
@@ -1027,11 +1027,30 @@ and the other two are single words. The stock values are read once a truck. A tr
 driven, so a truck driven again is scaled once and never twice. Compression is negative <i>x</i>; <i>L</i> is the
 compression travel as tuned and <i>u</i> = −<i>x</i> / <i>L</i>, from 0 to 1, how far into it the wheel is.</p>
 <h3>Spring, damping and travel</h3>
-{eq('<i>k</i> = clamp(<i>k</i><sub>stock</sub> · SpringScale · <i>f</i>(<i>u</i>), 0.001, 1),    <i>c</i> = clamp(<i>c</i><sub>stock</sub> · DampingScale · <i>G</i>(<i>v</i>) · <i>z</i>(<i>u</i>), 0.01, 1)', 41)}
+{eq('<i>k</i> = clamp(<i>k</i><sub>stock</sub> · Spring<sub>end</sub> · <i>f</i>(<i>u</i>), 0.001, 1),    <i>c</i> = clamp(<i>c</i><sub>stock</sub> · Damping<sub>end</sub> · <i>G</i>(<i>v</i>) · <i>z</i>(<i>u</i>), 0.01, 1)', 41)}
 <p class="where">The game holds both at 1, so a factor can act in full only while the stock figure times it stays under 1
 (the Arocs' front damping is 0.5: a factor above 2 is cut). <i>f</i>, <i>G</i> and <i>z</i> are 1 with their features off.
 ExtraTravel moves SuspensionMin by its cm toward the body (SuspensionMin − ExtraTravel / 100 m), from a file's 0.0 too, and
 never back.</p>
+<h3>Front and rear</h3>
+<p>Spring and damping have a factor for each end (SpringFront, SpringRear, DampingFront, DampingRear). A wheel's end is made
+once a vehicle (<code>SuspEndsRule</code>, <code>suspension_scan.h</code>), at the first pass where every wheel's place is
+read, from the wheel centres in the chassis's frame. A wheel is rear where another wheel is more than 0.2 m ahead of it and
+less aside than ahead. It is front where none is. So the first axle is front and every axle behind it rear, a second steered
+axle too, and a truck first seen bent or at full steer gets the same ends. The ends are kept until the vehicle or its wheel
+count changes. The mod's thread, the step's hook and the tab take a wheel's factor from that one list. Only the driven
+truck's own wheels are written, never a trailer's. <code>Gauges.log</code> names the front and the rear wheels once a truck
+("suspension: front wheels ..., rear wheels ...").</p>
+<p>While both ends of a value are alike it is written without the list, as before. With the ends apart and the list not made
+yet nothing new is written, and the log says so once a truck ("suspension: front and rear are set apart and this truck's
+front and rear wheels are not known yet ..."). One wheel whose place is not read in 20 passes, on a truck otherwise placed,
+is taken as rear and named in the log ("suspension: wheel 3's place was not read in 20 passes: it is taken as rear"). With one end at 1 that end's wheels get their stock each step. The
+ride height and the sway bars keep their own rule, the frontmost axle within 0.2 m, which is the same axle on a truck
+standing straight.</p>
+<p>The older keys SpringScale and DampingScale are read first as both ends, then each new key over them, from
+<code>Gauges.ini</code>, a truck's <code>[Suspension]</code> sections and a kind's. Reading an old file writes nothing. A
+save writes the four new keys. It writes the old key too while both ends are alike, so an older build reads the same value.
+Once they differ it removes the old key, and an older build takes that value from the level below, or 1.</p>
 <h3>The damper</h3>
 <p>Havok's damper is linear: its force is the damping times the shaft speed. So <i>G</i> is written each step, with
 <i>w</i> = |<i>v</i>| / knee, <i>L</i><sub>d</sub> and <i>H</i><sub>d</sub> the low and high speed factors (compression for
