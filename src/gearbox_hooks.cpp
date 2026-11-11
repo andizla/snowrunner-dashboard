@@ -1431,7 +1431,8 @@ static const int kShowLookAgain = 240; // calls: a list not placed whole is look
 static ShowSlot g_showSlots[2];
 static int g_showNext = 0;
 static void *volatile g_showSlot = nullptr;
-static ShowRead g_showRead; // the physics thread's own: one driven truck, one call at a time
+static ShowRead g_showRead; // one call at a time: g_showBusy keeps a second call out (a truck change, two threads)
+static volatile LONG g_showBusy = 0;
 static bool g_showMidOk = false;
 static DdAvg g_showAvg;
 static ShowLay g_showLay;
@@ -1458,14 +1459,17 @@ static bool ShowReadBefore(const void *vehicle, const void *action, ShowRead &r,
         r.sign = r.gear < 0 ? -1.0f : 1.0f;
         // the chassis's own forward speed, for a wheel whose rolling direction is not read
         float chassis = NAN;
+        CapVec mainF = {};
+        bool mainOk = false;
         const uint8_t *vm = *(const uint8_t *const *)(v + 0x60);
         const uint8_t *main = (uintptr_t)vm >= 0x10000 ? *(const uint8_t *const *)(vm + 0x230) : nullptr;
         if ((uintptr_t)main >= 0x10000)
         {
-            CapVec vel, f;
+            CapVec vel;
             CapGet3(main + 0x230, vel);
-            CapGet3(main + 0x170, f);
-            chassis = r.sign * CapDot(vel, f);
+            CapGet3(main + 0x170, mainF);
+            chassis = r.sign * CapDot(vel, mainF);
+            mainOk = true;
         }
         const uintptr_t begin = *(const uintptr_t *)(v + 0x200), end = *(const uintptr_t *)(v + 0x208);
         if (end < begin) return false;
@@ -1503,13 +1507,13 @@ static bool ShowReadBefore(const void *vehicle, const void *action, ShowRead &r,
             const bool cylinderRead = CutCylinderRead(wheel, cylinderVtable, cylinder);
             w.radius = WheelRollRadius(*(const volatile float *)(wheel + 0x94), cylinder, cylinderRead).r;
             w.ok = w.alen > 1e-6f && isfinite(w.alen) && w.radius > 0.0f && isfinite(w.radius);
-            // S1: the wheel body's own speed along its rolling direction: its parent's forward less the part along the axle
+            // S1: the wheel body's own speed along its rolling direction: the main body's forward less the part along
+            // the axle, so a steered wheel and an articulated rear follow by the axle. Not the parent's forward: a
+            // parent can be a rocker or a bone with a swing of its own (the review of 131, S2)
             w.truck = chassis;
-            const uint8_t *parent = *(const uint8_t *const *)(wheel + 0x10);
-            if (w.ok && (uintptr_t)parent >= 0x10000)
+            if (w.ok && mainOk)
             {
-                CapVec f, n = w.axle;
-                CapGet3(parent + 0x170, f);
+                CapVec f = mainF, n = w.axle;
                 ShowNorm(n);
                 const float along = CapDot(f, n);
                 CapVec d = { f.x - along * n.x, f.y - along * n.y, f.z - along * n.z };
@@ -1681,7 +1685,9 @@ static void ShowDrive(const ShowSlot *show, void *action, float throttle, float 
     InterlockedIncrement(&g_showSeq);
     InterlockedIncrement(&g_showSteps);
 }
-// The drive's hook. With no display slot: one test of a pointer, then the hook as it was.
+// The drive's hook. With no display slot: one test of a pointer, then the hook as it was. The display's read, note and
+// averages are one set: a call that finds another inside (at a truck change the old truck's call can still run on
+// another of the physics threads) runs the hook as it is, with no display (the review of 131, S1).
 static void CreepDrive(void *action, float throttle, float dt)
 {
     const ShowSlot *show = (const ShowSlot *)g_showSlot;
@@ -1691,7 +1697,13 @@ static void CreepDrive(void *action, float throttle, float dt)
         CreepDriveInner(action, throttle, dt);
         return;
     }
+    if (InterlockedCompareExchange(&g_showBusy, 1, 0) != 0)
+    {
+        CreepDriveInner(action, throttle, dt);
+        return;
+    }
     ShowDrive(show, action, throttle, dt);
+    InterlockedExchange(&g_showBusy, 0);
 }
 
 void DriveShowGive(uint64_t action, uint64_t vehicle, uint64_t cylinderVtable)

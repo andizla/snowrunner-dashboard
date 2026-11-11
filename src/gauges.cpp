@@ -4315,6 +4315,7 @@ struct TruckWatch
     bool canReverse;            // a binding reaches reverse (GearDown, GearR or GearN): Gearbox=2 with a wheel's pedals may take the shifter
     int gearboxLevel;           // the Gearbox level in force on the last pass (level 2 runs as 1 without a reverse), for state.h
     bool lowPlusSaid;           // the log said once that the game's shifter's L+ reads as the first gear
+    ShifterKept shifter;        // the game's shifter's last ask: the same one again is no pick (gearbox_model.h)
     PositionsState positions;   // the fitted gearbox's positions for the driven truck (PositionsStep)
     GearboxDoors doors;         // GearboxDoorsNow on the last pass
     PullTest pullTest;          // the pull test (the tab's button)
@@ -4519,6 +4520,7 @@ static void GearboxLetGo(TruckWatch &w)
 {
     GearboxPolicy(kPolicyPass, nullptr, false);
     w.pos = GearboxPosModel{};
+    w.shifter = ShifterKept{};
 }
 
 // The calls that passed the doors a position picked on the game's shifter comes through, so far: one more on a pass at
@@ -6558,6 +6560,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         if (orders.took)
         {
             GearboxPosTake(w.pos, boxTruck);
+            // the game's shifter stands where the truck is taken; what it sends from now on is measured against that
+            w.shifter = ShifterKept{};
+            w.shifter.last = GearboxAskOfPos(w.pos.pos, w.pos.gear);
             w.gearbox.gear = raw.gear >= 1 && raw.gear <= TruckTopGear(raw) ? raw.gear : 1;
             w.gearbox.pause = kShiftPause;
             GearboxHuntClear(w.gearbox);
@@ -6676,6 +6681,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             if (!own || w.pos.pos == kPosA) GearboxFollowFloor(w.gearbox, autoGear); // in A the model's gear goes where the floor lifts the game's
             const int posWas = w.pos.pos;
             GearboxActions acts = w.actions;
+            bool bySeq = false, byKick = false; // what moved the position, for its line
             // BackToA (review 17, Sequential): at Gearbox=2, back to A once the timer has run out and the conditions
             // have held a second; one log line for each change of what holds it
             if (own)
@@ -6702,7 +6708,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 const float heldFor = w.back.since;
                 if (BackToAStep(w.back, s.backToA, w.backHand, bi, dt))
                 {
-                    acts.a = true;
+                    acts.a = bySeq = true;
                     Log(L"sequential: back to A after %.1f s in gear %d, A's gear %d, %.0f rpm", heldFor + dt, w.pos.gear, autoGear, w.tach.rpm);
                 }
                 else if (w.back.why != w.backSaid && w.back.why > kBackTimer && w.back.why != kBackSteadying)
@@ -6735,7 +6741,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 const int seq = acts.a ? 0 : SequentialStep(w.seq, si, dt);
                 if (seq)
                 {
-                    acts.a = true;
+                    acts.a = bySeq = true;
                     Log(seq > 0 ? L"sequential: up at the red zone, gear %d, back to D (D's gear %d), %.0f rpm on the gearbox's input"
                                 : L"sequential: down before a stall, gear %d, back to D (D's gear %d), %.0f rpm on the gearbox's input",
                         w.pos.gear, autoGear, w.clutch.input);
@@ -6743,10 +6749,20 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             }
             else w.back = BackModel{}, w.backSaid = kBackOff, w.seq = SeqModel{};
             const int gearWas = w.pos.gear;
-            if (shifterAsked)
+            // the game's shifter sends its last position again when its button is let go (a tap, or the lock on the same
+            // button): only an ask that differs from the last is the player's pick (ShifterAskStep)
+            static const char *const askName[] = { "", "A", "N", "R", "H", "a gear", "L-", "L" };
+            const int shifterDid = shifterAsked ? ShifterAskStep(w.shifter, ask, acts, boxTruck.top) : kShifterAgain;
+            const bool shifterPicked = shifterAsked && shifterDid == kShifterPick;
+            if (shifterAsked && shifterDid == kShifterAgainFirst)
             {
-                GearboxActionsAsk(acts, ask, boxTruck.top);
-                static const char *const askName[] = { "", "A", "N", "R", "H", "a gear", "L-", "L" };
+                if (ask.kind == kAskGear) Log(L"gearbox: the game's shifter sent gear %d again, not followed (its last position, sent when its button is let go)", ask.gear);
+                else Log(L"gearbox: the game's shifter sent %S again, not followed (its last position, sent when its button is let go)", askName[ask.kind]);
+            }
+            const int againTold = ShifterAgainTold(w.shifter, dt);
+            if (againTold) Log(L"gearbox: the game's shifter sent its last position again %d times in the last minute, none followed", againTold);
+            if (shifterPicked)
+            {
                 if (ask.kind == kAskGear) Log(L"gearbox: the game's shifter asked for gear %d", ask.gear);
                 else Log(L"gearbox: the game's shifter asked for %S", askName[ask.kind]);
                 if (ask.kind == kAskGear && ask.gear == 1 && !w.lowPlusSaid)
@@ -6761,7 +6777,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             const long kicks = GearboxKicks();
             if (own && w.kicksKnown && kicks != w.kicksSeen && GearboxManual(w) && w.pos.pos != kPosN)
             {
-                if (!(shifterAsked && ask.kind == kAskN)) GearboxActionsAsk(acts, GearboxAsk{ kAskN, 0 }, boxTruck.top);
+                if (!(shifterPicked && ask.kind == kAskN)) GearboxActionsAsk(acts, GearboxAsk{ kAskN, 0 }, boxTruck.top);
+                byKick = true;
                 Log(L"gearbox damage: the game kicked the gearbox to N");
             }
             w.kicksSeen = kicks;
@@ -6793,7 +6810,10 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 else stallCost = box.setGear ? L"; its gearbox damage goes to the game's thread once the gear is set (not if the game refuses the shift)"
                                              : L"; its gearbox damage goes to the game's thread";
             }
-            if (box.moved && w.pos.pos != posWas) Log(L"gearbox: %S to %S", GearboxPosName(posWas), GearboxPosName(w.pos.pos));
+            if (box.moved && w.pos.pos != posWas)
+                Log(L"gearbox: %S to %S, %s", GearboxPosName(posWas), GearboxPosName(w.pos.pos),
+                    box.fitted ? L"by the gearbox's positions" : byKick ? L"by the gearbox damage" : shifterPicked ? L"by the game's shifter" : bySeq ? L"by the sequential"
+                                                                                                                                 : L"by the bindings");
             // up from L+ refused within the hold after the walk: once a visit to L+, so a run of presses shows its refusal
             if (box.lowUpSay)
                 Log(L"gearbox: up from L+ refused %.1f s after the walk got there (press again to go to 1st)", box.lowUpAfter);

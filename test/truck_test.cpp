@@ -3459,6 +3459,43 @@ int main()
               "drive display in the drive's hook (M1, M3): its own list of all four wheels, listed in another order, on the right rows and sides; all wheel drive off: the rear "
               "with half each, the front with its spin and no share, the game's own differential and kept 100 with no cut and no lock; all wheel drive on: four shares; air by "
               "the contact share; a refused body gives an empty cell; of 18 wheels the first 16 and no fault; each call counted");
+        // the review of 131, S2: the mark goes by the main body's forward. A wheel whose parent is a rocker swung 37
+        // degrees up still reads its body's 2 m/s (by the parent's forward it read 1.6)
+        static uint8_t rocker[0x300] = {};
+        putP(rocker, 0x10, world);
+        putV(rocker, 0x170, 0.0f, 0.6f, 0.8f);
+        putV(rocker, 0x180, 0.0f, 0.8f, -0.6f);
+        putV(rocker, 0x190, 1.0f, 0.0f, 0.0f);
+        putP(wheels[RL], 0x10, rocker);
+        const bool onRocker = steps(90, 4.0f, 4.0f, 4.0f, 4.0f) && Near(d.truck[RL], 2.0f) && Near(d.truck[RR], 2.0f);
+        if (!onRocker) printf("     the rocker: truck %.3f %.3f\n", d.truck[RL], d.truck[RR]);
+        putP(wheels[RL], 0x10, chassis);
+        // the review of 131, S1: one call at a time. A second drive call that starts while the first is inside (here
+        // from inside the stand-in drive, in the game from another physics thread at a truck change) runs the hook
+        // with no display: ten calls give ten steps, not twenty, and no fault
+        static int depth;
+        static void (*volatile inner)(void *);
+        static void (*volatile again)(void *, float, float);
+        static void *againAct;
+        depth = 0, inner = g_driveDoes, again = &FakeDrive, againAct = act;
+        long st4 = 0, f4 = 0, st5 = 0, f5 = 0;
+        counts(st4, f4);
+        g_driveDoes = [](void *x) {
+            if (depth++ == 0) again(againAct, 0.5f, 1.0f / 60.0f);
+            depth--;
+            inner(x);
+        };
+        const bool gotTwice = steps(10, 4.0f, 4.0f, 4.0f, 4.0f);
+        counts(st5, f5);
+        g_driveDoes = inner;
+        const bool oneAtATime = gotTwice && st5 == st4 + 10 && f5 == f4 && d.n == 4;
+        if (!oneAtATime) printf("     one at a time: got %d steps %ld faults %ld n %d\n", gotTwice, st5 - st4, f5 - f4, d.n);
+        const bool afterTwice = steps(2, 4.0f, 4.0f, 4.0f, 4.0f); // the flag is free again
+        long st6 = 0, f6 = 0;
+        counts(st6, f6);
+        Check(onRocker && oneAtATime && afterTwice && st6 == st5 + 2,
+              "drive display, the review of 131: the mark goes by the main body and not by a swung parent (S2); a drive call that starts while another is inside "
+              "runs with no display and the next one is read again (S1)");
 
         // M2: each path through the hook with the display on is fed (the steps counted, the force named), and with
         // the key off the hook reads and keeps nothing for the display: the counts and the record's sequence stand,

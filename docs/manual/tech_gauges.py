@@ -1726,7 +1726,7 @@ N and L-. It wins over SkipNeutral, and the once-only import of SMT.ini takes SM
 comments).</li>
 <li>At Gearbox=2 driven with a pad or the keyboard (Input 1 or 2) the game's shifter picks the position: the calls stay refused, and
 the first door of each shift is a request the model takes as that position's key (L+ reads as the first gear). With a key bound the
-slider used to move while nothing shifted. With a wheel's pedals (Input 0) the game's shifts stay refused and level 2 still runs as 1
+slider used to move while nothing shifted. A request equal to the shifter's last one is not followed (<code>ShifterAskStep</code>): the game sends the shifter's position again when its button is let go. The last request is kept from the take (the position the truck is taken in) to the let go, and a binding does not change it. The log says "gearbox: the game's shifter sent A again, not followed" the first time for each position ("gearbox: the game's shifter sent gear 3 again, not followed" for a gear) and a minute after "gearbox: the game's shifter sent its last position again 2 times in the last minute, none followed". With a wheel's pedals (Input 0) the game's shifts stay refused and level 2 still runs as 1
 until a binding reaches reverse (asked for in the comments and seen in the author's own drive).</li></ul>
 <h3>Not changed</h3>
 <ul><li>The oil's lag is fitted with the engine speed set equal to the load (0.5).</li>

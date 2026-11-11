@@ -146,6 +146,72 @@ inline void GearboxActionsAsk(GearboxActions &a, const GearboxAsk &ask, int top)
     a.shifter = true;
 }
 
+// ---- the game's shifter sends its position again (BRIEF_lock_press_shifts_to_a.md) ----
+// The game's shifter keeps a position of its own, the last one it asked for, and sends it again each time its button is
+// let go, moved or not (read from a drive's log, not from the game's code). A tap of that button, or the lock on the same
+// button, came as a pick of that position and threw a low gear to A. So the mod keeps the shifter's last ask (after the
+// merge) and follows only an ask that differs. A binding does not change the kept ask: L on the shifter, L+ by a binding
+// and a tap would else give L again. The cost: the position the shifter already stands at cannot be picked on it again;
+// its binding picks it, or another position first.
+struct ShifterKept
+{
+    GearboxAsk last; // the shifter's last ask; at the take the position the truck was taken in; kAskNone while let go
+    unsigned said;   // a bit a kind: the log told that repeat once
+    int again;       // the repeats not followed since the last count
+    float since;     // seconds since the first of them
+};
+static const float kShifterAgainTell = 60.0f; // the count of the repeats goes to the log this long after the first
+
+// The ask the game's shifter would send for a position of the mod's: L+ reads as the first gear, as the merge has it.
+inline GearboxAsk GearboxAskOfPos(int pos, int gear)
+{
+    switch (pos)
+    {
+    case kPosA: return GearboxAsk{ kAskA, 0 };
+    case kPosN: return GearboxAsk{ kAskN, 0 };
+    case kPosR: return GearboxAsk{ kAskR, 0 };
+    case kPosH: return GearboxAsk{ kAskH, 0 };
+    case kPosLowMinus: return GearboxAsk{ kAskLowMinus, 0 };
+    case kPosLow: return GearboxAsk{ kAskLow, 0 };
+    case kPosLowPlus: return GearboxAsk{ kAskGear, 1 };
+    case kPosGear: return GearboxAsk{ kAskGear, gear };
+    default: return GearboxAsk{ kAskNone, 0 };
+    }
+}
+
+inline bool GearboxAskSame(const GearboxAsk &a, const GearboxAsk &b) { return a.kind == b.kind && (a.kind != kAskGear || a.gear == b.gear); }
+
+// An ask taken on this pass: a pick (it differs from the kept one, becomes the kept one and is this pass's action), or
+// the kept one again, which is not followed; the first of a kind since the take is told apart for the log.
+enum { kShifterPick, kShifterAgain, kShifterAgainFirst };
+inline int ShifterAskStep(ShifterKept &k, const GearboxAsk &ask, GearboxActions &acts, int top)
+{
+    if (ask.kind == kAskNone) return kShifterAgain;
+    if (!GearboxAskSame(k.last, ask))
+    {
+        k.last = ask;
+        GearboxActionsAsk(acts, ask, top);
+        return kShifterPick;
+    }
+    k.again++;
+    const unsigned bit = 1u << ask.kind;
+    if (k.said & bit) return kShifterAgain;
+    k.said |= bit;
+    return kShifterAgainFirst;
+}
+
+// Once a pass: the count of the repeats to tell, 0 for none yet.
+inline int ShifterAgainTold(ShifterKept &k, float dt)
+{
+    if (k.again <= 0) return 0;
+    if (dt > 0.0f && dt < 10.0f) k.since += dt;
+    if (k.since < kShifterAgainTell) return 0;
+    const int n = k.again;
+    k.again = 0;
+    k.since = 0.0f;
+    return n;
+}
+
 // The truck as read on this pass.
 struct GearboxTruck
 {

@@ -1015,6 +1015,7 @@ int main()
         const bool alone = GearboxAskMerge(GearboxAsk{}, kFnSetPower, 0, 0.45f).kind == kAskNone;
         const bool doors = GearboxAskMerge(GearboxAsk{}, kFnShiftToNeutral, 0, 0.0f).kind == kAskN && GearboxAskMerge(GearboxAsk{}, kFnShiftToHigh, 0, 0.0f).kind == kAskH &&
                            GearboxAskMerge(GearboxAsk{}, kFnShiftToAuto, 0, 0.0f).kind == kAskA && GearboxAskMerge(GearboxAsk{}, kFnShiftGear, 0, 0.0f).kind == kAskN;
+        // true of the merge alone: whether an ask is a pick is decided after it (ShifterAskStep, the game's side below)
         Check(rev && first && low.kind == kAskLow && lowMinus.kind == kAskLowMinus && plus.kind == kAskGear && alone && doors,
               "gearbox: a shift's doors make one request, the first door naming it; the power factor after a first gear makes L or L- (L+ stays the first gear); a factor alone asks nothing");
     }
@@ -1403,6 +1404,175 @@ int main()
         Check(hooked && offRefused && offNone && refused && low && once && rev && gear && other && g_ran[kFnShiftGear] == 0 && g_ran[kFnAutoOffAndShift] == 0,
               "gearbox hooks: at Gearbox=2 with the asks on the game's shifter's calls stay refused and its first door is one request, taken once on the "
               "next pass (L from the power factor after the first gear); with the asks off none is made");
+    }
+
+    // the game's side (BRIEF_lock_press_shifts_to_a.md, M3): a shifter that keeps a position and sends it through the
+    // doors each time its button is let go, moved or not. Through the hooks, the take, ShifterAskStep and the positions'
+    // model, as gauges.cpp runs them. A pad and the keyboard share this one path (the asks are on for both); with a
+    // wheel's pedals the asks are off. The rule before (every ask followed) runs as the counter-case.
+    {
+        FunctionFind finds[kFnCount] = {};
+        void *fakes[kFnCount] = { (void *)&FakeShift, (void *)&FakeAuto, (void *)&FakeHigh, (void *)&FakeReverse, (void *)&FakeNeutral, nullptr,
+                                  (void *)&FakeAutoOff, (void *)&FakePower, (void *)&FakeVehicle };
+        for (int f = 0; f < kFnCount; f++)
+            if (fakes[f]) finds[f] = FunctionFind{ kFnFound, (size_t)(uintptr_t)fakes[f], 1, false };
+        char why[512];
+        const bool hooked = GearboxHook(0, finds, why, sizeof why) == 8;
+        GearboxAsk drop = {};
+        GearboxAskTake(drop);
+        GearboxPolicy(kPolicyAll, nullptr, false);
+        GearboxShifterAsks(true);
+        auto letGo = [](int kind, int gear) {
+            switch (kind)
+            {
+            case kAskA: FakeAuto(nullptr); break;
+            case kAskR: FakeReverse(nullptr); break;
+            case kAskN: FakeNeutral(nullptr); break;
+            case kAskH: FakeHigh(nullptr); break;
+            case kAskLow: FakeAutoOff(nullptr, 1), FakeShift(nullptr, 1), FakePower(nullptr, 0.45f); break;
+            case kAskLowMinus: FakeAutoOff(nullptr, 1), FakeShift(nullptr, 1), FakePower(nullptr, 0.2f); break;
+            default: FakeAutoOff(nullptr, gear), FakeShift(nullptr, gear); break;
+            }
+        };
+        GearboxPosModel m = {};
+        GearboxTruck t = {};
+        ShifterKept kept = {};
+        int sideKind = kAskA, sideGear = 0; // where the game's shifter stands
+        bool rule = true;
+        const GearboxOptions o = {};
+        auto take = [&]() {
+            t = Truck(1);
+            t.speed = 0.0f;
+            t.automatic = true;
+            GearboxPosTake(m, t);
+            t.automatic = false;
+            kept = ShifterKept{};
+            kept.last = GearboxAskOfPos(m.pos, m.gear);
+            sideKind = kAskA, sideGear = 0;
+        };
+        auto pass = [&](GearboxActions acts) {
+            GearboxAsk a = {};
+            if (GearboxAskTake(a))
+            {
+                if (rule) ShifterAskStep(kept, a, acts, t.top);
+                else GearboxActionsAsk(acts, a, t.top);
+            }
+            Pass(m, o, acts, t);
+        };
+        // the button pressed and let go with nothing moved, as the lock on the same button does
+        auto tap = [&]() { letGo(sideKind, sideGear), pass(None()), pass(None()); };
+        auto pick = [&](int kind, int gear) { sideKind = kind, sideGear = gear, tap(); };
+        auto bind = [&](int pos) {
+            GearboxActions a = {};
+            switch (pos)
+            {
+            case kPosA: a.a = true; break;
+            case kPosN: a.n = true; break;
+            case kPosR: a.r = true; break;
+            case kPosH: a.h = true; break;
+            case kPosLowMinus: a.lowMinus = true; break;
+            case kPosLow: a.low = true; break;
+            case kPosLowPlus: a.lowPlus = true; break;
+            default: a.gearPressed = 3; break;
+            }
+            pass(a);
+        };
+        static const int places[] = { kPosLowPlus, kPosLow, kPosLowMinus, kPosGear, kPosR, kPosN, kPosH };
+        // each place reached by its binding with the game's shifter at A, then three taps: how many stay, -1 a place not reached
+        auto fault = [&](bool withRule) {
+            rule = withRule;
+            int stays = 0;
+            for (int place : places)
+            {
+                take();
+                if (m.pos != kPosA) return -2;
+                bind(place);
+                if (m.pos != place) return -1;
+                tap(), tap(), tap();
+                if (m.pos == place) stays++;
+                else if (m.pos != kPosA) return -3;
+            }
+            return stays;
+        };
+        const int staysNow = fault(true), staysBefore = fault(false);
+        if (staysNow != 7 || staysBefore != 0) printf("     the taps: %d of 7 stay with the rule, %d without\n", staysNow, staysBefore);
+        Check(hooked && staysNow == 7 && staysBefore == 0,
+              "game's shifter: with it at A and the mod's gearbox in L+, L, L-, a numbered gear, R, N and H by a binding, three taps of its button leave each "
+              "position; with every ask followed, as before, each falls to A");
+        // the repeat of L and of R: the shifter at L, the mod in L+ and in L- by a binding; the shifter at R, the mod in A
+        rule = true;
+        take();
+        pick(kAskLow, 0);
+        const bool toLow = m.pos == kPosLow;
+        bind(kPosLowPlus), tap();
+        const bool plusStays = m.pos == kPosLowPlus;
+        bind(kPosLowMinus), tap();
+        const bool minusStays = m.pos == kPosLowMinus && kept.last.kind == kAskLow; // the bindings left the kept ask alone
+        pick(kAskR, 0);
+        const bool toR = m.pos == kPosR;
+        bind(kPosA), tap();
+        const bool aStays = m.pos == kPosA;
+        Check(toLow && plusStays && minusStays && toR && aStays,
+              "game's shifter: at L a tap leaves the mod's L+ and L-, at R a tap leaves the mod's A; a binding does not change the kept ask");
+        // the picks still work, each a new ask
+        take();
+        pick(kAskR, 0);
+        const bool pR = m.pos == kPosR;
+        pick(kAskA, 0);
+        const bool pA = m.pos == kPosA;
+        pick(kAskLow, 0);
+        const bool pL = m.pos == kPosLow;
+        pick(kAskLowMinus, 0);
+        const bool pLm = m.pos == kPosLowMinus;
+        pick(kAskGear, 4);
+        const bool pG = m.pos == kPosGear && m.gear == 4;
+        pick(kAskH, 0);
+        const bool pH = m.pos == kPosH;
+        pick(kAskN, 0);
+        const bool pN = m.pos == kPosN;
+        Check(pR && pA && pL && pLm && pG && pH && pN, "game's shifter: A to R, R to A, A to L, L to L-, a gear, H and N are each a new ask and are followed");
+        // the cost, meant (the addendum's M2): the position the shifter already stands at cannot be picked on it again
+        take();
+        bind(kPosLowPlus);
+        pick(kAskA, 0);
+        const bool costA = m.pos == kPosLowPlus;
+        take();
+        pick(kAskR, 0);
+        bind(kPosA);
+        pick(kAskR, 0);
+        const bool costR = m.pos == kPosA;
+        pick(kAskN, 0), pick(kAskR, 0);
+        const bool viaN = m.pos == kPosR;
+        Check(costA && costR && viaN,
+              "game's shifter, the cost and no miss: at A with the mod in L+, A picked on the shifter again changes nothing; the same for R from A, where N "
+              "then R reaches reverse");
+        // with a wheel's pedals the asks are off: nothing is taken
+        GearboxShifterAsks(false);
+        letGo(kAskA, 0);
+        GearboxAsk none = {};
+        const bool wheel = !GearboxAskTake(none);
+        GearboxPolicy(kPolicyPass, nullptr, false);
+        GearboxUnhook();
+        // the rule alone: the first repeat of a kind told apart, the count after a minute, the kept ask of each position
+        ShifterKept k = {};
+        k.last = GearboxAskOfPos(kPosA, 0);
+        GearboxActions acts = {};
+        const bool first = ShifterAskStep(k, GearboxAsk{ kAskA, 0 }, acts, 6) == kShifterAgainFirst && !acts.a && !acts.shifter;
+        const bool second = ShifterAskStep(k, GearboxAsk{ kAskA, 0 }, acts, 6) == kShifterAgain && k.again == 2;
+        int early = 0; // passes of half a second: nothing for 119 of them, the count on the 120th, nothing after
+        for (int i = 0; i < 119; i++) early += ShifterAgainTold(k, 0.5f);
+        const bool told = early == 0 && ShifterAgainTold(k, 0.5f) == 2 && ShifterAgainTold(k, 0.5f) == 0 && k.again == 0;
+        const bool picked = ShifterAskStep(k, GearboxAsk{ kAskGear, 2 }, acts, 6) == kShifterPick && acts.shifter && k.last.kind == kAskGear && k.last.gear == 2;
+        const bool otherGear = ShifterAskStep(k, GearboxAsk{ kAskGear, 3 }, acts, 6) == kShifterPick && ShifterAskStep(k, GearboxAsk{ kAskGear, 3 }, acts, 6) == kShifterAgainFirst;
+        const bool ofPos = GearboxAskOfPos(kPosLowPlus, 0).kind == kAskGear && GearboxAskOfPos(kPosLowPlus, 0).gear == 1 && GearboxAskOfPos(kPosGear, 5).gear == 5 &&
+                           GearboxAskOfPos(kPosLow, 0).kind == kAskLow && GearboxAskOfPos(kPosLowMinus, 0).kind == kAskLowMinus && GearboxAskOfPos(kPosR, 0).kind == kAskR &&
+                           GearboxAskOfPos(kPosN, 0).kind == kAskN && GearboxAskOfPos(kPosH, 0).kind == kAskH;
+        ShifterKept gone = {};
+        GearboxActions actsGone = {};
+        const bool letGoFollows = ShifterAskStep(gone, GearboxAsk{ kAskA, 0 }, actsGone, 6) == kShifterPick; // nothing kept: any ask is a pick
+        Check(wheel && first && second && told && picked && otherGear && ofPos && letGoFollows,
+              "game's shifter: the first repeat of a position is told apart and the count comes a minute after; another gear is a pick; the kept ask of each "
+              "position (L+ the first gear); with the asks off nothing is taken");
     }
 
     // the levels: at Gearbox=1 only a reverse while standing in A with the brake down and the game's automatic flag up
