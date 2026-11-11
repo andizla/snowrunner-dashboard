@@ -4822,18 +4822,18 @@ int main(int argc, char **argv)
             const bool okW[4] = { true, true, true, true };
             const float one[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
             const float aPre[4] = { 8.0f, 8.0f, 8.0f, 8.0f }, aEven[4] = { 9.0f, 9.0f, 9.0f, 9.0f };
-            const CapStepOut a = DiffOpenStep(aPre, aEven, one, okW, 4, 8.5f), aCap = CapStep(aPre, aEven, one, okW, 4, 8.5f, true);
+            const CapStepOut oa = DiffOpenStep(aPre, aEven, one, okW, 4, 8.5f), aCap = CapStep(aPre, aEven, one, okW, 4, 8.5f, true);
             const float bPre[4] = { 0.0f, 0.0f, 0.0f, 56.0f }, bEven[4] = { 1.0f, 1.0f, 1.0f, 61.0f };
-            const CapStepOut b = DiffOpenStep(bPre, bEven, one, okW, 4, 15.0f);
+            const CapStepOut ob = DiffOpenStep(bPre, bEven, one, okW, 4, 15.0f);
             const float cPre[2] = { 20.0f, 20.0f }, cEven[2] = { 22.0f, 22.0f }, dEven[2] = { 18.0f, 18.0f };
             const CapStepOut c = DiffOpenStep(cPre, cEven, one, okW, 2, 15.0f), d = DiffOpenStep(cPre, dEven, one, okW, 2, 15.0f);
             const float ePre[2] = { 1.0f, 1.0f }, eEven[2] = { 2.0f, 2.0f };
             const CapStepOut e = DiffOpenStep(ePre, eEven, one, okW, 2, 15.0f);
             const float fPre[2] = { 10.0f, 20.0f }, fEven[2] = { 8.0f, 30.0f };
             const CapStepOut f = DiffOpenStep(fPre, fEven, one, okW, 2, 15.0f), g0 = DiffOpenStep(fPre, fEven, one, okW, 2, 0.0f), gn = DiffOpenStep(fPre, fEven, one, okW, 2, NAN);
-            for (int i = 0; i < 4; i++) ceiling = ceiling && close(a.final[i], 8.5f) && close(a.final[i], aCap.final[i]) && a.clamped[i];
-            ceiling = ceiling && a.clamps == 4 && close(a.kept, 0.5f) && close(b.final[0], 0.5f) && close(b.final[1], 0.5f) && close(b.final[2], 0.5f) && close(b.final[3], 58.5f) &&
-                      close(b.kept, 0.5f) && close(b.excess, 1.0f) && b.spread == 0.0f && c.final[0] == 20.0f && c.final[1] == 20.0f && c.kept == 0.0f && c.clamps == 2 &&
+            for (int i = 0; i < 4; i++) ceiling = ceiling && close(oa.final[i], 8.5f) && close(oa.final[i], aCap.final[i]) && oa.clamped[i];
+            ceiling = ceiling && oa.clamps == 4 && close(oa.kept, 0.5f) && close(ob.final[0], 0.5f) && close(ob.final[1], 0.5f) && close(ob.final[2], 0.5f) && close(ob.final[3], 58.5f) &&
+                      close(ob.kept, 0.5f) && close(ob.excess, 1.0f) && ob.spread == 0.0f && c.final[0] == 20.0f && c.final[1] == 20.0f && c.kept == 0.0f && c.clamps == 2 &&
                       d.final[0] == 18.0f && d.final[1] == 18.0f && d.clamps == 0 && d.kept == 1.0f && e.final[0] == 2.0f && e.clamps == 0 && e.kept == 1.0f && f.final[0] == 8.0f &&
                       close(f.final[1], 22.0f) && f.clamps == 1 && !f.clamped[0] && close(f.keptEach[1], 0.2f) && g0.final[1] == 30.0f && g0.clamps == 0 && gn.final[1] == 30.0f &&
                       gn.clamps == 0;
@@ -5025,12 +5025,12 @@ int main(int argc, char **argv)
         {
             const float v = speeds[i] * top, want = 4.0f * u.couple * (1.5f * top - v);
             float got[2], clamp[2];
-            for (int b = 0; b < 2; b++)
+            for (int at = 0; at < 2; at++)
             {
                 TopSetup c = u;
-                c.flat = brackets[b], c.holdV = v, c.s0 = c.v0 = v;
+                c.flat = brackets[at], c.holdV = v, c.s0 = c.v0 = v;
                 const TopResult q = TopRun(c);
-                got[b] = q.push, clamp[b] = q.clampShare;
+                got[at] = q.push, clamp[at] = q.clampShare;
                 offMost = fmaxf(offMost, fabsf(q.push - want) / want);
                 onLine = onLine && fabsf(q.push - want) <= 0.005f * want && q.clampShare > 0.99f && q.pushJump <= 0.005f * want;
             }
