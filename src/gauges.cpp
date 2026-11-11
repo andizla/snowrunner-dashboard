@@ -1249,7 +1249,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; EngineBrake (with Powertrain at Gearbox=2): in a gear held by hand the truck pulls with the mod engine alone, no cut at the gear's top;\n"
                         L";   with the foot off the engine holds it back by this share of the gear's torque at the redline, in percent, 0 to 30 (15; 0 lets it roll).\n"
                         L"; WheelCap (with that, in L-, L, L+ and R): no driven wheel turns faster than this percent of the gear's top, 110 to 200 (150; no box).\n"
-                        L"; LowRangeSlip (with that): how much wheel slip L and L- may use, 0 to 100 (100: the same room as L+; 0: each wheel near the top speed of its gear).\n"
+                        L"; LowRangeSlip (with that): how much wheel slip L-, L and R may use, 0 to 100 (100: the same room as L+; 0: each wheel near the top speed of its gear).\n"
                         L"; PushShare (with Powertrain): the percent of the surge at speed the game's chassis push may carry over the mod's pull, 0 to 100 (0; 100 as before; no box).\n"
                         L"; DiffLockBite (with Powertrain): how firmly the diff lock ties the driven wheels together, 0 to 100 (0: the game lock; 100: one shaft).\n"
                         L";   It acts on a truck whose diff lock is always on too. Such a truck then scrubs in every turn on hard ground.\n"
@@ -4117,7 +4117,7 @@ static void LogSettings(const GaugeSettings &s)
                           s.engineShare, !s.roadLoad ? L"off" : s.powertrain ? L"on (the air's drag, once each gear's pull is learned)" : L"on, acts with Powertrain on",
                           TorqueCutWanted(s) ? L"in a gear held by hand the torque cut: the mod engine alone, no cut at the gear's top" : L"no torque cut (it needs Gearbox=2, EngineShare above 0 and ModEngineSpeed=1)",
                           s.modEngineSpeed ? L"the mod engine's (ModEngineSpeed=1; the fuel's and the stall's calls keep the game's own, by the cut's own pull under the cut)" : L"its own (ModEngineSpeed=0)");
-        Log(L"settings: diff lock bite %d (DiffLockBite; 0 the game's lock, 100 one shaft), the differential's type %d (DiffType; 0 Auto, 1 Open, 2 Limited slip, 3 Locked), low range slip %d (LowRangeSlip; 0 the gear's own wheel cap in L- and L, 100 the cap of the highest low gear)", s.diffLockBite, s.diffType, s.lowRangeSlip);
+        Log(L"settings: diff lock bite %d (DiffLockBite; 0 the game's lock, 100 one shaft), the differential's type %d (DiffType; 0 Auto, 1 Open, 2 Limited slip, 3 Locked), low range slip %d (LowRangeSlip; 0 the gear's own wheel cap in L-, L and R, 100 the cap of the highest low gear)", s.diffLockBite, s.diffType, s.lowRangeSlip);
     }
     else Log(L"settings: powertrain off: the truck pulls with the game's own engine (Powertrain=1 hands it the mod's)");
     Log(s.creep && s.creepManual ? L"settings: creep on, in a gear picked by hand too (CreepManual): an automatic through the converter to walking pace, a gear picked by hand at its idle speed"
@@ -4342,6 +4342,7 @@ struct TruckWatch
     bool cutActs;               // the torque cut acted on the last pass (BRIEF_drivetrain_2_torque_cut.md): the learners rest, the fuel reads the stand-in (TorqueCutStandIn)
     float cutFloor;             // the creep's share on the last pass: the cut's least F while it acts (CreepManual)
     ULONGLONG cutProbeAt;       // the cut's probe line, once a second
+    ULONGLONG pullProbeAt;      // the probe's line of the pull with no gear held by hand, once a second
     TorqueCutCounts cutWas;     // the detour's counts at the last probe line
     WheelCapCounts capWas;      // the wheel cap's at the last probe line
     PushCounts pushWas;         // the chassis push's at the last probe line
@@ -4525,11 +4526,12 @@ static TorqueCutSlot TorqueCutSlotOf(const TruckWatch &w, const TruckRaw &raw, c
     // the wheel speed cap, the runaway guard, in the wheels' own measure (+ 0x16C's): WheelCap percent of the gear's top, in
     // L-, L, L+ and R alone (the user: "the cap is for L gears")
     c.cap = GearboxPosCapped(w.pos.pos) && gearTop > 0.0f && isfinite(gearTop) ? (float)s.wheelCap / 100.0f * gearTop : 0.0f;
-    // L- and L: wider by LowRangeSlip, up to the cap of the highest low gear this gearbox has (LowRangeCap). The wider cap
+    // L-, L and R (BRIEF_reverse_pull.md): wider by LowRangeSlip, up to the cap of the highest low gear this gearbox has
+    // (LowRangeCap; R's own cap where that is the larger, and with no low gear). The wider cap
     // goes beside the gear's own: the ceiling has it whole while the truck is slow and the gear's own from 0.75 of the
     // gear's top (CapCeilingWide)
     c.capWide = 0.0f;
-    if (c.cap > 0.0f && (w.pos.pos == kPosLowMinus || w.pos.pos == kPosLow) && raw.gearEngaged == 1)
+    if (c.cap > 0.0f && (((w.pos.pos == kPosLowMinus || w.pos.pos == kPosLow) && raw.gearEngaged == 1) || (w.pos.pos == kPosR && raw.gearEngaged < 0)))
     {
         const float power = GearboxLowMostPower(w.positions.vehicle == w.refs.vehicle ? w.positions.missing : 0);
         const float mostTop = power > 0.0f ? TruckGearTopAt(raw, 1, power) : 0.0f;
@@ -7141,9 +7143,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 if (slipTold != s.lowRangeSlip)
                 {
                     slipTold = s.lowRangeSlip;
-                    Log(L"low range slip: in L- and L the wheel cap is the gear's own plus %d percent of the way to the cap of the highest low gear the gearbox has "
+                    Log(L"low range slip: in L-, L and R the wheel cap is the gear's own plus %d percent of the way to the cap of the highest low gear the gearbox has "
                         L"(LowRangeSlip; 100 the same room as L+, 0 the gear's own), whole while the truck is under a quarter of the gear's top speed and down to the gear's own "
-                        L"at three quarters of it; R and L+ keep their own, and no wheel may run faster than in the highest low gear",
+                        L"at three quarters of it; L+ keeps its own, as R does where its own cap is the larger or the gearbox has no low gear, and no wheel may run faster than in the highest low gear",
                         s.lowRangeSlip);
                 }
             }
@@ -7270,6 +7272,15 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                     pc.steps - pb.steps, pc.backs - pb.backs, pc.given - pb.given, pc.back - pb.back, pc.k, pc.fx, pc.f, pc.b4, pc.speed, pc.kicks - pb.kicks, pc.skipped - pb.skipped,
                     pc.faults - pb.faults, s.pushShare, DriveRateOn() ? 120 : 60);
                 w.pushWas = pc;
+            }
+            // the pull with no gear held by hand (BRIEF_reverse_pull.md, M4), Probe=1, once a second while the mod's engine
+            // pulls: in A the cut does not act and its line has no figures, so this one says what the game gets
+            if (probe && s.powertrain && w.hand.on && !GearboxManual(w) && now >= w.pullProbeAt)
+            {
+                w.pullProbeAt = now + 1000;
+                Log(L"probe: pull in A: the mod hands the game %.2f of the game's own torque (the factor %.2f written, the game's own %.2f), the pedal %.2f, "
+                    L"the wheels at %.2f of the gear's top, gear %d",
+                    w.hand.game > 0.0f ? w.hand.written / w.hand.game : 0.0f, w.hand.written, w.hand.game, TruckPedal(raw), w.liftX, raw.gearEngaged);
             }
             // the torque cut's probe (Probe=1), once a second: acting or why not; the detour's last answer (the wheels'
             // speed s, its share of the gear's top and the rpm there, F, the bracket after the blend and the least F, the

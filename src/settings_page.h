@@ -875,7 +875,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     {
         PageLabel("Real engine", labelX);
         changed(ImGui::Checkbox("##powertrain", &s.powertrain));
-        PageTip("The truck pulls with the mod engine: its torque curve at the engine speed shown, and the mod automatic shifts by it. In a gear held by hand the truck pulls with the mod engine alone: no cut at the top, engine braking with the foot off. The engine holds the truck at the top speed of the gear. In L+ and R no driven wheel runs more than half again past it. L and L- get the room of L+ (Low range slip). The pedal is the fuel, as the game has it. Off by default.");
+        PageTip("The truck pulls with the mod engine: its torque curve at the engine speed shown, and the mod automatic shifts by it. In a gear held by hand the truck pulls with the mod engine alone: no cut at the top, engine braking with the foot off. The engine holds the truck at the top speed of the gear. In L+ no driven wheel runs more than half again past it. L-, L and R get the room of L+ (Low range slip). The pedal is the fuel, as the game has it. Off by default.");
         if (s.powertrain)
         {
             PageLabel("Engine share", labelX);
@@ -896,7 +896,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             PageLabel("Low range slip", labelX);
             ImGui::SetNextItemWidth(w);
             changed(ImGui::SliderInt("##lowrangeslip", &s.lowRangeSlip, 0, 100, "%d %%", ImGuiSliderFlags_AlwaysClamp));
-            PageTip("How much wheel slip L and L- may use. 100 gives them the same room as L+. 0 holds each wheel near the top speed of its gear.");
+            PageTip("How much wheel slip L-, L and R may use. 100 gives them the same room as L+. 0 holds each wheel near the top speed of its gear.");
             PageLabel("Drive display", labelX);
             changed(ImGui::Checkbox("##drivedisplay", &s.driveDisplay));
             PageTip("Each wheel: its spin against the truck speed and its share of the drive.");

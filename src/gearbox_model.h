@@ -431,7 +431,9 @@ inline const char *GearboxPosName(int pos)
 // and the engine curve are the whole limit. Every held gear, as the Reviewer's part 3 had it, would add pos == kPosGear.
 inline bool GearboxPosCapped(int pos) { return pos == kPosR || (pos >= kPosLowMinus && pos <= kPosLowPlus); }
 
-// The wheel cap of L- and L, widened (BRIEF_low_range_pull.md, M1). A low gear's pull comes from its wheels' slip, and a
+// The wheel cap of L-, L and R, widened (BRIEF_low_range_pull.md, M1; R since BRIEF_reverse_pull.md: its top is as low,
+// so its wheels had as little slip to pull by). R's own cap at or over most stays its own.
+// The wheel cap of L- and L first: A low gear's pull comes from its wheels' slip, and a
 // cap at half again a top of 2 rad/s leaves L- a third of the slip L+ has, so the deepest gear pulled the least. own:
 // the cap by the gear's own top; most: the cap by the top of the highest low gear the gearbox has; share: LowRangeSlip,
 // the percent of the way from own to most. 0 is own to the last bit. Never over most, so a free wheel runs no faster
@@ -439,7 +441,7 @@ inline bool GearboxPosCapped(int pos) { return pos == kPosR || (pos >= kPosLowMi
 inline float LowRangeCap(int pos, float own, float most, int share)
 {
     if (!(own > 0.0f) || !isfinite(own)) return 0.0f;
-    if (pos != kPosLowMinus && pos != kPosLow) return own;
+    if (pos != kPosLowMinus && pos != kPosLow && pos != kPosR) return own;
     if (share <= 0 || !isfinite(most) || !(most > own)) return own;
     if (share >= 100) return most;
     return own + (most - own) * (float)share / 100.0f;

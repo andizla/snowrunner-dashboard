@@ -322,7 +322,7 @@ struct TorqueCutSlot
     uint64_t cylinderVtable; // hkpCylinderShape's vtable (gauges.cpp WheelCylinderVtable, on the mod's thread: M1), 0 not found, for the rolling radius
     int mode;
     float scalar, floor, share, pedal, sLast, listTop, gamePull, cap, pushBack; // pushBack: 1 - PushShare / 100, for the cap's part of the chassis push
-    float capWide; // the low range's wider cap for L- and L (LowRangeCap, CapCeilingWide), in the wheels' measure; 0 none. cap stays the gear's own
+    float capWide; // the low range's wider cap for L-, L and R (LowRangeCap, CapCeilingWide), in the wheels' measure; 0 none. cap stays the gear's own
     TorqueCutMap map;
     int diff; // the differential's type for this truck (DiffTypeOf, on the mod's thread)
 };
@@ -572,7 +572,7 @@ inline float CapCeiling(float cap, float top, float governTo, float truck)
 }
 
 // The ceiling with the low range's wider cap (BRIEF_low_range_pull.md, M1 and M3): own is the gear's own cap, wide the
-// cap LowRangeSlip gives L- and L (LowRangeCap), both in the wheels' measure. The wide part, wide - own, is whole while
+// cap LowRangeSlip gives L-, L and R (LowRangeCap), both in the wheels' measure. The wide part, wide - own, is whole while
 // the truck is slower than from x the gear's top and is down to nothing by CutSmooth at kCapCeilFrom x the top. From
 // there on the ceiling is CapCeiling of the gear's own cap to the last bit, so the top of the gear is held as without
 // the wide part and the governor's band is no steeper. With no wide part, no truck speed or no top: CapCeiling of own.
