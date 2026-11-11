@@ -3574,6 +3574,21 @@ int main()
               "fed on every call and names the differential in force; with the key off no call is read, no fault counted and the record stands, and on every path the wheels "
               "end at the same speeds as with the display on");
 
+        // the diff lamp's edge (the lead's should of 2026-11-12): a write within 0.2 rad/s or within 5 percent of what the
+        // drive left the wheel is no mark, so Open, which writes every wheel on every step, lights nothing by that alone
+        {
+            const bool edge = !DdTied(4.0f, 4.0f) && !DdTied(4.19f, 4.0f) && DdTied(4.21f, 4.0f) && DdTied(3.79f, 4.0f) && !DdTied(3.81f, 4.0f) && !DdTied(10.45f, 10.0f) &&
+                              DdTied(10.55f, 10.0f) && !DdTied(9.55f, 10.0f) && DdTied(9.45f, 10.0f) && !DdTied(0.15f, 0.0f) && DdTied(0.25f, 0.0f) && !DdTied(-10.45f, -10.0f) &&
+                              DdTied(-10.55f, -10.0f) && !DdTied(NAN, 1.0f) && !DdTied(1.0f, NAN);
+            arrange(kLock);
+            push(0.0f, 0.0f, 0.2f, 0.0f);
+            const bool gotS = steps(90, 4.0f, 4.0f, 4.0f, 4.0f);
+            bool slight = gotS && d.force == kDiffForceLock && Near(speed(RL), 4.05f) && Near(speed(FL), 4.05f);
+            for (int i = 0; i < 4; i++) slight = slight && !d.lockLamp[i];
+            if (!(edge && slight)) printf("     diff lamp: edge %d, got %d force %d lamps %d %d %d %d speeds %.3f %.3f\n", edge, gotS, d.force, d.lockLamp[0], d.lockLamp[1], d.lockLamp[2], d.lockLamp[3], speed(RL), speed(FL));
+            Check(edge && slight, "drive display: the diff lamp counts a step only where the lock or Open left the wheel more than 0.2 rad/s and more than 5 percent off what the drive left it; "
+                                 "the lock evening a push of 0.2 rad/s on one wheel of four writes each wheel and lights no lamp");
+        }
         // the marks: the lock at 100 ties four wheels the drive pushed unevenly: its lamp on each, the shares even after
         // it and all on one wheel before it; the cap at 3: its lamp on each clamped wheel and kept under 100
         arrange(kLock);

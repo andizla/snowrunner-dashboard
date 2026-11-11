@@ -300,6 +300,12 @@ inline SimResult SimRun(const SimSetup &u)
 // and the ground's side, which is a rate a second (grip, drag, grade, the free wheel's drag, the noise by its seconds).
 // As the game leaves them in stage 1, a step: w + 0x118's blend 0.7 and 0.3 and the share's 0.8 and 0.2. The couple is
 // a ratio and stays. The results that are a step's (push, pushJump) are then a step's at 120.
+// slipShare (BRIEF_low_range_pull.md, M3): the ground by the slip. The ground above takes its whole grip from a slip of
+// 0.3 rad/s on, so a wheel held at a low ceiling pulls as one at a high ceiling. Measured in a drive at 120 steps a
+// second, a capped wheel gave up a share of its slip a step, about 0.2 on soft ground and 0.5 on full contact, until
+// the grip ended it near 3 rad/s a step. With slipShare the take of a step at 120 is that share of the slip, at most
+// the grip (grip stays the figure of a step at 60, so 6 for 3 a step at 120). The sub steps and rate 60 are scaled so
+// that the share of a step at 120 holds: a sub step takes 1 - (1 - share)^(2 x part / 10) of the slip left.
 struct TopSetup
 {
     TorqueCutSlot slot;   // mode kCutMap, the map's top and band
@@ -327,6 +333,9 @@ struct TopSetup
     float lockK;          // above 0 (and not Open): the lock's step (LockStepHeld) after the drive and before the cap, a free wheel's load 0 and every other 1
     float lockMass, lockRadius; // the truck's mass and each wheel's rolling radius for it
     bool lockNoBound;     // the lock's law as before BRIEF_lock_wheels_backward.md: without LockBound's rules
+    float capWide;        // above cap x top: the low range's wider cap in rad/s (LowRangeSlip), the ceiling then CapCeilingWide's
+    float wideFrom;       // the truck's speed over the top where the wide part starts down; at or over kCapCeilFrom the counter case, the wide cap whole down to the governor's band
+    float slipShare;      // above 0: the ground by the slip, the share of its slip a gripping wheel gives up a step at 120, at most grip
 };
 struct TopResult
 {
@@ -347,6 +356,7 @@ struct TopResult
     float freeEnd;              // the fastest free wheel after the last step's cap
     float wEnd[8];              // each wheel after the last step's cap
     int lockUnder;              // wheels the lock wrote under 0, the whole run
+    int lockBreach;             // of those, with the drive's impulse over 0 and under what the drive left them (LockStepOut's breach), the whole run
     float lockOver;             // the most a wheel left the lock over the fastest wheel the drive left, the whole run
     float lockAdded;            // the most the lock's step added to the wheels' summed speed, the whole run
 };
@@ -438,11 +448,12 @@ inline TopResult TopRun(const TopSetup &u)
             for (int i = 0; i < n; i++) fastest = fmaxf(fastest, post[i]), sumPost += post[i], sumLock += l.final[i];
             for (int i = 0; i < n; i++) left[i] = l.final[i], r.lockOver = fmaxf(r.lockOver, l.final[i] - fastest);
             r.lockUnder += l.under;
+            r.lockBreach += l.breach;
             r.lockAdded = fmaxf(r.lockAdded, sumLock - sumPost);
         }
         if (capV > 0.0f && (armed || !u.oldLaw))
         {
-            const float ceiling = u.oldLaw ? capV : CapCeiling(capV, top, slot.map.governTo, v);
+            const float ceiling = u.oldLaw ? capV : CapCeilingWide(capV, u.capWide, top, slot.map.governTo, v, u.wideFrom);
             const CapStepOut o = u.open ? DiffOpenAxles(pre, left, gain, ok, axle, n, ceiling, !u.noHandOn).o : CapStep(pre, left, gain, ok, n, ceiling, true);
             for (int i = 0; i < n; i++)
             {
@@ -472,6 +483,11 @@ inline TopResult TopRun(const TopSetup &u)
                 }
                 const float slip = w[i] - v, g = u.grip * part * fmaxf(0.0f, 1.0f + u.gripNoise * noise[i] * 2.5f) / 10.0f;
                 float a = g * tanhf(slip / 0.3f);
+                if (u.slipShare > 0.0f)
+                {
+                    a = slip * (1.0f - powf(1.0f - fminf(u.slipShare, 1.0f), 2.0f * part / 10.0f));
+                    if (fabsf(a) > g) a = slip > 0.0f ? g : -g;
+                }
                 const float most = fabsf(slip) / (1.0f + u.couple);
                 if (fabsf(a) > most) a = slip > 0.0f ? most : -most;
                 w[i] -= a;

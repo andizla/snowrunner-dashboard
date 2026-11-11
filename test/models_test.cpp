@@ -781,11 +781,36 @@ int main(int argc, char **argv)
         const bool ceiling = CapCeiling(most, top, to, 0.0f) == most && CapCeiling(most, top, to, kCapCeilFrom * top) == most && Near(CapCeiling(most, top, to, end), end, 1e-5f) &&
                              Near(CapCeiling(most, top, to, 3.0f * end), end, 1e-5f) && Near(CapCeiling(most, top, to, NAN), end, 1e-5f) &&
                              CapCeiling(most, top, to, 0.9f * top) < most && CapCeiling(most, top, to, 0.9f * top) > end;
+        // the ceiling with the wider cap: whole under kLowWideFrom of the top, the gear's own law to the last bit from kCapCeilFrom on
+        bool wideOk = CapCeilingWide(own, most, top, to, 0.0f) == most && CapCeilingWide(own, most, top, to, kLowWideFrom * top) == most &&
+                      Near(CapCeilingWide(own, most, top, to, 0.5f * (kLowWideFrom + kCapCeilFrom) * top), 0.5f * (own + most), 1e-4f) &&
+                      CapCeilingWide(own, most, top, to, -1.0f) == most && CapCeilingWide(own, own, top, to, 0.0f) == own && CapCeilingWide(own, 0.0f, top, to, 0.0f) == own &&
+                      CapCeilingWide(own, NAN, top, to, 0.0f) == own && CapCeilingWide(0.0f, most, top, to, 0.0f) == 0.0f && CapCeilingWide(own, most, 0.0f, to, 1.0f) == own &&
+                      CapCeilingWide(own, most, top, to, NAN) == CapCeiling(own, top, to, NAN) && CapCeilingWide(own, most, top, to, 0.4f * top, kCapCeilFrom) == most;
+        for (int k = 0; k <= 60; k++)
+        {
+            const float v = top * (float)k / 40.0f, c = CapCeilingWide(own, most, top, to, v);
+            if (v >= kCapCeilFrom * top && c != CapCeiling(own, top, to, v)) wideOk = false;
+            if (k && c > CapCeilingWide(own, most, top, to, top * (float)(k - 1) / 40.0f) + 1e-6f) wideOk = false;
+        }
+        Check(wideOk, "low range slip, the ceiling: the wider cap whole while the truck is under a quarter of the gear's top, half way between it and the gear's own at half the top, "
+                      "the gear's own law to the last bit from three quarters on, never rising with the truck's speed; the gear's own with no wider cap or no truck speed");
         Check(tops && power && none && whole && half && others && lone && ceiling,
               "low range slip: the top of a low gear at a power factor given; the highest low gear a gearbox has; at 0 the gear's own cap to the last bit, at 100 the cap of the "
               "highest low gear in L- and L, at 50 half way; L+, R and every other position their own; one low gear or a top that is no number the gear's own; the ceiling "
               "with the wider cap ends at the governor's end of the gear's own top, and there with no truck speed");
         if (!(tops && power && none && whole && half && others && lone && ceiling)) printf("     %d %d %d %d %d %d %d %d\n", tops, power, none, whole, half, others, lone, ceiling);
+        // the truck's speed in the wheels' measure where the cut gave none (the by-wheel line read "nan")
+        const float radii[4] = { 0.5f, 0.5f, 0.0f, NAN }, bad[2] = { 0.0f, NAN };
+        const bool rOk[4] = { true, true, true, true }, firstOnly[4] = { true, false, false, false }, noneOk[4] = {};
+        const float mixed[4] = { 0.4f, 0.6f, 0.6f, 0.6f };
+        const bool speed = Near(TruckSpeedInWheels(3.0f, radii, rOk, 4, 1.0f), 6.0f, 1e-5f) && Near(TruckSpeedInWheels(3.0f, radii, rOk, 4, -1.0f), -6.0f, 1e-5f) &&
+                           Near(TruckSpeedInWheels(-1.5f, radii, rOk, 4, 1.0f), -3.0f, 1e-5f) && Near(TruckSpeedInWheels(3.0f, mixed, firstOnly, 4, 1.0f), 7.5f, 1e-5f) &&
+                           Near(TruckSpeedInWheels(3.0f, mixed, rOk, 4, 1.0f), 3.0f * 0.25f * (1.0f / 0.4f + 3.0f / 0.6f), 1e-4f) && TruckSpeedInWheels(0.0f, radii, rOk, 4, 1.0f) == 0.0f &&
+                           isnan(TruckSpeedInWheels(NAN, radii, rOk, 4, 1.0f)) && isnan(TruckSpeedInWheels(3.0f, radii, noneOk, 4, 1.0f)) && isnan(TruckSpeedInWheels(3.0f, bad, rOk, 2, 1.0f)) &&
+                           isnan(TruckSpeedInWheels(3.0f, radii, rOk, 0, 1.0f)) && isnan(TruckSpeedInWheels(INFINITY, radii, rOk, 4, 1.0f));
+        Check(speed, "truck speed in the wheels' measure: the forward speed over the mean rolling radius of the wheels read whole, in the gear's direction, a radius of 0 or no number "
+                     "left out; no number with no forward speed, no wheel read or no radius usable");
     }
 
     // the driven wheels
@@ -4741,6 +4766,173 @@ int main(int argc, char **argv)
                      q.vMin, q.vMax, q.needleMax - q.needleMin, law0.vMin, law0.vMax, law0.needleMax - law0.needleMin);
             Check(q.vMax < 3.05f && law0.vMax < 3.05f && q.needleMax - q.needleMin > 500.0f && law0.needleMax - law0.needleMin > 500.0f, line);
         }
+        // the low range's pull (BRIEF_low_range_pull.md, M3), on the ground by the slip (slipShare): 0.2 of the slip a step
+        // at 120 on soft ground, 0.5 on hard, at most 3 rad/s a step. Three low gears with tops of 2.23, 4.18 and 8.06,
+        // four wheels, 120 steps a second. The wider cap is LowRangeCap's, as the mod's slot gets it.
+        {
+            const float tops[3] = { 2.23f, 4.18f, 8.06f };
+            const int poses[3] = { kPosLowMinus, kPosLow, kPosLowPlus };
+            float wideFrom = kLowWideFrom;
+            auto low = [&](int g, float cap, int slipPercent) {
+                TopSetup c = u;
+                c.slot.map = mapOf(tops[g]);
+                c.cap = cap, c.wheels = 4, c.rate = 120, c.gripNoise = 0.0f, c.dragNoise = 0.0f, c.grip = 6.0f;
+                c.capWide = LowRangeCap(poses[g], cap * tops[g], cap * tops[2], slipPercent), c.wideFrom = wideFrom;
+                return c;
+            };
+            // (a) and (b): the truck held standing, floored for 20 s. What a wheel gives the ground a step, after 3 s
+            {
+                int len = snprintf(line, sizeof line, "low range pull, standing and floored, rad/s a step and wheel given to the ground in L-, L and L+ (cap, ground: at LowRangeSlip 0; at 100):");
+                bool fault = true, fixedAll = true;
+                const float caps[2] = { 1.5f, 2.0f }, grounds[2] = { 0.2f, 0.5f };
+                for (int cI = 0; cI < 2; cI++)
+                    for (int gI = 0; gI < 2; gI++)
+                    {
+                        float was[3], now[3];
+                        for (int g = 0; g < 3; g++)
+                            for (int m = 0; m < 2; m++)
+                            {
+                                TopSetup c = low(g, caps[cI], m ? 100 : 0);
+                                c.holdV = 0.0f, c.slipShare = grounds[gI];
+                                const TopResult q = TopRun(c);
+                                (m ? now : was)[g] = q.push / c.couple / 4.0f;
+                            }
+                        const float most = fmaxf(now[0], fmaxf(now[1], now[2])), least = fminf(now[0], fminf(now[1], now[2]));
+                        // within 2 percent. At a cap of 1.5 on the soft ground within 4: the game's overspeed brake (from 0.5 rad/s under the governor's end of the
+                        // gear's own top) slows L-'s and L's wheels on the steps the game's traction term gives no drive, and L+'s only on some
+                        const float tol = cI == 0 && gI == 0 ? 0.04f : 0.02f;
+                        const bool same = most - least <= tol * most && now[0] >= (1.0f - tol) * now[1] && now[1] >= (1.0f - tol) * now[2] && now[2] >= 0.999f * was[2] && now[2] <= 1.001f * was[2];
+                        // the fault, on the soft ground at a cap of 2.0: the share of the slip at the ceiling is 0.89, 1.67 and 3.0 (the grip). The sim's wheels
+                        // give 0.85 to 1 of it, since the game's traction term leaves out the drive on the steps a wheel's whole rad/s rises. L- under L under L+
+                        if (cI == 1 && gI == 0)
+                        {
+                            fault = was[0] < 0.98f * was[1] && was[1] < 0.98f * was[2];
+                            for (int g = 0; g < 3; g++)
+                            {
+                                const float whole = fminf(0.2f * 2.0f * tops[g], 3.0f);
+                                fault = fault && was[g] >= 0.85f * whole && was[g] <= 1.001f * whole;
+                            }
+                        }
+                        fixedAll = fixedAll && same;
+                        len += snprintf(line + len, sizeof line - len, "%s %.1f, %.1f: %.2f, %.2f, %.2f; %.2f, %.2f, %.2f%s", cI || gI ? ";" : "", caps[cI], grounds[gI], was[0], was[1], was[2], now[0],
+                                        now[1], now[2], same ? "" : " <<<");
+                    }
+                Check(fault && fixedAll, line);
+                if (!fault) printf("     the fault's case does not show the fall\n");
+            }
+            // (c): the top holds. L- with the wider cap, free to run: from rest on the flat with a light load, and downhill
+            // from 0.9 of the top, on both grounds. The truck's largest speed is the one at LowRangeSlip 0. The counter
+            // case: the wide cap whole down to the governor's band (wideFrom at kCapCeilFrom) runs past the end on the flat
+            {
+                int len = snprintf(line, sizeof line, "low range pull, the top of L- holds (ground, case: the truck's largest speed over the top at LowRangeSlip 0; at 100; with the wide cap whole to 0.75 of the top):");
+                bool held = true, counter = false;
+                for (int gI = 0; gI < 2; gI++)
+                    for (int hill = 0; hill < 2; hill++)
+                    {
+                        float most[3], end[3];
+                        int lowered = 0;
+                        float limit = 0.0f;
+                        for (int m = 0; m < 3; m++)
+                        {
+                            wideFrom = m == 2 ? kCapCeilFrom : kLowWideFrom;
+                            TopSetup c = low(0, 2.0f, m ? 100 : 0);
+                            c.slipShare = gI ? 0.2f : 0.0f, c.grip = gI ? 6.0f : 5.0f;
+                            c.drag = hill ? 0.005f : 0.0005f, c.grade = hill ? 0.02f : 0.0f;
+                            if (hill) c.s0 = c.v0 = 0.9f * tops[0];
+                            limit = (c.slot.map.governTo + 0.02f) * tops[0];
+                            const TopResult q = TopRun(c);
+                            most[m] = q.vMost, end[m] = q.vEnd;
+                            if (m < 2) lowered += q.lowered;
+                        }
+                        wideFrom = kLowWideFrom;
+                        const bool good = lowered == 0 && fabsf(most[1] - most[0]) <= 0.002f * tops[0] && (hill || (most[1] <= limit && end[1] > tops[0]));
+                        held = held && good;
+                        if (!hill && most[2] > most[0] + 0.02f * tops[0]) counter = true;
+                        len += snprintf(line + len, sizeof line - len, "%s %s, %s: %.3f; %.3f; %.3f%s", gI || hill ? ";" : "", gI ? "by the slip" : "the grip whole", hill ? "downhill" : "the flat",
+                                        most[0] / tops[0], most[1] / tops[0], most[2] / tops[0], good ? "" : " <<<");
+                    }
+                Check(held && counter, line);
+            }
+            // (d): no sway. The first case above (floored at the top for 20 s, two wheels, 60 steps, the six grips, a load
+            // of half the push the ground can give) on L- and L with the wider cap of 1.5 and 2.0 times L+'s top. At the
+            // top the law is the one at LowRangeSlip 0, so the figures are the same. In L some of these cases sit on
+            // the sim's own limit (the last case above) at LowRangeSlip 0 too: there the wider cap must not be the worse.
+            // The counter case, the wide cap whole to 0.75 of the top: the needle swings over 150 rpm in some
+            {
+                int len = snprintf(line, sizeof line, "low range pull, no sway at the top of L- and L with the wider cap (top, cap, grip: truck band, needle band rpm, push jump over push; the needle band at "
+                                                      "LowRangeSlip 0; with the wide cap whole to 0.75 of the top):");
+                bool calmAll = true;
+                int counterBad = 0, limitCases = 0;
+                const float caps[2] = { 1.5f, 2.0f }, grips[6] = { 0.5f, 1.0f, 2.0f, 2.5f, 5.0f, 10.0f };
+                for (int g = 0; g < 2; g++)
+                    for (int cI = 0; cI < 2; cI++)
+                        for (int gr = 0; gr < 6; gr++)
+                        {
+                            const float top = tops[g];
+                            TopResult q[3];
+                            bool good[3];
+                            for (int m = 0; m < 3; m++)
+                            {
+                                TopSetup c = u;
+                                c.slot.map = mapOf(top);
+                                c.cap = caps[cI], c.capWide = LowRangeCap(poses[g], caps[cI] * top, caps[cI] * tops[2], m ? 100 : 0), c.wideFrom = m == 2 ? kCapCeilFrom : kLowWideFrom;
+                                c.grip = grips[gr], c.s0 = c.v0 = 0.9f * top;
+                                c.drag = 0.5f * 2.0f * c.couple * fminf(c.grip, 0.45f * top);
+                                q[m] = TopRun(c);
+                                good[m] = q[m].needleMax - q[m].needleMin <= 150.0f && 0.5f * (q[m].vMax - q[m].vMin) <= 0.02f * top && q[m].pushJump <= 0.35f * q[m].push &&
+                                          q[m].vMin >= kCapCeilFrom * top && q[m].vMax <= c.slot.map.governTo * top && q[m].lowered == 0;
+                            }
+                            // L-: calm in every case. L: calm, or on the sim's limit as at LowRangeSlip 0 and then no worse
+                            const bool fine = good[1] || (g == 1 && !good[0] && q[1].needleMax - q[1].needleMin <= q[0].needleMax - q[0].needleMin + 1.0f);
+                            calmAll = calmAll && fine;
+                            limitCases += !good[1];
+                            counterBad += g == 0 && !good[2];
+                            len += snprintf(line + len, sizeof line - len, "%s %.2f, %.1f, %.1f: %.3f to %.3f, %.0f, %.2f; %.0f; %.0f%s", g || cI || gr ? ";" : "", top, caps[cI], grips[gr], q[1].vMin / top,
+                                            q[1].vMax / top, q[1].needleMax - q[1].needleMin, q[1].pushJump / q[1].push, q[0].needleMax - q[0].needleMin, q[2].needleMax - q[2].needleMin,
+                                            fine ? "" : " <<<");
+                        }
+                len += snprintf(line + len, sizeof line - len, "; %d of the 24 on the sim's limit as at LowRangeSlip 0; the counter case swings in %d of L-'s 12", limitCases, counterBad);
+                Check(calmAll && counterBad > 0, line);
+            }
+            // moving under a load: half of what the four wheels give the ground standing with the wider cap, on the soft
+            // ground, 30 s from rest. With the wider cap the truck keeps moving, at LowRangeSlip 0 it stands
+            {
+                TopSetup s = low(0, 2.0f, 100);
+                s.holdV = 0.0f, s.slipShare = 0.2f;
+                const float stand = TopRun(s).push * 2.0f; // a step at 120 into the drag's measure, a step at 60
+                TopResult q[2];
+                for (int m = 0; m < 2; m++)
+                {
+                    TopSetup c = low(0, 2.0f, m ? 100 : 0);
+                    c.slipShare = 0.2f, c.gripNoise = 0.3f, c.dragNoise = 0.3f, c.seconds = 30.0f, c.drag = 0.5f * stand;
+                    q[m] = TopRun(c);
+                }
+                snprintf(line, sizeof line, "low range pull, L- from rest against a load of half the standing pull with the wider cap, soft ground, 30 s: the truck runs at %.2f to %.2f of the top, "
+                                            "at LowRangeSlip 0 at %.2f to %.2f",
+                         q[1].vMin / tops[0], q[1].vMax / tops[0], q[0].vMin / tops[0], q[0].vMax / tops[0]);
+                Check(q[1].vMin > kLowWideFrom * tops[0] && q[1].vMax < kCapCeilFrom * tops[0] && q[0].vMax < 0.05f * tops[0] && q[1].lowered == 0, line);
+            }
+            // (e): one wheel of four in the air in L-: with the truck held standing the free wheel's fastest speed is the
+            // wider cap and not over it; held at half the top it is the ceiling there (CapCeilingWide), half way down to
+            // the gear's own; the other three pull no less than at LowRangeSlip 0
+            {
+                TopSetup c = low(0, 2.0f, 100);
+                c.freeWheels = 1, c.holdV = 0.0f, c.slipShare = 0.2f;
+                const TopResult q = TopRun(c);
+                c.holdV = 0.5f * tops[0];
+                const TopResult half = TopRun(c);
+                const float halfCeil = CapCeilingWide(2.0f * tops[0], c.capWide, tops[0], c.slot.map.governTo, c.holdV);
+                c.capWide = 0.0f, c.holdV = 0.0f;
+                const TopResult own = TopRun(c);
+                const float wide = 2.0f * tops[2];
+                snprintf(line, sizeof line, "low range pull, one wheel of four free in L-, the truck held standing: the free wheel to %.2f rad/s, the wider cap %.2f (%.2f at LowRangeSlip 0, "
+                                            "the gear's own %.2f); held at half the top to %.2f, the ceiling there %.2f; the three's pull standing %.0f against %.0f",
+                         q.freeMost, wide, own.freeMost, 2.0f * tops[0], half.freeMost, halfCeil, q.pull, own.pull);
+                Check(q.freeMost <= wide + 1e-3f && q.freeMost > 0.95f * wide && own.freeMost <= 2.0f * tops[0] + 1e-3f && half.freeMost <= halfCeil + 1e-3f && half.freeMost > 0.95f * halfCeil &&
+                          halfCeil < 0.75f * wide && q.pull >= own.pull && q.lowered + half.lowered == 0,
+                      line);
+            }
+        }
     }
 
     // the diff lock's bite, pure (BRIEF_diff_lock_bite.md with the Reviewer's addendum and the lead's of 14:09): k from the
@@ -5474,10 +5666,12 @@ int main(int argc, char **argv)
             if (b.most > fastest + 1e-4f || b.added > 1e-3f) b.rules = false;
             return b;
         };
+        int breachBefore = 0, breachNow = 0, underNow = 0, lockCalls = 0;
         auto both = [&](const float *pre6, const float *add6, const float *load6, float k, LockStepOut &before, LockStepOut &after, float *p6) {
             for (int i = 0; i < 6; i++) p6[i] = pre6[i] + add6[i];
             before = LockStepHeld(pre6, p6, bGain, load6, bRadius, bOk, 6, k, bMass, false);
             after = LockStepHeld(pre6, p6, bGain, load6, bRadius, bOk, 6, k, bMass);
+            breachBefore += before.breach, breachNow += after.breach, underNow += after.under, lockCalls++;
         };
         const float nine[6] = { 9.0f, 9.0f, 9.0f, 9.0f, 9.0f, 9.0f };
         LockStepOut b0, a0;
@@ -5504,7 +5698,7 @@ int main(int argc, char **argv)
         const float pre3[6] = { -2.0f, -2.0f, -2.0f, -2.0f, -2.02f, -2.0f }, load3[6] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f };
         both(pre3, nine, load3, 1.0f, b0, a0, p);
         const float air3b = b0.final[5], air3 = a0.final[5];
-        const bool case3 = air3b < -1.0f && b0.under == 1 && air3 >= 0.0f && a0.under == 0 && seen(a0, p).rules;
+        const bool case3 = air3b < -1.0f && b0.under == 1 && b0.breach == 1 && air3 >= 0.0f && a0.under == 0 && a0.breach == 0 && seen(a0, p).rules;
         // 4. rolling back at 5 rad/s with the engine pulling forward: before the lightly loaded wheels are lowered, now none
         const float pre4[6] = { -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.02f }, two[6] = { 2.0f, 2.0f, 2.0f, 2.0f, 2.0f, 2.0f };
         both(pre4, two, load1, 1.0f, b0, a0, p);
@@ -5535,6 +5729,21 @@ int main(int argc, char **argv)
             printf("     bounds: case1 %d, inL %d (%d %d %d, %.3f %.3f %.3f), case2 %d, case3 %d, case4 %d, braking %d, in air %d\n", case1, inL, cap1b.clamps, cap1.clamps, cap1d.clamps,
                    cap1b.excess, cap1.excess, cap1d.excess, case2, case3, case4, braking, inAir6);
         Check(case1 && inL && case2 && case3 && case4 && braking && inAir6, bLine);
+        // the new count (BRIEF_low_range_pull.md): a wheel written under 0 and under what the drive left it while the
+        // drive's impulse is over 0. 0 over every case above with the bounds; the law of before breaks it. The engine
+        // braking with wheels turning back is counted as under 0 (the old count) and is no breach
+        {
+            const int callsAbove = lockCalls, breachAbove = breachNow, beforeAbove = breachBefore;
+            const float pre8[6] = { -1.0f, -1.0f, -3.0f, -3.0f, -3.0f, -3.02f };
+            LockStepOut b8, a8;
+            both(pre8, less, load1, 1.0f, b8, a8, p);
+            char cLine[400];
+            snprintf(cLine, sizeof cLine,
+                     "locked differential, the count of wheels under 0 and under the drive's with the drive's impulse over 0: %d over the %d steps of the bounds' cases, %d with "
+                     "the law of before; engine braking with the wheels turning back: %d under 0, %d of them counted",
+                     breachAbove, callsAbove, beforeAbove, a8.under, a8.breach);
+            Check(breachAbove == 0 && callsAbove == 8 && beforeAbove > 0 && a8.wrote && a8.j < 0.0f && a8.under > 0 && a8.breach == 0 && b8.breach == 0 && underNow >= 0, cLine);
+        }
 
         // S1: the lock's step in the top's sim (TopRun), four wheels of which one in the air, the truck held standing,
         // 20 s, in a numbered gear (no cap) and in L (a cap of 1.5): the law of before and with the bounds
@@ -5566,7 +5775,7 @@ int main(int argc, char **argv)
                              was.lockAdded, is.lockAdded);
             // the cost: in a numbered gear the gripping wheels keep at least 0.95 of what the lock of before gave them and the free
             // wheel stays under a tenth of the unlocked one's speed; in L the cap holds the free wheel either way
-            simOk = simOk && is.lockOver <= 1e-3f && is.lockAdded <= 1e-2f && is.lockUnder == 0 && is.freeMost <= was.freeMost + 0.01f && pullIs >= 0.95f * pullWas &&
+            simOk = simOk && is.lockOver <= 1e-3f && is.lockAdded <= 1e-2f && is.lockUnder == 0 && is.lockBreach == 0 && is.freeMost <= was.freeMost + 0.01f && pullIs >= 0.95f * pullWas &&
                     pullIs >= pullNone && (gearCase || (is.freeMost < 0.1f * none.freeMost && was.lockOver > 10.0f && pullIs > 100.0f * pullNone));
         }
         printf("     %s\n", sLine);

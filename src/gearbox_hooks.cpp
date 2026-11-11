@@ -677,7 +677,7 @@ static ShowNote g_showNote; // the physics thread's own
 static void ShowNoteWheels(const CapTruckRead &t, const float *post, const float *work)
 {
     g_showNote.n = t.n;
-    for (int i = 0; i < t.n; i++) g_showNote.wheel[i] = t.w[i].wheel, g_showNote.capped[i] = false, g_showNote.tied[i] = t.w[i].ok && work[i] != post[i];
+    for (int i = 0; i < t.n; i++) g_showNote.wheel[i] = t.w[i].wheel, g_showNote.capped[i] = false, g_showNote.tied[i] = t.w[i].ok && DdTied(work[i], post[i]);
 }
 static void CapGet3(const uint8_t *p, CapVec &v)
 {
@@ -1094,10 +1094,11 @@ static CapAround CapStepAround(const TorqueCutSlot *cut, void *action, float thr
     if (t.refused) InterlockedExchangeAdd(&g_capRefused, t.refused);
     const bool capHere = cut->cap > 0.0f && isfinite(cut->cap);
     const float cap = capHere ? cut->cap : 0.0f;
+    const float capWide = capHere && isfinite(cut->capWide) && cut->capWide > cap ? cut->capWide : cap; // the low range's wider cap, else the gear's own
     float mean = 0.0f, preMost = 0.0f, preLeast = kCapNone;
     int m = 0;
     for (int i = 0; i < t.n; i++)
-        if (t.w[i].ok) mean += t.w[i].pre, m++, preMost = fmaxf(preMost, t.w[i].pre - cap), preLeast = fminf(preLeast, t.w[i].pre);
+        if (t.w[i].ok) mean += t.w[i].pre, m++, preMost = fmaxf(preMost, t.w[i].pre - capWide), preLeast = fminf(preLeast, t.w[i].pre);
     if (m) mean /= (float)m;
     const bool armed = readOk && CapArmStep(g_capArm, t.gear, mean, m > 0, cap);
     InterlockedExchange64(&g_capKeptVehicle, (LONG64)vehicle);
@@ -1106,7 +1107,7 @@ static CapAround CapStepAround(const TorqueCutSlot *cut, void *action, float thr
     DriveCall(action, throttle, dt);
     const float truck = BitsFloat(g_capTruck);
     // in Open the ceiling is the limit of the driven wheels' mean, else of each wheel
-    const float ceiling = CapCeiling(cap, cut->map.top, cut->map.governTo, truck);
+    const float ceiling = CapCeilingWide(cap, capWide, cut->map.top, cut->map.governTo, truck);
     InterlockedExchange(&g_capCeiling, FloatBits(ceiling));
     if (!readOk)
     {

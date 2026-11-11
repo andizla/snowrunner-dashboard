@@ -322,6 +322,7 @@ struct TorqueCutSlot
     uint64_t cylinderVtable; // hkpCylinderShape's vtable (gauges.cpp WheelCylinderVtable, on the mod's thread: M1), 0 not found, for the rolling radius
     int mode;
     float scalar, floor, share, pedal, sLast, listTop, gamePull, cap, pushBack; // pushBack: 1 - PushShare / 100, for the cap's part of the chassis push
+    float capWide; // the low range's wider cap for L- and L (LowRangeCap, CapCeilingWide), in the wheels' measure; 0 none. cap stays the gear's own
     TorqueCutMap map;
     int diff; // the differential's type for this truck (DiffTypeOf, on the mod's thread)
 };
@@ -505,6 +506,9 @@ static const int kCapDefault = 150, kCapLeast = 110, kCapMost = 200;
 static const float kCapArm = 1.0f, kCapKeptOld = 0.8f;
 // kCapCeilFrom: the truck's speed over the gear's top where the ceiling starts down from the cap (CapCeiling).
 static const float kCapCeilFrom = 0.75f;
+// kLowWideFrom: the truck's speed over the gear's top where the low range's wider cap starts down to the gear's own
+// (CapCeilingWide); it is the gear's own from kCapCeilFrom on.
+static const float kLowWideFrom = 0.25f;
 // kCapWheels: the wheels a truck may list (vehicle + 0x200), as kMaxWheels (truck.h, which this header does not see; a
 // static_assert in gauges.cpp holds them equal, the review of 113, M3). The cut, the cap, the lock and the chassis
 // push read a truck of up to this many and refuse a longer list.
@@ -565,6 +569,23 @@ inline float CapCeiling(float cap, float top, float governTo, float truck)
     const float from = kCapCeilFrom * top;
     if (!(end > from)) return truck < end ? cap : end;
     return cap + (end - cap) * CutSmooth((truck - from) / (end - from));
+}
+
+// The ceiling with the low range's wider cap (BRIEF_low_range_pull.md, M1 and M3): own is the gear's own cap, wide the
+// cap LowRangeSlip gives L- and L (LowRangeCap), both in the wheels' measure. The wide part, wide - own, is whole while
+// the truck is slower than from x the gear's top and is down to nothing by CutSmooth at kCapCeilFrom x the top. From
+// there on the ceiling is CapCeiling of the gear's own cap to the last bit, so the top of the gear is held as without
+// the wide part and the governor's band is no steeper. With no wide part, no truck speed or no top: CapCeiling of own.
+// from at or over kCapCeilFrom is the tests' counter case: the wide cap whole down to the governor's band.
+inline float CapCeilingWide(float own, float wide, float top, float governTo, float truck, float from = kLowWideFrom)
+{
+    const float base = CapCeiling(own, top, governTo, truck);
+    if (!(own > 0.0f) || !isfinite(own) || !isfinite(wide) || !(wide > own)) return base;
+    if (from >= kCapCeilFrom) return CapCeiling(wide, top, governTo, truck);
+    if (!(top > 0.0f) || !isfinite(top) || !isfinite(truck)) return base;
+    const float a = (from > 0.0f ? from : 0.0f) * top, b = kCapCeilFrom * top;
+    if (truck >= b) return base;
+    return base + (wide - own) * (1.0f - CutSmooth((truck - a) / (b - a)));
 }
 
 // One step of the cap over a truck's wheels, in the gear's direction and the game's measure: pre and post each wheel's

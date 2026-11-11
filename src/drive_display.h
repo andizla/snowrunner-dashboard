@@ -17,6 +17,15 @@ const float kDdBand = 0.15f;       // plain within 15 percent of the truck's spe
 const float kDdBandLeast = 1.0f;   // m/s: a truck slower than this has the band of this speed
 const float kDdFloor = 20.0f;      // the driven wheels' parts above 0 must sum to this (impulse over the step's seconds) for a share (M5)
 const float kDdLampOn = 0.1f;      // a lamp shows while its average is over this: about a third of a second after the last step
+const float kDdTiedMin = 0.2f;     // rad/s: the diff lamp counts a step only where the lock or Open left the wheel further than this from what the drive left it
+const float kDdTiedShare = 0.05f;  // and further than this share of what the drive left it
+// A step counts for the diff lamp: the wheel as the lock or Open wrote it against the wheel as the drive left it. Open
+// writes every wheel on every step, so a lamp for any write was always lit and said nothing.
+inline bool DdTied(float written, float left)
+{
+    const float d = fabsf(written - left);
+    return isfinite(d) && d > kDdTiedMin && d > kDdTiedShare * fabsf(left);
+}
 enum { kDdPlain, kDdAmber, kDdRed, kDdBlue };
 const int kDdGameOwn = -1;         // the differential in force where neither the cut nor the lock has the truck; else kDiffForce...
 
@@ -47,7 +56,7 @@ inline DdSpin DdSpinOf(float wheel, float truck, int gear)
 
 // One drive call as the hook read it. given: the impulse the drive's call left on the wheel after the mod's cap and lock
 // (the spin added over the wheel's gain); before: the same as the game's drive left it, before the mod wrote. Both only
-// for a driven wheel with a gain. capped: the wheel cap clamped this wheel; tied: the lock or Open wrote it.
+// for a driven wheel with a gain. capped: the wheel cap clamped this wheel; tied: the lock or Open moved it (DdTied).
 struct DdSample
 {
     uint64_t vehicle;

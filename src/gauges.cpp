@@ -4513,12 +4513,16 @@ static TorqueCutSlot TorqueCutSlotOf(const TruckWatch &w, const TruckRaw &raw, c
     // the wheel speed cap, the runaway guard, in the wheels' own measure (+ 0x16C's): WheelCap percent of the gear's top, in
     // L-, L, L+ and R alone (the user: "the cap is for L gears")
     c.cap = GearboxPosCapped(w.pos.pos) && gearTop > 0.0f && isfinite(gearTop) ? (float)s.wheelCap / 100.0f * gearTop : 0.0f;
-    // L- and L: wider by LowRangeSlip, up to the cap of the highest low gear this gearbox has (LowRangeCap)
+    // L- and L: wider by LowRangeSlip, up to the cap of the highest low gear this gearbox has (LowRangeCap). The wider cap
+    // goes beside the gear's own: the ceiling has it whole while the truck is slow and the gear's own from 0.75 of the
+    // gear's top (CapCeilingWide)
+    c.capWide = 0.0f;
     if (c.cap > 0.0f && (w.pos.pos == kPosLowMinus || w.pos.pos == kPosLow) && raw.gearEngaged == 1)
     {
         const float power = GearboxLowMostPower(w.positions.vehicle == w.refs.vehicle ? w.positions.missing : 0);
         const float mostTop = power > 0.0f ? TruckGearTopAt(raw, 1, power) : 0.0f;
-        c.cap = LowRangeCap(w.pos.pos, c.cap, (float)s.wheelCap / 100.0f * mostTop, s.lowRangeSlip);
+        const float wide = LowRangeCap(w.pos.pos, c.cap, (float)s.wheelCap / 100.0f * mostTop, s.lowRangeSlip);
+        c.capWide = wide > c.cap ? wide : 0.0f;
     }
     c.pushBack = 1.0f - (float)s.pushShare / 100.0f;
     return c;
@@ -7126,7 +7130,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 {
                     slipTold = s.lowRangeSlip;
                     Log(L"low range slip: in L- and L the wheel cap is the gear's own plus %d percent of the way to the cap of the highest low gear the gearbox has "
-                        L"(LowRangeSlip; 100 the same room as L+, 0 the gear's own); R and L+ keep their own, and no wheel may run faster than in the highest low gear",
+                        L"(LowRangeSlip; 100 the same room as L+, 0 the gear's own), whole while the truck is under a quarter of the gear's top speed and down to the gear's own "
+                        L"at three quarters of it; R and L+ keep their own, and no wheel may run faster than in the highest low gear",
                         s.lowRangeSlip);
                 }
             }

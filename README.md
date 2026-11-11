@@ -109,6 +109,7 @@ The Gameplay tab of the NEXT GEN menu edits every setting while you play, in eig
 | With `Powertrain=1`, the air's drag taken off the engine's pull | Power: Air drag | `RoadLoad` 0 or 1 | on |
 | With `Powertrain=1`, in a gear of the mod gearbox held by hand: how hard the engine holds the truck back with the foot off, as a percent of the gear's torque at the redline (see below) | Power: Engine braking | `EngineBrake` 0 to 30 | 15 |
 | With `Powertrain=1`: how firmly the diff lock ties the driven wheels together, 0 the game's lock, 100 one shaft (see below) | Power: Diff lock bite | `DiffLockBite` 0 to 100 | 0 |
+| With `Powertrain=1`: how much wheel slip L and L- may use. 100 gives them the room of L+ while the truck is slow, 0 holds each wheel near the top speed of its gear | Power: Low range slip | `LowRangeSlip` 0 to 100 | 100 |
 | With `Powertrain=1`: the differential of the driven truck, kept in that truck's file (see below) | Power: Diff | `DiffType` 0 Auto, 1 Open, 2 Limited slip, 3 Locked | 0 |
 | With `Powertrain=1`, the game's tachometer, cockpit needles, rev lights, engine sound, effects and exhaust follow the mod's engine (see below) | Power: Mod engine speed | `ModEngineSpeed` 0 or 1 | on |
 | The mod's engine speed the game reads as its top, a share of the redline | ini only | `EngineSpeedTop` 0.5 to 1.5 | 1 |
