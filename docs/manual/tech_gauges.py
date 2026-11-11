@@ -403,16 +403,30 @@ push and the share taken back, k, F_excess, F, B4, the forward speed and the kic
 with width clamp(0.05 fastest, 0.05, 0.5), smoothed 0.8 old; nothing ties the speeds. The mod's thread publishes the driven truck's action,
 vehicle and DiffLockBite p (<code>LockGive</code>) while Powertrain is on and p is above 0, at every Gearbox level, with the setter's
 pattern (<code>kLockSetterPattern</code>, d7d470 on 6adb8627: it writes + 0x4A only while vehicle + 0xE8 is 0) found once at the start
-and the kind at vehicle + 0xE8 read and 0 or 1 (<code>LockPublishes</code>; 2 is always on and takes the bite only with DiffLockBiteAlways=1, any other kind none). In the
+and the kind at vehicle + 0xE8 read and 0 or 1 (<code>LockPublishes</code>; 2 is always on and takes the bite too, any other kind none). In the
 drive's hook, which the bite asks for by itself (<code>DriveHookWanted</code>), after the original drive and while + 0x4A is set and the
-handbrake + 0x48 is not: each driven wheel's spin about its axle w (as the wheel cap reads it) moves to w + k (mean − w), the mean
+handbrake + 0x48 is not, or the truck's type is Locked: each driven wheel's spin about its axle w (as the wheel cap reads it) moves to w + k (mean − w), the mean
 weighted by each wheel's inertia about its axle (1 / <code>CapGain</code>), so the momentum about the axles stays (<code>LockStep</code>);
 k = 1 − exp(−dt / tau), tau = 10^(−p / 50) s, 1 at p 100, 0 for a dt that is no number or not above 0 (<code>LockK</code>). Nothing
 under a spread of 0.01 rad/s, with fewer than two wheels, or for a wheel with no inertia (skipped, counted). With the wheel cap on the
 lock comes first and the cap works on the locked speeds, one write a wheel against the drive's result. Gauges.log has
-"settings: diff lock bite ..." with the settings, "diff lock bite: the game's diff lock setter at +..." at the code look, "diff lock bite:
-rests on this truck: its diff lock is always on ..." for kind 2, "diff lock bite: rests on this truck: kind ..." for a kind not known (it publishes nothing), "diff lock bite: acts on this truck (kind ...)" at the first write,
+"settings: diff lock bite ..." with the settings, "diff lock bite: the game's diff lock setter at +..." at the code look, "diff lock bite: rests on this truck: kind ..." for a kind not known (it publishes nothing), "diff lock bite: acts on this truck (kind ...)" at the first write,
 and with Probe=1 "probe: diff lock bite: kind ..." a second.</p>
+<p><b>The differential's type</b> (BRIEF_diff_types.md). DiffType is a key of the truck's own file: 0 Auto, 1 Open, 2 Limited slip, 3 Locked
+(<code>DiffTypeOf</code>). Auto is Locked at kind 2, Open at kinds 0 and 1, and Limited slip for a kind not read or not known. The type acts
+where the torque cut acts. Each step of the drive reads once what is in force (<code>DiffForceOf</code>): the lock while + 0x4A is set and
+the handbrake is not, or the type is Locked; else Open for the type Open; else Limited slip, the cut as it was before the types. Open: after
+the drive the driven wheels share its impulse evenly, J = the sum of (post &minus; pre) / gain and each speed pre + gain J / n
+(<code>DiffEvenStep</code>); the cut's answer is the same in every type, and where the gear has a wheel cap one wheel's limit is n &times;
+the step's ceiling (<code>DiffOpenCap</code> over <code>CapCeiling</code>), with nothing handed on from a held wheel. Locked on a truck of
+kind 0 or 1: the mod's thread holds the lock byte (<code>LockHoldStep</code>), never clears a byte the player set, and sets a cleared one
+again with one line in the log. A truck left with the mod's byte set keeps it, and back on that truck the byte is the mod's own again and is
+cleared once the type no longer acts (the last four such trucks are remembered). With the bite above 0
+the lock's step weighs each wheel by what it has behind it (<code>LockStepHeld</code>): W = I + load &times; mass / n &times; r&sup2;, the
+load the contact share at wheel + 0x128, so a wheel in the air no longer pulls the mean up; with every load 0 it is <code>LockStep</code>.
+Below k 1 a free wheel still runs ahead by about the drive's kick &times; (1 &minus; k) / k. Gauges.log has "differential: the lock kind ..."
+for a truck, "differential: Locked on a truck whose lock is not always on ..." as the mod takes or leaves the lock byte,
+"differential: the lock byte the mod holds for Locked was 0 again ..." once, and with Probe=1 "probe: differential: ..." a second.</p>
 <h3>The torque cut (a gear held by hand)</h3>
 <p>The game's torque per gear is one function, <code>bool(vehicle, int gear, float* torque, float* start, float* a, float* top, float* gearSpeed)</code>, found by
 its first bytes once (<code>kGearTorquePattern</code>), and the drive's call of it is the first call in the wheels' drive that lands there (<code>GearTorqueFind</code>,
