@@ -456,6 +456,13 @@ again with one line in the log. A truck left with the mod's byte set keeps it, a
 cleared once the type no longer acts (the last four such trucks are remembered). With the bite above 0
 the lock's step weighs each wheel by what it has behind it (<code>LockStepHeld</code>): W = I + load &times; mass / n &times; r&sup2;, the
 load the contact share at wheel + 0x128, so a wheel in the air no longer pulls the mean up; with every load 0 it is <code>LockStep</code>.
+While the drive's impulse J = the sum of I &times; (post &minus; pre) is over 0, three rules bound what is written (<code>LockBound</code>, on the
+blended speed, so below bite 100 too): final is at least min(post, 0); final is at most the fastest post; the sum of I &times; final is at most
+that of I &times; post, the surplus taken from the wheels by their room above the floor. What the rules do not let through is dropped and
+kept nowhere. With J at 0 or under (a truck rolling back, engine braking) the step is as before. With Probe=1 the line a second counts the
+steps with C under 0 and J over 0, the wheels written under 0 and the steps where the rules moved a wheel, and the line
+"probe: diff lock bite: the last written step by wheel ..." gives the last written step wheel by wheel: before the drive, after the drive,
+as the lock wrote it, the contact share, the gain, the rolling radius and the same wheel's speed before the next step's drive.
 Below k 1 a free wheel still runs ahead by about the drive's kick &times; (1 &minus; k) / k. Gauges.log has "differential: the lock kind ..."
 for a truck, "differential: Locked on a truck whose lock is not always on ..." as the mod takes or leaves the lock byte,
 "differential: the lock byte the mod holds for Locked was 0 again ..." once, and with Probe=1 "probe: differential: ..." a second.</p>
