@@ -219,23 +219,37 @@ struct PushCounts
     float given, back, k, fx, f, b4, speed;
 };
 void PushCountsGet(PushCounts &out);
-// The diff lock's bite (BRIEF_diff_lock_bite.md; torque_cut.h, LockStep): the driven truck's action and vehicle,
-// DiffLockBite (1 to 100) and the lock kind read (vehicle + 0xE8), published while it may bite; bite 0 or no action
-// clears it; a publish older than kTorqueFresh passes. In the drive's hook, while the lock byte (action + 0x4A) is set and
-// the handbrake (action + 0x48) is not, the driven wheels' spins about their axles move toward their mean after the drive,
-// before the wheel cap.
-void LockGive(uint64_t action, uint64_t vehicle, int bite, int kind);
+// The diff lock's bite (BRIEF_diff_lock_bite.md; torque_cut.h, LockStepHeld): the driven truck's action and vehicle,
+// DiffLockBite (1 to 100), the lock kind read (vehicle + 0xE8), the truck's mass by its files (0 not known) and
+// hkpCylinderShape's vtable (0 not found), published while it may bite; bite 0 or no action clears it; a publish older
+// than kTorqueFresh passes. In the drive's hook, while the lock is in force (DiffLockInForce: the lock byte at
+// action + 0x4A set and the handbrake at action + 0x48 not, or the cut's slot's type Locked), the driven wheels' spins
+// about their axles move toward their mean, weighted by what each has behind it, after the drive and before the wheel cap.
+void LockGive(uint64_t action, uint64_t vehicle, int bite, int kind, float mass = 0.0f, uint64_t cylinderVtable = 0);
 // Its counters since the start: the steps the slot named the action, those with the lock byte off, those held by the
 // handbrake, those written, faults, wheels skipped (no inertia); the last written step's wheels, k and spread after the
-// drive and after the lock (rad/s), and the vehicle it was for.
+// drive and after the lock (rad/s), the vehicle it was for, and that step's weighted mean before the drive (c), the
+// impulse handed to the wheels on the ground (r) and the fastest wheel after the drive over c (over).
 struct LockCounts
 {
     long calls, off, handbrake, writes, faults, skipped;
     int wheels;
     float k, spreadBefore, spreadAfter;
     uint64_t vehicle;
+    float c, r, over;
 };
 void LockCountsGet(LockCounts &out);
+// The differential's type in the drive's hook (BRIEF_diff_types.md): the steps Open's evening ran, those it wrote and
+// its faults since the start; the last one's wheels and impulse J; and what was in force in the last step of the cut's
+// action (kDiffForceOpen, kDiffForceLimited or kDiffForceLock).
+struct DiffCounts
+{
+    long steps, writes, faults;
+    int wheels;
+    float j;
+    int force;
+};
+void DiffCountsGet(DiffCounts &out);
 // The hook's calls so far: for the action given (hits) and all of them.
 void CreepCounts(long &hits, long &calls);
 // The threads the drive was called on so far, at most most of them; full where more were seen than are kept.

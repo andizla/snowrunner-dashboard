@@ -4742,11 +4742,9 @@ int main(int argc, char **argv)
         const LockStepOut g = LockStep(two, noGain, okAll, 2, 1.0f), c = LockStep(close, equal, okAll, 2, 1.0f), z = LockStep(two, equal, okAll, 2, 0.0f),
                           nk = LockStep(two, equal, okAll, 2, NAN);
         const bool nothing = !g.wrote && g.skipped == 1 && g.final[1] == 20.0f && !c.wrote && c.final[1] == 10.005f && !z.wrote && !nk.wrote && nk.final[0] == 10.0f;
-        // who publishes (the lead's addendum): kinds 0 and 1, kind 2 only with DiffLockBiteAlways, never without the read or the pattern
-        const bool publishes = LockPublishes(true, true, 0, false) && LockPublishes(true, true, 1, false) && !LockPublishes(true, true, 2, false) &&
-                               LockPublishes(true, true, 2, true) && !LockPublishes(true, false, 0, false) && !LockPublishes(false, true, 0, false) &&
-                               !LockPublishes(false, true, 1, true) && !LockPublishes(false, true, 2, true) && !LockPublishes(true, true, 3, false) && !LockPublishes(true, true, 3, true) &&
-                               !LockPublishes(true, true, -1, true);
+        // who publishes (the diff types' addendum, A3): kinds 0, 1 and 2, never another kind, never without the read or the pattern
+        const bool publishes = LockPublishes(true, true, 0) && LockPublishes(true, true, 1) && LockPublishes(true, true, 2) && !LockPublishes(true, false, 0) &&
+                               !LockPublishes(false, true, 0) && !LockPublishes(false, true, 2) && !LockPublishes(true, true, 3) && !LockPublishes(true, true, -1);
         // the drive's hook: the bite alone asks for it (Powertrain on, DiffLockBite above 0), at 0 or with Powertrain off it does not
         const bool hook = DriveHookWanted(false, false, false, false, true, 50) && !DriveHookWanted(false, false, false, false, true, 0) &&
                           !DriveHookWanted(false, false, false, false, false, 50) && DriveHookWanted(true, false, false, false, false, 0);
@@ -4755,8 +4753,8 @@ int main(int argc, char **argv)
                    u.final[1], oneMean, nothing, publishes, hook);
         Check(ks && pairs && weighted && oneMean && nothing && publishes && hook,
               "diff lock bite: k is 0 at 0 and 1 at 100, 0.1535 at 50 for 1/60 s and the same over two half steps, 0 for no step; the wheels on their inertia-weighted mean "
-              "with the momentum kept; a wheel with no inertia skipped, a spread under 0.01 or no k writes nothing; published at kinds 0 and 1, at 2 only with "
-              "DiffLockBiteAlways, never without the read or the setter's pattern; the bite alone asks for the drive's hook");
+              "with the momentum kept; a wheel with no inertia skipped, a spread under 0.01 or no k writes nothing; published at kinds 0, 1 and 2, "
+              "never at another kind, never without the read or the setter's pattern; the bite alone asks for the drive's hook");
     }
     // the sketch at 60 Hz (the brief's): one driven wheel on ice and one on grip, floored for 5 s, the game's locked rule
     // (the Reviewer's reading of c423a4: whole speeds, the threshold over the slowest, the share smoothed 0.8 old) alone
@@ -4799,6 +4797,194 @@ int main(int argc, char **argv)
                                     "%.3f at 100; the truck at %.2f, %.2f, %.2f and %.2f m/s",
                  game.spread, halfway.spread, firm.spread, shaft.spread, game.speed, halfway.speed, firm.speed, shaft.speed);
         Check(shaft.spread < 0.01f && firm.spread < halfway.spread && halfway.spread < game.spread && shaft.speed > game.speed, line);
+    }
+
+    // the differential's types (BRIEF_diff_types.md with the Reviewer's addendum of 2026-11-11): the type by the setting and
+    // the kind, what is in force in a step, Open's ceiling, the held lock byte
+    {
+        const bool types = DiffTypeOf(kDiffAuto, true, 0) == kDiffOpen && DiffTypeOf(kDiffAuto, true, 1) == kDiffOpen && DiffTypeOf(kDiffAuto, true, 2) == kDiffLocked &&
+                           DiffTypeOf(kDiffAuto, true, 3) == kDiffLimited && DiffTypeOf(kDiffAuto, false, 2) == kDiffLimited && DiffTypeOf(kDiffAuto, true, -1) == kDiffLimited &&
+                           DiffTypeOf(kDiffOpen, true, 2) == kDiffOpen && DiffTypeOf(kDiffLimited, true, 0) == kDiffLimited && DiffTypeOf(kDiffLocked, false, 0) == kDiffLocked &&
+                           DiffTypeOf(9, true, 2) == kDiffLocked && DiffTypeOf(-1, true, 1) == kDiffOpen;
+        const bool force = DiffForceOf(kDiffOpen, false, false) == kDiffForceOpen && DiffForceOf(kDiffOpen, true, false) == kDiffForceLock &&
+                           DiffForceOf(kDiffOpen, true, true) == kDiffForceOpen && DiffForceOf(kDiffLimited, false, false) == kDiffForceLimited &&
+                           DiffForceOf(kDiffLimited, true, false) == kDiffForceLock && DiffForceOf(kDiffLimited, true, true) == kDiffForceLimited &&
+                           DiffForceOf(kDiffLocked, false, false) == kDiffForceLock && DiffForceOf(kDiffLocked, false, true) == kDiffForceLock &&
+                           DiffLockInForce(kDiffLocked, false, true) && !DiffLockInForce(kDiffOpen, true, true);
+        const bool ceiling = DiffOpenCap(4, 15.0f) == 60.0f && DiffOpenCap(2, 13.75f) == 27.5f && DiffOpenCap(0, 15.0f) == 0.0f && DiffOpenCap(4, 0.0f) == 0.0f &&
+                             DiffOpenCap(4, NAN) == 0.0f && DiffOpenCap(4, -3.0f) == 0.0f;
+        // the hold: set where the byte is 0, left where it is set, cleared once the type no longer acts, set again when
+        // the game cleared it; a byte the player set first is never cleared; no read and no action do nothing
+        LockHold h = {};
+        const int set = LockHoldStep(h, 0x1000, true, true, 0), stays = LockHoldStep(h, 0x1000, true, true, 1), again = LockHoldStep(h, 0x1000, true, true, 0);
+        const bool oursNow = h.ours;
+        const int clear = LockHoldStep(h, 0x1000, false, true, 1), after = LockHoldStep(h, 0x1000, false, true, 1);
+        LockHold p = {};
+        const int players = LockHoldStep(p, 0x1000, true, true, 1), playersOff = LockHoldStep(p, 0x1000, false, true, 1);
+        // a truck change: the new action starts with nothing held, and the old truck's byte is not touched from there;
+        // back on the old truck its byte is the mod's own again and is cleared once the type no longer acts (G1), also
+        // after three more trucks, and a byte the game cleared meanwhile is not written
+        LockHold c = {};
+        LockHoldStep(c, 0x1000, true, true, 0);
+        const int other = LockHoldStep(c, 0x2000, false, true, 1);
+        const bool otherNotOurs = !c.ours && c.action == 0x2000;
+        const int back = LockHoldStep(c, 0x1000, false, true, 1);
+        const bool backDone = !c.ours;
+        const int backAfter = LockHoldStep(c, 0x1000, false, true, 1);
+        LockHold c4 = {};
+        LockHoldStep(c4, 0x1000, true, true, 0);
+        LockHoldStep(c4, 0x2000, true, true, 0);
+        LockHoldStep(c4, 0x3000, true, true, 1); // the player's
+        LockHoldStep(c4, 0x4000, true, true, 0);
+        const int players3 = LockHoldStep(c4, 0x3000, false, true, 1), back2 = LockHoldStep(c4, 0x2000, false, true, 1), back1 = LockHoldStep(c4, 0x1000, false, true, 0);
+        const int back4 = LockHoldStep(c4, 0x4000, true, true, 1), off4 = LockHoldStep(c4, 0x4000, false, true, 1);
+        const bool forgot = otherNotOurs && back == 0 && backDone && backAfter == -1 && players3 == -1 && back2 == 0 && back1 == -1 && back4 == -1 && off4 == 0;
+        LockHold n = {};
+        const int noRead = LockHoldStep(n, 0x1000, true, false, 0), noAction = LockHoldStep(n, 0, true, true, 0);
+        LockHold g = {};
+        LockHoldStep(g, 0x1000, true, true, 0);
+        const int gone = LockHoldStep(g, 0x1000, false, true, 0); // ours, and the game cleared it already: nothing to write
+        const bool hold = set == 1 && stays == -1 && again == 1 && oursNow && clear == 0 && after == -1 && players == -1 && !p.ours && playersOff == -1 && other == -1 && forgot &&
+                          noRead == -1 && noAction == -1 && gone == -1 && !g.ours;
+        if (!(types && force && ceiling && hold)) printf("     diff types: types %d, force %d, ceiling %d, hold %d (%d %d %d %d %d %d %d %d)\n", types, force, ceiling, hold, set, stays, again, clear, after, players, playersOff, other);
+        Check(types && force && ceiling && hold,
+              "diff types: Auto is Open at kinds 0 and 1 and Locked at kind 2, Limited slip with the kind not read or not known, a set type is itself; the lock is in force "
+              "with the byte set and the handbrake off on any type and always on Locked; Open's limit n x the step's ceiling; the held lock byte is set where it is 0, "
+              "cleared only where the mod set it, also on the way back to a truck left with it set");
+    }
+
+    // Open (A1, A2, with C5 of BRIEF_governor_sway.md): the evening shares the drive's impulse, the limit is n times the
+    // step's ceiling with nothing handed on, the cut's answer is the same in every type (no governor by the mean); the lock
+    // set over a free wheel does not lurch (F1 of the review)
+    {
+        auto nearly = [](float a, float b, float tol) { return fabsf(a - b) <= tol; };
+        const bool okAll[kCapWheels] = { true, true, true, true };
+        const float one[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+        // two wheels, the free one took the whole kick: half each
+        const float pre2[2] = { 0.0f, 0.0f }, post2[2] = { 10.0f, 0.0f };
+        const DiffEvenOut e2 = DiffEvenStep(pre2, post2, one, okAll, 2);
+        // unequal gains (inertia 2 and 0.5): J = 0 / 0.5 + 20 / 2 = 10, 5 each: 1 + 0.5 x 5 and 1 + 2 x 5, the momentum kept
+        const float pre3[2] = { 1.0f, 1.0f }, post3[2] = { 1.0f, 21.0f }, gain3[2] = { 0.5f, 2.0f };
+        const DiffEvenOut e3 = DiffEvenStep(pre3, post3, gain3, okAll, 2);
+        const bool evens = e2.final[0] == 5.0f && e2.final[1] == 5.0f && e2.wrote && e2.used == 2 && nearly(e2.j, 10.0f, 1e-5f) && nearly(e3.final[0], 3.5f, 1e-5f) &&
+                           nearly(e3.final[1], 11.0f, 1e-5f) && nearly(e3.final[0] / 0.5f + e3.final[1] / 2.0f, 1.0f / 0.5f + 1.0f / 2.0f + 10.0f, 1e-4f);
+        // all four gripping, the drive even already: nothing written
+        const float pre4[4] = { 8.0f, 8.0f, 8.0f, 8.0f }, post4[4] = { 8.5f, 8.5f, 8.5f, 8.5f };
+        const DiffEvenOut e4 = DiffEvenStep(pre4, post4, one, okAll, 4);
+        // one wheel, a gain of 0 beside one wheel, a NaN: as the drive left them
+        const float nanPost[2] = { NAN, 4.0f }, noGain[2] = { 0.0f, 1.0f };
+        const DiffEvenOut e1 = DiffEvenStep(pre2, post2, one, okAll, 1), eg = DiffEvenStep(pre2, post2, noGain, okAll, 2), en = DiffEvenStep(pre2, nanPost, one, okAll, 2);
+        const bool leaves = !e4.wrote && e4.final[2] == 8.5f && e4.used == 4 && !e1.wrote && e1.final[0] == 10.0f && !eg.wrote && eg.final[0] == 10.0f && eg.used == 1 && !en.wrote &&
+                            en.final[1] == 4.0f;
+        // at the limit (two wheels, a ceiling of 13.75: 27.5) the free wheel is held and the standing one gets nothing of it
+        const float capPre[2] = { 0.0f, 26.0f }, capPost[2] = { 0.0f, 30.0f };
+        const CapStepOut atCap = CapStep(capPre, capPost, one, okAll, 2, DiffOpenCap(2, 13.75f), false), handed = CapStep(capPre, capPost, one, okAll, 2, DiffOpenCap(2, 13.75f), true);
+        const bool noHand = atCap.final[1] == 27.5f && atCap.final[0] == 0.0f && atCap.spread == 0.0f && atCap.clamps == 1 && handed.final[0] > 0.0f;
+        // F1: a gear's top of 10 and a cap of 15; in Open one wheel of four runs free at 4 x the top, the drive's kick 150 on
+        // it and 3 on each of the others. The step before: evened, the limit 4 x 15. Then the lock byte is set with
+        // DiffLockBite at 0: the cap's step with the ceiling 15 and the spread. The free wheel keeps its 40, no wheel gains
+        // more than in the step before, and all four gain no more than the drive gave
+        const float fPre[4] = { 0.0f, 0.0f, 0.0f, 40.0f }, fPost[4] = { 3.0f, 3.0f, 3.0f, 190.0f };
+        const DiffEvenOut fEven = DiffEvenStep(fPre, fPost, one, okAll, 4);
+        const CapStepOut inOpen = CapStep(fPre, fEven.final, one, okAll, 4, DiffOpenCap(4, 15.0f), false), lockSet = CapStep(fPre, fPost, one, okAll, 4, 15.0f, true);
+        bool noLurch = lockSet.final[3] == 40.0f && inOpen.final[3] == 60.0f;
+        float gained = 0.0f, gainMost = 0.0f;
+        for (int i = 0; i < 4; i++)
+        {
+            noLurch = noLurch && lockSet.final[i] - fPre[i] <= inOpen.final[i] - fPre[i] + 1e-4f;
+            gained += lockSet.final[i] - fPre[i];
+            gainMost = fmaxf(gainMost, lockSet.final[i] - fPre[i]);
+        }
+        noLurch = noLurch && gained <= 159.0f + 1e-3f && gainMost <= 15.0f + 1e-4f;
+        if (!(evens && leaves && noHand && noLurch))
+            printf("     open: evens %d, leaves %d, no hand %d, no lurch %d (the lock set: %.3f %.3f %.3f %.3f, in Open %.3f %.3f %.3f %.3f)\n", evens, leaves, noHand, noLurch, lockSet.final[0],
+                   lockSet.final[1], lockSet.final[2], lockSet.final[3], inOpen.final[0], inOpen.final[1], inOpen.final[2], inOpen.final[3]);
+        Check(evens && leaves && noHand && noLurch,
+              "open differential: the drive's impulse is shared evenly over the driven wheels with the momentum kept, an even drive is not written; at the limit (the "
+              "driven wheels times the ceiling) nothing is handed to the standing wheel; the lock set over a wheel free at 4 x the top leaves that wheel its speed and "
+              "gives no wheel more than the step before did");
+
+        // S1 anew on the top's sim (TopRun, torque_cut_sim.h): four wheels, one free, the truck held standing, 20 s. In L-
+        // (a cap of 1.5) and in a numbered gear (no cap), Open and not
+        TopSetup u = {};
+        u.slot.vehicle = 1, u.slot.mode = kCutMap, u.slot.share = 1.0f, u.slot.pedal = 1.0f;
+        u.wheels = 4, u.freeWheels = 1, u.kick = 500.0f, u.mdav = 0.01f, u.inertia = 10.0f, u.flat = -1.0f, u.holdV = 0.0f, u.grip = 1000.0f;
+        u.seconds = 20.0f, u.rise = 0.008f, u.seed = 7, u.gripNoise = 0.3f, u.dragNoise = 0.3f, u.couple = 1.0f / 60.0f;
+        auto run = [&](float top, float cap, bool open) {
+            TopSetup c = u;
+            const CutBand band = CutGovernBand(top, kTachOverrun);
+            c.slot.map = TorqueCutMap{ 1.0f, 1.0f, 0.0f, 1.0f, 0.15f, top, 800.0f, 2500.0f, 1.2f, { 5, { 0.25f, 0.45f, 0.6f, 0.8f, 1.0f }, { 0.55f, 0.85f, 1.0f, 1.0f, 0.85f } }, band.from, band.to };
+            c.cap = cap;
+            c.open = open;
+            return TopRun(c);
+        };
+        const float lowTop = 2.4f, highTop = 12.3f;
+        const TopResult lowOpen = run(lowTop, 1.5f, true), lowNot = run(lowTop, 1.5f, false), highOpen = run(highTop, 0.0f, true), highNot = run(highTop, 0.0f, false);
+        static char line[1400];
+        snprintf(line, sizeof line,
+                 "open differential on the top's sim: one free wheel of four, the truck held standing, 20 s; in L- the free wheel runs to %.2f of the top (4 x the cap) and %.2f "
+                 "not Open, the driven mean %.2f to %.2f and %.2f to %.2f, the three's pull %.1f and %.1f; in a numbered gear the free wheel to %.2f and %.2f, the mean %.2f "
+                 "to %.2f and %.2f to %.2f, the pull %.1f and %.1f; no wheel lowered (%d %d)",
+                 lowOpen.freeMost / lowTop, lowNot.freeMost / lowTop, lowOpen.preMin / lowTop, lowOpen.preMax / lowTop, lowNot.preMin / lowTop, lowNot.preMax / lowTop, lowOpen.pull,
+                 lowNot.pull, highOpen.freeMost / highTop, highNot.freeMost / highTop, highOpen.preMin / highTop, highOpen.preMax / highTop, highNot.preMin / highTop,
+                 highNot.preMax / highTop, highOpen.pull, highNot.pull, lowOpen.lowered, highOpen.lowered);
+        printf("     %s\n", line);
+        Check(lowOpen.freeMost <= 4.0f * 1.5f * lowTop + 1e-3f && lowOpen.freeMost > 1.5f * lowTop && lowNot.freeMost <= 1.5f * lowTop + 1e-3f && lowOpen.pull > lowNot.pull && lowOpen.preMax <= 1.5f * lowTop + 1e-3f && highOpen.preMax < 1.3f * highTop &&
+                  highOpen.pull > highNot.pull && lowOpen.lowered == 0 && highOpen.lowered == 0,
+              line);
+    }
+
+    // Locked (M3, S2): the lock's step with the ground behind the wheels
+    {
+        auto nearly = [](float a, float b, float tol) { return fabsf(a - b) <= tol; };
+        const bool okAll[kCapWheels] = { true, true, true, true };
+        const float one[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+        // one wheel in the air and one held by the ground, the kick of 150 on the free one: W 1 and 1 + 1000 / 2 x 0.25 =
+        // 126, C 5, aHeld 150 / 127, the rest to the held wheel
+        const float pre[2] = { 5.0f, 5.0f }, post[2] = { 155.0f, 5.0f }, load[2] = { 0.0f, 1.0f }, radius[2] = { 0.5f, 0.5f };
+        const LockStepOut l = LockStepHeld(pre, post, one, load, radius, okAll, 2, 1.0f, 1000.0f), half = LockStepHeld(pre, post, one, load, radius, okAll, 2, 0.5f, 1000.0f);
+        const float aHeld = 150.0f / 127.0f;
+        const bool held = nearly(l.final[0], 5.0f + aHeld, 1e-3f) && nearly(l.final[1], 5.0f + aHeld + (150.0f - 2.0f * aHeld), 1e-2f) && nearly(l.final[0] + l.final[1], 2.0f * 5.0f + 150.0f, 1e-2f) &&
+                          l.wrote && l.used == 2 && nearly(l.c, 5.0f, 1e-4f) && nearly(l.r, 150.0f - 2.0f * aHeld, 1e-2f) && nearly(l.over, 150.0f, 1e-3f) &&
+                          nearly(half.final[0], 155.0f + 0.5f * (l.final[0] - 155.0f), 1e-3f) && nearly(half.final[1], 5.0f + 0.5f * (l.final[1] - 5.0f), 1e-3f);
+        // no mass or no radius: the stand-in weight I x (1 + 30 x load); every wheel in the air: LockStep itself
+        const float noRadius[2] = { 0.0f, 0.0f }, air[2] = { 0.0f, 0.0f };
+        const LockStepOut m0 = LockStepHeld(pre, post, one, load, radius, okAll, 2, 1.0f, 0.0f), r0 = LockStepHeld(pre, post, one, load, noRadius, okAll, 2, 1.0f, 1000.0f);
+        const LockStepOut inAir = LockStepHeld(pre, post, one, air, radius, okAll, 2, 1.0f, 1000.0f), plain = LockStep(post, one, okAll, 2, 1.0f);
+        const float a30 = 150.0f / 32.0f;
+        const bool standIn = nearly(m0.final[0], 5.0f + a30, 1e-3f) && m0.final[0] == r0.final[0] && m0.final[1] == r0.final[1] && inAir.final[0] == plain.final[0] &&
+                             inAir.final[1] == plain.final[1] && inAir.final[0] == 80.0f && inAir.wrote;
+        // nothing: one wheel, no k, a NaN before, both spreads under the least
+        const float nanPre[2] = { NAN, 5.0f }, same[2] = { 5.0f, 5.0f };
+        const bool nothing = !LockStepHeld(pre, post, one, load, radius, okAll, 1, 1.0f, 1000.0f).wrote && !LockStepHeld(pre, post, one, load, radius, okAll, 2, 0.0f, 1000.0f).wrote &&
+                             !LockStepHeld(nanPre, post, one, load, radius, okAll, 2, 1.0f, 1000.0f).wrote && !LockStepHeld(same, same, one, load, radius, okAll, 2, 1.0f, 1000.0f).wrote;
+        // S2, the drive's case as a sequence: 60 steps, three wheels on the ground that a stand-in solver sets back to the
+        // ground's 5 rad/s each step, one in the air, kicks of 150 on it and 3 on the others; a truck of 4000 kg on 0.5 m
+        auto run = [&](bool heldStep, float k) {
+            float w[4] = { 5.0f, 5.0f, 5.0f, 5.0f }, worst = 0.0f, identity = 0.0f;
+            const float loads[4] = { 1.0f, 1.0f, 1.0f, 0.0f }, radii[4] = { 0.5f, 0.5f, 0.5f, 0.5f };
+            for (int step = 0; step < 60; step++)
+            {
+                float p[4], q[4];
+                for (int i = 0; i < 4; i++) p[i] = w[i], q[i] = w[i] + (i == 3 ? 150.0f : 3.0f);
+                const LockStepOut o = heldStep ? LockStepHeld(p, q, one, loads, radii, okAll, 4, k, 4000.0f) : LockStep(q, one, okAll, 4, k);
+                if (heldStep) identity = fmaxf(identity, fabsf(o.final[0] + o.final[1] + o.final[2] + o.final[3] - (4.0f * o.c + 159.0f)));
+                for (int i = 0; i < 3; i++) w[i] = 5.0f;
+                w[3] = o.final[3];
+                worst = fmaxf(worst, w[3] - 5.0f);
+            }
+            struct R { float ahead, worst, identity; };
+            return R{ w[3] - 5.0f, worst, identity };
+        };
+        const auto old = run(false, 1.0f), now = run(true, 1.0f), blend = run(true, 0.5f);
+        char line[500];
+        snprintf(line, sizeof line,
+                 "locked differential, the drive's case: 60 steps, three wheels set back to the ground's speed and one in the air, kicks of 150; the step of before leaves "
+                 "the free wheel %.1f rad/s ahead, the step with the ground behind the wheels %.2f (at most %.2f on the way), at k 0.5 %.1f; the momentum off by %.4f at most",
+                 old.ahead, now.ahead, now.worst, blend.ahead, now.identity);
+        printf("     %s\n", line);
+        if (!(held && standIn && nothing)) printf("     locked: held %d (%.4f %.4f c %.4f r %.4f over %.4f), stand-in %d (%.4f), nothing %d\n", held, l.final[0], l.final[1], l.c, l.r, l.over, standIn, m0.final[0], nothing);
+        Check(held && standIn && nothing && now.worst < 2.0f && old.ahead > 20.0f * now.ahead && now.identity < 0.05f && blend.ahead > now.ahead && blend.ahead < old.ahead * 4.0f, line);
     }
 
     // the chassis push (BRIEF_chassis_push.md with the Reviewer's addendum and the lead's): k = 1 - max(1 / F_excess, 1 / F)

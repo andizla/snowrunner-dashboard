@@ -292,7 +292,8 @@ inline SimResult SimRun(const SimSetup &u)
 // Speeds in rad/s of the wheels, the truck's over the rolling radius.
 // The law: the ceiling by the truck's speed (CapCeiling) in the cap's step on every step, no fade in F. oldLaw: the
 // law before it, kept here for the counter-cases: the governor's factor by the truck's speed on the bracket, the cap flat
-// and written only once armed by the mean.
+// and written only once armed by the mean. open: the hook's order with Open in force, the evening and then the limit; with
+// no cap (a numbered gear) the evening alone.
 struct TopSetup
 {
     TorqueCutSlot slot;   // mode kCutMap, the map's top and band
@@ -311,6 +312,7 @@ struct TopSetup
     float footUpAt;       // above 0: the pedal goes to 0 from this second on
     bool oldLaw;          // the law before the ceiling: the governor on the bracket, the cap flat and armed by the mean
     uint32_t seed;
+    bool open;            // Open in force: the drive's impulse evened (DiffEvenStep), the limit n times the ceiling, nothing handed on
 };
 struct TopResult
 {
@@ -395,18 +397,26 @@ inline TopResult TopRun(const TopSetup &u)
         const bool armed = capV > 0.0f && CapArmStep(arm, 1, sp.mean, sp.ok, capV);
         float postMean = 0.0f;
         int clampsNow = 0;
+        float left[8];
+        for (int i = 0; i < n; i++) left[i] = post[i];
+        if (u.open)
+        {
+            const DiffEvenOut e = DiffEvenStep(pre, post, gain, ok, n);
+            for (int i = 0; i < n; i++) left[i] = e.final[i];
+        }
         if (capV > 0.0f && (armed || !u.oldLaw))
         {
-            const CapStepOut o = CapStep(pre, post, gain, ok, n, u.oldLaw ? capV : CapCeiling(capV, top, slot.map.governTo, v), true);
+            const float ceiling = u.oldLaw ? capV : CapCeiling(capV, top, slot.map.governTo, v);
+            const CapStepOut o = CapStep(pre, left, gain, ok, n, u.open ? DiffOpenCap(n, ceiling) : ceiling, !u.open);
             for (int i = 0; i < n; i++)
             {
-                if (o.final[i] < fminf(pre[i], post[i]) - 1e-5f) r.lowered++;
+                if (o.final[i] < fminf(pre[i], left[i]) - 1e-5f) r.lowered++;
                 w[i] = o.final[i];
             }
             clampsNow = o.clamps;
         }
         else
-            for (int i = 0; i < n; i++) w[i] = post[i];
+            for (int i = 0; i < n; i++) w[i] = left[i];
         for (int i = 0; i < n; i++) postMean += w[i] / (float)n;
         for (int i = 0; i < u.freeWheels && i < n; i++) r.freeMost = fmaxf(r.freeMost, w[i]);
         // the ground

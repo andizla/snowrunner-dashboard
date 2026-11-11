@@ -892,7 +892,16 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             PageLabel("Diff lock bite", labelX);
             ImGui::SetNextItemWidth(w);
             changed(ImGui::SliderInt("##difflockbite", &s.diffLockBite, 0, 100, s.diffLockBite > 0 ? "%d %%" : "game lock", ImGuiSliderFlags_AlwaysClamp));
-            PageTip("How firmly the diff lock ties the driven wheels together. 0 leaves the game lock as it is. 100 turns them as one shaft. A locked truck then scrubs in a turn on hard ground, as a real one does. A truck whose lock is always on keeps the game lock.");
+            PageTip("How firmly the diff lock ties the driven wheels together. 0 leaves the game lock as it is. 100 turns them as one shaft. A locked truck then scrubs in a turn on hard ground, as a real one does. It acts on a truck whose lock is always on too.");
+            PageLabel("Diff", labelX);
+            ImGui::SetNextItemWidth(w);
+            {
+                // 0 Auto, 1 Open, 2 Limited slip, 3 Locked (torque_cut.h); Auto names what it picks while a truck is driven
+                static const char *const autos[] = { "Auto", "Auto (Open)", "Auto (Limited slip)", "Auto (Locked)" };
+                const char *const diffs[] = { view.diffKnown && view.diffAuto >= 1 && view.diffAuto <= 3 ? autos[view.diffAuto] : autos[0], "Open", "Limited slip", "Locked" };
+                changed(ImGui::Combo("##difftype", &s.diffType, diffs, 4));
+            }
+            PageTip("The differential of the driven truck, saved for that truck. Auto picks Locked where the lock of the truck is always on, else Open. Open lets a free wheel spin and the others pull no harder than it does. Limited slip holds a spinning wheel, only in L-, L, L+ and R. Locked ties the wheels, and holds a free wheel only with Diff lock bite above 0. While the diff lock is on the truck is locked whatever the type, so on a truck whose lock is always on Open and Limited slip may change nothing. The type acts in the gear positions of the mod gearbox, not in A.");
             PageLabel("Mod engine speed", labelX);
             changed(ImGui::Checkbox("##modenginespeed", &s.modEngineSpeed));
             PageTip("The game tachometer, cockpit needles, rev lights, engine sound, effects and exhaust follow the mod engine while Real engine is on. Fuel use and the stall keep the game rules, and in a gear held by hand they follow the pull of the mod engine. Off: the game computes its own, and the mod engine never pulls alone in a gear held by hand, as that needs this on. On by default.");

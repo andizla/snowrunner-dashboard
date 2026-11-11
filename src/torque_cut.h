@@ -241,6 +241,74 @@ inline void RollMeanAdd(RollMean &m, float r)
 }
 inline float RollMeanOf(const RollMean &m) { return m.n && m.inv > 0.0f ? (float)m.n / m.inv : NAN; }
 
+// ---- the differential's type (BRIEF_diff_types.md and the Reviewer's addendum of 2026-11-11) ----
+// DiffType, a truck's own setting: Auto goes by the truck's lock kind (vehicle + 0xE8: 2, a lock always on, is Locked; 0, a
+// lock fitted, and 1, none, are Open), the others are themselves. A kind not read or not known under Auto is Limited
+// slip, the mod's behaviour before the types.
+enum { kDiffAuto, kDiffOpen, kDiffLimited, kDiffLocked, kDiffTypes };
+inline int DiffTypeOf(int setting, bool kindRead, int kind)
+{
+    if (setting == kDiffOpen || setting == kDiffLimited || setting == kDiffLocked) return setting;
+    if (!kindRead) return kDiffLimited;
+    return kind == 2 ? kDiffLocked : kind == 0 || kind == 1 ? kDiffOpen : kDiffLimited;
+}
+// The lock is in force (A3): the lock byte set (action + 0x4A) and the handbrake (action + 0x48) not, on any type, or
+// the type Locked.
+inline bool DiffLockInForce(int type, bool lockByte, bool handbrake) { return (lockByte && !handbrake) || type == kDiffLocked; }
+// What acts in one step of the drive (M4), read once with that step's lock byte: the lock where it is in force, else
+// Open for the type Open, else Limited slip.
+enum { kDiffForceOpen, kDiffForceLimited, kDiffForceLock };
+inline int DiffForceOf(int type, bool lockByte, bool handbrake)
+{
+    return DiffLockInForce(type, lockByte, handbrake) ? kDiffForceLock : type == kDiffOpen ? kDiffForceOpen : kDiffForceLimited;
+}
+// Open's ceiling for one wheel (A1, as C5 of BRIEF_governor_sway.md has it): n times the step's ceiling (CapCeiling),
+// n the driven wheels read that step. With all but one standing the free one runs to it, and the driven mean is then
+// at the ceiling the other types hold each wheel to. 0 where the ceiling is no number or not above 0.
+inline float DiffOpenCap(int n, float ceiling)
+{
+    const float cap = (float)n * ceiling;
+    return n > 0 && ceiling > 0.0f && isfinite(cap) ? cap : 0.0f;
+}
+// Locked on a truck whose lock is not always on (S4): the mod holds the lock byte while the type acts. One pass of the
+// mod's thread: want (the type Locked acts on this action), the byte as read. Returns the byte to write, -1 for none. A
+// byte the player set first is not the mod's and is never cleared; one the mod set is cleared once the type no longer
+// acts. Another action (a truck change): the old truck keeps its byte as it was left, and its action is remembered (the
+// last kLockHoldLeft of them), so back on it the byte is the mod's own again and is cleared once the type no longer acts
+// (G1 of the review).
+static const int kLockHoldLeft = 4;
+struct LockHold
+{
+    uint64_t action;
+    bool ours;
+    uint64_t left[kLockHoldLeft]; // the actions left with the mod's byte set, 0 for a free place
+    int next;
+};
+inline int LockHoldStep(LockHold &h, uint64_t action, bool want, bool byteRead, uint8_t byte)
+{
+    if (action != h.action)
+    {
+        if (h.ours && h.action)
+        {
+            h.left[h.next] = h.action;
+            h.next = (h.next + 1) % kLockHoldLeft;
+        }
+        h.action = action, h.ours = false;
+        for (int i = 0; i < kLockHoldLeft; i++)
+            if (action && h.left[i] == action) h.left[i] = 0, h.ours = true;
+    }
+    if (!action || !byteRead) return -1;
+    if (want)
+    {
+        if (byte) return -1;
+        h.ours = true;
+        return 1;
+    }
+    if (!h.ours) return -1;
+    h.ours = false;
+    return byte ? 0 : -1;
+}
+
 struct TorqueCutSlot
 {
     uint64_t vehicle, action;
@@ -249,6 +317,7 @@ struct TorqueCutSlot
     int mode;
     float scalar, floor, share, pedal, sLast, listTop, gamePull, cap, pushBack; // pushBack: 1 - PushShare / 100, for the cap's part of the chassis push
     TorqueCutMap map;
+    int diff; // the differential's type for this truck (DiffTypeOf, on the mod's thread)
 };
 
 // The cut answers a call only when all hold: it is the drive's (it returns to driveBack), a slot is published for this
@@ -380,7 +449,8 @@ struct TorqueCutAnswer
 };
 // The governor's fade goes by the truck's own speed where it was read (M5), else by the wheels' mean; the curve held to
 // the redline and no fade in F only where the guard acts (slot.cap above 0): the ceiling holds the top there, and F's
-// drive is 0 from the governor's end.
+// drive is 0 from the governor's end. The same in every type of differential: Open has no governor of its own (C5 of
+// BRIEF_governor_sway.md voids the one by the wheels' mean), its limit is the ceiling times the driven wheels.
 inline TorqueCutAnswer TorqueCutAnswerOf(const TorqueCutSlot &slot, float stock, float start, float a, float top, float pf, float d4, CutSpeeds sp)
 {
     TorqueCutAnswer r = {};
@@ -624,6 +694,7 @@ struct LockStepOut
     float spreadBefore, spreadAfter; // the fastest minus the slowest of the wheels used, after the drive and after the lock
     int used, skipped;               // wheels in the mean, and driven wheels read whole but with no inertia (gain 0)
     bool wrote;                      // final differs from post
+    float c, r, over;                // LockStepHeld's: the weighted mean before the drive, the impulse handed to the wheels on the ground, the fastest wheel after the drive over c
 };
 // One step of the lock over a truck's driven wheels: post each one's speed after the drive (the gear's direction, the
 // game's measure), gain its CapGain, ok read whole. Fewer than two wheels with a gain, a spread under kLockSpreadMin, no
@@ -666,20 +737,156 @@ inline LockStepOut LockStep(const float *post, const float *gain, const bool *ok
     o.spreadAfter = hi - lo;
     return o;
 }
+// The lock's step with the ground behind the wheels (M3 of the diff types' addendum). LockStep's mean is weighted by each
+// wheel's own inertia, so a wheel in the air pulls the mean up and the solver takes the others back down each step: the
+// free wheel runs away. Here each wheel weighs what it has behind it: I = 1 / gain, and W = I + load x mass / n x r^2
+// (load the contact share at wheel + 0x128 held to 0 to 1, mass the truck's by its files, r the rolling radius, n the
+// wheels used); with no mass, or no radius for that wheel, W = I x (1 + 30 x load). C is the mean of pre by W, J the
+// drive's impulse (the sum of (post - pre) x I), a = J / the sum of W the speed it gives wheels and truck together, and
+// R = J - a x the sum of I what is left for the ground. A wheel's locked speed is C + a + gain x R x load / the sum of
+// the loads (the last term left out with the loads under 0.001), and final = post + k x (locked - post). With every
+// load 0 it is LockStep itself. Fewer than two wheels, no k, both spreads (pre's and post's) under kLockSpreadMin or a
+// value that is no number: final is post. A wheel on the ground that slips counts as loaded and is not held.
+inline LockStepOut LockStepHeld(const float *pre, const float *post, const float *gain, const float *load, const float *radius, const bool *ok, int n, float k, float mass)
+{
+    LockStepOut o = {};
+    if (n > kCapWheels) n = kCapWheels;
+    if (n < 0) n = 0;
+    bool use[kCapWheels] = {};
+    float ld[kCapWheels] = {};
+    float sumLoad = 0.0f, sumI = 0.0f, sumIpost = 0.0f, lo = 0.0f, hi = 0.0f, preLo = 0.0f, preHi = 0.0f;
+    bool preOk = true;
+    int used = 0;
+    for (int i = 0; i < n; i++)
+    {
+        o.final[i] = post[i];
+        if (!ok[i]) continue;
+        if (!(gain[i] > 0.0f) || !isfinite(gain[i]) || !isfinite(post[i]))
+        {
+            o.skipped++;
+            continue;
+        }
+        use[i] = true;
+        ld[i] = isfinite(load[i]) ? CutClamp01(load[i]) : 0.0f;
+        sumLoad += ld[i];
+        const float inertia = 1.0f / gain[i];
+        sumI += inertia;
+        sumIpost += inertia * post[i];
+        if (!isfinite(pre[i])) preOk = false;
+        lo = used ? fminf(lo, post[i]) : post[i];
+        hi = used ? fmaxf(hi, post[i]) : post[i];
+        preLo = used ? fminf(preLo, pre[i]) : pre[i];
+        preHi = used ? fmaxf(preHi, pre[i]) : pre[i];
+        used++;
+    }
+    if (!(sumLoad > 0.0f))
+    {
+        // every wheel in the air: the lock as it was, to the float
+        o = LockStep(post, gain, ok, n, k);
+        o.c = used >= 2 && sumI > 0.0f ? sumIpost / sumI : 0.0f;
+        o.over = used >= 2 ? hi - o.c : 0.0f;
+        return o;
+    }
+    o.used = used;
+    o.spreadBefore = o.spreadAfter = used ? hi - lo : 0.0f;
+    if (used < 2 || !preOk || !(k > 0.0f) || !isfinite(k) || (o.spreadBefore < kLockSpreadMin && preHi - preLo < kLockSpreadMin)) return o;
+    const bool massOk = mass > 0.0f && isfinite(mass);
+    float sumW = 0.0f, sumWpre = 0.0f, j = 0.0f;
+    for (int i = 0; i < n; i++)
+    {
+        if (!use[i]) continue;
+        const float inertia = 1.0f / gain[i], r = radius[i];
+        const float w = massOk && r > 0.0f && isfinite(r) ? inertia + ld[i] * mass / (float)used * r * r : inertia * (1.0f + 30.0f * ld[i]);
+        sumW += w;
+        sumWpre += w * pre[i];
+        j += (post[i] - pre[i]) * inertia;
+    }
+    if (!(sumW > 0.0f) || !isfinite(sumW) || !isfinite(sumWpre) || !isfinite(j) || !isfinite(sumI)) return o;
+    const float c = sumWpre / sumW, a = j / sumW, rest = j - a * sumI, kk = CutClamp01(k);
+    float final[kCapWheels];
+    for (int i = 0; i < n; i++)
+    {
+        if (!use[i]) continue;
+        const float locked = c + a + (sumLoad >= 0.001f ? gain[i] * rest * ld[i] / sumLoad : 0.0f);
+        final[i] = kk >= 1.0f ? locked : post[i] + kk * (locked - post[i]);
+        if (!isfinite(final[i])) return o;
+    }
+    const float postHi = hi;
+    bool first = true;
+    for (int i = 0; i < n; i++)
+    {
+        if (!use[i]) continue;
+        o.final[i] = final[i];
+        lo = first ? final[i] : fminf(lo, final[i]);
+        hi = first ? final[i] : fmaxf(hi, final[i]);
+        first = false;
+        if (final[i] != post[i]) o.wrote = true;
+    }
+    o.spreadAfter = hi - lo;
+    o.over = postHi - c;
+    o.c = c;
+    o.r = rest;
+    return o;
+}
+// Open's evening (A2): an open differential gives each of its wheels the same torque. After the drive the driven wheels
+// read whole with a gain share its impulse evenly: J = the sum of (post - pre) / gain, and each one's speed is pre +
+// gain x J / n. The chassis push stays the game's. Fewer than two wheels or a value that is no number: final is post.
+struct DiffEvenOut
+{
+    float final[kCapWheels];
+    float j;    // the drive's impulse over the wheels used
+    int used;
+    bool wrote; // final differs from post
+};
+inline DiffEvenOut DiffEvenStep(const float *pre, const float *post, const float *gain, const bool *ok, int n)
+{
+    DiffEvenOut o = {};
+    if (n > kCapWheels) n = kCapWheels;
+    if (n < 0) n = 0;
+    bool use[kCapWheels] = {};
+    float j = 0.0f;
+    for (int i = 0; i < n; i++)
+    {
+        o.final[i] = post[i];
+        if (!ok[i] || !(gain[i] > 0.0f) || !isfinite(gain[i]) || !isfinite(post[i]) || !isfinite(pre[i])) continue;
+        use[i] = true;
+        j += (post[i] - pre[i]) / gain[i];
+        o.used++;
+    }
+    o.j = isfinite(j) ? j : 0.0f;
+    if (o.used < 2 || !isfinite(j)) return o;
+    float final[kCapWheels];
+    for (int i = 0; i < n; i++)
+    {
+        if (!use[i]) continue;
+        final[i] = pre[i] + gain[i] * j / (float)o.used;
+        if (!isfinite(final[i])) return o;
+    }
+    for (int i = 0; i < n; i++)
+        if (use[i])
+        {
+            o.final[i] = final[i];
+            if (final[i] != post[i]) o.wrote = true;
+        }
+    return o;
+}
 // What the mod's thread publishes for the driven truck: its action and vehicle and DiffLockBite, while Powertrain is on,
-// the setting above 0 and the truck's lock kind not always on (vehicle + 0xE8 is not 2, or DiffLockBiteAlways).
+// the setting above 0 and the truck's lock kind read and known (vehicle + 0xE8), with what LockStepHeld needs.
 struct LockSlot
 {
     uint64_t action, vehicle;
     uint64_t at; // GetTickCount64 at the publish
     int bite;    // DiffLockBite, 1 to 100
     int kind;    // vehicle + 0xE8: 0 a lock fitted, 1 none, 2 always on
+    float mass;  // the truck's by its files, kg; 0 not known
+    uint64_t cylinderVtable; // hkpCylinderShape's vtable for the wheels' rolling radius, 0 not found
 };
-// Whether the mod's thread publishes the bite for a truck of this lock kind (the lead's addendum of 14:09): only with the
-// setter's pattern found once at the start, the kind read, and the kind not 2 unless DiffLockBiteAlways.
-inline bool LockPublishes(bool patternFound, bool kindRead, int kind, bool always)
+// Whether the mod's thread publishes the bite for a truck of this lock kind: only with the setter's pattern found once
+// at the start and the kind read and known. A truck whose lock is always on (kind 2) gets the bite too (A3 of the diff
+// types' addendum; DiffLockBiteAlways is gone).
+inline bool LockPublishes(bool patternFound, bool kindRead, int kind)
 {
-    return patternFound && kindRead && (kind == 0 || kind == 1 || (kind == 2 && always)); // a kind not known publishes nothing (the review of 105)
+    return patternFound && kindRead && (kind == 0 || kind == 1 || kind == 2); // a kind not known publishes nothing (the review of 105)
 }
 // Whether the wheels' drive's hook is asked for (gauges.cpp, CreepHookStep): Creep, Probe, the damper's settings, the
 // torque cut, or the diff lock's bite (Powertrain on and DiffLockBite above 0; the Reviewer's R4).

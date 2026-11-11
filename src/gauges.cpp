@@ -788,7 +788,7 @@ static void WriteIni(const GaugeSettings &s)
     whole(L"WheelCap", s.wheelCap);
     whole(L"PushShare", s.pushShare);
     whole(L"DiffLockBite", s.diffLockBite);
-    whole(L"DiffLockBiteAlways", s.diffLockBiteAlways ? 1 : 0);
+    whole(L"DiffType", s.diffType);
     whole(L"ModEngineSpeed", s.modEngineSpeed ? 1 : 0);
     num(L"EngineSpeedTop", s.engineSpeedTop);
     num(L"RoadCdA", s.roadCdA);
@@ -1214,7 +1214,9 @@ static void ReadIni(GaugeSettings &s)
                         L"; WheelCap (with that, in L-, L, L+ and R): no driven wheel turns faster than this percent of the gear's top, 110 to 200 (150; no box).\n"
                         L"; PushShare (with Powertrain): the percent of the surge at speed the game's chassis push may carry over the mod's pull, 0 to 100 (0; 100 as before; no box).\n"
                         L"; DiffLockBite (with Powertrain): how firmly the diff lock ties the driven wheels together, 0 to 100 (0: the game lock; 100: one shaft).\n"
-                        L"; DiffLockBiteAlways=1: the bite also acts on a truck whose diff lock is always on. Such a truck then scrubs in every turn on hard ground.\n"
+                        L";   It acts on a truck whose diff lock is always on too. Such a truck then scrubs in every turn on hard ground.\n"
+                        L"; DiffType (with Powertrain, in the gear positions of the mod gearbox): 0 Auto, 1 Open, 2 Limited slip, 3 Locked. Auto is Locked where the lock is always on, else Open.\n"
+                        L";   A truck file may hold its own DiffType; the tab writes it there for the driven truck.\n"
                         L"; ModEngineSpeed=1 (with Powertrain, on by default): the game tachometer, sound and effects follow the mod engine; its fuel burn and stall check keep the game's own.\n"
                         L";   EngineSpeedTop: the mod engine speed the game reads as its top, as a share of the redline, 0.5 to 1.5 (1: the redline; idle is its 0).\n"
                         L";   Base1.<engine>, Base2.<engine> ... in a truck's file: each gear's acceleration at the game's own pull, floored, learned.\n"
@@ -1281,7 +1283,7 @@ static void ReadIni(GaugeSettings &s)
     s.wheelCap = IniInt(L"WheelCap", s.wheelCap, ini);
     s.pushShare = IniInt(L"PushShare", s.pushShare, ini);
     s.diffLockBite = IniInt(L"DiffLockBite", s.diffLockBite, ini);
-    s.diffLockBiteAlways = IniBool(L"DiffLockBiteAlways", s.diffLockBiteAlways, ini);
+    s.diffType = IniInt(L"DiffType", s.diffType, ini);
     s.engineBrake = IniFloat(L"EngineBrake", s.engineBrake, ini); // CrawlHold= is read no more: the torque cut took its place
     s.modEngineSpeed = IniBool(L"ModEngineSpeed", s.modEngineSpeed, ini);
     s.engineSpeedTop = IniFloat(L"EngineSpeedTop", s.engineSpeedTop, ini);
@@ -1812,6 +1814,16 @@ static bool ReadTruckIni(const char *key, GaugeSettings &s)
     if (has(L"SpeedMax")) s.speedMax = IniFloatIn(section.c_str(), L"SpeedMax", s.speedMax, ini);
     if (has(L"BoostMax")) s.boostMax = IniFloatIn(section.c_str(), L"BoostMax", s.boostMax, ini);
     if (has(L"BoostProfile")) s.boostProfile = (int)GetPrivateProfileIntW(section.c_str(), L"BoostProfile", s.boostProfile, ini.c_str());
+    // the truck's differential (BRIEF_diff_types.md, S5): the file's eighth key, not one of the scales, so it does not
+    // make them the truck's own; a value out of 0 to 3 is left out
+    {
+        wchar_t buf[8] = {};
+        if (GetPrivateProfileStringW(section.c_str(), L"DiffType", L"", buf, 8, ini.c_str()) > 0)
+        {
+            const int v = _wtoi(buf);
+            if (v >= 0 && v <= 3 && iswdigit(buf[0])) s.diffType = v;
+        }
+    }
     // the truck's own drag area, by hand in its file: not one of the scales, so it does not make them the truck's own
     {
         wchar_t buf[16] = {};
@@ -1837,6 +1849,23 @@ static void WriteTruckIni(const char *key, const GaugeSettings &s)
     IniPutFloat(section.c_str(), L"SpeedMax", s.speedMax, ini);
     IniPutFloat(section.c_str(), L"BoostMax", s.boostMax, ini);
     IniPutInt(section.c_str(), L"BoostProfile", s.boostProfile, ini);
+}
+
+// The truck's differential into its file: one put (S5).
+static void WriteTruckDiff(const char *key, int type)
+{
+    const std::wstring ini = SetupFile(kSetupTruck, key), section = kSetupSections[kSetupTruck];
+    SetupBegin(kSetupTruck, Wide(key));
+    IniPutInt(section.c_str(), L"DiffType", type, ini);
+}
+// And out of it; true when it was there.
+static bool DropTruckDiff(const char *key)
+{
+    const std::wstring ini = SetupFile(kSetupTruck, key), section = kSetupSections[kSetupTruck];
+    wchar_t buf[8] = {};
+    if (GetPrivateProfileStringW(section.c_str(), L"DiffType", L"", buf, 8, ini.c_str()) == 0) return false;
+    WritePrivateProfileStringW(section.c_str(), L"DiffType", nullptr, ini.c_str());
+    return true;
 }
 
 // Takes the truck's seven scales out of its file, and the file with them when nothing else is in it.
@@ -2542,7 +2571,7 @@ static const wchar_t *EngineLevelWords(int level)
 // kind and id its game id ("" while none is driven or the id is not read). changed, suspChanged and truckChanged: the
 // scales, the kind's or the truck's suspension were changed on the tab and are not in the ini yet. The functions below
 // are all that changes a state once the ini is read into plain.
-struct SettingsState { GaugeSettings plain, s; char key[kMaxText], id[40]; bool own, changed, suspOwn, suspKept, suspChanged, truckOwn, truckKept, truckChanged; };
+struct SettingsState { GaugeSettings plain, s; char key[kMaxText], id[40]; bool own, changed, suspOwn, suspKept, suspChanged, truckOwn, truckKept, truckChanged, diffChanged; }; // diffChanged: the Diff row moved while this truck is driven, not in its file yet
 
 // The suspension level in force: the default, the kind's, this owned truck's.
 enum { kSuspLevelDefault, kSuspLevelKind, kSuspLevelTruck };
@@ -2585,7 +2614,7 @@ static void SettingsFor(SettingsState &st, const char *key, const char *id = "")
     strncpy_s(st.id, key[0] ? id : "", _TRUNCATE);
     st.s = st.plain;
     st.own = key[0] && ReadTruckIni(key, st.s);
-    st.changed = false;
+    st.changed = st.diffChanged = false;
     SuspMarkClear(st.key, st.id);
     SuspMarkClear(st.key, st.id, kEngineSection);
     SuspMarkClear(st.key, st.id, kOdoSection); // the Reviewer's must 5: a count driven again is no left-over
@@ -2603,6 +2632,8 @@ static void SettingsTake(SettingsState &st, const GaugeSettings &in)
 {
     const bool ticked = st.key[0] && in.airAxleMask != st.s.airAxleMask;
     if (st.key[0] && !ScalesSame(in, st.s)) st.own = st.changed = true;
+    // the Diff row with a truck driven is that truck's (its file's DiffType); the plain one keeps its value
+    if (st.key[0] && in.diffType != st.s.diffType) st.diffChanged = true;
     if (st.key[0] && !SuspSame(in, st.s))
     {
         if (st.truckOwn) st.truckChanged = true;
@@ -2612,6 +2643,7 @@ static void SettingsTake(SettingsState &st, const GaugeSettings &in)
     const GaugeSettings before = st.plain;
     st.plain = in;
     if (st.own) ScalesCopy(st.plain, before);
+    if (st.key[0]) st.plain.diffType = before.diffType;
     if (st.suspOwn || st.truckOwn) SuspCopy(st.plain, before);
     st.plain.airAxleMask = -1, st.plain.airMaskFrom = kAirFromNone;
     st.s = in;
@@ -2722,7 +2754,8 @@ static void SettingsSuspToDefault(SettingsState &st)
 // level, is kept with Own=0 (not thrown away); other trucks keep theirs.
 static void SettingsToDefaults(SettingsState &st)
 {
-    if (st.own) DropTruckIni(st.key);
+    const bool diffOwn = st.key[0] && DropTruckDiff(st.key); // the truck's differential goes back to the default too
+    if (st.own || diffOwn) DropTruckIni(st.key);
     if (st.truckOwn) WriteTruckSusp(st.key, st.s, false, st.id);
     if (st.suspOwn)
     {
@@ -2739,7 +2772,7 @@ static void SettingsToDefaults(SettingsState &st)
     }
     SettingsDefaults(st.plain);
     st.s = st.plain;
-    st.own = st.changed = false;
+    st.own = st.changed = st.diffChanged = false;
     SuspFromFiles(st);
 }
 
@@ -2750,10 +2783,11 @@ static void SettingsToDefaults(SettingsState &st)
 static void SettingsWriteTruck(SettingsState &st)
 {
     if (st.own && st.changed) WriteTruckIni(st.key, st.s);
+    if (st.key[0] && st.diffChanged) WriteTruckDiff(st.key, st.s.diffType);
     if (st.truckOwn && st.truckChanged) WriteTruckSusp(st.key, st.s, true, st.id);
     else if (st.suspOwn && st.suspChanged) WriteTruckSusp(st.key, st.s, true);
     if (st.key[0]) TruckSuspPrune(st.key), TruckSuspPrune(st.key, kEngineSection);
-    st.changed = st.suspChanged = st.truckChanged = false;
+    st.changed = st.suspChanged = st.truckChanged = st.diffChanged = false;
 }
 static void SettingsWrite(SettingsState &st)
 {
@@ -3777,7 +3811,7 @@ static void GameCodeLook(const GaugeSettings &s)
         const char *why = "";
         size_t at = 0;
         g_lockPattern = LockSetterFind(code.data(), from, to, at, why);
-        if (g_lockPattern) Log(L"diff lock bite: the game's diff lock setter at +%zx holds the lock kind at vehicle + 0xE8; the bite rests on a truck whose lock is always on (kind 2)", at);
+        if (g_lockPattern) Log(L"diff lock bite: the game's diff lock setter at +%zx holds the lock kind at vehicle + 0xE8", at);
         else Log(L"diff lock bite: %S, so the bite is off in this game and every truck keeps the game lock", why);
     }
     {
@@ -4017,7 +4051,7 @@ static void LogSettings(const GaugeSettings &s)
                           s.engineShare, !s.roadLoad ? L"off" : s.powertrain ? L"on (the air's drag, once each gear's pull is learned)" : L"on, acts with Powertrain on",
                           TorqueCutWanted(s) ? L"in a gear held by hand the torque cut: the mod engine alone, no cut at the gear's top" : L"no torque cut (it needs Gearbox=2, EngineShare above 0 and ModEngineSpeed=1)",
                           s.modEngineSpeed ? L"the mod engine's (ModEngineSpeed=1; the fuel's and the stall's calls keep the game's own, by the cut's own pull under the cut)" : L"its own (ModEngineSpeed=0)");
-        Log(L"settings: diff lock bite %d (DiffLockBite; 0 the game's lock, 100 one shaft), DiffLockBiteAlways %d", s.diffLockBite, s.diffLockBiteAlways);
+        Log(L"settings: diff lock bite %d (DiffLockBite; 0 the game's lock, 100 one shaft), the differential's type %d (DiffType; 0 Auto, 1 Open, 2 Limited slip, 3 Locked)", s.diffLockBite, s.diffType);
     }
     else Log(L"settings: powertrain off: the truck pulls with the game's own engine (Powertrain=1 hands it the mod's)");
     Log(s.creep && s.creepManual ? L"settings: creep on, in a gear picked by hand too (CreepManual): an automatic through the converter to walking pace, a gear picked by hand at its idle speed"
@@ -4247,6 +4281,14 @@ struct TruckWatch
     ULONGLONG pushProbeAt;      // its next probe line
     bool pushTold;              // its log line was written
     uint64_t lockRestSaid, lockActSaid; // the vehicle the diff lock's bite last said it rests on (its kind), and acts on
+    bool diffKindRead;          // the differential (BRIEF_diff_types.md): the lock kind at vehicle + 0xE8 was read on this pass,
+    int diffKind, diffType;     // the kind (-1 not read) and the type for this truck (DiffTypeOf)
+    uint64_t diffSaid;          // the vehicle its log line was for, with the type and the setting it named
+    int diffSaidType, diffSaidSet;
+    LockHold lockHold;          // Locked on a truck whose lock can be switched: the lock byte the mod holds (LockHoldStep)
+    uint64_t lockHoldSaid;      // the vehicle the cleared byte was said for
+    float diffBand[2];          // the governor's band of the last slot, rad/s
+    DiffCounts diffWas;         // the evening's counts at the last probe line
     bool kicksKnown;            // kicksSeen holds GearboxKicks as of a pass
     long kicksSeen;
     bool creeping;              // the creep's share was above 0 on the last pass (models.h, CreepShare)
@@ -4379,6 +4421,7 @@ static TorqueCutSlot TorqueCutSlotOf(const TruckWatch &w, const TruckRaw &raw, c
     c.vehicle = w.refs.vehicle;
     c.action = w.refs.action;
     c.cylinderVtable = WheelCylinderVtable(); // on the mod's thread, never in the hook (the review of 113, M1)
+    c.diff = DiffTypeOf(s.diffType, w.diffKindRead, w.diffKind);
     c.mode = locked ? kCutMap : kCutScalar;
     const float held = w.profile.torque > 0.0f && w.profile.torque < 1.0f ? w.profile.torque : 1.0f;
     const float carried = isfinite(w.clutch.carried) && !w.clutch.dead ? w.clutch.carried : 0.0f;
@@ -4515,22 +4558,44 @@ static void GearsNowKey(const TruckWatch &w, char *out, size_t size)
     GearboxKey(t, "", out, size);
 }
 
-// The diff lock's bite for the driven truck (BRIEF_diff_lock_bite.md): published at every Gearbox level while Powertrain
-// is on and DiffLockBite above 0, with the setter found at the code look and the truck's lock kind (vehicle + 0xE8) read
-// and not 2 (always on) unless DiffLockBiteAlways. One line a truck when it rests for its kind, one when it first acts,
-// and with Probe=1 a line a second while it is published.
-static void LockPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s, bool driving, unsigned long long now)
+// The differential's type for the driven truck (BRIEF_diff_types.md): the lock kind (vehicle + 0xE8) read each pass,
+// the type by DiffType and the kind (DiffTypeOf), and one line a truck, again when the type or the setting changes.
+static const wchar_t *DiffTypeName(int type)
+{
+    return type == kDiffOpen ? L"Open" : type == kDiffLimited ? L"Limited slip" : type == kDiffLocked ? L"Locked" : L"Auto";
+}
+static void DiffPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s, bool driving)
 {
     int kind = -1;
+    w.diffKindRead = driving && w.refs.vehicle && m.get(w.refs.vehicle + 0xE8, kind);
+    w.diffKind = w.diffKindRead ? kind : -1;
+    w.diffType = DiffTypeOf(s.diffType, w.diffKindRead, kind);
+    if (!driving || !w.refs.vehicle) return;
+    if (w.diffSaid == w.refs.vehicle && w.diffSaidType == w.diffType && w.diffSaidSet == s.diffType) return;
+    w.diffSaid = w.refs.vehicle, w.diffSaidType = w.diffType, w.diffSaidSet = s.diffType;
+    const wchar_t *why = s.diffType != kDiffAuto ? L"set by DiffType"
+                         : !w.diffKindRead ? L"Auto, and the kind is not read"
+                         : kind == 2 ? L"Auto, and this truck's lock is always on"
+                         : kind == 0 || kind == 1 ? L"Auto, and this truck's lock is not always on"
+                                                  : L"Auto, and the kind is not one the mod knows";
+    wchar_t kindText[24] = L"not read";
+    if (w.diffKindRead) swprintf_s(kindText, L"%d", kind);
+    Log(L"differential: the lock kind at vehicle + 0xE8 is %s, the type is %s (DiffType %d: %s); it acts where the torque cut acts, a gear position of the mod's gearbox",
+        kindText, DiffTypeName(w.diffType), s.diffType, why);
+}
+
+// The diff lock's bite for the driven truck (BRIEF_diff_lock_bite.md): published at every Gearbox level while Powertrain
+// is on and DiffLockBite above 0, with the setter found at the code look and the truck's lock kind (vehicle + 0xE8, by
+// DiffPass) read and 0, 1 or 2, with the truck's mass and the cylinder's vtable for the held step. One line a truck
+// when it rests for a kind not known, one when it first acts, and with Probe=1 a line a second while it is published.
+static void LockPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s, bool driving, unsigned long long now)
+{
+    (void)m;
     const bool want = driving && s.powertrain && s.diffLockBite > 0 && w.refs.vehicle && w.refs.action;
-    const bool kindRead = want && m.get(w.refs.vehicle + 0xE8, kind);
-    const bool give = want && LockPublishes(g_lockPattern, kindRead, kind, s.diffLockBiteAlways);
-    LockGive(give ? w.refs.action : 0, w.refs.vehicle, s.diffLockBite, kind);
-    if (want && kindRead && kind == 2 && !give && w.lockRestSaid != w.refs.vehicle)
-    {
-        w.lockRestSaid = w.refs.vehicle;
-        Log(L"diff lock bite: rests on this truck: its diff lock is always on (kind 2 at vehicle + 0xE8), so it keeps the game lock (DiffLockBiteAlways=1 gives it the bite)");
-    }
+    const int kind = w.diffKind;
+    const bool kindRead = want && w.diffKindRead;
+    const bool give = want && LockPublishes(g_lockPattern, kindRead, kind);
+    LockGive(give ? w.refs.action : 0, w.refs.vehicle, s.diffLockBite, kind, w.mass, WheelCylinderVtable());
     // a kind the research does not know publishes nothing (the review of 105): one line for the truck
     if (want && kindRead && g_lockPattern && kind != 0 && kind != 1 && kind != 2 && w.lockRestSaid != w.refs.vehicle)
     {
@@ -4543,19 +4608,21 @@ static void LockPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s
     if (lc.writes && lc.vehicle == w.refs.vehicle && w.lockActSaid != w.refs.vehicle)
     {
         w.lockActSaid = w.refs.vehicle;
-        Log(L"diff lock bite: acts on this truck (kind %d): while the lock byte (action + 0x4A) is set and the handbrake (action + 0x48) is not, each driven wheel's "
-            L"spin about its axle (body + 0x240 along wheel + 0x154) moves toward the driven wheels' mean weighted by their inertia (body + 0x220), after the drive "
-            L"and before the wheel cap, by k from DiffLockBite %d and the step's seconds",
-            kind, s.diffLockBite);
+        Log(L"diff lock bite: acts on this truck (kind %d): while the lock is in force (the lock byte at action + 0x4A set and the handbrake at action + 0x48 not, or "
+            L"the type Locked), each driven wheel's spin about its axle (body + 0x240 along wheel + 0x154) moves toward the driven wheels' mean before the drive, "
+            L"weighted by what each has behind it (its inertia at body + 0x220, and on the ground its share at wheel + 0x128 of the truck's mass, %.0f kg, at its rolling "
+            L"radius), after the drive and before the wheel cap, by k from DiffLockBite %d and the step's seconds",
+            kind, w.mass, s.diffLockBite);
     }
     static unsigned long long at = 0;
     static LockCounts was = {};
     if (s.probe && now - at >= 1000)
     {
         Log(L"probe: diff lock bite: kind %d, %d driven wheels, k %.3f, the spread %.2f rad/s after the drive and %.2f after the lock; a second: %ld steps here, %ld written, "
-            L"%ld with the lock off, %ld held by the handbrake, %ld wheels skipped, %ld faults; DiffLockBite %d",
+            L"%ld with the lock off, %ld held by the handbrake, %ld wheels skipped, %ld faults; DiffLockBite %d; the last written step: the fastest wheel %.2f rad/s "
+            L"over the weighted mean before the drive C %.2f rad/s, the impulse handed on R %.3f",
             kind, lc.wheels, lc.k, lc.spreadBefore, lc.spreadAfter, lc.calls - was.calls, lc.writes - was.writes, lc.off - was.off, lc.handbrake - was.handbrake,
-            lc.skipped - was.skipped, lc.faults - was.faults, s.diffLockBite);
+            lc.skipped - was.skipped, lc.faults - was.faults, s.diffLockBite, lc.over, lc.c, lc.r);
         at = now;
         was = lc;
     }
@@ -6071,6 +6138,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     // garage takes its gear; the gearbox keeps the truck and reads its position again on the way back (review 7, R6)
     if (w.take.driving && !(driving && !held && same) && GearboxHoldingNow()) GearboxPolicy(kPolicyPass, nullptr, false);
     // and no creep there: the hook lets every call pass until the truck is driven in the world again
+    DiffPass(w, m, s, driving && !held && same);
     LockPass(w, m, s, driving && !held && same, GetTickCount64());
     if (!(driving && !held && same))
     {
@@ -6862,6 +6930,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 if (!w.cutActs) w.cutGamePull = TorqueCutGamePull(raw.actionB4, TruckPedal(raw));
                 TorqueCutSlot slot = TorqueCutSlotOf(w, raw, s, scale, curve, tachTop, locked, gearTop);
                 slot.gamePull = w.cutGamePull;
+                w.diffBand[0] = slot.map.governFrom * slot.map.top, w.diffBand[1] = slot.map.governTo * slot.map.top;
                 TorqueCutPublish(&slot);
                 // the over-rev's share (BRIEF_overrev_downshift.md, M1 and M2): only where the map went out (the engine on
                 // the wheels, the clutch in) and the drive answered since the last pass, by the speeds that answer used
@@ -6906,6 +6975,27 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 else Log(L"torque cut: off, %s; the game's own torque again", TorqueCutWhyNot(s, want, own && GearboxManual(w), cutHooks, raw.gearEngaged, gearTop, cutAgrees));
             }
             w.cutActs = cutActs;
+            // Locked on a truck whose lock can be switched (kinds 0 and 1; S4): the mod holds the lock byte, the one the
+            // mod's lock key flips, while the type acts, so the game's own lock rule is on as well. A byte the player set
+            // is never cleared; the mod's own is, once the type no longer acts
+            {
+                const uint64_t a = w.refs.action;
+                const bool outside = a && !(a >= m.base && a < m.base + g_exeSize);
+                const bool holdWant = cutActs && w.diffType == kDiffLocked && w.diffKindRead && (w.diffKind == 0 || w.diffKind == 1);
+                uint8_t byte = 0;
+                const bool byteRead = outside && m.get(a + kLockAt[kLockDiff], byte);
+                const bool wasOurs = w.lockHold.ours && w.lockHold.action == a;
+                const int to = LockHoldStep(w.lockHold, a, holdWant, byteRead, byte);
+                if (wasOurs && holdWant && byteRead && !byte && w.lockHoldSaid != w.refs.vehicle)
+                {
+                    w.lockHoldSaid = w.refs.vehicle;
+                    Log(L"differential: the lock byte the mod holds for Locked was 0 again on this truck (the game or a key cleared it); it is set again each pass, "
+                        L"and the mod's own lock acts without it");
+                }
+                if (to >= 0 && m.put(a + kLockAt[kLockDiff], (uint8_t)to) && !(wasOurs && to == 1))
+                    Log(L"differential: Locked on a truck whose lock is not always on (kind %d): the lock byte (action + 0x4A) %s by the mod", w.diffKind,
+                        to ? L"set and held" : L"cleared again");
+            }
             const bool handWas = w.hand.on;
             const float gameWas = w.hand.game;
             // held back to the engine's Torque share where one is set; the lift's roof is the truck's class's, fading over
@@ -7024,6 +7114,13 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                     cap.preMost, cap.steps > w.capWas.steps ? (cap.postSum - w.capWas.postSum) / (float)(cap.steps - w.capWas.steps) : 0.0f, cap.steps - w.capWas.steps, cap.postMost, cap.preLeast, cap.refused - w.capWas.refused, cap.waitSteps - w.capWas.waitSteps, cap.kept, cap.spread - w.capWas.spread, cap.faults - w.capWas.faults);
                 w.cutWas = c;
                 w.capWas = cap;
+                DiffCounts dc = {};
+                DiffCountsGet(dc);
+                Log(L"probe: differential: the type %s, in force in the last step %s; Open's evening: J %.4f over %d wheels in its last step, %ld steps, %ld written, %ld faults "
+                    L"in a second; the wheels' mean %.2f rad/s against the governor's band %.2f to %.2f",
+                    DiffTypeName(w.diffType), !cutActs ? L"nothing (the cut is off)" : dc.force == kDiffForceOpen ? L"Open" : dc.force == kDiffForceLock ? L"the lock" : L"Limited slip",
+                    dc.j, dc.wheels, dc.steps - w.diffWas.steps, dc.writes - w.diffWas.writes, dc.faults - w.diffWas.faults, c.s, w.diffBand[0], w.diffBand[1]);
+                w.diffWas = dc;
             }
         }
         // the creep (review 11's addendum): an idling truck in gear moves, its drive throttle raised for this truck alone
@@ -8524,6 +8621,8 @@ static DWORD WINAPI Run(void *)
             v.airHeight = watch.airHeight;
             v.airKnown = driving && watch.airFor[0];
             v.airAxles = watch.airAxles, v.airFrom = watch.airFrom;
+            v.diffKnown = driving && watch.diffKindRead;
+            v.diffAuto = DiffTypeOf(kDiffAuto, watch.diffKindRead, watch.diffKind);
             v.airLevel[0] = watch.step.airLevel[0], v.airLevel[1] = watch.step.airLevel[1], v.airSide = watch.step.airSide;
             v.airShown = driving && inForce.airSuspension && watch.airPressedAt && GetTickCount64() - watch.airPressedAt < 3000;
             // each axle's rest place from the probe's windows or the display (cm along the axis, compression negative)
@@ -8740,7 +8839,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.overRevDamage == b.overRevDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
            a.springScale == b.springScale && a.dampingScale == b.dampingScale && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
-           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.diffLockBiteAlways == b.diffLockBiteAlways && a.engineBrake == b.engineBrake && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
+           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.diffType == b.diffType && a.engineBrake == b.engineBrake && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
            a.camberGainFront == b.camberGainFront && a.camberGainRear == b.camberGainRear && a.camberRestFront == b.camberRestFront && a.camberRestRear == b.camberRestRear;
 }
 
@@ -8773,7 +8872,7 @@ int wmain(int argc, wchar_t **argv)
     Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.hotDamageFrom == kTempRed && d.coldDamage == 5.0f && d.overRevDamage == 10.0f && d.stallDamage == 5.0f && d.clutchBurn && d.clutchHeat == 60.0f &&
               d.springScale == 1.0f && d.dampingScale == 1.0f && d.extraTravel == 0.0f && d.frameFlex == 1.0f && d.twistRange == 1.0f,
           "defaults: the radiator's full airflow from 30 km/h, engine damage on from the red zone, 10 percent a minute for the heat and 5 for the cold");
-    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.walkSkipsLow && d.positionsByGearbox && !d.ignoreShifter && d.backToA == 0 && d.gameGearDisplay == kGameGearOffOwn && d.input == kInputWheel && !d.powertrain && d.roadLoad && d.wheelCap == 150 && d.pushShare == 0 && d.diffLockBite == 0 && !d.diffLockBiteAlways && d.engineBrake == 15.0f && d.modEngineSpeed && d.engineSpeedTop == 1.0f && d.roadCdA == 0.0f && d.engineShare == 50 && d.creep && !d.creepManual && !d.dieselFlutter,
+    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.walkSkipsLow && d.positionsByGearbox && !d.ignoreShifter && d.backToA == 0 && d.gameGearDisplay == kGameGearOffOwn && d.input == kInputWheel && !d.powertrain && d.roadLoad && d.wheelCap == 150 && d.pushShare == 0 && d.diffLockBite == 0 && d.diffType == 0 && d.engineBrake == 15.0f && d.modEngineSpeed && d.engineSpeedTop == 1.0f && d.roadCdA == 0.0f && d.engineShare == 50 && d.creep && !d.creepManual && !d.dieselFlutter,
           "defaults: the oil as a second needle, warm after 5 minutes, too hot from 120 C; the standard turbo, a diesel's lift without the flutter; the creep on");
 
     // Air drag on by default (BRIEF_defaults_on.md): a missing key gives 1, an explicit 0 stays 0, the defaults give 1
@@ -8902,7 +9001,7 @@ int wmain(int argc, wchar_t **argv)
     c.wheelCap = 120;
     c.pushShare = 60;
     c.diffLockBite = 75;
-    c.diffLockBiteAlways = true;
+    c.diffType = 2;
     c.modEngineSpeed = false;
     c.engineSpeedTop = 1.25f;
     c.roadCdA = 2.5f;
@@ -8921,7 +9020,7 @@ int wmain(int argc, wchar_t **argv)
                             c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.overRevDamage != d.overRevDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springScale != d.springScale && c.dampingScale != d.dampingScale && c.extraTravel != d.extraTravel && c.frameFlex != d.frameFlex && c.twistRange != d.twistRange && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
                             c.demo != d.demo && c.probe != d.probe && c.keepLogs != d.keepLogs && c.soundVolume != d.soundVolume && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
-                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.diffLockBite != d.diffLockBite && c.diffLockBiteAlways != d.diffLockBiteAlways && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
+                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.diffLockBite != d.diffLockBite && c.diffType != d.diffType && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
     WriteIni(c);
     ReadIni(b);
     Check(allChanged, "ini: the test changes every setting from its default");
@@ -8942,7 +9041,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 148, "ini: the help text survives a write (148 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 150, "ini: the help text survives a write (150 comment lines)");
     // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
     {
         char none[32] = "x", tab[32] = {}, kept[32] = {};
@@ -9235,6 +9334,73 @@ int wmain(int argc, wchar_t **argv)
         const bool ckSection = GetFileAttributesW(truckFile("chevrolet_ck1500").c_str()) != INVALID_FILE_ATTRIBUTES;
         Check(dropped && moddedPlain && !next.own && !left && !ckSection,
               "trucks: a truck that gives up its scales takes the plain ones, its file keeps what else it holds, and an empty file goes");
+        // the truck's differential (BRIEF_diff_types.md, S5): its file's eighth key, written by one put, not one of the scales
+        {
+            for (const char *dk : { "diff_a", "diff_b" }) DeleteFileW(truckFile(dk).c_str());
+            auto fileDiff = [&](const char *k) {
+                wchar_t v[8] = {};
+                GetPrivateProfileStringW(L"Truck", L"DiffType", L"", v, 8, truckFile(k).c_str());
+                return std::wstring(v);
+            };
+            SettingsState dt = {};
+            ReadIni(dt.plain);
+            const int plainWas = dt.plain.diffType;
+            SettingsFor(dt, "diff_a");
+            GaugeSettings di = dt.s;
+            di.diffType = 3;
+            SettingsTake(dt, di);
+            const bool taken = dt.diffChanged && !dt.own && dt.s.diffType == 3 && dt.plain.diffType == plainWas;
+            SettingsWrite(dt);
+            wchar_t red[8] = {};
+            GetPrivateProfileStringW(L"Truck", L"RedlineRpm", L"", red, 8, truckFile("diff_a").c_str());
+            const bool onePut = fileDiff("diff_a") == L"3" && !red[0] && !dt.diffChanged;
+            // the type follows the truck: another has the default, this one its own again, and not as its scales
+            SettingsFor(dt, "diff_b");
+            const bool otherPlain = dt.s.diffType == plainWas && !dt.own;
+            SettingsFor(dt, "diff_a");
+            const bool back = dt.s.diffType == 3 && !dt.own && !dt.diffChanged;
+            // with no truck the row is the default: the truck with a key keeps its own, the other takes the new default
+            SettingsFor(dt, "");
+            di = dt.s;
+            di.diffType = 2;
+            SettingsTake(dt, di);
+            const bool plainTaken = dt.plain.diffType == 2 && !dt.diffChanged;
+            SettingsFor(dt, "diff_b");
+            const bool otherNew = dt.s.diffType == 2;
+            SettingsFor(dt, "diff_a");
+            const bool ownKept = dt.s.diffType == 3 && dt.plain.diffType == 2;
+            // a change of a scale writes the seven and leaves the key; the scales given up leave it too
+            di = dt.s;
+            di.idleRpm = 900.0f;
+            SettingsTake(dt, di);
+            SettingsWrite(dt);
+            GetPrivateProfileStringW(L"Truck", L"RedlineRpm", L"", red, 8, truckFile("diff_a").c_str());
+            const bool withScales = dt.own && red[0] && fileDiff("diff_a") == L"3";
+            SettingsDrop(dt);
+            SettingsFor(dt, "diff_a");
+            const bool dropKeeps = !dt.own && dt.s.diffType == 3 && fileDiff("diff_a") == L"3";
+            // a value out of 0 to 3 or no number is left out
+            truckPut("diff_a", L"DiffType", L"9");
+            SettingsFor(dt, "diff_a");
+            const bool outOfRange = dt.s.diffType == 2;
+            truckPut("diff_a", L"DiffType", L"x");
+            SettingsFor(dt, "diff_a");
+            const bool noNumber = dt.s.diffType == 2;
+            truckPut("diff_a", L"DiffType", L"1");
+            SettingsFor(dt, "diff_a");
+            const bool open = dt.s.diffType == 1;
+            // the defaults take the key out, and the file with it when nothing else is in it
+            SettingsToDefaults(dt);
+            const bool toDefaults = dt.s.diffType == 0 && GetFileAttributesW(truckFile("diff_a").c_str()) == INVALID_FILE_ATTRIBUTES;
+            dt.plain.diffType = plainWas;
+            SettingsFor(dt, "");
+            SettingsWrite(dt);
+            Check(taken && onePut && otherPlain && back && plainTaken && otherNew && ownKept && withScales && dropKeeps && outOfRange && noNumber && open && toDefaults,
+                  "trucks: the differential's type is the driven truck's own key in its file, written alone, read back for that truck only and kept when its scales go; "
+                  "with no truck the row is the default; a value out of 0 to 3 is left out; the defaults take it out");
+            if (!(taken && onePut && otherPlain && back && plainTaken && otherNew && ownKept && withScales && dropKeeps && outOfRange && noNumber && open && toDefaults))
+                printf("     diff key: %d %d %d %d %d %d %d %d %d %d %d %d %d\n", taken, onePut, otherPlain, back, plainTaken, otherNew, ownKept, withScales, dropKeeps, outOfRange, noNumber, open, toDefaults);
+        }
         // the defaults: the plain settings and the driven truck's own scales; another truck keeps its own
         SettingsFor(next, "half");
         const bool halfOwn = next.own;

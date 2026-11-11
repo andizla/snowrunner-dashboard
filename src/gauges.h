@@ -121,8 +121,8 @@ struct GaugeSettings
     bool modEngineSpeed;     // ModEngineSpeed: with Powertrain, the game's engine speed (its tachometer, sound and effects) is the mod engine's (gearbox_hooks.h, EngineSpeedHook); on by default
     float engineSpeedTop;    // EngineSpeedTop: the mod engine's speed the game reads as its 1, as a share of the redline, 0.5 to 1.5 (1: the redline)
     int diffLockBite;        // DiffLockBite: with Powertrain, how firmly the diff lock ties the driven wheels together, 0 (the game's lock) to 100 (one shaft), 0
-    bool diffLockBiteAlways; // DiffLockBiteAlways: the bite also on a truck whose diff lock is always on (vehicle + 0xE8 is 2); ini only, off
-    int pushShare;           // PushShare: with Powertrain, the share in percent of the game's chassis push at speed that carries the mod's surplus over its own pull (BRIEF_chassis_push.md), 0 to 100, 0 (taken back); no box, for the A/B: 100 today's
+    int pushShare;           // PushShare: with Powertrain, the share in percent of the game's chassis push at speed that carries the mod's surplus over its own pull (BRIEF_chassis_push.md), 0 to 100
+    int diffType;            // DiffType: the differential of a truck where the torque cut acts, 0 Auto (by the lock kind at vehicle + 0xE8), 1 Open, 2 Limited slip, 3 Locked (torque_cut.h, kDiff...); a truck file may hold its own
     int wheelCap;            // WheelCap: with the torque cut in L-, L, L+ and R, no driven wheel runs faster than this percent of the gear's top (BRIEF_drivetrain_2c_wheel_cap.md), 110 to 200, 150; no box, for the A/B
     float engineBrake;       // EngineBrake: with Powertrain in a gear held by hand at Gearbox=2 (the torque cut), the share of the gear's torque in percent the engine holds the truck back with at the redline with the foot off, 0 to 30 (torque_cut.h)
     float roadCdA;           // RoadCdA: the drag's area in m², 0 by the truck's mass (1.1 under 4 t, 3.5 under 10 t, else 6); a truck's file may set its own
@@ -215,7 +215,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.wheelCap = 150; // kCapDefault (BRIEF_drivetrain_2c_wheel_cap.md with M5)
     s.pushShare = 0; // the surplus taken back (BRIEF_chassis_push.md)
     s.diffLockBite = 0; // the game's own lock until the drive picks a default (BRIEF_diff_lock_bite.md)
-    s.diffLockBiteAlways = false;
+    s.diffType = 0; // Auto (BRIEF_diff_types.md)
     s.engineSpeedTop = 1.0f;
     s.roadCdA = 0.0f;
     s.creep = true;
@@ -363,6 +363,7 @@ inline void SettingsClamp(GaugeSettings &s)
     s.wheelCap = s.wheelCap < 110 ? 110 : s.wheelCap > 200 ? 200 : s.wheelCap;
     s.pushShare = s.pushShare < 0 ? 0 : s.pushShare > 100 ? 100 : s.pushShare;
     s.diffLockBite = s.diffLockBite < 0 ? 0 : s.diffLockBite > 100 ? 100 : s.diffLockBite;
+    s.diffType = s.diffType < 0 || s.diffType > 3 ? 0 : s.diffType;
     s.roadCdA = isfinite(s.roadCdA) ? (s.roadCdA <= 0.0f ? 0.0f : s.roadCdA < 0.3f ? 0.3f : s.roadCdA > 20.0f ? 20.0f : s.roadCdA) : 0.0f;
     s.gearbox = s.gearbox < 0 || s.gearbox >= kGearboxCount ? kGearboxGame : s.gearbox;
     s.input = s.input < 0 || s.input >= kInputCount ? kInputWheel : s.input;
@@ -558,7 +559,7 @@ struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWar
                    int pullTest, pullPhase; const char *pullWhy;
                    float ambientDay, ambientNight, hour; // the map's day and night (with mapOwn), the hour of the game's day (-1 not known)
                    SuspDisplayView susp; bool swayOff; float rideRest[2]; bool rideRestKnown; // the display's figures; the bars disconnected; each axle's rest place along its axis (front, rear; cm), from the probe
-                   bool air, airTaken, airShown; int airHeight; float airLevel[2], airSide; bool airKnown; int airAxles, airFrom; // airKnown: a truck is driven and its air axles (air_axles.h) and their source are read // the air suspension runs on the driven truck, its rest places taken, the height box shown; the keys' height (cm) and the levelling (front, rear, left over right; cm)
+                   bool air, airTaken, airShown; int airHeight; float airLevel[2], airSide; bool airKnown; int airAxles, airFrom; bool diffKnown; int diffAuto; // airKnown: a truck is driven and its air axles (air_axles.h) and their source are read // the air suspension runs on the driven truck, its rest places taken, the height box shown; the keys' height (cm) and the levelling (front, rear, left over right; cm)
                    bool frameKnown, frameRigid; float frameFile[4], frameMost; // the driven truck's frame joint (frame_flex.h): its stock spring, damping and limits in degrees; or none (a rigid frame)
                    bool suspKnown; float suspFile[3][2]; // the driven truck's file: spring, damping and the compression end (m), [front, rear] (wheel 0 and the last)
                    char gearbox[96]; float gearHold; bool gearHoldOwn; // the driven truck's gearbox (its key, "" for none), the seconds each gear is held going up with the mod's engine, and whether its file sets them
