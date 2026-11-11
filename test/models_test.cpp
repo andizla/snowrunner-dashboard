@@ -5002,6 +5002,52 @@ int main(int argc, char **argv)
         Check(calm, line);
     }
 
+    // the physics rate, stage 1 (BRIEF_physics_rate_stage1.md, section 7 and the Reviewer's S3): the governor ceiling's
+    // floored table and Open's once more with the sim at 120 steps a second and stage 1's corrections (TopSetup's rate),
+    // the same bounds as at 60
+    {
+        TopSetup u = {};
+        u.slot.vehicle = 1, u.slot.mode = kCutMap, u.slot.share = 1.0f, u.slot.pedal = 1.0f;
+        u.cap = 1.5f, u.kick = 500.0f, u.mdav = 0.01f, u.inertia = 10.0f, u.flat = -1.0f, u.holdV = -1.0f;
+        u.seconds = 20.0f, u.rise = 0.008f, u.seed = 7, u.gripNoise = 0.3f, u.dragNoise = 0.3f, u.couple = 1.0f / 60.0f;
+        u.rate = 120;
+        static char line[14000];
+        const float tops[3] = { 2.4f, 3.4f, 4.5f }, grips[6] = { 0.5f, 1.0f, 2.0f, 2.5f, 5.0f, 10.0f };
+        for (int open = 0; open < 2; open++)
+        {
+            int len = snprintf(line, sizeof line, "physics rate 120, %s, floored at the top of a low gear for 20 s (wheels, top, grip: truck band, needle band rpm, push jump over push, the truck's most; "
+                                                  "the needle band at 60):", open ? "open differential" : "governor ceiling");
+            bool calm = true;
+            float needleMost = 0.0f, truckMost = 0.0f, jumpMost = 0.0f, needle60 = 0.0f;
+            int failing = 0, cases = 0;
+            for (int wheels = 2; wheels <= (open ? 4 : 2); wheels += 2)
+                for (int tI = 0; tI < 3; tI++)
+                    for (int g = 0; g < 6; g++)
+                    {
+                        const float top = tops[tI];
+                        TopSetup c = u;
+                        const CutBand band = CutGovernBand(top, kTachOverrun);
+                        c.slot.map = TorqueCutMap{ 1.0f, 1.0f, 0.0f, 1.0f, 0.15f, top, 800.0f, 2500.0f, 1.2f, { 5, { 0.25f, 0.45f, 0.6f, 0.8f, 1.0f }, { 0.55f, 0.85f, 1.0f, 1.0f, 0.85f } }, band.from, band.to };
+                        c.open = open != 0, c.wheels = wheels, c.grip = grips[g], c.s0 = c.v0 = 0.9f * top;
+                        c.drag = 0.5f * (float)wheels * c.couple * fminf(c.grip, 0.45f * top);
+                        const TopResult q = TopRun(c);
+                        c.rate = 60;
+                        const TopResult at60 = TopRun(c);
+                        bool good = q.needleMax - q.needleMin <= 150.0f && 0.5f * (q.vMax - q.vMin) <= 0.02f * top && q.lowered == 0;
+                        if (open) good = good && q.vMost <= (c.slot.map.governTo + 0.02f) * top;
+                        else good = good && q.pushJump <= 0.35f * q.push && q.vMin >= kCapCeilFrom * top && q.vMax <= c.slot.map.governTo * top;
+                        calm = calm && good, cases++, failing += good ? 0 : 1;
+                        needleMost = fmaxf(needleMost, q.needleMax - q.needleMin), truckMost = fmaxf(truckMost, q.vMost / top), jumpMost = fmaxf(jumpMost, q.pushJump / q.push);
+                        needle60 = fmaxf(needle60, at60.needleMax - at60.needleMin);
+                        len += snprintf(line + len, sizeof line - len, "%s %d, %.1f, %.1f: %.3f to %.3f, %.0f, %.2f, %.3f; %.0f%s", wheels > 2 || tI || g ? ";" : "", wheels, top, c.grip, q.vMin / top,
+                                        q.vMax / top, q.needleMax - q.needleMin, q.pushJump / q.push, q.vMost / top, at60.needleMax - at60.needleMin, good ? "" : " <<<");
+                    }
+            printf("     physics rate 120, %s: %d of %d cases failing, the widest needle band %.0f rpm (%.0f at 60), the truck's most %.3f of the top, the largest push jump %.2f of the push\n",
+                   open ? "open" : "the ceiling", failing, cases, needleMost, needle60, truckMost, jumpMost);
+            Check(calm, line);
+        }
+    }
+
     // C6's first step (C3 of BRIEF_governor_sway.md, F1 of the governor ceiling's review): the push the ground takes a
     // step against the truck's speed lies on the cap's line whatever the bracket. The law before the ceiling (the cap
     // flat at 1.5 of the top), four wheels in L-, the bracket held at 0.39 and at 0.012 (flat), the truck's speed held

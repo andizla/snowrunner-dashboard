@@ -10,6 +10,7 @@
 #include "game_code.h"
 #include "gearbox_model.h"
 #include "torque_cut.h"
+#include "physics_rate.h"
 
 // The calls each hook has seen since the attach, and the last arguments of those that have some.
 struct GearboxCounts
@@ -252,6 +253,26 @@ struct DiffCounts
 void DiffCountsGet(DiffCounts &out);
 // The hook's calls so far: for the action given (hits) and all of them.
 void CreepCounts(long &hits, long &calls);
+// The physics rate test mode (physics_rate.h). on: every call of the game's drive goes with the action's two figures
+// a step halved around it (RateHalveBefore and After, under the hook's fault guard), the kept share's smoothing goes
+// by the step's seconds, and the hook looks for the world: ownerSlot is the address of the static the world's owner
+// hangs on (0: no look), iterations what the solver was asked. Off (as at the start) the hook writes nothing of this
+// and reads nothing of it. Set once at the start, before the game's code is written.
+void DriveRateSet(bool on, uint64_t ownerSlot, int iterations);
+bool DriveRateOn();
+// What the hook saw: worlds grows with each new world pointer at a drive call; that world, the step's seconds as the
+// world holds them (bits) and its solver's iterations, read at that call; the seconds the call itself came with; the
+// reads that faulted (the halving's and the world's).
+struct DriveRateSeen
+{
+    long worlds;
+    uint64_t world;
+    uint32_t dtBits;
+    int iterations;
+    float hookDt;
+    long faults;
+};
+void DriveRateSeenGet(DriveRateSeen &out);
 // The threads the drive was called on so far, at most most of them; full where more were seen than are kept.
 int DriveThreadsGet(DWORD *out, int most, bool &full);
 

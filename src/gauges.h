@@ -180,6 +180,7 @@ struct GaugeSettings
     bool dieselFlutter;      // DieselFlutter: a diesel's lift flutters too; off, it is quiet, or plays the player's own turbo whistle files (review 12, finding 6)
     int toggleKey;           // ToggleKey: virtual key code of the key that hides and shows the cluster, 0 = none
     char padToggle[32];      // PadToggle: pad buttons that do the same ("LB+DPadUp"), "None"
+    int physicsRate;         // PhysicsRate: 60 or 120, a test (physics_rate.h): read once at the start, a change acts at the next one
     bool demo;               // Demo: for work on the mod: demo values are drawn whenever no truck is driven, menus and loading screens included
     int probe;               // Probe: for work on the mod: the values read from the game go into Gauges.log (0 = off)
     int keepLogs;            // KeepLogs: how many of the last starts' logs Gauges\logs keeps, at most 500 MB of them; 0 keeps all
@@ -258,6 +259,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.zoneTo = 0.6f;
     s.soundVolume = 50;
     strncpy_s(s.padToggle, "None", _TRUNCATE);
+    s.physicsRate = 60;
     s.demo = false;
     s.probe = 0;
     s.keepLogs = 20;
@@ -364,6 +366,7 @@ inline void SettingsClamp(GaugeSettings &s)
     s.pushShare = s.pushShare < 0 ? 0 : s.pushShare > 100 ? 100 : s.pushShare;
     s.diffLockBite = s.diffLockBite < 0 ? 0 : s.diffLockBite > 100 ? 100 : s.diffLockBite;
     s.diffType = s.diffType < 0 || s.diffType > 3 ? 0 : s.diffType;
+    s.physicsRate = s.physicsRate == 120 ? 120 : 60;
     s.roadCdA = isfinite(s.roadCdA) ? (s.roadCdA <= 0.0f ? 0.0f : s.roadCdA < 0.3f ? 0.3f : s.roadCdA > 20.0f ? 20.0f : s.roadCdA) : 0.0f;
     s.gearbox = s.gearbox < 0 || s.gearbox >= kGearboxCount ? kGearboxGame : s.gearbox;
     s.input = s.input < 0 || s.input >= kInputCount ? kInputWheel : s.input;
@@ -555,6 +558,7 @@ struct SuspDisplayView
 // smtInstalled: the manual transmission mod is in the game; gearboxHeld: another mod holds the game's gearbox
 // functions. Either way the mod's gearbox stands down (the tab says why). warn: the clutch's and the engine's warning
 // boxes while a truck is driven.
+enum { kRateNoteNone, kRateNoteOff, kRateNoteIter, kRateNoteStep };
 struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWarnBoxes]; int engineDamage, engineCapacity; char truck[96]; char idWords[96]; bool truckOwn, suspOwn, suspKept, suspIdKnown, suspTruckKept, suspKindSet, smtInstalled, gearboxHeld; int suspLevel; char map[96], mapFrom[64]; bool mapOwn; float ambientC;
                    int pullTest, pullPhase; const char *pullWhy;
                    float ambientDay, ambientNight, hour; // the map's day and night (with mapOwn), the hour of the game's day (-1 not known)
@@ -571,6 +575,7 @@ struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWar
                    // asked for (-1 none), whether a binding reaches reverse (Gearbox=2 may take the shifter), the
                    // controllers read, and the stalls and shifts since the truck was taken
                    char bindText[kViewActions][2][40]; int captureAction, captureSlot; bool canReverse; int controllers, gearStalls, gearShifts;
+                   int rateNow, rateNote; // the physics rate in force (60 or 120) and what the tab says of it (kRateNote...)
                    bool odoKnown, odoCanSet, odoHours; char odoText[24]; // the driven truck's count: decided, Set to open (its id read, the match not waiting), hours shown, the figure
                    };
 

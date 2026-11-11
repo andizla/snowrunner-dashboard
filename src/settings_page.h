@@ -1417,6 +1417,22 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             PageTip(testTip);
         }
 
+        ImGui::SeparatorText("Test");
+        PageLabel("Physics rate", labelX);
+        changed(ImGui::RadioButton("60###physicsrate60", &s.physicsRate, 60));
+        ImGui::SameLine();
+        changed(ImGui::RadioButton("120###physicsrate120", &s.physicsRate, 120));
+        PageTip("Steps the physics 120 times a second. A test. Needs a restart. Single player only.");
+        {
+            const char *note = view.rateNote == kRateNoteOff    ? "120 was asked and is not running. Gauges.log says why."
+                               : view.rateNote == kRateNoteIter ? "Running at 120 with other solver iterations than asked. Gauges.log has the figures."
+                               : view.rateNote == kRateNoteStep ? "The step is not 1/120 s. Gauges.log has the figures."
+                               : s.physicsRate != view.rateNow  ? (s.physicsRate == 120 ? "Saved. 120 runs after a restart." : "Saved. 60 runs after a restart.")
+                               : view.rateNow == 120            ? "Running at 120."
+                                                                : nullptr;
+            if (note) ImGui::TextDisabled("%s", note);
+        }
+
         ImGui::Separator();
         if (ImGui::Button("Defaults"))
         {

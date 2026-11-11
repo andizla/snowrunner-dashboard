@@ -294,6 +294,12 @@ inline SimResult SimRun(const SimSetup &u)
 // law before it, kept here for the counter-cases: the governor's factor by the truck's speed on the bracket, the cap flat
 // and written only once armed by the mean. open: the hook's order with Open in force, the evening and then the limit; with
 // no cap (a numbered gear) the evening alone.
+// rate 120 (BRIEF_physics_rate_stage1.md, the Reviewer's S3): the same truck and ground stepped 120 times a second with
+// what stage 1 corrects in the game and nothing else. The setup's figures stay the ones a step at 60. Halved a step: the
+// drive's kick and the overspeed brake (the drive's operands), MaxDeltaAngVel, the bracket's pace (EngineResponsiveness),
+// and the ground's side, which is a rate a second (grip, drag, grade, the free wheel's drag, the noise by its seconds).
+// As the game leaves them in stage 1, a step: w + 0x118's blend 0.7 and 0.3 and the share's 0.8 and 0.2. The couple is
+// a ratio and stays. The results that are a step's (push, pushJump) are then a step's at 120.
 struct TopSetup
 {
     TorqueCutSlot slot;   // mode kCutMap, the map's top and band
@@ -313,6 +319,7 @@ struct TopSetup
     bool oldLaw;          // the law before the ceiling: the governor on the bracket, the cap flat and armed by the mean
     uint32_t seed;
     bool open;            // Open in force: the drive's impulse evened (DiffEvenStep), the ceiling on the driven mean (DiffOpenStep), nothing handed on
+    int rate;             // 120: stepped 120 times a second with stage 1's corrections; anything else 60
 };
 struct TopResult
 {
@@ -348,11 +355,14 @@ inline TopResult TopRun(const TopSetup &u)
     r.vMax = r.preMax = r.postMax = r.fMax = r.needleMax = -1e9f;
     int counted = 0, clamps = 0;
     double pushSum = 0.0;
-    const int steps = (int)(u.seconds * 60.0f);
+    const int hzI = u.rate == 120 ? 120 : 60;
+    const float hz = (float)hzI, part = 60.0f / hz; // a step's part of one at 60
+    const float mdav = u.mdav * part, rise = u.rise * part;
+    const int steps = (int)(u.seconds * hz);
     for (int k = 0; k < steps; k++)
     {
-        const bool late = k >= 180;
-        if (u.footUpAt > 0.0f && k >= (int)(u.footUpAt * 60.0f)) slot.pedal = slot.map.pedal = 0.0f;
+        const bool late = k >= 3 * hzI;
+        if (u.footUpAt > 0.0f && k >= (int)(u.footUpAt * hz)) slot.pedal = slot.map.pedal = 0.0f;
         int wi[8], hi = 0, sum = 0;
         bool driven[8], ok[8];
         for (int i = 0; i < n; i++)
@@ -371,7 +381,7 @@ inline TopResult TopRun(const TopSetup &u)
         {
             bracket = TorqueCutAnswerOf(slot, 1.0f, -1.0f, 0.0f, 1e9f, 1.0f, 1.0f, sp).bracket;
             if (u.oldLaw && bracket > 0.0f) bracket *= CutGovernor(v / top, slot.map.governFrom, slot.map.governTo);
-            used = u.rise > 0.0f ? CutRise(used, bracket, u.rise) : bracket;
+            used = rise > 0.0f ? CutRise(used, bracket, rise) : bracket;
         }
         float pre[8], post[8], gain[8];
         const float threshold = fmaxf(fminf((float)hi - 0.5f, u.slot.map.governTo * top - 0.5f), 0.0f);
@@ -379,7 +389,7 @@ inline TopResult TopRun(const TopSetup &u)
         {
             d118[i] = 0.7f * (float)(wi[i] - whole[i]) + 0.3f * d118[i];
             whole[i] = wi[i];
-            const float traction = CutClamp01(0.5f - 2.0f * d118[i] / u.mdav);
+            const float traction = CutClamp01(0.5f - 2.0f * d118[i] / mdav);
             const float clamp = CutClamp01(traction + 1.0f - CutClamp01((fabsf(w[i]) - 1.0f) * 0.5f));
             const float target = CutClamp01(1.0f - (float)(hi - wi[i]) / fminf(fmaxf(meanInt / 4.0f, 0.1f), 2.0f));
             share[i] = 0.8f * share[i] + 0.2f * target;
@@ -389,10 +399,10 @@ inline TopResult TopRun(const TopSetup &u)
             if (u.inertia > 0.0f && w[i] > threshold)
             {
                 const float x = fminf((w[i] - threshold) * 0.2f, 1.0f);
-                brake = fminf(x * x * 1024.0f / 60.0f / u.inertia, w[i] - threshold);
+                brake = fminf(x * x * 1024.0f / hz / u.inertia, w[i] - threshold);
             }
-            post[i] = w[i] - brake + used * u.kick * clamp * share[i];
-            noise[i] += (1.0f - expf(-1.0f / 60.0f / kSimNoiseLag)) * ((SimRand(seed) * 2.0f - 1.0f) * 1.732f - noise[i]);
+            post[i] = w[i] - brake + used * (u.kick * part) * clamp * share[i];
+            noise[i] += (1.0f - expf(-1.0f / hz / kSimNoiseLag)) * ((SimRand(seed) * 2.0f - 1.0f) * 1.732f - noise[i]);
         }
         const bool armed = capV > 0.0f && CapArmStep(arm, 1, sp.mean, sp.ok, capV);
         float postMean = 0.0f;
@@ -426,10 +436,10 @@ inline TopResult TopRun(const TopSetup &u)
             {
                 if (i < u.freeWheels)
                 {
-                    w[i] -= 0.2f * w[i] / 600.0f;
+                    w[i] -= 0.2f * w[i] / (10.0f * hz);
                     continue;
                 }
-                const float slip = w[i] - v, g = u.grip * fmaxf(0.0f, 1.0f + u.gripNoise * noise[i] * 2.5f) / 10.0f;
+                const float slip = w[i] - v, g = u.grip * part * fmaxf(0.0f, 1.0f + u.gripNoise * noise[i] * 2.5f) / 10.0f;
                 float a = g * tanhf(slip / 0.3f);
                 const float most = fabsf(slip) / (1.0f + u.couple);
                 if (fabsf(a) > most) a = slip > 0.0f ? most : -most;
@@ -439,10 +449,10 @@ inline TopResult TopRun(const TopSetup &u)
                 push += u.couple * a;
                 r.pull += a;
             }
-        slow += (1.0f - expf(-1.0f / 60.0f)) * ((SimRand(seed) * 2.0f - 1.0f) * 1.732f - slow);
+        slow += (1.0f - expf(-1.0f / hz)) * ((SimRand(seed) * 2.0f - 1.0f) * 1.732f - slow);
         if (u.holdV < 0.0f)
         {
-            v += u.grade - u.drag * fmaxf(0.0f, 1.0f + u.dragNoise * slow * 2.5f);
+            v += (u.grade - u.drag * fmaxf(0.0f, 1.0f + u.dragNoise * slow * 2.5f)) * part;
             if (v < 0.0f) v = 0.0f;
         }
         r.vMost = fmaxf(r.vMost, v);
@@ -459,10 +469,10 @@ inline TopResult TopRun(const TopSetup &u)
             const float rpm = TorqueCutRpm(u.slot.map, postMean);
             r.needleMin = fminf(r.needleMin, rpm), r.needleMax = fmaxf(r.needleMax, rpm);
             for (int i = u.freeWheels; i < n; i++) r.wMax = fmaxf(r.wMax, w[i]);
-            if (k > 180) r.pushJump = fmaxf(r.pushJump, fabsf(push - lastPush));
-            if (k % 60 == 0)
+            if (k > 3 * hzI) r.pushJump = fmaxf(r.pushJump, fabsf(push - lastPush));
+            if (k % hzI == 0)
             {
-                if (k > 180) r.preSwing = fmaxf(r.preSwing, fabsf(sp.mean - lastPre)), r.postSwing = fmaxf(r.postSwing, fabsf(postMean - lastPost));
+                if (k > 3 * hzI) r.preSwing = fmaxf(r.preSwing, fabsf(sp.mean - lastPre)), r.postSwing = fmaxf(r.postSwing, fabsf(postMean - lastPost));
                 lastPre = sp.mean, lastPost = postMean;
             }
         }

@@ -854,6 +854,7 @@ static void WriteIni(const GaugeSettings &s)
     whole(L"SoundVolume", s.soundVolume);
     whole(L"SoundsOnly", s.soundsOnly ? 1 : 0);
     whole(L"DieselFlutter", s.dieselFlutter ? 1 : 0);
+    whole(L"PhysicsRate", s.physicsRate);
     whole(L"Demo", s.demo ? 1 : 0);
     whole(L"Probe", s.probe);
     whole(L"KeepLogs", s.keepLogs);
@@ -1228,6 +1229,8 @@ static void ReadIni(GaugeSettings &s)
                         L";   Torque: how much of its torque the truck gets, 10 to 100 percent (100 when not set). Lower it for an RLM-like engine with several times a stock engine's torque.\n"
                         L"; A truck's own Torque.<engine> and GearHold.<gearbox>: [Engine] of its file in Gauges\\trucks (every truck of the kind) or [Engine:<id>] (one truck), with Own; before the two files above.\n"
                         L"; Mod work: Demo=1 draws demo values whenever no truck is driven, Probe=1 logs the values read from the game.\n"
+                        L"; PhysicsRate: 60 or 120 (60). A test: 120 steps the physics 120 times a second. Single player only. Read once at the start.\n"
+                        L";   PhysicsIterations (with 120, no box): 0 the mod choice (2), 2 or 4 solver iterations a step. Add the key by hand.\n"
                         L"; KeepLogs: how many of the last starts' logs Gauges\\logs keeps (20; at most 500 MB of them; 0 keeps all).\n");
             fclose(f);
             WriteIni(s);
@@ -1366,6 +1369,7 @@ static void ReadIni(GaugeSettings &s)
     s.soundVolume = IniInt(L"SoundVolume", s.soundVolume, ini);
     s.soundsOnly = IniBool(L"SoundsOnly", s.soundsOnly, ini);
     s.dieselFlutter = IniBool(L"DieselFlutter", s.dieselFlutter, ini);
+    s.physicsRate = IniInt(L"PhysicsRate", s.physicsRate, ini);
     s.demo = IniBool(L"Demo", s.demo, ini);
     s.probe = IniInt(L"Probe", s.probe, ini);
     s.keepLogs = IniInt(L"KeepLogs", s.keepLogs, ini);
@@ -3799,7 +3803,9 @@ static void GameCodeLook(const GaugeSettings &s)
         Log(L"gear display: the script engine's class registry at +%llx, its string pool at +%llx, its allocate at +%llx", (unsigned long long)g_ssl.classes,
             (unsigned long long)g_ssl.pool, (unsigned long long)g_ssl.alloc);
     else Log(L"gear display: %S, so the game's gear display stays as it is", g_ssl.why);
-    if (DrivePlaceFind(code.data(), from, to, g_drive))
+    if (CreepHooked())
+        Log(L"creep: the game's wheels' drive at +%zx, called at +%zx; hooked at the start for the physics rate, so not looked for again", g_drive.drive, g_drive.call);
+    else if (DrivePlaceFind(code.data(), from, to, g_drive))
         Log(L"creep: the game's wheels' drive at +%zx, called at +%zx; hooked once Creep, Probe, the suspension's settings, the torque cut or the diff lock bite "
             L"is on with a truck driven", g_drive.drive, g_drive.call);
     else Log(L"creep: %S, so an idling truck stands as in the game%s", g_drive.why, s.powertrain && s.diffLockBite > 0 ? L" and the diff lock bite does not act" : L"");
@@ -7083,9 +7089,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 PushCountsGet(pc);
                 const PushCounts &pb = w.pushWas;
                 Log(L"probe: chassis push: steps %ld, taken back in %ld; the push %.1f N s, %.1f taken back; k %.3f, F_excess %.2f, F %.2f, B4 %.3f; %.2f m/s; kick path %ld; "
-                    L"bodies skipped %ld, faults %ld; PushShare %d",
+                    L"bodies skipped %ld, faults %ld; PushShare %d; the physics at %d steps a second",
                     pc.steps - pb.steps, pc.backs - pb.backs, pc.given - pb.given, pc.back - pb.back, pc.k, pc.fx, pc.f, pc.b4, pc.speed, pc.kicks - pb.kicks, pc.skipped - pb.skipped,
-                    pc.faults - pb.faults, s.pushShare);
+                    pc.faults - pb.faults, s.pushShare, DriveRateOn() ? 120 : 60);
                 w.pushWas = pc;
             }
             // the torque cut's probe (Probe=1), once a second: acting or why not; the detour's last answer (the wheels'
@@ -7106,20 +7112,20 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                     L"the game's T %.3f, answered %.3f; D4 %.2f, B4s %.3f, the stand-in %.3f, the stall's wheels %.3f; calls answered %ld, passed %ld, the other callers' %ld, reads failed %ld; falls of 0.3 or more "
                     L"in one step %ld; the throttle held at 1 %s; the governor by the truck's speed %.2f rad/s (the rolling radius %.3f m, wheel + 0x94 %.3f m; %ld by the cylinder, %ld without, %ld out of bounds); the wheel cap %s: the ceiling %.2f rad/s, clamps %ld (%ld in the last step), the largest excess %.2f rad/s "
                     L"after the drive and %.2f before it, the driven mean after the drive %.2f rad/s over %ld steps (%.2f at the most), the least driven wheel before the drive %.2f rad/s, "
-                    L"bodies refused %ld, steps waiting %ld, kept %.3f, spread %.2f rad/s, faults %ld",
+                    L"bodies refused %ld, steps waiting %ld, kept %.3f, spread %.2f rad/s, faults %ld; the physics at %d steps a second",
                     cutActs ? L"acting" : TorqueCutWhyNot(s, want, own && GearboxManual(w), cutHooks, raw.gearEngaged, gearTop, cutAgrees), c.s, sTop, gearTop, sTop * scale.redline,
                     c.f, c.bracket, w.cutFloor, c.used, c.rate, locked ? 0.0f : SettingsRange(w.clutch.carried, -1.0f, kClutchHold), s.engineShare / 100.0f, c.stock, c.torque, c.d4, c.b4s, c.standIn, c.w,
                     c.answered - before.answered, c.passed - before.passed, c.others - before.others, c.faults - before.faults, c.falls - before.falls, cutActs ? L"on" : L"off",
                     c.truck, c.radius, c.radius94, c.rollCylinder, c.rollNone, c.rollOut, !GearboxPosCapped(w.pos.pos) ? L"not in this gear" : cap.armed ? L"armed" : L"waiting", cap.ceiling, cap.clamps - w.capWas.clamps, cap.clampedNow, cap.excessMost,
-                    cap.preMost, cap.steps > w.capWas.steps ? (cap.postSum - w.capWas.postSum) / (float)(cap.steps - w.capWas.steps) : 0.0f, cap.steps - w.capWas.steps, cap.postMost, cap.preLeast, cap.refused - w.capWas.refused, cap.waitSteps - w.capWas.waitSteps, cap.kept, cap.spread - w.capWas.spread, cap.faults - w.capWas.faults);
+                    cap.preMost, cap.steps > w.capWas.steps ? (cap.postSum - w.capWas.postSum) / (float)(cap.steps - w.capWas.steps) : 0.0f, cap.steps - w.capWas.steps, cap.postMost, cap.preLeast, cap.refused - w.capWas.refused, cap.waitSteps - w.capWas.waitSteps, cap.kept, cap.spread - w.capWas.spread, cap.faults - w.capWas.faults, DriveRateOn() ? 120 : 60);
                 w.cutWas = c;
                 w.capWas = cap;
                 DiffCounts dc = {};
                 DiffCountsGet(dc);
                 Log(L"probe: differential: the type %s, in force in the last step %s; Open's evening: J %.4f over %d wheels in its last step, %ld steps, %ld written, %ld faults "
-                    L"in a second; the wheels' mean %.2f rad/s against the governor's band %.2f to %.2f; in Open the wheel cap's ceiling and excess are the driven mean's, not each wheel's",
+                    L"in a second; the wheels' mean %.2f rad/s against the governor's band %.2f to %.2f; in Open the wheel cap's ceiling and excess are the driven mean's, not each wheel's; the physics at %d steps a second",
                     DiffTypeName(w.diffType), !cutActs ? L"nothing (the cut is off)" : dc.force == kDiffForceOpen ? L"Open" : dc.force == kDiffForceLock ? L"the lock" : L"Limited slip",
-                    dc.j, dc.wheels, dc.steps - w.diffWas.steps, dc.writes - w.diffWas.writes, dc.faults - w.diffWas.faults, c.s, w.diffBand[0], w.diffBand[1]);
+                    dc.j, dc.wheels, dc.steps - w.diffWas.steps, dc.writes - w.diffWas.writes, dc.faults - w.diffWas.faults, c.s, w.diffBand[0], w.diffBand[1], DriveRateOn() ? 120 : 60);
                 w.diffWas = dc;
             }
         }
@@ -7435,6 +7441,214 @@ static DWORD ExeStamp()
     return *(const DWORD *)(image + *(const DWORD *)(image + 0x3C) + 8);
 }
 
+// ---- the physics rate test mode (physics_rate.h; BRIEF_physics_rate_stage1.md) ----
+// What is in force for this run of the game: set once by RateStart, read by the mod's thread alone.
+static int g_rateNow = kRateStock, g_rateNote = kRateNoteNone, g_rateIterAsked = 0;
+static uint64_t g_rateSlotAt = 0;
+
+// One page for the mod's floats within reach of every place in the exe's code (a disp32 from the code): the first
+// free one above the exe, else below it, at most 0x70000000 away. 0 where there is none.
+static uint64_t RatePageMake()
+{
+    const uint64_t kStep = 0x10000, kFar = 0x70000000ull;
+    const uint64_t end = (g_base + ImageSize() + kStep - 1) & ~(kStep - 1);
+    for (int pass = 0; pass < 2; pass++)
+    {
+        uint64_t at = pass == 0 ? end : (g_base > kStep ? g_base - kStep : 0);
+        for (int tries = 0; tries < 8192 && at; tries++)
+        {
+            if (pass == 0 ? at > g_base + kFar : (at + kFar < g_base || at < kStep)) break;
+            MEMORY_BASIC_INFORMATION info = {};
+            if (!VirtualQuery((const void *)at, &info, sizeof info)) break;
+            if (info.State == MEM_FREE)
+                if (void *page = VirtualAlloc((void *)at, 0x1000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE)) return (uint64_t)(uintptr_t)page;
+            if (pass == 0) at = ((uint64_t)(uintptr_t)info.BaseAddress + info.RegionSize + kStep - 1) & ~(kStep - 1);
+            else at = (uint64_t)(uintptr_t)info.AllocationBase && info.State != MEM_FREE ? ((uint64_t)(uintptr_t)info.AllocationBase - kStep) & ~(kStep - 1) : at - kStep;
+        }
+    }
+    return 0;
+}
+static float RateFloat(uint32_t bits)
+{
+    float f = 0.0f;
+    memcpy(&f, &bits, 4);
+    return f;
+}
+static bool RateCodeRead(size_t at, uint32_t &value) { return PeekGame(g_base + at, &value, 4); }
+// Four bytes into the exe's code: the protection changed and put back, the instruction cache flushed.
+static bool RateCodeWrite(size_t at, uint32_t value)
+{
+    void *const place = (void *)(uintptr_t)(g_base + at);
+    DWORD old = 0, again = 0;
+    if (!VirtualProtect(place, 4, PAGE_EXECUTE_READWRITE, &old)) return false;
+    bool ok = false;
+    __try
+    {
+        memcpy(place, &value, 4);
+        ok = true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        ok = false;
+    }
+    VirtualProtect(place, 4, old, &again);
+    FlushInstructionCache(GetCurrentProcess(), place, 4);
+    return ok;
+}
+static void RateOffSay(const char *why)
+{
+    g_rateNote = kRateNoteOff;
+    Log(L"physics rate: 120 asked (PhysicsRate=120) and off: %S. The game steps 60 times a second as it does without the mod", why);
+}
+// The start: the first thing after the log's head, before the overlay (the Reviewer's M2). At PhysicsRate=60 it reads
+// the key and does nothing else: no page, no hook, no write, no line. At 120: every place and the drive found and
+// checked on a copy of the exe (looked for again while the game's code is not ready, as the places are), the page
+// made, the drive hooked whatever the features' settings are, then the writes with the step last. One thing that
+// fails leaves the game as it is, with one line that names it.
+static void RateStart()
+{
+    const std::wstring ini = IniPath();
+    bool known = true;
+    const int asked = IniInt(L"PhysicsRate", kRateStock, ini);
+    const int rate = RateOf(asked, known);
+    if (!known) Log(L"physics rate: PhysicsRate=%d in Gauges.ini is neither 60 nor 120: read as 60", asked);
+    if (rate != kRateFast) return;
+    const int iterAsked = IniInt(L"PhysicsIterations", 0, ini);
+    const int iterations = IterationsOf(iterAsked, known);
+    if (!known) Log(L"physics rate: PhysicsIterations=%d in Gauges.ini is none of 0, 2 and 4: read as 0, the mod's choice (2)", iterAsked);
+    g_rateIterAsked = iterations;
+    std::vector<uint8_t> image;
+    size_t from = 0, to = 0;
+    RatePlan plan = {};
+    DrivePlace drive = {};
+    bool found = false, driveOk = false;
+    int looks = 0, since = 0;
+    // the drive's place is the sign that the game's code is there: without it a look is made again; with it and a
+    // rate's place missing, one more look decides
+    for (looks = 1; looks <= kPlacesLooks; looks++)
+    {
+        const bool copied = CodeCopy(image, from, to, true);
+        driveOk = copied && DrivePlaceFind(image.data(), from, to, drive);
+        const bool planOk = copied && RatePlanMake(image.data(), image.size(), from, to, g_base, 0, iterations, plan);
+        if (driveOk && planOk)
+        {
+            found = true;
+            break;
+        }
+        if (driveOk && ++since >= 2) break;
+        if (looks < kPlacesLooks) Sleep(kPlacesRetryMs);
+    }
+    if (!found)
+    {
+        RateOffSay(!driveOk ? drive.why : plan.why);
+        return;
+    }
+    const uint64_t page = RatePageMake();
+    if (!page)
+    {
+        RateOffSay("no free page within 2 GB of the exe for the mod's floats");
+        return;
+    }
+    uint32_t floats[kRateFloats];
+    RatePageFill(floats);
+    memcpy((void *)(uintptr_t)page, floats, sizeof floats);
+    DWORD old = 0;
+    const bool readOnly = VirtualProtect((void *)(uintptr_t)page, 0x1000, PAGE_READONLY, &old) != 0;
+    if (!readOnly || !RatePlanMake(image.data(), image.size(), from, to, g_base, page, iterations, plan))
+    {
+        VirtualFree((void *)(uintptr_t)page, 0, MEM_RELEASE);
+        RateOffSay(!readOnly ? "the mod's page could not be made read only" : plan.why);
+        return;
+    }
+    char why[160] = "";
+    if (!CreepHook((uintptr_t)(g_base + drive.drive), why, sizeof why))
+    {
+        VirtualFree((void *)(uintptr_t)page, 0, MEM_RELEASE);
+        RateOffSay(why);
+        return;
+    }
+    g_drive = drive;
+    g_rateSlotAt = g_base + plan.ownerSlot;
+    // a world that is there already (the owner's static holds an owner whose + 0x20 holds a world) was made with the
+    // game's own iterations: read before the writes
+    uint64_t owner = 0, world = 0;
+    uint32_t worldDt = 0;
+    int worldIter = 0;
+    const bool worldThere = PeekGame(g_rateSlotAt, &owner, 8) && owner && PeekGame(owner + kRateOwnerWorld, &world, 8) && world &&
+                            PeekGame(world + kRateWorldDtAt, &worldDt, 4) && PeekGame(world + kRateWorldIterAt, &worldIter, 4);
+    // the halving first, the step's operand last: a step between the two runs at 1/60 s with the drive's two figures
+    // halved, never at 1/120 s with them whole
+    DriveRateSet(true, g_rateSlotAt, iterations);
+    const RateApplied put = RateApply(plan.writes, plan.count, RateCodeRead, RateCodeWrite);
+    long hits = 0, calls = 0;
+    CreepCounts(hits, calls);
+    if (!put.ok)
+    {
+        DriveRateSet(false, 0, 0);
+        char line[320];
+        const char *name = put.failed >= 0 && put.failed < plan.count ? plan.writes[put.failed].name : "a place";
+        if (!put.written) snprintf(line, sizeof line, "%s does not hold the game's own bytes in memory, so nothing was written", name);
+        else
+            snprintf(line, sizeof line, "the write at %s did not hold when read back, after %d that did; %s", name, put.done,
+                     put.restored ? "every one of them is back as the game had it" : "NOT every one of them could be put back: the game's code is part changed, start the game again with PhysicsRate=60");
+        if (!put.written || put.restored) VirtualFree((void *)(uintptr_t)page, 0, MEM_RELEASE);
+        RateOffSay(line);
+        return;
+    }
+    g_rateNow = kRateFast;
+    Log(L"physics rate: 120 steps a second (PhysicsRate=120; a test, single player only), on look %d: the step at +%zx, the drive's wheel impulse at +%zx, its chassis push at +%zx, "
+        L"the overspeed brake at +%zx, the readout's shares at +%zx; each now reads the mod's own float (a page at %llx, read only), the game's floats are as they were. "
+        L"The solver's iterations at +%zx: %s. The world's owner's static at +%zx. The wheels' drive hooked at +%zx: MaxDeltaAngVel and EngineResponsiveness are halved around each call",
+        looks, plan.match[kRateStep], plan.match[kRateWheel], plan.match[kRateChassis], plan.match[kRateBrake], plan.match[kRateReadOld], (unsigned long long)page, plan.iterAt,
+        iterations == kRateIterFast ? L"2 written in the place of 4 (PhysicsIterations 0 or 2)" : L"left at 4 (PhysicsIterations=4)", plan.ownerSlot, drive.drive);
+    if (calls) Log(L"physics rate: the writes were late: the drive had run %ld times before the last one went in, so some steps ran part changed", calls);
+    else Log(L"physics rate: no step had come before the last write went in (the drive's hook counted none)");
+    if (worldThere)
+        Log(L"physics rate: a world was there already at the start (the owner's static held one): %d iterations, step %.6f s. The iterations written reach only a world made after this: "
+            L"the line at its first step says what it runs with", worldIter, RateFloat(worldDt));
+    else Log(L"physics rate: no world was there yet at the start (the owner's static held none), so the first one is made with the iterations above");
+    if (iterations == kRateIterStock)
+        Log(L"physics rate: the suspension is not corrected at 4 iterations: at 120 steps its springs and dampers, the handbrake and the winch are likely four times stronger. "
+            L"For this measurement turn the mod's damper, its spring features and the tune off");
+    Log(L"physics rate: not corrected yet at 120: the brakes, the water's lift and drag, the substance force, the blends at w + 0x110, 0x118, 0x128 and 0x170, "
+        L"the adjustable suspension's height move, w + 0x190 and 0x18C, action + 0xC8. The hook on the drive now runs twice a frame at 60 fps and up to eight times at 30 fps");
+}
+// On the mod's thread each pass: one line for each world the hook saw at its first drive call (the Reviewer's M3),
+// loud where the world does not run what was asked; the tab's row says so too.
+static void RateWorldSay()
+{
+    if (g_rateNow != kRateFast) return;
+    static long said = 0;
+    static bool faultSaid = false;
+    DriveRateSeen seen = {};
+    DriveRateSeenGet(seen);
+    if (seen.faults && !faultSaid)
+    {
+        faultSaid = true;
+        Log(L"physics rate: a read in the drive's hook faulted (%ld so far): the halving or the world's look was left out for that call", seen.faults);
+    }
+    if (seen.worlds == said) return;
+    said = seen.worlds;
+    const int bad = RateWorldJudge(seen.dtBits, seen.iterations, g_rateIterAsked);
+    Log(L"physics rate: world %ld (%llx) at its first drive call: %d iterations, step %.6f s as the world holds it, %.6f s as the drive got it%s", seen.worlds,
+        (unsigned long long)seen.world, seen.iterations, RateFloat(seen.dtBits), seen.hookDt, bad ? L"" : L": as asked");
+    if (bad & kRateBadStep)
+    {
+        g_rateNote = kRateNoteStep;
+        Log(L"PHYSICS RATE: THE STEP IS %.6f s (%08x), NOT 1/120 s (%08x), after the writes: this world does not run at 120. What this session shows is no test of the rate",
+            RateFloat(seen.dtBits), seen.dtBits, kRateDtBits);
+    }
+    else if (bad & kRateBadIter)
+    {
+        g_rateNote = kRateNoteIter;
+        Log(L"PHYSICS RATE: THIS WORLD RUNS %d ITERATIONS, NOT THE %d ASKED, at a step of 1/120 s (it was made before the write): read this session as PhysicsIterations=4. "
+            L"The suspension is not corrected at 4 iterations: its springs and dampers, the handbrake and the winch are likely four times stronger; "
+            L"the mod's damper, its spring features and the tune are to be off for a measurement",
+            seen.iterations, g_rateIterAsked);
+    }
+    else if (g_rateNote != kRateNoteOff) g_rateNote = kRateNoteNone;
+}
+
 static DWORD WINAPI Run(void *)
 {
     if (g_second)
@@ -7453,6 +7667,7 @@ static DWORD WINAPI Run(void *)
     LogKeptSay();
     CrashLineSet(); // before the overlay and the places' looks, which can take 60 s (BRIEF_crash_line_early.md)
     LogGameFolder();
+    RateStart(); // the physics rate test mode: at 60 one key read, nothing else
     SettingsDefaults(g_set); // what the tab shows until the ini is read
     g_overlayOk = OverlayInit(g_self);
     g_exeSize = ImageSize(); // where the exe ends, which the engine damage write keeps out of
@@ -8327,6 +8542,7 @@ static DWORD WINAPI Run(void *)
         // the hooks a level needs, attached the first time it needs them (also when the tab turns them on mid-game)
         GearboxHooksStep(s);
         CreepHookStep(s, driving);
+        RateWorldSay();
         EngineSpeedHookStep(s, driving);
         TruckInputHookStep(s, driving);
         GearTorqueHookStep(s, driving);
@@ -8738,6 +8954,7 @@ static DWORD WINAPI Run(void *)
             v.st.hour = hour;
             v.st.outsideC = inForce.ambientC;
         }
+        v.rateNow = g_rateNow, v.rateNote = g_rateNote;
         AcquireSRWLockExclusive(&g_viewLock);
         g_view = v;
         ReleaseSRWLockExclusive(&g_viewLock);
@@ -8839,7 +9056,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.overRevDamage == b.overRevDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
            a.springScale == b.springScale && a.dampingScale == b.dampingScale && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
-           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.diffType == b.diffType && a.engineBrake == b.engineBrake && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
+           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.diffType == b.diffType && a.physicsRate == b.physicsRate && a.engineBrake == b.engineBrake && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
            a.camberGainFront == b.camberGainFront && a.camberGainRear == b.camberGainRear && a.camberRestFront == b.camberRestFront && a.camberRestRear == b.camberRestRear;
 }
 
@@ -8872,7 +9089,7 @@ int wmain(int argc, wchar_t **argv)
     Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.hotDamageFrom == kTempRed && d.coldDamage == 5.0f && d.overRevDamage == 10.0f && d.stallDamage == 5.0f && d.clutchBurn && d.clutchHeat == 60.0f &&
               d.springScale == 1.0f && d.dampingScale == 1.0f && d.extraTravel == 0.0f && d.frameFlex == 1.0f && d.twistRange == 1.0f,
           "defaults: the radiator's full airflow from 30 km/h, engine damage on from the red zone, 10 percent a minute for the heat and 5 for the cold");
-    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.walkSkipsLow && d.positionsByGearbox && !d.ignoreShifter && d.backToA == 0 && d.gameGearDisplay == kGameGearOffOwn && d.input == kInputWheel && !d.powertrain && d.roadLoad && d.wheelCap == 150 && d.pushShare == 0 && d.diffLockBite == 0 && d.diffType == 0 && d.engineBrake == 15.0f && d.modEngineSpeed && d.engineSpeedTop == 1.0f && d.roadCdA == 0.0f && d.engineShare == 50 && d.creep && !d.creepManual && !d.dieselFlutter,
+    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.walkSkipsLow && d.positionsByGearbox && !d.ignoreShifter && d.backToA == 0 && d.gameGearDisplay == kGameGearOffOwn && d.input == kInputWheel && !d.powertrain && d.roadLoad && d.wheelCap == 150 && d.pushShare == 0 && d.diffLockBite == 0 && d.diffType == 0 && d.physicsRate == 60 && d.engineBrake == 15.0f && d.modEngineSpeed && d.engineSpeedTop == 1.0f && d.roadCdA == 0.0f && d.engineShare == 50 && d.creep && !d.creepManual && !d.dieselFlutter,
           "defaults: the oil as a second needle, warm after 5 minutes, too hot from 120 C; the standard turbo, a diesel's lift without the flutter; the creep on");
 
     // Air drag on by default (BRIEF_defaults_on.md): a missing key gives 1, an explicit 0 stays 0, the defaults give 1
@@ -9002,6 +9219,7 @@ int wmain(int argc, wchar_t **argv)
     c.pushShare = 60;
     c.diffLockBite = 75;
     c.diffType = 2;
+    c.physicsRate = 120;
     c.modEngineSpeed = false;
     c.engineSpeedTop = 1.25f;
     c.roadCdA = 2.5f;
@@ -9020,7 +9238,7 @@ int wmain(int argc, wchar_t **argv)
                             c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.overRevDamage != d.overRevDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springScale != d.springScale && c.dampingScale != d.dampingScale && c.extraTravel != d.extraTravel && c.frameFlex != d.frameFlex && c.twistRange != d.twistRange && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
                             c.demo != d.demo && c.probe != d.probe && c.keepLogs != d.keepLogs && c.soundVolume != d.soundVolume && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
-                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.diffLockBite != d.diffLockBite && c.diffType != d.diffType && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
+                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.diffLockBite != d.diffLockBite && c.diffType != d.diffType && c.physicsRate != d.physicsRate && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
     WriteIni(c);
     ReadIni(b);
     Check(allChanged, "ini: the test changes every setting from its default");
@@ -9041,7 +9259,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 150, "ini: the help text survives a write (150 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 152, "ini: the help text survives a write (152 comment lines)");
     // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
     {
         char none[32] = "x", tab[32] = {}, kept[32] = {};

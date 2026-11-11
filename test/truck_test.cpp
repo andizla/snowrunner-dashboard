@@ -424,6 +424,71 @@ static void MakeGame()
     }
 }
 
+// ---- the physics rate test mode (physics_rate.h): a made-up exe ----
+// 0x6000 bytes, the code 0x1000 to 0x3000: each place's pattern with its operand pointed at a float in the data that
+// holds the game's value, the iterations' three stores, the owner's constructor piece with its small function at
+// 0x1800 and the static at 0x4000. No byte of it is the game's beyond the patterns themselves.
+static const size_t kRateTestAt[kRateFloats] = { 0x1100, 0x1200, 0x1300, 0x1400, 0x1500, 0x1500 };
+static void RatePut(std::vector<uint8_t> &image, size_t at, const char *pattern)
+{
+    uint8_t bytes[kPatternMax], mask[kPatternMax];
+    const int n = PatternParse(pattern, bytes, mask);
+    for (int i = 0; i < n; i++) image[at + i] = mask[i] ? bytes[i] : 0;
+}
+static void RateRel(std::vector<uint8_t> &image, size_t operand, size_t end, size_t target)
+{
+    const int32_t rel = (int32_t)((int64_t)target - (int64_t)end);
+    memcpy(&image[operand], &rel, 4);
+}
+static std::vector<uint8_t> RateImage()
+{
+    std::vector<uint8_t> image(0x6000, 0xCC);
+    for (int i = 0; i < kRateFloats; i++)
+        if (i != kRateReadNew) RatePut(image, kRateTestAt[i], kRateSites[i].pattern);
+    for (int i = 0; i < kRateFloats; i++)
+    {
+        const size_t value = 0x3100 + 8 * (size_t)i;
+        memcpy(&image[value], &kRateSites[i].stock, 4);
+        RateRel(image, kRateTestAt[i] + kRateSites[i].operand, kRateTestAt[i] + kRateSites[i].end, value);
+    }
+    RatePut(image, 0x1600, kRateIterPattern);
+    RatePut(image, 0x1700, kRateOwnerPattern);
+    RateRel(image, 0x1701, 0x1705, 0x1800);
+    image[0x1800] = 0x48, image[0x1801] = 0x8D, image[0x1802] = 0x05, image[0x1807] = 0xC3;
+    RateRel(image, 0x1803, 0x1807, 0x4000);
+    return image;
+}
+static bool RatePlanFails(const std::vector<uint8_t> &image, uint64_t page, const char *name, const char *what)
+{
+    RatePlan p = {};
+    const bool ok = RatePlanMake(image.data(), image.size(), 0x1000, 0x3000, 0x140000000ull, page, 2, p);
+    const bool right = !ok && !p.ok && p.count == 0 && strstr(p.why, name) && strstr(p.why, what);
+    if (!right) printf("     wanted \"%s: %s\", got ok %d \"%s\"\n", name, what, ok, p.why);
+    return right;
+}
+// what the stand-in drive saw of the action during the call, and what it does to it
+static uint8_t g_rateDuring[0x100];
+static volatile float g_rateGameWrites = 0.0f;
+static void RateSnap(void *action) { memcpy(g_rateDuring, action, sizeof g_rateDuring); }
+static void RateSnapAndWrite(void *action)
+{
+    memcpy(g_rateDuring, action, sizeof g_rateDuring);
+    const float f = g_rateGameWrites;
+    memcpy((uint8_t *)action + 0x4C, &f, 4);
+}
+static float RateF(const uint8_t *block, size_t at)
+{
+    float f;
+    memcpy(&f, block + at, 4);
+    return f;
+}
+static uint32_t RateBitsOf(float f)
+{
+    uint32_t b;
+    memcpy(&b, &f, 4);
+    return b;
+}
+
 static int g_failed = 0;
 static void Check(bool ok, const char *what)
 {
@@ -643,6 +708,25 @@ static void RealImageTest()
     // pass of review 14)
     const uint64_t constraint = VtableByName(image.data(), image.size(), imageBase, kSuspConstraintName);
     Check(update ? constraint == 0x23d9538 : constraint != 0, "places: hkpWheelConstraintData's vtable by its RTTI name, for the suspension probe");
+    // the physics rate's places (physics_rate.h): each once with the game's own float behind it, where they were read
+    // in the three builds; a page just past the exe is within every place's reach
+    {
+        RatePlan look = {}, plan = {};
+        const bool found = RatePlanMake(image.data(), image.size(), from, to, imageBase, 0, kRateIterFast, look);
+        const bool planned = RatePlanMake(image.data(), image.size(), from, to, imageBase, imageBase + ((image.size() + 0xFFFF) & ~(uint64_t)0xFFFF), kRateIterFast, plan);
+        const bool newest = stamp == 0x6adb8627;
+        const size_t stepWant = newest ? 0xde8cca : update ? 0xde8d5a : steam ? 0xde774a : look.match[kRateStep];
+        const size_t iterWant = newest ? 0x1945a38 : update ? 0x1945198 : steam ? 0x1943518 : look.iterAt;
+        const size_t slotWant = newest ? 0x2a93c30 : update ? 0x2a92e70 : steam ? 0x2a8ebb0 : look.ownerSlot;
+        char rate[400];
+        snprintf(rate, sizeof rate, "physics rate's places in a real image: %s; the step at %zx, the wheel impulse %zx, the chassis push %zx, the overspeed brake %zx, the readout %zx, "
+                 "the iterations at %zx, the owner's static at %zx; %d writes planned with the step last",
+                 found ? "all found once with the game's floats" : look.why, look.match[kRateStep], look.match[kRateWheel], look.match[kRateChassis], look.match[kRateBrake],
+                 look.match[kRateReadOld], look.iterAt, look.ownerSlot, plan.count);
+        Check(found && planned && look.count == 0 && look.match[kRateStep] == stepWant && look.iterAt == iterWant && look.ownerSlot == slotWant && plan.count == 7 &&
+                  plan.writes[6].at == look.match[kRateStep] + kRateSites[kRateStep].operand && image[look.iterAt] == 4,
+              rate);
+    }
 }
 
 // The game's gear display (game_script.h, BRIEF_shifter_no_gear.md part B): a made-up script engine with a class
@@ -871,6 +955,253 @@ static void GearDisplayTest()
         Check(all && targets, "gear display: the opcodes and the five jumps are sslkit's (ops.py)");
     }
     else printf("     gear display's opcodes against sslkit's table: no SSL_OPS names its ops.py, not tested\n");
+}
+
+static void PhysicsRateTest()
+{
+    // ---- the physics rate test mode (BRIEF_physics_rate_stage1.md, the Reviewer's addendum) ----
+    // the settings as they read
+    {
+        bool k60 = false, k120 = false, k0 = true, k240 = true, kNeg = true;
+        const bool rates = RateOf(60, k60) == 60 && k60 && RateOf(120, k120) == 120 && k120 && RateOf(0, k0) == 60 && !k0 && RateOf(240, k240) == 60 && !k240 && RateOf(-120, kNeg) == 60 && !kNeg;
+        bool i0 = false, i2 = false, i4 = false, i3 = true, i8 = true;
+        const bool iters = IterationsOf(0, i0) == 2 && i0 && IterationsOf(2, i2) == 2 && i2 && IterationsOf(4, i4) == 4 && i4 && IterationsOf(3, i3) == 2 && !i3 && IterationsOf(8, i8) == 2 && !i8;
+        Check(rates && iters, "physics rate: PhysicsRate reads as 60 or 120 and anything else as 60, not known; PhysicsIterations 0 and 2 as 2, 4 as 4, anything else as 2, not known");
+    }
+    // the plan on a made-up exe: every place once, the new operands' arithmetic, the order
+    {
+        const uint64_t base = 0x140000000ull, page = base + 0x7000000;
+        const std::vector<uint8_t> image = RateImage();
+        RatePlan look = {}, two = {}, four = {};
+        const bool lookOk = RatePlanMake(image.data(), image.size(), 0x1000, 0x3000, base, 0, 2, look);
+        const bool twoOk = RatePlanMake(image.data(), image.size(), 0x1000, 0x3000, base, page, 2, two);
+        const bool fourOk = RatePlanMake(image.data(), image.size(), 0x1000, 0x3000, base, page, 4, four);
+        bool places = lookOk && look.count == 0 && look.iterAt == 0x1600 + 26 && look.ownerSlot == 0x4000;
+        for (int i = 0; i < kRateFloats; i++) places = places && look.match[i] == kRateTestAt[i];
+        bool arithmetic = twoOk && two.count == 7;
+        for (int i = 0; arithmetic && i < two.count; i++)
+        {
+            const RateWrite &w = two.writes[i];
+            if (w.at == two.iterAt)
+            {
+                arithmetic = w.stock == 4 && w.value == 2 && i == two.count - 2;
+                continue;
+            }
+            int site = -1;
+            for (int k = 0; k < kRateFloats; k++)
+                if (w.at == two.match[k] + kRateSites[k].operand) site = k;
+            uint32_t held = 0;
+            memcpy(&held, &image[w.at], 4);
+            arithmetic = site >= 0 && held == w.stock && base + two.match[site] + kRateSites[site].end + (int64_t)(int32_t)w.value == page + 4 * (uint64_t)site;
+        }
+        const size_t stepAt = kRateTestAt[kRateStep] + kRateSites[kRateStep].operand;
+        bool order = twoOk && fourOk && two.writes[6].at == stepAt && four.count == 6 && four.writes[5].at == stepAt;
+        for (int i = 0; i < four.count; i++) order = order && four.writes[i].at != four.iterAt;
+        uint32_t fill[kRateFloats];
+        RatePageFill(fill);
+        float oldShare = 0.0f, newShare = 0.0f;
+        memcpy(&oldShare, &fill[kRateReadOld], 4), memcpy(&newShare, &fill[kRateReadNew], 4);
+        const bool floats = fill[kRateStep] == RateBitsOf(1.0f / 120.0f) && fill[kRateWheel] == RateBitsOf(1.0f / 120.0f) && fill[kRateChassis] == RateBitsOf(1.0f / 240.0f) &&
+                            fill[kRateBrake] == RateBitsOf(-1.0f / 120.0f) && fabsf(oldShare * oldShare - 0.6f) < 1e-6f && fabsf(oldShare + newShare - 1.0f) < 1e-6f &&
+                            kRateDtBits == RateBitsOf(1.0f / 120.0f);
+        Check(places && arithmetic && order && floats,
+              "physics rate plan: on a made-up exe each place is found once; a look without a page plans no write; with one, each new operand reaches the mod's float from the "
+              "instruction's end and the old one is kept as stock; the iterations go in second to last only at 2 and the step last; the page holds 1/120, 1/240, -1/120 and the "
+              "readout's root of 0.6 with its rest");
+    }
+    // all or nothing: one place missing, twice, not the game's float, out of reach
+    {
+        const uint64_t base = 0x140000000ull, page = base + 0x7000000;
+        const std::vector<uint8_t> image = RateImage();
+        std::vector<uint8_t> none = image, twice = image, other = image, away = image, iter = image, getter = image, slot = image;
+        none[kRateTestAt[kRateWheel]] ^= 0xFF;
+        memcpy(&twice[0x2000], &image[kRateTestAt[kRateChassis]], 20);
+        other[0x3100 + 8 * kRateBrake] ^= 1;
+        RateRel(away, kRateTestAt[kRateReadOld] + kRateSites[kRateReadOld].operand, kRateTestAt[kRateReadOld] + kRateSites[kRateReadOld].end, 0x6000);
+        iter[0x1600 + 26] = 2;
+        getter[0x1800] = 0x90;
+        RateRel(slot, 0x1803, 0x1807, 0x2800);
+        const bool a = RatePlanFails(none, page, "the drive's wheel impulse", "its code is not found");
+        const bool b = RatePlanFails(twice, page, "the drive's chassis push", "its code stands more than once");
+        const bool c = RatePlanFails(other, page, "the overspeed brake", "the float it reads is not the game's own");
+        const bool d = RatePlanFails(away, page, "the readout's old share", "its operand points outside the exe");
+        const bool e = RatePlanFails(image, base + 0x100000000ull, "the step", "the mod's page is out of its reach");
+        const bool f = RatePlanFails(iter, page, "the solver's iterations", "its code is not found");
+        const bool g = RatePlanFails(getter, page, "the world's owner", "the function that gives its static is not the one known");
+        const bool h = RatePlanFails(slot, page, "the world's owner", "its static lies outside the exe's data");
+        const bool i = RatePlanFails(none, 0, "the drive's wheel impulse", "its code is not found");
+        Check(a && b && c && d && e && f && g && h && i,
+              "physics rate plan, all or nothing: a place not found, one that stands twice, a float that is not the game's, an operand out of the exe, a page out of reach, "
+              "iterations other than 4 in the code, another function for the owner's static or a static in the code: no plan, no write, and the reason names the place");
+    }
+    // the writes: all in and read back; one that does not hold puts the earlier ones back; a place not stock, no write
+    {
+        const uint64_t base = 0x140000000ull, page = base + 0x7000000;
+        const std::vector<uint8_t> image = RateImage();
+        RatePlan plan = {};
+        RatePlanMake(image.data(), image.size(), 0x1000, 0x3000, base, page, 2, plan);
+        static std::vector<uint8_t> memory;
+        static int writes, failAt, deadFrom;
+        const auto read = [](size_t at, uint32_t &value) {
+            if (at + 4 > memory.size()) return false;
+            memcpy(&value, &memory[at], 4);
+            return true;
+        };
+        // the write number failAt goes in wrong; from write number deadFrom on nothing goes in at all
+        const auto write = [](size_t at, uint32_t value) {
+            const int n = writes++;
+            if (n >= deadFrom) return false;
+            if (n == failAt) value ^= 0x100;
+            memcpy(&memory[at], &value, 4);
+            return true;
+        };
+        memory = image, writes = 0, failAt = -1, deadFrom = 99;
+        const RateApplied all = RateApply(plan.writes, plan.count, read, write);
+        bool allIn = all.ok && all.failed == -1 && all.done == 7 && all.written && writes == 7;
+        std::vector<uint8_t> undone = memory;
+        for (int i = 0; i < plan.count; i++)
+        {
+            allIn = allIn && memcmp(&memory[plan.writes[i].at], &plan.writes[i].value, 4) == 0;
+            memcpy(&undone[plan.writes[i].at], &plan.writes[i].stock, 4);
+        }
+        allIn = allIn && undone == image; // nothing but the seven places changed
+        memory = image, writes = 0, failAt = 3, deadFrom = 99;
+        const RateApplied back = RateApply(plan.writes, plan.count, read, write);
+        const bool putBack = !back.ok && back.failed == 3 && back.done == 3 && back.written && back.restored && memory == image;
+        memory = image, writes = 0, failAt = 3, deadFrom = 5; // the wrong one, then one put back, then no write holds
+        const RateApplied stuck = RateApply(plan.writes, plan.count, read, write);
+        const bool notBack = !stuck.ok && stuck.failed == 3 && stuck.written && !stuck.restored && memory != image;
+        memory = image, writes = 0, failAt = -1, deadFrom = 99;
+        memory[plan.writes[2].at] ^= 1;
+        const std::vector<uint8_t> changed = memory;
+        const RateApplied stale = RateApply(plan.writes, plan.count, read, write);
+        const bool noWrite = !stale.ok && stale.failed == 2 && !stale.written && stale.done == 0 && writes == 0 && memory == changed;
+        memory = image, writes = 0, failAt = 0, deadFrom = 99;
+        const RateApplied first = RateApply(plan.writes, plan.count, read, write);
+        const bool firstBack = !first.ok && first.failed == 0 && first.done == 0 && first.restored && memory == image;
+        Check(allIn && putBack && notBack && noWrite && firstBack,
+              "physics rate writes: all seven go in, each read back, nothing else changes; a place that does not hold the stock bytes first means no write at all; a write that "
+              "reads back wrong is named and it and the earlier ones are stock again; where they cannot be put back the answer says so");
+    }
+    // the world's first step judged
+    Check(RateWorldJudge(kRateDtBits, 2, 2) == kRateWorldGood && RateWorldJudge(kRateDtBits, 4, 4) == kRateWorldGood && RateWorldJudge(kRateDtBits, 4, 2) == kRateBadIter &&
+              RateWorldJudge(0x3C888889, 2, 2) == kRateBadStep && RateWorldJudge(0x3C888889, 4, 2) == (kRateBadStep | kRateBadIter),
+          "physics rate, a world's first step: 1/120 s to the bit with the iterations asked is good; other iterations and another step are each told");
+    // the kept share's old part by the step's seconds (the Reviewer's S4)
+    {
+        const float at60 = CapKeptOldAt(1.0f / 60.0f), at120 = CapKeptOldAt(1.0f / 120.0f);
+        const float twoSteps = CapKeptSmooth(CapKeptSmooth(1.0f, 0.0f, at120), 0.0f, at120), oneStep = CapKeptSmooth(1.0f, 0.0f);
+        Check(RateBitsOf(at60) == RateBitsOf(kCapKeptOld) && fabsf(at120 - 0.894427f) < 1e-5f && fabsf(twoSteps - oneStep) < 1e-6f && oneStep == kCapKeptOld &&
+                  RateBitsOf(CapKeptOldAt(0.0f)) == RateBitsOf(kCapKeptOld) && RateBitsOf(CapKeptOldAt(-1.0f)) == RateBitsOf(kCapKeptOld) &&
+                  RateBitsOf(CapKeptOldAt(NAN)) == RateBitsOf(kCapKeptOld) && RateBitsOf(CapKeptSmooth(0.25f, 0.75f)) == RateBitsOf(CapKeptSmooth(0.25f, 0.75f, kCapKeptOld)),
+              "physics rate, the kept share: its old part is 0.8 to the bit at 1/60 s and for a step that is no time, 0.894 at 1/120 s, and two steps at 1/120 s leave what "
+              "one step at 1/60 s leaves");
+    }
+    // the halving around the drive (the Reviewer's M1), through the hook on the stand-in drive
+    {
+        void (*volatile drive)(void *, float, float) = &FakeDrive;
+        char why[160] = "";
+        const bool hooked = CreepHook((uintptr_t)&FakeDrive, why, sizeof why);
+        static uint8_t a[0x100], b[0x100];
+        uint8_t before[0x100], beforeB[0x100];
+        const auto fill = [](uint8_t *action, float most, float response) {
+            for (int i = 0; i < 0x100; i++) action[i] = (uint8_t)(i * 7 + 3);
+            memcpy(action + 0x4C, &most, 4);
+            memcpy(action + 0xC4, &response, 4);
+        };
+        fill(a, 8.0f, 0.3f);
+        fill(b, 2.0f, 1.0f);
+        memcpy(before, a, 0x100), memcpy(beforeB, b, 0x100);
+        // off (PhysicsRate=60): the hook writes nothing of this, during the call or after it
+        g_driveDoes = &RateSnap;
+        const bool wasOff = !DriveRateOn();
+        drive(a, 0.5f, 1.0f / 60.0f);
+        const bool off = wasOff && memcmp(g_rateDuring, before, 0x100) == 0 && memcmp(a, before, 0x100) == 0 && g_driveAction == a;
+        // on: both figures half during the call, once, and stock after it; nothing else of the action changes
+        DriveRateSet(true, 0, 2);
+        const bool isOn = DriveRateOn();
+        drive(a, 0.5f, 1.0f / 120.0f);
+        uint8_t half[0x100];
+        memcpy(half, before, 0x100);
+        const float halfMost = 4.0f, halfResponse = 0.3f * 0.5f;
+        memcpy(half + 0x4C, &halfMost, 4), memcpy(half + 0xC4, &halfResponse, 4);
+        const bool halved = isOn && memcmp(g_rateDuring, half, 0x100) == 0 && memcmp(a, before, 0x100) == 0 && g_driveDt == 1.0f / 120.0f && g_driveThrottle == 0.5f;
+        drive(a, 0.5f, 1.0f / 120.0f);
+        const bool once = RateF(g_rateDuring, 0xC4) == halfResponse && RateF(g_rateDuring, 0x4C) == halfMost && memcmp(a, before, 0x100) == 0;
+        // two actions in turn
+        drive(b, 0.5f, 1.0f / 120.0f);
+        const bool second = RateF(g_rateDuring, 0x4C) == 1.0f && RateF(g_rateDuring, 0xC4) == 0.5f && memcmp(b, beforeB, 0x100) == 0 && memcmp(a, before, 0x100) == 0;
+        drive(a, 0.5f, 1.0f / 120.0f);
+        const bool turn = RateF(g_rateDuring, 0x4C) == halfMost && memcmp(a, before, 0x100) == 0 && memcmp(b, beforeB, 0x100) == 0;
+        // the game's own write during the call stays
+        g_rateGameWrites = 3.0f;
+        g_driveDoes = &RateSnapAndWrite;
+        drive(a, 0.5f, 1.0f / 120.0f);
+        const bool gameKept = RateF(g_rateDuring, 0x4C) == halfMost && RateF(a, 0x4C) == 3.0f && RateF(a, 0xC4) == 0.3f;
+        // 0, a negative and no number are left alone
+        g_driveDoes = &RateSnap;
+        bool left = true;
+        static const uint32_t kOdd[][2] = { { 0, 0x80000000 }, { 0xBF800000, 0xC1000000 }, { 0x7FC00000, 0x7F800000 }, { 0xFF800000, 0xFFC00000 } };
+        for (const auto &odd : kOdd)
+        {
+            memcpy(a + 0x4C, &odd[0], 4), memcpy(a + 0xC4, &odd[1], 4);
+            uint8_t was[0x100];
+            memcpy(was, a, 0x100);
+            drive(a, 0.5f, 1.0f / 120.0f);
+            left = left && memcmp(g_rateDuring, was, 0x100) == 0 && memcmp(a, was, 0x100) == 0;
+        }
+        // one good and one odd: only the good one is halved
+        fill(a, 0.0f, 0.3f);
+        drive(a, 0.5f, 1.0f / 120.0f);
+        const bool mixed = RateF(g_rateDuring, 0x4C) == 0.0f && RateF(g_rateDuring, 0xC4) == halfResponse && RateF(a, 0xC4) == 0.3f && RateF(a, 0x4C) == 0.0f;
+        Check(hooked && off && halved && once && second && turn && gameKept && left && mixed,
+              "physics rate, the drive's two figures: off, the hook writes nothing (the action compared during the call and after it); on, MaxDeltaAngVel and "
+              "EngineResponsiveness are half during the call, once however many calls, and stock after it with nothing else changed; two actions in turn; a value the game "
+              "writes during the call stays; 0, a negative and no number are left alone");
+        if (!hooked) printf("     %s\n", why);
+
+        // the world's look (the Reviewer's M3): the owner's static, the owner's world, its step and iterations once a world
+        static uint64_t slot;
+        static uint8_t owner[0x40], world1[0x400], world2[0x400];
+        const uint32_t fast = kRateDtBits, stock = 0x3C888889;
+        const int it2 = 2, it4 = 4;
+        memcpy(world1 + kRateWorldDtAt, &fast, 4), memcpy(world1 + kRateWorldIterAt, &it2, 4);
+        memcpy(world2 + kRateWorldDtAt, &stock, 4), memcpy(world2 + kRateWorldIterAt, &it4, 4);
+        const uint64_t firstWorld = (uint64_t)(uintptr_t)world1, nextWorld = (uint64_t)(uintptr_t)world2;
+        fill(a, 8.0f, 0.3f);
+        DriveRateSeen s0 = {}, s1 = {}, s2 = {}, s3 = {}, s4 = {}, s5 = {};
+        DriveRateSeenGet(s0);
+        slot = 0;
+        DriveRateSet(true, (uint64_t)(uintptr_t)&slot, 2);
+        drive(a, 0.5f, 1.0f / 120.0f); // no owner yet
+        DriveRateSeenGet(s1);
+        slot = (uint64_t)(uintptr_t)owner;
+        drive(a, 0.5f, 1.0f / 120.0f); // an owner with no world
+        DriveRateSeenGet(s2);
+        memcpy(owner + kRateOwnerWorld, &firstWorld, 8);
+        drive(a, 0.5f, 1.0f / 120.0f);
+        drive(a, 0.5f, 1.0f / 120.0f); // the same world: not again
+        DriveRateSeenGet(s3);
+        memcpy(owner + kRateOwnerWorld, &nextWorld, 8);
+        drive(a, 0.5f, 1.0f / 60.0f);
+        DriveRateSeenGet(s4);
+        slot = 0x10; // a static that holds no pointer: the read faults, is counted, and the drive runs
+        g_driveAction = nullptr;
+        drive(a, 0.5f, 1.0f / 120.0f);
+        DriveRateSeenGet(s5);
+        const bool ran = g_driveAction == a && RateF(g_rateDuring, 0x4C) == 4.0f;
+        DriveRateSet(false, 0, 0);
+        g_driveDoes = nullptr;
+        drive(a, 0.5f, 1.0f / 60.0f);
+        DriveRateSeen s6 = {};
+        DriveRateSeenGet(s6);
+        Check(s1.worlds == s0.worlds && s2.worlds == s0.worlds && s3.worlds == s0.worlds + 1 && s3.world == firstWorld && s3.dtBits == kRateDtBits && s3.iterations == 2 &&
+                  s3.hookDt == 1.0f / 120.0f && RateWorldJudge(s3.dtBits, s3.iterations, 2) == kRateWorldGood && s4.worlds == s0.worlds + 2 && s4.world == nextWorld &&
+                  s4.iterations == 4 && s4.hookDt == 1.0f / 60.0f && RateWorldJudge(s4.dtBits, s4.iterations, 2) == (kRateBadStep | kRateBadIter) &&
+                  s4.faults == s0.faults && s5.faults == s0.faults + 1 && s5.worlds == s4.worlds && ran && !DriveRateOn() && s6.faults == s5.faults && s6.worlds == s5.worlds,
+              "physics rate, the world: no owner or no world yet is no line; a new world pointer gives its step and iterations once, the same world not again, the next "
+              "world again; a static that cannot be read is counted and the drive still runs halved; off, no look");
+    }
 }
 
 int main()
@@ -5821,6 +6152,7 @@ int main()
               "game words with no truck: the garage's flag and its pointer as read in one line; another pointer or another flag is a change; at most 100 lines");
     }
 
+    PhysicsRateTest();
     RealImageTest();
     GearDisplayTest();
 

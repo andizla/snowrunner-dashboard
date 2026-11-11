@@ -476,6 +476,102 @@ static volatile LONG g_creepHits = 0, g_creepCalls = 0;
 static DriveStepFn volatile g_driveStep = nullptr;
 static CreepSlot g_creepSlots[2];
 static int g_creepNext = 0;
+
+// ---- the physics rate test mode (physics_rate.h) ----
+// g_rateOn 0: the drive is called as it is and nothing below is touched.
+static volatile LONG g_rateOn = 0, g_rateAsked = 0;
+static volatile LONG64 g_rateSlot = 0;
+static uint64_t g_rateWorld = 0; // the physics thread's own: the world of the last look
+static volatile LONG g_rateWorlds = 0, g_rateDtBits = 0, g_rateIter = 0, g_rateHookDt = 0, g_rateFaults = 0;
+static volatile LONG64 g_rateSeenWorld = 0;
+static LONG FloatBits(float f);
+static float BitsFloat(LONG bits);
+static bool RateBefore(void *action, RateHalved &h)
+{
+    __try
+    {
+        RateHalveBefore(action, h);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        h.on[0] = h.on[1] = false;
+        InterlockedIncrement(&g_rateFaults);
+        return false;
+    }
+}
+static void RateAfter(void *action, const RateHalved &h)
+{
+    __try
+    {
+        RateHalveAfter(action, h);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        InterlockedIncrement(&g_rateFaults);
+    }
+}
+// The game's own drive. In the test mode with the action's MaxDeltaAngVel and EngineResponsiveness halved around it
+// (the Reviewer's M1): the drive and what it calls (the torque hook's CutWheelsRead among it) read the halves, and
+// the game's values stand as they were once it returns. The drive itself runs outside any guard, as before.
+static void DriveCall(void *action, float throttle, float dt)
+{
+    if (!g_rateOn)
+    {
+        ((DriveFn)g_creepWay)(action, throttle, dt);
+        return;
+    }
+    RateHalved h = {};
+    const bool read = RateBefore(action, h);
+    ((DriveFn)g_creepWay)(action, throttle, dt);
+    if (read) RateAfter(action, h);
+}
+// The world of this call (the Reviewer's M3): the owner's static, the owner's world; at a new world pointer its step's
+// seconds and its solver's iterations are kept for the mod's thread, which judges and logs them. Two reads a call.
+static void RateWorldLook(float dt)
+{
+    const uint64_t slot = (uint64_t)g_rateSlot;
+    if (!slot) return;
+    __try
+    {
+        const uint64_t owner = *(const volatile uint64_t *)(uintptr_t)slot;
+        if (!owner) return;
+        const uint64_t world = *(const volatile uint64_t *)(uintptr_t)(owner + kRateOwnerWorld);
+        if (!world || world == g_rateWorld) return;
+        const uint32_t bits = *(const volatile uint32_t *)(uintptr_t)(world + kRateWorldDtAt);
+        const int iterations = *(const volatile int *)(uintptr_t)(world + kRateWorldIterAt);
+        g_rateWorld = world;
+        InterlockedExchange64(&g_rateSeenWorld, (LONG64)world);
+        InterlockedExchange(&g_rateDtBits, (LONG)bits);
+        InterlockedExchange(&g_rateIter, iterations);
+        InterlockedExchange(&g_rateHookDt, FloatBits(dt));
+        InterlockedIncrement(&g_rateWorlds); // last: the mod's thread reads the rest once this has grown
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        InterlockedIncrement(&g_rateFaults);
+    }
+}
+void DriveRateSet(bool on, uint64_t ownerSlot, int iterations)
+{
+    InterlockedExchange64(&g_rateSlot, (LONG64)ownerSlot);
+    InterlockedExchange(&g_rateAsked, iterations);
+    InterlockedExchange(&g_rateOn, on ? 1 : 0);
+}
+bool DriveRateOn() { return g_rateOn != 0; }
+void DriveRateSeenGet(DriveRateSeen &out)
+{
+    for (int look = 0; look < 4; look++)
+    {
+        out.worlds = g_rateWorlds;
+        out.world = (uint64_t)g_rateSeenWorld;
+        out.dtBits = (uint32_t)g_rateDtBits;
+        out.iterations = g_rateIter;
+        out.hookDt = BitsFloat(g_rateHookDt);
+        out.faults = g_rateFaults;
+        if (out.worlds == g_rateWorlds) return;
+    }
+}
 static bool g_creepHooked = false;
 
 // Each thread the drive was called on, kept in a slot of its own (the Reviewer's addendum 1 to
@@ -793,7 +889,7 @@ static CapAround CapStepAround(const TorqueCutSlot *cut, void *action, float thr
     InterlockedExchange64(&g_capKeptVehicle, (LONG64)vehicle);
     InterlockedExchange(&g_capArmedNow, armed ? 1 : 0);
     InterlockedExchange(&g_capTruck, 0x7FC00000);
-    ((DriveFn)g_creepWay)(action, throttle, dt);
+    DriveCall(action, throttle, dt);
     const float truck = BitsFloat(g_capTruck);
     // in Open the ceiling is the limit of the driven wheels' mean, else of each wheel
     const float ceiling = CapCeiling(cap, cut->map.top, cut->map.governTo, truck);
@@ -853,7 +949,7 @@ static CapAround CapStepAround(const TorqueCutSlot *cut, void *action, float thr
     CapMost(g_capExcessMost, o.excess);
     CapAdd(g_capSpreadBits, o.spread);
     InterlockedExchange(&g_capClampedNow, o.clamps);
-    g_capKept = CapKeptSmooth(g_capKept, o.kept);
+    g_capKept = CapKeptSmooth(g_capKept, o.kept, g_rateOn ? CapKeptOldAt(dt) : kCapKeptOld); // S4: by the clock at 120
     InterlockedExchange(&g_capKeptBits, FloatBits(g_capKept));
     out.clamps = o.clamps;
     out.kept = o.kept;
@@ -996,6 +1092,7 @@ static void PushTake(PushRead &r, float kAll, float kCap)
 static void CreepDrive(void *action, float throttle, float dt)
 {
     InterlockedIncrement(&g_creepCalls);
+    if (g_rateOn) RateWorldLook(dt);
     const LONG thread = (LONG)GetCurrentThreadId();
     if (thread != g_driveThread) DriveThreadNote(thread);
     g_driveThread = thread;
@@ -1054,7 +1151,7 @@ static void CreepDrive(void *action, float throttle, float dt)
         static CapTruckRead lr;
         const bool lockRead = lockK > 0.0f && CapReadBefore((const void *)(uintptr_t)lock->vehicle, action, lr, lock->cylinderVtable);
         if (lockK > 0.0f && !lockRead) InterlockedIncrement(&g_lockFaults);
-        ((DriveFn)g_creepWay)(action, throttle, dt);
+        DriveCall(action, throttle, dt);
         if (lockRead)
         {
             float post[kCapWheels], locked[kCapWheels];

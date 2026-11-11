@@ -124,6 +124,8 @@ The Gameplay tab of the NEXT GEN menu edits every setting while you play, in eig
 | Pad buttons that do the same | Controls: Pad toggle | `PadToggle`, as `LB+DPadUp` | None |
 | Demo values whenever no truck is driven, in menus and on loading screens too | Mod work: Demo values | `Demo` | off |
 | A log of the values read from the game | Mod work: Probe log | `Probe` | off |
+| A test: the physics stepped 120 times a second in place of 60. Single player only. Runs after a restart | Mod work: Test, Physics rate | `PhysicsRate`: 60 or 120 | 60 |
+| With `PhysicsRate=120`: the solver iterations a step. 0 is the mod choice, 2 | ini only | `PhysicsIterations`: 0, 2 or 4 | 0 |
 | How many of the last starts' logs `Gauges\logs` keeps, at most 500 MB of them; 0 keeps all | ini only | `KeepLogs` | 20 |
 | The tab the Gameplay tab opens on: the one open last | (the tab picked) | `Tab`: display, engine, gearbox, power, suspension, controls, sounds or modwork | display |
 
@@ -291,6 +293,16 @@ The mod does it through the game's torque factor, the share of its torque the ga
 
 The Power tab has a pull test, for the engine's torque the mod will hand to the game next. Press its Start button, then on a long flat road drive in the fourth gear or higher and floor the pedal for seven seconds. The mod holds the gear, changes the game's torque factor (what it leaves a damaged engine) for a second at a time (halved, raised by half, at three quarters) and measures how hard the truck pulls, then puts the factor back. Lifting the foot, braking or another gear stops it. The numbers go into `Gauges.log`.
 
+## Physics rate, a test
+
+`PhysicsRate=120` (Mod work, Test: Physics rate) steps the physics of the game 120 times a second in place of 60. It is a test and is off by default. It is for single player only: nothing checks that every player in co-op runs the same rate. The key is read once as the game starts, so a change on the tab is saved and runs after a restart. The row says which rate is running.
+
+At 120 the mod halves what the drive adds to the wheels each step, so a truck pulls and revs as it does at 60. Not corrected yet: the brakes, the forces of water, mud and snow, and some smoothing of the wheels. Expect those to feel different. The physics costs more processor time, most at a low frame rate. If one place in the game code is not found, nothing is changed and `Gauges.log` says which.
+
+`PhysicsIterations` (ini only, with 120) sets the solver iterations a step: 0 is the mod choice (2), or 2 or 4. At 4 the suspension is not corrected and is likely far stiffer. It is there for a measurement.
+
+The idea of a higher physics rate, and the first map of what has to be scaled, come from True 240Hz Physics Patch by alounana on mod.io.
+
 ## With Next Gen Tire Inflation
 
 Next Gen Tire Inflation (the SnowRunner Tire Inflation System) and this mod are made to run side by side, each with its own ini and log, their tabs in the one NEXT GEN menu. The same `version.dll` loads both `.asi` files. This mod does not touch the pad's buttons, so that mod's panel keeps working as before.
@@ -355,6 +367,8 @@ GNU General Public License v3.0 (GPL-3.0-only), see `LICENSE`.
 The cluster and the menu are drawn with Dear ImGui by Omar Cornut, and their text is baked with stb_truetype by Sean Barrett. ReShade by Patrick Mours (crosire), which the release brings without its start banner, hands the mod the game's swap chains through its add-on API. The game's gearbox functions are hooked through Microsoft Detours. Their notices are in `THIRD_PARTY_NOTICES.md`. The mod's gearbox takes its method from drafty46's Snowrunner Manual Transmission (SMT, MIT) and its knowledge of the game's gearbox functions from Ferrster's reverse engineering. The loader in `tools` is the one of the SnowRunner Tire Inflation System.
 
 `SOUND_CREDITS.md` says where each sound comes from.
+
+The idea of a higher physics rate, and the first map of what has to be scaled, come from True 240Hz Physics Patch by alounana on mod.io.
 
 A big thank you to the testers who gave their time to the early builds: Milos_Mk6, Globalhacker and Zenosxy. Your runs, logs, ideas and patience shaped this release, and it would not be what it is without you.
 

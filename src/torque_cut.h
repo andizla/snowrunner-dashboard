@@ -656,11 +656,21 @@ inline bool CapArmStep(CapArm &a, int gear, float mean, bool ok, float cap)
     return a.armed;
 }
 
-// The kept share smoothed over steps, kCapKeptOld old; a value that is no number counts as 1.
-inline float CapKeptSmooth(float before, float now)
+// The kept share smoothed over steps, old the old part (kCapKeptOld a step of 1/60 s); a value that is no number
+// counts as 1.
+inline float CapKeptSmooth(float before, float now, float old = kCapKeptOld)
 {
     const float b = isfinite(before) ? CutClamp01(before) : 1.0f, k = isfinite(now) ? CutClamp01(now) : 1.0f;
-    return kCapKeptOld * b + (1.0f - kCapKeptOld) * k;
+    return old * b + (1.0f - old) * k;
+}
+// The old part for a step of dt seconds, so that the share settles as fast by the clock as at 1/60 s: kCapKeptOld to
+// the power dt x 60 (0.894 at 1/120 s). A step of 1/60 s, or one that is no time, gives kCapKeptOld itself. Only the
+// physics rate test mode asks (physics_rate.h): at the game's own rate the hook hands kCapKeptOld on as it is.
+inline float CapKeptOldAt(float dt)
+{
+    if (!isfinite(dt) || !(dt > 0.0f) || dt == 1.0f / 60.0f) return kCapKeptOld;
+    const float steps = dt * 60.0f;
+    return powf(kCapKeptOld, steps < 0.25f ? 0.25f : steps > 4.0f ? 4.0f : steps);
 }
 
 // ---- the diff lock's bite (BRIEF_diff_lock_bite.md, the Reviewer's addendum and the lead's of 14:09) ----
