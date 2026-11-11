@@ -19,6 +19,10 @@ out\test\models_test.exe || set failed=1
 out\test\input_test.exe || set failed=1
 out\test\crt_test.exe || set failed=1
 out\test\truck_id_test.exe || set failed=1
+rem the overlay's start against the swap chain, each case a run of its own (BRIEF_overlay_late_hook.md)
+out\test\late_test.exe late || set failed=1
+out\test\late_test.exe order || set failed=1
+out\test\late_test.exe handover || set failed=1
 rem the player texts carry no apostrophe (BRIEF_texts_no_apostrophes.md): the tabs, the tips, the boxes and the panel
 python -I test\player_texts.py src\settings_page.h src\gauge_draw.h src\gauge_overlay.cpp src\ng_overlay.cpp || set failed=1
 if not exist out\test\gauge_preview.exe goto nopreview

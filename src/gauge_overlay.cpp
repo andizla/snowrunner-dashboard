@@ -297,7 +297,23 @@ static void OnPage()
     if (act & kPageHearOil) SoundHear(kSoundOil);
 }
 
-bool OverlayInit(HMODULE)
+// The overlay's hooks, first thing at the mod's start (BRIEF_overlay_late_hook.md): the game can make its swap chain
+// within a second. Nothing is drawn before OverlayInit says the start is done.
+bool OverlayHooks()
+{
+    NgClient client = {};
+    client.tab = "Gameplay";
+    client.version = GAUGES_VERSION;
+    client.order = 1;
+    client.log = GaugeLog;
+    client.frame = OnFrame;
+    client.page = OnPage;
+    client.deviceGone = FreeFontTexture;
+    client.waitReady = true;
+    return NgOverlayStart(client);
+}
+
+void OverlayInit(HMODULE)
 {
     // the game's font files sit next to the exe
     wchar_t dir[MAX_PATH] = {};
@@ -308,13 +324,5 @@ bool OverlayInit(HMODULE)
     g_warnFontFiles = slash && FontsLoad(g_warnFonts, dir, kWarnStyles, kWsStyleCount);
     g_signFontFiles = slash && FontsLoad(g_signFonts, dir, kWarnStyles, kWsStyleCount);
     GaugeLog(g_fontFiles ? L"overlay: game font read (TT Lakes Compressed)" : L"overlay: game font not found, Dear ImGui's font stands in");
-    NgClient client = {};
-    client.tab = "Gameplay";
-    client.version = GAUGES_VERSION;
-    client.order = 1;
-    client.log = GaugeLog;
-    client.frame = OnFrame;
-    client.page = OnPage;
-    client.deviceGone = FreeFontTexture;
-    return NgOverlayStart(client);
+    NgOverlayReady();
 }

@@ -616,7 +616,8 @@ void DamageTestAsk(int points);             // the tab's test buttons: the mod a
 void ViewGet(GaugeView &out);               // what to draw (any thread)
 void SoundHear(int tier);                   // plays the turbo's sound of that strength (kTurboHigh ..) or the oil warning (kSoundOil) as loud as the settings have it (the tab's buttons)
 void GaugeLog(const wchar_t *fmt, ...);     // a line in Gauges.log (any thread)
-bool OverlayInit(HMODULE self);             // starts the mod's own overlay (the cluster and the Gameplay tab); false = it did not start
+bool OverlayHooks();                        // the overlay's hooks on the game's swap chains, first at the start; false = it did not start
+void OverlayInit(HMODULE self);             // the overlay's fonts, then the word that frames may be drawn
 uint32_t PadButtons();                      // the buttons of all connected pads together, 0 without a pad
 
 extern volatile LONG g_pageCapturing; // GetTickCount() of the last frame the tab waited for pad buttons, 0 = none: the mod ignores the pad then

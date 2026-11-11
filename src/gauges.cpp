@@ -7917,10 +7917,13 @@ static DWORD WINAPI Run(void *)
         g_addon ? L"by ReShade as Gauges.addon64, the name from before 0.16 (the mod needs no ReShade now: keep it as Gauges.asi)" : L"by an ASI loader");
     LogKeptSay();
     CrashLineSet(); // before the overlay and the places' looks, which can take 60 s (BRIEF_crash_line_early.md)
+    // the hooks on the game's swap chains before anything that takes time: the game can make its chain within a second
+    // (BRIEF_overlay_late_hook.md). Nothing is drawn until OverlayInit below.
+    g_overlayOk = OverlayHooks();
     LogGameFolder();
     RateStart(); // the physics rate test mode: at 60 one key read, nothing else
     SettingsDefaults(g_set); // what the tab shows until the ini is read
-    g_overlayOk = OverlayInit(g_self);
+    OverlayInit(g_self);
     g_exeSize = ImageSize(); // where the exe ends, which the engine damage write keeps out of
     // the game's statics: known on the build the mod was made on, found by the code that uses them on any other
     uint64_t clockPlace = 0;
@@ -7987,7 +7990,7 @@ static DWORD WINAPI Run(void *)
     BindingsLog(binds);
     InputDevicesStart([](const wchar_t *line) { Log(L"%s", line); }, PadButtons);
     if (s.probe) PlacesHarvest(stamp);
-    Log(g_overlayOk ? L"overlay: the cluster and the Gameplay tab of the NEXT GEN menu are drawn by the mod's own overlay"
+    Log(g_overlayOk ? L"overlay: the overlay is set up for the cluster and the Gameplay tab of the NEXT GEN menu; the line Present hooked says when a swap chain is taken"
                     : L"overlay: the overlay did not start (the lines above say why), so nothing is drawn");
     SoundStart(g_dir); // the sounds are read or made now; the audio device is only taken while one plays
     // the block other mods read the mod's state from (state.h), written at the end of every pass
@@ -9313,7 +9316,8 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
 // defaults, values out of range are held to it, the scales fit each other, a truck's own scales come and go with its
 // section, and the maps' sections are written once and read. With an ini as its argument, a copy of that file must
 // read back unchanged after a write.
-bool OverlayInit(HMODULE) { return false; }
+bool OverlayHooks() { return false; }
+void OverlayInit(HMODULE) {}
 volatile LONG g_pageCapturing = 0, g_modOff = 0;
 
 static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)

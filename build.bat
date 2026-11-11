@@ -47,6 +47,8 @@ cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I src /Fo:out\obj\ /Fe:out\test\
 rem the crash line's C runtime handlers (src\crt_line.h): an invalid parameter and abort, each in a child process
 cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I src /Fo:out\obj\crt_test.obj /Fe:out\test\crt_test.exe test\crt_test.cpp || goto fail
 cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I src /Fo:out\obj\truck_id_test.obj /Fe:out\test\truck_id_test.exe test\truck_id_test.cpp || goto fail
+rem the late start test: the overlay against a swap chain made before and after its hooks (test\late_test.cpp)
+cl /nologo /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /I deps\imgui /I src /Fo:out\obj\late_test.obj /Fe:out\test\late_test.exe test\late_test.cpp %IMGUI_OBJ% /link d3d11.lib dxgi.lib d3dcompiler.lib ole32.lib user32.lib || goto fail
 rem the loader
 ml64 /nologo /c /Fo out\obj\version_stubs.obj tools\version_stubs.asm || goto fail
 cl /nologo /c /O2 /W4 /EHsc /std:c++17 /utf-8 /MT /Fo:out\obj\loader.obj tools\loader.cpp || goto fail
