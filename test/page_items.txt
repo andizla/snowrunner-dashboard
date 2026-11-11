@@ -272,6 +272,7 @@ Set###odosetbutton
 ##dampingfront
 ##dampingrear
 ##difflockbite
+##lowrangeslip
 ##drivedisplay
 ##overrevdamage
 ##positionsbygearbox

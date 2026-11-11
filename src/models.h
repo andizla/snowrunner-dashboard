@@ -160,15 +160,17 @@ inline bool GearTopShareUsable(float share) { return isfinite(share) && share >=
 // name comes with other gear speeds on another truck, and a truck's gear speeds drift by a few percent within a drive
 // (BRIEF_gear_tops_per_truck.md: 2 a + 5 of one gear was 21.0 on one truck and 10.6 on another of the same gearbox's
 // name). The high gear's a + 2 holds (an HX 520 sat at 15.8 to 16.3 rad/s in H against 16 in 11 floored plateaus).
-// The low range is the first gear held to a share of that by the power factor.
-inline float TruckGearTop(const TruckRaw &t, int gear)
+// The low range is the first gear held to a share of that by the power factor. TruckGearTopAt: the same at a power
+// factor given, for the top of a low gear the truck is not in (the low range's wider wheel cap).
+inline float TruckGearTopAt(const TruckRaw &t, int gear, float power)
 {
     float top = TruckGearFormulaTop(t, gear);
     if (!(top > 0.0f)) return 0.0f;
     if (gear >= 1 && gear <= TruckTopGear(t) && gear < kMaxGears && GearTopShareUsable(t.gearTop[gear])) top *= t.gearTop[gear];
-    if (gear == 1 && !t.automatic) top = 1.0f + (top - 1.0f) * SettingsRange(t.powerFactor, 0.0f, 1.0f);
+    if (gear == 1 && !t.automatic) top = 1.0f + (top - 1.0f) * SettingsRange(power, 0.0f, 1.0f);
     return top;
 }
+inline float TruckGearTop(const TruckRaw &t, int gear) { return TruckGearTopAt(t, gear, t.powerFactor); }
 
 // How far the pedal is down, 0 to 1. The game holds forwards as the negative side; an automatic in reverse drives on
 // the positive side, and the other side is the brake.

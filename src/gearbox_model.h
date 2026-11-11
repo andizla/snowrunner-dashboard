@@ -32,6 +32,14 @@ inline int GearboxPosHasBit(int pos)
 // SetPowerFactor 0.450 in L; A, H, N and R 1.000). The d110 has no L- or L+, so 0.2 and 1.0 stand until a heavy truck's
 // drive through L- and L+ with Gearbox=0 confirms them in the probe's SetPowerFactor line (review 7, R8).
 static const float kLowRangePower[3] = { 0.20f, 0.45f, 1.00f };
+// The power factor of the highest low gear the fitted gearbox has (missing: the kHas... bits it lacks), 0 with none.
+inline float GearboxLowMostPower(int missing)
+{
+    static const int has[3] = { 4, 1, 2 }; // kHasLowMinus, kHasL, kHasLowPlus
+    for (int i = 2; i >= 0; i--)
+        if (!(missing & has[i])) return kLowRangePower[i];
+    return 0.0f;
+}
 static const float kLowMinusUnder = 0.325f, kLowUnder = 0.725f; // a factor in gear 1 under these is L-, and L (truck.h)
 // The road load learns gear 1 only at the plain power: L and L- are the game's gear 1 at 0.45 and 0.20, with another
 // pull and top, and in gear 1's sums they would skew its a_base and, through the fold, K (review F1). The test
@@ -422,6 +430,20 @@ inline const char *GearboxPosName(int pos)
 // low (the user, 2026-11-10: "L gears and R"). Not a numbered gear held by hand, where the governor on the truck's speed
 // and the engine curve are the whole limit. Every held gear, as the Reviewer's part 3 had it, would add pos == kPosGear.
 inline bool GearboxPosCapped(int pos) { return pos == kPosR || (pos >= kPosLowMinus && pos <= kPosLowPlus); }
+
+// The wheel cap of L- and L, widened (BRIEF_low_range_pull.md, M1). A low gear's pull comes from its wheels' slip, and a
+// cap at half again a top of 2 rad/s leaves L- a third of the slip L+ has, so the deepest gear pulled the least. own:
+// the cap by the gear's own top; most: the cap by the top of the highest low gear the gearbox has; share: LowRangeSlip,
+// the percent of the way from own to most. 0 is own to the last bit. Never over most, so a free wheel runs no faster
+// than it may in L+. Any other position, one low gear, or a most that is no number or not over own: own.
+inline float LowRangeCap(int pos, float own, float most, int share)
+{
+    if (!(own > 0.0f) || !isfinite(own)) return 0.0f;
+    if (pos != kPosLowMinus && pos != kPosLow) return own;
+    if (share <= 0 || !isfinite(most) || !(most > own)) return own;
+    if (share >= 100) return most;
+    return own + (most - own) * (float)share / 100.0f;
+}
 
 // The letter the cluster shows for it ("" for a numbered gear, which shows its number).
 inline const char *GearboxPosLetter(int pos)

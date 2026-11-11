@@ -240,6 +240,19 @@ inline void RollMeanAdd(RollMean &m, float r)
     if (isfinite(r) && r > 0.0f) m.inv += 1.0f / r, m.n++;
 }
 inline float RollMeanOf(const RollMean &m) { return m.n && m.inv > 0.0f ? (float)m.n / m.inv : NAN; }
+// The truck's own speed in the wheels' measure from its forward speed (m/s) and the rolling radii of the wheels read
+// whole (ok), in the gear's direction (sign), as CutSpeedsTruck has it. For a step the cut's hook gave no truck speed
+// to (the lock without the cut). No number where the forward speed is none or no radius is usable.
+inline float TruckSpeedInWheels(float forward, const float *radius, const bool *ok, int n, float sign)
+{
+    RollMean m = {};
+    for (int i = 0; i < n; i++)
+        if (ok[i]) RollMeanAdd(m, radius[i]);
+    const float r = RollMeanOf(m);
+    if (!isfinite(forward) || !(r > 0.0f) || !isfinite(r)) return NAN;
+    const float s = forward / r * (sign < 0.0f ? -1.0f : 1.0f);
+    return isfinite(s) ? s : NAN;
+}
 
 // ---- the differential's type (BRIEF_diff_types.md and the Reviewer's addendum of 2026-11-11) ----
 // DiffType, a truck's own setting: Auto goes by the truck's lock kind (vehicle + 0xE8: 2, a lock always on, is Locked; 0, a
@@ -700,6 +713,7 @@ struct LockStepOut
     float c, r, over;                // LockStepHeld's: the weighted mean before the drive, the impulse handed to the wheels on the ground, the fastest wheel after the drive over c
     float j;                         // LockStepHeld's: the drive's impulse, the sum of (post - pre) x inertia (0 where it was not worked out)
     int under, bounded;              // wheels written under 0, and wheels LockBound's rules moved (every used wheel where the sum was taken down)
+    int breach;                      // wheels written under 0 and under what the drive left them while the drive's impulse is over 0: LockBound forbids it, so 0
 };
 // The bounds on what the lock writes while the drive's impulse is over 0 (BRIEF_lock_wheels_backward.md, M2). The lock's
 // law deals the drive's whole impulse out anew by contact share, so a wheel with little load is written near C, under
@@ -851,6 +865,7 @@ inline LockStepOut LockStepHeld(const float *pre, const float *post, const float
             firstAir = false;
             if (o.final[i] != post[i]) o.wrote = true;
             if (o.final[i] != post[i] && o.final[i] < 0.0f) o.under++;
+            if (o.j > 0.0f && o.final[i] < fminf(post[i], 0.0f)) o.breach++;
         }
         o.spreadAfter = hi - lo;
         return o;
@@ -892,6 +907,7 @@ inline LockStepOut LockStepHeld(const float *pre, const float *post, const float
         first = false;
         if (final[i] != post[i]) o.wrote = true;
         if (final[i] != post[i] && final[i] < 0.0f) o.under++;
+        if (j > 0.0f && final[i] < fminf(post[i], 0.0f)) o.breach++;
     }
     o.spreadAfter = hi - lo;
     o.over = postHi - c;

@@ -122,6 +122,7 @@ struct GaugeSettings
     bool modEngineSpeed;     // ModEngineSpeed: with Powertrain, the game's engine speed (its tachometer, sound and effects) is the mod engine's (gearbox_hooks.h, EngineSpeedHook); on by default
     float engineSpeedTop;    // EngineSpeedTop: the mod engine's speed the game reads as its 1, as a share of the redline, 0.5 to 1.5 (1: the redline)
     int diffLockBite;        // DiffLockBite: with Powertrain, how firmly the diff lock ties the driven wheels together, 0 (the game's lock) to 100 (one shaft), 0
+    int lowRangeSlip;        // LowRangeSlip: with the torque cut in L- and L, the wheel cap is the gear's own plus this percent of the way to the cap of the highest low gear the gearbox has (BRIEF_low_range_pull.md), 0 to 100, 100
     int pushShare;           // PushShare: with Powertrain, the share in percent of the game's chassis push at speed that carries the mod's surplus over its own pull (BRIEF_chassis_push.md), 0 to 100
     int diffType;            // DiffType: the differential of a truck where the torque cut acts, 0 Auto (by the lock kind at vehicle + 0xE8), 1 Open, 2 Limited slip, 3 Locked (torque_cut.h, kDiff...); a truck file may hold its own
     int wheelCap;            // WheelCap: with the torque cut in L-, L, L+ and R, no driven wheel runs faster than this percent of the gear's top (BRIEF_drivetrain_2c_wheel_cap.md), 110 to 200, 150; no box, for the A/B
@@ -218,6 +219,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.modEngineSpeed = true; // on by default (BRIEF_drivetrain_1_engine_speed.md); an explicit 0 stays 0
     s.wheelCap = 150; // kCapDefault (BRIEF_drivetrain_2c_wheel_cap.md with M5)
     s.pushShare = 0; // the surplus taken back (BRIEF_chassis_push.md)
+    s.lowRangeSlip = 100; // L- and L with the slip room of L+ (BRIEF_low_range_pull.md, the lead)
     s.diffLockBite = 0; // the game's own lock until the drive picks a default (BRIEF_diff_lock_bite.md)
     s.diffType = 0; // Auto (BRIEF_diff_types.md)
     s.engineSpeedTop = 1.0f;
@@ -367,6 +369,7 @@ inline void SettingsClamp(GaugeSettings &s)
     s.engineBrake = isfinite(s.engineBrake) ? SettingsRange(s.engineBrake, 0.0f, 30.0f) : 15.0f;
     s.wheelCap = s.wheelCap < 110 ? 110 : s.wheelCap > 200 ? 200 : s.wheelCap;
     s.pushShare = s.pushShare < 0 ? 0 : s.pushShare > 100 ? 100 : s.pushShare;
+    s.lowRangeSlip = s.lowRangeSlip < 0 ? 0 : s.lowRangeSlip > 100 ? 100 : s.lowRangeSlip;
     s.diffLockBite = s.diffLockBite < 0 ? 0 : s.diffLockBite > 100 ? 100 : s.diffLockBite;
     s.diffType = s.diffType < 0 || s.diffType > 3 ? 0 : s.diffType;
     s.physicsRate = s.physicsRate == 120 ? 120 : 60;

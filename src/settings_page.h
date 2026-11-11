@@ -875,7 +875,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     {
         PageLabel("Real engine", labelX);
         changed(ImGui::Checkbox("##powertrain", &s.powertrain));
-        PageTip("The truck pulls with the mod engine: its torque curve at the engine speed shown, and the mod automatic shifts by it. In a gear held by hand the truck pulls with the mod engine alone: no cut at the top, engine braking with the foot off. The engine holds the truck at the top speed of the gear. In L-, L, L+ and R no driven wheel runs more than half again past it. The pedal is the fuel, as the game has it. Off by default.");
+        PageTip("The truck pulls with the mod engine: its torque curve at the engine speed shown, and the mod automatic shifts by it. In a gear held by hand the truck pulls with the mod engine alone: no cut at the top, engine braking with the foot off. The engine holds the truck at the top speed of the gear. In L+ and R no driven wheel runs more than half again past it. L and L- get the room of L+ (Low range slip). The pedal is the fuel, as the game has it. Off by default.");
         if (s.powertrain)
         {
             PageLabel("Engine share", labelX);
@@ -893,6 +893,10 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             ImGui::SetNextItemWidth(w);
             changed(ImGui::SliderInt("##difflockbite", &s.diffLockBite, 0, 100, s.diffLockBite > 0 ? "%d %%" : "game lock", ImGuiSliderFlags_AlwaysClamp));
             PageTip("How firmly the diff lock ties the driven wheels together. 0 leaves the game lock as it is. 100 turns them as one shaft. A locked truck then scrubs in a turn on hard ground, as a real one does. It acts on a truck whose lock is always on too.");
+            PageLabel("Low range slip", labelX);
+            ImGui::SetNextItemWidth(w);
+            changed(ImGui::SliderInt("##lowrangeslip", &s.lowRangeSlip, 0, 100, "%d %%", ImGuiSliderFlags_AlwaysClamp));
+            PageTip("How much wheel slip L and L- may use. 100 gives them the same room as L+. 0 holds each wheel near the top speed of its gear.");
             PageLabel("Drive display", labelX);
             changed(ImGui::Checkbox("##drivedisplay", &s.driveDisplay));
             PageTip("Each wheel: its spin against the truck speed and its share of the drive.");

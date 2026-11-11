@@ -757,6 +757,36 @@ int main(int argc, char **argv)
     const float lowMinus = TruckGearTop(t, 1);
     t.automatic = 1;
     Check(Near(low, 5.5f, 0.001f) && Near(lowMinus, 3.0f, 0.001f) && Near(TruckGearTop(t, 1), 11.0f, 0.001f), "gears: the low range holds the first gear to a share, an automatic's first gear runs out");
+    // the low range's wider wheel cap (BRIEF_low_range_pull.md, M1)
+    {
+        TruckRaw lr = Truck();
+        lr.powerFactor = 0.2f;
+        const float own = 1.5f * TruckGearTop(lr, 1), mid = 1.5f * TruckGearTopAt(lr, 1, 0.45f), most = 1.5f * TruckGearTopAt(lr, 1, 1.0f);
+        const bool tops = Near(TruckGearTopAt(lr, 1, 0.2f), 3.0f, 0.001f) && Near(TruckGearTopAt(lr, 1, 0.45f), 5.5f, 0.001f) && Near(TruckGearTopAt(lr, 1, 1.0f), 11.0f, 0.001f) &&
+                          TruckGearTopAt(lr, 1, lr.powerFactor) == TruckGearTop(lr, 1) && TruckGearTopAt(lr, 2, 0.2f) == TruckGearTop(lr, 2);
+        const bool power = GearboxLowMostPower(0) == 1.0f && GearboxLowMostPower(kHasLowPlus) == 0.45f && GearboxLowMostPower(kHasLowPlus | kHasL) == 0.2f &&
+                           GearboxLowMostPower(kHasLowPlus | kHasL | kHasLowMinus) == 0.0f && GearboxLowMostPower(kHasLowMinus | kHasL) == 1.0f && GearboxLowMostPower(kHasH) == 1.0f;
+        const bool none = LowRangeCap(kPosLowMinus, own, most, 0) == own && LowRangeCap(kPosLow, mid, most, 0) == mid && LowRangeCap(kPosLowMinus, own, most, -5) == own;
+        const bool whole = LowRangeCap(kPosLowMinus, own, most, 100) == most && LowRangeCap(kPosLow, mid, most, 100) == most && LowRangeCap(kPosLowMinus, own, most, 150) == most;
+        const bool half = Near(LowRangeCap(kPosLowMinus, own, most, 50), 0.5f * (own + most), 1e-5f) && Near(LowRangeCap(kPosLow, mid, most, 50), 0.5f * (mid + most), 1e-5f) &&
+                          Near(LowRangeCap(kPosLowMinus, own, most, 25), own + 0.25f * (most - own), 1e-5f);
+        const bool others = LowRangeCap(kPosLowPlus, most, 2.0f * most, 100) == most && LowRangeCap(kPosR, own, most, 100) == own && LowRangeCap(kPosGear, own, most, 100) == own &&
+                            LowRangeCap(kPosH, own, most, 100) == own && LowRangeCap(kPosA, own, most, 100) == own && LowRangeCap(kPosN, own, most, 100) == own;
+        // one low gear (the most is its own), a top that is no number or none: the gear's own cap
+        const bool lone = LowRangeCap(kPosLow, mid, mid, 100) == mid && LowRangeCap(kPosLowMinus, own, NAN, 100) == own && LowRangeCap(kPosLowMinus, own, INFINITY, 100) == own &&
+                          LowRangeCap(kPosLowMinus, own, 0.0f, 100) == own && LowRangeCap(kPosLowMinus, own, 0.5f * own, 100) == own && LowRangeCap(kPosLowMinus, 0.0f, most, 100) == 0.0f &&
+                          LowRangeCap(kPosLowMinus, NAN, most, 100) == 0.0f;
+        // the ceiling with the wider cap: the governor's end of the gear's own top once the truck is there, and with no truck speed
+        const float top = TruckGearTop(lr, 1), to = 1.1f, end = to * top;
+        const bool ceiling = CapCeiling(most, top, to, 0.0f) == most && CapCeiling(most, top, to, kCapCeilFrom * top) == most && Near(CapCeiling(most, top, to, end), end, 1e-5f) &&
+                             Near(CapCeiling(most, top, to, 3.0f * end), end, 1e-5f) && Near(CapCeiling(most, top, to, NAN), end, 1e-5f) &&
+                             CapCeiling(most, top, to, 0.9f * top) < most && CapCeiling(most, top, to, 0.9f * top) > end;
+        Check(tops && power && none && whole && half && others && lone && ceiling,
+              "low range slip: the top of a low gear at a power factor given; the highest low gear a gearbox has; at 0 the gear's own cap to the last bit, at 100 the cap of the "
+              "highest low gear in L- and L, at 50 half way; L+, R and every other position their own; one low gear or a top that is no number the gear's own; the ceiling "
+              "with the wider cap ends at the governor's end of the gear's own top, and there with no truck speed");
+        if (!(tops && power && none && whole && half && others && lone && ceiling)) printf("     %d %d %d %d %d %d %d %d\n", tops, power, none, whole, half, others, lone, ceiling);
+    }
 
     // the driven wheels
     t = Truck();

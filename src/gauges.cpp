@@ -815,6 +815,7 @@ static void WriteIni(const GaugeSettings &s)
     WritePrivateProfileStringW(kIniSection, L"CrawlHold", nullptr, ini.c_str()); // the Crawl hold went with the torque cut: its key dropped
     num(L"EngineBrake", s.engineBrake);
     whole(L"WheelCap", s.wheelCap);
+    whole(L"LowRangeSlip", s.lowRangeSlip);
     whole(L"PushShare", s.pushShare);
     whole(L"DiffLockBite", s.diffLockBite);
     whole(L"DiffType", s.diffType);
@@ -1248,6 +1249,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; EngineBrake (with Powertrain at Gearbox=2): in a gear held by hand the truck pulls with the mod engine alone, no cut at the gear's top;\n"
                         L";   with the foot off the engine holds it back by this share of the gear's torque at the redline, in percent, 0 to 30 (15; 0 lets it roll).\n"
                         L"; WheelCap (with that, in L-, L, L+ and R): no driven wheel turns faster than this percent of the gear's top, 110 to 200 (150; no box).\n"
+                        L"; LowRangeSlip (with that): how much wheel slip L and L- may use, 0 to 100 (100: the same room as L+; 0: each wheel near the top speed of its gear).\n"
                         L"; PushShare (with Powertrain): the percent of the surge at speed the game's chassis push may carry over the mod's pull, 0 to 100 (0; 100 as before; no box).\n"
                         L"; DiffLockBite (with Powertrain): how firmly the diff lock ties the driven wheels together, 0 to 100 (0: the game lock; 100: one shaft).\n"
                         L";   It acts on a truck whose diff lock is always on too. Such a truck then scrubs in every turn on hard ground.\n"
@@ -1319,6 +1321,7 @@ static void ReadIni(GaugeSettings &s)
     s.powertrain = IniBool(L"Powertrain", s.powertrain, ini);
     s.roadLoad = IniBool(L"RoadLoad", s.roadLoad, ini);
     s.wheelCap = IniInt(L"WheelCap", s.wheelCap, ini);
+    s.lowRangeSlip = IniInt(L"LowRangeSlip", s.lowRangeSlip, ini);
     s.pushShare = IniInt(L"PushShare", s.pushShare, ini);
     s.diffLockBite = IniInt(L"DiffLockBite", s.diffLockBite, ini);
     s.diffType = IniInt(L"DiffType", s.diffType, ini);
@@ -4102,7 +4105,7 @@ static void LogSettings(const GaugeSettings &s)
                           s.engineShare, !s.roadLoad ? L"off" : s.powertrain ? L"on (the air's drag, once each gear's pull is learned)" : L"on, acts with Powertrain on",
                           TorqueCutWanted(s) ? L"in a gear held by hand the torque cut: the mod engine alone, no cut at the gear's top" : L"no torque cut (it needs Gearbox=2, EngineShare above 0 and ModEngineSpeed=1)",
                           s.modEngineSpeed ? L"the mod engine's (ModEngineSpeed=1; the fuel's and the stall's calls keep the game's own, by the cut's own pull under the cut)" : L"its own (ModEngineSpeed=0)");
-        Log(L"settings: diff lock bite %d (DiffLockBite; 0 the game's lock, 100 one shaft), the differential's type %d (DiffType; 0 Auto, 1 Open, 2 Limited slip, 3 Locked)", s.diffLockBite, s.diffType);
+        Log(L"settings: diff lock bite %d (DiffLockBite; 0 the game's lock, 100 one shaft), the differential's type %d (DiffType; 0 Auto, 1 Open, 2 Limited slip, 3 Locked), low range slip %d (LowRangeSlip; 0 the gear's own wheel cap in L- and L, 100 the cap of the highest low gear)", s.diffLockBite, s.diffType, s.lowRangeSlip);
     }
     else Log(L"settings: powertrain off: the truck pulls with the game's own engine (Powertrain=1 hands it the mod's)");
     Log(s.creep && s.creepManual ? L"settings: creep on, in a gear picked by hand too (CreepManual): an automatic through the converter to walking pace, a gear picked by hand at its idle speed"
@@ -4510,6 +4513,13 @@ static TorqueCutSlot TorqueCutSlotOf(const TruckWatch &w, const TruckRaw &raw, c
     // the wheel speed cap, the runaway guard, in the wheels' own measure (+ 0x16C's): WheelCap percent of the gear's top, in
     // L-, L, L+ and R alone (the user: "the cap is for L gears")
     c.cap = GearboxPosCapped(w.pos.pos) && gearTop > 0.0f && isfinite(gearTop) ? (float)s.wheelCap / 100.0f * gearTop : 0.0f;
+    // L- and L: wider by LowRangeSlip, up to the cap of the highest low gear this gearbox has (LowRangeCap)
+    if (c.cap > 0.0f && (w.pos.pos == kPosLowMinus || w.pos.pos == kPosLow) && raw.gearEngaged == 1)
+    {
+        const float power = GearboxLowMostPower(w.positions.vehicle == w.refs.vehicle ? w.positions.missing : 0);
+        const float mostTop = power > 0.0f ? TruckGearTopAt(raw, 1, power) : 0.0f;
+        c.cap = LowRangeCap(w.pos.pos, c.cap, (float)s.wheelCap / 100.0f * mostTop, s.lowRangeSlip);
+    }
     c.pushBack = 1.0f - (float)s.pushShare / 100.0f;
     return c;
 }
@@ -4690,25 +4700,27 @@ static void LockPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s
         Log(L"probe: diff lock bite: kind %d, %d driven wheels, k %.3f, the spread %.2f rad/s after the drive and %.2f after the lock; a second: %ld steps here, %ld written, "
             L"%ld with the lock off, %ld held by the handbrake, %ld wheels skipped, %ld faults; DiffLockBite %d; the last written step: the fastest wheel %.2f rad/s "
             L"over the weighted mean before the drive C %.2f rad/s, the impulse handed on R %.3f; a second: %ld steps with C under 0 and the drive's impulse over 0, "
-            L"%ld wheels written under 0, %ld steps where the bounds moved a wheel",
+            L"%ld wheels written under 0, %ld steps where the bounds moved a wheel, %ld wheels written under 0 and under what the drive left them with the drive's "
+            L"impulse over 0 (0 while the bounds hold)",
             kind, lc.wheels, lc.k, lc.spreadBefore, lc.spreadAfter, lc.calls - was.calls, lc.writes - was.writes, lc.off - was.off, lc.handbrake - was.handbrake,
             lc.skipped - was.skipped, lc.faults - was.faults, s.diffLockBite, lc.over, lc.c, lc.r, lc.cUnder - was.cUnder, lc.under - was.under,
-            lc.bounded - was.bounded);
+            lc.bounded - was.bounded, lc.breach - was.breach);
         // M1 of BRIEF_lock_wheels_backward.md: the last written step by wheel, with what the ground left of it
         static LockLast last;
         static unsigned long lastSaid = 0;
         if (LockLastGet(last) && last.vehicle == w.refs.vehicle && last.seq != lastSaid)
         {
             lastSaid = last.seq;
-            static wchar_t byWheel[3200];
+            static wchar_t byWheel[4800];
             int put = 0;
             byWheel[0] = 0;
-            for (int i = 0; i < last.n && i < kCapWheels && put < 3100; i++)
-                put += FmtCut(byWheel + put, 3200 - put, L"%s%d: %.2f, %.2f, %.2f, %.2f, %.5f, %.3f, %.2f", i ? L" | " : L"", i, last.pre[i], last.post[i], last.final[i],
-                              last.load[i], last.gain[i], last.radius[i], last.next[i]);
-            Log(L"probe: diff lock bite: the last written step by wheel, the truck at %.2f rad/s in the wheels' measure (rad/s before the drive, after the drive, as the "
-                L"lock wrote it, the contact share, the gain, the rolling radius m, rad/s before the next step's drive): %s",
-                last.truck, byWheel);
+            for (int i = 0; i < last.n && i < kCapWheels && put < 4700; i++)
+                put += FmtCut(byWheel + put, 4800 - put, L"%s%d: %.2f, %.2f, %.2f, %.2f, %.5f, %.3f, %.2f, %.2f, %u, %.3f, %.2f", i ? L" | " : L"", i, last.pre[i], last.post[i],
+                              last.final[i], last.load[i], last.gain[i], last.radius[i], last.next[i], last.capped[i], (unsigned)last.ground[i], last.sink[i], last.ice[i]);
+            Log(L"probe: diff lock bite: the last written step by wheel, the truck at %.2f rad/s in the wheels' measure, the wheel cap's ceiling of the step %.2f rad/s "
+                L"(0: no cap in this position) (rad/s before the drive, after the drive, as the lock wrote it, the contact share, the gain, the rolling radius m, rad/s "
+                L"before the next step's drive, rad/s after the wheel cap, the byte at wheel + 0x1A4, the float at + 0x178, the float at + 0x1C4): %s",
+                last.truck, last.ceiling, byWheel);
         }
         at = now;
         was = lc;
@@ -7109,6 +7121,14 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                         L"others; the governor goes by the truck's own speed (the chassis's forward speed over the driven wheels' rolling radius, each one's collision cylinder or wheel + 0x94)",
                         s.wheelCap);
                 }
+                static int slipTold = -1;
+                if (slipTold != s.lowRangeSlip)
+                {
+                    slipTold = s.lowRangeSlip;
+                    Log(L"low range slip: in L- and L the wheel cap is the gear's own plus %d percent of the way to the cap of the highest low gear the gearbox has "
+                        L"(LowRangeSlip; 100 the same room as L+, 0 the gear's own); R and L+ keep their own, and no wheel may run faster than in the highest low gear",
+                        s.lowRangeSlip);
+                }
             }
             else
             {
@@ -9232,7 +9252,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.overRevDamage == b.overRevDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
            a.springFront == b.springFront && a.dampingFront == b.dampingFront && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
-           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.diffType == b.diffType && a.physicsRate == b.physicsRate && a.engineBrake == b.engineBrake && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
+           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.lowRangeSlip == b.lowRangeSlip && a.diffType == b.diffType && a.physicsRate == b.physicsRate && a.engineBrake == b.engineBrake && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
            a.camberGainFront == b.camberGainFront && a.camberGainRear == b.camberGainRear && a.camberRestFront == b.camberRestFront && a.camberRestRear == b.camberRestRear;
 }
 
@@ -9265,7 +9285,7 @@ int wmain(int argc, wchar_t **argv)
     Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.hotDamageFrom == kTempRed && d.coldDamage == 5.0f && d.overRevDamage == 10.0f && d.stallDamage == 5.0f && d.clutchBurn && d.clutchHeat == 60.0f &&
               d.springFront == 1.0f && d.dampingFront == 1.0f && d.extraTravel == 0.0f && d.frameFlex == 1.0f && d.twistRange == 1.0f,
           "defaults: the radiator's full airflow from 30 km/h, engine damage on from the red zone, 10 percent a minute for the heat and 5 for the cold");
-    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.walkSkipsLow && d.positionsByGearbox && !d.ignoreShifter && d.backToA == 0 && d.gameGearDisplay == kGameGearOffOwn && d.input == kInputWheel && !d.powertrain && d.roadLoad && d.wheelCap == 150 && d.pushShare == 0 && d.diffLockBite == 0 && d.diffType == 0 && d.physicsRate == 60 && d.engineBrake == 15.0f && d.modEngineSpeed && d.engineSpeedTop == 1.0f && d.roadCdA == 0.0f && d.engineShare == 50 && d.creep && !d.creepManual && !d.dieselFlutter,
+    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.walkSkipsLow && d.positionsByGearbox && !d.ignoreShifter && d.backToA == 0 && d.gameGearDisplay == kGameGearOffOwn && d.input == kInputWheel && !d.powertrain && d.roadLoad && d.wheelCap == 150 && d.pushShare == 0 && d.diffLockBite == 0 && d.lowRangeSlip == 100 && d.diffType == 0 && d.physicsRate == 60 && d.engineBrake == 15.0f && d.modEngineSpeed && d.engineSpeedTop == 1.0f && d.roadCdA == 0.0f && d.engineShare == 50 && d.creep && !d.creepManual && !d.dieselFlutter,
           "defaults: the oil as a second needle, warm after 5 minutes, too hot from 120 C; the standard turbo, a diesel's lift without the flutter; the creep on");
 
     // Air drag on by default (BRIEF_defaults_on.md): a missing key gives 1, an explicit 0 stays 0, the defaults give 1
@@ -9394,6 +9414,7 @@ int wmain(int argc, wchar_t **argv)
     c.wheelCap = 120;
     c.pushShare = 60;
     c.diffLockBite = 75;
+    c.lowRangeSlip = 40;
     c.diffType = 2;
     c.physicsRate = 120;
     c.modEngineSpeed = false;
@@ -9414,7 +9435,7 @@ int wmain(int argc, wchar_t **argv)
                             c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.overRevDamage != d.overRevDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springFront != d.springFront && c.dampingFront != d.dampingFront && c.extraTravel != d.extraTravel && c.frameFlex != d.frameFlex && c.twistRange != d.twistRange && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
                             c.demo != d.demo && c.probe != d.probe && c.keepLogs != d.keepLogs && c.soundVolume != d.soundVolume && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
-                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.diffLockBite != d.diffLockBite && c.diffType != d.diffType && c.physicsRate != d.physicsRate && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
+                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.diffLockBite != d.diffLockBite && c.lowRangeSlip != d.lowRangeSlip && c.diffType != d.diffType && c.physicsRate != d.physicsRate && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
     WriteIni(c);
     ReadIni(b);
     Check(allChanged, "ini: the test changes every setting from its default");
@@ -9435,7 +9456,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 154, "ini: the help text survives a write (154 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 155, "ini: the help text survives a write (155 comment lines)");
     // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
     {
         char none[32] = "x", tab[32] = {}, kept[32] = {};

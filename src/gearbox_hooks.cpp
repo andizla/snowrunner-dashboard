@@ -652,6 +652,8 @@ struct CapWheelRead
     CapVec axle, localAxle, invI;
     float pre, gain, alen;
     float load, radius; // the contact share (wheel + 0x128) and the rolling radius (WheelRollRadius), for LockStepHeld
+    float sink, ice;    // wheel + 0x178 (the sink, m) and + 0x1C4 (the ice blend), for the lock's by-wheel line alone
+    uint8_t ground;     // wheel + 0x1A4 (the contact with a ground body), for the same
     bool ok;
 };
 struct CapTruckRead
@@ -660,6 +662,7 @@ struct CapTruckRead
     int n, refused;
     int gear;
     float sign;
+    float forward; // the main body's forward speed, m/s (no number: not read), for the lock's truck speed where the cut gave none
 };
 // What the hook notes for the drive display in the call it reads (action == g_showNow): the differential in force,
 // the cap's kept share, and by the wheel's pointer whether the cap clamped it and whether Open or the lock moved it.
@@ -698,6 +701,17 @@ static bool CapReadBefore(const void *vehicle, const void *action, CapTruckRead 
         const bool awd = *(const volatile uint8_t *)(a + 0x49) != 0;
         t.gear = *(const volatile int *)(a + 0x74);
         t.sign = t.gear < 0 ? -1.0f : 1.0f;
+        t.forward = NAN;
+        {
+            // as CutWheelsRead: [[vehicle + 0x60] + 0x230], its linear velocity (+ 0x230) along its rotation's first column (+ 0x170)
+            const uint8_t *vm = *(const uint8_t *const *)(v + 0x60);
+            const uint8_t *main = (uintptr_t)vm >= 0x10000 ? *(const uint8_t *const *)(vm + 0x230) : nullptr;
+            if ((uintptr_t)main >= 0x10000)
+            {
+                const volatile float *vel = (const volatile float *)(main + 0x230), *f = (const volatile float *)(main + 0x170);
+                t.forward = vel[0] * f[0] + vel[1] * f[1] + vel[2] * f[2];
+            }
+        }
         const uintptr_t begin = *(const uintptr_t *)(v + 0x200), end = *(const uintptr_t *)(v + 0x208);
         if (end < begin || (end - begin) / 8 > (uintptr_t)kCapWheels) return false;
         for (uintptr_t p = begin; p < end; p += 8)
@@ -728,6 +742,9 @@ static bool CapReadBefore(const void *vehicle, const void *action, CapTruckRead 
             CapGet3(body + 0x220, r.invI);
             r.gain = CapGain(r.localAxle, r.invI, r.alen);
             r.load = *(const volatile float *)(wheel + 0x128);
+            r.ground = *(const volatile uint8_t *)(wheel + 0x1A4);
+            r.sink = *(const volatile float *)(wheel + 0x178);
+            r.ice = *(const volatile float *)(wheel + 0x1C4);
             float cylinder = NAN;
             const bool cylinderRead = CutCylinderRead(wheel, cylinderVtable, cylinder);
             r.radius = WheelRollRadius(*(const volatile float *)(wheel + 0x94), cylinder, cylinderRead).r;
@@ -802,7 +819,7 @@ static volatile LONG64 g_lockVehicle = 0;
 // M1 of BRIEF_lock_wheels_backward.md. g_lockHeld is the physics thread's own: a written step that waits for the next
 // step's speeds before the drive. g_lockLast is the pair given to the mod's thread, g_lockLastSeq odd while it is
 // written (the reader takes a copy and asks the count again).
-static volatile LONG g_lockCUnder = 0, g_lockUnder = 0, g_lockBounded = 0, g_lockLastSeq = 0;
+static volatile LONG g_lockCUnder = 0, g_lockUnder = 0, g_lockBounded = 0, g_lockBreach = 0, g_lockLastSeq = 0;
 static LockLast g_lockHeld, g_lockLast;
 static const uint8_t *g_lockHeldWheel[kCapWheels];
 static bool g_lockHeldOn = false;
@@ -824,8 +841,10 @@ static bool DiffBytesRead(const void *action, bool &lockByte, bool &handbrake)
         return false;
     }
 }
-// LockStepHeld over a read truck, counted; locked gets the speeds to write (post where nothing moves).
-static void LockOver(const CapTruckRead &t, const float *post, float k, float *locked, uint64_t vehicle, float mass, float truck)
+// LockStepHeld over a read truck, counted; locked gets the speeds to write (post where nothing moves). True where it
+// wrote: the step is then kept for the by-wheel line, and the caller with a cap sets its capped and ceiling. truck no
+// number (the lock without the cut, whose hook alone works the truck's speed out): from the read's forward speed.
+static bool LockOver(const CapTruckRead &t, const float *post, float k, float *locked, uint64_t vehicle, float mass, float truck)
 {
     if (g_lockHeldOn)
     {
@@ -850,10 +869,12 @@ static void LockOver(const CapTruckRead &t, const float *post, float k, float *l
     if (o.j > 0.0f && o.c < 0.0f) InterlockedIncrement(&g_lockCUnder);
     if (o.under) InterlockedExchangeAdd(&g_lockUnder, o.under);
     if (o.bounded) InterlockedIncrement(&g_lockBounded);
-    if (!o.wrote) return;
+    if (o.breach) InterlockedExchangeAdd(&g_lockBreach, o.breach);
+    if (!o.wrote) return false;
     g_lockHeld.vehicle = vehicle;
     g_lockHeld.n = t.n;
-    g_lockHeld.truck = truck;
+    g_lockHeld.truck = isfinite(truck) ? truck : TruckSpeedInWheels(t.forward, radius, ok, t.n, t.sign);
+    g_lockHeld.ceiling = 0.0f;
     for (int i = 0; i < t.n; i++)
     {
         g_lockHeldWheel[i] = t.w[i].wheel;
@@ -861,6 +882,8 @@ static void LockOver(const CapTruckRead &t, const float *post, float k, float *l
         g_lockHeld.post[i] = t.w[i].ok ? post[i] : NAN;
         g_lockHeld.final[i] = t.w[i].ok ? o.final[i] : NAN;
         g_lockHeld.load[i] = load[i], g_lockHeld.gain[i] = gain[i], g_lockHeld.radius[i] = radius[i];
+        g_lockHeld.capped[i] = g_lockHeld.final[i];
+        g_lockHeld.ground[i] = t.w[i].ground, g_lockHeld.sink[i] = t.w[i].sink, g_lockHeld.ice[i] = t.w[i].ice;
     }
     g_lockHeldOn = true;
     InterlockedIncrement(&g_lockWrites);
@@ -872,6 +895,7 @@ static void LockOver(const CapTruckRead &t, const float *post, float k, float *l
     InterlockedExchange(&g_lockRBits, FloatBits(o.r));
     InterlockedExchange(&g_lockOverBits, FloatBits(o.over));
     InterlockedExchange64(&g_lockVehicle, (LONG64)vehicle);
+    return true;
 }
 
 // The cap's state, the physics thread's own (one vehicle under the cut): the arming, the kept share smoothed. A clear
@@ -1117,6 +1141,7 @@ static CapAround CapStepAround(const TorqueCutSlot *cut, void *action, float thr
         CapMost(g_capPostMost, postMean);
     }
     int axle[kCapWheels], place[kCapWheels];
+    bool lockWrote = false;
     if (open)
     {
         AxleTableStep(vehicle);
@@ -1128,7 +1153,7 @@ static CapAround CapStepAround(const TorqueCutSlot *cut, void *action, float thr
         InterlockedExchange(&g_evenN, e.used);
         InterlockedExchange(&g_evenJBits, FloatBits(e.j));
     }
-    else if (lockK > 0.0f) LockOver(t, post, lockK, work, vehicle, mass, truck);
+    else if (lockK > 0.0f) lockWrote = LockOver(t, post, lockK, work, vehicle, mass, truck);
     if (action == g_showNow) ShowNoteWheels(t, post, work);
     if (!capHere)
     {
@@ -1139,6 +1164,12 @@ static CapAround CapStepAround(const TorqueCutSlot *cut, void *action, float thr
     }
     const CapStepOut o = open ? OpenAxlesStep(pre, work, gain, ok, axle, place, t.n, ceiling) : CapStep(pre, work, gain, ok, t.n, ceiling, true);
     if (!CapWrite(t, post, o)) InterlockedIncrement(&g_capFaults);
+    if (lockWrote)
+    {
+        // the lock's kept step: what the cap made of the lock's speeds, and the ceiling it went by
+        g_lockHeld.ceiling = ceiling;
+        for (int i = 0; i < t.n; i++) g_lockHeld.capped[i] = ok[i] ? o.final[i] : NAN;
+    }
     InterlockedIncrement(&g_capSteps);
     if (o.clamps) InterlockedExchangeAdd(&g_capClamps, o.clamps);
     CapMost(g_capExcessMost, o.excess);
@@ -1785,6 +1816,7 @@ void LockCountsGet(LockCounts &out)
     out.cUnder = g_lockCUnder;
     out.under = g_lockUnder;
     out.bounded = g_lockBounded;
+    out.breach = g_lockBreach;
 }
 
 bool LockLastGet(LockLast &out)

@@ -253,13 +253,17 @@ struct LockCounts
     uint64_t vehicle;
     float c, r, over;
     long cUnder, under, bounded; // steps with c under 0 and the drive's impulse over 0, wheels written under 0, steps LockBound's rules moved a wheel
+    long breach;                 // wheels written under 0 and under what the drive left them with the drive's impulse over 0 (LockStepOut's breach): 0 while the bounds hold
 };
 void LockCountsGet(LockCounts &out);
 // The lock's last written step that had a step after it, by wheel (BRIEF_lock_wheels_backward.md, M1): each wheel's
 // speed before the drive, after it and as the lock wrote it, its contact share, gain and rolling radius, and its speed
 // before the drive of the step after, which is what the ground left of the write (no number: not read). truck: the
 // truck's own speed of the written step in the wheels' measure (no number: not read). seq counts the steps given so
-// far, 0 none yet. False while none is there or the read met a write four times.
+// far, 0 none yet. capped: each wheel's speed after the wheel cap's step (final where no cap acted); ceiling: that
+// step's ceiling (0 with no cap). ground, sink and ice: wheel + 0x1A4 (a byte, the contact with a ground body),
+// + 0x178 (a float, the sink in metres) and + 0x1C4 (a float, the ice blend) before the drive, as the tire mod reads
+// them. False while none is there or the read met a write four times.
 struct LockLast
 {
     uint64_t vehicle;
@@ -267,6 +271,8 @@ struct LockLast
     int n;
     float truck;
     float pre[kCapWheels], post[kCapWheels], final[kCapWheels], load[kCapWheels], gain[kCapWheels], radius[kCapWheels], next[kCapWheels];
+    float capped[kCapWheels], sink[kCapWheels], ice[kCapWheels], ceiling;
+    uint8_t ground[kCapWheels];
 };
 bool LockLastGet(LockLast &out);
 // The differential's type in the drive's hook (BRIEF_diff_types.md): the steps Open's evening ran, those it wrote and
