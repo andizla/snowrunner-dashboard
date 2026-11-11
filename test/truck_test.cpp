@@ -5329,6 +5329,179 @@ int main()
                                                       "side toward the droop and the other toward the bump; the shift held to 12 cm");
     }
 
+    // front and rear (BRIEF_suspension_front_rear.md, M1 and M2): the rule, the ends made once and kept, a wheel not read
+    {
+        auto same = [](int n, const bool *x, const bool *y) {
+            bool all = true;
+            for (int i = 0; i < n; i++) all &= x[i] == y[i];
+            return all;
+        };
+        // standing straight the ends are SuspPairs' front, on 4, 6 and 8 wheels (a second steered axle is rear)
+        const float fwd4[4] = { 2.28f, 2.28f, -2.05f, -2.05f }, left4[4] = { 0.96f, -0.96f, 0.96f, -0.96f };
+        const float fwd6[6] = { 2.6f, 2.6f, -1.3f, -1.3f, -2.7f, -2.7f }, left6[6] = { 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f };
+        const float fwd8[8] = { 2.78f, 2.78f, 1.0f, 1.0f, -1.98f, -1.98f, -3.33f, -3.33f }, left8[8] = { 1.1f, -1.1f, 1.1f, -1.1f, 1.0f, -1.0f, 1.0f, -1.0f };
+        int partner[8];
+        bool isLeft[8], pairFront[8], rearmost[8], ends4[8], ends6[8], ends8[8];
+        SuspEndsRule(4, fwd4, left4, 0xFu, ends4);
+        SuspPairs(4, fwd4, left4, partner, isLeft, pairFront, rearmost);
+        bool straight = same(4, ends4, pairFront) && ends4[0] && ends4[1] && !ends4[2] && !ends4[3];
+        SuspEndsRule(6, fwd6, left6, 0x3Fu, ends6);
+        SuspPairs(6, fwd6, left6, partner, isLeft, pairFront, rearmost);
+        straight &= same(6, ends6, pairFront) && ends6[0] && ends6[1] && !ends6[2] && !ends6[5];
+        SuspEndsRule(8, fwd8, left8, 0xFFu, ends8);
+        SuspPairs(8, fwd8, left8, partner, isLeft, pairFront, rearmost);
+        straight &= same(8, ends8, pairFront) && ends8[0] && ends8[1] && !ends8[2] && !ends8[3] && !ends8[7];
+        // first seen bent 40 degrees either way about a joint 0.5 m ahead of the middle (the front axle's wheels swing with
+        // the front half), and at full steer (each front wheel's centre 0.12 m along and across): the same ends
+        bool bent = true;
+        for (float deg : { 40.0f, -40.0f })
+        {
+            const float c = cosf(deg * 3.14159265f / 180.0f), sn = sinf(deg * 3.14159265f / 180.0f);
+            float f6[6], l6[6], f8[8], l8[8];
+            bool en[8];
+            for (int i = 0; i < 6; i++)
+            {
+                const bool swings = i < 2;
+                const float x = fwd6[i] - 0.5f, y = left6[i];
+                f6[i] = swings ? 0.5f + x * c - y * sn : fwd6[i], l6[i] = swings ? x * sn + y * c : left6[i];
+            }
+            SuspEndsRule(6, f6, l6, 0x3Fu, en);
+            bent &= same(6, en, ends6);
+            for (int i = 0; i < 8; i++)
+            {
+                const bool swings = i < 4; // both steered axles on the front half
+                const float x = fwd8[i] - 0.5f, y = left8[i];
+                f8[i] = swings ? 0.5f + x * c - y * sn : fwd8[i], l8[i] = swings ? x * sn + y * c : left8[i];
+            }
+            SuspEndsRule(8, f8, l8, 0xFFu, en);
+            bent &= same(8, en, ends8);
+            // the whole truck seen turned in a frame that is not its own by as much: still the first axle
+            float f4[4], l4[4];
+            for (int i = 0; i < 4; i++) f4[i] = fwd4[i] * c - left4[i] * sn * 0.5f, l4[i] = left4[i];
+            SuspEndsRule(4, f4, l4, 0xFu, en);
+            bent &= same(4, en, ends4);
+        }
+        float steerF[4], steerL[4];
+        bool steered[8];
+        for (int i = 0; i < 4; i++) steerF[i] = fwd4[i] + (i == 0 ? 0.12f : i == 1 ? -0.12f : 0.0f), steerL[i] = left4[i] + (i < 2 ? 0.12f : 0.0f);
+        SuspEndsRule(4, steerF, steerL, 0xFu, steered);
+        bent &= same(4, steered, ends4);
+        // a wheel on another body, far behind in the chassis's frame, is rear; a wheel without a place is rear
+        const float fwd5[5] = { 2.28f, 2.28f, -2.05f, -2.05f, -7.5f }, left5[5] = { 0.96f, -0.96f, 0.96f, -0.96f, 2.4f };
+        bool ends5[8];
+        SuspEndsRule(5, fwd5, left5, 0x1Fu, ends5);
+        const bool otherBody = ends5[0] && ends5[1] && !ends5[2] && !ends5[3] && !ends5[4];
+        SuspEndsRule(4, fwd4, left4, 0xEu, ends5); // wheel 0, a front one, has no place
+        const bool placeless = !ends5[0] && ends5[1] && !ends5[2] && !ends5[3];
+        Check(straight && bent && otherBody && placeless,
+              "front and rear: standing straight the ends are the ride's on 4, 6 and 8 wheels, a second steered axle rear; a truck first seen bent 40 degrees either way or at full "
+              "steer has the same ends; a wheel on another body is rear by its place; a wheel without a place is rear");
+
+        // made once a vehicle and kept: a later pose never moves them; a new vehicle or wheel count makes them anew
+        SuspEnds en = {};
+        const bool madeAtOnce = SuspEndsStep(en, 0x77, 4, fwd4, left4, 0xFu) && en.known && en.fresh && en.front[0] && en.front[1] && !en.front[2] && !en.unread;
+        const float back4[4] = { -2.28f, -2.28f, 2.05f, 2.05f }; // rolled over or read the other way round
+        const bool kept = SuspEndsStep(en, 0x77, 4, back4, left4, 0xFu) && !en.fresh && en.front[0] && en.front[1] && !en.front[2] && !en.front[3] &&
+                          SuspEndsStep(en, 0x77, 4, back4, left4, 0x0u) && en.front[0];
+        const bool anew = SuspEndsStep(en, 0x78, 4, back4, left4, 0xFu) && en.fresh && !en.front[0] && en.front[2] && en.front[3] && en.vehicle == 0x78;
+        const bool count = SuspEndsStep(en, 0x78, 6, fwd6, left6, 0x3Fu) && en.fresh && en.wheels == 6 && en.front[0] && !en.front[2];
+        // a wheel not read: one on a truck otherwise placed is rear after kEndsWait passes and named; read before that it is
+        // placed like any other; two not read, or one of two wheels: no end, however long
+        SuspEnds lone = {};
+        bool waiting = true;
+        for (int pass = 1; pass < kEndsWait; pass++) waiting &= !SuspEndsStep(lone, 0x79, 4, fwd4, left4, 0xEu) && !lone.known;
+        const bool taken = SuspEndsStep(lone, 0x79, 4, fwd4, left4, 0xEu) && lone.known && lone.fresh && lone.unread == 1u && !lone.front[0] && lone.front[1] && !lone.front[2];
+        const bool takenKept = SuspEndsStep(lone, 0x79, 4, fwd4, left4, 0xFu) && !lone.front[0] && lone.unread == 1u; // kept, not made anew once it reads
+        SuspEnds late = {};
+        for (int pass = 0; pass < 5; pass++) SuspEndsStep(late, 0x7A, 4, fwd4, left4, 0xEu);
+        const bool readLater = SuspEndsStep(late, 0x7A, 4, fwd4, left4, 0xFu) && late.front[0] && late.front[1] && !late.unread;
+        SuspEnds two = {}, pair = {};
+        bool never = true;
+        for (int pass = 0; pass < kEndsWait * 3; pass++)
+            never &= !SuspEndsStep(two, 0x7B, 4, fwd4, left4, 0xCu) && !SuspEndsStep(pair, 0x7C, 2, fwd4, left4, 0x2u) && !two.known && !pair.known;
+        // the factor: alike whatever is known; unlike only with the ends known for that vehicle
+        float f = 0.0f;
+        const bool factor = SuspEndFactor(nullptr, 0x7B, 0, 1.5f, 1.5f, f) && f == 1.5f && SuspEndFactor(&two, 0x7B, 0, 2.0f, 2.0f, f) && f == 2.0f &&
+                            !SuspEndFactor(&two, 0x7B, 0, 2.0f, 0.5f, f) && !SuspEndFactor(nullptr, 0x79, 0, 2.0f, 0.5f, f) && !SuspEndFactor(&lone, 0x7B, 1, 2.0f, 0.5f, f) &&
+                            SuspEndFactor(&lone, 0x79, 1, 2.0f, 0.5f, f) && f == 2.0f && SuspEndFactor(&lone, 0x79, 0, 2.0f, 0.5f, f) && f == 0.5f &&
+                            SuspEndBase(&lone, 0x79, 2, 0.3f, 2.0f, 0.5f) == 0.15f && SuspEndBase(&lone, 0x79, 1, 0.7f, 2.0f, 0.5f) == 1.0f && SuspEndBase(&two, 0x7B, 1, 0.7f, 2.0f, 0.5f) == 0.0f;
+        Check(madeAtOnce && kept && anew && count && waiting && taken && takenKept && readLater && never && factor,
+              "front and rear: the ends are made at the first pass with every place read and kept through any later pose, anew for a new vehicle or wheel count; one wheel not "
+              "read on a truck otherwise placed is rear after the wait and named; two not read, or one of two, give no end; a factor is one end's only with the ends known");
+    }
+
+    // front and rear in the tune (M1, M2, S2): each wheel's written figure is its own end's and the one the step's block
+    // takes (SuspEndBase), through a slider move and a truck switch; with the ends not known and unlike nothing is written
+    {
+        const uint64_t vtable = kExe + 0x23d9538, base = 0x10A00000, vehicleB = 0x10A80000;
+        TruckRefs a = {}, bTruck = {};
+        a.vehicle = kVehicle, bTruck.vehicle = vehicleB;
+        a.wheels = bTruck.wheels = 4;
+        uint64_t con[2][4];
+        for (int tr = 0; tr < 2; tr++)
+            for (int i = 0; i < 4; i++)
+            {
+                const uint64_t wheel = base + (uint64_t)(tr * 8 + i * 2) * 0x10000, c = wheel + 0x10000;
+                Block(wheel, 0x200), Block(c, 0x200);
+                Put(wheel + 0x28, c);
+                Put(c, vtable);
+                Put(c + 0xC4, i < 2 ? 0.026f : 0.3f), Put(c + 0xC8, i < 2 ? 0.4f : 0.2f), Put(c + 0xB4, -0.6f), Put(c + 0xB8, 0.4f);
+                (tr ? bTruck : a).wheel[i] = wheel;
+                con[tr][i] = c;
+            }
+        auto at = [&](uint64_t c, uint32_t off) { float v = 0.0f; Peek(c + off, &v, sizeof v); return v; };
+        const float fwd[4] = { 2.28f, 2.28f, -2.05f, -2.05f }, left[4] = { 0.96f, -0.96f, 0.96f, -0.96f };
+        const float fwdB[4] = { -2.0f, -2.0f, 2.3f, 2.3f }; // truck B's wheels the other way round: 2 and 3 are its front
+        const float apart[2][kSuspValues] = { { 2.0f, 0.5f, 1.0f, 1.0f }, { 0.5f, 1.5f, 1.0f, 1.0f } };
+        const float moved[2][kSuspValues] = { { 1.0f, 0.5f, 1.0f, 1.0f }, { 0.5f, 3.0f, 1.0f, 1.0f } }; // the front spring at 1
+        const float alike[2][kSuspValues] = { { 1.5f, 0.5f, 1.0f, 1.0f }, { 1.5f, 0.5f, 1.0f, 1.0f } };
+        SuspTune tune = {};
+        SuspEnds ends = {};
+        // each wheel's two fields against the block's figure
+        auto agrees = [&](const TruckRefs &r, const uint64_t *c, const float sc[2][kSuspValues]) {
+            bool all = true;
+            for (int i = 0; i < 4; i++)
+            {
+                const float k = SuspEndBase(&ends, r.vehicle, i, tune.wheel[i].stock[kSuspStrength], sc[0][kSuspStrength], sc[1][kSuspStrength]);
+                const float d = SuspEndBase(&ends, r.vehicle, i, tune.wheel[i].stock[kSuspDamping], sc[0][kSuspDamping], sc[1][kSuspDamping]);
+                all &= k > 0.0f && d > 0.0f && at(c[i], 0xC4) == k && at(c[i], 0xC8) == d;
+            }
+            return all;
+        };
+        // the ends not known yet (two places not read): unlike ends write nothing and say so; alike ends write as before
+        SuspEndsStep(ends, a.vehicle, 4, fwd, left, 0x3u);
+        const bool heldBack = SuspTuneStepEnds(tune, kMemory, a, vtable, apart, &ends) == 0 && tune.held && at(con[0][0], 0xC4) == 0.026f && at(con[0][2], 0xC8) == 0.2f;
+        const bool alikeWrites = SuspTuneStepEnds(tune, kMemory, a, vtable, alike, &ends) == 4 && !tune.held && Near(at(con[0][0], 0xC4), 0.039f) && Near(at(con[0][2], 0xC4), 0.45f) &&
+                                 Near(at(con[0][3], 0xC8), 0.1f);
+        // back to unlike with the ends still not known: what is there stays, nothing new, nothing put back
+        const bool heldStays = SuspTuneStepEnds(tune, kMemory, a, vtable, apart, &ends) == 0 && tune.held && Near(at(con[0][0], 0xC4), 0.039f) && Near(at(con[0][2], 0xC4), 0.45f);
+        // the ends known: each wheel its own end's, the block's figure
+        SuspEndsStep(ends, a.vehicle, 4, fwd, left, 0xFu);
+        const bool own = SuspTuneStepEnds(tune, kMemory, a, vtable, apart, &ends) == 4 && !tune.held && Near(at(con[0][0], 0xC4), 0.052f) && Near(at(con[0][1], 0xC8), 0.2f) &&
+                         Near(at(con[0][2], 0xC4), 0.15f) && Near(at(con[0][3], 0xC8), 0.3f) && agrees(a, con[0], apart) &&
+                         SuspTuneStepEnds(tune, kMemory, a, vtable, apart, &ends) == 0;
+        // a slider move, the front spring to 1: the front wheels get their stock, the rear stay tuned (S2)
+        const bool slid = SuspTuneStepEnds(tune, kMemory, a, vtable, moved, &ends) == 4 && tune.moved && at(con[0][0], 0xC4) == 0.026f && at(con[0][1], 0xC4) == 0.026f &&
+                          Near(at(con[0][2], 0xC4), 0.15f) && Near(at(con[0][2], 0xC8), 0.6f) && agrees(a, con[0], moved);
+        // the truck switched: A back at its stock, B by its own ends (its wheels 2 and 3 the front)
+        SuspEndsStep(ends, bTruck.vehicle, 4, fwdB, left, 0xFu);
+        int restored = 0;
+        const bool switched = SuspTuneStepEnds(tune, kMemory, bTruck, vtable, apart, &ends, &restored) == 4 && restored > 0 && at(con[0][2], 0xC4) == 0.3f && at(con[0][0], 0xC8) == 0.4f &&
+                              Near(at(con[1][2], 0xC4), 0.6f) && Near(at(con[1][0], 0xC4), 0.013f) && Near(at(con[1][3], 0xC8), 0.1f) && Near(at(con[1][1], 0xC8), 0.6f) &&
+                              agrees(bTruck, con[1], apart);
+        // and A again, with ends still B's until A's are made: nothing new on A; then its own
+        const bool stale = SuspTuneStepEnds(tune, kMemory, a, vtable, apart, &ends) == 0 && tune.held && at(con[0][0], 0xC4) == 0.026f && at(con[1][2], 0xC4) == 0.3f;
+        SuspEndsStep(ends, a.vehicle, 4, fwd, left, 0xFu);
+        const bool again = SuspTuneStepEnds(tune, kMemory, a, vtable, apart, &ends) == 4 && agrees(a, con[0], apart) && Near(at(con[0][0], 0xC4), 0.052f);
+        // all at 1: every wheel's stock back
+        const float ones[2][kSuspValues] = { { 1.0f, 1.0f, 1.0f, 1.0f }, { 1.0f, 1.0f, 1.0f, 1.0f } };
+        const bool backAll = SuspTuneStepEnds(tune, kMemory, a, vtable, ones, &ends) == 4 && at(con[0][0], 0xC4) == 0.026f && at(con[0][2], 0xC4) == 0.3f && at(con[0][1], 0xC8) == 0.4f &&
+                             at(con[0][3], 0xC8) == 0.2f;
+        Check(heldBack && alikeWrites && heldStays && own && slid && switched && stale && again && backAll,
+              "front and rear: with the ends not known unlike factors write nothing and alike ones write as before; known, each wheel's spring and damping are its own end's and "
+              "the step block's figure, through a slider move (an end at 1 gets its stock) and a truck switch (the old truck's stock back, the new one by its own ends); 1 puts all back");
+    }
+
     // the attach point's write and its guard on the physics thread (in this process's memory): with everything off nothing
     // is written; with a ride height the stock plus the shift along the axis; a field the game wrote meanwhile (neither the
     // mod's nor the stock) stops the writes for the block and is counted once; let go puts the stock back

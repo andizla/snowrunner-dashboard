@@ -128,10 +128,96 @@ struct SuspWheel
 struct SuspTune
 {
     uint64_t vehicle;
-    float scale[kSuspValues];   // the sliders on the last pass
+    float scale[2][kSuspValues]; // the sliders on the last pass: the front's and the rear's
     bool moved;                 // they moved since the last pass
+    bool held;                  // a value was left as it is on this pass: front and rear are set apart and the wheel's end is not known
     SuspWheel wheel[kMaxWheels];
 };
+
+// ---- front and rear (BRIEF_suspension_front_rear.md and its addendum, M1 and M2) ----
+// Each wheel's end, the one source for the tune's write, the step's bases and the tab's figures. Made once a vehicle,
+// at the first pass where every wheel's place is read, and kept until the vehicle or its wheel count changes: never
+// from the pose of a later pass, so a truck that bends, steers or rolls over keeps its ends. Front is the first axle,
+// every other axle is rear (a second steered axle too). Standing straight that is SuspPairs' rule, the one Ride front
+// goes by: within kPairAlong of the frontmost wheel along the chassis's forward. So that a truck first seen bent or at
+// full steer has the same ends, the rule here is by what is ahead: a wheel is rear where another wheel is more than
+// kPairAlong ahead of it and less aside than ahead (within 45 degrees of straight ahead), front where none is. A wheel
+// on another body is placed by its centre in the chassis's frame like any other. A single wheel whose place stays
+// unread for kEndsWait passes on a truck of three wheels or more is rear (unread says which); with more unread no end
+// is known and nothing is guessed.
+struct SuspEnds
+{
+    uint64_t vehicle;
+    int wheels;
+    bool known;                 // every wheel has its end
+    bool front[kMaxWheels];
+    uint32_t unread;            // the wheel taken as rear because its place was not read
+    int waited;                 // passes with all places read but one
+    bool fresh;                 // made on this pass (for the log)
+    bool told;                  // "the ends are not known yet" said for this truck (gauges.cpp, SuspTunePass)
+};
+static const int kEndsWait = 20;
+
+// read: a bit for each wheel whose place is known; a wheel without one is rear.
+inline void SuspEndsRule(int n, const float *forward, const float *left, uint32_t read, bool *front)
+{
+    for (int i = 0; i < n; i++)
+    {
+        front[i] = false;
+        if (!(read >> i & 1u)) continue;
+        bool ahead = false;
+        for (int j = 0; j < n && !ahead; j++)
+        {
+            const float by = forward[j] - forward[i];
+            ahead = j != i && (read >> j & 1u) && by > kPairAlong && fabsf(left[j] - left[i]) < by;
+        }
+        front[i] = !ahead;
+    }
+}
+
+// One pass: true where the ends are known. forward, left: each wheel's place in the chassis's frame.
+inline bool SuspEndsStep(SuspEnds &e, uint64_t vehicle, int wheels, const float *forward, const float *left, uint32_t read)
+{
+    if (e.vehicle != vehicle || e.wheels != wheels) e = SuspEnds{ vehicle, wheels };
+    e.fresh = false;
+    const int n = wheels < kMaxWheels ? wheels : kMaxWheels;
+    if (e.known || !vehicle || n <= 0) return e.known;
+    const uint32_t all = n >= 32 ? 0xFFFFFFFFu : (1u << n) - 1u, unread = all & ~read;
+    int missing = 0;
+    for (int i = 0; i < n; i++) missing += unread >> i & 1u;
+    if (missing > 1 || (missing == 1 && n < 3))
+    {
+        e.waited = 0;
+        return false;
+    }
+    if (missing == 1 && ++e.waited < kEndsWait) return false;
+    SuspEndsRule(n, forward, left, read & all, e.front);
+    e.unread = unread;
+    e.known = e.fresh = true;
+    return true;
+}
+
+// Wheel i's factor, the front's or the rear's by its end. With both alike that one, whatever is known; false where
+// they differ and the wheel's end is not known (never a guess, never one end's value on all wheels).
+inline bool SuspEndFactor(const SuspEnds *e, uint64_t vehicle, int i, float front, float rear, float &out)
+{
+    if (front == rear)
+    {
+        out = front;
+        return true;
+    }
+    if (!e || !e->known || e->vehicle != vehicle || i < 0 || i >= kMaxWheels) return false;
+    out = e->front[i] ? front : rear;
+    return true;
+}
+
+// What a wheel's spring or damping is to be: its stock times its end's factor, held to the game's 1. The step's block
+// takes its bases from here and the tune writes the same figure; 0 where SuspEndFactor gives none.
+inline float SuspEndBase(const SuspEnds *e, uint64_t vehicle, int i, float stock, float front, float rear)
+{
+    float factor = 1.0f;
+    return SuspEndFactor(e, vehicle, i, front, rear, factor) ? fminf(1.0f, stock * factor) : 0.0f;
+}
 
 // A value the tune may take as a stock: the spring and the damping a factor of Havok's, a limit on its side of 0.
 inline bool SuspValueSane(int k, float v)
@@ -171,7 +257,9 @@ struct SuspTuneTest
 };
 
 // One pass for the driven truck: vtable is the constraint's vtable in the game (0 = not known: nothing is done).
-// scale: SpringScale, DampingScale and two factors of 1 (the travel's ends go by extra). Returns the wheels written on
+// scale: the front's and the rear's spring and damping factors and two factors of 1 each (the travel's ends go by
+// extra); ends gives each wheel its one (SuspEndFactor). Where the two differ and the wheel's end is not known, that
+// value is left as it is and held is set. Returns the wheels written on
 // this pass. extra: metres past the file's compression end (ExtraTravel), 0 for the file's; it never shortens.
 // restored: the values of the truck driven before put back on this pass (another truck is driven now).
 // test: SuspStepTest's write, nullptr for none. damper: per wheel, the damper owns its damping (suspension_step.h):
@@ -180,9 +268,9 @@ struct SuspTuneTest
 // and both for the tune on the step (BRIEF_step_hook_writes.md). words: the mod's last words in each wheel's strength
 // and damping (the step hook's and the let go's), nullptr for none: each is taken as the tune's own write, so it puts
 // the stock back on a truck switch and is never a new stock, in place or at a new address (the Reviewer's must 3).
-inline int SuspTuneStep(SuspTune &t, const TruckMemory &m, const TruckRefs &r, uint64_t vtable, const float scale[kSuspValues], int *restored = nullptr,
-                        const SuspTuneTest *test = nullptr, const bool *damper = nullptr, const bool *spring = nullptr, float extra = 0.0f,
-                        const SuspModWords *words = nullptr)
+inline int SuspTuneStepEnds(SuspTune &t, const TruckMemory &m, const TruckRefs &r, uint64_t vtable, const float scale[2][kSuspValues], const SuspEnds *ends,
+                            int *restored = nullptr, const SuspTuneTest *test = nullptr, const bool *damper = nullptr, const bool *spring = nullptr, float extra = 0.0f,
+                            const SuspModWords *words = nullptr)
 {
     if (words && words->vehicle && words->vehicle == t.vehicle)
         for (int i = 0; i < kMaxWheels; i++)
@@ -203,6 +291,7 @@ inline int SuspTuneStep(SuspTune &t, const TruckMemory &m, const TruckRefs &r, u
         memcpy(t.scale, scale, sizeof t.scale);
     }
     t.moved = memcmp(t.scale, scale, sizeof t.scale) != 0;
+    t.held = false;
     memcpy(t.scale, scale, sizeof t.scale);
     int written = 0;
     for (int i = 0; i < r.wheels && i < kMaxWheels; i++)
@@ -241,9 +330,15 @@ inline int SuspTuneStep(SuspTune &t, const TruckMemory &m, const TruckRefs &r, u
         for (int k = 0; k < kSuspValues; k++)
         {
             if (!SuspValueSane(k, w.stock[k]) || owned(i, k)) continue; // not a value of the kind known, or the damper's: left as it is
-            float want = w.stock[k] * scale[k];
+            float factor = 1.0f;
+            if (!SuspEndFactor(ends, r.vehicle, i, scale[0][k], scale[1][k], factor))
+            {
+                t.held = true; // front and rear apart and this wheel's end not known: nothing new is written
+                continue;
+            }
+            float want = w.stock[k] * factor;
             if (k == kSuspStrength || k == kSuspDamping) want = fminf(1.0f, want);
-            if (scale[k] == 1.0f) want = w.stock[k];
+            if (factor == 1.0f) want = w.stock[k];
             if (k == kSuspMin && extra > 0.0f) want = w.stock[k] - extra; // past the file's end, from a 0.0 too
             if (test && test->wheel == i && test->value == k && test->factor != 1.0f) want *= test->factor;
             const bool tuned = want != w.stock[k];
@@ -264,6 +359,17 @@ inline int SuspTuneStep(SuspTune &t, const TruckMemory &m, const TruckRefs &r, u
         }
     }
     return written;
+}
+
+// Both ends at the same factors: the tune of before front and rear were apart.
+inline int SuspTuneStep(SuspTune &t, const TruckMemory &m, const TruckRefs &r, uint64_t vtable, const float scale[kSuspValues], int *restored = nullptr,
+                        const SuspTuneTest *test = nullptr, const bool *damper = nullptr, const bool *spring = nullptr, float extra = 0.0f,
+                        const SuspModWords *words = nullptr)
+{
+    float both[2][kSuspValues];
+    memcpy(both[0], scale, sizeof both[0]);
+    memcpy(both[1], scale, sizeof both[1]);
+    return SuspTuneStepEnds(t, m, r, vtable, both, nullptr, restored, test, damper, spring, extra, words);
 }
 
 // A value the step hook found the game had set itself in a field the hook writes (suspension_step.h, SuspGameSet): the
@@ -288,6 +394,20 @@ inline void SuspLocal(const TruckRaw &t, int i, float out[3])
     const float d[3] = { t.wheelAt[i][0] - t.position[0], t.wheelAt[i][1] - t.position[1], t.wheelAt[i][2] - t.position[2] };
     const float *axis[3] = { t.forward, t.up, t.left };
     for (int k = 0; k < 3; k++) out[k] = d[0] * axis[k][0] + d[1] * axis[k][1] + d[2] * axis[k][2];
+}
+
+// The ends from the truck as read: each wheel's place in the chassis's frame, by the places read on this pass.
+inline bool SuspEndsPass(SuspEnds &e, const TruckRaw &t, uint64_t vehicle, int wheels)
+{
+    float forward[kMaxWheels] = {}, left[kMaxWheels] = {};
+    for (int i = 0; i < wheels && i < t.wheels && i < kMaxWheels; i++)
+    {
+        if (!(t.placeRead >> i & 1u)) continue;
+        float local[3];
+        SuspLocal(t, i, local);
+        forward[i] = local[0], left[i] = local[2];
+    }
+    return SuspEndsStep(e, vehicle, wheels, forward, left, t.placeRead);
 }
 
 struct SuspTravel

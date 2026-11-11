@@ -122,6 +122,7 @@ struct TruckRaw
     float spin[kMaxWheels];
     bool waterKnown;               // each wheel's place and the water at it were read
     float wheelAt[kMaxWheels][3];  // wheel + 0x13C: where the wheel's centre is in the world
+    uint32_t placeRead;            // a bit for each wheel whose place was read on this pass
     float wheelWater[kMaxWheels];  // wheel + 0x17C: metres of water the wheel stands in, 0 on dry ground
     bool clockKnown;
     float clock;                   // vehicle + 0x114: the seconds the game has simulated this truck for
@@ -237,6 +238,7 @@ inline bool TruckRead(const TruckMemory &m, const TruckRefs &r, TruckRaw &t)
     else if (speedsEnd > speedsBegin && (speedsEnd - speedsBegin) % 4 == 0 && speedsEnd - speedsBegin <= 1024 * 4)
         t.gearListLong = (int)((speedsEnd - speedsBegin) / 4);
     t.waterKnown = r.wheels > 0;
+    t.placeRead = 0;
     for (int i = 0; i < r.wheels; i++)
     {
         // the wheel from + 0x13C to + 0x180 in one read: its place, its turning speed at + 0x16C, the water at + 0x17C.
@@ -246,6 +248,7 @@ inline bool TruckRead(const TruckMemory &m, const TruckRefs &r, TruckRaw &t)
         if (m.get(r.wheel[i] + 0x13C, w))
         {
             memcpy(t.wheelAt[i], w, sizeof t.wheelAt[i]);
+            if (i < 32) t.placeRead |= 1u << i;
             t.spin[i] = w[12];
             t.wheelWater[i] = w[16] >= 0.0f && w[16] < 100.0f ? w[16] : 0.0f; // 0 too for a depth that is no number
         }

@@ -198,7 +198,7 @@ inline float ZoneFactor(const SpringSet &k, float u, float v, float travel, floa
     return f;
 }
 
-// The factor written for a wheel whose damping is base (stock times DampingScale) at shaft speed v; clamped is set
+// The factor written for a wheel whose damping is base (stock times its end's damping factor) at shaft speed v; clamped is set
 // where the clamp held.
 inline float DamperFactor(const DamperSet &d, float base, float v, bool &clamped)
 {
@@ -244,10 +244,10 @@ struct SuspStepBlock
     DamperSet damper;
     uint64_t vtable;              // the constraints' class, checked before each write
     uint64_t constraint[kMaxWheels]; // [wheel + 0x28] when the block was made; 0 = the damper leaves this wheel alone
-    float base[kMaxWheels];       // the wheel's damping as the tune gives it (stock times DampingScale), never the field's value
+    float base[kMaxWheels];       // the wheel's damping as the tune gives it (stock times its end's damping factor), never the field's value
     bool springing;               // the spring's strength is written each step (a curve or the bump stops)
     SpringSet spring;
-    float baseK[kMaxWheels];      // the wheel's strength as the tune gives it (stock times SpringScale)
+    float baseK[kMaxWheels];      // the wheel's strength as the tune gives it (stock times its end's spring factor)
     float attachUp[kMaxWheels], axisUp[kMaxWheels], travel[kMaxWheels]; // for x = (h - attachUp) / axisUp, and L; axisUp 0 = no place
     uint64_t attachAt[kMaxWheels]; // the attach point's component along up, read each step (the game's ride height moves it), 0 = attachUp
     // the attach point's features (build B): the physics thread writes stock + shift along the axis each step
@@ -260,7 +260,7 @@ struct SuspStepBlock
     bool isLeft[kMaxWheels];
     float along[kMaxWheels], across[kMaxWheels]; // its place in the chassis's frame, forward and to the left (m), for the air suspension's plane
     float sway[kMaxWheels];       // its pair's bar as a share of the axle's spring rate, 0 none or disconnected
-    float springK[kMaxWheels];     // its strength as the tune gives it (stock times SpringScale), for the bar
+    float springK[kMaxWheels];     // its strength as the tune gives it (stock times its end's spring factor), for the bar
     bool air;                      // AirSuspension (build C): each axle held at its rest place, on top of the ride height
     bool leafAxle[kMaxWheels];     // the wheel's axle has no air (air_axles.h): it keeps the game's own, out of the levelling and the keys' height
     float airKeys;                 // the keys' height set, m toward the droop (followed in 3 s; faded out with air off)
@@ -268,7 +268,7 @@ struct SuspStepBlock
     float tiltForward, tiltLeft;   // how far the chassis's forward and left axes point up (their y, the tilt lamp's), NaN not known
     bool display;                  // the display's figures are published each step
     float travelMax[kMaxWheels];   // the droop end, for the display's bars
-    // the tune on the step (BRIEF_step_hook_writes.md): SpringScale and DampingScale written here each step, base and
+    // the tune on the step (BRIEF_step_hook_writes.md): the spring and damping factors written here each step, base and
     // baseK, wherever no feature writes the field; the mod's thread then never writes them
     bool tuneK, tuneD;
     float stockK[kMaxWheels], stockD[kMaxWheels]; // the stock the mod's thread holds: a field at it is no word of the game's
@@ -679,7 +679,7 @@ inline bool SuspDamperStep(SuspStepState &s, const SuspStepBlock &b, const float
         const bool damper = b.damping && !b.bare[i], spring = b.springing && !b.bare[i] && b.travel[i] > 0.0f;
         if (damper)
         {
-            // stock x DampingScale x G(v) x the zone and the bump stop, held once
+            // stock x its end's damping factor x G(v) x the zone and the bump stop, held once
             if (moving && b.base[i] > 0.0f)
             {
                 const float zone = placed && ZonesOn(b.spring) ? ZoneFactor(b.spring, u, s.v[i], b.travel[i], ahead) : 1.0f;
@@ -1123,7 +1123,7 @@ inline void SuspStepLookAt(SuspStepState &s, SuspStepBlock *const volatile *slot
 }
 
 // The damper let go (the mod's thread, once the physics thread has stepped past the block that ran it): each wheel's
-// damping and strength as the tune gives them (stock times DampingScale and SpringScale), where the physics thread
+// damping and strength as the tune gives them (stock times its end's damping and spring factors), where the physics thread
 // wrote them and the constraint is still the block's and of its class. Returns the wheels written. words: the mod's
 // last words (the hook's), nullptr for no check. With them a field is put back only where it holds a word of the
 // mod's, so a value the game set itself stays, and each value put back becomes the mod's word there.

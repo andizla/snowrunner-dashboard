@@ -147,8 +147,9 @@ struct GaugeSettings
     float stallDamage;       // StallDamagePercent: percent of what the gearbox takes that a shift without the clutch costs it (with Damage)
     bool clutchBurn;         // ClutchBurn: a slipping clutch under load heats up and costs the gearbox (with Damage)
     float clutchHeat;        // ClutchHeatPercent: how fast it heats, percent of the model's own pace (kClutchHeatRange); cooling is not scaled
-    float springScale;       // SpringScale: each wheel's suspension spring as a factor of the truck's own (kSuspScaleRange); 1 writes nothing (a test)
-    float dampingScale;      // DampingScale: the same for its damping
+    float springFront, springRear;   // SpringFront, SpringRear: each wheel's suspension spring as a factor of the truck's own (kSuspScaleRange), by the wheel's end
+                                     // (suspension_scan.h, SuspEnds); 1 writes nothing (a test). The one SpringScale of before reads as both
+    float dampingFront, dampingRear; // DampingFront, DampingRear: the same for its damping (DampingScale before)
     float frameFlex;         // FrameFlex: the frame's twist spring as a factor of the truck's own, its damping by the square root (kFrameFlexRange); 1 writes nothing
     float twistRange;        // TwistRange: how far the frame twists, as a factor of the truck's own limits (kTwistRange); 1 writes nothing
     float extraTravel;       // ExtraTravel: cm added past the file's compression end (SuspensionMin), kExtraTravelRange; 0 = the file's, it never shortens (a test).
@@ -240,7 +241,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.stallDamage = 5.0f;
     s.clutchBurn = true;
     s.clutchHeat = 60.0f;
-    s.springScale = s.dampingScale = 1.0f;
+    s.springFront = s.springRear = s.dampingFront = s.dampingRear = 1.0f;
     s.frameFlex = s.twistRange = 1.0f;
     s.extraTravel = 0.0f;
     s.lowCompression = s.highCompression = s.lowRebound = s.highRebound = 1.0f;
@@ -387,8 +388,8 @@ inline void SettingsClamp(GaugeSettings &s)
     s.overRevDamage = SettingsRange(s.overRevDamage, kDamageRange[0], kDamageRange[1]);
     s.stallDamage = SettingsRange(s.stallDamage, kStallDamageRange[0], kStallDamageRange[1]);
     s.clutchHeat = SettingsRange(s.clutchHeat, kClutchHeatRange[0], kClutchHeatRange[1]);
-    s.springScale = SettingsRange(s.springScale, kSuspScaleRange[0], kSuspScaleRange[1]);
-    s.dampingScale = SettingsRange(s.dampingScale, kSuspScaleRange[0], kSuspScaleRange[1]);
+    float *const ends[] = { &s.springFront, &s.springRear, &s.dampingFront, &s.dampingRear };
+    for (float *v : ends) *v = SettingsRange(*v, kSuspScaleRange[0], kSuspScaleRange[1]);
     s.frameFlex = SettingsRange(s.frameFlex, kFrameFlexRange[0], kFrameFlexRange[1]);
     s.twistRange = SettingsRange(s.twistRange, kTwistRange[0], kTwistRange[1]);
     s.extraTravel = SettingsRange(s.extraTravel, kExtraTravelRange[0], kExtraTravelRange[1]);

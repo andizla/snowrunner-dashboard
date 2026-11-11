@@ -952,29 +952,32 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             if (view.suspOwn && view.suspLevel != 2 && view.suspTruckKept) ImGui::TextDisabled("The set of this truck is kept, not in use: This truck only brings it back.");
             ImGui::TextDisabled("In force: %s%s", view.suspLevel == 2 ? "this truck" : view.suspLevel == 1 ? "every " : "the default", view.suspLevel == 1 ? view.truck : "");
         }
-        // under each slider the driven truck's file, front and rear, and what is in force now (the addendum of 2 November,
-        // 13:18): a spring or a damping the game holds at 1 is said so
-        auto fileLine = [&](int k, float factor) {
+        // under each slider the driven truck's file for that slider's end and what is in force now (the addendum of
+        // 2 November, 13:18; its own end only, BRIEF_suspension_front_rear.md N1): a spring or a damping the game holds at 1
+        // is said so
+        auto fileLine = [&](int k, int end, float factor) {
             if (!view.suspKnown)
             {
                 ImGui::TextDisabled("No truck driven: the figures of the file show here.");
                 return;
             }
-            const float f = view.suspFile[k][0], r = view.suspFile[k][1];
-            const float nf = fminf(1.0f, f * factor), nr = fminf(1.0f, r * factor);
-            const bool held = f * factor > 1.0f || r * factor > 1.0f;
-            ImGui::TextDisabled("File %.3g / %.3g (front / rear), now %.3g / %.3g%s", f, r, nf, nr, held ? ", held at the limit of 1 the game sets" : "");
+            const float f = view.suspFile[k][end];
+            ImGui::TextDisabled("File %.3g, now %.3g%s", f, fminf(1.0f, f * factor), f * factor > 1.0f ? ", held at the limit of 1 the game sets" : "");
         };
-        PageLabel("Spring", labelX);
-        ImGui::SetNextItemWidth(w);
-        changed(ImGui::SliderFloat("##springscale", &s.springScale, kSuspScaleRange[0], kSuspScaleRange[1], "x%.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic));
-        PageTip("A test: the spring of each wheel as a factor of its own. Above 1 stiffer and higher. Default 1.");
-        fileLine(0, s.springScale);
-        PageLabel("Damping", labelX);
-        ImGui::SetNextItemWidth(w);
-        changed(ImGui::SliderFloat("##dampingscale", &s.dampingScale, kSuspScaleRange[0], kSuspScaleRange[1], "x%.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic));
-        PageTip("A test: the damping of each wheel as a factor of its own. Above 1 the body settles faster. Default 1.");
-        fileLine(1, s.dampingScale);
+        // Spring and Damping, front and rear apart (BRIEF_suspension_front_rear.md): the ends as Ride front and Ride rear
+        auto scaleRow = [&](const char *label, const char *id, float &value, int k, int end, const char *tip) {
+            PageLabel(label, labelX);
+            ImGui::SetNextItemWidth(w);
+            changed(ImGui::SliderFloat(id, &value, kSuspScaleRange[0], kSuspScaleRange[1], "x%.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic));
+            PageTip(tip);
+            fileLine(k, end, value);
+        };
+        scaleRow("Spring front", "##springfront", s.springFront, 0, 0, "A test: the spring of each front wheel as a factor of its own. Above 1 stiffer and higher. Default 1.");
+        scaleRow("Spring rear", "##springrear", s.springRear, 0, 1,
+                 "A test: the spring of each rear wheel as a factor of its own. Rear is every axle behind the first. Above 1 stiffer and higher. Default 1.");
+        scaleRow("Damping front", "##dampingfront", s.dampingFront, 1, 0, "A test: the damping of each front wheel as a factor of its own. Above 1 the body settles faster. Default 1.");
+        scaleRow("Damping rear", "##dampingrear", s.dampingRear, 1, 1,
+                 "A test: the damping of each rear wheel as a factor of its own. Rear is every axle behind the first. Above 1 the body settles faster. Default 1.");
         // the frame's twist (BRIEF_frame_flex.md part 2): its spring and its limits, from the driven truck's own joint
         auto frameLine = [&](bool limits, float factor) {
             if (!view.frameKnown && !view.frameRigid) ImGui::TextDisabled("No truck driven: the figures of the file show here.");

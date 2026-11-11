@@ -640,6 +640,35 @@ static void IniPutFloat(const wchar_t *section, const wchar_t *key, float v, con
     WritePrivateProfileStringW(section, key, b, ini.c_str());
 }
 
+// The suspension's spring and damping had one key each before front and rear were apart (BRIEF_suspension_front_rear.md,
+// M3 and S1). Read: the old key is both ends, and each new key lies over it where the section has one. Written: the
+// two new keys, and the old key beside them where both ends are alike, so a build of before reads the same; where they
+// differ the old key is removed (a build of before then reads the level below, or 1).
+static const struct
+{
+    const wchar_t *name;
+    float GaugeSettings::*front, GaugeSettings::*rear;
+} kSuspOldFloats[] = {
+    { L"SpringScale", &GaugeSettings::springFront, &GaugeSettings::springRear },
+    { L"DampingScale", &GaugeSettings::dampingFront, &GaugeSettings::dampingRear },
+};
+static bool IniKeyThere(const wchar_t *section, const wchar_t *key, const std::wstring &ini)
+{
+    wchar_t buf[8] = {};
+    return GetPrivateProfileStringW(section, key, L"", buf, 8, ini.c_str()) > 0;
+}
+static void SuspOldRead(const wchar_t *section, GaugeSettings &s, const std::wstring &ini)
+{
+    for (const auto &o : kSuspOldFloats)
+        if (IniKeyThere(section, o.name, ini)) s.*o.front = s.*o.rear = IniFloatIn(section, o.name, s.*o.front, ini);
+}
+static void SuspOldWrite(const wchar_t *section, const GaugeSettings &s, const std::wstring &ini)
+{
+    for (const auto &o : kSuspOldFloats)
+        if (s.*o.front == s.*o.rear) IniPutFloat(section, o.name, s.*o.front, ini);
+        else if (IniKeyThere(section, o.name, ini)) WritePrivateProfileStringW(section, o.name, nullptr, ini.c_str());
+}
+
 static void IniPutInt(const wchar_t *section, const wchar_t *key, int v, const std::wstring &ini)
 {
     wchar_t b[16];
@@ -814,8 +843,11 @@ static void WriteIni(const GaugeSettings &s)
     num(L"StallDamagePercent", s.stallDamage);
     whole(L"ClutchBurn", s.clutchBurn ? 1 : 0);
     num(L"ClutchHeatPercent", s.clutchHeat);
-    num(L"SpringScale", s.springScale);
-    num(L"DampingScale", s.dampingScale);
+    num(L"SpringFront", s.springFront);
+    num(L"SpringRear", s.springRear);
+    num(L"DampingFront", s.dampingFront);
+    num(L"DampingRear", s.dampingRear);
+    SuspOldWrite(kIniSection, s, ini);
     num(L"FrameFlex", s.frameFlex);
     num(L"TwistRange", s.twistRange);
     num(L"ExtraTravel", s.extraTravel);
@@ -1145,8 +1177,9 @@ static void ReadIni(GaugeSettings &s)
                         L"; StallDamagePercent: what a shift without the clutch costs the gearbox, percent of what it takes, 0 to 25 (5), with Damage=1.\n"
                         L"; ClutchBurn=1: a clutch slipping under load heats up and costs the gearbox, a pedal's or the one that works by itself, with Damage=1.\n"
                         L"; ClutchHeatPercent: how fast it heats up, percent of the model's own pace, 10 to 300 (60); lower gives more time to react.\n"
-                        L"; SpringScale, DampingScale (a test): the suspension's spring and damping as a factor of the truck's own, 0.25 to 4 (1 = the truck's own;\n"
-                        L"; the game holds each at 1). ExtraTravel: cm added past the file's compression end, 0 to 30 (0 = the file's; past it a wheel may go into the body).\n"
+                        L"; SpringFront, SpringRear, DampingFront, DampingRear (a test): the suspension's spring and damping as a factor of the truck's own, 0.25 to 4\n"
+                        L"; (1 = the truck's own; the game holds each at 1). Front is the first axle, rear every axle behind it. The older SpringScale and DampingScale\n"
+                        L"; read as both ends; they are written too while both ends are alike and removed once they differ. ExtraTravel: cm added past the file's compression end, 0 to 30 (0 = the file's; past it a wheel may go into the body).\n"
                         L"; FrameFlex: the frame's twist spring as a factor of the truck's own, 0.1 to 7 (its damping by the square root); TwistRange: how far the frame\n"
                         L"; twists, 0.25 to 8 of the truck's own limits, at most 22 degrees (175 on an articulated truck's roll). 1 = the truck's own. Only a truck whose frame twists has them.\n"
                         L"; RideFront, RideRear: each axle's ride height in cm, -10 to 10; SwayFront, SwayRear: a sway bar, 0 to 0.3 of the axle's spring rate (BindSwayDisconnect\n"
@@ -1314,8 +1347,11 @@ static void ReadIni(GaugeSettings &s)
     s.stallDamage = IniFloat(L"StallDamagePercent", s.stallDamage, ini);
     s.clutchBurn = IniBool(L"ClutchBurn", s.clutchBurn, ini);
     s.clutchHeat = IniFloat(L"ClutchHeatPercent", s.clutchHeat, ini);
-    s.springScale = IniFloat(L"SpringScale", s.springScale, ini);
-    s.dampingScale = IniFloat(L"DampingScale", s.dampingScale, ini);
+    SuspOldRead(kIniSection, s, ini); // the one key of before as both ends, then each end's own over it
+    s.springFront = IniFloat(L"SpringFront", s.springFront, ini);
+    s.springRear = IniFloat(L"SpringRear", s.springRear, ini);
+    s.dampingFront = IniFloat(L"DampingFront", s.dampingFront, ini);
+    s.dampingRear = IniFloat(L"DampingRear", s.dampingRear, ini);
     s.frameFlex = IniFloat(L"FrameFlex", s.frameFlex, ini);
     s.twistRange = IniFloat(L"TwistRange", s.twistRange, ini);
     s.extraTravel = IniFloat(L"ExtraTravel", s.extraTravel, ini); // TravelMinScale and TravelMaxScale are no longer read
@@ -1914,7 +1950,8 @@ static bool ScalesSame(const GaugeSettings &a, const GaugeSettings &b)
 // box again brings them back. A section without Own is taken as in force (written by hand). The names are the ini's.
 static const wchar_t *const kSuspSection = L"Suspension";
 static const struct { const wchar_t *name; float GaugeSettings::*v; } kSuspSetFloats[] = {
-    { L"SpringScale", &GaugeSettings::springScale },     { L"DampingScale", &GaugeSettings::dampingScale },
+    { L"SpringFront", &GaugeSettings::springFront },     { L"SpringRear", &GaugeSettings::springRear },
+    { L"DampingFront", &GaugeSettings::dampingFront },   { L"DampingRear", &GaugeSettings::dampingRear },
     { L"ExtraTravel", &GaugeSettings::extraTravel },     { L"RideFront", &GaugeSettings::rideFront },
     { L"RideRear", &GaugeSettings::rideRear },           { L"SwayFront", &GaugeSettings::swayFront },
     { L"CamberGainFront", &GaugeSettings::camberGainFront }, { L"CamberGainRear", &GaugeSettings::camberGainRear },
@@ -1982,6 +2019,9 @@ static int ReadTruckSusp(const char *key, GaugeSettings &s, const char *id = "")
         any = any || there;
         return there;
     };
+    // the one key of before front and rear were apart: both ends, with each end's own key over it below (M3)
+    for (const auto &o : kSuspOldFloats)
+        if (has(o.name)) s.*o.front = s.*o.rear = IniFloatIn(section, o.name, s.*o.front, ini);
     for (const auto &k : kSuspSetFloats)
         if (has(k.name)) s.*k.v = IniFloatIn(section, k.name, s.*k.v, ini);
     for (const auto &k : kSuspSetInts)
@@ -2002,6 +2042,7 @@ static void WriteTruckSusp(const char *key, const GaugeSettings &s, bool own, co
     SetupBegin(kSetupTruck, Wide(key));
     IniPutInt(section, L"Own", own ? 1 : 0, ini);
     for (const auto &k : kSuspSetFloats) IniPutFloat(section, k.name, s.*k.v, ini);
+    SuspOldWrite(section, s, ini);
     for (const auto &k : kSuspSetInts)
         if (s.*k.v >= 0) IniPutInt(section, k.name, s.*k.v, ini); // AirAxleMask -1: none ticked, nothing written
     for (const auto &k : kSuspSetBools) IniPutInt(section, k.name, s.*k.v ? 1 : 0, ini);
@@ -4036,7 +4077,8 @@ static void LogSettings(const GaugeSettings &s)
     Log(L"settings: the oil warm after %g minutes of driving, too hot from %g C", s.oilWarmUpMinutes, s.oilWarnC);
     Log(L"settings: the radiator has all its air from %g km/h; engine damage %s: from %g C, %g percent a minute at 125 C, %g percent a minute for a cold engine floored at the red zone at 0 C, %g percent a minute over-revving; %g percent of the gearbox for a shift without the clutch; clutch burn %s, heating at %g percent of the model's pace",
         s.airFullKmh, s.damage ? L"on" : L"off", s.hotDamageFrom, s.hotDamage, s.coldDamage, s.overRevDamage, s.stallDamage, s.clutchBurn ? L"on" : L"off", s.clutchHeat);
-    Log(L"settings: suspension spring x%g, damping x%g of the truck's own, %g cm of travel past its compression end", s.springScale, s.dampingScale, s.extraTravel);
+    Log(L"settings: suspension spring x%g front and x%g rear, damping x%g front and x%g rear of the truck's own, %g cm of travel past its compression end", s.springFront, s.springRear,
+        s.dampingFront, s.dampingRear, s.extraTravel);
     Log(L"settings: sound volume %d of 100%s%s", s.soundVolume, s.soundsOnly ? L", sounds only: the cluster is not drawn" : L"",
         s.dieselFlutter ? L", a diesel's lift flutters"
                         : SoundWhistles() > 0 ? L", a diesel's lift plays the sounds\\turbo_whistle_ files" : L", a diesel's lift is quiet");
@@ -4193,7 +4235,7 @@ struct SuspStepWatch
     int next;                   // the slot written next
     uint64_t vehicle, constraint[kMaxWheels];
     int wheels;
-    float scale[kSuspValues], position[3];
+    float scale[6], position[3]; // both ends' spring and damping, the extra travel and whether the ends are in use
     SuspStepFrame frame, last;  // this generation's and the one before (a window a new generation cut is logged by its own)
     ULONGLONG bodiesAt;         // when the bodies not found are looked for again
     LONG windows, tail, faults, refused; // the windows, the ring's entries, the faults and the refused writes taken so far
@@ -4394,7 +4436,8 @@ struct TruckWatch
     char idFor[40];             // the id idVehicle was recorded with, and the vehicle the pass that read that id had (step 2's F1)
     uint64_t idVehicle;
     SuspProbe susp;             // the probe's scan for each wheel's suspension constraint (Probe=1)
-    SuspTune tune;              // what SpringScale and DampingScale wrote into each wheel's constraint
+    SuspTune tune;              // what the spring and damping factors wrote into each wheel's constraint
+    SuspEnds ends;              // each wheel's end, front or rear, made once a vehicle (suspension_scan.h)
     FrameTune frame;            // the frame's joint and what FrameFlex and TwistRange wrote into it (frame_flex.h)
     SuspTravel travel;          // the travel probe: each wheel's height in the chassis's frame (Probe=1)
     ULONGLONG travelAt;         // when it logs next
@@ -4934,21 +4977,49 @@ static void FrameFlexPass(FrameTune &t, const TruckMemory &m, const TruckRefs &r
             FrameDeg(t.back[kFrameMin]), FrameDeg(t.back[kFrameMax]));
 }
 
-// SpringScale, DampingScale and ExtraTravel (a test, BRIEF_suspension_simple.md and the addendum of 2 November, 13:18):
-// each wheel's spring and damping as the stock times the slider, its compression end that many cm past the file's
+// The spring and damping factors, front and rear (SpringFront to DampingRear; BRIEF_suspension_front_rear.md), and
+// ExtraTravel (a test, BRIEF_suspension_simple.md and the addendum of 2 November, 13:18):
+// each wheel's spring and damping as the stock times its end's slider, its compression end that many cm past the file's
 // (suspension_scan.h's SuspTuneStep). The stock is read on every truck, for the tab's figures, and nothing is written
 // at the defaults. The stock and
 // the first writes of each wheel are logged with what was read back right after; writes while a slider moves are not
 // counted, and each wheel's values are logged once when the sliders stand still again. A wheel written kSuspWritesBack
 // times with the sliders still is one the game keeps putting back, said once.
 static const int kSuspWritesTold = 2, kSuspWritesBack = 20;
-static void SuspTunePass(SuspTune &t, const TruckMemory &m, const TruckRefs &r, const GaugeSettings &s, const SuspTuneTest *test, const bool *damperOwns,
+
+// The ends as made, once a vehicle: which wheels are front, and a wheel taken as rear because its place was not read.
+static void SuspEndsLog(const SuspEnds &e)
+{
+    wchar_t front[160] = L"", rear[160] = L"";
+    for (int i = 0; i < e.wheels && i < kMaxWheels; i++)
+    {
+        wchar_t one[8];
+        _snwprintf_s(one, _TRUNCATE, L" %d", i);
+        wcsncat_s(e.front[i] ? front : rear, 160, one, _TRUNCATE);
+    }
+    Log(L"suspension: front wheels%s, rear wheels%s (the first axle is front, every other rear; kept for this truck)", front[0] ? front : L" none", rear[0] ? rear : L" none");
+    for (int i = 0; i < e.wheels && i < kMaxWheels; i++)
+        if (e.unread >> i & 1u) Log(L"suspension: wheel %d's place was not read in %d passes: it is taken as rear", i, kEndsWait);
+}
+static void SuspTunePass(SuspTune &t, SuspEnds &ends, const TruckMemory &m, const TruckRefs &r, const GaugeSettings &s, const SuspTuneTest *test, const bool *damperOwns,
                          const bool *springOwns, const SuspModWords *words)
 {
-    const float scale[kSuspValues] = { s.springScale, s.dampingScale, 1.0f, 1.0f };
+    const float scale[2][kSuspValues] = { { s.springFront, s.dampingFront, 1.0f, 1.0f }, { s.springRear, s.dampingRear, 1.0f, 1.0f } };
     int restored = 0;
-    SuspTuneStep(t, m, r, SuspVtable(), scale, &restored, test, damperOwns, springOwns, s.extraTravel / 100.0f, words);
+    SuspTuneStepEnds(t, m, r, SuspVtable(), scale, &ends, &restored, test, damperOwns, springOwns, s.extraTravel / 100.0f, words);
     if (restored) Log(L"suspension: the truck driven before: %d values put back to its stock", restored);
+    if (t.held && ends.vehicle == r.vehicle && !ends.told)
+    {
+        // M2: never a guess and never one end's value on all wheels
+        ends.told = true;
+        Log(L"suspension: front and rear are set apart and this truck's front and rear wheels are not known yet: nothing new is written until they are");
+    }
+    // each wheel's own factors for the lines below (N2); a value held back shows as x0
+    auto own = [&](int i, float front, float rear) {
+        float f = 0.0f;
+        SuspEndFactor(&ends, r.vehicle, i, front, rear, f);
+        return f;
+    };
     for (int i = 0; i < r.wheels && i < kMaxWheels; i++)
     {
         SuspWheel &w = t.wheel[i];
@@ -4959,14 +5030,14 @@ static void SuspTunePass(SuspTune &t, const TruckMemory &m, const TruckRefs &r, 
         {
             float v[kSuspValues] = {};
             for (int k = 0; k < kSuspValues; k++) m.get(w.constraint + kSuspValueAt[k], v[k]);
-            Log(L"suspension: wheel %d at spring x%g, damping x%g, %g cm of extra travel: read back spring %g, damping %g, travel %g to %g", i, scale[0], scale[1],
-                s.extraTravel, v[kSuspStrength], v[kSuspDamping], v[kSuspMin], v[kSuspMax]);
+            Log(L"suspension: wheel %d at spring x%g, damping x%g, %g cm of extra travel: read back spring %g, damping %g, travel %g to %g", i,
+                own(i, s.springFront, s.springRear), own(i, s.dampingFront, s.dampingRear), s.extraTravel, v[kSuspStrength], v[kSuspDamping], v[kSuspMin], v[kSuspMax]);
             w.settle = false;
         }
         if (!w.wroteNow || t.moved) continue;
         if (w.writes <= kSuspWritesTold)
             Log(L"suspension: wheel %d written (spring x%g, damping x%g of the stock, %g cm of extra travel): read back spring %g, damping %g, travel %g to %g", i,
-                scale[0], scale[1], s.extraTravel, w.back[kSuspStrength], w.back[kSuspDamping], w.back[kSuspMin], w.back[kSuspMax]);
+                own(i, s.springFront, s.springRear), own(i, s.dampingFront, s.dampingRear), s.extraTravel, w.back[kSuspStrength], w.back[kSuspDamping], w.back[kSuspMin], w.back[kSuspMax]);
         else if (w.writes == kSuspWritesBack) Log(L"suspension: wheel %d written %d times with the sliders still: the game puts its values back", i, w.writes);
     }
 }
@@ -5380,8 +5451,8 @@ static bool AirFading(const SuspStepWatch &p, const TruckRefs &r)
     return p.block.shifting && (p.block.air || (g_step.level.action && g_step.level.action == r.action));
 }
 
-// SpringScale or DampingScale off 1: with the drive's hook in, the step writes them (BRIEF_step_hook_writes.md).
-static bool TuneOff(const GaugeSettings &s) { return s.springScale != 1.0f || s.dampingScale != 1.0f; }
+// A spring or damping factor of either end off 1: with the drive's hook in, the step writes them (BRIEF_step_hook_writes.md).
+static bool TuneOff(const GaugeSettings &s) { return s.springFront != 1.0f || s.springRear != 1.0f || s.dampingFront != 1.0f || s.dampingRear != 1.0f; }
 
 // The block writes a wheel's spring or damping each step: the damper, a spring feature or the tune.
 static bool BlockWrites(const SuspStepBlock &b) { return b.damping || b.springing || b.tuneK || b.tuneD; }
@@ -5412,7 +5483,7 @@ static void SuspDamperRelease(SuspStepWatch &p, const TruckMemory &m, const wcha
     const int back = SuspDamperLetGo(was, m, &g_step.words);
     _WriteBarrier();
     g_step.wordsSerial = g_step.wordsSerial + 1;
-    Log(L"damper: let go (%s): %d wheels' damping and spring back to the truck's own times DampingScale and SpringScale", why, back);
+    Log(L"damper: let go (%s): %d wheels' damping and spring back to the truck's own times the factors of each wheel's end", why, back);
 }
 
 // The game's own spring or damping the hook found in a wheel it writes (the Reviewer's must 2): taken as the wheel's
@@ -5564,7 +5635,7 @@ static void SwingLog(const TruckMemory &m, const TruckRefs &r, const CamberTune 
     if (swing) Log(L"suspension: swing axles, the camber follows the travel x%g (the look only; %d of %d wheels)", most, swing, r.wheels);
 }
 
-static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const TruckRefs &r, const TruckRaw &t, const GaugeSettings &s, const SuspTune &tune, bool found,
+static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const TruckRefs &r, const TruckRaw &t, const GaugeSettings &s, const SuspTune &tune, const SuspEnds &ends, bool found,
                              ULONGLONG now, bool swayOff, int airHeight, const TiltModel &tilt, int airMask)
 {
     const DamperSet damper = DamperFrom(s);
@@ -5572,7 +5643,11 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
     const bool damping = (DamperOn(damper) || ZonesOn(spring)) && SuspVtable(), springing = SpringOn(spring) && SuspVtable();
     const bool shifting = (AttachFeaturesOn(s) || (r.vehicle == p.vehicle && AirFading(p, r))) && r.vehicle != p.attachOffVehicle && SuspVtable();
     // the tune on the step (BRIEF_step_hook_writes.md): only with the drive's hook in, else the mod's thread writes it
-    const bool tuneK = s.springScale != 1.0f && CreepHooked() && SuspVtable(), tuneD = s.dampingScale != 1.0f && CreepHooked() && SuspVtable();
+    // either end off 1 (S2): a wheel of the end at 1 then gets its stock each step. With the ends apart and not known
+    // yet the step writes none of that value (M2), and the mod's thread writes nothing new either
+    const bool endsIn = ends.known && ends.vehicle == r.vehicle, hooked = CreepHooked() && SuspVtable();
+    const bool tuneK = (s.springFront != 1.0f || s.springRear != 1.0f) && hooked && (endsIn || s.springFront == s.springRear);
+    const bool tuneD = (s.dampingFront != 1.0f || s.dampingRear != 1.0f) && hooked && (endsIn || s.dampingFront == s.dampingRear);
     const bool tuning = tuneK || tuneD;
     if ((!s.probe && !damping && !springing && !shifting && !s.suspDisplay && !tuning) || !found)
     {
@@ -5584,7 +5659,9 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
         }
         return p.generation;
     }
-    const float scale[kSuspValues] = { s.springScale, s.dampingScale, s.extraTravel, 1.0f }; // a change of any is a new generation
+    // a change of any is a new generation; the last is the ends coming into use where front and rear are apart
+    const bool apart = s.springFront != s.springRear || s.dampingFront != s.dampingRear;
+    const float scale[6] = { s.springFront, s.springRear, s.dampingFront, s.dampingRear, s.extraTravel, apart && endsIn ? 1.0f : 0.0f };
     uint64_t constraint[kMaxWheels] = {};
     for (int i = 0; i < r.wheels && i < kMaxWheels; i++) m.get(r.wheel[i] + kSuspConstraintAt, constraint[i]);
     const float jump[3] = { t.position[0] - p.position[0], t.position[1] - p.position[1], t.position[2] - p.position[2] };
@@ -5689,7 +5766,7 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
     // the attach point's stock, read where the constraint is new (never one the mod has written), kept for it after
     for (int i = 0; i < b.wheels; i++)
         if (constraint[i] && constraint[i] != p.attachStockC[i] && m.get(constraint[i] + 0xA4, p.attachStock[i])) p.attachStockC[i] = constraint[i];
-    // the damper: each wheel whose body is known, at its damping as the tune gives it (stock times DampingScale)
+    // the damper: each wheel whose body is known, at its damping as the tune gives it (stock times its end's factor)
     b.damping = damping;
     b.damper = damping ? damper : DamperSet{};
     b.springing = springing;
@@ -5740,20 +5817,24 @@ static uint32_t SuspStepPass(SuspStepWatch &p, const TruckMemory &m, const Truck
         b.isLeft[i] = p.isLeft[i];
         b.along[i] = p.forward[i], b.across[i] = p.left[i];
         b.sway[i] = swayOff ? 0.0f : p.front[i] ? s.swayFront : s.swayRear;
-        b.springK[i] = w.constraint == constraint[i] && SuspValueSane(kSuspStrength, w.stock[kSuspStrength]) ? fminf(1.0f, w.stock[kSuspStrength] * s.springScale) : 0.0f;
+        // the wheel's own factors, by its end (M1: the same source as the tune's write); none where the ends are apart and not known
+        float springBy = 1.0f, dampingBy = 1.0f;
+        const bool springIn = SuspEndFactor(&ends, r.vehicle, i, s.springFront, s.springRear, springBy);
+        const bool dampingIn = SuspEndFactor(&ends, r.vehicle, i, s.dampingFront, s.dampingRear, dampingBy);
+        b.springK[i] = springIn && w.constraint == constraint[i] && SuspValueSane(kSuspStrength, w.stock[kSuspStrength]) ? SuspEndBase(&ends, r.vehicle, i, w.stock[kSuspStrength], s.springFront, s.springRear) : 0.0f;
         b.stockK[i] = b.stockD[i] = 0.0f;
         b.bare[i] = false;
         if ((!running && !tuning) || i >= b.wheels || !constraint[i] || w.constraint != constraint[i]) continue;
         // the damper and the spring's features need the wheel's body; the tune does not
         const bool bodied = !p.frame.other[i];
-        const bool damped = SuspValueSane(kSuspDamping, w.stock[kSuspDamping]) && ((damping && bodied) || tuneD);
-        const bool sprung = SuspValueSane(kSuspStrength, w.stock[kSuspStrength]) && ((springing && bodied && b.travel[i] > 0.0f) || tuneK);
+        const bool damped = dampingIn && SuspValueSane(kSuspDamping, w.stock[kSuspDamping]) && ((damping && bodied) || tuneD);
+        const bool sprung = springIn && SuspValueSane(kSuspStrength, w.stock[kSuspStrength]) && ((springing && bodied && b.travel[i] > 0.0f) || tuneK);
         if (!damped && !sprung) continue;
         b.constraint[i] = constraint[i];
         b.bare[i] = !bodied;
         b.stockK[i] = w.stock[kSuspStrength], b.stockD[i] = w.stock[kSuspDamping];
-        if (damped) b.base[i] = fminf(1.0f, w.stock[kSuspDamping] * s.dampingScale);
-        if (sprung) b.baseK[i] = fminf(1.0f, w.stock[kSuspStrength] * s.springScale);
+        if (damped) b.base[i] = SuspEndBase(&ends, r.vehicle, i, w.stock[kSuspDamping], s.dampingFront, s.dampingRear);
+        if (sprung) b.baseK[i] = SuspEndBase(&ends, r.vehicle, i, w.stock[kSuspStrength], s.springFront, s.springRear);
     }
     // a wheel the physics thread stops owning gets its values back before the new block runs without it
     bool dropped = false;
@@ -5987,7 +6068,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     if (w.found) SuspGameTake(w.step, w.tune);
     SuspModWords words;
     SuspWordsCopy(g_step, words);
-    if (setIn) SuspTunePass(w.tune, m, w.refs, s, stepTest, damperOwns, springOwns, &words);
+    // each wheel's end, before anything takes a factor by it
+    if (w.found && SuspEndsPass(w.ends, raw, w.refs.vehicle, w.refs.wheels) && w.ends.fresh) SuspEndsLog(w.ends);
+    if (setIn) SuspTunePass(w.tune, w.ends, m, w.refs, s, stepTest, damperOwns, springOwns, &words);
     if (setIn) FrameFlexPass(w.frame, m, w.refs, s);
     if (setIn && w.step.on && w.step.value < 0.0f && w.refs.wheels > 0)
     {
@@ -6018,7 +6101,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         AirAxlesLog(w.airAxles, w.airFrom, w.step, w.refs);
         SwingLog(m, w.refs, w.camber);
     }
-    const uint32_t generation = SuspStepPass(w.step, m, w.refs, raw, s, w.tune, setIn, now, w.swayOff, w.airHeight, w.tilt, w.airAxles);
+    const uint32_t generation = SuspStepPass(w.step, m, w.refs, raw, s, w.tune, w.ends, setIn, now, w.swayOff, w.airHeight, w.tilt, w.airAxles);
     if (w.found) StepThreadsLog();
     if (probe && w.found) SuspTravelProbe(w.travel, w.travelAt, m, w.refs, raw, now, generation);
     WorldRead(m, w.found ? w.refs.control : 0, world);
@@ -8908,7 +8991,17 @@ static DWORD WINAPI Run(void *)
         v.suspKnown = false;
         if (driving && watch.tune.vehicle == watch.refs.vehicle && watch.refs.wheels > 0)
         {
-            const SuspWheel &front = watch.tune.wheel[0], &rear = watch.tune.wheel[(watch.refs.wheels < kMaxWheels ? watch.refs.wheels : kMaxWheels) - 1];
+            // a wheel of each end by the kept ends (M1), the first and the last wheel until they are known
+            const int count = watch.refs.wheels < kMaxWheels ? watch.refs.wheels : kMaxWheels;
+            int fi = 0, ri = count - 1;
+            if (watch.ends.known && watch.ends.vehicle == watch.refs.vehicle)
+            {
+                for (int i = count - 1; i >= 0; i--)
+                    if (watch.ends.front[i]) fi = i;
+                for (int i = 0; i < count; i++)
+                    if (!watch.ends.front[i]) ri = i;
+            }
+            const SuspWheel &front = watch.tune.wheel[fi], &rear = watch.tune.wheel[ri];
             v.suspKnown = front.constraint && rear.constraint;
             const int field[3] = { kSuspStrength, kSuspDamping, kSuspMin };
             for (int k = 0; k < 3; k++) v.suspFile[k][0] = front.stock[field[k]], v.suspFile[k][1] = rear.stock[field[k]];
@@ -9086,7 +9179,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.rollWarnDeg == b.rollWarnDeg && a.rollDangerDeg == b.rollDangerDeg && a.pitchDangerDeg == b.pitchDangerDeg &&
            a.warmUpMinutes == b.warmUpMinutes && a.overheatMinutes == b.overheatMinutes && a.coolDownMinutes == b.coolDownMinutes && a.ambientC == b.ambientC &&
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.overRevDamage == b.overRevDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
-           a.springScale == b.springScale && a.dampingScale == b.dampingScale && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange &&
+           a.springFront == b.springFront && a.dampingFront == b.dampingFront && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
            a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.diffType == b.diffType && a.physicsRate == b.physicsRate && a.engineBrake == b.engineBrake && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
            a.camberGainFront == b.camberGainFront && a.camberGainRear == b.camberGainRear && a.camberRestFront == b.camberRestFront && a.camberRestRear == b.camberRestRear;
@@ -9119,7 +9212,7 @@ int wmain(int argc, wchar_t **argv)
     Check(d.warmUpMinutes == 3.0f && d.overheatMinutes == 1.5f && d.coolDownMinutes == 15.0f && d.ambientC == 15.0f && d.ambientByMap,
           "defaults: the coolant warm after 3 minutes, in the red zone after 1.5, cool after 15, with 15 C outside");
     Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.hotDamageFrom == kTempRed && d.coldDamage == 5.0f && d.overRevDamage == 10.0f && d.stallDamage == 5.0f && d.clutchBurn && d.clutchHeat == 60.0f &&
-              d.springScale == 1.0f && d.dampingScale == 1.0f && d.extraTravel == 0.0f && d.frameFlex == 1.0f && d.twistRange == 1.0f,
+              d.springFront == 1.0f && d.dampingFront == 1.0f && d.extraTravel == 0.0f && d.frameFlex == 1.0f && d.twistRange == 1.0f,
           "defaults: the radiator's full airflow from 30 km/h, engine damage on from the red zone, 10 percent a minute for the heat and 5 for the cold");
     Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.walkSkipsLow && d.positionsByGearbox && !d.ignoreShifter && d.backToA == 0 && d.gameGearDisplay == kGameGearOffOwn && d.input == kInputWheel && !d.powertrain && d.roadLoad && d.wheelCap == 150 && d.pushShare == 0 && d.diffLockBite == 0 && d.diffType == 0 && d.physicsRate == 60 && d.engineBrake == 15.0f && d.modEngineSpeed && d.engineSpeedTop == 1.0f && d.roadCdA == 0.0f && d.engineShare == 50 && d.creep && !d.creepManual && !d.dieselFlutter,
           "defaults: the oil as a second needle, warm after 5 minutes, too hot from 120 C; the standard turbo, a diesel's lift without the flutter; the creep on");
@@ -9223,8 +9316,8 @@ int wmain(int argc, wchar_t **argv)
     c.stallDamage = 12.0f;
     c.clutchBurn = false;
     c.clutchHeat = 150.0f;
-    c.springScale = 1.5f;
-    c.dampingScale = 0.75f;
+    c.springFront = 1.5f;
+    c.dampingFront = 0.75f;
     c.extraTravel = 12.0f;
     c.frameFlex = 2.5f;
     c.twistRange = 0.5f;
@@ -9267,7 +9360,7 @@ int wmain(int argc, wchar_t **argv)
                             c.speedMax != d.speedMax && c.boostMax != d.boostMax && c.rollWarnDeg != d.rollWarnDeg && c.rollDangerDeg != d.rollDangerDeg &&
                             c.pitchDangerDeg != d.pitchDangerDeg && c.warmUpMinutes != d.warmUpMinutes && c.overheatMinutes != d.overheatMinutes &&
                             c.coolDownMinutes != d.coolDownMinutes && c.ambientC != d.ambientC && c.ambientByMap != d.ambientByMap && c.airFullKmh != d.airFullKmh && c.damage != d.damage &&
-                            c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.overRevDamage != d.overRevDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springScale != d.springScale && c.dampingScale != d.dampingScale && c.extraTravel != d.extraTravel && c.frameFlex != d.frameFlex && c.twistRange != d.twistRange && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
+                            c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.overRevDamage != d.overRevDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springFront != d.springFront && c.dampingFront != d.dampingFront && c.extraTravel != d.extraTravel && c.frameFlex != d.frameFlex && c.twistRange != d.twistRange && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
                             c.demo != d.demo && c.probe != d.probe && c.keepLogs != d.keepLogs && c.soundVolume != d.soundVolume && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
                             c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.diffLockBite != d.diffLockBite && c.diffType != d.diffType && c.physicsRate != d.physicsRate && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
@@ -9291,7 +9384,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 152, "ini: the help text survives a write (152 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 153, "ini: the help text survives a write (153 comment lines)");
     // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
     {
         char none[32] = "x", tab[32] = {}, kept[32] = {};
@@ -9364,14 +9457,16 @@ int wmain(int argc, wchar_t **argv)
     WritePrivateProfileStringW(kIniSection, L"HotDamageFrom", L"90", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"StallDamagePercent", L"40", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"ClutchHeatPercent", L"5", ini.c_str());
-    WritePrivateProfileStringW(kIniSection, L"SpringScale", L"9", ini.c_str());
+    for (const wchar_t *end : { L"SpringFront", L"DampingRear" }) WritePrivateProfileStringW(kIniSection, end, L"9", ini.c_str());
+    for (const wchar_t *end : { L"SpringRear", L"DampingFront" }) WritePrivateProfileStringW(kIniSection, end, L"0.01", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"FrameFlex", L"20", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"TwistRange", L"0.01", ini.c_str());
     ReadIni(b);
     const bool held = b.airFullKmh == kAirFullRange[0] && b.hotDamage == kDamageRange[1] && b.coldDamage == 0.0f && b.overRevDamage == kDamageRange[1] && !b.damage && b.hotDamageFrom == kHotDamageFromRange[0] &&
-                      b.stallDamage == kStallDamageRange[1] && b.clutchHeat == kClutchHeatRange[0] && b.springScale == kSuspScaleRange[1] && b.frameFlex == kFrameFlexRange[1] &&
+                      b.stallDamage == kStallDamageRange[1] && b.clutchHeat == kClutchHeatRange[0] && b.springFront == kSuspScaleRange[1] && b.dampingRear == kSuspScaleRange[1] &&
+                      b.springRear == kSuspScaleRange[0] && b.dampingFront == kSuspScaleRange[0] && b.frameFlex == kFrameFlexRange[1] &&
                       b.twistRange == kTwistRange[0];
-    WritePrivateProfileStringW(kIniSection, L"SpringScale", L"1", ini.c_str());
+    for (const wchar_t *end : { L"SpringFront", L"SpringRear", L"DampingFront", L"DampingRear" }) WritePrivateProfileStringW(kIniSection, end, L"1", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"FrameFlex", L"1", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"TwistRange", L"1", ini.c_str());
     // an old ini's TravelMinScale and TravelMaxScale are no longer read: ExtraTravel stays as it was, and a write drops neither
@@ -9670,20 +9765,20 @@ int wmain(int argc, wchar_t **argv)
             DeleteFileW(ini.c_str());
             SettingsState su = {};
             ReadIni(su.plain);
-            su.plain.springScale = 1.25f;
+            su.plain.springFront = 1.25f;
             WriteIni(su.plain);
             // a kind with no section uses the default; with no truck driven a change is the default's
             SettingsFor(su, "susp_hx");
-            const bool hxPlain = !su.suspOwn && !su.suspKept && su.s.springScale == 1.25f;
+            const bool hxPlain = !su.suspOwn && !su.suspKept && su.s.springFront == 1.25f;
             SettingsFor(su, "");
             GaugeSettings ed = su.s;
-            ed.dampingScale = 1.5f;
+            ed.dampingFront = 1.5f;
             SettingsTake(su, ed);
-            const bool noTruckDefault = !su.suspOwn && su.plain.dampingScale == 1.5f;
+            const bool noTruckDefault = !su.suspOwn && su.plain.dampingFront == 1.5f;
             // a change while a kind is driven makes the whole set its own, the bump keys with it; the default stays
             SettingsFor(su, "susp_hx");
             ed = su.s;
-            ed.springScale = 2.0f;
+            ed.springFront = 2.0f;
             ed.bumpStops = true;
             ed.bumpZone = 0.12f;
             ed.bumpForce = 3.0f;
@@ -9695,52 +9790,52 @@ int wmain(int argc, wchar_t **argv)
             GetPrivateProfileStringW(L"Suspension", L"BumpZone", L"", zone, 16, truckFile("susp_hx").c_str());
             GaugeSettings fromIni2;
             ReadIni(fromIni2);
-            Check(hxPlain && noTruckDefault && su.suspOwn && !wcscmp(own, L"1") && !wcscmp(zone, L"0.12") && su.plain.springScale == 1.25f &&
-                      fromIni2.springScale == 1.25f && fromIni2.dampingScale == 1.5f && !fromIni2.bumpStops,
+            Check(hxPlain && noTruckDefault && su.suspOwn && !wcscmp(own, L"1") && !wcscmp(zone, L"0.12") && su.plain.springFront == 1.25f &&
+                      fromIni2.springFront == 1.25f && fromIni2.dampingFront == 1.5f && !fromIni2.bumpStops,
                   "suspension: a kind with no section uses the default, a change while it is driven makes the whole set its own with the bump keys, and the default stays");
             // two kinds in turn each get their own; A, then B, then A again gives A's set over the default, no climb
             SettingsFor(su, "susp_ww");
             ed = su.s;
-            const bool wwStartsPlain = !su.suspOwn && ed.springScale == 1.25f && !ed.bumpStops;
-            ed.springScale = 0.75f;
+            const bool wwStartsPlain = !su.suspOwn && ed.springFront == 1.25f && !ed.bumpStops;
+            ed.springFront = 0.75f;
             SettingsTake(su, ed);
             SettingsWrite(su);
             SettingsFor(su, "susp_hx");
             const GaugeSettings hxFirst = su.s;
             SettingsFor(su, "susp_ww");
-            const bool wwOwn = su.suspOwn && su.s.springScale == 0.75f && !su.s.bumpStops;
+            const bool wwOwn = su.suspOwn && su.s.springFront == 0.75f && !su.s.bumpStops;
             SettingsFor(su, "susp_hx");
-            Check(wwStartsPlain && wwOwn && su.suspOwn && su.s.springScale == 2.0f && su.s.bumpForce == 3.0f && SuspSame(su.s, hxFirst) &&
-                      su.s.dampingScale == 1.5f,
+            Check(wwStartsPlain && wwOwn && su.suspOwn && su.s.springFront == 2.0f && su.s.bumpForce == 3.0f && SuspSame(su.s, hxFirst) &&
+                      su.s.dampingFront == 1.5f,
                   "suspension: two kinds in turn each get their own set, and A to B to A gives A's set as it was, on the default, not on B's");
             // the box off keeps the values with Own=0 and the default is in force; on again brings them back
             SettingsSuspOwn(su, false);
             GetPrivateProfileStringW(L"Suspension", L"Own", L"", own, 8, truckFile("susp_hx").c_str());
-            const bool offDefault = !su.suspOwn && su.suspKept && su.s.springScale == 1.25f && !su.s.bumpStops && !wcscmp(own, L"0");
+            const bool offDefault = !su.suspOwn && su.suspKept && su.s.springFront == 1.25f && !su.s.bumpStops && !wcscmp(own, L"0");
             SettingsFor(su, "susp_hx");
-            const bool offAfterReload = !su.suspOwn && su.suspKept && su.s.springScale == 1.25f;
+            const bool offAfterReload = !su.suspOwn && su.suspKept && su.s.springFront == 1.25f;
             SettingsSuspOwn(su, true);
-            const bool back = su.suspOwn && !su.suspKept && su.s.springScale == 2.0f && su.s.bumpZone == 0.12f;
+            const bool back = su.suspOwn && !su.suspKept && su.s.springFront == 2.0f && su.s.bumpZone == 0.12f;
             SettingsFor(su, "susp_hx");
-            Check(offDefault && offAfterReload && back && su.suspOwn && su.s.springScale == 2.0f,
+            Check(offDefault && offAfterReload && back && su.suspOwn && su.s.springFront == 2.0f,
                   "suspension: the box off keeps the set with Own=0 and the default in force, on again brings the set back");
             // a change while the set is kept edits the default: the file's set and Own=0 stay, [Gauges] takes it (review F1)
             SettingsSuspOwn(su, false);
             ed = su.s;
-            ed.springScale = 0.5f;
+            ed.springFront = 0.5f;
             SettingsTake(su, ed);
             SettingsWrite(su);
             wchar_t keptSpring[16] = {};
             GetPrivateProfileStringW(L"Suspension", L"Own", L"", own, 8, truckFile("susp_hx").c_str());
-            GetPrivateProfileStringW(L"Suspension", L"SpringScale", L"", keptSpring, 16, truckFile("susp_hx").c_str());
+            GetPrivateProfileStringW(L"Suspension", L"SpringFront", L"", keptSpring, 16, truckFile("susp_hx").c_str());
             GaugeSettings fromIniKept;
             ReadIni(fromIniKept);
-            const bool keptStays = !su.suspOwn && su.suspKept && !wcscmp(own, L"0") && !wcscmp(keptSpring, L"2") && fromIniKept.springScale == 0.5f && su.plain.springScale == 0.5f;
+            const bool keptStays = !su.suspOwn && su.suspKept && !wcscmp(own, L"0") && !wcscmp(keptSpring, L"2") && fromIniKept.springFront == 0.5f && su.plain.springFront == 0.5f;
             SettingsSuspOwn(su, true);
-            Check(keptStays && su.suspOwn && su.s.springScale == 2.0f && su.plain.springScale == 0.5f,
+            Check(keptStays && su.suspOwn && su.s.springFront == 2.0f && su.plain.springFront == 0.5f,
                   "suspension: a change while the set is kept edits the default, the box stays off, and the file's set and Own=0 stay as they were");
             ed = su.plain;
-            ed.springScale = 1.25f;
+            ed.springFront = 1.25f;
             su.plain = ed;
             WriteIni(su.plain);
             SettingsFor(su, "susp_hx");
@@ -9749,7 +9844,7 @@ int wmain(int argc, wchar_t **argv)
             SettingsFor(su, "susp_old");
             SettingsSuspOwn(su, true);
             GetPrivateProfileStringW(L"Suspension", L"Own", L"", own, 8, truckFile("susp_old").c_str());
-            const bool onFresh = su.suspOwn && su.s.springScale == 1.25f && !wcscmp(own, L"1");
+            const bool onFresh = su.suspOwn && su.s.springFront == 1.25f && !wcscmp(own, L"1");
             DeleteFileW(truckFile("susp_old").c_str());
             // "Make these the default": Gauges.ini takes the truck's set, the truck keeps its own
             SettingsFor(su, "susp_hx");
@@ -9759,7 +9854,7 @@ int wmain(int argc, wchar_t **argv)
             ReadIni(fromIni3);
             SettingsFor(su, "susp_hx");
             GetPrivateProfileStringW(L"Suspension", L"Own", L"", own, 8, truckFile("susp_hx").c_str());
-            Check(onFresh && fromIni3.springScale == 2.0f && fromIni3.bumpStops && fromIni3.bumpZone == 0.12f && su.suspOwn && su.s.springScale == 2.0f && !wcscmp(own, L"1"),
+            Check(onFresh && fromIni3.springFront == 2.0f && fromIni3.bumpStops && fromIni3.bumpZone == 0.12f && su.suspOwn && su.s.springFront == 2.0f && !wcscmp(own, L"1"),
                   "suspension: the box on with nothing kept takes the default shown, and Make these the default writes Gauges.ini and leaves the truck's own");
             // giving up the scales leaves the suspension and its file; the defaults button keeps the set with Own=0
             ed = su.s;
@@ -9769,7 +9864,7 @@ int wmain(int argc, wchar_t **argv)
             SettingsDrop(su);
             const bool fileStays = GetFileAttributesW(truckFile("susp_hx").c_str()) != INVALID_FILE_ATTRIBUTES;
             SettingsFor(su, "susp_hx");
-            const bool suspStays = fileStays && !su.own && su.suspOwn && su.s.springScale == 2.0f;
+            const bool suspStays = fileStays && !su.own && su.suspOwn && su.s.springFront == 2.0f;
             SettingsToDefaults(su);
             SettingsWrite(su);
             SettingsFor(su, "susp_hx");
@@ -9780,11 +9875,143 @@ int wmain(int argc, wchar_t **argv)
             // a section written by hand without Own is in force; a value out of range is held as [Gauges]' are
             WritePrivateProfileStringW(L"Suspension", L"SpringScale", L"9", truckFile("susp_old").c_str());
             SettingsFor(su, "susp_old");
-            Check(su.suspOwn && su.s.springScale == kSuspScaleRange[1], "suspension: a section without Own is in force, its values held to their ranges");
+            Check(su.suspOwn && su.s.springFront == kSuspScaleRange[1] && su.s.springRear == kSuspScaleRange[1],
+                  "suspension: a section without Own is in force, its values held to their ranges (the one SpringScale of before as both ends)");
             DeleteFileW(truckFile("susp_old").c_str());
+            // front and rear apart (BRIEF_suspension_front_rear.md, M3 and S1): the one key of before reads as both ends at
+            // each level and moves nothing; the first save writes the two new keys
+            {
+                const GaugeSettings plainWas = su.plain;
+                auto bytes = [](const std::wstring &path) {
+                    std::string all;
+                    FILE *f = nullptr;
+                    if (_wfopen_s(&f, path.c_str(), L"rb") || !f) return all;
+                    char buf[4096];
+                    for (size_t got; (got = fread(buf, 1, sizeof buf, f)) > 0;) all.append(buf, got);
+                    fclose(f);
+                    return all;
+                };
+                auto there = [&](const std::wstring &file, const wchar_t *section, const wchar_t *key) { return IniKeyThere(section, key, file); };
+                const wchar_t *const ends[] = { L"SpringFront", L"SpringRear", L"DampingFront", L"DampingRear" };
+                // the default's: an ini of before, with the one key each
+                SettingsFor(su, "");
+                for (const wchar_t *end : ends) WritePrivateProfileStringW(kIniSection, end, nullptr, ini.c_str());
+                WritePrivateProfileStringW(kIniSection, L"SpringScale", L"1.6", ini.c_str());
+                WritePrivateProfileStringW(kIniSection, L"DampingScale", L"0.7", ini.c_str());
+                const std::string iniWas = bytes(ini);
+                ReadIni(su.plain);
+                SettingsFor(su, "");
+                const bool defRead = su.s.springFront == 1.6f && su.s.springRear == 1.6f && su.s.dampingFront == 0.7f && su.s.dampingRear == 0.7f && bytes(ini) == iniWas && !iniWas.empty();
+                SettingsWrite(su);
+                GaugeSettings again;
+                ReadIni(again);
+                const bool defSaved = IniFloat(L"SpringFront", 0.0f, ini) == 1.6f && IniFloat(L"SpringRear", 0.0f, ini) == 1.6f && IniFloat(L"DampingFront", 0.0f, ini) == 0.7f &&
+                                      IniFloat(L"DampingRear", 0.0f, ini) == 0.7f && IniFloat(L"SpringScale", 0.0f, ini) == 1.6f && IniFloat(L"DampingScale", 0.0f, ini) == 0.7f &&
+                                      SuspSame(again, su.s);
+                // unlike ends: the old key goes, the other stays; a new key lies over an old one left by hand
+                GaugeSettings apart = su.s;
+                apart.springRear = 2.5f;
+                SettingsTake(su, apart);
+                SettingsWrite(su);
+                ReadIni(again);
+                const bool defApart = !there(ini, kIniSection, L"SpringScale") && there(ini, kIniSection, L"DampingScale") && again.springFront == 1.6f && again.springRear == 2.5f &&
+                                      again.dampingFront == 0.7f && again.dampingRear == 0.7f;
+                WritePrivateProfileStringW(kIniSection, L"SpringScale", L"3", ini.c_str());
+                ReadIni(again);
+                const bool newOver = again.springFront == 1.6f && again.springRear == 2.5f;
+                WritePrivateProfileStringW(kIniSection, L"SpringRear", nullptr, ini.c_str());
+                ReadIni(again);
+                const bool oneOver = again.springFront == 1.6f && again.springRear == 3.0f; // the old key for the end without its own
+                Check(defRead && defSaved && defApart && newOver && oneOver,
+                      "front and rear: an ini of before reads its one SpringScale and DampingScale as both ends and is not written by the read; the first save writes the four new keys "
+                      "and keeps the old key while both ends are alike, takes it out once they differ; a new key lies over the old one");
+                // back to an ini with all at 1 for the levels below
+                SettingsDefaults(su.plain);
+                WriteIni(su.plain);
+                // the kind's: a section of before, in force (no Own) and kept (Own=0)
+                const std::wstring tf = truckFile("susp_m3");
+                DeleteFileW(tf.c_str());
+                WritePrivateProfileStringW(L"Suspension", L"SpringScale", L"1.5", tf.c_str());
+                WritePrivateProfileStringW(L"Suspension", L"DampingScale", L"0.6", tf.c_str());
+                const std::string kindWas = bytes(tf);
+                SettingsFor(su, "susp_m3");
+                GaugeSettings want = su.plain;
+                want.springFront = want.springRear = 1.5f, want.dampingFront = want.dampingRear = 0.6f;
+                const bool kindRead = SuspLevel(su) == kSuspLevelKind && su.suspOwn && !su.suspKept && !su.suspChanged && SuspSame(su.s, want);
+                SettingsTake(su, su.s); // the tab's frame with nothing moved
+                SettingsWrite(su);
+                const bool kindStill = bytes(tf) == kindWas && !kindWas.empty() && !su.suspChanged && SuspLevel(su) == kSuspLevelKind;
+                GaugeSettings moved = su.s;
+                moved.dampingFront = 0.9f;
+                SettingsTake(su, moved);
+                SettingsWrite(su);
+                const bool kindSaved = IniFloatIn(L"Suspension", L"SpringFront", 0.0f, tf) == 1.5f && IniFloatIn(L"Suspension", L"SpringRear", 0.0f, tf) == 1.5f &&
+                                       IniFloatIn(L"Suspension", L"SpringScale", 0.0f, tf) == 1.5f && IniFloatIn(L"Suspension", L"DampingFront", 0.0f, tf) == 0.9f &&
+                                       IniFloatIn(L"Suspension", L"DampingRear", 0.0f, tf) == 0.6f && !there(tf, L"Suspension", L"DampingScale");
+                SettingsFor(su, "susp_m3");
+                const bool kindBack = su.suspOwn && su.s.springFront == 1.5f && su.s.springRear == 1.5f && su.s.dampingFront == 0.9f && su.s.dampingRear == 0.6f;
+                DeleteFileW(tf.c_str());
+                WritePrivateProfileStringW(L"Suspension", L"Own", L"0", tf.c_str());
+                WritePrivateProfileStringW(L"Suspension", L"SpringScale", L"2", tf.c_str());
+                const std::string keptWas = bytes(tf);
+                SettingsFor(su, "susp_m3");
+                const bool keptRead = !su.suspOwn && su.suspKept && SuspLevel(su) == kSuspLevelDefault && SuspSame(su.s, su.plain) && su.s.springFront == 1.0f && su.s.springRear == 1.0f;
+                SettingsTake(su, su.s);
+                SettingsWrite(su);
+                const bool keptStill = bytes(tf) == keptWas && !su.suspOwn && su.suspKept;
+                SettingsSuspOwn(su, true);
+                const bool keptOn = su.suspOwn && su.s.springFront == 2.0f && su.s.springRear == 2.0f;
+                // this truck's: its section of before with one new key over the old one, and the range on all four
+                const char *const m3id = "{0A000000-0000-0000-0000-0000000000A3}";
+                const std::wstring ms = SuspSectionOf(m3id);
+                DeleteFileW(tf.c_str());
+                WritePrivateProfileStringW(ms.c_str(), L"SpringScale", L"0.5", tf.c_str());
+                WritePrivateProfileStringW(ms.c_str(), L"SpringRear", L"3", tf.c_str());
+                WritePrivateProfileStringW(ms.c_str(), L"DampingScale", L"1.2", tf.c_str());
+                const std::string truckWas = bytes(tf);
+                SettingsFor(su, "susp_m3", m3id);
+                const bool truckRead = SuspLevel(su) == kSuspLevelTruck && su.truckOwn && !su.truckChanged && su.s.springFront == 0.5f && su.s.springRear == 3.0f &&
+                                       su.s.dampingFront == 1.2f && su.s.dampingRear == 1.2f && bytes(tf) == truckWas;
+                WritePrivateProfileStringW(ms.c_str(), L"SpringFront", L"9", tf.c_str());
+                WritePrivateProfileStringW(ms.c_str(), L"SpringRear", L"0.01", tf.c_str());
+                WritePrivateProfileStringW(ms.c_str(), L"DampingFront", L"0.01", tf.c_str());
+                WritePrivateProfileStringW(ms.c_str(), L"DampingRear", L"9", tf.c_str());
+                SettingsFor(su, "susp_m3", m3id);
+                const bool ranged = su.s.springFront == kSuspScaleRange[1] && su.s.springRear == kSuspScaleRange[0] && su.s.dampingFront == kSuspScaleRange[0] &&
+                                    su.s.dampingRear == kSuspScaleRange[1];
+                Check(kindRead && kindStill && kindSaved && kindBack && keptRead && keptStill && keptOn && truckRead && ranged,
+                      "front and rear: a kind's section of before reads as both ends at the same level with nothing changed and its file untouched until a slider moves, then holds the "
+                      "new keys; a kept one stays kept, untouched, and comes back as both ends; a truck's own with a new key over the old; all four keys held to the range");
+                // Defaults put both ends back, at the default and with a kind's set in force (kept with Own=0, 1 in force)
+                DeleteFileW(tf.c_str());
+                SettingsFor(su, "");
+                GaugeSettings four = su.s;
+                four.springFront = 1.3f, four.springRear = 0.6f, four.dampingFront = 2.0f, four.dampingRear = 0.5f;
+                SettingsTake(su, four);
+                SettingsWrite(su);
+                GaugeSettings fromIni4;
+                ReadIni(fromIni4);
+                const bool fourSaved = fromIni4.springFront == 1.3f && fromIni4.springRear == 0.6f && fromIni4.dampingFront == 2.0f && fromIni4.dampingRear == 0.5f;
+                SettingsFor(su, "susp_m3");
+                four = su.s;
+                four.springRear = 3.5f;
+                SettingsTake(su, four);
+                SettingsWrite(su);
+                const bool kindApart = su.suspOwn && IniFloatIn(L"Suspension", L"SpringRear", 0.0f, tf) == 3.5f && IniFloatIn(L"Suspension", L"SpringFront", 0.0f, tf) == 1.3f;
+                SettingsToDefaults(su);
+                SettingsWrite(su);
+                ReadIni(fromIni4);
+                auto ones = [](const GaugeSettings &g) { return g.springFront == 1.0f && g.springRear == 1.0f && g.dampingFront == 1.0f && g.dampingRear == 1.0f; };
+                Check(fourSaved && kindApart && ones(su.s) && ones(su.plain) && ones(fromIni4) && !su.suspOwn,
+                      "front and rear: four unlike values save and read back; Defaults put both ends of the spring and the damping back to 1");
+                DeleteFileW(tf.c_str());
+                su.plain = plainWas;
+                WriteIni(su.plain);
+                SettingsFor(su, "susp_old");
+            }
             // a pull learned on the mod's thread while the tab writes the suspension into the same file: neither is lost
             struct Both { GaugeSettings s; } both = { su.s };
-            both.s.springScale = 1.75f;
+            both.s.springFront = 1.75f;
             HANDLE writers[2];
             writers[0] = CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
                 for (int k = 0; k < 200; k++) GearBaseWrite("susp_ww", "e_test", 1 + k % 8, 1.0f + k * 0.01f);
@@ -9800,7 +10027,7 @@ int wmain(int argc, wchar_t **argv)
             float bases[kMaxGears] = {};
             const int learned = GearBaseRead("susp_ww", "e_test", bases);
             SettingsFor(su, "susp_ww");
-            Check(learned == 8 && fabsf(bases[8] - 2.99f) < 0.001f && su.suspOwn && su.s.springScale == 1.75f,
+            Check(learned == 8 && fabsf(bases[8] - 2.99f) < 0.001f && su.suspOwn && su.s.springFront == 1.75f,
                   "suspension: the learned pulls and the tab's suspension written into one file at once both stay");
             // the wheels' drag mark (the Reviewer's point 5): old figures for gears 2 and 3 without BaseDamp, the read drops
             // both and marks; gear 2 learned again; read again: gear 2 the new one, gear 3 is 0. A truck with no figures
@@ -9868,29 +10095,29 @@ int wmain(int argc, wchar_t **argv)
                 // the kind's own set, then this truck only: the truck's level in force, the kind's stays for the others
                 SettingsFor(su, kind, id1);
                 ed = su.s;
-                ed.springScale = 1.5f;
+                ed.springFront = 1.5f;
                 SettingsTake(su, ed);
                 SettingsWrite(su);
                 const bool kindFirst = SuspLevel(su) == kSuspLevelKind && su.suspOwn && !su.truckOwn;
                 SettingsSuspLevel(su, true);
                 ed = su.s;
-                ed.springScale = 2.5f;
+                ed.springFront = 2.5f;
                 ed.bumpStops = true;
                 SettingsTake(su, ed);
                 SettingsWrite(su);
                 SettingsFor(su, kind, id1);
-                const bool truckLevel = SuspLevel(su) == kSuspLevelTruck && su.s.springScale == 2.5f && su.s.bumpStops;
+                const bool truckLevel = SuspLevel(su) == kSuspLevelTruck && su.s.springFront == 2.5f && su.s.bumpStops;
                 SettingsFor(su, kind, id3);
-                const bool othersKind = SuspLevel(su) == kSuspLevelKind && su.s.springScale == 1.5f && !su.s.bumpStops;
+                const bool othersKind = SuspLevel(su) == kSuspLevelKind && su.s.springFront == 1.5f && !su.s.bumpStops;
                 Check(kindFirst && truckLevel && othersKind,
                       "suspension: This truck only puts the set at the truck's level by its id, in force for it, and the kind's stays for another truck of the kind");
                 // a new id takes the kind's level (a truck out of the warehouse), and A to B to A gives A's set from the default, no climb
                 SettingsFor(su, kind, id1);
                 const GaugeSettings aFirst = su.s;
                 SettingsFor(su, other, idB);
-                const bool bPlain = SuspLevel(su) == kSuspLevelDefault && su.s.springScale == su.plain.springScale;
+                const bool bPlain = SuspLevel(su) == kSuspLevelDefault && su.s.springFront == su.plain.springFront;
                 SettingsFor(su, kind, id1);
-                Check(bPlain && SuspSame(su.s, aFirst) && su.s.springScale == 2.5f,
+                Check(bPlain && SuspSame(su.s, aFirst) && su.s.springFront == 2.5f,
                       "suspension: A to B to A gives the truck's own set as it was, on the default, not on B's");
                 // the take-over: gone, back as the same kind under a new id within 20 s with none between
                 SuspTracker t = {};
@@ -9904,9 +10131,9 @@ int wmain(int argc, wchar_t **argv)
                 const bool due = SuspTrack(t, none, a2, 6000, gone) && !strcmp(gone, id1);
                 const bool copied = TruckSuspTakeOver(kind, gone, id2);
                 SettingsFor(su, kind, id2);
-                const bool takenOver = SuspLevel(su) == kSuspLevelTruck && su.s.springScale == 2.5f && su.s.bumpStops;
+                const bool takenOver = SuspLevel(su) == kSuspLevelTruck && su.s.springFront == 2.5f && su.s.bumpStops;
                 SettingsFor(su, kind, id1);
-                const bool oldKept = SuspLevel(su) == kSuspLevelTruck && su.s.springScale == 2.5f;
+                const bool oldKept = SuspLevel(su) == kSuspLevelTruck && su.s.springFront == 2.5f;
                 Check(away && due && copied && takenOver && oldKept,
                       "suspension: the take-over: the same kind back under a new id 5 s after it went takes the set over, and the old id keeps its own");
                 // a switch to another truck and back is none, nor a gap over 20 s, nor the same id back
@@ -9927,12 +10154,12 @@ int wmain(int argc, wchar_t **argv)
                 SettingsFor(su, kind, id3);
                 SettingsSuspLevel(su, true);
                 ed = su.s;
-                ed.springScale = 0.75f;
+                ed.springFront = 0.75f;
                 SettingsTake(su, ed);
                 SettingsWrite(su);
                 const bool notOver = !TruckSuspTakeOver(kind, id1, id3);
                 SettingsFor(su, kind, id3);
-                Check(viaB && late && same && direct && notOver && su.s.springScale == 0.75f,
+                Check(viaB && late && same && direct && notOver && su.s.springFront == 0.75f,
                       "suspension: no take-over after a switch to another truck and back, a gap over 20 s, the same id back, or onto an id with a set of its own");
                 // the same vehicle object back under a new id is the same truck, however long the gap (a garage visit took
                 // 21 s, the drive of 2026-11-06 22:37); another vehicle only within 20 s; the same pointer with another
@@ -9962,7 +10189,7 @@ int wmain(int argc, wchar_t **argv)
                     const bool dueOwn = back(va, a3, va, 30000, 0, nullptr);
                     const bool ownKept = dueOwn && !TruckSuspTakeOver(kind, gone, id3);
                     SettingsFor(su, kind, id3);
-                    Check(same21 && same120 && same600 && soonOther && other21 && kindOther && loaded && noVehicle && between && ownKept && su.s.springScale == 0.75f,
+                    Check(same21 && same120 && same600 && soonOther && other21 && kindOther && loaded && noVehicle && between && ownKept && su.s.springFront == 0.75f,
                           "suspension: the take-over on the same vehicle object after 21 s, 120 s and 10 min; another vehicle only within 20 s; none for the same "
                           "pointer with another kind, another truck between or a load between; an id with a set of its own keeps it on the same pointer");
                 }
@@ -9995,24 +10222,24 @@ int wmain(int argc, wchar_t **argv)
                 // while driven, a new id (the game made the truck anew under the driver) takes the set over
                 SettingsFor(su, kind, id1);
                 const char *id4 = "{44444444-4444-4444-4444-444444444444}";
-                const bool whileDriven = SettingsTakeOver(su, id4) && !strcmp(su.id, id4) && SuspLevel(su) == kSuspLevelTruck && su.s.springScale == 2.5f;
+                const bool whileDriven = SettingsTakeOver(su, id4) && !strcmp(su.id, id4) && SuspLevel(su) == kSuspLevelTruck && su.s.springFront == 2.5f;
                 // Own=0 at the truck's level keeps its set there, and the kind's is in force for it; ticked again it is back
                 SettingsSuspOwn(su, false);
                 wchar_t own[8] = {};
                 GetPrivateProfileStringW(SuspSectionOf(id4).c_str(), L"Own", L"", own, 8, truckFile(kind).c_str());
-                const bool keptTruck = !su.truckOwn && su.truckKept && SuspLevel(su) == kSuspLevelKind && su.s.springScale == 1.5f && !wcscmp(own, L"0");
+                const bool keptTruck = !su.truckOwn && su.truckKept && SuspLevel(su) == kSuspLevelKind && su.s.springFront == 1.5f && !wcscmp(own, L"0");
                 SettingsFor(su, kind, id4);
                 const bool keptRead = su.truckKept && SuspLevel(su) == kSuspLevelKind;
                 SettingsSuspLevel(su, true);
-                Check(whileDriven && keptTruck && keptRead && SuspLevel(su) == kSuspLevelTruck && su.s.springScale == 2.5f,
+                Check(whileDriven && keptTruck && keptRead && SuspLevel(su) == kSuspLevelTruck && su.s.springFront == 2.5f,
                       "suspension: a new id while driven takes the set over; Own=0 at the truck's level keeps it, the kind's in force, and This truck only brings it back");
                 // Every <kind> with a set for the kind (review F2): the kind's in force, the truck's kept with Own=0, This truck only brings it back
                 SettingsSuspLevel(su, false);
                 wchar_t keptOwn[8] = {};
                 GetPrivateProfileStringW(SuspSectionOf(id4).c_str(), L"Own", L"", keptOwn, 8, truckFile(kind).c_str());
-                const bool kindInForce = SuspLevel(su) == kSuspLevelKind && su.s.springScale == 1.5f && su.truckKept && !wcscmp(keptOwn, L"0");
+                const bool kindInForce = SuspLevel(su) == kSuspLevelKind && su.s.springFront == 1.5f && su.truckKept && !wcscmp(keptOwn, L"0");
                 SettingsSuspLevel(su, true);
-                const bool backAgain = SuspLevel(su) == kSuspLevelTruck && su.s.springScale == 2.5f;
+                const bool backAgain = SuspLevel(su) == kSuspLevelTruck && su.s.springFront == 2.5f;
                 SettingsFor(su, kind, id3);
                 const bool id3Own = SuspLevel(su) == kSuspLevelTruck; // id3 keeps its own
                 Check(kindInForce && backAgain && id3Own,
@@ -10027,7 +10254,7 @@ int wmain(int argc, wchar_t **argv)
                     wchar_t mine[16] = {};
                     GetPrivateProfileSectionW(SuspSectionOf(id4).c_str(), mine, 16, kf.c_str());
                     SettingsFor(su, kind, "{55555555-5555-5555-5555-555555555555}");
-                    Check(noKind && !mine[0] && SuspLevel(su) == kSuspLevelKind && su.s.springScale == 2.5f,
+                    Check(noKind && !mine[0] && SuspLevel(su) == kSuspLevelKind && su.s.springFront == 2.5f,
                           "suspension: Every <kind> with no set for the kind puts the truck's set at the kind's level and takes the truck's own section out");
                 }
                 // with the id not read the truck has the kind's level only
@@ -10209,21 +10436,21 @@ int wmain(int argc, wchar_t **argv)
                     // written for any other reason carries it only where it was; Defaults takes it out
                     SettingsFor(su, air_az, air_idA);
                     GaugeSettings air_slide = su.s;
-                    air_slide.springScale = 0.8f;
+                    air_slide.springFront = 0.8f;
                     SettingsTake(su, air_slide);
                     SettingsWrite(su);
-                    const bool air_notWritten = SuspLevel(su) == kSuspLevelKind && !air_there(air_az, "") && IniFloatIn(kSuspSection, L"SpringScale", 0.0f, truckFile(air_az)) == 0.8f;
+                    const bool air_notWritten = SuspLevel(su) == kSuspLevelKind && !air_there(air_az, "") && IniFloatIn(kSuspSection, L"SpringFront", 0.0f, truckFile(air_az)) == 0.8f;
                     SettingsSuspLevel(su, true);
                     const bool air_notCarried = !air_there(air_az, air_idA) && !air_there(air_az, "");
                     air_tick(su, 0); // both unticked: a saved 0, none ticked by the player
                     const bool air_zeroWritten = air_there(air_az, air_idA) && GetPrivateProfileIntW(SuspSectionOf(air_idA).c_str(), L"AirAxleMask", -1, truckFile(air_az).c_str()) == 0;
                     air_slide = su.s;
-                    air_slide.dampingScale = 1.3f;
+                    air_slide.dampingFront = 1.3f;
                     SettingsTake(su, air_slide);
                     SettingsWrite(su);
                     int air_fz = -1;
                     SettingsFor(su, air_az, air_idA);
-                    const bool air_kept = air_mask(su, air_fz) == 0 && air_fz == kAirFromTruck && su.s.dampingScale == 1.3f;
+                    const bool air_kept = air_mask(su, air_fz) == 0 && air_fz == kAirFromTruck && su.s.dampingFront == 1.3f;
                     SettingsToDefaults(su);
                     SettingsWrite(su);
                     int air_fd = -1;
@@ -10243,7 +10470,7 @@ int wmain(int argc, wchar_t **argv)
                     // no level in force and a set kept: the tick holds for this truck, not saved, never in the default
                     SettingsFor(su, air_ak, air_idA);
                     air_slide = su.s;
-                    air_slide.springScale = 0.9f;
+                    air_slide.springFront = 0.9f;
                     SettingsTake(su, air_slide);
                     SettingsWrite(su);
                     SettingsSuspOwn(su, false);

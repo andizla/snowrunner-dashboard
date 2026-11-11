@@ -703,8 +703,8 @@ int wmain(int argc, wchar_t **argv)
         // travel past the file's end, so the notes show (the addendum of 2 November, 13:18)
         {
             GaugeSettings t = s;
-            t.springScale = 4.0f;
-            t.dampingScale = 3.0f;
+            t.springFront = t.springRear = 4.0f;
+            t.dampingFront = t.dampingRear = 3.0f;
             t.extraTravel = 12.0f;
             GaugeView v = view;
             strcpy_s(v.truck, "arocs/1180732");
