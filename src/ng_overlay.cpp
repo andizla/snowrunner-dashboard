@@ -131,6 +131,7 @@ static NgChain *g_chain = &g_chainPrivate;
 static volatile LONG g_ready = 0;       // the client's start is done (NgOverlayReady): frames are drawn from now on
 static volatile LONG g_wantServed = 0;  // the want this mod last looked at in its Present
 static volatile LONG g_offers = 0;      // the offers this mod made
+static volatile LONG g_wantOpen = 0;    // this mod asked and its asking is not answered yet
 static volatile LONG g_lateWaitMs = 10000, g_lateGraceMs = 1000;
 
 void NgOverlayReady() { InterlockedExchange(&g_ready, 1); }
@@ -153,6 +154,13 @@ static void ChainJoin()
     InterlockedCompareExchange(&c->version, kNgChainVersion, 0);
     if (c->version == kNgChainVersion) g_chain = c;
     else NG_LOG(L"overlay: another Next Gen mod hands swap chains over another way (block version %ld): this mod neither asks nor offers", c->version);
+}
+
+// This mod's asking is answered, once: by the chain it was offered, by one it took at its making after all, or by
+// an offer it could not use. An asking left open would have every mod that draws offer for nothing.
+static void ChainAnswer()
+{
+    if (InterlockedExchange(&g_wantOpen, 0)) InterlockedIncrement(&g_chain->taken);
 }
 
 // In this mod's Present, on the game's render thread: a Next Gen mod that started late asked for the chain. It is
@@ -1986,6 +1994,7 @@ static void SwapChainOwn(IDXGISwapChain *sc)
     if (why.atStart) NG_LOG(L"overlay: a swap chain's method table lies at the start of its memory (made by %s, Present in %s): copied from there", in, has);
     InterlockedExchangePointer((void **)sc, to);
     InterlockedIncrement(&g_scOwned);
+    ChainAnswer();
     DXGI_SWAP_CHAIN_DESC sd = {};
     sc->GetDesc(&sd);
     wchar_t onto[MAX_PATH];
@@ -2100,19 +2109,14 @@ static BOOL CALLBACK WindowUpEach(HWND w, LPARAM out)
 static DWORD WINAPI WatchThread(void *viaReShade)
 {
     ULONGLONG windowAt = 0;
-    bool wanted = false;
+    bool wanted = false, said = false;
     LONG offeredSeen = g_chain->offered;
     for (;;)
     {
         Sleep(20);
         if (g_ownBroken) return 0;
         NgChain *c = g_chain;
-        if (g_scOwned)
-        {
-            // one came after all, at its making: the asking is answered so that no mod waits on it
-            if (wanted) InterlockedIncrement(&c->taken);
-            return 0;
-        }
+        if (g_scOwned) return 0; // one came after all, at its making; SwapChainOwn answered the asking
         const ULONGLONG now = GetTickCount64();
         if (!windowAt)
         {
@@ -2134,6 +2138,7 @@ static DWORD WINAPI WatchThread(void *viaReShade)
             {
                 wanted = true;
                 offeredSeen = c->offered;
+                InterlockedExchange(&g_wantOpen, 1);
                 InterlockedExchange(&g_wantServed, InterlockedIncrement(&c->want));
                 NG_LOG(L"overlay: the game made its swap chain before the overlay's hook was in: asking the other Next Gen mods for it");
             }
@@ -2147,18 +2152,19 @@ static DWORD WINAPI WatchThread(void *viaReShade)
                     const bool took = g_scOwned != 0;
                     if (took) NG_LOG(L"overlay: the swap chain taken from another Next Gen mod's Present");
                     else NG_LOG(L"overlay: another Next Gen mod offered the swap chain but it could not be given the overlay's Present (the lines above say why)");
-                    InterlockedIncrement(&c->taken);
+                    ChainAnswer(); // where SwapChainOwn did not
                     if (took) return 0;
                 }
             }
         }
-        if (now - windowAt >= (ULONGLONG)g_lateWaitMs)
+        if (!said && now - windowAt >= (ULONGLONG)g_lateWaitMs)
         {
+            said = true; // the watch goes on: an offer may still come
             if (viaReShade) NG_LOG(L"overlay: THE OVERLAY DRAWS NOTHING: ReShade took the overlay as an add-on but handed it no swap chain of the game's");
             else
                 NG_LOG(L"overlay: THE OVERLAY DRAWS NOTHING: the game made its swap chain before the overlay's hook was in, and no other Next Gen mod handed it "
                        L"over; the next swap chain the game makes is taken (a change of the screen mode can make one)");
-            return 0;
+            if (viaReShade) return 0;
         }
     }
 }
