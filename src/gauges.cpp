@@ -3979,7 +3979,8 @@ static void GearboxHooksStep(const GaugeSettings &s)
 // damper, the torque cut or the diff lock's bite is on with a truck driven (DriveHookWanted), at any level of Gearbox,
 // and left in place until the game is started again. With Creep off it gives no share (TruckPass hands it none);
 // without Probe=1 or the damper the step probe has no block and reads nothing. With all five off it is never attached,
-// so the game's drive runs as it is.
+// so the game's drive runs as it is. Since BRIEF_step_check_always.md Powertrain alone asks for it too, for the step's
+// check, and the drive display does (131).
 static void SuspStepHook(uint64_t action, float dt);
 static bool SuspFeaturesOn(const GaugeSettings &s);
 static bool TuneOff(const GaugeSettings &s);
@@ -3989,7 +3990,18 @@ static void CreepHookStep(const GaugeSettings &s, bool driving)
     const bool damper = SuspFeaturesOn(s) || TuneOff(s);
     const bool cut = TorqueCutWanted(s); // the torque cut holds the drive's throttle at 1 through this hook
     const bool bite = s.powertrain && s.diffLockBite > 0; // the diff lock's bite works in this hook (the Reviewer's R4)
-    if (tried || !DriveHookWanted(s.creep, s.probe, damper, cut, s.powertrain, s.diffLockBite, s.driveDisplay) || !driving || !g_drive.drive) return;
+    // the step's check (BRIEF_step_check_always.md, M3): with Powertrain on the mod engine's torque acts, so the hook goes
+    // in for the check alone. With the hook left out, or the drive not found, the log says once that the step is not checked
+    const bool wanted = DriveHookWanted(s.creep, s.probe, damper, cut, s.powertrain, s.diffLockBite, s.driveDisplay) || s.powertrain;
+    static bool notCheckedSaid = false;
+    if (!tried && driving && !notCheckedSaid && !DriveRateOn() && (!wanted || !g_drive.drive)) // at 120 the hook is in from the start
+    {
+        notCheckedSaid = true;
+        Log(L"physics step: not checked: %s. If another mod changes the physics rate, this log and the screen will not say so",
+            !g_drive.drive ? L"the game's wheels' drive was not found in this build of the game"
+                           : L"the wheels' drive is not hooked with these settings (Creep, Probe, Powertrain, the suspension features and the drive display are all off)");
+    }
+    if (tried || !wanted || !driving || !g_drive.drive) return;
     tried = true;
     DriveStepSet(SuspStepHook);
     char why[160] = "";
@@ -7627,6 +7639,9 @@ static DWORD ExeStamp()
 // ---- the physics rate test mode (physics_rate.h; BRIEF_physics_rate_stage1.md) ----
 // What is in force for this run of the game: set once by RateStart, read by the mod's thread alone.
 static int g_rateNow = kRateStock, g_rateNote = kRateNoteNone, g_rateIterAsked = 0;
+// Another mod changes the physics rate (BRIEF_step_check_always.md): set by the step's judge (StepSay) or by a step's
+// float that is not the game's own at the write for 120. Never cleared: the sign stays until the game ends.
+static bool g_stepSignOn = false;
 static uint64_t g_rateSlotAt = 0;
 
 // One page for the mod's floats within reach of every place in the exe's code (a disp32 from the code): the first
@@ -7723,6 +7738,7 @@ static void RateStart()
     }
     if (!found)
     {
+        if (driveOk && plan.foreignStep) g_stepSignOn = true;
         RateOffSay(!driveOk ? drive.why : plan.why);
         return;
     }
@@ -7740,6 +7756,7 @@ static void RateStart()
     if (!readOnly || !RatePlanMake(image.data(), image.size(), from, to, g_base, page, iterations, plan))
     {
         VirtualFree((void *)(uintptr_t)page, 0, MEM_RELEASE);
+        if (readOnly && plan.foreignStep) g_stepSignOn = true;
         RateOffSay(!readOnly ? "the mod's page could not be made read only" : plan.why);
         return;
     }
@@ -7770,7 +7787,11 @@ static void RateStart()
         DriveRateSet(false, 0, 0);
         char line[320];
         const char *name = put.failed >= 0 && put.failed < plan.count ? plan.writes[put.failed].name : "a place";
-        if (!put.written) snprintf(line, sizeof line, "%s does not hold the game's own bytes in memory, so nothing was written", name);
+        const bool stepsCode = !put.written && !strcmp(name, kRateSites[kRateStep].name);
+        if (stepsCode) g_stepSignOn = true;
+        if (!put.written)
+            snprintf(line, sizeof line, "%s does not hold the game's own bytes in memory, so nothing was written%s", name,
+                     stepsCode ? ": another mod has changed the step (its code no longer reads the game's float)" : "");
         else
             snprintf(line, sizeof line, "the write at %s did not hold when read back, after %d that did; %s", name, put.done,
                      put.restored ? "every one of them is back as the game had it" : "NOT every one of them could be put back: the game's code is part changed, start the game again with PhysicsRate=60");
@@ -7831,6 +7852,27 @@ static void RateWorldSay()
             seen.iterations, g_rateIterAsked);
     }
     else if (g_rateNote != kRateNoteOff) g_rateNote = kRateNoteNone;
+}
+
+// On the mod's thread each pass: one line for each verdict of the step's judge (the drive's hook, StepLook), at both
+// rates. A foreign step turns the sign on for the rest of this run of the game.
+static void StepSay()
+{
+    static long said = 0;
+    DriveStepSeen seen = {};
+    DriveStepSeenGet(seen);
+    if (seen.changes == said) return;
+    said = seen.changes;
+    const double perSecond = seen.dt > 0.0f ? 1.0 / (double)seen.dt : 0.0;
+    if (seen.verdict == kStepRight) Log(L"physics step: %.6f s as the drive gets it, the rate in force %d", seen.dt, g_rateNow);
+    else if (seen.verdict == kStepOwnMiss)
+        Log(L"physics step: %.6f s as the drive gets it with 120 in force: this world still steps at 60, made before the mod's write (the world's own line says so). "
+            L"No other mod is in it and no sign is shown", seen.dt);
+    else if (seen.verdict == kStepForeign)
+        Log(L"PHYSICS STEP: %.6f s as the drive gets it (%.0f steps a second), not within 20 percent of the rate in force, %d: another mod changes the physics rate. "
+            L"The figures of this mod are for %d. The sign in the middle of the screen stays until the game ends; nothing else changes",
+            seen.dt, perSecond, g_rateNow, g_rateNow);
+    if (seen.sign) g_stepSignOn = true;
 }
 
 static DWORD WINAPI Run(void *)
@@ -8727,6 +8769,7 @@ static DWORD WINAPI Run(void *)
         GearboxHooksStep(s);
         CreepHookStep(s, driving);
         RateWorldSay();
+        StepSay();
         EngineSpeedHookStep(s, driving);
         TruckInputHookStep(s, driving);
         GearTorqueHookStep(s, driving);
@@ -9156,6 +9199,7 @@ static DWORD WINAPI Run(void *)
             v.st.outsideC = inForce.ambientC;
         }
         v.rateNow = g_rateNow, v.rateNote = g_rateNote;
+        v.stepSign = g_stepSignOn;
         AcquireSRWLockExclusive(&g_viewLock);
         g_view = v;
         ReleaseSRWLockExclusive(&g_viewLock);

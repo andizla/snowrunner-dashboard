@@ -87,6 +87,7 @@ struct RatePlan
     size_t ownerSlot;         // the owner's static
     RateWrite writes[kRateWritesMax]; // in the order they go in: the step last
     int count;
+    bool foreignStep;         // the plan failed on the step's own float: it does not hold the game's 1/60 (another mod has changed the step)
 };
 
 inline bool RateFail(RatePlan &p, const char *name, const char *what)
@@ -121,7 +122,18 @@ inline bool RatePlanMake(const uint8_t *image, size_t size, size_t from, size_t 
         if (target < 0 || (uint64_t)target + 4 > size) return RateFail(p, s.name, "its operand points outside the exe");
         uint32_t held = 0;
         memcpy(&held, image + target, 4);
-        if (held != s.stock) return RateFail(p, s.name, "the float it reads is not the game's own");
+        if (held != s.stock)
+        {
+            // what it holds, and at the step's own place the seconds: there only another mod's write explains it (BRIEF_step_check_always.md, S3)
+            char what[120];
+            float seconds;
+            memcpy(&seconds, &held, 4);
+            if (i == kRateStep) snprintf(what, sizeof what, "the float it reads is not the game's own, it holds %08x, %.6f s: another mod has changed the step", held, isfinite(seconds) ? seconds : 0.0f);
+            else snprintf(what, sizeof what, "the float it reads is not the game's own, it holds %08x", held);
+            RateFail(p, s.name, what);
+            p.foreignStep = i == kRateStep;
+            return false;
+        }
         const int64_t reach = (int64_t)(page + 4 * (uint64_t)i) - (int64_t)(base + at + s.end);
         if (page && (reach > 0x7FFFFFFFll || reach < -0x80000000ll)) return RateFail(p, s.name, "the mod's page is out of its reach");
         p.match[i] = at;
@@ -261,6 +273,70 @@ inline uint32_t RateBits(float f)
     return bits;
 }
 enum { kRateWorldGood = 0, kRateBadIter = 1, kRateBadStep = 2 }; // bits
+
+// ---- the step as the drive is handed it, judged at both rates (BRIEF_step_check_always.md: the head note of 21:10, the
+// Reviewer's first addendum M1, M3 and M4 and the third) ----
+// Another mod can change the game's physics rate. The mod's figures are for the rate in force, so the step each drive
+// call is handed is held against it: right within kRateStepNear. At 120 in force a step near 1/60 is the mod's own miss
+// (a world made before the write), not another mod. Anything else is foreign. A step that is no number, 0 or under is
+// counted and not judged. A verdict counts after kStepRow calls in a row agree, and not before kStepWarm seconds of
+// drive calls in a world, so a loading step says nothing. Once a foreign step was the verdict the sign is on and stays.
+enum { kStepNone, kStepRight, kStepOwnMiss, kStepForeign };
+static const int kStepRow = 8;
+static const float kStepWarm = 1.0f;
+inline bool StepNear(float dt, float want) { return fabsf(dt - want) <= kRateStepNear * want; }
+inline int StepVerdictOf(float dt, int rate)
+{
+    if (!isfinite(dt) || !(dt > 0.0f)) return kStepNone;
+    if (StepNear(dt, 1.0f / (float)(rate == kRateFast ? kRateFast : kRateStock))) return kStepRight;
+    if (rate == kRateFast && StepNear(dt, 1.0f / (float)kRateStock)) return kStepOwnMiss;
+    return kStepForeign;
+}
+struct StepJudge
+{
+    int verdict;       // the one kept, kStepNone before the first
+    float dt;          // the step it was made on
+    int candidate, row; // the verdict of the last calls and how many in a row
+    float candidateDt;
+    float warm;        // seconds of drive calls since the world began, counted to kStepWarm
+    long notJudged;    // calls whose step was no number, 0 or under
+    bool sign;         // a foreign step was the verdict once
+};
+// A new world: its first second is not judged. The verdict kept and the sign stay.
+inline void StepJudgeWorld(StepJudge &j)
+{
+    j.warm = 0.0f;
+    j.row = 0;
+    j.candidate = kStepNone;
+}
+// One drive call. True when the kept verdict changed, or a wrong step moved by more than kRateStepNear: the mod's
+// thread then has a line to write.
+inline bool StepJudgeCall(StepJudge &j, float dt, int rate)
+{
+    const int v = StepVerdictOf(dt, rate);
+    if (v == kStepNone)
+    {
+        j.notJudged++;
+        return false;
+    }
+    if (j.warm < kStepWarm)
+    {
+        j.warm += dt;
+        j.row = 0;
+        j.candidate = kStepNone;
+        return false;
+    }
+    if (v == j.candidate && (v == kStepRight || StepNear(dt, j.candidateDt))) j.row = j.row < kStepRow ? j.row + 1 : kStepRow;
+    else j.candidate = v, j.candidateDt = dt, j.row = 1;
+    if (j.row < kStepRow) return false;
+    if (v == j.verdict && (v == kStepRight || StepNear(dt, j.dt))) return false;
+    j.verdict = v;
+    j.dt = dt;
+    if (v == kStepForeign) j.sign = true;
+    return true;
+}
+// Nothing left to learn from a right step: the hook then compares one float a call and does nothing else (M4).
+inline bool StepJudgeCalm(const StepJudge &j) { return j.verdict == kStepRight && j.candidate == kStepRight && j.row >= kStepRow && j.warm >= kStepWarm; }
 inline bool RateStepGood(uint32_t dtBits)
 {
     float dt;

@@ -1038,6 +1038,98 @@ static void PhysicsRateTest()
               "physics rate plan, all or nothing: a place not found, one that stands twice, a float that is not the game's, an operand out of the exe, a page out of reach, "
               "iterations other than 4 in the code, another function for the owner's static or a static in the code: no plan, no write, and the reason names the place");
     }
+    // the step as the drive is handed it (BRIEF_step_check_always.md): the rule for both rates, the 8 calls in a row, the
+    // first second of a world, a change after the start, the sign that stays, and nothing in the view that hides it
+    {
+        const float s60 = 1.0f / 60.0f, s120 = 1.0f / 120.0f, s240 = 1.0f / 240.0f;
+        const bool rule = StepVerdictOf(s60, 60) == kStepRight && StepVerdictOf(s240, 60) == kStepForeign && StepVerdictOf(s120, 60) == kStepForeign &&
+                          StepVerdictOf(s60 * 1.19f, 60) == kStepRight && StepVerdictOf(s60 * 1.21f, 60) == kStepForeign && StepVerdictOf(s60 * 0.81f, 60) == kStepRight &&
+                          StepVerdictOf(s60 * 0.79f, 60) == kStepForeign && StepVerdictOf(s120, 120) == kStepRight && StepVerdictOf(s120 * 1.19f, 120) == kStepRight &&
+                          StepVerdictOf(s120 * 1.21f, 120) == kStepForeign && StepVerdictOf(s120 * 0.81f, 120) == kStepRight && StepVerdictOf(s120 * 0.79f, 120) == kStepForeign &&
+                          StepVerdictOf(s60, 120) == kStepOwnMiss && StepVerdictOf(s60 * 1.19f, 120) == kStepOwnMiss && StepVerdictOf(s60 * 0.81f, 120) == kStepOwnMiss &&
+                          StepVerdictOf(s240, 120) == kStepForeign && StepVerdictOf(1.0f / 30.0f, 120) == kStepForeign && StepVerdictOf(1.0f / 30.0f, 60) == kStepForeign;
+        bool none = true;
+        const float noStep[5] = { NAN, 0.0f, -s60, INFINITY, -INFINITY };
+        for (int i = 0; i < 5; i++) none = none && StepVerdictOf(noStep[i], 60) == kStepNone && StepVerdictOf(noStep[i], 120) == kStepNone;
+        auto warm = [](StepJudge &j, float dt, int rate) {
+            bool quiet = true;
+            for (int n = 0; j.warm < kStepWarm && n < 2000; n++) quiet = !StepJudgeCall(j, dt, rate) && quiet;
+            return quiet;
+        };
+        auto calls = [](StepJudge &j, float dt, int rate, int n) {
+            int changes = 0;
+            for (int i = 0; i < n; i++) changes += StepJudgeCall(j, dt, rate) ? 1 : 0;
+            return changes;
+        };
+        // at 60: the first second says nothing; the 8th right call is the first verdict; 7 wrong and a right say nothing,
+        // one wrong among right ones too; the 8th wrong in a row is the sign; a right step later does not take it down
+        StepJudge a = {};
+        bool row = warm(a, s60, 60) && calls(a, s60, 60, 7) == 0 && a.verdict == kStepNone && !StepJudgeCalm(a) && calls(a, s60, 60, 1) == 1 && a.verdict == kStepRight && StepJudgeCalm(a);
+        row = row && calls(a, s240, 60, 7) == 0 && !StepJudgeCalm(a) && calls(a, s60, 60, 1) == 0 && a.verdict == kStepRight && !a.sign;
+        row = row && calls(a, s60, 60, 20) == 0 && calls(a, s240, 60, 1) == 0 && calls(a, s60, 60, 20) == 0 && !a.sign && StepJudgeCalm(a);
+        row = row && calls(a, s240, 60, 7) == 0 && !a.sign && calls(a, s240, 60, 1) == 1 && a.sign && a.verdict == kStepForeign && a.dt == s240 && !StepJudgeCalm(a);
+        const bool stays = calls(a, s240, 60, 50) == 0 && calls(a, s60, 60, 8) == 1 && a.verdict == kStepRight && a.sign && calls(a, s60, 60, 500) == 0 && a.sign;
+        // a wrong step in a world's first second only: no sign. A new world: its first second is not judged either, and what was kept stays
+        StepJudge b = {};
+        bool first = calls(b, s240, 60, 230) == 0 && b.warm < kStepWarm && warm(b, s60, 60) && calls(b, s60, 60, 8) == 1 && b.verdict == kStepRight && !b.sign;
+        StepJudgeWorld(b);
+        first = first && b.verdict == kStepRight && calls(b, s240, 60, 230) == 0 && !b.sign && warm(b, s60, 60) && calls(b, s60, 60, 30) == 0 && !b.sign;
+        StepJudgeWorld(a);
+        first = first && a.sign && a.verdict == kStepRight;
+        // at 120 in force a step of 1/60 is the mod's own miss: a verdict, no sign. 1/240 there is the sign
+        StepJudge c = {};
+        bool own = warm(c, s60, 120) && calls(c, s60, 120, 8) == 1 && c.verdict == kStepOwnMiss && !c.sign && calls(c, s60, 120, 300) == 0 && !c.sign;
+        own = own && calls(c, s120, 120, 8) == 1 && c.verdict == kStepRight && !c.sign && calls(c, s240, 120, 8) == 1 && c.verdict == kStepForeign && c.sign;
+        // a wrong step that moves by more than 20 percent is told again; one that is no number is counted, not judged, and breaks no row
+        StepJudge d = {};
+        bool moves = warm(d, s60, 60) && calls(d, s240, 60, 8) == 1 && calls(d, s240, 60, 8) == 0 && calls(d, s240 * 1.1f, 60, 8) == 0 && calls(d, 1.0f / 480.0f, 60, 7) == 0 &&
+                     calls(d, 1.0f / 480.0f, 60, 1) == 1 && d.dt == 1.0f / 480.0f;
+        StepJudge e = {};
+        moves = moves && warm(e, s60, 60) && calls(e, s240, 60, 4) == 0 && calls(e, NAN, 60, 1) == 0 && calls(e, 0.0f, 60, 1) == 0 && e.notJudged == 2 && calls(e, s240, 60, 3) == 0 &&
+                calls(e, s240, 60, 1) == 1 && e.sign;
+        // the sign's switch is the view's flag alone: no hidden state and no setting of the view reaches it
+        static GaugeView gv;
+        bool shown = true;
+        for (int hidden = kShown; hidden <= kHiddenSoundsOnly; hidden++)
+            for (int show = 0; show < 2; show++)
+                for (int demo = 0; demo < 2; demo++)
+                {
+                    gv = GaugeView{};
+                    gv.hidden = hidden, gv.show = show != 0, gv.demo = demo != 0;
+                    shown = shown && !StepSignShown(gv);
+                    gv.stepSign = true;
+                    shown = shown && StepSignShown(gv);
+                }
+        // the plan at 120: a step's float that is not the game's own names another mod and its seconds; another place's float gives what it holds and no more
+        const std::vector<uint8_t> good = RateImage();
+        RatePlan p0 = {}, p1 = {}, p2 = {};
+        bool plan = RatePlanMake(good.data(), good.size(), 0x1000, 0x3000, 0x140000000ull, 0, 2, p0) && !p0.foreignStep;
+        auto floatAt = [&](int site) {
+            int32_t disp = 0;
+            memcpy(&disp, &good[p0.match[site] + kRateSites[site].operand], 4);
+            return (size_t)((int64_t)p0.match[site] + kRateSites[site].end + disp);
+        };
+        std::vector<uint8_t> stepped = good, braked = good;
+        const uint32_t bits240 = 0x3B888889, bitsOther = 0xBC000000;
+        if (plan)
+        {
+            memcpy(&stepped[floatAt(kRateStep)], &bits240, 4);
+            memcpy(&braked[floatAt(kRateBrake)], &bitsOther, 4);
+        }
+        plan = plan && !RatePlanMake(stepped.data(), stepped.size(), 0x1000, 0x3000, 0x140000000ull, 0, 2, p1) && p1.foreignStep && strstr(p1.why, "the step: the float it reads is not the game's own") &&
+               strstr(p1.why, "3b888889") && strstr(p1.why, "0.004167 s") && strstr(p1.why, "another mod has changed the step");
+        plan = plan && !RatePlanMake(braked.data(), braked.size(), 0x1000, 0x3000, 0x140000000ull, 0, 2, p2) && !p2.foreignStep && strstr(p2.why, "bc000000") && !strstr(p2.why, "another mod");
+        if (!(rule && none && row && stays && first && own && moves && shown && plan))
+            printf("     step: rule %d none %d row %d stays %d first %d own %d moves %d shown %d plan %d (\"%s\" / \"%s\")\n", rule, none, row, stays, first, own, moves, shown, plan, p1.why, p2.why);
+        Check(rule && none, "physics step, the rule: within 20 percent of 1/60 right at 60 and of 1/120 right at 120, both edges; at 120 a step near 1/60 the mod's own miss; 1/240 foreign at "
+                            "both; no number, 0 and under 0 not judged");
+        Check(row && stays && first, "physics step, the judge: nothing in a world's first second of drive calls; 7 wrong calls and a right one say nothing, the 8th in a row is the verdict; "
+                                     "the sign once on stays through a right step and a new world");
+        Check(own && moves, "physics step: at 120 in force a step of 1/60 is a verdict with no sign and 1/240 the sign; a wrong step that moves by over 20 percent is told again; "
+                            "a step that is no number is counted and breaks no row");
+        Check(shown, "physics step: the sign is drawn by its flag alone, whatever the view's hidden state, show and demo");
+        Check(plan, "physics rate plan: a step's float that is not the game's own gives its bits, its seconds and \"another mod has changed the step\"; another place's float gives its bits alone");
+    }
     // the writes: all in and read back; one that does not hold puts the earlier ones back; a place not stock, no write
     {
         const uint64_t base = 0x140000000ull, page = base + 0x7000000;

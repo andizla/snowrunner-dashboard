@@ -478,7 +478,8 @@ static CreepSlot g_creepSlots[2];
 static int g_creepNext = 0;
 
 // ---- the physics rate test mode (physics_rate.h) ----
-// g_rateOn 0: the drive is called as it is and nothing below is touched.
+// g_rateOn 0: the drive is called as it is and nothing below is touched but the step's judge (StepLook), which runs
+// at both rates.
 static volatile LONG g_rateOn = 0, g_rateAsked = 0;
 static volatile LONG64 g_rateSlot = 0;
 static uint64_t g_rateWorld = 0; // the physics thread's own: the world of the last look
@@ -556,6 +557,49 @@ static void RateWorldLook(float dt)
     __except (EXCEPTION_EXECUTE_HANDLER)
     {
         InterlockedIncrement(&g_rateFaults);
+    }
+}
+// The step's judge on every drive call, at both rates (BRIEF_step_check_always.md). With the verdict right and nothing
+// new this is one compare of a float (M4): no lock, no read of the game. Otherwise one thread at a time judges, and a
+// thread that finds the judge taken leaves its call out. A new verdict is published by interlocked writes, the count
+// last. Nothing else happens here: the log's line and the sign are the mod's own threads' work.
+static StepJudge g_stepJudge; // under g_stepBusy
+static long g_stepWorlds = 0;  // under g_stepBusy: g_rateWorlds as the judge last saw it
+static volatile LONG g_stepBusy = 0, g_stepCalm = 0, g_stepWantBits = 0x3C888889, g_stepChanges = 0, g_stepVerdict = 0, g_stepDtBits = 0, g_stepSign = 0, g_stepNotJudged = 0;
+static void StepLook(float dt)
+{
+    if (g_stepCalm)
+    {
+        const float want = BitsFloat(g_stepWantBits);
+        if (fabsf(dt - want) <= kRateStepNear * want) return;
+    }
+    if (InterlockedCompareExchange(&g_stepBusy, 1, 0) != 0) return;
+    const int rate = g_rateOn ? kRateFast : kRateStock;
+    const long worlds = g_rateWorlds; // at 120 the world's look counts the worlds: each one's first second is not judged
+    if (worlds != g_stepWorlds) g_stepWorlds = worlds, StepJudgeWorld(g_stepJudge);
+    const bool changed = StepJudgeCall(g_stepJudge, dt, rate);
+    InterlockedExchange(&g_stepWantBits, FloatBits(1.0f / (float)rate));
+    InterlockedExchange(&g_stepNotJudged, g_stepJudge.notJudged);
+    if (changed)
+    {
+        InterlockedExchange(&g_stepDtBits, FloatBits(g_stepJudge.dt));
+        InterlockedExchange(&g_stepVerdict, g_stepJudge.verdict);
+        if (g_stepJudge.sign) InterlockedExchange(&g_stepSign, 1);
+        InterlockedIncrement(&g_stepChanges); // last: the mod's thread reads the rest once this has grown
+    }
+    InterlockedExchange(&g_stepCalm, StepJudgeCalm(g_stepJudge) ? 1 : 0);
+    InterlockedExchange(&g_stepBusy, 0);
+}
+void DriveStepSeenGet(DriveStepSeen &out)
+{
+    for (int look = 0; look < 4; look++)
+    {
+        out.changes = g_stepChanges;
+        out.verdict = g_stepVerdict;
+        out.dt = BitsFloat(g_stepDtBits);
+        out.sign = g_stepSign != 0;
+        out.notJudged = g_stepNotJudged;
+        if (out.changes == g_stepChanges) return;
     }
 }
 void DriveRateSet(bool on, uint64_t ownerSlot, int iterations)
@@ -1322,6 +1366,7 @@ static void CreepDriveInner(void *action, float throttle, float dt)
 {
     InterlockedIncrement(&g_creepCalls);
     if (g_rateOn) RateWorldLook(dt);
+    StepLook(dt);
     const LONG thread = (LONG)GetCurrentThreadId();
     if (thread != g_driveThread) DriveThreadNote(thread);
     g_driveThread = thread;

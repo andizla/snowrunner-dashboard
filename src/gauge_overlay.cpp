@@ -30,6 +30,10 @@ static float g_fontFailedAt = 0.0f; // the size a bake failed at: not tried agai
 static GaugeFonts g_warnFonts;
 static bool g_warnFontFiles = false;
 static float g_warnFontFailedAt = 0.0f;
+// The physics rate sign's own atlas: the boxes' font at the sign's size, baked the first time the sign is drawn.
+static GaugeFonts g_signFonts;
+static bool g_signFontFiles = false;
+static float g_signFontFailedAt = 0.0f;
 
 static void FreeFontTexture()
 {
@@ -37,6 +41,8 @@ static void FreeFontTexture()
     g_fonts.tex = 0;
     NgTextureFree(g_warnFonts.tex);
     g_warnFonts.tex = 0;
+    NgTextureFree(g_signFonts.tex);
+    g_signFonts.tex = 0;
 }
 
 // The boxes' atlas for u (WarnUnit), again when the picture's size changes.
@@ -54,6 +60,27 @@ static void UpdateWarnFontTexture(float u)
     }
     g_warnFontFailedAt = g_warnFonts.tex ? 0.0f : u;
     if (!g_warnFonts.tex) GaugeLog(L"overlay: the warning boxes' font did not become a texture at %.3f px per reference px, Dear ImGui's font stands in", u);
+}
+
+// The physics rate sign (BRIEF_step_check_always.md): its atlas for u, then the sign on the foreground list, so over the
+// cluster, the boxes and the NEXT GEN menu. Where the font does not become a texture Dear ImGui's font stands in.
+static void DrawStepSign(float w, float h)
+{
+    const float u = kStepSignScale * WarnUnit(w, h);
+    const bool have = g_signFonts.tex && fabsf(g_signFonts.u - u) < 0.001f, failed = !g_signFonts.tex && g_signFontFailedAt > 0.0f && fabsf(g_signFontFailedAt - u) < 0.001f;
+    if (g_signFontFiles && !have && !failed)
+    {
+        NgTextureFree(g_signFonts.tex);
+        g_signFonts.tex = 0;
+        if (FontsBake(g_signFonts, u))
+        {
+            g_signFonts.tex = NgTextureMake(g_signFonts.rgba, g_signFonts.w, g_signFonts.h);
+            free(g_signFonts.rgba);
+            g_signFonts.rgba = nullptr;
+        }
+        g_signFontFailedAt = g_signFonts.tex ? 0.0f : u;
+    }
+    GStepSign(ImGui::GetForegroundDrawList(), g_signFonts, w, h, u);
 }
 
 // The clutch's and the engine's warning boxes, below the tire mod's: each fades in over a quarter second while it has
@@ -148,6 +175,9 @@ static void OnFrame()
     const float dt = fminf(fmaxf(io.DeltaTime, 0.0f), 0.1f);
     DrawWarnings(view, io.DisplaySize.x, io.DisplaySize.y, dt);
     DrawSuspension(view, io.DisplaySize.x, io.DisplaySize.y);
+    // the physics rate sign: on the foreground list, so over the cluster, the boxes and the NEXT GEN menu; before every
+    // switch below (the toggle key, the truck, the other tabs, the opacity), so none of them reaches it
+    if (StepSignShown(view)) DrawStepSign(io.DisplaySize.x, io.DisplaySize.y);
     // hidden while the menu shows a tab this mod does not draw (BRIEF_full_pass_gameplay.md part 3): it would lie over
     // that tab where the two overlap; on the Gameplay tabs it stays, so Size and the layout show as they are set
     const bool shows = view.show && !NgOtherTabShown();
@@ -276,6 +306,7 @@ bool OverlayInit(HMODULE)
     if (slash) *slash = 0;
     g_fontFiles = slash && FontsLoad(g_fonts, dir, kGaugeStyles, kGsStyleCount);
     g_warnFontFiles = slash && FontsLoad(g_warnFonts, dir, kWarnStyles, kWsStyleCount);
+    g_signFontFiles = slash && FontsLoad(g_signFonts, dir, kWarnStyles, kWsStyleCount);
     GaugeLog(g_fontFiles ? L"overlay: game font read (TT Lakes Compressed)" : L"overlay: game font not found, Dear ImGui's font stands in");
     NgClient client = {};
     client.tab = "Gameplay";

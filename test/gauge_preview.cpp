@@ -626,6 +626,32 @@ int wmain(int argc, wchar_t **argv)
             Backdrop(bg, 1920, 1080);
             for (int i = 0; i < 3; i++) GWarnBox(bg, warnFonts, WarnOrigin(1920.0f, 1080.0f, i), wu, 1.0f, boxes[i]);
         });
+        // the physics rate sign over them (BRIEF_step_check_always.md): its lines are the text asked for, word for word
+        {
+            std::string all;
+            for (int i = 0; i < kStepSignCount; i++) all += i ? " " : "", all += kStepSignLines[i];
+            const bool text = all == "Another mod changes the physics rate. Turn that mod off and start the game again. Next Gen Gameplay can run the physics at 120 itself: "
+                                     "Physics rate on the Gameplay tab." &&
+                              all.find((char)39) == std::string::npos;
+            printf("%s physics rate sign: its four lines are the text asked for, word for word, with no apostrophe\n", text ? "ok  " : "FAIL");
+            if (!text) g_failed++;
+            GaugeFonts signFonts = {};
+            ID3D11ShaderResourceView *signSrv = nullptr;
+            if (FontsLoad(signFonts, fontDir, kWarnStyles, kWsStyleCount) && FontsBake(signFonts, kStepSignScale * wu))
+            {
+                signSrv = MakeTexture(signFonts.rgba, signFonts.w, signFonts.h);
+                free(signFonts.rgba);
+                signFonts.rgba = nullptr;
+                signFonts.tex = (ImTextureID)(intptr_t)signSrv;
+            }
+            swprintf_s(path, L"%s\\step_sign.png", out);
+            RenderPng(path, 1920, 1080, [&](ImDrawList *, ImDrawList *bg) {
+                Backdrop(bg, 1920, 1080);
+                for (int i = 0; i < 3; i++) GWarnBox(bg, warnFonts, WarnOrigin(1920.0f, 1080.0f, i), wu, 1.0f, boxes[i]);
+                GStepSign(bg, signFonts, 1920.0f, 1080.0f, kStepSignScale * wu);
+            });
+            Release(signSrv);
+        }
         // the suspension display below them (build B): an Arocs on a twisted crossing, its front left deep and hitting the
         // end, its front right hanging, the bump stops on; then the sway bars' lamp
         SuspDisplayView d = {};

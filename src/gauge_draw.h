@@ -868,6 +868,26 @@ static void GWarnBox(ImDrawList *dl, const GaugeFonts &f, ImVec2 at, float u, fl
     dl->AddRectFilled(P(12, kWarnH - 9), P(12 + (kWarnW - 12) * (float)shown / 100.0f, kWarnH), col);
 }
 
+// ---- the physics rate sign (BRIEF_step_check_always.md, the head note of 2026-11-11 21:10) ----
+// A plain red box in the middle of the screen with these lines, drawn while another mod changes the physics rate. No
+// key and no setting hides it: it takes no opacity and no scale but the screen's. In the boxes' reference pixels.
+static const char *const kStepSignLines[] = { "Another mod changes the physics rate.", "Turn that mod off and start the game again.",
+                                              "Next Gen Gameplay can run the physics at 120 itself:", "Physics rate on the Gameplay tab." };
+static const int kStepSignCount = 4;
+static const float kStepSignPitch = 62.0f, kStepSignPad = 54.0f;
+static const float kStepSignScale = 2.0f; // times the warning boxes' unit: about 40 percent of the screen's width
+static void GStepSign(ImDrawList *dl, const GaugeFonts &f, float w, float h, float u)
+{
+    float widest = 0.0f;
+    for (int i = 0; i < kStepSignCount; i++) widest = fmaxf(widest, TextWidth(f, kWsTitle, kStepSignLines[i], u));
+    const float boxW = widest + 2.0f * kStepSignPad * u, boxH = (2.0f * kStepSignPad + (kStepSignCount - 1) * kStepSignPitch + 26.0f) * u;
+    const float x0 = floorf((w - boxW) * 0.5f), y0 = floorf((h - boxH) * 0.5f);
+    dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x0 + boxW, y0 + boxH), GCol(200, 36, 48, 1.0f), 4.0f * u);
+    dl->AddRect(ImVec2(x0, y0), ImVec2(x0 + boxW, y0 + boxH), GCol(255, 255, 255, 1.0f), 4.0f * u, 0, 3.0f * u);
+    for (int i = 0; i < kStepSignCount; i++)
+        TextDraw(dl, f, kWsTitle, ImVec2(w * 0.5f, y0 + (kStepSignPad + 13.0f + i * kStepSignPitch) * u), GCol(255, 255, 255, 1.0f), kStepSignLines[i], 0, u);
+}
+
 // ---- the suspension display and the sway bars' lamp (BRIEF_suspension_extras.md, build B), on the warning boxes' stage
 // below them, in the boxes' reference pixels ----
 // One row an axle, its left wheel's bar on the left and its right wheel's on the right. A bar runs from the wheel's

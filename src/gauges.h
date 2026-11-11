@@ -582,8 +582,12 @@ struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWar
                    // controllers read, and the stalls and shifts since the truck was taken
                    char bindText[kViewActions][2][40]; int captureAction, captureSlot; bool canReverse; int controllers, gearStalls, gearShifts;
                    int rateNow, rateNote; // the physics rate in force (60 or 120) and what the tab says of it (kRateNote...)
+                   bool stepSign; // another mod changes the physics rate: the sign in the middle of the screen, on until the game ends (StepSignShown)
                    bool odoKnown, odoCanSet, odoHours; char odoText[24]; // the driven truck's count: decided, Set to open (its id read, the match not waiting), hours shown, the figure
                    };
+// Whether the physics rate sign is drawn: by the view's flag alone. Not by show or hidden (the toggle key, no truck,
+// sounds only), not by any setting: nothing hides it (BRIEF_step_check_always.md).
+inline bool StepSignShown(const GaugeView &v) { return v.stepSign; }
 
 LONG SettingsGet(GaugeSettings &out);       // the settings in force (any thread); returns their turn, for SettingsPut
 void SettingsPut(const GaugeSettings &in, LONG turn); // settings edited from those of a turn: the mod takes them at once and saves the ini a

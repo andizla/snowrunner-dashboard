@@ -308,6 +308,16 @@ bool DriveRateOn();
 // What the hook saw: worlds grows with each new world pointer at a drive call; that world, the step's seconds as the
 // world holds them (bits) and its solver's iterations, read at that call; the seconds the call itself came with; the
 // reads that faulted (the halving's and the world's).
+// The step's judge (physics_rate.h, StepJudge), as the drive's hook keeps it: changes grows with each new verdict.
+struct DriveStepSeen
+{
+    long changes;
+    int verdict;    // kStepRight, kStepOwnMiss or kStepForeign
+    float dt;       // the step's seconds the verdict was made on
+    bool sign;      // a foreign step was the verdict once in this run of the game
+    long notJudged; // calls whose step was no number, 0 or under
+};
+void DriveStepSeenGet(DriveStepSeen &out);
 struct DriveRateSeen
 {
     long worlds;
