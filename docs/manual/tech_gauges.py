@@ -417,8 +417,11 @@ and with Probe=1 "probe: diff lock bite: kind ..." a second.</p>
 where the torque cut acts. Each step of the drive reads once what is in force (<code>DiffForceOf</code>): the lock while + 0x4A is set and
 the handbrake is not, or the type is Locked; else Open for the type Open; else Limited slip, the cut as it was before the types. Open: after
 the drive the driven wheels share its impulse evenly, J = the sum of (post &minus; pre) / gain and each speed pre + gain J / n
-(<code>DiffEvenStep</code>); the cut's answer is the same in every type, and where the gear has a wheel cap one wheel's limit is n &times;
-the step's ceiling (<code>DiffOpenCap</code> over <code>CapCeiling</code>), with nothing handed on from a held wheel. Locked on a truck of
+(<code>DiffEvenStep</code>); the cut's answer is the same in every type, and where the gear has a wheel cap the step's ceiling (<code>CapCeiling</code>) holds the
+mean of the driven wheels, not each wheel (<code>DiffOpenStep</code>): what the drive added to each wheel in the step is scaled by one factor
+k in 0 to 1, so that the mean after the step is min(the mean after the drive, max(the mean before, the ceiling)). No wheel is lowered, a
+wheel the drive slowed keeps the drive's result, and nothing is handed on. With all wheels alike each stays at the ceiling; one free wheel
+with the others standing runs to n &times; the ceiling. The probe's ceiling and largest excess are then the mean's. Locked on a truck of
 kind 0 or 1: the mod's thread holds the lock byte (<code>LockHoldStep</code>), never clears a byte the player set, and sets a cleared one
 again with one line in the log. A truck left with the mod's byte set keeps it, and back on that truck the byte is the mod's own again and is
 cleared once the type no longer acts (the last four such trucks are remembered). With the bite above 0
