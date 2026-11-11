@@ -64,10 +64,26 @@ static const char *const kRateOwnerPattern = "E8 ? ? ? ? 48 89 30 48 8D 05 ? ? ?
 static const uint64_t kRateOwnerWorld = 0x20, kRateWorldDtAt = 0x2A8, kRateWorldIterAt = 0x3DC;
 static const uint32_t kRateDtBits = 0x3C088889; // 1/120 as the step holds it
 
+// Stage 2, part A (BRIEF_physics_rate_stage2.md with the Reviewer's addendum): the substance action's lift and drag, in
+// water and in mud alike. The action builds two vectors a step, the lift with the drag and the drag on the spin's side,
+// multiplies each by four 60s loaded once into a register, and hands each to the body's motion as an impulse at a point
+// (the motion's applyPointImpulse). Nothing in the two vectors holds the step's seconds: the speeds in them are a move
+// over 1/60 s times 60, a pair that is left as it is (M1). So the amount is one a step, and at 120 steps the four 60s
+// are 30. The load is a movaps, so its operand is pointed at four floats of the mod's page that stand 16 bytes aligned.
+// The pattern is the load and what follows to the first multiply: the lift put into the vector's second place.
+static const char *const kRateSubstanceName = "the substance's lift and drag";
+static const char *const kRateSubstancePattern = "44 0F 28 35 ? ? ? ? 0F 28 45 40 0F C6 C0 E1 F3 0F 10 C1 0F C6 C0 E1 41 0F 59 C6";
+static const int kRateSubstanceOperand = 4, kRateSubstanceEnd = 8;
+static const uint32_t kRateSubstanceStock = 0x42700000, kRateSubstanceWanted = 0x41F00000; // 60 and 30
+static const int kRateSubstanceWord = 8; // where the four stand on the mod's page, in floats: 32 bytes in
+static const int kRatePageWords = kRateSubstanceWord + 4;
+
 // The page's floats, in the sites' order.
-inline void RatePageFill(uint32_t out[kRateFloats])
+inline void RatePageFill(uint32_t out[kRatePageWords])
 {
+    for (int i = 0; i < kRatePageWords; i++) out[i] = 0;
     for (int i = 0; i < kRateFloats; i++) out[i] = kRateSites[i].wanted;
+    for (int i = 0; i < 4; i++) out[kRateSubstanceWord + i] = kRateSubstanceWanted;
 }
 
 // One write of four bytes into the exe's code: where (from the exe's base), what stands there and what goes there.
@@ -77,13 +93,14 @@ struct RateWrite
     uint32_t stock, value;
     const char *name;
 };
-static const int kRateWritesMax = kRateFloats + 1;
+static const int kRateWritesMax = kRateFloats + 2;
 struct RatePlan
 {
     bool ok;
     char why[160];            // the place that failed, for the log
     size_t match[kRateFloats]; // each float place's match
     size_t iterAt;            // the iterations' immediate
+    size_t substanceAt;       // the substance action's load of the four 60s
     size_t ownerSlot;         // the owner's static
     RateWrite writes[kRateWritesMax]; // in the order they go in: the step last
     int count;
@@ -139,6 +156,33 @@ inline bool RatePlanMake(const uint8_t *image, size_t size, size_t from, size_t 
         p.match[i] = at;
         floats[i] = RateWrite{ at + s.operand, (uint32_t)disp, (uint32_t)(int32_t)reach, s.name };
     }
+    RateWrite substance = {};
+    {
+        const int length = PatternParse(kRateSubstancePattern, bytes, mask);
+        size_t at = 0;
+        int count = 0;
+        if (!length || !PatternFind(image, from, to, bytes, mask, length, at, count) || count != 1)
+            return RateFail(p, kRateSubstanceName, count > 1 ? "its code stands more than once" : "its code is not found");
+        int32_t disp = 0;
+        memcpy(&disp, image + at + kRateSubstanceOperand, 4);
+        const int64_t target = (int64_t)at + kRateSubstanceEnd + disp;
+        if (target < 0 || (uint64_t)target + 16 > size) return RateFail(p, kRateSubstanceName, "its operand points outside the exe");
+        uint32_t held[4];
+        memcpy(held, image + target, 16);
+        // all four: a single 60 with other figures after it is another constant (the action's own 60 for its speeds is one)
+        if (held[0] != kRateSubstanceStock || held[1] != kRateSubstanceStock || held[2] != kRateSubstanceStock || held[3] != kRateSubstanceStock)
+        {
+            char what[120];
+            snprintf(what, sizeof what, "the four floats it reads are not the game's four 60s, they hold %08x %08x %08x %08x", held[0], held[1], held[2], held[3]);
+            return RateFail(p, kRateSubstanceName, what);
+        }
+        const uint64_t slot = page + 4 * (uint64_t)kRateSubstanceWord;
+        const int64_t reach = (int64_t)slot - (int64_t)(base + at + kRateSubstanceEnd);
+        if (page && (slot & 15)) return RateFail(p, kRateSubstanceName, "the mod's page does not stand 16 bytes aligned");
+        if (page && (reach > 0x7FFFFFFFll || reach < -0x80000000ll)) return RateFail(p, kRateSubstanceName, "the mod's page is out of its reach");
+        p.substanceAt = at;
+        substance = RateWrite{ at + kRateSubstanceOperand, (uint32_t)disp, (uint32_t)(int32_t)reach, kRateSubstanceName };
+    }
     {
         const int length = PatternParse(kRateIterPattern, bytes, mask);
         size_t at = 0;
@@ -166,8 +210,9 @@ inline bool RatePlanMake(const uint8_t *image, size_t size, size_t from, size_t 
     }
     p.ok = true;
     if (!page) return true;
-    // the order: the drive's three, the readout's two, the iterations, the step last
+    // the order: the drive's three, the readout's two, the substance's four, the iterations, the step last
     for (int i = 1; i < kRateFloats; i++) p.writes[p.count++] = floats[i];
+    p.writes[p.count++] = substance;
     if (iterations == kRateIterFast) p.writes[p.count++] = RateWrite{ p.iterAt, (uint32_t)kRateIterStock, (uint32_t)kRateIterFast, "the solver's iterations" };
     p.writes[p.count++] = floats[kRateStep];
     return true;
@@ -273,6 +318,9 @@ inline uint32_t RateBits(float f)
     return bits;
 }
 enum { kRateWorldGood = 0, kRateBadIter = 1, kRateBadStep = 2 }; // bits
+// The probe's line a second with the corrected terms as they read back (stage 2, S2): with Probe on and 120 in force
+// alone. At 60, or without Probe, no line and no read.
+inline bool RateProbeDue(bool probe, int rateInForce) { return probe && rateInForce == kRateFast; }
 
 // ---- the step as the drive is handed it, judged at both rates (BRIEF_step_check_always.md: the head note of 21:10, the
 // Reviewer's first addendum M1, M3 and M4 and the third) ----

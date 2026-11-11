@@ -455,6 +455,10 @@ static std::vector<uint8_t> RateImage()
         memcpy(&image[value], &kRateSites[i].stock, 4);
         RateRel(image, kRateTestAt[i] + kRateSites[i].operand, kRateTestAt[i] + kRateSites[i].end, value);
     }
+    // stage 2, part A: the substance action's load, its four 60s at 0x3200
+    RatePut(image, 0x1900, kRateSubstancePattern);
+    for (int i = 0; i < 4; i++) memcpy(&image[0x3200 + 4 * (size_t)i], &kRateSubstanceStock, 4);
+    RateRel(image, 0x1900 + kRateSubstanceOperand, 0x1900 + kRateSubstanceEnd, 0x3200);
     RatePut(image, 0x1600, kRateIterPattern);
     RatePut(image, 0x1700, kRateOwnerPattern);
     RateRel(image, 0x1701, 0x1705, 0x1800);
@@ -724,11 +728,12 @@ static void RealImageTest()
         const size_t slotWant = newest ? 0x2a93c30 : update ? 0x2a92e70 : steam ? 0x2a8ebb0 : look.ownerSlot;
         char rate[400];
         snprintf(rate, sizeof rate, "physics rate's places in a real image: %s; the step at %zx, the wheel impulse %zx, the chassis push %zx, the overspeed brake %zx, the readout %zx, "
-                 "the iterations at %zx, the owner's static at %zx; %d writes planned with the step last",
+                 "the substance's four 60s %zx, the iterations at %zx, the owner's static at %zx; %d writes planned with the step last",
                  found ? "all found once with the game's floats" : look.why, look.match[kRateStep], look.match[kRateWheel], look.match[kRateChassis], look.match[kRateBrake],
-                 look.match[kRateReadOld], look.iterAt, look.ownerSlot, plan.count);
-        Check(found && planned && look.count == 0 && look.match[kRateStep] == stepWant && look.iterAt == iterWant && look.ownerSlot == slotWant && plan.count == 7 &&
-                  plan.writes[6].at == look.match[kRateStep] + kRateSites[kRateStep].operand && image[look.iterAt] == 4,
+                 look.match[kRateReadOld], look.substanceAt, look.iterAt, look.ownerSlot, plan.count);
+        Check(found && planned && look.count == 0 && look.match[kRateStep] == stepWant && look.iterAt == iterWant && look.ownerSlot == slotWant && plan.count == 8 &&
+                  plan.writes[7].at == look.match[kRateStep] + kRateSites[kRateStep].operand && image[look.iterAt] == 4 &&
+                  (!newest || look.substanceAt == 0xc55609) && plan.writes[5].at == look.substanceAt + kRateSubstanceOperand,
               rate);
     }
 }
@@ -982,13 +987,22 @@ static void PhysicsRateTest()
         const bool fourOk = RatePlanMake(image.data(), image.size(), 0x1000, 0x3000, base, page, 4, four);
         bool places = lookOk && look.count == 0 && look.iterAt == 0x1600 + 26 && look.ownerSlot == 0x4000;
         for (int i = 0; i < kRateFloats; i++) places = places && look.match[i] == kRateTestAt[i];
-        bool arithmetic = twoOk && two.count == 7;
+        bool arithmetic = twoOk && two.count == 8 && two.substanceAt == 0x1900;
         for (int i = 0; arithmetic && i < two.count; i++)
         {
             const RateWrite &w = two.writes[i];
             if (w.at == two.iterAt)
             {
                 arithmetic = w.stock == 4 && w.value == 2 && i == two.count - 2;
+                continue;
+            }
+            if (w.at == two.substanceAt + kRateSubstanceOperand)
+            {
+                // the four 30s stand 32 bytes into the page, 16 bytes aligned for the movaps; third from the end
+                uint32_t was = 0;
+                memcpy(&was, &image[w.at], 4);
+                const uint64_t slot = page + 4 * (uint64_t)kRateSubstanceWord;
+                arithmetic = was == w.stock && base + two.substanceAt + kRateSubstanceEnd + (int64_t)(int32_t)w.value == slot && (slot & 15) == 0 && i == two.count - 3;
                 continue;
             }
             int site = -1;
@@ -999,10 +1013,35 @@ static void PhysicsRateTest()
             arithmetic = site >= 0 && held == w.stock && base + two.match[site] + kRateSites[site].end + (int64_t)(int32_t)w.value == page + 4 * (uint64_t)site;
         }
         const size_t stepAt = kRateTestAt[kRateStep] + kRateSites[kRateStep].operand;
-        bool order = twoOk && fourOk && two.writes[6].at == stepAt && four.count == 6 && four.writes[5].at == stepAt;
+        bool order = twoOk && fourOk && two.writes[7].at == stepAt && four.count == 7 && four.writes[6].at == stepAt;
         for (int i = 0; i < four.count; i++) order = order && four.writes[i].at != four.iterAt;
-        uint32_t fill[kRateFloats];
+        uint32_t fill[kRatePageWords];
         RatePageFill(fill);
+        // stage 2, part A: 30 for 60 to the bit, four of them, twice 30 the game's 60; the words between the floats and the four are 0
+        float thirty = 0.0f, sixty = 0.0f;
+        memcpy(&thirty, &kRateSubstanceWanted, 4), memcpy(&sixty, &kRateSubstanceStock, 4);
+        bool substance = thirty == 30.0f && sixty == 60.0f && thirty + thirty == sixty && fill[6] == 0 && fill[7] == 0 && kRateSubstanceWord * 4 % 16 == 0 && RateProbeDue(true, 120) &&
+                         !RateProbeDue(true, 60) && !RateProbeDue(false, 120) && !RateProbeDue(false, 60);
+        for (int i = 0; i < 4; i++) substance = substance && fill[kRateSubstanceWord + i] == RateBitsOf(30.0f);
+        // M1 and M2: the load's operand at a single 60 with other figures after it (the action's own 60 for its speeds), no load at all, the load twice:
+        // no plan and nothing to write. The 1/60 and the scalar 60 of the action are other instructions and match no pattern of the plan
+        {
+            std::vector<uint8_t> scalar = image, gone = image, twice = image;
+            const float others[4] = { 60.0f, 60.0f, 64.0f, 90.0f };
+            memcpy(&scalar[0x3300], others, 16);
+            RateRel(scalar, 0x1900 + kRateSubstanceOperand, 0x1900 + kRateSubstanceEnd, 0x3300);
+            // in the load's place the action's two other instructions: addss xmm0, [the 1/60] and movss xmm5, [the 60]
+            const uint8_t pair[16] = { 0xF3, 0x0F, 0x58, 0x05, 0, 0, 0, 0, 0xF3, 0x0F, 0x10, 0x2D, 0, 0, 0, 0 };
+            memset(&gone[0x1900], 0xCC, 28);
+            memcpy(&gone[0x1900], pair, 16);
+            RateRel(gone, 0x1904, 0x1908, 0x3100), RateRel(gone, 0x190C, 0x1910, 0x3300);
+            RatePut(twice, 0x1A00, kRateSubstancePattern);
+            RateRel(twice, 0x1A00 + kRateSubstanceOperand, 0x1A00 + kRateSubstanceEnd, 0x3200);
+            substance = substance && RatePlanFails(scalar, page, kRateSubstanceName, "the four floats it reads are not the game's four 60s") &&
+                        RatePlanFails(gone, page, kRateSubstanceName, "its code is not found") && RatePlanFails(twice, page, kRateSubstanceName, "its code stands more than once");
+        }
+        Check(substance, "physics rate, the substance's lift and drag: 30 for 60 to the bit, four floats 16 bytes aligned on the mod's page; an operand at a single 60, no load "
+                         "or the load twice: no plan, nothing written, the place named; the action's 1/60 and its own 60 match no pattern; the probe's line with Probe at 120 alone");
         float oldShare = 0.0f, newShare = 0.0f;
         memcpy(&oldShare, &fill[kRateReadOld], 4), memcpy(&newShare, &fill[kRateReadNew], 4);
         const bool floats = fill[kRateStep] == RateBitsOf(1.0f / 120.0f) && fill[kRateWheel] == RateBitsOf(1.0f / 120.0f) && fill[kRateChassis] == RateBitsOf(1.0f / 240.0f) &&
@@ -1153,14 +1192,14 @@ static void PhysicsRateTest()
         };
         memory = image, writes = 0, failAt = -1, deadFrom = 99;
         const RateApplied all = RateApply(plan.writes, plan.count, read, write);
-        bool allIn = all.ok && all.failed == -1 && all.done == 7 && all.written && writes == 7;
+        bool allIn = all.ok && all.failed == -1 && all.done == 8 && all.written && writes == 8;
         std::vector<uint8_t> undone = memory;
         for (int i = 0; i < plan.count; i++)
         {
             allIn = allIn && memcmp(&memory[plan.writes[i].at], &plan.writes[i].value, 4) == 0;
             memcpy(&undone[plan.writes[i].at], &plan.writes[i].stock, 4);
         }
-        allIn = allIn && undone == image; // nothing but the seven places changed
+        allIn = allIn && undone == image; // nothing but the eight places changed
         memory = image, writes = 0, failAt = 3, deadFrom = 99;
         const RateApplied back = RateApply(plan.writes, plan.count, read, write);
         const bool putBack = !back.ok && back.failed == 3 && back.done == 3 && back.written && back.restored && memory == image;
