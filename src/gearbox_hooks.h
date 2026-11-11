@@ -346,12 +346,15 @@ void TorqueCutCountsGet(TorqueCutCounts &out);
 // its slot: the counters since the start (clamps: wheels held at the cap; steps capped; bodies refused; steps armed and
 // waiting, M3; reads that faulted), the wheels clamped in the last step, armed in it, the kept share smoothed (M1), the
 // speed spread to the other wheels, summed (rad/s), and the largest excess over the cap after the drive and before it
-// (the solver's push after the last clamp) since the last read.
+// (the solver's push after the last clamp) since the last read. Since the ceiling (BRIEF_governor_sway.md, M5): steps
+// counts every step written, armed or waiting; postSum the driven wheels' mean after the drive and before the ceiling,
+// summed over those steps (rad/s, a forward mean alone), postMost its largest and preLeast the least driven wheel
+// before the drive, both since the last read (0 with no step); ceiling the last step's.
 struct WheelCapCounts
 {
     long clamps, steps, refused, armedSteps, waitSteps, faults, clampedNow;
     bool armed;
-    float kept, spread, excessMost, preMost;
+    float kept, spread, excessMost, preMost, postSum, postMost, preLeast, ceiling;
 };
 void WheelCapCountsGet(WheelCapCounts &out);
 // The game's own ShiftGear(0) refused for the held truck at kPolicyAll so far: the gearbox damage's kick to N

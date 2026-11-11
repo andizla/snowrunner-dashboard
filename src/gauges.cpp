@@ -7014,13 +7014,14 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 const float sTop = gearTop > 0.0f ? c.s / gearTop : 0.0f;
                 Log(L"probe: torque cut: %s; s %.2f rad/s (%.2f of the top %.2f, %.0f rpm), F %.3f, the bracket %.3f (the least %.3f, used %.3f at %.3f a step), the scalar %.3f, the share %.2f; "
                     L"the game's T %.3f, answered %.3f; D4 %.2f, B4s %.3f, the stand-in %.3f, the stall's wheels %.3f; calls answered %ld, passed %ld, the other callers' %ld, reads failed %ld; falls of 0.3 or more "
-                    L"in one step %ld; the throttle held at 1 %s; the governor by the truck's speed %.2f rad/s (the rolling radius %.3f m, wheel + 0x94 %.3f m; %ld by the cylinder, %ld without, %ld out of bounds); the wheel cap %s: clamps %ld (%ld in the last step), the largest excess %.2f rad/s "
-                    L"after the drive and %.2f before it, bodies refused %ld, steps waiting %ld, kept %.3f, spread %.2f rad/s, faults %ld",
+                    L"in one step %ld; the throttle held at 1 %s; the governor by the truck's speed %.2f rad/s (the rolling radius %.3f m, wheel + 0x94 %.3f m; %ld by the cylinder, %ld without, %ld out of bounds); the wheel cap %s: the ceiling %.2f rad/s, clamps %ld (%ld in the last step), the largest excess %.2f rad/s "
+                    L"after the drive and %.2f before it, the driven mean after the drive %.2f rad/s over %ld steps (%.2f at the most), the least driven wheel before the drive %.2f rad/s, "
+                    L"bodies refused %ld, steps waiting %ld, kept %.3f, spread %.2f rad/s, faults %ld",
                     cutActs ? L"acting" : TorqueCutWhyNot(s, want, own && GearboxManual(w), cutHooks, raw.gearEngaged, gearTop, cutAgrees), c.s, sTop, gearTop, sTop * scale.redline,
                     c.f, c.bracket, w.cutFloor, c.used, c.rate, locked ? 0.0f : SettingsRange(w.clutch.carried, -1.0f, kClutchHold), s.engineShare / 100.0f, c.stock, c.torque, c.d4, c.b4s, c.standIn, c.w,
                     c.answered - before.answered, c.passed - before.passed, c.others - before.others, c.faults - before.faults, c.falls - before.falls, cutActs ? L"on" : L"off",
-                    c.truck, c.radius, c.radius94, c.rollCylinder, c.rollNone, c.rollOut, !GearboxPosCapped(w.pos.pos) ? L"not in this gear" : cap.armed ? L"armed" : L"waiting", cap.clamps - w.capWas.clamps, cap.clampedNow, cap.excessMost,
-                    cap.preMost, cap.refused - w.capWas.refused, cap.waitSteps - w.capWas.waitSteps, cap.kept, cap.spread - w.capWas.spread, cap.faults - w.capWas.faults);
+                    c.truck, c.radius, c.radius94, c.rollCylinder, c.rollNone, c.rollOut, !GearboxPosCapped(w.pos.pos) ? L"not in this gear" : cap.armed ? L"armed" : L"waiting", cap.ceiling, cap.clamps - w.capWas.clamps, cap.clampedNow, cap.excessMost,
+                    cap.preMost, cap.steps > w.capWas.steps ? (cap.postSum - w.capWas.postSum) / (float)(cap.steps - w.capWas.steps) : 0.0f, cap.steps - w.capWas.steps, cap.postMost, cap.preLeast, cap.refused - w.capWas.refused, cap.waitSteps - w.capWas.waitSteps, cap.kept, cap.spread - w.capWas.spread, cap.faults - w.capWas.faults);
                 w.cutWas = c;
                 w.capWas = cap;
             }

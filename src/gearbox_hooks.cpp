@@ -728,6 +728,13 @@ static volatile LONG64 g_capKeptVehicle = 0;
 static volatile LONG g_capKeptBits = 0x3F800000; // 1.0f
 static volatile LONG g_capClamps = 0, g_capSteps = 0, g_capRefused = 0, g_capArmedSteps = 0, g_capWaitSteps = 0, g_capFaults = 0, g_capClampedNow = 0, g_capArmedNow = 0;
 static volatile LONG g_capExcessMost = 0, g_capPreMost = 0, g_capSpreadBits = 0;
+// M5 of BRIEF_governor_sway.md: the driven mean after the drive (before the ceiling), summed over the steps and its
+// largest since the last read; the least driven wheel before the drive since the last read (kCapNone: no step); the
+// last step's ceiling.
+static const float kCapNone = 1e9f;
+static volatile LONG g_capPostSum = 0, g_capPostMost = 0, g_capPreLeast = 0x4E6E6B28 /* 1e9f */, g_capCeiling = 0;
+// the truck's own speed of this step for the ceiling: no number before the drive, the torque hook's inside it
+static volatile LONG g_capTruck = 0x7FC00000;
 static void CapMost(volatile LONG &bits, float x)
 {
     if (isfinite(x) && x > BitsFloat(bits)) InterlockedExchange(&bits, FloatBits(x));
@@ -737,9 +744,10 @@ static void CapAdd(volatile LONG &bits, float x)
     if (isfinite(x) && x > 0.0f) InterlockedExchange(&bits, FloatBits(BitsFloat(bits) + x));
 }
 
-// The drive with the cap around it: the wheels read before, the arming (M3), the original drive, the wheels after, the
-// cap with the spread (CapStep), the writes and the kept share for the stand-in (M1). A read that faults leaves the
-// drive's own result.
+// The drive with the cap around it: the wheels read before, the arming's state (M3), the original drive, the wheels
+// after, the ceiling by the truck's own speed of this step (the torque hook's, inside the drive; none where it did not
+// answer in this step), the cap's step with the spread (CapStep), the writes and the kept share for the stand-in (M1).
+// A read that faults leaves the drive's own result.
 struct CapAround
 {
     int clamps;
@@ -764,37 +772,27 @@ static CapAround CapStepAround(const TorqueCutSlot *cut, void *action, float thr
     const bool readOk = CapReadBefore((const void *)(uintptr_t)vehicle, action, t);
     if (!readOk) InterlockedIncrement(&g_capFaults);
     if (t.refused) InterlockedExchangeAdd(&g_capRefused, t.refused);
-    float mean = 0.0f, preMost = 0.0f;
+    float mean = 0.0f, preMost = 0.0f, preLeast = kCapNone;
     int m = 0;
     for (int i = 0; i < t.n; i++)
-        if (t.w[i].ok) mean += t.w[i].pre, m++, preMost = fmaxf(preMost, t.w[i].pre - cap);
+        if (t.w[i].ok) mean += t.w[i].pre, m++, preMost = fmaxf(preMost, t.w[i].pre - cap), preLeast = fminf(preLeast, t.w[i].pre);
     if (m) mean /= (float)m;
     const bool armed = readOk && CapArmStep(g_capArm, t.gear, mean, m > 0, cap);
     InterlockedExchange64(&g_capKeptVehicle, (LONG64)vehicle);
     InterlockedExchange(&g_capArmedNow, armed ? 1 : 0);
+    InterlockedExchange(&g_capTruck, 0x7FC00000);
     ((DriveFn)g_creepWay)(action, throttle, dt);
-    if (!armed)
+    const float truck = BitsFloat(g_capTruck);
+    const float ceiling = CapCeiling(cap, cut->map.top, cut->map.governTo, truck);
+    InterlockedExchange(&g_capCeiling, FloatBits(ceiling));
+    if (!readOk)
     {
-        InterlockedIncrement(&g_capWaitSteps);
         InterlockedExchange(&g_capClampedNow, 0);
-        g_capKept = CapKeptSmooth(g_capKept, 1.0f);
-        InterlockedExchange(&g_capKeptBits, FloatBits(g_capKept));
-        // the lock acts with the cap waiting too: the locked speeds against the drive's
-        if (lockK > 0.0f && readOk)
-        {
-            float post[kCapWheels], locked[kCapWheels];
-            for (int i = 0; i < t.n; i++) post[i] = t.w[i].pre;
-            if (!CapReadAfter(t, post)) InterlockedIncrement(&g_lockFaults);
-            else
-            {
-                LockOver(t, post, lockK, locked, vehicle);
-                if (!CapWriteFinal(t, post, locked)) InterlockedIncrement(&g_lockFaults);
-            }
-        }
         return out;
     }
-    InterlockedIncrement(&g_capArmedSteps);
+    InterlockedIncrement(armed ? &g_capArmedSteps : &g_capWaitSteps);
     CapMost(g_capPreMost, preMost);
+    if (preLeast < BitsFloat(g_capPreLeast)) InterlockedExchange(&g_capPreLeast, FloatBits(preLeast));
     float pre[kCapWheels], post[kCapWheels], gain[kCapWheels];
     bool ok[kCapWheels];
     for (int i = 0; i < t.n; i++) pre[i] = t.w[i].pre, post[i] = t.w[i].pre, gain[i] = t.w[i].gain, ok[i] = t.w[i].ok;
@@ -805,9 +803,19 @@ static CapAround CapStepAround(const TorqueCutSlot *cut, void *action, float thr
     }
     // the lock on what the drive left, then the cap on the locked speeds (the brief's point 4); the write against post
     float locked[kCapWheels];
-    for (int i = 0; i < t.n; i++) locked[i] = post[i];
+    float postMean = 0.0f;
+    for (int i = 0; i < t.n; i++)
+    {
+        locked[i] = post[i];
+        if (ok[i] && m) postMean += post[i] / (float)m;
+    }
+    if (m)
+    {
+        CapAdd(g_capPostSum, postMean);
+        CapMost(g_capPostMost, postMean);
+    }
     if (lockK > 0.0f) LockOver(t, post, lockK, locked, vehicle);
-    const CapStepOut o = CapStep(pre, locked, gain, ok, t.n, cap, true);
+    const CapStepOut o = CapStep(pre, locked, gain, ok, t.n, ceiling, true);
     if (!CapWrite(t, post, o)) InterlockedIncrement(&g_capFaults);
     InterlockedIncrement(&g_capSteps);
     if (o.clamps) InterlockedExchangeAdd(&g_capClamps, o.clamps);
@@ -1568,6 +1576,7 @@ __declspec(noinline) static bool HookGearTorque(void *vehicle, int gear, float *
         InterlockedExchange(&g_cutRate, FloatBits(rate));
         InterlockedExchange(&g_cutS, FloatBits(r.s));
         InterlockedExchange(&g_cutTruck, FloatBits(sp.truckOk ? sp.truck : NAN));
+        InterlockedExchange(&g_capTruck, FloatBits(sp.truckOk ? sp.truck : NAN));
         InterlockedExchange(&g_cutRadius, FloatBits(radii.radius));
         InterlockedExchange(&g_cutRadius94, FloatBits(radii.radius94));
         InterlockedExchange(&g_cutRollCylinder, radii.cylinder);
@@ -1687,6 +1696,11 @@ void WheelCapCountsGet(WheelCapCounts &out)
     out.spread = BitsFloat(g_capSpreadBits);
     out.excessMost = BitsFloat(InterlockedExchange(&g_capExcessMost, 0)); // the largest since the last read
     out.preMost = BitsFloat(InterlockedExchange(&g_capPreMost, 0));
+    out.postSum = BitsFloat(g_capPostSum);
+    out.postMost = BitsFloat(InterlockedExchange(&g_capPostMost, 0));
+    const float least = BitsFloat(InterlockedExchange(&g_capPreLeast, FloatBits(kCapNone)));
+    out.preLeast = least < kCapNone ? least : 0.0f;
+    out.ceiling = BitsFloat(g_capCeiling);
 }
 
 long GearboxKicks() { return g_kicks; }

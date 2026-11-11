@@ -69,6 +69,7 @@ static void FakeOnFrame(void *first) { g_frameFirst = (LONG64)first; }
 static volatile float g_driveThrottle = 0.0f, g_driveDt = 0.0f;
 static void *volatile g_driveAction = nullptr;
 static void (*volatile g_driveDoes)(void *action) = nullptr; // what the stand-in does to the wheels, the wheel cap's test
+static volatile float g_capTestPush = 1.0f;                  // the stand-in's push on each driven wheel, rad/s (the wheel cap's test)
 uint8_t *g_capTestBodies[4] = {};
 uint8_t *g_capTestChassis = nullptr;
 uint8_t *g_pushTestBodies[3] = {};
@@ -2350,7 +2351,7 @@ int main()
             {
                 float x;
                 memcpy(&x, g_capTestBodies[i] + 0x240, 4);
-                x += 1.0f / lens[i];
+                x += g_capTestPush / lens[i];
                 memcpy(g_capTestBodies[i] + 0x240, &x, 4);
             }
             float cv;
@@ -2369,10 +2370,10 @@ int main()
         TorqueCutPublish(&slot);
         WheelCapCounts c0 = {};
         WheelCapCountsGet(c0);
-        // M3: at 2 x the cap nothing is written
+        // at 2 x the cap, not armed (M3): the drive adds nothing to a wheel over the ceiling, and no wheel is lowered
         for (int i = 0; i < 4; i++) setSpeed(i, 6.0f);
         drive(act, 0.5f, 0.016f);
-        const bool waited = Near(speed(0), 7.0f) && Near(speed(1), 7.0f) && Near(speed(3), 6.0f);
+        const bool waited = Near(speed(0), 6.0f) && Near(speed(1), 6.0f) && Near(speed(2), 6.0f) && Near(speed(3), 6.0f);
         // armed under 1.1 x the cap: two driven wheels at 2.5 pushed to 3.5 and held at 3; the third at 1.0 pushed to 2.0
         // takes the two's excess impulse (0.5 / 0.2 + 0.5 / 0.1) through its gain 0.1: 2.75; the undriven one stays
         setSpeed(0, 2.5f), setSpeed(1, 2.5f), setSpeed(2, 1.0f), setSpeed(3, 5.0f);
@@ -2382,14 +2383,16 @@ int main()
                             Near(getF(bodies[0], 0x240), 1.5f);
         WheelCapCounts c1 = {};
         WheelCapCountsGet(c1);
-        // M1: kept 2.75 / 3, smoothed from 1 (0.8 old)
-        const float kept = 0.8f + 0.2f * (2.75f / 3.0f);
-        const bool counts = c1.armed && c1.clampedNow == 2 && c1.clamps - c0.clamps == 2 && c1.waitSteps - c0.waitSteps == 1 && c1.steps - c0.steps == 1 && Near(c1.kept, kept) &&
-                            Near(c1.excessMost, 0.5f) && c1.refused == c0.refused;
-        // armed already, wheels the ground pushed over the cap: held there with no push left
+        // M1: the waiting step kept none of the three pushes (0.8 from 1), this one 2.75 of 3; both steps written and
+        // counted, three held wheels in the first and two in this one, the largest excess the first step's whole push
+        const float kept = 0.8f * 0.8f + 0.2f * (2.75f / 3.0f);
+        const bool counts = c1.armed && c1.clampedNow == 2 && c1.clamps - c0.clamps == 5 && c1.waitSteps - c0.waitSteps == 1 && c1.steps - c0.steps == 2 && Near(c1.kept, kept) &&
+                            Near(c1.excessMost, 1.0f) && c1.refused == c0.refused && Near(c1.ceiling, 3.0f) && Near(c1.preLeast, 1.0f) && Near(c1.postMost, 7.0f) &&
+                            Near(c1.postSum - c0.postSum, 7.0f + 3.0f);
+        // armed already, wheels the ground pushed over the cap: they keep the ground's speed, the drive adds nothing
         setSpeed(0, 3.25f), setSpeed(1, 3.25f), setSpeed(2, 3.25f);
         drive(act, 0.5f, 0.016f);
-        const bool downhill = Near(speed(0), 3.0f) && Near(speed(2), 3.0f);
+        const bool downhill = Near(speed(0), 3.25f) && Near(speed(1), 3.25f) && Near(speed(2), 3.25f);
         // a refused body (a fixed motion) is counted and left
         bodies[2][0x160] = 5;
         setSpeed(2, 2.0f);
@@ -2398,20 +2401,42 @@ int main()
         WheelCapCountsGet(c2);
         const bool refused = c2.refused - c1.refused == 1 && Near(speed(2), 3.0f);
         bodies[2][0x160] = 0;
-        // a shift waits again
+        // a shift waits again: not armed at 2 x the cap, and the drive still adds nothing there
         gear = 2;
         memcpy(act + 0x74, &gear, 4);
         setSpeed(0, 6.0f), setSpeed(1, 6.0f), setSpeed(2, 6.0f);
         drive(act, 0.5f, 0.016f);
-        const bool shiftWaits = Near(speed(0), 7.0f);
-        // R: the cap in the gear's direction
+        WheelCapCounts c3 = {};
+        WheelCapCountsGet(c3);
+        const bool shiftWaits = Near(speed(0), 6.0f) && !c3.armed;
+        gear = 1;
+        memcpy(act + 0x74, &gear, 4);
+        // the ceiling by the truck's speed: with a top of 2 and the governor's end at 1.1 x it, in a step where the
+        // torque hook gave no truck speed, the wheels are held at the governor's end, 2.2, under the cap of 3
+        slot.map.top = 2.0f, slot.map.governTo = 1.1f;
+        slot.at = 0;
+        TorqueCutPublish(&slot);
+        setSpeed(0, 1.5f), setSpeed(1, 1.5f), setSpeed(2, 1.5f);
+        drive(act, 0.5f, 0.016f);
+        WheelCapCounts c4 = {};
+        WheelCapCountsGet(c4);
+        const bool governEnd = Near(speed(0), 2.2f) && Near(speed(1), 2.2f) && Near(speed(2), 2.2f) && Near(c4.ceiling, 2.2f) && c4.clampedNow == 3;
+        slot.map.top = 0.0f, slot.map.governTo = 0.0f;
+        slot.at = 0;
+        TorqueCutPublish(&slot);
+        // R: the cap in the gear's direction. The stand-in pushing backward: two wheels from -2.5 held at -3, the third
+        // from -1.0 with the spread at -2.75. Then pushing forward, against R: a wheel at -4.5 slowed to -3.5 is left
+        // there, and the others take no spread
         gear = -1;
         memcpy(act + 0x74, &gear, 4);
-        setSpeed(0, -2.0f), setSpeed(1, -2.0f), setSpeed(2, -2.0f); // arms at 2, under the cap in R
+        g_capTestPush = -1.0f;
+        setSpeed(0, -2.5f), setSpeed(1, -2.5f), setSpeed(2, -1.0f);
         drive(act, 0.5f, 0.016f);
-        setSpeed(1, -4.5f);
-        drive(act, 0.5f, 0.016f); // the stand-in pushes forward, against R: -3.5, held to -3
-        const bool reverse = Near(speed(1), -3.0f) && Near(speed(0), 0.0f) && Near(speed(2), 0.0f); // the others pushed against R take none of the spread
+        const bool reverseHeld = Near(speed(0), -3.0f) && Near(speed(1), -3.0f) && Near(speed(2), -2.75f);
+        g_capTestPush = 1.0f;
+        setSpeed(0, -2.0f), setSpeed(1, -4.5f), setSpeed(2, -2.0f);
+        drive(act, 0.5f, 0.016f);
+        const bool reverse = reverseHeld && Near(speed(1), -3.5f) && Near(speed(0), -1.0f) && Near(speed(2), -1.0f);
         gear = 1;
         memcpy(act + 0x74, &gear, 4);
         // no cap in the slot, and the cut cleared: nothing written
@@ -2469,14 +2494,17 @@ int main()
         Check(capSlowWhole && capFastBack && capClunkWhole, "the cap's part of the chassis push: nothing at 2 m/s (the kick's push, counted), (1 - kept) at 10 m/s, nothing on the clunk of engaging a gear");
         g_driveDoes = nullptr;
         char line[600];
-        snprintf(line, sizeof line, "wheel cap in the drive's hook: a downshift at 2 x the cap waits (M3); armed, two driven wheels held at %.3f and %.3f (an axle of length 2 and a unit one, "
-                                    "the parts across kept), the third %.3f with the spread, the undriven one %.1f as it was; kept %.3f, %ld held; held at the cap with no push "
-                                    "left; a fixed body refused; a shift waits again; R, the others pushed against it take none; no cap or a clear writes nothing",
+        snprintf(line, sizeof line, "wheel cap in the drive's hook: wheels at 2 x the cap after a downshift gain nothing from the drive and none is lowered, not armed (M3); armed, two "
+                                    "driven wheels held at %.3f and %.3f (an axle of length 2 and a unit one, the parts across kept), the third %.3f with the spread, the undriven "
+                                    "one %.1f as it was; kept %.3f, %ld held; wheels the ground took over the cap keep its speed; a fixed body refused; after a shift not armed and "
+                                    "still nothing added; with a top and no truck speed held at the governor's end; R held at the cap its way, a wheel slowed against it left, the "
+                                    "others take none; no cap or a clear writes nothing",
                  speedHeld0, speedHeld1, speedSpread, 5.0f, c1.kept, c1.clampedNow);
-        Check(CreepHooked() && waited && capped && counts && downhill && refused && shiftWaits && reverse && noCap && cleared, line);
-        if (!(waited && capped && counts && downhill && refused && shiftWaits && reverse && noCap && cleared))
-            printf("     %d %d %d %d %d %d %d %d %d; speeds %.3f %.3f %.3f %.3f; kept %.3f clamped %ld excess %.3f\n", waited, capped, counts, downhill, refused, shiftWaits, reverse,
-                   noCap, cleared, speed(0), speed(1), speed(2), speed(3), c1.kept, c1.clampedNow, c1.excessMost);
+        Check(CreepHooked() && waited && capped && counts && downhill && refused && shiftWaits && governEnd && reverse && noCap && cleared, line);
+        if (!(waited && capped && counts && downhill && refused && shiftWaits && governEnd && reverse && noCap && cleared))
+            printf("     %d %d %d %d %d %d %d %d %d %d; speeds %.3f %.3f %.3f %.3f; kept %.3f clamped %ld excess %.3f ceiling %.3f least %.3f most %.3f sum %.3f\n", waited, capped, counts,
+                   downhill, refused, shiftWaits, governEnd, reverse, noCap, cleared, speed(0), speed(1), speed(2), speed(3), c1.kept, c1.clampedNow, c1.excessMost, c1.ceiling, c1.preLeast,
+                   c1.postMost, c1.postSum - c0.postSum);
     }
 
     // the diff lock's bite in the wheels' drive's hook (BRIEF_diff_lock_bite.md with the Reviewer's addendum and the
@@ -2484,7 +2512,7 @@ int main()
     // and an undriven one; the stand-in drive adds 1 rad/s to each driven wheel. With the lock byte set and the slot
     // published: at 100 every driven wheel on the inertia-weighted mean, the momentum kept; at 50 a step of k; the lock off,
     // the handbrake, another action, a cleared slot, a stale one and a spread under 0.01 write nothing; AWD off leaves a
-    // type 2 wheel out; a body with no inertia skipped and counted; with the cap: locked, then held at the cap together
+    // type 2 wheel out; a body with no inertia skipped and counted; with the cap: locked, then held at the cap (a wheel over it before the drive left at its own speed)
     {
         static uint8_t vehicle[0x800] = {}, act[0x100] = {}, otherAct[0x100] = {}, models[4][0x300] = {}, wheels[4][0x200] = {}, bodies[4][0x300] = {}, chassis[0x300] = {},
                        desc[0x200] = {}, world[0x10] = {};
@@ -2533,7 +2561,7 @@ int main()
             {
                 float x;
                 memcpy(&x, g_capTestBodies[i] + 0x240, 4);
-                x += 1.0f / lens[i];
+                x += g_capTestPush / lens[i];
                 memcpy(g_capTestBodies[i] + 0x240, &x, 4);
             }
         };
@@ -2631,7 +2659,8 @@ int main()
         setSpeeds(3.0f, 3.3f, 2.8f, 7.0f);
         drive(act, 0.5f, 1.0f / 60.0f);
         WheelCapCountsGet(k2);
-        const bool atCap = Near(speed(0), 3.0f) && Near(speed(1), 3.0f) && Near(speed(2), 3.0f);
+        // locked at 4.04, then held: the first and the third at the cap, the second, at 3.3 before the drive, at its own 3.3
+        const bool atCap = Near(speed(0), 3.0f) && Near(speed(1), 3.3f) && Near(speed(2), 3.0f);
         // over it all three clamped: the pushes to 4.04 are 1.04, 0.74 and 1.24, of which only the third wheel keeps 0.2
         const bool keptOver = k2.armed && k2.clampedNow == 3 && Near(k2.kept, CapKeptSmooth(k1.kept, 0.2f / 3.02f));
         TorqueCutPublish(nullptr);
@@ -2651,7 +2680,7 @@ int main()
         Check(CreepHooked() && all,
               "diff lock bite in the drive's hook: at 100 the driven wheels on their inertia-weighted mean, the momentum about their axles kept, the parts across the axle "
               "and the undriven wheel left; at 50 a step of k; nothing with the lock off, the handbrake on, another action, a cleared or stale slot or a spread under 0.01; "
-              "AWD off leaves a type 2 wheel out; a wheel with no inertia skipped and counted; with the cap locked first, then held at the cap together, "
+              "AWD off leaves a type 2 wheel out; a wheel with no inertia skipped and counted; with the cap locked first, then held at the cap, a wheel over it before the drive at its own speed, "
               "the kept share 1 under the cap and the third wheel's 0.2 of 3.02 over it, all three clamped");
     }
     // a wide truck (BRIEF_cut_radius_cylinder.md, the rider, the Reviewer's S3): 17, 32 and 33 driven wheels of equal
@@ -2754,10 +2783,10 @@ int main()
             WheelCapCountsGet(c0);
             setSpeeds(n, 1.0f);
             drive(act, 0.5f, 1.0f / 60.0f);
-            setSpeeds(n, 3.0f);
+            setSpeeds(n, 2.7f); // 2.7 and 2.9 under the cap, driven and locked over it
             drive(act, 0.5f, 1.0f / 60.0f);
             WheelCapCountsGet(c1);
-            const bool capOk = fits ? allAt(n, 3.0f) && c1.faults == c0.faults && c1.clampedNow == n : asDriven(n, 3.0f) && c1.faults == c0.faults + 2;
+            const bool capOk = fits ? allAt(n, 3.0f) && c1.faults == c0.faults && c1.clampedNow == n : asDriven(n, 2.7f) && c1.faults == c0.faults + 2;
             TorqueCutPublish(nullptr);
             LockGive(0, 0, 0, 0);
             act[0x4A] = 0;

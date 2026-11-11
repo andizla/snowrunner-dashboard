@@ -4415,7 +4415,8 @@ int main(int argc, char **argv)
         // R4, the sketch: L- with a top of 2.9 floored, the brake (F1) and the pace (F1b) as above, today (the governor by
         // the wheels, no cap) against M5 (the governor by the truck's own speed, the guard at 1.5); the scout (a kick of 50 rad/s a step) with a wheel free, in deep mud, on a road; the heavy (6 a step) with a
         // wheel free; the foot off down a grade entered at the top; a downshift floored on a road at 2 x the new top with
-        // M3, with the cap armed at once (the counter-case) and today
+        // M3, with the cap armed at once and today (armed at once was the counter-case while the step set a wheel over
+        // the cap down to it; since BRIEF_governor_sway.md it lowers none, so the two are the same)
         SimSetup u = {};
         u.mdav = 0.01f;
         u.wheels = 4;
@@ -4546,10 +4547,170 @@ int main(int argc, char **argv)
         down.capAtOnce = true;
         const SimResult downOnce = SimRun(down);
         len += snprintf(line + len, sizeof line - len, " the heavy foot off down a grade from the top: %.2f today, %.2f with M5; a downshift at 2 x the guard, the truck at 0.5 s %.2f "
-                                                       "today, %.2f with the guard waiting (M3), %.2f armed at once",
+                                                       "today, %.2f with the guard waiting (M3), %.2f armed at once (the same: the step lowers no wheel)",
                         hillToday.vEnd / 2.9f, hillCap.vEnd / 2.9f, downToday.vHalf, downWait.vHalf, downOnce.vHalf);
-        ok = ok && hillCap.vEnd <= hillToday.vEnd + 0.05f && downWait.vHalf > downOnce.vHalf;
+        ok = ok && hillCap.vEnd <= hillToday.vEnd + 0.05f && fabsf(downWait.vHalf - downOnce.vHalf) < 1e-3f && downWait.vHalf > downToday.vHalf - 0.01f;
         Check(ok, line);
+    }
+
+    // the governor's sway (BRIEF_governor_sway.md): the top of a low gear held by a ceiling on each driven wheel, by the
+    // truck's speed, in place of the governor's factor on F. TopRun (torque_cut_sim.h) with the law and, as the counter
+    // case, the law before it. Speeds over the gear's top.
+    {
+        TopSetup u = {};
+        u.slot.vehicle = 1, u.slot.mode = kCutMap, u.slot.share = 1.0f, u.slot.pedal = 1.0f;
+        u.cap = 1.5f, u.wheels = 2, u.kick = 500.0f, u.mdav = 0.01f, u.inertia = 10.0f, u.flat = -1.0f, u.holdV = -1.0f;
+        u.seconds = 20.0f, u.rise = 0.008f, u.seed = 7, u.gripNoise = 0.3f, u.dragNoise = 0.3f, u.couple = 1.0f / 60.0f;
+        static char line[6000];
+        auto mapOf = [](float top) {
+            const CutBand band = CutGovernBand(top, kTachOverrun);
+            return TorqueCutMap{ 1.0f, 1.0f, 0.0f, 1.0f, 0.15f, top, 800.0f, 2500.0f, 1.2f, { 5, { 0.25f, 0.45f, 0.6f, 0.8f, 1.0f }, { 0.55f, 0.85f, 1.0f, 1.0f, 0.85f } }, band.from, band.to };
+        };
+        // the pure parts: the ceiling, the step's guard, F's switch
+        {
+            const float cap = 3.0f, top = 2.0f, to = 1.1f, end = to * top, from = kCapCeilFrom * top;
+            const bool ceiling = CapCeiling(0.0f, top, to, 1.0f) == 0.0f && CapCeiling(cap, top, to, 0.0f) == cap && CapCeiling(cap, top, to, from) == cap &&
+                                 Near(CapCeiling(cap, top, to, 0.5f * (from + end)), 0.5f * (cap + end), 1e-5f) && Near(CapCeiling(cap, top, to, end), end, 1e-6f) &&
+                                 Near(CapCeiling(cap, top, to, 2.0f * end), end, 1e-6f) && Near(CapCeiling(cap, top, to, NAN), end, 1e-6f) && CapCeiling(cap, 0.0f, to, 1.0f) == cap &&
+                                 CapCeiling(cap, top, 0.0f, 1.0f) == cap && CapCeiling(2.0f, top, to, 2.5f) == 2.0f && CapCeiling(cap, top, to, 1.8f) < CapCeiling(cap, top, to, 1.7f);
+            const float pre[3] = { 4.0f, 4.0f, 2.0f }, post[3] = { 5.0f, 3.5f, 5.0f }, gain[3] = { 1.0f, 1.0f, 1.0f };
+            const bool ok[3] = { true, true, true };
+            const CapStepOut o = CapStep(pre, post, gain, ok, 3, 3.0f, false);
+            const bool guard = Near(o.final[0], 4.0f, 1e-6f) && Near(o.final[1], 3.5f, 1e-6f) && Near(o.final[2], 3.0f, 1e-6f);
+            TorqueCutMap cm = mapOf(10.0f);
+            const float full = CutCurveAt(cm.curve, 1.0f, cm.tachTop);
+            const bool sw = Near(TorqueCutF(cm, 10.5f, 1.0f, NAN, true), full, 1e-5f) && Near(TorqueCutF(cm, 12.0f, 1.0f, 10.9f, true), full, 1e-5f) &&
+                            TorqueCutF(cm, 10.5f, 1.0f, 11.0f, true) == 0.0f && TorqueCutF(cm, 9.0f, 1.0f, 12.0f, true) == 0.0f && TorqueCutF(cm, 11.5f, 1.0f, NAN, true) == 0.0f &&
+                            Near(TorqueCutF(cm, 10.5f), 0.5f * CutCurveAt(cm.curve, 1.05f, cm.tachTop), 1e-5f);
+            Check(ceiling && guard && sw, "governor ceiling, pure: the cap under 0.75 of the top, down to the governor's end at the truck's speed there and past it, halfway at the middle, the end with no "
+                                          "truck speed, the cap with no top, no end or an end over it, 0 with no cap; the step leaves a wheel over the ceiling at its speed before the drive, keeps "
+                                          "the drive's own slowing, holds one under it at the ceiling; F where the guard acts whole under the governor's end and 0 from it, by the truck's speed when "
+                                          "given; elsewhere the fade as before");
+            if (!(ceiling && guard && sw)) printf("     %d %d %d\n", ceiling, guard, sw);
+        }
+        // floored at the top, three low gears, the grip of 5 and 1 with half and twice each (N1), a load of half the push
+        // the ground can give: after 3 s the needle within 150 rpm, the truck within 2 percent of the top around its
+        // middle, the push from step to step without a jump. The law before: the needle and the push swing. The tops and
+        // the start keep the wheels off a whole rad/s (the sim's limit, the last case here).
+        {
+            const float tops[3] = { 2.4f, 3.4f, 4.5f }, grips[6] = { 0.5f, 1.0f, 2.0f, 2.5f, 5.0f, 10.0f };
+            int len = snprintf(line, sizeof line, "governor ceiling, floored at the top of a low gear for 20 s (top, grip: truck band, needle band rpm, push jump over push; the law before):");
+            bool calmAll = true, swayed = true;
+            for (int tI = 0; tI < 3; tI++)
+                for (int g = 0; g < 6; g++)
+                {
+                    const float top = tops[tI];
+                    TopSetup c = u;
+                    c.slot.map = mapOf(top);
+                    c.grip = grips[g], c.s0 = c.v0 = 0.9f * top;
+                    c.drag = 0.5f * 2.0f * c.couple * fminf(c.grip, 0.45f * top);
+                    const TopResult q = TopRun(c);
+                    c.oldLaw = true;
+                    const TopResult law0 = TopRun(c);
+                    const bool good = q.needleMax - q.needleMin <= 150.0f && 0.5f * (q.vMax - q.vMin) <= 0.02f * top && q.pushJump <= 0.35f * q.push && q.vMin >= kCapCeilFrom * top &&
+                                      q.vMax <= c.slot.map.governTo * top && q.lowered == 0;
+                    const bool bad = law0.needleMax - law0.needleMin > 2.0f * 150.0f && law0.pushJump > q.pushJump;
+                    calmAll = calmAll && good, swayed = swayed && bad;
+                    len += snprintf(line + len, sizeof line - len, "%s %.1f, %.1f: %.3f to %.3f, %.0f, %.2f; %.3f to %.3f, %.0f, %.2f%s", tI || g ? ";" : "", top, c.grip, q.vMin / top, q.vMax / top,
+                                    q.needleMax - q.needleMin, q.pushJump / q.push, law0.vMin / top, law0.vMax / top, law0.needleMax - law0.needleMin, law0.pushJump / law0.push, good && bad ? "" : " <<<");
+                }
+            Check(calmAll && swayed, line);
+        }
+        // a climb that takes 0.15 g (0.049 rad/s a step at a rolling radius of 0.5 m), four wheels, from rest: the truck
+        // holds 0.75 of the top or more with a steady needle
+        {
+            TopSetup c = u;
+            const float top = 2.0f;
+            c.slot.map = mapOf(top);
+            c.wheels = 4, c.couple = 1.0f / 30.0f, c.grip = 5.0f, c.drag = 0.0f, c.grade = -0.049f;
+            const TopResult q = TopRun(c);
+            c.oldLaw = true;
+            const TopResult law0 = TopRun(c);
+            snprintf(line, sizeof line, "governor ceiling, a climb of 0.15 g in a low gear from rest: the truck holds %.3f to %.3f of the top, the needle within %.0f rpm, no wheel lowered; the law "
+                                        "before %.3f to %.3f, the needle over %.0f rpm",
+                     q.vMin / top, q.vMax / top, q.needleMax - q.needleMin, law0.vMin / top, law0.vMax / top, law0.needleMax - law0.needleMin);
+            Check(q.vMin >= kCapCeilFrom * top && q.needleMax - q.needleMin <= 150.0f && q.lowered == 0 && law0.needleMax - law0.needleMin > 300.0f, line);
+        }
+        // downhill past the top, the pedal down and then up: the cap's step lowers no wheel under what the road and the
+        // drive left it (the counter case is the hook's test, where wheels over the cap were set down to it)
+        {
+            bool none = true, past = true;
+            float reach[2] = {};
+            for (int foot = 0; foot < 2; foot++)
+            {
+                TopSetup c = u;
+                const float top = 2.0f;
+                c.slot.map = mapOf(top);
+                c.grip = 5.0f, c.drag = 0.005f, c.grade = 0.02f, c.s0 = c.v0 = 0.9f * top, c.footUpAt = foot ? 10.0f : 0.0f;
+                const TopResult q = TopRun(c);
+                none = none && q.lowered == 0;
+                past = past && q.vMost > (c.slot.map.governTo + 0.5f) * top;
+                reach[foot] = q.vMost / top;
+            }
+            snprintf(line, sizeof line, "governor ceiling, downhill past the top with the pedal down (to %.2f of the top) and with it let up at 10 s (%.2f): the cap's step lowers no wheel", reach[0],
+                     reach[1]);
+            Check(none && past, line);
+        }
+        // M4 and S1: floored from rest, into the gear at the top with the pull already whole, and after a shift down at
+        // 1.6 of the top, a light load: the truck is not past the governor's end by more than 2 percent of the top once
+        // the drive has it, and over that the wheels give it under 2 percent of the top in all
+        {
+            int len = snprintf(line, sizeof line, "governor ceiling, floored with a light load (top: from rest the most; into the gear at the top with the pull whole the most; shifted down at 1.6 "
+                                                  "the end and the wheels' gift over the end, all over the top):");
+            bool held = true;
+            const float tops[3] = { 2.0f, 3.4f, 4.6f };
+            for (int tI = 0; tI < 3; tI++)
+            {
+                const float top = tops[tI];
+                TopSetup c = u;
+                c.slot.map = mapOf(top);
+                c.grip = 5.0f, c.drag = 0.0005f;
+                const float limit = (c.slot.map.governTo + 0.02f) * top;
+                const TopResult rest = TopRun(c);
+                c.s0 = c.v0 = top, c.used0 = 1.0f;
+                const TopResult into = TopRun(c);
+                c.s0 = c.v0 = 1.6f * top, c.used0 = 0.0f;
+                const TopResult down = TopRun(c);
+                const bool good = rest.vMost <= limit && rest.vEnd > top && into.vMost <= limit && down.vEnd <= limit && down.gainOver <= 0.02f * top && rest.lowered + into.lowered + down.lowered == 0;
+                held = held && good;
+                len += snprintf(line + len, sizeof line - len, "%s %.1f: %.3f; %.3f; %.3f, %.4f%s", tI ? ";" : "", top, rest.vMost / top, into.vMost / top, down.vEnd / top, down.gainOver / top,
+                                good ? "" : " <<<");
+            }
+            Check(held, line);
+        }
+        // S4: one wheel of four in the air, the truck held at half the top: the free wheel is held at the cap, and the
+        // other three pull no less than under the law before
+        {
+            TopSetup c = u;
+            const float top = 2.0f;
+            c.slot.map = mapOf(top);
+            c.wheels = 4, c.freeWheels = 1, c.grip = 1.0f, c.holdV = 0.5f * top;
+            const TopResult q = TopRun(c);
+            c.oldLaw = true;
+            const TopResult law0 = TopRun(c);
+            snprintf(line, sizeof line, "governor ceiling, one wheel of four free, the truck held at %.2f of the top: the free wheel to %.3f of the top, the cap; the three's pull %.1f, "
+                                        "%.1f under the law before",
+                     c.holdV / top, q.freeMost / top, q.pull, law0.pull);
+            Check(q.pull > 0.0f && q.freeMost <= c.cap * top + 1e-4f && q.freeMost > 1.4f * top && q.pull >= 0.999f * law0.pull && q.lowered == 0, line);
+        }
+        // the sim's own limit, under both laws: the game's traction term cuts the drive for some steps when a wheel's
+        // whole rad/s rises, so with a high grip and a heavy load a truck that starts under a whole number below the
+        // band stays at it with the needle swinging. The cases above keep clear of it. Whether the game does this is not
+        // known from the sim
+        {
+            TopSetup c = u;
+            const float top = 3.4f;
+            c.slot.map = mapOf(top);
+            c.grip = 10.0f, c.s0 = c.v0 = 0.6f * top;
+            c.drag = 0.5f * 2.0f * c.couple * fminf(c.grip, 0.45f * top);
+            const TopResult q = TopRun(c);
+            c.oldLaw = true;
+            const TopResult law0 = TopRun(c);
+            snprintf(line, sizeof line, "governor ceiling, the sim's limit under both laws: a heavy load and a high grip from under a whole 3 rad/s, top 3.4: the truck stays at %.2f to %.2f rad/s, "
+                                        "the needle over %.0f rpm; the law before %.2f to %.2f, %.0f",
+                     q.vMin, q.vMax, q.needleMax - q.needleMin, law0.vMin, law0.vMax, law0.needleMax - law0.needleMin);
+            Check(q.vMax < 3.05f && law0.vMax < 3.05f && q.needleMax - q.needleMin > 500.0f && law0.needleMax - law0.needleMin > 500.0f, line);
+        }
     }
 
     // the diff lock's bite, pure (BRIEF_diff_lock_bite.md with the Reviewer's addendum and the lead's of 14:09): k from the

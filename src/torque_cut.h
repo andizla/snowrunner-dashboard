@@ -93,13 +93,21 @@ inline float TorqueCutRpm(const TorqueCutMap &m, float s)
 // guard, and a wheel running up to the guard swung on it (the sketch: the heavy with a wheel free fell by 0.3 in a step 4
 // times in 10 s). Where the guard does not act (a numbered gear), E keeps its tail: it is the one limit on a wheel that
 // runs free there (the review of bc224bf, M1).
+// The governor's fade is in F only where the guard does not act (BRIEF_governor_sway.md, C4). Where it acts, the
+// top is held by the ceiling on each wheel (CapCeiling, CapStep), set anew each step: a factor on F there was a bracket
+// of a few thousandths against a drive that gives a wheel hundreds of rad/s a step at a bracket of 1, so the pull at
+// the top was the wheels' run to the guard switched on and off, and the engine speed swayed with it.
+// At or over the governor's end the drive's part of F is still 0 there, by the same speed as before: the cap's step
+// leaves a wheel over the ceiling at its speed before the drive, so with a pull in F the drive would undo the game's
+// own brake on an over-speeding wheel each step, and a truck shifted down at speed would coast on with the foot down
+// where it was held back before. At the end the ceiling is the truck's own speed, so this switch moves no pull.
 inline float TorqueCutF(const TorqueCutMap &m, float s, float brakeShare = 1.0f, float governS = NAN, bool holdCurve = false)
 {
     if (!(m.redline > m.idle) || !(m.idle >= 0.0f)) return 0.0f;
     const float rpm = TorqueCutRpm(m, isfinite(s) ? s : 0.0f), speed = rpm / m.redline;
     const float governSpeed = isfinite(governS) ? TorqueCutRpm(m, governS) / m.redline : speed;
     const float pedal = CutClamp01(m.pedal);
-    const float e = CutCurveAt(m.curve, holdCurve ? fminf(speed, 1.0f) : speed, m.tachTop) * CutGovernor(governSpeed, m.governFrom, m.governTo);
+    const float e = CutCurveAt(m.curve, holdCurve ? fminf(speed, 1.0f) : speed, m.tachTop) * (holdCurve ? (m.governTo > 0.0f && governSpeed >= m.governTo ? 0.0f : 1.0f) : CutGovernor(governSpeed, m.governFrom, m.governTo));
     const float limit = isfinite(m.limit) ? CutClamp01(m.limit / (pedal > 1e-3f ? pedal : 1e-3f)) : 1.0f;
     float drive = pedal * (e * limit - (isfinite(m.load) && m.load > 0.0f ? m.load : 0.0f));
     if (!(drive > 0.0f)) drive = 0.0f;
@@ -371,7 +379,8 @@ struct TorqueCutAnswer
     float torque, bracket, f, b4s, stockCurve, s, standIn, w, used, taper;
 };
 // The governor's fade goes by the truck's own speed where it was read (M5), else by the wheels' mean; the curve held to
-// the redline only where the guard acts (slot.cap above 0).
+// the redline and no fade in F only where the guard acts (slot.cap above 0): the ceiling holds the top there, and F's
+// drive is 0 from the governor's end.
 inline TorqueCutAnswer TorqueCutAnswerOf(const TorqueCutSlot &slot, float stock, float start, float a, float top, float pf, float d4, CutSpeeds sp)
 {
     TorqueCutAnswer r = {};
@@ -418,6 +427,8 @@ inline void TorqueCutAnswerPaced(TorqueCutAnswer &r, float stock, float usedBefo
 // and the engine brake, not by a clamp in one step). kCapKeptOld: the kept share's smoothing, old part.
 static const int kCapDefault = 150, kCapLeast = 110, kCapMost = 200;
 static const float kCapArm = 1.0f, kCapKeptOld = 0.8f;
+// kCapCeilFrom: the truck's speed over the gear's top where the ceiling starts down from the cap (CapCeiling).
+static const float kCapCeilFrom = 0.75f;
 // kCapWheels: the wheels a truck may list (vehicle + 0x200), as kMaxWheels (truck.h, which this header does not see; a
 // static_assert in gauges.cpp holds them equal, the review of 113, M3). The cut, the cap, the lock and the chassis
 // push read a truck of up to this many and refuse a longer list.
@@ -464,12 +475,32 @@ inline float CapGain(const CapVec &localAxle, const CapVec &invInertia, float ax
     return isfinite(g) && g > 0.0f ? g : 0.0f;
 }
 
+// The ceiling on a driven wheel after the drive (BRIEF_governor_sway.md, C4), in the wheels' measure: the cap while
+// the truck is slow, down by CutSmooth to the governor's end (governTo x the gear's top) as the truck's own speed
+// (CutSpeedsTruck's, the gear's direction) goes from kCapCeilFrom x the top to the end. So under kCapCeilFrom the wheels
+// have the cap's whole room, and the drive adds nothing to a wheel at the governor's end once the truck is there. With
+// no truck speed read, the end; with an end at or over the cap, or no end, the cap; 0 with no cap.
+inline float CapCeiling(float cap, float top, float governTo, float truck)
+{
+    if (!(cap > 0.0f) || !isfinite(cap)) return 0.0f;
+    const float end = governTo * top;
+    if (!(top > 0.0f) || !isfinite(end) || !(end > 0.0f) || end >= cap) return cap;
+    if (!isfinite(truck)) return end;
+    const float from = kCapCeilFrom * top;
+    if (!(end > from)) return truck < end ? cap : end;
+    return cap + (end - cap) * CutSmooth((truck - from) / (end - from));
+}
+
 // One step of the cap over a truck's wheels, in the gear's direction and the game's measure: pre and post each wheel's
 // speed before and after the game's drive, gain its CapGain (0 unknown), ok a driven wheel read whole. Out: final, the
 // speed each wheel is set to; clamped, held at the cap this step; keptEach, each wheel's share of
 // its push kept (1 with no push); kept, the truck's share (M1: the sum of what each kept over the sum of the pushes, 1
-// where the pushes sum to about 0; M1, the burn by what the wheels keep); excess, the largest speed over the cap after the
-// drive; spread, the speed handed on.
+// where the pushes sum to about 0; M1, the burn by what the wheels keep); excess, the largest speed over a wheel's limit
+// after the drive; spread, the speed handed on.
+// cap is the ceiling of this step (CapCeiling). A wheel's limit is the ceiling or its own speed before the drive, the
+// larger: final = min(post, max(pre, cap)). So the step takes away only what the drive added in it: a wheel the road
+// took past the ceiling (a downhill, a shift down at speed) is never lowered, the drive only adds nothing to it, and a
+// wheel the drive slowed (the engine's braking) keeps the drive's own result.
 // spread (S1, the lead's call): what a clamped wheel could not take, as an impulse (its excess over its gain), goes to
 // the driven wheels not clamped and not pushed against the gear, by their own push's impulse (equal where none pushed),
 // through each one's gain, and each is capped again; nothing to a clamped wheel and nothing to one the drive pushed back.
@@ -491,10 +522,12 @@ inline CapStepOut CapStep(const float *pre, const float *post, const float *gain
     {
         o.final[i] = post[i];
         o.keptEach[i] = 1.0f;
-        if (!ok[i] || !(cap > 0.0f) || !isfinite(post[i]) || post[i] <= cap) continue;
-        const float e = post[i] - cap;
+        if (!ok[i] || !(cap > 0.0f) || !isfinite(post[i])) continue;
+        const float limit = isfinite(pre[i]) && pre[i] > cap ? pre[i] : cap;
+        if (post[i] <= limit) continue;
+        const float e = post[i] - limit;
         o.excess = fmaxf(o.excess, e);
-        o.final[i] = cap;
+        o.final[i] = limit;
         o.clamped[i] = true;
         o.clamps++;
         if (gain[i] > 0.0f) impulse += e / gain[i];
@@ -516,10 +549,11 @@ inline CapStepOut CapStep(const float *pre, const float *post, const float *gain
             const float share = sum > 1e-9f ? weight[i] / sum : 1.0f / (float)takers;
             const float add = impulse * share * gain[i];
             if (!(add > 0.0f) || !isfinite(add)) continue;
+            const float limit = pre[i] > cap ? pre[i] : cap;
             float to = o.final[i] + add;
-            if (to > cap)
+            if (to > limit)
             {
-                to = o.final[i] > cap ? o.final[i] : cap;
+                to = o.final[i] > limit ? o.final[i] : limit;
                 o.clamped[i] = true;
                 o.clamps++;
             }
@@ -542,8 +576,11 @@ inline CapStepOut CapStep(const float *pre, const float *post, const float *gain
 }
 
 // The cap's arming (M3, at the guard): after a take-over (a clear) or a shift (the drive's gear changes), the cap waits
-// until the driven wheels' mean is at or under kCapArm x the cap, then stays armed while the cut acts. Until then nothing
-// is written. mean: this step's before the drive, the gear's direction; ok false (no wheel read) never arms.
+// until the driven wheels' mean is at or under kCapArm x the cap, then stays armed while the cut acts.
+// mean: this step's before the drive, the gear's direction; ok false (no wheel read) never arms.
+// Since the ceiling (BRIEF_governor_sway.md) the step is written while waiting too: it cannot lower a wheel under its
+// speed before the drive, which was the arming's reason, and with the governor out of F nothing else would hold the
+// drive after a shift down at speed. The state stays for the probe: waiting says the wheels came into the gear over the cap.
 struct CapArm
 {
     int gear;
