@@ -4746,8 +4746,10 @@ int main(int argc, char **argv)
         const bool publishes = LockPublishes(true, true, 0) && LockPublishes(true, true, 1) && LockPublishes(true, true, 2) && !LockPublishes(true, false, 0) &&
                                !LockPublishes(false, true, 0) && !LockPublishes(false, true, 2) && !LockPublishes(true, true, 3) && !LockPublishes(true, true, -1);
         // the drive's hook: the bite alone asks for it (Powertrain on, DiffLockBite above 0), at 0 or with Powertrain off it does not
+        // and the drive display alone asks for it, whatever else is off (131's M2)
         const bool hook = DriveHookWanted(false, false, false, false, true, 50) && !DriveHookWanted(false, false, false, false, true, 0) &&
-                          !DriveHookWanted(false, false, false, false, false, 50) && DriveHookWanted(true, false, false, false, false, 0);
+                          !DriveHookWanted(false, false, false, false, false, 50) && DriveHookWanted(true, false, false, false, false, 0) &&
+                          DriveHookWanted(false, false, false, false, false, 0, true) && !DriveHookWanted(false, false, false, false, false, 0, false);
         if (!(ks && pairs && weighted && oneMean && nothing && publishes && hook))
             printf("     lock pure: k %d (k50 %.5f), pairs %d, weighted %d (%.4f %.4f), one mean %d, nothing %d, publishes %d, hook %d\n", ks, k50, pairs, weighted, u.final[0],
                    u.final[1], oneMean, nothing, publishes, hook);

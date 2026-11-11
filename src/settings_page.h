@@ -893,6 +893,9 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             ImGui::SetNextItemWidth(w);
             changed(ImGui::SliderInt("##difflockbite", &s.diffLockBite, 0, 100, s.diffLockBite > 0 ? "%d %%" : "game lock", ImGuiSliderFlags_AlwaysClamp));
             PageTip("How firmly the diff lock ties the driven wheels together. 0 leaves the game lock as it is. 100 turns them as one shaft. A locked truck then scrubs in a turn on hard ground, as a real one does. It acts on a truck whose lock is always on too.");
+            PageLabel("Drive display", labelX);
+            changed(ImGui::Checkbox("##drivedisplay", &s.driveDisplay));
+            PageTip("Each wheel: its spin against the truck speed and its share of the drive.");
             PageLabel("Diff", labelX);
             ImGui::SetNextItemWidth(w);
             {

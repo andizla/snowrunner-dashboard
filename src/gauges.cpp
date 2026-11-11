@@ -860,6 +860,7 @@ static void WriteIni(const GaugeSettings &s)
     num(L"CamberRestFront", s.camberRestFront);
     num(L"CamberRestRear", s.camberRestRear);
     whole(L"SuspDisplay", s.suspDisplay ? 1 : 0);
+    whole(L"DriveDisplay", s.driveDisplay ? 1 : 0);
     whole(L"AirSuspension", s.airSuspension ? 1 : 0);
     whole(L"AirHorizon", s.airHorizon ? 1 : 0);
     whole(L"AirSync", s.airSync ? 1 : 0);
@@ -1184,6 +1185,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; twists, 0.25 to 8 of the truck's own limits, at most 22 degrees (175 on an articulated truck's roll). 1 = the truck's own. Only a truck whose frame twists has them.\n"
                         L"; RideFront, RideRear: each axle's ride height in cm, -10 to 10; SwayFront, SwayRear: a sway bar, 0 to 0.3 of the axle's spring rate (BindSwayDisconnect\n"
                         L"; toggles them). Both move the attach point and stop on a truck whose game moves it. SuspDisplay=1 draws each wheel's travel. All tests, off by default.\n"
+                        L"; DriveDisplay=1 draws each wheel's spin against the truck's speed and its share of the drive, beside the travel display. It only reads. Off by default.\n"
                         L"; AirSuspension=1 holds each wheel at its rest place of the first standstill, cargo or not (3 s to settle, under 10 km/h); AirHorizon=1 levels the body\n"
                         L"; to the horizon instead (about 7 degrees at most). BindRideUp, BindRideDown move it 2 cm under 20 km/h.\n"
                         L"; Only the ends ticked Air follow them (AirAxleMask in the truck's [Suspension]: 1 front, 2 rear, 3 both); unticked, AirAxles=all, rear, front or none in [Truck], else the mod's table, else none. AirSync=1 shows the height's slider.\n"
@@ -1373,6 +1375,7 @@ static void ReadIni(GaugeSettings &s)
         }
     }
     s.suspDisplay = IniInt(L"SuspDisplay", s.suspDisplay ? 1 : 0, ini) != 0;
+    s.driveDisplay = IniInt(L"DriveDisplay", s.driveDisplay ? 1 : 0, ini) != 0;
     s.airSuspension = IniInt(L"AirSuspension", s.airSuspension ? 1 : 0, ini) != 0;
     s.airHorizon = IniInt(L"AirHorizon", s.airHorizon ? 1 : 0, ini) != 0;
     s.airSync = IniInt(L"AirSync", s.airSync ? 1 : 0, ini) != 0;
@@ -3983,13 +3986,13 @@ static void CreepHookStep(const GaugeSettings &s, bool driving)
     const bool damper = SuspFeaturesOn(s) || TuneOff(s);
     const bool cut = TorqueCutWanted(s); // the torque cut holds the drive's throttle at 1 through this hook
     const bool bite = s.powertrain && s.diffLockBite > 0; // the diff lock's bite works in this hook (the Reviewer's R4)
-    if (tried || !DriveHookWanted(s.creep, s.probe, damper, cut, s.powertrain, s.diffLockBite) || !driving || !g_drive.drive) return;
+    if (tried || !DriveHookWanted(s.creep, s.probe, damper, cut, s.powertrain, s.diffLockBite, s.driveDisplay) || !driving || !g_drive.drive) return;
     tried = true;
     DriveStepSet(SuspStepHook);
     char why[160] = "";
     if (CreepHook((uintptr_t)(g_base + g_drive.drive), why, sizeof why))
         Log(L"creep: the game's wheels' drive hooked (%s): %s",
-            s.creep ? L"Creep=1" : s.probe ? L"Probe=1" : cut ? L"the torque cut" : bite ? L"the diff lock's bite" : L"the suspension's settings",
+            s.creep ? L"Creep=1" : s.probe ? L"Probe=1" : cut ? L"the torque cut" : bite ? L"the diff lock's bite" : damper ? L"the suspension's settings" : L"the drive display",
             s.creep ? L"an idling truck in gear moves, and each wheel's travel is read every physics step for the probe and the damper" : L"each wheel's travel is read every physics step");
     else Log(L"creep: %S, so an idling truck stands as in the game and the travel is not read every step%s", why, bite ? L"; the diff lock bite does not act" : L"");
 }
@@ -4658,6 +4661,8 @@ static void LockPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s
     const bool kindRead = want && w.diffKindRead;
     const bool give = want && LockPublishes(g_lockPattern, kindRead, kind);
     LockGive(give ? w.refs.action : 0, w.refs.vehicle, s.diffLockBite, kind, w.mass, WheelCylinderVtable());
+    // the drive display's feed (131): the driven truck's drive call is read while DriveDisplay=1, whatever else is on
+    DriveShowGive(driving && s.driveDisplay && w.refs.vehicle && w.refs.action ? w.refs.action : 0, w.refs.vehicle, WheelCylinderVtable());
     // a kind the research does not know publishes nothing (the review of 105): one line for the truck
     if (want && kindRead && g_lockPattern && kind != 0 && kind != 1 && kind != 2 && w.lockRestSaid != w.refs.vehicle)
     {
@@ -6191,6 +6196,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         TorqueGive(m, w.refs, false, TorqueHandStep(w.hand, false, 0, 0, 0.0f, 1.0f));
         CreepGive(0, 0.0f);
         LockGive(0, 0, 0, 0);
+        DriveShowGive(0, 0);
         TorqueCutPublish(nullptr);
         w.cutActs = false;
         w.creeping = false;
@@ -8963,6 +8969,13 @@ static DWORD WINAPI Run(void *)
                 sv.articulationKnown = fk && rk;
                 sv.articulation = (fr - rr) * 100.0f;
             }
+            // the drive display (131): the hook's last record, while it is the driven truck's and under a second old
+            v.driveShown = false;
+            if (driving && inForce.driveDisplay && DriveShowGet(v.drive))
+            {
+                const ULONGLONG at = GetTickCount64();
+                v.driveShown = v.drive.n > 0 && v.drive.rows > 0 && v.drive.vehicle == watch.refs.vehicle && at >= v.drive.at && at - v.drive.at <= 1000;
+            }
             v.swayOff = driving && watch.swayOff && (inForce.swayFront > 0.0f || inForce.swayRear > 0.0f);
             // the air suspension: the tab's figures, and the overlay's height box for 3 s after a press
             v.air = driving && inForce.airSuspension && watch.step.block.air;
@@ -9402,7 +9415,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 153, "ini: the help text survives a write (153 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 154, "ini: the help text survives a write (154 comment lines)");
     // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
     {
         char none[32] = "x", tab[32] = {}, kept[32] = {};

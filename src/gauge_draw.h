@@ -911,6 +911,71 @@ static void GSuspDisplay(ImDrawList *dl, const GaugeFonts &f, ImVec2 at, float u
     (void)amber;
 }
 
+// The drive display (BRIEF_drive_display.md; drive_display.h), the suspension display's box and style: the truck from
+// above, a row an axle with the front at the top, a cell a wheel. In a cell two bars. The left one is the wheel's spin:
+// the mark in the middle is the truck's speed, the fill goes up from it for a faster wheel and down for a slower one,
+// white within the band, amber outside it, red at the bar's end and blue while the wheel turns against the gear, with
+// "air" under it while the wheel has no contact. The right one is the wheel's share of the drive after the mod's cap
+// and lock, 0 at the bottom to 100 percent, the figure under it and a thin mark at the share before them; "cap" beside
+// it while the wheel cap clamped the wheel, "diff" while the lock or Open wrote it. Under the wheels the differential
+// in force and what the cap kept. Over 8 rows (16 wheels one a row) the rows shrink to the same height.
+static const float kDriveRow = 108.0f, kDriveBarW = 40.0f, kDriveFoot = 52.0f;
+static float GDriveRowH(const DdShown &d) { return d.rows <= 8 ? kDriveRow : kDriveRow * 8.0f / (float)d.rows; }
+static float GDriveHeight(const DdShown &d) { return kSuspTop + d.rows * GDriveRowH(d) + kDriveFoot; }
+static void GDriveDisplay(ImDrawList *dl, const GaugeFonts &f, ImVec2 at, float u, float a, const DdShown &d)
+{
+    if (d.n <= 0 || d.rows <= 0) return;
+    const float x0 = floorf(at.x), y0 = floorf(at.y);
+    auto P = [&](float x, float y) { return ImVec2(x0 + x * u, y0 + y * u); };
+    const ImU32 amber = GCol(236, 182, 48, a), red = GCol(225, 58, 70, a), white = GCol(255, 255, 255, a), grey = GCol(142, 150, 152, a),
+                blue = GCol(70, 140, 200, a), back = GCol(33, 33, 33, a);
+    const float height = GDriveHeight(d), rowH = GDriveRowH(d), barH = fmaxf(rowH - 54.0f, 12.0f), cell = (kSuspW - 2.0f * kSuspPad) * 0.5f;
+    dl->AddRectFilled(P(0, 0), P(kSuspW, height), GCol(5, 5, 5, 0.94f * a), 3.0f * u);
+    dl->AddRectFilled(P(0, 0), P(12, height), blue, 3.0f * u, ImDrawFlags_RoundCornersLeft);
+    TextDraw(dl, f, kWsTitle, P(kSuspPad, 50), white, "DRIVE", -1, u);
+    for (int i = 0; i < d.n && i < kDdWheels; i++)
+    {
+        const float cx = kSuspPad + (d.right[i] ? 1.5f : 0.5f) * cell, top = kSuspTop + d.row[i] * rowH, bottom = top + barH, mid = top + barH * 0.5f;
+        const float sx = cx - 12.0f - kDriveBarW, dx = cx + 12.0f;
+        dl->AddRectFilled(P(sx, top), P(sx + kDriveBarW, bottom), back);
+        dl->AddRectFilled(P(dx, top), P(dx + kDriveBarW, bottom), back);
+        if (!d.ok[i]) continue; // a wheel that was not read: an empty cell
+        const DdSpin s = DdSpinOf(d.speed[i], d.truck[i], d.gear);
+        if (s.ok && s.fill != 0.0f)
+        {
+            const float y = mid - s.fill * barH * 0.5f;
+            const ImU32 col = s.colour == kDdBlue ? blue : s.colour == kDdRed ? red : s.colour == kDdAmber ? amber : white;
+            dl->AddRectFilled(P(sx, fminf(y, mid)), P(sx + kDriveBarW, fmaxf(y, mid)), col);
+        }
+        dl->AddRectFilled(P(sx - 4.0f, mid - 1.0f), P(sx + kDriveBarW + 4.0f, mid + 1.0f), grey);
+        if (d.air[i]) TextDraw(dl, f, kWsLine, P(sx + kDriveBarW * 0.5f, bottom + 27.0f), amber, "air", 0, u);
+        if (d.driven[i] && d.share[i] >= 0.0f)
+        {
+            const float share = fminf(d.share[i], 1.0f);
+            char text[16];
+            snprintf(text, sizeof text, "%.0f%%", share * 100.0f);
+            dl->AddRectFilled(P(dx, bottom - share * barH), P(dx + kDriveBarW, bottom), white);
+            TextDraw(dl, f, kWsLine, P(dx + kDriveBarW * 0.5f, bottom + 27.0f), white, text, 0, u);
+            if (d.shareBefore[i] >= 0.0f)
+            {
+                const float y = bottom - fminf(d.shareBefore[i], 1.0f) * barH;
+                dl->AddRectFilled(P(dx - 4.0f, y - 1.0f), P(dx + kDriveBarW + 4.0f, y + 1.0f), grey);
+            }
+        }
+        if (d.capLamp[i]) TextDraw(dl, f, kWsLine, P(dx + kDriveBarW + 14.0f, top + 18.0f), amber, "cap", -1, u);
+        if (d.lockLamp[i]) TextDraw(dl, f, kWsLine, P(dx + kDriveBarW + 14.0f, top + 46.0f), blue, "diff", -1, u);
+    }
+    const float line = kSuspTop + d.rows * rowH + 22.0f;
+    if (d.braking) TextDraw(dl, f, kWsLine, P(kSuspPad, line), grey, "Engine braking", -1, u);
+    else
+    {
+        char text[32];
+        snprintf(text, sizeof text, "kept %.0f%%", d.kept * 100.0f);
+        TextDraw(dl, f, kWsLine, P(kSuspPad, line), grey, DdForceName(d.force), -1, u);
+        TextDraw(dl, f, kWsLine, P(kSuspW - kSuspPad, line), grey, text, 1, u);
+    }
+}
+
 // The sway bars' lamp, a small box while they are disconnected.
 static const float kSwayW = 420.0f, kSwayH = 72.0f;
 static void GSwayLamp(ImDrawList *dl, const GaugeFonts &f, ImVec2 at, float u, float a)

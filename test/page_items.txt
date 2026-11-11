@@ -26,7 +26,6 @@
 ##damage
 ##dampercurve
 ##damperknee
-##dampingscale
 ##frameflex
 ##dampingzones
 ##demo
@@ -85,7 +84,6 @@
 ##springcross
 ##springcurve
 ##springrise
-##springscale
 ##twistrange
 ##stalldamage
 ##style
@@ -271,3 +269,14 @@ x
 ##showodometer
 Set###odosetbutton
 ##gamegeardisplay
+##dampingfront
+##dampingrear
+##difflockbite
+##drivedisplay
+##overrevdamage
+##positionsbygearbox
+##springfront
+##springrear
+##walkskipslow
+120###physicsrate120
+60###physicsrate60

@@ -1239,10 +1239,11 @@ inline bool LockPublishes(bool patternFound, bool kindRead, int kind)
     return patternFound && kindRead && (kind == 0 || kind == 1 || kind == 2); // a kind not known publishes nothing (the review of 105)
 }
 // Whether the wheels' drive's hook is asked for (gauges.cpp, CreepHookStep): Creep, Probe, the damper's settings, the
-// torque cut, or the diff lock's bite (Powertrain on and DiffLockBite above 0; the Reviewer's R4).
-inline bool DriveHookWanted(bool creep, bool probe, bool damper, bool cut, bool powertrain, int bite)
+// torque cut, the diff lock's bite (Powertrain on and DiffLockBite above 0; the Reviewer's R4), or the drive display
+// (DriveDisplay=1, whatever else is on: 131's M2).
+inline bool DriveHookWanted(bool creep, bool probe, bool damper, bool cut, bool powertrain, int bite, bool display = false)
 {
-    return creep || probe || damper || cut || (powertrain && bite > 0);
+    return creep || probe || damper || cut || (powertrain && bite > 0) || display;
 }
 
 // ---- the chassis push (BRIEF_chassis_push.md, the Reviewer's addendum and the lead's of 2026-11-10 09:58) ----

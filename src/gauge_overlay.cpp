@@ -76,18 +76,21 @@ static void DrawWarnings(const GaugeView &view, float w, float h, float dt)
 }
 
 // The suspension display, the sway bars' lamp (build B) and the air suspension's height box (build C), on the warning
-// boxes' stage below their slots; not while the NEXT GEN menu is open.
+// boxes' stage below their slots; not while the NEXT GEN menu is open. The drive display (131) in the suspension
+// display's place, or beside it on its right while both are on.
 static void DrawSuspension(const GaugeView &view, float w, float h)
 {
-    if (NgMenuOpen() || (view.susp.wheels <= 0 && !view.swayOff && !view.airShown)) return;
+    if (NgMenuOpen() || (view.susp.wheels <= 0 && !view.driveShown && !view.swayOff && !view.airShown)) return;
     const float u = WarnUnit(w, h);
     UpdateWarnFontTexture(u);
     ImVec2 at = WarnOrigin(w, h, 3);
+    if (view.driveShown) GDriveDisplay(ImGui::GetBackgroundDrawList(), g_warnFonts, ImVec2(at.x + (view.susp.wheels > 0 ? (kSuspW + kWarnGap) * u : 0.0f), at.y), u, 1.0f, view.drive);
     if (view.susp.wheels > 0)
     {
         GSuspDisplay(ImGui::GetBackgroundDrawList(), g_warnFonts, at, u, 1.0f, view.susp);
         at.y += (GSuspHeight(view.susp) + kWarnGap) * u;
     }
+    else if (view.driveShown) at.y += (GDriveHeight(view.drive) + kWarnGap) * u;
     if (view.swayOff)
     {
         GSwayLamp(ImGui::GetBackgroundDrawList(), g_warnFonts, at, u, 1.0f);

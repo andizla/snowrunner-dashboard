@@ -511,6 +511,10 @@ static void RateAfter(void *action, const RateHalved &h)
         InterlockedIncrement(&g_rateFaults);
     }
 }
+// The drive display (further down): the action whose call it reads now, set and cleared by that call's own thread;
+// ShowMid reads the wheels right after the game's own drive, before the mod's cap and lock write.
+static void *volatile g_showNow = nullptr;
+static void ShowMid();
 // The game's own drive. In the test mode with the action's MaxDeltaAngVel and EngineResponsiveness halved around it
 // (the Reviewer's M1): the drive and what it calls (the torque hook's CutWheelsRead among it) read the halves, and
 // the game's values stand as they were once it returns. The drive itself runs outside any guard, as before.
@@ -519,12 +523,14 @@ static void DriveCall(void *action, float throttle, float dt)
     if (!g_rateOn)
     {
         ((DriveFn)g_creepWay)(action, throttle, dt);
+        if (action == g_showNow) ShowMid();
         return;
     }
     RateHalved h = {};
     const bool read = RateBefore(action, h);
     ((DriveFn)g_creepWay)(action, throttle, dt);
     if (read) RateAfter(action, h);
+    if (action == g_showNow) ShowMid();
 }
 // The world of this call (the Reviewer's M3): the owner's static, the owner's world; at a new world pointer its step's
 // seconds and its solver's iterations are kept for the mod's thread, which judges and logs them. Two reads a call.
@@ -655,6 +661,21 @@ struct CapTruckRead
     int gear;
     float sign;
 };
+// What the hook notes for the drive display in the call it reads (action == g_showNow): the differential in force,
+// the cap's kept share, and by the wheel's pointer whether the cap clamped it and whether Open or the lock moved it.
+struct ShowNote
+{
+    int force, n;
+    float kept;
+    uint8_t *wheel[kCapWheels];
+    bool capped[kCapWheels], tied[kCapWheels];
+};
+static ShowNote g_showNote; // the physics thread's own
+static void ShowNoteWheels(const CapTruckRead &t, const float *post, const float *work)
+{
+    g_showNote.n = t.n;
+    for (int i = 0; i < t.n; i++) g_showNote.wheel[i] = t.w[i].wheel, g_showNote.capped[i] = false, g_showNote.tied[i] = t.w[i].ok && work[i] != post[i];
+}
 static void CapGet3(const uint8_t *p, CapVec &v)
 {
     v.x = *(const volatile float *)p;
@@ -1108,6 +1129,7 @@ static CapAround CapStepAround(const TorqueCutSlot *cut, void *action, float thr
         InterlockedExchange(&g_evenJBits, FloatBits(e.j));
     }
     else if (lockK > 0.0f) LockOver(t, post, lockK, work, vehicle, mass, truck);
+    if (action == g_showNow) ShowNoteWheels(t, post, work);
     if (!capHere)
     {
         // no cap in this gear: the evening or the lock alone
@@ -1128,6 +1150,8 @@ static CapAround CapStepAround(const TorqueCutSlot *cut, void *action, float thr
     out.kept = o.kept;
     out.n = t.n;
     for (int i = 0; i < t.n; i++) out.clamped[i] = o.clamped[i], out.wheel[i] = t.w[i].wheel;
+    if (action == g_showNow)
+        for (int i = 0; i < t.n; i++) g_showNote.capped[i] = o.clamped[i];
     return out;
 }
 
@@ -1262,7 +1286,7 @@ static void PushTake(PushRead &r, float kAll, float kCap)
 // The creep's larger of the two throttles, as the stub's maxss had it (the share where the game's is not a number),
 // then the step probe's look, then on into the drive with the step's seconds as they came. While the torque cut has the
 // action, its throttle is 1 and B4 is written 1 instead (the Reviewer's S2).
-static void CreepDrive(void *action, float throttle, float dt)
+static void CreepDriveInner(void *action, float throttle, float dt)
 {
     InterlockedIncrement(&g_creepCalls);
     if (g_rateOn) RateWorldLook(dt);
@@ -1309,6 +1333,7 @@ static void CreepDrive(void *action, float throttle, float dt)
         else lockK = LockK(lock->bite, dt);
     }
     const bool evenOn = cutHere && force == kDiffForceOpen;
+    if (action == g_showNow) g_showNote.force = lockK > 0.0f ? kDiffForceLock : cutHere ? force : kDdGameOwn;
     uint64_t at = 0;
     const bool pushOn = !cutHere && push && (uint64_t)(uintptr_t)action == push->action && push->back > 0.0f && (at = GetTickCount64()) >= push->at && at - push->at <= kTorqueFresh;
     const bool capPush = capOn && cut->pushBack > 0.0f;
@@ -1334,6 +1359,7 @@ static void CreepDrive(void *action, float throttle, float dt)
             else
             {
                 LockOver(lr, post, lockK, locked, lock->vehicle, lock->mass, BitsFloat(g_capTruck));
+                if (action == g_showNow) ShowNoteWheels(lr, post, locked);
                 if (!CapWriteFinal(lr, post, locked)) InterlockedIncrement(&g_lockFaults);
             }
         }
@@ -1349,6 +1375,7 @@ static void CreepDrive(void *action, float throttle, float dt)
     }
     const bool lockSame = lockHere && lock->vehicle == cut->vehicle;
     const CapAround around = CapStepAround(cut, action, throttle, dt, lockSame ? lockK : 0.0f, force, lockSame ? lock->mass : 0.0f);
+    if (action == g_showNow) g_showNote.kept = around.kept;
     if (capPush && pushRead && PushReadAfter(pr))
     {
         // a parent carries a held wheel when one of the wheels the cap held this step hangs on it
@@ -1368,6 +1395,337 @@ static void CreepDrive(void *action, float throttle, float dt)
         }
         PushTake(pr, 0.0f, PushCapBack(around.clamps > 0, around.kept, cut->pushBack));
     }
+}
+
+// ---- the drive display's feed (BRIEF_drive_display.md; drive_display.h) ----
+// The mod's thread publishes the driven truck's action and vehicle while DriveDisplay=1 (DriveShowGive). Around that
+// action's drive call, whatever the gear and the settings: the display's own list of the truck's first 16 wheels, driven
+// or not (M1: the cap's list, order and indices are not touched), each wheel's speed about its axle before the call,
+// right after the game's own drive (ShowMid, from DriveCall) and after the mod's cap and lock, the wheel body's own
+// speed along its rolling direction, and what the inner hook noted of the cap and the lock (g_showNote). Averaged by the
+// step's seconds (DdStep) and given out with a sequence count, odd while written (DriveShowGet, as LockLastGet).
+// Reads only. No lock, no heap, no log. With no slot the hook's cost is the tests of two pointers.
+struct ShowWheel
+{
+    uint8_t *wheel, *body;
+    CapVec axle;
+    float alen, gain, radius, pre, mid, truck;
+    bool ok, driven, air;
+};
+struct ShowRead
+{
+    ShowWheel w[kDdWheels];
+    int n, gear;
+    float sign;
+};
+struct ShowLay
+{
+    uint64_t vehicle;
+    int n, rows, since;
+    uint64_t wheel[kDdWheels];
+    uint8_t row[kDdWheels];
+    bool right[kDdWheels];
+    bool whole; // every wheel placed and grouped
+};
+static const int kShowLookAgain = 240; // calls: a list not placed whole is looked at again (a truck read before its wheels were placed)
+static ShowSlot g_showSlots[2];
+static int g_showNext = 0;
+static void *volatile g_showSlot = nullptr;
+static ShowRead g_showRead; // the physics thread's own: one driven truck, one call at a time
+static bool g_showMidOk = false;
+static DdAvg g_showAvg;
+static ShowLay g_showLay;
+static DdShown g_showRec;
+static volatile LONG g_showSeq = 0, g_showSteps = 0, g_showFaults = 0;
+
+static float ShowNorm(CapVec &v)
+{
+    const float len = sqrtf(CapDot(v, v));
+    if (!(len > 1e-6f) || !isfinite(len)) return 0.0f;
+    v.x /= len, v.y /= len, v.z /= len;
+    return len;
+}
+static bool ShowReadBefore(const void *vehicle, const void *action, ShowRead &r, uint64_t cylinderVtable)
+{
+    r.n = 0;
+    __try
+    {
+        const uint8_t *v = (const uint8_t *)vehicle;
+        if (*(const void *const volatile *)(v + 0x68) != action) return false;
+        const uint8_t *a = (const uint8_t *)action;
+        const bool awd = *(const volatile uint8_t *)(a + 0x49) != 0;
+        r.gear = *(const volatile int *)(a + 0x74);
+        r.sign = r.gear < 0 ? -1.0f : 1.0f;
+        // the chassis's own forward speed, for a wheel whose rolling direction is not read
+        float chassis = NAN;
+        const uint8_t *vm = *(const uint8_t *const *)(v + 0x60);
+        const uint8_t *main = (uintptr_t)vm >= 0x10000 ? *(const uint8_t *const *)(vm + 0x230) : nullptr;
+        if ((uintptr_t)main >= 0x10000)
+        {
+            CapVec vel, f;
+            CapGet3(main + 0x230, vel);
+            CapGet3(main + 0x170, f);
+            chassis = r.sign * CapDot(vel, f);
+        }
+        const uintptr_t begin = *(const uintptr_t *)(v + 0x200), end = *(const uintptr_t *)(v + 0x208);
+        if (end < begin) return false;
+        for (uintptr_t p = begin; p < end && r.n < kDdWheels; p += 8) // over 16 wheels: the first 16 (M3)
+        {
+            const uint8_t *model = *(const uint8_t *const *)p;
+            if ((uintptr_t)model < 0x10000) continue;
+            uint8_t *wheel = *(uint8_t *const *)(model + 0x2C8);
+            if ((uintptr_t)wheel < 0x10000) continue;
+            ShowWheel &w = r.w[r.n++];
+            w = ShowWheel{};
+            w.wheel = wheel;
+            w.pre = w.mid = w.truck = NAN;
+            const int type = *(const volatile int *)(wheel + 0xE8);
+            uint8_t *body = *(uint8_t *const *)(wheel + 0x18);
+            if (!CapBodyOk(body)) continue; // a body refused: an empty cell
+            w.body = body;
+            w.driven = type == 1 || (type == 2 && awd);
+            CapVec omega, vel;
+            CapGet3(wheel + 0x154, w.axle);
+            CapGet3(body + 0x240, omega);
+            CapGet3(body + 0x230, vel);
+            w.alen = sqrtf(CapDot(w.axle, w.axle));
+            w.pre = w.mid = CapSpeed(omega, w.axle, r.sign);
+            if (w.driven)
+            {
+                CapVec localAxle = {}, invI;
+                const uint8_t *desc = *(const uint8_t *const *)(wheel + 0x28);
+                if ((uintptr_t)desc >= 0x10000) CapGet3(desc + 0x100, localAxle);
+                CapGet3(body + 0x220, invI);
+                w.gain = CapGain(localAxle, invI, w.alen);
+            }
+            w.air = !(*(const volatile float *)(wheel + 0x128) > 0.0f); // S2: the contact share for now
+            float cylinder = NAN;
+            const bool cylinderRead = CutCylinderRead(wheel, cylinderVtable, cylinder);
+            w.radius = WheelRollRadius(*(const volatile float *)(wheel + 0x94), cylinder, cylinderRead).r;
+            w.ok = w.alen > 1e-6f && isfinite(w.alen) && w.radius > 0.0f && isfinite(w.radius);
+            // S1: the wheel body's own speed along its rolling direction: its parent's forward less the part along the axle
+            w.truck = chassis;
+            const uint8_t *parent = *(const uint8_t *const *)(wheel + 0x10);
+            if (w.ok && (uintptr_t)parent >= 0x10000)
+            {
+                CapVec f, n = w.axle;
+                CapGet3(parent + 0x170, f);
+                ShowNorm(n);
+                const float along = CapDot(f, n);
+                CapVec d = { f.x - along * n.x, f.y - along * n.y, f.z - along * n.z };
+                if (ShowNorm(d) > 0.5f) w.truck = r.sign * CapDot(vel, d);
+            }
+        }
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        r.n = 0;
+        return false;
+    }
+}
+// Each wheel's speed again: into mid right after the game's own drive, into out after the whole hook.
+static bool ShowSpeeds(const ShowRead &r, float *out)
+{
+    __try
+    {
+        for (int i = 0; i < r.n; i++)
+        {
+            out[i] = NAN;
+            if (!r.w[i].ok) continue;
+            CapVec omega;
+            CapGet3(r.w[i].body + 0x240, omega);
+            out[i] = CapSpeed(omega, r.w[i].axle, r.sign);
+        }
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+static void ShowMid()
+{
+    float mid[kDdWheels];
+    if (!ShowSpeeds(g_showRead, mid)) return;
+    for (int i = 0; i < g_showRead.n; i++) g_showRead.w[i].mid = mid[i];
+    g_showMidOk = true;
+}
+// The cells' rows and sides for this list of wheels: the axles as Open by axle groups them (a wheel's place in its
+// parent body's own frame), the rows ordered by the places in the main body's frame. Made when the list is another,
+// and again every kShowLookAgain calls while a wheel was not placed. A read that faults: one wheel a row.
+static void ShowLayMake(uint64_t vehicle, const ShowRead &r)
+{
+    ShowLay &l = g_showLay;
+    bool same = l.vehicle == vehicle && l.n == r.n;
+    for (int i = 0; same && i < r.n; i++) same = l.wheel[i] == (uint64_t)(uintptr_t)r.w[i].wheel;
+    if (same && (l.whole || ++l.since < kShowLookAgain)) return;
+    uint64_t body[kDdWheels];
+    float along[kDdWheels], side[kDdWheels], rowAt[kDdWheels];
+    bool ok[kDdWheels];
+    int axle[kDdWheels];
+    bool grouped = false;
+    for (int i = 0; i < r.n; i++) ok[i] = false, body[i] = 0, along[i] = side[i] = rowAt[i] = 0.0f, axle[i] = i;
+    __try
+    {
+        const uint8_t *vm = *(const uint8_t *const *)((const uint8_t *)(uintptr_t)vehicle + 0x60);
+        const uint8_t *main = (uintptr_t)vm >= 0x10000 ? *(const uint8_t *const *)(vm + 0x230) : nullptr;
+        float ma[3] = {}, mf[3] = {}, ml[3] = {};
+        bool mainOk = false;
+        if ((uintptr_t)main >= 0x10000)
+        {
+            CapVec at, f, left;
+            CapGet3(main + 0x1A0, at);
+            CapGet3(main + 0x170, f);
+            CapGet3(main + 0x190, left);
+            ma[0] = at.x, ma[1] = at.y, ma[2] = at.z, mf[0] = f.x, mf[1] = f.y, mf[2] = f.z, ml[0] = left.x, ml[1] = left.y, ml[2] = left.z;
+            mainOk = true;
+        }
+        for (int i = 0; i < r.n; i++)
+        {
+            const uint8_t *b = *(const uint8_t *const *)(r.w[i].wheel + 0x10);
+            if ((uintptr_t)b < 0x10000) continue;
+            CapVec c, at, f, left;
+            CapGet3(r.w[i].wheel + 0x13C, c);
+            CapGet3(b + 0x1A0, at);
+            CapGet3(b + 0x170, f);
+            CapGet3(b + 0x190, left);
+            const float cc[3] = { c.x, c.y, c.z }, aa[3] = { at.x, at.y, at.z }, ff[3] = { f.x, f.y, f.z }, ll[3] = { left.x, left.y, left.z };
+            ok[i] = AxlePlace(cc, aa, ff, ll, along[i], side[i]);
+            body[i] = (uint64_t)(uintptr_t)b;
+            float mainSide = 0.0f;
+            rowAt[i] = along[i];
+            if (ok[i] && mainOk && !AxlePlace(cc, ma, mf, ml, rowAt[i], mainSide)) rowAt[i] = along[i];
+        }
+        const AxleGroupsOut g = AxleGroups(body, along, side, ok, r.n);
+        for (int i = 0; i < r.n; i++) axle[i] = g.axle[i];
+        grouped = true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        grouped = false;
+        InterlockedIncrement(&g_showFaults);
+    }
+    bool whole = grouped;
+    for (int i = 0; i < r.n; i++) whole = whole && ok[i];
+    if (same && !whole) // no better than what is kept: wait again
+    {
+        l.since = 0;
+        return;
+    }
+    l.vehicle = vehicle, l.n = r.n, l.since = 0, l.whole = whole;
+    for (int i = 0; i < r.n; i++) l.wheel[i] = (uint64_t)(uintptr_t)r.w[i].wheel;
+    l.rows = DdLayout(axle, rowAt, side, ok, r.n, grouped, l.row, l.right);
+}
+static void CreepDriveInner(void *action, float throttle, float dt);
+// The driven truck's drive call with the display on: the read before, the hook as it is, the read after, the record.
+static void ShowDrive(const ShowSlot *show, void *action, float throttle, float dt)
+{
+    ShowRead &r = g_showRead;
+    if (!ShowReadBefore((const void *)(uintptr_t)show->vehicle, action, r, show->cylinderVtable))
+    {
+        InterlockedIncrement(&g_showFaults);
+        g_showAvg.has = false;
+        CreepDriveInner(action, throttle, dt);
+        return;
+    }
+    g_showNote.force = kDdGameOwn, g_showNote.kept = 1.0f, g_showNote.n = 0;
+    g_showMidOk = false;
+    g_showNow = action;
+    CreepDriveInner(action, throttle, dt);
+    g_showNow = nullptr;
+    float final[kDdWheels];
+    if (!g_showMidOk || !ShowSpeeds(r, final))
+    {
+        InterlockedIncrement(&g_showFaults);
+        g_showAvg.has = false;
+        return;
+    }
+    static DdSample s; // the physics thread's own
+    s = DdSample{};
+    s.vehicle = show->vehicle;
+    s.n = r.n;
+    s.gear = r.gear;
+    s.force = g_showNote.force;
+    s.kept = g_showNote.kept;
+    for (int i = 0; i < r.n; i++)
+    {
+        const ShowWheel &w = r.w[i];
+        s.wheel[i] = (uint64_t)(uintptr_t)w.wheel;
+        s.ok[i] = w.ok;
+        if (!w.ok) continue;
+        s.air[i] = w.air;
+        s.speed[i] = final[i] / w.alen * w.radius;
+        s.truck[i] = w.truck;
+        s.driven[i] = w.driven && w.gain > 0.0f && isfinite(w.gain);
+        if (!s.driven[i]) continue;
+        s.given[i] = (final[i] - w.pre) / w.gain;
+        s.before[i] = (w.mid - w.pre) / w.gain;
+        for (int k = 0; k < g_showNote.n; k++)
+            if (g_showNote.wheel[k] == w.wheel) s.capped[i] = g_showNote.capped[k], s.tied[i] = g_showNote.tied[k];
+    }
+    DdStep(g_showAvg, s, dt);
+    ShowLayMake(show->vehicle, r);
+    InterlockedIncrement(&g_showSeq); // odd: being written
+    DdShown &o = g_showRec;
+    DdShow(g_showAvg, o);
+    o.at = GetTickCount64();
+    o.rows = 0;
+    const bool lay = g_showLay.vehicle == show->vehicle && g_showLay.n == o.n;
+    for (int i = 0; i < o.n; i++)
+    {
+        o.row[i] = lay ? g_showLay.row[i] : (uint8_t)i;
+        o.right[i] = lay && g_showLay.right[i];
+        if (o.row[i] + 1 > o.rows) o.rows = o.row[i] + 1;
+    }
+    InterlockedIncrement(&g_showSeq);
+    InterlockedIncrement(&g_showSteps);
+}
+// The drive's hook. With no display slot: one test of a pointer, then the hook as it was.
+static void CreepDrive(void *action, float throttle, float dt)
+{
+    const ShowSlot *show = (const ShowSlot *)g_showSlot;
+    uint64_t now = 0;
+    if (!show || (uint64_t)(uintptr_t)action != show->action || (now = GetTickCount64()) < show->at || now - show->at > kTorqueFresh)
+    {
+        CreepDriveInner(action, throttle, dt);
+        return;
+    }
+    ShowDrive(show, action, throttle, dt);
+}
+
+void DriveShowGive(uint64_t action, uint64_t vehicle, uint64_t cylinderVtable)
+{
+    if (!action || !vehicle)
+    {
+        InterlockedExchangePointer(&g_showSlot, nullptr);
+        return;
+    }
+    ShowSlot &slot = g_showSlots[g_showNext];
+    g_showNext ^= 1;
+    slot = ShowSlot{ action, vehicle, GetTickCount64(), cylinderVtable };
+    InterlockedExchangePointer(&g_showSlot, &slot);
+}
+
+bool DriveShowGet(DdShown &out)
+{
+    for (int tries = 0; tries < 4; tries++)
+    {
+        const LONG before = g_showSeq;
+        if (!before) return false;
+        if (before & 1) continue;
+        out = g_showRec;
+        if (g_showSeq != before) continue;
+        out.seq = (unsigned long)before / 2;
+        return true;
+    }
+    return false;
+}
+
+void DriveShowCountsGet(long &steps, long &faults)
+{
+    steps = g_showSteps;
+    faults = g_showFaults;
 }
 
 void PushGive(uint64_t action, uint64_t vehicle, float assumed, float factorOver, float back)

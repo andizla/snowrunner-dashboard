@@ -76,6 +76,10 @@ uint8_t *g_pushTestBodies[3] = {};
 // the wide truck's test (BRIEF_cut_radius_cylinder.md, the rider): its wheels' bodies and how many the stand-in drive turns
 static uint8_t g_wideBodies[33][0x300] = {};
 static int g_wideN = 0;
+// the drive display's test (BRIEF_drive_display.md): its wheels' bodies and the stand-in drive's push on each, rad/s
+static uint8_t g_ddBodies[18][0x300] = {};
+static float g_ddPush[18] = {};
+static int g_ddN = 0;
 __declspec(noinline) static void FakeDrive(void *action, float throttle, float dt)
 {
     g_driveAction = action;
@@ -3146,6 +3150,441 @@ int main()
         snprintf(line, sizeof line, "a wide truck: up to kCapWheels %d wheels the lock, the cap and the chassis push read and act, a longer list is refused with its fault "
                                     "counted and the drive's result left (%s)", kCapWheels, wideLine);
         Check(kCapWheels == kMaxWheels && wideOk, line);
+    }
+    // the drive display's own reckoning (BRIEF_drive_display.md with the addendum; drive_display.h): the spin bar
+    {
+        auto spin = [](float w, float t, int g, float fill, int colour) {
+            const DdSpin s = DdSpinOf(w, t, g);
+            return s.ok && Near(s.fill, fill) && s.colour == colour;
+        };
+        const bool level = spin(5.0f, 5.0f, 1, 0.0f, kDdPlain) && spin(5.5f, 5.0f, 1, 0.5f / 15.0f, kDdPlain) && spin(6.0f, 5.0f, 1, 1.0f / 15.0f, kDdAmber);
+        const bool twice = spin(10.0f, 5.0f, 1, 1.0f / 3.0f, kDdAmber);
+        const bool five = spin(25.0f, 5.0f, 1, 1.0f, kDdRed) && spin(20.0f, 5.0f, 1, 1.0f, kDdRed) && spin(19.0f, 5.0f, 1, 14.0f / 15.0f, kDdAmber);
+        const bool standing = spin(0.0f, 5.0f, 1, -1.0f / 3.0f, kDdAmber);
+        const bool against = spin(-2.0f, 5.0f, 1, -7.0f / 15.0f, kDdBlue) && spin(-2.0f, 5.0f, -1, -7.0f / 15.0f, kDdBlue) && spin(-2.0f, 5.0f, 0, -7.0f / 15.0f, kDdAmber) &&
+                             spin(-0.5f, 5.0f, 1, -5.5f / 15.0f, kDdAmber);
+        const bool still = spin(3.0f, 0.0f, 1, 1.0f, kDdRed) && spin(0.0f, 0.0f, 1, 0.0f, kDdPlain) && spin(0.1f, 0.0f, 1, 0.1f / 3.0f, kDdPlain) && spin(2.0f, 0.0f, 1, 2.0f / 3.0f, kDdAmber);
+        const bool noNumber = !DdSpinOf(NAN, 5.0f, 1).ok && !DdSpinOf(5.0f, NAN, 1).ok && !DdSpinOf(INFINITY, 5.0f, 1).ok;
+        // S1: one rule for the bar's end, so no step at 1 m/s. The bar is 2 long (-1 to 1); 2 percent of it is 0.04
+        const float step = fabsf(DdSpinOf(2.0f, 0.99f, 1).fill - DdSpinOf(2.0f, 1.01f, 1).fill);
+        const bool scale = step < 0.04f && DdSpinOf(2.0f, 0.99f, 1).colour == DdSpinOf(2.0f, 1.01f, 1).colour;
+        if (!(level && twice && five && standing && against && still && noNumber && scale))
+            printf("     spin: level %d, twice %d, five %d, standing %d, against %d, still %d, no number %d, scale %d (%.4f)\n", level, twice, five, standing, against, still, noNumber,
+                   scale, step);
+        Check(level && twice && five && standing && against && still && noNumber && scale,
+              "drive display, the spin bar: a wheel at the truck's speed at the mark and plain, plain within 15 percent and amber over; at 2 times a third up and amber; at 5 times "
+              "at the bar's end and red; standing with the truck moving a third down and amber; against the gear blue, forward or reverse, not in neutral and not within the band; "
+              "a standing truck with one wheel at 3 m/s at the end and red; no number gives no bar; the bar at 0.99 and at 1.01 m/s differs by under 2 percent");
+    }
+    // the shares (M5)
+    {
+        float sh[4];
+        bool un[4], br = false;
+        const bool every[4] = { true, true, true, true }, rear[4] = { true, true, false, false };
+        auto shares = [&](float a, float b, float c, float d, const bool *driven) {
+            const float p[4] = { a, b, c, d };
+            br = false;
+            DdSharesOf(p, driven, 4, sh, un, &br);
+        };
+        auto empty = [&]() { return sh[0] < 0.0f && sh[1] < 0.0f && sh[2] < 0.0f && sh[3] < 0.0f; };
+        shares(100.0f, 100.0f, 100.0f, 100.0f, every);
+        const bool equal = Near(sh[0], 0.25f) && Near(sh[1], 0.25f) && Near(sh[2], 0.25f) && Near(sh[3], 0.25f) && !br && !un[0];
+        shares(100.0f, 0.0f, 0.0f, 0.0f, every);
+        const bool one = Near(sh[0], 1.0f) && sh[1] == 0.0f && sh[2] == 0.0f && sh[3] == 0.0f && !un[1] && !br;
+        shares(0.0f, 0.0f, 0.0f, 0.0f, every);
+        const bool none = empty() && !br;
+        shares(50.0f, 50.0f, 999.0f, 999.0f, rear);
+        const bool two = Near(sh[0], 0.5f) && Near(sh[1], 0.5f) && sh[2] < 0.0f && sh[3] < 0.0f;
+        shares(-30.0f, 40.0f, 40.0f, 20.0f, every);
+        const bool under = sh[0] == 0.0f && un[0] && !un[1] && Near(sh[1], 0.4f) && Near(sh[2], 0.4f) && Near(sh[3], 0.2f) && Near(sh[1] + sh[2] + sh[3], 1.0f) && !br;
+        shares(-30.0f, -30.0f, -30.0f, -30.0f, every);
+        const bool allUnder = empty() && br && !un[0];
+        shares(5.0f, 5.0f, 5.0f, 0.0f, every);
+        const bool floor = empty() && !br;
+        shares(10.0f, 10.0f, 0.0f, 0.0f, every);
+        const bool atFloor = Near(sh[0], 0.5f) && Near(sh[1], 0.5f);
+        shares(NAN, 60.0f, 60.0f, 0.0f, every);
+        const bool noNumber = sh[0] < 0.0f && Near(sh[1], 0.5f) && Near(sh[2], 0.5f) && sh[3] == 0.0f;
+        if (!(equal && one && none && two && under && allUnder && floor && atFloor && noNumber))
+            printf("     shares: equal %d, one %d, none %d, two %d, under %d, all under %d, floor %d, at the floor %d, no number %d\n", equal, one, none, two, under, allUnder, floor,
+                   atFloor, noNumber);
+        Check(equal && one && none && two && under && allUnder && floor && atFloor && noNumber,
+              "drive display, the shares: four equal give 25 each; one with all gives 100 and the rest 0; no impulse gives empty bars with no division; two driven and two not "
+              "give two shares; one under 0 and three over give three shares summing to 100 and the fourth marked; all under 0 gives empty bars and engine braking; a sum under "
+              "the floor of 20 gives empty bars, at the floor shares; a part that is no number is left out");
+    }
+    // the averaging by the step's seconds (M4)
+    {
+        auto sample = [](uint64_t vehicle, float dt, float speed0, float given0) {
+            DdSample s = {};
+            s.vehicle = vehicle;
+            s.n = 2;
+            s.wheel[0] = 11, s.wheel[1] = 12;
+            s.ok[0] = s.ok[1] = true;
+            s.driven[0] = s.driven[1] = true;
+            s.speed[0] = speed0, s.speed[1] = 2.0f;
+            s.truck[0] = s.truck[1] = 2.0f;
+            s.given[0] = s.before[0] = given0 * dt;
+            s.given[1] = s.before[1] = 100.0f * dt;
+            s.kept = 1.0f;
+            s.gear = 1;
+            s.force = kDdGameOwn;
+            return s;
+        };
+        auto run = [&](float dt, int steps) {
+            DdAvg a = {};
+            DdStep(a, sample(7, dt, 2.0f, 100.0f), dt);
+            for (int i = 0; i < steps; i++) DdStep(a, sample(7, dt, 8.0f, 300.0f), dt);
+            DdShown o = {};
+            DdShow(a, o);
+            return o;
+        };
+        const DdShown at60 = run(1.0f / 60.0f, 30), at120 = run(1.0f / 120.0f, 60);
+        const float e = expf(-0.5f / kDdTau);
+        const bool sameBars = at60.n == 2 && at120.n == 2 && Near(at60.speed[0], at120.speed[0]) && Near(at60.share[0], at120.share[0]) && Near(at60.share[1], at120.share[1]) &&
+                              Near(DdSpinOf(at60.speed[0], at60.truck[0], 1).fill, DdSpinOf(at120.speed[0], at120.truck[0], 1).fill) && Near(at60.speed[0], 8.0f - 6.0f * e) &&
+                              Near(at60.share[0], (300.0f - 200.0f * e) / (400.0f - 200.0f * e));
+        const float dt = 1.0f / 60.0f;
+        DdAvg a = {};
+        const bool first = DdStep(a, sample(7, dt, 2.0f, 100.0f), dt) && a.has && Near(a.speed[0], 2.0f) && Near(a.given[0], 100.0f);
+        DdStep(a, sample(7, dt, 8.0f, 300.0f), dt);
+        const bool part = Near(a.speed[0], 2.0f + 6.0f * (1.0f - expf(-dt / kDdTau))) && a.speed[0] < 3.0f;
+        DdStep(a, sample(9, dt, 8.0f, 300.0f), dt);
+        const bool otherTruck = a.vehicle == 9 && Near(a.speed[0], 8.0f) && Near(a.given[0], 300.0f);
+        DdSample other = sample(9, dt, 2.0f, 100.0f);
+        other.wheel[1] = 13;
+        DdStep(a, other, dt);
+        const bool otherList = Near(a.speed[0], 2.0f) && Near(a.given[0], 100.0f) && a.wheel[1] == 13;
+        const bool badDt = !DdStep(a, sample(9, dt, 8.0f, 300.0f), NAN) && !a.has && !DdStep(a, sample(9, dt, 8.0f, 300.0f), 0.0f) && !DdStep(a, sample(9, dt, 8.0f, 300.0f), -dt);
+        DdShown gone = {};
+        DdShow(a, gone);
+        other.wheel[1] = 12;
+        other.speed[0] = 8.0f;
+        const bool anew = gone.n == 0 && DdStep(a, other, dt) && a.has && Near(a.speed[0], 8.0f);
+        // a wheel that was not driven and now is takes its first step whole; one no longer driven has no share
+        DdSample s = sample(9, dt, 8.0f, 300.0f);
+        s.driven[0] = false;
+        DdStep(a, s, dt);
+        DdShown o = {};
+        DdShow(a, o);
+        const bool notDriven = !o.driven[0] && o.share[0] < 0.0f && Near(o.share[1], 1.0f) && o.ok[0];
+        DdStep(a, sample(9, dt, 8.0f, 300.0f), dt);
+        const bool again = Near(a.given[0], 300.0f);
+        if (!(sameBars && first && part && otherTruck && otherList && badDt && anew && notDriven && again))
+            printf("     averaging: same bars %d (%.4f %.4f, %.4f %.4f), first %d, part %d, other truck %d, other list %d, bad dt %d, anew %d, not driven %d, again %d\n", sameBars,
+                   at60.speed[0], at120.speed[0], at60.share[0], at120.share[0], first, part, otherTruck, otherList, badDt, anew, notDriven, again);
+        Check(sameBars && first && part && otherTruck && otherList && badDt && anew && notDriven && again,
+              "drive display, the averaging: the same wheel speeds and drive stepped at 60 and at 120 a second give the same bars after 0.5 s, by the time constant of 0.15 s; "
+              "the first step is taken whole; another truck, another list of wheels and a dt that is no number or not above 0 start the averages anew; a wheel newly driven "
+              "takes its step whole");
+    }
+    // the cells (M3): the axles as Open by axle groups them, the front at the top, left and right by the side's sign
+    {
+        auto lay = [](const float *along, const float *side, int n, uint8_t *row, bool *right, bool grouped) {
+            uint64_t body[kCapWheels];
+            bool ok[kCapWheels];
+            for (int i = 0; i < n; i++) body[i] = 1, ok[i] = true;
+            const AxleGroupsOut g = AxleGroups(body, along, side, ok, n);
+            return DdLayout(g.axle, along, side, ok, n, grouped, row, right);
+        };
+        uint8_t row[kDdWheels];
+        bool right[kDdWheels];
+        // 4 wheels listed rear right, front left, rear left, front right
+        const float a4[4] = { -1.5f, 1.5f, -1.5f, 1.5f }, s4[4] = { -1.0f, 1.0f, 1.0f, -1.0f };
+        const bool four = lay(a4, s4, 4, row, right, true) == 2 && row[0] == 1 && row[1] == 0 && row[2] == 1 && row[3] == 0 && right[0] && !right[1] && !right[2] && right[3];
+        const bool oneARow = lay(a4, s4, 4, row, right, false) == 4 && row[0] == 0 && row[1] == 1 && row[2] == 2 && row[3] == 3 && right[0] && !right[1] && !right[2] && right[3];
+        const float a6[6] = { 2.0f, 2.0f, 0.0f, 0.0f, -1.5f, -1.5f }, s6[6] = { 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f };
+        bool six = lay(a6, s6, 6, row, right, true) == 3;
+        for (int i = 0; i < 6; i++) six = six && row[i] == i / 2 && right[i] == (i % 2 == 1);
+        // 8 wheels listed from the rear, the right wheel first
+        const float a8[8] = { -2.5f, -2.5f, -1.0f, -1.0f, 1.5f, 1.5f, 3.0f, 3.0f }, s8[8] = { -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f };
+        bool eight = lay(a8, s8, 8, row, right, true) == 4;
+        for (int i = 0; i < 8; i++) eight = eight && row[i] == 3 - i / 2 && right[i] == (i % 2 == 0);
+        // 18 wheels: the first 16
+        float a18[18], s18[18];
+        for (int i = 0; i < 18; i++) a18[i] = 9.0f - (float)(i / 2), s18[i] = i % 2 ? -1.0f : 1.0f;
+        bool many = lay(a18, s18, 18, row, right, true) == 8;
+        for (int i = 0; i < 16; i++) many = many && row[i] == i / 2 && right[i] == (i % 2 == 1);
+        // a wheel alone is a row of its own; a wheel not placed puts every wheel in a row of its own
+        const float a3[3] = { 1.5f, 1.5f, -1.5f }, s3[3] = { 1.0f, -1.0f, 0.2f };
+        const bool alone = lay(a3, s3, 3, row, right, true) == 2 && row[0] == 0 && row[1] == 0 && row[2] == 1 && !right[2];
+        const int ax[2] = { 0, 0 };
+        const float al[2] = { 1.0f, 1.0f }, sd[2] = { 1.0f, -1.0f };
+        const bool placed[2] = { true, false };
+        const bool notPlaced = DdLayout(ax, al, sd, placed, 2, true, row, right) == 2 && row[0] == 0 && row[1] == 1 && !right[1];
+        if (!(four && oneARow && six && eight && many && alone && notPlaced))
+            printf("     cells: four %d, one a row %d, six %d, eight %d, 18 %d, alone %d, not placed %d\n", four, oneARow, six, eight, many, alone, notPlaced);
+        Check(four && oneARow && six && eight && many && alone && notPlaced && strcmp(DdForceName(kDiffForceOpen), "Open") == 0 &&
+                  strcmp(DdForceName(kDiffForceLimited), "Limited slip") == 0 && strcmp(DdForceName(kDiffForceLock), "Locked") == 0 && strcmp(DdForceName(kDdGameOwn), "Game diff") == 0,
+              "drive display, the cells: 4, 6 and 8 wheels in rows by Open by axle's grouping with the front at the top and left and right by the side's sign, whatever the list's "
+              "order; 18 wheels give 16 cells; a wheel alone has its own row; with no grouping or a wheel not placed each wheel has its own row; the line's four names");
+    }
+    // the drive display's feed in the drive's hook, on a made up truck listed rear right, front left, rear left, front
+    // right: the rear driven (type 1), the front with all wheel drive (type 2). Rolling radius 0.5, so 4 rad/s is 2 m/s,
+    // each wheel body moving at 2 m/s forward. The stand-in drive adds g_ddPush to each wheel
+    {
+        static uint8_t vehicle[0x800] = {}, act[0x100] = {}, vmodel[0x300] = {}, models[18][0x300] = {}, wheels[18][0x200] = {}, chassis[0x300] = {}, desc[0x200] = {}, world[0x10] = {};
+        static uint64_t list[19] = {};
+        auto putF = [](uint8_t *p, size_t at, float v) { memcpy(p + at, &v, 4); };
+        auto getF = [](const uint8_t *p, size_t at) {
+            float v;
+            memcpy(&v, p + at, 4);
+            return v;
+        };
+        auto putP = [](uint8_t *p, size_t at, const void *v) {
+            const uint64_t x = (uint64_t)(uintptr_t)v;
+            memcpy(p + at, &x, 8);
+        };
+        auto putV = [&](uint8_t *p, size_t at, float x, float y, float z) { putF(p, at, x), putF(p, at + 4, y), putF(p, at + 8, z); };
+        enum { RR, FL, RL, FR };
+        putP(vehicle, 0x68, act);
+        putP(vehicle, 0x60, vmodel);
+        putP(vmodel, 0x230, chassis);
+        int gear = 1;
+        memcpy(act + 0x74, &gear, 4);
+        memcpy(act + 0x70, &gear, 4);
+        putV(desc, 0x100, 1.0f, 0.0f, 0.0f);
+        putP(chassis, 0x10, world);
+        putV(chassis, 0x170, 0.0f, 0.0f, 1.0f);
+        putV(chassis, 0x180, 0.0f, 1.0f, 0.0f);
+        putV(chassis, 0x190, 1.0f, 0.0f, 0.0f);
+        putV(chassis, 0x220, 0.01f, 0.01f, 0.01f);
+        putF(chassis, 0x22C, 0.001f);
+        putV(chassis, 0x230, 0.0f, 0.0f, 2.0f);
+        const float cx[4] = { -1.0f, 1.0f, 1.0f, -1.0f }, cz[4] = { -1.5f, 1.5f, -1.5f, 1.5f };
+        const int types[4] = { 1, 2, 1, 2 };
+        for (int i = 0; i < 18; i++)
+        {
+            list[i] = (uint64_t)(uintptr_t)models[i];
+            putP(models[i], 0x2C8, wheels[i]);
+            const int type = i < 4 ? types[i] : 1;
+            memcpy(wheels[i] + 0xE8, &type, 4);
+            putP(wheels[i], 0x18, g_ddBodies[i]);
+            putP(wheels[i], 0x10, chassis);
+            putP(wheels[i], 0x28, desc);
+            putV(wheels[i], 0x154, 1.0f, 0.0f, 0.0f);
+            putF(wheels[i], 0x94, 0.5f);
+            putF(wheels[i], 0x128, 1.0f);
+            putV(wheels[i], 0x13C, i < 4 ? cx[i] : i % 2 ? 1.0f : -1.0f, 0.0f, i < 4 ? cz[i] : -1.5f - (float)(i / 2));
+            wheels[i][0x1A4] = 1;
+            memset(g_ddBodies[i], 0, sizeof g_ddBodies[i]);
+            putP(g_ddBodies[i], 0x10, world);
+            putV(g_ddBodies[i], 0x220, 0.1f, 0.1f, 0.1f);
+            putV(g_ddBodies[i], 0x230, 0.0f, 0.0f, 2.0f);
+        }
+        g_driveDoes = [](void *) {
+            for (int i = 0; i < g_ddN; i++)
+            {
+                float x;
+                memcpy(&x, g_ddBodies[i] + 0x240, 4);
+                x += g_ddPush[i];
+                memcpy(g_ddBodies[i] + 0x240, &x, 4);
+            }
+        };
+        void (*volatile drive)(void *, float, float) = &FakeDrive;
+        const uint64_t v = (uint64_t)(uintptr_t)vehicle, a = (uint64_t)(uintptr_t)act;
+        const float dt = 1.0f / 60.0f;
+        auto set = [&](float rr, float fl, float rl, float fr) {
+            putV(g_ddBodies[RR], 0x240, rr, 0.0f, 0.0f), putV(g_ddBodies[FL], 0x240, fl, 0.0f, 0.0f), putV(g_ddBodies[RL], 0x240, rl, 0.0f, 0.0f), putV(g_ddBodies[FR], 0x240, fr, 0.0f, 0.0f);
+        };
+        auto push = [&](float rr, float fl, float rl, float fr) { g_ddPush[RR] = rr, g_ddPush[FL] = fl, g_ddPush[RL] = rl, g_ddPush[FR] = fr; };
+        auto speed = [&](int i) { return getF(g_ddBodies[i], 0x240); };
+        DdShown d = {};
+        // n drive calls with the display on, each from the same wheel speeds
+        auto steps = [&](int n, float rr, float fl, float rl, float fr) {
+            for (int k = 0; k < n; k++)
+            {
+                set(rr, fl, rl, fr);
+                DriveShowGive(a, v);
+                drive(act, 0.5f, dt);
+            }
+            d = DdShown{};
+            return DriveShowGet(d);
+        };
+        auto counts = [&](long &st, long &f) { DriveShowCountsGet(st, f); };
+        auto eachShare = [&](float want) { return Near(d.share[RR], want) && Near(d.share[FL], want) && Near(d.share[RL], want) && Near(d.share[FR], want); };
+        TorqueCutPublish(nullptr);
+        PushGive(0, 0, 0.0f, 1.0f, 0.0f);
+        LockGive(0, 0, 0, 0);
+        act[0x49] = 0, act[0x4A] = 0;
+        g_ddN = 4;
+        putP(vehicle, 0x200, &list[0]);
+        putP(vehicle, 0x208, &list[4]);
+        long st0 = 0, f0 = 0, st1 = 0, f1 = 0;
+        counts(st0, f0);
+        // M1, all wheel drive off: four cells, the rear with half each, the front with its spin and no share; no cut and
+        // no lock: the game's own differential and kept 100 (M2)
+        push(1.0f, 0.0f, 1.0f, 0.0f);
+        const bool gotA = steps(90, 4.0f, 4.0f, 8.0f, 4.0f);
+        counts(st1, f1);
+        const bool cells = gotA && d.n == 4 && d.rows == 2 && d.row[FL] == 0 && d.row[FR] == 0 && d.row[RL] == 1 && d.row[RR] == 1 && !d.right[FL] && d.right[FR] && !d.right[RL] &&
+                           d.right[RR] && d.vehicle == v && d.gear == 1;
+        const bool rearOnly = gotA && d.driven[RR] && d.driven[RL] && !d.driven[FL] && !d.driven[FR] && Near(d.share[RR], 0.5f) && Near(d.share[RL], 0.5f) && d.share[FL] < 0.0f &&
+                              d.share[FR] < 0.0f && Near(d.shareBefore[RR], 0.5f) && d.shareBefore[FL] < 0.0f && d.ok[FL] && d.ok[FR] && Near(d.speed[FL], 2.0f) &&
+                              Near(d.speed[RL], 4.5f) && Near(d.speed[RR], 2.5f) && Near(d.truck[FL], 2.0f) && Near(d.truck[RL], 2.0f);
+        bool quiet = gotA && d.force == kDdGameOwn && Near(d.kept, 1.0f) && !d.braking && st1 == st0 + 90 && f1 == f0;
+        for (int i = 0; i < 4; i++) quiet = quiet && !d.air[i] && !d.capLamp[i] && !d.lockLamp[i];
+        if (!(cells && rearOnly && quiet))
+            printf("     feed A: got %d n %d rows %d, row %d %d %d %d, right %d %d %d %d; driven %d %d %d %d share %.3f %.3f %.3f %.3f speed %.3f %.3f %.3f %.3f truck %.3f; force %d "
+                   "kept %.3f steps %ld faults %ld\n", gotA, d.n, d.rows, d.row[0], d.row[1], d.row[2], d.row[3], d.right[0], d.right[1], d.right[2], d.right[3], d.driven[0], d.driven[1],
+                   d.driven[2], d.driven[3], d.share[0], d.share[1], d.share[2], d.share[3], d.speed[0], d.speed[1], d.speed[2], d.speed[3], d.truck[1], d.force, d.kept, st1 - st0,
+                   f1 - f0);
+        // all wheel drive on: four shares
+        act[0x49] = 1;
+        push(1.0f, 1.0f, 1.0f, 1.0f);
+        const bool allFour = steps(90, 4.0f, 4.0f, 4.0f, 4.0f) && d.driven[FL] && d.driven[FR] && eachShare(0.25f) && Near(d.shareBefore[FL], 0.25f) && Near(d.speed[FL], 2.5f);
+        // S2: air by the contact share; a wheel whose body is refused: an empty cell, the rest share on
+        putF(wheels[FL], 0x128, 0.0f);
+        g_ddBodies[RR][0x160] = 5;
+        const bool gotC = steps(90, 4.0f, 4.0f, 4.0f, 4.0f);
+        const bool airAndRefused = gotC && d.n == 4 && d.air[FL] && !d.air[FR] && !d.air[RL] && !d.ok[RR] && !d.driven[RR] && d.share[RR] < 0.0f && Near(d.share[FL], 1.0f / 3.0f) &&
+                                   Near(d.share[RL], 1.0f / 3.0f) && Near(d.share[FR], 1.0f / 3.0f) && d.rows == 2 && d.row[RR] == 1 && d.right[RR];
+        putF(wheels[FL], 0x128, 1.0f);
+        g_ddBodies[RR][0x160] = 0;
+        // 18 wheels: the first 16 and no fault
+        long st2 = 0, f2 = 0, st3 = 0, f3 = 0;
+        counts(st2, f2);
+        g_ddN = 18;
+        for (int i = 0; i < 18; i++) g_ddPush[i] = 1.0f;
+        putP(vehicle, 0x208, &list[18]);
+        const bool got18 = steps(2, 4.0f, 4.0f, 4.0f, 4.0f);
+        counts(st3, f3);
+        const bool sixteen = got18 && d.n == 16 && d.rows >= 1 && d.rows <= 16 && st3 == st2 + 2 && f3 == f2 && d.ok[15] && d.driven[15];
+        g_ddN = 4;
+        putP(vehicle, 0x208, &list[4]);
+        if (!(allFour && airAndRefused && sixteen))
+            printf("     feed B: all four %d, air and refused %d (n %d air %d ok %d share %.3f %.3f %.3f %.3f), 16 of 18 %d (n %d rows %d steps %ld faults %ld)\n", allFour, airAndRefused,
+                   d.n, d.air[FL], d.ok[RR], d.share[0], d.share[1], d.share[2], d.share[3], sixteen, d.n, d.rows, st3 - st2, f3 - f2);
+        Check(cells && rearOnly && quiet && allFour && airAndRefused && sixteen,
+              "drive display in the drive's hook (M1, M3): its own list of all four wheels, listed in another order, on the right rows and sides; all wheel drive off: the rear "
+              "with half each, the front with its spin and no share, the game's own differential and kept 100 with no cut and no lock; all wheel drive on: four shares; air by "
+              "the contact share; a refused body gives an empty cell; of 18 wheels the first 16 and no fault; each call counted");
+
+        // M2: each path through the hook with the display on is fed (the steps counted, the force named), and with
+        // the key off the hook reads and keeps nothing for the display: the counts and the record's sequence stand,
+        // and the wheels end at the same speeds as with the display on
+        enum { kPlain, kCutNoCap, kOpen, kCap, kLock, kPaths };
+        auto arrange = [&](int which) {
+            TorqueCutPublish(nullptr);
+            LockGive(0, 0, 0, 0);
+            act[0x4A] = 0;
+            TorqueCutSlot cs = {};
+            cs.vehicle = v;
+            cs.action = a;
+            cs.diff = which == kOpen ? kDiffOpen : kDiffLimited;
+            cs.cap = which == kCap ? 3.0f : 0.0f;
+            if (which == kCutNoCap || which == kOpen || which == kCap) TorqueCutPublish(&cs);
+            if (which == kLock)
+            {
+                act[0x4A] = 1;
+                LockGive(a, v, 100, 0);
+            }
+        };
+        auto path = [&](int which, bool on, float *end) {
+            arrange(which);
+            push(1.0f, 1.0f, 2.0f, 1.0f);
+            for (int k = 0; k < 4; k++)
+            {
+                if (k == 0) set(1.0f, 1.2f, 1.0f, 1.2f);
+                else set(2.7f, 2.9f, 2.7f, 2.9f);
+                if (on) DriveShowGive(a, v);
+                else DriveShowGive(0, 0);
+                drive(act, 0.5f, dt);
+            }
+            for (int i = 0; i < 4; i++) end[i] = speed(i);
+        };
+        float off1[kPaths][4], on1[kPaths][4], off2[kPaths][4];
+        DdShown before = {}, after = {};
+        long s0 = 0, g0 = 0, s1 = 0, g1 = 0, s2 = 0, g2 = 0, s3 = 0, g3 = 0;
+        DriveShowGive(0, 0);
+        const bool hadRecord = DriveShowGet(before);
+        counts(s0, g0);
+        for (int p = 0; p < kPaths; p++) path(p, false, off1[p]);
+        counts(s1, g1);
+        const bool stillRecord = DriveShowGet(after);
+        const bool offReadsNothing = hadRecord && stillRecord && s1 == s0 && g1 == g0 && after.seq == before.seq && after.at == before.at;
+        bool fedEach = true;
+        int fedForce[kPaths];
+        for (int p = 0; p < kPaths; p++)
+        {
+            long x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+            counts(x0, y0);
+            path(p, true, on1[p]);
+            counts(x1, y1);
+            DdShown now = {};
+            const bool got = DriveShowGet(now);
+            fedForce[p] = got ? now.force : -9;
+            fedEach = fedEach && got && x1 == x0 + 4 && y1 == y0 && now.n == 4;
+        }
+        counts(s2, g2);
+        for (int p = 0; p < kPaths; p++) path(p, false, off2[p]);
+        counts(s3, g3);
+        const bool forces = fedForce[kPlain] == kDdGameOwn && fedForce[kCutNoCap] == kDiffForceLimited && fedForce[kOpen] == kDiffForceOpen && fedForce[kCap] == kDiffForceLimited &&
+                            fedForce[kLock] == kDiffForceLock;
+        bool sameEnds = s3 == s2 && g3 == g2;
+        for (int p = 0; p < kPaths; p++)
+            for (int i = 0; i < 4; i++) sameEnds = sameEnds && off1[p][i] == on1[p][i] && off1[p][i] == off2[p][i];
+        if (!(offReadsNothing && fedEach && forces && sameEnds))
+        {
+            printf("     paths: off reads nothing %d (record %d %d, steps %ld faults %ld, seq %lu %lu), fed each %d, forces %d (%d %d %d %d %d), same ends %d\n", offReadsNothing, hadRecord,
+                   stillRecord, s1 - s0, g1 - g0, before.seq, after.seq, fedEach, forces, fedForce[0], fedForce[1], fedForce[2], fedForce[3], fedForce[4], sameEnds);
+            for (int p = 0; p < kPaths; p++)
+                printf("       path %d: off %.4f %.4f %.4f %.4f, on %.4f %.4f %.4f %.4f, off %.4f %.4f %.4f %.4f\n", p, off1[p][0], off1[p][1], off1[p][2], off1[p][3], on1[p][0],
+                       on1[p][1], on1[p][2], on1[p][3], off2[p][0], off2[p][1], off2[p][2], off2[p][3]);
+        }
+        Check(offReadsNothing && fedEach && forces && sameEnds,
+              "drive display, each path through the hook (M2): with no cut and no lock, the cut without the cap, Open, the cut with the cap and the lock alone the display is "
+              "fed on every call and names the differential in force; with the key off no call is read, no fault counted and the record stands, and on every path the wheels "
+              "end at the same speeds as with the display on");
+
+        // the marks: the lock at 100 ties four wheels the drive pushed unevenly: its lamp on each, the shares even after
+        // it and all on one wheel before it; the cap at 3: its lamp on each clamped wheel and kept under 100
+        arrange(kLock);
+        push(0.0f, 0.0f, 1.0f, 0.0f);
+        const bool gotL = steps(90, 4.0f, 4.0f, 4.0f, 4.0f);
+        bool lockMarks = gotL && d.force == kDiffForceLock && eachShare(0.25f) && Near(d.shareBefore[RL], 1.0f) && Near(d.shareBefore[FL], 0.0f) && Near(d.kept, 1.0f) && Near(speed(RL), 4.25f) &&
+                         Near(speed(FL), 4.25f);
+        for (int i = 0; i < 4; i++) lockMarks = lockMarks && d.lockLamp[i] && !d.capLamp[i];
+        if (!lockMarks)
+            printf("     lock marks: got %d force %d share %.3f %.3f %.3f %.3f before %.3f %.3f %.3f %.3f lamps %d %d %d %d speeds %.3f %.3f\n", gotL, d.force, d.share[0], d.share[1],
+                   d.share[2], d.share[3], d.shareBefore[0], d.shareBefore[1], d.shareBefore[2], d.shareBefore[3], d.lockLamp[0], d.lockLamp[1], d.lockLamp[2], d.lockLamp[3], speed(RL),
+                   speed(FL));
+        arrange(kCap);
+        push(1.0f, 1.0f, 1.0f, 1.0f);
+        steps(1, 1.0f, 1.0f, 1.0f, 1.0f);
+        const bool gotK = steps(90, 2.7f, 2.7f, 2.7f, 2.7f);
+        bool capMarks = gotK && d.force == kDiffForceLimited && d.kept < 0.9f && d.kept >= 0.0f && eachShare(0.25f) && Near(d.shareBefore[RR], 0.25f) && Near(speed(RR), 3.0f);
+        for (int i = 0; i < 4; i++) capMarks = capMarks && d.capLamp[i];
+        if (!capMarks)
+            printf("     cap marks: got %d force %d kept %.3f share %.3f %.3f %.3f %.3f lamps %d %d %d %d, lock lamps %d %d %d %d, speeds %.3f %.3f %.3f %.3f\n", gotK, d.force, d.kept,
+                   d.share[0], d.share[1], d.share[2], d.share[3], d.capLamp[0], d.capLamp[1], d.capLamp[2], d.capLamp[3], d.lockLamp[0], d.lockLamp[1], d.lockLamp[2], d.lockLamp[3],
+                   speed(0), speed(1), speed(2), speed(3));
+        // the lamps go out again: 90 calls with neither
+        arrange(kPlain);
+        const bool gotO = steps(90, 4.0f, 4.0f, 4.0f, 4.0f);
+        bool out = gotO && d.force == kDdGameOwn && Near(d.kept, 1.0f);
+        for (int i = 0; i < 4; i++) out = out && !d.capLamp[i] && !d.lockLamp[i];
+        // a cleared slot stops the feed; another action's call is not read
+        long e0 = 0, h0 = 0, e1 = 0, h1 = 0;
+        static uint8_t otherAct[0x100] = {};
+        DriveShowGive(a, v);
+        counts(e0, h0);
+        drive(otherAct, 0.5f, dt);
+        DriveShowGive(0, 0);
+        set(4.0f, 4.0f, 4.0f, 4.0f);
+        drive(act, 0.5f, dt);
+        counts(e1, h1);
+        const bool stops = e1 == e0 && h1 == h0;
+        TorqueCutPublish(nullptr);
+        LockGive(0, 0, 0, 0);
+        DriveShowGive(0, 0);
+        act[0x49] = 0, act[0x4A] = 0;
+        g_driveDoes = nullptr;
+        g_ddN = 0;
+        if (!(out && stops)) printf("     marks: lamps out %d, stops %d\n", out, stops);
+        Check(lockMarks && capMarks && out && stops,
+              "drive display, the marks: the lock ties four wheels the drive pushed unevenly, its lamp on each, a quarter each after it and all on one wheel before it; the cap "
+              "holds four wheels at 3, its lamp on each and kept under 100; both lamps out again after 90 calls with neither; another action's call and a cleared slot are not read");
     }
     // the diff lock's setter's place in made-up code: its bytes once; not taken twice or where they are not
     {

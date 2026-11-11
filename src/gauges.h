@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include "drive_display.h" // DdShown, the drive display's record (it reads no game memory)
 #define GAUGES_VERSION "0.18.4"
 
 // The exe the addresses in this mod were taken from (SnowRunner on Steam, the build of 22 July 2026). On any other build
@@ -167,6 +168,7 @@ struct GaugeSettings
     float swayFront, swayRear; // SwayFront, SwayRear: each axle's sway bar as a share of its spring rate (kSwayRange), 0 none (a test)
     float camberGainFront, camberGainRear; // CamberGainFront, CamberGainRear: the wheels' camber multiplier as a factor of the file's (kCamberGainRange), the front axle and every other; 1 writes nothing (camber.h)
     float camberRestFront, camberRestRear; // CamberRestFront, CamberRestRear: degrees added to the file's render camber (kCamberRestRange), an offset, never the angle; 0 writes nothing
+    bool driveDisplay;       // DriveDisplay: the drive display beside the suspension's, each wheel's spin against the truck's speed and its share of the drive (drive_display.h); per player, off by default
     bool suspDisplay;        // SuspDisplay: the suspension display, each wheel's travel, its end hits and whether it hangs, and the articulation
     bool airSuspension;      // AirSuspension: each wheel held at its rest place of the first standstill, cargo or not; BindRideUp and BindRideDown move it (a test)
     bool airHorizon;         // AirHorizon: with AirSuspension, the body's pitch and roll levelled to the horizon instead of to the wheels (a test)
@@ -563,7 +565,7 @@ enum { kRateNoteNone, kRateNoteOff, kRateNoteIter, kRateNoteStep };
 struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWarnBoxes]; int engineDamage, engineCapacity; char truck[96]; char idWords[96]; bool truckOwn, suspOwn, suspKept, suspIdKnown, suspTruckKept, suspKindSet, smtInstalled, gearboxHeld; int suspLevel; char map[96], mapFrom[64]; bool mapOwn; float ambientC;
                    int pullTest, pullPhase; const char *pullWhy;
                    float ambientDay, ambientNight, hour; // the map's day and night (with mapOwn), the hour of the game's day (-1 not known)
-                   SuspDisplayView susp; bool swayOff; float rideRest[2]; bool rideRestKnown; // the display's figures; the bars disconnected; each axle's rest place along its axis (front, rear; cm), from the probe
+                   SuspDisplayView susp; DdShown drive; bool driveShown; bool swayOff; float rideRest[2]; bool rideRestKnown; // the display's figures; the bars disconnected; each axle's rest place along its axis (front, rear; cm), from the probe
                    bool air, airTaken, airShown; int airHeight; float airLevel[2], airSide; bool airKnown; int airAxles, airFrom; bool diffKnown; int diffAuto; // airKnown: a truck is driven and its air axles (air_axles.h) and their source are read // the air suspension runs on the driven truck, its rest places taken, the height box shown; the keys' height (cm) and the levelling (front, rear, left over right; cm)
                    bool frameKnown, frameRigid; float frameFile[4], frameMost; // the driven truck's frame joint (frame_flex.h): its stock spring, damping and limits in degrees; or none (a rigid frame)
                    bool suspKnown; float suspFile[3][2]; // the driven truck's file: spring, damping and the compression end (m), [front, rear] (wheel 0 and the last)

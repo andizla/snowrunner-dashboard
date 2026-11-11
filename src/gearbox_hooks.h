@@ -11,6 +11,7 @@
 #include "gearbox_model.h"
 #include "torque_cut.h"
 #include "physics_rate.h"
+#include "drive_display.h"
 
 // The calls each hook has seen since the attach, and the last arguments of those that have some.
 struct GearboxCounts
@@ -227,6 +228,19 @@ void PushCountsGet(PushCounts &out);
 // action + 0x4A set and the handbrake at action + 0x48 not, or the cut's slot's type Locked), the driven wheels' spins
 // about their axles move toward their mean, weighted by what each has behind it, after the drive and before the wheel cap.
 void LockGive(uint64_t action, uint64_t vehicle, int bite, int kind, float mass = 0.0f, uint64_t cylinderVtable = 0);
+// The drive display (ini DriveDisplay=1; drive_display.h). DriveShowGive: the mod's thread, each pass while the
+// display is on and a truck is driven; 0 takes it off, and the hook then reads nothing for it. The slot is stale after
+// a second, as the lock's. DriveShowGet: the last record whole, false where none was written or it is being written.
+// DriveShowCountsGet: the calls read and the reads that faulted.
+struct ShowSlot
+{
+    uint64_t action, vehicle;
+    uint64_t at; // GetTickCount64 at the publish
+    uint64_t cylinderVtable;
+};
+void DriveShowGive(uint64_t action, uint64_t vehicle, uint64_t cylinderVtable = 0);
+bool DriveShowGet(DdShown &out);
+void DriveShowCountsGet(long &steps, long &faults);
 // Its counters since the start: the steps the slot named the action, those with the lock byte off, those held by the
 // handbrake, those written, faults, wheels skipped (no inertia); the last written step's wheels, k and spread after the
 // drive and after the lock (rad/s), the vehicle it was for, and that step's weighted mean before the drive (c), the

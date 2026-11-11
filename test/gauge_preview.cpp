@@ -646,6 +646,25 @@ int wmain(int argc, wchar_t **argv)
             GSwayLamp(bg, warnFonts, ImVec2(at.x, at.y + (GSuspHeight(d) + kWarnGap) * wu), wu, 1.0f);
             GRideBox(bg, warnFonts, ImVec2(at.x, at.y + (GSuspHeight(d) + kSwayH + 2.0f * kWarnGap) * wu), wu, 1.0f, 4); // the air suspension raised 4 cm
         });
+        // the drive display beside it (131): a made up truck of four axles, the two rear ones driven, at 2 m/s in a forward
+        // gear: the third axle's left wheel spinning in the air and clamped by the cap, the rear right one turning back
+        DdShown dd = {};
+        dd.n = 8, dd.rows = 4, dd.force = kDiffForceLimited, dd.gear = 1, dd.kept = 0.82f;
+        const float spd[8] = { 2.0f, 2.0f, 2.1f, 1.9f, 9.5f, 2.6f, 2.2f, -0.6f }, shr[8] = { -1, -1, -1, -1, 0.08f, 0.46f, 0.40f, 0.06f },
+                    was[8] = { -1, -1, -1, -1, 0.55f, 0.20f, 0.15f, 0.10f };
+        for (int i = 0; i < 8; i++)
+        {
+            dd.row[i] = (uint8_t)(i / 2), dd.right[i] = i % 2 == 1, dd.ok[i] = true, dd.driven[i] = i >= 4;
+            dd.speed[i] = spd[i], dd.truck[i] = 2.0f, dd.share[i] = shr[i], dd.shareBefore[i] = was[i];
+        }
+        dd.air[4] = true, dd.capLamp[4] = true, dd.lockLamp[5] = dd.lockLamp[7] = true;
+        swprintf_s(path, L"%s\\drive.png", out);
+        RenderPng(path, 1920, 1080, [&](ImDrawList *, ImDrawList *bg) {
+            Backdrop(bg, 1920, 1080);
+            const ImVec2 at = WarnOrigin(1920.0f, 1080.0f, 3);
+            GSuspDisplay(bg, warnFonts, at, wu, 1.0f, d);
+            GDriveDisplay(bg, warnFonts, ImVec2(at.x + (kSuspW + kWarnGap) * wu, at.y), wu, 1.0f, dd);
+        });
         Release(warnSrv);
     }
 
