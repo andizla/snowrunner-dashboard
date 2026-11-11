@@ -760,9 +760,9 @@ struct CapAround
     uint8_t *wheel[kCapWheels];
     int n;
 };
-// force: what is in force this step (DiffForceOf). Open: the wheels' impulses evened (DiffEvenStep), the limit at Open's
-// (DiffOpenCap: the ceiling times the driven wheels read; only where the slot has a cap: L-, L, L+ and R) and nothing
-// passed on from a held wheel. Else the lock's step where lockK is above 0, the ceiling with the spread. Where the slot
+// force: what is in force this step (DiffForceOf). Open: the wheels' impulses evened (DiffEvenStep), then the ceiling on
+// the driven wheels' mean (DiffOpenStep: one factor on what the drive added, for all of them; only where the slot has a
+// cap: L-, L, L+ and R) and nothing passed on. Else the lock's step where lockK is above 0, the ceiling with the spread. Where the slot
 // has no cap (a numbered gear) the evening and the lock act alone. A change of what is in force mid-drive (the lock
 // set with a free wheel far over the ceiling) lowers no wheel: the step's limit is never under the wheel's own speed
 // before the drive, and what is handed on is counted from that limit (F1 of the review).
@@ -795,8 +795,8 @@ static CapAround CapStepAround(const TorqueCutSlot *cut, void *action, float thr
     InterlockedExchange(&g_capTruck, 0x7FC00000);
     ((DriveFn)g_creepWay)(action, throttle, dt);
     const float truck = BitsFloat(g_capTruck);
-    const float ceilingOne = CapCeiling(cap, cut->map.top, cut->map.governTo, truck);
-    const float ceiling = open ? DiffOpenCap(m, ceilingOne) : ceilingOne;
+    // in Open the ceiling is the limit of the driven wheels' mean, else of each wheel
+    const float ceiling = CapCeiling(cap, cut->map.top, cut->map.governTo, truck);
     InterlockedExchange(&g_capCeiling, FloatBits(ceiling));
     if (!readOk)
     {
@@ -846,7 +846,7 @@ static CapAround CapStepAround(const TorqueCutSlot *cut, void *action, float thr
         if (!CapWriteFinal(t, post, work)) InterlockedIncrement(&faults);
         return out;
     }
-    const CapStepOut o = CapStep(pre, work, gain, ok, t.n, ceiling, !open);
+    const CapStepOut o = open ? DiffOpenStep(pre, work, gain, ok, t.n, ceiling) : CapStep(pre, work, gain, ok, t.n, ceiling, true);
     if (!CapWrite(t, post, o)) InterlockedIncrement(&g_capFaults);
     InterlockedIncrement(&g_capSteps);
     if (o.clamps) InterlockedExchangeAdd(&g_capClamps, o.clamps);

@@ -7117,7 +7117,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 DiffCounts dc = {};
                 DiffCountsGet(dc);
                 Log(L"probe: differential: the type %s, in force in the last step %s; Open's evening: J %.4f over %d wheels in its last step, %ld steps, %ld written, %ld faults "
-                    L"in a second; the wheels' mean %.2f rad/s against the governor's band %.2f to %.2f",
+                    L"in a second; the wheels' mean %.2f rad/s against the governor's band %.2f to %.2f; in Open the wheel cap's ceiling and excess are the driven mean's, not each wheel's",
                     DiffTypeName(w.diffType), !cutActs ? L"nothing (the cut is off)" : dc.force == kDiffForceOpen ? L"Open" : dc.force == kDiffForceLock ? L"the lock" : L"Limited slip",
                     dc.j, dc.wheels, dc.steps - w.diffWas.steps, dc.writes - w.diffWas.writes, dc.faults - w.diffWas.faults, c.s, w.diffBand[0], w.diffBand[1]);
                 w.diffWas = dc;

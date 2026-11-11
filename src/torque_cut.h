@@ -262,14 +262,7 @@ inline int DiffForceOf(int type, bool lockByte, bool handbrake)
 {
     return DiffLockInForce(type, lockByte, handbrake) ? kDiffForceLock : type == kDiffOpen ? kDiffForceOpen : kDiffForceLimited;
 }
-// Open's ceiling for one wheel (A1, as C5 of BRIEF_governor_sway.md has it): n times the step's ceiling (CapCeiling),
-// n the driven wheels read that step. With all but one standing the free one runs to it, and the driven mean is then
-// at the ceiling the other types hold each wheel to. 0 where the ceiling is no number or not above 0.
-inline float DiffOpenCap(int n, float ceiling)
-{
-    const float cap = (float)n * ceiling;
-    return n > 0 && ceiling > 0.0f && isfinite(cap) ? cap : 0.0f;
-}
+// Open's limit is on the driven wheels' mean (DiffOpenStep, below DiffEvenStep), not on each wheel.
 // Locked on a truck whose lock is not always on (S4): the mod holds the lock byte while the type acts. One pass of the
 // mod's thread: want (the type Locked acts on this action), the byte as read. Returns the byte to write, -1 for none. A
 // byte the player set first is not the mod's and is never cleared; one the mod set is cleared once the type no longer
@@ -450,7 +443,7 @@ struct TorqueCutAnswer
 // The governor's fade goes by the truck's own speed where it was read (M5), else by the wheels' mean; the curve held to
 // the redline and no fade in F only where the guard acts (slot.cap above 0): the ceiling holds the top there, and F's
 // drive is 0 from the governor's end. The same in every type of differential: Open has no governor of its own (C5 of
-// BRIEF_governor_sway.md voids the one by the wheels' mean), its limit is the ceiling times the driven wheels.
+// BRIEF_governor_sway.md voids the one by the wheels' mean), its limit is the ceiling on the driven wheels' mean (DiffOpenStep).
 inline TorqueCutAnswer TorqueCutAnswerOf(const TorqueCutSlot &slot, float stock, float start, float a, float top, float pf, float d4, CutSpeeds sp)
 {
     TorqueCutAnswer r = {};
@@ -868,6 +861,55 @@ inline DiffEvenOut DiffEvenStep(const float *pre, const float *post, const float
             o.final[i] = final[i];
             if (final[i] != post[i]) o.wrote = true;
         }
+    return o;
+}
+// Open's limit (F1 of the review of the types on the governor ceiling): the step's ceiling (CapCeiling) holds the driven
+// wheels' mean, not each wheel. pre each wheel's speed before the drive, even its speed after the evening. What the
+// drive added to a wheel in this step is scaled by one factor k for all driven wheels, so that the mean after the step is
+// min(the mean after the drive, max(the mean before, the ceiling)). k lies in 0 to 1. No wheel is lowered under its speed
+// before the drive, and a wheel the drive slowed (the engine's braking) keeps the drive's own result. With all wheels
+// alike this is CapStep's law for each. With one wheel free and the others standing the free one runs to n times the
+// ceiling and the mean sits at the ceiling. Nothing is handed on.
+// Out as CapStep's: final; clamped and keptEach (k) for each wheel the drive added to while k is under 1; kept, the
+// truck's share; excess, the mean's speed over its limit after the drive; spread 0.
+inline CapStepOut DiffOpenStep(const float *pre, const float *even, const float *gain, const bool *ok, int n, float ceiling)
+{
+    (void)gain;
+    CapStepOut o = {};
+    o.kept = 1.0f;
+    if (n > kCapWheels) n = kCapWheels;
+    if (n < 0) n = 0;
+    float before = 0.0f, added = 0.0f, taken = 0.0f;
+    int m = 0;
+    for (int i = 0; i < n; i++)
+    {
+        o.final[i] = even[i];
+        o.keptEach[i] = 1.0f;
+        if (!ok[i] || !isfinite(pre[i]) || !isfinite(even[i])) continue;
+        const float d = even[i] - pre[i];
+        before += pre[i];
+        if (d > 0.0f) added += d;
+        else taken += d;
+        m++;
+    }
+    if (!m || !(ceiling > 0.0f) || !isfinite(ceiling) || !(added > 0.0f) || !isfinite(added) || !isfinite(before) || !isfinite(taken)) return o;
+    const float count = (float)m, meanBefore = before / count, meanAfter = (before + added + taken) / count;
+    const float limit = meanBefore > ceiling ? meanBefore : ceiling;
+    if (meanAfter <= limit) return o;
+    // the mean with the additions scaled: (before + k x added + taken) / m = limit
+    const float k = CutClamp01((limit * count - before - taken) / added);
+    o.excess = meanAfter - limit;
+    for (int i = 0; i < n; i++)
+    {
+        if (!ok[i] || !isfinite(pre[i]) || !isfinite(even[i]) || !(even[i] > pre[i])) continue;
+        const float to = pre[i] + k * (even[i] - pre[i]);
+        if (!isfinite(to)) continue;
+        o.final[i] = to < pre[i] ? pre[i] : to > even[i] ? even[i] : to;
+        o.keptEach[i] = k;
+        o.clamped[i] = true;
+        o.clamps++;
+    }
+    o.kept = k;
     return o;
 }
 // What the mod's thread publishes for the driven truck: its action and vehicle and DiffLockBite, while Powertrain is on,

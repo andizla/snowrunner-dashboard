@@ -312,7 +312,7 @@ struct TopSetup
     float footUpAt;       // above 0: the pedal goes to 0 from this second on
     bool oldLaw;          // the law before the ceiling: the governor on the bracket, the cap flat and armed by the mean
     uint32_t seed;
-    bool open;            // Open in force: the drive's impulse evened (DiffEvenStep), the limit n times the ceiling, nothing handed on
+    bool open;            // Open in force: the drive's impulse evened (DiffEvenStep), the ceiling on the driven mean (DiffOpenStep), nothing handed on
 };
 struct TopResult
 {
@@ -407,7 +407,7 @@ inline TopResult TopRun(const TopSetup &u)
         if (capV > 0.0f && (armed || !u.oldLaw))
         {
             const float ceiling = u.oldLaw ? capV : CapCeiling(capV, top, slot.map.governTo, v);
-            const CapStepOut o = CapStep(pre, left, gain, ok, n, u.open ? DiffOpenCap(n, ceiling) : ceiling, !u.open);
+            const CapStepOut o = u.open ? DiffOpenStep(pre, left, gain, ok, n, ceiling) : CapStep(pre, left, gain, ok, n, ceiling, true);
             for (int i = 0; i < n; i++)
             {
                 if (o.final[i] < fminf(pre[i], left[i]) - 1e-5f) r.lowered++;

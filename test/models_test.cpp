@@ -4800,7 +4800,7 @@ int main(int argc, char **argv)
     }
 
     // the differential's types (BRIEF_diff_types.md with the Reviewer's addendum of 2026-11-11): the type by the setting and
-    // the kind, what is in force in a step, Open's ceiling, the held lock byte
+    // the kind, what is in force in a step, Open's limit on the driven mean, the held lock byte
     {
         const bool types = DiffTypeOf(kDiffAuto, true, 0) == kDiffOpen && DiffTypeOf(kDiffAuto, true, 1) == kDiffOpen && DiffTypeOf(kDiffAuto, true, 2) == kDiffLocked &&
                            DiffTypeOf(kDiffAuto, true, 3) == kDiffLimited && DiffTypeOf(kDiffAuto, false, 2) == kDiffLimited && DiffTypeOf(kDiffAuto, true, -1) == kDiffLimited &&
@@ -4811,8 +4811,33 @@ int main(int argc, char **argv)
                            DiffForceOf(kDiffLimited, true, false) == kDiffForceLock && DiffForceOf(kDiffLimited, true, true) == kDiffForceLimited &&
                            DiffForceOf(kDiffLocked, false, false) == kDiffForceLock && DiffForceOf(kDiffLocked, false, true) == kDiffForceLock &&
                            DiffLockInForce(kDiffLocked, false, true) && !DiffLockInForce(kDiffOpen, true, true);
-        const bool ceiling = DiffOpenCap(4, 15.0f) == 60.0f && DiffOpenCap(2, 13.75f) == 27.5f && DiffOpenCap(0, 15.0f) == 0.0f && DiffOpenCap(4, 0.0f) == 0.0f &&
-                             DiffOpenCap(4, NAN) == 0.0f && DiffOpenCap(4, -3.0f) == 0.0f;
+        // Open's limit (DiffOpenStep), wheels with a gain of 1 and the evening done: all alike are held at the ceiling
+        // each; one free at 56 with three standing, the drive adding 5 and 1, 1, 1: the mean from 14 to the ceiling of
+        // 15 by half of each addition; a mean over the ceiling before the drive gets nothing and loses nothing; the
+        // engine's braking passes whole; under the ceiling nothing is touched; one wheel slowed by 2 and one pushed by
+        // 10 around a mean of 15: the slowing whole, 0.2 of the push; no ceiling (0, no number): as the drive left it
+        bool ceiling = true;
+        {
+            auto close = [](float a, float b) { return fabsf(a - b) <= 1e-4f; };
+            const bool okW[4] = { true, true, true, true };
+            const float one[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+            const float aPre[4] = { 8.0f, 8.0f, 8.0f, 8.0f }, aEven[4] = { 9.0f, 9.0f, 9.0f, 9.0f };
+            const CapStepOut a = DiffOpenStep(aPre, aEven, one, okW, 4, 8.5f), aCap = CapStep(aPre, aEven, one, okW, 4, 8.5f, true);
+            const float bPre[4] = { 0.0f, 0.0f, 0.0f, 56.0f }, bEven[4] = { 1.0f, 1.0f, 1.0f, 61.0f };
+            const CapStepOut b = DiffOpenStep(bPre, bEven, one, okW, 4, 15.0f);
+            const float cPre[2] = { 20.0f, 20.0f }, cEven[2] = { 22.0f, 22.0f }, dEven[2] = { 18.0f, 18.0f };
+            const CapStepOut c = DiffOpenStep(cPre, cEven, one, okW, 2, 15.0f), d = DiffOpenStep(cPre, dEven, one, okW, 2, 15.0f);
+            const float ePre[2] = { 1.0f, 1.0f }, eEven[2] = { 2.0f, 2.0f };
+            const CapStepOut e = DiffOpenStep(ePre, eEven, one, okW, 2, 15.0f);
+            const float fPre[2] = { 10.0f, 20.0f }, fEven[2] = { 8.0f, 30.0f };
+            const CapStepOut f = DiffOpenStep(fPre, fEven, one, okW, 2, 15.0f), g0 = DiffOpenStep(fPre, fEven, one, okW, 2, 0.0f), gn = DiffOpenStep(fPre, fEven, one, okW, 2, NAN);
+            for (int i = 0; i < 4; i++) ceiling = ceiling && close(a.final[i], 8.5f) && close(a.final[i], aCap.final[i]) && a.clamped[i];
+            ceiling = ceiling && a.clamps == 4 && close(a.kept, 0.5f) && close(b.final[0], 0.5f) && close(b.final[1], 0.5f) && close(b.final[2], 0.5f) && close(b.final[3], 58.5f) &&
+                      close(b.kept, 0.5f) && close(b.excess, 1.0f) && b.spread == 0.0f && c.final[0] == 20.0f && c.final[1] == 20.0f && c.kept == 0.0f && c.clamps == 2 &&
+                      d.final[0] == 18.0f && d.final[1] == 18.0f && d.clamps == 0 && d.kept == 1.0f && e.final[0] == 2.0f && e.clamps == 0 && e.kept == 1.0f && f.final[0] == 8.0f &&
+                      close(f.final[1], 22.0f) && f.clamps == 1 && !f.clamped[0] && close(f.keptEach[1], 0.2f) && g0.final[1] == 30.0f && g0.clamps == 0 && gn.final[1] == 30.0f &&
+                      gn.clamps == 0;
+        }
         // the hold: set where the byte is 0, left where it is set, cleared once the type no longer acts, set again when
         // the game cleared it; a byte the player set first is never cleared; no read and no action do nothing
         LockHold h = {};
@@ -4849,13 +4874,14 @@ int main(int argc, char **argv)
         if (!(types && force && ceiling && hold)) printf("     diff types: types %d, force %d, ceiling %d, hold %d (%d %d %d %d %d %d %d %d)\n", types, force, ceiling, hold, set, stays, again, clear, after, players, playersOff, other);
         Check(types && force && ceiling && hold,
               "diff types: Auto is Open at kinds 0 and 1 and Locked at kind 2, Limited slip with the kind not read or not known, a set type is itself; the lock is in force "
-              "with the byte set and the handbrake off on any type and always on Locked; Open's limit n x the step's ceiling; the held lock byte is set where it is 0, "
+              "with the byte set and the handbrake off on any type and always on Locked; Open's limit is the step's ceiling on the driven wheels' mean, one factor on what "
+              "the drive added, no wheel lowered and the engine's braking whole; the held lock byte is set where it is 0, "
               "cleared only where the mod set it, also on the way back to a truck left with it set");
     }
 
-    // Open (A1, A2, with C5 of BRIEF_governor_sway.md): the evening shares the drive's impulse, the limit is n times the
-    // step's ceiling with nothing handed on, the cut's answer is the same in every type (no governor by the mean); the lock
-    // set over a free wheel does not lurch (F1 of the review)
+    // Open (A1, A2, with C5 of BRIEF_governor_sway.md): the evening shares the drive's impulse, the limit is the step's
+    // ceiling on the driven wheels' mean with nothing handed on, the cut's answer is the same in every type (no governor by
+    // the mean); the lock set over a free wheel does not lurch (F1 of the review)
     {
         auto nearly = [](float a, float b, float tol) { return fabsf(a - b) <= tol; };
         const bool okAll[kCapWheels] = { true, true, true, true };
@@ -4876,22 +4902,25 @@ int main(int argc, char **argv)
         const DiffEvenOut e1 = DiffEvenStep(pre2, post2, one, okAll, 1), eg = DiffEvenStep(pre2, post2, noGain, okAll, 2), en = DiffEvenStep(pre2, nanPost, one, okAll, 2);
         const bool leaves = !e4.wrote && e4.final[2] == 8.5f && e4.used == 4 && !e1.wrote && e1.final[0] == 10.0f && !eg.wrote && eg.final[0] == 10.0f && eg.used == 1 && !en.wrote &&
                             en.final[1] == 4.0f;
-        // at the limit (two wheels, a ceiling of 13.75: 27.5) the free wheel is held and the standing one gets nothing of it
+        // at the limit (two wheels, a ceiling of 13.75 on the mean: the free one at 27.5 with the other standing) the free
+        // wheel is held and the standing one gets nothing of it; the cap's step with the spread would hand it on
         const float capPre[2] = { 0.0f, 26.0f }, capPost[2] = { 0.0f, 30.0f };
-        const CapStepOut atCap = CapStep(capPre, capPost, one, okAll, 2, DiffOpenCap(2, 13.75f), false), handed = CapStep(capPre, capPost, one, okAll, 2, DiffOpenCap(2, 13.75f), true);
-        const bool noHand = atCap.final[1] == 27.5f && atCap.final[0] == 0.0f && atCap.spread == 0.0f && atCap.clamps == 1 && handed.final[0] > 0.0f;
+        const CapStepOut atCap = DiffOpenStep(capPre, capPost, one, okAll, 2, 13.75f), handed = CapStep(capPre, capPost, one, okAll, 2, 27.5f, true);
+        const bool noHand = nearly(atCap.final[1], 27.5f, 1e-4f) && atCap.final[0] == 0.0f && atCap.spread == 0.0f && atCap.clamps == 1 && handed.final[0] > 0.0f;
         // F1: a gear's top of 10 and a cap of 15; in Open one wheel of four runs free at 4 x the top, the drive's kick 150 on
-        // it and 3 on each of the others. The step before: evened, the limit 4 x 15. Then the lock byte is set with
-        // DiffLockBite at 0: the cap's step with the ceiling 15 and the spread. The free wheel keeps its 40, no wheel gains
-        // more than in the step before, and all four gain no more than the drive gave
+        // it and 3 on each of the others. The step before: evened (39.75 each), the mean from 10 to the ceiling of 15, so 5
+        // each. Then the lock byte is set with DiffLockBite at 0: the cap's step with the ceiling 15 and the spread. The free
+        // wheel keeps its 40, no wheel gains more than the ceiling, and all four gain no more than the drive gave. (With
+        // the mean's limit a standing wheel gains more under the lock than in the Open step before, up to the ceiling:
+        // that is the lock's push on the wheels that grip.)
         const float fPre[4] = { 0.0f, 0.0f, 0.0f, 40.0f }, fPost[4] = { 3.0f, 3.0f, 3.0f, 190.0f };
         const DiffEvenOut fEven = DiffEvenStep(fPre, fPost, one, okAll, 4);
-        const CapStepOut inOpen = CapStep(fPre, fEven.final, one, okAll, 4, DiffOpenCap(4, 15.0f), false), lockSet = CapStep(fPre, fPost, one, okAll, 4, 15.0f, true);
-        bool noLurch = lockSet.final[3] == 40.0f && inOpen.final[3] == 60.0f;
+        const CapStepOut inOpen = DiffOpenStep(fPre, fEven.final, one, okAll, 4, 15.0f), lockSet = CapStep(fPre, fPost, one, okAll, 4, 15.0f, true);
+        bool noLurch = lockSet.final[3] == 40.0f && nearly(inOpen.final[3], 45.0f, 1e-3f) && nearly(inOpen.final[0], 5.0f, 1e-3f);
         float gained = 0.0f, gainMost = 0.0f;
         for (int i = 0; i < 4; i++)
         {
-            noLurch = noLurch && lockSet.final[i] - fPre[i] <= inOpen.final[i] - fPre[i] + 1e-4f;
+            noLurch = noLurch && lockSet.final[i] >= fPre[i] && lockSet.final[i] <= fmaxf(fPre[i], 15.0f) + 1e-4f;
             gained += lockSet.final[i] - fPre[i];
             gainMost = fmaxf(gainMost, lockSet.final[i] - fPre[i]);
         }
@@ -4901,11 +4930,13 @@ int main(int argc, char **argv)
                    lockSet.final[1], lockSet.final[2], lockSet.final[3], inOpen.final[0], inOpen.final[1], inOpen.final[2], inOpen.final[3]);
         Check(evens && leaves && noHand && noLurch,
               "open differential: the drive's impulse is shared evenly over the driven wheels with the momentum kept, an even drive is not written; at the limit (the "
-              "driven wheels times the ceiling) nothing is handed to the standing wheel; the lock set over a wheel free at 4 x the top leaves that wheel its speed and "
-              "gives no wheel more than the step before did");
+              "ceiling on the driven mean) nothing is handed to the standing wheel; the lock set over a wheel free at 4 x the top leaves that wheel its speed and "
+              "takes no wheel past the ceiling");
 
         // S1 anew on the top's sim (TopRun, torque_cut_sim.h): four wheels, one free, the truck held standing, 20 s. In L-
-        // (a cap of 1.5) and in a numbered gear (no cap), Open and not
+        // (a cap of 1.5) and in a numbered gear (no cap), Open and not. In L- the free wheel runs to 4 x the cap with the
+        // mean at the cap, and the three that stand still pull, though less than with the cap's hand-on (not Open): the
+        // mean's limit scales their share too. In a numbered gear nothing limits and Open pulls more
         TopSetup u = {};
         u.slot.vehicle = 1, u.slot.mode = kCutMap, u.slot.share = 1.0f, u.slot.pedal = 1.0f;
         u.wheels = 4, u.freeWheels = 1, u.kick = 500.0f, u.mdav = 0.01f, u.inertia = 10.0f, u.flat = -1.0f, u.holdV = 0.0f, u.grip = 1000.0f;
@@ -4922,16 +4953,91 @@ int main(int argc, char **argv)
         const TopResult lowOpen = run(lowTop, 1.5f, true), lowNot = run(lowTop, 1.5f, false), highOpen = run(highTop, 0.0f, true), highNot = run(highTop, 0.0f, false);
         static char line[1400];
         snprintf(line, sizeof line,
-                 "open differential on the top's sim: one free wheel of four, the truck held standing, 20 s; in L- the free wheel runs to %.2f of the top (4 x the cap) and %.2f "
+                 "open differential on the top's sim: one free wheel of four, the truck held standing, 20 s; in L- the free wheel runs to %.2f of the top (4 x the cap, the mean at the cap) and %.2f "
                  "not Open, the driven mean %.2f to %.2f and %.2f to %.2f, the three's pull %.1f and %.1f; in a numbered gear the free wheel to %.2f and %.2f, the mean %.2f "
                  "to %.2f and %.2f to %.2f, the pull %.1f and %.1f; no wheel lowered (%d %d)",
                  lowOpen.freeMost / lowTop, lowNot.freeMost / lowTop, lowOpen.preMin / lowTop, lowOpen.preMax / lowTop, lowNot.preMin / lowTop, lowNot.preMax / lowTop, lowOpen.pull,
                  lowNot.pull, highOpen.freeMost / highTop, highNot.freeMost / highTop, highOpen.preMin / highTop, highOpen.preMax / highTop, highNot.preMin / highTop,
                  highNot.preMax / highTop, highOpen.pull, highNot.pull, lowOpen.lowered, highOpen.lowered);
         printf("     %s\n", line);
-        Check(lowOpen.freeMost <= 4.0f * 1.5f * lowTop + 1e-3f && lowOpen.freeMost > 1.5f * lowTop && lowNot.freeMost <= 1.5f * lowTop + 1e-3f && lowOpen.pull > lowNot.pull && lowOpen.preMax <= 1.5f * lowTop + 1e-3f && highOpen.preMax < 1.3f * highTop &&
+        Check(lowOpen.freeMost <= 4.0f * 1.5f * lowTop + 1e-3f && lowOpen.freeMost > 0.95f * 4.0f * 1.5f * lowTop && lowNot.freeMost <= 1.5f * lowTop + 1e-3f && lowOpen.pull > 0.0f &&
+                  lowOpen.preMax <= 1.5f * lowTop + 1e-3f && lowOpen.preMax > 0.95f * 1.5f * lowTop && highOpen.preMax < 1.3f * highTop &&
                   highOpen.pull > highNot.pull && lowOpen.lowered == 0 && highOpen.lowered == 0,
               line);
+    }
+
+    // Open with every wheel on the ground (F1 of the review of 118 on 121): the governor ceiling's floored table once more
+    // with Open in force, two and four driven wheels. The same bounds: after 3 s the needle within 150 rpm and the truck
+    // within 2 percent of the top around its middle, and the truck never past the governor's end by more than 2 percent
+    // of the top. With a limit of n times the ceiling on each wheel nothing ended the pull before F's switch
+    {
+        TopSetup u = {};
+        u.slot.vehicle = 1, u.slot.mode = kCutMap, u.slot.share = 1.0f, u.slot.pedal = 1.0f;
+        u.cap = 1.5f, u.kick = 500.0f, u.mdav = 0.01f, u.inertia = 10.0f, u.flat = -1.0f, u.holdV = -1.0f;
+        u.seconds = 20.0f, u.rise = 0.008f, u.seed = 7, u.gripNoise = 0.3f, u.dragNoise = 0.3f, u.couple = 1.0f / 60.0f;
+        u.open = true;
+        static char line[9000];
+        const float tops[3] = { 2.4f, 3.4f, 4.5f }, grips[6] = { 0.5f, 1.0f, 2.0f, 2.5f, 5.0f, 10.0f };
+        int len = snprintf(line, sizeof line, "open differential, floored at the top of a low gear for 20 s with every wheel on the ground (wheels, top, grip: truck band, needle band rpm, the truck's most):");
+        bool calm = true;
+        float needleMost = 0.0f, truckMost = 0.0f;
+        for (int wheels = 2; wheels <= 4; wheels += 2)
+            for (int tI = 0; tI < 3; tI++)
+                for (int g = 0; g < 6; g++)
+                {
+                    const float top = tops[tI];
+                    TopSetup c = u;
+                    const CutBand band = CutGovernBand(top, kTachOverrun);
+                    c.slot.map = TorqueCutMap{ 1.0f, 1.0f, 0.0f, 1.0f, 0.15f, top, 800.0f, 2500.0f, 1.2f, { 5, { 0.25f, 0.45f, 0.6f, 0.8f, 1.0f }, { 0.55f, 0.85f, 1.0f, 1.0f, 0.85f } }, band.from, band.to };
+                    c.wheels = wheels, c.grip = grips[g], c.s0 = c.v0 = 0.9f * top;
+                    c.drag = 0.5f * (float)wheels * c.couple * fminf(c.grip, 0.45f * top);
+                    const TopResult q = TopRun(c);
+                    const bool good = q.needleMax - q.needleMin <= 150.0f && 0.5f * (q.vMax - q.vMin) <= 0.02f * top && q.vMost <= (c.slot.map.governTo + 0.02f) * top && q.lowered == 0;
+                    calm = calm && good;
+                    needleMost = fmaxf(needleMost, q.needleMax - q.needleMin), truckMost = fmaxf(truckMost, q.vMost / top);
+                    len += snprintf(line + len, sizeof line - len, "%s %d, %.1f, %.1f: %.3f to %.3f, %.0f, %.3f%s", wheels > 2 || tI || g ? ";" : "", wheels, top, c.grip, q.vMin / top, q.vMax / top,
+                                    q.needleMax - q.needleMin, q.vMost / top, good ? "" : " <<<");
+                }
+        printf("     open, floored: the widest needle band %.0f rpm, the truck's most %.3f of the top\n", needleMost, truckMost);
+        Check(calm, line);
+    }
+
+    // C6's first step (C3 of BRIEF_governor_sway.md, F1 of the governor ceiling's review): the push the ground takes a
+    // step against the truck's speed lies on the cap's line whatever the bracket. The law before the ceiling (the cap
+    // flat at 1.5 of the top), four wheels in L-, the bracket held at 0.39 and at 0.012 (flat), the truck's speed held
+    // (holdV) at 0 to 1.25 of the top, a ground that takes all a wheel has over it. The cap's line: each wheel leaves the
+    // step at the cap and the ground takes its speed over the truck's, so the truck gains
+    // wheels x couple x (the cap - the truck's speed) a step, straight down to 0 at the cap
+    {
+        TopSetup u = {};
+        u.slot.vehicle = 1, u.slot.mode = kCutMap, u.slot.share = 1.0f, u.slot.pedal = 1.0f;
+        u.cap = 1.5f, u.wheels = 4, u.kick = 500.0f, u.mdav = 0.01f, u.inertia = 10.0f, u.grip = 1000.0f;
+        u.seconds = 10.0f, u.rise = 0.008f, u.seed = 7, u.couple = 1.0f / 60.0f, u.oldLaw = true;
+        const float top = 2.4f, speeds[6] = { 0.0f, 0.25f, 0.5f, 0.75f, 1.0f, 1.25f }, brackets[2] = { 0.39f, 0.012f };
+        const CutBand band = CutGovernBand(top, kTachOverrun);
+        u.slot.map = TorqueCutMap{ 1.0f, 1.0f, 0.0f, 1.0f, 0.15f, top, 800.0f, 2500.0f, 1.2f, { 5, { 0.25f, 0.45f, 0.6f, 0.8f, 1.0f }, { 0.55f, 0.85f, 1.0f, 1.0f, 0.85f } }, band.from, band.to };
+        static char line[1600];
+        int len = snprintf(line, sizeof line, "the cap's line (C3): the truck's gain a step from four wheels in L-, the law before the ceiling, the truck's speed held (speed over the top: the line, at a "
+                                              "bracket of 0.39 with its clamp share, at 0.012 with its clamp share):");
+        bool onLine = true;
+        float offMost = 0.0f;
+        for (int i = 0; i < 6; i++)
+        {
+            const float v = speeds[i] * top, want = 4.0f * u.couple * (1.5f * top - v);
+            float got[2], clamp[2];
+            for (int b = 0; b < 2; b++)
+            {
+                TopSetup c = u;
+                c.flat = brackets[b], c.holdV = v, c.s0 = c.v0 = v;
+                const TopResult q = TopRun(c);
+                got[b] = q.push, clamp[b] = q.clampShare;
+                offMost = fmaxf(offMost, fabsf(q.push - want) / want);
+                onLine = onLine && fabsf(q.push - want) <= 0.005f * want && q.clampShare > 0.99f && q.pushJump <= 0.005f * want;
+            }
+            len += snprintf(line + len, sizeof line - len, "%s %.2f: %.4f, %.4f (%.2f), %.4f (%.2f)", i ? ";" : "", speeds[i], want, got[0], clamp[0], got[1], clamp[1]);
+        }
+        printf("     the cap's line: the push is off the line by %.2f percent at most\n", 100.0f * offMost);
+        Check(onLine, line);
     }
 
     // Locked (M3, S2): the lock's step with the ground behind the wheels
