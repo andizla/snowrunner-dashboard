@@ -249,10 +249,28 @@ inline void RateHalveAfter(void *action, const RateHalved &h)
 }
 
 // ---- the proof a world (the Reviewer's M3) ----
-// What a world's first step showed against what was asked: the step's seconds 1/120 to the bit and the iterations the
-// ones in force.
+// What a world's first step showed against what was asked: the step's seconds within kRateStepNear of 1/120 and the
+// iterations the ones in force, exactly. The step is not held to the bit: the world's own figure is a difference of two
+// of the game's times and comes out a little off 1/120 (a first step was seen at 3c089000 against 3c088889, 0.02
+// percent over), while a world still at 60 is 100 percent over. No number is no step.
+static const float kRateStepNear = 0.2f;
+inline uint32_t RateBits(float f)
+{
+    uint32_t bits;
+    memcpy(&bits, &f, 4);
+    return bits;
+}
 enum { kRateWorldGood = 0, kRateBadIter = 1, kRateBadStep = 2 }; // bits
+inline bool RateStepGood(uint32_t dtBits)
+{
+    float dt;
+    memcpy(&dt, &dtBits, 4);
+    float want;
+    const uint32_t wantBits = kRateDtBits;
+    memcpy(&want, &wantBits, 4);
+    return isfinite(dt) && fabsf(dt - want) <= kRateStepNear * want;
+}
 inline int RateWorldJudge(uint32_t dtBits, int iterations, int asked)
 {
-    return (dtBits != kRateDtBits ? kRateBadStep : 0) | (iterations != asked ? kRateBadIter : 0);
+    return (RateStepGood(dtBits) ? 0 : kRateBadStep) | (iterations != asked ? kRateBadIter : 0);
 }

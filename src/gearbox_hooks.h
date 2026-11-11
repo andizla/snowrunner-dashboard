@@ -249,7 +249,17 @@ struct DiffCounts
     int wheels;
     float j;
     int force;
+    // Open by axle: the truck the axles were made for, a count that goes up when they are made anew, the axles found, the
+    // wheels alone and the wheels of the truck; the reads that faulted; and of the last Open step the first kDiffAxleSay
+    // axles: the mean of each after the step, its factor and its wheels (a bit each by the place in the truck's list)
+    uint64_t axleVehicle;
+    long axleGen, axleFaults;
+    int axles, alone, axleWheels;
+    int sayN;
+    float sayMean[8], sayK[8];
+    unsigned sayWheels[8];
 };
+enum { kDiffAxleSay = 8 };
 void DiffCountsGet(DiffCounts &out);
 // The hook's calls so far: for the action given (hits) and all of them.
 void CreepCounts(long &hits, long &calls);

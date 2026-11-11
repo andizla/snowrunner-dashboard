@@ -262,7 +262,7 @@ inline int DiffForceOf(int type, bool lockByte, bool handbrake)
 {
     return DiffLockInForce(type, lockByte, handbrake) ? kDiffForceLock : type == kDiffOpen ? kDiffForceOpen : kDiffForceLimited;
 }
-// Open's limit is on the driven wheels' mean (DiffOpenStep, below DiffEvenStep), not on each wheel.
+// Open's limit is on the mean of each axle's wheels (DiffOpenAxles, below DiffEvenStep), not on each wheel.
 // Locked on a truck whose lock is not always on (S4): the mod holds the lock byte while the type acts. One pass of the
 // mod's thread: want (the type Locked acts on this action), the byte as read. Returns the byte to write, -1 for none. A
 // byte the player set first is not the mod's and is never cleared; one the mod set is cleared once the type no longer
@@ -443,7 +443,7 @@ struct TorqueCutAnswer
 // The governor's fade goes by the truck's own speed where it was read (M5), else by the wheels' mean; the curve held to
 // the redline and no fade in F only where the guard acts (slot.cap above 0): the ceiling holds the top there, and F's
 // drive is 0 from the governor's end. The same in every type of differential: Open has no governor of its own (C5 of
-// BRIEF_governor_sway.md voids the one by the wheels' mean), its limit is the ceiling on the driven wheels' mean (DiffOpenStep).
+// BRIEF_governor_sway.md voids the one by the wheels' mean), its limit is the ceiling on each axle's mean (DiffOpenAxles).
 inline TorqueCutAnswer TorqueCutAnswerOf(const TorqueCutSlot &slot, float stock, float start, float a, float top, float pf, float d4, CutSpeeds sp)
 {
     TorqueCutAnswer r = {};
@@ -921,6 +921,161 @@ inline CapStepOut DiffOpenStep(const float *pre, const float *even, const float 
     }
     o.kept = k;
     return o;
+}
+// ---- Open by axle (BRIEF_open_by_axle.md with the Reviewer's addendum) ----
+// Open is an open differential in each axle. The evening and the limit above run over the two wheels of one axle, and
+// nothing passes between axles: the game's own shares between them stay. So a free wheel takes the pull of its own axle
+// and the other axles pull on.
+// The grouping (M1). Two wheels are one axle where they hang on the same parent body (wheel + 0x10), stand on other sides
+// of it, and are each the other's nearest along that body's forward, no further apart than kAxleAlong. The place is the
+// wheel's centre in its parent body's own frame (AxlePlace), so a frame that bends, a steered wheel and a spring's
+// travel change nothing: the first two do not move the centre along the body by more than a few centimetres, the
+// third moves it along the body's up, which is not looked at.
+// kAxleAlong 0.5 m: the axles of a tandem stand over 1 m apart, so half of that can not reach the next axle, and it is
+// wide enough for an axle whose two wheels are not quite opposite. The mutual nearest keeps a wheel from taking a
+// partner that has a nearer one.
+// A wheel with no such partner, or one not read, is an axle of its own (M2): axle[i] is i. A pair has the lower index.
+static const float kAxleAlong = 0.5f;
+inline bool AxlePlace(const float *centre, const float *bodyAt, const float *forward, const float *left, float &along, float &side)
+{
+    const float d[3] = { centre[0] - bodyAt[0], centre[1] - bodyAt[1], centre[2] - bodyAt[2] };
+    along = d[0] * forward[0] + d[1] * forward[1] + d[2] * forward[2];
+    side = d[0] * left[0] + d[1] * left[1] + d[2] * left[2];
+    return isfinite(along) && isfinite(side);
+}
+struct AxleGroupsOut
+{
+    int axle[kCapWheels];
+    int axles; // the axles found, a wheel alone counted as one
+    int alone; // the wheels with no partner, the ones not read among them
+};
+inline AxleGroupsOut AxleGroups(const uint64_t *body, const float *along, const float *side, const bool *ok, int n)
+{
+    AxleGroupsOut o = {};
+    if (n > kCapWheels) n = kCapWheels;
+    if (n < 0) n = 0;
+    int best[kCapWheels];
+    for (int i = 0; i < n; i++)
+    {
+        best[i] = -1;
+        o.axle[i] = i;
+        if (!ok[i] || !body[i] || !isfinite(along[i]) || !isfinite(side[i])) continue;
+        float least = kAxleAlong;
+        for (int j = 0; j < n; j++)
+        {
+            if (j == i || !ok[j] || body[j] != body[i] || !(side[i] * side[j] < 0.0f)) continue;
+            const float d = fabsf(along[i] - along[j]);
+            if (!(d <= least) || (best[i] >= 0 && d == least)) continue;
+            best[i] = j, least = d;
+        }
+    }
+    for (int i = 0; i < n; i++)
+    {
+        const int j = best[i];
+        if (j >= 0 && best[j] == i) o.axle[i] = i < j ? i : j;
+        else o.alone++;
+        if (o.axle[i] == i) o.axles++;
+    }
+    return o;
+}
+// A driven wheel's axle out of the truck's table (wheels the wheel objects' pointers, axle as AxleGroups gave it): by the
+// pointer, since the hook's list holds only the driven wheels in an order of its own. A wheel not in the table gets
+// notFound, an axle of its own (M2). place: where the wheel stands in the table, -1 not in it.
+inline int AxleOfWheel(const uint64_t *wheels, const int *axle, int n, uint64_t wheel, int notFound, int *place)
+{
+    for (int s = 0; s < n; s++)
+        if (wheels[s] == wheel)
+        {
+            if (place) *place = s;
+            return axle[s];
+        }
+    if (place) *place = -1;
+    return notFound;
+}
+// The evening by axle: DiffEvenStep over the wheels with the same axle[i], each axle by itself. j is the sum of the
+// impulses of the axles evened and used their wheels. An axle with one wheel read is left as the drive left it.
+inline DiffEvenOut DiffEvenAxles(const float *pre, const float *post, const float *gain, const bool *ok, const int *axle, int n)
+{
+    DiffEvenOut o = {};
+    if (n > kCapWheels) n = kCapWheels;
+    if (n < 0) n = 0;
+    bool done[kCapWheels] = {};
+    for (int i = 0; i < n; i++) o.final[i] = post[i];
+    for (int i = 0; i < n; i++)
+    {
+        if (done[i]) continue;
+        int at[kCapWheels], m = 0;
+        float p[kCapWheels], q[kCapWheels], g[kCapWheels];
+        bool k[kCapWheels];
+        for (int j = i; j < n; j++)
+            if (!done[j] && axle[j] == axle[i]) at[m] = j, p[m] = pre[j], q[m] = post[j], g[m] = gain[j], k[m] = ok[j], done[j] = true, m++;
+        const DiffEvenOut e = DiffEvenStep(p, q, g, k, m);
+        if (e.used >= 2) o.j += e.j, o.used += e.used;
+        for (int s = 0; s < m; s++) o.final[at[s]] = e.final[s];
+        if (e.wrote) o.wrote = true;
+    }
+    return o;
+}
+// The limit by axle: DiffOpenStep over the wheels of each axle against the same ceiling, so the ceiling holds each
+// axle's mean and a wheel alone is held at the ceiling itself (M2). The truck's kept (M3) is what all axles kept of what
+// the drive added: the sum of k x added over the axles, over the sum of added; where every axle that got something has
+// the same k it is that k itself, to the bit; 1 where the drive added nothing. clamps is the sum, excess the largest.
+// For the probe: each axle's mean after the step, its factor and the wheels it holds (a bit each by the place in the list).
+struct OpenAxlesOut
+{
+    CapStepOut o;
+    int axles;
+    float mean[kCapWheels], k[kCapWheels];
+    uint32_t wheels[kCapWheels];
+};
+inline OpenAxlesOut DiffOpenAxles(const float *pre, const float *even, const float *gain, const bool *ok, const int *axle, int n, float ceiling)
+{
+    OpenAxlesOut r = {};
+    r.o.kept = 1.0f;
+    if (n > kCapWheels) n = kCapWheels;
+    if (n < 0) n = 0;
+    bool done[kCapWheels] = {};
+    for (int i = 0; i < n; i++) r.o.final[i] = even[i], r.o.keptEach[i] = 1.0f;
+    float addedAll = 0.0f, keptAll = 0.0f, kOne = 1.0f;
+    bool any = false, alike = true;
+    for (int i = 0; i < n; i++)
+    {
+        if (done[i]) continue;
+        int at[kCapWheels], m = 0;
+        float p[kCapWheels], q[kCapWheels], g[kCapWheels];
+        bool k[kCapWheels];
+        for (int j = i; j < n; j++)
+            if (!done[j] && axle[j] == axle[i]) at[m] = j, p[m] = pre[j], q[m] = even[j], g[m] = gain[j], k[m] = ok[j], done[j] = true, m++;
+        const CapStepOut a = DiffOpenStep(p, q, g, k, m, ceiling);
+        float added = 0.0f, sum = 0.0f;
+        int read = 0;
+        uint32_t mask = 0;
+        for (int s = 0; s < m; s++)
+        {
+            const int w = at[s];
+            r.o.final[w] = a.final[s];
+            r.o.keptEach[w] = a.keptEach[s];
+            r.o.clamped[w] = a.clamped[s];
+            mask |= 1u << w;
+            if (!k[s] || !isfinite(p[s]) || !isfinite(q[s])) continue;
+            if (q[s] > p[s]) added += q[s] - p[s];
+            sum += a.final[s], read++;
+        }
+        r.o.clamps += a.clamps;
+        if (a.excess > r.o.excess) r.o.excess = a.excess;
+        if (added > 0.0f && isfinite(added))
+        {
+            addedAll += added, keptAll += a.kept * added;
+            if (!any) kOne = a.kept, any = true;
+            else if (a.kept != kOne) alike = false;
+        }
+        r.mean[r.axles] = read ? sum / (float)read : 0.0f;
+        r.k[r.axles] = a.kept;
+        r.wheels[r.axles] = mask;
+        r.axles++;
+    }
+    if (any) r.o.kept = alike ? kOne : addedAll > 0.0f && isfinite(keptAll / addedAll) ? CutClamp01(keptAll / addedAll) : 1.0f;
+    return r;
 }
 // What the mod's thread publishes for the driven truck: its action and vehicle and DiffLockBite, while Powertrain is on,
 // the setting above 0 and the truck's lock kind read and known (vehicle + 0xE8), with what LockStepHeld needs.

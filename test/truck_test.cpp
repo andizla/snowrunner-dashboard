@@ -1085,8 +1085,14 @@ static void PhysicsRateTest()
     }
     // the world's first step judged
     Check(RateWorldJudge(kRateDtBits, 2, 2) == kRateWorldGood && RateWorldJudge(kRateDtBits, 4, 4) == kRateWorldGood && RateWorldJudge(kRateDtBits, 4, 2) == kRateBadIter &&
-              RateWorldJudge(0x3C888889, 2, 2) == kRateBadStep && RateWorldJudge(0x3C888889, 4, 2) == (kRateBadStep | kRateBadIter),
-          "physics rate, a world's first step: 1/120 s to the bit with the iterations asked is good; other iterations and another step are each told");
+              RateWorldJudge(0x3C888889, 2, 2) == kRateBadStep && RateWorldJudge(0x3C888889, 4, 2) == (kRateBadStep | kRateBadIter) &&
+              // within 20 percent of 1/120 (the Reviewer's S3): the step a world was seen with, 19 percent over and under; not 21 percent, nothing, a negative, no number
+              RateWorldJudge(0x3C089000, 2, 2) == kRateWorldGood && RateWorldJudge(0x3C089000, 4, 2) == kRateBadIter && RateWorldJudge(RateBits(1.19f / 120.0f), 2, 2) == kRateWorldGood &&
+              RateWorldJudge(RateBits(0.81f / 120.0f), 2, 2) == kRateWorldGood && RateWorldJudge(RateBits(1.21f / 120.0f), 2, 2) == kRateBadStep &&
+              RateWorldJudge(RateBits(0.79f / 120.0f), 2, 2) == kRateBadStep && RateWorldJudge(0, 2, 2) == kRateBadStep && RateWorldJudge(RateBits(-1.0f / 120.0f), 2, 2) == kRateBadStep &&
+              RateWorldJudge(0x7FC00000, 2, 2) == kRateBadStep && RateWorldJudge(0x7F800000, 2, 2) == kRateBadStep,
+          "physics rate, a world's first step: within 20 percent of 1/120 s (3c089000 as a world held it, 19 percent over and under) with the iterations asked is good; other "
+          "iterations are told exactly; a step of 1/60 s, 21 percent off, nothing, a negative and no number are told");
     // the kept share's old part by the step's seconds (the Reviewer's S4)
     {
         const float at60 = CapKeptOldAt(1.0f / 60.0f), at120 = CapKeptOldAt(1.0f / 120.0f);

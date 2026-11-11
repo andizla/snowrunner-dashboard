@@ -4291,6 +4291,8 @@ struct TruckWatch
     int diffKind, diffType;     // the kind (-1 not read) and the type for this truck (DiffTypeOf)
     uint64_t diffSaid;          // the vehicle its log line was for, with the type and the setting it named
     int diffSaidType, diffSaidSet;
+    uint64_t axleSaid;          // Open by axle: the vehicle the axles' line was for, and the making it named
+    long axleSaidGen;
     LockHold lockHold;          // Locked on a truck whose lock can be switched: the lock byte the mod holds (LockHoldStep)
     uint64_t lockHoldSaid;      // the vehicle the cleared byte was said for
     float diffBand[2];          // the governor's band of the last slot, rad/s
@@ -4577,6 +4579,16 @@ static void DiffPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s
     w.diffKind = w.diffKindRead ? kind : -1;
     w.diffType = DiffTypeOf(s.diffType, w.diffKindRead, kind);
     if (!driving || !w.refs.vehicle) return;
+    // Open by axle (M2): once a truck, and again when its axles are made anew, how many were found
+    DiffCounts ax = {};
+    DiffCountsGet(ax);
+    if (ax.axleGen && ax.axleVehicle == w.refs.vehicle && (w.axleSaid != w.refs.vehicle || w.axleSaidGen != ax.axleGen))
+    {
+        w.axleSaid = w.refs.vehicle, w.axleSaidGen = ax.axleGen;
+        Log(L"differential: Open by axle: %d axles over the %d wheels of this truck, %d wheels alone (each an axle of its own); two wheels are one axle on the same "
+            L"parent body (wheel + 0x10), on other sides of it and each the other's nearest along it within %.1f m; reads faulted %ld",
+            ax.axles, ax.axleWheels, ax.alone, kAxleAlong, ax.axleFaults);
+    }
     if (w.diffSaid == w.refs.vehicle && w.diffSaidType == w.diffType && w.diffSaidSet == s.diffType) return;
     w.diffSaid = w.refs.vehicle, w.diffSaidType = w.diffType, w.diffSaidSet = s.diffType;
     const wchar_t *why = s.diffType != kDiffAuto ? L"set by DiffType"
@@ -4586,7 +4598,8 @@ static void DiffPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s
                                                   : L"Auto, and the kind is not one the mod knows";
     wchar_t kindText[24] = L"not read";
     if (w.diffKindRead) swprintf_s(kindText, L"%d", kind);
-    Log(L"differential: the lock kind at vehicle + 0xE8 is %s, the type is %s (DiffType %d: %s); it acts where the torque cut acts, a gear position of the mod's gearbox",
+    Log(L"differential: the lock kind at vehicle + 0xE8 is %s, the type is %s (DiffType %d: %s); it acts where the torque cut acts, a gear position of the mod's gearbox; Open acts in each axle by itself and "
+        L"hands nothing from one axle to another",
         kindText, DiffTypeName(w.diffType), s.diffType, why);
 }
 
@@ -7122,10 +7135,28 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 w.capWas = cap;
                 DiffCounts dc = {};
                 DiffCountsGet(dc);
-                Log(L"probe: differential: the type %s, in force in the last step %s; Open's evening: J %.4f over %d wheels in its last step, %ld steps, %ld written, %ld faults "
-                    L"in a second; the wheels' mean %.2f rad/s against the governor's band %.2f to %.2f; in Open the wheel cap's ceiling and excess are the driven mean's, not each wheel's; the physics at %d steps a second",
+                Log(L"probe: differential: the type %s, in force in the last step %s; Open's evening by axle: J %.4f summed over %d wheels in its last step, %ld steps, %ld written, %ld faults "
+                    L"in a second; the wheels' mean %.2f rad/s against the governor's band %.2f to %.2f; in Open the wheel cap's ceiling is on each axle's mean, and the excess is the largest axle's; the physics at %d steps a second",
                     DiffTypeName(w.diffType), !cutActs ? L"nothing (the cut is off)" : dc.force == kDiffForceOpen ? L"Open" : dc.force == kDiffForceLock ? L"the lock" : L"Limited slip",
                     dc.j, dc.wheels, dc.steps - w.diffWas.steps, dc.writes - w.diffWas.writes, dc.faults - w.diffWas.faults, c.s, w.diffBand[0], w.diffBand[1], DriveRateOn() ? 120 : 60);
+                if (dc.force == kDiffForceOpen && cutActs && dc.axleVehicle == w.refs.vehicle)
+                {
+                    // N2: each axle of the last Open step, so a wrong pair shows
+                    wchar_t axles[640];
+                    int len = 0;
+                    axles[0] = 0;
+                    for (int a = 0; a < dc.sayN && len < 560; a++)
+                    {
+                        wchar_t wheels[100];
+                        int wl = 0;
+                        wheels[0] = 0;
+                        for (int i = 0; i < kMaxWheels && wl < 90; i++)
+                            if (dc.sayWheels[a] >> i & 1u) wl += swprintf_s(wheels + wl, 100 - wl, L"%s%d", wl ? L" " : L"", i);
+                        len += swprintf_s(axles + len, 640 - len, L"%swheels %s: mean %.2f rad/s, factor %.3f", a ? L"; " : L"", wl ? wheels : L"none known", dc.sayMean[a], dc.sayK[a]);
+                    }
+                    Log(L"probe: differential: Open by axle, the last step (the wheels by their place in the list of the truck): %s; the truck has %d axles, %d wheels alone, reads faulted %ld",
+                        len ? axles : L"no axle", dc.axles, dc.alone, dc.axleFaults);
+                }
                 w.diffWas = dc;
             }
         }
@@ -7630,12 +7661,13 @@ static void RateWorldSay()
     if (seen.worlds == said) return;
     said = seen.worlds;
     const int bad = RateWorldJudge(seen.dtBits, seen.iterations, g_rateIterAsked);
-    Log(L"physics rate: world %ld (%llx) at its first drive call: %d iterations, step %.6f s as the world holds it, %.6f s as the drive got it%s", seen.worlds,
-        (unsigned long long)seen.world, seen.iterations, RateFloat(seen.dtBits), seen.hookDt, bad ? L"" : L": as asked");
+    Log(L"physics rate: world %ld (%llx) at its first drive call: %d iterations, step %.6f s (%08x) as the world holds it, %.6f s as the drive got it%s", seen.worlds,
+        (unsigned long long)seen.world, seen.iterations, RateFloat(seen.dtBits), seen.dtBits, seen.hookDt,
+        bad ? L"" : seen.dtBits == kRateDtBits ? L": as asked" : L": as asked, the step within 20 percent of 1/120 s");
     if (bad & kRateBadStep)
     {
         g_rateNote = kRateNoteStep;
-        Log(L"PHYSICS RATE: THE STEP IS %.6f s (%08x), NOT 1/120 s (%08x), after the writes: this world does not run at 120. What this session shows is no test of the rate",
+        Log(L"PHYSICS RATE: THE STEP IS %.6f s (%08x), NOT WITHIN 20 PERCENT OF 1/120 s (%08x), after the writes: this world does not run at 120. What this session shows is no test of the rate",
             RateFloat(seen.dtBits), seen.dtBits, kRateDtBits);
     }
     else if (bad & kRateBadIter)

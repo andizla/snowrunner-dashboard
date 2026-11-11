@@ -4933,37 +4933,237 @@ int main(int argc, char **argv)
               "ceiling on the driven mean) nothing is handed to the standing wheel; the lock set over a wheel free at 4 x the top leaves that wheel its speed and "
               "takes no wheel past the ceiling");
 
-        // S1 anew on the top's sim (TopRun, torque_cut_sim.h): four wheels, one free, the truck held standing, 20 s. In L-
-        // (a cap of 1.5) and in a numbered gear (no cap), Open and not. In L- the free wheel runs to 4 x the cap with the
-        // mean at the cap, and the three that stand still pull, though less than with the cap's hand-on (not Open): the
-        // mean's limit scales their share too. In a numbered gear nothing limits and Open pulls more
+        // S1 anew on the top's sim (TopRun, torque_cut_sim.h), by axle (BRIEF_open_by_axle.md): four wheels in two
+        // axles, the truck held standing, 20 s, in L- (a cap of 1.5). One front wheel free:
+        // the free wheel's partner gets next to nothing, the free wheel stays at or under 2 x the cap and the front
+        // mean at the cap. As one axle (the law before, the open centre) the same run breaks those bounds. One wheel
+        // free on each axle: the truck barely pulls. The rear axle: the mod's step takes nothing from it, and with
+        // every wheel's share of the drive held at 1 (shareOne, not the game) it pulls as with no wheel free. With
+        // the game's own share (a wheel slower than the fastest by a whole rad/s gets next to none of the drive) the
+        // rear axle gets next to nothing by axle too, and nothing is handed to it: the run says so and its figures
+        // are printed, not held to a bound. In a numbered gear (no cap) nothing limits
         TopSetup u = {};
         u.slot.vehicle = 1, u.slot.mode = kCutMap, u.slot.share = 1.0f, u.slot.pedal = 1.0f;
         u.wheels = 4, u.freeWheels = 1, u.kick = 500.0f, u.mdav = 0.01f, u.inertia = 10.0f, u.flat = -1.0f, u.holdV = 0.0f, u.grip = 1000.0f;
         u.seconds = 20.0f, u.rise = 0.008f, u.seed = 7, u.gripNoise = 0.3f, u.dragNoise = 0.3f, u.couple = 1.0f / 60.0f;
-        auto run = [&](float top, float cap, bool open) {
+        auto run = [&](float top, float cap, bool open, uint32_t freeMask, bool oneAxle, int rate, bool shareOne = false) {
             TopSetup c = u;
+            c.shareOne = shareOne;
             const CutBand band = CutGovernBand(top, kTachOverrun);
             c.slot.map = TorqueCutMap{ 1.0f, 1.0f, 0.0f, 1.0f, 0.15f, top, 800.0f, 2500.0f, 1.2f, { 5, { 0.25f, 0.45f, 0.6f, 0.8f, 1.0f }, { 0.55f, 0.85f, 1.0f, 1.0f, 0.85f } }, band.from, band.to };
             c.cap = cap;
             c.open = open;
+            c.freeWheels = 0, c.freeMask = freeMask, c.oneAxle = oneAxle, c.rate = rate;
             return TopRun(c);
         };
-        const float lowTop = 2.4f, highTop = 12.3f;
-        const TopResult lowOpen = run(lowTop, 1.5f, true), lowNot = run(lowTop, 1.5f, false), highOpen = run(highTop, 0.0f, true), highNot = run(highTop, 0.0f, false);
-        static char line[1400];
-        snprintf(line, sizeof line,
-                 "open differential on the top's sim: one free wheel of four, the truck held standing, 20 s; in L- the free wheel runs to %.2f of the top (4 x the cap, the mean at the cap) and %.2f "
-                 "not Open, the driven mean %.2f to %.2f and %.2f to %.2f, the three's pull %.1f and %.1f; in a numbered gear the free wheel to %.2f and %.2f, the mean %.2f "
-                 "to %.2f and %.2f to %.2f, the pull %.1f and %.1f; no wheel lowered (%d %d)",
-                 lowOpen.freeMost / lowTop, lowNot.freeMost / lowTop, lowOpen.preMin / lowTop, lowOpen.preMax / lowTop, lowNot.preMin / lowTop, lowNot.preMax / lowTop, lowOpen.pull,
-                 lowNot.pull, highOpen.freeMost / highTop, highNot.freeMost / highTop, highOpen.preMin / highTop, highOpen.preMax / highTop, highNot.preMin / highTop,
-                 highNot.preMax / highTop, highOpen.pull, highNot.pull, lowOpen.lowered, highOpen.lowered);
+        const float lowTop = 2.4f, highTop = 12.3f, capAt = 1.5f * lowTop;
+        static char line[3600];
+        bool axleSim = true;
+        int len = 0;
+        for (int rate = 60; rate <= 120; rate += 60)
+        {
+            const TopResult oneFree = run(lowTop, 1.5f, true, 1u, false, rate), none = run(lowTop, 1.5f, true, 0u, false, rate), asOne = run(lowTop, 1.5f, true, 1u, true, rate);
+            const TopResult limited = run(lowTop, 1.5f, false, 1u, false, rate), both = run(lowTop, 1.5f, true, 5u, false, rate);
+            const float rearPull = oneFree.pullEach[2] + oneFree.pullEach[3], rearNone = none.pullEach[2] + none.pullEach[3], rearBefore = asOne.pullEach[2] + asOne.pullEach[3];
+            const float frontMean = 0.5f * (oneFree.wEnd[0] + oneFree.wEnd[1]), frontBefore = 0.5f * (asOne.wEnd[0] + asOne.wEnd[1]);
+            const TopResult oneS = run(lowTop, 1.5f, true, 1u, false, rate, true), noneS = run(lowTop, 1.5f, true, 0u, false, rate, true), beforeS = run(lowTop, 1.5f, true, 1u, true, rate, true);
+            const float rearS = oneS.pullEach[2] + oneS.pullEach[3], rearNoneS = noneS.pullEach[2] + noneS.pullEach[3], rearBeforeS = beforeS.pullEach[2] + beforeS.pullEach[3];
+            len += snprintf(line + len, sizeof line - len,
+                            "%sopen by axle on the top's sim at %d steps a second: four wheels, the truck held standing, 20 s in L- (the cap %.2f rad/s); one front wheel free: it ends at %.2f "
+                            "x the cap (%.2f at the most), its partner pulls %.1f (%.1f with no wheel free), the front mean ends at %.2f x the cap; the rear axle with the game's own share "
+                            "pulls %.1f (%.1f with no wheel free, %.1f as one axle): the game gives a wheel far slower than the fastest next to none of the drive and Open hands it nothing; "
+                            "with every share held at 1 (not the game) the rear axle pulls %.1f against %.1f with no wheel free, and %.1f as one axle; "
+                            "as one axle, the law before: the free wheel to %.2f x the cap, the front mean %.2f x the cap; Limited slip: the three pull %.1f; one wheel "
+                            "free on each axle: all pull %.1f against %.1f with no wheel free; no wheel lowered (%d %d %d)",
+                            len ? "; " : "", rate, capAt, oneFree.freeEnd / capAt, oneFree.freeMost / capAt, oneFree.pullEach[1], none.pullEach[1], frontMean / capAt, rearPull, rearNone, rearBefore, rearS, rearNoneS,
+                            rearBeforeS, asOne.freeMost / capAt, frontBefore / capAt, limited.pull, both.pull, none.pull, oneFree.lowered, both.lowered, oneS.lowered);
+            const bool good = oneFree.freeMost <= 2.0f * capAt + 1e-3f && nearly(rearS, rearNoneS, 0.05f * rearNoneS) && oneFree.pullEach[1] <= 0.05f * none.pullEach[1] && nearly(frontMean, capAt, 0.03f * capAt) &&
+                              both.pull <= 0.05f * none.pull && oneFree.lowered == 0 && both.lowered == 0 && oneS.lowered == 0 && oneFree.pull > 0.0f && oneS.freeMost <= 2.0f * capAt + 1e-3f;
+            // the law before must break them: the free wheel past 2 x the cap, the front mean not at the cap, and with the shares at 1 the rear axle short
+            const bool beforeBreaks = asOne.freeMost > 2.5f * capAt && !nearly(frontBefore, capAt, 0.03f * capAt) && rearBeforeS < 0.5f * rearNoneS;
+            axleSim = axleSim && good && beforeBreaks;
+            if (!(good && beforeBreaks)) printf("     open by axle at %d: the bounds %d, the law before breaks them %d\n", rate, good, beforeBreaks);
+        }
         printf("     %s\n", line);
-        Check(lowOpen.freeMost <= 4.0f * 1.5f * lowTop + 1e-3f && lowOpen.freeMost > 0.95f * 4.0f * 1.5f * lowTop && lowNot.freeMost <= 1.5f * lowTop + 1e-3f && lowOpen.pull > 0.0f &&
-                  lowOpen.preMax <= 1.5f * lowTop + 1e-3f && lowOpen.preMax > 0.95f * 1.5f * lowTop && highOpen.preMax < 1.3f * highTop &&
-                  highOpen.pull > highNot.pull && lowOpen.lowered == 0 && highOpen.lowered == 0,
-              line);
+        Check(axleSim, line);
+        const TopResult highOpen = run(highTop, 0.0f, true, 1u, false, 60), highNot = run(highTop, 0.0f, false, 1u, false, 60);
+        static char high[600];
+        snprintf(high, sizeof high,
+                 "open by axle in a numbered gear (no cap), one front wheel of four free, the truck held standing: the free wheel to %.2f of the top and %.2f not Open, the pull %.1f and "
+                 "%.1f, the rear axle %.1f and %.1f; no wheel lowered (%d)",
+                 highOpen.freeMost / highTop, highNot.freeMost / highTop, highOpen.pull, highNot.pull, highOpen.pullEach[2] + highOpen.pullEach[3], highNot.pullEach[2] + highNot.pullEach[3],
+                 highOpen.lowered);
+        printf("     %s\n", high);
+        Check(highOpen.pull > 0.0f && highOpen.lowered == 0 && isfinite(highOpen.freeMost), high);
+    }
+
+    // Open by axle, pure (BRIEF_open_by_axle.md with the Reviewer's addendum): the grouping (M1), a wheel alone (M2), the
+    // truck's kept (M3), the release from the lock (S2), and the step that must fail under the law before
+    {
+        auto nearly = [](float a, float b, float tol) { return fabsf(a - b) <= tol; };
+        struct Frame
+        {
+            float at[3], f[3], l[3];
+        };
+        auto frame = [](float x, float z, float yawDeg) {
+            const float y = yawDeg * 3.14159265f / 180.0f;
+            Frame b = { { x, 0.0f, z }, { cosf(y), 0.0f, sinf(y) }, { -sinf(y), 0.0f, cosf(y) } };
+            return b;
+        };
+        struct Wheels
+        {
+            uint64_t body[kCapWheels];
+            float along[kCapWheels], side[kCapWheels], c[kCapWheels][3];
+            bool ok[kCapWheels];
+            int n;
+        };
+        // a wheel at along, side and up of its body, placed in the world and read back in that body's frame
+        auto add = [](Wheels &w, uint64_t id, const Frame &b, float along, float side, float up) {
+            float *c = w.c[w.n];
+            for (int k = 0; k < 3; k++) c[k] = b.at[k] + along * b.f[k] + side * b.l[k];
+            c[1] += up;
+            w.body[w.n] = id;
+            w.ok[w.n] = AxlePlace(c, b.at, b.f, b.l, w.along[w.n], w.side[w.n]);
+            w.n++;
+        };
+        auto groups = [](const Wheels &w) { return AxleGroups(w.body, w.along, w.side, w.ok, w.n); };
+        const Frame straight = frame(3.0f, -7.0f, 25.0f);
+        // 4, 6 and 8 wheels on one body, a tandem 1.3 m apart
+        Wheels w4 = {}, w6 = {}, w8 = {};
+        const float at8[4] = { 2.6f, 1.2f, -1.6f, -2.9f };
+        for (int at = 0; at < 4; at++)
+        {
+            if (at == 0 || at == 3) add(w4, 1, straight, at8[at], 1.0f, 0.0f), add(w4, 1, straight, at8[at], -1.0f, 0.0f);
+            if (at != 1) add(w6, 1, straight, at8[at], 1.0f, 0.0f), add(w6, 1, straight, at8[at], -1.0f, 0.0f);
+            add(w8, 1, straight, at8[at], 1.0f, 0.0f), add(w8, 1, straight, at8[at], -1.0f, 0.0f);
+        }
+        const AxleGroupsOut g4 = groups(w4), g6 = groups(w6), g8 = groups(w8);
+        bool counts = g4.axles == 2 && g4.alone == 0 && g6.axles == 3 && g6.alone == 0 && g8.axles == 4 && g8.alone == 0;
+        for (int i = 0; i < 8; i++) counts = counts && g8.axle[i] == (i & ~1) && (i >= 6 || g6.axle[i] == (i & ~1)) && (i >= 4 || g4.axle[i] == (i & ~1));
+        // a bent frame: the front axle on one body, a tandem on another turned 40 degrees. In its own body's frame each
+        // pair is found. In the front body's frame (the old pairing) the rear wheels are over 1 m apart along and none pairs
+        const Frame front = frame(0.0f, 0.0f, 0.0f), rearB = frame(-1.5f, 0.0f, 40.0f);
+        Wheels bent = {}, oneFrame = {};
+        add(bent, 1, front, 1.5f, 1.0f, 0.0f), add(bent, 1, front, 1.5f, -1.0f, 0.0f);
+        for (int at = 0; at < 2; at++) add(bent, 2, rearB, -1.5f - 1.3f * (float)at, 1.0f, 0.0f), add(bent, 2, rearB, -1.5f - 1.3f * (float)at, -1.0f, 0.0f);
+        const AxleGroupsOut gBent = groups(bent);
+        oneFrame = bent;
+        for (int i = 0; i < oneFrame.n; i++) oneFrame.body[i] = 1, AxlePlace(bent.c[i], front.at, front.f, front.l, oneFrame.along[i], oneFrame.side[i]);
+        const AxleGroupsOut gOne = groups(oneFrame);
+        const bool bends = gBent.axles == 3 && gBent.alone == 0 && gBent.axle[2] == 2 && gBent.axle[3] == 2 && gBent.axle[4] == 4 && gBent.axle[5] == 4 &&
+                           fabsf(oneFrame.along[2] - oneFrame.along[3]) > 1.0f && gOne.alone >= 2;
+        // two wheels opposite on two bodies are no axle
+        Wheels two = {};
+        add(two, 1, front, 0.0f, 1.0f, 0.0f), add(two, 2, front, 0.0f, -1.0f, 0.0f);
+        const AxleGroupsOut gTwo = groups(two);
+        // the front wheels at full steer (45 degrees about a pin 0.1 m inboard: 0.07 m along, one forward and one back),
+        // and one rear wheel 0.3 m up on its spring
+        Wheels pose = {};
+        add(pose, 1, straight, 2.6f + 0.07f, 0.97f, 0.0f), add(pose, 1, straight, 2.6f - 0.07f, -0.97f, 0.0f);
+        add(pose, 1, straight, -1.6f, 1.0f, 0.3f), add(pose, 1, straight, -1.6f, -1.0f, 0.0f);
+        const AxleGroupsOut gPose = groups(pose);
+        const bool poses = gPose.axles == 2 && gPose.alone == 0 && gPose.axle[1] == 0 && gPose.axle[3] == 2 && gTwo.axles == 2 && gTwo.alone == 2;
+        // a wheel with no partner (the last of the 6 gone), a wheel in the middle (side 0), and a wheel not read: it and
+        // its partner are each alone
+        Wheels five = w6, mid = w4, unread = w6;
+        five.n = 5;
+        add(mid, 1, straight, 0.0f, 0.0f, 0.0f);
+        unread.ok[2] = false;
+        const AxleGroupsOut gFive = groups(five), gMid = groups(mid), gUnread = groups(unread);
+        // the mutual nearest: a left at 0, a right at 0.3 and a left at 0.4: the right one and the second left are the
+        // pair (0.1 m), the first left is alone though it has a wheel within the bound; and a pair 0.6 m apart is none
+        Wheels near3 = {}, wide = {};
+        add(near3, 1, straight, 0.0f, 1.0f, 0.0f), add(near3, 1, straight, 0.3f, -1.0f, 0.0f), add(near3, 1, straight, 0.4f, 1.0f, 0.0f);
+        add(wide, 1, straight, 0.0f, 1.0f, 0.0f), add(wide, 1, straight, 0.6f, -1.0f, 0.0f);
+        const AxleGroupsOut gNear = groups(near3), gWide = groups(wide);
+        const bool lone = gFive.axles == 3 && gFive.alone == 1 && gFive.axle[4] == 4 && gMid.axles == 3 && gMid.alone == 1 && gMid.axle[4] == 4 && gUnread.axles == 4 && gUnread.alone == 2 &&
+                          gUnread.axle[2] == 2 && gUnread.axle[3] == 3 && gNear.axle[0] == 0 && gNear.axle[1] == 1 && gNear.axle[2] == 1 && gNear.alone == 1 && gWide.alone == 2;
+        // all wheel drive off on the 6 wheel truck: the hook's list holds the four rear wheels in an order of its own, and
+        // a wheel the table does not hold; by the pointer each finds its axle, the stranger is its own
+        uint64_t ptr[6];
+        for (int i = 0; i < 6; i++) ptr[i] = 0x1000 + 0x100 * (uint64_t)i;
+        const uint64_t driven[5] = { ptr[5], ptr[2], ptr[4], ptr[3], 0x9999 };
+        int ax[5], place[5];
+        for (int i = 0; i < 5; i++) ax[i] = AxleOfWheel(ptr, g6.axle, 6, driven[i], kCapWheels + i, &place[i]);
+        const bool byPointer = ax[0] == 4 && ax[2] == 4 && ax[1] == 2 && ax[3] == 2 && ax[4] == kCapWheels + 4 && place[0] == 5 && place[1] == 2 && place[4] == -1;
+
+        // the steps. One front wheel of four free, the others standing on ground that takes all they get each step; a
+        // ceiling of 15; the drive's kick 150 on the free wheel and 3 on each other. By axle: the free wheel ends at 2 x
+        // the ceiling, the front mean at the ceiling, its partner gets nothing in the end, each rear wheel gets its 3
+        // each step as with no wheel free. As one axle (the law before) the free wheel ends at 4 x the ceiling and the
+        // rear wheels get nothing in the end
+        const bool okAll[kCapWheels] = { true, true, true, true };
+        const float one[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+        const int pairs[4] = { 0, 0, 2, 2 }, single[4] = { 0, 0, 0, 0 };
+        float end[2][4] = {}, got[2][4] = {};
+        int lowered = 0;
+        for (int law = 0; law < 2; law++)
+        {
+            const int *axle = law ? single : pairs;
+            float freeW = 0.0f;
+            for (int step = 0; step < 400; step++)
+            {
+                const float pre[4] = { freeW, 0.0f, 0.0f, 0.0f }, post[4] = { freeW + 150.0f, 3.0f, 3.0f, 3.0f };
+                const DiffEvenOut e = DiffEvenAxles(pre, post, one, okAll, axle, 4);
+                const OpenAxlesOut o = DiffOpenAxles(pre, e.final, one, okAll, axle, 4, 15.0f);
+                for (int i = 0; i < 4; i++)
+                {
+                    end[law][i] = o.o.final[i], got[law][i] = o.o.final[i] - pre[i];
+                    if (o.o.final[i] < pre[i]) lowered++;
+                }
+                freeW = o.o.final[0];
+            }
+        }
+        const bool byAxle = nearly(end[0][0], 30.0f, 0.01f) && nearly(got[0][1], 0.0f, 0.01f) && nearly(0.5f * (end[0][0] + end[0][1]), 15.0f, 0.01f) && got[0][2] == 3.0f && got[0][3] == 3.0f &&
+                            lowered == 0;
+        const bool beforeFails = nearly(end[1][0], 60.0f, 0.01f) && nearly(got[1][2], 0.0f, 0.01f) && !nearly(0.5f * (end[1][0] + end[1][1]), 15.0f, 1.0f);
+        // M2: a wheel alone is held at the ceiling itself; a wheel whose partner is not read this step the same, and
+        // the one not read is not touched
+        const int own[2] = { kCapWheels, kCapWheels + 1 }, pair2[2] = { 0, 0 };
+        const float aPre[2] = { 10.0f, 10.0f }, aPost[2] = { 20.0f, 12.0f };
+        const bool half[2] = { true, false };
+        const DiffEvenOut aEven = DiffEvenAxles(aPre, aPost, one, okAll, own, 2), hEven = DiffEvenAxles(aPre, aPost, one, half, pair2, 2);
+        const OpenAxlesOut aOut = DiffOpenAxles(aPre, aEven.final, one, okAll, own, 2, 15.0f), hOut = DiffOpenAxles(aPre, hEven.final, one, half, pair2, 2, 15.0f);
+        const bool aloneHeld = !aEven.wrote && aEven.used == 0 && aOut.o.final[0] == 15.0f && aOut.o.final[1] == 12.0f && aOut.axles == 2 && aOut.o.clamps == 1 && !hEven.wrote &&
+                               hOut.o.final[0] == 15.0f && hOut.o.final[1] == 12.0f && hOut.axles == 1;
+        // M3: two axles the drive added 2 to each, one kept whole and one at 0.1: the truck's kept is 0.55, the clamps the
+        // sum and the excess the largest; with all axles alike the figures are the one step's over all four, to the bit
+        const float mPre[4] = { 0.0f, 0.0f, 14.9f, 14.9f }, mEven[4] = { 1.0f, 1.0f, 15.9f, 15.9f };
+        const OpenAxlesOut mOut = DiffOpenAxles(mPre, mEven, one, okAll, pairs, 4, 15.0f);
+        const float sPre[4] = { 8.0f, 8.0f, 8.0f, 8.0f }, sEven[4] = { 9.0f, 9.0f, 9.0f, 9.0f };
+        const OpenAxlesOut sOut = DiffOpenAxles(sPre, sEven, one, okAll, pairs, 4, 8.3f);
+        const CapStepOut sOne = DiffOpenStep(sPre, sEven, one, okAll, 4, 8.3f);
+        const float xPre[4] = { 0.0f, 0.0f, 0.0f, 0.0f }, xEven[4] = { 20.0f, 20.0f, 16.0f, 16.0f };
+        const OpenAxlesOut xOut = DiffOpenAxles(xPre, xEven, one, okAll, pairs, 4, 15.0f);
+        bool kept = nearly(mOut.o.kept, 0.55f, 1e-3f) && mOut.o.clamps == 2 && mOut.axles == 2 && nearly(mOut.k[0], 1.0f, 0.0f) && nearly(mOut.k[1], 0.1f, 1e-3f) && mOut.wheels[0] == 3u &&
+                    mOut.wheels[1] == 12u && nearly(mOut.mean[1], 15.0f, 1e-4f) && sOut.o.kept == sOne.kept && sOut.o.clamps == sOne.clamps && sOut.o.excess == sOne.excess &&
+                    xOut.o.clamps == 4 && nearly(xOut.o.excess, 5.0f, 1e-4f) && nearly(xOut.o.kept, (0.75f * 40.0f + 0.9375f * 32.0f) / 72.0f, 1e-4f);
+        for (int i = 0; i < 4; i++) kept = kept && sOut.o.final[i] == sOne.final[i] && sOut.o.keptEach[i] == sOne.keptEach[i];
+        // S2, the release: the step after the lock, Open by axle with the free wheel at 40 against a ceiling of 15. No
+        // wheel is lowered, the free wheel keeps its 40, its partner gets nothing of the kick and the rear axle its own
+        const float rPre[4] = { 40.0f, 0.0f, 0.0f, 0.0f }, rPost[4] = { 190.0f, 3.0f, 3.0f, 3.0f };
+        const DiffEvenOut rEven = DiffEvenAxles(rPre, rPost, one, okAll, pairs, 4);
+        const OpenAxlesOut rOut = DiffOpenAxles(rPre, rEven.final, one, okAll, pairs, 4, 15.0f);
+        const bool release = rOut.o.final[0] == 40.0f && rOut.o.final[1] == 0.0f && rOut.o.final[2] == 3.0f && rOut.o.final[3] == 3.0f && nearly(rEven.final[1], 76.5f, 1e-3f);
+        // one wheel free on each axle, both at 2 x the ceiling: the standing wheels get nothing
+        const float bPre[4] = { 30.0f, 0.0f, 30.0f, 0.0f }, bPost[4] = { 180.0f, 3.0f, 180.0f, 3.0f };
+        const DiffEvenOut bEven = DiffEvenAxles(bPre, bPost, one, okAll, pairs, 4);
+        const OpenAxlesOut bOut = DiffOpenAxles(bPre, bEven.final, one, okAll, pairs, 4, 15.0f);
+        const bool bothFree = bOut.o.final[1] == 0.0f && bOut.o.final[3] == 0.0f && bOut.o.final[0] == 30.0f && bOut.o.kept == 0.0f;
+        if (!(counts && bends && poses && lone && byPointer && byAxle && beforeFails && aloneHeld && kept && release && bothFree))
+            printf("     open by axle: counts %d, bends %d, poses %d, lone %d, by pointer %d, by axle %d (%.3f %.3f %.3f %.3f), the law before fails %d (%.3f, %.3f), alone held %d, kept %d "
+                   "(%.4f, %.4f), release %d, both free %d\n",
+                   counts, bends, poses, lone, byPointer, byAxle, end[0][0], end[0][1], got[0][2], got[0][3], beforeFails, end[1][0], got[1][2], aloneHeld, kept, mOut.o.kept, xOut.o.kept, release,
+                   bothFree);
+        Check(counts && bends && poses && lone && byPointer,
+              "open by axle, the grouping: two wheels are one axle on the same parent body, on other sides and each the other's nearest along it within 0.5 m; 4, 6 and 8 wheels give "
+              "2, 3 and 4 axles; a frame bent by 40 degrees, full steer and a wheel 0.3 m up change nothing; a wheel with no partner, one in the middle and one not read are alone; "
+              "the driven wheels find their axle by the pointer with all wheel drive off");
+        Check(byAxle && beforeFails && aloneHeld && kept && release && bothFree,
+              "open by axle, the steps: one front wheel of four free ends at 2 x the ceiling with the front mean at the ceiling, and the rear wheels get what the drive gives them (as "
+              "one axle, the law before, it ends at 4 x and they get nothing); a wheel alone is held at the ceiling; the truck's kept is the axles' weighted by what each added, "
+              "0.55 for 1 and 0.1, and one step's figure to the bit where all are alike; from the lock to Open over a free wheel no wheel is lowered; one free wheel on each axle "
+              "leaves the standing ones nothing");
     }
 
     // Open with every wheel on the ground (F1 of the review of 118 on 121): the governor ceiling's floored table once more

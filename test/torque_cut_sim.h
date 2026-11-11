@@ -320,6 +320,9 @@ struct TopSetup
     uint32_t seed;
     bool open;            // Open in force: the drive's impulse evened (DiffEvenStep), the ceiling on the driven mean (DiffOpenStep), nothing handed on
     int rate;             // 120: stepped 120 times a second with stage 1's corrections; anything else 60
+    bool oneAxle;         // Open as before BRIEF_open_by_axle.md: all driven wheels one axle (the open centre). Else wheels 0 and 1 are an axle, 2 and 3 the next
+    uint32_t freeMask;    // not 0: the free wheels a bit each, in place of the first freeWheels
+    bool shareOne;        // not the game: every wheel's share of the drive held at 1, to tell what the game's own share does from what the mod's step does
 };
 struct TopResult
 {
@@ -336,6 +339,9 @@ struct TopResult
     float wMax;                 // the fastest gripping wheel handed to the ground, after 3 s
     int lowered;                // wheel steps where the cap's step left a wheel under min(pre, post)
     float pull;                 // what the gripping wheels gave up to the ground, summed over the run, rad/s
+    float pullEach[8];          // the same for each wheel
+    float freeEnd;              // the fastest free wheel after the last step's cap
+    float wEnd[8];              // each wheel after the last step's cap
 };
 
 inline TopResult TopRun(const TopSetup &u)
@@ -359,6 +365,9 @@ inline TopResult TopRun(const TopSetup &u)
     const float hz = (float)hzI, part = 60.0f / hz; // a step's part of one at 60
     const float mdav = u.mdav * part, rise = u.rise * part;
     const int steps = (int)(u.seconds * hz);
+    bool isFree[8];
+    int axle[8];
+    for (int i = 0; i < 8; i++) isFree[i] = u.freeMask ? (u.freeMask >> i & 1u) != 0 : i < u.freeWheels, axle[i] = u.oneAxle ? 0 : i / 2;
     for (int k = 0; k < steps; k++)
     {
         const bool late = k >= 3 * hzI;
@@ -392,7 +401,7 @@ inline TopResult TopRun(const TopSetup &u)
             const float traction = CutClamp01(0.5f - 2.0f * d118[i] / mdav);
             const float clamp = CutClamp01(traction + 1.0f - CutClamp01((fabsf(w[i]) - 1.0f) * 0.5f));
             const float target = CutClamp01(1.0f - (float)(hi - wi[i]) / fminf(fmaxf(meanInt / 4.0f, 0.1f), 2.0f));
-            share[i] = 0.8f * share[i] + 0.2f * target;
+            share[i] = u.shareOne ? 1.0f : 0.8f * share[i] + 0.2f * target;
             pre[i] = w[i];
             gain[i] = 1.0f;
             float brake = 0.0f;
@@ -411,13 +420,13 @@ inline TopResult TopRun(const TopSetup &u)
         for (int i = 0; i < n; i++) left[i] = post[i];
         if (u.open)
         {
-            const DiffEvenOut e = DiffEvenStep(pre, post, gain, ok, n);
+            const DiffEvenOut e = DiffEvenAxles(pre, post, gain, ok, axle, n);
             for (int i = 0; i < n; i++) left[i] = e.final[i];
         }
         if (capV > 0.0f && (armed || !u.oldLaw))
         {
             const float ceiling = u.oldLaw ? capV : CapCeiling(capV, top, slot.map.governTo, v);
-            const CapStepOut o = u.open ? DiffOpenStep(pre, left, gain, ok, n, ceiling) : CapStep(pre, left, gain, ok, n, ceiling, true);
+            const CapStepOut o = u.open ? DiffOpenAxles(pre, left, gain, ok, axle, n, ceiling).o : CapStep(pre, left, gain, ok, n, ceiling, true);
             for (int i = 0; i < n; i++)
             {
                 if (o.final[i] < fminf(pre[i], left[i]) - 1e-5f) r.lowered++;
@@ -428,13 +437,18 @@ inline TopResult TopRun(const TopSetup &u)
         else
             for (int i = 0; i < n; i++) w[i] = left[i];
         for (int i = 0; i < n; i++) postMean += w[i] / (float)n;
-        for (int i = 0; i < u.freeWheels && i < n; i++) r.freeMost = fmaxf(r.freeMost, w[i]);
+        r.freeEnd = 0.0f;
+        for (int i = 0; i < n; i++)
+        {
+            r.wEnd[i] = w[i];
+            if (isFree[i]) r.freeMost = fmaxf(r.freeMost, w[i]), r.freeEnd = fmaxf(r.freeEnd, w[i]);
+        }
         // the ground
         float push = 0.0f;
         for (int sub = 0; sub < 10; sub++)
             for (int i = 0; i < n; i++)
             {
-                if (i < u.freeWheels)
+                if (isFree[i])
                 {
                     w[i] -= 0.2f * w[i] / (10.0f * hz);
                     continue;
@@ -448,6 +462,7 @@ inline TopResult TopRun(const TopSetup &u)
                 if (u.holdV < 0.0f) v += u.couple * a;
                 push += u.couple * a;
                 r.pull += a;
+                r.pullEach[i] += a;
             }
         slow += (1.0f - expf(-1.0f / hz)) * ((SimRand(seed) * 2.0f - 1.0f) * 1.732f - slow);
         if (u.holdV < 0.0f)
@@ -468,7 +483,8 @@ inline TopResult TopRun(const TopSetup &u)
             r.usedMax = fmaxf(r.usedMax, used);
             const float rpm = TorqueCutRpm(u.slot.map, postMean);
             r.needleMin = fminf(r.needleMin, rpm), r.needleMax = fmaxf(r.needleMax, rpm);
-            for (int i = u.freeWheels; i < n; i++) r.wMax = fmaxf(r.wMax, w[i]);
+            for (int i = 0; i < n; i++)
+                if (!isFree[i]) r.wMax = fmaxf(r.wMax, w[i]);
             if (k > 3 * hzI) r.pushJump = fmaxf(r.pushJump, fabsf(push - lastPush));
             if (k % hzI == 0)
             {
