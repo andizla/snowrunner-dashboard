@@ -256,7 +256,7 @@ struct DiffCounts
     long axleGen, axleFaults;
     int axles, alone, axleWheels;
     int sayN;
-    float sayMean[8], sayK[8];
+    float sayMean[8], sayK[8], sayGot[8]; // sayGot: the speed handed to the axle from the others, summed over its wheels
     unsigned sayWheels[8];
 };
 enum { kDiffAxleSay = 8 };

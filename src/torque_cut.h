@@ -923,9 +923,10 @@ inline CapStepOut DiffOpenStep(const float *pre, const float *even, const float 
     return o;
 }
 // ---- Open by axle (BRIEF_open_by_axle.md with the Reviewer's addendum) ----
-// Open is an open differential in each axle. The evening and the limit above run over the two wheels of one axle, and
-// nothing passes between axles: the game's own shares between them stay. So a free wheel takes the pull of its own axle
-// and the other axles pull on.
+// Open is an open differential in each axle. The evening and the limit above run over the two wheels of one axle. What
+// an axle's limit took from the drive is handed to the other axles (DiffOpenAxles, the tied shaft between the axles): the
+// game gives a wheel far slower than the fastest next to none of the drive, so without the hand-on a free wheel would
+// take the pull of the whole truck. So a free wheel takes the pull of its own axle and the other axles pull on.
 // The grouping (M1). Two wheels are one axle where they hang on the same parent body (wheel + 0x10), stand on other sides
 // of it, and are each the other's nearest along that body's forward, no further apart than kAxleAlong. The place is the
 // wheel's centre in its parent body's own frame (AxlePlace), so a frame that bends, a steered wheel and a spring's
@@ -1020,15 +1021,24 @@ inline DiffEvenOut DiffEvenAxles(const float *pre, const float *post, const floa
 // axle's mean and a wheel alone is held at the ceiling itself (M2). The truck's kept (M3) is what all axles kept of what
 // the drive added: the sum of k x added over the axles, over the sum of added; where every axle that got something has
 // the same k it is that k itself, to the bit; 1 where the drive added nothing. clamps is the sum, excess the largest.
-// For the probe: each axle's mean after the step, its factor and the wheels it holds (a bit each by the place in the list).
+// The hand-on (handOn; F1 of the review of 122, the tied shaft between the axles), as CapStep hands on between wheels:
+// what the limit took from an axle's wheels, as an impulse (each wheel's speed taken over its gain), goes to the axles the
+// limit took nothing from and the drive did not push back, by each one's own impulse from the drive (equal where none
+// got any). Within the axle that receives, each wheel gets the same impulse through its own gain, and the axle's mean
+// stays under the same limit, max(its mean before the drive, the ceiling): what does not fit is dropped in this step and
+// kept nowhere. Nothing goes to an axle that gave, so nothing to the partner of a free wheel. Only what the drive added
+// in this step moves and no wheel is lowered. The truck's kept then counts what was handed on as kept, as CapStep's:
+// the sum of what each wheel gained over the sum of what the drive added. o.spread is the speed handed on.
+// For the probe: each axle's mean after the step, its factor, the wheels it holds (a bit each by the place in the list)
+// and the speed handed to it, summed over its wheels.
 struct OpenAxlesOut
 {
     CapStepOut o;
     int axles;
-    float mean[kCapWheels], k[kCapWheels];
+    float mean[kCapWheels], k[kCapWheels], got[kCapWheels];
     uint32_t wheels[kCapWheels];
 };
-inline OpenAxlesOut DiffOpenAxles(const float *pre, const float *even, const float *gain, const bool *ok, const int *axle, int n, float ceiling)
+inline OpenAxlesOut DiffOpenAxles(const float *pre, const float *even, const float *gain, const bool *ok, const int *axle, int n, float ceiling, bool handOn)
 {
     OpenAxlesOut r = {};
     r.o.kept = 1.0f;
@@ -1038,6 +1048,8 @@ inline OpenAxlesOut DiffOpenAxles(const float *pre, const float *even, const flo
     for (int i = 0; i < n; i++) r.o.final[i] = even[i], r.o.keptEach[i] = 1.0f;
     float addedAll = 0.0f, keptAll = 0.0f, kOne = 1.0f;
     bool any = false, alike = true;
+    float gave[kCapWheels] = {}, own[kCapWheels] = {};
+    bool taker[kCapWheels] = {};
     for (int i = 0; i < n; i++)
     {
         if (done[i]) continue;
@@ -1069,12 +1081,75 @@ inline OpenAxlesOut DiffOpenAxles(const float *pre, const float *even, const flo
             if (!any) kOne = a.kept, any = true;
             else if (a.kept != kOne) alike = false;
         }
+        // for the hand-on: what the limit took here as an impulse, the drive's own impulse, and whether this axle may receive
+        bool takes = a.clamps == 0 && read > 0;
+        for (int s = 0; s < m; s++)
+        {
+            if (!k[s] || !isfinite(p[s]) || !isfinite(q[s])) continue;
+            if (!(g[s] > 0.0f) || !isfinite(g[s]) || q[s] < p[s])
+            {
+                takes = false;
+                continue;
+            }
+            gave[r.axles] += (q[s] - a.final[s]) / g[s];
+            own[r.axles] += (q[s] - p[s]) / g[s];
+        }
+        taker[r.axles] = takes;
         r.mean[r.axles] = read ? sum / (float)read : 0.0f;
         r.k[r.axles] = a.kept;
         r.wheels[r.axles] = mask;
         r.axles++;
     }
     if (any) r.o.kept = alike ? kOne : addedAll > 0.0f && isfinite(keptAll / addedAll) ? CutClamp01(keptAll / addedAll) : 1.0f;
+    float pool = 0.0f, ownSum = 0.0f;
+    int takers = 0;
+    for (int a = 0; a < r.axles; a++)
+    {
+        if (gave[a] > 0.0f && !taker[a]) pool += gave[a];
+        if (taker[a]) ownSum += own[a], takers++;
+    }
+    if (!handOn || !takers || !(pool > 0.0f) || !isfinite(pool) || !isfinite(ownSum)) return r;
+    for (int a = 0; a < r.axles; a++)
+    {
+        if (!taker[a]) continue;
+        const float impulse = pool * (ownSum > 1e-9f ? own[a] / ownSum : 1.0f / (float)takers);
+        float before = 0.0f, now = 0.0f, add = 0.0f;
+        int count = 0;
+        for (int i = 0; i < n; i++)
+            if ((r.wheels[a] >> i & 1u) && ok[i] && isfinite(pre[i]) && isfinite(even[i])) before += pre[i], now += r.o.final[i], add += gain[i], count++;
+        if (!count || !(impulse > 0.0f) || !isfinite(impulse)) continue;
+        add *= impulse / (float)count; // the speed the whole share would add, summed over the axle's wheels
+        const float meanBefore = before / (float)count;
+        const float room = (meanBefore > ceiling ? meanBefore : ceiling) * (float)count - now;
+        if (!(add > 0.0f) || !isfinite(add) || !(room > 0.0f)) continue;
+        float part = 1.0f;
+        if (add > room) part = room / add, r.o.clamps++;
+        float sum = 0.0f;
+        for (int i = 0; i < n; i++)
+        {
+            if (!((r.wheels[a] >> i & 1u) && ok[i] && isfinite(pre[i]) && isfinite(even[i]))) continue;
+            const float to = r.o.final[i] + part * impulse / (float)count * gain[i];
+            if (isfinite(to) && to > r.o.final[i])
+            {
+                r.got[a] += to - r.o.final[i], r.o.spread += to - r.o.final[i];
+                r.o.final[i] = to;
+                if (part < 1.0f) r.o.clamped[i] = true;
+            }
+            sum += r.o.final[i];
+        }
+        r.mean[a] = sum / (float)count;
+    }
+    if (r.o.spread > 0.0f)
+    {
+        float keptSum = 0.0f, pushSum = 0.0f;
+        for (int i = 0; i < n; i++)
+        {
+            if (!ok[i] || !isfinite(pre[i]) || !isfinite(even[i])) continue;
+            if (even[i] > pre[i]) pushSum += even[i] - pre[i];
+            if (r.o.final[i] > pre[i]) keptSum += r.o.final[i] - pre[i];
+        }
+        r.o.kept = pushSum > 1e-4f ? CutClamp01(keptSum / pushSum) : 1.0f;
+    }
     return r;
 }
 // What the mod's thread publishes for the driven truck: its action and vehicle and DiffLockBite, while Powertrain is on,

@@ -322,6 +322,7 @@ struct TopSetup
     int rate;             // 120: stepped 120 times a second with stage 1's corrections; anything else 60
     bool oneAxle;         // Open as before BRIEF_open_by_axle.md: all driven wheels one axle (the open centre). Else wheels 0 and 1 are an axle, 2 and 3 the next
     uint32_t freeMask;    // not 0: the free wheels a bit each, in place of the first freeWheels
+    bool noHandOn;        // Open by axle as before F1 of the review of 122: nothing handed from one axle to another
     bool shareOne;        // not the game: every wheel's share of the drive held at 1, to tell what the game's own share does from what the mod's step does
 };
 struct TopResult
@@ -426,7 +427,7 @@ inline TopResult TopRun(const TopSetup &u)
         if (capV > 0.0f && (armed || !u.oldLaw))
         {
             const float ceiling = u.oldLaw ? capV : CapCeiling(capV, top, slot.map.governTo, v);
-            const CapStepOut o = u.open ? DiffOpenAxles(pre, left, gain, ok, axle, n, ceiling).o : CapStep(pre, left, gain, ok, n, ceiling, true);
+            const CapStepOut o = u.open ? DiffOpenAxles(pre, left, gain, ok, axle, n, ceiling, !u.noHandOn).o : CapStep(pre, left, gain, ok, n, ceiling, true);
             for (int i = 0; i < n; i++)
             {
                 if (o.final[i] < fminf(pre[i], left[i]) - 1e-5f) r.lowered++;

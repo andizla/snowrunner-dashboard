@@ -4599,7 +4599,7 @@ static void DiffPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s
     wchar_t kindText[24] = L"not read";
     if (w.diffKindRead) swprintf_s(kindText, L"%d", kind);
     Log(L"differential: the lock kind at vehicle + 0xE8 is %s, the type is %s (DiffType %d: %s); it acts where the torque cut acts, a gear position of the mod's gearbox; Open acts in each axle by itself and "
-        L"hands nothing from one axle to another",
+        L"hands what the limit took from an axle to the other axles",
         kindText, DiffTypeName(w.diffType), s.diffType, why);
 }
 
@@ -7152,7 +7152,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                         wheels[0] = 0;
                         for (int i = 0; i < kMaxWheels && wl < 90; i++)
                             if (dc.sayWheels[a] >> i & 1u) wl += swprintf_s(wheels + wl, 100 - wl, L"%s%d", wl ? L" " : L"", i);
-                        len += swprintf_s(axles + len, 640 - len, L"%swheels %s: mean %.2f rad/s, factor %.3f", a ? L"; " : L"", wl ? wheels : L"none known", dc.sayMean[a], dc.sayK[a]);
+                        len += swprintf_s(axles + len, 640 - len, L"%swheels %s: mean %.2f rad/s, factor %.3f, handed %.3f", a ? L"; " : L"", wl ? wheels : L"none known", dc.sayMean[a], dc.sayK[a], dc.sayGot[a]);
                     }
                     Log(L"probe: differential: Open by axle, the last step (the wheels by their place in the list of the truck): %s; the truck has %d axles, %d wheels alone, reads faulted %ld",
                         len ? axles : L"no axle", dc.axles, dc.alone, dc.axleFaults);

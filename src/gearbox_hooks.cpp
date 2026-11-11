@@ -877,7 +877,7 @@ static const int kAxleSay = kDiffAxleSay; // gearbox_hooks.h, DiffCounts
 static AxleTable g_axle; // the physics thread's own
 static volatile LONG g_axleGen = 0, g_axleAxles = 0, g_axleAlone = 0, g_axleWheels = 0, g_axleFaults = 0;
 static volatile LONG64 g_axleVehicle = 0;
-static volatile LONG g_axleSayN = 0, g_axleSayMean[kAxleSay] = {}, g_axleSayK[kAxleSay] = {}, g_axleSayWheels[kAxleSay] = {};
+static volatile LONG g_axleSayN = 0, g_axleSayMean[kAxleSay] = {}, g_axleSayK[kAxleSay] = {}, g_axleSayWheels[kAxleSay] = {}, g_axleSayGot[kAxleSay] = {};
 static bool AxleWheelsRead(const void *vehicle, uint8_t **wheel, int &n)
 {
     n = 0;
@@ -973,7 +973,7 @@ static void AxleLook(const CapTruckRead &t, int *axle, int *place)
 static CapStepOut OpenAxlesStep(const float *pre, const float *even, const float *gain, const bool *ok, const int *axle, const int *place, int n, float ceiling)
 {
     static OpenAxlesOut r; // the physics thread's own
-    r = DiffOpenAxles(pre, even, gain, ok, axle, n, ceiling);
+    r = DiffOpenAxles(pre, even, gain, ok, axle, n, ceiling, true);
     const int say = r.axles < kAxleSay ? r.axles : kAxleSay;
     for (int a = 0; a < say; a++)
     {
@@ -982,6 +982,7 @@ static CapStepOut OpenAxlesStep(const float *pre, const float *even, const float
             if ((r.wheels[a] >> i & 1u) && place[i] >= 0) wheels |= (LONG)(1u << place[i]);
         InterlockedExchange(&g_axleSayMean[a], FloatBits(r.mean[a]));
         InterlockedExchange(&g_axleSayK[a], FloatBits(r.k[a]));
+        InterlockedExchange(&g_axleSayGot[a], FloatBits(r.got[a]));
         InterlockedExchange(&g_axleSayWheels[a], wheels);
     }
     InterlockedExchange(&g_axleSayN, say);
@@ -1393,7 +1394,7 @@ void DiffCountsGet(DiffCounts &out)
     out.sayN = (int)g_axleSayN;
     if (out.sayN > kDiffAxleSay) out.sayN = kDiffAxleSay;
     for (int a = 0; a < kDiffAxleSay; a++)
-        out.sayMean[a] = BitsFloat(g_axleSayMean[a]), out.sayK[a] = BitsFloat(g_axleSayK[a]), out.sayWheels[a] = (unsigned)g_axleSayWheels[a];
+        out.sayMean[a] = BitsFloat(g_axleSayMean[a]), out.sayK[a] = BitsFloat(g_axleSayK[a]), out.sayGot[a] = BitsFloat(g_axleSayGot[a]), out.sayWheels[a] = (unsigned)g_axleSayWheels[a];
 }
 
 void PushCountsGet(PushCounts &out)

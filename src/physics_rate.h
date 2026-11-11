@@ -250,8 +250,8 @@ inline void RateHalveAfter(void *action, const RateHalved &h)
 
 // ---- the proof a world (the Reviewer's M3) ----
 // What a world's first step showed against what was asked: the step's seconds within kRateStepNear of 1/120 and the
-// iterations the ones in force, exactly. The step is not held to the bit: the world's own figure is a difference of two
-// of the game's times and comes out a little off 1/120 (a first step was seen at 3c089000 against 3c088889, 0.02
+// iterations the ones in force, exactly. The step is not held to the bit: the world's own figure (by the engine's layout a difference of
+// two of its times) comes out a little off 1/120 (a first step was seen at 3c089000 against 3c088889, 0.02
 // percent over), while a world still at 60 is 100 percent over. No number is no step.
 static const float kRateStepNear = 0.2f;
 inline uint32_t RateBits(float f)
