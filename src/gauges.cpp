@@ -4682,9 +4682,27 @@ static void LockPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s
     {
         Log(L"probe: diff lock bite: kind %d, %d driven wheels, k %.3f, the spread %.2f rad/s after the drive and %.2f after the lock; a second: %ld steps here, %ld written, "
             L"%ld with the lock off, %ld held by the handbrake, %ld wheels skipped, %ld faults; DiffLockBite %d; the last written step: the fastest wheel %.2f rad/s "
-            L"over the weighted mean before the drive C %.2f rad/s, the impulse handed on R %.3f",
+            L"over the weighted mean before the drive C %.2f rad/s, the impulse handed on R %.3f; a second: %ld steps with C under 0 and the drive's impulse over 0, "
+            L"%ld wheels written under 0, %ld steps where the bounds moved a wheel",
             kind, lc.wheels, lc.k, lc.spreadBefore, lc.spreadAfter, lc.calls - was.calls, lc.writes - was.writes, lc.off - was.off, lc.handbrake - was.handbrake,
-            lc.skipped - was.skipped, lc.faults - was.faults, s.diffLockBite, lc.over, lc.c, lc.r);
+            lc.skipped - was.skipped, lc.faults - was.faults, s.diffLockBite, lc.over, lc.c, lc.r, lc.cUnder - was.cUnder, lc.under - was.under,
+            lc.bounded - was.bounded);
+        // M1 of BRIEF_lock_wheels_backward.md: the last written step by wheel, with what the ground left of it
+        static LockLast last;
+        static unsigned long lastSaid = 0;
+        if (LockLastGet(last) && last.vehicle == w.refs.vehicle && last.seq != lastSaid)
+        {
+            lastSaid = last.seq;
+            static wchar_t byWheel[3200];
+            int put = 0;
+            byWheel[0] = 0;
+            for (int i = 0; i < last.n && i < kCapWheels && put < 3100; i++)
+                put += FmtCut(byWheel + put, 3200 - put, L"%s%d: %.2f, %.2f, %.2f, %.2f, %.5f, %.3f, %.2f", i ? L" | " : L"", i, last.pre[i], last.post[i], last.final[i],
+                              last.load[i], last.gain[i], last.radius[i], last.next[i]);
+            Log(L"probe: diff lock bite: the last written step by wheel, the truck at %.2f rad/s in the wheels' measure (rad/s before the drive, after the drive, as the "
+                L"lock wrote it, the contact share, the gain, the rolling radius m, rad/s before the next step's drive): %s",
+                last.truck, byWheel);
+        }
         at = now;
         was = lc;
     }

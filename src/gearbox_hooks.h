@@ -238,8 +238,23 @@ struct LockCounts
     float k, spreadBefore, spreadAfter;
     uint64_t vehicle;
     float c, r, over;
+    long cUnder, under, bounded; // steps with c under 0 and the drive's impulse over 0, wheels written under 0, steps LockBound's rules moved a wheel
 };
 void LockCountsGet(LockCounts &out);
+// The lock's last written step that had a step after it, by wheel (BRIEF_lock_wheels_backward.md, M1): each wheel's
+// speed before the drive, after it and as the lock wrote it, its contact share, gain and rolling radius, and its speed
+// before the drive of the step after, which is what the ground left of the write (no number: not read). truck: the
+// truck's own speed of the written step in the wheels' measure (no number: not read). seq counts the steps given so
+// far, 0 none yet. False while none is there or the read met a write four times.
+struct LockLast
+{
+    uint64_t vehicle;
+    unsigned long seq;
+    int n;
+    float truck;
+    float pre[kCapWheels], post[kCapWheels], final[kCapWheels], load[kCapWheels], gain[kCapWheels], radius[kCapWheels], next[kCapWheels];
+};
+bool LockLastGet(LockLast &out);
 // The differential's type in the drive's hook (BRIEF_diff_types.md): the steps Open's evening ran, those it wrote and
 // its faults since the start; the last one's wheels and impulse J; and what was in force in the last step of the cut's
 // action (kDiffForceOpen, kDiffForceLimited or kDiffForceLock).

@@ -698,7 +698,51 @@ struct LockStepOut
     int used, skipped;               // wheels in the mean, and driven wheels read whole but with no inertia (gain 0)
     bool wrote;                      // final differs from post
     float c, r, over;                // LockStepHeld's: the weighted mean before the drive, the impulse handed to the wheels on the ground, the fastest wheel after the drive over c
+    float j;                         // LockStepHeld's: the drive's impulse, the sum of (post - pre) x inertia (0 where it was not worked out)
+    int under, bounded;              // wheels written under 0, and wheels LockBound's rules moved (every used wheel where the sum was taken down)
 };
+// The bounds on what the lock writes while the drive's impulse is over 0 (BRIEF_lock_wheels_backward.md, M2). The lock's
+// law deals the drive's whole impulse out anew by contact share, so a wheel with little load is written near C, under
+// 0 where C is, and a wheel with much load over every wheel the drive left. Three rules on final, the lock's speeds
+// after the blend by k: 1. no wheel under min(post, 0): none leaves the lock backward unless the drive left it there,
+// and then not lower. 2. no wheel over the fastest of post: the lock makes no new fastest wheel, so the spread is not
+// wider and the wheel cap has nothing of the lock's to cut. 3. the sum of inertia x final not over that of post: the
+// lock adds no spin. What is over is taken from every wheel by its room above rule 1's floor, which always holds
+// enough. What the rules do not let through is dropped and stored nowhere. Returns the wheels moved.
+inline int LockBound(const float *post, const float *gain, const bool *use, int n, float *final)
+{
+    float top = 0.0f, sumPost = 0.0f, sumAbs = 0.0f, sumFinal = 0.0f, room = 0.0f;
+    bool first = true;
+    int moved = 0, used = 0;
+    for (int i = 0; i < n; i++)
+    {
+        if (!use[i]) continue;
+        top = first ? post[i] : fmaxf(top, post[i]);
+        first = false;
+    }
+    for (int i = 0; i < n; i++)
+    {
+        if (!use[i]) continue;
+        const float inertia = 1.0f / gain[i], floor = fminf(post[i], 0.0f), x = fminf(fmaxf(final[i], floor), top);
+        if (x != final[i]) moved++;
+        final[i] = x;
+        sumPost += inertia * post[i];
+        sumAbs += inertia * fabsf(post[i]);
+        sumFinal += inertia * x;
+        room += inertia * (x - floor);
+        used++;
+    }
+    const float surplus = sumFinal - sumPost;
+    if (!(surplus > 1e-5f * sumAbs) || !(room > 0.0f)) return moved;
+    const float part = fminf(surplus / room, 1.0f);
+    for (int i = 0; i < n; i++)
+    {
+        if (!use[i]) continue;
+        const float floor = fminf(post[i], 0.0f);
+        final[i] = fmaxf(final[i] - part * (final[i] - floor), floor);
+    }
+    return used;
+}
 // One step of the lock over a truck's driven wheels: post each one's speed after the drive (the gear's direction, the
 // game's measure), gain its CapGain, ok read whole. Fewer than two wheels with a gain, a spread under kLockSpreadMin, no
 // k or a value that is no number: final is post.
@@ -749,15 +793,18 @@ inline LockStepOut LockStep(const float *post, const float *gain, const bool *ok
 // R = J - a x the sum of I what is left for the ground. A wheel's locked speed is C + a + gain x R x load / the sum of
 // the loads (the last term left out with the loads under 0.001), and final = post + k x (locked - post). With every
 // load 0 it is LockStep itself. Fewer than two wheels, no k, both spreads (pre's and post's) under kLockSpreadMin or a
-// value that is no number: final is post. A wheel on the ground that slips counts as loaded and is not held.
-inline LockStepOut LockStepHeld(const float *pre, const float *post, const float *gain, const float *load, const float *radius, const bool *ok, int n, float k, float mass)
+// value that is no number: final is post. A wheel on the ground that slips counts as loaded and is not held. With the
+// drive's impulse J over 0 LockBound's three rules hold on final (bound false: the law without them, for the tests'
+// figures of before).
+inline LockStepOut LockStepHeld(const float *pre, const float *post, const float *gain, const float *load, const float *radius, const bool *ok, int n, float k, float mass,
+                                bool bound = true)
 {
     LockStepOut o = {};
     if (n > kCapWheels) n = kCapWheels;
     if (n < 0) n = 0;
     bool use[kCapWheels] = {};
     float ld[kCapWheels] = {};
-    float sumLoad = 0.0f, sumI = 0.0f, sumIpost = 0.0f, lo = 0.0f, hi = 0.0f, preLo = 0.0f, preHi = 0.0f;
+    float sumLoad = 0.0f, sumI = 0.0f, sumIpost = 0.0f, sumIpre = 0.0f, lo = 0.0f, hi = 0.0f, preLo = 0.0f, preHi = 0.0f;
     bool preOk = true;
     int used = 0;
     for (int i = 0; i < n; i++)
@@ -775,6 +822,7 @@ inline LockStepOut LockStepHeld(const float *pre, const float *post, const float
         const float inertia = 1.0f / gain[i];
         sumI += inertia;
         sumIpost += inertia * post[i];
+        sumIpre += inertia * pre[i];
         if (!isfinite(pre[i])) preOk = false;
         lo = used ? fminf(lo, post[i]) : post[i];
         hi = used ? fmaxf(hi, post[i]) : post[i];
@@ -788,6 +836,23 @@ inline LockStepOut LockStepHeld(const float *pre, const float *post, const float
         o = LockStep(post, gain, ok, n, k);
         o.c = used >= 2 && sumI > 0.0f ? sumIpost / sumI : 0.0f;
         o.over = used >= 2 ? hi - o.c : 0.0f;
+        const float jAir = preOk ? sumIpost - sumIpre : 0.0f;
+        if (isfinite(jAir)) o.j = jAir;
+        if (!o.wrote) return o;
+        // the mean of post is never over its fastest and adds no spin: only rule 1 can move a wheel here
+        if (bound && o.j > 0.0f) o.bounded = LockBound(post, gain, use, n, o.final);
+        o.wrote = false;
+        bool firstAir = true;
+        for (int i = 0; i < n; i++)
+        {
+            if (!use[i]) continue;
+            lo = firstAir ? o.final[i] : fminf(lo, o.final[i]);
+            hi = firstAir ? o.final[i] : fmaxf(hi, o.final[i]);
+            firstAir = false;
+            if (o.final[i] != post[i]) o.wrote = true;
+            if (o.final[i] != post[i] && o.final[i] < 0.0f) o.under++;
+        }
+        o.spreadAfter = hi - lo;
         return o;
     }
     o.used = used;
@@ -814,6 +879,8 @@ inline LockStepOut LockStepHeld(const float *pre, const float *post, const float
         final[i] = kk >= 1.0f ? locked : post[i] + kk * (locked - post[i]);
         if (!isfinite(final[i])) return o;
     }
+    o.j = j;
+    if (bound && j > 0.0f) o.bounded = LockBound(post, gain, use, n, final);
     const float postHi = hi;
     bool first = true;
     for (int i = 0; i < n; i++)
@@ -824,6 +891,7 @@ inline LockStepOut LockStepHeld(const float *pre, const float *post, const float
         hi = first ? final[i] : fmaxf(hi, final[i]);
         first = false;
         if (final[i] != post[i]) o.wrote = true;
+        if (final[i] != post[i] && final[i] < 0.0f) o.under++;
     }
     o.spreadAfter = hi - lo;
     o.over = postHi - c;

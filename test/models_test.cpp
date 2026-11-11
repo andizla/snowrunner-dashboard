@@ -5415,6 +5415,132 @@ int main(int argc, char **argv)
         Check(held && standIn && nothing && now.worst < 2.0f && old.ahead > 20.0f * now.ahead && now.identity < 0.05f && blend.ahead > now.ahead && blend.ahead < old.ahead * 4.0f, line);
     }
 
+    // the lock's bounds (BRIEF_lock_wheels_backward.md, M2; LockBound): with the drive's impulse over 0 no wheel leaves
+    // the lock under min(post, 0), none over the fastest wheel the drive left, and the lock adds no spin. Six wheels of
+    // inertia 34.5 on 0.586 m under 12000 kg, each case with the law of before (bound false) beside it. A spread of
+    // 0.02 rad/s before the drive is in the cases with equal speeds, since under kLockSpreadMin nothing is written.
+    {
+        const bool bOk[kCapWheels] = { true, true, true, true, true, true };
+        float bGain[6], bRadius[6];
+        for (int i = 0; i < 6; i++) bGain[i] = 1.0f / 34.5f, bRadius[i] = 0.586f;
+        const float bMass = 12000.0f;
+        struct BSeen
+        {
+            float least, most, added;
+            bool rules, lowered;
+        };
+        auto seen = [](const LockStepOut &o, const float *p6) {
+            BSeen b = { o.final[0], o.final[0], 0.0f, true, false };
+            float fastest = p6[0];
+            for (int i = 0; i < 6; i++)
+            {
+                b.least = fminf(b.least, o.final[i]), b.most = fmaxf(b.most, o.final[i]), fastest = fmaxf(fastest, p6[i]);
+                b.added += o.final[i] - p6[i];
+                if (o.final[i] < fminf(p6[i], 0.0f) - 1e-4f) b.rules = false;
+                if (o.final[i] < p6[i] - 1e-4f) b.lowered = true;
+            }
+            if (b.most > fastest + 1e-4f || b.added > 1e-3f) b.rules = false;
+            return b;
+        };
+        auto both = [&](const float *pre6, const float *add6, const float *load6, float k, LockStepOut &before, LockStepOut &after, float *p6) {
+            for (int i = 0; i < 6; i++) p6[i] = pre6[i] + add6[i];
+            before = LockStepHeld(pre6, p6, bGain, load6, bRadius, bOk, 6, k, bMass, false);
+            after = LockStepHeld(pre6, p6, bGain, load6, bRadius, bOk, 6, k, bMass);
+        };
+        const float nine[6] = { 9.0f, 9.0f, 9.0f, 9.0f, 9.0f, 9.0f };
+        LockStepOut b0, a0;
+        float p[6];
+        // 1. standing, the drive leaves 9 on each, two wheels carry the truck: before 21.0 on those and 3.0 on the rest
+        const float pre1[6] = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.02f }, load1[6] = { 1.0f, 1.0f, 0.1f, 0.1f, 0.1f, 0.1f };
+        both(pre1, nine, load1, 1.0f, b0, a0, p);
+        const BSeen s1b = seen(b0, p), s1 = seen(a0, p);
+        const bool case1 = !s1b.rules && s1b.most > 20.5f && s1b.most < 21.5f && s1b.least > 2.5f && s1b.least < 3.5f && s1.rules && s1.most <= 9.02f + 1e-4f && s1.least >= 0.0f &&
+                           a0.wrote && a0.bounded > 0 && a0.under == 0 && a0.j > 0.0f;
+        // in L: a ceiling just over the drive's 9 cuts two wheels of the lock's before and none of them now
+        const CapStepOut cap1b = CapStep(pre1, b0.final, bGain, bOk, 6, 9.05f, true), cap1 = CapStep(pre1, a0.final, bGain, bOk, 6, 9.05f, true), cap1d = CapStep(pre1, p, bGain, bOk, 6, 9.05f, true);
+        const bool inL = cap1b.clamps == 2 && cap1.clamps == 0 && cap1d.clamps == 0;
+        const float most1b = s1b.most, least1b = s1b.least, most1 = s1.most, least1 = s1.least;
+        // 2. the wheels turning back before the drive, which adds 9: before C is -1.95 and the lock writes 16.3 and 2.4
+        const float pre2[6] = { -2.5f, -0.8f, -0.8f, -2.5f, -0.8f, -0.8f }, load2[6] = { 1.0f, 0.2f, 0.2f, 1.0f, 0.2f, 0.2f };
+        both(pre2, nine, load2, 1.0f, b0, a0, p);
+        const BSeen s2b = seen(b0, p), s2 = seen(a0, p);
+        const float c2 = b0.c, most2b = s2b.most, least2b = s2b.least, most2 = s2.most, least2 = s2.least;
+        LockStepOut b2h, a2h;
+        both(pre2, nine, load2, 0.5f, b2h, a2h, p);
+        const bool case2 = !s2b.rules && c2 < -1.9f && c2 > -2.0f && most2b > 15.5f && least2b < 3.0f && s2.rules && seen(a2h, p).rules && !seen(b2h, p).rules;
+        // 3. one wheel in the air and C under 0: before that wheel is written to about -1.5
+        const float pre3[6] = { -2.0f, -2.0f, -2.0f, -2.0f, -2.02f, -2.0f }, load3[6] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f };
+        both(pre3, nine, load3, 1.0f, b0, a0, p);
+        const float air3b = b0.final[5], air3 = a0.final[5];
+        const bool case3 = air3b < -1.0f && b0.under == 1 && air3 >= 0.0f && a0.under == 0 && seen(a0, p).rules;
+        // 4. rolling back at 5 rad/s with the engine pulling forward: before the lightly loaded wheels are lowered, now none
+        const float pre4[6] = { -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.02f }, two[6] = { 2.0f, 2.0f, 2.0f, 2.0f, 2.0f, 2.0f };
+        both(pre4, two, load1, 1.0f, b0, a0, p);
+        const BSeen s4b = seen(b0, p), s4 = seen(a0, p);
+        const bool case4 = s4b.lowered && !s4.lowered && s4.rules;
+        // the engine braking (the drive's impulse not over 0): the law as it was, to the float
+        const float less[6] = { -1.0f, -1.0f, -0.5f, -0.5f, -0.5f, -0.5f }, pre5[6] = { 6.0f, 6.0f, 7.0f, 7.0f, 7.0f, 7.0f };
+        both(pre5, less, load1, 1.0f, b0, a0, p);
+        bool braking = a0.wrote && a0.bounded == 0 && a0.j < 0.0f;
+        for (int i = 0; i < 6; i++) braking = braking && a0.final[i] == b0.final[i];
+        // every wheel in the air, one turning back: no wheel on the ground: the mean of post as it was, and with one wheel turning back fast no other wheel is taken under 0
+        const float pre6[6] = { 9.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f }, one6[6] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f }, air6[6] = {};
+        const float pre7[6] = { -30.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+        both(pre6, one6, air6, 1.0f, b0, a0, p);
+        bool inAir6 = seen(a0, p).rules && a0.bounded == 0;
+        for (int i = 0; i < 6; i++) inAir6 = inAir6 && a0.final[i] == b0.final[i];
+        both(pre7, one6, air6, 1.0f, b0, a0, p);
+        inAir6 = inAir6 && !seen(b0, p).rules && seen(a0, p).rules && a0.bounded > 0 && a0.final[1] >= 0.0f && b0.final[1] < -3.0f;
+        char bLine[700];
+        snprintf(bLine, sizeof bLine,
+                 "locked differential, the bounds: the drive leaves 9 rad/s on six standing wheels of which two carry the truck: the lock wrote %.1f and %.1f, now %.2f and %.2f, "
+                 "none over the drive's fastest, none under 0, no spin added, and the ceiling in L cuts nothing of the lock's; wheels turning back at C %.2f: %.1f and %.1f "
+                 "before, now %.2f and %.2f; a wheel in the air with C under 0: %.2f before, now %.2f; rolling back with the engine pulling no wheel is lowered; "
+                 "engine braking and wheels all in the air as they were",
+                 most1b, least1b, most1, least1, c2, most2b, least2b, most2, least2, air3b, air3);
+        printf("     %s\n", bLine);
+        if (!(case1 && inL && case2 && case3 && case4 && braking && inAir6))
+            printf("     bounds: case1 %d, inL %d (%d %d %d, %.3f %.3f %.3f), case2 %d, case3 %d, case4 %d, braking %d, in air %d\n", case1, inL, cap1b.clamps, cap1.clamps, cap1d.clamps,
+                   cap1b.excess, cap1.excess, cap1d.excess, case2, case3, case4, braking, inAir6);
+        Check(case1 && inL && case2 && case3 && case4 && braking && inAir6, bLine);
+
+        // S1: the lock's step in the top's sim (TopRun), four wheels of which one in the air, the truck held standing,
+        // 20 s, in a numbered gear (no cap) and in L (a cap of 1.5): the law of before and with the bounds
+        TopSetup lu = {};
+        lu.slot.vehicle = 1, lu.slot.mode = kCutMap, lu.slot.share = 1.0f, lu.slot.pedal = 1.0f;
+        lu.wheels = 4, lu.freeWheels = 1, lu.kick = 500.0f, lu.mdav = 0.01f, lu.inertia = 10.0f, lu.flat = -1.0f, lu.holdV = 0.0f, lu.grip = 1000.0f;
+        lu.seconds = 20.0f, lu.rise = 0.008f, lu.seed = 7, lu.gripNoise = 0.3f, lu.dragNoise = 0.3f, lu.couple = 1.0f / 60.0f;
+        lu.lockK = 1.0f, lu.lockMass = 4000.0f, lu.lockRadius = 0.5f;
+        auto lockRun = [&](float top, float cap, bool noBound, float lockK) {
+            TopSetup c = lu;
+            const CutBand band = CutGovernBand(top, kTachOverrun);
+            c.slot.map = TorqueCutMap{ 1.0f, 1.0f, 0.0f, 1.0f, 0.15f, top, 800.0f, 2500.0f, 1.2f, { 5, { 0.25f, 0.45f, 0.6f, 0.8f, 1.0f }, { 0.55f, 0.85f, 1.0f, 1.0f, 0.85f } }, band.from, band.to };
+            c.cap = cap, c.lockNoBound = noBound, c.lockK = lockK;
+            return TopRun(c);
+        };
+        static char sLine[1500];
+        int sLen = 0;
+        bool simOk = true;
+        for (int gearCase = 0; gearCase < 2; gearCase++)
+        {
+            const float top = gearCase ? 2.4f : 12.3f, cap = gearCase ? 1.5f : 0.0f;
+            const TopResult none = lockRun(top, cap, false, 0.0f), was = lockRun(top, cap, true, 1.0f), is = lockRun(top, cap, false, 1.0f);
+            const float pullNone = none.pullEach[1] + none.pullEach[2] + none.pullEach[3], pullWas = was.pullEach[1] + was.pullEach[2] + was.pullEach[3],
+                        pullIs = is.pullEach[1] + is.pullEach[2] + is.pullEach[3];
+            sLen += snprintf(sLine + sLen, sizeof sLine - sLen,
+                             "%s%s: the gripping wheels give the ground %.0f rad/s without the lock, %.0f with the lock of before, %.0f with the bounds; the free wheel at most %.1f, "
+                             "%.1f, %.1f rad/s; the lock over the drive's fastest by %.2f before and %.4f now, spin added %.2f and %.4f",
+                             gearCase ? "; " : "", gearCase ? "in L" : "in a numbered gear", pullNone, pullWas, pullIs, none.freeMost, was.freeMost, is.freeMost, was.lockOver, is.lockOver,
+                             was.lockAdded, is.lockAdded);
+            // the cost: in a numbered gear the gripping wheels keep at least 0.95 of what the lock of before gave them and the free
+            // wheel stays under a tenth of the unlocked one's speed; in L the cap holds the free wheel either way
+            simOk = simOk && is.lockOver <= 1e-3f && is.lockAdded <= 1e-2f && is.lockUnder == 0 && is.freeMost <= was.freeMost + 0.01f && pullIs >= 0.95f * pullWas &&
+                    pullIs >= pullNone && (gearCase || (is.freeMost < 0.1f * none.freeMost && was.lockOver > 10.0f && pullIs > 100.0f * pullNone));
+        }
+        printf("     %s\n", sLine);
+        Check(simOk, "locked differential, the bounds in the sim: nothing over the drive's fastest, no spin added, no wheel under 0, the free wheel no faster than with the lock of before and the gripping wheels given at least 0.95 of it");
+    }
+
     // the chassis push (BRIEF_chassis_push.md with the Reviewer's addendum and the lead's): k = 1 - max(1 / F_excess, 1 / F)
     // where F_excess = min(B4, throttle) over the pull the factor assumed is above 1 and F (the factor over the game's own
     // share) above 1; the push of a factor stepping from 1 to 3 at a GameFall of 0.4 with B4 still 0.9 held to the mod's

@@ -324,6 +324,9 @@ struct TopSetup
     uint32_t freeMask;    // not 0: the free wheels a bit each, in place of the first freeWheels
     bool noHandOn;        // Open by axle as before F1 of the review of 122: nothing handed from one axle to another
     bool shareOne;        // not the game: every wheel's share of the drive held at 1, to tell what the game's own share does from what the mod's step does
+    float lockK;          // above 0 (and not Open): the lock's step (LockStepHeld) after the drive and before the cap, a free wheel's load 0 and every other 1
+    float lockMass, lockRadius; // the truck's mass and each wheel's rolling radius for it
+    bool lockNoBound;     // the lock's law as before BRIEF_lock_wheels_backward.md: without LockBound's rules
 };
 struct TopResult
 {
@@ -343,6 +346,9 @@ struct TopResult
     float pullEach[8];          // the same for each wheel
     float freeEnd;              // the fastest free wheel after the last step's cap
     float wEnd[8];              // each wheel after the last step's cap
+    int lockUnder;              // wheels the lock wrote under 0, the whole run
+    float lockOver;             // the most a wheel left the lock over the fastest wheel the drive left, the whole run
+    float lockAdded;            // the most the lock's step added to the wheels' summed speed, the whole run
 };
 
 inline TopResult TopRun(const TopSetup &u)
@@ -423,6 +429,16 @@ inline TopResult TopRun(const TopSetup &u)
         {
             const DiffEvenOut e = DiffEvenAxles(pre, post, gain, ok, axle, n);
             for (int i = 0; i < n; i++) left[i] = e.final[i];
+        }
+        if (u.lockK > 0.0f && !u.open)
+        {
+            float load[8], radius[8], fastest = post[0], sumPost = 0.0f, sumLock = 0.0f;
+            for (int i = 0; i < n; i++) load[i] = isFree[i] ? 0.0f : 1.0f, radius[i] = u.lockRadius;
+            const LockStepOut l = LockStepHeld(pre, post, gain, load, radius, ok, n, u.lockK, u.lockMass, !u.lockNoBound);
+            for (int i = 0; i < n; i++) fastest = fmaxf(fastest, post[i]), sumPost += post[i], sumLock += l.final[i];
+            for (int i = 0; i < n; i++) left[i] = l.final[i], r.lockOver = fmaxf(r.lockOver, l.final[i] - fastest);
+            r.lockUnder += l.under;
+            r.lockAdded = fmaxf(r.lockAdded, sumLock - sumPost);
         }
         if (capV > 0.0f && (armed || !u.oldLaw))
         {
