@@ -201,9 +201,13 @@ inline int ShifterAskStep(ShifterKept &k, const GearboxAsk &ask, GearboxActions 
         GearboxActionsAsk(acts, ask, top);
         return kShifterPick;
     }
-    k.again++;
+    // the first of a kind is told at once and not counted, so the count's line comes only for more (the review of 133, S2)
     const unsigned bit = 1u << ask.kind;
-    if (k.said & bit) return kShifterAgain;
+    if (k.said & bit)
+    {
+        k.again++;
+        return kShifterAgain;
+    }
     k.said |= bit;
     return kShifterAgainFirst;
 }

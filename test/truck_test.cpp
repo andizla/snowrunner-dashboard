@@ -1152,7 +1152,17 @@ static void PhysicsRateTest()
         bool row = warm(a, s60, 60) && calls(a, s60, 60, 7) == 0 && a.verdict == kStepNone && !StepJudgeCalm(a) && calls(a, s60, 60, 1) == 1 && a.verdict == kStepRight && StepJudgeCalm(a);
         row = row && calls(a, s240, 60, 7) == 0 && !StepJudgeCalm(a) && calls(a, s60, 60, 1) == 0 && a.verdict == kStepRight && !a.sign;
         row = row && calls(a, s60, 60, 20) == 0 && calls(a, s240, 60, 1) == 0 && calls(a, s60, 60, 20) == 0 && !a.sign && StepJudgeCalm(a);
-        row = row && calls(a, s240, 60, 7) == 0 && !a.sign && calls(a, s240, 60, 1) == 1 && a.sign && a.verdict == kStepForeign && a.dt == s240 && !StepJudgeCalm(a);
+        // the review of 129, S1: after a right verdict the wrong step needs a second of drive calls and the 8 in a row. 8 wrong: nothing. 0.9 s wrong and one
+        // right: nothing, and the second starts again. A full second wrong: the sign, on the call that ends the second
+        auto until = [](StepJudge &j, float dt, int rate) {
+            int n = 0;
+            while (n < 5000 && !StepJudgeCall(j, dt, rate)) n++;
+            return n + 1;
+        };
+        row = row && calls(a, s240, 60, 8) == 0 && !a.sign && calls(a, s240, 60, 208) == 0 && !a.sign && calls(a, s60, 60, 1) == 0 && calls(a, s240, 60, 216) == 0 && !a.sign &&
+              a.verdict == kStepRight && calls(a, s60, 60, 8) == 0 && StepJudgeCalm(a);
+        const int lasted = until(a, s240, 60);
+        row = row && lasted >= 239 && lasted <= 242 && a.sign && a.verdict == kStepForeign && a.dt == s240 && !StepJudgeCalm(a);
         const bool stays = calls(a, s240, 60, 50) == 0 && calls(a, s60, 60, 8) == 1 && a.verdict == kStepRight && a.sign && calls(a, s60, 60, 500) == 0 && a.sign;
         // a wrong step in a world's first second only: no sign. A new world: its first second is not judged either, and what was kept stays
         StepJudge b = {};
@@ -1164,7 +1174,16 @@ static void PhysicsRateTest()
         // at 120 in force a step of 1/60 is the mod's own miss: a verdict, no sign. 1/240 there is the sign
         StepJudge c = {};
         bool own = warm(c, s60, 120) && calls(c, s60, 120, 8) == 1 && c.verdict == kStepOwnMiss && !c.sign && calls(c, s60, 120, 300) == 0 && !c.sign;
-        own = own && calls(c, s120, 120, 8) == 1 && c.verdict == kStepRight && !c.sign && calls(c, s240, 120, 8) == 1 && c.verdict == kStepForeign && c.sign;
+        own = own && calls(c, s120, 120, 8) == 1 && c.verdict == kStepRight && !c.sign && calls(c, s240, 120, 8) == 0 && !c.sign;
+        {
+            // at 120 the same rule: the wrong step after the right verdict lasts a second first; a new world sets the second back
+            const int lasted = until(c, s240, 120);
+            own = own && lasted >= 229 && lasted <= 234 && c.verdict == kStepForeign && c.sign;
+            StepJudge w = {};
+            own = own && warm(w, s120, 120) && calls(w, s120, 120, 8) == 1 && calls(w, s60, 120, 50) == 0;
+            StepJudgeWorld(w);
+            own = own && w.wrongFor == 0.0f && warm(w, s120, 120) && calls(w, s60, 120, 50) == 0 && w.verdict == kStepRight && until(w, s60, 120) >= 9 && w.verdict == kStepOwnMiss && !w.sign;
+        }
         // a wrong step that moves by more than 20 percent is told again; one that is no number is counted, not judged, and breaks no row
         StepJudge d = {};
         bool moves = warm(d, s60, 60) && calls(d, s240, 60, 8) == 1 && calls(d, s240, 60, 8) == 0 && calls(d, s240 * 1.1f, 60, 8) == 0 && calls(d, 1.0f / 480.0f, 60, 7) == 0 &&
@@ -2671,6 +2690,15 @@ int main()
         PositionsJob j = {};
         PositionsState ps = {};
         PositionsNewVehicle(ps, v);
+        {
+            // the review of 130, S3: the read asked for and not back: waiting, for this vehicle alone and for 5 s at most; a name read ends it
+            PositionsState pw = ps;
+            pw.since = 1000;
+            bool waits = PositionsWaiting(pw, v, 1000) && PositionsWaiting(pw, v, 5999) && !PositionsWaiting(pw, v, 6000) && !PositionsWaiting(pw, v + 8, 1000) && !PositionsWaiting(pw, 0, 1000);
+            pw.name[0] = 'g';
+            waits = waits && !PositionsWaiting(pw, v, 1000) && !PositionsWaiting(PositionsState{}, v, 1000);
+            Check(waits, "gearbox positions: a truck whose read is not back yet waits, 5 s at most, and the low range's wider cap waits with it; another vehicle, a read that came and a truck never asked for do not");
+        }
         int step = -1;
         GearboxFlags got = {};
         const bool posted = PositionsJobPost(j, v, 1000) && !PositionsJobPost(j, v, 1000);

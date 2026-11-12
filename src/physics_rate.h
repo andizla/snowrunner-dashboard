@@ -353,7 +353,8 @@ inline bool RateProbeDue(bool probe, int rateInForce) { return probe && rateInFo
 // call is handed is held against it: right within kRateStepNear. At 120 in force a step near 1/60 is the mod's own miss
 // (a world made before the write), not another mod. Anything else is foreign. A step that is no number, 0 or under is
 // counted and not judged. A verdict counts after kStepRow calls in a row agree, and not before kStepWarm seconds of
-// drive calls in a world, so a loading step says nothing. Once a foreign step was the verdict the sign is on and stays.
+// drive calls in a world, so a loading step says nothing. After a right verdict a wrong one needs a second of wrong
+// drive calls as well. Once a foreign step was the verdict the sign is on and stays.
 enum { kStepNone, kStepRight, kStepOwnMiss, kStepForeign };
 static const int kStepRow = 8;
 static const float kStepWarm = 1.0f;
@@ -373,6 +374,7 @@ struct StepJudge
     float candidateDt;
     float warm;        // seconds of drive calls since the world began, counted to kStepWarm
     long notJudged;    // calls whose step was no number, 0 or under
+    float wrongFor;    // seconds of drive calls at a wrong step since the last right one, while the kept verdict is right
     bool sign;         // a foreign step was the verdict once
 };
 // A new world: its first second is not judged. The verdict kept and the sign stay.
@@ -381,6 +383,7 @@ inline void StepJudgeWorld(StepJudge &j)
     j.warm = 0.0f;
     j.row = 0;
     j.candidate = kStepNone;
+    j.wrongFor = 0.0f;
 }
 // One drive call. True when the kept verdict changed, or a wrong step moved by more than kRateStepNear: the mod's
 // thread then has a line to write.
@@ -401,6 +404,15 @@ inline bool StepJudgeCall(StepJudge &j, float dt, int rate)
     }
     if (v == j.candidate && (v == kStepRight || StepNear(dt, j.candidateDt))) j.row = j.row < kStepRow ? j.row + 1 : kStepRow;
     else j.candidate = v, j.candidateDt = dt, j.row = 1;
+    // after a right verdict a wrong step must last: kStepWarm seconds of drive calls with no right one among them, and the
+    // row. A later map's load, a pause or a very low frame rate may hand the drive an odd step for a few calls; another
+    // mod's rate lasts for good, so nothing true is lost (the review of 129, S1). At both rates, and with no world known
+    if (v == kStepRight) j.wrongFor = 0.0f;
+    else if (j.verdict == kStepRight)
+    {
+        j.wrongFor += dt;
+        if (j.wrongFor < kStepWarm) return false;
+    }
     if (j.row < kStepRow) return false;
     if (v == j.verdict && (v == kStepRight || StepNear(dt, j.dt))) return false;
     j.verdict = v;

@@ -1779,8 +1779,16 @@ static void CreepDrive(void *action, float throttle, float dt)
         CreepDriveInner(action, throttle, dt);
         return;
     }
-    ShowDrive(show, action, throttle, dt);
-    InterlockedExchange(&g_showBusy, 0);
+    // a fault of the game's drive that leaves this call would keep the flag up and the display dead for the session
+    // (the review of 133, S3): it comes down on the way out either way
+    __try
+    {
+        ShowDrive(show, action, throttle, dt);
+    }
+    __finally
+    {
+        InterlockedExchange(&g_showBusy, 0);
+    }
 }
 
 void DriveShowGive(uint64_t action, uint64_t vehicle, uint64_t cylinderVtable)

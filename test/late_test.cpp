@@ -164,7 +164,7 @@ static void CaseLate()
     const ULONGLONG took = GetTickCount64() - from;
     Presents(a, 10);
     Check(g_frames == 0, "nothing is drawn on the chain made before the hooks");
-    Check(Lines(L"THE OVERLAY DRAWS NOTHING: the game made its swap chain before the overlay's hook was in") == 1 && took >= 1000 && took < 3000,
+    Check(Lines(L"THE OVERLAY DRAWS NOTHING: no swap chain came while a window was up (the game likely made its own before the overlay's hook was in)") == 1 && took >= 1000 && took < 3000,
           "the line in capitals with its reason, once, after the wait (1.5 s here)");
     Check(c->want == 1 && c->offered == 0 && c->taken == 0 && Lines(L"asking the other Next Gen mods") == 1, "the chain was asked for once and nobody offered");
     Check(Lines(L"Present hooked") == 0, "no line says a Present is hooked");

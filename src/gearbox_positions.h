@@ -212,7 +212,16 @@ struct PositionsState
     unsigned long long peekAt;
     int refusedSaid;       // kHas... bits of the refused keys told for this truck
     bool shifterSaid;      // the shifter gave a position the read lacks: told, the mask zeroed
+    unsigned long long since; // when this vehicle's read was first asked for (the mod's clock, ms)
 };
+
+// The read for this vehicle has been asked for and has not come back: what depends on the low gears it has waits, at
+// most kPositionsWaitMs (a read that never comes leaves the truck with every position, as before).
+static const unsigned long long kPositionsWaitMs = 5000;
+inline bool PositionsWaiting(const PositionsState &st, uint64_t vehicle, unsigned long long now)
+{
+    return vehicle && st.vehicle == vehicle && !st.name[0] && now - st.since < kPositionsWaitMs;
+}
 
 // On the mod's thread, the job's result taken (true) when it is done: kept only when it is for this vehicle and the name
 // the mod's own peek reads now (nameNow); else dropped, and the next peek posts again.

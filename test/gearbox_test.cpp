@@ -1558,10 +1558,10 @@ int main()
         k.last = GearboxAskOfPos(kPosA, 0);
         GearboxActions acts = {};
         const bool first = ShifterAskStep(k, GearboxAsk{ kAskA, 0 }, acts, 6) == kShifterAgainFirst && !acts.a && !acts.shifter;
-        const bool second = ShifterAskStep(k, GearboxAsk{ kAskA, 0 }, acts, 6) == kShifterAgain && k.again == 2;
+        const bool second = ShifterAskStep(k, GearboxAsk{ kAskA, 0 }, acts, 6) == kShifterAgain && k.again == 1;
         int early = 0; // passes of half a second: nothing for 119 of them, the count on the 120th, nothing after
         for (int i = 0; i < 119; i++) early += ShifterAgainTold(k, 0.5f);
-        const bool told = early == 0 && ShifterAgainTold(k, 0.5f) == 2 && ShifterAgainTold(k, 0.5f) == 0 && k.again == 0;
+        const bool told = early == 0 && ShifterAgainTold(k, 0.5f) == 1 && ShifterAgainTold(k, 0.5f) == 0 && k.again == 0;
         const bool picked = ShifterAskStep(k, GearboxAsk{ kAskGear, 2 }, acts, 6) == kShifterPick && acts.shifter && k.last.kind == kAskGear && k.last.gear == 2;
         const bool otherGear = ShifterAskStep(k, GearboxAsk{ kAskGear, 3 }, acts, 6) == kShifterPick && ShifterAskStep(k, GearboxAsk{ kAskGear, 3 }, acts, 6) == kShifterAgainFirst;
         const bool ofPos = GearboxAskOfPos(kPosLowPlus, 0).kind == kAskGear && GearboxAskOfPos(kPosLowPlus, 0).gear == 1 && GearboxAskOfPos(kPosGear, 5).gear == 5 &&

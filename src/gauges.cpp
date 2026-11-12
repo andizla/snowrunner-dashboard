@@ -4531,7 +4531,9 @@ static TorqueCutSlot TorqueCutSlotOf(const TruckWatch &w, const TruckRaw &raw, c
     // goes beside the gear's own: the ceiling has it whole while the truck is slow and the gear's own from 0.75 of the
     // gear's top (CapCeilingWide)
     c.capWide = 0.0f;
-    if (c.cap > 0.0f && (((w.pos.pos == kPosLowMinus || w.pos.pos == kPosLow) && raw.gearEngaged == 1) || (w.pos.pos == kPosR && raw.gearEngaged < 0)))
+    // while the fitted gearbox's positions are still being read the truck would count as having every low gear, and a box
+    // with L- and L and no L+ would get L+'s room for a pass or two: the wide cap waits for the read (the review of 130, S3)
+    if (c.cap > 0.0f && !PositionsWaiting(w.positions, w.refs.vehicle, GetTickCount64()) && (((w.pos.pos == kPosLowMinus || w.pos.pos == kPosLow) && raw.gearEngaged == 1) || (w.pos.pos == kPosR && raw.gearEngaged < 0)))
     {
         const float power = GearboxLowMostPower(w.positions.vehicle == w.refs.vehicle ? w.positions.missing : 0);
         const float mostTop = power > 0.0f ? TruckGearTopAt(raw, 1, power) : 0.0f;
@@ -4764,7 +4766,7 @@ static int PositionsStep(TruckWatch &w, const TruckMemory &m, const GaugeSetting
         PositionsJobDrop(g_positionsJob, 0, now);
         return 0;
     }
-    if (st.vehicle != w.refs.vehicle) PositionsNewVehicle(st, w.refs.vehicle);
+    if (st.vehicle != w.refs.vehicle) PositionsNewVehicle(st, w.refs.vehicle), st.since = now;
     char nameNow[kMaxText];
     size_t length = 0;
     const bool named = TruckNameText(m, st.vehicle + kGearboxFittedAt, nameNow, length, true);
@@ -6603,6 +6605,14 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             else if (own) Log(L"gearbox: the mod's gearbox takes the truck in %S (the game's gear %d); the game's own shifting is refused from now on, "
                               L"the bindings pick the position (driven with a wheel's pedals)", GearboxPosName(w.pos.pos), raw.gear);
             else Log(L"gearbox: the mod's automatic takes the truck in A (the game's gear %d); the game's reverse on the brake is refused", raw.gear);
+            // the review of 133, S1: where the mod was handed back and takes the truck again, the game's shifter may stand elsewhere
+            // than the position taken, and its first send then reads as a pick. The line shows how often that is
+            if (own && shifterAsks)
+            {
+                static const char *const keptName[] = { "nothing", "A", "N", "R", "H", "a gear", "L-", "L" };
+                if (w.shifter.last.kind == kAskGear) Log(L"gearbox: the shifter taken as at gear %d: what it sends is measured against that", w.shifter.last.gear);
+                else Log(L"gearbox: the shifter taken as at %S: what it sends is measured against that", keptName[w.shifter.last.kind]);
+            }
         }
         if (orders.gaveBack)
         {
@@ -7299,7 +7309,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 Log(L"probe: torque cut: %s; s %.2f rad/s (%.2f of the top %.2f, %.0f rpm), F %.3f, the bracket %.3f (the least %.3f, used %.3f at %.3f a step), the scalar %.3f, the share %.2f; "
                     L"the game's T %.3f, answered %.3f; D4 %.2f, B4s %.3f, the stand-in %.3f, the stall's wheels %.3f; calls answered %ld, passed %ld, the other callers' %ld, reads failed %ld; falls of 0.3 or more "
                     L"in one step %ld; the throttle held at 1 %s; the governor by the truck's speed %.2f rad/s (the rolling radius %.3f m, wheel + 0x94 %.3f m; %ld by the cylinder, %ld without, %ld out of bounds); the wheel cap %s: the ceiling %.2f rad/s, clamps %ld (%ld in the last step), the largest excess %.2f rad/s "
-                    L"after the drive and %.2f before it, the driven mean after the drive %.2f rad/s over %ld steps (%.2f at the most), the least driven wheel before the drive %.2f rad/s, "
+                    L"after the drive and %.2f before it (before it against the wider cap of L-, L and R at any truck speed), the driven mean after the drive %.2f rad/s over %ld steps (%.2f at the most), the least driven wheel before the drive %.2f rad/s, "
                     L"bodies refused %ld, steps waiting %ld, kept %.3f, spread %.2f rad/s, faults %ld; the physics at %d steps a second",
                     cutActs ? L"acting" : TorqueCutWhyNot(s, want, own && GearboxManual(w), cutHooks, raw.gearEngaged, gearTop, cutAgrees), c.s, sTop, gearTop, sTop * scale.redline,
                     c.f, c.bracket, w.cutFloor, c.used, c.rate, locked ? 0.0f : SettingsRange(w.clutch.carried, -1.0f, kClutchHold), s.engineShare / 100.0f, c.stock, c.torque, c.d4, c.b4s, c.standIn, c.w,
@@ -7706,10 +7716,13 @@ static bool RateCodeWrite(size_t at, uint32_t value)
     FlushInstructionCache(GetCurrentProcess(), place, 4);
     return ok;
 }
-static void RateOffSay(const char *why)
+// foreign: the step's own float is another mod's, so the game does not step as it does without the mod and the line's
+// tail is left off (the review of 129, S3).
+static void RateOffSay(const char *why, bool foreign = false)
 {
     g_rateNote = kRateNoteOff;
-    Log(L"physics rate: 120 asked (PhysicsRate=120) and off: %S. The game steps 60 times a second as it does without the mod", why);
+    if (foreign) Log(L"physics rate: 120 asked (PhysicsRate=120) and off: %S", why);
+    else Log(L"physics rate: 120 asked (PhysicsRate=120) and off: %S. The game steps 60 times a second as it does without the mod", why);
 }
 // The start: the first thing after the log's head, before the overlay (the Reviewer's M2). At PhysicsRate=60 it reads
 // the key and does nothing else: no page, no hook, no write, no line. At 120: every place and the drive found and
@@ -7752,7 +7765,7 @@ static void RateStart()
     if (!found)
     {
         if (driveOk && plan.foreignStep) g_stepSignOn = true;
-        RateOffSay(!driveOk ? drive.why : plan.why);
+        RateOffSay(!driveOk ? drive.why : plan.why, driveOk && plan.foreignStep);
         return;
     }
     const uint64_t page = RatePageMake();
@@ -7770,7 +7783,7 @@ static void RateStart()
     {
         VirtualFree((void *)(uintptr_t)page, 0, MEM_RELEASE);
         if (readOnly && plan.foreignStep) g_stepSignOn = true;
-        RateOffSay(!readOnly ? "the mod's page could not be made read only" : plan.why);
+        RateOffSay(!readOnly ? "the mod's page could not be made read only" : plan.why, readOnly && plan.foreignStep);
         return;
     }
     char why[160] = "";
