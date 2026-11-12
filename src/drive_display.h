@@ -6,6 +6,7 @@
 #pragma once
 #include <math.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include "torque_cut.h"
 
@@ -67,6 +68,7 @@ struct DdSample
     float given[kDdWheels], before[kDdWheels];
     int force, gear;
     float kept;
+    uint8_t type[kDdWheels]; // the differential by axle: the wheel's axle's type in force in this step (kDdAx...), 0 where the axles are alike
 };
 
 // The averages, the physics thread's own. given and before are kept as impulse over the step's seconds, so a step of
@@ -81,6 +83,7 @@ struct DdAvg
     float speed[kDdWheels], truck[kDdWheels], given[kDdWheels], before[kDdWheels], air[kDdWheels], capped[kDdWheels], tied[kDdWheels];
     float kept;
     int force, gear;
+    uint8_t type[kDdWheels]; // the last step's
 };
 
 inline bool DdSameWheels(const DdAvg &a, const DdSample &s)
@@ -132,6 +135,7 @@ inline bool DdStep(DdAvg &a, const DdSample &s, float dt)
         else a.given[i] = a.before[i] = a.capped[i] = a.tied[i] = 0.0f;
         a.ok[i] = ok;
         a.driven[i] = driven;
+        a.type[i] = driven ? s.type[i] : 0;
     }
     to(a.kept, s.kept, k);
     a.force = s.force;
@@ -154,6 +158,7 @@ struct DdShown
     bool ok[kDdWheels], driven[kDdWheels], air[kDdWheels], capLamp[kDdWheels], lockLamp[kDdWheels];
     float speed[kDdWheels], truck[kDdWheels];
     float share[kDdWheels], shareBefore[kDdWheels];
+    uint8_t type[kDdWheels]; // each driven wheel's axle's type in force where the axles differ (kDdAx...), else 0
 };
 
 // The shares (M5): each driven wheel's part above 0 over the sum of the parts above 0. A wheel under 0 gets an empty
@@ -197,6 +202,7 @@ inline void DdShow(const DdAvg &a, DdShown &o)
     {
         o.ok[i] = a.ok[i];
         o.driven[i] = a.driven[i];
+        o.type[i] = a.type[i];
         o.speed[i] = a.speed[i];
         o.truck[i] = a.truck[i];
         o.air[i] = a.ok[i] && a.air[i] > 0.5f;
@@ -259,5 +265,141 @@ inline int DdLayout(const int *axle, const float *along, const float *side, cons
 // The line under the wheels: the differential in force and what the wheel cap kept of the drive.
 inline const char *DdForceName(int force)
 {
-    return force == kDiffForceOpen ? "Open" : force == kDiffForceLimited ? "Limited slip" : force == kDiffForceLock ? "Locked" : "Game diff";
+    return force == kDiffForceOpen ? "Open" : force == kDiffForceLimited ? "Limited slip" : force == kDiffForceLock ? "Locked" : force == kDiffForceAxles ? "By axle" : "Game diff";
+}
+// The differential by axle (BRIEF_axle_diff.md, M4 and M8): an axle's type in force as the display names it. The first
+// three are kDiffOpen, kDiffLimited and kDiffLocked; kDdAxNoBite is Locked with nothing to tie it (Diff lock bite 0, or
+// no lock slot published).
+enum { kDdAxNone, kDdAxOpen, kDdAxLimited, kDdAxLocked, kDdAxNoBite };
+inline const char *DdAxleName(int type)
+{
+    return type == kDdAxOpen ? "Open" : type == kDdAxLimited ? "Limited slip" : type == kDdAxLocked ? "Locked" : type == kDdAxNoBite ? "Locked, no bite" : "";
+}
+// The line under the wheels. Where the axles are alike: the one name, as before. Where they differ: each driven axle's
+// type front to back, by the rows, " / " between them. An axle with no wheel driven in this step is left out.
+inline void DdAxlesLine(const DdShown &d, char *out, size_t size)
+{
+    if (!size) return;
+    out[0] = 0;
+    size_t len = 0;
+    if (d.force == kDiffForceAxles)
+        for (int r = 0; r < d.rows; r++)
+        {
+            int type = kDdAxNone;
+            for (int i = 0; i < d.n && i < kDdWheels && type == kDdAxNone; i++)
+                if (d.row[i] == r && d.driven[i]) type = d.type[i];
+            const char *name = DdAxleName(type);
+            if (!name[0]) continue;
+            const int put = snprintf(out + len, size - len, "%s%s", len ? " / " : "", name);
+            if (put < 0 || (size_t)put >= size - len)
+            {
+                out[size - 1] = 0;
+                return;
+            }
+            len += (size_t)put;
+        }
+    if (!len) snprintf(out, size, "%s", DdForceName(d.force));
+}
+
+// ---- the differential by axle: the rows of the Power tab (BRIEF_axle_diff.md, M5 to M7) ----
+// The truck's axles front to back, from what the mod's thread read of every wheel: its parent body, its place in that
+// body's frame (along, side; AxlePlace), its place along the main body (rowAt, the order's key) and how it is driven
+// (0 not, 1 always, 2 with all wheel drive). One grouping: AxleGroups. One order: DdLayout's, the further forward
+// first. axles 0: no rows (a wheel not placed, a wheel with no partner, more wheels than the display holds or more
+// than kAxleRowsMost axles); the whole truck then goes by DiffType as before.
+enum { kAxleRowsMost = 8 };
+struct AxleRows
+{
+    int axles;                // every axle of the truck, driven or not
+    int ofWheel[kDdWheels];   // each wheel's axle, 0 the front
+    int drive[kAxleRowsMost]; // 0 not driven (no row), 1 always, 2 with all wheel drive
+};
+inline AxleRows AxleRowsMake(const uint64_t *body, const float *along, const float *side, const float *rowAt, const bool *ok, const int *drive, int n)
+{
+    AxleRows r = {};
+    if (n < 2 || n > kDdWheels) return r;
+    for (int i = 0; i < n; i++)
+        if (!ok[i]) return r;
+    const AxleGroupsOut g = AxleGroups(body, along, side, ok, n);
+    if (g.alone > 0) return r;
+    uint8_t row[kDdWheels];
+    bool right[kDdWheels];
+    const int rows = DdLayout(g.axle, rowAt, side, ok, n, true, row, right);
+    if (rows < 1 || rows > kAxleRowsMost || rows >= n) return r;
+    r.axles = rows;
+    for (int i = 0; i < n; i++)
+    {
+        r.ofWheel[i] = row[i];
+        int &k = r.drive[row[i]];
+        if (drive[i] == 1) k = 1;
+        else if (drive[i] == 2 && k == 0) k = 2;
+    }
+    return r;
+}
+// An axle's set type (M6): its own key where it holds 0 to 3, else the truck's DiffType.
+inline int AxleSetOf(const int *diffAxle, int axle, int diffType)
+{
+    const int v = axle >= 0 && axle < kAxleRowsMost ? diffAxle[axle] : -1;
+    return v >= kDiffAuto && v <= kDiffLocked ? v : diffType;
+}
+// The two levers (M7): the front one has axle 1 where it can be driven, the rear one every other axle that can.
+inline bool AxleLeverHas(const AxleRows &r, bool front)
+{
+    if (front) return r.axles > 0 && r.drive[0] != 0;
+    for (int a = 1; a < r.axles; a++)
+        if (r.drive[a]) return true;
+    return false;
+}
+// The levers' state, kept with the truck's watch by vehicle and never written (M7). Another truck starts with both
+// off, and back on the first they are off too. A press: -1 nothing to lock (no state), else 1 on or 0 off.
+struct AxleLevers
+{
+    uint64_t vehicle;
+    bool front, rear;
+};
+inline void AxleLeversFor(AxleLevers &l, uint64_t vehicle)
+{
+    if (vehicle && l.vehicle != vehicle) l = AxleLevers{ vehicle, false, false };
+}
+inline int AxleLeverPressed(AxleLevers &l, uint64_t vehicle, const AxleRows &r, bool front)
+{
+    if (!vehicle || !AxleLeverHas(r, front)) return -1;
+    AxleLeversFor(l, vehicle);
+    bool &on = front ? l.front : l.rear;
+    on = !on;
+    return on ? 1 : 0;
+}
+// What is in force on each axle in this pass: its set type through DiffTypeOf (Auto by the lock kind, the same for
+// every axle), or Locked while its lever is on. now: driven in this pass (always, or with all wheel drive on).
+// common: the type every axle driven now has, -1 where two differ; with none driven the whole truck's by DiffType.
+// byAxle: the set types of the axles that can be driven differ (the Diff row then reads "By axle").
+struct AxlePlan
+{
+    int type[kAxleRowsMost];
+    bool lever[kAxleRowsMost], now[kAxleRowsMost];
+    int common;
+    bool byAxle;
+};
+inline AxlePlan AxlePlanOf(const AxleRows &r, const int *diffAxle, int diffType, bool kindRead, int kind, bool awd, bool leverFront, bool leverRear)
+{
+    AxlePlan p = {};
+    int first = -1, firstSet = -1;
+    bool differ = false;
+    for (int a = 0; a < r.axles && a < kAxleRowsMost; a++)
+    {
+        const int set = AxleSetOf(diffAxle, a, diffType);
+        p.lever[a] = r.drive[a] != 0 && (a == 0 ? leverFront : leverRear);
+        p.type[a] = p.lever[a] ? kDiffLocked : DiffTypeOf(set, kindRead, kind);
+        p.now[a] = r.drive[a] == 1 || (r.drive[a] == 2 && awd);
+        if (r.drive[a])
+        {
+            if (firstSet < 0) firstSet = set;
+            else if (set != firstSet) p.byAxle = true;
+        }
+        if (!p.now[a]) continue;
+        if (first < 0) first = p.type[a];
+        else if (p.type[a] != first) differ = true;
+    }
+    p.common = differ ? -1 : first >= 0 ? first : DiffTypeOf(diffType, kindRead, kind);
+    return p;
 }

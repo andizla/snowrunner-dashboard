@@ -469,6 +469,15 @@ Its truck speed is the cut's, and where the cut gave none the main body's forwar
 Below k 1 a free wheel still runs ahead by about the drive's kick &times; (1 &minus; k) / k. Gauges.log has "differential: the lock kind ..."
 for a truck, "differential: Locked on a truck whose lock is not always on ..." as the mod takes or leaves the lock byte,
 "differential: the lock byte the mod holds for Locked was 0 again ..." once, and with Probe=1 "probe: differential: ..." a second.</p>
+<p><b>The differential by axle</b> (BRIEF_axle_diff.md). DiffAxle1 to DiffAxle8 are keys of the truck's own file, 0 to 3 as DiffType. An axle with no key goes by DiffType.
+The mod's thread reads every wheel's parent body and place and groups them as Open by axle does (<code>AxleGroups</code>), ordered front to back as the Drive display's rows
+(<code>AxleRowsMake</code>). <code>AxlePlanOf</code> gives each axle's type in force: its set type through <code>DiffTypeOf</code>, or Locked while its lever is on.
+The cut's slot carries each wheel's pointer with its axle's type and how it is driven. In the drive's hook <code>SlotForce</code> decides once a step, over the wheels driven in that step.
+Alike: the step is the one before the rows, with their type. The lock byte in force: the whole truck's lock. Else <code>DiffAxlesStep</code>: an Open axle is evened within itself,
+a Locked axle gets <code>LockStepHeld</code> over its own wheels with the truck's mass times the axle's wheels over the driven wheels read, a Limited slip axle is left as the drive left it.
+In a gear with a cap each axle is then held against the same ceiling and what the limit took goes to the other axles by <code>DiffOpenAxles</code>' rule.
+The mod holds the lock byte only where every driven axle is Locked. The two levers are kept with the truck's watch by vehicle and never written.
+Gauges.log has "differential by axle: ..." for the axles read and for a lever's press, and with Probe=1 "probe: differential by axle: ..." a second while the axles differ.</p>
 <h3>The torque cut (a gear held by hand)</h3>
 <p>The game's torque per gear is one function, <code>bool(vehicle, int gear, float* torque, float* start, float* a, float* top, float* gearSpeed)</code>, found by
 its first bytes once (<code>kGearTorquePattern</code>), and the drive's call of it is the first call in the wheels' drive that lands there (<code>GearTorqueFind</code>,

@@ -716,12 +716,13 @@ struct ShowNote
     float kept;
     uint8_t *wheel[kCapWheels];
     bool capped[kCapWheels], tied[kCapWheels];
+    uint8_t type[kCapWheels]; // the differential by axle: the wheel's axle's type in force (kDdAx...), 0 where the axles are alike
 };
 static ShowNote g_showNote; // the physics thread's own
 static void ShowNoteWheels(const CapTruckRead &t, const float *post, const float *work)
 {
     g_showNote.n = t.n;
-    for (int i = 0; i < t.n; i++) g_showNote.wheel[i] = t.w[i].wheel, g_showNote.capped[i] = false, g_showNote.tied[i] = t.w[i].ok && DdTied(work[i], post[i]);
+    for (int i = 0; i < t.n; i++) g_showNote.wheel[i] = t.w[i].wheel, g_showNote.capped[i] = false, g_showNote.tied[i] = t.w[i].ok && DdTied(work[i], post[i]), g_showNote.type[i] = 0;
 }
 static void CapGet3(const uint8_t *p, CapVec &v)
 {
@@ -868,20 +869,24 @@ static LockLast g_lockHeld, g_lockLast;
 static const uint8_t *g_lockHeldWheel[kCapWheels];
 static bool g_lockHeldOn = false;
 static volatile LONG g_evenSteps = 0, g_evenWrites = 0, g_evenFaults = 0, g_evenN = 0, g_evenJBits = 0, g_diffForceNow = kDiffForceLimited;
-// The lock byte (action + 0x4A) and the handbrake (action + 0x48), once a step; false where the read faults.
-static bool DiffBytesRead(const void *action, bool &lockByte, bool &handbrake)
+// the differential by axle (BRIEF_axle_diff.md): the steps, the Locked axles tied, the wheels not in the slot, the axles of two types, the last k
+static volatile LONG g_axSteps = 0, g_axTied = 0, g_axMissing = 0, g_axSplit = 0, g_axKBits = 0;
+// The lock byte (action + 0x4A), the handbrake (action + 0x48) and all wheel drive (action + 0x49), once a step; false
+// where the read faults.
+static bool DiffBytesRead(const void *action, bool &lockByte, bool &handbrake, bool &awd)
 {
-    lockByte = handbrake = false;
+    lockByte = handbrake = awd = false;
     __try
     {
         const uint8_t *a = (const uint8_t *)action;
         lockByte = *(const volatile uint8_t *)(a + 0x4A) != 0;
         handbrake = *(const volatile uint8_t *)(a + 0x48) != 0;
+        awd = *(const volatile uint8_t *)(a + 0x49) != 0;
         return true;
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
     {
-        lockByte = handbrake = false;
+        lockByte = handbrake = awd = false;
         return false;
     }
 }
@@ -1002,7 +1007,7 @@ static const int kAxleSay = kDiffAxleSay; // gearbox_hooks.h, DiffCounts
 static AxleTable g_axle; // the physics thread's own
 static volatile LONG g_axleGen = 0, g_axleAxles = 0, g_axleAlone = 0, g_axleWheels = 0, g_axleFaults = 0;
 static volatile LONG64 g_axleVehicle = 0;
-static volatile LONG g_axleSayN = 0, g_axleSayMean[kAxleSay] = {}, g_axleSayK[kAxleSay] = {}, g_axleSayWheels[kAxleSay] = {}, g_axleSayGot[kAxleSay] = {};
+static volatile LONG g_axleSayN = 0, g_axleSayMean[kAxleSay] = {}, g_axleSayK[kAxleSay] = {}, g_axleSayWheels[kAxleSay] = {}, g_axleSayGot[kAxleSay] = {}, g_axleSayType[kAxleSay] = {};
 static bool AxleWheelsRead(const void *vehicle, uint8_t **wheel, int &n)
 {
     n = 0;
@@ -1095,10 +1100,8 @@ static void AxleLook(const CapTruckRead &t, int *axle, int *place)
 }
 // The limit by axle, with each axle's mean, factor and wheels left for the probe (the first kAxleSay of them; the wheels
 // a bit each by their place in the truck's list). A ceiling of 0 limits nothing and only leaves the figures.
-static CapStepOut OpenAxlesStep(const float *pre, const float *even, const float *gain, const bool *ok, const int *axle, const int *place, int n, float ceiling)
+static void AxlesSay(const OpenAxlesOut &r, const int *place, int n, const int *type)
 {
-    static OpenAxlesOut r; // the physics thread's own
-    r = DiffOpenAxles(pre, even, gain, ok, axle, n, ceiling, true);
     const int say = r.axles < kAxleSay ? r.axles : kAxleSay;
     for (int a = 0; a < say; a++)
     {
@@ -1109,8 +1112,15 @@ static CapStepOut OpenAxlesStep(const float *pre, const float *even, const float
         InterlockedExchange(&g_axleSayK[a], FloatBits(r.k[a]));
         InterlockedExchange(&g_axleSayGot[a], FloatBits(r.got[a]));
         InterlockedExchange(&g_axleSayWheels[a], wheels);
+        InterlockedExchange(&g_axleSayType[a], type ? type[a] : kDiffOpen);
     }
     InterlockedExchange(&g_axleSayN, say);
+}
+static CapStepOut OpenAxlesStep(const float *pre, const float *even, const float *gain, const bool *ok, const int *axle, const int *place, int n, float ceiling)
+{
+    static OpenAxlesOut r; // the physics thread's own
+    r = DiffOpenAxles(pre, even, gain, ok, axle, n, ceiling, true);
+    AxlesSay(r, place, n, nullptr);
     return r.o;
 }
 
@@ -1120,7 +1130,11 @@ static CapStepOut OpenAxlesStep(const float *pre, const float *even, const float
 // has no cap (a numbered gear) the evening and the lock act alone. A change of what is in force mid-drive (the lock
 // set with a free wheel far over the ceiling) lowers no wheel: the step's limit is never under the wheel's own speed
 // before the drive, and what is handed on is counted from that limit (F1 of the review).
-static CapAround CapStepAround(const TorqueCutSlot *cut, void *action, float throttle, float dt, float lockK, int force, float mass)
+// byAxle (BRIEF_axle_diff.md, M3; force is kDiffForceAxles): the driven axles differ in type. Each read wheel's type is
+// the slot's by its pointer (not found: Limited slip, counted), an axle goes by its first wheel's (two types on one
+// axle: counted), and DiffAxlesStep does the rest: within each axle by its type, lockK the Locked axles' k, then the
+// ceiling and the hand-on where the slot has a cap. The whole truck's lock does not run and its by-wheel line is not fed.
+static CapAround CapStepAround(const TorqueCutSlot *cut, void *action, float throttle, float dt, float lockK, int force, float mass, bool byAxle)
 {
     CapAround out = {};
     out.kept = 1.0f;
@@ -1167,7 +1181,7 @@ static CapAround CapStepAround(const TorqueCutSlot *cut, void *action, float thr
     float pre[kCapWheels], post[kCapWheels], gain[kCapWheels], work[kCapWheels];
     bool ok[kCapWheels];
     for (int i = 0; i < t.n; i++) pre[i] = t.w[i].pre, post[i] = t.w[i].pre, gain[i] = t.w[i].gain, ok[i] = t.w[i].ok;
-    volatile LONG &faults = capHere ? g_capFaults : open ? g_evenFaults : g_lockFaults;
+    volatile LONG &faults = capHere ? g_capFaults : open || byAxle ? g_evenFaults : g_lockFaults;
     if (!CapReadAfter(t, post))
     {
         InterlockedIncrement(&faults);
@@ -1185,8 +1199,9 @@ static CapAround CapStepAround(const TorqueCutSlot *cut, void *action, float thr
         CapAdd(g_capPostSum, postMean);
         CapMost(g_capPostMost, postMean);
     }
-    int axle[kCapWheels], place[kCapWheels];
+    int axle[kCapWheels], place[kCapWheels], axType[kCapWheels];
     bool lockWrote = false;
+    static DiffAxlesOut ax; // the physics thread's own
     if (open)
     {
         AxleTableStep(vehicle);
@@ -1198,8 +1213,51 @@ static CapAround CapStepAround(const TorqueCutSlot *cut, void *action, float thr
         InterlockedExchange(&g_evenN, e.used);
         InterlockedExchange(&g_evenJBits, FloatBits(e.j));
     }
+    else if (byAxle)
+    {
+        AxleTableStep(vehicle);
+        AxleLook(t, axle, place);
+        float load[kCapWheels], radius[kCapWheels];
+        int missing = 0, split = 0;
+        for (int i = 0; i < t.n; i++)
+        {
+            bool found = false;
+            axType[i] = SlotWheelType(*cut, (uint64_t)(uintptr_t)t.w[i].wheel, &found);
+            if (!found) missing++;
+            load[i] = t.w[i].load, radius[i] = t.w[i].radius;
+            for (int j = 0; j < i; j++)
+            {
+                if (axle[j] != axle[i]) continue;
+                if (axType[j] != axType[i]) split++, axType[i] = axType[j];
+                break;
+            }
+        }
+        ax = DiffAxlesStep(pre, post, gain, load, radius, ok, axle, axType, t.n, lockK, mass, capHere ? ceiling : 0.0f, true);
+        for (int i = 0; i < t.n; i++) work[i] = ax.work[i];
+        InterlockedIncrement(&g_axSteps);
+        if (ax.tied) InterlockedExchangeAdd(&g_axTied, ax.tied);
+        if (missing) InterlockedExchangeAdd(&g_axMissing, missing);
+        if (split) InterlockedExchangeAdd(&g_axSplit, split);
+        InterlockedExchange(&g_axKBits, FloatBits(lockK));
+        if (ax.lockUnder) InterlockedExchangeAdd(&g_lockUnder, ax.lockUnder);
+        if (ax.lockBounded) InterlockedExchangeAdd(&g_lockBounded, ax.lockBounded);
+        if (ax.lockBreach) InterlockedExchangeAdd(&g_lockBreach, ax.lockBreach);
+        if (ax.evenUsed >= 2)
+        {
+            InterlockedIncrement(&g_evenSteps);
+            if (ax.evenWrote) InterlockedIncrement(&g_evenWrites);
+            InterlockedExchange(&g_evenN, ax.evenUsed);
+            InterlockedExchange(&g_evenJBits, FloatBits(ax.evenJ));
+        }
+        AxlesSay(ax.r, place, t.n, ax.type);
+    }
     else if (lockK > 0.0f) lockWrote = LockOver(t, post, lockK, work, vehicle, mass, truck);
-    if (action == g_showNow) ShowNoteWheels(t, post, work);
+    if (action == g_showNow)
+    {
+        ShowNoteWheels(t, post, work);
+        if (byAxle)
+            for (int i = 0; i < t.n; i++) g_showNote.type[i] = (uint8_t)(axType[i] == kDiffLocked && !(lockK > 0.0f) ? kDdAxNoBite : axType[i]);
+    }
     if (!capHere)
     {
         // no cap in this gear: the evening or the lock alone
@@ -1207,7 +1265,7 @@ static CapAround CapStepAround(const TorqueCutSlot *cut, void *action, float thr
         if (!CapWriteFinal(t, post, work)) InterlockedIncrement(&faults);
         return out;
     }
-    const CapStepOut o = open ? OpenAxlesStep(pre, work, gain, ok, axle, place, t.n, ceiling) : CapStep(pre, work, gain, ok, t.n, ceiling, true);
+    const CapStepOut o = open ? OpenAxlesStep(pre, work, gain, ok, axle, place, t.n, ceiling) : byAxle ? ax.r.o : CapStep(pre, work, gain, ok, t.n, ceiling, true);
     if (!CapWrite(t, post, o)) InterlockedIncrement(&g_capFaults);
     if (lockWrote)
     {
@@ -1397,15 +1455,20 @@ static void CreepDriveInner(void *action, float throttle, float dt)
     const LockSlot *lock = (const LockSlot *)g_lockSlot;
     uint64_t lockAt = 0;
     const bool lockHere = lock && (uint64_t)(uintptr_t)action == lock->action && lock->bite > 0 && (lockAt = GetTickCount64()) >= lock->at && lockAt - lock->at <= kTorqueFresh;
-    bool lockByte = false, handbrake = false;
-    const bool bytesOk = (cutHere || lockHere) && DiffBytesRead(action, lockByte, handbrake);
-    const int force = DiffForceOf(cutHere ? cut->diff : kDiffLimited, lockByte, handbrake);
+    bool lockByte = false, handbrake = false, awd = false;
+    const bool bytesOk = (cutHere || lockHere) && DiffBytesRead(action, lockByte, handbrake, awd);
+    // by axle (BRIEF_axle_diff.md, M1 and M2): over the slot's wheels driven in this step. Alike: the step is the one
+    // before the axles, with their type. The lock byte in force: the whole truck's lock, whatever the axles are. Else,
+    // where they differ: each axle by its own (kDiffForceAxles)
+    const int force = cutHere ? SlotForce(*cut, bytesOk, lockByte, handbrake, awd) : DiffForceOf(kDiffLimited, lockByte, handbrake);
+    const bool byAxle = force == kDiffForceAxles;
     if (cutHere) InterlockedExchange(&g_diffForceNow, force);
-    float lockK = 0.0f;
+    float lockK = 0.0f, axleK = 0.0f;
     if (lockHere)
     {
         InterlockedIncrement(&g_lockCalls);
         if (!bytesOk) InterlockedIncrement(&g_lockFaults);
+        else if (byAxle) axleK = LockK(lock->bite, dt); // the Locked axles' k; the whole truck's lock rests
         else if (force != kDiffForceLock) InterlockedIncrement(lockByte ? &g_lockHand : &g_lockOff);
         else lockK = LockK(lock->bite, dt);
     }
@@ -1420,7 +1483,7 @@ static void CreepDriveInner(void *action, float throttle, float dt)
     if (pushVehicle && !pushRead) InterlockedIncrement(&g_pushFaults);
     float b4 = NAN;
     if (pushOn && pushRead) b4 = CutB4Read(action);
-    if (!capOn && !evenOn)
+    if (!capOn && !evenOn && !byAxle)
     {
         // the lock without the cap: its own read block (one driven truck, one call at a time)
         static CapTruckRead lr;
@@ -1451,7 +1514,7 @@ static void CreepDriveInner(void *action, float throttle, float dt)
         return;
     }
     const bool lockSame = lockHere && lock->vehicle == cut->vehicle;
-    const CapAround around = CapStepAround(cut, action, throttle, dt, lockSame ? lockK : 0.0f, force, lockSame ? lock->mass : 0.0f);
+    const CapAround around = CapStepAround(cut, action, throttle, dt, lockSame ? (byAxle ? axleK : lockK) : 0.0f, force, lockSame ? lock->mass : 0.0f, byAxle);
     if (action == g_showNow) g_showNote.kept = around.kept;
     if (capPush && pushRead && PushReadAfter(pr))
     {
@@ -1743,7 +1806,7 @@ static void ShowDrive(const ShowSlot *show, void *action, float throttle, float 
         s.given[i] = (final[i] - w.pre) / w.gain;
         s.before[i] = (w.mid - w.pre) / w.gain;
         for (int k = 0; k < g_showNote.n; k++)
-            if (g_showNote.wheel[k] == w.wheel) s.capped[i] = g_showNote.capped[k], s.tied[i] = g_showNote.tied[k];
+            if (g_showNote.wheel[k] == w.wheel) s.capped[i] = g_showNote.capped[k], s.tied[i] = g_showNote.tied[k], s.type[i] = g_showNote.type[k];
     }
     DdStep(g_showAvg, s, dt);
     ShowLayMake(show->vehicle, r);
@@ -1905,7 +1968,9 @@ void DiffCountsGet(DiffCounts &out)
     out.sayN = (int)g_axleSayN;
     if (out.sayN > kDiffAxleSay) out.sayN = kDiffAxleSay;
     for (int a = 0; a < kDiffAxleSay; a++)
-        out.sayMean[a] = BitsFloat(g_axleSayMean[a]), out.sayK[a] = BitsFloat(g_axleSayK[a]), out.sayGot[a] = BitsFloat(g_axleSayGot[a]), out.sayWheels[a] = (unsigned)g_axleSayWheels[a];
+        out.sayMean[a] = BitsFloat(g_axleSayMean[a]), out.sayK[a] = BitsFloat(g_axleSayK[a]), out.sayGot[a] = BitsFloat(g_axleSayGot[a]), out.sayWheels[a] = (unsigned)g_axleSayWheels[a],
+        out.sayType[a] = (int)g_axleSayType[a];
+    out.axSteps = g_axSteps, out.axTied = g_axTied, out.axMissing = g_axMissing, out.axSplit = g_axSplit, out.axK = BitsFloat(g_axKBits);
 }
 
 void PushCountsGet(PushCounts &out)

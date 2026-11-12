@@ -20,6 +20,8 @@ enum GearAction
     kActSway,     // the sway bars connected and disconnected (BRIEF_suspension_extras.md, build B), at every level of Gearbox
     kActRideUp,   // the air suspension raised and lowered (build C), at every level of Gearbox
     kActRideDown,
+    kActLockFront, // the differential by axle (BRIEF_axle_diff.md, M7): axle 1, and every other axle, held Locked while on; unbound by default
+    kActLockRear,
     kActCount
 };
 enum { kGearKeys = 16 }; // the numbered gear keys, Gear1 to Gear16
@@ -27,7 +29,7 @@ enum { kGearKeys = 16 }; // the numbered gear keys, Gear1 to Gear16
 static const char *const kActionNames[kActCount] = { "Gear1", "Gear2", "Gear3", "Gear4", "Gear5", "Gear6", "Gear7", "Gear8", "Gear9", "Gear10",
                                                      "Gear11", "Gear12", "Gear13", "Gear14", "Gear15", "Gear16", "GearH", "GearL-", "GearL", "GearL+", "GearN", "GearR", "GearUp",
                                                      "GearDown", "Clutch", "RangeHigh", "RangeLow", "GearA", "DiffLock", "Awd", "SwayDisconnect",
-                                                     "RideUp", "RideDown" };
+                                                     "RideUp", "RideDown", "LockFrontAxle", "LockRearAxles" };
 
 // A binding: a key (its virtual key code), a pad chord (XInput buttons, PadParse), a wheel's or shifter's button, one
 // direction of its POV hat, or one of its axes (the clutch: inverted where the pedal reads backwards). Wheels count

@@ -270,7 +270,9 @@ inline int DiffTypeOf(int setting, bool kindRead, int kind)
 inline bool DiffLockInForce(int type, bool lockByte, bool handbrake) { return (lockByte && !handbrake) || type == kDiffLocked; }
 // What acts in one step of the drive (M4), read once with that step's lock byte: the lock where it is in force, else
 // Open for the type Open, else Limited slip.
-enum { kDiffForceOpen, kDiffForceLimited, kDiffForceLock };
+// kDiffForceAxles: the driven axles differ in type and the lock byte is not in force, so each axle goes by its own
+// (BRIEF_axle_diff.md, M3; DiffAxlesStep). DiffForceOf never gives it: the hook does, over the slot's wheels.
+enum { kDiffForceOpen, kDiffForceLimited, kDiffForceLock, kDiffForceAxles };
 inline int DiffForceOf(int type, bool lockByte, bool handbrake)
 {
     return DiffLockInForce(type, lockByte, handbrake) ? kDiffForceLock : type == kDiffOpen ? kDiffForceOpen : kDiffForceLimited;
@@ -325,7 +327,57 @@ struct TorqueCutSlot
     float capWide; // the low range's wider cap for L-, L and R (LowRangeCap, CapCeilingWide), in the wheels' measure; 0 none. cap stays the gear's own
     TorqueCutMap map;
     int diff; // the differential's type for this truck (DiffTypeOf, on the mod's thread)
+    // The differential by axle (BRIEF_axle_diff.md, M5): the truck's wheels by their pointers, each with its axle's type
+    // in force (kDiffOpen, kDiffLimited or kDiffLocked) and how it is driven (1 always, 2 with all wheel drive, 0 not).
+    // axleN 0: the axles are not read as pairs and the whole truck goes by diff.
+    int axleN;
+    uint64_t axleWheel[32];
+    uint8_t axleType[32], axleDrive[32];
 };
+enum { kSlotWheels = 32 };
+// What the hook goes by in one step (M1): over the slot's wheels that are driven in this step (awd: the byte at
+// action + 0x49), the type they all have, or differ where two of them have two types. With no table, or no wheel of it
+// driven, the slot's own type. Where they differ, type is the slot's own too (the lock byte's rule goes by it).
+struct SlotAxles
+{
+    int type;
+    bool differ;
+};
+inline SlotAxles SlotAxleTypes(const TorqueCutSlot &c, bool awd)
+{
+    SlotAxles f = { c.diff, false };
+    bool any = false;
+    for (int i = 0; i < c.axleN && i < kSlotWheels; i++)
+    {
+        if (!(c.axleDrive[i] == 1 || (c.axleDrive[i] == 2 && awd))) continue;
+        if (!any) f.type = c.axleType[i], any = true;
+        else if (c.axleType[i] != f.type) f.differ = true;
+    }
+    if (f.differ) f.type = c.diff;
+    return f;
+}
+// What is in force in one step with the cut on this action (M1, M2): each axle by its own (kDiffForceAxles) where the
+// bytes were read, the driven axles differ and the lock byte is not in force (set, and the handbrake not). Else what
+// DiffForceOf gives for the type the driven axles share: the lock byte in force is the whole truck's lock whatever
+// the axles are.
+inline int SlotForce(const TorqueCutSlot &c, bool bytesOk, bool lockByte, bool handbrake, bool awd)
+{
+    const SlotAxles sa = SlotAxleTypes(c, awd);
+    if (bytesOk && sa.differ && !(lockByte && !handbrake)) return kDiffForceAxles;
+    return DiffForceOf(sa.type, lockByte, handbrake);
+}
+// One wheel's type by its pointer. Not in the slot: Limited slip, and found false (counted for the probe).
+inline int SlotWheelType(const TorqueCutSlot &c, uint64_t wheel, bool *found)
+{
+    for (int i = 0; i < c.axleN && i < kSlotWheels; i++)
+        if (c.axleWheel[i] == wheel)
+        {
+            if (found) *found = true;
+            return c.axleType[i] == kDiffOpen || c.axleType[i] == kDiffLocked ? c.axleType[i] : kDiffLimited;
+        }
+    if (found) *found = false;
+    return kDiffLimited;
+}
 
 // The cut answers a call only when all hold: it is the drive's (it returns to driveBack), a slot is published for this
 // vehicle, at most kTorqueFresh old, and the game's own answer was true (a gear the game drives: not 0, a >= 0).
@@ -513,6 +565,7 @@ static const float kLowWideFrom = 0.25f;
 // static_assert in gauges.cpp holds them equal, the review of 113, M3). The cut, the cap, the lock and the chassis
 // push read a truck of up to this many and refuse a longer list.
 static const int kCapWheels = 32;
+static_assert(kSlotWheels == kCapWheels, "the slot's wheel table holds every wheel the cap reads");
 
 struct CapVec
 {
@@ -1143,7 +1196,9 @@ struct OpenAxlesOut
     float mean[kCapWheels], k[kCapWheels], got[kCapWheels];
     uint32_t wheels[kCapWheels];
 };
-inline OpenAxlesOut DiffOpenAxles(const float *pre, const float *even, const float *gain, const bool *ok, const int *axle, int n, float ceiling, bool handOn)
+// type (the differential by axle, DiffAxlesStep): each wheel's axle's type, or nullptr for Open everywhere. An axle that
+// is not Open is held wheel by wheel, with the spread within the axle (CapStep), in place of the limit on its mean.
+inline OpenAxlesOut DiffOpenAxles(const float *pre, const float *even, const float *gain, const bool *ok, const int *axle, int n, float ceiling, bool handOn, const int *type = nullptr)
 {
     OpenAxlesOut r = {};
     r.o.kept = 1.0f;
@@ -1163,7 +1218,7 @@ inline OpenAxlesOut DiffOpenAxles(const float *pre, const float *even, const flo
         bool k[kCapWheels];
         for (int j = i; j < n; j++)
             if (!done[j] && axle[j] == axle[i]) at[m] = j, p[m] = pre[j], q[m] = even[j], g[m] = gain[j], k[m] = ok[j], done[j] = true, m++;
-        const CapStepOut a = DiffOpenStep(p, q, g, k, m, ceiling);
+        const CapStepOut a = !type || type[i] == kDiffOpen ? DiffOpenStep(p, q, g, k, m, ceiling) : CapStep(p, q, g, k, m, ceiling, true);
         float added = 0.0f, sum = 0.0f;
         int read = 0;
         uint32_t mask = 0;
@@ -1256,6 +1311,69 @@ inline OpenAxlesOut DiffOpenAxles(const float *pre, const float *even, const flo
         r.o.kept = pushSum > 1e-4f ? CutClamp01(keptSum / pushSum) : 1.0f;
     }
     return r;
+}
+// ---- the differential by axle (BRIEF_axle_diff.md with the Reviewer's addendum, M3) ----
+// Each driven axle has a type of its own. Where the axles of a step differ, after the game's drive:
+//   1. within each axle, on what the drive left: Open evens the drive (DiffEvenStep), Locked ties the axle's wheels
+//      (LockStepHeld over them alone, with the truck's mass times the axle's wheels over the driven wheels read, so each
+//      wheel weighs what it weighs in the whole truck's step), Limited slip does nothing;
+//   2. with no ceiling (a gear with no cap) that is written and nothing passes between the axles;
+//   3. with a ceiling each axle goes against the same one: Open on the axle's mean (DiffOpenStep), Limited slip and
+//      Locked on each wheel with the spread within the axle (CapStep);
+//   4. between the axles the hand-on Open has, by DiffOpenAxles' own rule;
+//   5. the kept share is DiffOpenAxles' formula over all axles.
+// type: each wheel's axle's type (kDiffOpen, kDiffLimited or kDiffLocked); an axle goes by its first wheel's. k: the
+// lock's factor of this step (LockK), 0 ties nothing. With every type Open this is DiffEvenAxles and then DiffOpenAxles,
+// to the bit. No wheel is lowered where the drive's impulse is over 0: every part works from this step's speeds, and no
+// limit is under a wheel's own speed before the drive.
+struct DiffAxlesOut
+{
+    OpenAxlesOut r;         // the speeds to write and each axle's figures, in the order of the axles' first wheels
+    float work[kCapWheels]; // the speeds after part 1, before the ceiling
+    int type[kCapWheels];   // each axle's type, in r's order
+    int tied;               // Locked axles the lock's step ran over (k above 0)
+    int lockWrote, lockUnder, lockBounded, lockBreach; // the lock's counts, summed over those axles
+    float evenJ;            // the Open axles' impulse, summed, and their wheels
+    int evenUsed;
+    bool evenWrote;
+};
+inline DiffAxlesOut DiffAxlesStep(const float *pre, const float *post, const float *gain, const float *load, const float *radius, const bool *ok, const int *axle, const int *type,
+                                  int n, float k, float mass, float ceiling, bool handOn)
+{
+    DiffAxlesOut x = {};
+    if (n > kCapWheels) n = kCapWheels;
+    if (n < 0) n = 0;
+    int read = 0, axles = 0;
+    for (int i = 0; i < n; i++) x.work[i] = post[i], read += ok[i] ? 1 : 0;
+    bool done[kCapWheels] = {};
+    int first[kCapWheels]; // each wheel's axle's type, the first wheel's
+    for (int i = 0; i < n; i++)
+    {
+        if (done[i]) continue;
+        int at[kCapWheels], m = 0, used = 0;
+        float p[kCapWheels], q[kCapWheels], g[kCapWheels], ld[kCapWheels], rd[kCapWheels];
+        bool u[kCapWheels];
+        for (int j = i; j < n; j++)
+            if (!done[j] && axle[j] == axle[i])
+                at[m] = j, p[m] = pre[j], q[m] = post[j], g[m] = gain[j], ld[m] = load[j], rd[m] = radius[j], u[m] = ok[j], used += ok[j] ? 1 : 0, first[j] = type[i], done[j] = true, m++;
+        x.type[axles++] = type[i];
+        if (type[i] == kDiffOpen)
+        {
+            const DiffEvenOut e = DiffEvenStep(p, q, g, u, m);
+            if (e.used >= 2) x.evenJ += e.j, x.evenUsed += e.used;
+            for (int s = 0; s < m; s++) x.work[at[s]] = e.final[s];
+            if (e.wrote) x.evenWrote = true;
+        }
+        else if (type[i] == kDiffLocked && k > 0.0f)
+        {
+            const LockStepOut l = LockStepHeld(p, q, g, ld, rd, u, m, k, read > 0 && mass > 0.0f ? mass * (float)used / (float)read : 0.0f);
+            for (int s = 0; s < m; s++) x.work[at[s]] = l.final[s];
+            x.tied++;
+            x.lockWrote += l.wrote ? 1 : 0, x.lockUnder += l.under, x.lockBounded += l.bounded ? 1 : 0, x.lockBreach += l.breach;
+        }
+    }
+    x.r = DiffOpenAxles(pre, x.work, gain, ok, axle, n, ceiling, handOn, first);
+    return x;
 }
 // What the mod's thread publishes for the driven truck: its action and vehicle and DiffLockBite, while Powertrain is on,
 // the setting above 0 and the truck's lock kind read and known (vehicle + 0xE8), with what LockStepHeld needs.

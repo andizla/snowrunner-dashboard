@@ -138,6 +138,7 @@ struct GaugeSettings
     int lowRangeSlip;        // LowRangeSlip: with the torque cut in L- and L, the wheel cap is the gear's own plus this percent of the way to the cap of the highest low gear the gearbox has (BRIEF_low_range_pull.md), 0 to 100, 100
     int pushShare;           // PushShare: with Powertrain, the share in percent of the game's chassis push at speed that carries the mod's surplus over its own pull (BRIEF_chassis_push.md), 0 to 100
     int diffType;            // DiffType: the differential of a truck where the torque cut acts, 0 Auto (by the lock kind at vehicle + 0xE8), 1 Open, 2 Limited slip, 3 Locked (torque_cut.h, kDiff...); a truck file may hold its own
+    int diffAxle[kAxleRowsMost]; // DiffAxle1 to DiffAxle8, in a truck file alone: each axle's own type front to back, 0 to 3 as DiffType; -1 no key, the axle goes by DiffType (BRIEF_axle_diff.md, M6)
     int heldGearSlip;        // HeldGearSlip: the slip room of a numbered gear held by hand: 0 the governor as before, 1 the cap of L+ in the gears near it, 2 the wheel cap in every gear (gearbox_model.h, GearboxPosCap); 0 by default until the user has driven
     int wheelCap;            // WheelCap: with the torque cut in L-, L, L+ and R, no driven wheel runs faster than this percent of the gear's top (BRIEF_drivetrain_2c_wheel_cap.md), 110 to 200, 150; no box, for the A/B
     float engineBrake;       // EngineBrake: with Powertrain in a gear held by hand at Gearbox=2 (the torque cut), the share of the gear's torque in percent the engine holds the truck back with at the redline with the foot off, 0 to 30 (torque_cut.h)
@@ -242,6 +243,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.lowRangeSlip = 100; // L- and L with the slip room of L+ (BRIEF_low_range_pull.md, the lead)
     s.diffLockBite = 0; // the game's own lock until the drive picks a default (BRIEF_diff_lock_bite.md)
     s.diffType = 0; // Auto (BRIEF_diff_types.md)
+    for (int a = 0; a < kAxleRowsMost; a++) s.diffAxle[a] = -1;
     s.engineSpeedTop = 1.0f;
     s.roadCdA = 0.0f;
     s.creep = true;
@@ -398,6 +400,7 @@ inline void SettingsClamp(GaugeSettings &s)
     s.lowRangeSlip = s.lowRangeSlip < 0 ? 0 : s.lowRangeSlip > 100 ? 100 : s.lowRangeSlip;
     s.diffLockBite = s.diffLockBite < 0 ? 0 : s.diffLockBite > 100 ? 100 : s.diffLockBite;
     s.diffType = s.diffType < 0 || s.diffType > 3 ? 0 : s.diffType;
+    for (int a = 0; a < kAxleRowsMost; a++) s.diffAxle[a] = s.diffAxle[a] < 0 || s.diffAxle[a] > 3 ? -1 : s.diffAxle[a];
     s.physicsRate = s.physicsRate == 120 ? 120 : 60;
     s.roadCdA = isfinite(s.roadCdA) ? (s.roadCdA <= 0.0f ? 0.0f : s.roadCdA < 0.3f ? 0.3f : s.roadCdA > 20.0f ? 20.0f : s.roadCdA) : 0.0f;
     s.gearbox = s.gearbox < 0 || s.gearbox >= kGearboxCount ? kGearboxGame : s.gearbox;
@@ -576,7 +579,7 @@ enum { kSoundOil = kTurboTiers, kSoundPurge, kSoundWhistle, kSoundTierCount }; /
 // string that lives as long as the mod
 enum { kViewPullOff, kViewPullArmed, kViewPullRunning, kViewPullDone, kViewPullStopped };
 static const int kEnginePlot = 40; // points of the tab's torque plot
-static const int kViewActions = 33; // the gearbox's actions the view holds the bindings of (input_bindings.h's kActCount)
+static const int kViewActions = 35; // the gearbox's actions the view holds the bindings of (input_bindings.h's kActCount)
 static const int kViewShifts = 28;  // of them the shifter's, before the two locks (DiffLock, Awd)
 // The tab's asks of the gearbox's bindings: begin a capture into an action's slot, or clear it (the mod's thread does
 // both, with the snapshot of its pass).
@@ -623,7 +626,11 @@ struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWar
                    int pullTest, pullPhase; const char *pullWhy;
                    float ambientDay, ambientNight, hour; // the map's day and night (with mapOwn), the hour of the game's day (-1 not known)
                    SuspDisplayView susp; DdShown drive; bool driveShown; bool swayOff; float rideRest[2]; bool rideRestKnown; // the display's figures; the bars disconnected; each axle's rest place along its axis (front, rear; cm), from the probe
-                   bool air, airTaken, airShown; int airHeight; float airLevel[2], airSide; bool airKnown; int airAxles, airFrom; bool diffKnown; int diffAuto; // airKnown: a truck is driven and its air axles (air_axles.h) and their source are read // the air suspension runs on the driven truck, its rest places taken, the height box shown; the keys' height (cm) and the levelling (front, rear, left over right; cm)
+                   bool air, airTaken, airShown; int airHeight; float airLevel[2], airSide; bool airKnown; int airAxles, airFrom; bool diffKnown; int diffAuto;
+                   // the differential by axle (BRIEF_axle_diff.md, M8): the rows, one for each axle of the driven truck that can be driven: its axle (0 the front),
+                   // whether it is driven now and whether its key holds it Locked; diffNoPairs: the axles are not read as pairs; diffKind: the lock kind (-1 not read);
+                   // diffBiteActs: the lock slot is published for this truck's kind
+                   int diffRows, diffRowAxle[kAxleRowsMost], diffKind; bool diffRowNow[kAxleRowsMost], diffRowKey[kAxleRowsMost], diffNoPairs, diffBiteActs; // airKnown: a truck is driven and its air axles (air_axles.h) and their source are read // the air suspension runs on the driven truck, its rest places taken, the height box shown; the keys' height (cm) and the levelling (front, rear, left over right; cm)
                    bool frameKnown, frameRigid; float frameFile[4], frameMost; // the driven truck's frame joint (frame_flex.h): its stock spring, damping and limits in degrees; or none (a rigid frame)
                    bool suspKnown; float suspFile[3][2]; // the driven truck's file: spring, damping and the compression end (m), [front, rear] (wheel 0 and the last)
                    char gearbox[96]; float gearHold; bool gearHoldOwn; // the driven truck's gearbox (its key, "" for none), the seconds each gear is held going up with the mod's engine, and whether its file sets them

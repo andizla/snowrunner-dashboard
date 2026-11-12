@@ -3838,6 +3838,128 @@ int main()
               "drive display, the cells: 4, 6 and 8 wheels in rows by Open by axle's grouping with the front at the top and left and right by the side's sign, whatever the list's "
               "order; 18 wheels give 16 cells; a wheel alone has its own row; with no grouping or a wheel not placed each wheel has its own row; the line's four names");
     }
+    // the differential by axle: the rows, what is in force, the levers, the byte's hold and the display's line
+    // (BRIEF_axle_diff.md with the addendum, M1, M2 and M4 to M8)
+    {
+        // three axles given out of order (rear, front, middle) on one body; the front with all wheel drive
+        const uint64_t body6[6] = { 7, 7, 7, 7, 7, 7 };
+        const float along6[6] = { -3.0f, -3.0f, 2.0f, 2.0f, -1.5f, -1.5f }, side6[6] = { 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f };
+        const bool ok6[6] = { true, true, true, true, true, true };
+        const int drive6[6] = { 1, 1, 2, 2, 1, 1 };
+        const AxleRows three = AxleRowsMake(body6, along6, side6, along6, ok6, drive6, 6);
+        const bool order = three.axles == 3 && three.ofWheel[0] == 2 && three.ofWheel[1] == 2 && three.ofWheel[2] == 0 && three.ofWheel[3] == 0 && three.ofWheel[4] == 1 && three.ofWheel[5] == 1 &&
+                           three.drive[0] == 2 && three.drive[1] == 1 && three.drive[2] == 1 && AxleLeverHas(three, true) && AxleLeverHas(three, false);
+        // a dead front axle: rows for axles 2 and 3, the numbers count every axle
+        const int driveDead[6] = { 1, 1, 0, 0, 1, 1 };
+        const AxleRows dead = AxleRowsMake(body6, along6, side6, along6, ok6, driveDead, 6);
+        const bool deadFront = dead.axles == 3 && dead.drive[0] == 0 && dead.drive[1] == 1 && dead.drive[2] == 1 && !AxleLeverHas(dead, true) && AxleLeverHas(dead, false);
+        // no rows: a wheel alone, a wheel not placed, one wheel, more wheels than the display holds; 16 wheels are 8 axles
+        const bool okGap[6] = { true, true, true, false, true, true };
+        uint64_t body18[18];
+        float along18[18], side18[18];
+        bool ok18[18];
+        int drive18[18];
+        for (int i = 0; i < 18; i++) body18[i] = 7, along18[i] = -1.5f * (float)(i / 2), side18[i] = i % 2 ? -1.0f : 1.0f, ok18[i] = true, drive18[i] = 1;
+        const bool noRows = AxleRowsMake(body6, along6, side6, along6, ok6, drive6, 5).axles == 0 && AxleRowsMake(body6, along6, side6, along6, okGap, drive6, 6).axles == 0 &&
+                            AxleRowsMake(body6, along6, side6, along6, ok6, drive6, 1).axles == 0 && AxleRowsMake(body18, along18, side18, along18, ok18, drive18, 18).axles == 0 &&
+                            AxleRowsMake(body18, along18, side18, along18, ok18, drive18, 16).axles == 8;
+        const AxleRows oneAxle = AxleRowsMake(body6, along6, side6, along6, ok6, driveDead, 2); // one driven axle: its row alone
+        const AxleRows four = AxleRowsMake(body18, along18, side18, along18, ok18, drive18, 8);
+        // what is in force (M1, M6). An old file has no key: every axle on DiffType, alike, for each of the four choices
+        int keys[kAxleRowsMost];
+        for (int a = 0; a < kAxleRowsMost; a++) keys[a] = -1;
+        const AxlePlan oldOpen = AxlePlanOf(three, keys, kDiffOpen, true, 0, true, false, false);
+        const bool oldFile = oldOpen.common == kDiffOpen && !oldOpen.byAxle && oldOpen.type[0] == kDiffOpen && oldOpen.type[2] == kDiffOpen && oldOpen.now[0] && !oldOpen.lever[0] &&
+                             AxlePlanOf(three, keys, kDiffAuto, true, 0, true, false, false).common == kDiffOpen && AxlePlanOf(three, keys, kDiffAuto, true, 2, true, false, false).common == kDiffLocked &&
+                             AxlePlanOf(three, keys, kDiffLimited, true, 0, true, false, false).common == kDiffLimited && AxlePlanOf(three, keys, kDiffLocked, true, 0, true, false, false).common == kDiffLocked &&
+                             AxlePlanOf(three, keys, kDiffAuto, false, -1, true, false, false).common == kDiffLimited && AxlePlanOf(oneAxle, keys, kDiffLocked, true, 0, true, false, false).common == kDiffLocked;
+        // a row's pick: the rear axle Locked beside Open: the driven axles differ and the Diff row reads By axle
+        keys[2] = kDiffLocked;
+        const AxlePlan rearSet = AxlePlanOf(three, keys, kDiffOpen, true, 0, true, false, false);
+        const bool rowPick = rearSet.common == -1 && rearSet.byAxle && rearSet.type[2] == kDiffLocked && rearSet.type[0] == kDiffOpen && rearSet.type[1] == kDiffOpen;
+        // the front with all wheel drive Locked, the rest Open: with all wheel drive off the driven axles are alike (M1); the row waits
+        keys[2] = -1, keys[0] = kDiffLocked;
+        const AxlePlan awdOff = AxlePlanOf(three, keys, kDiffOpen, true, 0, false, false, false), awdOn = AxlePlanOf(three, keys, kDiffOpen, true, 0, true, false, false);
+        const bool awd = awdOff.common == kDiffOpen && awdOff.byAxle && !awdOff.now[0] && awdOff.type[0] == kDiffLocked && awdOn.common == -1 && awdOn.now[0];
+        // set, not in force: Locked beside Auto on a truck whose lock is always on reads By axle though every axle is Locked
+        const AxlePlan always = AxlePlanOf(three, keys, kDiffAuto, true, 2, true, false, false);
+        const bool setNotForce = always.byAxle && always.common == kDiffLocked;
+        // a key for an axle the truck does not have is not read; a key out of 0 to 3 goes by DiffType
+        keys[0] = -1, keys[6] = kDiffLocked, keys[1] = 9;
+        const AxlePlan spare = AxlePlanOf(three, keys, kDiffOpen, true, 0, true, false, false);
+        const bool spareKey = spare.common == kDiffOpen && !spare.byAxle && AxleSetOf(keys, 1, kDiffLimited) == kDiffLimited && AxleSetOf(keys, 6, kDiffOpen) == kDiffLocked && AxleSetOf(keys, 8, kDiffOpen) == kDiffOpen;
+        keys[6] = keys[1] = -1;
+        // the levers (M7): the front one on and off; kept by vehicle; another truck and back: both off
+        AxleLevers lv = {};
+        const bool frontOn = AxleLeverPressed(lv, 100, three, true) == 1 && lv.front && !lv.rear && lv.vehicle == 100;
+        const AxlePlan frontKey = AxlePlanOf(three, keys, kDiffOpen, true, 0, true, lv.front, lv.rear);
+        const bool frontActs = frontKey.type[0] == kDiffLocked && frontKey.lever[0] && !frontKey.lever[1] && frontKey.type[1] == kDiffOpen && frontKey.common == -1 && !frontKey.byAxle;
+        const bool frontOff = AxleLeverPressed(lv, 100, three, true) == 0 && !lv.front && AxlePlanOf(three, keys, kDiffOpen, true, 0, true, lv.front, lv.rear).common == kDiffOpen;
+        // the rear one on a truck of four axles: axles 2, 3 and 4
+        const bool rearOn = AxleLeverPressed(lv, 100, four, false) == 1 && lv.rear;
+        const AxlePlan rearKey = AxlePlanOf(four, keys, kDiffOpen, true, 0, true, lv.front, lv.rear);
+        const bool rearActs = four.axles == 4 && rearKey.type[0] == kDiffOpen && rearKey.type[1] == kDiffLocked && rearKey.type[2] == kDiffLocked && rearKey.type[3] == kDiffLocked && rearKey.common == -1;
+        // both on: every driven axle Locked, so the step before the axles with the whole truck Locked, and the byte is held
+        const bool bothOn = AxleLeverPressed(lv, 100, four, true) == 1 && AxlePlanOf(four, keys, kDiffOpen, true, 0, true, lv.front, lv.rear).common == kDiffLocked;
+        AxleLeversFor(lv, 200);
+        const bool truckTwo = !lv.front && !lv.rear && lv.vehicle == 200;
+        AxleLeversFor(lv, 100);
+        AxleLeversFor(lv, 0); // no truck read: nothing changes
+        const bool backOff = !lv.front && !lv.rear && lv.vehicle == 100;
+        // nothing to lock: a dead front axle, no rows, no truck: no state
+        const AxleRows noAxles = {};
+        const bool noLock = AxleLeverPressed(lv, 100, dead, true) == -1 && AxleLeverPressed(lv, 100, noAxles, false) == -1 && AxleLeverPressed(lv, 0, three, true) == -1 && !lv.front && !lv.rear &&
+                             oneAxle.axles == 1 && AxleLeverPressed(lv, 100, oneAxle, false) == -1 && AxleLeverPressed(lv, 100, oneAxle, true) == 1; // one axle in all: it is axle 1, the front lever's
+        // the byte's hold (M2): held while every driven axle is Locked; one axle leaves Locked and the mod's byte is cleared;
+        // a byte the player set is not
+        auto want = [](const AxlePlan &pl) { return pl.common == kDiffLocked; };
+        for (int a = 0; a < 3; a++) keys[a] = kDiffLocked;
+        const AxlePlan allLocked = AxlePlanOf(three, keys, kDiffOpen, true, 0, true, false, false);
+        keys[1] = kDiffOpen;
+        const AxlePlan oneLeft = AxlePlanOf(three, keys, kDiffOpen, true, 0, true, false, false);
+        LockHold mine = {}, theirs = {};
+        const bool hold = want(allLocked) && !want(oneLeft) && LockHoldStep(mine, 0x5000, want(allLocked), true, 0) == 1 && LockHoldStep(mine, 0x5000, want(oneLeft), true, 1) == 0 &&
+                          LockHoldStep(theirs, 0x5000, want(allLocked), true, 1) == -1 && LockHoldStep(theirs, 0x5000, want(oneLeft), true, 1) == -1;
+        // the display's line (M4, M8): each driven axle's type front to back where they differ, the one name where alike
+        DdShown sh = {};
+        sh.n = 4, sh.rows = 2, sh.force = kDiffForceAxles;
+        for (int i = 0; i < 4; i++) sh.row[i] = (uint8_t)(i / 2), sh.driven[i] = true, sh.type[i] = (uint8_t)(i < 2 ? kDdAxOpen : kDdAxNoBite);
+        char line[64], tiny[8];
+        DdAxlesLine(sh, line, sizeof line);
+        bool lineOk = !strcmp(line, "Open / Locked, no bite");
+        sh.type[2] = sh.type[3] = kDdAxLocked, sh.type[0] = sh.type[1] = kDdAxLimited;
+        DdAxlesLine(sh, line, sizeof line);
+        lineOk = lineOk && !strcmp(line, "Limited slip / Locked");
+        sh.driven[0] = sh.driven[1] = false; // the front not driven in this step: left out
+        DdAxlesLine(sh, line, sizeof line);
+        lineOk = lineOk && !strcmp(line, "Locked");
+        DdAxlesLine(sh, tiny, sizeof tiny);
+        lineOk = lineOk && strlen(tiny) < sizeof tiny;
+        sh.force = kDiffForceLock;
+        DdAxlesLine(sh, line, sizeof line);
+        lineOk = lineOk && !strcmp(line, "Locked");
+        sh.force = kDiffForceOpen;
+        DdAxlesLine(sh, line, sizeof line);
+        lineOk = lineOk && !strcmp(line, "Open") && !strcmp(DdForceName(kDiffForceAxles), "By axle") && !strcmp(DdAxleName(kDdAxNoBite), "Locked, no bite");
+        // the types travel from the step's sample to the record
+        DdSample smp = {};
+        smp.vehicle = 9, smp.n = 2, smp.force = kDiffForceAxles, smp.kept = 1.0f;
+        for (int i = 0; i < 2; i++) smp.wheel[i] = 50u + (uint64_t)i, smp.ok[i] = smp.driven[i] = true, smp.speed[i] = smp.truck[i] = 1.0f, smp.given[i] = smp.before[i] = 0.1f, smp.type[i] = (uint8_t)kDdAxLocked;
+        DdAvg avg = {};
+        DdShown rec = {};
+        const bool carried = DdStep(avg, smp, 1.0f / 60.0f) && (DdShow(avg, rec), rec.type[0] == kDdAxLocked && rec.type[1] == kDdAxLocked && rec.force == kDiffForceAxles);
+        if (!(order && deadFront && noRows && oldFile && rowPick && awd && setNotForce && spareKey && frontOn && frontActs && frontOff && rearOn && rearActs && bothOn && truckTwo && backOff && noLock && hold && lineOk && carried))
+            printf("     order %d dead %d noRows %d old %d pick %d awd %d set %d spare %d frontOn %d acts %d off %d rearOn %d acts %d both %d other %d back %d nothing %d hold %d line %d carried %d\n", order, deadFront,
+                   noRows, oldFile, rowPick, awd, setNotForce, spareKey, frontOn, frontActs, frontOff, rearOn, rearActs, bothOn, truckTwo, backOff, noLock, hold, lineOk, carried);
+        Check(order && deadFront && noRows && oldFile && rowPick && awd && setNotForce && spareKey,
+              "differential by axle, the rows: three axles given out of order are numbered front to back; a dead front axle leaves rows 2 and 3; a wheel alone, a wheel not placed and more than "
+              "16 wheels give no rows; with no key every axle is on DiffType and alike for each choice; a row set apart makes the driven axles differ and the Diff row By axle; with all wheel "
+              "drive off a differing front axle waits; a key for an axle the truck has not is not read");
+        Check(frontOn && frontActs && frontOff && rearOn && rearActs && bothOn && truckTwo && backOff && noLock && hold,
+              "differential by axle, the levers and the byte: Lock front axle on and off; Lock rear axles on a truck of four; both on is the whole truck Locked; another truck and back start "
+              "off; nothing to lock keeps no state; the lock byte is held only while every driven axle is Locked, the one the mod set is cleared when an axle leaves, one the player set is not");
+        Check(lineOk && carried, "differential by axle, the display: each driven axle named front to back where they differ, Locked with no bite said so, the one name where alike; the types reach the record");
+    }
     // the drive display's feed in the drive's hook, on a made up truck listed rear right, front left, rear left, front
     // right: the rear driven (type 1), the front with all wheel drive (type 2). Rolling radius 0.5, so 4 rad/s is 2 m/s,
     // each wheel body moving at 2 m/s forward. The stand-in drive adds g_ddPush to each wheel

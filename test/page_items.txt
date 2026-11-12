@@ -282,3 +282,13 @@ Set###odosetbutton
 120###physicsrate120
 60###physicsrate60
 ##heldgearslip
+None###bind
+None###bind
+None###bind
+None###bind
+x
+x
+x
+x
+##diffaxle1
+##diffaxle2

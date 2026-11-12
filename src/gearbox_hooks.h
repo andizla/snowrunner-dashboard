@@ -293,6 +293,12 @@ struct DiffCounts
     int sayN;
     float sayMean[8], sayK[8], sayGot[8]; // sayGot: the speed handed to the axle from the others, summed over its wheels
     unsigned sayWheels[8];
+    // The differential by axle (BRIEF_axle_diff.md): the steps that went by axle, the Locked axles the lock's step ran
+    // over in them, the driven wheels not found in the slot (Limited slip then), the axles whose two wheels came with
+    // two types (the lower index's then), and the last step's k and types in sayMean's order (kDiff...)
+    long axSteps, axTied, axMissing, axSplit;
+    float axK;
+    int sayType[8];
 };
 enum { kDiffAxleSay = 8 };
 void DiffCountsGet(DiffCounts &out);

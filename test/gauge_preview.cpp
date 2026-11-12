@@ -41,7 +41,7 @@ static std::vector<std::string> *g_items = nullptr;
 // under the ID stack in force when they are added
 void ImGuiTestEngineHook_ItemAdd(ImGuiContext *ctx, ImGuiID id, const ImRect &, const ImGuiLastItemData *)
 {
-    static const char *const quiet[] = { "##aspiration", "##class", "##dampercurve", "##fuel", "##gamegeardisplay", "##heldgearslip", "##input", "##layout", "##oilgauge", "##spool", "##springcurve", "##style", "##torquecurve" };
+    static const char *const quiet[] = { "##aspiration", "##class", "##dampercurve", "##diffaxle1", "##diffaxle2", "##fuel", "##gamegeardisplay", "##heldgearslip", "##input", "##layout", "##oilgauge", "##spool", "##springcurve", "##style", "##torquecurve" };
     if (!g_items || !ctx->CurrentWindow || ctx->CurrentWindow->IDStack.Size == 0) return;
     for (const char *l : quiet)
         if (ctx->CurrentWindow->GetID(l) == id) g_items->push_back(l);
@@ -79,6 +79,8 @@ static void PageWidest(GaugeSettings &s, GaugeView &v)
     v.engineCapacity = 150;
     v.canReverse = true;
     v.captureAction = v.captureSlot = -1;
+    // two rows by axle on the Power tab (BRIEF_axle_diff.md): the front waits for all wheel drive
+    v.diffRows = 2, v.diffRowAxle[0] = 0, v.diffRowAxle[1] = 1, v.diffRowNow[1] = true, v.diffKind = 0;
     for (int a = 0; a < kViewActions; a++) strcpy_s(v.bindText[a][0], "None"), strcpy_s(v.bindText[a][1], "None");
 }
 

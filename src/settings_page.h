@@ -75,6 +75,8 @@ static void PageTipShow(const char *text)
     ImGui::PopTextWrapPos();
     ImGui::EndTooltip();
 }
+// The four names of the Diff row, for the rows by axle under it (the first is Auto with what it picks on this truck).
+static const char *g_pageDiffNames[4] = { "Auto", "Open", "Limited slip", "Locked" };
 static void PageTip(const char *text)
 {
     const bool label = g_pageLabelHovered && fabsf(ImGui::GetItemRectMin().y - g_pageLabelY) < ImGui::GetFrameHeight() * 0.5f;
@@ -949,9 +951,56 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 // 0 Auto, 1 Open, 2 Limited slip, 3 Locked (torque_cut.h); Auto names what it picks while a truck is driven
                 static const char *const autos[] = { "Auto", "Auto (Open)", "Auto (Limited slip)", "Auto (Locked)" };
                 const char *const diffs[] = { view.diffKnown && view.diffAuto >= 1 && view.diffAuto <= 3 ? autos[view.diffAuto] : autos[0], "Open", "Limited slip", "Locked" };
-                changed(ImGui::Combo("##difftype", &s.diffType, diffs, 4));
+                // "By axle" where the set types of the rows shown differ (M6). A pick here sets every axle: the keys by axle go
+                bool byAxle = false;
+                for (int r = 1; r < view.diffRows; r++) byAxle = byAxle || AxleSetOf(s.diffAxle, view.diffRowAxle[r], s.diffType) != AxleSetOf(s.diffAxle, view.diffRowAxle[0], s.diffType);
+                if (ImGui::BeginCombo("##difftype", byAxle ? "By axle" : diffs[s.diffType]))
+                {
+                    for (int d = 0; d < 4; d++)
+                        if (ImGui::Selectable(diffs[d], !byAxle && s.diffType == d))
+                        {
+                            s.diffType = d;
+                            for (int a = 0; a < kAxleRowsMost; a++) s.diffAxle[a] = -1;
+                            changed(true);
+                        }
+                    ImGui::EndCombo();
+                }
+                g_pageDiffNames[0] = diffs[0];
             }
             PageTip("The differential of the driven truck, saved for that truck. Auto picks Locked where the lock of the truck is always on, else Open. Open lets a free wheel spin. That wheel takes the pull from the other wheel of its axle. The other axles take over what it cannot use. Limited slip holds a spinning wheel, only in L-, L, L+ and R. Locked ties the wheels, and holds a free wheel only with Diff lock bite above 0. While the diff lock is on the truck is locked whatever the type, so on a truck whose lock is always on Open and Limited slip may change nothing. The type acts in the gear positions of the mod gearbox, not in A.");
+            // a row for each axle of the driven truck that can be driven, front to back (BRIEF_axle_diff.md, M8)
+            {
+                bool lockedOne = false, differ = false;
+                int firstForce = -1;
+                for (int r = 0; r < view.diffRows && r < kAxleRowsMost; r++)
+                {
+                    const int a = view.diffRowAxle[r];
+                    char label[16], id[24];
+                    _snprintf_s(label, _TRUNCATE, "Axle %d", a + 1);
+                    _snprintf_s(id, _TRUNCATE, "##diffaxle%d", a + 1);
+                    PageLabel(label, labelX);
+                    ImGui::SetNextItemWidth(w);
+                    int set = AxleSetOf(s.diffAxle, a, s.diffType);
+                    if (ImGui::Combo(id, &set, g_pageDiffNames, 4))
+                    {
+                        s.diffAxle[a] = set;
+                        changed(true);
+                    }
+                    PageTip("The differential of this axle. The Diff row above sets all axles at once. While the diff lock of the truck is on, every axle is locked.");
+                    if (view.diffRowKey[r] || !view.diffRowNow[r])
+                    {
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("%s", view.diffRowKey[r] ? "Locked by the key" : "not driven now");
+                    }
+                    const int force = view.diffRowKey[r] ? kDiffLocked : DiffTypeOf(set, view.diffKnown, view.diffKind);
+                    lockedOne = lockedOne || force == kDiffLocked;
+                    if (firstForce < 0) firstForce = force;
+                    else differ = differ || force != firstForce;
+                }
+                if (view.diffRows > 0 && view.diffKind == 2) ImGui::TextDisabled("The lock of this truck is always on. It is locked whatever the rows say.");
+                if (lockedOne && differ && (s.diffLockBite <= 0 || !view.diffBiteActs)) ImGui::TextDisabled("Locked on one axle needs Diff lock bite above 0.");
+                if (view.diffNoPairs) ImGui::TextDisabled("The axles of this truck are not read as pairs.");
+            }
             PageLabel("Mod engine speed", labelX);
             changed(ImGui::Checkbox("##modenginespeed", &s.modEngineSpeed));
             PageTip("The game tachometer, cockpit needles, rev lights, engine sound, effects and exhaust follow the mod engine while Real engine is on. Fuel use and the stall keep the game rules, and in a gear held by hand they follow the pull of the mod engine. Off: the game computes its own, and the mod engine never pulls alone in a gear held by hand, as that needs this on. On by default.");
@@ -1391,7 +1440,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         // order is input_bindings.h's GearAction). The shifter's at Gearbox=2, the locks' at every level
         static const char *actions[kViewActions] = { "Gear 1", "Gear 2", "Gear 3", "Gear 4", "Gear 5", "Gear 6", "Gear 7", "Gear 8", "Gear 9", "Gear 10",
                                                      "Gear 11", "Gear 12", "Gear 13", "Gear 14", "Gear 15", "Gear 16", "H", "L-", "L", "L+", "Neutral", "Reverse", "Gear up", "Gear down", "Clutch",
-                                                     "Range high", "Range low", "D", "Diff lock", "AWD", "Sway bars", "Ride up", "Ride down" };
+                                                     "Range high", "Range low", "D", "Diff lock", "AWD", "Sway bars", "Ride up", "Ride down", "Lock front axle", "Lock rear axles" };
         auto bindingRow = [&](int a) {
             ImGui::PushID(1000 + a);
             PageLabel(actions[a], labelX);
@@ -1415,7 +1464,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         ImGui::PopTextWrapPos();
         if (s.gearbox == kGearboxOwn) for (int a = 0; a < kViewShifts; a++) bindingRow(a);
         ImGui::TextDisabled("Locks and ride");
-        PageTip("The diff lock and AWD on a key on every truck. Sway bars connects and disconnects the sway bars. Ride up and Ride down move the air suspension 2 cm a press under 20 km/h.");
+        PageTip("The diff lock and AWD on a key on every truck. Sway bars connects and disconnects the sway bars. Ride up and Ride down move the air suspension 2 cm a press under 20 km/h. Lock front axle and Lock rear axles hold those axles Locked until pressed again, over the Axle rows of the Power tab.");
         for (int a = kViewShifts; a < kViewActions; a++) bindingRow(a);
         if (view.controllers) ImGui::TextDisabled("%d wheel or shifter read through DirectInput.", view.controllers);
     }

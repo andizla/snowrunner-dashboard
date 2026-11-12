@@ -992,7 +992,9 @@ static void GDriveDisplay(ImDrawList *dl, const GaugeFonts &f, ImVec2 at, float 
     {
         char text[32];
         snprintf(text, sizeof text, "kept %.0f%%", d.kept * 100.0f);
-        TextDraw(dl, f, kWsLine, P(kSuspPad, line), grey, DdForceName(d.force), -1, u);
+        char axles[160]; // each axle's type where they differ, else the one name
+        DdAxlesLine(d, axles, sizeof axles);
+        TextDraw(dl, f, kWsLine, P(kSuspPad, line), grey, axles, -1, u);
         TextDraw(dl, f, kWsLine, P(kSuspW - kSuspPad, line), grey, text, 1, u);
     }
 }

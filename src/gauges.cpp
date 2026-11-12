@@ -1267,6 +1267,8 @@ static void ReadIni(GaugeSettings &s)
                         L";   It acts on a truck whose diff lock is always on too. Such a truck then scrubs in every turn on hard ground.\n"
                         L"; DiffType (with Powertrain, in the gear positions of the mod gearbox): 0 Auto, 1 Open, 2 Limited slip, 3 Locked. Auto is Locked where the lock is always on, else Open.\n"
                         L";   A truck file may hold its own DiffType; the tab writes it there for the driven truck.\n"
+                        L";   DiffAxle1 to DiffAxle8 in a truck file: one axle its own type, front to back, the same four choices. An axle with no key goes by DiffType.\n"
+                        L";   BindLockFrontAxle and BindLockRearAxles hold those axles Locked until pressed again. While the diff lock of the truck is on, every axle is locked.\n"
                         L"; ModEngineSpeed=1 (with Powertrain, on by default): the game tachometer, sound and effects follow the mod engine; its fuel burn and stall check keep the game's own.\n"
                         L";   EngineSpeedTop: the mod engine speed the game reads as its top, as a share of the redline, 0.5 to 1.5 (1: the redline; idle is its 0).\n"
                         L";   Base1.<engine>, Base2.<engine> ... in a truck's file: each gear's acceleration at the game's own pull, floored, learned.\n"
@@ -1902,6 +1904,14 @@ static bool ReadTruckIni(const char *key, GaugeSettings &s)
             if (v >= 0 && v <= 3 && iswdigit(buf[0])) s.diffType = v;
         }
     }
+    // each axle's own (BRIEF_axle_diff.md, M6): DiffAxle1 to DiffAxle8, one digit of 0 to 3; anything else is as if absent
+    for (int a = 0; a < kAxleRowsMost; a++)
+    {
+        wchar_t name[16], buf[8] = {};
+        swprintf_s(name, L"DiffAxle%d", a + 1);
+        s.diffAxle[a] = -1;
+        if (GetPrivateProfileStringW(section.c_str(), name, L"", buf, 8, ini.c_str()) > 0 && buf[0] >= L'0' && buf[0] <= L'3' && !buf[1]) s.diffAxle[a] = buf[0] - L'0';
+    }
     // the truck's own drag area, by hand in its file: not one of the scales, so it does not make them the truck's own
     {
         wchar_t buf[16] = {};
@@ -1929,19 +1939,50 @@ static void WriteTruckIni(const char *key, const GaugeSettings &s)
     IniPutInt(section.c_str(), L"BoostProfile", s.boostProfile, ini);
 }
 
-// The truck's differential into its file: one put (S5).
+// The keys by axle out of a truck's file; true when one was there.
+static bool DropTruckAxles(const std::wstring &ini, const std::wstring &section)
+{
+    bool there = false;
+    for (int a = 0; a < kAxleRowsMost; a++)
+    {
+        wchar_t name[16], buf[8] = {};
+        swprintf_s(name, L"DiffAxle%d", a + 1);
+        if (GetPrivateProfileStringW(section.c_str(), name, L"", buf, 8, ini.c_str()) == 0) continue;
+        WritePrivateProfileStringW(section.c_str(), name, nullptr, ini.c_str());
+        there = true;
+    }
+    return there;
+}
+// The truck's differential into its file: one put (S5). The Diff row sets every axle, so the keys by axle go (M6).
 static void WriteTruckDiff(const char *key, int type)
 {
     const std::wstring ini = SetupFile(kSetupTruck, key), section = kSetupSections[kSetupTruck];
     SetupBegin(kSetupTruck, Wide(key));
     IniPutInt(section.c_str(), L"DiffType", type, ini);
+    DropTruckAxles(ini, section);
+}
+// One axle's own type into the truck's file (axle 0 the front), or its key out of it for a type under 0.
+static void WriteTruckAxle(const char *key, int axle, int type)
+{
+    const std::wstring ini = SetupFile(kSetupTruck, key), section = kSetupSections[kSetupTruck];
+    wchar_t name[16];
+    swprintf_s(name, L"DiffAxle%d", axle + 1);
+    if (type < 0)
+    {
+        wchar_t buf[8] = {};
+        if (GetPrivateProfileStringW(section.c_str(), name, L"", buf, 8, ini.c_str()) > 0) WritePrivateProfileStringW(section.c_str(), name, nullptr, ini.c_str());
+        return;
+    }
+    SetupBegin(kSetupTruck, Wide(key));
+    IniPutInt(section.c_str(), name, type, ini);
 }
 // And out of it; true when it was there.
 static bool DropTruckDiff(const char *key)
 {
     const std::wstring ini = SetupFile(kSetupTruck, key), section = kSetupSections[kSetupTruck];
     wchar_t buf[8] = {};
-    if (GetPrivateProfileStringW(section.c_str(), L"DiffType", L"", buf, 8, ini.c_str()) == 0) return false;
+    const bool axles = DropTruckAxles(ini, section);
+    if (GetPrivateProfileStringW(section.c_str(), L"DiffType", L"", buf, 8, ini.c_str()) == 0) return axles;
     WritePrivateProfileStringW(section.c_str(), L"DiffType", nullptr, ini.c_str());
     return true;
 }
@@ -2654,7 +2695,7 @@ static const wchar_t *EngineLevelWords(int level)
 // kind and id its game id ("" while none is driven or the id is not read). changed, suspChanged and truckChanged: the
 // scales, the kind's or the truck's suspension were changed on the tab and are not in the ini yet. The functions below
 // are all that changes a state once the ini is read into plain.
-struct SettingsState { GaugeSettings plain, s; char key[kMaxText], id[40]; bool own, changed, suspOwn, suspKept, suspChanged, truckOwn, truckKept, truckChanged, diffChanged; }; // diffChanged: the Diff row moved while this truck is driven, not in its file yet
+struct SettingsState { GaugeSettings plain, s; char key[kMaxText], id[40]; bool own, changed, suspOwn, suspKept, suspChanged, truckOwn, truckKept, truckChanged, diffChanged; int axleChanged; }; // diffChanged: the Diff row moved while this truck is driven, not in its file yet
 
 // The suspension level in force: the default, the kind's, this owned truck's.
 enum { kSuspLevelDefault, kSuspLevelKind, kSuspLevelTruck };
@@ -2698,6 +2739,7 @@ static void SettingsFor(SettingsState &st, const char *key, const char *id = "")
     st.s = st.plain;
     st.own = key[0] && ReadTruckIni(key, st.s);
     st.changed = st.diffChanged = false;
+    st.axleChanged = 0;
     SuspMarkClear(st.key, st.id);
     SuspMarkClear(st.key, st.id, kEngineSection);
     SuspMarkClear(st.key, st.id, kOdoSection); // the Reviewer's must 5: a count driven again is no left-over
@@ -2717,6 +2759,9 @@ static void SettingsTake(SettingsState &st, const GaugeSettings &in)
     if (st.key[0] && !ScalesSame(in, st.s)) st.own = st.changed = true;
     // the Diff row with a truck driven is that truck's (its file's DiffType); the plain one keeps its value
     if (st.key[0] && in.diffType != st.s.diffType) st.diffChanged = true;
+    // a row by axle is that truck's too: its own key, a bit an axle (M6)
+    for (int a = 0; st.key[0] && a < kAxleRowsMost; a++)
+        if (in.diffAxle[a] != st.s.diffAxle[a]) st.axleChanged |= 1 << a;
     if (st.key[0] && !SuspSame(in, st.s))
     {
         if (st.truckOwn) st.truckChanged = true;
@@ -2727,6 +2772,7 @@ static void SettingsTake(SettingsState &st, const GaugeSettings &in)
     st.plain = in;
     if (st.own) ScalesCopy(st.plain, before);
     if (st.key[0]) st.plain.diffType = before.diffType;
+    for (int a = 0; a < kAxleRowsMost; a++) st.plain.diffAxle[a] = -1; // never the plain settings': a truck file's alone
     if (st.suspOwn || st.truckOwn) SuspCopy(st.plain, before);
     st.plain.airAxleMask = -1, st.plain.airMaskFrom = kAirFromNone;
     st.s = in;
@@ -2856,6 +2902,7 @@ static void SettingsToDefaults(SettingsState &st)
     SettingsDefaults(st.plain);
     st.s = st.plain;
     st.own = st.changed = st.diffChanged = false;
+    st.axleChanged = 0;
     SuspFromFiles(st);
 }
 
@@ -2867,6 +2914,9 @@ static void SettingsWriteTruck(SettingsState &st)
 {
     if (st.own && st.changed) WriteTruckIni(st.key, st.s);
     if (st.key[0] && st.diffChanged) WriteTruckDiff(st.key, st.s.diffType);
+    for (int a = 0; st.key[0] && a < kAxleRowsMost; a++)
+        if (st.axleChanged >> a & 1) WriteTruckAxle(st.key, a, st.s.diffAxle[a]);
+    st.axleChanged = 0;
     if (st.truckOwn && st.truckChanged) WriteTruckSusp(st.key, st.s, true, st.id);
     else if (st.suspOwn && st.suspChanged) WriteTruckSusp(st.key, st.s, true);
     if (st.key[0]) TruckSuspPrune(st.key), TruckSuspPrune(st.key, kEngineSection);
@@ -4155,6 +4205,8 @@ static void LogSettings(const GaugeSettings &s)
         Log(L"settings: diff lock bite %d (DiffLockBite; 0 the game's lock, 100 one shaft), the differential's type %d (DiffType; 0 Auto, 1 Open, 2 Limited slip, 3 Locked), low range slip %d (LowRangeSlip; 0 the gear's own wheel cap in L-, L and R, 100 the cap of the highest low gear)", s.diffLockBite, s.diffType, s.lowRangeSlip);
         Log(L"settings: held gear slip %d, %S (HeldGearSlip; 0 a numbered gear held by hand has the governor, 1 the cap of L+ in the gears near it, 2 the wheel cap in every gear)", s.heldGearSlip,
             HeldSlipName(s.heldGearSlip));
+        Log(L"settings: the differential by axle (DiffAxle1 to DiffAxle8 of the truck file, front to back; -1 no key: the axle goes by DiffType): %d %d %d %d %d %d %d %d",
+            s.diffAxle[0], s.diffAxle[1], s.diffAxle[2], s.diffAxle[3], s.diffAxle[4], s.diffAxle[5], s.diffAxle[6], s.diffAxle[7]);
     }
     else Log(L"settings: powertrain off: the truck pulls with the game's own engine (Powertrain=1 hands it the mod's)");
     Log(s.creep && s.creepManual ? L"settings: creep on, in a gear picked by hand too (CreepManual): an automatic through the converter to walking pace, a gear picked by hand at its idle speed"
@@ -4394,6 +4446,17 @@ struct TruckWatch
     int diffSaidType, diffSaidSet;
     uint64_t axleSaid;          // Open by axle: the vehicle the axles' line was for, and the making it named
     long axleSaidGen;
+    // the differential by axle (BRIEF_axle_diff.md): the truck's axles as the mod's thread read them (AxleRowsStep), the
+    // truck and wheel list they were made for, when and how often they were looked at; what is in force on each
+    // (AxlePlanOf); diffMixed: the axles driven now differ; the two levers; the line last logged
+    AxleRows axleRows;
+    uint64_t axleRowsFor, axleRowsWheel[kDdWheels];
+    int axleRowsN, axleRowsLooks;
+    unsigned long long axleRowsAt;
+    AxlePlan axlePlan;
+    bool diffMixed;
+    AxleLevers levers;
+    wchar_t axleSaidText[400];
     LockHold lockHold;          // Locked on a truck whose lock can be switched: the lock byte the mod holds (LockHoldStep)
     uint64_t lockHoldSaid;      // the vehicle the cleared byte was said for
     float diffBand[2];          // the governor's band of the last slot, rad/s
@@ -4531,7 +4594,16 @@ static TorqueCutSlot TorqueCutSlotOf(const TruckWatch &w, const TruckRaw &raw, c
     c.vehicle = w.refs.vehicle;
     c.action = w.refs.action;
     c.cylinderVtable = WheelCylinderVtable(); // on the mod's thread, never in the hook (the review of 113, M1)
-    c.diff = DiffTypeOf(s.diffType, w.diffKindRead, w.diffKind);
+    c.diff = w.axleRows.axles > 0 && w.axlePlan.common >= 0 ? w.axlePlan.common : DiffTypeOf(s.diffType, w.diffKindRead, w.diffKind);
+    // by axle (BRIEF_axle_diff.md, M5): each wheel of the rows' read with its axle's type in force and how it is driven
+    if (w.axleRows.axles > 0 && w.axleRowsFor == w.refs.vehicle)
+        for (int i = 0; i < w.axleRowsN && i < kDdWheels && i < raw.wheels; i++)
+        {
+            c.axleWheel[c.axleN] = w.axleRowsWheel[i];
+            c.axleType[c.axleN] = (uint8_t)w.axlePlan.type[w.axleRows.ofWheel[i]];
+            c.axleDrive[c.axleN] = (uint8_t)(raw.drive[i] == 1 || raw.drive[i] == 2 ? raw.drive[i] : 0);
+            c.axleN++;
+        }
     c.mode = locked ? kCutMap : kCutScalar;
     const float held = w.profile.torque > 0.0f && w.profile.torque < 1.0f ? w.profile.torque : 1.0f;
     const float carried = isfinite(w.clutch.carried) && !w.clutch.dead ? w.clutch.carried : 0.0f;
@@ -4690,13 +4762,81 @@ static const wchar_t *DiffTypeName(int type)
 {
     return type == kDiffOpen ? L"Open" : type == kDiffLimited ? L"Limited slip" : type == kDiffLocked ? L"Locked" : L"Auto";
 }
-static void DiffPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s, bool driving)
+// The driven truck's axles for the rows by axle (BRIEF_axle_diff.md, M5), read on the mod's thread: every wheel's parent
+// body (wheel + 0x10), its centre (wheel + 0x13C) in that body's frame (forward + 0x170, left + 0x190, place + 0x1A0)
+// and along the main body ([[vehicle + 0x60] + 0x230]), as the hook's table and the Drive display read them. Made when
+// the truck or its wheel list is another; while no rows came of it, looked at again once a second (a truck read before
+// its wheels were placed).
+static void AxleRowsStep(TruckWatch &w, const TruckMemory &m, const TruckRaw &raw, unsigned long long now)
+{
+    const int n = w.refs.wheels;
+    bool same = w.axleRowsFor == w.refs.vehicle && w.axleRowsN == n;
+    for (int i = 0; same && i < n && i < kDdWheels; i++) same = w.axleRowsWheel[i] == w.refs.wheel[i];
+    if (same && (w.axleRows.axles > 0 || now - w.axleRowsAt < 1000)) return;
+    if (!same) w.axleRowsLooks = 0;
+    w.axleRowsFor = w.refs.vehicle, w.axleRowsN = n, w.axleRowsAt = now;
+    if (w.axleRowsLooks < 1000) w.axleRowsLooks++;
+    for (int i = 0; i < n && i < kDdWheels; i++) w.axleRowsWheel[i] = w.refs.wheel[i];
+    w.axleRows = AxleRows{};
+    if (n < 2 || n > kDdWheels || raw.wheels != n) return;
+    uint64_t body[kDdWheels], model = 0, mainBody = 0;
+    float along[kDdWheels], side[kDdWheels], rowAt[kDdWheels], ma[3], mf[3], ml[3];
+    bool ok[kDdWheels];
+    int drive[kDdWheels];
+    const bool mainOk = m.get(w.refs.vehicle + 0x60, model) && m.get(model + 0x230, mainBody) && m.get(mainBody + 0x1A0, ma) && m.get(mainBody + 0x170, mf) && m.get(mainBody + 0x190, ml);
+    for (int i = 0; i < n; i++)
+    {
+        float c[3], at[3], f[3], l[3];
+        body[i] = 0, ok[i] = false, along[i] = side[i] = rowAt[i] = 0.0f, drive[i] = raw.drive[i];
+        if (!m.get(w.refs.wheel[i] + 0x10, body[i]) || !m.get(w.refs.wheel[i] + 0x13C, c) || !m.get(body[i] + 0x1A0, at) || !m.get(body[i] + 0x170, f) || !m.get(body[i] + 0x190, l)) continue;
+        ok[i] = AxlePlace(c, at, f, l, along[i], side[i]);
+        float mainSide = 0.0f;
+        rowAt[i] = along[i];
+        if (ok[i] && mainOk && !AxlePlace(c, ma, mf, ml, rowAt[i], mainSide)) rowAt[i] = along[i];
+    }
+    w.axleRows = AxleRowsMake(body, along, side, rowAt, ok, drive, n);
+}
+static void DiffPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s, bool driving, const TruckRaw &raw)
 {
     int kind = -1;
     w.diffKindRead = driving && w.refs.vehicle && m.get(w.refs.vehicle + 0xE8, kind);
     w.diffKind = w.diffKindRead ? kind : -1;
-    w.diffType = DiffTypeOf(s.diffType, w.diffKindRead, kind);
+    // by axle: the rows, the levers (another truck starts with both off) and what is in force on each axle. Where the
+    // axles driven now are alike, their type is the truck's; where they differ, the truck's stays the one by DiffType
+    if (driving && w.refs.vehicle)
+    {
+        AxleRowsStep(w, m, raw, GetTickCount64());
+        AxleLeversFor(w.levers, w.refs.vehicle);
+    }
+    else w.axleRows = AxleRows{}, w.axleRowsFor = 0;
+    const bool leversHere = w.levers.vehicle == w.refs.vehicle;
+    w.axlePlan = AxlePlanOf(w.axleRows, s.diffAxle, s.diffType, w.diffKindRead, kind, driving && raw.awd != 0, leversHere && w.levers.front, leversHere && w.levers.rear);
+    w.diffMixed = w.axleRows.axles > 0 && w.axlePlan.common < 0;
+    w.diffType = w.axleRows.axles > 0 && !w.diffMixed ? w.axlePlan.common : DiffTypeOf(s.diffType, w.diffKindRead, kind);
     if (!driving || !w.refs.vehicle) return;
+    // one line a truck, and again when a row, a lever, all wheel drive or the read changes
+    {
+        wchar_t text[400];
+        int len = 0;
+        text[0] = 0;
+        if (w.axleRows.axles == 0)
+        {
+            if (w.axleRowsLooks >= 3) len = swprintf_s(text, L"vehicle %llx: the axles of this truck are not read as pairs (%d wheels): no rows, the whole truck by DiffType", (unsigned long long)w.refs.vehicle, w.refs.wheels);
+        }
+        else
+        {
+            len = swprintf_s(text, L"vehicle %llx: %d axles front to back:", (unsigned long long)w.refs.vehicle, w.axleRows.axles);
+            for (int a = 0; a < w.axleRows.axles && len < 340; a++)
+                len += swprintf_s(text + len, 400 - len, L" %d %s%s%s%s", a + 1, !w.axleRows.drive[a] ? L"not driven" : DiffTypeName(w.axlePlan.type[a]), w.axlePlan.lever[a] ? L" by the key" : L"",
+                                  w.axleRows.drive[a] && !w.axlePlan.now[a] ? L" (not driven now)" : L"", a + 1 < w.axleRows.axles ? L"," : L"");
+            if (len < 340) len += swprintf_s(text + len, 400 - len, w.diffMixed ? L"; the driven axles differ: each by its own while the lock byte is not in force" : L"; the driven axles are alike: the step as before the rows");
+        }
+        if (len > 0 && wcscmp(text, w.axleSaidText))
+        {
+            wcscpy_s(w.axleSaidText, text);
+            Log(L"differential by axle: %s", text);
+        }
+    }
     // Open by axle (M2): once a truck, and again when its axles are made anew, how many were found
     DiffCounts ax = {};
     DiffCountsGet(ax);
@@ -4721,6 +4861,23 @@ static void DiffPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s
         kindText, DiffTypeName(w.diffType), s.diffType, why);
 }
 
+// A lever's press (BRIEF_axle_diff.md, M7): the state flips with the truck's watch, one line a press saying whether it
+// acts now. Nothing to lock: one line, no state.
+static void AxleLeverPress(TruckWatch &w, bool front)
+{
+    const wchar_t *name = front ? L"Lock front axle (BindLockFrontAxle)" : L"Lock rear axles (BindLockRearAxles)";
+    const bool here = w.refs.vehicle && w.axleRowsFor == w.refs.vehicle;
+    static const AxleRows none = {};
+    const int to = AxleLeverPressed(w.levers, here ? w.refs.vehicle : 0, here ? w.axleRows : none, front);
+    if (to < 0)
+    {
+        Log(L"differential by axle: %s: nothing to lock: %s", name, !here ? L"no truck is driven" : w.axleRows.axles == 0 ? L"the axles of this truck are not read as pairs"
+                                                                    : front ? L"the front axle of this truck is not driven" : L"no axle behind the front one is driven");
+        return;
+    }
+    Log(L"differential by axle: %s: %s; %s", name, to ? L"on, Locked over the rows" : L"off, the rows again",
+        w.cutActs ? L"it acts now" : L"it does not act now (the torque cut is off: A, or no gear held by the mod gearbox)");
+}
 // The diff lock's bite for the driven truck (BRIEF_diff_lock_bite.md): published at every Gearbox level while Powertrain
 // is on and DiffLockBite above 0, with the setter found at the code look and the truck's lock kind (vehicle + 0xE8, by
 // DiffPass) read and 0, 1 or 2, with the truck's mass and the cylinder's vtable for the held step. One line a truck
@@ -6338,7 +6495,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     // garage takes its gear; the gearbox keeps the truck and reads its position again on the way back (review 7, R6)
     if (w.take.driving && !(driving && !held && same) && GearboxHoldingNow()) GearboxPolicy(kPolicyPass, nullptr, false);
     // and no creep there: the hook lets every call pass until the truck is driven in the world again
-    DiffPass(w, m, s, driving && !held && same);
+    DiffPass(w, m, s, driving && !held && same, raw);
     LockPass(w, m, s, driving && !held && same, GetTickCount64());
     if (!(driving && !held && same))
     {
@@ -7239,7 +7396,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             {
                 const uint64_t a = w.refs.action;
                 const bool outside = a && !(a >= m.base && a < m.base + g_exeSize);
-                const bool holdWant = cutActs && w.diffType == kDiffLocked && w.diffKindRead && (w.diffKind == 0 || w.diffKind == 1);
+                // by axle (M2): only where every axle driven now is Locked; with one axle Locked and another not the byte is not held
+                const bool holdWant = cutActs && !w.diffMixed && w.diffType == kDiffLocked && w.diffKindRead && (w.diffKind == 0 || w.diffKind == 1);
                 uint8_t byte = 0;
                 const bool byteRead = outside && m.get(a + kLockAt[kLockDiff], byte);
                 const bool wasOurs = w.lockHold.ours && w.lockHold.action == a;
@@ -7390,9 +7548,20 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 DiffCountsGet(dc);
                 Log(L"probe: differential: the type %s, in force in the last step %s; Open's evening by axle: J %.4f summed over %d wheels in its last step, %ld steps, %ld written, %ld faults "
                     L"in a second; the wheels' mean %.2f rad/s against the governor's band %.2f to %.2f; in Open the wheel cap's ceiling is on each axle's mean, and the excess is the largest axle's; the physics at %d steps a second",
-                    DiffTypeName(w.diffType), !cutActs ? L"nothing (the cut is off)" : dc.force == kDiffForceOpen ? L"Open" : dc.force == kDiffForceLock ? L"the lock" : L"Limited slip",
+                    DiffTypeName(w.diffType), !cutActs ? L"nothing (the cut is off)" : dc.force == kDiffForceOpen ? L"Open" : dc.force == kDiffForceLock ? L"the lock" : dc.force == kDiffForceAxles ? L"each axle by its own" : L"Limited slip",
                     dc.j, dc.wheels, dc.steps - w.diffWas.steps, dc.writes - w.diffWas.writes, dc.faults - w.diffWas.faults, c.s, w.diffBand[0], w.diffBand[1], DriveRateOn() ? 120 : 60);
-                if (dc.force == kDiffForceOpen && cutActs && dc.axleVehicle == w.refs.vehicle)
+                if (dc.force == kDiffForceAxles && cutActs)
+                {
+                    wchar_t types[240];
+                    int tl = 0;
+                    types[0] = 0;
+                    for (int a = 0; a < dc.sayN && tl < 200; a++) tl += swprintf_s(types + tl, 240 - tl, L"%s%s", a ? L", " : L"", DiffTypeName(dc.sayType[a]));
+                    Log(L"probe: differential by axle: the driven axles differ, each by its own; their types in the order of their first wheels: %s; k %.3f for a Locked axle (0: Diff lock bite 0 or no "
+                        L"lock slot, so a Locked axle is not tied); in a second %ld steps, %ld Locked axles tied, %ld driven wheels not in the slot (Limited slip then), %ld axles whose wheels came with two "
+                        L"types (the lower wheel's then); the by-wheel line of the lock is the whole truck's and these steps do not feed it",
+                        tl ? types : L"none", dc.axK, dc.axSteps - w.diffWas.axSteps, dc.axTied - w.diffWas.axTied, dc.axMissing - w.diffWas.axMissing, dc.axSplit - w.diffWas.axSplit);
+                }
+                if ((dc.force == kDiffForceOpen || dc.force == kDiffForceAxles) && cutActs && dc.axleVehicle == w.refs.vehicle)
                 {
                     // N2: each axle of the last Open step, so a wrong pair shows
                     wchar_t axles[640];
@@ -8739,6 +8908,9 @@ static DWORD WINAPI Run(void *)
             const bool locksHeard = !menuGate && !bindCapture.active;
             watch.lockPress[kLockDiff] = locksHeard && states[kActDiffLock].pressed;
             watch.lockPress[kLockAwd] = locksHeard && states[kActAwd].pressed;
+            // the two axle levers (BRIEF_axle_diff.md, M7)
+            if (locksHeard && states[kActLockFront].pressed) AxleLeverPress(watch, true);
+            if (locksHeard && states[kActLockRear].pressed) AxleLeverPress(watch, false);
             if (locksHeard && states[kActSway].pressed)
             {
                 watch.swayOff = !watch.swayOff;
@@ -9303,6 +9475,17 @@ static DWORD WINAPI Run(void *)
             v.airAxles = watch.airAxles, v.airFrom = watch.airFrom;
             v.diffKnown = driving && watch.diffKindRead;
             v.diffAuto = DiffTypeOf(kDiffAuto, watch.diffKindRead, watch.diffKind);
+            // the rows by axle: one for each axle that can be driven, front to back
+            v.diffKind = watch.diffKindRead ? watch.diffKind : -1;
+            v.diffRows = 0;
+            v.diffNoPairs = driving && watch.axleRowsFor == watch.refs.vehicle && watch.axleRows.axles == 0 && watch.axleRowsLooks >= 3;
+            v.diffBiteActs = LockPublishes(g_lockPattern, watch.diffKindRead, watch.diffKind);
+            for (int a = 0; driving && a < watch.axleRows.axles && a < kAxleRowsMost; a++)
+            {
+                if (!watch.axleRows.drive[a]) continue;
+                v.diffRowAxle[v.diffRows] = a, v.diffRowNow[v.diffRows] = watch.axlePlan.now[a], v.diffRowKey[v.diffRows] = watch.axlePlan.lever[a];
+                v.diffRows++;
+            }
             v.airLevel[0] = watch.step.airLevel[0], v.airLevel[1] = watch.step.airLevel[1], v.airSide = watch.step.airSide;
             v.airShown = driving && inForce.airSuspension && watch.airPressedAt && GetTickCount64() - watch.airPressedAt < 3000;
             // each axle's rest place from the probe's windows or the display (cm along the axis, compression negative)
@@ -9555,7 +9738,8 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.springFront == b.springFront && a.dampingFront == b.dampingFront && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.hiddenWarnings == b.hiddenWarnings && a.warnFuel == b.warnFuel && a.warnEngine == b.warnEngine && a.warnGearbox == b.warnGearbox && a.warnCoolant == b.warnCoolant && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
            a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.heldGearSlip == b.heldGearSlip && a.lowRangeSlip == b.lowRangeSlip && a.diffType == b.diffType && a.physicsRate == b.physicsRate && a.engineBrake == b.engineBrake && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
-           a.camberGainFront == b.camberGainFront && a.camberGainRear == b.camberGainRear && a.camberRestFront == b.camberRestFront && a.camberRestRear == b.camberRestRear;
+           a.camberGainFront == b.camberGainFront && a.camberGainRear == b.camberGainRear && a.camberRestFront == b.camberRestFront && a.camberRestRear == b.camberRestRear &&
+           !memcmp(a.diffAxle, b.diffAxle, sizeof a.diffAxle);
 }
 
 static int g_failed = 0;
@@ -9764,7 +9948,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 159, "ini: the help text survives a write (159 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 161, "ini: the help text survives a write (161 comment lines)");
     // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
     {
         char none[32] = "x", tab[32] = {}, kept[32] = {};
@@ -10199,6 +10383,95 @@ int wmain(int argc, wchar_t **argv)
                   "with no truck the row is the default; a value out of 0 to 3 is left out; the defaults take it out");
             if (!(taken && onePut && otherPlain && back && plainTaken && otherNew && ownKept && withScales && dropKeeps && outOfRange && noNumber && open && toDefaults))
                 printf("     diff key: %d %d %d %d %d %d %d %d %d %d %d %d %d\n", taken, onePut, otherPlain, back, plainTaken, otherNew, ownKept, withScales, dropKeeps, outOfRange, noNumber, open, toDefaults);
+            // by axle (BRIEF_axle_diff.md, M6): DiffAxle1 to DiffAxle8 in the truck's file
+            {
+                for (const char *dk : { "axle_a", "axle_b" }) DeleteFileW(truckFile(dk).c_str());
+                auto fileKey = [&](const char *k, const wchar_t *name) {
+                    wchar_t v[8] = {};
+                    GetPrivateProfileStringW(L"Truck", name, L"", v, 8, truckFile(k).c_str());
+                    return std::wstring(v);
+                };
+                auto noAxleKey = [&](const char *k) {
+                    bool none = true;
+                    for (int ax = 0; ax < kAxleRowsMost; ax++) none = none && fileKey(k, (L"DiffAxle" + std::to_wstring(ax + 1)).c_str()).empty();
+                    return none;
+                };
+                SettingsState at = {};
+                ReadIni(at.plain);
+                // a file from before: DiffType alone, no axle has a key
+                truckPut("axle_a", L"DiffType", L"1");
+                SettingsFor(at, "axle_a");
+                bool oldFile = at.s.diffType == 1 && !at.axleChanged;
+                for (int ax = 0; ax < kAxleRowsMost; ax++) oldFile = oldFile && at.s.diffAxle[ax] == -1 && at.plain.diffAxle[ax] == -1;
+                // a row's pick writes its own key alone
+                GaugeSettings ai = at.s;
+                ai.diffAxle[1] = 3;
+                SettingsTake(at, ai);
+                const bool rowTaken = at.axleChanged == 2 && !at.diffChanged && !at.own && at.plain.diffAxle[1] == -1 && at.s.diffAxle[1] == 3;
+                SettingsWrite(at);
+                const bool rowPut = fileKey("axle_a", L"DiffAxle2") == L"3" && fileKey("axle_a", L"DiffAxle1").empty() && fileKey("axle_a", L"DiffType") == L"1" && !at.axleChanged;
+                // read back for that truck only
+                SettingsFor(at, "axle_b");
+                const bool otherNone = at.s.diffAxle[1] == -1;
+                SettingsFor(at, "axle_a");
+                const bool backAgain = at.s.diffAxle[1] == 3 && at.s.diffAxle[0] == -1 && at.s.diffType == 1;
+                // a key of 9, of x and of two digits is as if absent; a key for axle 7 is read into its own place
+                truckPut("axle_a", L"DiffAxle1", L"9");
+                truckPut("axle_a", L"DiffAxle3", L"x");
+                truckPut("axle_a", L"DiffAxle4", L"12");
+                truckPut("axle_a", L"DiffAxle7", L"2");
+                SettingsFor(at, "axle_a");
+                const bool badKeys = at.s.diffAxle[0] == -1 && at.s.diffAxle[2] == -1 && at.s.diffAxle[3] == -1 && at.s.diffAxle[6] == 2 && at.s.diffAxle[1] == 3;
+                // another row's pick leaves the keys of the other axles in the file, the one for an axle the truck has not too
+                ai = at.s;
+                ai.diffAxle[0] = 0;
+                SettingsTake(at, ai);
+                SettingsWrite(at);
+                const bool spareLeft = fileKey("axle_a", L"DiffAxle7") == L"2" && fileKey("axle_a", L"DiffAxle1") == L"0" && fileKey("axle_a", L"DiffAxle2") == L"3";
+                // the Diff row's pick writes DiffType and removes every key by axle
+                ai = at.s;
+                ai.diffType = 2;
+                for (int ax = 0; ax < kAxleRowsMost; ax++) ai.diffAxle[ax] = -1;
+                SettingsTake(at, ai);
+                SettingsWrite(at);
+                const bool rowAll = fileKey("axle_a", L"DiffType") == L"2" && noAxleKey("axle_a");
+                // By axle shown and the choice it already has picked on the Diff row: the keys go though DiffType is the same
+                ai = at.s;
+                ai.diffAxle[2] = 1;
+                SettingsTake(at, ai);
+                SettingsWrite(at);
+                const bool third = fileKey("axle_a", L"DiffAxle3") == L"1";
+                ai = at.s;
+                ai.diffAxle[2] = -1;
+                SettingsTake(at, ai);
+                SettingsWrite(at);
+                const bool samePick = third && !at.diffChanged && noAxleKey("axle_a") && fileKey("axle_a", L"DiffType") == L"2";
+                // the defaults take the keys out, and the file with them when nothing else is in it
+                ai = at.s;
+                ai.diffAxle[0] = 3;
+                SettingsTake(at, ai);
+                SettingsWrite(at);
+                const GaugeSettings plainKept = at.plain;
+                SettingsToDefaults(at);
+                const bool axleDefaults = at.s.diffAxle[0] == -1 && at.s.diffType == 0 && GetFileAttributesW(truckFile("axle_a").c_str()) == INVALID_FILE_ATTRIBUTES;
+                // the compare and the clamp hold them
+                GaugeSettings sa = plainKept, sb = plainKept;
+                sb.diffAxle[4] = 1;
+                const bool compared = SameSettings(sa, sa) && !SameSettings(sa, sb);
+                sb.diffAxle[4] = 7, sb.diffAxle[5] = -4;
+                SettingsClamp(sb);
+                GaugeSettings fresh;
+                SettingsDefaults(fresh);
+                const bool clamped = sb.diffAxle[4] == -1 && sb.diffAxle[5] == -1 && fresh.diffAxle[0] == -1 && fresh.diffAxle[7] == -1;
+                at.plain = plainKept;
+                SettingsFor(at, "");
+                SettingsWrite(at);
+                if (!(oldFile && rowTaken && rowPut && otherNone && backAgain && badKeys && spareLeft && rowAll && samePick && axleDefaults && compared && clamped))
+                    printf("     axle keys: %d %d %d %d %d %d %d %d %d %d %d %d\n", oldFile, rowTaken, rowPut, otherNone, backAgain, badKeys, spareLeft, rowAll, samePick, axleDefaults, compared, clamped);
+                Check(oldFile && rowTaken && rowPut && otherNone && backAgain && badKeys && spareLeft && rowAll && samePick && axleDefaults && compared && clamped,
+                      "trucks: the differential by axle: a file from before has no axle key; a row writes its own key alone, read back for that truck only; a key of 9, x or two digits is as if "
+                      "absent; a key for an axle the truck has not stays in the file; the Diff row writes DiffType and removes every axle key, also when its choice is the same; the defaults take them out");
+            }
         }
         // the defaults: the plain settings and the driven truck's own scales; another truck keeps its own
         SettingsFor(next, "half");

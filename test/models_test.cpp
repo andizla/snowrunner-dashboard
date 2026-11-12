@@ -4767,6 +4767,122 @@ int main(int argc, char **argv)
                      q.vMin, q.vMax, q.needleMax - q.needleMin, law0.vMin, law0.vMax, law0.needleMax - law0.needleMin);
             Check(q.vMax < 3.05f && law0.vMax < 3.05f && q.needleMax - q.needleMin > 500.0f && law0.needleMax - law0.needleMin > 500.0f, line);
         }
+        // the differential by axle (BRIEF_axle_diff.md, M3 and M4; torque_cut.h, DiffAxlesStep). Four wheels, the front axle
+        // wheels 0 and 1, the rear 2 and 3, every gain 1
+        {
+            const int axle4[4] = { 0, 0, 2, 2 };
+            const float gain4[4] = { 1.0f, 1.0f, 1.0f, 1.0f }, radius4[4] = { 0.5f, 0.5f, 0.5f, 0.5f };
+            const bool ok4[4] = { true, true, true, true };
+            // a free front wheel: the drive gives it nearly all
+            const float pre4[4] = { 2.0f, 2.0f, 2.0f, 2.0f }, post4[4] = { 9.0f, 2.1f, 2.05f, 2.02f }, load4[4] = { 0.0f, 1.0f, 1.0f, 1.0f };
+            const int open4[4] = { kDiffOpen, kDiffOpen, kDiffOpen, kDiffOpen };
+            const float mass = 4000.0f, kFull = LockK(100, 1.0f / 60.0f);
+            auto lowered = [&](const DiffAxlesOut &x, const float *pre, const float *post, int n) {
+                for (int i = 0; i < n; i++)
+                    if (!(x.r.o.final[i] >= fminf(pre[i], post[i]) - 1e-4f) || !isfinite(x.r.o.final[i])) return true;
+                return false;
+            };
+            // every type Open, and one axle: DiffEvenAxles then DiffOpenAxles, to the bit, with a ceiling and with none
+            bool alike = true;
+            for (float ceiling : { 3.0f, 0.0f })
+            {
+                const DiffEvenOut e = DiffEvenAxles(pre4, post4, gain4, ok4, axle4, 4);
+                const OpenAxlesOut was = DiffOpenAxles(pre4, e.final, gain4, ok4, axle4, 4, ceiling, true);
+                const DiffAxlesOut is = DiffAxlesStep(pre4, post4, gain4, load4, radius4, ok4, axle4, open4, 4, kFull, mass, ceiling, true);
+                alike = alike && !memcmp(is.r.o.final, was.o.final, 4 * sizeof(float)) && !memcmp(is.work, e.final, 4 * sizeof(float)) && is.r.o.kept == was.o.kept &&
+                        is.r.o.spread == was.o.spread && is.r.axles == was.axles && is.evenJ == e.j && is.evenUsed == e.used && is.tied == 0;
+                const int one[2] = { 0, 0 };
+                const DiffEvenOut e1 = DiffEvenAxles(pre4, post4, gain4, ok4, one, 2);
+                const OpenAxlesOut was1 = DiffOpenAxles(pre4, e1.final, gain4, ok4, one, 2, ceiling, true);
+                const DiffAxlesOut is1 = DiffAxlesStep(pre4, post4, gain4, load4, radius4, ok4, one, open4, 2, kFull, mass, ceiling, true);
+                alike = alike && !memcmp(is1.r.o.final, was1.o.final, 2 * sizeof(float)) && is1.r.o.kept == was1.o.kept && is1.r.axles == 1;
+            }
+            // Open front and Locked rear, the free front wheel, a capped gear: the front axle's mean at the ceiling, the rear gets
+            // the hand-on, its two wheels are tied, no wheel lowered
+            const int frontOpen[4] = { kDiffOpen, kDiffOpen, kDiffLocked, kDiffLocked };
+            const DiffAxlesOut capped = DiffAxlesStep(pre4, post4, gain4, load4, radius4, ok4, axle4, frontOpen, 4, kFull, mass, 3.0f, true);
+            const float *f = capped.r.o.final;
+            const bool mixed = Near(0.5f * (f[0] + f[1]), 3.0f, 1e-4f) && capped.r.got[1] > 0.5f && capped.r.got[0] == 0.0f && Near(f[2], f[3], 1e-3f) && 0.5f * (f[2] + f[3]) <= 3.0f + 1e-4f &&
+                               f[2] > 2.5f && !lowered(capped, pre4, post4, 4) && capped.tied == 1 && capped.type[0] == kDiffOpen && capped.type[1] == kDiffLocked && capped.lockBreach == 0 &&
+                               capped.lockUnder == 0 && capped.r.o.kept > 0.0f && capped.r.o.kept <= 1.0f;
+            // the same with no cap: the front evened, the rear tied, nothing passes between the axles
+            const DiffAxlesOut free = DiffAxlesStep(pre4, post4, gain4, load4, radius4, ok4, axle4, frontOpen, 4, kFull, mass, 0.0f, true);
+            const bool noCap = Near(free.r.o.final[0], 5.55f, 1e-4f) && Near(free.r.o.final[1], 5.55f, 1e-4f) && Near(free.r.o.final[2], free.r.o.final[3], 1e-3f) && free.r.o.final[2] < 2.1f &&
+                               free.r.got[0] == 0.0f && free.r.got[1] == 0.0f && free.r.o.spread == 0.0f && !memcmp(free.r.o.final, free.work, 4 * sizeof(float));
+            // Locked front and Limited slip rear, a free rear wheel: the front tied, the rear held wheel by wheel at the ceiling
+            const int frontLocked[4] = { kDiffLocked, kDiffLocked, kDiffLimited, kDiffLimited };
+            const float postRear[4] = { 2.3f, 2.1f, 9.0f, 2.05f }, loadRear[4] = { 1.0f, 1.0f, 0.0f, 1.0f };
+            const DiffAxlesOut limRear = DiffAxlesStep(pre4, postRear, gain4, loadRear, radius4, ok4, axle4, frontLocked, 4, kFull, mass, 3.0f, true);
+            const bool lockedFront = Near(limRear.r.o.final[0], limRear.r.o.final[1], 1e-3f) && limRear.r.o.final[2] <= 3.0f + 1e-4f && limRear.work[2] == 9.0f && limRear.work[3] == 2.05f &&
+                                     !lowered(limRear, pre4, postRear, 4) && limRear.type[0] == kDiffLocked && limRear.type[1] == kDiffLimited;
+            // the mass share: two wheels of eight get a quarter of the mass. The Locked axle's part is LockStepHeld over its two
+            // wheels with that mass, to the bit
+            bool share = true;
+            {
+                int axle8[8], type8[8];
+                float pre8[8], post8[8], gain8[8], load8[8], radius8[8];
+                bool ok8[8];
+                for (int i = 0; i < 8; i++)
+                {
+                    axle8[i] = i & ~1, type8[i] = i < 2 ? kDiffLocked : i < 4 ? kDiffOpen : kDiffLimited, pre8[i] = 2.0f, post8[i] = 2.0f + 0.3f * (float)(i % 3), gain8[i] = 1.0f,
+                    load8[i] = i == 1 ? 0.2f : 1.0f, radius8[i] = 0.5f, ok8[i] = true;
+                }
+                post8[1] = 4.0f;
+                const DiffAxlesOut x8 = DiffAxlesStep(pre8, post8, gain8, load8, radius8, ok8, axle8, type8, 8, 0.5f, mass, 0.0f, true);
+                const LockStepOut own = LockStepHeld(pre8, post8, gain8, load8, radius8, ok8, 2, 0.5f, mass * 2.0f / 8.0f), whole = LockStepHeld(pre8, post8, gain8, load8, radius8, ok8, 2, 0.5f, mass);
+                share = x8.work[0] == own.final[0] && x8.work[1] == own.final[1] && (own.final[0] != whole.final[0] || own.final[1] != whole.final[1]) && x8.r.axles == 4 && x8.tied == 1 &&
+                        x8.type[0] == kDiffLocked && x8.type[1] == kDiffOpen && x8.type[2] == kDiffLimited && x8.type[3] == kDiffLimited && !lowered(x8, pre8, post8, 8);
+                // four axles of three types against a ceiling: numbers, a share kept, no wheel lowered
+                const DiffAxlesOut c8 = DiffAxlesStep(pre8, post8, gain8, load8, radius8, ok8, axle8, type8, 8, 0.5f, mass, 2.2f, true);
+                share = share && !lowered(c8, pre8, post8, 8) && c8.r.o.kept >= 0.0f && c8.r.o.kept <= 1.0f && c8.r.axles == 4;
+                for (int ax8 = 0; ax8 < 4; ax8++) share = share && isfinite(c8.r.mean[ax8]) && c8.r.mean[ax8] <= 2.2f + 1e-3f;
+            }
+            // M4: at Diff lock bite 0 a Locked axle among others is not tied at all; at 100 its two wheels are equal after the step
+            const DiffAxlesOut noBite = DiffAxlesStep(pre4, post4, gain4, load4, radius4, ok4, axle4, frontOpen, 4, LockK(0, 1.0f / 60.0f), mass, 0.0f, true);
+            const bool bite = noBite.tied == 0 && noBite.work[2] == post4[2] && noBite.work[3] == post4[3] && free.work[2] == free.work[3] && free.tied == 1 && LockK(0, 1.0f / 60.0f) == 0.0f;
+            if (!(alike && mixed && noCap && lockedFront && share && bite))
+                printf("     alike %d mixed %d noCap %d lockedFront %d share %d bite %d; capped %.3f %.3f %.3f %.3f got %.3f; free %.3f %.3f %.3f %.3f\n", alike, mixed, noCap, lockedFront, share, bite,
+                       f[0], f[1], f[2], f[3], capped.r.got[1], free.r.o.final[0], free.r.o.final[1], free.r.o.final[2], free.r.o.final[3]);
+            Check(alike && mixed && noCap && lockedFront && share && bite,
+                  "differential by axle: every axle Open and one axle are the evening and the limit by axle to the bit; Open front and Locked rear with a free front wheel: the front mean at the "
+                  "ceiling, the rear gets the hand-on and is tied, no wheel lowered; with no cap nothing passes; Locked front with Limited slip rear; two wheels of eight weigh a quarter of the mass; "
+                  "at bite 0 a Locked axle is not tied, at 100 its wheels are equal");
+        }
+        // the hook's decision over the slot's wheels (M1, M2, M5): alike is the step before the axles, the lock byte in
+        // force is the whole truck's lock, only driven axles that differ go by axle
+        {
+            TorqueCutSlot sl = {};
+            sl.diff = kDiffLimited;
+            bool slotOk = SlotForce(sl, true, false, false, true) == kDiffForceLimited && SlotForce(sl, true, true, false, true) == kDiffForceLock && !SlotAxleTypes(sl, true).differ;
+            sl.axleN = 4;
+            for (int i = 0; i < 4; i++) sl.axleWheel[i] = 0x1000u + (uint64_t)i * 0x100u, sl.axleDrive[i] = 1;
+            for (int type = kDiffOpen; type <= kDiffLocked; type++)
+            {
+                for (int i = 0; i < 4; i++) sl.axleType[i] = (uint8_t)type;
+                for (int bytes = 0; bytes < 4; bytes++)
+                    slotOk = slotOk && SlotForce(sl, true, (bytes & 1) != 0, (bytes & 2) != 0, false) == DiffForceOf(type, (bytes & 1) != 0, (bytes & 2) != 0) && SlotAxleTypes(sl, false).type == type;
+            }
+            // the front axle with all wheel drive Locked, the rear Open
+            sl.axleType[0] = sl.axleType[1] = kDiffLocked, sl.axleType[2] = sl.axleType[3] = kDiffOpen;
+            sl.axleDrive[0] = sl.axleDrive[1] = 2;
+            const bool differ = SlotForce(sl, true, false, false, true) == kDiffForceAxles && SlotAxleTypes(sl, true).differ && SlotAxleTypes(sl, true).type == kDiffLimited;
+            const bool awdOff = SlotForce(sl, true, false, false, false) == kDiffForceOpen && !SlotAxleTypes(sl, false).differ; // the differing axle is not driven: the step before the axles
+            const bool byteOn = SlotForce(sl, true, true, false, true) == kDiffForceLock && SlotForce(sl, true, true, true, true) == kDiffForceAxles;
+            const bool notRead = SlotForce(sl, false, false, false, true) == kDiffForceLimited;
+            sl.axleDrive[2] = sl.axleDrive[3] = 0; // no wheel driven: the slot's own type
+            const bool noneDriven = SlotForce(sl, true, false, false, false) == kDiffForceLimited;
+            bool found = false, lost = true;
+            const bool byPointer = SlotWheelType(sl, 0x1100u, &found) == kDiffLocked && found && SlotWheelType(sl, 0x1300u, &found) == kDiffOpen && found &&
+                                   SlotWheelType(sl, 0x9900u, &lost) == kDiffLimited && !lost;
+            sl.axleType[3] = 9;
+            const bool badType = SlotWheelType(sl, 0x1300u, &found) == kDiffLimited && found;
+            if (!(slotOk && differ && awdOff && byteOn && notRead && noneDriven && byPointer && badType))
+                printf("     slot %d differ %d awdOff %d byteOn %d notRead %d noneDriven %d byPointer %d badType %d\n", slotOk, differ, awdOff, byteOn, notRead, noneDriven, byPointer, badType);
+            Check(slotOk && differ && awdOff && byteOn && notRead && noneDriven && byPointer && badType,
+                  "differential by axle, the hook: no table and axles alike give the force as before for each type and each byte; a Locked front with an Open rear goes by axle; with all wheel "
+                  "drive off the front is not driven and the step is the one before; the lock byte set is the whole truck locked, with the handbrake by axle again; a wheel missing from the "
+                  "slot is Limited slip and counted");
+        }
         // the slip room of the numbered gears (BRIEF_held_gear_slip.md with the Reviewer's addendum): the one rule, the
         // choice in force at a switch, and the closed loop in gear 1 against L+ on the same figures. The first gear's top
         // is 8.06, as the low range's test below has L+.
