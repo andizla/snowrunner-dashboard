@@ -75,7 +75,15 @@ inline void GearHudText(int gear, const char *mode, char *buf, size_t size)
     else _snprintf_s(buf, size, _TRUNCATE, "%d", gear);
 }
 
-enum { kLayoutStrip, kLayoutBlock, kLayoutHudDials, kLayoutHudDigital, kLayoutCount }; // GaugeSettings::layout (an older Gauges reads 2 and 3 as the strip)
+// GaugeSettings::layout. An older Gauges reads 2, 3 and 4 as the strip. Off is no place: the cluster is not drawn, and
+// nothing that places a cluster is asked about it (BRIEF_dials_off_option.md).
+enum { kLayoutStrip, kLayoutBlock, kLayoutHudDials, kLayoutHudDigital, kLayoutOff, kLayoutCount };
+// The layout's name for the log. A number that is no layout reads as the strip.
+inline const wchar_t *LayoutName(int layout)
+{
+    static const wchar_t *names[kLayoutCount] = { L"strip", L"block", L"Spotter dials", L"Spotter digital", L"off" };
+    return names[layout < 0 || layout >= kLayoutCount ? kLayoutStrip : layout];
+}
 enum { kFaceSolid, kFaceTinted, kFaceOpen, kFaceCount };     // GaugeSettings::style
 enum { kClassTruck, kClassScout, kClassHeavy, kClassCount }; // GaugeSettings::tachClass
 enum { kOilOff, kOilNeedle, kOilDial, kOilGaugeCount };      // GaugeSettings::oilGauge
@@ -512,7 +520,26 @@ inline void GaugeDemo(GaugeState &st, const GaugeSettings &s)
 // What the render thread draws: show = the cluster is on screen, demo = st holds the demo values, hidden = why it is
 // not on screen. engineDamage of engineCapacity is the driven truck's engine damage as the game holds it, for the
 // tab; engineCapacity is 0 while it is not known.
-enum { kShown, kHiddenByToggle, kHiddenNoTruck, kHiddenSoundsOnly };
+enum { kShown, kHiddenByToggle, kHiddenNoTruck, kHiddenSoundsOnly, kHiddenOff, kHiddenCount };
+// Why the cluster is not on screen, or kShown. The Off layout comes first: there the toggle, a driven truck and the
+// demo values count for nothing.
+inline int ClusterHidden(int layout, bool visible, bool soundsOnly, bool driving, bool demo)
+{
+    return layout == kLayoutOff ? kHiddenOff : !visible ? kHiddenByToggle : soundsOnly ? kHiddenSoundsOnly : driving || demo ? kShown : kHiddenNoTruck;
+}
+// The toggle key or the pad chord was pressed with this layout in force. In Off it does nothing, or the player would
+// leave Off and find the cluster hidden by a press made a while ago. True when it flipped.
+inline bool ClusterToggle(bool &visible, int layout)
+{
+    if (layout == kLayoutOff) return false;
+    visible = !visible;
+    return true;
+}
+// The layout in force went from one to another: leaving Off shows the cluster, whatever the toggle had made of it.
+inline void ClusterLayoutChange(bool &visible, int was, int now)
+{
+    if (was == kLayoutOff && now != kLayoutOff) visible = true;
+}
 // How strong the turbo's flutter is after a lift of the pedal, by the boost the lift had: the sounds come in these three.
 // After them the oil warning, the air dryer's purge and a diesel turbo's whistle (the player's own files only), the
 // mod's other sounds.

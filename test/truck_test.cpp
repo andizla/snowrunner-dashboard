@@ -1230,7 +1230,7 @@ static void PhysicsRateTest()
         // the sign's switch is the view's flag alone: no hidden state and no setting of the view reaches it
         static GaugeView gv;
         bool shown = true;
-        for (int hidden = kShown; hidden <= kHiddenSoundsOnly; hidden++)
+        for (int hidden = kShown; hidden < kHiddenCount; hidden++)
             for (int show = 0; show < 2; show++)
                 for (int demo = 0; demo < 2; demo++)
                 {

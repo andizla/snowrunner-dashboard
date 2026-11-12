@@ -434,7 +434,7 @@ bars and the air suspension stop for that truck, and the log says so.</li></ul>
 
 <h2>19. Every setting</h2>
 {gt(['Setting', 'In the ini', 'Default'], [
- ['Layout: strip along the bottom, block in the corner, Spotter dials or Spotter digital (left of Spotter\'s gear panel)', 'Layout 0 to 3', 'strip'], ['The speedometer and the tachometer change places, except in Spotter digital (Swap dials)', 'SwapDials 0 or 1', '0'],['Style of the strip and the block: solid, tinted, or open', 'Style 0, 1 or 2', 'open'],
+ ['Layout: strip along the bottom, block in the corner, Spotter dials or Spotter digital (left of Spotter\'s gear panel). Off draws no dials: the features act, the dials that show them are not there', 'Layout 0 to 4', 'strip'], ['The speedometer and the tachometer change places, except in Spotter digital (Swap dials)', 'SwapDials 0 or 1', '0'],['Style of the strip and the block: solid, tinted, or open', 'Style 0, 1 or 2', 'open'],
  ['How dark tinted faces are', 'FaceOpacity 0 to 0.85', '0.35'], ['Position in 1080p pixels from the layout\'s place', 'OffsetX, OffsetY', '0, 0'],
  ['Size, opacity', 'Scale, Opacity 0.1 to 1', '1, 1'], ['mph, psi, Fahrenheit', 'Mph, Psi, Fahrenheit', 'off'],
  ['Temperature, boost, air dials, lamps', 'ShowTemp, ShowBoost, ShowAir, ShowLamps', 'on, on, off, on'], ['Clock with the outside temperature (Clock)', 'ShowClock', 'on'], ['Odometer under the speed (Odometer)', 'ShowOdometer', 'on'], ['Fuel used a minute after the range (Fuel use)', 'ShowFuelUse', 'on'],['Oil: none, second needle, own dial', 'OilGauge 0, 1 or 2', 'second needle'],

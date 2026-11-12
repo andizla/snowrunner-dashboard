@@ -1317,7 +1317,7 @@ static float GaugeUnit(float screenW, float screenH, const GaugeSettings &s)
 static GaugeLayout GaugeLayoutOf(const GaugeSettings &s)
 {
     GaugeLayout lay = {};
-    lay.variant = s.layout >= 0 && s.layout < kLayoutCount ? s.layout : kLayoutStrip;
+    lay.variant = s.layout >= 0 && s.layout < kLayoutCount && s.layout != kLayoutOff ? s.layout : kLayoutStrip; // Off is never drawn: the caller returns before
     lay.swapDials = s.swapDials;
     lay.showTemp = s.showTemp;
     lay.showBoost = s.showBoost;

@@ -6645,6 +6645,20 @@ int main(int argc, char **argv)
         if (whole) CloseHandle(whole);
         const bool modes = StateGearMode("") == SRG_GEAR_NUMBER && StateGearMode(nullptr) == SRG_GEAR_NUMBER && StateGearMode("H") == SRG_GEAR_H &&
                            StateGearMode("L-") == SRG_GEAR_L_MINUS && StateGearMode("L") == SRG_GEAR_L && StateGearMode("L+") == SRG_GEAR_L_PLUS;
+        // the Off layout (BRIEF_dials_off_option.md): the block takes one thing from the layout and the toggle, the bit that
+        // says the cluster is on screen. Off gives the options a cluster hidden by the key gives, to the bit
+        {
+            bool same = true;
+            for (int combo = 0; combo < 32; combo++)
+            {
+                const bool mph = (combo & 1) != 0, psi = (combo & 2) != 0, fahrenheit = (combo & 4) != 0, vacuum = (combo & 8) != 0, natural = (combo & 16) != 0;
+                const uint32_t strip = StateOptions(mph, psi, fahrenheit, ClusterHidden(kLayoutStrip, true, false, true, false) == kShown, vacuum, natural);
+                const uint32_t byKey = StateOptions(mph, psi, fahrenheit, ClusterHidden(kLayoutStrip, false, false, true, false) == kShown, vacuum, natural);
+                const uint32_t noDials = StateOptions(mph, psi, fahrenheit, ClusterHidden(kLayoutOff, true, false, true, false) == kShown, vacuum, natural);
+                same = same && noDials == byKey && (strip ^ noDials) == SRG_OPT_CLUSTER && !(noDials & SRG_OPT_CLUSTER);
+            }
+            Check(same, "state: with the Off layout the options are a hidden cluster's, and differ from the strip's on screen by the cluster bit alone");
+        }
         Check(v2 && oldBlock && modes, "state: version 2 carries what the cluster shows at the header's places, an unknown burn or range as -1 and never NaN, "
                                        "the gear letters as codes, and a reader of version 2 sees an older 64-byte block's new fields as absent");
     }

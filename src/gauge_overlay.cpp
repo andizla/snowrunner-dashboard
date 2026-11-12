@@ -170,7 +170,12 @@ static void OnFrame()
     GaugeView view;
     SettingsGet(s);
     ViewGet(view);
-    const float u = GaugeUnit(io.DisplaySize.x, io.DisplaySize.y, s);
+    // Off is no place (BRIEF_dials_off_option.md): the font keeps the strip's unit there, and the cluster's own part
+    // below is left before anything places it
+    const bool off = s.layout == kLayoutOff;
+    GaugeSettings place = s;
+    if (off) place.layout = kLayoutStrip;
+    const float u = GaugeUnit(io.DisplaySize.x, io.DisplaySize.y, place);
     UpdateFontTexture(u);
     const float dt = fminf(fmaxf(io.DeltaTime, 0.0f), 0.1f);
     DrawWarnings(view, io.DisplaySize.x, io.DisplaySize.y, dt);
@@ -178,6 +183,12 @@ static void OnFrame()
     // the physics rate sign: on the foreground list, so over the cluster, the boxes and the NEXT GEN menu; before every
     // switch below (the toggle key, the truck, the other tabs, the opacity), so none of them reaches it
     if (StepSignShown(view)) DrawStepSign(io.DisplaySize.x, io.DisplaySize.y);
+    // the Off layout: no dials, at once and with no fade. The boxes, the displays and the sign above are not the cluster's
+    if (off)
+    {
+        alpha = 0.0f;
+        return;
+    }
     // hidden while the menu shows a tab this mod does not draw (BRIEF_full_pass_gameplay.md part 3): it would lie over
     // that tab where the two overlap; on the Gameplay tabs it stays, so Size and the layout show as they are set
     const bool shows = view.show && !NgOtherTabShown();
@@ -230,9 +241,9 @@ static void OnFrame()
     {
         loggedW = io.DisplaySize.x;
         loggedH = io.DisplaySize.y;
-        static const wchar_t *layouts[kLayoutCount] = { L"strip", L"block", L"Spotter dials", L"Spotter digital" }, *styles[kFaceCount] = { L"solid", L"tinted", L"open" };
+        static const wchar_t *styles[kFaceCount] = { L"solid", L"tinted", L"open" };
         GaugeLog(L"overlay: the cluster is drawn on a %.0f x %.0f picture (%s layout, %s style, %.3f px per reference px%s)", loggedW, loggedH,
-                 layouts[s.layout < 0 || s.layout >= kLayoutCount ? kLayoutStrip : s.layout],
+                 LayoutName(s.layout),
                  GaugeOnStage(s) ? L"the HUD's" : styles[s.style < 0 || s.style >= kFaceCount ? kFaceOpen : s.style], u, view.demo ? L", demo values" : L"");
     }
 }

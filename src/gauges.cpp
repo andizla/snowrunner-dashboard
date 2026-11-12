@@ -1118,7 +1118,7 @@ static void ReadIni(GaugeSettings &s)
             fwprintf(f, L"; Gauges: the gauge cluster of Next Gen Gameplay for the truck being driven, drawn by the mod itself.\n"
                         L"; The Gameplay tab of the NEXT GEN menu (F2 opens it, or the key in NextGen.ini) edits everything here in the game.\n"
                         L"; Tab: the tab it opens on, the one open last (display, engine, gearbox, power, suspension, controls, sounds, modwork).\n"
-                        L"; Layout: 0 = a strip along the bottom centre, 1 = a block in the bottom right corner, 2 = Spotter dials, 3 = Spotter digital (left of Spotter's gear panel).\n"
+                        L"; Layout: 0 = a strip along the bottom centre, 1 = a block in the bottom right corner, 2 = Spotter dials, 3 = Spotter digital (left of Spotter's gear panel), 4 = off, the dials are not drawn.\n"
                         L"; SwapDials=1 puts the speedometer where the tachometer is and the tachometer where the speedometer is (not in Spotter digital).\n"
                         L"; Style (the strip and the block): 0 = solid dial faces, 1 = tinted see-through faces (FaceOpacity 0 to 0.85 sets how dark),\n"
                         L"; 2 = open: no faces, only the scales, numbers and needles.\n"
@@ -4087,14 +4087,14 @@ static void ClockText(const FILETIME &t, char *out, size_t size)
 
 static void LogSettings(const GaugeSettings &s)
 {
-    static const wchar_t *layouts[kLayoutCount] = { L"strip", L"block", L"Spotter dials", L"Spotter digital" }, *styles[kFaceCount] = { L"solid", L"tinted", L"open" },
+    static const wchar_t *styles[kFaceCount] = { L"solid", L"tinted", L"open" },
                          *classes[kClassCount] = { L"truck", L"scout", L"heavy" };
     const GaugeScale k = GaugeScaleOf(s);
     char key[32];
     KeyName(s.toggleKey, key, sizeof key);
     static const wchar_t *oils[kOilGaugeCount] = { L"", L", the oil as a second needle in the temperature dial", L", the oil in a dial of its own" },
                          *profiles[kSpoolCount] = { L"standard", L"small and quick", L"big and slow", L"two stages" };
-    Log(L"settings: %s layout%s, %s style, size x%g, opacity %g, offset %g / %g, dials:%s%s%s%s%s%s%s%s", layouts[s.layout],
+    Log(L"settings: %s layout%s, %s style, size x%g, opacity %g, offset %g / %g, dials:%s%s%s%s%s%s%s%s", LayoutName(s.layout),
         s.swapDials ? L" with the speedometer and the tachometer swapped" : L"", styles[s.style], s.scale, s.opacity, s.offsetX,
         s.offsetY, s.showTemp ? L" temperature" : L"", s.showBoost ? L" boost" : L"", s.showAir ? L" air" : L"", s.showClock ? L" clock" : L"",
         s.showFuelUse ? L" fuel use" : L"", s.showLamps ? L" lamps" : L"", oils[s.oilGauge], s.showOdometer ? L"; the odometer under the speed" : L"");
@@ -8147,6 +8147,7 @@ static DWORD WINAPI Run(void *)
         else Log(L"tuning: the Powertrain's figures are not published (the shared memory could not be made); the tab and the ini have them");
     }
     bool visible = true, keyDown = false;
+    int layoutWas = kLayoutStrip; // the layout on the last pass: leaving Off shows the cluster
     uint32_t padMask = PadParse(s.padToggle), padPrev = 0;
     ULONGLONG saveAt = 0;
     TruckIdentity truck = {};
@@ -8605,11 +8606,10 @@ static DWORD WINAPI Run(void *)
         const uint32_t pad = menuGate ? 0 : padHeld;
         if (padMask && (pad & padMask) == padMask && (padPrev & padMask) != padMask) toggle = true;
         padPrev = padHeld;
-        if (toggle)
-        {
-            visible = !visible;
-            Log(L"cluster %s", visible ? L"shown" : L"hidden");
-        }
+        // the Off layout (BRIEF_dials_off_option.md): leaving it shows the cluster, and in it the toggle does nothing
+        ClusterLayoutChange(visible, layoutWas, s.layout);
+        layoutWas = s.layout;
+        if (toggle && ClusterToggle(visible, s.layout)) Log(L"cluster %s", visible ? L"shown" : L"hidden");
         // the gearbox's bindings: one snapshot of the keys, the pad and the wheels and shifters a pass, read only while
         // the game is in front. The tab's asks (a capture into a slot, a slot cleared) are done here with it, and a
         // capture ends when the NEXT GEN menu closes; the actions go to the gearbox only at Gearbox=2 with a binding
@@ -9311,7 +9311,7 @@ static DWORD WINAPI Run(void *)
         v.pullPhase = watch.pullTest.phase;
         v.pullWhy = watch.pullTest.why;
         v.demo = !driving && s.demo;
-        v.hidden = !visible ? kHiddenByToggle : s.soundsOnly ? kHiddenSoundsOnly : driving || s.demo ? kShown : kHiddenNoTruck;
+        v.hidden = ClusterHidden(s.layout, visible, s.soundsOnly, driving, s.demo);
         v.show = v.hidden == kShown;
         uint32_t lampsLit = 0, lampsBlink = 0; // the lamps' steady states for state.h, set while a truck is driven
         if (driving)
@@ -9414,8 +9414,7 @@ static DWORD WINAPI Run(void *)
                               (st.lowGear ? SRG_LAMP_LOW_GEAR : 0) | (st.headlights ? SRG_LAMP_LIGHTS : 0) | (st.cold ? SRG_LAMP_COLD : 0) |
                               ((uint32_t)(st.tilt < 0 ? 3 : st.tilt > 2 ? 2 : st.tilt) << SRG_LAMP_TILT_SHIFT);
             published.blinks = lampsBlink;
-            published.options = (st.mph ? SRG_OPT_MPH : 0) | (st.psi ? SRG_OPT_PSI : 0) | (st.fahrenheit ? SRG_OPT_FAHRENHEIT : 0) | (v.show ? SRG_OPT_CLUSTER : 0) |
-                                (st.boostVacuum ? SRG_OPT_VACUUM : 0) | (st.natural ? SRG_OPT_NO_BOOST : 0);
+            published.options = StateOptions(st.mph, st.psi, st.fahrenheit, v.show, st.boostVacuum, st.natural);
         }
         StateWrite(state, published, GetTickCount64());
     }
@@ -9693,25 +9692,61 @@ int wmain(int argc, wchar_t **argv)
         PageTabRead(kept, sizeof kept);
         Check(!none[0] && !strcmp(tab, "power") && !strcmp(kept, "power"), "ini: Tab reads \"\" when not set, then the id written; a write of the settings or the defaults keeps it");
     }
-    // the HUD layouts (BRIEF_cluster_hud_layouts.md): 2 and 3 load and save, 4 is held to the strip, and Style and
-    // FaceOpacity survive a trip through Spotter dials
+    // the HUD layouts (BRIEF_cluster_hud_layouts.md) and Off (BRIEF_dials_off_option.md): 2, 3 and 4 load and save, 5
+    // and 9 are held to the strip, and the rows that shape the cluster survive a trip through each of them
     {
         GaugeSettings h = c, r;
         bool both = true;
-        for (int layout = kLayoutHudDials; layout <= kLayoutHudDigital; layout++)
+        h.scale = 1.5f, h.opacity = 0.7f, h.offsetX = 40.0f, h.offsetY = -30.0f, h.swapDials = true, h.showAir = true, h.showClock = false;
+        for (int layout = kLayoutHudDials; layout <= kLayoutOff; layout++)
         {
             h.layout = layout;
             WriteIni(h);
             ReadIni(r);
-            both &= r.layout == layout && r.style == c.style && r.faceOpacity == c.faceOpacity;
+            both &= r.layout == layout && r.style == c.style && r.faceOpacity == c.faceOpacity && r.scale == 1.5f && r.opacity == 0.7f && r.offsetX == 40.0f && r.offsetY == -30.0f &&
+                    r.swapDials && r.showAir && !r.showClock;
         }
         h.layout = kLayoutBlock;
         WriteIni(h);
         ReadIni(r);
-        const bool back = r.layout == kLayoutBlock && r.style == kFaceTinted && r.faceOpacity == 0.6f;
+        const bool back = r.layout == kLayoutBlock && r.style == kFaceTinted && r.faceOpacity == 0.6f && r.scale == 1.5f;
+        bool held = true;
+        for (const wchar_t *no : { L"5", L"9", L"-1" })
+        {
+            WritePrivateProfileStringW(kIniSection, L"Layout", no, ini.c_str());
+            ReadIni(r);
+            held &= r.layout == kLayoutStrip;
+        }
         WritePrivateProfileStringW(kIniSection, L"Layout", L"4", ini.c_str());
         ReadIni(r);
-        Check(both && back && r.layout == kLayoutStrip, "ini: Layout 2 and 3 load and save with Style and FaceOpacity kept for a way back; 4 is held to the strip");
+        Check(both && back && held && r.layout == kLayoutOff, "ini: Layout 2, 3 and 4 (Off) load and save with Style, FaceOpacity and the other cluster rows kept for a way back; "
+                                                             "5, 9 and -1 are held to the strip");
+        // the layout's name for the log: every number gets one, Off says off, a number that is no layout the strip
+        bool names = !wcscmp(LayoutName(kLayoutOff), L"off") && !wcscmp(LayoutName(kLayoutStrip), L"strip") && !wcscmp(LayoutName(kLayoutHudDigital), L"Spotter digital");
+        for (int layout = -3; layout <= kLayoutCount + 3; layout++)
+            names &= LayoutName(layout) && LayoutName(layout)[0] && ((layout >= 0 && layout < kLayoutCount) || !wcscmp(LayoutName(layout), L"strip"));
+        // the toggle in Off: two presses flip nothing, then the strip is picked and the cluster shows; a cluster hidden
+        // by the key before Off shows on leaving it; between two layouts with dials the key's state stays
+        bool vis = true;
+        bool toggles = !ClusterToggle(vis, kLayoutOff) && vis && !ClusterToggle(vis, kLayoutOff) && vis;
+        ClusterLayoutChange(vis, kLayoutOff, kLayoutStrip);
+        toggles = toggles && vis && ClusterHidden(kLayoutStrip, vis, false, true, false) == kShown;
+        toggles = toggles && ClusterToggle(vis, kLayoutStrip) && !vis && ClusterHidden(kLayoutStrip, vis, false, true, false) == kHiddenByToggle;
+        ClusterLayoutChange(vis, kLayoutStrip, kLayoutBlock);
+        toggles = toggles && !vis;
+        ClusterLayoutChange(vis, kLayoutBlock, kLayoutOff);
+        toggles = toggles && !vis && !ClusterToggle(vis, kLayoutOff) && !vis;
+        ClusterLayoutChange(vis, kLayoutOff, kLayoutOff);
+        toggles = toggles && !vis;
+        ClusterLayoutChange(vis, kLayoutOff, kLayoutHudDials);
+        toggles = toggles && vis;
+        // Off is hidden whatever else holds: the key, a driven truck, the demo values, Sounds only
+        bool hidden = true;
+        for (int m = 0; m < 16; m++) hidden &= ClusterHidden(kLayoutOff, (m & 1) != 0, (m & 2) != 0, (m & 4) != 0, (m & 8) != 0) == kHiddenOff;
+        hidden = hidden && ClusterHidden(kLayoutStrip, true, false, false, true) == kShown && ClusterHidden(kLayoutStrip, true, false, false, false) == kHiddenNoTruck &&
+                 ClusterHidden(kLayoutBlock, true, true, true, false) == kHiddenSoundsOnly;
+        Check(names && toggles && hidden, "the Off layout: the log has a name for every layout number; the toggle pressed twice in Off flips nothing and the strip picked after it shows; "
+                                          "leaving Off shows a cluster the key had hidden; in Off no key, truck or demo value brings it back");
         WriteIni(c);
     }
 

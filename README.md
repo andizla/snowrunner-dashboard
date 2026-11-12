@@ -53,7 +53,7 @@ The Gameplay tab of the NEXT GEN menu edits every setting while you play, in eig
 
 | Setting | On the tab | In the ini | Default |
 |---|---|---|---|
-| Layout: a strip along the bottom centre, a block in the bottom right corner, or Spotter dials or Spotter digital in Spotter's HUD style, left of its gear panel | Display: Layout | `Layout` 0, 1, 2 or 3 | strip |
+| Layout: a strip along the bottom centre, a block in the bottom right corner, or Spotter dials or Spotter digital in Spotter's HUD style, left of its gear panel. Off draws no dials: the features act, the dials that show them are not there | Display: Layout | `Layout` 0, 1, 2, 3 or 4 | strip |
 | The speedometer and the tachometer change places, except in Spotter digital | Display: Swap dials | `SwapDials` 0 or 1 | 0 |
 | Style of the strip and the block: solid dial faces, tinted see-through faces, or open (no faces, only scales, numbers and needles) | Display: Style | `Style` 0, 1 or 2 | open |
 | How dark the tinted faces are | Display: Face tint | `FaceOpacity` 0 to 0.85 | 0.35 |

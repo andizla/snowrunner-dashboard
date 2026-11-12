@@ -221,22 +221,24 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     if (open && tab == kTabDisplay)
     {
         ImGui::SeparatorText("Cluster");
-        if (view.show) ImGui::TextUnformatted(view.demo ? "On screen, with demo values." : "On screen.");
+        const bool off = s.layout == kLayoutOff; // no dials: the rows that only shape them are drawn disabled
+        if (off) ImGui::TextDisabled("Not drawn: Layout is Off. Every feature still acts.");
+        else if (view.show) ImGui::TextUnformatted(view.demo ? "On screen, with demo values." : "On screen.");
         else if (view.hidden == kHiddenByToggle) ImGui::TextDisabled("Hidden. The toggle key or the pad buttons show it again.");
         else if (view.hidden == kHiddenSoundsOnly) ImGui::TextDisabled("Not drawn: \"Sounds only\" is ticked under Sounds.");
         else ImGui::TextDisabled("No truck is being driven. The cluster shows while you drive.");
-        static const char *layouts[kLayoutCount] = { "Strip, bottom centre", "Block, bottom right", "Spotter dials", "Spotter digital" };
+        static const char *layouts[kLayoutCount] = { "Strip, bottom centre", "Block, bottom right", "Spotter dials", "Spotter digital", "Off" };
         PageLabel("Layout", labelX);
         ImGui::SetNextItemWidth(w);
         changed(ImGui::Combo("##layout", &s.layout, layouts, kLayoutCount));
-        PageTip("Where the cluster sits. Spotter dials and Spotter digital draw it in the HUD style of Spotter. Default: Strip.");
-        ImGui::BeginDisabled(s.layout == kLayoutHudDigital);
+        PageTip("Where the cluster sits. Spotter dials and Spotter digital draw it in the HUD style of Spotter. Off draws no dials: the features act as before. Default: Strip.");
+        ImGui::BeginDisabled(s.layout == kLayoutHudDigital || off);
         PageLabel("Swap dials", labelX);
         changed(ImGui::Checkbox("##swapdials", &s.swapDials));
         PageTip("The speedometer and the tachometer change places. Off by default.");
         ImGui::EndDisabled();
         // Style and Face opacity are the strip's and the block's; the HUD layouts keep them for a way back
-        const bool hud = GaugeOnStage(s);
+        const bool hud = GaugeOnStage(s) || off;
         ImGui::BeginDisabled(hud);
         static const char *styles[kFaceCount] = { "Solid", "Tinted", "Open" };
         PageLabel("Style", labelX);
@@ -250,6 +252,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         changed(ImGui::SliderFloat("##face", &s.faceOpacity, 0.0f, kFaceOpacityMax, "%.2f", ImGuiSliderFlags_AlwaysClamp));
         PageTip("How dark the tinted faces are. 0 is clear. Default 0.35.");
         ImGui::EndDisabled();
+        ImGui::BeginDisabled(off);
         PageLabel("Size", labelX);
         ImGui::SetNextItemWidth(w);
         changed(ImGui::SliderFloat("##scale", &s.scale, 0.5f, 2.5f, "x%.2f", ImGuiSliderFlags_AlwaysClamp));
@@ -302,6 +305,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         ImGui::SetNextItemWidth(w);
         changed(ImGui::Combo("##oilgauge", &s.oilGauge, oils, kOilGaugeCount));
         PageTip("Second needle: an amber needle in the coolant dial. Own dial: a small dial beside it. The oil lamp shows either way. Default: Second needle.");
+
+        ImGui::EndDisabled();
 
         ImGui::SeparatorText("Odometer");
         {

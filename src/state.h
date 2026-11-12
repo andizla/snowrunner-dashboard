@@ -54,6 +54,14 @@ inline uint8_t StateGearMode(const char *mode)
     return SRG_GEAR_NUMBER;
 }
 
+// The block's options. cluster: the mod's own cluster is on screen. It is the one thing the block takes from the
+// cluster's layout and its toggle, so the Off layout reads as a cluster hidden by the key does.
+inline uint32_t StateOptions(bool mph, bool psi, bool fahrenheit, bool cluster, bool vacuum, bool natural)
+{
+    return (mph ? SRG_OPT_MPH : 0) | (psi ? SRG_OPT_PSI : 0) | (fahrenheit ? SRG_OPT_FAHRENHEIT : 0) | (cluster ? SRG_OPT_CLUSTER : 0) | (vacuum ? SRG_OPT_VACUUM : 0) |
+           (natural ? SRG_OPT_NO_BOOST : 0);
+}
+
 // A value for the block: never NaN or infinite (none for a value that has no meaning, else 0).
 inline float StateNumber(float v, float none = 0.0f) { return isfinite(v) ? v : none; }
 
