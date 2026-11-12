@@ -1018,6 +1018,13 @@ the system leaks 0.1 bar a minute, 0.35 with the brake held. From empty the tank
 minutes at idle; eight full applications with the engine off take a full tank to {8.2 - 8 * 0.35:.1f} bar, the red zone's edge
 (5.5).</p>
 {fig}
+<p><b>Air brakes by truck and the spring brakes</b> (BRIEF_spring_brakes.md). <code>AirBrakesOn</code> is the truck's own choice where its file holds one
+(AirBrakes, 0 or 1, in the suspension's sections, the owned truck's over the kind's), else every class but the scout. Everything of the brake air asks it:
+the model (<code>AirStepFor</code>: off, it does not run and holds no pressure), the dial, the HUD's cell, the warning and the purge.
+<code>SpringHeldStep</code> holds under 3.0 bar and lets go at 4.5; the 0.4 bar the release takes leaves the needle over the hold.
+The truck is held by the game's own handbrake, the byte at action + 0x48, through <code>LockHoldStep</code> with a hold of its own: a handbrake the player set first is never cleared,
+the mod's own is set again when a key clears it and cleared at the release. No hook and no write to a wheel or a body. This route is not proved in the game yet.
+Gauges.log has "spring brakes: hold at ..." and "spring brakes: release at ...", one line in capitals if a held truck still rolls on flat ground, and with Probe=1 "probe: spring brakes: ..." a second.</p>
 <h2>The tilt lamp</h2>
 <p>The world-up parts of the chassis' forward, up and left axes (chassis +0x170, +0x180, +0x190) are smoothed with a 0.3 s time constant,
 so a bump does not light the lamp (<code>models.h:334-386</code>):</p>
@@ -1163,7 +1170,7 @@ def s_lamps():
 {table(['Lamp', 'Reads', 'Lit', 'Colour'], rows, 'The lamps (gauge_draw.h:729-777)', 'small')}
 <p>Dials: fuel red under 10%; coolant 50 to 130 °C, blue under 60 and red from 118, with the oil as a second, amber needle; the oil
 dial 50 to 150 °C, red from <code>OilWarnC</code>; boost from 0 (a diesel) or −1 bar (a petrol engine) to 2 bar, or 3 for a turbo of more than 2 (× 14.5 for psi); brake air 0 to 10 bar, red under 5.5,
-hidden when the scales' class is scout (scouts brake by hydraulics); the clock, twelve hour marks and two hands over the game's
+hidden on a truck without air brakes (<code>AirBrakesOn</code>: the Air brakes choice, else every class but the scout); the clock, twelve hour marks and two hands over the game's
 hour (no hands while the clock is not found), with the outside temperature in force as a number in its face. The speed is the chassis velocity along its forward axis,
 × 3.6 for km/h. Every dial sweeps from 150° to 390°.</p>
 '''

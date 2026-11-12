@@ -3800,6 +3800,44 @@ inline bool AirStep(AirModel &m, const TruckRaw &t, float speed, float dt)
     return cutOut;
 }
 
+// The model for a truck with or without air brakes (BRIEF_spring_brakes.md, M5). Off: it does not run and holds no
+// pressure, so there is no purge, no warning and no hold. Switched on, the tanks start full, as on a new truck.
+inline bool AirStepFor(AirModel &m, bool on, const TruckRaw &t, float speed, float dt)
+{
+    if (!on)
+    {
+        m = AirModel{};
+        return false;
+    }
+    return AirStep(m, t, speed, dt);
+}
+
+// ---- the spring brakes (BRIEF_spring_brakes.md, M2) ----
+// The game's handbrake is on or off, so the hold comes where real spring brakes are fully on, and goes where a driver
+// can push the valve in again. The release costs kSpringAir (AirStep, the handbrake let go), which leaves the needle
+// well over the hold: no chatter between the two. The two points are gauges.h's kSpringHold and kSpringRelease.
+// One pass: held before, the truck has air brakes, the model has a truck, its pressure; held now. Nothing is held
+// without air brakes, without a truck in the model or with a pressure that is no number.
+inline bool SpringHeldStep(bool held, bool on, bool running, float bar)
+{
+    if (!on || !running || !isfinite(bar)) return false;
+    return held ? bar < kSpringRelease : bar < kSpringHold;
+}
+// The proof of the hold (M1): a held truck that still rolls faster than kSpringRoll for kSpringRollFor seconds on flat
+// ground. since: the seconds so far, the caller's. True on the pass the time is reached.
+static const float kSpringRoll = 0.5f, kSpringRollFor = 2.0f;
+inline bool SpringRollStep(float &since, bool held, float speedMs, bool flat, float dt)
+{
+    if (!held || !flat || !(fabsf(speedMs) > kSpringRoll) || !(dt > 0.0f))
+    {
+        since = 0.0f;
+        return false;
+    }
+    const bool was = since >= kSpringRollFor;
+    since += dt;
+    return !was && since >= kSpringRollFor;
+}
+
 // The brake air in a line of text for the probe log.
 inline void AirProbeText(const TruckRaw &t, const AirModel &m, char *out, size_t size)
 {

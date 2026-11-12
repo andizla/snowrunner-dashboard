@@ -1287,6 +1287,7 @@ inline bool WorldDriving(const World &w) { return w.known && w.menu <= 0 && !w.l
 // next pass after a write of 1 with no press between, it is said once a truck (kLockCleared) and left.
 enum { kLockDiff, kLockAwd, kLocks };
 static const uint64_t kLockAt[kLocks] = { 0x4A, 0x49 };
+static const uint64_t kHandbrakeAt = 0x48; // action + 0x48, the game's own handbrake: the spring brakes hold it (BRIEF_spring_brakes.md, M1)
 enum { kLockNone, kLockOn, kLockOff, kLockCleared };
 struct LocksWatch
 {

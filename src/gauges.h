@@ -139,6 +139,7 @@ struct GaugeSettings
     int pushShare;           // PushShare: with Powertrain, the share in percent of the game's chassis push at speed that carries the mod's surplus over its own pull (BRIEF_chassis_push.md), 0 to 100
     int diffType;            // DiffType: the differential of a truck where the torque cut acts, 0 Auto (by the lock kind at vehicle + 0xE8), 1 Open, 2 Limited slip, 3 Locked (torque_cut.h, kDiff...); a truck file may hold its own
     int diffAxle[kAxleRowsMost]; // DiffAxle1 to DiffAxle8, in a truck file alone: each axle's own type front to back, 0 to 3 as DiffType; -1 no key, the axle goes by DiffType (BRIEF_axle_diff.md, M6)
+    int airBrakes;           // AirBrakes, in a truck file alone: this truck has air brakes, 1 or 0; -1 no choice, its class decides (AirBrakesOn; BRIEF_spring_brakes.md, M4 and M7)
     int heldGearSlip;        // HeldGearSlip: the slip room of a numbered gear held by hand: 0 the governor as before, 1 the cap of L+ in the gears near it, 2 the wheel cap in every gear (gearbox_model.h, GearboxPosCap); 0 by default until the user has driven
     int wheelCap;            // WheelCap: with the torque cut in L-, L, L+ and R, no driven wheel runs faster than this percent of the gear's top (BRIEF_drivetrain_2c_wheel_cap.md), 110 to 200, 150; no box, for the A/B
     float engineBrake;       // EngineBrake: with Powertrain in a gear held by hand at Gearbox=2 (the torque cut), the share of the gear's torque in percent the engine holds the truck back with at the redline with the foot off, 0 to 30 (torque_cut.h)
@@ -243,6 +244,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.lowRangeSlip = 100; // L- and L with the slip room of L+ (BRIEF_low_range_pull.md, the lead)
     s.diffLockBite = 0; // the game's own lock until the drive picks a default (BRIEF_diff_lock_bite.md)
     s.diffType = 0; // Auto (BRIEF_diff_types.md)
+    s.airBrakes = -1; // by the class
     for (int a = 0; a < kAxleRowsMost; a++) s.diffAxle[a] = -1;
     s.engineSpeedTop = 1.0f;
     s.roadCdA = 0.0f;
@@ -400,6 +402,7 @@ inline void SettingsClamp(GaugeSettings &s)
     s.lowRangeSlip = s.lowRangeSlip < 0 ? 0 : s.lowRangeSlip > 100 ? 100 : s.lowRangeSlip;
     s.diffLockBite = s.diffLockBite < 0 ? 0 : s.diffLockBite > 100 ? 100 : s.diffLockBite;
     s.diffType = s.diffType < 0 || s.diffType > 3 ? 0 : s.diffType;
+    s.airBrakes = s.airBrakes == 0 || s.airBrakes == 1 ? s.airBrakes : -1;
     for (int a = 0; a < kAxleRowsMost; a++) s.diffAxle[a] = s.diffAxle[a] < 0 || s.diffAxle[a] > 3 ? -1 : s.diffAxle[a];
     s.physicsRate = s.physicsRate == 120 ? 120 : 60;
     s.roadCdA = isfinite(s.roadCdA) ? (s.roadCdA <= 0.0f ? 0.0f : s.roadCdA < 0.3f ? 0.3f : s.roadCdA > 20.0f ? 20.0f : s.roadCdA) : 0.0f;
@@ -473,6 +476,12 @@ inline void SettingsClamp(GaugeSettings &s)
 // (km/h) and the boost its turbo reaches (bar).
 struct GaugeScale { float idle, redline, max, speedMax, boost; };
 static const float kAirWarn = 5.5f; // bar: under this the brake air dial's red zone, too little air to brake safely (AirStep, GAir)
+static const float kSpringHold = 3.0f;    // bar: under this the spring brakes hold the truck (models.h, SpringHeldStep)
+static const float kSpringRelease = 4.5f; // bar: from here they let it go
+// The truck has air brakes (BRIEF_spring_brakes.md, M4 and M5): its own choice where its file holds one, else by its
+// class in force, every truck but a scout (scouts brake by hydraulics). Everything of the brake air asks this: the
+// model, the dial, the HUD's cell, the warning, the purge and the spring brakes.
+inline bool AirBrakesOn(const GaugeSettings &s) { return s.airBrakes == 1 || (s.airBrakes != 0 && s.tachClass != kClassScout); }
 static const GaugeScale kClassScales[kClassCount] = { { 650.0f, 2200.0f, 3000.0f, 100.0f, 1.8f }, { 800.0f, 5500.0f, 7000.0f, 120.0f, 1.0f }, { 600.0f, 1900.0f, 2500.0f, 80.0f, 2.0f } };
 
 // The class changed from was: a number set to the old class's own follows the new class (0, the class's), and one set

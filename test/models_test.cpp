@@ -3414,6 +3414,141 @@ int main(int argc, char **argv)
         const float released = charged - spring.bar;
         for (float at = 0.0f; at < 600.0f; at += kDt) AirStep(spring, stopped, 0.0f, kDt);
         Check(Near(released, kSpringAir, 0.01f) && Near(charged - released - spring.bar, 1.0f, 0.02f), "brake air: letting the handbrake go takes the spring brakes' air, and it leaks a bar in ten minutes standing");
+        // the spring brakes (BRIEF_spring_brakes.md with the addendum, M1 to M3 and M5)
+        {
+            // the two points: the release's own air leaves the needle half a bar over the hold, and the release is under the warning
+            const bool points = kSpringRelease - kSpringAir >= kSpringHold + 0.5f && kSpringRelease < kAirWarn && kSpringHold < kSpringRelease;
+            bool sh = false;
+            sh = SpringHeldStep(sh, true, true, kSpringHold);
+            const bool atHold = !sh;
+            sh = SpringHeldStep(sh, true, true, 2.99f);
+            const bool under = sh;
+            sh = SpringHeldStep(sh, true, true, 4.49f);
+            const bool stillHeld = sh;
+            sh = SpringHeldStep(sh, true, true, kSpringRelease);
+            const bool letGo = !sh;
+            sh = SpringHeldStep(sh, true, true, kSpringRelease - kSpringAir);
+            const bool noChatter = !sh;
+            const bool noNumber = !SpringHeldStep(true, true, true, NAN) && !SpringHeldStep(true, true, false, 1.0f) && !SpringHeldStep(true, false, true, 1.0f) && SpringHeldStep(true, true, true, 1.0f);
+            // a new vehicle is full and not held; with the engine off the fifteenth full application brings the hold
+            AirModel fresh = {};
+            stopped.throttle = 0.0f, stopped.handbrake = 0;
+            const bool purgeNew = AirStepFor(fresh, true, stopped, 0.0f, kDt);
+            const bool fullNew = fresh.running && fresh.bar > kAirCutOut - 0.01f && !SpringHeldStep(false, true, fresh.running, fresh.bar) && !purgeNew;
+            bool held15 = false;
+            int heldAt = 0;
+            for (int i = 1; i <= 15; i++)
+            {
+                stopped.throttle = 1.0f;
+                AirStepFor(fresh, true, stopped, 0.0f, kDt);
+                stopped.throttle = 0.0f;
+                AirStepFor(fresh, true, stopped, 0.0f, kDt);
+                held15 = SpringHeldStep(held15, true, fresh.running, fresh.bar);
+                if (held15 && !heldAt) heldAt = i;
+            }
+            // the engine started: let go at the release point, and the air the release takes does not bring the hold back
+            TruckRaw runningTruck = airTruck;
+            runningTruck.throttle = 0.0f;
+            float releasedAt = 0.0f;
+            bool heldAgain = false;
+            for (float at = 0.0f; at < 400.0f; at += kDt)
+            {
+                runningTruck.handbrake = held15 ? 1 : 0; // the mod's byte, as the model reads it while held
+                AirStepFor(fresh, true, runningTruck, 1.0f, kDt);
+                const bool heldBefore = held15;
+                held15 = SpringHeldStep(held15, true, fresh.running, fresh.bar);
+                if (heldBefore && !held15) releasedAt = fresh.bar;
+                else if (!heldBefore && held15) heldAgain = true;
+                if (releasedAt > 0.0f && fresh.bar > 6.0f) break;
+            }
+            const bool refilled = releasedAt >= kSpringRelease && releasedAt < kSpringRelease + 0.05f && !heldAgain && !held15;
+            // the box off: the model does not run, holds no pressure and never purges; on again the tanks start full
+            AirModel boxOff = fresh;
+            bool offPurge = false;
+            for (int i = 0; i < 600; i++) offPurge = AirStepFor(boxOff, false, airTruck, 1.0f, kDt) || offPurge;
+            const bool offQuiet = !offPurge && !boxOff.running && boxOff.bar == 0.0f && boxOff.cutOuts == 0 && !SpringHeldStep(true, false, boxOff.running, boxOff.bar);
+            AirStepFor(boxOff, true, airTruck, 1.0f, kDt);
+            const bool onFull = boxOff.running && boxOff.bar > kAirCutOut - 0.01f && !SpringHeldStep(false, true, boxOff.running, boxOff.bar);
+            // the handbrake byte through LockHoldStep (M1). The player's own first: never the mod's, it stays after the release
+            LockHold hbPlayer = {}, hbMod = {}, hbTwo = {};
+            const bool players = LockHoldStep(hbPlayer, 0x7000, true, true, 1) == -1 && LockHoldStep(hbPlayer, 0x7000, false, true, 1) == -1;
+            // the mod's: set, left while it reads set, set again when a key cleared it, cleared at the release
+            const bool mods = LockHoldStep(hbMod, 0x7000, true, true, 0) == 1 && LockHoldStep(hbMod, 0x7000, true, true, 1) == -1 && LockHoldStep(hbMod, 0x7000, true, true, 0) == 1 &&
+                              LockHoldStep(hbMod, 0x7000, false, true, 1) == 0 && LockHoldStep(hbMod, 0x7000, false, true, 0) == -1;
+            // another truck: the old one keeps the byte; back on it the byte is the mod's own again and goes at the release
+            LockHoldStep(hbTwo, 0x7000, true, true, 0);
+            const bool away = LockHoldStep(hbTwo, 0x8000, false, true, 0) == -1 && LockHoldStep(hbTwo, 0x7000, false, true, 1) == 0;
+            // the proof's clock: a held truck over half a metre a second on flat ground for two seconds, said once
+            float rolled = 0.0f;
+            int saidRoll = 0;
+            for (int i = 0; i < 300; i++) saidRoll += SpringRollStep(rolled, true, 0.8f, true, kDt) ? 1 : 0;
+            float stoodFor = 0.0f, slopeFor = 0.0f, freeFor = 0.0f;
+            bool quiet = true;
+            for (int i = 0; i < 300; i++)
+                quiet = quiet && !SpringRollStep(stoodFor, true, 0.3f, true, kDt) && !SpringRollStep(slopeFor, true, 2.0f, false, kDt) && !SpringRollStep(freeFor, false, 2.0f, true, kDt);
+            const bool proof = saidRoll == 1 && quiet;
+            if (!(points && atHold && under && stillHeld && letGo && noChatter && noNumber && fullNew && heldAt == 15 && refilled && offQuiet && onFull && players && mods && away && proof))
+                printf("     points %d atHold %d under %d still %d letGo %d noChatter %d noNumber %d full %d heldAt %d refilled %d (%.2f, again %d) off %d on %d players %d mods %d away %d proof %d (%d)\n", points, atHold, under,
+                       stillHeld, letGo, noChatter, noNumber, fullNew, heldAt, refilled, releasedAt, heldAgain, offQuiet, onFull, players, mods, away, proof, saidRoll);
+            Check(points && atHold && under && stillHeld && letGo && noChatter && noNumber && fullNew && heldAt == 15 && refilled,
+                  "spring brakes: held under 3.0 bar and let go at 4.5; the air the release takes leaves the needle half a bar over the hold; no hold without a number, a truck or air brakes; "
+                  "a new truck is full and free; with the engine off the fifteenth full application brings the hold, and the running engine lets go at 4.5 once");
+            Check(offQuiet && onFull && players && mods && away && proof,
+                  "spring brakes: with Air brakes off the model holds no air and never purges, and on again the tanks are full; a handbrake the player set stays after the release, the one the mod "
+                  "set is set again when a key clears it and cleared at the release; another truck keeps it; a held truck that rolls on flat ground is said once");
+        }
+    }
+    // air brakes by truck: the default by the class, the choice over it, and the box on screen (BRIEF_spring_brakes.md, M4 to M6)
+    {
+        GaugeSettings ab;
+        SettingsDefaults(ab);
+        bool byClass = ab.airBrakes == -1;
+        ab.tachClass = kClassTruck;
+        byClass = byClass && AirBrakesOn(ab);
+        ab.tachClass = kClassHeavy;
+        byClass = byClass && AirBrakesOn(ab);
+        ab.tachClass = kClassScout;
+        byClass = byClass && !AirBrakesOn(ab);
+        ab.airBrakes = 1; // a scout ticked gets air
+        bool overClass = AirBrakesOn(ab);
+        ab.tachClass = kClassHeavy, ab.airBrakes = 0; // a heavy truck unticked loses it
+        overClass = overClass && !AirBrakesOn(ab);
+        ab.airBrakes = 7;
+        SettingsClamp(ab);
+        const bool clamped = ab.airBrakes == -1;
+        // the box: red, in As with dials and At my limits with the Layout at Off, in place of LOW BRAKE AIR; none at None; none with dials
+        WarnFigures sf = {};
+        sf.driving = true, sf.airKnown = true, sf.airBar = 2.5f, sf.springHeld = true;
+        sf.clutch = sf.engine = WarnBox{ kWarnNone, "", "", 0 };
+        auto boxes = [&](int layout, int choice, const WarnFigures &figs) {
+            GaugeSettings ws;
+            SettingsDefaults(ws);
+            ws.layout = layout, ws.hiddenWarnings = choice;
+            WarnMargins wm = {};
+            return WarnListMake(ws, figs, wm);
+        };
+        auto holds = [](const WarnList &wl, int what) {
+            for (int i = 0; i < kWarnBoxes; i++)
+                if (wl.what[i] == what && wl.box[i].state != kWarnNone) return i;
+            return -1;
+        };
+        const WarnList atLimits = boxes(kLayoutOff, kHwLimits, sf), asDials = boxes(kLayoutOff, kHwAsDials, sf), atNone = boxes(kLayoutOff, kHwNone, sf), withDials = boxes(kLayoutStrip, kHwLimits, sf);
+        const int li = holds(atLimits, kWlSpring), di = holds(asDials, kWlSpring);
+        const bool shown = li == 0 && di == 0 && atLimits.box[0].state == kWarnRed && !strcmp(atLimits.box[0].title, "SPRING BRAKES ON") && !strcmp(atLimits.box[0].line, "Wait for the tanks to fill") &&
+                           !strcmp(atLimits.box[0].figure, "2.5 bar") && holds(atLimits, kWlAir) < 0 && holds(asDials, kWlAir) < 0;
+        const bool notShown = holds(atNone, kWlSpring) < 0 && atNone.count == 0 && holds(withDials, kWlSpring) < 0;
+        // not held: the low air box alone, as before; no air brakes: neither, whatever the figures say
+        WarnFigures lowOnly = sf;
+        lowOnly.springHeld = false, lowOnly.airBar = 5.0f;
+        const WarnList lowList = boxes(kLayoutOff, kHwLimits, lowOnly);
+        WarnFigures noAir = sf;
+        noAir.airKnown = false;
+        const WarnList without = boxes(kLayoutOff, kHwLimits, noAir);
+        const bool others = holds(lowList, kWlAir) >= 0 && holds(lowList, kWlSpring) < 0 && holds(without, kWlAir) < 0 && holds(without, kWlSpring) < 0 && without.count == 0;
+        if (!(byClass && overClass && clamped && shown && notShown && others)) printf("     byClass %d overClass %d clamped %d shown %d (%d %d) notShown %d others %d\n", byClass, overClass, clamped, shown, li, di, notShown, others);
+        Check(byClass && overClass && clamped && shown && notShown && others,
+              "air brakes by truck: with no choice every class but the scout has them, the choice overrules the class both ways; held, a red box SPRING BRAKES ON stands in place of LOW BRAKE AIR "
+              "with the Layout at Off, not at None and not with dials; a truck without air brakes gets neither box");
     }
 
     // what the temperature costs the engine

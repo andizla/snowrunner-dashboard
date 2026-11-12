@@ -1269,6 +1269,7 @@ static void ReadIni(GaugeSettings &s)
                         L";   A truck file may hold its own DiffType; the tab writes it there for the driven truck.\n"
                         L";   DiffAxle1 to DiffAxle8 in a truck file: one axle its own type, front to back, the same four choices. An axle with no key goes by DiffType.\n"
                         L";   BindLockFrontAxle and BindLockRearAxles hold those axles Locked until pressed again. While the diff lock of the truck is on, every axle is locked.\n"
+                        L"; AirBrakes in a truck file (the Air brakes box of the Engine tab): 1 the truck has brake air and spring brakes, 0 it has none. No key: every class but the scout has them.\n"
                         L"; ModEngineSpeed=1 (with Powertrain, on by default): the game tachometer, sound and effects follow the mod engine; its fuel burn and stall check keep the game's own.\n"
                         L";   EngineSpeedTop: the mod engine speed the game reads as its top, as a share of the redline, 0.5 to 1.5 (1: the redline; idle is its 0).\n"
                         L";   Base1.<engine>, Base2.<engine> ... in a truck's file: each gear's acceleration at the game's own pull, floored, learned.\n"
@@ -2145,11 +2146,43 @@ static int AirFileKind(const char *key)
     return AirKindOf(text);
 }
 
-// An owned truck's section out of the kind's file (its set went to the kind's level).
+// The truck's Air brakes choice (BRIEF_spring_brakes.md, M7): AirBrakes, 0 or 1, in the suspension's sections of the
+// kind's file, so it follows the truck through the take-over as they do. The owned truck's section over the kind's;
+// anything but 0 or 1 is as if absent. It is no suspension value: a section with this key alone is no set.
+static int TruckAirAt(const char *key, const char *id)
+{
+    wchar_t buf[8] = {};
+    if (!key[0] || GetPrivateProfileStringW(SuspSectionOf(id).c_str(), L"AirBrakes", L"", buf, 8, SetupFile(kSetupTruck, key).c_str()) == 0) return -1;
+    return (buf[0] == L'0' || buf[0] == L'1') && !buf[1] ? buf[0] - L'0' : -1;
+}
+static int ReadTruckAir(const char *key, const char *id)
+{
+    const int mine = id[0] ? TruckAirAt(key, id) : -1;
+    return mine >= 0 ? mine : TruckAirAt(key, "");
+}
+// Written at the owned truck's level where its id is read, else at the kind's.
+static void WriteTruckAir(const char *key, const char *id, int on)
+{
+    SetupBegin(kSetupTruck, Wide(key));
+    IniPutInt(SuspSectionOf(id).c_str(), L"AirBrakes", on ? 1 : 0, SetupFile(kSetupTruck, key));
+}
+// Out of both levels (the defaults).
+static void DropTruckAir(const char *key, const char *id)
+{
+    if (!key[0]) return;
+    const std::wstring ini = SetupFile(kSetupTruck, key);
+    wchar_t buf[8] = {};
+    if (GetPrivateProfileStringW(kSuspSection, L"AirBrakes", L"", buf, 8, ini.c_str()) > 0) WritePrivateProfileStringW(kSuspSection, L"AirBrakes", nullptr, ini.c_str());
+    if (id[0] && GetPrivateProfileStringW(SuspSectionOf(id).c_str(), L"AirBrakes", L"", buf, 8, ini.c_str()) > 0)
+        WritePrivateProfileStringW(SuspSectionOf(id).c_str(), L"AirBrakes", nullptr, ini.c_str());
+}
+// An owned truck's section out of the kind's file (its set went to the kind's level). Its Air brakes choice stays.
 static void DropTruckSusp(const char *key, const char *id)
 {
     if (!id[0]) return;
+    const int air = TruckAirAt(key, id);
     WritePrivateProfileStringW(SuspSectionOf(id).c_str(), nullptr, nullptr, SetupFile(kSetupTruck, key).c_str());
+    if (air >= 0) IniPutInt(SuspSectionOf(id).c_str(), L"AirBrakes", air, SetupFile(kSetupTruck, key));
 }
 
 // The take-over (BRIEF_suspension_per_truck.md step 2): the game made the driven truck anew under another id. The old
@@ -2695,7 +2728,7 @@ static const wchar_t *EngineLevelWords(int level)
 // kind and id its game id ("" while none is driven or the id is not read). changed, suspChanged and truckChanged: the
 // scales, the kind's or the truck's suspension were changed on the tab and are not in the ini yet. The functions below
 // are all that changes a state once the ini is read into plain.
-struct SettingsState { GaugeSettings plain, s; char key[kMaxText], id[40]; bool own, changed, suspOwn, suspKept, suspChanged, truckOwn, truckKept, truckChanged, diffChanged; int axleChanged; }; // diffChanged: the Diff row moved while this truck is driven, not in its file yet
+struct SettingsState { GaugeSettings plain, s; char key[kMaxText], id[40]; bool own, changed, suspOwn, suspKept, suspChanged, truckOwn, truckKept, truckChanged, diffChanged; int axleChanged; bool airChanged; }; // diffChanged: the Diff row moved while this truck is driven, not in its file yet
 
 // The suspension level in force: the default, the kind's, this owned truck's.
 enum { kSuspLevelDefault, kSuspLevelKind, kSuspLevelTruck };
@@ -2744,6 +2777,8 @@ static void SettingsFor(SettingsState &st, const char *key, const char *id = "")
     SuspMarkClear(st.key, st.id, kEngineSection);
     SuspMarkClear(st.key, st.id, kOdoSection); // the Reviewer's must 5: a count driven again is no left-over
     SuspFromFiles(st);
+    st.s.airBrakes = ReadTruckAir(st.key, st.id); // the truck's own, never the plain settings'
+    st.airChanged = false;
 }
 
 // An edit from the tab, in. A scale changed while a truck is driven makes the seven scales that truck's own, and
@@ -2759,6 +2794,8 @@ static void SettingsTake(SettingsState &st, const GaugeSettings &in)
     if (st.key[0] && !ScalesSame(in, st.s)) st.own = st.changed = true;
     // the Diff row with a truck driven is that truck's (its file's DiffType); the plain one keeps its value
     if (st.key[0] && in.diffType != st.s.diffType) st.diffChanged = true;
+    // the Air brakes box is that truck's too (BRIEF_spring_brakes.md, M7)
+    if (st.key[0] && in.airBrakes != st.s.airBrakes) st.airChanged = true;
     // a row by axle is that truck's too: its own key, a bit an axle (M6)
     for (int a = 0; st.key[0] && a < kAxleRowsMost; a++)
         if (in.diffAxle[a] != st.s.diffAxle[a]) st.axleChanged |= 1 << a;
@@ -2773,9 +2810,11 @@ static void SettingsTake(SettingsState &st, const GaugeSettings &in)
     if (st.own) ScalesCopy(st.plain, before);
     if (st.key[0]) st.plain.diffType = before.diffType;
     for (int a = 0; a < kAxleRowsMost; a++) st.plain.diffAxle[a] = -1; // never the plain settings': a truck file's alone
+    st.plain.airBrakes = -1;
     if (st.suspOwn || st.truckOwn) SuspCopy(st.plain, before);
     st.plain.airAxleMask = -1, st.plain.airMaskFrom = kAirFromNone;
     st.s = in;
+    if (!st.key[0]) st.s.airBrakes = -1; // with no truck the Air brakes box is greyed: nothing to keep
     if (!st.key[0]) st.s.airAxleMask = -1, st.s.airMaskFrom = kAirFromNone;
     else if (ticked) st.s.airMaskFrom = st.truckOwn ? kAirFromTruck : st.suspOwn ? kAirFromKind : kAirFromTicked;
 }
@@ -2884,6 +2923,7 @@ static void SettingsSuspToDefault(SettingsState &st)
 static void SettingsToDefaults(SettingsState &st)
 {
     const bool diffOwn = st.key[0] && DropTruckDiff(st.key); // the truck's differential goes back to the default too
+    DropTruckAir(st.key, st.id);                             // and its Air brakes choice: by the class again
     if (st.own || diffOwn) DropTruckIni(st.key);
     if (st.truckOwn) WriteTruckSusp(st.key, st.s, false, st.id);
     if (st.suspOwn)
@@ -2901,7 +2941,7 @@ static void SettingsToDefaults(SettingsState &st)
     }
     SettingsDefaults(st.plain);
     st.s = st.plain;
-    st.own = st.changed = st.diffChanged = false;
+    st.own = st.changed = st.diffChanged = st.airChanged = false;
     st.axleChanged = 0;
     SuspFromFiles(st);
 }
@@ -2917,6 +2957,8 @@ static void SettingsWriteTruck(SettingsState &st)
     for (int a = 0; st.key[0] && a < kAxleRowsMost; a++)
         if (st.axleChanged >> a & 1) WriteTruckAxle(st.key, a, st.s.diffAxle[a]);
     st.axleChanged = 0;
+    if (st.key[0] && st.airChanged && st.s.airBrakes >= 0) WriteTruckAir(st.key, st.id, st.s.airBrakes);
+    st.airChanged = false;
     if (st.truckOwn && st.truckChanged) WriteTruckSusp(st.key, st.s, true, st.id);
     else if (st.suspOwn && st.suspChanged) WriteTruckSusp(st.key, st.s, true);
     if (st.key[0]) TruckSuspPrune(st.key), TruckSuspPrune(st.key, kEngineSection);
@@ -4205,6 +4247,8 @@ static void LogSettings(const GaugeSettings &s)
         Log(L"settings: diff lock bite %d (DiffLockBite; 0 the game's lock, 100 one shaft), the differential's type %d (DiffType; 0 Auto, 1 Open, 2 Limited slip, 3 Locked), low range slip %d (LowRangeSlip; 0 the gear's own wheel cap in L-, L and R, 100 the cap of the highest low gear)", s.diffLockBite, s.diffType, s.lowRangeSlip);
         Log(L"settings: held gear slip %d, %S (HeldGearSlip; 0 a numbered gear held by hand has the governor, 1 the cap of L+ in the gears near it, 2 the wheel cap in every gear)", s.heldGearSlip,
             HeldSlipName(s.heldGearSlip));
+        Log(L"settings: air brakes %s (AirBrakes of the truck file: %d; -1 no choice, every class but the scout has them); the spring brakes hold under %.1f bar and let go at %.1f",
+            AirBrakesOn(s) ? L"on" : L"off", s.airBrakes, kSpringHold, kSpringRelease);
         Log(L"settings: the differential by axle (DiffAxle1 to DiffAxle8 of the truck file, front to back; -1 no key: the axle goes by DiffType): %d %d %d %d %d %d %d %d",
             s.diffAxle[0], s.diffAxle[1], s.diffAxle[2], s.diffAxle[3], s.diffAxle[4], s.diffAxle[5], s.diffAxle[6], s.diffAxle[7]);
     }
@@ -4457,6 +4501,15 @@ struct TruckWatch
     bool diffMixed;
     AxleLevers levers;
     wchar_t axleSaidText[400];
+    // the spring brakes (BRIEF_spring_brakes.md): held now; the handbrake byte the mod holds (LockHoldStep); the proof's
+    // counts: the mod's writes, the passes where the game had cleared the byte, the seconds a held truck has rolled; the
+    // vehicles the cleared byte and the rolling were said for; the next probe line
+    bool springHeld;
+    LockHold springHold;
+    long springWrites, springCleared;
+    float springRoll;
+    uint64_t springClearSaid, springRollSaid;
+    unsigned long long springProbeAt;
     LockHold lockHold;          // Locked on a truck whose lock can be switched: the lock byte the mod holds (LockHoldStep)
     uint64_t lockHoldSaid;      // the vehicle the cleared byte was said for
     float diffBand[2];          // the governor's band of the last slot, rad/s
@@ -6624,7 +6677,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             w.burnKnown = isfinite(w.burn);
         }
         // the air dryer's purge: a hiss each time the governor stops the compressor, a little under the oil warning
-        if (AirStep(w.air, raw, TachSpeed(w.tach, scale), dt) && TruckEngineOn(raw)) SoundPlay(kSoundPurge, 0.8f * OilBeepGain(s.soundVolume), 1.0f);
+        // Only on a truck with air brakes (BRIEF_spring_brakes.md, M5): without them the model does not run, so no purge
+        if (AirStepFor(w.air, AirBrakesOn(s), raw, TachSpeed(w.tach, scale), dt) && TruckEngineOn(raw)) SoundPlay(kSoundPurge, 0.8f * OilBeepGain(s.soundVolume), 1.0f);
         TiltStep(w.tilt, raw, s, dt);
         TempStep(w.temp, kind, raw, TachSpeed(w.tach, scale), s, dt);
         // the oil warning: heard every few seconds while the oil is too hot, and said in the log when it comes and goes
@@ -7134,6 +7188,58 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             for (int i = 0; i < kLocks; i++)
                 if (lockSaid[i] == kLockOn || lockSaid[i] == kLockOff) Log(L"locks: %s %s by the mod's key", lockName[i], lockSaid[i] == kLockOn ? L"on" : L"off");
                 else if (lockSaid[i] == kLockCleared) Log(L"locks: the game cleared %s on this truck; it may not have the upgrade", lockName[i]);
+        }
+        // The spring brakes (BRIEF_spring_brakes.md, M1 and M2): under kSpringHold the mod holds the game's own handbrake
+        // (the byte at action + 0x48) until the air is back at kSpringRelease. LockHoldStep is the law, as for the lock
+        // byte: a handbrake the player set first is never cleared, the mod's own is cleared at the release and set again
+        // when a key cleared it. Only where the lock keys may write. The route is not proved in the game: the pass after
+        // a write reads the byte back, and a held truck that still rolls on flat ground is said in capitals
+        {
+            const uint64_t a = w.refs.action;
+            const bool outside = a && !(a >= m.base && a < m.base + g_exeSize);
+            const bool heldWas = w.springHeld;
+            w.springHeld = SpringHeldStep(w.springHeld, AirBrakesOn(s), w.air.running, w.air.bar);
+            uint8_t byte = 0;
+            const bool byteRead = outside && m.get(a + kHandbrakeAt, byte);
+            const bool wasOurs = w.springHold.ours && w.springHold.action == a;
+            const int to = LockHoldStep(w.springHold, a, w.springHeld, byteRead, byte);
+            if (wasOurs && w.springHeld && byteRead && !byte)
+            {
+                w.springCleared++;
+                if (w.springClearSaid != w.refs.vehicle)
+                {
+                    w.springClearSaid = w.refs.vehicle;
+                    Log(L"spring brakes: the handbrake the mod holds was off again on this truck (the game or a key cleared it); it is set again each pass until the air is back at %.1f bar", kSpringRelease);
+                }
+            }
+            const bool wrote = to >= 0 && m.put(a + kHandbrakeAt, (uint8_t)to);
+            if (wrote) w.springWrites++;
+            if (w.springHeld != heldWas)
+            {
+                if (w.springHeld)
+                    Log(L"spring brakes: hold at %.2f bar (under %.1f): %s", w.air.bar, kSpringHold,
+                        !byteRead ? L"the handbrake byte is not read, nothing written" : byte ? L"the handbrake was on already and stays the player's" : wrote ? L"the handbrake (action + 0x48) set by the mod"
+                                                                                                                                                    : L"THE WRITE OF THE HANDBRAKE BYTE FAILED");
+                else
+                    Log(L"spring brakes: release at %.2f bar (%s): %s", w.air.bar, AirBrakesOn(s) ? L"the air is back" : L"Air brakes switched off",
+                        to == 0 && wrote ? L"the handbrake cleared by the mod" : L"the handbrake left as it is (not the mod's)");
+            }
+            const bool flat = w.tilt.running && fabsf(w.tilt.pitchDeg) < 3.0f && fabsf(w.tilt.rollDeg) < 3.0f;
+            if (SpringRollStep(w.springRoll, w.springHeld && byteRead, w.kmh / 3.6f, flat, dt) && w.springRollSaid != w.refs.vehicle)
+            {
+                w.springRollSaid = w.refs.vehicle;
+                Log(L"SPRING BRAKES: THE HELD TRUCK STILL ROLLS AT %.1f M/S AFTER %.0f S ON FLAT GROUND: THE HANDBRAKE BYTE DOES NOT HOLD IT (the byte reads %d, %ld writes, cleared by the game on %ld passes)",
+                    w.kmh / 3.6f, kSpringRollFor, byte, w.springWrites, w.springCleared);
+            }
+            const unsigned long long springNow = GetTickCount64();
+            if (s.probe && AirBrakesOn(s) && springNow >= w.springProbeAt)
+            {
+                w.springProbeAt = springNow + 1000;
+                Log(L"probe: spring brakes: the air %.2f bar, hold under %.1f and release at %.1f: %s; the handbrake byte %s, the mod's own %d; %ld writes, cleared by the game on %ld passes; the truck at %.2f m/s, "
+                    L"rolling while held for %.1f s",
+                    w.air.bar, kSpringHold, kSpringRelease, w.springHeld ? L"held" : L"free", !byteRead ? L"not read" : byte ? L"1" : L"0", w.springHold.ours ? 1 : 0, w.springWrites, w.springCleared,
+                    w.kmh / 3.6f, w.springRoll);
+            }
         }
         // the road load's ground (the game pull and road load brief): the truck's acceleration over the ground, each
         // gear's pull at the game's own torque learned floored on flat ground, and with the probe the game's pull by x
@@ -9568,7 +9674,7 @@ static DWORD WINAPI Run(void *)
             v.st.boostVacuum = watch.turbo.petrol;
             v.st.boostTop = watch.turbo.most;
             v.st.natural = watch.profile.aspiration == kAspNatural;
-            v.st.airBar = watch.air.bar;
+            v.st.airBar = AirBrakesOn(inForce) ? watch.air.bar : kAirCutOut; // without air brakes the model holds none: the figure of full tanks, and nothing draws it
             v.st.rangeKm = watch.range.rangeKm;
             if (s.showOdometer && v.odoKnown) strncpy_s(v.st.odometer, v.odoText, _TRUNCATE);
             v.st.burnPerMin = watch.burnKnown ? watch.burn : -1.0f;
@@ -9619,7 +9725,8 @@ static DWORD WINAPI Run(void *)
                 wf.tilt = watch.tilt.running ? watch.tilt.lamp : -1;
                 wf.rollDeg = watch.tilt.rollDeg;
                 wf.pitchDeg = watch.tilt.pitchDeg;
-                wf.airKnown = inForce.tachClass != kClassScout; // scouts brake by hydraulics
+                wf.airKnown = AirBrakesOn(inForce); // a truck without air brakes has no air to warn of
+                wf.springHeld = watch.springHeld;
                 wf.airBar = watch.air.bar;
                 const WarnList list = WarnListMake(s, wf, warnMargins);
                 for (int i = 0; i < kWarnBoxes; i++) v.warn[i] = list.box[i];
@@ -9739,7 +9846,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.hiddenWarnings == b.hiddenWarnings && a.warnFuel == b.warnFuel && a.warnEngine == b.warnEngine && a.warnGearbox == b.warnGearbox && a.warnCoolant == b.warnCoolant && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
            a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.heldGearSlip == b.heldGearSlip && a.lowRangeSlip == b.lowRangeSlip && a.diffType == b.diffType && a.physicsRate == b.physicsRate && a.engineBrake == b.engineBrake && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
            a.camberGainFront == b.camberGainFront && a.camberGainRear == b.camberGainRear && a.camberRestFront == b.camberRestFront && a.camberRestRear == b.camberRestRear &&
-           !memcmp(a.diffAxle, b.diffAxle, sizeof a.diffAxle);
+           !memcmp(a.diffAxle, b.diffAxle, sizeof a.diffAxle) && a.airBrakes == b.airBrakes;
 }
 
 static int g_failed = 0;
@@ -9948,7 +10055,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 161, "ini: the help text survives a write (161 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 162, "ini: the help text survives a write (162 comment lines)");
     // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
     {
         char none[32] = "x", tab[32] = {}, kept[32] = {};
@@ -10471,6 +10578,78 @@ int wmain(int argc, wchar_t **argv)
                 Check(oldFile && rowTaken && rowPut && otherNone && backAgain && badKeys && spareLeft && rowAll && samePick && axleDefaults && compared && clamped,
                       "trucks: the differential by axle: a file from before has no axle key; a row writes its own key alone, read back for that truck only; a key of 9, x or two digits is as if "
                       "absent; a key for an axle the truck has not stays in the file; the Diff row writes DiffType and removes every axle key, also when its choice is the same; the defaults take them out");
+            }
+            // the Air brakes choice (BRIEF_spring_brakes.md, M7): AirBrakes in the suspension's sections, the owned truck's over the kind's
+            {
+                const char *bk = "brake_a";
+                const char *b1 = "{B0000000-0000-4000-8000-000000000001}", *b2 = "{B0000000-0000-4000-8000-000000000002}", *b3 = "{B0000000-0000-4000-8000-000000000003}";
+                DeleteFileW(truckFile(bk).c_str());
+                auto airKey = [&](const char *id) {
+                    wchar_t v[8] = {};
+                    GetPrivateProfileStringW(SuspSectionOf(id).c_str(), L"AirBrakes", L"", v, 8, truckFile(bk).c_str());
+                    return std::wstring(v);
+                };
+                SettingsState bs = {};
+                ReadIni(bs.plain);
+                // no key: no choice, the class decides
+                SettingsFor(bs, bk, b1);
+                const bool noKey = bs.s.airBrakes == -1 && !bs.airChanged;
+                // the box: written at the owned truck's level and read back for that id; another truck of the kind has none
+                GaugeSettings bi = bs.s;
+                bi.airBrakes = 0;
+                SettingsTake(bs, bi);
+                const bool boxTaken = bs.airChanged && bs.s.airBrakes == 0 && bs.plain.airBrakes == -1 && !bs.own && !bs.truckOwn && !bs.suspOwn;
+                SettingsWrite(bs);
+                const bool boxPut = airKey(b1) == L"0" && airKey("").empty() && !bs.airChanged;
+                SettingsFor(bs, bk, b2);
+                const bool otherId = bs.s.airBrakes == -1;
+                SettingsFor(bs, bk, b1);
+                const bool mineBack = bs.s.airBrakes == 0 && !bs.truckOwn && !bs.truckKept; // a section with this key alone is no suspension set
+                // the kind's level: with no id read the box writes there, and a truck of the kind without its own takes it
+                SettingsFor(bs, bk, "");
+                bi = bs.s;
+                bi.airBrakes = 1;
+                SettingsTake(bs, bi);
+                SettingsWrite(bs);
+                const bool kindPut = airKey("") == L"1" && airKey(b1) == L"0";
+                SettingsFor(bs, bk, b2);
+                const bool kindUnder = bs.s.airBrakes == 1 && !bs.suspOwn && !bs.suspKept;
+                SettingsFor(bs, bk, b1);
+                const bool idOver = bs.s.airBrakes == 0;
+                // a key of 7 is as if absent: the kind's then
+                WritePrivateProfileStringW(SuspSectionOf(b1).c_str(), L"AirBrakes", L"7", truckFile(bk).c_str());
+                SettingsFor(bs, bk, b1);
+                const bool seven = bs.s.airBrakes == 1;
+                WritePrivateProfileStringW(SuspSectionOf(b1).c_str(), L"AirBrakes", L"0", truckFile(bk).c_str());
+                // the take-over to a new id carries it
+                const bool over = TruckSuspTakeOver(bk, b1, b3);
+                SettingsFor(bs, bk, b3);
+                const bool carried = over && bs.s.airBrakes == 0 && airKey(b3) == L"0";
+                // the owned truck's suspension set dropped to the kind's level: the choice stays
+                DropTruckSusp(bk, b3);
+                const bool keptAtDrop = airKey(b3) == L"0";
+                // the compare holds it; the defaults take it out of both levels
+                GaugeSettings ca = bs.s, cb = bs.s;
+                cb.airBrakes = 1;
+                const bool comparedAir = SameSettings(ca, ca) && !SameSettings(ca, cb);
+                SettingsFor(bs, bk, b3);
+                const GaugeSettings plainKeptB = bs.plain;
+                SettingsToDefaults(bs);
+                const bool airDefaults = bs.s.airBrakes == -1 && airKey(b3).empty() && airKey("").empty() && airKey(b1) == L"0"; // another truck's own stays
+                bs.plain = plainKeptB;
+                // with no truck the box is greyed and keeps nothing
+                SettingsFor(bs, "");
+                bi = bs.s;
+                bi.airBrakes = 1;
+                SettingsTake(bs, bi);
+                const bool noTruck = bs.s.airBrakes == -1 && bs.plain.airBrakes == -1 && !bs.airChanged;
+                SettingsWrite(bs);
+                DeleteFileW(truckFile(bk).c_str());
+                if (!(noKey && boxTaken && boxPut && otherId && mineBack && kindPut && kindUnder && idOver && seven && carried && keptAtDrop && comparedAir && airDefaults && noTruck))
+                    printf("     air brakes key: %d %d %d %d %d %d %d %d %d %d(%d) %d %d %d %d\n", noKey, boxTaken, boxPut, otherId, mineBack, kindPut, kindUnder, idOver, seven, carried, over, keptAtDrop, comparedAir, airDefaults, noTruck);
+                Check(noKey && boxTaken && boxPut && otherId && mineBack && kindPut && kindUnder && idOver && seven && carried && keptAtDrop && comparedAir && airDefaults && noTruck,
+                      "trucks: the Air brakes box is the driven truck's own key by its id, read back for that truck only and no suspension set; the key of the kind is under it; a key of 7 is as "
+                      "if absent; a take-over to a new id carries it; it stays when the suspension set of the truck goes; the defaults take it out; with no truck nothing is kept");
             }
         }
         // the defaults: the plain settings and the driven truck's own scales; another truck keeps its own

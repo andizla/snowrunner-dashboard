@@ -18,7 +18,7 @@
 #include <stdio.h>
 #include "gauges.h"
 
-enum { kWlClutch, kWlEngine, kWlFuel, kWlEngineWorn, kWlGearboxWorn, kWlOil, kWlTilt, kWlAir, kWlCount };
+enum { kWlClutch, kWlEngine, kWlFuel, kWlEngineWorn, kWlGearboxWorn, kWlOil, kWlTilt, kWlAir, kWlSpring, kWlCount };
 
 // How far a figure must come back past its limit before its box goes, so a box does not flicker at the limit: fuel in
 // points of the tank, the coolant in points of the way from warm to the red mark, the brake air in bar. Engine and
@@ -40,8 +40,9 @@ struct WarnFigures
     float oilC;
     int tilt;                // TiltModel::lamp: 0 level, 1 amber, 2 red, below 0 not known
     float rollDeg, pitchDeg;
-    bool airKnown;           // the truck brakes by air (no scout)
+    bool airKnown;           // the truck has air brakes (AirBrakesOn)
     float airBar;
+    bool springHeld;         // the spring brakes hold the truck (SpringHeldStep)
 };
 
 // Which of the limits with a margin warned on the last pass. The caller keeps it from pass to pass.
@@ -128,6 +129,16 @@ inline WarnList WarnListMake(const GaugeSettings &s, const WarnFigures &f, WarnM
             if (s.psi) snprintf(b.figure, sizeof b.figure, "%.0f psi", f.airBar * 14.5038f);
             else snprintf(b.figure, sizeof b.figure, "%.1f bar", f.airBar);
         }
+    }
+    // the spring brakes (BRIEF_spring_brakes.md, M6): a red box in As with dials and in At my limits, in place of the
+    // low air's while it shows: one box for the air, not two
+    if (f.springHeld && f.airKnown && isfinite(f.airBar))
+    {
+        all[kWlAir] = none;
+        WarnBox &b = all[kWlSpring];
+        b = { kWarnRed, "SPRING BRAKES ON", "Wait for the tanks to fill", WarnPercent(f.airBar / kSpringRelease * 100.0f) };
+        if (s.psi) snprintf(b.figure, sizeof b.figure, "%.0f psi", f.airBar * 14.5038f);
+        else snprintf(b.figure, sizeof b.figure, "%.1f bar", f.airBar);
     }
     // the red ones first, then the amber, each in the enum's order; what does not fit waits
     for (int state = kWarnRed; state >= kWarnAmber; state--)

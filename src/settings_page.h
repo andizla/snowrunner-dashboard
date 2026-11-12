@@ -321,7 +321,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         PageTip("The turbo boost dial. On by default.");
         PageLabel("Brake air pressure", labelX);
         changed(ImGui::Checkbox("##showair", &s.showAir));
-        PageTip("The air in the brake tanks: filled up to 8.2 bar and red under 5.5. Not drawn for scouts. Off by default.");
+        PageTip("The air in the brake tanks: filled up to 8.2 bar and red under 5.5. Not drawn for a truck without Air brakes on the Engine tab. Off by default.");
         PageLabel("Clock", labelX);
         changed(ImGui::Checkbox("##showclock", &s.showClock));
         PageTip("The time of day in the game, with the outside temperature in its face. On by default.");
@@ -537,6 +537,19 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             act |= kPageChanged;
         }
         PageTip("Sets the idle, the red zone, the tops of both dials and the boost for a truck, a scout or a heavy truck. The mod automatic shifts by the class of a truck with scales of its own, else by its weight. Class beside a number set by hand gives it back. Default: Truck.");
+        // the brakes of the driven truck (BRIEF_spring_brakes.md): its own choice in its file, by its class until it has one
+        {
+            ImGui::BeginDisabled(!view.truck[0]);
+            PageLabel("Air brakes", labelX);
+            bool airOn = AirBrakesOn(s);
+            if (ImGui::Checkbox("##airbrakes", &airOn))
+            {
+                s.airBrakes = airOn ? 1 : 0;
+                act |= kPageChanged;
+            }
+            PageTip("This truck has air brakes: the brake air dial, the low air warning, the air sounds and spring brakes. Under 3 bar the spring brakes hold the truck as the handbrake does, until the air is back at 4.5 bar. Saved for this truck. Until it is set, every truck but a scout has them.");
+            ImGui::EndDisabled();
+        }
         {
             const GaugeScale own = kClassScales[s.tachClass < 0 || s.tachClass >= kClassCount ? kClassTruck : s.tachClass];
             // each number is the class's own until it is changed here; "Class" gives it back to the class

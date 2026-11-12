@@ -1324,7 +1324,7 @@ static GaugeLayout GaugeLayoutOf(const GaugeSettings &s)
     lay.swapDials = s.swapDials;
     lay.showTemp = s.showTemp;
     lay.showBoost = s.showBoost;
-    lay.showAir = s.showAir && s.tachClass != kClassScout; // scouts brake by hydraulics: no air to show
+    lay.showAir = s.showAir && AirBrakesOn(s); // a truck without air brakes has no air to show
     lay.showLamps = s.showLamps;
     lay.showClock = s.showClock;
     lay.showFuelUse = s.showFuelUse;
