@@ -22,6 +22,7 @@
 #include "maps.h"
 #include "game_code.h"
 #include "winch_out.h"
+#include "lock_steer.h"
 #include "game_globals.h"
 #include "clock_scan.h"
 #include "suspension_scan.h"
@@ -700,6 +701,12 @@ static void RealImageTest()
     snprintf(line, sizeof line, "places in a real image (stamp %08x): the rope length's read at %zx, its set at %zx, the test of the winch's two active bytes at %zx%s%s", stamp,
              winchPlace.get, winchPlace.set, winchPlace.bytes, winchFound ? "" : "; ", winchPlace.why);
     Check(winchRight, line);
+    // the steering's product, for the steering with a lock in: found once on any build
+    size_t steerAt = 0;
+    const char *steerWhy = "";
+    const bool steerFound = SteerPlaceFind(image.data(), from, to, steerAt, steerWhy);
+    snprintf(line, sizeof line, "places in a real image (stamp %08x): the steering's product is found once%s%s", stamp, steerFound ? "" : "; ", steerWhy);
+    Check(steerFound, line);
     // the gear torque and the drive's call of it, for the torque cut (the research's d73dc0 and the drive's start + 0xCA on
     // 6adb8627, d73e50 on 6ab52f5d); on another build found once
     GearTorquePlace gearTorque;
@@ -7654,6 +7661,235 @@ static void TruckTestsNine()
     }
 }
 
+// The steering with a lock in (lock_steer.h; BRIEF_lock_steering.md with the addendum and the change of 21:31): the
+// target by the axles locked, the ease, the wheels' stock figures in made-up memory, the put back, the place in code.
+static void TruckTestsLockSteer()
+{
+    // a truck of two axles: the front steers and is driven with all wheel drive, the rear is always driven
+    AxleRows two = {};
+    two.axles = 2;
+    for (int i = 0; i < 4; i++) two.ofWheel[i] = i / 2;
+    two.drive[0] = 2, two.drive[1] = 1;
+    struct Ask { int axleFront, axleRear, diff, kind; bool awd, leverFront, leverRear, gameLock, cutActs, tied; int front, rear; };
+    auto targetOf = [&](const Ask &q, const AxleRows &rows) {
+        int diffAxle[kAxleRowsMost];
+        for (int a = 0; a < kAxleRowsMost; a++) diffAxle[a] = -1;
+        diffAxle[0] = q.axleFront, diffAxle[1] = q.axleRear;
+        LockSteerIn in = {};
+        in.rows = rows;
+        in.plan = AxlePlanOf(rows, diffAxle, q.diff, q.kind >= 0, q.kind, q.awd, q.leverFront, q.leverRear);
+        in.steers[0] = true;
+        in.gameLock = q.gameLock, in.alwaysOn = q.kind == 2, in.cutActs = q.cutActs, in.tied = q.tied;
+        in.front = q.front, in.rear = q.rear;
+        return LockSteerTarget(in);
+    };
+    auto is = [](float a, float b) { return fabsf(a - b) < 0.00001f; };
+    {
+        const Ask plainAsk = { -1, -1, kDiffOpen, 0, true, false, false, false, true, true, 60, 85 };
+        Ask q = plainAsk;
+        const bool none = is(targetOf(q, two), 1.0f);
+        q = plainAsk, q.axleFront = kDiffLocked;
+        const bool frontRow = is(targetOf(q, two), 0.6f);
+        q.tied = false;
+        const bool noBite = is(targetOf(q, two), 1.0f);                 // "Locked, no bite" costs no steering
+        q = plainAsk, q.axleFront = kDiffLocked, q.awd = false;
+        const bool notDriven = is(targetOf(q, two), 1.0f);              // the front is not driven now
+        q = plainAsk, q.leverRear = true;
+        const bool rearLever = is(targetOf(q, two), 0.85f);
+        q = plainAsk, q.diff = kDiffLocked;
+        const bool bothRows = is(targetOf(q, two), 0.6f);               // the smaller of the two, not the product
+        q.cutActs = false;
+        const bool cutOff = is(targetOf(q, two), 1.0f);                 // a row counts only while the cut acts
+        q = plainAsk, q.cutActs = false, q.gameLock = true;
+        const bool gameLock = is(targetOf(q, two), 0.6f);               // the lock byte in force, the mod's own too: wherever the truck is driven
+        q.awd = false;
+        const bool gameRear = is(targetOf(q, two), 0.85f);
+        Check(none && frontRow && noBite && notDriven && rearLever && bothRows && cutOff && gameLock && gameRear,
+              "lock steering, the target: nothing locked is all of it; the front row Locked gives the first slider, not with no bite and not while the front is not driven; "
+              "the rear lever the second; both the smaller; a row not while the cut is off; the lock byte in force wherever the truck is driven, the second slider with all wheel drive off");
+
+        // a truck whose lock is always on is limited like any other locked truck (the user's ruling)
+        q = plainAsk, q.kind = 2, q.diff = kDiffAuto;
+        const bool always = is(targetOf(q, two), 0.6f);
+        q.axleFront = q.axleRear = kDiffOpen;
+        const bool rowOpen = is(targetOf(q, two), 0.6f);                // a row set to Open changes nothing on it
+        q = plainAsk, q.kind = 2, q.diff = kDiffAuto, q.awd = false;
+        const bool alwaysRear = is(targetOf(q, two), 0.85f);
+        q = plainAsk, q.kind = 2, q.diff = kDiffAuto, q.cutActs = false;
+        const bool alwaysInA = is(targetOf(q, two), 0.6f);
+        // no rows: the game's lock gives the smaller of the two, rows and levers do not exist
+        const AxleRows noRows = {};
+        q = plainAsk, q.diff = kDiffLocked, q.leverFront = q.leverRear = true;
+        const bool noRowsRow = is(targetOf(q, noRows), 1.0f);
+        q.gameLock = true;
+        const bool noRowsLock = is(targetOf(q, noRows), 0.6f);
+        q = plainAsk, q.kind = 2;
+        const bool noRowsAlways = is(targetOf(q, noRows), 0.6f);
+        // 100 is off; an ask under 30 is held to it
+        q = plainAsk, q.diff = kDiffLocked, q.front = q.rear = 100;
+        const bool off = is(targetOf(q, two), 1.0f) && !LockSteerOn(true, 100, 100) && LockSteerOn(true, 100, 85) && LockSteerOn(true, 60, 100) && !LockSteerOn(false, 60, 85);
+        q.rear = 85;
+        const bool oneOff = is(targetOf(q, two), 0.85f);
+        q.front = 12;
+        const bool heldTo = is(targetOf(q, two), 0.30f);
+        Check(always && rowOpen && alwaysRear && alwaysInA && noRowsRow && noRowsLock && noRowsAlways && off && oneOff && heldTo,
+              "lock steering, the target: a truck whose lock is always on is limited, with Auto, with a row set to Open and with the cut off, by the second slider with all "
+              "wheel drive off; a truck with no rows by the game lock alone, the smaller of the two; 100 and 100 is off and needs Powertrain; 12 is held to 30");
+    }
+    // the ease: 1 to 0.6 in half a second and never in one step; a long pass counts as 0.1 s; back up; a slider moved
+    {
+        float share = 1.0f, at29 = 0.0f;
+        for (int i = 0; i < 30; i++)
+        {
+            share = LockSteerEase(share, 0.6f, 1.0f / 60.0f);
+            if (i == 28) at29 = share;
+        }
+        const bool half = is(share, 0.6f) && at29 > 0.605f && is(LockSteerEase(share, 0.6f, 1.0f / 60.0f), 0.6f);
+        const bool longPass = is(LockSteerEase(1.0f, 0.6f, 5.0f), 0.92f);
+        const bool up = is(LockSteerEase(0.6f, 1.0f, 0.05f), 0.64f) && is(LockSteerEase(0.99f, 1.0f, 0.05f), 1.0f);
+        const bool slider = is(LockSteerEase(0.6f, 0.8f, 0.05f), 0.64f) && is(LockSteerEase(0.6f, 0.45f, 0.05f), 0.56f);
+        const bool noTime = LockSteerEase(0.7f, 0.6f, 0.0f) == 0.7f && LockSteerEase(0.7f, 0.6f, NAN) == 0.7f;
+        Check(half && longPass && up && slider && noTime && LockSteerPercent(0.6f) == 60 && LockSteerPercent(1.0f) == 0 && LockSteerPercent(0.996f) == 100,
+              "lock steering, the ease: 1 to 0.6 in thirty passes of 1/60 s and not before; a pass of 5 s moves it by 0.08; up again and to a slider's new figure the same way; no time, no move");
+    }
+    // the wheels in made-up memory: two fronts with a most angle of 0.6 rad, two rears with 0
+    {
+        const uint64_t setA[4] = { 0x7B1000000ull, 0x7B1001000ull, 0x7B1002000ull, 0x7B1003000ull };
+        const uint64_t setB[4] = { 0x7B2000000ull, 0x7B2001000ull, 0x7B2002000ull, 0x7B2003000ull };
+        for (int i = 0; i < 4; i++) Block(setA[i], 0x200), Block(setB[i], 0x200);
+        auto put = [&](const uint64_t *set, int i, float v) { Put(set[i] + kSteerMostAt, v); };
+        auto get = [&](const uint64_t *set, int i) {
+            float v = -1.0f;
+            Peek(set[i] + kSteerMostAt, &v, sizeof v);
+            return v;
+        };
+        auto stockOf = [&](const uint64_t *set) {
+            put(set, 0, 0.6f), put(set, 1, 0.6f), put(set, 2, 0.0f), put(set, 3, 0.0f);
+        };
+        stockOf(setA);
+        LockSteerRec rec = {};
+        const bool fresh = LockSteerFor(rec, kMemory, 0x7B0000100ull, "{51111111-0000-4000-8000-000000000001}") && rec.share == 1.0f;
+        const bool looked = LockSteerLook(rec, kMemory, setA, 4) && rec.n == 4 && rec.stock[0] == 0.6f && rec.stock[2] == 0.0f;
+        bool steers[kAxleRowsMost];
+        LockSteerAxles(rec, two, steers);
+        const bool axles = steers[0] && !steers[1];
+        const int first = LockSteerWrite(rec, kMemory, 0.6f, 0.25f);                // a pass counts as 0.1 s at the most: the share 0.92
+        const bool wrote = first == 2 && is(rec.share, 0.92f) && LockSteerSame(get(setA, 0), 0.6f * rec.share) && LockSteerSame(get(setA, 1), 0.6f * rec.share) &&
+                           get(setA, 0) < 0.6f && get(setA, 2) == 0.0f && get(setA, 3) == 0.0f;
+        bool again = true;
+        for (int k = 0; k < 4; k++) again = again && LockSteerLook(rec, kMemory, setA, 4) && LockSteerWrite(rec, kMemory, 0.6f, 0.1f) == 2;
+        again = again && is(rec.share, 0.6f) && LockSteerSame(get(setA, 0), 0.6f * rec.share);
+        // the sum of five steps is a hair off 0.6, so one more pass lands on the target itself; then nothing is written while it holds
+        const bool settled = LockSteerLook(rec, kMemory, setA, 4) && (LockSteerWrite(rec, kMemory, 0.6f, 0.1f), rec.share == 0.6f) && LockSteerSame(get(setA, 0), 0.6f * 0.6f);
+        const long writesAt = rec.writes;
+        const bool steady = settled && LockSteerLook(rec, kMemory, setA, 4) && LockSteerWrite(rec, kMemory, 0.6f, 0.25f) == 0 && rec.writes == writesAt;
+        // the wheels moved to new pointers with the mod's figure, ten times: the stock stays, the figure does not shrink
+        bool moved = true;
+        const float limited = get(setA, 0);
+        for (int k = 0; k < 10; k++)
+        {
+            const uint64_t *from = k % 2 ? setB : setA, *to = k % 2 ? setA : setB;
+            for (int i = 0; i < 4; i++) put(to, i, get(from, i));
+            moved = moved && LockSteerLook(rec, kMemory, to, 4) && LockSteerWrite(rec, kMemory, 0.6f, 0.02f) == 0 && rec.stock[0] == 0.6f && LockSteerSame(get(to, 0), limited);
+        }
+        // the same truck id with another vehicle is the same record; a fresh wheel with the stock figure gets the share
+        const bool sameTruck = !LockSteerFor(rec, kMemory, 0x7B0000200ull, "{51111111-0000-4000-8000-000000000001}") && rec.vehicle == 0x7B0000200ull && rec.stock[0] == 0.6f;
+        put(setA, 0, 0.6f);
+        const bool freshWheel = LockSteerLook(rec, kMemory, setA, 4) && LockSteerWrite(rec, kMemory, 0.6f, 0.02f) == 1 && LockSteerSame(get(setA, 0), limited);
+        // back to all of it: the stock figure itself is written at 1
+        bool backUp = true;
+        for (int k = 0; k < 6; k++) backUp = backUp && LockSteerLook(rec, kMemory, setA, 4) && (LockSteerWrite(rec, kMemory, 1.0f, 0.1f), true);
+        backUp = backUp && rec.share == 1.0f && get(setA, 0) == 0.6f && get(setA, 1) == 0.6f;
+        // at a share of 1 another figure is a new stock one (other wheels fitted)
+        put(setA, 0, 0.5f), put(setA, 1, 0.5f);
+        const bool anew = LockSteerLook(rec, kMemory, setA, 4) && rec.stock[0] == 0.5f && LockSteerWrite(rec, kMemory, 0.6f, 0.1f) == 2 && is(rec.share, 0.92f) &&
+                          LockSteerSame(get(setA, 0), 0.5f * rec.share);
+        if (!(fresh && looked && axles && wrote && again && steady && moved && sameTruck && freshWheel && backUp && anew))
+            printf("     wheels: %d %d %d %d %d %d %d %d %d %d %d; share %g, wheel 1 %g\n", fresh, looked, axles, wrote, again, steady, moved, sameTruck, freshWheel, backUp, anew, rec.share, get(setA, 0));
+        Check(fresh && looked && axles && wrote && again && steady && moved && sameTruck && freshWheel && backUp && anew,
+              "lock steering, the wheels: the stock figures taken at a share of 1, the front axle steers; each steered wheel written as its stock times the share and read back, "
+              "a wheel with 0 never; the wheels moved to new pointers ten times keep their stock and the figure does not shrink; the same id on another vehicle is the same record; "
+              "a fresh wheel gets the share; at 1 the stock itself is back, and another figure there is a new stock");
+
+        // a foreign figure while the share is in force closes the record: the other wheel put back, nothing more written
+        put(setA, 0, 0.45f);
+        const bool closed = !LockSteerLook(rec, kMemory, setA, 4) && rec.closed && rec.closedAt == 0 && rec.closedRead == 0.45f && get(setA, 0) == 0.45f && get(setA, 1) == 0.5f;
+        const long writesWere = rec.writes;
+        const bool noMore = !LockSteerLook(rec, kMemory, setA, 4) && LockSteerWrite(rec, kMemory, 0.6f, 0.25f) == 0 && rec.writes == writesWere && get(setA, 1) == 0.5f;
+        // another truck takes anew; the old truck's wheels are put back where they still read as the mod's, one changed by another hand is left
+        stockOf(setB);
+        LockSteerRec other = {};
+        LockSteerFor(other, kMemory, 0x7B0000300ull, "{51111111-0000-4000-8000-000000000002}");
+        LockSteerLook(other, kMemory, setB, 4);
+        LockSteerWrite(other, kMemory, 0.6f, 0.25f);
+        put(setB, 1, 0.33f);
+        stockOf(setA);
+        const bool newTruck = LockSteerFor(other, kMemory, 0x7B0000400ull, "{51111111-0000-4000-8000-000000000003}") && get(setB, 0) == 0.6f && get(setB, 1) == 0.33f &&
+                              other.share == 1.0f && !other.n && LockSteerLook(other, kMemory, setA, 4) && other.stock[0] == 0.6f;
+        // the drop: the feature off or the truck left
+        LockSteerWrite(other, kMemory, 0.6f, 0.25f);
+        const bool limitedNow = other.share < 1.0f && LockSteerSame(get(setA, 0), 0.6f * other.share);
+        const bool dropped = LockSteerDrop(other, kMemory) == 2 && get(setA, 0) == 0.6f && get(setA, 1) == 0.6f && !other.known && LockSteerDrop(other, kMemory) == 0;
+        // no id read: the truck is known by its vehicle
+        const bool byVehicle = LockSteerFor(other, kMemory, 0x7B0000500ull, "") && !LockSteerFor(other, kMemory, 0x7B0000500ull, "") && LockSteerFor(other, kMemory, 0x7B0000600ull, "");
+        // a figure that is no most angle is never taken: nothing is written to that truck
+        put(setB, 0, 2.0f), put(setB, 1, 0.6f);
+        LockSteerRec wild = {};
+        LockSteerFor(wild, kMemory, 0x7B0000700ull, "{51111111-0000-4000-8000-000000000004}");
+        const bool tooLarge = !LockSteerLook(wild, kMemory, setB, 4) && wild.closed && LockSteerWrite(wild, kMemory, 0.6f, 0.25f) == 0 && get(setB, 0) == 2.0f && get(setB, 1) == 0.6f;
+        const uint64_t gone[4] = { 0x7BF000000ull, 0x7BF001000ull, 0x7BF002000ull, 0x7BF003000ull };
+        LockSteerRec unread = {};
+        LockSteerFor(unread, kMemory, 0x7B0000800ull, "");
+        const bool notRead = !LockSteerLook(unread, kMemory, gone, 4) && !unread.closed && LockSteerWrite(unread, kMemory, 0.6f, 0.25f) == 0;
+        if (!(closed && noMore && newTruck && limitedNow && dropped && byVehicle && tooLarge && notRead))
+            printf("     put back: %d %d %d %d %d %d %d %d\n", closed, noMore, newTruck, limitedNow, dropped, byVehicle, tooLarge, notRead);
+        Check(closed && noMore && newTruck && limitedNow && dropped && byVehicle && tooLarge && notRead,
+              "lock steering, the check and the put back: a figure that is not the mod's closes the record, the other wheel gets its stock back and nothing more is written; "
+              "another truck takes anew and the old wheels are put back, one changed by another hand left; the drop puts the stock back once; a figure of 2 rad is never taken; "
+              "wheels that are not read change nothing");
+    }
+    // the steering's place in made-up code, and the Drive display's line
+    {
+        uint8_t bytes[kPatternMax], mask[kPatternMax];
+        const int length = PatternParse(kSteerProductPattern, bytes, mask);
+        std::vector<uint8_t> code(0x4000, 0xCC);
+        for (int i = 0; i < length; i++) code[0x1500 + i] = bytes[i];
+        size_t at = 0;
+        const char *why = "";
+        const bool found = length > 0 && SteerPlaceFind(code.data(), 0x10, code.size(), at, why) && at == 0x1500 && !*why;
+        std::vector<uint8_t> twice = code;
+        for (int i = 0; i < length; i++) twice[0x2500 + i] = bytes[i];
+        const bool twiceNot = !SteerPlaceFind(twice.data(), 0x10, twice.size(), at, why) && strstr(why, "more than once") && !at;
+        std::vector<uint8_t> empty(0x4000, 0xCC);
+        const bool noneNot = !SteerPlaceFind(empty.data(), 0x10, empty.size(), at, why) && strstr(why, "not found");
+        DdShown sh = {};
+        sh.n = 8, sh.rows = 4, sh.force = kDiffForceAxles;
+        static const uint8_t kinds[4] = { kDdAxOpen, kDdAxLimited, kDdAxLocked, kDdAxNoBite };
+        for (int i = 0; i < 8; i++) sh.row[i] = (uint8_t)(i / 2), sh.driven[i] = true, sh.type[i] = kinds[i / 2];
+        char line[64], tiny[12];
+        DdAxlesLine(sh, line, sizeof line);
+        bool lineOk = !strcmp(line, "O / LS / L / L, no bite");
+        sh.driven[6] = sh.driven[7] = false; // three axles driven: the long names
+        sh.steer = 60;
+        DdAxlesLine(sh, line, sizeof line);
+        lineOk = lineOk && !strcmp(line, "Open / Limited slip / Locked, steering 60 %");
+        sh.force = kDiffForceLock;
+        DdAxlesLine(sh, line, sizeof line);
+        lineOk = lineOk && !strcmp(line, "Locked, steering 60 %");
+        DdAxlesLine(sh, tiny, sizeof tiny);
+        lineOk = lineOk && strlen(tiny) < sizeof tiny;
+        sh.steer = 100;
+        DdAxlesLine(sh, line, sizeof line);
+        lineOk = lineOk && !strcmp(line, "Locked");
+        sh.steer = 0;
+        DdAxlesLine(sh, line, sizeof line);
+        lineOk = lineOk && !strcmp(line, "Locked");
+        Check(found && twiceNot && noneNot && lineOk,
+              "lock steering, the place and the line: the steering product in made-up code once, not twice and not where it is not; the Drive display's line has the short "
+              "names from four axles on and the steering left after the types while a lock limits it");
+    }
+}
+
 int main()
 {
     TruckRefs r;
@@ -7671,6 +7907,7 @@ int main()
     TruckTestsSeven();
     TruckTestsEight();
     TruckTestsNine();
+    TruckTestsLockSteer();
     PhysicsRateTest();
     PhysicsRateB2Test();
     RealImageTest();

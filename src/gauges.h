@@ -140,6 +140,7 @@ struct GaugeSettings
     int diffType;            // DiffType: the differential of a truck where the torque cut acts, 0 Auto (by the lock kind at vehicle + 0xE8), 1 Open, 2 Limited slip, 3 Locked (torque_cut.h, kDiff...); a truck file may hold its own
     int diffAxle[kAxleRowsMost]; // DiffAxle1 to DiffAxle8, in a truck file alone: each axle's own type front to back, 0 to 3 as DiffType; -1 no key, the axle goes by DiffType (BRIEF_axle_diff.md, M6)
     int airBrakes;           // AirBrakes, in a truck file alone: this truck has air brakes, 1 or 0; -1 no choice, its class decides (AirBrakesOn; BRIEF_spring_brakes.md, M4 and M7)
+    int lockSteerFront, lockSteerRear; // LockSteerFront, LockSteerRear: with Powertrain, the percent of the steering left while an axle that steers is locked, and while another driven axle is, 30 to 100 (60 and 85; lock_steer.h). 100 and 100: off
     int heldGearSlip;        // HeldGearSlip: the slip room of a numbered gear held by hand: 0 the governor as before, 1 the cap of L+ in the gears near it, 2 the wheel cap in every gear (gearbox_model.h, GearboxPosCap); 0 by default until the user has driven
     int wheelCap;            // WheelCap: with the torque cut in L-, L, L+ and R, no driven wheel runs faster than this percent of the gear's top (BRIEF_drivetrain_2c_wheel_cap.md), 110 to 200, 150; no box, for the A/B
     float engineBrake;       // EngineBrake: with Powertrain in a gear held by hand at Gearbox=2 (the torque cut), the share of the gear's torque in percent the engine holds the truck back with at the redline with the foot off, 0 to 30 (torque_cut.h)
@@ -246,6 +247,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.pushShare = 0; // the surplus taken back (BRIEF_chassis_push.md)
     s.lowRangeSlip = 100; // L- and L with the slip room of L+ (BRIEF_low_range_pull.md, the lead)
     s.diffLockBite = 0; // the game's own lock until the drive picks a default (BRIEF_diff_lock_bite.md)
+    s.lockSteerFront = 60, s.lockSteerRear = 85; // kLockSteerFrontDefault, kLockSteerRearDefault (BRIEF_lock_steering.md, M7)
     s.diffType = 0; // Auto (BRIEF_diff_types.md)
     s.airBrakes = -1; // by the class
     for (int a = 0; a < kAxleRowsMost; a++) s.diffAxle[a] = -1;
@@ -406,6 +408,8 @@ inline void SettingsClamp(GaugeSettings &s)
     s.pushShare = s.pushShare < 0 ? 0 : s.pushShare > 100 ? 100 : s.pushShare;
     s.lowRangeSlip = s.lowRangeSlip < 0 ? 0 : s.lowRangeSlip > 100 ? 100 : s.lowRangeSlip;
     s.diffLockBite = s.diffLockBite < 0 ? 0 : s.diffLockBite > 100 ? 100 : s.diffLockBite;
+    s.lockSteerFront = s.lockSteerFront < 30 ? 30 : s.lockSteerFront > 100 ? 100 : s.lockSteerFront; // kLockSteerLeast
+    s.lockSteerRear = s.lockSteerRear < 30 ? 30 : s.lockSteerRear > 100 ? 100 : s.lockSteerRear;
     s.diffType = s.diffType < 0 || s.diffType > 3 ? 0 : s.diffType;
     s.airBrakes = s.airBrakes == 0 || s.airBrakes == 1 ? s.airBrakes : -1;
     for (int a = 0; a < kAxleRowsMost; a++) s.diffAxle[a] = s.diffAxle[a] < 0 || s.diffAxle[a] > 3 ? -1 : s.diffAxle[a];
@@ -644,7 +648,7 @@ struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWar
                    // the differential by axle (BRIEF_axle_diff.md, M8): the rows, one for each axle of the driven truck that can be driven: its axle (0 the front),
                    // whether it is driven now and whether its key holds it Locked; diffNoPairs: the axles are not read as pairs; diffKind: the lock kind (-1 not read);
                    // diffBiteActs: the lock slot is published for this truck's kind
-                   int diffRows, diffRowAxle[kAxleRowsMost], diffKind; bool diffRowNow[kAxleRowsMost], diffRowKey[kAxleRowsMost], diffNoPairs, diffBiteActs; // airKnown: a truck is driven and its air axles (air_axles.h) and their source are read // the air suspension runs on the driven truck, its rest places taken, the height box shown; the keys' height (cm) and the levelling (front, rear, left over right; cm)
+                   int diffRows, diffRowAxle[kAxleRowsMost], diffKind; bool diffRowNow[kAxleRowsMost], diffRowKey[kAxleRowsMost], diffNoPairs, diffBiteActs; int steerPercent; bool steerNoRoute; /* the steering left while a lock limits it, 0 none; the steering's place not found in this game */ // airKnown: a truck is driven and its air axles (air_axles.h) and their source are read // the air suspension runs on the driven truck, its rest places taken, the height box shown; the keys' height (cm) and the levelling (front, rear, left over right; cm)
                    bool frameKnown, frameRigid; float frameFile[4], frameMost; // the driven truck's frame joint (frame_flex.h): its stock spring, damping and limits in degrees; or none (a rigid frame)
                    bool suspKnown; float suspFile[3][2]; // the driven truck's file: spring, damping and the compression end (m), [front, rear] (wheel 0 and the last)
                    char gearbox[96]; float gearHold; bool gearHoldOwn; // the driven truck's gearbox (its key, "" for none), the seconds each gear is held going up with the mod's engine, and whether its file sets them

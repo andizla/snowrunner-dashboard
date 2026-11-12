@@ -1329,9 +1329,21 @@ that blink (engine damage, oil, tire) are flagged in their own word, so a reader
 The tire mod reads the outside temperature from here. Other mods' authors get the layout and the read rule in
 <code>docs\\SnowRunnerGauges_State.h</code> and its guide <code>SnowRunnerGauges_State.md</code> (CC0); a reader maps the whole block
 (size 0) and checks each field against the size, so it reads version 1 and 2 alike.</p>
+<p><b>A lock limits the steering.</b> <code>lock_steer.h</code>. The game steers a wheel to its most angle times the stick, and
+keeps that most angle as a float at wheel + 0xB8. One pattern of the game's code proves the place, found once
+(<code>steering: the game's steering product at +</code>); where it is not found nothing is ever written. While an axle is locked
+and a row is under 100 the mod keeps each steered wheel's stock figure and writes stock times one share, the same for every wheel
+(<code>steering: a lock limits the steering of vehicle</code>). The share moves at 0.8 a second, a pass counts as 0.1 s at the most,
+and nothing is written while the stick is within 0.01 of the middle. Before every write the wheel must hold its stock figure or the
+mod's own last one, to the bit. Another figure there ends the writing for that truck (<code>steering: wheel</code>). The stock figure
+goes back when the truck is left, when Real engine goes off and when both rows are at 100
+(<code>steering: the stock most angle put back into</code>). The settings line is
+<code>settings: the steering left with a lock in:</code>, and with <code>Probe=1</code> a line a second
+(<code>probe: steering: the target</code>) gives the target, the share in force and the first wheel's figures.</p>
 <p><b>The tuning block.</b> A second block, <code>Local&#92;NextGen.Tune.&lt;process id&gt;.&lt;n&gt;</code> (<code>ng_tune.h</code>,
-the same file in every Next Gen mod; <code>tune_figures.h</code>), holds four figures of the Powertrain for a tuning tool that is
-not part of a release: <code>DiffLockBite</code>, <code>WheelCap</code>, <code>PushShare</code> and <code>LowRangeSlip</code>, each
+the same file in every Next Gen mod; <code>tune_figures.h</code>), holds figures of the Powertrain for a tuning tool that is
+not part of a release: <code>DiffLockBite</code>, <code>WheelCap</code>, <code>PushShare</code>, <code>LowRangeSlip</code>,
+<code>HeldGearSlip</code>, <code>LockSteerFront</code> and <code>LockSteerRear</code>, each
 with its name, tip, range, default and the value the tab shows. The tool writes a wanted value with a count. The mod's thread
 takes it at its next pass (the count, the value, the count again), held to the range and to whole percent, and hands it in by
 <code>SettingsPut</code> with the turn it read the settings at. That is the road an edit on the tab takes: in force on that pass,

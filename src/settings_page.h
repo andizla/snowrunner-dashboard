@@ -1014,6 +1014,17 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 if (lockedOne && differ && (s.diffLockBite <= 0 || !view.diffBiteActs)) ImGui::TextDisabled("Locked on one axle needs Diff lock bite above 0.");
                 if (view.diffNoPairs) ImGui::TextDisabled("The axles of this truck are not read as pairs.");
             }
+            // a locked differential limits the steering (BRIEF_lock_steering.md, M7): the share of the steering that is left
+            PageLabel("Steering with front lock", labelX);
+            ImGui::SetNextItemWidth(w);
+            changed(ImGui::SliderInt("##locksteerfront", &s.lockSteerFront, 30, 100, "%d %%", ImGuiSliderFlags_AlwaysClamp));
+            PageTip("How much steering is left while an axle that steers is locked. 100 leaves it all. A truck whose lock is always on has this all the time. Default 60 %.");
+            PageLabel("Steering with rear lock", labelX);
+            ImGui::SetNextItemWidth(w);
+            changed(ImGui::SliderInt("##locksteerrear", &s.lockSteerRear, 30, 100, "%d %%", ImGuiSliderFlags_AlwaysClamp));
+            PageTip("How much steering is left while another driven axle is locked. 100 leaves it all. With both locked the smaller figure counts. A truck whose lock is always on has this all the time. Default 85 %.");
+            if (view.steerNoRoute) ImGui::TextDisabled("The steering is not found in this game version. Nothing is changed.");
+            else if (view.steerPercent) ImGui::TextDisabled("Steering now %d %%", view.steerPercent);
             PageLabel("Mod engine speed", labelX);
             changed(ImGui::Checkbox("##modenginespeed", &s.modEngineSpeed));
             PageTip("The game tachometer, cockpit needles, rev lights, engine sound, effects and exhaust follow the mod engine while Real engine is on. Fuel use and the stall keep the game rules, and in a gear held by hand they follow the pull of the mod engine. Off: the game computes its own, and the mod engine never pulls alone in a gear held by hand, as that needs this on. On by default.");

@@ -56,6 +56,7 @@ int NgMenuKeyFromIni(); // the menu's key, which a capture never binds
 #include "tune_figures.h"
 #include "warn_list.h"
 #include "winch_out.h"
+#include "lock_steer.h"
 
 static HMODULE g_self = nullptr;
 static std::wstring g_dir; // the game's folder, with the last backslash
@@ -832,6 +833,8 @@ static void WriteIni(const GaugeSettings &s)
     whole(L"HeldGearSlip", s.heldGearSlip);
     whole(L"PushShare", s.pushShare);
     whole(L"DiffLockBite", s.diffLockBite);
+    whole(L"LockSteerFront", s.lockSteerFront);
+    whole(L"LockSteerRear", s.lockSteerRear);
     whole(L"DiffType", s.diffType);
     whole(L"ModEngineSpeed", s.modEngineSpeed ? 1 : 0);
     num(L"EngineSpeedTop", s.engineSpeedTop);
@@ -1271,6 +1274,8 @@ static void ReadIni(GaugeSettings &s)
                         L"; PushShare (with Powertrain): the percent of the surge at speed the game's chassis push may carry over the mod's pull, 0 to 100 (0; 100 as before; no box).\n"
                         L"; DiffLockBite (with Powertrain): how firmly the diff lock ties the driven wheels together, 0 to 100 (0: the game lock; 100: one shaft).\n"
                         L";   It acts on a truck whose diff lock is always on too. Such a truck then scrubs in every turn on hard ground.\n"
+                        L"; LockSteerFront, LockSteerRear (with Powertrain): the percent of the steering left while a differential is locked, 30 to 100 (60 and 85; 100 leaves it all).\n"
+                        L";   Front: an axle that steers is locked. Rear: another driven axle is. With both the smaller counts. A truck whose lock is always on has it all the time.\n"
                         L"; DiffType (with Powertrain, in the gear positions of the mod gearbox): 0 Auto, 1 Open, 2 Limited slip, 3 Locked. Auto is Locked where the lock is always on, else Open.\n"
                         L";   A truck file may hold its own DiffType; the tab writes it there for the driven truck.\n"
                         L";   DiffAxle1 to DiffAxle8 in a truck file: one axle its own type, front to back, the same four choices. An axle with no key goes by DiffType.\n"
@@ -1351,6 +1356,8 @@ static void ReadIni(GaugeSettings &s)
     s.heldGearSlip = IniInt(L"HeldGearSlip", s.heldGearSlip, ini);
     s.pushShare = IniInt(L"PushShare", s.pushShare, ini);
     s.diffLockBite = IniInt(L"DiffLockBite", s.diffLockBite, ini);
+    s.lockSteerFront = IniInt(L"LockSteerFront", s.lockSteerFront, ini);
+    s.lockSteerRear = IniInt(L"LockSteerRear", s.lockSteerRear, ini);
     s.diffType = IniInt(L"DiffType", s.diffType, ini);
     s.engineBrake = IniFloat(L"EngineBrake", s.engineBrake, ini); // CrawlHold= is read no more: the torque cut took its place
     s.winchOutRate = IniFloat(L"WinchOutRate", s.winchOutRate, ini);
@@ -1474,13 +1481,14 @@ void SettingsPut(const GaugeSettings &in, LONG turn)
 // read at, so the pass takes it below and saves it a second after the last change), then the figures are published.
 // With no tool in the game the block is written and nobody reads it.
 static char g_slipLine[32] = ""; // the held gear slip's line for the tool, written by the truck's pass on this thread; empty with no gear held under the cut
+static char g_steerLine[16] = ""; // the steering's line for the tool ("60 %"), written by the truck's pass too (lock_steer.h); empty where nothing limits it
 static void TunePass(uint8_t *block, ULONGLONG now)
 {
     if (!block) return;
     GaugeSettings g;
     const LONG turn = SettingsGet(g);
     if (GtTake(block, g)) SettingsPut(g, turn);
-    GtPublish(block, g, now, g_slipLine);
+    GtPublish(block, g, now, g_slipLine, g_steerLine);
 }
 
 // The settings in force, for the tab to show. What the tab handed back and the mod's thread has not taken yet is
@@ -3960,6 +3968,7 @@ static void (*g_damageUpdate)(uint64_t) = nullptr;
 static void OnTruckFrame(void *first, float step);
 static bool g_truckFrames = false; // the truck update is hooked: its jobs are dealt
 static bool g_lockPattern = false; // the diff lock's setter found once at the code look: the kind is at vehicle + 0xE8 (BRIEF_diff_lock_bite.md)
+static bool g_steerPattern = false; // the steering's product found once at the code look: the most angle is at wheel + 0xB8 (BRIEF_lock_steering.md, M1)
 
 // The fitted gearbox's positions (gearbox_positions.h, BRIEF_positions_by_gearbox.md): the game's lookup of a gearbox's
 // desc (0 until found), the job, and the feature off for the session (g_positionsOff: why, for the line said once).
@@ -4055,6 +4064,13 @@ static void GameCodeLook(const GaugeSettings &s)
             Log(L"gearbox positions: the game's gearbox lookup at +%zx; the fitted gearbox is read on the game's thread at Gearbox=2 with Positions by gearbox on", g_gearboxDescAt);
         }
         else Log(L"gearbox positions: %S, so every truck has all positions", why);
+    }
+    {
+        const char *why = "";
+        size_t at = 0;
+        g_steerPattern = SteerPlaceFind(code.data(), from, to, at, why);
+        if (g_steerPattern) Log(L"steering: the game's steering product at +%zx holds the wheel's most angle at wheel + 0xB8; a lock limits the steering with LockSteerFront or LockSteerRear under 100", at);
+        else Log(L"steering: %S, so a lock never limits the steering in this game and nothing is written", why);
     }
     {
         WinchPlace winch = {};
@@ -4316,6 +4332,8 @@ static void LogSettings(const GaugeSettings &s)
                           TorqueCutWanted(s) ? L"in a gear held by hand the torque cut: the mod engine alone, no cut at the gear's top" : L"no torque cut (it needs Gearbox=2, EngineShare above 0 and ModEngineSpeed=1)",
                           s.modEngineSpeed ? L"the mod engine's (ModEngineSpeed=1; the fuel's and the stall's calls keep the game's own, by the cut's own pull under the cut)" : L"its own (ModEngineSpeed=0)");
         Log(L"settings: diff lock bite %d (DiffLockBite; 0 the game's lock, 100 one shaft), the differential's type %d (DiffType; 0 Auto, 1 Open, 2 Limited slip, 3 Locked), low range slip %d (LowRangeSlip; 0 the gear's own wheel cap in L-, L and R, 100 the cap of the highest low gear)", s.diffLockBite, s.diffType, s.lowRangeSlip);
+        Log(L"settings: the steering left with a lock in: %d percent while an axle that steers is locked (LockSteerFront), %d while another driven axle is (LockSteerRear); 100 and 100 is off%s",
+            s.lockSteerFront, s.lockSteerRear, LockSteerOn(s.powertrain, s.lockSteerFront, s.lockSteerRear) ? L"" : L" (off now)");
         Log(L"settings: held gear slip %d, %S (HeldGearSlip; 0 a numbered gear held by hand has the governor, 1 the cap of L+ in the gears near it, 2 the wheel cap in every gear)", s.heldGearSlip,
             HeldSlipName(s.heldGearSlip));
         Log(L"settings: air brakes %s (AirBrakes of the truck file: %d; -1 no choice, every class but the scout has them); the spring brakes hold under %.1f bar and let go at %.1f",
@@ -4652,6 +4670,10 @@ struct TruckWatch
     // vehicles the cleared byte and the rolling were said for; the next probe line
     bool springHeld;
     LockHold springHold;
+    // the steering with a lock in (lock_steer.h): the record of the truck's wheels, the last pass's time, what was said
+    LockSteerRec steer;
+    unsigned long long steerAt, steerProbeAt;
+    bool steerSaid;
     long springWrites, springCleared;
     float springRoll;
     uint64_t springClearSaid, springRollSaid;
@@ -5062,6 +5084,76 @@ static void DiffPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s
 
 // A lever's press (BRIEF_axle_diff.md, M7): the state flips with the truck's watch, one line a press saying whether it
 // acts now. Nothing to lock: one line, no state.
+// The steering with a lock in (lock_steer.h; BRIEF_lock_steering.md), every pass after DiffPass, on the mod's thread.
+// Off (Powertrain off, or both sliders at 100), no truck, or the truck being left: the stock figures back into the
+// wheels that still read as the mod's, and the record forgotten. While the game's clock stands: nothing. Else the
+// look at the wheels, the target by the axles locked, the ease and the write. The cut's state is the last pass's.
+static void LockSteerPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s, bool driving, bool held, bool same, const TruckRaw &raw, unsigned long long now)
+{
+    LockSteerRec &r = w.steer;
+    g_steerLine[0] = 0;
+    if (!g_steerPattern) return;
+    if (!LockSteerOn(s.powertrain, s.lockSteerFront, s.lockSteerRear) || !driving || !same || !w.refs.vehicle)
+    {
+        if (r.known)
+        {
+            const uint64_t was = r.vehicle;
+            const int back = LockSteerDrop(r, m);
+            if (back) Log(L"steering: the stock most angle put back into %d wheels of vehicle %llx (%s)", back, (unsigned long long)was,
+                          !s.powertrain ? L"Powertrain is off" : s.lockSteerFront >= 100 && s.lockSteerRear >= 100 ? L"both sliders are at 100" : L"the truck is left");
+        }
+        w.steerAt = 0;
+        return;
+    }
+    if (held)
+    {
+        w.steerAt = 0;
+        return;
+    }
+    const float dt = w.steerAt && now > w.steerAt ? (float)(now - w.steerAt) / 1000.0f : 0.0f;
+    w.steerAt = now;
+    if (LockSteerFor(r, m, w.refs.vehicle, w.who.taken.id)) w.steerSaid = false;
+    const bool wasClosed = r.closed;
+    const bool looked = LockSteerLook(r, m, w.refs.wheel, w.refs.wheels);
+    if (r.closed && !wasClosed)
+        Log(L"steering: wheel %d of vehicle %llx holds a most angle of %.4f rad that is neither its stock figure nor the mod's own, so nothing more is written to this truck; "
+            L"the wheels that still read as the mod's have their stock figure back",
+            r.closedAt + 1, (unsigned long long)r.vehicle, r.closedRead);
+    if (!looked) return;
+    LockSteerIn in = {};
+    in.rows = w.axleRows, in.plan = w.axlePlan;
+    LockSteerAxles(r, w.axleRows, in.steers);
+    in.gameLock = raw.diffLock && !raw.handbrake;
+    in.alwaysOn = w.diffKindRead && w.diffKind == 2;
+    in.cutActs = w.cutActs;
+    in.tied = s.diffLockBite > 0 && LockPublishes(g_lockPattern, w.diffKindRead, w.diffKind);
+    in.front = s.lockSteerFront, in.rear = s.lockSteerRear;
+    const float target = LockSteerTarget(in);
+    const int wrote = LockSteerWrite(r, m, target, dt);
+    int steered = 0, first = -1;
+    for (int i = 0; i < r.n; i++)
+        if (r.has[i] && r.stock[i] > 0.0f)
+        {
+            if (first < 0) first = i;
+            steered++;
+        }
+    if (wrote && !w.steerSaid)
+    {
+        w.steerSaid = true;
+        Log(L"steering: a lock limits the steering of vehicle %llx: %d steered wheels, the first with a stock most angle of %.4f rad; the share goes to %.0f percent at %.1f a second "
+            L"(LockSteerFront %d, LockSteerRear %d)",
+            (unsigned long long)r.vehicle, steered, first >= 0 ? r.stock[first] : 0.0f, target * 100.0f, kLockSteerPace, s.lockSteerFront, s.lockSteerRear);
+    }
+    const int percent = LockSteerPercent(r.share);
+    if (percent) _snprintf_s(g_steerLine, _TRUNCATE, "%d %%", percent);
+    if (s.probe && now - w.steerProbeAt >= 1000)
+    {
+        w.steerProbeAt = now;
+        Log(L"probe: steering: the target %.2f, in force %.3f; %d steered wheels, the first: stock %.4f rad, written %.4f; %ld writes and %ld put back on this truck, the record %s",
+            target, r.share, steered, first >= 0 ? r.stock[first] : 0.0f, first >= 0 ? r.last[first] : 0.0f, r.writes, r.backs, r.closed ? L"closed" : L"open");
+    }
+}
+
 static void AxleLeverPress(TruckWatch &w, bool front)
 {
     const wchar_t *name = front ? L"Lock front axle (BindLockFrontAxle)" : L"Lock rear axles (BindLockRearAxles)";
@@ -6696,6 +6788,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     // and no creep there: the hook lets every call pass until the truck is driven in the world again
     DiffPass(w, m, s, driving && !held && same, raw);
     LockPass(w, m, s, driving && !held && same, GetTickCount64());
+    LockSteerPass(w, m, s, driving, held, same, raw, GetTickCount64());
     if (!(driving && !held && same))
     {
         CreepGive(0, 0.0f);
@@ -9735,6 +9828,10 @@ static DWORD WINAPI Run(void *)
             v.diffRows = 0;
             v.diffNoPairs = driving && watch.axleRowsFor == watch.refs.vehicle && watch.axleRows.axles == 0 && watch.axleRowsLooks >= 3;
             v.diffBiteActs = LockPublishes(g_lockPattern, watch.diffKindRead, watch.diffKind);
+            // the steering left while a lock limits it (lock_steer.h): on the tab under the two rows and in the Drive display's line
+            v.steerPercent = driving && watch.steer.known ? LockSteerPercent(watch.steer.share) : 0;
+            v.steerNoRoute = !g_steerPattern;
+            v.drive.steer = (uint8_t)v.steerPercent;
             for (int a = 0; driving && a < watch.axleRows.axles && a < kAxleRowsMost; a++)
             {
                 if (!watch.axleRows.drive[a]) continue;
@@ -9993,7 +10090,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.overRevDamage == b.overRevDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
            a.springFront == b.springFront && a.dampingFront == b.dampingFront && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.hiddenWarnings == b.hiddenWarnings && a.warnFuel == b.warnFuel && a.warnEngine == b.warnEngine && a.warnGearbox == b.warnGearbox && a.warnCoolant == b.warnCoolant && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
-           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.heldGearSlip == b.heldGearSlip && a.lowRangeSlip == b.lowRangeSlip && a.diffType == b.diffType && a.physicsRate == b.physicsRate && a.engineBrake == b.engineBrake && a.winchOutRate == b.winchOutRate && a.winchOutStep == b.winchOutStep && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
+           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.lockSteerFront == b.lockSteerFront && a.lockSteerRear == b.lockSteerRear && a.heldGearSlip == b.heldGearSlip && a.lowRangeSlip == b.lowRangeSlip && a.diffType == b.diffType && a.physicsRate == b.physicsRate && a.engineBrake == b.engineBrake && a.winchOutRate == b.winchOutRate && a.winchOutStep == b.winchOutStep && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
            a.camberGainFront == b.camberGainFront && a.camberGainRear == b.camberGainRear && a.camberRestFront == b.camberRestFront && a.camberRestRear == b.camberRestRear &&
            !memcmp(a.diffAxle, b.diffAxle, sizeof a.diffAxle) && a.airBrakes == b.airBrakes;
 }
@@ -10051,7 +10148,7 @@ static void PartIni()
     Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.hotDamageFrom == kTempRed && d.coldDamage == 5.0f && d.overRevDamage == 10.0f && d.stallDamage == 5.0f && d.clutchBurn && d.clutchHeat == 60.0f &&
               d.springFront == 1.0f && d.dampingFront == 1.0f && d.extraTravel == 0.0f && d.frameFlex == 1.0f && d.twistRange == 1.0f,
           "defaults: the radiator's full airflow from 30 km/h, engine damage on from the red zone, 10 percent a minute for the heat and 5 for the cold");
-    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.walkSkipsLow && d.positionsByGearbox && !d.ignoreShifter && d.backToA == 0 && d.gameGearDisplay == kGameGearOffOwn && d.input == kInputWheel && !d.powertrain && d.roadLoad && d.wheelCap == 150 && d.pushShare == 0 && d.diffLockBite == 0 && d.lowRangeSlip == 100 && d.diffType == 0 && d.physicsRate == 60 && d.engineBrake == 15.0f && d.modEngineSpeed && d.engineSpeedTop == 1.0f && d.roadCdA == 0.0f && d.engineShare == 50 && d.creep && !d.creepManual && !d.dieselFlutter,
+    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.walkSkipsLow && d.positionsByGearbox && !d.ignoreShifter && d.backToA == 0 && d.gameGearDisplay == kGameGearOffOwn && d.input == kInputWheel && !d.powertrain && d.roadLoad && d.wheelCap == 150 && d.pushShare == 0 && d.diffLockBite == 0 && d.lockSteerFront == 60 && d.lockSteerRear == 85 && d.lowRangeSlip == 100 && d.diffType == 0 && d.physicsRate == 60 && d.engineBrake == 15.0f && d.modEngineSpeed && d.engineSpeedTop == 1.0f && d.roadCdA == 0.0f && d.engineShare == 50 && d.creep && !d.creepManual && !d.dieselFlutter,
           "defaults: the oil as a second needle, warm after 5 minutes, too hot from 120 C; the standard turbo, a diesel's lift without the flutter; the creep on");
 
     // Air drag on by default (BRIEF_defaults_on.md): a missing key gives 1, an explicit 0 stays 0, the defaults give 1
@@ -10134,6 +10231,28 @@ static void PartIni()
         WritePrivateProfileStringW(kIniSection, L"WinchOutRate", nullptr, ini.c_str());
         WritePrivateProfileStringW(kIniSection, L"WinchOutStep", nullptr, ini.c_str());
         WriteIni(plain);
+    }
+    // the steering with a lock in (BRIEF_lock_steering.md, M7): LockSteerFront and LockSteerRear, 60 and 85 by default,
+    // read back, held to 30 to 100
+    {
+        GaugeSettings fresh;
+        SettingsDefaults(fresh);
+        WriteIni(fresh);
+        GaugeSettings asked = fresh;
+        asked.lockSteerFront = 45, asked.lockSteerRear = 100;
+        WriteIni(asked);
+        GaugeSettings readBack;
+        ReadIni(readBack);
+        SettingsClamp(readBack);
+        WritePrivateProfileStringW(kIniSection, L"LockSteerFront", L"12", ini.c_str());
+        WritePrivateProfileStringW(kIniSection, L"LockSteerRear", L"250", ini.c_str());
+        GaugeSettings wide;
+        ReadIni(wide);
+        SettingsClamp(wide);
+        Check(fresh.lockSteerFront == 60 && fresh.lockSteerRear == 85 && readBack.lockSteerFront == 45 && readBack.lockSteerRear == 100 && wide.lockSteerFront == 30 &&
+              wide.lockSteerRear == 100 && !SameSettings(fresh, asked),
+              "settings: LockSteerFront and LockSteerRear are 60 and 85 by default, 45 and 100 read back, 12 held to 30 and 250 to 100");
+        WriteIni(fresh);
     }
     // the torque cut wants Powertrain, Gearbox=2, EngineShare above 0 and ModEngineSpeed (the Reviewer's M2): with the
     // game's own engine speed it is not published, so the throttle and B4 pass as they came
@@ -10226,6 +10345,8 @@ static void PartIni()
     c.wheelCap = 120;
     c.pushShare = 60;
     c.diffLockBite = 75;
+    c.lockSteerFront = 45;
+    c.lockSteerRear = 70;
     c.lowRangeSlip = 40;
     c.heldGearSlip = 2;
     c.diffType = 2;
@@ -10248,7 +10369,7 @@ static void PartIni()
                             c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.overRevDamage != d.overRevDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springFront != d.springFront && c.dampingFront != d.dampingFront && c.extraTravel != d.extraTravel && c.frameFlex != d.frameFlex && c.twistRange != d.twistRange && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
                             c.demo != d.demo && c.probe != d.probe && c.keepLogs != d.keepLogs && c.soundVolume != d.soundVolume && c.hiddenWarnings != d.hiddenWarnings && c.warnFuel != d.warnFuel && c.warnEngine != d.warnEngine && c.warnGearbox != d.warnGearbox && c.warnCoolant != d.warnCoolant && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
-                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.diffLockBite != d.diffLockBite && c.heldGearSlip != d.heldGearSlip && c.lowRangeSlip != d.lowRangeSlip && c.diffType != d.diffType && c.physicsRate != d.physicsRate && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
+                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.diffLockBite != d.diffLockBite && c.lockSteerFront != d.lockSteerFront && c.lockSteerRear != d.lockSteerRear && c.heldGearSlip != d.heldGearSlip && c.lowRangeSlip != d.lowRangeSlip && c.diffType != d.diffType && c.physicsRate != d.physicsRate && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
     WriteIni(c);
     ReadIni(b);
     Check(allChanged, "ini: the test changes every setting from its default");
@@ -10269,7 +10390,7 @@ static void PartIni()
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 162, "ini: the help text survives a write (162 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 164, "ini: the help text survives a write (164 comment lines)");
     // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
     {
         char none[32] = "x", tab[32] = {}, kept[32] = {};
@@ -12444,7 +12565,7 @@ static void PartRest()
         static NgTuneSeen seen;
         NgTuneItem items[kGtItems];
         const int count = GtItems(items);
-        bool listed = count == 6 && NgTuneSetUp(block, sizeof block, "Gameplay", 1, items, count) && NgTuneRead(block, sizeof block, seen) && seen.count == 6 &&
+        bool listed = count == 9 && NgTuneSetUp(block, sizeof block, "Gameplay", 1, items, count) && NgTuneRead(block, sizeof block, seen) && seen.count == 9 &&
                       !strcmp(seen.mod, "Gameplay") && !strcmp(seen.e[kGtCap].name, "Wheel cap") && seen.e[kGtCap].least == 110.0f && seen.e[kGtCap].most == 200.0f &&
                       seen.e[kGtCap].def == 150.0f && seen.e[kGtLowSlip].def == 100.0f && seen.e[kGtBite].def == 0.0f && seen.e[kGtPush].most == 100.0f &&
                       !strcmp(seen.e[0].group, "Powertrain");
@@ -12521,11 +12642,28 @@ static void PartRest()
                     HeldSlipLine(words, sizeof words, set, force, capNow);
                     slipEntry = slipEntry && strlen(words) < 32 && !strchr(words, '\'');
                 }
+        // the steering with a lock in (BRIEF_lock_steering.md, M7): two sliders of 30 to 100 and a line with the share in force
+        bool steerEntry = seen.e[kGtSteerFront].kind == kNgTuneSlider && !strcmp(seen.e[kGtSteerFront].name, "Steering with front lock") && seen.e[kGtSteerFront].least == 30.0f &&
+                          seen.e[kGtSteerFront].most == 100.0f && seen.e[kGtSteerFront].def == 60.0f && !strcmp(seen.e[kGtSteerRear].name, "Steering with rear lock") &&
+                          seen.e[kGtSteerRear].least == 30.0f && seen.e[kGtSteerRear].def == 85.0f && seen.e[kGtSteerLine].kind == kNgTuneLine &&
+                          !strcmp(seen.e[kGtSteerLine].name, "Steering now") && !strcmp(NgTuneAt(block, kGtSteerLine)->text, "all of it") && strlen(items[kGtSteerLine].tip) < 128;
+        want(kGtSteerFront, 12.0f);
+        want(kGtSteerRear, 70.4f);
+        TunePass(block, 1291);
+        SettingsGet(got);
+        steerEntry = steerEntry && got.lockSteerFront == 30 && got.lockSteerRear == 70 && shown(kGtSteerFront) == 30.0f && shown(kGtSteerRear) == 70.0f;
+        InterlockedExchange(&g_setDirty, 0);
+        strcpy_s(g_steerLine, "60 %");
+        TunePass(block, 1292);
+        steerEntry = steerEntry && !strcmp(NgTuneAt(block, kGtSteerLine)->text, "60 %");
+        g_steerLine[0] = 0;
         g_slipLine[0] = 0;
         d.powertrain = false;
         SettingsPublish(d);
         TunePass(block, 1295);
         slipEntry = slipEntry && greyed(kGtHeldSlip) && greyed(kGtHeldLine);
+        steerEntry = steerEntry && greyed(kGtSteerFront) && greyed(kGtSteerRear) && greyed(kGtSteerLine);
+        Check(steerEntry, "tuning block: Steering with front lock and with rear lock are sliders of 30 to 100 with 60 and 85, 12 asked is 30 and 70.4 is 70; the line says the share in force; greyed with Real engine off");
         Check(slipEntry, "tuning block: Held gear slip is a slider of 0 to 2 in whole steps with a line under it; 1.4 asked is 1 and 7 is 2; the line says the choice and the cap and fits; greyed with Real engine off");
         TunePass(nullptr, 1300); // no block: the pass does nothing
         if (!(listed && published && taken && nothing && reset && off)) printf("     listed %d published %d taken %d nothing %d reset %d off %d\n", listed, published, taken, nothing, reset, off);

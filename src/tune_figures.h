@@ -3,7 +3,8 @@
 // their sliders on the Powertrain tab too, and the wheel cap and the push share, which are ini keys with no slider
 // there, so the tool's is their only one. And the slip room of the numbered gears (BRIEF_held_gear_slip.md): a slider
 // of 0, 1 and 2, since the block has no choice of three, with a line under it that says the choice by name and the cap
-// in force.
+// in force. And the two shares of the steering with a lock in (BRIEF_lock_steering.md, M7), with a line that says the
+// share in force.
 //
 // The mod's own thread alone touches the block. Each pass it takes what the tool asked into a copy of the settings the
 // tab shows; gauges.cpp hands that copy back by SettingsPut with the turn it was read at, the road the tab's own edit
@@ -15,8 +16,8 @@
 #include "ng_tune.h"
 #include "gearbox_model.h"
 
-enum { kGtBite, kGtCap, kGtPush, kGtLowSlip, kGtHeldSlip, kGtCount }; // the figures; after them the lines to read
-enum { kGtHeldLine = kGtCount, kGtItems };
+enum { kGtBite, kGtCap, kGtPush, kGtLowSlip, kGtHeldSlip, kGtSteerFront, kGtSteerRear, kGtCount }; // the figures; after them the lines to read
+enum { kGtHeldLine = kGtCount, kGtSteerLine, kGtItems };
 struct GtInfo { const char *key, *name, *tip; float least, most, def; };
 static const char kGtGroup[] = "Powertrain";
 static const char kGtWhyOff[] = "Real engine is off.";
@@ -26,13 +27,20 @@ static const GtInfo kGt[kGtCount] = {
     { "PushShare", "Push share", "How much of the extra push the game gives the chassis at speed is left in, in percent. 0 takes all of it back.", 0.0f, 100.0f, 0.0f },
     { "LowRangeSlip", "Low range slip", "How much wheel slip L-, L and R may use. 100 gives them the same room as L+. 0 holds each wheel near the top of its gear.", 0.0f, 100.0f, 100.0f },
     { "HeldGearSlip", "Held gear slip", "Wheel spin in a numbered gear held by hand. 0 Engine held: to the engine limit. 1 Low gears: as L+. 2 All gears: by Wheel cap.", 0.0f, 2.0f, 0.0f },
+    { "LockSteerFront", "Steering with front lock", "Steering left while an axle that steers is locked. 100 leaves it all. A truck whose lock is always on has this all the time.", 30.0f, 100.0f, 60.0f },
+    { "LockSteerRear", "Steering with rear lock", "Steering left while another driven axle is locked. 100 leaves it all. With both locked the smaller figure counts.", 30.0f, 100.0f, 85.0f },
 };
-inline int *GtField(GaugeSettings &s, int i) { return i == kGtBite ? &s.diffLockBite : i == kGtCap ? &s.wheelCap : i == kGtPush ? &s.pushShare : i == kGtHeldSlip ? &s.heldGearSlip : &s.lowRangeSlip; }
+inline int *GtField(GaugeSettings &s, int i)
+{
+    return i == kGtBite ? &s.diffLockBite : i == kGtCap ? &s.wheelCap : i == kGtPush ? &s.pushShare : i == kGtHeldSlip ? &s.heldGearSlip : i == kGtSteerFront ? &s.lockSteerFront :
+           i == kGtSteerRear ? &s.lockSteerRear : &s.lowRangeSlip;
+}
 
 inline int GtItems(NgTuneItem *items)
 {
     for (int i = 0; i < kGtCount; i++) items[i] = { kNgTuneSlider, kGt[i].name, kGtGroup, kGt[i].tip, kGt[i].least, kGt[i].most, kGt[i].def, 1.0f, 0 };
     items[kGtHeldLine] = { kNgTuneLine, "Held gear slip now", kGtGroup, "The choice in force by name and the wheel cap of the gear held, in rad/s.", 0.0f, 0.0f, 0.0f, 0.0f, 0 };
+    items[kGtSteerLine] = { kNgTuneLine, "Steering now", kGtGroup, "The share of the steering left now, in percent.", 0.0f, 0.0f, 0.0f, 0.0f, 0 };
     return kGtItems;
 }
 // What the tool asked since the last pass, into s (the settings the tab shows). NgTuneTake has held each to its range
@@ -51,12 +59,14 @@ inline bool GtTake(uint8_t *block, GaugeSettings &s)
 }
 // The figures as the tab shows them, under the block's sequence. With Real engine off none of them acts: greyed, and the
 // first carries why.
-// line: the held gear slip's line (HeldSlipLine), from the truck's pass; nullptr with no truck.
-inline void GtPublish(uint8_t *block, GaugeSettings s, uint64_t now, const char *line = nullptr)
+// line: the held gear slip's line (HeldSlipLine), from the truck's pass; nullptr with no truck. steer: the steering's
+// line from the same pass ("60 %"); nullptr or empty where nothing limits it.
+inline void GtPublish(uint8_t *block, GaugeSettings s, uint64_t now, const char *line = nullptr, const char *steer = nullptr)
 {
     const bool off = !s.powertrain;
     NgTuneBegin(block);
     for (int i = 0; i < kGtCount; i++) NgTuneValue(block, i, (float)*GtField(s, i), off && i == 0 ? kGtWhyOff : nullptr, off);
     NgTuneValue(block, kGtHeldLine, 0.0f, line && line[0] ? line : "no gear held", off);
+    NgTuneValue(block, kGtSteerLine, 0.0f, steer && steer[0] ? steer : "all of it", off);
     NgTuneEnd(block, now);
 }

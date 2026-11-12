@@ -159,6 +159,7 @@ struct DdShown
     float speed[kDdWheels], truck[kDdWheels];
     float share[kDdWheels], shareBefore[kDdWheels];
     uint8_t type[kDdWheels]; // each driven wheel's axle's type in force where the axles differ (kDdAx...), else 0
+    uint8_t steer;           // the percent of the steering left while a lock limits it, 0 none (lock_steer.h); the mod's thread sets it, not the hook
 };
 
 // The shares (M5): each driven wheel's part above 0 over the sum of the parts above 0. A wheel under 0 gets an empty
@@ -275,20 +276,36 @@ inline const char *DdAxleName(int type)
 {
     return type == kDdAxOpen ? "Open" : type == kDdAxLimited ? "Limited slip" : type == kDdAxLocked ? "Locked" : type == kDdAxNoBite ? "Locked, no bite" : "";
 }
+// From four axles on the line has the short names, so that it stays in the box.
+inline const char *DdAxleShort(int type)
+{
+    return type == kDdAxOpen ? "O" : type == kDdAxLimited ? "LS" : type == kDdAxLocked ? "L" : type == kDdAxNoBite ? "L, no bite" : "";
+}
 // The line under the wheels. Where the axles are alike: the one name, as before. Where they differ: each driven axle's
-// type front to back, by the rows, " / " between them. An axle with no wheel driven in this step is left out.
+// type front to back, by the rows, " / " between them, short from four axles on. An axle with no wheel driven in this
+// step is left out. After it "steering 60 %" while a lock limits the steering (lock_steer.h).
 inline void DdAxlesLine(const DdShown &d, char *out, size_t size)
 {
     if (!size) return;
     out[0] = 0;
     size_t len = 0;
+    auto typeOf = [&](int r) {
+        int type = kDdAxNone;
+        for (int i = 0; i < d.n && i < kDdWheels && type == kDdAxNone; i++)
+            if (d.row[i] == r && d.driven[i]) type = d.type[i];
+        return type;
+    };
+    auto steering = [&]() {
+        if (d.steer > 0 && d.steer < 100 && len < size) snprintf(out + len, size - len, ", steering %d %%", d.steer);
+    };
+    int named = 0;
+    if (d.force == kDiffForceAxles)
+        for (int r = 0; r < d.rows; r++) named += DdAxleName(typeOf(r))[0] ? 1 : 0;
     if (d.force == kDiffForceAxles)
         for (int r = 0; r < d.rows; r++)
         {
-            int type = kDdAxNone;
-            for (int i = 0; i < d.n && i < kDdWheels && type == kDdAxNone; i++)
-                if (d.row[i] == r && d.driven[i]) type = d.type[i];
-            const char *name = DdAxleName(type);
+            const int type = typeOf(r);
+            const char *name = named >= 4 ? DdAxleShort(type) : DdAxleName(type);
             if (!name[0]) continue;
             const int put = snprintf(out + len, size - len, "%s%s", len ? " / " : "", name);
             if (put < 0 || (size_t)put >= size - len)
@@ -298,7 +315,12 @@ inline void DdAxlesLine(const DdShown &d, char *out, size_t size)
             }
             len += (size_t)put;
         }
-    if (!len) snprintf(out, size, "%s", DdForceName(d.force));
+    if (!len)
+    {
+        const int put = snprintf(out, size, "%s", DdForceName(d.force));
+        len = put < 0 || (size_t)put >= size ? size : (size_t)put;
+    }
+    steering();
 }
 
 // ---- the differential by axle: the rows of the Power tab (BRIEF_axle_diff.md, M5 to M7) ----

@@ -299,3 +299,5 @@ x
 x
 ##winchrate
 ##winchstep
+##locksteerfront
+##locksteerrear

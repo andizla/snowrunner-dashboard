@@ -595,6 +595,28 @@ inline bool WinchPlaceFind(const uint8_t *code, size_t from, size_t to, WinchPla
     return true;
 }
 
+// ---- the wheels' most steering angle, for the steering with a lock in (BRIEF_lock_steering.md, M1; lock_steer.h) ----
+// The truck action's product in its loop over the wheels: the wheel's most angle times the truck's steer value. Its
+// bytes name the wheel's + 0xB8 and + 0xD0, so found once they say the most angle is at wheel + 0xB8 on this build.
+// Never called, never hooked.
+static const char *const kSteerProductPattern = "F3 0F 10 B7 B8 00 00 00 F3 41 0F 59 74 24 08 41 0F 57 F4 40 38 AF D0 00 00 00";
+inline bool SteerPlaceFind(const uint8_t *code, size_t from, size_t to, size_t &out, const char *&why)
+{
+    out = 0;
+    why = "";
+    uint8_t bytes[kPatternMax], mask[kPatternMax];
+    size_t at = 0;
+    int count = 0;
+    const int length = PatternParse(kSteerProductPattern, bytes, mask);
+    if (!PatternFind(code, from, to, bytes, mask, length, at, count) || count != 1)
+    {
+        why = count > 1 ? "the steering's product stands more than once" : "the steering's product was not found";
+        return false;
+    }
+    out = at;
+    return true;
+}
+
 // ---- the game's gear torque, for the torque cut (BRIEF_drivetrain_2_torque_cut.md) ----
 // bool(vehicle, int gear, float *torque, float *start, float *a, float *top, float *gearSpeed): the gear's torque and
 // its curve (review\own_drivetrain_research.md A; RVA d73dc0 in 6adb8627, d73e50 in 6ab52f5d), found by its first
