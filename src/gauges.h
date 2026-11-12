@@ -772,7 +772,8 @@ inline void KeyName(int vk, char *out, size_t size)
         { VK_INSERT, "Insert" }, { VK_DELETE, "Delete" }, { VK_HOME, "Home" }, { VK_END, "End" }, { VK_PRIOR, "Page Up" },
         { VK_NEXT, "Page Down" }, { VK_UP, "Up" }, { VK_DOWN, "Down" }, { VK_LEFT, "Left" }, { VK_RIGHT, "Right" },
         { VK_PAUSE, "Pause" }, { VK_SCROLL, "Scroll Lock" }, { VK_TAB, "Tab" }, { VK_SPACE, "Space" }, { VK_BACK, "Backspace" },
-        { VK_RETURN, "Enter" }, { VK_ADD, "Num +" }, { VK_SUBTRACT, "Num -" }, { VK_MULTIPLY, "Num *" }, { VK_DIVIDE, "Num /" }, { VK_DECIMAL, "Num ." } };
+        { VK_RETURN, "Enter" }, { VK_ADD, "Num +" }, { VK_SUBTRACT, "Num -" }, { VK_MULTIPLY, "Num *" }, { VK_DIVIDE, "Num /" }, { VK_DECIMAL, "Num ." },
+        { VK_XBUTTON1, "Mouse 4" }, { VK_XBUTTON2, "Mouse 5" } }; // the mouse's two side buttons, as Windows counts them
     if (vk <= 0) strncpy_s(out, size, "None", _TRUNCATE);
     else if (vk >= VK_F1 && vk <= VK_F24) _snprintf_s(out, size, _TRUNCATE, "F%d", vk - VK_F1 + 1);
     else if ((vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z')) _snprintf_s(out, size, _TRUNCATE, "%c", (char)vk);

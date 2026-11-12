@@ -1483,8 +1483,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             ImGui::PopID();
         };
         ImGui::PushTextWrapPos(0.0f);
-        ImGui::TextDisabled("Bindings: click a slot, then press a key, buttons on a pad or a button on a wheel, or move the clutch pedal. A control already "
-                            "held is left alone. Escape cancels.");
+        ImGui::TextDisabled("Bindings: click a slot, then press a key, a side button of the mouse, buttons on a pad or a button on a wheel, or move the clutch "
+                            "pedal. A control already held is left alone. Escape cancels. The game may have the same key or button bound: outside this menu both act.");
         ImGui::PopTextWrapPos();
         if (s.gearbox == kGearboxOwn) for (int a = 0; a < kViewShifts; a++) bindingRow(a);
         ImGui::TextDisabled("Locks and ride");

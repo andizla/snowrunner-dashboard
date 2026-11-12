@@ -51,8 +51,10 @@ struct Binding
 enum { kBindingSlots = 2 };
 struct GearBindings { Binding slot[kActCount][kBindingSlots]; };
 
-// Whether a virtual key is the mouse's (its buttons): never bound, as the tab's button that begins a capture is clicked.
-inline bool KeyIsMouse(int vk) { return vk == VK_LBUTTON || vk == VK_RBUTTON || vk == VK_MBUTTON || vk == VK_XBUTTON1 || vk == VK_XBUTTON2; }
+// Whether a virtual key is the mouse's left, right or middle button: never bound, as the tab's button that begins a
+// capture is clicked. The two side buttons (VK_XBUTTON1 and 2, "Mouse 4" and "Mouse 5") click nothing in the tab and
+// are bound like a key (BRIEF_mouse_side_buttons.md).
+inline bool KeyIsMouse(int vk) { return vk == VK_LBUTTON || vk == VK_RBUTTON || vk == VK_MBUTTON; }
 
 // A key's text: its name as the tab shows it (KeyName), or its code where it has none. A code under 10 has two digits
 // ("03"), as one digit alone is the top row's digit key (KeyFromText).
@@ -131,7 +133,7 @@ inline bool BindingParse(const char *text, Binding &out, char *why, size_t whySi
         }
         const int vk = KeyFromText(name);
         if (!vk) return refuse("no such key (a name as the tab shows it, or a code from 1 to 254)");
-        if (KeyIsMouse(vk)) return refuse("a mouse button cannot be bound (the codes 1, 2, 4, 5 and 6)");
+        if (KeyIsMouse(vk)) return refuse("the left, right and middle mouse buttons cannot be bound (the codes 1, 2 and 4)");
         out.kind = kBindKey;
         out.code = (uint32_t)vk;
         return true;

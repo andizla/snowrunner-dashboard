@@ -76,7 +76,7 @@ int main()
     }
     // bad texts: refused, each with its reason
     {
-        static const char *const bad[] = { "", "Key", "Key Nothing", "Key 01", "Key 02", "Key 04", "Key 05", "Key 06", "Key 300", "Pad", "Pad LB+Nothing", "Wheel", "Wheel 0 Button 1", "Wheel 9 Button 1",
+        static const char *const bad[] = { "", "Key", "Key Nothing", "Key 01", "Key 02", "Key 04", "Key 300", "Pad", "Pad LB+Nothing", "Wheel", "Wheel 0 Button 1", "Wheel 9 Button 1",
                                            "Wheel 1", "Wheel 1 Button", "Wheel 1 Button 0", "Wheel 1 Button 129", "Wheel 1 POV", "Wheel 1 POV Sideways",
                                            "Wheel 1 POV 5 Up", "Wheel 1 Axis 9", "Wheel 1 Axis 3 backwards", "None at all", "Mouse 1" };
         bool refused = true;
@@ -129,8 +129,23 @@ int main()
         BindingText(Binding{ kBindKey, 0, '1', 0, false }, one, sizeof one);
         BindingText(Binding{ kBindKey, 0, 3, 0, false }, three, sizeof three);
         Check(round && distinct && digits && !strcmp(one, "Key 1") && !strcmp(three, "Key 03"),
-              "bindings: every key but the mouse buttons round trips by its text and no two share one; Key 0 to Key 9 are the digit keys, the 1 key "
+              "bindings: every key but the left, right and middle mouse buttons round trips by its text and no two share one; Key 0 to Key 9 are the digit keys, the 1 key "
               "written Key 1 as before, a code under 10 with two digits");
+        // the mouse's side buttons (BRIEF_mouse_side_buttons.md): by name and by code, written back by name; the other three refused with the reason
+        char four[96], five[96], why1[160] = "", why2[160] = "", why4[160] = "";
+        Binding none;
+        const Binding m4 = Parsed("Key Mouse 4"), m5 = Parsed("Key Mouse 5"), c5 = Parsed("Key 05"), c6 = Parsed("Key 06"), digit5 = Parsed("Key 5");
+        BindingText(c5, four, sizeof four);
+        BindingText(c6, five, sizeof five);
+        const bool names = m4.kind == kBindKey && m4.code == VK_XBUTTON1 && m5.kind == kBindKey && m5.code == VK_XBUTTON2 && c5.code == VK_XBUTTON1 && c6.code == VK_XBUTTON2 &&
+                           !strcmp(four, "Key Mouse 4") && !strcmp(five, "Key Mouse 5") && digit5.kind == kBindKey && digit5.code == '5';
+        const char *const reason = "the left, right and middle mouse buttons cannot be bound (the codes 1, 2 and 4)";
+        const bool refusedThree = !BindingParse("Key 01", none, why1, sizeof why1) && !BindingParse("Key 02", none, why2, sizeof why2) && !BindingParse("Key 04", none, why4, sizeof why4) &&
+                                  !strcmp(why1, reason) && !strcmp(why2, reason) && !strcmp(why4, reason) && !KeyIsMouse(VK_XBUTTON1) && !KeyIsMouse(VK_XBUTTON2) &&
+                                  KeyIsMouse(VK_LBUTTON) && KeyIsMouse(VK_RBUTTON) && KeyIsMouse(VK_MBUTTON);
+        Check(names && refusedThree,
+              "bindings, the mouse: Key Mouse 4 and Key Mouse 5 are the two side buttons, Key 05 and Key 06 read as them and are written back by name, Key 5 is still the 5 "
+              "key; Key 01, Key 02 and Key 04 are refused with the reason");
     }
     // the reader: one press per push, chords, the larger chord over the smaller one, a wheel's button and POV
     {
@@ -250,6 +265,33 @@ int main()
         s.key['G'] = s.key[VK_LBUTTON] = 0;
         Check(stillHeld == kCaptureWaiting && key == kCaptureBound && !strcmp(text, "Key G"),
               "capture: a key held at the start is left alone until let go, then pressed again it is bound; the mouse never");
+        // a side button of the mouse is captured like a key; held at the start it is left alone until let go; the left, right and middle never
+        BindingCaptureBegin(c, kActGearN, 0, 2500);
+        s.key[VK_LBUTTON] = 1;  // the click on the tab's button
+        s.key[VK_XBUTTON2] = 1; // and the second side button, down at the start
+        BindingCaptureStep(c, s, 2550, out);
+        const int sideHeld = BindingCaptureStep(c, s, 2600, out);
+        s.key[VK_XBUTTON2] = 0;
+        s.key[VK_RBUTTON] = s.key[VK_MBUTTON] = 1;
+        const int others = BindingCaptureStep(c, s, 2650, out); // the left, right and middle are down: nothing is bound
+        s.key[VK_XBUTTON1] = 1;
+        const int side = BindingCaptureStep(c, s, 2700, out);
+        BindingText(out, text, sizeof text);
+        const bool sideFirst = side == kCaptureBound && !strcmp(text, "Key Mouse 4");
+        s.key[VK_XBUTTON1] = s.key[VK_RBUTTON] = s.key[VK_MBUTTON] = 0;
+        BindingCaptureBegin(c, kActGearN, 0, 2800);
+        BindingCaptureStep(c, s, 2850, out);
+        s.key[VK_XBUTTON2] = 1; // let go since, and pressed again: bound
+        const int sideAgain = BindingCaptureStep(c, s, 2900, out);
+        BindingText(out, text, sizeof text);
+        s.key[VK_XBUTTON2] = s.key[VK_LBUTTON] = 0;
+        // read as down: the binding's key is the snapshot's
+        InputSnapshot down = {};
+        down.key[VK_XBUTTON1] = 1;
+        const bool readDown = down.key[Parsed("Key Mouse 4").code] && !down.key[Parsed("Key Mouse 5").code];
+        Check(sideHeld == kCaptureWaiting && others == kCaptureWaiting && sideFirst && sideAgain == kCaptureBound && !strcmp(text, "Key Mouse 5") && readDown,
+              "capture, the mouse: a side button is bound like a key (Key Mouse 4) and read as down; one held at the start is left alone until let go, then pressed again "
+              "it is bound (Key Mouse 5); the left, the right and the middle button never");
         BindingCaptureBegin(c, kActGear1, 1, 3000);
         s.device[0].present = true;
         for (uint32_t &p : s.device[0].pov) p = 0xFFFF;
