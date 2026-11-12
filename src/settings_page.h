@@ -1453,7 +1453,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         // order is input_bindings.h's GearAction). The shifter's at Gearbox=2, the locks' at every level
         static const char *actions[kViewActions] = { "Gear 1", "Gear 2", "Gear 3", "Gear 4", "Gear 5", "Gear 6", "Gear 7", "Gear 8", "Gear 9", "Gear 10",
                                                      "Gear 11", "Gear 12", "Gear 13", "Gear 14", "Gear 15", "Gear 16", "H", "L-", "L", "L+", "Neutral", "Reverse", "Gear up", "Gear down", "Clutch",
-                                                     "Range high", "Range low", "D", "Diff lock", "AWD", "Sway bars", "Ride up", "Ride down", "Lock front axle", "Lock rear axles" };
+                                                     "Range high", "Range low", "D", "Diff lock", "AWD", "Sway bars", "Ride up", "Ride down", "Lock front axle", "Lock rear axles", "Winch out" };
         auto bindingRow = [&](int a) {
             ImGui::PushID(1000 + a);
             PageLabel(actions[a], labelX);
@@ -1478,7 +1478,13 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         if (s.gearbox == kGearboxOwn) for (int a = 0; a < kViewShifts; a++) bindingRow(a);
         ImGui::TextDisabled("Locks and ride");
         PageTip("The diff lock and AWD on a key on every truck. Sway bars connects and disconnects the sway bars. Ride up and Ride down move the air suspension 2 cm a press under 20 km/h. Lock front axle and Lock rear axles hold those axles Locked until pressed again, over the Axle rows of the Power tab.");
-        for (int a = kViewShifts; a < kViewActions; a++) bindingRow(a);
+        for (int a = kViewShifts; a < kViewActions - 1; a++) bindingRow(a);
+        if (s.probe)
+        {
+            // the probe's own row, the last action (input_bindings.h, kActWinchOut): not there without Probe=1
+            bindingRow(kViewActions - 1);
+            PageTip("Lets the winch rope out while held. A test: it works with Probe=1 alone. Bind a key or button the game does not use.");
+        }
         if (view.controllers) ImGui::TextDisabled("%d wheel or shifter read through DirectInput.", view.controllers);
     }
     else if (open && tab == kTabSounds)
@@ -1530,6 +1536,15 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             ImGui::SameLine();
             if (ImGui::Button("Add 10###test10")) DamageTestAsk(10);
             PageTip(testTip);
+            // the winch let out (winch_out.h): the Winch out row is on the Controls tab
+            PageLabel("Winch out rate", labelX);
+            ImGui::SetNextItemWidth(w);
+            changed(ImGui::SliderFloat("##winchrate", &s.winchOutRate, 0.1f, 2.0f, "%.2f m/s", ImGuiSliderFlags_AlwaysClamp));
+            PageTip("A test: how fast the rope is let out while Winch out is held. Default 0.50 m/s.");
+            PageLabel("Winch out step", labelX);
+            ImGui::SetNextItemWidth(w);
+            changed(ImGui::SliderFloat("##winchstep", &s.winchOutStep, 0.0f, 2.0f, s.winchOutStep > 0.0f ? "%.2f m a press" : "off", ImGuiSliderFlags_AlwaysClamp));
+            PageTip("A test: above 0 each press of Winch out lets this much rope out once and holding does nothing. Default off.");
         }
 
         ImGui::SeparatorText("Test");

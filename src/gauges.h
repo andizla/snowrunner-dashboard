@@ -143,6 +143,7 @@ struct GaugeSettings
     int heldGearSlip;        // HeldGearSlip: the slip room of a numbered gear held by hand: 0 the governor as before, 1 the cap of L+ in the gears near it, 2 the wheel cap in every gear (gearbox_model.h, GearboxPosCap); 0 by default until the user has driven
     int wheelCap;            // WheelCap: with the torque cut in L-, L, L+ and R, no driven wheel runs faster than this percent of the gear's top (BRIEF_drivetrain_2c_wheel_cap.md), 110 to 200, 150; no box, for the A/B
     float engineBrake;       // EngineBrake: with Powertrain in a gear held by hand at Gearbox=2 (the torque cut), the share of the gear's torque in percent the engine holds the truck back with at the redline with the foot off, 0 to 30 (torque_cut.h)
+    float winchOutRate, winchOutStep; // WinchOutRate, WinchOutStep, the probe's alone (winch_out.h): metres a second while the key is held, 0.1 to 2.0; metres a press, 0 to 2.0, 0 the hold pays out at the rate. Written only with Probe=1
     float roadCdA;           // RoadCdA: the drag's area in m², 0 by the truck's mass (1.1 under 4 t, 3.5 under 10 t, else 6); a truck's file may set its own
     int engineShare;         // EngineShare: how much of the mod's engine the game gets with it, in percent: 0 the game's own pull, 100 the mod's
     bool creepManual;        // CreepManual: the creep in a gear picked by hand too (off: only where an automatic picks the gear)
@@ -237,6 +238,8 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.engineShare = 50;
     s.roadLoad = true; // on by default (BRIEF_defaults_on.md); an explicit 0 in the ini stays 0
     s.engineBrake = 15.0f; // kEngineBrakeDefault (BRIEF_drivetrain_2_torque_cut.md)
+    s.winchOutRate = 0.5f; // kWinchRateDefault (winch_out.h)
+    s.winchOutStep = 0.0f;
     s.modEngineSpeed = true; // on by default (BRIEF_drivetrain_1_engine_speed.md); an explicit 0 stays 0
     s.heldGearSlip = 0;
     s.wheelCap = 150; // kCapDefault (BRIEF_drivetrain_2c_wheel_cap.md with M5)
@@ -396,6 +399,8 @@ inline void SettingsClamp(GaugeSettings &s)
     s.engineShare = s.engineShare < 0 ? 0 : s.engineShare > 100 ? 100 : s.engineShare;
     s.engineSpeedTop = isfinite(s.engineSpeedTop) ? SettingsRange(s.engineSpeedTop, 0.5f, 1.5f) : 1.0f;
     s.engineBrake = isfinite(s.engineBrake) ? SettingsRange(s.engineBrake, 0.0f, 30.0f) : 15.0f;
+    s.winchOutRate = isfinite(s.winchOutRate) ? SettingsRange(s.winchOutRate, 0.1f, 2.0f) : 0.5f; // kWinchRateRange
+    s.winchOutStep = isfinite(s.winchOutStep) ? SettingsRange(s.winchOutStep, 0.0f, 2.0f) : 0.0f; // kWinchStepRange
     s.wheelCap = s.wheelCap < 110 ? 110 : s.wheelCap > 200 ? 200 : s.wheelCap;
     s.heldGearSlip = s.heldGearSlip < 0 || s.heldGearSlip > 2 ? 0 : s.heldGearSlip;
     s.pushShare = s.pushShare < 0 ? 0 : s.pushShare > 100 ? 100 : s.pushShare;
@@ -588,7 +593,7 @@ enum { kSoundOil = kTurboTiers, kSoundPurge, kSoundWhistle, kSoundTierCount }; /
 // string that lives as long as the mod
 enum { kViewPullOff, kViewPullArmed, kViewPullRunning, kViewPullDone, kViewPullStopped };
 static const int kEnginePlot = 40; // points of the tab's torque plot
-static const int kViewActions = 35; // the gearbox's actions the view holds the bindings of (input_bindings.h's kActCount)
+static const int kViewActions = 36; // the gearbox's actions the view holds the bindings of (input_bindings.h's kActCount)
 static const int kViewShifts = 28;  // of them the shifter's, before the two locks (DiffLock, Awd)
 // The tab's asks of the gearbox's bindings: begin a capture into an action's slot, or clear it (the mod's thread does
 // both, with the snapshot of its pass).

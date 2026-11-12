@@ -131,9 +131,10 @@ struct HooksWanted { bool shifts, truckUpdate; };
 // The truck update also whenever the mod's gearbox may hold a truck (Gearbox 1 or 2) with ShiftOnGameThread=1: the
 // mod's shifts are dealt there (review 17, step 1); and at Gearbox=2 with PositionsByGearbox, whose read of the fitted
 // gearbox is a job there (BRIEF_positions_by_gearbox.md, review M1).
-inline HooksWanted GearboxHooksWanted(int level, bool damage, bool shiftJobs = false, bool positions = false)
+// And at every level for the probe that lets the winch rope out (winch_out.h, WinchOutWanted): its calls go from there.
+inline HooksWanted GearboxHooksWanted(int level, bool damage, bool shiftJobs = false, bool positions = false, bool winchProbe = false)
 {
-    return HooksWanted{ level >= 1, (level >= 2 && (damage || positions)) || (level >= 1 && shiftJobs) };
+    return HooksWanted{ level >= 1, (level >= 2 && (damage || positions)) || (level >= 1 && shiftJobs) || winchProbe };
 }
 
 // What has been asked of the hooks so far. A hook is attached the first time a level needs it (at the finder's look,
@@ -173,8 +174,9 @@ inline int GearboxGateStep(HooksGate &g, const HooksWanted &w)
 
 // The game's truck update (game_code.h, DamagePathFind) detoured at address at, in a transaction of its own: on the
 // game's thread, every frame and before the update runs, onFrame gets its first argument (an object with the vehicle
-// at + 0x20). False with why when Detours refused it; true at once when it is in place already.
-typedef void (*TruckFrameFn)(void *first);
+// at + 0x20) and its fourth, the step's seconds. False with why when Detours refused it; true at once when it is in
+// place already.
+typedef void (*TruckFrameFn)(void *first, float step);
 bool TruckUpdateHook(uintptr_t at, TruckFrameFn onFrame, char *why, size_t size);
 void TruckUpdateUnhook();
 bool TruckUpdateHooked();

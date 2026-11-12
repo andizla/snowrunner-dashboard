@@ -553,6 +553,48 @@ inline bool GearboxDescFind(const uint8_t *code, size_t from, size_t to, size_t 
     return true;
 }
 
+// ---- the winch rope's length, for the probe that lets it out (BRIEF_winch_out_probe.md; winch_out.h) ----
+// The game's read of a truck's rope length, float (vehicle) (b1d870 on 6adb8627, b1d900 on 6ab52f5d, b1bfd0 on
+// 6a607c05), and its set of a rope of a given length, (vehicle, float length) (b1d7d0, b1d860, b1bf30), each found once
+// by its first bytes and only called, never hooked. The third pattern is the game's own test of its two active bytes
+// side by side (d703e2, d70472, d6ea52): found once it says they sit at vehicle + 0x8C8 and + 0x8C9 on this build.
+static const char *const kWinchSetPattern = "48 89 5C 24 08 57 48 83 EC 30 0F 29 74 24 20 48 8B D9 0F 28 F1 E8 ? ? ? ? 48 8B F8 48 83 38 00 74 30 48 8B 4B 60 "
+                                            "E8 ? ? ? ? 84 C0 74 23 48 8B 0F 33 D2 E8 ? ? ? ? 48 85 C0";
+static const char *const kWinchGetPattern = "40 53 48 83 EC 30 45 33 C9 48 C7 44 24 20 00 00 00 00 45 33 C0 33 D2 48 8B D9 E8 ? ? ? ? 48 8B CB 84 C0 74 0C 33 D2 "
+                                            "48 83 C4 30 5B E9 ? ? ? ? 45 33 C9 48 C7 44 24 20 00 00 00 00 45 33 C0 B2 01 E8 ? ? ? ? 84 C0 74 13 "
+                                            "48 8B 8B D8 07 00 00 33 D2 48 83 C4 30 5B E9";
+static const char *const kWinchBytesPattern = "75 ? 80 BB C8 08 00 00 00 75 ? 80 BB C9 08 00 00 00 75 ? 40 32 FF EB 03 40 B7 01";
+
+struct WinchPlace
+{
+    size_t get, set, bytes; // the offsets in the code, 0 = not found
+    const char *why;        // what was not found (a string literal), "" when all three were
+};
+
+inline bool WinchPlaceFind(const uint8_t *code, size_t from, size_t to, WinchPlace &out)
+{
+    out = WinchPlace{ 0, 0, 0, "" };
+    static const struct { const char *pattern, *none, *many; } parts[3] = {
+        { kWinchGetPattern, "the rope length's read was not found", "the rope length's read's bytes stand more than once" },
+        { kWinchSetPattern, "the rope length's set was not found", "the rope length's set's bytes stand more than once" },
+        { kWinchBytesPattern, "the test of the winch's two active bytes was not found", "the test of the winch's two active bytes stands more than once" },
+    };
+    size_t found[3] = {};
+    for (int i = 0; i < 3; i++)
+    {
+        uint8_t bytes[kPatternMax], mask[kPatternMax];
+        int count = 0;
+        const int length = PatternParse(parts[i].pattern, bytes, mask);
+        if (!PatternFind(code, from, to, bytes, mask, length, found[i], count) || count != 1)
+        {
+            out.why = count > 1 ? parts[i].many : parts[i].none;
+            return false;
+        }
+    }
+    out.get = found[0], out.set = found[1], out.bytes = found[2];
+    return true;
+}
+
 // ---- the game's gear torque, for the torque cut (BRIEF_drivetrain_2_torque_cut.md) ----
 // bool(vehicle, int gear, float *torque, float *start, float *a, float *top, float *gearSpeed): the gear's torque and
 // its curve (review\own_drivetrain_research.md A; RVA d73dc0 in 6adb8627, d73e50 in 6ab52f5d), found by its first

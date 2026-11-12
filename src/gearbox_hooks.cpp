@@ -420,7 +420,7 @@ static void HookTruckUpdate(void *first, void *second, float third, float fourth
 {
     InterlockedIncrement(&g_frames);
     g_truckThread = (LONG)GetCurrentThreadId();
-    if (const TruckFrameFn on = g_onFrame) on(first);
+    if (const TruckFrameFn on = g_onFrame) on(first, fourth);
     ((TruckUpdateFn)g_truckWay)(first, second, third, fourth);
 }
 

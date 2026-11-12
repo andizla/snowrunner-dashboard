@@ -293,3 +293,9 @@ x
 ##diffaxle1
 ##diffaxle2
 ##airbrakes
+None###bind
+None###bind
+x
+x
+##winchrate
+##winchstep

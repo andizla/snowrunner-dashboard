@@ -21,6 +21,7 @@
 #include "models.h"
 #include "maps.h"
 #include "game_code.h"
+#include "winch_out.h"
 #include "game_globals.h"
 #include "clock_scan.h"
 #include "suspension_scan.h"
@@ -62,7 +63,22 @@ __declspec(noinline) static float FakeTruckUpdate(void *first, void *second, flo
     return third + fourth + (float)fifth + (second ? 0.5f : 0.0f);
 }
 static volatile LONG64 g_frameFirst = 0;
-static void FakeOnFrame(void *first) { g_frameFirst = (LONG64)first; }
+static volatile float g_frameStep = 0.0f;
+static void FakeOnFrame(void *first, float step) { g_frameFirst = (LONG64)first, g_frameStep = step; }
+
+// Stand-ins for the game's read and set of a rope's length (winch_out.h): the rope is as long as the longest asked.
+static float g_ropeLength = 0.0f, g_ropeAsked[32];
+static int g_ropeReads = 0, g_ropeSets = 0;
+static bool g_ropeSetFaults = false;
+static float FakeRopeGet(uint64_t) { g_ropeReads++; return g_ropeLength; }
+static bool FakeRopeSet(uint64_t, float length)
+{
+    if (g_ropeSetFaults) return false;
+    if (g_ropeSets < 32) g_ropeAsked[g_ropeSets] = length;
+    g_ropeSets++;
+    if (length > g_ropeLength) g_ropeLength = length;
+    return true;
+}
 
 // A stand-in for the game's wheels' drive (the creep's hook): the action, the throttle and the step's seconds, as
 // the game passes them; what it got is kept.
@@ -675,6 +691,15 @@ static void RealImageTest()
     const bool descRight = now ? descFound && descAt == 0xd7d550 : before ? descFound && descAt == 0xd7d5e0 : descFound;
     snprintf(line, sizeof line, "places in a real image (stamp %08x): the game's gearbox lookup at %zx%s%s", stamp, descAt, descFound ? "" : "; ", descWhy);
     Check(descRight, line);
+    // the rope length's read and set and the test of the two active bytes, for the winch probe (b1d870, b1d7d0 and d703e2
+    // on 6adb8627; b1d900, b1d860 and d70472 on 6ab52f5d; b1bfd0, b1bf30 and d6ea52 on 6a607c05); found once on any build
+    WinchPlace winchPlace;
+    const bool winchFound = WinchPlaceFind(image.data(), from, to, winchPlace);
+    const bool winchRight = now ? winchFound && winchPlace.get == 0xb1d870 && winchPlace.set == 0xb1d7d0 && winchPlace.bytes == 0xd703e2
+                          : before ? winchFound && winchPlace.get == 0xb1d900 && winchPlace.set == 0xb1d860 && winchPlace.bytes == 0xd70472 : winchFound;
+    snprintf(line, sizeof line, "places in a real image (stamp %08x): the rope length's read at %zx, its set at %zx, the test of the winch's two active bytes at %zx%s%s", stamp,
+             winchPlace.get, winchPlace.set, winchPlace.bytes, winchFound ? "" : "; ", winchPlace.why);
+    Check(winchRight, line);
     // the gear torque and the drive's call of it, for the torque cut (the research's d73dc0 and the drive's start + 0xCA on
     // 6adb8627, d73e50 on 6ab52f5d); on another build found once
     GearTorquePlace gearTorque;
@@ -2658,13 +2683,13 @@ int main()
         const long framesBefore = TruckUpdateFrames();
         g_fakeVehicle = 0;
         const float through = update(object, &second, 1.5f, 2.0f, 7);
-        const bool seen = g_frameFirst == (LONG64)(uintptr_t)object && TruckUpdateFrames() == framesBefore + 1 && g_fakeVehicle == truck;
+        const bool seen = g_frameFirst == (LONG64)(uintptr_t)object && g_frameStep == 2.0f && TruckUpdateFrames() == framesBefore + 1 && g_fakeVehicle == truck;
         const bool twice = TruckUpdateHook((uintptr_t)&FakeTruckUpdate, &FakeOnFrame, why, sizeof why);
         TruckUpdateUnhook();
         g_frameFirst = 0;
         const float after = update(object, &second, 1.5f, 2.0f, 7);
         Check(plain == 11.0f && hooked && through == 11.0f && seen && twice && after == 11.0f && g_frameFirst == 0 && TruckUpdateFrames() == framesBefore + 1,
-              "truck update hook: through Detours on a function with the game's signature, the callback gets the first argument, the function its five "
+              "truck update hook: through Detours on a function with the game's signature, the callback gets the first argument and the fourth (the step), the function its five "
               "arguments (the fifth on the stack) and its answer in xmm0 comes back; after the unhook it is its own again");
         if (!hooked) printf("     %s\n", why);
     }
@@ -4294,6 +4319,149 @@ int main()
         std::vector<uint8_t> empty(0x4000, 0xCC);
         const bool noneNot = !LockSetterFind(empty.data(), 0x10, empty.size(), at, why) && strstr(why, "not found");
         Check(found && twiceNot && noneNot, "diff lock setter's place in made-up code: its bytes once; not taken twice or where they are not");
+    }
+    // the winch probe's three places in made-up code: all three once; none where one is missing or stands twice
+    {
+        static const char *const three[3] = { kWinchGetPattern, kWinchSetPattern, kWinchBytesPattern };
+        static const size_t put[3] = { 0x1100, 0x1400, 0x1700 };
+        std::vector<uint8_t> code(0x4000, 0xCC);
+        uint8_t bytes[kPatternMax], mask[kPatternMax];
+        bool parsed = true;
+        for (int p = 0; p < 3; p++)
+        {
+            const int length = PatternParse(three[p], bytes, mask);
+            parsed = parsed && length > 0;
+            for (int i = 0; i < length; i++) code[put[p] + i] = bytes[i];
+        }
+        WinchPlace place;
+        const bool found = parsed && WinchPlaceFind(code.data(), 0x10, code.size(), place) && place.get == 0x1100 && place.set == 0x1400 && place.bytes == 0x1700 && !*place.why;
+        bool eachMissing = true, eachTwice = true;
+        for (int p = 0; p < 3; p++)
+        {
+            const int length = PatternParse(three[p], bytes, mask);
+            std::vector<uint8_t> gone = code, twice = code;
+            for (int i = 0; i < length; i++) gone[put[p] + i] = 0xCC, twice[put[p] + 0x2000 + i] = bytes[i];
+            eachMissing = eachMissing && !WinchPlaceFind(gone.data(), 0x10, gone.size(), place) && strstr(place.why, "not found") && !place.get && !place.set && !place.bytes;
+            eachTwice = eachTwice && !WinchPlaceFind(twice.data(), 0x10, twice.size(), place) && strstr(place.why, "more than once") && !place.get;
+        }
+        Check(found && eachMissing && eachTwice,
+              "winch probe's places in made-up code: the read, the set and the test of the two bytes, each once; nothing where one of the three is missing or stands twice");
+    }
+    // the winch probe's frame (winch_out.h): a truck update's first argument with the vehicle at + 0x20, the vehicle's
+    // rope, bytes and crane's byte in made-up memory, the game's two functions stood in for
+    {
+        const uint64_t ropeFirst = 0x7A1000000ull, ropeTruck = 0x7A2000000ull, ropeOther = 0x7A3000000ull, ropeThing = 0x7A4000000ull;
+        Block(ropeFirst, 0x40);
+        Block(ropeTruck, 0x1000);
+        Block(ropeOther, 0x1000);
+        Put(ropeFirst + 0x20, ropeTruck);
+        Put(ropeTruck + kWinchRopeAt, ropeThing);
+        WinchOutJob job;
+        auto anew = [&]() {
+            memset((void *)&job, 0, sizeof job);
+            g_ropeLength = 10.0f, g_ropeReads = g_ropeSets = 0, g_ropeSetFaults = false;
+        };
+        auto frame = [&](float dt, unsigned long long at) { return WinchOutFrame(job, kMemory, ropeFirst, dt, FakeRopeGet, FakeRopeSet, at); };
+        auto close = [](float a, float b) { return fabsf(a - b) < 0.0001f; };
+        const float tick = 1.0f / 60.0f;
+
+        // ten frames of 1/60 s at 0.5 m/s: ten calls, each the length read plus 0.5 / 60
+        anew();
+        int made = 0;
+        unsigned long long clock = 1000;
+        for (int i = 0; i < 10; i++, clock += 16)
+        {
+            WinchOutPost(job, true, ropeTruck, true, i == 0, 0.5f, 0.0f, clock);
+            made += frame(tick, clock) ? 1 : 0;
+        }
+        bool eachAsked = true;
+        for (int i = 0; i < 10; i++) eachAsked = eachAsked && close(g_ropeAsked[i], 10.0f + 0.5f * tick * (float)(i + 1));
+        const bool ten = made == 10 && g_ropeSets == 10 && g_ropeReads == 10 && eachAsked && job.calls == 10 && job.frames == 10 && job.hold == 1 && !job.shrunk &&
+                         close(WinchFloat(job.askedBits), 10.0f * 0.5f * tick) && close(WinchFloat(job.stepSumBits), 10.0f * tick) && WinchFloat(job.firstBits) == 10.0f;
+        // a read under what the frame before asked is counted (S3)
+        g_ropeLength = 9.5f;
+        WinchOutPost(job, true, ropeTruck, true, false, 0.5f, 0.0f, clock);
+        const bool shrunk = frame(tick, clock) && job.shrunk == 1 && close(g_ropeAsked[10], 9.5f + 0.5f * tick);
+        // released: no call, no read, no frame counted
+        WinchOutPost(job, true, ropeTruck, false, false, 0.5f, 0.0f, clock);
+        const bool released = !frame(tick, clock) && g_ropeSets == 11 && g_ropeReads == 11 && job.frames == 11;
+        Check(ten && shrunk && released,
+              "winch probe: ten frames of 1/60 s at 0.5 m/s make ten calls, each the length read plus 0.5 / 60; a read under what was asked is counted; released, no call and no read");
+
+        // the step's time: 0.5 s is held to 0.05, 0 makes no call; the mod's last pass 150 ms old makes none, 100 ms does
+        anew();
+        WinchOutPost(job, true, ropeTruck, true, true, 0.5f, 0.0f, 1000);
+        const bool longStep = frame(0.5f, 1000) && close(g_ropeAsked[0], 10.0f + 0.5f * kWinchDtMost);
+        const bool noStep = !frame(0.0f, 1000) && job.zeroStep == 1 && g_ropeSets == 1 && g_ropeReads == 1;
+        const bool stale = !frame(tick, 1150) && job.stale == 1 && g_ropeSets == 1 && g_ropeReads == 1;
+        const bool fresh = frame(tick, 1100) && g_ropeSets == 2;
+        Check(longStep && noStep && stale && fresh,
+              "winch probe: a step of 0.5 s is held to 0.05, a step of 0 makes no call; no call once the mod's last pass with the key held is 150 ms old, one at 100 ms");
+
+        // the gate and the skips: no call while the game's pull or its second active byte is on, with no rope of this
+        // truck, at a length of 0, on a crane's winch, in another vehicle's frame; each counted by its reason
+        anew();
+        WinchOutPost(job, true, ropeTruck, true, true, 0.5f, 0.0f, 1000);
+        Put(ropeTruck + kWinchPullAt, (uint8_t)1);
+        const bool pull = !frame(tick, 1000) && job.skipPull == 1 && !g_ropeReads;
+        Put(ropeTruck + kWinchPullAt, (uint8_t)0);
+        Put(ropeTruck + kWinchActiveAt, (uint8_t)1);
+        const bool active = !frame(tick, 1000) && job.skipActive == 1 && !g_ropeReads;
+        Put(ropeTruck + kWinchActiveAt, (uint8_t)0);
+        Put(ropeTruck + kWinchRopeAt, (uint64_t)0);
+        const bool noRope = !frame(tick, 1000) && job.noRope == 1 && !g_ropeReads;
+        Put(ropeTruck + kWinchRopeAt, ropeThing);
+        g_ropeLength = 0.0f;
+        const bool noLength = !frame(tick, 1000) && job.noLength == 1 && g_ropeReads == 1 && !g_ropeSets;
+        g_ropeLength = 10.0f;
+        Put(ropeTruck + kWinchCraneAt, (uint8_t)1);
+        const bool crane = !frame(tick, 1000) && job.crane == 1 && g_ropeReads == 1;
+        Put(ropeTruck + kWinchCraneAt, (uint8_t)0);
+        Put(ropeFirst + 0x20, ropeOther);
+        const long framesWere = job.frames;
+        const bool otherFrame = !frame(tick, 1000) && job.frames == framesWere && g_ropeReads == 1;
+        Put(ropeFirst + 0x20, ropeTruck);
+        const bool after = frame(tick, 1000) && g_ropeSets == 1 && job.calls == 1 && job.frames == framesWere + 1;
+        Check(pull && active && noRope && noLength && crane && otherFrame && after,
+              "winch probe: no call while the game's pull is on, while its second active byte is on, with no rope of this truck, at a length of 0, on a crane's winch or in "
+              "another vehicle's frame, each counted by its reason; a call again once all are clear");
+
+        // the step mode: one call a press of length + step, nothing while held; a refused press is taken and counted
+        anew();
+        WinchOutPost(job, true, ropeTruck, true, true, 0.5f, 0.25f, 1000);
+        const bool press = frame(tick, 1000) && close(g_ropeAsked[0], 10.25f) && !job.press;
+        WinchOutPost(job, true, ropeTruck, true, false, 0.5f, 0.25f, 1016);
+        const bool heldNot = !frame(tick, 1016) && !frame(tick, 1016) && g_ropeSets == 1 && job.frames == 1;
+        WinchOutPost(job, true, ropeTruck, true, true, 0.5f, 0.25f, 1032);
+        const bool again = frame(tick, 1032) && close(g_ropeAsked[1], 10.5f);
+        Put(ropeTruck + kWinchPullAt, (uint8_t)1);
+        WinchOutPost(job, true, ropeTruck, true, true, 0.5f, 0.25f, 1048);
+        const bool refused = !frame(tick, 1048) && job.refused == 1 && job.skipPull == 1 && !job.press;
+        Put(ropeTruck + kWinchPullAt, (uint8_t)0);
+        const bool taken = !frame(tick, 1048) && g_ropeSets == 2;
+        Check(press && heldNot && again && refused && taken,
+              "winch probe, the step mode: one call a press of the length plus the step, none while held; a press refused by the game's pull is counted and not kept");
+
+        // off (Probe=0, or no truck): the job rests whatever the key does; a fault in either function ends the calls
+        anew();
+        WinchOutPost(job, false, ropeTruck, true, true, 0.5f, 0.25f, 1000);
+        const bool offNot = !job.held && !job.press && !job.vehicle && !frame(tick, 1000) && !g_ropeReads;
+        WinchOutPost(job, true, 0, true, true, 0.5f, 0.0f, 1000);
+        const bool noTruck = !job.held && !frame(tick, 1000) && !g_ropeReads;
+        WinchOutPost(job, true, ropeTruck, true, true, 0.5f, 0.0f, 1000);
+        g_ropeSetFaults = true;
+        const bool setFault = !frame(tick, 1000) && job.fault == 2 && !job.calls;
+        g_ropeSetFaults = false;
+        const bool callsEnded = !frame(tick, 1000) && g_ropeReads == 1;
+        anew();
+        WinchOutPost(job, true, ropeTruck, true, true, 0.5f, 0.0f, 1000);
+        g_ropeLength = NAN;
+        const bool getFault = !frame(tick, 1000) && job.fault == 1 && !g_ropeSets;
+        const bool wanted = WinchOutWanted(true, true) && !WinchOutWanted(false, true) && !WinchOutWanted(true, false) && GearboxHooksWanted(0, false, false, false, true).truckUpdate &&
+                            !GearboxHooksWanted(0, false, false, false, true).shifts && !GearboxHooksWanted(0, true, false, true, false).truckUpdate;
+        Check(offNot && noTruck && setFault && callsEnded && getFault && wanted,
+              "winch probe: with the probe off or no truck the job rests whatever the key does; a fault in the set or the read ends the calls; the truck update is asked "
+              "for only with Probe=1 and the action bound, at any Gearbox");
     }
 
     // the chassis push in the wheels' drive's hook (BRIEF_chassis_push.md): four driven wheels, two on the chassis, one on a

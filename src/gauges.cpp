@@ -55,6 +55,7 @@ int NgMenuKeyFromIni(); // the menu's key, which a capture never binds
 #endif
 #include "tune_figures.h"
 #include "warn_list.h"
+#include "winch_out.h"
 
 static HMODULE g_self = nullptr;
 static std::wstring g_dir; // the game's folder, with the last backslash
@@ -821,6 +822,11 @@ static void WriteIni(const GaugeSettings &s)
     whole(L"RoadLoad", s.roadLoad ? 1 : 0);
     WritePrivateProfileStringW(kIniSection, L"CrawlHold", nullptr, ini.c_str()); // the Crawl hold went with the torque cut: its key dropped
     num(L"EngineBrake", s.engineBrake);
+    if (s.probe) // the probe's own two keys (winch_out.h): in no ini without Probe=1
+    {
+        num(L"WinchOutRate", s.winchOutRate);
+        num(L"WinchOutStep", s.winchOutStep);
+    }
     whole(L"WheelCap", s.wheelCap);
     whole(L"LowRangeSlip", s.lowRangeSlip);
     whole(L"HeldGearSlip", s.heldGearSlip);
@@ -1347,6 +1353,8 @@ static void ReadIni(GaugeSettings &s)
     s.diffLockBite = IniInt(L"DiffLockBite", s.diffLockBite, ini);
     s.diffType = IniInt(L"DiffType", s.diffType, ini);
     s.engineBrake = IniFloat(L"EngineBrake", s.engineBrake, ini); // CrawlHold= is read no more: the torque cut took its place
+    s.winchOutRate = IniFloat(L"WinchOutRate", s.winchOutRate, ini);
+    s.winchOutStep = IniFloat(L"WinchOutStep", s.winchOutStep, ini);
     s.modEngineSpeed = IniBool(L"ModEngineSpeed", s.modEngineSpeed, ini);
     s.engineSpeedTop = IniFloat(L"EngineSpeedTop", s.engineSpeedTop, ini);
     s.roadCdA = IniFloat(L"RoadCdA", s.roadCdA, ini);
@@ -2976,6 +2984,7 @@ static void SettingsWrite(SettingsState &st)
 // not there keeps the default: up, down, N, R and A on the number pad, which the game, the shipped ReShade.ini (Home
 // alone) and the usual mods leave alone.
 static_assert(kActCount <= kViewActions, "the view holds the bindings of every action");
+static_assert(kActWinchOut == kViewActions - 1, "the tab's last row is the winch probe's, shown with Probe=1 alone");
 static_assert(kActDiffLock == kViewShifts && kActAwd == kViewShifts + 1, "the tab's rows of the locks follow the shifter's");
 static const wchar_t *const kBindSection = L"Gearbox";
 
@@ -3034,7 +3043,9 @@ static void BindingWriteOne(const std::wstring &ini, const GearBindings &b, int 
     char text[96];
     BindingKey(a, slot, key, 48);
     BindingText(b.slot[a][slot], text, sizeof text);
-    WritePrivateProfileStringW(kBindSection, key, Wide(text).c_str(), ini.c_str());
+    // the winch probe's key is in the ini only while it is bound
+    const bool none = a == kActWinchOut && b.slot[a][slot].kind == kBindNone;
+    WritePrivateProfileStringW(kBindSection, key, none ? nullptr : Wide(text).c_str(), ini.c_str());
 }
 
 static void BindingsWrite(const std::wstring &ini, const GearBindings &b)
@@ -3681,6 +3692,51 @@ static bool GameShiftCall(uint64_t vehicle, int gear)
 #endif
 }
 
+// ---- the winch rope let out, a probe (winch_out.h; BRIEF_winch_out_probe.md) ----
+// The game's read of a rope's length and its set of one, once the code look found both and the test of the two active
+// bytes (game_code.h, WinchPlaceFind). Called only from the truck update's frame, each behind a fault guard: a fault
+// ends the probe for the session (WinchOutFrame).
+typedef float (*GameWinchGetFn)(void *vehicle);
+typedef void (*GameWinchSetFn)(void *vehicle, float length);
+static GameWinchGetFn g_winchGet = nullptr;
+static GameWinchSetFn g_winchSet = nullptr;
+static WinchOutJob g_winchJob = {};
+static bool g_winchBound = false; // Winch out has a binding: the mod's thread sets it, the gate reads it
+
+static float WinchGetCall(uint64_t vehicle)
+{
+#ifdef _MSC_VER
+    __try
+    {
+        return g_winchGet((void *)vehicle);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return NAN;
+    }
+#else
+    return g_winchGet((void *)vehicle);
+#endif
+}
+
+static bool WinchSetCall(uint64_t vehicle, float length)
+{
+#ifdef _MSC_VER
+    __try
+    {
+        g_winchSet((void *)vehicle, length);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+#else
+    g_winchSet((void *)vehicle, length);
+    return true;
+#endif
+}
+
 static bool GameShift(uint64_t vehicle, int gear)
 {
     if (!g_shiftGear || vehicle < 0x10000) return false;
@@ -3901,7 +3957,7 @@ static int GearboxBlocked(const FunctionFind finds[kFnCount])
 // found) and the callback the truck update's hook runs every frame (below PeekGame).
 static StallJob g_stallJob = {};
 static void (*g_damageUpdate)(uint64_t) = nullptr;
-static void OnTruckFrame(void *first);
+static void OnTruckFrame(void *first, float step);
 static bool g_truckFrames = false; // the truck update is hooked: its jobs are dealt
 static bool g_lockPattern = false; // the diff lock's setter found once at the code look: the kind is at vehicle + 0xE8 (BRIEF_diff_lock_bite.md)
 
@@ -4000,6 +4056,19 @@ static void GameCodeLook(const GaugeSettings &s)
         }
         else Log(L"gearbox positions: %S, so every truck has all positions", why);
     }
+    {
+        WinchPlace winch = {};
+        if (WinchPlaceFind(code.data(), from, to, winch))
+        {
+            g_winchGet = (GameWinchGetFn)(g_base + winch.get);
+            g_winchSet = (GameWinchSetFn)(g_base + winch.set);
+            Log(L"winch out: the game's read of the rope length at +%zx and its set at +%zx; its test of the two active bytes at +%zx says they are at vehicle + 0x8C8 "
+                L"and + 0x8C9. The rope at + 0x8B0, the winch's own length at + 0x8F0 and the crane's byte at + 0x904 are the three known builds' offsets, not "
+                L"checked on this one. A test: only with Probe=1 and Winch out bound",
+                winch.get, winch.set, winch.bytes);
+        }
+        else Log(L"winch out: %S, so the test that lets the rope out does nothing in this game", winch.why);
+    }
     if (TruckInputFind(code.data(), from, to, g_input))
         Log(L"engine sound: the game's truck input at +%zx, its handle helper at +%zx; hooked once Powertrain and ModEngineSpeed are on with a truck driven", g_input.input,
             g_input.helper);
@@ -4045,7 +4114,8 @@ static void GearboxHooksStep(const GaugeSettings &s)
     if (!g_hooksReady) return;
     static HooksGate gate = {};
     static bool saidNone = false, saidNoTruck = false;
-    const HooksWanted want = GearboxHooksWanted(s.gearbox, s.damage, s.shiftOnGameThread != 0, s.positionsByGearbox);
+    const bool winchProbe = WinchOutWanted(s.probe != 0, g_winchBound) && g_winchGet && g_winchSet;
+    const HooksWanted want = GearboxHooksWanted(s.gearbox, s.damage, s.shiftOnGameThread != 0, s.positionsByGearbox, winchProbe);
     const int act = GearboxGateStep(gate, want);
     if (!want.shifts && !gate.shifts && !saidNone)
     {
@@ -4091,6 +4161,7 @@ static void GearboxHooksStep(const GaugeSettings &s)
             Log(L"gearbox damage: dealt on the game's own thread, from its truck update at +%zx (hooked at Gearbox=2 with Damage on, or with ShiftOnGameThread=1), with its "
                 L"damage update at +%zx after; the mod's shifts are dealt there too (ShiftOnGameThread=%d)",
                 g_path.truckUpdate, g_path.damageUpdate, s.shiftOnGameThread);
+            if (winchProbe) Log(L"winch out: the truck update is hooked for the test (Probe=1 with Winch out bound)");
         }
     }
     if ((act & kGateAttachTruck) && !g_truckFrames) g_positionsOff = L"the game's truck update is not hooked";
@@ -4308,16 +4379,91 @@ static bool ShiftOnGame(uint64_t vehicle, int gear) { return g_shiftGear && Game
 
 // On the game's thread, every frame of its truck update: a shift's job and a stall's dealt for the truck the update
 // is for, and + 0x70 watched after a shift.
-static void OnTruckFrame(void *first)
+static void OnTruckFrame(void *first, float step)
 {
     const TruckMemory m = { PeekGame, g_base, PokeGame };
     const long frame = TruckUpdateFrames();
+    // the winch probe, before the stall job's early return below (winch_out.h): nothing unless the key is held
+    if (g_winchJob.held || g_winchJob.press) WinchOutFrame(g_winchJob, m, (uint64_t)first, step, WinchGetCall, WinchSetCall, GetTickCount64());
     if (g_shiftJob.state == kShiftPosted) ShiftJobFrame(g_shiftJob, g_engage, m, (uint64_t)first, ShiftOnGame, frame, GetCurrentThreadId(), GetTickCount64());
     EngageFrame(g_engage, m, frame);
     if (g_positionsJob.state == kPosJobPosted && g_gearboxDesc && !g_positionsFault)
         PositionsJobFrame(g_positionsJob, m, (uint64_t)first, GearboxDescCall, GetTickCount64());
     if (g_stallJob.state != kStallJobPosted) return;
     StallJobFrame(g_stallJob, m, (uint64_t)first, g_damageUpdate);
+}
+
+// The winch probe on the mod's thread, every pass (winch_out.h): the job posted for the frame, and the log. vehicle:
+// the driven truck's, 0 none; held and pressed: Winch out on this pass, false wherever the keys are not heard.
+//   One line at each hold's start, one a second while held, one at its end, each with what the frame counted in this
+//   hold; one in capitals where a call faulted.
+static void WinchOutPass(const GaugeSettings &s, uint64_t vehicle, bool held, bool pressed)
+{
+    WinchOutJob &j = g_winchJob;
+    static bool wasHeld = false, saidFault = false, saidWhy = false;
+    static unsigned long long saidAt = 0;
+    static uint64_t holdVehicle = 0;
+    static LONG from[11];
+    static float fromAsked = 0.0f, fromSteps = 0.0f;
+    const unsigned long long now = GetTickCount64();
+    if (j.fault && !saidFault)
+    {
+        saidFault = true;
+        Log(L"WINCH OUT: the game's %s of the rope length faulted on the game's thread, so the test is off until the game is started again. The rope may be gone: hook the winch again",
+            j.fault == 1 ? L"read" : L"set");
+    }
+    const wchar_t *why = !s.probe ? L"" : j.fault ? L"a call faulted" : !g_winchGet || !g_winchSet ? L"the game's functions were not found" : !g_truckFrames ? L"the game's truck update is not hooked" : nullptr;
+    if (why && *why && pressed && !saidWhy)
+    {
+        saidWhy = true;
+        Log(L"winch out: nothing done: %s", why);
+    }
+    const bool on = !why;
+    held = held && on && vehicle;
+    WinchOutPost(j, on, vehicle, held, pressed && on, s.winchOutRate, s.winchOutStep, now);
+    auto counts = [&](LONG out[11]) {
+        const LONG v[11] = { j.frames, j.calls, j.skipPull, j.skipActive, j.noRope, j.noLength, j.crane, j.stale, j.zeroStep, j.shrunk, j.refused };
+        memcpy(out, v, sizeof v);
+    };
+    auto say = [&](const wchar_t *head) {
+        LONG c[11];
+        counts(c);
+        for (int i = 0; i < 11; i++) c[i] -= from[i];
+        const float first = WinchFloat(j.firstBits);
+        wchar_t firstText[32] = L"not read";
+        if (isfinite(first)) swprintf_s(firstText, L"%.3f m", first);
+        Log(L"winch out: %s: the rope %.3f m (at the start of the hold %s), %ld calls in %ld frames asked %.3f m more over %.3f s of steps; no call: the game's pull %ld, "
+            L"its second active byte %ld, no rope of this truck %ld, a length of 0 %ld, a crane %ld, the mod's pass late %ld, a step of 0 %ld; presses with no call %ld; "
+            L"a read under what was asked %ld",
+            head, c[1] ? WinchFloat(j.lengthBits) : 0.0f, firstText, c[1], c[0], WinchFloat(j.askedBits) - fromAsked, WinchFloat(j.stepSumBits) - fromSteps, c[2], c[3], c[4],
+            c[5], c[6], c[7], c[8], c[10], c[9]);
+    };
+    if (held && !wasHeld)
+    {
+        const TruckMemory m = { PeekGame, g_base, PokeGame };
+        counts(from);
+        fromAsked = WinchFloat(j.askedBits), fromSteps = WinchFloat(j.stepSumBits);
+        holdVehicle = vehicle, saidAt = now;
+        uint64_t rope = 0;
+        uint8_t pull = 0, active = 0, crane = 0;
+        float own = 0.0f;
+        const bool read = m.get(vehicle + kWinchRopeAt, rope) && m.get(vehicle + kWinchPullAt, pull) && m.get(vehicle + kWinchActiveAt, active) &&
+                          m.get(vehicle + kWinchOwnAt, own) && m.get(vehicle + kWinchCraneAt, crane);
+        wchar_t how[64];
+        if (s.winchOutStep > 0.0f) swprintf_s(how, L"%.2f m a press (WinchOutStep)", s.winchOutStep);
+        else swprintf_s(how, L"%.2f m/s (WinchOutRate)", s.winchOutRate);
+        if (read)
+            Log(L"winch out: held on vehicle %llx at %s: its rope %s, the winch's own length %.2f m, the game's pull byte %d, its second active byte %d, a crane's %d",
+                (unsigned long long)vehicle, how, rope ? L"is there" : L"is not there", own, pull, active, crane);
+        else Log(L"winch out: held on vehicle %llx at %s: the winch's fields were not read", (unsigned long long)vehicle, how);
+    }
+    else if (held && now - saidAt >= 1000)
+    {
+        saidAt = now;
+        say(L"held");
+    }
+    else if (!held && wasHeld) say(holdVehicle && vehicle != holdVehicle ? L"ended, another truck or none" : L"released");
+    wasHeld = held;
 }
 
 // Havok's wheel constraint's vtable in the game (suspension_scan.h), by its RTTI name, looked for once: 0 where it is
@@ -9017,6 +9163,9 @@ static DWORD WINAPI Run(void *)
             // the two axle levers (BRIEF_axle_diff.md, M7)
             if (locksHeard && states[kActLockFront].pressed) AxleLeverPress(watch, true);
             if (locksHeard && states[kActLockRear].pressed) AxleLeverPress(watch, false);
+            // the winch probe (winch_out.h): every pass, so a hold ends wherever the keys are not heard
+            g_winchBound = binds.slot[kActWinchOut][0].kind != kBindNone || binds.slot[kActWinchOut][1].kind != kBindNone;
+            WinchOutPass(s, watch.found ? watch.refs.vehicle : 0, locksHeard && states[kActWinchOut].held, locksHeard && states[kActWinchOut].pressed);
             if (locksHeard && states[kActSway].pressed)
             {
                 watch.swayOff = !watch.swayOff;
@@ -9844,7 +9993,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.overRevDamage == b.overRevDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
            a.springFront == b.springFront && a.dampingFront == b.dampingFront && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.hiddenWarnings == b.hiddenWarnings && a.warnFuel == b.warnFuel && a.warnEngine == b.warnEngine && a.warnGearbox == b.warnGearbox && a.warnCoolant == b.warnCoolant && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
-           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.heldGearSlip == b.heldGearSlip && a.lowRangeSlip == b.lowRangeSlip && a.diffType == b.diffType && a.physicsRate == b.physicsRate && a.engineBrake == b.engineBrake && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
+           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.heldGearSlip == b.heldGearSlip && a.lowRangeSlip == b.lowRangeSlip && a.diffType == b.diffType && a.physicsRate == b.physicsRate && a.engineBrake == b.engineBrake && a.winchOutRate == b.winchOutRate && a.winchOutStep == b.winchOutStep && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
            a.camberGainFront == b.camberGainFront && a.camberGainRear == b.camberGainRear && a.camberRestFront == b.camberRestFront && a.camberRestRear == b.camberRestRear &&
            !memcmp(a.diffAxle, b.diffAxle, sizeof a.diffAxle) && a.airBrakes == b.airBrakes;
 }
@@ -9920,6 +10069,47 @@ int wmain(int argc, wchar_t **argv)
         Check(old.engineBrake == 22.0f && !wcscmp(kept, L"none") && high.engineBrake == 30.0f && back.engineBrake == 15.0f,
               "settings: an old CrawlHold= is ignored and dropped at the next write; EngineBrake 22 read back, 80 held to 30, 15 by default");
         WriteIni(back);
+    }
+    // the winch probe's two keys (winch_out.h): written only with Probe=1, read back, held to their ranges; its binding's
+    // key is in the ini only while bound
+    {
+        GaugeSettings plain;
+        SettingsDefaults(plain);
+        WritePrivateProfileStringW(kIniSection, L"WinchOutRate", nullptr, ini.c_str());
+        WritePrivateProfileStringW(kIniSection, L"WinchOutStep", nullptr, ini.c_str());
+        WriteIni(plain);
+        wchar_t rateKept[16] = L"", bindKept[32] = L"";
+        GetPrivateProfileStringW(kIniSection, L"WinchOutRate", L"none", rateKept, 16, ini.c_str());
+        GaugeSettings probing = plain;
+        probing.probe = 1, probing.winchOutRate = 1.25f, probing.winchOutStep = 0.5f;
+        WriteIni(probing);
+        GaugeSettings readBack;
+        SettingsDefaults(readBack);
+        ReadIni(readBack);
+        SettingsClamp(readBack);
+        WritePrivateProfileStringW(kIniSection, L"WinchOutRate", L"9", ini.c_str());
+        WritePrivateProfileStringW(kIniSection, L"WinchOutStep", L"-1", ini.c_str());
+        GaugeSettings wide;
+        SettingsDefaults(wide);
+        ReadIni(wide);
+        SettingsClamp(wide);
+        GearBindings none = {}, bound = {};
+        bound.slot[kActWinchOut][0].kind = kBindKey, bound.slot[kActWinchOut][0].code = 'K';
+        wchar_t bindKey[48];
+        BindingKey(kActWinchOut, 0, bindKey, 48);
+        BindingsWrite(ini, bound);
+        GearBindings boundBack = {};
+        BindingsRead(ini, boundBack, false);
+        BindingsWrite(ini, none);
+        GetPrivateProfileStringW(kBindSection, bindKey, L"none", bindKept, 32, ini.c_str());
+        Check(!wcscmp(rateKept, L"none") && plain.winchOutRate == 0.5f && plain.winchOutStep == 0.0f && readBack.winchOutRate == 1.25f && readBack.winchOutStep == 0.5f &&
+              wide.winchOutRate == 2.0f && wide.winchOutStep == 0.0f && !SameSettings(plain, probing) && boundBack.slot[kActWinchOut][0].kind == kBindKey &&
+              boundBack.slot[kActWinchOut][0].code == 'K' && !wcscmp(bindKept, L"none") && !strcmp(kActionNames[kActWinchOut], "WinchOut"),
+              "settings: WinchOutRate and WinchOutStep are in no ini without Probe=1, with it 1.25 and 0.5 read back, 9 held to 2.0 and -1 to 0; the WinchOut binding's "
+              "key is there only while bound");
+        WritePrivateProfileStringW(kIniSection, L"WinchOutRate", nullptr, ini.c_str());
+        WritePrivateProfileStringW(kIniSection, L"WinchOutStep", nullptr, ini.c_str());
+        WriteIni(plain);
     }
     // the torque cut wants Powertrain, Gearbox=2, EngineShare above 0 and ModEngineSpeed (the Reviewer's M2): with the
     // game's own engine speed it is not published, so the throttle and B4 pass as they came
