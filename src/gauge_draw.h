@@ -861,8 +861,9 @@ static void GWarnBox(ImDrawList *dl, const GaugeFonts &f, ImVec2 at, float u, fl
     TextDraw(dl, f, kWsTitle, P(44, 50), GCol(255, 255, 255, a), b.title, -1, u);
     TextDraw(dl, f, kWsLine, P(44, 101), GCol(142, 150, 152, a), b.line, -1, u);
     const int shown = b.percent < 0 ? 0 : b.percent > 100 ? 100 : b.percent;
-    char text[8];
-    snprintf(text, sizeof text, "%d%%", shown);
+    char text[16];
+    if (b.figure[0]) snprintf(text, sizeof text, "%s", b.figure);
+    else snprintf(text, sizeof text, "%d%%", shown);
     TextDraw(dl, f, kWsTitle, P(kWarnW - 44, 50), col, text, 1, u);
     dl->AddRectFilled(P(12, kWarnH - 9), P(kWarnW, kWarnH), GCol(33, 33, 33, a), 3.0f * u, ImDrawFlags_RoundCornersBottomRight);
     dl->AddRectFilled(P(12, kWarnH - 9), P(12 + (kWarnW - 12) * (float)shown / 100.0f, kWarnH), col);

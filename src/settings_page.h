@@ -232,6 +232,39 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         ImGui::SetNextItemWidth(w);
         changed(ImGui::Combo("##layout", &s.layout, layouts, kLayoutCount));
         PageTip("Where the cluster sits. Spotter dials and Spotter digital draw it in the HUD style of Spotter. Off draws no dials: the features act as before. Default: Strip.");
+        if (off)
+        {
+            // the warnings with the dials off (warn_list.h): the choice, and with "At my limits" a slider a limit, each with an off end
+            static const char *warns[kHwCount] = { "None", "As with dials", "At my limits" };
+            PageLabel("Warnings", labelX);
+            ImGui::SetNextItemWidth(w);
+            changed(ImGui::Combo("##hiddenwarnings", &s.hiddenWarnings, warns, kHwCount));
+            PageTip("What still warns with the dials off. None: no box and no lamp. As with dials: the clutch and engine boxes. At my limits: a box when a figure passes its limit below.");
+            if (s.hiddenWarnings == kHwLimits)
+            {
+                PageLabel("Fuel under", labelX);
+                ImGui::SetNextItemWidth(w);
+                changed(ImGui::SliderInt("##warnfuel", &s.warnFuel, 0, 50, s.warnFuel > 0 ? "%d %%" : "off", ImGuiSliderFlags_AlwaysClamp));
+                PageTip("A LOW FUEL box while the tank holds less than this share. 0 is off. Default 15.");
+                PageLabel("Engine damage over", labelX);
+                ImGui::SetNextItemWidth(w);
+                changed(ImGui::SliderInt("##warnengine", &s.warnEngine, 0, 100, s.warnEngine < 100 ? "%d %%" : "off", ImGuiSliderFlags_AlwaysClamp));
+                PageTip("An ENGINE WORN box while the engine damage is over this share of what the engine takes. 100 is off. Default 50.");
+                PageLabel("Gearbox damage over", labelX);
+                ImGui::SetNextItemWidth(w);
+                changed(ImGui::SliderInt("##warngearbox", &s.warnGearbox, 0, 100, s.warnGearbox < 100 ? "%d %%" : "off", ImGuiSliderFlags_AlwaysClamp));
+                PageTip("A GEARBOX WORN box while the gearbox damage is over this share of what the gearbox takes. 100 is off. Default 50.");
+                char warm[16], red[16], tip[200];
+                degrees(kTempWarm, warm, sizeof warm);
+                degrees(kTempRed, red, sizeof red);
+                _snprintf_s(tip, _TRUNCATE, "An ENGINE HOT box from this share of the way from warm (%s) to the red mark (%s). 100 is off. Default 90.", warm, red);
+                PageLabel("Coolant over", labelX);
+                ImGui::SetNextItemWidth(w);
+                changed(ImGui::SliderInt("##warncoolant", &s.warnCoolant, 50, 100, s.warnCoolant < 100 ? "%d %%" : "off", ImGuiSliderFlags_AlwaysClamp));
+                PageTip(tip);
+                ImGui::TextDisabled("Oil, tilt and brake air warn at their own points.");
+            }
+        }
         ImGui::BeginDisabled(s.layout == kLayoutHudDigital || off);
         PageLabel("Swap dials", labelX);
         changed(ImGui::Checkbox("##swapdials", &s.swapDials));

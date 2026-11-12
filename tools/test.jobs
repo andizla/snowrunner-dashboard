@@ -16,5 +16,5 @@ late_test_late row :: out\test\late_test.exe late
 late_test_order row :: out\test\late_test.exe order
 late_test_handover row :: out\test\late_test.exe handover
 # the player texts carry no apostrophe (BRIEF_texts_no_apostrophes.md): the tabs, the tips, the boxes and the panel
-player_texts :: python -I test\player_texts.py src\tune_figures.h src\settings_page.h src\gauge_draw.h src\gauge_overlay.cpp src\ng_overlay.cpp
+player_texts :: python -I test\player_texts.py src\tune_figures.h src\warn_list.h src\settings_page.h src\gauge_draw.h src\gauge_overlay.cpp src\ng_overlay.cpp
 preview row :: if exist out\test\gauge_preview.exe (out\test\gauge_preview.exe out\preview "%FONTS%" %SHOT%) else (echo no out\test\gauge_preview.exe: the preview was not built)

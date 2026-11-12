@@ -85,6 +85,7 @@ inline const wchar_t *LayoutName(int layout)
     return names[layout < 0 || layout >= kLayoutCount ? kLayoutStrip : layout];
 }
 enum { kFaceSolid, kFaceTinted, kFaceOpen, kFaceCount };     // GaugeSettings::style
+enum { kHwNone, kHwAsDials, kHwLimits, kHwCount };           // GaugeSettings::hiddenWarnings (warn_list.h)
 enum { kClassTruck, kClassScout, kClassHeavy, kClassCount }; // GaugeSettings::tachClass
 enum { kOilOff, kOilNeedle, kOilDial, kOilGaugeCount };      // GaugeSettings::oilGauge
 enum { kSpoolStandard, kSpoolQuick, kSpoolLaggy, kSpoolTwoStage, kSpoolCount }; // GaugeSettings::boostProfile
@@ -187,6 +188,11 @@ struct GaugeSettings
     bool airSync;            // AirSync: the Suspension tab shows the row with the air's height slider (a view setting)
     int shiftOnGameThread;   // ShiftOnGameThread (ini only, 1 by default): the mod's shifts dealt on the game's thread in its truck update; 0 calls the game's ShiftGear from the mod's thread as before (review 17, step 1)
     int suspStepTest;        // SuspStepTest (ini only, a test, with Probe=1): every 20 s wheel 0's spring at half for 1 s standing (1), its damping at a tenth for 0.5 s moving (2), or its attach point 2 cm toward the droop for 1 s standing (3)
+    int hiddenWarnings;      // HiddenWarnings: what warns while the Layout is Off: 0 nothing, seen or heard, 1 the clutch's and the engine's box as with dials, 2 a box at the limits below
+    int warnFuel;            // WarnFuelUnder: percent of the tank, 0 to 50; 0 = off
+    int warnEngine;          // WarnEngineOver: percent of the engine damage the engine takes, 0 to 100; 100 = off
+    int warnGearbox;         // WarnGearboxOver: the same of the gearbox
+    int warnCoolant;         // WarnCoolantOver: percent of the way from kTempWarm to kTempRed, 50 to 100; 100 = off
     int soundVolume;        // SoundVolume: how loud the turbo's flutter and the oil warning are, 0 to 100; 0 = no sound
     bool soundsOnly;         // SoundsOnly: the sounds are played and the cluster is not drawn
     bool dieselFlutter;      // DieselFlutter: a diesel's lift flutters too; off, it is quiet, or plays the player's own turbo whistle files (review 12, finding 6)
@@ -270,6 +276,11 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.zoneFirm = 1.5f;
     s.zoneFrom = 0.1f;
     s.zoneTo = 0.6f;
+    s.hiddenWarnings = kHwAsDials;
+    s.warnFuel = 15;
+    s.warnEngine = 50;
+    s.warnGearbox = 50;
+    s.warnCoolant = 90;
     s.soundVolume = 50;
     strncpy_s(s.padToggle, "None", _TRUNCATE);
     s.physicsRate = 60;
@@ -434,6 +445,11 @@ inline void SettingsClamp(GaugeSettings &s)
     s.zoneTo = SettingsRange(s.zoneTo, 0.0f, 1.0f);
     if (s.zoneFrom >= s.zoneTo) s.zoneFrom = 0.1f, s.zoneTo = 0.6f; // the soft part needs a width
     s.toggleKey = s.toggleKey < 0 || s.toggleKey > 255 ? 0 : s.toggleKey;
+    s.hiddenWarnings = s.hiddenWarnings < 0 || s.hiddenWarnings >= kHwCount ? kHwAsDials : s.hiddenWarnings;
+    s.warnFuel = s.warnFuel < 0 ? 0 : s.warnFuel > 50 ? 50 : s.warnFuel;
+    s.warnEngine = s.warnEngine < 0 ? 0 : s.warnEngine > 100 ? 100 : s.warnEngine;
+    s.warnGearbox = s.warnGearbox < 0 ? 0 : s.warnGearbox > 100 ? 100 : s.warnGearbox;
+    s.warnCoolant = s.warnCoolant < 50 ? 50 : s.warnCoolant > 100 ? 100 : s.warnCoolant;
     s.soundVolume = s.soundVolume < 0 ? 0 : s.soundVolume > 100 ? 100 : s.soundVolume;
     s.probe = s.probe < 0 ? 0 : s.probe;
     s.keepLogs = s.keepLogs < 0 ? 0 : s.keepLogs > 1000 ? 1000 : s.keepLogs;
@@ -561,15 +577,19 @@ void BindingAsk(int what, int action, int slot);
 enum { kBindAskCapture = 1, kBindAskClear = 2, kBindAskCancel = 3 };
 // A warning box (models.h, ClutchWarn and EngineWarn; drawn by gauge_draw.h, GWarnBox, the tire mod's TIRE DAMAGE box's
 // shape): none, amber or red, its title and line of advice (string literals), and the number at its right and the bar
-// along its bottom in percent, 0 to 100.
+// along its bottom in percent, 0 to 100. figure: where it is not empty it stands at the right in place of the percent
+// (degrees, bar), and the percent is the bar's alone.
 enum { kWarnNone, kWarnAmber, kWarnRed };
 struct WarnBox
 {
     int state;
     const char *title, *line;
     int percent;
+    char figure[12];
 };
-enum { kWarnClutch, kWarnEngine, kWarnBoxes };
+// The view holds three boxes. With dials shown the first is the clutch's and the second the engine's, each in its own
+// slot. With the Layout at Off they are a stack, made by WarnListMake (warn_list.h).
+enum { kWarnClutch, kWarnEngine, kWarnBoxes = 3 };
 
 // The suspension display's figures (build B), at most kViewWheels wheels: each wheel's place along its axis and its travel
 // (m, compression negative), its rest place, a hit of the compression end in the last second, whether it hangs (at or past
@@ -592,7 +612,7 @@ struct SuspDisplayView
 // functions. Either way the mod's gearbox stands down (the tab says why). warn: the clutch's and the engine's warning
 // boxes while a truck is driven.
 enum { kRateNoteNone, kRateNoteOff, kRateNoteIter, kRateNoteStep, kRateNotePart };
-struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWarnBoxes]; int engineDamage, engineCapacity; char truck[96]; char idWords[96]; bool truckOwn, suspOwn, suspKept, suspIdKnown, suspTruckKept, suspKindSet, smtInstalled, gearboxHeld; int suspLevel; char map[96], mapFrom[64]; bool mapOwn; float ambientC;
+struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWarnBoxes]; bool warnStacked; int engineDamage, engineCapacity; char truck[96]; char idWords[96]; bool truckOwn, suspOwn, suspKept, suspIdKnown, suspTruckKept, suspKindSet, smtInstalled, gearboxHeld; int suspLevel; char map[96], mapFrom[64]; bool mapOwn; float ambientC;
                    int pullTest, pullPhase; const char *pullWhy;
                    float ambientDay, ambientNight, hour; // the map's day and night (with mapOwn), the hour of the game's day (-1 not known)
                    SuspDisplayView susp; DdShown drive; bool driveShown; bool swayOff; float rideRest[2]; bool rideRestKnown; // the display's figures; the bars disconnected; each axle's rest place along its axis (front, rear; cm), from the probe

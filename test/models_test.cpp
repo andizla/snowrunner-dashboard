@@ -35,6 +35,7 @@
 #include "gearbox_model.h"
 #include "sound.h"
 #include "state.h"
+#include "warn_list.h"
 #include "tires.h"
 #include "torque_cut_sim.h"
 
@@ -6645,6 +6646,241 @@ int main(int argc, char **argv)
         if (whole) CloseHandle(whole);
         const bool modes = StateGearMode("") == SRG_GEAR_NUMBER && StateGearMode(nullptr) == SRG_GEAR_NUMBER && StateGearMode("H") == SRG_GEAR_H &&
                            StateGearMode("L-") == SRG_GEAR_L_MINUS && StateGearMode("L") == SRG_GEAR_L && StateGearMode("L+") == SRG_GEAR_L_PLUS;
+        // the warnings with the dials off (warn_list.h, BRIEF_dials_off_option.md with addendum 2)
+        {
+            GaugeSettings ws;
+            SettingsDefaults(ws);
+            const WarnBox noBox = { kWarnNone, "", "", 0 }, clutchAmber = { kWarnAmber, "CLUTCH HOT", "Ease off or shift down", 60 },
+                          clutchRed = { kWarnRed, "CLUTCH DAMAGE", "Shift down, the clutch is wearing", 100 }, engineAmber = { kWarnAmber, "ENGINE HOT", "Ease off, the coolant is in the red", 10 },
+                          engineRed = { kWarnRed, "ENGINE DAMAGE", "Ease off, the engine is wearing", 80 };
+            // a truck with nothing wrong: every figure read and on its good side
+            WarnFigures fine = {};
+            fine.driving = true;
+            fine.clutch = fine.engine = noBox;
+            fine.fuelKnown = fine.engineKnown = fine.gearboxKnown = fine.coolantKnown = fine.airKnown = true;
+            fine.fuelPercent = 80.0f, fine.enginePercent = 10.0f, fine.gearboxPercent = 10.0f, fine.coolantC = 90.0f, fine.oilC = 95.0f, fine.airBar = 8.0f;
+            auto list = [&](int layout, int choice, const WarnFigures &f, WarnMargins &wmar) {
+                GaugeSettings wset = ws;
+                wset.layout = layout, wset.hiddenWarnings = choice;
+                return WarnListMake(wset, f, wmar);
+            };
+            auto is = [](const WarnList &l, int at, int what, int state) { return l.what[at] == what && l.box[at].state == state; };
+            auto empty = [&](const WarnList &l) {
+                bool e = l.count == 0;
+                for (int i = 0; i < kWarnBoxes; i++) e = e && l.box[i].state == kWarnNone && l.what[i] < 0;
+                return e;
+            };
+            // every figure at its worst
+            WarnFigures bad = fine;
+            bad.clutch = clutchAmber, bad.engine = engineAmber;
+            bad.fuelPercent = 3.0f, bad.enginePercent = 90.0f, bad.gearboxPercent = 95.0f, bad.coolantC = 119.0f, bad.oilHot = true, bad.oilC = 130.0f, bad.tilt = 1, bad.rollDeg = -18.0f,
+            bad.airBar = 3.0f;
+
+            // M2: each choice with the same figures. With dials, whatever the key holds: today's two boxes in their slots
+            bool choices = true;
+            for (int layout = kLayoutStrip; layout <= kLayoutHudDigital; layout++)
+                for (int choice = kHwNone; choice < kHwCount; choice++)
+                {
+                    WarnMargins wmar = { true, true, true };
+                    const WarnList l = list(layout, choice, bad, wmar);
+                    choices = choices && !l.stacked && l.count == 2 && is(l, 0, kWlClutch, kWarnAmber) && is(l, 1, kWlEngine, kWarnAmber) && l.box[2].state == kWarnNone &&
+                              !strcmp(l.box[1].line, "Ease off, the coolant is in the red") && !wmar.fuel && !wmar.coolant && !wmar.air;
+                    // the engine's alone stays in the second slot
+                    WarnFigures one = bad;
+                    one.clutch = noBox;
+                    const WarnList o = list(layout, choice, one, wmar);
+                    choices = choices && o.box[0].state == kWarnNone && is(o, 1, kWlEngine, kWarnAmber);
+                }
+            WarnMargins mm = {};
+            const WarnList offNone = list(kLayoutOff, kHwNone, bad, mm), offDials = list(kLayoutOff, kHwAsDials, bad, mm);
+            choices = choices && offNone.stacked && empty(offNone) && offDials.stacked && offDials.count == 2 && is(offDials, 0, kWlClutch, kWarnAmber) && is(offDials, 1, kWlEngine, kWarnAmber) &&
+                      !mm.fuel && !mm.coolant && !mm.air;
+            {
+                // as with dials in Off the boxes stack: the engine's alone takes the first place
+                WarnFigures one = bad;
+                one.clutch = noBox;
+                const WarnList o = list(kLayoutOff, kHwAsDials, one, mm);
+                choices = choices && o.count == 1 && is(o, 0, kWlEngine, kWarnAmber);
+            }
+            // None asks for no warning sound, and only in Off; the other two and every layout with dials do
+            bool sounds = true;
+            for (int layout = 0; layout < kLayoutCount; layout++)
+                for (int choice = kHwNone; choice < kHwCount; choice++)
+                {
+                    GaugeSettings wset = ws;
+                    wset.layout = layout, wset.hiddenWarnings = choice;
+                    sounds = sounds && WarnSoundsOn(wset) == !(layout == kLayoutOff && choice == kHwNone);
+                }
+            {
+                // the oil over OilWarnC with the engine running: the model asks for its beep, and in None none is played
+                GaugeSettings wset = ws;
+                wset.layout = kLayoutOff, wset.hiddenWarnings = kHwNone;
+                OilWarning ow = {};
+                TempModel tm = {};
+                tm.known = true, tm.oil = wset.oilWarnC + 5.0f;
+                TruckRaw tr = {};
+                tr.flags = 1; // the engine runs
+                const bool asked = OilWarnStep(ow, tm, tr, wset, 0.05f);
+                sounds = sounds && asked && ow.on && !(asked && WarnSoundsOn(wset));
+                wset.hiddenWarnings = kHwAsDials;
+                sounds = sounds && WarnSoundsOn(wset);
+            }
+
+            // M3: five warnings at once, three shown, the red first; one goes and the fourth comes
+            bool stack = true;
+            {
+                WarnFigures f = bad;
+                f.engine = engineRed;
+                f.tilt = 2, f.rollDeg = 27.0f;
+                WarnMargins wmar = {};
+                const WarnList l = list(kLayoutOff, kHwLimits, f, wmar);
+                stack = stack && l.stacked && l.count == 3 && is(l, 0, kWlEngine, kWarnRed) && is(l, 1, kWlTilt, kWarnRed) && is(l, 2, kWlClutch, kWarnAmber) &&
+                        !strcmp(l.box[0].title, "ENGINE DAMAGE") && !strcmp(l.box[1].figure, "27 deg") && wmar.fuel && wmar.air;
+                f.tilt = 0, f.rollDeg = 2.0f;
+                const WarnList l2 = list(kLayoutOff, kHwLimits, f, wmar);
+                stack = stack && l2.count == 3 && is(l2, 0, kWlEngine, kWarnRed) && is(l2, 1, kWlClutch, kWarnAmber) && is(l2, 2, kWlFuel, kWarnAmber);
+                f.clutch = noBox, f.engine = noBox, f.coolantC = 90.0f;
+                const WarnList l3 = list(kLayoutOff, kHwLimits, f, wmar);
+                stack = stack && l3.count == 3 && is(l3, 0, kWlFuel, kWarnAmber) && is(l3, 1, kWlEngineWorn, kWarnAmber) && is(l3, 2, kWlGearboxWorn, kWarnAmber);
+                f.fuelPercent = 80.0f, f.enginePercent = 10.0f;
+                const WarnList l4 = list(kLayoutOff, kHwLimits, f, wmar);
+                stack = stack && l4.count == 3 && is(l4, 0, kWlGearboxWorn, kWarnAmber) && is(l4, 1, kWlOil, kWarnAmber) && is(l4, 2, kWlAir, kWarnAmber) &&
+                        !strcmp(l4.box[1].figure, "130 C") && !strcmp(l4.box[2].figure, "3.0 bar") && l4.box[0].figure[0] == 0 && l4.box[0].percent == 95;
+                // the figures in the player's units
+                GaugeSettings wset = ws;
+                wset.layout = kLayoutOff, wset.hiddenWarnings = kHwLimits, wset.fahrenheit = true, wset.psi = true;
+                const WarnList l5 = WarnListMake(wset, f, wmar);
+                stack = stack && !strcmp(l5.box[1].figure, "266 F") && !strcmp(l5.box[2].figure, "44 psi");
+            }
+
+            // M1: every limit at its off end with every figure at its worst: the red boxes of damage, the tilt's and the brake
+            // air's still come, and the oil's, which has no off end of its own here; no fuel, wear or coolant box
+            bool offEnds = true;
+            {
+                GaugeSettings wset = ws;
+                wset.layout = kLayoutOff, wset.hiddenWarnings = kHwLimits, wset.warnFuel = 0, wset.warnEngine = 100, wset.warnGearbox = 100, wset.warnCoolant = 100;
+                WarnFigures f = bad;
+                f.fuelPercent = 0.0f, f.enginePercent = 100.0f, f.gearboxPercent = 100.0f, f.coolantC = 124.0f, f.oilHot = false;
+                f.clutch = noBox;
+                WarnMargins wmar = {};
+                const WarnList amberOnly = WarnListMake(wset, f, wmar);
+                offEnds = offEnds && amberOnly.count == 2 && is(amberOnly, 0, kWlTilt, kWarnAmber) && is(amberOnly, 1, kWlAir, kWarnAmber) && !wmar.fuel && !wmar.coolant && wmar.air;
+                f.clutch = clutchRed, f.engine = engineRed;
+                const WarnList reds = WarnListMake(wset, f, wmar);
+                offEnds = offEnds && reds.count == 3 && is(reds, 0, kWlClutch, kWarnRed) && is(reds, 1, kWlEngine, kWarnRed) && is(reds, 2, kWlTilt, kWarnAmber);
+                f.tilt = 0, f.airBar = 8.0f, f.clutch = noBox, f.engine = engineAmber;
+                offEnds = offEnds && empty(WarnListMake(wset, f, wmar)); // the engine's amber at 118 C is not shown either: the coolant's limit is off
+                f.oilHot = true;
+                const WarnList oil = WarnListMake(wset, f, wmar);
+                offEnds = offEnds && oil.count == 1 && is(oil, 0, kWlOil, kWarnAmber);
+            }
+
+            // M4: each limit just under, just over and back inside its margin
+            bool margins = true;
+            {
+                GaugeSettings wset = ws;
+                wset.layout = kLayoutOff, wset.hiddenWarnings = kHwLimits; // fuel under 15, damage over 50, coolant over 90 percent of 85 to 118 C: 114.7 C
+                WarnMargins wmar = {};
+                WarnFigures f = fine;
+                auto has = [&](int what) {
+                    const WarnList l = WarnListMake(wset, f, wmar);
+                    for (int i = 0; i < l.count; i++)
+                        if (l.what[i] == what) return true;
+                    return false;
+                };
+                f.fuelPercent = 15.1f;
+                margins = margins && !has(kWlFuel);
+                f.fuelPercent = 14.9f;
+                margins = margins && has(kWlFuel);
+                f.fuelPercent = 16.9f;
+                margins = margins && has(kWlFuel) && has(kWlFuel); // inside the margin of 2 points: no flicker
+                f.fuelPercent = 17.1f;
+                margins = margins && !has(kWlFuel);
+                f.fuelPercent = 16.0f;
+                margins = margins && !has(kWlFuel); // and not on again inside the margin
+                f.fuelPercent = 80.0f;
+                f.enginePercent = 50.0f;
+                margins = margins && !has(kWlEngineWorn);
+                f.enginePercent = 50.5f;
+                margins = margins && has(kWlEngineWorn);
+                f.enginePercent = 49.9f; // after a repair: gone at once, there is no margin
+                margins = margins && !has(kWlEngineWorn);
+                f.gearboxPercent = 50.0f;
+                margins = margins && !has(kWlGearboxWorn);
+                f.gearboxPercent = 51.0f;
+                margins = margins && has(kWlGearboxWorn);
+                f.gearboxPercent = 10.0f;
+                margins = margins && !has(kWlGearboxWorn);
+                const float at90 = kTempWarm + (kTempRed - kTempWarm) * 0.90f, at87 = kTempWarm + (kTempRed - kTempWarm) * 0.87f;
+                f.coolantC = at90 - 0.2f;
+                margins = margins && !has(kWlEngine);
+                f.coolantC = at90 + 0.2f;
+                margins = margins && has(kWlEngine);
+                f.coolantC = at87 + 0.2f;
+                margins = margins && has(kWlEngine); // inside the margin of 3 points
+                {
+                    const WarnList l = WarnListMake(wset, f, wmar);
+                    margins = margins && l.count == 1 && !strcmp(l.box[0].title, "ENGINE HOT") && !strcmp(l.box[0].line, "The coolant is over your limit") && l.box[0].percent == 87;
+                }
+                f.coolantC = at87 - 0.2f;
+                margins = margins && !has(kWlEngine);
+                f.coolantC = at87 + 0.5f;
+                margins = margins && !has(kWlEngine);
+                f.coolantC = 90.0f;
+                f.airBar = kAirWarn + 0.05f;
+                margins = margins && !has(kWlAir);
+                f.airBar = kAirWarn - 0.05f;
+                margins = margins && has(kWlAir);
+                f.airBar = kAirWarn + 0.25f;
+                margins = margins && has(kWlAir);
+                f.airBar = kAirWarn + 0.35f;
+                margins = margins && !has(kWlAir);
+                f.airBar = kAirWarn + 0.25f;
+                margins = margins && !has(kWlAir);
+                // the margins are let go when the choice is left, the layout shows dials again or no truck is driven
+                f.fuelPercent = 14.0f, f.coolantC = 117.0f, f.airBar = 3.0f;
+                margins = margins && has(kWlFuel) && wmar.fuel && wmar.coolant && wmar.air;
+                WarnFigures parkedNow = f;
+                parkedNow.driving = false;
+                margins = margins && empty(WarnListMake(wset, parkedNow, wmar)) && !wmar.fuel && !wmar.coolant && !wmar.air;
+            }
+
+            // a figure not read gives no box, never a box from a zero; no truck, no box; a figure that is no number neither
+            bool notRead = true;
+            {
+                GaugeSettings wset = ws;
+                wset.layout = kLayoutOff, wset.hiddenWarnings = kHwLimits;
+                WarnFigures f = {};
+                f.driving = true;
+                f.clutch = f.engine = noBox;
+                f.tilt = -1;
+                WarnMargins wmar = {};
+                notRead = notRead && empty(WarnListMake(wset, f, wmar)); // nothing read: fuel 0, air 0, damage 0 of 0, and no box
+                f.fuelKnown = f.engineKnown = f.gearboxKnown = f.coolantKnown = f.airKnown = true;
+                f.fuelPercent = f.enginePercent = f.gearboxPercent = f.coolantC = f.airBar = NAN;
+                f.oilHot = true, f.oilC = NAN;
+                notRead = notRead && empty(WarnListMake(wset, f, wmar));
+                WarnFigures parked = bad;
+                parked.driving = false;
+                parked.clutch = clutchRed, parked.engine = engineRed;
+                for (int layout = 0; layout < kLayoutCount; layout++)
+                    for (int choice = kHwNone; choice < kHwCount; choice++)
+                    {
+                        const WarnList l = list(layout, choice, parked, wmar);
+                        for (int i = 0; i < kWarnBoxes; i++) notRead = notRead && l.box[i].state == kWarnNone;
+                    }
+                // a scout has no brake air to warn of
+                WarnFigures scout = fine;
+                scout.airKnown = false, scout.airBar = 0.0f;
+                notRead = notRead && empty(WarnListMake(wset, scout, wmar));
+            }
+            Check(choices, "warnings with the dials off: with dials the two boxes of today in their slots whatever the choice; in Off None gives none, As with dials the two as a stack");
+            Check(sounds, "warnings with the dials off: only Off with None asks for no warning sound, and there the oil over its limit plays none");
+            Check(stack, "warnings with the dials off: at most three at once, the red first, then in the list's order; one goes and the next comes; degrees, bar and psi at the right");
+            Check(offEnds, "warnings with the dials off: every limit at its off end never warns, while the damage, tilt, brake air and oil boxes still come");
+            Check(margins, "warnings with the dials off: each limit just under, just over and back inside its margin without a flicker; damage has no margin; the margins are let go with the truck");
+            Check(notRead, "warnings with the dials off: a figure not read or no number gives no box, no truck gives none, a scout has no brake air box");
+        }
         // the Off layout (BRIEF_dials_off_option.md): the block takes one thing from the layout and the toggle, the bit that
         // says the cluster is on screen. Off gives the options a cluster hidden by the key gives, to the bit
         {

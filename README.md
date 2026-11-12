@@ -54,6 +54,8 @@ The Gameplay tab of the NEXT GEN menu edits every setting while you play, in eig
 | Setting | On the tab | In the ini | Default |
 |---|---|---|---|
 | Layout: a strip along the bottom centre, a block in the bottom right corner, or Spotter dials or Spotter digital in Spotter's HUD style, left of its gear panel. Off draws no dials: the features act, the dials that show them are not there | Display: Layout | `Layout` 0, 1, 2, 3 or 4 | strip |
+| With the Layout at Off, what still warns. None: no box, no lamp and no warning sound, while the damage still acts. As with dials: the clutch and engine boxes. At my limits: a box when a figure passes its limit | Display: Warnings | `HiddenWarnings` 0, 1 or 2 | 1, as with dials |
+| The limits of At my limits: fuel under a share of the tank (0 is off), engine damage and gearbox damage over a share of what the part takes (100 is off), coolant over a share of the way from 85 C to the red mark at 118 C (100 is off). Oil warns at `OilWarnC`, tilt at its two angles, brake air under 5.5 bar | Display: Fuel under, Engine damage over, Gearbox damage over, Coolant over | `WarnFuelUnder` 0 to 50, `WarnEngineOver` and `WarnGearboxOver` 0 to 100, `WarnCoolantOver` 50 to 100 | 15, 50, 50, 90 |
 | The speedometer and the tachometer change places, except in Spotter digital | Display: Swap dials | `SwapDials` 0 or 1 | 0 |
 | Style of the strip and the block: solid dial faces, tinted see-through faces, or open (no faces, only scales, numbers and needles) | Display: Style | `Style` 0, 1 or 2 | open |
 | How dark the tinted faces are | Display: Face tint | `FaceOpacity` 0 to 0.85 | 0.35 |

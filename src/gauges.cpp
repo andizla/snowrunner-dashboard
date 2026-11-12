@@ -54,6 +54,7 @@ int NgMenuKeyFromIni(); // the menu's key, which a capture never binds
 #include "state.h"
 #endif
 #include "tune_figures.h"
+#include "warn_list.h"
 
 static HMODULE g_self = nullptr;
 static std::wstring g_dir; // the game's folder, with the last backslash
@@ -775,6 +776,11 @@ static void WriteIni(const GaugeSettings &s)
     auto num = [&](const wchar_t *key, float v) { IniPutFloat(kIniSection, key, v, ini); };
     auto whole = [&](const wchar_t *key, int v) { IniPutInt(kIniSection, key, v, ini); };
     whole(L"Layout", s.layout);
+    whole(L"HiddenWarnings", s.hiddenWarnings);
+    whole(L"WarnFuelUnder", s.warnFuel);
+    whole(L"WarnEngineOver", s.warnEngine);
+    whole(L"WarnGearboxOver", s.warnGearbox);
+    whole(L"WarnCoolantOver", s.warnCoolant);
     whole(L"SwapDials", s.swapDials ? 1 : 0);
     whole(L"Style", s.style);
     num(L"FaceOpacity", s.faceOpacity);
@@ -1119,6 +1125,10 @@ static void ReadIni(GaugeSettings &s)
                         L"; The Gameplay tab of the NEXT GEN menu (F2 opens it, or the key in NextGen.ini) edits everything here in the game.\n"
                         L"; Tab: the tab it opens on, the one open last (display, engine, gearbox, power, suspension, controls, sounds, modwork).\n"
                         L"; Layout: 0 = a strip along the bottom centre, 1 = a block in the bottom right corner, 2 = Spotter dials, 3 = Spotter digital (left of Spotter's gear panel), 4 = off, the dials are not drawn.\n"
+                        L"; HiddenWarnings, while Layout is 4: 0 = no warning box and no warning sound, 1 = the clutch and engine boxes as with dials,\n"
+                        L"; 2 = a box when a figure passes its limit: WarnFuelUnder (0 to 50 percent of the tank, 0 = off), WarnEngineOver and WarnGearboxOver\n"
+                        L"; (0 to 100 percent of the damage the part takes, 100 = off), WarnCoolantOver (50 to 100 percent of the way from 85 C to the red\n"
+                        L"; mark at 118 C, 100 = off). Oil warns at OilWarnC, tilt at the two angles, brake air under 5.5 bar.\n"
                         L"; SwapDials=1 puts the speedometer where the tachometer is and the tachometer where the speedometer is (not in Spotter digital).\n"
                         L"; Style (the strip and the block): 0 = solid dial faces, 1 = tinted see-through faces (FaceOpacity 0 to 0.85 sets how dark),\n"
                         L"; 2 = open: no faces, only the scales, numbers and needles.\n"
@@ -1283,6 +1293,11 @@ static void ReadIni(GaugeSettings &s)
         Log(L"settings: %d trucks' scales and %d gearboxes' holds moved out of Gauges.ini, each into a file of its own in Gauges\\trucks and "
             L"Gauges\\gearboxes", moved[kSetupTruck], moved[kSetupGearbox]);
     s.layout = IniInt(L"Layout", s.layout, ini);
+    s.hiddenWarnings = IniInt(L"HiddenWarnings", s.hiddenWarnings, ini);
+    s.warnFuel = IniInt(L"WarnFuelUnder", s.warnFuel, ini);
+    s.warnEngine = IniInt(L"WarnEngineOver", s.warnEngine, ini);
+    s.warnGearbox = IniInt(L"WarnGearboxOver", s.warnGearbox, ini);
+    s.warnCoolant = IniInt(L"WarnCoolantOver", s.warnCoolant, ini);
     s.swapDials = IniBool(L"SwapDials", s.swapDials, ini);
     s.style = IniInt(L"Style", s.style, ini);
     s.faceOpacity = IniFloat(L"FaceOpacity", s.faceOpacity, ini);
@@ -4111,6 +4126,9 @@ static void LogSettings(const GaugeSettings &s)
         s.airFullKmh, s.damage ? L"on" : L"off", s.hotDamageFrom, s.hotDamage, s.coldDamage, s.overRevDamage, s.stallDamage, s.clutchBurn ? L"on" : L"off", s.clutchHeat);
     Log(L"settings: suspension spring x%g front and x%g rear, damping x%g front and x%g rear of the truck's own, %g cm of travel past its compression end", s.springFront, s.springRear,
         s.dampingFront, s.dampingRear, s.extraTravel);
+    static const wchar_t *hidden[kHwCount] = { L"none, seen or heard", L"the clutch and engine boxes as with dials", L"boxes at the limits" };
+    Log(L"settings: with the dials off the warnings are %s; the limits: fuel under %d %%, engine damage over %d %%, gearbox damage over %d %%, coolant over %d %% of the way to the red mark",
+        hidden[s.hiddenWarnings < 0 || s.hiddenWarnings >= kHwCount ? kHwAsDials : s.hiddenWarnings], s.warnFuel, s.warnEngine, s.warnGearbox, s.warnCoolant);
     Log(L"settings: sound volume %d of 100%s%s", s.soundVolume, s.soundsOnly ? L", sounds only: the cluster is not drawn" : L"",
         s.dieselFlutter ? L", a diesel's lift flutters"
                         : SoundWhistles() > 0 ? L", a diesel's lift plays the sounds\\turbo_whistle_ files" : L", a diesel's lift is quiet");
@@ -6446,7 +6464,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         TempStep(w.temp, kind, raw, TachSpeed(w.tach, scale), s, dt);
         // the oil warning: heard every few seconds while the oil is too hot, and said in the log when it comes and goes
         const bool oilWas = w.oil.on;
-        if (OilWarnStep(w.oil, w.temp, raw, s, dt)) SoundPlay(kSoundOil, OilBeepGain(s.soundVolume), 1.0f);
+        // no warning sound with the Layout at Off and its Warnings at None (warn_list.h); the model steps as ever
+        if (OilWarnStep(w.oil, w.temp, raw, s, dt) && WarnSoundsOn(s)) SoundPlay(kSoundOil, OilBeepGain(s.soundVolume), 1.0f);
         // the powertrain: what the engine delivers, logged, and handed to the game with Powertrain=1 (below)
         PowertrainStep(w.power, raw, curve, TachSpeed(w.tach, scale), tachTop, w.temp.oil, natural ? 1.0f : w.boost.limit, dt);
         // the automatic: the gear it would be in, the same way, by the pedal as held. With the probe on each of its
@@ -8148,6 +8167,7 @@ static DWORD WINAPI Run(void *)
     }
     bool visible = true, keyDown = false;
     int layoutWas = kLayoutStrip; // the layout on the last pass: leaving Off shows the cluster
+    WarnMargins warnMargins = {}; // the limits' margins of the boxes with the dials off (warn_list.h), from pass to pass
     uint32_t padMask = PadParse(s.padToggle), padPrev = 0;
     ULONGLONG saveAt = 0;
     TruckIdentity truck = {};
@@ -9313,6 +9333,8 @@ static DWORD WINAPI Run(void *)
         v.demo = !driving && s.demo;
         v.hidden = ClusterHidden(s.layout, visible, s.soundsOnly, driving, s.demo);
         v.show = v.hidden == kShown;
+        v.warnStacked = s.layout == kLayoutOff;
+        if (!driving) warnMargins = WarnMargins{};
         uint32_t lampsLit = 0, lampsBlink = 0; // the lamps' steady states for state.h, set while a truck is driven
         if (driving)
         {
@@ -9360,8 +9382,29 @@ static DWORD WINAPI Run(void *)
                 const bool dealt = watch.addedAt != addedWas;
                 addedWas = watch.addedAt;
                 const bool full = BoostFull(watch.boost.bar, watch.boost.most, TruckPedal(raw));
-                v.warn[kWarnClutch] = ClutchWarn(watch.clutchHeat, s.damage && s.clutchBurn);
-                v.warn[kWarnEngine] = EngineWarn(watch.temp.temp, s.damage ? watch.damage.hot : 0.0f, s.damage, full, dealt, watch.floorPan);
+                // with the Layout at Off its Warnings choose what of them shows and what else (warn_list.h); with dials
+                // the list is these two, each in its slot
+                WarnFigures wf = {};
+                wf.driving = true;
+                wf.clutch = ClutchWarn(watch.clutchHeat, s.damage && s.clutchBurn);
+                wf.engine = EngineWarn(watch.temp.temp, s.damage ? watch.damage.hot : 0.0f, s.damage, full, dealt, watch.floorPan);
+                wf.fuelKnown = isfinite(raw.fuel) && isfinite(raw.tank) && raw.tank > 0.0f;
+                wf.fuelPercent = wf.fuelKnown ? raw.fuel / raw.tank * 100.0f : 0.0f;
+                wf.engineKnown = raw.damageKnown && raw.damageCapacity > 0;
+                wf.enginePercent = wf.engineKnown ? (float)raw.damage / (float)raw.damageCapacity * 100.0f : 0.0f;
+                wf.gearboxKnown = raw.gearboxKnown && raw.gearboxCapacity > 0;
+                wf.gearboxPercent = wf.gearboxKnown ? (float)raw.gearboxDamage / (float)raw.gearboxCapacity * 100.0f : 0.0f;
+                wf.coolantKnown = watch.temp.known;
+                wf.coolantC = watch.temp.temp;
+                wf.oilHot = watch.oil.on;
+                wf.oilC = watch.temp.oil;
+                wf.tilt = watch.tilt.running ? watch.tilt.lamp : -1;
+                wf.rollDeg = watch.tilt.rollDeg;
+                wf.pitchDeg = watch.tilt.pitchDeg;
+                wf.airKnown = inForce.tachClass != kClassScout; // scouts brake by hydraulics
+                wf.airBar = watch.air.bar;
+                const WarnList list = WarnListMake(s, wf, warnMargins);
+                for (int i = 0; i < kWarnBoxes; i++) v.warn[i] = list.box[i];
             }
             v.engineDamage = raw.damage;
             v.engineCapacity = raw.damageKnown ? raw.damageCapacity : 0;
@@ -9475,7 +9518,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.warmUpMinutes == b.warmUpMinutes && a.overheatMinutes == b.overheatMinutes && a.coolDownMinutes == b.coolDownMinutes && a.ambientC == b.ambientC &&
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.overRevDamage == b.overRevDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
            a.springFront == b.springFront && a.dampingFront == b.dampingFront && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange &&
-           !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
+           !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.hiddenWarnings == b.hiddenWarnings && a.warnFuel == b.warnFuel && a.warnEngine == b.warnEngine && a.warnGearbox == b.warnGearbox && a.warnCoolant == b.warnCoolant && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
            a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.lowRangeSlip == b.lowRangeSlip && a.diffType == b.diffType && a.physicsRate == b.physicsRate && a.engineBrake == b.engineBrake && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
            a.camberGainFront == b.camberGainFront && a.camberGainRear == b.camberGainRear && a.camberRestFront == b.camberRestFront && a.camberRestRear == b.camberRestRear;
 }
@@ -9622,6 +9665,11 @@ int wmain(int argc, wchar_t **argv)
     c.probe = 1;
     c.keepLogs = 5;
     c.soundVolume = 80;
+    c.hiddenWarnings = kHwLimits;
+    c.warnFuel = 22;
+    c.warnEngine = 35;
+    c.warnGearbox = 65;
+    c.warnCoolant = 75;
     c.soundsOnly = true;
     c.dieselFlutter = true;
     c.oilGauge = kOilDial;
@@ -9657,7 +9705,7 @@ int wmain(int argc, wchar_t **argv)
                             c.pitchDangerDeg != d.pitchDangerDeg && c.warmUpMinutes != d.warmUpMinutes && c.overheatMinutes != d.overheatMinutes &&
                             c.coolDownMinutes != d.coolDownMinutes && c.ambientC != d.ambientC && c.ambientByMap != d.ambientByMap && c.airFullKmh != d.airFullKmh && c.damage != d.damage &&
                             c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.overRevDamage != d.overRevDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springFront != d.springFront && c.dampingFront != d.dampingFront && c.extraTravel != d.extraTravel && c.frameFlex != d.frameFlex && c.twistRange != d.twistRange && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
-                            c.demo != d.demo && c.probe != d.probe && c.keepLogs != d.keepLogs && c.soundVolume != d.soundVolume && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
+                            c.demo != d.demo && c.probe != d.probe && c.keepLogs != d.keepLogs && c.soundVolume != d.soundVolume && c.hiddenWarnings != d.hiddenWarnings && c.warnFuel != d.warnFuel && c.warnEngine != d.warnEngine && c.warnGearbox != d.warnGearbox && c.warnCoolant != d.warnCoolant && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
                             c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.diffLockBite != d.diffLockBite && c.lowRangeSlip != d.lowRangeSlip && c.diffType != d.diffType && c.physicsRate != d.physicsRate && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
     WriteIni(c);
@@ -9680,7 +9728,7 @@ int wmain(int argc, wchar_t **argv)
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 155, "ini: the help text survives a write (155 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 159, "ini: the help text survives a write (159 comment lines)");
     // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
     {
         char none[32] = "x", tab[32] = {}, kept[32] = {};
@@ -9745,6 +9793,29 @@ int wmain(int argc, wchar_t **argv)
         for (int m = 0; m < 16; m++) hidden &= ClusterHidden(kLayoutOff, (m & 1) != 0, (m & 2) != 0, (m & 4) != 0, (m & 8) != 0) == kHiddenOff;
         hidden = hidden && ClusterHidden(kLayoutStrip, true, false, false, true) == kShown && ClusterHidden(kLayoutStrip, true, false, false, false) == kHiddenNoTruck &&
                  ClusterHidden(kLayoutBlock, true, true, true, false) == kHiddenSoundsOnly;
+        // the warnings with the dials off: the defaults, an ini from before the keys reads as "As with dials" with the
+        // limits' defaults, and what is out of range is held
+        {
+            static const wchar_t *keys[5] = { L"HiddenWarnings", L"WarnFuelUnder", L"WarnEngineOver", L"WarnGearboxOver", L"WarnCoolantOver" };
+            GaugeSettings w = c, o, k;
+            WriteIni(w);
+            ReadIni(o);
+            bool warns = o.hiddenWarnings == kHwLimits && o.warnFuel == 22 && o.warnEngine == 35 && o.warnGearbox == 65 && o.warnCoolant == 75;
+            for (const wchar_t *key : keys) WritePrivateProfileStringW(kIniSection, key, nullptr, ini.c_str());
+            ReadIni(o);
+            warns = warns && o.hiddenWarnings == kHwAsDials && o.warnFuel == 15 && o.warnEngine == 50 && o.warnGearbox == 50 && o.warnCoolant == 90 &&
+                    d.hiddenWarnings == kHwAsDials && d.warnFuel == 15 && d.warnEngine == 50 && d.warnGearbox == 50 && d.warnCoolant == 90;
+            static const wchar_t *high[5] = { L"7", L"80", L"140", L"101", L"200" }, *low[5] = { L"-1", L"-5", L"-1", L"-20", L"10" };
+            for (int i = 0; i < 5; i++) WritePrivateProfileStringW(kIniSection, keys[i], high[i], ini.c_str());
+            ReadIni(k);
+            warns = warns && k.hiddenWarnings == kHwAsDials && k.warnFuel == 50 && k.warnEngine == 100 && k.warnGearbox == 100 && k.warnCoolant == 100;
+            for (int i = 0; i < 5; i++) WritePrivateProfileStringW(kIniSection, keys[i], low[i], ini.c_str());
+            ReadIni(k);
+            warns = warns && k.hiddenWarnings == kHwAsDials && k.warnFuel == 0 && k.warnEngine == 0 && k.warnGearbox == 0 && k.warnCoolant == 50;
+            Check(warns, "ini: HiddenWarnings and the four limits round trip; an ini without them reads as As with dials with the limits at 15, 50, 50 and 90; "
+                         "what is out of range is held to it, a choice that is none to As with dials");
+            WriteIni(c);
+        }
         Check(names && toggles && hidden, "the Off layout: the log has a name for every layout number; the toggle pressed twice in Off flips nothing and the strip picked after it shows; "
                                           "leaving Off shows a cluster the key had hidden; in Off no key, truck or demo value brings it back");
         WriteIni(c);

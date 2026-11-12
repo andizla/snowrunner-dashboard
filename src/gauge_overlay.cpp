@@ -85,32 +85,39 @@ static void DrawStepSign(float w, float h)
 
 // The clutch's and the engine's warning boxes, below the tire mod's: each fades in over a quarter second while it has
 // something to say and out again after, keeping its last words while it fades; not while the NEXT GEN menu is open,
-// and on the background list, so never over the menu.
-static void DrawWarnings(const GaugeView &view, float w, float h, float dt)
+// and on the background list, so never over the menu. Returns the slot the displays under the boxes start at: 3 with
+// dials shown, as ever; with the Layout at Off the one under the last box on screen (BRIEF_dials_off_option.md).
+static int DrawWarnings(const GaugeView &view, float w, float h, float dt)
 {
     static float fade[kWarnBoxes] = {};
     static WarnBox last[kWarnBoxes] = {};
     const float u = WarnUnit(w, h);
     UpdateWarnFontTexture(u);
     const bool menu = NgMenuOpen();
+    int under = 1;
     for (int i = 0; i < kWarnBoxes; i++)
     {
         const bool on = view.warn[i].state != kWarnNone && !menu;
         if (view.warn[i].state != kWarnNone) last[i] = view.warn[i];
         fade[i] = fminf(fmaxf(fade[i] + (on ? dt : -dt) / 0.25f, 0.0f), 1.0f);
-        if (fade[i] > 0.0f) GWarnBox(ImGui::GetBackgroundDrawList(), g_warnFonts, WarnOrigin(w, h, 1 + i), u, fade[i], last[i]);
+        if (fade[i] > 0.0f)
+        {
+            GWarnBox(ImGui::GetBackgroundDrawList(), g_warnFonts, WarnOrigin(w, h, 1 + i), u, fade[i], last[i]);
+            under = 2 + i;
+        }
     }
+    return view.warnStacked ? under : 3;
 }
 
 // The suspension display, the sway bars' lamp (build B) and the air suspension's height box (build C), on the warning
 // boxes' stage below their slots; not while the NEXT GEN menu is open. The drive display (131) in the suspension
 // display's place, or beside it on its right while both are on.
-static void DrawSuspension(const GaugeView &view, float w, float h)
+static void DrawSuspension(const GaugeView &view, float w, float h, int slot)
 {
     if (NgMenuOpen() || (view.susp.wheels <= 0 && !view.driveShown && !view.swayOff && !view.airShown)) return;
     const float u = WarnUnit(w, h);
     UpdateWarnFontTexture(u);
-    ImVec2 at = WarnOrigin(w, h, 3);
+    ImVec2 at = WarnOrigin(w, h, slot);
     if (view.driveShown) GDriveDisplay(ImGui::GetBackgroundDrawList(), g_warnFonts, ImVec2(at.x + (view.susp.wheels > 0 ? (kSuspW + kWarnGap) * u : 0.0f), at.y), u, 1.0f, view.drive);
     if (view.susp.wheels > 0)
     {
@@ -178,8 +185,8 @@ static void OnFrame()
     const float u = GaugeUnit(io.DisplaySize.x, io.DisplaySize.y, place);
     UpdateFontTexture(u);
     const float dt = fminf(fmaxf(io.DeltaTime, 0.0f), 0.1f);
-    DrawWarnings(view, io.DisplaySize.x, io.DisplaySize.y, dt);
-    DrawSuspension(view, io.DisplaySize.x, io.DisplaySize.y);
+    const int under = DrawWarnings(view, io.DisplaySize.x, io.DisplaySize.y, dt);
+    DrawSuspension(view, io.DisplaySize.x, io.DisplaySize.y, under);
     // the physics rate sign: on the foreground list, so over the cluster, the boxes and the NEXT GEN menu; before every
     // switch below (the toggle key, the truck, the other tabs, the opacity), so none of them reaches it
     if (StepSignShown(view)) DrawStepSign(io.DisplaySize.x, io.DisplaySize.y);
