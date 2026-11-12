@@ -347,14 +347,25 @@ int wmain(int argc, wchar_t **argv)
         sh->open = 1;
         sh->chosen = own;
         const bool ours = own >= 0 && !NgOtherTabShown();
+        const bool ownShown = own >= 0 && NgOwnTabShown();
         sh->chosen = 1;
-        const bool other = NgOtherTabShown();
+        const LONG readyWas = sh->slots[1].ready;
+        sh->slots[1].ready = 1;                  // another mod's tab, as every tab was before BRIEF_dials_under_tuning.md
+        const bool other = NgOtherTabShown() && !NgOwnTabShown();
         Run(argv[1], 1920, 1080, L"_other_tab"); // the cluster faded out under the other tab
+        sh->slots[1].ready = 2;                  // a tab whose mod set keepOthers: the others keep drawing under it
+        const bool kept = !NgOtherTabShown() && !NgOwnTabShown();
+        sh->open = 0;
+        const bool keptClosed = !NgOtherTabShown() && !NgOwnTabShown();
+        sh->open = 1;
+        sh->slots[1].ready = readyWas;
         sh->chosen = -1;
-        const bool none = !NgOtherTabShown();
+        const bool none = !NgOtherTabShown() && !NgOwnTabShown();
         sh->chosen = chosenWas;
-        const bool ok = closed && ours && other && none;
-        printf("%s the other-tab test: closed %d, own tab %d, another tab %d, no tab chosen %d (1 is right)\n", ok ? "ok  " : "FAIL", closed, ours, other, none);
+        const bool ok = closed && ours && ownShown && other && kept && keptClosed && none;
+        printf("%s the other-tab test: closed %d, own tab %d and it shows %d, another tab with ready 1 %d, another tab with ready 2 keeps the others drawing %d, "
+               "that one closed %d, no tab chosen %d (1 is right)\n",
+               ok ? "ok  " : "FAIL", closed, ours, ownShown, other, kept, keptClosed, none);
         if (!ok) g_failed++;
         const bool stamped = NgLastFrameDrawn() != 0 && GetTickCount64() - NgLastFrameDrawn() < 1000 && !NgOverlayBroken();
         printf("%s the last frame drawn is stamped and the overlay is not broken\n", stamped ? "ok  " : "FAIL");
