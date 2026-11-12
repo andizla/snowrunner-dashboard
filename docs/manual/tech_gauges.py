@@ -1313,6 +1313,15 @@ that blink (engine damage, oil, tire) are flagged in their own word, so a reader
 The tire mod reads the outside temperature from here. Other mods' authors get the layout and the read rule in
 <code>docs\\SnowRunnerGauges_State.h</code> and its guide <code>SnowRunnerGauges_State.md</code> (CC0); a reader maps the whole block
 (size 0) and checks each field against the size, so it reads version 1 and 2 alike.</p>
+<p><b>The tuning block.</b> A second block, <code>Local&#92;NextGen.Tune.&lt;process id&gt;.&lt;n&gt;</code> (<code>ng_tune.h</code>,
+the same file in every Next Gen mod; <code>tune_figures.h</code>), holds four figures of the Powertrain for a tuning tool that is
+not part of a release: <code>DiffLockBite</code>, <code>WheelCap</code>, <code>PushShare</code> and <code>LowRangeSlip</code>, each
+with its name, tip, range, default and the value the tab shows. The tool writes a wanted value with a count. The mod's thread
+takes it at its next pass (the count, the value, the count again), held to the range and to whole percent, and hands it in by
+<code>SettingsPut</code> with the turn it read the settings at. That is the road an edit on the tab takes: in force on that pass,
+saved a second after the last change. With Real engine off the four are published greyed. Only the mod's thread touches the
+block, and no hook does. Without the tool nothing reads it. The log's start says "tuning:" with the block's name, or that it
+could not be made.</p>
 {table(['Offset', 'Type', 'Field'], tire, 'Read: Local\\SnowRunnerTirePressure.State.&lt;process id&gt;, the tire mod\'s (tires.h); the fields used', 'small')}
 <p>Looked for every 5 s, stale after 2 s. The tire lamp shows only while the block's vehicle is the driven one: the letter L, R, N
 or +; red while the tires are too fast or one is worn out; otherwise blinking (400 ms) while the pressure changes or waits for the

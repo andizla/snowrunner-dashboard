@@ -53,6 +53,7 @@ int NgMenuKeyFromIni(); // the menu's key, which a capture never binds
 #include "sound.h"
 #include "state.h"
 #endif
+#include "tune_figures.h"
 
 static HMODULE g_self = nullptr;
 static std::wstring g_dir; // the game's folder, with the last backslash
@@ -1438,6 +1439,19 @@ void SettingsPut(const GaugeSettings &in, LONG turn)
         InterlockedExchange(&g_setDirty, 1);
     }
     ReleaseSRWLockExclusive(&g_setLock);
+}
+
+// One pass of the tuning block (tune_figures.h), on the mod's thread, just before the tab's edits are taken: what the
+// tuning tool asked goes into the settings the tab shows by the tab's own road (SettingsPut with the turn they were
+// read at, so the pass takes it below and saves it a second after the last change), then the figures are published.
+// With no tool in the game the block is written and nobody reads it.
+static void TunePass(uint8_t *block, ULONGLONG now)
+{
+    if (!block) return;
+    GaugeSettings g;
+    const LONG turn = SettingsGet(g);
+    if (GtTake(block, g)) SettingsPut(g, turn);
+    GtPublish(block, g, now);
 }
 
 // The settings in force, for the tab to show. What the tab handed back and the mod's thread has not taken yet is
@@ -8122,6 +8136,16 @@ static DWORD WINAPI Run(void *)
         if (StateOpen(state)) Log(L"state published for other mods in %s", name);
         else Log(L"state: Windows gave no shared memory for %s (error %lu), so nothing is published for other mods", name, GetLastError());
     }
+    // the block the tuning tool reads the Powertrain's figures from and asks through (tune_figures.h)
+    NgTuneMod tune = {};
+    {
+        NgTuneItem items[kGtCount];
+        const int count = GtItems(items);
+        if (NgTuneOpen(tune, "Gameplay", 1, items, count))
+            Log(L"tuning: %d figures of the Powertrain are published in Local\\NextGen.Tune.%lu.%d (ng_tune.h) for the tuning tool; nothing reads it where the tool is not in the game", count,
+                GetCurrentProcessId(), tune.n);
+        else Log(L"tuning: the Powertrain's figures are not published (the shared memory could not be made); the tab and the ini have them");
+    }
     bool visible = true, keyDown = false;
     uint32_t padMask = PadParse(s.padToggle), padPrev = 0;
     ULONGLONG saveAt = 0;
@@ -8450,6 +8474,7 @@ static DWORD WINAPI Run(void *)
             saveAt = 0;
             edited = true;
         }
+        TunePass(tune.block, GetTickCount64());
         if (InterlockedExchange(&g_setDirty, 0))
         {
             const bool ownBefore = set.own, suspBefore = set.suspOwn;
@@ -11551,6 +11576,70 @@ int wmain(int argc, wchar_t **argv)
         SettingsPut(edit, turn);
         const LONG turnNow = SettingsGet(got);
         Check(taken && turnNow != turn && got.opacity == 0.3f && !g_setDirty, "tab: an edit made from the settings in force is taken, one made from settings the mod has replaced since is dropped");
+    }
+
+    // the tuning block (tune_figures.h): what the tool asks goes in by the tab's road
+    {
+        static uint8_t block[kNgTuneBlockMost];
+        static NgTuneSeen seen;
+        NgTuneItem items[kGtCount];
+        const int count = GtItems(items);
+        bool listed = count == 4 && NgTuneSetUp(block, sizeof block, "Gameplay", 1, items, count) && NgTuneRead(block, sizeof block, seen) && seen.count == 4 &&
+                      !strcmp(seen.mod, "Gameplay") && !strcmp(seen.e[kGtCap].name, "Wheel cap") && seen.e[kGtCap].least == 110.0f && seen.e[kGtCap].most == 200.0f &&
+                      seen.e[kGtCap].def == 150.0f && seen.e[kGtLowSlip].def == 100.0f && seen.e[kGtBite].def == 0.0f && seen.e[kGtPush].most == 100.0f &&
+                      !strcmp(seen.e[0].group, "Powertrain");
+        GaugeSettings d, got;
+        SettingsDefaults(d);
+        for (int i = 0; i < count; i++)
+            listed = listed && strlen(items[i].tip) < 128 && strlen(items[i].name) < 48 && !strchr(items[i].tip, '\'') && !strchr(items[i].name, '\'') &&
+                     items[i].def == (float)*GtField(d, i);
+        auto want = [&](int i, float v) {
+            NgTuneEntry *e = NgTuneAt(block, i);
+            e->wanted = v;
+            InterlockedIncrement(&e->wantedCount);
+        };
+        auto shown = [&](int i) { return NgTuneAt(block, i)->value; };
+        auto greyed = [&](int i) { return (NgTuneAt(block, i)->flags & kNgTuneDisabled) != 0; };
+        d.powertrain = true;
+        SettingsPublish(d);
+        TunePass(block, 1000);
+        bool published = ((NgTuneHead *)block)->tick == 1000 && !greyed(0) && !g_setDirty;
+        for (int i = 0; i < count; i++) published = published && shown(i) == kGt[i].def;
+        // a wanted value: on the tab's settings, flagged for the pass as a tab's edit is (taken and saved from there), and shown
+        want(kGtBite, 62.4f);
+        want(kGtCap, 500.0f);
+        TunePass(block, 1050);
+        const bool flagged = InterlockedExchange(&g_setDirty, 0) == 1;
+        SettingsGet(got);
+        const bool taken = flagged && got.diffLockBite == 62 && got.wheelCap == 200 && shown(kGtBite) == 62.0f && shown(kGtCap) == 200.0f && got.lowRangeSlip == 100 && got.opacity == d.opacity;
+        // no number: nothing changes and nothing is flagged
+        want(kGtPush, nanf(""));
+        TunePass(block, 1100);
+        SettingsGet(got);
+        const bool nothing = !g_setDirty && got.pushShare == 0 && shown(kGtPush) == 0.0f;
+        // the tool's Reset: every default asked
+        for (int i = 0; i < count; i++) want(i, kGt[i].def);
+        TunePass(block, 1150);
+        InterlockedExchange(&g_setDirty, 0);
+        SettingsGet(got);
+        const bool reset = got.diffLockBite == d.diffLockBite && got.wheelCap == d.wheelCap && got.pushShare == d.pushShare && got.lowRangeSlip == d.lowRangeSlip && got.powertrain &&
+                           got.engineShare == d.engineShare && got.opacity == d.opacity;
+        // Real engine off: greyed with why, and nothing is taken
+        d.powertrain = false;
+        SettingsPublish(d);
+        TunePass(block, 1200);
+        want(kGtLowSlip, 10.0f);
+        TunePass(block, 1250);
+        SettingsGet(got);
+        const bool off = greyed(0) && greyed(kGtLowSlip) && !strcmp(NgTuneAt(block, 0)->text, "Real engine is off.") && !g_setDirty && got.lowRangeSlip == 100;
+        TunePass(nullptr, 1300); // no block: the pass does nothing
+        if (!(listed && published && taken && nothing && reset && off)) printf("     listed %d published %d taken %d nothing %d reset %d off %d\n", listed, published, taken, nothing, reset, off);
+        Check(listed && published && taken && nothing && reset && off,
+              "tuning block: four figures of the Powertrain with the settings' own ranges and defaults; a wanted value goes into the tab's settings held to its range and to whole "
+              "percent, flagged as a tab's edit is, and is shown; no number changes nothing; every default asked resets the four and leaves the rest; with Real engine off greyed with "
+              "why and nothing taken");
+        SettingsDefaults(d);
+        SettingsPublish(d);
     }
 
     // pad button names

@@ -311,6 +311,8 @@ Next Gen Tire Inflation (the SnowRunner Tire Inflation System) and this mod are 
 
 The mod publishes its state for other mods to read: a block of 256 bytes of shared memory named `Local\SnowRunnerGauges.State.<process id>`, written about 20 times a second. It holds the truck driven, the outside temperature in force, and everything the cluster shows as it shows it: the speed, the gear and its letter, the dials' scales, the temperatures, boost, air, fuel, range, the lamps and the units the player picked. A speedo of another mod can draw from it and agree with the cluster. A tire mod by the same author reads the outside temperature from it. `docs\SnowRunnerGauges_State.h` has the layout and the read rule, with an example reader. It needs only `windows.h` and `stdint.h`, and the mod builds its writer on the same file. Version 1 was the first 64 bytes, and readers of it still work.
 
+A second block, `Local\NextGen.Tune.<process id>.<n>` (`src\ng_tune.h`), holds four figures of the Powertrain for a tuning tool that is not part of a release: `DiffLockBite`, `WheelCap`, `PushShare` and `LowRangeSlip`. The tool asks for a value through the block, and the mod takes it as it takes an edit on the tab. Without the tool nothing reads it.
+
 From the version of that mod that publishes its own state, the cluster has a tenth lamp: a tire with the letter of the pressure mode you chose there, L for Low, R for Reduced, N for Normal, + for Increased. It is lit amber at Low and Reduced and green at Increased, dark at Normal, it blinks while the pressure is on its way, and it is red while the tires take damage or one is worn out. Without that mod, or with an older version of it, there are nine lamps as before.
 
 ## Remove
