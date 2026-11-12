@@ -90,11 +90,69 @@ struct LockSteerRec
     float closedRead;
     float share;     // the share in force, 1 with nothing limited
     long writes, backs;
+    long mended;     // figures met again after they were let go (LockSteerKept), and the last of them
+    float mendedRead, mendedStock;
 };
 inline bool LockSteerSame(float a, float b) { return !memcmp(&a, &b, sizeof a); } // to the bit
 
+// ---- the figures let go (review_lock_steering_151.md, M1) ----
+// A record is thrown away when the truck is left and when another truck is driven. Its wheels get their stock figure
+// back first, but only through the pointers the record holds. Where the game has moved or rebuilt the wheels by then,
+// nothing is put back, and the wheels turn up at a new place holding stock times the share. Taken as a stock figure,
+// that would be lowered again: 60 percent, then 36, then 22.
+// So every wheel let go with the mod's figure still in it leaves a pair here: its stock figure and the mod's last
+// write, with the truck's id. The memory outlives every record, for the session: kLockSteerKeptMost pairs, the oldest
+// dropped. A figure about to be taken as a stock figure is looked up among the last writes first, to the bit, for the
+// same truck id (or none on both sides). Found: it is the mod's own figure on a moved wheel, and the pair is spent.
+enum { kLockSteerKeptMost = 64 };
+struct LockSteerKept
+{
+    int n;
+    float stock[kLockSteerKeptMost], last[kLockSteerKeptMost];
+    char id[kLockSteerKeptMost][40];
+    long kept, met; // pairs kept and pairs met again, over the session
+};
+inline LockSteerKept &LockSteerMemory()
+{
+    static LockSteerKept kept = {};
+    return kept;
+}
+inline void LockSteerKeep(LockSteerKept &k, const char *id, float stock, float last)
+{
+    if (k.n >= kLockSteerKeptMost)
+    {
+        memmove(k.stock, k.stock + 1, sizeof(float) * (kLockSteerKeptMost - 1));
+        memmove(k.last, k.last + 1, sizeof(float) * (kLockSteerKeptMost - 1));
+        memmove(k.id, k.id + 1, sizeof k.id[0] * (kLockSteerKeptMost - 1));
+        k.n = kLockSteerKeptMost - 1;
+    }
+    k.stock[k.n] = stock, k.last[k.n] = last;
+    strncpy_s(k.id[k.n], id, _TRUNCATE);
+    k.n++;
+    k.kept++;
+}
+// The stock figure of the newest pair whose last write is `figure` to the bit, for the truck id; the pair is spent.
+inline bool LockSteerMeet(LockSteerKept &k, const char *id, float figure, float &stock)
+{
+    for (int i = k.n - 1; i >= 0; i--)
+    {
+        if (!LockSteerSame(k.last[i], figure) || strcmp(k.id[i], id)) continue;
+        stock = k.stock[i];
+        memmove(k.stock + i, k.stock + i + 1, sizeof(float) * (size_t)(k.n - 1 - i));
+        memmove(k.last + i, k.last + i + 1, sizeof(float) * (size_t)(k.n - 1 - i));
+        memmove(k.id + i, k.id + i + 1, sizeof k.id[0] * (size_t)(k.n - 1 - i));
+        k.n--;
+        k.met++;
+        return true;
+    }
+    return false;
+}
+
 // The stock figure back into every wheel that still reads as the mod's own write. A figure that reads as anything
 // else is left alone. The share in force is 1 after it. How many were written.
+// A wheel that is not put back (it is not read, it reads as another figure than the stock one, or the write fails) is
+// let go with the mod's figure in it, wherever the game has it now: its pair goes to the memory of the figures let go,
+// and the record no longer claims it.
 inline int LockSteerBack(LockSteerRec &r, const TruckMemory &m)
 {
     int back = 0;
@@ -102,8 +160,14 @@ inline int LockSteerBack(LockSteerRec &r, const TruckMemory &m)
     {
         if (!r.has[i] || !(r.stock[i] > 0.0f) || LockSteerSame(r.last[i], r.stock[i])) continue;
         float now = 0.0f;
-        if (!m.get(r.wheel[i] + kSteerMostAt, now) || !LockSteerSame(now, r.last[i])) continue;
-        if (m.put(r.wheel[i] + kSteerMostAt, r.stock[i])) r.last[i] = r.stock[i], back++;
+        const bool read = m.get(r.wheel[i] + kSteerMostAt, now);
+        if (read && LockSteerSame(now, r.last[i]) && m.put(r.wheel[i] + kSteerMostAt, r.stock[i]))
+        {
+            r.last[i] = r.stock[i], back++;
+            continue;
+        }
+        if (!(read && LockSteerSame(now, r.stock[i]))) LockSteerKeep(LockSteerMemory(), r.id, r.stock[i], r.last[i]);
+        r.last[i] = r.stock[i];
     }
     r.backs += back;
     r.share = 1.0f;
@@ -143,6 +207,9 @@ inline int LockSteerDrop(LockSteerRec &r, const TruckMemory &m)
 //   the stock stays; the stock figure is a fresh wheel of the same kind.
 //   Anything else while the share in force is 1 is taken as a new stock figure. Under 1 it is not the mod's: the
 //   record is closed, the wheels that still read as the mod's are put back, and nothing more is written to this truck.
+//   A figure about to be taken as a stock figure is first looked up among the figures let go (LockSteerMeet). Met: it
+//   is the mod's own write on a moved wheel. The stock is the pair's, the last write is the figure read, and the share
+//   in force is no more than figure over stock, so the next write goes on from there and never lowers it twice.
 // A figure that is no most angle (under 0, a quarter turn or more, no number) closes the record too. False: closed
 // (now or before), or a wheel was not read (nothing is done in this pass).
 inline bool LockSteerLook(LockSteerRec &r, const TruckMemory &m, const uint64_t *wheel, int n)
@@ -155,16 +222,25 @@ inline bool LockSteerLook(LockSteerRec &r, const TruckMemory &m, const uint64_t 
         if (!m.get(wheel[i] + kSteerMostAt, now[i])) return false;
     auto sane = [](float a) { return a == 0.0f || (a > 0.0f && a < kSteerSaneUnder); };
     int bad = -1;
+    const bool unlimited = r.share >= 1.0f; // as this look began: a figure met again lowers the share in the loop
     for (int i = 0; i < n && bad < 0; i++)
     {
         const bool fresh = !r.has[i] || i >= r.n;
         // a new pointer needs no case of its own: the mod's last write there is the old wheel moved (the stock stays),
         // the stock figure is a fresh wheel of the same kind, and anything else is judged as at the old pointer
         const bool mine = !fresh && LockSteerSame(now[i], r.last[i]), stock = !fresh && LockSteerSame(now[i], r.stock[i]);
-        if (fresh || (!mine && !stock && r.share >= 1.0f))
+        if (fresh || (!mine && !stock && unlimited))
         {
             // taken as the stock: a place with no record, or another figure while nothing is limited
+            float kept = 0.0f;
             if (!sane(now[i])) bad = i;
+            else if (now[i] > 0.0f && LockSteerMeet(LockSteerMemory(), r.id, now[i], kept) && kept > now[i] && sane(kept))
+            {
+                // the mod's own figure on a wheel that moved after its record was thrown away
+                r.has[i] = true, r.stock[i] = kept, r.last[i] = now[i];
+                if (now[i] / kept < r.share) r.share = now[i] / kept;
+                r.mended++, r.mendedRead = now[i], r.mendedStock = kept;
+            }
             else r.has[i] = true, r.stock[i] = r.last[i] = now[i];
         }
         else if (stock) r.last[i] = r.stock[i];       // the stock figure stands there: a fresh wheel, or put back by another hand

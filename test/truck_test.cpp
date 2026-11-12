@@ -8040,6 +8040,83 @@ static void TruckTestsLockSteer()
         Check(half && longPass && up && slider && noTime && LockSteerPercent(0.6f) == 60 && LockSteerPercent(1.0f) == 0 && LockSteerPercent(0.996f) == 100,
               "lock steering, the ease: 1 to 0.6 in thirty passes of 1/60 s and not before; a pass of 5 s moves it by 0.08; up again and to a slider's new figure the same way; no time, no move");
     }
+    // a truck the game rebuilds while a limit is in force (review_lock_steering_151.md, M1): the wheels move to new
+    // pointers with the mod's figures in them and the old pointers read nothing, so nothing is put back when the
+    // record is thrown away. The figure met again is never taken as a stock figure: stock times 0.6 after every round
+    {
+        LockSteerMemory() = LockSteerKept{};
+        const uint64_t kMoved = 0x7B4000000ull;
+        const float stockOuter = 0.6f, stockInner = 0.7f;
+        auto roundTrip = [&](bool leftForAPass, const char *id) {
+            LockSteerMemory() = LockSteerKept{};
+            uint64_t at[4];
+            for (int i = 0; i < 4; i++) at[i] = kMoved + 0x1000ull * (uint64_t)i;
+            for (int i = 0; i < 4; i++) Block(at[i], 0x200);
+            Put(at[0] + kSteerMostAt, stockOuter), Put(at[1] + kSteerMostAt, stockInner), Put(at[2] + kSteerMostAt, 0.0f), Put(at[3] + kSteerMostAt, 0.0f);
+            LockSteerRec r = {};
+            uint64_t vehicle = 0x7B5000100ull;
+            bool ok = LockSteerFor(r, kMemory, vehicle, id);
+            auto settle = [&](float target) {
+                for (int pass = 0; pass < 12; pass++) ok = ok && LockSteerLook(r, kMemory, at, 4), LockSteerWrite(r, kMemory, target, 0.1f);
+            };
+            auto holds = [&](float share) {
+                float a = -1.0f, b = -1.0f, c = -1.0f;
+                Peek(at[0] + kSteerMostAt, &a, 4), Peek(at[1] + kSteerMostAt, &b, 4), Peek(at[2] + kSteerMostAt, &c, 4);
+                return fabsf(a - stockOuter * share) < 1e-6f && fabsf(b - stockInner * share) < 1e-6f && c == 0.0f;
+            };
+            settle(0.6f);
+            ok = ok && holds(0.6f) && r.stock[0] == stockOuter && r.stock[1] == stockInner;
+            long mended = 0;
+            for (int round = 0; round < 10 && ok; round++)
+            {
+                // the game moves the wheels: new pointers with the figures as they are, the old ones gone
+                uint64_t to[4];
+                for (int i = 0; i < 4; i++)
+                {
+                    float v = 0.0f;
+                    Peek(at[i] + kSteerMostAt, &v, 4);
+                    to[i] = kMoved + 0x100000ull * (uint64_t)(round + 1) + 0x1000ull * (uint64_t)i;
+                    Block(to[i], 0x200);
+                    Put(to[i] + kSteerMostAt, v);
+                    Drop(at[i]);
+                    at[i] = to[i];
+                }
+                if (leftForAPass) LockSteerDrop(r, kMemory);    // the truck is not driven for a pass: nothing can be put back
+                else vehicle += 0x10000;                         // a truck with no id at a new vehicle pointer
+                const bool anew = LockSteerFor(r, kMemory, vehicle, id);
+                ok = ok && anew && LockSteerLook(r, kMemory, at, 4);
+                ok = ok && r.stock[0] == stockOuter && r.stock[1] == stockInner && r.share < 0.61f && r.share > 0.59f && r.mended == 2;
+                mended += r.mended;
+                settle(0.6f);
+                ok = ok && holds(0.6f);
+            }
+            // both sliders at 100: the stock figure is back in the moved wheels
+            LockSteerDrop(r, kMemory);
+            ok = ok && holds(1.0f) && mended == 20 && LockSteerMemory().n == 0;
+            for (int i = 0; i < 4; i++) Drop(at[i]);
+            return ok;
+        };
+        const bool left = roundTrip(true, "{51111111-0000-4000-8000-000000000003}"), leftNoId = roundTrip(true, "");
+        const bool newVehicle = roundTrip(false, "");
+        // the pairs are a truck's own: another truck whose stock figure equals a figure let go keeps it as its stock
+        LockSteerKept &k = LockSteerMemory();
+        k = LockSteerKept{};
+        LockSteerKeep(k, "{51111111-0000-4000-8000-000000000004}", 0.5f, 0.3f);
+        float stock = 0.0f;
+        const bool othersOwn = !LockSteerMeet(k, "{51111111-0000-4000-8000-000000000005}", 0.3f, stock) && !LockSteerMeet(k, "", 0.3f, stock) && k.n == 1 &&
+                               !LockSteerMeet(k, "{51111111-0000-4000-8000-000000000004}", 0.30000001192f * 1.0000002f, stock) &&
+                               LockSteerMeet(k, "{51111111-0000-4000-8000-000000000004}", 0.3f, stock) && stock == 0.5f && k.n == 0;
+        // the memory holds 64 pairs, the oldest dropped
+        for (int i = 0; i < kLockSteerKeptMost + 3; i++) LockSteerKeep(k, "", 0.9f, 0.1f + 0.001f * (float)i);
+        const bool most = k.n == kLockSteerKeptMost && !LockSteerMeet(k, "", 0.1f + 0.001f * 2.0f, stock) && LockSteerMeet(k, "", 0.1f + 0.001f * 3.0f, stock) &&
+                          LockSteerMeet(k, "", 0.1f + 0.001f * (float)(kLockSteerKeptMost + 2), stock) && k.n == kLockSteerKeptMost - 2;
+        k = LockSteerKept{};
+        if (!(left && leftNoId && newVehicle && othersOwn && most)) printf("     rebuilt: %d %d %d %d %d\n", left, leftNoId, newVehicle, othersOwn, most);
+        Check(left && leftNoId && newVehicle && othersOwn && most,
+              "lock steering, a truck rebuilt under a limit: the wheels moved to new pointers with the old ones gone, the truck left for a pass and driven again, or a "
+              "truck with no id at a new vehicle pointer, ten rounds each: the figure is stock times 0.6 after every round and the stock figure is back at the end; a "
+              "figure let go is met only by its own truck and to the bit; the memory holds 64 pairs");
+    }
     // the wheels in made-up memory: two fronts with a most angle of 0.6 rad, two rears with 0
     {
         const uint64_t setA[4] = { 0x7B1000000ull, 0x7B1001000ull, 0x7B1002000ull, 0x7B1003000ull };
@@ -8055,6 +8132,7 @@ static void TruckTestsLockSteer()
             put(set, 0, 0.6f), put(set, 1, 0.6f), put(set, 2, 0.0f), put(set, 3, 0.0f);
         };
         stockOf(setA);
+        LockSteerMemory() = LockSteerKept{};
         LockSteerRec rec = {};
         const bool fresh = LockSteerFor(rec, kMemory, 0x7B0000100ull, "{51111111-0000-4000-8000-000000000001}") && rec.share == 1.0f;
         const bool looked = LockSteerLook(rec, kMemory, setA, 4) && rec.n == 4 && rec.stock[0] == 0.6f && rec.stock[2] == 0.0f;

@@ -5207,7 +5207,12 @@ static void LockSteerPass(TruckWatch &w, const TruckMemory &m, const GaugeSettin
     w.steerAt = now;
     if (LockSteerFor(r, m, w.refs.vehicle, w.who.taken.id)) w.steerSaid = false;
     const bool wasClosed = r.closed;
+    const long mendedWas = r.mended;
     const bool looked = LockSteerLook(r, m, w.refs.wheel, w.refs.wheels);
+    if (r.mended != mendedWas)
+        Log(L"steering: %ld wheels of vehicle %llx hold the mod's own figure from before the truck was rebuilt (the last %.4f rad): the stock figure is mended to %.4f rad, "
+            L"not taken from it, and the share in force goes on from %.3f",
+            r.mended - mendedWas, (unsigned long long)r.vehicle, r.mendedRead, r.mendedStock, r.share);
     if (r.closed && !wasClosed)
         Log(L"steering: wheel %d of vehicle %llx holds a most angle of %.4f rad that is neither its stock figure nor the mod's own, so nothing more is written to this truck; "
             L"the wheels that still read as the mod's have their stock figure back",

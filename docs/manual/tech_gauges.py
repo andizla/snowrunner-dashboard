@@ -1356,11 +1356,14 @@ truck alone and only while the last pass is no older than 250 ms. Each refusal i
 keeps that most angle as a float at wheel + 0xB8. One pattern of the game's code proves the place, found once
 (<code>steering: the game's steering product at +</code>); where it is not found nothing is ever written. While an axle is locked
 and a row is under 100 the mod keeps each steered wheel's stock figure and writes stock times one share, the same for every wheel
-(<code>steering: a lock limits the steering of vehicle</code>). The share moves at 0.8 a second, a pass counts as 0.1 s at the most,
-and nothing is written while the stick is within 0.01 of the middle. Before every write the wheel must hold its stock figure or the
+(<code>steering: a lock limits the steering of vehicle</code>). The share moves at 0.8 a second and a pass counts as 0.1 s at the most.
+The stick is not read: at the middle the product is 0 at any share. Before every write the wheel must hold its stock figure or the
 mod's own last one, to the bit. Another figure there ends the writing for that truck (<code>steering: wheel</code>). The stock figure
 goes back when the truck is left, when Real engine goes off and when both rows are at 100
-(<code>steering: the stock most angle put back into</code>). The settings line is
+(<code>steering: the stock most angle put back into</code>). A wheel that cannot be put back, because the game has moved or rebuilt it,
+is let go with the mod's figure in it. Its stock figure and that figure are kept as a pair for the session, 64 pairs at the most, with
+the truck's id. A figure about to be taken as a stock figure is looked up among them first. Met again, the stock is the pair's and the
+share in force goes on from figure over stock, so a rebuilt truck is never lowered twice (<code>steering: %ld wheels of vehicle</code>). The settings line is
 <code>settings: the steering left with a lock in:</code>, and with <code>Probe=1</code> a line a second
 (<code>probe: steering: the target</code>) gives the target, the share in force and the first wheel's figures.</p>
 <p><b>The tuning block.</b> A second block, <code>Local&#92;NextGen.Tune.&lt;process id&gt;.&lt;n&gt;</code> (<code>ng_tune.h</code>,
