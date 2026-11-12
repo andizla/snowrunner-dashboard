@@ -935,6 +935,11 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             ImGui::SetNextItemWidth(w);
             changed(ImGui::SliderInt("##lowrangeslip", &s.lowRangeSlip, 0, 100, "%d %%", ImGuiSliderFlags_AlwaysClamp));
             PageTip("How much wheel slip L-, L and R may use. 100 gives them the same room as L+. 0 holds each wheel near the top speed of its gear.");
+            static const char *slips[kSlipCount] = { "Engine held", "Low gears", "All gears" };
+            PageLabel("Held gear slip", labelX);
+            ImGui::SetNextItemWidth(w);
+            changed(ImGui::Combo("##heldgearslip", &s.heldGearSlip, slips, kSlipCount));
+            PageTip("How far a numbered gear held by hand may spin its wheels. Engine held: to the engine speed limit. Low gears: as far as L+, in the gears near it. All gears: by the Wheel cap in every gear.");
             PageLabel("Drive display", labelX);
             changed(ImGui::Checkbox("##drivedisplay", &s.driveDisplay));
             PageTip("Each wheel: its spin against the truck speed and its share of the drive.");

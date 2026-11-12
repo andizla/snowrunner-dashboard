@@ -85,6 +85,10 @@ inline const wchar_t *LayoutName(int layout)
     return names[layout < 0 || layout >= kLayoutCount ? kLayoutStrip : layout];
 }
 enum { kFaceSolid, kFaceTinted, kFaceOpen, kFaceCount };     // GaugeSettings::style
+#ifndef NG_SLIP_CHOICES // the same line in gauges.h and gearbox_model.h: each is read without the other by some test
+#define NG_SLIP_CHOICES
+enum { kSlipEngineHeld, kSlipLowGears, kSlipAllGears, kSlipCount }; // GaugeSettings::heldGearSlip (gearbox_model.h, GearboxPosCap)
+#endif
 enum { kHwNone, kHwAsDials, kHwLimits, kHwCount };           // GaugeSettings::hiddenWarnings (warn_list.h)
 enum { kClassTruck, kClassScout, kClassHeavy, kClassCount }; // GaugeSettings::tachClass
 enum { kOilOff, kOilNeedle, kOilDial, kOilGaugeCount };      // GaugeSettings::oilGauge
@@ -134,6 +138,7 @@ struct GaugeSettings
     int lowRangeSlip;        // LowRangeSlip: with the torque cut in L- and L, the wheel cap is the gear's own plus this percent of the way to the cap of the highest low gear the gearbox has (BRIEF_low_range_pull.md), 0 to 100, 100
     int pushShare;           // PushShare: with Powertrain, the share in percent of the game's chassis push at speed that carries the mod's surplus over its own pull (BRIEF_chassis_push.md), 0 to 100
     int diffType;            // DiffType: the differential of a truck where the torque cut acts, 0 Auto (by the lock kind at vehicle + 0xE8), 1 Open, 2 Limited slip, 3 Locked (torque_cut.h, kDiff...); a truck file may hold its own
+    int heldGearSlip;        // HeldGearSlip: the slip room of a numbered gear held by hand: 0 the governor as before, 1 the cap of L+ in the gears near it, 2 the wheel cap in every gear (gearbox_model.h, GearboxPosCap); 0 by default until the user has driven
     int wheelCap;            // WheelCap: with the torque cut in L-, L, L+ and R, no driven wheel runs faster than this percent of the gear's top (BRIEF_drivetrain_2c_wheel_cap.md), 110 to 200, 150; no box, for the A/B
     float engineBrake;       // EngineBrake: with Powertrain in a gear held by hand at Gearbox=2 (the torque cut), the share of the gear's torque in percent the engine holds the truck back with at the redline with the foot off, 0 to 30 (torque_cut.h)
     float roadCdA;           // RoadCdA: the drag's area in m², 0 by the truck's mass (1.1 under 4 t, 3.5 under 10 t, else 6); a truck's file may set its own
@@ -231,6 +236,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.roadLoad = true; // on by default (BRIEF_defaults_on.md); an explicit 0 in the ini stays 0
     s.engineBrake = 15.0f; // kEngineBrakeDefault (BRIEF_drivetrain_2_torque_cut.md)
     s.modEngineSpeed = true; // on by default (BRIEF_drivetrain_1_engine_speed.md); an explicit 0 stays 0
+    s.heldGearSlip = 0;
     s.wheelCap = 150; // kCapDefault (BRIEF_drivetrain_2c_wheel_cap.md with M5)
     s.pushShare = 0; // the surplus taken back (BRIEF_chassis_push.md)
     s.lowRangeSlip = 100; // L- and L with the slip room of L+ (BRIEF_low_range_pull.md, the lead)
@@ -387,6 +393,7 @@ inline void SettingsClamp(GaugeSettings &s)
     s.engineSpeedTop = isfinite(s.engineSpeedTop) ? SettingsRange(s.engineSpeedTop, 0.5f, 1.5f) : 1.0f;
     s.engineBrake = isfinite(s.engineBrake) ? SettingsRange(s.engineBrake, 0.0f, 30.0f) : 15.0f;
     s.wheelCap = s.wheelCap < 110 ? 110 : s.wheelCap > 200 ? 200 : s.wheelCap;
+    s.heldGearSlip = s.heldGearSlip < 0 || s.heldGearSlip > 2 ? 0 : s.heldGearSlip;
     s.pushShare = s.pushShare < 0 ? 0 : s.pushShare > 100 ? 100 : s.pushShare;
     s.lowRangeSlip = s.lowRangeSlip < 0 ? 0 : s.lowRangeSlip > 100 ? 100 : s.lowRangeSlip;
     s.diffLockBite = s.diffLockBite < 0 ? 0 : s.diffLockBite > 100 ? 100 : s.diffLockBite;

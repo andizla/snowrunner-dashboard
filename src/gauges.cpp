@@ -823,6 +823,7 @@ static void WriteIni(const GaugeSettings &s)
     num(L"EngineBrake", s.engineBrake);
     whole(L"WheelCap", s.wheelCap);
     whole(L"LowRangeSlip", s.lowRangeSlip);
+    whole(L"HeldGearSlip", s.heldGearSlip);
     whole(L"PushShare", s.pushShare);
     whole(L"DiffLockBite", s.diffLockBite);
     whole(L"DiffType", s.diffType);
@@ -1338,6 +1339,7 @@ static void ReadIni(GaugeSettings &s)
     s.roadLoad = IniBool(L"RoadLoad", s.roadLoad, ini);
     s.wheelCap = IniInt(L"WheelCap", s.wheelCap, ini);
     s.lowRangeSlip = IniInt(L"LowRangeSlip", s.lowRangeSlip, ini);
+    s.heldGearSlip = IniInt(L"HeldGearSlip", s.heldGearSlip, ini);
     s.pushShare = IniInt(L"PushShare", s.pushShare, ini);
     s.diffLockBite = IniInt(L"DiffLockBite", s.diffLockBite, ini);
     s.diffType = IniInt(L"DiffType", s.diffType, ini);
@@ -1460,13 +1462,14 @@ void SettingsPut(const GaugeSettings &in, LONG turn)
 // tuning tool asked goes into the settings the tab shows by the tab's own road (SettingsPut with the turn they were
 // read at, so the pass takes it below and saves it a second after the last change), then the figures are published.
 // With no tool in the game the block is written and nobody reads it.
+static char g_slipLine[32] = ""; // the held gear slip's line for the tool, written by the truck's pass on this thread; empty with no gear held under the cut
 static void TunePass(uint8_t *block, ULONGLONG now)
 {
     if (!block) return;
     GaugeSettings g;
     const LONG turn = SettingsGet(g);
     if (GtTake(block, g)) SettingsPut(g, turn);
-    GtPublish(block, g, now);
+    GtPublish(block, g, now, g_slipLine);
 }
 
 // The settings in force, for the tab to show. What the tab handed back and the mod's thread has not taken yet is
@@ -4150,6 +4153,8 @@ static void LogSettings(const GaugeSettings &s)
                           TorqueCutWanted(s) ? L"in a gear held by hand the torque cut: the mod engine alone, no cut at the gear's top" : L"no torque cut (it needs Gearbox=2, EngineShare above 0 and ModEngineSpeed=1)",
                           s.modEngineSpeed ? L"the mod engine's (ModEngineSpeed=1; the fuel's and the stall's calls keep the game's own, by the cut's own pull under the cut)" : L"its own (ModEngineSpeed=0)");
         Log(L"settings: diff lock bite %d (DiffLockBite; 0 the game's lock, 100 one shaft), the differential's type %d (DiffType; 0 Auto, 1 Open, 2 Limited slip, 3 Locked), low range slip %d (LowRangeSlip; 0 the gear's own wheel cap in L-, L and R, 100 the cap of the highest low gear)", s.diffLockBite, s.diffType, s.lowRangeSlip);
+        Log(L"settings: held gear slip %d, %S (HeldGearSlip; 0 a numbered gear held by hand has the governor, 1 the cap of L+ in the gears near it, 2 the wheel cap in every gear)", s.heldGearSlip,
+            HeldSlipName(s.heldGearSlip));
     }
     else Log(L"settings: powertrain off: the truck pulls with the game's own engine (Powertrain=1 hands it the mod's)");
     Log(s.creep && s.creepManual ? L"settings: creep on, in a gear picked by hand too (CreepManual): an automatic through the converter to walking pace, a gear picked by hand at its idle speed"
@@ -4376,6 +4381,8 @@ struct TruckWatch
     ULONGLONG cutProbeAt;       // the cut's probe line, once a second
     ULONGLONG pullProbeAt;      // the probe's line of the pull with no gear held by hand, once a second
     TorqueCutCounts cutWas;     // the detour's counts at the last probe line
+    HeldSlip slip;              // HeldGearSlip's choice in force for the gear held, apart from the choice set (gearbox_model.h, HeldSlipStep)
+    float slotCap;              // the wheel cap the slot went out with on this pass, 0 none or no cut
     WheelCapCounts capWas;      // the wheel cap's at the last probe line
     PushCounts pushWas;         // the chassis push's at the last probe line
     ULONGLONG pushProbeAt;      // its next probe line
@@ -4518,7 +4525,7 @@ static bool GearboxManual(const TruckWatch &w) { return GearboxHeldBy(w.take.dri
 // share of the last pass as the least F; the engine held back (Torque) on what it pushes, not on its braking.
 static_assert(kCapWheels == kMaxWheels, "the cut, the cap, the lock and the chassis push read as many wheels as the rest of the mod");
 static TorqueCutSlot TorqueCutSlotOf(const TruckWatch &w, const TruckRaw &raw, const GaugeSettings &s, const GaugeScale &scale, const TorqueCurve &curve, float tachTop,
-                                     bool locked, float gearTop)
+                                     bool locked, float gearTop, int slip = kSlipEngineHeld, float firstTop = 0.0f)
 {
     TorqueCutSlot c = {};
     c.vehicle = w.refs.vehicle;
@@ -4557,7 +4564,8 @@ static TorqueCutSlot TorqueCutSlotOf(const TruckWatch &w, const TruckRaw &raw, c
     m.governTo = band.to;
     // the wheel speed cap, the runaway guard, in the wheels' own measure (+ 0x16C's): WheelCap percent of the gear's top, in
     // L-, L, L+ and R alone (the user: "the cap is for L gears")
-    c.cap = GearboxPosCapped(w.pos.pos) && gearTop > 0.0f && isfinite(gearTop) ? (float)s.wheelCap / 100.0f * gearTop : 0.0f;
+    // a numbered gear held by hand by HeldGearSlip's choice in force (slip; BRIEF_held_gear_slip.md): the one rule is GearboxPosCap
+    c.cap = GearboxPosCap(w.pos.pos, slip, (float)s.wheelCap / 100.0f, gearTop, firstTop);
     // L-, L and R (BRIEF_reverse_pull.md): wider by LowRangeSlip, up to the cap of the highest low gear this gearbox has
     // (LowRangeCap; R's own cap where that is the larger, and with no low gear). The wider cap
     // goes beside the gear's own: the ceiling has it whole while the truck is slow and the gear's own from 0.75 of the
@@ -7143,11 +7151,33 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             const bool cutAgrees = GearboxPosAgrees(w.pos, raw.gearEngaged);
             const bool cutActs = want && own && GearboxManual(w) && TorqueCutWanted(s) && cutHooks && raw.gearEngaged != 0 && cutAgrees && gearTop > 0.0f &&
                                  w.refs.action != 0;
+            if (!cutActs)
+            {
+                w.slip = HeldSlip{ s.heldGearSlip, -1, 0 };
+                w.slotCap = 0.0f;
+                g_slipLine[0] = 0;
+            }
             if (cutActs)
             {
                 // S1: B4 is the game's own until the first publish (the drive's hook writes it 1 only while a slot is out)
                 if (!w.cutActs) w.cutGamePull = TorqueCutGamePull(raw.actionB4, TruckPedal(raw));
-                TorqueCutSlot slot = TorqueCutSlotOf(w, raw, s, scale, curve, tachTop, locked, gearTop);
+                // the slip room of a numbered gear: the choice in force, which waits where a cap would go with the wheels still
+                // past the governor (HeldSlipStep). The truck's speed is the hook's of its last step
+                const float firstTop = TruckGearTopAt(raw, 1, 1.0f);
+                {
+                    const float capShare = (float)s.wheelCap / 100.0f, dirNow = raw.gearEngaged < 0 ? -1.0f : 1.0f;
+                    float sumNow = 0.0f;
+                    int driven = 0;
+                    for (int i = 0; i < raw.wheels; i++)
+                        if (raw.drive[i] == 1 || (raw.drive[i] == 2 && raw.awd)) sumNow += raw.spin[i] * dirNow, driven++;
+                    TorqueCutCounts last = {};
+                    TorqueCutCountsGet(last);
+                    HeldSlipStep(w.slip, s.heldGearSlip, w.pos.pos, w.pos.gear, capShare, gearTop, firstTop, TruckPedal(raw), driven ? sumNow / (float)driven : NAN, last.truck,
+                                 CutGovernBand(gearTop, kTachOverrun).from);
+                }
+                TorqueCutSlot slot = TorqueCutSlotOf(w, raw, s, scale, curve, tachTop, locked, gearTop, w.slip.inForce, firstTop);
+                w.slotCap = slot.cap;
+                HeldSlipLine(g_slipLine, sizeof g_slipLine, GearboxPosNumbered(w.pos.pos) ? s.heldGearSlip : w.slip.inForce, w.slip.inForce, slot.cap);
                 slot.gamePull = w.cutGamePull;
                 w.diffBand[0] = slot.map.governFrom * slot.map.top, w.diffBand[1] = slot.map.governTo * slot.map.top;
                 TorqueCutPublish(&slot);
@@ -7347,8 +7377,13 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                     cutActs ? L"acting" : TorqueCutWhyNot(s, want, own && GearboxManual(w), cutHooks, raw.gearEngaged, gearTop, cutAgrees), c.s, sTop, gearTop, sTop * scale.redline,
                     c.f, c.bracket, w.cutFloor, c.used, c.rate, locked ? 0.0f : SettingsRange(w.clutch.carried, -1.0f, kClutchHold), s.engineShare / 100.0f, c.stock, c.torque, c.d4, c.b4s, c.standIn, c.w,
                     c.answered - before.answered, c.passed - before.passed, c.others - before.others, c.faults - before.faults, c.falls - before.falls, cutActs ? L"on" : L"off",
-                    c.truck, c.radius, c.radius94, c.rollCylinder, c.rollNone, c.rollOut, !GearboxPosCapped(w.pos.pos) ? L"not in this gear" : cap.armed ? L"armed" : L"waiting", cap.ceiling, cap.clamps - w.capWas.clamps, cap.clampedNow, cap.excessMost,
+                    c.truck, c.radius, c.radius94, c.rollCylinder, c.rollNone, c.rollOut, !(w.slotCap > 0.0f) ? L"not in this gear" : cap.armed ? L"armed" : L"waiting", cap.ceiling, cap.clamps - w.capWas.clamps, cap.clampedNow, cap.excessMost,
                     cap.preMost, cap.steps > w.capWas.steps ? (cap.postSum - w.capWas.postSum) / (float)(cap.steps - w.capWas.steps) : 0.0f, cap.steps - w.capWas.steps, cap.postMost, cap.preLeast, cap.refused - w.capWas.refused, cap.waitSteps - w.capWas.waitSteps, cap.kept, cap.spread - w.capWas.spread, cap.faults - w.capWas.faults, DriveRateOn() ? 120 : 60);
+                {
+                    char slipWords[80];
+                    HeldSlipProbe(slipWords, sizeof slipWords, s.heldGearSlip, GearboxPosNumbered(w.pos.pos) && cutActs ? w.slip.inForce : s.heldGearSlip);
+                    Log(L"probe: held gear slip: %S; in %S the cap is %.2f rad/s (0 none) and the ceiling %.2f rad/s", slipWords, GearboxPosName(w.pos.pos), w.slotCap, w.slotCap > 0.0f ? cap.ceiling : 0.0f);
+                }
                 w.cutWas = c;
                 w.capWas = cap;
                 DiffCounts dc = {};
@@ -8158,7 +8193,7 @@ static DWORD WINAPI Run(void *)
     // the block the tuning tool reads the Powertrain's figures from and asks through (tune_figures.h)
     NgTuneMod tune = {};
     {
-        NgTuneItem items[kGtCount];
+        NgTuneItem items[kGtItems];
         const int count = GtItems(items);
         if (NgTuneOpen(tune, "Gameplay", 1, items, count))
             Log(L"tuning: %d figures of the Powertrain are published in Local\\NextGen.Tune.%lu.%d (ng_tune.h) for the tuning tool; nothing reads it where the tool is not in the game", count,
@@ -9519,7 +9554,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.overRevDamage == b.overRevDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
            a.springFront == b.springFront && a.dampingFront == b.dampingFront && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.hiddenWarnings == b.hiddenWarnings && a.warnFuel == b.warnFuel && a.warnEngine == b.warnEngine && a.warnGearbox == b.warnGearbox && a.warnCoolant == b.warnCoolant && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
-           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.lowRangeSlip == b.lowRangeSlip && a.diffType == b.diffType && a.physicsRate == b.physicsRate && a.engineBrake == b.engineBrake && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
+           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.heldGearSlip == b.heldGearSlip && a.lowRangeSlip == b.lowRangeSlip && a.diffType == b.diffType && a.physicsRate == b.physicsRate && a.engineBrake == b.engineBrake && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
            a.camberGainFront == b.camberGainFront && a.camberGainRear == b.camberGainRear && a.camberRestFront == b.camberRestFront && a.camberRestRear == b.camberRestRear;
 }
 
@@ -9687,6 +9722,7 @@ int wmain(int argc, wchar_t **argv)
     c.pushShare = 60;
     c.diffLockBite = 75;
     c.lowRangeSlip = 40;
+    c.heldGearSlip = 2;
     c.diffType = 2;
     c.physicsRate = 120;
     c.modEngineSpeed = false;
@@ -9707,7 +9743,7 @@ int wmain(int argc, wchar_t **argv)
                             c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.overRevDamage != d.overRevDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springFront != d.springFront && c.dampingFront != d.dampingFront && c.extraTravel != d.extraTravel && c.frameFlex != d.frameFlex && c.twistRange != d.twistRange && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
                             c.demo != d.demo && c.probe != d.probe && c.keepLogs != d.keepLogs && c.soundVolume != d.soundVolume && c.hiddenWarnings != d.hiddenWarnings && c.warnFuel != d.warnFuel && c.warnEngine != d.warnEngine && c.warnGearbox != d.warnGearbox && c.warnCoolant != d.warnCoolant && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
-                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.diffLockBite != d.diffLockBite && c.lowRangeSlip != d.lowRangeSlip && c.diffType != d.diffType && c.physicsRate != d.physicsRate && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
+                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.diffLockBite != d.diffLockBite && c.heldGearSlip != d.heldGearSlip && c.lowRangeSlip != d.lowRangeSlip && c.diffType != d.diffType && c.physicsRate != d.physicsRate && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
     WriteIni(c);
     ReadIni(b);
     Check(allChanged, "ini: the test changes every setting from its default");
@@ -9814,6 +9850,21 @@ int wmain(int argc, wchar_t **argv)
             warns = warns && k.hiddenWarnings == kHwAsDials && k.warnFuel == 0 && k.warnEngine == 0 && k.warnGearbox == 0 && k.warnCoolant == 50;
             Check(warns, "ini: HiddenWarnings and the four limits round trip; an ini without them reads as As with dials with the limits at 15, 50, 50 and 90; "
                          "what is out of range is held to it, a choice that is none to As with dials");
+            WriteIni(c);
+        }
+        {
+            // HeldGearSlip: 0 by default, anything that is no choice reads as 0
+            GaugeSettings k;
+            bool slipKey = d.heldGearSlip == 0;
+            static const wchar_t *texts[5] = { L"1", L"2", L"3", L"-1", L"x" };
+            static const int reads[5] = { 1, 2, 0, 0, 0 };
+            for (int i = 0; i < 5; i++)
+            {
+                WritePrivateProfileStringW(kIniSection, L"HeldGearSlip", texts[i], ini.c_str());
+                ReadIni(k);
+                slipKey = slipKey && k.heldGearSlip == reads[i];
+            }
+            Check(slipKey, "ini: HeldGearSlip is 0 by default, 1 and 2 are read, anything else is 0");
             WriteIni(c);
         }
         Check(names && toggles && hidden, "the Off layout: the log has a name for every layout number; the toggle pressed twice in Off flips nothing and the strip picked after it shows; "
@@ -11688,15 +11739,15 @@ int wmain(int argc, wchar_t **argv)
     {
         static uint8_t block[kNgTuneBlockMost];
         static NgTuneSeen seen;
-        NgTuneItem items[kGtCount];
+        NgTuneItem items[kGtItems];
         const int count = GtItems(items);
-        bool listed = count == 4 && NgTuneSetUp(block, sizeof block, "Gameplay", 1, items, count) && NgTuneRead(block, sizeof block, seen) && seen.count == 4 &&
+        bool listed = count == 6 && NgTuneSetUp(block, sizeof block, "Gameplay", 1, items, count) && NgTuneRead(block, sizeof block, seen) && seen.count == 6 &&
                       !strcmp(seen.mod, "Gameplay") && !strcmp(seen.e[kGtCap].name, "Wheel cap") && seen.e[kGtCap].least == 110.0f && seen.e[kGtCap].most == 200.0f &&
                       seen.e[kGtCap].def == 150.0f && seen.e[kGtLowSlip].def == 100.0f && seen.e[kGtBite].def == 0.0f && seen.e[kGtPush].most == 100.0f &&
                       !strcmp(seen.e[0].group, "Powertrain");
         GaugeSettings d, got;
         SettingsDefaults(d);
-        for (int i = 0; i < count; i++)
+        for (int i = 0; i < kGtCount; i++)
             listed = listed && strlen(items[i].tip) < 128 && strlen(items[i].name) < 48 && !strchr(items[i].tip, '\'') && !strchr(items[i].name, '\'') &&
                      items[i].def == (float)*GtField(d, i);
         auto want = [&](int i, float v) {
@@ -11710,7 +11761,7 @@ int wmain(int argc, wchar_t **argv)
         SettingsPublish(d);
         TunePass(block, 1000);
         bool published = ((NgTuneHead *)block)->tick == 1000 && !greyed(0) && !g_setDirty;
-        for (int i = 0; i < count; i++) published = published && shown(i) == kGt[i].def;
+        for (int i = 0; i < kGtCount; i++) published = published && shown(i) == kGt[i].def;
         // a wanted value: on the tab's settings, flagged for the pass as a tab's edit is (taken and saved from there), and shown
         want(kGtBite, 62.4f);
         want(kGtCap, 500.0f);
@@ -11724,7 +11775,7 @@ int wmain(int argc, wchar_t **argv)
         SettingsGet(got);
         const bool nothing = !g_setDirty && got.pushShare == 0 && shown(kGtPush) == 0.0f;
         // the tool's Reset: every default asked
-        for (int i = 0; i < count; i++) want(i, kGt[i].def);
+        for (int i = 0; i < kGtCount; i++) want(i, kGt[i].def);
         TunePass(block, 1150);
         InterlockedExchange(&g_setDirty, 0);
         SettingsGet(got);
@@ -11738,6 +11789,41 @@ int wmain(int argc, wchar_t **argv)
         TunePass(block, 1250);
         SettingsGet(got);
         const bool off = greyed(0) && greyed(kGtLowSlip) && !strcmp(NgTuneAt(block, 0)->text, "Real engine is off.") && !g_setDirty && got.lowRangeSlip == 100;
+        // the held gear slip (BRIEF_held_gear_slip.md, M4): a slider of 0 to 2 in whole steps and a line under it. 1.4 asked is 1, 7 is 2
+        d.powertrain = true;
+        SettingsPublish(d);
+        TunePass(block, 1260);
+        NgTuneRead(block, sizeof block, seen);
+        bool slipEntry = seen.e[kGtHeldSlip].kind == kNgTuneSlider && !strcmp(seen.e[kGtHeldSlip].name, "Held gear slip") && seen.e[kGtHeldSlip].least == 0.0f && seen.e[kGtHeldSlip].most == 2.0f &&
+                         seen.e[kGtHeldSlip].def == 0.0f && seen.e[kGtHeldLine].kind == kNgTuneLine && !strcmp(seen.e[kGtHeldLine].group, "Powertrain") && shown(kGtHeldSlip) == 0.0f &&
+                         !strcmp(NgTuneAt(block, kGtHeldLine)->text, "no gear held") && strlen(items[kGtHeldLine].tip) < 128 && !strchr(items[kGtHeldLine].tip, '\'');
+        want(kGtHeldSlip, 1.4f);
+        TunePass(block, 1270);
+        SettingsGet(got);
+        slipEntry = slipEntry && got.heldGearSlip == 1 && shown(kGtHeldSlip) == 1.0f && InterlockedExchange(&g_setDirty, 0) == 1;
+        want(kGtHeldSlip, 7.0f);
+        TunePass(block, 1280);
+        SettingsGet(got);
+        slipEntry = slipEntry && got.heldGearSlip == 2 && shown(kGtHeldSlip) == 2.0f;
+        InterlockedExchange(&g_setDirty, 0);
+        // the line is the truck pass's own words, and every text it can hold fits the block's 31 characters
+        HeldSlipLine(g_slipLine, sizeof g_slipLine, 1, 1, 16.6f);
+        TunePass(block, 1290);
+        slipEntry = slipEntry && !strcmp(NgTuneAt(block, kGtHeldLine)->text, "Low gears, cap 16.6");
+        for (int set = 0; set < kSlipCount; set++)
+            for (int force = 0; force < kSlipCount; force++)
+                for (float capNow : { 0.0f, 9.9f, 123.4f })
+                {
+                    char words[64];
+                    HeldSlipLine(words, sizeof words, set, force, capNow);
+                    slipEntry = slipEntry && strlen(words) < 32 && !strchr(words, '\'');
+                }
+        g_slipLine[0] = 0;
+        d.powertrain = false;
+        SettingsPublish(d);
+        TunePass(block, 1295);
+        slipEntry = slipEntry && greyed(kGtHeldSlip) && greyed(kGtHeldLine);
+        Check(slipEntry, "tuning block: Held gear slip is a slider of 0 to 2 in whole steps with a line under it; 1.4 asked is 1 and 7 is 2; the line says the choice and the cap and fits; greyed with Real engine off");
         TunePass(nullptr, 1300); // no block: the pass does nothing
         if (!(listed && published && taken && nothing && reset && off)) printf("     listed %d published %d taken %d nothing %d reset %d off %d\n", listed, published, taken, nothing, reset, off);
         Check(listed && published && taken && nothing && reset && off,

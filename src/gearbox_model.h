@@ -451,6 +451,73 @@ inline float LowRangeCap(int pos, float own, float most, int share)
     return own + (most - own) * (float)share / 100.0f;
 }
 
+// ---- the slip room of the numbered gears (BRIEF_held_gear_slip.md with the Reviewer's addendum) ----
+// HeldGearSlip, what a numbered gear held by hand gets:
+//   0 Engine held   the governor and no cap, as before the setting.
+//   1 Low gears     the cap of L+ on this truck (WheelCap x the top of the game's first gear at the plain factor), in the
+//                   gears where that cap is at least kSlipLeast x the gear's own top. A gear past that is as at 0.
+//   2 All gears     WheelCap x the gear's own top, as L+ has it.
+// A numbered gear never gets the low range's wide part. L-, L, L+ and R are the same at every choice.
+#ifndef NG_SLIP_CHOICES // the same line in gauges.h and gearbox_model.h: each is read without the other by some test
+#define NG_SLIP_CHOICES
+enum { kSlipEngineHeld, kSlipLowGears, kSlipAllGears, kSlipCount }; // GaugeSettings::heldGearSlip (gearbox_model.h, GearboxPosCap)
+#endif
+static const float kSlipLeast = 1.10f; // no cap is closer to its gear's top than this (torque_cut.h's kCapLeast, in percent there)
+inline const char *HeldSlipName(int choice)
+{
+    static const char *names[kSlipCount] = { "Engine held", "Low gears", "All gears" };
+    return names[choice < 0 || choice >= kSlipCount ? kSlipEngineHeld : choice];
+}
+// A forward gear held by hand that has the governor at choice 0: a numbered gear, and H.
+inline bool GearboxPosNumbered(int pos) { return pos == kPosGear || pos == kPosH; }
+// The wheel cap of the position held, in the wheels' measure; 0 none. The one place the rule is written: the slot, the
+// probe and the tests call it. cap: WheelCap over 100. top: the top of the gear held. firstTop: the top of the game's
+// first gear at the plain factor, which is the top of L+ whether this gearbox has an L+ or not.
+inline float GearboxPosCap(int pos, int choice, float cap, float top, float firstTop)
+{
+    if (!(top > 0.0f) || !isfinite(top) || !(cap > 0.0f) || !isfinite(cap)) return 0.0f;
+    if (GearboxPosCapped(pos)) return cap * top;
+    if (!GearboxPosNumbered(pos)) return 0.0f;
+    if (choice == kSlipAllGears) return cap * top;
+    if (choice != kSlipLowGears) return 0.0f;
+    const float low = cap * firstTop;
+    return isfinite(low) && low >= kSlipLeast * top ? low : 0.0f;
+}
+
+// The choice in force, apart from the choice set (M3). A cap that comes, grows, or shrinks and stays is in force at
+// once: the cap's step lowers no wheel, and the cut's own pacing takes the rise of the pull. A cap that goes is not:
+// with the wheels past the governor's end the governor's pull is 0, so the pull would fall to nothing in one step. The
+// old choice stays until both laws give the same pull: the pedal at 0, or the driven wheels' mean at or under the gear's
+// top with the truck at or under the governor's start. Another position or gear takes the set choice at once.
+struct HeldSlip { int inForce, pos, gear; };
+inline int HeldSlipStep(HeldSlip &st, int set, int pos, int gear, float cap, float top, float firstTop, float pedal, float mean, float truck, float governFrom)
+{
+    if (st.pos != pos || st.gear != gear)
+    {
+        st.pos = pos, st.gear = gear;
+        st.inForce = set;
+        return set;
+    }
+    if (st.inForce == set) return set;
+    const float was = GearboxPosCap(pos, st.inForce, cap, top, firstTop), now = GearboxPosCap(pos, set, cap, top, firstTop);
+    const bool goes = was > 0.0f && !(now > 0.0f);
+    const bool agree = !(pedal > 0.0f) || (isfinite(mean) && mean <= top && isfinite(truck) && truck <= governFrom * top);
+    if (!goes || agree) st.inForce = set;
+    return st.inForce;
+}
+// The line the tuning tool shows under the slider (31 characters at the most), and the probe's words.
+inline void HeldSlipLine(char *out, size_t size, int set, int inForce, float cap)
+{
+    if (set != inForce) snprintf(out, size, "%s until wheels slow", HeldSlipName(inForce));
+    else if (cap > 0.0f) snprintf(out, size, "%s, cap %.1f", HeldSlipName(set), cap);
+    else snprintf(out, size, "%s, no cap here", HeldSlipName(set));
+}
+inline void HeldSlipProbe(char *out, size_t size, int set, int inForce)
+{
+    if (set != inForce) snprintf(out, size, "set %d, in force %d until the wheels are under the top", set, inForce);
+    else snprintf(out, size, "%d (%s)", set, HeldSlipName(set));
+}
+
 // The letter the cluster shows for it ("" for a numbered gear, which shows its number).
 inline const char *GearboxPosLetter(int pos)
 {

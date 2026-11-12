@@ -4767,6 +4767,188 @@ int main(int argc, char **argv)
                      q.vMin, q.vMax, q.needleMax - q.needleMin, law0.vMin, law0.vMax, law0.needleMax - law0.needleMin);
             Check(q.vMax < 3.05f && law0.vMax < 3.05f && q.needleMax - q.needleMin > 500.0f && law0.needleMax - law0.needleMin > 500.0f, line);
         }
+        // the slip room of the numbered gears (BRIEF_held_gear_slip.md with the Reviewer's addendum): the one rule, the
+        // choice in force at a switch, and the closed loop in gear 1 against L+ on the same figures. The first gear's top
+        // is 8.06, as the low range's test below has L+.
+        {
+            const float capShare = 1.5f, firstTop = 8.06f, capLow = capShare * firstTop;
+            // M1 and M2: the rule over every position and choice
+            bool rule = true;
+            for (int choice = -1; choice <= kSlipCount; choice++)
+            {
+                // L-, L, L+ and R the same at every choice, to the bit; A and N never
+                rule = rule && GearboxPosCap(kPosLowPlus, choice, capShare, firstTop, firstTop) == capShare * firstTop && GearboxPosCap(kPosLowMinus, choice, capShare, 2.23f, firstTop) == capShare * 2.23f &&
+                       GearboxPosCap(kPosLow, choice, capShare, 4.18f, firstTop) == capShare * 4.18f && GearboxPosCap(kPosR, choice, capShare, 3.1f, firstTop) == capShare * 3.1f &&
+                       GearboxPosCap(kPosA, choice, capShare, firstTop, firstTop) == 0.0f && GearboxPosCap(kPosN, choice, capShare, firstTop, firstTop) == 0.0f;
+                // what is no choice is choice 0: no cap in a numbered gear or in H
+                if (choice != kSlipLowGears && choice != kSlipAllGears)
+                    rule = rule && GearboxPosCap(kPosGear, choice, capShare, firstTop, firstTop) == 0.0f && GearboxPosCap(kPosH, choice, capShare, 40.0f, firstTop) == 0.0f;
+            }
+            // gear 1 at choices 1 and 2: the cap of L+, to the bit
+            const float capPlus = GearboxPosCap(kPosLowPlus, kSlipEngineHeld, capShare, firstTop, firstTop);
+            rule = rule && GearboxPosCap(kPosGear, kSlipLowGears, capShare, firstTop, firstTop) == capPlus && GearboxPosCap(kPosGear, kSlipAllGears, capShare, firstTop, firstTop) == capPlus;
+            // choice 1: the cap of L+ where it is at least 1.10 of the gear's own top, else none
+            const float edge = capLow / kSlipLeast;
+            rule = rule && GearboxPosCap(kPosGear, kSlipLowGears, capShare, 0.999f * edge, firstTop) == capLow && GearboxPosCap(kPosGear, kSlipLowGears, capShare, 1.001f * edge, firstTop) == 0.0f &&
+                   GearboxPosCap(kPosGear, kSlipLowGears, capShare, 10.5f, firstTop) == capLow && GearboxPosCap(kPosGear, kSlipLowGears, capShare, 20.0f, firstTop) == 0.0f;
+            // at WheelCap 110 choice 1 caps gear 1 alone where the second gear's top is over the first's
+            rule = rule && GearboxPosCap(kPosGear, kSlipLowGears, 1.1f, firstTop, firstTop) == 1.1f * firstTop && GearboxPosCap(kPosGear, kSlipLowGears, 1.1f, 1.01f * firstTop, firstTop) == 0.0f;
+            // choice 2: the cap by the gear's own top, in the highest gear and in H; H at choice 1 is far past the rule
+            rule = rule && GearboxPosCap(kPosGear, kSlipAllGears, capShare, 40.0f, firstTop) == capShare * 40.0f && GearboxPosCap(kPosH, kSlipAllGears, capShare, 40.0f, firstTop) == capShare * 40.0f &&
+                   GearboxPosCap(kPosH, kSlipLowGears, capShare, 40.0f, firstTop) == 0.0f && GearboxPosNumbered(kPosGear) && GearboxPosNumbered(kPosH) && !GearboxPosNumbered(kPosA) &&
+                   !GearboxPosNumbered(kPosN) && !GearboxPosNumbered(kPosLowPlus) && !GearboxPosNumbered(kPosR);
+            // figures that are no number give no cap
+            rule = rule && GearboxPosCap(kPosGear, kSlipAllGears, capShare, 0.0f, firstTop) == 0.0f && GearboxPosCap(kPosGear, kSlipAllGears, capShare, NAN, firstTop) == 0.0f &&
+                   GearboxPosCap(kPosGear, kSlipLowGears, capShare, firstTop, NAN) == 0.0f && GearboxPosCap(kPosGear, kSlipAllGears, NAN, firstTop, firstTop) == 0.0f;
+            // no wide part in a numbered gear at any LowRangeSlip
+            for (int share : { 0, 50, 100 })
+                rule = rule && LowRangeCap(kPosGear, capLow, 2.0f * capLow, share) == capLow && LowRangeCap(kPosH, capLow, 2.0f * capLow, share) == capLow;
+            rule = rule && !strcmp(HeldSlipName(0), "Engine held") && !strcmp(HeldSlipName(1), "Low gears") && !strcmp(HeldSlipName(2), "All gears") && !strcmp(HeldSlipName(9), "Engine held");
+            Check(rule, "held gear slip: the one rule: L-, L, L+ and R the same at every choice, A and N never; gear 1 at Low gears and All gears has the cap of L+ to the bit; Low gears caps "
+                        "where the cap of L+ is at least 1.10 of the gear top and nowhere past it; All gears caps by the gear top, H too; no wide part in a numbered gear");
+
+            // M3: the choice in force at a switch at speed
+            bool sw = true;
+            {
+                const float from = CutGovernBand(firstTop, kTachOverrun).from;
+                TorqueCutMap cm = mapOf(firstTop);
+                const float fCap = TorqueCutF(cm, 1.8f * firstTop, 1.0f, 0.3f * firstTop, true), fGovern = TorqueCutF(cm, 1.8f * firstTop, 1.0f, 0.3f * firstTop, false);
+                // a cap comes (0 to 2), floored with the wheels at the governor: in force at once
+                HeldSlip st = { kSlipEngineHeld, kPosGear, 1 };
+                sw = sw && HeldSlipStep(st, kSlipAllGears, kPosGear, 1, capShare, firstTop, firstTop, 1.0f, 1.1f * firstTop, 0.3f * firstTop, from) == kSlipAllGears;
+                // the cap's step lowers no wheel in that step, and the pull rises by the cut's own pacing
+                const float ceiling = CapCeiling(capLow, firstTop, cm.governTo, 0.3f * firstTop);
+                const float pre[4] = { 1.12f * firstTop, 1.08f * firstTop, 0.4f * firstTop, 1.9f * firstTop }, post[4] = { 1.13f * firstTop, 1.2f * firstTop, 0.45f * firstTop, 1.95f * firstTop },
+                            gain[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+                const bool ok[4] = { true, true, true, true };
+                const CapStepOut o = CapStep(pre, post, gain, ok, 4, ceiling, false);
+                for (int i = 0; i < 4; i++) sw = sw && o.final[i] >= fminf(pre[i], post[i]) - 1e-5f;
+                const float usedWas = TorqueCutF(cm, 1.1f * firstTop, 1.0f, 0.3f * firstTop, false), bracketNow = TorqueCutF(cm, 1.1f * firstTop, 1.0f, 0.3f * firstTop, true);
+                const float paced = CutRise(usedWas, bracketNow, 0.008f);
+                sw = sw && bracketNow > usedWas && paced > usedWas && paced < bracketNow;
+                // a cap goes (2 to 0) with the wheels at 1.8 of the top and the foot down: the old choice stays, so the pull
+                // does not fall in that step (it would, from the whole curve to nothing)
+                sw = sw && fCap > 0.5f && fGovern == 0.0f;
+                sw = sw && HeldSlipStep(st, kSlipEngineHeld, kPosGear, 1, capShare, firstTop, firstTop, 1.0f, 1.8f * firstTop, 0.3f * firstTop, from) == kSlipAllGears && st.inForce == kSlipAllGears;
+                char words[80];
+                HeldSlipProbe(words, sizeof words, kSlipEngineHeld, st.inForce);
+                sw = sw && !strcmp(words, "set 0, in force 2 until the wheels are under the top");
+                // the wheels under the top with the truck still over the governor's start, or the truck speed not read: it stays
+                sw = sw && HeldSlipStep(st, kSlipEngineHeld, kPosGear, 1, capShare, firstTop, firstTop, 1.0f, 0.9f * firstTop, 1.05f * from * firstTop, from) == kSlipAllGears &&
+                     HeldSlipStep(st, kSlipEngineHeld, kPosGear, 1, capShare, firstTop, firstTop, 1.0f, 0.9f * firstTop, NAN, from) == kSlipAllGears;
+                // the pedal lifted: the next pass has no cap
+                sw = sw && HeldSlipStep(st, kSlipEngineHeld, kPosGear, 1, capShare, firstTop, firstTop, 0.0f, 1.8f * firstTop, 0.3f * firstTop, from) == kSlipEngineHeld &&
+                     GearboxPosCap(kPosGear, st.inForce, capShare, firstTop, firstTop) == 0.0f;
+                // or the wheels at the top and the truck under the governor's start
+                st = HeldSlip{ kSlipAllGears, kPosGear, 1 };
+                sw = sw && HeldSlipStep(st, kSlipEngineHeld, kPosGear, 1, capShare, firstTop, firstTop, 1.0f, firstTop, 0.9f * from * firstTop, from) == kSlipEngineHeld;
+                // 2 to 1 in a gear that keeps a cap: at once, the cap smaller, and its step lowers no wheel
+                const float second = 9.0f;
+                st = HeldSlip{ kSlipAllGears, kPosGear, 2 };
+                sw = sw && HeldSlipStep(st, kSlipLowGears, kPosGear, 2, capShare, second, firstTop, 1.0f, 1.45f * second, 0.3f * second, from) == kSlipLowGears &&
+                     GearboxPosCap(kPosGear, kSlipLowGears, capShare, second, firstTop) == capLow && capLow < capShare * second;
+                {
+                    const float lower = CapCeiling(capLow, second, cm.governTo, 0.3f * second);
+                    const float pre2[4] = { 1.45f * second, 1.3f * second, 0.4f * second, 1.48f * second }, post2[4] = { 1.47f * second, 1.4f * second, 0.45f * second, 1.44f * second };
+                    const CapStepOut o2 = CapStep(pre2, post2, gain, ok, 4, lower, false);
+                    for (int i = 0; i < 4; i++) sw = sw && o2.final[i] >= fminf(pre2[i], post2[i]) - 1e-5f;
+                }
+                // 1 to 2 there: the cap grows, at once
+                sw = sw && HeldSlipStep(st, kSlipAllGears, kPosGear, 2, capShare, second, firstTop, 1.0f, 1.3f * second, 0.3f * second, from) == kSlipAllGears;
+                // 2 to 1 in a gear past the rule: the cap goes, so it waits as to 0 does
+                st = HeldSlip{ kSlipAllGears, kPosGear, 5 };
+                sw = sw && HeldSlipStep(st, kSlipLowGears, kPosGear, 5, capShare, 20.0f, firstTop, 1.0f, 1.4f * 20.0f, 6.0f, from) == kSlipAllGears;
+                // a shift ends the wait, and so does another position
+                sw = sw && HeldSlipStep(st, kSlipLowGears, kPosGear, 6, capShare, 26.0f, firstTop, 1.0f, 1.4f * 20.0f, 6.0f, from) == kSlipLowGears;
+                st = HeldSlip{ kSlipAllGears, kPosGear, 5 };
+                sw = sw && HeldSlipStep(st, kSlipEngineHeld, kPosGear, 5, capShare, 20.0f, firstTop, 1.0f, 30.0f, 6.0f, from) == kSlipAllGears &&
+                     HeldSlipStep(st, kSlipEngineHeld, kPosH, 0, capShare, 40.0f, firstTop, 1.0f, 30.0f, 6.0f, from) == kSlipEngineHeld;
+                // the same choice set and in force: nothing to do
+                sw = sw && HeldSlipStep(st, kSlipEngineHeld, kPosH, 0, capShare, 40.0f, firstTop, 1.0f, 30.0f, 6.0f, from) == kSlipEngineHeld;
+                HeldSlipProbe(words, sizeof words, 1, 1);
+                sw = sw && !strcmp(words, "1 (Low gears)");
+            }
+            Check(sw, "held gear slip: a cap that comes or grows is in force at once, lowers no wheel in its step and the pull rises by the pacing; a cap that goes waits with the foot down "
+                      "and the wheels past the top, so the pull does not fall in one step; the pedal lifted, the wheels and the truck slow, a shift or another position ends the wait");
+
+            // the closed loop: four wheels, 120 steps a second, as the low range's test below
+            auto held = [&](float top, float capAbs) {
+                TopSetup c = u;
+                c.slot.map = mapOf(top);
+                c.cap = capAbs > 0.0f ? capAbs / top : 0.0f, c.wheels = 4, c.rate = 120, c.gripNoise = 0.0f, c.dragNoise = 0.0f, c.grip = 6.0f;
+                return c;
+            };
+            const float capOf[kSlipCount] = { GearboxPosCap(kPosGear, 0, capShare, firstTop, firstTop), GearboxPosCap(kPosGear, 1, capShare, firstTop, firstTop),
+                                              GearboxPosCap(kPosGear, 2, capShare, firstTop, firstTop) };
+            // standing against soft ground, floored: gear 1 at choices 1 and 2 is L+ to the last figure; at choice 0 it pulls less
+            float push[kSlipCount] = {}, pushPlus = 0.0f;
+            bool same = true;
+            {
+                TopSetup p = held(firstTop, capPlus);
+                p.holdV = 0.0f, p.slipShare = 0.2f;
+                const TopResult plus = TopRun(p);
+                pushPlus = plus.push;
+                for (int choice = 0; choice < kSlipCount; choice++)
+                {
+                    TopSetup c = held(firstTop, capOf[choice]);
+                    c.holdV = 0.0f, c.slipShare = 0.2f;
+                    const TopResult q = TopRun(c);
+                    push[choice] = q.push;
+                    if (choice) same = same && q.push == plus.push && q.wMax == plus.wMax && q.freeMost == plus.freeMost && q.needleMax == plus.needleMax && q.lowered == 0;
+                }
+            }
+            // the top of the gear is held as L+ holds its own: the free run to the top, the same truck speed and needle band
+            bool tops = true;
+            float vPlus = 0.0f, vSecond = 0.0f, vHigh = 0.0f, vGovern = 0.0f;
+            {
+                const TopResult plus = TopRun(held(firstTop, capPlus));
+                vPlus = plus.vMax;
+                for (int choice = 1; choice < kSlipCount; choice++)
+                {
+                    const TopResult q = TopRun(held(firstTop, capOf[choice]));
+                    tops = tops && q.vMax == plus.vMax && q.vMin == plus.vMin && q.needleMin == plus.needleMin && q.needleMax == plus.needleMax && q.lowered == 0;
+                }
+                vGovern = TopRun(held(firstTop, 0.0f)).vMax;
+                // choice 1 in the second gear (top 10.5, the cap of L+ under its own) and choice 2 in a high gear (top 30): the
+                // top held under the governor's end, no wheel lowered
+                const TopResult second = TopRun(held(10.5f, GearboxPosCap(kPosGear, kSlipLowGears, capShare, 10.5f, firstTop)));
+                const TopResult high = TopRun(held(30.0f, GearboxPosCap(kPosGear, kSlipAllGears, capShare, 30.0f, firstTop)));
+                vSecond = second.vMax, vHigh = high.vMax;
+                tops = tops && second.vMax <= 1.12f * 10.5f && high.vMax <= 1.12f * 30.0f && second.lowered == 0 && high.lowered == 0 && plus.vMax <= 1.12f * firstTop;
+            }
+            // a wheel in the air, the truck held standing: it stops at the ceiling in each
+            bool air = true;
+            float freeAt[3] = {};
+            {
+                const float topsOf[3] = { firstTop, 10.5f, 30.0f };
+                const float caps[3] = { capOf[kSlipLowGears], GearboxPosCap(kPosGear, kSlipLowGears, capShare, 10.5f, firstTop), GearboxPosCap(kPosGear, kSlipAllGears, capShare, 30.0f, firstTop) };
+                for (int i = 0; i < 3; i++)
+                {
+                    TopSetup c = held(topsOf[i], caps[i]);
+                    c.holdV = 0.0f, c.freeWheels = 1;
+                    const TopResult q = TopRun(c);
+                    freeAt[i] = q.freeMost;
+                    air = air && caps[i] > 0.0f && q.freeMost <= caps[i] * 1.001f && q.freeMost >= 0.9f * caps[i];
+                }
+            }
+            // the lock's bounds in a capped numbered gear (the test of 130's rules): nothing under 0, no breach
+            bool lock = true;
+            {
+                // the setup of that test: 60 steps a second, a ground that grips hard, one wheel free, the truck held standing
+                TopSetup c = u;
+                c.slot.map = mapOf(firstTop);
+                c.cap = capOf[kSlipAllGears] / firstTop, c.wheels = 4, c.freeWheels = 1, c.holdV = 0.0f, c.grip = 1000.0f;
+                c.lockK = 1.0f, c.lockMass = 4000.0f, c.lockRadius = 0.5f;
+                const TopResult q = TopRun(c);
+                lock = q.lockUnder == 0 && q.lockBreach == 0 && q.lockOver <= 1e-3f && q.lockAdded <= 1e-2f;
+            }
+            snprintf(line, sizeof line, "held gear slip in the closed loop: standing floored on soft ground gear 1 gives the truck %.4f a step at Engine held, %.4f at Low gears and %.4f at All gears, "
+                                        "L+ %.4f (Engine held is %.2f of L+); the top: L+ %.2f, gear 1 governed %.2f, the second gear at Low gears %.2f of 10.5, a high gear at All gears %.2f of 30; "
+                                        "a wheel in the air stops at %.2f, %.2f and %.2f rad/s; the lock keeps its bounds",
+                     push[0], push[1], push[2], pushPlus, pushPlus > 0.0f ? push[0] / pushPlus : 0.0f, vPlus, vGovern, vSecond, vHigh, freeAt[0], freeAt[1], freeAt[2]);
+            if (!(same && tops && air && lock && push[0] < pushPlus)) printf("     same %d tops %d air %d lock %d\n", same, tops, air, lock);
+            Check(same && tops && air && lock && push[0] < pushPlus, line);
+        }
         // the low range's pull (BRIEF_low_range_pull.md, M3), on the ground by the slip (slipShare): 0.2 of the slip a step
         // at 120 on soft ground, 0.5 on hard, at most 3 rad/s a step. Three low gears with tops of 2.23, 4.18 and 8.06,
         // four wheels, 120 steps a second. The wider cap is LowRangeCap's, as the mod's slot gets it.
