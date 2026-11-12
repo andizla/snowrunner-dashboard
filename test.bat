@@ -5,31 +5,24 @@ rem hooks' policy, the engine speed, the range,
 rem the tilt, the coolant temperature and what it costs the engine on made up drives, and the preview, which draws
 rem the cluster and the Gauges tab into out\preview\*.png. With SR_IMAGE set to a copy of the game exe's image from a
 rem running game (as the tire mod's test takes one), the truck test checks the place search on it too.
-rem   test.bat [game Bin folder] [game screenshot.png]
+rem   test.bat [serial] [game Bin folder] [game screenshot.png]
 rem The game's font files are read from its Bin folder (the Steam default when none is given; without them the
 rem preview draws with the ImGui font). With a screenshot the cluster is drawn over it.
+rem The tests are the lines of tools\test.jobs. tools\run_jobs.py runs those that share nothing side by side and the
+rem others in a row, and prints their output in the list's order; every test runs, also after one failed, and one that
+rem does not end in 300 s is killed and fails. "test.bat serial" runs the same lines one at a time. Each test's output
+rem is also in out\test\log, with the time each took in times.txt.
 cd /d "%~dp0"
+set MODE=
+if /i "%~1"=="serial" set MODE=--serial
+if /i "%~1"=="serial" shift
 set FONTS=%~1
 if "%FONTS%"=="" set FONTS=C:\Program Files (x86)\Steam\steamapps\common\Snowrunner\Sources\Bin
-set failed=0
-out\test\settings_test.exe || set failed=1
-out\test\truck_test.exe || set failed=1
-out\test\gearbox_test.exe || set failed=1
-out\test\models_test.exe || set failed=1
-out\test\input_test.exe || set failed=1
-out\test\crt_test.exe || set failed=1
-out\test\truck_id_test.exe || set failed=1
-rem the overlay's start against the swap chain, each case a run of its own (BRIEF_overlay_late_hook.md)
-out\test\late_test.exe late || set failed=1
-out\test\late_test.exe order || set failed=1
-out\test\late_test.exe handover || set failed=1
-rem the player texts carry no apostrophe (BRIEF_texts_no_apostrophes.md): the tabs, the tips, the boxes and the panel
-python -I test\player_texts.py src\settings_page.h src\gauge_draw.h src\gauge_overlay.cpp src\ng_overlay.cpp || set failed=1
-if not exist out\test\gauge_preview.exe goto nopreview
-out\test\gauge_preview.exe out\preview "%FONTS%" %2 || set failed=1
-goto done
-:nopreview
-echo no out\test\gauge_preview.exe: the preview was not built
-:done
-if %failed%==1 (echo TESTS FAILED & exit /b 1)
+set SHOT=%2
+python -I tools\run_jobs.py tools\test.jobs --log out\test\log --timeout 300 %MODE%
+if errorlevel 1 goto failed
 echo TESTS OK
+exit /b 0
+:failed
+echo TESTS FAILED
+exit /b 1

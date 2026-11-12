@@ -1,0 +1,20 @@
+# What test.bat runs, a job a line, for tools\run_jobs.py (its head says how a line reads). The order is the one the
+# tests ran in one after another, and the one their output is printed in. test.bat sets FONTS and SHOT.
+# What each writes: settings_test out\test\Gauges.ini, Gauges.log and out\test\Gauges\; truck_id_test
+# out\test\truck_id_test_*.ini; the preview out\preview\*.png; the others nothing. The row holds the tests with child
+# processes, windows and waits of their own, and the one that asks DirectInput for this machine's devices.
+# settings_test takes most of the time and touches only its own files, so the row does not wait for it.
+settings_test beside :: out\test\settings_test.exe
+truck_test :: out\test\truck_test.exe
+gearbox_test :: out\test\gearbox_test.exe
+models_test :: out\test\models_test.exe
+input_test row :: out\test\input_test.exe
+crt_test row :: out\test\crt_test.exe
+truck_id_test :: out\test\truck_id_test.exe
+# the overlay's start against the swap chain, each case a run of its own (BRIEF_overlay_late_hook.md)
+late_test_late row :: out\test\late_test.exe late
+late_test_order row :: out\test\late_test.exe order
+late_test_handover row :: out\test\late_test.exe handover
+# the player texts carry no apostrophe (BRIEF_texts_no_apostrophes.md): the tabs, the tips, the boxes and the panel
+player_texts :: python -I test\player_texts.py src\settings_page.h src\gauge_draw.h src\gauge_overlay.cpp src\ng_overlay.cpp
+preview row :: if exist out\test\gauge_preview.exe (out\test\gauge_preview.exe out\preview "%FONTS%" %SHOT%) else (echo no out\test\gauge_preview.exe: the preview was not built)
