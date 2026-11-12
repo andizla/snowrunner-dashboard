@@ -328,6 +328,23 @@ struct DriveRateSeen
     long faults;
 };
 void DriveRateSeenGet(DriveRateSeen &out);
+// The game's brakes (game_code.h, BrakePlaceFind) detoured at address at, in a transaction of its own, by the physics
+// rate's start once 120 is in force; at 60 it is never put in. While the rate is on, each call reads every wheel
+// body's angular velocity before the game's function and after it and writes the root of the game's braked share
+// where the game braked the wheel (physics_rate.h, BrakeRootOf). False with why when Detours refused it.
+bool BrakeHook(uintptr_t at, char *why, size_t size);
+bool BrakeHooked();
+struct BrakeCounts
+{
+    long calls;   // calls with the rate on
+    long written; // wheels written as before times the root
+    long same;    // wheels the game's function left as they were
+    long other;   // wheels it changed in another way (the lock's zero, anything else): left
+    long refused; // wheel bodies that could not be used, and calls with more wheels than are kept
+    long faults;  // reads or writes that faulted
+    float brake;  // the brake the last write went by
+};
+void BrakeCountsGet(BrakeCounts &out);
 // The threads the drive was called on so far, at most most of them; full where more were seen than are kept.
 int DriveThreadsGet(DWORD *out, int most, bool &full);
 

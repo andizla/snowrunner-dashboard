@@ -91,7 +91,33 @@ static const RateQuad kRateQuadSites[kRateQuads] = {
     { "the substance's second impulse on a wheel", "0F 28 44 24 30 0F 59 05 ? ? ? ? 0F 29 44 24 30 48 8B 5F 18 48 8B CB E8", 8, 12 },
 };
 static const int kRateSubstanceWord = 8; // where the four stand on the mod's page, in floats: 32 bytes in
-static const int kRatePageWords = kRateSubstanceWord + 4;
+
+// Stage 2, part B2 (addendum 2, M3 and M4): a second group of operands, all or nothing in itself. Refused, 120 runs
+// with the first group alone and the start's line and the tab say so.
+// The two blends with constant weights. A blend that keeps q of the old a step keeps q x q over two, so at 120 the
+// old's weight is the root of the game's and the new's is 1 less that: each pair sums to 1 to the bit.
+//   w + 0x118: the old's 0.3 becomes 0.5477226 (3F0C378C), the new's 0.7 becomes 0.4522774 (3EE790E8)
+//   w + 0x110: the old's 0.8 becomes 0.8944272 (3F64F92E), the new's 0.2 becomes 0.1055728 (3DD83690)
+// The game's own constants are shared with other code and are not written. w + 0x128 is left, both weights: its old
+// weight comes in a register. w + 0x170 is left: a mean of two steps.
+// The fixed 1/60 force, in two places with the same code: a body that lies under a surface the action asks for has its
+// linear and its angular velocity set to zero that step and is then pushed up by a force (its depth over a range, at
+// most 1, times a gain, at most 10 for each kilogram of its mass) for a fixed 1/60 s. At 120 steps the time is 1/120 s,
+// so the push stays the one that belongs to the step's gravity. Both places or neither. Not the substance action's own
+// 1/60 beside its 60 (the first addendum's M1): that pair stays and no pattern here matches it.
+enum { kRate2SpeedNew, kRate2SpeedOld, kRate2ShareOld, kRate2ShareNew, kRate2Force, kRate2ForceTwin, kRate2Sites };
+static const char *const kRate2SpeedPattern = "F3 0F 5C 88 14 01 00 00 F3 0F 11 80 14 01 00 00 F3 0F 59 0D ? ? ? ? F3 0F 10 80 18 01 00 00 F3 0F 59 05 ? ? ? ?";
+static const char *const kRate2SharePattern = "F3 0F 10 8A 10 01 00 00 F3 0F 59 0D ? ? ? ? F3 0F 59 05 ? ? ? ? F3 0F 58 C8 F3 0F 11 8A 10 01 00 00";
+static const RateSite kRate2[kRate2Sites] = {
+    { "the blend at w + 0x118, the new's weight", kRate2SpeedPattern, 20, 24, 0x3F333333, 0x3EE790E8 },
+    { "the blend at w + 0x118, the old's weight", kRate2SpeedPattern, 36, 40, 0x3E99999A, 0x3F0C378C },
+    { "the blend at w + 0x110, the old's weight", kRate2SharePattern, 12, 16, 0x3F4CCCCD, 0x3F64F92E },
+    { "the blend at w + 0x110, the new's weight", kRate2SharePattern, 20, 24, 0x3E4CCCCD, 0x3DD83690 },
+    { "the fixed 1/60 force", "48 8B 06 4C 8D 44 24 40 F3 0F 10 0D ? ? ? ? 48 8B CE FF 90 D8 00 00 00", 12, 16, 0x3C888889, 0x3C088889 },
+    { "the fixed 1/60 force's twin", "48 8B 07 4C 8D 44 24 40 F3 0F 10 0D ? ? ? ? 48 8B CF FF 90 D8 00 00 00", 12, 16, 0x3C888889, 0x3C088889 },
+};
+static const int kRate2Word = kRateSubstanceWord + 4; // the second group's floats on the mod's page, after the four 30s
+static const int kRatePageWords = kRate2Word + kRate2Sites;
 
 // The page's floats, in the sites' order.
 inline void RatePageFill(uint32_t out[kRatePageWords])
@@ -99,6 +125,7 @@ inline void RatePageFill(uint32_t out[kRatePageWords])
     for (int i = 0; i < kRatePageWords; i++) out[i] = 0;
     for (int i = 0; i < kRateFloats; i++) out[i] = kRateSites[i].wanted;
     for (int i = 0; i < 4; i++) out[kRateSubstanceWord + i] = kRateSubstanceWanted;
+    for (int i = 0; i < kRate2Sites; i++) out[kRate2Word + i] = kRate2[i].wanted;
 }
 
 // One write of four bytes into the exe's code: where (from the exe's base), what stands there and what goes there.
@@ -241,6 +268,99 @@ inline bool RatePlanMake(const uint8_t *image, size_t size, size_t from, size_t 
     if (iterations == kRateIterFast) p.writes[p.count++] = RateWrite{ p.iterAt, (uint32_t)kRateIterStock, (uint32_t)kRateIterFast, "the solver's iterations" };
     p.writes[p.count++] = floats[kRateStep];
     return true;
+}
+
+// The second group's plan (stage 2, part B2), on the same copy and with the same page: each of its six places once,
+// each at the game's own float, each new operand in reach. One missing, twice or at another float: no plan and no
+// write of the group, the place named. The first group is not touched by it either way.
+struct RatePlan2
+{
+    bool ok;
+    char why[160];
+    size_t match[kRate2Sites];
+    RateWrite writes[kRate2Sites];
+    int count;
+};
+inline bool Rate2PlanMake(const uint8_t *image, size_t size, size_t from, size_t to, uint64_t base, uint64_t page, RatePlan2 &p)
+{
+    p = RatePlan2{};
+    const auto fail = [&p](const char *name, const char *what) {
+        snprintf(p.why, sizeof p.why, "%s: %s", name, what);
+        p.ok = false;
+        p.count = 0;
+        return false;
+    };
+    uint8_t bytes[kPatternMax], mask[kPatternMax];
+    if (to > size || from >= to) return fail("the exe", "no code to look through");
+    RateWrite writes[kRate2Sites];
+    for (int i = 0; i < kRate2Sites; i++)
+    {
+        const RateSite &s = kRate2[i];
+        const int length = PatternParse(s.pattern, bytes, mask);
+        size_t at = 0;
+        int count = 0;
+        if (!length || !PatternFind(image, from, to, bytes, mask, length, at, count) || count != 1)
+            return fail(s.name, count > 1 ? "its code stands more than once" : "its code is not found");
+        int32_t disp = 0;
+        memcpy(&disp, image + at + s.operand, 4);
+        const int64_t target = (int64_t)at + s.end + disp;
+        if (target < 0 || (uint64_t)target + 4 > size) return fail(s.name, "its operand points outside the exe");
+        uint32_t held = 0;
+        memcpy(&held, image + target, 4);
+        if (held != s.stock)
+        {
+            char what[120];
+            snprintf(what, sizeof what, "the float it reads is not the game's own, it holds %08x", held);
+            return fail(s.name, what);
+        }
+        const int64_t reach = (int64_t)(page + 4 * (uint64_t)(kRate2Word + i)) - (int64_t)(base + at + s.end);
+        if (page && (reach > 0x7FFFFFFFll || reach < -0x80000000ll)) return fail(s.name, "the mod's page is out of its reach");
+        p.match[i] = at;
+        writes[i] = RateWrite{ at + s.operand, (uint32_t)disp, (uint32_t)(int32_t)reach, s.name };
+    }
+    p.ok = true;
+    if (!page) return true;
+    for (int i = 0; i < kRate2Sites; i++) p.writes[p.count++] = writes[i];
+    return true;
+}
+
+// ---- the brakes (stage 2, part B2; addendum 2, M2) ----
+// The game's brakes take a share of each wheel's spin a step: the wheel body's angular velocity times (1 - brake),
+// set once a call, with no step's seconds in it. Two steps of that leave (1 - brake) squared, so at 120 the factor is
+// the root of (1 - brake). The share is the input and no constant, so there is no operand to point elsewhere. The hook
+// on the brakes' function reads each wheel body's angular velocity before the call and after it. Only where the
+// velocity after is the velocity before times (1 - brake) on all three parts, to the bit, is it written as before
+// times the root. Anything else is left: the lock's zero vector, a wheel the function did not touch, a brake at or
+// under the game's 0.0001, a figure that is no number. The brake is the one the function used: the first of its
+// delayed inputs (the action's + 0x78), read after the call. The input itself is not changed: it also sets the
+// lock's threshold.
+static const int kBrakeWheels = 32;
+static const float kBrakeLeast = 0.0001f;
+inline uint32_t BrakeBits(float f)
+{
+    uint32_t bits;
+    memcpy(&bits, &f, 4);
+    return bits;
+}
+// True with out to write where after is the game's braked before; false leaves the wheel as it is.
+inline bool BrakeRootOf(const float before[3], const float after[3], float brake, float out[3])
+{
+    if (!isfinite(brake) || !(brake > kBrakeLeast) || !(brake < 1.0f)) return false;
+    const float share = 1.0f - brake;
+    for (int i = 0; i < 3; i++)
+    {
+        if (!isfinite(before[i])) return false;
+        const float game = before[i] * share;
+        if (BrakeBits(game) != BrakeBits(after[i])) return false;
+    }
+    const float root = sqrtf(share);
+    bool moved = false;
+    for (int i = 0; i < 3; i++)
+    {
+        out[i] = before[i] * root;
+        moved = moved || BrakeBits(out[i]) != BrakeBits(after[i]);
+    }
+    return moved;
 }
 
 // The writes put in. read(at, value) and write(at, value) take a place from the exe's base and four bytes; write

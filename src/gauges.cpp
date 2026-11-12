@@ -7666,6 +7666,9 @@ static bool g_stepSignOn = false;
 static uint64_t g_rateSlotAt = 0;
 static size_t g_rateSubstanceAt = 0; // the substance action's load, from the exe's base, once 120 is in force
 static size_t g_rateQuadAt[kRateQuads] = {}; // and the three readers of the four 60s
+static size_t g_rate2At[kRate2Sites] = {};   // the second group's places, once it is in (stage 2, part B2)
+static bool g_rate2On = false;               // the second group is in
+static bool g_ratePart = false;              // 120 runs with the second group or the brakes' hook missing: the tab says so
 
 // One page for the mod's floats within reach of every place in the exe's code (a disp32 from the code): the first
 // free one above the exe, else below it, at most 0x70000000 away. 0 where there is none.
@@ -7744,7 +7747,9 @@ static void RateStart()
     std::vector<uint8_t> image;
     size_t from = 0, to = 0;
     RatePlan plan = {};
+    RatePlan2 plan2 = {};
     DrivePlace drive = {};
+    BrakePlace brake = {};
     bool found = false, driveOk = false;
     int looks = 0, since = 0;
     // the drive's place is the sign that the game's code is there: without it a look is made again; with it and a
@@ -7786,6 +7791,9 @@ static void RateStart()
         RateOffSay(!readOnly ? "the mod's page could not be made read only" : plan.why, readOnly && plan.foreignStep);
         return;
     }
+    // the second group's places and the brakes' function, on the same copy: neither decides whether 120 runs
+    const bool plan2Ok = Rate2PlanMake(image.data(), image.size(), from, to, g_base, page, plan2);
+    const bool brakeOk = BrakePlaceFind(image.data(), from, to, drive, brake);
     char why[160] = "";
     if (!CreepHook((uintptr_t)(g_base + drive.drive), why, sizeof why))
     {
@@ -7841,14 +7849,60 @@ static void RateStart()
         Log(L"physics rate: a world was there already at the start (the owner's static held one): %d iterations, step %.6f s. The iterations written reach only a world made after this: "
             L"the line at its first step says what it runs with", worldIter, RateFloat(worldDt));
     else Log(L"physics rate: no world was there yet at the start (the owner's static held none), so the first one is made with the iterations above");
+    // the second group (stage 2, part B2), after the first and all or nothing in itself. Between the two the game may
+    // step a few times at 120 with these six as it has them. Refused, 120 runs with the first group alone
+    {
+        char why2[320] = "";
+        if (!plan2Ok) snprintf(why2, sizeof why2, "%s", plan2.why);
+        else
+        {
+            const RateApplied put2 = RateApply(plan2.writes, plan2.count, RateCodeRead, RateCodeWrite);
+            const char *name = put2.failed >= 0 && put2.failed < plan2.count ? plan2.writes[put2.failed].name : "a place";
+            if (put2.ok) g_rate2On = true;
+            else if (!put2.written) snprintf(why2, sizeof why2, "%s does not hold the game's own bytes in memory, so nothing of the group was written", name);
+            else
+                snprintf(why2, sizeof why2, "the write at %s did not hold when read back, after %d that did; %s", name, put2.done,
+                         put2.restored ? "every one of them is back as the game had it" : "NOT every one of them could be put back: the game's code is part changed, start the game again with PhysicsRate=60");
+        }
+        if (g_rate2On)
+        {
+            for (int i = 0; i < kRate2Sites; i++) g_rate2At[i] = plan2.match[i];
+            Log(L"physics rate: the second group is in: the blend at w + 0x118 at +%zx (the old's weight 0.5477 for 0.3, the new's 0.4523 for 0.7), the blend at w + 0x110 at +%zx "
+                L"(0.8944 for 0.8, 0.1056 for 0.2), the fixed 1/60 force at +%zx and its twin at +%zx (1/120 s). Each operand now reads the mod's own float on the same page",
+                plan2.match[kRate2SpeedNew], plan2.match[kRate2ShareOld], plan2.match[kRate2Force], plan2.match[kRate2ForceTwin]);
+        }
+        else
+        {
+            g_ratePart = true;
+            Log(L"physics rate: THE SECOND GROUP IS NOT IN: %S. 120 runs with the first group alone: the blends at w + 0x118 and w + 0x110 settle twice as fast and the fixed 1/60 "
+                L"force pushes for twice the step's time", why2);
+        }
+    }
+    // the brakes' hook: neither group. It goes in or it does not, by itself
+    {
+        char brakeWhy[160] = "";
+        if (brakeOk && BrakeHook((uintptr_t)(g_base + brake.brakes), brakeWhy, sizeof brakeWhy))
+            Log(L"physics rate: the brakes hooked at +%zx (called at +%zx, right after the drive's call): a wheel the game brakes by (1 - brake) a step is written as its speed "
+                L"before times the root of (1 - brake), so two steps at 120 take what one takes at 60. The lock, a wheel the brakes did not touch and a brake under 0.0001 are left",
+                brake.brakes, brake.call);
+        else
+        {
+            g_ratePart = true;
+            Log(L"physics rate: THE BRAKES ARE NOT CORRECTED at 120: %S. Each wheel is braked by the game's share twice in 1/60 s, so the brakes bite harder than at 60",
+                brakeOk ? brakeWhy : brake.why);
+        }
+    }
+    if (g_ratePart) g_rateNote = kRateNotePart;
     if (iterations == kRateIterStock)
         Log(L"physics rate: the suspension is not corrected at 4 iterations: at 120 steps its springs and dampers, the handbrake and the winch are likely four times stronger. "
             L"For this measurement turn the mod's damper, its spring features and the tune off");
     Log(L"physics rate: corrected at 120: the step, the drive's wheel impulse and chassis push, the overspeed brake, the readout's shares, MaxDeltaAngVel and EngineResponsiveness, "
         L"and since stage 2 the substance action's lift and drag in water and in mud, on the chassis and on each wheel (four 30s in the place of four 60s: an impulse a step). Left as they are on purpose: "
         L"the substance action's own 1/60 and 60, a pair that makes a speed at any step, and the suspension's spring and damping, which are right at 2 iterations");
-    Log(L"physics rate: not corrected yet at 120: the brakes, the handbrake and the winch (not traced yet), the blends at w + 0x110, 0x118, 0x128 and 0x170, "
-        L"the adjustable suspension's height move, w + 0x190 and 0x18C, action + 0xC8. The hook on the drive now runs twice a frame at 60 fps and up to eight times at 30 fps");
+    Log(L"physics rate: left as they are on purpose at 120: the blend at w + 0x128, both weights (its old weight comes in a register; it is the contact share the lock and the probe "
+        L"read, and it settles twice as fast), the mean of two steps at w + 0x170, the adjustable suspension's height move (twice as fast), the wet look's fade at w + 0x190 and "
+        L"the dirt on the wheel at w + 0x18C (twice as fast), action + 0xC8 (nothing in the game writes it), the handbrake and the winch (a stiffness in the solver: right at 2 "
+        L"iterations). The hook on the drive and the one on the brakes now run twice a frame at 60 fps and up to eight times at 30 fps");
 }
 // On the mod's thread each pass: one line for each world the hook saw at its first drive call (the Reviewer's M3),
 // loud where the world does not run what was asked; the tab's row says so too.
@@ -7884,7 +7938,7 @@ static void RateWorldSay()
             L"the mod's damper, its spring features and the tune are to be off for a measurement",
             seen.iterations, g_rateIterAsked);
     }
-    else if (g_rateNote != kRateNoteOff) g_rateNote = kRateNoteNone;
+    else if (g_rateNote != kRateNoteOff) g_rateNote = g_ratePart ? kRateNotePart : kRateNoteNone;
 }
 
 // On the mod's thread each pass: one line for each verdict of the step's judge (the drive's hook, StepLook), at both
@@ -7938,6 +7992,33 @@ static void RateProbeSay(bool probe)
             wheel[0][0], wheel[0][1], wheel[0][2], wheel[0][3], wheel[1][0], wheel[1][1], wheel[1][2], wheel[1][3], g_rateQuadAt[kRateQuadWheelFirst] + kRateQuadSites[kRateQuadWheelFirst].operand,
             g_rateQuadAt[kRateQuadWheelSecond] + kRateQuadSites[kRateQuadWheelSecond].operand);
     else Log(L"probe: physics rate: the substance action's two wheel operands could not be read back");
+    // part B2: the second group's six floats read back the same way, and what the brakes' hook did so far
+    if (g_rate2On)
+    {
+        float held[kRate2Sites] = {};
+        bool read2 = true;
+        for (int i = 0; i < kRate2Sites; i++)
+        {
+            const uint64_t site = g_base + g_rate2At[i];
+            read2 = read2 && g_rate2At[i] && PeekGame(site + kRate2[i].operand, &disp, 4) && PeekGame((uint64_t)((int64_t)(site + kRate2[i].end) + disp), &held[i], 4);
+        }
+        if (read2)
+            Log(L"probe: physics rate: the second group reads w + 0x118 old %.4f new %.4f, w + 0x110 old %.4f new %.4f, the fixed force's time %.6f s and its twin's %.6f s", held[kRate2SpeedOld],
+                held[kRate2SpeedNew], held[kRate2ShareOld], held[kRate2ShareNew], held[kRate2Force], held[kRate2ForceTwin]);
+        else Log(L"probe: physics rate: the second group's floats could not be read back");
+    }
+    else Log(L"probe: physics rate: the second group is not in");
+    if (BrakeHooked())
+    {
+        static BrakeCounts was = {};
+        BrakeCounts c = {};
+        BrakeCountsGet(c);
+        Log(L"probe: physics rate: the brakes' hook in the last second: %ld calls, %ld wheels written by the root (the last at brake %.4f), %ld left as the brakes left them untouched, "
+            L"%ld left that the brakes changed in another way (the lock among them), %ld bodies refused, %ld faults",
+            c.calls - was.calls, c.written - was.written, c.brake, c.same - was.same, c.other - was.other, c.refused - was.refused, c.faults - was.faults);
+        was = c;
+    }
+    else Log(L"probe: physics rate: the brakes are not hooked");
 }
 
 static DWORD WINAPI Run(void *)

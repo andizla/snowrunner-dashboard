@@ -1946,6 +1946,139 @@ bool CreepHook(uintptr_t at, char *why, size_t size)
 
 bool CreepHooked() { return g_creepHooked; }
 
+// ---- the brakes at 120 steps a second (physics_rate.h, BrakeRootOf; addendum 2 of BRIEF_physics_rate_stage2.md, M2) ----
+// On Havok's worker threads, as the drive's hook: no lock, no heap, no log, the call's own block on its stack. Every
+// wheel of the action's truck (the action's + 0x30, its wheels as the game's function walks them), driven or not. A
+// body is used as the cap uses one (CapBodyOk) and written as the cap writes one: three floats at body + 0x240, the
+// fourth left, no call into the game. The brake is the first of the action's delayed inputs (+ 0x78), read after the
+// call: the one the function used.
+typedef void (*BrakeFn)(void *action, float brake, float dt);
+static void *g_brakeWay = nullptr;
+static bool g_brakeHooked = false;
+static volatile LONG g_brakeCalls = 0, g_brakeWritten = 0, g_brakeSame = 0, g_brakeOther = 0, g_brakeRefused = 0, g_brakeFaults = 0, g_brakeBits = 0;
+struct BrakeRead
+{
+    uint8_t *body[kBrakeWheels];
+    float before[kBrakeWheels][3];
+    int n;
+};
+static bool BrakeReadBefore(const void *action, BrakeRead &r)
+{
+    r.n = 0;
+    __try
+    {
+        const uint8_t *v = *(const uint8_t *const volatile *)((const uint8_t *)action + 0x30);
+        if ((uintptr_t)v < 0x10000) return false;
+        const uintptr_t begin = *(const uintptr_t *)(v + 0x200), end = *(const uintptr_t *)(v + 0x208);
+        if (end < begin || (end - begin) / 8 > (uintptr_t)kBrakeWheels)
+        {
+            InterlockedIncrement(&g_brakeRefused);
+            return false;
+        }
+        for (uintptr_t p = begin; p < end; p += 8)
+        {
+            const uint8_t *model = *(const uint8_t *const *)p;
+            if ((uintptr_t)model < 0x10000) continue;
+            const uint8_t *wheel = *(const uint8_t *const *)(model + 0x2C8);
+            if ((uintptr_t)wheel < 0x10000) continue;
+            uint8_t *body = *(uint8_t *const *)(wheel + 0x18);
+            if (!CapBodyOk(body))
+            {
+                InterlockedIncrement(&g_brakeRefused);
+                continue;
+            }
+            const volatile float *at = (const volatile float *)(body + 0x240);
+            r.body[r.n] = body;
+            r.before[r.n][0] = at[0], r.before[r.n][1] = at[1], r.before[r.n][2] = at[2];
+            r.n++;
+        }
+        return r.n > 0;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        r.n = 0;
+        InterlockedIncrement(&g_brakeFaults);
+        return false;
+    }
+}
+static void BrakeAfter(const void *action, const BrakeRead &r)
+{
+    __try
+    {
+        const uintptr_t begin = *(const uintptr_t volatile *)((const uint8_t *)action + 0x78), end = *(const uintptr_t volatile *)((const uint8_t *)action + 0x80);
+        if (begin < 0x10000 || end < begin + 8) return;
+        const float brake = *(const volatile float *)begin;
+        long written = 0, same = 0, other = 0;
+        for (int i = 0; i < r.n; i++)
+        {
+            if (!CapBodyOk(r.body[i]))
+            {
+                InterlockedIncrement(&g_brakeRefused);
+                continue;
+            }
+            volatile float *at = (volatile float *)(r.body[i] + 0x240);
+            const float after[3] = { at[0], at[1], at[2] };
+            float root[3];
+            if (BrakeRootOf(r.before[i], after, brake, root))
+            {
+                at[0] = root[0], at[1] = root[1], at[2] = root[2];
+                written++;
+            }
+            else if (BrakeBits(after[0]) == BrakeBits(r.before[i][0]) && BrakeBits(after[1]) == BrakeBits(r.before[i][1]) && BrakeBits(after[2]) == BrakeBits(r.before[i][2])) same++;
+            else other++;
+        }
+        if (written) InterlockedExchangeAdd(&g_brakeWritten, written), InterlockedExchange(&g_brakeBits, FloatBits(brake));
+        if (same) InterlockedExchangeAdd(&g_brakeSame, same);
+        if (other) InterlockedExchangeAdd(&g_brakeOther, other);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        InterlockedIncrement(&g_brakeFaults);
+    }
+}
+// At 60 (the rate off) one test and the game's function as it is: nothing read, nothing written.
+static void HookBrakes(void *action, float brake, float dt)
+{
+    if (!g_rateOn)
+    {
+        ((BrakeFn)g_brakeWay)(action, brake, dt);
+        return;
+    }
+    InterlockedIncrement(&g_brakeCalls);
+    BrakeRead r;
+    const bool read = BrakeReadBefore(action, r);
+    ((BrakeFn)g_brakeWay)(action, brake, dt);
+    if (read) BrakeAfter(action, r);
+}
+bool BrakeHook(uintptr_t at, char *why, size_t size)
+{
+    why[0] = 0;
+    if (g_brakeHooked) return true;
+    g_brakeWay = (void *)at;
+    void **targets[1] = { &g_brakeWay };
+    void *const hooks[1] = { (void *)&HookBrakes };
+    const long error = GearboxAttach(targets, hooks, 1);
+    if (error != NO_ERROR)
+    {
+        snprintf(why, size, "Detours could not attach the brakes' hook (error %ld)", error);
+        g_brakeWay = nullptr;
+        return false;
+    }
+    g_brakeHooked = true;
+    return true;
+}
+bool BrakeHooked() { return g_brakeHooked; }
+void BrakeCountsGet(BrakeCounts &out)
+{
+    out.calls = g_brakeCalls;
+    out.written = g_brakeWritten;
+    out.same = g_brakeSame;
+    out.other = g_brakeOther;
+    out.refused = g_brakeRefused;
+    out.faults = g_brakeFaults;
+    out.brake = BitsFloat(g_brakeBits);
+}
+
 void CreepGive(uint64_t action, float share)
 {
     if (!action || !(share > 0.0f))

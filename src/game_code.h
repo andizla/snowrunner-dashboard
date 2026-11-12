@@ -315,6 +315,71 @@ inline bool DrivePlaceFind(const uint8_t *code, size_t from, size_t to, DrivePla
     return true;
 }
 
+// ---- the game's brakes, for the physics rate test mode (BRIEF_physics_rate_stage2.md, addendum 2, M2) ----
+// void(action, float brake, float dt), called once in the same caller right after the drive's call: so it runs where
+// the drive runs, once for each drive call. Found from the drive's call: the next call's bytes, its target a
+// function's start with the head known, and the multiply of a wheel body's angular velocity by (1 - brake) once in the
+// code and inside it. RVA c42ea0 in 6adb8627, c42f30 in 6ab52f5d, c41460 in 6a607c05.
+static const char *const kBrakeCallPattern = "F3 0F 10 55 08 48 8B CB F3 0F 10 8C 24 ? ? ? ? E8 ? ? ? ?";
+static const char *const kBrakeHeadPattern = "40 53 56 41 56 48 81 EC 90 00 00 00 48 8B 41 30 48 8B F1 0F 29 B4 24 80 00 00 00 0F 57 DB";
+static const char *const kBrakeSharePattern = "48 8B 5F 18 0F 28 CF F3 0F 5C CE 48 8B CB 0F C6 C9 00 0F 59 8B 40 02 00 00 0F 29 4C 24 20";
+static const size_t kBrakeBodyMost = 0x400; // the multiply lies this near after the function's start
+struct BrakePlace
+{
+    size_t call, brakes; // offsets in the code, 0 = not found
+    const char *why;     // what was not found (a string literal), "" when both were
+};
+inline bool BrakePlaceFind(const uint8_t *code, size_t from, size_t to, const DrivePlace &drive, BrakePlace &out)
+{
+    out = BrakePlace{};
+    out.why = "";
+    uint8_t bytes[kPatternMax], mask[kPatternMax];
+    int length = PatternParse(kBrakeCallPattern, bytes, mask);
+    const size_t after = drive.call + 5; // what follows the drive's call
+    if (!drive.call || after + (size_t)length > to || !PatternAt(code + after, bytes, mask, length))
+    {
+        out.why = "the call of the brakes does not follow the wheels' drive's call";
+        return false;
+    }
+    const size_t call = after + (size_t)length - 5;
+    int32_t distance = 0;
+    memcpy(&distance, code + call + 1, sizeof distance);
+    const int64_t target = (int64_t)call + 5 + distance;
+    length = PatternParse(kBrakeHeadPattern, bytes, mask);
+    if (target <= (int64_t)from || target + length > (int64_t)to)
+    {
+        out.why = "the call of the brakes goes outside the game's code";
+        return false;
+    }
+    const size_t brakes = (size_t)target;
+    if (code[brakes - 1] != 0xCC)
+    {
+        out.why = "the call of the brakes does not go to a function's start";
+        return false;
+    }
+    if (!PatternAt(code + brakes, bytes, mask, length))
+    {
+        out.why = code[brakes] == 0xE9 || (code[brakes] == 0xFF && code[brakes + 1] == 0x25) ? "another mod holds the brakes" : "the brakes do not start as they should";
+        return false;
+    }
+    length = PatternParse(kBrakeSharePattern, bytes, mask);
+    size_t at = 0;
+    int count = 0;
+    if (!PatternFind(code, from, to, bytes, mask, length, at, count) || count != 1)
+    {
+        out.why = count > 1 ? "the brakes' multiply of a wheel's spin stands more than once" : "the brakes' multiply of a wheel's spin was not found";
+        return false;
+    }
+    if (at < brakes || at - brakes > kBrakeBodyMost)
+    {
+        out.why = "the brakes' multiply of a wheel's spin does not lie in the function the call goes to";
+        return false;
+    }
+    out.call = call;
+    out.brakes = brakes;
+    return true;
+}
+
 // ---- the game's engine speed, for the mod's own (BRIEF_drivetrain_1_engine_speed.md) ----
 // float(vehicle, bool withWheels, bool withMinThrottle): the engine speed 0 to 1 the game works out on each call from
 // the pedal, its pull (action + 0xB4) and the driven wheels, stored nowhere (review\own_drivetrain_research.md B; RVA

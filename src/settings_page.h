@@ -1437,6 +1437,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             const char *note = view.rateNote == kRateNoteOff    ? "120 was asked and is not running. Gauges.log says why."
                                : view.rateNote == kRateNoteIter ? "Running at 120 with other solver iterations than asked. Gauges.log has the figures."
                                : view.rateNote == kRateNoteStep ? "The step is not 1/120 s. Gauges.log has the figures."
+                               : view.rateNote == kRateNotePart ? "Running at 120 with a part of the corrections missing. Gauges.log says which."
                                : s.physicsRate != view.rateNow  ? (s.physicsRate == 120 ? "Saved. 120 runs after a restart." : "Saved. 60 runs after a restart.")
                                : view.rateNow == 120            ? "Running at 120."
                                                                 : nullptr;

@@ -466,6 +466,18 @@ static std::vector<uint8_t> RateImage()
         RatePut(image, at, kRateQuadSites[q].pattern);
         RateRel(image, at + kRateQuadSites[q].operand, at + kRateQuadSites[q].end, 0x3200);
     }
+    // part B2: the second group's two blends and the fixed force's two places, their floats at 0x3500
+    for (int i = 0; i < kRate2Sites; i++)
+    {
+        const size_t at = i < kRate2ShareOld ? 0x2100 : i < kRate2Force ? 0x2200 : i == kRate2Force ? 0x2300 : 0x2400, value = 0x3500 + 8 * (size_t)i;
+        RatePut(image, at, kRate2[i].pattern);
+        memcpy(&image[value], &kRate2[i].stock, 4);
+    }
+    for (int i = 0; i < kRate2Sites; i++)
+    {
+        const size_t at = i < kRate2ShareOld ? 0x2100 : i < kRate2Force ? 0x2200 : i == kRate2Force ? 0x2300 : 0x2400;
+        RateRel(image, at + kRate2[i].operand, at + kRate2[i].end, 0x3500 + 8 * (size_t)i);
+    }
     RatePut(image, 0x1600, kRateIterPattern);
     RatePut(image, 0x1700, kRateOwnerPattern);
     RateRel(image, 0x1701, 0x1705, 0x1800);
@@ -744,6 +756,30 @@ static void RealImageTest()
                   plan.writes[5].at == look.substanceAt + kRateSubstanceOperand && plan.writes[6].at == look.quadAt[kRateQuadWheelFirst] + kRateQuadSites[kRateQuadWheelFirst].operand &&
                   plan.writes[7].at == look.quadAt[kRateQuadWheelSecond] + kRateQuadSites[kRateQuadWheelSecond].operand,
               rate);
+        // part B2: the second group's six places and the brakes' function, each once on each of the three builds
+        RatePlan2 two = {};
+        BrakePlace brake = {};
+        const bool twoFound = Rate2PlanMake(image.data(), image.size(), from, to, imageBase, imageBase + ((image.size() + 0xFFFF) & ~(uint64_t)0xFFFF), two);
+        const bool brakeFound = BrakePlaceFind(image.data(), from, to, drive, brake);
+        const size_t speedWant = newest ? 0xc42324 : update ? 0xc423b4 : steam ? 0xc408e4 : two.match[kRate2SpeedNew];
+        const size_t shareWant = newest ? 0xc424a7 : update ? 0xc42537 : steam ? 0xc40a67 : two.match[kRate2ShareOld];
+        const size_t forceWant = newest ? 0xd33e0c : update ? 0xd33e9c : steam ? 0xd3246c : two.match[kRate2Force];
+        const size_t twinWant = newest ? 0xc55ef0 : update ? 0xc55f80 : steam ? 0xc544b0 : two.match[kRate2ForceTwin];
+        const size_t brakesWant = newest ? 0xc42ea0 : update ? 0xc42f30 : steam ? 0xc41460 : brake.brakes;
+        bool apart = twoFound && two.count == kRate2Sites;
+        // none of the group's writes is one of the first group's, and (6adb8627) none is the new's weight of w + 0x128 at c419db or the substance action's own 1/60 at c54995
+        for (int i = 0; i < two.count; i++)
+        {
+            for (int k = 0; k < plan.count; k++) apart = apart && two.writes[i].at != plan.writes[k].at;
+            apart = apart && (!newest || (two.writes[i].at != 0xc419db && (two.writes[i].at < 0xc54990 || two.writes[i].at > 0xc549a0)));
+        }
+        char second[400];
+        snprintf(second, sizeof second, "physics rate's second group in a real image: %s; the blend at w + 0x118 at %zx, at w + 0x110 at %zx, the fixed 1/60 force at %zx and its twin at %zx; "
+                 "the brakes at %zx, called at %zx (%s)", twoFound ? "all six found once with the game's floats" : two.why, two.match[kRate2SpeedNew], two.match[kRate2ShareOld],
+                 two.match[kRate2Force], two.match[kRate2ForceTwin], brake.brakes, brake.call, brakeFound ? "right after the drive's call" : brake.why);
+        Check(apart && brakeFound && two.match[kRate2SpeedNew] == speedWant && two.match[kRate2SpeedOld] == speedWant && two.match[kRate2ShareOld] == shareWant &&
+                  two.match[kRate2Force] == forceWant && two.match[kRate2ForceTwin] == twinWant && brake.brakes == brakesWant && brake.call == drive.call + 22,
+              second);
     }
 }
 
@@ -1407,6 +1443,284 @@ static void PhysicsRateTest()
                   s4.faults == s0.faults && s5.faults == s0.faults + 1 && s5.worlds == s4.worlds && ran && !DriveRateOn() && s6.faults == s5.faults && s6.worlds == s5.worlds,
               "physics rate, the world: no owner or no world yet is no line; a new world pointer gives its step and iterations once, the same world not again, the next "
               "world again; a static that cannot be read is counted and the drive still runs halved; off, no look");
+    }
+}
+
+// ---- stage 2, part B2 (addendum 2 of BRIEF_physics_rate_stage2.md): the second group, the brakes' place and hook ----
+static const size_t kRate2TestAt[kRate2Sites] = { 0x2100, 0x2100, 0x2200, 0x2200, 0x2300, 0x2400 };
+static bool Rate2PlanFails(const std::vector<uint8_t> &image, uint64_t page, const char *name, const char *what)
+{
+    RatePlan2 p = {};
+    const bool ok = Rate2PlanMake(image.data(), image.size(), 0x1000, 0x3000, 0x140000000ull, page, p);
+    const bool right = !ok && !p.ok && p.count == 0 && strstr(p.why, name) && strstr(p.why, what);
+    if (!right) printf("     wanted \"%s: %s\", got ok %d \"%s\"\n", name, what, ok, p.why);
+    return right;
+}
+// The stand-in for the game's brakes: the brake goes to the front of the action's delayed inputs, then each wheel
+// body of the test's own list gets what the game's function would do to it (g_brakeDoes: 0 braked by (1 - brake)
+// where the brake is over 0.0001, 1 the lock's zero vector, 2 not touched, 3 another change).
+static uint8_t g_brakeBodies[6][0x300] = {};
+static int g_brakeDoes[6] = {};
+static int g_brakeN = 0;
+static volatile LONG g_brakeFakeCalls = 0;
+__declspec(noinline) static void FakeBrakes(void *action, float brake, float dt)
+{
+    (void)dt;
+    InterlockedIncrement(&g_brakeFakeCalls);
+    float *queue = *(float **)((uint8_t *)action + 0x78);
+    queue[0] = brake;
+    for (int i = 0; i < g_brakeN; i++)
+    {
+        float *w = (float *)(g_brakeBodies[i] + 0x240);
+        if (g_brakeDoes[i] == 1) w[0] = w[1] = w[2] = w[3] = 0.0f;
+        else if (g_brakeDoes[i] == 3) w[0] += 0.125f;
+        else if (g_brakeDoes[i] == 0 && brake > 0.0001f)
+        {
+            const float share = 1.0f - brake;
+            for (int k = 0; k < 4; k++) w[k] *= share;
+        }
+    }
+}
+static void PhysicsRateB2Test()
+{
+    const uint64_t base = 0x140000000ull, page = base + 0x7000000;
+    const std::vector<uint8_t> image = RateImage();
+    // M3 and M4: the plan
+    {
+        RatePlan2 look = {}, plan = {};
+        const bool lookOk = Rate2PlanMake(image.data(), image.size(), 0x1000, 0x3000, base, 0, look);
+        const bool planOk = Rate2PlanMake(image.data(), image.size(), 0x1000, 0x3000, base, page, plan);
+        bool reach = lookOk && look.count == 0 && planOk && plan.count == kRate2Sites;
+        for (int i = 0; i < kRate2Sites && reach; i++)
+        {
+            const RateWrite &w = plan.writes[i];
+            uint32_t was = 0;
+            memcpy(&was, &image[w.at], 4);
+            reach = plan.match[i] == kRate2TestAt[i] && w.at == kRate2TestAt[i] + kRate2[i].operand && was == w.stock &&
+                    base + kRate2TestAt[i] + kRate2[i].end + (int64_t)(int32_t)w.value == page + 4 * (uint64_t)(kRate2Word + i);
+        }
+        uint32_t fill[kRatePageWords];
+        RatePageFill(fill);
+        float f[kRate2Sites];
+        for (int i = 0; i < kRate2Sites; i++) memcpy(&f[i], &fill[kRate2Word + i], 4);
+        const bool roots = fill[kRate2Word + kRate2SpeedOld] == RateBitsOf(sqrtf(0.3f)) && fill[kRate2Word + kRate2ShareOld] == RateBitsOf(sqrtf(0.8f)) &&
+                           RateBitsOf(f[kRate2SpeedOld] + f[kRate2SpeedNew]) == RateBitsOf(1.0f) && RateBitsOf(f[kRate2ShareOld] + f[kRate2ShareNew]) == RateBitsOf(1.0f) &&
+                           fill[kRate2Word + kRate2Force] == RateBitsOf(1.0f / 120.0f) && fill[kRate2Word + kRate2ForceTwin] == RateBitsOf(1.0f / 120.0f) &&
+                           fill[kRateSubstanceWord] == kRateSubstanceWanted && fill[kRateStep] == RateBitsOf(1.0f / 120.0f) && (kRate2Word & 3) == 0;
+        // two steps of the new blend against one of the game's, the new value held
+        bool steps = true;
+        const float olds[2] = { f[kRate2SpeedOld], f[kRate2ShareOld] }, news[2] = { f[kRate2SpeedNew], f[kRate2ShareNew] }, gameOld[2] = { 0.3f, 0.8f }, gameNew[2] = { 0.7f, 0.2f };
+        for (int b = 0; b < 2; b++)
+            for (float v = -3.0f; v <= 3.0f; v += 1.5f)
+            {
+                const float n = 0.75f, one = v * gameOld[b] + n * gameNew[b];
+                float two = v;
+                for (int k = 0; k < 2; k++) two = two * olds[b] + n * news[b];
+                steps = steps && fabsf(two - one) < 1e-5f;
+            }
+        Check(reach && roots && steps,
+              "physics rate, the second group: its six operands planned at the mod's floats after the four 30s; a look plans no write; the roots of 0.3 and 0.8 to the bit, each "
+              "pair sums to 1 to the bit, two steps of the new blend give one of the game's; the fixed force's time 1/120 in both places");
+    }
+    // one operand of a pair missing or at another float: neither written; one of the force's two missing: neither; no site at w + 0x128; group 1 is not touched
+    {
+        bool refused = true;
+        for (int i = 0; i < kRate2Sites; i++)
+        {
+            std::vector<uint8_t> other = image;
+            other[0x3500 + 8 * (size_t)i] ^= 1;
+            refused = refused && Rate2PlanFails(other, page, kRate2[i].name, "the float it reads is not the game's own");
+        }
+        std::vector<uint8_t> noSpeed = image, noShare = image, noForce = image, noTwin = image, twice = image, away = image;
+        noSpeed[0x2100 + 32] ^= 0xFF; // the old's multiply of the w + 0x118 pair: the pattern is one, so the new's goes with it
+        noShare[0x2200 + 16] ^= 0xFF;
+        memset(&noForce[0x2300], 0xCC, 25);
+        memset(&noTwin[0x2400], 0xCC, 25);
+        RatePut(twice, 0x2500, kRate2[kRate2Force].pattern);
+        RateRel(twice, 0x2500 + 12, 0x2500 + 16, 0x3500 + 8 * kRate2Force);
+        RateRel(away, 0x2400 + 12, 0x2400 + 16, 0x6000);
+        refused = refused && Rate2PlanFails(noSpeed, page, kRate2[kRate2SpeedNew].name, "its code is not found") && Rate2PlanFails(noShare, page, kRate2[kRate2ShareOld].name, "its code is not found") &&
+                  Rate2PlanFails(noForce, page, kRate2[kRate2Force].name, "its code is not found") && Rate2PlanFails(noTwin, page, kRate2[kRate2ForceTwin].name, "its code is not found") &&
+                  Rate2PlanFails(twice, page, kRate2[kRate2Force].name, "its code stands more than once") && Rate2PlanFails(away, page, kRate2[kRate2ForceTwin].name, "its operand points outside the exe") &&
+                  Rate2PlanFails(image, base + 0x100000000ull, kRate2[0].name, "the mod's page is out of its reach");
+        // S1: with the second group refused the first is planned as ever
+        RatePlan one = {};
+        const bool firstStill = RatePlanMake(noTwin.data(), noTwin.size(), 0x1000, 0x3000, base, page, 2, one) && one.count == 10;
+        // no pattern of the group reads or writes w + 0x128 (its weights are left), and none is the substance action's own 1/60
+        bool none128 = true;
+        uint8_t bytes[kPatternMax], mask[kPatternMax];
+        for (int i = 0; i < kRate2Sites; i++)
+        {
+            const int n = PatternParse(kRate2[i].pattern, bytes, mask);
+            for (int k = 0; k + 4 <= n; k++)
+                none128 = none128 && !(mask[k] && mask[k + 1] && mask[k + 2] && mask[k + 3] && bytes[k] == 0x28 && bytes[k + 1] == 0x01 && bytes[k + 2] == 0 && bytes[k + 3] == 0);
+        }
+        Check(refused && firstStill && none128,
+              "physics rate, the second group all or nothing: one weight of a pair missing or at another float, one of the force's two places missing, twice or out of the exe, the "
+              "page out of reach: no plan and no write of the group, the place named; the first group is planned all the same; no pattern of it touches w + 0x128");
+    }
+    // the group's writes go in and come back as the first group's do
+    {
+        std::vector<uint8_t> memory = image;
+        RatePlan2 plan = {};
+        Rate2PlanMake(image.data(), image.size(), 0x1000, 0x3000, base, page, plan);
+        int fail = -1, writes = 0;
+        const auto read = [&](size_t at, uint32_t &v) { memcpy(&v, &memory[at], 4); return true; };
+        const auto write = [&](size_t at, uint32_t v) { if (writes++ == fail) return false; memcpy(&memory[at], &v, 4); return true; };
+        const RateApplied all = RateApply(plan.writes, plan.count, read, write);
+        bool in = all.ok && all.done == kRate2Sites;
+        for (int i = 0; i < kRate2Sites; i++)
+        {
+            uint32_t v = 0;
+            memcpy(&v, &memory[plan.writes[i].at], 4);
+            in = in && v == plan.writes[i].value;
+        }
+        memory = image, fail = 3, writes = 0;
+        const RateApplied part = RateApply(plan.writes, plan.count, read, write);
+        Check(in && !part.ok && part.failed == 3 && part.done == 3 && part.restored && memory == image,
+              "physics rate, the second group's writes: all six go in and read back; one that does not hold puts the three before it back, and the code is the game's again");
+    }
+    // M2: the brakes' place from the drive's call, in made-up code
+    {
+        uint8_t b[kPatternMax], m[kPatternMax];
+        std::vector<uint8_t> code(0x1000, 0x90);
+        const auto put = [&](std::vector<uint8_t> &c, size_t at, const char *pattern) {
+            const int n = PatternParse(pattern, b, m);
+            for (int i = 0; i < n; i++) c[at + i] = m[i] ? b[i] : 0;
+            return (size_t)n;
+        };
+        const size_t driveCall = 0x100, brakesAt = 0x400;
+        code[driveCall] = 0xE8;
+        const size_t callLength = put(code, driveCall + 5, kBrakeCallPattern), call = driveCall + 5 + callLength - 5;
+        const int32_t distance = (int32_t)brakesAt - (int32_t)(call + 5);
+        memcpy(&code[call + 1], &distance, 4);
+        memset(&code[brakesAt - 16], 0xCC, 16);
+        put(code, brakesAt, kBrakeHeadPattern);
+        put(code, brakesAt + 0x20D, kBrakeSharePattern);
+        DrivePlace drive = {};
+        drive.call = driveCall, drive.drive = 0x800;
+        BrakePlace place = {}, p1 = {}, p2 = {}, p3 = {}, p4 = {}, p5 = {}, p6 = {};
+        const bool found = BrakePlaceFind(code.data(), 0x10, code.size(), drive, place) && place.call == call && place.brakes == brakesAt && !*place.why;
+        std::vector<uint8_t> noCall = code, held = code, noStart = code, twice = code, outside = code, noShare = code;
+        noCall[driveCall + 5 + 3] ^= 0xFF;
+        held[brakesAt] = 0xE9;
+        noStart[brakesAt - 1] = 0x90;
+        put(twice, 0x900, kBrakeSharePattern);
+        memset(&outside[brakesAt + 0x20D], 0x90, 30);
+        put(outside, brakesAt + 0x500, kBrakeSharePattern);
+        memset(&noShare[brakesAt + 0x20D], 0x90, 30);
+        DrivePlace noDrive = {};
+        const bool not1 = !BrakePlaceFind(noCall.data(), 0x10, noCall.size(), drive, p1) && strstr(p1.why, "does not follow") && !p1.brakes;
+        const bool not2 = !BrakePlaceFind(held.data(), 0x10, held.size(), drive, p2) && strstr(p2.why, "another mod holds the brakes");
+        const bool not3 = !BrakePlaceFind(noStart.data(), 0x10, noStart.size(), drive, p3) && strstr(p3.why, "function's start");
+        const bool not4 = !BrakePlaceFind(twice.data(), 0x10, twice.size(), drive, p4) && strstr(p4.why, "more than once");
+        const bool not5 = !BrakePlaceFind(outside.data(), 0x10, outside.size(), drive, p5) && strstr(p5.why, "does not lie in the function");
+        const bool not6 = !BrakePlaceFind(noShare.data(), 0x10, noShare.size(), drive, p6) && strstr(p6.why, "was not found") && !BrakePlaceFind(code.data(), 0x10, code.size(), noDrive, p6);
+        Check(found && not1 && not2 && not3 && not4 && not5 && not6,
+              "physics rate, the brakes' place: the call right after the drive's call, to a function's start with the head known and the multiply of a wheel's spin once and "
+              "inside it; not taken without the call, with another mod's jump there, off a function's start, the multiply twice, outside or missing, or with no drive");
+    }
+    // M2: what is written for what the game left
+    {
+        const float before[3] = { 10.0f, -4.0f, 2.5f };
+        const float share = 1.0f - 0.3f;
+        const float braked[3] = { before[0] * share, before[1] * share, before[2] * share }, zero[3] = { 0.0f, 0.0f, 0.0f };
+        float out[3] = {}, again[3] = {}, none[3] = { 7.0f, 7.0f, 7.0f };
+        const bool root = BrakeRootOf(before, braked, 0.3f, out) && RateBitsOf(out[0]) == RateBitsOf(before[0] * sqrtf(share)) && RateBitsOf(out[1]) == RateBitsOf(before[1] * sqrtf(share)) &&
+                          RateBitsOf(out[2]) == RateBitsOf(before[2] * sqrtf(share));
+        // the next step at 120: the game brakes the written speed again, the hook writes the root again
+        const float next[3] = { out[0] * share, out[1] * share, out[2] * share };
+        const bool two = BrakeRootOf(out, next, 0.3f, again) && fabsf(again[0] - braked[0]) < 1e-5f && fabsf(again[1] - braked[1]) < 1e-5f && fabsf(again[2] - braked[2]) < 1e-5f;
+        float offBit[3] = { braked[0], braked[1], braked[2] };
+        uint32_t bits = RateBitsOf(offBit[1]) + 1;
+        memcpy(&offBit[1], &bits, 4);
+        const float notANumber[3] = { NAN, -4.0f, 2.5f };
+        const bool left = !BrakeRootOf(before, zero, 0.3f, none) && !BrakeRootOf(before, before, 0.3f, none) && !BrakeRootOf(before, before, 0.0f, none) &&
+                          !BrakeRootOf(before, braked, 0.0001f, none) && !BrakeRootOf(before, braked, NAN, none) && !BrakeRootOf(before, zero, 1.0f, none) &&
+                          !BrakeRootOf(before, braked, 1.5f, none) && !BrakeRootOf(before, offBit, 0.3f, none) && !BrakeRootOf(before, braked, 0.31f, none) &&
+                          !BrakeRootOf(notANumber, notANumber, 0.3f, none) && !BrakeRootOf(zero, zero, 0.3f, none);
+        Check(root && two && left,
+              "physics rate, the brakes' share: a wheel braked at 0.3 is written as before times the root of 0.7 to the bit, and two such steps give the game's one; the lock's "
+              "zero, an untouched wheel, a brake of 0, 0.0001, 1 or over, no number, a result one bit off, another brake's result and a wheel at rest are left");
+    }
+    // M2: the hook on a stand-in for the game's brakes
+    {
+        void (*volatile brakes)(void *, float, float) = &FakeBrakes;
+        char why[160] = "";
+        const bool hooked = BrakeHook((uintptr_t)&FakeBrakes, why, sizeof why) && BrakeHooked() && BrakeHook((uintptr_t)&FakeBrakes, why, sizeof why);
+        static uint8_t action[0x100], vehicle[0x300], models[6][0x300], wheels[6][0x200];
+        static uint8_t *list[6];
+        static float queue[4];
+        g_brakeN = 6;
+        const float spin[4] = { 10.0f, -4.0f, 2.5f, 9.0f };
+        const auto set = [&]() {
+            for (int i = 0; i < 6; i++)
+            {
+                memset(g_brakeBodies[i], 0, sizeof g_brakeBodies[i]);
+                void *world = g_brakeBodies;
+                memcpy(g_brakeBodies[i] + 0x10, &world, 8);
+                memcpy(g_brakeBodies[i] + 0x240, spin, 16);
+                uint8_t *body = g_brakeBodies[i], *wheel = wheels[i];
+                memcpy(wheels[i] + 0x18, &body, 8);
+                memcpy(models[i] + 0x2C8, &wheel, 8);
+                list[i] = models[i];
+            }
+            g_brakeBodies[4][0x160] = 5; // a fixed body: not used
+            uint8_t *v = vehicle, **begin = list, **end = list + 6;
+            float *q = queue, *qEnd = queue + 2;
+            memcpy(action + 0x30, &v, 8);
+            memcpy(vehicle + 0x200, &begin, 8), memcpy(vehicle + 0x208, &end, 8);
+            memcpy(action + 0x78, &q, 8), memcpy(action + 0x80, &qEnd, 8);
+        };
+        const auto at = [&](int i, int k) { float f; memcpy(&f, g_brakeBodies[i] + 0x240 + 4 * k, 4); return f; };
+        const float share = 1.0f - 0.3f, root = sqrtf(share);
+        g_brakeDoes[0] = 0, g_brakeDoes[1] = 1, g_brakeDoes[2] = 2, g_brakeDoes[3] = 3, g_brakeDoes[4] = 0, g_brakeDoes[5] = 0;
+        // off (PhysicsRate=60): the game's result to the bit, nothing counted, and a vehicle that cannot be read is not read
+        set();
+        BrakeCounts c0 = {}, c1 = {}, c2 = {}, c3 = {}, c4 = {}, c5 = {};
+        BrakeCountsGet(c0);
+        const LONG fake0 = g_brakeFakeCalls;
+        brakes(action, 0.3f, 1.0f / 60.0f);
+        uint8_t *gone = (uint8_t *)(uintptr_t)0x7FFF00001000ull;
+        bool off = !DriveRateOn() && RateBitsOf(at(0, 0)) == RateBitsOf(spin[0] * share) && RateBitsOf(at(0, 3)) == RateBitsOf(spin[3] * share) && RateBitsOf(at(5, 1)) == RateBitsOf(spin[1] * share);
+        memcpy(action + 0x30, &gone, 8);
+        brakes(action, 0.3f, 1.0f / 60.0f);
+        BrakeCountsGet(c1);
+        off = off && c1.calls == c0.calls && c1.written == c0.written && c1.faults == c0.faults && c1.refused == c0.refused && g_brakeFakeCalls == fake0 + 2;
+        // on: wheel 0 and 5 by the root (the fourth float as the game left it), the lock's zero, the untouched and the other change left, the fixed body refused
+        set();
+        DriveRateSet(true, 0, 2);
+        brakes(action, 0.3f, 1.0f / 120.0f);
+        BrakeCountsGet(c2);
+        const bool on = RateBitsOf(at(0, 0)) == RateBitsOf(spin[0] * root) && RateBitsOf(at(0, 1)) == RateBitsOf(spin[1] * root) && RateBitsOf(at(0, 2)) == RateBitsOf(spin[2] * root) &&
+                        RateBitsOf(at(0, 3)) == RateBitsOf(spin[3] * share) && RateBitsOf(at(5, 0)) == RateBitsOf(spin[0] * root) && at(1, 0) == 0.0f && at(1, 1) == 0.0f && at(1, 2) == 0.0f &&
+                        at(2, 0) == spin[0] && at(2, 1) == spin[1] && at(3, 0) == spin[0] + 0.125f && at(3, 1) == spin[1] && RateBitsOf(at(4, 0)) == RateBitsOf(spin[0] * share) &&
+                        c2.calls == c1.calls + 1 && c2.written == c1.written + 2 && c2.same == c1.same + 1 && c2.other == c1.other + 2 && c2.refused == c1.refused + 1 &&
+                        c2.faults == c1.faults && c2.brake == 0.3f;
+        // the second step at 120: the two together are the game's one at 60
+        brakes(action, 0.3f, 1.0f / 120.0f);
+        const bool two = fabsf(at(0, 0) - spin[0] * share) < 1e-5f && fabsf(at(0, 1) - spin[1] * share) < 1e-5f && fabsf(at(0, 2) - spin[2] * share) < 1e-5f;
+        // a brake of 0: the game touches nothing and neither does the hook
+        set();
+        BrakeCountsGet(c3);
+        brakes(action, 0.0f, 1.0f / 120.0f);
+        BrakeCountsGet(c4);
+        const bool zero = at(0, 0) == spin[0] && at(5, 2) == spin[2] && c4.written == c3.written && c4.calls == c3.calls + 1;
+        // a vehicle that cannot be read: counted, nothing written, the game's function still runs
+        set();
+        memcpy(action + 0x30, &gone, 8);
+        const LONG fake1 = g_brakeFakeCalls;
+        brakes(action, 0.3f, 1.0f / 120.0f);
+        BrakeCountsGet(c5);
+        const bool fault = c5.faults == c4.faults + 1 && c5.written == c4.written && g_brakeFakeCalls == fake1 + 1 && RateBitsOf(at(0, 0)) == RateBitsOf(spin[0] * share);
+        DriveRateSet(false, 0, 0);
+        if (!(hooked && off && on && two && zero && fault))
+            printf("     hooked %d (%s) off %d on %d two %d zero %d fault %d; written %ld same %ld other %ld refused %ld faults %ld\n", hooked, why, off, on, two, zero, fault,
+                   c2.written - c1.written, c2.same - c1.same, c2.other - c1.other, c2.refused - c1.refused, c5.faults - c4.faults);
+        Check(hooked && off && on && two && zero && fault,
+              "physics rate, the brakes' hook on a stand-in: at 60 nothing read or written; at 120 a wheel braked at 0.3 is written as before times the root of 0.7, its fourth "
+              "float left, and two calls give the game's one; a locked wheel, an untouched one, one changed another way and a brake of 0 are left to the bit; a fixed body is "
+              "refused and counted; a truck that cannot be read is counted and the game's brakes still run");
     }
 }
 
@@ -7028,6 +7342,7 @@ int main()
     }
 
     PhysicsRateTest();
+    PhysicsRateB2Test();
     RealImageTest();
     GearDisplayTest();
 
