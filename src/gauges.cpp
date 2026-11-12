@@ -7655,6 +7655,7 @@ static int g_rateNow = kRateStock, g_rateNote = kRateNoteNone, g_rateIterAsked =
 static bool g_stepSignOn = false;
 static uint64_t g_rateSlotAt = 0;
 static size_t g_rateSubstanceAt = 0; // the substance action's load, from the exe's base, once 120 is in force
+static size_t g_rateQuadAt[kRateQuads] = {}; // and the three readers of the four 60s
 
 // One page for the mod's floats within reach of every place in the exe's code (a disp32 from the code): the first
 // free one above the exe, else below it, at most 0x70000000 away. 0 where there is none.
@@ -7813,11 +7814,12 @@ static void RateStart()
     }
     g_rateNow = kRateFast;
     g_rateSubstanceAt = plan.substanceAt;
+    for (int q = 0; q < kRateQuads; q++) g_rateQuadAt[q] = plan.quadAt[q];
     Log(L"physics rate: 120 steps a second (PhysicsRate=120; a test, single player only), on look %d: the step at +%zx, the drive's wheel impulse at +%zx, its chassis push at +%zx, "
-        L"the overspeed brake at +%zx, the readout's shares at +%zx, the substance action's four 60s for its lift and drag at +%zx; each now reads the mod's own float "
+        L"the overspeed brake at +%zx, the readout's shares at +%zx, the substance action's four 60s for its lift and drag at +%zx and for a wheel at +%zx and +%zx; each now reads the mod's own float "
         L"(a page at %llx, read only), the game's floats are as they were. "
         L"The solver's iterations at +%zx: %s. The world's owner's static at +%zx. The wheels' drive hooked at +%zx: MaxDeltaAngVel and EngineResponsiveness are halved around each call",
-        looks, plan.match[kRateStep], plan.match[kRateWheel], plan.match[kRateChassis], plan.match[kRateBrake], plan.match[kRateReadOld], plan.substanceAt, (unsigned long long)page,
+        looks, plan.match[kRateStep], plan.match[kRateWheel], plan.match[kRateChassis], plan.match[kRateBrake], plan.match[kRateReadOld], plan.substanceAt, plan.quadAt[kRateQuadWheelFirst], plan.quadAt[kRateQuadWheelSecond], (unsigned long long)page,
         plan.iterAt,
         iterations == kRateIterFast ? L"2 written in the place of 4 (PhysicsIterations 0 or 2)" : L"left at 4 (PhysicsIterations=4)", plan.ownerSlot, drive.drive);
     if (calls) Log(L"physics rate: the writes were late: the drive had run %ld times before the last one went in, so some steps ran part changed", calls);
@@ -7830,7 +7832,7 @@ static void RateStart()
         Log(L"physics rate: the suspension is not corrected at 4 iterations: at 120 steps its springs and dampers, the handbrake and the winch are likely four times stronger. "
             L"For this measurement turn the mod's damper, its spring features and the tune off");
     Log(L"physics rate: corrected at 120: the step, the drive's wheel impulse and chassis push, the overspeed brake, the readout's shares, MaxDeltaAngVel and EngineResponsiveness, "
-        L"and since stage 2 the substance action's lift and drag in water and in mud (four 30s in the place of four 60s: an impulse a step). Left as they are on purpose: "
+        L"and since stage 2 the substance action's lift and drag in water and in mud, on the chassis and on each wheel (four 30s in the place of four 60s: an impulse a step). Left as they are on purpose: "
         L"the substance action's own 1/60 and 60, a pair that makes a speed at any step, and the suspension's spring and damping, which are right at 2 iterations");
     Log(L"physics rate: not corrected yet at 120: the brakes, the handbrake and the winch (not traced yet), the blends at w + 0x110, 0x118, 0x128 and 0x170, "
         L"the adjustable suspension's height move, w + 0x190 and 0x18C, action + 0xC8. The hook on the drive now runs twice a frame at 60 fps and up to eight times at 30 fps");
@@ -7909,6 +7911,20 @@ static void RateProbeSay(bool probe)
         Log(L"probe: physics rate: the substance action reads %.2f %.2f %.2f %.2f for its lift and drag a step, through its operand at +%zx (30 at 120, 60 the game's own)", four[0],
             four[1], four[2], four[3], g_rateSubstanceAt + kRateSubstanceOperand);
     else Log(L"probe: physics rate: the substance action's four floats could not be read back");
+    // part B1: the two multiplies for a wheel, read back the same way
+    float wheel[2][4] = {};
+    bool read = true;
+    for (int q = kRateQuadWheelFirst; q < kRateQuads; q++)
+    {
+        const uint64_t site = g_base + g_rateQuadAt[q];
+        read = read && g_rateQuadAt[q] && PeekGame(site + kRateQuadSites[q].operand, &disp, 4) &&
+               PeekGame((uint64_t)((int64_t)(site + kRateQuadSites[q].end) + disp), wheel[q - kRateQuadWheelFirst], 16);
+    }
+    if (read)
+        Log(L"probe: physics rate: the substance action's two impulses on a wheel read %.2f %.2f %.2f %.2f and %.2f %.2f %.2f %.2f a step, through their operands at +%zx and +%zx",
+            wheel[0][0], wheel[0][1], wheel[0][2], wheel[0][3], wheel[1][0], wheel[1][1], wheel[1][2], wheel[1][3], g_rateQuadAt[kRateQuadWheelFirst] + kRateQuadSites[kRateQuadWheelFirst].operand,
+            g_rateQuadAt[kRateQuadWheelSecond] + kRateQuadSites[kRateQuadWheelSecond].operand);
+    else Log(L"probe: physics rate: the substance action's two wheel operands could not be read back");
 }
 
 static DWORD WINAPI Run(void *)

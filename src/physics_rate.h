@@ -75,6 +75,21 @@ static const char *const kRateSubstanceName = "the substance's lift and drag";
 static const char *const kRateSubstancePattern = "44 0F 28 35 ? ? ? ? 0F 28 45 40 0F C6 C0 E1 F3 0F 10 C1 0F C6 C0 E1 41 0F 59 C6";
 static const int kRateSubstanceOperand = 4, kRateSubstanceEnd = 8;
 static const uint32_t kRateSubstanceStock = 0x42700000, kRateSubstanceWanted = 0x41F00000; // 60 and 30
+// Stage 2, part B1 (addendum 2, M1): the same four 60s have two more readers, the action's two multiplies for a wheel.
+// Each is followed by the body's activate and the motion's impulse call with one vector, so each is an impulse a step
+// as the chassis's is. With the load alone corrected the chassis got the right lift and drag at 120 and each wheel twice
+// it. All three or none.
+struct RateQuad
+{
+    const char *name, *pattern;
+    int operand, end;
+};
+enum { kRateQuadLoad, kRateQuadWheelFirst, kRateQuadWheelSecond, kRateQuads };
+static const RateQuad kRateQuadSites[kRateQuads] = {
+    { kRateSubstanceName, kRateSubstancePattern, kRateSubstanceOperand, kRateSubstanceEnd },
+    { "the substance's first impulse on a wheel", "44 0F 28 5C 24 40 44 0F 59 1D ? ? ? ? 44 0F 29 5C 24 40 48 8B 5F 18 48 8B CB E8", 10, 14 },
+    { "the substance's second impulse on a wheel", "0F 28 44 24 30 0F 59 05 ? ? ? ? 0F 29 44 24 30 48 8B 5F 18 48 8B CB E8", 8, 12 },
+};
 static const int kRateSubstanceWord = 8; // where the four stand on the mod's page, in floats: 32 bytes in
 static const int kRatePageWords = kRateSubstanceWord + 4;
 
@@ -93,7 +108,7 @@ struct RateWrite
     uint32_t stock, value;
     const char *name;
 };
-static const int kRateWritesMax = kRateFloats + 2;
+static const int kRateWritesMax = kRateFloats + 1 + kRateQuads;
 struct RatePlan
 {
     bool ok;
@@ -101,6 +116,7 @@ struct RatePlan
     size_t match[kRateFloats]; // each float place's match
     size_t iterAt;            // the iterations' immediate
     size_t substanceAt;       // the substance action's load of the four 60s
+    size_t quadAt[kRateQuads]; // the three readers of the four 60s: the load (substanceAt) and the wheels' two multiplies
     size_t ownerSlot;         // the owner's static
     RateWrite writes[kRateWritesMax]; // in the order they go in: the step last
     int count;
@@ -156,17 +172,22 @@ inline bool RatePlanMake(const uint8_t *image, size_t size, size_t from, size_t 
         p.match[i] = at;
         floats[i] = RateWrite{ at + s.operand, (uint32_t)disp, (uint32_t)(int32_t)reach, s.name };
     }
-    RateWrite substance = {};
+    // the three readers of the game's four 60s: the action's load for the chassis and its two multiplies for a wheel
+    // (stage 2, part A and B1). Each once, each at the same four 60s, each new operand 16 bytes aligned and in reach
+    RateWrite quads[kRateQuads] = {};
+    int64_t fourAt = 0;
+    for (int q = 0; q < kRateQuads; q++)
     {
-        const int length = PatternParse(kRateSubstancePattern, bytes, mask);
+        const RateQuad &s = kRateQuadSites[q];
+        const int length = PatternParse(s.pattern, bytes, mask);
         size_t at = 0;
         int count = 0;
         if (!length || !PatternFind(image, from, to, bytes, mask, length, at, count) || count != 1)
-            return RateFail(p, kRateSubstanceName, count > 1 ? "its code stands more than once" : "its code is not found");
+            return RateFail(p, s.name, count > 1 ? "its code stands more than once" : "its code is not found");
         int32_t disp = 0;
-        memcpy(&disp, image + at + kRateSubstanceOperand, 4);
-        const int64_t target = (int64_t)at + kRateSubstanceEnd + disp;
-        if (target < 0 || (uint64_t)target + 16 > size) return RateFail(p, kRateSubstanceName, "its operand points outside the exe");
+        memcpy(&disp, image + at + s.operand, 4);
+        const int64_t target = (int64_t)at + s.end + disp;
+        if (target < 0 || (uint64_t)target + 16 > size) return RateFail(p, s.name, "its operand points outside the exe");
         uint32_t held[4];
         memcpy(held, image + target, 16);
         // all four: a single 60 with other figures after it is another constant (the action's own 60 for its speeds is one)
@@ -174,15 +195,19 @@ inline bool RatePlanMake(const uint8_t *image, size_t size, size_t from, size_t 
         {
             char what[120];
             snprintf(what, sizeof what, "the four floats it reads are not the game's four 60s, they hold %08x %08x %08x %08x", held[0], held[1], held[2], held[3]);
-            return RateFail(p, kRateSubstanceName, what);
+            return RateFail(p, s.name, what);
         }
+        // the wheels' two read the very four the load reads, not four 60s somewhere else (addendum 2, M1)
+        if (q == 0) fourAt = target;
+        else if (target != fourAt) return RateFail(p, s.name, "it does not read the four 60s the substance action's load reads");
         const uint64_t slot = page + 4 * (uint64_t)kRateSubstanceWord;
-        const int64_t reach = (int64_t)slot - (int64_t)(base + at + kRateSubstanceEnd);
-        if (page && (slot & 15)) return RateFail(p, kRateSubstanceName, "the mod's page does not stand 16 bytes aligned");
-        if (page && (reach > 0x7FFFFFFFll || reach < -0x80000000ll)) return RateFail(p, kRateSubstanceName, "the mod's page is out of its reach");
-        p.substanceAt = at;
-        substance = RateWrite{ at + kRateSubstanceOperand, (uint32_t)disp, (uint32_t)(int32_t)reach, kRateSubstanceName };
+        const int64_t reach = (int64_t)slot - (int64_t)(base + at + s.end);
+        if (page && (slot & 15)) return RateFail(p, s.name, "the mod's page does not stand 16 bytes aligned");
+        if (page && (reach > 0x7FFFFFFFll || reach < -0x80000000ll)) return RateFail(p, s.name, "the mod's page is out of its reach");
+        p.quadAt[q] = at;
+        quads[q] = RateWrite{ at + s.operand, (uint32_t)disp, (uint32_t)(int32_t)reach, s.name };
     }
+    p.substanceAt = p.quadAt[kRateQuadLoad];
     {
         const int length = PatternParse(kRateIterPattern, bytes, mask);
         size_t at = 0;
@@ -210,9 +235,9 @@ inline bool RatePlanMake(const uint8_t *image, size_t size, size_t from, size_t 
     }
     p.ok = true;
     if (!page) return true;
-    // the order: the drive's three, the readout's two, the substance's four, the iterations, the step last
+    // the order: the drive's three, the readout's two, the substance's three readers, the iterations, the step last
     for (int i = 1; i < kRateFloats; i++) p.writes[p.count++] = floats[i];
-    p.writes[p.count++] = substance;
+    for (int q = 0; q < kRateQuads; q++) p.writes[p.count++] = quads[q];
     if (iterations == kRateIterFast) p.writes[p.count++] = RateWrite{ p.iterAt, (uint32_t)kRateIterStock, (uint32_t)kRateIterFast, "the solver's iterations" };
     p.writes[p.count++] = floats[kRateStep];
     return true;
