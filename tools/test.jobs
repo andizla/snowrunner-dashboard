@@ -1,10 +1,17 @@
 # What test.bat runs, a job a line, for tools\run_jobs.py (its head says how a line reads). The order is the one the
 # tests ran in one after another, and the one their output is printed in. test.bat sets FONTS and SHOT.
-# What each writes: settings_test out\test\Gauges.ini, Gauges.log and out\test\Gauges\; truck_id_test
-# out\test\truck_id_test_*.ini; the preview out\preview\*.png; the others nothing. The row holds the tests with child
-# processes, windows and waits of their own, and the one that asks DirectInput for this machine's devices.
-# settings_test takes most of the time and touches only its own files, so the row does not wait for it.
-settings_test beside :: out\test\settings_test.exe
+# What each writes: a part of settings_test its own folder out\test\settings_<part>\ (Gauges.ini, Gauges.log and
+# Gauges\ in it); truck_id_test out\test\truck_id_test_*.ini; the preview out\preview\*.png; the others nothing. The
+# row holds the tests with child processes, windows and waits of their own, and the one that asks DirectInput for this
+# machine's devices.
+# settings_test is five parts that share nothing (BRIEF_tests_time.md; src\gauges.cpp, kParts), a line a part, in the
+# order the one test had its checks in. They take most of the time and each touches only its own folder, so the row
+# does not wait for them. out\test\settings_test.exe with no part runs the same five one after another.
+settings_ini beside :: out\test\settings_test.exe ini
+settings_trucks beside :: out\test\settings_test.exe trucks
+settings_suspension beside :: out\test\settings_test.exe suspension
+settings_owned beside :: out\test\settings_test.exe owned
+settings_rest beside :: out\test\settings_test.exe rest
 truck_test :: out\test\truck_test.exe
 gearbox_test :: out\test\gearbox_test.exe
 models_test :: out\test\models_test.exe

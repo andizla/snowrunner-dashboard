@@ -9999,17 +9999,41 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
 }
 
 static int g_failed = 0;
+// The test's own clock (BRIEF_tests_time.md, M1): with SETTINGS_TEST_TIMES naming a file, each check leaves a line
+// there with the seconds since the check before it (the first: since the start) and the head of its name.
+static FILE *g_times = nullptr;
+static LARGE_INTEGER g_timeLast = {}, g_timeFreq = {};
+static void TimesOpen()
+{
+    wchar_t name[MAX_PATH] = L"";
+    if (!GetEnvironmentVariableW(L"SETTINGS_TEST_TIMES", name, MAX_PATH) || !name[0]) return;
+    if (_wfopen_s(&g_times, name, L"a")) g_times = nullptr; // added to: every part leaves its lines
+    QueryPerformanceFrequency(&g_timeFreq);
+    QueryPerformanceCounter(&g_timeLast);
+}
 static void Check(bool ok, const char *what)
 {
     printf("%s %s\n", ok ? "ok  " : "FAIL", what);
     if (!ok) g_failed++;
+    if (!g_times) return;
+    LARGE_INTEGER at;
+    QueryPerformanceCounter(&at);
+    fprintf(g_times, "%8.3f\t%.110s\n", (double)(at.QuadPart - g_timeLast.QuadPart) / (double)g_timeFreq.QuadPart, what);
+    g_timeLast = at;
 }
 
-int wmain(int argc, wchar_t **argv)
+// The parts (BRIEF_tests_time.md, M3). The test is five parts that share nothing: each works in a folder of its own,
+// out\test\settings_<part>\, and starts where the test always took its ini away. tools\test.jobs runs them side by
+// side, a line a part:
+//   settings_test <part> [an ini]
+// With no part named the test starts itself once for each part, one after another, and fails where one failed. The
+// checks and their order within a part are those of the one test before; the parts in the order below give the old
+// order. An ini named is the rest part's: a copy of that file must read back unchanged after a write.
+static std::wstring g_userIni; // the ini named on the command line, "" none
+
+// The ini: a missing one written, every key read back, the help text, what is no number or out of range, the scales.
+static void PartIni()
 {
-    wchar_t path[MAX_PATH] = {};
-    GetModuleFileNameW(nullptr, path, MAX_PATH);
-    g_dir.assign(path, wcsrchr(path, L'\\') + 1 - path);
     const std::wstring ini = IniPath();
     DeleteFileW(ini.c_str());
     const bool gone = GetFileAttributesW(ini.c_str()) == INVALID_FILE_ATTRIBUTES;
@@ -10506,1466 +10530,1503 @@ int wmain(int argc, wchar_t **argv)
     GaugeDemo(st, a);
     Check(st.engineOn && st.rpm > 650.0f && st.rpm < 2200.0f && st.rpmMax == 3000.0f && st.speedMax == 100.0f && st.mph && !st.psi && st.gearMode &&
           !strcmp(st.gearMode, "A"), "demo: a cruising truck on the scales and units of the settings");
+}
 
-    // a truck's own scales, in its file in Gauges\trucks: one state, as the mod's thread keeps it
+// A truck's own scales, in its file in Gauges\trucks: one state, as the mod's thread keeps it. With them the
+// differential's type, the axles' and the Air brakes box.
+static void PartTrucks()
+{
+    const std::wstring ini = IniPath();
+    auto truckFile = [](const char *key) { return SetupFile(kSetupTruck, key); };
+    auto truckPut = [&](const char *key, const wchar_t *name, const wchar_t *value) {
+        SetupFolderMake(kSetupTruck);
+        WritePrivateProfileStringW(L"Truck", name, value, truckFile(key).c_str());
+    };
+    for (const char *key : { "someone_elses", "mod_suv/1000001", "chevrolet_ck1500", "half", "wild" }) DeleteFileW(truckFile(key).c_str());
+    DeleteFileW(ini.c_str());
+    SettingsState state = {};
+    ReadIni(state.plain);
+    state.plain.tachClass = kClassScout;
+    state.plain.redlineRpm = 5000.0f;
+    WriteIni(state.plain);
+    // a truck this test never drives, and a truck's section with something in it that the mod does not know
+    truckPut("someone_elses", L"RedlineRpm", L"1800");
+    truckPut("mod_suv/1000001", L"FromALaterVersion", L"7");
+    SettingsFor(state, "");
+    const bool none = !state.own && SameSettings(state.s, state.plain);
+    GaugeSettings in = state.s;
+    in.maxRpm = 6000.0f;
+    SettingsTake(state, in);
+    const bool plainEdit = !state.own && !state.changed && state.plain.maxRpm == 6000.0f;
+    SettingsFor(state, "mod_suv/1000001");
+    Check(none && plainEdit && !state.own && SameSettings(state.s, state.plain), "trucks: with no truck driven the tab sets the plain scales, and a truck without scales of its own shows them");
+    in = state.s;
+    in.opacity = 0.5f;
+    SettingsTake(state, in);
+    Check(!state.own && state.plain.opacity == 0.5f && SameSettings(state.s, state.plain), "trucks: a setting that is no scale is every truck's, whichever truck is driven");
+    in = state.s;
+    in.redlineRpm = 4500.0f;
+    SettingsTake(state, in);
+    Check(state.own && state.changed && state.s.redlineRpm == 4500.0f && state.s.tachClass == kClassScout && state.plain.redlineRpm == 5000.0f,
+          "trucks: a scale changed while a truck is driven makes the scales that truck's own and leaves the plain ones as they were");
+    SettingsWrite(state);
+    // a second truck, set up another way; then a setting that is no scale changed while it is driven
+    SettingsFor(state, "chevrolet_ck1500");
+    const bool ckPlain = !state.own && state.s.redlineRpm == 5000.0f && state.s.maxRpm == 6000.0f;
+    in = state.s;
+    in.tachClass = kClassHeavy;
+    in.speedMax = 70.0f;
+    in.boostMax = 1.45f;
+    in.boostProfile = kSpoolLaggy;
+    SettingsTake(state, in);
+    in = state.s;
+    in.scale = 1.5f;
+    SettingsTake(state, in);
+    SettingsWrite(state);
+    Check(ckPlain && state.own && state.plain.scale == 1.5f && state.plain.tachClass == kClassScout && state.plain.speedMax == 0.0f && state.plain.boostMax == 0.0f &&
+          state.plain.boostProfile == kSpoolStandard && state.plain.redlineRpm == 5000.0f,
+          "trucks: a second truck starts from the plain scales, and what is changed beside its scales still goes to every truck");
+    // the game is started again: [Gauges] holds the plain settings, each truck its own scales
+    SettingsState next = {};
+    ReadIni(next.plain);
+    SettingsFor(next, "mod_suv/1000001");
+    const bool moddedBack = next.own && next.s.redlineRpm == 4500.0f && next.s.tachClass == kClassScout && next.s.maxRpm == 6000.0f && next.s.speedMax == 0.0f && next.s.boostMax == 0.0f && next.s.scale == 1.5f;
+    SettingsFor(next, "chevrolet_ck1500");
+    Check(SameSettings(next.plain, state.plain) && moddedBack && next.own && next.s.tachClass == kClassHeavy && next.s.speedMax == 70.0f && next.s.boostMax == 1.45f &&
+          GaugeScaleOf(next.s).boost == 1.45f && next.s.boostProfile == kSpoolLaggy && next.s.redlineRpm == 5000.0f,
+          "trucks: after a new start [Gauges] reads back as the plain settings and each truck has its own scales again");
+    wchar_t kept[16] = {}, later2[16] = {};
+    GetPrivateProfileStringW(L"Truck", L"RedlineRpm", L"", kept, 16, truckFile("someone_elses").c_str());
+    GetPrivateProfileStringW(L"Truck", L"FromALaterVersion", L"", later2, 16, truckFile("mod_suv/1000001").c_str());
+    Check(!wcscmp(kept, L"1800") && !wcscmp(later2, L"7"), "trucks: the file of a truck that was not driven, and a key the mod does not know in a truck's file, survive the writes");
+    // a section that holds one of the seven takes the others from [Gauges]; what is out of range is held to it
+    truckPut("half", L"MaxRpm", L"4000");
+    truckPut("wild", L"RedlineRpm", L"50");
+    truckPut("wild", L"TachClass", L"9");
+    truckPut("wild", L"IdleRpm", L"nan");
+    truckPut("wild", L"BoostProfile", L"9");
+    SettingsFor(next, "wild");
+    const bool wild = next.own && next.s.redlineRpm == kRedlineRange[0] && next.s.tachClass == kClassTruck && next.s.idleRpm == next.plain.idleRpm &&
+                      next.s.boostProfile == kSpoolStandard;
+    SettingsFor(next, "half");
+    Check(wild && next.own && !next.changed && next.s.maxRpm == 4000.0f && next.s.redlineRpm == 5000.0f && next.s.tachClass == kClassScout,
+          "trucks: a file takes from [Gauges] what it leaves out, and its values are held to their ranges as those of [Gauges] are");
+    // a save after a change of something else leaves such a section as it is; after a change of a scale it has all seven
+    wchar_t halfRed[16] = {};
+    in = next.s;
+    in.opacity = 0.75f;
+    SettingsTake(next, in);
+    SettingsWrite(next);
+    GetPrivateProfileStringW(L"Truck", L"RedlineRpm", L"", halfRed, 16, truckFile("half").c_str());
+    const bool leftAlone = next.own && !halfRed[0];
+    in = next.s;
+    in.idleRpm = 900.0f;
+    SettingsTake(next, in);
+    SettingsWrite(next);
+    GetPrivateProfileStringW(L"Truck", L"RedlineRpm", L"", halfRed, 16, truckFile("half").c_str());
+    wchar_t halfTurbo[16] = {};
+    GetPrivateProfileStringW(L"Truck", L"BoostProfile", L"", halfTurbo, 16, truckFile("half").c_str());
+    Check(leftAlone && !wcscmp(halfRed, L"5000") && !wcscmp(halfTurbo, L"0") && !next.changed,
+          "trucks: a save leaves a truck's file as it is until one of its scales is changed on the tab, and then writes all seven");
+    // the truck gives its scales up: they go out of the ini, what else its section holds stays, and a section left empty goes
+    SettingsFor(next, "mod_suv/1000001");
+    SettingsDrop(next);
+    const bool dropped = !next.own && SameSettings(next.s, next.plain);
+    SettingsFor(next, "mod_suv/1000001");
+    GetPrivateProfileStringW(L"Truck", L"FromALaterVersion", L"", later2, 16, truckFile("mod_suv/1000001").c_str());
+    const bool moddedPlain = !next.own && SameSettings(next.s, next.plain) && !wcscmp(later2, L"7");
+    SettingsFor(next, "chevrolet_ck1500");
+    SettingsDrop(next);
+    wchar_t rest[64] = {};
+    const DWORD left = GetPrivateProfileSectionW(L"Truck", rest, 64, truckFile("chevrolet_ck1500").c_str());
+    const bool ckSection = GetFileAttributesW(truckFile("chevrolet_ck1500").c_str()) != INVALID_FILE_ATTRIBUTES;
+    Check(dropped && moddedPlain && !next.own && !left && !ckSection,
+          "trucks: a truck that gives up its scales takes the plain ones, its file keeps what else it holds, and an empty file goes");
+    // the truck's differential (BRIEF_diff_types.md, S5): its file's eighth key, written by one put, not one of the scales
     {
-        auto truckFile = [](const char *key) { return SetupFile(kSetupTruck, key); };
-        auto truckPut = [&](const char *key, const wchar_t *name, const wchar_t *value) {
-            SetupFolderMake(kSetupTruck);
-            WritePrivateProfileStringW(L"Truck", name, value, truckFile(key).c_str());
+        for (const char *dk : { "diff_a", "diff_b" }) DeleteFileW(truckFile(dk).c_str());
+        auto fileDiff = [&](const char *k) {
+            wchar_t v[8] = {};
+            GetPrivateProfileStringW(L"Truck", L"DiffType", L"", v, 8, truckFile(k).c_str());
+            return std::wstring(v);
         };
-        for (const char *key : { "someone_elses", "mod_suv/1000001", "chevrolet_ck1500", "half", "wild" }) DeleteFileW(truckFile(key).c_str());
-        DeleteFileW(ini.c_str());
-        SettingsState state = {};
-        ReadIni(state.plain);
-        state.plain.tachClass = kClassScout;
-        state.plain.redlineRpm = 5000.0f;
-        WriteIni(state.plain);
-        // a truck this test never drives, and a truck's section with something in it that the mod does not know
-        truckPut("someone_elses", L"RedlineRpm", L"1800");
-        truckPut("mod_suv/1000001", L"FromALaterVersion", L"7");
-        SettingsFor(state, "");
-        const bool none = !state.own && SameSettings(state.s, state.plain);
-        GaugeSettings in = state.s;
-        in.maxRpm = 6000.0f;
-        SettingsTake(state, in);
-        const bool plainEdit = !state.own && !state.changed && state.plain.maxRpm == 6000.0f;
-        SettingsFor(state, "mod_suv/1000001");
-        Check(none && plainEdit && !state.own && SameSettings(state.s, state.plain), "trucks: with no truck driven the tab sets the plain scales, and a truck without scales of its own shows them");
-        in = state.s;
-        in.opacity = 0.5f;
-        SettingsTake(state, in);
-        Check(!state.own && state.plain.opacity == 0.5f && SameSettings(state.s, state.plain), "trucks: a setting that is no scale is every truck's, whichever truck is driven");
-        in = state.s;
-        in.redlineRpm = 4500.0f;
-        SettingsTake(state, in);
-        Check(state.own && state.changed && state.s.redlineRpm == 4500.0f && state.s.tachClass == kClassScout && state.plain.redlineRpm == 5000.0f,
-              "trucks: a scale changed while a truck is driven makes the scales that truck's own and leaves the plain ones as they were");
-        SettingsWrite(state);
-        // a second truck, set up another way; then a setting that is no scale changed while it is driven
-        SettingsFor(state, "chevrolet_ck1500");
-        const bool ckPlain = !state.own && state.s.redlineRpm == 5000.0f && state.s.maxRpm == 6000.0f;
-        in = state.s;
-        in.tachClass = kClassHeavy;
-        in.speedMax = 70.0f;
-        in.boostMax = 1.45f;
-        in.boostProfile = kSpoolLaggy;
-        SettingsTake(state, in);
-        in = state.s;
-        in.scale = 1.5f;
-        SettingsTake(state, in);
-        SettingsWrite(state);
-        Check(ckPlain && state.own && state.plain.scale == 1.5f && state.plain.tachClass == kClassScout && state.plain.speedMax == 0.0f && state.plain.boostMax == 0.0f &&
-              state.plain.boostProfile == kSpoolStandard && state.plain.redlineRpm == 5000.0f,
-              "trucks: a second truck starts from the plain scales, and what is changed beside its scales still goes to every truck");
-        // the game is started again: [Gauges] holds the plain settings, each truck its own scales
-        SettingsState next = {};
-        ReadIni(next.plain);
-        SettingsFor(next, "mod_suv/1000001");
-        const bool moddedBack = next.own && next.s.redlineRpm == 4500.0f && next.s.tachClass == kClassScout && next.s.maxRpm == 6000.0f && next.s.speedMax == 0.0f && next.s.boostMax == 0.0f && next.s.scale == 1.5f;
-        SettingsFor(next, "chevrolet_ck1500");
-        Check(SameSettings(next.plain, state.plain) && moddedBack && next.own && next.s.tachClass == kClassHeavy && next.s.speedMax == 70.0f && next.s.boostMax == 1.45f &&
-              GaugeScaleOf(next.s).boost == 1.45f && next.s.boostProfile == kSpoolLaggy && next.s.redlineRpm == 5000.0f,
-              "trucks: after a new start [Gauges] reads back as the plain settings and each truck has its own scales again");
-        wchar_t kept[16] = {}, later2[16] = {};
-        GetPrivateProfileStringW(L"Truck", L"RedlineRpm", L"", kept, 16, truckFile("someone_elses").c_str());
-        GetPrivateProfileStringW(L"Truck", L"FromALaterVersion", L"", later2, 16, truckFile("mod_suv/1000001").c_str());
-        Check(!wcscmp(kept, L"1800") && !wcscmp(later2, L"7"), "trucks: the file of a truck that was not driven, and a key the mod does not know in a truck's file, survive the writes");
-        // a section that holds one of the seven takes the others from [Gauges]; what is out of range is held to it
-        truckPut("half", L"MaxRpm", L"4000");
-        truckPut("wild", L"RedlineRpm", L"50");
-        truckPut("wild", L"TachClass", L"9");
-        truckPut("wild", L"IdleRpm", L"nan");
-        truckPut("wild", L"BoostProfile", L"9");
-        SettingsFor(next, "wild");
-        const bool wild = next.own && next.s.redlineRpm == kRedlineRange[0] && next.s.tachClass == kClassTruck && next.s.idleRpm == next.plain.idleRpm &&
-                          next.s.boostProfile == kSpoolStandard;
-        SettingsFor(next, "half");
-        Check(wild && next.own && !next.changed && next.s.maxRpm == 4000.0f && next.s.redlineRpm == 5000.0f && next.s.tachClass == kClassScout,
-              "trucks: a file takes from [Gauges] what it leaves out, and its values are held to their ranges as those of [Gauges] are");
-        // a save after a change of something else leaves such a section as it is; after a change of a scale it has all seven
-        wchar_t halfRed[16] = {};
-        in = next.s;
-        in.opacity = 0.75f;
-        SettingsTake(next, in);
-        SettingsWrite(next);
-        GetPrivateProfileStringW(L"Truck", L"RedlineRpm", L"", halfRed, 16, truckFile("half").c_str());
-        const bool leftAlone = next.own && !halfRed[0];
-        in = next.s;
-        in.idleRpm = 900.0f;
-        SettingsTake(next, in);
-        SettingsWrite(next);
-        GetPrivateProfileStringW(L"Truck", L"RedlineRpm", L"", halfRed, 16, truckFile("half").c_str());
-        wchar_t halfTurbo[16] = {};
-        GetPrivateProfileStringW(L"Truck", L"BoostProfile", L"", halfTurbo, 16, truckFile("half").c_str());
-        Check(leftAlone && !wcscmp(halfRed, L"5000") && !wcscmp(halfTurbo, L"0") && !next.changed,
-              "trucks: a save leaves a truck's file as it is until one of its scales is changed on the tab, and then writes all seven");
-        // the truck gives its scales up: they go out of the ini, what else its section holds stays, and a section left empty goes
-        SettingsFor(next, "mod_suv/1000001");
-        SettingsDrop(next);
-        const bool dropped = !next.own && SameSettings(next.s, next.plain);
-        SettingsFor(next, "mod_suv/1000001");
-        GetPrivateProfileStringW(L"Truck", L"FromALaterVersion", L"", later2, 16, truckFile("mod_suv/1000001").c_str());
-        const bool moddedPlain = !next.own && SameSettings(next.s, next.plain) && !wcscmp(later2, L"7");
-        SettingsFor(next, "chevrolet_ck1500");
-        SettingsDrop(next);
-        wchar_t rest[64] = {};
-        const DWORD left = GetPrivateProfileSectionW(L"Truck", rest, 64, truckFile("chevrolet_ck1500").c_str());
-        const bool ckSection = GetFileAttributesW(truckFile("chevrolet_ck1500").c_str()) != INVALID_FILE_ATTRIBUTES;
-        Check(dropped && moddedPlain && !next.own && !left && !ckSection,
-              "trucks: a truck that gives up its scales takes the plain ones, its file keeps what else it holds, and an empty file goes");
-        // the truck's differential (BRIEF_diff_types.md, S5): its file's eighth key, written by one put, not one of the scales
+        SettingsState dt = {};
+        ReadIni(dt.plain);
+        const int plainWas = dt.plain.diffType;
+        SettingsFor(dt, "diff_a");
+        GaugeSettings di = dt.s;
+        di.diffType = 3;
+        SettingsTake(dt, di);
+        const bool taken = dt.diffChanged && !dt.own && dt.s.diffType == 3 && dt.plain.diffType == plainWas;
+        SettingsWrite(dt);
+        wchar_t red[8] = {};
+        GetPrivateProfileStringW(L"Truck", L"RedlineRpm", L"", red, 8, truckFile("diff_a").c_str());
+        const bool onePut = fileDiff("diff_a") == L"3" && !red[0] && !dt.diffChanged;
+        // the type follows the truck: another has the default, this one its own again, and not as its scales
+        SettingsFor(dt, "diff_b");
+        const bool otherPlain = dt.s.diffType == plainWas && !dt.own;
+        SettingsFor(dt, "diff_a");
+        const bool back = dt.s.diffType == 3 && !dt.own && !dt.diffChanged;
+        // with no truck the row is the default: the truck with a key keeps its own, the other takes the new default
+        SettingsFor(dt, "");
+        di = dt.s;
+        di.diffType = 2;
+        SettingsTake(dt, di);
+        const bool plainTaken = dt.plain.diffType == 2 && !dt.diffChanged;
+        SettingsFor(dt, "diff_b");
+        const bool otherNew = dt.s.diffType == 2;
+        SettingsFor(dt, "diff_a");
+        const bool ownKept = dt.s.diffType == 3 && dt.plain.diffType == 2;
+        // a change of a scale writes the seven and leaves the key; the scales given up leave it too
+        di = dt.s;
+        di.idleRpm = 900.0f;
+        SettingsTake(dt, di);
+        SettingsWrite(dt);
+        GetPrivateProfileStringW(L"Truck", L"RedlineRpm", L"", red, 8, truckFile("diff_a").c_str());
+        const bool withScales = dt.own && red[0] && fileDiff("diff_a") == L"3";
+        SettingsDrop(dt);
+        SettingsFor(dt, "diff_a");
+        const bool dropKeeps = !dt.own && dt.s.diffType == 3 && fileDiff("diff_a") == L"3";
+        // a value out of 0 to 3 or no number is left out
+        truckPut("diff_a", L"DiffType", L"9");
+        SettingsFor(dt, "diff_a");
+        const bool outOfRange = dt.s.diffType == 2;
+        truckPut("diff_a", L"DiffType", L"x");
+        SettingsFor(dt, "diff_a");
+        const bool noNumber = dt.s.diffType == 2;
+        truckPut("diff_a", L"DiffType", L"1");
+        SettingsFor(dt, "diff_a");
+        const bool open = dt.s.diffType == 1;
+        // the defaults take the key out, and the file with it when nothing else is in it
+        SettingsToDefaults(dt);
+        const bool toDefaults = dt.s.diffType == 0 && GetFileAttributesW(truckFile("diff_a").c_str()) == INVALID_FILE_ATTRIBUTES;
+        dt.plain.diffType = plainWas;
+        SettingsFor(dt, "");
+        SettingsWrite(dt);
+        Check(taken && onePut && otherPlain && back && plainTaken && otherNew && ownKept && withScales && dropKeeps && outOfRange && noNumber && open && toDefaults,
+              "trucks: the differential's type is the driven truck's own key in its file, written alone, read back for that truck only and kept when its scales go; "
+              "with no truck the row is the default; a value out of 0 to 3 is left out; the defaults take it out");
+        if (!(taken && onePut && otherPlain && back && plainTaken && otherNew && ownKept && withScales && dropKeeps && outOfRange && noNumber && open && toDefaults))
+            printf("     diff key: %d %d %d %d %d %d %d %d %d %d %d %d %d\n", taken, onePut, otherPlain, back, plainTaken, otherNew, ownKept, withScales, dropKeeps, outOfRange, noNumber, open, toDefaults);
+        // by axle (BRIEF_axle_diff.md, M6): DiffAxle1 to DiffAxle8 in the truck's file
         {
-            for (const char *dk : { "diff_a", "diff_b" }) DeleteFileW(truckFile(dk).c_str());
-            auto fileDiff = [&](const char *k) {
+            for (const char *dk : { "axle_a", "axle_b" }) DeleteFileW(truckFile(dk).c_str());
+            auto fileKey = [&](const char *k, const wchar_t *name) {
                 wchar_t v[8] = {};
-                GetPrivateProfileStringW(L"Truck", L"DiffType", L"", v, 8, truckFile(k).c_str());
+                GetPrivateProfileStringW(L"Truck", name, L"", v, 8, truckFile(k).c_str());
                 return std::wstring(v);
             };
-            SettingsState dt = {};
-            ReadIni(dt.plain);
-            const int plainWas = dt.plain.diffType;
-            SettingsFor(dt, "diff_a");
-            GaugeSettings di = dt.s;
-            di.diffType = 3;
-            SettingsTake(dt, di);
-            const bool taken = dt.diffChanged && !dt.own && dt.s.diffType == 3 && dt.plain.diffType == plainWas;
-            SettingsWrite(dt);
-            wchar_t red[8] = {};
-            GetPrivateProfileStringW(L"Truck", L"RedlineRpm", L"", red, 8, truckFile("diff_a").c_str());
-            const bool onePut = fileDiff("diff_a") == L"3" && !red[0] && !dt.diffChanged;
-            // the type follows the truck: another has the default, this one its own again, and not as its scales
-            SettingsFor(dt, "diff_b");
-            const bool otherPlain = dt.s.diffType == plainWas && !dt.own;
-            SettingsFor(dt, "diff_a");
-            const bool back = dt.s.diffType == 3 && !dt.own && !dt.diffChanged;
-            // with no truck the row is the default: the truck with a key keeps its own, the other takes the new default
-            SettingsFor(dt, "");
-            di = dt.s;
-            di.diffType = 2;
-            SettingsTake(dt, di);
-            const bool plainTaken = dt.plain.diffType == 2 && !dt.diffChanged;
-            SettingsFor(dt, "diff_b");
-            const bool otherNew = dt.s.diffType == 2;
-            SettingsFor(dt, "diff_a");
-            const bool ownKept = dt.s.diffType == 3 && dt.plain.diffType == 2;
-            // a change of a scale writes the seven and leaves the key; the scales given up leave it too
-            di = dt.s;
-            di.idleRpm = 900.0f;
-            SettingsTake(dt, di);
-            SettingsWrite(dt);
-            GetPrivateProfileStringW(L"Truck", L"RedlineRpm", L"", red, 8, truckFile("diff_a").c_str());
-            const bool withScales = dt.own && red[0] && fileDiff("diff_a") == L"3";
-            SettingsDrop(dt);
-            SettingsFor(dt, "diff_a");
-            const bool dropKeeps = !dt.own && dt.s.diffType == 3 && fileDiff("diff_a") == L"3";
-            // a value out of 0 to 3 or no number is left out
-            truckPut("diff_a", L"DiffType", L"9");
-            SettingsFor(dt, "diff_a");
-            const bool outOfRange = dt.s.diffType == 2;
-            truckPut("diff_a", L"DiffType", L"x");
-            SettingsFor(dt, "diff_a");
-            const bool noNumber = dt.s.diffType == 2;
-            truckPut("diff_a", L"DiffType", L"1");
-            SettingsFor(dt, "diff_a");
-            const bool open = dt.s.diffType == 1;
-            // the defaults take the key out, and the file with it when nothing else is in it
-            SettingsToDefaults(dt);
-            const bool toDefaults = dt.s.diffType == 0 && GetFileAttributesW(truckFile("diff_a").c_str()) == INVALID_FILE_ATTRIBUTES;
-            dt.plain.diffType = plainWas;
-            SettingsFor(dt, "");
-            SettingsWrite(dt);
-            Check(taken && onePut && otherPlain && back && plainTaken && otherNew && ownKept && withScales && dropKeeps && outOfRange && noNumber && open && toDefaults,
-                  "trucks: the differential's type is the driven truck's own key in its file, written alone, read back for that truck only and kept when its scales go; "
-                  "with no truck the row is the default; a value out of 0 to 3 is left out; the defaults take it out");
-            if (!(taken && onePut && otherPlain && back && plainTaken && otherNew && ownKept && withScales && dropKeeps && outOfRange && noNumber && open && toDefaults))
-                printf("     diff key: %d %d %d %d %d %d %d %d %d %d %d %d %d\n", taken, onePut, otherPlain, back, plainTaken, otherNew, ownKept, withScales, dropKeeps, outOfRange, noNumber, open, toDefaults);
-            // by axle (BRIEF_axle_diff.md, M6): DiffAxle1 to DiffAxle8 in the truck's file
-            {
-                for (const char *dk : { "axle_a", "axle_b" }) DeleteFileW(truckFile(dk).c_str());
-                auto fileKey = [&](const char *k, const wchar_t *name) {
-                    wchar_t v[8] = {};
-                    GetPrivateProfileStringW(L"Truck", name, L"", v, 8, truckFile(k).c_str());
-                    return std::wstring(v);
-                };
-                auto noAxleKey = [&](const char *k) {
-                    bool none = true;
-                    for (int ax = 0; ax < kAxleRowsMost; ax++) none = none && fileKey(k, (L"DiffAxle" + std::to_wstring(ax + 1)).c_str()).empty();
-                    return none;
-                };
-                SettingsState at = {};
-                ReadIni(at.plain);
-                // a file from before: DiffType alone, no axle has a key
-                truckPut("axle_a", L"DiffType", L"1");
-                SettingsFor(at, "axle_a");
-                bool oldFile = at.s.diffType == 1 && !at.axleChanged;
-                for (int ax = 0; ax < kAxleRowsMost; ax++) oldFile = oldFile && at.s.diffAxle[ax] == -1 && at.plain.diffAxle[ax] == -1;
-                // a row's pick writes its own key alone
-                GaugeSettings ai = at.s;
-                ai.diffAxle[1] = 3;
-                SettingsTake(at, ai);
-                const bool rowTaken = at.axleChanged == 2 && !at.diffChanged && !at.own && at.plain.diffAxle[1] == -1 && at.s.diffAxle[1] == 3;
-                SettingsWrite(at);
-                const bool rowPut = fileKey("axle_a", L"DiffAxle2") == L"3" && fileKey("axle_a", L"DiffAxle1").empty() && fileKey("axle_a", L"DiffType") == L"1" && !at.axleChanged;
-                // read back for that truck only
-                SettingsFor(at, "axle_b");
-                const bool otherNone = at.s.diffAxle[1] == -1;
-                SettingsFor(at, "axle_a");
-                const bool backAgain = at.s.diffAxle[1] == 3 && at.s.diffAxle[0] == -1 && at.s.diffType == 1;
-                // a key of 9, of x and of two digits is as if absent; a key for axle 7 is read into its own place
-                truckPut("axle_a", L"DiffAxle1", L"9");
-                truckPut("axle_a", L"DiffAxle3", L"x");
-                truckPut("axle_a", L"DiffAxle4", L"12");
-                truckPut("axle_a", L"DiffAxle7", L"2");
-                SettingsFor(at, "axle_a");
-                const bool badKeys = at.s.diffAxle[0] == -1 && at.s.diffAxle[2] == -1 && at.s.diffAxle[3] == -1 && at.s.diffAxle[6] == 2 && at.s.diffAxle[1] == 3;
-                // another row's pick leaves the keys of the other axles in the file, the one for an axle the truck has not too
-                ai = at.s;
-                ai.diffAxle[0] = 0;
-                SettingsTake(at, ai);
-                SettingsWrite(at);
-                const bool spareLeft = fileKey("axle_a", L"DiffAxle7") == L"2" && fileKey("axle_a", L"DiffAxle1") == L"0" && fileKey("axle_a", L"DiffAxle2") == L"3";
-                // the Diff row's pick writes DiffType and removes every key by axle
-                ai = at.s;
-                ai.diffType = 2;
-                for (int ax = 0; ax < kAxleRowsMost; ax++) ai.diffAxle[ax] = -1;
-                SettingsTake(at, ai);
-                SettingsWrite(at);
-                const bool rowAll = fileKey("axle_a", L"DiffType") == L"2" && noAxleKey("axle_a");
-                // By axle shown and the choice it already has picked on the Diff row: the keys go though DiffType is the same
-                ai = at.s;
-                ai.diffAxle[2] = 1;
-                SettingsTake(at, ai);
-                SettingsWrite(at);
-                const bool third = fileKey("axle_a", L"DiffAxle3") == L"1";
-                ai = at.s;
-                ai.diffAxle[2] = -1;
-                SettingsTake(at, ai);
-                SettingsWrite(at);
-                const bool samePick = third && !at.diffChanged && noAxleKey("axle_a") && fileKey("axle_a", L"DiffType") == L"2";
-                // the defaults take the keys out, and the file with them when nothing else is in it
-                ai = at.s;
-                ai.diffAxle[0] = 3;
-                SettingsTake(at, ai);
-                SettingsWrite(at);
-                const GaugeSettings plainKept = at.plain;
-                SettingsToDefaults(at);
-                const bool axleDefaults = at.s.diffAxle[0] == -1 && at.s.diffType == 0 && GetFileAttributesW(truckFile("axle_a").c_str()) == INVALID_FILE_ATTRIBUTES;
-                // the compare and the clamp hold them
-                GaugeSettings sa = plainKept, sb = plainKept;
-                sb.diffAxle[4] = 1;
-                const bool compared = SameSettings(sa, sa) && !SameSettings(sa, sb);
-                sb.diffAxle[4] = 7, sb.diffAxle[5] = -4;
-                SettingsClamp(sb);
-                GaugeSettings fresh;
-                SettingsDefaults(fresh);
-                const bool clamped = sb.diffAxle[4] == -1 && sb.diffAxle[5] == -1 && fresh.diffAxle[0] == -1 && fresh.diffAxle[7] == -1;
-                at.plain = plainKept;
-                SettingsFor(at, "");
-                SettingsWrite(at);
-                if (!(oldFile && rowTaken && rowPut && otherNone && backAgain && badKeys && spareLeft && rowAll && samePick && axleDefaults && compared && clamped))
-                    printf("     axle keys: %d %d %d %d %d %d %d %d %d %d %d %d\n", oldFile, rowTaken, rowPut, otherNone, backAgain, badKeys, spareLeft, rowAll, samePick, axleDefaults, compared, clamped);
-                Check(oldFile && rowTaken && rowPut && otherNone && backAgain && badKeys && spareLeft && rowAll && samePick && axleDefaults && compared && clamped,
-                      "trucks: the differential by axle: a file from before has no axle key; a row writes its own key alone, read back for that truck only; a key of 9, x or two digits is as if "
-                      "absent; a key for an axle the truck has not stays in the file; the Diff row writes DiffType and removes every axle key, also when its choice is the same; the defaults take them out");
-            }
-            // the Air brakes choice (BRIEF_spring_brakes.md, M7): AirBrakes in the suspension's sections, the owned truck's over the kind's
-            {
-                const char *bk = "brake_a";
-                const char *b1 = "{B0000000-0000-4000-8000-000000000001}", *b2 = "{B0000000-0000-4000-8000-000000000002}", *b3 = "{B0000000-0000-4000-8000-000000000003}";
-                DeleteFileW(truckFile(bk).c_str());
-                auto airKey = [&](const char *id) {
-                    wchar_t v[8] = {};
-                    GetPrivateProfileStringW(SuspSectionOf(id).c_str(), L"AirBrakes", L"", v, 8, truckFile(bk).c_str());
-                    return std::wstring(v);
-                };
-                SettingsState bs = {};
-                ReadIni(bs.plain);
-                // no key: no choice, the class decides
-                SettingsFor(bs, bk, b1);
-                const bool noKey = bs.s.airBrakes == -1 && !bs.airChanged;
-                // the box: written at the owned truck's level and read back for that id; another truck of the kind has none
-                GaugeSettings bi = bs.s;
-                bi.airBrakes = 0;
-                SettingsTake(bs, bi);
-                const bool boxTaken = bs.airChanged && bs.s.airBrakes == 0 && bs.plain.airBrakes == -1 && !bs.own && !bs.truckOwn && !bs.suspOwn;
-                SettingsWrite(bs);
-                const bool boxPut = airKey(b1) == L"0" && airKey("").empty() && !bs.airChanged;
-                SettingsFor(bs, bk, b2);
-                const bool otherId = bs.s.airBrakes == -1;
-                SettingsFor(bs, bk, b1);
-                const bool mineBack = bs.s.airBrakes == 0 && !bs.truckOwn && !bs.truckKept; // a section with this key alone is no suspension set
-                // the kind's level: with no id read the box writes there, and a truck of the kind without its own takes it
-                SettingsFor(bs, bk, "");
-                bi = bs.s;
-                bi.airBrakes = 1;
-                SettingsTake(bs, bi);
-                SettingsWrite(bs);
-                const bool kindPut = airKey("") == L"1" && airKey(b1) == L"0";
-                SettingsFor(bs, bk, b2);
-                const bool kindUnder = bs.s.airBrakes == 1 && !bs.suspOwn && !bs.suspKept;
-                SettingsFor(bs, bk, b1);
-                const bool idOver = bs.s.airBrakes == 0;
-                // a key of 7 is as if absent: the kind's then
-                WritePrivateProfileStringW(SuspSectionOf(b1).c_str(), L"AirBrakes", L"7", truckFile(bk).c_str());
-                SettingsFor(bs, bk, b1);
-                const bool seven = bs.s.airBrakes == 1;
-                WritePrivateProfileStringW(SuspSectionOf(b1).c_str(), L"AirBrakes", L"0", truckFile(bk).c_str());
-                // the take-over to a new id carries it
-                const bool over = TruckSuspTakeOver(bk, b1, b3);
-                SettingsFor(bs, bk, b3);
-                const bool carried = over && bs.s.airBrakes == 0 && airKey(b3) == L"0";
-                // the owned truck's suspension set dropped to the kind's level: the choice stays
-                DropTruckSusp(bk, b3);
-                const bool keptAtDrop = airKey(b3) == L"0";
-                // the compare holds it; the defaults take it out of both levels
-                GaugeSettings ca = bs.s, cb = bs.s;
-                cb.airBrakes = 1;
-                const bool comparedAir = SameSettings(ca, ca) && !SameSettings(ca, cb);
-                SettingsFor(bs, bk, b3);
-                const GaugeSettings plainKeptB = bs.plain;
-                SettingsToDefaults(bs);
-                const bool airDefaults = bs.s.airBrakes == -1 && airKey(b3).empty() && airKey("").empty() && airKey(b1) == L"0"; // another truck's own stays
-                bs.plain = plainKeptB;
-                // with no truck the box is greyed and keeps nothing
-                SettingsFor(bs, "");
-                bi = bs.s;
-                bi.airBrakes = 1;
-                SettingsTake(bs, bi);
-                const bool noTruck = bs.s.airBrakes == -1 && bs.plain.airBrakes == -1 && !bs.airChanged;
-                SettingsWrite(bs);
-                DeleteFileW(truckFile(bk).c_str());
-                if (!(noKey && boxTaken && boxPut && otherId && mineBack && kindPut && kindUnder && idOver && seven && carried && keptAtDrop && comparedAir && airDefaults && noTruck))
-                    printf("     air brakes key: %d %d %d %d %d %d %d %d %d %d(%d) %d %d %d %d\n", noKey, boxTaken, boxPut, otherId, mineBack, kindPut, kindUnder, idOver, seven, carried, over, keptAtDrop, comparedAir, airDefaults, noTruck);
-                Check(noKey && boxTaken && boxPut && otherId && mineBack && kindPut && kindUnder && idOver && seven && carried && keptAtDrop && comparedAir && airDefaults && noTruck,
-                      "trucks: the Air brakes box is the driven truck's own key by its id, read back for that truck only and no suspension set; the key of the kind is under it; a key of 7 is as "
-                      "if absent; a take-over to a new id carries it; it stays when the suspension set of the truck goes; the defaults take it out; with no truck nothing is kept");
-            }
+            auto noAxleKey = [&](const char *k) {
+                bool none = true;
+                for (int ax = 0; ax < kAxleRowsMost; ax++) none = none && fileKey(k, (L"DiffAxle" + std::to_wstring(ax + 1)).c_str()).empty();
+                return none;
+            };
+            SettingsState at = {};
+            ReadIni(at.plain);
+            // a file from before: DiffType alone, no axle has a key
+            truckPut("axle_a", L"DiffType", L"1");
+            SettingsFor(at, "axle_a");
+            bool oldFile = at.s.diffType == 1 && !at.axleChanged;
+            for (int ax = 0; ax < kAxleRowsMost; ax++) oldFile = oldFile && at.s.diffAxle[ax] == -1 && at.plain.diffAxle[ax] == -1;
+            // a row's pick writes its own key alone
+            GaugeSettings ai = at.s;
+            ai.diffAxle[1] = 3;
+            SettingsTake(at, ai);
+            const bool rowTaken = at.axleChanged == 2 && !at.diffChanged && !at.own && at.plain.diffAxle[1] == -1 && at.s.diffAxle[1] == 3;
+            SettingsWrite(at);
+            const bool rowPut = fileKey("axle_a", L"DiffAxle2") == L"3" && fileKey("axle_a", L"DiffAxle1").empty() && fileKey("axle_a", L"DiffType") == L"1" && !at.axleChanged;
+            // read back for that truck only
+            SettingsFor(at, "axle_b");
+            const bool otherNone = at.s.diffAxle[1] == -1;
+            SettingsFor(at, "axle_a");
+            const bool backAgain = at.s.diffAxle[1] == 3 && at.s.diffAxle[0] == -1 && at.s.diffType == 1;
+            // a key of 9, of x and of two digits is as if absent; a key for axle 7 is read into its own place
+            truckPut("axle_a", L"DiffAxle1", L"9");
+            truckPut("axle_a", L"DiffAxle3", L"x");
+            truckPut("axle_a", L"DiffAxle4", L"12");
+            truckPut("axle_a", L"DiffAxle7", L"2");
+            SettingsFor(at, "axle_a");
+            const bool badKeys = at.s.diffAxle[0] == -1 && at.s.diffAxle[2] == -1 && at.s.diffAxle[3] == -1 && at.s.diffAxle[6] == 2 && at.s.diffAxle[1] == 3;
+            // another row's pick leaves the keys of the other axles in the file, the one for an axle the truck has not too
+            ai = at.s;
+            ai.diffAxle[0] = 0;
+            SettingsTake(at, ai);
+            SettingsWrite(at);
+            const bool spareLeft = fileKey("axle_a", L"DiffAxle7") == L"2" && fileKey("axle_a", L"DiffAxle1") == L"0" && fileKey("axle_a", L"DiffAxle2") == L"3";
+            // the Diff row's pick writes DiffType and removes every key by axle
+            ai = at.s;
+            ai.diffType = 2;
+            for (int ax = 0; ax < kAxleRowsMost; ax++) ai.diffAxle[ax] = -1;
+            SettingsTake(at, ai);
+            SettingsWrite(at);
+            const bool rowAll = fileKey("axle_a", L"DiffType") == L"2" && noAxleKey("axle_a");
+            // By axle shown and the choice it already has picked on the Diff row: the keys go though DiffType is the same
+            ai = at.s;
+            ai.diffAxle[2] = 1;
+            SettingsTake(at, ai);
+            SettingsWrite(at);
+            const bool third = fileKey("axle_a", L"DiffAxle3") == L"1";
+            ai = at.s;
+            ai.diffAxle[2] = -1;
+            SettingsTake(at, ai);
+            SettingsWrite(at);
+            const bool samePick = third && !at.diffChanged && noAxleKey("axle_a") && fileKey("axle_a", L"DiffType") == L"2";
+            // the defaults take the keys out, and the file with them when nothing else is in it
+            ai = at.s;
+            ai.diffAxle[0] = 3;
+            SettingsTake(at, ai);
+            SettingsWrite(at);
+            const GaugeSettings plainKept = at.plain;
+            SettingsToDefaults(at);
+            const bool axleDefaults = at.s.diffAxle[0] == -1 && at.s.diffType == 0 && GetFileAttributesW(truckFile("axle_a").c_str()) == INVALID_FILE_ATTRIBUTES;
+            // the compare and the clamp hold them
+            GaugeSettings sa = plainKept, sb = plainKept;
+            sb.diffAxle[4] = 1;
+            const bool compared = SameSettings(sa, sa) && !SameSettings(sa, sb);
+            sb.diffAxle[4] = 7, sb.diffAxle[5] = -4;
+            SettingsClamp(sb);
+            GaugeSettings fresh;
+            SettingsDefaults(fresh);
+            const bool clamped = sb.diffAxle[4] == -1 && sb.diffAxle[5] == -1 && fresh.diffAxle[0] == -1 && fresh.diffAxle[7] == -1;
+            at.plain = plainKept;
+            SettingsFor(at, "");
+            SettingsWrite(at);
+            if (!(oldFile && rowTaken && rowPut && otherNone && backAgain && badKeys && spareLeft && rowAll && samePick && axleDefaults && compared && clamped))
+                printf("     axle keys: %d %d %d %d %d %d %d %d %d %d %d %d\n", oldFile, rowTaken, rowPut, otherNone, backAgain, badKeys, spareLeft, rowAll, samePick, axleDefaults, compared, clamped);
+            Check(oldFile && rowTaken && rowPut && otherNone && backAgain && badKeys && spareLeft && rowAll && samePick && axleDefaults && compared && clamped,
+                  "trucks: the differential by axle: a file from before has no axle key; a row writes its own key alone, read back for that truck only; a key of 9, x or two digits is as if "
+                  "absent; a key for an axle the truck has not stays in the file; the Diff row writes DiffType and removes every axle key, also when its choice is the same; the defaults take them out");
         }
-        // the defaults: the plain settings and the driven truck's own scales; another truck keeps its own
-        SettingsFor(next, "half");
-        const bool halfOwn = next.own;
-        SettingsToDefaults(next);
-        SettingsWrite(next);
-        GaugeSettings defaults, fromIni;
-        SettingsDefaults(defaults);
-        ReadIni(fromIni);
-        wchar_t halfMax[16] = {};
-        GetPrivateProfileStringW(L"Truck", L"MaxRpm", L"", halfMax, 16, truckFile("half").c_str());
-        GetPrivateProfileStringW(L"Truck", L"RedlineRpm", L"", kept, 16, truckFile("someone_elses").c_str());
-        Check(halfOwn && !next.own && SameSettings(next.s, defaults) && SameSettings(fromIni, defaults) && !halfMax[0] && !wcscmp(kept, L"1800"),
-              "trucks: the defaults take the plain settings and the driven truck's own scales, and leave the other trucks' files as they were");
-        // a truck kind's own suspension (BRIEF_suspension_per_truck.md step 1): [Suspension] beside [Truck] in its file
+        // the Air brakes choice (BRIEF_spring_brakes.md, M7): AirBrakes in the suspension's sections, the owned truck's over the kind's
         {
-            for (const char *key : { "susp_hx", "susp_ww", "susp_old" }) DeleteFileW(truckFile(key).c_str());
-            DeleteFileW(ini.c_str());
-            SettingsState su = {};
-            ReadIni(su.plain);
-            su.plain.springFront = 1.25f;
-            WriteIni(su.plain);
-            // a kind with no section uses the default; with no truck driven a change is the default's
-            SettingsFor(su, "susp_hx");
-            const bool hxPlain = !su.suspOwn && !su.suspKept && su.s.springFront == 1.25f;
-            SettingsFor(su, "");
-            GaugeSettings ed = su.s;
-            ed.dampingFront = 1.5f;
-            SettingsTake(su, ed);
-            const bool noTruckDefault = !su.suspOwn && su.plain.dampingFront == 1.5f;
-            // a change while a kind is driven makes the whole set its own, the bump keys with it; the default stays
-            SettingsFor(su, "susp_hx");
-            ed = su.s;
-            ed.springFront = 2.0f;
-            ed.bumpStops = true;
-            ed.bumpZone = 0.12f;
-            ed.bumpForce = 3.0f;
-            ed.bumpDamping = 2.5f;
-            SettingsTake(su, ed);
+            const char *bk = "brake_a";
+            const char *b1 = "{B0000000-0000-4000-8000-000000000001}", *b2 = "{B0000000-0000-4000-8000-000000000002}", *b3 = "{B0000000-0000-4000-8000-000000000003}";
+            DeleteFileW(truckFile(bk).c_str());
+            auto airKey = [&](const char *id) {
+                wchar_t v[8] = {};
+                GetPrivateProfileStringW(SuspSectionOf(id).c_str(), L"AirBrakes", L"", v, 8, truckFile(bk).c_str());
+                return std::wstring(v);
+            };
+            SettingsState bs = {};
+            ReadIni(bs.plain);
+            // no key: no choice, the class decides
+            SettingsFor(bs, bk, b1);
+            const bool noKey = bs.s.airBrakes == -1 && !bs.airChanged;
+            // the box: written at the owned truck's level and read back for that id; another truck of the kind has none
+            GaugeSettings bi = bs.s;
+            bi.airBrakes = 0;
+            SettingsTake(bs, bi);
+            const bool boxTaken = bs.airChanged && bs.s.airBrakes == 0 && bs.plain.airBrakes == -1 && !bs.own && !bs.truckOwn && !bs.suspOwn;
+            SettingsWrite(bs);
+            const bool boxPut = airKey(b1) == L"0" && airKey("").empty() && !bs.airChanged;
+            SettingsFor(bs, bk, b2);
+            const bool otherId = bs.s.airBrakes == -1;
+            SettingsFor(bs, bk, b1);
+            const bool mineBack = bs.s.airBrakes == 0 && !bs.truckOwn && !bs.truckKept; // a section with this key alone is no suspension set
+            // the kind's level: with no id read the box writes there, and a truck of the kind without its own takes it
+            SettingsFor(bs, bk, "");
+            bi = bs.s;
+            bi.airBrakes = 1;
+            SettingsTake(bs, bi);
+            SettingsWrite(bs);
+            const bool kindPut = airKey("") == L"1" && airKey(b1) == L"0";
+            SettingsFor(bs, bk, b2);
+            const bool kindUnder = bs.s.airBrakes == 1 && !bs.suspOwn && !bs.suspKept;
+            SettingsFor(bs, bk, b1);
+            const bool idOver = bs.s.airBrakes == 0;
+            // a key of 7 is as if absent: the kind's then
+            WritePrivateProfileStringW(SuspSectionOf(b1).c_str(), L"AirBrakes", L"7", truckFile(bk).c_str());
+            SettingsFor(bs, bk, b1);
+            const bool seven = bs.s.airBrakes == 1;
+            WritePrivateProfileStringW(SuspSectionOf(b1).c_str(), L"AirBrakes", L"0", truckFile(bk).c_str());
+            // the take-over to a new id carries it
+            const bool over = TruckSuspTakeOver(bk, b1, b3);
+            SettingsFor(bs, bk, b3);
+            const bool carried = over && bs.s.airBrakes == 0 && airKey(b3) == L"0";
+            // the owned truck's suspension set dropped to the kind's level: the choice stays
+            DropTruckSusp(bk, b3);
+            const bool keptAtDrop = airKey(b3) == L"0";
+            // the compare holds it; the defaults take it out of both levels
+            GaugeSettings ca = bs.s, cb = bs.s;
+            cb.airBrakes = 1;
+            const bool comparedAir = SameSettings(ca, ca) && !SameSettings(ca, cb);
+            SettingsFor(bs, bk, b3);
+            const GaugeSettings plainKeptB = bs.plain;
+            SettingsToDefaults(bs);
+            const bool airDefaults = bs.s.airBrakes == -1 && airKey(b3).empty() && airKey("").empty() && airKey(b1) == L"0"; // another truck's own stays
+            bs.plain = plainKeptB;
+            // with no truck the box is greyed and keeps nothing
+            SettingsFor(bs, "");
+            bi = bs.s;
+            bi.airBrakes = 1;
+            SettingsTake(bs, bi);
+            const bool noTruck = bs.s.airBrakes == -1 && bs.plain.airBrakes == -1 && !bs.airChanged;
+            SettingsWrite(bs);
+            DeleteFileW(truckFile(bk).c_str());
+            if (!(noKey && boxTaken && boxPut && otherId && mineBack && kindPut && kindUnder && idOver && seven && carried && keptAtDrop && comparedAir && airDefaults && noTruck))
+                printf("     air brakes key: %d %d %d %d %d %d %d %d %d %d(%d) %d %d %d %d\n", noKey, boxTaken, boxPut, otherId, mineBack, kindPut, kindUnder, idOver, seven, carried, over, keptAtDrop, comparedAir, airDefaults, noTruck);
+            Check(noKey && boxTaken && boxPut && otherId && mineBack && kindPut && kindUnder && idOver && seven && carried && keptAtDrop && comparedAir && airDefaults && noTruck,
+                  "trucks: the Air brakes box is the driven truck's own key by its id, read back for that truck only and no suspension set; the key of the kind is under it; a key of 7 is as "
+                  "if absent; a take-over to a new id carries it; it stays when the suspension set of the truck goes; the defaults take it out; with no truck nothing is kept");
+        }
+    }
+    // the defaults: the plain settings and the driven truck's own scales; another truck keeps its own
+    SettingsFor(next, "half");
+    const bool halfOwn = next.own;
+    SettingsToDefaults(next);
+    SettingsWrite(next);
+    GaugeSettings defaults, fromIni;
+    SettingsDefaults(defaults);
+    ReadIni(fromIni);
+    wchar_t halfMax[16] = {};
+    GetPrivateProfileStringW(L"Truck", L"MaxRpm", L"", halfMax, 16, truckFile("half").c_str());
+    GetPrivateProfileStringW(L"Truck", L"RedlineRpm", L"", kept, 16, truckFile("someone_elses").c_str());
+    Check(halfOwn && !next.own && SameSettings(next.s, defaults) && SameSettings(fromIni, defaults) && !halfMax[0] && !wcscmp(kept, L"1800"),
+          "trucks: the defaults take the plain settings and the driven truck's own scales, and leave the other trucks' files as they were");
+}
+
+// A truck kind's own suspension (BRIEF_suspension_per_truck.md step 1): [Suspension] beside [Truck] in its file.
+static void PartSuspension()
+{
+    const std::wstring ini = IniPath();
+    auto truckFile = [](const char *key) { return SetupFile(kSetupTruck, key); };
+    auto truckPut = [&](const char *key, const wchar_t *name, const wchar_t *value) {
+        SetupFolderMake(kSetupTruck);
+        WritePrivateProfileStringW(L"Truck", name, value, truckFile(key).c_str());
+    };
+    for (const char *key : { "susp_hx", "susp_ww", "susp_old" }) DeleteFileW(truckFile(key).c_str());
+    DeleteFileW(ini.c_str());
+    SettingsState su = {};
+    ReadIni(su.plain);
+    su.plain.springFront = 1.25f;
+    WriteIni(su.plain);
+    // a kind with no section uses the default; with no truck driven a change is the default's
+    SettingsFor(su, "susp_hx");
+    const bool hxPlain = !su.suspOwn && !su.suspKept && su.s.springFront == 1.25f;
+    SettingsFor(su, "");
+    GaugeSettings ed = su.s;
+    ed.dampingFront = 1.5f;
+    SettingsTake(su, ed);
+    const bool noTruckDefault = !su.suspOwn && su.plain.dampingFront == 1.5f;
+    // a change while a kind is driven makes the whole set its own, the bump keys with it; the default stays
+    SettingsFor(su, "susp_hx");
+    ed = su.s;
+    ed.springFront = 2.0f;
+    ed.bumpStops = true;
+    ed.bumpZone = 0.12f;
+    ed.bumpForce = 3.0f;
+    ed.bumpDamping = 2.5f;
+    SettingsTake(su, ed);
+    SettingsWrite(su);
+    wchar_t own[8] = {}, zone[16] = {};
+    GetPrivateProfileStringW(L"Suspension", L"Own", L"", own, 8, truckFile("susp_hx").c_str());
+    GetPrivateProfileStringW(L"Suspension", L"BumpZone", L"", zone, 16, truckFile("susp_hx").c_str());
+    GaugeSettings fromIni2;
+    ReadIni(fromIni2);
+    Check(hxPlain && noTruckDefault && su.suspOwn && !wcscmp(own, L"1") && !wcscmp(zone, L"0.12") && su.plain.springFront == 1.25f &&
+              fromIni2.springFront == 1.25f && fromIni2.dampingFront == 1.5f && !fromIni2.bumpStops,
+          "suspension: a kind with no section uses the default, a change while it is driven makes the whole set its own with the bump keys, and the default stays");
+    // two kinds in turn each get their own; A, then B, then A again gives A's set over the default, no climb
+    SettingsFor(su, "susp_ww");
+    ed = su.s;
+    const bool wwStartsPlain = !su.suspOwn && ed.springFront == 1.25f && !ed.bumpStops;
+    ed.springFront = 0.75f;
+    SettingsTake(su, ed);
+    SettingsWrite(su);
+    SettingsFor(su, "susp_hx");
+    const GaugeSettings hxFirst = su.s;
+    SettingsFor(su, "susp_ww");
+    const bool wwOwn = su.suspOwn && su.s.springFront == 0.75f && !su.s.bumpStops;
+    SettingsFor(su, "susp_hx");
+    Check(wwStartsPlain && wwOwn && su.suspOwn && su.s.springFront == 2.0f && su.s.bumpForce == 3.0f && SuspSame(su.s, hxFirst) &&
+              su.s.dampingFront == 1.5f,
+          "suspension: two kinds in turn each get their own set, and A to B to A gives A's set as it was, on the default, not on B's");
+    // the box off keeps the values with Own=0 and the default is in force; on again brings them back
+    SettingsSuspOwn(su, false);
+    GetPrivateProfileStringW(L"Suspension", L"Own", L"", own, 8, truckFile("susp_hx").c_str());
+    const bool offDefault = !su.suspOwn && su.suspKept && su.s.springFront == 1.25f && !su.s.bumpStops && !wcscmp(own, L"0");
+    SettingsFor(su, "susp_hx");
+    const bool offAfterReload = !su.suspOwn && su.suspKept && su.s.springFront == 1.25f;
+    SettingsSuspOwn(su, true);
+    const bool back = su.suspOwn && !su.suspKept && su.s.springFront == 2.0f && su.s.bumpZone == 0.12f;
+    SettingsFor(su, "susp_hx");
+    Check(offDefault && offAfterReload && back && su.suspOwn && su.s.springFront == 2.0f,
+          "suspension: the box off keeps the set with Own=0 and the default in force, on again brings the set back");
+    // a change while the set is kept edits the default: the file's set and Own=0 stay, [Gauges] takes it (review F1)
+    SettingsSuspOwn(su, false);
+    ed = su.s;
+    ed.springFront = 0.5f;
+    SettingsTake(su, ed);
+    SettingsWrite(su);
+    wchar_t keptSpring[16] = {};
+    GetPrivateProfileStringW(L"Suspension", L"Own", L"", own, 8, truckFile("susp_hx").c_str());
+    GetPrivateProfileStringW(L"Suspension", L"SpringFront", L"", keptSpring, 16, truckFile("susp_hx").c_str());
+    GaugeSettings fromIniKept;
+    ReadIni(fromIniKept);
+    const bool keptStays = !su.suspOwn && su.suspKept && !wcscmp(own, L"0") && !wcscmp(keptSpring, L"2") && fromIniKept.springFront == 0.5f && su.plain.springFront == 0.5f;
+    SettingsSuspOwn(su, true);
+    Check(keptStays && su.suspOwn && su.s.springFront == 2.0f && su.plain.springFront == 0.5f,
+          "suspension: a change while the set is kept edits the default, the box stays off, and the file's set and Own=0 stay as they were");
+    ed = su.plain;
+    ed.springFront = 1.25f;
+    su.plain = ed;
+    WriteIni(su.plain);
+    SettingsFor(su, "susp_hx");
+    // the box on with nothing kept makes the default shown the kind's own
+    DeleteFileW(truckFile("susp_old").c_str());
+    SettingsFor(su, "susp_old");
+    SettingsSuspOwn(su, true);
+    GetPrivateProfileStringW(L"Suspension", L"Own", L"", own, 8, truckFile("susp_old").c_str());
+    const bool onFresh = su.suspOwn && su.s.springFront == 1.25f && !wcscmp(own, L"1");
+    DeleteFileW(truckFile("susp_old").c_str());
+    // "Make these the default": Gauges.ini takes the truck's set, the truck keeps its own
+    SettingsFor(su, "susp_hx");
+    SettingsSuspToDefault(su);
+    SettingsWrite(su);
+    GaugeSettings fromIni3;
+    ReadIni(fromIni3);
+    SettingsFor(su, "susp_hx");
+    GetPrivateProfileStringW(L"Suspension", L"Own", L"", own, 8, truckFile("susp_hx").c_str());
+    Check(onFresh && fromIni3.springFront == 2.0f && fromIni3.bumpStops && fromIni3.bumpZone == 0.12f && su.suspOwn && su.s.springFront == 2.0f && !wcscmp(own, L"1"),
+          "suspension: the box on with nothing kept takes the default shown, and Make these the default writes Gauges.ini and leaves the truck's own");
+    // giving up the scales leaves the suspension and its file; the defaults button keeps the set with Own=0
+    ed = su.s;
+    ed.redlineRpm = 3900.0f;
+    SettingsTake(su, ed);
+    SettingsWrite(su);
+    SettingsDrop(su);
+    const bool fileStays = GetFileAttributesW(truckFile("susp_hx").c_str()) != INVALID_FILE_ATTRIBUTES;
+    SettingsFor(su, "susp_hx");
+    const bool suspStays = fileStays && !su.own && su.suspOwn && su.s.springFront == 2.0f;
+    SettingsToDefaults(su);
+    SettingsWrite(su);
+    SettingsFor(su, "susp_hx");
+    GaugeSettings defaults2;
+    SettingsDefaults(defaults2);
+    Check(suspStays && !su.suspOwn && su.suspKept && SuspSame(su.s, defaults2),
+          "suspension: the truck giving up its scales keeps its suspension and its file, and the defaults keep the set with Own=0");
+    // a section written by hand without Own is in force; a value out of range is held as [Gauges]' are
+    WritePrivateProfileStringW(L"Suspension", L"SpringScale", L"9", truckFile("susp_old").c_str());
+    SettingsFor(su, "susp_old");
+    Check(su.suspOwn && su.s.springFront == kSuspScaleRange[1] && su.s.springRear == kSuspScaleRange[1],
+          "suspension: a section without Own is in force, its values held to their ranges (the one SpringScale of before as both ends)");
+    DeleteFileW(truckFile("susp_old").c_str());
+    // front and rear apart (BRIEF_suspension_front_rear.md, M3 and S1): the one key of before reads as both ends at
+    // each level and moves nothing; the first save writes the two new keys
+    {
+        const GaugeSettings plainWas = su.plain;
+        auto bytes = [](const std::wstring &path) {
+            std::string all;
+            FILE *f = nullptr;
+            if (_wfopen_s(&f, path.c_str(), L"rb") || !f) return all;
+            char buf[4096];
+            for (size_t got; (got = fread(buf, 1, sizeof buf, f)) > 0;) all.append(buf, got);
+            fclose(f);
+            return all;
+        };
+        auto there = [&](const std::wstring &file, const wchar_t *section, const wchar_t *key) { return IniKeyThere(section, key, file); };
+        const wchar_t *const ends[] = { L"SpringFront", L"SpringRear", L"DampingFront", L"DampingRear" };
+        // the default's: an ini of before, with the one key each
+        SettingsFor(su, "");
+        for (const wchar_t *end : ends) WritePrivateProfileStringW(kIniSection, end, nullptr, ini.c_str());
+        WritePrivateProfileStringW(kIniSection, L"SpringScale", L"1.6", ini.c_str());
+        WritePrivateProfileStringW(kIniSection, L"DampingScale", L"0.7", ini.c_str());
+        const std::string iniWas = bytes(ini);
+        ReadIni(su.plain);
+        SettingsFor(su, "");
+        const bool defRead = su.s.springFront == 1.6f && su.s.springRear == 1.6f && su.s.dampingFront == 0.7f && su.s.dampingRear == 0.7f && bytes(ini) == iniWas && !iniWas.empty();
+        SettingsWrite(su);
+        GaugeSettings again;
+        ReadIni(again);
+        const bool defSaved = IniFloat(L"SpringFront", 0.0f, ini) == 1.6f && IniFloat(L"SpringRear", 0.0f, ini) == 1.6f && IniFloat(L"DampingFront", 0.0f, ini) == 0.7f &&
+                              IniFloat(L"DampingRear", 0.0f, ini) == 0.7f && IniFloat(L"SpringScale", 0.0f, ini) == 1.6f && IniFloat(L"DampingScale", 0.0f, ini) == 0.7f &&
+                              SuspSame(again, su.s);
+        // unlike ends: the old key goes, the other stays; a new key lies over an old one left by hand
+        GaugeSettings apart = su.s;
+        apart.springRear = 2.5f;
+        SettingsTake(su, apart);
+        SettingsWrite(su);
+        ReadIni(again);
+        const bool defApart = !there(ini, kIniSection, L"SpringScale") && there(ini, kIniSection, L"DampingScale") && again.springFront == 1.6f && again.springRear == 2.5f &&
+                              again.dampingFront == 0.7f && again.dampingRear == 0.7f;
+        WritePrivateProfileStringW(kIniSection, L"SpringScale", L"3", ini.c_str());
+        ReadIni(again);
+        const bool newOver = again.springFront == 1.6f && again.springRear == 2.5f;
+        WritePrivateProfileStringW(kIniSection, L"SpringRear", nullptr, ini.c_str());
+        ReadIni(again);
+        const bool oneOver = again.springFront == 1.6f && again.springRear == 3.0f; // the old key for the end without its own
+        Check(defRead && defSaved && defApart && newOver && oneOver,
+              "front and rear: an ini of before reads its one SpringScale and DampingScale as both ends and is not written by the read; the first save writes the four new keys "
+              "and keeps the old key while both ends are alike, takes it out once they differ; a new key lies over the old one");
+        // back to an ini with all at 1 for the levels below
+        SettingsDefaults(su.plain);
+        WriteIni(su.plain);
+        // the kind's: a section of before, in force (no Own) and kept (Own=0)
+        const std::wstring tf = truckFile("susp_m3");
+        DeleteFileW(tf.c_str());
+        WritePrivateProfileStringW(L"Suspension", L"SpringScale", L"1.5", tf.c_str());
+        WritePrivateProfileStringW(L"Suspension", L"DampingScale", L"0.6", tf.c_str());
+        const std::string kindWas = bytes(tf);
+        SettingsFor(su, "susp_m3");
+        GaugeSettings want = su.plain;
+        want.springFront = want.springRear = 1.5f, want.dampingFront = want.dampingRear = 0.6f;
+        const bool kindRead = SuspLevel(su) == kSuspLevelKind && su.suspOwn && !su.suspKept && !su.suspChanged && SuspSame(su.s, want);
+        SettingsTake(su, su.s); // the tab's frame with nothing moved
+        SettingsWrite(su);
+        const bool kindStill = bytes(tf) == kindWas && !kindWas.empty() && !su.suspChanged && SuspLevel(su) == kSuspLevelKind;
+        GaugeSettings moved = su.s;
+        moved.dampingFront = 0.9f;
+        SettingsTake(su, moved);
+        SettingsWrite(su);
+        const bool kindSaved = IniFloatIn(L"Suspension", L"SpringFront", 0.0f, tf) == 1.5f && IniFloatIn(L"Suspension", L"SpringRear", 0.0f, tf) == 1.5f &&
+                               IniFloatIn(L"Suspension", L"SpringScale", 0.0f, tf) == 1.5f && IniFloatIn(L"Suspension", L"DampingFront", 0.0f, tf) == 0.9f &&
+                               IniFloatIn(L"Suspension", L"DampingRear", 0.0f, tf) == 0.6f && !there(tf, L"Suspension", L"DampingScale");
+        SettingsFor(su, "susp_m3");
+        const bool kindBack = su.suspOwn && su.s.springFront == 1.5f && su.s.springRear == 1.5f && su.s.dampingFront == 0.9f && su.s.dampingRear == 0.6f;
+        DeleteFileW(tf.c_str());
+        WritePrivateProfileStringW(L"Suspension", L"Own", L"0", tf.c_str());
+        WritePrivateProfileStringW(L"Suspension", L"SpringScale", L"2", tf.c_str());
+        const std::string keptWas = bytes(tf);
+        SettingsFor(su, "susp_m3");
+        const bool keptRead = !su.suspOwn && su.suspKept && SuspLevel(su) == kSuspLevelDefault && SuspSame(su.s, su.plain) && su.s.springFront == 1.0f && su.s.springRear == 1.0f;
+        SettingsTake(su, su.s);
+        SettingsWrite(su);
+        const bool keptStill = bytes(tf) == keptWas && !su.suspOwn && su.suspKept;
+        SettingsSuspOwn(su, true);
+        const bool keptOn = su.suspOwn && su.s.springFront == 2.0f && su.s.springRear == 2.0f;
+        // this truck's: its section of before with one new key over the old one, and the range on all four
+        const char *const m3id = "{0A000000-0000-0000-0000-0000000000A3}";
+        const std::wstring ms = SuspSectionOf(m3id);
+        DeleteFileW(tf.c_str());
+        WritePrivateProfileStringW(ms.c_str(), L"SpringScale", L"0.5", tf.c_str());
+        WritePrivateProfileStringW(ms.c_str(), L"SpringRear", L"3", tf.c_str());
+        WritePrivateProfileStringW(ms.c_str(), L"DampingScale", L"1.2", tf.c_str());
+        const std::string truckWas = bytes(tf);
+        SettingsFor(su, "susp_m3", m3id);
+        const bool truckRead = SuspLevel(su) == kSuspLevelTruck && su.truckOwn && !su.truckChanged && su.s.springFront == 0.5f && su.s.springRear == 3.0f &&
+                               su.s.dampingFront == 1.2f && su.s.dampingRear == 1.2f && bytes(tf) == truckWas;
+        WritePrivateProfileStringW(ms.c_str(), L"SpringFront", L"9", tf.c_str());
+        WritePrivateProfileStringW(ms.c_str(), L"SpringRear", L"0.01", tf.c_str());
+        WritePrivateProfileStringW(ms.c_str(), L"DampingFront", L"0.01", tf.c_str());
+        WritePrivateProfileStringW(ms.c_str(), L"DampingRear", L"9", tf.c_str());
+        SettingsFor(su, "susp_m3", m3id);
+        const bool ranged = su.s.springFront == kSuspScaleRange[1] && su.s.springRear == kSuspScaleRange[0] && su.s.dampingFront == kSuspScaleRange[0] &&
+                            su.s.dampingRear == kSuspScaleRange[1];
+        Check(kindRead && kindStill && kindSaved && kindBack && keptRead && keptStill && keptOn && truckRead && ranged,
+              "front and rear: a kind's section of before reads as both ends at the same level with nothing changed and its file untouched until a slider moves, then holds the "
+              "new keys; a kept one stays kept, untouched, and comes back as both ends; a truck's own with a new key over the old; all four keys held to the range");
+        // Defaults put both ends back, at the default and with a kind's set in force (kept with Own=0, 1 in force)
+        DeleteFileW(tf.c_str());
+        SettingsFor(su, "");
+        GaugeSettings four = su.s;
+        four.springFront = 1.3f, four.springRear = 0.6f, four.dampingFront = 2.0f, four.dampingRear = 0.5f;
+        SettingsTake(su, four);
+        SettingsWrite(su);
+        GaugeSettings fromIni4;
+        ReadIni(fromIni4);
+        const bool fourSaved = fromIni4.springFront == 1.3f && fromIni4.springRear == 0.6f && fromIni4.dampingFront == 2.0f && fromIni4.dampingRear == 0.5f;
+        SettingsFor(su, "susp_m3");
+        four = su.s;
+        four.springRear = 3.5f;
+        SettingsTake(su, four);
+        SettingsWrite(su);
+        const bool kindApart = su.suspOwn && IniFloatIn(L"Suspension", L"SpringRear", 0.0f, tf) == 3.5f && IniFloatIn(L"Suspension", L"SpringFront", 0.0f, tf) == 1.3f;
+        SettingsToDefaults(su);
+        SettingsWrite(su);
+        ReadIni(fromIni4);
+        auto ones = [](const GaugeSettings &g) { return g.springFront == 1.0f && g.springRear == 1.0f && g.dampingFront == 1.0f && g.dampingRear == 1.0f; };
+        Check(fourSaved && kindApart && ones(su.s) && ones(su.plain) && ones(fromIni4) && !su.suspOwn,
+              "front and rear: four unlike values save and read back; Defaults put both ends of the spring and the damping back to 1");
+        DeleteFileW(tf.c_str());
+        su.plain = plainWas;
+        WriteIni(su.plain);
+        SettingsFor(su, "susp_old");
+    }
+    // a pull learned on the mod's thread while the tab writes the suspension into the same file: neither is lost
+    struct Both { GaugeSettings s; } both = { su.s };
+    both.s.springFront = 1.75f;
+    HANDLE writers[2];
+    writers[0] = CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
+        for (int k = 0; k < 200; k++) GearBaseWrite("susp_ww", "e_test", 1 + k % 8, 1.0f + k * 0.01f);
+        return 0;
+    }, nullptr, 0, nullptr);
+    writers[1] = CreateThread(nullptr, 0, [](LPVOID p) -> DWORD {
+        for (int k = 0; k < 200; k++) WriteTruckSusp("susp_ww", ((Both *)p)->s, true);
+        return 0;
+    }, &both, 0, nullptr);
+    WaitForMultipleObjects(2, writers, TRUE, INFINITE);
+    CloseHandle(writers[0]);
+    CloseHandle(writers[1]);
+    float bases[kMaxGears] = {};
+    const int learned = GearBaseRead("susp_ww", "e_test", bases);
+    SettingsFor(su, "susp_ww");
+    Check(learned == 8 && fabsf(bases[8] - 2.99f) < 0.001f && su.suspOwn && su.s.springFront == 1.75f,
+          "suspension: the learned pulls and the tab's suspension written into one file at once both stay");
+    // the wheels' drag mark (the Reviewer's point 5): old figures for gears 2 and 3 without BaseDamp, the read drops
+    // both and marks; gear 2 learned again; read again: gear 2 the new one, gear 3 is 0. A truck with no figures
+    // gets no file from the read.
+    {
+        const std::wstring oldFile = truckFile("base_old");
+        DeleteFileW(oldFile.c_str());
+        SetupBegin(kSetupTruck, L"base_old");
+        WritePrivateProfileStringW(kSetupSections[kSetupTruck], L"Base2.e_old", L"1.500", oldFile.c_str());
+        WritePrivateProfileStringW(kSetupSections[kSetupTruck], L"Base3.e_old", L"1.700", oldFile.c_str());
+        WritePrivateProfileStringW(kSetupSections[kSetupTruck], L"Base3.e_other", L"1.900", oldFile.c_str());
+        float b1[kMaxGears] = {}, b2[kMaxGears] = {};
+        int dropped1 = -1, dropped2 = -1;
+        const int first = GearBaseRead("base_old", "e_old", b1, &dropped1);
+        wchar_t left[24] = {};
+        const bool gone = GetPrivateProfileStringW(kSetupSections[kSetupTruck], L"Base2.e_old", L"", left, 24, oldFile.c_str()) == 0 &&
+                          GetPrivateProfileStringW(kSetupSections[kSetupTruck], L"Base3.e_old", L"", left, 24, oldFile.c_str()) == 0 &&
+                          GearBaseMarked("base_old", "e_old") && !GearBaseMarked("base_old", "e_other") &&
+                          GetPrivateProfileStringW(kSetupSections[kSetupTruck], L"Base3.e_other", L"", left, 24, oldFile.c_str()) > 0 && !wcscmp(left, L"1.900");
+        GearBaseWrite("base_old", "e_old", 2, 1.8f);
+        const int second = GearBaseRead("base_old", "e_old", b2, &dropped2);
+        float b3[kMaxGears] = {};
+        int dropped3 = -1;
+        const std::wstring noneFile = truckFile("base_none");
+        DeleteFileW(noneFile.c_str());
+        const int none = GearBaseRead("base_none", "e_old", b3, &dropped3);
+        const bool noFile = GetFileAttributesW(noneFile.c_str()) == INVALID_FILE_ATTRIBUTES;
+        Check(first == 0 && dropped1 == 2 && b1[2] == 0.0f && b1[3] == 0.0f && gone && second == 1 && dropped2 == 0 && fabsf(b2[2] - 1.8f) < 0.001f && b2[3] == 0.0f &&
+                  none == 0 && dropped3 == 0 && noFile,
+              "road load: figures without BaseDamp are dropped and the mark written at the read; one learned again is read, the one not learned again is 0; another engine's keys stay");
+        DeleteFileW(oldFile.c_str());
+    }
+    // the last written figure (BRIEF_air_drag_save.md, the Reviewer's point 1): the load at the fold makes the file's
+    // figures the last written, for the engine fitted; an engine change makes that engine's the last written; a pass
+    // within 2 % of the file's writes nothing; a gear with none in the file writes on its first pass
+    {
+        const std::wstring loadFile = truckFile("base_load");
+        DeleteFileW(loadFile.c_str());
+        GearBaseWrite("base_load", "e_a", 3, 2.0f);
+        GearBaseWrite("base_load", "e_b", 3, 1.5f);
+        GearBaseWrite("base_load", "e_b", 4, 1.2f);
+        float keptBase[kMaxGears], fileBase[kMaxGears];
+        const int onA = GearBaseLoad("base_load", "e_a", keptBase, fileBase);
+        const bool engineA = onA == 1 && fabsf(fileBase[3] - 2.0f) < 0.001f && fileBase[3] == keptBase[3] && fileBase[4] == 0.0f;
+        const int onB = GearBaseLoad("base_load", "e_b", keptBase, fileBase);
+        const bool engineB = onB == 2 && fabsf(fileBase[3] - 1.5f) < 0.001f && fabsf(fileBase[4] - 1.2f) < 0.001f;
+        const bool quiet = !GearBaseStep(keptBase[3], fileBase[3], 1.49f) && fabsf(fileBase[3] - 1.5f) < 0.001f;
+        const bool fresh = GearBaseStep(keptBase[5], fileBase[5], 1.0f) && fileBase[5] == 1.0f;
+        Check(engineA && engineB && quiet && fresh,
+              "road load: the figures read at the fold are the last written, by the engine fitted, and another engine's after a change; within 2 % of the file's "
+              "nothing is written; a gear with none in the file writes on its first pass");
+        DeleteFileW(loadFile.c_str());
+    }
+    // an old Gauges.ini: no truck file has [Suspension], so every truck has the values of [Gauges] as before
+    for (const char *key : { "susp_hx", "susp_ww" }) DeleteFileW(truckFile(key).c_str());
+    SettingsFor(su, "susp_hx");
+    Check(!su.suspOwn && !su.suspKept && SameSettings(su.s, su.plain), "suspension: with no [Suspension] in a truck's file the truck has every value of [Gauges]");
+}
+
+// The owned truck's level of the suspension. The state and the edit are new here: the block reads the plain settings
+// from a missing ini and takes a truck before it uses either, and SettingsFor sets every field of the state.
+static void PartOwned()
+{
+    const std::wstring ini = IniPath();
+    auto truckFile = [](const char *key) { return SetupFile(kSetupTruck, key); };
+    auto truckPut = [&](const char *key, const wchar_t *name, const wchar_t *value) {
+        SetupFolderMake(kSetupTruck);
+        WritePrivateProfileStringW(L"Truck", name, value, truckFile(key).c_str());
+    };
+    SettingsState su = {};
+    GaugeSettings ed;
+    DeleteFileW(ini.c_str());
+    // step 2: the owned truck's level, [Suspension:<id>] in the kind's file, by the game's id of the truck (made up ids)
+    {
+        const char *kind = "susp_own", *id1 = "{11111111-1111-1111-1111-111111111111}", *id2 = "{22222222-2222-2222-2222-222222222222}",
+                   *id3 = "{33333333-3333-3333-3333-333333333333}", *other = "susp_other", *idB = "{BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB}";
+        DeleteFileW(truckFile(kind).c_str());
+        ReadIni(su.plain);
+        // the kind's own set, then this truck only: the truck's level in force, the kind's stays for the others
+        SettingsFor(su, kind, id1);
+        ed = su.s;
+        ed.springFront = 1.5f;
+        SettingsTake(su, ed);
+        SettingsWrite(su);
+        const bool kindFirst = SuspLevel(su) == kSuspLevelKind && su.suspOwn && !su.truckOwn;
+        SettingsSuspLevel(su, true);
+        ed = su.s;
+        ed.springFront = 2.5f;
+        ed.bumpStops = true;
+        SettingsTake(su, ed);
+        SettingsWrite(su);
+        SettingsFor(su, kind, id1);
+        const bool truckLevel = SuspLevel(su) == kSuspLevelTruck && su.s.springFront == 2.5f && su.s.bumpStops;
+        SettingsFor(su, kind, id3);
+        const bool othersKind = SuspLevel(su) == kSuspLevelKind && su.s.springFront == 1.5f && !su.s.bumpStops;
+        Check(kindFirst && truckLevel && othersKind,
+              "suspension: This truck only puts the set at the truck's level by its id, in force for it, and the kind's stays for another truck of the kind");
+        // a new id takes the kind's level (a truck out of the warehouse), and A to B to A gives A's set from the default, no climb
+        SettingsFor(su, kind, id1);
+        const GaugeSettings aFirst = su.s;
+        SettingsFor(su, other, idB);
+        const bool bPlain = SuspLevel(su) == kSuspLevelDefault && su.s.springFront == su.plain.springFront;
+        SettingsFor(su, kind, id1);
+        Check(bPlain && SuspSame(su.s, aFirst) && su.s.springFront == 2.5f,
+              "suspension: A to B to A gives the truck's own set as it was, on the default, not on B's");
+        // the take-over: gone, back as the same kind under a new id within 20 s with none between
+        SuspTracker t = {};
+        TruckIdentity a1 = {}, a2 = {}, none = {}, b1 = {}, a3 = {};
+        strncpy_s(a1.key, kind, _TRUNCATE); strncpy_s(a1.id, id1, _TRUNCATE);
+        strncpy_s(a2.key, kind, _TRUNCATE); strncpy_s(a2.id, id2, _TRUNCATE);
+        strncpy_s(a3.key, kind, _TRUNCATE); strncpy_s(a3.id, id3, _TRUNCATE);
+        strncpy_s(b1.key, other, _TRUNCATE); strncpy_s(b1.id, idB, _TRUNCATE);
+        char gone[40];
+        const bool away = !SuspTrack(t, a1, none, 1000, gone);
+        const bool due = SuspTrack(t, none, a2, 6000, gone) && !strcmp(gone, id1);
+        const bool copied = TruckSuspTakeOver(kind, gone, id2);
+        SettingsFor(su, kind, id2);
+        const bool takenOver = SuspLevel(su) == kSuspLevelTruck && su.s.springFront == 2.5f && su.s.bumpStops;
+        SettingsFor(su, kind, id1);
+        const bool oldKept = SuspLevel(su) == kSuspLevelTruck && su.s.springFront == 2.5f;
+        Check(away && due && copied && takenOver && oldKept,
+              "suspension: the take-over: the same kind back under a new id 5 s after it went takes the set over, and the old id keeps its own");
+        // a switch to another truck and back is none, nor a gap over 20 s, nor the same id back
+        SuspTracker u = {};
+        SuspTrack(u, a1, none, 0, gone);
+        SuspTrack(u, none, b1, 2000, gone);
+        SuspTrack(u, b1, none, 3000, gone);
+        const bool viaB = !SuspTrack(u, none, a2, 4000, gone);
+        SuspTracker w = {};
+        SuspTrack(w, a1, none, 0, gone);
+        const bool late = !SuspTrack(w, none, a2, 25000, gone);
+        SuspTracker x = {};
+        SuspTrack(x, a1, none, 0, gone);
+        const bool same = !SuspTrack(x, none, a1, 3000, gone);
+        SuspTracker y = {};
+        const bool direct = !SuspTrack(y, a1, b1, 0, gone) && !SuspTrack(y, b1, a2, 1000, gone);
+        // a new id that has a set of its own is another truck of the kind: no take-over writes over it
+        SettingsFor(su, kind, id3);
+        SettingsSuspLevel(su, true);
+        ed = su.s;
+        ed.springFront = 0.75f;
+        SettingsTake(su, ed);
+        SettingsWrite(su);
+        const bool notOver = !TruckSuspTakeOver(kind, id1, id3);
+        SettingsFor(su, kind, id3);
+        Check(viaB && late && same && direct && notOver && su.s.springFront == 0.75f,
+              "suspension: no take-over after a switch to another truck and back, a gap over 20 s, the same id back, or onto an id with a set of its own");
+        // the same vehicle object back under a new id is the same truck, however long the gap (a garage visit took
+        // 21 s, the drive of 2026-11-06 22:37); another vehicle only within 20 s; the same pointer with another
+        // kind, another truck driven between, or a load between is none; and an id with its own set keeps it
+        {
+            const uint64_t va = 0x1000, vb = 0x2000;
+            auto back = [&](uint64_t goneOn, const TruckIdentity &who, uint64_t on, ULONGLONG after, unsigned loadsThen, bool *byVehicle) {
+                SuspTracker k = {};
+                SuspTrack(k, a1, none, 1000, gone, goneOn, 0, 0);
+                return SuspTrack(k, none, who, 1000 + after, gone, 0, on, loadsThen, byVehicle);
+            };
+            bool by21 = false, by120 = false, by600 = false, bySoon = true;
+            const bool same21 = back(va, a2, va, 21000, 0, &by21) && by21 && !strcmp(gone, id1);
+            const bool same120 = back(va, a2, va, 120000, 0, &by120) && by120;
+            const bool same600 = back(va, a2, va, 600000, 0, &by600) && by600;
+            const bool soonOther = back(va, a2, vb, 5000, 0, &bySoon) && !bySoon;
+            const bool other21 = !back(va, a2, vb, 21000, 0, nullptr);
+            const bool kindOther = !back(va, b1, va, 21000, 0, nullptr);
+            const bool loaded = !back(va, a2, va, 21000, 1, nullptr) && back(va, a2, va, 5000, 1, nullptr);
+            const bool noVehicle = !back(0, a2, 0, 21000, 0, nullptr);
+            SuspTracker k = {};
+            SuspTrack(k, a1, none, 0, gone, va, 0, 0);
+            SuspTrack(k, none, b1, 2000, gone, 0, vb, 0);
+            SuspTrack(k, b1, none, 3000, gone, vb, 0, 0);
+            const bool between = !SuspTrack(k, none, a2, 40000, gone, 0, va, 0);
+            // the same pointer and kind, the new id already holding a set of its own: due, but nothing copied
+            const bool dueOwn = back(va, a3, va, 30000, 0, nullptr);
+            const bool ownKept = dueOwn && !TruckSuspTakeOver(kind, gone, id3);
+            SettingsFor(su, kind, id3);
+            Check(same21 && same120 && same600 && soonOther && other21 && kindOther && loaded && noVehicle && between && ownKept && su.s.springFront == 0.75f,
+                  "suspension: the take-over on the same vehicle object after 21 s, 120 s and 10 min; another vehicle only within 20 s; none for the same "
+                  "pointer with another kind, another truck between or a load between; an id with a set of its own keeps it on the same pointer");
+        }
+        // another vehicle within 20 s asks whether the old truck is still there (truck_test.cpp tests the reads):
+        // there, no take-over; gone, taken over; the same vehicle is never asked
+        {
+            const uint64_t va = 0x1000, vb = 0x2000;
+            auto ask = [&](uint64_t on, bool still, int &asked, uint64_t &askedOn) {
+                SuspTracker k = {};
+                SuspTrack(k, a1, none, 1000, gone, va, 0, 0);
+                return SuspTrackWith(k, none, a2, 1000 + 5000, gone, 0, on, 0, nullptr, [&](const TruckIdentity &g, uint64_t gv) {
+                    asked++;
+                    askedOn = gv;
+                    return still && !strcmp(g.id, id1);
+                });
+            };
+            int n1 = 0, n2 = 0, n3 = 0, n4 = 0;
+            uint64_t on1 = 0, on2 = 0, on3 = 0, on4 = 0;
+            const bool stillThere = !ask(vb, true, n1, on1) && n1 == 1 && on1 == va;
+            const bool goneOver = ask(vb, false, n2, on2) && n2 == 1 && !strcmp(gone, id1);
+            const bool sameNot = ask(va, true, n3, on3) && n3 == 0;
+            SuspTracker k = {};
+            SuspTrack(k, a1, none, 1000, gone, va, 0, 0);
+            const bool lateNot = !SuspTrackWith(k, none, a2, 1000 + 21000, gone, 0, vb, 0, nullptr, [&](const TruckIdentity &, uint64_t) { n4++; return false; }) && n4 == 0;
+            (void)on4;
+            Check(stillThere && goneOver && sameNot && lateNot,
+                  "suspension: on another vehicle within 20 s the old truck still there is no take-over, gone it is; the same vehicle and a gap over 20 s "
+                  "never ask");
+        }
+        // while driven, a new id (the game made the truck anew under the driver) takes the set over
+        SettingsFor(su, kind, id1);
+        const char *id4 = "{44444444-4444-4444-4444-444444444444}";
+        const bool whileDriven = SettingsTakeOver(su, id4) && !strcmp(su.id, id4) && SuspLevel(su) == kSuspLevelTruck && su.s.springFront == 2.5f;
+        // Own=0 at the truck's level keeps its set there, and the kind's is in force for it; ticked again it is back
+        SettingsSuspOwn(su, false);
+        wchar_t own[8] = {};
+        GetPrivateProfileStringW(SuspSectionOf(id4).c_str(), L"Own", L"", own, 8, truckFile(kind).c_str());
+        const bool keptTruck = !su.truckOwn && su.truckKept && SuspLevel(su) == kSuspLevelKind && su.s.springFront == 1.5f && !wcscmp(own, L"0");
+        SettingsFor(su, kind, id4);
+        const bool keptRead = su.truckKept && SuspLevel(su) == kSuspLevelKind;
+        SettingsSuspLevel(su, true);
+        Check(whileDriven && keptTruck && keptRead && SuspLevel(su) == kSuspLevelTruck && su.s.springFront == 2.5f,
+              "suspension: a new id while driven takes the set over; Own=0 at the truck's level keeps it, the kind's in force, and This truck only brings it back");
+        // Every <kind> with a set for the kind (review F2): the kind's in force, the truck's kept with Own=0, This truck only brings it back
+        SettingsSuspLevel(su, false);
+        wchar_t keptOwn[8] = {};
+        GetPrivateProfileStringW(SuspSectionOf(id4).c_str(), L"Own", L"", keptOwn, 8, truckFile(kind).c_str());
+        const bool kindInForce = SuspLevel(su) == kSuspLevelKind && su.s.springFront == 1.5f && su.truckKept && !wcscmp(keptOwn, L"0");
+        SettingsSuspLevel(su, true);
+        const bool backAgain = SuspLevel(su) == kSuspLevelTruck && su.s.springFront == 2.5f;
+        SettingsFor(su, kind, id3);
+        const bool id3Own = SuspLevel(su) == kSuspLevelTruck; // id3 keeps its own
+        Check(kindInForce && backAgain && id3Own,
+              "suspension: Every <kind> with a set for the kind puts the kind's in force and keeps the truck's with Own=0; This truck only brings it back");
+        // Every <kind> with no set for the kind: the truck's set goes up to it and its own section goes
+        {
+            const std::wstring kf = truckFile(kind);
+            WritePrivateProfileStringW(kSuspSection, nullptr, nullptr, kf.c_str());
+            SettingsFor(su, kind, id4);
+            const bool noKind = SuspLevel(su) == kSuspLevelTruck && !su.suspOwn && !su.suspKept;
+            SettingsSuspLevel(su, false);
+            wchar_t mine[16] = {};
+            GetPrivateProfileSectionW(SuspSectionOf(id4).c_str(), mine, 16, kf.c_str());
+            SettingsFor(su, kind, "{55555555-5555-5555-5555-555555555555}");
+            Check(noKind && !mine[0] && SuspLevel(su) == kSuspLevelKind && su.s.springFront == 2.5f,
+                  "suspension: Every <kind> with no set for the kind puts the truck's set at the kind's level and takes the truck's own section out");
+        }
+        // with the id not read the truck has the kind's level only
+        SettingsFor(su, kind, "");
+        Check(SuspLevel(su) == kSuspLevelKind && !su.truckOwn && !su.truckKept, "suspension: a truck whose id is not read has the kind's level only");
+        // FrameFlex and TwistRange go with the suspension set at both levels (BRIEF_frame_flex.md part 2); a section without them reads 1
+        {
+            GaugeSettings flex = su.plain, back = su.plain;
+            flex.frameFlex = 0.5f, flex.twistRange = 2.0f;
+            WriteTruckSusp(kind, flex, true);
+            flex.frameFlex = 3.0f, flex.twistRange = 0.5f;
+            WriteTruckSusp(kind, flex, true, id1);
+            GaugeSettings atKind = su.plain, atTruck = su.plain;
+            ReadTruckSusp(kind, atKind);
+            ReadTruckSusp(kind, atTruck, id1);
+            wchar_t keyText[16] = {};
+            GetPrivateProfileStringW(SuspSectionOf(id1).c_str(), L"TwistRange", L"", keyText, 16, truckFile(kind).c_str());
+            WritePrivateProfileStringW(kSuspSection, L"FrameFlex", nullptr, truckFile(kind).c_str());
+            WritePrivateProfileStringW(kSuspSection, L"TwistRange", nullptr, truckFile(kind).c_str());
+            back.frameFlex = back.twistRange = 1.0f;
+            ReadTruckSusp(kind, back);
+            Check(atKind.frameFlex == 0.5f && atKind.twistRange == 2.0f && atTruck.frameFlex == 3.0f && atTruck.twistRange == 0.5f && !wcscmp(keyText, L"0.5") &&
+                      back.frameFlex == 1.0f && back.twistRange == 1.0f,
+                  "suspension: FrameFlex and TwistRange are kept at the kind's level and the truck's, and a section without them reads 1");
+        }
+        // the take-over while driven (review F1): only on the vehicle the old id was taken with
+        Check(SuspAgainTakeOver(id1, 0x1000, id2, 0x1000) && !SuspAgainTakeOver(id1, 0x1000, id2, 0x2000) && !SuspAgainTakeOver(id1, 0, id2, 0) &&
+                  !SuspAgainTakeOver(id1, 0x1000, id1, 0x1000) && !SuspAgainTakeOver("", 0x1000, id2, 0x1000),
+              "suspension: a new id while driven is a take-over on the same vehicle only; a new id on a new vehicle is another truck");
+        // the take-over mark (review N1): written on the old section, cleared when the old id is driven again,
+        // the marked sections beyond the newest 10 dropped at a save, an unmarked one kept
+        {
+            const std::wstring kf = truckFile(kind);
+            DeleteFileW(kf.c_str());
+            SettingsFor(su, kind, id1);
+            SettingsSuspLevel(su, true);
             SettingsWrite(su);
-            wchar_t own[8] = {}, zone[16] = {};
-            GetPrivateProfileStringW(L"Suspension", L"Own", L"", own, 8, truckFile("susp_hx").c_str());
-            GetPrivateProfileStringW(L"Suspension", L"BumpZone", L"", zone, 16, truckFile("susp_hx").c_str());
-            GaugeSettings fromIni2;
-            ReadIni(fromIni2);
-            Check(hxPlain && noTruckDefault && su.suspOwn && !wcscmp(own, L"1") && !wcscmp(zone, L"0.12") && su.plain.springFront == 1.25f &&
-                      fromIni2.springFront == 1.25f && fromIni2.dampingFront == 1.5f && !fromIni2.bumpStops,
-                  "suspension: a kind with no section uses the default, a change while it is driven makes the whole set its own with the bump keys, and the default stays");
-            // two kinds in turn each get their own; A, then B, then A again gives A's set over the default, no climb
-            SettingsFor(su, "susp_ww");
-            ed = su.s;
-            const bool wwStartsPlain = !su.suspOwn && ed.springFront == 1.25f && !ed.bumpStops;
-            ed.springFront = 0.75f;
-            SettingsTake(su, ed);
+            const bool took = TruckSuspTakeOver(kind, id1, id2, 100);
+            wchar_t by[48] = {}, byNew[48] = {};
+            GetPrivateProfileStringW(SuspSectionOf(id1).c_str(), L"TakenBy", L"", by, 48, kf.c_str());
+            GetPrivateProfileStringW(SuspSectionOf(id2).c_str(), L"TakenBy", L"", byNew, 48, kf.c_str());
+            const bool marked = took && Wide(id2) == by && !byNew[0];
+            SettingsFor(su, kind, id1);
+            wchar_t after[48] = {};
+            GetPrivateProfileStringW(SuspSectionOf(id1).c_str(), L"TakenBy", L"", after, 48, kf.c_str());
+            const bool cleared = !after[0] && SuspLevel(su) == kSuspLevelTruck;
+            // eleven marked sections, oldest first, and id1 unmarked
+            auto has = [&](const char *id) { wchar_t b[16] = {}; return GetPrivateProfileSectionW(SuspSectionOf(id).c_str(), b, 16, kf.c_str()) != 0; };
+            bool tenKept = false;
+            char ids[11][40];
+            for (int i = 0; i < 11; i++)
+            {
+                _snprintf_s(ids[i], _TRUNCATE, "{A%07d-0000-0000-0000-000000000000}", i);
+                WritePrivateProfileStringW(SuspSectionOf(ids[i]).c_str(), L"Own", L"1", kf.c_str());
+                TruckSuspTakeOver(kind, ids[i], "{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}", 1000 + i);
+                WritePrivateProfileStringW(SuspSectionOf("{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}").c_str(), nullptr, nullptr, kf.c_str());
+                if (i == 9) tenKept = has(ids[0]);
+            }
+            const bool noSave = !has(ids[0]) && has(ids[1]); // the 11th take-over dropped the oldest with no save (review F3)
+            SettingsFor(su, kind, id1);
+            su.truckChanged = true;
             SettingsWrite(su);
-            SettingsFor(su, "susp_hx");
-            const GaugeSettings hxFirst = su.s;
-            SettingsFor(su, "susp_ww");
-            const bool wwOwn = su.suspOwn && su.s.springFront == 0.75f && !su.s.bumpStops;
-            SettingsFor(su, "susp_hx");
-            Check(wwStartsPlain && wwOwn && su.suspOwn && su.s.springFront == 2.0f && su.s.bumpForce == 3.0f && SuspSame(su.s, hxFirst) &&
-                      su.s.dampingFront == 1.5f,
-                  "suspension: two kinds in turn each get their own set, and A to B to A gives A's set as it was, on the default, not on B's");
-            // the box off keeps the values with Own=0 and the default is in force; on again brings them back
-            SettingsSuspOwn(su, false);
-            GetPrivateProfileStringW(L"Suspension", L"Own", L"", own, 8, truckFile("susp_hx").c_str());
-            const bool offDefault = !su.suspOwn && su.suspKept && su.s.springFront == 1.25f && !su.s.bumpStops && !wcscmp(own, L"0");
-            SettingsFor(su, "susp_hx");
-            const bool offAfterReload = !su.suspOwn && su.suspKept && su.s.springFront == 1.25f;
-            SettingsSuspOwn(su, true);
-            const bool back = su.suspOwn && !su.suspKept && su.s.springFront == 2.0f && su.s.bumpZone == 0.12f;
-            SettingsFor(su, "susp_hx");
-            Check(offDefault && offAfterReload && back && su.suspOwn && su.s.springFront == 2.0f,
-                  "suspension: the box off keeps the set with Own=0 and the default in force, on again brings the set back");
-            // a change while the set is kept edits the default: the file's set and Own=0 stay, [Gauges] takes it (review F1)
-            SettingsSuspOwn(su, false);
-            ed = su.s;
-            ed.springFront = 0.5f;
-            SettingsTake(su, ed);
+            bool newest = true;
+            for (int i = 1; i < 11; i++) newest = newest && has(ids[i]);
+            Check(marked && cleared && tenKept && noSave && !has(ids[0]) && newest && has(id1) && has(id2),
+                  "suspension: a take-over marks the old section, the old id driven again clears it, ten marked stay, the 11th take-over drops the oldest with no save, a save keeps the newest 10 and the unmarked");
+        }
+        // the camber (BRIEF_swing_camber.md point 3): CamberGainFront, CamberGainRear, CamberRestFront and
+        // CamberRestRear kept with the set at the kind's level and the truck's; a slider moved makes the set the kind's
+        // own; This truck only and the take-over carry them; a section without them reads the file's (x1 and +0)
+        {
+            const char *cam_k = "camber_x", *cam_id = "{C1111111-1111-1111-1111-111111111111}", *cam_new = "{C2222222-2222-2222-2222-222222222222}";
+            DeleteFileW(truckFile(cam_k).c_str());
+            SettingsState cam = {};
+            SettingsDefaults(cam.plain);
+            SettingsFor(cam, cam_k, cam_id);
+            const bool cam_start = cam.s.camberGainFront == 1.0f && cam.s.camberGainRear == 1.0f && cam.s.camberRestFront == 0.0f && cam.s.camberRestRear == 0.0f &&
+                                   SuspLevel(cam) == kSuspLevelDefault;
+            GaugeSettings cam_in = cam.s;
+            cam_in.camberGainFront = 2.0f, cam_in.camberRestRear = -1.5f;
+            SettingsTake(cam, cam_in);
+            SettingsWrite(cam);
+            GaugeSettings cam_kind = cam.plain;
+            const int cam_kindRead = ReadTruckSusp(cam_k, cam_kind);
+            const bool cam_toKind = SuspLevel(cam) == kSuspLevelKind && cam_kindRead == kSuspInForce && cam_kind.camberGainFront == 2.0f && cam_kind.camberRestRear == -1.5f &&
+                                    cam.plain.camberGainFront == 1.0f;
+            // This truck only, then the truck's own figures
+            SettingsSuspLevel(cam, true);
+            cam_in = cam.s;
+            cam_in.camberGainRear = 0.0f, cam_in.camberRestFront = 3.0f;
+            SettingsTake(cam, cam_in);
+            SettingsWrite(cam);
+            GaugeSettings cam_truck = cam.plain, cam_kind2 = cam.plain;
+            ReadTruckSusp(cam_k, cam_truck, cam_id);
+            ReadTruckSusp(cam_k, cam_kind2);
+            const bool cam_levels = SuspLevel(cam) == kSuspLevelTruck && cam_truck.camberGainFront == 2.0f && cam_truck.camberGainRear == 0.0f && cam_truck.camberRestFront == 3.0f &&
+                                    cam_truck.camberRestRear == -1.5f && cam_kind2.camberGainRear == 1.0f && cam_kind2.camberRestFront == 0.0f;
+            // the take-over: the new id has them, read back through SettingsFor
+            TruckSuspTakeOver(cam_k, cam_id, cam_new);
+            SettingsFor(cam, cam_k, cam_new);
+            const bool cam_taken = SuspLevel(cam) == kSuspLevelTruck && cam.s.camberGainRear == 0.0f && cam.s.camberRestFront == 3.0f;
+            // old sections without the keys: the truck's takes the kind's, and with neither holding them x1 and +0
+            for (const wchar_t *cam_key : { L"CamberGainFront", L"CamberGainRear", L"CamberRestFront", L"CamberRestRear" })
+                WritePrivateProfileStringW(SuspSectionOf(cam_new).c_str(), cam_key, nullptr, truckFile(cam_k).c_str());
+            SettingsFor(cam, cam_k, cam_new);
+            const bool cam_underKind = SuspLevel(cam) == kSuspLevelTruck && cam.s.camberGainFront == 2.0f && cam.s.camberGainRear == 1.0f && cam.s.camberRestRear == -1.5f;
+            for (const wchar_t *cam_key : { L"CamberGainFront", L"CamberGainRear", L"CamberRestFront", L"CamberRestRear" })
+                WritePrivateProfileStringW(kSuspSection, cam_key, nullptr, truckFile(cam_k).c_str());
+            SettingsFor(cam, cam_k, cam_new);
+            const bool cam_old = cam_underKind && SuspLevel(cam) == kSuspLevelTruck && cam.s.camberGainFront == 1.0f && cam.s.camberGainRear == 1.0f &&
+                                 cam.s.camberRestFront == 0.0f && cam.s.camberRestRear == 0.0f;
+            // the ini's figures held to the ranges and steps
+            GaugeSettings cam_c = cam.plain;
+            cam_c.camberGainFront = 9.0f, cam_c.camberGainRear = 1.01f, cam_c.camberRestFront = -20.0f, cam_c.camberRestRear = 0.2f;
+            SettingsClamp(cam_c);
+            const bool cam_clamp = cam_c.camberGainFront == 3.0f && cam_c.camberGainRear == 1.0f && cam_c.camberRestFront == -10.0f && cam_c.camberRestRear == 0.0f;
+            DeleteFileW(truckFile(cam_k).c_str());
+            Check(cam_start && cam_toKind && cam_levels && cam_taken && cam_old && cam_clamp,
+                  "camber: x1 and +0 to start; a slider moved makes the set the kind's own, the default untouched; This truck only keeps its own figures beside the kind's; "
+                  "the take-over carries them; a truck's section without the keys takes the kind's, and with neither x1 and +0; the figures held to x0 to x3 and -10 to +10 on their steps");
+        }
+        // the air's ticks (BRIEF_air_axle_ticks.md): AirAxleMask kept with the set at the kind's level and the
+        // truck's, never in Gauges.ini, never the last truck's; written only once ticked; Defaults takes it out;
+        // the take-over carries it; the start order's five sources
+        {
+            const char *air_ax = "air_x", *air_ay = "air_y", *air_az = "air_z", *air_ak = "air_k", *air_table = "western_star_6900xd", *air_plainKind = "air_plain";
+            const char *air_idA = "{A1111111-1111-1111-1111-111111111111}", *air_idB = "{A2222222-2222-2222-2222-222222222222}",
+                       *air_idC = "{A3333333-3333-3333-3333-333333333333}";
+            for (const char *air_k : { air_ax, air_ay, air_az, air_ak, air_table, air_plainKind }) DeleteFileW(truckFile(air_k).c_str());
+            auto air_mask = [&](SettingsState &st, int &from) { return AirMaskOf(st.key, AirFileKind(st.key), st.s.airAxleMask, st.s.airMaskFrom, from); };
+            auto air_tick = [&](SettingsState &st, int m) {
+                GaugeSettings air_t = st.s;
+                air_t.airAxleMask = m;
+                SettingsTake(st, air_t);
+                SettingsWrite(st);
+            };
+            auto air_there = [&](const char *k, const char *id) { return SuspKeyThere(k, id, L"AirAxleMask"); };
+            int air_f1 = -1, air_f2 = -1, air_f3 = -1, air_f4 = -1, air_f5 = -1;
+            // the five sources: none for a kind the mod knows nothing about, the table, AirAxles=, the kind's, the truck's
+            SettingsFor(su, air_plainKind, air_idA);
+            const bool air_none = air_mask(su, air_f1) == 0 && air_f1 == kAirFromNone;
+            SettingsFor(su, air_table, air_idA);
+            const bool air_byTable = air_mask(su, air_f2) == kAirMaskRear && air_f2 == kAirFromTable;
+            WritePrivateProfileStringW(kSetupSections[kSetupTruck], L"AirAxles", L"Front ", truckFile(air_ay).c_str());
+            SettingsFor(su, air_ay, air_idA);
+            const bool air_byKey = air_mask(su, air_f3) == kAirMaskFront && air_f3 == kAirFromKey;
+            SettingsFor(su, air_ax, air_idA);
+            air_tick(su, kAirMaskFront);
+            SettingsFor(su, air_ax, air_idA);
+            const bool air_byKind = air_mask(su, air_f4) == kAirMaskFront && air_f4 == kAirFromKind && air_there(air_ax, "") && SuspLevel(su) == kSuspLevelKind;
+            SettingsSuspLevel(su, true);
+            air_tick(su, kAirMaskRear);
+            SettingsFor(su, air_ax, air_idA);
+            const bool air_byTruck = air_mask(su, air_f5) == kAirMaskRear && air_f5 == kAirFromTruck && air_there(air_ax, air_idA);
+            Check(air_none && air_byTable && air_byKey && air_byKind && air_byTruck,
+                  "air ticks: the start order's five sources: none on a kind the mod knows nothing about, the table's rear, AirAxles=Front, the kind's ticks, this truck's own");
+            // A to B to A: each truck keeps its own; B has none, so the kind's
+            int air_fa = -1, air_fb = -1, air_fa2 = -1;
+            SettingsFor(su, air_ax, air_idB);
+            const bool air_b1 = air_mask(su, air_fb) == kAirMaskFront && air_fb == kAirFromKind;
+            SettingsFor(su, air_ax, air_idA);
+            const bool air_a2 = air_mask(su, air_fa2) == kAirMaskRear && air_fa2 == kAirFromTruck;
+            // the Reviewer's point 1: kind X ticked front only, then a truck of kind Y with nothing saved starts from its own
+            // AirAxles=, the table or none, never the last truck's
+            SettingsFor(su, air_ax, air_idB);
+            SettingsFor(su, air_ay, air_idB);
+            const bool air_y = su.s.airAxleMask < 0 && air_mask(su, air_fa) == kAirMaskFront && air_fa == kAirFromKey;
+            SettingsFor(su, air_ax, air_idB);
+            SettingsFor(su, air_plainKind, air_idB);
+            int air_fp = -1;
+            const bool air_p = su.s.airAxleMask < 0 && air_mask(su, air_fp) == 0 && air_fp == kAirFromNone;
+            SettingsFor(su, air_ax, air_idA);
+            SettingsFor(su, air_table, air_idB);
+            int air_ft = -1;
+            const bool air_t = su.s.airAxleMask < 0 && air_mask(su, air_ft) == kAirMaskRear && air_ft == kAirFromTable;
+            Check(air_b1 && air_a2 && air_y && air_p && air_t,
+                  "air ticks: a mask per kind and per truck reads back (A to B to A); after kind X ticked, a truck of kind Y with nothing saved starts from its own AirAxles=, the table or none");
+            // the Reviewer's point 2, the lead's 16:30: a slider saved leaves the mask unwritten; a tick writes it; a set
+            // written for any other reason carries it only where it was; Defaults takes it out
+            SettingsFor(su, air_az, air_idA);
+            GaugeSettings air_slide = su.s;
+            air_slide.springFront = 0.8f;
+            SettingsTake(su, air_slide);
             SettingsWrite(su);
-            wchar_t keptSpring[16] = {};
-            GetPrivateProfileStringW(L"Suspension", L"Own", L"", own, 8, truckFile("susp_hx").c_str());
-            GetPrivateProfileStringW(L"Suspension", L"SpringFront", L"", keptSpring, 16, truckFile("susp_hx").c_str());
-            GaugeSettings fromIniKept;
-            ReadIni(fromIniKept);
-            const bool keptStays = !su.suspOwn && su.suspKept && !wcscmp(own, L"0") && !wcscmp(keptSpring, L"2") && fromIniKept.springFront == 0.5f && su.plain.springFront == 0.5f;
-            SettingsSuspOwn(su, true);
-            Check(keptStays && su.suspOwn && su.s.springFront == 2.0f && su.plain.springFront == 0.5f,
-                  "suspension: a change while the set is kept edits the default, the box stays off, and the file's set and Own=0 stay as they were");
-            ed = su.plain;
-            ed.springFront = 1.25f;
-            su.plain = ed;
-            WriteIni(su.plain);
-            SettingsFor(su, "susp_hx");
-            // the box on with nothing kept makes the default shown the kind's own
-            DeleteFileW(truckFile("susp_old").c_str());
-            SettingsFor(su, "susp_old");
-            SettingsSuspOwn(su, true);
-            GetPrivateProfileStringW(L"Suspension", L"Own", L"", own, 8, truckFile("susp_old").c_str());
-            const bool onFresh = su.suspOwn && su.s.springFront == 1.25f && !wcscmp(own, L"1");
-            DeleteFileW(truckFile("susp_old").c_str());
-            // "Make these the default": Gauges.ini takes the truck's set, the truck keeps its own
-            SettingsFor(su, "susp_hx");
-            SettingsSuspToDefault(su);
+            const bool air_notWritten = SuspLevel(su) == kSuspLevelKind && !air_there(air_az, "") && IniFloatIn(kSuspSection, L"SpringFront", 0.0f, truckFile(air_az)) == 0.8f;
+            SettingsSuspLevel(su, true);
+            const bool air_notCarried = !air_there(air_az, air_idA) && !air_there(air_az, "");
+            air_tick(su, 0); // both unticked: a saved 0, none ticked by the player
+            const bool air_zeroWritten = air_there(air_az, air_idA) && GetPrivateProfileIntW(SuspSectionOf(air_idA).c_str(), L"AirAxleMask", -1, truckFile(air_az).c_str()) == 0;
+            air_slide = su.s;
+            air_slide.dampingFront = 1.3f;
+            SettingsTake(su, air_slide);
             SettingsWrite(su);
-            GaugeSettings fromIni3;
-            ReadIni(fromIni3);
-            SettingsFor(su, "susp_hx");
-            GetPrivateProfileStringW(L"Suspension", L"Own", L"", own, 8, truckFile("susp_hx").c_str());
-            Check(onFresh && fromIni3.springFront == 2.0f && fromIni3.bumpStops && fromIni3.bumpZone == 0.12f && su.suspOwn && su.s.springFront == 2.0f && !wcscmp(own, L"1"),
-                  "suspension: the box on with nothing kept takes the default shown, and Make these the default writes Gauges.ini and leaves the truck's own");
-            // giving up the scales leaves the suspension and its file; the defaults button keeps the set with Own=0
-            ed = su.s;
-            ed.redlineRpm = 3900.0f;
-            SettingsTake(su, ed);
-            SettingsWrite(su);
-            SettingsDrop(su);
-            const bool fileStays = GetFileAttributesW(truckFile("susp_hx").c_str()) != INVALID_FILE_ATTRIBUTES;
-            SettingsFor(su, "susp_hx");
-            const bool suspStays = fileStays && !su.own && su.suspOwn && su.s.springFront == 2.0f;
+            int air_fz = -1;
+            SettingsFor(su, air_az, air_idA);
+            const bool air_kept = air_mask(su, air_fz) == 0 && air_fz == kAirFromTruck && su.s.dampingFront == 1.3f;
             SettingsToDefaults(su);
             SettingsWrite(su);
-            SettingsFor(su, "susp_hx");
-            GaugeSettings defaults2;
-            SettingsDefaults(defaults2);
-            Check(suspStays && !su.suspOwn && su.suspKept && SuspSame(su.s, defaults2),
-                  "suspension: the truck giving up its scales keeps its suspension and its file, and the defaults keep the set with Own=0");
-            // a section written by hand without Own is in force; a value out of range is held as [Gauges]' are
-            WritePrivateProfileStringW(L"Suspension", L"SpringScale", L"9", truckFile("susp_old").c_str());
-            SettingsFor(su, "susp_old");
-            Check(su.suspOwn && su.s.springFront == kSuspScaleRange[1] && su.s.springRear == kSuspScaleRange[1],
-                  "suspension: a section without Own is in force, its values held to their ranges (the one SpringScale of before as both ends)");
-            DeleteFileW(truckFile("susp_old").c_str());
-            // front and rear apart (BRIEF_suspension_front_rear.md, M3 and S1): the one key of before reads as both ends at
-            // each level and moves nothing; the first save writes the two new keys
-            {
-                const GaugeSettings plainWas = su.plain;
-                auto bytes = [](const std::wstring &path) {
-                    std::string all;
-                    FILE *f = nullptr;
-                    if (_wfopen_s(&f, path.c_str(), L"rb") || !f) return all;
-                    char buf[4096];
-                    for (size_t got; (got = fread(buf, 1, sizeof buf, f)) > 0;) all.append(buf, got);
-                    fclose(f);
-                    return all;
-                };
-                auto there = [&](const std::wstring &file, const wchar_t *section, const wchar_t *key) { return IniKeyThere(section, key, file); };
-                const wchar_t *const ends[] = { L"SpringFront", L"SpringRear", L"DampingFront", L"DampingRear" };
-                // the default's: an ini of before, with the one key each
-                SettingsFor(su, "");
-                for (const wchar_t *end : ends) WritePrivateProfileStringW(kIniSection, end, nullptr, ini.c_str());
-                WritePrivateProfileStringW(kIniSection, L"SpringScale", L"1.6", ini.c_str());
-                WritePrivateProfileStringW(kIniSection, L"DampingScale", L"0.7", ini.c_str());
-                const std::string iniWas = bytes(ini);
-                ReadIni(su.plain);
-                SettingsFor(su, "");
-                const bool defRead = su.s.springFront == 1.6f && su.s.springRear == 1.6f && su.s.dampingFront == 0.7f && su.s.dampingRear == 0.7f && bytes(ini) == iniWas && !iniWas.empty();
-                SettingsWrite(su);
-                GaugeSettings again;
-                ReadIni(again);
-                const bool defSaved = IniFloat(L"SpringFront", 0.0f, ini) == 1.6f && IniFloat(L"SpringRear", 0.0f, ini) == 1.6f && IniFloat(L"DampingFront", 0.0f, ini) == 0.7f &&
-                                      IniFloat(L"DampingRear", 0.0f, ini) == 0.7f && IniFloat(L"SpringScale", 0.0f, ini) == 1.6f && IniFloat(L"DampingScale", 0.0f, ini) == 0.7f &&
-                                      SuspSame(again, su.s);
-                // unlike ends: the old key goes, the other stays; a new key lies over an old one left by hand
-                GaugeSettings apart = su.s;
-                apart.springRear = 2.5f;
-                SettingsTake(su, apart);
-                SettingsWrite(su);
-                ReadIni(again);
-                const bool defApart = !there(ini, kIniSection, L"SpringScale") && there(ini, kIniSection, L"DampingScale") && again.springFront == 1.6f && again.springRear == 2.5f &&
-                                      again.dampingFront == 0.7f && again.dampingRear == 0.7f;
-                WritePrivateProfileStringW(kIniSection, L"SpringScale", L"3", ini.c_str());
-                ReadIni(again);
-                const bool newOver = again.springFront == 1.6f && again.springRear == 2.5f;
-                WritePrivateProfileStringW(kIniSection, L"SpringRear", nullptr, ini.c_str());
-                ReadIni(again);
-                const bool oneOver = again.springFront == 1.6f && again.springRear == 3.0f; // the old key for the end without its own
-                Check(defRead && defSaved && defApart && newOver && oneOver,
-                      "front and rear: an ini of before reads its one SpringScale and DampingScale as both ends and is not written by the read; the first save writes the four new keys "
-                      "and keeps the old key while both ends are alike, takes it out once they differ; a new key lies over the old one");
-                // back to an ini with all at 1 for the levels below
-                SettingsDefaults(su.plain);
-                WriteIni(su.plain);
-                // the kind's: a section of before, in force (no Own) and kept (Own=0)
-                const std::wstring tf = truckFile("susp_m3");
-                DeleteFileW(tf.c_str());
-                WritePrivateProfileStringW(L"Suspension", L"SpringScale", L"1.5", tf.c_str());
-                WritePrivateProfileStringW(L"Suspension", L"DampingScale", L"0.6", tf.c_str());
-                const std::string kindWas = bytes(tf);
-                SettingsFor(su, "susp_m3");
-                GaugeSettings want = su.plain;
-                want.springFront = want.springRear = 1.5f, want.dampingFront = want.dampingRear = 0.6f;
-                const bool kindRead = SuspLevel(su) == kSuspLevelKind && su.suspOwn && !su.suspKept && !su.suspChanged && SuspSame(su.s, want);
-                SettingsTake(su, su.s); // the tab's frame with nothing moved
-                SettingsWrite(su);
-                const bool kindStill = bytes(tf) == kindWas && !kindWas.empty() && !su.suspChanged && SuspLevel(su) == kSuspLevelKind;
-                GaugeSettings moved = su.s;
-                moved.dampingFront = 0.9f;
-                SettingsTake(su, moved);
-                SettingsWrite(su);
-                const bool kindSaved = IniFloatIn(L"Suspension", L"SpringFront", 0.0f, tf) == 1.5f && IniFloatIn(L"Suspension", L"SpringRear", 0.0f, tf) == 1.5f &&
-                                       IniFloatIn(L"Suspension", L"SpringScale", 0.0f, tf) == 1.5f && IniFloatIn(L"Suspension", L"DampingFront", 0.0f, tf) == 0.9f &&
-                                       IniFloatIn(L"Suspension", L"DampingRear", 0.0f, tf) == 0.6f && !there(tf, L"Suspension", L"DampingScale");
-                SettingsFor(su, "susp_m3");
-                const bool kindBack = su.suspOwn && su.s.springFront == 1.5f && su.s.springRear == 1.5f && su.s.dampingFront == 0.9f && su.s.dampingRear == 0.6f;
-                DeleteFileW(tf.c_str());
-                WritePrivateProfileStringW(L"Suspension", L"Own", L"0", tf.c_str());
-                WritePrivateProfileStringW(L"Suspension", L"SpringScale", L"2", tf.c_str());
-                const std::string keptWas = bytes(tf);
-                SettingsFor(su, "susp_m3");
-                const bool keptRead = !su.suspOwn && su.suspKept && SuspLevel(su) == kSuspLevelDefault && SuspSame(su.s, su.plain) && su.s.springFront == 1.0f && su.s.springRear == 1.0f;
-                SettingsTake(su, su.s);
-                SettingsWrite(su);
-                const bool keptStill = bytes(tf) == keptWas && !su.suspOwn && su.suspKept;
-                SettingsSuspOwn(su, true);
-                const bool keptOn = su.suspOwn && su.s.springFront == 2.0f && su.s.springRear == 2.0f;
-                // this truck's: its section of before with one new key over the old one, and the range on all four
-                const char *const m3id = "{0A000000-0000-0000-0000-0000000000A3}";
-                const std::wstring ms = SuspSectionOf(m3id);
-                DeleteFileW(tf.c_str());
-                WritePrivateProfileStringW(ms.c_str(), L"SpringScale", L"0.5", tf.c_str());
-                WritePrivateProfileStringW(ms.c_str(), L"SpringRear", L"3", tf.c_str());
-                WritePrivateProfileStringW(ms.c_str(), L"DampingScale", L"1.2", tf.c_str());
-                const std::string truckWas = bytes(tf);
-                SettingsFor(su, "susp_m3", m3id);
-                const bool truckRead = SuspLevel(su) == kSuspLevelTruck && su.truckOwn && !su.truckChanged && su.s.springFront == 0.5f && su.s.springRear == 3.0f &&
-                                       su.s.dampingFront == 1.2f && su.s.dampingRear == 1.2f && bytes(tf) == truckWas;
-                WritePrivateProfileStringW(ms.c_str(), L"SpringFront", L"9", tf.c_str());
-                WritePrivateProfileStringW(ms.c_str(), L"SpringRear", L"0.01", tf.c_str());
-                WritePrivateProfileStringW(ms.c_str(), L"DampingFront", L"0.01", tf.c_str());
-                WritePrivateProfileStringW(ms.c_str(), L"DampingRear", L"9", tf.c_str());
-                SettingsFor(su, "susp_m3", m3id);
-                const bool ranged = su.s.springFront == kSuspScaleRange[1] && su.s.springRear == kSuspScaleRange[0] && su.s.dampingFront == kSuspScaleRange[0] &&
-                                    su.s.dampingRear == kSuspScaleRange[1];
-                Check(kindRead && kindStill && kindSaved && kindBack && keptRead && keptStill && keptOn && truckRead && ranged,
-                      "front and rear: a kind's section of before reads as both ends at the same level with nothing changed and its file untouched until a slider moves, then holds the "
-                      "new keys; a kept one stays kept, untouched, and comes back as both ends; a truck's own with a new key over the old; all four keys held to the range");
-                // Defaults put both ends back, at the default and with a kind's set in force (kept with Own=0, 1 in force)
-                DeleteFileW(tf.c_str());
-                SettingsFor(su, "");
-                GaugeSettings four = su.s;
-                four.springFront = 1.3f, four.springRear = 0.6f, four.dampingFront = 2.0f, four.dampingRear = 0.5f;
-                SettingsTake(su, four);
-                SettingsWrite(su);
-                GaugeSettings fromIni4;
-                ReadIni(fromIni4);
-                const bool fourSaved = fromIni4.springFront == 1.3f && fromIni4.springRear == 0.6f && fromIni4.dampingFront == 2.0f && fromIni4.dampingRear == 0.5f;
-                SettingsFor(su, "susp_m3");
-                four = su.s;
-                four.springRear = 3.5f;
-                SettingsTake(su, four);
-                SettingsWrite(su);
-                const bool kindApart = su.suspOwn && IniFloatIn(L"Suspension", L"SpringRear", 0.0f, tf) == 3.5f && IniFloatIn(L"Suspension", L"SpringFront", 0.0f, tf) == 1.3f;
-                SettingsToDefaults(su);
-                SettingsWrite(su);
-                ReadIni(fromIni4);
-                auto ones = [](const GaugeSettings &g) { return g.springFront == 1.0f && g.springRear == 1.0f && g.dampingFront == 1.0f && g.dampingRear == 1.0f; };
-                Check(fourSaved && kindApart && ones(su.s) && ones(su.plain) && ones(fromIni4) && !su.suspOwn,
-                      "front and rear: four unlike values save and read back; Defaults put both ends of the spring and the damping back to 1");
-                DeleteFileW(tf.c_str());
-                su.plain = plainWas;
-                WriteIni(su.plain);
-                SettingsFor(su, "susp_old");
-            }
-            // a pull learned on the mod's thread while the tab writes the suspension into the same file: neither is lost
-            struct Both { GaugeSettings s; } both = { su.s };
-            both.s.springFront = 1.75f;
-            HANDLE writers[2];
-            writers[0] = CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
-                for (int k = 0; k < 200; k++) GearBaseWrite("susp_ww", "e_test", 1 + k % 8, 1.0f + k * 0.01f);
-                return 0;
-            }, nullptr, 0, nullptr);
-            writers[1] = CreateThread(nullptr, 0, [](LPVOID p) -> DWORD {
-                for (int k = 0; k < 200; k++) WriteTruckSusp("susp_ww", ((Both *)p)->s, true);
-                return 0;
-            }, &both, 0, nullptr);
-            WaitForMultipleObjects(2, writers, TRUE, INFINITE);
-            CloseHandle(writers[0]);
-            CloseHandle(writers[1]);
-            float bases[kMaxGears] = {};
-            const int learned = GearBaseRead("susp_ww", "e_test", bases);
-            SettingsFor(su, "susp_ww");
-            Check(learned == 8 && fabsf(bases[8] - 2.99f) < 0.001f && su.suspOwn && su.s.springFront == 1.75f,
-                  "suspension: the learned pulls and the tab's suspension written into one file at once both stay");
-            // the wheels' drag mark (the Reviewer's point 5): old figures for gears 2 and 3 without BaseDamp, the read drops
-            // both and marks; gear 2 learned again; read again: gear 2 the new one, gear 3 is 0. A truck with no figures
-            // gets no file from the read.
-            {
-                const std::wstring oldFile = truckFile("base_old");
-                DeleteFileW(oldFile.c_str());
-                SetupBegin(kSetupTruck, L"base_old");
-                WritePrivateProfileStringW(kSetupSections[kSetupTruck], L"Base2.e_old", L"1.500", oldFile.c_str());
-                WritePrivateProfileStringW(kSetupSections[kSetupTruck], L"Base3.e_old", L"1.700", oldFile.c_str());
-                WritePrivateProfileStringW(kSetupSections[kSetupTruck], L"Base3.e_other", L"1.900", oldFile.c_str());
-                float b1[kMaxGears] = {}, b2[kMaxGears] = {};
-                int dropped1 = -1, dropped2 = -1;
-                const int first = GearBaseRead("base_old", "e_old", b1, &dropped1);
-                wchar_t left[24] = {};
-                const bool gone = GetPrivateProfileStringW(kSetupSections[kSetupTruck], L"Base2.e_old", L"", left, 24, oldFile.c_str()) == 0 &&
-                                  GetPrivateProfileStringW(kSetupSections[kSetupTruck], L"Base3.e_old", L"", left, 24, oldFile.c_str()) == 0 &&
-                                  GearBaseMarked("base_old", "e_old") && !GearBaseMarked("base_old", "e_other") &&
-                                  GetPrivateProfileStringW(kSetupSections[kSetupTruck], L"Base3.e_other", L"", left, 24, oldFile.c_str()) > 0 && !wcscmp(left, L"1.900");
-                GearBaseWrite("base_old", "e_old", 2, 1.8f);
-                const int second = GearBaseRead("base_old", "e_old", b2, &dropped2);
-                float b3[kMaxGears] = {};
-                int dropped3 = -1;
-                const std::wstring noneFile = truckFile("base_none");
-                DeleteFileW(noneFile.c_str());
-                const int none = GearBaseRead("base_none", "e_old", b3, &dropped3);
-                const bool noFile = GetFileAttributesW(noneFile.c_str()) == INVALID_FILE_ATTRIBUTES;
-                Check(first == 0 && dropped1 == 2 && b1[2] == 0.0f && b1[3] == 0.0f && gone && second == 1 && dropped2 == 0 && fabsf(b2[2] - 1.8f) < 0.001f && b2[3] == 0.0f &&
-                          none == 0 && dropped3 == 0 && noFile,
-                      "road load: figures without BaseDamp are dropped and the mark written at the read; one learned again is read, the one not learned again is 0; another engine's keys stay");
-                DeleteFileW(oldFile.c_str());
-            }
-            // the last written figure (BRIEF_air_drag_save.md, the Reviewer's point 1): the load at the fold makes the file's
-            // figures the last written, for the engine fitted; an engine change makes that engine's the last written; a pass
-            // within 2 % of the file's writes nothing; a gear with none in the file writes on its first pass
-            {
-                const std::wstring loadFile = truckFile("base_load");
-                DeleteFileW(loadFile.c_str());
-                GearBaseWrite("base_load", "e_a", 3, 2.0f);
-                GearBaseWrite("base_load", "e_b", 3, 1.5f);
-                GearBaseWrite("base_load", "e_b", 4, 1.2f);
-                float keptBase[kMaxGears], fileBase[kMaxGears];
-                const int onA = GearBaseLoad("base_load", "e_a", keptBase, fileBase);
-                const bool engineA = onA == 1 && fabsf(fileBase[3] - 2.0f) < 0.001f && fileBase[3] == keptBase[3] && fileBase[4] == 0.0f;
-                const int onB = GearBaseLoad("base_load", "e_b", keptBase, fileBase);
-                const bool engineB = onB == 2 && fabsf(fileBase[3] - 1.5f) < 0.001f && fabsf(fileBase[4] - 1.2f) < 0.001f;
-                const bool quiet = !GearBaseStep(keptBase[3], fileBase[3], 1.49f) && fabsf(fileBase[3] - 1.5f) < 0.001f;
-                const bool fresh = GearBaseStep(keptBase[5], fileBase[5], 1.0f) && fileBase[5] == 1.0f;
-                Check(engineA && engineB && quiet && fresh,
-                      "road load: the figures read at the fold are the last written, by the engine fitted, and another engine's after a change; within 2 % of the file's "
-                      "nothing is written; a gear with none in the file writes on its first pass");
-                DeleteFileW(loadFile.c_str());
-            }
-            // an old Gauges.ini: no truck file has [Suspension], so every truck has the values of [Gauges] as before
-            for (const char *key : { "susp_hx", "susp_ww" }) DeleteFileW(truckFile(key).c_str());
-            SettingsFor(su, "susp_hx");
-            Check(!su.suspOwn && !su.suspKept && SameSettings(su.s, su.plain), "suspension: with no [Suspension] in a truck's file the truck has every value of [Gauges]");
-            DeleteFileW(ini.c_str());
-            // step 2: the owned truck's level, [Suspension:<id>] in the kind's file, by the game's id of the truck (made up ids)
-            {
-                const char *kind = "susp_own", *id1 = "{11111111-1111-1111-1111-111111111111}", *id2 = "{22222222-2222-2222-2222-222222222222}",
-                           *id3 = "{33333333-3333-3333-3333-333333333333}", *other = "susp_other", *idB = "{BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB}";
-                DeleteFileW(truckFile(kind).c_str());
-                ReadIni(su.plain);
-                // the kind's own set, then this truck only: the truck's level in force, the kind's stays for the others
-                SettingsFor(su, kind, id1);
-                ed = su.s;
-                ed.springFront = 1.5f;
-                SettingsTake(su, ed);
-                SettingsWrite(su);
-                const bool kindFirst = SuspLevel(su) == kSuspLevelKind && su.suspOwn && !su.truckOwn;
-                SettingsSuspLevel(su, true);
-                ed = su.s;
-                ed.springFront = 2.5f;
-                ed.bumpStops = true;
-                SettingsTake(su, ed);
-                SettingsWrite(su);
-                SettingsFor(su, kind, id1);
-                const bool truckLevel = SuspLevel(su) == kSuspLevelTruck && su.s.springFront == 2.5f && su.s.bumpStops;
-                SettingsFor(su, kind, id3);
-                const bool othersKind = SuspLevel(su) == kSuspLevelKind && su.s.springFront == 1.5f && !su.s.bumpStops;
-                Check(kindFirst && truckLevel && othersKind,
-                      "suspension: This truck only puts the set at the truck's level by its id, in force for it, and the kind's stays for another truck of the kind");
-                // a new id takes the kind's level (a truck out of the warehouse), and A to B to A gives A's set from the default, no climb
-                SettingsFor(su, kind, id1);
-                const GaugeSettings aFirst = su.s;
-                SettingsFor(su, other, idB);
-                const bool bPlain = SuspLevel(su) == kSuspLevelDefault && su.s.springFront == su.plain.springFront;
-                SettingsFor(su, kind, id1);
-                Check(bPlain && SuspSame(su.s, aFirst) && su.s.springFront == 2.5f,
-                      "suspension: A to B to A gives the truck's own set as it was, on the default, not on B's");
-                // the take-over: gone, back as the same kind under a new id within 20 s with none between
-                SuspTracker t = {};
-                TruckIdentity a1 = {}, a2 = {}, none = {}, b1 = {}, a3 = {};
-                strncpy_s(a1.key, kind, _TRUNCATE); strncpy_s(a1.id, id1, _TRUNCATE);
-                strncpy_s(a2.key, kind, _TRUNCATE); strncpy_s(a2.id, id2, _TRUNCATE);
-                strncpy_s(a3.key, kind, _TRUNCATE); strncpy_s(a3.id, id3, _TRUNCATE);
-                strncpy_s(b1.key, other, _TRUNCATE); strncpy_s(b1.id, idB, _TRUNCATE);
-                char gone[40];
-                const bool away = !SuspTrack(t, a1, none, 1000, gone);
-                const bool due = SuspTrack(t, none, a2, 6000, gone) && !strcmp(gone, id1);
-                const bool copied = TruckSuspTakeOver(kind, gone, id2);
-                SettingsFor(su, kind, id2);
-                const bool takenOver = SuspLevel(su) == kSuspLevelTruck && su.s.springFront == 2.5f && su.s.bumpStops;
-                SettingsFor(su, kind, id1);
-                const bool oldKept = SuspLevel(su) == kSuspLevelTruck && su.s.springFront == 2.5f;
-                Check(away && due && copied && takenOver && oldKept,
-                      "suspension: the take-over: the same kind back under a new id 5 s after it went takes the set over, and the old id keeps its own");
-                // a switch to another truck and back is none, nor a gap over 20 s, nor the same id back
-                SuspTracker u = {};
-                SuspTrack(u, a1, none, 0, gone);
-                SuspTrack(u, none, b1, 2000, gone);
-                SuspTrack(u, b1, none, 3000, gone);
-                const bool viaB = !SuspTrack(u, none, a2, 4000, gone);
-                SuspTracker w = {};
-                SuspTrack(w, a1, none, 0, gone);
-                const bool late = !SuspTrack(w, none, a2, 25000, gone);
-                SuspTracker x = {};
-                SuspTrack(x, a1, none, 0, gone);
-                const bool same = !SuspTrack(x, none, a1, 3000, gone);
-                SuspTracker y = {};
-                const bool direct = !SuspTrack(y, a1, b1, 0, gone) && !SuspTrack(y, b1, a2, 1000, gone);
-                // a new id that has a set of its own is another truck of the kind: no take-over writes over it
-                SettingsFor(su, kind, id3);
-                SettingsSuspLevel(su, true);
-                ed = su.s;
-                ed.springFront = 0.75f;
-                SettingsTake(su, ed);
-                SettingsWrite(su);
-                const bool notOver = !TruckSuspTakeOver(kind, id1, id3);
-                SettingsFor(su, kind, id3);
-                Check(viaB && late && same && direct && notOver && su.s.springFront == 0.75f,
-                      "suspension: no take-over after a switch to another truck and back, a gap over 20 s, the same id back, or onto an id with a set of its own");
-                // the same vehicle object back under a new id is the same truck, however long the gap (a garage visit took
-                // 21 s, the drive of 2026-11-06 22:37); another vehicle only within 20 s; the same pointer with another
-                // kind, another truck driven between, or a load between is none; and an id with its own set keeps it
-                {
-                    const uint64_t va = 0x1000, vb = 0x2000;
-                    auto back = [&](uint64_t goneOn, const TruckIdentity &who, uint64_t on, ULONGLONG after, unsigned loadsThen, bool *byVehicle) {
-                        SuspTracker k = {};
-                        SuspTrack(k, a1, none, 1000, gone, goneOn, 0, 0);
-                        return SuspTrack(k, none, who, 1000 + after, gone, 0, on, loadsThen, byVehicle);
-                    };
-                    bool by21 = false, by120 = false, by600 = false, bySoon = true;
-                    const bool same21 = back(va, a2, va, 21000, 0, &by21) && by21 && !strcmp(gone, id1);
-                    const bool same120 = back(va, a2, va, 120000, 0, &by120) && by120;
-                    const bool same600 = back(va, a2, va, 600000, 0, &by600) && by600;
-                    const bool soonOther = back(va, a2, vb, 5000, 0, &bySoon) && !bySoon;
-                    const bool other21 = !back(va, a2, vb, 21000, 0, nullptr);
-                    const bool kindOther = !back(va, b1, va, 21000, 0, nullptr);
-                    const bool loaded = !back(va, a2, va, 21000, 1, nullptr) && back(va, a2, va, 5000, 1, nullptr);
-                    const bool noVehicle = !back(0, a2, 0, 21000, 0, nullptr);
-                    SuspTracker k = {};
-                    SuspTrack(k, a1, none, 0, gone, va, 0, 0);
-                    SuspTrack(k, none, b1, 2000, gone, 0, vb, 0);
-                    SuspTrack(k, b1, none, 3000, gone, vb, 0, 0);
-                    const bool between = !SuspTrack(k, none, a2, 40000, gone, 0, va, 0);
-                    // the same pointer and kind, the new id already holding a set of its own: due, but nothing copied
-                    const bool dueOwn = back(va, a3, va, 30000, 0, nullptr);
-                    const bool ownKept = dueOwn && !TruckSuspTakeOver(kind, gone, id3);
-                    SettingsFor(su, kind, id3);
-                    Check(same21 && same120 && same600 && soonOther && other21 && kindOther && loaded && noVehicle && between && ownKept && su.s.springFront == 0.75f,
-                          "suspension: the take-over on the same vehicle object after 21 s, 120 s and 10 min; another vehicle only within 20 s; none for the same "
-                          "pointer with another kind, another truck between or a load between; an id with a set of its own keeps it on the same pointer");
-                }
-                // another vehicle within 20 s asks whether the old truck is still there (truck_test.cpp tests the reads):
-                // there, no take-over; gone, taken over; the same vehicle is never asked
-                {
-                    const uint64_t va = 0x1000, vb = 0x2000;
-                    auto ask = [&](uint64_t on, bool still, int &asked, uint64_t &askedOn) {
-                        SuspTracker k = {};
-                        SuspTrack(k, a1, none, 1000, gone, va, 0, 0);
-                        return SuspTrackWith(k, none, a2, 1000 + 5000, gone, 0, on, 0, nullptr, [&](const TruckIdentity &g, uint64_t gv) {
-                            asked++;
-                            askedOn = gv;
-                            return still && !strcmp(g.id, id1);
-                        });
-                    };
-                    int n1 = 0, n2 = 0, n3 = 0, n4 = 0;
-                    uint64_t on1 = 0, on2 = 0, on3 = 0, on4 = 0;
-                    const bool stillThere = !ask(vb, true, n1, on1) && n1 == 1 && on1 == va;
-                    const bool goneOver = ask(vb, false, n2, on2) && n2 == 1 && !strcmp(gone, id1);
-                    const bool sameNot = ask(va, true, n3, on3) && n3 == 0;
-                    SuspTracker k = {};
-                    SuspTrack(k, a1, none, 1000, gone, va, 0, 0);
-                    const bool lateNot = !SuspTrackWith(k, none, a2, 1000 + 21000, gone, 0, vb, 0, nullptr, [&](const TruckIdentity &, uint64_t) { n4++; return false; }) && n4 == 0;
-                    (void)on4;
-                    Check(stillThere && goneOver && sameNot && lateNot,
-                          "suspension: on another vehicle within 20 s the old truck still there is no take-over, gone it is; the same vehicle and a gap over 20 s "
-                          "never ask");
-                }
-                // while driven, a new id (the game made the truck anew under the driver) takes the set over
-                SettingsFor(su, kind, id1);
-                const char *id4 = "{44444444-4444-4444-4444-444444444444}";
-                const bool whileDriven = SettingsTakeOver(su, id4) && !strcmp(su.id, id4) && SuspLevel(su) == kSuspLevelTruck && su.s.springFront == 2.5f;
-                // Own=0 at the truck's level keeps its set there, and the kind's is in force for it; ticked again it is back
-                SettingsSuspOwn(su, false);
-                wchar_t own[8] = {};
-                GetPrivateProfileStringW(SuspSectionOf(id4).c_str(), L"Own", L"", own, 8, truckFile(kind).c_str());
-                const bool keptTruck = !su.truckOwn && su.truckKept && SuspLevel(su) == kSuspLevelKind && su.s.springFront == 1.5f && !wcscmp(own, L"0");
-                SettingsFor(su, kind, id4);
-                const bool keptRead = su.truckKept && SuspLevel(su) == kSuspLevelKind;
-                SettingsSuspLevel(su, true);
-                Check(whileDriven && keptTruck && keptRead && SuspLevel(su) == kSuspLevelTruck && su.s.springFront == 2.5f,
-                      "suspension: a new id while driven takes the set over; Own=0 at the truck's level keeps it, the kind's in force, and This truck only brings it back");
-                // Every <kind> with a set for the kind (review F2): the kind's in force, the truck's kept with Own=0, This truck only brings it back
-                SettingsSuspLevel(su, false);
-                wchar_t keptOwn[8] = {};
-                GetPrivateProfileStringW(SuspSectionOf(id4).c_str(), L"Own", L"", keptOwn, 8, truckFile(kind).c_str());
-                const bool kindInForce = SuspLevel(su) == kSuspLevelKind && su.s.springFront == 1.5f && su.truckKept && !wcscmp(keptOwn, L"0");
-                SettingsSuspLevel(su, true);
-                const bool backAgain = SuspLevel(su) == kSuspLevelTruck && su.s.springFront == 2.5f;
-                SettingsFor(su, kind, id3);
-                const bool id3Own = SuspLevel(su) == kSuspLevelTruck; // id3 keeps its own
-                Check(kindInForce && backAgain && id3Own,
-                      "suspension: Every <kind> with a set for the kind puts the kind's in force and keeps the truck's with Own=0; This truck only brings it back");
-                // Every <kind> with no set for the kind: the truck's set goes up to it and its own section goes
-                {
-                    const std::wstring kf = truckFile(kind);
-                    WritePrivateProfileStringW(kSuspSection, nullptr, nullptr, kf.c_str());
-                    SettingsFor(su, kind, id4);
-                    const bool noKind = SuspLevel(su) == kSuspLevelTruck && !su.suspOwn && !su.suspKept;
-                    SettingsSuspLevel(su, false);
-                    wchar_t mine[16] = {};
-                    GetPrivateProfileSectionW(SuspSectionOf(id4).c_str(), mine, 16, kf.c_str());
-                    SettingsFor(su, kind, "{55555555-5555-5555-5555-555555555555}");
-                    Check(noKind && !mine[0] && SuspLevel(su) == kSuspLevelKind && su.s.springFront == 2.5f,
-                          "suspension: Every <kind> with no set for the kind puts the truck's set at the kind's level and takes the truck's own section out");
-                }
-                // with the id not read the truck has the kind's level only
-                SettingsFor(su, kind, "");
-                Check(SuspLevel(su) == kSuspLevelKind && !su.truckOwn && !su.truckKept, "suspension: a truck whose id is not read has the kind's level only");
-                // FrameFlex and TwistRange go with the suspension set at both levels (BRIEF_frame_flex.md part 2); a section without them reads 1
-                {
-                    GaugeSettings flex = su.plain, back = su.plain;
-                    flex.frameFlex = 0.5f, flex.twistRange = 2.0f;
-                    WriteTruckSusp(kind, flex, true);
-                    flex.frameFlex = 3.0f, flex.twistRange = 0.5f;
-                    WriteTruckSusp(kind, flex, true, id1);
-                    GaugeSettings atKind = su.plain, atTruck = su.plain;
-                    ReadTruckSusp(kind, atKind);
-                    ReadTruckSusp(kind, atTruck, id1);
-                    wchar_t keyText[16] = {};
-                    GetPrivateProfileStringW(SuspSectionOf(id1).c_str(), L"TwistRange", L"", keyText, 16, truckFile(kind).c_str());
-                    WritePrivateProfileStringW(kSuspSection, L"FrameFlex", nullptr, truckFile(kind).c_str());
-                    WritePrivateProfileStringW(kSuspSection, L"TwistRange", nullptr, truckFile(kind).c_str());
-                    back.frameFlex = back.twistRange = 1.0f;
-                    ReadTruckSusp(kind, back);
-                    Check(atKind.frameFlex == 0.5f && atKind.twistRange == 2.0f && atTruck.frameFlex == 3.0f && atTruck.twistRange == 0.5f && !wcscmp(keyText, L"0.5") &&
-                              back.frameFlex == 1.0f && back.twistRange == 1.0f,
-                          "suspension: FrameFlex and TwistRange are kept at the kind's level and the truck's, and a section without them reads 1");
-                }
-                // the take-over while driven (review F1): only on the vehicle the old id was taken with
-                Check(SuspAgainTakeOver(id1, 0x1000, id2, 0x1000) && !SuspAgainTakeOver(id1, 0x1000, id2, 0x2000) && !SuspAgainTakeOver(id1, 0, id2, 0) &&
-                          !SuspAgainTakeOver(id1, 0x1000, id1, 0x1000) && !SuspAgainTakeOver("", 0x1000, id2, 0x1000),
-                      "suspension: a new id while driven is a take-over on the same vehicle only; a new id on a new vehicle is another truck");
-                // the take-over mark (review N1): written on the old section, cleared when the old id is driven again,
-                // the marked sections beyond the newest 10 dropped at a save, an unmarked one kept
-                {
-                    const std::wstring kf = truckFile(kind);
-                    DeleteFileW(kf.c_str());
-                    SettingsFor(su, kind, id1);
-                    SettingsSuspLevel(su, true);
-                    SettingsWrite(su);
-                    const bool took = TruckSuspTakeOver(kind, id1, id2, 100);
-                    wchar_t by[48] = {}, byNew[48] = {};
-                    GetPrivateProfileStringW(SuspSectionOf(id1).c_str(), L"TakenBy", L"", by, 48, kf.c_str());
-                    GetPrivateProfileStringW(SuspSectionOf(id2).c_str(), L"TakenBy", L"", byNew, 48, kf.c_str());
-                    const bool marked = took && Wide(id2) == by && !byNew[0];
-                    SettingsFor(su, kind, id1);
-                    wchar_t after[48] = {};
-                    GetPrivateProfileStringW(SuspSectionOf(id1).c_str(), L"TakenBy", L"", after, 48, kf.c_str());
-                    const bool cleared = !after[0] && SuspLevel(su) == kSuspLevelTruck;
-                    // eleven marked sections, oldest first, and id1 unmarked
-                    auto has = [&](const char *id) { wchar_t b[16] = {}; return GetPrivateProfileSectionW(SuspSectionOf(id).c_str(), b, 16, kf.c_str()) != 0; };
-                    bool tenKept = false;
-                    char ids[11][40];
-                    for (int i = 0; i < 11; i++)
-                    {
-                        _snprintf_s(ids[i], _TRUNCATE, "{A%07d-0000-0000-0000-000000000000}", i);
-                        WritePrivateProfileStringW(SuspSectionOf(ids[i]).c_str(), L"Own", L"1", kf.c_str());
-                        TruckSuspTakeOver(kind, ids[i], "{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}", 1000 + i);
-                        WritePrivateProfileStringW(SuspSectionOf("{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}").c_str(), nullptr, nullptr, kf.c_str());
-                        if (i == 9) tenKept = has(ids[0]);
-                    }
-                    const bool noSave = !has(ids[0]) && has(ids[1]); // the 11th take-over dropped the oldest with no save (review F3)
-                    SettingsFor(su, kind, id1);
-                    su.truckChanged = true;
-                    SettingsWrite(su);
-                    bool newest = true;
-                    for (int i = 1; i < 11; i++) newest = newest && has(ids[i]);
-                    Check(marked && cleared && tenKept && noSave && !has(ids[0]) && newest && has(id1) && has(id2),
-                          "suspension: a take-over marks the old section, the old id driven again clears it, ten marked stay, the 11th take-over drops the oldest with no save, a save keeps the newest 10 and the unmarked");
-                }
-                // the camber (BRIEF_swing_camber.md point 3): CamberGainFront, CamberGainRear, CamberRestFront and
-                // CamberRestRear kept with the set at the kind's level and the truck's; a slider moved makes the set the kind's
-                // own; This truck only and the take-over carry them; a section without them reads the file's (x1 and +0)
-                {
-                    const char *cam_k = "camber_x", *cam_id = "{C1111111-1111-1111-1111-111111111111}", *cam_new = "{C2222222-2222-2222-2222-222222222222}";
-                    DeleteFileW(truckFile(cam_k).c_str());
-                    SettingsState cam = {};
-                    SettingsDefaults(cam.plain);
-                    SettingsFor(cam, cam_k, cam_id);
-                    const bool cam_start = cam.s.camberGainFront == 1.0f && cam.s.camberGainRear == 1.0f && cam.s.camberRestFront == 0.0f && cam.s.camberRestRear == 0.0f &&
-                                           SuspLevel(cam) == kSuspLevelDefault;
-                    GaugeSettings cam_in = cam.s;
-                    cam_in.camberGainFront = 2.0f, cam_in.camberRestRear = -1.5f;
-                    SettingsTake(cam, cam_in);
-                    SettingsWrite(cam);
-                    GaugeSettings cam_kind = cam.plain;
-                    const int cam_kindRead = ReadTruckSusp(cam_k, cam_kind);
-                    const bool cam_toKind = SuspLevel(cam) == kSuspLevelKind && cam_kindRead == kSuspInForce && cam_kind.camberGainFront == 2.0f && cam_kind.camberRestRear == -1.5f &&
-                                            cam.plain.camberGainFront == 1.0f;
-                    // This truck only, then the truck's own figures
-                    SettingsSuspLevel(cam, true);
-                    cam_in = cam.s;
-                    cam_in.camberGainRear = 0.0f, cam_in.camberRestFront = 3.0f;
-                    SettingsTake(cam, cam_in);
-                    SettingsWrite(cam);
-                    GaugeSettings cam_truck = cam.plain, cam_kind2 = cam.plain;
-                    ReadTruckSusp(cam_k, cam_truck, cam_id);
-                    ReadTruckSusp(cam_k, cam_kind2);
-                    const bool cam_levels = SuspLevel(cam) == kSuspLevelTruck && cam_truck.camberGainFront == 2.0f && cam_truck.camberGainRear == 0.0f && cam_truck.camberRestFront == 3.0f &&
-                                            cam_truck.camberRestRear == -1.5f && cam_kind2.camberGainRear == 1.0f && cam_kind2.camberRestFront == 0.0f;
-                    // the take-over: the new id has them, read back through SettingsFor
-                    TruckSuspTakeOver(cam_k, cam_id, cam_new);
-                    SettingsFor(cam, cam_k, cam_new);
-                    const bool cam_taken = SuspLevel(cam) == kSuspLevelTruck && cam.s.camberGainRear == 0.0f && cam.s.camberRestFront == 3.0f;
-                    // old sections without the keys: the truck's takes the kind's, and with neither holding them x1 and +0
-                    for (const wchar_t *cam_key : { L"CamberGainFront", L"CamberGainRear", L"CamberRestFront", L"CamberRestRear" })
-                        WritePrivateProfileStringW(SuspSectionOf(cam_new).c_str(), cam_key, nullptr, truckFile(cam_k).c_str());
-                    SettingsFor(cam, cam_k, cam_new);
-                    const bool cam_underKind = SuspLevel(cam) == kSuspLevelTruck && cam.s.camberGainFront == 2.0f && cam.s.camberGainRear == 1.0f && cam.s.camberRestRear == -1.5f;
-                    for (const wchar_t *cam_key : { L"CamberGainFront", L"CamberGainRear", L"CamberRestFront", L"CamberRestRear" })
-                        WritePrivateProfileStringW(kSuspSection, cam_key, nullptr, truckFile(cam_k).c_str());
-                    SettingsFor(cam, cam_k, cam_new);
-                    const bool cam_old = cam_underKind && SuspLevel(cam) == kSuspLevelTruck && cam.s.camberGainFront == 1.0f && cam.s.camberGainRear == 1.0f &&
-                                         cam.s.camberRestFront == 0.0f && cam.s.camberRestRear == 0.0f;
-                    // the ini's figures held to the ranges and steps
-                    GaugeSettings cam_c = cam.plain;
-                    cam_c.camberGainFront = 9.0f, cam_c.camberGainRear = 1.01f, cam_c.camberRestFront = -20.0f, cam_c.camberRestRear = 0.2f;
-                    SettingsClamp(cam_c);
-                    const bool cam_clamp = cam_c.camberGainFront == 3.0f && cam_c.camberGainRear == 1.0f && cam_c.camberRestFront == -10.0f && cam_c.camberRestRear == 0.0f;
-                    DeleteFileW(truckFile(cam_k).c_str());
-                    Check(cam_start && cam_toKind && cam_levels && cam_taken && cam_old && cam_clamp,
-                          "camber: x1 and +0 to start; a slider moved makes the set the kind's own, the default untouched; This truck only keeps its own figures beside the kind's; "
-                          "the take-over carries them; a truck's section without the keys takes the kind's, and with neither x1 and +0; the figures held to x0 to x3 and -10 to +10 on their steps");
-                }
-                // the air's ticks (BRIEF_air_axle_ticks.md): AirAxleMask kept with the set at the kind's level and the
-                // truck's, never in Gauges.ini, never the last truck's; written only once ticked; Defaults takes it out;
-                // the take-over carries it; the start order's five sources
-                {
-                    const char *air_ax = "air_x", *air_ay = "air_y", *air_az = "air_z", *air_ak = "air_k", *air_table = "western_star_6900xd", *air_plainKind = "air_plain";
-                    const char *air_idA = "{A1111111-1111-1111-1111-111111111111}", *air_idB = "{A2222222-2222-2222-2222-222222222222}",
-                               *air_idC = "{A3333333-3333-3333-3333-333333333333}";
-                    for (const char *air_k : { air_ax, air_ay, air_az, air_ak, air_table, air_plainKind }) DeleteFileW(truckFile(air_k).c_str());
-                    auto air_mask = [&](SettingsState &st, int &from) { return AirMaskOf(st.key, AirFileKind(st.key), st.s.airAxleMask, st.s.airMaskFrom, from); };
-                    auto air_tick = [&](SettingsState &st, int m) {
-                        GaugeSettings air_t = st.s;
-                        air_t.airAxleMask = m;
-                        SettingsTake(st, air_t);
-                        SettingsWrite(st);
-                    };
-                    auto air_there = [&](const char *k, const char *id) { return SuspKeyThere(k, id, L"AirAxleMask"); };
-                    int air_f1 = -1, air_f2 = -1, air_f3 = -1, air_f4 = -1, air_f5 = -1;
-                    // the five sources: none for a kind the mod knows nothing about, the table, AirAxles=, the kind's, the truck's
-                    SettingsFor(su, air_plainKind, air_idA);
-                    const bool air_none = air_mask(su, air_f1) == 0 && air_f1 == kAirFromNone;
-                    SettingsFor(su, air_table, air_idA);
-                    const bool air_byTable = air_mask(su, air_f2) == kAirMaskRear && air_f2 == kAirFromTable;
-                    WritePrivateProfileStringW(kSetupSections[kSetupTruck], L"AirAxles", L"Front ", truckFile(air_ay).c_str());
-                    SettingsFor(su, air_ay, air_idA);
-                    const bool air_byKey = air_mask(su, air_f3) == kAirMaskFront && air_f3 == kAirFromKey;
-                    SettingsFor(su, air_ax, air_idA);
-                    air_tick(su, kAirMaskFront);
-                    SettingsFor(su, air_ax, air_idA);
-                    const bool air_byKind = air_mask(su, air_f4) == kAirMaskFront && air_f4 == kAirFromKind && air_there(air_ax, "") && SuspLevel(su) == kSuspLevelKind;
-                    SettingsSuspLevel(su, true);
-                    air_tick(su, kAirMaskRear);
-                    SettingsFor(su, air_ax, air_idA);
-                    const bool air_byTruck = air_mask(su, air_f5) == kAirMaskRear && air_f5 == kAirFromTruck && air_there(air_ax, air_idA);
-                    Check(air_none && air_byTable && air_byKey && air_byKind && air_byTruck,
-                          "air ticks: the start order's five sources: none on a kind the mod knows nothing about, the table's rear, AirAxles=Front, the kind's ticks, this truck's own");
-                    // A to B to A: each truck keeps its own; B has none, so the kind's
-                    int air_fa = -1, air_fb = -1, air_fa2 = -1;
-                    SettingsFor(su, air_ax, air_idB);
-                    const bool air_b1 = air_mask(su, air_fb) == kAirMaskFront && air_fb == kAirFromKind;
-                    SettingsFor(su, air_ax, air_idA);
-                    const bool air_a2 = air_mask(su, air_fa2) == kAirMaskRear && air_fa2 == kAirFromTruck;
-                    // the Reviewer's point 1: kind X ticked front only, then a truck of kind Y with nothing saved starts from its own
-                    // AirAxles=, the table or none, never the last truck's
-                    SettingsFor(su, air_ax, air_idB);
-                    SettingsFor(su, air_ay, air_idB);
-                    const bool air_y = su.s.airAxleMask < 0 && air_mask(su, air_fa) == kAirMaskFront && air_fa == kAirFromKey;
-                    SettingsFor(su, air_ax, air_idB);
-                    SettingsFor(su, air_plainKind, air_idB);
-                    int air_fp = -1;
-                    const bool air_p = su.s.airAxleMask < 0 && air_mask(su, air_fp) == 0 && air_fp == kAirFromNone;
-                    SettingsFor(su, air_ax, air_idA);
-                    SettingsFor(su, air_table, air_idB);
-                    int air_ft = -1;
-                    const bool air_t = su.s.airAxleMask < 0 && air_mask(su, air_ft) == kAirMaskRear && air_ft == kAirFromTable;
-                    Check(air_b1 && air_a2 && air_y && air_p && air_t,
-                          "air ticks: a mask per kind and per truck reads back (A to B to A); after kind X ticked, a truck of kind Y with nothing saved starts from its own AirAxles=, the table or none");
-                    // the Reviewer's point 2, the lead's 16:30: a slider saved leaves the mask unwritten; a tick writes it; a set
-                    // written for any other reason carries it only where it was; Defaults takes it out
-                    SettingsFor(su, air_az, air_idA);
-                    GaugeSettings air_slide = su.s;
-                    air_slide.springFront = 0.8f;
-                    SettingsTake(su, air_slide);
-                    SettingsWrite(su);
-                    const bool air_notWritten = SuspLevel(su) == kSuspLevelKind && !air_there(air_az, "") && IniFloatIn(kSuspSection, L"SpringFront", 0.0f, truckFile(air_az)) == 0.8f;
-                    SettingsSuspLevel(su, true);
-                    const bool air_notCarried = !air_there(air_az, air_idA) && !air_there(air_az, "");
-                    air_tick(su, 0); // both unticked: a saved 0, none ticked by the player
-                    const bool air_zeroWritten = air_there(air_az, air_idA) && GetPrivateProfileIntW(SuspSectionOf(air_idA).c_str(), L"AirAxleMask", -1, truckFile(air_az).c_str()) == 0;
-                    air_slide = su.s;
-                    air_slide.dampingFront = 1.3f;
-                    SettingsTake(su, air_slide);
-                    SettingsWrite(su);
-                    int air_fz = -1;
-                    SettingsFor(su, air_az, air_idA);
-                    const bool air_kept = air_mask(su, air_fz) == 0 && air_fz == kAirFromTruck && su.s.dampingFront == 1.3f;
-                    SettingsToDefaults(su);
-                    SettingsWrite(su);
-                    int air_fd = -1;
-                    SettingsFor(su, air_az, air_idA);
-                    const bool air_defaults = !air_there(air_az, air_idA) && !air_there(air_az, "") && su.s.airAxleMask < 0 && air_mask(su, air_fd) == 0 && air_fd == kAirFromNone;
-                    Check(air_notWritten && air_notCarried && air_zeroWritten && air_kept && air_defaults,
-                          "air ticks: a slider saved leaves the mask unwritten, This truck only carries none; a tick writes it (both unticked a 0); a later save keeps it; Defaults takes it out");
-                    // the take-over carries the mask with the set; the default never holds one, nor Gauges.ini
-                    SettingsFor(su, air_ax, air_idA);
-                    int air_fc = -1;
-                    const bool air_taken = SettingsTakeOver(su, air_idC) && air_mask(su, air_fc) == kAirMaskRear && air_fc == kAirFromTruck;
-                    SettingsSuspToDefault(su);
-                    WriteIni(su.plain);
-                    wchar_t air_inIni[8] = {};
-                    GetPrivateProfileStringW(kIniSection, L"AirAxleMask", L"", air_inIni, 8, ini.c_str());
-                    const bool air_plainNone = su.plain.airAxleMask < 0 && !air_inIni[0];
-                    // no level in force and a set kept: the tick holds for this truck, not saved, never in the default
-                    SettingsFor(su, air_ak, air_idA);
-                    air_slide = su.s;
-                    air_slide.springFront = 0.9f;
-                    SettingsTake(su, air_slide);
-                    SettingsWrite(su);
-                    SettingsSuspOwn(su, false);
-                    air_tick(su, kAirMaskAll);
-                    int air_fk = -1;
-                    const bool air_ticked = su.suspKept && air_mask(su, air_fk) == kAirMaskAll && air_fk == kAirFromTicked && !air_there(air_ak, "") && su.plain.airAxleMask < 0;
-                    Check(air_taken && air_plainNone && air_ticked,
-                          "air ticks: the take-over carries the mask; the default and Gauges.ini never hold one; with a set kept and none in force a tick holds for this truck, not saved");
-                    for (const char *air_k : { air_ax, air_ay, air_az, air_ak, air_table, air_plainKind }) DeleteFileW(truckFile(air_k).c_str());
-                }
-                DeleteFileW(truckFile(kind).c_str());
-            }
-            DeleteFileW(ini.c_str());
+            int air_fd = -1;
+            SettingsFor(su, air_az, air_idA);
+            const bool air_defaults = !air_there(air_az, air_idA) && !air_there(air_az, "") && su.s.airAxleMask < 0 && air_mask(su, air_fd) == 0 && air_fd == kAirFromNone;
+            Check(air_notWritten && air_notCarried && air_zeroWritten && air_kept && air_defaults,
+                  "air ticks: a slider saved leaves the mask unwritten, This truck only carries none; a tick writes it (both unticked a 0); a later save keeps it; Defaults takes it out");
+            // the take-over carries the mask with the set; the default never holds one, nor Gauges.ini
+            SettingsFor(su, air_ax, air_idA);
+            int air_fc = -1;
+            const bool air_taken = SettingsTakeOver(su, air_idC) && air_mask(su, air_fc) == kAirMaskRear && air_fc == kAirFromTruck;
+            SettingsSuspToDefault(su);
+            WriteIni(su.plain);
+            wchar_t air_inIni[8] = {};
+            GetPrivateProfileStringW(kIniSection, L"AirAxleMask", L"", air_inIni, 8, ini.c_str());
+            const bool air_plainNone = su.plain.airAxleMask < 0 && !air_inIni[0];
+            // no level in force and a set kept: the tick holds for this truck, not saved, never in the default
+            SettingsFor(su, air_ak, air_idA);
+            air_slide = su.s;
+            air_slide.springFront = 0.9f;
+            SettingsTake(su, air_slide);
+            SettingsWrite(su);
+            SettingsSuspOwn(su, false);
+            air_tick(su, kAirMaskAll);
+            int air_fk = -1;
+            const bool air_ticked = su.suspKept && air_mask(su, air_fk) == kAirMaskAll && air_fk == kAirFromTicked && !air_there(air_ak, "") && su.plain.airAxleMask < 0;
+            Check(air_taken && air_plainNone && air_ticked,
+                  "air ticks: the take-over carries the mask; the default and Gauges.ini never hold one; with a set kept and none in force a tick holds for this truck, not saved");
+            for (const char *air_k : { air_ax, air_ay, air_az, air_ak, air_table, air_plainKind }) DeleteFileW(truckFile(air_k).c_str());
         }
-        // the engine's settings per truck (BRIEF_engine_per_truck.md): the levels, the box, the For choice, the
-        // button, Defaults and the take-over, on made up kinds, engines and ids
-        {
-            const char *kind = "eng_kind", *kind2 = "eng_kind2", *kind3 = "eng_kind3", *kind4 = "eng_kind4", *kind5 = "eng_kind5";
-            const char *e1 = "e_eng_test.v8", *e2 = "e_eng test two", *g1 = "g_eng_box";
-            const char *id1 = "{E1111111-1111-1111-1111-111111111111}", *id2 = "{E2222222-2222-2222-2222-222222222222}",
-                       *id3 = "{E3333333-3333-3333-3333-333333333333}";
-            char tens[10][24];
-            for (int i = 0; i < 10; i++) _snprintf_s(tens[i], _TRUNCATE, "e_ten_%d", i);
-            auto clean = [&]() {
-                for (const char *k : { kind, kind2, kind3, kind4, kind5 }) DeleteFileW(truckFile(k).c_str());
-                for (const char *n : { e1, e2 }) DeleteFileW(SetupFile(kSetupEngine, n).c_str());
-                for (const char *n : tens) DeleteFileW(SetupFile(kSetupEngine, n).c_str());
-                DeleteFileW(SetupFile(kSetupGearbox, g1).c_str());
-            };
-            clean();
-            EngineState e = {}, o = {};
-            // nothing set: 100 % and the class's hold; an old file's Torque= and GearHold= are the defaults
-            EngineFor(e, kind, id1, e1, g1);
-            const bool none = e.torque == 100 && e.torqueFrom == kEngLevelNone && e.hold == 0.0f && e.holdFrom == kEngLevelNone && !e.kindOwn && !e.truckOwn &&
-                              EngineLevel(e) == kEngLevelDefault;
-            EngineTorqueWrite(e1, 80);
-            GearHoldWrite(g1, 2.0f);
-            EngineFor(e, kind, id1, e1, g1);
-            const bool old = e.torque == 80 && e.torqueFrom == kEngLevelDefault && fabsf(e.hold - 2.0f) < 0.001f && e.holdFrom == kEngLevelDefault;
-            Check(none && old, "engine: nothing set gives 100 % and the class's hold, an old Torque= and GearHold= read as the engine's and the gearbox's default");
-            // the first edit makes the kind's own (the box ticks itself); another kind with the same engine keeps the default
-            const bool made = EngineTake(e, 60, 0.0f);
-            const bool kindLevel = e.kindOwn && e.torque == 60 && e.torqueFrom == kEngLevelKind && e.holdFrom == kEngLevelDefault && EngineTorqueRead(e1) == 80;
-            EngineFor(o, kind2, id3, e1, g1);
-            const bool otherDefault = o.torque == 80 && o.torqueFrom == kEngLevelDefault && !o.kindOwn;
-            Check(made && kindLevel && otherDefault,
-                  "engine: two kinds share one engine: the first edit makes one kind's own, the engine's default stays for the other kind");
-            // an engine changed with the box ticked falls through to the next level for that engine
-            EngineFor(e, kind, id1, e2, g1);
-            const bool through = e.kindOwn && e.torque == 100 && e.torqueFrom == kEngLevelNone && e.holdFrom == kEngLevelDefault;
-            EngineTake(e, 70, 0.0f);
-            const bool spaced = e.torque == 70 && e.torqueFrom == kEngLevelKind;
-            EngineFor(e, kind, id1, e1, g1);
-            const bool firstKept = e.torque == 60 && e.torqueFrom == kEngLevelKind;
-            Check(through && spaced && firstKept && EngineKeyOf(L"Torque", "a=b;c[d]") == L"Torque.a_b_c_d_" && EngineKeyOf(L"Torque", e2) == L"Torque.e_eng test two",
-                  "engine: another engine in a kind with a set falls through to its own default, an engine's name with a space or a dot is a key, = ; [ ] go to _");
-            // ten engines keep ten values in one kind's file
-            bool ten = true;
-            for (int i = 0; i < 10; i++) EngineFor(o, kind2, "", tens[i], ""), EngineTake(o, 50 + i, 0.0f);
-            for (int i = 0; i < 10; i++) EngineFor(o, kind2, "", tens[i], ""), ten = ten && o.torque == 50 + i && o.torqueFrom == kEngLevelKind;
-            Check(ten, "engine: ten engines keep ten values in one kind's file");
-            // This truck only: the truck's level by its id; another truck of the kind keeps the kind's; A to B to A
-            EngineFor(e, kind, id1, e1, g1);
-            EngineLevelSet(e, true);
-            EngineTake(e, 40, 1.5f);
-            const bool truckLevel = EngineLevel(e) == kEngLevelTruck && e.torque == 40 && e.torqueFrom == kEngLevelTruck && fabsf(e.hold - 1.5f) < 0.001f &&
-                                    e.holdFrom == kEngLevelTruck;
-            EngineFor(o, kind, id3, e1, g1);
-            const bool othersKind = o.torque == 60 && o.torqueFrom == kEngLevelKind && fabsf(o.hold - 2.0f) < 0.001f && o.holdFrom == kEngLevelDefault;
-            EngineFor(o, kind2, id2, e1, g1);
-            EngineFor(e, kind, id1, e1, g1);
-            const bool aba = o.torque == 80 && e.torque == 40 && e.torqueFrom == kEngLevelTruck;
-            Check(truckLevel && othersKind && aba,
-                  "engine: This truck only puts both figures at the truck's level, another truck of the kind keeps the kind's, A to B to A gives A's as it was");
-            // Every kind with a set for the kind: the kind's in force, the truck's kept (F2); This truck only brings it back
-            EngineLevelSet(e, false);
-            const bool f2 = EngineLevel(e) == kEngLevelKind && e.truckKept && !e.truckOwn && e.torque == 60;
-            EngineLevelSet(e, true);
-            const bool back = EngineLevel(e) == kEngLevelTruck && e.torque == 40;
-            // Every kind with no set for the kind: the truck's whole section goes up to it
-            EngineFor(o, kind3, id2, e1, g1);
-            EngineLevelSet(o, true);
-            EngineTake(o, 30, 0.0f);
-            EngineLevelSet(o, false);
-            wchar_t probe[8] = {};
-            const bool up = EngineLevel(o) == kEngLevelKind && !o.truckKept && o.torque == 30 && fabsf(o.hold - 2.0f) < 0.001f &&
-                            !GetPrivateProfileSectionW(SectionOf(kEngineSection, id2).c_str(), probe, 8, truckFile(kind3).c_str());
-            Check(f2 && back && up,
-                  "engine: Every kind with the kind's set keeps the truck's with Own=0 and This truck only brings it back, with none it moves the truck's up whole");
-            // the box: off keeps the set with Own=0, an edit then goes to the default (F1), on brings the set back
-            EngineOwnSet(o, false);
-            const bool off = o.kindKept && !o.kindOwn && o.torque == 80 && o.torqueFrom == kEngLevelDefault;
-            EngineTake(o, 90, 0.0f);
-            const bool toDefault = EngineTorqueRead(e1) == 90 && o.kindKept && GetPrivateProfileIntW(kEngineSection, L"Torque.e_eng_test.v8", 0, truckFile(kind3).c_str()) == 30;
-            EngineOwnSet(o, true);
-            const bool on = o.kindOwn && o.torque == 30;
-            Check(off && toDefault && on, "engine: the box off keeps the set with Own=0 and an edit goes to the engine's default, the box on brings the set back");
-            // the button writes both defaults; the truck keeps its own
-            EngineFor(e, kind, id1, e1, g1);
-            EngineToDefault(e);
-            float dh = 0.0f;
-            const bool button = EngineTorqueRead(e1) == 40 && GearHoldRead(g1, dh) && fabsf(dh - 1.5f) < 0.001f && EngineLevel(e) == kEngLevelTruck;
-            Check(button, "engine: Make this the engine's default writes the torque to the engine's file and the hold to the gearbox's");
-            // Defaults: 100 % and the class's hold, the sets kept with Own=0
-            EngineDefaults(e);
-            const bool defaults = e.torque == 100 && e.torqueFrom == kEngLevelNone && e.hold == 0.0f && e.holdFrom == kEngLevelNone && e.truckKept && e.kindKept;
-            Check(defaults, "engine: Defaults gives 100 % and the class's hold and keeps the sets with Own=0");
-            // the take-over at a rebuild with no suspension set, and its own prune of the marked sections
-            {
-                const std::wstring kf = truckFile(kind4);
-                EngineFor(e, kind4, id1, e1, g1);
-                EngineLevelSet(e, true);
-                EngineTake(e, 45, 0.0f);
-                const int taken = TakeOverBoth(kind4, id1, id2);
-                EngineFor(e, kind4, id2, e1, g1);
-                wchar_t by[48] = {};
-                GetPrivateProfileStringW(SectionOf(kEngineSection, id1).c_str(), L"TakenBy", L"", by, 48, kf.c_str());
-                const bool tookEngine = taken == kTakenEngine && e.truckOwn && e.torque == 45 && Wide(id2) == by && !wcscmp(TakenWords(taken), L"the engine's settings");
-                // the old id driven again clears its engine mark
-                SuspMarkClear(kind4, id1, kEngineSection);
-                wchar_t after[48] = {};
-                GetPrivateProfileStringW(SectionOf(kEngineSection, id1).c_str(), L"TakenBy", L"", after, 48, kf.c_str());
-                const bool cleared = !after[0];
-                // a marked suspension section, older than all, stays through the engine's prune
-                WritePrivateProfileStringW(SuspSectionOf(id3).c_str(), L"TakenAt", L"1", kf.c_str());
-                auto has = [&](const std::wstring &sec) { wchar_t b[16] = {}; return GetPrivateProfileSectionW(sec.c_str(), b, 16, kf.c_str()) != 0; };
-                char ids[11][40];
-                for (int i = 0; i < 11; i++)
-                {
-                    _snprintf_s(ids[i], _TRUNCATE, "{B%07d-0000-0000-0000-000000000000}", i);
-                    WritePrivateProfileStringW(SectionOf(kEngineSection, ids[i]).c_str(), L"Own", L"1", kf.c_str());
-                    TruckSuspTakeOver(kind4, ids[i], "{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}", 1000 + i, kEngineSection);
-                    WritePrivateProfileStringW(SectionOf(kEngineSection, "{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}").c_str(), nullptr, nullptr, kf.c_str());
-                }
-                const bool pruned = !has(SectionOf(kEngineSection, ids[0])) && has(SectionOf(kEngineSection, ids[1])) && has(SuspSectionOf(id3));
-                Check(tookEngine && cleared && pruned,
-                      "engine: a rebuild takes over an engine set with no suspension set, the old id driven again clears its mark, its own prune drops the 11th marked engine section and leaves the suspension's");
-            }
-            // an edit with the engine's or the gearbox's name not known writes nothing (review N1)
-            {
-                EngineFor(o, kind5, id1, "", g1);
-                const bool noEngine = !EngineTake(o, 55, 0.0f) && !o.kindOwn;
-                EngineFor(o, kind5, id1, e1, "");
-                const bool noBox = !EngineTake(o, 0, 1.5f) && !o.kindOwn;
-                Check(noEngine && noBox && GetFileAttributesW(truckFile(kind5).c_str()) == INVALID_FILE_ATTRIBUTES,
-                      "engine: an edit with the engine's or the gearbox's name not known yet writes nothing and ticks no set");
-            }
-            // the engine's profile by truck and kind (BRIEF_engine_profile_per_truck.md and its addendum)
-            {
-                const char *ka = "eng_prof_a", *kb = "eng_prof_b", *kc = "eng_prof_c", *kd = "eng_prof_d", *ep = "e_prof_engine_3";
-                auto cleanP = [&]() {
-                    for (const char *k : { ka, kb, kc, kd }) DeleteFileW(truckFile(k).c_str());
-                    DeleteFileW(SetupFile(kSetupEngine, ep).c_str());
-                };
-                cleanP();
-                const std::wstring ef = SetupFile(kSetupEngine, ep);
-                // the user's case: the engine's default holds 950 and Torque=; two kinds with that engine
-                EngineProfileWrite(ep, 950.0f, kAspTurbo, kFuelClass);
-                EngineTorqueWrite(ep, 90);
-                EngineState a = {}, b = {};
-                EngineFor(a, ka, id1, ep, g1);
-                const bool fromDefault = a.profileFrom == kEngLevelDefault && a.profile.peakRpm == 950.0f && a.torque == 90;
-                // each kind's first edit makes its own; the engine's default stays 950 (point 6)
-                const bool madeA = EngineProfileTake(a, 1200.0f, kAspTurbo, kFuelClass);
-                EngineFor(b, kb, id2, ep, g1);
-                const bool bDefault = b.profileFrom == kEngLevelDefault && b.profile.peakRpm == 950.0f;
-                const bool madeB = EngineProfileTake(b, 1450.0f, kAspNatural, kFuelDiesel);
-                EngineProfile dflt;
-                EngineProfileRead(ep, dflt);
-                const bool defaultStays = dflt.peakRpm == 950.0f && dflt.aspiration == kAspTurbo && EngineTorqueRead(ep) == 90;
-                // A, B, A through EngineFor and EngineApply's part on one watch's profile, as the thread does (point 1); a
-                // state for another engine puts nothing in
-                EngineProfile wp;
-                EngineProfileRead(ep, wp);
-                EngineState s = {};
-                EngineFor(s, ka, id1, ep, g1), EngineProfileApply(s, ep, wp);
-                const bool onA = wp.peakRpm == 1200.0f && wp.aspiration == kAspTurbo && fabsf(wp.torque - 0.9f) < 0.001f;
-                EngineFor(s, kb, id2, ep, g1), EngineProfileApply(s, ep, wp);
-                const bool onB = wp.peakRpm == 1450.0f && wp.aspiration == kAspNatural && wp.fuel == kFuelDiesel;
-                EngineFor(s, ka, id1, e2, g1), EngineProfileApply(s, ep, wp);
-                const bool otherEngine = wp.peakRpm == 1450.0f;
-                EngineFor(s, ka, id1, ep, g1), EngineProfileApply(s, ep, wp);
-                const bool backA = wp.peakRpm == 1200.0f && wp.aspiration == kAspTurbo && wp.fuel == kFuelClass && s.profileFrom == kEngLevelKind;
-                Check(fromDefault && madeA && bDefault && madeB && defaultStays && onA && onB && otherEngine && backA,
-                      "engine profile: two kinds with one engine keep two profiles, the first edit of each makes its own, A to B to A on one watch puts each one's back, "
-                      "a state for another engine puts nothing in, the default stays");
-                // whole from one level (point 2): a truck's peak over a default's TorqueCurve gives the truck's peak;
-                // a kind's class fuel over a default's diesel gives the class's
-                WritePrivateProfileStringW(L"Engine", L"TorqueCurve", L"0.3:0.7,0.5:1,1:0.75", ef.c_str());
-                WritePrivateProfileStringW(L"Engine", L"Fuel", L"diesel", ef.c_str());
-                EngineFor(a, ka, id1, ep, g1);
-                EngineLevelSet(a, true);
-                EngineProfileTake(a, 1300.0f, kAspTurbo, kFuelClass);
-                EngineFor(a, ka, id1, ep, g1);
-                const TorqueCurve ac = EngineCurveOf(a.profile, kClassCurves[kClassTruck], 2000.0f);
-                const bool truckPeak = a.profileFrom == kEngLevelTruck && !a.profile.custom && a.profile.peakRpm == 1300.0f && fabsf(CurvePeak(ac) - CurvePeak(EngineCurveFromPeak(1300.0f / 2000.0f, false))) < 0.001f;
-                EngineFor(o, ka, id3, ep, g1);
-                const bool kindClassFuel = o.profileFrom == kEngLevelKind && o.profile.fuel == kFuelClass && !o.profile.custom;
-                // a level holding Torque only falls through whole to the default, its curve and fuel with it
-                EngineFor(o, kc, id1, ep, g1);
-                EngineTake(o, 70, 0.0f);
-                const bool torqueOnly = o.kindOwn && o.profileFrom == kEngLevelDefault && o.profile.custom && o.profile.fuel == kFuelDiesel && o.torque == 70;
-                Check(truckPeak && kindClassFuel && torqueOnly,
-                      "engine profile: whole from one level, a truck's peak over the default's TorqueCurve gives the peak, a kind's class fuel over the default's diesel gives "
-                      "the class's, a level with Torque only takes the default's profile whole");
-                // the profile edit keeps a curve of its own in force with it at a level (and its text)
-                EngineProfileTake(o, 1500.0f, kAspNatural, kFuelPetrol);
-                wchar_t kept[256] = {};
-                GetPrivateProfileStringW(kEngineSection, EngineKeyOf(L"TorqueCurve", ep).c_str(), L"", kept, 256, truckFile(kc).c_str());
-                const bool curveKept = o.profileFrom == kEngLevelKind && o.profile.custom && o.profile.fuel == kFuelPetrol && !wcscmp(kept, L"0.3:0.7,0.5:1,1:0.75");
-                // Class curve at the kind's level: the class's curve there, the default untouched (point 4)
-                EngineProfileDrop(o);
-                EngineProfile after;
-                EngineProfileRead(ep, after);
-                const bool dropKind = o.profileFrom == kEngLevelKind && o.profile.own && !ProfileNotStock(o.profile) &&
-                                      EngineCurveOf(o.profile, kClassCurves[kClassTruck], 2000.0f).n == kClassCurves[kClassTruck].n && after.custom && after.peakRpm == 950.0f &&
-                                      GetFileAttributesW(ef.c_str()) != INVALID_FILE_ATTRIBUTES;
-                Check(curveKept && dropKind, "engine profile: an edit at a level keeps the curve of its own in force, Class curve at the kind's level gives the class's curve "
-                                             "there and leaves the default as it is");
-                // Make this the engine's default copies the profile whole; Class curve at the default level keeps Torque=
-                EngineFor(a, ka, id1, ep, g1);
-                EngineToDefault(a);
-                EngineProfile copied;
-                wchar_t copiedCurve[256];
-                EngineProfileRead(ep, copied, copiedCurve);
-                const bool toDefault = copied.peakRpm == 1300.0f && copied.fuel == kFuelClass && !copied.custom && !copiedCurve[0];
-                EngineFor(b, kb, id2, ep, g1);
-                EngineOwnSet(b, false);
-                const bool bOff = b.profileFrom == kEngLevelDefault && b.profile.peakRpm == 1300.0f;
-                EngineProfileDrop(b);
-                EngineProfile gone;
-                const bool dropDefault = !EngineProfileRead(ep, gone) && EngineTorqueRead(ep) > 0 && GetFileAttributesW(ef.c_str()) != INVALID_FILE_ATTRIBUTES &&
-                                         b.profileFrom == kEngLevelNone && b.kindKept;
-                // Defaults leaves the engine file's profile alone (point 5)
-                EngineProfileWrite(ep, 1100.0f, kAspTurbo, kFuelClass);
-                EngineDefaults(b);
-                EngineProfile still;
-                const bool defaultsKeep = EngineProfileRead(ep, still) && still.peakRpm == 1100.0f;
-                Check(toDefault && bOff && dropDefault && defaultsKeep,
-                      "engine profile: Make this the engine's default copies the profile whole, Class curve at the default level takes the four keys out and keeps Torque= "
-                      "and the file, Defaults leaves the engine file's profile");
-                // This truck only and Every kind carry the profile keys with Torque (EngineLevelSet, the take-over's sections)
-                EngineFor(o, kc, id2, ep, g1);
-                EngineLevelSet(o, true);
-                EngineProfileTake(o, 1700.0f, kAspTurbo, kFuelClass);
-                const bool truckOwn = o.profileFrom == kEngLevelTruck && o.profile.peakRpm == 1700.0f;
-                // Every kind with the kind's set: the kind's (Class curve's marker) in force, the truck's kept; This truck only brings it back
-                EngineLevelSet(o, false);
-                const bool kindKeepsKind = o.profileFrom == kEngLevelKind && o.profile.own && o.profile.peakRpm == 0.0f && o.truckKept;
-                EngineLevelSet(o, true);
-                const bool truckBack = o.profileFrom == kEngLevelTruck && o.profile.peakRpm == 1700.0f;
-                // Every kind with no set for the kind: the truck's section goes up whole, its profile with it
-                EngineFor(o, kd, id1, ep, g1);
-                EngineLevelSet(o, true);
-                EngineProfileTake(o, 1800.0f, kAspNatural, kFuelClass);
-                EngineLevelSet(o, false);
-                wchar_t probeD[8] = {};
-                const bool movedUp = o.profileFrom == kEngLevelKind && o.profile.peakRpm == 1800.0f && o.profile.aspiration == kAspNatural && !o.truckKept &&
-                                     !GetPrivateProfileSectionW(SectionOf(kEngineSection, id1).c_str(), probeD, 8, truckFile(kd).c_str());
-                Check(truckOwn && kindKeepsKind && truckBack && movedUp, "engine profile: This truck only and Every kind move the profile with the level, as Torque");
-                cleanP();
-            }
-            // DropTruckIni keeps the file while [Engine] is in it
-            {
-                const std::wstring kf = truckFile(kind5);
-                SetupBegin(kSetupTruck, Wide(kind5));
-                WritePrivateProfileStringW(kSetupSections[kSetupTruck], L"TachClass", L"1", kf.c_str());
-                WritePrivateProfileStringW(kEngineSection, L"Own", L"1", kf.c_str());
-                DropTruckIni(kind5);
-                const bool kept = GetFileAttributesW(kf.c_str()) != INVALID_FILE_ATTRIBUTES;
-                WritePrivateProfileStringW(kEngineSection, nullptr, nullptr, kf.c_str());
-                DropTruckIni(kind5);
-                const bool gone = GetFileAttributesW(kf.c_str()) == INVALID_FILE_ATTRIBUTES;
-                Check(kept && gone, "engine: a truck's file with [Engine] in it stays when its scales go, with only [Truck] it goes");
-            }
-            clean();
-        }
-            // the files' names: a modded truck's stroke as "@", what no file's name may hold as "_"
-        Check(SetupFileName(L"mod_suv/1000001") == L"mod_suv@1000001" && SetupFileName(L"a:b*c?") == L"a_b_c_" &&
-                  SetupFileName(L"gears 1.5 4 high 2") == L"gears 1.5 4 high 2" && truckFile("mod_suv/1000001").find(L"Gauges\\trucks\\mod_suv@1000001.ini") != std::wstring::npos,
-              "setups: a file's name from the truck's kind or the gearbox's name");
-        // the learned tops per truck kind and gearbox (BRIEF_gear_tops_per_truck.md): TopShare<n>.<gearbox> in the kind's
-        // file, two kinds with one gearbox's name each their own, an old Top4 in the gearbox's file not read as one, a
-        // share outside 0.85 to 1.15 counted and not used, a gearbox's name with = ; [ ] as _
-        {
-            const char *k1 = "top_kind_a", *k2 = "top_kind_b", *box = "g_top_test", *odd = "g=top;[x]";
-            for (const char *k : { k1, k2 }) DeleteFileW(truckFile(k).c_str());
-            DeleteFileW(SetupFile(kSetupGearbox, box).c_str());
-            SetupBegin(kSetupGearbox, Wide(box));
-            WritePrivateProfileStringW(kSetupSections[kSetupGearbox], L"Top4", L"21.10", SetupFile(kSetupGearbox, box).c_str());
-            float s1[kMaxGears], s2[kMaxGears], old[kMaxGears];
-            const bool oldOnly = GearTopShareRead(k1, box, s1) == 0 && GearTopRead(box, old) == 1 && s1[4] == 0.0f;
-            GearTopShareWrite(k1, box, 4, 1.005f);
-            GearTopShareWrite(k2, box, 4, 0.92f);
-            GearTopShareWrite(k2, odd, 3, 0.95f);
-            const bool each = GearTopShareRead(k1, box, s1) == 1 && fabsf(s1[4] - 1.005f) < 0.0001f && GearTopShareRead(k2, box, s2) == 1 && fabsf(s2[4] - 0.92f) < 0.0001f;
-            float s3[kMaxGears];
-            const bool cleaned = GearTopShareRead(k2, odd, s3) == 1 && fabsf(s3[3] - 0.95f) < 0.0001f && GearTopShareName(3, odd) == L"TopShare3.g_top__x_";
-            WritePrivateProfileStringW(kSetupSections[kSetupTruck], L"TopShare5.g_top_test", L"1.99", truckFile(k1).c_str());
-            int outside = 0;
-            const bool wild = GearTopShareRead(k1, box, s1, &outside) == 1 && outside == 1 && s1[5] == 0.0f;
-            Check(oldOnly && each && cleaned && wild,
-                  "gear tops: kept per truck kind and gearbox as TopShare<n>.<gearbox>, two kinds of one gearbox each their own; an old Top4=21.10 of the gearbox's file not read; "
-                  "a share outside 0.85 to 1.15 counted and not used; = ; [ ] in a gearbox's name as _");
-            for (const char *k : { k1, k2 }) DeleteFileW(truckFile(k).c_str());
-            DeleteFileW(SetupFile(kSetupGearbox, box).c_str());
-        }
-        // a gearbox's hold into its file and back, held to its range
-        DeleteFileW(SetupFile(kSetupGearbox, "g_test_box").c_str());
-        float holdBack = 0.0f, holdWild = 0.0f;
-        const bool noHold = !GearHoldRead("g_test_box", holdBack);
-        GearHoldWrite("g_test_box", 1.7f);
-        const bool holdRead = GearHoldRead("g_test_box", holdBack);
-        WritePrivateProfileStringW(L"Gearbox", L"GearHold", L"9", SetupFile(kSetupGearbox, "g_test_box").c_str());
-        GearHoldRead("g_test_box", holdWild);
-        wchar_t boxName[32] = {};
-        GetPrivateProfileStringW(L"Gearbox", L"Name", L"", boxName, 32, SetupFile(kSetupGearbox, "g_test_box").c_str());
-        Check(noHold && holdRead && fabsf(holdBack - 1.7f) < 0.001f && holdWild == kGearHoldRange[1] && !wcscmp(boxName, L"g_test_box"),
-              "setups: a gearbox's hold in its own file with its name, read back, held to 1 to 3 seconds");
-        // a gearbox known by its gears finds the file of an earlier key of the same gears (BRIEF_manual_creep_and_hold.md):
-        // the four keys of one gearbox in the logs find the first's file; a gear more or one off by 5 % finds none
-        {
-            const char *keys[4] = { "gears 3.03638 6.05623 8.06946 14.1091 20.1488 high 10.0794", "gears 3.0269 6.04157 8.05135 14.0807 20.11 high 10.0587",
-                                    "gears 3.03574 6.05523 8.06823 14.1072 20.1462 high 10.078", "gears 3.03703 6.05722 8.07069 14.1111 20.1515 high 10.0808" };
-            for (const char *k : keys) DeleteFileW(SetupFile(kSetupGearbox, k).c_str());
-            GearHoldWrite(keys[0], 2.4f);
-            char found[96] = "";
-            bool all = true;
-            for (const char *k : keys) all &= GearboxFileMatch(k, found, sizeof found) && !strcmp(found, keys[0]);
-            const bool more = !GearboxFileMatch("gears 3.03638 6.05623 8.06946 14.1091 20.1488 25.0 high 10.0794", found, sizeof found);
-            const bool off = !GearboxFileMatch("gears 3.18820 6.05623 8.06946 14.1091 20.1488 high 10.0794", found, sizeof found);
-            float hold = 0.0f;
-            const bool own = GearboxFileMatch(keys[2], found, sizeof found) && GearHoldRead(found, hold) && fabsf(hold - 2.4f) < 0.001f;
-            DeleteFileW(SetupFile(kSetupGearbox, keys[0]).c_str());
-            Check(all && more && off && own, "setups: a gearbox known by its gears finds its file under an earlier key of the same gears within 2 % (one gearbox's four keys "
-                                             "of the logs), and keeps its hold; a gear more, or one off by 5 %, finds none");
-        }
-        // an engine's profile: its peak torque's speed and aspiration into its file and back; a curve of its own taken
-        // in place of the one from the peak; what is out of range held to it; none without a file
-        const char *engineName = "test_engine_2";
-        DeleteFileW(SetupFile(kSetupEngine, engineName).c_str());
-        EngineProfile profile;
-        const bool noProfile = !EngineProfileRead(engineName, profile) && !profile.own;
-        EngineProfileWrite(engineName, 1950.0f, kAspNatural, kFuelPetrol);
-        const bool profileBack = EngineProfileRead(engineName, profile) && profile.own && profile.peakRpm == 1950.0f && profile.aspiration == kAspNatural && !profile.custom &&
-                                 profile.fuel == kFuelPetrol;
-        EngineProfileWrite(engineName, 1950.0f, kAspNatural, kFuelClass);
-        EngineProfile classFuel;
-        const bool fuelGone = EngineProfileRead(engineName, classFuel) && classFuel.fuel == kFuelClass;
-        WritePrivateProfileStringW(L"Engine", L"Fuel", L"Diesel", SetupFile(kSetupEngine, engineName).c_str());
-        const bool fuelCase = EngineProfileRead(engineName, classFuel) && classFuel.fuel == kFuelDiesel;
-        WritePrivateProfileStringW(L"Engine", L"Fuel", nullptr, SetupFile(kSetupEngine, engineName).c_str());
-        const TorqueCurve fromPeak = EngineCurveOf(profile, kClassCurves[kClassScout], 4850.0f);
-        WritePrivateProfileStringW(L"Engine", L"TorqueCurve", L"0.3:0.7,0.5:1,1:0.75", SetupFile(kSetupEngine, engineName).c_str());
-        WritePrivateProfileStringW(L"Engine", L"Aspiration", L"7", SetupFile(kSetupEngine, engineName).c_str());
-        EngineProfileRead(engineName, profile);
-        const TorqueCurve own = EngineCurveOf(profile, kClassCurves[kClassScout], 4850.0f);
-        WritePrivateProfileStringW(L"Engine", L"PeakTorqueRpm", L"50000", SetupFile(kSetupEngine, engineName).c_str());
-        EngineProfile wildEngine;
-        EngineProfileRead(engineName, wildEngine);
-        Check(noProfile && profileBack && fabsf(CurvePeak(fromPeak) - 1950.0f / 4850.0f) < 0.001f && profile.custom && own.n == 3 && own.x[1] == 0.5f &&
-                  profile.aspiration == kAspTurbo && wildEngine.peakRpm == kPeakRpmRange[1] && fuelGone && fuelCase,
-              "setups: an engine's profile in its own file, read back, its fuel too (none written for the class's); its curve from its peak torque's speed, "
-              "or its own written one; out of range held");
-        // its torque share: into its file and back, held to 10 to 100 percent; none set, all of it
-        const bool torqueNone = wildEngine.torque == 0.0f && TorqueHeld(3.0f, wildEngine.torque) == 3.0f;
-        EngineTorqueWrite(engineName, 25);
-        EngineProfile heldEngine;
-        EngineProfileRead(engineName, heldEngine);
-        const bool torqueBack = fabsf(heldEngine.torque - 0.25f) < 0.001f;
-        WritePrivateProfileStringW(L"Engine", L"Torque", L"5", SetupFile(kSetupEngine, engineName).c_str());
-        EngineProfileRead(engineName, heldEngine);
-        const bool torqueLow = heldEngine.torque == kTorqueShareRange[0];
-        WritePrivateProfileStringW(L"Engine", L"Torque", L"150", SetupFile(kSetupEngine, engineName).c_str());
-        EngineProfileRead(engineName, heldEngine);
-        Check(torqueNone && torqueBack && torqueLow && heldEngine.torque == kTorqueShareRange[1],
-              "setups: an engine's torque share in its file, read back and held to 10 to 100 percent; none set leaves the push as it is");
-        DeleteFileW(SetupFile(kSetupEngine, engineName).c_str());
-        // the sections of 0.13.9 and before moved out of Gauges.ini into the files, a key the file holds already kept
-        DeleteFileW(truckFile("mover/123").c_str());
-        DeleteFileW(SetupFile(kSetupGearbox, "g_moved").c_str());
-        truckPut("mover/123", L"TachClass", L"1");
-        WritePrivateProfileStringW(L"Truck:mover/123", L"TachClass", L"2", ini.c_str());
-        WritePrivateProfileStringW(L"Truck:mover/123", L"RedlineRpm", L"3000", ini.c_str());
-        WritePrivateProfileStringW(L"Gearbox:g_moved", L"GearHold", L"1.2", ini.c_str());
-        GaugeSettings afterMove;
-        ReadIni(afterMove);
-        wchar_t movedClass[16] = {}, movedRed[16] = {}, movedKind[32] = {}, iniNames[2048] = {};
-        GetPrivateProfileStringW(L"Truck", L"TachClass", L"", movedClass, 16, truckFile("mover/123").c_str());
-        GetPrivateProfileStringW(L"Truck", L"RedlineRpm", L"", movedRed, 16, truckFile("mover/123").c_str());
-        GetPrivateProfileStringW(L"Truck", L"Kind", L"", movedKind, 32, truckFile("mover/123").c_str());
-        float movedHold = 0.0f;
-        const bool holdMoved = GearHoldRead("g_moved", movedHold) && fabsf(movedHold - 1.2f) < 0.001f;
-        GetPrivateProfileSectionNamesW(iniNames, 2048, ini.c_str());
-        bool leftInIni = false;
-        for (const wchar_t *n = iniNames; *n; n += wcslen(n) + 1) leftInIni = leftInIni || !_wcsnicmp(n, L"Truck:", 6) || !_wcsnicmp(n, L"Gearbox:", 8);
-        Check(!wcscmp(movedClass, L"1") && !wcscmp(movedRed, L"3000") && !wcscmp(movedKind, L"mover/123") && holdMoved && !leftInIni,
-              "setups: the trucks' and gearboxes' sections of Gauges.ini moved into their own files, what a file held already kept, none left behind");
+        DeleteFileW(truckFile(kind).c_str());
     }
+}
+
+// The rest: the engine per truck and the setups, the saves, the log, the maps, the tab, the tuning block, the pad and
+// key names, a player's own ini, the gearbox's bindings, the odometer and the save off the pass thread.
+static void PartRest()
+{
+    const std::wstring ini = IniPath();
+    auto truckFile = [](const char *key) { return SetupFile(kSetupTruck, key); };
+    auto truckPut = [&](const char *key, const wchar_t *name, const wchar_t *value) {
+        SetupFolderMake(kSetupTruck);
+        WritePrivateProfileStringW(L"Truck", name, value, truckFile(key).c_str());
+    };
+    DeleteFileW(ini.c_str()); // as the block before left it
+    // the engine's settings per truck (BRIEF_engine_per_truck.md): the levels, the box, the For choice, the
+    // button, Defaults and the take-over, on made up kinds, engines and ids
+    {
+        const char *kind = "eng_kind", *kind2 = "eng_kind2", *kind3 = "eng_kind3", *kind4 = "eng_kind4", *kind5 = "eng_kind5";
+        const char *e1 = "e_eng_test.v8", *e2 = "e_eng test two", *g1 = "g_eng_box";
+        const char *id1 = "{E1111111-1111-1111-1111-111111111111}", *id2 = "{E2222222-2222-2222-2222-222222222222}",
+                   *id3 = "{E3333333-3333-3333-3333-333333333333}";
+        char tens[10][24];
+        for (int i = 0; i < 10; i++) _snprintf_s(tens[i], _TRUNCATE, "e_ten_%d", i);
+        auto clean = [&]() {
+            for (const char *k : { kind, kind2, kind3, kind4, kind5 }) DeleteFileW(truckFile(k).c_str());
+            for (const char *n : { e1, e2 }) DeleteFileW(SetupFile(kSetupEngine, n).c_str());
+            for (const char *n : tens) DeleteFileW(SetupFile(kSetupEngine, n).c_str());
+            DeleteFileW(SetupFile(kSetupGearbox, g1).c_str());
+        };
+        clean();
+        EngineState e = {}, o = {};
+        // nothing set: 100 % and the class's hold; an old file's Torque= and GearHold= are the defaults
+        EngineFor(e, kind, id1, e1, g1);
+        const bool none = e.torque == 100 && e.torqueFrom == kEngLevelNone && e.hold == 0.0f && e.holdFrom == kEngLevelNone && !e.kindOwn && !e.truckOwn &&
+                          EngineLevel(e) == kEngLevelDefault;
+        EngineTorqueWrite(e1, 80);
+        GearHoldWrite(g1, 2.0f);
+        EngineFor(e, kind, id1, e1, g1);
+        const bool old = e.torque == 80 && e.torqueFrom == kEngLevelDefault && fabsf(e.hold - 2.0f) < 0.001f && e.holdFrom == kEngLevelDefault;
+        Check(none && old, "engine: nothing set gives 100 % and the class's hold, an old Torque= and GearHold= read as the engine's and the gearbox's default");
+        // the first edit makes the kind's own (the box ticks itself); another kind with the same engine keeps the default
+        const bool made = EngineTake(e, 60, 0.0f);
+        const bool kindLevel = e.kindOwn && e.torque == 60 && e.torqueFrom == kEngLevelKind && e.holdFrom == kEngLevelDefault && EngineTorqueRead(e1) == 80;
+        EngineFor(o, kind2, id3, e1, g1);
+        const bool otherDefault = o.torque == 80 && o.torqueFrom == kEngLevelDefault && !o.kindOwn;
+        Check(made && kindLevel && otherDefault,
+              "engine: two kinds share one engine: the first edit makes one kind's own, the engine's default stays for the other kind");
+        // an engine changed with the box ticked falls through to the next level for that engine
+        EngineFor(e, kind, id1, e2, g1);
+        const bool through = e.kindOwn && e.torque == 100 && e.torqueFrom == kEngLevelNone && e.holdFrom == kEngLevelDefault;
+        EngineTake(e, 70, 0.0f);
+        const bool spaced = e.torque == 70 && e.torqueFrom == kEngLevelKind;
+        EngineFor(e, kind, id1, e1, g1);
+        const bool firstKept = e.torque == 60 && e.torqueFrom == kEngLevelKind;
+        Check(through && spaced && firstKept && EngineKeyOf(L"Torque", "a=b;c[d]") == L"Torque.a_b_c_d_" && EngineKeyOf(L"Torque", e2) == L"Torque.e_eng test two",
+              "engine: another engine in a kind with a set falls through to its own default, an engine's name with a space or a dot is a key, = ; [ ] go to _");
+        // ten engines keep ten values in one kind's file
+        bool ten = true;
+        for (int i = 0; i < 10; i++) EngineFor(o, kind2, "", tens[i], ""), EngineTake(o, 50 + i, 0.0f);
+        for (int i = 0; i < 10; i++) EngineFor(o, kind2, "", tens[i], ""), ten = ten && o.torque == 50 + i && o.torqueFrom == kEngLevelKind;
+        Check(ten, "engine: ten engines keep ten values in one kind's file");
+        // This truck only: the truck's level by its id; another truck of the kind keeps the kind's; A to B to A
+        EngineFor(e, kind, id1, e1, g1);
+        EngineLevelSet(e, true);
+        EngineTake(e, 40, 1.5f);
+        const bool truckLevel = EngineLevel(e) == kEngLevelTruck && e.torque == 40 && e.torqueFrom == kEngLevelTruck && fabsf(e.hold - 1.5f) < 0.001f &&
+                                e.holdFrom == kEngLevelTruck;
+        EngineFor(o, kind, id3, e1, g1);
+        const bool othersKind = o.torque == 60 && o.torqueFrom == kEngLevelKind && fabsf(o.hold - 2.0f) < 0.001f && o.holdFrom == kEngLevelDefault;
+        EngineFor(o, kind2, id2, e1, g1);
+        EngineFor(e, kind, id1, e1, g1);
+        const bool aba = o.torque == 80 && e.torque == 40 && e.torqueFrom == kEngLevelTruck;
+        Check(truckLevel && othersKind && aba,
+              "engine: This truck only puts both figures at the truck's level, another truck of the kind keeps the kind's, A to B to A gives A's as it was");
+        // Every kind with a set for the kind: the kind's in force, the truck's kept (F2); This truck only brings it back
+        EngineLevelSet(e, false);
+        const bool f2 = EngineLevel(e) == kEngLevelKind && e.truckKept && !e.truckOwn && e.torque == 60;
+        EngineLevelSet(e, true);
+        const bool back = EngineLevel(e) == kEngLevelTruck && e.torque == 40;
+        // Every kind with no set for the kind: the truck's whole section goes up to it
+        EngineFor(o, kind3, id2, e1, g1);
+        EngineLevelSet(o, true);
+        EngineTake(o, 30, 0.0f);
+        EngineLevelSet(o, false);
+        wchar_t probe[8] = {};
+        const bool up = EngineLevel(o) == kEngLevelKind && !o.truckKept && o.torque == 30 && fabsf(o.hold - 2.0f) < 0.001f &&
+                        !GetPrivateProfileSectionW(SectionOf(kEngineSection, id2).c_str(), probe, 8, truckFile(kind3).c_str());
+        Check(f2 && back && up,
+              "engine: Every kind with the kind's set keeps the truck's with Own=0 and This truck only brings it back, with none it moves the truck's up whole");
+        // the box: off keeps the set with Own=0, an edit then goes to the default (F1), on brings the set back
+        EngineOwnSet(o, false);
+        const bool off = o.kindKept && !o.kindOwn && o.torque == 80 && o.torqueFrom == kEngLevelDefault;
+        EngineTake(o, 90, 0.0f);
+        const bool toDefault = EngineTorqueRead(e1) == 90 && o.kindKept && GetPrivateProfileIntW(kEngineSection, L"Torque.e_eng_test.v8", 0, truckFile(kind3).c_str()) == 30;
+        EngineOwnSet(o, true);
+        const bool on = o.kindOwn && o.torque == 30;
+        Check(off && toDefault && on, "engine: the box off keeps the set with Own=0 and an edit goes to the engine's default, the box on brings the set back");
+        // the button writes both defaults; the truck keeps its own
+        EngineFor(e, kind, id1, e1, g1);
+        EngineToDefault(e);
+        float dh = 0.0f;
+        const bool button = EngineTorqueRead(e1) == 40 && GearHoldRead(g1, dh) && fabsf(dh - 1.5f) < 0.001f && EngineLevel(e) == kEngLevelTruck;
+        Check(button, "engine: Make this the engine's default writes the torque to the engine's file and the hold to the gearbox's");
+        // Defaults: 100 % and the class's hold, the sets kept with Own=0
+        EngineDefaults(e);
+        const bool defaults = e.torque == 100 && e.torqueFrom == kEngLevelNone && e.hold == 0.0f && e.holdFrom == kEngLevelNone && e.truckKept && e.kindKept;
+        Check(defaults, "engine: Defaults gives 100 % and the class's hold and keeps the sets with Own=0");
+        // the take-over at a rebuild with no suspension set, and its own prune of the marked sections
+        {
+            const std::wstring kf = truckFile(kind4);
+            EngineFor(e, kind4, id1, e1, g1);
+            EngineLevelSet(e, true);
+            EngineTake(e, 45, 0.0f);
+            const int taken = TakeOverBoth(kind4, id1, id2);
+            EngineFor(e, kind4, id2, e1, g1);
+            wchar_t by[48] = {};
+            GetPrivateProfileStringW(SectionOf(kEngineSection, id1).c_str(), L"TakenBy", L"", by, 48, kf.c_str());
+            const bool tookEngine = taken == kTakenEngine && e.truckOwn && e.torque == 45 && Wide(id2) == by && !wcscmp(TakenWords(taken), L"the engine's settings");
+            // the old id driven again clears its engine mark
+            SuspMarkClear(kind4, id1, kEngineSection);
+            wchar_t after[48] = {};
+            GetPrivateProfileStringW(SectionOf(kEngineSection, id1).c_str(), L"TakenBy", L"", after, 48, kf.c_str());
+            const bool cleared = !after[0];
+            // a marked suspension section, older than all, stays through the engine's prune
+            WritePrivateProfileStringW(SuspSectionOf(id3).c_str(), L"TakenAt", L"1", kf.c_str());
+            auto has = [&](const std::wstring &sec) { wchar_t b[16] = {}; return GetPrivateProfileSectionW(sec.c_str(), b, 16, kf.c_str()) != 0; };
+            char ids[11][40];
+            for (int i = 0; i < 11; i++)
+            {
+                _snprintf_s(ids[i], _TRUNCATE, "{B%07d-0000-0000-0000-000000000000}", i);
+                WritePrivateProfileStringW(SectionOf(kEngineSection, ids[i]).c_str(), L"Own", L"1", kf.c_str());
+                TruckSuspTakeOver(kind4, ids[i], "{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}", 1000 + i, kEngineSection);
+                WritePrivateProfileStringW(SectionOf(kEngineSection, "{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}").c_str(), nullptr, nullptr, kf.c_str());
+            }
+            const bool pruned = !has(SectionOf(kEngineSection, ids[0])) && has(SectionOf(kEngineSection, ids[1])) && has(SuspSectionOf(id3));
+            Check(tookEngine && cleared && pruned,
+                  "engine: a rebuild takes over an engine set with no suspension set, the old id driven again clears its mark, its own prune drops the 11th marked engine section and leaves the suspension's");
+        }
+        // an edit with the engine's or the gearbox's name not known writes nothing (review N1)
+        {
+            EngineFor(o, kind5, id1, "", g1);
+            const bool noEngine = !EngineTake(o, 55, 0.0f) && !o.kindOwn;
+            EngineFor(o, kind5, id1, e1, "");
+            const bool noBox = !EngineTake(o, 0, 1.5f) && !o.kindOwn;
+            Check(noEngine && noBox && GetFileAttributesW(truckFile(kind5).c_str()) == INVALID_FILE_ATTRIBUTES,
+                  "engine: an edit with the engine's or the gearbox's name not known yet writes nothing and ticks no set");
+        }
+        // the engine's profile by truck and kind (BRIEF_engine_profile_per_truck.md and its addendum)
+        {
+            const char *ka = "eng_prof_a", *kb = "eng_prof_b", *kc = "eng_prof_c", *kd = "eng_prof_d", *ep = "e_prof_engine_3";
+            auto cleanP = [&]() {
+                for (const char *k : { ka, kb, kc, kd }) DeleteFileW(truckFile(k).c_str());
+                DeleteFileW(SetupFile(kSetupEngine, ep).c_str());
+            };
+            cleanP();
+            const std::wstring ef = SetupFile(kSetupEngine, ep);
+            // the user's case: the engine's default holds 950 and Torque=; two kinds with that engine
+            EngineProfileWrite(ep, 950.0f, kAspTurbo, kFuelClass);
+            EngineTorqueWrite(ep, 90);
+            EngineState a = {}, b = {};
+            EngineFor(a, ka, id1, ep, g1);
+            const bool fromDefault = a.profileFrom == kEngLevelDefault && a.profile.peakRpm == 950.0f && a.torque == 90;
+            // each kind's first edit makes its own; the engine's default stays 950 (point 6)
+            const bool madeA = EngineProfileTake(a, 1200.0f, kAspTurbo, kFuelClass);
+            EngineFor(b, kb, id2, ep, g1);
+            const bool bDefault = b.profileFrom == kEngLevelDefault && b.profile.peakRpm == 950.0f;
+            const bool madeB = EngineProfileTake(b, 1450.0f, kAspNatural, kFuelDiesel);
+            EngineProfile dflt;
+            EngineProfileRead(ep, dflt);
+            const bool defaultStays = dflt.peakRpm == 950.0f && dflt.aspiration == kAspTurbo && EngineTorqueRead(ep) == 90;
+            // A, B, A through EngineFor and EngineApply's part on one watch's profile, as the thread does (point 1); a
+            // state for another engine puts nothing in
+            EngineProfile wp;
+            EngineProfileRead(ep, wp);
+            EngineState s = {};
+            EngineFor(s, ka, id1, ep, g1), EngineProfileApply(s, ep, wp);
+            const bool onA = wp.peakRpm == 1200.0f && wp.aspiration == kAspTurbo && fabsf(wp.torque - 0.9f) < 0.001f;
+            EngineFor(s, kb, id2, ep, g1), EngineProfileApply(s, ep, wp);
+            const bool onB = wp.peakRpm == 1450.0f && wp.aspiration == kAspNatural && wp.fuel == kFuelDiesel;
+            EngineFor(s, ka, id1, e2, g1), EngineProfileApply(s, ep, wp);
+            const bool otherEngine = wp.peakRpm == 1450.0f;
+            EngineFor(s, ka, id1, ep, g1), EngineProfileApply(s, ep, wp);
+            const bool backA = wp.peakRpm == 1200.0f && wp.aspiration == kAspTurbo && wp.fuel == kFuelClass && s.profileFrom == kEngLevelKind;
+            Check(fromDefault && madeA && bDefault && madeB && defaultStays && onA && onB && otherEngine && backA,
+                  "engine profile: two kinds with one engine keep two profiles, the first edit of each makes its own, A to B to A on one watch puts each one's back, "
+                  "a state for another engine puts nothing in, the default stays");
+            // whole from one level (point 2): a truck's peak over a default's TorqueCurve gives the truck's peak;
+            // a kind's class fuel over a default's diesel gives the class's
+            WritePrivateProfileStringW(L"Engine", L"TorqueCurve", L"0.3:0.7,0.5:1,1:0.75", ef.c_str());
+            WritePrivateProfileStringW(L"Engine", L"Fuel", L"diesel", ef.c_str());
+            EngineFor(a, ka, id1, ep, g1);
+            EngineLevelSet(a, true);
+            EngineProfileTake(a, 1300.0f, kAspTurbo, kFuelClass);
+            EngineFor(a, ka, id1, ep, g1);
+            const TorqueCurve ac = EngineCurveOf(a.profile, kClassCurves[kClassTruck], 2000.0f);
+            const bool truckPeak = a.profileFrom == kEngLevelTruck && !a.profile.custom && a.profile.peakRpm == 1300.0f && fabsf(CurvePeak(ac) - CurvePeak(EngineCurveFromPeak(1300.0f / 2000.0f, false))) < 0.001f;
+            EngineFor(o, ka, id3, ep, g1);
+            const bool kindClassFuel = o.profileFrom == kEngLevelKind && o.profile.fuel == kFuelClass && !o.profile.custom;
+            // a level holding Torque only falls through whole to the default, its curve and fuel with it
+            EngineFor(o, kc, id1, ep, g1);
+            EngineTake(o, 70, 0.0f);
+            const bool torqueOnly = o.kindOwn && o.profileFrom == kEngLevelDefault && o.profile.custom && o.profile.fuel == kFuelDiesel && o.torque == 70;
+            Check(truckPeak && kindClassFuel && torqueOnly,
+                  "engine profile: whole from one level, a truck's peak over the default's TorqueCurve gives the peak, a kind's class fuel over the default's diesel gives "
+                  "the class's, a level with Torque only takes the default's profile whole");
+            // the profile edit keeps a curve of its own in force with it at a level (and its text)
+            EngineProfileTake(o, 1500.0f, kAspNatural, kFuelPetrol);
+            wchar_t kept[256] = {};
+            GetPrivateProfileStringW(kEngineSection, EngineKeyOf(L"TorqueCurve", ep).c_str(), L"", kept, 256, truckFile(kc).c_str());
+            const bool curveKept = o.profileFrom == kEngLevelKind && o.profile.custom && o.profile.fuel == kFuelPetrol && !wcscmp(kept, L"0.3:0.7,0.5:1,1:0.75");
+            // Class curve at the kind's level: the class's curve there, the default untouched (point 4)
+            EngineProfileDrop(o);
+            EngineProfile after;
+            EngineProfileRead(ep, after);
+            const bool dropKind = o.profileFrom == kEngLevelKind && o.profile.own && !ProfileNotStock(o.profile) &&
+                                  EngineCurveOf(o.profile, kClassCurves[kClassTruck], 2000.0f).n == kClassCurves[kClassTruck].n && after.custom && after.peakRpm == 950.0f &&
+                                  GetFileAttributesW(ef.c_str()) != INVALID_FILE_ATTRIBUTES;
+            Check(curveKept && dropKind, "engine profile: an edit at a level keeps the curve of its own in force, Class curve at the kind's level gives the class's curve "
+                                         "there and leaves the default as it is");
+            // Make this the engine's default copies the profile whole; Class curve at the default level keeps Torque=
+            EngineFor(a, ka, id1, ep, g1);
+            EngineToDefault(a);
+            EngineProfile copied;
+            wchar_t copiedCurve[256];
+            EngineProfileRead(ep, copied, copiedCurve);
+            const bool toDefault = copied.peakRpm == 1300.0f && copied.fuel == kFuelClass && !copied.custom && !copiedCurve[0];
+            EngineFor(b, kb, id2, ep, g1);
+            EngineOwnSet(b, false);
+            const bool bOff = b.profileFrom == kEngLevelDefault && b.profile.peakRpm == 1300.0f;
+            EngineProfileDrop(b);
+            EngineProfile gone;
+            const bool dropDefault = !EngineProfileRead(ep, gone) && EngineTorqueRead(ep) > 0 && GetFileAttributesW(ef.c_str()) != INVALID_FILE_ATTRIBUTES &&
+                                     b.profileFrom == kEngLevelNone && b.kindKept;
+            // Defaults leaves the engine file's profile alone (point 5)
+            EngineProfileWrite(ep, 1100.0f, kAspTurbo, kFuelClass);
+            EngineDefaults(b);
+            EngineProfile still;
+            const bool defaultsKeep = EngineProfileRead(ep, still) && still.peakRpm == 1100.0f;
+            Check(toDefault && bOff && dropDefault && defaultsKeep,
+                  "engine profile: Make this the engine's default copies the profile whole, Class curve at the default level takes the four keys out and keeps Torque= "
+                  "and the file, Defaults leaves the engine file's profile");
+            // This truck only and Every kind carry the profile keys with Torque (EngineLevelSet, the take-over's sections)
+            EngineFor(o, kc, id2, ep, g1);
+            EngineLevelSet(o, true);
+            EngineProfileTake(o, 1700.0f, kAspTurbo, kFuelClass);
+            const bool truckOwn = o.profileFrom == kEngLevelTruck && o.profile.peakRpm == 1700.0f;
+            // Every kind with the kind's set: the kind's (Class curve's marker) in force, the truck's kept; This truck only brings it back
+            EngineLevelSet(o, false);
+            const bool kindKeepsKind = o.profileFrom == kEngLevelKind && o.profile.own && o.profile.peakRpm == 0.0f && o.truckKept;
+            EngineLevelSet(o, true);
+            const bool truckBack = o.profileFrom == kEngLevelTruck && o.profile.peakRpm == 1700.0f;
+            // Every kind with no set for the kind: the truck's section goes up whole, its profile with it
+            EngineFor(o, kd, id1, ep, g1);
+            EngineLevelSet(o, true);
+            EngineProfileTake(o, 1800.0f, kAspNatural, kFuelClass);
+            EngineLevelSet(o, false);
+            wchar_t probeD[8] = {};
+            const bool movedUp = o.profileFrom == kEngLevelKind && o.profile.peakRpm == 1800.0f && o.profile.aspiration == kAspNatural && !o.truckKept &&
+                                 !GetPrivateProfileSectionW(SectionOf(kEngineSection, id1).c_str(), probeD, 8, truckFile(kd).c_str());
+            Check(truckOwn && kindKeepsKind && truckBack && movedUp, "engine profile: This truck only and Every kind move the profile with the level, as Torque");
+            cleanP();
+        }
+        // DropTruckIni keeps the file while [Engine] is in it
+        {
+            const std::wstring kf = truckFile(kind5);
+            SetupBegin(kSetupTruck, Wide(kind5));
+            WritePrivateProfileStringW(kSetupSections[kSetupTruck], L"TachClass", L"1", kf.c_str());
+            WritePrivateProfileStringW(kEngineSection, L"Own", L"1", kf.c_str());
+            DropTruckIni(kind5);
+            const bool kept = GetFileAttributesW(kf.c_str()) != INVALID_FILE_ATTRIBUTES;
+            WritePrivateProfileStringW(kEngineSection, nullptr, nullptr, kf.c_str());
+            DropTruckIni(kind5);
+            const bool gone = GetFileAttributesW(kf.c_str()) == INVALID_FILE_ATTRIBUTES;
+            Check(kept && gone, "engine: a truck's file with [Engine] in it stays when its scales go, with only [Truck] it goes");
+        }
+        clean();
+    }
+        // the files' names: a modded truck's stroke as "@", what no file's name may hold as "_"
+    Check(SetupFileName(L"mod_suv/1000001") == L"mod_suv@1000001" && SetupFileName(L"a:b*c?") == L"a_b_c_" &&
+              SetupFileName(L"gears 1.5 4 high 2") == L"gears 1.5 4 high 2" && truckFile("mod_suv/1000001").find(L"Gauges\\trucks\\mod_suv@1000001.ini") != std::wstring::npos,
+          "setups: a file's name from the truck's kind or the gearbox's name");
+    // the learned tops per truck kind and gearbox (BRIEF_gear_tops_per_truck.md): TopShare<n>.<gearbox> in the kind's
+    // file, two kinds with one gearbox's name each their own, an old Top4 in the gearbox's file not read as one, a
+    // share outside 0.85 to 1.15 counted and not used, a gearbox's name with = ; [ ] as _
+    {
+        const char *k1 = "top_kind_a", *k2 = "top_kind_b", *box = "g_top_test", *odd = "g=top;[x]";
+        for (const char *k : { k1, k2 }) DeleteFileW(truckFile(k).c_str());
+        DeleteFileW(SetupFile(kSetupGearbox, box).c_str());
+        SetupBegin(kSetupGearbox, Wide(box));
+        WritePrivateProfileStringW(kSetupSections[kSetupGearbox], L"Top4", L"21.10", SetupFile(kSetupGearbox, box).c_str());
+        float s1[kMaxGears], s2[kMaxGears], old[kMaxGears];
+        const bool oldOnly = GearTopShareRead(k1, box, s1) == 0 && GearTopRead(box, old) == 1 && s1[4] == 0.0f;
+        GearTopShareWrite(k1, box, 4, 1.005f);
+        GearTopShareWrite(k2, box, 4, 0.92f);
+        GearTopShareWrite(k2, odd, 3, 0.95f);
+        const bool each = GearTopShareRead(k1, box, s1) == 1 && fabsf(s1[4] - 1.005f) < 0.0001f && GearTopShareRead(k2, box, s2) == 1 && fabsf(s2[4] - 0.92f) < 0.0001f;
+        float s3[kMaxGears];
+        const bool cleaned = GearTopShareRead(k2, odd, s3) == 1 && fabsf(s3[3] - 0.95f) < 0.0001f && GearTopShareName(3, odd) == L"TopShare3.g_top__x_";
+        WritePrivateProfileStringW(kSetupSections[kSetupTruck], L"TopShare5.g_top_test", L"1.99", truckFile(k1).c_str());
+        int outside = 0;
+        const bool wild = GearTopShareRead(k1, box, s1, &outside) == 1 && outside == 1 && s1[5] == 0.0f;
+        Check(oldOnly && each && cleaned && wild,
+              "gear tops: kept per truck kind and gearbox as TopShare<n>.<gearbox>, two kinds of one gearbox each their own; an old Top4=21.10 of the gearbox's file not read; "
+              "a share outside 0.85 to 1.15 counted and not used; = ; [ ] in a gearbox's name as _");
+        for (const char *k : { k1, k2 }) DeleteFileW(truckFile(k).c_str());
+        DeleteFileW(SetupFile(kSetupGearbox, box).c_str());
+    }
+    // a gearbox's hold into its file and back, held to its range
+    DeleteFileW(SetupFile(kSetupGearbox, "g_test_box").c_str());
+    float holdBack = 0.0f, holdWild = 0.0f;
+    const bool noHold = !GearHoldRead("g_test_box", holdBack);
+    GearHoldWrite("g_test_box", 1.7f);
+    const bool holdRead = GearHoldRead("g_test_box", holdBack);
+    WritePrivateProfileStringW(L"Gearbox", L"GearHold", L"9", SetupFile(kSetupGearbox, "g_test_box").c_str());
+    GearHoldRead("g_test_box", holdWild);
+    wchar_t boxName[32] = {};
+    GetPrivateProfileStringW(L"Gearbox", L"Name", L"", boxName, 32, SetupFile(kSetupGearbox, "g_test_box").c_str());
+    Check(noHold && holdRead && fabsf(holdBack - 1.7f) < 0.001f && holdWild == kGearHoldRange[1] && !wcscmp(boxName, L"g_test_box"),
+          "setups: a gearbox's hold in its own file with its name, read back, held to 1 to 3 seconds");
+    // a gearbox known by its gears finds the file of an earlier key of the same gears (BRIEF_manual_creep_and_hold.md):
+    // the four keys of one gearbox in the logs find the first's file; a gear more or one off by 5 % finds none
+    {
+        const char *keys[4] = { "gears 3.03638 6.05623 8.06946 14.1091 20.1488 high 10.0794", "gears 3.0269 6.04157 8.05135 14.0807 20.11 high 10.0587",
+                                "gears 3.03574 6.05523 8.06823 14.1072 20.1462 high 10.078", "gears 3.03703 6.05722 8.07069 14.1111 20.1515 high 10.0808" };
+        for (const char *k : keys) DeleteFileW(SetupFile(kSetupGearbox, k).c_str());
+        GearHoldWrite(keys[0], 2.4f);
+        char found[96] = "";
+        bool all = true;
+        for (const char *k : keys) all &= GearboxFileMatch(k, found, sizeof found) && !strcmp(found, keys[0]);
+        const bool more = !GearboxFileMatch("gears 3.03638 6.05623 8.06946 14.1091 20.1488 25.0 high 10.0794", found, sizeof found);
+        const bool off = !GearboxFileMatch("gears 3.18820 6.05623 8.06946 14.1091 20.1488 high 10.0794", found, sizeof found);
+        float hold = 0.0f;
+        const bool own = GearboxFileMatch(keys[2], found, sizeof found) && GearHoldRead(found, hold) && fabsf(hold - 2.4f) < 0.001f;
+        DeleteFileW(SetupFile(kSetupGearbox, keys[0]).c_str());
+        Check(all && more && off && own, "setups: a gearbox known by its gears finds its file under an earlier key of the same gears within 2 % (one gearbox's four keys "
+                                         "of the logs), and keeps its hold; a gear more, or one off by 5 %, finds none");
+    }
+    // an engine's profile: its peak torque's speed and aspiration into its file and back; a curve of its own taken
+    // in place of the one from the peak; what is out of range held to it; none without a file
+    const char *engineName = "test_engine_2";
+    DeleteFileW(SetupFile(kSetupEngine, engineName).c_str());
+    EngineProfile profile;
+    const bool noProfile = !EngineProfileRead(engineName, profile) && !profile.own;
+    EngineProfileWrite(engineName, 1950.0f, kAspNatural, kFuelPetrol);
+    const bool profileBack = EngineProfileRead(engineName, profile) && profile.own && profile.peakRpm == 1950.0f && profile.aspiration == kAspNatural && !profile.custom &&
+                             profile.fuel == kFuelPetrol;
+    EngineProfileWrite(engineName, 1950.0f, kAspNatural, kFuelClass);
+    EngineProfile classFuel;
+    const bool fuelGone = EngineProfileRead(engineName, classFuel) && classFuel.fuel == kFuelClass;
+    WritePrivateProfileStringW(L"Engine", L"Fuel", L"Diesel", SetupFile(kSetupEngine, engineName).c_str());
+    const bool fuelCase = EngineProfileRead(engineName, classFuel) && classFuel.fuel == kFuelDiesel;
+    WritePrivateProfileStringW(L"Engine", L"Fuel", nullptr, SetupFile(kSetupEngine, engineName).c_str());
+    const TorqueCurve fromPeak = EngineCurveOf(profile, kClassCurves[kClassScout], 4850.0f);
+    WritePrivateProfileStringW(L"Engine", L"TorqueCurve", L"0.3:0.7,0.5:1,1:0.75", SetupFile(kSetupEngine, engineName).c_str());
+    WritePrivateProfileStringW(L"Engine", L"Aspiration", L"7", SetupFile(kSetupEngine, engineName).c_str());
+    EngineProfileRead(engineName, profile);
+    const TorqueCurve own = EngineCurveOf(profile, kClassCurves[kClassScout], 4850.0f);
+    WritePrivateProfileStringW(L"Engine", L"PeakTorqueRpm", L"50000", SetupFile(kSetupEngine, engineName).c_str());
+    EngineProfile wildEngine;
+    EngineProfileRead(engineName, wildEngine);
+    Check(noProfile && profileBack && fabsf(CurvePeak(fromPeak) - 1950.0f / 4850.0f) < 0.001f && profile.custom && own.n == 3 && own.x[1] == 0.5f &&
+              profile.aspiration == kAspTurbo && wildEngine.peakRpm == kPeakRpmRange[1] && fuelGone && fuelCase,
+          "setups: an engine's profile in its own file, read back, its fuel too (none written for the class's); its curve from its peak torque's speed, "
+          "or its own written one; out of range held");
+    // its torque share: into its file and back, held to 10 to 100 percent; none set, all of it
+    const bool torqueNone = wildEngine.torque == 0.0f && TorqueHeld(3.0f, wildEngine.torque) == 3.0f;
+    EngineTorqueWrite(engineName, 25);
+    EngineProfile heldEngine;
+    EngineProfileRead(engineName, heldEngine);
+    const bool torqueBack = fabsf(heldEngine.torque - 0.25f) < 0.001f;
+    WritePrivateProfileStringW(L"Engine", L"Torque", L"5", SetupFile(kSetupEngine, engineName).c_str());
+    EngineProfileRead(engineName, heldEngine);
+    const bool torqueLow = heldEngine.torque == kTorqueShareRange[0];
+    WritePrivateProfileStringW(L"Engine", L"Torque", L"150", SetupFile(kSetupEngine, engineName).c_str());
+    EngineProfileRead(engineName, heldEngine);
+    Check(torqueNone && torqueBack && torqueLow && heldEngine.torque == kTorqueShareRange[1],
+          "setups: an engine's torque share in its file, read back and held to 10 to 100 percent; none set leaves the push as it is");
+    DeleteFileW(SetupFile(kSetupEngine, engineName).c_str());
+    // the sections of 0.13.9 and before moved out of Gauges.ini into the files, a key the file holds already kept
+    DeleteFileW(truckFile("mover/123").c_str());
+    DeleteFileW(SetupFile(kSetupGearbox, "g_moved").c_str());
+    truckPut("mover/123", L"TachClass", L"1");
+    WritePrivateProfileStringW(L"Truck:mover/123", L"TachClass", L"2", ini.c_str());
+    WritePrivateProfileStringW(L"Truck:mover/123", L"RedlineRpm", L"3000", ini.c_str());
+    WritePrivateProfileStringW(L"Gearbox:g_moved", L"GearHold", L"1.2", ini.c_str());
+    GaugeSettings afterMove;
+    ReadIni(afterMove);
+    wchar_t movedClass[16] = {}, movedRed[16] = {}, movedKind[32] = {}, iniNames[2048] = {};
+    GetPrivateProfileStringW(L"Truck", L"TachClass", L"", movedClass, 16, truckFile("mover/123").c_str());
+    GetPrivateProfileStringW(L"Truck", L"RedlineRpm", L"", movedRed, 16, truckFile("mover/123").c_str());
+    GetPrivateProfileStringW(L"Truck", L"Kind", L"", movedKind, 32, truckFile("mover/123").c_str());
+    float movedHold = 0.0f;
+    const bool holdMoved = GearHoldRead("g_moved", movedHold) && fabsf(movedHold - 1.2f) < 0.001f;
+    GetPrivateProfileSectionNamesW(iniNames, 2048, ini.c_str());
+    bool leftInIni = false;
+    for (const wchar_t *n = iniNames; *n; n += wcslen(n) + 1) leftInIni = leftInIni || !_wcsnicmp(n, L"Truck:", 6) || !_wcsnicmp(n, L"Gearbox:", 8);
+    Check(!wcscmp(movedClass, L"1") && !wcscmp(movedRed, L"3000") && !wcscmp(movedKind, L"mover/123") && holdMoved && !leftInIni,
+          "setups: the trucks' and gearboxes' sections of Gauges.ini moved into their own files, what a file held already kept, none left behind");
 
     // the saves: the newest of Steam's CompleteSave*.cfg and Epic's CompleteSave*.dat in the folders looked in; a path
     // in the log with the profile's folder written %USERPROFILE%
@@ -12485,13 +12546,15 @@ int wmain(int argc, wchar_t **argv)
     KeyName(0, name, sizeof name);
     Check(!strcmp(name, "None"), "key: none by name");
 
-    if (argc > 1)
+    if (!g_userIni.empty())
     {
-        if (!CopyFileW(argv[1], ini.c_str(), FALSE))
+        if (!CopyFileW(g_userIni.c_str(), ini.c_str(), FALSE))
         {
-            printf("FAIL ini: %ls could not be copied (error %lu)\n", argv[1], GetLastError());
-            return 1;
+            printf("FAIL ini: %ls could not be copied (error %lu)\n", g_userIni.c_str(), GetLastError());
+            g_failed++;
+            return;
         }
+        GaugeSettings a, b; // ReadIni starts each from the defaults
         ReadIni(a);
         WriteIni(a);
         ReadIni(b);
@@ -12910,7 +12973,54 @@ int wmain(int argc, wchar_t **argv)
               "settings save: off the pass thread, the hand-over returns at once; two edits during a save give one more save with the newest values and the "
               "bindings of the one between; busy while it runs or waits (a reload waits for the pass after), not after");
     }
-    printf(g_failed ? "SETTINGS TEST FAILED (%d)\n" : "SETTINGS TEST OK\n", g_failed);
-    return g_failed ? 1 : 0;
+}
+
+static const struct { const wchar_t *name; void (*run)(); } kParts[] = {
+    { L"ini", PartIni }, { L"trucks", PartTrucks }, { L"suspension", PartSuspension }, { L"owned", PartOwned }, { L"rest", PartRest },
+};
+
+int wmain(int argc, wchar_t **argv)
+{
+    wchar_t path[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, path, MAX_PATH);
+    const std::wstring folder(path, wcsrchr(path, L'\\') + 1 - path);
+    int part = -1, word = 1;
+    for (int p = 0; argc > 1 && p < (int)(sizeof kParts / sizeof kParts[0]); p++)
+        if (!_wcsicmp(argv[1], kParts[p].name)) part = p, word = 2;
+    if (argc > word) g_userIni = argv[word];
+    if (part >= 0)
+    {
+        g_dir = folder + L"settings_" + kParts[part].name + L"\\";
+        CreateDirectoryW(g_dir.c_str(), nullptr);
+        TimesOpen();
+        kParts[part].run();
+        if (g_failed) printf("SETTINGS TEST FAILED (%d): %ls\n", g_failed, kParts[part].name);
+        else printf("SETTINGS TEST OK: %ls\n", kParts[part].name);
+        return g_failed ? 1 : 0;
+    }
+    // every part, each a run of its own as tools\test.jobs has them, one after another
+    int failedParts = 0;
+    for (const auto &one : kParts)
+    {
+        std::wstring command = L"\"" + std::wstring(path) + L"\" " + one.name;
+        if (!g_userIni.empty()) command += L" \"" + g_userIni + L"\"";
+        fflush(stdout);
+        STARTUPINFOW si = { sizeof si };
+        PROCESS_INFORMATION pi = {};
+        DWORD code = 1;
+        if (!CreateProcessW(path, &command[0], nullptr, nullptr, TRUE, 0, nullptr, nullptr, &si, &pi))
+            printf("FAIL settings test: the part %ls could not be started (error %lu)\n", one.name, GetLastError());
+        else
+        {
+            WaitForSingleObject(pi.hProcess, INFINITE);
+            GetExitCodeProcess(pi.hProcess, &code);
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+        }
+        if (code) failedParts++;
+    }
+    if (failedParts) printf("SETTINGS TEST FAILED (%d of %d parts)\n", failedParts, (int)(sizeof kParts / sizeof kParts[0]));
+    else printf("SETTINGS TEST OK\n");
+    return failedParts ? 1 : 0;
 }
 #endif

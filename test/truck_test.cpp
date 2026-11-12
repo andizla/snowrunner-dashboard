@@ -1749,15 +1749,11 @@ static void PhysicsRateB2Test()
     }
 }
 
-int main()
+// The checks of main, in main's order, cut into functions so that the compiler's optimizer does not take one function of
+// 5 900 lines (BRIEF_tests_time.md, M4): the same checks in the same order, the same compile switches. main holds the
+// truck's objects and hands them on by reference, as the one function's blocks shared them.
+static void TruckTestsRead(TruckRefs &r, TruckRaw &t, World &w, GaugeSettings &s, GaugeState &st)
 {
-    TruckRefs r;
-    TruckRaw t;
-    World w;
-    GaugeSettings s;
-    GaugeState st;
-    SettingsDefaults(s);
-
     MakeGame();
     Check(TruckFind(kMemory, r) && r.vehicle == kVehicle && r.action == kAction && r.wheels == 4, "find: the driven truck's objects and its four wheels");
     Check(TruckRead(kMemory, r, t) && t.flags == 7 && t.gear == 3 && t.automatic == 1 && Near(t.powerFactor, 1.0f) && Near(t.throttle, -0.6f) && !t.handbrake && t.awd &&
@@ -2517,7 +2513,10 @@ int main()
     readEngine();
     Check(mismatch && nothing && noWay && noData && otherDriveTrain && otherTruck && otherControl && exeLeftAlone && untouched && oddDamage && engine[0] == 200,
           "write: nothing goes to an engine that does not take what its record says, to a handle without data, to another truck, into the exe, or to damage that reads as no engine's");
+}
 
+static void TruckTestsTwo(TruckRefs &r, TruckRaw &t)
+{
     // which truck this is
     {
         MakeGame();
@@ -3171,7 +3170,10 @@ int main()
               "torque cut's throttle hold: for the published action the drive's throttle is 1 and B4 is written 1 before it runs, over the creep's share; "
               "another action passes, a stale slot gives the creep its share again, a cleared one leaves the throttle and B4 as they came");
     }
+}
 
+static void TruckTestsThree()
+{
     // the wheel speed cap in the wheels' drive's hook (BRIEF_drivetrain_2c_wheel_cap.md with the Reviewer's addendum, its
     // part 2 and the lead's S1): four wheels of bodies the stand-in drive pushes by 1 rad/s about their axles (the first's
     // of length 2); the fourth not driven. A downshift at 2 x the cap writes nothing until the wheels are at the guard
@@ -3985,6 +3987,10 @@ int main()
               "off; nothing to lock keeps no state; the lock byte is held only while every driven axle is Locked, the one the mod set is cleared when an axle leaves, one the player set is not");
         Check(lineOk && carried, "differential by axle, the display: each driven axle named front to back where they differ, Locked with no bite said so, the one name where alike; the types reach the record");
     }
+}
+
+static void TruckTestsFour()
+{
     // the drive display's feed in the drive's hook, on a made up truck listed rear right, front left, rear left, front
     // right: the rear driven (type 1), the front with all wheel drive (type 2). Rolling radius 0.5, so 4 rad/s is 2 m/s,
     // each wheel body moving at 2 m/s forward. The stand-in drive adds g_ddPush to each wheel
@@ -4463,7 +4469,10 @@ int main()
               "winch probe: with the probe off or no truck the job rests whatever the key does; a fault in the set or the read ends the calls; the truck update is asked "
               "for only with Probe=1 and the action bound, at any Gearbox");
     }
+}
 
+static void TruckTestsFive()
+{
     // the chassis push in the wheels' drive's hook (BRIEF_chassis_push.md): four driven wheels, two on the chassis, one on a
     // rocker, one on a fixed body (an inverse mass of 0); the stand-in drive pushes each parent by 1 m/s forward and 0.5
     // rad/s of turn. With the factor's assumption published (PushGive): the shove (B4 0.9 over an assumed 0.25, F 3: k 2/3,
@@ -4981,7 +4990,10 @@ int main()
               "gearbox hooks: only functions found once and not held are hooked, each other one with its reason; a second attach changes nothing; the unhook "
               "gives the functions back; a failed transaction hooks none");
     }
+}
 
+static void TruckTestsSix(TruckRefs &r, TruckRaw &t, World &w)
+{
     // the probe's text and what makes it write
     MakeGame();
     TruckFind(kMemory, r);
@@ -5648,7 +5660,10 @@ int main()
         const bool window = s.looks == 1 && s.fastest[0] == 0.0f && Near(s.least[0], -0.49f) && Near(s.most[0], -0.49f) && !SuspTravelStep(s, t, kVehicle);
         Check(frame && rise && still && window, "travel probe: a wheel's centre in a turned chassis's frame, its range and its speed by the game's clock; a standing clock adds nothing");
     }
+}
 
+static void TruckTestsSeven()
+{
     // the hook on the wheels' drive as a C++ function (BRIEF_suspension_step_probe.md, part 1): with no share and no
     // step look the drive gets its three arguments as they came; the look gets the call's action and seconds before
     // the drive; a throttle that is not a number takes the share, as the stub's maxss did
@@ -6260,6 +6275,10 @@ int main()
         Check(tuned && kept && back && ownAgain, "spring ownership: with a spring feature on a wheel the tune keeps its strength stock however the field changes, the damping "
                                                  "still its own; let go writes stock x SpringScale back and the tune takes it as its own");
     }
+}
+
+static void TruckTestsEight()
+{
     // the tune on the step (BRIEF_step_hook_writes.md, in this process's memory): the walk from the action finds each
     // wheel as the game's applyAction walks them, past a model whose wheel is not of the wheel class, and none for another
     // truck; each wheel's spring and damping land in one step together; a slider move writes over the hook's own word; a
@@ -6932,7 +6951,10 @@ int main()
         const bool gone = !s.display[(s.displays - 1) & 1].hit[0] && s.displays == 3;
         Check(first && kept && gone, "display figures: the place along the axis, a hit of the compression end kept for a second, a hanging wheel, the rest place taken standing");
     }
+}
 
+static void TruckTestsNine()
+{
     // the wheels' places in the chassis for the air suspension's plane: one axle of two, and two axles of two
     static const float kAlong2[2] = { 0.0f, 0.0f }, kAcross2[2] = { 0.8f, -0.8f };
     static const float kAlong4[4] = { 1.5f, 1.5f, -1.5f, -1.5f }, kAcross4[4] = { 0.8f, -0.8f, 0.8f, -0.8f };
@@ -7630,7 +7652,25 @@ int main()
         Check(said && change && !WorldSame(a, b) && kWorldLinesCap == 100,
               "game words with no truck: the garage's flag and its pointer as read in one line; another pointer or another flag is a change; at most 100 lines");
     }
+}
 
+int main()
+{
+    TruckRefs r;
+    TruckRaw t;
+    World w;
+    GaugeSettings s;
+    GaugeState st;
+    SettingsDefaults(s);
+    TruckTestsRead(r, t, w, s, st);
+    TruckTestsTwo(r, t);
+    TruckTestsThree();
+    TruckTestsFour();
+    TruckTestsFive();
+    TruckTestsSix(r, t, w);
+    TruckTestsSeven();
+    TruckTestsEight();
+    TruckTestsNine();
     PhysicsRateTest();
     PhysicsRateB2Test();
     RealImageTest();
