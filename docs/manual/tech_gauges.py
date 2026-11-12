@@ -1341,6 +1341,17 @@ that blink (engine damage, oil, tire) are flagged in their own word, so a reader
 The tire mod reads the outside temperature from here. Other mods' authors get the layout and the read rule in
 <code>docs\\SnowRunnerGauges_State.h</code> and its guide <code>SnowRunnerGauges_State.md</code> (CC0); a reader maps the whole block
 (size 0) and checks each field against the size, so it reads version 1 and 2 alike.</p>
+<p><b>The quick winch.</b> <code>quick_winch.h</code>, <code>QuickWinchFind</code> in <code>game_code.h</code>. The game's quick winch
+key ends in one method of 29 bytes that only raises a request byte on the player's controller; the player's truck update makes the
+winch a frame later. The method is found in three steps: the hash of the script native's name once in the code, the thunk named just
+before it, the call at thunk + 0x5D, and the method's shape, which holds the store of the request byte
+(<code>quick winch: the game's request at +</code>). Any miss gives one line, no hook and a greyed row. The hook is attached alone in its
+own transaction the first time <code>QuickWinch</code> is not 0 (<code>quick winch: the game's request is hooked</code>, or
+<code>quick winch: the game's request could not be hooked</code>, and then the row is greyed too). A refusal is a
+return without the call, so nothing is raised and nothing is pending. The mod's thread posts the driven truck, its speed and the
+setting once a pass; the hook reads only those. It refuses under Off, and under Standing only at 0.5 m/s and above, for the driven
+truck alone and only while the last pass is no older than 250 ms. Each refusal is one line, at most one a second
+(<code>quick winch: refused</code>). The settings line is <code>settings: quick winch</code>.</p>
 <p><b>A lock limits the steering.</b> <code>lock_steer.h</code>. The game steers a wheel to its most angle times the stick, and
 keeps that most angle as a float at wheel + 0xB8. One pattern of the game's code proves the place, found once
 (<code>steering: the game's steering product at +</code>); where it is not found nothing is ever written. While an axle is locked

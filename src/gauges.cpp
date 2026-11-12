@@ -58,6 +58,7 @@ int NgMenuKeyFromIni(); // the menu's key, which a capture never binds
 #include "winch_out.h"
 #include "lock_steer.h"
 #include "truck_type.h"
+#include "quick_winch.h"
 
 static HMODULE g_self = nullptr;
 static std::wstring g_dir; // the game's folder, with the last backslash
@@ -834,6 +835,7 @@ static void WriteIni(const GaugeSettings &s)
     whole(L"HeldGearSlip", s.heldGearSlip);
     whole(L"PushShare", s.pushShare);
     whole(L"DiffLockBite", s.diffLockBite);
+    whole(L"QuickWinch", s.quickWinch);
     whole(L"LockSteerFront", s.lockSteerFront);
     whole(L"LockSteerRear", s.lockSteerRear);
     whole(L"DiffType", s.diffType);
@@ -1275,6 +1277,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; PushShare (with Powertrain): the percent of the surge at speed the game's chassis push may carry over the mod's pull, 0 to 100 (0; 100 as before; no box).\n"
                         L"; DiffLockBite (with Powertrain): how firmly the diff lock ties the driven wheels together, 0 to 100 (0: the game lock; 100: one shaft).\n"
                         L";   It acts on a truck whose diff lock is always on too. Such a truck then scrubs in every turn on hard ground.\n"
+                        L"; QuickWinch: the quick winch of the game on its key: 0 as the game has it, 1 only while the truck stands (the default), 2 never from that key.\n"
                         L"; LockSteerFront, LockSteerRear (with Powertrain): the percent of the steering left while a differential is locked, 30 to 100 (60 and 85; 100 leaves it all).\n"
                         L";   Front: an axle that steers is locked. Rear: another driven axle is. With both the smaller counts. A truck whose lock is always on has it all the time.\n"
                         L"; DiffType (with Powertrain, in the gear positions of the mod gearbox): 0 Auto, 1 Open, 2 Limited slip, 3 Locked. Auto is Locked where the lock is always on, else Open.\n"
@@ -1357,6 +1360,7 @@ static void ReadIni(GaugeSettings &s)
     s.heldGearSlip = IniInt(L"HeldGearSlip", s.heldGearSlip, ini);
     s.pushShare = IniInt(L"PushShare", s.pushShare, ini);
     s.diffLockBite = IniInt(L"DiffLockBite", s.diffLockBite, ini);
+    s.quickWinch = IniInt(L"QuickWinch", s.quickWinch, ini);
     s.lockSteerFront = IniInt(L"LockSteerFront", s.lockSteerFront, ini);
     s.lockSteerRear = IniInt(L"LockSteerRear", s.lockSteerRear, ini);
     s.diffType = IniInt(L"DiffType", s.diffType, ini);
@@ -3969,6 +3973,72 @@ static void (*g_damageUpdate)(uint64_t) = nullptr;
 static void OnTruckFrame(void *first, float step);
 static bool g_truckFrames = false; // the truck update is hooked: its jobs are dealt
 static bool g_lockPattern = false; // the diff lock's setter found once at the code look: the kind is at vehicle + 0xE8 (BRIEF_diff_lock_bite.md)
+// The game's quick winch request (quick_winch.h): the method behind the hook, what the mod's thread posts for it, and
+// whether it was found, is hooked, or could not be hooked.
+typedef void (*QuickWinchFn)(void *vehicle);
+static QuickWinchFn g_quickWinchGame = nullptr;
+static QuickWinchState g_quickWinch = {};
+static bool g_quickWinchFound = false, g_quickWinchHooked = false, g_quickWinchFailed = false;
+
+// The rule under its own fault guard: a fault here turns the rule off for the game and the press goes through.
+static bool QuickWinchRuleGuarded(void *vehicle)
+{
+    __try
+    {
+        return QuickWinchHookRule(g_quickWinch, (uint64_t)vehicle, GetTickCount64());
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        InterlockedExchange(&g_quickWinch.fault, 1);
+        return false;
+    }
+}
+
+// On the game's thread, in place of the game's method: a refusal is a return without the call (nothing is raised, so
+// nothing is pending). No log, no lock, no game memory read.
+static void QuickWinchHook(void *vehicle)
+{
+    if (!g_quickWinch.fault && QuickWinchRuleGuarded(vehicle)) return;
+    g_quickWinchGame(vehicle);
+}
+
+// On the mod's thread, each pass with a truck read: what the hook goes by, the hook itself the first time the setting
+// asks for it (alone in its transaction, so a failure takes no other hook with it), and one line a refusal, at most
+// one a second. vehicle: the driven truck's, 0 where none is driven.
+static void QuickWinchPass(const GaugeSettings &s, uint64_t vehicle, float speed)
+{
+    static LONG said = 0;
+    static unsigned long long saidAt = 0;
+    static bool saidFault = false;
+    const unsigned long long now = GetTickCount64();
+    QuickWinchPost(g_quickWinch, vehicle, speed, s.quickWinch, now);
+    if (g_quickWinchFound && !g_quickWinchHooked && !g_quickWinchFailed && s.quickWinch != kQuickWinchGame)
+    {
+        void **targets[1] = { (void **)&g_quickWinchGame };
+        void *const hooks[1] = { (void *)QuickWinchHook };
+        const long error = GearboxAttach(targets, hooks, 1);
+        g_quickWinchHooked = error == NO_ERROR;
+        g_quickWinchFailed = !g_quickWinchHooked;
+        if (g_quickWinchHooked) Log(L"quick winch: the game's request is hooked (QuickWinch %d); a press is refused by the setting, for the driven truck alone, on a pass no older than %llu ms",
+                                    s.quickWinch, kQuickWinchFreshMs);
+        else Log(L"quick winch: the game's request could not be hooked (error %ld), so the game does as it does", error);
+    }
+    if (g_quickWinch.fault && !saidFault)
+    {
+        saidFault = true;
+        Log(L"QUICK WINCH: the mod's rule faulted on the game's thread, so every press goes through until the game is started again");
+    }
+    const LONG refused = g_quickWinch.refused;
+    if (refused != said && now - saidAt >= 1000)
+    {
+        char line[160];
+        QuickWinchLine(line, sizeof line, g_quickWinch.refusedMode, QuickWinchFloat(g_quickWinch.refusedSpeedBits), refused - said);
+        Log(L"%S", line);
+        said = refused;
+        saidAt = now;
+    }
+}
+
 static TruckTypePlace g_typePlace = { false, 0, 0, 0, "" }; // the game's list of truck records, found at the code look (BRIEF_scout_by_truck_type.md)
 static bool g_steerPattern = false; // the steering's product found once at the code look: the most angle is at wheel + 0xB8 (BRIEF_lock_steering.md, M1)
 
@@ -4073,6 +4143,16 @@ static void GameCodeLook(const GaugeSettings &s)
         g_steerPattern = SteerPlaceFind(code.data(), from, to, at, why);
         if (g_steerPattern) Log(L"steering: the game's steering product at +%zx holds the wheel's most angle at wheel + 0xB8; a lock limits the steering with LockSteerFront or LockSteerRear under 100", at);
         else Log(L"steering: %S, so a lock never limits the steering in this game and nothing is written", why);
+    }
+    {
+        QuickWinchPlace quick = {};
+        if (QuickWinchFind(code.data(), from, to, quick))
+        {
+            g_quickWinchGame = (QuickWinchFn)(g_base + quick.method);
+            g_quickWinchFound = true;
+            Log(L"quick winch: the game's request at +%zx, behind the thunk at +%zx; hooked once QuickWinch asks for it", quick.method, quick.thunk);
+        }
+        else Log(L"quick winch: %S, so the quick winch stays as the game has it and the setting is greyed", quick.why);
     }
     {
         if (TruckTypePlaceFind(code.data(), from, to, g_typePlace))
@@ -4342,6 +4422,8 @@ static void LogSettings(const GaugeSettings &s)
         Log(L"settings: diff lock bite %d (DiffLockBite; 0 the game's lock, 100 one shaft), the differential's type %d (DiffType; 0 Auto, 1 Open, 2 Limited slip, 3 Locked), low range slip %d (LowRangeSlip; 0 the gear's own wheel cap in L-, L and R, 100 the cap of the highest low gear)", s.diffLockBite, s.diffType, s.lowRangeSlip);
         Log(L"settings: the steering left with a lock in: %d percent while an axle that steers is locked (LockSteerFront), %d while another driven axle is (LockSteerRear); 100 and 100 is off%s",
             s.lockSteerFront, s.lockSteerRear, LockSteerOn(s.powertrain, s.lockSteerFront, s.lockSteerRear) ? L"" : L" (off now)");
+        Log(L"settings: quick winch %d (QuickWinch; 0 as the game has it, 1 only while the truck stands, 2 never from its key)%s", s.quickWinch,
+            g_quickWinchFound ? L"" : L"; the game's method is not found, so the game does as it does");
         Log(L"settings: held gear slip %d, %S (HeldGearSlip; 0 a numbered gear held by hand has the governor, 1 the cap of L+ in the gears near it, 2 the wheel cap in every gear)", s.heldGearSlip,
             HeldSlipName(s.heldGearSlip));
         Log(L"settings: air brakes %s (AirBrakes of the truck file: %d; -1 no choice, every class but the scout has them); the spring brakes hold under %.1f bar and let go at %.1f",
@@ -6816,6 +6898,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     DiffPass(w, m, s, driving && !held && same, raw);
     LockPass(w, m, s, driving && !held && same, GetTickCount64());
     LockSteerPass(w, m, s, driving, held, same, raw, GetTickCount64());
+    QuickWinchPass(s, driving ? w.refs.vehicle : 0, raw.speed);
     if (!(driving && !held && same))
     {
         CreepGive(0, 0.0f);
@@ -9858,6 +9941,7 @@ static DWORD WINAPI Run(void *)
             // the steering left while a lock limits it (lock_steer.h): on the tab under the two rows and in the Drive display's line
             v.steerPercent = driving && watch.steer.known ? LockSteerPercent(watch.steer.share) : 0;
             v.steerNoRoute = !g_steerPattern;
+            v.quickWinchNoRoute = !g_quickWinchFound || g_quickWinchFailed;
             v.drive.steer = (uint8_t)v.steerPercent;
             for (int a = 0; driving && a < watch.axleRows.axles && a < kAxleRowsMost; a++)
             {
@@ -10118,7 +10202,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.overRevDamage == b.overRevDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
            a.springFront == b.springFront && a.dampingFront == b.dampingFront && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.hiddenWarnings == b.hiddenWarnings && a.warnFuel == b.warnFuel && a.warnEngine == b.warnEngine && a.warnGearbox == b.warnGearbox && a.warnCoolant == b.warnCoolant && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
-           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.lockSteerFront == b.lockSteerFront && a.lockSteerRear == b.lockSteerRear && a.heldGearSlip == b.heldGearSlip && a.lowRangeSlip == b.lowRangeSlip && a.diffType == b.diffType && a.physicsRate == b.physicsRate && a.engineBrake == b.engineBrake && a.winchOutRate == b.winchOutRate && a.winchOutStep == b.winchOutStep && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
+           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.quickWinch == b.quickWinch && a.lockSteerFront == b.lockSteerFront && a.lockSteerRear == b.lockSteerRear && a.heldGearSlip == b.heldGearSlip && a.lowRangeSlip == b.lowRangeSlip && a.diffType == b.diffType && a.physicsRate == b.physicsRate && a.engineBrake == b.engineBrake && a.winchOutRate == b.winchOutRate && a.winchOutStep == b.winchOutStep && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
            a.camberGainFront == b.camberGainFront && a.camberGainRear == b.camberGainRear && a.camberRestFront == b.camberRestFront && a.camberRestRear == b.camberRestRear &&
            !memcmp(a.diffAxle, b.diffAxle, sizeof a.diffAxle) && a.airBrakes == b.airBrakes;
 }
@@ -10281,6 +10365,21 @@ static void PartIni()
               wide.lockSteerRear == 100 && !SameSettings(fresh, asked),
               "settings: LockSteerFront and LockSteerRear are 60 and 85 by default, 45 and 100 read back, 12 held to 30 and 250 to 100");
         WriteIni(fresh);
+        // the quick winch (BRIEF_quick_winch.md): QuickWinch 1 by default, 0 and 2 read back, anything else is 1
+        GaugeSettings winch = fresh, winchBack[2], winchWide;
+        for (int i = 0; i < 2; i++)
+        {
+            winch.quickWinch = i ? 2 : 0;
+            WriteIni(winch);
+            ReadIni(winchBack[i]);
+            SettingsClamp(winchBack[i]);
+        }
+        WritePrivateProfileStringW(kIniSection, L"QuickWinch", L"7", ini.c_str());
+        ReadIni(winchWide);
+        SettingsClamp(winchWide);
+        Check(fresh.quickWinch == 1 && winchBack[0].quickWinch == 0 && winchBack[1].quickWinch == 2 && winchWide.quickWinch == 1 && !SameSettings(fresh, winch),
+              "settings: QuickWinch is 1 by default (only while the truck stands), 0 and 2 read back, 7 is 1");
+        WriteIni(fresh);
     }
     // the torque cut wants Powertrain, Gearbox=2, EngineShare above 0 and ModEngineSpeed (the Reviewer's M2): with the
     // game's own engine speed it is not published, so the throttle and B4 pass as they came
@@ -10374,6 +10473,7 @@ static void PartIni()
     c.pushShare = 60;
     c.diffLockBite = 75;
     c.lockSteerFront = 45;
+    c.quickWinch = 2;
     c.lockSteerRear = 70;
     c.lowRangeSlip = 40;
     c.heldGearSlip = 2;
@@ -10397,7 +10497,7 @@ static void PartIni()
                             c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.overRevDamage != d.overRevDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springFront != d.springFront && c.dampingFront != d.dampingFront && c.extraTravel != d.extraTravel && c.frameFlex != d.frameFlex && c.twistRange != d.twistRange && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
                             c.demo != d.demo && c.probe != d.probe && c.keepLogs != d.keepLogs && c.soundVolume != d.soundVolume && c.hiddenWarnings != d.hiddenWarnings && c.warnFuel != d.warnFuel && c.warnEngine != d.warnEngine && c.warnGearbox != d.warnGearbox && c.warnCoolant != d.warnCoolant && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
-                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.diffLockBite != d.diffLockBite && c.lockSteerFront != d.lockSteerFront && c.lockSteerRear != d.lockSteerRear && c.heldGearSlip != d.heldGearSlip && c.lowRangeSlip != d.lowRangeSlip && c.diffType != d.diffType && c.physicsRate != d.physicsRate && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
+                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.diffLockBite != d.diffLockBite && c.quickWinch != d.quickWinch && c.lockSteerFront != d.lockSteerFront && c.lockSteerRear != d.lockSteerRear && c.heldGearSlip != d.heldGearSlip && c.lowRangeSlip != d.lowRangeSlip && c.diffType != d.diffType && c.physicsRate != d.physicsRate && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
     WriteIni(c);
     ReadIni(b);
     Check(allChanged, "ini: the test changes every setting from its default");
@@ -10418,7 +10518,7 @@ static void PartIni()
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 164, "ini: the help text survives a write (164 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 165, "ini: the help text survives a write (165 comment lines)");
     // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
     {
         char none[32] = "x", tab[32] = {}, kept[32] = {};

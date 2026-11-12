@@ -1496,6 +1496,17 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             bindingRow(kViewActions - 1);
             PageTip("Lets the winch rope out while held. A test: it works with Probe=1 alone. Bind a key or button the game does not use.");
         }
+        // the game's quick winch on its key (BRIEF_quick_winch.md): acts at once; greyed where the game's method is not found
+        {
+            static const char *quick[3] = { "As the game", "Standing only", "Off" };
+            ImGui::BeginDisabled(view.quickWinchNoRoute);
+            PageLabel("Quick winch", labelX);
+            ImGui::SetNextItemWidth(w);
+            changed(ImGui::Combo("##quickwinch", &s.quickWinch, quick, 3));
+            ImGui::EndDisabled();
+            PageTip("The quick winch of the game on its key. Standing only: it attaches only while the truck stands, so on the move the key does its other function alone. Off: never from that key.");
+            if (view.quickWinchNoRoute) ImGui::TextDisabled("Quick winch: not in this build. The game does as it does.");
+        }
         if (view.controllers) ImGui::TextDisabled("%d wheel or shifter read through DirectInput.", view.controllers);
     }
     else if (open && tab == kTabSounds)

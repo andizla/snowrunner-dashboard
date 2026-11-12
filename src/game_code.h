@@ -681,6 +681,65 @@ inline bool TruckTypePlaceFind(const uint8_t *code, size_t from, size_t to, Truc
     return true;
 }
 
+// ---- the game's quick winch request (BRIEF_quick_winch.md part B; review\research_quick_winch.md) ----
+// Three steps, each a stop where it fails. The script native's name hash stands once in the code, as the immediate of a
+// mov edx, with the lea r8 of its thunk just before it. The thunk calls the method at kQuickWinchCallAt (mov rcx, rdi;
+// call). The method is 29 bytes whose shape holds the store of the request byte: it raises the request on the player's
+// controller and does nothing else. The method is what the mod hooks.
+static const char *const kQuickWinchHashPattern = "BA 5C D3 EF 7A";
+static const size_t kQuickWinchCallAt = 0x5D;
+static const char *const kQuickWinchMethodPattern = "48 83 EC 28 E8 ? ? ? ? 48 8B 08 48 85 C9 74 07 C6 81 89 01 00 00 01 48 83 C4 28 C3";
+
+struct QuickWinchPlace
+{
+    size_t hash, thunk, method; // the offsets in the code, 0 = not found
+    const char *why;            // what was not found (a string literal), "" when all three were
+};
+
+inline bool QuickWinchFind(const uint8_t *code, size_t from, size_t to, QuickWinchPlace &out)
+{
+    out = QuickWinchPlace{ 0, 0, 0, "" };
+    uint8_t bytes[kPatternMax], mask[kPatternMax];
+    size_t at = 0;
+    int count = 0;
+    int length = PatternParse(kQuickWinchHashPattern, bytes, mask);
+    if (!PatternFind(code, from, to, bytes, mask, length, at, count) || count != 1)
+    {
+        out.why = count > 1 ? "the quick winch's name stands more than once" : "the quick winch's name was not found";
+        return false;
+    }
+    if (at < from + 7 || code[at - 7] != 0x4C || code[at - 6] != 0x8D || code[at - 5] != 0x05)
+    {
+        out.why = "the quick winch's name has no thunk before it";
+        return false;
+    }
+    int32_t rel = 0;
+    memcpy(&rel, code + at - 4, 4);
+    const int64_t thunk = (int64_t)at + rel;
+    if (thunk <= (int64_t)from || thunk + (int64_t)kQuickWinchCallAt + 8 > (int64_t)to)
+    {
+        out.why = "the quick winch's thunk lies outside the code";
+        return false;
+    }
+    const size_t call = (size_t)thunk + kQuickWinchCallAt;
+    if (code[call] != 0x48 || code[call + 1] != 0x8B || code[call + 2] != 0xCF || code[call + 3] != 0xE8)
+    {
+        out.why = "the quick winch's thunk has another shape";
+        return false;
+    }
+    const size_t method = CallTarget(code, from, to, call + 3);
+    length = PatternParse(kQuickWinchMethodPattern, bytes, mask);
+    if (method == SIZE_MAX || method + (size_t)length > to || !PatternAt(code + method, bytes, mask, length))
+    {
+        out.why = "the quick winch's method has another shape";
+        return false;
+    }
+    out.hash = at;
+    out.thunk = (size_t)thunk;
+    out.method = method;
+    return true;
+}
+
 // ---- the game's gear torque, for the torque cut (BRIEF_drivetrain_2_torque_cut.md) ----
 // bool(vehicle, int gear, float *torque, float *start, float *a, float *top, float *gearSpeed): the gear's torque and
 // its curve (review\own_drivetrain_research.md A; RVA d73dc0 in 6adb8627, d73e50 in 6ab52f5d), found by its first

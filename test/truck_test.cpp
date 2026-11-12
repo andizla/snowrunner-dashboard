@@ -24,6 +24,7 @@
 #include "winch_out.h"
 #include "lock_steer.h"
 #include "truck_type.h"
+#include "quick_winch.h"
 #include "game_globals.h"
 #include "clock_scan.h"
 #include "suspension_scan.h"
@@ -702,6 +703,15 @@ static void RealImageTest()
     snprintf(line, sizeof line, "places in a real image (stamp %08x): the rope length's read at %zx, its set at %zx, the test of the winch's two active bytes at %zx%s%s", stamp,
              winchPlace.get, winchPlace.set, winchPlace.bytes, winchFound ? "" : "; ", winchPlace.why);
     Check(winchRight, line);
+    // the quick winch's request: the name's hash, its thunk and the method behind it (b5d1f9, b99480 and b30a00 on 6adb8627;
+    // b5d289, b99510 and b30a90 on 6ab52f5d); found on any build
+    QuickWinchPlace quickPlace;
+    const bool quickFound = QuickWinchFind(image.data(), from, to, quickPlace);
+    const bool quickRight = now ? quickFound && quickPlace.thunk == 0xb99480 && quickPlace.method == 0xb30a00
+                          : before ? quickFound && quickPlace.thunk == 0xb99510 && quickPlace.method == 0xb30a90 : quickFound;
+    snprintf(line, sizeof line, "places in a real image (stamp %08x): the quick winch's name at %zx, its thunk at %zx, its method at %zx%s%s", stamp, quickPlace.hash,
+             quickPlace.thunk, quickPlace.method, quickFound ? "" : "; ", quickPlace.why);
+    Check(quickRight, line);
     // the list of truck records, for a truck's TruckType: found once on any build, a record of 0x288 bytes with the text
     // at + 0xE8 on the three builds at hand
     TruckTypePlace typePlace;
@@ -7669,6 +7679,104 @@ static void TruckTestsNine()
               "game words with no truck: the garage's flag and its pointer as read in one line; another pointer or another flag is a change; at most 100 lines");
     }
 }
+
+// The quick winch (quick_winch.h; BRIEF_quick_winch.md part B): the find on made code, the rule, the hook's reads, the line.
+static void TruckTestsQuickWinch()
+{
+    // the find: the name's hash once, the thunk before it, the call at thunk + 0x5D, the method's shape
+    {
+        uint8_t bytes[kPatternMax], mask[kPatternMax];
+        const int methodLength = PatternParse(kQuickWinchMethodPattern, bytes, mask);
+        const size_t kHash = 0x207, kThunk = 0x800, kMethod = 0x1000;
+        auto made = [&]() {
+            std::vector<uint8_t> code(0x2000);
+            code[kHash - 7] = 0x4C, code[kHash - 6] = 0x8D, code[kHash - 5] = 0x05;     // lea r8, [the thunk]
+            RateRel(code, kHash - 4, kHash, kThunk);
+            RatePut(code, kHash, kQuickWinchHashPattern);                                // mov edx, the name's hash
+            const size_t call = kThunk + kQuickWinchCallAt;
+            code[call] = 0x48, code[call + 1] = 0x8B, code[call + 2] = 0xCF, code[call + 3] = 0xE8; // mov rcx, rdi; call the method
+            RateRel(code, call + 4, call + 8, kMethod);
+            RatePut(code, kMethod, kQuickWinchMethodPattern);
+            return code;
+        };
+        QuickWinchPlace p;
+        std::vector<uint8_t> code = made();
+        const bool found = QuickWinchFind(code.data(), 0, code.size(), p) && p.hash == kHash && p.thunk == kThunk && p.method == kMethod && !p.why[0];
+        code = made();
+        RatePut(code, 0x1800, kQuickWinchHashPattern);
+        const bool twice = !QuickWinchFind(code.data(), 0, code.size(), p) && !p.method && !strcmp(p.why, "the quick winch's name stands more than once");
+        code = made();
+        code[kHash + 1] ^= 1;
+        const bool noName = !QuickWinchFind(code.data(), 0, code.size(), p) && !strcmp(p.why, "the quick winch's name was not found");
+        code = made();
+        code[kHash - 6] = 0x8B;
+        const bool noLea = !QuickWinchFind(code.data(), 0, code.size(), p) && !strcmp(p.why, "the quick winch's name has no thunk before it");
+        code = made();
+        RateRel(code, kHash - 4, kHash, 0x1FF0);                                         // the thunk's call would lie past the code
+        const bool thunkOut = !QuickWinchFind(code.data(), 0, code.size(), p) && !strcmp(p.why, "the quick winch's thunk lies outside the code");
+        code = made();
+        code[kThunk + kQuickWinchCallAt + 2] = 0xCE;                                     // mov rcx, rsi: a changed thunk
+        const bool thunkShape = !QuickWinchFind(code.data(), 0, code.size(), p) && !strcmp(p.why, "the quick winch's thunk has another shape");
+        code = made();
+        code[kMethod + 19] = 0x8A;                                                       // the store of the request byte at another offset
+        const bool storeMoved = !QuickWinchFind(code.data(), 0, code.size(), p) && !p.method && !strcmp(p.why, "the quick winch's method has another shape");
+        code = made();
+        code[kMethod + (size_t)methodLength - 1] = 0xCC;                                 // no ret at its end
+        const bool methodShape = !QuickWinchFind(code.data(), 0, code.size(), p);
+        code = made();
+        RateRel(code, kThunk + kQuickWinchCallAt + 4, kThunk + kQuickWinchCallAt + 8, 0x1FF8); // the method would end past the code
+        const bool methodOut = !QuickWinchFind(code.data(), 0, code.size(), p);
+        Check(found && twice && noName && noLea && thunkOut && thunkShape && storeMoved && methodShape && methodOut,
+              "quick winch, the find: a made thunk of the expected shape leads to the method; two hash hits, no hash, no thunk before it, a thunk outside the code or of "
+              "another shape, a method whose store of the request byte is at another offset or that ends otherwise are refused, each with its reason");
+    }
+    // the rule: Off, or Standing only at kStandStill and above, for the driven truck on a fresh pass
+    {
+        const float under = kStandStill - 0.001f;
+        const bool game = !QuickWinchRefuse(kQuickWinchGame, true, true, 0.0f) && !QuickWinchRefuse(kQuickWinchGame, true, true, 20.0f) && !QuickWinchRefuse(kQuickWinchGame, true, true, -20.0f);
+        const bool standing = !QuickWinchRefuse(kQuickWinchStanding, true, true, 0.0f) && !QuickWinchRefuse(kQuickWinchStanding, true, true, under) &&
+                              !QuickWinchRefuse(kQuickWinchStanding, true, true, -under) && QuickWinchRefuse(kQuickWinchStanding, true, true, kStandStill) &&
+                              QuickWinchRefuse(kQuickWinchStanding, true, true, -kStandStill) && QuickWinchRefuse(kQuickWinchStanding, true, true, 12.0f) &&
+                              QuickWinchRefuse(kQuickWinchStanding, true, true, -3.0f) && !QuickWinchRefuse(kQuickWinchStanding, true, true, NAN);
+        const bool off = QuickWinchRefuse(kQuickWinchOff, true, true, 0.0f) && QuickWinchRefuse(kQuickWinchOff, true, true, 12.0f) && QuickWinchRefuse(kQuickWinchOff, true, true, NAN);
+        const bool other = !QuickWinchRefuse(kQuickWinchOff, true, false, 0.0f) && !QuickWinchRefuse(kQuickWinchStanding, true, false, 30.0f);
+        const bool stale = !QuickWinchRefuse(kQuickWinchOff, false, true, 0.0f) && !QuickWinchRefuse(kQuickWinchStanding, false, true, 30.0f);
+        Check(game && standing && off && other && stale,
+              "quick winch, the rule: as the game nothing is refused; Standing only refuses at 0.5 m/s and above, forward and backward, and not just under it or with no "
+              "speed; Off refuses at any speed; another truck than the driven one passes at any speed; a stale pass passes");
+    }
+    // the hook's reads: what the mod's thread posted, the stamp's age, the counts, the line
+    {
+        QuickWinchState q = {};
+        const uint64_t truck = 0x10010000, otherTruck = 0x100D0000;
+        const bool nothingPosted = !QuickWinchHookRule(q, truck, 5000) && q.passed == 1 && q.refused == 0;
+        QuickWinchPost(q, truck, 3.0f, kQuickWinchStanding, 10000);
+        const bool moving = QuickWinchHookRule(q, truck, 10000) && QuickWinchHookRule(q, truck, 10250) && q.refused == 2 && q.refusedMode == kQuickWinchStanding &&
+                            QuickWinchFloat(q.refusedSpeedBits) == 3.0f;
+        const bool old = !QuickWinchHookRule(q, truck, 10251) && !QuickWinchHookRule(q, truck, 9999); // a pass older than 250 ms, and a clock behind the stamp
+        const bool another = !QuickWinchHookRule(q, otherTruck, 10100) && !QuickWinchHookRule(q, 0, 10100);
+        QuickWinchPost(q, truck, 0.2f, kQuickWinchStanding, 11000);
+        const bool stands = !QuickWinchHookRule(q, truck, 11010);
+        QuickWinchPost(q, truck, -0.2f, kQuickWinchOff, 12000);
+        const bool offNow = QuickWinchHookRule(q, truck, 12010) && q.refusedMode == kQuickWinchOff && q.refused == 3;
+        QuickWinchPost(q, 0, 0.0f, kQuickWinchOff, 13000);                                              // no truck is driven
+        const bool noTruck = !QuickWinchHookRule(q, truck, 13010) && !QuickWinchHookRule(q, 0, 13010);
+        QuickWinchPost(q, truck, 9.0f, kQuickWinchGame, 14000);
+        const bool asGame = !QuickWinchHookRule(q, truck, 14010) && q.refused == 3 && q.passed == 9;
+        char line[160], lineOff[160], lineMore[160];
+        QuickWinchLine(line, sizeof line, kQuickWinchStanding, -0.861f, 1);
+        QuickWinchLine(lineOff, sizeof lineOff, kQuickWinchOff, 4.0f, 1);
+        QuickWinchLine(lineMore, sizeof lineMore, kQuickWinchStanding, 2.0f, 3);
+        const bool lines = !strcmp(line, "quick winch: refused, the truck moves at 3.1 km/h (Standing only)") && !strcmp(lineOff, "quick winch: refused (Off)") &&
+                           !strcmp(lineMore, "quick winch: refused, the truck moves at 7.2 km/h (Standing only), 3 presses");
+        if (!(nothingPosted && moving && old && another && stands && offNow && noTruck && asGame && lines))
+            printf("     the hook: %d %d %d %d %d %d %d %d %d; passed %ld refused %ld; %s\n", nothingPosted, moving, old, another, stands, offNow, noTruck, asGame, lines, q.passed, q.refused, line);
+        Check(nothingPosted && moving && old && another && stands && offNow && noTruck && asGame && lines,
+              "quick winch, the hook: with nothing posted a press passes; the driven truck moving is refused on a pass up to 250 ms old and passes on an older one; "
+              "another truck passes; standing passes; Off refuses; no truck driven refuses nothing; the line names the speed and the setting");
+    }
+}
+
 // The game's TruckType: the rule, the read on a list made in the test's memory, the places from bytes
 // (BRIEF_scout_by_truck_type.md). Every name here is invented.
 static void TruckTestsTruckType()
@@ -8089,6 +8197,7 @@ int main()
     TruckTestsNine();
     TruckTestsLockSteer();
     TruckTestsTruckType();
+    TruckTestsQuickWinch();
     PhysicsRateTest();
     PhysicsRateB2Test();
     RealImageTest();

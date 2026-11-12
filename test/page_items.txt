@@ -301,3 +301,4 @@ x
 ##winchstep
 ##locksteerfront
 ##locksteerrear
+##quickwinch
