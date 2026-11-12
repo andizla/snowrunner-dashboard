@@ -23,6 +23,7 @@
 #include "game_code.h"
 #include "winch_out.h"
 #include "lock_steer.h"
+#include "truck_type.h"
 #include "game_globals.h"
 #include "clock_scan.h"
 #include "suspension_scan.h"
@@ -701,6 +702,14 @@ static void RealImageTest()
     snprintf(line, sizeof line, "places in a real image (stamp %08x): the rope length's read at %zx, its set at %zx, the test of the winch's two active bytes at %zx%s%s", stamp,
              winchPlace.get, winchPlace.set, winchPlace.bytes, winchFound ? "" : "; ", winchPlace.why);
     Check(winchRight, line);
+    // the list of truck records, for a truck's TruckType: found once on any build, a record of 0x288 bytes with the text
+    // at + 0xE8 on the three builds at hand
+    TruckTypePlace typePlace;
+    const bool typeFound = TruckTypePlaceFind(image.data(), from, to, typePlace);
+    const bool typeRight = typeFound && (!now || typePlace.list == 0x2AA24E8) && (!(now || before) || (typePlace.size == 0x288 && typePlace.text == 0xE8));
+    snprintf(line, sizeof line, "places in a real image (stamp %08x): the list of truck records at %zx, a record of 0x%x bytes, its TruckType at + 0x%x%s%s", stamp,
+             typePlace.list, typePlace.size, typePlace.text, typeFound ? "" : "; ", typePlace.why);
+    Check(typeRight, line);
     // the steering's product, for the steering with a lock in: found once on any build
     size_t steerAt = 0;
     const char *steerWhy = "";
@@ -7660,6 +7669,177 @@ static void TruckTestsNine()
               "game words with no truck: the garage's flag and its pointer as read in one line; another pointer or another flag is a change; at most 100 lines");
     }
 }
+// The game's TruckType: the rule, the read on a list made in the test's memory, the places from bytes
+// (BRIEF_scout_by_truck_type.md). Every name here is invented.
+static void TruckTestsTruckType()
+{
+    // M1: the text and the mass in, the class out
+    {
+        const float light = 5000.0f, mid = 6001.0f, under = 15999.0f, over = 16000.0f;
+        const bool scout = ClassByType("SCOUT", light, kClassTruck) == kClassScout && ClassByType("SCOUT", mid, kClassTruck) == kClassScout &&
+                           ClassByType("SCOUT", over, kClassTruck) == kClassScout && ClassByType("SCOUT", 0.0f, kClassHeavy) == kClassScout;
+        bool others = true;
+        for (const char *text : { "OFFROAD", "HIGHWAY", "HEAVY_DUTY", "HEAVY" })
+            others = others && ClassByType(text, light, kClassScout) == kClassTruck && ClassByType(text, 6000.0f, kClassScout) == kClassTruck &&
+                     ClassByType(text, mid, kClassScout) == kClassTruck && ClassByType(text, under, kClassScout) == kClassTruck &&
+                     ClassByType(text, over, kClassScout) == kClassHeavy && ClassByType(text, 0.0f, kClassHeavy) == kClassHeavy && ClassByType(text, NAN, kClassScout) == kClassScout;
+        bool nothing = true;
+        for (const char *text : { "Undefined", "scout", "Scout", "SCOUT ", " SCOUT", "offroad", "SPECIAL", "" })
+            nothing = nothing && TruckTypeSays(text) == kTypeSaysNothing && ClassByType(text, light, kClassTruck) == kClassScout && ClassByType(text, mid, kClassScout) == kClassTruck &&
+                      ClassByType(text, over, kClassScout) == kClassHeavy && ClassByType(text, 0.0f, kClassHeavy) == kClassHeavy;
+        nothing = nothing && TruckTypeSays(nullptr) == kTypeSaysNothing && ClassByType(nullptr, light, kClassTruck) == kClassScout;
+        // M4: the scales' own class over the type, the type over the weight
+        const bool order = ClassInForce(false, kClassHeavy, "SCOUT", 9000.0f) == kClassScout && ClassInForce(true, kClassHeavy, "SCOUT", 9000.0f) == kClassHeavy &&
+                           ClassInForce(true, kClassTruck, "SCOUT", 2000.0f) == kClassTruck && ClassInForce(false, kClassScout, "", 9000.0f) == kClassTruck &&
+                           ClassInForce(false, kClassScout, "OFFROAD", 4000.0f) == kClassTruck && ClassInForce(true, kClassScout, "OFFROAD", 4000.0f) == kClassScout &&
+                           ClassInForce(false, kClassHeavy, "OFFROAD", 0.0f) == kClassHeavy;
+        Check(order, "truck type, who overrules whom: the class of a truck's own scales goes over the game's TruckType, the type over the weight, the weight alone where no "
+                     "type was read, the plain class where neither is known");
+        Check(scout && others && nothing,
+              "truck type, the rule: SCOUT is a scout at any weight and with none; the four other values are never a scout, truck or heavy by the upper border alone, the "
+              "plain class with no weight; Undefined, lower case, a space, another value, an empty text and none go by the weight whole");
+    }
+    // M2: the read, on a list of five records of 0x120 bytes with the text at + 0xE8
+    {
+        const uint64_t kList = 0x20000000, kTypeModel = 0x20100000, kChars = 0x20200000, kPointers = kExe + 0x3000000,
+                       kNowhere = 0x700000000000ull; // nothing is made at kNowhere
+        const TruckTypePlace place = { true, 0x3000000, 0x120, 0xE8, "" };
+        Block(kList, 5 * 0x120);
+        Block(kTypeModel, 0x600);
+        Block(kChars, 0x1000);
+        Block(kPointers, 0x10);
+        const char *longName = "a_truck_with_a_long_name"; // 24 characters: behind a pointer in the model and in the record
+        auto record = [&](int i, const char *name, int flag, const char *type, uint64_t chars) {
+            const uint64_t at = kList + 0x120ull * (uint64_t)i;
+            const int32_t size = (int32_t)strlen(name);
+            Put(at, size);
+            Put(at + 4, (int32_t)flag);
+            if (flag == 1) for (int k = 0; k < size && k < 16; k++) Put(at + 8 + (uint64_t)k, name[k]);
+            else
+            {
+                Put(at + 8, chars);
+                if (chars >= kChars && chars < kChars + 0x1000) for (int k = 0; k < size; k++) Put(chars + (uint64_t)k, name[k]);
+            }
+            PutText(at + 0xE8, type, 0);
+        };
+        record(0, "first_one", 1, "OFFROAD", 0);
+        record(1, "small_one", 1, "SCOUT", 0);
+        record(2, longName, 0, "HEAVY", kChars + 0x100);
+        record(3, "third_one", 2, "HIGHWAY", 0);        // a flag the mod does not know: passed over
+        record(4, "plain_one", 1, "Undefined", 0);
+        auto ends = [&](uint64_t begin, uint64_t end) { Put(kPointers, begin); Put(kPointers + 8, end); };
+        auto look = [&](const char *name, TruckTypeRead &out, const TruckTypePlace &p) {
+            PutText(kTypeModel + 0x588, name, kChars + 0x800);
+            return TruckTypeLook(kMemory, p, kTypeModel, out);
+        };
+        ends(kList, kList + 5 * 0x120);
+        TruckTypeRead r;
+        const bool found = look("small_one", r, place) && r.found && !strcmp(r.text, "SCOUT") && !strcmp(r.name, "small_one") && r.records == 5 && !r.why[0];
+        const bool foundLong = look(longName, r, place) && !strcmp(r.text, "HEAVY") && !strcmp(r.name, longName);
+        const bool foundLast = look("plain_one", r, place) && !strcmp(r.text, "Undefined");
+        const bool notFound = !look("no_such_one", r, place) && !r.found && !r.text[0] && r.records == 5 && !strcmp(r.why, "no truck record has the name") && !strcmp(r.name, "no_such_one");
+        const bool oddFlag = !look("third_one", r, place) && !strcmp(r.why, "no truck record has the name");
+        const bool shorter = !look("small_on", r, place) && !look("small_one_", r, place);
+        ends(kList + 0x120, kList);
+        const bool overEnd = !look("small_one", r, place) && !strcmp(r.why, "the list of truck records begins after its end");
+        ends(kList, kList + 4097ull * 0x120);
+        const bool tooMany = !look("small_one", r, place) && !strcmp(r.why, "the list of truck records is too long");
+        ends(kList, kList + 5 * 0x120);
+        // the truck's name: none, and one of 300 characters
+        uint8_t text[0x20] = {};
+        uint64_t size = 0, room = 15;
+        memcpy(text + 0x10, &size, 8);
+        memcpy(text + 0x18, &room, 8);
+        Put(kTypeModel + 0x588, text);
+        const bool noName = !TruckTypeLook(kMemory, place, kTypeModel, r) && !strcmp(r.why, "the name of the truck was not read") && !r.name[0];
+        size = room = 300;
+        const uint64_t chars = kChars + 0x800;
+        memcpy(text, &chars, 8);
+        memcpy(text + 0x10, &size, 8);
+        memcpy(text + 0x18, &room, 8);
+        Put(kTypeModel + 0x588, text);
+        const bool longerName = !TruckTypeLook(kMemory, place, kTypeModel, r) && !strcmp(r.why, "the name of the truck was not read");
+        // a TruckType of 16 characters sits behind a pointer: not followed
+        PutText(kList + 0x120 + 0xE8, "SIXTEEN_LETTERS_", kChars + 0x400);
+        const bool longText = !look("small_one", r, place) && !r.found && !r.text[0] && !strcmp(r.why, "the TruckType of the record is too long");
+        PutText(kList + 0x120 + 0xE8, "SCOUT", 0);
+        // a read that fails at each step
+        TruckTypePlace none = place;
+        none.found = false;
+        const bool noPlace = !look("small_one", r, none) && !strcmp(r.why, "the list of truck records was not found in this game version");
+        const bool noModel = !TruckTypeLook(kMemory, place, kNowhere, r) && !strcmp(r.why, "the name of the truck was not read");
+        TruckTypePlace away = place;
+        away.list = 0x3800000;
+        const bool noPointers = !look("small_one", r, away) && !strcmp(r.why, "the list of truck records was not read");
+        ends(0x8000, 0x8000 + 5 * 0x120);
+        const bool lowBegin = !look("small_one", r, place) && !strcmp(r.why, "the list of truck records was not read");
+        ends(kNowhere, kNowhere + 5 * 0x120);
+        const bool noRecords = !look("small_one", r, place) && !strcmp(r.why, "a truck record was not read");
+        ends(kList, kList + 5 * 0x120);
+        record(0, "another_long_truck_name_", 0, "OFFROAD", kNowhere); // the same length as the long name, its characters not readable
+        const bool noChars = !look(longName, r, place) && !strcmp(r.why, "a truck record was not read");
+        const bool beforeIt = !look("small_one", r, place) ? false : !strcmp(r.text, "SCOUT"); // another length: the record's characters are never read
+        record(0, "first_one", 1, "OFFROAD", 0);
+        ends(kList, kList + 6 * 0x120);                  // the sixth record lies past the made list
+        const bool pastEnd = look("small_one", r, place) && !look("no_such_one", r, place) && !strcmp(r.why, "a truck record was not read");
+        Drop(kList);
+        Drop(kTypeModel);
+        Drop(kChars);
+        Drop(kPointers);
+        if (!(found && foundLong && foundLast && notFound && oddFlag && shorter && overEnd && tooMany && noName && longerName && longText && noPlace && noModel && noPointers &&
+              lowBegin && noRecords && noChars && beforeIt && pastEnd))
+            printf("     the read: %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n", found, foundLong, foundLast, notFound, oddFlag, shorter, overEnd, tooMany, noName,
+                   longerName, longText, noPlace, noModel, noPointers, lowBegin, noRecords, noChars, beforeIt, pastEnd);
+        Check(found && foundLong && foundLast && notFound && oddFlag && shorter && overEnd && tooMany && noName && longerName && longText && noPlace && noModel && noPointers &&
+                  lowBegin && noRecords && noChars && beforeIt && pastEnd,
+              "truck type, the read: a record is found by a short name and by one behind a pointer, and its text read; no record, an unknown flag and a name one letter "
+              "off give none; the begin over the end, more than 4096 records, a name of 0 and of 300 characters and a text of 16 are refused; a read that fails at the "
+              "place, the model, the pointers, a record or its characters gives its reason and no text");
+    }
+    // M3: the record's size and the text's place come out of the matched bytes
+    {
+        uint8_t bytes[kPatternMax], mask[kPatternMax];
+        const int lookLength = PatternParse(kTypeLookupPattern, bytes, mask), parseLength = PatternParse(kTypeParsePattern, bytes, mask);
+        auto image = [&](uint32_t sizeA, uint32_t sizeB, uint32_t text, bool parse) {
+            std::vector<uint8_t> code(0x2000);
+            if (parse)
+            {
+                RatePut(code, 0x100, kTypeParsePattern);
+                memcpy(&code[0x100 + (size_t)parseLength - 4], &text, 4);
+            }
+            size_t at = 0x800;
+            for (uint32_t size : { sizeA, sizeB })
+            {
+                if (size)
+                {
+                    RatePut(code, at, kTypeLookupPattern);
+                    memcpy(&code[at + (size_t)lookLength - 11], &size, 4);
+                    RateRel(code, at + (size_t)lookLength - 4, at + (size_t)lookLength, at == 0x800 ? 0x1111 : 0x1222);
+                }
+                at += 0x100;
+            }
+            return code;
+        };
+        TruckTypePlace p;
+        std::vector<uint8_t> code = image(0xE8, 0x288, 0xE8, true); // the sibling list of small records stands first
+        const bool taken = TruckTypePlaceFind(code.data(), 0, code.size(), p) && p.found && p.size == 0x288 && p.text == 0xE8 && p.list == 0x1222 && !p.why[0];
+        code = image(0x300, 0, 0x110, true);                        // an update that moved both is followed
+        const bool moved = TruckTypePlaceFind(code.data(), 0, code.size(), p) && p.size == 0x300 && p.text == 0x110 && p.list == 0x1111;
+        code = image(0x40, 0, 0x20, true);
+        const bool tooSmall = !TruckTypePlaceFind(code.data(), 0, code.size(), p) && !p.found && !p.size && !p.list && p.why[0];
+        code = image(0x288, 0x300, 0xE8, true);
+        const bool twice = !TruckTypePlaceFind(code.data(), 0, code.size(), p) && !strcmp(p.why, "the lookup of a truck record stands more than once");
+        code = image(0x288, 0, 0xE8, false);
+        const bool noParse = !TruckTypePlaceFind(code.data(), 0, code.size(), p) && !strcmp(p.why, "the parse of TruckType was not found");
+        code = image(0x288, 0, 0x270, true);                        // the text would end past the record
+        const bool outside = !TruckTypePlaceFind(code.data(), 0, code.size(), p);
+        const bool sane = TruckTypeSane(0x288, 0xE8) && TruckTypeSane(0x100, 0xE0) && TruckTypeSane(0x1000, 0) && !TruckTypeSane(0x40, 0x20) && !TruckTypeSane(0xFF, 0x10) &&
+                          !TruckTypeSane(0x1001, 0xE8) && !TruckTypeSane(0x288, 0x269) && !TruckTypeSane(0x288, 0x288) && !TruckTypeSane(0x288, 0x1000);
+        Check(taken && moved && tooSmall && twice && noParse && outside && sane,
+              "truck type, the places: the record's size and the text's place are taken from the matched bytes, the one lookup whose records can hold the text; a size "
+              "of 0x40, two such lookups, no parse and a text past the record's end are refused");
+    }
+}
 
 // The steering with a lock in (lock_steer.h; BRIEF_lock_steering.md with the addendum and the change of 21:31): the
 // target by the axles locked, the ease, the wheels' stock figures in made-up memory, the put back, the place in code.
@@ -7908,6 +8088,7 @@ int main()
     TruckTestsEight();
     TruckTestsNine();
     TruckTestsLockSteer();
+    TruckTestsTruckType();
     PhysicsRateTest();
     PhysicsRateB2Test();
     RealImageTest();

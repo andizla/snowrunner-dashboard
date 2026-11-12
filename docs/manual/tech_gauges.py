@@ -231,6 +231,18 @@ at most max, and idle to at most 0.8 red.</p>
 otherwise the class by the truck's mass (model +0x784, without addons, cargo or trailer): up to 6000 kg a scout, under 16000 kg a
 truck, from 16000 kg a heavy truck (<code>models.h:1282-1292</code>; the TUZ 108 weighs 4.1 t, the Tayga 12.0 t, a twin-steer
 Western Star 20.3 t). Weight cannot tell every scout from a truck: the Fleetstar (6314 kg) counts as a truck.</p>
+<p><b>The game's own truck type.</b> <code>truck_type.h</code>, <code>ClassByType</code> in <code>models.h</code>. Every truck file
+names its role in <code>TruckType</code>, and the game keeps it as a text in its list of truck records, "Undefined" where the file has
+none. <code>SCOUT</code> is a scout whatever the truck weighs. <code>OFFROAD</code>, <code>HIGHWAY</code>, <code>HEAVY_DUTY</code> and
+<code>HEAVY</code> are never a scout: truck or heavy by the 16000 kg border alone. The game's <code>HEAVY</code> is a role and not a
+weight, so it does not make a truck heavy here. Any other text, and no text, leaves the weight's rule whole. The order is: the class of
+the truck's own scales, then the type, then the weight. The route: the truck's name is the text at model + 0x588; the list's begin and
+end and a record's size come from the game's own lookup by name, the text's place in a record from the parse of the attribute, both
+found by pattern and read from the matched bytes (<code>truck type: the game's list of truck records at +</code>). A size outside
+0x100 to 0x1000 or a text past the record's end is refused. The list is walked once a truck, on the mod's thread, by guarded reads
+alone; nothing is written. A list of more than 4096 records, a name of none or more than 255 characters and a type of 16 characters or
+more are not followed. Each failure gives the weight's rule and its reason in the log. One line a truck names the name read, the type,
+the class by the type, the class by the weight and the class taken.</p>
 '''
 
 

@@ -617,6 +617,70 @@ inline bool SteerPlaceFind(const uint8_t *code, size_t from, size_t to, size_t &
     return true;
 }
 
+// ---- the game's list of truck records, for a truck's TruckType (BRIEF_scout_by_truck_type.md) ----
+// The game's lookup of a truck record by its name ends with "index times the record's size, plus the list's begin".
+// The size and the begin's place are read from the matched bytes. A sibling list of smaller records has the same
+// shape, so of the matches only one may have records large enough to hold the text. The parse of the attribute ends
+// with the text's place in the record, read from the matched bytes too. Never called, never hooked.
+static const char *const kTypeLookupPattern = "48 83 EC 28 4C 8B C1 48 8D 54 24 38 48 8D 0D ? ? ? ? E8 ? ? ? ? 48 8B 44 24 38 48 3B 05 ? ? ? ? 74 1B 48 83 C0 30 74 15 "
+                                              "8B 00 48 69 C0 ? ? ? ? 48 03 05 ? ? ? ?";
+static const char *const kTypeParsePattern = "48 8D 8D 20 10 00 00 E8 ? ? ? ? 4D 8B C6 49 FF C0 42 80 3C 00 00 75 F6 48 8D 8F ? ? ? ?";
+static const uint32_t kTypeSizeLeast = 0x100, kTypeSizeMost = 0x1000; // a record's size outside this is refused
+
+struct TruckTypePlace
+{
+    bool found;
+    size_t list;    // the offset in the exe of the list's begin pointer; its end pointer follows at + 8
+    uint32_t size;  // a record's size
+    uint32_t text;  // the TruckType text's place in a record
+    const char *why; // what was not found (a string literal), "" when all was
+};
+
+// A record's size and the text's place as the matched bytes give them: sane, and the text of 0x20 bytes inside the record.
+inline bool TruckTypeSane(uint32_t size, uint32_t text)
+{
+    return size >= kTypeSizeLeast && size <= kTypeSizeMost && text <= size && size - text >= 0x20;
+}
+
+inline bool TruckTypePlaceFind(const uint8_t *code, size_t from, size_t to, TruckTypePlace &out)
+{
+    out = TruckTypePlace{ false, 0, 0, 0, "" };
+    uint8_t bytes[kPatternMax], mask[kPatternMax];
+    size_t at = 0;
+    int count = 0;
+    int length = PatternParse(kTypeParsePattern, bytes, mask);
+    if (!PatternFind(code, from, to, bytes, mask, length, at, count) || count != 1)
+    {
+        out.why = count > 1 ? "the parse of TruckType stands more than once" : "the parse of TruckType was not found";
+        return false;
+    }
+    uint32_t text = 0;
+    memcpy(&text, code + at + length - 4, 4);
+    length = PatternParse(kTypeLookupPattern, bytes, mask);
+    int good = 0;
+    for (size_t p = from; PatternFind(code, p, to, bytes, mask, length, at, count); p = at + 1)
+    {
+        uint32_t size = 0;
+        int32_t rel = 0;
+        memcpy(&size, code + at + length - 11, 4);
+        memcpy(&rel, code + at + length - 4, 4);
+        if (!TruckTypeSane(size, text)) continue;
+        good++;
+        out.size = size;
+        out.list = (size_t)((int64_t)(at + length) + rel);
+    }
+    if (good != 1)
+    {
+        out.why = good > 1 ? "the lookup of a truck record stands more than once" : "the lookup of a truck record was not found, or its records cannot hold the text";
+        out.size = 0;
+        out.list = 0;
+        return false;
+    }
+    out.text = text;
+    out.found = true;
+    return true;
+}
+
 // ---- the game's gear torque, for the torque cut (BRIEF_drivetrain_2_torque_cut.md) ----
 // bool(vehicle, int gear, float *torque, float *start, float *a, float *top, float *gearSpeed): the gear's torque and
 // its curve (review\own_drivetrain_research.md A; RVA d73dc0 in 6adb8627, d73e50 in 6ab52f5d), found by its first

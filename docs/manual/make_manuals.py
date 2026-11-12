@@ -168,7 +168,7 @@ Kind=chevrolet_ck1500
 TachClass=1
 RedlineRpm=4500
 BoostProfile=2</pre>
-<p>A truck without its own class shifts, in the mod's automatic, by the class of its weight from the game's files: a scout up to 6 tonnes, a truck under 16, a heavy truck above. Some modded trucks carry a weight that is too high and land in the wrong class: set their class by hand.</p>
+<p>A truck without its own class shifts, in the mod's automatic, by its type and its weight from the game's files. A truck whose file says <code>SCOUT</code> is a scout whatever it weighs. A truck with another type is never a scout: a truck under 16 tonnes, a heavy truck above. Where the type is not read the weight decides alone: a scout up to 6 tonnes, a truck under 16, a heavy truck above. Some modded trucks carry a wrong type or a weight that is too high and land in the wrong class: set their class by hand.</p>
 
 <h2>12. The outside temperature by map</h2>
 <p>The mod reads which map you are on from the game's save (Steam, Epic and Microsoft Store saves) and takes the temperature from a section named after the map or its region, using the game's English names; a modded map goes by its id.</p>

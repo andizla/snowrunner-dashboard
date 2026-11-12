@@ -57,6 +57,7 @@ int NgMenuKeyFromIni(); // the menu's key, which a capture never binds
 #include "warn_list.h"
 #include "winch_out.h"
 #include "lock_steer.h"
+#include "truck_type.h"
 
 static HMODULE g_self = nullptr;
 static std::wstring g_dir; // the game's folder, with the last backslash
@@ -3968,6 +3969,7 @@ static void (*g_damageUpdate)(uint64_t) = nullptr;
 static void OnTruckFrame(void *first, float step);
 static bool g_truckFrames = false; // the truck update is hooked: its jobs are dealt
 static bool g_lockPattern = false; // the diff lock's setter found once at the code look: the kind is at vehicle + 0xE8 (BRIEF_diff_lock_bite.md)
+static TruckTypePlace g_typePlace = { false, 0, 0, 0, "" }; // the game's list of truck records, found at the code look (BRIEF_scout_by_truck_type.md)
 static bool g_steerPattern = false; // the steering's product found once at the code look: the most angle is at wheel + 0xB8 (BRIEF_lock_steering.md, M1)
 
 // The fitted gearbox's positions (gearbox_positions.h, BRIEF_positions_by_gearbox.md): the game's lookup of a gearbox's
@@ -4071,6 +4073,12 @@ static void GameCodeLook(const GaugeSettings &s)
         g_steerPattern = SteerPlaceFind(code.data(), from, to, at, why);
         if (g_steerPattern) Log(L"steering: the game's steering product at +%zx holds the wheel's most angle at wheel + 0xB8; a lock limits the steering with LockSteerFront or LockSteerRear under 100", at);
         else Log(L"steering: %S, so a lock never limits the steering in this game and nothing is written", why);
+    }
+    {
+        if (TruckTypePlaceFind(code.data(), from, to, g_typePlace))
+            Log(L"truck type: the game's list of truck records at +%zx, a record of 0x%x bytes with its TruckType at + 0x%x; SCOUT there makes a truck a scout whatever it weighs",
+                g_typePlace.list, g_typePlace.size, g_typePlace.text);
+        else Log(L"truck type: %S, so a truck's class goes by its weight alone", g_typePlace.why);
     }
     {
         WinchPlace winch = {};
@@ -4724,6 +4732,8 @@ struct TruckWatch
     DamageModel damage;         // what the temperature costs the engine of the truck at modelVehicle
     EngineRecord engine;        // the record of the engine of the truck at engineVehicle
     float mass;                 // that truck's mass in kg by its files (TruckMass), 0 where not read
+    TruckTypeRead type;         // the game's TruckType of the truck at typeVehicle with the model typeModel (truck_type.h), its text "" where not read
+    uint64_t typeVehicle, typeModel;
     bool ownScales;             // the driven truck has scales of its own (Gauges\trucks): their class is the automatic's, else its weight's
     uint64_t engineVehicle;
     EngineProfile profile;      // the engine's own profile (Gauges\engines), for the engine named profileFor
@@ -4959,11 +4969,12 @@ static void EngineLevelLog(const EngineState &e, const wchar_t *why)
 static const wchar_t *const kClassWords[kClassCount] = { L"truck", L"scout", L"heavy" };
 
 // The class the automatic goes by (each gear's hold, and the engine's curve where it has no profile of its own): the
-// class of the truck's own scales, and without them the class of its weight (ClassByMass), the plain scales' where
-// the weight is not read. tachClass: the class of the scales in force.
+// class of the truck's own scales, and without them the class by the game's TruckType and its weight (ClassByType: a
+// SCOUT is a scout whatever it weighs, the rest by the weight), the plain scales' where the weight is not read.
+// tachClass: the class of the scales in force.
 static int AutoClass(const TruckWatch &w, int tachClass)
 {
-    return w.ownScales ? tachClass : ClassByMass(w.mass, tachClass);
+    return ClassInForce(w.ownScales, tachClass, w.type.text, w.mass);
 }
 
 // The driven truck's gears as read last, as a key of gears ("" where they are not this vehicle's).
@@ -5359,6 +5370,22 @@ static void EngineLook(TruckWatch &w, const TruckMemory &m, ULONGLONG now, bool 
                 L"has no scales of its own",
                 mass, kClassWords[ClassByMass(mass, kClassTruck)]);
         else Log(L"truck: its mass by its files was not read (%.0f)", mass);
+    }
+    // the game's own TruckType, once a truck: again only for another vehicle or another model (BRIEF_scout_by_truck_type.md, M2)
+    if (w.refs.vehicle != w.typeVehicle || w.refs.model != w.typeModel)
+    {
+        w.typeVehicle = w.refs.vehicle;
+        w.typeModel = w.refs.model;
+        const int byMass = ClassByMass(mass, kClassTruck);
+        if (TruckTypeLook(m, g_typePlace, w.refs.model, w.type))
+        {
+            const int says = TruckTypeSays(w.type.text);
+            Log(L"truck type: %S is %S in the game's list of %d truck records: %s by the type, a %s by the weight; without scales of its own the automatic goes by the %s class",
+                w.type.name, w.type.text, w.type.records, says == kTypeSaysScout ? L"a scout" : says == kTypeSaysNoScout ? L"no scout" : L"nothing said", kClassWords[byMass],
+                kClassWords[ClassByType(w.type.text, mass, kClassTruck)]);
+        }
+        else
+            Log(L"truck type: %S%s%S, so the weight alone gives the class (a %s)", w.type.name, w.type.name[0] ? L": " : L"", w.type.why ? w.type.why : "", kClassWords[byMass]);
     }
     w.mass = mass;
     if (w.refs.vehicle != w.engineVehicle || e.found != w.engine.found || strcmp(e.name, w.engine.name) || e.capacity != w.engine.capacity ||
@@ -9638,7 +9665,7 @@ static DWORD WINAPI Run(void *)
                     L"goes by the %s class%s; the engine's lift at most %g (the class's roof, fading over each gear's last fifth)",
                     truck.key, truck.named ? L"" : L" (the name of its kind was not read, so it goes by its build)", truck.id[0] ? truck.id : "not read",
                     (void *)truckVehicle, set.own ? L"it has scales of its own" : L"it has no scales of its own and takes the plain ones", k.idle, k.redline, k.max, k.speedMax,
-                    kClassWords[autoClass], set.own ? L", its scales'" : watch.mass > 0.0f ? L", its weight's" : L", the plain scales' (its weight not read)",
+                    kClassWords[autoClass], set.own ? L", its scales'" : TruckTypeSays(watch.type.text) == kTypeSaysScout ? L", its type's in the game files" : watch.mass > 0.0f ? L", its weight's" : L", the plain scales' (its weight not read)",
                     TorqueRoof(autoClass));
             if (truck.key[0])
             {
@@ -9895,7 +9922,8 @@ static DWORD WINAPI Run(void *)
         for (int e = 0; e < 2; e++)
             v.camberEnd[e] = v.camberKnown && CamberEndFile(watch.camber, e, v.camberFile[e][0], v.camberFile[e][1]);
         v.autoClass = AutoClass(watch, inForce.tachClass);
-        v.autoByWeight = driving && !watch.ownScales && watch.mass > 0.0f;
+        v.autoByType = driving && !watch.ownScales && TruckTypeSays(watch.type.text) == kTypeSaysScout;
+        v.autoByWeight = driving && !watch.ownScales && !v.autoByType && watch.mass > 0.0f;
         v.massKg = driving ? watch.mass : 0.0f;
         v.pullTest = watch.pullTest.state;
         v.pullPhase = watch.pullTest.phase;

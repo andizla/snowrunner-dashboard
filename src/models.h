@@ -2200,6 +2200,35 @@ inline int ClassByMass(float kg, int plain)
     return kg <= kScoutMassMost ? kClassScout : kg < kHeavyMassLeast ? kClassTruck : kClassHeavy;
 }
 
+// What the game's own TruckType text says (truck_type.h): a scout, no scout, or nothing. The capitals as the game has
+// them, compared exactly. "Undefined" (a file without the attribute), any other text and no text say nothing.
+enum { kTypeSaysNothing, kTypeSaysScout, kTypeSaysNoScout };
+inline int TruckTypeSays(const char *text)
+{
+    if (!text) return kTypeSaysNothing;
+    if (!strcmp(text, "SCOUT")) return kTypeSaysScout;
+    return !strcmp(text, "OFFROAD") || !strcmp(text, "HIGHWAY") || !strcmp(text, "HEAVY_DUTY") || !strcmp(text, "HEAVY") ? kTypeSaysNoScout : kTypeSaysNothing;
+}
+
+// The class of a truck by the game's TruckType text and its kg. SCOUT is a scout whatever it weighs. The four other
+// values are never a scout: truck or heavy by the weight's upper border alone, plain where the weight is not known
+// (as the weight's rule has it). The game's HEAVY is a role and not a weight, so it does not make a truck heavy here.
+// Anything else: the weight's rule, whole.
+inline int ClassByType(const char *text, float kg, int plain)
+{
+    const int says = TruckTypeSays(text);
+    if (says == kTypeSaysScout) return kClassScout;
+    if (says == kTypeSaysNothing || !(kg > 0.0f) || !isfinite(kg)) return ClassByMass(kg, plain);
+    return kg < kHeavyMassLeast ? kClassTruck : kClassHeavy;
+}
+
+// Who overrules whom: the class of the truck's own scales (the player's Truck class row) first, then the game's
+// TruckType, then the weight. tachClass: the class of the scales in force.
+inline int ClassInForce(bool ownScales, int tachClass, const char *type, float kg)
+{
+    return ownScales ? tachClass : ClassByType(type, kg, tachClass);
+}
+
 // The gear the automatic sets off in with the mod's engine: the lowest whose top is at least kStartShare of the top
 // gear's, and lower while launch (the engine's Torque over the truck's mass; 0 where either is not known) over the
 // gear's top is under kStartPull.

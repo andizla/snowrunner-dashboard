@@ -432,7 +432,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             // the profile's level is in the "In force:" line under Fuel (BRIEF_engine_profile_per_truck.md)
             if (view.engineOwn) ImGui::TextWrapped("Engine %s. It has a profile of its own.", view.engine);
             else ImGui::TextWrapped("Engine %s. It pulls by the torque curve of the %s class%s.%s", view.engine, PageClassWord(view.autoClass),
-                                    view.autoByWeight ? " (the class of the truck by its weight)" : "", view.engProfileFrom ? "" : " Set its peak torque here to give it a profile of its own.");
+                                    view.autoByType ? " (the class of the truck by its type in the game files)" : view.autoByWeight ? " (the class of the truck by its weight)" : "", view.engProfileFrom ? "" : " Set its peak torque here to give it a profile of its own.");
             if (view.engineFigure > 0.0f) ImGui::TextWrapped("Its torque in the game files: %.0f (the engine of a stock scout reads about 195000).", view.engineFigure);
             // whose Engine torque and Upshift delay these are (BRIEF_engine_per_truck.md): this truck's, the kind's, or
             // the engine's default; the box, the For choice and the kept texts are the Suspension tab's
@@ -536,7 +536,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             ScalesClassChange(s, classWas);
             act |= kPageChanged;
         }
-        PageTip("Sets the idle, the red zone, the tops of both dials and the boost for a truck, a scout or a heavy truck. The mod automatic shifts by the class of a truck with scales of its own, else by its weight. Class beside a number set by hand gives it back. Default: Truck.");
+        PageTip("Sets the idle, the red zone, the tops of both dials and the boost for a truck, a scout or a heavy truck. The mod automatic shifts by the class of a truck with scales of its own, else by its type in the game files and its weight. Class beside a number set by hand gives it back. Default: Truck.");
         // the brakes of the driven truck (BRIEF_spring_brakes.md): its own choice in its file, by its class until it has one
         {
             ImGui::BeginDisabled(!view.truck[0]);
@@ -916,7 +916,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 char gearTip[400], whose[160] = "";
                 if (!view.gearHoldOwn)
                     _snprintf_s(whose, _TRUNCATE, " Until it is moved: by the %s class%s, a scout 1.5 s and the others 2.5 s.", PageClassWord(view.autoClass),
-                          view.autoByWeight ? " (by the weight of the truck)" : "");
+                          view.autoByType ? " (by the type of the truck in the game files)" : view.autoByWeight ? " (by the weight of the truck)" : "");
                 _snprintf_s(gearTip, _TRUNCATE, "Going up, the mod automatic waits in each gear at least this long. Kept for this gearbox (%s) by Own settings on the Engine tab.%s Needs Real engine (Power tab).", view.gearbox, whose);
                 ImGui::EndDisabled();
                 if (view.engHoldFrom) ImGui::TextDisabled("In force: %s%s", PageEngLevel(view.engHoldFrom, "gearbox"), view.engHoldFrom == 2 ? view.truck : "");
