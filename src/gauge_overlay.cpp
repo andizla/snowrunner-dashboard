@@ -16,6 +16,7 @@
 #include "gauges.h"
 #include "gauge_draw.h"
 #include "settings_page.h"
+#include "checkers_board.h"
 
 volatile LONG g_pageCapturing = 0;
 volatile LONG g_modOff = 0;
@@ -164,6 +165,61 @@ static void UpdateFontTexture(float u)
     }
 }
 
+// ---- the checkers board (BRIEF_checkers.md with the Reviewer's addendum): hidden, and no line of it runs until its
+// binding or the five clicks ask. It shows only with the NEXT GEN menu open on the mod's tab, in place of the tab's body.
+static CkBoard g_ck = {};
+static CkWindow g_ckWin = {};
+static volatile LONG g_ckAsk = 0;
+static uint64_t g_ckTruck = 0;
+void CheckersAsk() { InterlockedExchange(&g_ckAsk, 1); }
+
+// What the board asks of the menu. NgMenuShowTab opens the menu on the mod's tab, and with it the menu's own take of
+// the keys and the mouse; NgMenuShowTab(nullptr) closes it and gives them back. The board takes nothing by itself.
+static void CkMenuDo(int what)
+{
+    if (what == kCkMenuShow) NgMenuShowTab("Gameplay");
+    else if (what == kCkMenuClose) NgMenuShowTab(nullptr);
+}
+
+static void CheckersOpen(const GaugeView &view)
+{
+    if (g_ckWin.open) return;
+    g_ckTruck = view.truckVehicle;
+    CkBoardOpened(g_ck, (uint32_t)GetTickCount()); // the opponent's seed from the clock, its own from there on
+    CkMenuDo(CkWindowOpen(g_ckWin, NgMenuOpen()));
+}
+
+// Every frame, and nothing where the board is closed and not asked for: the binding's press, and what closes the board
+// besides the player (the menu gone, the game's window not in front, another truck).
+static void CheckersFrame(const GaugeSettings &s, const GaugeView &view)
+{
+    if (!g_ckWin.open && !g_ckAsk) return;
+    if (InterlockedExchange(&g_ckAsk, 0) && s.checkers)
+    {
+        if (g_ckWin.open) CkMenuDo(CkWindowClose(g_ckWin));
+        else CheckersOpen(view);
+        return;
+    }
+    DWORD process = 0;
+    GetWindowThreadProcessId(GetForegroundWindow(), &process);
+    CkMenuDo(CkWindowFrame(g_ckWin, NgMenuOpen(), process == GetCurrentProcessId(), view.truckVehicle == g_ckTruck));
+}
+
+// The board in place of the tab's body: the pad's d-pad or left stick, A and B, and the arrow keys, Enter and Escape,
+// which the open menu hands to Dear ImGui. The pad is only read: the game hears it too.
+static void CheckersPage()
+{
+    const uint32_t pad = PadButtons();
+    const ImGuiIO &io = ImGui::GetIO();
+    const unsigned held = CkHeldOf((pad & (XINPUT_GAMEPAD_DPAD_LEFT | kPadLSLeft)) || ImGui::IsKeyDown(ImGuiKey_LeftArrow),
+                                   (pad & (XINPUT_GAMEPAD_DPAD_RIGHT | kPadLSRight)) || ImGui::IsKeyDown(ImGuiKey_RightArrow),
+                                   (pad & (XINPUT_GAMEPAD_DPAD_UP | kPadLSUp)) || ImGui::IsKeyDown(ImGuiKey_UpArrow),
+                                   (pad & (XINPUT_GAMEPAD_DPAD_DOWN | kPadLSDown)) || ImGui::IsKeyDown(ImGuiKey_DownArrow),
+                                   (pad & XINPUT_GAMEPAD_A) || ImGui::IsKeyDown(ImGuiKey_Enter) || ImGui::IsKeyDown(ImGuiKey_KeypadEnter),
+                                   (pad & XINPUT_GAMEPAD_B) || ImGui::IsKeyDown(ImGuiKey_Escape));
+    if (CkBoardDraw(g_ck, held, fminf(fmaxf(io.DeltaTime, 0.0f), 0.1f))) CkMenuDo(CkWindowClose(g_ckWin));
+}
+
 static void OnFrame()
 {
     static float alpha = 0.0f;
@@ -177,6 +233,7 @@ static void OnFrame()
     GaugeView view;
     SettingsGet(s);
     ViewGet(view);
+    CheckersFrame(s, view);
     // Off is no place (BRIEF_dials_off_option.md): the font keeps the strip's unit there, and the cluster's own part
     // below is left before anything places it
     const bool off = s.layout == kLayoutOff;
@@ -282,9 +339,25 @@ static void OnPage()
         PageTabRead(id, sizeof id);
         st.tab = PageTabFromId(id);
     }
+    // the board in place of the tab's body, so a click beside it reaches nothing
+    if (g_ckWin.open)
+    {
+        CheckersPage();
+        return;
+    }
     // the pad is read on every frame of the tab: the frame the binding's button is pressed on has to know that the
     // pad's A, which pressed it, is still down
-    const int act = SettingsPage(s, view, st, PadButtons());
+    int act = SettingsPage(s, view, st, PadButtons());
+    if (act & kPageCheckers)
+    {
+        if (!s.checkers)
+        {
+            s.checkers = true;
+            act |= kPageChanged;
+            GaugeLog(L"checkers: the board was opened for the first time; its row with a binding is on the Mod work tab from now on");
+        }
+        CheckersOpen(view);
+    }
     if (act & kPageTab) PageTabWrite(kPageTabIds[st.tab]);
     if (act & kPageChanged) SettingsPut(s, turn);
     if (act & kPageTruckDrop) SettingsTruckDrop();

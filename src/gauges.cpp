@@ -912,6 +912,7 @@ static void WriteIni(const GaugeSettings &s)
     whole(L"PhysicsRate", s.physicsRate);
     whole(L"Demo", s.demo ? 1 : 0);
     whole(L"Probe", s.probe);
+    if (s.checkers) whole(L"Checkers", 1); // in no ini until the board was opened once
     whole(L"KeepLogs", s.keepLogs);
 }
 
@@ -1456,6 +1457,7 @@ static void ReadIni(GaugeSettings &s)
     s.physicsRate = IniInt(L"PhysicsRate", s.physicsRate, ini);
     s.demo = IniBool(L"Demo", s.demo, ini);
     s.probe = IniInt(L"Probe", s.probe, ini);
+    s.checkers = IniBool(L"Checkers", s.checkers, ini);
     s.keepLogs = IniInt(L"KeepLogs", s.keepLogs, ini);
     SettingsClamp(s);
 }
@@ -2998,7 +3000,8 @@ static void SettingsWrite(SettingsState &st)
 // not there keeps the default: up, down, N, R and A on the number pad, which the game, the shipped ReShade.ini (Home
 // alone) and the usual mods leave alone.
 static_assert(kActCount <= kViewActions, "the view holds the bindings of every action");
-static_assert(kActWinchOut == kViewActions - 1, "the tab's last row is the winch probe's, shown with Probe=1 alone");
+static_assert(kActWinchOut == kViewActions - 2, "the Controls tab's last row is the winch probe's, shown with Probe=1 alone");
+static_assert(kActCheckers == kViewActions - 1, "the last action is the board's, its row on the Mod work tab once the board was opened");
 static_assert(kActDiffLock == kViewShifts && kActAwd == kViewShifts + 1, "the tab's rows of the locks follow the shifter's");
 static const wchar_t *const kBindSection = L"Gearbox";
 
@@ -3058,7 +3061,7 @@ static void BindingWriteOne(const std::wstring &ini, const GearBindings &b, int 
     BindingKey(a, slot, key, 48);
     BindingText(b.slot[a][slot], text, sizeof text);
     // the winch probe's key is in the ini only while it is bound
-    const bool none = a == kActWinchOut && b.slot[a][slot].kind == kBindNone;
+    const bool none = (a == kActWinchOut || a == kActCheckers) && b.slot[a][slot].kind == kBindNone;
     WritePrivateProfileStringW(kBindSection, key, none ? nullptr : Wide(text).c_str(), ini.c_str());
 }
 
@@ -9530,7 +9533,9 @@ static DWORD WINAPI Run(void *)
             // the tab's defaults button
             EngineDefaults(eng);
             EngineApply(eng, watch);
+            const bool board = set.s.checkers; // no setting of the tabs: the board's row stays once it is there
             SettingsToDefaults(set);
+            set.s.checkers = board;
             SettingsPublish(s);
             Log(L"settings: back to the defaults");
             saveAt = GetTickCount64() + 1000;
@@ -9650,6 +9655,8 @@ static DWORD WINAPI Run(void *)
             if (locksHeard && states[kActLockFront].pressed) AxleLeverPress(watch, true);
             if (locksHeard && states[kActLockRear].pressed) AxleLeverPress(watch, false);
             // the winch probe (winch_out.h): every pass, so a hold ends wherever the keys are not heard
+            // the board's binding (checkers.h): heard with the menu open too, since the board shows there and the same press closes it
+            if (s.checkers && !bindCapture.active && states[kActCheckers].pressed) CheckersAsk();
             g_winchBound = binds.slot[kActWinchOut][0].kind != kBindNone || binds.slot[kActWinchOut][1].kind != kBindNone;
             WinchOutPass(s, watch.found ? watch.refs.vehicle : 0, locksHeard && states[kActWinchOut].held, locksHeard && states[kActWinchOut].pressed);
             if (locksHeard && states[kActSway].pressed)
@@ -10390,6 +10397,7 @@ static DWORD WINAPI Run(void *)
             v.st.outsideC = inForce.ambientC;
         }
         v.rateNow = g_rateNow, v.rateNote = g_rateNote, v.rateWinch = g_rateWinch;
+        v.truckVehicle = watch.found ? watch.refs.vehicle : 0;
         v.stepSign = g_stepSignOn;
         AcquireSRWLockExclusive(&g_viewLock);
         g_view = v;
@@ -10491,7 +10499,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.warmUpMinutes == b.warmUpMinutes && a.overheatMinutes == b.overheatMinutes && a.coolDownMinutes == b.coolDownMinutes && a.ambientC == b.ambientC &&
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.overRevDamage == b.overRevDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
            a.springFront == b.springFront && a.dampingFront == b.dampingFront && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange &&
-           !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.hiddenWarnings == b.hiddenWarnings && a.warnFuel == b.warnFuel && a.warnEngine == b.warnEngine && a.warnGearbox == b.warnGearbox && a.warnCoolant == b.warnCoolant && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
+           !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.checkers == b.checkers && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.hiddenWarnings == b.hiddenWarnings && a.warnFuel == b.warnFuel && a.warnEngine == b.warnEngine && a.warnGearbox == b.warnGearbox && a.warnCoolant == b.warnCoolant && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
            a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.quickWinch == b.quickWinch && a.lockSteerFront == b.lockSteerFront && a.lockSteerRear == b.lockSteerRear && a.heldGearSlip == b.heldGearSlip && a.lowRangeSlip == b.lowRangeSlip && a.diffType == b.diffType && a.physicsRate == b.physicsRate && a.engineBrake == b.engineBrake && a.winchOutRate == b.winchOutRate && a.winchOutStep == b.winchOutStep && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
            a.camberGainFront == b.camberGainFront && a.camberGainRear == b.camberGainRear && a.camberRestFront == b.camberRestFront && a.camberRestRear == b.camberRestRear &&
            !memcmp(a.diffAxle, b.diffAxle, sizeof a.diffAxle) && a.airBrakes == b.airBrakes;
@@ -10630,6 +10638,32 @@ static void PartIni()
               boundBack.slot[kActWinchOut][0].code == 'K' && !wcscmp(bindKept, L"none") && !strcmp(kActionNames[kActWinchOut], "WinchOut"),
               "settings: WinchOutRate and WinchOutStep are in no ini without Probe=1, with it 1.25 and 0.5 read back, 9 held to 2.0 and -1 to 0; the WinchOut binding's "
               "key is there only while bound");
+        {
+            // the board's key and its binding (BRIEF_checkers.md, M5): in no ini until the board was opened once
+            wchar_t boardKept[16] = L"", boardBind[32] = L"", boardOn[16] = L"", boardKey[48];
+            BindingKey(kActCheckers, 0, boardKey, 48);
+            GetPrivateProfileStringW(kIniSection, L"Checkers", L"none", boardKept, 16, ini.c_str());
+            GetPrivateProfileStringW(kBindSection, boardKey, L"none", boardBind, 32, ini.c_str());
+            GaugeSettings opened = plain;
+            opened.checkers = true;
+            WriteIni(opened);
+            GetPrivateProfileStringW(kIniSection, L"Checkers", L"none", boardOn, 16, ini.c_str());
+            GaugeSettings openedBack;
+            SettingsDefaults(openedBack);
+            ReadIni(openedBack);
+            GearBindings boardBound = {}, boardBack = {};
+            boardBound.slot[kActCheckers][0].kind = kBindKey, boardBound.slot[kActCheckers][0].code = 'J';
+            BindingsWrite(ini, boardBound);
+            BindingsRead(ini, boardBack, false);
+            BindingsWrite(ini, none);
+            wchar_t boardBindAfter[32] = L"";
+            GetPrivateProfileStringW(kBindSection, boardKey, L"none", boardBindAfter, 32, ini.c_str());
+            Check(!plain.checkers && !wcscmp(boardKept, L"none") && !wcscmp(boardBind, L"none") && !wcscmp(boardOn, L"1") && openedBack.checkers && !SameSettings(plain, opened) &&
+                  boardBack.slot[kActCheckers][0].kind == kBindKey && boardBack.slot[kActCheckers][0].code == 'J' && !wcscmp(boardBindAfter, L"none") &&
+                  !wcscmp(boardKey, L"BindCheckers") && kActCheckers == kActCount - 1,
+                  "settings: a fresh ini has no Checkers key and no binding of it; once on it is written as 1 and read back; its binding's key is there only while bound");
+            WritePrivateProfileStringW(kIniSection, L"Checkers", nullptr, ini.c_str());
+        }
         WritePrivateProfileStringW(kIniSection, L"WinchOutRate", nullptr, ini.c_str());
         WritePrivateProfileStringW(kIniSection, L"WinchOutStep", nullptr, ini.c_str());
         WriteIni(plain);
@@ -10775,6 +10809,7 @@ static void PartIni()
     c.engineShare = 80;
     c.creep = false;
     c.creepManual = true;
+    c.checkers = true;
     c.oilWarmUpMinutes = 12.5f;
     c.oilWarnC = 132.0f;
     const bool allChanged = c.layout != d.layout && c.swapDials != d.swapDials && c.style != d.style && c.faceOpacity != d.faceOpacity && c.offsetX != d.offsetX && c.offsetY != d.offsetY &&
@@ -10785,7 +10820,7 @@ static void PartIni()
                             c.pitchDangerDeg != d.pitchDangerDeg && c.warmUpMinutes != d.warmUpMinutes && c.overheatMinutes != d.overheatMinutes &&
                             c.coolDownMinutes != d.coolDownMinutes && c.ambientC != d.ambientC && c.ambientByMap != d.ambientByMap && c.airFullKmh != d.airFullKmh && c.damage != d.damage &&
                             c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.overRevDamage != d.overRevDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springFront != d.springFront && c.dampingFront != d.dampingFront && c.extraTravel != d.extraTravel && c.frameFlex != d.frameFlex && c.twistRange != d.twistRange && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
-                            c.demo != d.demo && c.probe != d.probe && c.keepLogs != d.keepLogs && c.soundVolume != d.soundVolume && c.hiddenWarnings != d.hiddenWarnings && c.warnFuel != d.warnFuel && c.warnEngine != d.warnEngine && c.warnGearbox != d.warnGearbox && c.warnCoolant != d.warnCoolant && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
+                            c.demo != d.demo && c.checkers != d.checkers && c.probe != d.probe && c.keepLogs != d.keepLogs && c.soundVolume != d.soundVolume && c.hiddenWarnings != d.hiddenWarnings && c.warnFuel != d.warnFuel && c.warnEngine != d.warnEngine && c.warnGearbox != d.warnGearbox && c.warnCoolant != d.warnCoolant && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
                             c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.diffLockBite != d.diffLockBite && c.quickWinch != d.quickWinch && c.lockSteerFront != d.lockSteerFront && c.lockSteerRear != d.lockSteerRear && c.heldGearSlip != d.heldGearSlip && c.lowRangeSlip != d.lowRangeSlip && c.diffType != d.diffType && c.physicsRate != d.physicsRate && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
     WriteIni(c);

@@ -6,6 +6,7 @@
 #include "gauges.h"
 #include "air_axles.h"
 #include "odometer.h"
+#include "checkers.h"
 
 struct PageState
 {
@@ -25,6 +26,7 @@ struct PageState
     double odoValue = 0.0;        // Set's figure: metres, or seconds with hours
     char odoText[24] = "";        // Set's field as typed, and the word under it where it was refused
     const char *odoWord = "";
+    CkClicks ckClicks = {};       // the clicks on the foot line of the Mod work tab (kPageCheckers)
     int tab = -1;                 // the open tab (kTab...): the host sets the one Gauges.ini keeps before the first frame, else Display
     int tabAsk = -1;              // a tab to open on the next frame (the previews)
     int tabSettle = 0;            // frames until an asked tab is the shown one
@@ -36,7 +38,7 @@ enum { kPageChanged = 1, kPageReload = 2, kPageTruckDrop = 4, kPageDefaults = 8,
        kPagePullTest = 256, kPagePullCancel = 512, kPageMapAmbient = 1024, kPageGearHold = 2048, kPageEngineSet = 4096,
        kPageEngineDrop = 8192, kPageTab = 16384, kPageEngineTorque = 32768, kPageSuspOn = 65536, kPageSuspOff = 131072, kPageSuspDefault = 262144, kPageSuspTruck = 524288, kPageSuspKind = 1048576,
        kPageEngOn = 2097152, kPageEngOff = 4194304, kPageEngDefault = 8388608, kPageEngTruck = 16777216, kPageEngKind = 33554432, kPageAirHeight = 67108864,
-       kPageOdoSet = 134217728, kPageOdoHours = 268435456 };
+       kPageOdoSet = 134217728, kPageOdoHours = 268435456, kPageCheckers = 536870912 };
 
 // The Dear ImGui key as a virtual key, for the keys the toggle key can be; 0 for others.
 static int PageVirtualKey(int k)
@@ -1464,7 +1466,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         // order is input_bindings.h's GearAction). The shifter's at Gearbox=2, the locks' at every level
         static const char *actions[kViewActions] = { "Gear 1", "Gear 2", "Gear 3", "Gear 4", "Gear 5", "Gear 6", "Gear 7", "Gear 8", "Gear 9", "Gear 10",
                                                      "Gear 11", "Gear 12", "Gear 13", "Gear 14", "Gear 15", "Gear 16", "H", "L-", "L", "L+", "Neutral", "Reverse", "Gear up", "Gear down", "Clutch",
-                                                     "Range high", "Range low", "D", "Diff lock", "AWD", "Sway bars", "Ride up", "Ride down", "Lock front axle", "Lock rear axles", "Winch out" };
+                                                     "Range high", "Range low", "D", "Diff lock", "AWD", "Sway bars", "Ride up", "Ride down", "Lock front axle", "Lock rear axles", "Winch out", "Checkers" };
         auto bindingRow = [&](int a) {
             ImGui::PushID(1000 + a);
             PageLabel(actions[a], labelX);
@@ -1489,11 +1491,11 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         if (s.gearbox == kGearboxOwn) for (int a = 0; a < kViewShifts; a++) bindingRow(a);
         ImGui::TextDisabled("Locks and ride");
         PageTip("The diff lock and AWD on a key on every truck. Sway bars connects and disconnects the sway bars. Ride up and Ride down move the air suspension 2 cm a press under 20 km/h. Lock front axle and Lock rear axles hold those axles Locked until pressed again, over the Axle rows of the Power tab.");
-        for (int a = kViewShifts; a < kViewActions - 1; a++) bindingRow(a);
+        for (int a = kViewShifts; a < kViewActions - 2; a++) bindingRow(a);
         if (s.probe)
         {
-            // the probe's own row, the last action (input_bindings.h, kActWinchOut): not there without Probe=1
-            bindingRow(kViewActions - 1);
+            // the probe's own row (input_bindings.h, kActWinchOut): not there without Probe=1
+            bindingRow(kViewActions - 2);
             PageTip("Lets the winch rope out while held. A test: it works with Probe=1 alone. Bind a key or button the game does not use.");
         }
         // the game's quick winch on its key (BRIEF_quick_winch.md): acts at once; greyed where the game's method is not found
@@ -1600,7 +1602,30 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         ImGui::SameLine();
         if (ImGui::Button("Reload ini")) act |= kPageReload;
         PageTip("Reads Gauges.ini again, after an edit by hand.");
+        if (s.checkers)
+        {
+            // the board's own row, the last action (input_bindings.h, kActCheckers): there once the board was opened
+            const int a = kViewActions - 1;
+            ImGui::PushID(1000 + a);
+            PageLabel("Checkers", labelX);
+            for (int slot = 0; slot < 2; slot++)
+            {
+                ImGui::PushID(slot);
+                if (slot) ImGui::SameLine();
+                const bool waiting = view.captureAction == a && view.captureSlot == slot;
+                char text[64];
+                _snprintf_s(text, _TRUNCATE, "%s###bind", waiting ? "press a key, a button or move the pedal..." : view.bindText[a][slot]);
+                if (ImGui::Button(text, ImVec2(w * 0.42f, 0.0f))) BindingAsk(waiting ? kBindAskCancel : kBindAskCapture, a, slot);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("x")) BindingAsk(kBindAskClear, a, slot);
+                ImGui::PopID();
+            }
+            ImGui::PopID();
+            PageTip("Opens and closes the board. The game still hears the pad.");
+        }
         ImGui::TextDisabled("Changes count at once and go into Gauges.ini, and the settings of a truck or a gearbox into its file in Gauges. Version " GAUGES_VERSION ".");
+        // five clicks on that line within three seconds (checkers.h): no hover, no cursor, no tip
+        if (ImGui::IsItemClicked() && CkClick(st.ckClicks, ImGui::GetTime())) act |= kPageCheckers;
     }
     ImGui::EndChild();
     InterlockedExchange(&g_pageCapturing, st.capture >= 1 ? (LONG)GetTickCount() : 0);

@@ -25,6 +25,14 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 SKIP = ('docs/manual/', 'test/', 'out/', 'deps/')
+# The names of the hidden extra, which is in no manual on purpose (BRIEF_checkers.md): its ini key, its binding, its row and its one
+# log line. They are left out of the lists. Nothing else is: a name not here is listed as before.
+HIDDEN_NAMES = {('Checkers', 'key'), ('BindCheckers', 'key'), ('Checkers', 'tab')}
+HIDDEN_LOG = 'checkers: '
+
+
+def hidden(name, kind):
+    return (name, kind) in HIDDEN_NAMES or (kind == 'log' and name.startswith(HIDDEN_LOG))
 
 # an ini key: two or more capitalised parts ("BackToA", "Gear16"), quoted, followed by = or in backticks
 KEY = r'[A-Z][a-z]+(?:[A-Z][a-z0-9]*|[0-9]+)+'
@@ -89,8 +97,9 @@ def found_in(lines):
 # (a log line that gained a field), and is told apart.
 def names_of(added, removed):
     plus, minus = found_in(added), found_in(removed)
-    beside = sorted(n for n in set(plus) | set(minus) if n[1] == 'log' and plus.get(n, 0) == minus.get(n, 0))
-    changed = sorted(n for n in set(plus) | set(minus) if n not in beside)
+    every = [n for n in set(plus) | set(minus) if not hidden(*n)]
+    beside = sorted(n for n in every if n[1] == 'log' and plus.get(n, 0) == minus.get(n, 0))
+    changed = sorted(n for n in every if n not in beside)
     return changed, beside
 
 
@@ -122,7 +131,21 @@ def paragraphs():
                 yield name, number, plain(line)
 
 
+# The list of hidden names leaves out its three and no fourth: made-up lines with the three and one more key.
+def selftest():
+    lines = ['    if (s.checkers) whole(L"Checkers", 1);', '            PageLabel("Checkers", labelX);', '            !wcscmp(boardKey, L"BindCheckers")',
+             '            GaugeLog(L"checkers: the board was opened for the first time");', '    whole(L"CheckersTwo", 1);',
+             '            PageLabel("Checkers board", labelX);', '            Log(L"chess: the board was opened for the first time");']
+    names, _ = names_of(lines, [])
+    want = [('CheckersTwo', 'key'), ('Checkers board', 'tab'), ('chess: the board was opened for the first time', 'log')]
+    ok = sorted(names) == sorted(want)
+    print('%s manual check: the hidden extra is left out by its four names, and a fourth key, another label and another log line are listed' % ('ok  ' if ok else 'FAIL'))
+    if not ok: print('     listed: %r' % (names,))
+    sys.exit(0 if ok else 1)
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == '--selftest': selftest()
     spec = sys.argv[1] if len(sys.argv) > 1 else None
     names, beside = names_of(*changed_lines(spec))
     order = {'key': 0, 'tab': 1, 'log': 2}

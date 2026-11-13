@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Checkers on the wheel, as promised.
 - Positions by gearbox follows the shifter of the game on every truck. On some trucks the mod read the flags of the fitted gearbox from another place than the shifter of the game does. The mod then had L-, L+ or H where the shifter shows none. Now the mod takes the five flags as the game hands them to its own shifter at each truck change. Where none comes within two seconds the read of before is taken. `Gauges.log` names the read in force, and both sets of flags where the two differ. **A gearbox whose low range the game drives by hand now has L alone in the low range: no L- and no L+, as the shifter of the game shows.**
 - The winch line under Physics rate reads "not corrected, see the log" wherever the pull is not corrected at 120. Where the code of the game was left part changed it says to start the game again.
 - After a change of truck the over-rev damage and the slip room choice of a held gear could go by the last figures of the truck before, for one pass of the mod. They now wait for the first figures of the truck driven.

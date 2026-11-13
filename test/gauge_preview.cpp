@@ -29,6 +29,7 @@
 #include "gauges.h"
 #include "gauge_draw.h"
 #include "settings_page.h"
+#include "checkers_board.h"
 #include "imgui_internal.h"
 #include <string>
 #include <algorithm>
@@ -869,6 +870,24 @@ int wmain(int argc, wchar_t **argv)
         if (!same) g_failed++;
         printf("%s settings tabs: each tab drawn untouched reports no change\n", quiet ? "ok  " : "FAIL");
         if (!quiet) g_failed++;
+        // the board (BRIEF_checkers.md, M5): every tab above was drawn and no line of the board's ran; then the board as a
+        // picture (checkers.png), a game a few moves in with a piece picked
+        {
+            const long before = g_ckBoardFrames;
+            CkBoard board = {};
+            CkBoardOpened(board, 7);
+            board.two = true;
+            CkBoardStep(board, 0, 2 * 8 + 2, 0.016f), CkBoardStep(board, 0, 3 * 8 + 3, 0.016f);
+            CkBoardStep(board, 0, 5 * 8 + 5, 0.016f), CkBoardStep(board, 0, 4 * 8 + 6, 0.016f);
+            CkBoardStep(board, 0, 2 * 8 + 4, 0.016f);
+            bool closed = false;
+            wchar_t path[MAX_PATH];
+            swprintf_s(path, L"%s\\checkers.png", out);
+            RenderPng(path, 760, 760, [&](ImDrawList *, ImDrawList *) { closed = CkBoardDraw(board, 0, 0.016f) || closed; }, 4);
+            const bool off = before == 0 && g_ckBoardFrames == 4 && !closed && board.game.plies == 2 && board.pick.n == 1;
+            printf("%s checkers: no frame of the board ran while the eight tabs were drawn; drawn by itself it runs, closes nothing and keeps its game\n", off ? "ok  " : "FAIL");
+            if (!off) g_failed++;
+        }
         const bool ids = PageTabFromId("power") == kTabPower && PageTabFromId("modwork") == kTabModWork && PageTabFromId("Power") == kTabDisplay &&
                          PageTabFromId("") == kTabDisplay && PageTabFromId(nullptr) == kTabDisplay && PageTabFromId("tyres") == kTabDisplay;
         printf("%s settings tabs: an id opens its tab; an unknown one, another case or none opens Display\n", ids ? "ok  " : "FAIL");

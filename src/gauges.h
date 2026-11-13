@@ -127,6 +127,7 @@ struct GaugeSettings
     bool downStaysForward;   // DownStaysForward: Gear down stops at the lowest forward place; wins over SkipNeutral
     bool walkSkipsLow;       // WalkSkipsLow: Gear up and Gear down walk R, N, 1, 2 and on; the low range only on its own keys
     bool positionsByGearbox; // PositionsByGearbox: at Gearbox=2, L-, L, L+ and H only where the fitted gearbox has them in the game
+    bool checkers;           // Checkers: the board was opened once, so its row with a binding is on the Mod work tab. In the ini only once true, and Defaults leaves it
     bool ignoreShifter;      // IgnoreShifter: at Gearbox=2 a position picked on the game's shifter does nothing
     int backToA;             // BackToA: at Gearbox=2, seconds after a shift by hand until the gearbox goes back to A by itself; 0 never, else 3 to 30
     int gameGearDisplay;     // GameGearDisplay: the game's gear display at the bottom right; 0 the game's, 1 off with the mod's gearbox, 2 off always
@@ -303,6 +304,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     strncpy_s(s.padToggle, "None", _TRUNCATE);
     s.physicsRate = 60;
     s.demo = false;
+    s.checkers = false;
     s.probe = 0;
     s.keepLogs = 20;
     s.shiftOnGameThread = 1;
@@ -605,7 +607,7 @@ enum { kSoundOil = kTurboTiers, kSoundPurge, kSoundWhistle, kSoundTierCount }; /
 // string that lives as long as the mod
 enum { kViewPullOff, kViewPullArmed, kViewPullRunning, kViewPullDone, kViewPullStopped };
 static const int kEnginePlot = 40; // points of the tab's torque plot
-static const int kViewActions = 36; // the gearbox's actions the view holds the bindings of (input_bindings.h's kActCount)
+static const int kViewActions = 37; // the gearbox's actions the view holds the bindings of (input_bindings.h's kActCount)
 static const int kViewShifts = 28;  // of them the shifter's, before the two locks (DiffLock, Awd)
 // The tab's asks of the gearbox's bindings: begin a capture into an action's slot, or clear it (the mod's thread does
 // both, with the snapshot of its pass).
@@ -673,6 +675,7 @@ struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWar
                    char bindText[kViewActions][2][40]; int captureAction, captureSlot; bool canReverse; int controllers, gearStalls, gearShifts;
                    int rateNow, rateNote; // the physics rate in force (60 or 120) and what the tab says of it (kRateNote...)
                    int rateWinch;         // the winch's pull at 120 (kRateWinch...)
+                   uint64_t truckVehicle; // the driven truck's vehicle, 0 none: another one closes the checkers board
                    bool stepSign; // another mod changes the physics rate: the sign in the middle of the screen, on until the game ends (StepSignShown)
                    bool odoKnown, odoCanSet, odoHours; char odoText[24]; // the driven truck's count: decided, Set to open (its id read, the match not waiting), hours shown, the figure
                    };
@@ -710,6 +713,7 @@ void GaugeLog(const wchar_t *fmt, ...);     // a line in Gauges.log (any thread)
 bool OverlayHooks();                        // the overlay's hooks on the game's swap chains, first at the start; false = it did not start
 void OverlayInit(HMODULE self);             // the overlay's fonts, then the word that frames may be drawn
 uint32_t PadButtons();                      // the buttons of all connected pads together, 0 without a pad
+void CheckersAsk();                         // the Checkers binding was pressed: the board opens, or closes where it is open (gauge_overlay.cpp)
 
 extern volatile LONG g_pageCapturing; // GetTickCount() of the last frame the tab waited for pad buttons, 0 = none: the mod ignores the pad then
 extern volatile LONG g_modOff;        // 1 = the mod stood down (another version of the game): the tab says so

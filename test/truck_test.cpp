@@ -36,6 +36,7 @@
 #include "game_script.h"
 #include "gearbox_positions.h"
 #include "shifter_read.h"
+#include "checkers.h"
 
 // The hooks' attach and detach (gearbox_hooks.h) on a function of the test's own: the hook counts and calls through.
 static volatile int g_hookSaw = 0;
@@ -3489,6 +3490,212 @@ static void TruckTestsTwo(TruckRefs &r, TruckRaw &t)
         waits = waits && !PositionsWaiting(wait, 0x9000, 1500);
         Check(waits && ShifterHookWanted(2, true) && !ShifterHookWanted(1, true) && !ShifterHookWanted(2, false) && !ShifterHookWanted(0, false),
               "the game shifter's read: what depends on the low gears waits while the shifter's read may still come and no longer once it is in force; the hook is wanted at Gearbox 2 with the box on alone");
+    }
+    {
+        // checkers.h (BRIEF_checkers.md with the Reviewer's addendum): the rules, the opponent, the pick and the window
+        auto ckSq = [](const char *name) { return (name[1] - '1') * 8 + (name[0] - 'a'); };
+        auto ckSet = [&](CkGame &game, int side, std::initializer_list<std::pair<const char *, int>> pieces) {
+            CkClear(game);
+            for (const auto &piece : pieces) game.b[ckSq(piece.first)] = (uint8_t)piece.second;
+            game.side = side;
+            CkRemember(game);
+            CkJudge(game);
+        };
+        auto ckPlay = [&](CkGame &game, const char *from, const char *to) {
+            CkMoves list;
+            CkLegal(game, list);
+            for (int i = 0; i < list.n; i++)
+                if (list.m[i].path[0] == ckSq(from) && list.m[i].path[list.m[i].n - 1] == ckSq(to))
+                {
+                    CkMake(game, list.m[i]);
+                    return true;
+                }
+            return false;
+        };
+        CkGame ckG;
+        CkMoves ckMv;
+        // the start: twelve men a side on the dark squares, the dark square at the lower left, white to move with seven moves
+        CkNew(ckG);
+        int whiteMen = 0, blackMen = 0, onLight = 0;
+        for (int i = 0; i < 64; i++)
+        {
+            whiteMen += ckG.b[i] == kCkWhiteMan, blackMen += ckG.b[i] == kCkBlackMan;
+            onLight += ckG.b[i] && !CkDark(i >> 3, i & 7);
+        }
+        CkLegal(ckG, ckMv);
+        const bool start = whiteMen == 12 && blackMen == 12 && !onLight && CkDark(0, 0) && ckG.b[ckSq("a1")] == kCkWhiteMan && ckG.b[ckSq("h8")] == kCkBlackMan && ckG.side == kCkWhite &&
+                           ckG.result == kCkPlaying && ckMv.n == 7 && !ckMv.capture;
+        // a man takes backward, and a capture is compulsory: the other man's quiet moves are not legal
+        ckSet(ckG, kCkWhite, { { "c3", kCkWhiteMan }, { "h2", kCkWhiteMan }, { "b2", kCkBlackMan }, { "h8", kCkBlackMan } });
+        CkLegal(ckG, ckMv);
+        const bool backward = ckMv.n == 1 && ckMv.capture && ckMv.m[0].path[0] == ckSq("c3") && ckMv.m[0].path[1] == ckSq("a1") && ckMv.m[0].ntaken == 1 && ckMv.m[0].taken[0] == ckSq("b2");
+        // a man moves forward alone: with nothing to take, c3 has two moves and h2 one, none backward
+        ckSet(ckG, kCkWhite, { { "c3", kCkWhiteMan }, { "h2", kCkWhiteMan }, { "h8", kCkBlackMan } });
+        CkLegal(ckG, ckMv);
+        bool forward = ckMv.n == 3 && !ckMv.capture;
+        for (int i = 0; i < ckMv.n; i++) forward = forward && (ckMv.m[i].path[1] >> 3) == (ckMv.m[i].path[0] >> 3) + 1;
+        // any capture may be picked, not the longest, and a capture goes on to its end
+        ckSet(ckG, kCkWhite, { { "a1", kCkWhiteMan }, { "h2", kCkWhiteMan }, { "b2", kCkBlackMan }, { "d4", kCkBlackMan }, { "g3", kCkBlackMan } });
+        CkLegal(ckG, ckMv);
+        int longOnes = 0, shortOnes = 0, cutShort = 0;
+        for (int i = 0; i < ckMv.n; i++)
+        {
+            longOnes += ckMv.m[i].path[0] == ckSq("a1") && ckMv.m[i].ntaken == 2 && ckMv.m[i].n == 3 && ckMv.m[i].path[2] == ckSq("e5");
+            shortOnes += ckMv.m[i].path[0] == ckSq("h2") && ckMv.m[i].ntaken == 1 && ckMv.m[i].path[1] == ckSq("f4");
+            cutShort += ckMv.m[i].path[0] == ckSq("a1") && ckMv.m[i].ntaken == 1;
+        }
+        const bool anyCapture = ckMv.n == 2 && ckMv.capture && longOnes == 1 && shortOnes == 1 && !cutShort;
+        // the pick, square by square: the piece, each landing, and the move is made at its last square
+        CkPick ckP = {};
+        CkMove ckPlayed;
+        bool pick = CkPickSquare(ckG, ckP, ckSq("d4"), ckPlayed) == kCkPickNo && CkPickSquare(ckG, ckP, ckSq("a1"), ckPlayed) == kCkPickOn && ckP.n == 1;
+        bool ckTo[64];
+        CkPickTargets(ckG, ckP, ckTo);
+        pick = pick && ckTo[ckSq("c3")] && !ckTo[ckSq("e5")] && CkPickSquare(ckG, ckP, ckSq("e5"), ckPlayed) == kCkPickNo && CkPickSquare(ckG, ckP, ckSq("c3"), ckPlayed) == kCkPickOn && ckP.n == 2 &&
+               CkPickSquare(ckG, ckP, ckSq("e5"), ckPlayed) == kCkPickPlayed && ckP.n == 0 && ckPlayed.ntaken == 2 && ckG.side == kCkBlack && ckG.b[ckSq("e5")] == kCkWhiteMan &&
+               !ckG.b[ckSq("b2")] && !ckG.b[ckSq("d4")] && ckG.b[ckSq("g3")] == kCkBlackMan;
+        // crowned in the middle of a capture, it goes on as a king: the man on b6 takes c7, lands on d8 and takes f6 from there
+        ckSet(ckG, kCkWhite, { { "b6", kCkWhiteMan }, { "c7", kCkBlackMan }, { "f6", kCkBlackMan }, { "a7", kCkBlackMan } });
+        CkLegal(ckG, ckMv);
+        bool crown = ckMv.n == 2 && ckMv.capture;
+        for (int i = 0; i < ckMv.n; i++)
+            crown = crown && ckMv.m[i].crowned && ckMv.m[i].ntaken == 2 && ckMv.m[i].n == 3 && ckMv.m[i].path[1] == ckSq("d8") && (ckMv.m[i].path[2] == ckSq("g5") || ckMv.m[i].path[2] == ckSq("h4"));
+        crown = crown && ckPlay(ckG, "b6", "h4") && ckG.b[ckSq("h4")] == kCkWhiteKing && !ckG.b[ckSq("c7")] && !ckG.b[ckSq("f6")];
+        // a man that reaches the far row by a quiet move is a king at once
+        ckSet(ckG, kCkWhite, { { "a7", kCkWhiteMan }, { "h8", kCkBlackMan } });
+        crown = crown && ckPlay(ckG, "a7", "b8") && ckG.b[ckSq("b8")] == kCkWhiteKing;
+        // a flying king: seven quiet squares along the long diagonal; it takes from afar and lands on any free square behind
+        ckSet(ckG, kCkWhite, { { "a1", kCkWhiteKing }, { "b8", kCkBlackMan } });
+        CkLegal(ckG, ckMv);
+        bool flying = ckMv.n == 7 && !ckMv.capture;
+        ckSet(ckG, kCkWhite, { { "a1", kCkWhiteKing }, { "c3", kCkBlackMan } });
+        CkLegal(ckG, ckMv);
+        flying = flying && ckMv.n == 5 && ckMv.capture;
+        // ... and where it can take again from one of them, on that one alone
+        ckSet(ckG, kCkWhite, { { "a1", kCkWhiteKing }, { "c3", kCkBlackMan }, { "e7", kCkBlackMan } });
+        CkLegal(ckG, ckMv);
+        const bool landsOn = ckMv.n == 1 && ckMv.m[0].n == 3 && ckMv.m[0].path[1] == ckSq("f6") && ckMv.m[0].path[2] == ckSq("d8") && ckMv.m[0].ntaken == 2;
+        // a man taken stays on the board until the move ends: it is not jumped twice and it blocks the way
+        CkGen ckX = {};
+        ckX.side = kCkWhite;
+        ckX.b[ckSq("d4")] = kCkBlackMan, ckX.b[ckSq("f6")] = kCkBlackMan;
+        const bool free = CkCanJump(ckX, ckSq("b2"), true) && CkCanJump(ckX, ckSq("c3"), false);
+        ckX.taken = 1ull << ckSq("d4");
+        const bool notTwice = free && !CkCanJump(ckX, ckSq("b2"), true) && !CkCanJump(ckX, ckSq("c3"), false) && CkCanJump(ckX, ckSq("e5"), false);
+        // a side with no move loses, and a side with no man
+        ckSet(ckG, kCkBlack, { { "a3", kCkBlackMan }, { "b2", kCkWhiteMan }, { "c1", kCkWhiteMan } });
+        bool lost = ckG.result == kCkWhiteWins;
+        ckSet(ckG, kCkBlack, { { "b2", kCkWhiteMan } });
+        lost = lost && ckG.result == kCkWhiteWins;
+        ckSet(ckG, kCkWhite, { { "h8", kCkBlackMan } });
+        lost = lost && ckG.result == kCkBlackWins && CkPickSquare(ckG, ckP, ckSq("h8"), ckPlayed) == kCkPickNo;
+        // the draws: the same position three times with the same side to move, and 30 king moves in a row with no capture
+        ckSet(ckG, kCkWhite, { { "c1", kCkWhiteKing }, { "f8", kCkBlackKing } });
+        bool repeat = true;
+        for (int round = 0; round < 2 && repeat; round++)
+        {
+            repeat = ckPlay(ckG, "c1", "d2") && ckPlay(ckG, "f8", "e7") && ckPlay(ckG, "d2", "c1") && ckG.result == kCkPlaying && ckPlay(ckG, "e7", "f8");
+            repeat = repeat && ckG.result == (round ? kCkDraw : kCkPlaying);
+        }
+        repeat = repeat && ckG.plies == 8 && ckG.quiet == 8;
+        ckSet(ckG, kCkWhite, { { "c1", kCkWhiteKing }, { "f8", kCkBlackKing } });
+        ckG.quiet = kCkDrawQuiet - 2;
+        bool quiet = ckPlay(ckG, "c1", "d2") && ckG.result == kCkPlaying && ckPlay(ckG, "f8", "e7") && ckG.result == kCkDraw && ckG.quiet == kCkDrawQuiet;
+        // a man's move starts both counts over
+        ckSet(ckG, kCkWhite, { { "c1", kCkWhiteKing }, { "a1", kCkWhiteMan }, { "f8", kCkBlackKing } });
+        ckG.quiet = 20;
+        quiet = quiet && ckPlay(ckG, "a1", "b2") && ckG.quiet == 0 && ckG.seen == 1 && ckG.result == kCkPlaying;
+        Check(start && backward && forward && anyCapture && pick, "checkers, the rules: twelve men a side on the dark squares with white to move; a man moves forward and takes backward; a capture is compulsory; "
+                                                                    "any capture may be picked, not the longest, and it goes on to its end; the pick goes square by square");
+        Check(crown && flying && landsOn && notTwice, "checkers, the rules: a man crowned in the middle of a capture goes on as a king; a king flies and takes from afar; it lands where it can take again, "
+                                                      "where there is such a square; a man taken is not jumped twice and blocks the way");
+        Check(lost && repeat && quiet, "checkers, the end: a side with no move or no man loses; the same position a third time is a draw; 30 king moves with no capture are a draw; a man moved starts the counts over");
+        // the opponent: 200 games against itself from 200 seeds all end, each move legal, the positions looked at under the bound
+        int ended = 0, illegal = 0, worst = 0, longest = 0, whiteWon = 0, blackWon = 0, draws = 0;
+        for (uint32_t seedNo = 1; seedNo <= 200; seedNo++)
+        {
+            uint32_t seed = seedNo * 2654435761u;
+            CkNew(ckG);
+            while (ckG.result == kCkPlaying && ckG.plies < 2000)
+            {
+                CkMove move;
+                int looked = 0;
+                if (!CkOpponent(ckG, seed, move, looked) || !CkIsLegal(ckG, move))
+                {
+                    illegal++;
+                    break;
+                }
+                if (looked > worst) worst = looked;
+                CkMake(ckG, move);
+            }
+            ended += ckG.result != kCkPlaying;
+            whiteWon += ckG.result == kCkWhiteWins, blackWon += ckG.result == kCkBlackWins, draws += ckG.result == kCkDraw;
+            if (ckG.plies > longest) longest = ckG.plies;
+        }
+        // the same seed gives the same move, and no move where there is none
+        CkGame ckA, ckB;
+        CkNew(ckA), CkNew(ckB);
+        uint32_t seedA = 77, seedB = 77;
+        CkMove moveA, moveB;
+        int lookedA = 0, lookedB = 0;
+        const bool same = CkOpponent(ckA, seedA, moveA, lookedA) && CkOpponent(ckB, seedB, moveB, lookedB) && moveA.path[0] == moveB.path[0] && moveA.path[1] == moveB.path[1] && seedA == seedB;
+        ckSet(ckG, kCkWhite, { { "h8", kCkBlackMan } });
+        const bool noMove = !CkOpponent(ckG, seedA, moveA, lookedA);
+        // it takes the man it is offered, and does not give one away where it need not
+        ckSet(ckG, kCkBlack, { { "d6", kCkBlackMan }, { "h8", kCkBlackMan }, { "c5", kCkWhiteMan }, { "a1", kCkWhiteMan } });
+        bool takes = CkOpponent(ckG, seedA, moveA, lookedA) && moveA.ntaken == 1 && moveA.path[0] == ckSq("d6");
+        printf("     checkers, the opponent against itself: %d of 200 games ended (white %d, black %d, draws %d), the longest %d moves, at most %d positions looked at for a move (the bound %d)\n", ended,
+               whiteWon, blackWon, draws, longest, worst, kCkSearchMax);
+        Check(ended == 200 && !illegal && worst > 0 && worst <= kCkSearchMax && same && noMove && takes,
+              "checkers, the opponent: 200 games against itself from 200 seeds all end, every move legal, the positions looked at within the bound; the same seed gives the same move; it takes a man offered");
+        // the hidden opening: five clicks within three seconds, counted over the last five
+        CkClicks clicks = {};
+        bool five = !CkClick(clicks, 0.0) && !CkClick(clicks, 1.0) && !CkClick(clicks, 2.0) && !CkClick(clicks, 3.5) && !CkClick(clicks, 3.6) && CkClick(clicks, 3.7) && clicks.n == 0;
+        five = five && !CkClick(clicks, 10.0) && !CkClick(clicks, 10.1) && !CkClick(clicks, 10.2) && !CkClick(clicks, 10.3) && CkClick(clicks, 10.4);
+        // the controls: what is held at the opening is no press; pick and back once a press; a direction repeats after 0.4 s, every 0.15 s
+        CkControls controls = {};
+        bool keys = CkControlsStep(controls, kCkPickKey | kCkLeft, 0.016f) == 0 && CkControlsStep(controls, kCkPickKey | kCkLeft, 0.016f) == 0 && CkControlsStep(controls, 0, 0.016f) == 0 &&
+                    CkControlsStep(controls, kCkPickKey, 0.016f) == kCkPickKey && CkControlsStep(controls, kCkPickKey, 0.016f) == 0 && CkControlsStep(controls, kCkPickKey | kCkBackKey, 0.016f) == kCkBackKey;
+        keys = keys && CkControlsStep(controls, kCkUp, 0.016f) == kCkUp && CkControlsStep(controls, kCkUp, 0.3f) == 0 && CkControlsStep(controls, kCkUp, 0.1f) == kCkUp &&
+               CkControlsStep(controls, kCkUp, 0.1f) == 0 && CkControlsStep(controls, kCkUp, 0.06f) == kCkUp && CkControlsStep(controls, 0, 0.016f) == 0 &&
+               CkHeldOf(true, false, false, true, true, false) == (kCkLeft | kCkDown | kCkPickKey) && CkHeldOf(false, true, true, false, false, true) == (kCkRight | kCkUp | kCkBackKey);
+        // the window and the menu (M2): after every way of closing the menu is as before the opening
+        CkWindow win = {};
+        bool window = CkWindowClose(win) == kCkMenuLeave && CkWindowFrame(win, false, true, true) == kCkMenuLeave; // closed: nothing asked
+        window = window && CkWindowOpen(win, false) == kCkMenuShow && win.open && win.openedMenu && CkWindowOpen(win, true) == kCkMenuLeave && win.openedMenu &&
+                 CkWindowFrame(win, true, true, true) == kCkMenuLeave && win.open && CkWindowClose(win) == kCkMenuClose && !win.open && !win.openedMenu; // by the player: the menu it opened goes
+        window = window && CkWindowOpen(win, true) == kCkMenuShow && !win.openedMenu && CkWindowClose(win) == kCkMenuLeave && !win.open;          // opened in an open menu: the menu stays
+        window = window && CkWindowOpen(win, false) == kCkMenuShow && CkWindowFrame(win, false, true, true) == kCkMenuLeave && !win.open && !win.openedMenu; // the menu's own key closed it
+        window = window && CkWindowOpen(win, false) == kCkMenuShow && CkWindowFrame(win, true, false, true) == kCkMenuClose && !win.open && !win.openedMenu; // the game's window not in front
+        window = window && CkWindowOpen(win, false) == kCkMenuShow && CkWindowFrame(win, true, true, false) == kCkMenuClose && !win.open && !win.openedMenu; // another truck
+        window = window && CkWindowOpen(win, true) == kCkMenuShow && CkWindowFrame(win, true, true, false) == kCkMenuLeave && !win.open;                      // another truck, in a menu that was open
+        Check(five && keys && window, "checkers, the window: five clicks within three seconds open it; what is held at the opening is no press and a direction repeats; every way of closing leaves the menu "
+                                      "as it was before the opening, and the board is never open with the menu closed, so the mod's bindings rest under it");
+        // the board: the cursor, the pick, back, the buttons and the opponent's wait
+        CkBoard board = {};
+        CkBoardOpened(board, 5);
+        bool play = board.started && board.cx == 2 && board.cy == 2 && board.game.plies == 0 && !board.two;
+        play = play && !CkBoardStep(board, kCkPickKey, -1, 0.016f) && board.pick.n == 1 && !CkBoardStep(board, kCkBackKey, -1, 0.016f) && board.pick.n == 0 && board.game.plies == 0; // c3 picked, taken back
+        play = play && !CkBoardStep(board, kCkPickKey, -1, 0.016f) && !CkBoardStep(board, kCkUp | kCkRight, -1, 0.016f) && board.cx == 3 && board.cy == 3 &&
+               !CkBoardStep(board, kCkPickKey, -1, 0.016f) && board.game.plies == 1 && board.game.side == kCkBlack && board.game.b[ckSq("d4")] == kCkWhiteMan;      // c3 to d4
+        play = play && !CkBoardStep(board, kCkPickKey, ckSq("f6"), 0.3f) && board.game.plies == 1 && board.pick.n == 0;                                             // not the player's turn
+        play = play && !CkBoardStep(board, 0, -1, 0.3f) && board.game.plies == 2 && board.game.side == kCkWhite && board.worst > 0;                                 // the opponent after half a second
+        for (int i = 0; i < 12; i++) CkBoardStep(board, kCkDown | kCkLeft, -1, 0.016f);
+        play = play && board.cy == -1 && board.cx == 0 && !CkBoardStep(board, kCkPickKey, -1, 0.016f) && board.game.plies == 0 && board.pick.n == 0;               // New game
+        for (int i = 0; i < 4; i++) CkBoardStep(board, kCkRight, -1, 0.016f);
+        play = play && board.cx == 4 && !CkBoardStep(board, kCkPickKey, -1, 0.016f) && board.two;                                                                   // Two players
+        play = play && !CkBoardStep(board, 0, ckSq("c3"), 0.016f) && board.cx == 2 && board.cy == 2 && board.pick.n == 1;                                           // a click picks
+        CkBoardStep(board, 0, ckSq("d4"), 0.016f);
+        play = play && board.game.plies == 1 && !CkBoardStep(board, 0, -1, 2.0f) && board.game.plies == 1;                                                          // no opponent with two players
+        CkBoardStep(board, 0, ckSq("f6"), 0.016f), CkBoardStep(board, 0, ckSq("e5"), 0.016f);
+        play = play && board.game.plies == 2 && !strcmp(CkBoardStatus(board), "White to move");
+        for (int i = 0; i < 12; i++) CkBoardStep(board, kCkDown | kCkRight, -1, 0.016f);
+        play = play && board.cy == -1 && board.cx == 7 && CkBoardStep(board, kCkPickKey, -1, 0.016f) && board.game.plies == 2;                                      // Close: the game is kept
+        play = play && CkBoardStep(board, kCkBackKey, -1, 0.016f);                                                                                                   // back with nothing picked closes
+        CkBoardOpened(board, 99);
+        play = play && board.game.plies == 2 && board.seed != 99; // opened again: the same game, the same seed
+        Check(play, "checkers, the board: the cursor picks and drops, back takes the pick back and closes with nothing picked, a click picks; the opponent moves after half a second and not with two players; "
+                    "the buttons under the board; a game is kept through a close");
     }
 
     // the engine speed's places in made-up code: the function's bytes once, the fuel's and the stall's calls once each

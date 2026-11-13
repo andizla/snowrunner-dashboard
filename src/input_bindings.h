@@ -23,6 +23,7 @@ enum GearAction
     kActLockFront, // the differential by axle (BRIEF_axle_diff.md, M7): axle 1, and every other axle, held Locked while on; unbound by default
     kActLockRear,
     kActWinchOut,  // the winch rope let out while held, a probe with Probe=1 alone (winch_out.h); unbound, and its key in the ini only once bound
+    kActCheckers,  // a board opened and closed (checkers.h): its row is on no tab until the board was opened once; unbound, and its key in the ini only once bound
     kActCount
 };
 enum { kGearKeys = 16 }; // the numbered gear keys, Gear1 to Gear16
@@ -30,7 +31,7 @@ enum { kGearKeys = 16 }; // the numbered gear keys, Gear1 to Gear16
 static const char *const kActionNames[kActCount] = { "Gear1", "Gear2", "Gear3", "Gear4", "Gear5", "Gear6", "Gear7", "Gear8", "Gear9", "Gear10",
                                                      "Gear11", "Gear12", "Gear13", "Gear14", "Gear15", "Gear16", "GearH", "GearL-", "GearL", "GearL+", "GearN", "GearR", "GearUp",
                                                      "GearDown", "Clutch", "RangeHigh", "RangeLow", "GearA", "DiffLock", "Awd", "SwayDisconnect",
-                                                     "RideUp", "RideDown", "LockFrontAxle", "LockRearAxles", "WinchOut" };
+                                                     "RideUp", "RideDown", "LockFrontAxle", "LockRearAxles", "WinchOut", "Checkers" };
 
 // A binding: a key (its virtual key code), a pad chord (XInput buttons, PadParse), a wheel's or shifter's button, one
 // direction of its POV hat, or one of its axes (the clutch: inverted where the pedal reads backwards). Wheels count
