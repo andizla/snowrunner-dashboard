@@ -1,5 +1,7 @@
-// winch_out.h: the winch rope let out on a held key, a probe that works with Probe=1 alone (BRIEF_winch_out_probe.md
-// with the Reviewer's addendum of 2026-11-10; review\research_winch_payout.md).
+// winch_out.h: the winch rope let out on a held key (BRIEF_winch_out_probe.md with the Reviewer's addendum of
+// 2026-11-10; review\research_winch_payout.md). It began as a probe behind Probe=1. Since BRIEF_jobs_1114.md, part 163,
+// the key works with its binding alone: the rate is a setting of every player, the rope stops at the winch's own
+// length, and the step mode and the lines of each hold stay the probe's.
 //
 // The game makes the rope's constraint anew on every step while a winch is active. Its own function for a rope of a
 // given length does the same once: L = max(min(span, length now), length asked), capped at the larger of the winch's
@@ -54,6 +56,7 @@ struct WinchOutJob
     volatile LONG skipPull, skipActive, noRope, noLength, crane, stale, zeroStep; // the frames with no call, each by its reason
     volatile LONG shrunk;           // a read more than 1 mm under what the frame before asked: that call was no step
     volatile LONG refused;          // presses of the step mode that made no call
+    volatile LONG noOwn, atEnd;     // no call: the winch's own length not read or not above 0; the ask would pass it
     volatile LONG askedBits, stepSumBits; // sums: the metres asked over the length read, the seconds of the steps
     volatile LONG lengthBits, firstBits;  // the last length read; the first of this hold, no number until there is one
     volatile LONG pullBits;               // the length read under the game's pull (read only, no call), no number until there is one
@@ -61,8 +64,8 @@ struct WinchOutJob
     float lastAsked;
 };
 
-// On the mod's thread, each pass. on: the probe may act (Probe=1, both functions found, the truck update hooked, no
-// fault). vehicle: the driven truck's, 0 none. held and pressed: the key on this pass, false wherever the keys are not
+// On the mod's thread, each pass. on: the key may act (bound, both functions found, the truck update hooked, no
+// fault). step: above 0 only with Probe=1. vehicle: the driven truck's, 0 none. held and pressed: the key on this pass, false wherever the keys are not
 // heard (the menu, a capture, the game not in front).
 inline void WinchOutPost(WinchOutJob &j, bool on, uint64_t vehicle, bool held, bool pressed, float rate, float step, unsigned long long now)
 {
@@ -86,6 +89,8 @@ typedef bool (*WinchSetFn)(uint64_t vehicle, float length);
 //   wrong at the far end of another truck's rope (it gives 0) and on a coupled truck (it gives that truck's rope).
 //   No call while the game's pull or its second active byte is on (M2): the game makes the rope anew itself then.
 //   No call on a crane's winch (S6), at a step of 0 (a pause) or with a stale stamp.
+//   The stop (163, must 1): no call where the ask would pass the winch's own length (vehicle + 0x8F0), and none where
+//   that length is not read or not above 0. The game's own cap is 50 m or more, so without this the rope has no end.
 //   The step mode (step above 0): one call a press, the press taken once whether it is refused or not.
 inline bool WinchOutFrame(WinchOutJob &j, const TruckMemory &m, uint64_t first, float dt, WinchGetFn get, WinchSetFn set, unsigned long long now)
 {
@@ -141,7 +146,10 @@ inline bool WinchOutFrame(WinchOutJob &j, const TruckMemory &m, uint64_t first, 
     if (j.lastAsked > 0.0f && length < j.lastAsked - 0.001f) InterlockedIncrement(&j.shrunk);
     if (!isfinite(WinchFloat(j.firstBits))) InterlockedExchange(&j.firstBits, WinchBits(length));
     InterlockedExchange(&j.lengthBits, WinchBits(length));
+    float own = 0.0f;
+    if (!m.get(vehicle + kWinchOwnAt, own) || !isfinite(own) || !(own > 0.0f)) return none(j.noOwn);
     const float ask = length + (byStep ? step : rate * d); // never under the length read: the set can shorten a rope (N7)
+    if (ask > own) return none(j.atEnd);
     if (!set(vehicle, ask))
     {
         InterlockedExchange(&j.fault, 2);
@@ -162,5 +170,6 @@ inline float WinchClosing(float before, float now, float seconds)
     return (before - now) / seconds;
 }
 
-// Whether the probe asks for the truck update's hook (gearbox_hooks.h, GearboxHooksWanted): Probe=1 with the action bound.
-inline bool WinchOutWanted(bool probe, bool bound) { return probe && bound; }
+// Whether Winch out asks for the truck update's hook (gearbox_hooks.h, GearboxHooksWanted): the action bound, and
+// nothing else. It has no default binding, so nothing more runs for a player who binds nothing (163, must 2).
+inline bool WinchOutWanted(bool bound) { return bound; }

@@ -131,7 +131,7 @@ struct HooksWanted { bool shifts, truckUpdate; };
 // The truck update also whenever the mod's gearbox may hold a truck (Gearbox 1 or 2) with ShiftOnGameThread=1: the
 // mod's shifts are dealt there (review 17, step 1); and at Gearbox=2 with PositionsByGearbox, whose read of the fitted
 // gearbox is a job there (BRIEF_positions_by_gearbox.md, review M1).
-// And at every level for the probe that lets the winch rope out (winch_out.h, WinchOutWanted): its calls go from there.
+// And at every level for Winch out once it is bound (winch_out.h, WinchOutWanted): its calls go from there.
 inline HooksWanted GearboxHooksWanted(int level, bool damage, bool shiftJobs = false, bool positions = false, bool winchProbe = false)
 {
     return HooksWanted{ level >= 1, (level >= 2 && (damage || positions)) || (level >= 1 && shiftJobs) || winchProbe };

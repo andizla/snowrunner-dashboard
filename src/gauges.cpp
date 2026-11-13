@@ -827,11 +827,8 @@ static void WriteIni(const GaugeSettings &s)
     whole(L"RoadLoad", s.roadLoad ? 1 : 0);
     WritePrivateProfileStringW(kIniSection, L"CrawlHold", nullptr, ini.c_str()); // the Crawl hold went with the torque cut: its key dropped
     num(L"EngineBrake", s.engineBrake);
-    if (s.probe) // the probe's own two keys (winch_out.h): in no ini without Probe=1
-    {
-        num(L"WinchOutRate", s.winchOutRate);
-        num(L"WinchOutStep", s.winchOutStep);
-    }
+    num(L"WinchOutRate", s.winchOutRate);
+    if (s.probe) num(L"WinchOutStep", s.winchOutStep); // the step mode is the probe's (winch_out.h): in no ini without Probe=1
     whole(L"WheelCap", s.wheelCap);
     whole(L"LowRangeSlip", s.lowRangeSlip);
     whole(L"HeldGearSlip", s.heldGearSlip);
@@ -1281,6 +1278,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; DiffLockBite (with Powertrain): how firmly the diff lock ties the driven wheels together, 0 to 100 (0: the game lock; 100: one shaft).\n"
                         L";   It acts on a truck whose diff lock is always on too. Such a truck then scrubs in every turn on hard ground.\n"
                         L"; QuickWinch: the quick winch of the game on its key: 0 as the game has it, 1 only while the truck stands (the default), 2 never from that key.\n"
+                        L"; WinchOutRate: how fast the winch wire is let out while the Winch out key is held, 0.1 to 2.0 metres a second (0.5 by default). The key has no binding until one is set on the Controls tab.\n"
                         L"; LockSteerFront, LockSteerRear (with Powertrain): the percent of the steering left while a differential is locked, 30 to 100 (60 and 85; 100 leaves it all).\n"
                         L";   Front: an axle that steers is locked. Rear: another driven axle is. With both the smaller counts. A truck whose lock is always on has it all the time.\n"
                         L"; DiffType (with Powertrain, in the gear positions of the mod gearbox): 0 Auto, 1 Open, 2 Limited slip, 3 Locked. Auto is Locked where the lock is always on, else Open.\n"
@@ -3668,7 +3666,7 @@ static bool ProfilesStep(SettingsState &st, EngineState &e, const char *gearsNow
 // not there keeps the default: up, down, N, R and A on the number pad, which the game, the shipped ReShade.ini (Home
 // alone) and the usual mods leave alone.
 static_assert(kActCount <= kViewActions, "the view holds the bindings of every action");
-static_assert(kActWinchOut == kViewActions - 2, "the Controls tab's last row is the winch probe's, shown with Probe=1 alone");
+static_assert(kActWinchOut == kViewActions - 2, "the Controls tab's last row is Winch out, with its speed under it");
 static_assert(kActCheckers == kViewActions - 1, "the last action is the board's, its row on the Mod work tab once the board was opened");
 static_assert(kActDiffLock == kViewShifts && kActAwd == kViewShifts + 1, "the tab's rows of the locks follow the shifter's");
 static const wchar_t *const kBindSection = L"Gearbox";
@@ -3728,8 +3726,8 @@ static void BindingWriteOne(const std::wstring &ini, const GearBindings &b, int 
     char text[96];
     BindingKey(a, slot, key, 48);
     BindingText(b.slot[a][slot], text, sizeof text);
-    // the winch probe's key is in the ini only while it is bound
-    const bool none = (a == kActWinchOut || a == kActCheckers) && b.slot[a][slot].kind == kBindNone;
+    // the board's key is in the ini only while it is bound; Winch out is written as every other row (163, must 6)
+    const bool none = a == kActCheckers && b.slot[a][slot].kind == kBindNone;
     WritePrivateProfileStringW(kBindSection, key, none ? nullptr : Wide(text).c_str(), ini.c_str());
 }
 
@@ -4377,10 +4375,10 @@ static bool GameShiftCall(uint64_t vehicle, int gear)
 #endif
 }
 
-// ---- the winch rope let out, a probe (winch_out.h; BRIEF_winch_out_probe.md) ----
+// ---- the winch rope let out on a held key (winch_out.h; BRIEF_winch_out_probe.md, BRIEF_jobs_1114.md part 163) ----
 // The game's read of a rope's length and its set of one, once the code look found both and the test of the two active
 // bytes (game_code.h, WinchPlaceFind). Called only from the truck update's frame, each behind a fault guard: a fault
-// ends the probe for the session (WinchOutFrame).
+// ends Winch out for the session (WinchOutFrame).
 typedef float (*GameWinchGetFn)(void *vehicle);
 typedef void (*GameWinchSetFn)(void *vehicle, float length);
 static GameWinchGetFn g_winchGet = nullptr;
@@ -4917,10 +4915,10 @@ static void GameCodeLook(const GaugeSettings &s)
             g_winchSet = (GameWinchSetFn)(g_base + winch.set);
             Log(L"winch out: the game's read of the rope length at +%zx and its set at +%zx; its test of the two active bytes at +%zx says they are at vehicle + 0x8C8 "
                 L"and + 0x8C9. The rope at + 0x8B0, the winch's own length at + 0x8F0 and the crane's byte at + 0x904 are the three known builds' offsets, not "
-                L"checked on this one. A test: only with Probe=1 and Winch out bound",
+                L"checked on this one. Hooked only once Winch out is bound",
                 winch.get, winch.set, winch.bytes);
         }
-        else Log(L"winch out: %S, so the test that lets the rope out does nothing in this game", winch.why);
+        else Log(L"winch out: %S, so Winch out does nothing in this game version", winch.why);
     }
     if (TruckInputFind(code.data(), from, to, g_input))
         Log(L"engine sound: the game's truck input at +%zx, its handle helper at +%zx; hooked once Powertrain and ModEngineSpeed are on with a truck driven", g_input.input,
@@ -4967,7 +4965,7 @@ static void GearboxHooksStep(const GaugeSettings &s)
     if (!g_hooksReady) return;
     static HooksGate gate = {};
     static bool saidNone = false, saidNoTruck = false;
-    const bool winchProbe = WinchOutWanted(s.probe != 0, g_winchBound) && g_winchGet && g_winchSet;
+    const bool winchProbe = WinchOutWanted(g_winchBound) && g_winchGet && g_winchSet;
     const HooksWanted want = GearboxHooksWanted(s.gearbox, s.damage, s.shiftOnGameThread != 0, s.positionsByGearbox, winchProbe);
     const int act = GearboxGateStep(gate, want);
     if (!want.shifts && !gate.shifts && !saidNone)
@@ -5014,7 +5012,7 @@ static void GearboxHooksStep(const GaugeSettings &s)
             Log(L"gearbox damage: dealt on the game's own thread, from its truck update at +%zx (hooked at Gearbox=2 with Damage on, or with ShiftOnGameThread=1), with its "
                 L"damage update at +%zx after; the mod's shifts are dealt there too (ShiftOnGameThread=%d)",
                 g_path.truckUpdate, g_path.damageUpdate, s.shiftOnGameThread);
-            if (winchProbe) Log(L"winch out: the truck update is hooked for the test (Probe=1 with Winch out bound)");
+            if (winchProbe) Log(L"winch out: the truck update is hooked (Winch out is bound)");
         }
     }
     if ((act & kGateAttachTruck) && !g_truckFrames) g_positionsOff = L"the game's truck update is not hooked";
@@ -5257,7 +5255,7 @@ static void OnTruckFrame(void *first, float step)
 {
     const TruckMemory m = { PeekGame, g_base, PokeGame };
     const long frame = TruckUpdateFrames();
-    // the winch probe, before the stall job's early return below (winch_out.h): nothing unless the key is held
+    // Winch out, before the stall job's early return below (winch_out.h): nothing unless the key is held
     if (g_winchJob.held || g_winchJob.press) WinchOutFrame(g_winchJob, m, (uint64_t)first, step, WinchGetCall, WinchSetCall, GetTickCount64());
     if (g_shiftJob.state == kShiftPosted) ShiftJobFrame(g_shiftJob, g_engage, m, (uint64_t)first, ShiftOnGame, frame, GetCurrentThreadId(), GetTickCount64());
     EngageFrame(g_engage, m, frame);
@@ -5267,17 +5265,21 @@ static void OnTruckFrame(void *first, float step)
     StallJobFrame(g_stallJob, m, (uint64_t)first, g_damageUpdate);
 }
 
-// The winch probe on the mod's thread, every pass (winch_out.h): the job posted for the frame, and the log. vehicle:
+// Winch out on the mod's thread, every pass (winch_out.h): the job posted for the frame, and the log. vehicle:
 // the driven truck's, 0 none; held and pressed: Winch out on this pass, false wherever the keys are not heard.
-//   One line at each hold's start, one a second while held, one at its end, each with what the frame counted in this
-//   hold; one in capitals where a call faulted.
+//   For every player: one line in capitals where a call faulted, one where a press could do nothing, one plain line at
+//   the first hold of a session. With Probe=1: one line at each hold's start, one a second while held, one at its end,
+//   each with what the frame counted in this hold.
+//   The mod keeps no length and no latch: with no key held it makes no call, so a released winch, a truck change and a
+//   recovery leave nothing of the mod behind (the Reviewer's addendum on 163).
 static void WinchOutPass(const GaugeSettings &s, uint64_t vehicle, bool held, bool pressed)
 {
     WinchOutJob &j = g_winchJob;
-    static bool wasHeld = false, saidFault = false, saidWhy = false;
+    static bool wasHeld = false, saidFault = false, saidWhy = false, saidFirst = false;
     static unsigned long long saidAt = 0;
     static uint64_t holdVehicle = 0;
-    static LONG from[11];
+    static LONG from[13];
+    const float stepNow = s.probe ? s.winchOutStep : 0.0f; // the step mode stays the probe's (163, must 5)
     static float fromAsked = 0.0f, fromSteps = 0.0f;
     static float pullWas = NAN;             // the rope's length under the game's pull at the last line, none before one
     static unsigned long long pullAt = 0;
@@ -5285,26 +5287,26 @@ static void WinchOutPass(const GaugeSettings &s, uint64_t vehicle, bool held, bo
     if (j.fault && !saidFault)
     {
         saidFault = true;
-        Log(L"WINCH OUT: the game's %s of the rope length faulted on the game's thread, so the test is off until the game is started again. The rope may be gone: hook the winch again",
+        Log(L"WINCH OUT: the game's %s of the rope length faulted on the game's thread, so Winch out is off until the game is started again. The rope may be gone: hook the winch again",
             j.fault == 1 ? L"read" : L"set");
     }
-    const wchar_t *why = !s.probe ? L"" : j.fault ? L"a call faulted" : !g_winchGet || !g_winchSet ? L"the game's functions were not found" : !g_truckFrames ? L"the game's truck update is not hooked" : nullptr;
-    if (why && *why && pressed && !saidWhy)
+    const wchar_t *why = j.fault ? L"a call faulted" : !g_winchGet || !g_winchSet ? L"the game's functions were not found" : !g_truckFrames ? L"the game's truck update is not hooked" : nullptr;
+    if (why && pressed && !saidWhy)
     {
         saidWhy = true;
         Log(L"winch out: nothing done: %s", why);
     }
-    const bool on = !why;
+    const bool on = !why && g_winchBound;
     held = held && on && vehicle;
-    WinchOutPost(j, on, vehicle, held, pressed && on, s.winchOutRate, s.winchOutStep, now);
-    auto counts = [&](LONG out[11]) {
-        const LONG v[11] = { j.frames, j.calls, j.skipPull, j.skipActive, j.noRope, j.noLength, j.crane, j.stale, j.zeroStep, j.shrunk, j.refused };
+    WinchOutPost(j, on, vehicle, held, pressed && on, s.winchOutRate, stepNow, now);
+    auto counts = [&](LONG out[13]) {
+        const LONG v[13] = { j.frames, j.calls, j.skipPull, j.skipActive, j.noRope, j.noLength, j.crane, j.stale, j.zeroStep, j.shrunk, j.refused, j.noOwn, j.atEnd };
         memcpy(out, v, sizeof v);
     };
     auto say = [&](const wchar_t *head) {
-        LONG c[11];
+        LONG c[13];
         counts(c);
-        for (int i = 0; i < 11; i++) c[i] -= from[i];
+        for (int i = 0; i < 13; i++) c[i] -= from[i];
         const float first = WinchFloat(j.firstBits);
         wchar_t firstText[32] = L"not read";
         if (isfinite(first)) swprintf_s(firstText, L"%.3f m", first);
@@ -5326,10 +5328,10 @@ static void WinchOutPass(const GaugeSettings &s, uint64_t vehicle, bool held, bo
         if (c[1]) swprintf_s(ropeText, L"%.3f m", WinchFloat(j.lengthBits));
         else wcscpy_s(ropeText, c[0] ? L"not read (no call)" : L"not read (no frame)");
         Log(L"winch out: %s: the rope %s (at the start of the hold %s), %ld calls in %ld frames asked %.3f m more over %.3f s of steps; no call: the game's pull %ld, "
-            L"its second active byte %ld, no rope of this truck %ld, a length of 0 %ld, a crane %ld, the mod's pass late %ld, a step of 0 %ld; presses with no call %ld; "
-            L"a read under what was asked %ld%s",
+            L"its second active byte %ld, no rope of this truck %ld, a length of 0 %ld, a crane %ld, the mod's pass late %ld, a step of 0 %ld, the winch's own length "
+            L"reached %ld, its own length not read %ld; presses with no call %ld; a read under what was asked %ld%s",
             head, ropeText, firstText, c[1], c[0], WinchFloat(j.askedBits) - fromAsked, WinchFloat(j.stepSumBits) - fromSteps, c[2], c[3], c[4],
-            c[5], c[6], c[7], c[8], c[10], c[9], pullText);
+            c[5], c[6], c[7], c[8], c[12], c[11], c[10], c[9], pullText);
     };
     if (held && !wasHeld)
     {
@@ -5344,9 +5346,17 @@ static void WinchOutPass(const GaugeSettings &s, uint64_t vehicle, bool held, bo
         const bool read = m.get(vehicle + kWinchRopeAt, rope) && m.get(vehicle + kWinchPullAt, pull) && m.get(vehicle + kWinchActiveAt, active) &&
                           m.get(vehicle + kWinchOwnAt, own) && m.get(vehicle + kWinchCraneAt, crane);
         wchar_t how[64];
-        if (s.winchOutStep > 0.0f) swprintf_s(how, L"%.2f m a press (WinchOutStep)", s.winchOutStep);
+        if (stepNow > 0.0f) swprintf_s(how, L"%.2f m a press (WinchOutStep)", stepNow);
         else swprintf_s(how, L"%.2f m/s (WinchOutRate)", s.winchOutRate);
-        if (read)
+        if (!saidFirst)
+        {
+            saidFirst = true;
+            Log(L"winch out: the key lets the winch wire out at %s while held, to the winch's own length at the most. The wire is drawn tight meanwhile; the slack is in the "
+                L"physics, and the next pull of the winch takes it back",
+                how);
+        }
+        if (!s.probe) {}
+        else if (read)
             Log(L"winch out: held on vehicle %llx at %s: its rope %s, the winch's own length %.2f m, the game's pull byte %d, its second active byte %d, a crane's %d",
                 (unsigned long long)vehicle, how, rope ? L"is there" : L"is not there", own, pull, active, crane);
         else Log(L"winch out: held on vehicle %llx at %s: the winch's fields were not read", (unsigned long long)vehicle, how);
@@ -5354,9 +5364,9 @@ static void WinchOutPass(const GaugeSettings &s, uint64_t vehicle, bool held, bo
     else if (held && now - saidAt >= 1000)
     {
         saidAt = now;
-        say(L"held");
+        if (s.probe) say(L"held");
     }
-    else if (!held && wasHeld) say(holdVehicle && vehicle != holdVehicle ? L"ended, another truck or none" : L"released");
+    else if (!held && wasHeld && s.probe) say(holdVehicle && vehicle != holdVehicle ? L"ended, another truck or none" : L"released");
     wasHeld = held;
 }
 
@@ -10366,7 +10376,7 @@ static DWORD WINAPI Run(void *)
             // the two axle levers (BRIEF_axle_diff.md, M7)
             if (locksHeard && states[kActLockFront].pressed) AxleLeverPress(watch, true);
             if (locksHeard && states[kActLockRear].pressed) AxleLeverPress(watch, false);
-            // the winch probe (winch_out.h): every pass, so a hold ends wherever the keys are not heard
+            // Winch out (winch_out.h): every pass, so a hold ends wherever the keys are not heard
             // the board's binding (checkers.h): heard with the menu open too, since the board shows there and the same press closes it
             if (s.checkers && !bindCapture.active && states[kActCheckers].pressed) CheckersAsk();
             g_winchBound = binds.slot[kActWinchOut][0].kind != kBindNone || binds.slot[kActWinchOut][1].kind != kBindNone;
@@ -10946,6 +10956,7 @@ static DWORD WINAPI Run(void *)
             v.steerPercent = driving && watch.steer.known ? LockSteerPercent(watch.steer.share) : 0;
             v.steerNoRoute = !g_steerPattern;
             v.quickWinchNoRoute = !g_quickWinchFound || g_quickWinchFailed;
+            v.winchOutOff = g_winchJob.fault ? 2 : !g_winchGet || !g_winchSet ? 1 : 0;
             v.drive.steer = (uint8_t)v.steerPercent;
             for (int a = 0; driving && a < watch.axleRows.axles && a < kAxleRowsMost; a++)
             {
@@ -11315,16 +11326,25 @@ static void PartIni()
               "settings: an old CrawlHold= is ignored and dropped at the next write; EngineBrake 22 read back, 80 held to 30, 15 by default");
         WriteIni(back);
     }
-    // the winch probe's two keys (winch_out.h): written only with Probe=1, read back, held to their ranges; its binding's
-    // key is in the ini only while bound
+    // Winch out's keys (winch_out.h; 163, must 6): WinchOutRate is every player's, WinchOutStep is written only with
+    // Probe=1; both read back and held to their ranges; the binding's key is written as the other rows' are
     {
         GaugeSettings plain;
         SettingsDefaults(plain);
         WritePrivateProfileStringW(kIniSection, L"WinchOutRate", nullptr, ini.c_str());
         WritePrivateProfileStringW(kIniSection, L"WinchOutStep", nullptr, ini.c_str());
         WriteIni(plain);
-        wchar_t rateKept[16] = L"", bindKept[32] = L"";
+        wchar_t rateKept[16] = L"", stepKept[16] = L"", bindKept[32] = L"", otherKept[32] = L"", otherKey[48];
         GetPrivateProfileStringW(kIniSection, L"WinchOutRate", L"none", rateKept, 16, ini.c_str());
+        GetPrivateProfileStringW(kIniSection, L"WinchOutStep", L"none", stepKept, 16, ini.c_str());
+        GaugeSettings plainRate = plain, rateBack;
+        plainRate.winchOutRate = 0.75f, plainRate.winchOutStep = 0.5f;
+        WriteIni(plainRate);
+        SettingsDefaults(rateBack);
+        ReadIni(rateBack);
+        SettingsClamp(rateBack);
+        wchar_t stepNoProbe[16] = L"";
+        GetPrivateProfileStringW(kIniSection, L"WinchOutStep", L"none", stepNoProbe, 16, ini.c_str());
         GaugeSettings probing = plain;
         probing.probe = 1, probing.winchOutRate = 1.25f, probing.winchOutStep = 0.5f;
         WriteIni(probing);
@@ -11347,11 +11367,17 @@ static void PartIni()
         BindingsRead(ini, boundBack, false);
         BindingsWrite(ini, none);
         GetPrivateProfileStringW(kBindSection, bindKey, L"none", bindKept, 32, ini.c_str());
-        Check(!wcscmp(rateKept, L"none") && plain.winchOutRate == 0.5f && plain.winchOutStep == 0.0f && readBack.winchOutRate == 1.25f && readBack.winchOutStep == 0.5f &&
-              wide.winchOutRate == 2.0f && wide.winchOutStep == 0.0f && !SameSettings(plain, probing) && boundBack.slot[kActWinchOut][0].kind == kBindKey &&
-              boundBack.slot[kActWinchOut][0].code == 'K' && !wcscmp(bindKept, L"none") && !strcmp(kActionNames[kActWinchOut], "WinchOut"),
-              "settings: WinchOutRate and WinchOutStep are in no ini without Probe=1, with it 1.25 and 0.5 read back, 9 held to 2.0 and -1 to 0; the WinchOut binding's "
-              "key is there only while bound");
+        BindingKey(kActSway, 0, otherKey, 48);
+        GetPrivateProfileStringW(kBindSection, otherKey, L"none", otherKept, 32, ini.c_str());
+        GearBindings fresh = {};
+        BindingsDefault(fresh);
+        Check(_wtof(rateKept) == 0.5 && !wcscmp(stepKept, L"none") && !wcscmp(stepNoProbe, L"none") && rateBack.winchOutRate == 0.75f && rateBack.winchOutStep == 0.0f &&
+              plain.winchOutRate == 0.5f && plain.winchOutStep == 0.0f && readBack.winchOutRate == 1.25f && readBack.winchOutStep == 0.5f &&
+              wide.winchOutRate == 2.0f && wide.winchOutStep == 0.0f && !SameSettings(plain, probing) && !SameSettings(plain, plainRate) && boundBack.slot[kActWinchOut][0].kind == kBindKey &&
+              boundBack.slot[kActWinchOut][0].code == 'K' && wcscmp(bindKept, L"none") && !wcscmp(bindKept, otherKept) && fresh.slot[kActWinchOut][0].kind == kBindNone &&
+              fresh.slot[kActWinchOut][1].kind == kBindNone && !strcmp(kActionNames[kActWinchOut], "WinchOut"),
+              "settings: WinchOutRate is in the ini without Probe=1, 0.5 by default and 0.75 read back; WinchOutStep is in no ini without Probe=1 and with it 0.5 read back; 9 is "
+              "held to 2.0 and -1 to 0; the WinchOut binding has no default and its key is written as the other rows' are, bound or not");
         {
             // the board's key and its binding (BRIEF_checkers.md, M5): in no ini until the board was opened once
             wchar_t boardKept[16] = L"", boardBind[32] = L"", boardOn[16] = L"", boardKey[48];
@@ -11557,7 +11583,7 @@ static void PartIni()
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 165, "ini: the help text survives a write (165 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 166, "ini: the help text survives a write (166 comment lines)");
     // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
     {
         char none[32] = "x", tab[32] = {}, kept[32] = {};

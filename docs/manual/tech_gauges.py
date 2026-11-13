@@ -1381,6 +1381,21 @@ that blink (engine damage, oil, tire) are flagged in their own word, so a reader
 The tire mod reads the outside temperature from here. Other mods' authors get the layout and the read rule in
 <code>docs\\SnowRunnerGauges_State.h</code> and its guide <code>SnowRunnerGauges_State.md</code> (CC0); a reader maps the whole block
 (size 0) and checks each field against the size, so it reads version 1 and 2 alike.</p>
+<p><b>Winch out</b> (<code>winch_out.h</code>; BRIEF_winch_out_probe.md, BRIEF_jobs_1114.md part 163). The game makes the rope's
+constraint anew on every step while a winch is active, and it has a function of its own for a rope of a given length. While the
+key is held the mod reads the rope's length by the game's function in the driven truck's update and asks for that length plus
+the rate times the step (<code>WinchOutFrame</code>; the step is held to 0.05 s, so 60 and 120 steps give the same metres a
+second). The mod keeps no length and no latch: with no key held it makes no call, so a released winch, a truck change and a
+recovery leave nothing of the mod behind. No call while the game's pull or its second active byte is on, on a crane's winch,
+with no rope of this truck, and where the ask would pass the winch's own length (vehicle + 0x8F0) or that length is not read.
+The truck update's hook is asked for only once the action is bound (<code>WinchOutWanted</code>); there is no default binding.
+The three places in the game's code must each be found exactly once, else the row is greyed and reads "Winch out: not in this
+game version." After a call faulted the log has one line in capitals (<code>WINCH OUT: the game's</code>) and the row says so
+until the game is started again. The first hold of a session gives one line (<code>winch out: the key lets the winch wire out
+at</code>), the hook one (<code>winch out: the truck update is hooked (Winch out is bound)</code>; while it was a probe the line read
+<code>winch out: the truck update is hooked for the test</code>). The action is WinchOut in the list of bindings, so its
+key is BindWinchOut. The slider was Winch out rate on the Mod work tab while it was a probe and is Winch out speed on the
+Controls tab now. The lines of each hold with their counts, and the step mode (WinchOutStep), stay behind Probe=1.</p>
 <p><b>The quick winch.</b> <code>quick_winch.h</code>, <code>QuickWinchFind</code> in <code>game_code.h</code>. The game's quick winch
 key ends in one method of 29 bytes that only raises a request byte on the player's controller; the player's truck update makes the
 winch a frame later. The method is found in three steps: the hash of the script native's name once in the code, the thunk named just

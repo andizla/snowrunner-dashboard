@@ -5012,6 +5012,7 @@ static void TruckTestsFour()
         Block(ropeOther, 0x1000);
         Put(ropeFirst + 0x20, ropeTruck);
         Put(ropeTruck + kWinchRopeAt, ropeThing);
+        Put(ropeTruck + kWinchOwnAt, 30.0f);
         WinchOutJob job;
         auto anew = [&]() {
             memset((void *)&job, 0, sizeof job);
@@ -5042,7 +5043,7 @@ static void TruckTestsFour()
         WinchOutPost(job, true, ropeTruck, false, false, 0.5f, 0.0f, clock);
         const bool released = !frame(tick, clock) && g_ropeSets == 11 && g_ropeReads == 11 && job.frames == 11;
         Check(ten && shrunk && released,
-              "winch probe: ten frames of 1/60 s at 0.5 m/s make ten calls, each the length read plus 0.5 / 60; a read under what was asked is counted; released, no call and no read");
+              "winch out: ten frames of 1/60 s at 0.5 m/s make ten calls, each the length read plus 0.5 / 60; a read under what was asked is counted; released, no call and no read");
 
         // the step's time: 0.5 s is held to 0.05, 0 makes no call; the mod's last pass 150 ms old makes none, 100 ms does
         anew();
@@ -5115,11 +5116,60 @@ static void TruckTestsFour()
         WinchOutPost(job, true, ropeTruck, true, true, 0.5f, 0.0f, 1000);
         g_ropeLength = NAN;
         const bool getFault = !frame(tick, 1000) && job.fault == 1 && !g_ropeSets;
-        const bool wanted = WinchOutWanted(true, true) && !WinchOutWanted(false, true) && !WinchOutWanted(true, false) && GearboxHooksWanted(0, false, false, false, true).truckUpdate &&
-                            !GearboxHooksWanted(0, false, false, false, true).shifts && !GearboxHooksWanted(0, true, false, true, false).truckUpdate;
+        const bool wanted = WinchOutWanted(true) && !WinchOutWanted(false) && GearboxHooksWanted(0, false, false, false, WinchOutWanted(true)).truckUpdate &&
+                            !GearboxHooksWanted(0, false, false, false, WinchOutWanted(true)).shifts && !GearboxHooksWanted(0, true, false, true, WinchOutWanted(false)).truckUpdate;
         Check(offNot && noTruck && setFault && callsEnded && getFault && wanted,
-              "winch probe: with the probe off or no truck the job rests whatever the key does; a fault in the set or the read ends the calls; the truck update is asked "
-              "for only with Probe=1 and the action bound, at any Gearbox");
+              "winch out: with it off or no truck the job rests whatever the key does; a fault in the set or the read ends the calls; the truck update is asked "
+              "for with the action bound alone, at any Gearbox and with no Probe, and not while it is not bound");
+
+        // the stop at the winch's own length (163, must 1): the rope goes to it and no further; no call where the own
+        // length is 0, under 0 or no number, each counted
+        anew();
+        Put(ropeTruck + kWinchOwnAt, 10.05f);
+        clock = 1000;
+        int stopCalls = 0;
+        for (int i = 0; i < 60; i++, clock += 16)
+        {
+            WinchOutPost(job, true, ropeTruck, true, i == 0, 0.5f, 0.0f, clock);
+            stopCalls += frame(tick, clock) ? 1 : 0;
+        }
+        const bool stops = stopCalls == 6 && g_ropeSets == 6 && g_ropeLength <= 10.05f && g_ropeLength > 10.04f && job.atEnd == 54 && !job.noOwn && job.frames == 60;
+        // the step mode's press past the end is refused whole
+        anew();
+        WinchOutPost(job, true, ropeTruck, true, true, 0.5f, 0.25f, 1000);
+        const bool stepStops = !frame(tick, 1000) && job.atEnd == 1 && job.refused == 1 && !g_ropeSets && g_ropeLength == 10.0f;
+        bool noOwn = true;
+        long counted = 0;
+        for (const float own : { 0.0f, -5.0f, (float)NAN })
+        {
+            anew();
+            Put(ropeTruck + kWinchOwnAt, own);
+            WinchOutPost(job, true, ropeTruck, true, true, 0.5f, 0.0f, 1000);
+            noOwn = noOwn && !frame(tick, 1000) && !g_ropeSets && job.noOwn == 1 && !job.atEnd && !job.calls;
+            counted += job.noOwn;
+        }
+        Put(ropeTruck + kWinchOwnAt, 30.0f);
+        Check(stops && stepStops && noOwn && counted == 3,
+              "winch out: the rope is let out to the winch's own length and no further, the frames past it counted; a press of the step mode that would pass it makes no call; "
+              "with an own length of 0, under 0 or no number there is no call");
+        if (!(stops && stepStops && noOwn)) printf("     winch stop: %d %d %d (calls %d, length %.4f, at end %ld)\n", stops, stepStops, noOwn, stopCalls, g_ropeLength, job.atEnd);
+
+        // the same metres a second at 60 and at 120 steps (163, S2): a second of frames of 1/60 and one of frames of 1/120
+        float lengths[2] = { 0.0f, 0.0f };
+        for (int rate = 0; rate < 2; rate++)
+        {
+            anew();
+            const int frames = rate ? 120 : 60;
+            clock = 1000;
+            for (int i = 0; i < frames; i++, clock += rate ? 8 : 16)
+            {
+                WinchOutPost(job, true, ropeTruck, true, i == 0, 0.5f, 0.0f, clock);
+                frame(1.0f / (float)frames, clock);
+            }
+            lengths[rate] = g_ropeLength;
+        }
+        Check(fabsf(lengths[0] - 10.5f) < 0.001f && fabsf(lengths[1] - 10.5f) < 0.001f && fabsf(lengths[0] - lengths[1]) < 0.001f,
+              "winch out: a second held at 0.5 m/s lets out half a metre with 60 frames of 1/60 s and with 120 frames of 1/120 s");
     }
 }
 

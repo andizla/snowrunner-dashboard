@@ -22,7 +22,7 @@ enum GearAction
     kActRideDown,
     kActLockFront, // the differential by axle (BRIEF_axle_diff.md, M7): axle 1, and every other axle, held Locked while on; unbound by default
     kActLockRear,
-    kActWinchOut,  // the winch rope let out while held, a probe with Probe=1 alone (winch_out.h); unbound, and its key in the ini only once bound
+    kActWinchOut,  // the winch rope let out while held (winch_out.h); no default binding
     kActCheckers,  // a board opened and closed (checkers.h): its row is on no tab until the board was opened once; unbound, and its key in the ini only once bound
     kActCount
 };

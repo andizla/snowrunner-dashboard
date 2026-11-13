@@ -1625,11 +1625,21 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         ImGui::TextDisabled("Locks and ride");
         PageTip("The diff lock and AWD on a key on every truck. Sway bars connects and disconnects the sway bars. Ride up and Ride down move the air suspension 2 cm a press under 20 km/h. Lock front axle and Lock rear axles hold those axles Locked until pressed again, over the Axle rows of the Power tab.");
         for (int a = kViewShifts; a < kViewActions - 2; a++) bindingRow(a);
-        if (s.probe)
+        // Winch out (input_bindings.h, kActWinchOut; winch_out.h): the row, and under it the one figure of that key.
+        // Greyed with its reason where the game's functions are not found or a call faulted (163, must 3)
         {
-            // the probe's own row (input_bindings.h, kActWinchOut): not there without Probe=1
+            ImGui::BeginDisabled(view.winchOutOff != 0);
             bindingRow(kViewActions - 2);
-            PageTip("Lets the winch rope out while held. A test: it works with Probe=1 alone. Bind a key or button the game does not use.");
+            ImGui::EndDisabled();
+            PageTip("Lets the winch wire out while held. The wire looks tight while it is let out. It goes slack once the truck moves off. The next pull of the winch takes the slack back. Pick a key or button the game does not use.");
+            ImGui::BeginDisabled(view.winchOutOff != 0);
+            PageLabel("Winch out speed", labelX);
+            ImGui::SetNextItemWidth(w);
+            changed(ImGui::SliderFloat("##winchrate", &s.winchOutRate, 0.1f, 2.0f, "%.2f m/s", ImGuiSliderFlags_AlwaysClamp));
+            ImGui::EndDisabled();
+            PageTip("How fast the wire is let out while Winch out is held. It stops at the full length of the winch. Default 0.50 m/s.");
+            if (view.winchOutOff == 1) ImGui::TextDisabled("Winch out: not in this game version.");
+            else if (view.winchOutOff == 2) ImGui::TextDisabled("Winch out: off until the game is started again. Hook the winch again.");
         }
         // the game's quick winch on its key (BRIEF_quick_winch.md): acts at once; greyed where the game's method is not found
         {
@@ -1693,11 +1703,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             ImGui::SameLine();
             if (ImGui::Button("Add 10###test10")) DamageTestAsk(10);
             PageTip(testTip);
-            // the winch let out (winch_out.h): the Winch out row is on the Controls tab
-            PageLabel("Winch out rate", labelX);
-            ImGui::SetNextItemWidth(w);
-            changed(ImGui::SliderFloat("##winchrate", &s.winchOutRate, 0.1f, 2.0f, "%.2f m/s", ImGuiSliderFlags_AlwaysClamp));
-            PageTip("A test: how fast the rope is let out while Winch out is held. Default 0.50 m/s.");
+            // the winch let out by a press (winch_out.h): the probe's step mode. The Winch out row and its speed are on the Controls tab
             PageLabel("Winch out step", labelX);
             ImGui::SetNextItemWidth(w);
             changed(ImGui::SliderFloat("##winchstep", &s.winchOutStep, 0.0f, 2.0f, s.winchOutStep > 0.0f ? "%.2f m a press" : "off", ImGuiSliderFlags_AlwaysClamp));
