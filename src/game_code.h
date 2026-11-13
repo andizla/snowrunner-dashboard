@@ -681,6 +681,48 @@ inline bool TruckTypePlaceFind(const uint8_t *code, size_t from, size_t to, Truc
     return true;
 }
 
+// ---- the native the script asks for a bool of an XML node (BRIEF_positions_by_shifter.md, the gate G1) ----
+// bool f(node, {const char *text, uint32 length} *name, bool default, bool flag), the answer in al. Found two ways that
+// must agree: the function's own first bytes, once in the code (its neighbours take an int or a float default and
+// differ at the two movzx), and the script thunk's call of it, once in the code (the default and the flag from the
+// script's two bools, the name at rsp + 0x20, the native object in rsi, the answer stored as a byte after). The native
+// has no other caller.
+static const char *const kXmlBoolPattern = "48 8B C4 56 57 41 56 48 81 EC A0 00 00 00 48 C7 40 88 FE FF FF FF 48 89 58 10 48 89 68 18 41 0F B6 E9 45 0F B6 F0 48 8B F2 48 8D 79 08 48 8B CF E8 ? ? ? ? 84 C0 0F 85";
+static const char *const kXmlBoolCallPattern = "44 0F B6 CB 44 0F B6 C7 48 8D 54 24 20 48 8B CE E8 ? ? ? ? 88 44 24 20";
+static const size_t kXmlBoolCallAt = 16;
+struct XmlBoolPlace
+{
+    size_t native, call; // the offsets in the code, 0 = not found
+    const char *why;     // what was not found (a string literal), "" when found
+};
+inline bool XmlBoolFind(const uint8_t *code, size_t from, size_t to, XmlBoolPlace &out)
+{
+    out = XmlBoolPlace{ 0, 0, "" };
+    uint8_t bytes[kPatternMax], mask[kPatternMax];
+    size_t native = 0, call = 0;
+    int count = 0;
+    int length = PatternParse(kXmlBoolPattern, bytes, mask);
+    if (!PatternFind(code, from, to, bytes, mask, length, native, count) || count != 1)
+    {
+        out.why = count > 1 ? "the script's bool read of an XML node stands more than once" : "the script's bool read of an XML node was not found";
+        return false;
+    }
+    length = PatternParse(kXmlBoolCallPattern, bytes, mask);
+    if (!PatternFind(code, from, to, bytes, mask, length, call, count) || count != 1)
+    {
+        out.why = count > 1 ? "the script thunk's call of the bool read stands more than once" : "the script thunk's call of the bool read was not found";
+        return false;
+    }
+    if (CallTarget(code, from, to, call + kXmlBoolCallAt) != native)
+    {
+        out.why = "the script thunk calls another function than the bool read found";
+        return false;
+    }
+    out.native = native;
+    out.call = call;
+    return true;
+}
+
 // ---- the game's quick winch request (BRIEF_quick_winch.md part B; review\research_quick_winch.md) ----
 // Three steps, each a stop where it fails. The script native's name hash stands once in the code, as the immediate of a
 // mov edx, with the lea r8 of its thunk just before it. The thunk calls the method at kQuickWinchCallAt (mov rcx, rdi;

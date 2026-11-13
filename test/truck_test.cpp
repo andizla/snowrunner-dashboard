@@ -35,6 +35,7 @@
 #include "gearbox_hooks.h"
 #include "game_script.h"
 #include "gearbox_positions.h"
+#include "shifter_read.h"
 
 // The hooks' attach and detach (gearbox_hooks.h) on a function of the test's own: the hook counts and calls through.
 static volatile int g_hookSaw = 0;
@@ -704,6 +705,15 @@ static void RealImageTest()
     const bool descRight = now ? descFound && descAt == 0xd7d550 : before ? descFound && descAt == 0xd7d5e0 : descFound;
     snprintf(line, sizeof line, "places in a real image (stamp %08x): the game's gearbox lookup at %zx%s%s", stamp, descAt, descFound ? "" : "; ", descWhy);
     Check(descRight, line);
+    // the script's bool read of an XML node and its thunk's call, for the game shifter's own read of the five flags
+    // (b9c220 and d341ac on 6adb8627; b9c2b0 and d3423c on 6ab52f5d); found once on any build
+    XmlBoolPlace boolPlace;
+    const bool boolFound = XmlBoolFind(image.data(), from, to, boolPlace);
+    const bool boolRight = now ? boolFound && boolPlace.native == 0xb9c220 && boolPlace.call == 0xd341ac
+                         : before ? boolFound && boolPlace.native == 0xb9c2b0 && boolPlace.call == 0xd3423c : boolFound;
+    snprintf(line, sizeof line, "places in a real image (stamp %08x): the script's bool read of an XML node at %zx, its thunk's call at %zx%s%s", stamp, boolPlace.native, boolPlace.call,
+             boolFound ? "" : "; ", boolPlace.why);
+    Check(boolRight, line);
     // the rope length's read and set and the test of the two active bytes, for the winch probe (b1d870, b1d7d0 and d703e2
     // on 6adb8627; b1d900, b1d860 and d70472 on 6ab52f5d; b1bfd0, b1bf30 and d6ea52 on 6a607c05); found once on any build
     WinchPlace winchPlace;
@@ -3154,17 +3164,20 @@ static void TruckTestsTwo(TruckRefs &r, TruckRaw &t)
                           GearboxHasFromFlags(flags(true, true, true, false, true, false)) == (kHasL | kHasLowPlus | kHasH) &&
                           GearboxHasFromFlags(flags(true, true, true, true, false, false)) == (kHasL | kHasLowPlus | kHasLowMinus);
         const bool noNode = GearboxHasFromFlags(flags(false, true, true, true, true, false)) == 0 && GearboxMissingFromHas(0) == kHasPositions;
-        const bool manual = (GearboxHasFromFlags(flags(true, true, true, true, true, true)) & kHasPositions) == kHasPositions &&
-                            (GearboxHasFromFlags(flags(true, true, true, true, true, true)) & kHasManual);
+        // the manual flag (BRIEF_positions_by_shifter.md, M4): L and H stay, L- and L+ go, as the game shifter shows; not manual keeps all four
+        const bool manual = GearboxHasFromFlags(flags(true, true, true, true, true, true)) == (kHasL | kHasH | kHasManual) && kManualDropsEnds &&
+                            GearboxMissingFromHas(GearboxHasFromFlags(flags(true, true, true, true, true, true))) == (kHasLowPlus | kHasLowMinus) &&
+                            GearboxHasFromFlags(flags(true, true, true, true, true, false)) == kHasPositions;
         // the six groups of the game's gearboxes: H and L; H with all three; L alone; H, L and L-; H, L and L+; all three without H
         const bool groups = GearboxMissingFromHas(GearboxHasFromFlags(flags(true, true, false, false, true, false))) == (kHasLowPlus | kHasLowMinus) &&
                             GearboxMissingFromHas(GearboxHasFromFlags(flags(true, true, true, true, true, false))) == 0 &&
                             GearboxMissingFromHas(GearboxHasFromFlags(flags(true, true, false, false, false, false))) == (kHasLowPlus | kHasLowMinus | kHasH) &&
                             GearboxMissingFromHas(GearboxHasFromFlags(flags(true, true, false, true, true, false))) == kHasLowPlus &&
                             GearboxMissingFromHas(GearboxHasFromFlags(flags(true, true, true, false, true, false))) == kHasLowMinus &&
-                            GearboxMissingFromHas(GearboxHasFromFlags(flags(true, true, true, true, false, true))) == kHasH;
+                            GearboxMissingFromHas(GearboxHasFromFlags(flags(true, true, true, true, false, true))) == (kHasH | kHasLowPlus | kHasLowMinus) && // the manual flag: L alone
+                            GearboxMissingFromHas(GearboxHasFromFlags(flags(true, true, true, true, false, false))) == kHasH;
         Check(rows && noNode && manual && groups,
-              "gearbox positions: the mask by the table (L+ and L- only with L), no GearboxParams none, the manual low flag takes nothing, the six groups of the game");
+              "gearbox positions: the mask by the table (L+ and L- only with L), no GearboxParams none, the manual low flag takes L- and L+ and leaves L and H, the six groups of the game");
     }
     // the read over a made-up pugixml tree in this build's layout, peeked through ReadProcessMemory as the mod's own peek is
     {
@@ -3328,6 +3341,154 @@ static void TruckTestsTwo(TruckRefs &r, TruckRaw &t)
         std::vector<uint8_t> empty(0x4000, 0xCC);
         const bool noneNot = !GearboxDescFind(empty.data(), 0x10, empty.size(), at, why) && strstr(why, "not found");
         Check(found && twiceNot && noneNot, "gearbox lookup's place in made-up code: its bytes once; not taken twice or where they are not");
+    }
+    {
+        // the script's bool read and its thunk's call in made-up code: the two must agree
+        uint8_t nb[kPatternMax], nm[kPatternMax], cb[kPatternMax], cm[kPatternMax];
+        const int nl = PatternParse(kXmlBoolPattern, nb, nm), cl = PatternParse(kXmlBoolCallPattern, cb, cm);
+        const size_t kNative = 0x1200, kCall = 0x3000, kOther = 0x2400;
+        auto put = [&](std::vector<uint8_t> &c, size_t at, const uint8_t *b, const uint8_t *k, int n) { for (int i = 0; i < n; i++) c[at + i] = k[i] ? b[i] : 0x11; };
+        auto aim = [&](std::vector<uint8_t> &c, size_t call, size_t target) { const int32_t rel = (int32_t)(target - (call + kXmlBoolCallAt + 5)); memcpy(&c[call + kXmlBoolCallAt + 1], &rel, 4); };
+        std::vector<uint8_t> code(0x5000, 0xCC);
+        put(code, kNative, nb, nm, nl);
+        put(code, kCall, cb, cm, cl);
+        aim(code, kCall, kNative);
+        XmlBoolPlace p;
+        const bool found = XmlBoolFind(code.data(), 0x10, code.size(), p) && p.native == kNative && p.call == kCall && !p.why[0];
+        std::vector<uint8_t> elsewhere = code;
+        aim(elsewhere, kCall, kOther);
+        const bool another = !XmlBoolFind(elsewhere.data(), 0x10, elsewhere.size(), p) && !p.native && strstr(p.why, "another function");
+        std::vector<uint8_t> twice = code;
+        put(twice, kOther, nb, nm, nl);
+        const bool twiceNot = !XmlBoolFind(twice.data(), 0x10, twice.size(), p) && strstr(p.why, "more than once");
+        std::vector<uint8_t> noCall(0x5000, 0xCC);
+        put(noCall, kNative, nb, nm, nl);
+        const bool noCallNot = !XmlBoolFind(noCall.data(), 0x10, noCall.size(), p) && strstr(p.why, "thunk") && strstr(p.why, "not found");
+        std::vector<uint8_t> none(0x5000, 0xCC);
+        const bool noneNot = !XmlBoolFind(none.data(), 0x10, none.size(), p) && strstr(p.why, "not found");
+        Check(found && another && twiceNot && noCallNot && noneNot,
+              "the game shifter's read in made-up code: the bool read once and its thunk's call once, the call landing on it; not taken where the call lands elsewhere, the read stands twice or either is missing");
+    }
+    {
+        // M1, the capture on a made-up native: the hook's part after the answer
+        const uint64_t nodeA = 0x7000100, nodeB = 0x7000200;
+        auto ask = [](ShifterRing &ring, uint64_t node, const char *name, bool answer, unsigned long long tick) { ShifterNote(ring, node, name, (uint32_t)strlen(name), answer, tick); };
+        auto parse = [&](ShifterRing &ring, uint64_t node, int answers, unsigned long long tick) {
+            for (int i = 0; i < kShifterNames; i++) ask(ring, node, kShifterName[i], (answers & kShifterBit[i]) != 0, tick + i);
+        };
+        ShifterRing ring = {};
+        ShifterCapture got[kShifterRing];
+        for (int i = 0; i < 4; i++) ask(ring, nodeA, kShifterName[i], i != 2, 1000 + i); // High 1, Lower 1, LowerPlus 0, LowerMinus 1
+        const bool fourNot = ShifterRingRead(ring, got) && got[0].node == nodeA && !ShifterComplete(got[0]) && ShifterPick(got, kShifterRing, 0, 0) < 0;
+        ask(ring, nodeA, kShifterName[4], false, 1004);
+        const bool whole = ShifterRingRead(ring, got) && ShifterComplete(got[0]) && got[0].answers == (kHasH | kHasL | kHasLowMinus) && got[0].tick == 1004 && ring.kept == 5 &&
+                           ShifterPick(got, kShifterRing, 0, 0) == 0;
+        const GearboxFlags told = ShifterFlags(got[0]);
+        const bool asFlags = told.params && told.high && told.low && !told.lowPlus && told.lowMinus && !told.manual;
+        // a sixth name, a name of the same length, a part of a name and no node: not kept
+        ask(ring, nodeA, "IsLowerGearExistz", true, 1005);
+        ask(ring, nodeA, "Torque", true, 1005);
+        ask(ring, nodeA, "IsHighGearExistsToo", true, 1005);
+        ask(ring, 0, kShifterName[0], true, 1005);
+        ShifterNote(ring, nodeA, nullptr, 16, true, 1005);
+        const bool sixthNot = ring.kept == 5 && ShifterRingRead(ring, got) && got[0].answers == (kHasH | kHasL | kHasLowMinus) && got[1].node == 0 &&
+                              ShifterNameIndex("IsManualLowGear", 15) == 4 && ShifterNameIndex("IsManualLowGear", 14) < 0 && ShifterNameIndex("IsLowerMinusGearExists", 22) == 3;
+        // two nodes in turn give two captures, also where their asks interleave
+        ShifterRing two = {};
+        for (int i = 0; i < kShifterNames; i++) ask(two, nodeA, kShifterName[i], true, 2000 + i), ask(two, nodeB, kShifterName[i], false, 2000 + i);
+        const bool twoNodes = ShifterRingRead(two, got) && got[0].node == nodeA && got[1].node == nodeB && ShifterComplete(got[0]) && ShifterComplete(got[1]) &&
+                              got[0].answers == kShifterAll && got[1].answers == 0 && got[2].node == 0;
+        // the same node parsed again later is a capture of its own, and a flag asked twice in one parse starts one too
+        parse(two, nodeA, kHasL, 9000);
+        const bool again = ShifterRingRead(two, got) && got[2].node == nodeA && got[2].answers == kHasL && got[0].answers == kShifterAll && ShifterPick(got, kShifterRing, 0, 0) == 2;
+        // a fifth node pushes the oldest out
+        ShifterRing five = {};
+        for (int n = 0; n < 5; n++) parse(five, 0x7001000 + n * 0x100, kHasL, 3000 + n * 100);
+        const bool pushed = ShifterRingRead(five, got) && got[0].node == 0x7001400 && got[1].node == 0x7001100 && got[3].node == 0x7001300;
+        // a capture half written is not read; a second writer's flag is dropped, never waited for
+        ShifterRing half = ring;
+        half.seq = ring.seq + 1;
+        const bool halfNot = !ShifterRingRead(half, got);
+        ShifterRing busy = {};
+        busy.writing = 1;
+        ask(busy, nodeA, kShifterName[0], true, 100);
+        const bool dropped = busy.kept == 0 && busy.c[0].node == 0;
+        Check(fourNot && whole && asFlags && sixthNot && twoNodes && again && pushed && halfNot && dropped,
+              "the game shifter's read, the capture: four names are not whole and the fifth makes it so, with the answers as told; a sixth name, a like name and no node are not kept; "
+              "two nodes give two captures; the same node again is a new one; a fifth node pushes the oldest out; a capture half written is not read and a second writer is dropped");
+        // M2, which capture is this truck's
+        ShifterCapture c[kShifterRing] = {};
+        c[0] = ShifterCapture{ nodeA, kShifterAll, kHasPositions, 10000 };
+        c[1] = ShifterCapture{ nodeB, kShifterAll, kHasL | kHasH, 20000 };
+        c[2] = ShifterCapture{ nodeB, kHasL | kHasH, kHasL, 20500 }; // not whole
+        const bool fresh = ShifterPick(c, kShifterRing, 20040, 0) == 1 && ShifterPick(c, kShifterRing, 19950, 0) == 1 && ShifterPick(c, kShifterRing, 21000, 0) == 1;
+        const bool oldNot = ShifterPick(c, kShifterRing, 21001, 0) < 0 && ShifterPick(c, kShifterRing, 25000, 0) < 0; // entered five seconds after, no parse between
+        const bool takenOnce = ShifterPick(c, kShifterRing, 20040, 20000) < 0;
+        // the route: none while the shifter's read may still come, the desc's after two seconds, a late capture replaces it
+        const GearboxFlags all = { true, true, true, true, true, false, 0 }, lowOnly = { true, true, false, false, true, false, 0 }, noParams = {};
+        PositionsRoute rt = {};
+        int missing = -1;
+        bool walk = !PositionsRouteStep(rt, true, false, 30000, 30000, missing) && rt.route == kRouteNone && missing == 0 && !PositionsRoutePending(rt);
+        rt.haveDesc = true, rt.desc = all, rt.descStep = kReadOk, rt.descNode = 0x5550;
+        walk = walk && !PositionsRouteStep(rt, true, false, 30000, 30500, missing) && rt.route == kRouteNone && missing == 0 && PositionsRoutePending(rt);
+        walk = walk && !PositionsRouteStep(rt, true, false, 30000, 31999, missing) && PositionsRoutePending(rt);
+        walk = walk && PositionsRouteStep(rt, true, false, 30000, 32000, missing) && rt.route == kRouteDesc && rt.why == kDescWhyLate && missing == 0 && !PositionsRoutePending(rt);
+        rt.desc = lowOnly;
+        walk = walk && !PositionsRouteStep(rt, true, false, 30000, 32050, missing) && missing == (kHasLowPlus | kHasLowMinus);
+        char text[700];
+        PositionsRouteLine(text, sizeof text, "a_gearbox", rt, "L and H");
+        const bool lateLine = strstr(text, "a_gearbox by the desc's read (node 5550; no read of the shifter came in two seconds)") && strstr(text, "IsLowerPlusGearExists 0") && strstr(text, "the truck has L and H");
+        rt.haveShifter = true, rt.shifter = ShifterFlags(c[0]), rt.shifterNode = 0x7770, rt.takenTick = c[0].tick;
+        const bool late = PositionsRouteStep(rt, true, false, 30000, 34000, missing) && rt.route == kRouteShifter && missing == 0 && !PositionsRoutePending(rt);
+        // M3: the two differ, both sets and both nodes; they agree; the desc not back yet
+        PositionsRouteLine(text, sizeof text, "a_gearbox", rt, "L-, L, L+ and H");
+        const bool differs = strstr(text, "a_gearbox by the game shifter's own read (node 7770): IsHighGearExists 1, IsLowerGearExists 1, IsLowerPlusGearExists 1, IsLowerMinusGearExists 1, IsManualLowGear 0") &&
+                             strstr(text, "THE DESC'S READ DIFFERS (node 5550): IsHighGearExists 1, IsLowerGearExists 1, IsLowerPlusGearExists 0, IsLowerMinusGearExists 0, IsManualLowGear 0") &&
+                             strstr(text, "different files") && !GearboxFlagsSame(rt.shifter, rt.desc);
+        rt.desc = all;
+        PositionsRouteLine(text, sizeof text, "a_gearbox", rt, "L-, L, L+ and H");
+        const bool agrees = strstr(text, "the desc's read agrees (node 5550)") && !strstr(text, "DIFFERS") && GearboxFlagsSame(rt.shifter, rt.desc);
+        rt.haveDesc = false;
+        PositionsRouteLine(text, sizeof text, "a_gearbox", rt, "L-, L, L+ and H");
+        const bool alone = strstr(text, "the desc's read is not back yet") != nullptr;
+        // the shifter's read first, before the desc: in force at once
+        PositionsRoute first = {};
+        first.haveShifter = true, first.shifter = ShifterFlags(c[1]);
+        const bool atOnce = PositionsRouteStep(first, true, false, 40000, 40000, missing) && first.route == kRouteShifter && missing == (kHasLowPlus | kHasLowMinus);
+        // no GearboxParams: the script asks no flag, so the desc's read at once and none of the four
+        PositionsRoute bare = {};
+        bare.haveDesc = true, bare.desc = noParams, bare.descStep = kReadOk;
+        const bool none = PositionsRouteStep(bare, true, false, 40000, 40000, missing) && bare.route == kRouteDesc && bare.why == kDescWhyNoParams && missing == kHasPositions;
+        PositionsRouteLine(text, sizeof text, "a_gearbox", bare, "none of the four");
+        const bool noneLine = strstr(text, "no GearboxParams, so the shifter asks no flag") && strstr(text, "the truck has none of the four");
+        // no hook: the desc's read at once, as before this build; a fault: the desc's read, whatever was captured
+        PositionsRoute plain = {};
+        plain.haveDesc = true, plain.desc = lowOnly, plain.descStep = kReadOk;
+        const bool noHook = PositionsRouteStep(plain, false, false, 40000, 40000, missing) && plain.route == kRouteDesc && plain.why == kDescWhyNoHook && missing == (kHasLowPlus | kHasLowMinus);
+        PositionsRoute bad = rt;
+        bad.haveDesc = true, bad.desc = lowOnly;
+        const bool fault = PositionsRouteStep(bad, true, true, 30000, 34050, missing) && bad.route == kRouteDesc && bad.why == kDescWhyFault && missing == (kHasLowPlus | kHasLowMinus);
+        // a desc read that failed leaves every position there
+        PositionsRoute failed = {};
+        failed.haveDesc = true, failed.descStep = kReadNoDesc;
+        const bool failedAll = PositionsRouteStep(failed, false, false, 40000, 40000, missing) && missing == 0;
+        PositionsRouteLine(text, sizeof text, "a_gearbox", failed, "all");
+        const bool failedLine = strstr(text, "the desc's read failed at") && strstr(text, "all positions");
+        Check(fresh && oldNot && takenOnce && walk && lateLine && late, "the game shifter's read, which capture: the newest whole one from no more than a second before the change; one from before it is not taken, "
+                                                                          "nor one taken already; none in two seconds gives the desc's read and the line says so; a late one replaces it");
+        Check(differs && agrees && alone && atOnce && none && noneLine && noHook && fault && failedAll && failedLine,
+              "the game shifter's read, the line: both sets and both nodes where the two reads differ, one where they agree; no GearboxParams gives none of the four; without the hook or after a fault "
+              "the desc's read is in force; a failed read leaves all positions");
+        // the wait: goes on while the desc is back and the shifter's read may come, ends where the shifter's is in force
+        PositionsState wait = {};
+        wait.vehicle = 0x9000, wait.since = 1000, wait.name[0] = 'g';
+        bool waits = !PositionsWaiting(wait, 0x9000, 1500);
+        wait.pending = true;
+        waits = waits && PositionsWaiting(wait, 0x9000, 1500) && !PositionsWaiting(wait, 0x9000, 6000);
+        wait.name[0] = 0, wait.pending = false, wait.settled = true;
+        waits = waits && !PositionsWaiting(wait, 0x9000, 1500);
+        Check(waits && ShifterHookWanted(2, true) && !ShifterHookWanted(1, true) && !ShifterHookWanted(2, false) && !ShifterHookWanted(0, false),
+              "the game shifter's read: what depends on the low gears waits while the shifter's read may still come and no longer once it is in force; the hook is wanted at Gearbox 2 with the box on alone");
     }
 
     // the engine speed's places in made-up code: the function's bytes once, the fuel's and the stall's calls once each

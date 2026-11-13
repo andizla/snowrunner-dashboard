@@ -29,6 +29,7 @@
 #include "gearbox_hooks.h"
 #include "gearbox_model.h"
 #include "gearbox_positions.h"
+#include "shifter_read.h"
 #include "input_bindings.h"
 #ifndef GAUGES_SETTINGS_TEST
 #include "input_devices.h"
@@ -4051,6 +4052,66 @@ static PositionsJob g_positionsJob = {};
 static volatile LONG g_positionsFault = 0;
 static const wchar_t *g_positionsOff = nullptr;
 
+// The game shifter's own read of the five flags (shifter_read.h, BRIEF_positions_by_shifter.md): the script's bool read
+// of an XML node, hooked on whatever thread the script runs. The game's own answer first and always returned as it is;
+// then the name by its length, and one of the five goes into the ring. No log, no lock, no allocation, no read of game
+// memory but the name handed in. Its own fault guard: a fault turns the capture off for the session.
+typedef bool (*XmlBoolFn)(void *node, const XmlName *name, bool fallback, bool flag);
+static XmlBoolFn g_xmlBool = nullptr;
+static ShifterRing g_shifter = {};
+static bool g_xmlBoolFound = false, g_xmlBoolHooked = false, g_xmlBoolFailed = false;
+
+static void ShifterNoteGuarded(void *node, const XmlName *name, bool answer)
+{
+    __try
+    {
+        if (name->length >= 15 && name->length <= 22) ShifterNote(g_shifter, (uint64_t)node, name->text, name->length, answer, GetTickCount64());
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        InterlockedExchange(&g_shifter.fault, 1);
+    }
+}
+
+static bool XmlBoolHook(void *node, const XmlName *name, bool fallback, bool flag)
+{
+    const bool answer = g_xmlBool(node, name, fallback, flag);
+    InterlockedIncrement(&g_shifter.calls);
+    if (name && !g_shifter.fault) ShifterNoteGuarded(node, name, answer);
+    return answer;
+}
+
+// On the mod's thread, each pass where the positions go by the fitted gearbox: the hook the first time (alone in its
+// transaction, as the quick winch's), the fault said once in capitals, and with Probe=1 the hook's calls a second.
+static void ShifterHookPass(const GaugeSettings &s, unsigned long long now)
+{
+    static bool saidFault = false;
+    static unsigned long long probeAt = 0;
+    static LONG callsWas = 0;
+    if (g_xmlBoolFound && !g_xmlBoolHooked && !g_xmlBoolFailed && ShifterHookWanted(s.gearbox, s.positionsByGearbox))
+    {
+        void **targets[1] = { (void **)&g_xmlBool };
+        void *const hooks[1] = { (void *)XmlBoolHook };
+        const long error = GearboxAttach(targets, hooks, 1);
+        g_xmlBoolHooked = error == NO_ERROR;
+        g_xmlBoolFailed = !g_xmlBoolHooked;
+        if (g_xmlBoolHooked) Log(L"gearbox positions: the game shifter's read of the five flags is hooked; a truck's positions go by what the shifter was told, taken within %llu ms of the change", kShifterWaitMs);
+        else Log(L"gearbox positions: the game shifter's read could not be hooked (error %ld), so the positions go by the desc's read alone", error);
+    }
+    if (g_shifter.fault && !saidFault)
+    {
+        saidFault = true;
+        Log(L"GEARBOX POSITIONS: the mod's part of the game shifter's read faulted, so the positions go by the desc's read until the game is started again");
+    }
+    if (s.probe && g_xmlBoolHooked && now - probeAt >= 1000)
+    {
+        const LONG calls = g_shifter.calls;
+        if (probeAt) Log(L"probe: gearbox positions: the script's bool read was called %ld times in the last %llu ms; %ld of all its calls asked one of the five flags", calls - callsWas, now - probeAt, g_shifter.kept);
+        callsWas = calls;
+        probeAt = now;
+    }
+}
+
 // The lookup on the game's thread, its own plain function under __try as GameShiftCall is (review S1): a fault turns
 // the read off for the session, and the mod's thread says so.
 static bool GearboxDescCall(uint64_t vehicle, uint64_t name, uint64_t &desc)
@@ -4136,6 +4197,15 @@ static void GameCodeLook(const GaugeSettings &s)
             Log(L"gearbox positions: the game's gearbox lookup at +%zx; the fitted gearbox is read on the game's thread at Gearbox=2 with Positions by gearbox on", g_gearboxDescAt);
         }
         else Log(L"gearbox positions: %S, so every truck has all positions", why);
+        XmlBoolPlace place = {};
+        if (XmlBoolFind(code.data(), from, to, place))
+        {
+            g_xmlBool = (XmlBoolFn)(g_base + place.native);
+            g_xmlBoolFound = true;
+            Log(L"gearbox positions: the script's bool read of an XML node at +%zx, called by its thunk at +%zx: the game shifter's own read of the fitted gearbox's five flags; "
+                L"hooked once Gearbox=2 runs with Positions by gearbox on", place.native, place.call);
+        }
+        else Log(L"gearbox positions: %S, so the positions go by the desc's read alone, as before", place.why);
     }
     {
         const char *why = "";
@@ -4741,6 +4811,9 @@ struct TruckWatch
     bool lowPlusSaid;           // the log said once that the game's shifter's L+ reads as the first gear
     ShifterKept shifter;        // the game's shifter's last ask: the same one again is no pick (gearbox_model.h)
     PositionsState positions;   // the fitted gearbox's positions for the driven truck (PositionsStep)
+    PositionsRoute route;       // which read gives them: the game shifter's own or the desc's (shifter_read.h)
+    char routeName[kMaxText];   // the fitted name the route is for: another one on the same vehicle starts it anew
+    unsigned long long routeSince, routeAnewAt; // when the route was started, and when a new name started it anew (0 never)
     GearboxDoors doors;         // GearboxDoorsNow on the last pass
     PullTest pullTest;          // the pull test (the tab's button)
     uint64_t pullVehicle, pullAction; // the truck whose torque factor a running pull test changed
@@ -5365,10 +5438,21 @@ static void LockPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s
 // for every position there. At Gearbox=2 with the box on: a new vehicle starts at 0, its fitted name is peeked once a
 // second, and a name the last read was not for posts a read to the game's thread (gearbox_positions.h); the result counts
 // only for this vehicle and the name the peek reads now (review M2). Off, at another level or without the hook: 0.
+// The flags in force are the game shifter's own where its read was caught (shifter_read.h): the newest whole capture no
+// older than a second before another truck or none was last seen. The desc's read runs beside it for the name, the
+// comparison and the fallback after two seconds.
 static int PositionsStep(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s, bool own, unsigned long long now)
 {
     PositionsState &st = w.positions;
+    PositionsRoute &r = w.route;
     static bool offSaid = false;
+    // when another truck or none was last seen: before the early return, so a pass with the feature off counts too
+    static uint64_t seen = 0;
+    static unsigned long long seenAt = 0, otherAt = 0;
+    const uint64_t driven = own ? w.refs.vehicle : 0;
+    if (!driven || driven != seen || now - seenAt > kShifterGapMs) otherAt = now;
+    seen = driven;
+    seenAt = now;
     if (g_positionsFault && !g_positionsOff) g_positionsOff = L"the game's gearbox lookup faulted";
     if (!s.positionsByGearbox || !own || !w.refs.vehicle || !g_gearboxDesc || !g_truckFrames || g_positionsOff)
     {
@@ -5378,37 +5462,82 @@ static int PositionsStep(TruckWatch &w, const TruckMemory &m, const GaugeSetting
             Log(L"gearbox positions: %s, so every truck has all positions in this game", g_positionsOff);
         }
         PositionsJobDrop(g_positionsJob, 0, now);
+        st.pending = false;
         return 0;
     }
-    if (st.vehicle != w.refs.vehicle) PositionsNewVehicle(st, w.refs.vehicle), st.since = now;
+    ShifterHookPass(s, now);
+    if (st.vehicle != w.refs.vehicle)
+    {
+        PositionsNewVehicle(st, w.refs.vehicle);
+        st.since = now;
+        r = PositionsRoute{};
+        w.routeName[0] = 0;
+        w.routeSince = now;
+        w.routeAnewAt = 0;
+    }
     char nameNow[kMaxText];
     size_t length = 0;
     const bool named = TruckNameText(m, st.vehicle + kGearboxFittedAt, nameNow, length, true);
+    // another gearbox fitted on the same vehicle: the route starts anew, and no capture from before is taken again
+    if (named && w.routeName[0] && strcmp(nameNow, w.routeName))
+    {
+        const unsigned long long taken = r.takenTick;
+        r = PositionsRoute{};
+        r.takenTick = taken;
+        w.routeSince = w.routeAnewAt = now;
+        st.settled = false;
+        st.missing = 0;
+    }
+    if (named) strncpy_s(w.routeName, nameNow, _TRUNCATE);
+    r.changedAt = otherAt > w.routeAnewAt ? otherAt : w.routeAnewAt;
+    bool news = false;
     int step = kReadOk;
     GearboxFlags flags = {};
     if (PositionsJobTake(g_positionsJob, st, named ? nameNow : nullptr, step, flags))
     {
-        char has[40];
-        GearboxPosHasText(st.missing, has, sizeof has);
-        if (step != kReadOk) Log(L"gearbox positions: the read of %S failed at %S, so the truck has all positions", st.name, kReadSteps[step]);
-        else if (!flags.params) Log(L"gearbox positions: %S has no GearboxParams in its GameData, as the game shifter shows: the truck has %S", st.name, has);
-        else
+        r.haveDesc = true;
+        r.desc = flags;
+        r.descStep = step;
+        r.descNode = g_positionsJob.paramsNode; // the job's fields stand until this thread posts again
+        news = true;
+    }
+    const bool hooked = g_xmlBoolHooked, faulted = hooked && g_shifter.fault != 0;
+    ShifterCapture caps[kShifterRing];
+    if (hooked && !faulted && ShifterRingRead(g_shifter, caps))
+    {
+        const int k = ShifterPick(caps, kShifterRing, r.changedAt, r.takenTick);
+        if (k >= 0)
         {
-            char defaults[128] = "";
-            static const char *const flagName[5] = { "IsLowerGearExists", "IsLowerPlusGearExists", "IsLowerMinusGearExists", "IsHighGearExists", "IsManualLowGear" };
-            static const int flagBit[5] = { kHasL, kHasLowPlus, kHasLowMinus, kHasH, kHasManual };
-            int at = 0;
-            for (int i = 0; i < 5; i++)
-                if (flags.defaulted & flagBit[i]) at += FmtCut(defaults + at, sizeof defaults - at, "%s%s", at ? ", " : "", flagName[i]);
-            Log(L"gearbox positions: %S reads IsLowerGearExists %d, IsLowerPlusGearExists %d, IsLowerMinusGearExists %d, IsHighGearExists %d, IsManualLowGear %d "
-                L"(by default: %S): the truck has %S", st.name, flags.low, flags.lowPlus, flags.lowMinus, flags.high, flags.manual, defaults[0] ? defaults : "none", has);
+            uint64_t inner = 0, node = 0;
+            r.haveShifter = true;
+            r.shifter = ShifterFlags(caps[k]);
+            r.takenTick = caps[k].tick;
+            // the node behind the native object asked, for the line alone: the object may be gone by now, so 0 where it does not read
+            r.shifterNode = m.peek(caps[k].node + 8, &inner, 8) && inner >= 0x10000 && m.peek(inner, &node, 8) ? node : 0;
+            news = true;
         }
-        st.refusedSaid = 0;
-        st.shifterSaid = false;
+    }
+    int missing = 0;
+    if (PositionsRouteStep(r, hooked, faulted, w.routeSince, now, missing)) news = true;
+    st.pending = PositionsRoutePending(r);
+    st.settled = r.route == kRouteShifter;
+    if (news)
+    {
+        st.missing = missing;
+        if (r.route != kRouteNone)
+        {
+            char has[40], line[700];
+            GearboxPosHasText(st.missing, has, sizeof has);
+            PositionsRouteLine(line, sizeof line, st.name[0] ? st.name : named ? nameNow : "the fitted gearbox", r, has);
+            Log(L"gearbox positions: %S", line);
+            st.refusedSaid = 0;
+            st.shifterSaid = false;
+        }
     }
     PositionsJobDrop(g_positionsJob, st.vehicle, now);
-    // a fitted name other than the one read: 0 until it is read (N1), posted at the next peek
-    if (named && strcmp(nameNow, st.name)) st.missing = 0;
+    // a fitted name other than the one read: 0 until it is read (N1), posted at the next peek. Not where the shifter's
+    // own read is in force: that one is this truck's, whatever the desc's read has come to
+    if (r.route != kRouteShifter && named && strcmp(nameNow, st.name)) st.missing = 0;
     if (named && now - st.peekAt >= 1000 && strcmp(nameNow, st.name) && PositionsJobPost(g_positionsJob, st.vehicle, now)) st.peekAt = now;
     return st.missing;
 }
@@ -8608,13 +8737,14 @@ static void RateStart()
     int third = 0;
     const int total = RateStartWrites(kRateFast, plan, plan3, order, third);
     char why3[320] = "";
-    bool winchIn = false;
+    bool winchIn = false, winchBroken = false;
     if (!plan3Ok) snprintf(why3, sizeof why3, "%s", plan3.why);
     else
     {
         const RateApplied put3 = RateApply(order, third, RateCodeRead, RateCodeWrite);
         const char *name = put3.failed >= 0 && put3.failed < third ? order[put3.failed].name : "a place";
         winchIn = put3.ok;
+        winchBroken = !put3.ok && put3.written && !put3.restored;
         if (put3.ok) {}
         else if (!put3.written) snprintf(why3, sizeof why3, "%s does not hold the game's own bytes in memory, so nothing of the group was written", name);
         else
@@ -8640,6 +8770,7 @@ static void RateStart()
         // the winch's group goes back with the mode: the step is back already (the first to go back, or never in)
         const bool winchBack = !winchIn || RateBack(order, third, RateCodeRead, RateCodeWrite);
         if (!winchBack) strncat_s(line, "; the winch's four operands could NOT be put back: start the game again with PhysicsRate=60", _TRUNCATE);
+        if (!winchBack || winchBroken) g_rateWinch = kRateWinchBroken;
         if ((!put.written || put.restored) && winchBack) VirtualFree((void *)(uintptr_t)page, 0, MEM_RELEASE);
         RateOffSay(line);
         return;
@@ -8672,7 +8803,7 @@ static void RateStart()
     }
     else
     {
-        g_rateWinch = kRateWinchRefused;
+        g_rateWinch = winchBroken ? kRateWinchBroken : kRateWinchRefused;
         g_ratePart = true;
         Log(L"physics rate: THE WINCH'S PULL IS NOT CORRECTED at 120: %S. 120 runs without it: the winch hauls a truck at up to 2.4 m/s for 1.2 with the same force, and its pull builds up "
             L"two to three times as fast", why3);

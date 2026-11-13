@@ -648,7 +648,9 @@ struct SuspDisplayView
 // functions. Either way the mod's gearbox stands down (the tab says why). warn: the clutch's and the engine's warning
 // boxes while a truck is driven.
 enum { kRateNoteNone, kRateNoteOff, kRateNoteIter, kRateNoteStep, kRateNotePart };
-enum { kRateWinchNone, kRateWinchIn, kRateWinchRefused }; // the winch's pull at 120: not asked, corrected, or its code not found
+// the winch's pull at 120: not asked, corrected, not corrected (not found or a write that did not hold, all put back), or
+// part changed where a write failed and could not be put back
+enum { kRateWinchNone, kRateWinchIn, kRateWinchRefused, kRateWinchBroken };
 struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWarnBoxes]; bool warnStacked; int engineDamage, engineCapacity; char truck[96]; char idWords[96]; bool truckOwn, suspOwn, suspKept, suspIdKnown, suspTruckKept, suspKindSet, smtInstalled, gearboxHeld; int suspLevel; char map[96], mapFrom[64]; bool mapOwn; float ambientC;
                    int pullTest, pullPhase; const char *pullWhy;
                    float ambientDay, ambientNight, hour; // the map's day and night (with mapOwn), the hour of the game's day (-1 not known)

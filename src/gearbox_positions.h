@@ -22,8 +22,11 @@ struct GearboxFlags
 };
 
 // What the gearbox has, as kHas... bits (the brief's table): L by IsLowerGearExists, L+ and L- by their own flags with
-// L, H by IsHighGearExists. No GearboxParams has none, as the game's shifter shows (the research). IsManualLowGear does
-// not take L- and L+ away (the lead's call, review R3): kHasManual is for the log alone.
+// L, H by IsHighGearExists. No GearboxParams has none, as the game's shifter shows (the research).
+// kManualDropsEnds: with IsManualLowGear the game's shifter shows L alone, so the mod has no L- and no L+ there either
+// (BRIEF_positions_by_shifter.md, M4: the lead's word, the mod has what the shifter shows; it replaces review R3, which
+// kept both). The one line to turn back if the word changes.
+static const bool kManualDropsEnds = true;
 inline int GearboxHasFromFlags(const GearboxFlags &f)
 {
     if (!f.params) return 0;
@@ -31,6 +34,7 @@ inline int GearboxHasFromFlags(const GearboxFlags &f)
     if (f.low) has |= kHasL | (f.lowPlus ? kHasLowPlus : 0) | (f.lowMinus ? kHasLowMinus : 0);
     if (f.high) has |= kHasH;
     if (f.manual) has |= kHasManual;
+    if (f.manual && kManualDropsEnds) has &= ~(kHasLowPlus | kHasLowMinus);
     return has;
 }
 inline int GearboxMissingFromHas(int has) { return ~has & kHasPositions; }
@@ -97,9 +101,10 @@ inline int GearboxNodeOfDesc(PositionsPeek peek, uint64_t desc, uint64_t &node)
 // From the <GameData> node to the flags, by this build's pugixml (the research): a node's name at + 0x10, its first
 // child at + 0x20, its next sibling at + 0x30, its first attribute at + 0x38; an attribute's name at + 0x08, its value at
 // + 0x10, the next at + 0x20. Names case-sensitive; a bool "true" or "false" in any case, anything else the default.
-inline int GearboxFlagsOfNode(PositionsPeek peek, uint64_t node, GearboxFlags &f)
+inline int GearboxFlagsOfNode(PositionsPeek peek, uint64_t node, GearboxFlags &f, uint64_t *paramsNode = nullptr)
 {
     f = GearboxFlags{ false, true, true, true, true, false, kHasPositions | kHasManual };
+    if (paramsNode) *paramsNode = 0;
     uint64_t p = 0;
     if (!peek(node + 0x20, &p, 8)) return kReadWalk;
     int steps = 0;
@@ -110,6 +115,7 @@ inline int GearboxFlagsOfNode(PositionsPeek peek, uint64_t node, GearboxFlags &f
     if (!p) return kReadOk; // no GearboxParams: none, as the game's shifter shows
     if (p < 0x10000) return kReadWalk;
     f.params = true;
+    if (paramsNode) *paramsNode = p;
     struct Want { const char *name; bool *flag; int bit; };
     const Want wants[5] = { { "IsLowerGearExists", &f.low, kHasL },          { "IsLowerPlusGearExists", &f.lowPlus, kHasLowPlus },
                             { "IsLowerMinusGearExists", &f.lowMinus, kHasLowMinus }, { "IsHighGearExists", &f.high, kHasH },
@@ -158,6 +164,7 @@ struct PositionsJob
     char name[kMaxText]; // the fitted name as the job read it
     int step;            // kRead...: kReadOk read
     GearboxFlags flags;
+    uint64_t paramsNode; // the GearboxParams node the flags were read from, 0 none: for the line beside the shifter's own read
 };
 // The game's lookup through a plain function under __try that the caller hands in: false on a fault.
 typedef bool (*PositionsLookup)(uint64_t vehicle, uint64_t name, uint64_t &desc);
@@ -180,6 +187,7 @@ inline bool PositionsJobFrame(PositionsJob &j, const TruckMemory &m, uint64_t fi
     if (j.state != kPosJobPosted || !m.get(first + 0x20, vehicle) || vehicle != j.vehicle || now - j.postedAt > kShiftJobMs) return false;
     if (InterlockedCompareExchange(&j.state, kPosJobDealing, kPosJobPosted) != kPosJobPosted) return false;
     j.flags = GearboxFlags{};
+    j.paramsNode = 0;
     size_t length = 0;
     uint64_t desc = 0, node = 0;
     if (!TruckNameText(m, vehicle + kGearboxFittedAt, j.name, length, true)) j.step = kReadName; // an empty or odd name: no call
@@ -189,7 +197,7 @@ inline bool PositionsJobFrame(PositionsJob &j, const TruckMemory &m, uint64_t fi
     else
     {
         j.step = GearboxNodeOfDesc(m.peek, desc, node);
-        if (j.step == kReadOk) j.step = GearboxFlagsOfNode(m.peek, node, j.flags);
+        if (j.step == kReadOk) j.step = GearboxFlagsOfNode(m.peek, node, j.flags, &j.paramsNode);
     }
     InterlockedExchange(&j.state, kPosJobDone);
     return true;
@@ -213,6 +221,8 @@ struct PositionsState
     int refusedSaid;       // kHas... bits of the refused keys told for this truck
     bool shifterSaid;      // the shifter gave a position the read lacks: told, the mask zeroed
     unsigned long long since; // when this vehicle's read was first asked for (the mod's clock, ms)
+    bool pending;          // the desc's read is back and the shifter's own may still come (shifter_read.h): the wait goes on
+    bool settled;          // the shifter's own read is in force, with or without the desc's: no wait
 };
 
 // The read for this vehicle has been asked for and has not come back: what depends on the low gears it has waits, at
@@ -220,7 +230,7 @@ struct PositionsState
 static const unsigned long long kPositionsWaitMs = 5000;
 inline bool PositionsWaiting(const PositionsState &st, uint64_t vehicle, unsigned long long now)
 {
-    return vehicle && st.vehicle == vehicle && !st.name[0] && now - st.since < kPositionsWaitMs;
+    return vehicle && st.vehicle == vehicle && !st.settled && (!st.name[0] || st.pending) && now - st.since < kPositionsWaitMs;
 }
 
 // On the mod's thread, the job's result taken (true) when it is done: kept only when it is for this vehicle and the name
