@@ -481,6 +481,19 @@ Its truck speed is the cut's, and where the cut gave none the main body's forwar
 Below k 1 a free wheel still runs ahead by about the drive's kick &times; (1 &minus; k) / k. Gauges.log has "differential: the lock kind ..."
 for a truck, "differential: Locked on a truck whose lock is not always on ..." as the mod takes or leaves the lock byte,
 "differential: the lock byte the mod holds for Locked was 0 again ..." once, and with Probe=1 "probe: differential: ..." a second.</p>
+<p><b>The diff types by owned truck</b> (BRIEF_truck_keys_per_truck.md, the diff step). The diff group, DiffType with DiffAxle1
+to DiffAxle8, has a level of the owned truck: <code>[Truck:&lt;id&gt;]</code> in the kind's file, beside
+[Suspension:&lt;id&gt;] and [Engine:&lt;id&gt;]. It has no Own key. A key of the group in the section makes the whole group the
+truck's, and the kind's keys of the group are then not read for it (<code>TruckDiffRead</code>, <code>ReadTruckIni</code>). With
+the id read an edit writes the whole group in force into the section (<code>WriteTruckDiffs</code>); with no id read it writes
+the kind's keys as before. No read writes a file, so an old file gives every truck of the kind what it gave. The id arrives a
+pass or more after the truck: the kind's group is in force until then, and the settings are read again on that pass
+(<code>SettingsFor</code>) and at a take-over (<code>DiffFromFiles</code>). The section is the fourth of the sections that
+follow a truck, at the end of <code>TruckIdAllPrefixes</code>, so the settings' bits are 1, 2 and 8 and the odometer's is 4. The
+take-over, the marks and the prune are those of the other sections. The defaults take the group out at both levels, and a
+section left with the parts alone goes. The log says at each truck change where the diff types come from
+(<code>DiffLevelLog</code>: "differential: this truck's own diff types (", or the kind's, or the plain Diff row), and at a save
+"settings: saved, this truck's diff types in". RoadCdA, AirAxles and OdometerHours stay keys of the kind.</p>
 <p><b>The differential by axle</b> (BRIEF_axle_diff.md). DiffAxle1 to DiffAxle8 are keys of the truck's own file, 0 to 3 as DiffType. An axle with no key goes by DiffType.
 The mod's thread reads every wheel's parent body and place and groups them as Open by axle does (<code>AxleGroups</code>), ordered front to back as the Drive display's rows
 (<code>AxleRowsMake</code>). <code>AxlePlanOf</code> gives each axle's type in force: its set type through <code>DiffTypeOf</code>, or Locked while its lever is on.
@@ -1048,7 +1061,7 @@ Notes, and Backup in a backup), <code>[Truck]</code> (the seven scales together 
 OdometerHours, AirBrakes), <code>[Drive]</code> (DiffType and DiffAxle by axle as the truck's file has it, DiffAxle2 for the second axle, else <code>DiffOwn=0</code>; a DiffAxle9 is an unknown key),
 <code>[Suspension]</code> (the whole set in force), <code>[Engine]</code> (Torque, GearHold, PeakTorqueRpm, Aspiration, Fuel,
 TorqueCurve with no part name, only what some level holds) and <code>[Tire Inflation]</code> (Mode from the tire mod's file,
-written only). The truck's id, [Seen], the odometer's count and the learned figures never go in. A backup holds one level exactly: where the level has nothing of its own it says <code>AirOwn=0</code>, <code>SuspOwn=0</code> or <code>EngineOwn=0</code>, and taking it puts that part out of force again.</p>
+written only). The truck's id, [Seen], the odometer's count and the learned figures never go in. A backup holds one level exactly: where the level has nothing of its own it says <code>AirOwn=0</code>, <code>SuspOwn=0</code> or <code>EngineOwn=0</code>, and taking it puts that part out of force again. Import writes the diff group into the truck's own section, whole. A backup of the kind's level also takes RoadCdA, AirAxles and DiffType out where it does not hold them.</p>
 <p>All file work is on the mod's pass. The tab only asks (<code>ProfileAskPut</code>) and shows the list the pass made
 (<code>ProfilesGet</code>, 50 rows at the most, the rest counted, the driven kind's files first). An edit that waits for its
 save is saved before the asking is dealt with. An Import checks the file first: 64 KB at the most, a truck named in its head, a

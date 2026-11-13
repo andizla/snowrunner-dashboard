@@ -152,6 +152,7 @@ struct ProfileTaken
     bool susp, air, torque, hold, engine, engineOff, scales, scalesOff, diff, diffOff, cda, airAxles, odo, engineDefault;
     bool engineOther, gearboxOther; // made with another engine or gearbox: that part was left
     bool kindLeft;                  // the first button: the kind's keys were left
+    bool truckOver;                 // the second button: this truck has its own in force over a part taken
     int unknown;                    // keys the mod does not know, left out
 };
 inline void ProfileTakenText(const ProfileTaken &t, char *out, size_t size)
@@ -162,14 +163,15 @@ inline void ProfileTakenText(const ProfileTaken &t, char *out, size_t size)
         if (took[0]) strncat_s(took, ", ", _TRUNCATE);
         strncat_s(took, what, _TRUNCATE);
     };
-    add(t.scales, "the class and scales"), add(t.scalesOff, "the plain scales"), add(t.diff || t.diffOff, "the diff types"), add(t.cda, "the drag area"),
-        add(t.airAxles, "the air axles"), add(t.odo, "the Counts choice"), add(t.susp, "the suspension"), add(t.air, "Air brakes"), add(t.torque, "Engine torque"),
+    add(t.scales, "the class and scales"), add(t.scalesOff, "the plain scales"), add(t.cda, "the drag area"),
+        add(t.airAxles, "the air axles"), add(t.odo, "the Counts choice"), add(t.diff || t.diffOff, "the diff types"), add(t.susp, "the suspension"), add(t.air, "Air brakes"), add(t.torque, "Engine torque"),
         add(t.hold, "the gear hold"), add(t.engine, "the engine profile"), add(t.engineOff, "the engine settings out of force"), add(t.engineDefault, "the default of the engine");
     int n = snprintf(out, size, "Taken: %s.", took[0] ? took : "nothing");
     auto more = [&](const char *text) {
         if (n > 0 && (size_t)n < size) n += snprintf(out + n, size - n, " %s", text);
     };
     if (t.kindLeft) more("The settings of the kind were left.");
+    if (t.truckOver) more("This truck has settings of its own in force, and those stay.");
     if (t.engineOther) more("Made with another engine: its engine settings were left.");
     if (t.gearboxOther) more("Made with another gearbox: its gear hold was left.");
     more("The tire mode is not taken yet.");

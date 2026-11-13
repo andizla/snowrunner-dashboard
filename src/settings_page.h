@@ -855,7 +855,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             else if (pl.say[0]) wrapped(pl.say, false);
             if (pl.truck && !pl.idRead) wrapped("The id of this truck is not read, so it has no settings of its own: only the second button works.", true);
             else
-                wrapped("Import takes what this truck keeps as its own: the suspension, Air brakes and the engine settings. The class, the scales and the diff types belong to the kind and are left. "
+                wrapped("Import takes what this truck keeps as its own: the diff types, the suspension, Air brakes and the engine settings. The class and the scales belong to the kind and are left. "
                         "The second button takes all of it for every truck of this kind. A backup is written first, and it is in this list.", true);
             int others = 0;
             auto row = [&](int i, bool other) {
@@ -1113,7 +1113,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 }
                 g_pageDiffNames[0] = diffs[0];
             }
-            PageTip("The differential of the driven truck, saved for that truck. Auto picks Locked where the lock of the truck is always on, else Open. Open lets a free wheel spin. That wheel takes the pull from the other wheel of its axle. The other axles take over what it cannot use. Limited slip holds a spinning wheel, only in L-, L, L+ and R. Locked ties the wheels, and holds a free wheel only with Diff lock bite above 0. While the diff lock is on the truck is locked whatever the type, so on a truck whose lock is always on Open and Limited slip may change nothing. The type acts in the gear positions of the mod gearbox, not in A.");
+            PageTip("The differential of the driven truck, kept for this truck alone. A truck that never had it set goes by its kind. Auto picks Locked where the lock of the truck is always on, else Open. Open lets a free wheel spin. That wheel takes the pull from the other wheel of its axle. The other axles take over what it cannot use. Limited slip holds a spinning wheel, only in L-, L, L+ and R. Locked ties the wheels, and holds a free wheel only with Diff lock bite above 0. While the diff lock is on the truck is locked whatever the type, so on a truck whose lock is always on Open and Limited slip may change nothing. The type acts in the gear positions of the mod gearbox, not in A.");
             // a row for each axle of the driven truck that can be driven, front to back (BRIEF_axle_diff.md, M8)
             {
                 bool lockedOne = false, differ = false;

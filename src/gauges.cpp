@@ -1901,6 +1901,43 @@ static void EngineTorqueWrite(const char *name, int percent)
 // when one of them is changed on the tab while that truck is driven, and take the place of the plain ones of
 // [Gauges] whenever that truck is driven again. The key is the truck's as truck.h makes it (TruckKey).
 
+// The owned truck's level for the keys of [Truck] (BRIEF_truck_keys_per_truck.md, the diff step): [Truck:<id>] of the
+// kind's file, beside [Suspension:<id>] and [Engine:<id>]. It holds the diff group, DiffType with DiffAxle1 to 8, and
+// has no Own: a key of the group in it is the group for that truck, and the kind's keys of the group are then not read
+// for it. A file without the section gives every truck of the kind what it gave before. id "" is the kind's [Truck].
+static std::wstring TruckSectionOf(const char *id)
+{
+    std::wstring section = kSetupSections[kSetupTruck];
+    if (id && id[0]) section += L":" + Wide(id);
+    return section;
+}
+static void DiffCopy(GaugeSettings &to, const GaugeSettings &from)
+{
+    to.diffType = from.diffType;
+    for (int a = 0; a < kAxleRowsMost; a++) to.diffAxle[a] = from.diffAxle[a];
+}
+// The diff group of one section, laid over s: DiffType where it is there and 0 to 3 (BRIEF_diff_types.md, S5), and each
+// axle's own row or -1 (BRIEF_axle_diff.md, M6: one digit of 0 to 3, anything else is as if absent). True where the
+// section holds a key of the group that counts.
+static bool TruckDiffRead(const std::wstring &ini, const std::wstring &section, GaugeSettings &s)
+{
+    bool there = false;
+    wchar_t type[8] = {};
+    if (GetPrivateProfileStringW(section.c_str(), L"DiffType", L"", type, 8, ini.c_str()) > 0)
+    {
+        const int v = _wtoi(type);
+        if (v >= 0 && v <= 3 && iswdigit(type[0])) s.diffType = v, there = true;
+    }
+    for (int a = 0; a < kAxleRowsMost; a++)
+    {
+        wchar_t name[16], buf[8] = {};
+        swprintf_s(name, L"DiffAxle%d", a + 1);
+        s.diffAxle[a] = -1;
+        if (GetPrivateProfileStringW(section.c_str(), name, L"", buf, 8, ini.c_str()) > 0 && buf[0] >= L'0' && buf[0] <= L'3' && !buf[1]) s.diffAxle[a] = buf[0] - L'0', there = true;
+    }
+    return there;
+}
+
 // Lays the truck's own scales over s: each of the seven its file holds. One the file does not hold stays as it is in
 // s. False when the file holds none of them, or is not there.
 // The keys from a section of any file (a truck's file's [Truck]; a profile's [Truck] and [Drive], truck_profile.h).
@@ -1920,24 +1957,8 @@ static bool TruckKeysRead(const std::wstring &ini, const std::wstring &section, 
     if (has(L"SpeedMax")) s.speedMax = IniFloatIn(section.c_str(), L"SpeedMax", s.speedMax, ini);
     if (has(L"BoostMax")) s.boostMax = IniFloatIn(section.c_str(), L"BoostMax", s.boostMax, ini);
     if (has(L"BoostProfile")) s.boostProfile = (int)GetPrivateProfileIntW(section.c_str(), L"BoostProfile", s.boostProfile, ini.c_str());
-    // the truck's differential (BRIEF_diff_types.md, S5): the file's eighth key, not one of the scales, so it does not
-    // make them the truck's own; a value out of 0 to 3 is left out
-    {
-        wchar_t buf[8] = {};
-        if (GetPrivateProfileStringW(section.c_str(), L"DiffType", L"", buf, 8, ini.c_str()) > 0)
-        {
-            const int v = _wtoi(buf);
-            if (v >= 0 && v <= 3 && iswdigit(buf[0])) s.diffType = v;
-        }
-    }
-    // each axle's own (BRIEF_axle_diff.md, M6): DiffAxle1 to DiffAxle8, one digit of 0 to 3; anything else is as if absent
-    for (int a = 0; a < kAxleRowsMost; a++)
-    {
-        wchar_t name[16], buf[8] = {};
-        swprintf_s(name, L"DiffAxle%d", a + 1);
-        s.diffAxle[a] = -1;
-        if (GetPrivateProfileStringW(section.c_str(), name, L"", buf, 8, ini.c_str()) > 0 && buf[0] >= L'0' && buf[0] <= L'3' && !buf[1]) s.diffAxle[a] = buf[0] - L'0';
-    }
+    // the truck's differential and each axle's own: not of the scales, so they do not make them the truck's own
+    TruckDiffRead(ini, section, s);
     // the truck's own drag area, by hand in its file: not one of the scales, so it does not make them the truck's own
     {
         wchar_t buf[16] = {};
@@ -1950,7 +1971,18 @@ static bool TruckKeysRead(const std::wstring &ini, const std::wstring &section, 
     if (any) SettingsClamp(s);
     return any;
 }
-static bool ReadTruckIni(const char *key, GaugeSettings &s) { return TruckKeysRead(SetupFile(kSetupTruck, key), kSetupSections[kSetupTruck], s); }
+// The kind's [Truck] over s, then with an id the owned truck's diff group in the place of the kind's: laid over the
+// group s came with (the plain one), never over the kind's rows. diffTruck: the truck has a group of its own.
+static bool ReadTruckIni(const char *key, GaugeSettings &s, const char *id = "", bool *diffTruck = nullptr)
+{
+    const std::wstring ini = SetupFile(kSetupTruck, key);
+    GaugeSettings mine = s;
+    const bool own = TruckKeysRead(ini, kSetupSections[kSetupTruck], s);
+    const bool truck = id && id[0] && TruckDiffRead(ini, TruckSectionOf(id), mine);
+    if (truck) DiffCopy(s, mine);
+    if (diffTruck) *diffTruck = truck;
+    return own;
+}
 
 // Writes the truck's file: the seven scales of s.
 static void WriteTruckIni(const char *key, const GaugeSettings &s)
@@ -1981,17 +2013,18 @@ static bool DropTruckAxles(const std::wstring &ini, const std::wstring &section)
     return there;
 }
 // The truck's differential into its file: one put (S5). The Diff row sets every axle, so the keys by axle go (M6).
-static void WriteTruckDiff(const char *key, int type)
+// id: the owned truck's [Truck:<id>], "" the kind's [Truck] (so for the three below).
+static void WriteTruckDiff(const char *key, int type, const char *id = "")
 {
-    const std::wstring ini = SetupFile(kSetupTruck, key), section = kSetupSections[kSetupTruck];
+    const std::wstring ini = SetupFile(kSetupTruck, key), section = TruckSectionOf(id);
     SetupBegin(kSetupTruck, Wide(key));
     IniPutInt(section.c_str(), L"DiffType", type, ini);
     DropTruckAxles(ini, section);
 }
 // One axle's own type into the truck's file (axle 0 the front), or its key out of it for a type under 0.
-static void WriteTruckAxle(const char *key, int axle, int type)
+static void WriteTruckAxle(const char *key, int axle, int type, const char *id = "")
 {
-    const std::wstring ini = SetupFile(kSetupTruck, key), section = kSetupSections[kSetupTruck];
+    const std::wstring ini = SetupFile(kSetupTruck, key), section = TruckSectionOf(id);
     wchar_t name[16];
     swprintf_s(name, L"DiffAxle%d", axle + 1);
     if (type < 0)
@@ -2003,15 +2036,40 @@ static void WriteTruckAxle(const char *key, int axle, int type)
     SetupBegin(kSetupTruck, Wide(key));
     IniPutInt(section.c_str(), name, type, ini);
 }
-// And out of it; true when it was there.
-static bool DropTruckDiff(const char *key)
+// And out of it; true when it was there. An owned truck's section goes with it when nothing of its own is left there:
+// the parts and a mark alone are no section.
+static bool DropTruckDiff(const char *key, const char *id = "")
 {
-    const std::wstring ini = SetupFile(kSetupTruck, key), section = kSetupSections[kSetupTruck];
+    const std::wstring ini = SetupFile(kSetupTruck, key), section = TruckSectionOf(id);
     wchar_t buf[8] = {};
-    const bool axles = DropTruckAxles(ini, section);
-    if (GetPrivateProfileStringW(section.c_str(), L"DiffType", L"", buf, 8, ini.c_str()) == 0) return axles;
-    WritePrivateProfileStringW(section.c_str(), L"DiffType", nullptr, ini.c_str());
-    return true;
+    bool there = DropTruckAxles(ini, section);
+    if (GetPrivateProfileStringW(section.c_str(), L"DiffType", L"", buf, 8, ini.c_str()) > 0)
+    {
+        WritePrivateProfileStringW(section.c_str(), L"DiffType", nullptr, ini.c_str());
+        there = true;
+    }
+    if (id[0] && truckid::SectionThere(ini, section))
+    {
+        bool own = false;
+        for (const auto &k : truckid::Keys(ini, section)) own = own || (!truckid::MarkKey(k.first) && !truckid::KeyIs(k.first, L"Engine") && !truckid::KeyIs(k.first, L"Gearbox"));
+        if (!own) WritePrivateProfileStringW(section.c_str(), nullptr, nullptr, ini.c_str());
+    }
+    return there;
+}
+// The whole group into a level, in the place of what it had: the type (under 0: none, so the key goes) and each axle's
+// own row. An owned truck's section never holds half a group by an edit (the addendum's S1).
+static void WriteTruckDiffs(const char *key, const char *id, int type, const int *axle)
+{
+    const std::wstring ini = SetupFile(kSetupTruck, key), section = TruckSectionOf(id);
+    if (type >= 0) WriteTruckDiff(key, type, id);
+    else
+    {
+        wchar_t buf[8] = {};
+        DropTruckAxles(ini, section);
+        if (GetPrivateProfileStringW(section.c_str(), L"DiffType", L"", buf, 8, ini.c_str()) > 0) WritePrivateProfileStringW(section.c_str(), L"DiffType", nullptr, ini.c_str());
+    }
+    for (int a = 0; a < kAxleRowsMost; a++)
+        if (axle[a] >= 0) WriteTruckAxle(key, a, axle[a], id);
 }
 
 // Takes the truck's seven scales out of its file, and the file with them when nothing else is in it.
@@ -2310,7 +2368,7 @@ static truckid::Parts TruckPartsOf(const char *engine, const char *gearbox)
 // The sections that hold settings: the match's first tier and the levels go by these.
 static const std::vector<std::wstring> &TruckIdPrefixes()
 {
-    static const std::vector<std::wstring> p = { std::wstring(kSuspSection) + L":", std::wstring(kEngineSection) + L":" };
+    static const std::vector<std::wstring> p = { std::wstring(kSuspSection) + L":", std::wstring(kEngineSection) + L":", TruckSectionOf("") + L":" };
     return p;
 }
 // Every section that follows the truck: the settings' and the odometer's (BRIEF_odometer.md). The parts go into each,
@@ -2318,7 +2376,8 @@ static const std::vector<std::wstring> &TruckIdPrefixes()
 static const wchar_t *const kOdoSection = L"Odometer";
 static const std::vector<std::wstring> &TruckIdAllPrefixes()
 {
-    static const std::vector<std::wstring> p = { std::wstring(kSuspSection) + L":", std::wstring(kEngineSection) + L":", std::wstring(kOdoSection) + L":" };
+    // a bit a place: a new one goes at the end, never in the middle (kIdOdoBits is the third place)
+    static const std::vector<std::wstring> p = { std::wstring(kSuspSection) + L":", std::wstring(kEngineSection) + L":", std::wstring(kOdoSection) + L":", TruckSectionOf("") + L":" };
     return p;
 }
 static const std::vector<std::wstring> &OdoPrefixes()
@@ -2329,10 +2388,10 @@ static const std::vector<std::wstring> &OdoPrefixes()
 // The words for TruckIdAllPrefixes' sections, in its order (the match's line).
 static const std::vector<std::wstring> &TruckIdNames()
 {
-    static const std::vector<std::wstring> n = { L"suspension", L"engine", L"odometer" };
+    static const std::vector<std::wstring> n = { L"suspension", L"engine", L"odometer", L"differential" };
     return n;
 }
-static const unsigned kIdSettingsBits = 3, kIdOdoBits = 4; // TruckIdAllPrefixes' bits: the settings' two, the odometer's
+static const unsigned kIdSettingsBits = 1 | 2 | 8, kIdOdoBits = 4; // TruckIdAllPrefixes' bits: the settings' three (the suspension, the engine, [Truck:<id>]), the odometer's
 // The parts written into the id's sections where they exist: the bits of the sections changed (bit i for
 // TruckIdAllPrefixes()[i]).
 static unsigned TruckPartsPutBits(const char *key, const char *id, const truckid::Parts &parts)
@@ -2758,7 +2817,7 @@ static const wchar_t *EngineLevelWords(int level)
 // kind and id its game id ("" while none is driven or the id is not read). changed, suspChanged and truckChanged: the
 // scales, the kind's or the truck's suspension were changed on the tab and are not in the ini yet. The functions below
 // are all that changes a state once the ini is read into plain.
-struct SettingsState { GaugeSettings plain, s; char key[kMaxText], id[40]; bool own, changed, suspOwn, suspKept, suspChanged, truckOwn, truckKept, truckChanged, diffChanged; int axleChanged; bool airChanged; }; // diffChanged: the Diff row moved while this truck is driven, not in its file yet
+struct SettingsState { GaugeSettings plain, s; char key[kMaxText], id[40]; bool own, changed, suspOwn, suspKept, suspChanged, truckOwn, truckKept, truckChanged, diffChanged; int axleChanged; bool airChanged, diffTruck; }; // diffChanged: the Diff row moved while this truck is driven, not in its file yet; diffTruck: the diff group in force is the owned truck's ([Truck:<id>])
 
 // The suspension level in force: the default, the kind's, this owned truck's.
 enum { kSuspLevelDefault, kSuspLevelKind, kSuspLevelTruck };
@@ -2800,11 +2859,13 @@ static void SettingsFor(SettingsState &st, const char *key, const char *id = "")
     strncpy_s(st.key, key, _TRUNCATE);
     strncpy_s(st.id, key[0] ? id : "", _TRUNCATE);
     st.s = st.plain;
-    st.own = key[0] && ReadTruckIni(key, st.s);
+    st.diffTruck = false;
+    st.own = key[0] && ReadTruckIni(key, st.s, st.id, &st.diffTruck);
     st.changed = st.diffChanged = false;
     st.axleChanged = 0;
     SuspMarkClear(st.key, st.id);
     SuspMarkClear(st.key, st.id, kEngineSection);
+    SuspMarkClear(st.key, st.id, kSetupSections[kSetupTruck]);
     SuspMarkClear(st.key, st.id, kOdoSection); // the Reviewer's must 5: a count driven again is no left-over
     SuspFromFiles(st);
     st.s.airBrakes = ReadTruckAir(st.key, st.id); // the truck's own, never the plain settings'
@@ -2914,21 +2975,36 @@ static void SettingsSuspLevel(SettingsState &st, bool truckOnly)
 // The driven truck is the same kind under a new id (the game made it anew): its sections follow it, the suspension's
 // and the engine's each on its own. Which were taken: kTakenSusp and kTakenEngine.
 // And the odometer's count (kTakenOdo, the Reviewer's must 2), so a recovery or a garage visit keeps it.
-enum { kTakenSusp = 1, kTakenEngine = 2, kTakenOdo = 4 };
+// And the owned truck's [Truck:<id>] (kTakenTruck): its diff group.
+enum { kTakenSusp = 1, kTakenEngine = 2, kTakenOdo = 4, kTakenTruck = 8 };
 static int TakeOverBoth(const char *key, const char *oldId, const char *newId)
 {
     return (TruckSuspTakeOver(key, oldId, newId) ? kTakenSusp : 0) | (TruckSuspTakeOver(key, oldId, newId, 0, kEngineSection) ? kTakenEngine : 0) |
-           (TruckSuspTakeOver(key, oldId, newId, 0, kOdoSection) ? kTakenOdo : 0);
+           (TruckSuspTakeOver(key, oldId, newId, 0, kOdoSection) ? kTakenOdo : 0) | (TruckSuspTakeOver(key, oldId, newId, 0, kSetupSections[kSetupTruck]) ? kTakenTruck : 0);
 }
+// The words of what was taken, for the log's line; good until the thread's next call.
 static const wchar_t *TakenWords(int taken)
 {
-    const int settings = taken & (kTakenSusp | kTakenEngine);
-    if (taken & kTakenOdo)
-        return settings == (kTakenSusp | kTakenEngine) ? L"the suspension's and the engine's settings and its count"
-               : settings == kTakenEngine              ? L"the engine's settings and its count"
-               : settings == kTakenSusp                ? L"the suspension's settings and its count"
-                                                       : L"its count";
-    return settings == (kTakenSusp | kTakenEngine) ? L"the suspension's and the engine's settings" : settings == kTakenEngine ? L"the engine's settings" : L"the suspension's settings";
+    static thread_local wchar_t text[120];
+    const wchar_t *part[3];
+    int n = 0;
+    if (taken & kTakenSusp) part[n++] = L"the suspension's";
+    if (taken & kTakenEngine) part[n++] = L"the engine's";
+    if (taken & kTakenTruck) part[n++] = L"the differential's";
+    std::wstring t;
+    for (int i = 0; i < n; i++) t += part[i], t += i + 2 < n ? L", " : i + 1 < n ? L" and " : L" settings";
+    if (taken & kTakenOdo) t += n ? L" and its count" : L"its count";
+    wcsncpy_s(text, t.c_str(), _TRUNCATE);
+    return text;
+}
+// The diff group in force from the files, where no edit of it waits for its save: the kind's, then the owned truck's.
+static void DiffFromFiles(SettingsState &st)
+{
+    st.diffTruck = false;
+    if (!st.key[0]) return;
+    GaugeSettings d = st.plain;
+    ReadTruckIni(st.key, d, st.id, &st.diffTruck);
+    if (!st.diffChanged && !st.axleChanged) DiffCopy(st.s, d);
 }
 static int SettingsTakeOver(SettingsState &st, const char *newId)
 {
@@ -2937,6 +3013,7 @@ static int SettingsTakeOver(SettingsState &st, const char *newId)
     const GaugeSettings scales = st.s;
     SuspFromFiles(st);
     ScalesCopy(st.s, scales);
+    DiffFromFiles(st); // the new id's own group, taken over or its own from before; else the kind's as it was
     return taken;
 }
 
@@ -2953,6 +3030,7 @@ static void SettingsSuspToDefault(SettingsState &st)
 static void SettingsToDefaults(SettingsState &st)
 {
     const bool diffOwn = st.key[0] && DropTruckDiff(st.key); // the truck's differential goes back to the default too
+    if (st.key[0] && st.id[0]) DropTruckDiff(st.key, st.id);  // at both levels, as its Air brakes choice; a sister's own section stays
     DropTruckAir(st.key, st.id);                             // and its Air brakes choice: by the class again
     if (st.own || diffOwn) DropTruckIni(st.key);
     if (st.truckOwn) WriteTruckSusp(st.key, st.s, false, st.id);
@@ -2971,7 +3049,7 @@ static void SettingsToDefaults(SettingsState &st)
     }
     SettingsDefaults(st.plain);
     st.s = st.plain;
-    st.own = st.changed = st.diffChanged = st.airChanged = false;
+    st.own = st.changed = st.diffChanged = st.airChanged = st.diffTruck = false;
     st.axleChanged = 0;
     SuspFromFiles(st);
 }
@@ -2983,15 +3061,21 @@ static void SettingsToDefaults(SettingsState &st)
 static void SettingsWriteTruck(SettingsState &st)
 {
     if (st.own && st.changed) WriteTruckIni(st.key, st.s);
-    if (st.key[0] && st.diffChanged) WriteTruckDiff(st.key, st.s.diffType);
-    for (int a = 0; st.key[0] && a < kAxleRowsMost; a++)
-        if (st.axleChanged >> a & 1) WriteTruckAxle(st.key, a, st.s.diffAxle[a]);
+    // with the id read an edit of the Diff row or a row by axle is the owned truck's (the lead's ruling 1): the whole
+    // group in force into its section, so its first edit starts from what it drove with (S1). Else the kind's, as before
+    if (st.key[0] && st.id[0] && (st.diffChanged || st.axleChanged)) WriteTruckDiffs(st.key, st.id, st.s.diffType, st.s.diffAxle), st.diffTruck = true;
+    else
+    {
+        if (st.key[0] && st.diffChanged) WriteTruckDiff(st.key, st.s.diffType);
+        for (int a = 0; st.key[0] && a < kAxleRowsMost; a++)
+            if (st.axleChanged >> a & 1) WriteTruckAxle(st.key, a, st.s.diffAxle[a]);
+    }
     st.axleChanged = 0;
     if (st.key[0] && st.airChanged && st.s.airBrakes >= 0) WriteTruckAir(st.key, st.id, st.s.airBrakes);
     st.airChanged = false;
     if (st.truckOwn && st.truckChanged) WriteTruckSusp(st.key, st.s, true, st.id);
     else if (st.suspOwn && st.suspChanged) WriteTruckSusp(st.key, st.s, true);
-    if (st.key[0]) TruckSuspPrune(st.key), TruckSuspPrune(st.key, kEngineSection);
+    if (st.key[0]) TruckSuspPrune(st.key), TruckSuspPrune(st.key, kEngineSection), TruckSuspPrune(st.key, kSetupSections[kSetupTruck]);
     st.changed = st.suspChanged = st.truckChanged = st.diffChanged = false;
 }
 static void SettingsWrite(SettingsState &st)
@@ -3076,15 +3160,25 @@ static std::wstring ProfileText(const SettingsState &st, const EngineState &e, i
     const int air = exact ? TruckAirAt(st.key, id) : st.s.airBrakes;
     if (air == 0 || air == 1) num(L"AirBrakes", air);
     else if (exact) line(L"AirOwn", L"0");
+    // the diff group: the kind's own keys, the owned truck's own exactly (a backup of its level), or the group in force
+    // where that is the truck's
     t += L"\r\n[Drive]\r\n";
+    GaugeSettings dg = k;
     bool drive = TruckKeyThere(st.key, L"DiffType");
-    if (drive) num(L"DiffType", k.diffType);
+    if (level == kProfLevelTruck)
+    {
+        dg = st.plain, dg.diffType = -1;
+        TruckDiffRead(SetupFile(kSetupTruck, st.key), TruckSectionOf(st.id), dg);
+        drive = dg.diffType >= 0;
+    }
+    else if (level == kProfLevelInForce && st.diffTruck) DiffCopy(dg, st.s), drive = true;
+    if (drive) num(L"DiffType", dg.diffType);
     for (int a = 0; a < kAxleRowsMost; a++)
-        if (k.diffAxle[a] >= 0)
+        if (dg.diffAxle[a] >= 0)
         {
             wchar_t name[16];
             swprintf_s(name, L"DiffAxle%d", a + 1);
-            num(name, k.diffAxle[a]);
+            num(name, dg.diffAxle[a]);
             drive = true;
         }
     if (!drive) line(L"DiffOwn", L"0");
@@ -3256,6 +3350,8 @@ static void ProfileImport(SettingsState &st, EngineState &e, const std::wstring 
     t.kindLeft = !kindLevel;
     const char *id = kindLevel ? "" : st.id;
     const std::wstring truckIni = SetupFile(kSetupTruck, st.key);
+    // a backup gives the level back as it was: a key the backup lacks goes out of it (15's S1, and the engine's below)
+    const bool backupFile = GetPrivateProfileIntW(L"Profile", L"Backup", 0, file.c_str()) != 0;
     if (kindLevel)
     {
         // the seven scales as one, or back to the plain ones where the profile says its truck showed those
@@ -3275,6 +3371,8 @@ static void ProfileImport(SettingsState &st, EngineState &e, const std::wstring 
             IniPutFloat(kSetupSections[kSetupTruck], L"RoadCdA", k.roadCdA, truckIni);
             t.cda = true;
         }
+        else if (backupFile && !ProfKeyThere(file, L"Truck", L"RoadCdA") && TruckKeyThere(st.key, L"RoadCdA"))
+            WritePrivateProfileStringW(kSetupSections[kSetupTruck], L"RoadCdA", nullptr, truckIni.c_str()), t.cda = true;
         char word[16];
         if (ProfStr(file, L"Truck", L"AirAxles", word, sizeof word, 12) && AirKindOf(word) >= 0)
         {
@@ -3282,15 +3380,29 @@ static void ProfileImport(SettingsState &st, EngineState &e, const std::wstring 
             WritePrivateProfileStringW(kSetupSections[kSetupTruck], L"AirAxles", Wide(kAirKindNames[AirKindOf(word)]).c_str(), truckIni.c_str());
             t.airAxles = true;
         }
+        else if (backupFile && !ProfKeyThere(file, L"Truck", L"AirAxles") && TruckKeyThere(st.key, L"AirAxles"))
+            WritePrivateProfileStringW(kSetupSections[kSetupTruck], L"AirAxles", nullptr, truckIni.c_str()), t.airAxles = true;
         if (ProfStr(file, L"Truck", L"OdometerHours", word, sizeof word, 4) && (!strcmp(word, "0") || !strcmp(word, "1"))) OdoHoursPut(st.key, word[0] == '1'), t.odo = true;
-        // the diff types: the Diff row first (it takes the rows by axle out), then each axle's own
+    }
+    // the diff types, at the level the press writes: the owned truck's own section, or the kind's keys
+    {
         GaugeSettings d = st.plain;
         d.diffType = -1;
-        TruckKeysRead(file, L"Drive", d);
-        if (d.diffType >= 0) WriteTruckDiff(st.key, d.diffType), t.diff = true;
-        for (int a = 0; a < kAxleRowsMost; a++)
-            if (d.diffAxle[a] >= 0) WriteTruckAxle(st.key, a, d.diffAxle[a]), t.diff = true;
-        if (!t.diff && ProfKeyThere(file, L"Drive", L"DiffOwn") && GetPrivateProfileIntW(L"Drive", L"DiffOwn", 1, file.c_str()) == 0) t.diffOff = DropTruckDiff(st.key);
+        if (TruckDiffRead(file, L"Drive", d))
+        {
+            // this truck's group is whole: a profile with rows alone gets the type in force. A backup is taken exactly
+            // at either level. Else the kind's as an edit has it: the Diff row first (it takes the rows out), then the rows
+            if (!kindLevel && !backupFile && d.diffType < 0) d.diffType = st.s.diffType;
+            if (!kindLevel || backupFile) WriteTruckDiffs(st.key, id, d.diffType, d.diffAxle);
+            else
+            {
+                if (d.diffType >= 0) WriteTruckDiff(st.key, d.diffType);
+                for (int a = 0; a < kAxleRowsMost; a++)
+                    if (d.diffAxle[a] >= 0) WriteTruckAxle(st.key, a, d.diffAxle[a]);
+            }
+            t.diff = true;
+        }
+        else if (ProfKeyThere(file, L"Drive", L"DiffOwn") && GetPrivateProfileIntW(L"Drive", L"DiffOwn", 1, file.c_str()) == 0) t.diffOff = DropTruckDiff(st.key, id);
     }
     // the suspension set over the one the level has now (the set in force where it has none), in force there
     {
@@ -3345,7 +3457,7 @@ static void ProfileImport(SettingsState &st, EngineState &e, const std::wstring 
         wchar_t wasCurve[256] = {};
         const int wasAt = ReadTruckEngine(st.key, id, e.engine, e.gearbox, wasTorque, wasHold, wasProfile, wasCurve);
         // a backup gives the level back as it was: this engine's and this gearbox's keys the backup lacks go out of it
-        if (GetPrivateProfileIntW(L"Profile", L"Backup", 0, file.c_str()) != 0 && wasAt != kSuspNone)
+        if (backupFile && wasAt != kSuspNone)
         {
             const std::wstring sec = SectionOf(kEngineSection, id);
             if (engineSame && !takeTorque) WritePrivateProfileStringW(sec.c_str(), EngineKeyOf(L"Torque", e.engine).c_str(), nullptr, truckIni.c_str());
@@ -3363,6 +3475,10 @@ static void ProfileImport(SettingsState &st, EngineState &e, const std::wstring 
             if (takeTorque) EngineTorqueWrite(e.engine, torque);
             t.engineDefault = true;
         }
+        // the second button on a truck with its own in force (15's S2): that stays over what the kind just took
+        t.truckOver = kindLevel && st.id[0] &&
+                      ((t.susp && st.truckOwn) || ((t.diff || t.diffOff) && st.diffTruck) || (t.air && TruckAirAt(st.key, st.id) >= 0) ||
+                       ((t.torque || t.hold || t.engine || t.engineOff) && e.truckOwn));
     }
 }
 
@@ -5087,9 +5203,24 @@ static void SuspLevelLog(const SettingsState &st, bool newToMod)
             : st.truckKept ? L" (this truck's own are kept, not in use)" : st.suspKept && level == kSuspLevelDefault ? L" (the kind's own are kept, not in use)" : L"");
 }
 
+// Where the driven truck's diff types come from, in the log (the addendum's S2): its own section, the kind's keys, or
+// the plain Diff row.
+static void DiffLevelLog(const SettingsState &st)
+{
+    if (!st.key[0]) return;
+    GaugeSettings k = st.plain;
+    const bool kind = !st.diffTruck && TruckDiffRead(SetupFile(kSetupTruck, st.key), TruckSectionOf(""), k);
+    if (st.diffTruck) Log(L"differential: this truck's own diff types (%S, [Truck:%S]): DiffType %d", st.key, st.id, st.s.diffType);
+    else
+        Log(L"differential: %s%s: DiffType %d%s", kind ? L"the diff types of every " : L"the plain Diff row, no diff types in the file of ", Wide(st.key).c_str(), st.s.diffType,
+            st.id[0] ? L"" : L" (the truck's id not read, so no level of its own)");
+}
+
 // Saves the ini and says so in the log.
 static void SettingsSave(SettingsState &st)
 {
+    if (st.key[0] && st.id[0] && (st.diffChanged || st.axleChanged))
+        Log(L"settings: saved, this truck's diff types in [Truck:%S] of Gauges\\trucks\\%s.ini", st.id, SetupFileName(Wide(st.key)).c_str());
     if (st.own && st.changed) Log(L"settings: saved, the truck's scales in Gauges\\trucks\\%s.ini", SetupFileName(Wide(st.key)).c_str());
     if (st.truckOwn && st.truckChanged) Log(L"settings: saved, this truck's suspension in [Suspension:%S] of Gauges\\trucks\\%s.ini", st.id, SetupFileName(Wide(st.key)).c_str());
     else if (st.suspOwn && st.suspChanged) Log(L"settings: saved, the truck's suspension in Gauges\\trucks\\%s.ini", SetupFileName(Wide(st.key)).c_str());
@@ -9912,6 +10043,7 @@ static DWORD WINAPI Run(void *)
             EngineFor(eng, truck.key, truck.id, e, g);
             EngineLevelLog(eng, took == kTookLast ? L"the truck that went last" : L"matched out of the warehouse");
             SuspLevelLog(set, false);
+            DiffLevelLog(set);
             if (took == kTookLast)
             {
                 // the gap in words (S1): "9 min before, no truck and no load between"
@@ -10635,6 +10767,7 @@ static DWORD WINAPI Run(void *)
                 Log(L"suspension: the take-over: %S under its new id %S (vehicle %p) takes over %s of %S (back %.0f s after it went%s)", truck.key, truck.id,
                     (void *)truckVehicle, TakenWords(taken), oldId, (GetTickCount64() - goneAt) / 1000.0, byVehicle ? L", on the same vehicle" : L"");
             if (truck.key[0]) SuspLevelLog(set, truck.id[0] && !set.truckOwn && !set.truckKept && !taken && !takeOver);
+            DiffLevelLog(set);
             idChanged(taken, takeOver, oldId, byVehicle ? L"the same vehicle after more than 20 s" : L"back within 20 s");
         }
         else if (strcmp(now.id, truck.id))
@@ -10667,6 +10800,7 @@ static DWORD WINAPI Run(void *)
                 Log(L"suspension: the take-over: %S under its new id %S (vehicle %p) takes over %s of %S (while driven, the same vehicle)", truck.key, truck.id,
                     (void *)truckVehicle, TakenWords(taken), oldId);
             SuspLevelLog(set, !set.truckOwn && !set.truckKept && !taken && truck.id[0]);
+            DiffLevelLog(set);
             idChanged(taken, sameTruck, oldId, L"a new id on the same vehicle while driven");
         }
         // the match once the engine's and the gearbox's names are this truck's, or after 10 s without them
@@ -12784,6 +12918,154 @@ static void PartOwned()
         }
         DeleteFileW(truckFile(kind).c_str());
     }
+    // the owned truck's level for the diff group (BRIEF_truck_keys_per_truck.md, the diff step): [Truck:<id>]
+    {
+        const char *dk = "diff_own_kind", *a = "{D1000000-0000-0000-0000-000000000001}", *b = "{D1000000-0000-0000-0000-000000000002}", *c = "{D1000000-0000-0000-0000-000000000003}";
+        const std::wstring df = truckFile(dk);
+        DeleteFileW(df.c_str());
+        auto dkey = [&](const char *id, const wchar_t *name) {
+            wchar_t v[48] = {};
+            GetPrivateProfileStringW(TruckSectionOf(id).c_str(), name, L"", v, 48, df.c_str());
+            return std::wstring(v);
+        };
+        auto there = [&](const char *id) { return truckid::SectionThere(df, TruckSectionOf(id)); };
+        SettingsState d = {};
+        ReadIni(d.plain);
+        // an old file: the kind's keys alone give both ids the same, and no read makes a section
+        truckPut(dk, L"DiffType", L"1");
+        truckPut(dk, L"DiffAxle2", L"3");
+        SettingsFor(d, dk, a);
+        const GaugeSettings oldA = d.s;
+        const bool oldOwn = d.diffTruck;
+        SettingsFor(d, dk, b);
+        const bool oldSame = !oldOwn && !d.diffTruck && SameSettings(oldA, d.s) && d.s.diffType == 1 && d.s.diffAxle[1] == 3 && !there(a) && !there(b);
+        // an edit on a: the whole group in force into its own section, the kind's keys as they were, b as before
+        SettingsFor(d, dk, a);
+        GaugeSettings in = d.s;
+        in.diffAxle[0] = 2;
+        SettingsTake(d, in);
+        SettingsWrite(d);
+        const bool whole = d.diffTruck && dkey(a, L"DiffType") == L"1" && dkey(a, L"DiffAxle1") == L"2" && dkey(a, L"DiffAxle2") == L"3" && dkey("", L"DiffType") == L"1" &&
+                           dkey("", L"DiffAxle1").empty() && dkey("", L"DiffAxle2") == L"3";
+        SettingsFor(d, dk, b);
+        const bool sister = !d.diffTruck && SameSettings(oldA, d.s) && !there(b);
+        Check(oldSame && whole && sister,
+              "truck keys: a file with the kind's diff keys alone gives two ids of the kind the same settings and no read makes a section; an edit with the id read writes the whole group in force into [Truck:<id>], leaves the kind's keys, and the sister drives as before");
+        if (!(oldSame && whole && sister)) printf("     truck keys: %d %d %d\n", oldSame, whole, sister);
+        // the truck's group over the kind's: the kind's row for an axle is not read under a truck's own DiffType
+        SettingsFor(d, dk, a);
+        in = d.s;
+        in.diffType = 3;
+        for (int ax = 0; ax < kAxleRowsMost; ax++) in.diffAxle[ax] = -1;
+        SettingsTake(d, in);
+        SettingsWrite(d);
+        SettingsFor(d, dk, a);
+        const bool over = d.diffTruck && d.s.diffType == 3 && d.s.diffAxle[1] == -1 && dkey(a, L"DiffAxle2").empty() && dkey(a, L"DiffAxle1").empty() && dkey("", L"DiffAxle2") == L"3";
+        // a section with a row alone: the type is the plain one, never the kind's, and the kind's other rows are not read
+        WritePrivateProfileStringW(TruckSectionOf(c).c_str(), L"DiffAxle1", L"2", df.c_str());
+        SettingsFor(d, dk, c);
+        const bool rowAlone = d.diffTruck && d.s.diffType == d.plain.diffType && d.s.diffAxle[0] == 2 && d.s.diffAxle[1] == -1;
+        // a key that does not count (9, x) is as if absent: the kind's group then
+        WritePrivateProfileStringW(TruckSectionOf(c).c_str(), L"DiffAxle1", L"9", df.c_str());
+        WritePrivateProfileStringW(TruckSectionOf(c).c_str(), L"DiffType", L"x", df.c_str());
+        SettingsFor(d, dk, c);
+        const bool badKeys = !d.diffTruck && d.s.diffType == 1 && d.s.diffAxle[1] == 3;
+        WritePrivateProfileStringW(TruckSectionOf(c).c_str(), nullptr, nullptr, df.c_str());
+        Check(over && rowAlone && badKeys,
+              "truck keys: a truck's own diff group stands in the place of the kind's whole, so the kind's row for an axle is not read under it; a key that does not count there is as if absent");
+        // the id comes a pass or more after the truck (must 2): the kind's type until then, the truck's from that pass,
+        // and the axle plan made from each
+        AxleRows rows = {};
+        rows.axles = 2, rows.drive[0] = rows.drive[1] = 1;
+        SettingsFor(d, dk, "");
+        const AxlePlan p1 = AxlePlanOf(rows, d.s.diffAxle, d.s.diffType, true, 0, true, false, false);
+        const bool pass1 = !d.diffTruck && d.s.diffType == 1 && p1.type[0] == kDiffOpen && p1.type[1] == kDiffLocked && p1.common < 0;
+        SettingsFor(d, dk, "");
+        const bool pass2 = !d.diffTruck && d.s.diffType == 1;
+        SettingsFor(d, dk, a);
+        const AxlePlan p3 = AxlePlanOf(rows, d.s.diffAxle, d.s.diffType, true, 0, true, false, false);
+        const bool pass3 = d.diffTruck && d.s.diffType == 3 && p3.type[0] == kDiffLocked && p3.type[1] == kDiffLocked && p3.common == kDiffLocked;
+        // with no id read an edit is the kind's, as before
+        SettingsFor(d, dk, "");
+        in = d.s;
+        in.diffAxle[0] = 1;
+        SettingsTake(d, in);
+        SettingsWrite(d);
+        const bool kindEdit = !d.diffTruck && dkey("", L"DiffAxle1") == L"1" && dkey(a, L"DiffAxle1").empty();
+        truckPut(dk, L"DiffAxle1", nullptr);
+        Check(pass1 && pass2 && pass3 && kindEdit,
+              "truck keys: with the id read on the third pass the kind's diff types are in force for two passes and the truck's own from the third, the axle plan made from each; an edit with no id read is the kind's as before");
+        // the take-over: the section follows the truck to its new id, the old is marked, and driven again loses the mark
+        SettingsFor(d, dk, a);
+        const int taken = SettingsTakeOver(d, c);
+        wchar_t by[48] = {};
+        GetPrivateProfileStringW(TruckSectionOf(a).c_str(), L"TakenBy", L"", by, 48, df.c_str());
+        const bool carried = taken == kTakenTruck && !strcmp(d.id, c) && d.diffTruck && d.s.diffType == 3 && dkey(c, L"DiffType") == L"3" && Wide(c) == by && dkey(c, L"TakenBy").empty() &&
+                             !wcscmp(TakenWords(taken), L"the differential's settings") &&
+                             !wcscmp(TakenWords(kTakenSusp | kTakenEngine | kTakenTruck | kTakenOdo), L"the suspension's, the engine's and the differential's settings and its count") &&
+                             !wcscmp(TakenWords(kTakenSusp | kTakenTruck), L"the suspension's and the differential's settings");
+        // a truck with none of its own taken over: the kind's stays in force under the new id
+        SettingsFor(d, dk, b);
+        const bool noneTaken = !SettingsTakeOver(d, "{D1000000-0000-0000-0000-000000000009}") && !d.diffTruck && d.s.diffType == 1 && d.s.diffAxle[1] == 3;
+        SettingsFor(d, dk, a);
+        const bool markGone = dkey(a, L"TakenBy").empty() && dkey(a, L"TakenAt").empty() && d.diffTruck;
+        // eleven marked sections prune to ten, the oldest out; the kind's [Truck] and an unmarked section stay
+        char ids[11][40];
+        for (int i = 0; i < 11; i++)
+        {
+            sprintf_s(ids[i], "{E1000000-0000-0000-0000-0000000000%02d}", i);
+            wchar_t at[16];
+            swprintf_s(at, L"%d", 1000 + i);
+            WritePrivateProfileStringW(TruckSectionOf(ids[i]).c_str(), L"DiffType", L"2", df.c_str());
+            WritePrivateProfileStringW(TruckSectionOf(ids[i]).c_str(), L"TakenBy", L"{E2000000-0000-0000-0000-000000000000}", df.c_str());
+            WritePrivateProfileStringW(TruckSectionOf(ids[i]).c_str(), L"TakenAt", at, df.c_str());
+        }
+        const int dropped = TruckSuspPrune(dk, kSetupSections[kSetupTruck]);
+        const bool pruned = dropped == 1 && !there(ids[0]) && there(ids[1]) && there(ids[10]) && there(a) && there(c) && dkey("", L"DiffType") == L"1";
+        for (int i = 0; i < 11; i++) WritePrivateProfileStringW(TruckSectionOf(ids[i]).c_str(), nullptr, nullptr, df.c_str());
+        Check(carried && noneTaken && markGone && pruned,
+              "truck keys: the take-over copies [Truck:<id>] to the new id and marks the old, a truck with none of its own keeps the kind's under its new id, the old id driven again loses the mark, and eleven marked sections prune to ten with the kind's [Truck] left");
+        if (!(carried && noneTaken && markGone && pruned)) printf("     truck keys take-over: %d %d %d %d (taken %d, dropped %d)\n", carried, noneTaken, markGone, pruned, taken, dropped);
+        // the bits are places in the list: the odometer's is still the third, the new section the fourth
+        {
+            const char *x = "{D1000000-0000-0000-0000-00000000000A}";
+            WritePrivateProfileStringW(SuspSectionOf(x).c_str(), L"Own", L"1", df.c_str());
+            WritePrivateProfileStringW(SectionOf(kEngineSection, x).c_str(), L"Own", L"1", df.c_str());
+            WritePrivateProfileStringW(SectionOf(kOdoSection, x).c_str(), L"Metres", L"5", df.c_str());
+            WritePrivateProfileStringW(TruckSectionOf(x).c_str(), L"DiffType", L"1", df.c_str());
+            const truckid::Parts parts = TruckPartsOf("bits_engine", "bits_gearbox");
+            const unsigned all = TruckPartsPutBits(dk, x, parts);
+            const truckid::Look l = truckid::LookAt(df, TruckIdAllPrefixes(), Wide(x), parts);
+            const std::wstring words = truckid::LookWords(l, TruckIdNames());
+            WritePrivateProfileStringW(SectionOf(kOdoSection, x).c_str(), nullptr, nullptr, df.c_str());
+            const unsigned settings = TruckPartsPutBits(dk, x, TruckPartsOf("bits_engine_2", "bits_gearbox"));
+            bool inForce = false;
+            const bool sections = TruckIdSections(dk, x, &inForce);
+            Check(all == 15 && l.sections == 15 && l.own == 15 && settings == kIdSettingsBits && kIdOdoBits == 4 && truckid::BitsWords(kIdOdoBits, TruckIdNames()) == L"odometer" &&
+                      truckid::BitsWords(8, TruckIdNames()) == L"differential" && words.find(L"suspension, engine, odometer and differential") == 0 && sections && inForce &&
+                      truckid::LookCandidate(l, kIdSettingsBits) && TruckIdPrefixes().size() == 3 && TruckIdAllPrefixes()[2] == std::wstring(kOdoSection) + L":" && TruckIdAllPrefixes()[3] == L"Truck:",
+                  "truck keys: [Truck:<id>] is the fourth place of the sections that follow a truck, so the odometer's bit is still 4 and the settings' bits are 1, 2 and 8; the parts go into all four and the match's line names all four");
+            if (!(all == 15 && l.sections == 15 && l.own == 15 && settings == kIdSettingsBits)) printf("     truck keys bits: %u %u %u %u '%ls'\n", all, l.sections, l.own, settings, words.c_str());
+            for (const wchar_t *sec : { kSuspSection, kEngineSection, kOdoSection }) WritePrivateProfileStringW(SectionOf(sec, x).c_str(), nullptr, nullptr, df.c_str());
+            WritePrivateProfileStringW(TruckSectionOf(x).c_str(), nullptr, nullptr, df.c_str());
+        }
+        // every setting back to its default: the diff out at both levels, the sister's own section left
+        WritePrivateProfileStringW(TruckSectionOf(b).c_str(), L"DiffType", L"2", df.c_str());
+        TruckPartsPutBits(dk, a, TruckPartsOf("bits_engine", "bits_gearbox"));
+        const GaugeSettings plainWas = d.plain;
+        SettingsFor(d, dk, a);
+        SettingsToDefaults(d);
+        const bool defaults = !d.diffTruck && d.s.diffType == 0 && d.s.diffAxle[1] == -1 && !there(a) && dkey("", L"DiffType").empty() && dkey("", L"DiffAxle2").empty() && dkey(b, L"DiffType") == L"2" &&
+                              there(c);
+        SettingsFor(d, dk, b);
+        const bool sisterOwn = d.diffTruck && d.s.diffType == 2;
+        Check(defaults && sisterOwn,
+              "truck keys: every setting back to its default takes the diff types out of the truck's own section and out of the kind's, the section with nothing of its own left goes, and a sister keeps her own");
+        d.plain = plainWas;
+        SettingsFor(d, "");
+        SettingsWrite(d);
+        DeleteFileW(df.c_str());
+    }
 }
 
 // The rest: the engine per truck and the setups, the saves, the log, the maps, the tab, the tuning block, the pad and
@@ -14312,7 +14594,7 @@ static void PartProfiles()
                                hold == 1.5f && p.own && p.peakRpm == 1400.0f && p.fuel == kFuelDiesel;
         EngineProfile dp = {};
         const bool ownLeft = ReadTruckSusp(kind, own, id1) == kSuspNone && TruckAirAt(kind, id1) < 0 && !EngineProfileRead("prof_eng_a", dp) && !EngineTorqueRead("prof_eng_a");
-        Check(taken && same && kindLevel && ownLeft && says("Taken: the class and scales") && !says("were left") && says("The tire mode is not taken yet.") && files(backups) == backupsWere + 1 &&
+        Check(taken && same && kindLevel && ownLeft && says("Taken: the class and scales") && !says("were left") && !says("of its own in force") && says("The tire mode is not taken yet.") && files(backups) == backupsWere + 1 &&
                   st.s.springFront == 2.5f && e.torque == 80 && e.torqueFrom == kEngLevelKind,
               "profiles: For every truck of this kind lays every key back into an empty truck's file at the kind's level, in force after the files are read again; the truck's own sections and the engine's own file are not written; a backup is written first");
     }
@@ -14329,9 +14611,13 @@ static void PartProfiles()
         wchar_t curve[256] = {};
         const bool truckLevel = ReadTruckSusp(kind, own, id1) == kSuspInForce && own.springFront == 2.5f && TruckAirAt(kind, id1) == 1 &&
                                 ReadTruckEngine(kind, id1, "prof_eng_a", "prof_gb_a", torque, hold, p, curve) == kSuspInForce && torque == 80 && hold == 1.5f && p.peakRpm == 1400.0f;
-        const bool kindLeft = !ReadTruckIni(kind, k) && ReadTruckSusp(kind, su, "") == kSuspNone && TruckAirAt(kind, "") < 0 && !OdoHoursOf(kind) && AirFileKind(kind) < 0;
-        Check(taken && truckLevel && kindLeft && says("Taken: the suspension, Air brakes, Engine torque, the gear hold, the engine profile.") && says("The settings of the kind were left."),
-              "profiles: Import takes what has a level of the truck (the suspension, Air brakes, the engine's figures) into its own sections; the kind's keys are left and the line says so");
+        const bool kindLeft = !ReadTruckIni(kind, k) && ReadTruckSusp(kind, su, "") == kSuspNone && TruckAirAt(kind, "") < 0 && !OdoHoursOf(kind) && AirFileKind(kind) < 0 &&
+                              !TruckKeyThere(kind, L"DiffType") && !TruckKeyThere(kind, L"DiffAxle2");
+        const std::wstring mine = TruckSectionOf(id1);
+        const bool diffMine = st.diffTruck && st.s.diffType == kDiffLimited && st.s.diffAxle[1] == kDiffLocked && key(SetupFile(kSetupTruck, kind), mine.c_str(), L"DiffType") == L"2" &&
+                              key(SetupFile(kSetupTruck, kind), mine.c_str(), L"DiffAxle2") == L"3";
+        Check(taken && truckLevel && diffMine && kindLeft && says("Taken: the diff types, the suspension, Air brakes, Engine torque, the gear hold, the engine profile.") && says("The settings of the kind were left."),
+              "profiles: Import takes what has a level of the truck (the diff types, the suspension, Air brakes, the engine's figures) into its own sections; the kind's keys are left and the line says so");
         fresh();
         drive(kind, "", "prof_eng_a", "prof_gb_a");
         const int backupsWere = files(backups);
@@ -14349,7 +14635,7 @@ static void PartProfiles()
         put(other, L"Engine", L"Torque", L"60");
         wipe(backups);
         const bool taken = run(kProfAskImportTruck, "prof_kind - Stiff.ini");
-        const bool changed = st.s.springFront == 3.0f && e.torque == 60;
+        const bool changed = st.s.springFront == 3.0f && e.torque == 60 && st.diffTruck;
         int back = -1;
         for (int i = 0; i < list.count; i++)
             if (list.row[i].backup && back < 0) back = i;
@@ -14358,7 +14644,8 @@ static void PartProfiles()
         char backFile[200] = "";
         if (back >= 0) strncpy_s(backFile, list.row[back].file, _TRUNCATE);
         const bool backTaken = back >= 0 && run(kProfAskImportTruck, backFile, "", false, true);
-        const bool wayBack = st.s.springFront == 2.5f && st.s.bumpStops && e.torque == 80 && e.torqueFrom == kEngLevelTruck && files(backups) == 2;
+        const bool wayBack = st.s.springFront == 2.5f && st.s.bumpStops && e.torque == 80 && e.torqueFrom == kEngLevelTruck && files(backups) == 2 && !st.diffTruck &&
+                             st.s.diffType == kDiffLimited && st.s.diffAxle[1] == kDiffLocked && back >= 0 && key(backups + L"\\" + Wide(backFile), L"Drive", L"DiffOwn") == L"0";
         // a level with nothing of its own comes back as that: the backup says so, and taking it leaves no set in force at the level
         fresh();
         drive(kind, id1, "prof_eng_a", "prof_gb_a");
@@ -14370,7 +14657,8 @@ static void PartProfiles()
             if (list.row[i].backup) strncpy_s(noneFile, list.row[i].file, _TRUNCATE);
         const std::wstring noneBackup = backups + L"\\" + Wide(noneFile);
         const bool saysNone = key(noneBackup, L"Suspension", L"SuspOwn") == L"0" && key(noneBackup, L"Suspension", L"SpringFront").empty() && key(noneBackup, L"Engine", L"EngineOwn") == L"0" &&
-                              key(noneBackup, L"Engine", L"Torque").empty() && key(noneBackup, L"Truck", L"AirOwn") == L"0" && st.s.springFront == 3.0f && e.torque == 60 && st.s.airBrakes == 1;
+                              key(noneBackup, L"Engine", L"Torque").empty() && key(noneBackup, L"Truck", L"AirOwn") == L"0" && key(noneBackup, L"Drive", L"DiffOwn") == L"0" && st.s.springFront == 3.0f && e.torque == 60 &&
+                              st.s.airBrakes == 1 && st.diffTruck;
         run(kProfAskImportTruck, noneFile, "", false, true);
         GaugeSettings gone = st.plain;
         int goneTorque = 0;
@@ -14379,12 +14667,76 @@ static void PartProfiles()
         wchar_t goneCurve[256] = {};
         const int engineGone = ReadTruckEngine(kind, id1, "prof_eng_a", "prof_gb_a", goneTorque, goneHold, goneProfile, goneCurve);
         const bool asBefore = ReadTruckSusp(kind, gone, id1) == kSuspKept && engineGone == kSuspKept && !goneTorque && goneHold == 0.0f && !goneProfile.own && TruckAirAt(kind, id1) < 0 &&
-                              st.s.springFront == st.plain.springFront && e.torqueFrom == kEngLevelNone && e.holdFrom == kEngLevelNone && e.profileFrom == kEngLevelNone && !says("unknown");
+                              st.s.springFront == st.plain.springFront && e.torqueFrom == kEngLevelNone && e.holdFrom == kEngLevelNone && e.profileFrom == kEngLevelNone && !says("unknown") && !st.diffTruck &&
+                              !truckid::SectionThere(SetupFile(kSetupTruck, kind), TruckSectionOf(id1));
         Check(saysNone && asBefore,
               "profiles: the backup of a truck with nothing of its own says so in place of figures; taking it puts the suspension and the engine settings out of force for the truck, takes its engine keys and its Air brakes choice out again, and the defaults are in force");
         Check(taken && changed && listed && backTaken && wayBack,
               "profiles: the backup of an Import is a profile in the list after the profiles, shown by its date and time with what it was written before in its notes; taking it gives the truck's own set and figures back, and its own backup written in the same second is a second file");
         DeleteFileW(other.c_str());
+        setAll();
+    }
+
+    // 160, the diff step: the truck's own diff types in an Export, in the first button's backup and on the way back; a
+    // backup of the kind takes out what it lacks (15's S1); the second button says where the truck's own stays (15's S2)
+    {
+        setAll();
+        const std::wstring tf = SetupFile(kSetupTruck, kind), mine = TruckSectionOf(id1);
+        GaugeSettings in = st.s;
+        in.diffType = kDiffOpen;
+        for (int a = 0; a < kAxleRowsMost; a++) in.diffAxle[a] = -1;
+        SettingsTake(st, in);
+        SettingsWriteTruck(st);
+        drive(kind, id1, "prof_eng_a", "prof_gb_a");
+        const bool ownWas = st.diffTruck && st.s.diffType == kDiffOpen && key(tf, mine.c_str(), L"DiffType") == L"1" && key(tf, L"Truck", L"DiffType") == L"2";
+        const std::wstring own = folder + L"\\prof_kind - Own.ini";
+        run(kProfAskExport, "Own");
+        const bool exported = key(own, L"Drive", L"DiffType") == L"1" && key(own, L"Drive", L"DiffAxle2").empty() && key(own, L"Drive", L"DiffOwn").empty();
+        DeleteFileW(own.c_str());
+        wipe(backups);
+        run(kProfAskImportTruck, "prof_kind - First.ini");
+        const bool took = st.diffTruck && st.s.diffType == kDiffLimited && st.s.diffAxle[1] == kDiffLocked && key(tf, mine.c_str(), L"DiffAxle2") == L"3";
+        char backFile[200] = "";
+        for (int i = 0; i < list.count; i++)
+            if (list.row[i].backup) strncpy_s(backFile, list.row[i].file, _TRUNCATE);
+        const std::wstring backup = backups + L"\\" + Wide(backFile);
+        const bool held = backFile[0] && key(backup, L"Drive", L"DiffType") == L"1" && key(backup, L"Drive", L"DiffAxle2").empty() && key(backup, L"Drive", L"DiffOwn").empty() &&
+                          std::wstring((const wchar_t *)bytes(backup).data(), bytes(backup).size() / 2).find(Wide(id1)) == std::wstring::npos;
+        run(kProfAskImportTruck, backFile, "", false, true);
+        const bool back = st.diffTruck && st.s.diffType == kDiffOpen && st.s.diffAxle[1] == -1 && key(tf, mine.c_str(), L"DiffAxle2").empty() && key(tf, L"Truck", L"DiffAxle2") == L"3" &&
+                          key(tf, L"Truck", L"DiffType") == L"2";
+        Check(ownWas && exported && took && held && back,
+              "profiles: a truck's own diff types go into an Export from the level in force; the first button's backup holds the truck's own group exactly, with no id, and taking it gives the group back and leaves the kind's keys");
+        if (!(ownWas && exported && took && held && back)) printf("     profiles diff: %d %d %d %d %d\n", ownWas, exported, took, held, back);
+        // the second button on a truck with its own in force says that those stay
+        run(kProfAskImportKind, "prof_kind - First.ini");
+        const bool said = says("This truck has settings of its own in force, and those stay.") && st.diffTruck && st.s.diffType == kDiffOpen;
+        // 15's S1: a kind with a row by axle and no DiffType, no drag area and no air axles gets all three from a profile,
+        // and its backup takes them out again
+        fresh();
+        SetupBegin(kSetupTruck, Wide(kind));
+        put(tf, L"Truck", L"DiffAxle2", L"3");
+        drive(kind, id1, "prof_eng_a", "prof_gb_a");
+        wipe(backups);
+        run(kProfAskImportKind, "prof_kind - First.ini");
+        const bool brought = key(tf, L"Truck", L"DiffType") == L"2" && key(tf, L"Truck", L"RoadCdA") == L"7.25" && key(tf, L"Truck", L"AirAxles") == L"rear";
+        backFile[0] = 0;
+        for (int i = 0; i < list.count; i++)
+            if (list.row[i].backup) strncpy_s(backFile, list.row[i].file, _TRUNCATE);
+        run(kProfAskImportKind, backFile, "", false, true);
+        const bool out = backFile[0] && key(tf, L"Truck", L"DiffType").empty() && key(tf, L"Truck", L"DiffAxle2") == L"3" && key(tf, L"Truck", L"RoadCdA").empty() && key(tf, L"Truck", L"AirAxles").empty() &&
+                         st.s.diffType == st.plain.diffType && st.s.diffAxle[1] == kDiffLocked;
+        // a profile that is no backup and lacks them leaves them
+        run(kProfAskImportKind, "prof_kind - First.ini");
+        const std::wstring bare = folder + L"\\prof_kind - Bare.ini";
+        CopyFileW(first.c_str(), bare.c_str(), FALSE);
+        put(bare, L"Truck", L"RoadCdA", nullptr), put(bare, L"Truck", L"AirAxles", nullptr), put(bare, L"Drive", L"DiffType", nullptr);
+        run(kProfAskImportKind, "prof_kind - Bare.ini");
+        const bool leftIn = key(tf, L"Truck", L"DiffType") == L"2" && key(tf, L"Truck", L"RoadCdA") == L"7.25" && key(tf, L"Truck", L"AirAxles") == L"rear";
+        DeleteFileW(bare.c_str());
+        Check(said && brought && out && leftIn,
+              "profiles: the second button on a truck with its own in force says that those stay; a backup of the kind takes DiffType, the drag area and the air axles out again where it does not hold them, and a profile that is no backup leaves them");
+        if (!(said && brought && out && leftIn)) printf("     profiles S1 S2: %d %d %d %d\n", said, brought, out, leftIn);
         setAll();
     }
 
