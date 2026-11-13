@@ -117,7 +117,31 @@ static const RateSite kRate2[kRate2Sites] = {
     { "the fixed 1/60 force's twin", "48 8B 07 4C 8D 44 24 40 F3 0F 10 0D ? ? ? ? 48 8B CF FF 90 D8 00 00 00", 12, 16, 0x3C888889, 0x3C088889 },
 };
 static const int kRate2Word = kRateSubstanceWord + 4; // the second group's floats on the mod's page, after the four 30s
-static const int kRatePageWords = kRate2Word + kRate2Sites;
+
+// The winch's pull (BRIEF_winch_pull_120.md with the Reviewer's addendum): a third group, all or nothing in itself.
+// The pull is a spring whose strength the pull action's step governs by how far the rope closed since the step before,
+// in metres a step: over 0.02 the strength is cut to 0, and it builds towards its target by a weight of 0.01 a step
+// that eases off from 0.005 up. At 120 steps the same metres a step are twice the speed, so the winch hauled a truck
+// twice as fast with the same force and built its pull up to three times as fast. Four operands of the step read
+// three of the game's floats; each is pointed at a float of the mod's page:
+//   the cut, 0.02, becomes 0.01 and the easing's start, 0.005, becomes 0.0025: the same 1.2 and 0.3 m/s, to the bit;
+//   the weight, 0.01, becomes 1 less the root of 0.99, 0.0050126 (3BA4406D): two steps then build what one built.
+//   That is right with the truck standing and within a third of a percent at any speed under the cut.
+// The cut's float is loaded into a register and read twice from it, so the 0.015 between the two follows by itself.
+// The rope's constraint and the reel are by seconds already and are left. The game's three floats are never written.
+enum { kRate3Cut, kRate3EaseFirst, kRate3EaseSecond, kRate3Weight, kRate3Sites };
+enum { kRate3WordCut, kRate3WordEase, kRate3WordWeight, kRate3Words };
+static const char *const kRate3CutPattern = "F3 0F 10 0D ? ? ? ? 0F 2F D1 76 05 0F 57 C9 EB 4F F3 0F 5C 0D ? ? ? ? F3 0F 5C 15 ? ? ? ?";
+static const char *const kRate3WeightPattern = "F3 0F 5C C3 F3 0F 59 05 ? ? ? ? F3 0F 5C C8 F3 0F 59 87 80 00 00 00 F3 0F 59 4F 74";
+static const RateSite kRate3[kRate3Sites] = {
+    { "the winch's cut", kRate3CutPattern, 4, 8, 0x3CA3D70A, 0x3C23D70A },
+    { "the winch's easing, its first read", kRate3CutPattern, 22, 26, 0x3BA3D70A, 0x3B23D70A },
+    { "the winch's easing, its second read", kRate3CutPattern, 30, 34, 0x3BA3D70A, 0x3B23D70A },
+    { "the winch's weight a step", kRate3WeightPattern, 8, 12, 0x3C23D70A, 0x3BA4406D },
+};
+static const int kRate3WordOf[kRate3Sites] = { kRate3WordCut, kRate3WordEase, kRate3WordEase, kRate3WordWeight };
+static const int kRate3Word = kRate2Word + kRate2Sites; // the third group's three floats on the mod's page, after the second's six
+static const int kRatePageWords = kRate3Word + kRate3Words;
 
 // The page's floats, in the sites' order.
 inline void RatePageFill(uint32_t out[kRatePageWords])
@@ -126,6 +150,7 @@ inline void RatePageFill(uint32_t out[kRatePageWords])
     for (int i = 0; i < kRateFloats; i++) out[i] = kRateSites[i].wanted;
     for (int i = 0; i < 4; i++) out[kRateSubstanceWord + i] = kRateSubstanceWanted;
     for (int i = 0; i < kRate2Sites; i++) out[kRate2Word + i] = kRate2[i].wanted;
+    for (int i = 0; i < kRate3Sites; i++) out[kRate3Word + kRate3WordOf[i]] = kRate3[i].wanted;
 }
 
 // One write of four bytes into the exe's code: where (from the exe's base), what stands there and what goes there.
@@ -324,6 +349,88 @@ inline bool Rate2PlanMake(const uint8_t *image, size_t size, size_t from, size_t
     return true;
 }
 
+// The third group's plan (the winch's pull), on the same copy and with the same page: each of its two patterns once,
+// each of the four operands at the game's own float, each new operand in reach. One missing, twice or at another
+// float: no plan and no write of the group, the place named. The first and the second group are not touched by it.
+struct RatePlan3
+{
+    bool ok;
+    char why[160];
+    size_t match[kRate3Sites];
+    RateWrite writes[kRate3Sites];
+    int count;
+};
+inline bool Rate3PlanMake(const uint8_t *image, size_t size, size_t from, size_t to, uint64_t base, uint64_t page, RatePlan3 &p)
+{
+    p = RatePlan3{};
+    const auto fail = [&p](const char *name, const char *what) {
+        snprintf(p.why, sizeof p.why, "%s: %s", name, what);
+        p.ok = false;
+        p.count = 0;
+        return false;
+    };
+    uint8_t bytes[kPatternMax], mask[kPatternMax];
+    if (to > size || from >= to) return fail("the exe", "no code to look through");
+    RateWrite writes[kRate3Sites];
+    for (int i = 0; i < kRate3Sites; i++)
+    {
+        const RateSite &s = kRate3[i];
+        const int length = PatternParse(s.pattern, bytes, mask);
+        size_t at = 0;
+        int count = 0;
+        if (!length || !PatternFind(image, from, to, bytes, mask, length, at, count) || count != 1)
+            return fail(s.name, count > 1 ? "its code stands more than once" : "its code is not found");
+        int32_t disp = 0;
+        memcpy(&disp, image + at + s.operand, 4);
+        const int64_t target = (int64_t)at + s.end + disp;
+        if (target < 0 || (uint64_t)target + 4 > size) return fail(s.name, "its operand points outside the exe");
+        uint32_t held = 0;
+        memcpy(&held, image + target, 4);
+        if (held != s.stock)
+        {
+            char what[120];
+            snprintf(what, sizeof what, "the float it reads is not the game's own, it holds %08x", held);
+            return fail(s.name, what);
+        }
+        const int64_t reach = (int64_t)(page + 4 * (uint64_t)(kRate3Word + kRate3WordOf[i])) - (int64_t)(base + at + s.end);
+        if (page && (reach > 0x7FFFFFFFll || reach < -0x80000000ll)) return fail(s.name, "the mod's page is out of its reach");
+        p.match[i] = at;
+        writes[i] = RateWrite{ at + s.operand, (uint32_t)disp, (uint32_t)(int32_t)reach, s.name };
+    }
+    p.ok = true;
+    if (!page) return true;
+    for (int i = 0; i < kRate3Sites; i++) p.writes[p.count++] = writes[i];
+    return true;
+}
+
+// The writes of a start in the order they go in: the third group's four where it is planned, then the first group's
+// with the step last, so no step of 1/120 s runs with the winch's figures of 60. third: how many of them are the third
+// group's, which go in as a group of their own (RateApply) before the rest. At 60 there is none.
+static const int kRateStartMax = kRate3Sites + kRateWritesMax;
+inline int RateStartWrites(int rate, const RatePlan &first, const RatePlan3 &winch, RateWrite out[kRateStartMax], int &third)
+{
+    third = 0;
+    if (rate != kRateFast || !first.ok) return 0;
+    int n = 0;
+    if (winch.ok)
+        for (int i = 0; i < winch.count; i++) out[n++] = winch.writes[i];
+    third = n;
+    for (int i = 0; i < first.count; i++) out[n++] = first.writes[i];
+    return n;
+}
+
+// The winch's strength after one step (the game's own arithmetic in the pull action's step, read): closed is how far
+// the rope closed since the step before, in metres. Over the cut the strength is 0; else it goes towards the target by
+// the weight, which eases off from ease to the cut. For the tests, with the game's three figures or the mod's.
+inline float WinchPullStep(float strength, float target, float closed, float cut, float ease, float weight)
+{
+    if (closed > cut) return 0.0f;
+    float t = (closed - ease) / (cut - ease);
+    t = t < 0.0f ? 0.0f : t > 1.0f ? 1.0f : t;
+    const float k = (1.0f - t) * weight;
+    return (1.0f - k) * strength + k * target;
+}
+
 // ---- the brakes (stage 2, part B2; addendum 2, M2) ----
 // The game's brakes take a share of each wheel's spin a step: the wheel body's angular velocity times (1 - brake),
 // set once a call, with no step's seconds in it. Two steps of that leave (1 - brake) squared, so at 120 the factor is
@@ -409,6 +516,19 @@ template <class Read, class Write> inline RateApplied RateApply(const RateWrite 
     }
     r.ok = true;
     return r;
+}
+
+// Writes that went in, put back to stock from the last to the first and read back: true where every one holds stock.
+template <class Read, class Write> inline bool RateBack(const RateWrite *w, int n, Read read, Write write)
+{
+    bool all = true;
+    for (int j = n - 1; j >= 0; j--)
+    {
+        uint32_t held = 0;
+        write(w[j].at, w[j].stock);
+        if (!read(w[j].at, held) || held != w[j].stock) all = false;
+    }
+    return all;
 }
 
 // ---- the drive's two figures a step, halved around the call (the Reviewer's M1) ----

@@ -648,6 +648,7 @@ struct SuspDisplayView
 // functions. Either way the mod's gearbox stands down (the tab says why). warn: the clutch's and the engine's warning
 // boxes while a truck is driven.
 enum { kRateNoteNone, kRateNoteOff, kRateNoteIter, kRateNoteStep, kRateNotePart };
+enum { kRateWinchNone, kRateWinchIn, kRateWinchRefused }; // the winch's pull at 120: not asked, corrected, or its code not found
 struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWarnBoxes]; bool warnStacked; int engineDamage, engineCapacity; char truck[96]; char idWords[96]; bool truckOwn, suspOwn, suspKept, suspIdKnown, suspTruckKept, suspKindSet, smtInstalled, gearboxHeld; int suspLevel; char map[96], mapFrom[64]; bool mapOwn; float ambientC;
                    int pullTest, pullPhase; const char *pullWhy;
                    float ambientDay, ambientNight, hour; // the map's day and night (with mapOwn), the hour of the game's day (-1 not known)
@@ -669,6 +670,7 @@ struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWar
                    // controllers read, and the stalls and shifts since the truck was taken
                    char bindText[kViewActions][2][40]; int captureAction, captureSlot; bool canReverse; int controllers, gearStalls, gearShifts;
                    int rateNow, rateNote; // the physics rate in force (60 or 120) and what the tab says of it (kRateNote...)
+                   int rateWinch;         // the winch's pull at 120 (kRateWinch...)
                    bool stepSign; // another mod changes the physics rate: the sign in the middle of the screen, on until the game ends (StepSignShown)
                    bool odoKnown, odoCanSet, odoHours; char odoText[24]; // the driven truck's count: decided, Set to open (its id read, the match not waiting), hours shown, the figure
                    };

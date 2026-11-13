@@ -100,7 +100,7 @@ GAUGES = f'''
 <li><b>Suspension</b>: tests of the springs, the dampers, the ride height and the sway bars.</li>
 <li><b>Controls</b>: Driven with (wheel pedals, a pad or the keyboard), the toggle key and the pad toggle, every binding, and Quick winch: whether the quick winch key of the game gives a quick winch always (As the game), only while the truck stands (Standing only, the default) or never (Off). On the move the key then does its other function alone. The winch menu is not touched.</li>
 <li><b>Sounds</b>: how loud the turbo and the oil warning are.</li>
-<li><b>Mod work</b>: demo values, the probe log, Defaults and Reload ini. Under Test, Physics rate: 60 or 120 steps of the physics a second. A test, single player only, and a change runs after a restart.</li></ul>
+<li><b>Mod work</b>: demo values, the probe log, Defaults and Reload ini. Under Test, Physics rate: 60 or 120 steps of the physics a second. A test, single player only, and a change runs after a restart. At 120 the row also says whether the winch pull is corrected.</li></ul>
 <p>The menu opens on the tab open last (<code>Tab</code> in the ini).</p>
 
 <h2>6. When something is wrong</h2>

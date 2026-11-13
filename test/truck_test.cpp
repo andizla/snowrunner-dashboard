@@ -497,6 +497,16 @@ static std::vector<uint8_t> RateImage()
         const size_t at = i < kRate2ShareOld ? 0x2100 : i < kRate2Force ? 0x2200 : i == kRate2Force ? 0x2300 : 0x2400;
         RateRel(image, at + kRate2[i].operand, at + kRate2[i].end, 0x3500 + 8 * (size_t)i);
     }
+    // the winch's group: its two patterns at 0x2600 and 0x2700, the game's three floats at 0x3600 as the game has them
+    // side by side (0.005, 0.02, 0.01)
+    RatePut(image, 0x2600, kRate3CutPattern);
+    RatePut(image, 0x2700, kRate3WeightPattern);
+    for (int i = 0; i < kRate3Sites; i++)
+    {
+        const size_t at = i == kRate3Weight ? 0x2700 : 0x2600, value = 0x3600 + 4 * (size_t)(i == kRate3Cut ? 1 : i == kRate3Weight ? 2 : 0);
+        memcpy(&image[value], &kRate3[i].stock, 4);
+        RateRel(image, at + kRate3[i].operand, at + kRate3[i].end, value);
+    }
     RatePut(image, 0x1600, kRateIterPattern);
     RatePut(image, 0x1700, kRateOwnerPattern);
     RateRel(image, 0x1701, 0x1705, 0x1800);
@@ -831,6 +841,29 @@ static void RealImageTest()
         Check(apart && brakeFound && two.match[kRate2SpeedNew] == speedWant && two.match[kRate2SpeedOld] == speedWant && two.match[kRate2ShareOld] == shareWant &&
                   two.match[kRate2Force] == forceWant && two.match[kRate2ForceTwin] == twinWant && brake.brakes == brakesWant && brake.call == drive.call + 22,
               second);
+        // the winch's group (BRIEF_winch_pull_120.md, M3): its two patterns once on each of the three builds, the four operands at the game's own three floats
+        RatePlan3 three = {};
+        const bool threeFound = Rate3PlanMake(image.data(), image.size(), from, to, imageBase, imageBase + ((image.size() + 0xFFFF) & ~(uint64_t)0xFFFF), three);
+        const size_t cutWant = newest ? 0xd91270 : update ? 0xd91300 : steam ? 0xd8fcd0 : three.match[kRate3Cut];
+        const size_t weightWant = newest ? 0xd912b0 : update ? 0xd91340 : steam ? 0xd8fd10 : three.match[kRate3Weight];
+        bool winchApart = threeFound && three.count == kRate3Sites;
+        int64_t floatAt[kRate3Sites] = {};
+        for (int i = 0; i < three.count; i++)
+        {
+            for (int k = 0; k < plan.count; k++) winchApart = winchApart && three.writes[i].at != plan.writes[k].at;
+            for (int k = 0; k < two.count; k++) winchApart = winchApart && three.writes[i].at != two.writes[k].at;
+            floatAt[i] = (int64_t)three.match[i] + kRate3[i].end + (int64_t)(int32_t)three.writes[i].stock;
+        }
+        // as the game has them: the easing's 0.005, the cut's 0.02 and the weight's 0.01 side by side, both reads of the easing at one float
+        const bool sideBySide = threeFound && floatAt[kRate3EaseFirst] == floatAt[kRate3EaseSecond] && floatAt[kRate3Cut] == floatAt[kRate3EaseFirst] + 4 &&
+                                floatAt[kRate3Weight] == floatAt[kRate3EaseFirst] + 8;
+        char winch[320];
+        snprintf(winch, sizeof winch, "physics rate's winch group in a real image: %s; the cut and the easing at %zx, the weight at %zx, their floats at %llx",
+                 threeFound ? "both patterns once, the four operands at the game's three floats" : three.why, three.match[kRate3Cut], three.match[kRate3Weight],
+                 (unsigned long long)floatAt[kRate3EaseFirst]);
+        Check(winchApart && sideBySide && three.match[kRate3Cut] == cutWant && three.match[kRate3EaseFirst] == cutWant && three.match[kRate3EaseSecond] == cutWant &&
+                  three.match[kRate3Weight] == weightWant,
+              winch);
     }
 }
 
@@ -1507,6 +1540,184 @@ static bool Rate2PlanFails(const std::vector<uint8_t> &image, uint64_t page, con
     if (!right) printf("     wanted \"%s: %s\", got ok %d \"%s\"\n", name, what, ok, p.why);
     return right;
 }
+// ---- the winch's pull at 120 (BRIEF_winch_pull_120.md with the Reviewer's addendum): the third group ----
+static bool Rate3PlanFails(const std::vector<uint8_t> &image, uint64_t page, const char *name, const char *what)
+{
+    RatePlan3 p = {};
+    const bool ok = Rate3PlanMake(image.data(), image.size(), 0x1000, 0x3000, 0x140000000ull, page, p);
+    const bool right = !ok && !p.ok && p.count == 0 && strstr(p.why, name) && strstr(p.why, what);
+    if (!right) printf("     wanted \"%s: %s\", got ok %d \"%s\"\n", name, what, ok, p.why);
+    return right;
+}
+static void PhysicsRateWinchTest()
+{
+    const uint64_t base = 0x140000000ull, page = base + 0x7000000;
+    const std::vector<uint8_t> image = RateImage();
+    const size_t at3[kRate3Sites] = { 0x2600, 0x2600, 0x2600, 0x2700 };
+    // the bits and the page
+    {
+        uint32_t fill[kRatePageWords];
+        RatePageFill(fill);
+        float cut, ease, weight;
+        memcpy(&cut, &fill[kRate3Word + kRate3WordCut], 4);
+        memcpy(&ease, &fill[kRate3Word + kRate3WordEase], 4);
+        memcpy(&weight, &fill[kRate3Word + kRate3WordWeight], 4);
+        const bool halves = fill[kRate3Word + kRate3WordCut] == RateBitsOf(0.02f * 0.5f) && fill[kRate3Word + kRate3WordEase] == RateBitsOf(0.005f * 0.5f) &&
+                            kRate3[kRate3Cut].stock == RateBitsOf(0.02f) && kRate3[kRate3EaseFirst].stock == RateBitsOf(0.005f) && kRate3[kRate3EaseSecond].stock == RateBitsOf(0.005f) &&
+                            kRate3[kRate3Weight].stock == RateBitsOf(0.01f) && kRate3[kRate3EaseFirst].wanted == kRate3[kRate3EaseSecond].wanted;
+        const double left = (1.0 - (double)weight) * (1.0 - (double)weight);
+        const bool root = fill[kRate3Word + kRate3WordWeight] == 0x3BA4406D && fabs(left - 0.99) < 1e-8 && fill[kRate3Word + kRate3WordWeight] == RateBitsOf((float)(1.0 - sqrt(0.99)));
+        // the first two groups' floats stand where they stood
+        const bool others = kRate3Word == kRate2Word + kRate2Sites && kRatePageWords == kRate3Word + 3 && fill[kRateStep] == RateBitsOf(1.0f / 120.0f) &&
+                            fill[kRateSubstanceWord] == kRateSubstanceWanted && fill[kRate2Word + kRate2Force] == RateBitsOf(1.0f / 120.0f);
+        Check(halves && root && others,
+              "physics rate, the winch: the cut and the easing halved to the bit, the weight 1 less the root of 0.99 (two steps leave 0.99 within one part in a hundred million), "
+              "three floats after the second group's six, the other floats where they stood");
+        // the law: one step of 1/60 s with the game's figures against two of 1/120 s with the mod's, the rope closing at a steady speed
+        bool law = true;
+        const float target = 24000.0f, speeds[5] = { 0.0f, 0.3f, 0.6f, 0.9f, 1.3f };
+        for (int i = 0; i < 5; i++)
+            for (float start = 0.0f; start <= target; start += 6000.0f)
+            {
+                const float one = WinchPullStep(start, target, speeds[i] / 60.0f, 0.02f, 0.005f, 0.01f);
+                float two = start;
+                for (int k = 0; k < 2; k++) two = WinchPullStep(two, target, speeds[i] / 120.0f, cut, ease, weight);
+                // within half a percent of what the step added, and of the target
+                law = law && fabsf(two - one) <= 0.005f * fabsf(one - start) + 0.02f && fabsf(two - one) <= 0.005f * target && (one == 0.0f) == (two == 0.0f);
+            }
+        // the cut at the same speed: just under 1.2 m/s both pull, just over neither does; as the game has it at 120, it pulls on to 2.4
+        const bool cutSame = WinchPullStep(1000.0f, target, 1.19f / 60.0f, 0.02f, 0.005f, 0.01f) > 0.0f && WinchPullStep(1000.0f, target, 1.19f / 120.0f, cut, ease, weight) > 0.0f &&
+                             WinchPullStep(1000.0f, target, 1.21f / 60.0f, 0.02f, 0.005f, 0.01f) == 0.0f && WinchPullStep(1000.0f, target, 1.21f / 120.0f, cut, ease, weight) == 0.0f &&
+                             WinchPullStep(1000.0f, target, 2.3f / 120.0f, 0.02f, 0.005f, 0.01f) > 0.0f;
+        // the build-up from nothing over a second and a half, the truck standing: the same at both rates within half a percent
+        float at60 = 0.0f, at120 = 0.0f, stock120 = 0.0f;
+        for (int k = 0; k < 90; k++) at60 = WinchPullStep(at60, target, 0.0f, 0.02f, 0.005f, 0.01f);
+        for (int k = 0; k < 180; k++) at120 = WinchPullStep(at120, target, 0.0f, cut, ease, weight), stock120 = WinchPullStep(stock120, target, 0.0f, 0.02f, 0.005f, 0.01f);
+        Check(law && cutSame && fabsf(at120 - at60) < 0.005f * target && stock120 > 1.3f * at60,
+              "physics rate, the winch's law: two steps of 1/120 s with the mod's three figures give the strength of one step of 1/60 s with the game's within half a percent at 0, 0.3, "
+              "0.6, 0.9 and 1.3 m/s, the cut at 1.2 m/s at both, the build-up over a second and a half the same; with the game's figures at 120 it pulls on past 2 m/s and builds faster");
+    }
+    // the plan: four writes at the three floats, a look plans none
+    {
+        RatePlan3 look = {}, plan = {};
+        const bool lookOk = Rate3PlanMake(image.data(), image.size(), 0x1000, 0x3000, base, 0, look);
+        const bool planOk = Rate3PlanMake(image.data(), image.size(), 0x1000, 0x3000, base, page, plan);
+        bool reach = lookOk && look.count == 0 && planOk && plan.count == kRate3Sites;
+        for (int i = 0; i < kRate3Sites && reach; i++)
+        {
+            const RateWrite &w = plan.writes[i];
+            uint32_t was = 0;
+            memcpy(&was, &image[w.at], 4);
+            reach = plan.match[i] == at3[i] && w.at == at3[i] + kRate3[i].operand && was == w.stock &&
+                    base + at3[i] + kRate3[i].end + (int64_t)(int32_t)w.value == page + 4 * (uint64_t)(kRate3Word + kRate3WordOf[i]);
+        }
+        const bool oneEase = reach && base + 0x2600 + kRate3[kRate3EaseFirst].end + (int64_t)(int32_t)plan.writes[kRate3EaseFirst].value ==
+                                          base + 0x2600 + kRate3[kRate3EaseSecond].end + (int64_t)(int32_t)plan.writes[kRate3EaseSecond].value;
+        // refused whole: an operand's float changed, a pattern gone, a pattern twice, an operand out of the exe, the page out of reach
+        bool refused = true;
+        for (int i = 0; i < kRate3Sites; i++)
+        {
+            std::vector<uint8_t> other = image;
+            other[0x3600 + 4 * (size_t)(i == kRate3Cut ? 1 : i == kRate3Weight ? 2 : 0)] ^= 1;
+            // the easing's float changed is met at its first read
+            refused = refused && Rate3PlanFails(other, page, kRate3[i == kRate3EaseSecond ? kRate3EaseFirst : i].name, "the float it reads is not the game's own");
+        }
+        std::vector<uint8_t> noCut = image, noWeight = image, cutTwice = image, weightTwice = image, away = image, apartEase = image;
+        noCut[0x2600 + 9] ^= 0xFF;
+        memset(&noWeight[0x2700], 0xCC, 29);
+        RatePut(cutTwice, 0x2800, kRate3CutPattern);
+        RatePut(weightTwice, 0x2900, kRate3WeightPattern);
+        RateRel(away, 0x2700 + 8, 0x2700 + 12, 0x6000);
+        // the second read of the easing at a float that is not the game's 0.005: refused, though the first read is right
+        RateRel(apartEase, 0x2600 + 30, 0x2600 + 34, 0x3604);
+        refused = refused && Rate3PlanFails(noCut, page, kRate3[kRate3Cut].name, "its code is not found") && Rate3PlanFails(noWeight, page, kRate3[kRate3Weight].name, "its code is not found") &&
+                  Rate3PlanFails(cutTwice, page, kRate3[kRate3Cut].name, "its code stands more than once") &&
+                  Rate3PlanFails(weightTwice, page, kRate3[kRate3Weight].name, "its code stands more than once") &&
+                  Rate3PlanFails(away, page, kRate3[kRate3Weight].name, "its operand points outside the exe") &&
+                  Rate3PlanFails(apartEase, page, kRate3[kRate3EaseSecond].name, "the float it reads is not the game's own") &&
+                  Rate3PlanFails(image, base + 0x100000000ull, kRate3[0].name, "the mod's page is out of its reach");
+        // refused, the first two groups are planned as ever; and their refusal does not touch this one
+        RatePlan one = {}, oneWas = {};
+        RatePlan2 two = {}, twoWas = {};
+        RatePlanMake(image.data(), image.size(), 0x1000, 0x3000, base, page, 2, oneWas);
+        Rate2PlanMake(image.data(), image.size(), 0x1000, 0x3000, base, page, twoWas);
+        const bool othersStill = RatePlanMake(noWeight.data(), noWeight.size(), 0x1000, 0x3000, base, page, 2, one) && one.count == oneWas.count &&
+                                 !memcmp(one.writes, oneWas.writes, sizeof(RateWrite) * (size_t)one.count) &&
+                                 Rate2PlanMake(noWeight.data(), noWeight.size(), 0x1000, 0x3000, base, page, two) && two.count == twoWas.count &&
+                                 !memcmp(two.writes, twoWas.writes, sizeof(RateWrite) * (size_t)two.count);
+        bool apart = true;
+        for (int i = 0; i < plan.count; i++)
+        {
+            for (int k = 0; k < oneWas.count; k++) apart = apart && plan.writes[i].at != oneWas.writes[k].at;
+            for (int k = 0; k < twoWas.count; k++) apart = apart && plan.writes[i].at != twoWas.writes[k].at;
+        }
+        Check(reach && oneEase && refused && othersStill && apart,
+              "physics rate, the winch's group all or nothing: four operands planned at three floats of the page, both reads of the easing at one; a look plans no write; a float "
+              "changed, a pattern gone or twice, an operand out of the exe, the page out of reach: no plan and no write, the place named; the first two groups planned as ever");
+    }
+    // the order of a start's writes, and none at 60
+    {
+        RatePlan one = {};
+        RatePlan3 three = {}, none = {};
+        RatePlanMake(image.data(), image.size(), 0x1000, 0x3000, base, page, 2, one);
+        Rate3PlanMake(image.data(), image.size(), 0x1000, 0x3000, base, page, three);
+        RateWrite order[kRateStartMax];
+        int third = -1;
+        const int total = RateStartWrites(kRateFast, one, three, order, third);
+        bool first = total == kRate3Sites + one.count && third == kRate3Sites;
+        for (int i = 0; i < kRate3Sites && first; i++) first = order[i].at == three.writes[i].at;
+        const size_t stepAt = kRateTestAt[kRateStep] + kRateSites[kRateStep].operand;
+        const bool stepLast = first && order[total - 1].at == stepAt;
+        bool stepOnce = true;
+        for (int i = 0; i + 1 < total; i++) stepOnce = stepOnce && order[i].at != stepAt;
+        int thirdNone = -1, thirdSixty = -1;
+        const int without = RateStartWrites(kRateFast, one, none, order, thirdNone);
+        const bool refusedOrder = without == one.count && thirdNone == 0 && order[without - 1].at == stepAt;
+        const int sixty = RateStartWrites(kRateStock, one, three, order, thirdSixty);
+        RatePlan bad = {};
+        int thirdBad = -1;
+        const int noFirst = RateStartWrites(kRateFast, bad, three, order, thirdBad);
+        Check(stepLast && stepOnce && refusedOrder && sixty == 0 && thirdSixty == 0 && noFirst == 0 && thirdBad == 0,
+              "physics rate, the winch's order: its four writes go in first and the step last; refused, the first group's writes alone with the step last; at 60 no write at all, "
+              "and none without the first group's plan");
+        // in as a group of its own, and back with the mode: a failed write of the first group, then the winch's four put back
+        std::vector<uint8_t> memory = image;
+        int fail = -1, writes = 0;
+        const auto read = [&](size_t at, uint32_t &v) { memcpy(&v, &memory[at], 4); return true; };
+        const auto write = [&](size_t at, uint32_t v) { if (writes++ == fail) return false; memcpy(&memory[at], &v, 4); return true; };
+        RateStartWrites(kRateFast, one, three, order, third);
+        const RateApplied in3 = RateApply(order, third, read, write);
+        fail = writes + 3;
+        const RateApplied in1 = RateApply(order + third, total - third, read, write);
+        bool winchHeld = in3.ok && !in1.ok && in1.restored;
+        for (int i = 0; i < third; i++)
+        {
+            uint32_t v = 0;
+            memcpy(&v, &memory[order[i].at], 4);
+            winchHeld = winchHeld && v == order[i].value;
+        }
+        fail = -1;
+        const bool back = RateBack(order, third, read, write) && memory == image;
+        // a write of the winch's own fails: the group is put back whole and the first group still goes in
+        std::vector<uint8_t> fresh = image;
+        memory = fresh;
+        writes = 0, fail = 2;
+        const RateApplied half = RateApply(order, third, read, write);
+        const bool wholeBack = !half.ok && half.restored && memory == image;
+        fail = -1;
+        const RateApplied rest = RateApply(order + third, total - third, read, write);
+        uint32_t stepNow = 0;
+        memcpy(&stepNow, &memory[stepAt], 4);
+        Check(winchHeld && back && wholeBack && rest.ok && stepNow == order[total - 1].value,
+              "physics rate, the winch's writes: in before the first group; where the first group fails they are put back and the code is the game's again; where one of their own "
+              "fails all four are back and the first group goes in all the same");
+    }
+    // the probe's closing speed under a pull
+    Check(fabsf(WinchClosing(10.0f, 8.8f, 1.0f) - 1.2f) < 1e-5f && fabsf(WinchClosing(10.0f, 8.8f, 0.5f) - 2.4f) < 1e-5f && isnan(WinchClosing(NAN, 8.8f, 1.0f)) &&
+              isnan(WinchClosing(10.0f, 0.0f, 1.0f)) && isnan(WinchClosing(10.0f, 8.8f, 0.0f)) && WinchClosing(8.0f, 9.0f, 1.0f) < 0.0f,
+          "winch probe: the closing speed is the fall of the rope's length over the time between two reads, none where a read is missing or no time passed");
+}
+
 // The stand-in for the game's brakes: the brake goes to the front of the action's delayed inputs, then each wheel
 // body of the test's own list gets what the game's function would do to it (g_brakeDoes: 0 braked by (1 - brake)
 // where the brake is over 0.0001, 1 the lock's zero vector, 2 not touched, 3 another change).
@@ -4435,27 +4646,29 @@ static void TruckTestsFour()
         anew();
         WinchOutPost(job, true, ropeTruck, true, true, 0.5f, 0.0f, 1000);
         Put(ropeTruck + kWinchPullAt, (uint8_t)1);
-        const bool pull = !frame(tick, 1000) && job.skipPull == 1 && !g_ropeReads;
+        // under the pull the length is read for the probe's closing speed and nothing is set (BRIEF_winch_pull_120.md, S1)
+        const bool noneYet = !(WinchFloat(job.pullBits) > 0.0f);
+        const bool pull = noneYet && !frame(tick, 1000) && job.skipPull == 1 && g_ropeReads == 1 && !g_ropeSets && WinchFloat(job.pullBits) == 10.0f && !job.calls;
         Put(ropeTruck + kWinchPullAt, (uint8_t)0);
         Put(ropeTruck + kWinchActiveAt, (uint8_t)1);
-        const bool active = !frame(tick, 1000) && job.skipActive == 1 && !g_ropeReads;
+        const bool active = !frame(tick, 1000) && job.skipActive == 1 && g_ropeReads == 1;
         Put(ropeTruck + kWinchActiveAt, (uint8_t)0);
         Put(ropeTruck + kWinchRopeAt, (uint64_t)0);
-        const bool noRope = !frame(tick, 1000) && job.noRope == 1 && !g_ropeReads;
+        const bool noRope = !frame(tick, 1000) && job.noRope == 1 && g_ropeReads == 1;
         Put(ropeTruck + kWinchRopeAt, ropeThing);
         g_ropeLength = 0.0f;
-        const bool noLength = !frame(tick, 1000) && job.noLength == 1 && g_ropeReads == 1 && !g_ropeSets;
+        const bool noLength = !frame(tick, 1000) && job.noLength == 1 && g_ropeReads == 2 && !g_ropeSets;
         g_ropeLength = 10.0f;
         Put(ropeTruck + kWinchCraneAt, (uint8_t)1);
-        const bool crane = !frame(tick, 1000) && job.crane == 1 && g_ropeReads == 1;
+        const bool crane = !frame(tick, 1000) && job.crane == 1 && g_ropeReads == 2;
         Put(ropeTruck + kWinchCraneAt, (uint8_t)0);
         Put(ropeFirst + 0x20, ropeOther);
         const long framesWere = job.frames;
-        const bool otherFrame = !frame(tick, 1000) && job.frames == framesWere && g_ropeReads == 1;
+        const bool otherFrame = !frame(tick, 1000) && job.frames == framesWere && g_ropeReads == 2;
         Put(ropeFirst + 0x20, ropeTruck);
         const bool after = frame(tick, 1000) && g_ropeSets == 1 && job.calls == 1 && job.frames == framesWere + 1;
         Check(pull && active && noRope && noLength && crane && otherFrame && after,
-              "winch probe: no call while the game's pull is on, while its second active byte is on, with no rope of this truck, at a length of 0, on a crane's winch or in "
+              "winch probe: no call while the game's pull is on (the length is read there and nothing set), while its second active byte is on, with no rope of this truck, at a length of 0, on a crane's winch or in "
               "another vehicle's frame, each counted by its reason; a call again once all are clear");
 
         // the step mode: one call a press of length + step, nothing while held; a refused press is taken and counted
@@ -8286,6 +8499,7 @@ int main()
     TruckTestsQuickWinch();
     PhysicsRateTest();
     PhysicsRateB2Test();
+    PhysicsRateWinchTest();
     RealImageTest();
     GearDisplayTest();
 

@@ -4515,6 +4515,8 @@ static void WinchOutPass(const GaugeSettings &s, uint64_t vehicle, bool held, bo
     static uint64_t holdVehicle = 0;
     static LONG from[11];
     static float fromAsked = 0.0f, fromSteps = 0.0f;
+    static float pullWas = NAN;             // the rope's length under the game's pull at the last line, none before one
+    static unsigned long long pullAt = 0;
     const unsigned long long now = GetTickCount64();
     if (j.fault && !saidFault)
     {
@@ -4542,11 +4544,24 @@ static void WinchOutPass(const GaugeSettings &s, uint64_t vehicle, bool held, bo
         const float first = WinchFloat(j.firstBits);
         wchar_t firstText[32] = L"not read";
         if (isfinite(first)) swprintf_s(firstText, L"%.3f m", first);
+        // under the game's pull the probe makes no call and reads the rope's length alone: its fall since the last line
+        // is the closing speed, about 1.2 m/s at 60 and at 120 where the winch's pull is right (BRIEF_winch_pull_120.md, S1)
+        wchar_t pullText[128] = L"";
+        const float under = WinchFloat(j.pullBits);
+        const bool pulled = c[2] > 0 && isfinite(under) && under > 0.0f;
+        if (pulled)
+        {
+            const float closing = WinchClosing(pullWas, under, (float)(now - pullAt) / 1000.0f);
+            if (isfinite(closing)) swprintf_s(pullText, L"; under the game's pull the rope %.3f m, closing at %.2f m/s since the last line", under, closing);
+            else swprintf_s(pullText, L"; under the game's pull the rope %.3f m, the first read", under);
+        }
+        pullWas = pulled ? under : NAN;
+        pullAt = now;
         Log(L"winch out: %s: the rope %.3f m (at the start of the hold %s), %ld calls in %ld frames asked %.3f m more over %.3f s of steps; no call: the game's pull %ld, "
             L"its second active byte %ld, no rope of this truck %ld, a length of 0 %ld, a crane %ld, the mod's pass late %ld, a step of 0 %ld; presses with no call %ld; "
-            L"a read under what was asked %ld",
+            L"a read under what was asked %ld%s",
             head, c[1] ? WinchFloat(j.lengthBits) : 0.0f, firstText, c[1], c[0], WinchFloat(j.askedBits) - fromAsked, WinchFloat(j.stepSumBits) - fromSteps, c[2], c[3], c[4],
-            c[5], c[6], c[7], c[8], c[10], c[9]);
+            c[5], c[6], c[7], c[8], c[10], c[9], pullText);
     };
     if (held && !wasHeld)
     {
@@ -4554,6 +4569,7 @@ static void WinchOutPass(const GaugeSettings &s, uint64_t vehicle, bool held, bo
         counts(from);
         fromAsked = WinchFloat(j.askedBits), fromSteps = WinchFloat(j.stepSumBits);
         holdVehicle = vehicle, saidAt = now;
+        pullWas = NAN, pullAt = now;
         uint64_t rope = 0;
         uint8_t pull = 0, active = 0, crane = 0;
         float own = 0.0f;
@@ -8421,7 +8437,9 @@ static size_t g_rateSubstanceAt = 0; // the substance action's load, from the ex
 static size_t g_rateQuadAt[kRateQuads] = {}; // and the three readers of the four 60s
 static size_t g_rate2At[kRate2Sites] = {};   // the second group's places, once it is in (stage 2, part B2)
 static bool g_rate2On = false;               // the second group is in
-static bool g_ratePart = false;              // 120 runs with the second group or the brakes' hook missing: the tab says so
+static bool g_ratePart = false;              // 120 runs with the second group, the winch's group or the brakes' hook missing: the tab says so
+static size_t g_rate3At[kRate3Sites] = {};   // the winch's group's places, once it is in (BRIEF_winch_pull_120.md)
+static int g_rateWinch = kRateWinchNone;     // the winch's group: not asked (60, or 120 off), in, or refused
 
 // One page for the mod's floats within reach of every place in the exe's code (a disp32 from the code): the first
 // free one above the exe, else below it, at most 0x70000000 away. 0 where there is none.
@@ -8501,6 +8519,7 @@ static void RateStart()
     size_t from = 0, to = 0;
     RatePlan plan = {};
     RatePlan2 plan2 = {};
+    RatePlan3 plan3 = {};
     DrivePlace drive = {};
     BrakePlace brake = {};
     bool found = false, driveOk = false;
@@ -8546,6 +8565,7 @@ static void RateStart()
     }
     // the second group's places and the brakes' function, on the same copy: neither decides whether 120 runs
     const bool plan2Ok = Rate2PlanMake(image.data(), image.size(), from, to, g_base, page, plan2);
+    const bool plan3Ok = Rate3PlanMake(image.data(), image.size(), from, to, g_base, page, plan3);
     const bool brakeOk = BrakePlaceFind(image.data(), from, to, drive, brake);
     char why[160] = "";
     if (!CreepHook((uintptr_t)(g_base + drive.drive), why, sizeof why))
@@ -8566,7 +8586,26 @@ static void RateStart()
     // the halving first, the step's operand last: a step between the two runs at 1/60 s with the drive's two figures
     // halved, never at 1/120 s with them whole
     DriveRateSet(true, g_rateSlotAt, iterations);
-    const RateApplied put = RateApply(plan.writes, plan.count, RateCodeRead, RateCodeWrite);
+    // the winch's group first (BRIEF_winch_pull_120.md, M2), all or nothing in itself, so no step of 1/120 s runs with the
+    // winch's figures of 60; then the first group, the step last. Refused, 120 runs without it
+    RateWrite order[kRateStartMax];
+    int third = 0;
+    const int total = RateStartWrites(kRateFast, plan, plan3, order, third);
+    char why3[320] = "";
+    bool winchIn = false;
+    if (!plan3Ok) snprintf(why3, sizeof why3, "%s", plan3.why);
+    else
+    {
+        const RateApplied put3 = RateApply(order, third, RateCodeRead, RateCodeWrite);
+        const char *name = put3.failed >= 0 && put3.failed < third ? order[put3.failed].name : "a place";
+        winchIn = put3.ok;
+        if (put3.ok) {}
+        else if (!put3.written) snprintf(why3, sizeof why3, "%s does not hold the game's own bytes in memory, so nothing of the group was written", name);
+        else
+            snprintf(why3, sizeof why3, "the write at %s did not hold when read back, after %d that did; %s", name, put3.done,
+                     put3.restored ? "every one of them is back as the game had it" : "NOT every one of them could be put back: the game's code is part changed, start the game again with PhysicsRate=60");
+    }
+    const RateApplied put = RateApply(order + third, total - third, RateCodeRead, RateCodeWrite);
     long hits = 0, calls = 0;
     CreepCounts(hits, calls);
     if (!put.ok)
@@ -8582,7 +8621,10 @@ static void RateStart()
         else
             snprintf(line, sizeof line, "the write at %s did not hold when read back, after %d that did; %s", name, put.done,
                      put.restored ? "every one of them is back as the game had it" : "NOT every one of them could be put back: the game's code is part changed, start the game again with PhysicsRate=60");
-        if (!put.written || put.restored) VirtualFree((void *)(uintptr_t)page, 0, MEM_RELEASE);
+        // the winch's group goes back with the mode: the step is back already (the first to go back, or never in)
+        const bool winchBack = !winchIn || RateBack(order, third, RateCodeRead, RateCodeWrite);
+        if (!winchBack) strncat_s(line, "; the winch's four operands could NOT be put back: start the game again with PhysicsRate=60", _TRUNCATE);
+        if ((!put.written || put.restored) && winchBack) VirtualFree((void *)(uintptr_t)page, 0, MEM_RELEASE);
         RateOffSay(line);
         return;
     }
@@ -8602,6 +8644,23 @@ static void RateStart()
         Log(L"physics rate: a world was there already at the start (the owner's static held one): %d iterations, step %.6f s. The iterations written reach only a world made after this: "
             L"the line at its first step says what it runs with", worldIter, RateFloat(worldDt));
     else Log(L"physics rate: no world was there yet at the start (the owner's static held none), so the first one is made with the iterations above");
+    // the winch's group, which went in before the step
+    if (winchIn)
+    {
+        g_rateWinch = kRateWinchIn;
+        for (int i = 0; i < kRate3Sites; i++) g_rate3At[i] = plan3.match[i];
+        Log(L"physics rate: the winch's pull is in: its cut at +%zx (0.01 m a step for 0.02), its easing at +%zx and +%zx (0.0025 for 0.005) and its weight a step at +%zx "
+            L"(0.0050126 for 0.01), so the pull is cut at 1.2 m/s, eases from 0.3 m/s and builds up as at 60. Each operand now reads the mod's own float on the same page; they went in before the step",
+            plan3.match[kRate3Cut] + kRate3[kRate3Cut].operand, plan3.match[kRate3EaseFirst] + kRate3[kRate3EaseFirst].operand,
+            plan3.match[kRate3EaseSecond] + kRate3[kRate3EaseSecond].operand, plan3.match[kRate3Weight] + kRate3[kRate3Weight].operand);
+    }
+    else
+    {
+        g_rateWinch = kRateWinchRefused;
+        g_ratePart = true;
+        Log(L"physics rate: THE WINCH'S PULL IS NOT CORRECTED at 120: %S. 120 runs without it: the winch hauls a truck at up to 2.4 m/s for 1.2 with the same force, and its pull builds up "
+            L"two to three times as fast", why3);
+    }
     // the second group (stage 2, part B2), after the first and all or nothing in itself. Between the two the game may
     // step a few times at 120 with these six as it has them. Refused, 120 runs with the first group alone
     {
@@ -8647,15 +8706,15 @@ static void RateStart()
     }
     if (g_ratePart) g_rateNote = kRateNotePart;
     if (iterations == kRateIterStock)
-        Log(L"physics rate: the suspension is not corrected at 4 iterations: at 120 steps its springs and dampers, the handbrake and the winch are likely four times stronger. "
+        Log(L"physics rate: the suspension is not corrected at 4 iterations: at 120 steps its springs and dampers, the handbrake and the winch's rope are likely four times stronger. "
             L"For this measurement turn the mod's damper, its spring features and the tune off");
     Log(L"physics rate: corrected at 120: the step, the drive's wheel impulse and chassis push, the overspeed brake, the readout's shares, MaxDeltaAngVel and EngineResponsiveness, "
         L"and since stage 2 the substance action's lift and drag in water and in mud, on the chassis and on each wheel (four 30s in the place of four 60s: an impulse a step). Left as they are on purpose: "
         L"the substance action's own 1/60 and 60, a pair that makes a speed at any step, and the suspension's spring and damping, which are right at 2 iterations");
     Log(L"physics rate: left as they are on purpose at 120: the blend at w + 0x128, both weights (its old weight comes in a register; it is the contact share the lock and the probe "
         L"read, and it settles twice as fast), the mean of two steps at w + 0x170, the adjustable suspension's height move (twice as fast), the wet look's fade at w + 0x190 and "
-        L"the dirt on the wheel at w + 0x18C (twice as fast), action + 0xC8 (nothing in the game writes it), the handbrake and the winch (a stiffness in the solver: right at 2 "
-        L"iterations). The hook on the drive and the one on the brakes now run twice a frame at 60 fps and up to eight times at 30 fps");
+        L"the dirt on the wheel at w + 0x18C (twice as fast), action + 0xC8 (nothing in the game writes it), the handbrake and the winch's rope (a stiffness in the solver: right at 2 "
+        L"iterations; the winch's pull is another thing, with a line of its own above), the winch's reel (by seconds already). The hook on the drive and the one on the brakes now run twice a frame at 60 fps and up to eight times at 30 fps");
 }
 // On the mod's thread each pass: one line for each world the hook saw at its first drive call (the Reviewer's M3),
 // loud where the world does not run what was asked; the tab's row says so too.
@@ -8761,6 +8820,22 @@ static void RateProbeSay(bool probe)
         else Log(L"probe: physics rate: the second group's floats could not be read back");
     }
     else Log(L"probe: physics rate: the second group is not in");
+    // the winch's group: its three floats through the four operands
+    if (g_rateWinch == kRateWinchIn)
+    {
+        float held[kRate3Sites] = {};
+        bool read3 = true;
+        for (int i = 0; i < kRate3Sites; i++)
+        {
+            const uint64_t site = g_base + g_rate3At[i];
+            read3 = read3 && g_rate3At[i] && PeekGame(site + kRate3[i].operand, &disp, 4) && PeekGame((uint64_t)((int64_t)(site + kRate3[i].end) + disp), &held[i], 4);
+        }
+        if (read3)
+            Log(L"probe: physics rate: the winch's pull reads its cut %.4f m a step, its easing %.4f and %.4f, its weight %.7f a step", held[kRate3Cut], held[kRate3EaseFirst],
+                held[kRate3EaseSecond], held[kRate3Weight]);
+        else Log(L"probe: physics rate: the winch's floats could not be read back");
+    }
+    else Log(L"probe: physics rate: the winch's pull is not in");
     if (BrakeHooked())
     {
         static BrakeCounts was = {};
@@ -10167,7 +10242,7 @@ static DWORD WINAPI Run(void *)
             v.st.hour = hour;
             v.st.outsideC = inForce.ambientC;
         }
-        v.rateNow = g_rateNow, v.rateNote = g_rateNote;
+        v.rateNow = g_rateNow, v.rateNote = g_rateNote, v.rateWinch = g_rateWinch;
         v.stepSign = g_stepSignOn;
         AcquireSRWLockExclusive(&g_viewLock);
         g_view = v;

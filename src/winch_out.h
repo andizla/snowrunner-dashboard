@@ -56,6 +56,7 @@ struct WinchOutJob
     volatile LONG refused;          // presses of the step mode that made no call
     volatile LONG askedBits, stepSumBits; // sums: the metres asked over the length read, the seconds of the steps
     volatile LONG lengthBits, firstBits;  // the last length read; the first of this hold, no number until there is one
+    volatile LONG pullBits;               // the length read under the game's pull (read only, no call), no number until there is one
     LONG holdSeen;                  // the frame's own
     float lastAsked;
 };
@@ -104,6 +105,7 @@ inline bool WinchOutFrame(WinchOutJob &j, const TruckMemory &m, uint64_t first, 
         j.holdSeen = j.hold;
         j.lastAsked = 0.0f;
         InterlockedExchange(&j.firstBits, WinchBits(NAN));
+        InterlockedExchange(&j.pullBits, WinchBits(NAN));
     }
     auto none = [&](volatile LONG &count) {
         InterlockedIncrement(&count);
@@ -121,7 +123,13 @@ inline bool WinchOutFrame(WinchOutJob &j, const TruckMemory &m, uint64_t first, 
     if (!m.get(vehicle + kWinchCraneAt, crane) || !m.get(vehicle + kWinchRopeAt, rope) || !m.get(vehicle + kWinchPullAt, pull) || !m.get(vehicle + kWinchActiveAt, active)) return none(j.noRope);
     if (crane) return none(j.crane);
     if (!rope) return none(j.noRope);
-    if (pull) return none(j.skipPull);
+    if (pull)
+    {
+        // read only, for the closing speed in the probe's line (BRIEF_winch_pull_120.md, S1): no set, no call counted
+        const float under = get(vehicle);
+        if (isfinite(under) && under > 0.0f) InterlockedExchange(&j.pullBits, WinchBits(under));
+        return none(j.skipPull);
+    }
     if (active) return none(j.skipActive);
     const float length = get(vehicle);
     if (!isfinite(length))
@@ -144,6 +152,14 @@ inline bool WinchOutFrame(WinchOutJob &j, const TruckMemory &m, uint64_t first, 
     InterlockedExchange(&j.stepSumBits, WinchBits(WinchFloat(j.stepSumBits) + d));
     j.lastAsked = ask;
     return true;
+}
+
+// The closing speed under a pull from two lengths read seconds apart, m/s, above 0 while the rope shortens; no number
+// where either length is none or no time passed.
+inline float WinchClosing(float before, float now, float seconds)
+{
+    if (!isfinite(before) || !isfinite(now) || !(before > 0.0f) || !(now > 0.0f) || !(seconds > 0.0f)) return NAN;
+    return (before - now) / seconds;
 }
 
 // Whether the probe asks for the truck update's hook (gearbox_hooks.h, GearboxHooksWanted): Probe=1 with the action bound.

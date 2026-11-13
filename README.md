@@ -309,7 +309,7 @@ The Power tab has a pull test, for the engine's torque the mod will hand to the 
 
 ## Physics rate, a test
 
-`PhysicsRate=120` (Mod work, Test: Physics rate) steps the physics of the game 120 times a second in place of 60. It is a test and is off by default. It is for single player only: nothing checks that every player in co-op runs the same rate. The key is read once as the game starts, so a change on the tab is saved and runs after a restart. The row says which rate is running.
+`PhysicsRate=120` (Mod work, Test: Physics rate) steps the physics of the game 120 times a second in place of 60. It is a test and is off by default. It is for single player only: nothing checks that every player in co-op runs the same rate. The key is read once as the game starts, so a change on the tab is saved and runs after a restart. The row says which rate is running. At 120 the winch pull is corrected too: the row then reads "Winch pull: right at 120.", or says that the winch pulls too fast where the code of the game is not found.
 
 At 120 the mod halves what the drive adds to the wheels each step, so a truck pulls and revs as it does at 60. Not corrected yet: the brakes, the forces of water, mud and snow, and some smoothing of the wheels. Expect those to feel different. The physics costs more processor time, most at a low frame rate. If one place in the game code is not found, nothing is changed and `Gauges.log` says which.
 

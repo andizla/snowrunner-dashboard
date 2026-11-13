@@ -1584,6 +1584,9 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                                : view.rateNow == 120            ? "Running at 120."
                                                                 : nullptr;
             if (note) ImGui::TextDisabled("%s", note);
+            // the winch at 120 (BRIEF_winch_pull_120.md, M4)
+            if (view.rateNow == 120 && view.rateWinch == kRateWinchIn) ImGui::TextDisabled("Winch pull: right at 120.");
+            else if (view.rateNow == 120 && view.rateWinch == kRateWinchRefused) ImGui::TextDisabled("Winch pull: too fast at 120 (not found in this game).");
         }
 
         ImGui::Separator();
