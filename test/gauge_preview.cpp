@@ -412,7 +412,7 @@ int wmain(int argc, wchar_t **argv)
             // the air cell goes by the state's noAir, which the mod's thread works out for the truck, not by the plain
             // scales' class (BRIEF_air_brakes_by_truck.md, M2)
             GaugeSettings airSet = s;
-            airSet.showAir = true, airSet.tachClass = kClassScout, airSet.airBrakes = -1;
+            airSet.showAir = true, airSet.tachClass = airSet.scaleClass = kClassScout, airSet.airBrakes = -1;
             GaugeState noAir = st;
             noAir.noAir = true;
             auto hasAir = [&](const GaugeState &state) {
@@ -438,7 +438,7 @@ int wmain(int argc, wchar_t **argv)
     // other settings: the scout's scales, the other units, the air dial, no lamps, larger, moved up and to the left
     {
         GaugeSettings s = def;
-        s.tachClass = kClassScout;
+        s.tachClass = s.scaleClass = kClassScout;
         s.mph = s.psi = s.fahrenheit = true;
         s.showAir = true;
         s.showLamps = false;

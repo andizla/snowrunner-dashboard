@@ -2291,11 +2291,22 @@ inline int ClassByType(const char *text, float kg, int plain)
     return kg < kHeavyMassLeast ? kClassTruck : kClassHeavy;
 }
 
-// Who overrules whom: the class of the truck's own scales (the player's Truck class row) first, then the game's
-// TruckType, then the weight. tachClass: the class of the scales in force.
-inline int ClassInForce(bool ownScales, int tachClass, const char *type, float kg)
+// Who overrules whom (the lead's ruling 3 on BRIEF_truck_keys_per_truck.md): a class the player picked for the truck
+// first, then the game's TruckType, then the weight, then the class picked on the plain row, then truck. picked: the
+// class of the truck's own scales, kClassAuto where it has none or none is picked there. plainPick: the plain row's,
+// kClassAuto where none is picked. So the plain pick never overrules the game's type: it acts only for a truck whose
+// type and weight say nothing, and with no truck driven.
+inline int ClassInForce(int picked, int plainPick, const char *type, float kg)
 {
-    return ownScales ? tachClass : ClassByType(type, kg, tachClass);
+    return picked >= kClassTruck && picked < kClassCount ? picked : ClassByType(type, kg, plainPick >= kClassTruck && plainPick < kClassCount ? plainPick : kClassTruck);
+}
+// The class the scales go by on this pass. tried: this vehicle's type and weight have been tried. Until then the class
+// of the pass before stands, never a guess from half of the two (must 8): the pass tries both before it takes the
+// scales, so this holds only where that read is late.
+inline int ScaleClassStep(int &held, bool tried, int resolved)
+{
+    if (tried) held = resolved;
+    return held;
 }
 
 // The gear the automatic sets off in with the mod's engine: the lowest whose top is at least kStartShare of the top

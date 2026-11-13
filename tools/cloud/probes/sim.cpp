@@ -31,7 +31,7 @@ static void Step(Sim &s, float pedal, float brake, float grade, float mud, float
 }
 int main()
 {
-    GaugeSettings st = {}; SettingsDefaults(st); st.tachClass = kClassScout; st.idleRpm = 800; st.redlineRpm = 4850; SettingsClamp(st); k = GaugeScaleOf(st); printf("idle %.0f, red zone %.0f\n", k.idle, k.redline);
+    GaugeSettings st = {}; SettingsDefaults(st); st.tachClass = st.scaleClass = kClassScout; st.idleRpm = 800; st.redlineRpm = 4850; SettingsClamp(st); k = GaugeScaleOf(st); printf("idle %.0f, red zone %.0f\n", k.idle, k.redline);
     const float dt = 1.0f / 60;
     Sim s;
     for (float p : { 1.0f, 0.5f, 0.25f })

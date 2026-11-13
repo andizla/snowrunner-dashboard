@@ -92,7 +92,10 @@ enum { kFaceSolid, kFaceTinted, kFaceOpen, kFaceCount };     // GaugeSettings::s
 enum { kSlipEngineHeld, kSlipLowGears, kSlipAllGears, kSlipCount }; // GaugeSettings::heldGearSlip (gearbox_model.h, GearboxPosCap)
 #endif
 enum { kHwNone, kHwAsDials, kHwLimits, kHwCount };           // GaugeSettings::hiddenWarnings (warn_list.h)
-enum { kClassTruck, kClassScout, kClassHeavy, kClassCount }; // GaugeSettings::tachClass
+// GaugeSettings::tachClass. Auto is the game's own truck type and the weight (the lead's ruling 3 on
+// BRIEF_truck_keys_per_truck.md): a class is a setting only where the player picked one. Auto is never an index.
+enum { kClassAuto = -1, kClassTruck, kClassScout, kClassHeavy, kClassCount };
+inline int ClassOr(int cls, int other) { return cls >= kClassTruck && cls < kClassCount ? cls : other; }
 enum { kOilOff, kOilNeedle, kOilDial, kOilGaugeCount };      // GaugeSettings::oilGauge
 enum { kSpoolStandard, kSpoolQuick, kSpoolLaggy, kSpoolTwoStage, kSpoolCount }; // GaugeSettings::boostProfile
 enum { kGearboxGame, kGearboxModel, kGearboxOwn, kGearboxCount }; // GaugeSettings::gearbox: the game's own, the mod's automatic in A, the mod's own gearbox
@@ -116,7 +119,8 @@ struct GaugeSettings
     bool showOdometer;       // ShowOdometer: the driven truck's count under the speed (odometer.h)
     bool showFuelUse;           // ShowFuelUse: the fuel used a minute, after the range under the fuel dial
     int oilGauge;            // OilGauge: the oil temperature: 0 not shown, 1 a second needle in the temperature dial, 2 a dial of its own left of it
-    int tachClass;           // TachClass: 0 truck, 1 scout, 2 heavy: the scales of the tachometer and the speedometer
+    int tachClass;           // Class: the class the player picked for the scales, 0 truck, 1 scout, 2 heavy, or kClassAuto (no key): by the truck. An old TachClass is never read as a class
+    int scaleClass;          // the class the scales go by now, never Auto: resolved on the mod's pass (the picked class, else the truck's type and weight, else the plain pick, else truck). Not saved, not compared
     float idleRpm, redlineRpm, maxRpm, speedMax;  // IdleRpm, RedlineRpm, MaxRpm, SpeedMax: 0 = the class's own
     float boostMax;          // BoostMax: the boost in bar the turbo reaches with the pedal floored at high engine speed; 0 = the class's own
     int boostProfile;        // BoostProfile: how the turbo builds its boost: 0 standard, 1 small and quick, 2 big and slow, 3 two stages
@@ -232,7 +236,8 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.showOdometer = true;
     s.showFuelUse = true;
     s.oilGauge = kOilNeedle;
-    s.tachClass = kClassTruck;
+    s.tachClass = kClassAuto;
+    s.scaleClass = kClassTruck;
     s.boostProfile = kSpoolStandard;
     s.gearbox = kGearboxGame;
     s.requireClutch = s.requireGearHeld = s.skipNeutral = s.downStaysForward = s.walkSkipsLow = s.ignoreShifter = false;
@@ -397,7 +402,8 @@ inline void SettingsClamp(GaugeSettings &s)
     s.offsetY = SettingsRange(s.offsetY, -kOffsetMax, kOffsetMax);
     s.scale = SettingsRange(s.scale, kScaleMin, kScaleMax);
     s.opacity = SettingsRange(s.opacity, kOpacityMin, 1.0f);
-    s.tachClass = s.tachClass < 0 || s.tachClass >= kClassCount ? kClassTruck : s.tachClass;
+    s.tachClass = ClassOr(s.tachClass, kClassAuto);
+    s.scaleClass = ClassOr(s.scaleClass, kClassTruck);
     s.idleRpm = SettingsOverride(s.idleRpm, kIdleRange);
     s.redlineRpm = SettingsOverride(s.redlineRpm, kRedlineRange);
     s.maxRpm = SettingsOverride(s.maxRpm, kMaxRpmRange);
@@ -505,10 +511,11 @@ inline bool AirBrakesOn(const GaugeSettings &s, int autoClass) { return s.airBra
 static const GaugeScale kClassScales[kClassCount] = { { 650.0f, 2200.0f, 3000.0f, 100.0f, 1.8f }, { 800.0f, 5500.0f, 7000.0f, 120.0f, 1.0f }, { 600.0f, 1900.0f, 2500.0f, 80.0f, 2.0f } };
 
 // The class changed from was: a number set to the old class's own follows the new class (0, the class's), and one set
-// by hand to anything else stays (Milos_Mk6 lost his numbers picking a class).
+// by hand to anything else stays (a player lost his numbers picking a class). was: the class in force before, so a
+// change from or to Auto goes by what Auto was for the truck (must 9).
 inline void ScalesClassChange(GaugeSettings &s, int was)
 {
-    const GaugeScale old = kClassScales[was < 0 || was >= kClassCount ? kClassTruck : was];
+    const GaugeScale old = kClassScales[ClassOr(was, kClassTruck)];
     if (s.idleRpm == old.idle) s.idleRpm = 0.0f;
     if (s.redlineRpm == old.redline) s.redlineRpm = 0.0f;
     if (s.maxRpm == old.max) s.maxRpm = 0.0f;
@@ -518,9 +525,10 @@ inline void ScalesClassChange(GaugeSettings &s, int was)
 
 // The scales in force: the class's, with the settings' own numbers in their place where given, made to fit each other
 // (the tachometer's top a whole step of its numbers, the red zone inside it, idle well below the red zone).
-inline GaugeScale GaugeScaleOf(const GaugeSettings &s)
+// cls: the class in force, never the setting, which may be Auto (must 7).
+inline GaugeScale GaugeScaleFor(const GaugeSettings &s, int cls)
 {
-    GaugeScale k = kClassScales[s.tachClass < 0 || s.tachClass >= kClassCount ? kClassTruck : s.tachClass];
+    GaugeScale k = kClassScales[ClassOr(cls, kClassTruck)];
     if (s.idleRpm > 0.0f) k.idle = s.idleRpm;
     if (s.redlineRpm > 0.0f) k.redline = s.redlineRpm;
     if (s.maxRpm > 0.0f) k.max = s.maxRpm;
@@ -532,6 +540,8 @@ inline GaugeScale GaugeScaleOf(const GaugeSettings &s)
     if (k.idle > k.redline * 0.8f) k.idle = k.redline * 0.8f;
     return k;
 }
+// By the class the mod's pass resolved into the settings (scaleClass): the one way for the dials, the logs and the tab.
+inline GaugeScale GaugeScaleOf(const GaugeSettings &s) { return GaugeScaleFor(s, s.scaleClass); }
 
 // The parts of a state that come from the settings: the scales and the units.
 inline void GaugeStateSettings(GaugeState &st, const GaugeSettings &s)
@@ -666,7 +676,7 @@ struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWar
                    bool frameKnown, frameRigid; float frameFile[4], frameMost; // the driven truck's frame joint (frame_flex.h): its stock spring, damping and limits in degrees; or none (a rigid frame)
                    bool suspKnown; float suspFile[3][2]; // the driven truck's file: spring, damping and the compression end (m), [front, rear] (wheel 0 and the last)
                    char gearbox[96]; float gearHold; bool gearHoldOwn; // the driven truck's gearbox (its key, "" for none), the seconds each gear is held going up with the mod's engine, and whether its file sets them
-                   int autoClass; bool autoByWeight, autoByType; float massKg; // the class the automatic goes by for it, whether by its weight (no scales of its own), and that weight (0 not read)
+                   int autoClass; bool autoByWeight, autoByType; float massKg; int classAuto; /* what Auto is for the driven truck (its type, its weight, else the plain pick, else truck) */ int scalesLevel; /* whose scales are in force: 0 the plain ones, 1 the kind's own, 2 this truck's own */ bool scalesIdKnown; // the class the automatic goes by for it, whether by its weight (no scales of its own), and that weight (0 not read)
                    bool camberKnown; bool camberEnd[2]; float camberFile[2][2]; // the driven truck's camber (camber.h) is read; each end has a wheel; its file's render angle (degrees) and multiplier, [front, rear]
                    char engine[96]; bool engineOwn, engineCustom; float enginePeakRpm; int engineAspiration, engineFuel; float engineTorque, engineFigure; bool engSetOwn, engSetKept, engSetTruckKept, engSetKindSet; int engSetLevel, engTorqueFrom, engHoldFrom, engProfileFrom; // the engine's settings per truck: a level in force or kept, this truck's kept, the kind's there, the level in force (0 none, 1 the default, 2 the kind's, 3 this truck's), and the level each figure (and the profile, whole) came from // the driven truck's engine ("" not known): a profile other than the class's curve, turbo and the class's fuel or not, a whole curve of its own in it, the peak torque's speed in force, turbo or not, its fuel (kFuelClass the class's), the share of its torque the truck gets (1 none set), and the engine's torque figure from the game's files (0 not read)
                    float engineIdle, engineRedline; float engineCurve[kEnginePlot]; // the slider's range, and the torque in force from idle to the tachometer's top, for the tab's plot

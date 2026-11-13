@@ -162,13 +162,14 @@ figure for this truck, for one bought used; 0 starts it anew. <code>ShowOdometer
 
 <h2>11. Scales by truck class and per truck</h2>
 {gt(['', 'Truck', 'Scout', 'Heavy'], [['Idle', '650 rpm', '800 rpm', '600 rpm'], ['Red zone from', '2200 rpm', '5500 rpm', '1900 rpm'], ['Tachometer top', '3000 rpm', '7000 rpm', '2500 rpm'], ['Speedometer top', '100 km/h', '120 km/h', '80 km/h'], ['Boost', '1.8 bar', '1 bar', '2 bar']], 'Table 4. Scales by class')}
-<p>Each kind of truck can have its own seven: the class, idle, the red zone, the tachometer's top, the speedometer's top, the boost and the turbo profile. Change one on the Engine tab while you drive a truck and all seven are kept for that kind of truck, in a file of its own in <code>Gauges\\trucks</code>, named as the game's files name the truck (a modded truck's <code>name/mod id</code> becomes <code>name@mod id.ini</code>). The file can be shared and dropped into another player's folder. "Plain scales" gives them up. Every other truck shows the plain scales of <code>[Gauges]</code>.</p>
+<p><b>Truck class</b> is <b>Auto</b> by default: the scales go by the type of the truck in the game files and by its weight, and the row says what Auto is for the driven truck. Pick Truck, Scout or Heavy to overrule it. A picked class is saved as <code>Class</code> (0 to 2). Auto has no key.</p>
+<p>Each truck can have its own seven: the class, idle, the red zone, the tachometer's top, the speedometer's top, the boost and the turbo profile. Change one on the Engine tab while you drive a truck and all seven are kept for that one truck, in its section <code>[Truck:&lt;id&gt;]</code> of the file of its kind in <code>Gauges\\trucks</code>. The file is named as the game's files name the truck (a modded truck's <code>name/mod id</code> becomes <code>name@mod id.ini</code>). "Scales of the kind" gives them up. Scales in <code>[Truck]</code> are those of the kind, for every truck of the kind without its own: an older version saved them there, and a file written by hand can hold them. "Plain scales" takes those out. Every other truck shows the plain scales of <code>[Gauges]</code>. A class saved by an older version (<code>TachClass</code>) is not read as a class: pick it again if you picked it on purpose.</p>
 <pre>[Truck]
 Kind=chevrolet_ck1500
-TachClass=1
+Class=1
 RedlineRpm=4500
 BoostProfile=2</pre>
-<p>A truck without its own class shifts, in the mod's automatic, by its type and its weight from the game's files. A truck whose file says <code>SCOUT</code> is a scout whatever it weighs. A truck with another type is never a scout: a truck under 16 tonnes, a heavy truck above. Where the type is not read the weight decides alone: a scout up to 6 tonnes, a truck under 16, a heavy truck above. Some modded trucks carry a wrong type or a weight that is too high and land in the wrong class: set their class by hand.</p>
+<p>A truck with no class picked gets its scales, and its shifts in the mod's automatic, by its type and its weight from the game's files. A truck whose file says <code>SCOUT</code> is a scout whatever it weighs. A truck with another type is never a scout: a truck under 16 tonnes, a heavy truck above. Where the type is not read the weight decides alone: a scout up to 6 tonnes, a truck under 16, a heavy truck above. Some modded trucks carry a wrong type or a weight that is too high and land in the wrong class: set their class by hand.</p>
 
 <h2>12. The outside temperature by map</h2>
 <p>The mod reads which map you are on from the game's save (Steam, Epic and Microsoft Store saves) and takes the temperature from a section named after the map or its region, using the game's English names; a modded map goes by its id.</p>
@@ -459,7 +460,7 @@ bars and the air suspension stop for that truck, and the log says so.</li></ul>
  ['How dark tinted faces are', 'FaceOpacity 0 to 0.85', '0.35'], ['Position in 1080p pixels from the layout\'s place', 'OffsetX, OffsetY', '0, 0'],
  ['Size, opacity', 'Scale, Opacity 0.1 to 1', '1, 1'], ['mph, psi, Fahrenheit', 'Mph, Psi, Fahrenheit', 'off'],
  ['Temperature, boost, air dials, lamps', 'ShowTemp, ShowBoost, ShowAir, ShowLamps', 'on, on, off, on'], ['Clock with the outside temperature (Clock)', 'ShowClock', 'on'], ['Odometer under the speed (Odometer)', 'ShowOdometer', 'on'], ['Fuel used a minute after the range (Fuel use)', 'ShowFuelUse', 'on'],['Oil: none, second needle, own dial', 'OilGauge 0, 1 or 2', 'second needle'],
- ['Truck class', 'TachClass 0 truck, 1 scout, 2 heavy', 'truck'], ['Own idle, red zone, tach top, speedo top', 'IdleRpm, RedlineRpm, MaxRpm, SpeedMax', '0: the class\'s'],
+ ['Truck class', 'Class 0 truck, 1 scout, 2 heavy; no key: Auto', 'Auto'], ['Own idle, red zone, tach top, speedo top', 'IdleRpm, RedlineRpm, MaxRpm, SpeedMax', '0: the class\'s'],
  ['Boost reached, 0.3 to 3 bar', 'BoostMax', '0: the class\'s'], ['Turbo profile', 'BoostProfile 0 to 3', 'standard'],
  ['Tilt lamp angles', 'RollWarnDeg, RollDangerDeg, PitchDangerDeg', '15, 25, 35'], ['Coolant times', 'WarmUpMinutes, OverheatMinutes, CoolDownMinutes', '3, 1.5, 15'],
  ['Outside temperature, -40 to 50', 'AmbientC', '15'], ['Outside temperature by map', 'AmbientByMap', '1'], ['Radiator full air from, 10 to 80 km/h', 'AirFullKmh', '30'],

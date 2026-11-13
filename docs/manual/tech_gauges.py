@@ -227,16 +227,27 @@ def s_scales():
 a truck's own file or from <code>[Gauges]</code>, replaces the class value. The scale is then made to fit
 (<code>GaugeScaleOf</code>, <code>gauges.h:198-211</code>): max is rounded up to a step of 1000 rpm (500 below 5000), red is held to
 at most max, and idle to at most 0.8 red.</p>
-<p>The automatic and the torque curves need a class too. It is the truck file's <code>TachClass</code> if that file sets any scale,
-otherwise the class by the truck's mass (model +0x784, without addons, cargo or trailer): up to 6000 kg a scout, under 16000 kg a
+<p>The scales, the automatic and the torque curves go by one class (<code>ClassInForce</code> in <code>models.h</code>,
+BRIEF_truck_keys_per_truck.md, ruling 3). It is the class picked for the truck (<code>Class</code>, 0 to 2, in the scales in force
+for it: its own in <code>[Truck:&lt;id&gt;]</code>, else its kind's in <code>[Truck]</code>), else the game's type, else the weight,
+else the class picked on the plain row, else truck. The plain row's pick never goes over the type. <code>GaugeSettings::tachClass</code>
+holds the pick or <code>kClassAuto</code>; the class in force is put into <code>scaleClass</code> by the mod's pass, and
+<code>GaugeScaleOf</code> goes by that: one way for the dials, the log and the tab. The weight and the type are read at the top of a
+truck's first pass (<code>ClassLook</code>), before the scales are taken, and <code>ScaleClassStep</code> keeps the class of the pass
+before until they were tried, so the red zone does not jump a pass later. An old <code>TachClass</code> is never read as a class: one
+log line a file (<code>truck class: the file of</code>, <code>truck class: Gauges.ini holds a class saved by an older version</code>), the key goes when that level's
+scales are next written, and no read writes a file. A level's scales are whole: a section with any scale key gives all seven over the
+plain ones, and without <code>Class</code> it is Auto. An edit with the id read writes all seven into the truck's section
+(<code>settings: saved, this truck's scales in [Truck:&lt;id&gt;] of</code> the file); giving up acts at the level in force (<code>SettingsDrop</code>). The class by
+the truck's mass (model +0x784, without addons, cargo or trailer): up to 6000 kg a scout, under 16000 kg a
 truck, from 16000 kg a heavy truck (<code>models.h:1282-1292</code>; the TUZ 108 weighs 4.1 t, the Tayga 12.0 t, a twin-steer
 Western Star 20.3 t). Weight cannot tell every scout from a truck: the Fleetstar (6314 kg) counts as a truck.</p>
 <p><b>The game's own truck type.</b> <code>truck_type.h</code>, <code>ClassByType</code> in <code>models.h</code>. Every truck file
 names its role in <code>TruckType</code>, and the game keeps it as a text in its list of truck records, "Undefined" where the file has
 none. <code>SCOUT</code> is a scout whatever the truck weighs. <code>OFFROAD</code>, <code>HIGHWAY</code>, <code>HEAVY_DUTY</code> and
 <code>HEAVY</code> are never a scout: truck or heavy by the 16000 kg border alone. The game's <code>HEAVY</code> is a role and not a
-weight, so it does not make a truck heavy here. Any other text, and no text, leaves the weight's rule whole. The order is: the class of
-the truck's own scales, then the type, then the weight. The route: the truck's name is the text at model + 0x588; the list's begin and
+weight, so it does not make a truck heavy here. Any other text, and no text, leaves the weight's rule whole. The order is: the class picked
+for the truck, then the type, then the weight. The route: the truck's name is the text at model + 0x588; the list's begin and
 end and a record's size come from the game's own lookup by name, the text's place in a record from the parse of the attribute, both
 found by pattern and read from the matched bytes (<code>truck type: the game's list of truck records at +</code>). A size outside
 0x100 to 0x1000 or a text past the record's end is refused. The list is walked once a truck, on the mod's thread, by guarded reads
@@ -1045,8 +1056,8 @@ minutes at idle; eight full applications with the engine off take a full tank to
 {fig}
 <p><b>Air brakes by truck and the spring brakes</b> (BRIEF_spring_brakes.md). <code>AirBrakesOn</code> is the truck's own choice where its file holds one
 (AirBrakes, 0 or 1, in the suspension's sections, the owned truck's over the kind's), else every class but the scout, by the class the automatic goes by for the truck
-(<code>AutoClass</code>: its own scales, else the game's truck type, else its weight), never the plain scales' class while a truck
-is driven. The mod's thread works it out once a pass, and not before the truck's type has been tried, so it never flips a pass after
+(<code>AutoClass</code>: the class picked for it, else the game's truck type, else its weight), the plain row's pick only where
+neither is read. The mod's thread works it out once a pass, and not before the truck's type has been tried, so it never flips a pass after
 the truck is found (<code>air brakes: %s for vehicle</code>). The draw gets the answer in the state (<code>noAir</code>). Everything of the brake air asks it:
 the model (<code>AirStepFor</code>: off, it does not run and holds no pressure), the dial, the HUD's cell, the warning and the purge.
 <code>SpringHeldStep</code> holds under 3.0 bar and lets go at 4.5; the 0.4 bar the release takes leaves the needle over the hold.
@@ -1447,8 +1458,9 @@ def s_files():
 <h2>Files and what wins</h2>
 <ul><li><code>Gauges.ini</code>, section <code>[Gauges]</code>: every setting. A missing ini is written with help text and the defaults;
 values that are not finite fall back to the defaults; tab edits are saved a second after the last one.</li>
-<li><code>Gauges\\trucks\\&lt;kind&gt;.ini</code>, <code>[Truck]</code>: the seven scales (<code>TachClass IdleRpm RedlineRpm MaxRpm
-SpeedMax BoostMax BoostProfile</code>); a key present wins over <code>[Gauges]</code>. Written when one is changed on the tab while that truck
+<li><code>Gauges\\trucks\\&lt;kind&gt;.ini</code>, <code>[Truck]</code> for the kind and <code>[Truck:&lt;id&gt;]</code> for one
+truck: the seven scales (<code>Class IdleRpm RedlineRpm MaxRpm SpeedMax BoostMax BoostProfile</code>; <code>Class</code> only where a
+class is picked); a key present wins over <code>[Gauges]</code>. Written when one is changed on the tab while that truck
 is driven. The kind is the game's (model +0x588).</li>
 <li><code>Gauges\\gearboxes\\&lt;name&gt;.ini</code>, <code>[Gearbox]</code>: <code>GearHold</code>, 1 to 3 s. The name is the gearbox
 fitted (vehicle +0x9C0), the truck's default (+0x9A0) only when none is read there.</li>

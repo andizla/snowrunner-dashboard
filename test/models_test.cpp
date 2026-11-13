@@ -211,7 +211,7 @@ static int Replay(const char *path, float idleRpm, float redlineRpm)
     }
     GaugeSettings s;
     SettingsDefaults(s);
-    s.tachClass = kClassScout;
+    s.tachClass = s.scaleClass = kClassScout;
     s.idleRpm = idleRpm;
     s.redlineRpm = redlineRpm;
     SettingsClamp(s);
@@ -295,7 +295,7 @@ static int Replay(const char *path, float idleRpm, float redlineRpm)
             const float dt = fminf(left, kDt), before = tach.rpm;
             const bool was = tach.running;
             TachStep(tach, t, k, dt);
-            const int lift = BoostStep(boost, t, TurboOf(s.tachClass, s.boostProfile, k.boost, kFuelClass), TachSpeed(tach, k), kClassCurves[s.tachClass],
+            const int lift = BoostStep(boost, t, TurboOf(s.scaleClass, s.boostProfile, k.boost, kFuelClass), TachSpeed(tach, k), kClassCurves[s.scaleClass],
                                        k.max / k.redline, 1.0f, t.gearEngaged == 0, dt);
             if (lift == kLiftBlowOff) blowOffs++;
             if (lift == kLiftFlutter) flutters++;
@@ -320,7 +320,7 @@ static int Replay(const char *path, float idleRpm, float redlineRpm)
             steps++;
             if (tach.rpm > k.redline) redSteps++;
             TempStep(temp, kind, t, TachSpeed(tach, k), s, dt);
-            PowertrainStep(power, t, kClassCurves[s.tachClass], TachSpeed(tach, k), k.max / k.redline, temp.oil, boost.bar / k.boost, dt);
+            PowertrainStep(power, t, kClassCurves[s.scaleClass], TachSpeed(tach, k), k.max / k.redline, temp.oil, boost.bar / k.boost, dt);
             GearboxStep(box, t, k, TruckEngineOn(t) ? TruckPedal(t) : 0.0f, power.power, dt);
             AirStep(air, t, TachSpeed(tach, k), dt);
             airLowest = fminf(airLowest, air.bar);
@@ -1707,7 +1707,7 @@ int main(int argc, char **argv)
         auto steady = [&](int tachClass, float needle) {
             GaugeSettings cs;
             SettingsDefaults(cs);
-            cs.tachClass = tachClass;
+            cs.tachClass = cs.scaleClass = tachClass;
             const GaugeScale k = GaugeScaleOf(cs);
             const float rpm = k.idle + needle * (k.redline - k.idle);
             BoostModel bm = {};
@@ -3107,7 +3107,7 @@ int main(int argc, char **argv)
         TruckRaw c = Truck();
         c.gear = c.gearEngaged = 1;
         auto wheels = [&](float spin) { for (int i = 0; i < c.wheels; i++) c.spin[i] = spin; };
-        const TorqueCurve &curve = kClassCurves[s.tachClass];
+        const TorqueCurve &curve = kClassCurves[s.scaleClass];
         const float range = k.redline - k.idle;
         wheels(0.0f);
         ClutchModel free = {};
@@ -3504,9 +3504,9 @@ int main(int argc, char **argv)
         SettingsDefaults(ab);
         // the class is the one the automatic goes by for the truck, not the plain scales' (BRIEF_air_brakes_by_truck.md, M1)
         bool byClass = ab.airBrakes == -1;
-        ab.tachClass = kClassScout; // the plain row says nothing about the truck
+        ab.tachClass = ab.scaleClass = kClassScout; // the plain row says nothing about the truck
         byClass = byClass && AirBrakesOn(ab, kClassTruck) && AirBrakesOn(ab, kClassHeavy) && !AirBrakesOn(ab, kClassScout);
-        ab.tachClass = kClassHeavy;
+        ab.tachClass = ab.scaleClass = kClassHeavy;
         byClass = byClass && AirBrakesOn(ab, kClassTruck) && AirBrakesOn(ab, kClassHeavy) && !AirBrakesOn(ab, kClassScout);
         ab.airBrakes = 1; // a scout ticked gets air
         bool overClass = AirBrakesOn(ab, kClassScout) && AirBrakesOn(ab, kClassTruck) && AirBrakesOn(ab, kClassHeavy);
@@ -3515,10 +3515,10 @@ int main(int argc, char **argv)
         // the order, by the class in force: own scales of the Scout class on a heavy truck by weight: off. No scales, SCOUT at
         // 20 t: off. No scales, OFFROAD at 5 t: on. No type and no weight: the plain row, Scout off and Truck on
         ab.airBrakes = -1;
-        const bool order = !AirBrakesOn(ab, ClassInForce(true, kClassScout, "HEAVY", 20000.0f)) && !AirBrakesOn(ab, ClassInForce(false, kClassTruck, "SCOUT", 20000.0f)) &&
-                           AirBrakesOn(ab, ClassInForce(false, kClassScout, "OFFROAD", 5000.0f)) && !AirBrakesOn(ab, ClassInForce(false, kClassScout, "", 0.0f)) &&
-                           AirBrakesOn(ab, ClassInForce(false, kClassTruck, "", 0.0f)) && !AirBrakesOn(ab, ClassInForce(false, kClassTruck, "", 5000.0f)) &&
-                           AirBrakesOn(ab, ClassInForce(true, kClassHeavy, "SCOUT", 2000.0f));
+        const bool order = !AirBrakesOn(ab, ClassInForce(kClassScout, kClassAuto, "HEAVY", 20000.0f)) && !AirBrakesOn(ab, ClassInForce(kClassAuto, kClassTruck, "SCOUT", 20000.0f)) &&
+                           AirBrakesOn(ab, ClassInForce(kClassAuto, kClassScout, "OFFROAD", 5000.0f)) && !AirBrakesOn(ab, ClassInForce(kClassAuto, kClassScout, "", 0.0f)) &&
+                           AirBrakesOn(ab, ClassInForce(kClassAuto, kClassTruck, "", 0.0f)) && !AirBrakesOn(ab, ClassInForce(kClassAuto, kClassTruck, "", 5000.0f)) &&
+                           AirBrakesOn(ab, ClassInForce(kClassHeavy, kClassAuto, "SCOUT", 2000.0f));
         overClass = overClass && order;
         // the flip (M4): a hold of the spring brakes ends on the pass the truck turns out to have no air brakes, and the model holds no air
         AirModel flip = { true, 2.0f };
@@ -3772,9 +3772,9 @@ int main(int argc, char **argv)
         GaugeSettings bs;
         SettingsDefaults(bs);
         const float truckMost = GaugeScaleOf(bs).boost;
-        bs.tachClass = kClassScout;
+        bs.tachClass = bs.scaleClass = kClassScout;
         const float scoutMost = GaugeScaleOf(bs).boost;
-        bs.tachClass = kClassHeavy;
+        bs.tachClass = bs.scaleClass = kClassHeavy;
         const float heavyMost = GaugeScaleOf(bs).boost;
         bs.boostMax = 1.35f;
         Check(truckMost == 1.8f && scoutMost == 1.0f && heavyMost == 2.0f && GaugeScaleOf(bs).boost == 1.35f,

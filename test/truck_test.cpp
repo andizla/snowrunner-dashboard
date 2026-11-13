@@ -8478,12 +8478,21 @@ static void TruckTestsTruckType()
                       ClassByType(text, over, kClassScout) == kClassHeavy && ClassByType(text, 0.0f, kClassHeavy) == kClassHeavy;
         nothing = nothing && TruckTypeSays(nullptr) == kTypeSaysNothing && ClassByType(nullptr, light, kClassTruck) == kClassScout;
         // M4: the scales' own class over the type, the type over the weight
-        const bool order = ClassInForce(false, kClassHeavy, "SCOUT", 9000.0f) == kClassScout && ClassInForce(true, kClassHeavy, "SCOUT", 9000.0f) == kClassHeavy &&
-                           ClassInForce(true, kClassTruck, "SCOUT", 2000.0f) == kClassTruck && ClassInForce(false, kClassScout, "", 9000.0f) == kClassTruck &&
-                           ClassInForce(false, kClassScout, "OFFROAD", 4000.0f) == kClassTruck && ClassInForce(true, kClassScout, "OFFROAD", 4000.0f) == kClassScout &&
-                           ClassInForce(false, kClassHeavy, "OFFROAD", 0.0f) == kClassHeavy;
-        Check(order, "truck type, who overrules whom: the class of a truck's own scales goes over the game's TruckType, the type over the weight, the weight alone where no "
-                     "type was read, the plain class where neither is known");
+        const bool order = ClassInForce(kClassAuto, kClassHeavy, "SCOUT", 9000.0f) == kClassScout && ClassInForce(kClassHeavy, kClassAuto, "SCOUT", 9000.0f) == kClassHeavy &&
+                           ClassInForce(kClassTruck, kClassAuto, "SCOUT", 2000.0f) == kClassTruck && ClassInForce(kClassAuto, kClassScout, "", 9000.0f) == kClassTruck &&
+                           ClassInForce(kClassAuto, kClassScout, "OFFROAD", 4000.0f) == kClassTruck && ClassInForce(kClassScout, kClassAuto, "OFFROAD", 4000.0f) == kClassScout &&
+                           ClassInForce(kClassAuto, kClassHeavy, "OFFROAD", 0.0f) == kClassHeavy;
+        // Auto everywhere: the type, the weight, and truck where neither is known. The plain pick never goes over the type
+        const bool autos = ClassInForce(kClassAuto, kClassAuto, "SCOUT", 9000.0f) == kClassScout && ClassInForce(kClassAuto, kClassAuto, "HEAVY", 20000.0f) == kClassHeavy &&
+                           ClassInForce(kClassAuto, kClassAuto, "", 0.0f) == kClassTruck && ClassInForce(kClassAuto, kClassAuto, nullptr, NAN) == kClassTruck &&
+                           ClassInForce(kClassAuto, kClassHeavy, "SCOUT", 0.0f) == kClassScout && ClassInForce(kClassAuto, kClassScout, "HEAVY", 20000.0f) == kClassHeavy &&
+                           ClassInForce(kClassAuto, kClassScout, "", 0.0f) == kClassScout && ClassInForce(7, -5, "", 0.0f) == kClassTruck;
+        // the class a pass late (must 8): until this vehicle's type and weight were tried the class of the pass before stands
+        int held = kClassHeavy;
+        const bool late = ScaleClassStep(held, false, kClassScout) == kClassHeavy && held == kClassHeavy && ScaleClassStep(held, true, kClassScout) == kClassScout &&
+                          held == kClassScout && ScaleClassStep(held, false, kClassTruck) == kClassScout;
+        Check(order && autos && late, "truck type, who overrules whom: a class picked for the truck goes over the game's TruckType, the type over the weight, the weight alone where no "
+                     "type was read, the plain row's pick where neither is known, truck where nothing is; the plain pick never over the type; a class not tried yet leaves the one before");
         Check(scout && others && nothing,
               "truck type, the rule: SCOUT is a scout at any weight and with none; the four other values are never a scout, truck or heavy by the upper border alone, the "
               "plain class with no weight; Undefined, lower case, a space, another value, an empty text and none go by the weight whole");

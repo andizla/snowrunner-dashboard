@@ -100,7 +100,7 @@ static void PageTip(const char *text)
 static const char *PageClassWord(int tachClass)
 {
     static const char *const words[kClassCount] = { "truck", "scout", "heavy" };
-    return words[tachClass < 0 || tachClass >= kClassCount ? kClassTruck : tachClass];
+    return words[ClassOr(tachClass, kClassTruck)];
 }
 
 // Whose engine or gearbox figure is in force (GaugeView::engTorqueFrom, engHoldFrom: 0 none, 1 the default, 2 the kind's, 3 this truck's).
@@ -530,25 +530,37 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
 
         ImGui::SeparatorText("Scales");
         // whose scales these are: the driven truck's own, or the plain ones
+        const char *const keeper = view.scalesIdKnown ? "this truck" : "this kind of truck";
         if (!view.truck[0]) ImGui::TextWrapped("No truck is driven. These are the plain scales, which every truck without scales of its own shows.");
-        else if (!view.truckOwn)
-            ImGui::TextWrapped("Scales for %s. It shows the plain ones. Change one here and this kind of truck keeps all seven as its own.", view.truck);
+        else if (view.scalesLevel == 0 && !view.truckOwn)
+            ImGui::TextWrapped("Scales for %s. It shows the plain ones. Change one here and %s keeps all seven as its own.", view.truck, keeper);
+        else if (view.scalesLevel == 2)
+        {
+            ImGui::TextWrapped("Scales for %s. They are its own, kept for this truck alone in the file of its kind in Gauges\\trucks.", view.truck);
+            if (ImGui::SmallButton("Scales of the kind")) act |= kPageTruckDrop;
+            PageTip("This truck gives up its own scales. It shows the scales of its kind again, or the plain ones where the kind has none.");
+        }
         else
         {
-            ImGui::TextWrapped("Scales for %s. They are its own, kept for this kind of truck in its file in Gauges\\trucks.", view.truck);
+            ImGui::TextWrapped("Scales for %s. They are the scales of its kind, kept in its file in Gauges\\trucks.%s", view.truck,
+                               view.scalesIdKnown ? " Change one here and this truck keeps all seven as its own." : "");
             if (ImGui::SmallButton("Plain scales")) act |= kPageTruckDrop;
-            PageTip("This kind of truck gives up its own scales and shows the plain ones again.");
+            PageTip("This kind of truck gives up its scales. Every truck of the kind without scales of its own shows the plain ones again.");
         }
-        static const char *classes[kClassCount] = { "Truck", "Scout", "Heavy" };
+        // Auto first: the class by the truck itself. A picked class is index 1 to 3 (kClassTruck is 0, kClassAuto -1)
+        static const char *const autos[kClassCount + 1] = { "Auto (Truck)", "Auto (Scout)", "Auto (Heavy)", "Auto" };
+        const char *const classes[kClassCount + 1] = { view.truck[0] ? autos[ClassOr(view.classAuto, kClassTruck)] : autos[kClassCount], "Truck", "Scout", "Heavy" };
         PageLabel("Truck class", labelX);
         ImGui::SetNextItemWidth(w);
-        const int classWas = s.tachClass;
-        if (ImGui::Combo("##class", &s.tachClass, classes, kClassCount))
+        const int classWas = ClassOr(s.tachClass, view.classAuto);
+        int classRow = ClassOr(s.tachClass, kClassAuto) + 1;
+        if (ImGui::Combo("##class", &classRow, classes, kClassCount + 1))
         {
-            ScalesClassChange(s, classWas);
+            s.tachClass = classRow - 1;
+            if (ClassOr(s.tachClass, view.classAuto) != classWas) ScalesClassChange(s, classWas);
             act |= kPageChanged;
         }
-        PageTip("Sets the idle, the red zone, the tops of both dials and the boost for a truck, a scout or a heavy truck. The mod automatic shifts by the class of a truck with scales of its own, else by its type in the game files and its weight. Class beside a number set by hand gives it back. Default: Truck.");
+        PageTip("Sets the idle, the red zone, the tops of both dials and the boost for a truck, a scout or a heavy truck. Auto goes by the type of the truck in the game files and by its weight. Pick a class to overrule that. The mod automatic and Air brakes go by the same class. Class beside a number set by hand gives it back. Default: Auto.");
         // the brakes of the driven truck (BRIEF_spring_brakes.md): its own choice in its file, by its class until it has one
         {
             ImGui::BeginDisabled(!view.truck[0]);
@@ -563,7 +575,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             ImGui::EndDisabled();
         }
         {
-            const GaugeScale own = kClassScales[s.tachClass < 0 || s.tachClass >= kClassCount ? kClassTruck : s.tachClass];
+            const GaugeScale own = kClassScales[ClassOr(ClassOr(s.tachClass, view.classAuto), kClassTruck)];
             // each number is the class's own until it is changed here; "Class" gives it back to the class
             struct Row { const char *label, *unit, *tip; float *value; float own; const float *range; float speed; };
             const Row rows[4] = {
@@ -855,7 +867,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             else if (pl.say[0]) wrapped(pl.say, false);
             if (pl.truck && !pl.idRead) wrapped("The id of this truck is not read, so it has no settings of its own: only the second button works.", true);
             else
-                wrapped("Import takes what this truck keeps as its own: the diff types, the suspension, Air brakes and the engine settings. The class and the scales belong to the kind and are left. "
+                wrapped("Import takes what this truck keeps as its own: the class and scales, the diff types, the suspension, Air brakes and the engine settings. The drag area, the air axles and the Counts choice belong to the kind and are left. "
                         "The second button takes all of it for every truck of this kind. A backup is written first, and it is in this list.", true);
             int others = 0;
             auto row = [&](int i, bool other) {

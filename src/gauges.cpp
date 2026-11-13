@@ -619,6 +619,7 @@ static float IniFloatIn(const wchar_t *section, const wchar_t *key, float def, c
 }
 
 static float IniFloat(const wchar_t *key, float def, const std::wstring &ini) { return IniFloatIn(kIniSection, key, def, ini); }
+static bool g_oldPlainClass = false; // Gauges.ini holds a TachClass of an older build: said once a run (LogSettings)
 static int IniInt(const wchar_t *key, int def, const std::wstring &ini) { return (int)GetPrivateProfileIntW(kIniSection, key, def, ini.c_str()); }
 static bool IniBool(const wchar_t *key, bool def, const std::wstring &ini) { return IniInt(key, def ? 1 : 0, ini) != 0; }
 
@@ -805,7 +806,11 @@ static void WriteIni(const GaugeSettings &s)
     whole(L"ShowFuelUse", s.showFuelUse ? 1 : 0);
     whole(L"ShowLamps", s.showLamps ? 1 : 0);
     whole(L"OilGauge", s.oilGauge);
-    whole(L"TachClass", s.tachClass);
+    // the class picked on the plain row (Class, 0 to 2); Auto has no key. An old TachClass goes at this write: it is
+    // never read as a class (the lead's ruling 3 on BRIEF_truck_keys_per_truck.md)
+    if (s.tachClass >= kClassTruck && s.tachClass < kClassCount) whole(L"Class", s.tachClass);
+    else WritePrivateProfileStringW(kIniSection, L"Class", nullptr, ini.c_str());
+    WritePrivateProfileStringW(kIniSection, L"TachClass", nullptr, ini.c_str());
     num(L"IdleRpm", s.idleRpm);
     num(L"RedlineRpm", s.redlineRpm);
     num(L"MaxRpm", s.maxRpm);
@@ -1155,8 +1160,8 @@ static void ReadIni(GaugeSettings &s)
                         L"; ShowFuelUse=1 draws the fuel used a minute, after the range under the fuel dial (litres a minute, gallons an hour with Mph).\n"
                         L"; OilGauge shows the oil temperature: 1 = a second needle (amber) in the temperature dial, 2 = a dial of its\n"
                         L"; own left of the temperature dial, 0 = not at all. The oil lamp is in the lamps either way.\n"
-                        L"; TachClass sets the scales: 0 = truck (idle 650 rpm, red zone from 2200 of 3000, speedometer to 100 km/h),\n"
-                        L"; 1 = scout (800, 5500 of 7000, 120 km/h), 2 = heavy (600, 1900 of 2500, 80 km/h).\n"
+                        L"; Class picks the class of the scales: 0 = truck (idle 650 rpm, red zone from 2200 of 3000, speedometer to 100 km/h),\n"
+                        L"; 1 = scout (800, 5500 of 7000, 120 km/h), 2 = heavy (600, 1900 of 2500, 80 km/h). No key: by the type and weight of each truck.\n"
                         L"; IdleRpm, RedlineRpm, MaxRpm and SpeedMax (km/h) replace the class's numbers; 0 = the class's own.\n"
                         L"; The boost dial shows a turbo that blows by the fuel the engine burns and how fast it turns.\n"
                         L"; BoostMax is the boost in bar it reaches with the pedal floored at high engine speed (0.3 to 3);\n"
@@ -1336,7 +1341,9 @@ static void ReadIni(GaugeSettings &s)
     s.showFuelUse = IniBool(L"ShowFuelUse", s.showFuelUse, ini);
     s.showLamps = IniBool(L"ShowLamps", s.showLamps, ini);
     s.oilGauge = IniInt(L"OilGauge", s.oilGauge, ini);
-    s.tachClass = IniInt(L"TachClass", s.tachClass, ini);
+    // Class where the player picked one; no key is Auto. An old TachClass is not read as a class: one line a run says so
+    s.tachClass = ClassOr(IniInt(L"Class", kClassAuto, ini), kClassAuto);
+    if (IniInt(L"TachClass", -9, ini) != -9) g_oldPlainClass = true;
     s.idleRpm = IniFloat(L"IdleRpm", s.idleRpm, ini);
     s.redlineRpm = IniFloat(L"RedlineRpm", s.redlineRpm, ini);
     s.maxRpm = IniFloat(L"MaxRpm", s.maxRpm, ini);
@@ -1895,7 +1902,7 @@ static void EngineTorqueWrite(const char *name, int percent)
 }
 
 // ---- a truck's own scales: its file Gauges\trucks\<kind>.ini ----
-// A truck can have seven settings of its own: TachClass, IdleRpm, RedlineRpm, MaxRpm, SpeedMax, BoostMax and BoostProfile. They are written
+// A truck can have seven settings of its own: Class (only where one is picked), IdleRpm, RedlineRpm, MaxRpm, SpeedMax, BoostMax and BoostProfile. They are written
 // when one of them is changed on the tab while that truck is driven, and take the place of the plain ones of
 // [Gauges] whenever that truck is driven again. The key is the truck's as truck.h makes it (TruckKey).
 
@@ -1939,7 +1946,10 @@ static bool TruckDiffRead(const std::wstring &ini, const std::wstring &section, 
 // Lays the truck's own scales over s: each of the seven its file holds. One the file does not hold stays as it is in
 // s. False when the file holds none of them, or is not there.
 // The keys from a section of any file (a truck's file's [Truck]; a profile's [Truck] and [Drive], truck_profile.h).
-static bool TruckKeysRead(const std::wstring &ini, const std::wstring &section, GaugeSettings &s)
+// The scales group of one section, laid over s: each of the six numbers it holds, and the class picked there (Class, 0
+// to 2) or Auto. A section with scales and no Class is Auto, never the class s came with: the group is whole. An old
+// TachClass counts as a key of the group and is not read as a class (the lead's ruling 3); oldClass: it was there.
+static bool TruckScalesRead(const std::wstring &ini, const std::wstring &section, GaugeSettings &s, bool *oldClass = nullptr)
 {
     bool any = false;
     auto has = [&](const wchar_t *name) {
@@ -1948,13 +1958,27 @@ static bool TruckKeysRead(const std::wstring &ini, const std::wstring &section, 
         any = any || there;
         return there;
     };
-    if (has(L"TachClass")) s.tachClass = (int)GetPrivateProfileIntW(section.c_str(), L"TachClass", s.tachClass, ini.c_str());
+    const bool old = has(L"TachClass");
+    if (oldClass) *oldClass = old;
+    int picked = kClassAuto;
+    if (has(L"Class"))
+    {
+        wchar_t buf[8] = {};
+        GetPrivateProfileStringW(section.c_str(), L"Class", L"", buf, 8, ini.c_str());
+        if (buf[0] >= L'0' && buf[0] < L'0' + kClassCount && !buf[1]) picked = buf[0] - L'0';
+    }
     if (has(L"IdleRpm")) s.idleRpm = IniFloatIn(section.c_str(), L"IdleRpm", s.idleRpm, ini);
     if (has(L"RedlineRpm")) s.redlineRpm = IniFloatIn(section.c_str(), L"RedlineRpm", s.redlineRpm, ini);
     if (has(L"MaxRpm")) s.maxRpm = IniFloatIn(section.c_str(), L"MaxRpm", s.maxRpm, ini);
     if (has(L"SpeedMax")) s.speedMax = IniFloatIn(section.c_str(), L"SpeedMax", s.speedMax, ini);
     if (has(L"BoostMax")) s.boostMax = IniFloatIn(section.c_str(), L"BoostMax", s.boostMax, ini);
     if (has(L"BoostProfile")) s.boostProfile = (int)GetPrivateProfileIntW(section.c_str(), L"BoostProfile", s.boostProfile, ini.c_str());
+    if (any) s.tachClass = picked;
+    return any;
+}
+static bool TruckKeysRead(const std::wstring &ini, const std::wstring &section, GaugeSettings &s, bool *oldClass = nullptr)
+{
+    const bool any = TruckScalesRead(ini, section, s, oldClass);
     // the truck's differential and each axle's own: not of the scales, so they do not make them the truck's own
     TruckDiffRead(ini, section, s);
     // the truck's own drag area, by hand in its file: not one of the scales, so it does not make them the truck's own
@@ -1969,25 +1993,41 @@ static bool TruckKeysRead(const std::wstring &ini, const std::wstring &section, 
     if (any) SettingsClamp(s);
     return any;
 }
-// The kind's [Truck] over s, then with an id the owned truck's diff group in the place of the kind's: laid over the
-// group s came with (the plain one), never over the kind's rows. diffTruck: the truck has a group of its own.
-static bool ReadTruckIni(const char *key, GaugeSettings &s, const char *id = "", bool *diffTruck = nullptr)
+// The kind's [Truck] over s, then with an id the owned truck's groups in the place of the kind's: each laid over the
+// group s came with (the plain one), never over the kind's keys. diffTruck, scalesTruck: the truck has that group of
+// its own. oldClass: a section read holds a TachClass of an older build. True where scales of some level are in force.
+static bool ReadTruckIni(const char *key, GaugeSettings &s, const char *id = "", bool *diffTruck = nullptr, bool *scalesTruck = nullptr, bool *oldClass = nullptr)
 {
     const std::wstring ini = SetupFile(kSetupTruck, key);
-    GaugeSettings mine = s;
-    const bool own = TruckKeysRead(ini, kSetupSections[kSetupTruck], s);
+    GaugeSettings mine = s, mineScales = s;
+    bool oldKind = false, oldTruck = false;
+    bool own = TruckKeysRead(ini, kSetupSections[kSetupTruck], s, &oldKind);
     const bool truck = id && id[0] && TruckDiffRead(ini, TruckSectionOf(id), mine);
     if (truck) DiffCopy(s, mine);
+    const bool scales = id && id[0] && TruckScalesRead(ini, TruckSectionOf(id), mineScales, &oldTruck);
+    if (scales)
+    {
+        SettingsClamp(mineScales);
+        s.tachClass = mineScales.tachClass, s.idleRpm = mineScales.idleRpm, s.redlineRpm = mineScales.redlineRpm, s.maxRpm = mineScales.maxRpm;
+        s.speedMax = mineScales.speedMax, s.boostMax = mineScales.boostMax, s.boostProfile = mineScales.boostProfile;
+        own = true;
+    }
     if (diffTruck) *diffTruck = truck;
+    if (scalesTruck) *scalesTruck = scales;
+    if (oldClass) *oldClass = oldKind || oldTruck;
     return own;
 }
 
-// Writes the truck's file: the seven scales of s.
-static void WriteTruckIni(const char *key, const GaugeSettings &s)
+// Writes the scales of s into a level of the truck's file: the kind's [Truck], or with an id the owned truck's
+// [Truck:<id>]. The class only where one is picked (Class); an old TachClass goes at this write.
+static void WriteTruckIni(const char *key, const GaugeSettings &s, const char *id = "")
 {
-    const std::wstring ini = SetupFile(kSetupTruck, key), section = kSetupSections[kSetupTruck];
+    const std::wstring ini = SetupFile(kSetupTruck, key), section = TruckSectionOf(id);
     SetupBegin(kSetupTruck, Wide(key));
-    IniPutInt(section.c_str(), L"TachClass", s.tachClass, ini);
+    wchar_t there[8] = {};
+    if (s.tachClass >= kClassTruck && s.tachClass < kClassCount) IniPutInt(section.c_str(), L"Class", s.tachClass, ini);
+    else if (GetPrivateProfileStringW(section.c_str(), L"Class", L"", there, 8, ini.c_str()) > 0) WritePrivateProfileStringW(section.c_str(), L"Class", nullptr, ini.c_str());
+    if (GetPrivateProfileStringW(section.c_str(), L"TachClass", L"", there, 8, ini.c_str()) > 0) WritePrivateProfileStringW(section.c_str(), L"TachClass", nullptr, ini.c_str());
     IniPutFloat(section.c_str(), L"IdleRpm", s.idleRpm, ini);
     IniPutFloat(section.c_str(), L"RedlineRpm", s.redlineRpm, ini);
     IniPutFloat(section.c_str(), L"MaxRpm", s.maxRpm, ini);
@@ -2034,8 +2074,17 @@ static void WriteTruckAxle(const char *key, int axle, int type, const char *id =
     SetupBegin(kSetupTruck, Wide(key));
     IniPutInt(section.c_str(), name, type, ini);
 }
-// And out of it; true when it was there. An owned truck's section goes with it when nothing of its own is left there:
-// the parts and a mark alone are no section.
+// An owned truck's [Truck:<id>] goes when nothing of its own is left in it: the parts and a mark alone are no section.
+// An empty one goes too, head and all: a head left behind would keep the file when its last key is gone.
+static void TruckSectionTidy(const std::wstring &ini, const char *id)
+{
+    const std::wstring section = TruckSectionOf(id);
+    if (!id[0] || GetFileAttributesW(ini.c_str()) == INVALID_FILE_ATTRIBUTES) return;
+    bool own = false;
+    for (const auto &k : truckid::Keys(ini, section)) own = own || (!truckid::MarkKey(k.first) && !truckid::KeyIs(k.first, L"Engine") && !truckid::KeyIs(k.first, L"Gearbox"));
+    if (!own) WritePrivateProfileStringW(section.c_str(), nullptr, nullptr, ini.c_str());
+}
+// And out of it; true when it was there. An owned truck's section goes with it when nothing of its own is left there.
 static bool DropTruckDiff(const char *key, const char *id = "")
 {
     const std::wstring ini = SetupFile(kSetupTruck, key), section = TruckSectionOf(id);
@@ -2046,12 +2095,7 @@ static bool DropTruckDiff(const char *key, const char *id = "")
         WritePrivateProfileStringW(section.c_str(), L"DiffType", nullptr, ini.c_str());
         there = true;
     }
-    if (id[0] && truckid::SectionThere(ini, section))
-    {
-        bool own = false;
-        for (const auto &k : truckid::Keys(ini, section)) own = own || (!truckid::MarkKey(k.first) && !truckid::KeyIs(k.first, L"Engine") && !truckid::KeyIs(k.first, L"Gearbox"));
-        if (!own) WritePrivateProfileStringW(section.c_str(), nullptr, nullptr, ini.c_str());
-    }
+    TruckSectionTidy(ini, id);
     return there;
 }
 // The whole group into a level, in the place of what it had: the type (under 0: none, so the key goes) and each axle's
@@ -2075,7 +2119,7 @@ static void DropTruckIni(const char *key)
 {
     const std::wstring ini = SetupFile(kSetupTruck, key), section = kSetupSections[kSetupTruck];
     if (GetFileAttributesW(ini.c_str()) == INVALID_FILE_ATTRIBUTES) return;
-    for (const wchar_t *name : { L"TachClass", L"IdleRpm", L"RedlineRpm", L"MaxRpm", L"SpeedMax", L"BoostMax", L"BoostProfile", L"Kind" })
+    for (const wchar_t *name : { L"TachClass", L"Class", L"IdleRpm", L"RedlineRpm", L"MaxRpm", L"SpeedMax", L"BoostMax", L"BoostProfile", L"Kind" })
         WritePrivateProfileStringW(section.c_str(), name, nullptr, ini.c_str());
     wchar_t rest[8] = {}, names[64] = {};
     // the file goes only when [Truck] is empty and no other section is in it: a kind's own suspension or engine, and an
@@ -2087,7 +2131,26 @@ static void DropTruckIni(const char *key)
     else SetupBegin(kSetupTruck, Wide(key)); // something else stays: the kind with it
 }
 
-// The seven scales a truck can have of its own: copied from one set of settings into another, and compared.
+// The owned truck's scales out of its own section, and the section with them when nothing of its own is left there.
+// True when one was there. The kind's [Truck] is not touched.
+static bool DropTruckScales(const char *key, const char *id)
+{
+    if (!key[0] || !id[0]) return false;
+    const std::wstring ini = SetupFile(kSetupTruck, key), section = TruckSectionOf(id);
+    bool there = false;
+    for (const wchar_t *name : { L"TachClass", L"Class", L"IdleRpm", L"RedlineRpm", L"MaxRpm", L"SpeedMax", L"BoostMax", L"BoostProfile" })
+    {
+        wchar_t buf[8] = {};
+        if (GetPrivateProfileStringW(section.c_str(), name, L"", buf, 8, ini.c_str()) == 0) continue;
+        WritePrivateProfileStringW(section.c_str(), name, nullptr, ini.c_str());
+        there = true;
+    }
+    TruckSectionTidy(ini, id);
+    return there;
+}
+
+// The seven scales a truck can have of its own (the class picked or Auto, and six numbers): copied from one set of
+// settings into another, and compared.
 static void ScalesCopy(GaugeSettings &to, const GaugeSettings &from)
 {
     to.tachClass = from.tachClass;
@@ -2815,7 +2878,7 @@ static const wchar_t *EngineLevelWords(int level)
 // kind and id its game id ("" while none is driven or the id is not read). changed, suspChanged and truckChanged: the
 // scales, the kind's or the truck's suspension were changed on the tab and are not in the ini yet. The functions below
 // are all that changes a state once the ini is read into plain.
-struct SettingsState { GaugeSettings plain, s; char key[kMaxText], id[40]; bool own, changed, suspOwn, suspKept, suspChanged, truckOwn, truckKept, truckChanged, diffChanged; int axleChanged; bool airChanged, diffTruck; }; // diffChanged: the Diff row moved while this truck is driven, not in its file yet; diffTruck: the diff group in force is the owned truck's ([Truck:<id>])
+struct SettingsState { GaugeSettings plain, s; char key[kMaxText], id[40]; bool own, changed, suspOwn, suspKept, suspChanged, truckOwn, truckKept, truckChanged, diffChanged; int axleChanged; bool airChanged, diffTruck, scalesTruck; }; // scalesTruck: the scales in force (own) are the owned truck's, not its kind's; // diffChanged: the Diff row moved while this truck is driven, not in its file yet; diffTruck: the diff group in force is the owned truck's ([Truck:<id>])
 
 // The suspension level in force: the default, the kind's, this owned truck's.
 enum { kSuspLevelDefault, kSuspLevelKind, kSuspLevelTruck };
@@ -2849,6 +2912,21 @@ static void SuspFromFiles(SettingsState &st)
     st.suspChanged = st.truckChanged = false;
 }
 
+// An older build wrote the class with every set of scales (TachClass). It is never read as a class (the lead's ruling
+// 3): one line a kind a run says so. The key goes when that level's scales are next written; no read writes a file.
+static int g_oldClassSaid = 0;
+static void OldClassSay(const char *key)
+{
+    static std::vector<std::string> said;
+    for (const auto &k : said)
+        if (k == key) return;
+    said.push_back(key);
+    g_oldClassSaid++;
+    Log(L"truck class: the file of %S holds a class saved by an older version (TachClass). It is not read as a class any more: the truck goes by its type in the game files "
+        L"and its weight (Truck class: Auto). The numbers of its scales stay as they are. Pick the class again on the Engine tab if it was picked on purpose",
+        key);
+}
+
 // The settings in force for a truck (key "" for none, id "" while not read), from the plain ones and the ini. Each
 // truck's set goes in over the plain one, never over the last truck's (the game's values are the stock times the set,
 // the addendum's point 4).
@@ -2857,8 +2935,13 @@ static void SettingsFor(SettingsState &st, const char *key, const char *id = "")
     strncpy_s(st.key, key, _TRUNCATE);
     strncpy_s(st.id, key[0] ? id : "", _TRUNCATE);
     st.s = st.plain;
-    st.diffTruck = false;
-    st.own = key[0] && ReadTruckIni(key, st.s, st.id, &st.diffTruck);
+    st.diffTruck = st.scalesTruck = false;
+    bool oldClass = false;
+    st.own = key[0] && ReadTruckIni(key, st.s, st.id, &st.diffTruck, &st.scalesTruck, &oldClass);
+    if (oldClass) OldClassSay(key);
+    // a truck without scales of its own has no class picked: the plain row's pick is not its pick, and never overrules
+    // its type. So its row reads Auto, and a number set for it does not make the plain pick the truck's
+    if (key[0] && !st.own) st.s.tachClass = kClassAuto;
     st.changed = st.diffChanged = false;
     st.axleChanged = 0;
     SuspMarkClear(st.key, st.id);
@@ -2897,6 +2980,7 @@ static void SettingsTake(SettingsState &st, const GaugeSettings &in)
     const GaugeSettings before = st.plain;
     st.plain = in;
     if (st.own) ScalesCopy(st.plain, before);
+    if (st.key[0]) st.plain.tachClass = before.tachClass; // the plain pick is set with no truck driven alone
     if (st.key[0]) st.plain.diffType = before.diffType;
     for (int a = 0; a < kAxleRowsMost; a++) st.plain.diffAxle[a] = -1; // never the plain settings': a truck file's alone
     st.plain.airBrakes = -1;
@@ -2908,12 +2992,27 @@ static void SettingsTake(SettingsState &st, const GaugeSettings &in)
     else if (ticked) st.s.airMaskFrom = st.truckOwn ? kAirFromTruck : st.suspOwn ? kAirFromKind : kAirFromTicked;
 }
 
-// The driven truck gives up its own scales: they go out of the ini, and the plain ones are in force for it again.
+// The scales in force from the files, where no edit of them waits for its save: the plain ones, the kind's, the truck's.
+static void ScalesFromFiles(SettingsState &st)
+{
+    if (!st.key[0] || st.changed) return;
+    GaugeSettings d = st.plain;
+    st.scalesTruck = false;
+    st.own = ReadTruckIni(st.key, d, st.id, nullptr, &st.scalesTruck);
+    if (!st.own) d.tachClass = kClassAuto; // as SettingsFor
+    ScalesCopy(st.s, d);
+}
+
+// The scales in force are given up, at their own level. The owned truck's: they go out of its section, and its kind's
+// are in force for it again, or the plain ones. The kind's: they go out of [Truck], and the plain ones are in force for
+// every truck of the kind without its own. An edit not saved yet goes with them.
 static void SettingsDrop(SettingsState &st)
 {
-    DropTruckIni(st.key);
+    if (st.scalesTruck) DropTruckScales(st.key, st.id);
+    else DropTruckIni(st.key);
+    st.own = st.scalesTruck = st.changed = false;
     ScalesCopy(st.s, st.plain);
-    st.own = st.changed = false;
+    ScalesFromFiles(st);
 }
 
 // The tab's box "Own settings". Off: the level in force keeps its set with Own=0 (a change not yet written goes in
@@ -3008,10 +3107,9 @@ static int SettingsTakeOver(SettingsState &st, const char *newId)
 {
     const int taken = TakeOverBoth(st.key, st.id, newId);
     strncpy_s(st.id, newId, _TRUNCATE);
-    const GaugeSettings scales = st.s;
     SuspFromFiles(st);
-    ScalesCopy(st.s, scales);
-    DiffFromFiles(st); // the new id's own group, taken over or its own from before; else the kind's as it was
+    ScalesFromFiles(st); // the new id's own scales and diff group, taken over or its own from before; else the kind's as they were
+    DiffFromFiles(st);
     return taken;
 }
 
@@ -3029,6 +3127,7 @@ static void SettingsToDefaults(SettingsState &st)
 {
     const bool diffOwn = st.key[0] && DropTruckDiff(st.key); // the truck's differential goes back to the default too
     if (st.key[0] && st.id[0]) DropTruckDiff(st.key, st.id);  // at both levels, as its Air brakes choice; a sister's own section stays
+    if (st.key[0] && st.id[0]) DropTruckScales(st.key, st.id); // and its own scales, with the kind's below
     DropTruckAir(st.key, st.id);                             // and its Air brakes choice: by the class again
     if (st.own || diffOwn) DropTruckIni(st.key);
     if (st.truckOwn) WriteTruckSusp(st.key, st.s, false, st.id);
@@ -3047,7 +3146,7 @@ static void SettingsToDefaults(SettingsState &st)
     }
     SettingsDefaults(st.plain);
     st.s = st.plain;
-    st.own = st.changed = st.diffChanged = st.airChanged = st.diffTruck = false;
+    st.own = st.changed = st.diffChanged = st.airChanged = st.diffTruck = st.scalesTruck = false;
     st.axleChanged = 0;
     SuspFromFiles(st);
 }
@@ -3058,7 +3157,13 @@ static void SettingsToDefaults(SettingsState &st)
 // the take-over and the next truck read those files on the same pass (the hand-back of 114 says why S1 is not taken).
 static void SettingsWriteTruck(SettingsState &st)
 {
-    if (st.own && st.changed) WriteTruckIni(st.key, st.s);
+    // the scales as the diff types below: with the id read the seven are this truck's, whole in its own section, so its
+    // first edit starts from what it drove with; with no id read the kind's, as before
+    if (st.own && st.changed)
+    {
+        WriteTruckIni(st.key, st.s, st.id);
+        st.scalesTruck = st.id[0] != 0;
+    }
     // with the id read an edit of the Diff row or a row by axle is the owned truck's (the lead's ruling 1): the whole
     // group in force into its section, so its first edit starts from what it drove with (S1). Else the kind's, as before
     if (st.key[0] && st.id[0] && (st.diffChanged || st.axleChanged)) WriteTruckDiffs(st.key, st.id, st.s.diffType, st.s.diffAxle), st.diffTruck = true;
@@ -3109,7 +3214,8 @@ static bool TruckKeyThere(const char *key, const wchar_t *name)
     wchar_t buf[8] = {};
     return key[0] && GetPrivateProfileStringW(kSetupSections[kSetupTruck], name, L"", buf, 8, SetupFile(kSetupTruck, key).c_str()) > 0;
 }
-static const wchar_t *const kProfScaleKeys[7] = { L"TachClass", L"IdleRpm", L"RedlineRpm", L"MaxRpm", L"SpeedMax", L"BoostMax", L"BoostProfile" };
+// The six numbers a set of scales holds. The class goes beside them as Class, only where one is picked.
+static const wchar_t *const kProfScaleKeys[6] = { L"IdleRpm", L"RedlineRpm", L"MaxRpm", L"SpeedMax", L"BoostMax", L"BoostProfile" };
 static const wchar_t *const kTireModesFile = L"TirePressure.trucks.ini"; // Tire Inflation's file of modes by truck (its truck_modes.h)
 static const wchar_t *const kTireModeNames[4] = { L"Low", L"Reduced", L"Normal", L"Increased" };
 
@@ -3143,11 +3249,22 @@ static std::wstring ProfileText(const SettingsState &st, const EngineState &e, i
     // the kind's own: the seven scales as one, or the word that it shows the plain ones
     GaugeSettings k = st.plain;
     const bool own = ReadTruckIni(st.key, k);
-    t += L"\r\n[Truck]\r\n";
-    if (own)
+    // the scales: those in force, or one level's own exactly (a backup): the kind's [Truck], the owned truck's section
+    GaugeSettings sc = k;
+    bool scOwn = own;
+    if (level == kProfLevelInForce) sc = st.s, scOwn = st.own;
+    else if (level == kProfLevelTruck)
     {
-        num(L"TachClass", k.tachClass), flt(L"IdleRpm", k.idleRpm), flt(L"RedlineRpm", k.redlineRpm), flt(L"MaxRpm", k.maxRpm), flt(L"SpeedMax", k.speedMax), flt(L"BoostMax", k.boostMax);
-        num(L"BoostProfile", k.boostProfile);
+        sc = st.plain;
+        scOwn = TruckScalesRead(SetupFile(kSetupTruck, st.key), TruckSectionOf(st.id), sc);
+        if (scOwn) SettingsClamp(sc);
+    }
+    t += L"\r\n[Truck]\r\n";
+    if (scOwn)
+    {
+        if (sc.tachClass >= kClassTruck && sc.tachClass < kClassCount) num(L"Class", sc.tachClass);
+        flt(L"IdleRpm", sc.idleRpm), flt(L"RedlineRpm", sc.redlineRpm), flt(L"MaxRpm", sc.maxRpm), flt(L"SpeedMax", sc.speedMax), flt(L"BoostMax", sc.boostMax);
+        num(L"BoostProfile", sc.boostProfile);
     }
     else line(L"ScalesOwn", L"0");
     if (TruckKeyThere(st.key, L"RoadCdA")) flt(L"RoadCdA", k.roadCdA);
@@ -3309,7 +3426,7 @@ static int ProfileUnknown(const std::wstring &file)
             bool known = false;
             if (!_wcsicmp(sec, L"Profile")) known = is({ L"Version", L"Truck", L"Date", L"Engine", L"Gearbox", L"Notes", L"Backup" });
             else if (!_wcsicmp(sec, L"Truck"))
-                known = is({ L"TachClass", L"IdleRpm", L"RedlineRpm", L"MaxRpm", L"SpeedMax", L"BoostMax", L"BoostProfile", L"ScalesOwn", L"RoadCdA", L"AirAxles", L"OdometerHours", L"AirBrakes", L"AirOwn" });
+                known = is({ L"TachClass", L"Class", L"IdleRpm", L"RedlineRpm", L"MaxRpm", L"SpeedMax", L"BoostMax", L"BoostProfile", L"ScalesOwn", L"RoadCdA", L"AirAxles", L"OdometerHours", L"AirBrakes", L"AirOwn" });
             else if (!_wcsicmp(sec, L"Drive"))
                 known = is({ L"DiffType", L"DiffOwn" }) || (key.size() == 9 && !_wcsnicmp(key.c_str(), L"DiffAxle", 8) && key[8] >= L'1' && key[8] < L'1' + kAxleRowsMost);
             else if (!_wcsicmp(sec, L"Suspension"))
@@ -3350,19 +3467,23 @@ static void ProfileImport(SettingsState &st, EngineState &e, const std::wstring 
     const std::wstring truckIni = SetupFile(kSetupTruck, st.key);
     // a backup gives the level back as it was: a key the backup lacks goes out of it (15's S1, and the engine's below)
     const bool backupFile = GetPrivateProfileIntW(L"Profile", L"Backup", 0, file.c_str()) != 0;
-    if (kindLevel)
+    // the scales as one at the level the press writes, or out of that level where the profile says its truck showed the
+    // plain ones. The class is taken from Class alone: a profile of an older build holds TachClass, which is Auto here
+    GaugeSettings k = st.plain;
+    TruckKeysRead(file, L"Truck", k);
     {
-        // the seven scales as one, or back to the plain ones where the profile says its truck showed those
-        bool seven = true;
-        for (const wchar_t *name : kProfScaleKeys) seven = seven && ProfKeyThere(file, L"Truck", name);
-        GaugeSettings k = st.plain;
-        TruckKeysRead(file, L"Truck", k);
-        if (seven) WriteTruckIni(st.key, k), t.scales = true;
+        bool six = true;
+        for (const wchar_t *name : kProfScaleKeys) six = six && ProfKeyThere(file, L"Truck", name);
+        if (six) WriteTruckIni(st.key, k, id), t.scales = true;
         else if (GetPrivateProfileIntW(L"Truck", L"ScalesOwn", 1, file.c_str()) == 0 && ProfKeyThere(file, L"Truck", L"ScalesOwn"))
         {
             GaugeSettings was = st.plain;
-            if (ReadTruckIni(st.key, was)) DropTruckIni(st.key), t.scalesOff = true;
+            if (!kindLevel) t.scalesOff = DropTruckScales(st.key, id);
+            else if (TruckKeysRead(truckIni, kSetupSections[kSetupTruck], was)) DropTruckIni(st.key), t.scalesOff = true;
         }
+    }
+    if (kindLevel)
+    {
         if (ProfKeyThere(file, L"Truck", L"RoadCdA") && k.roadCdA > 0.0f)
         {
             SetupBegin(kSetupTruck, Wide(st.key));
@@ -3475,7 +3596,7 @@ static void ProfileImport(SettingsState &st, EngineState &e, const std::wstring 
         }
         // the second button on a truck with its own in force (15's S2): that stays over what the kind just took
         t.truckOver = kindLevel && st.id[0] &&
-                      ((t.susp && st.truckOwn) || ((t.diff || t.diffOff) && st.diffTruck) || (t.air && TruckAirAt(st.key, st.id) >= 0) ||
+                      ((t.susp && st.truckOwn) || ((t.diff || t.diffOff) && st.diffTruck) || ((t.scales || t.scalesOff) && st.scalesTruck) || (t.air && TruckAirAt(st.key, st.id) >= 0) ||
                        ((t.torque || t.hold || t.engine || t.engineOff) && e.truckOwn));
     }
 }
@@ -5130,7 +5251,17 @@ static void LogSettings(const GaugeSettings &s)
         s.swapDials ? L" with the speedometer and the tachometer swapped" : L"", styles[s.style], s.scale, s.opacity, s.offsetX,
         s.offsetY, s.showTemp ? L" temperature" : L"", s.showBoost ? L" boost" : L"", s.showAir ? L" air" : L"", s.showClock ? L" clock" : L"",
         s.showFuelUse ? L" fuel use" : L"", s.showLamps ? L" lamps" : L"", oils[s.oilGauge], s.showOdometer ? L"; the odometer under the speed" : L"");
-    Log(L"settings: %s scales: idle %.0f rpm, red zone from %.0f of %.0f, speedometer to %.0f km/h, boost to %g bar, a %s turbo; units %s, %s, %s", classes[s.tachClass], k.idle,
+    wchar_t classText[48];
+    if (s.tachClass >= kClassTruck && s.tachClass < kClassCount) swprintf_s(classText, L"%s", classes[s.tachClass]);
+    else swprintf_s(classText, L"auto (%s now)", classes[ClassOr(s.scaleClass, kClassTruck)]);
+    static bool saidOldClass = false;
+    if (g_oldPlainClass && !saidOldClass)
+    {
+        saidOldClass = true;
+        Log(L"truck class: Gauges.ini holds a class saved by an older version (TachClass). It is not read as a class any more: the plain row is Auto, by the type and "
+            L"weight of each truck. Pick the class again on the Engine tab if it was picked on purpose. The old key goes at the next save");
+    }
+    Log(L"settings: %s scales: idle %.0f rpm, red zone from %.0f of %.0f, speedometer to %.0f km/h, boost to %g bar, a %s turbo; units %s, %s, %s", classText, k.idle,
         k.redline, k.max, k.speedMax, k.boost, profiles[s.boostProfile], s.mph ? L"mph" : L"km/h", s.psi ? L"psi" : L"bar", s.fahrenheit ? L"F" : L"C");
     Log(L"settings: tilt lamp amber from %g degrees to a side, red from %g, red from %g up or down a slope", s.rollWarnDeg, s.rollDangerDeg, s.pitchDangerDeg);
     if (g_spinCalmKey >= 0)
@@ -5219,7 +5350,8 @@ static void SettingsSave(SettingsState &st)
 {
     if (st.key[0] && st.id[0] && (st.diffChanged || st.axleChanged))
         Log(L"settings: saved, this truck's diff types in [Truck:%S] of Gauges\\trucks\\%s.ini", st.id, SetupFileName(Wide(st.key)).c_str());
-    if (st.own && st.changed) Log(L"settings: saved, the truck's scales in Gauges\\trucks\\%s.ini", SetupFileName(Wide(st.key)).c_str());
+    if (st.own && st.changed && st.id[0]) Log(L"settings: saved, this truck's scales in [Truck:%S] of Gauges\\trucks\\%s.ini", st.id, SetupFileName(Wide(st.key)).c_str());
+    else if (st.own && st.changed) Log(L"settings: saved, the truck's scales in Gauges\\trucks\\%s.ini", SetupFileName(Wide(st.key)).c_str());
     if (st.truckOwn && st.truckChanged) Log(L"settings: saved, this truck's suspension in [Suspension:%S] of Gauges\\trucks\\%s.ini", st.id, SetupFileName(Wide(st.key)).c_str());
     else if (st.suspOwn && st.suspChanged) Log(L"settings: saved, the truck's suspension in Gauges\\trucks\\%s.ini", SetupFileName(Wide(st.key)).c_str());
     if (!(st.own && st.changed) && !(st.suspOwn && st.suspChanged) && !(st.truckOwn && st.truckChanged)) Log(L"settings: saved to Gauges.ini");
@@ -5619,7 +5751,9 @@ struct TruckWatch
     uint64_t airSaid;           // the vehicle the log's air brakes line was written for
     TruckTypeRead type;         // the game's TruckType of the truck at typeVehicle with the model typeModel (truck_type.h), its text "" where not read
     uint64_t typeVehicle, typeModel;
-    bool ownScales;             // the driven truck has scales of its own (Gauges\trucks): their class is the automatic's, else its weight's
+    int pickedClass, plainClass; // the class picked for the driven truck (its own scales' Class, kClassAuto where none) and on the plain row; the mod's thread sets both before each pass
+    int scaleClass;             // the class the scales go by on this pass, never Auto (ScaleClassStep)
+    uint64_t massVehicle;       // the vehicle whose weight was last said in the log
     uint64_t engineVehicle;
     EngineProfile profile;      // the engine's own profile (Gauges\engines), for the engine named profileFor
     char profileFor[kMaxText];
@@ -5857,9 +5991,9 @@ static const wchar_t *const kClassWords[kClassCount] = { L"truck", L"scout", L"h
 // class of the truck's own scales, and without them the class by the game's TruckType and its weight (ClassByType: a
 // SCOUT is a scout whatever it weighs, the rest by the weight), the plain scales' where the weight is not read.
 // tachClass: the class of the scales in force.
-static int AutoClass(const TruckWatch &w, int tachClass)
+static int AutoClass(const TruckWatch &w)
 {
-    return ClassInForce(w.ownScales, tachClass, w.type.text, w.mass);
+    return ClassInForce(w.pickedClass, w.plainClass, w.type.text, w.mass);
 }
 
 // The driven truck's gears as read last, as a key of gears ("" where they are not this vehicle's).
@@ -6292,7 +6426,7 @@ static void GearboxLook(TruckWatch &w, const TruckMemory &m, const TruckRaw &raw
     wchar_t whose[96];
     if (w.gearHoldOwn) wcsncpy_s(whose, L"its own (its file in Gauges\\gearboxes)", _TRUNCATE);
     else _snwprintf_s(whose, _TRUNCATE, L"the %s class's%s", kClassWords[tachClass < 0 || tachClass >= kClassCount ? kClassTruck : tachClass],
-                    w.ownScales || !(w.mass > 0.0f) ? L"" : L", the class of the truck's weight");
+                    w.pickedClass >= kClassTruck || !(w.mass > 0.0f) ? L"" : L", the class of the truck's weight");
     // the gearbox fitted, and the truck's default where it is another (an upgrade fitted)
     char other[kMaxText + 40] = "";
     if (stock[0] && strcmp(stock, name)) _snprintf_s(other, _TRUNCATE, " (the truck's default is %s)", stock);
@@ -6300,19 +6434,18 @@ static void GearboxLook(TruckWatch &w, const TruckMemory &m, const TruckRaw &raw
     else Log(L"gearbox: its name not read, so it goes by its gears (%S); each gear held going up %.1f s, %s", key, GearHoldOf(w, tachClass), whose);
 }
 
-// Looks up the record of the driven truck's engine, and says so in the log when it is another one than before. With
-// the probe on, the record's first 0x100 bytes and the floats of a mass's size in the vehicle and its model go into
-// the log as well, to find the engine's Torque and the truck's mass.
-static void EngineLook(TruckWatch &w, const TruckMemory &m, ULONGLONG now, bool probe)
+// The driven truck's weight and the game's own TruckType, once a vehicle: what its class goes by. Tried at the top of
+// the truck's first pass, before the scales are taken (BRIEF_truck_keys_per_truck.md, must 8), and again with the
+// engine's look, which finds nothing new then.
+static void ClassLook(TruckWatch &w, const TruckMemory &m)
 {
-    EngineRecord e;
-    TruckEngineRecord(m, w.refs.vehicle, e);
     const float mass = TruckMass(m, w.refs.model);
-    if (w.refs.vehicle != w.engineVehicle || mass != w.mass)
+    if (w.refs.vehicle != w.massVehicle || mass != w.mass)
     {
+        w.massVehicle = w.refs.vehicle;
         if (mass > 0.0f)
-            Log(L"truck: it weighs %.0f kg by its files (without addons, cargo or a trailer): a %s's weight, the class the automatic goes by where the truck "
-                L"has no scales of its own",
+            Log(L"truck: it weighs %.0f kg by its files (without addons, cargo or a trailer): a %s's weight, the class the scales and the automatic go by where no "
+                L"class is picked for the truck and its type says nothing",
                 mass, kClassWords[ClassByMass(mass, kClassTruck)]);
         else Log(L"truck: its mass by its files was not read (%.0f)", mass);
     }
@@ -6325,7 +6458,7 @@ static void EngineLook(TruckWatch &w, const TruckMemory &m, ULONGLONG now, bool 
         if (TruckTypeLook(m, g_typePlace, w.refs.model, w.type))
         {
             const int says = TruckTypeSays(w.type.text);
-            Log(L"truck type: %S is %S in the game's list of %d truck records: %s by the type, a %s by the weight; without scales of its own the automatic goes by the %s class",
+            Log(L"truck type: %S is %S in the game's list of %d truck records: %s by the type, a %s by the weight; with no class picked the scales and the automatic go by the %s class",
                 w.type.name, w.type.text, w.type.records, says == kTypeSaysScout ? L"a scout" : says == kTypeSaysNoScout ? L"no scout" : L"nothing said", kClassWords[byMass],
                 kClassWords[ClassByType(w.type.text, mass, kClassTruck)]);
         }
@@ -6333,6 +6466,16 @@ static void EngineLook(TruckWatch &w, const TruckMemory &m, ULONGLONG now, bool 
             Log(L"truck type: %S%s%S, so the weight alone gives the class (a %s)", w.type.name, w.type.name[0] ? L": " : L"", w.type.why ? w.type.why : "", kClassWords[byMass]);
     }
     w.mass = mass;
+}
+
+// Looks up the record of the driven truck's engine, and says so in the log when it is another one than before. With
+// the probe on, the record's first 0x100 bytes and the floats of a mass's size in the vehicle and its model go into
+// the log as well, to find the engine's Torque and the truck's mass.
+static void EngineLook(TruckWatch &w, const TruckMemory &m, ULONGLONG now, bool probe)
+{
+    EngineRecord e;
+    TruckEngineRecord(m, w.refs.vehicle, e);
+    ClassLook(w, m);
     if (w.refs.vehicle != w.engineVehicle || e.found != w.engine.found || strcmp(e.name, w.engine.name) || e.capacity != w.engine.capacity ||
         e.threshold != w.engine.threshold || e.torqueMin != w.engine.torqueMin || e.torqueMax != w.engine.torqueMax || e.torque != w.engine.torque)
     {
@@ -7703,6 +7846,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             Log(L"shift %u: %d to %d dropped: %s", g_shiftJob.number, g_shiftJob.from, g_shiftJob.gear, ShiftJobDropWhy(g_shiftJob, 0));
             w.pos.lastSet = INT_MIN;
         }
+        w.scaleClass = ClassInForce(kClassAuto, w.plainClass, "", 0.0f); // with no truck the dials go by the plain row's pick, else truck
         return false;
     }
     // which truck this is (TruckWhoStep). While another truck than the one taken is read, the models wait: on the
@@ -7752,7 +7896,12 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
     // stand elsewhere by then. The coolant temperature stays with each kind of truck (TempStep). Engine damage that
     // waits to be written belongs to the truck it came from and goes with it. While the game's clock for the truck
     // stands (held), nothing is stepped: the game is not simulating, whatever its window shows.
-    const GaugeScale scale = GaugeScaleOf(s);
+    // the class first (must 8): this vehicle's weight and type are tried before the scales are taken, on its first pass,
+    // so the red zone the models run on does not change a pass after the truck is found. With no truck: the plain pick
+    const bool classTruck = w.found && w.refs.vehicle && w.refs.model;
+    if (classTruck) ClassLook(w, m);
+    const int scaleClass = ScaleClassStep(w.scaleClass, !classTruck || w.typeVehicle == w.refs.vehicle, classTruck ? AutoClass(w) : ClassInForce(kClassAuto, w.plainClass, "", 0.0f));
+    const GaugeScale scale = GaugeScaleFor(s, scaleClass);
     const uint64_t kind = TruckKeyNumber(w.who.taken.key);
     // out of the world (the garage, the map, the viewer, a menu): the game's own calls pass, so a gearbox fitted in the
     // garage takes its gear; the gearbox keeps the truck and reads its position again on the way back (review 7, R6)
@@ -7870,7 +8019,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         }
         // the engine's torque curve: its own profile's (Gauges\\engines), else the class's; a naturally aspirated one
         // has no boost, no turbo sounds and no boost dial
-        const int autoClass = AutoClass(w, s.tachClass);
+        const int autoClass = AutoClass(w);
         const TorqueCurve curve = EngineCurveOf(w.profile, kClassCurves[autoClass], scale.redline);
         const bool natural = w.profile.aspiration == kAspNatural;
         // the boost (review 12's model: the class's turbo under BoostProfile and BoostMax, the engine's fuel), before the
@@ -7929,14 +8078,14 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         // has none, so the default never flips a pass after the truck is found. Then the tanks start full
         {
             const bool airWas = w.airOn;
-            w.airOn = w.typeVehicle == w.refs.vehicle && AirBrakesOn(s, AutoClass(w, s.tachClass));
+            w.airOn = w.typeVehicle == w.refs.vehicle && AirBrakesOn(s, AutoClass(w));
             if (w.airOn != airWas || w.airSaid != w.refs.vehicle)
             {
                 if (w.typeVehicle == w.refs.vehicle)
                 {
                     w.airSaid = w.refs.vehicle;
                     Log(L"air brakes: %s for vehicle %llx (%s)", w.airOn ? L"on" : L"off", (unsigned long long)w.refs.vehicle,
-                        s.airBrakes >= 0 ? L"its box on the Engine tab" : w.ownScales ? L"the class of its own scales" : L"the class by its type in the game files and its weight");
+                        s.airBrakes >= 0 ? L"its box on the Engine tab" : w.pickedClass >= kClassTruck ? L"the class picked for it" : L"the class by its type in the game files and its weight");
                 }
             }
         }
@@ -9113,7 +9262,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         if (w.refs.vehicle != w.engineVehicle || (!w.engine.found && now >= w.engineAt)) EngineLook(w, m, now, s.probe != 0);
         // the gearbox: for each truck as it is first driven, and again when its gears change (another fitted in the garage)
         if (w.refs.vehicle != w.gearboxVehicle || raw.gearSpeeds != w.gearSpeeds || memcmp(raw.gearSpeed, w.gearSpeed, sizeof w.gearSpeed))
-            GearboxLook(w, m, raw, AutoClass(w, s.tachClass));
+            GearboxLook(w, m, raw, AutoClass(w));
         // what the temperature costs the engine: the whole points wait in owed until they are written. Nothing comes
         // together while the game's window is not in front, as the game may stand still then with its last values.
         // over-revving (BRIEF_overrev_downshift.md): this pass's share, taken once
@@ -10154,9 +10303,10 @@ static DWORD WINAPI Run(void *)
         if (InterlockedExchange(&g_truckDropAsked, 0) && set.own)
         {
             // the tab's button
+            const bool mine = set.scalesTruck;
             SettingsDrop(set);
             SettingsPublish(s);
-            Log(L"truck: %S gave up its own scales and takes the plain ones", set.key);
+            Log(L"truck: %S gave up %s scales and takes %s", set.key, mine ? L"its own" : L"the scales of its kind", set.own ? L"the scales of its kind" : L"the plain ones");
             LogSettings(s);
             edited = true;
         }
@@ -10571,7 +10721,9 @@ static DWORD WINAPI Run(void *)
         // what the cluster shows: the truck being driven; with the ini's Demo, demo values while none is
         TruckRaw raw;
         World world;
-        watch.ownScales = set.own;
+        // the class: what the pass resolves it from, and its last answer into the settings for the dials and the logs
+        watch.pickedClass = set.own ? set.s.tachClass : kClassAuto, watch.plainClass = set.plain.tachClass;
+        set.s.scaleClass = inForce.scaleClass = watch.scaleClass;
         // the engine's settings for the truck, engine and gearbox fitted: read again when any of them changes (an
         // engine changed in the garage goes by the next level until an edit writes its own key), in force each pass
         // (the engine's and the gearbox's names only once they are this vehicle's, not the truck's driven before)
@@ -10584,6 +10736,7 @@ static DWORD WINAPI Run(void *)
         }
         EngineApply(eng, watch);
         const bool driving = TruckPass(watch, memory, inForce, front, raw, world);
+        set.s.scaleClass = inForce.scaleClass = watch.scaleClass; // this pass's class, for everything drawn and said below
         wasDriving = driving;
         GearDisplayPass(s, watch.found ? watch.refs.vehicle : 0, memory);
         // the flag that rose names itself (the Reviewer's should 6 on BRIEF_cluster_under_windows.md)
@@ -10751,16 +10904,18 @@ static DWORD WINAPI Run(void *)
                 taken = TakeOverBoth(truck.key, oldId, truck.id);
             }
             SettingsFor(set, truck.key, truck.id);
+            // the new truck's class: its weight and type were tried at the top of the pass that read it
+            watch.pickedClass = set.own ? set.s.tachClass : kClassAuto, watch.plainClass = set.plain.tachClass;
+            const int autoClass = truck.key[0] ? AutoClass(watch) : ClassInForce(kClassAuto, watch.plainClass, "", 0.0f);
+            set.s.scaleClass = watch.scaleClass = autoClass;
             SettingsPublish(s);
             const GaugeScale k = GaugeScaleOf(s);
-            watch.ownScales = set.own;
-            const int autoClass = AutoClass(watch, s.tachClass);
             if (truck.key[0])
                 Log(L"truck: this is %S%s, the game's id for it %S (vehicle %p); %s: idle %.0f rpm, red zone from %.0f of %.0f, speedometer to %.0f km/h; the automatic "
                     L"goes by the %s class%s; the engine's lift at most %g (the class's roof, fading over each gear's last fifth)",
                     truck.key, truck.named ? L"" : L" (the name of its kind was not read, so it goes by its build)", truck.id[0] ? truck.id : "not read",
-                    (void *)truckVehicle, set.own ? L"it has scales of its own" : L"it has no scales of its own and takes the plain ones", k.idle, k.redline, k.max, k.speedMax,
-                    kClassWords[autoClass], set.own ? L", its scales'" : TruckTypeSays(watch.type.text) == kTypeSaysScout ? L", its type's in the game files" : watch.mass > 0.0f ? L", its weight's" : L", the plain scales' (its weight not read)",
+                    (void *)truckVehicle, set.scalesTruck ? L"it has scales of its own" : set.own ? L"it takes the scales of its kind" : L"it has no scales of its own and takes the plain ones", k.idle, k.redline, k.max, k.speedMax,
+                    kClassWords[autoClass], watch.pickedClass >= kClassTruck ? L", the class picked for it" : TruckTypeSays(watch.type.text) == kTypeSaysScout ? L", its type's in the game files" : watch.mass > 0.0f ? L", its weight's" : L", the plain scales' (its weight not read)",
                     TorqueRoof(autoClass));
             if (truck.key[0])
             {
@@ -10867,7 +11022,7 @@ static DWORD WINAPI Run(void *)
         if (driving && watch.profileFor[0])
         {
             const GaugeScale es = GaugeScaleOf(inForce);
-            const TorqueCurve ec = EngineCurveOf(watch.profile, kClassCurves[AutoClass(watch, inForce.tachClass)], es.redline);
+            const TorqueCurve ec = EngineCurveOf(watch.profile, kClassCurves[AutoClass(watch)], es.redline);
             strncpy_s(v.engine, watch.profileFor, _TRUNCATE);
             v.engineOwn = watch.profile.own && ProfileNotStock(watch.profile);
             v.engineCustom = watch.profile.custom;
@@ -10881,7 +11036,7 @@ static DWORD WINAPI Run(void *)
             const float top = es.redline > 0.0f ? es.max / es.redline : 1.0f, from = es.redline > 0.0f ? es.idle / es.redline : 0.0f;
             for (int i = 0; i < kEnginePlot; i++) v.engineCurve[i] = TorqueAt(ec, from + (top - from) * i / (kEnginePlot - 1), top);
         }
-        v.gearHold = GearHoldOf(watch, AutoClass(watch, inForce.tachClass));
+        v.gearHold = GearHoldOf(watch, AutoClass(watch));
         v.gearHoldOwn = watch.gearHoldOwn;
         // the engine's settings per truck, for the Engine tab's box (as the Suspension tab's)
         v.engSetOwn = eng.kindOwn || eng.truckOwn;
@@ -11020,9 +11175,13 @@ static DWORD WINAPI Run(void *)
         v.camberKnown = driving && watch.camber.vehicle == watch.refs.vehicle && watch.camber.wheels > 0;
         for (int e = 0; e < 2; e++)
             v.camberEnd[e] = v.camberKnown && CamberEndFile(watch.camber, e, v.camberFile[e][0], v.camberFile[e][1]);
-        v.autoClass = AutoClass(watch, inForce.tachClass);
-        v.autoByType = driving && !watch.ownScales && TruckTypeSays(watch.type.text) == kTypeSaysScout;
-        v.autoByWeight = driving && !watch.ownScales && !v.autoByType && watch.mass > 0.0f;
+        const bool classPicked = watch.pickedClass >= kClassTruck && watch.pickedClass < kClassCount;
+        v.autoClass = driving ? AutoClass(watch) : ClassInForce(kClassAuto, inForce.tachClass, "", 0.0f);
+        v.classAuto = driving ? ClassInForce(kClassAuto, watch.plainClass, watch.type.text, watch.mass) : kClassTruck;
+        v.autoByType = driving && !classPicked && TruckTypeSays(watch.type.text) == kTypeSaysScout;
+        v.autoByWeight = driving && !classPicked && !v.autoByType && watch.mass > 0.0f;
+        v.scalesLevel = set.scalesTruck ? 2 : set.own ? 1 : 0;
+        v.scalesIdKnown = set.id[0] != 0;
         v.massKg = driving ? watch.mass : 0.0f;
         v.pullTest = watch.pullTest.state;
         v.pullPhase = watch.pullTest.phase;
@@ -11113,7 +11272,7 @@ static DWORD WINAPI Run(void *)
         else if (v.demo)
         {
             GaugeDemo(v.st, s);
-            v.st.noAir = !AirBrakesOn(inForce, inForce.tachClass); // with no truck driven: the plain scales' class, as before
+            v.st.noAir = !AirBrakesOn(inForce, ClassInForce(kClassAuto, inForce.tachClass, "", 0.0f)); // with no truck driven: the plain pick, else truck
         }
         // the clock: the game's hour and the outside temperature in force (the demo keeps its own)
         if (!v.demo)
@@ -11481,7 +11640,7 @@ static void PartIni()
     c.showClock = false;
     c.showOdometer = false;
     c.showFuelUse = false;
-    c.tachClass = kClassHeavy;
+    c.tachClass = c.scaleClass = kClassHeavy;
     c.idleRpm = 700.0f;
     c.redlineRpm = 2100.0f;
     c.maxRpm = 3500.0f;
@@ -11698,7 +11857,7 @@ static void PartIni()
     WritePrivateProfileStringW(kIniSection, L"FaceOpacity", L"5", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"Layout", L"9", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"Style", L"-3", ini.c_str());
-    WritePrivateProfileStringW(kIniSection, L"TachClass", L"12", ini.c_str());
+    WritePrivateProfileStringW(kIniSection, L"Class", L"12", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"IdleRpm", L"50", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"MaxRpm", L"-200", ini.c_str());
     WritePrivateProfileStringW(kIniSection, L"ToggleKey", L"4000", ini.c_str());
@@ -11711,7 +11870,7 @@ static void PartIni()
     WritePrivateProfileStringW(kIniSection, L"AmbientC", L"nan", ini.c_str());
     ReadIni(b);
     Check(b.scale == d.scale && b.opacity == d.opacity, "ini: \"nan\" and \"inf\" give the defaults");
-    Check(b.offsetX == 0.0f && b.faceOpacity == kFaceOpacityMax && b.layout == kLayoutStrip && b.style == kFaceOpen && b.tachClass == kClassTruck &&
+    Check(b.offsetX == 0.0f && b.faceOpacity == kFaceOpacityMax && b.layout == kLayoutStrip && b.style == kFaceOpen && b.tachClass == kClassAuto &&
           b.idleRpm == kIdleRange[0] && b.maxRpm == 0.0f && b.toggleKey == 0, "ini: values out of range are held to it");
     Check(b.rollWarnDeg == 40.0f && b.rollDangerDeg == 40.0f && b.pitchDangerDeg == kTiltRange[1], "ini: the tilt lamp's red never comes before its amber, and no angle passes 89 degrees");
     Check(b.warmUpMinutes == kWarmUpRange[0] && b.overheatMinutes == kOverheatRange[1] && b.coolDownMinutes == kCoolDownRange[0] && b.ambientC == d.ambientC,
@@ -11811,26 +11970,26 @@ static void PartIni()
     GaugeScale k = GaugeScaleOf(d);
     Check(k.idle == 650.0f && k.redline == 2200.0f && k.max == 3000.0f && k.speedMax == 100.0f, "scales: the truck class by default");
     a = d;
-    a.tachClass = kClassScout;
+    a.tachClass = a.scaleClass = kClassScout;
     k = GaugeScaleOf(a);
     Check(k.idle == 800.0f && k.redline == 5500.0f && k.max == 7000.0f && k.speedMax == 120.0f, "scales: the scout class");
     {
         // a class change: a number at the old class's own follows the new class, one set by hand stays, the class's stays the class's
         GaugeSettings sc = d;
-        sc.tachClass = kClassTruck;
+        sc.tachClass = sc.scaleClass = kClassTruck;
         sc.idleRpm = 650.0f;   // the truck class's own, written as a number
         sc.redlineRpm = 2600.0f; // set by hand
         sc.maxRpm = 0.0f;      // the class's
         sc.speedMax = 90.0f;   // set by hand
         sc.boostMax = 1.8f;    // the truck class's own
-        sc.tachClass = kClassScout;
+        sc.tachClass = sc.scaleClass = kClassScout;
         ScalesClassChange(sc, kClassTruck);
         const GaugeScale ks = GaugeScaleOf(sc);
         Check(sc.idleRpm == 0.0f && sc.redlineRpm == 2600.0f && sc.maxRpm == 0.0f && sc.speedMax == 90.0f && sc.boostMax == 0.0f && ks.idle == 800.0f &&
                   ks.max == 7000.0f && ks.boost == 1.0f,
               "scales: on a class change the numbers set by hand stay, the ones at the old class's own follow the new class");
     }
-    a.tachClass = kClassHeavy;
+    a.tachClass = a.scaleClass = kClassHeavy;
     a.maxRpm = 2750.0f;
     a.redlineRpm = 4000.0f;
     a.idleRpm = 2900.0f;
@@ -11866,6 +12025,12 @@ static void PartTrucks()
     // a truck this test never drives, and a truck's section with something in it that the mod does not know
     truckPut("someone_elses", L"RedlineRpm", L"1800");
     truckPut("mod_suv/1000001", L"FromALaterVersion", L"7");
+    // a truck without scales of its own shows the plain ones, with no class picked: the plain row's pick is not its own
+    auto asPlain = [](const SettingsState &of) {
+        GaugeSettings p = of.plain;
+        if (of.key[0]) p.tachClass = kClassAuto;
+        return SameSettings(of.s, p);
+    };
     SettingsFor(state, "");
     const bool none = !state.own && SameSettings(state.s, state.plain);
     GaugeSettings in = state.s;
@@ -11873,15 +12038,15 @@ static void PartTrucks()
     SettingsTake(state, in);
     const bool plainEdit = !state.own && !state.changed && state.plain.maxRpm == 6000.0f;
     SettingsFor(state, "mod_suv/1000001");
-    Check(none && plainEdit && !state.own && SameSettings(state.s, state.plain), "trucks: with no truck driven the tab sets the plain scales, and a truck without scales of its own shows them");
+    Check(none && plainEdit && !state.own && asPlain(state) && state.s.tachClass == kClassAuto && state.plain.tachClass == kClassScout, "trucks: with no truck driven the tab sets the plain scales, and a truck without scales of its own shows them");
     in = state.s;
     in.opacity = 0.5f;
     SettingsTake(state, in);
-    Check(!state.own && state.plain.opacity == 0.5f && SameSettings(state.s, state.plain), "trucks: a setting that is no scale is every truck's, whichever truck is driven");
+    Check(!state.own && state.plain.opacity == 0.5f && asPlain(state) && state.plain.tachClass == kClassScout, "trucks: a setting that is no scale is every truck's, whichever truck is driven");
     in = state.s;
     in.redlineRpm = 4500.0f;
     SettingsTake(state, in);
-    Check(state.own && state.changed && state.s.redlineRpm == 4500.0f && state.s.tachClass == kClassScout && state.plain.redlineRpm == 5000.0f,
+    Check(state.own && state.changed && state.s.redlineRpm == 4500.0f && state.s.tachClass == kClassAuto && state.plain.redlineRpm == 5000.0f,
           "trucks: a scale changed while a truck is driven makes the scales that truck's own and leaves the plain ones as they were");
     SettingsWrite(state);
     // a second truck, set up another way; then a setting that is no scale changed while it is driven
@@ -11904,7 +12069,7 @@ static void PartTrucks()
     SettingsState next = {};
     ReadIni(next.plain);
     SettingsFor(next, "mod_suv/1000001");
-    const bool moddedBack = next.own && next.s.redlineRpm == 4500.0f && next.s.tachClass == kClassScout && next.s.maxRpm == 6000.0f && next.s.speedMax == 0.0f && next.s.boostMax == 0.0f && next.s.scale == 1.5f;
+    const bool moddedBack = next.own && next.s.redlineRpm == 4500.0f && next.s.tachClass == kClassAuto && next.s.maxRpm == 6000.0f && next.s.speedMax == 0.0f && next.s.boostMax == 0.0f && next.s.scale == 1.5f;
     SettingsFor(next, "chevrolet_ck1500");
     Check(SameSettings(next.plain, state.plain) && moddedBack && next.own && next.s.tachClass == kClassHeavy && next.s.speedMax == 70.0f && next.s.boostMax == 1.45f &&
           GaugeScaleOf(next.s).boost == 1.45f && next.s.boostProfile == kSpoolLaggy && next.s.redlineRpm == 5000.0f,
@@ -11916,15 +12081,15 @@ static void PartTrucks()
     // a section that holds one of the seven takes the others from [Gauges]; what is out of range is held to it
     truckPut("half", L"MaxRpm", L"4000");
     truckPut("wild", L"RedlineRpm", L"50");
-    truckPut("wild", L"TachClass", L"9");
+    truckPut("wild", L"Class", L"9");
     truckPut("wild", L"IdleRpm", L"nan");
     truckPut("wild", L"BoostProfile", L"9");
     SettingsFor(next, "wild");
-    const bool wild = next.own && next.s.redlineRpm == kRedlineRange[0] && next.s.tachClass == kClassTruck && next.s.idleRpm == next.plain.idleRpm &&
+    const bool wild = next.own && next.s.redlineRpm == kRedlineRange[0] && next.s.tachClass == kClassAuto && next.s.idleRpm == next.plain.idleRpm &&
                       next.s.boostProfile == kSpoolStandard;
     SettingsFor(next, "half");
-    Check(wild && next.own && !next.changed && next.s.maxRpm == 4000.0f && next.s.redlineRpm == 5000.0f && next.s.tachClass == kClassScout,
-          "trucks: a file takes from [Gauges] what it leaves out, and its values are held to their ranges as those of [Gauges] are");
+    Check(wild && next.own && !next.changed && next.s.maxRpm == 4000.0f && next.s.redlineRpm == 5000.0f && next.s.tachClass == kClassAuto,
+          "trucks: a file takes from [Gauges] the numbers it leaves out, and its values are held to their ranges as those of [Gauges] are; its class is Auto where none is picked in it, never the plain row's");
     // a save after a change of something else leaves such a section as it is; after a change of a scale it has all seven
     wchar_t halfRed[16] = {};
     in = next.s;
@@ -11945,10 +12110,10 @@ static void PartTrucks()
     // the truck gives its scales up: they go out of the ini, what else its section holds stays, and a section left empty goes
     SettingsFor(next, "mod_suv/1000001");
     SettingsDrop(next);
-    const bool dropped = !next.own && SameSettings(next.s, next.plain);
+    const bool dropped = !next.own && asPlain(next);
     SettingsFor(next, "mod_suv/1000001");
     GetPrivateProfileStringW(L"Truck", L"FromALaterVersion", L"", later2, 16, truckFile("mod_suv/1000001").c_str());
-    const bool moddedPlain = !next.own && SameSettings(next.s, next.plain) && !wcscmp(later2, L"7");
+    const bool moddedPlain = !next.own && asPlain(next) && !wcscmp(later2, L"7");
     SettingsFor(next, "chevrolet_ck1500");
     SettingsDrop(next);
     wchar_t rest[64] = {};
@@ -13091,6 +13256,156 @@ static void PartOwned()
         SettingsFor(d, "");
         SettingsWrite(d);
         DeleteFileW(df.c_str());
+    }
+    // the owned truck's level for the scales, and the class by the game's type unless one is picked
+    // (BRIEF_truck_keys_per_truck.md, the scales step, the lead's ruling 3)
+    {
+        const char *sk = "scales_own_kind", *a = "{5C000000-0000-0000-0000-000000000001}", *b = "{5C000000-0000-0000-0000-000000000002}";
+        const std::wstring sf = truckFile(sk);
+        DeleteFileW(sf.c_str());
+        auto skey = [&](const char *id, const wchar_t *name) {
+            wchar_t v[48] = {};
+            GetPrivateProfileStringW(TruckSectionOf(id).c_str(), name, L"", v, 48, sf.c_str());
+            return std::wstring(v);
+        };
+        auto there = [&](const char *id) { return truckid::SectionThere(sf, TruckSectionOf(id)); };
+        auto bytesOf = [](const std::wstring &file) {
+            std::string all;
+            FILE *f = nullptr;
+            if (!_wfopen_s(&f, file.c_str(), L"rb") && f)
+            {
+                char buf[4096];
+                for (size_t n = fread(buf, 1, sizeof buf, f); n > 0; n = fread(buf, 1, sizeof buf, f)) all.append(buf, n);
+                fclose(f);
+            }
+            return all;
+        };
+        auto take = [](SettingsState &of, const GaugeSettings &in) {
+            SettingsTake(of, in);
+            SettingsWrite(of);
+        };
+        SettingsState d = {};
+        ReadIni(d.plain);
+        const GaugeSettings plainWas = d.plain;
+        // an old file: the kind's scales with the class an older build wrote beside them. Read twice, by two ids
+        truckPut(sk, L"TachClass", L"0");
+        truckPut(sk, L"RedlineRpm", L"2400");
+        const std::string old = bytesOf(sf);
+        const int saidWas = g_oldClassSaid;
+        SettingsFor(d, sk, a);
+        SettingsFor(d, sk, b);
+        const bool oldRead = d.own && !d.scalesTruck && d.s.tachClass == kClassAuto && d.s.redlineRpm == 2400.0f && g_oldClassSaid == saidWas + 1 && !old.empty() && bytesOf(sf) == old;
+        // the same truck is a scout by its type: the scout's scales under its own number, whatever the old key said
+        const int byType = ClassInForce(d.own ? d.s.tachClass : kClassAuto, d.plain.tachClass, "SCOUT", 9000.0f);
+        const GaugeScale ks = GaugeScaleFor(d.s, byType);
+        const bool scoutByType = byType == kClassScout && ks.idle == 800.0f && ks.redline == 2400.0f && ks.max == 7000.0f && ks.speedMax == 120.0f;
+        Check(oldRead && scoutByType,
+              "truck class: a class an older version saved (TachClass) is not read as one: the scales are Auto with their numbers kept, a scout by its type shows the scout's, "
+              "one line a kind a run, and no read writes the file");
+        // Auto by the class in force, one way: the three classes' own scales
+        {
+            GaugeSettings au;
+            SettingsDefaults(au);
+            GaugeScale k3[kClassCount];
+            for (int c = 0; c < kClassCount; c++) au.scaleClass = c, k3[c] = GaugeScaleOf(au);
+            au.scaleClass = kClassAuto; // never an index: truck
+            const GaugeScale none = GaugeScaleOf(au);
+            Check(au.tachClass == kClassAuto && k3[kClassTruck].idle == 650.0f && k3[kClassTruck].redline == 2200.0f && k3[kClassTruck].max == 3000.0f && k3[kClassTruck].speedMax == 100.0f &&
+                      k3[kClassScout].idle == 800.0f && k3[kClassScout].redline == 5500.0f && k3[kClassScout].max == 7000.0f && k3[kClassScout].speedMax == 120.0f &&
+                      k3[kClassHeavy].idle == 600.0f && k3[kClassHeavy].redline == 1900.0f && k3[kClassHeavy].max == 2500.0f && k3[kClassHeavy].speedMax == 80.0f && none.redline == 2200.0f &&
+                      GaugeScaleFor(au, 9).redline == 2200.0f,
+                  "truck class: Auto is the default, and the scales go by the class in force: a truck's, a scout's and a heavy truck's own; a class out of range is truck");
+            // a number by hand through a class change from Auto and back: Auto was scout for this truck
+            GaugeSettings h = au;
+            h.idleRpm = 800.0f;     // the scout's own, written as a number
+            h.redlineRpm = 4850.0f; // by hand
+            h.tachClass = kClassTruck;
+            ScalesClassChange(h, ClassOr(kClassAuto, kClassScout));
+            const bool toTruck = h.idleRpm == 0.0f && h.redlineRpm == 4850.0f && GaugeScaleFor(h, kClassTruck).idle == 650.0f;
+            h.idleRpm = 650.0f;     // the truck's own
+            h.tachClass = kClassAuto;
+            ScalesClassChange(h, kClassTruck);
+            Check(toTruck && h.idleRpm == 0.0f && h.redlineRpm == 4850.0f && GaugeScaleFor(h, kClassScout).idle == 800.0f,
+                  "truck class: a change from Auto and back to it goes by the class Auto was for the truck: a number at that class's own follows, one set by hand stays");
+        }
+        // a number changed with the id read: the seven are this truck's, whole in its own section. The kind's stay as
+        // they were, old key and all, and a sister shows the kind's
+        SettingsFor(d, sk, a);
+        GaugeSettings in = d.s;
+        in.idleRpm = 900.0f;
+        take(d, in);
+        const bool mine = d.own && d.scalesTruck && skey(a, L"IdleRpm") == L"900" && skey(a, L"RedlineRpm") == L"2400" && skey(a, L"Class").empty() && skey(a, L"TachClass").empty() &&
+                          skey("", L"TachClass") == L"0" && skey("", L"IdleRpm").empty() && skey("", L"RedlineRpm") == L"2400";
+        SettingsFor(d, sk, b);
+        const bool sister = d.own && !d.scalesTruck && d.s.idleRpm == d.plain.idleRpm && d.s.redlineRpm == 2400.0f && !there(b);
+        // a class picked for this truck goes into its section, and over its type both ways; Auto takes the key out again
+        SettingsFor(d, sk, a);
+        const bool back = d.own && d.scalesTruck && d.s.idleRpm == 900.0f && d.s.redlineRpm == 2400.0f && d.s.tachClass == kClassAuto;
+        in = d.s, in.tachClass = kClassTruck;
+        take(d, in);
+        SettingsFor(d, sk, a);
+        const bool pickedTruck = d.scalesTruck && d.s.tachClass == kClassTruck && skey(a, L"Class") == L"0" && ClassInForce(d.s.tachClass, kClassScout, "SCOUT", 2000.0f) == kClassTruck;
+        in = d.s, in.tachClass = kClassScout;
+        take(d, in);
+        const bool pickedScout = skey(a, L"Class") == L"1" && ClassInForce(d.s.tachClass, kClassTruck, "HEAVY", 20000.0f) == kClassScout;
+        in = d.s, in.tachClass = kClassAuto;
+        take(d, in);
+        const bool autoAgain = d.scalesTruck && d.s.tachClass == kClassAuto && skey(a, L"Class").empty() && skey(a, L"IdleRpm") == L"900";
+        Check(mine && sister && back && pickedTruck && pickedScout && autoAgain,
+              "truck keys: a scale changed with the id read makes all seven this truck's in its own section, the kind's keys stay, a sister shows the kind's; a class picked is "
+              "written there (Class) and goes over the type both ways, Auto takes the key out");
+        // the truck gives its own up: its kind's again. Then the kind's: the plain ones, and the empty file goes
+        SettingsFor(d, sk, a);
+        SettingsDrop(d);
+        const bool toKind = d.own && !d.scalesTruck && d.s.redlineRpm == 2400.0f && d.s.idleRpm == d.plain.idleRpm && !there(a) && skey("", L"RedlineRpm") == L"2400";
+        SettingsDrop(d);
+        const bool toPlain = !d.own && !d.scalesTruck && d.s.redlineRpm == d.plain.redlineRpm && d.s.tachClass == kClassAuto && GetFileAttributesW(sf.c_str()) == INVALID_FILE_ATTRIBUTES;
+        // with no id read a change is the kind's, and that write takes the old key out
+        truckPut(sk, L"TachClass", L"2");
+        truckPut(sk, L"MaxRpm", L"2600");
+        SettingsFor(d, sk);
+        in = d.s, in.speedMax = 70.0f;
+        take(d, in);
+        const bool kindWrite = d.own && !d.scalesTruck && skey("", L"TachClass").empty() && skey("", L"Class").empty() && skey("", L"SpeedMax") == L"70" && skey("", L"MaxRpm") == L"2600";
+        Check(toKind && toPlain && kindWrite,
+              "truck keys: a truck that gives up its own scales shows its kind's and its section goes, the kind's given up leaves the plain ones; with no id read a change is the "
+              "kind's, and that write takes the old class key out");
+        // the truck's group is whole: laid over the plain scales, never over the kind's. Every setting back to its
+        // default takes both levels out
+        WritePrivateProfileStringW(TruckSectionOf(a).c_str(), L"IdleRpm", L"700", sf.c_str());
+        WritePrivateProfileStringW(TruckSectionOf(b).c_str(), L"IdleRpm", L"750", sf.c_str());
+        SettingsFor(d, sk, a);
+        const bool whole = d.scalesTruck && d.s.idleRpm == 700.0f && d.s.maxRpm == d.plain.maxRpm && d.s.speedMax == d.plain.speedMax;
+        SettingsToDefaults(d);
+        const bool defaults = !d.own && !d.scalesTruck && !there(a) && skey("", L"SpeedMax").empty() && skey(b, L"IdleRpm") == L"750";
+        Check(whole && defaults, "truck keys: the truck's own scales are whole, over the plain ones and never over its kind's; every setting back to its default takes them out at both levels, a sister keeps hers");
+        // Gauges.ini: an old TachClass is not read as the plain class, a read leaves the file, the next save takes the key out
+        d.plain = plainWas;
+        SettingsFor(d, "");
+        SettingsWrite(d);
+        WritePrivateProfileStringW(kIniSection, L"TachClass", L"1", ini.c_str());
+        const std::string iniOld = bytesOf(ini);
+        GaugeSettings fromOld;
+        ReadIni(fromOld);
+        const bool plainRead = fromOld.tachClass == kClassAuto && g_oldPlainClass && bytesOf(ini) == iniOld;
+        fromOld.tachClass = kClassHeavy;
+        WriteIni(fromOld);
+        wchar_t cls[8] = {}, oldCls[8] = {};
+        GetPrivateProfileStringW(kIniSection, L"Class", L"", cls, 8, ini.c_str());
+        GetPrivateProfileStringW(kIniSection, L"TachClass", L"", oldCls, 8, ini.c_str());
+        GaugeSettings fromNew;
+        ReadIni(fromNew);
+        const bool plainPick = !wcscmp(cls, L"2") && !oldCls[0] && fromNew.tachClass == kClassHeavy;
+        fromNew.tachClass = kClassAuto;
+        WriteIni(fromNew);
+        GetPrivateProfileStringW(kIniSection, L"Class", L"x", cls, 8, ini.c_str());
+        Check(plainRead && plainPick && !wcscmp(cls, L"x"),
+              "truck class: an old TachClass in Gauges.ini is not the plain class and a read leaves the file; a class picked on the plain row is written as Class and read back, Auto has no key");
+        g_oldPlainClass = false;
+        d.plain = plainWas;
+        SettingsFor(d, "");
+        SettingsWrite(d);
+        DeleteFileW(sf.c_str());
     }
 }
 
@@ -14577,7 +14892,7 @@ static void PartProfiles()
         Check(secs == L"Profile|Truck|Drive|Suspension|Engine|" && text.find(Wide(id1)) == std::wstring::npos && text.find(L"Seen") == std::wstring::npos && text.find(L"Odometer=") == std::wstring::npos &&
                   text.find(L"prof_eng_a") == text.rfind(L"prof_eng_a") && raw.size() > 2 && (unsigned char)raw[0] == 0xFF && (unsigned char)raw[1] == 0xFE,
               "profiles: the file has the five sections and nothing else: no id of the truck, no [Seen], no count of the odometer, no section of a gearbox, the engine named once in the head");
-        Check(key(first, L"Truck", L"TachClass") == L"2" && key(first, L"Truck", L"IdleRpm") == L"650" && key(first, L"Truck", L"RoadCdA") == L"7.25" && key(first, L"Truck", L"AirAxles") == L"rear" &&
+        Check(key(first, L"Truck", L"Class") == L"2" && key(first, L"Truck", L"TachClass").empty() && key(first, L"Truck", L"IdleRpm") == L"650" && key(first, L"Truck", L"RoadCdA") == L"7.25" && key(first, L"Truck", L"AirAxles") == L"rear" &&
                   key(first, L"Truck", L"OdometerHours") == L"1" && key(first, L"Truck", L"AirBrakes") == L"1" && key(first, L"Drive", L"DiffType") == L"2" && key(first, L"Drive", L"DiffAxle2") == L"3" &&
                   key(first, L"Suspension", L"SpringFront") == L"2.5" && key(first, L"Engine", L"Torque") == L"80" && key(first, L"Engine", L"GearHold") == L"1.5" &&
                   key(first, L"Engine", L"PeakTorqueRpm") == L"1400" && key(first, L"Engine", L"Fuel") == L"diesel",
@@ -14640,10 +14955,26 @@ static void PartProfiles()
         const bool kindLeft = !ReadTruckIni(kind, k) && ReadTruckSusp(kind, su, "") == kSuspNone && TruckAirAt(kind, "") < 0 && !OdoHoursOf(kind) && AirFileKind(kind) < 0 &&
                               !TruckKeyThere(kind, L"DiffType") && !TruckKeyThere(kind, L"DiffAxle2");
         const std::wstring mine = TruckSectionOf(id1);
+        const bool scalesMine = st.own && st.scalesTruck && st.s.tachClass == kClassHeavy && st.s.idleRpm == 650.0f && key(SetupFile(kSetupTruck, kind), mine.c_str(), L"Class") == L"2" &&
+                                key(SetupFile(kSetupTruck, kind), mine.c_str(), L"RedlineRpm") == L"2100" && key(SetupFile(kSetupTruck, kind), mine.c_str(), L"BoostProfile") == L"1";
         const bool diffMine = st.diffTruck && st.s.diffType == kDiffLimited && st.s.diffAxle[1] == kDiffLocked && key(SetupFile(kSetupTruck, kind), mine.c_str(), L"DiffType") == L"2" &&
                               key(SetupFile(kSetupTruck, kind), mine.c_str(), L"DiffAxle2") == L"3";
-        Check(taken && truckLevel && diffMine && kindLeft && says("Taken: the diff types, the suspension, Air brakes, Engine torque, the gear hold, the engine profile.") && says("The settings of the kind were left."),
-              "profiles: Import takes what has a level of the truck (the diff types, the suspension, Air brakes, the engine's figures) into its own sections; the kind's keys are left and the line says so");
+        Check(taken && truckLevel && diffMine && scalesMine && kindLeft && says("Taken: the class and scales, the diff types, the suspension, Air brakes, Engine torque, the gear hold, the engine profile.") &&
+                  says("The settings of the kind were left."),
+              "profiles: Import takes what has a level of the truck (the class and scales, the diff types, the suspension, Air brakes, the engine's figures) into its own sections; the kind's keys are left and the line says so");
+        // a profile an older version made: its TachClass is a known key and no class, so the scales are taken as Auto
+        {
+            const std::wstring oldProf = folder + L"\\prof_kind - Old.ini";
+            CopyFileW(first.c_str(), oldProf.c_str(), FALSE);
+            put(oldProf, L"Truck", L"Class", nullptr), put(oldProf, L"Truck", L"TachClass", L"1");
+            fresh();
+            drive(kind, id1, "prof_eng_a", "prof_gb_a");
+            const bool oldTaken = run(kProfAskImportTruck, "prof_kind - Old.ini");
+            Check(oldTaken && st.scalesTruck && st.s.tachClass == kClassAuto && st.s.idleRpm == 650.0f && key(SetupFile(kSetupTruck, kind), mine.c_str(), L"Class").empty() &&
+                      key(SetupFile(kSetupTruck, kind), mine.c_str(), L"TachClass").empty() && says("Taken: the class and scales") && !says("unknown"),
+                  "profiles: a profile with the class key of an older version is taken with the class at Auto, the key counted as known and written nowhere");
+            DeleteFileW(oldProf.c_str());
+        }
         fresh();
         drive(kind, "", "prof_eng_a", "prof_gb_a");
         const int backupsWere = files(backups);
@@ -14830,7 +15161,7 @@ static void PartProfiles()
         GaugeSettings none = st.plain;
         none.diffType = -1;
         const bool dropped = !ReadTruckIni(kind, none) || (none.tachClass == st.plain.tachClass && none.diffType < 0 && none.diffAxle[1] < 0);
-        Check(dropped && says("the plain scales") && says("the diff types") && !TruckKeyThere(kind, L"TachClass") && !TruckKeyThere(kind, L"DiffType") && TruckKeyThere(kind, L"RoadCdA"),
+        Check(dropped && says("the plain scales") && says("the diff types") && !TruckKeyThere(kind, L"Class") && !TruckKeyThere(kind, L"IdleRpm") && !TruckKeyThere(kind, L"DiffType") && TruckKeyThere(kind, L"RoadCdA"),
               "profiles: a profile of a truck with the plain scales and no diff types of its own takes the kind's own scales and diff rows away, and leaves its other keys");
         DeleteFileW(plain.c_str());
 

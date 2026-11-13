@@ -8,7 +8,7 @@
 #include "models.h"
 void GaugeLog(const wchar_t *, ...) {}
 int main(int argc, char**argv){
-  GaugeSettings s; SettingsDefaults(s); s.tachClass=kClassScout; s.idleRpm=800; s.redlineRpm=4850; SettingsClamp(s); GaugeScale k=GaugeScaleOf(s);
+  GaugeSettings s; SettingsDefaults(s); s.tachClass = s.scaleClass = kClassScout; s.idleRpm=800; s.redlineRpm=4850; SettingsClamp(s); GaugeScale k=GaugeScaleOf(s);
   FILE*f=fopen(argv[1],"r"); char line[2048]; float last=-1; TachModel tach={}; BoostModel boost={}; TempModel temp={}; PowertrainModel pw={}; GearboxModel box={};
   int prevGear=0; float lastShiftAt=-100; int lastDir=0; int hunts=0, shifts=0; int printed=0;
   int gameGear=0, oursGear=0; float oursLastAt=-100; int oursLastDir=0, oursHunts=0, oursShifts=0, oursStopHunts=0, gameStopHunts=0; float lastSpin=0; float gameLastAt=-100; int gameLastDir=0, gameHunts=0, gameShifts=0;
