@@ -2709,4 +2709,11 @@ void WheelCapCountsGet(WheelCapCounts &out)
     out.ceiling = BitsFloat(g_capCeiling);
 }
 
+void WheelCapCeilingGet(uint64_t &vehicle, long &steps, float &ceiling)
+{
+    vehicle = (uint64_t)g_capKeptVehicle;
+    steps = g_capSteps;
+    ceiling = BitsFloat(g_capCeiling);
+}
+
 long GearboxKicks() { return g_kicks; }

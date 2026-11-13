@@ -309,6 +309,43 @@ inline void TachStep(TachModel &m, const TruckRaw &t, const GaugeScale &k, float
     m.live = m.rpm; // not handed to the game from here; TachFollow goes on from it
 }
 
+// The needle's stop: as far past the red zone as it ever shows (TachFollow holds it there).
+inline float TachStop(const GaugeScale &k) { return k.idle + (k.redline - k.idle) * kTachOverrun; }
+
+// The engine speed the needle heads for in a position with a wheel cap, the clutch locked (BRIEF_drive_1112_findings.md
+// part 1). spin: the driven wheels' mean in the gear's direction, top: the gear's top, ceiling: the cap's ceiling in
+// force, all rad/s. At or under the top the wheels' share of the red zone's start, as the clutch model has it. Past it
+// the wheels' place between the top and the ceiling takes the needle from the red zone's start to its stop, so it
+// moves through the whole slip room and is not at the stop from 1.07 of the top on. With no usable ceiling (0, no
+// number, at or under the top) the share goes on as before and TachFollow holds it at the stop.
+inline float SlipRoomRpm(float spin, float top, float ceiling, const GaugeScale &k)
+{
+    if (!(top > 0.0f)) return 0.0f;
+    const float plain = spin / top * k.redline;
+    if (!(spin > top) || !isfinite(ceiling) || !(ceiling > top)) return plain;
+    return k.redline + (TachStop(k) - k.redline) * SettingsRange((spin - top) / (ceiling - top), 0.0f, 1.0f);
+}
+
+// The ceiling the law may use: the hook's last, only where the hook's truck is the driven one and it stepped since the
+// last pass; else 0, none.
+inline float SlipRoomCeiling(float ceiling, uint64_t capVehicle, uint64_t driven, bool fresh)
+{
+    return fresh && driven && capVehicle == driven && isfinite(ceiling) && ceiling > 0.0f ? ceiling : 0.0f;
+}
+
+// How the needle's target came about on a pass, for the probe's line.
+enum { kNeedleGame, kNeedleConverter, kNeedleClutch, kNeedleSlipRoom };
+struct NeedleRule
+{
+    int rule;                 // kNeedle...
+    float heading;            // the engine speed the needle heads for, before the stop and the lag
+    float spin, top, ceiling; // the slip room's three, rad/s
+};
+inline const char *NeedleRuleName(int rule)
+{
+    return rule == kNeedleConverter ? "the converter" : rule == kNeedleClutch ? "the clutch" : rule == kNeedleSlipRoom ? "the slip room" : "the game's gears";
+}
+
 // One step of the needle towards an engine speed worked out elsewhere (the converter of the mod's automatic, while it
 // drives the game's gears), with the needle's own lag; starting, stalling and stopped as TachTarget has them, and no
 // further past the red zone than wheelspin takes it there (kTachOverrun): the converter's speed has no top of its own.
@@ -320,7 +357,7 @@ inline void TachFollow(TachModel &m, const TruckRaw &t, const GaugeScale &k, flo
     // goes by the needle before the stall's dip (the Reviewer's S1); a start's TachTarget has the dip in it already
     float live = t.startTimer > 0.0f && !(t.flags & 2) && alive > 0.1f ? target / (alive * alive) : target;
     target *= alive * alive;
-    const float overrun = k.idle + (k.redline - k.idle) * kTachOverrun;
+    const float overrun = TachStop(k);
     target = fminf(target, overrun);
     live = fminf(live, overrun);
     m.gear = t.gearEngaged;
@@ -4045,13 +4082,18 @@ inline void DamageProbeText(const TruckRaw &t, const EngineRecord &e, const Dama
 }
 
 // The models' numbers in a line of text for the probe log.
-inline void ModelProbeText(const TruckRaw &t, const TachModel &tach, const RangeModel &range, const GaugeScale &k, char *out, size_t size)
+// rule: how the needle's target came about on this pass (none given: the game's gears' rule, TachTarget).
+inline void ModelProbeText(const TruckRaw &t, const TachModel &tach, const RangeModel &range, const GaugeScale &k, char *out, size_t size, const NeedleRule *rule = nullptr)
 {
-    char km[32] = "none yet";
+    char km[32] = "none yet", by[160];
     if (range.rangeKm >= 0.0f) _snprintf_s(km, _TRUNCATE, "%.1f km", range.rangeKm);
+    const int how = rule ? rule->rule : kNeedleGame;
+    if (how == kNeedleSlipRoom)
+        _snprintf_s(by, _TRUNCATE, " by the slip room: the wheels %.2f rad/s between the gear's top %.2f and the ceiling %.2f", rule->spin, rule->top, rule->ceiling);
+    else _snprintf_s(by, _TRUNCATE, " by %s", NeedleRuleName(how));
     _snprintf_s(out, size, _TRUNCATE,
-              "engine speed %.0f rpm, heading for %.0f (pedal %.2f, wheels %.2f rad/s of the gear's %.2f) | range %s: %.3f l/km over %.0f m, %.2f l burned on %.0f m driven | "
+              "engine speed %.0f rpm, heading for %.0f%s (pedal %.2f, wheels %.2f rad/s of the gear's %.2f) | range %s: %.3f l/km over %.0f m, %.2f l burned on %.0f m driven | "
               "burn %.2f l/min by the game's rule, %.2f l/min measured standing",
-              tach.rpm, TachTarget(t, k), TruckPedal(t), TruckDrivenSpin(t), TruckGearTop(t, t.gearEngaged), km, range.perKm, range.way - range.mark[0].way, range.used,
-              range.way, TruckFuelRate(t), range.standing);
+              tach.rpm, rule ? rule->heading : TachTarget(t, k), by, TruckPedal(t), TruckDrivenSpin(t), TruckGearTop(t, t.gearEngaged), km, range.perKm,
+              range.way - range.mark[0].way, range.used, range.way, TruckFuelRate(t), range.standing);
 }

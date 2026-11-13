@@ -3883,6 +3883,104 @@ int main(int argc, char **argv)
     ModelProbeText(t, m, r, k, text, sizeof text);
     Check(strstr(text, "wheels 8.50 rad/s of the gear's 17.00") && strstr(text, "pedal 1.00") && strstr(text, "l/min by the game's rule"), "probe: the models' line carries their numbers");
 
+    // the needle in the slip room (BRIEF_drive_1112_findings.md part 1 with its addendum)
+    {
+        const float top = 8.0f, ceil = 20.0f, stop = TachStop(k), red = k.redline;
+        // M1: under the top and at it, the clutch model's own figure to the bit
+        const bool under = SlipRoomRpm(0.5f * top, top, ceil, k) == 0.5f * top / top * red && SlipRoomRpm(top, top, ceil, k) == top / top * red &&
+                           SlipRoomRpm(0.0f, top, ceil, k) == 0.0f && SlipRoomRpm(-2.0f, top, ceil, k) == -2.0f / top * red;
+        const bool middle = Near(SlipRoomRpm(0.5f * (top + ceil), top, ceil, k), 0.5f * (red + stop), 0.01f);
+        const bool atStop = SlipRoomRpm(ceil, top, ceil, k) == stop && SlipRoomRpm(2.0f * ceil, top, ceil, k) == stop;
+        // no usable ceiling: as before, the share, which TachFollow holds at the stop
+        const float past = 1.5f * top;
+        const bool none = SlipRoomRpm(past, top, 0.0f, k) == past / top * red && SlipRoomRpm(past, top, NAN, k) == past / top * red &&
+                          SlipRoomRpm(past, top, top, k) == past / top * red && SlipRoomRpm(past, top, 0.5f * top, k) == past / top * red &&
+                          SlipRoomRpm(past, top, INFINITY, k) == past / top * red && past / top * red > stop && SlipRoomRpm(past, 0.0f, ceil, k) == 0.0f;
+        bool roomRising = true;
+        float last = -1.0f;
+        for (float wheels = 0.0f; wheels <= 1.2f * ceil; wheels += 0.05f)
+        {
+            const float n = SlipRoomRpm(wheels, top, ceil, k);
+            if (n < last || n > stop) roomRising = false;
+            last = n;
+        }
+        // a reverse gear: the wheels come in the gear's direction, so the same law (the top of a reverse gear is its own)
+        TruckRaw rv = Truck();
+        Drive(rv, -1, false, 1.5f, 1.0f);
+        const float rTop = TruckGearTop(rv, -1), rSpin = TruckDrivenSpinGeared(rv);
+        const bool reverse = rTop > 0.0f && Near(rSpin, 1.5f * rTop, 0.001f) && Near(SlipRoomRpm(rSpin, rTop, 2.0f * rTop, k), 0.5f * (red + stop), 0.5f);
+        Check(under && middle && atStop && none && roomRising && reverse,
+              "slip room: under the gear's top the needle's figure is the clutch's to the bit, past it it goes from the red zone's start to the stop by the wheels' place under the ceiling, and with no usable ceiling as before");
+
+        // the fall and the rise through TachFollow: the wheels from the ceiling to the top over two seconds, pedal 0
+        TruckRaw g = Truck();
+        Drive(g, 2, false, 1.0f, 0.0f);
+        TachModel fall = {};
+        for (float at = 0.0f; at < 2.0f; at += kDt) TachFollow(fall, g, k, SlipRoomRpm(ceil, top, ceil, k), kDt);
+        const bool startsAtStop = Near(fall.rpm, stop, 1.0f);
+        bool falls = true, pinnedBefore = true;
+        TachModel old = fall;
+        float was = fall.rpm;
+        int step = 0;
+        for (float at = 0.0f; at < 2.0f; at += kDt, step++)
+        {
+            const float wheels = ceil + (top - ceil) * (at + kDt) / 2.0f;
+            TachFollow(fall, g, k, SlipRoomRpm(wheels, top, ceil, k), kDt);
+            TachFollow(old, g, k, wheels / top * red, kDt); // before: the clutch model's engine
+            if (!(fall.rpm < was)) falls = false;
+            if (at < 1.5f && !Near(old.rpm, stop, 1.0f)) pinnedBefore = false;
+            was = fall.rpm;
+        }
+        const bool endsAtRed = fall.rpm < red + 0.35f * (stop - red) && fall.rpm >= red - 1.0f;
+        TachModel rise = fall;
+        bool rises = true;
+        for (float at = 0.0f; at < 2.0f; at += kDt)
+        {
+            const float needleWas = rise.rpm, wheels = top + (ceil - top) * (at + kDt) / 2.0f;
+            TachFollow(rise, g, k, SlipRoomRpm(wheels, top, ceil, k), kDt);
+            if (rise.rpm < needleWas || rise.rpm > stop + 0.01f) rises = false;
+        }
+        Check(startsAtStop && falls && pinnedBefore && endsAtRed && rises && rise.rpm > fall.rpm,
+              "slip room: the needle falls at every step as the wheels fall from the ceiling to the gear's top, where it stood at the stop before, and rises with them, never over the stop");
+
+        // M2: the ceiling only of the driven truck and only fresh
+        Check(SlipRoomCeiling(ceil, 0x1000, 0x1000, true) == ceil && SlipRoomCeiling(ceil, 0x2000, 0x1000, true) == 0.0f && SlipRoomCeiling(ceil, 0x1000, 0x1000, false) == 0.0f &&
+                  SlipRoomCeiling(ceil, 0, 0, true) == 0.0f && SlipRoomCeiling(NAN, 0x1000, 0x1000, true) == 0.0f && SlipRoomCeiling(0.0f, 0x1000, 0x1000, true) == 0.0f &&
+                  SlipRoomRpm(past, top, SlipRoomCeiling(ceil, 0x2000, 0x1000, true), k) == past / top * red,
+              "slip room: a ceiling of another vehicle or one not fresh is not used, and the needle then goes as before");
+
+        // M3: the over-rev's rate is the same whatever the needle shows, and the clutch model's engine is not the law's
+        GaugeSettings set;
+        SettingsDefaults(set);
+        TempModel warm = {};
+        DamageModel atStopWear = {}, inRoomWear = {};
+        TruckRaw c = Truck();
+        Drive(c, 2, false, 1.0f, 1.0f);
+        for (float at = 0.0f; at < 30.0f; at += kDt)
+        {
+            DamageStep(atStopWear, 1, c, warm, stop / red, set, kDt, 1.4f, 1.1f);
+            DamageStep(inRoomWear, 1, c, warm, SlipRoomRpm(0.5f * (top + ceil), top, ceil, k) / red, set, kDt, 1.4f, 1.1f);
+        }
+        TorqueCurve curve = kClassCurves[kClassTruck];
+        ClutchModel cm = {};
+        TruckRaw fast = Truck();
+        Drive(fast, 2, false, 1.5f, 1.0f);
+        for (float at = 0.0f; at < 2.0f; at += kDt) ClutchStep(cm, fast, k, curve, 0.0f, 1.0f, 1.0f, false, kDt);
+        const float engine = cm.rpm, fTop = TruckGearTop(fast, 2);
+        const float shown = SlipRoomRpm(cm.input / k.redline * fTop, fTop, 2.0f * fTop, k);
+        Check(atStopWear.over > 0.0f && atStopWear.over == inRoomWear.over && cm.locked && cm.rpm == engine && Near(engine, 1.5f * red, 1.0f) && Near(shown, 0.5f * (red + stop), 0.5f),
+              "slip room: the over-rev's rate is the same at either needle, and the clutch model's engine stays the wheels' share while the needle shows the room");
+
+        // the probe's line names the rule
+        NeedleRule room = { kNeedleSlipRoom, 2050.0f, 12.0f, 8.0f, 20.0f }, clutch = { kNeedleClutch, 1500.0f };
+        char roomText[700], clutchText[700];
+        ModelProbeText(t, m, r, k, roomText, sizeof roomText, &room);
+        ModelProbeText(t, m, r, k, clutchText, sizeof clutchText, &clutch);
+        Check(strstr(roomText, "heading for 2050 by the slip room: the wheels 12.00 rad/s between the gear's top 8.00 and the ceiling 20.00 (pedal") &&
+                  strstr(clutchText, "heading for 1500 by the clutch (pedal") && strstr(text, " by the game's gears (pedal") && strstr(roomText, "measured standing"),
+              "slip room: the probe's line says what the needle heads for and by which rule, with the wheels, the top and the ceiling in the room");
+    }
+
     // the sound of a lift: how loud and how fast
     {
         LiftSound ls;

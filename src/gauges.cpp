@@ -4735,6 +4735,8 @@ struct TruckWatch
     TorqueCutCounts cutWas;     // the detour's counts at the last probe line
     HeldSlip slip;              // HeldGearSlip's choice in force for the gear held, apart from the choice set (gearbox_model.h, HeldSlipStep)
     float slotCap;              // the wheel cap the slot went out with on this pass, 0 none or no cut
+    NeedleRule needle;          // how the needle's target came about on this pass, for the probe's line
+    long needleSteps;           // the cap's steps as counted at the last pass: its ceiling counts for the needle only on a pass where they rose
     WheelCapCounts capWas;      // the wheel cap's at the last probe line
     PushCounts pushWas;         // the chassis push's at the last probe line
     ULONGLONG pushProbeAt;      // its next probe line
@@ -6977,9 +6979,43 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         // the needle: while the mod's gearbox is in A, its converter's engine speed (of the last pass); in a position of
         // its own, the clutch model's, so the needle and the torque curve the game gets go by the one engine the clutch
         // sets (review 11: they went by the wheels' share and a pedal lift that worked with the clutch pressed too)
-        if (w.take.driving && !GearboxManual(w)) TachFollow(w.tach, raw, scale, w.gearbox.rpm, dt);
-        else if (w.take.driving && w.clutch.running) TachFollow(w.tach, raw, scale, w.clutch.rpm, dt);
-        else TachStep(w.tach, raw, scale, dt);
+        // In a position with a wheel cap, the clutch locked and the wheels past the gear's top, the needle goes by the
+        // wheels' place in the slip room (SlipRoomRpm): the clutch model's engine has no top of its own there and the
+        // needle stood at its stop for the whole room. The clutch model's own engine is left as it is
+        {
+            uint64_t capVehicle = 0;
+            long capSteps = 0;
+            float capCeiling = 0.0f;
+            WheelCapCeilingGet(capVehicle, capSteps, capCeiling);
+            const bool capFresh = capSteps != w.needleSteps;
+            w.needleSteps = capSteps;
+            w.needle = NeedleRule{ kNeedleGame, 0.0f, 0.0f, 0.0f, 0.0f };
+            if (w.take.driving && !GearboxManual(w))
+            {
+                w.needle.rule = kNeedleConverter, w.needle.heading = w.gearbox.rpm;
+                TachFollow(w.tach, raw, scale, w.gearbox.rpm, dt);
+            }
+            else if (w.take.driving && w.clutch.running)
+            {
+                float rpm = w.clutch.rpm;
+                w.needle.rule = kNeedleClutch;
+                const float top = TruckGearTop(raw, raw.gearEngaged), ceiling = SlipRoomCeiling(capCeiling, capVehicle, w.refs.vehicle, capFresh);
+                if (w.clutch.locked && w.slotCap > 0.0f && top > 0.0f && scale.redline > 0.0f && w.clutch.input > scale.redline && ceiling > top)
+                {
+                    // the wheels as the clutch model had them, so the two meet at the gear's top
+                    const float spin = w.clutch.input / scale.redline * top;
+                    rpm = SlipRoomRpm(spin, top, ceiling, scale);
+                    w.needle.rule = kNeedleSlipRoom, w.needle.spin = spin, w.needle.top = top, w.needle.ceiling = ceiling;
+                }
+                w.needle.heading = rpm;
+                TachFollow(w.tach, raw, scale, rpm, dt);
+            }
+            else
+            {
+                w.needle.heading = TachTarget(raw, scale);
+                TachStep(w.tach, raw, scale, dt);
+            }
+        }
         // the engine's torque curve: its own profile's (Gauges\\engines), else the class's; a naturally aspirated one
         // has no boost, no turbo sounds and no boost dial
         const int autoClass = AutoClass(w, s.tachClass);
@@ -8273,11 +8309,11 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                   TempZone(w.temp) != w.probedZone || DamageAdding(w.damage, s) != w.probedAdding ||
                   w.boost.flutters + w.boost.blowOffs != w.probedLifts))
     {
-        char first[640], second[1024], third[512], fourth[256], fifth[640], sixth[1024], seventh[400], eighth[900], ninth[1024], tenth[400], eleventh[320], twelfth[256];
+        char first[640], second[1024], third[700], fourth[256], fifth[640], sixth[1024], seventh[400], eighth[900], ninth[1024], tenth[400], eleventh[320], twelfth[256];
         // while the mod's gearbox has the truck the letter is the model's, as the cluster's (the flag is down, so the
         // game's own rule would read the first gear's factor as L+)
         TruckProbeText(raw, world, w.byWay, first, sizeof first, second, sizeof second, w.take.driving && w.pos.running ? GearboxPosLetter(w.pos.pos) : nullptr);
-        ModelProbeText(raw, w.tach, w.range, scale, third, sizeof third);
+        ModelProbeText(raw, w.tach, w.range, scale, third, sizeof third, &w.needle);
         Log(L"probe: %S", first);
         Log(L"probe: %S", second);
         TiltProbeText(raw, w.tilt, fourth, sizeof fourth);

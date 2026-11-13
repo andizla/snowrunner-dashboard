@@ -1553,7 +1553,12 @@ game's reverse while the truck stands in A with the brake down and the game's au
 moment after the shift modifier is tapped or A picked again, before the mod puts it down; the hook reads it at the call), at
 ShiftToReverse or a gear below 0 through AutoOffAndShift or ShiftGear; with the flag down the shifter's R passes; 2 the mod's own gearbox, which takes the shifter: A, the numbered gears, N, R, H and the low range L-, L, L+ (0.2, 0.45, 1)
 as positions of its own, with a clutch (a button, or a pedal axis that the engine model runs behind; in these positions the needle
-and the torque curve handed to the game follow the clutch model's engine speed, TachFollow, as A follows the converter's; its pedal
+and the torque curve handed to the game follow the clutch model's engine speed, TachFollow, as A follows the converter's; with the clutch locked, a wheel cap in the
+slot and the wheels past the gear's top the needle goes by <code>SlipRoomRpm</code> instead: from the red zone's start to the stop
+(<code>TachStop</code>) by the driven wheels' place between the gear's top and the cap's ceiling of the hook's last step
+(<code>WheelCapCeilingGet</code>; only for the driven vehicle and only where the hook stepped since the last pass,
+<code>SlipRoomCeiling</code>, else as before); the clutch model's own engine speed is not changed, and the probe's "engine speed" line
+names the rule; its pedal
 is a torque between the idle governor and the high-speed one, the curve's fall past the red zone, as a road truck's min-max governor;
 a stall of it with the clutch on an axis goes to the game's stall seconds as the gearbox's own does, a clutch on a button never
 stalls), a stall for a shift without it standing or crawling, under 1.5 m/s (RequireClutch: 5 written into the truck's stall

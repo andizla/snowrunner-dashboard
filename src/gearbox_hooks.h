@@ -472,6 +472,9 @@ struct WheelCapCounts
     float kept, spread, excessMost, preMost, postSum, postMost, preLeast, ceiling;
 };
 void WheelCapCountsGet(WheelCapCounts &out);
+// The cap's last ceiling alone, with the vehicle it was worked out for and the steps counted so far, and nothing set
+// back by the read (WheelCapCountsGet gives its largest figures since the last read): for the needle, every pass.
+void WheelCapCeilingGet(uint64_t &vehicle, long &steps, float &ceiling);
 // The game's own ShiftGear(0) refused for the held truck at kPolicyAll so far: the gearbox damage's kick to N
 // (review\own_drivetrain_research.md C.5); the player's N comes through ShiftToNeutral or AutoOffAndShift, refused at its
 // own door, so it never reaches ShiftGear.

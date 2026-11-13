@@ -116,7 +116,7 @@ GAUGES = f'''
 <h2>7. The dials one by one</h2>
 <ul><li><b>Speed</b>, forwards and backwards.</li>
 <li><b>Gear</b>: its number with a D in automatic, H for the high gear, L, L+ and L- for the low range, R and N.</li>
-<li><b>Engine speed.</b> Worked out from the driven wheels, the gear and the pedal. The needle climbs through each gear to the red zone and falls at the shift, rises under the pedal when the truck is stuck, revs freely in neutral, and spinning wheels take it into the red zone. It rises from 0 while the engine starts and runs down when it stalls or stops.</li>
+<li><b>Engine speed.</b> Worked out from the driven wheels, the gear and the pedal. The needle climbs through each gear to the red zone and falls at the shift, rises under the pedal when the truck is stuck, revs freely in neutral, and spinning wheels take it into the red zone. In a gear held by hand of the mod's gearbox the wheels may spin well past the gear's top: the needle then moves between the start of the red zone and its stop with them, and falls with them when you lift. It rises from 0 while the engine starts and runs down when it stalls or stops.</li>
 <li><b>Odometer</b> under the speed: the kilometres this truck has driven (miles with Mph), or its engine hours where its kind
 counts hours (Counts in the Display tab, <code>OdometerHours=1</code> in <code>[Truck]</code> of its file). Each truck keeps its own
 count in <code>[Odometer:&lt;id&gt;]</code> of its kind's file. Only driving counts: nothing while the game is held, on the map or
