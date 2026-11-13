@@ -23,18 +23,19 @@ struct GearboxFlags
 
 // What the gearbox has, as kHas... bits (the brief's table): L by IsLowerGearExists, L+ and L- by their own flags with
 // L, H by IsHighGearExists. No GearboxParams has none, as the game's shifter shows (the research).
-// kManualDropsEnds: with IsManualLowGear the game's shifter shows L alone, so the mod has no L- and no L+ there either
-// (BRIEF_positions_by_shifter.md, M4: the lead's word, the mod has what the shifter shows; it replaces review R3, which
-// kept both). The one line to turn back if the word changes.
-static const bool kManualDropsEnds = true;
-inline int GearboxHasFromFlags(const GearboxFlags &f)
+// kManualDropsEnds: with IsManualLowGear the game's shifter shows L alone, but the game still reaches the low range's
+// two ends there, so the mod keeps L- and L+ (review R3; the lead's word of 2026-11-13: kept until the user says
+// otherwise). True would take both away, as the shifter shows (BRIEF_positions_by_shifter.md, M4). The one constant
+// to turn; the rule can be asked for either way, for the tests.
+static const bool kManualDropsEnds = false;
+inline int GearboxHasFromFlags(const GearboxFlags &f, bool manualDropsEnds = kManualDropsEnds)
 {
     if (!f.params) return 0;
     int has = 0;
     if (f.low) has |= kHasL | (f.lowPlus ? kHasLowPlus : 0) | (f.lowMinus ? kHasLowMinus : 0);
     if (f.high) has |= kHasH;
     if (f.manual) has |= kHasManual;
-    if (f.manual && kManualDropsEnds) has &= ~(kHasLowPlus | kHasLowMinus);
+    if (f.manual && manualDropsEnds) has &= ~(kHasLowPlus | kHasLowMinus);
     return has;
 }
 inline int GearboxMissingFromHas(int has) { return ~has & kHasPositions; }

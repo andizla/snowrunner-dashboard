@@ -3165,20 +3165,24 @@ static void TruckTestsTwo(TruckRefs &r, TruckRaw &t)
                           GearboxHasFromFlags(flags(true, true, true, false, true, false)) == (kHasL | kHasLowPlus | kHasH) &&
                           GearboxHasFromFlags(flags(true, true, true, true, false, false)) == (kHasL | kHasLowPlus | kHasLowMinus);
         const bool noNode = GearboxHasFromFlags(flags(false, true, true, true, true, false)) == 0 && GearboxMissingFromHas(0) == kHasPositions;
-        // the manual flag (BRIEF_positions_by_shifter.md, M4): L and H stay, L- and L+ go, as the game shifter shows; not manual keeps all four
-        const bool manual = GearboxHasFromFlags(flags(true, true, true, true, true, true)) == (kHasL | kHasH | kHasManual) && kManualDropsEnds &&
-                            GearboxMissingFromHas(GearboxHasFromFlags(flags(true, true, true, true, true, true))) == (kHasLowPlus | kHasLowMinus) &&
-                            GearboxHasFromFlags(flags(true, true, true, true, true, false)) == kHasPositions;
+        // the manual flag (BRIEF_positions_by_shifter.md, M4, and review R3): in force it takes nothing, L- and L+ stay. The
+        // rule asked the other way takes L- and L+ and leaves L and H; not manual keeps all four either way
+        const bool manual = !kManualDropsEnds && GearboxHasFromFlags(flags(true, true, true, true, true, true)) == (kHasPositions | kHasManual) &&
+                            GearboxMissingFromHas(GearboxHasFromFlags(flags(true, true, true, true, true, true))) == 0 &&
+                            GearboxHasFromFlags(flags(true, true, true, true, true, true), false) == (kHasPositions | kHasManual) &&
+                            GearboxHasFromFlags(flags(true, true, true, true, true, true), true) == (kHasL | kHasH | kHasManual) &&
+                            GearboxMissingFromHas(GearboxHasFromFlags(flags(true, true, true, true, true, true), true)) == (kHasLowPlus | kHasLowMinus) &&
+                            GearboxHasFromFlags(flags(true, true, true, true, true, false), true) == kHasPositions && GearboxHasFromFlags(flags(true, true, true, true, true, false)) == kHasPositions;
         // the six groups of the game's gearboxes: H and L; H with all three; L alone; H, L and L-; H, L and L+; all three without H
         const bool groups = GearboxMissingFromHas(GearboxHasFromFlags(flags(true, true, false, false, true, false))) == (kHasLowPlus | kHasLowMinus) &&
                             GearboxMissingFromHas(GearboxHasFromFlags(flags(true, true, true, true, true, false))) == 0 &&
                             GearboxMissingFromHas(GearboxHasFromFlags(flags(true, true, false, false, false, false))) == (kHasLowPlus | kHasLowMinus | kHasH) &&
                             GearboxMissingFromHas(GearboxHasFromFlags(flags(true, true, false, true, true, false))) == kHasLowPlus &&
                             GearboxMissingFromHas(GearboxHasFromFlags(flags(true, true, true, false, true, false))) == kHasLowMinus &&
-                            GearboxMissingFromHas(GearboxHasFromFlags(flags(true, true, true, true, false, true))) == (kHasH | kHasLowPlus | kHasLowMinus) && // the manual flag: L alone
+                            GearboxMissingFromHas(GearboxHasFromFlags(flags(true, true, true, true, false, true))) == kHasH && // the manual flag takes nothing
                             GearboxMissingFromHas(GearboxHasFromFlags(flags(true, true, true, true, false, false))) == kHasH;
         Check(rows && noNode && manual && groups,
-              "gearbox positions: the mask by the table (L+ and L- only with L), no GearboxParams none, the manual low flag takes L- and L+ and leaves L and H, the six groups of the game");
+              "gearbox positions: the mask by the table (L+ and L- only with L), no GearboxParams none, the manual low flag takes nothing (asked the other way it takes L- and L+ and leaves L and H), the six groups of the game");
     }
     // the read over a made-up pugixml tree in this build's layout, peeked through ReadProcessMemory as the mod's own peek is
     {
