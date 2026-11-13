@@ -3638,7 +3638,11 @@ static void TruckTestsTwo(TruckRefs &r, TruckRaw &t)
                                                       "where there is such a square; a man taken is not jumped twice and blocks the way");
         Check(lost && repeat && quiet, "checkers, the end: a side with no move or no man loses; the same position a third time is a draw; 30 king moves with no capture are a draw; a man moved starts the counts over");
         // the opponent: 200 games against itself from 200 seeds all end, each move legal, the positions looked at under the bound
-        int ended = 0, illegal = 0, worst = 0, longest = 0, whiteWon = 0, blackWon = 0, draws = 0;
+        int ended = 0, illegal = 0, worst = 0, longest = 0, whiteWon = 0, blackWon = 0, draws = 0, slowestLooked = 0, calls = 0;
+        // the time of one move by the clock (review of 139, S1): the longest call, and the time a position costs at the most
+        LARGE_INTEGER ckRate, ckT0, ckT1;
+        QueryPerformanceFrequency(&ckRate);
+        double slowestMs = 0.0, costliestUs = 0.0, sumMs = 0.0;
         for (uint32_t seedNo = 1; seedNo <= 200; seedNo++)
         {
             uint32_t seed = seedNo * 2654435761u;
@@ -3647,7 +3651,15 @@ static void TruckTestsTwo(TruckRefs &r, TruckRaw &t)
             {
                 CkMove move;
                 int looked = 0;
-                if (!CkOpponent(ckG, seed, move, looked) || !CkIsLegal(ckG, move))
+                QueryPerformanceCounter(&ckT0);
+                const bool moved = CkOpponent(ckG, seed, move, looked);
+                QueryPerformanceCounter(&ckT1);
+                const double ms = (double)(ckT1.QuadPart - ckT0.QuadPart) * 1000.0 / (double)ckRate.QuadPart;
+                if (ms > slowestMs) slowestMs = ms, slowestLooked = looked;
+                if (looked >= 50 && ms * 1000.0 / looked > costliestUs) costliestUs = ms * 1000.0 / looked;
+                sumMs += ms;
+                calls++;
+                if (!moved || !CkIsLegal(ckG, move))
                 {
                     illegal++;
                     break;
@@ -3673,6 +3685,8 @@ static void TruckTestsTwo(TruckRefs &r, TruckRaw &t)
         bool takes = CkOpponent(ckG, seedA, moveA, lookedA) && moveA.ntaken == 1 && moveA.path[0] == ckSq("d6");
         printf("     checkers, the opponent against itself: %d of 200 games ended (white %d, black %d, draws %d), the longest %d moves, at most %d positions looked at for a move (the bound %d)\n", ended,
                whiteWon, blackWon, draws, longest, worst, kCkSearchMax);
+        printf("     checkers, the opponent by the clock: %d moves, %.4f ms a move on average, the longest %.4f ms (%d positions); a position cost %.3f us at the most (moves of 50 positions and more), "
+               "so the bound of %d would be %.2f ms\n", calls, calls ? sumMs / calls : 0.0, slowestMs, slowestLooked, costliestUs, kCkSearchMax, costliestUs * kCkSearchMax / 1000.0);
         Check(ended == 200 && !illegal && worst > 0 && worst <= kCkSearchMax && same && noMove && takes,
               "checkers, the opponent: 200 games against itself from 200 seeds all end, every move legal, the positions looked at within the bound; the same seed gives the same move; it takes a man offered");
         // the hidden opening: five clicks within three seconds, counted over the last five

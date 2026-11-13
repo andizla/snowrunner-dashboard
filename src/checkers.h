@@ -27,7 +27,10 @@ enum { kCkPlaying, kCkWhiteWins, kCkBlackWins, kCkDraw };
 static const int kCkMaxPath = 13;     // a move's squares: where it starts and a landing for each of at most twelve men taken
 static const int kCkMaxMoves = 96;    // the moves kept of one position; more than that are cut (CkMoves::cut), the kept ones are legal
 static const int kCkDrawQuiet = 30;   // moves in a row by kings with no capture that make a draw
-static const int kCkSearchMax = 6000; // the positions the opponent looks at for one move, at the most
+// The positions the opponent looks at for one move, at the most. By the clock a position costs about a third of a
+// microsecond and a microsecond at the worst met, and the most met in 200 self games is 609 (the test prints both): so
+// 1500 keeps a move under two milliseconds on the drawing thread at the worst, and is never reached in those games.
+static const int kCkSearchMax = 1500;
 static const int kCkLost = 100000;
 
 inline int CkSide(int piece) { return piece == kCkWhiteMan || piece == kCkWhiteKing ? kCkWhite : piece == kCkBlackMan || piece == kCkBlackKing ? kCkBlack : -1; }
