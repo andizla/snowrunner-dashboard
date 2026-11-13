@@ -571,8 +571,14 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 s.airBrakes = airOn ? 1 : 0;
                 act |= kPageChanged;
             }
-            PageTip("This truck has air brakes: the brake air dial, the low air warning, the air sounds and spring brakes. Under 3 bar the spring brakes hold the truck as the handbrake does, until the air is back at 4.5 bar. Saved for this truck. Until it is set, every truck but a scout has them.");
+            PageTip("This truck has air brakes: the brake air dial, the low air warning, the air sounds and spring brakes. Under 3 bar the spring brakes hold the truck as the handbrake does, until the air is back at 4.5 bar. A truck keeps the air it was left with, between drives and between sessions. Saved for this truck. Until it is set, every truck but a scout has them.");
             ImGui::EndDisabled();
+        }
+        // empty tanks at the first drive of a session, for every truck with air brakes (BRIEF_jobs_1114.md, part 165)
+        {
+            PageLabel("Empty tanks at a start", labelX);
+            if (ImGui::Checkbox("##airempty", &s.airEmptyAtStart)) act |= kPageChanged;
+            PageTip("The first time you drive a truck with air brakes after the game starts, its tanks are empty. It stands on its spring brakes until the compressor has filled them to 4.5 bar: about a minute and a half at idle, under half a minute at the red zone. A truck you come back to in the same session keeps its air. A truck left while its spring brakes held comes back with the handbrake on: let it go yourself. For every truck. Default: off.");
         }
         {
             const GaugeScale own = kClassScales[ClassOr(ClassOr(s.tachClass, view.classAuto), kClassTruck)];

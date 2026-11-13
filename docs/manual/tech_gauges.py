@@ -1064,6 +1064,16 @@ the model (<code>AirStepFor</code>: off, it does not run and holds no pressure),
 The truck is held by the game's own handbrake, the byte at action + 0x48, through <code>LockHoldStep</code> with a hold of its own: a handbrake the player set first is never cleared,
 the mod's own is set again when a key clears it and cleared at the release. No hook and no write to a wheel or a body. This route is not proved in the game yet.
 Gauges.log has "spring brakes: hold at ..." and "spring brakes: release at ...", one line in capitals if a held truck still rolls on flat ground, and with Probe=1 "probe: spring brakes: ..." a second.</p>
+<p><b>The air kept by the owned truck</b> (<code>air_keep.h</code>; BRIEF_jobs_1114.md, part 165). The mod's thread keeps a list of the ids driven in this run with the bar each
+was left with (<code>AirRun</code>), updated each pass from the model, so a truck away loses nothing by the clock. The list follows the take-over and the match
+(<code>AirRunRename</code>), so the same truck under a new id is no first drive. Between runs the bar is <code>AirBar</code> in the truck's <code>[Odometer:&lt;id&gt;]</code>,
+written with the count at the odometer's own moments and at a truck change where the bar moved, and read ranged (0 to 8.2, anything else is no figure). The take-over, the
+warehouse match, the marks and the prune carry the key with the section, and no profile holds it. The bar a truck starts with is decided where the odometer's count is, once
+the take-over and the match have decided (<code>AirAtDecision</code>): as left in this run, else 0 with <code>AirEmptyAtStart</code> (the box Empty tanks at a start), else its
+file's figure, else full. A truck whose id is not read starts full and keeps nothing. Until the decision the model runs from full, the spring brakes are not judged
+(<code>AirJudged</code>) and the dial keeps the figure it showed. The decided bar goes into the model on its first step for a truck with air brakes
+(<code>AirStartStep</code>), with one line: <code>brake air: &lt;kind&gt;, id</code>, the bar and where it came from. A truck without air brakes keeps no figure and its key
+goes at the next write.</p>
 <p><b>Truck profiles</b> (BRIEF_truck_profile.md, build 1; <code>truck_profile.h</code> and a block in <code>gauges.cpp</code>).
 The storage is not changed: a profile is written from the truck's, the engine's and the gearbox's files and goes back into them
 through the functions an edit uses. The file is <code>Gauges\\profiles\\&lt;kind&gt; - &lt;name&gt;.ini</code>, UTF-16,

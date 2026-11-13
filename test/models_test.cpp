@@ -31,6 +31,7 @@
 #include "truck.h"
 #include "models.h"
 #include "odometer.h"
+#include "air_keep.h"
 #include "text_cut.h"
 #include "gearbox_model.h"
 #include "sound.h"
@@ -3414,6 +3415,83 @@ int main(int argc, char **argv)
         const float released = charged - spring.bar;
         for (float at = 0.0f; at < 600.0f; at += kDt) AirStep(spring, stopped, 0.0f, kDt);
         Check(Near(released, kSpringAir, 0.01f) && Near(charged - released - spring.bar, 1.0f, 0.02f), "brake air: letting the handbrake go takes the spring brakes' air, and it leaks a bar in ten minutes standing");
+        // the air kept by the owned truck and the box Empty tanks at a start (BRIEF_jobs_1114.md, part 165)
+        {
+            std::vector<AirRun> run;
+            float bar = -1.0f;
+            // a truck first driven with no figure in its file: full. Left at 5.0, another driven, back: 5.0, whatever
+            // its file says by then and with the box on
+            const bool first = AirAtDecision(true, AirRunFind(run, "a"), false, 0.0f, false, kAirCutOut, bar) == kAirFromFull && bar == kAirCutOut;
+            AirRunAdd(run, "a")->has = true;
+            AirRunFind(run, "a")->bar = 5.0f;
+            const bool other = AirAtDecision(true, AirRunFind(run, "b"), false, 0.0f, false, kAirCutOut, bar) == kAirFromFull && bar == kAirCutOut;
+            AirRunAdd(run, "b");
+            const bool backAgain = AirAtDecision(true, AirRunFind(run, "a"), true, 7.0f, true, kAirCutOut, bar) == kAirFromRun && bar == 5.0f;
+            // the take-over: the entry is the new id's, over one the new id had, and the old id has none
+            AirRunAdd(run, "a2")->has = false;
+            AirRunRename(run, "a", "a2");
+            const bool taken = !AirRunFind(run, "a") && run.size() == 2 && AirAtDecision(true, AirRunFind(run, "a2"), false, 0.0f, true, kAirCutOut, bar) == kAirFromRun && bar == 5.0f;
+            AirRunRename(run, "nobody", "b"), AirRunRename(run, "", "b"), AirRunRename(run, "b", ""), AirRunRename(run, "b", "b");
+            const bool renames = run.size() == 2 && AirRunFind(run, "b") && !AirRunFind(run, "") && !AirRunAdd(run, "");
+            // a new run: the file's figure with the box off, 0 with it on whatever the file says; no id: full either way
+            const bool fromFile = AirAtDecision(true, nullptr, true, 5.0f, false, kAirCutOut, bar) == kAirFromFile && bar == 5.0f;
+            const bool emptied = AirAtDecision(true, nullptr, true, 5.0f, true, kAirCutOut, bar) == kAirFromEmpty && bar == 0.0f;
+            const bool noId = AirAtDecision(false, nullptr, true, 5.0f, true, kAirCutOut, bar) == kAirFromNoId && bar == kAirCutOut &&
+                              AirAtDecision(false, nullptr, false, 0.0f, false, kAirCutOut, bar) == kAirFromNoId && bar == kAirCutOut;
+            // driven early in this run without air brakes: full, and not emptied by a box turned on since
+            const bool noAirBefore = AirAtDecision(true, AirRunFind(run, "b"), true, 3.0f, true, kAirCutOut, bar) == kAirFromFull && bar == kAirCutOut;
+            Check(first && other && backAgain && taken && renames && fromFile && emptied && noId && noAirBefore,
+                  "brake air kept: a truck left at 5.0 bar comes back to 5.0 in the same run, under a new id after a take-over too; in a new run its file's figure, or 0 with "
+                  "Empty tanks at a start; a truck driven early in this run is never emptied; with no id read full tanks, box on or off");
+            // a kept bar of -1, of 99 and of text is no figure; the file's own two decimals are
+            float kept = -1.0f; // the figure a read gives
+            const bool wild = !AirBarRanged(L"-1", kAirCutOut, kept) && !AirBarRanged(L"99", kAirCutOut, kept) && !AirBarRanged(L"full", kAirCutOut, kept) && !AirBarRanged(L"", kAirCutOut, kept) &&
+                              !AirBarRanged(L"5 bar", kAirCutOut, kept) && !AirBarRanged(L"nan", kAirCutOut, kept) && !AirBarRanged(L"inf", kAirCutOut, kept) && !AirBarRanged(nullptr, kAirCutOut, kept) && kept == -1.0f;
+            const bool good = AirBarRanged(L"5.00", kAirCutOut, kept) && kept == 5.0f && AirBarRanged(L"0", kAirCutOut, kept) && kept == 0.0f && AirBarRanged(L"8.20", kAirCutOut, kept) && kept == kAirCutOut &&
+                              AirBarRanged(L"2.5 ", kAirCutOut, kept) && kept == 2.5f;
+            Check(wild && good, "brake air kept: a figure of -1, of 99, of text or of no number is none, so the truck starts full; 0 to the cut-out is taken");
+            // must 1: the id decides on the third pass with 2.0 bar kept. No hold and nothing put in early it, held from it
+            AirModel late = {};
+            bool pending = false, decided = false, held = false, early = true;
+            for (int pass = 0; pass < 2; pass++)
+            {
+                AirStepFor(late, true, airTruck, idleSpeed, kDt);
+                const bool put = AirStartStep(late, pending, decided, true, 2.0f, kAirCutIn);
+                if (AirJudged(decided, pending, true)) held = SpringHeldStep(held, true, late.running, late.bar);
+                early = early && !put && !held && late.bar > 8.0f && !AirJudged(decided, pending, true);
+            }
+            decided = pending = true;
+            AirStepFor(late, true, airTruck, idleSpeed, kDt);
+            const bool put = AirStartStep(late, pending, decided, true, 2.0f, kAirCutIn);
+            if (AirJudged(decided, pending, true)) held = SpringHeldStep(held, true, late.running, late.bar);
+            const bool third = put && !pending && late.bar == 2.0f && late.pumping && held && !AirStartStep(late, pending, decided, true, 7.0f, kAirCutIn) && late.bar == 2.0f;
+            // a held truck stays held while its air waits; a truck without air brakes is judged as ever and gets nothing put in
+            bool waits = true;
+            AirModel none = {};
+            const bool noAir = AirJudged(false, true, false) && !AirStartStep(none, waits, true, false, 0.0f, kAirCutIn) && waits && !AirJudged(true, true, true) && AirJudged(true, false, true);
+            Check(early && third && noAir,
+                  "brake air kept: until the id has decided the model runs from full and the spring brakes are not judged; on the pass it decides the kept 2.0 bar goes in "
+                  "once and the truck is held from it; a truck without air brakes gets nothing");
+            // the box: a first drive starts at 0 bar and held, and is let go at 4.5 bar
+            auto release = [&](float speed) {
+                AirModel f = {};
+                bool p = true;
+                AirStepFor(f, true, airTruck, speed, kDt);
+                AirStartStep(f, p, true, true, 0.0f, kAirCutIn);
+                bool h = SpringHeldStep(false, true, f.running, f.bar);
+                float t = h && f.bar == 0.0f ? 0.0f : -1000.0f;
+                for (; h && t < 900.0f; t += kDt)
+                {
+                    AirStep(f, airTruck, speed, kDt);
+                    h = SpringHeldStep(h, true, true, f.bar);
+                }
+                return f.bar >= kSpringRelease ? t : -1.0f;
+            };
+            const float goIdle = release(idleSpeed), goRed = release(1.0f);
+            printf("     brake air: from empty tanks the spring brakes let go after %.0f s at idle and %.0f s at the red zone\n", goIdle, goRed);
+            Check(goRed > 15.0f && goRed < 40.0f && goIdle > 60.0f && goIdle < 130.0f,
+                  "brake air kept: with Empty tanks at a start a first drive begins at 0 bar on its spring brakes and is let go at 4.5 bar, in under 40 s at the red zone and under 130 s at idle");
+        }
         // the spring brakes (BRIEF_spring_brakes.md with the addendum, M1 to M3 and M5)
         {
             // the two points: the release's own air leaves the needle half a bar over the hold, and the release is under the warning

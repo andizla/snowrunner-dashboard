@@ -48,6 +48,7 @@ int NgMenuKeyFromIni(); // the menu's key, which a capture never binds
 #include "air_axles.h"
 #include "frame_flex.h"
 #include "odometer.h"
+#include "air_keep.h"
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "shell32.lib")
 #ifndef GAUGES_SETTINGS_TEST
@@ -802,6 +803,7 @@ static void WriteIni(const GaugeSettings &s)
     whole(L"ShowBoost", s.showBoost ? 1 : 0);
     whole(L"ShowAir", s.showAir ? 1 : 0);
     whole(L"ShowClock", s.showClock ? 1 : 0);
+    whole(L"AirEmptyAtStart", s.airEmptyAtStart ? 1 : 0);
     whole(L"ShowOdometer", s.showOdometer ? 1 : 0);
     whole(L"ShowFuelUse", s.showFuelUse ? 1 : 0);
     whole(L"ShowLamps", s.showLamps ? 1 : 0);
@@ -1290,6 +1292,7 @@ static void ReadIni(GaugeSettings &s)
                         L";   A truck file may hold its own DiffType; the tab writes it there for the driven truck.\n"
                         L";   DiffAxle1 to DiffAxle8 in a truck file: one axle its own type, front to back, the same four choices. An axle with no key goes by DiffType.\n"
                         L";   BindLockFrontAxle and BindLockRearAxles hold those axles Locked until pressed again. While the diff lock of the truck is on, every axle is locked.\n"
+                        L"; AirEmptyAtStart=1: a truck with air brakes first driven after the game starts has empty tanks and stands on its spring brakes until they fill. A truck keeps its air between drives (AirBar in its [Odometer:<id>]).\n"
                         L"; AirBrakes in a truck file (the Air brakes box of the Engine tab): 1 the truck has brake air and spring brakes, 0 it has none. No key: every truck but a scout has them, by the class the mod automatic goes by for it.\n"
                         L"; ModEngineSpeed=1 (with Powertrain, on by default): the game tachometer, sound and effects follow the mod engine; its fuel burn and stall check keep the game's own.\n"
                         L";   EngineSpeedTop: the mod engine speed the game reads as its top, as a share of the redline, 0.5 to 1.5 (1: the redline; idle is its 0).\n"
@@ -1337,6 +1340,7 @@ static void ReadIni(GaugeSettings &s)
     s.showBoost = IniBool(L"ShowBoost", s.showBoost, ini);
     s.showAir = IniBool(L"ShowAir", s.showAir, ini);
     s.showClock = IniBool(L"ShowClock", s.showClock, ini);
+    s.airEmptyAtStart = IniBool(L"AirEmptyAtStart", s.airEmptyAtStart, ini);
     s.showOdometer = IniBool(L"ShowOdometer", s.showOdometer, ini);
     s.showFuelUse = IniBool(L"ShowFuelUse", s.showFuelUse, ini);
     s.showLamps = IniBool(L"ShowLamps", s.showLamps, ini);
@@ -2514,6 +2518,29 @@ static void OdoWrite(const char *key, const char *id, double metres, double seco
     WritePrivateProfileStringW(sec.c_str(), L"Metres", buf, ini.c_str());
     _snwprintf_s(buf, _TRUNCATE, L"%llu", (unsigned long long)llround(fmax(seconds, 0.0)));
     WritePrivateProfileStringW(sec.c_str(), L"Seconds", buf, ini.c_str());
+}
+// The brake air an owned truck was left with (air_keep.h): AirBar in its [Odometer:<id>], a count the mod keeps as
+// the two beside it, so the take-over, the match, the marks and the prune carry it and no profile holds it. Read ranged:
+// anything but a number from 0 to the cut-out is no figure.
+static bool AirBarRead(const char *key, const char *id, float &bar)
+{
+    if (!key[0] || !id[0]) return false;
+    wchar_t buf[32] = {};
+    GetPrivateProfileStringW(SectionOf(kOdoSection, id).c_str(), L"AirBar", L"", buf, 32, SetupFile(kSetupTruck, key).c_str());
+    return AirBarRanged(buf, kAirCutOut, bar);
+}
+// Written with the odometer's count. has: the truck has air brakes and a bar to keep; without, the key goes (must 4).
+static void AirBarWrite(const char *key, const char *id, bool has, float bar)
+{
+    if (!key[0] || !id[0]) return;
+    const std::wstring ini = SetupFile(kSetupTruck, key), sec = SectionOf(kOdoSection, id);
+    wchar_t buf[32] = {};
+    if (has)
+    {
+        _snwprintf_s(buf, _TRUNCATE, L"%.2f", fmin(fmax((double)bar, 0.0), (double)kAirCutOut));
+        WritePrivateProfileStringW(sec.c_str(), L"AirBar", buf, ini.c_str());
+    }
+    else if (GetPrivateProfileStringW(sec.c_str(), L"AirBar", L"", buf, 32, ini.c_str()) > 0) WritePrivateProfileStringW(sec.c_str(), L"AirBar", nullptr, ini.c_str());
 }
 // OdometerHours=1 in the kind's [Truck]: this kind shows engine hours.
 static bool OdoHoursOf(const char *key) { return key[0] && GetPrivateProfileIntW(kSetupSections[kSetupTruck], L"OdometerHours", 0, SetupFile(kSetupTruck, key).c_str()) != 0; }
@@ -5721,6 +5748,12 @@ struct TruckWatch
     TurboChar turbo;            // the turbo's character in force on this pass (TurboOf)
     bool creepStall;            // the creep stalled a stuck truck on the last pass: handed to the game's stall seconds on this one
     AirModel air;               // and the air in its brakes' tanks
+    // the air this truck starts with (air_keep.h): decided by the mod's thread once the truck's id has (the take-over,
+    // the match), then put into the model on its first step for a truck with air brakes. Until then the model runs
+    // from full and the spring brakes are not judged. airCame: where the bar came from, for the line
+    bool airDecided, airPending;
+    float airStart;
+    int airCame;
     TiresReader tiresReader;    // the tire inflation mod's published state (tires.h)
     TiresView tires;            // as read on this pass
     bool tiresSeen;
@@ -7937,6 +7970,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             GearboxLetGo(w);
             PullGiveBack(m, w, L"another truck is driven");
             w.air = AirModel{};
+            w.airDecided = w.airPending = false; // the new vehicle's air waits for its id's decision
             w.tilt = TiltModel{};
             w.owed = w.asked = 0;
             w.stallsOwed = 0;
@@ -8090,6 +8124,11 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             }
         }
         if (AirStepFor(w.air, w.airOn, raw, TachSpeed(w.tach, scale), dt) && TruckEngineOn(raw)) SoundPlay(kSoundPurge, 0.8f * OilBeepGain(s.soundVolume), 1.0f);
+        // the air the truck was left with, or empty tanks by the box, once: at its first step after its id decided
+        if (AirStartStep(w.air, w.airPending, w.airDecided, w.airOn, w.airStart, kAirCutIn))
+            Log(L"brake air: %S, id %S: %.2f bar, %s", w.who.taken.key, w.who.taken.id[0] ? truckid::Short(w.who.taken.id).c_str() : "not read", w.air.bar, AirFromWords(w.airCame));
+        // a truck that turns out to have no air brakes keeps no figure waiting: its box ticked later starts full
+        if (!w.airOn && w.airSaid == w.refs.vehicle) w.airPending = false;
         TiltStep(w.tilt, raw, s, dt);
         TempStep(w.temp, kind, raw, TachSpeed(w.tach, scale), s, dt);
         // the oil warning: heard every few seconds while the oil is too hot, and said in the log when it comes and goes
@@ -8609,7 +8648,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             const uint64_t a = w.refs.action;
             const bool outside = a && !(a >= m.base && a < m.base + g_exeSize);
             const bool heldWas = w.springHeld;
-            w.springHeld = SpringHeldStep(w.springHeld, w.airOn, w.air.running, w.air.bar);
+            // not judged while the truck's air waits for its id (part 165, must 1): the hold stays as it was
+            if (AirJudged(w.airDecided, w.airPending, w.airOn)) w.springHeld = SpringHeldStep(w.springHeld, w.airOn, w.air.running, w.air.bar);
             uint8_t byte = 0;
             const bool byteRead = outside && m.get(a + kHandbrakeAt, byte);
             const bool wasOurs = w.springHold.ours && w.springHold.action == a;
@@ -10027,8 +10067,23 @@ static DWORD WINAPI Run(void *)
     bool odoHours = false;
     char odoFrom[40] = "";
     const wchar_t *odoFromWords = L"";
+    // the brake air by owned truck (air_keep.h): the trucks driven in this run with the bar each was left with, whether
+    // the driven truck's air was decided with its id read, the bar its file holds (-1 none), and the bar the dial last showed
+    std::vector<AirRun> airRun;
+    bool airIdRead = false;
+    float airWrote = -1.0f, airShown = kAirCutOut;
+    auto airOwed = [&]() {
+        if (!odo.decided || !odo.saves || !truck.id[0]) return false;
+        const AirRun *e = AirRunFind(airRun, truck.id);
+        return e && e->has ? fabsf(e->bar - airWrote) >= 0.05f : airWrote >= 0.0f;
+    };
     auto odoWrite = [&](const wchar_t *why) {
         OdoWrite(truck.key, truck.id, odo.metres, odo.seconds);
+        {
+            const AirRun *e = AirRunFind(airRun, truck.id);
+            AirBarWrite(truck.key, truck.id, e && e->has, e ? e->bar : 0.0f);
+            airWrote = e && e->has ? e->bar : -1.0f;
+        }
         OdoWritten(odo, GetTickCount64());
         if (s.probe) Log(L"odometer: %S, id %S: %.0f m and %.0f s written (%s)", truck.key, truckid::Short(truck.id).c_str(), odo.metres, odo.seconds, why);
     };
@@ -10070,6 +10125,10 @@ static DWORD WINAPI Run(void *)
         wchar_t text[512];
         truckid::DriveLine(text, 512, truck.key, truck.id[0] ? truck.id : "", line, lastSeen, fromId, rule, why);
         Log(L"%s", text);
+        // the run's list of the brake air follows the take-over and the match: the old id's entry is this id's, so
+        // the same truck under a new id is no first drive (part 165, must 3). The match of a count alone names its
+        // truck in odoFrom
+        AirRunRename(airRun, fromId && fromId[0] ? fromId : odoFrom, truck.id);
         // the odometer's figure, only now the take-over and the match have decided (the Reviewer's must 3): the copied
         // section is read, and what was counted since the change goes on top of it
         if (truck.key[0] && !odo.decided)
@@ -10845,6 +10904,20 @@ static DWORD WINAPI Run(void *)
             watch.odoMetres = watch.odoSeconds = 0.0;
             const int due = OdoPass(odo, metres, seconds, watch.odoMoving, watch.odoStepped, GetTickCount64());
             if (due != kOdoNoWrite) odoWrite(due == kOdoMinute ? L"a minute" : due == kOdoStop ? L"a stop" : L"the game held");
+            // the bar the driven truck holds now is what it is left with: kept as it is, with no leak by the clock
+            // while it is away. Not on the pass another vehicle came (its air is not decided), and nothing for a truck
+            // without air brakes (must 4): the kept figure goes
+            if (truck.id[0] && odo.decided && watch.airDecided && !watch.airPending)
+            {
+                if (watch.airOn && watch.air.running && isfinite(watch.air.bar))
+                {
+                    if (AirRun *e = AirRunAdd(airRun, truck.id)) e->has = true, e->bar = watch.air.bar;
+                }
+                else if (!watch.airOn && watch.airSaid == watch.refs.vehicle)
+                {
+                    if (AirRun *e = AirRunAdd(airRun, truck.id)) e->has = false;
+                }
+            }
             const LONG setAsk = InterlockedExchange(&g_odoSetAsked, 0);
             if (setAsk && odo.decided && odo.saves && !idPending.on)
             {
@@ -10890,7 +10963,7 @@ static DWORD WINAPI Run(void *)
                     thereId, (void *)thereVehicle, there.id[0] ? there.id : "no id", there.kind[0] ? there.kind : "none", (void *)there.body, (void *)there.world,
                     (void *)there.newWorld, there.there ? L"another truck, not taken over" : L"gone, taken over");
             if (idPending.on) idResolve();
-            if (OdoOwed(odo)) odoWrite(L"another truck driven");
+            if (OdoOwed(odo) || airOwed()) odoWrite(L"another truck driven");
             OdoChange(odo);
             idLeaves();
             // any truck taken (its id read or not) takes the one that went last for its match, and none is left (M2)
@@ -10946,7 +11019,7 @@ static DWORD WINAPI Run(void *)
             strncpy_s(oldId, truck.id, _TRUNCATE);
             const uint64_t oldVehicle = truckVehicle;
             if (idPending.on) idResolve();
-            if (OdoOwed(odo)) odoWrite(L"a new id");
+            if (OdoOwed(odo) || airOwed()) odoWrite(L"a new id");
             OdoChange(odo);
             idLeaves();
             lastForMatch = truckid::LastTaken(lastGone);
@@ -10984,6 +11057,24 @@ static DWORD WINAPI Run(void *)
                     truckid::Short(truck.id).c_str(), eng.engine, eng.gearbox, truckid::BitsWords(put, TruckIdNames()).c_str(), (put & (put - 1)) ? L"s" : L"");
         }
         GaugeView v = {};
+        // the brake air of the driven truck, once its id has decided (part 165, must 1): where the odometer's count is
+        // taken, after the take-over and the match. Again where the id was not read at the first decision and is now
+        if (truck.key[0] && odo.decided && !idPending.on && (!watch.airDecided || (truck.id[0] && !airIdRead)))
+        {
+            float fileBar = 0.0f, bar = kAirCutOut;
+            const bool fileKnown = AirBarRead(truck.key, truck.id, fileBar);
+            const AirRun *was = AirRunFind(airRun, truck.id);
+            watch.airCame = AirAtDecision(truck.id[0] != 0, was, fileKnown, fileBar, inForce.airEmptyAtStart, kAirCutOut, bar);
+            // decided is driven: the truck is in the run's list from here, with the bar it starts on where that is
+            // not full tanks, so a truck left before its first step comes back to the same
+            if (AirRun *e = AirRunAdd(airRun, truck.id))
+                if (watch.airCame != kAirFromFull) e->has = true, e->bar = bar;
+            airIdRead = truck.id[0] != 0;
+            airWrote = fileKnown ? fileBar : -1.0f;
+            watch.airStart = bar;
+            watch.airPending = true;
+            watch.airDecided = true;
+        }
         strncpy_s(v.truck, truck.key, _TRUNCATE);
         v.truckOwn = set.own;
         v.suspOwn = set.suspOwn || set.truckOwn;
@@ -11209,7 +11300,10 @@ static DWORD WINAPI Run(void *)
             // air brakes by the truck: what the pass worked out for the driven one
             const bool airOn = watch.airOn;
             v.st.noAir = !airOn;
-            v.st.airBar = airOn ? watch.air.bar : kAirCutOut; // without air brakes the model holds none: the figure of full tanks, and nothing draws it
+            // until the truck's air is decided and in the model the dial keeps the figure it showed, so the needle
+            // does not jump from full to the kept bar (part 165, must 1)
+            if (airOn && watch.airDecided && !watch.airPending) airShown = watch.air.bar;
+            v.st.airBar = airOn ? airShown : kAirCutOut; // without air brakes the model holds none: the figure of full tanks, and nothing draws it
             v.st.rangeKm = watch.range.rangeKm;
             if (s.showOdometer && v.odoKnown) strncpy_s(v.st.odometer, v.odoText, _TRUNCATE);
             v.st.burnPerMin = watch.burnKnown ? watch.burn : -1.0f;
@@ -11377,7 +11471,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
 {
     return a.layout == b.layout && a.swapDials == b.swapDials && a.style == b.style && a.faceOpacity == b.faceOpacity && a.offsetX == b.offsetX && a.offsetY == b.offsetY &&
            a.scale == b.scale && a.opacity == b.opacity && a.mph == b.mph && a.psi == b.psi && a.fahrenheit == b.fahrenheit && a.showTemp == b.showTemp &&
-           a.showBoost == b.showBoost && a.showAir == b.showAir && a.showClock == b.showClock && a.showOdometer == b.showOdometer && a.showFuelUse == b.showFuelUse && a.showLamps == b.showLamps && a.tachClass == b.tachClass && a.idleRpm == b.idleRpm &&
+           a.showBoost == b.showBoost && a.showAir == b.showAir && a.airEmptyAtStart == b.airEmptyAtStart && a.showClock == b.showClock && a.showOdometer == b.showOdometer && a.showFuelUse == b.showFuelUse && a.showLamps == b.showLamps && a.tachClass == b.tachClass && a.idleRpm == b.idleRpm &&
            a.redlineRpm == b.redlineRpm && a.maxRpm == b.maxRpm && a.speedMax == b.speedMax && a.boostMax == b.boostMax && a.toggleKey == b.toggleKey &&
            a.rollWarnDeg == b.rollWarnDeg && a.rollDangerDeg == b.rollDangerDeg && a.pitchDangerDeg == b.pitchDangerDeg &&
            a.warmUpMinutes == b.warmUpMinutes && a.overheatMinutes == b.overheatMinutes && a.coolDownMinutes == b.coolDownMinutes && a.ambientC == b.ambientC &&
@@ -11638,6 +11732,7 @@ static void PartIni()
     c.showAir = true;
     c.airSync = true;
     c.showClock = false;
+    c.airEmptyAtStart = true;
     c.showOdometer = false;
     c.showFuelUse = false;
     c.tachClass = c.scaleClass = kClassHeavy;
@@ -11742,7 +11837,7 @@ static void PartIni()
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 166, "ini: the help text survives a write (166 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 167, "ini: the help text survives a write (167 comment lines)");
     // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
     {
         char none[32] = "x", tab[32] = {}, kept[32] = {};
@@ -14601,6 +14696,39 @@ static void PartRest()
         Check(none && back && notSettings && parted,
               "odometer store: none before a write; Metres= and Seconds= whole and read back; an odometer section alone is no settings section (no level, not "
               "in force) but is one of the truck's, and the parts go into it");
+        // the brake air beside the count (BRIEF_jobs_1114.md, part 165): AirBar written and read back, ranged at the
+        // read, out again for a truck without air brakes with the count left, and carried by the take-over
+        {
+            const char *q = "{0D000000-0000-0000-0000-0000000000A1}", *q2 = "{0D000000-0000-0000-0000-0000000000A2}";
+            const char *ak = "air_bar_kind"; // its own file: the prune test below counts the marks in the other
+            const std::wstring af = SetupFile(kSetupTruck, ak), qs = SectionOf(kOdoSection, q);
+            DeleteFileW(af.c_str());
+            float bar = -1.0f;
+            const bool noKey = !AirBarRead(ak, q, bar) && !AirBarRead(ak, "", bar) && !AirBarRead("", q, bar);
+            AirBarWrite(ak, q, false, 0.0f);
+            const bool noSection = !truckid::SectionThere(af, qs);
+            OdoWrite(ak, q, 10.0, 1.0);
+            AirBarWrite(ak, q, true, 5.0f);
+            const bool kept = AirBarRead(ak, q, bar) && bar == 5.0f;
+            bool wild = true;
+            for (const wchar_t *t : { L"-1", L"99", L"text" })
+            {
+                WritePrivateProfileStringW(qs.c_str(), L"AirBar", t, af.c_str());
+                wild = wild && !AirBarRead(ak, q, bar);
+            }
+            AirBarWrite(ak, q, true, 99.0f);
+            const bool held = AirBarRead(ak, q, bar) && bar == kAirCutOut;
+            AirBarWrite(ak, q, true, 4.25f);
+            const int over = TakeOverBoth(ak, q, q2);
+            const bool carried = over && AirBarRead(ak, q2, bar) && bar == 4.25f;
+            AirBarWrite(ak, q2, false, 0.0f);
+            double m2 = 0.0, s2 = 0.0;
+            const bool gone = !AirBarRead(ak, q2, bar) && OdoRead(ak, q2, m2, s2) && m2 == 10.0 && s2 == 1.0;
+            DeleteFileW(af.c_str());
+            Check(noKey && noSection && kept && wild && held && carried && gone,
+                  "brake air kept: AirBar in the truck's [Odometer:<id>] written and read back; -1, 99 and text are no figure; a bar over the cut-out is written as the cut-out; the "
+                  "take-over carries it; for a truck without air brakes the key goes and the count stays, and no section is made for it");
+        }
         // the parts look (the Reviewer's M1 on the drive of 2026-11-09): the odometer's section first, then the engine's
         // box ticked, then a suspension section: each section made later gets the parts on the next look, said once
         {

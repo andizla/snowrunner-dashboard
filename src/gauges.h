@@ -146,6 +146,7 @@ struct GaugeSettings
     int pushShare;           // PushShare: with Powertrain, the share in percent of the game's chassis push at speed that carries the mod's surplus over its own pull (BRIEF_chassis_push.md), 0 to 100
     int diffType;            // DiffType: the differential of a truck where the torque cut acts, 0 Auto (by the lock kind at vehicle + 0xE8), 1 Open, 2 Limited slip, 3 Locked (torque_cut.h, kDiff...); a truck file may hold its own
     int diffAxle[kAxleRowsMost]; // DiffAxle1 to DiffAxle8, in a truck file alone: each axle's own type front to back, 0 to 3 as DiffType; -1 no key, the axle goes by DiffType (BRIEF_axle_diff.md, M6)
+    bool airEmptyAtStart;    // AirEmptyAtStart: a truck with air brakes first driven after the game starts has empty tanks (air_keep.h; BRIEF_jobs_1114.md, part 165). Every truck's
     int airBrakes;           // AirBrakes, in a truck file alone: this truck has air brakes, 1 or 0; -1 no choice, its class decides (AirBrakesOn; BRIEF_spring_brakes.md, M4 and M7)
     int quickWinch;          // QuickWinch: the game's quick winch on its key: 0 as the game has it, 1 only while the truck stands, 2 never (quick_winch.h). 1 by default
     int lockSteerFront, lockSteerRear; // LockSteerFront, LockSteerRear: with Powertrain, the percent of the steering left while an axle that steers is locked, and while another driven axle is, 30 to 100 (60 and 85; lock_steer.h). 100 and 100: off
@@ -260,6 +261,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.lockSteerFront = 60, s.lockSteerRear = 85; // kLockSteerFrontDefault, kLockSteerRearDefault (BRIEF_lock_steering.md, M7)
     s.diffType = 0; // Auto (BRIEF_diff_types.md)
     s.airBrakes = -1; // by the class
+    s.airEmptyAtStart = false;
     for (int a = 0; a < kAxleRowsMost; a++) s.diffAxle[a] = -1;
     s.engineSpeedTop = 1.0f;
     s.roadCdA = 0.0f;
