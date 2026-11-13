@@ -408,6 +408,22 @@ int wmain(int argc, wchar_t **argv)
             const bool closes = order && one == 1 && cells[0].kind == kHudTemp && HudCells(GaugeLayoutOf(s), st, cells) == 4;
             printf("%s   HUD layouts: hidden cells close up (%d of 4, %d with a naturally aspirated engine)\n", closes ? "ok" : "FAIL", two, one);
             if (!closes) g_failed++;
+            // the air cell goes by the state's noAir, which the mod's thread works out for the truck, not by the plain
+            // scales' class (BRIEF_air_brakes_by_truck.md, M2)
+            GaugeSettings airSet = s;
+            airSet.showAir = true, airSet.tachClass = kClassScout, airSet.airBrakes = -1;
+            GaugeState noAir = st;
+            noAir.noAir = true;
+            auto hasAir = [&](const GaugeState &state) {
+                HudCell all[8];
+                const int n = HudCells(GaugeLayoutOf(airSet), state, all);
+                for (int i = 0; i < n; i++)
+                    if (all[i].kind == kHudAir) return true;
+                return false;
+            };
+            const bool airByState = hasAir(st) && !hasAir(noAir) && GaugeLayoutOf(airSet).showAir;
+            printf("%s   HUD layouts: the air cell is there with the plain scales at Scout and goes by the state's no air brakes alone\n", airByState ? "ok" : "FAIL");
+            if (!airByState) g_failed++;
         }
         // hidden cells close up: no oil, no air
         s.oilGauge = kOilOff;

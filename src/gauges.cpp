@@ -1284,7 +1284,7 @@ static void ReadIni(GaugeSettings &s)
                         L";   A truck file may hold its own DiffType; the tab writes it there for the driven truck.\n"
                         L";   DiffAxle1 to DiffAxle8 in a truck file: one axle its own type, front to back, the same four choices. An axle with no key goes by DiffType.\n"
                         L";   BindLockFrontAxle and BindLockRearAxles hold those axles Locked until pressed again. While the diff lock of the truck is on, every axle is locked.\n"
-                        L"; AirBrakes in a truck file (the Air brakes box of the Engine tab): 1 the truck has brake air and spring brakes, 0 it has none. No key: every class but the scout has them.\n"
+                        L"; AirBrakes in a truck file (the Air brakes box of the Engine tab): 1 the truck has brake air and spring brakes, 0 it has none. No key: every truck but a scout has them, by the class the mod automatic goes by for it.\n"
                         L"; ModEngineSpeed=1 (with Powertrain, on by default): the game tachometer, sound and effects follow the mod engine; its fuel burn and stall check keep the game's own.\n"
                         L";   EngineSpeedTop: the mod engine speed the game reads as its top, as a share of the redline, 0.5 to 1.5 (1: the redline; idle is its 0).\n"
                         L";   Base1.<engine>, Base2.<engine> ... in a truck's file: each gear's acceleration at the game's own pull, floored, learned.\n"
@@ -4426,8 +4426,10 @@ static void LogSettings(const GaugeSettings &s)
             g_quickWinchFound ? L"" : L"; the game's method is not found, so the game does as it does");
         Log(L"settings: held gear slip %d, %S (HeldGearSlip; 0 a numbered gear held by hand has the governor, 1 the cap of L+ in the gears near it, 2 the wheel cap in every gear)", s.heldGearSlip,
             HeldSlipName(s.heldGearSlip));
-        Log(L"settings: air brakes %s (AirBrakes of the truck file: %d; -1 no choice, every class but the scout has them); the spring brakes hold under %.1f bar and let go at %.1f",
-            AirBrakesOn(s) ? L"on" : L"off", s.airBrakes, kSpringHold, kSpringRelease);
+        Log(L"settings: air brakes %s (AirBrakes of the truck file: %d; -1 no choice: every truck but a scout has them, by the class the automatic goes by for the truck); "
+            L"the spring brakes hold under %.1f bar and let go at %.1f",
+            s.airBrakes == 1 ? L"on by the truck's box" : s.airBrakes == 0 ? L"off by the truck's box" : L"by the truck driven, not known with none", s.airBrakes, kSpringHold,
+            kSpringRelease);
         Log(L"settings: the differential by axle (DiffAxle1 to DiffAxle8 of the truck file, front to back; -1 no key: the axle goes by DiffType): %d %d %d %d %d %d %d %d",
             s.diffAxle[0], s.diffAxle[1], s.diffAxle[2], s.diffAxle[3], s.diffAxle[4], s.diffAxle[5], s.diffAxle[6], s.diffAxle[7]);
     }
@@ -4814,6 +4816,8 @@ struct TruckWatch
     DamageModel damage;         // what the temperature costs the engine of the truck at modelVehicle
     EngineRecord engine;        // the record of the engine of the truck at engineVehicle
     float mass;                 // that truck's mass in kg by its files (TruckMass), 0 where not read
+    bool airOn;                 // the driven truck has air brakes, as the pass last worked it out (AirBrakesOn by the class the automatic goes by), false before its type was tried
+    uint64_t airSaid;           // the vehicle the log's air brakes line was written for
     TruckTypeRead type;         // the game's TruckType of the truck at typeVehicle with the model typeModel (truck_type.h), its text "" where not read
     uint64_t typeVehicle, typeModel;
     bool ownScales;             // the driven truck has scales of its own (Gauges\trucks): their class is the automatic's, else its weight's
@@ -5205,7 +5209,7 @@ static void LockSteerPass(TruckWatch &w, const TruckMemory &m, const GaugeSettin
     }
     const float dt = w.steerAt && now > w.steerAt ? (float)(now - w.steerAt) / 1000.0f : 0.0f;
     w.steerAt = now;
-    if (LockSteerFor(r, m, w.refs.vehicle, w.who.taken.id)) w.steerSaid = false;
+    if (LockSteerFor(r, m, w.refs.vehicle, w.who.taken.id, w.who.taken.key)) w.steerSaid = false;
     const bool wasClosed = r.closed;
     const long mendedWas = r.mended;
     const bool looked = LockSteerLook(r, m, w.refs.wheel, w.refs.wheels);
@@ -7032,7 +7036,23 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         }
         // the air dryer's purge: a hiss each time the governor stops the compressor, a little under the oil warning
         // Only on a truck with air brakes (BRIEF_spring_brakes.md, M5): without them the model does not run, so no purge
-        if (AirStepFor(w.air, AirBrakesOn(s), raw, TachSpeed(w.tach, scale), dt) && TruckEngineOn(raw)) SoundPlay(kSoundPurge, 0.8f * OilBeepGain(s.soundVolume), 1.0f);
+        // Whether it has them (BRIEF_air_brakes_by_truck.md): its box first, else by the class the automatic goes by. Not
+        // before this vehicle's type and weight have been tried, which is at the end of its first pass: until then it
+        // has none, so the default never flips a pass after the truck is found. Then the tanks start full
+        {
+            const bool airWas = w.airOn;
+            w.airOn = w.typeVehicle == w.refs.vehicle && AirBrakesOn(s, AutoClass(w, s.tachClass));
+            if (w.airOn != airWas || w.airSaid != w.refs.vehicle)
+            {
+                if (w.typeVehicle == w.refs.vehicle)
+                {
+                    w.airSaid = w.refs.vehicle;
+                    Log(L"air brakes: %s for vehicle %llx (%s)", w.airOn ? L"on" : L"off", (unsigned long long)w.refs.vehicle,
+                        s.airBrakes >= 0 ? L"its box on the Engine tab" : w.ownScales ? L"the class of its own scales" : L"the class by its type in the game files and its weight");
+                }
+            }
+        }
+        if (AirStepFor(w.air, w.airOn, raw, TachSpeed(w.tach, scale), dt) && TruckEngineOn(raw)) SoundPlay(kSoundPurge, 0.8f * OilBeepGain(s.soundVolume), 1.0f);
         TiltStep(w.tilt, raw, s, dt);
         TempStep(w.temp, kind, raw, TachSpeed(w.tach, scale), s, dt);
         // the oil warning: heard every few seconds while the oil is too hot, and said in the log when it comes and goes
@@ -7552,7 +7572,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             const uint64_t a = w.refs.action;
             const bool outside = a && !(a >= m.base && a < m.base + g_exeSize);
             const bool heldWas = w.springHeld;
-            w.springHeld = SpringHeldStep(w.springHeld, AirBrakesOn(s), w.air.running, w.air.bar);
+            w.springHeld = SpringHeldStep(w.springHeld, w.airOn, w.air.running, w.air.bar);
             uint8_t byte = 0;
             const bool byteRead = outside && m.get(a + kHandbrakeAt, byte);
             const bool wasOurs = w.springHold.ours && w.springHold.action == a;
@@ -7575,7 +7595,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                         !byteRead ? L"the handbrake byte is not read, nothing written" : byte ? L"the handbrake was on already and stays the player's" : wrote ? L"the handbrake (action + 0x48) set by the mod"
                                                                                                                                                     : L"THE WRITE OF THE HANDBRAKE BYTE FAILED");
                 else
-                    Log(L"spring brakes: release at %.2f bar (%s): %s", w.air.bar, AirBrakesOn(s) ? L"the air is back" : L"Air brakes switched off",
+                    Log(L"spring brakes: release at %.2f bar (%s): %s", w.air.bar, w.airOn ? L"the air is back" : L"the truck has no air brakes now",
                         to == 0 && wrote ? L"the handbrake cleared by the mod" : L"the handbrake left as it is (not the mod's)");
             }
             const bool flat = w.tilt.running && fabsf(w.tilt.pitchDeg) < 3.0f && fabsf(w.tilt.rollDeg) < 3.0f;
@@ -7586,7 +7606,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                     w.kmh / 3.6f, kSpringRollFor, byte, w.springWrites, w.springCleared);
             }
             const unsigned long long springNow = GetTickCount64();
-            if (s.probe && AirBrakesOn(s) && springNow >= w.springProbeAt)
+            if (s.probe && w.airOn && springNow >= w.springProbeAt)
             {
                 w.springProbeAt = springNow + 1000;
                 Log(L"probe: spring brakes: the air %.2f bar, hold under %.1f and release at %.1f: %s; the handbrake byte %s, the mod's own %d; %ld writes, cleared by the game on %ld passes; the truck at %.2f m/s, "
@@ -10037,7 +10057,10 @@ static DWORD WINAPI Run(void *)
             v.st.boostVacuum = watch.turbo.petrol;
             v.st.boostTop = watch.turbo.most;
             v.st.natural = watch.profile.aspiration == kAspNatural;
-            v.st.airBar = AirBrakesOn(inForce) ? watch.air.bar : kAirCutOut; // without air brakes the model holds none: the figure of full tanks, and nothing draws it
+            // air brakes by the truck: what the pass worked out for the driven one
+            const bool airOn = watch.airOn;
+            v.st.noAir = !airOn;
+            v.st.airBar = airOn ? watch.air.bar : kAirCutOut; // without air brakes the model holds none: the figure of full tanks, and nothing draws it
             v.st.rangeKm = watch.range.rangeKm;
             if (s.showOdometer && v.odoKnown) strncpy_s(v.st.odometer, v.odoText, _TRUNCATE);
             v.st.burnPerMin = watch.burnKnown ? watch.burn : -1.0f;
@@ -10088,7 +10111,7 @@ static DWORD WINAPI Run(void *)
                 wf.tilt = watch.tilt.running ? watch.tilt.lamp : -1;
                 wf.rollDeg = watch.tilt.rollDeg;
                 wf.pitchDeg = watch.tilt.pitchDeg;
-                wf.airKnown = AirBrakesOn(inForce); // a truck without air brakes has no air to warn of
+                wf.airKnown = watch.airOn; // a truck without air brakes has no air to warn of
                 wf.springHeld = watch.springHeld;
                 wf.airBar = watch.air.bar;
                 const WarnList list = WarnListMake(s, wf, warnMargins);
@@ -10097,7 +10120,11 @@ static DWORD WINAPI Run(void *)
             v.engineDamage = raw.damage;
             v.engineCapacity = raw.damageKnown ? raw.damageCapacity : 0;
         }
-        else if (v.demo) GaugeDemo(v.st, s);
+        else if (v.demo)
+        {
+            GaugeDemo(v.st, s);
+            v.st.noAir = !AirBrakesOn(inForce, inForce.tachClass); // with no truck driven: the plain scales' class, as before
+        }
         // the clock: the game's hour and the outside temperature in force (the demo keeps its own)
         if (!v.demo)
         {

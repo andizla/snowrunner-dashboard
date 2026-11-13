@@ -219,6 +219,7 @@ static void OnFrame()
     QueryPerformanceCounter(&before);
     GaugeLayout lay = GaugeLayoutOf(s);
     if (shown.natural) lay.showBoost = false; // a naturally aspirated engine has no boost to show
+    if (shown.noAir) lay.showAir = false;     // a truck without air brakes has no air to show (the mod's thread worked it out)
     GaugeDraw(ImGui::GetBackgroundDrawList(), g_fonts, GaugeOrigin(s, io.DisplaySize.x, io.DisplaySize.y), u, alpha * s.opacity, shown, lay);
     QueryPerformanceCounter(&after);
     if (s.probe)

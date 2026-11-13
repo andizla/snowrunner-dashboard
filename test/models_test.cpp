@@ -3502,17 +3502,33 @@ int main(int argc, char **argv)
     {
         GaugeSettings ab;
         SettingsDefaults(ab);
+        // the class is the one the automatic goes by for the truck, not the plain scales' (BRIEF_air_brakes_by_truck.md, M1)
         bool byClass = ab.airBrakes == -1;
-        ab.tachClass = kClassTruck;
-        byClass = byClass && AirBrakesOn(ab);
+        ab.tachClass = kClassScout; // the plain row says nothing about the truck
+        byClass = byClass && AirBrakesOn(ab, kClassTruck) && AirBrakesOn(ab, kClassHeavy) && !AirBrakesOn(ab, kClassScout);
         ab.tachClass = kClassHeavy;
-        byClass = byClass && AirBrakesOn(ab);
-        ab.tachClass = kClassScout;
-        byClass = byClass && !AirBrakesOn(ab);
+        byClass = byClass && AirBrakesOn(ab, kClassTruck) && AirBrakesOn(ab, kClassHeavy) && !AirBrakesOn(ab, kClassScout);
         ab.airBrakes = 1; // a scout ticked gets air
-        bool overClass = AirBrakesOn(ab);
-        ab.tachClass = kClassHeavy, ab.airBrakes = 0; // a heavy truck unticked loses it
-        overClass = overClass && !AirBrakesOn(ab);
+        bool overClass = AirBrakesOn(ab, kClassScout) && AirBrakesOn(ab, kClassTruck) && AirBrakesOn(ab, kClassHeavy);
+        ab.airBrakes = 0; // a heavy truck unticked loses it
+        overClass = overClass && !AirBrakesOn(ab, kClassHeavy) && !AirBrakesOn(ab, kClassTruck) && !AirBrakesOn(ab, kClassScout);
+        // the order, by the class in force: own scales of the Scout class on a heavy truck by weight: off. No scales, SCOUT at
+        // 20 t: off. No scales, OFFROAD at 5 t: on. No type and no weight: the plain row, Scout off and Truck on
+        ab.airBrakes = -1;
+        const bool order = !AirBrakesOn(ab, ClassInForce(true, kClassScout, "HEAVY", 20000.0f)) && !AirBrakesOn(ab, ClassInForce(false, kClassTruck, "SCOUT", 20000.0f)) &&
+                           AirBrakesOn(ab, ClassInForce(false, kClassScout, "OFFROAD", 5000.0f)) && !AirBrakesOn(ab, ClassInForce(false, kClassScout, "", 0.0f)) &&
+                           AirBrakesOn(ab, ClassInForce(false, kClassTruck, "", 0.0f)) && !AirBrakesOn(ab, ClassInForce(false, kClassTruck, "", 5000.0f)) &&
+                           AirBrakesOn(ab, ClassInForce(true, kClassHeavy, "SCOUT", 2000.0f));
+        overClass = overClass && order;
+        // the flip (M4): a hold of the spring brakes ends on the pass the truck turns out to have no air brakes, and the model holds no air
+        AirModel flip = { true, 2.0f };
+        const bool heldOn = SpringHeldStep(false, true, flip.running, flip.bar), heldOff = SpringHeldStep(heldOn, false, flip.running, flip.bar);
+        TruckRaw still = {};
+        AirStepFor(flip, false, still, 0.5f, 0.05f);
+        const bool noAirLeft = !flip.running && flip.bar == 0.0f;
+        AirStepFor(flip, true, still, 0.5f, 0.05f);
+        const bool startsFull = flip.running && flip.bar > kSpringRelease && !SpringHeldStep(false, true, flip.running, flip.bar);
+        overClass = overClass && heldOn && !heldOff && noAirLeft && startsFull;
         ab.airBrakes = 7;
         SettingsClamp(ab);
         const bool clamped = ab.airBrakes == -1;

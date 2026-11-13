@@ -26,6 +26,7 @@ struct GaugeState
     float rpm;                      // engine speed (the mod's own model)
     float rpmRedline, rpmMax;       // the tachometer's scale: red zone from rpmRedline to rpmMax
     bool natural;                   // the engine is naturally aspirated (its profile): no boost dial
+    bool noAir;                     // the truck has no air brakes (AirBrakesOn, worked out by the mod's thread): no air dial
     int gear;                       // below 0 reverse, 0 neutral, 1.. forward
     const char *gearMode;           // "A" automatic (drawn beside the gear's number); "H" high, "L", "L+", "L-" (drawn in the number's place);
                                     // "" a numbered gear. String literals only: the pointer crosses threads
@@ -493,7 +494,11 @@ static const float kSpringRelease = 4.5f; // bar: from here they let it go
 // The truck has air brakes (BRIEF_spring_brakes.md, M4 and M5): its own choice where its file holds one, else by its
 // class in force, every truck but a scout (scouts brake by hydraulics). Everything of the brake air asks this: the
 // model, the dial, the HUD's cell, the warning, the purge and the spring brakes.
-inline bool AirBrakesOn(const GaugeSettings &s) { return s.airBrakes == 1 || (s.airBrakes != 0 && s.tachClass != kClassScout); }
+// The truck has air brakes: its own choice first (the box, 1 or 0), and with no choice every class but the scout.
+// autoClass: the class the automatic goes by for the truck (the class of its own scales, else the game's truck type,
+// else its weight), so the brakes, the hold in a gear and the engine's curve never differ
+// (BRIEF_air_brakes_by_truck.md). With no truck driven: the plain scales' class.
+inline bool AirBrakesOn(const GaugeSettings &s, int autoClass) { return s.airBrakes == 1 || (s.airBrakes != 0 && autoClass != kClassScout); }
 static const GaugeScale kClassScales[kClassCount] = { { 650.0f, 2200.0f, 3000.0f, 100.0f, 1.8f }, { 800.0f, 5500.0f, 7000.0f, 120.0f, 1.0f }, { 600.0f, 1900.0f, 2500.0f, 80.0f, 2.0f } };
 
 // The class changed from was: a number set to the old class's own follows the new class (0, the class's), and one set

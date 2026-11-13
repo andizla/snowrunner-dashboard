@@ -1067,7 +1067,7 @@ static int HudCells(const GaugeLayout &lay, const GaugeState &st, HudCell *out)
     if (lay.showTemp) add(kHudTemp, "%.0f", temp(st.tempC), deg, st.tempC >= kTempRed);
     if (lay.oilGauge != kOilOff) add(kHudOil, "%.0f", temp(st.oilC), deg, st.oilHot);
     if (lay.showBoost && !st.natural) add(kHudBoost, st.psi ? "%.0f" : "%.1f", st.psi ? st.boostBar * 14.5f : st.boostBar, st.psi ? "PSI" : "BAR", false);
-    if (lay.showAir) add(kHudAir, "%.1f", st.airBar, "BAR", st.airBar < kAirWarn);
+    if (lay.showAir && !st.noAir) add(kHudAir, "%.1f", st.airBar, "BAR", st.airBar < kAirWarn);
     return n;
 }
 
@@ -1324,7 +1324,7 @@ static GaugeLayout GaugeLayoutOf(const GaugeSettings &s)
     lay.swapDials = s.swapDials;
     lay.showTemp = s.showTemp;
     lay.showBoost = s.showBoost;
-    lay.showAir = s.showAir && AirBrakesOn(s); // a truck without air brakes has no air to show
+    lay.showAir = s.showAir; // a truck without air brakes has no air to show: the caller turns it off by the state's noAir
     lay.showLamps = s.showLamps;
     lay.showClock = s.showClock;
     lay.showFuelUse = s.showFuelUse;

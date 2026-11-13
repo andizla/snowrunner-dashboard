@@ -541,7 +541,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         {
             ImGui::BeginDisabled(!view.truck[0]);
             PageLabel("Air brakes", labelX);
-            bool airOn = AirBrakesOn(s);
+            bool airOn = AirBrakesOn(s, view.autoClass);
             if (ImGui::Checkbox("##airbrakes", &airOn))
             {
                 s.airBrakes = airOn ? 1 : 0;

@@ -1031,7 +1031,10 @@ minutes at idle; eight full applications with the engine off take a full tank to
 (5.5).</p>
 {fig}
 <p><b>Air brakes by truck and the spring brakes</b> (BRIEF_spring_brakes.md). <code>AirBrakesOn</code> is the truck's own choice where its file holds one
-(AirBrakes, 0 or 1, in the suspension's sections, the owned truck's over the kind's), else every class but the scout. Everything of the brake air asks it:
+(AirBrakes, 0 or 1, in the suspension's sections, the owned truck's over the kind's), else every class but the scout, by the class the automatic goes by for the truck
+(<code>AutoClass</code>: its own scales, else the game's truck type, else its weight), never the plain scales' class while a truck
+is driven. The mod's thread works it out once a pass, and not before the truck's type has been tried, so it never flips a pass after
+the truck is found (<code>air brakes: %s for vehicle</code>). The draw gets the answer in the state (<code>noAir</code>). Everything of the brake air asks it:
 the model (<code>AirStepFor</code>: off, it does not run and holds no pressure), the dial, the HUD's cell, the warning and the purge.
 <code>SpringHeldStep</code> holds under 3.0 bar and lets go at 4.5; the 0.4 bar the release takes leaves the needle over the hold.
 The truck is held by the game's own handbrake, the byte at action + 0x48, through <code>LockHoldStep</code> with a hold of its own: a handbrake the player set first is never cleared,
@@ -1182,7 +1185,7 @@ def s_lamps():
 {table(['Lamp', 'Reads', 'Lit', 'Colour'], rows, 'The lamps (gauge_draw.h:729-777)', 'small')}
 <p>Dials: fuel red under 10%; coolant 50 to 130 °C, blue under 60 and red from 118, with the oil as a second, amber needle; the oil
 dial 50 to 150 °C, red from <code>OilWarnC</code>; boost from 0 (a diesel) or −1 bar (a petrol engine) to 2 bar, or 3 for a turbo of more than 2 (× 14.5 for psi); brake air 0 to 10 bar, red under 5.5,
-hidden on a truck without air brakes (<code>AirBrakesOn</code>: the Air brakes choice, else every class but the scout); the clock, twelve hour marks and two hands over the game's
+hidden on a truck without air brakes (<code>AirBrakesOn</code>: the Air brakes choice, else every class but the scout, by the class the automatic goes by); the clock, twelve hour marks and two hands over the game's
 hour (no hands while the clock is not found), with the outside temperature in force as a number in its face. The speed is the chassis velocity along its forward axis,
 × 3.6 for km/h. Every dial sweeps from 150° to 390°.</p>
 '''
@@ -1365,7 +1368,7 @@ mod's own last one, to the bit. Another figure there ends the writing for that t
 goes back when the truck is left, when Real engine goes off and when both rows are at 100
 (<code>steering: the stock most angle put back into</code>). A wheel that cannot be put back, because the game has moved or rebuilt it,
 is let go with the mod's figure in it. Its stock figure and that figure are kept as a pair for the session, 64 pairs at the most, with
-the truck's id. A figure about to be taken as a stock figure is looked up among them first. Met again, the stock is the pair's and the
+the truck's kind (not its id, which the game renews at a recovery). A figure about to be taken as a stock figure is looked up among them first. Met again, the stock is the pair's and the
 share in force goes on from figure over stock, so a rebuilt truck is never lowered twice (<code>steering: %ld wheels of vehicle</code>). The settings line is
 <code>settings: the steering left with a lock in:</code>, and with <code>Probe=1</code> a line a second
 (<code>probe: steering: the target</code>) gives the target, the share in force and the first wheel's figures.</p>

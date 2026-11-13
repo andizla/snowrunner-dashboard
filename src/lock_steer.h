@@ -81,6 +81,7 @@ struct LockSteerRec
     bool known;
     uint64_t vehicle;
     char id[40];
+    char kind[96];   // the truck's kind as the game's files name it, "" where it is not read: what a figure let go is kept and met by
     int n;
     uint64_t wheel[kDdWheels];
     float stock[kDdWheels], last[kDdWheels], read[kDdWheels]; // read: what the wheel held at this pass's look
@@ -101,15 +102,18 @@ inline bool LockSteerSame(float a, float b) { return !memcmp(&a, &b, sizeof a); 
 // nothing is put back, and the wheels turn up at a new place holding stock times the share. Taken as a stock figure,
 // that would be lowered again: 60 percent, then 36, then 22.
 // So every wheel let go with the mod's figure still in it leaves a pair here: its stock figure and the mod's last
-// write, with the truck's id. The memory outlives every record, for the session: kLockSteerKeptMost pairs, the oldest
+// write, with the truck's kind. The memory outlives every record, for the session: kLockSteerKeptMost pairs, the oldest
 // dropped. A figure about to be taken as a stock figure is looked up among the last writes first, to the bit, for the
-// same truck id (or none on both sides). Found: it is the mod's own figure on a moved wheel, and the pair is spent.
+// same kind of truck (or none on both sides). Found: it is the mod's own figure on a moved wheel, and the pair is spent.
+// By the kind and not by the truck's id (review_lock_steering_151_fix.md, S1): the game hands out a new id at a
+// recovery, and two trucks of one kind have the same stock angles, so a figure of the mod's on one is never another's
+// true stock. A truck of another kind is never met: its true stock could have the same bits as a figure let go.
 enum { kLockSteerKeptMost = 64 };
 struct LockSteerKept
 {
     int n;
     float stock[kLockSteerKeptMost], last[kLockSteerKeptMost];
-    char id[kLockSteerKeptMost][40];
+    char kind[kLockSteerKeptMost][96];
     long kept, met; // pairs kept and pairs met again, over the session
 };
 inline LockSteerKept &LockSteerMemory()
@@ -117,30 +121,30 @@ inline LockSteerKept &LockSteerMemory()
     static LockSteerKept kept = {};
     return kept;
 }
-inline void LockSteerKeep(LockSteerKept &k, const char *id, float stock, float last)
+inline void LockSteerKeep(LockSteerKept &k, const char *kind, float stock, float last)
 {
     if (k.n >= kLockSteerKeptMost)
     {
         memmove(k.stock, k.stock + 1, sizeof(float) * (kLockSteerKeptMost - 1));
         memmove(k.last, k.last + 1, sizeof(float) * (kLockSteerKeptMost - 1));
-        memmove(k.id, k.id + 1, sizeof k.id[0] * (kLockSteerKeptMost - 1));
+        memmove(k.kind, k.kind + 1, sizeof k.kind[0] * (kLockSteerKeptMost - 1));
         k.n = kLockSteerKeptMost - 1;
     }
     k.stock[k.n] = stock, k.last[k.n] = last;
-    strncpy_s(k.id[k.n], id, _TRUNCATE);
+    strncpy_s(k.kind[k.n], kind, _TRUNCATE);
     k.n++;
     k.kept++;
 }
-// The stock figure of the newest pair whose last write is `figure` to the bit, for the truck id; the pair is spent.
-inline bool LockSteerMeet(LockSteerKept &k, const char *id, float figure, float &stock)
+// The stock figure of the newest pair whose last write is `figure` to the bit, for the kind of truck; the pair is spent.
+inline bool LockSteerMeet(LockSteerKept &k, const char *kind, float figure, float &stock)
 {
     for (int i = k.n - 1; i >= 0; i--)
     {
-        if (!LockSteerSame(k.last[i], figure) || strcmp(k.id[i], id)) continue;
+        if (!LockSteerSame(k.last[i], figure) || strcmp(k.kind[i], kind)) continue;
         stock = k.stock[i];
         memmove(k.stock + i, k.stock + i + 1, sizeof(float) * (size_t)(k.n - 1 - i));
         memmove(k.last + i, k.last + i + 1, sizeof(float) * (size_t)(k.n - 1 - i));
-        memmove(k.id + i, k.id + i + 1, sizeof k.id[0] * (size_t)(k.n - 1 - i));
+        memmove(k.kind + i, k.kind + i + 1, sizeof k.kind[0] * (size_t)(k.n - 1 - i));
         k.n--;
         k.met++;
         return true;
@@ -166,7 +170,7 @@ inline int LockSteerBack(LockSteerRec &r, const TruckMemory &m)
             r.last[i] = r.stock[i], back++;
             continue;
         }
-        if (!(read && LockSteerSame(now, r.stock[i]))) LockSteerKeep(LockSteerMemory(), r.id, r.stock[i], r.last[i]);
+        if (!(read && LockSteerSame(now, r.stock[i]))) LockSteerKeep(LockSteerMemory(), r.kind, r.stock[i], r.last[i]);
         r.last[i] = r.stock[i];
     }
     r.backs += back;
@@ -177,7 +181,7 @@ inline int LockSteerBack(LockSteerRec &r, const TruckMemory &m)
 // The record for this truck. The same truck (its id, or its vehicle where no id is read): kept, also where the vehicle
 // is another, as a truck rebuilt in place is. Another truck: the old one's wheels put back, a new record. True where it
 // is a new record.
-inline bool LockSteerFor(LockSteerRec &r, const TruckMemory &m, uint64_t vehicle, const char *id)
+inline bool LockSteerFor(LockSteerRec &r, const TruckMemory &m, uint64_t vehicle, const char *id, const char *kind = "")
 {
     const bool same = r.known && (id[0] ? !strcmp(r.id, id) : !r.id[0] && r.vehicle == vehicle);
     if (same)
@@ -189,6 +193,7 @@ inline bool LockSteerFor(LockSteerRec &r, const TruckMemory &m, uint64_t vehicle
     r = LockSteerRec{};
     r.known = true, r.vehicle = vehicle, r.share = 1.0f, r.closedAt = -1;
     strncpy_s(r.id, id, _TRUNCATE);
+    strncpy_s(r.kind, kind, _TRUNCATE);
     return true;
 }
 
@@ -234,7 +239,7 @@ inline bool LockSteerLook(LockSteerRec &r, const TruckMemory &m, const uint64_t 
             // taken as the stock: a place with no record, or another figure while nothing is limited
             float kept = 0.0f;
             if (!sane(now[i])) bad = i;
-            else if (now[i] > 0.0f && LockSteerMeet(LockSteerMemory(), r.id, now[i], kept) && kept > now[i] && sane(kept))
+            else if (now[i] > 0.0f && LockSteerMeet(LockSteerMemory(), r.kind, now[i], kept) && kept > now[i] && sane(kept))
             {
                 // the mod's own figure on a wheel that moved after its record was thrown away
                 r.has[i] = true, r.stock[i] = kept, r.last[i] = now[i];
