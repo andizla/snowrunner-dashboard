@@ -895,6 +895,21 @@ static bool DiffBytesRead(const void *action, bool &lockByte, bool &handbrake, b
 // number (the lock without the cut, whose hook alone works the truck's speed out): from the read's forward speed.
 static bool LockOver(const CapTruckRead &t, const float *post, float k, float *locked, uint64_t vehicle, float mass, float truck)
 {
+    // another truck: what was kept of the last written step is the old truck's and is set anew
+    // (BRIEF_drive_1112_findings.md part 4, M1: its count of wheels stood in the probe's line of the new truck)
+    static uint64_t seen = 0;
+    if (seen != vehicle)
+    {
+        seen = vehicle;
+        InterlockedExchange64(&g_lockVehicle, 0);
+        InterlockedExchange(&g_lockWheels, 0);
+        InterlockedExchange(&g_lockKBits, 0);
+        InterlockedExchange(&g_lockBeforeBits, 0);
+        InterlockedExchange(&g_lockAfterBits, 0);
+        InterlockedExchange(&g_lockCBits, 0);
+        InterlockedExchange(&g_lockRBits, 0);
+        InterlockedExchange(&g_lockOverBits, 0);
+    }
     if (g_lockHeldOn)
     {
         // the step after a written one: its speeds before the drive are what the ground left of the write
@@ -1145,6 +1160,7 @@ static CapAround CapStepAround(const TorqueCutSlot *cut, void *action, float thr
         g_capVehicle = vehicle;
         g_capArm = CapArm{ 0x7FFFFFFF, false };
         g_capKept = 1.0f;
+        InterlockedExchange(&g_capCeiling, 0); // the old truck's ceiling; this step sets its own below
     }
     static CapTruckRead t; // the physics thread's own: one vehicle under the cut, one call at a time
     const bool readOk = CapReadBefore((const void *)(uintptr_t)vehicle, action, t, cut->cylinderVtable);
@@ -2437,6 +2453,7 @@ static volatile LONG g_b4sBits = 0, g_cutWBits = 0, g_cutPedalBits = 0;
 // the bracket the drive got last step, per vehicle (F1b: CutRise paces it); none for a new vehicle or after a clear, where
 // the pace starts from the slot's gamePull
 static volatile LONG64 g_riseVehicle = 0;
+static volatile LONG64 g_cutAnswerVehicle = 0; // the vehicle of the last answer (TorqueCutCounts::vehicle)
 static volatile LONG g_riseBits = 0, g_cutUsed = 0, g_cutRate = 0, g_cutTruck = 0x7FC00000; // a quiet NaN: not read
 // the last answer's rolling radius (BRIEF_cut_radius_cylinder.md, M2: the hook does not log; the mod's thread does): the
 // radius used and the driven wheels' + 0x94 by the same mean, and the driven wheels by their kind (WheelRollRadius)
@@ -2575,6 +2592,7 @@ __declspec(noinline) static bool HookGearTorque(void *vehicle, int gear, float *
         if (a) *a = curve.a;
         if (top) *top = curve.top;
         if (gearSpeed) *gearSpeed = gs;
+        InterlockedExchange64(&g_cutAnswerVehicle, (LONG64)(uintptr_t)vehicle);
         InterlockedIncrement(&g_cutAnswered);
         if (BitsFloat(g_cutLastBracket) - r.used >= 0.3f) InterlockedIncrement(&g_cutFalls);
         InterlockedExchange(&g_cutLastBracket, FloatBits(r.used));
@@ -2686,6 +2704,7 @@ void TorqueCutCountsGet(TorqueCutCounts &out)
     out.rollCylinder = g_cutRollCylinder;
     out.rollNone = g_cutRollNone;
     out.rollOut = g_cutRollOut;
+    out.vehicle = (uint64_t)g_cutAnswerVehicle;
 }
 
 void WheelCapCountsGet(WheelCapCounts &out)

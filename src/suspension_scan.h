@@ -85,6 +85,9 @@ inline void SuspHitWords(const SuspHit &h, char *out, size_t size)
 }
 
 // The floats of a constraint's first kSuspFloats bytes, as "+0x10 1.5 ..." in groups of four; false where it is gone.
+// The print begins behind the table pointer at + 0 (its two halves read as floats gave "-nan" and a tiny figure in
+// every line), and a word that is no number as a float is printed as its bits, so the line never holds nan.
+static const int kSuspFloatsFrom = 2;
 inline bool SuspFloatsText(const TruckMemory &m, uint64_t at, uint64_t vtable, char *out, size_t size)
 {
     float f[kSuspFloats / 4];
@@ -92,10 +95,15 @@ inline bool SuspFloatsText(const TruckMemory &m, uint64_t at, uint64_t vtable, c
     if (!m.get(at, vt) || vt != vtable || !m.peek(at, f, sizeof f)) return false;
     size_t used = 0;
     out[0] = 0;
-    for (int i = 0; i < (int)(kSuspFloats / 4) && used + 32 < size; i++)
+    for (int i = kSuspFloatsFrom; i < (int)(kSuspFloats / 4) && used + 32 < size; i++)
     {
-        if (i % 4) used += (size_t)snprintf(out + used, size - used, " %.5g", f[i]);
-        else used += (size_t)snprintf(out + used, size - used, "%s+%x %.5g", i ? " | " : "", i * 4, f[i]);
+        char word[24];
+        uint32_t bits = 0;
+        memcpy(&bits, &f[i], 4);
+        if (isfinite(f[i])) snprintf(word, sizeof word, "%.5g", f[i]);
+        else snprintf(word, sizeof word, "x%08x", bits);
+        if (i % 4 && i != kSuspFloatsFrom) used += (size_t)snprintf(out + used, size - used, " %s", word);
+        else used += (size_t)snprintf(out + used, size - used, "%s+%x %s", i != kSuspFloatsFrom ? " | " : "", i * 4, word);
     }
     return true;
 }

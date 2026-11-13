@@ -4557,10 +4557,14 @@ static void WinchOutPass(const GaugeSettings &s, uint64_t vehicle, bool held, bo
         }
         pullWas = pulled ? under : NAN;
         pullAt = now;
-        Log(L"winch out: %s: the rope %.3f m (at the start of the hold %s), %ld calls in %ld frames asked %.3f m more over %.3f s of steps; no call: the game's pull %ld, "
+        // the rope's length is the last call's: with no call in the hold there is none to print (it read 0.000 m)
+        wchar_t ropeText[40];
+        if (c[1]) swprintf_s(ropeText, L"%.3f m", WinchFloat(j.lengthBits));
+        else wcscpy_s(ropeText, c[0] ? L"not read (no call)" : L"not read (no frame)");
+        Log(L"winch out: %s: the rope %s (at the start of the hold %s), %ld calls in %ld frames asked %.3f m more over %.3f s of steps; no call: the game's pull %ld, "
             L"its second active byte %ld, no rope of this truck %ld, a length of 0 %ld, a crane %ld, the mod's pass late %ld, a step of 0 %ld; presses with no call %ld; "
             L"a read under what was asked %ld%s",
-            head, c[1] ? WinchFloat(j.lengthBits) : 0.0f, firstText, c[1], c[0], WinchFloat(j.askedBits) - fromAsked, WinchFloat(j.stepSumBits) - fromSteps, c[2], c[3], c[4],
+            head, ropeText, firstText, c[1], c[0], WinchFloat(j.askedBits) - fromAsked, WinchFloat(j.stepSumBits) - fromSteps, c[2], c[3], c[4],
             c[5], c[6], c[7], c[8], c[10], c[9], pullText);
     };
     if (held && !wasHeld)
@@ -5325,12 +5329,14 @@ static void LockPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s
     static LockCounts was = {};
     if (s.probe && now - at >= 1000)
     {
-        Log(L"probe: diff lock bite: kind %d, %d driven wheels, k %.3f, the spread %.2f rad/s after the drive and %.2f after the lock; a second: %ld steps here, %ld written, "
+        char lockWheels[96];
+        LockWheelsText(lockWheels, sizeof lockWheels, lc.wheels, lc.vehicle, w.refs.vehicle, lc.writes != was.writes);
+        Log(L"probe: diff lock bite: kind %d, %S, k %.3f, the spread %.2f rad/s after the drive and %.2f after the lock; a second: %ld steps here, %ld written, "
             L"%ld with the lock off, %ld held by the handbrake, %ld wheels skipped, %ld faults; DiffLockBite %d; the last written step: the fastest wheel %.2f rad/s "
             L"over the weighted mean before the drive C %.2f rad/s, the impulse handed on R %.3f; a second: %ld steps with C under 0 and the drive's impulse over 0, "
             L"%ld wheels written under 0, %ld steps where the bounds moved a wheel, %ld wheels written under 0 and under what the drive left them with the drive's "
             L"impulse over 0 (0 while the bounds hold)",
-            kind, lc.wheels, lc.k, lc.spreadBefore, lc.spreadAfter, lc.calls - was.calls, lc.writes - was.writes, lc.off - was.off, lc.handbrake - was.handbrake,
+            kind, lockWheels, lc.k, lc.spreadBefore, lc.spreadAfter, lc.calls - was.calls, lc.writes - was.writes, lc.off - was.off, lc.handbrake - was.handbrake,
             lc.skipped - was.skipped, lc.faults - was.faults, s.diffLockBite, lc.over, lc.c, lc.r, lc.cUnder - was.cUnder, lc.under - was.under,
             lc.bounded - was.bounded, lc.breach - was.breach);
         // M1 of BRIEF_lock_wheels_backward.md: the last written step by wheel, with what the ground left of it
@@ -7861,7 +7867,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                         if (raw.drive[i] == 1 || (raw.drive[i] == 2 && raw.awd)) sumNow += raw.spin[i] * dirNow, driven++;
                     TorqueCutCounts last = {};
                     TorqueCutCountsGet(last);
-                    HeldSlipStep(w.slip, s.heldGearSlip, w.pos.pos, w.pos.gear, capShare, gearTop, firstTop, TruckPedal(raw), driven ? sumNow / (float)driven : NAN, last.truck,
+                    // the truck's speed only where the last answer is this truck's: another truck's would let a cap go too soon (no number keeps the choice until the pedal is off)
+                    HeldSlipStep(w.slip, s.heldGearSlip, w.pos.pos, w.pos.gear, capShare, gearTop, firstTop, TruckPedal(raw), driven ? sumNow / (float)driven : NAN,
+                                 CutAnswerOurs(last.vehicle, w.refs.vehicle) ? last.truck : NAN,
                                  CutGovernBand(gearTop, kTachOverrun).from);
                 }
                 TorqueCutSlot slot = TorqueCutSlotOf(w, raw, s, scale, curve, tachTop, locked, gearTop, w.slip.inForce, firstTop);
@@ -7874,7 +7882,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 // the wheels, the clutch in) and the drive answered since the last pass, by the speeds that answer used
                 TorqueCutCounts oc = {};
                 TorqueCutCountsGet(oc);
-                const bool overFresh = oc.answered != w.overAnswered;
+                // fresh: an answer since the last pass, and this truck's. The count alone was fresh on the first pass of a
+                // truck just entered, with the figures of the truck before (the over-rev's share of one pass, and the line below)
+                const bool overFresh = oc.answered != w.overAnswered && CutAnswerOurs(oc.vehicle, w.refs.vehicle);
                 w.overAnswered = oc.answered;
                 w.overShare = slot.mode == kCutMap && overFresh ? OverRevShare(oc.s, oc.truck, slot.map.top) : NAN;
                 // the rolling radius (BRIEF_cut_radius_cylinder.md): a line a truck, and again when the count of either
@@ -8059,15 +8069,18 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 WheelCapCountsGet(cap);
                 const TorqueCutCounts &before = w.cutWas;
                 const float sTop = gearTop > 0.0f ? c.s / gearTop : 0.0f;
+                char governor[200];
+                CutGovernorText(governor, sizeof governor, c.truck, c.radius, c.radius94, c.rollCylinder, c.rollNone, c.rollOut, c.vehicle, w.refs.vehicle);
                 Log(L"probe: torque cut: %s; s %.2f rad/s (%.2f of the top %.2f, %.0f rpm), F %.3f, the bracket %.3f (the least %.3f, used %.3f at %.3f a step), the scalar %.3f, the share %.2f; "
                     L"the game's T %.3f, answered %.3f; D4 %.2f, B4s %.3f, the stand-in %.3f, the stall's wheels %.3f; calls answered %ld, passed %ld, the other callers' %ld, reads failed %ld; falls of 0.3 or more "
-                    L"in one step %ld; the throttle held at 1 %s; the governor by the truck's speed %.2f rad/s (the rolling radius %.3f m, wheel + 0x94 %.3f m; %ld by the cylinder, %ld without, %ld out of bounds); the wheel cap %s: the ceiling %.2f rad/s, clamps %ld (%ld in the last step), the largest excess %.2f rad/s "
+                    L"in one step %ld; the throttle held at 1 %s; the last answer %s; the governor by the truck's speed %S; the wheel cap %s: the ceiling %.2f rad/s, clamps %ld (%ld in the last step), the largest excess %.2f rad/s "
                     L"after the drive and %.2f before it (before it against the wider cap of L-, L and R at any truck speed), the driven mean after the drive %.2f rad/s over %ld steps (%.2f at the most), the least driven wheel before the drive %.2f rad/s, "
                     L"bodies refused %ld, steps waiting %ld, kept %.3f, spread %.2f rad/s, faults %ld; the physics at %d steps a second",
                     cutActs ? L"acting" : TorqueCutWhyNot(s, want, own && GearboxManual(w), cutHooks, raw.gearEngaged, gearTop, cutAgrees), c.s, sTop, gearTop, sTop * scale.redline,
                     c.f, c.bracket, w.cutFloor, c.used, c.rate, locked ? 0.0f : SettingsRange(w.clutch.carried, -1.0f, kClutchHold), s.engineShare / 100.0f, c.stock, c.torque, c.d4, c.b4s, c.standIn, c.w,
                     c.answered - before.answered, c.passed - before.passed, c.others - before.others, c.faults - before.faults, c.falls - before.falls, cutActs ? L"on" : L"off",
-                    c.truck, c.radius, c.radius94, c.rollCylinder, c.rollNone, c.rollOut, !(w.slotCap > 0.0f) ? L"not in this gear" : cap.armed ? L"armed" : L"waiting", cap.ceiling, cap.clamps - w.capWas.clamps, cap.clampedNow, cap.excessMost,
+                    CutAnswerOurs(c.vehicle, w.refs.vehicle) ? L"is this truck's" : L"is not this truck's (its figures here are another truck's or none)", governor,
+                    !(w.slotCap > 0.0f) ? L"not in this gear" : cap.armed ? L"armed" : L"waiting", cap.ceiling, cap.clamps - w.capWas.clamps, cap.clampedNow, cap.excessMost,
                     cap.preMost, cap.steps > w.capWas.steps ? (cap.postSum - w.capWas.postSum) / (float)(cap.steps - w.capWas.steps) : 0.0f, cap.steps - w.capWas.steps, cap.postMost, cap.preLeast, cap.refused - w.capWas.refused, cap.waitSteps - w.capWas.waitSteps, cap.kept, cap.spread - w.capWas.spread, cap.faults - w.capWas.faults, DriveRateOn() ? 120 : 60);
                 {
                     char slipWords[80];
@@ -8079,9 +8092,12 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 DiffCounts dc = {};
                 DiffCountsGet(dc);
                 Log(L"probe: differential: the type %s, in force in the last step %s; Open's evening by axle: J %.4f summed over %d wheels in its last step, %ld steps, %ld written, %ld faults "
-                    L"in a second; the wheels' mean %.2f rad/s against the governor's band %.2f to %.2f; in Open the wheel cap's ceiling is on each axle's mean, and the excess is the largest axle's; the physics at %d steps a second",
+                    L"in a second; the wheels' mean %.2f rad/s against the governor's band %.2f to %.2f; in Open the wheel cap's ceiling is on each axle's mean, and the excess is the largest axle's; the physics at %d steps a second; %s",
                     DiffTypeName(w.diffType), !cutActs ? L"nothing (the cut is off)" : dc.force == kDiffForceOpen ? L"Open" : dc.force == kDiffForceLock ? L"the lock" : dc.force == kDiffForceAxles ? L"each axle by its own" : L"Limited slip",
-                    dc.j, dc.wheels, dc.steps - w.diffWas.steps, dc.writes - w.diffWas.writes, dc.faults - w.diffWas.faults, c.s, w.diffBand[0], w.diffBand[1], DriveRateOn() ? 120 : 60);
+                    dc.j, dc.wheels, dc.steps - w.diffWas.steps, dc.writes - w.diffWas.writes, dc.faults - w.diffWas.faults, c.s, w.diffBand[0], w.diffBand[1], DriveRateOn() ? 120 : 60,
+                    w.axleRows.axles == 0 ? L"no axle rows for this truck, so not by axle"
+                    : w.diffMixed       ? L"the driven axles differ, so by axle while the lock byte is not in force (the by-axle line follows)"
+                                        : L"the axle rows are alike, so not by axle and no by-axle line");
                 if (dc.force == kDiffForceAxles && cutActs)
                 {
                     wchar_t types[240];

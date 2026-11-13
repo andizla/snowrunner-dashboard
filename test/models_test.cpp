@@ -3981,6 +3981,30 @@ int main(int argc, char **argv)
               "slip room: the probe's line says what the needle heads for and by which rule, with the wheels, the top and the ceiling in the room");
     }
 
+    // what a hook kept, in a probe's line (BRIEF_drive_1112_findings.md part 4, M1 and M2)
+    {
+        // two trucks in turn: eight wheels written on the first, then a four-wheel truck with no written step yet, then its own
+        char eight[96], other[96], four[96], stood[96], noTruck[96];
+        LockWheelsText(eight, sizeof eight, 8, 0x1000, 0x1000, true);
+        LockWheelsText(other, sizeof other, 8, 0x1000, 0x2000, true);
+        LockWheelsText(four, sizeof four, 4, 0x2000, 0x2000, true);
+        LockWheelsText(stood, sizeof stood, 4, 0x2000, 0x2000, false);
+        LockWheelsText(noTruck, sizeof noTruck, 8, 0, 0, true);
+        Check(!strcmp(eight, "8 driven wheels") && !strcmp(other, "no written step yet for this truck") && !strstr(other, "8") && !strcmp(four, "4 driven wheels") &&
+                  !strcmp(stood, "4 driven wheels at the last written step, none written in this second") && !strcmp(noTruck, "no written step yet for this truck"),
+              "kept counts: the lock's wheel count is printed only for the driven truck, a four-wheel truck after an eight-wheel one reads none yet and then four");
+        char none[200], foreign[200], read[200], part[200];
+        CutGovernorText(none, sizeof none, NAN, NAN, NAN, 0, 0, 0, 0, 0x2000);
+        CutGovernorText(foreign, sizeof foreign, 3.5f, 0.6f, 0.62f, 8, 0, 0, 0x1000, 0x2000);
+        CutGovernorText(read, sizeof read, 3.5f, 0.6f, 0.62f, 4, 0, 0, 0x2000, 0x2000);
+        CutGovernorText(part, sizeof part, NAN, NAN, 0.62f, 0, 4, 0, 0x2000, 0x2000);
+        Check(!strstr(none, "nan") && strstr(none, "not read yet for this truck") && !strstr(foreign, "8 by the cylinder") && strstr(foreign, "not read yet for this truck") &&
+                  !strcmp(read, "3.50 rad/s (the rolling radius 0.600 m, wheel + 0x94 0.620 m; 4 by the cylinder, 0 without, 0 out of bounds)") && !strstr(part, "nan") &&
+                  strstr(part, "not read (the rolling radius not read, wheel + 0x94 0.620 m; 0 by the cylinder, 4 without") && CutAnswerOurs(0x2000, 0x2000) &&
+                  !CutAnswerOurs(0x1000, 0x2000) && !CutAnswerOurs(0, 0),
+              "kept counts: the governor's part of the cut's line has no nan before the first answer and none of another truck's figures; the last answer counts only where it is the driven truck's");
+    }
+
     // the sound of a lift: how loud and how fast
     {
         LiftSound ls;

@@ -309,6 +309,38 @@ inline void TachStep(TachModel &m, const TruckRaw &t, const GaugeScale &k, float
     m.live = m.rpm; // not handed to the game from here; TachFollow goes on from it
 }
 
+// ---- what a hook kept from its last step, in a probe's line (BRIEF_drive_1112_findings.md part 4, M1 and M2) ----
+// A hook keeps the figures of its last step, whatever truck that was and however long ago. A line prints them only
+// where they are the driven truck's, and says so where they are not.
+// The lock's wheel count: its last written step's. fresh: a step was written in this second.
+inline void LockWheelsText(char *out, size_t size, int wheels, uint64_t countsVehicle, uint64_t driven, bool fresh)
+{
+    if (!driven || countsVehicle != driven) snprintf(out, size, "no written step yet for this truck");
+    else if (fresh) snprintf(out, size, "%d driven wheels", wheels);
+    else snprintf(out, size, "%d driven wheels at the last written step, none written in this second", wheels);
+}
+// The governor's part of the torque cut's line: the truck's own speed and the rolling radius of the cut's last answer.
+// Before the first answer for this truck they are no number or another truck's.
+inline void CutGovernorText(char *out, size_t size, float truck, float radius, float radius94, long cylinder, long none, long outOf, uint64_t answerVehicle, uint64_t driven)
+{
+    if (!driven || answerVehicle != driven)
+    {
+        snprintf(out, size, "not read yet for this truck (no answer of the cut for it so far)");
+        return;
+    }
+    char speed[32], roll[32], plain[32];
+    if (isfinite(truck)) snprintf(speed, sizeof speed, "%.2f rad/s", truck);
+    else snprintf(speed, sizeof speed, "not read");
+    if (isfinite(radius)) snprintf(roll, sizeof roll, "%.3f m", radius);
+    else snprintf(roll, sizeof roll, "not read");
+    if (isfinite(radius94)) snprintf(plain, sizeof plain, "%.3f m", radius94);
+    else snprintf(plain, sizeof plain, "not read");
+    snprintf(out, size, "%s (the rolling radius %s, wheel + 0x94 %s; %ld by the cylinder, %ld without, %ld out of bounds)", speed, roll, plain, cylinder, none, outOf);
+}
+// Whether the cut's last answer may be used for the driven truck on this pass: it is this truck's, and for a share
+// that must be of now the count of answers rose since the last pass.
+inline bool CutAnswerOurs(uint64_t answerVehicle, uint64_t driven) { return driven != 0 && answerVehicle == driven; }
+
 // The needle's stop: as far past the red zone as it ever shows (TachFollow holds it there).
 inline float TachStop(const GaugeScale &k) { return k.idle + (k.redline - k.idle) * kTachOverrun; }
 

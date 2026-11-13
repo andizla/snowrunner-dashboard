@@ -5593,8 +5593,13 @@ static void TruckTestsSix(TruckRefs &r, TruckRaw &t, World &w)
         SuspHitWords(hits[0], path, sizeof path);
         const bool found = n == 2 && hits[0].at == inBody && hits[0].depth == 2 && hits[0].off[0] == 0x18 && hits[0].off[1] == 0x40 && !hits[0].fromModel &&
                            hits[1].at == inModel && hits[1].depth == 1 && hits[1].off[0] == 0x60 && hits[1].fromModel && !strcmp(path, "wheel 0's object [[+0x18]+0x40]");
-        const bool text = SuspFloatsText(kMemory, inBody, vtable, floats, sizeof floats) && strstr(floats, "| +30 1.5 0.25 ") && !SuspFloatsText(kMemory, decoy, vtable, floats, sizeof floats);
-        Check(found && text, "suspension probe: a constraint two pointers from the wheel and one in its model, each once, with its path and floats; a decoy left out");
+        // the print begins behind the table pointer and a word that is no number is printed as its bits (BRIEF_drive_1112_findings.md part 4, M2)
+        Put(inBody + 0x34, (uint32_t)0x7FC00000);
+        Put(inBody + 0x3C, (uint32_t)0xFF800000);
+        const bool text = SuspFloatsText(kMemory, inBody, vtable, floats, sizeof floats) && strstr(floats, "| +30 1.5 x7fc00000 ") && strstr(floats, " xff800000") &&
+                          !strncmp(floats, "+8 ", 3) && !strstr(floats, "nan") && !strstr(floats, "inf") && !SuspFloatsText(kMemory, decoy, vtable, floats, sizeof floats);
+        Check(found && text, "suspension probe: a constraint two pointers from the wheel and one in its model, each once, with its path and floats from behind the table pointer, "
+                             "no nan in the line (a word that is no number as its bits); a decoy left out");
     }
 
     // frame flex (frame_flex.h, BRIEF_frame_flex.md part 2): a made up truck. Its front wheel hangs on the frame's front
