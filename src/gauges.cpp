@@ -4059,10 +4059,13 @@ static const wchar_t *g_positionsOff = nullptr;
 // of an XML node, hooked on whatever thread the script runs. The game's own answer first and always returned as it is;
 // then the name by its length, and one of the five goes into the ring. No log, no lock, no allocation, no read of game
 // memory but the name handed in. Its own fault guard: a fault turns the capture off for the session.
-typedef bool (*XmlBoolFn)(void *node, const XmlName *name, bool fallback, bool flag);
+// The two bools and the answer are bytes to the game: bytes here too, handed through untouched (review of 159, S1).
+typedef uint8_t (*XmlBoolFn)(void *node, const XmlName *name, uint8_t fallback, uint8_t flag);
 static XmlBoolFn g_xmlBool = nullptr;
 static ShifterRing g_shifter = {};
 static bool g_xmlBoolFound = false, g_xmlBoolHooked = false, g_xmlBoolFailed = false;
+static unsigned long long g_xmlBoolHookedAt = 0; // the mod's clock when the hook went in
+static ShifterSeen g_shifterSeen = {};           // the trucks as PositionsStep's passes saw them
 
 static void ShifterNoteGuarded(void *node, const XmlName *name, bool answer)
 {
@@ -4076,16 +4079,18 @@ static void ShifterNoteGuarded(void *node, const XmlName *name, bool answer)
     }
 }
 
-static bool XmlBoolHook(void *node, const XmlName *name, bool fallback, bool flag)
+static uint8_t XmlBoolHook(void *node, const XmlName *name, uint8_t fallback, uint8_t flag)
 {
-    const bool answer = g_xmlBool(node, name, fallback, flag);
+    const uint8_t answer = g_xmlBool(node, name, fallback, flag);
     InterlockedIncrement(&g_shifter.calls);
-    if (name && !g_shifter.fault) ShifterNoteGuarded(node, name, answer);
+    if (name && !g_shifter.fault) ShifterNoteGuarded(node, name, answer != 0);
     return answer;
 }
 
-// On the mod's thread, each pass where the positions go by the fitted gearbox: the hook the first time (alone in its
-// transaction, as the quick winch's), the fault said once in capitals, and with Probe=1 the hook's calls a second.
+// On the mod's thread, on every pass, with or without a truck (review of 159, M1a: the script parses at the truck
+// change, before the mod's first pass with that truck, so the hook is in before any truck where the settings ask): the
+// hook the first time Gearbox is at 2 with Positions by gearbox on (alone in its transaction, as the quick winch's),
+// the fault said once in capitals, and with Probe=1 the hook's calls a second.
 static void ShifterHookPass(const GaugeSettings &s, unsigned long long now)
 {
     static bool saidFault = false;
@@ -4098,7 +4103,10 @@ static void ShifterHookPass(const GaugeSettings &s, unsigned long long now)
         const long error = GearboxAttach(targets, hooks, 1);
         g_xmlBoolHooked = error == NO_ERROR;
         g_xmlBoolFailed = !g_xmlBoolHooked;
-        if (g_xmlBoolHooked) Log(L"gearbox positions: the game shifter's read of the five flags is hooked; a truck's positions go by what the shifter was told, taken within %llu ms of the change", kShifterWaitMs);
+        g_xmlBoolHookedAt = now;
+        if (g_xmlBoolHooked)
+            Log(L"gearbox positions: the game shifter's read of the five flags is hooked; a truck's positions go by what the shifter was told at its truck change: the newest whole read since the truck "
+                L"before was last seen%s", g_shifterSeen.truck && now - g_shifterSeen.at < 1000 ? L". A truck is driven already: its read comes with the next truck change" : L"");
         else Log(L"gearbox positions: the game shifter's read could not be hooked (error %ld), so the positions go by the desc's read alone", error);
     }
     if (g_shifter.fault && !saidFault)
@@ -4816,7 +4824,7 @@ struct TruckWatch
     PositionsState positions;   // the fitted gearbox's positions for the driven truck (PositionsStep)
     PositionsRoute route;       // which read gives them: the game shifter's own or the desc's (shifter_read.h)
     char routeName[kMaxText];   // the fitted name the route is for: another one on the same vehicle starts it anew
-    unsigned long long routeSince, routeAnewAt; // when the route was started, and when a new name started it anew (0 never)
+    unsigned long long routeSince, routeAnewAt, routeNameAt; // when the route was started; the last pass with the name before a new one started it anew (0 never); the last pass the name was read
     GearboxDoors doors;         // GearboxDoorsNow on the last pass
     PullTest pullTest;          // the pull test (the tab's button)
     uint64_t pullVehicle, pullAction; // the truck whose torque factor a running pull test changed
@@ -5449,13 +5457,8 @@ static int PositionsStep(TruckWatch &w, const TruckMemory &m, const GaugeSetting
     PositionsState &st = w.positions;
     PositionsRoute &r = w.route;
     static bool offSaid = false;
-    // when another truck or none was last seen: before the early return, so a pass with the feature off counts too
-    static uint64_t seen = 0;
-    static unsigned long long seenAt = 0, otherAt = 0;
-    const uint64_t driven = own ? w.refs.vehicle : 0;
-    if (!driven || driven != seen || now - seenAt > kShifterGapMs) otherAt = now;
-    seen = driven;
-    seenAt = now;
+    // the trucks as the passes see them: before the early return, so a pass with the feature off counts too
+    ShifterSeenStep(g_shifterSeen, own ? w.refs.vehicle : 0, now);
     if (g_positionsFault && !g_positionsOff) g_positionsOff = L"the game's gearbox lookup faulted";
     if (!s.positionsByGearbox || !own || !w.refs.vehicle || !g_gearboxDesc || !g_truckFrames || g_positionsOff)
     {
@@ -5468,7 +5471,6 @@ static int PositionsStep(TruckWatch &w, const TruckMemory &m, const GaugeSetting
         st.pending = false;
         return 0;
     }
-    ShifterHookPass(s, now);
     if (st.vehicle != w.refs.vehicle)
     {
         PositionsNewVehicle(st, w.refs.vehicle);
@@ -5476,7 +5478,7 @@ static int PositionsStep(TruckWatch &w, const TruckMemory &m, const GaugeSetting
         r = PositionsRoute{};
         w.routeName[0] = 0;
         w.routeSince = now;
-        w.routeAnewAt = 0;
+        w.routeAnewAt = w.routeNameAt = 0;
     }
     char nameNow[kMaxText];
     size_t length = 0;
@@ -5487,12 +5489,13 @@ static int PositionsStep(TruckWatch &w, const TruckMemory &m, const GaugeSetting
         const unsigned long long taken = r.takenTick;
         r = PositionsRoute{};
         r.takenTick = taken;
-        w.routeSince = w.routeAnewAt = now;
+        w.routeSince = now;
+        w.routeAnewAt = w.routeNameAt; // the last pass with the name before: a parse since then is the new gearbox's
         st.settled = false;
         st.missing = 0;
     }
-    if (named) strncpy_s(w.routeName, nameNow, _TRUNCATE);
-    r.changedAt = otherAt > w.routeAnewAt ? otherAt : w.routeAnewAt;
+    if (named) strncpy_s(w.routeName, nameNow, _TRUNCATE), w.routeNameAt = now;
+    r.changedAt = g_shifterSeen.beforeAt > w.routeAnewAt ? g_shifterSeen.beforeAt : w.routeAnewAt;
     bool news = false;
     int step = kReadOk;
     GearboxFlags flags = {};
@@ -5521,7 +5524,9 @@ static int PositionsStep(TruckWatch &w, const TruckMemory &m, const GaugeSetting
         }
     }
     int missing = 0;
-    if (PositionsRouteStep(r, hooked, faulted, w.routeSince, now, missing)) news = true;
+    // hooked after this truck was taken (the box ticked with a truck driven): no parse of it was caught and none comes
+    const bool hookAfter = hooked && g_xmlBoolHookedAt > g_shifterSeen.since;
+    if (PositionsRouteStep(r, hooked, faulted, w.routeSince, now, missing, hookAfter)) news = true;
     st.pending = PositionsRoutePending(r);
     st.settled = r.route == kRouteShifter;
     if (news)
@@ -9642,6 +9647,8 @@ static DWORD WINAPI Run(void *)
             }
             // the reader steps on what is really held every pass, so its latches follow the hardware through the menu
             // (review 8, W2); reverse is reached by what is there, in front or not
+            // the game shifter's read (shifter_read.h): its hook on every pass, so it is in before the first truck
+            ShifterHookPass(s, GetTickCount64());
             static ActionState states[kActCount];
             InputStep(bindReader, binds, seen, states);
             watch.canReverse = BindingsCanReverse(binds, snap, PadPresent());

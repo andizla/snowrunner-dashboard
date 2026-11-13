@@ -99,10 +99,31 @@ inline bool ShifterRingRead(const ShifterRing &r, ShifterCapture out[kShifterRin
 }
 
 // Which capture is the driven truck's: the newest complete one whose tick is no older than kShifterBeforeMs before the
-// mod last saw another truck or none (changedAt), and newer than the one taken before (takenTick, 0 none). -1 none.
-// The script parses at the change; the mod sees the change a pass sooner or later, and the second covers either order.
-// Never a capture from before the change.
+// last pass on which the mod saw the truck before (changedAt; 0 for the first truck of a session: any whole capture),
+// and newer than the one taken before (takenTick, 0 none). -1 none. The parse has one caller, the truck change, so
+// while the mod sees no truck every parse is of the truck to come: at a load or coming from the garage the script may
+// parse well before the mod's first pass with the truck (review of 159, M1b). The second covers a change the mod saw
+// a pass late. Never a capture from while the truck before was still driven.
 static const unsigned long long kShifterBeforeMs = 1000, kShifterWaitMs = 2000;
+
+// The trucks as the mod's passes saw them: the driven one, when it was first and last seen, and the last pass on which
+// the truck before it was seen (0: there was none). A pass with no truck changes nothing.
+struct ShifterSeen
+{
+    uint64_t truck;
+    unsigned long long since, at, beforeAt;
+};
+inline void ShifterSeenStep(ShifterSeen &s, uint64_t driven, unsigned long long now)
+{
+    if (!driven) return;
+    if (driven != s.truck)
+    {
+        s.beforeAt = s.truck ? s.at : 0;
+        s.truck = driven;
+        s.since = now;
+    }
+    s.at = now;
+}
 inline int ShifterPick(const ShifterCapture *c, int n, unsigned long long changedAt, unsigned long long takenTick)
 {
     int best = -1;
@@ -131,16 +152,14 @@ inline bool GearboxFlagsSame(const GearboxFlags &a, const GearboxFlags &b)
 
 // The hook is wanted only where the positions go by the fitted gearbox: the mod's own gearbox with the box on.
 inline bool ShifterHookWanted(int level, bool positions) { return level >= 2 && positions; }
-// A pass of the mod this long after the last one counts as no truck seen between the two.
-static const unsigned long long kShifterGapMs = 1000;
-
 // ---- which read is in force for the driven truck ----
 enum { kRouteNone, kRouteShifter, kRouteDesc };
 // Why the desc's read is the one in force, for the line.
-enum { kDescWhyNone, kDescWhyNoHook, kDescWhyNoParams, kDescWhyLate, kDescWhyFault };
+enum { kDescWhyNone, kDescWhyNoHook, kDescWhyNoParams, kDescWhyLate, kDescWhyFault, kDescWhyHookAfter };
 static const char *const kDescWhy[] = {
     "", "the shifter's own read is not hooked in this game", "no GearboxParams, so the shifter asks no flag",
     "no read of the shifter came in two seconds", "the mod's part of the shifter's read faulted",
+    "the shifter's read was hooked after this truck was taken, so it comes with the next truck change",
 };
 struct PositionsRoute
 {
@@ -149,15 +168,17 @@ struct PositionsRoute
     GearboxFlags shifter, desc;
     int descStep;                    // kRead... of the desc's read
     uint64_t shifterNode, descNode;  // the GearboxParams node of each (the shifter's: the pugi node behind the native asked, 0 not read)
-    unsigned long long changedAt;    // when the mod last saw another truck or none, before this one
+    unsigned long long changedAt;    // the last pass with the truck before, or with the fitted name before; 0 the first truck
     unsigned long long takenTick;    // the tick of the capture taken, 0 none
 };
 
 // The read in force and the mask it gives: the shifter's as soon as there is one, whenever it comes. Else the desc's,
 // once it is back and either the shifter's cannot come (no hook, a fault, no GearboxParams) or two seconds have gone
 // since the truck was first seen. Until then none, and every position is there (missing 0) while the caller waits.
-// hooked: the native is hooked and its capture has not faulted. Returns true where the route or its flags changed.
-inline bool PositionsRouteStep(PositionsRoute &r, bool hooked, bool faulted, unsigned long long since, unsigned long long now, int &missing)
+// hooked: the native is hooked and its capture has not faulted. hookAfter: the hook went in after this truck was
+// taken, so its parse was not caught and none will come: the desc's read at once, no wait. Returns true where the
+// route or its flags changed.
+inline bool PositionsRouteStep(PositionsRoute &r, bool hooked, bool faulted, unsigned long long since, unsigned long long now, int &missing, bool hookAfter = false)
 {
     const int routeWas = r.route, whyWas = r.why;
     if (r.haveShifter && !faulted)
@@ -167,7 +188,8 @@ inline bool PositionsRouteStep(PositionsRoute &r, bool hooked, bool faulted, uns
     }
     else if (r.haveDesc)
     {
-        const int why = faulted ? kDescWhyFault : !hooked ? kDescWhyNoHook : r.descStep == kReadOk && !r.desc.params ? kDescWhyNoParams : now - since >= kShifterWaitMs ? kDescWhyLate : kDescWhyNone;
+        const int why = faulted ? kDescWhyFault : !hooked ? kDescWhyNoHook : r.descStep == kReadOk && !r.desc.params ? kDescWhyNoParams : hookAfter ? kDescWhyHookAfter :
+                        now - since >= kShifterWaitMs ? kDescWhyLate : kDescWhyNone;
         if (why == kDescWhyNone)
         {
             r.route = kRouteNone, r.why = kDescWhyNone;

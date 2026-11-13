@@ -3422,9 +3422,36 @@ static void TruckTestsTwo(TruckRefs &r, TruckRaw &t)
         c[0] = ShifterCapture{ nodeA, kShifterAll, kHasPositions, 10000 };
         c[1] = ShifterCapture{ nodeB, kShifterAll, kHasL | kHasH, 20000 };
         c[2] = ShifterCapture{ nodeB, kHasL | kHasH, kHasL, 20500 }; // not whole
-        const bool fresh = ShifterPick(c, kShifterRing, 20040, 0) == 1 && ShifterPick(c, kShifterRing, 19950, 0) == 1 && ShifterPick(c, kShifterRing, 21000, 0) == 1;
-        const bool oldNot = ShifterPick(c, kShifterRing, 21001, 0) < 0 && ShifterPick(c, kShifterRing, 25000, 0) < 0; // entered five seconds after, no parse between
-        const bool takenOnce = ShifterPick(c, kShifterRing, 20040, 20000) < 0;
+        // the bound is the last pass with the truck before (review of 159, M1b). The first truck of a session: any whole capture
+        const bool fresh = ShifterPick(c, kShifterRing, 20040, 0) == 1 && ShifterPick(c, kShifterRing, 19950, 0) == 1 && ShifterPick(c, kShifterRing, 21000, 0) == 1 &&
+                           ShifterPick(c, kShifterRing, 0, 0) == 1;
+        // a capture from while the truck before was still driven, more than a second before its last pass, is not taken
+        const bool oldNot = ShifterPick(c, kShifterRing, 21001, 0) < 0 && ShifterPick(c, kShifterRing, 25000, 0) < 0;
+        const bool takenOnce = ShifterPick(c, kShifterRing, 20040, 20000) < 0 && ShifterPick(c, kShifterRing, 0, 20000) < 0;
+        // the trucks as the passes see them: the first has no truck before; passes with no truck change nothing, so a parse
+        // five seconds before the first sight of the next truck, with no truck seen between, is taken
+        ShifterSeen seenTrucks = {};
+        ShifterSeenStep(seenTrucks, 0, 1000);
+        bool sight = seenTrucks.truck == 0 && seenTrucks.beforeAt == 0;
+        ShifterSeenStep(seenTrucks, 0xA000, 5000), ShifterSeenStep(seenTrucks, 0xA000, 15000);
+        sight = sight && seenTrucks.truck == 0xA000 && seenTrucks.since == 5000 && seenTrucks.at == 15000 && seenTrucks.beforeAt == 0 && ShifterPick(c, kShifterRing, seenTrucks.beforeAt, 0) == 1;
+        ShifterSeenStep(seenTrucks, 0, 16000), ShifterSeenStep(seenTrucks, 0, 24000);
+        sight = sight && seenTrucks.truck == 0xA000 && seenTrucks.at == 15000;
+        ShifterSeenStep(seenTrucks, 0xB000, 25000); // c[1] was parsed at 20000: five seconds before this first sight
+        sight = sight && seenTrucks.truck == 0xB000 && seenTrucks.since == 25000 && seenTrucks.beforeAt == 15000 && ShifterPick(c, kShifterRing, seenTrucks.beforeAt, 0) == 1 &&
+                ShifterPick(c, kShifterRing, seenTrucks.beforeAt, 10000) == 1 && ShifterPick(c, kShifterRing, seenTrucks.beforeAt, 20000) < 0;
+        ShifterSeenStep(seenTrucks, 0xB000, 30000), ShifterSeenStep(seenTrucks, 0xA000, 30050);
+        sight = sight && seenTrucks.beforeAt == 30000 && seenTrucks.since == 30050 && ShifterPick(c, kShifterRing, seenTrucks.beforeAt, 0) < 0; // back in the first: no old capture
+        // the hook went in after the truck was taken: the desc's read at once with its own reason, and a capture that comes all the same is in force
+        PositionsRoute after = {};
+        int afterMissing = -1;
+        after.haveDesc = true, after.desc = GearboxFlags{ true, true, false, false, true, false, 0 }, after.descStep = kReadOk;
+        bool hookLate = PositionsRouteStep(after, true, false, 50000, 50000, afterMissing, true) && after.route == kRouteDesc && after.why == kDescWhyHookAfter &&
+                        afterMissing == (kHasLowPlus | kHasLowMinus) && !PositionsRoutePending(after) && strstr(kDescWhy[kDescWhyHookAfter], "comes with the next truck change");
+        after.haveShifter = true, after.shifter = ShifterFlags(c[0]);
+        hookLate = hookLate && PositionsRouteStep(after, true, false, 50000, 50100, afterMissing, true) && after.route == kRouteShifter && afterMissing == 0;
+        Check(sight && hookLate, "the game shifter's read, the trucks seen: the first truck of a session takes any whole capture; a parse five seconds before the first sight with no truck between is taken; "
+                                 "one from while the truck before was driven is not; a hook that went in after the truck was taken gives the desc's read at once and says why");
         // the route: none while the shifter's read may still come, the desc's after two seconds, a late capture replaces it
         const GearboxFlags all = { true, true, true, true, true, false, 0 }, lowOnly = { true, true, false, false, true, false, 0 }, noParams = {};
         PositionsRoute rt = {};
