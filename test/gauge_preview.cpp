@@ -870,6 +870,52 @@ int wmain(int argc, wchar_t **argv)
         if (!same) g_failed++;
         printf("%s settings tabs: each tab drawn untouched reports no change\n", quiet ? "ok  " : "FAIL");
         if (!quiet) g_failed++;
+        // the Engine tab's Profiles with a list (BRIEF_truck_profile.md), as a picture (settings_profiles.png): a profile
+        // of this kind, its backup, a file that is no profile and one of another kind with its second press asked for;
+        // texts a stranger wrote (a %s, a %n) are drawn as they stand; drawn untouched it asks nothing of the pass
+        {
+            static PageState pst;
+            pst = PageState{};
+            pst.tabAsk = kTabEngine;
+            pst.wholeTab = true;
+            ProfileList &pl = pst.prof;
+            pl.turn = 1, pl.truck = pl.idRead = pl.canExport = true;
+            strcpy_s(pl.kind, "truck_kind"), strcpy_s(pl.kindFile, "truck_kind");
+            strcpy_s(pl.say, "Taken: the suspension, Air brakes. The settings of the kind were left. The tire mode is not taken yet.");
+            auto add = [&](const char *file, const char *name, const char *truck, const char *notes, bool valid, bool backup, bool same) {
+                ProfileRow &r = pl.row[pl.count++];
+                strcpy_s(r.file, file), strcpy_s(r.name, name), strcpy_s(r.truck, truck), strcpy_s(r.notes, notes), strcpy_s(r.date, "2026-11-13 13:30"), strcpy_s(r.version, "9.9.9");
+                r.valid = valid, r.backup = backup, r.sameKind = same, r.sameEngine = r.sameGearbox = same, r.otherVersion = !same;
+            };
+            add("truck_kind - Mud.ini", "Mud", "truck_kind", "Soft springs %s%n%s for the swamp", true, false, true);
+            add("truck_kind 2026-11-13 13.24.51.ini", "2026-11-13 13.24.51", "truck_kind", "Before Mud, this truck", true, true, true);
+            add("truck_kind - Broken.ini", "Broken", "", "", false, false, false);
+            add("other_kind - Road %d.ini", "other_kind - Road %d", "other_kind %s", "%n%n%n", true, false, false);
+            pl.more = 3;
+            strcpy_s(pst.profOther, "other_kind - Road %d.ini");
+            pst.profOtherWhat = kProfAskImportKind;
+            std::vector<std::string> items;
+            int frame = 0, act = 0;
+            wchar_t path[MAX_PATH];
+            swprintf_s(path, L"%s\\settings_profiles.png", out);
+            RenderPng(path, 1100, 2600, [&](ImDrawList *, ImDrawList *) {
+                ImGui::SetNextWindowPos(ImVec2(10, 10));
+                ImGui::SetNextWindowSize(ImVec2(1080, 0));
+                ImGui::Begin("Gauges", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+                g_items = ++frame == 4 ? &items : nullptr;
+                ImGui::GetCurrentContext()->TestEngineHookItems = g_items != nullptr;
+                act |= SettingsPage(s, v, pst, 0);
+                g_items = nullptr;
+                ImGui::GetCurrentContext()->TestEngineHookItems = false;
+                ImGui::End();
+            }, 4);
+            int imports = 0, kinds = 0, others = 0;
+            for (const std::string &i : items) imports += i == "Import", kinds += i == "For every truck of this kind", others += i == "Other trucks###profother";
+            const bool rows = imports >= 2 && kinds >= 2 && others == 1 && !act && pst.profAsk.what == kProfAskNone;
+            printf("%s profiles: the list drawn with a profile, a backup, a file that is no profile and one of another kind has the two buttons on each profile and none on the other file, and asks nothing untouched (%d, %d, %d)\n",
+                   rows ? "ok  " : "FAIL", imports, kinds, others);
+            if (!rows) g_failed++;
+        }
         // the board (BRIEF_checkers.md, M5): every tab above was drawn and no line of the board's ran; then the board as a
         // picture (checkers.png), a game a few moves in with a piece picked
         {

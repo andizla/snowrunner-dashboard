@@ -639,13 +639,14 @@ static std::wstring Wide(const char *s)
 }
 
 // A number into a section of the ini, with the fewest digits that read back as the same float.
-static void IniPutFloat(const wchar_t *section, const wchar_t *key, float v, const std::wstring &ini)
+static std::wstring FloatText(float v)
 {
     wchar_t b[32];
     _snwprintf_s(b, _TRUNCATE, L"%g", v);
     for (int digits = 7; digits <= 9 && (float)_wtof(b) != v; digits++) _snwprintf_s(b, _TRUNCATE, L"%.*g", digits, v);
-    WritePrivateProfileStringW(section, key, b, ini.c_str());
+    return b;
 }
+static void IniPutFloat(const wchar_t *section, const wchar_t *key, float v, const std::wstring &ini) { WritePrivateProfileStringW(section, key, FloatText(v).c_str(), ini.c_str()); }
 
 // The suspension's spring and damping had one key each before front and rear were apart (BRIEF_suspension_front_rear.md,
 // M3 and S1). Read: the old key is both ends, and each new key lies over it where the section has one. Written: the
@@ -1902,9 +1903,9 @@ static void EngineTorqueWrite(const char *name, int percent)
 
 // Lays the truck's own scales over s: each of the seven its file holds. One the file does not hold stays as it is in
 // s. False when the file holds none of them, or is not there.
-static bool ReadTruckIni(const char *key, GaugeSettings &s)
+// The keys from a section of any file (a truck's file's [Truck]; a profile's [Truck] and [Drive], truck_profile.h).
+static bool TruckKeysRead(const std::wstring &ini, const std::wstring &section, GaugeSettings &s)
 {
-    const std::wstring ini = SetupFile(kSetupTruck, key), section = kSetupSections[kSetupTruck];
     bool any = false;
     auto has = [&](const wchar_t *name) {
         wchar_t buf[8] = {};
@@ -1949,6 +1950,7 @@ static bool ReadTruckIni(const char *key, GaugeSettings &s)
     if (any) SettingsClamp(s);
     return any;
 }
+static bool ReadTruckIni(const char *key, GaugeSettings &s) { return TruckKeysRead(SetupFile(kSetupTruck, key), kSetupSections[kSetupTruck], s); }
 
 // Writes the truck's file: the seven scales of s.
 static void WriteTruckIni(const char *key, const GaugeSettings &s)
@@ -2112,10 +2114,9 @@ static const wchar_t *const kEngineSection = L"Engine";
 // A truck's suspension section (the kind's, or with an id the owned truck's): none (no value there), kept (Own=0) or
 // in force. Its values are laid over s where the section holds them, whichever it is; one it does not hold stays.
 enum { kSuspNone, kSuspKept, kSuspInForce };
-static int ReadTruckSusp(const char *key, GaugeSettings &s, const char *id = "")
+// The set's keys from a section of any file, laid over s; true where it holds one (a profile's [Suspension] too).
+static bool SuspKeysRead(const std::wstring &ini, const wchar_t *section, GaugeSettings &s)
 {
-    const std::wstring ini = SetupFile(kSetupTruck, key), sec = SuspSectionOf(id);
-    const wchar_t *section = sec.c_str();
     bool any = false;
     auto has = [&](const wchar_t *name) {
         wchar_t buf[8] = {};
@@ -2132,9 +2133,14 @@ static int ReadTruckSusp(const char *key, GaugeSettings &s, const char *id = "")
         if (has(k.name)) s.*k.v = (int)GetPrivateProfileIntW(section, k.name, s.*k.v, ini.c_str());
     for (const auto &k : kSuspSetBools)
         if (has(k.name)) s.*k.v = GetPrivateProfileIntW(section, k.name, s.*k.v ? 1 : 0, ini.c_str()) != 0;
-    if (!any) return kSuspNone;
+    return any;
+}
+static int ReadTruckSusp(const char *key, GaugeSettings &s, const char *id = "")
+{
+    const std::wstring ini = SetupFile(kSetupTruck, key), sec = SuspSectionOf(id);
+    if (!SuspKeysRead(ini, sec.c_str(), s)) return kSuspNone;
     SettingsClamp(s);
-    return GetPrivateProfileIntW(section, L"Own", 1, ini.c_str()) ? kSuspInForce : kSuspKept;
+    return GetPrivateProfileIntW(sec.c_str(), L"Own", 1, ini.c_str()) ? kSuspInForce : kSuspKept;
 }
 
 // A truck's suspension section written: Own and every value of s. Key by key through the profile API, never the file
@@ -2992,6 +2998,552 @@ static void SettingsWrite(SettingsState &st)
 {
     WriteIni(st.plain);
     SettingsWriteTruck(st);
+}
+
+// ---- truck profiles (truck_profile.h; BRIEF_truck_profile.md with the Reviewer's addendum, build 1) ----
+// One plain file a profile in Gauges\profiles, "<kind> - <name>.ini": the driven truck's settings from the level in
+// force, under the truck's file's own key names. Export writes it; Import lays it into the truck's files through the
+// functions an edit uses, after a backup of the levels it will write (itself a profile, in profiles\backup). All of it
+// on the mod's pass: the tab only asks (ProfileAskPut) and shows the list the pass made (ProfilesGet).
+static std::wstring ProfilesFolder(bool backup) { return g_dir + L"Gauges\\profiles" + (backup ? L"\\backup" : L""); }
+static void ProfilesFolderMake(bool backup)
+{
+    CreateDirectoryW((g_dir + L"Gauges").c_str(), nullptr);
+    CreateDirectoryW(ProfilesFolder(false).c_str(), nullptr);
+    if (backup) CreateDirectoryW(ProfilesFolder(true).c_str(), nullptr);
+}
+static void ProfNarrow(const wchar_t *w, char *out, size_t size)
+{
+    if (!size || !WideCharToMultiByte(CP_UTF8, 0, w, -1, out, (int)size, nullptr, nullptr)) out[0] = 0;
+}
+static std::string ProfKindFile(const char *key)
+{
+    char out[3 * kMaxText];
+    ProfNarrow(SetupFileName(Wide(key)).c_str(), out, sizeof out);
+    return out;
+}
+static bool TruckKeyThere(const char *key, const wchar_t *name)
+{
+    wchar_t buf[8] = {};
+    return key[0] && GetPrivateProfileStringW(kSetupSections[kSetupTruck], name, L"", buf, 8, SetupFile(kSetupTruck, key).c_str()) > 0;
+}
+static const wchar_t *const kProfScaleKeys[7] = { L"TachClass", L"IdleRpm", L"RedlineRpm", L"MaxRpm", L"SpeedMax", L"BoostMax", L"BoostProfile" };
+static const wchar_t *const kTireModesFile = L"TirePressure.trucks.ini"; // Tire Inflation's file of modes by truck (its truck_modes.h)
+static const wchar_t *const kTireModeNames[4] = { L"Low", L"Reduced", L"Normal", L"Increased" };
+
+// Which level a profile is written from: what is in force (an Export), or one level exactly as its sections have it
+// (a backup of what an Import will write). A level with nothing of its own says so (AirOwn=0, SuspOwn=0, EngineOwn=0),
+// and one kept but not in force has its keys with that word, so taking the backup gives the level back as it was.
+enum { kProfLevelInForce, kProfLevelTruck, kProfLevelKind };
+
+// The profile's text for the driven truck. The [Truck] and [Drive] keys are the kind's file's, at every level.
+static std::wstring ProfileText(const SettingsState &st, const EngineState &e, int level, const char *notes, bool backup)
+{
+    std::wstring t;
+    auto line = [&](const wchar_t *k, const std::wstring &v) { t += k, t += L"=", t += v, t += L"\r\n"; };
+    auto num = [&](const wchar_t *k, int v) { line(k, std::to_wstring(v)); };
+    auto flt = [&](const wchar_t *k, float v) { line(k, FloatText(v)); };
+    const char *id = level == kProfLevelTruck ? st.id : "";
+    SYSTEMTIME now;
+    GetLocalTime(&now);
+    wchar_t date[32];
+    swprintf_s(date, L"%04d-%02d-%02d %02d:%02d", now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute);
+    char clean[kProfileNotesMost + 8];
+    ProfileTextClean(notes, clean, sizeof clean, kProfileNotesMost);
+    t += L"; A truck profile of Next Gen Gameplay. Put it in Gauges\\profiles and take it on the Engine tab of the mod.\r\n[Profile]\r\n";
+    line(L"Version", Wide(GAUGES_VERSION));
+    line(L"Truck", Wide(st.key));
+    line(L"Date", date);
+    line(L"Engine", Wide(e.engine));
+    line(L"Gearbox", Wide(e.gearbox));
+    line(L"Notes", Wide(clean));
+    if (backup) line(L"Backup", L"1");
+    // the kind's own: the seven scales as one, or the word that it shows the plain ones
+    GaugeSettings k = st.plain;
+    const bool own = ReadTruckIni(st.key, k);
+    t += L"\r\n[Truck]\r\n";
+    if (own)
+    {
+        num(L"TachClass", k.tachClass), flt(L"IdleRpm", k.idleRpm), flt(L"RedlineRpm", k.redlineRpm), flt(L"MaxRpm", k.maxRpm), flt(L"SpeedMax", k.speedMax), flt(L"BoostMax", k.boostMax);
+        num(L"BoostProfile", k.boostProfile);
+    }
+    else line(L"ScalesOwn", L"0");
+    if (TruckKeyThere(st.key, L"RoadCdA")) flt(L"RoadCdA", k.roadCdA);
+    const int airKind = AirFileKind(st.key);
+    if (airKind >= 0) line(L"AirAxles", Wide(kAirKindNames[airKind]));
+    num(L"OdometerHours", OdoHoursOf(st.key) ? 1 : 0);
+    const bool exact = level != kProfLevelInForce;
+    const int air = exact ? TruckAirAt(st.key, id) : st.s.airBrakes;
+    if (air == 0 || air == 1) num(L"AirBrakes", air);
+    else if (exact) line(L"AirOwn", L"0");
+    t += L"\r\n[Drive]\r\n";
+    bool drive = TruckKeyThere(st.key, L"DiffType");
+    if (drive) num(L"DiffType", k.diffType);
+    for (int a = 0; a < kAxleRowsMost; a++)
+        if (k.diffAxle[a] >= 0)
+        {
+            wchar_t name[16];
+            swprintf_s(name, L"DiffAxle%d", a + 1);
+            num(name, k.diffAxle[a]);
+            drive = true;
+        }
+    if (!drive) line(L"DiffOwn", L"0");
+    // the suspension, whole: the set in force, or the level's own section over it
+    GaugeSettings su = st.s;
+    const int suspAt = exact ? ReadTruckSusp(st.key, su, id) : kSuspInForce;
+    t += L"\r\n[Suspension]\r\n";
+    if (suspAt != kSuspInForce) line(L"SuspOwn", L"0");
+    if (suspAt != kSuspNone)
+    {
+        for (const auto &f : kSuspSetFloats) flt(f.name, su.*f.v);
+        for (const auto &i : kSuspSetInts)
+            if (su.*i.v >= 0) num(i.name, su.*i.v);
+        for (const auto &b : kSuspSetBools) num(b.name, su.*b.v ? 1 : 0);
+    }
+    // the engine's figures, plain: only what a level has
+    int torque = e.torqueFrom != kEngLevelNone ? e.torque : 0;
+    float hold = e.holdFrom != kEngLevelNone ? e.hold : 0.0f;
+    bool has = e.profileFrom != kEngLevelNone;
+    EngineProfile p = e.profile;
+    wchar_t curve[256];
+    wcsncpy_s(curve, e.curve, _TRUNCATE);
+    t += L"\r\n[Engine]\r\n";
+    if (exact)
+    {
+        const int engineAt = ReadTruckEngine(st.key, id, e.engine, e.gearbox, torque, hold, p, curve);
+        has = p.own;
+        if (engineAt != kSuspInForce) line(L"EngineOwn", L"0");
+    }
+    if (torque > 0) num(L"Torque", torque);
+    if (hold > 0.0f)
+    {
+        wchar_t buf[16];
+        _snwprintf_s(buf, _TRUNCATE, L"%.1f", hold);
+        line(L"GearHold", buf);
+    }
+    if (has)
+    {
+        flt(L"PeakTorqueRpm", p.peakRpm > 0.0f ? roundf(p.peakRpm) : 0.0f);
+        num(L"Aspiration", p.aspiration);
+        if (p.fuel == kFuelDiesel || p.fuel == kFuelPetrol) line(L"Fuel", p.fuel == kFuelDiesel ? L"diesel" : L"petrol");
+        if (curve[0]) line(L"TorqueCurve", curve);
+    }
+    // Tire Inflation's mode for the truck, where its file has one: the owned truck's before the kind's
+    {
+        const std::wstring tire = g_dir + kTireModesFile;
+        wchar_t mode[32] = {};
+        if (st.id[0]) GetPrivateProfileStringW((Wide(st.key) + L":" + Wide(st.id)).c_str(), L"Mode", L"", mode, 32, tire.c_str());
+        if (!mode[0]) GetPrivateProfileStringW(Wide(st.key).c_str(), L"Mode", L"", mode, 32, tire.c_str());
+        for (const wchar_t *name : kTireModeNames)
+            if (mode[0] && !_wcsicmp(mode, name))
+            {
+                t += L"\r\n[Tire Inflation]\r\n";
+                line(L"Mode", name);
+            }
+    }
+    return t;
+}
+
+// The text into a file, whole: written beside it first and then put in its place, so a file half written is never a
+// profile. UTF-16 with its mark, as the profile API reads it.
+static bool ProfileFileWrite(const std::wstring &file, const std::wstring &text)
+{
+    const std::wstring part = file + L".part";
+    const HANDLE h = CreateFileW(part.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    const wchar_t mark = 0xFEFF;
+    DWORD put = 0, all = 0;
+    bool ok = WriteFile(h, &mark, 2, &put, nullptr) && put == 2;
+    ok = ok && WriteFile(h, text.data(), (DWORD)(text.size() * sizeof(wchar_t)), &all, nullptr) && all == text.size() * sizeof(wchar_t);
+    CloseHandle(h);
+    if (ok) ok = MoveFileExW(part.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
+    if (!ok) DeleteFileW(part.c_str());
+    return ok;
+}
+
+// One text of a profile, cleaned and cut. A stranger's: never used as a format or a path.
+static bool ProfStr(const std::wstring &file, const wchar_t *section, const wchar_t *key, char *out, size_t size, int most)
+{
+    wchar_t buf[400] = {};
+    char raw[1600];
+    GetPrivateProfileStringW(section, key, L"", buf, 400, file.c_str());
+    ProfNarrow(buf, raw, sizeof raw);
+    return ProfileTextClean(raw, out, size, most);
+}
+static bool ProfKeyThere(const std::wstring &file, const wchar_t *section, const wchar_t *key)
+{
+    wchar_t buf[8] = {};
+    return GetPrivateProfileStringW(section, key, L"", buf, 8, file.c_str()) > 0;
+}
+
+// A file's head: whether it is a profile (not over 64 KB, a truck named in it) and what it says of itself.
+static bool ProfileHead(const std::wstring &file, ProfileRow &row)
+{
+    WIN32_FILE_ATTRIBUTE_DATA d = {};
+    row.valid = false;
+    row.truck[0] = row.engine[0] = row.gearbox[0] = row.date[0] = row.version[0] = row.notes[0] = 0;
+    if (!GetFileAttributesExW(file.c_str(), GetFileExInfoStandard, &d) || (d.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return false;
+    if (d.nFileSizeHigh || d.nFileSizeLow > kProfileFileMost || !d.nFileSizeLow) return false;
+    ProfStr(file, L"Profile", L"Truck", row.truck, sizeof row.truck, 90);
+    ProfStr(file, L"Profile", L"Engine", row.engine, sizeof row.engine, 90);
+    ProfStr(file, L"Profile", L"Gearbox", row.gearbox, sizeof row.gearbox, 90);
+    ProfStr(file, L"Profile", L"Date", row.date, sizeof row.date, 16);
+    ProfStr(file, L"Profile", L"Version", row.version, sizeof row.version, 12);
+    ProfStr(file, L"Profile", L"Notes", row.notes, sizeof row.notes, kProfileNotesMost);
+    row.valid = row.truck[0] != 0;
+    row.otherVersion = row.valid && strcmp(row.version, GAUGES_VERSION) != 0;
+    return row.valid;
+}
+
+// The keys of a profile the mod does not know: counted, and left out by never being asked for.
+static int ProfileUnknown(const std::wstring &file)
+{
+    std::vector<wchar_t> names(4096, L'\0'), keys(32768, L'\0');
+    int unknown = 0;
+    GetPrivateProfileSectionNamesW(names.data(), (DWORD)names.size(), file.c_str());
+    for (const wchar_t *sec = names.data(); *sec; sec += wcslen(sec) + 1)
+    {
+        keys[0] = keys[1] = 0;
+        GetPrivateProfileSectionW(sec, keys.data(), (DWORD)keys.size(), file.c_str());
+        for (const wchar_t *kv = keys.data(); *kv; kv += wcslen(kv) + 1)
+        {
+            const wchar_t *eq = wcschr(kv, L'=');
+            const std::wstring key(kv, eq ? (size_t)(eq - kv) : wcslen(kv));
+            auto is = [&](std::initializer_list<const wchar_t *> list) {
+                for (const wchar_t *one : list)
+                    if (!_wcsicmp(key.c_str(), one)) return true;
+                return false;
+            };
+            bool known = false;
+            if (!_wcsicmp(sec, L"Profile")) known = is({ L"Version", L"Truck", L"Date", L"Engine", L"Gearbox", L"Notes", L"Backup" });
+            else if (!_wcsicmp(sec, L"Truck"))
+                known = is({ L"TachClass", L"IdleRpm", L"RedlineRpm", L"MaxRpm", L"SpeedMax", L"BoostMax", L"BoostProfile", L"ScalesOwn", L"RoadCdA", L"AirAxles", L"OdometerHours", L"AirBrakes", L"AirOwn" });
+            else if (!_wcsicmp(sec, L"Drive"))
+                known = is({ L"DiffType", L"DiffOwn" }) || (key.size() == 9 && !_wcsnicmp(key.c_str(), L"DiffAxle", 8) && key[8] >= L'1' && key[8] < L'1' + kAxleRowsMost);
+            else if (!_wcsicmp(sec, L"Suspension"))
+            {
+                known = is({ L"SuspOwn" });
+                for (const auto &f : kSuspSetFloats) known = known || !_wcsicmp(key.c_str(), f.name);
+                for (const auto &i : kSuspSetInts) known = known || !_wcsicmp(key.c_str(), i.name);
+                for (const auto &b : kSuspSetBools) known = known || !_wcsicmp(key.c_str(), b.name);
+                for (const auto &o : kSuspOldFloats) known = known || !_wcsicmp(key.c_str(), o.name);
+            }
+            else if (!_wcsicmp(sec, L"Engine")) known = is({ L"Torque", L"GearHold", L"PeakTorqueRpm", L"Aspiration", L"Fuel", L"TorqueCurve", L"EngineOwn" });
+            else if (!_wcsicmp(sec, L"Tire Inflation")) known = is({ L"Mode" });
+            if (!known) unknown++;
+        }
+    }
+    return unknown;
+}
+
+// Whether a profile may be taken, before anything is written: why not, as the tab says it, or nullptr.
+static const char *ProfileRefused(const SettingsState &st, const std::wstring &file, bool kindLevel, bool otherKind, ProfileRow &head)
+{
+    if (!st.key[0]) return "Drive a truck first.";
+    if (!ProfileHead(file, head)) return "That file is not a profile.";
+    if (!kindLevel && !st.id[0]) return "The id of this truck is not read, so it has no settings of its own. Use the second button.";
+    if (_stricmp(head.truck, st.key) && !otherKind) return "That profile is for another truck.";
+    return nullptr;
+}
+
+// A profile into the truck's files (after ProfileRefused said nothing): this truck's own sections, or with kindLevel the
+// kind's level and its [Truck] keys. Each part through the function an edit uses. The engine's and the gearbox's shared
+// files are never written, but the engine's with engineToo. The caller reads the files again after it.
+static void ProfileImport(SettingsState &st, EngineState &e, const std::wstring &file, const ProfileRow &head, bool kindLevel, bool engineToo, const char *gearsNow, ProfileTaken &t)
+{
+    t = ProfileTaken{};
+    t.unknown = ProfileUnknown(file);
+    t.kindLeft = !kindLevel;
+    const char *id = kindLevel ? "" : st.id;
+    const std::wstring truckIni = SetupFile(kSetupTruck, st.key);
+    if (kindLevel)
+    {
+        // the seven scales as one, or back to the plain ones where the profile says its truck showed those
+        bool seven = true;
+        for (const wchar_t *name : kProfScaleKeys) seven = seven && ProfKeyThere(file, L"Truck", name);
+        GaugeSettings k = st.plain;
+        TruckKeysRead(file, L"Truck", k);
+        if (seven) WriteTruckIni(st.key, k), t.scales = true;
+        else if (GetPrivateProfileIntW(L"Truck", L"ScalesOwn", 1, file.c_str()) == 0 && ProfKeyThere(file, L"Truck", L"ScalesOwn"))
+        {
+            GaugeSettings was = st.plain;
+            if (ReadTruckIni(st.key, was)) DropTruckIni(st.key), t.scalesOff = true;
+        }
+        if (ProfKeyThere(file, L"Truck", L"RoadCdA") && k.roadCdA > 0.0f)
+        {
+            SetupBegin(kSetupTruck, Wide(st.key));
+            IniPutFloat(kSetupSections[kSetupTruck], L"RoadCdA", k.roadCdA, truckIni);
+            t.cda = true;
+        }
+        char word[16];
+        if (ProfStr(file, L"Truck", L"AirAxles", word, sizeof word, 12) && AirKindOf(word) >= 0)
+        {
+            SetupBegin(kSetupTruck, Wide(st.key));
+            WritePrivateProfileStringW(kSetupSections[kSetupTruck], L"AirAxles", Wide(kAirKindNames[AirKindOf(word)]).c_str(), truckIni.c_str());
+            t.airAxles = true;
+        }
+        if (ProfStr(file, L"Truck", L"OdometerHours", word, sizeof word, 4) && (!strcmp(word, "0") || !strcmp(word, "1"))) OdoHoursPut(st.key, word[0] == '1'), t.odo = true;
+        // the diff types: the Diff row first (it takes the rows by axle out), then each axle's own
+        GaugeSettings d = st.plain;
+        d.diffType = -1;
+        TruckKeysRead(file, L"Drive", d);
+        if (d.diffType >= 0) WriteTruckDiff(st.key, d.diffType), t.diff = true;
+        for (int a = 0; a < kAxleRowsMost; a++)
+            if (d.diffAxle[a] >= 0) WriteTruckAxle(st.key, a, d.diffAxle[a]), t.diff = true;
+        if (!t.diff && ProfKeyThere(file, L"Drive", L"DiffOwn") && GetPrivateProfileIntW(L"Drive", L"DiffOwn", 1, file.c_str()) == 0) t.diffOff = DropTruckDiff(st.key);
+    }
+    // the suspension set over the one the level has now (the set in force where it has none), in force there
+    {
+        // SuspOwn=0 (a backup's word): the set is kept and not in force, or with no keys the level had none of its own
+        GaugeSettings su = st.s, was = st.s;
+        const bool own = GetPrivateProfileIntW(L"Suspension", L"SuspOwn", 1, file.c_str()) != 0;
+        if (kindLevel) ReadTruckSusp(st.key, su, "");
+        if (SuspKeysRead(file, L"Suspension", su))
+        {
+            SettingsClamp(su);
+            WriteTruckSusp(st.key, su, own, id);
+            t.susp = true;
+        }
+        else if (!own && ReadTruckSusp(st.key, was, id) == kSuspInForce) WriteTruckSusp(st.key, was, false, id), t.susp = true;
+    }
+    {
+        char word[8];
+        const std::wstring sec = SuspSectionOf(id);
+        if (ProfStr(file, L"Truck", L"AirBrakes", word, sizeof word, 4) && (!strcmp(word, "0") || !strcmp(word, "1"))) WriteTruckAir(st.key, id, word[0] - '0'), t.air = true;
+        else if (ProfKeyThere(file, L"Truck", L"AirOwn") && GetPrivateProfileIntW(L"Truck", L"AirOwn", 1, file.c_str()) == 0 && TruckAirAt(st.key, id) >= 0)
+            WritePrivateProfileStringW(sec.c_str(), L"AirBrakes", nullptr, truckIni.c_str()), t.air = true; // the level had no choice of its own
+    }
+    // the engine's part only for the same engine, the hold only for the same gearbox (as the id's match compares them)
+    {
+        const bool engineSame = e.engine[0] && head.engine[0] && EnginePartOf(head.engine) == EnginePartOf(e.engine);
+        const bool gearboxSame = e.gearbox[0] && head.gearbox[0] && PartSame(L"Gearbox", EnginePartOf(head.gearbox), EnginePartOf(e.gearbox), gearsNow);
+        int torque = 0;
+        float hold = 0.0f;
+        wchar_t buf[24] = {};
+        if (GetPrivateProfileStringW(L"Engine", L"Torque", L"", buf, 24, file.c_str()) > 0)
+        {
+            const float v = (float)_wtof(buf);
+            if (isfinite(v) && v > 0.0f) torque = (int)lroundf(SettingsRange(v, kTorqueShareRange[0] * 100.0f, kTorqueShareRange[1] * 100.0f));
+        }
+        if (GetPrivateProfileStringW(L"Engine", L"GearHold", L"", buf, 24, file.c_str()) > 0)
+        {
+            const float v = (float)_wtof(buf);
+            if (isfinite(v) && v > 0.0f) hold = SettingsRange(v, kGearHoldRange[0], kGearHoldRange[1]);
+        }
+        EngineProfile p = {};
+        wchar_t curve[256] = {};
+        ProfileKeysRead(L"Engine", file, nullptr, p, curve);
+        if (curve[0] && !p.custom) curve[0] = 0; // a curve its parser does not take is left out
+        t.engineOther = !engineSame && (torque > 0 || p.own);
+        t.gearboxOther = !gearboxSame && hold > 0.0f;
+        const bool takeTorque = engineSame && torque > 0, takeProfile = engineSame && p.own, takeHold = gearboxSame && hold > 0.0f;
+        // EngineOwn=0 (a backup's word): the figures are kept and not in force, or with none the level had none of its own
+        const bool own = GetPrivateProfileIntW(L"Engine", L"EngineOwn", 1, file.c_str()) != 0;
+        int wasTorque = 0;
+        float wasHold = 0.0f;
+        EngineProfile wasProfile = {};
+        wchar_t wasCurve[256] = {};
+        const int wasAt = ReadTruckEngine(st.key, id, e.engine, e.gearbox, wasTorque, wasHold, wasProfile, wasCurve);
+        // a backup gives the level back as it was: this engine's and this gearbox's keys the backup lacks go out of it
+        if (GetPrivateProfileIntW(L"Profile", L"Backup", 0, file.c_str()) != 0 && wasAt != kSuspNone)
+        {
+            const std::wstring sec = SectionOf(kEngineSection, id);
+            if (engineSame && !takeTorque) WritePrivateProfileStringW(sec.c_str(), EngineKeyOf(L"Torque", e.engine).c_str(), nullptr, truckIni.c_str());
+            if (engineSame && !takeProfile)
+                for (const wchar_t *what : { L"PeakTorqueRpm", L"Aspiration", L"Fuel", L"TorqueCurve" }) WritePrivateProfileStringW(sec.c_str(), EngineKeyOf(what, e.engine).c_str(), nullptr, truckIni.c_str());
+            if (gearboxSame && !takeHold) WritePrivateProfileStringW(sec.c_str(), EngineKeyOf(L"GearHold", e.gearbox).c_str(), nullptr, truckIni.c_str());
+        }
+        if (takeTorque || takeProfile || takeHold)
+            WriteTruckEngine(st.key, id, own, engineSame ? e.engine : "", takeTorque ? torque : 0, takeHold ? e.gearbox : "", takeHold ? hold : 0.0f, takeProfile ? &p : nullptr, curve);
+        else if (!own && wasAt == kSuspInForce) EngineSectionOwn(st.key, id, false), t.engineOff = true;
+        t.torque = takeTorque, t.engine = takeProfile, t.hold = takeHold;
+        if (engineToo && (takeTorque || takeProfile))
+        {
+            if (takeProfile) EngineProfileWrite(e.engine, p, curve);
+            if (takeTorque) EngineTorqueWrite(e.engine, torque);
+            t.engineDefault = true;
+        }
+    }
+}
+
+// The list for the tab, the tab's asking and the last word, between the pass and the page.
+static SRWLOCK g_profLock = SRWLOCK_INIT;
+static ProfileList g_profList = {};
+static ProfileAsk g_profAsk = {};
+static volatile LONG g_profAsked = 0;
+static bool g_profListed = false;                                                // the tab has asked for the list once: only then is a folder looked at
+static char g_profFor[4][kMaxText] = {};                                         // the truck, id, engine and gearbox the list was made for
+void ProfileAskPut(const ProfileAsk &a)
+{
+    AcquireSRWLockExclusive(&g_profLock);
+    g_profAsk = a;
+    ReleaseSRWLockExclusive(&g_profLock);
+    InterlockedExchange(&g_profAsked, 1);
+}
+void ProfilesGet(ProfileList &out)
+{
+    AcquireSRWLockShared(&g_profLock);
+    if (out.turn != g_profList.turn) out = g_profList;
+    ReleaseSRWLockShared(&g_profLock);
+}
+
+// The name a row shows: a profile's as ProfileShownName has it, a backup of this kind by its date and time alone.
+static void ProfRowName(const char *file, bool backup, const char *kindFile, char *out, size_t size)
+{
+    const size_t k = strlen(kindFile);
+    if (backup && k && !_strnicmp(file, kindFile, k) && file[k] == ' ' && file[k + 1]) ProfileShownName(file + k + 1, nullptr, out, size);
+    else ProfileShownName(file, kindFile, out, size);
+}
+
+// The list made anew, 50 rows at the most: the files named for the driven kind before the others, in each the profiles
+// before the backups, the newest first.
+static void ProfilesList(const SettingsState &st, const EngineState &e, const char *gearsNow, const char *say)
+{
+    struct Found { std::wstring name; bool backup, mine; FILETIME at; };
+    std::vector<Found> found;
+    const std::string kindName = ProfKindFile(st.key);
+    for (int backup = 0; backup < 2; backup++)
+    {
+        WIN32_FIND_DATAW f;
+        const HANDLE h = FindFirstFileW((ProfilesFolder(backup != 0) + L"\\*").c_str(), &f);
+        if (h == INVALID_HANDLE_VALUE) continue;
+        do
+        {
+            char name[600];
+            ProfNarrow(f.cFileName, name, sizeof name);
+            if ((f.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || !name[0] || strlen(name) >= sizeof(ProfileRow().file) || !ProfileFileEnding(name)) continue;
+            const bool mine = st.key[0] && !_strnicmp(name, kindName.c_str(), kindName.size()) && name[kindName.size()] == ' ';
+            found.push_back(Found{ f.cFileName, backup != 0, mine, f.ftLastWriteTime });
+        } while (FindNextFileW(h, &f) && found.size() < 2000);
+        FindClose(h);
+    }
+    std::sort(found.begin(), found.end(), [](const Found &a, const Found &b) { return a.mine != b.mine ? a.mine : a.backup != b.backup ? !a.backup : CompareFileTime(&a.at, &b.at) > 0; });
+    static ProfileList list; // large: not on the stack
+    const long turn = list.turn;
+    list = ProfileList{};
+    list.turn = turn + 1;
+    list.truck = st.key[0] != 0, list.idRead = st.id[0] != 0;
+    list.canExport = list.truck && e.engine[0] && e.gearbox[0] && !strcmp(e.key, st.key);
+    strncpy_s(list.kind, st.key, _TRUNCATE);
+    strncpy_s(list.kindFile, ProfKindFile(st.key).c_str(), _TRUNCATE);
+    strncpy_s(list.say, say ? say : "", _TRUNCATE);
+    for (const Found &one : found)
+    {
+        if (list.count >= kProfileRowsMost)
+        {
+            list.more++;
+            continue;
+        }
+        ProfileRow &row = list.row[list.count++];
+        ProfNarrow(one.name.c_str(), row.file, sizeof row.file);
+        row.backup = one.backup;
+        ProfileHead(ProfilesFolder(one.backup) + L"\\" + one.name, row);
+        ProfRowName(row.file, row.backup, list.kindFile, row.name, sizeof row.name);
+        row.sameKind = row.valid && st.key[0] && !_stricmp(row.truck, st.key);
+        row.sameEngine = row.valid && e.engine[0] && row.engine[0] && EnginePartOf(row.engine) == EnginePartOf(e.engine);
+        row.sameGearbox = row.valid && e.gearbox[0] && row.gearbox[0] && PartSame(L"Gearbox", EnginePartOf(row.gearbox), EnginePartOf(e.gearbox), gearsNow);
+    }
+    strncpy_s(g_profFor[0], st.key, _TRUNCATE), strncpy_s(g_profFor[1], st.id, _TRUNCATE), strncpy_s(g_profFor[2], e.engine, _TRUNCATE), strncpy_s(g_profFor[3], e.gearbox, _TRUNCATE);
+    AcquireSRWLockExclusive(&g_profLock);
+    g_profList = list;
+    ReleaseSRWLockExclusive(&g_profLock);
+}
+
+// Whether the pass has something to do here: an asking, or a list shown that was made for another truck or parts.
+static bool ProfilesDue(const SettingsState &st, const EngineState &e)
+{
+    return g_profAsked || (g_profListed && (strcmp(g_profFor[0], st.key) || strcmp(g_profFor[1], st.id) || strcmp(g_profFor[2], e.engine) || strcmp(g_profFor[3], e.gearbox)));
+}
+
+// A row's file as the tab named it, in its folder: a name alone, never a path, and a profile's ending.
+static bool ProfileRowFile(const ProfileAsk &a, std::wstring &file)
+{
+    if (!a.file[0] || strpbrk(a.file, "\\/:*?\"<>|") || strstr(a.file, "..") || !ProfileFileEnding(a.file)) return false;
+    file = ProfilesFolder(a.backup) + L"\\" + Wide(a.file);
+    return GetFileAttributesW(file.c_str()) != INVALID_FILE_ATTRIBUTES;
+}
+
+// On the pass: the tab's asking dealt with, and the list made anew. The caller has put an edit that waited for its
+// save into the files first. True after an Import: the caller reads the truck's files again.
+static bool ProfilesStep(SettingsState &st, EngineState &e, const char *gearsNow)
+{
+    ProfileAsk ask = {};
+    if (InterlockedExchange(&g_profAsked, 0))
+    {
+        AcquireSRWLockShared(&g_profLock);
+        ask = g_profAsk;
+        ReleaseSRWLockShared(&g_profLock);
+        g_profListed = true;
+    }
+    char say[480] = "";
+    bool imported = false;
+    const std::string kindFile = ProfKindFile(st.key);
+    if (ask.what == kProfAskExport)
+    {
+        char name[64], fileName[200];
+        const char *why = "";
+        if (!st.key[0]) strcpy_s(say, "Drive a truck first.");
+        else if (!e.engine[0] || !e.gearbox[0] || strcmp(e.key, st.key)) strcpy_s(say, "The engine and the gearbox of this truck are not read yet.");
+        else if (!ProfileNameClean(ask.name, name, sizeof name, &why)) strcpy_s(say, why);
+        else
+        {
+            ProfileFileName(kindFile.c_str(), name, fileName, sizeof fileName);
+            const std::wstring file = ProfilesFolder(false) + L"\\" + Wide(fileName);
+            if (GetFileAttributesW(file.c_str()) != INVALID_FILE_ATTRIBUTES && !ask.over) strcpy_s(say, "A profile of that name is there. Press Export again to write over it.");
+            else
+            {
+                ProfilesFolderMake(false);
+                if (ProfileFileWrite(file, ProfileText(st, e, kProfLevelInForce, ask.notes, false)))
+                {
+                    snprintf(say, sizeof say, "Exported: %s", fileName);
+                    Log(L"profile: exported %S to Gauges\\profiles\\%s (the settings in force; engine %S, gearbox %S)", st.key, Wide(fileName).c_str(), e.engine, e.gearbox);
+                }
+                else
+                {
+                    strcpy_s(say, "The file could not be written.");
+                    Log(L"profile: Gauges\\profiles\\%s could not be written (error %lu)", Wide(fileName).c_str(), GetLastError());
+                }
+            }
+        }
+    }
+    else if (ask.what == kProfAskImportTruck || ask.what == kProfAskImportKind)
+    {
+        const bool kindLevel = ask.what == kProfAskImportKind;
+        std::wstring file;
+        ProfileRow head = {};
+        const char *why = ProfileRowFile(ask, file) ? ProfileRefused(st, file, kindLevel, ask.otherKind, head) : "That file is not there any more.";
+        if (why) strcpy_s(say, why);
+        else
+        {
+            // the backup first, of the levels this press will write: itself a profile, so the way back is an Import of it
+            SYSTEMTIME now;
+            GetLocalTime(&now);
+            char stamp[40], backName[200], note[kProfileNotesMost + 8], shown[64];
+            snprintf(stamp, sizeof stamp, "%04d-%02d-%02d %02d.%02d.%02d", now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond);
+            snprintf(backName, sizeof backName, "%s %s.ini", kindFile.c_str(), stamp);
+            // a second Import in the same second: its backup is a file of its own, never written over the first (which may be the one taken)
+            for (int again = 2; again < 100 && GetFileAttributesW((ProfilesFolder(true) + L"\\" + Wide(backName)).c_str()) != INVALID_FILE_ATTRIBUTES; again++)
+                snprintf(backName, sizeof backName, "%s %s (%d).ini", kindFile.c_str(), stamp, again);
+            ProfRowName(ask.file, ask.backup, kindFile.c_str(), shown, sizeof shown);
+            snprintf(note, sizeof note, "Before %.60s, %s", shown, kindLevel ? "the kind" : "this truck");
+            ProfilesFolderMake(true);
+            if (!ProfileFileWrite(ProfilesFolder(true) + L"\\" + Wide(backName), ProfileText(st, e, kindLevel ? kProfLevelKind : kProfLevelTruck, note, true)))
+            {
+                strcpy_s(say, "The backup could not be written, so nothing was taken.");
+                Log(L"profile: the backup Gauges\\profiles\\backup\\%s could not be written (error %lu), so nothing was taken", Wide(backName).c_str(), GetLastError());
+            }
+            else
+            {
+                ProfileTaken taken;
+                ProfileImport(st, e, file, head, kindLevel, ask.engineToo, gearsNow, taken);
+                ProfileTakenText(taken, say, sizeof say);
+                Log(L"profile: %s taken for %s: %S The backup is Gauges\\profiles\\backup\\%s", Wide(ask.file).c_str(), kindLevel ? L"every truck of this kind" : L"this truck", say, Wide(backName).c_str());
+                imported = true;
+            }
+        }
+    }
+    if (g_profListed) ProfilesList(st, e, gearsNow, say);
+    return imported;
 }
 
 // ---- the gearbox's bindings: the [Gearbox] section of Gauges.ini ----
@@ -9559,6 +10111,27 @@ static DWORD WINAPI Run(void *)
             SettingsSave(set);
             saveAt = 0;
         }
+        // the Engine tab's Profiles (truck_profile.h): an edit that waits for its save goes into the files first, so an
+        // Export has what the tab shows and no save lands on what an Import brought
+        if (ProfilesDue(set, eng))
+        {
+            if (g_profAsked && saveAt)
+            {
+                SettingsSave(set);
+                saveAt = 0;
+            }
+            char gearsNow[96];
+            GearsNowKey(watch, gearsNow, sizeof gearsNow);
+            if (ProfilesStep(set, eng, gearsNow))
+            {
+                // the truck's files read again, as "read the ini again" does for the truck; the marks cleared as an edit clears them
+                SettingsFor(set, truck.key, truck.id);
+                SettingsPublish(s);
+                EngineFromFiles(eng);
+                EngineApply(eng, watch);
+                edited = true;
+            }
+        }
         if (edited) padMask = PadParse(s.padToggle);
         // the toggle: the key, or the pad buttons all down that were not all down on the last pass; only while the
         // game's window is in front, and the pad not while the tab waits for buttons to bind
@@ -13573,8 +14146,410 @@ static void PartRest()
     }
 }
 
+// The truck profiles (truck_profile.h; BRIEF_truck_profile.md with the Reviewer's addendum): the file an Export writes,
+// what an Import takes at each level, the backup and the way back, and a stranger's file.
+static void PartProfiles()
+{
+    const char *kind = "prof_kind", *otherKind = "prof_other", *id1 = "{11111111-1111-1111-1111-111111111111}";
+    const std::wstring folder = ProfilesFolder(false), backups = ProfilesFolder(true), tireFile = g_dir + kTireModesFile;
+    auto wipe = [](const std::wstring &dir) {
+        WIN32_FIND_DATAW f;
+        const HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &f);
+        if (h == INVALID_HANDLE_VALUE) return;
+        do
+            if (!(f.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) DeleteFileW((dir + L"\\" + f.cFileName).c_str());
+        while (FindNextFileW(h, &f));
+        FindClose(h);
+    };
+    auto files = [](const std::wstring &dir) {
+        int n = 0;
+        WIN32_FIND_DATAW f;
+        const HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &f);
+        if (h == INVALID_HANDLE_VALUE) return 0;
+        do
+            if (!(f.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) n++;
+        while (FindNextFileW(h, &f));
+        FindClose(h);
+        return n;
+    };
+    auto key = [](const std::wstring &file, const wchar_t *section, const wchar_t *name) {
+        wchar_t buf[400] = {};
+        GetPrivateProfileStringW(section, name, L"", buf, 400, file.c_str());
+        return std::wstring(buf);
+    };
+    auto put = [](const std::wstring &file, const wchar_t *section, const wchar_t *name, const wchar_t *value) { WritePrivateProfileStringW(section, name, value, file.c_str()); };
+    auto bytes = [](const std::wstring &file) {
+        std::string all;
+        FILE *f = nullptr;
+        if (_wfopen_s(&f, file.c_str(), L"rb") || !f) return all;
+        char buf[4096];
+        for (size_t n; (n = fread(buf, 1, sizeof buf, f)) > 0;) all.append(buf, n);
+        fclose(f);
+        return all;
+    };
+    static ProfileList list;
+    SettingsState st = {};
+    EngineState e = {};
+    ReadIni(st.plain);
+    // the truck as the loop has it: its settings and its engine's from the files
+    auto drive = [&](const char *k, const char *id, const char *engine, const char *gearbox) {
+        SettingsFor(st, k, id);
+        e = EngineState{};
+        strncpy_s(e.key, k, _TRUNCATE), strncpy_s(e.id, id, _TRUNCATE), strncpy_s(e.engine, engine, _TRUNCATE), strncpy_s(e.gearbox, gearbox, _TRUNCATE);
+        EngineFromFiles(e);
+    };
+    // one asking, dealt with as the pass deals with it; after an Import the truck's files are read again
+    auto run = [&](int what, const char *nameOrFile, const char *notes = "", bool over = false, bool backup = false, bool engineToo = false, bool other = false) {
+        ProfileAsk a = {};
+        a.what = what;
+        if (what == kProfAskExport) strncpy_s(a.name, nameOrFile, _TRUNCATE), strncpy_s(a.notes, notes, _TRUNCATE);
+        else strncpy_s(a.file, nameOrFile, _TRUNCATE);
+        a.over = over, a.backup = backup, a.engineToo = engineToo, a.otherKind = other;
+        ProfileAskPut(a);
+        const bool due = ProfilesDue(st, e);
+        const bool taken = ProfilesStep(st, e, "");
+        if (taken)
+        {
+            char k[kMaxText], id[kMaxText], engine[kMaxText], gearbox[kMaxText];
+            strncpy_s(k, st.key, _TRUNCATE), strncpy_s(id, st.id, _TRUNCATE), strncpy_s(engine, e.engine, _TRUNCATE), strncpy_s(gearbox, e.gearbox, _TRUNCATE);
+            drive(k, id, engine, gearbox);
+        }
+        ProfilesGet(list);
+        return due && taken;
+    };
+    auto says = [&](const char *part) { return strstr(list.say, part) != nullptr; };
+    auto fresh = [&] {
+        DeleteFileW(SetupFile(kSetupTruck, kind).c_str()), DeleteFileW(SetupFile(kSetupTruck, otherKind).c_str());
+        DeleteFileW(SetupFile(kSetupEngine, "prof_eng_a").c_str()), DeleteFileW(SetupFile(kSetupEngine, "prof_eng_b").c_str());
+        DeleteFileW(tireFile.c_str());
+    };
+    wipe(folder), wipe(backups), fresh();
+    Check(!ProfilesDue(st, e), "profiles: before the tab asked for the list the pass has nothing to do and looks at no folder");
+
+    // the truck with everything set: the kind's keys, and its own suspension, Air brakes and engine figures
+    GaugeSettings scales = st.plain;
+    scales.tachClass = kClassHeavy, scales.idleRpm = 650.0f, scales.redlineRpm = 2100.0f, scales.maxRpm = 2600.0f, scales.speedMax = 90.0f, scales.boostProfile = 1;
+    EngineProfile ep = {};
+    ep.own = true, ep.peakRpm = 1400.0f, ep.aspiration = kAspTurbo, ep.fuel = kFuelDiesel;
+    auto setAll = [&] {
+        fresh();
+        WriteTruckIni(kind, scales);
+        WriteTruckDiff(kind, kDiffLimited);
+        WriteTruckAxle(kind, 1, kDiffLocked);
+        IniPutFloat(L"Truck", L"RoadCdA", 7.25f, SetupFile(kSetupTruck, kind));
+        put(SetupFile(kSetupTruck, kind), L"Truck", L"AirAxles", L"rear");
+        OdoHoursPut(kind, true);
+        SettingsFor(st, kind, id1);
+        GaugeSettings g = st.s;
+        g.springFront = 2.5f, g.bumpStops = true;
+        WriteTruckSusp(kind, g, true, id1);
+        WriteTruckAir(kind, id1, 1);
+        WriteTruckEngine(kind, id1, true, "prof_eng_a", 80, "prof_gb_a", 1.5f, &ep, L"");
+        drive(kind, id1, "prof_eng_a", "prof_gb_a");
+    };
+    setAll();
+    GaugeSettings before = st.plain;
+    const bool beforeOwn = ReadTruckIni(kind, before);
+    const std::wstring first = folder + L"\\prof_kind - First.ini";
+
+    // Export: the file, its head, its sections and what never goes in
+    {
+        run(kProfAskExport, "First", "for mud %s%n%s");
+        std::vector<wchar_t> names(2048, L'\0');
+        GetPrivateProfileSectionNamesW(names.data(), (DWORD)names.size(), first.c_str());
+        std::wstring secs;
+        for (const wchar_t *s = names.data(); *s; s += wcslen(s) + 1) secs += s, secs += L"|";
+        const std::string raw = bytes(first);
+        const std::wstring text((const wchar_t *)raw.data(), raw.size() / 2);
+        const bool head = key(first, L"Profile", L"Truck") == L"prof_kind" && key(first, L"Profile", L"Engine") == L"prof_eng_a" && key(first, L"Profile", L"Gearbox") == L"prof_gb_a" &&
+                          key(first, L"Profile", L"Version") == Wide(GAUGES_VERSION) && key(first, L"Profile", L"Date").size() == 16 && key(first, L"Profile", L"Notes") == L"for mud %s%n%s";
+        Check(beforeOwn && says("Exported: prof_kind - First.ini") && head && list.count == 1 && list.row[0].valid && list.row[0].sameKind && list.row[0].sameEngine &&
+                  list.row[0].sameGearbox && !list.row[0].otherVersion && !strcmp(list.row[0].name, "First") && !strcmp(list.row[0].notes, "for mud %s%n%s"),
+              "profiles: Export writes Gauges\\profiles\\<kind> - <name>.ini with the truck, the engine, the gearbox, the version, the date and the notes as typed (a %s in them is text), and the list has it");
+        Check(secs == L"Profile|Truck|Drive|Suspension|Engine|" && text.find(Wide(id1)) == std::wstring::npos && text.find(L"Seen") == std::wstring::npos && text.find(L"Odometer=") == std::wstring::npos &&
+                  text.find(L"prof_eng_a") == text.rfind(L"prof_eng_a") && raw.size() > 2 && (unsigned char)raw[0] == 0xFF && (unsigned char)raw[1] == 0xFE,
+              "profiles: the file has the five sections and nothing else: no id of the truck, no [Seen], no count of the odometer, no section of a gearbox, the engine named once in the head");
+        Check(key(first, L"Truck", L"TachClass") == L"2" && key(first, L"Truck", L"IdleRpm") == L"650" && key(first, L"Truck", L"RoadCdA") == L"7.25" && key(first, L"Truck", L"AirAxles") == L"rear" &&
+                  key(first, L"Truck", L"OdometerHours") == L"1" && key(first, L"Truck", L"AirBrakes") == L"1" && key(first, L"Drive", L"DiffType") == L"2" && key(first, L"Drive", L"DiffAxle2") == L"3" &&
+                  key(first, L"Suspension", L"SpringFront") == L"2.5" && key(first, L"Engine", L"Torque") == L"80" && key(first, L"Engine", L"GearHold") == L"1.5" &&
+                  key(first, L"Engine", L"PeakTorqueRpm") == L"1400" && key(first, L"Engine", L"Fuel") == L"diesel",
+              "profiles: the keys are the truck's file's own, from the level in force: the scales, the drag area, the air axles, the Counts choice, Air brakes, the diff types, the suspension and the engine's figures, plain");
+        // the name: one question before a file is written over, none typed, a device's
+        run(kProfAskExport, "First");
+        const bool asks = says("Press Export again");
+        run(kProfAskExport, "First", "second", true);
+        const bool over = says("Exported") && key(first, L"Profile", L"Notes") == L"second";
+        run(kProfAskExport, "  ");
+        const bool none = says("Type a name first.");
+        run(kProfAskExport, "con");
+        const bool device = says("Windows keeps that name.");
+        run(kProfAskExport, "a/b:c*d", "", false);
+        const bool cleaned = GetFileAttributesW((folder + L"\\prof_kind - a@b_c_d.ini").c_str()) != INVALID_FILE_ATTRIBUTES;
+        DeleteFileW((folder + L"\\prof_kind - a@b_c_d.ini").c_str());
+        Check(asks && over && none && device && cleaned && files(folder) == 1,
+              "profiles: a name a file has is written over only with the second press; no name and a device name of Windows are refused; what a file name cannot hold is replaced");
+        run(kProfAskExport, "First", "for mud", true);
+    }
+
+    // Import for every truck of the kind into an empty file: every key back, at the kind's level, the truck's own section untouched
+    {
+        fresh();
+        drive(kind, id1, "prof_eng_a", "prof_gb_a");
+        const int backupsWere = files(backups);
+        const bool taken = run(kProfAskImportKind, "prof_kind - First.ini");
+        GaugeSettings after = st.plain, su = st.plain, own = st.plain;
+        const bool afterOwn = ReadTruckIni(kind, after);
+        int torque = 0;
+        float hold = 0.0f;
+        EngineProfile p = {};
+        wchar_t curve[256] = {};
+        const int engineAt = ReadTruckEngine(kind, "", "prof_eng_a", "prof_gb_a", torque, hold, p, curve);
+        const bool same = afterOwn && after.tachClass == before.tachClass && after.idleRpm == before.idleRpm && after.redlineRpm == before.redlineRpm && after.maxRpm == before.maxRpm &&
+                          after.speedMax == before.speedMax && after.boostMax == before.boostMax && after.boostProfile == before.boostProfile && after.roadCdA == before.roadCdA &&
+                          after.diffType == before.diffType && after.diffAxle[1] == before.diffAxle[1] && after.diffAxle[0] == before.diffAxle[0] && AirFileKind(kind) == AirKindOf("rear") &&
+                          OdoHoursOf(kind);
+        const bool kindLevel = ReadTruckSusp(kind, su, "") == kSuspInForce && su.springFront == 2.5f && su.bumpStops && TruckAirAt(kind, "") == 1 && engineAt == kSuspInForce && torque == 80 &&
+                               hold == 1.5f && p.own && p.peakRpm == 1400.0f && p.fuel == kFuelDiesel;
+        EngineProfile dp = {};
+        const bool ownLeft = ReadTruckSusp(kind, own, id1) == kSuspNone && TruckAirAt(kind, id1) < 0 && !EngineProfileRead("prof_eng_a", dp) && !EngineTorqueRead("prof_eng_a");
+        Check(taken && same && kindLevel && ownLeft && says("Taken: the class and scales") && !says("were left") && says("The tire mode is not taken yet.") && files(backups) == backupsWere + 1 &&
+                  st.s.springFront == 2.5f && e.torque == 80 && e.torqueFrom == kEngLevelKind,
+              "profiles: For every truck of this kind lays every key back into an empty truck's file at the kind's level, in force after the files are read again; the truck's own sections and the engine's own file are not written; a backup is written first");
+    }
+
+    // Import for this truck: its own sections, the kind's keys left and said so; without the id nothing
+    {
+        fresh();
+        drive(kind, id1, "prof_eng_a", "prof_gb_a");
+        const bool taken = run(kProfAskImportTruck, "prof_kind - First.ini");
+        GaugeSettings own = st.plain, k = st.plain, su = st.plain;
+        int torque = 0;
+        float hold = 0.0f;
+        EngineProfile p = {};
+        wchar_t curve[256] = {};
+        const bool truckLevel = ReadTruckSusp(kind, own, id1) == kSuspInForce && own.springFront == 2.5f && TruckAirAt(kind, id1) == 1 &&
+                                ReadTruckEngine(kind, id1, "prof_eng_a", "prof_gb_a", torque, hold, p, curve) == kSuspInForce && torque == 80 && hold == 1.5f && p.peakRpm == 1400.0f;
+        const bool kindLeft = !ReadTruckIni(kind, k) && ReadTruckSusp(kind, su, "") == kSuspNone && TruckAirAt(kind, "") < 0 && !OdoHoursOf(kind) && AirFileKind(kind) < 0;
+        Check(taken && truckLevel && kindLeft && says("Taken: the suspension, Air brakes, Engine torque, the gear hold, the engine profile.") && says("The settings of the kind were left."),
+              "profiles: Import takes what has a level of the truck (the suspension, Air brakes, the engine's figures) into its own sections; the kind's keys are left and the line says so");
+        fresh();
+        drive(kind, "", "prof_eng_a", "prof_gb_a");
+        const int backupsWere = files(backups);
+        const bool refused = !run(kProfAskImportTruck, "prof_kind - First.ini") && says("The id of this truck is not read");
+        Check(refused && files(backups) == backupsWere && GetFileAttributesW(SetupFile(kSetupTruck, kind).c_str()) == INVALID_FILE_ATTRIBUTES && !list.idRead,
+              "profiles: with the id of the truck not read Import is refused with its reason, with no backup and nothing written");
+    }
+
+    // the backup is a profile of the level the press writes, and taking it is the way back; two in one second keep both
+    {
+        setAll();
+        const std::wstring other = folder + L"\\prof_kind - Stiff.ini";
+        CopyFileW(first.c_str(), other.c_str(), FALSE);
+        put(other, L"Suspension", L"SpringFront", L"3");
+        put(other, L"Engine", L"Torque", L"60");
+        wipe(backups);
+        const bool taken = run(kProfAskImportTruck, "prof_kind - Stiff.ini");
+        const bool changed = st.s.springFront == 3.0f && e.torque == 60;
+        int back = -1;
+        for (int i = 0; i < list.count; i++)
+            if (list.row[i].backup && back < 0) back = i;
+        const bool listed = back == 2 && list.row[back].valid && list.row[back].sameKind && strstr(list.row[back].notes, "Before Stiff, this truck") && !list.row[0].backup && !list.row[1].backup &&
+                            strlen(list.row[back].name) == 19 && !strncmp(list.row[back].name, "20", 2);
+        char backFile[200] = "";
+        if (back >= 0) strncpy_s(backFile, list.row[back].file, _TRUNCATE);
+        const bool backTaken = back >= 0 && run(kProfAskImportTruck, backFile, "", false, true);
+        const bool wayBack = st.s.springFront == 2.5f && st.s.bumpStops && e.torque == 80 && e.torqueFrom == kEngLevelTruck && files(backups) == 2;
+        // a level with nothing of its own comes back as that: the backup says so, and taking it leaves no set in force at the level
+        fresh();
+        drive(kind, id1, "prof_eng_a", "prof_gb_a");
+        wipe(backups);
+        run(kProfAskImportTruck, "prof_kind - Stiff.ini");
+        ProfilesGet(list);
+        char noneFile[200] = "";
+        for (int i = 0; i < list.count; i++)
+            if (list.row[i].backup) strncpy_s(noneFile, list.row[i].file, _TRUNCATE);
+        const std::wstring noneBackup = backups + L"\\" + Wide(noneFile);
+        const bool saysNone = key(noneBackup, L"Suspension", L"SuspOwn") == L"0" && key(noneBackup, L"Suspension", L"SpringFront").empty() && key(noneBackup, L"Engine", L"EngineOwn") == L"0" &&
+                              key(noneBackup, L"Engine", L"Torque").empty() && key(noneBackup, L"Truck", L"AirOwn") == L"0" && st.s.springFront == 3.0f && e.torque == 60 && st.s.airBrakes == 1;
+        run(kProfAskImportTruck, noneFile, "", false, true);
+        GaugeSettings gone = st.plain;
+        int goneTorque = 0;
+        float goneHold = 0.0f;
+        EngineProfile goneProfile = {};
+        wchar_t goneCurve[256] = {};
+        const int engineGone = ReadTruckEngine(kind, id1, "prof_eng_a", "prof_gb_a", goneTorque, goneHold, goneProfile, goneCurve);
+        const bool asBefore = ReadTruckSusp(kind, gone, id1) == kSuspKept && engineGone == kSuspKept && !goneTorque && goneHold == 0.0f && !goneProfile.own && TruckAirAt(kind, id1) < 0 &&
+                              st.s.springFront == st.plain.springFront && e.torqueFrom == kEngLevelNone && e.holdFrom == kEngLevelNone && e.profileFrom == kEngLevelNone && !says("unknown");
+        Check(saysNone && asBefore,
+              "profiles: the backup of a truck with nothing of its own says so in place of figures; taking it puts the suspension and the engine settings out of force for the truck, takes its engine keys and its Air brakes choice out again, and the defaults are in force");
+        Check(taken && changed && listed && backTaken && wayBack,
+              "profiles: the backup of an Import is a profile in the list after the profiles, shown by its date and time with what it was written before in its notes; taking it gives the truck's own set and figures back, and its own backup written in the same second is a second file");
+        DeleteFileW(other.c_str());
+        setAll();
+    }
+
+    // made with another engine or gearbox: that part is left; the engine's own default only with the tick
+    {
+        fresh();
+        drive(kind, id1, "prof_eng_b", "prof_gb_a");
+        run(kProfAskImportTruck, "prof_kind - First.ini", "", false, false, true);
+        int torque = 0;
+        float hold = 0.0f;
+        EngineProfile p = {}, dp = {};
+        wchar_t curve[256] = {};
+        ReadTruckEngine(kind, id1, "prof_eng_b", "prof_gb_a", torque, hold, p, curve);
+        int torqueA = 0;
+        float holdA = 0.0f;
+        EngineProfile pa = {};
+        ReadTruckEngine(kind, id1, "prof_eng_a", "prof_gb_a", torqueA, holdA, pa, curve);
+        const bool engineLeft = !torque && !p.own && !torqueA && !pa.own && hold == 1.5f && says("Made with another engine: its engine settings were left.") && says("the gear hold") &&
+                                !EngineProfileRead("prof_eng_b", dp) && !EngineProfileRead("prof_eng_a", dp) && !list.row[0].sameEngine && list.row[0].sameGearbox;
+        fresh();
+        drive(kind, id1, "prof_eng_a", "prof_gb_b");
+        run(kProfAskImportTruck, "prof_kind - First.ini");
+        ReadTruckEngine(kind, id1, "prof_eng_a", "prof_gb_b", torque, hold, p, curve);
+        const bool holdLeft = torque == 80 && p.own && hold == 0.0f && says("Made with another gearbox: its gear hold was left.") && !EngineProfileRead("prof_eng_a", dp) && !list.row[0].sameGearbox;
+        fresh();
+        drive(kind, id1, "prof_eng_a", "prof_gb_a");
+        run(kProfAskImportTruck, "prof_kind - First.ini", "", false, false, true);
+        float dh = 0.0f;
+        const bool ticked = EngineProfileRead("prof_eng_a", dp) && dp.peakRpm == 1400.0f && EngineTorqueRead("prof_eng_a") == 80 && says("the default of the engine") && !GearHoldRead("prof_gb_a", dh);
+        Check(engineLeft && holdLeft && ticked,
+              "profiles: a profile made with another engine leaves its engine settings, one made with another gearbox its gear hold, each said; the engine's own default is written only with the tick and the gearbox's never");
+    }
+
+    // a stranger's file: unknown keys counted and left, figures into their ranges, the plain scales' word, a large file, another kind, a path
+    {
+        fresh();
+        drive(kind, id1, "prof_eng_a", "prof_gb_a");
+        const std::wstring odd = folder + L"\\prof_kind - Odd.ini";
+        CopyFileW(first.c_str(), odd.c_str(), FALSE);
+        put(odd, L"Suspension", L"SpringFront", L"1e30"), put(odd, L"Suspension", L"Bogus", L"1"), put(odd, L"Seen", L"Key", L"x"), put(odd, L"Drive", L"DiffAxle9", L"1"), put(odd, L"Engine", L"Torque", L"99999");
+        put(odd, L"Engine", L"GearHold", L"nan"), put(odd, L"Truck", L"AirBrakes", L"7"), put(odd, L"Truck", L"AirAxles", L"sideways"), put(odd, L"Truck", L"IdleRpm", L"-5");
+        put(odd, L"Drive", L"DiffType", L"44"), put(odd, L"Profile", L"Notes", L"%s%s%s%n  \x01tab");
+        run(kProfAskImportKind, "prof_kind - Odd.ini");
+        GaugeSettings k = st.plain, lim = st.plain;
+        lim.springFront = 1e30f, lim.idleRpm = -5.0f;
+        SettingsClamp(lim);
+        ReadTruckIni(kind, k);
+        const bool ranged = st.s.springFront == lim.springFront && st.s.springFront < 1e6f && e.torque == (int)lroundf(kTorqueShareRange[1] * 100.0f) && e.holdFrom == kEngLevelNone &&
+                            TruckAirAt(kind, "") < 0 && AirFileKind(kind) < 0 && k.idleRpm == lim.idleRpm && k.diffType >= 0 && k.diffType < kDiffTypes;
+        int oddRow = -1;
+        for (int i = 0; i < list.count; i++)
+            if (!strcmp(list.row[i].name, "Odd")) oddRow = i;
+        Check(ranged && says("3 unknown keys were left out.") && oddRow >= 0 && !strcmp(list.row[oddRow].notes, "%s%s%s%n  tab"),
+              "profiles: keys the mod does not know are counted and left out, a figure out of its range is brought into it or left, and notes with %s and a control character are shown as plain text");
+        DeleteFileW(odd.c_str());
+
+        // the truck showed the plain scales: the kind gives its own up
+        setAll();
+        const std::wstring plain = folder + L"\\prof_kind - Plain.ini";
+        CopyFileW(first.c_str(), plain.c_str(), FALSE);
+        for (const wchar_t *name : kProfScaleKeys) put(plain, L"Truck", name, nullptr);
+        put(plain, L"Truck", L"ScalesOwn", L"0");
+        put(plain, L"Drive", nullptr, nullptr), put(plain, L"Drive", L"DiffOwn", L"0");
+        run(kProfAskImportKind, "prof_kind - Plain.ini");
+        GaugeSettings none = st.plain;
+        none.diffType = -1;
+        const bool dropped = !ReadTruckIni(kind, none) || (none.tachClass == st.plain.tachClass && none.diffType < 0 && none.diffAxle[1] < 0);
+        Check(dropped && says("the plain scales") && says("the diff types") && !TruckKeyThere(kind, L"TachClass") && !TruckKeyThere(kind, L"DiffType") && TruckKeyThere(kind, L"RoadCdA"),
+              "profiles: a profile of a truck with the plain scales and no diff types of its own takes the kind's own scales and diff rows away, and leaves its other keys");
+        DeleteFileW(plain.c_str());
+
+        // a megabyte, an empty file, a file with no head: none is a profile and nothing is read of them
+        fresh();
+        drive(kind, id1, "prof_eng_a", "prof_gb_a");
+        const std::wstring big = folder + L"\\prof_kind - Big.ini", empty = folder + L"\\prof_kind - Empty.ini", half = folder + L"\\prof_kind - Half.ini";
+        {
+            FILE *f = nullptr;
+            if (!_wfopen_s(&f, big.c_str(), L"wb") && f)
+            {
+                fputs("[Profile]\r\nTruck=prof_kind\r\n[Suspension]\r\nSpringFront=3\r\n", f);
+                for (int i = 0; i < 1024 * 16; i++) fputs("; 0123456789012345678901234567890123456789012345678901234567890\r\n", f);
+                fclose(f);
+            }
+            if (!_wfopen_s(&f, empty.c_str(), L"wb") && f) fclose(f);
+            if (!_wfopen_s(&f, half.c_str(), L"wb") && f) fputs("[Suspension]\r\nSpringFront=3\r\n[Profi", f), fclose(f);
+        }
+        const int backupsWere = files(backups);
+        const bool bigNo = !run(kProfAskImportKind, "prof_kind - Big.ini") && says("That file is not a profile.");
+        const bool emptyNo = !run(kProfAskImportKind, "prof_kind - Empty.ini") && says("That file is not a profile.");
+        const bool halfNo = !run(kProfAskImportKind, "prof_kind - Half.ini") && says("That file is not a profile.");
+        int invalid = 0;
+        for (int i = 0; i < list.count; i++) invalid += !list.row[i].valid;
+        Check(bytes(big).size() > 1024 * 1024 && bigNo && emptyNo && halfNo && invalid == 3 && files(backups) == backupsWere && GetFileAttributesW(SetupFile(kSetupTruck, kind).c_str()) == INVALID_FILE_ATTRIBUTES,
+              "profiles: a file of a megabyte, an empty one and one with no head are in the list as no profile; taking one is refused with no backup and nothing written");
+        DeleteFileW(big.c_str()), DeleteFileW(empty.c_str()), DeleteFileW(half.c_str());
+
+        // a file named for this kind whose head names another: only with the second press, and then the kind is this truck's
+        const std::wstring fake = folder + L"\\prof_kind - Fake.ini";
+        CopyFileW(first.c_str(), fake.c_str(), FALSE);
+        put(fake, L"Profile", L"Truck", L"prof_other");
+        const bool fakeNo = !run(kProfAskImportTruck, "prof_kind - Fake.ini") && says("That profile is for another truck.");
+        int fakeRow = -1;
+        for (int i = 0; i < list.count; i++)
+            if (!strcmp(list.row[i].name, "Fake")) fakeRow = i;
+        const bool shown = fakeRow >= 0 && !list.row[fakeRow].sameKind && !strcmp(list.row[fakeRow].truck, "prof_other");
+        const bool fakeYes = run(kProfAskImportTruck, "prof_kind - Fake.ini", "", false, false, false, true) && st.s.springFront == 2.5f &&
+                             GetFileAttributesW(SetupFile(kSetupTruck, otherKind).c_str()) == INVALID_FILE_ATTRIBUTES;
+        Check(fakeNo && shown && fakeYes,
+              "profiles: a file under this kind's name whose head names another kind is listed as the other kind's and refused; the second press takes it, into this truck's file alone");
+        DeleteFileW(fake.c_str());
+
+        // never a path: a row is a file's name in the folder
+        const int were = files(backups);
+        const bool pathNo = !run(kProfAskImportKind, "..\\..\\Gauges.ini") && says("not there any more") && !run(kProfAskImportKind, "backup\\x.ini") && !run(kProfAskImportKind, "C:\\x.ini") &&
+                            !run(kProfAskImportKind, "prof_kind - First.exe") && !run(kProfAskImportKind, "") && files(backups) == were;
+        Check(pathNo, "profiles: an asking that names a path, another ending or nothing is refused: a row is a file's name in the folder");
+    }
+
+    // Tire Inflation's mode goes into the profile and is not taken yet; its file is never written
+    {
+        setAll();
+        put(tireFile, L"prof_kind", L"Mode", L"Low");
+        put(tireFile, (std::wstring(L"prof_kind:") + Wide(id1)).c_str(), L"Mode", L"increased");
+        const std::string tireWas = bytes(tireFile);
+        run(kProfAskExport, "Tire");
+        const std::wstring tire = folder + L"\\prof_kind - Tire.ini";
+        const bool written = key(tire, L"Tire Inflation", L"Mode") == L"Increased";
+        put(tire, L"Tire Inflation", L"Mode", L"Low");
+        run(kProfAskImportKind, "prof_kind - Tire.ini");
+        Check(written && bytes(tireFile) == tireWas && says("The tire mode is not taken yet.") && !says("unknown"),
+              "profiles: the tire mode of the truck (its own before the kind's) goes into the profile; an Import leaves the file of Tire Inflation as it is and says the mode is not taken yet");
+        DeleteFileW(tire.c_str()), DeleteFileW(tireFile.c_str());
+    }
+
+    // the list: fifty rows and the count of the rest, the profiles before the backups; made anew when the truck changes
+    {
+        wipe(backups);
+        for (int i = 0; i < 53; i++)
+        {
+            wchar_t name[80];
+            swprintf_s(name, L"\\prof_other - n%02d.ini", i);
+            put(folder + name, L"Profile", L"Truck", L"prof_other");
+        }
+        put(backups + L"\\prof_kind 2026-01-01 00.00.00.ini", L"Profile", L"Truck", L"prof_kind");
+        drive(kind, id1, "prof_eng_a", "prof_gb_a");
+        run(kProfAskLook, "");
+        int backupRows = 0, mine = 0;
+        for (int i = 0; i < list.count; i++) backupRows += list.row[i].backup, mine += list.row[i].sameKind;
+        const bool cut = list.count == kProfileRowsMost && list.more == 5 && backupRows == 1 && mine == 2 && !list.row[0].backup && list.row[1].backup && !list.row[2].sameKind && list.truck && list.idRead && list.canExport && !strcmp(list.kind, "prof_kind");
+        const bool quiet = !ProfilesDue(st, e);
+        const long turn = list.turn;
+        drive(otherKind, "", "prof_eng_a", "prof_gb_a");
+        const bool due = ProfilesDue(st, e);
+        ProfilesStep(st, e, "");
+        ProfilesGet(list);
+        int theirs = 0;
+        for (int i = 0; i < list.count; i++) theirs += list.row[i].sameKind;
+        Check(cut && quiet && due && list.turn == turn + 1 && theirs == kProfileRowsMost && list.more == 5 && !list.idRead && !strcmp(list.kind, "prof_other") && !ProfilesDue(st, e),
+              "profiles: the list has fifty rows and counts the rest, the files named for the driven kind first and in each the profiles before the backups; it is made anew when another truck is driven and not again until something changes");
+    }
+    wipe(folder), wipe(backups), fresh();
+}
+
 static const struct { const wchar_t *name; void (*run)(); } kParts[] = {
-    { L"ini", PartIni }, { L"trucks", PartTrucks }, { L"suspension", PartSuspension }, { L"owned", PartOwned }, { L"rest", PartRest },
+    { L"ini", PartIni }, { L"trucks", PartTrucks }, { L"suspension", PartSuspension }, { L"owned", PartOwned }, { L"rest", PartRest }, { L"profiles", PartProfiles },
 };
 
 int wmain(int argc, wchar_t **argv)

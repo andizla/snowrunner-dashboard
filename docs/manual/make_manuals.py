@@ -297,6 +297,25 @@ the level. A level gives the whole profile: a key it lacks is the stock one, not
 class's curve at that level, and at the default it takes the four keys out of this file and keeps Torque. Defaults leaves the
 profile here alone.</p>
 
+<h3>Truck profiles</h3>
+<p>A truck profile is the settings of one truck as one file. It is for keeping a setup, for going back to it and for handing it
+to a friend. The <b>Profiles</b> section is at the foot of the Engine tab.</p>
+<p><b>Export.</b> Type a <b>Name</b> and, if you like, a line of <b>Notes</b>. Press <b>Export</b>. The mod writes the settings in
+force for the driven truck into <code>Gauges\\profiles</code>, as a file named by the truck and the name. It holds the class and
+scales, the diff types, the drag area, the suspension, Air brakes and the engine settings. It holds no odometer count and nothing
+the mod learned. A name that is taken asks for a second press before the file is written over.</p>
+<p><b>Import.</b> The list shows the files of the folder, the driven truck's first. <b>Import</b> takes what this truck keeps as
+its own: the suspension, Air brakes and the engine settings. The class, the scales and the diff types belong to the kind of truck
+and are left. <b>For every truck of this kind</b> takes all of it, for every truck of the kind. <b>Look again</b> reads the folder
+again after you put a file in it.</p>
+<p><b>The way back.</b> Before each Import the mod writes a backup of what it is about to change. The backup is in the list,
+marked as a backup, with its date and time. Take it with the same button and the truck is as it was.</p>
+<p><b>A file from a friend</b> goes into <code>Gauges\\profiles</code>. A profile made with another engine leaves the engine
+settings out. One made with another gearbox leaves the gear hold out. The row says so before you press. A profile of another
+truck is under <b>Other trucks</b> and asks for a second press. With <b>Also the default of the engine</b> ticked an Import also
+writes the engine profile as the default of that engine, for every truck that has it.</p>
+<p>The tire mode of the truck is written into the file. It is not taken yet.</p>
+
 <h2>16. The pull test</h2>
 <p>The Power tab's Pull test has a Start button: on a long flat road, in fourth gear or higher, floor the pedal for seven seconds. The mod holds the gear, changes the torque factor for a second at a time (halved, raised by half, at three quarters), measures the pull and puts the factor back. Lifting the foot, braking or another gear stops it. The numbers go into the log.</p>
 

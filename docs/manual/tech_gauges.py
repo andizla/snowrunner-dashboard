@@ -1040,6 +1040,27 @@ the model (<code>AirStepFor</code>: off, it does not run and holds no pressure),
 The truck is held by the game's own handbrake, the byte at action + 0x48, through <code>LockHoldStep</code> with a hold of its own: a handbrake the player set first is never cleared,
 the mod's own is set again when a key clears it and cleared at the release. No hook and no write to a wheel or a body. This route is not proved in the game yet.
 Gauges.log has "spring brakes: hold at ..." and "spring brakes: release at ...", one line in capitals if a held truck still rolls on flat ground, and with Probe=1 "probe: spring brakes: ..." a second.</p>
+<p><b>Truck profiles</b> (BRIEF_truck_profile.md, build 1; <code>truck_profile.h</code> and a block in <code>gauges.cpp</code>).
+The storage is not changed: a profile is written from the truck's, the engine's and the gearbox's files and goes back into them
+through the functions an edit uses. The file is <code>Gauges\\profiles\\&lt;kind&gt; - &lt;name&gt;.ini</code>, UTF-16,
+written beside its place and then put there whole. Its sections: <code>[Profile]</code> (Version, Truck, Date, Engine, Gearbox,
+Notes, and Backup in a backup), <code>[Truck]</code> (the seven scales together or <code>ScalesOwn=0</code>, RoadCdA, AirAxles,
+OdometerHours, AirBrakes), <code>[Drive]</code> (DiffType and DiffAxle by axle as the truck's file has it, DiffAxle2 for the second axle, else <code>DiffOwn=0</code>; a DiffAxle9 is an unknown key),
+<code>[Suspension]</code> (the whole set in force), <code>[Engine]</code> (Torque, GearHold, PeakTorqueRpm, Aspiration, Fuel,
+TorqueCurve with no part name, only what some level holds) and <code>[Tire Inflation]</code> (Mode from the tire mod's file,
+written only). The truck's id, [Seen], the odometer's count and the learned figures never go in. A backup holds one level exactly: where the level has nothing of its own it says <code>AirOwn=0</code>, <code>SuspOwn=0</code> or <code>EngineOwn=0</code>, and taking it puts that part out of force again.</p>
+<p>All file work is on the mod's pass. The tab only asks (<code>ProfileAskPut</code>) and shows the list the pass made
+(<code>ProfilesGet</code>, 50 rows at the most, the rest counted, the driven kind's files first). An edit that waits for its
+save is saved before the asking is dealt with. An Import checks the file first: 64 KB at the most, a truck named in its head, a
+row name with no path, another kind only after the second press. Then it writes a backup of the levels it will change into
+<code>Gauges\\profiles\\backup</code>; the backup is itself a profile. Where the backup cannot be written nothing is taken.
+Import writes the truck's own sections (its id must be read). <b>For every truck of this kind</b> writes the kind's level and
+the [Truck] keys. The engine's part is taken only for the same engine and the hold only for the same gearbox, compared as the
+id's match compares them. The engine's shared file is written only with <b>Also the default of the engine</b>, the gearbox's
+never. Each figure goes into its range, unknown keys are counted and left out, and a text of the file is cleaned, cut and never
+a format or a path. Gauges.log has <code>profile: exported</code>, <code>profile: Gauges\\profiles\\... could not be
+written</code>, <code>profile: the backup Gauges\\profiles\\backup\\... could not be written</code> and a line naming
+what was taken. Build 1 does not take the tire mode.</p>
 <h2>The tilt lamp</h2>
 <p>The world-up parts of the chassis' forward, up and left axes (chassis +0x170, +0x180, +0x190) are smoothed with a 0.3 s time constant,
 so a bump does not light the lamp (<code>models.h:334-386</code>):</p>

@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include "truck_profile.h" // the list of profile files and what the tab asks of the pass
 #include "drive_display.h" // DdShown, the drive display's record (it reads no game memory)
 #define GAUGES_VERSION "0.18.4"
 
@@ -713,6 +714,8 @@ void GaugeLog(const wchar_t *fmt, ...);     // a line in Gauges.log (any thread)
 bool OverlayHooks();                        // the overlay's hooks on the game's swap chains, first at the start; false = it did not start
 void OverlayInit(HMODULE self);             // the overlay's fonts, then the word that frames may be drawn
 uint32_t PadButtons();                      // the buttons of all connected pads together, 0 without a pad
+void ProfileAskPut(const ProfileAsk &a);    // the Engine tab's Profiles: an Export, an Import or a new look, done on the mod's pass
+void ProfilesGet(ProfileList &out);         // the list the pass made, copied where it is newer than out's turn
 void CheckersAsk();                         // the Checkers binding was pressed: the board opens, or closes where it is open (gauge_overlay.cpp)
 
 extern volatile LONG g_pageCapturing; // GetTickCount() of the last frame the tab waited for pad buttons, 0 = none: the mod ignores the pad then

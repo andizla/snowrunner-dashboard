@@ -27,6 +27,16 @@ struct PageState
     char odoText[24] = "";        // Set's field as typed, and the word under it where it was refused
     const char *odoWord = "";
     CkClicks ckClicks = {};       // the clicks on the foot line of the Mod work tab (kPageCheckers)
+    ProfileList prof = {};        // the Engine tab's Profiles: the list the pass made (the host copies it in before the page)
+    ProfileAsk profAsk = {};      // ... and what a press asks of the pass (kPageProfile)
+    char profName[kProfileNameMost + 8] = "", profNotes[kProfileNotesMost + 8] = ""; // Export's fields as typed
+    char profOver[kProfileNameMost + 8] = ""; // the name Export was pressed with once though a file has it: the next press writes over it
+    char profOther[200] = "";     // the row of another kind a button was pressed on once: the next press of that button takes it
+    bool profOtherBackup = false;
+    int profOtherWhat = 0;
+    bool profEngineToo = false;   // the tick: an Import also writes the engine's own default
+    bool profLooked = false;      // the host asked for the list once
+    const char *profWord = "";    // the tab's own word, before the pass has answered
     int tab = -1;                 // the open tab (kTab...): the host sets the one Gauges.ini keeps before the first frame, else Display
     int tabAsk = -1;              // a tab to open on the next frame (the previews)
     int tabSettle = 0;            // frames until an asked tab is the shown one
@@ -38,7 +48,7 @@ enum { kPageChanged = 1, kPageReload = 2, kPageTruckDrop = 4, kPageDefaults = 8,
        kPagePullTest = 256, kPagePullCancel = 512, kPageMapAmbient = 1024, kPageGearHold = 2048, kPageEngineSet = 4096,
        kPageEngineDrop = 8192, kPageTab = 16384, kPageEngineTorque = 32768, kPageSuspOn = 65536, kPageSuspOff = 131072, kPageSuspDefault = 262144, kPageSuspTruck = 524288, kPageSuspKind = 1048576,
        kPageEngOn = 2097152, kPageEngOff = 4194304, kPageEngDefault = 8388608, kPageEngTruck = 16777216, kPageEngKind = 33554432, kPageAirHeight = 67108864,
-       kPageOdoSet = 134217728, kPageOdoHours = 268435456, kPageCheckers = 536870912 };
+       kPageOdoSet = 134217728, kPageOdoHours = 268435456, kPageCheckers = 536870912, kPageProfile = 1073741824 };
 
 // The Dear ImGui key as a virtual key, for the keys the toggle key can be; 0 for others.
 static int PageVirtualKey(int k)
@@ -786,6 +796,127 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                     "With Engine braking at 0 the engine does not hold the truck and a descent in a held gear over-revs. Default 10 %.");
             ImGui::EndDisabled();
             if (view.engineCapacity > 0) ImGui::TextDisabled("The engine of this truck has %d of %d left.", view.engineCapacity - view.engineDamage, view.engineCapacity);
+        }
+        // the truck's settings as one file (truck_profile.h): the mod's pass does the file work, the tab asks (st.profAsk
+        // with kPageProfile) and shows the list the pass made (st.prof). A profile's texts are a stranger's: each is
+        // shown as it stands, never as a format
+        {
+            const ProfileList &pl = st.prof;
+            auto ask = [&](int what) {
+                st.profAsk = ProfileAsk{};
+                st.profAsk.what = what;
+                st.profWord = "";
+                act |= kPageProfile;
+            };
+            auto wrapped = [&](const char *text, bool dim) {
+                if (dim) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                ImGui::PushTextWrapPos(0.0f);
+                ImGui::TextUnformatted(text);
+                ImGui::PopTextWrapPos();
+                if (dim) ImGui::PopStyleColor();
+            };
+            ImGui::SeparatorText("Profiles");
+            wrapped("The settings of this truck as one file in Gauges\\profiles: to keep, to take back later or to hand to a friend. A file from a friend goes into that folder.", false);
+            ImGui::BeginDisabled(!view.truck[0]);
+            PageLabel("Name", labelX);
+            ImGui::SetNextItemWidth(w);
+            ImGui::InputText("##profname", st.profName, kProfileNameMost + 1);
+            PageTip("The name of the profile. The file is named by the truck and this name.");
+            PageLabel("Notes", labelX);
+            ImGui::SetNextItemWidth(w);
+            ImGui::InputText("##profnotes", st.profNotes, kProfileNotesMost + 1);
+            PageTip("A line for whoever takes the profile: what it is tuned for.");
+            if (ImGui::SmallButton("Export###profexport"))
+            {
+                const bool there = ProfileNameThere(pl, st.profName);
+                if (there && strcmp(st.profOver, st.profName))
+                {
+                    strncpy_s(st.profOver, st.profName, _TRUNCATE);
+                    st.profWord = "A profile of that name is there. Press Export again to write over it.";
+                }
+                else
+                {
+                    ask(kProfAskExport);
+                    strncpy_s(st.profAsk.name, st.profName, _TRUNCATE);
+                    strncpy_s(st.profAsk.notes, st.profNotes, _TRUNCATE);
+                    st.profAsk.over = there;
+                    st.profOver[0] = 0;
+                }
+            }
+            PageTip("Writes the settings in force for this truck into a profile: the class and scales, the diff types, the suspension, Air brakes and the engine settings. No count of the odometer and nothing the mod learned goes in.");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Look again###proflook")) ask(kProfAskLook);
+            PageTip("Reads the folder again, after a file was put in it.");
+            ImGui::SameLine();
+            ImGui::Checkbox("Also the default of the engine###profengine", &st.profEngineToo);
+            PageTip("An Import also writes the engine profile as the default of this engine, for every truck with it. Off, only this truck or this kind gets it.");
+            ImGui::EndDisabled();
+            if (st.profWord[0]) wrapped(st.profWord, false);
+            else if (pl.say[0]) wrapped(pl.say, false);
+            if (pl.truck && !pl.idRead) wrapped("The id of this truck is not read, so it has no settings of its own: only the second button works.", true);
+            else
+                wrapped("Import takes what this truck keeps as its own: the suspension, Air brakes and the engine settings. The class, the scales and the diff types belong to the kind and are left. "
+                        "The second button takes all of it for every truck of this kind. A backup is written first, and it is in this list.", true);
+            int others = 0;
+            auto row = [&](int i, bool other) {
+                const ProfileRow &r = pl.row[i];
+                char text[420];
+                ImGui::PushID(i);
+                _snprintf_s(text, _TRUNCATE, "%s%s   %s", r.name, r.backup ? " (backup)" : "", !r.valid ? "not a profile" : r.backup ? "" : r.date);
+                ImGui::TextUnformatted(text);
+                if (r.valid)
+                {
+                    if (other)
+                    {
+                        _snprintf_s(text, _TRUNCATE, "For %s.", r.truck);
+                        wrapped(text, true);
+                    }
+                    if (r.notes[0]) wrapped(r.notes, true);
+                    if (!r.sameEngine) wrapped("Made with another engine: its engine settings are left.", true);
+                    if (!r.sameGearbox) wrapped("Made with another gearbox: its gear hold is left.", true);
+                    if (r.otherVersion)
+                    {
+                        _snprintf_s(text, _TRUNCATE, "Made with version %s.", r.version);
+                        wrapped(text, true);
+                    }
+                    const bool armed = other && !strcmp(st.profOther, r.file) && st.profOtherBackup == r.backup;
+                    auto press = [&](int what) {
+                        if (other && !(armed && st.profOtherWhat == what))
+                        {
+                            strncpy_s(st.profOther, r.file, _TRUNCATE);
+                            st.profOtherBackup = r.backup, st.profOtherWhat = what;
+                            return;
+                        }
+                        ask(what);
+                        strncpy_s(st.profAsk.file, r.file, _TRUNCATE);
+                        st.profAsk.backup = r.backup, st.profAsk.engineToo = st.profEngineToo, st.profAsk.otherKind = other;
+                        st.profOther[0] = 0;
+                    };
+                    ImGui::BeginDisabled(!pl.idRead);
+                    if (ImGui::SmallButton("Import")) press(kProfAskImportTruck);
+                    ImGui::EndDisabled();
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("For every truck of this kind")) press(kProfAskImportKind);
+                    if (armed)
+                    {
+                        _snprintf_s(text, _TRUNCATE, "This profile is for %s. This truck is %s. Press again to take it.", r.truck, pl.kind);
+                        wrapped(text, false);
+                    }
+                }
+                ImGui::Spacing();
+                ImGui::PopID();
+            };
+            for (int i = 0; i < pl.count && i < kProfileRowsMost; i++)
+                if (pl.row[i].sameKind || !pl.row[i].valid) row(i, false);
+                else others++;
+            if (pl.turn && pl.count == others) ImGui::TextDisabled("No profile of this truck yet.");
+            if (others && ImGui::TreeNode("Other trucks###profother"))
+            {
+                for (int i = 0; i < pl.count && i < kProfileRowsMost; i++)
+                    if (pl.row[i].valid && !pl.row[i].sameKind) row(i, true);
+                ImGui::TreePop();
+            }
+            if (pl.more > 0) ImGui::TextDisabled("And %d more files.", pl.more);
         }
     }
     else if (open && tab == kTabGearbox)

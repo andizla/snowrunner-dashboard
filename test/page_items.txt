@@ -266,6 +266,11 @@ x
 ##suspown
 ##engown
 ##odoset
+##profname
+##profnotes
+Export###profexport
+Look again###proflook
+Also the default of the engine###profengine
 ##showodometer
 Set###odosetbutton
 ##gamegeardisplay

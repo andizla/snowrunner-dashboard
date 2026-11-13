@@ -8895,6 +8895,60 @@ static void TruckTestsLockSteer()
     }
 }
 
+// The truck profiles' names and texts (truck_profile.h): what has no file in it.
+static void TruckProfileTest()
+{
+    char out[64], file[200];
+    const char *why = nullptr;
+    const bool name = ProfileNameClean("  Mud run. ", out, sizeof out, &why) && !strcmp(out, "Mud run") && ProfileNameClean("a/b\\c:d*e?f\"g<h>i|j", out, sizeof out) && !strcmp(out, "a@b_c_d_e_f_g_h_i_j") &&
+                      !ProfileNameClean(" .. ", out, sizeof out, &why) && !strcmp(why, "Type a name first.") && !ProfileNameClean(nullptr, out, sizeof out) &&
+                      ProfileNameClean("ab\x01\x1f" "c\x7f", out, sizeof out) && !strcmp(out, "abc") &&
+                      ProfileNameClean("12345678901234567890123456789012345678901234567890", out, sizeof out) && strlen(out) == (size_t)kProfileNameMost;
+    char tiny[8];
+    const bool cut = ProfileNameClean("abcdefghijklmnop", tiny, sizeof tiny) && !strcmp(tiny, "abcdefg");
+    const bool device = !ProfileNameClean("con", out, sizeof out, &why) && !strcmp(why, "Windows keeps that name. Type another.") && ProfileDeviceName("NUL") && ProfileDeviceName("Lpt9.old") &&
+                        ProfileDeviceName("com1") && ProfileDeviceName("AUX .x") && !ProfileDeviceName("COM0") && !ProfileDeviceName("COM10") && !ProfileDeviceName("CONSOLE") && !ProfileDeviceName("nulls") &&
+                        ProfileNameClean("console", out, sizeof out);
+    Check(name && cut && device,
+          "profiles: a typed name loses what a file name cannot hold, control characters, the spaces and dots at its ends and what is past 40 characters or its buffer; nothing left or a device name of Windows is refused with its word");
+    ProfileFileName("kind_a", "Mud", file, sizeof file);
+    char shown[64], other[64], bare[64], hostile[64];
+    ProfileShownName(file, "kind_a", shown, sizeof shown);
+    ProfileShownName("kind_b - Mud.ini", "kind_a", other, sizeof other);
+    ProfileShownName("kind_a - .ini", "kind_a", bare, sizeof bare);
+    ProfileShownName("%s%n\x02.TXT", "kind_a", hostile, sizeof hostile);
+    const bool names = !strcmp(file, "kind_a - Mud.ini") && !strcmp(shown, "Mud") && !strcmp(other, "kind_b - Mud") && !strcmp(bare, "kind_a -") && !strcmp(hostile, "%s%n") &&
+                       ProfileFileEnding("a.INI") && ProfileFileEnding("a.txt") && !ProfileFileEnding(".ini") && !ProfileFileEnding("a.exe") && !ProfileFileEnding("a.ini.part");
+    char text[16], none[4] = "x";
+    const bool clean = ProfileTextClean("  a\tb\r\nc  ", text, sizeof text, 100) && !strcmp(text, "abc") && ProfileTextClean("abcdef", text, sizeof text, 3) && !strcmp(text, "abc") &&
+                       !ProfileTextClean(" \x01 ", text, sizeof text, 100) && !text[0] && !ProfileTextClean(nullptr, none, sizeof none, 100) && !none[0] &&
+                       ProfileTextClean("\xD0\x96\xD0\xB0", text, sizeof text, 100) && !strcmp(text, "\xD0\x96\xD0\xB0");
+    Check(names && clean,
+          "profiles: the file is <kind> - <name>.ini and a row shows the name alone for this kind, the whole name for another; .ini and .txt end a profile; a shown text has no control character, is cut and keeps its UTF-8");
+    static ProfileList list;
+    list = ProfileList{};
+    strcpy_s(list.kindFile, "kind_a");
+    list.count = 2;
+    strcpy_s(list.row[0].file, "KIND_A - mud.INI");
+    strcpy_s(list.row[1].file, "kind_a - Old.ini"), list.row[1].backup = true;
+    const bool there = ProfileNameThere(list, " Mud ") && !ProfileNameThere(list, "Old") && !ProfileNameThere(list, "Sand") && !ProfileNameThere(list, "");
+    ProfileTaken t = {};
+    char say[480], shortSay[24];
+    ProfileTakenText(t, say, sizeof say);
+    const bool nothing = !strcmp(say, "Taken: nothing. The tire mode is not taken yet.");
+    t.susp = t.air = t.kindLeft = t.engineOther = t.gearboxOther = true, t.unknown = 3;
+    ProfileTakenText(t, say, sizeof say);
+    ProfileTakenText(t, shortSay, sizeof shortSay);
+    const bool told = !strcmp(say, "Taken: the suspension, Air brakes. The settings of the kind were left. Made with another engine: its engine settings were left. "
+                                   "Made with another gearbox: its gear hold was left. The tire mode is not taken yet. 3 unknown keys were left out.") &&
+                      strlen(shortSay) == sizeof shortSay - 1;
+    t = ProfileTaken{};
+    t.scales = t.scalesOff = t.diff = t.cda = t.airAxles = t.odo = t.susp = t.air = t.torque = t.hold = t.engine = t.engineOff = t.engineDefault = t.kindLeft = t.engineOther = t.gearboxOther = true, t.unknown = 123456;
+    ProfileTakenText(t, say, sizeof say);
+    Check(there && nothing && told && strlen(say) < sizeof say && !strchr(say, 39),
+          "profiles: a typed name is known as a file of the list whatever its case, a backup is not; the line of an Import names what was taken and what was left, fits its buffer with everything in it and has no apostrophe");
+}
+
 int main()
 {
     TruckRefs r;
@@ -8920,6 +8974,7 @@ int main()
     PhysicsRateWinchTest();
     RealImageTest();
     GearDisplayTest();
+    TruckProfileTest();
 
     printf(g_failed ? "TRUCK TEST FAILED (%d)\n" : "TRUCK TEST OK\n", g_failed);
     return g_failed ? 1 : 0;

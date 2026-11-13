@@ -347,7 +347,20 @@ static void OnPage()
     }
     // the pad is read on every frame of the tab: the frame the binding's button is pressed on has to know that the
     // pad's A, which pressed it, is still down
+    // the Engine tab's Profiles: the list the pass made, and the first look at the folder when the tab is first shown
+    ProfilesGet(st.prof);
     int act = SettingsPage(s, view, st, PadButtons());
+    if (!(act & kPageProfile) && st.tab == kTabEngine && !st.profLooked)
+    {
+        st.profAsk = ProfileAsk{};
+        st.profAsk.what = kProfAskLook;
+        act |= kPageProfile;
+    }
+    if (act & kPageProfile)
+    {
+        st.profLooked = true;
+        ProfileAskPut(st.profAsk);
+    }
     if (act & kPageCheckers)
     {
         if (!s.checkers)
