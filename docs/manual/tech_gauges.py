@@ -465,7 +465,9 @@ other's nearest along it within 0.5 m (<code>AxleGroups</code>; <code>kAxleAlong
 that cannot reach the next axle, and it leaves room for two wheels not quite opposite). A wheel's place is its centre (wheel + 0x13C,
 world) less the body's place (body + 0x1A0), along the body's forward (+ 0x170) and left (+ 0x190), so a bent frame, steer and spring
 travel do not move a wheel to another axle. All wheels of the truck are grouped, driven or not, and the driven ones find their axle by
-the wheel object's pointer. A wheel with no partner, one not read or one the table does not hold is an axle of its own. The grouping is
+the wheel object's pointer. The wheels left alone are paired again by the same rule in the main body's frame (vehicle + 0x60, model + 0x230),
+whatever body each hangs on: a tandem on beams, one beam a side, has both wheels of a beam on one side of it, so only the second pairing
+gives it two axles of two wheels. A wheel with no partner, one not read or one the table does not hold is an axle of its own. The grouping is
 made in the drive's hook, on the physics thread, in the first step with Open in force on a truck: reads only, under the fault guard. It is
 kept and made again when the vehicle or one of its wheel pointers is another, and looked at again every 240 Open steps while a wheel stands
 alone, where only a result with fewer wheels alone is taken. A read that faults leaves each wheel an axle of its own and is counted.

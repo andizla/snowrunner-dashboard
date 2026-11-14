@@ -326,27 +326,37 @@ inline void DdAxlesLine(const DdShown &d, char *out, size_t size)
 // ---- the differential by axle: the rows of the Power tab (BRIEF_axle_diff.md, M5 to M7) ----
 // The truck's axles front to back, from what the mod's thread read of every wheel: its parent body, its place in that
 // body's frame (along, side; AxlePlace), its place along the main body (rowAt, the order's key) and how it is driven
-// (0 not, 1 always, 2 with all wheel drive). One grouping: AxleGroups. One order: DdLayout's, the further forward
-// first. axles 0: no rows (a wheel not placed, a wheel with no partner, more wheels than the display holds or more
-// than kAxleRowsMost axles); the whole truck then goes by DiffType as before.
+// (0 not, 1 always, 2 with all wheel drive). One grouping: AxleGroups, with its second pairing in the main body's frame
+// (rowAt along it, mainSide across it; nullptr: the main body was not read). One order: DdLayout's, the further
+// forward first. A wheel left with no partner is an axle and a row of its own (BRIEF_tester_1114.md, part 186, must 1).
+// axles 0: no rows (a wheel not placed, no pair at all, more wheels than the display holds or more than kAxleRowsMost
+// axles); the whole truck then goes by DiffType as before. The wheels left alone are kept for the log either way.
 enum { kAxleRowsMost = 8 };
 struct AxleRows
 {
     int axles;                // every axle of the truck, driven or not
     int ofWheel[kDdWheels];   // each wheel's axle, 0 the front
     int drive[kAxleRowsMost]; // 0 not driven (no row), 1 always, 2 with all wheel drive
+    int alone;                // the wheels with no partner (0 with a wheel not placed: nothing was grouped)
+    int across;               // the axles paired in the main body's frame
+    bool lone[kDdWheels];     // the wheel has no partner
 };
-inline AxleRows AxleRowsMake(const uint64_t *body, const float *along, const float *side, const float *rowAt, const bool *ok, const int *drive, int n)
+inline AxleRows AxleRowsMake(const uint64_t *body, const float *along, const float *side, const float *rowAt, const bool *ok, const int *drive, int n,
+                             const float *mainSide = nullptr)
 {
     AxleRows r = {};
     if (n < 2 || n > kDdWheels) return r;
     for (int i = 0; i < n; i++)
         if (!ok[i]) return r;
-    const AxleGroupsOut g = AxleGroups(body, along, side, ok, n);
-    if (g.alone > 0) return r;
+    const AxleGroupsOut g = AxleGroups(body, along, side, ok, n, mainSide ? rowAt : nullptr, mainSide);
+    r.alone = g.alone, r.across = g.across;
+    for (int i = 0; i < n; i++) r.lone[i] = AxleLone(g, n, i);
+    if (g.alone >= n) return r;
+    float sideBy[kDdWheels];
+    AxleSideBy(g, n, side, mainSide, sideBy);
     uint8_t row[kDdWheels];
     bool right[kDdWheels];
-    const int rows = DdLayout(g.axle, rowAt, side, ok, n, true, row, right);
+    const int rows = DdLayout(g.axle, rowAt, sideBy, ok, n, true, row, right);
     if (rows < 1 || rows > kAxleRowsMost || rows >= n) return r;
     r.axles = rows;
     for (int i = 0; i < n; i++)

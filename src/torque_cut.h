@@ -1420,6 +1420,10 @@ inline CapStepOut DiffOpenStep(const float *pre, const float *even, const float 
 // wide enough for an axle whose two wheels are not quite opposite. The mutual nearest keeps a wheel from taking a
 // partner that has a nearer one.
 // A wheel with no such partner, or one not read, is an axle of its own (M2): axle[i] is i. A pair has the lower index.
+// The second pairing (BRIEF_tester_1114.md, part 186, must 2): the wheels left alone by the first are paired again by
+// the same rule in the main body's frame (mainAlong, mainSide; nullptr: no second pairing), whatever body each hangs
+// on. A tandem on beams, one beam a side, has both wheels of a beam on one side of it and its partner across the truck
+// on the other beam, so the first pairing leaves all four alone and the second gives two axles of two wheels.
 static const float kAxleAlong = 0.5f;
 inline bool AxlePlace(const float *centre, const float *bodyAt, const float *forward, const float *left, float &along, float &side)
 {
@@ -1431,37 +1435,79 @@ inline bool AxlePlace(const float *centre, const float *bodyAt, const float *for
 struct AxleGroupsOut
 {
     int axle[kCapWheels];
-    int axles; // the axles found, a wheel alone counted as one
-    int alone; // the wheels with no partner, the ones not read among them
+    int axles;  // the axles found, a wheel alone counted as one
+    int alone;  // the wheels with no partner, the ones not read among them
+    int across; // the axles of the second pairing, in the main body's frame
+    bool byMain[kCapWheels]; // the wheel was paired in the second pairing
 };
-inline AxleGroupsOut AxleGroups(const uint64_t *body, const float *along, const float *side, const bool *ok, int n)
+// The mutual nearest among the wheels `in` gives (body 0: any body), by place along a frame and on other sides of it.
+inline void AxlePairs(const uint64_t *body, const float *along, const float *side, const bool *in, int n, int *best)
 {
-    AxleGroupsOut o = {};
-    if (n > kCapWheels) n = kCapWheels;
-    if (n < 0) n = 0;
-    int best[kCapWheels];
     for (int i = 0; i < n; i++)
     {
         best[i] = -1;
-        o.axle[i] = i;
-        if (!ok[i] || !body[i] || !isfinite(along[i]) || !isfinite(side[i])) continue;
+        if (!in[i]) continue;
         float least = kAxleAlong;
         for (int j = 0; j < n; j++)
         {
-            if (j == i || !ok[j] || body[j] != body[i] || !(side[i] * side[j] < 0.0f)) continue;
+            if (j == i || !in[j] || (body && body[j] != body[i]) || !(side[i] * side[j] < 0.0f)) continue;
             const float d = fabsf(along[i] - along[j]);
             if (!(d <= least) || (best[i] >= 0 && d == least)) continue;
             best[i] = j, least = d;
         }
     }
+}
+inline AxleGroupsOut AxleGroups(const uint64_t *body, const float *along, const float *side, const bool *ok, int n, const float *mainAlong = nullptr,
+                                const float *mainSide = nullptr)
+{
+    AxleGroupsOut o = {};
+    if (n > kCapWheels) n = kCapWheels;
+    if (n < 0) n = 0;
+    int best[kCapWheels];
+    bool in[kCapWheels], lone[kCapWheels];
+    for (int i = 0; i < n; i++)
+        o.axle[i] = i, in[i] = ok[i] && body[i] && isfinite(along[i]) && isfinite(side[i]);
+    AxlePairs(body, along, side, in, n, best);
+    int left = 0;
     for (int i = 0; i < n; i++)
     {
         const int j = best[i];
-        if (j >= 0 && best[j] == i) o.axle[i] = i < j ? i : j;
-        else o.alone++;
+        lone[i] = !(j >= 0 && best[j] == i);
+        if (!lone[i]) o.axle[i] = i < j ? i : j;
+        else if (in[i]) left++;
+    }
+    if (mainAlong && mainSide && left >= 2)
+    {
+        for (int i = 0; i < n; i++) in[i] = in[i] && lone[i] && isfinite(mainAlong[i]) && isfinite(mainSide[i]);
+        AxlePairs(nullptr, mainAlong, mainSide, in, n, best);
+        for (int i = 0; i < n; i++)
+        {
+            const int j = best[i];
+            if (!in[i] || j < 0 || best[j] != i) continue;
+            lone[i] = false, o.byMain[i] = true, o.axle[i] = i < j ? i : j;
+            if (i < j) o.across++;
+        }
+    }
+    for (int i = 0; i < n; i++)
+    {
+        if (lone[i]) o.alone++;
         if (o.axle[i] == i) o.axles++;
     }
     return o;
+}
+// A wheel with no partner in the grouping: its axle holds it alone.
+inline bool AxleLone(const AxleGroupsOut &g, int n, int i)
+{
+    for (int j = 0; j < n; j++)
+        if (j != i && g.axle[j] == g.axle[i]) return false;
+    return true;
+}
+// The side each wheel's left and right go by: its parent body's frame for a pair of the first pairing, the main body's
+// for one of the second and for a wheel alone, where that was read (mainSide nullptr or not finite: the parent's).
+inline void AxleSideBy(const AxleGroupsOut &g, int n, const float *side, const float *mainSide, float *out)
+{
+    for (int i = 0; i < n; i++)
+        out[i] = mainSide && isfinite(mainSide[i]) && (g.byMain[i] || AxleLone(g, n, i)) ? mainSide[i] : side[i];
 }
 // A driven wheel's axle out of the truck's table (wheels the wheel objects' pointers, axle as AxleGroups gave it): by the
 // pointer, since the hook's list holds only the driven wheels in an order of its own. A wheel not in the table gets

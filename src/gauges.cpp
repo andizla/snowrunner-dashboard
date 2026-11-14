@@ -6054,7 +6054,7 @@ struct TruckWatch
     // truck and wheel list they were made for, when and how often they were looked at; what is in force on each
     // (AxlePlanOf); diffMixed: the axles driven now differ; the two levers; the line last logged
     AxleRows axleRows;
-    uint64_t axleRowsFor, axleRowsWheel[kDdWheels];
+    uint64_t axleRowsFor, axleRowsWheel[kDdWheels], axleRowsBody[kDdWheels]; // axleRowsBody: each wheel's parent body, for the log of the wheels alone
     int axleRowsN, axleRowsLooks;
     unsigned long long axleRowsAt;
     AxlePlan axlePlan;
@@ -6435,21 +6435,21 @@ static void AxleRowsStep(TruckWatch &w, const TruckMemory &m, const TruckRaw &ra
     w.axleRows = AxleRows{};
     if (n < 2 || n > kDdWheels || raw.wheels != n) return;
     uint64_t body[kDdWheels], model = 0, mainBody = 0;
-    float along[kDdWheels], side[kDdWheels], rowAt[kDdWheels], ma[3], mf[3], ml[3];
+    float along[kDdWheels], side[kDdWheels], rowAt[kDdWheels], mainSide[kDdWheels], ma[3], mf[3], ml[3];
     bool ok[kDdWheels];
     int drive[kDdWheels];
     const bool mainOk = m.get(w.refs.vehicle + 0x60, model) && m.get(model + 0x230, mainBody) && m.get(mainBody + 0x1A0, ma) && m.get(mainBody + 0x170, mf) && m.get(mainBody + 0x190, ml);
     for (int i = 0; i < n; i++)
     {
         float c[3], at[3], f[3], l[3];
-        body[i] = 0, ok[i] = false, along[i] = side[i] = rowAt[i] = 0.0f, drive[i] = raw.drive[i];
+        body[i] = 0, ok[i] = false, along[i] = side[i] = rowAt[i] = 0.0f, mainSide[i] = NAN, drive[i] = raw.drive[i];
         if (!m.get(w.refs.wheel[i] + 0x10, body[i]) || !m.get(w.refs.wheel[i] + 0x13C, c) || !m.get(body[i] + 0x1A0, at) || !m.get(body[i] + 0x170, f) || !m.get(body[i] + 0x190, l)) continue;
         ok[i] = AxlePlace(c, at, f, l, along[i], side[i]);
-        float mainSide = 0.0f;
         rowAt[i] = along[i];
-        if (ok[i] && mainOk && !AxlePlace(c, ma, mf, ml, rowAt[i], mainSide)) rowAt[i] = along[i];
+        if (ok[i] && mainOk && !AxlePlace(c, ma, mf, ml, rowAt[i], mainSide[i])) rowAt[i] = along[i], mainSide[i] = NAN;
     }
-    w.axleRows = AxleRowsMake(body, along, side, rowAt, ok, drive, n);
+    for (int i = 0; i < n; i++) w.axleRowsBody[i] = body[i];
+    w.axleRows = AxleRowsMake(body, along, side, rowAt, ok, drive, n, mainOk ? mainSide : nullptr);
 }
 static void DiffPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s, bool driving, const TruckRaw &raw)
 {
@@ -6476,7 +6476,7 @@ static void DiffPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s
         text[0] = 0;
         if (w.axleRows.axles == 0)
         {
-            if (w.axleRowsLooks >= 3) len = swprintf_s(text, L"vehicle %llx: the axles of this truck are not read as pairs (%d wheels): no rows, the whole truck by DiffType", (unsigned long long)w.refs.vehicle, w.refs.wheels);
+            if (w.axleRowsLooks >= 3) len = FmtCut(text, 400, L"vehicle %llx: the axles of this truck are not read as pairs (%d wheels): no rows, the whole truck by DiffType", (unsigned long long)w.refs.vehicle, w.refs.wheels);
         }
         else
         {
@@ -6485,6 +6485,23 @@ static void DiffPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s
                 len += swprintf_s(text + len, 400 - len, L" %d %s%s%s%s", a + 1, !w.axleRows.drive[a] ? L"not driven" : DiffTypeName(w.axlePlan.type[a]), w.axlePlan.lever[a] ? L" by the key" : L"",
                                   w.axleRows.drive[a] && !w.axlePlan.now[a] ? L" (not driven now)" : L"", a + 1 < w.axleRows.axles ? L"," : L"");
             if (len < 340) len += swprintf_s(text + len, 400 - len, w.diffMixed ? L"; the driven axles differ: each by its own while the lock byte is not in force" : L"; the driven axles are alike: the step as before the rows");
+        }
+        // the wheels left alone and the axles paired across the main body (BRIEF_tester_1114.md, part 186, must 5)
+        if (len > 0 && w.axleRows.across > 0) len += FmtCut(text + len, 400 - len, L"; %d paired across the main body", w.axleRows.across);
+        if (len > 0 && w.axleRows.alone > 0)
+        {
+            len += FmtCut(text + len, 400 - len, L"; %d alone:", w.axleRows.alone);
+            int said = 0;
+            for (int i = 0; i < w.refs.wheels && i < kDdWheels; i++)
+            {
+                if (!w.axleRows.lone[i]) continue;
+                if (said++ == 4)
+                {
+                    len += FmtCut(text + len, 400 - len, L" and more");
+                    break;
+                }
+                len += FmtCut(text + len, 400 - len, L" wheel %d on %llx", i, (unsigned long long)w.axleRowsBody[i]);
+            }
         }
         if (len > 0 && wcscmp(text, w.axleSaidText))
         {

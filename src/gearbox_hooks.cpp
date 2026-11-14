@@ -1047,16 +1047,29 @@ static bool AxleWheelsRead(const void *vehicle, uint8_t **wheel, int &n)
         return false;
     }
 }
-static bool AxleMake(uint8_t *const *wheel, int n, AxleGroupsOut &g)
+static bool AxleMake(uint64_t vehicle, uint8_t *const *wheel, int n, AxleGroupsOut &g)
 {
     uint64_t body[kCapWheels];
-    float along[kCapWheels], side[kCapWheels];
+    float along[kCapWheels], side[kCapWheels], mainAlong[kCapWheels], mainSide[kCapWheels];
     bool ok[kCapWheels];
     __try
     {
+        // the main body's frame, for the second pairing of the wheels left alone (BRIEF_tester_1114.md, part 186)
+        const uint8_t *vm = *(const uint8_t *const *)((const uint8_t *)(uintptr_t)vehicle + 0x60);
+        const uint8_t *main = (uintptr_t)vm >= 0x10000 ? *(const uint8_t *const *)(vm + 0x230) : nullptr;
+        float ma[3] = {}, mf[3] = {}, ml[3] = {};
+        const bool mainOk = (uintptr_t)main >= 0x10000;
+        if (mainOk)
+        {
+            CapVec at, f, left;
+            CapGet3(main + 0x1A0, at);
+            CapGet3(main + 0x170, f);
+            CapGet3(main + 0x190, left);
+            ma[0] = at.x, ma[1] = at.y, ma[2] = at.z, mf[0] = f.x, mf[1] = f.y, mf[2] = f.z, ml[0] = left.x, ml[1] = left.y, ml[2] = left.z;
+        }
         for (int i = 0; i < n; i++)
         {
-            ok[i] = false, body[i] = 0, along[i] = side[i] = 0.0f;
+            ok[i] = false, body[i] = 0, along[i] = side[i] = 0.0f, mainAlong[i] = mainSide[i] = NAN;
             const uint8_t *b = *(const uint8_t *const *)(wheel[i] + 0x10);
             if ((uintptr_t)b < 0x10000) continue;
             CapVec c, at, f, l;
@@ -1067,8 +1080,9 @@ static bool AxleMake(uint8_t *const *wheel, int n, AxleGroupsOut &g)
             const float cc[3] = { c.x, c.y, c.z }, aa[3] = { at.x, at.y, at.z }, ff[3] = { f.x, f.y, f.z }, ll[3] = { l.x, l.y, l.z };
             ok[i] = AxlePlace(cc, aa, ff, ll, along[i], side[i]);
             body[i] = (uint64_t)(uintptr_t)b;
+            if (ok[i] && mainOk && !AxlePlace(cc, ma, mf, ml, mainAlong[i], mainSide[i])) mainAlong[i] = mainSide[i] = NAN;
         }
-        g = AxleGroups(body, along, side, ok, n);
+        g = AxleGroups(body, along, side, ok, n, mainOk ? mainAlong : nullptr, mainOk ? mainSide : nullptr);
         return true;
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
@@ -1091,7 +1105,7 @@ static void AxleTableStep(uint64_t vehicle)
     if (same && !(g_axle.alone > 0 && ++g_axle.since >= kAxleLookAgain)) return;
     g_axle.since = 0;
     AxleGroupsOut g = {};
-    if (!AxleMake(now, n, g))
+    if (!AxleMake(vehicle, now, n, g))
     {
         InterlockedIncrement(&g_axleFaults);
         if (same) return;
@@ -1721,11 +1735,11 @@ static void ShowLayMake(uint64_t vehicle, const ShowRead &r)
     for (int i = 0; same && i < r.n; i++) same = l.wheel[i] == (uint64_t)(uintptr_t)r.w[i].wheel;
     if (same && (l.whole || ++l.since < kShowLookAgain)) return;
     uint64_t body[kDdWheels];
-    float along[kDdWheels], side[kDdWheels], rowAt[kDdWheels];
+    float along[kDdWheels], side[kDdWheels], rowAt[kDdWheels], mainSide[kDdWheels], sideBy[kDdWheels];
     bool ok[kDdWheels];
     int axle[kDdWheels];
     bool grouped = false;
-    for (int i = 0; i < r.n; i++) ok[i] = false, body[i] = 0, along[i] = side[i] = rowAt[i] = 0.0f, axle[i] = i;
+    for (int i = 0; i < r.n; i++) ok[i] = false, body[i] = 0, along[i] = side[i] = rowAt[i] = 0.0f, mainSide[i] = NAN, sideBy[i] = 0.0f, axle[i] = i;
     __try
     {
         const uint8_t *vm = *(const uint8_t *const *)((const uint8_t *)(uintptr_t)vehicle + 0x60);
@@ -1753,12 +1767,12 @@ static void ShowLayMake(uint64_t vehicle, const ShowRead &r)
             const float cc[3] = { c.x, c.y, c.z }, aa[3] = { at.x, at.y, at.z }, ff[3] = { f.x, f.y, f.z }, ll[3] = { left.x, left.y, left.z };
             ok[i] = AxlePlace(cc, aa, ff, ll, along[i], side[i]);
             body[i] = (uint64_t)(uintptr_t)b;
-            float mainSide = 0.0f;
             rowAt[i] = along[i];
-            if (ok[i] && mainOk && !AxlePlace(cc, ma, mf, ml, rowAt[i], mainSide)) rowAt[i] = along[i];
+            if (ok[i] && mainOk && !AxlePlace(cc, ma, mf, ml, rowAt[i], mainSide[i])) rowAt[i] = along[i], mainSide[i] = NAN;
         }
-        const AxleGroupsOut g = AxleGroups(body, along, side, ok, r.n);
+        const AxleGroupsOut g = AxleGroups(body, along, side, ok, r.n, mainOk ? rowAt : nullptr, mainOk ? mainSide : nullptr);
         for (int i = 0; i < r.n; i++) axle[i] = g.axle[i];
+        AxleSideBy(g, r.n, side, mainOk ? mainSide : nullptr, sideBy);
         grouped = true;
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
@@ -1766,6 +1780,8 @@ static void ShowLayMake(uint64_t vehicle, const ShowRead &r)
         grouped = false;
         InterlockedIncrement(&g_showFaults);
     }
+    if (!grouped)
+        for (int i = 0; i < r.n; i++) sideBy[i] = side[i];
     bool whole = grouped;
     for (int i = 0; i < r.n; i++) whole = whole && ok[i];
     if (same && !whole) // no better than what is kept: wait again
@@ -1775,7 +1791,7 @@ static void ShowLayMake(uint64_t vehicle, const ShowRead &r)
     }
     l.vehicle = vehicle, l.n = r.n, l.since = 0, l.whole = whole;
     for (int i = 0; i < r.n; i++) l.wheel[i] = (uint64_t)(uintptr_t)r.w[i].wheel;
-    l.rows = DdLayout(axle, rowAt, side, ok, r.n, grouped, l.row, l.right);
+    l.rows = DdLayout(axle, rowAt, sideBy, ok, r.n, grouped, l.row, l.right);
 }
 static void CreepDriveInner(void *action, float throttle, float dt);
 // The driven truck's drive call with the display on: the read before, the hook as it is, the read after, the record.

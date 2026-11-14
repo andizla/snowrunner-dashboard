@@ -4574,7 +4574,15 @@ static void TruckTestsThree()
         bool ok18[18];
         int drive18[18];
         for (int i = 0; i < 18; i++) body18[i] = 7, along18[i] = -1.5f * (float)(i / 2), side18[i] = i % 2 ? -1.0f : 1.0f, ok18[i] = true, drive18[i] = 1;
-        const bool noRows = AxleRowsMake(body6, along6, side6, along6, ok6, drive6, 5).axles == 0 && AxleRowsMake(body6, along6, side6, along6, okGap, drive6, 6).axles == 0 &&
+        // a wheel alone is a row of its own now (BRIEF_tester_1114.md, part 186, must 1): five wheels, the last one alone
+        const AxleRows five = AxleRowsMake(body6, along6, side6, along6, ok6, drive6, 5);
+        const bool aloneRow = five.axles == 3 && five.ofWheel[4] == 1 && five.ofWheel[2] == 0 && five.ofWheel[0] == 2 && five.alone == 1 && five.lone[4] && !five.lone[0] &&
+                              five.drive[1] == 1;
+        // nothing pairs at all: no rows, the wheels alone kept for the log
+        const float sideSame[6] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+        const AxleRows none = AxleRowsMake(body6, along6, sideSame, along6, ok6, drive6, 6);
+        const bool noPair = none.axles == 0 && none.alone == 6 && none.lone[0] && none.lone[5];
+        const bool noRows = aloneRow && noPair && AxleRowsMake(body6, along6, side6, along6, okGap, drive6, 6).axles == 0 &&
                             AxleRowsMake(body6, along6, side6, along6, ok6, drive6, 1).axles == 0 && AxleRowsMake(body18, along18, side18, along18, ok18, drive18, 18).axles == 0 &&
                             AxleRowsMake(body18, along18, side18, along18, ok18, drive18, 16).axles == 8;
         const AxleRows oneAxle = AxleRowsMake(body6, along6, side6, along6, ok6, driveDead, 2); // one driven axle: its row alone
@@ -4666,9 +4674,59 @@ static void TruckTestsThree()
             printf("     order %d dead %d noRows %d old %d pick %d awd %d set %d spare %d frontOn %d acts %d off %d rearOn %d acts %d both %d other %d back %d nothing %d hold %d line %d carried %d\n", order, deadFront,
                    noRows, oldFile, rowPick, awd, setNotForce, spareKey, frontOn, frontActs, frontOff, rearOn, rearActs, bothOn, truckTwo, backOff, noLock, hold, lineOk, carried);
         Check(order && deadFront && noRows && oldFile && rowPick && awd && setNotForce && spareKey,
-              "differential by axle, the rows: three axles given out of order are numbered front to back; a dead front axle leaves rows 2 and 3; a wheel alone, a wheel not placed and more than "
-              "16 wheels give no rows; with no key every axle is on DiffType and alike for each choice; a row set apart makes the driven axles differ and the Diff row By axle; with all wheel "
+              "differential by axle, the rows: three axles given out of order are numbered front to back; a dead front axle leaves rows 2 and 3; a wheel alone is a row of its own; "
+              "no pair at all, a wheel not placed and more than 16 wheels give no rows; with no key every axle is on DiffType and alike for each choice; a row set apart makes the driven axles differ and the Diff row By axle; with all wheel "
               "drive off a differing front axle waits; a key for an axle the truck has not is not read");
+        // the second pairing in the main body's frame (BRIEF_tester_1114.md, part 186, musts 2 to 4)
+        {
+            // a 6x6 with its rear tandem on beams, one beam a side: the front axle on the main body (1), each beam a body of
+            // its own (2 left, 3 right) holding a front and a rear wheel 1.4 m apart, both about on the beam's own line
+            const uint64_t bodyB[6] = { 1, 1, 2, 2, 3, 3 };
+            const float alongB[6] = { 2.0f, 2.0f, 0.7f, -0.7f, 0.7f, -0.7f }, sideB[6] = { 1.0f, -1.0f, 0.02f, -0.02f, -0.01f, 0.01f };
+            const float mainAlongB[6] = { 2.0f, 2.0f, -1.0f, -2.4f, -1.0f, -2.4f }, mainSideB[6] = { 1.0f, -1.0f, 0.9f, 0.9f, -0.9f, -0.9f };
+            const bool okB[6] = { true, true, true, true, true, true };
+            const int driveB[6] = { 2, 2, 1, 1, 1, 1 };
+            const AxleGroupsOut first = AxleGroups(bodyB, alongB, sideB, okB, 6);
+            const AxleGroupsOut both = AxleGroups(bodyB, alongB, sideB, okB, 6, mainAlongB, mainSideB);
+            const AxleRows beams = AxleRowsMake(bodyB, alongB, sideB, mainAlongB, okB, driveB, 6, mainSideB);
+            const bool beamOk = first.alone == 4 && first.across == 0 && both.alone == 0 && both.across == 2 && both.axles == 3 && both.byMain[2] && !both.byMain[0] &&
+                                both.axle[4] == 2 && both.axle[5] == 3 && beams.axles == 3 && beams.ofWheel[0] == 0 && beams.ofWheel[2] == 1 && beams.ofWheel[4] == 1 &&
+                                beams.ofWheel[3] == 2 && beams.ofWheel[5] == 2 && beams.across == 2 && beams.alone == 0 && beams.drive[0] == 2 && beams.drive[1] == 1;
+            // the beam tandem with the main body not read: the front pair and the four wheels alone, a row each
+            const AxleRows beamsBlind = AxleRowsMake(bodyB, alongB, sideB, mainAlongB, okB, driveB, 6);
+            const bool blindOk = beamsBlind.axles == 5 && beamsBlind.alone == 4 && beamsBlind.across == 0;
+            // left and right: the second pairing's wheels by the main body's side
+            float by[6];
+            AxleSideBy(both, 6, sideB, mainSideB, by);
+            const bool sideOk = by[0] == 1.0f && by[2] == 0.9f && by[3] == 0.9f && by[4] == -0.9f && by[5] == -0.9f;
+            // a dual tire: four wheels on one rear axle of the main body. The first pairing takes the outer left with the
+            // inner right (the first of two at the same place), the second the inner left with the outer right: two rows
+            // at the same place, each of two wheels across the truck
+            const uint64_t bodyD[6] = { 1, 1, 1, 1, 1, 1 };
+            const float alongD[6] = { 2.0f, 2.0f, -2.0f, -2.0f, -2.0f, -2.0f }, sideD[6] = { 1.0f, -1.0f, 1.0f, 0.7f, -0.7f, -1.0f };
+            const AxleRows dual = AxleRowsMake(bodyD, alongD, sideD, alongD, okB, driveB, 6, sideD);
+            const bool dualOk = dual.axles == 3 && dual.ofWheel[0] == 0 && dual.ofWheel[2] == dual.ofWheel[4] && dual.ofWheel[3] == dual.ofWheel[5] && dual.ofWheel[2] != dual.ofWheel[3] &&
+                                dual.across == 1 && dual.alone == 0;
+            // the 8x8 and the scout as today, row for row, with the main body's frame given (it is the parent's here)
+            const AxleRows threeMain = AxleRowsMake(body6, along6, side6, along6, ok6, drive6, 6, side6);
+            const AxleRows fourMain = AxleRowsMake(body18, along18, side18, along18, ok18, drive18, 8, side18);
+            bool asToday = threeMain.axles == three.axles && fourMain.axles == four.axles && threeMain.across == 0 && fourMain.across == 0 && threeMain.alone == 0;
+            for (int i = 0; i < 6; i++) asToday = asToday && threeMain.ofWheel[i] == three.ofWheel[i];
+            for (int i = 0; i < 8; i++) asToday = asToday && fourMain.ofWheel[i] == four.ofWheel[i];
+            // a one-wheel axle in the evening: the drive's figure stays (DiffEvenAxles)
+            const float pre[3] = { 1.0f, 1.0f, 1.0f }, post[3] = { 5.0f, 2.0f, 9.0f }, gain[3] = { 1.0f, 1.0f, 1.0f };
+            const bool okE[3] = { true, true, true };
+            const int axleE[3] = { 0, 0, 2 };
+            const DiffEvenOut even = DiffEvenAxles(pre, post, gain, okE, axleE, 3);
+            const bool oneWheel = even.final[2] == 9.0f && even.final[0] != 5.0f;
+            if (!(beamOk && blindOk && sideOk && dualOk && asToday && oneWheel))
+                printf("     axles: beams %d (alone %d %d, across %d, rows %d), blind %d (rows %d), side %d, dual %d (rows %d, across %d), today %d, one wheel %d (%.3f %.3f)\n", beamOk,
+                       first.alone, both.alone, both.across, beams.axles, blindOk, beamsBlind.axles, sideOk, dualOk, dual.axles, dual.across, asToday, oneWheel, even.final[0], even.final[2]);
+            Check(beamOk && blindOk && sideOk && dualOk && asToday && oneWheel,
+                  "differential by axle, the second pairing: a tandem on beams gives two axles of two wheels across the main body and the truck three rows; with the main body not read "
+                  "the four wheels are a row each; those wheels go left and right by the main body's side; a dual tire gives two rows at one place; three and four axles as before; "
+                  "a one-wheel axle keeps the drive's figure in the evening");
+        }
         Check(frontOn && frontActs && frontOff && rearOn && rearActs && bothOn && truckTwo && backOff && noLock && hold,
               "differential by axle, the levers and the byte: Lock front axle on and off; Lock rear axles on a truck of four; both on is the whole truck Locked; another truck and back start "
               "off; nothing to lock keeps no state; the lock byte is held only while every driven axle is Locked, the one the mod set is cleared when an axle leaves, one the player set is not");
