@@ -9549,7 +9549,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             }
             // the pull with no gear held by hand (BRIEF_reverse_pull.md, M4), Probe=1, once a second while the mod's engine
             // pulls: in A the cut does not act and its line has no figures, so this one says what the game gets
-            if (probe && s.powertrain && w.hand.on && !GearboxManual(w) && now >= w.pullProbeAt)
+            if (probe && s.powertrain && w.hand.on && PullInA(GearboxManual(w), raw.automatic, s.gearbox == kGearboxOwn && w.pos.running && w.pos.pos == kPosA) &&
+                now >= w.pullProbeAt)
             {
                 w.pullProbeAt = now + 1000;
                 Log(L"probe: pull in A: the mod hands the game %.2f of the game's own torque (the factor %.2f written, the game's own %.2f), the pedal %.2f, "

@@ -5217,6 +5217,9 @@ static void TruckTestsFour()
               "winch out: with it off or no truck the job rests whatever the key does; a fault in the set or the read ends the calls; the truck update is asked "
               "for with the action bound alone, at any Gearbox and with no Probe, and not while it is not bound");
 
+        // part 194: the probe's "pull in A" line only in A
+        Check(PullInA(false, 1, false) && PullInA(false, 0, true) && !PullInA(false, 0, false) && !PullInA(true, 1, true),
+              "pull in A: the probe's line in A by the game's flag or the mod gearbox's A, never on the game's shifter in L+ or a gear, never in a position of the player's own");
         // part 192: the Diff rows are drawn as on only where the types act: driven, by the cut's own state; with no truck, by the level
         Check(DiffTypesAct(true, true, false) && !DiffTypesAct(true, false, true) && DiffTypesAct(false, false, true) && !DiffTypesAct(false, true, false),
               "diff rows: drawn as on while the torque cut acts for the driven truck, off where it does not (Gearbox=1, A without the box); with no truck by whether the cut can act");

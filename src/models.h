@@ -1458,6 +1458,13 @@ static const float kShiftPullGain = 0.05f;   // floored, a shift is made for a g
 inline float ConverterStall(const GaugeScale &k) { return fmaxf(fminf(k.redline * kStallSpeed, kStallRpmMost), k.idle); }
 
 // The brake as held, 0 to 1: the side of the pedal opposite to the one that drives.
+// Whether the truck is in A for the probe's "pull in A" line (BRIEF_tester_1114.md, part 194): not in a position of the
+// player's own on the mod's gearbox (manual), and A by the game's automatic flag or by the mod's gearbox in its A
+// (ownA). In L+, L, L- or a numbered gear on the game's shifter the flag is down and the line is not printed: the old
+// chain's factor there is the gear's make-up for the game's fall, by design, and two figures a second for one factor
+// read like a fault.
+inline bool PullInA(bool manual, int gameAutomatic, bool ownA) { return !manual && (gameAutomatic != 0 || ownA); }
+
 inline float TruckBrake(const TruckRaw &t)
 {
     const float b = t.automatic && t.gearEngaged < 0 ? -t.throttle : t.throttle;
