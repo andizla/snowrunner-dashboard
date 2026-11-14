@@ -650,9 +650,9 @@ int wmain(int argc, wchar_t **argv)
             std::string all;
             for (int i = 0; i < kStepSignCount; i++) all += i ? " " : "", all += kStepSignLines[i];
             const bool text = all == "Another mod changes the physics rate. Turn that mod off and start the game again. Next Gen Gameplay can run the physics at 120 itself: "
-                                     "Physics rate on the Gameplay tab." &&
-                              all.find((char)39) == std::string::npos;
-            printf("%s physics rate sign: its four lines are the text asked for, word for word, with no apostrophe\n", text ? "ok  " : "FAIL");
+                                     "Physics rate, on the Mod work tab under Test." &&
+                              all.find((char)39) == std::string::npos && kStepSignCount == 4 && !strcmp(kPageTabNames[kTabCount - 1], "Mod work");
+            printf("%s physics rate sign: its four lines are the text asked for, word for word, with no apostrophe, and the last names the tab the row is on\n", text ? "ok  " : "FAIL");
             if (!text) g_failed++;
             GaugeFonts signFonts = {};
             ID3D11ShaderResourceView *signSrv = nullptr;

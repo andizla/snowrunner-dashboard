@@ -873,8 +873,8 @@ static void GWarnBox(ImDrawList *dl, const GaugeFonts &f, ImVec2 at, float u, fl
 // A plain red box in the middle of the screen with these lines, drawn while another mod changes the physics rate. No
 // key and no setting hides it: it takes no opacity and no scale but the screen's. In the boxes' reference pixels.
 static const char *const kStepSignLines[] = { "Another mod changes the physics rate.", "Turn that mod off and start the game again.",
-                                              "Next Gen Gameplay can run the physics at 120 itself:", "Physics rate on the Gameplay tab." };
-static const int kStepSignCount = 4;
+                                              "Next Gen Gameplay can run the physics at 120 itself:", "Physics rate, on the Mod work tab under Test." }; // the row where it is (BRIEF_jobs_1114.md, part 168)
+static const int kStepSignCount = (int)(sizeof kStepSignLines / sizeof kStepSignLines[0]); // the box is sized by the lines drawn
 static const float kStepSignPitch = 62.0f, kStepSignPad = 54.0f;
 static const float kStepSignScale = 2.0f; // times the warning boxes' unit: about 40 percent of the screen's width
 static void GStepSign(ImDrawList *dl, const GaugeFonts &f, float w, float h, float u)
