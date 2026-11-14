@@ -2674,8 +2674,8 @@ __declspec(noinline) static bool HookGearTorque(void *vehicle, int gear, float *
         {
             const float r2 = radii.radius * radii.radius;
             const float truckPart = slot.driveMass > 0.0f && drivenN > 0 && isfinite(r2) && r2 > 0.0f ? slot.driveMass / (float)drivenN * r2 : 0.0f;
-            drive = DriveInertiaStep(g_driveRun, r.torque, sp.mean, sp.ok, g_cutStepDt, g_cutStepCount, slot.driveShare, wheelI, truckPart,
-                                     RunDownWeight(sp.ok, sp.mean, sp.truckOk, sp.truck), (uint64_t)(uintptr_t)vehicle, slot.map.top, GetTickCount64());
+            drive = DriveInertiaStep(g_driveRun, r.torque, sp.mean, sp.ok, g_cutStepDt, g_cutStepCount, slot.driveShare, wheelI, truckPart, (uint64_t)(uintptr_t)vehicle,
+                                     slot.map.top, GetTickCount64());
             if (drive.acted)
             {
                 r.torque = drive.torque;

@@ -757,9 +757,10 @@ inline float CutRunStep(CutRun &run, float target, float usedBefore, float pedal
 // when it slows. Written as the pull less Ie x the wheels' measured acceleration it swings in the low gears, so the
 // form that cannot: the step's torque T less a share c of its surplus over the load the last step showed,
 // T' = T - c x (T - L), c = Ie / (Is + Ie), L = the torque last used - Is x the driven wheels' acceleration over the
-// last step by that step's seconds. Is is the inertia the mod takes the pull to turn: the driven wheels' own (the
-// least of them, from body + 0x220) and, by the grip, the truck's share, (1 - the spin weight) x the mass over the
-// driven wheels x the radius squared. It leans low, as too large an Is is the one way to make it swing. Steady spin
+// last step by that step's seconds. Is is the inertia the mod takes the pull to turn: the least driven wheel's own
+// alone (body + 0x220), at every slip and grip (the review of 185 part 1, M1): a wheel that slips at all turns about
+// its own inertia at the margin, and too large an Is is the one way to make it swing; with Is never over the truth
+// the error carried from step to step is at most c, under 1, at 60 and at 120. The truck's share sets Ie alone. Steady spin
 // (L near T) takes nothing; a free wheel rises at the flywheel's share Is / (Is + Ie); on grip it settles to the
 // flywheel's share too. Bound: never over the torque the step asked, never under the engine's braking (0 or T where T
 // is under 0), so at a lift it gives nothing and 180's run-down does that. Ie at 100 in the first gear is
@@ -791,20 +792,20 @@ struct DriveOut
 };
 // One call. T: the torque the step asks (after the pace); mean: the driven wheels' mean as the step finds them (meanOk
 // read); dt: this step's seconds; step: the drive's count of steps; ieShare: DriveIeShare's for this gear, 0 none;
-// wheelI: the least driven wheel's own inertia, kg m2; truckPart: the mass over the driven wheels x r^2, kg m2 (0 or
-// no number: not read); spin: RunDownWeight's, 0 to 1. A reset (another truck, another gear's top, a gap of more than
-// two steps, no mean, no seconds, the share at 0) leaves the step as it is and starts again from it.
-inline DriveOut DriveInertiaStep(DriveRun &d, float T, float mean, bool meanOk, float dt, uint64_t step, float ieShare, float wheelI, float truckPart, float spin,
-                                 uint64_t vehicle, float top, uint64_t now)
+// wheelI: the least driven wheel's own inertia, kg m2 (Is); truckPart: the mass over the driven wheels x r^2, kg m2 (0
+// or no number: not read), for Ie. A reset (another truck, another gear's top, any step skipped, no mean, no seconds,
+// the share at 0) leaves the step as it is and starts again from it.
+inline DriveOut DriveInertiaStep(DriveRun &d, float T, float mean, bool meanOk, float dt, uint64_t step, float ieShare, float wheelI, float truckPart, uint64_t vehicle,
+                                 float top, uint64_t now)
 {
     DriveOut o = { T, 0.0f, 0.0f, 0.0f, 0.0f, false, false };
     const bool good = isfinite(T) && meanOk && isfinite(mean) && dt > 0.0f && isfinite(dt) && ieShare > 0.0f && isfinite(ieShare) && wheelI > 0.0f && isfinite(wheelI) &&
                       truckPart > 0.0f && isfinite(truckPart);
-    const bool same = d.have && d.vehicle == vehicle && d.top == top && step > d.step && step - d.step <= 2 && d.dt > 0.0f && now >= d.at && now - d.at <= kDriveGapMs;
+    // the step before and this one next to each other (the review's S1: a skipped step would read two steps' change over one step's seconds)
+    const bool same = d.have && d.vehicle == vehicle && d.top == top && step == d.step + 1 && d.dt > 0.0f && now >= d.at && now - d.at <= kDriveGapMs;
     if (good && same)
     {
-        const float w = isfinite(spin) ? CutClamp01(spin) : 1.0f;
-        o.is = wheelI + (1.0f - w) * truckPart;
+        o.is = wheelI;
         o.ie = ieShare * kDriveIeFirst * truckPart;
         o.c = fminf(o.ie / (o.is + o.ie), kDriveShareMost);
         const float load = d.used - o.is * (mean - d.mean) / d.dt;
