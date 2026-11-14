@@ -2457,7 +2457,7 @@ static volatile LONG64 g_riseVehicle = 0;
 static volatile LONG64 g_cutAnswerVehicle = 0; // the vehicle of the last answer (TorqueCutCounts::vehicle)
 static volatile LONG g_riseBits = 0, g_cutUsed = 0, g_cutRate = 0, g_cutTruck = 0x7FC00000; // a quiet NaN: not read
 // the learner's totals under the cut (CutLearnTotals): written by the drive's thread alone, read by the mod's
-static volatile LONG g_ratioFactor = 0x3F800000, g_ratioA = 0, g_ratioRoofed = 0, g_ratioHeld = 0; // the last answer's gear ratio pull (1.0f: none)
+static volatile LONG g_ratioFactor = 0x3F800000, g_ratioA = 0, g_ratioRoofed = 0, g_ratioHeld = 0, g_convEngine = 0; // the last answer's gear ratio pull (1.0f: none)
 static volatile LONG64 g_learnSumBits = 0;
 static volatile LONG g_learnN = 0, g_learnBad = 0;
 static double LearnSum()
@@ -2639,6 +2639,7 @@ __declspec(noinline) static bool HookGearTorque(void *vehicle, int gear, float *
         InterlockedExchange(&g_ratioA, FloatBits(aa));
         InterlockedExchange(&g_ratioRoofed, ratioRoofed ? 1 : 0);
         InterlockedExchange(&g_ratioHeld, ratioHeld ? 1 : 0);
+        InterlockedExchange(&g_convEngine, FloatBits(r.convEngine));
         InterlockedExchange(&g_cutTorque, FloatBits(r.torque));
         InterlockedExchange(&g_cutD4, FloatBits(d4));
         InterlockedExchange(&g_cutCurve, FloatBits(r.stockCurve));
@@ -2739,6 +2740,7 @@ void TorqueCutCountsGet(TorqueCutCounts &out)
     out.ratioA = BitsFloat(g_ratioA);
     out.ratioRoofed = g_ratioRoofed != 0;
     out.ratioHeld = g_ratioHeld != 0;
+    out.convEngine = BitsFloat(g_convEngine);
 }
 
 void TorqueCutLearnGet(CutLearnTotals &out)

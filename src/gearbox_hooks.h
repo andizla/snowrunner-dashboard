@@ -459,6 +459,7 @@ struct TorqueCutCounts
     long rollCylinder, rollNone, rollOut;   // its driven wheels by the cylinder, without one (+ 0x94) and with one out of bounds (+ 0x94) (WheelRollRadius)
     uint64_t vehicle;                       // the vehicle of the last answer, 0 none yet: every figure of the last answer is that truck's
     float ratioFactor, ratioA;              // the last answer's gear ratio pull: the factor on the game's T (1 none) and the gear's a it was worked out from
+    float convEngine;                       // the last answer's open converter's engine speed, rpm; 0 where it was not through the open converter
     bool ratioRoofed, ratioHeld;            // ... the roof held it; R or a low position was held to gear 1's factor
 };
 void TorqueCutCountsGet(TorqueCutCounts &out);

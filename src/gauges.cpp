@@ -6280,6 +6280,9 @@ static TorqueCutSlot TorqueCutSlotOf(const TruckWatch &w, const TruckRaw &raw, c
     }
     c.pushBack = 1.0f - (float)s.pushShare / 100.0f;
     if (converter) c.scalar = locked ? 0.0f : ConverterOpenF(c.map, w.gearbox.input, w.gearbox.rpm, w.gearbox.ratio, kStallRatio);
+    // part B: open, the detour works F out from this step's wheels; the scalar above stays for a step whose wheels were not read
+    c.convOpen = converter && !locked;
+    c.convStall = w.gearbox.stallNow, c.convRise = w.gearbox.riseNow;
     // the gear ratio pull (161, must 3): by the position, a held one that is not H; 0 in A, in N and in H. The
     // reference is the highest numbered gear's a, the game's own figure for it
     const int refGear = TruckTopGear(raw);
@@ -8387,8 +8390,13 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             w.needle = NeedleRule{ kNeedleGame, 0.0f, 0.0f, 0.0f, 0.0f };
             if (w.take.driving && !GearboxManual(w))
             {
-                w.needle.rule = kNeedleConverter, w.needle.heading = w.gearbox.rpm;
-                TachFollow(w.tach, raw, scale, w.gearbox.rpm, dt);
+                // part B, point 14: while the cut acts in A through the open converter the needle goes by the detour's
+                // engine speed, the one the pull was worked out at; the tachometer's own smoothing follows it
+                TorqueCutCounts convLast = {};
+                TorqueCutCountsGet(convLast);
+                const float convRpm = ConverterNeedleRpm(w.cutInA, ConverterLockedForCut(w.gearbox), CutAnswerOurs(convLast.vehicle, w.refs.vehicle), convLast.convEngine, w.gearbox.rpm);
+                w.needle.rule = kNeedleConverter, w.needle.heading = convRpm;
+                TachFollow(w.tach, raw, scale, convRpm, dt);
             }
             else if (w.take.driving && w.clutch.running)
             {
@@ -9551,9 +9559,10 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                         c.ratioHeld ? L" (held to gear 1's)" : L"", c.ratioRoofed ? L" (the roof held it)" : L"", c.torque);
                 }
                 if (inA)
-                    Log(L"probe: torque cut in A: the slot is %s, the converter %s (input %.0f rpm, engine %.0f rpm, torque x%.2f), F to the wheels %.3f, the fall at a lock %s",
-                        lockedA ? L"the map" : L"the scalar", lockedA ? L"locked" : L"open", w.gearbox.input, w.gearbox.rpm, w.gearbox.ratio, w.gearbox.drive,
-                        w.fallAt ? L"in progress" : L"not in progress");
+                    Log(L"probe: torque cut in A: the slot is %s, the converter %s (the model on the mod's thread: input %.0f rpm, engine %.0f rpm, torque x%.2f, F %.3f; in the game's call by "
+                        L"this step's wheels: engine %.0f rpm, F %.3f, from a stall speed of %.0f rpm at this pedal rising %.2f with the input), the fall at a lock %s",
+                        lockedA ? L"the map" : L"the open converter worked out in the game's call", lockedA ? L"locked" : L"open", w.gearbox.input, w.gearbox.rpm, w.gearbox.ratio,
+                        w.gearbox.drive, c.convEngine, c.f, w.gearbox.stallNow, w.gearbox.riseNow, w.fallAt ? L"in progress" : L"not in progress");
                 w.cutWas = c;
                 w.capWas = cap;
                 DiffCounts dc = {};

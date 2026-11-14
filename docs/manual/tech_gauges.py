@@ -1520,7 +1520,12 @@ in A (TorqueCutInA, TorqueCutActs); a held gear still needs Gearbox=2, and the g
 alone. Locked, the slot is the map of a held gear, with its engine braking and the governor by the truck's own speed. A shift made
 locked reads locked on its own pass too (ConverterLockedForCut), so no scalar goes out between two maps. Open, the slot is the scalar
 from one function, ConverterOpenF: the map's law at the open converter's engine speed times its torque ratio, bounded at the stall's
-ratio of 2, with no braking. At a lock above the start gear the pull would fall about a quarter in one step, so the detour runs it
+ratio of 2, with no braking. Since part B that function runs in the game's own torque call, on that step's wheels
+(ConverterAt, ConverterOpenAt): the mod's thread hands the stall's speed at this pedal and its rise, and the call works out the
+turbine's speed, the engine's and the torque ratio, so a wheel that spins up lowers the ratio in the same step. A step whose
+wheels were not read goes by the thread's own figure. The needle goes by the engine speed the call worked out
+(ConverterNeedleRpm), through the tachometer's own smoothing, so the needle, the sound and the pull are one number. The lock
+state stays the thread's. At a lock above the start gear the pull would fall about a quarter in one step, so the detour runs it
 down to the map's in a straight line over 0.3 s by its own clock (CutLockFall), the same at 60 and at 120 steps a second; a lifted
 pedal is never held up. In A there is no wheel cap, no slip room and no over-rev damage (OverRevCounts). While the cut acts in A the
 automatic's net under a wrong top and its taper rule rest, as both read the game's pull, which the cut holds at 1. No gear top is

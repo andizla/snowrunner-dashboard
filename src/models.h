@@ -1395,10 +1395,8 @@ static const float kKickWindow = 0.5f;       // seconds after the push the kickd
 static const float kStallSpeed = 0.8f;       // the converter's stall speed as a share of the red zone's: where a floored engine stops against a standing truck
 static const float kStallRpmMost = 2600.0f;  // and at the most this: a fast revving engine's converter stalls well short of its red zone
 static const float kStallRise = 0.15f;       // open, the engine runs at the stall's speed plus this share of the gearbox's input
-static const float kConverterSlip = 0.04f;   // an unlocked converter turns the engine at least this much faster than the gearbox's input
-static const float kCouplingPoint = 0.87f;   // from this ratio of the gearbox's input speed to the engine's the converter multiplies nothing
+// kConverterSlip, kCouplingPoint and kStallRatio are in torque_cut.h: the detour works the open converter out with them too
 static const float kLockRatio = 0.92f;       // an open converter locks once its speed ratio is this (a shift made locked locks again at once)
-static const float kStallRatio = 2.0f;       // and at the stall it doubles the torque
 static const float kLockFrom = 0.5f, kUnlockBelow = 0.4f; // the converter locks from the first gear with the input at this share of the red zone's speed, and lets go below the second share of it, at a stop or for a shift's own pass (the game's own engine; with the mod's, kLockIdle and kUnlockIdle)
 static const float kStopShift = 0.1f;        // under this share of the red zone's speed in the first gear the truck all but stands: the first gear at once
 static const float kShiftSmooth = 0.25f;     // seconds the wheels' speed is smoothed over before the gearbox goes by it
@@ -1479,6 +1477,7 @@ struct GearboxModel
     float input;       // the gearbox's input speed in rpm: what the engine turns at with the converter locked
     float rpm;         // the engine speed
     float ratio;       // how much the converter multiplies the torque, 1 to kStallRatio
+    float stallNow, riseNow; // the open converter's stall speed at this pedal, rpm, and its rise with the input (the last step's)
     float drive;       // for the probe alone: the F the torque cut's slot carries in A, set by the pass (0 with no slot). The model's own figure is gone (the Reviewer's M1: it never drove a wheel)
     float pause;       // seconds until it may shift again
     bool upLast;       // the last shift was up
@@ -2896,6 +2895,7 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     // the stall's rise needs the foot on: at idle the engine stays at idle while the truck creeps (review 11's addendum)
     const float rise = kStallRise * SettingsRange(pedalNow / kFootOff, 0.0f, 1.0f);
     const float open = fmaxf(fmaxf(m.input * (1.0f + kConverterSlip), stall + rise * m.input), k.idle);
+    m.stallNow = stall, m.riseNow = rise; // for the torque cut's slot: the detour works the open converter out from these and the wheels (part B)
     // the speed ratio waited for only in the gears it sets off in (the first, the start gear): from there up it locks
     // over the lock point, as Allison's 2C-2L and lock to lock from the third
     const bool coupled = m.gear > start || m.input >= open * kLockRatio;

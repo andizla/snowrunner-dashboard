@@ -139,6 +139,55 @@ inline float ConverterOpenF(const TorqueCutMap &m, float inputRpm, float engineR
     return isfinite(drive) ? drive : 0.0f;
 }
 
+// ---- the open converter in the detour (BRIEF_drivetrain_3_a_on_our_chain.md, part B, points 12 to 14) ----
+// In part A the mod's thread worked the open converter out from the wheels' spin smoothed over a quarter second and
+// handed one number a pass. Here the same law runs in the game's own call, on this step's wheels: the turbine's speed
+// is the wheels' over the gear's top times the redline, the engine's the largest of the turbine's with the converter's
+// least slip, the stall's speed at this pedal with its rise, and idle, and the torque ratio falls in a line from the
+// stall's to 1 at the coupling point. So a wheel that spins up in one step lowers the ratio in that same step. The
+// thread hands what does not depend on the wheels: the stall's speed at this pedal and its rise (models.h, GearboxStep).
+// Both speeds stop at the tachometer's top, as the model's do.
+static const float kConverterSlip = 0.04f; // an unlocked converter turns the engine at least this much faster than the gearbox's input
+static const float kCouplingPoint = 0.87f; // from this ratio of the gearbox's input speed to the engine's the converter multiplies nothing
+static const float kStallRatio = 2.0f;     // and at the stall it doubles the torque
+struct ConverterNow
+{
+    float turbine, engine; // rpm
+    float ratio;           // the torque ratio, 1 to kStallRatio
+};
+inline float ConverterRatio(float turbine, float engine)
+{
+    const float speedRatio = engine > 0.0f ? turbine / engine : 1.0f;
+    if (!isfinite(speedRatio) || speedRatio >= kCouplingPoint) return 1.0f;
+    return 1.0f + (kStallRatio - 1.0f) * (1.0f - (speedRatio > 0.0f ? speedRatio : 0.0f) / kCouplingPoint);
+}
+inline ConverterNow ConverterAt(const TorqueCutMap &m, float s, float stall, float rise)
+{
+    ConverterNow c = { 0.0f, m.idle > 0.0f ? m.idle : 0.0f, 1.0f };
+    if (!(m.redline > m.idle) || !(m.idle >= 0.0f) || !isfinite(s)) return c;
+    const float most = m.tachTop > 0.0f ? m.tachTop * m.redline : 1e9f;
+    c.turbine = fminf(TorqueCutRpm(m, s), most);
+    const float stood = isfinite(stall) && stall > m.idle ? stall : m.idle, rose = isfinite(rise) && rise > 0.0f ? rise : 0.0f;
+    c.engine = fminf(fmaxf(fmaxf(c.turbine * (1.0f + kConverterSlip), stood + rose * c.turbine), m.idle), most);
+    c.ratio = ConverterRatio(c.turbine, c.engine);
+    return c;
+}
+// F through the open converter at the wheels' speed s: ConverterOpenF on ConverterAt's speeds. engine: the engine's
+// speed it was worked out at, for the needle (point 14).
+inline float ConverterOpenAt(const TorqueCutMap &m, float s, float stall, float rise, float *engine = nullptr)
+{
+    const ConverterNow c = ConverterAt(m, s, stall, rise);
+    if (engine) *engine = c.engine;
+    return ConverterOpenF(m, c.turbine, c.engine, c.ratio, kStallRatio);
+}
+// What the needle goes by in A (point 14): the detour's engine speed while the cut acts in A through the open
+// converter and the last answer is this truck's, so the needle, the sound and the pull are one number. Else the
+// model's. The tachometer's own smoothing follows either (the addendum on point 14: the detour's speed is unsmoothed).
+inline float ConverterNeedleRpm(bool cutInA, bool locked, bool ours, float detourRpm, float modelRpm)
+{
+    return cutInA && !locked && ours && isfinite(detourRpm) && detourRpm > 0.0f ? detourRpm : modelRpm;
+}
+
 // The fall at a lock, paced (the lead's point 17): above the start gear a floored lock finds the open converter still
 // multiplying, so F would fall about a quarter in one step. For kLockFallSeconds after the lock F runs in a straight
 // line from what the open converter gave (from) down to the map's. By the clock, so it is the same at 60 and at 120
@@ -376,6 +425,11 @@ struct TorqueCutSlot
     // ... and for R and the low positions (ratioHold, by the position): gear 1's a, whose factor they may not pass
     float ratioFirstA;
     bool ratioHold;
+    // the open converter in the detour (part B): with mode kCutScalar and convOpen up, F is ConverterOpenAt on this
+    // step's wheels from the thread's stall speed at this pedal and its rise. The scalar stays the thread's own figure
+    // for a step whose wheels were not read
+    bool convOpen;
+    float convStall, convRise;
     float capWide; // the low range's wider cap for L-, L and R (LowRangeCap, CapCeilingWide), in the wheels' measure; 0 none. cap stays the gear's own
     TorqueCutMap map;
     int diff; // the differential's type for this truck (DiffTypeOf, on the mod's thread)
@@ -557,6 +611,7 @@ inline CutCurveOut TorqueCutCurveOut(const TorqueCutMap &m, float pf)
 struct TorqueCutAnswer
 {
     float torque, bracket, f, b4s, stockCurve, s, standIn, w, used, taper;
+    float convEngine; // the open converter's engine speed this step, rpm; 0 where F was not worked out through it
     bool falling, floored; // the lock's fall held F up in this step; the bracket stands at the slot's floor
 };
 // The governor's fade goes by the truck's own speed where it was read (M5), else by the wheels' mean; the curve held to
@@ -572,7 +627,9 @@ inline TorqueCutAnswer TorqueCutAnswerOf(const TorqueCutSlot &slot, float stock,
     r.s = sp.mean;
     r.stockCurve = TorqueCutStockCurve(start, a, top, pf, sp.mid);
     r.taper = sp.ok ? TorqueCutBrakeTaper(sp.least, map) : 0.0f;
-    r.f = slot.mode == kCutMap ? TorqueCutF(map, sp.mean, r.taper, sp.truckOk ? sp.truck : NAN, slot.cap > 0.0f) : (isfinite(slot.scalar) ? slot.scalar : 0.0f);
+    if (slot.mode == kCutMap) r.f = TorqueCutF(map, sp.mean, r.taper, sp.truckOk ? sp.truck : NAN, slot.cap > 0.0f);
+    else if (slot.convOpen && sp.ok) r.f = ConverterOpenAt(map, sp.mean, slot.convStall, slot.convRise, &r.convEngine);
+    else r.f = isfinite(slot.scalar) ? slot.scalar : 0.0f;
     if (slot.mode == kCutMap && slot.fallAt && now >= slot.fallAt)
     {
         const float fell = CutLockFall(r.f, slot.fallFrom, slot.fallPedal, slot.pedal, (float)(now - slot.fallAt) / 1000.0f);

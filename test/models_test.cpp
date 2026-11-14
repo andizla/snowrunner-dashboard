@@ -1749,6 +1749,22 @@ int main(int argc, char **argv)
         // the model's own "to the wheels" figure and its creep are gone (BRIEF_drivetrain_3_a_on_our_chain.md, M1): the creep is CreepStep's alone
         const bool creep = Near(box.rpm, k.idle, 1.0f) && box.drive == 0.0f;
         Check(stall && creep, "automatic: standing, a floored engine runs at the converter's stall with the torque doubled, and an idling one runs at idle; the model gives no pull figure of its own");
+        // part B: the model hands the stall's speed at this pedal and its rise, and the detour's law gives the model's own engine speed and ratio from them
+        {
+            GearboxModel hands = {};
+            wheels(0.0f);
+            GearboxStep(hands, g, k, 1.0f, 1.0f, kDt);
+            TorqueCutMap km = {};
+            km.idle = k.idle, km.redline = k.redline, km.top = 10.0f, km.tachTop = 1.3f;
+            const ConverterNow stood = ConverterAt(km, 0.0f, hands.stallNow, hands.riseNow);
+            const bool stoodFloored = Near(hands.stallNow, ConverterStall(k), 0.5f) && Near(hands.riseNow, kStallRise, 1e-6f) && Near(stood.engine, hands.rpm, 0.5f) &&
+                                 Near(stood.ratio, hands.ratio, 1e-4f);
+            GearboxStep(hands, g, k, 0.0f, 0.0f, kDt);
+            const ConverterNow idling = ConverterAt(km, 0.0f, hands.stallNow, hands.riseNow);
+            Check(stoodFloored && Near(hands.stallNow, k.idle, 0.5f) && hands.riseNow == 0.0f && Near(idling.engine, hands.rpm, 0.5f),
+                  "torque cut in A, part B: the model hands the stall's speed at this pedal and its rise; from them the detour's law gives the model's own engine speed and torque "
+                  "ratio at a standstill, floored and with the foot off");
+        }
         // a truck's converter (review 11): the stall at 0.8 of the red zone, at most 2600 rpm (a truck 1760, a heavy truck
         // 1520, a scout's 5500 rpm engine 2600), where the truck's curve gives all its torque and the heavy truck's 0.96 (a
         // scout's 0.85); a floored launch from a standstill, gaining, lifts the engine from the stall through the launch and
@@ -4705,6 +4721,100 @@ int main(int argc, char **argv)
             Check(law, "torque cut in A: the open converter's F is the map's law at the engine's own speed times the torque ratio: 2.0 floored at the stall and never over the stall's ratio, "
                        "the map's own at the coupling point, at half pedal over the locked map by the brake term alone; the cold limit, the load and the engine held back as in the map; "
                        "0 with the foot off, at the governor's end and for a figure that is no number");
+            // part B (points 12 to 14): the open converter worked out in the detour from this step's wheels. Against the
+            // thread's own formulas (models.h, GearboxStep) at 20 speeds and 5 pedals: one function at two rates
+            {
+                bool agree = true, falls = true;
+                float worst = 0.0f;
+                const float pedals[5] = { 0.1f, 0.3f, 0.5f, 0.8f, 1.0f };
+                for (int pi = 0; pi < 5; pi++)
+                {
+                    TorqueCutMap pm = cm;
+                    pm.pedal = pedals[pi];
+                    const float stallAt = cm.idle + (fminf(cm.redline * kStallSpeed, kStallRpmMost) - cm.idle) * pedals[pi];
+                    const float riseAt = kStallRise * (pedals[pi] / kFootOff < 1.0f ? pedals[pi] / kFootOff : 1.0f);
+                    float ratioBefore = 9.0f;
+                    for (int si = 0; si < 20; si++)
+                    {
+                        const float sAt = cm.top * (float)si / 19.0f, inputAt = sAt / cm.top * cm.redline;
+                        const float openAt = fmaxf(fmaxf(inputAt * (1.0f + kConverterSlip), stallAt + riseAt * inputAt), cm.idle);
+                        const float speedRatio = inputAt / openAt;
+                        const float ratioAt = speedRatio >= kCouplingPoint ? 1.0f : 1.0f + (kStallRatio - 1.0f) * (1.0f - speedRatio / kCouplingPoint);
+                        const float thread = ConverterOpenF(pm, inputAt, openAt, ratioAt, kStallRatio);
+                        float engineAt = 0.0f;
+                        const float detour = ConverterOpenAt(pm, sAt, stallAt, riseAt, &engineAt);
+                        const float apart = fabsf(detour - thread) / fmaxf(fabsf(thread), 0.05f);
+                        worst = apart > worst ? apart : worst;
+                        agree = agree && apart <= 0.02f && Near(engineAt, openAt, 0.5f);
+                        const ConverterNow at = ConverterAt(pm, sAt, stallAt, riseAt);
+                        falls = falls && at.ratio <= ratioBefore + 1e-6f && at.ratio >= 1.0f && at.ratio <= kStallRatio;
+                        ratioBefore = at.ratio;
+                    }
+                }
+                // in the answer: a wheel that spins up in one step lowers the ratio and F in that same step, the engine's speed
+                // rises with it; a step whose wheels were not read goes by the thread's scalar; locked, the map as before
+                TorqueCutSlot conv = {};
+                conv.vehicle = 1, conv.mode = kCutScalar, conv.share = 1.0f, conv.pedal = 1.0f, conv.map = cm, conv.scalar = 0.77f;
+                conv.convOpen = true, conv.convStall = 1600.0f, conv.convRise = kStallRise;
+                const CutSpeeds grip = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, true }, spun = { 6.0f, 6.0f, 6.0f, 6.0f, 6.0f, true }, unread = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, false };
+                const TorqueCutAnswer gripped = TorqueCutAnswerOf(conv, 1.0f, -1.0f, 0.0f, 1e9f, 1.0f, 1.0f, grip), spinning = TorqueCutAnswerOf(conv, 1.0f, -1.0f, 0.0f, 1e9f, 1.0f, 1.0f, spun);
+                const TorqueCutAnswer blind = TorqueCutAnswerOf(conv, 1.0f, -1.0f, 0.0f, 1e9f, 1.0f, 1.0f, unread);
+                TorqueCutSlot thread = conv, lockedSlot = conv;
+                thread.convOpen = false;
+                lockedSlot.mode = kCutMap;
+                const TorqueCutAnswer byThread = TorqueCutAnswerOf(thread, 1.0f, -1.0f, 0.0f, 1e9f, 1.0f, 1.0f, spun), byMap = TorqueCutAnswerOf(lockedSlot, 1.0f, -1.0f, 0.0f, 1e9f, 1.0f, 1.0f, spun);
+                const bool step = spinning.f < gripped.f - 0.2f && spinning.convEngine > gripped.convEngine && gripped.f > 1.5f && gripped.f <= kStallRatio &&
+                                  Near(gripped.convEngine, 1600.0f + kStallRise * 200.0f, 0.5f) && blind.f == 0.77f && blind.convEngine == 0.0f && byThread.f == 0.77f &&
+                                  byThread.convEngine == 0.0f && byMap.convEngine == 0.0f && Near(byMap.f, TorqueCutF(cm, 6.0f), 1e-5f);
+                // the needle: the detour's engine speed while the cut acts in A through the open converter for this truck, else the model's
+                const bool needle = ConverterNeedleRpm(true, false, true, 1630.0f, 1500.0f) == 1630.0f && ConverterNeedleRpm(false, false, true, 1630.0f, 1500.0f) == 1500.0f &&
+                                    ConverterNeedleRpm(true, true, true, 1630.0f, 1500.0f) == 1500.0f && ConverterNeedleRpm(true, false, false, 1630.0f, 1500.0f) == 1500.0f &&
+                                    ConverterNeedleRpm(true, false, true, 0.0f, 1500.0f) == 1500.0f && ConverterNeedleRpm(true, false, true, NAN, 1500.0f) == 1500.0f;
+                const ConverterNow bad = ConverterAt(cm, NAN, 1600.0f, kStallRise), noStall = ConverterAt(cm, 0.0f, NAN, NAN), fast = ConverterAt(cm, 50.0f, 1600.0f, kStallRise);
+                const bool edges = bad.turbine == 0.0f && bad.engine == cm.idle && bad.ratio == 1.0f && noStall.engine == cm.idle && fast.engine <= cm.tachTop * cm.redline + 0.5f &&
+                                   fast.ratio == 1.0f && ConverterRatio(0.0f, 1600.0f) == kStallRatio && ConverterRatio(1500.0f, 1600.0f) == 1.0f && ConverterRatio(100.0f, 0.0f) == 1.0f;
+                printf("torque cut in A, part B: the detour against the thread's formulas, the largest difference %.5f of F\n", worst);
+                Check(agree && falls && step && needle && edges,
+                      "torque cut in A, part B: the open converter's F in the detour is the thread's at 20 speeds and 5 pedals within 2 percent, its ratio never rising with the speed; a "
+                      "wheel that spins up in one step lowers the ratio and F in that step and raises the engine's speed; wheels not read go by the thread's scalar; locked is the map; "
+                      "the needle goes by the detour's engine speed only while the cut acts in A, open, for this truck; no number and no stall give idle");
+                // the review's S3 (M7), a shift through the 60 Hz sketch, floored, the wheels at 5 rad/s: 30 steps in the first
+                // gear (top 6), then the second (top 10), each step its own gear's slot, the bracket paced as the detour paces it.
+                // Made locked: one gear's map, then the other's, and never the scalar. Made open: the converter in each gear
+                float worstStep[2] = { 0.0f, 0.0f };
+                bool noFlip = true, neverScalar = true;
+                for (int openShift = 0; openShift < 2; openShift++)
+                {
+                    TorqueCutSlot gearSlots[2];
+                    for (int gi = 0; gi < 2; gi++)
+                    {
+                        gearSlots[gi] = conv;
+                        gearSlots[gi].map.top = gi ? 10.0f : 6.0f;
+                        const CutBand shiftBand = CutGovernBand(gearSlots[gi].map.top, kTachOverrun);
+                        gearSlots[gi].map.governFrom = shiftBand.from, gearSlots[gi].map.governTo = shiftBand.to;
+                        gearSlots[gi].mode = openShift ? kCutScalar : kCutMap;
+                        gearSlots[gi].convOpen = openShift != 0;
+                        gearSlots[gi].scalar = NAN; // a scalar reaching the wheels here would read as 0 and show as a step
+                    }
+                    const CutSpeeds rolling5 = { 5.0f, 5.0f, 5.0f, 5.0f, 5.0f, true };
+                    float usedNow = 0.0f;
+                    for (int stepI = 0; stepI < 60; stepI++)
+                    {
+                        TorqueCutAnswer shiftAnswer = TorqueCutAnswerOf(gearSlots[stepI < 30 ? 0 : 1], 1.0f, -1.0f, 0.0f, 1e9f, 1.0f, 1.0f, rolling5);
+                        if (!stepI) usedNow = shiftAnswer.bracket;
+                        TorqueCutAnswerPaced(shiftAnswer, 1.0f, usedNow, 0.05f);
+                        const float change = fabsf(shiftAnswer.used - usedNow);
+                        if (stepI) worstStep[openShift] = change > worstStep[openShift] ? change : worstStep[openShift];
+                        noFlip = noFlip && shiftAnswer.used > 0.0f;
+                        neverScalar = neverScalar && (openShift ? shiftAnswer.convEngine > 0.0f : shiftAnswer.convEngine == 0.0f);
+                        usedNow = shiftAnswer.used;
+                    }
+                }
+                printf("torque cut in A, a shift 1 to 2 floored in the 60 Hz sketch: the largest step of the bracket %.3f made locked, %.3f made open\n", worstStep[0], worstStep[1]);
+                Check(worstStep[0] <= 0.15f && worstStep[1] <= 0.15f && noFlip && neverScalar,
+                      "torque cut in A, a shift from 1 to 2 floored in the 60 Hz sketch: made locked and made open no step of the bracket is over 0.15, the pull never changes its "
+                      "sign, and the thread's scalar never reaches the wheels");
+            }
             // the fall at a lock, paced by the clock (the lead's point 17): from the open converter's 1.34 to the map's 1.0
             // over 0.3 s, the same at 60 and at 120 steps a second, no step over the line's own
             bool sameAtBoth = true, smallSteps = true;
@@ -5360,6 +5470,31 @@ int main(int argc, char **argv)
             puts(pullLine);
             Check(pullOk, "gear ratio pull, the sketch: with the push doubled the wheel handed to the ground never passes the guard's ceiling, a free wheel keeps a smaller share, "
                           "the stand-in follows the kept share, and no fall of the bracket");
+        }
+        // the open converter in the detour through the sketch (162 part B; the brief's drive step 2, A in mud with the
+        // wheels spinning): floored in A, the first gear of a top of 6 rad/s, no cap in A. The scout with a wheel free, in
+        // deep mud and on a road: no fall of the bracket by 0.3 in a step, and the pull stays up
+        {
+            char convLine[700];
+            int cl = snprintf(convLine, sizeof convLine, "torque cut in A, part B, the sketch (the open converter on this step's wheels, top 6):");
+            bool convOk = true;
+            for (int c = 0; c < 3; c++)
+            {
+                SimSetup inA = u;
+                inA.drive = cases[c].drive, inA.freeWheels = cases[c].free, inA.ground = cases[c].ground;
+                inA.cap = 0.0f, inA.governTruck = true;
+                inA.slot.mode = kCutScalar, inA.slot.scalar = NAN, inA.slot.convOpen = true, inA.slot.convStall = 1600.0f, inA.slot.convRise = kStallRise;
+                inA.slot.map.top = 6.0f, inA.slot.map.idle = 800.0f, inA.slot.map.redline = 2000.0f;
+                const CutBand aBand = CutGovernBand(6.0f, kTachOverrun);
+                inA.slot.map.governFrom = aBand.from, inA.slot.map.governTo = aBand.to;
+                const SimResult open = SimRun(inA);
+                cl += snprintf(convLine + cl, sizeof convLine - cl, " %s: the bracket %.2f to %.2f, falls of 0.3 in a step %d, of 0.15 %d, the wheels x %.2f of the top, sd %.3f, the truck %.2f;",
+                               cases[c].name, open.fMin, open.fMax, open.cutsAfter, open.smallFalls, open.mean / 6.0f, open.sd / 6.0f, open.vEnd);
+                convOk = convOk && open.cutsAfter == 0 && open.smallFalls == 0 && open.fMin >= 0.0f && open.fMax <= kStallRatio + 1e-4f;
+            }
+            puts(convLine);
+            Check(convOk, "torque cut in A, part B, the sketch: with the open converter worked out on each step's wheels a free wheel, deep mud and a road give no fall of the bracket "
+                          "by 0.15 in a step; the pull is never under 0 and never over the stall's ratio, and at the gear's top it is the governor's 0");
         }
         // a numbered gear (no guard), a free wheel, floored, the fade on the truck's speed: the curve's tail is the limit
         // (the review of bc224bf, M1). 2nd with a top of 10 rad/s and the scout's kick; against the governor on the wheels
@@ -7380,6 +7515,26 @@ int main(int argc, char **argv)
         BaseLearn off = {};
         bool offLearned = false;
         for (int i = 0; i < 60; i++) offLearned = offLearned || BaseLearnStep(off, 3, true, 1.0f, 0.0f, factor, 0.5f, x, 0.0f, 9.0f, 0.05f, learned);
+        // the review of 162 part A, S3: the base learner's long rest. 10 000 passes in A under the cut with nothing to feed
+        // (not ok, as a step of the open converter or one that may not feed) learn nothing and write nothing; the visit
+        // that was open when the rest began is dropped; and what is learned after the rest is what a fresh learner learns
+        {
+            BaseLearn rested = {}, never = {};
+            float restLearned = -1.0f, gotRested = 0.0f, gotFresh = 0.0f;
+            for (int i = 0; i < 3; i++) BaseLearnStep(rested, 3, true, 2.0f * 0.8f, 0.0f, 99.0f, 1.0f, 0.5f, 0.0f, 9.0f, 0.05f, restLearned, nullptr, nullptr, 0.8f);
+            int restWrites = 0;
+            for (int i = 0; i < 10000; i++) restWrites += BaseLearnStep(rested, 3, false, NAN, 0.0f, 99.0f, 1.0f, 0.5f, 0.0f, 9.0f, 0.05f, restLearned, nullptr, nullptr, NAN) != 0;
+            const bool restClean = !restWrites && restLearned == -1.0f && rested.visitSum == 0.0f && rested.visitTime == 0.0f && rested.visitPull == 0.0f;
+            int doneRested = 0, doneFresh = 0;
+            for (int i = 0; i < 4000 && !(doneRested && doneFresh); i++)
+            {
+                if (!doneRested && BaseLearnStep(rested, 3, true, 1.4f * 0.8f, 0.0f, 99.0f, 1.0f, 0.5f, 0.0f, 9.0f, 0.05f, gotRested, nullptr, nullptr, 0.8f)) doneRested = i + 1;
+                if (!doneFresh && BaseLearnStep(never, 3, true, 1.4f * 0.8f, 0.0f, 99.0f, 1.0f, 0.5f, 0.0f, 9.0f, 0.05f, gotFresh, nullptr, nullptr, 0.8f)) doneFresh = i + 1;
+            }
+            Check(restClean && doneRested && doneRested == doneFresh && gotRested == gotFresh && Near(gotRested, 1.4f, 0.01f),
+                  "base learning, a long rest under the cut: 10 000 passes with nothing to feed learn and write nothing and drop the open visit; the first row after it is the one a "
+                  "fresh learner learns, in the same number of passes, with nothing of the passes before the rest in it");
+        }
         const bool learns = Near(got, base, base * 0.05f) && Near(gotOn, got, 0.001f) && !offLearned;
         // under the cut (the lead's addendum of 14:23 to BRIEF_drivetrain_3_a_on_our_chain.md): the acceleration is the
         // base times the bracket the cut used, and the same base is learned; a row begun without the cut and ended with it
