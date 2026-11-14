@@ -302,7 +302,6 @@ None###bind
 x
 x
 ##winchrate
-##winchstep
 ##locksteerfront
 ##locksteerrear
 ##quickwinch

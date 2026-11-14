@@ -3180,6 +3180,19 @@ int main(int argc, char **argv)
         const TorqueCurve &curve = kClassCurves[s.scaleClass];
         const float range = k.redline - k.idle;
         wheels(0.0f);
+        // the model begins from the needle's rpm where one is handed (BRIEF_drive_1114_findings.md, part 175, point 1):
+        // its first step never reads 0 with the engine running, nor idle with the needle at 2088; none handed, idle
+        {
+            ClutchModel seeded = {}, plainStart = {}, overTop = {};
+            const float needle = k.idle + 0.6f * range;
+            ClutchStep(seeded, c, k, curve, 1.0f, 0.0f, 1.0f, false, 0.0f, needle);
+            ClutchStep(plainStart, c, k, curve, 1.0f, 0.0f, 1.0f, false, 0.0f);
+            ClutchStep(overTop, c, k, curve, 1.0f, 0.0f, 1.0f, false, 0.0f, 99999.0f);
+            ClutchModel under = {};
+            ClutchStep(under, c, k, curve, 1.0f, 0.0f, 1.0f, false, 0.0f, k.idle * 0.5f);
+            Check(seeded.rpm == needle && plainStart.rpm == k.idle && overTop.rpm == fmaxf(k.max, k.redline) && under.rpm == k.idle,
+                  "clutch: the model begins at the needle's rpm where one is handed, at idle with none or one under idle, at the tachometer's top at the most");
+        }
         ClutchModel free = {};
         for (float at = 0.0f; at < 2.0f; at += kDt) ClutchStep(free, c, k, curve, 1.0f, 1.0f, 1.0f, false, kDt);
         // pressed, floored: the pedal is a torque (a road truck's min-max governor, review 11), so the free engine runs up

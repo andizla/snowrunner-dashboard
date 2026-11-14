@@ -19,6 +19,14 @@
 enum { kQuickWinchGame, kQuickWinchStanding, kQuickWinchOff, kQuickWinchCount }; // GaugeSettings::quickWinch
 static const unsigned long long kQuickWinchFreshMs = 250; // the mod's last pass may be this old; older, nothing is refused
 
+// The tail of the settings' line on the quick winch: nothing once the game's method is found; before the game's code
+// has been looked through it is not looked for yet, which is no fault (BRIEF_drive_1114_findings.md, part 175, point
+// 5: the line at a start said "not found" for a method found at the first truck).
+inline const wchar_t *QuickWinchSaid(bool found, bool looked)
+{
+    return found ? L"" : looked ? L"; the game's method is not found, so the game does as it does" : L"; the game's method is not looked for yet";
+}
+
 // The rule. mode: the setting; fresh: the mod's last pass is young enough; driven: the press is for the mod's driven
 // truck; speed: that truck's, metres a second, below 0 backwards. Standing is |speed| under kStandStill. A speed that
 // is no number refuses nothing under Standing only.

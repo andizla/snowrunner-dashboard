@@ -1717,11 +1717,6 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             ImGui::SameLine();
             if (ImGui::Button("Add 10###test10")) DamageTestAsk(10);
             PageTip(testTip);
-            // the winch let out by a press (winch_out.h): the probe's step mode. The Winch out row and its speed are on the Controls tab
-            PageLabel("Winch out step", labelX);
-            ImGui::SetNextItemWidth(w);
-            changed(ImGui::SliderFloat("##winchstep", &s.winchOutStep, 0.0f, 2.0f, s.winchOutStep > 0.0f ? "%.2f m a press" : "off", ImGuiSliderFlags_AlwaysClamp));
-            PageTip("A test: above 0 each press of Winch out lets this much rope out once and holding does nothing. Default off.");
         }
 
         ImGui::SeparatorText("Test");

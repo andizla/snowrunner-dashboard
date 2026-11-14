@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- **The steering limit with a lock in now also acts on a truck whose rear axle steers.** Before, the mod left such a truck alone after one look and wrote nothing to it.
 - **D no longer picks a high gear from one spinning wheel.** With the truck at rest and one wheel spinning free, a held gear that went back to D could land in a gear near the top. D now takes the gear it sets off in there, as it already did once it had learned how the wheels turn on the ground.
 - **In A a shift no longer throws the wheels into a spin.** The mod makes up for the pull the game takes away near the top of a gear. Until now the figure worked out for the old gear could stand in the new gear for a moment, right as the automatic shifted. In the new gear that was far too much: floored after a low position the wheels could fly to many times their speed, and the automatic then skipped a gear on that reading. Now the make-up is taken away before the gear is set and comes back for the new gear once it is in. The automatic also shifts up one gear at a time when the wheels spin free.
 - **A numbered gear held by hand now keeps its wheels to the wheel cap, in every gear.** Each wheel may spin only so far past the top speed of its gear, as in L+. Before, a held gear let the wheels spin up to the engine speed limit. A change at speed takes away no pull in one step. This acts for every player of the mod gearbox.

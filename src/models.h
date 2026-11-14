@@ -3212,12 +3212,16 @@ struct ClutchModel
 // driver's foot would: the engine at kAutoTakeUp of the pedal's speed while it slips, until the gearbox's input has
 // come up to it (see below); it never stalls the engine. The wheels are the game's, so the model only follows them.
 // Returns true on the step the engine stalls.
-inline bool ClutchStep(ClutchModel &m, const TruckRaw &t, const GaugeScale &k, const TorqueCurve &c, float travel, float pedal, float factor, bool automatic, float dt)
+// seed: the needle's rpm as the model begins (a change from A to a position of the player's own), so its engine goes on
+// from where the needle stands and not from idle (BRIEF_drive_1114_findings.md, part 175, point 1); under idle or
+// none, idle.
+inline bool ClutchStep(ClutchModel &m, const TruckRaw &t, const GaugeScale &k, const TorqueCurve &c, float travel, float pedal, float factor, bool automatic, float dt,
+                       float seed = 0.0f)
 {
     if (!m.running)
     {
         m = ClutchModel{ true };
-        m.rpm = TruckEngineOn(t) ? k.idle : 0.0f;
+        m.rpm = !TruckEngineOn(t) ? 0.0f : isfinite(seed) && seed > k.idle ? fminf(seed, fmaxf(k.max, k.redline)) : k.idle;
     }
     const float range = k.redline - k.idle;
     const int gear = t.gearEngaged;

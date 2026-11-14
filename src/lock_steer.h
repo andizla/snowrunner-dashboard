@@ -20,8 +20,10 @@ static const int kLockSteerLeast = 30, kLockSteerFrontDefault = 60, kLockSteerRe
 static const float kLockSteerPace = 0.8f;     // the share in force moves toward its target by this much a second: 100 to 60 in half a second
 static const float kLockSteerPassMost = 0.1f; // s: a pass counts as this long at the most
 static const uint64_t kSteerMostAt = 0xB8;    // wheel + 0xB8: the wheel's most steering angle, a float in radians
-static const float kSteerSteers = 0.01f;      // rad: an axle steers where one of its wheels has a stock most angle over this
-static const float kSteerSaneUnder = 1.5707964f; // a most angle is over 0 and under a quarter turn, or it is not one
+static const float kSteerSteers = 0.01f;      // rad: an axle steers where one of its wheels has a stock most angle over this, by its size
+static const float kSteerSaneUnder = 1.5707964f; // a most angle is under a quarter turn by its size, or it is not one. Its sign is the
+                                                 // wheel's own: a steered rear axle turns against the front and holds a negative one
+                                                 // (BRIEF_drive_1114_findings.md, part 175, point 3: -0.1745 rad on an 8x8 closed the record)
 
 // On at all (M5): with Powertrain, and one of the two sliders under 100. Off, nothing is read and nothing is written.
 inline bool LockSteerOn(bool powertrain, int front, int rear) { return powertrain && (front < 100 || rear < 100); }
@@ -162,7 +164,7 @@ inline int LockSteerBack(LockSteerRec &r, const TruckMemory &m)
     int back = 0;
     for (int i = 0; i < r.n && i < kDdWheels; i++)
     {
-        if (!r.has[i] || !(r.stock[i] > 0.0f) || LockSteerSame(r.last[i], r.stock[i])) continue;
+        if (!r.has[i] || r.stock[i] == 0.0f || LockSteerSame(r.last[i], r.stock[i])) continue;
         float now = 0.0f;
         const bool read = m.get(r.wheel[i] + kSteerMostAt, now);
         if (read && LockSteerSame(now, r.last[i]) && m.put(r.wheel[i] + kSteerMostAt, r.stock[i]))
@@ -215,7 +217,7 @@ inline int LockSteerDrop(LockSteerRec &r, const TruckMemory &m)
 //   A figure about to be taken as a stock figure is first looked up among the figures let go (LockSteerMeet). Met: it
 //   is the mod's own write on a moved wheel. The stock is the pair's, the last write is the figure read, and the share
 //   in force is no more than figure over stock, so the next write goes on from there and never lowers it twice.
-// A figure that is no most angle (under 0, a quarter turn or more, no number) closes the record too. False: closed
+// A figure that is no most angle (a quarter turn or more by its size, no number) closes the record too. False: closed
 // (now or before), or a wheel was not read (nothing is done in this pass).
 inline bool LockSteerLook(LockSteerRec &r, const TruckMemory &m, const uint64_t *wheel, int n)
 {
@@ -225,7 +227,7 @@ inline bool LockSteerLook(LockSteerRec &r, const TruckMemory &m, const uint64_t 
     float now[kDdWheels];
     for (int i = 0; i < n; i++)
         if (!m.get(wheel[i] + kSteerMostAt, now[i])) return false;
-    auto sane = [](float a) { return a == 0.0f || (a > 0.0f && a < kSteerSaneUnder); };
+    auto sane = [](float a) { return a == 0.0f || (fabsf(a) > 0.0f && fabsf(a) < kSteerSaneUnder); };
     int bad = -1;
     const bool unlimited = r.share >= 1.0f; // as this look began: a figure met again lowers the share in the loop
     for (int i = 0; i < n && bad < 0; i++)
@@ -239,7 +241,8 @@ inline bool LockSteerLook(LockSteerRec &r, const TruckMemory &m, const uint64_t 
             // taken as the stock: a place with no record, or another figure while nothing is limited
             float kept = 0.0f;
             if (!sane(now[i])) bad = i;
-            else if (now[i] > 0.0f && LockSteerMeet(LockSteerMemory(), r.kind, now[i], kept) && kept > now[i] && sane(kept))
+            else if (now[i] != 0.0f && LockSteerMeet(LockSteerMemory(), r.kind, now[i], kept) && fabsf(kept) > fabsf(now[i]) && (kept > 0.0f) == (now[i] > 0.0f) &&
+                     sane(kept))
             {
                 // the mod's own figure on a wheel that moved after its record was thrown away
                 r.has[i] = true, r.stock[i] = kept, r.last[i] = now[i];
@@ -272,12 +275,12 @@ inline void LockSteerAxles(const LockSteerRec &r, const AxleRows &rows, bool *st
 {
     for (int a = 0; a < kAxleRowsMost; a++) steers[a] = false;
     for (int i = 0; i < r.n && i < kDdWheels; i++)
-        if (r.has[i] && r.stock[i] > kSteerSteers && rows.ofWheel[i] >= 0 && rows.ofWheel[i] < kAxleRowsMost) steers[rows.ofWheel[i]] = true;
+        if (r.has[i] && fabsf(r.stock[i]) > kSteerSteers && rows.ofWheel[i] >= 0 && rows.ofWheel[i] < kAxleRowsMost) steers[rows.ofWheel[i]] = true;
 }
 
 // After a look that passed: the share eased one pass toward the target, and each steered wheel's most angle written as
 // its stock figure times the share, where it does not hold that already. At a share of 1 it is the stock figure
-// itself. Never over the stock. How many wheels were written.
+// itself. Never over the stock by its size, and the sign is the stock's. How many wheels were written.
 inline int LockSteerWrite(LockSteerRec &r, const TruckMemory &m, float target, float dt)
 {
     if (!r.known || r.closed) return 0;
@@ -287,9 +290,9 @@ inline int LockSteerWrite(LockSteerRec &r, const TruckMemory &m, float target, f
     int wrote = 0;
     for (int i = 0; i < r.n && i < kDdWheels; i++)
     {
-        if (!r.has[i] || !(r.stock[i] > 0.0f)) continue;
+        if (!r.has[i] || r.stock[i] == 0.0f || !isfinite(r.stock[i])) continue;
         float want = r.share >= 1.0f ? r.stock[i] : r.stock[i] * r.share;
-        if (!(want < r.stock[i])) want = r.stock[i];
+        if (!(fabsf(want) < fabsf(r.stock[i]))) want = r.stock[i];
         if (LockSteerSame(want, r.read[i])) continue;
         if (!m.put(r.wheel[i] + kSteerMostAt, want)) continue;
         r.last[i] = r.read[i] = want;

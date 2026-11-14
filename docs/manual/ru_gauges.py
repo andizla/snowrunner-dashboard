@@ -1961,8 +1961,8 @@ def s_shared():
 (<code>winch out: the key lets the winch wire out at</code>); при перехвате строка <code>winch out: the truck update is hooked
 (Winch out is bound)</code> (пока это была проба, строка была <code>winch out: the truck update is hooked for the test</code>).
 В списке привязок действие называется WinchOut, поэтому его ключ BindWinchOut. Ползунок назывался Winch out rate на вкладке Mod
-work, пока это была проба, а теперь это Winch out speed на вкладке Controls. Строки каждого удержания со счётчиками и режим шага
-(WinchOutStep) остаются за Probe=1.</p>
+work, пока это была проба, а теперь это Winch out speed на вкладке Controls. Строки каждого удержания со счётчиками остаются за
+Probe=1. Режим шага тестовых сборок, строка Winch out step, убран: WinchOutStep не пишется и не читается.</p>
 <p><b>Быстрая лебёдка.</b> <code>quick_winch.h</code>, <code>QuickWinchFind</code> в <code>game_code.h</code>. Клавиша быстрой
 лебёдки игры заканчивается одним методом в 29 байт, который только поднимает байт запроса у контроллера игрока; лебёдку делает
 обновление грузовика игрока кадром позже. Метод находится в три шага: хеш имени функции скрипта один раз в коде, переходник,

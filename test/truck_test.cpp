@@ -8761,6 +8761,43 @@ static void TruckTestsLockSteer()
         Check(half && longPass && up && slider && noTime && LockSteerPercent(0.6f) == 60 && LockSteerPercent(1.0f) == 0 && LockSteerPercent(0.996f) == 100,
               "lock steering, the ease: 1 to 0.6 in thirty passes of 1/60 s and not before; a pass of 5 s moves it by 0.08; up again and to a slider's new figure the same way; no time, no move");
     }
+    // a steered rear axle (BRIEF_drive_1114_findings.md, part 175, point 3): its wheels hold a negative most angle. The
+    // stock is kept with its sign, the limit's share is on the size and the write keeps the sign, the axle counts as
+    // one that steers, and the stock goes back to the bit. A quarter turn or more, either way, is still no angle
+    {
+        LockSteerMemory() = LockSteerKept{};
+        const uint64_t kRearSteer = 0x7B8000000ull;
+        uint64_t at[4];
+        for (int i = 0; i < 4; i++) at[i] = kRearSteer + 0x1000ull * (uint64_t)i, Block(at[i], 0x200);
+        const float front = 0.6f, rear = -0.1745f;
+        Put(at[0] + kSteerMostAt, front), Put(at[1] + kSteerMostAt, front), Put(at[2] + kSteerMostAt, rear), Put(at[3] + kSteerMostAt, rear);
+        LockSteerRec r = {};
+        bool ok = LockSteerFor(r, kMemory, 0x7B8100100ull, "rear steer", "an 8x8");
+        for (int pass = 0; pass < 12; pass++) ok = ok && LockSteerLook(r, kMemory, at, 4), LockSteerWrite(r, kMemory, 0.6f, 0.1f);
+        float f0 = 0.0f, r2 = 0.0f, r3 = 0.0f;
+        kMemory.get(at[0] + kSteerMostAt, f0), kMemory.get(at[2] + kSteerMostAt, r2), kMemory.get(at[3] + kSteerMostAt, r3);
+        const bool limited = ok && !r.closed && LockSteerSame(r.stock[2], rear) && Near(f0, front * 0.6f) && r2 < 0.0f && fabsf(r2 - rear * 0.6f) < 0.0001f && LockSteerSame(r2, r3);
+        AxleRows rows = {};
+        rows.axles = 2;
+        rows.ofWheel[0] = rows.ofWheel[1] = 0, rows.ofWheel[2] = rows.ofWheel[3] = 1;
+        bool steers[kAxleRowsMost];
+        LockSteerAxles(r, rows, steers);
+        const bool bothSteer = steers[0] && steers[1];
+        const int back = LockSteerDrop(r, kMemory);
+        kMemory.get(at[0] + kSteerMostAt, f0), kMemory.get(at[2] + kSteerMostAt, r2);
+        const bool putBack = back == 4 && LockSteerSame(f0, front) && LockSteerSame(r2, rear);
+        Put(at[2] + kSteerMostAt, -1.6f);
+        LockSteerRec wide = {};
+        LockSteerFor(wide, kMemory, 0x7B8100200ull, "wide", "an 8x8");
+        const bool wideClosed = !LockSteerLook(wide, kMemory, at, 4) && wide.closed && wide.closedAt == 2;
+        Check(limited && bothSteer && putBack && wideClosed,
+              "lock steering, a steered rear axle: a most angle of -0.1745 rad is its stock figure with its sign, 60 percent of it is -0.1047 and the record stays open, "
+              "the axle counts as one that steers, the stock goes back to the bit; -1.6 rad is still no angle");
+    }
+    // the settings' line on the quick winch (part 175, point 5): not looked for yet before the game's code is read
+    Check(!wcscmp(QuickWinchSaid(true, true), L"") && !wcscmp(QuickWinchSaid(true, false), L"") && wcsstr(QuickWinchSaid(false, false), L"not looked for yet") &&
+              wcsstr(QuickWinchSaid(false, true), L"is not found") && !wcsstr(QuickWinchSaid(false, false), L"is not found"),
+          "quick winch, the settings line: nothing once the method is found, not looked for yet before the game's code is read, not found after");
     // a truck the game rebuilds while a limit is in force (review_lock_steering_151.md, M1): the wheels move to new
     // pointers with the mod's figures in them and the old pointers read nothing, so nothing is put back when the
     // record is thrown away. The figure met again is never taken as a stock figure: stock times 0.6 after every round

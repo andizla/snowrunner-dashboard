@@ -835,7 +835,6 @@ static void WriteIni(const GaugeSettings &s)
     WritePrivateProfileStringW(kIniSection, L"CrawlHold", nullptr, ini.c_str()); // the Crawl hold went with the torque cut: its key dropped
     num(L"EngineBrake", s.engineBrake);
     num(L"WinchOutRate", s.winchOutRate);
-    if (s.probe) num(L"WinchOutStep", s.winchOutStep); // the step mode is the probe's (winch_out.h): in no ini without Probe=1
     whole(L"WheelCap", s.wheelCap);
     whole(L"LowRangeSlip", s.lowRangeSlip);
     whole(L"HeldGearSlip", s.heldGearSlip);
@@ -1384,7 +1383,6 @@ static void ReadIni(GaugeSettings &s)
     s.diffType = IniInt(L"DiffType", s.diffType, ini);
     s.engineBrake = IniFloat(L"EngineBrake", s.engineBrake, ini); // CrawlHold= is read no more: the torque cut took its place
     s.winchOutRate = IniFloat(L"WinchOutRate", s.winchOutRate, ini);
-    s.winchOutStep = IniFloat(L"WinchOutStep", s.winchOutStep, ini);
     s.modEngineSpeed = IniBool(L"ModEngineSpeed", s.modEngineSpeed, ini);
     s.engineSpeedTop = IniFloat(L"EngineSpeedTop", s.engineSpeedTop, ini);
     s.roadCdA = IniFloat(L"RoadCdA", s.roadCdA, ini);
@@ -4804,6 +4802,7 @@ typedef void (*QuickWinchFn)(void *vehicle);
 static QuickWinchFn g_quickWinchGame = nullptr;
 static QuickWinchState g_quickWinch = {};
 static bool g_quickWinchFound = false, g_quickWinchHooked = false, g_quickWinchFailed = false;
+static bool g_quickWinchLooked = false; // the game's code has been looked through for the method: before that "not found" is not true yet
 
 // The rule under its own fault guard: a fault here turns the rule off for the game and the press goes through.
 static bool QuickWinchRuleGuarded(void *vehicle)
@@ -5048,6 +5047,7 @@ static void GameCodeLook(const GaugeSettings &s)
     }
     {
         QuickWinchPlace quick = {};
+        g_quickWinchLooked = true;
         if (QuickWinchFind(code.data(), from, to, quick))
         {
             g_quickWinchGame = (QuickWinchFn)(g_base + quick.method);
@@ -5338,7 +5338,7 @@ static void LogSettings(const GaugeSettings &s)
         Log(L"settings: the steering left with a lock in: %d percent while an axle that steers is locked (LockSteerFront), %d while another driven axle is (LockSteerRear); 100 and 100 is off%s",
             s.lockSteerFront, s.lockSteerRear, LockSteerOn(s.powertrain, s.lockSteerFront, s.lockSteerRear) ? L"" : L" (off now)");
         Log(L"settings: quick winch %d (QuickWinch; 0 as the game has it, 1 only while the truck stands, 2 never from its key)%s", s.quickWinch,
-            g_quickWinchFound ? L"" : L"; the game's method is not found, so the game does as it does");
+            QuickWinchSaid(g_quickWinchFound, g_quickWinchLooked));
         // an ini from a build before All gears became the default holds the old 0 or 1, and no row changes it now
         // (part 170, the Reviewer's answer): kept, and said at every start
         static bool slipSaid = false;
@@ -5454,7 +5454,7 @@ static void WinchOutPass(const GaugeSettings &s, uint64_t vehicle, bool held, bo
     static unsigned long long saidAt = 0;
     static uint64_t holdVehicle = 0;
     static LONG from[13];
-    const float stepNow = s.probe ? s.winchOutStep : 0.0f; // the step mode stays the probe's (163, must 5)
+    const float stepNow = 0.0f; // the step mode is dropped (BRIEF_drive_1114_findings.md, part 175, point 4): the rate does the job; winch_out.h keeps its model
     static float fromAsked = 0.0f, fromSteps = 0.0f;
     static float pullWas = NAN;             // the rope's length under the game's pull at the last line, none before one
     static unsigned long long pullAt = 0;
@@ -5521,8 +5521,7 @@ static void WinchOutPass(const GaugeSettings &s, uint64_t vehicle, bool held, bo
         const bool read = m.get(vehicle + kWinchRopeAt, rope) && m.get(vehicle + kWinchPullAt, pull) && m.get(vehicle + kWinchActiveAt, active) &&
                           m.get(vehicle + kWinchOwnAt, own) && m.get(vehicle + kWinchCraneAt, crane);
         wchar_t how[64];
-        if (stepNow > 0.0f) swprintf_s(how, L"%.2f m a press (WinchOutStep)", stepNow);
-        else swprintf_s(how, L"%.2f m/s (WinchOutRate)", s.winchOutRate);
+        swprintf_s(how, L"%.2f m/s (WinchOutRate)", s.winchOutRate);
         if (!saidFirst)
         {
             saidFirst = true;
@@ -6217,7 +6216,7 @@ static void LockSteerPass(TruckWatch &w, const TruckMemory &m, const GaugeSettin
     const int wrote = LockSteerWrite(r, m, target, dt);
     int steered = 0, first = -1;
     for (int i = 0; i < r.n; i++)
-        if (r.has[i] && r.stock[i] > 0.0f)
+        if (r.has[i] && r.stock[i] != 0.0f)
         {
             if (first < 0) first = i;
             steered++;
@@ -8200,7 +8199,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             const bool onAxis = w.actions.clutchTravel >= 0.0f;
             // one stall a lug: none of the clutch model's once the creep has stalled the engine (and the creep has no grip
             // to stall by once the clutch model's engine is dead)
-            if (ClutchStep(w.clutch, raw, scale, curve, w.pos.travel, w.power.pedal, w.power.cold * w.power.boost, !onAxis, dt) && !w.creep.stalled)
+            if (ClutchStep(w.clutch, raw, scale, curve, w.pos.travel, w.power.pedal, w.power.cold * w.power.boost, !onAxis, dt, w.tach.rpm) && !w.creep.stalled)
             {
                 w.clutchStall = onAxis;
                 Log(L"clutch: the engine stalled, the clutch let up at %.0f rpm on the gearbox's input in gear %d; the game's engine stalls with it", w.clutch.input,
@@ -9314,8 +9313,10 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                     // of the gearbox's own the automatic's model stands down, so the wheels and the clutch model's engine
                     // give the figures (review 11: they were zeros)
                     const bool ownPos = GearboxManual(w);
+                    // in the pass of a change to a position of the player's own the clutch model has not begun: the needle's
+                    // rpm then, never a 0 with the engine running (part 175, point 1)
                     const float by = ownPos ? TruckDrivenSpin(raw) : w.gearbox.by, shiftInput = ownPos ? w.clutch.input : w.gearbox.input,
-                                shiftRpm = ownPos ? w.clutch.rpm : w.gearbox.rpm;
+                                shiftRpm = !ownPos ? w.gearbox.rpm : w.clutch.running ? w.clutch.rpm : w.tach.rpm;
                     const float from = GearboxInput(raw, scale, raw.gear, by) / scale.redline, into = GearboxInput(raw, scale, shiftTo, by) / scale.redline;
                     Log(L"gearbox: %d to %d at %.0f rpm on the gearbox's input, the engine at %.0f rpm, the pedal at %.2f; the wheels at %.2f of the gear's top "
                         L"(the game's pull %.2f) and %.2f of the new one's (%.2f)",
@@ -11518,7 +11519,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.overRevDamage == b.overRevDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
            a.springFront == b.springFront && a.dampingFront == b.dampingFront && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.checkers == b.checkers && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.hiddenWarnings == b.hiddenWarnings && a.warnFuel == b.warnFuel && a.warnEngine == b.warnEngine && a.warnGearbox == b.warnGearbox && a.warnCoolant == b.warnCoolant && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
-           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.quickWinch == b.quickWinch && a.lockSteerFront == b.lockSteerFront && a.lockSteerRear == b.lockSteerRear && a.engineSoundTop == b.engineSoundTop && a.engineSoundCurve == b.engineSoundCurve && a.heldGearSlip == b.heldGearSlip && a.lowRangeSlip == b.lowRangeSlip && a.diffType == b.diffType && a.physicsRate == b.physicsRate && a.engineBrake == b.engineBrake && a.winchOutRate == b.winchOutRate && a.winchOutStep == b.winchOutStep && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
+           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.quickWinch == b.quickWinch && a.lockSteerFront == b.lockSteerFront && a.lockSteerRear == b.lockSteerRear && a.engineSoundTop == b.engineSoundTop && a.engineSoundCurve == b.engineSoundCurve && a.heldGearSlip == b.heldGearSlip && a.lowRangeSlip == b.lowRangeSlip && a.diffType == b.diffType && a.physicsRate == b.physicsRate && a.engineBrake == b.engineBrake && a.winchOutRate == b.winchOutRate && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
            a.camberGainFront == b.camberGainFront && a.camberGainRear == b.camberGainRear && a.camberRestFront == b.camberRestFront && a.camberRestRear == b.camberRestRear &&
            !memcmp(a.diffAxle, b.diffAxle, sizeof a.diffAxle) && a.airBrakes == b.airBrakes;
 }
@@ -11631,7 +11632,7 @@ static void PartIni()
         GetPrivateProfileStringW(kIniSection, L"WinchOutRate", L"none", rateKept, 16, ini.c_str());
         GetPrivateProfileStringW(kIniSection, L"WinchOutStep", L"none", stepKept, 16, ini.c_str());
         GaugeSettings plainRate = plain, rateBack;
-        plainRate.winchOutRate = 0.75f, plainRate.winchOutStep = 0.5f;
+        plainRate.winchOutRate = 0.75f;
         WriteIni(plainRate);
         SettingsDefaults(rateBack);
         ReadIni(rateBack);
@@ -11639,8 +11640,10 @@ static void PartIni()
         wchar_t stepNoProbe[16] = L"";
         GetPrivateProfileStringW(kIniSection, L"WinchOutStep", L"none", stepNoProbe, 16, ini.c_str());
         GaugeSettings probing = plain;
-        probing.probe = 1, probing.winchOutRate = 1.25f, probing.winchOutStep = 0.5f;
+        probing.probe = 1, probing.winchOutRate = 1.25f;
         WriteIni(probing);
+        wchar_t stepWithProbe[16] = L"";
+        GetPrivateProfileStringW(kIniSection, L"WinchOutStep", L"none", stepWithProbe, 16, ini.c_str());
         GaugeSettings readBack;
         SettingsDefaults(readBack);
         ReadIni(readBack);
@@ -11664,12 +11667,12 @@ static void PartIni()
         GetPrivateProfileStringW(kBindSection, otherKey, L"none", otherKept, 32, ini.c_str());
         GearBindings fresh = {};
         BindingsDefault(fresh);
-        Check(_wtof(rateKept) == 0.5 && !wcscmp(stepKept, L"none") && !wcscmp(stepNoProbe, L"none") && rateBack.winchOutRate == 0.75f && rateBack.winchOutStep == 0.0f &&
-              plain.winchOutRate == 0.5f && plain.winchOutStep == 0.0f && readBack.winchOutRate == 1.25f && readBack.winchOutStep == 0.5f &&
-              wide.winchOutRate == 2.0f && wide.winchOutStep == 0.0f && !SameSettings(plain, probing) && !SameSettings(plain, plainRate) && boundBack.slot[kActWinchOut][0].kind == kBindKey &&
+        Check(_wtof(rateKept) == 0.5 && !wcscmp(stepKept, L"none") && !wcscmp(stepNoProbe, L"none") && rateBack.winchOutRate == 0.75f &&
+              plain.winchOutRate == 0.5f && readBack.winchOutRate == 1.25f && !wcscmp(stepWithProbe, L"none") &&
+              wide.winchOutRate == 2.0f && !SameSettings(plain, probing) && !SameSettings(plain, plainRate) && boundBack.slot[kActWinchOut][0].kind == kBindKey &&
               boundBack.slot[kActWinchOut][0].code == 'K' && wcscmp(bindKept, L"none") && !wcscmp(bindKept, otherKept) && fresh.slot[kActWinchOut][0].kind == kBindNone &&
               fresh.slot[kActWinchOut][1].kind == kBindNone && !strcmp(kActionNames[kActWinchOut], "WinchOut"),
-              "settings: WinchOutRate is in the ini without Probe=1, 0.5 by default and 0.75 read back; WinchOutStep is in no ini without Probe=1 and with it 0.5 read back; 9 is "
+              "settings: WinchOutRate is in the ini without Probe=1, 0.5 by default and 0.75 read back; WinchOutStep is in no ini, with Probe=1 neither, and one in the file is not read; 9 is "
               "held to 2.0 and -1 to 0; the WinchOut binding has no default and its key is written as the other rows' are, bound or not");
         {
             // the board's key and its binding (BRIEF_checkers.md, M5): in no ini until the board was opened once

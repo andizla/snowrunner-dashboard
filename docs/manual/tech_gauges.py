@@ -1424,7 +1424,8 @@ until the game is started again. The first hold of a session gives one line (<co
 at</code>), the hook one (<code>winch out: the truck update is hooked (Winch out is bound)</code>; while it was a probe the line read
 <code>winch out: the truck update is hooked for the test</code>). The action is WinchOut in the list of bindings, so its
 key is BindWinchOut. The slider was Winch out rate on the Mod work tab while it was a probe and is Winch out speed on the
-Controls tab now. The lines of each hold with their counts, and the step mode (WinchOutStep), stay behind Probe=1.</p>
+Controls tab now. The lines of each hold with their counts stay behind Probe=1. The step mode of the test builds, the row Winch out step, is dropped: WinchOutStep is
+neither written nor read.</p>
 <p><b>The quick winch.</b> <code>quick_winch.h</code>, <code>QuickWinchFind</code> in <code>game_code.h</code>. The game's quick winch
 key ends in one method of 29 bytes that only raises a request byte on the player's controller; the player's truck update makes the
 winch a frame later. The method is found in three steps: the hash of the script native's name once in the code, the thunk named just
