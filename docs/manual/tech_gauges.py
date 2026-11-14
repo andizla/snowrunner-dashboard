@@ -846,7 +846,8 @@ ground, the nose and A's gear, and "sequential: back to A after N s in gear g, A
 {table(['Condition', 'Figure', 'Why'], rows, 'Back to A: what must hold for a second')}
 <p>Sequential's own shifts (<code>SequentialStep</code>, gearbox_model.h): with <code>BackToA</code> above 0, not with
 <code>RequireClutch</code> or <code>RequireGearHeld</code>, never for a gear picked on the game's shifter and never within a
-shift's stages (which end 1.5 s after the gear engaged), a held numbered gear goes back to D (D picks the gear) near the red zone, when the gearbox's input
+shift's stages (which end 1.5 s after the gear engaged), a held numbered gear goes back to D (D picks the gear, and the line says which speed it went by: <code>by the ground: the wheels spin</code>, else by the wheels; before the grip is learned
+a truck at rest whose driven wheels lie their own mean apart, <code>kRestSpread</code>, counts as spinning, so one free wheel gives D no high gear) near the red zone, when the gearbox's input
 (<code>ClutchModel::input</code>, the wheels and the gear) has been at 0.9 of the red zone's speed for 0.3 s (a floored held gear settles near 0.95 of its top, where the game gives nothing), below the top gear, with the grip
 known, the wheels not spinning (Back to A's own test) and the pedal at 0.05 or more (with the foot off a low gear held downhill is
 engine braking), and before a stall, when it has been under 1.1 times idle for 0.5 s, the foot on or off (0.2 s under the brake),

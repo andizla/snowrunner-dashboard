@@ -2537,6 +2537,44 @@ int main(int argc, char **argv)
                     }
                     oneGear = oneGear && free.gear == 3;
                 }
+                // D's gear with one wheel spinning by itself (BRIEF_drive_1114_findings.md, part 173): one driven wheel at
+                // 45 rad/s, the others still, the truck at rest, in a gear held by hand where the model reads along. The
+                // gear A would ask stays the set-off gear, with the grip learned and not; all wheels at speed with the
+                // grip learned still lift the floor as before
+                {
+                    bool restGear = true, restSaid = true;
+                    for (float gripKnown : { 0.0f, 2.0f })
+                    {
+                        GearboxModel along = {};
+                        along.running = true;
+                        along.gear = GearboxStartGear(sd, whole.launch);
+                        along.grip = gripKnown;
+                        for (float at = 0.0f; at < 4.0f; at += kDt)
+                        {
+                            scoutAt(0.0f);
+                            sd.spin[sd.wheels - 1] = 45.0f;
+                            GearboxStep(along, sd, dk, 0.5f, 0.5f, kDt, whole, true);
+                            restSaid = restSaid && (at < 1.0f || along.spinning);
+                        }
+                        restGear = restGear && TakeoverAutoGear(sd, along.gear, GearboxLowestFit(along, sd, dk, true)) == GearboxStartGear(sd, whole.launch);
+                    }
+                    // the floor's other use: every wheel at 60 rad/s on ground that carries it, the model in the second
+                    GearboxModel downhill = {};
+                    downhill.running = true;
+                    downhill.gear = 2;
+                    downhill.grip = 2.0f;
+                    scoutAt(60.0f);
+                    GearboxStep(downhill, sd, dk, 0.0f, 0.0f, kDt, whole, true);
+                    downhill.rolling = 60.0f;
+                    int floorAt = 1;
+                    while (floorAt < TruckTopGear(sd) && GearboxInput(sd, dk, floorAt, 60.0f) >= dk.max) floorAt++;
+                    const bool floorKept = floorAt > 2 && GearboxLowestFit(downhill, sd, dk, true) == floorAt;
+                    GearboxModel unlearned = downhill;
+                    unlearned.grip = 0.0f;
+                    Check(restGear && restSaid && floorKept && GearboxLowestFit(unlearned, sd, dk, true) == 1,
+                          "automatic: one driven wheel at 45 rad/s with the truck at rest leaves the gear for D at the set-off gear, the grip learned or not, and the model "
+                          "says the wheels spin; every wheel at speed on ground that carries it still lifts the floor; with the grip not learned the floor is 1");
+                }
                 Check(figureStops && oneGear,
                       "automatic, the engine handed over: with the wheels free at six times the gear's top the input and the engine's figure stop at the tachometer's "
                       "top, and it shifts up one gear on that, never two");

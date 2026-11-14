@@ -8501,9 +8501,12 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 if (seq)
                 {
                     acts.a = bySeq = true;
-                    Log(seq > 0 ? L"sequential: up at the red zone, gear %d, back to D (D's gear %d), %.0f rpm on the gearbox's input"
-                                : L"sequential: down before a stall, gear %d, back to D (D's gear %d), %.0f rpm on the gearbox's input",
-                        w.pos.gear, autoGear, w.clutch.input);
+                    // which speed D's gear went by (BRIEF_drive_1114_findings.md, part 173, must 4): the model's own word
+                    Log(seq > 0 ? L"sequential: up at the red zone, gear %d, back to D (D's gear %d, %s), %.0f rpm on the gearbox's input"
+                                : L"sequential: down before a stall, gear %d, back to D (D's gear %d, %s), %.0f rpm on the gearbox's input",
+                        w.pos.gear, autoGear,
+                        w.gearbox.spinning ? L"by the ground: the wheels spin" : w.gearbox.grip > 0.0f ? L"by the wheels, which grip" : L"by the wheels, the grip not learned",
+                        w.clutch.input);
                 }
             }
             else w.back = BackModel{}, w.backSaid = kBackOff, w.seq = SeqModel{};

@@ -1425,6 +1425,7 @@ static const float kGripFall = 2.0f, kGripRise = 20.0f; // seconds the grip take
 // floored in mud spins steadily, with no converter to slip, and that slip is no grip. It may always fall
 static const float kHeldGripPedal = 0.7f;
 static const float kSlipUp = 1.05f;          // a shift up goes by the wheels at most this much faster than the ground: wheelspin in rough ground shifts nothing up
+static const float kRestSpread = 1.0f;       // before the grip is learned, at rest: the driven wheels this share of their mean apart are wheels spinning by themselves (GearboxStep)
 static const float kSlipShare = 1.2f, kSlipSpare = 1.0f; // wheels this much faster than the ground under them, and this many rad/s more, spin: the gearbox goes by the ground
                                                         // (floored in drives logged in the game the wheels turned within 1.13 times the learned grip nine times in ten)
 static const float kDownMost = 0.9f;         // no shift down puts the engine, at the speed the wheels turn, further than this from idle to the red zone
@@ -2550,11 +2551,18 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     // the speed the shifts go by: the wheels', at the most kSlipShare over the ground's, so wheelspin in mud does not
     // shift up; with the foot off the ground's where the wheels turn slower, so wheels locked under the brake do not
     // shift down; and the speed the wheels will turn at after a shift down, for the engine's sake
-    const float pace = m.grip > 0.0f ? fminf(m.spin, onGround * kSlipShare + kSlipSpare) : m.spin;
+    // Before the grip is learned the ground's speed in the wheels' terms is not known, but for a truck at rest it is 0
+    // whatever the grip: there the same rule holds with the ground at 0, so a wheel spinning by itself is no speed
+    // (BRIEF_drive_1114_findings.md, part 173: one wheel at 45 rad/s with the truck at rest took the model to the ninth
+    // gear, and D got it). Only where the driven wheels lie kRestSpread of their mean apart, so some stand while
+    // others carry the mean; wheels turning alike, and any truck from kGripSpeed on, go by the wheels as before,
+    // until the grip is learned.
+    const bool restUnlearned = m.grip <= 0.0f && ground <= kGripSpeed && TruckDrivenSpread(t) >= kRestSpread;
+    const float pace = m.grip > 0.0f ? fminf(m.spin, onGround * kSlipShare + kSlipSpare) : restUnlearned ? fminf(m.spin, kSlipSpare) : m.spin;
     // the speed the wheels will turn at after a shift down: the ground's, and the wheels' as far as they do not spin
-    const float coast = m.grip > 0.0f ? fmaxf(raw, onGround) : m.spin;
-    const float rolling = m.grip > 0.0f ? fmaxf(onGround, fminf(m.spin, onGround * kSlipShare + kSlipSpare)) : m.spin;
-    m.spinning = m.grip > 0.0f && m.spin > onGround * kSlipShare + kSlipSpare;
+    const float coast = m.grip > 0.0f ? fmaxf(raw, onGround) : restUnlearned ? fminf(m.spin, kSlipSpare) : m.spin;
+    const float rolling = m.grip > 0.0f ? fmaxf(onGround, fminf(m.spin, onGround * kSlipShare + kSlipSpare)) : restUnlearned ? fminf(m.spin, kSlipSpare) : m.spin;
+    m.spinning = m.grip > 0.0f ? m.spin > onGround * kSlipShare + kSlipSpare : restUnlearned && m.spin > kSlipSpare;
     m.rolling = rolling;
     // where it would shift at this pedal, at floored's while climbing
     const bool footOff = p < kFootOff;
