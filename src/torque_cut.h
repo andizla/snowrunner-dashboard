@@ -681,7 +681,22 @@ inline float RunDownSeconds(int percent, float gearTop, float firstTop)
     return kRunDownMost * share * ratio * ratio;
 }
 // What ends it from the mod's thread (must 3): the brake pedal, the handbrake and a shift that is out. N has no slot.
-inline bool RunDownAllowed(float brake, bool handbrake, bool shiftOut) { return !(brake > 0.0f) && isfinite(brake) && !handbrake && !shiftOut; }
+// clutchOpen: a clutch worked by hand is not locked (the review of 180, S1): an engine cut off from the wheels by its
+// clutch gives them nothing. The automatic's converter is no clutch here: in A it is never up.
+inline bool RunDownAllowed(float brake, bool handbrake, bool shiftOut, bool clutchOpen = false)
+{
+    return !(brake > 0.0f) && isfinite(brake) && !handbrake && !shiftOut && !clutchOpen;
+}
+// How much of the run-down the wheels get (the review of 180, S2), 0 to 1: nothing at the spinning threshold, all of
+// it from twice the truck's speed (and 0.5 rad/s). So one wheel slipping a little on a climb carries next to nothing
+// on to the gripping ones, and a run-down lands softly as the wheels come down to the truck's speed.
+inline float RunDownWeight(bool ok, float mean, bool truckOk, float truck)
+{
+    if (!ok || !truckOk || !isfinite(mean) || !isfinite(truck)) return 0.0f;
+    const float over = truck > 0.0f ? truck : 0.0f, from = over * kRunSpinShare + kRunSpinMore, whole = over * 2.0f + kRunSpinMore;
+    if (!(mean > from)) return 0.0f;
+    return whole > from ? CutClamp01((mean - from) / (whole - from)) : 1.0f;
+}
 inline bool RunDownSpinning(bool ok, float mean, bool truckOk, float truck)
 {
     if (!ok || !truckOk || !isfinite(mean) || !isfinite(truck)) return false;
@@ -697,9 +712,11 @@ struct CutRun
 };
 // One step of the detour. target: the bracket this step asks; usedBefore: the one the step before used. Returns the
 // bracket to use, never under target. paced: it was held above target.
-inline float CutRunStep(CutRun &run, float target, float usedBefore, float pedal, float top, bool spinning, float seconds, uint64_t now, uint64_t vehicle, bool *paced = nullptr)
+// spin: RunDownWeight's, 0 not spinning.
+inline float CutRunStep(CutRun &run, float target, float usedBefore, float pedal, float top, float spin, float seconds, uint64_t now, uint64_t vehicle, bool *paced = nullptr)
 {
     if (paced) *paced = false;
+    const bool spinning = spin > 0.0f;
     const float pedalWas = run.vehicle == vehicle ? run.pedalWas : pedal;
     run.pedalWas = pedal;
     const bool off = !(seconds > 0.0f) || !isfinite(seconds) || !spinning || !isfinite(target) || !isfinite(pedal);
@@ -727,7 +744,7 @@ inline float CutRunStep(CutRun &run, float target, float usedBefore, float pedal
         run.at = 0, run.spent = true;
         return target;
     }
-    const float held = target + (run.from - target) * (1.0f - since / seconds);
+    const float held = target + (run.from - target) * (1.0f - since / seconds) * (spin < 1.0f ? spin : 1.0f);
     if (!(held > target)) return target;
     if (paced) *paced = true;
     return held;

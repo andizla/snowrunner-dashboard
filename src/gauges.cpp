@@ -6289,7 +6289,7 @@ static TorqueCutSlot TorqueCutSlotOf(const TruckWatch &w, const TruckRaw &raw, c
     if (converter) c.scalar = locked ? 0.0f : ConverterOpenF(c.map, w.gearbox.input, w.gearbox.rpm, w.gearbox.ratio, kStallRatio);
     // part B: open, the detour works F out from this step's wheels; the scalar above stays for a step whose wheels were not read
     // the run-down at a lift (180): the seconds for this gear; none with the brake or the handbrake on or a shift out (must 3)
-    c.runSeconds = RunDownAllowed(TruckBrake(raw), raw.handbrake != 0, raw.gear != raw.gearEngaged) ? RunDownSeconds(s.engineInertia, gearTop, firstTop) : 0.0f;
+    c.runSeconds = RunDownAllowed(TruckBrake(raw), raw.handbrake != 0, raw.gear != raw.gearEngaged, !converter && !locked) ? RunDownSeconds(s.engineInertia, gearTop, firstTop) : 0.0f;
     c.convOpen = converter && !locked;
     c.convStall = w.gearbox.stallNow, c.convRise = w.gearbox.riseNow;
     // the gear ratio pull (161, must 3): by the position, a held one that is not H; 0 in A, in N and in H. The

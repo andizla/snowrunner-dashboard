@@ -4880,6 +4880,19 @@ int main(int argc, char **argv)
                                    !RunDownAllowed(NAN, false, false) && RunDownSpinning(true, 12.0f, true, 4.0f) && !RunDownSpinning(true, 4.5f, true, 4.0f) &&
                                    !RunDownSpinning(false, 12.0f, true, 4.0f) && !RunDownSpinning(true, 12.0f, false, 4.0f) && RunDownSpinning(true, 3.0f, true, -2.0f) &&
                                    !RunDownSpinning(true, 0.4f, true, 0.0f) && !RunDownSpinning(true, NAN, true, 4.0f);
+                // the review of 180, S1 and S2: a clutch that is not locked gives no seconds; the weight is nothing at the
+                // threshold and whole from twice the truck's speed, and the held part goes by it
+                CutRun weighed = {};
+                CutRunStep(weighed, 0.9f, 0.9f, 1.0f, 10.0f, 1.0f, 1.0f, 1000, 7);
+                const float fromThr = 4.0f * kRunSpinShare + kRunSpinMore;
+                const bool shoulds = !RunDownAllowed(0.0f, false, false, true) && RunDownAllowed(0.0f, false, false, false) && RunDownWeight(true, fromThr, true, 4.0f) == 0.0f &&
+                                     RunDownWeight(true, 8.5f, true, 4.0f) == 1.0f && RunDownWeight(true, 30.0f, true, 4.0f) == 1.0f &&
+                                     Near(RunDownWeight(true, (fromThr + 8.5f) / 2.0f, true, 4.0f), 0.5f, 1e-5f) && RunDownWeight(true, 0.6f, true, 0.0f) == 1.0f &&
+                                     RunDownWeight(true, 0.5f, true, 0.0f) == 0.0f && RunDownWeight(false, 30.0f, true, 4.0f) == 0.0f && RunDownWeight(true, 30.0f, false, 4.0f) == 0.0f &&
+                                     RunDownWeight(true, NAN, true, 4.0f) == 0.0f && (RunDownWeight(true, 6.0f, true, 4.0f) > 0.0f) == RunDownSpinning(true, 6.0f, true, 4.0f) &&
+                                     Near(CutRunStep(weighed, -0.07f, 0.9f, 0.0f, 10.0f, 0.25f, 1.0f, 1016, 7), -0.07f + 0.97f * 0.25f, 1e-5f);
+                Check(shoulds, "run-down at a lift: a clutch that is not locked gives it no seconds; the wheels get nothing of it at the spinning threshold, half of it half way and all "
+                               "of it from twice the truck's speed, so one wheel slipping a little carries next to nothing on");
                 // the step: a lift from 0.9 to the engine's braking at -0.07, 1.0 s: a straight line by the clock
                 CutRun line = {};
                 bool wasPaced = false;
@@ -4962,7 +4975,7 @@ int main(int argc, char **argv)
                         CutSpeeds rsp = { wheel, wheel, wheel, wheel, wheel, true };
                         rsp.truck = wheel * truckShare, rsp.truckOk = true;
                         TorqueCutAnswer ra = TorqueCutAnswerOf(rs, 1.0f, -1.0f, 0.0f, 1e9f, 1.0f, 1.0f, rsp);
-                        ra.bracket = CutRunStep(rr, ra.bracket, used, rs.pedal, rs.map.top, RunDownSpinning(rsp.ok, rsp.mean, rsp.truckOk, rsp.truck), rs.runSeconds,
+                        ra.bracket = CutRunStep(rr, ra.bracket, used, rs.pedal, rs.map.top, RunDownWeight(rsp.ok, rsp.mean, rsp.truckOk, rsp.truck), rs.runSeconds,
                                                 (uint64_t)(1000.0f + at * 1000.0f), 7, &ra.running);
                         TorqueCutAnswerPaced(ra, 1.0f, used, 1.0f);
                         used = ra.used;

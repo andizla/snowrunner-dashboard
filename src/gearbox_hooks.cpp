@@ -2601,7 +2601,7 @@ __declspec(noinline) static bool HookGearTorque(void *vehicle, int gear, float *
         const float rate = response * pf;
         const float usedBefore = (uint64_t)g_riseVehicle == (uint64_t)(uintptr_t)vehicle ? BitsFloat(g_riseBits) : CutClamp01(slot.gamePull);
         // the run-down at a lift (180): a fall of the bracket paced by the clock while the driven wheels spin over the truck's speed
-        r.bracket = CutRunStep(g_cutRun, r.bracket, usedBefore, slot.pedal, slot.map.top, RunDownSpinning(sp.ok, sp.mean, sp.truckOk, sp.truck), slot.runSeconds, GetTickCount64(),
+        r.bracket = CutRunStep(g_cutRun, r.bracket, usedBefore, slot.pedal, slot.map.top, RunDownWeight(sp.ok, sp.mean, sp.truckOk, sp.truck), slot.runSeconds, GetTickCount64(),
                                (uint64_t)(uintptr_t)vehicle, &r.running);
         if (r.running) InterlockedIncrement(&g_runSteps);
         TorqueCutAnswerPaced(r, t, usedBefore, rate, kept);
