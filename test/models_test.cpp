@@ -5162,6 +5162,104 @@ int main(int argc, char **argv)
                             cap.vEnd, cap.kept, cap.cutsAfter);
             ok = ok && cap.wIn <= 2.9f * guard + 1e-4f && cap.cutsAfter == 0;
         }
+        // the gear ratio pull (BRIEF_jobs_1114.md, 161): the law's figures, the roof, the detour's step and the sketch
+        {
+            const float refA = 14.35f;
+            bool roofed = true;
+            const float f1 = GearRatioFactor(2.54f, refA, 1.0f, kRatioPullRoof, &roofed), f3 = GearRatioFactor(8.62f, refA, 1.0f), fTop = GearRatioFactor(refA, refA, 1.0f);
+            const bool figures = Near(f1, 1.406f, 0.002f) && !roofed && Near(f3, 1.1745f, 0.002f) && fTop == 1.0f && Near(GearRatioFactor(1.675f, refA, 1.0f), 1.507f, 0.002f);
+            const bool half = Near(GearRatioFactor(2.54f, refA, 0.5f), 1.0f + (f1 - 1.0f) * 0.5f, 1e-5f) && Near(GearRatioFactor(2.54f, refA, 7.0f), f1, 1e-6f);
+            // a gear so low that the law asks more than the roof: a of 0.5 against a reference of 30 asks 3.2
+            const float deep = GearRatioFactor(0.5f, 30.0f, 1.0f, kRatioPullRoof, &roofed);
+            const bool roof = deep == kRatioPullRoof && roofed && Near(GearRatioFactor(0.5f, 30.0f, 0.5f), 1.5f, 1e-5f) && GearRatioFactor(0.5f, 30.0f, 1.0f, 1.2f) == 1.2f;
+            // never under 1: H's own a above the reference's, and every a from 0.2 to 60 against every reference
+            bool never = GearRatioFactor(20.0f, refA, 1.0f, kRatioPullRoof, &roofed) == 1.0f && !roofed;
+            for (float gearA = 0.2f; gearA < 60.0f; gearA += 0.37f)
+                for (float topA = 0.2f; topA < 60.0f; topA += 1.3f)
+                    for (int sh = 0; sh <= 4; sh++)
+                    {
+                        const float f = GearRatioFactor(gearA, topA, sh / 4.0f);
+                        never = never && f >= 1.0f && f <= kRatioPullRoof && (sh || f == 1.0f);
+                    }
+            const bool none = GearRatioFactor(NAN, refA, 1.0f) == 1.0f && GearRatioFactor(2.54f, NAN, 1.0f) == 1.0f && GearRatioFactor(2.54f, refA, NAN) == 1.0f &&
+                              GearRatioFactor(0.0f, refA, 1.0f) == 1.0f && GearRatioFactor(2.54f, 0.0f, 1.0f) == 1.0f && GearRatioFactor(-3.0f, refA, 1.0f) == 1.0f &&
+                              GearRatioFactor(2.54f, refA, -1.0f) == 1.0f && GearRatioFactor(INFINITY, refA, 1.0f) == 1.0f;
+            Check(figures && half && roof && never && none,
+                  "gear ratio pull: the law's figures against a top gear of 14.35 (x1.406 at 2.54, x1.175 at 8.62, 1 at the reference), half way at 50, the roof and the flag, never "
+                  "under 1 over every a, reference and share, exactly 1 at a share of 0, and 1 where a figure is no number or not above 0");
+            // the law itself: with the game's T as the engine's over the root of max(0.5 a, 1), the torque times the game's top is the same in every gear at 100
+            bool law = true;
+            const float gears[4] = { 4.2f, 6.1f, 8.62f, 11.0f };
+            for (int i = 0; i < 4; i++)
+            {
+                const float tGame = 1000.0f / sqrtf(fmaxf(0.5f * gears[i], 1.0f)), tRef = 1000.0f / sqrtf(0.5f * refA);
+                law = law && Near(tGame * GearRatioFactor(gears[i], refA, 1.0f) * (2.0f * gears[i] + 5.0f), tRef * (2.0f * refA + 5.0f), 0.05f);
+            }
+            // must 1: at 0 the detour's step writes neither the torque nor the slot
+            TorqueCutSlot base = u.slot;
+            base.map.load = 0.08f, base.floor = 0.12f, base.ratioRefA = refA, base.ratioShare = 0.0f;
+            TorqueCutSlot atZero = base;
+            float tOff = 257000.37f;
+            const float fOff = GearRatioApply(atZero, tOff, 2.54f);
+            const bool asBefore = fOff == 1.0f && tOff == 257000.37f && !memcmp(&atZero, &base, sizeof atZero);
+            // must 2: at 100 the air drag and the creep's floor are the same force, and the engine's braking grows by the factor
+            TorqueCutSlot on = base;
+            on.ratioShare = 1.0f;
+            float tOn = 257000.0f;
+            const float fOn = GearRatioApply(on, tOn, 2.54f, &roofed);
+            const bool forces = Near(fOn, f1, 1e-6f) && Near(tOn, 257000.0f * f1, 1.0f) && Near(on.map.load * tOn, base.map.load * 257000.0f, 1.0f) &&
+                                Near(on.floor * tOn, base.floor * 257000.0f, 1.0f);
+            TorqueCutSlot lift = base, liftOn = base;
+            lift.map.load = liftOn.map.load = 0.0f, lift.floor = liftOn.floor = 0.0f, lift.map.pedal = liftOn.map.pedal = 0.0f, lift.pedal = liftOn.pedal = 0.0f;
+            liftOn.ratioShare = 1.0f;
+            float tLift = 257000.0f;
+            GearRatioApply(liftOn, tLift, 2.54f);
+            const CutSpeeds rolling = { 2.0f, 2.0f, 2.0f, 2.0f, 2.0f, true };
+            const TorqueCutAnswer brake0 = TorqueCutAnswerOf(lift, 257000.0f, 0.0f, 2.54f, 10.08f, 1.0f, 1.0f, rolling);
+            const TorqueCutAnswer brake1 = TorqueCutAnswerOf(liftOn, tLift, 0.0f, 2.54f, 10.08f, 1.0f, 1.0f, rolling);
+            const bool braking = brake0.torque < 0.0f && Near(brake1.torque, brake0.torque * f1, fabsf(brake0.torque) * 1e-4f);
+            // a shift 2 to 3 at 100: each step is its own gear's, by the a the game answers for
+            TorqueCutSlot shift = on;
+            float t2 = 1000.0f / sqrtf(0.5f * 6.1f), t3 = 1000.0f / sqrtf(0.5f * 8.62f);
+            const float g2 = GearRatioApply(shift, t2, 6.1f);
+            shift = on;
+            const float g3 = GearRatioApply(shift, t3, 8.62f);
+            const bool shiftOk = g2 > g3 && Near(g3, f3, 1e-6f) && Near(t2 * (2.0f * 6.1f + 5.0f), t3 * (2.0f * 8.62f + 5.0f), 0.05f);
+            Check(law && asBefore && forces && braking && shiftOk,
+                  "gear ratio pull: at 100 the torque times the game's top is the same in every gear; at 0 the detour's step leaves the torque and the slot bit for bit; at 100 the "
+                  "air drag and the creep's floor stay the same force and the engine's braking grows by the factor; a shift from 2 to 3 takes each step's factor from its own gear");
+            // must 5, the sketch: the scout with a wheel free and on a road in L- under the guard, at 0 and at the roof. The
+            // wheel handed to the ground never passes the ceiling, and on a free wheel the cap keeps a smaller share of the larger push
+            char pullLine[900];
+            int pl = snprintf(pullLine, sizeof pullLine, "gear ratio pull, the sketch (L-, the guard at %.2f x the top 2.9):", guard);
+            bool pullOk = true;
+            for (int c = 0; c < 3; c += 2)
+            {
+                SimSetup p = u;
+                p.freeWheels = cases[c].free;
+                p.ground = cases[c].ground;
+                p.cap = guard;
+                p.governTruck = true;
+                p.drive = cases[c].drive;
+                const SimResult at0 = SimRun(p);
+                p.slot.ratioRefA = 30.0f, p.slot.ratioShare = 1.0f;
+                const float pf = GearRatioApply(p.slot, p.drive, 0.5f);
+                const SimResult at100 = SimRun(p);
+                pl += snprintf(pullLine + pl, sizeof pullLine - pl, " %s: at 0 into the ground at most %.3f, kept %.3f, the truck %.2f; at x%.1f: %.3f, kept %.3f, the truck %.2f;",
+                               cases[c].name, at0.wIn / 2.9f, at0.kept, at0.vEnd, pf, at100.wIn / 2.9f, at100.kept, at100.vEnd);
+                pullOk = pullOk && pf == kRatioPullRoof && at100.wIn <= 2.9f * guard + 1e-4f && at0.wIn <= 2.9f * guard + 1e-4f && at100.cutsAfter == 0;
+                if (cases[c].free) pullOk = pullOk && at100.kept < at0.kept;
+            }
+            // the stand-in for B4's readers follows the kept share (the fuel's side stays the game's rule)
+            TorqueCutAnswer keptMore = {}, keptLess = {};
+            keptMore.bracket = keptLess.bracket = 1.0f;
+            TorqueCutAnswerPaced(keptMore, 1000.0f, 1.0f, 1.0f, 0.8f);
+            TorqueCutAnswerPaced(keptLess, 2000.0f, 1.0f, 1.0f, 0.4f);
+            pullOk = pullOk && keptLess.standIn < keptMore.standIn && Near(keptLess.standIn, keptMore.standIn * 0.5f, 1e-4f);
+            puts(pullLine);
+            Check(pullOk, "gear ratio pull, the sketch: with the push doubled the wheel handed to the ground never passes the guard's ceiling, a free wheel keeps a smaller share, "
+                          "the stand-in follows the kept share, and no fall of the bracket");
+        }
         // a numbered gear (no guard), a free wheel, floored, the fade on the truck's speed: the curve's tail is the limit
         // (the review of bc224bf, M1). 2nd with a top of 10 rad/s and the scout's kick; against the governor on the wheels
         // (618410d's). The bound: no worse than 618410d by a tenth, no falls; the review's 1.2 x the needle's stop is said

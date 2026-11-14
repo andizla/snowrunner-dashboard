@@ -365,6 +365,9 @@ struct TorqueCutSlot
     // the tick of the lock; fallAt 0: none
     float fallFrom, fallPedal;
     uint64_t fallAt;
+    // the gear ratio pull (GearRatioFactor): the tool's share, 0 to 1, and the reference gear's a. The share is 0 in
+    // any position but a held one that is not H (by the position, on the mod's thread: must 3), so in A, in N and in H
+    float ratioShare, ratioRefA;
     float capWide; // the low range's wider cap for L-, L and R (LowRangeCap, CapCeilingWide), in the wheels' measure; 0 none. cap stays the gear's own
     TorqueCutMap map;
     int diff; // the differential's type for this truck (DiffTypeOf, on the mod's thread)
@@ -587,6 +590,52 @@ inline void TorqueCutAnswerPaced(TorqueCutAnswer &r, float stock, float usedBefo
     r.used = CutRise(usedBefore, r.bracket, rate);
     r.torque = isfinite(stock) ? stock * r.used : 0.0f;
     r.standIn = TorqueCutStandIn(r.used) * (isfinite(kept) ? CutClamp01(kept) : 1.0f);
+}
+
+// ---- the gear ratio pull (BRIEF_jobs_1114.md, "161, the choice": C, and the Reviewer's addendum of 00:25) ----
+// The game's gear torque falls slower over the gears than a gearbox's ratio does: it is the engine's torque over the
+// root of max(0.5 a, 1), where a is the gear's own figure, while the ratio goes as 1 over the gear's top, 2a + 5. So
+// against its top gear the game's low gears are short of what a real gearbox would give. This is the factor that takes
+// a gear's torque toward the ratio's, held to the reference gear: T(ref) x top(ref) / top(a), over the game's T(a).
+// The reference is the highest numbered gear the gearbox offers, never H. Never under 1: it adds, it never takes. Never
+// over the roof (the lead's ruling: 2.0, the figure the converter's stall has), and share (0 to 1, the tuning tool's
+// Gear ratio pull over 100) runs in a straight line from 1 to that. 1 where a figure is no number or not above 0 and
+// at a share of 0, exactly, so a build with the slider at 0 hands the game's own figure bit for bit. The tops are the
+// game's own, 2a + 5, not the mod's: those can be learned and carry the power factor, and a torque law should not move
+// with a learner. roofed: the roof held it.
+static const float kRatioPullRoof = 2.0f;
+inline float GearRatioFactor(float a, float refA, float share, float roof = kRatioPullRoof, bool *roofed = nullptr)
+{
+    if (roofed) *roofed = false;
+    if (!isfinite(a) || !isfinite(refA) || !isfinite(share) || !(a > 0.0f) || !(refA > 0.0f) || !(share > 0.0f)) return 1.0f;
+    float full = sqrtf(fmaxf(0.5f * a, 1.0f)) / sqrtf(fmaxf(0.5f * refA, 1.0f)) * (2.0f * refA + 5.0f) / (2.0f * a + 5.0f);
+    if (!isfinite(full) || !(full > 1.0f)) return 1.0f;
+    if (roof > 1.0f && full > roof)
+    {
+        full = roof;
+        if (roofed) *roofed = true;
+    }
+    return 1.0f + (full - 1.0f) * CutClamp01(share);
+}
+// The slot under the factor (must 2): the air drag's share and the creep's floor are shares of the gear's torque, so a
+// larger torque would make them larger forces. Both are divided by the factor and stay the same force. The engine's
+// braking is left to grow: it does go through the gear's ratio on a real truck. A factor of 1 changes nothing.
+// (TorqueCutSlot is declared further down: a template keeps this beside the factor's rule.)
+template <class Slot> inline void GearRatioSlot(Slot &slot, float factor)
+{
+    if (!(factor > 1.0f) || !isfinite(factor)) return;
+    if (slot.map.load > 0.0f) slot.map.load /= factor;
+    if (slot.floor > 0.0f) slot.floor /= factor;
+}
+// The detour's one step: the game's torque t for the gear whose figure is a, scaled by that gear's own factor, and the
+// slot with it. Returns the factor. At a factor of 1 neither t nor the slot is written, so both stay bit for bit.
+template <class Slot> inline float GearRatioApply(Slot &slot, float &t, float a, bool *roofed = nullptr)
+{
+    const float factor = GearRatioFactor(a, slot.ratioRefA, slot.ratioShare, kRatioPullRoof, roofed);
+    if (factor == 1.0f) return 1.0f;
+    t *= factor;
+    GearRatioSlot(slot, factor);
+    return factor;
 }
 
 // Whether a pass's over-rev share counts: only where the map went out and the drive answered since the last pass, and
