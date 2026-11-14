@@ -461,12 +461,14 @@ struct TruckListSeen
 {
     int list, count;
     bool unread;
+    bool found; // the list was found in the exe (its place not 0): a read of it that failed may go through a step later
 };
 inline bool TruckStillThere(const TruckMemory &m, uint64_t oldVehicle, const TruckIdentity &old, uint64_t newVehicle, uint64_t list, TruckThere &o,
                             TruckListSeen *seen = nullptr)
 {
     truckid::StillThere([&m](uint64_t at, void *out, size_t size) { return m.peek(at, out, size); }, oldVehicle, old.key, old.id, newVehicle, o);
     TruckListSeen s = {};
+    s.found = list != 0;
     s.list = TruckInList(m, list, oldVehicle, s.count);
     // the id's read itself: the vehicle's pointer to its text and the text; a pointer of 0 (a cleared block) is read
     uint64_t chars = 0;
@@ -496,10 +498,13 @@ inline std::wstring TruckThereWords(const TruckThere &o, const TruckListSeen &s,
 // How long a "there" by the list is asked again (BRIEF_tester_1114.md, part 198, the addendum's point 5): the garage's
 // order is not known, so the new vehicle may be built before the old one is destroyed. From kThereAskFrom after the new
 // truck came, once a second, until kThereAskMs: taken over once the old vehicle has left the list. A "gone" is final.
+// A list found but not read (the game moving the vector at that moment, as a garage's new vehicle pushes into it) is
+// asked again the same way (the second read of 198, S1); a list not found in the exe is final.
 static const unsigned long long kThereAskFrom = 2000, kThereAskMs = 15000, kThereAskEvery = 1000;
 inline bool ThereAskAgain(const TruckListSeen &s, bool there, unsigned long long since, unsigned long long now)
 {
-    return there && s.list == kListIn && !s.unread && now - since < kThereAskMs;
+    const bool ask = (s.list == kListIn && !s.unread) || (s.list == kListUnread && s.found);
+    return there && ask && now - since < kThereAskMs;
 }
 
 // The driven truck from pass to pass. taken is the truck the mod goes by, its key "" while none is read. Another

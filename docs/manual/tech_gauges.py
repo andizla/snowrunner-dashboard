@@ -1368,7 +1368,8 @@ or <code>vehicles: the game's list of live vehicles not</code> found, and then n
 at its constructor's end and takes itself out at its destructor's start. The old truck is there when its vehicle is an entry and reads
 its own id and kind, whatever its body, world or mass: a truck parked far away is out of the physics but still an entry, and a
 destroyed one is no entry though its memory may still read its id. A vehicle the game reused for the new truck (the same vehicle or the
-same chassis body) is gone. A list that will not read (or is over 4096 entries), or an entry whose id will not read, is no take-over.
+same chassis body) is gone. A list that will not read (or is over 4096 entries), or an entry whose id will not read, is no take-over; a
+list found but not read at that moment (the game may be moving it) is asked again as a "there" is.
 A "there" is asked again once a second from 2 s to 15 s after the new truck came, since the garage may build the new vehicle before it
 destroys the old one; once the old vehicle leaves the list the take-over is made then (<code>suspension: the take-over asked again</code>
 ... has left the game's list), and at 15 s it is another truck (<code>suspension: the take-over asked again for</code> 15 s). A "gone" is final. The match line and the

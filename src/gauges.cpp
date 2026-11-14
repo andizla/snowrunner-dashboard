@@ -11600,7 +11600,8 @@ static DWORD WINAPI Run(void *)
                 else _snwprintf_s(listWords, _TRUNCATE, L"%s of the game's %d vehicles", thereSeen.list == kListIn ? L"one" : L"not one", thereSeen.count);
                 Log(L"suspension: the take-over check: the old truck %S's vehicle %p reads %S (kind %S), %s, its chassis body %p in world %p (the new truck's %p): %s",
                     thereId, (void *)thereVehicle, there.id[0] ? there.id : "no id", there.kind[0] ? there.kind : "none", listWords, (void *)there.body, (void *)there.world,
-                    (void *)there.newWorld, thereSeen.unread ? L"not read, not taken over" : there.there ? L"another truck, not taken over; asked again for 15 s" : L"gone, taken over");
+                    (void *)there.newWorld, thereSeen.unread ? (ThereAskAgain(thereSeen, there.there, 0, 0) ? L"not read, not taken over; asked again for 15 s" : L"not read, not taken over")
+                    : there.there ? L"another truck, not taken over; asked again for 15 s" : L"gone, taken over");
             }
             // still one of the game's vehicles: the take-over is asked again (point 5); another truck taken ends it
             takeAsk = {};

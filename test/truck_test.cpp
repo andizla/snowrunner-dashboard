@@ -8622,11 +8622,13 @@ static void TruckTestsNine()
         const bool later = first && TruckInList(kMemory, list, v1, count) == kListGone && count == 2;
         listOf(3, true);
         // a list not read (not found, its place not readable, too long, not whole entries, the end under the begin): no take-over, said so
-        const bool noList = TruckStillThere(kMemory, v1, old, v2, 0, o, &seen) && seen.unread && seen.list == kListUnread &&
+        const bool noList = TruckStillThere(kMemory, v1, old, v2, 0, o, &seen) && seen.unread && seen.list == kListUnread && !seen.found && !ThereAskAgain(seen, true, 0, 3000) &&
                             TruckThereWords(o, seen, oldId, "test_kind").find(L"not read: no take-over") != std::wstring::npos;
         const bool unreadPlace = TruckStillThere(kMemory, v1, old, v2, 0x9800000, o, &seen) && seen.unread;
         Put(list + 8, entries + (kVehicleListMost + 1) * 8);
-        const bool tooLong = TruckStillThere(kMemory, v1, old, v2, list, o, &seen) && seen.unread && !ThereAskAgain(seen, true, 0, 3000);
+        // found but not read (S1 of the second read): asked again like a "there", until 15 s
+        const bool tooLong = TruckStillThere(kMemory, v1, old, v2, list, o, &seen) && seen.unread && seen.found && ThereAskAgain(seen, true, 0, 3000) &&
+                             !ThereAskAgain(seen, true, 0, kThereAskMs);
         Put(list + 8, entries + 12);
         const bool notWhole = TruckInList(kMemory, list, v1, count) == kListUnread;
         Put(list + 8, entries - 8);
@@ -8655,7 +8657,7 @@ static void TruckTestsNine()
         Check(all, "take-over check: the old truck is there as one of the game's list of vehicles with its id and kind, also out of the world or with no chassis "
                    "read (parked far away); gone when it is not one (destroyed, its memory still read), with another id or kind, or reused for the new truck; "
                    "there at first and gone a pass later is asked again and taken; a list not read, too long or not whole, or an id that does not read is no take-over "
-                   "and says so; a kind not named is never there");
+                   "and says so; a list found but not read is asked again, one not found is final; a kind not named is never there");
     }
     // the game's list of live vehicles found by its push: the three displacements agree, or it is not found
     {
