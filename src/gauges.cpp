@@ -846,6 +846,7 @@ static void WriteIni(const GaugeSettings &s)
     whole(L"LockSteerRear", s.lockSteerRear);
     whole(L"EngineSoundTop", s.engineSoundTop);
     whole(L"GearRatioPull", s.gearRatioPull);
+    whole(L"EngineInertia", s.engineInertia);
     whole(L"EngineSoundCurve", s.engineSoundCurve);
     whole(L"DiffType", s.diffType);
     whole(L"ModEngineSpeed", s.modEngineSpeed ? 1 : 0);
@@ -1384,6 +1385,7 @@ static void ReadIni(GaugeSettings &s)
     s.lockSteerRear = IniInt(L"LockSteerRear", s.lockSteerRear, ini);
     s.engineSoundTop = IniInt(L"EngineSoundTop", s.engineSoundTop, ini);
     s.gearRatioPull = IniInt(L"GearRatioPull", s.gearRatioPull, ini);
+    s.engineInertia = IniInt(L"EngineInertia", s.engineInertia, ini);
     s.engineSoundCurve = IniInt(L"EngineSoundCurve", s.engineSoundCurve, ini);
     s.diffType = IniInt(L"DiffType", s.diffType, ini);
     s.engineBrake = IniFloat(L"EngineBrake", s.engineBrake, ini); // CrawlHold= is read no more: the torque cut took its place
@@ -5597,6 +5599,9 @@ static void LogSettings(const GaugeSettings &s)
         if (s.cutInA)
             Log(L"settings: CutInA=1, a test: in A the torque cut answers too, at Gearbox=1 and 2, %s", TorqueCutWanted(s) ? L"and its settings are met" : L"but its other settings are not met (Powertrain, ModEngineSpeed, EngineShare above 0, Gearbox 1 or 2)");
         Log(L"settings: diff lock bite %d (DiffLockBite; 0 the game's lock, 100 one shaft), the differential's type %d (DiffType; 0 Auto, 1 Open, 2 Limited slip, 3 Locked), low range slip %d (LowRangeSlip; 0 the gear's own wheel cap in L-, L and R, 100 the cap of the highest low gear)", s.diffLockBite, s.diffType, s.lowRangeSlip);
+        if (s.engineInertia != 0)
+            Log(L"engine inertia: %d percent (EngineInertia, a figure of the tuning tool; 0 the game's own): where the torque cut answers, spinning wheels run on after a lift for %.2f s in the "
+                L"first gear and less in a higher one; not with the brake or the handbrake on, and not on gripping wheels", s.engineInertia, kRunDownMost * s.engineInertia / 100.0f);
         if (s.gearRatioPull != 0)
             Log(L"gear ratio pull: %d percent (GearRatioPull, a figure of the tuning tool; 0 the game's own): a gear held by hand gets more torque the lower it is, toward a gearbox's ratio held to the "
                 L"highest numbered gear, at most x%.1f; the fuel stays the game's", s.gearRatioPull, kRatioPullRoof);
@@ -6283,6 +6288,8 @@ static TorqueCutSlot TorqueCutSlotOf(const TruckWatch &w, const TruckRaw &raw, c
     c.pushBack = 1.0f - (float)s.pushShare / 100.0f;
     if (converter) c.scalar = locked ? 0.0f : ConverterOpenF(c.map, w.gearbox.input, w.gearbox.rpm, w.gearbox.ratio, kStallRatio);
     // part B: open, the detour works F out from this step's wheels; the scalar above stays for a step whose wheels were not read
+    // the run-down at a lift (180): the seconds for this gear; none with the brake or the handbrake on or a shift out (must 3)
+    c.runSeconds = RunDownAllowed(TruckBrake(raw), raw.handbrake != 0, raw.gear != raw.gearEngaged) ? RunDownSeconds(s.engineInertia, gearTop, firstTop) : 0.0f;
     c.convOpen = converter && !locked;
     c.convStall = w.gearbox.stallNow, c.convRise = w.gearbox.riseNow;
     // the gear ratio pull (161, must 3): by the position, a held one that is not H; 0 in A, in N and in H. The
@@ -9552,6 +9559,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                     HeldSlipProbe(slipWords, sizeof slipWords, s.heldGearSlip, GearboxPosNumbered(w.pos.pos) && cutActs ? w.slip.inForce : s.heldGearSlip);
                     Log(L"probe: held gear slip: %S; in %S the cap is %.2f rad/s (0 none) and the ceiling %.2f rad/s", slipWords, GearboxPosName(w.pos.pos), w.slotCap, w.slotCap > 0.0f ? cap.ceiling : 0.0f);
                 }
+                if (cutActs && s.engineInertia)
+                    Log(L"probe: engine inertia: %d percent, %.2f s in the first gear and less in a higher one (none with the brake or the handbrake on or a shift out); steps held up by the "
+                        L"run-down %ld since the last line", s.engineInertia, kRunDownMost * s.engineInertia / 100.0f, c.runSteps - before.runSteps);
                 if (cutActs)
                 {
                     // 161, must 8: the game's T, a, the game's top and the mod's, the reference gear and its a, the factor, the roof, the torque handed
@@ -11981,7 +11991,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.overRevDamage == b.overRevDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
            a.springFront == b.springFront && a.dampingFront == b.dampingFront && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.checkers == b.checkers && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.hiddenWarnings == b.hiddenWarnings && a.warnFuel == b.warnFuel && a.warnEngine == b.warnEngine && a.warnGearbox == b.warnGearbox && a.warnCoolant == b.warnCoolant && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
-           a.oilGauge == b.oilGauge && a.cutInA == b.cutInA && a.gearRatioPull == b.gearRatioPull && a.winchSag == b.winchSag && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.quickWinch == b.quickWinch && a.lockSteerFront == b.lockSteerFront && a.lockSteerRear == b.lockSteerRear && a.engineSoundTop == b.engineSoundTop && a.engineSoundCurve == b.engineSoundCurve && a.heldGearSlip == b.heldGearSlip && a.lowRangeSlip == b.lowRangeSlip && a.diffType == b.diffType && a.physicsRate == b.physicsRate && a.engineBrake == b.engineBrake && a.winchOutRate == b.winchOutRate && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
+           a.oilGauge == b.oilGauge && a.cutInA == b.cutInA && a.gearRatioPull == b.gearRatioPull && a.engineInertia == b.engineInertia && a.winchSag == b.winchSag && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.quickWinch == b.quickWinch && a.lockSteerFront == b.lockSteerFront && a.lockSteerRear == b.lockSteerRear && a.engineSoundTop == b.engineSoundTop && a.engineSoundCurve == b.engineSoundCurve && a.heldGearSlip == b.heldGearSlip && a.lowRangeSlip == b.lowRangeSlip && a.diffType == b.diffType && a.physicsRate == b.physicsRate && a.engineBrake == b.engineBrake && a.winchOutRate == b.winchOutRate && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
            a.camberGainFront == b.camberGainFront && a.camberGainRear == b.camberGainRear && a.camberRestFront == b.camberRestFront && a.camberRestRear == b.camberRestRear &&
            !memcmp(a.diffAxle, b.diffAxle, sizeof a.diffAxle) && a.airBrakes == b.airBrakes;
 }
@@ -12381,6 +12391,7 @@ static void PartIni()
     c.lockSteerRear = 70;
     c.engineSoundTop = 60, c.engineSoundCurve = 180;
     c.gearRatioPull = 50;
+    c.engineInertia = 40;
     c.lowRangeSlip = 40;
     c.heldGearSlip = 1;
     c.diffType = 2;
@@ -12405,7 +12416,7 @@ static void PartIni()
                             c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.overRevDamage != d.overRevDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springFront != d.springFront && c.dampingFront != d.dampingFront && c.extraTravel != d.extraTravel && c.frameFlex != d.frameFlex && c.twistRange != d.twistRange && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
                             c.demo != d.demo && c.checkers != d.checkers && c.probe != d.probe && c.keepLogs != d.keepLogs && c.soundVolume != d.soundVolume && c.hiddenWarnings != d.hiddenWarnings && c.warnFuel != d.warnFuel && c.warnEngine != d.warnEngine && c.warnGearbox != d.warnGearbox && c.warnCoolant != d.warnCoolant && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
-                            c.gearbox != d.gearbox && c.cutInA != d.cutInA && !d.cutInA && c.gearRatioPull != d.gearRatioPull && d.gearRatioPull == 0 && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.diffLockBite != d.diffLockBite && c.quickWinch != d.quickWinch && c.lockSteerFront != d.lockSteerFront && c.lockSteerRear != d.lockSteerRear && c.engineSoundTop != d.engineSoundTop && c.engineSoundCurve != d.engineSoundCurve && c.heldGearSlip != d.heldGearSlip && c.lowRangeSlip != d.lowRangeSlip && c.diffType != d.diffType && c.physicsRate != d.physicsRate && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
+                            c.gearbox != d.gearbox && c.cutInA != d.cutInA && !d.cutInA && c.gearRatioPull != d.gearRatioPull && d.gearRatioPull == 0 && c.engineInertia != d.engineInertia && d.engineInertia == 0 && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.diffLockBite != d.diffLockBite && c.quickWinch != d.quickWinch && c.lockSteerFront != d.lockSteerFront && c.lockSteerRear != d.lockSteerRear && c.engineSoundTop != d.engineSoundTop && c.engineSoundCurve != d.engineSoundCurve && c.heldGearSlip != d.heldGearSlip && c.lowRangeSlip != d.lowRangeSlip && c.diffType != d.diffType && c.physicsRate != d.physicsRate && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
     WriteIni(c);
     ReadIni(b);
     Check(allChanged, "ini: the test changes every setting from its default");
@@ -15006,7 +15017,7 @@ static void PartRest()
         static NgTuneSeen seen;
         NgTuneItem items[kGtItems];
         const int count = GtItems(items);
-        bool listed = count == 12 && NgTuneSetUp(block, sizeof block, "Gameplay", 1, items, count) && NgTuneRead(block, sizeof block, seen) && seen.count == 12 &&
+        bool listed = count == 13 && NgTuneSetUp(block, sizeof block, "Gameplay", 1, items, count) && NgTuneRead(block, sizeof block, seen) && seen.count == 13 &&
                       !strcmp(seen.mod, "Gameplay") && !strcmp(seen.e[kGtCap].name, "Wheel cap") && seen.e[kGtCap].least == 110.0f && seen.e[kGtCap].most == 200.0f &&
                       seen.e[kGtCap].def == 150.0f && seen.e[kGtLowSlip].def == 100.0f && seen.e[kGtBite].def == 0.0f && seen.e[kGtPush].most == 100.0f &&
                       !strcmp(seen.e[0].group, "Powertrain");

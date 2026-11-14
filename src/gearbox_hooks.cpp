@@ -2457,7 +2457,8 @@ static volatile LONG64 g_riseVehicle = 0;
 static volatile LONG64 g_cutAnswerVehicle = 0; // the vehicle of the last answer (TorqueCutCounts::vehicle)
 static volatile LONG g_riseBits = 0, g_cutUsed = 0, g_cutRate = 0, g_cutTruck = 0x7FC00000; // a quiet NaN: not read
 // the learner's totals under the cut (CutLearnTotals): written by the drive's thread alone, read by the mod's
-static volatile LONG g_ratioFactor = 0x3F800000, g_ratioA = 0, g_ratioRoofed = 0, g_ratioHeld = 0, g_convEngine = 0; // the last answer's gear ratio pull (1.0f: none)
+static volatile LONG g_ratioFactor = 0x3F800000, g_ratioA = 0, g_ratioRoofed = 0, g_ratioHeld = 0, g_convEngine = 0, g_runSteps = 0;
+static CutRun g_cutRun = {}; // the run-down at a lift: the game's thread alone reads and writes it // the last answer's gear ratio pull (1.0f: none)
 static volatile LONG64 g_learnSumBits = 0;
 static volatile LONG g_learnN = 0, g_learnBad = 0;
 static double LearnSum()
@@ -2599,6 +2600,10 @@ __declspec(noinline) static bool HookGearTorque(void *vehicle, int gear, float *
         // the game's own pull at that step (S1)
         const float rate = response * pf;
         const float usedBefore = (uint64_t)g_riseVehicle == (uint64_t)(uintptr_t)vehicle ? BitsFloat(g_riseBits) : CutClamp01(slot.gamePull);
+        // the run-down at a lift (180): a fall of the bracket paced by the clock while the driven wheels spin over the truck's speed
+        r.bracket = CutRunStep(g_cutRun, r.bracket, usedBefore, slot.pedal, slot.map.top, RunDownSpinning(sp.ok, sp.mean, sp.truckOk, sp.truck), slot.runSeconds, GetTickCount64(),
+                               (uint64_t)(uintptr_t)vehicle, &r.running);
+        if (r.running) InterlockedIncrement(&g_runSteps);
         TorqueCutAnswerPaced(r, t, usedBefore, rate, kept);
         InterlockedExchange(&g_riseBits, FloatBits(r.used));
         InterlockedExchange64(&g_riseVehicle, (LONG64)(uintptr_t)vehicle);
@@ -2741,6 +2746,7 @@ void TorqueCutCountsGet(TorqueCutCounts &out)
     out.ratioRoofed = g_ratioRoofed != 0;
     out.ratioHeld = g_ratioHeld != 0;
     out.convEngine = BitsFloat(g_convEngine);
+    out.runSteps = g_runSteps;
 }
 
 void TorqueCutLearnGet(CutLearnTotals &out)

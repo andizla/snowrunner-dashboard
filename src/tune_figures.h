@@ -16,7 +16,7 @@
 #include "ng_tune.h"
 #include "gearbox_model.h"
 
-enum { kGtBite, kGtCap, kGtPush, kGtLowSlip, kGtHeldSlip, kGtSteerFront, kGtSteerRear, kGtSoundTop, kGtSoundCurve, kGtRatioPull, kGtCount }; // the figures; after them the lines to read
+enum { kGtBite, kGtCap, kGtPush, kGtLowSlip, kGtHeldSlip, kGtSteerFront, kGtSteerRear, kGtSoundTop, kGtSoundCurve, kGtRatioPull, kGtEngineInertia, kGtCount }; // the figures; after them the lines to read
 enum { kGtHeldLine = kGtCount, kGtSteerLine, kGtItems };
 struct GtInfo { const char *key, *name, *tip; float least, most, def; };
 static const char kGtGroup[] = "Powertrain";
@@ -32,11 +32,12 @@ static const GtInfo kGt[kGtCount] = {
     { "EngineSoundTop", "Engine sound top", "How high the engine sound is at the start of the red zone, in percent of its top note. Lower it if it sounds too fast.", 40.0f, 100.0f, 100.0f },
     { "EngineSoundCurve", "Engine sound curve", "How the engine sound rises with the revs. 100 is straight. 180 bends as the pedal does: slow at first, fast near the top.", 100.0f, 300.0f, 100.0f },
     { "GearRatioPull", "Gear ratio pull", "More pull in the low gears held by hand. 0 is the game. The engine braking of a low gear grows with it. The fuel does not.", 0.0f, 100.0f, 0.0f },
+    { "EngineInertia", "Engine inertia", "How long spinning wheels run on after the foot comes off, as an engine and driveline keep them turning. 0 is the game.", 0.0f, 100.0f, 0.0f },
 };
 inline int *GtField(GaugeSettings &s, int i)
 {
     return i == kGtBite ? &s.diffLockBite : i == kGtCap ? &s.wheelCap : i == kGtPush ? &s.pushShare : i == kGtHeldSlip ? &s.heldGearSlip : i == kGtSteerFront ? &s.lockSteerFront :
-           i == kGtSteerRear ? &s.lockSteerRear : i == kGtSoundTop ? &s.engineSoundTop : i == kGtSoundCurve ? &s.engineSoundCurve : i == kGtRatioPull ? &s.gearRatioPull : &s.lowRangeSlip;
+           i == kGtSteerRear ? &s.lockSteerRear : i == kGtSoundTop ? &s.engineSoundTop : i == kGtSoundCurve ? &s.engineSoundCurve : i == kGtRatioPull ? &s.gearRatioPull : i == kGtEngineInertia ? &s.engineInertia : &s.lowRangeSlip;
 }
 
 inline int GtItems(NgTuneItem *items)

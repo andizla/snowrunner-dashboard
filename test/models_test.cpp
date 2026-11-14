@@ -4869,6 +4869,120 @@ int main(int argc, char **argv)
                       "torque cut in A, a shift from 1 to 2 floored in the 60 Hz sketch: made locked and made open no step of the bracket is over 0.15, the pull never changes its "
                       "sign, and the thread's scalar never reaches the wheels");
             }
+            // the run-down at a lift (BRIEF_drive_1114_findings.md, part 180, the seven musts)
+            {
+                // the seconds: the tool's figure over 100 times 2.0 s in the first gear, less by the tops' ratio squared above it
+                const bool secs = RunDownSeconds(100, 10.0f, 10.0f) == kRunDownMost && RunDownSeconds(50, 10.0f, 10.0f) == 1.0f && Near(RunDownSeconds(100, 20.0f, 10.0f), 0.5f, 1e-6f) &&
+                                  RunDownSeconds(100, 5.0f, 10.0f) == kRunDownMost && RunDownSeconds(0, 10.0f, 10.0f) == 0.0f && RunDownSeconds(-3, 10.0f, 10.0f) == 0.0f &&
+                                  RunDownSeconds(400, 10.0f, 10.0f) == kRunDownMost && RunDownSeconds(100, NAN, 10.0f) == 0.0f && RunDownSeconds(100, 0.0f, 10.0f) == 0.0f &&
+                                  RunDownSeconds(100, 20.0f, NAN) == kRunDownMost;
+                const bool gates = RunDownAllowed(0.0f, false, false) && !RunDownAllowed(0.3f, false, false) && !RunDownAllowed(0.0f, true, false) && !RunDownAllowed(0.0f, false, true) &&
+                                   !RunDownAllowed(NAN, false, false) && RunDownSpinning(true, 12.0f, true, 4.0f) && !RunDownSpinning(true, 4.5f, true, 4.0f) &&
+                                   !RunDownSpinning(false, 12.0f, true, 4.0f) && !RunDownSpinning(true, 12.0f, false, 4.0f) && RunDownSpinning(true, 3.0f, true, -2.0f) &&
+                                   !RunDownSpinning(true, 0.4f, true, 0.0f) && !RunDownSpinning(true, NAN, true, 4.0f);
+                // the step: a lift from 0.9 to the engine's braking at -0.07, 1.0 s: a straight line by the clock
+                CutRun line = {};
+                bool wasPaced = false;
+                bool rule = CutRunStep(line, 0.9f, 0.9f, 1.0f, 10.0f, true, 1.0f, 1000, 7, &wasPaced) == 0.9f && !wasPaced; // floored: nothing
+                rule = rule && Near(CutRunStep(line, -0.07f, 0.9f, 0.0f, 10.0f, true, 1.0f, 1016, 7, &wasPaced), 0.9f, 1e-6f) && wasPaced;
+                rule = rule && Near(CutRunStep(line, -0.07f, 0.8f, 0.0f, 10.0f, true, 1.0f, 1516, 7, &wasPaced), -0.07f + 0.97f * 0.5f, 1e-4f) && wasPaced;
+                rule = rule && CutRunStep(line, -0.07f, 0.4f, 0.0f, 10.0f, true, 1.0f, 2016, 7, &wasPaced) == -0.07f && !wasPaced && !line.at;
+                rule = rule && CutRunStep(line, -0.07f, -0.07f, 0.0f, 10.0f, true, 1.0f, 2032, 7, &wasPaced) == -0.07f && !wasPaced; // done: no second start
+                // the same at 60 and at 120 steps a second: the line by the clock at the same instants
+                bool rates = true;
+                {
+                    CutRun at60 = {}, at120 = {};
+                    CutRunStep(at60, 0.9f, 0.9f, 1.0f, 10.0f, true, 1.0f, 1000, 7);
+                    CutRunStep(at120, 0.9f, 0.9f, 1.0f, 10.0f, true, 1.0f, 1000, 7);
+                    float used60 = 0.9f, used120 = 0.9f;
+                    for (int ms = 1008; ms <= 2100; ms += 8)
+                    {
+                        used120 = CutRunStep(at120, -0.07f, used120, 0.0f, 10.0f, true, 1.0f, (uint64_t)ms, 7);
+                        if ((ms - 1000) % 16 == 0)
+                        {
+                            used60 = CutRunStep(at60, -0.07f, used60, 0.0f, 10.0f, true, 1.0f, (uint64_t)ms, 7);
+                            rates = rates && Near(used60, used120, 0.01f);
+                        }
+                    }
+                    rates = rates && used60 == -0.07f && used120 == -0.07f;
+                }
+                // what never paces: a figure of 0 (bit for bit, no state), gripping wheels, a rise, a fall with the pedal steady (the governor's)
+                CutRun none = {};
+                const float asked = -0.0712345f;
+                bool never = CutRunStep(none, 0.9f, 0.9f, 1.0f, 10.0f, true, 0.0f, 1000, 7) == 0.9f && CutRunStep(none, asked, 0.9f, 0.0f, 10.0f, true, 0.0f, 1016, 7, &wasPaced) == asked &&
+                             !wasPaced && !none.at;
+                CutRun grips = {};
+                CutRunStep(grips, 0.9f, 0.9f, 1.0f, 10.0f, false, 1.0f, 1000, 7);
+                never = never && CutRunStep(grips, asked, 0.9f, 0.0f, 10.0f, false, 1.0f, 1016, 7, &wasPaced) == asked && !wasPaced && !grips.at;
+                CutRun rise = {};
+                CutRunStep(rise, 0.2f, 0.2f, 0.0f, 10.0f, true, 1.0f, 1000, 7);
+                never = never && CutRunStep(rise, 0.5f, 0.2f, 0.0f, 10.0f, true, 1.0f, 1016, 7, &wasPaced) == 0.5f && !wasPaced;
+                CutRun pedalHeld = {};
+                CutRunStep(pedalHeld, 0.9f, 0.9f, 1.0f, 10.0f, true, 1.0f, 1000, 7);
+                never = never && CutRunStep(pedalHeld, 0.1f, 0.9f, 1.0f, 10.0f, true, 1.0f, 1016, 7, &wasPaced) == 0.1f && !wasPaced;
+                // what ends it at once: the pedal back, the wheels gripping, a shift (another top), 0 seconds (the brake, the handbrake), another truck
+                bool ends = true;
+                for (int how = 0; how < 5; how++)
+                {
+                    CutRun e = {};
+                    CutRunStep(e, 0.9f, 0.9f, 1.0f, 10.0f, true, 1.0f, 1000, 7);
+                    const bool going = CutRunStep(e, -0.07f, 0.9f, 0.0f, 10.0f, true, 1.0f, 1100, 7, &wasPaced) > 0.5f && wasPaced;
+                    const float target = how == 0 ? 0.3f : -0.07f;
+                    const float got = CutRunStep(e, target, 0.8f, how == 0 ? 0.3f : 0.0f, how == 2 ? 14.0f : 10.0f, how != 1, how == 3 ? 0.0f : 1.0f, 1116, how == 4 ? 8 : 7, &wasPaced);
+                    ends = ends && going && got == target && !wasPaced && !e.at;
+                }
+                // a paced step feeds no sample to the learner (must 5)
+                TorqueCutSlot learnSlot = {};
+                learnSlot.mode = kCutMap;
+                TorqueCutAnswer fed = {};
+                fed.bracket = fed.used = 0.5f;
+                const bool feeds = CutLearnStepOk(learnSlot, fed, 1.0f);
+                fed.running = true;
+                Check(secs && gates && rule && rates && never && ends && feeds && !CutLearnStepOk(learnSlot, fed, 1.0f),
+                      "run-down at a lift: 2.0 s in the first gear at 100, less by the tops' ratio squared above it, the low range as the first; a lift's fall runs in a straight line by "
+                      "the clock, the same at 60 and at 120 steps a second; at a figure of 0 the bracket is the step's own bit for bit; gripping wheels, a rise and a fall with the pedal "
+                      "steady are never paced; the pedal back, grip, a shift, the brake's 0 seconds and another truck end it at once; a paced step feeds no sample");
+                // the sketch (must 7): one driven wheel spinning in place, floored, then the foot off. The wheel's drive is 60 rad/s^2
+                // at a bracket of 1 and the ground takes 3 /s of its speed. The seconds until it is under a quarter of its speed at the lift
+                auto runDown = [&](int percent, float gearTop, float firstTop, int hz, float truckShare) {
+                    TorqueCutSlot rs = {};
+                    rs.vehicle = 7, rs.mode = kCutMap, rs.share = 1.0f, rs.pedal = 1.0f, rs.map = cm;
+                    rs.map.top = gearTop;
+                    const CutBand rb = CutGovernBand(gearTop, kTachOverrun);
+                    rs.map.governFrom = rb.from, rs.map.governTo = rb.to;
+                    rs.runSeconds = RunDownSeconds(percent, gearTop, firstTop);
+                    CutRun rr = {};
+                    float wheel = 0.0f, used = 0.0f, atLift = 0.0f, quarterAt = -1.0f;
+                    const float dt = 1.0f / (float)hz;
+                    for (int stepI = 0; stepI < 8 * hz; stepI++)
+                    {
+                        const float at = (float)stepI * dt;
+                        const bool lifted = at >= 3.0f;
+                        rs.pedal = rs.map.pedal = lifted ? 0.0f : 1.0f;
+                        CutSpeeds rsp = { wheel, wheel, wheel, wheel, wheel, true };
+                        rsp.truck = wheel * truckShare, rsp.truckOk = true;
+                        TorqueCutAnswer ra = TorqueCutAnswerOf(rs, 1.0f, -1.0f, 0.0f, 1e9f, 1.0f, 1.0f, rsp);
+                        ra.bracket = CutRunStep(rr, ra.bracket, used, rs.pedal, rs.map.top, RunDownSpinning(rsp.ok, rsp.mean, rsp.truckOk, rsp.truck), rs.runSeconds,
+                                                (uint64_t)(1000.0f + at * 1000.0f), 7, &ra.running);
+                        TorqueCutAnswerPaced(ra, 1.0f, used, 1.0f);
+                        used = ra.used;
+                        if (lifted && atLift == 0.0f) atLift = wheel;
+                        wheel = fmaxf(wheel + (60.0f * used - 3.0f * wheel) * dt, 0.0f);
+                        if (lifted && quarterAt < 0.0f && wheel < 0.25f * atLift) quarterAt = at - 3.0f;
+                    }
+                    return quarterAt;
+                };
+                const float today = runDown(0, 30.0f, 30.0f, 60, 0.0f), first60 = runDown(100, 30.0f, 30.0f, 60, 0.0f), first120 = runDown(100, 30.0f, 30.0f, 120, 0.0f);
+                const float atFifty = runDown(50, 30.0f, 30.0f, 60, 0.0f), topGear = runDown(100, 90.0f, 30.0f, 60, 0.0f), topToday = runDown(0, 90.0f, 30.0f, 60, 0.0f);
+                const float gripping = runDown(100, 30.0f, 30.0f, 60, 1.0f), grippingToday = runDown(0, 30.0f, 30.0f, 60, 1.0f);
+                printf("     run-down at a lift, the sketch: a wheel spinning in place is under a quarter of its speed %.2f s after the lift today, %.2f s at 100 in the first gear (%.2f s at "
+                       "120 steps a second), %.2f s at 50; in a gear of three times the top %.2f s at 100 against %.2f s today; a gripping truck %.2f s at 100 and %.2f s today\n",
+                       today, first60, first120, atFifty, topGear, topToday, gripping, grippingToday);
+                Check(today > 0.0f && first60 > today + 0.5f && fabsf(first60 - first120) <= 0.05f && atFifty > today && atFifty < first60 && topGear < first60 && topGear - topToday < first60 - today &&
+                          gripping == grippingToday,
+                      "run-down at a lift, the sketch: a wheel spinning in place runs on longer with Engine inertia than today, the same at 60 and at 120 steps a second, atFifty as long "
+                      "again at 50, and far less in a high gear than in the first; a gripping truck's lift is today's");
+            }
             // the fall at a lock, paced by the clock (the lead's point 17): from the open converter's 1.34 to the map's 1.0
             // over 0.3 s, the same at 60 and at 120 steps a second, no step over the line's own
             bool sameAtBoth = true, smallSteps = true;

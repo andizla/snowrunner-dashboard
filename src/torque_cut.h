@@ -438,6 +438,9 @@ struct TorqueCutSlot
     // for a step whose wheels were not read
     bool convOpen;
     float convStall, convRise;
+    // the run-down at a lift (CutRunStep): its seconds for this gear, 0 none (the tool's Engine inertia at 0, the brake,
+    // the handbrake, a shift out)
+    float runSeconds;
     float capWide; // the low range's wider cap for L-, L and R (LowRangeCap, CapCeilingWide), in the wheels' measure; 0 none. cap stays the gear's own
     TorqueCutMap map;
     int diff; // the differential's type for this truck (DiffTypeOf, on the mod's thread)
@@ -620,6 +623,7 @@ struct TorqueCutAnswer
 {
     float torque, bracket, f, b4s, stockCurve, s, standIn, w, used, taper;
     float convEngine; // the open converter's engine speed this step, rpm; 0 where F was not worked out through it
+    bool running;     // the run-down at a lift held the bracket up in this step
     bool falling, floored; // the lock's fall held F up in this step; the bracket stands at the slot's floor
 };
 // The governor's fade goes by the truck's own speed where it was read (M5), else by the wheels' mean; the curve held to
@@ -652,6 +656,81 @@ inline TorqueCutAnswer TorqueCutAnswerOf(const TorqueCutSlot &slot, float stock,
     r.standIn = TorqueCutStandIn(r.bracket);
     r.w = TorqueCutStallWheels(sp.wholeMean, sp.wholeMax, slot.listTop);
     return r;
+}
+
+// ---- the run-down at a lift (BRIEF_drive_1114_findings.md, part 180, the Reviewer's check and seven musts) ----
+// The game's wheel is a light body with nothing behind it: at a lift the drive hands it nothing and the ground takes
+// its speed in a few steps. An engine and a driveline keep a spinning wheel turning for a while. So where the cut
+// answers, a fall of the bracket at a lift is paced: from the bracket in use at the lift down to what the step asks
+// (the engine's braking, in the end) in a straight line over `seconds`, by the clock, so it is the same at 60 and at
+// 120 steps a second. Only a fall, only with the foot off or lifting, and only while the driven wheels' mean is over
+// the truck's own speed: a gripping truck's lift is today's, and no pull comes that the driver did not ask for.
+// It ends at once where the pedal comes back, the wheels grip, the gear's top changes (a shift), another truck
+// answers, or the thread hands 0 seconds (the brake, the handbrake, a shift out, the tool's figure at 0).
+// The seconds are the thread's: the tool's Engine inertia over 100 times kRunDownMost in the first gear, and less in
+// a higher gear by the tops' ratio squared, since the engine's inertia counts at the wheels by the gear's ratio squared.
+static const float kRunDownMost = 2.0f;    // s: the run-down in the first gear at an Engine inertia of 100
+static const float kRunFootOff = 0.05f;    // a pedal under this is the foot off (models.h, kFootOff)
+static const float kRunLift = 0.02f;       // a pedal this much under the step before is lifting; this much over the lift's is back
+static const float kRunSpinShare = 1.15f, kRunSpinMore = 0.5f; // spinning: the driven mean over the truck's speed by this share and this many rad/s
+inline float RunDownSeconds(int percent, float gearTop, float firstTop)
+{
+    if (percent <= 0 || !(gearTop > 0.0f) || !isfinite(gearTop)) return 0.0f;
+    const float share = (percent > 100 ? 100 : percent) / 100.0f;
+    const float ratio = firstTop > 0.0f && isfinite(firstTop) && gearTop > firstTop ? firstTop / gearTop : 1.0f; // the low range and R as the first gear
+    return kRunDownMost * share * ratio * ratio;
+}
+// What ends it from the mod's thread (must 3): the brake pedal, the handbrake and a shift that is out. N has no slot.
+inline bool RunDownAllowed(float brake, bool handbrake, bool shiftOut) { return !(brake > 0.0f) && isfinite(brake) && !handbrake && !shiftOut; }
+inline bool RunDownSpinning(bool ok, float mean, bool truckOk, float truck)
+{
+    if (!ok || !truckOk || !isfinite(mean) || !isfinite(truck)) return false;
+    return mean > (truck > 0.0f ? truck : 0.0f) * kRunSpinShare + kRunSpinMore;
+}
+struct CutRun
+{
+    uint64_t vehicle, at; // the truck and the tick of the lift; at 0: no run-down
+    float from, pedal;    // the bracket in use at the lift, and the pedal then
+    float top;            // the gear's top then: another one is a shift
+    float pedalWas;       // the pedal of the step before, for "lifting"
+    bool spent;           // a run-down was ended: none starts again until the bracket has landed or the foot is back on
+};
+// One step of the detour. target: the bracket this step asks; usedBefore: the one the step before used. Returns the
+// bracket to use, never under target. paced: it was held above target.
+inline float CutRunStep(CutRun &run, float target, float usedBefore, float pedal, float top, bool spinning, float seconds, uint64_t now, uint64_t vehicle, bool *paced = nullptr)
+{
+    if (paced) *paced = false;
+    const float pedalWas = run.vehicle == vehicle ? run.pedalWas : pedal;
+    run.pedalWas = pedal;
+    const bool off = !(seconds > 0.0f) || !isfinite(seconds) || !spinning || !isfinite(target) || !isfinite(pedal);
+    if (off || run.vehicle != vehicle)
+    {
+        // nothing to pace, or another truck's first step: an ended run-down stays ended
+        if (run.at) run.spent = true;
+        if (run.vehicle != vehicle) run.spent = false;
+        run.at = 0, run.vehicle = vehicle;
+        return target;
+    }
+    if (run.at && (pedal > run.pedal + kRunLift || top != run.top || now < run.at)) run.at = 0, run.spent = true; // the pedal is back, or a shift
+    if (!run.at)
+    {
+        const bool lifting = pedal < kRunFootOff || pedal < pedalWas - kRunLift;
+        const bool falls = isfinite(usedBefore) && usedBefore > target && usedBefore > 0.0f;
+        if (!lifting || !falls) run.spent = false; // the foot is on again or the bracket has landed: the next lift may start one
+        if (run.spent || !lifting || !falls) return target;
+        run.at = now ? now : 1, run.from = usedBefore, run.pedal = pedal, run.top = top;
+    }
+    if (pedal < run.pedal) run.pedal = pedal; // a lift that goes on: "back" is over the lowest pedal since the lift
+    const float since = (float)(now - run.at) / 1000.0f;
+    if (since >= seconds)
+    {
+        run.at = 0, run.spent = true;
+        return target;
+    }
+    const float held = target + (run.from - target) * (1.0f - since / seconds);
+    if (!(held > target)) return target;
+    if (paced) *paced = true;
+    return held;
 }
 
 // The answer paced (F1b): the bracket used from the last step's (CutRise at rate), the torque the stock times it, the
@@ -751,7 +830,7 @@ static const float kCutLearnPaced = 0.02f; // a bracket used within this share o
 // the push (kept under 1: the wheel cap takes some away).
 inline bool CutLearnStepOk(const TorqueCutSlot &slot, const TorqueCutAnswer &r, float kept)
 {
-    return slot.mode == kCutMap && !r.falling && !r.floored && r.bracket > 0.0f && fabsf(r.used - r.bracket) <= kCutLearnPaced * r.bracket && isfinite(kept) && kept >= 0.999f;
+    return slot.mode == kCutMap && !r.falling && !r.running && !r.floored && r.bracket > 0.0f && fabsf(r.used - r.bracket) <= kCutLearnPaced * r.bracket && isfinite(kept) && kept >= 0.999f;
 }
 // The detour's sum for the learner, one step more: the bracket used times the gear ratio pull's factor, since the
 // torque handed is the game's times both. So a row learned at one figure of the slider is the base learned at another.

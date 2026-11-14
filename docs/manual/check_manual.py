@@ -31,8 +31,10 @@ HIDDEN_NAMES = {('Checkers', 'key'), ('BindCheckers', 'key'), ('Checkers', 'tab'
                 # the tuning tool's Gear ratio pull (BRIEF_jobs_1114.md, 161, must 6): in no tab and in no manual until its default is set
                 ('GearRatioPull', 'key'),
                 # the drawn winch wire's sag, a probe (BRIEF_jobs_1114.md, 164, must 7): in no tab and in no manual
-                ('WinchSag', 'key')}
-HIDDEN_LOG = ('checkers: ', 'gear ratio pull:', 'probe: gear ratio pull:', 'winch sag:', 'WINCH SAG:')
+                ('WinchSag', 'key'),
+                # the tuning tool's Engine inertia (BRIEF_drive_1114_findings.md, 180): in no tab and in no manual until its default is set
+                ('EngineInertia', 'key')}
+HIDDEN_LOG = ('checkers: ', 'gear ratio pull:', 'probe: gear ratio pull:', 'winch sag:', 'WINCH SAG:', 'engine inertia:', 'probe: engine inertia:')
 
 
 def hidden(name, kind):
