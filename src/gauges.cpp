@@ -847,6 +847,7 @@ static void WriteIni(const GaugeSettings &s)
     whole(L"EngineSoundCurve", s.engineSoundCurve);
     whole(L"DiffType", s.diffType);
     whole(L"ModEngineSpeed", s.modEngineSpeed ? 1 : 0);
+    whole(L"CutInA", s.cutInA ? 1 : 0);
     num(L"EngineSpeedTop", s.engineSpeedTop);
     num(L"RoadCdA", s.roadCdA);
     whole(L"EngineShare", s.engineShare);
@@ -1298,6 +1299,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; AirEmptyAtStart=1: a truck with air brakes first driven after the game starts has empty tanks and stands on its spring brakes until they fill. A truck keeps its air between drives (AirBar in its [Odometer:<id>]).\n"
                         L"; AirBrakes in a truck file (the Air brakes box of the Engine tab): 1 the truck has brake air and spring brakes, 0 it has none. No key: every truck but a scout has them, by the class the mod automatic goes by for it.\n"
                         L"; ModEngineSpeed=1 (with Powertrain, on by default): the game tachometer, sound and effects follow the mod engine; its fuel burn and stall check keep the game's own.\n"
+                        L"; CutInA=1 (a test, off by default; the Mod work tab's Mod engine in A): in A the truck pulls with the mod engine alone through the converter, as a held gear does, at Gearbox=1 and 2.\n"
                         L";   EngineSpeedTop: the mod engine speed the game reads as its top, as a share of the redline, 0.5 to 1.5 (1: the redline; idle is its 0).\n"
                         L";   Base1.<engine>, Base2.<engine> ... in a truck's file: each gear's acceleration at the game's own pull, floored, learned.\n"
                         L"; Creep=1: an idling truck on an automatic moves to walking pace; the brake holds it. By default only where an automatic picks the gear.\n"
@@ -1384,6 +1386,7 @@ static void ReadIni(GaugeSettings &s)
     s.engineBrake = IniFloat(L"EngineBrake", s.engineBrake, ini); // CrawlHold= is read no more: the torque cut took its place
     s.winchOutRate = IniFloat(L"WinchOutRate", s.winchOutRate, ini);
     s.modEngineSpeed = IniBool(L"ModEngineSpeed", s.modEngineSpeed, ini);
+    s.cutInA = IniBool(L"CutInA", s.cutInA, ini);
     s.engineSpeedTop = IniFloat(L"EngineSpeedTop", s.engineSpeedTop, ini);
     s.roadCdA = IniFloat(L"RoadCdA", s.roadCdA, ini);
     s.engineShare = IniInt(L"EngineShare", s.engineShare, ini);
@@ -4578,26 +4581,40 @@ static bool GearboxHeldBy(bool driving, const GearboxPosModel &pos) { return dri
 // nothing there, but keeps the wheels' grip learned for the lift and Back to A, and the gear A would ask when it
 // comes back by Back to A or the A key (the held gear grip brief). There the grip rises only under kHeldGripPedal.
 static void GearboxModelPass(GearboxModel &m, bool driving, const GearboxPosModel &pos, const TruckRaw &raw, const GaugeScale &k, float foot, float power,
-                             float dt, const EngineHand &hand)
+                             float dt, const EngineHand &hand, bool pullHeld = false)
 {
-    GearboxStep(m, raw, k, foot, power, dt, hand, GearboxHeldBy(driving, pos));
+    GearboxStep(m, raw, k, foot, power, dt, hand, GearboxHeldBy(driving, pos), pullHeld);
 }
 
 // The settings the torque cut needs (BRIEF_drivetrain_2_torque_cut.md): Powertrain on, the mod's own gearbox
 // (Gearbox=2) and some of the mod's engine (EngineShare above 0). It acts in a gear held by hand (the torque block).
 // The cut needs the mod's engine speed too (the Reviewer's M2): with the throttle held at 1 every one of the game's
 // own engine speed readers but the fuel's and the stall's would read a floored pedal.
-static bool TorqueCutWanted(const GaugeSettings &s) { return s.powertrain && s.modEngineSpeed && s.gearbox == kGearboxOwn && s.engineShare > 0; }
+// With CutInA (BRIEF_drivetrain_3_a_on_our_chain.md, part A; the Reviewer's M6) the cut answers in A too, at Gearbox=1
+// as well, so it is wanted from the mod's automatic up. A held gear still needs the mod's own gearbox (TorqueCutActs).
+static bool TorqueCutWanted(const GaugeSettings &s)
+{
+    return s.powertrain && s.modEngineSpeed && (s.gearbox == kGearboxOwn || (s.cutInA && s.gearbox >= kGearboxModel)) && s.engineShare > 0;
+}
+// The position's term for A (M6), the same at both levels: the mod's automatic has the truck and the position is A.
+static bool TorqueCutInA(const GaugeSettings &s, bool driving, bool posRunning, int pos) { return s.cutInA && driving && posRunning && pos == kPosA; }
+// Whether the cut acts on this pass. held: a gear held by hand of the mod's own gearbox (own and GearboxManual); inA:
+// TorqueCutInA; agrees by the sign alone (M5: the game's engaged gear follows a shift a frame late, and a test by the
+// gear would drop the cut at every shift). With CutInA off inA is never true and this is the rule as it was.
+static bool TorqueCutActs(const GaugeSettings &s, bool want, bool held, bool inA, bool hooks, int gear, bool agrees, float top, bool read)
+{
+    return want && (held || inA) && TorqueCutWanted(s) && hooks && gear != 0 && agrees && top > 0.0f && read;
+}
 
 // Why the torque cut does not act, for its log line (the first that holds).
 static const wchar_t *TorqueCutWhyNot(const GaugeSettings &s, bool want, bool held, bool hooks, int gear, float top, bool agrees = true)
 {
     if (!s.powertrain) return L"Powertrain is off";
     if (!want) return L"the engine is off or the pull test is armed";
-    if (s.gearbox != kGearboxOwn) return L"the gearbox is not the mod's own (Gearbox=2)";
+    if (s.gearbox != kGearboxOwn && !(s.cutInA && s.gearbox >= kGearboxModel)) return s.cutInA ? L"the game's gearbox drives (Gearbox=0)" : L"the gearbox is not the mod's own (Gearbox=2)";
     if (s.engineShare <= 0) return L"EngineShare is 0";
     if (!s.modEngineSpeed) return L"ModEngineSpeed is 0";
-    if (!held) return L"no gear held by hand (A drives, or the mod's gearbox does not have the truck)";
+    if (!held) return s.cutInA ? L"neither A nor a gear held by hand (the mod's gearbox does not have the truck)" : L"no gear held by hand (A drives, or the mod's gearbox does not have the truck)";
     if (!hooks) return L"its hooks are not all in (the gear torque, the engine speed and the wheels' drive)";
     if (gear == 0) return L"in neutral";
     if (!agrees) return L"the game's gear does not yet agree with the position (a shift landing)";
@@ -5564,6 +5581,8 @@ static void LogSettings(const GaugeSettings &s)
                           s.engineShare, !s.roadLoad ? L"off" : s.powertrain ? L"on (the air's drag, once each gear's pull is learned)" : L"on, acts with Powertrain on",
                           TorqueCutWanted(s) ? L"in a gear held by hand the torque cut: the mod engine alone, no cut at the gear's top" : L"no torque cut (it needs Gearbox=2, EngineShare above 0 and ModEngineSpeed=1)",
                           s.modEngineSpeed ? L"the mod engine's (ModEngineSpeed=1; the fuel's and the stall's calls keep the game's own, by the cut's own pull under the cut)" : L"its own (ModEngineSpeed=0)");
+        if (s.cutInA)
+            Log(L"settings: CutInA=1, a test: in A the torque cut answers too, at Gearbox=1 and 2, %s", TorqueCutWanted(s) ? L"and its settings are met" : L"but its other settings are not met (Powertrain, ModEngineSpeed, EngineShare above 0, Gearbox 1 or 2)");
         Log(L"settings: diff lock bite %d (DiffLockBite; 0 the game's lock, 100 one shaft), the differential's type %d (DiffType; 0 Auto, 1 Open, 2 Limited slip, 3 Locked), low range slip %d (LowRangeSlip; 0 the gear's own wheel cap in L-, L and R, 100 the cap of the highest low gear)", s.diffLockBite, s.diffType, s.lowRangeSlip);
         if (s.engineSoundTop != 100 || s.engineSoundCurve != 100)
             Log(L"settings: the engine sound's top %d percent and curve %d (EngineSoundTop, EngineSoundCurve; 100 and 100 leave the sound as it was)", s.engineSoundTop, s.engineSoundCurve);
@@ -5934,6 +5953,16 @@ struct TruckWatch
     float cutGamePull;          // the game's own pull read on the take-over's pass (TorqueCutGamePull), kept while the cut acts
     bool cutActs;               // the torque cut acted on the last pass (BRIEF_drivetrain_2_torque_cut.md): the learners rest, the fuel reads the stand-in (TorqueCutStandIn)
     float cutFloor;             // the creep's share on the last pass: the cut's least F while it acts (CreepManual)
+    bool cutInA;                // the cut acted in A on the last pass (CutInA; BRIEF_drivetrain_3_a_on_our_chain.md, part A)
+    bool cutOpen;               // ... through the open converter, with cutOpenF its F and cutOpenPedal the pedal, for the fall at the lock
+    float cutOpenF, cutOpenPedal;
+    float fallFrom, fallPedal;  // the fall at a lock in progress (CutLockFall): what the open converter gave, the pedal then, the lock's tick (0 none)
+    uint64_t fallAt;
+    int converterSaid;          // the converter's state last logged in A (0 none, 1 open, 2 locked), and when, for the paced line
+    ULONGLONG converterSaidAt;
+    int converterChanges;       // its changes since that line
+    uint64_t topsSaidFor;       // the truck told that no gear top is learned in A
+    CutLearnTotals learnWas;    // the learner's totals at the last pass (TorqueCutLearnGet)
     ULONGLONG cutProbeAt;       // the cut's probe line, once a second
     ULONGLONG pullProbeAt;      // the probe's line of the pull with no gear held by hand, once a second
     TorqueCutCounts cutWas;     // the detour's counts at the last probe line
@@ -6056,6 +6085,7 @@ struct TruckWatch
     float baseSettled;          // seconds since the last shift's end (the stage idle, the engaged gear unchanged)
     int baseGearWas;
     ULONGLONG baseSaidAt[kMaxGears]; // when "road load: gear g learning" was last said (probe only, every 10 s at most)
+    bool baseByCut[kMaxGears];  // the gear's last passes were fed by the cut's bracket, not by the game's curve (the learned line says which)
     float accel, speedWas;     // the truck's acceleration over the ground, smoothed over kAccelSmooth, and the speed it goes from
     bool accelSeen;
     float damp;                // the wheels' drag as the truck's acceleration (TruckWheelDamp), smoothed as accel is
@@ -6119,8 +6149,11 @@ static bool GearboxManual(const TruckWatch &w) { return GearboxHeldBy(w.take.dri
 // the clutch as the scalar (the mod engine's own inertia is in it, so a pass's delay does no harm there); the creep's
 // share of the last pass as the least F; the engine held back (Torque) on what it pushes, not on its braking.
 static_assert(kCapWheels == kMaxWheels, "the cut, the cap, the lock and the chassis push read as many wheels as the rest of the mod");
+// converter (CutInA, part A): the truck is in A. locked is then the converter's (ConverterLockedForCut), and open the
+// scalar is the one function's F at the model's speeds (ConverterOpenF), bounded at the stall's ratio (M1, M3): the
+// clutch model does not run in A and is not read.
 static TorqueCutSlot TorqueCutSlotOf(const TruckWatch &w, const TruckRaw &raw, const GaugeSettings &s, const GaugeScale &scale, const TorqueCurve &curve, float tachTop,
-                                     bool locked, float gearTop, int slip = kSlipEngineHeld, float firstTop = 0.0f)
+                                     bool locked, float gearTop, int slip = kSlipEngineHeld, float firstTop = 0.0f, bool converter = false)
 {
     TorqueCutSlot c = {};
     c.vehicle = w.refs.vehicle;
@@ -6185,6 +6218,7 @@ static TorqueCutSlot TorqueCutSlotOf(const TruckWatch &w, const TruckRaw &raw, c
         c.capWide = wide > c.cap ? wide : 0.0f;
     }
     c.pushBack = 1.0f - (float)s.pushShare / 100.0f;
+    if (converter) c.scalar = locked ? 0.0f : ConverterOpenF(c.map, w.gearbox.input, w.gearbox.rpm, w.gearbox.ratio, kStallRatio);
     return c;
 }
 
@@ -6490,7 +6524,7 @@ static void AxleLeverPress(TruckWatch &w, bool front)
         return;
     }
     Log(L"differential by axle: %s: %s; %s", name, to ? L"on, Locked over the rows" : L"off, the rows again",
-        w.cutActs ? L"it acts now" : L"it does not act now (the torque cut is off: A, or no gear held by the mod gearbox)");
+        w.cutActs ? L"it acts now" : L"it does not act now (the torque cut is off: no gear held by the mod gearbox, or A without CutInA)");
 }
 // The diff lock's bite for the driven truck (BRIEF_diff_lock_bite.md): published at every Gearbox level while Powertrain
 // is on and DiffLockBite above 0, with the setter found at the code look and the truck's lock kind (vehicle + 0xE8, by
@@ -8403,7 +8437,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         const EngineHand hand{ w.hand.on, &curve, scale.redline > 0.0f ? scale.max / scale.redline : 1.0f, s.engineShare / 100.0f, launch,
                                GearHoldOf(w, autoClass), EngineLightFloor(curve, scale.redline), s.input, TorqueRoof(autoClass) };
         const int huntsWere = w.gearbox.hunts, topUpsWere = w.gearbox.topUps, taperUpsWere = w.gearbox.taperUps, taperWatchesWere = w.gearbox.taperWatches;
-        GearboxModelPass(w.gearbox, w.take.driving, w.pos, raw, scale, foot, w.power.power, dt, hand);
+        GearboxModelPass(w.gearbox, w.take.driving, w.pos, raw, scale, foot, w.power.power, dt, hand, w.cutInA); // the cut in A holds the game's pull at 1: the two rules that read it rest (M2)
         if (w.take.driving && !GearboxManual(w))
         {
             // the taper rule (BRIEF_auto_stuck_under_taper.md F1): each shift up, and each watch's end with both rates
@@ -9013,10 +9047,19 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 fold = true;
             }
             float learned = 0.0f, added = 0.0f, dampMean = 0.0f;
+            // under the cut with CutInA on the learning goes on (the lead's addendum of 14:23): by the mean of the
+            // brackets the detour used since the last pass, and only where every step of them may feed a sample
+            // (CutLearnDivisor). With CutInA off no gear learns under the cut, as before
+            CutLearnTotals learnNow = {};
+            TorqueCutLearnGet(learnNow);
+            const float cutDivisor = w.cutActs && s.cutInA ? CutLearnDivisor(w.learnWas, learnNow, w.refs.vehicle) : NAN;
+            w.learnWas = learnNow;
+            const bool learnByCut = isfinite(cutDivisor);
             const int done = baseTruck[0] && baseEngine[0]
-                                 ? BaseLearnStep(w.baseLearn, g, clean && BaseLearnPlainPower(g, raw.powerFactor) && !w.cutActs, w.accel, damp, raw.torqueFactor, pedalNow, groundX, gradeSin,
-                                                 w.baseSettled, dt, learned, &added, &dampMean)
+                                 ? BaseLearnStep(w.baseLearn, g, clean && BaseLearnPlainPower(g, raw.powerFactor) && (!w.cutActs || learnByCut), w.accel, damp, raw.torqueFactor, pedalNow, groundX, gradeSin,
+                                                 w.baseSettled, dt, learned, &added, &dampMean, learnByCut ? cutDivisor : NAN)
                                  : 0;
+            if (added > 0.0f && g >= 1 && g < kMaxGears) w.baseByCut[g] = learnByCut;
             if (probe && added > 0.0f && !done && g >= 1 && g < kMaxGears && GetTickCount64() - w.baseSaidAt[g] >= 10000)
             {
                 w.baseSaidAt[g] = GetTickCount64();
@@ -9032,9 +9075,10 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 if (file > 0.0f) _snwprintf_s(fileText, _TRUNCATE, L"the file's %.3f", file);
                 else wcsncpy_s(fileText, L"none in the file", _TRUNCATE);
                 // every learned gear (the Reviewer's point 6), so a drive shows the wheels' drag beside each figure
-                Log(L"road load: gear %d's pull at the game's own torque with %S, floored: learned %.3f m/s2 with the wheels' drag %.3f m/s2 added back, kept %.3f (from %.3f), %s: %s",
+                Log(L"road load: gear %d's pull at the game's own torque with %S, floored: learned %.3f m/s2 with the wheels' drag %.3f m/s2 added back, kept %.3f (from %.3f), %s: %s; its last passes by %s",
                     done, baseEngine, learned, dampMean, w.gearBase[done], was, fileText,
-                    written ? L"written (the truck's file in Gauges\\trucks)" : L"within 2 % of the file's, not written");
+                    written ? L"written (the truck's file in Gauges\\trucks)" : L"within 2 % of the file's, not written",
+                    w.baseByCut[done] ? L"the bracket the torque cut used" : L"the game's curve");
                 fold = true;
             }
             // one figure per truck: a gear with none learned goes by the learned gears' a_base × top over its own top
@@ -9121,9 +9165,15 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             // own share is given back once, so engine damage's own cut still acts through it
             const bool cutHooks = GearTorqueHooked() && EngineSpeedHooked() && CreepHooked();
             const bool cutAgrees = GearboxPosAgrees(w.pos, raw.gearEngaged);
-            const bool cutActs = want && own && GearboxManual(w) && TorqueCutWanted(s) && cutHooks && raw.gearEngaged != 0 && cutAgrees && gearTop > 0.0f &&
-                                 w.refs.action != 0;
-            if (!cutActs)
+            // in A too with CutInA (BRIEF_drivetrain_3_a_on_our_chain.md, part A): at both levels where the mod's automatic
+            // has the truck in A (M6). Off, inA is never true and the block is what it was
+            const bool cutHeld = own && GearboxManual(w), cutA = TorqueCutInA(s, w.take.driving, w.pos.running, w.pos.pos);
+            const bool cutActs = TorqueCutActs(s, want, cutHeld, cutA, cutHooks, raw.gearEngaged, cutAgrees, gearTop, w.refs.action != 0);
+            const bool inA = cutActs && cutA && !cutHeld;
+            // the converter as the cut reads it: locked through a shift made locked (M4)
+            const bool lockedA = inA && ConverterLockedForCut(w.gearbox);
+            const ULONGLONG cutTick = GetTickCount64();
+            if (!cutActs || inA) // A has no wheel cap and no slip room (GearboxPosCap is 0 there): the choice starts afresh at the next held gear
             {
                 w.slip = HeldSlip{ s.heldGearSlip, -1, 0 };
                 w.slotCap = 0.0f;
@@ -9136,6 +9186,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 // the slip room of a numbered gear: the choice in force, which waits where a cap would go with the wheels still
                 // past the governor (HeldSlipStep). The truck's speed is the hook's of its last step
                 const float firstTop = TruckGearTopAt(raw, 1, 1.0f);
+                if (!inA)
                 {
                     const float capShare = (float)s.wheelCap / 100.0f, dirNow = raw.gearEngaged < 0 ? -1.0f : 1.0f;
                     float sumNow = 0.0f;
@@ -9149,10 +9200,39 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                                  CutAnswerOurs(last.vehicle, w.refs.vehicle) ? last.truck : NAN,
                                  CutGovernBand(gearTop, kTachOverrun).from);
                 }
-                TorqueCutSlot slot = TorqueCutSlotOf(w, raw, s, scale, curve, tachTop, locked, gearTop, w.slip.inForce, firstTop);
+                TorqueCutSlot slot = TorqueCutSlotOf(w, raw, s, scale, curve, tachTop, inA ? lockedA : locked, gearTop, w.slip.inForce, firstTop, inA);
                 w.slotCap = slot.cap;
-                HeldSlipLine(g_slipLine, sizeof g_slipLine, GearboxPosNumbered(w.pos.pos) ? s.heldGearSlip : w.slip.inForce, w.slip.inForce, slot.cap);
+                if (!inA) HeldSlipLine(g_slipLine, sizeof g_slipLine, GearboxPosNumbered(w.pos.pos) ? s.heldGearSlip : w.slip.inForce, w.slip.inForce, slot.cap);
                 slot.gamePull = w.cutGamePull;
+                // the fall at a lock (the lead's point 17): the pass before was open and this one is locked. The slot carries
+                // what the open converter gave, the pedal then and the tick, and the detour runs F down to the map's
+                // by its own clock (CutLockFall). A shift made locked never comes here: it was not open (M4)
+                if (lockedA && w.cutOpen) w.fallFrom = w.cutOpenF, w.fallPedal = w.cutOpenPedal, w.fallAt = cutTick;
+                else if (!lockedA || (w.fallAt && cutTick - w.fallAt >= (ULONGLONG)(kLockFallSeconds * 1000.0f))) w.fallAt = 0;
+                if (w.fallAt) slot.fallFrom = w.fallFrom, slot.fallPedal = w.fallPedal, slot.fallAt = w.fallAt;
+                w.cutOpen = inA && !lockedA;
+                w.cutOpenF = slot.scalar, w.cutOpenPedal = slot.pedal;
+                // the probe's "to the wheels": the F the slot carries in A, at the wheels' speed this pass read (the lead: one figure, not two)
+                w.gearbox.drive = !inA ? 0.0f : lockedA ? TorqueCutF(slot.map, slot.sLast) : slot.scalar;
+                // the converter's line, at a change of locked and open, paced as the shift lines are: one a second at most
+                if (inA)
+                {
+                    const int state = lockedA ? 2 : 1;
+                    if (state != w.converterSaid)
+                    {
+                        w.converterChanges++;
+                        if (probe && cutTick - w.converterSaidAt >= 1000)
+                        {
+                            Log(L"torque cut: acting in A (the game's gear %d), the converter %s; %d changes since its last line", raw.gearEngaged,
+                                lockedA ? (w.fallAt ? L"locked (the map, the fall from the open converter's pull paced)" : L"locked (the map, as a held gear)") : L"open (its own pull through the torque ratio)",
+                                w.converterChanges);
+                            w.converterSaidAt = cutTick;
+                            w.converterChanges = 0;
+                        }
+                        w.converterSaid = state;
+                    }
+                }
+                else w.converterSaid = 0;
                 w.diffBand[0] = slot.map.governFrom * slot.map.top, w.diffBand[1] = slot.map.governTo * slot.map.top;
                 TorqueCutPublish(&slot);
                 // the over-rev's share (BRIEF_overrev_downshift.md, M1 and M2): only where the map went out (the engine on
@@ -9163,7 +9243,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 // truck just entered, with the figures of the truck before (the over-rev's share of one pass, and the line below)
                 const bool overFresh = oc.answered != w.overAnswered && CutAnswerOurs(oc.vehicle, w.refs.vehicle);
                 w.overAnswered = oc.answered;
-                w.overShare = slot.mode == kCutMap && overFresh ? OverRevShare(oc.s, oc.truck, slot.map.top) : NAN;
+                // none in A (point 9; the Reviewer's must of 2026-11-14): the automatic shifts, and a hill in the top gear is no over-rev of the driver's
+                w.overShare = OverRevCounts(slot.mode, overFresh, inA) ? OverRevShare(oc.s, oc.truck, slot.map.top) : NAN;
                 // the rolling radius (BRIEF_cut_radius_cylinder.md): a line a truck, and again when the count of either
                 // fallback changes (S5), not on each change of the radius, which the tire mod moves in play
                 const long rollRead = oc.rollCylinder + oc.rollNone + oc.rollOut;
@@ -9202,13 +9283,30 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             {
                 TorqueCutPublish(nullptr);
                 w.overShare = NAN;
+                w.cutOpen = false;
+                w.fallAt = 0;
+                w.converterSaid = 0;
+                w.gearbox.drive = 0.0f;
             }
             if (cutActs != w.cutActs)
             {
-                if (cutActs) Log(L"torque cut: acting in %S (the game's gear %d): the truck pulls with the mod engine alone, %d percent of it", GearboxPosName(w.pos.pos), raw.gearEngaged, s.engineShare);
-                else Log(L"torque cut: off, %s; the game's own torque again", TorqueCutWhyNot(s, want, own && GearboxManual(w), cutHooks, raw.gearEngaged, gearTop, cutAgrees));
+                if (cutActs) Log(L"torque cut: acting in %S (the game's gear %d): the truck pulls with the mod engine alone, %d percent of it%s", GearboxPosName(w.pos.pos), raw.gearEngaged, s.engineShare,
+                                 inA ? (lockedA ? L", the converter locked" : L", through the open converter") : L"");
+                else Log(L"torque cut: off, %s; the game's own torque again", TorqueCutWhyNot(s, want, cutHeld || cutA, cutHooks, raw.gearEngaged, gearTop, cutAgrees));
             }
             w.cutActs = cutActs;
+            w.cutInA = inA;
+            // no gear top is learned under the cut (GearTopStep rests: it reads the game's pull at nothing, which the cut
+            // holds at 1). With A under the cut that is every position, so once a truck the log says what it goes by
+            if (inA && w.topsSaidFor != w.refs.vehicle)
+            {
+                w.topsSaidFor = w.refs.vehicle;
+                int tops = 0;
+                for (int i = 1; i < kMaxGears; i++)
+                    if (GearTopShareUsable(w.gearTop[i])) tops++;
+                Log(L"gear tops: with the mod engine in A (CutInA=1) no gear top is learned on this truck; it goes by %d tops learned before and by the game's formula for the others, "
+                    L"and the governor holds it at them", tops);
+            }
             // Locked on a truck whose lock can be switched (kinds 0 and 1; S4): the mod holds the lock byte, the one the
             // mod's lock key flips, while the type acts, so the game's own lock rule is on as well. A byte the player set
             // is never cleared; the mod's own is, once the type no longer acts
@@ -9360,7 +9458,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                     L"in one step %ld; the throttle held at 1 %s; the last answer %s; the governor by the truck's speed %S; the wheel cap %s: the ceiling %.2f rad/s, clamps %ld (%ld in the last step), the largest excess %.2f rad/s "
                     L"after the drive and %.2f before it (before it against the wider cap of L-, L and R at any truck speed), the driven mean after the drive %.2f rad/s over %ld steps (%.2f at the most), the least driven wheel before the drive %.2f rad/s, "
                     L"bodies refused %ld, steps waiting %ld, kept %.3f, spread %.2f rad/s, faults %ld; the physics at %d steps a second",
-                    cutActs ? L"acting" : TorqueCutWhyNot(s, want, own && GearboxManual(w), cutHooks, raw.gearEngaged, gearTop, cutAgrees), c.s, sTop, gearTop, sTop * scale.redline,
+                    cutActs ? L"acting" : TorqueCutWhyNot(s, want, cutHeld || cutA, cutHooks, raw.gearEngaged, gearTop, cutAgrees), c.s, sTop, gearTop, sTop * scale.redline,
                     c.f, c.bracket, w.cutFloor, c.used, c.rate, locked ? 0.0f : SettingsRange(w.clutch.carried, -1.0f, kClutchHold), s.engineShare / 100.0f, c.stock, c.torque, c.d4, c.b4s, c.standIn, c.w,
                     c.answered - before.answered, c.passed - before.passed, c.others - before.others, c.faults - before.faults, c.falls - before.falls, cutActs ? L"on" : L"off",
                     CutAnswerOurs(c.vehicle, w.refs.vehicle) ? L"is this truck's" : L"is not this truck's (its figures here are another truck's or none)", governor,
@@ -9371,6 +9469,10 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                     HeldSlipProbe(slipWords, sizeof slipWords, s.heldGearSlip, GearboxPosNumbered(w.pos.pos) && cutActs ? w.slip.inForce : s.heldGearSlip);
                     Log(L"probe: held gear slip: %S; in %S the cap is %.2f rad/s (0 none) and the ceiling %.2f rad/s", slipWords, GearboxPosName(w.pos.pos), w.slotCap, w.slotCap > 0.0f ? cap.ceiling : 0.0f);
                 }
+                if (inA)
+                    Log(L"probe: torque cut in A: the slot is %s, the converter %s (input %.0f rpm, engine %.0f rpm, torque x%.2f), F to the wheels %.3f, the fall at a lock %s",
+                        lockedA ? L"the map" : L"the scalar", lockedA ? L"locked" : L"open", w.gearbox.input, w.gearbox.rpm, w.gearbox.ratio, w.gearbox.drive,
+                        w.fallAt ? L"in progress" : L"not in progress");
                 w.cutWas = c;
                 w.capWas = cap;
                 DiffCounts dc = {};
@@ -11785,7 +11887,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.overRevDamage == b.overRevDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
            a.springFront == b.springFront && a.dampingFront == b.dampingFront && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.checkers == b.checkers && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.hiddenWarnings == b.hiddenWarnings && a.warnFuel == b.warnFuel && a.warnEngine == b.warnEngine && a.warnGearbox == b.warnGearbox && a.warnCoolant == b.warnCoolant && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
-           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.quickWinch == b.quickWinch && a.lockSteerFront == b.lockSteerFront && a.lockSteerRear == b.lockSteerRear && a.engineSoundTop == b.engineSoundTop && a.engineSoundCurve == b.engineSoundCurve && a.heldGearSlip == b.heldGearSlip && a.lowRangeSlip == b.lowRangeSlip && a.diffType == b.diffType && a.physicsRate == b.physicsRate && a.engineBrake == b.engineBrake && a.winchOutRate == b.winchOutRate && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
+           a.oilGauge == b.oilGauge && a.cutInA == b.cutInA && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.quickWinch == b.quickWinch && a.lockSteerFront == b.lockSteerFront && a.lockSteerRear == b.lockSteerRear && a.engineSoundTop == b.engineSoundTop && a.engineSoundCurve == b.engineSoundCurve && a.heldGearSlip == b.heldGearSlip && a.lowRangeSlip == b.lowRangeSlip && a.diffType == b.diffType && a.physicsRate == b.physicsRate && a.engineBrake == b.engineBrake && a.winchOutRate == b.winchOutRate && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
            a.camberGainFront == b.camberGainFront && a.camberGainRear == b.camberGainRear && a.camberRestFront == b.camberRestFront && a.camberRestRear == b.camberRestRear &&
            !memcmp(a.diffAxle, b.diffAxle, sizeof a.diffAxle) && a.airBrakes == b.airBrakes;
 }
@@ -12023,6 +12125,54 @@ static void PartIni()
         cs.engineShare = 0;
         const bool offShare = !TorqueCutWanted(cs);
         Check(on && offSpeed && offShare, "torque cut: wanted with Powertrain, Gearbox=2, EngineShare above 0 and ModEngineSpeed=1; not with ModEngineSpeed=0 (said so) or EngineShare 0");
+        // the gate with A (BRIEF_drivetrain_3_a_on_our_chain.md, part A; M5, M6). CutInA off: at every level and every
+        // input the rule as it was before the job, A or not. On: A acts at Gearbox=1 and 2, a held gear only at 2
+        cs.engineShare = 100;
+        bool asBefore = true, offNeverA = true;
+        for (int level = kGearboxGame; level <= kGearboxOwn; level++)
+            for (int bits = 0; bits < 256; bits++)
+            {
+                GaugeSettings g = cs;
+                g.gearbox = level, g.cutInA = false;
+                g.powertrain = (bits & 1) != 0, g.modEngineSpeed = (bits & 2) != 0;
+                const bool want = (bits & 4) != 0, held = (bits & 8) != 0, hooks = (bits & 16) != 0, agrees = (bits & 32) != 0, read = (bits & 64) != 0, autoHas = (bits & 128) != 0;
+                for (int gear = -1; gear <= 1; gear++)
+                    for (float top : { 0.0f, 2.0f })
+                    {
+                        const bool was = want && held && (g.powertrain && g.modEngineSpeed && g.gearbox == kGearboxOwn && g.engineShare > 0) && hooks && gear != 0 && agrees && top > 0.0f && read;
+                        const bool inA = TorqueCutInA(g, autoHas, autoHas, kPosA);
+                        asBefore = asBefore && TorqueCutActs(g, want, held, inA, hooks, gear, agrees, top, read) == was;
+                        offNeverA = offNeverA && !inA;
+                    }
+            }
+        GaugeSettings ga = cs;
+        ga.cutInA = true;
+        ga.gearbox = kGearboxModel;
+        const bool aAtOne = TorqueCutWanted(ga) && TorqueCutInA(ga, true, true, kPosA) && TorqueCutActs(ga, true, false, true, true, 2, true, 2.0f, true);
+        const bool heldAtOne = !TorqueCutActs(ga, true, false, false, true, 2, true, 2.0f, true); // no gear is held by hand at level 1
+        ga.gearbox = kGearboxOwn;
+        const bool aAtTwo = TorqueCutActs(ga, true, false, TorqueCutInA(ga, true, true, kPosA), true, 3, true, 2.0f, true) && TorqueCutActs(ga, true, true, false, true, 3, true, 2.0f, true);
+        const bool notA = !TorqueCutInA(ga, true, true, kPosGear) && !TorqueCutInA(ga, false, true, kPosA) && !TorqueCutInA(ga, true, false, kPosA);
+        const bool noHooks = !TorqueCutActs(ga, true, false, true, false, 2, true, 2.0f, true) &&
+                             !wcscmp(TorqueCutWhyNot(ga, true, true, false, 2, 2.0f), L"its hooks are not all in (the gear torque, the engine speed and the wheels' drive)");
+        const bool landing = !TorqueCutActs(ga, true, false, true, true, 2, false, 2.0f, true) &&
+                             !wcscmp(TorqueCutWhyNot(ga, true, true, true, 2, 2.0f, false), L"the game's gear does not yet agree with the position (a shift landing)");
+        const bool neutral = !TorqueCutActs(ga, true, false, true, true, 0, true, 2.0f, true) && !wcscmp(TorqueCutWhyNot(ga, true, true, true, 0, 2.0f), L"in neutral");
+        const bool noPos = !wcscmp(TorqueCutWhyNot(ga, true, false, true, 2, 2.0f), L"neither A nor a gear held by hand (the mod's gearbox does not have the truck)");
+        ga.gearbox = kGearboxGame;
+        const bool gameBox = !TorqueCutWanted(ga) && !TorqueCutActs(ga, true, false, true, true, 2, true, 2.0f, true) && !wcscmp(TorqueCutWhyNot(ga, true, true, true, 2, 2.0f), L"the game's gearbox drives (Gearbox=0)");
+        ga.cutInA = false;
+        const bool oldWords = !wcscmp(TorqueCutWhyNot(ga, true, true, true, 2, 2.0f), L"the gearbox is not the mod's own (Gearbox=2)");
+        ga.gearbox = kGearboxOwn;
+        const bool oldHeld = !wcscmp(TorqueCutWhyNot(ga, true, false, true, 2, 2.0f), L"no gear held by hand (A drives, or the mod's gearbox does not have the truck)");
+        GaugeSettings fresh = {};
+        SettingsDefaults(fresh);
+        const bool gateAll = asBefore && offNeverA && aAtOne && heldAtOne && aAtTwo && notA && noHooks && landing && neutral && noPos && gameBox && oldWords && oldHeld && !fresh.cutInA;
+        if (!gateAll)
+            printf("     asBefore %d offNeverA %d aAtOne %d heldAtOne %d aAtTwo %d notA %d noHooks %d landing %d neutral %d noPos %d gameBox %d oldWords %d oldHeld %d\n", asBefore, offNeverA, aAtOne,
+                   heldAtOne, aAtTwo, notA, noHooks, landing, neutral, noPos, gameBox, oldWords, oldHeld);
+        Check(gateAll, "torque cut in A: with CutInA off (the default) the gate is the rule as it was at every level and input, and A never counts; on, A acts at Gearbox=1 and 2 and a held gear "
+                       "only at 2, never at Gearbox=0, with the hooks missing, in neutral or while the game's gear and the position disagree by sign, each with its words");
     }
     // keys the mod does not know, in its own section and in another one
     WritePrivateProfileStringW(kIniSection, L"FromALaterVersion", L"7", ini.c_str());
@@ -12108,6 +12258,7 @@ static void PartIni()
     c.diffType = 2;
     c.physicsRate = 120;
     c.modEngineSpeed = false;
+    c.cutInA = true;
     c.engineSpeedTop = 1.25f;
     c.roadCdA = 2.5f;
     c.engineShare = 80;
@@ -12126,7 +12277,7 @@ static void PartIni()
                             c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.overRevDamage != d.overRevDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springFront != d.springFront && c.dampingFront != d.dampingFront && c.extraTravel != d.extraTravel && c.frameFlex != d.frameFlex && c.twistRange != d.twistRange && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
                             c.demo != d.demo && c.checkers != d.checkers && c.probe != d.probe && c.keepLogs != d.keepLogs && c.soundVolume != d.soundVolume && c.hiddenWarnings != d.hiddenWarnings && c.warnFuel != d.warnFuel && c.warnEngine != d.warnEngine && c.warnGearbox != d.warnGearbox && c.warnCoolant != d.warnCoolant && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
-                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.diffLockBite != d.diffLockBite && c.quickWinch != d.quickWinch && c.lockSteerFront != d.lockSteerFront && c.lockSteerRear != d.lockSteerRear && c.engineSoundTop != d.engineSoundTop && c.engineSoundCurve != d.engineSoundCurve && c.heldGearSlip != d.heldGearSlip && c.lowRangeSlip != d.lowRangeSlip && c.diffType != d.diffType && c.physicsRate != d.physicsRate && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
+                            c.gearbox != d.gearbox && c.cutInA != d.cutInA && !d.cutInA && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.diffLockBite != d.diffLockBite && c.quickWinch != d.quickWinch && c.lockSteerFront != d.lockSteerFront && c.lockSteerRear != d.lockSteerRear && c.engineSoundTop != d.engineSoundTop && c.engineSoundCurve != d.engineSoundCurve && c.heldGearSlip != d.heldGearSlip && c.lowRangeSlip != d.lowRangeSlip && c.diffType != d.diffType && c.physicsRate != d.physicsRate && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
     WriteIni(c);
     ReadIni(b);
     Check(allChanged, "ini: the test changes every setting from its default");
@@ -12147,7 +12298,7 @@ static void PartIni()
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 169, "ini: the help text survives a write (169 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 170, "ini: the help text survives a write (170 comment lines)");
     // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
     {
         char none[32] = "x", tab[32] = {}, kept[32] = {};

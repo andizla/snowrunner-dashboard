@@ -1744,10 +1744,11 @@ int main(int argc, char **argv)
         GearboxModel box = {};
         wheels(0.0f);
         GearboxStep(box, g, k, 1.0f, 1.0f, kDt);
-        const bool stall = box.gear == 1 && !box.locked && Near(box.rpm, ConverterStall(k), 1.0f) && Near(box.ratio, kStallRatio, 0.001f) && Near(box.drive, kStallRatio, 0.001f);
+        const bool stall = box.gear == 1 && !box.locked && Near(box.rpm, ConverterStall(k), 1.0f) && Near(box.ratio, kStallRatio, 0.001f);
         GearboxStep(box, g, k, 0.0f, 0.0f, kDt);
-        const bool creep = Near(box.rpm, k.idle, 1.0f) && Near(box.drive, kCreep * kStallRatio, 0.001f);
-        Check(stall && creep, "automatic: standing, a floored engine runs at the converter's stall with the torque doubled, and an idling one creeps");
+        // the model's own "to the wheels" figure and its creep are gone (BRIEF_drivetrain_3_a_on_our_chain.md, M1): the creep is CreepStep's alone
+        const bool creep = Near(box.rpm, k.idle, 1.0f) && box.drive == 0.0f;
+        Check(stall && creep, "automatic: standing, a floored engine runs at the converter's stall with the torque doubled, and an idling one runs at idle; the model gives no pull figure of its own");
         // a truck's converter (review 11): the stall at 0.8 of the red zone, at most 2600 rpm (a truck 1760, a heavy truck
         // 1520, a scout's 5500 rpm engine 2600), where the truck's curve gives all its torque and the heavy truck's 0.96 (a
         // scout's 0.85); a floored launch from a standstill, gaining, lifts the engine from the stall through the launch and
@@ -2435,6 +2436,26 @@ int main(int argc, char **argv)
                                TorqueLift(1.0f, 1.0f, 1.0f, 1.0f, 1.3f) == 1.0f && Near(TorqueLift(1.0f, 1.0f, 1.0f, kStallRatio, 0.1f), kStallRatio, 0.001f) &&
                                Near(TorqueLift(0.8f, 0.55f, 1.0f, 1.0f, 0.3f), 0.8f * 0.55f, 0.001f) && Near(TorqueLift(0.8f, 0.55f, 0.4f, 1.0f, 0.3f), 0.8f, 0.001f) &&
                                TorqueLift(0.0f, 1.0f, 1.0f, 1.0f, 0.5f) == kTorqueFactorLeast && TorqueLift(nanf(""), 1.0f, 1.0f, 1.0f, 0.5f) == 1.0f;
+            // a long rest and a take again (BRIEF_drivetrain_3_a_on_our_chain.md, point 6): hours in A under the torque cut the
+            // hand step is not wanted. It gives the game's share back once and writes nothing more, and the first pass
+            // of the old chain after it writes the game's own share, no lift left over from before the rest
+            {
+                TorqueHand rested = {};
+                TorqueHandStep(rested, true, 0x5000, 0x4000, 0.9f, 2.0f);
+                const TorqueOrders liftedFirst = TorqueHandStep(rested, true, 0x5000, 0x4000, 0.9f, 2.0f);
+                int restWrites = 0;
+                float restLast = 0.0f;
+                for (int i = 0; i < 10000; i++)
+                {
+                    const TorqueOrders o = TorqueHandStep(rested, false, 0x5000, 0x4000, i ? 0.9f : liftedFirst.factor, 2.0f);
+                    if (o.write) restWrites++, restLast = o.factor;
+                }
+                const TorqueOrders again = TorqueHandStep(rested, true, 0x5000, 0x4000, 0.9f, 2.0f);
+                Check(Near(liftedFirst.factor, 1.8f, 0.001f) && restWrites == 1 && Near(restLast, 0.9f, 0.001f) && again.write && Near(again.factor, 0.9f, 0.001f),
+                      "torque hand under the cut: not wanted for 10 000 passes it gives the game's share back once and writes nothing more; taken again, its first write is the game's own share, no jump");
+                Check(OverRevCounts(kCutMap, true, false) && !OverRevCounts(kCutMap, true, true) && !OverRevCounts(kCutScalar, true, false) && !OverRevCounts(kCutMap, false, false),
+                      "over-rev: its share counts where the map went out and the drive answered, and never in A");
+            }
             TorqueHand hand = {};
             // the first write after the take is the game's own share, the lift comes with the second pass (part 172, must 2)
             const TorqueOrders took = TorqueHandStep(hand, true, 0x5000, 0x4000, 0.9f, 2.0f);
@@ -4633,6 +4654,82 @@ int main(int argc, char **argv)
         const bool overBrake = brake115 < brake100 && brake130 < brake115 && Near(brake130, -0.15f * (2600.0f - 800.0f) / 1200.0f, 1e-5f) && brake160 == brake130 &&
                                TorqueCutF(cm, 12.0f) == 0.0f && TorqueCutF(cm, 16.0f) == 0.0f;
         Check(overBrake, "torque cut: the engine braking keeps rising above the redline to its value at 1.3 of the top (1.5 x at the redline here), flat above; the pull 0 above the governor's end");
+        // the open converter's F (BRIEF_drivetrain_3_a_on_our_chain.md, M1 and M3): the map's law with the engine ahead of
+        // the input. Floored at the stall (the curve whole at 1600 rpm) the ratio doubles it and the bound is the stall's
+        // ratio; at the coupling point it is the map's own drive part; the cold limit, the load, the engine held back
+        {
+            TorqueCutMap half = cm, coldOpen = cm, loadedOpen = cm, heldOpen = cm, offOpen = cm;
+            half.pedal = 0.5f, coldOpen.limit = 0.6f, loadedOpen.load = 0.2f, heldOpen.held = 0.5f, offOpen.pedal = 0.0f;
+            const float atStall = ConverterOpenF(cm, 0.0f, 1600.0f, kStallRatio, kStallRatio), bounded = ConverterOpenF(cm, 0.0f, 1600.0f, 2.6f, kStallRatio);
+            const float coupled = ConverterOpenF(cm, 1200.0f, 1200.0f, 1.0f, kStallRatio), lockedSame = TorqueCutF(cm, 6.0f);
+            const float halfOpen = ConverterOpenF(half, 1200.0f, 1200.0f, 1.0f, kStallRatio), halfLocked = TorqueCutF(half, 6.0f);
+            const float brakeAtHalf = 0.5f * 0.15f * (1200.0f - 800.0f) / 1200.0f;
+            const bool law = Near(atStall, 2.0f, 1e-5f) && Near(bounded, kStallRatio, 1e-5f) && Near(coupled, 1.0f, 1e-5f) && Near(coupled, lockedSame, 1e-5f) && Near(halfOpen, 0.5f, 1e-5f) &&
+                             Near(halfOpen - halfLocked, brakeAtHalf, 1e-5f) && Near(ConverterOpenF(coldOpen, 0.0f, 1600.0f, 2.0f, kStallRatio), 1.2f, 1e-5f) &&
+                             Near(ConverterOpenF(loadedOpen, 0.0f, 1600.0f, 2.0f, kStallRatio), 1.8f, 1e-5f) && Near(ConverterOpenF(heldOpen, 0.0f, 1600.0f, 2.0f, kStallRatio), 1.0f, 1e-5f) &&
+                             ConverterOpenF(offOpen, 900.0f, 1000.0f, 1.3f, kStallRatio) == 0.0f && ConverterOpenF(cm, 2000.0f * cm.governTo, 2300.0f, 1.0f, kStallRatio) == 0.0f &&
+                             ConverterOpenF(cm, NAN, 1600.0f, 2.0f, kStallRatio) == 0.0f && ConverterOpenF(cm, 0.0f, 1600.0f, NAN, kStallRatio) == 0.0f &&
+                             Near(ConverterOpenF(cm, 1200.0f, 1200.0f, 0.4f, kStallRatio), 1.0f, 1e-5f);
+            Check(law, "torque cut in A: the open converter's F is the map's law at the engine's own speed times the torque ratio: 2.0 floored at the stall and never over the stall's ratio, "
+                       "the map's own at the coupling point, at half pedal over the locked map by the brake term alone; the cold limit, the load and the engine held back as in the map; "
+                       "0 with the foot off, at the governor's end and for a figure that is no number");
+            // the fall at a lock, paced by the clock (the lead's point 17): from the open converter's 1.34 to the map's 1.0
+            // over 0.3 s, the same at 60 and at 120 steps a second, no step over the line's own
+            bool sameAtBoth = true, smallSteps = true;
+            float last60 = 1.34f, last120 = 1.34f;
+            for (int i = 0; i <= 18; i++)
+            {
+                const float secs = (float)i / 60.0f, f60 = CutLockFall(1.0f, 1.34f, 1.0f, 1.0f, secs), f120 = CutLockFall(1.0f, 1.34f, 1.0f, 1.0f, (float)(2 * i) / 120.0f);
+                const float mid = CutLockFall(1.0f, 1.34f, 1.0f, 1.0f, (float)(2 * i + 1) / 120.0f);
+                sameAtBoth = sameAtBoth && Near(f60, f120, 1e-6f);
+                smallSteps = smallSteps && last60 - f60 <= 0.34f / 18.0f + 1e-5f && last120 - f120 <= 0.34f / 18.0f + 1e-5f && mid <= f120 + 1e-6f && mid >= 1.0f;
+                last60 = f60, last120 = f120;
+            }
+            const bool fall = sameAtBoth && smallSteps && Near(CutLockFall(1.0f, 1.34f, 1.0f, 1.0f, 0.0f), 1.34f, 1e-6f) && Near(CutLockFall(1.0f, 1.34f, 1.0f, 1.0f, 0.15f), 1.17f, 1e-5f) &&
+                              CutLockFall(1.0f, 1.34f, 1.0f, 1.0f, 0.3f) == 1.0f && CutLockFall(1.0f, 1.34f, 1.0f, 1.0f, 5.0f) == 1.0f;
+            // a lift is the driver's: the foot off drops to the map's at once, half the pedal takes half of what was held;
+            // a rise is never held, nor a time that is no number
+            const bool lift = CutLockFall(-0.1f, 1.34f, 1.0f, 0.0f, 0.05f) == -0.1f && Near(CutLockFall(0.5f, 1.34f, 1.0f, 0.5f, 0.0f), 0.67f, 1e-6f) &&
+                              CutLockFall(1.2f, 1.0f, 1.0f, 1.0f, 0.05f) == 1.2f && CutLockFall(1.0f, 1.34f, 1.0f, 1.0f, NAN) == 1.0f && CutLockFall(1.0f, 1.34f, 1.0f, 1.0f, -1.0f) == 1.0f &&
+                              CutLockFall(1.0f, NAN, 1.0f, 1.0f, 0.05f) == 1.0f && CutLockFall(1.0f, 1.34f, 0.0f, 1.0f, 0.05f) == 1.0f;
+            // in the answer: the map's slot with a fall carries it and says so, the scalar's never, and a slot without one is as before
+            const float omegaA[4] = { 6.0f, 6.0f, 6.0f, 6.0f };
+            const bool drivenA[4] = { true, true, true, true };
+            const CutSpeeds spA = TorqueCutSpeeds(omegaA, drivenA, 4, 1);
+            TorqueCutSlot fs = {};
+            fs.mode = kCutMap, fs.share = 1.0f, fs.pedal = 1.0f, fs.map = cm;
+            const TorqueCutAnswer plainAnswer = TorqueCutAnswerOf(fs, 3.0f, 0.25f, 4.0f, 13.0f, 1.0f, 1.0f, spA, 5000);
+            fs.fallFrom = 1.34f, fs.fallPedal = 1.0f, fs.fallAt = 5000;
+            const TorqueCutAnswer falling = TorqueCutAnswerOf(fs, 3.0f, 0.25f, 4.0f, 13.0f, 1.0f, 1.0f, spA, 5150), done = TorqueCutAnswerOf(fs, 3.0f, 0.25f, 4.0f, 13.0f, 1.0f, 1.0f, spA, 5300);
+            const TorqueCutAnswer noClock = TorqueCutAnswerOf(fs, 3.0f, 0.25f, 4.0f, 13.0f, 1.0f, 1.0f, spA);
+            TorqueCutSlot scalarSlot = fs;
+            scalarSlot.mode = kCutScalar, scalarSlot.scalar = 1.5f;
+            const TorqueCutAnswer scalarAnswer = TorqueCutAnswerOf(scalarSlot, 3.0f, 0.25f, 4.0f, 13.0f, 1.0f, 1.0f, spA, 5150);
+            const bool inAnswer = Near(plainAnswer.f, 1.0f, 1e-5f) && !plainAnswer.falling && Near(falling.f, 1.17f, 1e-4f) && falling.falling && Near(falling.torque, 3.0f * 1.17f, 1e-3f) &&
+                                  Near(done.f, 1.0f, 1e-5f) && !done.falling && Near(noClock.f, 1.0f, 1e-5f) && !noClock.falling && scalarAnswer.f == 1.5f && !scalarAnswer.falling;
+            if (!(fall && lift && inAnswer)) printf("     the fall: same %d steps %d fall %d lift %d inAnswer %d (%.4f %.4f %.4f)\n", sameAtBoth, smallSteps, fall, lift, inAnswer, plainAnswer.f, falling.f, done.f);
+            Check(fall && lift && inAnswer,
+                  "torque cut in A: the fall at a lock runs in a straight line from the open converter's F to the map's over 0.3 s by the clock, the same at 60 and at 120 steps a second, "
+                  "no step over the line's; a lift drops at once and a rise is never held; the detour's answer carries it in the map alone and says so");
+            // the learner under the cut (the lead's addendum of 14:23): which steps may feed a sample, and the divisor as
+            // the mean of what the detour used between two passes of the mod's thread
+            TorqueCutAnswer settled = plainAnswer;
+            settled.used = settled.bracket;
+            TorqueCutAnswer stillRising = settled, atFloor = settled;
+            stillRising.used = settled.bracket * 0.9f, atFloor.floored = true;
+            TorqueCutAnswer nearly = settled;
+            nearly.used = settled.bracket * 0.99f;
+            fs.fallAt = 0;
+            const bool stepOk = CutLearnStepOk(fs, settled, 1.0f) && CutLearnStepOk(fs, nearly, 1.0f) && !CutLearnStepOk(fs, stillRising, 1.0f) && !CutLearnStepOk(fs, atFloor, 1.0f) &&
+                                !CutLearnStepOk(fs, falling, 1.0f) && !CutLearnStepOk(scalarSlot, settled, 1.0f) && !CutLearnStepOk(fs, settled, 0.9f) && !CutLearnStepOk(fs, settled, NAN);
+            const CutLearnTotals was = { 10.0, 100, 3, 7 };
+            const CutLearnTotals three = { 11.5, 103, 3, 7 }, none = { 10.0, 100, 3, 7 }, bad = { 11.5, 103, 4, 7 }, other = { 11.5, 103, 3, 8 };
+            const bool divisor = Near(CutLearnDivisor(was, three, 7), 0.5f, 1e-6f) && !isfinite(CutLearnDivisor(was, none, 7)) && !isfinite(CutLearnDivisor(was, bad, 7)) &&
+                                 !isfinite(CutLearnDivisor(was, other, 8)) && !isfinite(CutLearnDivisor(was, other, 7)) && !isfinite(CutLearnDivisor(was, three, 0));
+            Check(stepOk && divisor,
+                  "torque cut, the learning: a step feeds a sample only from the map, settled within 2 percent, not in the lock's fall, not at the floor and with the wheels keeping all the push; "
+                  "the divisor is the mean of the brackets the detour used since the last pass, and no number for a count of 0, a step that may not feed, or another truck");
+        }
         // the game's curve, as the drive scales it by the power factor: 0 below the start, 1 at a, falling to 0 at the top
         const bool stock = TorqueCutStockCurve(0.25f, 4.0f, 13.0f, 1.0f, 0.1f) == 0.0f && TorqueCutStockCurve(0.25f, 4.0f, 13.0f, 1.0f, 4.0f) == 1.0f &&
                            Near(TorqueCutStockCurve(0.25f, 4.0f, 13.0f, 1.0f, 8.5f), 0.5f, 1e-5f) && TorqueCutStockCurve(0.25f, 4.0f, 13.0f, 1.0f, 13.5f) == 0.0f &&
@@ -7085,6 +7182,27 @@ int main(int argc, char **argv)
         bool offLearned = false;
         for (int i = 0; i < 60; i++) offLearned = offLearned || BaseLearnStep(off, 3, true, 1.0f, 0.0f, factor, 0.5f, x, 0.0f, 9.0f, 0.05f, learned);
         const bool learns = Near(got, base, base * 0.05f) && Near(gotOn, got, 0.001f) && !offLearned;
+        // under the cut (the lead's addendum of 14:23 to BRIEF_drivetrain_3_a_on_our_chain.md): the acceleration is the
+        // base times the bracket the cut used, and the same base is learned; a row begun without the cut and ended with it
+        // keeps what it has and lands on the same base; a bracket of 0.2 or less feeds nothing
+        {
+            BaseLearn byCut = {}, mixed = {}, lowBracket = {};
+            float gotCut = 0.0f, gotMixed = 0.0f;
+            bool lowLearned = false;
+            for (int i = 0; i < 60; i++)
+            {
+                const float bracket = 0.6f + 0.004f * i; // it moves with the wheels' speed
+                if (BaseLearnStep(byCut, 3, true, base * bracket, 0.0f, 99.0f, pedal, x, 0.0f, 9.0f, 0.05f, learned, nullptr, nullptr, bracket)) gotCut = learned;
+                const bool cutNow = i >= 20;
+                if (BaseLearnStep(mixed, 3, true, cutNow ? base * bracket : base * factor * pedal * GamePull(x), 0.0f, factor, pedal, x, 0.0f, 9.0f, 0.05f, learned, nullptr, nullptr,
+                                  cutNow ? bracket : NAN))
+                    gotMixed = learned;
+                lowLearned = lowLearned || BaseLearnStep(lowBracket, 3, true, base * 0.15f, 0.0f, factor, pedal, x, 0.0f, 9.0f, 0.05f, learned, nullptr, nullptr, 0.15f);
+            }
+            Check(Near(gotCut, base, base * 0.001f) && Near(gotMixed, base, base * 0.05f) && Near(gotMixed, got, 0.01f) && !lowLearned,
+                  "road load under the torque cut: a gear's pull learned by the bracket the cut used is the base learned without the cut, a row fed both ways lands on it too, "
+                  "and a bracket of 0.2 or less feeds nothing");
+        }
         char line[220];
         snprintf(line, sizeof line, "road load: the air only, %.3f m/s2 at 100 km/h for 3515 kg; near the top %.2f under %.2f; a gear's pull learned %.3f of %.2f, %.3f with the load on",
                  at100, loaded, plain, got, base, gotOn);
@@ -8689,10 +8807,33 @@ int main(int argc, char **argv)
             GearboxStep(creep, lt, tk, 0.0f, 0.0f, kDt);
             GearboxModel creepStand = boxIn(1, rollAt(1, 0.0f), 0.0f);
             GearboxStep(creepStand, lt, tk, 0.0f, 0.0f, kDt);
-            Check(ramp && !slip.locked && Near(slip.rpm, slip.input * (1.0f + kConverterSlip), 1.0f) && slip.rpm > slip.input && creep.drive > 0.0f &&
-                      creep.drive < creepStand.drive,
+            Check(ramp && !slip.locked && Near(slip.rpm, slip.input * (1.0f + kConverterSlip), 1.0f) && slip.rpm > slip.input && creep.ratio < creepStand.ratio &&
+                      Near(creepStand.ratio, kStallRatio, 0.001f),
                   "converter: the multiplication falls in a line from its stall to 1 at the coupling point; open and rolling the engine runs a little ahead of the "
-                  "input; an idling engine creeps less as the truck rolls");
+                  "input; at idle the converter multiplies less as the truck rolls");
+            // the converter as the cut reads it (M4): a shift made locked opens the model for its own pass alone, and the
+            // cut still reads locked there, so the slot never goes to the scalar and back within two passes
+            {
+                GearboxModel sb = boxIn(2, rollAt(2, tk.redline * 1.04f), 1.0f);
+                sb.locked = true;
+                bool shifted = false, openSeen = false;
+                for (int i = 0; i < 80 && !shifted; i++)
+                {
+                    GearboxStep(sb, lt, tk, 1.0f, 1.0f, kDt, handOf(kInputPad));
+                    shifted = sb.gear != 2;
+                    openSeen = openSeen || !ConverterLockedForCut(sb);
+                }
+                const bool onPass = shifted && sb.gear == 3 && !sb.locked && sb.relock && ConverterLockedForCut(sb) && !openSeen;
+                rollAt(3, GearboxInput(lt, tk, 3, sb.spin));
+                GearboxStep(sb, lt, tk, 1.0f, 1.0f, kDt, handOf(kInputPad));
+                const bool after = sb.locked && !sb.relock && ConverterLockedForCut(sb);
+                GearboxModel openBox = boxIn(1, rollAt(1, 0.0f), 1.0f);
+                GearboxStep(openBox, lt, tk, 1.0f, 1.0f, kDt, handOf(kInputPad));
+                if (!(onPass && after)) printf("     M4: shifted %d gear %d locked %d relock %d openSeen %d after %d\n", shifted, sb.gear, sb.locked, sb.relock, openSeen, after);
+                Check(onPass && after && !ConverterLockedForCut(openBox),
+                      "converter under the cut: on the pass of a shift made locked the model is open and the cut reads it locked, so no scalar goes out; it is locked again on the next pass; "
+                      "a launch from a standstill is open");
+            }
         }
         // finding 4: the light foot's floor from where the curve first reaches 0.9 of its most, at the most 0.45 of the red
         // zone: a scout's class curve about 2370 rpm (it was 3300, from its 0.98 point at 0.75), a truck's 880
@@ -8830,7 +8971,7 @@ int main(int argc, char **argv)
             // takes the top for (a wrong top), it goes up one after kTopStuckFor; not with the pull on, not under the gear's
             // hold, not in the top gear
             const EngineHand h = handOf(kInputPad);
-            auto stuckRun = [&](int gear, float pull, float moving, float seconds, int &ups, bool armed = true) {
+            auto stuckRun = [&](int gear, float pull, float moving, float seconds, int &ups, bool armed = true, bool pullHeld = false, bool *seen = nullptr) {
                 TruckRaw st = lt;
                 st.flags = 3;
                 st.gear = st.gearEngaged = gear;
@@ -8843,8 +8984,9 @@ int main(int argc, char **argv)
                 b.moving = moving;
                 b.holdUp = true;
                 b.pullSeen = armed;
-                for (float at = 0.0f; at < seconds && b.gear == gear; at += kDt) GearboxStep(b, st, tk, 1.0f, 1.0f, kDt, h);
+                for (float at = 0.0f; at < seconds && b.gear == gear; at += kDt) GearboxStep(b, st, tk, 1.0f, 1.0f, kDt, h, false, pullHeld);
                 ups = b.topUps;
+                if (seen) *seen = b.pullSeen;
                 return b.gear;
             };
             int u1 = 0, u2 = 0, u3 = 0, u4 = 0, u5 = 0, u6 = 0;
@@ -8858,6 +9000,12 @@ int main(int argc, char **argv)
                   "not sooner, not with the pull on (the taper rule's case then), not within the gear's hold, not in the top gear, not before the game's pull has "
                   "read over 0.1 once");
             (void)pulling;
+            // the cut in A holds the game's pull at 1 (M2, the lead's point 16): the net rests and is not armed by that pull
+            int u7 = 0, u8 = 0;
+            bool seenHeld = true;
+            const int restNet = stuckRun(3, 0.0f, 10.0f, 3.0f, u7, true, true), restArm = stuckRun(3, 1.0f, 10.0f, 3.0f, u8, false, true, &seenHeld);
+            Check(restNet == 3 && u7 == 0 && restArm == 3 && u8 == 0 && !seenHeld,
+                  "gear tops: with the torque cut acting in A the net under a wrong top rests: floored at a steady 0.8 of the top it stays in the gear, and a pull held at 1 does not arm it");
         }
         {
             // the taper rule (BRIEF_auto_stuck_under_taper.md F1, the Reviewer's point 11 and R1): in A, floored in 3rd at
@@ -8875,7 +9023,7 @@ int main(int argc, char **argv)
             tq.max = 4200.0f;
             struct Run { int gear, ups, backs, watches, most; float trend0, rate; };
             // in3(at): rad/s each second in 3rd at the run's time; in4(since): in 4th since the shift
-            auto taperRun = [&](float share, float pedal, float moving, bool holdUp, float seconds, auto in3, auto in4) {
+            auto taperRun = [&](float share, float pedal, float moving, bool holdUp, float seconds, auto in3, auto in4, bool pullHeld = false) {
                 TruckRaw st = lt;
                 st.flags = 3;
                 st.throttle = -pedal;
@@ -8893,7 +9041,8 @@ int main(int argc, char **argv)
                     st.gear = st.gearEngaged = b.gear;
                     for (int i = 0; i < st.wheels; i++) st.spin[i] = spin;
                     st.speed = spin / 2.0f;
-                    GearboxStep(b, st, tq, pedal, 1.0f, kDt, h);
+                    st.actionB4 = pullHeld ? 1.0f : 0.58f; // under the cut the game's pull reads 1
+                    GearboxStep(b, st, tq, pedal, 1.0f, kDt, h, false, pullHeld);
                     if (b.gear > r.most) r.most = b.gear;
                 }
                 r.gear = b.gear;
@@ -8911,6 +9060,10 @@ int main(int argc, char **argv)
             auto plus = [](float at) { return fmodf(at, 1.0f) < 0.5f ? 1.0f : -0.9f; };       // mean +0.05
             auto gaining = [](float) { return 0.3f; };
             const Run holds = taperRun(0.80f, 1.0f, 10.0f, true, 12.0f, flat, flat);
+            // the cut in A (M2): floored at the taper's share and not gaining for kTaperFor and far more, a climb too: no shift, no hunt
+            const Run restFlat = taperRun(0.80f, 1.0f, 10.0f, true, 12.0f, flat, flat, true), restClimb = taperRun(0.80f, 1.0f, 10.0f, true, 30.0f, [](float) { return -0.2f; }, flat, true);
+            Check(restFlat.gear == 3 && restFlat.ups == 0 && restFlat.most == 3 && restClimb.gear <= 3 && restClimb.ups == 0 && restClimb.most == 3,
+                  "taper rule: with the torque cut acting in A it rests: floored at 0.80 of 3rd's top and not gaining, on the flat and losing on a climb, no shift up by it");
             const Run bumpy = taperRun(0.80f, 1.0f, 10.0f, true, 6.0f, alternating, flat);
             const Run gap = taperRun(0.80f, 1.0f, 10.0f, true, 8.0f, flat, gapThen);
             const Run climb = taperRun(0.80f, 1.0f, 10.0f, true, 30.0f, flat, grade);

@@ -118,6 +118,43 @@ inline float TorqueCutF(const TorqueCutMap &m, float s, float brakeShare = 1.0f,
     return isfinite(f) ? f : 0.0f;
 }
 
+// F through an open converter (BRIEF_drivetrain_3_a_on_our_chain.md, the Reviewer's M1): the map's law with the engine
+// ahead of the gearbox's input. The raw pedal x (the curve at the open converter's engine speed x the governor at the
+// input's speed x min(1, limit / pedal) x the converter's torque ratio, less the road load), the engine held back, and
+// no braking: an open converter passes next to nothing back (R6). Before the blend with Engine share, as TorqueCutF is.
+// inputRpm: the gearbox's input (the turbine); engineRpm: the open converter's engine speed; ratio: its torque ratio, 1
+// at the coupling point to the stall's; most: the bound on F (the stall's ratio: nothing in the game bounds a share over
+// 1, the Reviewer's R1 and M3). One function for both rates: part A calls it on the mod's thread with the model's
+// speeds, part B in the detour with the wheels'. 0 for a figure that is no number.
+inline float ConverterOpenF(const TorqueCutMap &m, float inputRpm, float engineRpm, float ratio, float most)
+{
+    if (!(m.redline > m.idle) || !(m.idle >= 0.0f) || !isfinite(inputRpm) || !isfinite(engineRpm) || !isfinite(ratio)) return 0.0f;
+    const float pedal = CutClamp01(m.pedal);
+    const float e = CutCurveAt(m.curve, engineRpm / m.redline, m.tachTop) * CutGovernor(inputRpm / m.redline, m.governFrom, m.governTo);
+    const float limit = isfinite(m.limit) ? CutClamp01(m.limit / (pedal > 1e-3f ? pedal : 1e-3f)) : 1.0f;
+    float drive = pedal * (e * limit * (ratio > 1.0f ? ratio : 1.0f) - (isfinite(m.load) && m.load > 0.0f ? m.load : 0.0f));
+    if (!(drive > 0.0f)) drive = 0.0f;
+    if (m.held > 0.0f && m.held < 1.0f) drive *= m.held;
+    if (most > 0.0f && drive > most) drive = most;
+    return isfinite(drive) ? drive : 0.0f;
+}
+
+// The fall at a lock, paced (the lead's point 17): above the start gear a floored lock finds the open converter still
+// multiplying, so F would fall about a quarter in one step. For kLockFallSeconds after the lock F runs in a straight
+// line from what the open converter gave (from) down to the map's. By the clock, so it is the same at 60 and at 120
+// steps a second. Only a fall is paced, and only the driver's share of it: a lifted pedal takes its part at once (from
+// is scaled by the pedal now over the pedal at the lock), so with the foot off nothing is held up.
+static const float kLockFallSeconds = 0.3f;
+inline float CutLockFall(float fMap, float from, float lockPedal, float pedal, float since)
+{
+    if (!isfinite(fMap)) return 0.0f;
+    if (!isfinite(from) || !isfinite(since) || since < 0.0f || since >= kLockFallSeconds) return fMap;
+    const float foot = lockPedal > 1e-3f && isfinite(pedal) ? CutClamp01(pedal / lockPedal) : 0.0f;
+    const float held = from * foot;
+    if (!(held > fMap) || !(held > 0.0f)) return fMap; // nothing to hold with the foot off: the engine's braking comes in as the map has it
+    return fMap + (held - fMap) * (1.0f - since / kLockFallSeconds);
+}
+
 // The over-rev's share (BRIEF_overrev_downshift.md, the Reviewer's M1): the speed the governor went by over the gear's
 // top, held to the wheels' own: min(the truck's own speed, the wheels' mean) over top, both from the cut's last answer
 // (TorqueCutCounts s and truck). Where the truck's speed was not read (no number) the governor went by the wheels' mean,
@@ -324,6 +361,10 @@ struct TorqueCutSlot
     uint64_t cylinderVtable; // hkpCylinderShape's vtable (gauges.cpp WheelCylinderVtable, on the mod's thread: M1), 0 not found, for the rolling radius
     int mode;
     float scalar, floor, share, pedal, sLast, listTop, gamePull, cap, pushBack; // pushBack: 1 - PushShare / 100, for the cap's part of the chassis push
+    // the fall at a converter's lock (CutLockFall): what the open converter gave on its last pass, the pedal then and
+    // the tick of the lock; fallAt 0: none
+    float fallFrom, fallPedal;
+    uint64_t fallAt;
     float capWide; // the low range's wider cap for L-, L and R (LowRangeCap, CapCeilingWide), in the wheels' measure; 0 none. cap stays the gear's own
     TorqueCutMap map;
     int diff; // the differential's type for this truck (DiffTypeOf, on the mod's thread)
@@ -505,12 +546,13 @@ inline CutCurveOut TorqueCutCurveOut(const TorqueCutMap &m, float pf)
 struct TorqueCutAnswer
 {
     float torque, bracket, f, b4s, stockCurve, s, standIn, w, used, taper;
+    bool falling, floored; // the lock's fall held F up in this step; the bracket stands at the slot's floor
 };
 // The governor's fade goes by the truck's own speed where it was read (M5), else by the wheels' mean; the curve held to
 // the redline and no fade in F only where the guard acts (slot.cap above 0): the ceiling holds the top there, and F's
 // drive is 0 from the governor's end. The same in every type of differential: Open has no governor of its own (C5 of
 // BRIEF_governor_sway.md voids the one by the wheels' mean), its limit is the ceiling on each axle's mean (DiffOpenAxles).
-inline TorqueCutAnswer TorqueCutAnswerOf(const TorqueCutSlot &slot, float stock, float start, float a, float top, float pf, float d4, CutSpeeds sp)
+inline TorqueCutAnswer TorqueCutAnswerOf(const TorqueCutSlot &slot, float stock, float start, float a, float top, float pf, float d4, CutSpeeds sp, uint64_t now = 0)
 {
     TorqueCutAnswer r = {};
     const TorqueCutMap &map = slot.map;
@@ -520,8 +562,14 @@ inline TorqueCutAnswer TorqueCutAnswerOf(const TorqueCutSlot &slot, float stock,
     r.stockCurve = TorqueCutStockCurve(start, a, top, pf, sp.mid);
     r.taper = sp.ok ? TorqueCutBrakeTaper(sp.least, map) : 0.0f;
     r.f = slot.mode == kCutMap ? TorqueCutF(map, sp.mean, r.taper, sp.truckOk ? sp.truck : NAN, slot.cap > 0.0f) : (isfinite(slot.scalar) ? slot.scalar : 0.0f);
+    if (slot.mode == kCutMap && slot.fallAt && now >= slot.fallAt)
+    {
+        const float fell = CutLockFall(r.f, slot.fallFrom, slot.fallPedal, slot.pedal, (float)(now - slot.fallAt) / 1000.0f);
+        r.falling = fell > r.f;
+        r.f = fell;
+    }
     r.bracket = TorqueCutBlend(slot.share, slot.pedal, r.stockCurve, r.f);
-    if (slot.floor > 0.0f && r.bracket < slot.floor) r.bracket = slot.floor;
+    if (slot.floor > 0.0f && r.bracket <= slot.floor) r.bracket = slot.floor, r.floored = true;
     r.used = r.bracket;
     r.torque = isfinite(stock) ? stock * r.bracket : 0.0f;
     r.b4s = TorqueCutB4s(slot.pedal, d4, r.stockCurve);
@@ -539,6 +587,43 @@ inline void TorqueCutAnswerPaced(TorqueCutAnswer &r, float stock, float usedBefo
     r.used = CutRise(usedBefore, r.bracket, rate);
     r.torque = isfinite(stock) ? stock * r.used : 0.0f;
     r.standIn = TorqueCutStandIn(r.used) * (isfinite(kept) ? CutClamp01(kept) : 1.0f);
+}
+
+// Whether a pass's over-rev share counts: only where the map went out and the drive answered since the last pass, and
+// never in A (BRIEF_drivetrain_3_a_on_our_chain.md, point 9 and the Reviewer's must of 2026-11-14): there the automatic
+// picks the gear, and a hill run in the top gear is no over-rev of the driver's.
+inline bool OverRevCounts(int mode, bool fresh, bool inA) { return mode == kCutMap && fresh && !inA; }
+
+// ---- the learning under the cut (the lead's addendum of 2026-11-10 14:23) ----
+// The cut's answer is the game's own gear torque times the bracket, so a gear's learned pull means the same with the
+// cut: the truck's acceleration at a bracket of 1. A sample is divided by the bracket the detour used, not by what the
+// mod's thread meant: the detour runs 60 or 120 times a second and the thread 20. The detour keeps the sum of the
+// brackets used and their count, and counts every step that may not feed a sample (bad). They only grow; the thread
+// takes the difference between two of its passes.
+struct CutLearnTotals
+{
+    double sum;       // the brackets used, summed
+    long n, bad;      // the steps answered, and those of them that may not feed a sample
+    uint64_t vehicle; // the truck of the last answer
+};
+static const float kCutLearnPaced = 0.02f; // a bracket used within this share of the one asked is settled: CutRise only nears a rising one
+// Whether a step's answer may feed a sample: only the map (no sample from the open converter's or the clutch's scalar),
+// the bracket not paced (a rise by CutRise, or the lock's fall), not at the slot's floor, and the wheels keeping all of
+// the push (kept under 1: the wheel cap takes some away).
+inline bool CutLearnStepOk(const TorqueCutSlot &slot, const TorqueCutAnswer &r, float kept)
+{
+    return slot.mode == kCutMap && !r.falling && !r.floored && r.bracket > 0.0f && fabsf(r.used - r.bracket) <= kCutLearnPaced * r.bracket && isfinite(kept) && kept >= 0.999f;
+}
+// The divisor for the thread's pass: the mean of the brackets the detour used since the pass before; no number where
+// the detour answered nothing since (a count of 0, a stale slot), a step among them may not feed a sample, or the
+// answers are another truck's.
+inline float CutLearnDivisor(const CutLearnTotals &was, const CutLearnTotals &now, uint64_t vehicle)
+{
+    if (!vehicle || now.vehicle != vehicle || was.vehicle != vehicle) return NAN;
+    const long n = now.n - was.n;
+    if (n <= 0 || now.bad != was.bad) return NAN;
+    const float mean = (float)((now.sum - was.sum) / (double)n);
+    return isfinite(mean) && mean > 0.0f ? mean : NAN;
 }
 
 // ---- the wheel speed cap (BRIEF_drivetrain_2c_wheel_cap.md, the Reviewer's addendum and the Researcher's follow-up 4) ----

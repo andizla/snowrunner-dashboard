@@ -139,6 +139,7 @@ struct GaugeSettings
     int input;               // Input: what the pedal is: 0 a wheel's pedals, 1 a pad's trigger, 2 keys. The mod's automatic kicks down by it
     bool powertrain;         // Powertrain: the engine's torque (its curve, the cold oil, the boost) and the converter's handed to the game
     bool roadLoad;           // RoadLoad: with Powertrain, the air's drag taken off the torque handed to the game (models.h, road load); on by default
+    bool cutInA;             // CutInA: a test (BRIEF_drivetrain_3_a_on_our_chain.md, part A): in A the torque cut answers too, the truck pulling with the mod engine alone through the converter; off: A on the old chain, as before
     bool modEngineSpeed;     // ModEngineSpeed: with Powertrain, the game's engine speed (its tachometer, sound and effects) is the mod engine's (gearbox_hooks.h, EngineSpeedHook); on by default
     float engineSpeedTop;    // EngineSpeedTop: the mod engine's speed the game reads as its 1, as a share of the redline, 0.5 to 1.5 (1: the redline)
     int diffLockBite;        // DiffLockBite: with Powertrain, how firmly the diff lock ties the driven wheels together, 0 (the game's lock) to 100 (one shaft), 0
@@ -251,6 +252,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.roadLoad = true; // on by default (BRIEF_defaults_on.md); an explicit 0 in the ini stays 0
     s.engineBrake = 15.0f; // kEngineBrakeDefault (BRIEF_drivetrain_2_torque_cut.md)
     s.winchOutRate = 0.5f; // kWinchRateDefault (winch_out.h)
+    s.cutInA = false; // ships off until it is driven
     s.modEngineSpeed = true; // on by default (BRIEF_drivetrain_1_engine_speed.md); an explicit 0 stays 0
     s.heldGearSlip = kSlipAllGears; // the user, 2026-11-14: All gears is how a held gear behaves; no row on the tab, a figure of the tuning tool (BRIEF_jobs_1114.md, part 170)
     s.wheelCap = 150; // kCapDefault (BRIEF_drivetrain_2c_wheel_cap.md with M5)

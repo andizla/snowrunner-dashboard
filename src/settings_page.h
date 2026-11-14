@@ -1768,6 +1768,10 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             else if (view.rateNow == 120 && view.rateWinch == kRateWinchIn) ImGui::TextDisabled("Winch pull: right at 120.");
             else if (view.rateNow == 120 && view.rateWinch == kRateWinchRefused) ImGui::TextDisabled("Winch pull: too fast at 120 (not corrected, see the log).");
         }
+        // the automatic on the mod drivetrain, part A: a test the driver switches, acting at once
+        PageLabel("Mod engine in A", labelX);
+        changed(ImGui::Checkbox("##cutina", &s.cutInA));
+        PageTip("In A the truck pulls with the mod engine alone, through the converter, as a held gear already does. The Diff rows then act in A too. A test. Needs Real engine, Mod engine speed and the mod automatic or the mod gearbox. Off by default.");
 
         ImGui::Separator();
         if (ImGui::Button("Defaults"))

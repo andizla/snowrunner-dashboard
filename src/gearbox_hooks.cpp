@@ -2456,6 +2456,16 @@ static volatile LONG g_b4sBits = 0, g_cutWBits = 0, g_cutPedalBits = 0;
 static volatile LONG64 g_riseVehicle = 0;
 static volatile LONG64 g_cutAnswerVehicle = 0; // the vehicle of the last answer (TorqueCutCounts::vehicle)
 static volatile LONG g_riseBits = 0, g_cutUsed = 0, g_cutRate = 0, g_cutTruck = 0x7FC00000; // a quiet NaN: not read
+// the learner's totals under the cut (CutLearnTotals): written by the drive's thread alone, read by the mod's
+static volatile LONG64 g_learnSumBits = 0;
+static volatile LONG g_learnN = 0, g_learnBad = 0;
+static double LearnSum()
+{
+    const LONG64 bits = g_learnSumBits;
+    double sum;
+    memcpy(&sum, &bits, sizeof sum);
+    return sum;
+}
 // the last answer's rolling radius (BRIEF_cut_radius_cylinder.md, M2: the hook does not log; the mod's thread does): the
 // radius used and the driven wheels' + 0x94 by the same mean, and the driven wheels by their kind (WheelRollRadius)
 static volatile LONG g_cutRadius = 0x7FC00000, g_cutRadius94 = 0x7FC00000, g_cutRollCylinder = 0, g_cutRollNone = 0, g_cutRollOut = 0;
@@ -2577,7 +2587,7 @@ __declspec(noinline) static bool HookGearTorque(void *vehicle, int gear, float *
             CutSpeedsTruck(sp, forward, radii.radius, gear < 0 ? -1 : 1);
         }
         if (!sp.ok) InterlockedIncrement(&g_cutFaults);
-        TorqueCutAnswer r = TorqueCutAnswerOf(slot, t, st, aa, tp, pf, d4, sp);
+        TorqueCutAnswer r = TorqueCutAnswerOf(slot, t, st, aa, tp, pf, d4, sp, GetTickCount64()); // the tick for the fall at a converter's lock (CutLockFall)
         const float kept = (uint64_t)g_capKeptVehicle == (uint64_t)(uintptr_t)vehicle ? BitsFloat(g_capKeptBits) : 1.0f;
         // F1b: the bracket paced at the game's own B4 rate, from the last step's for this vehicle; at a take-over from
         // the game's own pull at that step (S1)
@@ -2586,6 +2596,15 @@ __declspec(noinline) static bool HookGearTorque(void *vehicle, int gear, float *
         TorqueCutAnswerPaced(r, t, usedBefore, rate, kept);
         InterlockedExchange(&g_riseBits, FloatBits(r.used));
         InterlockedExchange64(&g_riseVehicle, (LONG64)(uintptr_t)vehicle);
+        // the learner's totals: what this step used, and whether it may feed a sample
+        {
+            const double sum = LearnSum() + (isfinite(r.used) ? (double)r.used : 0.0);
+            LONG64 bits;
+            memcpy(&bits, &sum, sizeof bits);
+            if (!sp.ok || !CutLearnStepOk(slot, r, kept)) InterlockedIncrement(&g_learnBad);
+            InterlockedExchange64(&g_learnSumBits, bits);
+            InterlockedIncrement(&g_learnN);
+        }
         // F1: the curve flat under a finite top at the governor's end, so the game's own overspeed brake acts above it
         const CutCurveOut curve = TorqueCutCurveOut(slot.map, pf);
         if (torque) *torque = r.torque;
@@ -2706,6 +2725,19 @@ void TorqueCutCountsGet(TorqueCutCounts &out)
     out.rollNone = g_cutRollNone;
     out.rollOut = g_cutRollOut;
     out.vehicle = (uint64_t)g_cutAnswerVehicle;
+}
+
+void TorqueCutLearnGet(CutLearnTotals &out)
+{
+    // the count read before and after: a step between the two reads is read again, so the sum and the count are one step's
+    for (int i = 0; i < 4; i++)
+    {
+        out.n = g_learnN;
+        out.bad = g_learnBad;
+        out.sum = LearnSum();
+        out.vehicle = (uint64_t)g_cutAnswerVehicle;
+        if (out.n == g_learnN) break;
+    }
 }
 
 void WheelCapCountsGet(WheelCapCounts &out)

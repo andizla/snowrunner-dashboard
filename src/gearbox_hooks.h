@@ -460,6 +460,9 @@ struct TorqueCutCounts
     uint64_t vehicle;                       // the vehicle of the last answer, 0 none yet: every figure of the last answer is that truck's
 };
 void TorqueCutCountsGet(TorqueCutCounts &out);
+// The learner's totals under the cut (torque_cut.h, CutLearnTotals): the brackets the detour used, summed, the steps
+// answered and those that may not feed a sample, since the start; the mod's thread takes the difference of two reads.
+void TorqueCutLearnGet(CutLearnTotals &out);
 // The wheel speed cap (BRIEF_drivetrain_2c_wheel_cap.md), in the wheels' drive's hook while the cut acts with a cap in
 // its slot: the counters since the start (clamps: wheels held at the cap; steps capped; bodies refused; steps armed and
 // waiting, M3; reads that faulted), the wheels clamped in the last step, armed in it, the kept share smoothed (M1), the

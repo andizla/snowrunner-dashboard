@@ -1399,7 +1399,6 @@ static const float kConverterSlip = 0.04f;   // an unlocked converter turns the 
 static const float kCouplingPoint = 0.87f;   // from this ratio of the gearbox's input speed to the engine's the converter multiplies nothing
 static const float kLockRatio = 0.92f;       // an open converter locks once its speed ratio is this (a shift made locked locks again at once)
 static const float kStallRatio = 2.0f;       // and at the stall it doubles the torque
-static const float kCreep = 0.06f;           // what an idling engine pushes through the converter at a standstill, as a share of the most power
 static const float kLockFrom = 0.5f, kUnlockBelow = 0.4f; // the converter locks from the first gear with the input at this share of the red zone's speed, and lets go below the second share of it, at a stop or for a shift's own pass (the game's own engine; with the mod's, kLockIdle and kUnlockIdle)
 static const float kStopShift = 0.1f;        // under this share of the red zone's speed in the first gear the truck all but stands: the first gear at once
 static const float kShiftSmooth = 0.25f;     // seconds the wheels' speed is smoothed over before the gearbox goes by it
@@ -1480,7 +1479,7 @@ struct GearboxModel
     float input;       // the gearbox's input speed in rpm: what the engine turns at with the converter locked
     float rpm;         // the engine speed
     float ratio;       // how much the converter multiplies the torque, 1 to kStallRatio
-    float drive;       // what goes to the wheels: the power times the ratio, and the creep, as a share of the most power
+    float drive;       // for the probe alone: the F the torque cut's slot carries in A, set by the pass (0 with no slot). The model's own figure is gone (the Reviewer's M1: it never drove a wheel)
     float pause;       // seconds until it may shift again
     bool upLast;       // the last shift was up
     float spin;        // the driven wheels' speed, smoothed over kShiftSmooth
@@ -1992,12 +1991,20 @@ struct BaseLearn
 // damp the wheels' drag (WheelDampAccel, smoothed as accel is; NAN not read: no pass). Returns the gear whose a_base is
 // done, into learned, else 0; added: the seconds this pass added to its gear; dampMean: a_damp's mean over the done
 // gear's passes, for the log.
+// cutBracket (the lead's addendum of 2026-11-10 14:23 to BRIEF_drivetrain_3_a_on_our_chain.md): under the torque cut
+// the game's curve and the factor are out of the drive, and the pull is the game's gear torque times the bracket the
+// cut used. A number here is that bracket (CutLearnDivisor, the mean of what the detour used): the sample is the
+// acceleration alone and its weight the bracket, where without the cut it is the acceleration over factor x pedal and
+// the weight the game's pull. Both feed the same rows, as a gear's pull means the same either way: the acceleration
+// at a bracket of 1. No number: without the cut, as before.
 inline int BaseLearnStep(BaseLearn &l, int gear, bool ok, float accel, float damp, float factor, float pedal, float x, float gradeSin, float settled, float dt,
-                         float &learned, float *added = nullptr, float *dampMean = nullptr)
+                         float &learned, float *added = nullptr, float *dampMean = nullptr, float cutBracket = NAN)
 {
     if (added) *added = 0.0f;
     if (gear != l.gear) l.gear = gear, l.visitSum = l.visitPull = l.visitTime = l.visitDamp = 0.0f;
-    const float pull = GamePull(x);
+    const bool byCut = isfinite(cutBracket);
+    const float pull = byCut ? cutBracket : GamePull(x);
+    if (byCut) factor = pedal > 0.0f ? 1.0f / pedal : 0.0f; // factor x pedal is 1: the sample is the acceleration alone
     const bool pass = ok && gear >= 1 && gear < kMaxGears && factor > 0.0f && pedal >= kBaseLearnPedal && x >= kBaseLearnFrom && x <= kBaseLearnTo && pull > 0.2f &&
                       isfinite(accel) && isfinite(damp) && damp >= 0.0f && isfinite(gradeSin) && fabsf(gradeSin) <= sinf(kBaseLearnGrade * 3.14159265f / 180.0f) &&
                       settled >= kBaseLearnSkip;
@@ -2482,9 +2489,14 @@ inline float GearboxDownPoint(const TruckRaw &t, const GaugeScale &k, int gear, 
 // it has lasted kLiftAfter, and none for kLiftBlock after such a shift up was taken back (a key tapped to hold the speed).
 // byHand: the truck is in a position of the player's own, where the model decides nothing and only reads along (the
 // wheels' grip, the gear A would ask), and the grip rises only under kHeldGripPedal.
+// pullHeld (BRIEF_drivetrain_3_a_on_our_chain.md, the Reviewer's M2 and the lead's point 16): the torque cut acts in A
+// and holds the game's pull (action + 0xB4) at 1, so the two rules that read it rest: the net under a wrong top would
+// never fire, and the taper rule would hold on every floored pass at its share and hunt on a climb. m.pullSeen rests
+// with them.
 inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k, float pedal, float power, float dt, const EngineHand &hand = EngineHand{},
-                        bool byHand = false)
+                        bool byHand = false, bool pullHeld = false)
 {
+    (void)power; // no longer read: the model's own "to the wheels" figure went with part A of the automatic on the mod drivetrain (M1). Kept, so every caller stands
     const bool engine = hand.on;
     const int top = TruckTopGear(t);
     const float raw = TruckDrivenSpin(t), pedalNow = SettingsRange(pedal, 0.0f, 1.0f);
@@ -2717,8 +2729,8 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     // kPlateauFor, so a plateau in the window is learned first (GearTopStep runs before this in the pass)
     // It is armed once the game's pull has read over kTopPullSeen: a build where action + 0xB4 holds no pull reads 0
     // throughout, and a truck at its top reads 0 only after pulling to it.
-    if (isfinite(t.actionB4) && t.actionB4 > kTopPullSeen) m.pullSeen = true;
-    const bool topCase = m.pullSeen && !byHand && m.gear < top && t.powerFactor >= 0.99f && m.pause <= 0.0f && pedalNow >= kPlateauPedal &&
+    if (!pullHeld && isfinite(t.actionB4) && t.actionB4 > kTopPullSeen) m.pullSeen = true;
+    const bool topCase = !pullHeld && m.pullSeen && !byHand && m.gear < top && t.powerFactor >= 0.99f && m.pause <= 0.0f && pedalNow >= kPlateauPedal &&
                          isfinite(t.actionB4) && t.actionB4 <= kPlateauPull && raw > 1.0f;
     if (!topCase || !(m.topRef > 0.0f) || raw > m.topRef * (1.0f + kPlateauSteady))
     {
@@ -2747,7 +2759,7 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     }
     const float gearTop = TruckGearTop(t, m.gear);
     const float share = gearTop > 0.0f ? by / gearTop : 0.0f;
-    const bool taperCase = !byHand && !footOff && m.gear < top && t.powerFactor >= 0.99f && pedalNow >= kPlateauPedal && isfinite(t.actionB4) &&
+    const bool taperCase = !pullHeld && !byHand && !footOff && m.gear < top && t.powerFactor >= 0.99f && pedalNow >= kPlateauPedal && isfinite(t.actionB4) &&
                            t.actionB4 > kPlateauPull && isfinite(share) && share >= kTaperShare && isfinite(m.trend);
     bool taperSecond = false;
     float taperMean = 0.0f;
@@ -2901,11 +2913,12 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     m.heldNow = held;
     const float speedRatio = m.rpm > 0.0f ? m.input / m.rpm : 1.0f;
     m.ratio = m.locked || speedRatio >= kCouplingPoint ? 1.0f : 1.0f + (kStallRatio - 1.0f) * (1.0f - speedRatio / kCouplingPoint);
-    // the creep: what an idling engine pushes through the converter, less as the truck rolls up to the engine's speed
-    const float creep = kCreep * (1.0f - pedalNow) * (1.0f - SettingsRange(speedRatio, 0.0f, 1.0f));
-    m.drive = m.locked ? power : (power + creep) * m.ratio;
-    if (!isfinite(m.drive)) m.drive = 0.0f;
 }
+
+// The converter as the torque cut reads it in A (the Reviewer's M4): locked also on the pass of a shift made locked,
+// where the model opens it for that pass alone (relock) and locks again on the next. Read as open there, the slot would
+// go map, scalar, map within 50 ms: a blip up and then the fall.
+inline bool ConverterLockedForCut(const GearboxModel &m) { return m.locked || m.relock; }
 
 // The lowest gear the engine can take at the speed the truck goes (under kDownMost from idle to the red zone; with the
 // mod's engine, engine, under the tachometer's top), 1 when the first can, and 1 before the wheels' grip is
