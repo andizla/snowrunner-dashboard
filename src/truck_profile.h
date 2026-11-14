@@ -118,7 +118,7 @@ struct ProfileList
     bool truck, idRead;  // a truck is driven; its own id is read (so it has a level of its own)
     bool canExport;      // the engine and the gearbox are known too
     char kind[96], kindFile[96];
-    char say[480];       // what the last Export or Import did, or why not
+    char say[640];       // what the last Export or Import did, or why not (the longest line with the tire mode's two sentences is over 480)
     ProfileRow row[kProfileRowsMost];
 };
 
@@ -146,9 +146,25 @@ inline bool ProfileNameThere(const ProfileList &list, const char *typed)
     return false;
 }
 
+// What became of the profile's tire mode at an Import (BRIEF_truck_profile.md, build 2): none in the profile; written
+// into Tire Inflation's file; taken out of the level again (a backup of a level that had none); left because Tire
+// Inflation has no file here; left because the game gives the truck no name (Tire Inflation then shares one mode).
+enum { kTireNone, kTireTaken, kTireOut, kTireNoFile, kTireNoName };
+// A key made from the truck's build (truck.h TruckBuildKey), where the kind's name is not read: Tire Inflation has no
+// section for such a truck.
+inline bool ProfKeyByBuild(const char *key)
+{
+    float tank = 0.0f;
+    int wheels = 0, gears = 0, engine = 0, end = 0;
+    return sscanf_s(key, "tank%g_wheels%d_gearbox%d_engine%d%n", &tank, &wheels, &gears, &engine, &end) == 4 && end > 0 && !key[end];
+}
+
 // What an Import took and what it left, for the log's line and the tab's.
 struct ProfileTaken
 {
+    int tire;                       // kTire...
+    char tireMode[12];              // the mode's name where it was taken
+    bool tireOver;                  // the second button: this truck has its own tire mode in force, which stays
     bool susp, air, torque, hold, engine, engineOff, scales, scalesOff, diff, diffOff, cda, airAxles, odo, engineDefault;
     bool engineOther, gearboxOther; // made with another engine or gearbox: that part was left
     bool kindLeft;                  // the first button: the kind's keys were left
@@ -174,6 +190,11 @@ inline void ProfileTakenText(const ProfileTaken &t, char *out, size_t size)
     if (t.truckOver) more("This truck has settings of its own in force, and those stay.");
     if (t.engineOther) more("Made with another engine: its engine settings were left.");
     if (t.gearboxOther) more("Made with another gearbox: its gear hold was left.");
-    more("The tire mode is not taken yet.");
+    char tire[64];
+    if (t.tire == kTireTaken) snprintf(tire, sizeof tire, "The tire mode is now %.11s.", t.tireMode), more(tire);
+    else if (t.tire == kTireOut) more("The tire mode of this level was taken out again.");
+    else if (t.tire == kTireNoFile) more("The tire mode was left: Tire Inflation has no file here.");
+    else if (t.tire == kTireNoName) more("The tire mode was left: the game gives this truck no name.");
+    if (t.tireOver) more("This truck keeps its own tire mode.");
     if (t.unknown && n > 0 && (size_t)n < size) snprintf(out + n, size - n, " %d unknown keys were left out.", t.unknown);
 }

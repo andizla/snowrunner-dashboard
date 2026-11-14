@@ -881,7 +881,7 @@ int wmain(int argc, wchar_t **argv)
             ProfileList &pl = pst.prof;
             pl.turn = 1, pl.truck = pl.idRead = pl.canExport = true;
             strcpy_s(pl.kind, "truck_kind"), strcpy_s(pl.kindFile, "truck_kind");
-            strcpy_s(pl.say, "Taken: the suspension, Air brakes. The settings of the kind were left. The tire mode is not taken yet.");
+            strcpy_s(pl.say, "Taken: the suspension, Air brakes. The settings of the kind were left. The tire mode is now Reduced.");
             auto add = [&](const char *file, const char *name, const char *truck, const char *notes, bool valid, bool backup, bool same) {
                 ProfileRow &r = pl.row[pl.count++];
                 strcpy_s(r.file, file), strcpy_s(r.name, name), strcpy_s(r.truck, truck), strcpy_s(r.notes, notes), strcpy_s(r.date, "2026-11-13 13:30"), strcpy_s(r.version, "9.9.9");

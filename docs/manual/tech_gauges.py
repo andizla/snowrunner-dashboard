@@ -1089,8 +1089,9 @@ written beside its place and then put there whole. Its sections: <code>[Profile]
 Notes, and Backup in a backup), <code>[Truck]</code> (the seven scales together or <code>ScalesOwn=0</code>, RoadCdA, AirAxles,
 OdometerHours, AirBrakes), <code>[Drive]</code> (DiffType and DiffAxle by axle as the truck's file has it, DiffAxle2 for the second axle, else <code>DiffOwn=0</code>; a DiffAxle9 is an unknown key),
 <code>[Suspension]</code> (the whole set in force), <code>[Engine]</code> (Torque, GearHold, PeakTorqueRpm, Aspiration, Fuel,
-TorqueCurve with no part name, only what some level holds) and <code>[Tire Inflation]</code> (Mode from the tire mod's file,
-written only). The truck's id, [Seen], the odometer's count and the learned figures never go in. A backup holds one level exactly: where the level has nothing of its own it says <code>AirOwn=0</code>, <code>SuspOwn=0</code> or <code>EngineOwn=0</code>, and taking it puts that part out of force again. Import writes the diff group into the truck's own section, whole. A backup of the kind's level also takes RoadCdA, AirAxles and DiffType out where it does not hold them.</p>
+TorqueCurve with no part name, only what some level holds) and <code>[Tire Inflation]</code> (Mode from the tire mod's file; an Import
+writes it back into that file, only where the file is there and the game names the truck: Own=1 and Mode into the truck's own section,
+or Mode alone into the kind's; a backup of a level with no mode says <code>ModeOwn=0</code>). The truck's id, [Seen], the odometer's count and the learned figures never go in. A backup holds one level exactly: where the level has nothing of its own it says <code>AirOwn=0</code>, <code>SuspOwn=0</code> or <code>EngineOwn=0</code>, and taking it puts that part out of force again. Import writes the diff group into the truck's own section, whole. A backup of the kind's level also takes RoadCdA, AirAxles and DiffType out where it does not hold them.</p>
 <p>All file work is on the mod's pass. The tab only asks (<code>ProfileAskPut</code>) and shows the list the pass made
 (<code>ProfilesGet</code>, 50 rows at the most, the rest counted, the driven kind's files first). An edit that waits for its
 save is saved before the asking is dealt with. An Import checks the file first: 64 KB at the most, a truck named in its head, a

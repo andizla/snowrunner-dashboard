@@ -3370,16 +3370,26 @@ static std::wstring ProfileText(const SettingsState &st, const EngineState &e, i
     }
     // Tire Inflation's mode for the truck, where its file has one: the owned truck's before the kind's
     {
+        // An Export: the mode in force, the truck's own (not with Own=0, which is kept and not in force) before the
+        // kind's. A backup (BRIEF_truck_profile.md, build 2, must 11): the level the press writes, exactly. A level
+        // with no mode says ModeOwn=0, and a truck's own kept with Own=0 has its mode with that word, so the way back
+        // gives the level back as it was. Nothing where Tire Inflation has no file
         const std::wstring tire = g_dir + kTireModesFile;
+        const bool there = GetFileAttributesW(tire.c_str()) != INVALID_FILE_ATTRIBUTES;
+        const std::wstring tireOwn = Wide(st.key) + L":" + Wide(st.id);
         wchar_t mode[32] = {};
-        if (st.id[0]) GetPrivateProfileStringW((Wide(st.key) + L":" + Wide(st.id)).c_str(), L"Mode", L"", mode, 32, tire.c_str());
-        if (!mode[0]) GetPrivateProfileStringW(Wide(st.key).c_str(), L"Mode", L"", mode, 32, tire.c_str());
+        const bool ownOff = st.id[0] && GetPrivateProfileIntW(tireOwn.c_str(), L"Own", 1, tire.c_str()) == 0;
+        if (st.id[0] && level != kProfLevelKind && (exact || !ownOff)) GetPrivateProfileStringW(tireOwn.c_str(), L"Mode", L"", mode, 32, tire.c_str());
+        if (!mode[0] && level != kProfLevelTruck) GetPrivateProfileStringW(Wide(st.key).c_str(), L"Mode", L"", mode, 32, tire.c_str());
+        const wchar_t *named = nullptr;
         for (const wchar_t *name : kTireModeNames)
-            if (mode[0] && !_wcsicmp(mode, name))
-            {
-                t += L"\r\n[Tire Inflation]\r\n";
-                line(L"Mode", name);
-            }
+            if (mode[0] && !_wcsicmp(mode, name)) named = name;
+        if (named || (exact && there && (level == kProfLevelKind || st.id[0])))
+        {
+            t += L"\r\n[Tire Inflation]\r\n";
+            if (named) line(L"Mode", named);
+            if (exact && (!named || (level == kProfLevelTruck && ownOff))) line(L"ModeOwn", L"0");
+        }
     }
     return t;
 }
@@ -3469,7 +3479,7 @@ static int ProfileUnknown(const std::wstring &file)
                 for (const auto &o : kSuspOldFloats) known = known || !_wcsicmp(key.c_str(), o.name);
             }
             else if (!_wcsicmp(sec, L"Engine")) known = is({ L"Torque", L"GearHold", L"PeakTorqueRpm", L"Aspiration", L"Fuel", L"TorqueCurve", L"EngineOwn" });
-            else if (!_wcsicmp(sec, L"Tire Inflation")) known = is({ L"Mode" });
+            else if (!_wcsicmp(sec, L"Tire Inflation")) known = is({ L"Mode", L"ModeOwn" });
             if (!known) unknown++;
         }
     }
@@ -3625,6 +3635,57 @@ static void ProfileImport(SettingsState &st, EngineState &e, const std::wstring 
             if (takeTorque) EngineTorqueWrite(e.engine, torque);
             t.engineDefault = true;
         }
+        // Tire Inflation's mode (BRIEF_truck_profile.md, build 2): into its file of modes by truck, at the level the
+        // press writes. Only into a file that is there: the file is Tire Inflation's, and this mod never makes it. Only
+        // for a truck the game names. The truck's own section gets Own=1 first and then Mode, the order Tire Inflation
+        // reads a whole pair in; the kind's gets Mode alone. Never Tire=, a mark or [Seen]. Tire Inflation looks at
+        // the file once a second and takes the mode itself
+        {
+            wchar_t word[32] = {};
+            GetPrivateProfileStringW(L"Tire Inflation", L"Mode", L"", word, 32, file.c_str());
+            const bool none = ProfKeyThere(file, L"Tire Inflation", L"ModeOwn") && GetPrivateProfileIntW(L"Tire Inflation", L"ModeOwn", 1, file.c_str()) == 0;
+            const wchar_t *named = nullptr;
+            for (const wchar_t *name : kTireModeNames)
+                if (word[0] && !_wcsicmp(word, name)) named = name;
+            if (word[0] && !named) t.unknown++; // a word that is no mode: counted and left
+            const std::wstring tire = g_dir + kTireModesFile, kindSec = Wide(st.key), ownSec = kindSec + L":" + Wide(st.id);
+            const std::wstring sec = kindLevel ? kindSec : ownSec;
+            if ((named || none) && (kindLevel || st.id[0]))
+            {
+                if (GetFileAttributesW(tire.c_str()) == INVALID_FILE_ATTRIBUTES) t.tire = kTireNoFile;
+                else if (ProfKeyByBuild(st.key)) t.tire = kTireNoName;
+                else if (none)
+                {
+                    // a backup's word: the level had no mode in force. With a mode beside it, the truck's own was kept
+                    // with Own=0; else the two keys go out of the section, its other keys stay, and a section left
+                    // with nothing goes too
+                    if (!kindLevel && named)
+                    {
+                        WritePrivateProfileStringW(sec.c_str(), L"Own", L"0", tire.c_str());
+                        WritePrivateProfileStringW(sec.c_str(), L"Mode", named, tire.c_str());
+                    }
+                    else
+                    {
+                        WritePrivateProfileStringW(sec.c_str(), L"Mode", nullptr, tire.c_str());
+                        if (!kindLevel) WritePrivateProfileStringW(sec.c_str(), L"Own", nullptr, tire.c_str());
+                        wchar_t rest[8] = {};
+                        if (!GetPrivateProfileSectionW(sec.c_str(), rest, 8, tire.c_str())) WritePrivateProfileStringW(sec.c_str(), nullptr, nullptr, tire.c_str());
+                    }
+                    t.tire = kTireOut;
+                }
+                else
+                {
+                    if (!kindLevel) WritePrivateProfileStringW(sec.c_str(), L"Own", L"1", tire.c_str());
+                    WritePrivateProfileStringW(sec.c_str(), L"Mode", named, tire.c_str());
+                    t.tire = kTireTaken;
+                    snprintf(t.tireMode, sizeof t.tireMode, "%ls", named);
+                }
+                // the second button on a truck whose own mode is in force: that stays
+                wchar_t ownMode[32] = {};
+                if (st.id[0]) GetPrivateProfileStringW(ownSec.c_str(), L"Mode", L"", ownMode, 32, tire.c_str());
+                t.tireOver = kindLevel && (t.tire == kTireTaken || t.tire == kTireOut) && ownMode[0] && GetPrivateProfileIntW(ownSec.c_str(), L"Own", 1, tire.c_str()) != 0;
+            }
+        }
         // the second button on a truck with its own in force (15's S2): that stays over what the kind just took
         t.truckOver = kindLevel && st.id[0] &&
                       ((t.susp && st.truckOwn) || ((t.diff || t.diffOff) && st.diffTruck) || ((t.scales || t.scalesOff) && st.scalesTruck) || (t.air && TruckAirAt(st.key, st.id) >= 0) ||
@@ -3741,7 +3802,7 @@ static bool ProfilesStep(SettingsState &st, EngineState &e, const char *gearsNow
         ReleaseSRWLockShared(&g_profLock);
         g_profListed = true;
     }
-    char say[480] = "";
+    char say[640] = "";
     bool imported = false;
     const std::string kindFile = ProfKindFile(st.key);
     if (ask.what == kProfAskExport)
@@ -15134,7 +15195,7 @@ static void PartProfiles()
                                hold == 1.5f && p.own && p.peakRpm == 1400.0f && p.fuel == kFuelDiesel;
         EngineProfile dp = {};
         const bool ownLeft = ReadTruckSusp(kind, own, id1) == kSuspNone && TruckAirAt(kind, id1) < 0 && !EngineProfileRead("prof_eng_a", dp) && !EngineTorqueRead("prof_eng_a");
-        Check(taken && same && kindLevel && ownLeft && says("Taken: the class and scales") && !says("were left") && !says("of its own in force") && says("The tire mode is not taken yet.") && files(backups) == backupsWere + 1 &&
+        Check(taken && same && kindLevel && ownLeft && says("Taken: the class and scales") && !says("were left") && !says("of its own in force") && !says("tire mode") && files(backups) == backupsWere + 1 &&
                   st.s.springFront == 2.5f && e.torque == 80 && e.torqueFrom == kEngLevelKind,
               "profiles: For every truck of this kind lays every key back into an empty truck's file at the kind's level, in force after the files are read again; the truck's own sections and the engine's own file are not written; a backup is written first");
     }
@@ -15411,19 +15472,103 @@ static void PartProfiles()
         Check(pathNo, "profiles: an asking that names a path, another ending or nothing is refused: a row is a file's name in the folder");
     }
 
-    // Tire Inflation's mode goes into the profile and is not taken yet; its file is never written
+    // Tire Inflation's mode goes into the profile, and an Import writes it into Tire Inflation's file at the level the
+    // press writes (BRIEF_truck_profile.md, build 2, musts 7 to 13)
     {
         setAll();
+        const std::wstring ownSec = std::wstring(L"prof_kind:") + Wide(id1);
+        auto newestBackup = [&]() {
+            ProfilesGet(list);
+            std::wstring newest;
+            FILETIME at = {};
+            WIN32_FIND_DATAW f;
+            const HANDLE h = FindFirstFileW((backups + L"\\*").c_str(), &f);
+            if (h == INVALID_HANDLE_VALUE) return newest;
+            do
+                if (!(f.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && (newest.empty() || CompareFileTime(&f.ftLastWriteTime, &at) >= 0)) newest = f.cFileName, at = f.ftLastWriteTime;
+            while (FindNextFileW(h, &f));
+            FindClose(h);
+            return newest;
+        };
+        auto narrow = [](const std::wstring &w) {
+            std::string out;
+            for (wchar_t c : w) out += (char)c;
+            return out;
+        };
         put(tireFile, L"prof_kind", L"Mode", L"Low");
-        put(tireFile, (std::wstring(L"prof_kind:") + Wide(id1)).c_str(), L"Mode", L"increased");
+        put(tireFile, ownSec.c_str(), L"Own", L"1");
+        put(tireFile, ownSec.c_str(), L"Mode", L"increased");
+        put(tireFile, ownSec.c_str(), L"Tire", L"a_tire");
+        put(tireFile, L"Seen", L"x", L"1");
         const std::string tireWas = bytes(tireFile);
         run(kProfAskExport, "Tire");
         const std::wstring tire = folder + L"\\prof_kind - Tire.ini";
-        const bool written = key(tire, L"Tire Inflation", L"Mode") == L"Increased";
-        put(tire, L"Tire Inflation", L"Mode", L"Low");
+        const bool written = key(tire, L"Tire Inflation", L"Mode") == L"Increased" && key(tire, L"Tire Inflation", L"ModeOwn").empty();
+        // the second button: the kind's Mode alone, and this truck keeps its own
+        put(tire, L"Tire Inflation", L"Mode", L"reduced");
+        wipe(backups);
         run(kProfAskImportKind, "prof_kind - Tire.ini");
-        Check(written && bytes(tireFile) == tireWas && says("The tire mode is not taken yet.") && !says("unknown"),
-              "profiles: the tire mode of the truck (its own before the kind's) goes into the profile; an Import leaves the file of Tire Inflation as it is and says the mode is not taken yet");
+        const std::wstring kindBack = newestBackup();
+        const bool kindTaken = key(tireFile, L"prof_kind", L"Mode") == L"Reduced" && key(tireFile, L"prof_kind", L"Own").empty() && key(tireFile, ownSec.c_str(), L"Mode") == L"increased" &&
+                               key(tireFile, ownSec.c_str(), L"Tire") == L"a_tire" && key(tireFile, L"Seen", L"x") == L"1" && says("The tire mode is now Reduced.") &&
+                               says("This truck keeps its own tire mode.") && !says("unknown") && key(backups + L"\\" + kindBack, L"Tire Inflation", L"Mode") == L"Low";
+        // the way back: the backup, by the same button, and the file is as it was to the byte
+        const bool kindWayBack = run(kProfAskImportKind, narrow(kindBack).c_str(), "", false, true) && key(tireFile, L"prof_kind", L"Mode") == L"Low" &&
+                                 key(tireFile, ownSec.c_str(), L"Mode") == L"increased";
+        // the first button: Own=1 and Mode in the truck's own section, the kind's left; its backup holds the own mode
+        put(tire, L"Tire Inflation", L"Mode", L"Normal");
+        wipe(backups);
+        run(kProfAskImportTruck, "prof_kind - Tire.ini");
+        const std::wstring ownBack = newestBackup();
+        const bool ownTaken = key(tireFile, ownSec.c_str(), L"Mode") == L"Normal" && key(tireFile, ownSec.c_str(), L"Own") == L"1" && key(tireFile, ownSec.c_str(), L"Tire") == L"a_tire" &&
+                              key(tireFile, L"prof_kind", L"Mode") == L"Low" && says("The tire mode is now Normal.") && !says("keeps its own tire mode") &&
+                              key(backups + L"\\" + ownBack, L"Tire Inflation", L"Mode") == L"Increased" && key(backups + L"\\" + ownBack, L"Tire Inflation", L"ModeOwn").empty();
+        // a level that had none: the truck's section with Tire= alone. The backup says ModeOwn=0, and the way back
+        // takes Mode and Own out again and leaves Tire=
+        put(tireFile, ownSec.c_str(), L"Mode", nullptr);
+        put(tireFile, ownSec.c_str(), L"Own", nullptr);
+        const std::string noneWas = bytes(tireFile);
+        wipe(backups);
+        run(kProfAskImportTruck, "prof_kind - Tire.ini");
+        const std::wstring noneBack = newestBackup();
+        const bool noneTaken = key(tireFile, ownSec.c_str(), L"Mode") == L"Normal" && key(tireFile, ownSec.c_str(), L"Own") == L"1" &&
+                               key(backups + L"\\" + noneBack, L"Tire Inflation", L"ModeOwn") == L"0" && key(backups + L"\\" + noneBack, L"Tire Inflation", L"Mode").empty();
+        const bool noneWayBack = run(kProfAskImportTruck, narrow(noneBack).c_str(), "", false, true) && bytes(tireFile) == noneWas && says("The tire mode of this level was taken out again.");
+        // a truck's own kept with Own=0: the backup holds its mode with ModeOwn=0, and the way back keeps it so
+        put(tireFile, ownSec.c_str(), L"Own", L"0");
+        put(tireFile, ownSec.c_str(), L"Mode", L"Low");
+        wipe(backups);
+        run(kProfAskImportTruck, "prof_kind - Tire.ini");
+        const std::wstring keptBack = newestBackup();
+        const bool keptWayBack = key(tireFile, ownSec.c_str(), L"Own") == L"1" && key(backups + L"\\" + keptBack, L"Tire Inflation", L"ModeOwn") == L"0" &&
+                                 key(backups + L"\\" + keptBack, L"Tire Inflation", L"Mode") == L"Low" && run(kProfAskImportTruck, narrow(keptBack).c_str(), "", false, true) &&
+                                 key(tireFile, ownSec.c_str(), L"Own") == L"0" && key(tireFile, ownSec.c_str(), L"Mode") == L"Low";
+        // a word that is no mode: counted as unknown and left
+        const std::string beforeWord = bytes(tireFile);
+        put(tire, L"Tire Inflation", L"Mode", L"Soft");
+        run(kProfAskImportKind, "prof_kind - Tire.ini");
+        const bool wordLeft = bytes(tireFile) == beforeWord && says("1 unknown keys were left out.") && !says("The tire mode");
+        // Tire Inflation's file not there: never made, and the line says so
+        put(tire, L"Tire Inflation", L"Mode", L"Low");
+        DeleteFileW(tireFile.c_str());
+        run(kProfAskImportTruck, "prof_kind - Tire.ini");
+        const bool notMade = GetFileAttributesW(tireFile.c_str()) == INVALID_FILE_ATTRIBUTES && says("The tire mode was left: Tire Inflation has no file here.");
+        // a truck the game does not name goes by its build: no section for it
+        const bool byBuild = ProfKeyByBuild("tank200_wheels4_gearbox8_engine300") && ProfKeyByBuild("tank120.5_wheels8_gearbox10_engine0") && !ProfKeyByBuild("prof_kind") &&
+                             !ProfKeyByBuild("tank200_wheels4_gearbox8_engine300x") && !ProfKeyByBuild("tank_truck") && !ProfKeyByBuild("");
+        ProfileTaken noName = {};
+        noName.tire = kTireNoName;
+        char noNameSaid[640];
+        ProfileTakenText(noName, noNameSaid, sizeof noNameSaid);
+        const bool tireAll = written && kindTaken && kindWayBack && ownTaken && noneTaken && noneWayBack && keptWayBack && wordLeft && notMade && byBuild &&
+                             strstr(noNameSaid, "the game gives this truck no name") && !strchr(noNameSaid, 39) && tireWas.size() > 0;
+        if (!tireAll)
+            printf("     written %d kindTaken %d kindWayBack %d ownTaken %d noneTaken %d noneWayBack %d keptWayBack %d wordLeft %d notMade %d byBuild %d | %s\n", written, kindTaken,
+                   kindWayBack, ownTaken, noneTaken, noneWayBack, keptWayBack, wordLeft, notMade, byBuild, list.say);
+        Check(tireAll,
+              "profiles: the tire mode goes into the profile (the truck's own before the kind's) and an Import writes it into the file of Tire Inflation: the kind's Mode alone "
+              "for the second button, Own and Mode of the truck's own section for the first, nothing else of the file; the backup holds the level's mode or says it had none, "
+              "and the way back gives the level back; a word that is no mode is counted and left; a file not there is not made; a truck named by its build is left");
         DeleteFileW(tire.c_str()), DeleteFileW(tireFile.c_str());
     }
 

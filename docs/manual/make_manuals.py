@@ -315,7 +315,11 @@ marked as a backup, with its date and time. Take it with the same button and the
 settings out. One made with another gearbox leaves the gear hold out. The row says so before you press. A profile of another
 truck is under <b>Other trucks</b> and asks for a second press. With <b>Also the default of the engine</b> ticked an Import also
 writes the engine profile as the default of that engine, for every truck that has it.</p>
-<p>The tire mode of the truck is written into the file. It is not taken yet.</p>
+<p>The tire mode of the truck is written into the file. An Import hands it to Next Gen Tire Inflation: the first button for this
+truck alone, the second for every truck of the kind. Tire Inflation takes it about two seconds later, by its usual pace. It needs
+Tire Inflation installed with "Each truck keeps its own pressure" on, and a Tire Inflation older than the one released with this
+version takes the mode only when the truck is next driven. Increased with Increased switched off there is Normal. The line under
+the buttons says which mode was taken, or why it was left.</p>
 
 <h2>16. The pull test</h2>
 <p>The Power tab's Pull test has a Start button: on a long flat road, in fourth gear or higher, floor the pedal for seven seconds. The mod holds the gear, changes the torque factor for a second at a time (halved, raised by half, at three quarters), measures the pull and puts the factor back. Lifting the foot, braking or another gear stops it. The numbers go into the log.</p>

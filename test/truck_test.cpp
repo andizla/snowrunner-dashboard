@@ -9060,19 +9060,33 @@ static void TruckProfileTest()
     strcpy_s(list.row[1].file, "kind_a - Old.ini"), list.row[1].backup = true;
     const bool there = ProfileNameThere(list, " Mud ") && !ProfileNameThere(list, "Old") && !ProfileNameThere(list, "Sand") && !ProfileNameThere(list, "");
     ProfileTaken t = {};
-    char say[480], shortSay[24];
+    char say[640], shortSay[24];
     ProfileTakenText(t, say, sizeof say);
-    const bool nothing = !strcmp(say, "Taken: nothing. The tire mode is not taken yet.");
+    const bool nothing = !strcmp(say, "Taken: nothing.");
     t.susp = t.air = t.kindLeft = t.engineOther = t.gearboxOther = true, t.unknown = 3;
     ProfileTakenText(t, say, sizeof say);
     ProfileTakenText(t, shortSay, sizeof shortSay);
     const bool told = !strcmp(say, "Taken: the suspension, Air brakes. The settings of the kind were left. Made with another engine: its engine settings were left. "
-                                   "Made with another gearbox: its gear hold was left. The tire mode is not taken yet. 3 unknown keys were left out.") &&
+                                   "Made with another gearbox: its gear hold was left. 3 unknown keys were left out.") &&
                       strlen(shortSay) == sizeof shortSay - 1;
     t = ProfileTaken{};
     t.scales = t.scalesOff = t.diff = t.cda = t.airAxles = t.odo = t.susp = t.air = t.torque = t.hold = t.engine = t.engineOff = t.engineDefault = t.kindLeft = t.engineOther = t.gearboxOther = true, t.unknown = 123456;
+    // the tire mode's sentences (BRIEF_truck_profile.md, build 2): each of the four, and the longest in the full line
+    char tireSay[4][640];
+    for (int i = 0; i < 4; i++)
+    {
+        ProfileTaken one = {};
+        one.tire = kTireTaken + i, one.tireOver = i == 0;
+        strcpy_s(one.tireMode, "Increased");
+        ProfileTakenText(one, tireSay[i], sizeof tireSay[i]);
+    }
+    const bool tireSaid = !strcmp(tireSay[0], "Taken: nothing. The tire mode is now Increased. This truck keeps its own tire mode.") &&
+                          !strcmp(tireSay[1], "Taken: nothing. The tire mode of this level was taken out again.") &&
+                          !strcmp(tireSay[2], "Taken: nothing. The tire mode was left: Tire Inflation has no file here.") &&
+                          !strcmp(tireSay[3], "Taken: nothing. The tire mode was left: the game gives this truck no name.");
+    t.tire = kTireNoName, t.tireOver = t.truckOver = true;
     ProfileTakenText(t, say, sizeof say);
-    Check(there && nothing && told && strlen(say) < sizeof say && !strchr(say, 39),
+    Check(there && nothing && told && tireSaid && strlen(say) < sizeof say - 1 && strstr(say, "unknown keys were left out.") && !strchr(say, 39),
           "profiles: a typed name is known as a file of the list whatever its case, a backup is not; the line of an Import names what was taken and what was left, fits its buffer with everything in it and has no apostrophe");
 }
 
