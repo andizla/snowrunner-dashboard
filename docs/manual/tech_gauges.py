@@ -1449,7 +1449,10 @@ not part of a release: <code>DiffLockBite</code>, <code>WheelCap</code>, <code>P
 with its name, tip, range, default and the value the tab shows. The tool writes a wanted value with a count. The mod's thread
 takes it at its next pass (the count, the value, the count again), held to the range and to whole percent, and hands it in by
 <code>SettingsPut</code> with the turn it read the settings at. That is the road an edit on the tab takes: in force on that pass,
-saved a second after the last change. With Real engine off the four are published greyed. Only the mod's thread touches the
+saved a second after the last change. <code>HeldGearSlip</code> is a figure of the tool alone: test builds had it as the row Held
+gear slip on the Power tab, and the row is gone. Its default is 2, All gears: a numbered gear held by hand has the wheel cap in
+every gear. An ini of a test build that holds 0 or 1 keeps it, and the log says so at every start (<code>held gear slip:
+Gauges.ini has HeldGearSlip=</code>). With Real engine off the four are published greyed. Only the mod's thread touches the
 block, and no hook does. Without the tool nothing reads it. The log's start says "tuning:" with the block's name, or that it
 could not be made.</p>
 {table(['Offset', 'Type', 'Field'], tire, 'Read: Local\\SnowRunnerTirePressure.State.&lt;process id&gt;, the tire mod\'s (tires.h); the fields used', 'small')}

@@ -1292,6 +1292,7 @@ static void ReadIni(GaugeSettings &s)
                         L";   A truck file may hold its own DiffType; the tab writes it there for the driven truck.\n"
                         L";   DiffAxle1 to DiffAxle8 in a truck file: one axle its own type, front to back, the same four choices. An axle with no key goes by DiffType.\n"
                         L";   BindLockFrontAxle and BindLockRearAxles hold those axles Locked until pressed again. While the diff lock of the truck is on, every axle is locked.\n"
+                        L"; HeldGearSlip is a figure of the tuning tool, not of the tab: 2, a numbered gear held by hand has the wheel cap in every gear. 0 and 1 are the older ways.\n"
                         L"; AirEmptyAtStart=1: a truck with air brakes first driven after the game starts has empty tanks and stands on its spring brakes until they fill. A truck keeps its air between drives (AirBar in its [Odometer:<id>]).\n"
                         L"; AirBrakes in a truck file (the Air brakes box of the Engine tab): 1 the truck has brake air and spring brakes, 0 it has none. No key: every truck but a scout has them, by the class the mod automatic goes by for it.\n"
                         L"; ModEngineSpeed=1 (with Powertrain, on by default): the game tachometer, sound and effects follow the mod engine; its fuel burn and stall check keep the game's own.\n"
@@ -4790,6 +4791,7 @@ static StallJob g_stallJob = {};
 static void (*g_damageUpdate)(uint64_t) = nullptr;
 static void OnTruckFrame(void *first, float step);
 static bool g_truckFrames = false; // the truck update is hooked: its jobs are dealt
+static bool g_truckFramesTried = false; // the hook was asked for once: without g_truckFrames it failed, and it is not tried again
 static bool g_lockPattern = false; // the diff lock's setter found once at the code look: the kind is at vehicle + 0xE8 (BRIEF_diff_lock_bite.md)
 // The game's quick winch request (quick_winch.h): the method behind the hook, what the mod's thread posts for it, and
 // whether it was found, is hooked, or could not be hooked.
@@ -5146,6 +5148,7 @@ static void GearboxHooksStep(const GaugeSettings &s)
     }
     if (act & kGateAttachTruck)
     {
+        g_truckFramesTried = true;
         // the damage path: the game's truck update hooked so the damage is dealt on its thread, its damage update after
         char hookWhy[160] = "";
         if (!g_pathFound)
@@ -5329,6 +5332,12 @@ static void LogSettings(const GaugeSettings &s)
             s.lockSteerFront, s.lockSteerRear, LockSteerOn(s.powertrain, s.lockSteerFront, s.lockSteerRear) ? L"" : L" (off now)");
         Log(L"settings: quick winch %d (QuickWinch; 0 as the game has it, 1 only while the truck stands, 2 never from its key)%s", s.quickWinch,
             g_quickWinchFound ? L"" : L"; the game's method is not found, so the game does as it does");
+        // an ini from a build before All gears became the default holds the old 0 or 1, and no row changes it now
+        // (part 170, the Reviewer's answer): kept, and said at every start
+        static bool slipSaid = false;
+        if (!slipSaid && s.heldGearSlip != kSlipAllGears)
+            Log(L"held gear slip: Gauges.ini has HeldGearSlip=%d from an earlier build. All gears is 2. There is no row for it any more: change the key or take it out", s.heldGearSlip);
+        slipSaid = true;
         Log(L"settings: held gear slip %d, %S (HeldGearSlip; 0 a numbered gear held by hand has the governor, 1 the cap of L+ in the gears near it, 2 the wheel cap in every gear)", s.heldGearSlip,
             HeldSlipName(s.heldGearSlip));
         Log(L"settings: air brakes %s (AirBrakes of the truck file: %d; -1 no choice: every truck but a scout has them, by the class the automatic goes by for the truck); "
@@ -11202,7 +11211,8 @@ static DWORD WINAPI Run(void *)
             v.steerPercent = driving && watch.steer.known ? LockSteerPercent(watch.steer.share) : 0;
             v.steerNoRoute = !g_steerPattern;
             v.quickWinchNoRoute = !g_quickWinchFound || g_quickWinchFailed;
-            v.winchOutOff = g_winchJob.fault ? 2 : !g_winchGet || !g_winchSet ? 1 : 0;
+            // 3: the truck update was asked for and could not be hooked (163's should S1): the row says so
+            v.winchOutOff = g_winchJob.fault ? 2 : !g_winchGet || !g_winchSet ? 1 : g_truckFramesTried && !g_truckFrames ? 3 : 0;
             v.drive.steer = (uint8_t)v.steerPercent;
             for (int a = 0; driving && a < watch.axleRows.axles && a < kAxleRowsMost; a++)
             {
@@ -11794,7 +11804,7 @@ static void PartIni()
     c.quickWinch = 2;
     c.lockSteerRear = 70;
     c.lowRangeSlip = 40;
-    c.heldGearSlip = 2;
+    c.heldGearSlip = 1;
     c.diffType = 2;
     c.physicsRate = 120;
     c.modEngineSpeed = false;
@@ -11837,7 +11847,7 @@ static void PartIni()
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 167, "ini: the help text survives a write (167 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 168, "ini: the help text survives a write (168 comment lines)");
     // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
     {
         char none[32] = "x", tab[32] = {}, kept[32] = {};
@@ -11926,18 +11936,19 @@ static void PartIni()
             WriteIni(c);
         }
         {
-            // HeldGearSlip: 0 by default, anything that is no choice reads as 0
+            // HeldGearSlip: All gears (2) by default; a kept 0 and 1 read back as 0 and 1; a number that is no choice is 2.
+            // Text is 0, as every number of the ini read from text is
             GaugeSettings k;
-            bool slipKey = d.heldGearSlip == 0;
-            static const wchar_t *texts[5] = { L"1", L"2", L"3", L"-1", L"x" };
-            static const int reads[5] = { 1, 2, 0, 0, 0 };
-            for (int i = 0; i < 5; i++)
+            bool slipKey = d.heldGearSlip == kSlipAllGears;
+            static const wchar_t *texts[6] = { L"0", L"1", L"2", L"3", L"-1", L"x" };
+            static const int reads[6] = { 0, 1, 2, 2, 2, 0 };
+            for (int i = 0; i < 6; i++)
             {
                 WritePrivateProfileStringW(kIniSection, L"HeldGearSlip", texts[i], ini.c_str());
                 ReadIni(k);
                 slipKey = slipKey && k.heldGearSlip == reads[i];
             }
-            Check(slipKey, "ini: HeldGearSlip is 0 by default, 1 and 2 are read, anything else is 0");
+            Check(slipKey, "ini: HeldGearSlip is 2 by default (All gears), a kept 0 and 1 are read as they are, a number out of range is 2");
             WriteIni(c);
         }
         Check(names && toggles && hidden, "the Off layout: the log has a name for every layout number; the toggle pressed twice in Off flips nothing and the strip picked after it shows; "
@@ -14370,7 +14381,7 @@ static void PartRest()
         TunePass(block, 1260);
         NgTuneRead(block, sizeof block, seen);
         bool slipEntry = seen.e[kGtHeldSlip].kind == kNgTuneSlider && !strcmp(seen.e[kGtHeldSlip].name, "Held gear slip") && seen.e[kGtHeldSlip].least == 0.0f && seen.e[kGtHeldSlip].most == 2.0f &&
-                         seen.e[kGtHeldSlip].def == 0.0f && seen.e[kGtHeldLine].kind == kNgTuneLine && !strcmp(seen.e[kGtHeldLine].group, "Powertrain") && shown(kGtHeldSlip) == 0.0f &&
+                         seen.e[kGtHeldSlip].def == 2.0f && seen.e[kGtHeldLine].kind == kNgTuneLine && !strcmp(seen.e[kGtHeldLine].group, "Powertrain") && shown(kGtHeldSlip) == 2.0f && d.heldGearSlip == kSlipAllGears &&
                          !strcmp(NgTuneAt(block, kGtHeldLine)->text, "no gear held") && strlen(items[kGtHeldLine].tip) < 128 && !strchr(items[kGtHeldLine].tip, '\'');
         want(kGtHeldSlip, 1.4f);
         TunePass(block, 1270);
@@ -14415,7 +14426,7 @@ static void PartRest()
         slipEntry = slipEntry && greyed(kGtHeldSlip) && greyed(kGtHeldLine);
         steerEntry = steerEntry && greyed(kGtSteerFront) && greyed(kGtSteerRear) && greyed(kGtSteerLine);
         Check(steerEntry, "tuning block: Steering with front lock and with rear lock are sliders of 30 to 100 with 60 and 85, 12 asked is 30 and 70.4 is 70; the line says the share in force; greyed with Real engine off");
-        Check(slipEntry, "tuning block: Held gear slip is a slider of 0 to 2 in whole steps with a line under it; 1.4 asked is 1 and 7 is 2; the line says the choice and the cap and fits; greyed with Real engine off");
+        Check(slipEntry, "tuning block: Held gear slip is a slider of 0 to 2 in whole steps with a line under it, at 2 (All gears) by default and at a reset; 1.4 asked is 1 and 7 is 2; the line says the choice and the cap and fits; greyed with Real engine off");
         TunePass(nullptr, 1300); // no block: the pass does nothing
         if (!(listed && published && taken && nothing && reset && off)) printf("     listed %d published %d taken %d nothing %d reset %d off %d\n", listed, published, taken, nothing, reset, off);
         Check(listed && published && taken && nothing && reset && off,

@@ -252,7 +252,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.winchOutRate = 0.5f; // kWinchRateDefault (winch_out.h)
     s.winchOutStep = 0.0f;
     s.modEngineSpeed = true; // on by default (BRIEF_drivetrain_1_engine_speed.md); an explicit 0 stays 0
-    s.heldGearSlip = 0;
+    s.heldGearSlip = kSlipAllGears; // the user, 2026-11-14: All gears is how a held gear behaves; no row on the tab, a figure of the tuning tool (BRIEF_jobs_1114.md, part 170)
     s.wheelCap = 150; // kCapDefault (BRIEF_drivetrain_2c_wheel_cap.md with M5)
     s.pushShare = 0; // the surplus taken back (BRIEF_chassis_push.md)
     s.lowRangeSlip = 100; // L- and L with the slip room of L+ (BRIEF_low_range_pull.md, the lead)
@@ -418,7 +418,7 @@ inline void SettingsClamp(GaugeSettings &s)
     s.winchOutRate = isfinite(s.winchOutRate) ? SettingsRange(s.winchOutRate, 0.1f, 2.0f) : 0.5f; // kWinchRateRange
     s.winchOutStep = isfinite(s.winchOutStep) ? SettingsRange(s.winchOutStep, 0.0f, 2.0f) : 0.0f; // kWinchStepRange
     s.wheelCap = s.wheelCap < 110 ? 110 : s.wheelCap > 200 ? 200 : s.wheelCap;
-    s.heldGearSlip = s.heldGearSlip < 0 || s.heldGearSlip > 2 ? 0 : s.heldGearSlip;
+    s.heldGearSlip = s.heldGearSlip < 0 || s.heldGearSlip > 2 ? kSlipAllGears : s.heldGearSlip;
     s.pushShare = s.pushShare < 0 ? 0 : s.pushShare > 100 ? 100 : s.pushShare;
     s.lowRangeSlip = s.lowRangeSlip < 0 ? 0 : s.lowRangeSlip > 100 ? 100 : s.lowRangeSlip;
     s.diffLockBite = s.diffLockBite < 0 ? 0 : s.diffLockBite > 100 ? 100 : s.diffLockBite;

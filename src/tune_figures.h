@@ -26,7 +26,7 @@ static const GtInfo kGt[kGtCount] = {
     { "WheelCap", "Wheel cap", "In L-, L, L+ and R no driven wheel runs faster than this percent of the top speed of its gear. Needs the mod gearbox.", 110.0f, 200.0f, 150.0f },
     { "PushShare", "Push share", "How much of the extra push the game gives the chassis at speed is left in, in percent. 0 takes all of it back.", 0.0f, 100.0f, 0.0f },
     { "LowRangeSlip", "Low range slip", "How much wheel slip L-, L and R may use. 100 gives them the same room as L+. 0 holds each wheel near the top of its gear.", 0.0f, 100.0f, 100.0f },
-    { "HeldGearSlip", "Held gear slip", "Wheel spin in a numbered gear held by hand. 0 Engine held: to the engine limit. 1 Low gears: as L+. 2 All gears: by Wheel cap.", 0.0f, 2.0f, 0.0f },
+    { "HeldGearSlip", "Held gear slip", "Wheel spin in a numbered gear held by hand. 0 Engine held: to the engine limit. 1 Low gears: as L+. 2 All gears: by Wheel cap.", 0.0f, 2.0f, 2.0f },
     { "LockSteerFront", "Steering with front lock", "Steering left while an axle that steers is locked. 100 leaves it all. A truck whose lock is always on has this all the time.", 30.0f, 100.0f, 60.0f },
     { "LockSteerRear", "Steering with rear lock", "Steering left while another driven axle is locked. 100 leaves it all. With both locked the smaller figure counts.", 30.0f, 100.0f, 85.0f },
 };

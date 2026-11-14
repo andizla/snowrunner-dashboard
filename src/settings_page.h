@@ -1101,11 +1101,6 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             ImGui::SetNextItemWidth(w);
             changed(ImGui::SliderInt("##lowrangeslip", &s.lowRangeSlip, 0, 100, "%d %%", ImGuiSliderFlags_AlwaysClamp));
             PageTip("How much wheel slip L-, L and R may use. 100 gives them the same room as L+. 0 holds each wheel near the top speed of its gear.");
-            static const char *slips[kSlipCount] = { "Engine held", "Low gears", "All gears" };
-            PageLabel("Held gear slip", labelX);
-            ImGui::SetNextItemWidth(w);
-            changed(ImGui::Combo("##heldgearslip", &s.heldGearSlip, slips, kSlipCount));
-            PageTip("How far a numbered gear held by hand may spin its wheels. Engine held: to the engine speed limit. Low gears: as far as L+, in the gears near it. All gears: by the Wheel cap in every gear.");
             PageLabel("Drive display", labelX);
             changed(ImGui::Checkbox("##drivedisplay", &s.driveDisplay));
             PageTip("Each wheel: its spin against the truck speed and its share of the drive.");
@@ -1657,6 +1652,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             ImGui::EndDisabled();
             PageTip("How fast the wire is let out while Winch out is held. It stops at the full length of the winch. Default 0.50 m/s.");
             if (view.winchOutOff == 1) ImGui::TextDisabled("Winch out: not in this game version.");
+            else if (view.winchOutOff == 3) ImGui::TextDisabled("Winch out: the game could not be hooked.");
             else if (view.winchOutOff == 2) ImGui::TextDisabled("Winch out: off until the game is started again. Hook the winch again.");
         }
         // the game's quick winch on its key (BRIEF_quick_winch.md): acts at once; greyed where the game's method is not found

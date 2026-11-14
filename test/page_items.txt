@@ -286,7 +286,6 @@ Set###odosetbutton
 ##walkskipslow
 120###physicsrate120
 60###physicsrate60
-##heldgearslip
 None###bind
 None###bind
 None###bind
