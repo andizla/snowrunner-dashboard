@@ -29,6 +29,9 @@ long GearboxAttach(void **targets[], void *const hooks[], int n);
 // The same with no other thread suspended: for functions no other thread runs while the mod starts (the exit calls,
 // BRIEF_crash_line_early.md), as a thread suspended while it holds the heap's lock would hang the game at its boot.
 long GearboxAttachAlone(void **targets[], void *const hooks[], int n);
+// Whether an allocation base (VirtualQuery's) is the region of one of the trampolines the attaches above made: the
+// crash line's test for a fault in the mod's own hook memory (BRIEF_tester_1114.md, part 196). No heap, no lock.
+bool GearboxTrampolineRegion(const void *base);
 // Detaches them in one transaction; each targets[i] holds the function's own address again.
 long GearboxDetach(void **targets[], void *const hooks[], int n);
 

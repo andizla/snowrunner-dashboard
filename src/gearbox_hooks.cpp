@@ -299,6 +299,24 @@ static int OtherThreads(HANDLE out[kMostThreads])
     return n;
 }
 
+// The trampolines of every attach made (the original pointers Detours gives back), kept in static memory so the crash
+// line can tell whether a fault lies in one of their regions (BRIEF_tester_1114.md, part 196, must 1).
+static const int kMostTrampolines = 64;
+static const void *g_trampolines[kMostTrampolines];
+static volatile LONG g_trampolineCount = 0;
+
+bool GearboxTrampolineRegion(const void *base)
+{
+    if (!base) return false;
+    const LONG n = g_trampolineCount < kMostTrampolines ? g_trampolineCount : kMostTrampolines;
+    for (LONG i = 0; i < n; i++)
+    {
+        MEMORY_BASIC_INFORMATION m = {};
+        if (g_trampolines[i] && VirtualQuery(g_trampolines[i], &m, sizeof m) && m.AllocationBase == base) return true;
+    }
+    return false;
+}
+
 // One transaction of attaches (attach) or detaches, every other thread suspended for its commit; others false: none
 // suspended (GearboxAttachAlone).
 static long Transact(bool attach, void **targets[], void *const hooks[], int n, bool others = true)
@@ -317,6 +335,12 @@ static long Transact(bool attach, void **targets[], void *const hooks[], int n, 
     for (int i = 0; i < count; i++) DetourUpdateThread(threads[i]);
     error = DetourTransactionCommit();
     for (int i = 0; i < count; i++) CloseHandle(threads[i]);
+    if (error == NO_ERROR && attach)
+        for (int i = 0; i < n; i++)
+        {
+            const LONG at = InterlockedIncrement(&g_trampolineCount) - 1;
+            if (at < kMostTrampolines) g_trampolines[at] = *targets[i];
+        }
     return error;
 }
 

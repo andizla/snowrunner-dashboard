@@ -1351,7 +1351,12 @@ process, and addresses below 0x10000 are refused: an object freed under the mod 
 <li>The truck is found again every 500 ms and after any failed read; a read fails if control no longer points at the same vehicle. A
 truck must look sane: under 200 m/s, a tank under 100000 l with the fuel at most 1.01 of it, gears −1 to 32, throttle within ±2. A
 new kind is taken after 2 passes.</li>
-<li>The wheels are recognised by their class pointer; at most 32 wheels are read, and a gear list of 32 entries (R, 30 gears and H). A longer list is logged once a truck, and its gears are not read.</li></ul>
+<li>The wheels are recognised by their class pointer; at most 32 wheels are read, and a gear list of 32 entries (R, 30 gears and H). A longer list is logged once a truck, and its gears are not read.</li>
+<li>The crash and fault lines in <code>Gauges.log</code> name the memory at the faulting address: its state, its type (image, mapped
+or private), its allocation base, and whether that region holds one of the mod's hook trampolines. They also give the faulting
+thread's start as module + RVA. A fault on another thread after the game has called ExitProcess is written as <code>at the quit:
+after ExitProcess on thread ...</code>, not as a crash: the game is ending, and the line is still passed on to the game's handler
+(part 196).</li></ul>
 <h3>What it writes and calls</h3>
 <ul><li>With <code>Damage</code> on, the driven truck's engine damage, and with the record its effect and torque factor.</li>
 <li>With <code>Gearbox=1</code>, the automatic flag (truck action +0x3C), and it calls the game's <code>ShiftGear(vehicle, gear)</code>. That

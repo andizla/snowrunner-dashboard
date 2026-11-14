@@ -39,6 +39,7 @@
 #include "warn_list.h"
 #include "tires.h"
 #include "torque_cut_sim.h"
+#include "fault_place.h"
 
 void GaugeLog(const wchar_t *, ...) {} // the sounds say in the mod's log where each comes from; here that goes nowhere
 
@@ -10005,6 +10006,25 @@ int main(int argc, char **argv)
         Check(pending && decided && minute && stop && gap && held && still && unsaved && setZero && changed,
               "odometer writes: nothing before the decision and the count added to the figure loaded; a write a minute; one at a stop after 2 s standing, at most one "
               "every 10 s; one when the game holds the models, then none; an id not read never written; Set to keeps the other figure; another truck starts over");
+    }
+
+    // the crash line's words of a fault's place (BRIEF_tester_1114.md, part 196): the memory there, and a fault on
+    // another thread after ExitProcess named at the quit, not a crash
+    {
+        char memA[200], memB[200], memC[200], memD[200];
+        FaultMemoryText(true, MEM_COMMIT, MEM_PRIVATE, (const void *)0x7fff0aaa0000, true, memA, sizeof memA);
+        FaultMemoryText(true, MEM_COMMIT, MEM_IMAGE, (const void *)0x140000000, false, memB, sizeof memB);
+        FaultMemoryText(true, MEM_FREE, 0, nullptr, false, memC, sizeof memC);
+        FaultMemoryText(false, 0, 0, nullptr, false, memD, sizeof memD);
+        const bool words = strstr(memA, "committed, private") && strstr(memA, "the mod's hook trampolines") && strstr(memB, "committed, image") &&
+                           strstr(memB, "no region of the mod's") && strstr(memC, "free, none") && !strcmp(memD, "memory: not read");
+        const bool quit = !FaultAtQuit(0, 5) && !FaultAtQuit(5, 5) && FaultAtQuit(5, 7);
+        char shortText[24];
+        const int cut = FaultMemoryText(true, MEM_COMMIT, MEM_PRIVATE, (const void *)0x1000, true, shortText, sizeof shortText);
+        const bool cutOk = cut < 0 && strlen(shortText) == sizeof shortText - 1;
+        if (!(words && quit && cutOk)) printf("     fault place: \"%s\" \"%s\" \"%s\" \"%s\" quit %d cut %d\n", memA, memB, memC, memD, quit, cutOk);
+        Check(words && quit && cutOk, "crash line: the memory at a fault named by state, type, allocation base and whether it is the mod's hooks; a fault on "
+                                      "another thread after ExitProcess is at the quit, the thread that called it and before it not; a short buffer cuts the words");
     }
 
     printf(g_failed ? "MODELS TEST FAILED (%d)\n" : "MODELS TEST OK\n", g_failed);

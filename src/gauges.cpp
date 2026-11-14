@@ -406,6 +406,7 @@ void GaugeLog(const wchar_t *fmt, ...)
 // (crt_line.h). A /GS failure ends the same way but runs no code of the process: it cannot be caught here, only a
 // dump names it.
 #include "crt_line.h"
+#include "fault_place.h"
 static LPTOP_LEVEL_EXCEPTION_FILTER g_crashBefore = nullptr;
 static DWORD g_crashModThread = 0;
 static const LONG kFaultLines = 3;
@@ -441,15 +442,54 @@ static int CrashFrames(void *const *frames, int count, char *out, size_t size, i
 
 static const char *CrashThreadWord(DWORD thread) { return thread == g_crashModThread ? " (the mod's thread)" : ""; }
 
-// A fault's line. what: "crash" or "fault"; the place it was raised at, its thread and its callers.
+// The thread that called ExitProcess, set in its hook before the real call (part 196, must 2); 0 before.
+static volatile DWORD g_exitThread = 0;
+
+// The faulting address's memory and the thread's start as module + RVA (part 196, must 1), into out, with no heap.
+static int CrashWhose(const void *address, char *out, size_t size)
+{
+    MEMORY_BASIC_INFORMATION m = {};
+    const bool read = VirtualQuery(address, &m, sizeof m) != 0;
+    int used = FaultMemoryText(read, m.State, m.Type, m.AllocationBase, read && GearboxTrampolineRegion(m.AllocationBase), out, size);
+    if (used < 0) used = (int)strlen(out);
+    typedef LONG(NTAPI * QueryThread)(HANDLE, int, PVOID, ULONG, PULONG);
+    static QueryThread query = nullptr;
+    if (!query)
+    {
+        const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+        query = ntdll ? (QueryThread)GetProcAddress(ntdll, "NtQueryInformationThread") : nullptr;
+    }
+    void *start = nullptr;
+    const int kWin32StartAddress = 9; // ThreadQuerySetWin32StartAddress
+    if (query && query(GetCurrentThread(), kWin32StartAddress, &start, sizeof start, nullptr) >= 0 && start && used + 32 < (int)size)
+    {
+        int n = _snprintf_s(out + used, size - used, _TRUNCATE, "; the thread started at ");
+        if (n > 0) used += n;
+        n = CrashPlace(start, out + used, size - used);
+        if (n > 0) used += n;
+    }
+    else if (used + 32 < (int)size)
+    {
+        const int n = _snprintf_s(out + used, size - used, _TRUNCATE, "; the thread's start not read");
+        if (n > 0) used += n;
+    }
+    return used;
+}
+
+// A fault's line. what: "crash" or "fault"; the place it was raised at, its thread, the memory there, the thread's
+// start and its callers. On another thread after ExitProcess the head is "at the quit" instead (part 196, must 2).
 static void CrashWrite(const EXCEPTION_POINTERS *e, const char *what, const char *after)
 {
-    char text[1200], at[320];
+    char text[1400], at[320], whose[400];
     void *frames[kExitFrames];
     CrashPlace(e->ExceptionRecord->ExceptionAddress, at, sizeof at);
-    const DWORD thread = GetCurrentThreadId();
-    int used = _snprintf_s(text, sizeof text, _TRUNCATE, "%s: code %08lX at %s, thread %lu%s; %s; called from ", what, e->ExceptionRecord->ExceptionCode, at, thread,
-                           CrashThreadWord(thread), after);
+    CrashWhose(e->ExceptionRecord->ExceptionAddress, whose, sizeof whose);
+    const DWORD thread = GetCurrentThreadId(), exitThread = g_exitThread;
+    int used = FaultAtQuit(exitThread, thread)
+                   ? _snprintf_s(text, sizeof text, _TRUNCATE, "at the quit: after ExitProcess on thread %lu, the game is ending (a %s, not named a crash); code %08lX at %s, thread %lu%s; %s; %s; called from ",
+                                 exitThread, what, e->ExceptionRecord->ExceptionCode, at, thread, CrashThreadWord(thread), whose, after)
+                   : _snprintf_s(text, sizeof text, _TRUNCATE, "%s: code %08lX at %s, thread %lu%s; %s; %s; called from ", what, e->ExceptionRecord->ExceptionCode, at, thread,
+                                 CrashThreadWord(thread), whose, after);
     if (used < 0) used = (int)strlen(text);
     CrashFrames(frames, CaptureStackBackTrace(1, kExitFrames, frames, nullptr), text, sizeof text, used);
     CrashLineFlushed(text);
@@ -518,6 +558,7 @@ static BOOL(WINAPI *g_terminateProcess)(HANDLE, UINT) = TerminateProcess;
 static VOID(WINAPI *g_failFast)(PEXCEPTION_RECORD, PCONTEXT, DWORD) = RaiseFailFastException;
 static VOID WINAPI ExitProcessHook(UINT code)
 {
+    InterlockedCompareExchange((volatile LONG *)&g_exitThread, (LONG)GetCurrentThreadId(), 0);
     ExitWrite("ExitProcess", code);
     g_exitProcess(code);
 }
