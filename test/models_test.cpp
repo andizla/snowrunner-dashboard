@@ -3392,11 +3392,11 @@ int main(int argc, char **argv)
                 qWas = heat.q;
             }
             const bool idleOk = stalledNot && held.stalls == 0 && held.rpm == k.idle && !held.locked && held.idleHeld && held.carried > 0.0f && !held.dead && heat.q > 0.0f && heatRises;
-            // a little pedal pulling away in a spared gear: while the clutch slips the engine is held at idle; once it locks the
-            // engine turns with the gearbox, under idle as before (a lug, not a stall), and it never stalls
+            // a little pedal pulling away in a spared gear: the engine is held at idle with the clutch slipping until the
+            // input catches up (the review of 189, M1: no lug under idle there any more), then it locks and never stalls
             ClutchModel away = {};
             float least = 1e9f, slipLeast = 1e9f, in = 0.0f;
-            for (float at = 0.0f; at < 5.0f; at += kDt)
+            for (float at = 0.0f; at < 20.0f; at += kDt)
             {
                 wheels(TruckGearTop(c, 1) * in / k.redline);
                 ClutchStep(away, c, k, curve, 1.0f - SettingsRange(at / 3.0f, 0.0f, 1.0f), ThrottleShape(0.33f), 1.0f, false, kDt, 0.0f, true);
@@ -3404,18 +3404,48 @@ int main(int argc, char **argv)
                 if (at > 0.5f) least = fminf(least, away.rpm);
                 if (at > 0.5f && !away.locked) slipLeast = fminf(slipLeast, away.rpm);
             }
-            const bool awayOk = away.stalls == 0 && least > k.idle * kClutchStall && (slipLeast > 1e8f || slipLeast >= k.idle - 0.5f) && away.locked;
+            const bool awayOk = away.stalls == 0 && least >= k.idle - 0.5f && (slipLeast > 1e8f || slipLeast >= k.idle - 0.5f) && away.locked;
+            // rolling locked in the first gear, then a load stops the wheels for ten seconds (the review of 189, M1): no
+            // stall, the engine at idle, the clutch slipping with torque, the heat rising; the same in the second gear stalls
+            auto rollThenStop = [&](int gear, bool spare, ClutchHeat &h, bool &rose) {
+                TruckRaw r = c;
+                r.gear = r.gearEngaged = gear;
+                ClutchModel m = {};
+                for (int i = 0; i < r.wheels; i++) r.spin[i] = TruckGearTop(r, gear) * 0.4f;
+                for (float at = 0.0f; at < 2.0f; at += kDt) ClutchStep(m, r, k, curve, 0.0f, ThrottleShape(0.2f), 1.0f, false, kDt, 0.0f, spare);
+                const bool wasLocked = m.locked && m.stalls == 0;
+                for (int i = 0; i < r.wheels; i++) r.spin[i] = 0.0f;
+                rose = true;
+                float qWas2 = 0.0f;
+                for (float at = 0.0f; at < 10.0f; at += kDt)
+                {
+                    ClutchStep(m, r, k, curve, 0.0f, 0.0f, 1.0f, false, kDt, 0.0f, spare);
+                    ClutchHeatStep(h, 1, m, 195000.0f, true, kDt);
+                    if (at > 0.2f) rose = rose && h.q >= qWas2;
+                    qWas2 = h.q;
+                }
+                return std::make_pair(wasLocked, m);
+            };
+            ClutchHeat h1 = {}, h2 = {};
+            bool rose1 = false, rose2 = false;
+            const auto first = rollThenStop(1, true, h1, rose1), second = rollThenStop(2, false, h2, rose2);
+            const bool loadOk = first.first && first.second.stalls == 0 && first.second.rpm == k.idle && !first.second.locked && first.second.idleHeld && first.second.carried > 0.0f &&
+                                h1.q > 0.0f && rose1 && second.first && second.second.stalls == 1;
+            if (!loadOk)
+                printf("     clutch load: first gear locked %d stalls %d rpm %.0f locked %d held %d carried %.3f heat %.4f rose %d; second gear locked %d stalls %d\n", first.first,
+                       first.second.stalls, first.second.rpm, first.second.locked, first.second.idleHeld, first.second.carried, h1.q, rose1, second.first, second.second.stalls);
             wheels(0.0f);
             // the clutch that works by itself is not touched by it: it never holds at idle by this rule
             ClutchModel own = {};
             for (float at = 0.0f; at < 2.0f; at += kDt) ClutchStep(own, c, k, curve, 0.0f, 0.0f, 1.0f, true, kDt, 0.0f, true);
             const bool ownOk = !own.idleHeld && own.stalls == 0;
-            if (!(idleOk && awayOk && ownOk))
-                printf("     clutch spared: held %d (stalls %d rpm %.0f locked %d carried %.3f heat %.4f rising %d), away %d (least %.0f locked %d), own %d\n", idleOk, held.stalls,
-                       held.rpm, held.locked, held.carried, heat.q, heatRises, awayOk, least, away.locked, ownOk);
-            Check(idleOk && awayOk && ownOk,
+            if (!(idleOk && awayOk && ownOk && loadOk))
+                printf("     clutch spared: held %d (stalls %d rpm %.0f locked %d carried %.3f heat %.4f rising %d), away %d (least %.0f locked %d input %.0f carried %.3f), own %d\n", idleOk, held.stalls,
+                       held.rpm, held.locked, held.carried, heat.q, heatRises, awayOk, least, away.locked, away.input, away.carried, ownOk);
+            Check(idleOk && awayOk && ownOk && loadOk,
                   "clutch: let up at once in a gear that never stalls, the engine holds idle, the clutch slips with the torque of idle and heats on; pulling away there the "
-                  "engine is held at idle while the clutch slips, locks and never stalls; the clutch that works by itself is left as it was");
+                  "engine is held at idle until the input catches up, locks and never stalls; rolling locked in the first gear, a load that stops the wheels lets the clutch "
+                  "slip at idle and heat, where the second gear stalls; the clutch that works by itself is left as it was");
         }
         // let up over three seconds with a third of the pedal, the truck pulling away with what the clutch passes on
         // (the gearbox's input gaining 2000 rpm a second for each share of the most torque, as in a first gear)

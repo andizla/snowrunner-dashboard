@@ -3381,7 +3381,10 @@ inline bool ClutchStep(ClutchModel &m, const TruckRaw &t, const GaugeScale &k, c
         }
         m.rpm = next;
     }
-    if (spared && !automatic && m.connected && hold > 0.0f && !m.locked && m.rpm < k.idle && m.input < k.idle)
+    // slipping or locked (the review of 189, M1): a let-up clutch locked to an input a load drags under idle is let go
+    // into the hold too, so the truck the load stops creeps at idle with the clutch slipping; it locks again once the
+    // input is back over idle, by the slipping path above
+    if (spared && !automatic && m.connected && hold > 0.0f && m.rpm < k.idle && m.input < k.idle)
     {
         ClutchIdleHold(m, k, full, drag, hold);
         return false;
