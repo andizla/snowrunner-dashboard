@@ -723,7 +723,10 @@ gears go lock to lock. It lets go under 0.4 red with the game's own engine; in e
 on a coast, never by the pedal, so a press from a low cruise keeps it locked and a press that needs more pull gets a shift down by
 the schedule or the kickdown (review 11: the unlock point had risen with the pedal, and a press from a low cruise flared the engine
 to the stall). A lift keeps it locked, as a truck's automatic does: the engine follows the wheels down and the game's own engine
-braking slows the truck in the gear held. Before d0940b4 it opened on every lift for a second and at every shift for the shifts'
+braking slows the truck in the gear held. With the wheels spinning free (the model's spinning) the engine follows them down no slower
+than its own drag brings it, idle to the red zone in kEngineRevTime (0.8 s) back down, so free wheels in the air or deep mud no
+longer hold the needle at the tachometer's top; the lock and the shifts still read the input. With Probe=1 the automatic's line then
+ends "the foot off: the engine at its run-down". Before d0940b4 it opened on every lift for a second and at every shift for the shifts'
 pause, never locked in first; it stalled at 0.75 red (2400 at most), then at 0.6 (2000 at most, the tight one of d0940b4), coupling at
 0.85 and then 0.75: the truck felt like a rubber band (two players' reports, 28 October).</p>
 <h3>Creep at idle (Creep=1)</h3>

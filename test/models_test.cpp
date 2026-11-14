@@ -2307,6 +2307,48 @@ int main(int argc, char **argv)
             Check(learned && robust && spinning.spinning && spinning.gear == 1 && blind.gear == 2 && spinning.input > blind.input - 1.0f,
                   "automatic: wheels spinning faster than the ground goes do not shift up; the engine still turns with them; the wheels' speed against the "
                   "ground's is learned where they turn steadily, not from a bump, the handbrake or the truck sliding back");
+            // the foot off with free wheels (BRIEF_tester_1114.md, part 190): floored to the tachometer's top at 85 rad/s
+            // in the first gear, then the foot off with the wheels still at 85: the needle comes down under the red zone in
+            // under two seconds while the input stays at the top; gripping wheels at the gear's top keep it with them
+            {
+                const float top1 = TruckGearTop(g, 1);
+                GearboxModel free = spinning;
+                TruckRaw air = mud;
+                for (int i = 0; i < air.wheels; i++) air.spin[i] = 85.0f;
+                air.speed = 2.5f;
+                for (float at = 0.0f; at < 1.0f; at += kDt) GearboxStep(free, air, k, 1.0f, 1.0f, kDt);
+                const float atTop = free.rpm;
+                const bool upThere = free.locked && free.spinning && free.gear == 1 && atTop >= k.redline;
+                float under = -1.0f;
+                for (float at = 0.0f; at < 3.0f; at += kDt)
+                {
+                    GearboxStep(free, air, k, 0.0f, 0.0f, kDt);
+                    if (under < 0.0f && free.rpm < k.redline) under = at;
+                }
+                char text[1400];
+                GearboxProbeText(air, free, true, text, sizeof text);
+                const bool freeOk = upThere && under >= 0.0f && under < 2.0f && Near(free.rpm, k.idle, 1.0f) && free.input >= k.redline && free.locked && free.coastHeld > 0 &&
+                                    strstr(text, "the foot off: the engine at its run-down") != nullptr;
+                // gripping wheels at the gear's top: no run-down, the engine is the input
+                GearboxModel grip = spinning;
+                TruckRaw ground = mud;
+                for (int i = 0; i < ground.wheels; i++) ground.spin[i] = top1;
+                ground.speed = top1 / 2.2f;
+                for (float at = 0.0f; at < 2.0f; at += kDt) GearboxStep(grip, ground, k, 1.0f, 1.0f, kDt);
+                bool follows = true;
+                for (float at = 0.0f; at < 1.0f; at += kDt)
+                {
+                    GearboxStep(grip, ground, k, 0.0f, 0.0f, kDt);
+                    follows = follows && (!grip.locked || Near(grip.rpm, fmaxf(grip.input, k.idle), 0.5f)) && grip.coastHeld == 0;
+                }
+                follows = follows && !grip.spinning && grip.locked;
+                if (!(freeOk && follows))
+                    printf("     foot off: up %d (locked %d spinning %d gear %d rpm %.0f), under the red zone after %.2f s, now %.0f rpm, input %.0f, held %d; gripping %d (locked %d spinning %d rpm %.0f input %.0f)\n",
+                           upThere, free.locked, free.spinning, free.gear, atTop, under, free.rpm, free.input, free.coastHeld, follows, grip.locked, grip.spinning, grip.rpm, grip.input);
+                Check(freeOk && follows,
+                      "automatic: with the foot off and the wheels spinning free at 85 rad/s the locked engine runs down under the red zone in under two seconds and on to idle, "
+                      "the input and the lock as before, the probe says so; gripping wheels at the gear's top keep the engine with them");
+            }
             // fast in the top gear, the grip learned: floored, and a push of the pedal after a light foot, never shift
             // down into a gear the engine cannot take at the speed the truck goes
             TruckRaw fast = g;

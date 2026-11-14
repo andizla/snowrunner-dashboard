@@ -1488,6 +1488,7 @@ struct GearboxModel
     float labour;      // seconds the truck has been losing speed with the foot on
     float rolling;     // the speed the wheels will turn at after a shift: the largest of theirs and the ground's
     bool spinning;     // the wheels turn faster than the ground goes under them
+    int coastHeld;     // the steps in a row the engine was held at its run-down under the free wheels (kEngineRevTime), for the probe
     float wanted;      // seconds a shift has been called for, above 0 up and below 0 down
     float feel;        // the pedal the shift points go by: up with the foot at once, down at kPedalFall
     float pedal;       // the pedal on the last step, for the push that kicks down
@@ -2256,6 +2257,7 @@ static const float kLockIdle = 1.65f;          // with the mod's engine the conv
 static const float kLockLight = 0.3f;          // and from there up to kLockFrom of the red zone floored: a light foot's shift up lands locked
 static const float kUnlockIdle = 1.4f;         // with the mod's engine, locked it lets go with the foot on under this times idle,
 static const float kUnlockCoast = 1.04f;       // and with the foot off under this, for the engine's braking on a coast
+static const float kEngineRevTime = 0.8f;    // seconds an engine takes from idle to the red zone floored with nothing to drive
 static const float kEngineKickTo = 0.85f;   // the kickdown goes to the lowest gear that keeps the engine under this,
 static const float kKickRoom = 0.92f;       // and under this share of the gear's floored point up, so it is not left again at once
 static const float kEngineLimit = 0.98f;    // past this the engine is on the limiter: up at once, after kLimiterHold of the gear's hold
@@ -2904,8 +2906,21 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     if (!m.locked && !shifting && m.input >= lockAt && (coupled || m.relock)) m.locked = true;
     else if (m.locked && m.input < unlockAt) m.locked = false;
     if (!shifting) m.relock = false;
+    const float rpmWas = m.rpm;
     m.rpm = m.locked ? fmaxf(m.input, k.idle) : open;
     if (engine && m.rpm > tachTop) m.rpm = tachTop;
+    // free wheels with the foot off (BRIEF_tester_1114.md, part 190): the locked engine follows the wheels down, but no
+    // slower than its own drag takes it down, idle to the red zone in kEngineRevTime. Wheels spinning free in the air or
+    // in deep mud lose their speed only by the game's damping, a few percent a second, and would hold the needle at the
+    // tachometer's top for far longer than ten seconds. Gripping wheels keep the rule above: the engine is the truck's
+    // speed and the game's engine braking slows both. The shift and lock rules read m.input, which is not changed here.
+    const float runDown = isfinite(rpmWas) && dt > 0.0f ? fmaxf(rpmWas - (k.redline - k.idle) / kEngineRevTime * dt, k.idle) : m.rpm;
+    if (footOff && m.spinning && m.locked && !shifting && m.rpm > runDown)
+    {
+        m.rpm = runDown;
+        if (m.coastHeld < 1000000) m.coastHeld++;
+    }
+    else m.coastHeld = 0;
     // what the rules went by, for the probe
     m.upAt = GearboxUpPoint(t, k, m.gear, feel, hand);
     m.downAt = GearboxDownPoint(t, k, m.gear, feel, hand);
@@ -2974,6 +2989,12 @@ inline void GearboxProbeText(const TruckRaw &t, const GearboxModel &m, bool driv
               driving ? "the mod's, setting the game's gears" : "not handed to the game", m.byEngine ? "the mod's engine" : "the game's engine", m.gear, TruckTopGear(t), t.gearEngaged, m.locked ? "locked up" : "converter slipping",
               m.input, m.rpm, m.ratio, m.drive, m.grip, m.grip > 0.0f ? "" : " (not learned yet)", m.trend, x, GamePull(x), m.climb > 0.0f ? "climbing, " : "",
               m.spinning ? "wheels spinning, going by the ground, " : "", kept, m.shifts, m.hunts, rules);
+    if (m.coastHeld > 0)
+    {
+        const size_t used = strnlen(out, size);
+        if (used + 1 < size)
+            _snprintf_s(out + used, size - used, _TRUNCATE, " | the foot off: the engine at its run-down, %.0f rpm under the wheels' %.0f, for %d steps", m.rpm, m.input, m.coastHeld);
+    }
 }
 
 // ---- the mod's gearbox in the game ----
@@ -3181,7 +3202,6 @@ inline void PullTestText(const PullTest &m, char *first, size_t firstSize, char 
 static const float kClutchFree = 0.85f;      // a pedal pressed past this share of its travel holds nothing
 static const float kClutchBite = 0.35f;      // and one let up past this holds all it can; the bite lies between
 static const float kClutchHold = 1.5f;       // what a clutch fully let up holds, as a share of the engine's most torque
-static const float kEngineRevTime = 0.8f;    // seconds an engine takes from idle to the red zone floored with nothing to drive
 static const float kGovernorBand = 0.1f;     // the governor gives full torque this far under the speed it holds, as a share of idle to red zone
 static const float kEngineDrag = 0.4f;       // what the engine's friction and pumping take at the red zone, as a share of its most torque; it grows with the speed
 static const float kClutchStall = 0.5f;      // an engine dragged under this share of its idle speed dies
