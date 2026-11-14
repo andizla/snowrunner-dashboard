@@ -1474,6 +1474,9 @@ static void PushTake(PushRead &r, float kAll, float kCap)
 // The creep's larger of the two throttles, as the stub's maxss had it (the share where the game's is not a number),
 // then the step probe's look, then on into the drive with the step's seconds as they came. While the torque cut has the
 // action, its throttle is 1 and B4 is written 1 instead (the Reviewer's S2).
+// the step's seconds and count of the cut's own action, handed to the torque hook on the same thread and call (185, must 3)
+static float g_cutStepDt = 0.0f;
+static uint64_t g_cutStepCount = 0;
 static void CreepDriveInner(void *action, float throttle, float dt)
 {
     InterlockedIncrement(&g_creepCalls);
@@ -1490,6 +1493,7 @@ static void CreepDriveInner(void *action, float throttle, float dt)
     if (cut && (uint64_t)(uintptr_t)action == cut->action && (now = GetTickCount64()) >= cut->at && now - cut->at <= kTorqueFresh)
     {
         InterlockedIncrement(&g_cutHolds);
+        g_cutStepDt = dt, g_cutStepCount++; // for the driveline inertia's acceleration, by this step's seconds
         throttle = 1.0f;
         CutPullOne(action);
         capOn = cut->cap > 0.0f && isfinite(cut->cap);
@@ -2498,7 +2502,11 @@ static volatile LONG64 g_cutAnswerVehicle = 0; // the vehicle of the last answer
 static volatile LONG g_riseBits = 0, g_cutUsed = 0, g_cutRate = 0, g_cutTruck = 0x7FC00000; // a quiet NaN: not read
 // the learner's totals under the cut (CutLearnTotals): written by the drive's thread alone, read by the mod's
 static volatile LONG g_ratioFactor = 0x3F800000, g_ratioA = 0, g_ratioRoofed = 0, g_ratioHeld = 0, g_convEngine = 0, g_runSteps = 0;
-static CutRun g_cutRun = {}; // the run-down at a lift: the game's thread alone reads and writes it // the last answer's gear ratio pull (1.0f: none)
+static CutRun g_cutRun = {}; // the run-down at a lift: the game's thread alone reads and writes it
+// the driveline inertia (185): its state (the game's thread alone), the step's seconds and count handed from the drive's
+// hook on the same thread and call (must 3), and what the mod's thread logs
+static DriveRun g_driveRun = {};
+static volatile LONG g_driveIe = 0, g_driveIs = 0, g_driveC = 0, g_driveTook = 0, g_driveSteps = 0, g_driveBound = 0, g_driveNoSample = 0; // the last answer's gear ratio pull (1.0f: none)
 static volatile LONG64 g_learnSumBits = 0;
 static volatile LONG g_learnN = 0, g_learnBad = 0;
 static double LearnSum()
@@ -2546,9 +2554,11 @@ struct CutRadii
 // EngineResponsiveness (action + 0xC4, B4's rate a step over the power factor), read as the drive reads them; false where
 // a read faults or the list is out of bounds. cylinderVtable: the slot's (M1), for each driven wheel's rolling radius.
 static bool CutWheelsRead(const void *vehicle, uint64_t cylinderVtable, float *omega, bool *driven, int &n, float &pf, float &d4, float &response, float &forward,
-                          CutRadii &radii)
+                          CutRadii &radii, float *wheelI = nullptr, int *drivenN = nullptr)
 {
     n = 0;
+    if (wheelI) *wheelI = NAN;
+    if (drivenN) *drivenN = 0;
     forward = NAN;
     radii = CutRadii{ NAN, NAN, 0, 0, 0 };
     __try
@@ -2584,6 +2594,16 @@ static bool CutWheelsRead(const void *vehicle, uint64_t cylinderVtable, float *o
                 if (rr.kind == kRollCylinder) radii.cylinder++;
                 else if (rr.kind == kRollNoCylinder) radii.none++;
                 else radii.out++;
+                if (drivenN) ++*drivenN;
+                // the driveline inertia's Is (185): the least driven wheel's own inertia, 1 over body + 0x220; read only
+                // while the figure is on (must 1)
+                if (wheelI)
+                {
+                    const uint8_t *wheelBody = *(const uint8_t *const *)(wheel + 0x18);
+                    const float inverse = (uintptr_t)wheelBody >= 0x10000 ? *(const volatile float *)(wheelBody + 0x220) : 0.0f;
+                    const float own = inverse > 0.0f && isfinite(inverse) ? 1.0f / inverse : NAN;
+                    if (isfinite(own) && (!isfinite(*wheelI) || own < *wheelI)) *wheelI = own;
+                }
             }
             n++;
         }
@@ -2628,7 +2648,10 @@ __declspec(noinline) static bool HookGearTorque(void *vehicle, int gear, float *
         float pf = 1.0f, d4 = 1.0f, response = 1.0f, forward = NAN;
         CutSpeeds sp = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, false };
         CutRadii radii = { NAN, NAN, 0, 0, 0 };
-        if (CutWheelsRead(vehicle, slot.cylinderVtable, omega, driven, n, pf, d4, response, forward, radii))
+        const bool driveOn = slot.driveShare > 0.0f && isfinite(slot.driveShare);
+        float wheelI = NAN;
+        int drivenN = 0;
+        if (CutWheelsRead(vehicle, slot.cylinderVtable, omega, driven, n, pf, d4, response, forward, radii, driveOn ? &wheelI : nullptr, &drivenN))
         {
             sp = TorqueCutSpeeds(omega, driven, n, gear < 0 ? -1 : 1);
             CutSpeedsTruck(sp, forward, radii.radius, gear < 0 ? -1 : 1);
@@ -2645,6 +2668,26 @@ __declspec(noinline) static bool HookGearTorque(void *vehicle, int gear, float *
                                (uint64_t)(uintptr_t)vehicle, &r.running);
         if (r.running) InterlockedIncrement(&g_runSteps);
         TorqueCutAnswerPaced(r, t, usedBefore, rate, kept);
+        // the driveline inertia (185): on the torque after the pace, so the bracket and r.used stay what they are (must 8)
+        DriveOut drive = { r.torque, 0.0f, 0.0f, 0.0f, 0.0f, false, false };
+        if (driveOn)
+        {
+            const float r2 = radii.radius * radii.radius;
+            const float truckPart = slot.driveMass > 0.0f && drivenN > 0 && isfinite(r2) && r2 > 0.0f ? slot.driveMass / (float)drivenN * r2 : 0.0f;
+            drive = DriveInertiaStep(g_driveRun, r.torque, sp.mean, sp.ok, g_cutStepDt, g_cutStepCount, slot.driveShare, wheelI, truckPart,
+                                     RunDownWeight(sp.ok, sp.mean, sp.truckOk, sp.truck), (uint64_t)(uintptr_t)vehicle, slot.map.top, GetTickCount64());
+            if (drive.acted)
+            {
+                r.torque = drive.torque;
+                InterlockedIncrement(&g_driveSteps);
+                if (drive.bound) InterlockedIncrement(&g_driveBound);
+                InterlockedExchange(&g_driveIe, FloatBits(drive.ie));
+                InterlockedExchange(&g_driveIs, FloatBits(drive.is));
+                InterlockedExchange(&g_driveC, FloatBits(drive.c));
+                InterlockedExchange(&g_driveTook, FloatBits(drive.share));
+            }
+        }
+        else g_driveRun.have = false;
         InterlockedExchange(&g_riseBits, FloatBits(r.used));
         InterlockedExchange64(&g_riseVehicle, (LONG64)(uintptr_t)vehicle);
         // the learner's totals: what this step used, and whether it may feed a sample
@@ -2652,7 +2695,9 @@ __declspec(noinline) static bool HookGearTorque(void *vehicle, int gear, float *
             const double sum = CutLearnAdd(LearnSum(), r.used, ratioFactor); // the gear ratio pull's factor beside the bracket
             LONG64 bits;
             memcpy(&bits, &sum, sizeof bits);
-            if (!sp.ok || !CutLearnStepOk(slot, r, kept)) InterlockedIncrement(&g_learnBad);
+            const bool driveTook = drive.acted && drive.share > kDriveSampleOff; // the truck answered a smaller pull than the learner counts (must 8)
+            if (driveTook) InterlockedIncrement(&g_driveNoSample);
+            if (!sp.ok || !CutLearnStepOk(slot, r, kept) || driveTook) InterlockedIncrement(&g_learnBad);
             InterlockedExchange64(&g_learnSumBits, bits);
             InterlockedIncrement(&g_learnN);
         }
@@ -2787,6 +2832,8 @@ void TorqueCutCountsGet(TorqueCutCounts &out)
     out.ratioHeld = g_ratioHeld != 0;
     out.convEngine = BitsFloat(g_convEngine);
     out.runSteps = g_runSteps;
+    out.driveIe = BitsFloat(g_driveIe), out.driveIs = BitsFloat(g_driveIs), out.driveC = BitsFloat(g_driveC), out.driveShare = BitsFloat(g_driveTook);
+    out.driveSteps = g_driveSteps, out.driveBound = g_driveBound, out.driveNoSample = g_driveNoSample;
 }
 
 void TorqueCutLearnGet(CutLearnTotals &out)

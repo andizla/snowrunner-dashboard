@@ -10050,6 +10050,134 @@ int main(int argc, char **argv)
               "every 10 s; one when the game holds the models, then none; an id not read never written; Set to keeps the other figure; another truck starts over");
     }
 
+    // the driveline inertia (BRIEF_drive_1114_findings.md, part 185, the Reviewer's addendum of 14:29): T' = T - c (T - L)
+    {
+        const uint64_t veh = 0x1000;
+        // must 1: at 0 the torque keeps its bits, whatever else is read
+        DriveRun d0 = {};
+        bool bits = true;
+        const float asks[4] = { 1234.5678f, 0.1f, -77.25f, 3.0e7f };
+        for (int i = 0; i < 4; i++)
+        {
+            const DriveOut o = DriveInertiaStep(d0, asks[i], 5.0f + (float)i, true, 1.0f / 60.0f, (uint64_t)i + 1, 0.0f, 10.0f, 185.0f, 0.0f, veh, 9.0f, 16u * (uint64_t)i);
+            bits = bits && !memcmp(&o.torque, &asks[i], sizeof(float)) && !o.acted;
+        }
+        // the loop: one wheel of 10 kg m2, 185 kg m2 of truck behind it by the grip, at 60 and at 120. pull: the step's ask;
+        // grip: the wheel turns the truck (Is the whole 195, spin weight 0) or spins alone against a load (Is 10, weight 1)
+        struct Loop { float seconds, worstLate, worstEarly; bool swing; };
+        // the swing: the pull's change from step to step in the last second is not under half its largest in the quarter
+        // second after the start or after the change of grip (it dies away, or it grows)
+        auto loop = [&](int rate, float share, int mode, float pull, float target, float isScale) {
+            DriveRun d = {};
+            const float dt = 1.0f / (float)rate;
+            float omega = 0.0f, last = 0.0f;
+            Loop out = { -1.0f, 0.0f, 0.0f, false };
+            const int steps = rate * 8;
+            for (int st = 0; st < steps; st++)
+            {
+                const bool gripping = mode == 0 || (mode == 2 && st < steps / 2);
+                const float spin = gripping ? 0.0f : 1.0f;
+                // isScale: Is taken too large on purpose, by feeding the truck's part where the wheel spins alone
+                const float part = 185.0f * isScale;
+                const DriveOut o = DriveInertiaStep(d, pull, omega, true, dt, (uint64_t)st + 1, share, 10.0f, part, isScale > 1.0f ? 0.0f : spin, veh, 9.0f, (uint64_t)(st * 1000 / rate));
+                const float t = o.torque, inertia = gripping ? 195.0f : 10.0f, load = gripping ? 0.0f : 0.6f * pull;
+                omega += (t - load) * dt / inertia;
+                if (st > 0)
+                {
+                    const float c2 = fabsf(t - last);
+                    if (st < rate / 4 || (mode == 2 && st >= steps / 2 && st < steps / 2 + rate / 4)) out.worstEarly = fmaxf(out.worstEarly, c2);
+                    else if (st > steps - rate) out.worstLate = fmaxf(out.worstLate, c2);
+                }
+                last = t;
+                if (out.seconds < 0.0f && omega >= target) out.seconds = (float)(st + 1) * dt;
+                if (!isfinite(omega)) out.swing = true;
+            }
+            out.swing = out.swing || out.worstLate > 0.5f * out.worstEarly + 1.0f;
+            return out;
+        };
+        bool loopSteady = true, rates = true;
+        char loopLine[400] = "";
+        float g60 = 0, g120 = 0, s60 = 0, s120 = 0;
+        for (int mode = 0; mode < 3; mode++)
+            for (float share : { 0.5f, 1.0f })
+            {
+                const float target = mode == 1 ? 10.0f : 8.0f;
+                const Loop at60 = loop(60, share, mode, 1000.0f, target, 1.0f), at120 = loop(120, share, mode, 1000.0f, target, 1.0f);
+                loopSteady = loopSteady && !at60.swing && !at120.swing;
+                rates = rates && at60.seconds > 0.0f && at120.seconds > 0.0f && fabsf(at60.seconds - at120.seconds) <= 0.05f * at60.seconds;
+                if (mode == 0 && share == 1.0f) g60 = at60.seconds, g120 = at120.seconds;
+                if (mode == 1 && share == 1.0f) s60 = at60.seconds, s120 = at120.seconds;
+            }
+        // Is taken 18 times too large (a spinning wheel taken as gripping) swings; the build's Is goes by the spin weight
+        const Loop wrong = loop(60, 1.0f, 1, 1000.0f, 1e9f, 18.5f);
+        DriveRun di = {};
+        DriveInertiaStep(di, 100.0f, 1.0f, true, 1.0f / 60.0f, 1, 1.0f, 10.0f, 185.0f, 1.0f, veh, 9.0f, 0);
+        const DriveOut spinIs = DriveInertiaStep(di, 100.0f, 1.5f, true, 1.0f / 60.0f, 2, 1.0f, 10.0f, 185.0f, 1.0f, veh, 9.0f, 16);
+        const DriveOut halfIs = DriveInertiaStep(di, 100.0f, 2.0f, true, 1.0f / 60.0f, 3, 1.0f, 10.0f, 185.0f, 0.5f, veh, 9.0f, 33);
+        const bool isLow = spinIs.is == 10.0f && Near(halfIs.is, 10.0f + 0.5f * 185.0f, 1e-3f) && spinIs.c <= kDriveShareMost && wrong.swing;
+        // a steady spin in mud (the load equal to the pull): the term 0 within a hundredth
+        DriveRun dm = {};
+        float mudTook = 1.0f;
+        for (int st = 0; st < 120; st++) mudTook = DriveInertiaStep(dm, 800.0f, 30.0f, true, 1.0f / 60.0f, (uint64_t)st + 1, 1.0f, 10.0f, 185.0f, 1.0f, veh, 9.0f, (uint64_t)st * 16).share;
+        const bool mud = fabsf(mudTook) < 0.01f;
+        // the bound: at a lift (the ask falls) nothing is given; under the engine's braking (T under 0) T as asked
+        DriveRun db = {};
+        DriveInertiaStep(db, 1000.0f, 1.0f, true, 1.0f / 60.0f, 1, 1.0f, 10.0f, 185.0f, 1.0f, veh, 9.0f, 0);
+        const DriveOut lift = DriveInertiaStep(db, 200.0f, 1.0f, true, 1.0f / 60.0f, 2, 1.0f, 10.0f, 185.0f, 1.0f, veh, 9.0f, 16);
+        const DriveOut brake = DriveInertiaStep(db, -300.0f, 0.9f, true, 1.0f / 60.0f, 3, 1.0f, 10.0f, 185.0f, 1.0f, veh, 9.0f, 33);
+        const bool bound = lift.torque <= 200.0f && lift.torque >= 0.0f && brake.torque == -300.0f;
+        // the resets (must 5): another truck, another gear's top, a gap of three steps, a gap in time, the share at 0, no mean
+        auto fresh = [&](DriveRun &d) {
+            d = {};
+            DriveInertiaStep(d, 500.0f, 1.0f, true, 1.0f / 60.0f, 10, 1.0f, 10.0f, 185.0f, 1.0f, veh, 9.0f, 1000);
+        };
+        DriveRun dr = {};
+        fresh(dr);
+        bool resets = !DriveInertiaStep(dr, 500.0f, 3.0f, true, 1.0f / 60.0f, 11, 1.0f, 10.0f, 185.0f, 1.0f, veh + 8, 9.0f, 1016).acted;
+        fresh(dr);
+        resets = resets && !DriveInertiaStep(dr, 500.0f, 3.0f, true, 1.0f / 60.0f, 11, 1.0f, 10.0f, 185.0f, 1.0f, veh, 12.0f, 1016).acted;
+        fresh(dr);
+        resets = resets && !DriveInertiaStep(dr, 500.0f, 3.0f, true, 1.0f / 60.0f, 13, 1.0f, 10.0f, 185.0f, 1.0f, veh, 9.0f, 1016).acted;
+        fresh(dr);
+        resets = resets && !DriveInertiaStep(dr, 500.0f, 3.0f, true, 1.0f / 60.0f, 11, 1.0f, 10.0f, 185.0f, 1.0f, veh, 9.0f, 1200).acted;
+        fresh(dr);
+        resets = resets && !DriveInertiaStep(dr, 500.0f, 3.0f, true, 1.0f / 60.0f, 11, 0.0f, 10.0f, 185.0f, 1.0f, veh, 9.0f, 1016).acted;
+        fresh(dr);
+        resets = resets && !DriveInertiaStep(dr, 500.0f, NAN, false, 1.0f / 60.0f, 11, 1.0f, 10.0f, 185.0f, 1.0f, veh, 9.0f, 1016).acted;
+        fresh(dr);
+        resets = resets && DriveInertiaStep(dr, 500.0f, 3.0f, true, 1.0f / 60.0f, 11, 1.0f, 10.0f, 185.0f, 1.0f, veh, 9.0f, 1016).acted; // and on the same truck it acts
+        // the shares by the gear: 0 at 0, the first gear whole at 100, a gear of twice the top a quarter, the low range as the first
+        const bool shares = DriveIeShare(0, 9.0f, 9.0f) == 0.0f && DriveIeShare(100, 9.0f, 9.0f) == 1.0f && DriveIeShare(100, 18.0f, 9.0f) == 0.25f &&
+                            DriveIeShare(50, 4.0f, 9.0f) == 0.5f && DriveIeShare(150, 9.0f, 9.0f) == 1.0f;
+        // the drive-off on grip: a pull that takes the truck to 8 rad/s in 3.0 s at 0, at 50 and 100 (the truck's share and the
+        // wheels' own at 5 percent of it, the scout, and 15 percent, the 8x8)
+        auto driveOff = [&](float share, float wheelShare) {
+            DriveRun d = {};
+            const float part = 185.0f, wheel = part * wheelShare, inertia = part + wheel, pull = 8.0f * inertia / 3.0f;
+            float omega = 0.0f;
+            for (int st = 0; st < 60 * 30; st++)
+            {
+                const float tq = DriveInertiaStep(d, pull, omega, true, 1.0f / 60.0f, (uint64_t)st + 1, share, wheel, part, 0.0f, veh, 9.0f, (uint64_t)st * 16).torque;
+                omega += tq / 60.0f / inertia;
+                if (omega >= 8.0f) return (float)(st + 1) / 60.0f;
+            }
+            return -1.0f;
+        };
+        const float sc0 = driveOff(0.0f, 0.05f), sc50 = driveOff(0.5f, 0.05f), sc100 = driveOff(1.0f, 0.05f), ex0 = driveOff(0.0f, 0.15f), ex50 = driveOff(0.5f, 0.15f),
+                    ex100 = driveOff(1.0f, 0.15f);
+        snprintf(loopLine, sizeof loopLine,
+                 "driveline inertia: at 0 the bits; the loop at 60 and 120 settles (gripping %.2f s and %.2f s to 8 rad/s, spinning %.2f s and %.2f s to 10 rad/s at 100), Is 18 times too "
+                 "large swings and the build's leans by the spin weight; steady spin in mud takes %.3f; the bound and the resets; the drive-off of 3.0 s on grip at 50 and 100: %.2f and %.2f s "
+                 "(the scout), %.2f and %.2f s (the 8x8)",
+                 g60, g120, s60, s120, mudTook, sc50, sc100, ex50, ex100);
+        printf("     %s\n", loopLine);
+        const bool driveOk = sc0 > 2.9f && sc0 < 3.1f && sc50 > sc0 && sc100 > sc50 && ex0 > 2.9f && ex100 > ex50 && ex50 > ex0;
+        if (!(bits && loopSteady && rates && isLow && mud && bound && resets && shares && driveOk))
+            printf("     driveline: bits %d steady %d rates %d isLow %d (wrong swing %d) mud %d bound %d (lift %.1f brake %.1f) resets %d shares %d driveOff %d\n", bits, loopSteady, rates, isLow,
+                   wrong.swing, mud, bound, lift.torque, brake.torque, resets, shares, driveOk);
+        Check(bits && loopSteady && rates && isLow && mud && bound && resets && shares && driveOk, loopLine);
+    }
+
     // the crash line's words of a fault's place (BRIEF_tester_1114.md, part 196): the memory there, and a fault on
     // another thread after ExitProcess named at the quit, not a crash
     {

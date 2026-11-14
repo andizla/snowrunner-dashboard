@@ -441,6 +441,7 @@ struct TorqueCutSlot
     // the run-down at a lift (CutRunStep): its seconds for this gear, 0 none (the tool's Engine inertia at 0, the brake,
     // the handbrake, a shift out)
     float runSeconds;
+    float driveShare, driveMass; // the driveline inertia (185): Ie's share for this gear (DriveIeShare; 0 none: the clutch or the converter open, N, the figure at 0) and the truck's mass, kg (0 not read)
     float capWide; // the low range's wider cap for L-, L and R (LowRangeCap, CapCeilingWide), in the wheels' measure; 0 none. cap stays the gear's own
     TorqueCutMap map;
     int diff; // the differential's type for this truck (DiffTypeOf, on the mod's thread)
@@ -748,6 +749,79 @@ inline float CutRunStep(CutRun &run, float target, float usedBefore, float pedal
     if (!(held > target)) return target;
     if (paced) *paced = true;
     return held;
+}
+
+// ---- the driveline inertia (BRIEF_drive_1114_findings.md, part 185, the lead's change of 12:32 and the Reviewer's
+// addendum of 14:29) ----
+// What turns with the wheels (the driveline, the engine through the gear) takes torque to speed up and gives it back
+// when it slows. Written as the pull less Ie x the wheels' measured acceleration it swings in the low gears, so the
+// form that cannot: the step's torque T less a share c of its surplus over the load the last step showed,
+// T' = T - c x (T - L), c = Ie / (Is + Ie), L = the torque last used - Is x the driven wheels' acceleration over the
+// last step by that step's seconds. Is is the inertia the mod takes the pull to turn: the driven wheels' own (the
+// least of them, from body + 0x220) and, by the grip, the truck's share, (1 - the spin weight) x the mass over the
+// driven wheels x the radius squared. It leans low, as too large an Is is the one way to make it swing. Steady spin
+// (L near T) takes nothing; a free wheel rises at the flywheel's share Is / (Is + Ie); on grip it settles to the
+// flywheel's share too. Bound: never over the torque the step asked, never under the engine's braking (0 or T where T
+// is under 0), so at a lift it gives nothing and 180's run-down does that. Ie at 100 in the first gear is
+// kDriveIeFirst times the truck's share, so a drive-off on full grip takes about twice as long; by (the first gear's
+// top / this gear's top) squared above it, as the engine's inertia counts at the wheels by the gear's ratio squared.
+static const float kDriveIeFirst = 1.0f;    // Ie at 100 in the first gear, in the truck's share (mass / driven wheels x r^2)
+static const float kDriveShareMost = 0.95f; // c never over this
+static const float kDriveSampleOff = 0.1f;  // a step where the term took more than this share of the torque feeds no sample
+// Ie's share for a gear: percent over 100 times the tops' ratio squared, the low range and R as the first gear.
+inline float DriveIeShare(int percent, float gearTop, float firstTop)
+{
+    if (percent <= 0 || !(gearTop > 0.0f) || !isfinite(gearTop)) return 0.0f;
+    const float share = (percent > 100 ? 100 : percent) / 100.0f;
+    const float ratio = firstTop > 0.0f && isfinite(firstTop) && gearTop > firstTop ? firstTop / gearTop : 1.0f;
+    return share * ratio * ratio;
+}
+// The term's state from step to step, the game's thread alone (by the vehicle, as the run-down's).
+static const uint64_t kDriveGapMs = 100; // a gap longer than this between two calls (the cut's slot gone or stale) starts again
+struct DriveRun
+{
+    uint64_t vehicle, step, at; // the truck, the drive's step count and the tick of the last call
+    float top, mean, used, dt; // the gear's top, the driven mean, the torque used and the step's seconds of the last call
+    bool have;              // the last call left a mean and seconds to go by
+};
+struct DriveOut
+{
+    float torque, ie, is, c, share; // the torque to hand on, Ie, Is, c and the share the term took (0 none)
+    bool acted, bound;              // the term was worked out; the bound held it
+};
+// One call. T: the torque the step asks (after the pace); mean: the driven wheels' mean as the step finds them (meanOk
+// read); dt: this step's seconds; step: the drive's count of steps; ieShare: DriveIeShare's for this gear, 0 none;
+// wheelI: the least driven wheel's own inertia, kg m2; truckPart: the mass over the driven wheels x r^2, kg m2 (0 or
+// no number: not read); spin: RunDownWeight's, 0 to 1. A reset (another truck, another gear's top, a gap of more than
+// two steps, no mean, no seconds, the share at 0) leaves the step as it is and starts again from it.
+inline DriveOut DriveInertiaStep(DriveRun &d, float T, float mean, bool meanOk, float dt, uint64_t step, float ieShare, float wheelI, float truckPart, float spin,
+                                 uint64_t vehicle, float top, uint64_t now)
+{
+    DriveOut o = { T, 0.0f, 0.0f, 0.0f, 0.0f, false, false };
+    const bool good = isfinite(T) && meanOk && isfinite(mean) && dt > 0.0f && isfinite(dt) && ieShare > 0.0f && isfinite(ieShare) && wheelI > 0.0f && isfinite(wheelI) &&
+                      truckPart > 0.0f && isfinite(truckPart);
+    const bool same = d.have && d.vehicle == vehicle && d.top == top && step > d.step && step - d.step <= 2 && d.dt > 0.0f && now >= d.at && now - d.at <= kDriveGapMs;
+    if (good && same)
+    {
+        const float w = isfinite(spin) ? CutClamp01(spin) : 1.0f;
+        o.is = wheelI + (1.0f - w) * truckPart;
+        o.ie = ieShare * kDriveIeFirst * truckPart;
+        o.c = fminf(o.ie / (o.is + o.ie), kDriveShareMost);
+        const float load = d.used - o.is * (mean - d.mean) / d.dt;
+        float t = T - o.c * (T - load);
+        const float hi = T, lo = T < 0.0f ? T : 0.0f;
+        if (t > hi) t = hi, o.bound = true;
+        else if (t < lo) t = lo, o.bound = true;
+        if (isfinite(t))
+        {
+            o.torque = t;
+            o.acted = true;
+            o.share = T > 0.0f ? (T - t) / T : 0.0f;
+        }
+    }
+    d.vehicle = vehicle, d.step = step, d.at = now, d.top = top, d.mean = mean, d.used = o.torque, d.dt = dt;
+    d.have = good;
+    return o;
 }
 
 // The answer paced (F1b): the bracket used from the last step's (CutRise at rate), the torque the stock times it, the

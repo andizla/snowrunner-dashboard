@@ -150,6 +150,7 @@ struct GaugeSettings
     bool airEmptyAtStart;    // AirEmptyAtStart: a truck with air brakes first driven after the game starts has empty tanks (air_keep.h; BRIEF_jobs_1114.md, part 165). Every truck's
     int airBrakes;           // AirBrakes, in a truck file alone: this truck has air brakes, 1 or 0; -1 no choice, its class decides (AirBrakesOn; BRIEF_spring_brakes.md, M4 and M7)
     int quickWinch;          // QuickWinch: the game's quick winch on its key: 0 as the game has it, 1 only while the truck stands, 2 never (quick_winch.h). 1 by default
+    int drivelineInertia;    // DrivelineInertia: a figure of the tuning tool, 0 to 100 (torque_cut.h, DriveInertiaStep; BRIEF_drive_1114_findings.md, part 185): the weight of the driveline and the engine through the gear on the wheels where the torque cut answers; 0 the game's own
     int engineInertia;       // EngineInertia: a figure of the tuning tool, 0 to 100 (torque_cut.h, CutRunStep; BRIEF_drive_1114_findings.md, part 180): how long spinning wheels run on after a lift where the torque cut answers; 0 the game's own
     int gearRatioPull;       // GearRatioPull: a figure of the tuning tool, 0 to 100 (torque_cut.h, GearRatioFactor; BRIEF_jobs_1114.md, 161): how far a held gear's torque goes toward a gearbox's ratio held to the top gear; 0 the game's own
     int engineSoundTop, engineSoundCurve; // EngineSoundTop, EngineSoundCurve: figures of the tuning tool for the engine sound (models.h, SoundShare; BRIEF_jobs_1114.md, part 171): the factor at the red zone's start in percent, 40 to 100, and the curve's exponent in percent, 100 straight to 300
@@ -265,6 +266,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.diffLockBite = 0; // the game's own lock until the drive picks a default (BRIEF_diff_lock_bite.md)
     s.quickWinch = 1; // kQuickWinchStanding (BRIEF_quick_winch.md)
     s.engineInertia = 0; // the game's own, until the figure is set after a drive
+    s.drivelineInertia = 0; // the game's own (part 185)
     s.gearRatioPull = 0; // the game's own, until the figure is set after a drive
     s.engineSoundTop = 100, s.engineSoundCurve = 100; // today's sound, until the figures are set by ear
     s.lockSteerFront = 60, s.lockSteerRear = 85; // kLockSteerFrontDefault, kLockSteerRearDefault (BRIEF_lock_steering.md, M7)
@@ -437,6 +439,7 @@ inline void SettingsClamp(GaugeSettings &s)
     s.engineSoundTop = s.engineSoundTop < 40 ? 40 : s.engineSoundTop > 100 ? 100 : s.engineSoundTop;
     s.gearRatioPull = s.gearRatioPull < 0 ? 0 : s.gearRatioPull > 100 ? 100 : s.gearRatioPull;
     s.engineInertia = s.engineInertia < 0 ? 0 : s.engineInertia > 100 ? 100 : s.engineInertia;
+    s.drivelineInertia = s.drivelineInertia < 0 ? 0 : s.drivelineInertia > 100 ? 100 : s.drivelineInertia;
     s.engineSoundCurve = s.engineSoundCurve < 100 ? 100 : s.engineSoundCurve > 300 ? 300 : s.engineSoundCurve;
     s.diffType = s.diffType < 0 || s.diffType > 3 ? 0 : s.diffType;
     s.airBrakes = s.airBrakes == 0 || s.airBrakes == 1 ? s.airBrakes : -1;

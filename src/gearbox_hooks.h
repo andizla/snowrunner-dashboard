@@ -463,6 +463,8 @@ struct TorqueCutCounts
     uint64_t vehicle;                       // the vehicle of the last answer, 0 none yet: every figure of the last answer is that truck's
     float ratioFactor, ratioA;              // the last answer's gear ratio pull: the factor on the game's T (1 none) and the gear's a it was worked out from
     long runSteps;                          // steps in which the run-down at a lift held the bracket up
+    float driveIe, driveIs, driveC, driveShare; // the driveline inertia's last step (185): Ie, Is, c and the share of the torque the term took
+    long driveSteps, driveBound, driveNoSample; // its steps worked, held by the bound, and kept from the learner
     float convEngine;                       // the last answer's open converter's engine speed, rpm; 0 where it was not through the open converter
     bool ratioRoofed, ratioHeld;            // ... the roof held it; R or a low position was held to gear 1's factor
 };
