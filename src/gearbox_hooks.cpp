@@ -2457,7 +2457,7 @@ static volatile LONG64 g_riseVehicle = 0;
 static volatile LONG64 g_cutAnswerVehicle = 0; // the vehicle of the last answer (TorqueCutCounts::vehicle)
 static volatile LONG g_riseBits = 0, g_cutUsed = 0, g_cutRate = 0, g_cutTruck = 0x7FC00000; // a quiet NaN: not read
 // the learner's totals under the cut (CutLearnTotals): written by the drive's thread alone, read by the mod's
-static volatile LONG g_ratioFactor = 0x3F800000, g_ratioA = 0, g_ratioRoofed = 0; // the last answer's gear ratio pull (1.0f: none)
+static volatile LONG g_ratioFactor = 0x3F800000, g_ratioA = 0, g_ratioRoofed = 0, g_ratioHeld = 0; // the last answer's gear ratio pull (1.0f: none)
 static volatile LONG64 g_learnSumBits = 0;
 static volatile LONG g_learnN = 0, g_learnBad = 0;
 static double LearnSum()
@@ -2579,8 +2579,8 @@ __declspec(noinline) static bool HookGearTorque(void *vehicle, int gear, float *
         // the gear ratio pull (161): the game's figure scaled once, here, before the cut works on it, by the gear the game
         // is answering for in this step (aa), so a shift never pairs one gear's torque with another gear's factor. The
         // other callers of the game's function keep the game's own. At a share of 0 the factor is exactly 1
-        bool ratioRoofed = false;
-        const float gameT = t, ratioFactor = GearRatioApply(slot, t, aa, &ratioRoofed);
+        bool ratioRoofed = false, ratioHeld = false;
+        const float gameT = t, ratioFactor = GearRatioApply(slot, t, aa, &ratioRoofed, &ratioHeld);
         float omega[kCapWheels];
         bool driven[kCapWheels];
         int n = 0;
@@ -2604,8 +2604,7 @@ __declspec(noinline) static bool HookGearTorque(void *vehicle, int gear, float *
         InterlockedExchange64(&g_riseVehicle, (LONG64)(uintptr_t)vehicle);
         // the learner's totals: what this step used, and whether it may feed a sample
         {
-            // the gear ratio pull's factor beside the bracket (161's note for the learner): the torque handed is the game's times both
-            const double sum = LearnSum() + (isfinite(r.used) ? (double)r.used * (double)ratioFactor : 0.0);
+            const double sum = CutLearnAdd(LearnSum(), r.used, ratioFactor); // the gear ratio pull's factor beside the bracket
             LONG64 bits;
             memcpy(&bits, &sum, sizeof bits);
             if (!sp.ok || !CutLearnStepOk(slot, r, kept)) InterlockedIncrement(&g_learnBad);
@@ -2639,6 +2638,7 @@ __declspec(noinline) static bool HookGearTorque(void *vehicle, int gear, float *
         InterlockedExchange(&g_ratioFactor, FloatBits(ratioFactor));
         InterlockedExchange(&g_ratioA, FloatBits(aa));
         InterlockedExchange(&g_ratioRoofed, ratioRoofed ? 1 : 0);
+        InterlockedExchange(&g_ratioHeld, ratioHeld ? 1 : 0);
         InterlockedExchange(&g_cutTorque, FloatBits(r.torque));
         InterlockedExchange(&g_cutD4, FloatBits(d4));
         InterlockedExchange(&g_cutCurve, FloatBits(r.stockCurve));
@@ -2738,6 +2738,7 @@ void TorqueCutCountsGet(TorqueCutCounts &out)
     out.ratioFactor = BitsFloat(g_ratioFactor);
     out.ratioA = BitsFloat(g_ratioA);
     out.ratioRoofed = g_ratioRoofed != 0;
+    out.ratioHeld = g_ratioHeld != 0;
 }
 
 void TorqueCutLearnGet(CutLearnTotals &out)

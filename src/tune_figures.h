@@ -31,7 +31,7 @@ static const GtInfo kGt[kGtCount] = {
     { "LockSteerRear", "Steering with rear lock", "Steering left while another driven axle is locked. 100 leaves it all. With both locked the smaller figure counts.", 30.0f, 100.0f, 85.0f },
     { "EngineSoundTop", "Engine sound top", "How high the engine sound is at the start of the red zone, in percent of its top note. Lower it if it sounds too fast.", 40.0f, 100.0f, 100.0f },
     { "EngineSoundCurve", "Engine sound curve", "How the engine sound rises with the revs. 100 is straight. 180 bends as the pedal does: slow at first, fast near the top.", 100.0f, 300.0f, 100.0f },
-    { "GearRatioPull", "Gear ratio pull", "More pull in the low gears of a held gear, as a real gearbox gives. 0 is the game. The fuel burned stays as the game has it.", 0.0f, 100.0f, 0.0f },
+    { "GearRatioPull", "Gear ratio pull", "More pull in the low gears held by hand. 0 is the game. The engine braking of a low gear grows with it. The fuel does not.", 0.0f, 100.0f, 0.0f },
 };
 inline int *GtField(GaugeSettings &s, int i)
 {

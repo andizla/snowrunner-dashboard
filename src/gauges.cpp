@@ -6284,6 +6284,9 @@ static TorqueCutSlot TorqueCutSlotOf(const TruckWatch &w, const TruckRaw &raw, c
     const int refGear = TruckTopGear(raw);
     c.ratioShare = GearRatioShare(s.gearRatioPull, w.pos.pos, converter);
     c.ratioRefA = refGear >= 1 && refGear < kMaxGears ? raw.gearSpeed[refGear] : 0.0f;
+    // R and the low positions get no more than gear 1 gets (161b): gear 1's a beside the reference's, 0 where there is none
+    c.ratioFirstA = refGear >= 1 && kMaxGears > 1 ? raw.gearSpeed[1] : 0.0f;
+    c.ratioHold = GearboxPosCapped(w.pos.pos);
     return c;
 }
 
@@ -8222,6 +8225,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         LockGive(0, 0, 0, 0);
         DriveShowGive(0, 0);
         TorqueCutPublish(nullptr);
+        w.cutInA = false; // the two shift rules rest only while the cut has the truck in A (the review of 162 part A, S2)
         w.cutActs = false;
         w.creeping = false;
         w.creep = CreepModel{};
@@ -8303,6 +8307,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         CreepGive(0, 0.0f);
         EngineSpeedPublish(nullptr, 0.0f);
         TorqueCutPublish(nullptr); // the torque cut's too: every call of the gear torque passes until the truck is driven again
+        w.cutInA = false;
         w.cutActs = false;
         w.creeping = false;
         w.creep = CreepModel{};
@@ -9540,9 +9545,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                     const int refGear = TruckTopGear(raw);
                     const float refA = refGear >= 1 && refGear < kMaxGears ? raw.gearSpeed[refGear] : 0.0f;
                     Log(L"probe: gear ratio pull: %d percent, the share in this position %.2f; the game's T %.0f for a of %.3f (the game's top 2a + 5 = %.2f rad/s, the mod's %.2f), held to gear %d "
-                        L"with a of %.3f (top %.2f rad/s): the factor x%.3f%s, the torque handed %.0f",
+                        L"with a of %.3f (top %.2f rad/s): the factor x%.3f%s%s, the torque handed %.0f",
                         s.gearRatioPull, GearRatioShare(s.gearRatioPull, w.pos.pos, inA), c.stock, c.ratioA, 2.0f * c.ratioA + 5.0f, gearTop, refGear, refA, 2.0f * refA + 5.0f, c.ratioFactor,
-                        c.ratioRoofed ? L" (the roof held it)" : L"", c.torque);
+                        c.ratioHeld ? L" (held to gear 1's)" : L"", c.ratioRoofed ? L" (the roof held it)" : L"", c.torque);
                 }
                 if (inA)
                     Log(L"probe: torque cut in A: the slot is %s, the converter %s (input %.0f rpm, engine %.0f rpm, torque x%.2f), F to the wheels %.3f, the fall at a lock %s",

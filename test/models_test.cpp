@@ -5228,6 +5228,75 @@ int main(int argc, char **argv)
             Check(law && asBefore && forces && braking && shiftOk,
                   "gear ratio pull: at 100 the torque times the game's top is the same in every gear; at 0 the detour's step leaves the torque and the slot bit for bit; at 100 the "
                   "air drag and the creep's floor stay the same force and the engine's braking grows by the factor; a shift from 2 to 3 takes each step's factor from its own gear");
+            // 161b: R and the low positions get no more than gear 1 gets, by the smaller of two factors
+            {
+                const float firstA = 2.54f;
+                bool lowAll = true, numbered = true;
+                const float lowA[2] = { 1.0f, 0.5f };
+                for (int i = 0; i < 2; i++)
+                    for (int sh = 1; sh <= 2; sh++)
+                    {
+                        bool isRoofed = true, isHeld = false;
+                        const float share = sh / 2.0f, got = GearRatioHeld(lowA[i], refA, firstA, true, share, kRatioPullRoof, &isRoofed, &isHeld);
+                        lowAll = lowAll && got == GearRatioFactor(firstA, refA, share) && got < kRatioPullRoof && isHeld && !isRoofed;
+                    }
+                // without the hold the same figures read their own, the roof among them: the numbered gears are not touched
+                bool ownRoofed = false, ownHeld = true;
+                lowAll = lowAll && GearRatioHeld(0.5f, refA, firstA, false, 1.0f, kRatioPullRoof, &ownRoofed, &ownHeld) == kRatioPullRoof && ownRoofed && !ownHeld;
+                const float everyA[5] = { 2.54f, 4.2f, 6.1f, 8.62f, refA };
+                for (int i = 0; i < 5; i++)
+                {
+                    TorqueCutSlot gearSlot = base;
+                    gearSlot.ratioShare = 1.0f, gearSlot.ratioFirstA = firstA, gearSlot.ratioHold = false;
+                    float tg = 1000.0f;
+                    numbered = numbered && GearRatioApply(gearSlot, tg, everyA[i]) == GearRatioFactor(everyA[i], refA, 1.0f) && tg == 1000.0f * GearRatioFactor(everyA[i], refA, 1.0f);
+                }
+                // a low figure above gear 1's with a smaller factor keeps its own; one between 2.0 and 2.5 against a gear 1 of 2.0 has
+                // the larger factor though the larger figure, and is held; gear 1's own figure is not "held"; no gear 1: a factor of 1
+                bool hOwn = true, hRise = false, hSame = true, hNone = false;
+                const bool edges = GearRatioHeld(4.2f, refA, firstA, true, 1.0f, kRatioPullRoof, nullptr, &hOwn) == GearRatioFactor(4.2f, refA, 1.0f) && !hOwn &&
+                                   GearRatioFactor(2.5f, refA, 1.0f) > GearRatioFactor(2.0f, refA, 1.0f) &&
+                                   GearRatioHeld(2.5f, refA, 2.0f, true, 1.0f, kRatioPullRoof, nullptr, &hRise) == GearRatioFactor(2.0f, refA, 1.0f) && hRise &&
+                                   GearRatioHeld(firstA, refA, firstA, true, 1.0f, kRatioPullRoof, nullptr, &hSame) == f1 && !hSame &&
+                                   GearRatioHeld(1.0f, refA, 0.0f, true, 1.0f, kRatioPullRoof, nullptr, &hNone) == 1.0f && hNone &&
+                                   GearRatioHeld(1.0f, refA, NAN, true, 1.0f) == 1.0f && GearRatioHeld(1.0f, refA, firstA, true, 0.0f) == 1.0f;
+                // the detour's step with the hold: the slot's own shares go by the factor handed, and at 0 nothing is written
+                TorqueCutSlot lowSlot = base, lowZero = base;
+                lowSlot.ratioShare = 1.0f, lowSlot.ratioFirstA = lowZero.ratioFirstA = firstA, lowSlot.ratioHold = lowZero.ratioHold = true;
+                const TorqueCutSlot lowZeroWas = lowZero;
+                float tLow = 257000.0f, tLowZero = 257000.37f;
+                bool lowRoofed = true, lowHeld = false;
+                const float fLow = GearRatioApply(lowSlot, tLow, 0.5f, &lowRoofed, &lowHeld);
+                const bool step = fLow == f1 && lowHeld && !lowRoofed && Near(lowSlot.map.load * tLow, base.map.load * 257000.0f, 1.0f) && Near(lowSlot.floor * tLow, base.floor * 257000.0f, 1.0f) &&
+                                  GearRatioApply(lowZero, tLowZero, 0.5f) == 1.0f && tLowZero == 257000.37f && !memcmp(&lowZero, &lowZeroWas, sizeof lowZero);
+                Check(lowAll && numbered && edges && step,
+                      "gear ratio pull, R and the low positions: with an a of 1.0 and of 0.5 they read gear 1's factor at 50 and at 100, never the roof, and its flag is not set; "
+                      "the numbered gears from 1 to the top read their own as before; a held figure with the smaller factor keeps its own and one with the larger is held though "
+                      "its figure is the larger; no gear 1 gives 1; at 0 the detour's step writes nothing");
+                // T1, the learner under the factor: the detour's sum carries the bracket times the factor, so a row learned at 100 lands on the base learned at 0
+                CutLearnTotals was0 = { 0.0, 0, 0, 7 }, now0 = was0, was100 = was0, now100 = was0;
+                const float bracket = 0.8f, accel0 = 3.0f; // rad/s^2 at a bracket of 0.8 with the game's own torque
+                for (int stepI = 0; stepI < 6; stepI++)
+                {
+                    now0.sum = CutLearnAdd(now0.sum, bracket, 1.0f), now0.n++;
+                    now100.sum = CutLearnAdd(now100.sum, bracket, f1), now100.n++;
+                }
+                const float d0 = CutLearnDivisor(was0, now0, 7), d100 = CutLearnDivisor(was100, now100, 7);
+                Check(Near(d0, bracket, 1e-5f) && Near(d100, bracket * f1, 1e-5f) && Near(accel0 * f1 / d100, accel0 / d0, 1e-4f) && CutLearnAdd(1.5, NAN, 1.2f) == 1.5 &&
+                          CutLearnAdd(1.5, 0.5f, NAN) == 1.5,
+                      "gear ratio pull, the learner: the detour's sum carries the bracket times the factor, so the acceleration over the divisor at 100 is the same base as at 0; a "
+                      "bracket or a factor that is no number adds nothing");
+            }
+            // the review of 162 part A, S1: the slot's cap is GearboxPosCap of the position, and in A that is 0 at every
+            // Held gear slip choice (All gears is the default), every cap and every top, so the wheel cap never acts in A
+            {
+                bool aNoCap = true;
+                const float capTops[3] = { 2.9f, 10.0f, 40.0f }, capShares[3] = { 1.1f, 1.5f, 3.0f };
+                for (int ch = 0; ch < kSlipCount; ch++)
+                    for (int ti = 0; ti < 3; ti++)
+                        for (int ci = 0; ci < 3; ci++) aNoCap = aNoCap && GearboxPosCap(kPosA, ch, capShares[ci], capTops[ti], 2.9f) == 0.0f;
+                Check(aNoCap && !GearboxPosCapped(kPosA), "torque cut in A: the slot's cap is 0 in A at every Held gear slip choice, at every cap and top");
+            }
             // must 5, the sketch: the scout with a wheel free and on a road in L- under the guard, at 0 and at the roof. The
             // wheel handed to the ground never passes the ceiling, and on a free wheel the cap keeps a smaller share of the larger push
             char pullLine[900];

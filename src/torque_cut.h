@@ -368,6 +368,9 @@ struct TorqueCutSlot
     // the gear ratio pull (GearRatioFactor): the tool's share, 0 to 1, and the reference gear's a. The share is 0 in
     // any position but a held one that is not H (by the position, on the mod's thread: must 3), so in A, in N and in H
     float ratioShare, ratioRefA;
+    // ... and for R and the low positions (ratioHold, by the position): gear 1's a, whose factor they may not pass
+    float ratioFirstA;
+    bool ratioHold;
     float capWide; // the low range's wider cap for L-, L and R (LowRangeCap, CapCeilingWide), in the wheels' measure; 0 none. cap stays the gear's own
     TorqueCutMap map;
     int diff; // the differential's type for this truck (DiffTypeOf, on the mod's thread)
@@ -617,6 +620,23 @@ inline float GearRatioFactor(float a, float refA, float share, float roof = kRat
     }
     return 1.0f + (full - 1.0f) * CutClamp01(share);
 }
+// R and the low positions (the lead's ruling of 2026-11-14 06:26 and the Reviewer's addendum of 06:30): they get no
+// more than gear 1 gets. So with hold up the factor is the gear's own and no more than gear 1's, both by the law above
+// at the same share and roof: the smaller of two factors, not the larger of two figures, since between an a of 2.0 and
+// 2.5 the law rises a little with a. Where gear 1 has no figure above 0 a held position gets 1. held: gear 1's was the
+// smaller, and then roofed is gear 1's own flag. With hold down this is GearRatioFactor.
+inline float GearRatioHeld(float a, float refA, float firstA, bool hold, float share, float roof = kRatioPullRoof, bool *roofed = nullptr, bool *held = nullptr)
+{
+    if (held) *held = false;
+    const float own = GearRatioFactor(a, refA, share, roof, roofed);
+    if (!hold) return own;
+    bool firstRoofed = false;
+    const float first = GearRatioFactor(firstA, refA, share, roof, &firstRoofed);
+    if (!(own > first)) return own;
+    if (held) *held = true;
+    if (roofed) *roofed = firstRoofed;
+    return first;
+}
 // The slot under the factor (must 2): the air drag's share and the creep's floor are shares of the gear's torque, so a
 // larger torque would make them larger forces. Both are divided by the factor and stay the same force. The engine's
 // braking is left to grow: it does go through the gear's ratio on a real truck. A factor of 1 changes nothing.
@@ -629,9 +649,9 @@ template <class Slot> inline void GearRatioSlot(Slot &slot, float factor)
 }
 // The detour's one step: the game's torque t for the gear whose figure is a, scaled by that gear's own factor, and the
 // slot with it. Returns the factor. At a factor of 1 neither t nor the slot is written, so both stay bit for bit.
-template <class Slot> inline float GearRatioApply(Slot &slot, float &t, float a, bool *roofed = nullptr)
+template <class Slot> inline float GearRatioApply(Slot &slot, float &t, float a, bool *roofed = nullptr, bool *held = nullptr)
 {
-    const float factor = GearRatioFactor(a, slot.ratioRefA, slot.ratioShare, kRatioPullRoof, roofed);
+    const float factor = GearRatioHeld(a, slot.ratioRefA, slot.ratioFirstA, slot.ratioHold, slot.ratioShare, kRatioPullRoof, roofed, held);
     if (factor == 1.0f) return 1.0f;
     t *= factor;
     GearRatioSlot(slot, factor);
@@ -662,6 +682,12 @@ static const float kCutLearnPaced = 0.02f; // a bracket used within this share o
 inline bool CutLearnStepOk(const TorqueCutSlot &slot, const TorqueCutAnswer &r, float kept)
 {
     return slot.mode == kCutMap && !r.falling && !r.floored && r.bracket > 0.0f && fabsf(r.used - r.bracket) <= kCutLearnPaced * r.bracket && isfinite(kept) && kept >= 0.999f;
+}
+// The detour's sum for the learner, one step more: the bracket used times the gear ratio pull's factor, since the
+// torque handed is the game's times both. So a row learned at one figure of the slider is the base learned at another.
+inline double CutLearnAdd(double sum, float used, float factor)
+{
+    return sum + (isfinite(used) && isfinite(factor) ? (double)used * (double)factor : 0.0);
 }
 // The divisor for the thread's pass: the mean of the brackets the detour used since the pass before; no number where
 // the detour answered nothing since (a count of 0, a stale slot), a step among them may not feed a sample, or the
