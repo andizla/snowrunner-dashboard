@@ -1306,8 +1306,23 @@ inline float CurveReach(const TorqueCurve &c, float share)
     return 1.0f;
 }
 
+// The pedal's curve with its exponent as an argument: x, held to 0 to 1, to that power. 1 is straight; a higher one is
+// slow to rise over the low and middle part and takes the rest near the end.
+inline float PedalCurve(float x, float exponent) { return powf(SettingsRange(x, 0.0f, 1.0f), exponent); }
 // The pedal shaped by the curve, the way it is ramped. pedal: as the driver holds it, 0 to 1.
-inline float ThrottleShape(float pedal) { return powf(SettingsRange(pedal, 0.0f, 1.0f), kThrottleCurve); }
+inline float ThrottleShape(float pedal) { return PedalCurve(pedal, kThrottleCurve); }
+// The engine speed share as the engine sound gets it (BRIEF_jobs_1114.md, part 171): through the pedal's curve with an
+// exponent of its own (curvePercent / 100: 100 straight, 180 the pedal's bend), then times the top (topPercent / 100),
+// the figure the sound has at the red zone's start. For the sound alone: the share the game's fuel and stall read is
+// never this one. At 100 and 100 it is the share itself to the bit; 0 at idle and the top at the red zone's start at
+// every curve; never falling as the revs rise. No number stays no number: the factor's own rule makes it 0.
+inline float SoundShare(float share, int curvePercent, int topPercent)
+{
+    if (!isfinite(share)) return share;
+    const float x = SettingsRange(share, 0.0f, 1.0f);
+    const float shaped = curvePercent == 100 ? x : PedalCurve(x, (float)curvePercent / 100.0f);
+    return topPercent >= 100 ? shaped : shaped * ((float)topPercent / 100.0f);
+}
 
 struct PowertrainModel
 {

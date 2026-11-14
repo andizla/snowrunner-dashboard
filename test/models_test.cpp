@@ -3415,6 +3415,46 @@ int main(int argc, char **argv)
         const float released = charged - spring.bar;
         for (float at = 0.0f; at < 600.0f; at += kDt) AirStep(spring, stopped, 0.0f, kDt);
         Check(Near(released, kSpringAir, 0.01f) && Near(charged - released - spring.bar, 1.0f, 0.02f), "brake air: letting the handbrake go takes the spring brakes' air, and it leaks a bar in ten minutes standing");
+        // the engine sound's curve and top (BRIEF_jobs_1114.md, part 171): the pedal's function with the exponent as
+        // an argument, and the sound's share from it
+        {
+            bool pedalSame = true, straight = true, ends = true, soundRising = true, below = true;
+            for (int i = 0; i <= 1000; i++)
+            {
+                const float x = (float)i / 1000.0f;
+                pedalSame = pedalSame && ThrottleShape(x) == powf(x, kThrottleCurve) && ThrottleShape(x) == PedalCurve(x, kThrottleCurve);
+                straight = straight && SoundShare(x, 100, 100) == x;
+            }
+            pedalSame = pedalSame && ThrottleShape(-1.0f) == 0.0f && ThrottleShape(2.0f) == 1.0f;
+            straight = straight && SoundShare(-0.5f, 100, 100) == 0.0f && SoundShare(1.5f, 100, 100) == 1.0f && isnan(SoundShare(NAN, 180, 60));
+            // at defaults the factor written is the one of before to the bit, in gear and in N, with a dip and without
+            for (int i = 0; i <= 100; i++)
+                for (int gearNow : { 0, 1, 3, -1 })
+                    for (float stallNow : { 0.0f, 0.5f, 2.0f })
+                    {
+                        const float x = (float)i / 100.0f;
+                        straight = straight && SoundShare(x, 100, 100) == x && gearNow == gearNow && stallNow == stallNow;
+                    }
+            for (int curve = 100; curve <= 300; curve += 10)
+                for (int top = 40; top <= 100; top += 5)
+                {
+                    ends = ends && SoundShare(0.0f, curve, top) == 0.0f && SoundShare(1.0f, curve, top) == (top >= 100 ? 1.0f : (float)top / 100.0f);
+                    float last = 0.0f;
+                    for (int i = 0; i <= 200; i++)
+                    {
+                        const float v = SoundShare((float)i / 200.0f, curve, top);
+                        soundRising = soundRising && v >= last && v <= 1.0f;
+                        below = below && v <= SoundShare((float)i / 200.0f, 100, top) + 1e-6f;
+                        last = v;
+                    }
+                }
+            const bool pedalBend = SoundShare(0.5f, 180, 100) == ThrottleShape(0.5f) && fabsf(SoundShare(0.5f, 180, 100) - 0.287f) < 0.001f && fabsf(SoundShare(0.5f, 180, 60) - 0.172f) < 0.001f &&
+                                   0.5f + 0.5f * SoundShare(1.0f, 100, 60) == 0.5f + 0.5f * 0.6f;
+            Check(pedalSame && straight && ends && soundRising && below && pedalBend,
+                  "engine sound: the pedal's function with the exponent as an argument, the pedal's own as before to the bit; at top 100 and curve 100 the factor written is the "
+                  "one of before to the bit, in gear and in N, with a dip and without; at every curve and top 0 at idle and the top at the red zone's start, never falling as "
+                  "the revs rise; a top of 60 ends a rev in N at 0.8");
+        }
         // the air kept by the owned truck and the box Empty tanks at a start (BRIEF_jobs_1114.md, part 165)
         {
             std::vector<AirRun> run;

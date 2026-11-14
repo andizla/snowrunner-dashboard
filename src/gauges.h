@@ -149,6 +149,7 @@ struct GaugeSettings
     bool airEmptyAtStart;    // AirEmptyAtStart: a truck with air brakes first driven after the game starts has empty tanks (air_keep.h; BRIEF_jobs_1114.md, part 165). Every truck's
     int airBrakes;           // AirBrakes, in a truck file alone: this truck has air brakes, 1 or 0; -1 no choice, its class decides (AirBrakesOn; BRIEF_spring_brakes.md, M4 and M7)
     int quickWinch;          // QuickWinch: the game's quick winch on its key: 0 as the game has it, 1 only while the truck stands, 2 never (quick_winch.h). 1 by default
+    int engineSoundTop, engineSoundCurve; // EngineSoundTop, EngineSoundCurve: figures of the tuning tool for the engine sound (models.h, SoundShare; BRIEF_jobs_1114.md, part 171): the factor at the red zone's start in percent, 40 to 100, and the curve's exponent in percent, 100 straight to 300
     int lockSteerFront, lockSteerRear; // LockSteerFront, LockSteerRear: with Powertrain, the percent of the steering left while an axle that steers is locked, and while another driven axle is, 30 to 100 (60 and 85; lock_steer.h). 100 and 100: off
     int heldGearSlip;        // HeldGearSlip: the slip room of a numbered gear held by hand: 0 the governor as before, 1 the cap of L+ in the gears near it, 2 the wheel cap in every gear (gearbox_model.h, GearboxPosCap); 0 by default until the user has driven
     int wheelCap;            // WheelCap: with the torque cut in L-, L, L+ and R, no driven wheel runs faster than this percent of the gear's top (BRIEF_drivetrain_2c_wheel_cap.md), 110 to 200, 150; no box, for the A/B
@@ -258,6 +259,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.lowRangeSlip = 100; // L- and L with the slip room of L+ (BRIEF_low_range_pull.md, the lead)
     s.diffLockBite = 0; // the game's own lock until the drive picks a default (BRIEF_diff_lock_bite.md)
     s.quickWinch = 1; // kQuickWinchStanding (BRIEF_quick_winch.md)
+    s.engineSoundTop = 100, s.engineSoundCurve = 100; // today's sound, until the figures are set by ear
     s.lockSteerFront = 60, s.lockSteerRear = 85; // kLockSteerFrontDefault, kLockSteerRearDefault (BRIEF_lock_steering.md, M7)
     s.diffType = 0; // Auto (BRIEF_diff_types.md)
     s.airBrakes = -1; // by the class
@@ -425,6 +427,8 @@ inline void SettingsClamp(GaugeSettings &s)
     s.quickWinch = s.quickWinch < 0 || s.quickWinch > 2 ? 1 : s.quickWinch;
     s.lockSteerFront = s.lockSteerFront < 30 ? 30 : s.lockSteerFront > 100 ? 100 : s.lockSteerFront; // kLockSteerLeast
     s.lockSteerRear = s.lockSteerRear < 30 ? 30 : s.lockSteerRear > 100 ? 100 : s.lockSteerRear;
+    s.engineSoundTop = s.engineSoundTop < 40 ? 40 : s.engineSoundTop > 100 ? 100 : s.engineSoundTop;
+    s.engineSoundCurve = s.engineSoundCurve < 100 ? 100 : s.engineSoundCurve > 300 ? 300 : s.engineSoundCurve;
     s.diffType = s.diffType < 0 || s.diffType > 3 ? 0 : s.diffType;
     s.airBrakes = s.airBrakes == 0 || s.airBrakes == 1 ? s.airBrakes : -1;
     for (int a = 0; a < kAxleRowsMost; a++) s.diffAxle[a] = s.diffAxle[a] < 0 || s.diffAxle[a] > 3 ? -1 : s.diffAxle[a];

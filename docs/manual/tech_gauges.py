@@ -1452,7 +1452,13 @@ takes it at its next pass (the count, the value, the count again), held to the r
 saved a second after the last change. <code>HeldGearSlip</code> is a figure of the tool alone: test builds had it as the row Held
 gear slip on the Power tab, and the row is gone. Its default is 2, All gears: a numbered gear held by hand has the wheel cap in
 every gear. An ini of a test build that holds 0 or 1 keeps it, and the log says so at every start (<code>held gear slip:
-Gauges.ini has HeldGearSlip=</code>). With Real engine off the four are published greyed. Only the mod's thread touches the
+Gauges.ini has HeldGearSlip=</code>). <code>EngineSoundTop</code> (40 to 100) and <code>EngineSoundCurve</code> (100 to 300) are
+two more figures of the tool alone, for the engine sound. The mod's thread takes the engine speed share through the pedal's curve
+with the exponent <code>EngineSoundCurve</code> / 100, then times <code>EngineSoundTop</code> / 100, and hands the result to the
+sound's hook beside the share. The share the game's fuel and stall read is never changed by them. At 100 and 100 the sound is as
+it was. The probe's line <code>probe: engine sound: the engine speed share</code> names the share, the shaped and topped figure,
+the two keys, the factor written and the game's own. It takes the place of <code>probe: engine sound: the game's
+velocityFactor</code>. While either key is not 100 the settings have a line <code>settings: the engine sound's top</code>. With Real engine off the figures are published greyed. Only the mod's thread touches the
 block, and no hook does. Without the tool nothing reads it. The log's start says "tuning:" with the block's name, or that it
 could not be made.</p>
 {table(['Offset', 'Type', 'Field'], tire, 'Read: Local\\SnowRunnerTirePressure.State.&lt;process id&gt;, the tire mod\'s (tires.h); the fields used', 'small')}

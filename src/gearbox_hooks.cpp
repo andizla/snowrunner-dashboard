@@ -2318,7 +2318,7 @@ bool EngineSpeedHook(uintptr_t at, uintptr_t fuelBack, uintptr_t stallBack, char
 
 bool EngineSpeedHooked() { return g_speedHooked; }
 
-void EngineSpeedPublish(const void *vehicle, float share, uint64_t at)
+void EngineSpeedPublish(const void *vehicle, float share, uint64_t at, float sound)
 {
     if (!vehicle || !(share >= 0.0f))
     {
@@ -2329,6 +2329,7 @@ void EngineSpeedPublish(const void *vehicle, float share, uint64_t at)
     g_speedNext ^= 1;
     slot.vehicle = vehicle;
     slot.share = share > 1.0f ? 1.0f : share;
+    slot.sound = !(sound >= 0.0f) ? slot.share : sound > 1.0f ? 1.0f : sound;
     slot.at = at ? at : GetTickCount64();
     InterlockedExchangePointer(&g_speedSlot, &slot);
 }
@@ -2397,7 +2398,7 @@ __declspec(noinline) static void **HookTruckInput(void *vehicle, void **out)
         InterlockedIncrement(&g_inputNotOurs);
         return answer;
     }
-    if (InputWrite(vehicle, out, slot->share)) InterlockedIncrement(&g_inputWritten);
+    if (InputWrite(vehicle, out, slot->sound)) InterlockedIncrement(&g_inputWritten);
     else InterlockedIncrement(&g_inputFailed);
     return answer;
 }

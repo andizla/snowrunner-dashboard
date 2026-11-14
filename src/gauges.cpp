@@ -844,6 +844,8 @@ static void WriteIni(const GaugeSettings &s)
     whole(L"QuickWinch", s.quickWinch);
     whole(L"LockSteerFront", s.lockSteerFront);
     whole(L"LockSteerRear", s.lockSteerRear);
+    whole(L"EngineSoundTop", s.engineSoundTop);
+    whole(L"EngineSoundCurve", s.engineSoundCurve);
     whole(L"DiffType", s.diffType);
     whole(L"ModEngineSpeed", s.modEngineSpeed ? 1 : 0);
     num(L"EngineSpeedTop", s.engineSpeedTop);
@@ -1292,6 +1294,7 @@ static void ReadIni(GaugeSettings &s)
                         L";   A truck file may hold its own DiffType; the tab writes it there for the driven truck.\n"
                         L";   DiffAxle1 to DiffAxle8 in a truck file: one axle its own type, front to back, the same four choices. An axle with no key goes by DiffType.\n"
                         L";   BindLockFrontAxle and BindLockRearAxles hold those axles Locked until pressed again. While the diff lock of the truck is on, every axle is locked.\n"
+                        L"; EngineSoundTop and EngineSoundCurve are figures of the tuning tool for the engine sound: 100 and 100 leave it as it was. Top 40 to 100, curve 100 to 300.\n"
                         L"; HeldGearSlip is a figure of the tuning tool, not of the tab: 2, a numbered gear held by hand has the wheel cap in every gear. 0 and 1 are the older ways.\n"
                         L"; AirEmptyAtStart=1: a truck with air brakes first driven after the game starts has empty tanks and stands on its spring brakes until they fill. A truck keeps its air between drives (AirBar in its [Odometer:<id>]).\n"
                         L"; AirBrakes in a truck file (the Air brakes box of the Engine tab): 1 the truck has brake air and spring brakes, 0 it has none. No key: every truck but a scout has them, by the class the mod automatic goes by for it.\n"
@@ -1376,6 +1379,8 @@ static void ReadIni(GaugeSettings &s)
     s.quickWinch = IniInt(L"QuickWinch", s.quickWinch, ini);
     s.lockSteerFront = IniInt(L"LockSteerFront", s.lockSteerFront, ini);
     s.lockSteerRear = IniInt(L"LockSteerRear", s.lockSteerRear, ini);
+    s.engineSoundTop = IniInt(L"EngineSoundTop", s.engineSoundTop, ini);
+    s.engineSoundCurve = IniInt(L"EngineSoundCurve", s.engineSoundCurve, ini);
     s.diffType = IniInt(L"DiffType", s.diffType, ini);
     s.engineBrake = IniFloat(L"EngineBrake", s.engineBrake, ini); // CrawlHold= is read no more: the torque cut took its place
     s.winchOutRate = IniFloat(L"WinchOutRate", s.winchOutRate, ini);
@@ -5328,6 +5333,8 @@ static void LogSettings(const GaugeSettings &s)
                           TorqueCutWanted(s) ? L"in a gear held by hand the torque cut: the mod engine alone, no cut at the gear's top" : L"no torque cut (it needs Gearbox=2, EngineShare above 0 and ModEngineSpeed=1)",
                           s.modEngineSpeed ? L"the mod engine's (ModEngineSpeed=1; the fuel's and the stall's calls keep the game's own, by the cut's own pull under the cut)" : L"its own (ModEngineSpeed=0)");
         Log(L"settings: diff lock bite %d (DiffLockBite; 0 the game's lock, 100 one shaft), the differential's type %d (DiffType; 0 Auto, 1 Open, 2 Limited slip, 3 Locked), low range slip %d (LowRangeSlip; 0 the gear's own wheel cap in L-, L and R, 100 the cap of the highest low gear)", s.diffLockBite, s.diffType, s.lowRangeSlip);
+        if (s.engineSoundTop != 100 || s.engineSoundCurve != 100)
+            Log(L"settings: the engine sound's top %d percent and curve %d (EngineSoundTop, EngineSoundCurve; 100 and 100 leave the sound as it was)", s.engineSoundTop, s.engineSoundCurve);
         Log(L"settings: the steering left with a lock in: %d percent while an axle that steers is locked (LockSteerFront), %d while another driven axle is (LockSteerRear); 100 and 100 is off%s",
             s.lockSteerFront, s.lockSteerRear, LockSteerOn(s.powertrain, s.lockSteerFront, s.lockSteerRear) ? L"" : L" (off now)");
         Log(L"settings: quick winch %d (QuickWinch; 0 as the game has it, 1 only while the truck stands, 2 never from its key)%s", s.quickWinch,
@@ -5656,6 +5663,7 @@ struct TruckWatch
     ULONGLONG gearboxProbeAt;   // and its line of the game's gearbox functions (gearbox_hooks.h)
     ULONGLONG speedProbeAt;     // and its line of the game's engine speed's callers (EngineSpeedCallersGet)
     float speedShare;           // the engine speed share handed to the game on the last pass, -1 for none
+    float soundShare;           // and that share as the engine sound gets it (SoundShare), -1 for none
     bool probedAny;
     float way[3];               // where the chassis was half a second ago, for the speed by the way gone
     ULONGLONG wayAt;
@@ -9013,7 +9021,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             // converter in A, the clutch in a position of its own); else the slot cleared, and the hook gives the game's
             const bool speedOurs = want && s.modEngineSpeed && w.take.driving && (!GearboxManual(w) || w.clutch.running) && EngineSpeedHooked();
             w.speedShare = speedOurs ? EngineSpeedShare(w.tach.live, scale.idle, scale.redline * s.engineSpeedTop) : -1.0f;
-            EngineSpeedPublish(speedOurs ? (const void *)w.refs.vehicle : nullptr, w.speedShare);
+            // the sound's own figure beside it (part 171): the curve and the top, never the share the fuel and the stall read
+            w.soundShare = speedOurs ? SoundShare(w.speedShare, s.engineSoundCurve, s.engineSoundTop) : -1.0f;
+            EngineSpeedPublish(speedOurs ? (const void *)w.refs.vehicle : nullptr, w.speedShare, 0, w.soundShare);
             EngineSpeedProbe(probe && EngineSpeedHooked());
             // with the probe on, once a second: each caller of the game's engine speed (by where its call returns), its
             // calls and the last value the game gave it, beside the mod's (the Reviewer's S3)
@@ -9045,8 +9055,10 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                     static TruckInputCounts inputWas = {};
                     TruckInputCounts ic = {};
                     TruckInputCountsGet(ic);
-                    Log(L"probe: engine sound: the game's velocityFactor %.3f, the mod's %.3f, gear %d; a second: %ld calls, %ld written, %ld not ours, %ld handles not resolved",
-                        ic.stock, ic.ours, ic.gear, ic.calls - inputWas.calls, ic.written - inputWas.written, ic.notOurs - inputWas.notOurs, ic.failed - inputWas.failed);
+                    Log(L"probe: engine sound: the engine speed share %.3f, shaped and topped %.3f (EngineSoundCurve %d, EngineSoundTop %d), the factor written %.3f, the game's "
+                        L"velocityFactor %.3f, gear %d; a second: %ld calls, %ld written, %ld not ours, %ld handles not resolved",
+                        w.speedShare, w.soundShare, s.engineSoundCurve, s.engineSoundTop, ic.ours, ic.stock, ic.gear, ic.calls - inputWas.calls, ic.written - inputWas.written,
+                        ic.notOurs - inputWas.notOurs, ic.failed - inputWas.failed);
                     inputWas = ic;
                 }
             }
@@ -11488,7 +11500,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.overRevDamage == b.overRevDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
            a.springFront == b.springFront && a.dampingFront == b.dampingFront && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.checkers == b.checkers && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.hiddenWarnings == b.hiddenWarnings && a.warnFuel == b.warnFuel && a.warnEngine == b.warnEngine && a.warnGearbox == b.warnGearbox && a.warnCoolant == b.warnCoolant && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
-           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.quickWinch == b.quickWinch && a.lockSteerFront == b.lockSteerFront && a.lockSteerRear == b.lockSteerRear && a.heldGearSlip == b.heldGearSlip && a.lowRangeSlip == b.lowRangeSlip && a.diffType == b.diffType && a.physicsRate == b.physicsRate && a.engineBrake == b.engineBrake && a.winchOutRate == b.winchOutRate && a.winchOutStep == b.winchOutStep && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
+           a.oilGauge == b.oilGauge && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.quickWinch == b.quickWinch && a.lockSteerFront == b.lockSteerFront && a.lockSteerRear == b.lockSteerRear && a.engineSoundTop == b.engineSoundTop && a.engineSoundCurve == b.engineSoundCurve && a.heldGearSlip == b.heldGearSlip && a.lowRangeSlip == b.lowRangeSlip && a.diffType == b.diffType && a.physicsRate == b.physicsRate && a.engineBrake == b.engineBrake && a.winchOutRate == b.winchOutRate && a.winchOutStep == b.winchOutStep && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
            a.camberGainFront == b.camberGainFront && a.camberGainRear == b.camberGainRear && a.camberRestFront == b.camberRestFront && a.camberRestRear == b.camberRestRear &&
            !memcmp(a.diffAxle, b.diffAxle, sizeof a.diffAxle) && a.airBrakes == b.airBrakes;
 }
@@ -11803,6 +11815,7 @@ static void PartIni()
     c.lockSteerFront = 45;
     c.quickWinch = 2;
     c.lockSteerRear = 70;
+    c.engineSoundTop = 60, c.engineSoundCurve = 180;
     c.lowRangeSlip = 40;
     c.heldGearSlip = 1;
     c.diffType = 2;
@@ -11826,7 +11839,7 @@ static void PartIni()
                             c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.overRevDamage != d.overRevDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springFront != d.springFront && c.dampingFront != d.dampingFront && c.extraTravel != d.extraTravel && c.frameFlex != d.frameFlex && c.twistRange != d.twistRange && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
                             c.demo != d.demo && c.checkers != d.checkers && c.probe != d.probe && c.keepLogs != d.keepLogs && c.soundVolume != d.soundVolume && c.hiddenWarnings != d.hiddenWarnings && c.warnFuel != d.warnFuel && c.warnEngine != d.warnEngine && c.warnGearbox != d.warnGearbox && c.warnCoolant != d.warnCoolant && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
-                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.diffLockBite != d.diffLockBite && c.quickWinch != d.quickWinch && c.lockSteerFront != d.lockSteerFront && c.lockSteerRear != d.lockSteerRear && c.heldGearSlip != d.heldGearSlip && c.lowRangeSlip != d.lowRangeSlip && c.diffType != d.diffType && c.physicsRate != d.physicsRate && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
+                            c.gearbox != d.gearbox && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.diffLockBite != d.diffLockBite && c.quickWinch != d.quickWinch && c.lockSteerFront != d.lockSteerFront && c.lockSteerRear != d.lockSteerRear && c.engineSoundTop != d.engineSoundTop && c.engineSoundCurve != d.engineSoundCurve && c.heldGearSlip != d.heldGearSlip && c.lowRangeSlip != d.lowRangeSlip && c.diffType != d.diffType && c.physicsRate != d.physicsRate && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
     WriteIni(c);
     ReadIni(b);
     Check(allChanged, "ini: the test changes every setting from its default");
@@ -11847,7 +11860,7 @@ static void PartIni()
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 168, "ini: the help text survives a write (168 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 169, "ini: the help text survives a write (169 comment lines)");
     // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
     {
         char none[32] = "x", tab[32] = {}, kept[32] = {};
@@ -14327,7 +14340,7 @@ static void PartRest()
         static NgTuneSeen seen;
         NgTuneItem items[kGtItems];
         const int count = GtItems(items);
-        bool listed = count == 9 && NgTuneSetUp(block, sizeof block, "Gameplay", 1, items, count) && NgTuneRead(block, sizeof block, seen) && seen.count == 9 &&
+        bool listed = count == 11 && NgTuneSetUp(block, sizeof block, "Gameplay", 1, items, count) && NgTuneRead(block, sizeof block, seen) && seen.count == 11 &&
                       !strcmp(seen.mod, "Gameplay") && !strcmp(seen.e[kGtCap].name, "Wheel cap") && seen.e[kGtCap].least == 110.0f && seen.e[kGtCap].most == 200.0f &&
                       seen.e[kGtCap].def == 150.0f && seen.e[kGtLowSlip].def == 100.0f && seen.e[kGtBite].def == 0.0f && seen.e[kGtPush].most == 100.0f &&
                       !strcmp(seen.e[0].group, "Powertrain");
@@ -14425,6 +14438,32 @@ static void PartRest()
         TunePass(block, 1295);
         slipEntry = slipEntry && greyed(kGtHeldSlip) && greyed(kGtHeldLine);
         steerEntry = steerEntry && greyed(kGtSteerFront) && greyed(kGtSteerRear) && greyed(kGtSteerLine);
+        // the engine sound's two figures (BRIEF_jobs_1114.md, part 171, must 6): sliders of 40 to 100 and of 100 to 300, both at 100 by default
+        {
+            bool soundEntry = seen.e[kGtSoundTop].kind == kNgTuneSlider && !strcmp(seen.e[kGtSoundTop].name, "Engine sound top") && seen.e[kGtSoundTop].least == 40.0f &&
+                              seen.e[kGtSoundTop].most == 100.0f && seen.e[kGtSoundTop].def == 100.0f && !strcmp(seen.e[kGtSoundCurve].name, "Engine sound curve") &&
+                              seen.e[kGtSoundCurve].least == 100.0f && seen.e[kGtSoundCurve].most == 300.0f && seen.e[kGtSoundCurve].def == 100.0f &&
+                              strlen(kGt[kGtSoundTop].tip) < 128 && strlen(kGt[kGtSoundCurve].tip) < 128 && !strchr(kGt[kGtSoundTop].tip, '\'') && !strchr(kGt[kGtSoundCurve].tip, '\'');
+            d.powertrain = true;
+            SettingsPublish(d);
+            TunePass(block, 1296);
+            want(kGtSoundTop, 12.0f);
+            want(kGtSoundCurve, 180.4f);
+            TunePass(block, 1297);
+            SettingsGet(got);
+            soundEntry = soundEntry && got.engineSoundTop == 40 && got.engineSoundCurve == 180 && shown(kGtSoundTop) == 40.0f && shown(kGtSoundCurve) == 180.0f;
+            want(kGtSoundTop, kGt[kGtSoundTop].def);
+            want(kGtSoundCurve, kGt[kGtSoundCurve].def);
+            TunePass(block, 1298);
+            SettingsGet(got);
+            soundEntry = soundEntry && got.engineSoundTop == 100 && got.engineSoundCurve == 100;
+            InterlockedExchange(&g_setDirty, 0);
+            d.powertrain = false;
+            SettingsPublish(d);
+            TunePass(block, 1299);
+            soundEntry = soundEntry && greyed(kGtSoundTop) && greyed(kGtSoundCurve);
+            Check(soundEntry, "tuning block: Engine sound top is a slider of 40 to 100 and Engine sound curve one of 100 to 300, both 100 by default; 12 asked is 40 and 180.4 is 180; a reset gives 100 and 100; greyed with Real engine off");
+        }
         Check(steerEntry, "tuning block: Steering with front lock and with rear lock are sliders of 30 to 100 with 60 and 85, 12 asked is 30 and 70.4 is 70; the line says the share in force; greyed with Real engine off");
         Check(slipEntry, "tuning block: Held gear slip is a slider of 0 to 2 in whole steps with a line under it, at 2 (All gears) by default and at a reset; 1.4 asked is 1 and 7 is 2; the line says the choice and the cap and fits; greyed with Real engine off");
         TunePass(nullptr, 1300); // no block: the pass does nothing

@@ -3001,6 +3001,14 @@ static void TruckTestsTwo(TruckRefs &r, TruckRaw &t)
         truck[0x768] = 1;
         EngineSpeedPublish(truck, 1.7f);
         const bool held = SpeedFromCockpit(fn, truck) == 1.0f;
+        // the sound's own figure in the slot (BRIEF_jobs_1114.md, part 171, must 1) never reaches the engine speed's
+        // callers: they get the share, whatever the sound is handed
+        bool soundBeside = true;
+        for (float sound : { 0.0f, 0.25f, 1.0f, 7.0f, -1.0f })
+        {
+            EngineSpeedPublish(truck, 0.6f, 0, sound);
+            soundBeside = soundBeside && SpeedFromCockpit(fn, truck) == 0.6f && SpeedFromFuel(fn, truck) == 0.25f && SpeedFromStall(fn, truck) == 0.25f;
+        }
         EngineSpeedPublish(nullptr, 0.0f);
         const bool clearedStock = SpeedFromCockpit(fn, truck) == 0.25f;
         EngineSpeedPublish(truck, 0.6f, GetTickCount64() - 2 * kEngineSpeedFresh);
@@ -3037,7 +3045,7 @@ static void TruckTestsTwo(TruckRefs &r, TruckRaw &t)
                           !EngineSpeedOurs(3, 1, 2, &slot, truck, true, 10000 + kEngineSpeedFresh + 1) && EngineSpeedOurs(3, 1, 2, &slot, truck, true, 10000 + kEngineSpeedFresh) &&
                           !EngineSpeedOurs(3, 1, 2, &slot, truck, true, 9000);
         Check(distinct && hooked && unpublished && ours && fuelStock && stallStock && otherStock && offStock && held && clearedStock && staleStock && probedOurs &&
-                  probedFuel && cockpitKept && fuelKept && !full && answered == 3 && last == 0.4f && twice && EngineSpeedHooked() && rule,
+                  probedFuel && cockpitKept && fuelKept && !full && answered == 8 && last == 0.4f && twice && EngineSpeedHooked() && rule && soundBeside,
               "engine speed hook: through Detours on a function of its signature, the published share for its vehicle with the engine on (at most 1), not "
               "touching the game's own; the fuel's and the stall's callers, another vehicle, the engine off, a cleared slot and a stale one get the game's "
               "own; the probe calls the game's own first and keeps its value by caller");
@@ -3099,6 +3107,29 @@ static void TruckTestsTwo(TruckRefs &r, TruckRaw &t)
         const bool pure = SoundVelocityFactor(0.0f, 0, 0.0f) == 0.5f && SoundVelocityFactor(1.0f, 0, 0.0f) == 1.0f && SoundVelocityFactor(0.6f, 2, 0.0f) == 0.6f &&
                           SoundVelocityFactor(2.0f, 3, 0.0f) == 1.0f && SoundVelocityFactor(NAN, 3, 0.0f) == 0.0f && SoundVelocityFactor(0.6f, 3, 2.0f) == 0.0f &&
                           SoundVelocityFactor(0.6f, 0, 2.0f) == 0.5f && SoundVelocityFactor(0.6f, 3, NAN) == 0.6f;
+        // the sound's own share (BRIEF_jobs_1114.md, part 171): the hook writes the slot's sound, never its share. With
+        // none handed, or no number, it is the share, as before
+        truck[0x768] = 1;
+        g_inputFakeGear = 3;
+        EngineSpeedPublish(truck, 0.6f, 0, 0.25f);
+        const float soundIn3 = InputFromScript(fn, truck);
+        g_inputFakeGear = 0;
+        const float soundInN = InputFromScript(fn, truck);
+        g_inputFakeGear = 3;
+        putF(truck, 0x11C, 0.5f);
+        const float soundDipped = InputFromScript(fn, truck);
+        putF(truck, 0x11C, 0.0f);
+        EngineSpeedPublish(truck, 0.6f, 0, 7.0f);
+        const float soundOver = InputFromScript(fn, truck);
+        EngineSpeedPublish(truck, 0.6f, 0, NAN);
+        const float soundNone = InputFromScript(fn, truck);
+        EngineSpeedPublish(truck, 0.6f);
+        const float soundAsShare = InputFromScript(fn, truck);
+        EngineSpeedPublish(nullptr, 0.0f);
+        Check(soundIn3 == 0.25f && soundInN == 0.5f + 0.5f * 0.25f && soundDipped == SoundVelocityFactor(0.25f, 3, 0.5f) && soundDipped < 0.25f && soundOver == 1.0f && soundNone == 0.6f &&
+                  soundAsShare == 0.6f,
+              "engine sound hook: the sound's own share in the slot is what the hook writes (0.250 in 3rd, 0.625 in N, the stall's dip on it after); with none handed, or no "
+              "number, the engine speed's share as before");
         const bool twice = TruckInputHook((uintptr_t)&FakeTruckInput, (uintptr_t)&FakeHandleData, why, sizeof why);
         char line[500];
         snprintf(line, sizeof line, "engine sound hook: through Detours on a function of GetTruckInput's signature, velocityFactor written by the game's helper: 0.600 in 3rd, 1st and R, "

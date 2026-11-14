@@ -368,8 +368,8 @@ struct EngineSpeedSlot
 {
     const void *vehicle;
     float share;
-    uint32_t spare;
-    uint64_t at; // GetTickCount64 at the publish
+    float sound;  // the share as the engine sound gets it (models.h, SoundShare): shaped and topped on the mod's thread, so no power function runs in the game's call
+    uint64_t at;  // GetTickCount64 at the publish
 };
 inline bool EngineSpeedOurs(uintptr_t back, uintptr_t fuelBack, uintptr_t stallBack, const EngineSpeedSlot *slot, const void *vehicle, bool engineOn, uint64_t now)
 {
@@ -381,8 +381,9 @@ inline bool EngineSpeedOurs(uintptr_t back, uintptr_t fuelBack, uintptr_t stallB
 bool EngineSpeedHook(uintptr_t at, uintptr_t fuelBack, uintptr_t stallBack, char *why, size_t size);
 bool EngineSpeedHooked();
 // The share for vehicle (nullptr clears the slot: a truck switch, Powertrain off, the mod not driving it). at: the
-// publish's tick, 0 for now (a test gives an old one).
-void EngineSpeedPublish(const void *vehicle, float share, uint64_t at = 0);
+// publish's tick, 0 for now (a test gives an old one). sound: the share the engine sound gets, 0 to 1; under 0 or no
+// number, the share itself. The game's own reads (the fuel, the stall) never get it.
+void EngineSpeedPublish(const void *vehicle, float share, uint64_t at = 0, float sound = -1.0f);
 // With the probe on, the hook calls the game's own first on every call and keeps, by the address each call returns
 // to, the count and the last value the game gave (the Reviewer's S3). At most kSpeedCallers callers; full past them.
 void EngineSpeedProbe(bool on);
@@ -398,7 +399,8 @@ void EngineSpeedAnswers(long &answered, float &last);
 // calls the game's own, then, while the engine speed's slot (EngineSpeedPublish) names this vehicle, is fresh and its
 // engine is on, resolves the handle in *out through the game's own helper (never a mask of its own: the helper knows
 // the object's kinds) and writes SoundVelocityFactor there. Nothing else is written; gear stays the game's.
-// SoundVelocityFactor: the engine speed share (0 at idle, 1 at the redline x EngineSpeedTop, before the stall's dip)
+// SoundVelocityFactor: the sound's share (the slot's sound: the engine speed share, 0 at idle and 1 at the redline x
+// EngineSpeedTop, through SoundShare's curve and top, before the stall's dip)
 // with the dip the needle gets, (1 - 0.714 x stall)^2 (models.h kStallRate; the stall seconds at vehicle + 0x11C), and
 // in N (the data block's gear 0) 0.5 + 0.5 x it, so N idles at the game's own 0.5 and a rev rises to 1 at the redline.
 inline float SoundVelocityFactor(float share, int gear, float stall)

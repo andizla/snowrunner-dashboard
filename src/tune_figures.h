@@ -16,7 +16,7 @@
 #include "ng_tune.h"
 #include "gearbox_model.h"
 
-enum { kGtBite, kGtCap, kGtPush, kGtLowSlip, kGtHeldSlip, kGtSteerFront, kGtSteerRear, kGtCount }; // the figures; after them the lines to read
+enum { kGtBite, kGtCap, kGtPush, kGtLowSlip, kGtHeldSlip, kGtSteerFront, kGtSteerRear, kGtSoundTop, kGtSoundCurve, kGtCount }; // the figures; after them the lines to read
 enum { kGtHeldLine = kGtCount, kGtSteerLine, kGtItems };
 struct GtInfo { const char *key, *name, *tip; float least, most, def; };
 static const char kGtGroup[] = "Powertrain";
@@ -29,11 +29,13 @@ static const GtInfo kGt[kGtCount] = {
     { "HeldGearSlip", "Held gear slip", "Wheel spin in a numbered gear held by hand. 0 Engine held: to the engine limit. 1 Low gears: as L+. 2 All gears: by Wheel cap.", 0.0f, 2.0f, 2.0f },
     { "LockSteerFront", "Steering with front lock", "Steering left while an axle that steers is locked. 100 leaves it all. A truck whose lock is always on has this all the time.", 30.0f, 100.0f, 60.0f },
     { "LockSteerRear", "Steering with rear lock", "Steering left while another driven axle is locked. 100 leaves it all. With both locked the smaller figure counts.", 30.0f, 100.0f, 85.0f },
+    { "EngineSoundTop", "Engine sound top", "How high the engine sound is at the start of the red zone, in percent of its top note. Lower it if it sounds too fast.", 40.0f, 100.0f, 100.0f },
+    { "EngineSoundCurve", "Engine sound curve", "How the engine sound rises with the revs. 100 is straight. 180 bends as the pedal does: slow at first, fast near the top.", 100.0f, 300.0f, 100.0f },
 };
 inline int *GtField(GaugeSettings &s, int i)
 {
     return i == kGtBite ? &s.diffLockBite : i == kGtCap ? &s.wheelCap : i == kGtPush ? &s.pushShare : i == kGtHeldSlip ? &s.heldGearSlip : i == kGtSteerFront ? &s.lockSteerFront :
-           i == kGtSteerRear ? &s.lockSteerRear : &s.lowRangeSlip;
+           i == kGtSteerRear ? &s.lockSteerRear : i == kGtSoundTop ? &s.engineSoundTop : i == kGtSoundCurve ? &s.engineSoundCurve : &s.lowRangeSlip;
 }
 
 inline int GtItems(NgTuneItem *items)
