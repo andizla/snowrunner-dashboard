@@ -5719,7 +5719,7 @@ static void WinchOutPass(const GaugeSettings &s, uint64_t vehicle, bool held, bo
     // the drawn wire's sag (winch_out.h, the probe of part 164): behind Probe=1 and WinchSag, on the one build
     const int sagMode = WinchSagMode(s.probe != 0, s.winchSag, ExeStamp());
     static bool sagSaidBuild = false, sagSaidStop = false, sagSaidOn = false;
-    static LONG sagDumpSaid = 0, sagFrom[4];
+    static LONG sagDumpSaid = 0, sagFrom[5];
     if (s.probe && s.winchSag && !sagMode && !sagSaidBuild)
     {
         sagSaidBuild = true;
@@ -5731,11 +5731,12 @@ static void WinchOutPass(const GaugeSettings &s, uint64_t vehicle, bool held, bo
         Log(L"winch sag: WinchSag=%d, a probe: after each call of Winch out the drawn wire's link length (rope + 0x%x) is written longer by the limit over the wire's own length, x%.1f at "
             L"the most%s; read and checked before each write, and a failed check ends it until the game is started again",
             sagMode, (unsigned)kDrawnLinkAt, kSagFactorMost, sagMode == 2 ? L", and the wire's length (rope + 0x5c) with it" : L"; the wire's length is not written");
+        Log(L"winch sag: a wire the game's call left as the probe wrote it is not written again, and the lines count those frames: a wire that grows is then the game's doing, not the probe's");
     }
     if (j.sagStop && !sagSaidStop)
     {
         sagSaidStop = true;
-        Log(L"WINCH SAG: stopped until the game is started again: %S. Nothing more is written into the drawn wire; the limit read back %.3f m, the wire's link %.5f m and length %.3f m at the last write",
+        Log(L"WINCH SAG: stopped until the game is started again: %S. Nothing more is written into the drawn wire; in the frame that stopped it the limit read back was %.3f m, the wire's link %.5f m and its length %.3f m",
             WinchSagWhy(j.sagStop), WinchFloat(j.sagLimitBits), WinchFloat(j.sagLinkWas), WinchFloat(j.sagLengthWas));
     }
     auto sagSay = [&](const wchar_t *head) {
@@ -5754,11 +5755,11 @@ static void WinchOutPass(const GaugeSettings &s, uint64_t vehicle, bool held, bo
             }
             Log(L"winch sag: the drawn wire before the first write of this hold, 0x80 bytes from + 0 as words: %s", words);
         }
-        Log(L"winch sag: %s: mode %d, writes %ld, nothing to write %ld; the last write: the limit read back %.3f m, %ld links, x%.3f, the link %.5f m to %.5f m, the length %.3f m to %.3f m; "
-            L"the frame after found the link %.5f m and the length %.3f m: as written %ld times, not %ld times",
-            head, sagMode, j.sagWrites - sagFrom[0], j.sagNone - sagFrom[1], WinchFloat(j.sagLimitBits), j.sagLinks, WinchFloat(j.sagFactorBits), WinchFloat(j.sagLinkWas),
-            WinchFloat(j.sagLinkNow), WinchFloat(j.sagLengthWas), WinchFloat(j.sagLengthNow), WinchFloat(j.sagLinkNext), WinchFloat(j.sagLengthNext), j.sagKept - sagFrom[2],
-            j.sagBack - sagFrom[3]);
+        Log(L"winch sag: %s: mode %d, writes %ld, nothing to write %ld, no write on a wire the call left as the probe wrote it %ld; the last frame: the limit read back %.3f m, %ld links, "
+            L"x%.3f, the link %.5f m to %.5f m, the length %.3f m to %.3f m; the frame after found, before its call, the link %.5f m and the length %.3f m: as written %ld times, not %ld times",
+            head, sagMode, j.sagWrites - sagFrom[0], j.sagNone - sagFrom[1], j.sagSame - sagFrom[4], WinchFloat(j.sagLimitBits), j.sagLinks, WinchFloat(j.sagFactorBits),
+            WinchFloat(j.sagLinkWas), WinchFloat(j.sagLinkNow), WinchFloat(j.sagLengthWas), WinchFloat(j.sagLengthNow), WinchFloat(j.sagLinkNext), WinchFloat(j.sagLengthNext),
+            j.sagKept - sagFrom[2], j.sagBack - sagFrom[3]);
     };
     static bool wasHeld = false, saidFault = false, saidWhy = false, saidFirst = false;
     static unsigned long long saidAt = 0;
@@ -5822,7 +5823,7 @@ static void WinchOutPass(const GaugeSettings &s, uint64_t vehicle, bool held, bo
     {
         const TruckMemory m = { PeekGame, g_base, PokeGame };
         counts(from);
-        sagFrom[0] = j.sagWrites, sagFrom[1] = j.sagNone, sagFrom[2] = j.sagKept, sagFrom[3] = j.sagBack;
+        sagFrom[0] = j.sagWrites, sagFrom[1] = j.sagNone, sagFrom[2] = j.sagKept, sagFrom[3] = j.sagBack, sagFrom[4] = j.sagSame;
         fromAsked = WinchFloat(j.askedBits), fromSteps = WinchFloat(j.stepSumBits);
         holdVehicle = vehicle, saidAt = now;
         pullWas = NAN, pullAt = now;

@@ -141,6 +141,8 @@ struct WinchOutJob
     volatile LONG sagDumpHold;      // the hold whose first write's 0x80 bytes are in sagDump (set after the copy)
     uint8_t sagDump[kDrawnSize];
     float sagWrote;                 // the frame's own: the link's length it wrote last, 0 none in this hold
+    float sagLast;                  // the frame's own: the link's length of its last write in this session, 0 none; kept over holds
+    volatile LONG sagSame;          // frames with no write: after the set the rope still held the link the probe wrote, so the game had not made it anew
 };
 // The game's two functions behind the caller's fault guards: the read gives no number where it faulted, the set false.
 typedef float (*WinchGetFn)(uint64_t vehicle);
@@ -179,8 +181,24 @@ inline bool WinchSagFrame(WinchOutJob &j, const TruckMemory &m, uint64_t vehicle
         InterlockedExchange(&j.sagStop, kSagNoRead);
         return true;
     }
-    const WinchSagPlan p = WinchSagCheck(rope ? bytes : nullptr, limit, own > 50.0f ? own : 50.0f, mode);
     InterlockedExchange(&j.sagLimitBits, WinchBits(limit));
+    if (rope && j.sagLast > 0.0f)
+    {
+        // a rope the game left as the probe wrote it is never written a second time (the review of 164, S1): a new rope's
+        // link is its span over its count, and only one the probe lengthened holds the very float it wrote
+        float linkNow = 0.0f;
+        memcpy(&linkNow, bytes + kDrawnLinkAt, 4);
+        if (linkNow == j.sagLast)
+        {
+            InterlockedIncrement(&j.sagSame);
+            j.sagWrote = linkNow;
+            return true;
+        }
+    }
+    const WinchSagPlan p = WinchSagCheck(rope ? bytes : nullptr, limit, own > 50.0f ? own : 50.0f, mode);
+    // the two floats this frame read, for the stop's line too (no number where there is no rope)
+    InterlockedExchange(&j.sagLinkWas, WinchBits(p.linkWas));
+    InterlockedExchange(&j.sagLengthWas, WinchBits(p.lengthWas));
     if (p.why == kSagNone)
     {
         InterlockedIncrement(&j.sagNone);
@@ -196,8 +214,6 @@ inline bool WinchSagFrame(WinchOutJob &j, const TruckMemory &m, uint64_t vehicle
         memcpy(j.sagDump, bytes, sizeof bytes);
         InterlockedExchange(&j.sagDumpHold, j.hold);
     }
-    InterlockedExchange(&j.sagLinkWas, WinchBits(p.linkWas));
-    InterlockedExchange(&j.sagLengthWas, WinchBits(p.lengthWas));
     InterlockedExchange(&j.sagFactorBits, WinchBits(p.factor));
     InterlockedExchange(&j.sagLinks, p.links);
     if (!m.put(rope + kDrawnLinkAt, p.link) || (p.writeLength && !m.put(rope + kDrawnLengthAt, p.length)))
@@ -214,7 +230,7 @@ inline bool WinchSagFrame(WinchOutJob &j, const TruckMemory &m, uint64_t vehicle
     InterlockedExchange(&j.sagLinkNow, WinchBits(link));
     InterlockedExchange(&j.sagLengthNow, WinchBits(length));
     InterlockedIncrement(&j.sagWrites);
-    j.sagWrote = p.link;
+    j.sagWrote = j.sagLast = link; // as read back: the float the rope now holds
     return true;
 }
 

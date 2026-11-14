@@ -5248,7 +5248,27 @@ static void TruckTestsFour()
             WinchOutPost(job, true, ropeTruck, true, false, 0.5f, 0.0f, 1016, 1);
             const bool back = frame(tick, 1016) && !job.sagKept && job.sagBack == 1 && WinchFloat(job.sagLinkNext) == 0.25f && job.sagWrites == 2;
             WinchOutPost(job, true, ropeTruck, true, false, 0.5f, 0.0f, 1032, 1);
-            const bool kept = frame(tick, 1032) && job.sagKept == 1 && job.sagBack == 1 && job.sagWrites == 2 && job.sagStop == kSagCount;
+            const float linkLeft = floatAt(kDrawnLinkAt);
+            bool kept = frame(tick, 1032) && job.sagKept == 1 && job.sagBack == 1 && job.sagWrites == 2 && !job.sagStop && job.sagSame == 1 && floatAt(kDrawnLinkAt) == linkLeft;
+            // the review's S1: 36 links under a limit of twice the length. Held at x1.5 the count is whole again (24), so the
+            // check alone would write a second and a third time; the frame knows its own float and writes once
+            anew();
+            freshRope(0.25f, 9.0f);
+            g_ropeLength = 18.0f;
+            WinchOutPost(job, true, ropeTruck, true, true, 0.5f, 0.0f, 1000, 1);
+            kept = kept && frame(tick, 1000) && job.sagWrites == 1 && floatAt(kDrawnLinkAt) == 0.375f && WinchSagCheck(before, 18.0f, 50.0f, 1).links == 36;
+            for (int i = 1; i <= 3; i++)
+            {
+                WinchOutPost(job, true, ropeTruck, true, false, 0.5f, 0.0f, 1000 + 16 * i, 1);
+                kept = kept && frame(tick, 1000 + 16 * i) && job.sagWrites == 1 && job.sagSame == i && floatAt(kDrawnLinkAt) == 0.375f && !job.sagStop;
+            }
+            // a new hold on the same wire writes nothing either; a rope made anew is written again
+            WinchOutPost(job, true, ropeTruck, false, false, 0.5f, 0.0f, 1100, 1);
+            WinchOutPost(job, true, ropeTruck, true, true, 0.5f, 0.0f, 1116, 1);
+            kept = kept && frame(tick, 1116) && job.hold == 2 && job.sagWrites == 1 && job.sagSame == 4 && floatAt(kDrawnLinkAt) == 0.375f;
+            freshRope(0.25f, 9.0f);
+            WinchOutPost(job, true, ropeTruck, true, false, 0.5f, 0.0f, 1132, 1);
+            kept = kept && frame(tick, 1132) && job.sagWrites == 2 && floatAt(kDrawnLinkAt) == 0.375f;
             // mode 2: the length too, and nothing else
             anew();
             freshRope(0.25f, 8.0f);
@@ -5284,7 +5304,7 @@ static void TruckTestsFour()
             Put(ropeTruck + kWinchDrawnAt, (uint64_t)0);
             Check(offBoth && mode1 && kept && back && mode2 && stopped && stays && ropeGone && noRead && readFault,
                   "winch sag, the frame: with Probe=1 and the key at 0, and with the key set and no Probe, not one byte is written; at 1 the link's length alone, right after "
-                  "the call, by the limit read back, the 0x80 bytes kept from before the first write; the frame after says whether the game left it; at 2 the length too and "
+                  "the call, by the limit read back, the 0x80 bytes kept from before the first write; the frame after says whether the game left it; a wire the call left as written is never written again, in a new hold neither, and one made anew is; at 2 the length too and "
                   "no other byte; a failed check, no rope and a failed read each end the writes for the session and Winch out goes on; a faulted read after the set ends Winch out");
         }
 
