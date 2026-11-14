@@ -2436,26 +2436,30 @@ int main(int argc, char **argv)
                                Near(TorqueLift(0.8f, 0.55f, 1.0f, 1.0f, 0.3f), 0.8f * 0.55f, 0.001f) && Near(TorqueLift(0.8f, 0.55f, 0.4f, 1.0f, 0.3f), 0.8f, 0.001f) &&
                                TorqueLift(0.0f, 1.0f, 1.0f, 1.0f, 0.5f) == kTorqueFactorLeast && TorqueLift(nanf(""), 1.0f, 1.0f, 1.0f, 0.5f) == 1.0f;
             TorqueHand hand = {};
-            const TorqueOrders first = TorqueHandStep(hand, true, 0x5000, 0x4000, 0.9f, 2.0f);
+            // the first write after the take is the game's own share, the lift comes with the second pass (part 172, must 2)
+            const TorqueOrders took = TorqueHandStep(hand, true, 0x5000, 0x4000, 0.9f, 2.0f);
+            const TorqueOrders first = TorqueHandStep(hand, true, 0x5000, 0x4000, took.factor, 2.0f);
             const TorqueOrders same = TorqueHandStep(hand, true, 0x5000, 0x4000, first.factor, 2.0f);
             const TorqueOrders moved = TorqueHandStep(hand, true, 0x5000, 0x4000, first.factor, 1.5f);
             const TorqueOrders gameWrote = TorqueHandStep(hand, true, 0x5000, 0x4000, 0.8f, 1.5f);
-            const bool followed = first.write && first.action == 0x5000 && Near(first.factor, 1.8f, 0.001f) && !same.write && moved.write && Near(moved.factor, 1.35f, 0.001f) &&
+            const bool followed = took.write && Near(took.factor, 0.9f, 0.001f) && first.write && first.action == 0x5000 && Near(first.factor, 1.8f, 0.001f) && !same.write && moved.write && Near(moved.factor, 1.35f, 0.001f) &&
                                   gameWrote.write && Near(gameWrote.factor, 1.2f, 0.001f) && Near(hand.game, 0.8f, 0.001f);
             const TorqueOrders switchedOff = TorqueHandStep(hand, false, 0x5000, 0x4000, 1.2f, 1.5f);
             const TorqueOrders again = TorqueHandStep(hand, true, 0x5000, 0x4000, 0.8f, 1.5f);
             const TorqueOrders other = TorqueHandStep(hand, true, 0x7000, 0x6000, 1.0f, 1.5f);
             const TorqueOrders taken = TorqueHandStep(hand, true, 0x7000, 0x6000, 1.0f, 1.5f);
+            const TorqueOrders takenLift = TorqueHandStep(hand, true, 0x7000, 0x6000, 1.0f, 1.5f);
             const bool givenBack = switchedOff.write && switchedOff.action == 0x5000 && Near(switchedOff.factor, 0.8f, 0.001f) && again.write &&
                                    other.write && other.action == 0x5000 && other.vehicle == 0x4000 && Near(other.factor, 0.8f, 0.001f) && taken.write &&
-                                   taken.action == 0x7000 && Near(taken.factor, 1.5f, 0.001f);
+                                   taken.action == 0x7000 && Near(taken.factor, 1.0f, 0.001f) && takenLift.write && Near(takenLift.factor, 1.5f, 0.001f);
             // a factor left over above 1 (a test, or the mod's own) is taken as the game's 1
             TorqueHand left = {};
             const TorqueOrders over = TorqueHandStep(left, true, 0x5000, 0x4000, 2.4f, 1.0f);
             // a rebuilt action that reads the factor the mod wrote last keeps the game's share (review 5, G-R1): the damage cut
             // of 0.8 stays through a rebuild above 1, and below 1 the share does not sink with each rebuild
             TorqueHand rebuilt = {};
-            TorqueHandStep(rebuilt, true, 0x5000, 0x4000, 0.8f, 1.5f);                       // the game's 0.8: writes 1.2
+            TorqueHandStep(rebuilt, true, 0x5000, 0x4000, 0.8f, 1.5f);                       // the game's 0.8: the take writes 0.8
+            TorqueHandStep(rebuilt, true, 0x5000, 0x4000, 0.8f, 1.5f);                       // and the second pass 1.2
             const TorqueOrders r1 = TorqueHandStep(rebuilt, true, 0x9000, 0x4000, 1.2f, 1.5f); // the rebuilt action reads 1.2: the old one gets 0.8 back
             const TorqueOrders r2 = TorqueHandStep(rebuilt, true, 0x9000, 0x4000, 1.2f, 1.5f); // and 1.2 stands, not 1.5
             TorqueHand sinking = {};
@@ -2468,6 +2472,7 @@ int main(int argc, char **argv)
             // (2.4), a fall at once (1.0), then within the gear a rise of kLiftRise a second (1.0 to 2.4 in 1.4 s at passes
             // of 0.05 s); a fall again at once; a new gear at once
             TorqueHand paced = {};
+            TorqueHandStep(paced, true, 0x5000, 0x4000, 1.0f, 2.4f, 0.05f, 8); // the take: the game's own
             const TorqueOrders p0 = TorqueHandStep(paced, true, 0x5000, 0x4000, 1.0f, 2.4f, 0.05f, 8);
             const TorqueOrders p1 = TorqueHandStep(paced, true, 0x5000, 0x4000, paced.written, 1.0f, 0.05f, 8);
             const TorqueOrders p2 = TorqueHandStep(paced, true, 0x5000, 0x4000, paced.written, 2.4f, 0.05f, 8);
@@ -2510,6 +2515,32 @@ int main(int argc, char **argv)
                 sd.speed = spin / 2.0f;
             };
             const EngineHand whole{ true, &kClassCurves[kClassScout], 4800.0f / 4000.0f, 1.0f }, half{ true, &kClassCurves[kClassScout], 4800.0f / 4000.0f, 0.5f };
+            // the automatic's figure stops at the tachometer's top (BRIEF_drive_1114_findings.md, part 172, must 3): the
+            // wheels free at six times the second gear's top with the truck at a walk, floored: the input and the
+            // engine's figure never over 4800 rpm, and one gear up in half a second, not five
+            {
+                bool figureStops = true, oneGear = true;
+                for (float gripKnown : { 2.0f, 0.0f })
+                {
+                    GearboxModel free = {};
+                    free.running = true;
+                    free.gear = 2;
+                    free.grip = gripKnown;
+                    for (float at = 0.0f; at < 0.5f; at += kDt)
+                    {
+                        scoutAt(6.0f * TruckGearTop(sd, 2));
+                        sd.speed = 2.5f;
+                        const int gearWas = free.gear;
+                        GearboxStep(free, sd, dk, 1.0f, 1.0f, kDt, whole);
+                        figureStops = figureStops && free.input <= dk.max && free.rpm <= dk.max;
+                        oneGear = oneGear && free.gear <= gearWas + 1;
+                    }
+                    oneGear = oneGear && free.gear == 3;
+                }
+                Check(figureStops && oneGear,
+                      "automatic, the engine handed over: with the wheels free at six times the gear's top the input and the engine's figure stop at the tachometer's "
+                      "top, and it shifts up one gear on that, never two");
+            }
             // from a standstill to 0.9 of the top gear's top at gain rad/s each second: the share of each gear's top it
             // left them at, the most and the least, and the shifts down on the way
             auto scoutPull = [&](float pedal, float gain, int &firstGear, float &leftMost, float &leftLeast, int &downs) {
@@ -4433,6 +4464,7 @@ int main(int argc, char **argv)
             if (i >= 40) creptRise = fmaxf(creptRise, fh.written - before);
         }
         TorqueHand gh = {};
+        TorqueHandStep(gh, true, 0x5000, 0x4000, 1.0f, 2.0f, dt, 3); // the take: the game's own
         TorqueHandStep(gh, true, 0x5000, 0x4000, 1.0f, 2.0f, dt, 3);
         TorqueHandStep(gh, true, 0x5000, 0x4000, gh.written, 1.2f, dt, 3);
         const TorqueOrders groundRise = TorqueHandStep(gh, true, 0x5000, 0x4000, gh.written, 2.0f, dt, 3);
@@ -4441,6 +4473,74 @@ int main(int argc, char **argv)
         snprintf(line, sizeof line, "sway: a break loose at pass %d opens the pace, the fall to %.2f at once, the catch's rise at most %.3f a pass; a creep along the "
                                     "fade opens none (a rise back of %.2f at once); the ground path's cut still paces", looseAt, fallAt, worstRise, creptRise);
         Check(caught && !creptHeld && creptRise > kLiftRise * dt + 0.01f && ground, line);
+    }
+
+    // the factor of one gear never stands in another (BRIEF_drive_1114_findings.md, part 172, musts 1, 2 and 5)
+    {
+        const float dtp = 0.05f, lift1 = 4.04f, lift2 = 1.0f, liftNew = 1.3f, room = 0.0001f;
+        // one pass: what stands at the action is read, and a write puts the new figure there
+        auto passOf = [&](TorqueHand &th, float &stands, float lift, int gear, bool shiftOut) {
+            const TorqueOrders o = TorqueHandStep(th, true, 0x5000, 0x4000, stands, lift, dtp, gear, false, false, shiftOut);
+            if (o.write) stands = o.factor;
+        };
+        auto orderOf = [&](TorqueHand &th, float &stands, float &stood) {
+            const TorqueOrders o = TorqueHandShift(th, &stood);
+            if (o.write) stands = o.factor;
+            return o.write;
+        };
+        // L floored at 0.81 of gear 1's top into A, the start gear 2 ordered in the pass the hand takes the truck: gear
+        // 1's lift is 4.04, gear 2's own at its share 1.00. From the order on nothing above gear 2's own stands
+        TorqueHand intoA = {};
+        float at = 1.0f, stood = 0.0f;
+        passOf(intoA, at, lift1, 1, false);
+        bool walk = at == 1.0f && !orderOf(intoA, at, stood);
+        for (int i = 0; i < 6; i++)
+        {
+            passOf(intoA, at, lift1, 1, true); // the job is out: the engaged gear is still 1, the lift worked out still gear 1's
+            walk = walk && at <= 1.0f * lift2 + room;
+        }
+        passOf(intoA, at, liftNew, 2, false); // engaged: gear 2's lift at once
+        walk = walk && Near(at, liftNew, room);
+        // the shift a pass late: the take's 1.00, then 4.04 in gear 1, then the order: down to the game's own first
+        TorqueHand late = {};
+        float atLate = 1.0f, stoodLate = 0.0f;
+        passOf(late, atLate, lift1, 1, false);
+        passOf(late, atLate, lift1, 1, false);
+        bool lateWalk = Near(atLate, lift1, room) && orderOf(late, atLate, stoodLate) && Near(stoodLate, lift1, room) && atLate == 1.0f;
+        for (int i = 0; i < 6; i++)
+        {
+            passOf(late, atLate, lift1, 1, true);
+            lateWalk = lateWalk && atLate <= 1.0f * lift2 + room;
+        }
+        passOf(late, atLate, liftNew, 2, false);
+        lateWalk = lateWalk && Near(atLate, liftNew, room);
+        // a floored shift up at 0.9 of the top, the game's share 0.8 (a damaged engine): 2.57 times it stood in gear 6;
+        // in the first pass of gear 7 the factor is the game's own, then gear 7's lift at once, with no pace
+        TorqueHand up = {};
+        float atUp = 0.8f, stoodUp = 0.0f;
+        passOf(up, atUp, 2.57f, 6, false);
+        passOf(up, atUp, 2.57f, 6, false);
+        bool upWalk = Near(atUp, 0.8f * 2.57f, room) && orderOf(up, atUp, stoodUp) && Near(atUp, 0.8f, room) && !orderOf(up, atUp, stoodUp);
+        passOf(up, atUp, 2.57f, 6, true);
+        upWalk = upWalk && Near(atUp, 0.8f, room);
+        passOf(up, atUp, 1.1f, 7, false);
+        upWalk = upWalk && Near(atUp, 0.88f, room) && !up.heldBack;
+        // a shift down: a factor under the game's own is not raised by the rule, and a lower one is still written
+        // while the shift is out
+        TorqueHand down = {};
+        float atDown = 1.0f, stoodDown = 0.0f;
+        passOf(down, atDown, 0.6f, 5, false);
+        bool downWalk = Near(atDown, 0.6f, room) && !orderOf(down, atDown, stoodDown) && Near(atDown, 0.6f, room);
+        passOf(down, atDown, 0.5f, 5, true);
+        downWalk = downWalk && Near(atDown, 0.5f, room);
+        passOf(down, atDown, 2.0f, 5, true);
+        downWalk = downWalk && Near(atDown, 0.5f, room);
+        passOf(down, atDown, 2.0f, 4, false);
+        downWalk = downWalk && Near(atDown, 2.0f, room);
+        Check(walk && lateWalk && upWalk && downWalk,
+              "torque hand at a shift: L floored at 0.81 of gear 1's top into A with the start gear 2, the take's first write the game's own and nothing above gear 2's "
+              "own lift from the order on, also with the order a pass late (4.04 down to 1.00 first); a floored shift up has the game's own in the new gear's first "
+              "pass and its lift at once after; a shift down raises nothing");
     }
 
     // the torque cut's map (BRIEF_drivetrain_2_torque_cut.md): F over the wheels' speed with the clutch fully in. At idle

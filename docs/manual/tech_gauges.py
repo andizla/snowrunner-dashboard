@@ -537,6 +537,13 @@ S1). Since BRIEF_governor_sway.md the limit of a step is a ceiling by the truck'
 locked gear goes by the driven wheels' signed mean in the gear's direction, floored at 0 (<code>TruckDrivenSpinGeared</code>, F4). The mod's thread publishes the slot once a pass (<code>TorqueCutSlotOf</code>) with
 Powertrain=1, ModEngineSpeed=1 (else every engine speed reader but the fuel's and the stall's would read B4 = 1), Gearbox=2, a gear held by hand, EngineShare above 0 and the game's gear not 0. The detour reads <i>s</i> from the vehicle's own wheels: the mean of
 the driven wheels' float ω in the gear's direction, floored at 0 (<code>TorqueCutSpeeds</code>). A failed read takes the slot's last <i>s</i>.</p>
+<p>Where the cut does not act the torque factor carries the lift, and a factor worked out for one gear never stands in another.
+The first write after the mod takes a truck is the game's own share, and the lift comes with the second pass. Where the mod
+orders a shift, a factor above the game's own share is written down to it before the gear is set (<code>TorqueHandShift</code>;
+with the probe on, the line <code>probe: torque factor down for the shift:</code>). While that shift is out and the game's
+engaged gear is not yet the one asked, no factor is raised. The new gear's lift is written at once when it is engaged. The
+automatic's input and engine figure stop at the tachometer's top, and on a figure that stood there it shifts up one gear, never
+two.</p>
 <p>With rpm = max(<i>s</i>, 0)/top · redline: <i>F</i> = <i>p</i> · (E(rpm) · min(1, limit/<i>p</i>) − load) · held − (1 − <i>p</i>) · brake · clamp((rpm − idle)/(redline − idle), 0, 1).
 Here <i>p</i> is the raw pedal (TruckPedal, linear as the game's pull) and E the curve times the governor (a numbered gear's; where the guard acts the ceiling above governs): 1 up to 1.1 − max(0.1, <code>kGovernWidth</code>/top) of the redline, then a straight line to 0 at 1.1, the needle's stop
 (<code>CutGovernBand</code>, <code>kTachOverrun</code>; <code>kGovernWidth</code> 0.8 rad/s by the closed loop at 60 Hz: 0.6 chatters in L- floored in soft mud, 1.0 settles there in 9.4 s at 0.85 of the top, 0.8 in 2.1 s at 0.93; so L- 0.81 to 1.1, 1st and up 1.0 to 1.1). brake is <code>EngineBrake</code>/100. With the

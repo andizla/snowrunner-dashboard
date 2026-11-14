@@ -9001,7 +9001,10 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                                                                               spinMost),
                                                                         s.engineShare / 100.0f),
                                                             w.profile.torque),
-                                                 dt, raw.gearEngaged, locked, byspin.loose));
+                                                 dt, raw.gearEngaged, locked, byspin.loose,
+                                                 // a shift the mod ordered is out and the game's engaged gear is not yet the one
+                                                 // asked: the lift here is the old gear's, so nothing is raised (part 172)
+                                                 (w.stage.stage == kStageAsked || w.stage.stage == kStageSet) && raw.gearEngaged != w.stage.gear));
             // the chassis push (BRIEF_chassis_push.md): the game's pull this factor was written for, GameFall at its x times
             // the pedal, and the factor over the game's own share, for the drive's hook to take the surplus of the push back
             const bool pushOn = want && !cutActs && w.hand.on && w.hand.game > 0.0f && s.pushShare < 100;
@@ -9262,6 +9265,17 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             w.creep.share = w.creep.hold = w.creep.given = 0.0f;
             w.creep.armed = false;
             static unsigned shiftNumber = 0;
+            // the factor down to the game's own share before the gear is set (BRIEF_drive_1114_findings.md, part 172,
+            // must 1): the old gear's lift never stands in the new gear. Only where the shift is ordered now
+            auto factorDown = [&]() {
+                float stood = 0.0f;
+                const TorqueOrders down = TorqueHandShift(w.hand, &stood);
+                if (!down.write) return;
+                TorqueGive(m, w.refs, true, down);
+                if (probe)
+                    Log(L"probe: torque factor down for the shift: %.2f stood in gear %d, the game's own %.2f written before gear %d is set", stood, raw.gear, down.factor,
+                        shiftTo);
+            };
             char context[192];
             snprintf(context, sizeof context, "by %s (%s, clutch %s, %.1f m/s, creep %.2f, stall %.2f)", w.pos.byShifter ? "the game's shifter" : "the bindings",
                      GearboxPosName(w.pos.pos), w.pos.clutch ? "down" : "up", boxTruck.speed, creepWas, raw.stall);
@@ -9270,6 +9284,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 // posted for the truck update; one still out holds this pass's shift back, and the next pass asks again
                 if (g_shiftJob.state == kShiftIdle)
                 {
+                    factorDown();
                     g_shiftJob.number = ++shiftNumber;
                     strncpy_s(g_shiftJob.context, context, _TRUNCATE);
                     ShiftJobPost(g_shiftJob, w.refs.vehicle, w.refs.action, true, raw.gear, shiftTo, jobFlag, jobPower, jobFactor, TruckUpdateFrames(), now);
@@ -9279,7 +9294,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 else w.pos.lastSet = INT_MIN;
                 jobFlag = jobPower = false;
             }
-            else if (GameShift(w.refs.vehicle, shiftTo))
+            else if (factorDown(), GameShift(w.refs.vehicle, shiftTo))
             {
                 ShiftStageAsk(w.stage, shiftTo, w.stallWaits);
                 ShiftStageResult(w.stage, true);

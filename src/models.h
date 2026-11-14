@@ -2159,8 +2159,12 @@ struct TorqueOrders
 // (BRIEF_low_gear_sway.md, the Reviewer's addendum point 3): the window opens on a pass the wheels broke loose (loose,
 // SpinLiftStep), so the rise as they catch is paced, and a fall along the fade opens nothing; the ground path keeps the
 // cut (the surge fix of 28 October).
+// The factor of one gear never stands in another (BRIEF_drive_1114_findings.md, part 172): the first write after the
+// hand takes the truck is no more than the game's own share, and the lift comes with the second pass; and with
+// shifting (a shift the mod ordered is out, the game's engaged gear not yet the one asked) no factor is raised, since
+// the lift worked out here is still the old gear's. A lower one is written as ever.
 inline TorqueOrders TorqueHandStep(TorqueHand &h, bool want, uint64_t action, uint64_t vehicle, float read, float lift, float dt = 0.0f, int gear = 0,
-                                   bool byLoose = false, bool loose = false)
+                                   bool byLoose = false, bool loose = false, bool shifting = false)
 {
     TorqueOrders o = {};
     const float share = isfinite(read) && read > 0.0f ? fminf(read, 1.0f) : 1.0f;
@@ -2175,9 +2179,15 @@ inline TorqueOrders TorqueHandStep(TorqueHand &h, bool want, uint64_t action, ui
         h = TorqueHand{};
         if (!want || !action) return o;
     }
-    if (!h.on) h = TorqueHand{ true, action, vehicle, carried, carries ? read : -1.0f }; // what it reads is what the mod wrote: no write due
+    if (!h.on)
+    {
+        h = TorqueHand{ true, action, vehicle, carried, carries ? read : -1.0f }; // what it reads is what the mod wrote: no write due
+        h.paced = carries; // a rebuilt action is the same truck still in the hand: its next write is no first one
+    }
     else if (fabsf(read - h.written) > 1e-4f) h.game = share; // the game wrote its own, as engine damage moved it
     float factor = h.game * lift;
+    if (!h.paced) factor = fminf(factor, h.game);                       // the first write: the game's own share at the most
+    else if (shifting && factor > h.written) factor = h.written;        // a shift is out: nothing is raised
     const bool newGear = gear != h.gear;
     h.gear = gear;
     if (h.cutFor > 0.0f) h.cutFor -= dt;
@@ -2196,6 +2206,20 @@ inline TorqueOrders TorqueHandStep(TorqueHand &h, bool want, uint64_t action, ui
         h.written = factor;
         h.paced = true;
     }
+    return o;
+}
+
+// Where the mod sets a game gear the factor goes down first (BRIEF_drive_1114_findings.md, part 172, must 1): a factor
+// standing above the game's own share is written down to it before the shift is ordered, so the old gear's lift never
+// meets the new gear. Never raised here. was: the factor it stood at, for the probe. The pass after writes nothing
+// higher while the shift is out (TorqueHandStep's shifting), and the new gear's lift at once when it is engaged.
+inline TorqueOrders TorqueHandShift(TorqueHand &h, float *was = nullptr)
+{
+    TorqueOrders o = {};
+    if (!h.on || !(h.written > h.game + 1e-4f)) return o;
+    if (was) *was = h.written;
+    o = TorqueOrders{ true, h.action, h.vehicle, h.game };
+    h.written = h.game;
     return o;
 }
 
@@ -2566,7 +2590,15 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     // not shift up and back. The wheels as they turn now, not smoothed: a scout's first gear is through in a second, a
     // quarter of it in the smoothing's lag. The limiter goes by this too (pastIn)
     const bool setOff = engine && m.gear <= start && !slow;
-    const float byUp = footOff || m.grip <= 0.0f ? by : setOff ? raw : fminf(raw, onGround * kSlipUp);
+    // with the mod's engine no shift is decided on a figure above the tachometer's top (BRIEF_drive_1114_findings.md,
+    // part 172, must 3): the wheels' speed the shifts up go by stops where this gear's input is at that top, and from
+    // there it is one gear up, the next decided on its own reading (a first gear's free wheels read 15020 rpm and took
+    // the gear after the next)
+    const float tachTop = fmaxf(k.max, k.redline), gearTopNow = TruckGearTop(t, m.gear);
+    const float stopAt = engine && gearTopNow > 0.0f && k.redline > 0.0f ? gearTopNow * tachTop / k.redline : INFINITY;
+    const float byUpFree = footOff || m.grip <= 0.0f ? by : setOff ? raw : fminf(raw, onGround * kSlipUp);
+    const bool overTop = fmaxf(by, byUpFree) > stopAt;
+    const float byUp = fminf(byUpFree, stopAt), byMost = fminf(fmaxf(by, byUpFree), stopAt);
     // a lower gear the engine can take at the speed the wheels turn
     auto fits = [&](int gear) { return GearboxInput(t, k, gear, rolling) < most; };
     // what a gear pulls in the game at this speed, against the others
@@ -2581,7 +2613,7 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     // the wheels as they turn too (byUp): the smoothed speed lags a quick truck's by a fifth of a short gear
     const float limit = engine ? GearboxPoint(k, kEngineLimit) : k.redline;
     auto pastIn = [&](int gear) {
-        return engine ? GearboxInput(t, k, gear, fmaxf(by, byUp)) >= limit || (m.grip > 0.0f && GearboxInput(t, k, gear, rolling) >= limit)
+        return engine ? GearboxInput(t, k, gear, byMost) >= limit || (m.grip > 0.0f && GearboxInput(t, k, gear, fminf(rolling, stopAt)) >= limit)
                       : GearboxInput(t, k, gear, by) > k.redline || (m.grip > 0.0f && !fits(gear));
     };
     // that, or a gear the pedal would shift up from
@@ -2594,6 +2626,7 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     // box goes through its gears faster than a shift a second; with the mod's engine one at a time, but past the limiter
     auto upTo = [&](int gear) {
         int g = gear + 1;
+        if (overTop) return g; // the figure stood at the tachometer's top: one gear, never two on it
         while (g < top && !(engine && m.keepFor > 0.0f && g >= m.keep) && (engine ? pastIn(g) : upFrom(g))) g++;
         return g;
     };
@@ -2668,7 +2701,7 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     }
     if (standing) m.liftUpFor = m.liftBlock = m.liftBlockWait = 0.0f;
     const bool kept = engine && m.keepFor > 0.0f && m.gear >= m.keep;
-    const bool overRed = GearboxInput(t, k, m.gear, fmaxf(by, byUp)) >= (k.redline + fmaxf(k.max, k.redline)) * 0.5f;
+    const bool overRed = GearboxInput(t, k, m.gear, byMost) >= (k.redline + fmaxf(k.max, k.redline)) * 0.5f;
     // the net under a wrong top (BRIEF_gear_tops_per_truck.md point 3, the Reviewer's point 4): in A, a numbered gear
     // below the top one, the power factor whole, no shift in its pause, floored, the game's pull at nothing and the
     // wheels gaining under kPlateauSteady over kTopStuckFor: the game holds the gear at its top, whatever the mod takes
@@ -2835,6 +2868,7 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     // a press never opens it (review 11: from a low cruise a press lifted the unlock point over the input and flared
     // the engine); with the game's own engine both are shares of the red zone, as before
     m.input = GearboxInput(t, k, m.gear, m.spin);
+    if (engine && m.input > tachTop) m.input = tachTop; // the figure stops at the tachometer's top
     const float lockAt = engine ? k.idle * kLockIdle + (k.redline * kLockFrom - k.idle * kLockIdle) * SettingsRange((m.feel - kLockLight) / (1.0f - kLockLight), 0.0f, 1.0f)
                                 : k.redline * kLockFrom;
     const float unlockAt = engine ? k.idle * (footOff ? kUnlockCoast : kUnlockIdle) : k.redline * kUnlockBelow;
@@ -2849,6 +2883,7 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     else if (m.locked && m.input < unlockAt) m.locked = false;
     if (!shifting) m.relock = false;
     m.rpm = m.locked ? fmaxf(m.input, k.idle) : open;
+    if (engine && m.rpm > tachTop) m.rpm = tachTop;
     // what the rules went by, for the probe
     m.upAt = GearboxUpPoint(t, k, m.gear, feel, hand);
     m.downAt = GearboxDownPoint(t, k, m.gear, feel, hand);
