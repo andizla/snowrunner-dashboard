@@ -664,6 +664,22 @@ static float IniFloat(const wchar_t *key, float def, const std::wstring &ini) { 
 static bool g_oldPlainClass = false; // Gauges.ini holds a TachClass of an older build: said once a run (LogSettings)
 static int IniInt(const wchar_t *key, int def, const std::wstring &ini) { return (int)GetPrivateProfileIntW(kIniSection, key, def, ini.c_str()); }
 static bool IniBool(const wchar_t *key, bool def, const std::wstring &ini) { return IniInt(key, def ? 1 : 0, ini) != 0; }
+// [Gauges] DefaultsMoved (BRIEF_release_answers_1115.md, 199 and 200, the Reviewer's addendum of 00:34): a whole number,
+// the moves of defaults the ini has had. Every save before 0.19.0 wrote PhysicsRate=60 and CutInA=0 whether chosen or
+// not, so an ini under 1 reads neither key: both take the new defaults (120 and on), and the move is written once
+// (DefaultsMoveWrite). Each save writes the mark, so what a player sets after it holds. RateStart and the load both go
+// by this one function. A later move of a default writes 2 with its own list and reads "under 2".
+static const int kDefaultsMoved = 1;
+static bool IniDefaultsMoved(const std::wstring &ini) { return IniInt(L"DefaultsMoved", 0, ini) >= kDefaultsMoved; }
+// PhysicsRate as the start and the load both take it: as written where the mark is, else 120 (a key missing reads 120 too)
+static int RateAsked(const std::wstring &ini) { return IniDefaultsMoved(ini) ? IniInt(L"PhysicsRate", kRateFast, ini) : kRateFast; }
+// The move's words: the keys that changed, "" none. rateWas and cutWas: what the file held.
+static void DefaultsMoveWords(int rateWas, bool cutWas, wchar_t *what, size_t n)
+{
+    *what = 0;
+    if (rateWas != kRateFast) _snwprintf_s(what, n, _TRUNCATE, L"PhysicsRate %d to 120", rateWas);
+    if (!cutWas) wcsncat_s(what, n, *what ? L" and CutInA 0 to 1" : L"CutInA 0 to 1", _TRUNCATE);
+}
 
 // Text as UTF-8 (the game's names, such as Grüntal Hollow), or byte by byte where it is not valid UTF-8.
 static std::wstring Wide(const char *s)
@@ -962,6 +978,7 @@ static void WriteIni(const GaugeSettings &s)
     whole(L"SoundsOnly", s.soundsOnly ? 1 : 0);
     whole(L"DieselFlutter", s.dieselFlutter ? 1 : 0);
     whole(L"PhysicsRate", s.physicsRate);
+    whole(L"DefaultsMoved", kDefaultsMoved); // the defaults of 0.19.0 are in this file (IniDefaultsMoved)
     whole(L"Demo", s.demo ? 1 : 0);
     whole(L"Probe", s.probe);
     if (s.checkers) whole(L"Checkers", 1); // in no ini until the board was opened once
@@ -1115,6 +1132,23 @@ static bool IniHas(const std::vector<std::wstring> &sections, const std::wstring
     for (const auto &s : sections)
         if (!_wcsicmp(s.c_str(), name.c_str())) return true;
     return false;
+}
+
+// An ini without the mark (IniDefaultsMoved): the three keys into the file at once, so the file and the tab agree from
+// the first start and a hand edit after it holds; one line that names the keys that changed. A file that cannot be
+// written moves again at the next start, and the line says so.
+static void DefaultsMoveWrite(const std::wstring &ini)
+{
+    const int rateWas = IniInt(L"PhysicsRate", kRateStock, ini);
+    const bool cutWas = IniBool(L"CutInA", false, ini);
+    wchar_t mark[16];
+    _snwprintf_s(mark, _TRUNCATE, L"%d", kDefaultsMoved);
+    const bool put = WritePrivateProfileStringW(kIniSection, L"PhysicsRate", L"120", ini.c_str()) && WritePrivateProfileStringW(kIniSection, L"CutInA", L"1", ini.c_str()) &&
+                     WritePrivateProfileStringW(kIniSection, L"DefaultsMoved", mark, ini.c_str());
+    wchar_t what[96];
+    DefaultsMoveWords(rateWas, cutWas, what, 96);
+    Log(L"settings: an ini from before 0.19.0: %s, once (DefaultsMoved=%d)%s", *what ? what : L"nothing to move", kDefaultsMoved,
+        put ? L"" : L"; Gauges.ini could not be written, so the move acts again at the next start");
 }
 
 // Writes the regions' sections with their first temperatures when the ini has no map section at all. An ini from
@@ -1344,7 +1378,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; AirEmptyAtStart=1: a truck with air brakes first driven after the game starts has empty tanks and stands on its spring brakes until they fill. A truck keeps its air between drives (AirBar in its [Odometer:<id>]).\n"
                         L"; AirBrakes in a truck file (the Air brakes box of the Engine tab): 1 the truck has brake air and spring brakes, 0 it has none. No key: every truck but a scout has them, by the class the mod automatic goes by for it.\n"
                         L"; ModEngineSpeed=1 (with Powertrain, on by default): the game tachometer, sound and effects follow the mod engine; its fuel burn and stall check keep the game's own.\n"
-                        L"; CutInA=1 (a test, off by default; the Mod work tab's Mod engine in A): in A the truck pulls with the mod engine alone through the converter, as a held gear does, at Gearbox=1 and 2.\n"
+                        L"; CutInA=1 (on by default; the Mod work tab's Mod engine in A): in A the truck pulls with the mod engine alone through the converter, as a held gear does, at Gearbox=1 and 2.\n"
                         L";   EngineSpeedTop: the mod engine speed the game reads as its top, as a share of the redline, 0.5 to 1.5 (1: the redline; idle is its 0).\n"
                         L";   Base1.<engine>, Base2.<engine> ... in a truck's file: each gear's acceleration at the game's own pull, floored, learned.\n"
                         L"; Creep=1: an idling truck on an automatic moves to walking pace; the brake holds it. By default only where an automatic picks the gear.\n"
@@ -1355,7 +1389,9 @@ static void ReadIni(GaugeSettings &s)
                         L";   Torque: how much of its torque the truck gets, 10 to 100 percent (100 when not set). Lower it for an RLM-like engine with several times a stock engine's torque.\n"
                         L"; A truck's own Torque.<engine>, EngineBrake.<engine>, GearHold.<gearbox>, Creep.<gearbox> and CreepManual.<gearbox>: [Engine] of its file in Gauges\\trucks (every truck of the kind) or [Engine:<id>] (one truck), with Own; before the two files above, and EngineBrake, Creep and CreepManual here are for a truck with none of its own.\n"
                         L"; Mod work: Demo=1 draws demo values whenever no truck is driven, Probe=1 logs the values read from the game.\n"
-                        L"; PhysicsRate: 60 or 120 (60). A test: 120 steps the physics 120 times a second. Single player only. Read once at the start.\n"
+                        L"; PhysicsRate: 60 or 120 (120). 120 steps the physics 120 times a second, 60 as the game does. 120 is for single player:\n"
+                        L";   for co-op set 60 on every machine and start the game again. Read once at the start.\n"
+                        L"; DefaultsMoved: written by the mod. An ini without it is from before 0.19.0 and takes PhysicsRate=120 and CutInA=1 once.\n"
                         L";   PhysicsIterations (with 120, no box): 0 the mod choice (2), 2 or 4 solver iterations a step. Add the key by hand.\n"
                         L"; KeepLogs: how many of the last starts' logs Gauges\\logs keeps (20; at most 500 MB of them; 0 keeps all).\n");
             fclose(f);
@@ -1365,6 +1401,8 @@ static void ReadIni(GaugeSettings &s)
         return;
     }
     MapDefaultsWrite();
+    const bool defaultsMoved = IniDefaultsMoved(ini); // read before the move writes the mark
+    if (!defaultsMoved) DefaultsMoveWrite(ini);
     int moved[kSetupKinds];
     SetupsMove(moved);
     if (moved[kSetupTruck] || moved[kSetupGearbox])
@@ -1435,7 +1473,7 @@ static void ReadIni(GaugeSettings &s)
     s.winchOutRate = IniFloat(L"WinchOutRate", s.winchOutRate, ini);
     s.winchSag = IniInt(L"WinchSag", s.winchSag, ini);
     s.modEngineSpeed = IniBool(L"ModEngineSpeed", s.modEngineSpeed, ini);
-    s.cutInA = IniBool(L"CutInA", s.cutInA, ini);
+    if (defaultsMoved) s.cutInA = IniBool(L"CutInA", s.cutInA, ini); // without the mark the default of 0.19.0 (IniDefaultsMoved)
     s.engineSpeedTop = IniFloat(L"EngineSpeedTop", s.engineSpeedTop, ini);
     s.roadCdA = IniFloat(L"RoadCdA", s.roadCdA, ini);
     s.engineShare = IniInt(L"EngineShare", s.engineShare, ini);
@@ -1520,7 +1558,7 @@ static void ReadIni(GaugeSettings &s)
     s.soundVolume = IniInt(L"SoundVolume", s.soundVolume, ini);
     s.soundsOnly = IniBool(L"SoundsOnly", s.soundsOnly, ini);
     s.dieselFlutter = IniBool(L"DieselFlutter", s.dieselFlutter, ini);
-    s.physicsRate = IniInt(L"PhysicsRate", s.physicsRate, ini);
+    if (defaultsMoved) s.physicsRate = IniInt(L"PhysicsRate", s.physicsRate, ini); // as CutInA above
     s.demo = IniBool(L"Demo", s.demo, ini);
     s.probe = IniInt(L"Probe", s.probe, ini);
     s.checkers = IniBool(L"Checkers", s.checkers, ini);
@@ -5647,7 +5685,7 @@ static void LogSettings(const GaugeSettings &s)
                           TorqueCutWanted(s) ? L"in a gear held by hand the torque cut: the mod engine alone, no cut at the gear's top" : L"no torque cut (it needs Gearbox=2, EngineShare above 0 and ModEngineSpeed=1)",
                           s.modEngineSpeed ? L"the mod engine's (ModEngineSpeed=1; the fuel's and the stall's calls keep the game's own, by the cut's own pull under the cut)" : L"its own (ModEngineSpeed=0)");
         if (s.cutInA)
-            Log(L"settings: CutInA=1, a test: in A the torque cut answers too, at Gearbox=1 and 2, %s", TorqueCutWanted(s) ? L"and its settings are met" : L"but its other settings are not met (Powertrain, ModEngineSpeed, EngineShare above 0, Gearbox 1 or 2)");
+            Log(L"settings: CutInA=1: in A the torque cut answers too, at Gearbox=1 and 2, %s", TorqueCutWanted(s) ? L"and its settings are met" : L"but its other settings are not met (Powertrain, ModEngineSpeed, EngineShare above 0, Gearbox 1 or 2)");
         Log(L"settings: diff lock bite %d (DiffLockBite; 0 the game's lock, 100 one shaft), the differential's type %d (DiffType; 0 Auto, 1 Open, 2 Limited slip, 3 Locked), low range slip %d (LowRangeSlip; 0 the gear's own wheel cap in L-, L and R, 100 the cap of the highest low gear)", s.diffLockBite, s.diffType, s.lowRangeSlip);
         if (s.drivelineInertia != 0)
             Log(L"driveline inertia: %d percent (DrivelineInertia, a figure of the tuning tool; 0 the game's own): where the torque cut answers with the clutch or the converter locked, "
@@ -10129,7 +10167,7 @@ static void RateStart()
 {
     const std::wstring ini = IniPath();
     bool known = true;
-    const int asked = IniInt(L"PhysicsRate", kRateStock, ini);
+    const int asked = RateAsked(ini); // the same default and the same move as the load, so the tab and the game step alike
     const int rate = RateOf(asked, known);
     if (!known) Log(L"physics rate: PhysicsRate=%d in Gauges.ini is neither 60 nor 120: read as 60", asked);
     if (rate != kRateFast) return;
@@ -10255,7 +10293,7 @@ static void RateStart()
     g_rateNow = kRateFast;
     g_rateSubstanceAt = plan.substanceAt;
     for (int q = 0; q < kRateQuads; q++) g_rateQuadAt[q] = plan.quadAt[q];
-    Log(L"physics rate: 120 steps a second (PhysicsRate=120; a test, single player only), on look %d: the step at +%zx, the drive's wheel impulse at +%zx, its chassis push at +%zx, "
+    Log(L"physics rate: 120 steps a second (PhysicsRate=120; single player only), on look %d: the step at +%zx, the drive's wheel impulse at +%zx, its chassis push at +%zx, "
         L"the overspeed brake at +%zx, the readout's shares at +%zx, the substance action's four 60s for its lift and drag at +%zx and for a wheel at +%zx and +%zx; each now reads the mod's own float "
         L"(a page at %llx, read only), the game's floats are as they were. "
         L"The solver's iterations at +%zx: %s. The world's owner's static at +%zx. The wheels' drive hooked at +%zx: MaxDeltaAngVel and EngineResponsiveness are halved around each call",
@@ -10494,7 +10532,7 @@ static DWORD WINAPI Run(void *)
     // (BRIEF_overlay_late_hook.md). Nothing is drawn until OverlayInit below.
     g_overlayOk = OverlayHooks();
     LogGameFolder();
-    RateStart(); // the physics rate test mode: at 60 one key read, nothing else
+    RateStart(); // the physics rate: at 60 two keys read, nothing else
     SettingsDefaults(g_set); // what the tab shows until the ini is read
     OverlayInit(g_self);
     g_exeSize = ImageSize(); // where the exe ends, which the engine damage write keeps out of
@@ -12234,8 +12272,9 @@ static void PartIni()
     Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.hotDamageFrom == kTempRed && d.coldDamage == 5.0f && d.overRevDamage == 10.0f && d.stallDamage == 5.0f && d.clutchBurn && d.clutchHeat == 60.0f &&
               d.springFront == 1.0f && d.dampingFront == 1.0f && d.extraTravel == 0.0f && d.frameFlex == 1.0f && d.twistRange == 1.0f,
           "defaults: the radiator's full airflow from 30 km/h, engine damage on from the red zone, 10 percent a minute for the heat and 5 for the cold");
-    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.walkSkipsLow && d.positionsByGearbox && !d.ignoreShifter && d.backToA == 0 && d.gameGearDisplay == kGameGearOffOwn && d.input == kInputWheel && !d.powertrain && d.roadLoad && d.wheelCap == 150 && d.pushShare == 0 && d.diffLockBite == 0 && d.lockSteerFront == 60 && d.lockSteerRear == 85 && d.lowRangeSlip == 100 && d.diffType == 0 && d.physicsRate == 60 && d.engineBrake == 15.0f && d.modEngineSpeed && d.engineSpeedTop == 1.0f && d.roadCdA == 0.0f && d.engineShare == 50 && d.creep && !d.creepManual && !d.dieselFlutter,
-          "defaults: the oil as a second needle, warm after 5 minutes, too hot from 120 C; the standard turbo, a diesel's lift without the flutter; the creep on");
+    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.walkSkipsLow && d.positionsByGearbox && !d.ignoreShifter && d.backToA == 0 && d.gameGearDisplay == kGameGearOffOwn && d.input == kInputWheel && !d.powertrain && d.roadLoad && d.wheelCap == 150 && d.pushShare == 0 && d.diffLockBite == 0 && d.lockSteerFront == 60 && d.lockSteerRear == 85 && d.lowRangeSlip == 100 && d.diffType == 0 && d.physicsRate == 120 && d.cutInA && d.engineBrake == 15.0f && d.modEngineSpeed && d.engineSpeedTop == 1.0f && d.roadCdA == 0.0f && d.engineShare == 50 && d.creep && !d.creepManual && !d.dieselFlutter,
+          "defaults: the oil as a second needle, warm after 5 minutes, too hot from 120 C; the standard turbo, a diesel's lift without the flutter; the creep on; the physics at 120 and "
+          "the mod engine in A on");
 
     // Air drag on by default (BRIEF_defaults_on.md): a missing key gives 1, an explicit 0 stays 0, the defaults give 1
     {
@@ -12252,6 +12291,62 @@ static void PartIni()
         SettingsDefaults(back);
         Check(missing.roadLoad && !zero.roadLoad && back.roadLoad, "defaults: Air drag on with the key missing, an explicit RoadLoad=0 stays off, and the defaults give it on");
         WriteIni(back); // the ini as the tests below find it, with its help text
+    }
+    // the defaults of 0.19.0 (BRIEF_release_answers_1115.md, 199 and 200; the Reviewer's addendum of 00:34): an ini
+    // without DefaultsMoved reads PhysicsRate and CutInA as 120 and on and holds the three keys after the read; with
+    // the mark they read as written; a choice of 60 saved holds; the start's reading (RateAsked) agrees with the load
+    {
+        GaugeSettings r;
+        SettingsDefaults(r);
+        auto oldIni = [&](const wchar_t *rate, bool mark) {
+            WriteIni(r);
+            WritePrivateProfileStringW(kIniSection, L"DefaultsMoved", mark ? L"1" : nullptr, ini.c_str());
+            WritePrivateProfileStringW(kIniSection, L"PhysicsRate", rate, ini.c_str());
+            WritePrivateProfileStringW(kIniSection, L"CutInA", L"0", ini.c_str());
+        };
+        oldIni(L"60", false);
+        const int startOld = RateAsked(ini);
+        GaugeSettings old;
+        ReadIni(old);
+        const bool oldMoved = startOld == 120 && old.physicsRate == 120 && old.cutInA && IniInt(L"PhysicsRate", 0, ini) == 120 && IniInt(L"CutInA", 0, ini) == 1 &&
+                              IniInt(L"DefaultsMoved", 0, ini) == 1 && RateAsked(ini) == 120;
+        oldIni(L"60", true);
+        GaugeSettings marked;
+        ReadIni(marked);
+        const bool markKept = marked.physicsRate == 60 && !marked.cutInA && RateAsked(ini) == 60 && IniInt(L"PhysicsRate", 0, ini) == 60 && IniInt(L"CutInA", 1, ini) == 0;
+        oldIni(L"120", false);
+        GaugeSettings at120;
+        ReadIni(at120);
+        wchar_t both[96], cutOnly[96], none[96];
+        DefaultsMoveWords(60, false, both, 96);
+        DefaultsMoveWords(120, false, cutOnly, 96);
+        DefaultsMoveWords(120, true, none, 96);
+        const bool words = at120.physicsRate == 120 && at120.cutInA && !wcscmp(both, L"PhysicsRate 60 to 120 and CutInA 0 to 1") && !wcscmp(cutOnly, L"CutInA 0 to 1") && !*none;
+        // a choice of 60 and the box off after the move, saved and read
+        GaugeSettings chose = old;
+        chose.physicsRate = 60, chose.cutInA = false;
+        WriteIni(chose);
+        GaugeSettings back;
+        ReadIni(back);
+        const bool choiceHolds = back.physicsRate == 60 && !back.cutInA && RateAsked(ini) == 60 && IniInt(L"DefaultsMoved", 0, ini) == 1;
+        // a hand edit of 90 with the mark: 60, in the load and at the start
+        WritePrivateProfileStringW(kIniSection, L"PhysicsRate", L"90", ini.c_str());
+        GaugeSettings odd;
+        ReadIni(odd);
+        bool known = true;
+        const bool oddSixty = odd.physicsRate == 60 && RateOf(RateAsked(ini), known) == 60 && !known;
+        // no ini: 120 at the start, the defaults, and the mark with the first write
+        DeleteFileW(ini.c_str());
+        const int startNone = RateAsked(ini);
+        GaugeSettings fresh;
+        ReadIni(fresh);
+        const bool noIni = startNone == 120 && fresh.physicsRate == 120 && fresh.cutInA && IniInt(L"DefaultsMoved", 0, ini) == 1 && RateAsked(ini) == 120;
+        if (!(oldMoved && markKept && words && choiceHolds && oddSixty && noIni))
+            printf("     defaults moved: old %d marked %d words %d (%ls / %ls) choice %d odd %d none %d\n", oldMoved, markKept, words, both, cutOnly, choiceHolds, oddSixty, noIni);
+        Check(oldMoved && markKept && words && choiceHolds && oddSixty && noIni,
+              "defaults of 0.19.0: an ini without DefaultsMoved reads 120 and Mod engine in A on and holds them and the mark after the start; with the mark 60 and off stay; the line names "
+              "only the keys that changed; a choice of 60 saved holds; a hand edit of 90 reads 60; no ini is 120 and gets the mark; the start and the load agree");
+        WriteIni(r); // the ini as the tests below find it
     }
     // the Crawl hold went with the torque cut (BRIEF_drivetrain_2_torque_cut.md): an old CrawlHold= is read as nothing and
     // dropped at the next write; EngineBrake round trips and is held to 0 to 30
@@ -12489,11 +12584,11 @@ static void PartIni()
         const bool oldHeld = !wcscmp(TorqueCutWhyNot(ga, true, false, true, 2, 2.0f), L"no gear held by hand (A drives, or the mod's gearbox does not have the truck)");
         GaugeSettings fresh = {};
         SettingsDefaults(fresh);
-        const bool gateAll = asBefore && offNeverA && aAtOne && heldAtOne && aAtTwo && notA && noHooks && landing && neutral && noPos && gameBox && oldWords && oldHeld && !fresh.cutInA;
+        const bool gateAll = asBefore && offNeverA && aAtOne && heldAtOne && aAtTwo && notA && noHooks && landing && neutral && noPos && gameBox && oldWords && oldHeld && fresh.cutInA;
         if (!gateAll)
             printf("     asBefore %d offNeverA %d aAtOne %d heldAtOne %d aAtTwo %d notA %d noHooks %d landing %d neutral %d noPos %d gameBox %d oldWords %d oldHeld %d\n", asBefore, offNeverA, aAtOne,
                    heldAtOne, aAtTwo, notA, noHooks, landing, neutral, noPos, gameBox, oldWords, oldHeld);
-        Check(gateAll, "torque cut in A: with CutInA off (the default) the gate is the rule as it was at every level and input, and A never counts; on, A acts at Gearbox=1 and 2 and a held gear "
+        Check(gateAll, "torque cut in A: with CutInA off (on by default) the gate is the rule as it was at every level and input, and A never counts; on, A acts at Gearbox=1 and 2 and a held gear "
                        "only at 2, never at Gearbox=0, with the hooks missing, in neutral or while the game's gear and the position disagree by sign, each with its words");
     }
     // keys the mod does not know, in its own section and in another one
@@ -12581,9 +12676,9 @@ static void PartIni()
     c.lowRangeSlip = 40;
     c.heldGearSlip = 1;
     c.diffType = 2;
-    c.physicsRate = 120;
+    c.physicsRate = 60;
     c.modEngineSpeed = false;
-    c.cutInA = true;
+    c.cutInA = false;
     c.engineSpeedTop = 1.25f;
     c.roadCdA = 2.5f;
     c.engineShare = 80;
@@ -12602,7 +12697,7 @@ static void PartIni()
                             c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.overRevDamage != d.overRevDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springFront != d.springFront && c.dampingFront != d.dampingFront && c.extraTravel != d.extraTravel && c.frameFlex != d.frameFlex && c.twistRange != d.twistRange && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
                             c.demo != d.demo && c.checkers != d.checkers && c.probe != d.probe && c.keepLogs != d.keepLogs && c.soundVolume != d.soundVolume && c.hiddenWarnings != d.hiddenWarnings && c.warnFuel != d.warnFuel && c.warnEngine != d.warnEngine && c.warnGearbox != d.warnGearbox && c.warnCoolant != d.warnCoolant && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
-                            c.gearbox != d.gearbox && c.cutInA != d.cutInA && !d.cutInA && c.gearRatioPull != d.gearRatioPull && d.gearRatioPull == 0 && c.engineInertia != d.engineInertia && c.drivelineInertia != d.drivelineInertia && d.engineInertia == 0 && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.diffLockBite != d.diffLockBite && c.quickWinch != d.quickWinch && c.lockSteerFront != d.lockSteerFront && c.lockSteerRear != d.lockSteerRear && c.engineSoundTop != d.engineSoundTop && c.engineSoundCurve != d.engineSoundCurve && c.heldGearSlip != d.heldGearSlip && c.lowRangeSlip != d.lowRangeSlip && c.diffType != d.diffType && c.physicsRate != d.physicsRate && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
+                            c.gearbox != d.gearbox && c.cutInA != d.cutInA && d.cutInA && c.physicsRate != d.physicsRate && c.gearRatioPull != d.gearRatioPull && d.gearRatioPull == 0 && c.engineInertia != d.engineInertia && c.drivelineInertia != d.drivelineInertia && d.engineInertia == 0 && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.diffLockBite != d.diffLockBite && c.quickWinch != d.quickWinch && c.lockSteerFront != d.lockSteerFront && c.lockSteerRear != d.lockSteerRear && c.engineSoundTop != d.engineSoundTop && c.engineSoundCurve != d.engineSoundCurve && c.heldGearSlip != d.heldGearSlip && c.lowRangeSlip != d.lowRangeSlip && c.diffType != d.diffType && c.physicsRate != d.physicsRate && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
     WriteIni(c);
     ReadIni(b);
     Check(allChanged, "ini: the test changes every setting from its default");
@@ -12623,7 +12718,7 @@ static void PartIni()
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 170, "ini: the help text survives a write (170 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 172, "ini: the help text survives a write (172 comment lines)");
     // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
     {
         char none[32] = "x", tab[32] = {}, kept[32] = {};

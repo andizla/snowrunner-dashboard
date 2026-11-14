@@ -1752,12 +1752,12 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             PageTip(testTip);
         }
 
-        ImGui::SeparatorText("Test");
+        ImGui::SeparatorText("Drive");
         PageLabel("Physics rate", labelX);
         changed(ImGui::RadioButton("60###physicsrate60", &s.physicsRate, 60));
         ImGui::SameLine();
         changed(ImGui::RadioButton("120###physicsrate120", &s.physicsRate, 120));
-        PageTip("Steps the physics 120 times a second. A test. Needs a restart. Single player only.");
+        PageTip("Steps the physics 120 times a second. 60 turns it off. Needs a restart. For co-op set 60 on every machine.");
         {
             const char *note = view.rateNote == kRateNoteOff    ? "120 was asked and is not running. Gauges.log says why."
                                : view.rateNote == kRateNoteIter ? "Running at 120 with other solver iterations than asked. Gauges.log has the figures."
@@ -1772,10 +1772,10 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             else if (view.rateNow == 120 && view.rateWinch == kRateWinchIn) ImGui::TextDisabled("Winch pull: right at 120.");
             else if (view.rateNow == 120 && view.rateWinch == kRateWinchRefused) ImGui::TextDisabled("Winch pull: too fast at 120 (not corrected, see the log).");
         }
-        // the automatic on the mod drivetrain, part A: a test the driver switches, acting at once
+        // the automatic on the mod drivetrain, part A: on by default from 0.19.0 (200), switched at once
         PageLabel("Mod engine in A", labelX);
         changed(ImGui::Checkbox("##cutina", &s.cutInA));
-        PageTip("In A the truck pulls with the mod engine alone, through the converter, as a held gear already does. The Diff rows then act in A too. A test. Needs Real engine, Mod engine speed and the mod automatic or the mod gearbox. Off by default.");
+        PageTip("In A the truck pulls with the mod engine alone, through the converter, as a held gear already does. The Diff rows then act in A too. Needs Real engine, Mod engine speed and the mod automatic or the mod gearbox. On by default.");
 
         ImGui::Separator();
         if (ImGui::Button("Defaults"))

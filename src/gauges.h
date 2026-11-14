@@ -139,7 +139,7 @@ struct GaugeSettings
     int input;               // Input: what the pedal is: 0 a wheel's pedals, 1 a pad's trigger, 2 keys. The mod's automatic kicks down by it
     bool powertrain;         // Powertrain: the engine's torque (its curve, the cold oil, the boost) and the converter's handed to the game
     bool roadLoad;           // RoadLoad: with Powertrain, the air's drag taken off the torque handed to the game (models.h, road load); on by default
-    bool cutInA;             // CutInA: a test (BRIEF_drivetrain_3_a_on_our_chain.md, part A): in A the torque cut answers too, the truck pulling with the mod engine alone through the converter; off: A on the old chain, as before
+    bool cutInA;             // CutInA (BRIEF_drivetrain_3_a_on_our_chain.md, part A; on by default from 0.19.0, BRIEF_release_answers_1115.md, 200): in A the torque cut answers too, the truck pulling with the mod engine alone through the converter; off: A on the old chain, as before
     bool modEngineSpeed;     // ModEngineSpeed: with Powertrain, the game's engine speed (its tachometer, sound and effects) is the mod engine's (gearbox_hooks.h, EngineSpeedHook); on by default
     float engineSpeedTop;    // EngineSpeedTop: the mod engine's speed the game reads as its 1, as a share of the redline, 0.5 to 1.5 (1: the redline)
     int diffLockBite;        // DiffLockBite: with Powertrain, how firmly the diff lock ties the driven wheels together, 0 (the game's lock) to 100 (one shaft), 0
@@ -222,7 +222,7 @@ struct GaugeSettings
     bool dieselFlutter;      // DieselFlutter: a diesel's lift flutters too; off, it is quiet, or plays the player's own turbo whistle files (review 12, finding 6)
     int toggleKey;           // ToggleKey: virtual key code of the key that hides and shows the cluster, 0 = none
     char padToggle[32];      // PadToggle: pad buttons that do the same ("LB+DPadUp"), "None"
-    int physicsRate;         // PhysicsRate: 60 or 120, a test (physics_rate.h): read once at the start, a change acts at the next one
+    int physicsRate;         // PhysicsRate: 60 or 120, 120 by default from 0.19.0 (physics_rate.h; BRIEF_release_answers_1115.md, 199): read once at the start, a change acts at the next one
     bool demo;               // Demo: for work on the mod: demo values are drawn whenever no truck is driven, menus and loading screens included
     int probe;               // Probe: for work on the mod: the values read from the game go into Gauges.log (0 = off)
     int keepLogs;            // KeepLogs: how many of the last starts' logs Gauges\logs keeps, at most 500 MB of them; 0 keeps all
@@ -257,7 +257,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.engineBrake = 15.0f; // kEngineBrakeDefault (BRIEF_drivetrain_2_torque_cut.md)
     s.winchSag = 0;
     s.winchOutRate = 0.5f; // kWinchRateDefault (winch_out.h)
-    s.cutInA = false; // ships off until it is driven
+    s.cutInA = true; // on from 0.19.0 (200); it acts only with Gearbox 1 or 2, the Powertrain and an engine share above 0
     s.modEngineSpeed = true; // on by default (BRIEF_drivetrain_1_engine_speed.md); an explicit 0 stays 0
     s.heldGearSlip = kSlipAllGears; // the user, 2026-11-14: All gears is how a held gear behaves; no row on the tab, a figure of the tuning tool (BRIEF_jobs_1114.md, part 170)
     s.wheelCap = 150; // kCapDefault (BRIEF_drivetrain_2c_wheel_cap.md with M5)
@@ -321,7 +321,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.warnCoolant = 90;
     s.soundVolume = 50;
     strncpy_s(s.padToggle, "None", _TRUNCATE);
-    s.physicsRate = 60;
+    s.physicsRate = 120; // from 0.19.0 (199); 60 turns it off
     s.demo = false;
     s.checkers = false;
     s.probe = 0;

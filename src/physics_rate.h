@@ -1,5 +1,6 @@
-// The physics rate test mode, stage 1 (BRIEF_physics_rate_stage1.md with the Reviewer's addendum): the game's physics
-// stepped 120 times a second in place of 60. A test, off by default, read once at the start. Pure: the plan is made on
+// The physics rate, stage 1 (BRIEF_physics_rate_stage1.md with the Reviewer's addendum): the game's physics stepped
+// 120 times a second in place of 60. On by default from 0.19.0 (BRIEF_release_answers_1115.md, 199), 60 turns it
+// off; single player only; read once at the start. Pure: the plan is made on
 // a copy of the exe, the writes go through the caller's read and write, the halving works on a block handed in.
 //
 // At PhysicsRate=60 nothing here is called but RateOf and IterationsOf.
@@ -8,8 +9,9 @@
 // (one page within 2 GB of the exe, filled once, then read only). The game's own floats are never written: the 1/60
 // alone has 20 other readers. The solver's iteration count is an immediate in the code and is written there.
 //
-// The idea of a higher physics rate, and the first map of what has to be scaled, come from True 240Hz Physics Patch by
-// alounana on mod.io. No bytes, figures or text of that patch are here.
+// The idea of stepping the physics more often comes from WrexTheOnly. A first list of what has to be scaled came from
+// reading True 240Hz Physics Patch by alounana. The mode is built from the game itself and is not based on either. No
+// bytes, figures or text of that patch are here.
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
