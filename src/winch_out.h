@@ -31,6 +31,74 @@ static const uint64_t kWinchActiveAt = 0x8C9; // the game's second active byte
 static const uint64_t kWinchOwnAt = 0x8F0;    // the winch's own length, metres
 static const uint64_t kWinchCraneAt = 0x904;  // the winch is a crane's: the game's own control pays out there
 
+// ---- the drawn wire's sag, a probe (BRIEF_jobs_1114.md, part 164, and the Reviewer's addendum of 2026-11-14 00:21;
+// review\research_winch_slack.md) ----
+// The wire on screen is its own object at [vehicle + 0x8D0], 0x80 bytes, made anew inside every call of the set at
+// the span of that moment, so it is drawn straight however long the limit is. The probe, behind Probe=1 and the ini
+// key WinchSag (1 or 2), on the one build its offsets are from: right after the set's call, on the game's thread,
+// the link's length (rope + 0x30) is written longer by the limit over the length the rope was made with (rope + 0x5C),
+// 1.5 times at the most. With WinchSag=2 the rope's length is written too. The count of links, every pointer and
+// every other byte are never written. The pointer is read fresh after each call and never kept.
+static const uint32_t kWinchSagStamp = 0x6adb8627; // the game build the two offsets are from; on any other the key does nothing
+static const uint64_t kWinchDrawnAt = 0x8D0;       // the vehicle's drawn rope, null with none
+enum { kDrawnSize = 0x80, kDrawnLinkAt = 0x30, kDrawnLengthAt = 0x5C };
+static_assert(kDrawnLinkAt + 4 <= kDrawnSize && kDrawnLengthAt + 4 <= kDrawnSize, "the probe's two writes stay inside the drawn rope's 0x80 bytes");
+static const float kSagLengthLeast = 0.05f; // m: a drawn rope is at least this long
+static const float kSagOver = 0.03f;        // the drawn rope's length may pass the limit read back by this share at the most
+static const float kSagWhole = 0.01f;       // its length over a link's is a whole number to within this
+static const float kSagFactorMost = 1.5f;   // the probe makes a link this many times longer at the most
+static const int kSagLinksMost = 4096;      // more links than this is no rope (a wide bound until the first log fixes one)
+// What a check says. kSagWrite: write; kSagNone: nothing to write, the limit is not above the rope's length; every
+// other one is a failed check and ends the probe's writes for the session.
+enum { kSagWrite, kSagNone, kSagNoRope, kSagNoRead, kSagLimit, kSagLength, kSagOverLimit, kSagLink, kSagCount, kSagNoWrite, kSagReasons };
+inline const char *WinchSagWhy(int why)
+{
+    static const char *const names[kSagReasons] = { "a write", "nothing to write", "the drawn rope is not there", "a read failed", "the limit read back is no length",
+                                                    "the rope's length is no number or out of range", "the rope's length is over the limit read back",
+                                                    "the link's length is no number or not above 0", "the rope's length over a link's is no whole count of links",
+                                                    "a write failed" };
+    return why >= 0 && why < kSagReasons ? names[why] : "?";
+}
+// Whether the probe may write: both keys, and the one build (musts 4, 7 and 9).
+inline int WinchSagMode(bool probe, int key, uint32_t stamp) { return probe && stamp == kWinchSagStamp && (key == 1 || key == 2) ? key : 0; }
+struct WinchSagPlan
+{
+    int why;          // kSagWrite, or why not
+    float link;       // what goes to rope + 0x30
+    float length;     // what goes to rope + 0x5C where writeLength
+    bool writeLength; // mode 2
+    float factor;     // the link's length times this, 1 to kSagFactorMost
+    int links;        // the rope's links as its two floats give them
+    float linkWas, lengthWas;
+};
+// The check, pure: the rope's 0x80 bytes as read in one go (null: none), the limit the game's read gave after the
+// set, the set's cap and the mode. The rope's length must be a number from 0.05 m to the cap and not above the limit
+// by more than 3 percent: a chain made at the span is never longer than the limit, and it is shorter by the slack
+// itself. A link's length must be above 0 and the length over it a whole count from 2 to kSagLinksMost.
+inline WinchSagPlan WinchSagCheck(const uint8_t *rope, float limit, float cap, int mode)
+{
+    WinchSagPlan p = { kSagNoRope, 0.0f, 0.0f, false, 1.0f, 0, NAN, NAN };
+    if (!rope) return p;
+    memcpy(&p.linkWas, rope + kDrawnLinkAt, 4);
+    memcpy(&p.lengthWas, rope + kDrawnLengthAt, 4);
+    if (!isfinite(limit) || !(limit >= kSagLengthLeast) || !isfinite(cap) || !(limit <= cap)) return p.why = kSagLimit, p;
+    if (!isfinite(p.lengthWas) || !(p.lengthWas >= kSagLengthLeast) || !(p.lengthWas <= cap)) return p.why = kSagLength, p;
+    if (p.lengthWas > limit * (1.0f + kSagOver)) return p.why = kSagOverLimit, p;
+    if (!isfinite(p.linkWas) || !(p.linkWas > 0.0f)) return p.why = kSagLink, p;
+    const float count = p.lengthWas / p.linkWas, whole = roundf(count);
+    if (!isfinite(count) || fabsf(count - whole) > kSagWhole || whole < 2.0f || whole > (float)kSagLinksMost) return p.why = kSagCount, p;
+    p.links = (int)whole;
+    float factor = limit / p.lengthWas;
+    if (!(factor > 1.0f)) return p.why = kSagNone, p;
+    if (factor > kSagFactorMost) factor = kSagFactorMost;
+    p.factor = factor;
+    p.link = p.linkWas * factor;
+    p.length = p.lengthWas * factor; // the limit itself, but where the factor was held: the links times the count stay the length
+    p.writeLength = mode == 2;
+    p.why = mode == 1 || mode == 2 ? kSagWrite : kSagNone;
+    return p;
+}
+
 inline LONG WinchBits(float f)
 {
     LONG b;
@@ -62,14 +130,101 @@ struct WinchOutJob
     volatile LONG pullBits;               // the length read under the game's pull (read only, no call), no number until there is one
     LONG holdSeen;                  // the frame's own
     float lastAsked;
+    // the drawn wire's sag (the probe of part 164). The mod's thread writes sagMode (WinchSagMode); the rest is the frame's
+    volatile LONG sagMode;
+    volatile LONG sagStop;          // a failed check, read or write, by its reason: no more writes in this session
+    volatile LONG sagWrites, sagNone; // the frames with a write, and with nothing to write
+    volatile LONG sagKept, sagBack; // the next frame found the link's length as written, or not (the game put it back or made the rope anew)
+    volatile LONG sagLinkWas, sagLengthWas, sagLinkNow, sagLengthNow; // the two floats before the last write and read back after it
+    volatile LONG sagLinkNext, sagLengthNext; // the two floats as the next frame found them, before its own call
+    volatile LONG sagLimitBits, sagFactorBits, sagLinks;
+    volatile LONG sagDumpHold;      // the hold whose first write's 0x80 bytes are in sagDump (set after the copy)
+    uint8_t sagDump[kDrawnSize];
+    float sagWrote;                 // the frame's own: the link's length it wrote last, 0 none in this hold
 };
+// The game's two functions behind the caller's fault guards: the read gives no number where it faulted, the set false.
+typedef float (*WinchGetFn)(uint64_t vehicle);
+typedef bool (*WinchSetFn)(uint64_t vehicle, float length);
+// Before the frame's call of the set: what the frame before wrote, as the game left it. Reads only.
+inline void WinchSagBefore(WinchOutJob &j, const TruckMemory &m, uint64_t vehicle)
+{
+    if (!j.sagMode || j.sagStop || !(j.sagWrote > 0.0f)) return;
+    uint64_t rope = 0;
+    uint8_t bytes[kDrawnSize];
+    if (!m.get(vehicle + kWinchDrawnAt, rope) || (rope && (rope < 0x10000 || !m.peek(rope, bytes, sizeof bytes))))
+    {
+        InterlockedExchange(&j.sagStop, kSagNoRead);
+        return;
+    }
+    float link = NAN, length = NAN;
+    if (rope) memcpy(&link, bytes + kDrawnLinkAt, 4), memcpy(&length, bytes + kDrawnLengthAt, 4);
+    InterlockedExchange(&j.sagLinkNext, WinchBits(link));
+    InterlockedExchange(&j.sagLengthNext, WinchBits(length));
+    InterlockedIncrement(rope && link == j.sagWrote ? &j.sagKept : &j.sagBack);
+    j.sagWrote = 0.0f;
+}
+// Right after the set's call, on the game's thread: the limit read back, the rope's pointer read fresh, its 0x80
+// bytes read in one go and checked, then the write or writes and both floats read back. No log, no heap, no lock.
+// False where the game's read faulted (the caller ends Winch out for the session).
+inline bool WinchSagFrame(WinchOutJob &j, const TruckMemory &m, uint64_t vehicle, float own, WinchGetFn get)
+{
+    const int mode = j.sagMode;
+    if ((mode != 1 && mode != 2) || j.sagStop) return true;
+    const float limit = get(vehicle);
+    if (!isfinite(limit)) return false;
+    uint64_t rope = 0;
+    uint8_t bytes[kDrawnSize];
+    if (!m.get(vehicle + kWinchDrawnAt, rope) || (rope && (rope < 0x10000 || !m.peek(rope, bytes, sizeof bytes))))
+    {
+        InterlockedExchange(&j.sagStop, kSagNoRead);
+        return true;
+    }
+    const WinchSagPlan p = WinchSagCheck(rope ? bytes : nullptr, limit, own > 50.0f ? own : 50.0f, mode);
+    InterlockedExchange(&j.sagLimitBits, WinchBits(limit));
+    if (p.why == kSagNone)
+    {
+        InterlockedIncrement(&j.sagNone);
+        return true;
+    }
+    if (p.why != kSagWrite)
+    {
+        InterlockedExchange(&j.sagStop, p.why);
+        return true;
+    }
+    if (j.sagDumpHold != j.hold)
+    {
+        memcpy(j.sagDump, bytes, sizeof bytes);
+        InterlockedExchange(&j.sagDumpHold, j.hold);
+    }
+    InterlockedExchange(&j.sagLinkWas, WinchBits(p.linkWas));
+    InterlockedExchange(&j.sagLengthWas, WinchBits(p.lengthWas));
+    InterlockedExchange(&j.sagFactorBits, WinchBits(p.factor));
+    InterlockedExchange(&j.sagLinks, p.links);
+    if (!m.put(rope + kDrawnLinkAt, p.link) || (p.writeLength && !m.put(rope + kDrawnLengthAt, p.length)))
+    {
+        InterlockedExchange(&j.sagStop, kSagNoWrite);
+        return true;
+    }
+    float link = NAN, length = NAN;
+    if (!m.get(rope + kDrawnLinkAt, link) || !m.get(rope + kDrawnLengthAt, length))
+    {
+        InterlockedExchange(&j.sagStop, kSagNoRead);
+        return true;
+    }
+    InterlockedExchange(&j.sagLinkNow, WinchBits(link));
+    InterlockedExchange(&j.sagLengthNow, WinchBits(length));
+    InterlockedIncrement(&j.sagWrites);
+    j.sagWrote = p.link;
+    return true;
+}
 
 // On the mod's thread, each pass. on: the key may act (bound, both functions found, the truck update hooked, no
 // fault). step: above 0 only with Probe=1. vehicle: the driven truck's, 0 none. held and pressed: the key on this pass, false wherever the keys are not
 // heard (the menu, a capture, the game not in front).
-inline void WinchOutPost(WinchOutJob &j, bool on, uint64_t vehicle, bool held, bool pressed, float rate, float step, unsigned long long now)
+inline void WinchOutPost(WinchOutJob &j, bool on, uint64_t vehicle, bool held, bool pressed, float rate, float step, unsigned long long now, int sag = 0)
 {
     if (!on || !vehicle) held = pressed = false, vehicle = 0;
+    InterlockedExchange(&j.sagMode, sag); // WinchSagMode's: 0 unless Probe=1, the key and the one build
     InterlockedExchange(&j.rateBits, WinchBits(rate));
     InterlockedExchange(&j.stepBits, WinchBits(step));
     InterlockedExchange64(&j.vehicle, (LONG64)vehicle);
@@ -79,9 +234,6 @@ inline void WinchOutPost(WinchOutJob &j, bool on, uint64_t vehicle, bool held, b
     if (pressed && step > 0.0f) InterlockedExchange(&j.press, 1);
 }
 
-// The game's two functions behind the caller's fault guards: the read gives no number where it faulted, the set false.
-typedef float (*WinchGetFn)(uint64_t vehicle);
-typedef bool (*WinchSetFn)(uint64_t vehicle, float length);
 
 // On the game's thread, every frame of its truck update, before the update: first is the update's first argument (the
 // vehicle at + 0x20), dt its step in seconds. True where a call was made.
@@ -109,6 +261,7 @@ inline bool WinchOutFrame(WinchOutJob &j, const TruckMemory &m, uint64_t first, 
     {
         j.holdSeen = j.hold;
         j.lastAsked = 0.0f;
+        j.sagWrote = 0.0f;
         InterlockedExchange(&j.firstBits, WinchBits(NAN));
         InterlockedExchange(&j.pullBits, WinchBits(NAN));
     }
@@ -150,9 +303,15 @@ inline bool WinchOutFrame(WinchOutJob &j, const TruckMemory &m, uint64_t first, 
     if (!m.get(vehicle + kWinchOwnAt, own) || !isfinite(own) || !(own > 0.0f)) return none(j.noOwn);
     const float ask = length + (byStep ? step : rate * d); // never under the length read: the set can shorten a rope (N7)
     if (ask > own) return none(j.atEnd);
+    WinchSagBefore(j, m, vehicle);
     if (!set(vehicle, ask))
     {
         InterlockedExchange(&j.fault, 2);
+        return false;
+    }
+    if (!WinchSagFrame(j, m, vehicle, own, get))
+    {
+        InterlockedExchange(&j.fault, 1);
         return false;
     }
     InterlockedIncrement(&j.calls);

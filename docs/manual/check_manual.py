@@ -29,8 +29,10 @@ SKIP = ('docs/manual/', 'test/', 'out/', 'deps/')
 # log line. They are left out of the lists. Nothing else is: a name not here is listed as before.
 HIDDEN_NAMES = {('Checkers', 'key'), ('BindCheckers', 'key'), ('Checkers', 'tab'),
                 # the tuning tool's Gear ratio pull (BRIEF_jobs_1114.md, 161, must 6): in no tab and in no manual until its default is set
-                ('GearRatioPull', 'key')}
-HIDDEN_LOG = ('checkers: ', 'gear ratio pull:', 'probe: gear ratio pull:')
+                ('GearRatioPull', 'key'),
+                # the drawn winch wire's sag, a probe (BRIEF_jobs_1114.md, 164, must 7): in no tab and in no manual
+                ('WinchSag', 'key')}
+HIDDEN_LOG = ('checkers: ', 'gear ratio pull:', 'probe: gear ratio pull:', 'winch sag:', 'WINCH SAG:')
 
 
 def hidden(name, kind):

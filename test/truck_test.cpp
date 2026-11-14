@@ -75,7 +75,13 @@ static void FakeOnFrame(void *first, float step) { g_frameFirst = (LONG64)first,
 static float g_ropeLength = 0.0f, g_ropeAsked[32];
 static int g_ropeReads = 0, g_ropeSets = 0;
 static bool g_ropeSetFaults = false;
-static float FakeRopeGet(uint64_t) { g_ropeReads++; return g_ropeLength; }
+static int g_ropeNanAfter = -1; // the read gives no number once this many reads were made (-1 never): the read after the set faulting
+static float FakeRopeGet(uint64_t)
+{
+    if (g_ropeNanAfter >= 0 && g_ropeReads >= g_ropeNanAfter) return g_ropeReads++, NAN;
+    g_ropeReads++;
+    return g_ropeLength;
+}
 static bool FakeRopeSet(uint64_t, float length)
 {
     if (g_ropeSetFaults) return false;
@@ -5152,6 +5158,135 @@ static void TruckTestsFour()
         Check(offNot && noTruck && setFault && callsEnded && getFault && wanted,
               "winch out: with it off or no truck the job rests whatever the key does; a fault in the set or the read ends the calls; the truck update is asked "
               "for with the action bound alone, at any Gearbox and with no Probe, and not while it is not bound");
+
+        // the drawn wire's sag, the probe (winch_out.h; BRIEF_jobs_1114.md part 164). The check alone (the addendum's S1):
+        // a rope of 32 links of 0.25 m, 8 m, under a limit of 9.6 m
+        {
+            uint8_t drawn[kDrawnSize] = {};
+            auto floats = [&](float link, float length) { memcpy(drawn + kDrawnLinkAt, &link, 4), memcpy(drawn + kDrawnLengthAt, &length, 4); };
+            floats(0.25f, 8.0f);
+            const WinchSagPlan one = WinchSagCheck(drawn, 9.6f, 50.0f, 1), two = WinchSagCheck(drawn, 9.6f, 50.0f, 2), farOut = WinchSagCheck(drawn, 16.0f, 50.0f, 2);
+            const bool writes = one.why == kSagWrite && !one.writeLength && close(one.link, 0.3f) && close(one.factor, 1.2f) && one.links == 32 && one.linkWas == 0.25f &&
+                                one.lengthWas == 8.0f && two.why == kSagWrite && two.writeLength && close(two.length, 9.6f) && close(two.link, 0.3f);
+            const bool heldTo = farOut.why == kSagWrite && farOut.factor == kSagFactorMost && close(farOut.link, 0.375f) && close(farOut.length, 12.0f);
+            const bool nothing = WinchSagCheck(drawn, 8.0f, 50.0f, 1).why == kSagNone && WinchSagCheck(drawn, 7.9f, 50.0f, 1).why == kSagNone &&
+                                 WinchSagCheck(drawn, 9.6f, 50.0f, 0).why == kSagNone;
+            bool refusals = WinchSagCheck(nullptr, 9.6f, 50.0f, 1).why == kSagNoRope && WinchSagCheck(drawn, NAN, 50.0f, 1).why == kSagLimit &&
+                           WinchSagCheck(drawn, 60.0f, 50.0f, 1).why == kSagLimit && WinchSagCheck(drawn, 0.01f, 50.0f, 1).why == kSagLimit &&
+                           WinchSagCheck(drawn, 7.0f, 50.0f, 1).why == kSagOverLimit;
+            floats(0.25f, NAN);
+            refusals = refusals && WinchSagCheck(drawn, 9.6f, 50.0f, 1).why == kSagLength;
+            floats(0.25f, 50.5f);
+            refusals = refusals && WinchSagCheck(drawn, 50.0f, 50.0f, 1).why == kSagLength;
+            floats(0.01f, 0.02f);
+            refusals = refusals && WinchSagCheck(drawn, 9.6f, 50.0f, 1).why == kSagLength;
+            floats(NAN, 8.0f);
+            refusals = refusals && WinchSagCheck(drawn, 9.6f, 50.0f, 1).why == kSagLink;
+            floats(0.0f, 8.0f);
+            refusals = refusals && WinchSagCheck(drawn, 9.6f, 50.0f, 1).why == kSagLink;
+            floats(0.26f, 8.0f);
+            refusals = refusals && WinchSagCheck(drawn, 9.6f, 50.0f, 1).why == kSagCount;
+            floats(8.0f, 8.0f);
+            refusals = refusals && WinchSagCheck(drawn, 9.6f, 50.0f, 1).why == kSagCount;
+            floats(0.001f, 8.0f);
+            refusals = refusals && WinchSagCheck(drawn, 9.6f, 50.0f, 1).why == kSagCount;
+            const bool modes = WinchSagMode(true, 1, kWinchSagStamp) == 1 && WinchSagMode(true, 2, kWinchSagStamp) == 2 && !WinchSagMode(false, 1, kWinchSagStamp) &&
+                               !WinchSagMode(false, 2, kWinchSagStamp) && !WinchSagMode(true, 0, kWinchSagStamp) && !WinchSagMode(true, 3, kWinchSagStamp) &&
+                               !WinchSagMode(true, 1, 0x6ab52f5d) && !WinchSagMode(true, 2, 0x6a607c05);
+            Check(writes && heldTo && nothing && refusals && modes,
+                  "winch sag, the check: a link longer by the limit over the wire's length, the length too at 2, x1.5 at the most; nothing to write at or under the wire's "
+                  "length; refusals: no rope, a limit or a length that is no number or out of range, a length over the limit, a link of 0 or no number, a count that is not "
+                  "whole or under 2 or too large; the mode needs Probe, the key at 1 or 2 and the one build");
+        }
+        // the frame: the drawn rope in made-up memory at [vehicle + 0x8D0]
+        {
+            const uint64_t ropeDrawn = 0x7A5000000ull;
+            Block(ropeDrawn, 0x100);
+            Put(ropeTruck + kWinchDrawnAt, ropeDrawn);
+            uint8_t before[0x100], afterBytes[0x100];
+            auto freshRope = [&](float link, float length) {
+                for (int i = 0; i < 0x100; i += 4) Put(ropeDrawn + i, (uint32_t)(0xA0000000u + i));
+                Put(ropeDrawn + kDrawnLinkAt, link);
+                Put(ropeDrawn + kDrawnLengthAt, length);
+                kMemory.peek(ropeDrawn, before, sizeof before);
+            };
+            auto same = [&](int but1, int but2) {
+                kMemory.peek(ropeDrawn, afterBytes, sizeof afterBytes);
+                for (int i = 0; i < 0x100; i++)
+                    if (afterBytes[i] != before[i] && !(but1 >= 0 && i >= but1 && i < but1 + 4) && !(but2 >= 0 && i >= but2 && i < but2 + 4)) return false;
+                return true;
+            };
+            auto floatAt = [&](uint64_t at) {
+                float f = NAN;
+                kMemory.get(ropeDrawn + at, f);
+                return f;
+            };
+            // off: with Probe=1 and the key at 0, and with the key set and Probe off, a call is made and not one byte is written (musts 7 and 9)
+            bool offBoth = true;
+            const int offModes[2] = { WinchSagMode(true, 0, kWinchSagStamp), WinchSagMode(false, 2, kWinchSagStamp) };
+            for (int k = 0; k < 2; k++)
+            {
+                anew();
+                freshRope(0.25f, 8.0f);
+                WinchOutPost(job, true, ropeTruck, true, true, 0.5f, 0.0f, 1000, offModes[k]);
+                offBoth = offBoth && frame(tick, 1000) && g_ropeSets == 1 && g_ropeReads == 1 && same(-1, -1) && !job.sagWrites && !job.sagStop;
+            }
+            // mode 1: the link alone, right after the call, by the limit the game's read gave after the set
+            anew();
+            freshRope(0.25f, 8.0f);
+            WinchOutPost(job, true, ropeTruck, true, true, 0.5f, 0.0f, 1000, 1);
+            const bool call1 = frame(tick, 1000);
+            const float limit1 = 10.0f + 0.5f * tick;
+            const bool mode1 = call1 && g_ropeSets == 1 && g_ropeReads == 2 && job.sagWrites == 1 && !job.sagStop && close(floatAt(kDrawnLinkAt), 0.25f * limit1 / 8.0f) &&
+                               floatAt(kDrawnLengthAt) == 8.0f && same(kDrawnLinkAt, -1) && job.sagLinks == 32 && WinchFloat(job.sagLinkWas) == 0.25f &&
+                               close(WinchFloat(job.sagLinkNow), 0.25f * limit1 / 8.0f) && close(WinchFloat(job.sagLimitBits), limit1) && job.sagDumpHold == job.hold &&
+                               !memcmp(job.sagDump, before, kDrawnSize);
+            // the game makes the rope anew before the frame after, as it does inside every call: found, and written again.
+            // Then a rope the game left as the probe wrote it: found too, and its longer link against the old length is no
+            // whole count, so the check ends the writes there
+            freshRope(0.25f, 8.0f);
+            WinchOutPost(job, true, ropeTruck, true, false, 0.5f, 0.0f, 1016, 1);
+            const bool back = frame(tick, 1016) && !job.sagKept && job.sagBack == 1 && WinchFloat(job.sagLinkNext) == 0.25f && job.sagWrites == 2;
+            WinchOutPost(job, true, ropeTruck, true, false, 0.5f, 0.0f, 1032, 1);
+            const bool kept = frame(tick, 1032) && job.sagKept == 1 && job.sagBack == 1 && job.sagWrites == 2 && job.sagStop == kSagCount;
+            // mode 2: the length too, and nothing else
+            anew();
+            freshRope(0.25f, 8.0f);
+            WinchOutPost(job, true, ropeTruck, true, true, 0.5f, 0.0f, 1000, 2);
+            const bool mode2 = frame(tick, 1000) && job.sagWrites == 1 && close(floatAt(kDrawnLengthAt), limit1) && close(floatAt(kDrawnLinkAt), 0.25f * limit1 / 8.0f) &&
+                               same(kDrawnLinkAt, kDrawnLengthAt);
+            // a failed check: no write, its reason kept, and no more writes in this session though the rope is right again; Winch out itself goes on
+            anew();
+            freshRope(0.26f, 8.0f);
+            WinchOutPost(job, true, ropeTruck, true, true, 0.5f, 0.0f, 1000, 2);
+            const bool stopped = frame(tick, 1000) && job.sagStop == kSagCount && !job.sagWrites && same(-1, -1);
+            freshRope(0.25f, 8.0f);
+            WinchOutPost(job, true, ropeTruck, true, false, 0.5f, 0.0f, 1016, 2);
+            const int readsWas = g_ropeReads;
+            const bool stays = frame(tick, 1016) && g_ropeReads == readsWas + 1 && !job.sagWrites && same(-1, -1) && job.calls == 2 && !job.fault;
+            // no drawn rope, and one that cannot be read: each ends it
+            anew();
+            Put(ropeTruck + kWinchDrawnAt, (uint64_t)0);
+            WinchOutPost(job, true, ropeTruck, true, true, 0.5f, 0.0f, 1000, 1);
+            const bool ropeGone = frame(tick, 1000) && job.sagStop == kSagNoRope && !job.sagWrites;
+            anew();
+            Put(ropeTruck + kWinchDrawnAt, (uint64_t)0x7AF000000ull);
+            WinchOutPost(job, true, ropeTruck, true, true, 0.5f, 0.0f, 1000, 1);
+            const bool noRead = frame(tick, 1000) && job.sagStop == kSagNoRead && !job.sagWrites && !job.fault;
+            // the game's read faulting after the set ends Winch out, as a faulted read does
+            anew();
+            Put(ropeTruck + kWinchDrawnAt, ropeDrawn);
+            freshRope(0.25f, 8.0f);
+            WinchOutPost(job, true, ropeTruck, true, true, 0.5f, 0.0f, 1000, 1);
+            g_ropeNanAfter = 1;
+            const bool readFault = !frame(tick, 1000) && job.fault == 1 && !job.sagWrites && same(-1, -1);
+            g_ropeNanAfter = -1;
+            Put(ropeTruck + kWinchDrawnAt, (uint64_t)0);
+            Check(offBoth && mode1 && kept && back && mode2 && stopped && stays && ropeGone && noRead && readFault,
+                  "winch sag, the frame: with Probe=1 and the key at 0, and with the key set and no Probe, not one byte is written; at 1 the link's length alone, right after "
+                  "the call, by the limit read back, the 0x80 bytes kept from before the first write; the frame after says whether the game left it; at 2 the length too and "
+                  "no other byte; a failed check, no rope and a failed read each end the writes for the session and Winch out goes on; a faulted read after the set ends Winch out");
+        }
 
         // the stop at the winch's own length (163, must 1): the rope goes to it and no further; no call where the own
         // length is 0, under 0 or no number, each counted

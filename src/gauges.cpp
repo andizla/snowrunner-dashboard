@@ -835,6 +835,7 @@ static void WriteIni(const GaugeSettings &s)
     WritePrivateProfileStringW(kIniSection, L"CrawlHold", nullptr, ini.c_str()); // the Crawl hold went with the torque cut: its key dropped
     num(L"EngineBrake", s.engineBrake);
     num(L"WinchOutRate", s.winchOutRate);
+    if (s.probe) whole(L"WinchSag", s.winchSag); // the sag probe's key (winch_out.h): in no ini until Probe=1
     whole(L"WheelCap", s.wheelCap);
     whole(L"LowRangeSlip", s.lowRangeSlip);
     whole(L"HeldGearSlip", s.heldGearSlip);
@@ -1387,6 +1388,7 @@ static void ReadIni(GaugeSettings &s)
     s.diffType = IniInt(L"DiffType", s.diffType, ini);
     s.engineBrake = IniFloat(L"EngineBrake", s.engineBrake, ini); // CrawlHold= is read no more: the torque cut took its place
     s.winchOutRate = IniFloat(L"WinchOutRate", s.winchOutRate, ini);
+    s.winchSag = IniInt(L"WinchSag", s.winchSag, ini);
     s.modEngineSpeed = IniBool(L"ModEngineSpeed", s.modEngineSpeed, ini);
     s.cutInA = IniBool(L"CutInA", s.cutInA, ini);
     s.engineSpeedTop = IniFloat(L"EngineSpeedTop", s.engineSpeedTop, ini);
@@ -5710,9 +5712,54 @@ static void OnTruckFrame(void *first, float step)
 //   each with what the frame counted in this hold.
 //   The mod keeps no length and no latch: with no key held it makes no call, so a released winch, a truck change and a
 //   recovery leave nothing of the mod behind (the Reviewer's addendum on 163).
+static DWORD ExeStamp();
 static void WinchOutPass(const GaugeSettings &s, uint64_t vehicle, bool held, bool pressed)
 {
     WinchOutJob &j = g_winchJob;
+    // the drawn wire's sag (winch_out.h, the probe of part 164): behind Probe=1 and WinchSag, on the one build
+    const int sagMode = WinchSagMode(s.probe != 0, s.winchSag, ExeStamp());
+    static bool sagSaidBuild = false, sagSaidStop = false, sagSaidOn = false;
+    static LONG sagDumpSaid = 0, sagFrom[4];
+    if (s.probe && s.winchSag && !sagMode && !sagSaidBuild)
+    {
+        sagSaidBuild = true;
+        Log(L"winch sag: WinchSag=%d does nothing on this build of the game (exe stamp %08lx): the probe's two offsets are of %08lx alone", s.winchSag, ExeStamp(), kWinchSagStamp);
+    }
+    if (sagMode && !sagSaidOn)
+    {
+        sagSaidOn = true;
+        Log(L"winch sag: WinchSag=%d, a probe: after each call of Winch out the drawn wire's link length (rope + 0x%x) is written longer by the limit over the wire's own length, x%.1f at "
+            L"the most%s; read and checked before each write, and a failed check ends it until the game is started again",
+            sagMode, (unsigned)kDrawnLinkAt, kSagFactorMost, sagMode == 2 ? L", and the wire's length (rope + 0x5c) with it" : L"; the wire's length is not written");
+    }
+    if (j.sagStop && !sagSaidStop)
+    {
+        sagSaidStop = true;
+        Log(L"WINCH SAG: stopped until the game is started again: %S. Nothing more is written into the drawn wire; the limit read back %.3f m, the wire's link %.5f m and length %.3f m at the last write",
+            WinchSagWhy(j.sagStop), WinchFloat(j.sagLimitBits), WinchFloat(j.sagLinkWas), WinchFloat(j.sagLengthWas));
+    }
+    auto sagSay = [&](const wchar_t *head) {
+        if (!sagMode) return;
+        if (j.sagDumpHold && j.sagDumpHold != sagDumpSaid)
+        {
+            // the 0x80 bytes before the first write of this hold, as hex words (the addendum's S2)
+            sagDumpSaid = j.sagDumpHold;
+            wchar_t words[kDrawnSize / 4 * 9 + 1];
+            int at = 0;
+            for (int i = 0; i < kDrawnSize / 4; i++)
+            {
+                uint32_t word;
+                memcpy(&word, j.sagDump + i * 4, 4);
+                at += swprintf_s(words + at, _countof(words) - at, L"%08x ", word);
+            }
+            Log(L"winch sag: the drawn wire before the first write of this hold, 0x80 bytes from + 0 as words: %s", words);
+        }
+        Log(L"winch sag: %s: mode %d, writes %ld, nothing to write %ld; the last write: the limit read back %.3f m, %ld links, x%.3f, the link %.5f m to %.5f m, the length %.3f m to %.3f m; "
+            L"the frame after found the link %.5f m and the length %.3f m: as written %ld times, not %ld times",
+            head, sagMode, j.sagWrites - sagFrom[0], j.sagNone - sagFrom[1], WinchFloat(j.sagLimitBits), j.sagLinks, WinchFloat(j.sagFactorBits), WinchFloat(j.sagLinkWas),
+            WinchFloat(j.sagLinkNow), WinchFloat(j.sagLengthWas), WinchFloat(j.sagLengthNow), WinchFloat(j.sagLinkNext), WinchFloat(j.sagLengthNext), j.sagKept - sagFrom[2],
+            j.sagBack - sagFrom[3]);
+    };
     static bool wasHeld = false, saidFault = false, saidWhy = false, saidFirst = false;
     static unsigned long long saidAt = 0;
     static uint64_t holdVehicle = 0;
@@ -5736,7 +5783,7 @@ static void WinchOutPass(const GaugeSettings &s, uint64_t vehicle, bool held, bo
     }
     const bool on = !why && g_winchBound;
     held = held && on && vehicle;
-    WinchOutPost(j, on, vehicle, held, pressed && on, s.winchOutRate, stepNow, now);
+    WinchOutPost(j, on, vehicle, held, pressed && on, s.winchOutRate, stepNow, now, sagMode);
     auto counts = [&](LONG out[13]) {
         const LONG v[13] = { j.frames, j.calls, j.skipPull, j.skipActive, j.noRope, j.noLength, j.crane, j.stale, j.zeroStep, j.shrunk, j.refused, j.noOwn, j.atEnd };
         memcpy(out, v, sizeof v);
@@ -5775,6 +5822,7 @@ static void WinchOutPass(const GaugeSettings &s, uint64_t vehicle, bool held, bo
     {
         const TruckMemory m = { PeekGame, g_base, PokeGame };
         counts(from);
+        sagFrom[0] = j.sagWrites, sagFrom[1] = j.sagNone, sagFrom[2] = j.sagKept, sagFrom[3] = j.sagBack;
         fromAsked = WinchFloat(j.askedBits), fromSteps = WinchFloat(j.stepSumBits);
         holdVehicle = vehicle, saidAt = now;
         pullWas = NAN, pullAt = now;
@@ -5801,9 +5849,9 @@ static void WinchOutPass(const GaugeSettings &s, uint64_t vehicle, bool held, bo
     else if (held && now - saidAt >= 1000)
     {
         saidAt = now;
-        if (s.probe) say(L"held");
+        if (s.probe) say(L"held"), sagSay(L"held");
     }
-    else if (!held && wasHeld && s.probe) say(holdVehicle && vehicle != holdVehicle ? L"ended, another truck or none" : L"released");
+    else if (!held && wasHeld && s.probe) say(holdVehicle && vehicle != holdVehicle ? L"ended, another truck or none" : L"released"), sagSay(L"released");
     wasHeld = held;
 }
 
@@ -11914,7 +11962,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.overRevDamage == b.overRevDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
            a.springFront == b.springFront && a.dampingFront == b.dampingFront && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange &&
            !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.checkers == b.checkers && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.hiddenWarnings == b.hiddenWarnings && a.warnFuel == b.warnFuel && a.warnEngine == b.warnEngine && a.warnGearbox == b.warnGearbox && a.warnCoolant == b.warnCoolant && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
-           a.oilGauge == b.oilGauge && a.cutInA == b.cutInA && a.gearRatioPull == b.gearRatioPull && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.quickWinch == b.quickWinch && a.lockSteerFront == b.lockSteerFront && a.lockSteerRear == b.lockSteerRear && a.engineSoundTop == b.engineSoundTop && a.engineSoundCurve == b.engineSoundCurve && a.heldGearSlip == b.heldGearSlip && a.lowRangeSlip == b.lowRangeSlip && a.diffType == b.diffType && a.physicsRate == b.physicsRate && a.engineBrake == b.engineBrake && a.winchOutRate == b.winchOutRate && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
+           a.oilGauge == b.oilGauge && a.cutInA == b.cutInA && a.gearRatioPull == b.gearRatioPull && a.winchSag == b.winchSag && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.quickWinch == b.quickWinch && a.lockSteerFront == b.lockSteerFront && a.lockSteerRear == b.lockSteerRear && a.engineSoundTop == b.engineSoundTop && a.engineSoundCurve == b.engineSoundCurve && a.heldGearSlip == b.heldGearSlip && a.lowRangeSlip == b.lowRangeSlip && a.diffType == b.diffType && a.physicsRate == b.physicsRate && a.engineBrake == b.engineBrake && a.winchOutRate == b.winchOutRate && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
            a.camberGainFront == b.camberGainFront && a.camberGainRear == b.camberGainRear && a.camberRestFront == b.camberRestFront && a.camberRestRear == b.camberRestRear &&
            !memcmp(a.diffAxle, b.diffAxle, sizeof a.diffAxle) && a.airBrakes == b.airBrakes;
 }
@@ -12014,6 +12062,32 @@ static void PartIni()
         Check(old.engineBrake == 22.0f && !wcscmp(kept, L"none") && high.engineBrake == 30.0f && back.engineBrake == 15.0f,
               "settings: an old CrawlHold= is ignored and dropped at the next write; EngineBrake 22 read back, 80 held to 30, 15 by default");
         WriteIni(back);
+    }
+    // the sag probe's key (winch_out.h; BRIEF_jobs_1114.md part 164, must 7): in no ini until Probe=1, read back, held to 0, 1 or 2
+    {
+        GaugeSettings plain;
+        SettingsDefaults(plain);
+        WritePrivateProfileStringW(kIniSection, L"WinchSag", nullptr, ini.c_str());
+        GaugeSettings asked = plain;
+        asked.winchSag = 2;
+        WriteIni(asked);
+        wchar_t noProbe[16] = L"", withProbe[16] = L"";
+        GetPrivateProfileStringW(kIniSection, L"WinchSag", L"none", noProbe, 16, ini.c_str());
+        asked.probe = 1;
+        WriteIni(asked);
+        GetPrivateProfileStringW(kIniSection, L"WinchSag", L"none", withProbe, 16, ini.c_str());
+        GaugeSettings sagBack, sagWide;
+        SettingsDefaults(sagBack);
+        ReadIni(sagBack);
+        SettingsClamp(sagBack);
+        WritePrivateProfileStringW(kIniSection, L"WinchSag", L"7", ini.c_str());
+        SettingsDefaults(sagWide);
+        ReadIni(sagWide);
+        SettingsClamp(sagWide);
+        WritePrivateProfileStringW(kIniSection, L"WinchSag", nullptr, ini.c_str());
+        WriteIni(plain);
+        Check(plain.winchSag == 0 && !wcscmp(noProbe, L"none") && !wcscmp(withProbe, L"2") && sagBack.winchSag == 2 && sagWide.winchSag == 0 && !SameSettings(plain, asked),
+              "settings: WinchSag is 0 by default and in no ini without Probe=1; with Probe=1 it is written and 2 read back; 7 is held to 0");
     }
     // Winch out's keys (winch_out.h; 163, must 6): WinchOutRate is every player's, WinchOutStep is written only with
     // Probe=1; both read back and held to their ranges; the binding's key is written as the other rows' are
