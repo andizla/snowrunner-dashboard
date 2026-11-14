@@ -586,7 +586,14 @@ Tire Inflation, та же коробка: верхние скорости её �
 разделе <code>[Engine]</code> своего файла (<code>[Engine:&lt;id&gt;]</code> для одного грузовика), как
 <code>Torque.&lt;engine&gt;</code> и <code>GearHold.&lt;gearbox&gt;</code>. Значение, которого у грузовика нет, берётся из файла
 двигателя или коробки, а без них 100 % и задержка класса. Строка In force под каждым ползунком говорит, откуда оно. Кнопка
-записывает оба значения в эти два файла. Когда игра пересоздаёт грузовик, его набор двигателя переходит к нему, как и набор
+записывает оба значения в эти два файла. <b>Engine braking</b> на вкладке Power и <b>Creep</b> с <b>Creep in held gear</b> на
+вкладке Gearbox хранятся так же, если менять их за рулём грузовика: Engine braking для установленного двигателя, как
+<code>EngineBrake.&lt;engine&gt;</code>, а две строки Creep вместе для установленной коробки, как
+<code>Creep.&lt;gearbox&gt;</code> и <code>CreepManual.&lt;gearbox&gt;</code>. Грузовик, для которого их не задавали, берёт
+значения из <code>Gauges.ini</code>. Их задают те же строки, пока вы не за рулём. Строки "In force:" и "Creep in force:" под
+ними говорят, откуда значение. Если у грузовика свой Creep включён, а Creep в <code>Gauges.ini</code> и Real engine выключены,
+строка говорит "Creep cannot act for this truck yet": включите Real engine. Defaults на вкладке Engine возвращает их к
+значениям <code>Gauges.ini</code>. Когда игра пересоздаёт грузовик, его набор двигателя переходит к нему, как и набор
 подвески. Профиль двигателя хранится там же, целиком, как <code>PeakTorqueRpm.&lt;engine&gt;</code>,
 <code>Aspiration.&lt;engine&gt;</code>, <code>Fuel.&lt;engine&gt;</code> и <code>TorqueCurve.&lt;engine&gt;</code>, и кнопка
 копирует его в файл двигателя. Набор одного грузовика привязан к id игры, а он может смениться при загрузке. Пока у мода нет
@@ -1622,7 +1629,7 @@ def s_range_air_tilt():
 целиком. Разделы: <code>[Profile]</code> (Version, Truck, Date, Engine, Gearbox, Notes, у копии Backup), <code>[Truck]</code>
 (семь шкал вместе или <code>ScalesOwn=0</code>, RoadCdA, AirAxles, OdometerHours, AirBrakes), <code>[Drive]</code> (DiffType и
 DiffAxle по осям, как в файле грузовика, DiffAxle2 для второй оси, иначе <code>DiffOwn=0</code>; DiffAxle9 считается неизвестным ключом), <code>[Suspension]</code> (весь действующий набор), <code>[Engine]</code>
-(Torque, GearHold, PeakTorqueRpm, Aspiration, Fuel, TorqueCurve без имени детали, только то, что есть на каком-либо уровне) и
+(Torque, GearHold, EngineBrake, Creep, CreepManual, PeakTorqueRpm, Aspiration, Fuel, TorqueCurve без имени детали, только то, что есть на каком-либо уровне) и
 <code>[Tire Inflation]</code> (Mode из файла мода шин; Import пишет его обратно в этот файл, только если файл есть и игра
 называет грузовик: Own=1 и Mode в собственный раздел грузовика, или один Mode в раздел модели; копия уровня без режима говорит
 <code>ModeOwn=0</code>). В файл никогда не попадают id грузовика, [Seen],
@@ -2031,7 +2038,12 @@ def s_files():
 грузовика: семь шкал (<code>Class IdleRpm RedlineRpm MaxRpm SpeedMax BoostMax BoostProfile</code>; <code>Class</code> только там, где
 класс выбран); ключ, который в файле есть, имеет приоритет над <code>[Gauges]</code>. Файл пишется, когда одну из них меняют на
 вкладке за рулём этого грузовика. Тип берётся из игры (model +0x588).</li>
-<li><code>Gauges\\gearboxes\\&lt;name&gt;.ini</code>, <code>[Gearbox]</code>: <code>GearHold</code>, от 1 до 3 с. Имя берётся у
+<li><code>Gauges\\gearboxes\\&lt;name&gt;.ini</code>, <code>[Gearbox]</code>: <code>GearHold</code>, от 1 до 3 с, и <code>Creep</code>
+с <code>CreepManual</code> (0 или 1, читаются только вместе с Creep). Файл двигателя хранит <code>EngineBrake</code> (от 0 до 30).
+Это уровень по умолчанию той же цепочки: <code>[Engine:&lt;id&gt;]</code>, <code>[Engine]</code> вида, эти файлы, затем
+<code>[Gauges]</code>. Проход читает действующее значение в одном месте (EngineBrakeOf, CreepOf, CreepManualOf). Хук привода
+ставится по Creep из <code>[Gauges]</code> и по Real engine, как раньше, и смена грузовика его не трогает. Строки журнала:
+"engine braking by truck:" и "creep by truck:", а также "engine: every", когда первое движение строки создаёт набор вида. Имя берётся у
 установленной коробки (vehicle +0x9C0), у коробки грузовика по умолчанию (+0x9A0), только если там ничего не прочитано.</li>
 <li><code>Gauges\\engines\\&lt;name&gt;.ini</code>, <code>[Engine]</code>: <code>PeakTorqueRpm</code> (от 100 до 20000),
 <code>Aspiration</code>, <code>Fuel</code> (diesel или petrol), <code>TorqueCurve</code>: значение по умолчанию. Файл

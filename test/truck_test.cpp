@@ -9067,10 +9067,10 @@ static void TruckProfileTest()
     ProfileTakenText(t, say, sizeof say);
     ProfileTakenText(t, shortSay, sizeof shortSay);
     const bool told = !strcmp(say, "Taken: the suspension, Air brakes. The settings of the kind were left. Made with another engine: its engine settings were left. "
-                                   "Made with another gearbox: its gear hold was left. 3 unknown keys were left out.") &&
+                                   "Made with another gearbox: its gearbox settings were left. 3 unknown keys were left out.") &&
                       strlen(shortSay) == sizeof shortSay - 1;
     t = ProfileTaken{};
-    t.scales = t.scalesOff = t.diff = t.cda = t.airAxles = t.odo = t.susp = t.air = t.torque = t.hold = t.engine = t.engineOff = t.engineDefault = t.kindLeft = t.engineOther = t.gearboxOther = true, t.unknown = 123456;
+    t.scales = t.scalesOff = t.diff = t.cda = t.airAxles = t.odo = t.susp = t.air = t.torque = t.hold = t.brake = t.creep = t.engine = t.engineOff = t.engineDefault = t.kindLeft = t.engineOther = t.gearboxOther = true, t.unknown = 123456;
     // the tire mode's sentences (BRIEF_truck_profile.md, build 2): each of the four, and the longest in the full line
     char tireSay[4][640];
     for (int i = 0; i < 4; i++)

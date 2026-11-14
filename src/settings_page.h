@@ -18,6 +18,9 @@ struct PageState
     float mapAmbientC = 0.0f;     // the outside temperature the slider set for the map's section in force (kPageMapAmbient)
     int airHeight = 0;            // the air's height the Suspension tab's slider set, cm (kPageAirHeight)
     float gearHold = 0.0f;        // the seconds the slider set for the driven truck's gearbox (kPageGearHold)
+    int engRows = 0;              // the rows of the driven truck's engine chain moved this frame: 1 Engine braking (engBrake), 2 the creep (engCreep, engCreepManual)
+    float engBrake = 0.0f;
+    bool engCreep = false, engCreepManual = false;
     float enginePeak = 0.0f;      // the driven truck's engine's profile as the Engine section set it (kPageEngineSet)
     int engineAspiration = 0;
     int engineFuel = kFuelClass;
@@ -1041,14 +1044,28 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             PageTip("How fast a slipping clutch heats up; 100 is the pace of the model. Lower gives more time to react. Default 60 %.");
             if (view.gearShifts || view.gearStalls) ImGui::TextDisabled("Since the truck was taken: %d shifts, %d stalls.", view.gearShifts, view.gearStalls);
         }
-        PageLabel("Creep", labelX);
-        changed(ImGui::Checkbox("##creep", &s.creep));
-        PageTip("An idling truck in D or the game automatic creeps to walking pace, as a real automatic does. Hold the brake to stand. On by default.");
-        if (s.creep)
+        // the creep: with a truck driven the two rows set the gearbox of this truck on the levels of the Engine tab
+        // (167), the two as one group; with none they set the figure every truck without its own goes by
         {
-            PageLabel("Creep in held gear", labelX);
-            changed(ImGui::Checkbox("##creepmanual", &s.creepManual));
-            PageTip("A gear picked by hand creeps too. Stuck in the mod gearbox the engine stalls; in Sequential it goes back to D first. Off by default.");
+            bool creep = view.creepBy ? view.engCreep : s.creep, creepManual = view.creepBy ? view.engCreepManual : s.creepManual;
+            bool moved = false;
+            char creepTip[400], whose[200] = "";
+            if (view.creepBy) _snprintf_s(whose, _TRUNCATE, " With a truck driven it is kept for the gearbox of this truck (%s) by Own settings on the Engine tab.", view.gearbox);
+            PageLabel("Creep", labelX);
+            moved |= ImGui::Checkbox("##creep", &creep);
+            _snprintf_s(creepTip, _TRUNCATE, "An idling truck in D or the game automatic creeps to walking pace, as a real automatic does. Hold the brake to stand. On by default.%s", whose);
+            PageTip(creepTip);
+            if (creep)
+            {
+                PageLabel("Creep in held gear", labelX);
+                moved |= ImGui::Checkbox("##creepmanual", &creepManual);
+                _snprintf_s(creepTip, _TRUNCATE, "A gear picked by hand creeps too. Stuck in the mod gearbox the engine stalls; in Sequential it goes back to D first. Off by default.%s", whose);
+                PageTip(creepTip);
+            }
+            if (moved && view.creepBy) st.engCreep = creep, st.engCreepManual = creepManual, st.engRows |= 2;
+            else if (moved) s.creep = creep, s.creepManual = creepManual, act |= kPageChanged;
+            if (view.engCreepFrom) ImGui::TextDisabled("Creep in force: %s%s", PageEngLevel(view.engCreepFrom, "gearbox"), view.engCreepFrom == 2 ? view.truck : "");
+            if (view.creepNoHook) ImGui::TextDisabled("Creep cannot act for this truck yet. Real engine on the Power tab lets it.");
         }
         // the driven truck's gearbox: how long each gear is held going up, kept for that gearbox; it works with Real engine
         // on, a switch of the Power tab, so here it is greyed without it (the Reviewer's N5)
@@ -1089,10 +1106,22 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             PageLabel("Air drag", labelX);
             changed(ImGui::Checkbox("##roadload", &s.roadLoad));
             PageTip("The game already slows a rolling truck by itself, more the faster it goes. This adds the share of the air on top, taken off the engine pull in each gear once it is measured floored on flat ground. The drag of the wheels is left out of that measure, so Rolling drag and a flat tire do not make it stronger. Acts with Real engine on. On by default.");
-            PageLabel("Engine braking", labelX);
-            ImGui::SetNextItemWidth(w);
-            changed(ImGui::SliderFloat("##enginebrake", &s.engineBrake, 0.0f, 30.0f, "%.0f %%", ImGuiSliderFlags_AlwaysClamp));
-            PageTip("How hard the engine holds the truck back with the foot off in a gear held by hand, as a share of the gear torque at the redline. 0 lets it roll. Needs the mod gearbox. Default 15 %.");
+            // with a truck driven the row sets the engine of this truck on the levels of the Engine tab (167)
+            {
+                float brake = view.engBrakeBy ? view.engBrake : s.engineBrake;
+                PageLabel("Engine braking", labelX);
+                ImGui::SetNextItemWidth(w);
+                if (ImGui::SliderFloat("##enginebrake", &brake, 0.0f, 30.0f, "%.0f %%", ImGuiSliderFlags_AlwaysClamp))
+                {
+                    if (view.engBrakeBy) st.engBrake = floorf(brake + 0.5f), st.engRows |= 1;
+                    else s.engineBrake = brake, act |= kPageChanged;
+                }
+                char brakeTip[480], whose[200] = "";
+                if (view.engBrakeBy) _snprintf_s(whose, _TRUNCATE, " With a truck driven it is kept for the engine of this truck (%s) by Own settings on the Engine tab.", view.engine);
+                _snprintf_s(brakeTip, _TRUNCATE, "How hard the engine holds the truck back with the foot off in a gear held by hand, as a share of the gear torque at the redline. 0 lets it roll. Needs the mod gearbox. Default 15 %%.%s", whose);
+                if (view.engBrakeFrom) ImGui::TextDisabled("In force: %s%s", PageEngLevel(view.engBrakeFrom, "engine"), view.engBrakeFrom == 2 ? view.truck : "");
+                PageTip(brakeTip);
+            }
             PageLabel("Diff lock bite", labelX);
             ImGui::SetNextItemWidth(w);
             changed(ImGui::SliderInt("##difflockbite", &s.diffLockBite, 0, 100, s.diffLockBite > 0 ? "%d %%" : "game lock", ImGuiSliderFlags_AlwaysClamp));

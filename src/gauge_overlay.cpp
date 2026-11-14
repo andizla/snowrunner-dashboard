@@ -389,6 +389,9 @@ static void OnPage()
     if (act & kPageMapAmbient) MapAmbientSet(st.mapAmbientC);
     if (act & kPageAirHeight) AirHeightAsk(st.airHeight);
     if (act & kPageGearHold) GearHoldSet(st.gearHold);
+    if (st.engRows & 1) EngineBrakeSet(st.engBrake);
+    if (st.engRows & 2) CreepSet(st.engCreep, st.engCreepManual);
+    st.engRows = 0;
     if (act & kPageEngineSet) EngineProfileSet(st.enginePeak, st.engineAspiration, st.engineFuel);
     if (act & kPageEngineDrop) EngineProfileDrop();
     if (act & kPageEngineTorque) EngineTorqueSet(st.engineTorque);

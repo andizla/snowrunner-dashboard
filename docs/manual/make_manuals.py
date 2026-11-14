@@ -363,7 +363,15 @@ scout's slider does not move every scout with that engine. The Engine tab has it
 engine's default</b> and <b>For</b>. A truck keeps a figure for each engine and gearbox fitted, in an <code>[Engine]</code>
 section of its file (<code>[Engine:&lt;id&gt;]</code> for one truck), as <code>Torque.&lt;engine&gt;</code> and
 <code>GearHold.&lt;gearbox&gt;</code>. A figure it has none for comes from the engine's file, or the gearbox's, then 100 % and
-the class's hold. The line In force under each slider says which. The button writes both figures into those two files. When
+the class's hold. The line In force under each slider says which. The button writes both figures into those two files.
+<b>Engine braking</b> on the Power tab and <b>Creep</b> with <b>Creep in held gear</b> on the Gearbox tab are kept the same way
+once you move them with a truck driven: Engine braking for the engine fitted, as <code>EngineBrake.&lt;engine&gt;</code>, and
+the two creep rows together for the gearbox fitted, as <code>Creep.&lt;gearbox&gt;</code> and
+<code>CreepManual.&lt;gearbox&gt;</code>. A truck you never set them for goes by the figures of <code>Gauges.ini</code>, which
+the same rows set while no truck is driven. Under the rows "In force:" and "Creep in force:" say where the figure comes from.
+If a truck has its own Creep on while Creep in <code>Gauges.ini</code> is off and Real engine is off too, the row says "Creep
+cannot act for this truck yet": switch Real engine on. Defaults on the Engine tab puts these back to the figures of
+<code>Gauges.ini</code>. When
 the game rebuilds the truck, its engine set follows it as the suspension's does. The engine's profile is kept there too, whole,
 as <code>PeakTorqueRpm.&lt;engine&gt;</code>, <code>Aspiration.&lt;engine&gt;</code>, <code>Fuel.&lt;engine&gt;</code> and
 <code>TorqueCurve.&lt;engine&gt;</code>, and the button copies it to the engine's file (section 15). One truck's set goes by the

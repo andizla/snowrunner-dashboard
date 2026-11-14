@@ -1088,7 +1088,7 @@ through the functions an edit uses. The file is <code>Gauges\\profiles\\&lt;kind
 written beside its place and then put there whole. Its sections: <code>[Profile]</code> (Version, Truck, Date, Engine, Gearbox,
 Notes, and Backup in a backup), <code>[Truck]</code> (the seven scales together or <code>ScalesOwn=0</code>, RoadCdA, AirAxles,
 OdometerHours, AirBrakes), <code>[Drive]</code> (DiffType and DiffAxle by axle as the truck's file has it, DiffAxle2 for the second axle, else <code>DiffOwn=0</code>; a DiffAxle9 is an unknown key),
-<code>[Suspension]</code> (the whole set in force), <code>[Engine]</code> (Torque, GearHold, PeakTorqueRpm, Aspiration, Fuel,
+<code>[Suspension]</code> (the whole set in force), <code>[Engine]</code> (Torque, GearHold, EngineBrake, Creep, CreepManual, PeakTorqueRpm, Aspiration, Fuel,
 TorqueCurve with no part name, only what some level holds) and <code>[Tire Inflation]</code> (Mode from the tire mod's file; an Import
 writes it back into that file, only where the file is there and the game names the truck: Own=1 and Mode into the truck's own section,
 or Mode alone into the kind's; a backup of a level with no mode says <code>ModeOwn=0</code>). The truck's id, [Seen], the odometer's count and the learned figures never go in. A backup holds one level exactly: where the level has nothing of its own it says <code>AirOwn=0</code>, <code>SuspOwn=0</code> or <code>EngineOwn=0</code>, and taking it puts that part out of force again. Import writes the diff group into the truck's own section, whole. A backup of the kind's level also takes RoadCdA, AirAxles and DiffType out where it does not hold them.</p>
@@ -1491,7 +1491,12 @@ values that are not finite fall back to the defaults; tab edits are saved a seco
 truck: the seven scales (<code>Class IdleRpm RedlineRpm MaxRpm SpeedMax BoostMax BoostProfile</code>; <code>Class</code> only where a
 class is picked); a key present wins over <code>[Gauges]</code>. Written when one is changed on the tab while that truck
 is driven. The kind is the game's (model +0x588).</li>
-<li><code>Gauges\\gearboxes\\&lt;name&gt;.ini</code>, <code>[Gearbox]</code>: <code>GearHold</code>, 1 to 3 s. The name is the gearbox
+<li><code>Gauges\\gearboxes\\&lt;name&gt;.ini</code>, <code>[Gearbox]</code>: <code>GearHold</code>, 1 to 3 s, and <code>Creep</code>
+with <code>CreepManual</code> (0 or 1, read only beside Creep). The engine's file holds <code>EngineBrake</code> (0 to 30). These
+are the default's level of the same chain: <code>[Engine:&lt;id&gt;]</code>, the kind's <code>[Engine]</code>, these files, then
+<code>[Gauges]</code>. The pass reads the figure in force in one place each (EngineBrakeOf, CreepOf, CreepManualOf). The drive's
+hook goes in by the Creep of <code>[Gauges]</code> and by Real engine, as before, and a truck change never touches it. The log
+lines: "engine braking by truck:" and "creep by truck:", and "engine: every" where a row's first move makes the kind's set. The name is the gearbox
 fitted (vehicle +0x9C0), the truck's default (+0x9A0) only when none is read there.</li>
 <li><code>Gauges\\engines\\&lt;name&gt;.ini</code>, <code>[Engine]</code>: <code>PeakTorqueRpm</code> (100 to 20000), <code>Aspiration</code>,
 <code>Fuel</code> (diesel or petrol), <code>TorqueCurve</code>: the default. The truck's file holds the same four as

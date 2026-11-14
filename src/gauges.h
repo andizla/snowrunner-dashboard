@@ -679,6 +679,9 @@ struct GaugeView { bool show, demo; int hidden; GaugeState st; WarnBox warn[kWar
                    int diffRows, diffRowAxle[kAxleRowsMost], diffKind; bool diffRowNow[kAxleRowsMost], diffRowKey[kAxleRowsMost], diffNoPairs, diffBiteActs; int steerPercent; bool steerNoRoute, quickWinchNoRoute; int winchOutOff; /* Winch out: 0 it can act, 1 not found in this game version, 2 a call faulted, off for the session */ /* the steering left while a lock limits it, 0 none; the steering's place not found in this game */ // airKnown: a truck is driven and its air axles (air_axles.h) and their source are read // the air suspension runs on the driven truck, its rest places taken, the height box shown; the keys' height (cm) and the levelling (front, rear, left over right; cm)
                    bool frameKnown, frameRigid; float frameFile[4], frameMost; // the driven truck's frame joint (frame_flex.h): its stock spring, damping and limits in degrees; or none (a rigid frame)
                    bool suspKnown; float suspFile[3][2]; // the driven truck's file: spring, damping and the compression end (m), [front, rear] (wheel 0 and the last)
+                   // Engine braking and the creep by the owned truck (167): whether the row sets this truck's engine or gearbox (else Gauges.ini's figure), the figures in force,
+                   // the level each comes from (as engHoldFrom), and the truck's creep is on while the drive hook is not in
+                   bool engBrakeBy, creepBy; float engBrake; bool engCreep, engCreepManual; int engBrakeFrom, engCreepFrom; bool creepNoHook;
                    char gearbox[96]; float gearHold; bool gearHoldOwn; // the driven truck's gearbox (its key, "" for none), the seconds each gear is held going up with the mod's engine, and whether its file sets them
                    int autoClass; bool autoByWeight, autoByType; float massKg; int classAuto; /* what Auto is for the driven truck (its type, its weight, else the plain pick, else truck) */ int scalesLevel; /* whose scales are in force: 0 the plain ones, 1 the kind's own, 2 this truck's own */ bool scalesIdKnown; // the class the automatic goes by for it, whether by its weight (no scales of its own), and that weight (0 not read)
                    bool camberKnown; bool camberEnd[2]; float camberFile[2][2]; // the driven truck's camber (camber.h) is read; each end has a wheel; its file's render angle (degrees) and multiplier, [front, rear]
@@ -713,6 +716,8 @@ void EngineLevelAsk(bool truckOnly);        // the Engine tab's choice: this tru
 void SettingsReset();                       // the tab's button: every setting back to its default, the driven truck's own scales too
 void PullTestAsk(bool run);                  // the tab's button: arm the pull test, or cancel it
 void MapAmbientSet(float c);                 // the tab's slider: the outside temperature of the map's section in force
+void EngineBrakeSet(float percent);        // the Power tab's Engine braking with a truck driven: onto the engine's chain of levels, for the engine fitted
+void CreepSet(bool creep, bool creepManual); // the Gearbox tab's two Creep rows with a truck driven: onto the same chain, for the gearbox fitted, the two together
 void GearHoldSet(float seconds);            // the tab's slider: the seconds each gear of the driven truck's gearbox is held going up
 void EngineProfileSet(float peakRpm, int aspiration, int fuel); // the tab's Engine section: the driven truck's engine's profile into its file
 void EngineProfileDrop();                   // the tab's button: the driven truck's engine gives its profile up

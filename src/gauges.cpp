@@ -1306,7 +1306,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; TopShare<n>.<gearbox> in a truck's file: each gear's top as a share of 2a + 5, learned where the game's pull reaches nothing floored.\n"
                         L"; Gauges\\engines\\<name>.ini: PeakTorqueRpm, Aspiration (0 turbo, 1 naturally aspirated), Fuel (diesel, petrol), TorqueCurve (the Engine tab).\n"
                         L";   Torque: how much of its torque the truck gets, 10 to 100 percent (100 when not set). Lower it for an RLM-like engine with several times a stock engine's torque.\n"
-                        L"; A truck's own Torque.<engine> and GearHold.<gearbox>: [Engine] of its file in Gauges\\trucks (every truck of the kind) or [Engine:<id>] (one truck), with Own; before the two files above.\n"
+                        L"; A truck's own Torque.<engine>, EngineBrake.<engine>, GearHold.<gearbox>, Creep.<gearbox> and CreepManual.<gearbox>: [Engine] of its file in Gauges\\trucks (every truck of the kind) or [Engine:<id>] (one truck), with Own; before the two files above, and EngineBrake, Creep and CreepManual here are for a truck with none of its own.\n"
                         L"; Mod work: Demo=1 draws demo values whenever no truck is driven, Probe=1 logs the values read from the game.\n"
                         L"; PhysicsRate: 60 or 120 (60). A test: 120 steps the physics 120 times a second. Single player only. Read once at the start.\n"
                         L";   PhysicsIterations (with 120, no box): 0 the mod choice (2), 2 or 4 solver iterations a step. Add the key by hand.\n"
@@ -1566,6 +1566,19 @@ void EngineTorqueSet(int percent)
 {
     InterlockedExchange(&g_engineTorquePercent, percent);
     InterlockedExchange(&g_engineTorqueAsked, 1);
+}
+
+// The Engine braking row and the two Creep rows with a truck driven (167): the pass puts them on the engine's chain.
+static volatile LONG g_engBrakeAsked = 0, g_engBrakePercent = 0, g_creepAsked = 0, g_creepBits = 0; // bits: 1 Creep, 2 Creep in held gear
+void EngineBrakeSet(float percent)
+{
+    InterlockedExchange(&g_engBrakePercent, (LONG)lroundf(percent));
+    InterlockedExchange(&g_engBrakeAsked, 1);
+}
+void CreepSet(bool creep, bool creepManual)
+{
+    InterlockedExchange(&g_creepBits, (creep ? 1 : 0) | (creepManual ? 2 : 0));
+    InterlockedExchange(&g_creepAsked, 1);
 }
 
 void GearHoldSet(float seconds)
@@ -2641,13 +2654,86 @@ static bool TruckIdSections(const char *key, const char *id, bool *inForce = nul
     return any;
 }
 
+// Engine braking and Creep on the same chain (BRIEF_jobs_1114.md, 167): EngineBrake.<engine> beside Torque.<engine>,
+// and Creep.<gearbox> with CreepManual.<gearbox> beside GearHold.<gearbox>. Engine braking is the engine's and the
+// creep is the converter's, which is the gearbox's. A level that holds none says -1, and with no level the figure of
+// Gauges.ini is in force: the chain's last level. Creep and CreepManual are one group (must 3): read by Creep's key
+// alone and written together, so a level never has half.
+struct EngineMore
+{
+    float brake;            // percent, 0 to 30; -1 none
+    int creep, creepManual; // 0 or 1; -1 none (creepManual only beside creep)
+};
+static const EngineMore kNoMore = { -1.0f, -1, -1 };
+static const float kEngineBrakeRange[2] = { 0.0f, 30.0f };
+// A section's figures for the engine and the gearbox named (a null name: the plain keys, as a default's file and a
+// profile have them).
+static EngineMore EngineMoreRead(const wchar_t *sec, const std::wstring &ini, const char *engine, const char *gearbox)
+{
+    EngineMore m = kNoMore;
+    wchar_t buf[24] = {};
+    if ((!engine || engine[0]) && GetPrivateProfileStringW(sec, engine ? EngineKeyOf(L"EngineBrake", engine).c_str() : L"EngineBrake", L"", buf, 24, ini.c_str()) > 0)
+    {
+        wchar_t *end = buf;
+        const float v = (float)wcstod(buf, &end);
+        if (end != buf && isfinite(v)) m.brake = SettingsRange(v, kEngineBrakeRange[0], kEngineBrakeRange[1]);
+    }
+    if ((!gearbox || gearbox[0]) && GetPrivateProfileStringW(sec, gearbox ? EngineKeyOf(L"Creep", gearbox).c_str() : L"Creep", L"", buf, 24, ini.c_str()) > 0 &&
+        (!wcscmp(buf, L"0") || !wcscmp(buf, L"1")))
+    {
+        m.creep = buf[0] - L'0';
+        m.creepManual = GetPrivateProfileIntW(sec, gearbox ? EngineKeyOf(L"CreepManual", gearbox).c_str() : L"CreepManual", 0, ini.c_str()) == 1 ? 1 : 0;
+    }
+    return m;
+}
+// ... and written: what m holds, each for its part named. Creep and CreepManual go in together.
+static void EngineMoreWrite(const wchar_t *sec, const std::wstring &ini, const char *engine, const char *gearbox, const EngineMore &m)
+{
+    if ((!engine || engine[0]) && m.brake >= 0.0f)
+        IniPutInt(sec, engine ? EngineKeyOf(L"EngineBrake", engine).c_str() : L"EngineBrake", (int)lroundf(SettingsRange(m.brake, kEngineBrakeRange[0], kEngineBrakeRange[1])), ini);
+    if ((!gearbox || gearbox[0]) && m.creep >= 0)
+    {
+        IniPutInt(sec, gearbox ? EngineKeyOf(L"Creep", gearbox).c_str() : L"Creep", m.creep ? 1 : 0, ini);
+        IniPutInt(sec, gearbox ? EngineKeyOf(L"CreepManual", gearbox).c_str() : L"CreepManual", m.creepManual == 1 ? 1 : 0, ini);
+    }
+}
+// The default's level: EngineBrake= in the engine's file, Creep= and CreepManual= in the gearbox's.
+static EngineMore EngineMoreDefaultRead(const char *engine, const char *gearbox)
+{
+    EngineMore m = kNoMore;
+    if (engine[0]) m.brake = EngineMoreRead(kSetupSections[kSetupEngine], SetupFile(kSetupEngine, engine), nullptr, "").brake;
+    if (gearbox[0])
+    {
+        const EngineMore g = EngineMoreRead(kSetupSections[kSetupGearbox], SetupFile(kSetupGearbox, gearbox), "", nullptr);
+        m.creep = g.creep, m.creepManual = g.creepManual;
+    }
+    return m;
+}
+static void EngineMoreDefaultWrite(const char *engine, const char *gearbox, const EngineMore &m)
+{
+    if (engine[0] && m.brake >= 0.0f)
+    {
+        SetupBegin(kSetupEngine, Wide(engine));
+        EngineMoreWrite(kSetupSections[kSetupEngine], SetupFile(kSetupEngine, engine), nullptr, "", m);
+    }
+    if (gearbox[0] && m.creep >= 0)
+    {
+        SetupBegin(kSetupGearbox, Wide(gearbox));
+        EngineMoreWrite(kSetupSections[kSetupGearbox], SetupFile(kSetupGearbox, gearbox), "", nullptr, m);
+    }
+}
+// A gearbox's file holds a creep of its own (the gearbox's key stays with such a file, as with a hold).
+static bool CreepFileHas(const char *gearbox) { return gearbox[0] && EngineMoreDefaultRead("", gearbox).creep >= 0; }
+
 // One level's section: none (no key and no Own in it), kept (Own=0) or in force; and its figures for the engine and the
-// gearbox fitted, 0 where it holds none; and its profile for the engine fitted (profile.own: it holds one).
+// gearbox fitted, 0 where it holds none; and its profile for the engine fitted (profile.own: it holds one); and into
+// more, where asked, its engine braking and creep (EngineMore).
 static int ReadTruckEngine(const char *key, const char *id, const char *engine, const char *gearbox, int &torque, float &hold, EngineProfile &profile,
-                           wchar_t (&curve)[256])
+                           wchar_t (&curve)[256], EngineMore *more = nullptr)
 {
     torque = 0, hold = 0.0f;
     profile = EngineProfile{}, curve[0] = 0;
+    if (more) *more = kNoMore;
     if (!key[0]) return kSuspNone;
     const std::wstring ini = SetupFile(kSetupTruck, key), sec = SectionOf(kEngineSection, id);
     wchar_t probe[8] = {};
@@ -2664,13 +2750,14 @@ static int ReadTruckEngine(const char *key, const char *id, const char *engine, 
         if (isfinite(v) && v > 0.0f) hold = SettingsRange(v, kGearHoldRange[0], kGearHoldRange[1]);
     }
     if (engine[0]) ProfileKeysRead(sec.c_str(), ini, engine, profile, curve);
+    if (more) *more = EngineMoreRead(sec.c_str(), ini, engine, gearbox);
     return GetPrivateProfileIntW(sec.c_str(), L"Own", 1, ini.c_str()) ? kSuspInForce : kSuspKept;
 }
 
 // A level's section written: Own, and the figures given (a 0 leaves its key as it is). Key by key, as the suspension's;
 // a profile given (not null) goes in whole for the engine named.
 static void WriteTruckEngine(const char *key, const char *id, bool own, const char *engine, int torque, const char *gearbox, float hold,
-                             const EngineProfile *profile = nullptr, const wchar_t *curve = nullptr)
+                             const EngineProfile *profile = nullptr, const wchar_t *curve = nullptr, const EngineMore *more = nullptr)
 {
     if (!key[0]) return;
     const std::wstring ini = SetupFile(kSetupTruck, key), sec = SectionOf(kEngineSection, id);
@@ -2684,6 +2771,7 @@ static void WriteTruckEngine(const char *key, const char *id, bool own, const ch
         _snwprintf_s(buf, _TRUNCATE, L"%.1f", hold);
         WritePrivateProfileStringW(sec.c_str(), EngineKeyOf(L"GearHold", gearbox).c_str(), buf, ini.c_str());
     }
+    if (more) EngineMoreWrite(sec.c_str(), ini, engine, gearbox, *more);
 }
 
 static void EngineSectionOwn(const char *key, const char *id, bool own) { IniPutInt(SectionOf(kEngineSection, id).c_str(), L"Own", own ? 1 : 0, SetupFile(kSetupTruck, key)); }
@@ -2709,7 +2797,41 @@ struct EngineState
     EngineProfile profile;      // the profile in force, whole from one level (its torque unused: torque above), the stock one where none has one
     int profileFrom;            // its level (kEngLevel..., None: the stock one)
     wchar_t curve[256];         // its TorqueCurve text as written, "" for none
+    float brake; int brakeFrom; // engine braking in percent and its level (None: the figure of Gauges.ini is in force, brake is not read)
+    bool creep, creepManual; int creepFrom; // the creep and its level, the two as one group (None: Gauges.ini's)
 };
+
+// What the levels hold in force, for a write of the figures shown: -1 where none has it.
+static EngineMore EngineMoreOf(const EngineState &e)
+{
+    EngineMore m = kNoMore;
+    if (e.brakeFrom != kEngLevelNone) m.brake = e.brake;
+    if (e.creepFrom != kEngLevelNone) m.creep = e.creep ? 1 : 0, m.creepManual = e.creepManual ? 1 : 0;
+    return m;
+}
+
+// The state's engine braking and creep for the engine and the gearbox fitted, as the pass keeps them on the driven
+// truck (EngineApply's part, apart for the tests): a level's figure for another engine or gearbox (the state not
+// caught up yet) is not put in, and with none set the pass reads the figure of Gauges.ini. Must 2: these three are
+// the one place each figure is read.
+struct EngineOwnMore
+{
+    bool brakeSet, creepSet; // the chain has an engine braking, a creep, for this truck
+    float brake;
+    bool creep, creepManual;
+};
+static EngineOwnMore EngineMoreFor(const EngineState &e, const char *engineFitted, const char *gearboxFitted)
+{
+    EngineOwnMore o = {};
+    o.brakeSet = e.key[0] && e.engine[0] && !strcmp(e.engine, engineFitted) && e.brakeFrom != kEngLevelNone;
+    o.brake = o.brakeSet ? e.brake : 0.0f;
+    o.creepSet = e.key[0] && e.gearbox[0] && !strcmp(e.gearbox, gearboxFitted) && e.creepFrom != kEngLevelNone;
+    o.creep = o.creepSet && e.creep, o.creepManual = o.creepSet && e.creepManual;
+    return o;
+}
+static float EngineBrakeOf(const EngineOwnMore &o, const GaugeSettings &s) { return o.brakeSet ? o.brake : s.engineBrake; }
+static bool CreepOf(const EngineOwnMore &o, const GaugeSettings &s) { return o.creepSet ? o.creep : s.creep; }
+static bool CreepManualOf(const EngineOwnMore &o, const GaugeSettings &s) { return o.creepSet ? o.creepManual : s.creepManual; }
 
 // A profile other than the stock one: a peak, a curve of its own, naturally aspirated or a fuel of its own.
 static bool ProfileNotStock(const EngineProfile &p) { return p.peakRpm > 0.0f || p.custom || p.aspiration != kAspTurbo || p.fuel != kFuelClass; }
@@ -2726,8 +2848,9 @@ static void EngineFromFiles(EngineState &e)
     float kh = 0.0f, th = 0.0f;
     EngineProfile kp = {}, tp = {}, dp = {};
     wchar_t kc[256] = {}, tc[256] = {}, dc[256] = {};
-    const int kind = ReadTruckEngine(e.key, "", e.engine, e.gearbox, kt, kh, kp, kc);
-    const int truck = e.id[0] ? ReadTruckEngine(e.key, e.id, e.engine, e.gearbox, tt, th, tp, tc) : kSuspNone;
+    EngineMore km = kNoMore, tm = kNoMore;
+    const int kind = ReadTruckEngine(e.key, "", e.engine, e.gearbox, kt, kh, kp, kc, &km);
+    const int truck = e.id[0] ? ReadTruckEngine(e.key, e.id, e.engine, e.gearbox, tt, th, tp, tc, &tm) : kSuspNone;
     e.kindOwn = kind == kSuspInForce, e.kindKept = kind == kSuspKept;
     e.truckOwn = truck == kSuspInForce, e.truckKept = truck == kSuspKept;
     const bool dpOwn = EngineProfileRead(e.engine, dp, dc);
@@ -2747,6 +2870,14 @@ static void EngineFromFiles(EngineState &e)
     else if (e.kindOwn && kh > 0.0f) e.hold = kh, e.holdFrom = kEngLevelKind;
     else if (dhOwn) e.hold = dh, e.holdFrom = kEngLevelDefault;
     else e.hold = 0.0f, e.holdFrom = kEngLevelNone;
+    const EngineMore dm = e.key[0] ? EngineMoreDefaultRead(e.engine, e.gearbox) : kNoMore;
+    if (e.truckOwn && tm.brake >= 0.0f) e.brake = tm.brake, e.brakeFrom = kEngLevelTruck;
+    else if (e.kindOwn && km.brake >= 0.0f) e.brake = km.brake, e.brakeFrom = kEngLevelKind;
+    else if (dm.brake >= 0.0f) e.brake = dm.brake, e.brakeFrom = kEngLevelDefault;
+    else e.brake = 0.0f, e.brakeFrom = kEngLevelNone;
+    const EngineMore *cm = e.truckOwn && tm.creep >= 0 ? &tm : e.kindOwn && km.creep >= 0 ? &km : dm.creep >= 0 ? &dm : nullptr;
+    e.creepFrom = cm == &tm ? kEngLevelTruck : cm == &km ? kEngLevelKind : cm ? kEngLevelDefault : kEngLevelNone;
+    e.creep = cm && cm->creep == 1, e.creepManual = cm && cm->creepManual == 1;
 }
 
 // The state's profile and torque share onto a watch's profile, for the engine it is for (profileFor): the profile rides
@@ -2787,6 +2918,23 @@ static bool EngineTake(EngineState &e, int torque, float hold)
         if (torque > 0 && e.engine[0]) EngineTorqueWrite(e.engine, torque);
         if (hold > 0.0f && e.gearbox[0]) GearHoldWrite(e.gearbox, hold);
     }
+    EngineFromFiles(e);
+    return made;
+}
+
+// The Engine braking row's and the two Creep rows' edit, by EngineTake's rules (167, must 4): the level in force, else
+// the kind's made, else (a set kept) the engine's or the gearbox's default. m holds what is edited, -1 for the rest.
+// True where the kind's set was made by it; nothing is written for a part whose engine or gearbox is not known yet.
+static bool EngineMoreTake(EngineState &e, EngineMore m)
+{
+    if (!e.engine[0]) m.brake = -1.0f;
+    if (!e.gearbox[0]) m.creep = m.creepManual = -1;
+    if (!e.key[0] || (m.brake < 0.0f && m.creep < 0)) return false;
+    bool made = false;
+    if (e.truckOwn) WriteTruckEngine(e.key, e.id, true, e.engine, 0, e.gearbox, 0.0f, nullptr, nullptr, &m);
+    else if (e.kindOwn) WriteTruckEngine(e.key, "", true, e.engine, 0, e.gearbox, 0.0f, nullptr, nullptr, &m);
+    else if (!e.kindKept && !e.truckKept) WriteTruckEngine(e.key, "", true, e.engine, 0, e.gearbox, 0.0f, nullptr, nullptr, &m), made = true;
+    else EngineMoreDefaultWrite(e.engine, e.gearbox, m);
     EngineFromFiles(e);
     return made;
 }
@@ -2838,7 +2986,11 @@ static void EngineOwnSet(EngineState &e, bool on)
     if (e.truckOwn || e.kindOwn) return;
     if (e.truckKept) EngineSectionOwn(e.key, e.id, true);
     else if (e.kindKept) EngineSectionOwn(e.key, "", true);
-    else WriteTruckEngine(e.key, "", true, e.engine, e.torque, e.gearbox, e.hold, e.profileFrom != kEngLevelNone ? &e.profile : nullptr, e.curve);
+    else
+    {
+        const EngineMore more = EngineMoreOf(e);
+        WriteTruckEngine(e.key, "", true, e.engine, e.torque, e.gearbox, e.hold, e.profileFrom != kEngLevelNone ? &e.profile : nullptr, e.curve, &more);
+    }
     EngineFromFiles(e);
 }
 
@@ -2852,8 +3004,9 @@ static void EngineLevelSet(EngineState &e, bool truckOnly)
     if (truckOnly)
     {
         if (!e.id[0]) return;
+        const EngineMore more = EngineMoreOf(e);
         if (e.truckKept) EngineSectionOwn(e.key, e.id, true);
-        else WriteTruckEngine(e.key, e.id, true, e.engine, e.torque, e.gearbox, e.hold, e.profileFrom != kEngLevelNone ? &e.profile : nullptr, e.curve);
+        else WriteTruckEngine(e.key, e.id, true, e.engine, e.torque, e.gearbox, e.hold, e.profileFrom != kEngLevelNone ? &e.profile : nullptr, e.curve, &more);
     }
     else if (!e.kindOwn && !e.kindKept)
     {
@@ -2881,6 +3034,7 @@ static void EngineToDefault(EngineState &e)
     if (e.engine[0] && (e.profileFrom == kEngLevelTruck || e.profileFrom == kEngLevelKind)) EngineProfileWrite(e.engine, e.profile, e.curve);
     if (e.engine[0] && e.torque > 0) EngineTorqueWrite(e.engine, e.torque);
     if (e.gearbox[0] && e.hold > 0.0f) GearHoldWrite(e.gearbox, e.hold);
+    EngineMoreDefaultWrite(e.engine, e.gearbox, EngineMoreOf(e));
     EngineFromFiles(e);
 }
 
@@ -2894,6 +3048,10 @@ static void EngineDefaults(EngineState &e)
     if (e.kindOwn) EngineSectionOwn(e.key, "", false);
     if (e.engine[0]) WritePrivateProfileStringW(kSetupSections[kSetupEngine], L"Torque", nullptr, SetupFile(kSetupEngine, e.engine).c_str());
     if (e.gearbox[0]) WritePrivateProfileStringW(kSetupSections[kSetupGearbox], L"GearHold", nullptr, SetupFile(kSetupGearbox, e.gearbox).c_str());
+    // engine braking and the creep go back to the figures of Gauges.ini (167)
+    if (e.engine[0]) WritePrivateProfileStringW(kSetupSections[kSetupEngine], L"EngineBrake", nullptr, SetupFile(kSetupEngine, e.engine).c_str());
+    for (const wchar_t *what : { L"Creep", L"CreepManual" })
+        if (e.gearbox[0]) WritePrivateProfileStringW(kSetupSections[kSetupGearbox], what, nullptr, SetupFile(kSetupGearbox, e.gearbox).c_str());
     EngineFromFiles(e);
 }
 
@@ -3347,10 +3505,11 @@ static std::wstring ProfileText(const SettingsState &st, const EngineState &e, i
     EngineProfile p = e.profile;
     wchar_t curve[256];
     wcsncpy_s(curve, e.curve, _TRUNCATE);
+    EngineMore more = EngineMoreOf(e); // engine braking and the creep (167): what a level has, as the two above
     t += L"\r\n[Engine]\r\n";
     if (exact)
     {
-        const int engineAt = ReadTruckEngine(st.key, id, e.engine, e.gearbox, torque, hold, p, curve);
+        const int engineAt = ReadTruckEngine(st.key, id, e.engine, e.gearbox, torque, hold, p, curve, &more);
         has = p.own;
         if (engineAt != kSuspInForce) line(L"EngineOwn", L"0");
     }
@@ -3361,6 +3520,8 @@ static std::wstring ProfileText(const SettingsState &st, const EngineState &e, i
         _snwprintf_s(buf, _TRUNCATE, L"%.1f", hold);
         line(L"GearHold", buf);
     }
+    if (more.brake >= 0.0f) num(L"EngineBrake", (int)lroundf(more.brake));
+    if (more.creep >= 0) num(L"Creep", more.creep), num(L"CreepManual", more.creepManual == 1 ? 1 : 0);
     if (has)
     {
         flt(L"PeakTorqueRpm", p.peakRpm > 0.0f ? roundf(p.peakRpm) : 0.0f);
@@ -3478,7 +3639,7 @@ static int ProfileUnknown(const std::wstring &file)
                 for (const auto &b : kSuspSetBools) known = known || !_wcsicmp(key.c_str(), b.name);
                 for (const auto &o : kSuspOldFloats) known = known || !_wcsicmp(key.c_str(), o.name);
             }
-            else if (!_wcsicmp(sec, L"Engine")) known = is({ L"Torque", L"GearHold", L"PeakTorqueRpm", L"Aspiration", L"Fuel", L"TorqueCurve", L"EngineOwn" });
+            else if (!_wcsicmp(sec, L"Engine")) known = is({ L"Torque", L"GearHold", L"PeakTorqueRpm", L"Aspiration", L"Fuel", L"TorqueCurve", L"EngineOwn", L"EngineBrake", L"Creep", L"CreepManual" });
             else if (!_wcsicmp(sec, L"Tire Inflation")) known = is({ L"Mode", L"ModeOwn" });
             if (!known) unknown++;
         }
@@ -3606,9 +3767,15 @@ static void ProfileImport(SettingsState &st, EngineState &e, const std::wstring 
         wchar_t curve[256] = {};
         ProfileKeysRead(L"Engine", file, nullptr, p, curve);
         if (curve[0] && !p.custom) curve[0] = 0; // a curve its parser does not take is left out
-        t.engineOther = !engineSame && (torque > 0 || p.own);
-        t.gearboxOther = !gearboxSame && hold > 0.0f;
+        // engine braking by the engine and the creep by the gearbox (167), plain names; a profile without them changes nothing
+        const EngineMore fm = EngineMoreRead(L"Engine", file, nullptr, nullptr);
+        t.engineOther = !engineSame && (torque > 0 || p.own || fm.brake >= 0.0f);
+        t.gearboxOther = !gearboxSame && (hold > 0.0f || fm.creep >= 0);
         const bool takeTorque = engineSame && torque > 0, takeProfile = engineSame && p.own, takeHold = gearboxSame && hold > 0.0f;
+        const bool takeBrake = engineSame && fm.brake >= 0.0f, takeCreep = gearboxSame && fm.creep >= 0;
+        EngineMore tm = kNoMore;
+        if (takeBrake) tm.brake = fm.brake;
+        if (takeCreep) tm.creep = fm.creep, tm.creepManual = fm.creepManual;
         // EngineOwn=0 (a backup's word): the figures are kept and not in force, or with none the level had none of its own
         const bool own = GetPrivateProfileIntW(L"Engine", L"EngineOwn", 1, file.c_str()) != 0;
         int wasTorque = 0;
@@ -3624,13 +3791,17 @@ static void ProfileImport(SettingsState &st, EngineState &e, const std::wstring 
             if (engineSame && !takeProfile)
                 for (const wchar_t *what : { L"PeakTorqueRpm", L"Aspiration", L"Fuel", L"TorqueCurve" }) WritePrivateProfileStringW(sec.c_str(), EngineKeyOf(what, e.engine).c_str(), nullptr, truckIni.c_str());
             if (gearboxSame && !takeHold) WritePrivateProfileStringW(sec.c_str(), EngineKeyOf(L"GearHold", e.gearbox).c_str(), nullptr, truckIni.c_str());
+            if (engineSame && !takeBrake) WritePrivateProfileStringW(sec.c_str(), EngineKeyOf(L"EngineBrake", e.engine).c_str(), nullptr, truckIni.c_str());
+            if (gearboxSame && !takeCreep)
+                for (const wchar_t *what : { L"Creep", L"CreepManual" }) WritePrivateProfileStringW(sec.c_str(), EngineKeyOf(what, e.gearbox).c_str(), nullptr, truckIni.c_str());
         }
-        if (takeTorque || takeProfile || takeHold)
-            WriteTruckEngine(st.key, id, own, engineSame ? e.engine : "", takeTorque ? torque : 0, takeHold ? e.gearbox : "", takeHold ? hold : 0.0f, takeProfile ? &p : nullptr, curve);
+        if (takeTorque || takeProfile || takeHold || takeBrake || takeCreep)
+            WriteTruckEngine(st.key, id, own, engineSame ? e.engine : "", takeTorque ? torque : 0, gearboxSame ? e.gearbox : "", takeHold ? hold : 0.0f, takeProfile ? &p : nullptr, curve, &tm);
         else if (!own && wasAt == kSuspInForce) EngineSectionOwn(st.key, id, false), t.engineOff = true;
-        t.torque = takeTorque, t.engine = takeProfile, t.hold = takeHold;
-        if (engineToo && (takeTorque || takeProfile))
+        t.torque = takeTorque, t.engine = takeProfile, t.hold = takeHold, t.brake = takeBrake, t.creep = takeCreep;
+        if (engineToo && (takeTorque || takeProfile || takeBrake))
         {
+            if (takeBrake) EngineMoreDefaultWrite(e.engine, "", tm);
             if (takeProfile) EngineProfileWrite(e.engine, p, curve);
             if (takeTorque) EngineTorqueWrite(e.engine, torque);
             t.engineDefault = true;
@@ -3689,7 +3860,7 @@ static void ProfileImport(SettingsState &st, EngineState &e, const std::wstring 
         // the second button on a truck with its own in force (15's S2): that stays over what the kind just took
         t.truckOver = kindLevel && st.id[0] &&
                       ((t.susp && st.truckOwn) || ((t.diff || t.diffOff) && st.diffTruck) || ((t.scales || t.scalesOff) && st.scalesTruck) || (t.air && TruckAirAt(st.key, st.id) >= 0) ||
-                       ((t.torque || t.hold || t.engine || t.engineOff) && e.truckOwn));
+                       ((t.torque || t.hold || t.brake || t.creep || t.engine || t.engineOff) && e.truckOwn));
     }
 }
 
@@ -5870,6 +6041,7 @@ struct TruckWatch
     char gearboxKey[96];        // the gearbox of the truck at gearboxVehicle: its key (GearboxKey), "" before one is known
     bool gearHoldOwn;           // [Gearbox:<key>] holds GearHold, which is gearHold; else the truck's class has it
     float gearHold;
+    EngineOwnMore more;         // the engine's chain's engine braking and creep for this truck (EngineApply); where none is set Gauges.ini's are read
     float gearTop[kMaxGears];   // each numbered gear's top as a share of 2a + 5, learned where the game's pull reaches nothing (GearTopStep), 0 not yet;
                                 // kept in the truck kind's file by the gearbox (TopShare<n>.<gearbox>)
     char topTruck[kMaxText], topBox[96]; // the kind and gearbox gearTop is for
@@ -5984,7 +6156,7 @@ static TorqueCutSlot TorqueCutSlotOf(const TruckWatch &w, const TruckRaw &raw, c
     m.limit = w.power.cold * w.power.boost;
     m.load = w.roadShare;
     m.held = held;
-    m.brake = s.engineBrake / 100.0f;
+    m.brake = EngineBrakeOf(w.more, s) / 100.0f;
     m.top = gearTop;
     m.idle = scale.idle;
     m.redline = scale.redline;
@@ -6062,6 +6234,7 @@ static float GearHoldOf(const TruckWatch &w, int tachClass)
 static void EngineApply(const EngineState &e, TruckWatch &w)
 {
     EngineProfileApply(e, w.profileFor, w.profile);
+    w.more = EngineMoreFor(e, w.profileFor, w.gearboxKey); // engine braking and the creep (167)
     if (e.key[0] && e.gearbox[0] && !strcmp(e.gearbox, w.gearboxKey))
     {
         w.gearHoldOwn = e.hold > 0.0f;
@@ -6092,7 +6265,12 @@ static void EngineLevelLog(const EngineState &e, const wchar_t *why)
         else
             Log(L"gearbox hold: %s%S, %.1f s for %S (%s)", e.holdFrom == kEngLevelTruck ? L"this gearbox in this truck" : e.holdFrom == kEngLevelKind ? L"this gearbox in every " : L"this gearbox's default",
                 e.holdFrom == kEngLevelKind ? e.key : "", e.hold, e.gearbox, why);
+        if (e.creepFrom != kEngLevelNone)
+            Log(L"creep by truck: %s%S, %s%s for %S (%s)", e.creepFrom == kEngLevelTruck ? L"this gearbox in this truck" : e.creepFrom == kEngLevelKind ? L"this gearbox in every " : L"this gearbox's default",
+                e.creepFrom == kEngLevelKind ? e.key : "", e.creep ? L"on" : L"off", e.creep && e.creepManual ? L", in a held gear too" : L"", e.gearbox, why);
     }
+    if (e.engine[0] && e.brakeFrom != kEngLevelNone)
+        Log(L"engine braking by truck: %s%S, %.0f %% for %S (%s)", EngineLevelWords(e.brakeFrom), e.brakeFrom == kEngLevelKind ? e.key : "", e.brake, e.engine, why);
 }
 
 static const wchar_t *const kClassWords[kClassCount] = { L"truck", L"scout", L"heavy" };
@@ -6522,7 +6700,7 @@ static void GearboxLook(TruckWatch &w, const TruckMemory &m, const TruckRaw &raw
         char file[96];
         float hold = 0.0f, tops[kMaxGears];
         if (before[0] && GearboxKeysMatch(held, before)) strncpy_s(key, w.gearboxKey, _TRUNCATE);
-        else if (!GearHoldRead(key, hold) && GearTopRead(key, tops) == 0 && GearboxFileMatch(key, file, sizeof file)) strncpy_s(key, file, _TRUNCATE);
+        else if (!GearHoldRead(key, hold) && !CreepFileHas(key) && GearTopRead(key, tops) == 0 && GearboxFileMatch(key, file, sizeof file)) strncpy_s(key, file, _TRUNCATE);
     }
     w.gearboxVehicle = w.refs.vehicle;
     w.gearSpeeds = raw.gearSpeeds;
@@ -9259,8 +9437,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             // only where an automatic picks the gear, for now: the governor's path, the holding part and the stall stay in
             // place, unreached (the author, 1 November: "manual should have no converter. but thats for another time")
             // with CreepManual a gear picked by hand creeps too (CreepGoes), as before 53f526d
-            const bool autoPicks = CreepGoes(s.creepManual, w.take.driving, w.pos.running, w.pos.pos, raw.automatic);
-            const bool on = s.creep && CreepHooked() && !testing && autoPicks;
+            const bool autoPicks = CreepGoes(CreepManualOf(w.more, s), w.take.driving, w.pos.running, w.pos.pos, raw.automatic);
+            const bool on = CreepOf(w.more, s) && CreepHooked() && !testing && autoPicks;
             if (!on) w.creep = CreepModel{};
             // the holding part's most: the engine's full fuel at idle, a throttle of 1 with the engine handed to the game
             // (the factor makes it the curve's torque there), else the torque at idle of the curve it pulls by (review 13)
@@ -10806,6 +10984,27 @@ static DWORD WINAPI Run(void *)
                 gearHoldLogAt = GetTickCount64() + 1000;
             }
         }
+        // Engine braking and the creep from their rows (167): to the level by EngineTake's rules, in force at once. No
+        // hook is put in or taken out here (must 1): the drive's hook goes by Gauges.ini's Creep and the rest, as before
+        if (InterlockedExchange(&g_engBrakeAsked, 0) && eng.key[0] && eng.engine[0])
+        {
+            EngineMore m = kNoMore;
+            m.brake = SettingsRange((float)g_engBrakePercent, kEngineBrakeRange[0], kEngineBrakeRange[1]);
+            if (eng.brakeFrom == kEngLevelNone || fabsf(m.brake - eng.brake) >= 0.5f)
+            {
+                if (EngineMoreTake(eng, m)) Log(L"engine: every %S has its own engine settings from now on, kept in Gauges\\trucks\\%s.ini", eng.key, SetupFileName(Wide(eng.key)).c_str());
+                EngineApply(eng, watch);
+                gearHoldLogAt = GetTickCount64() + 1000;
+            }
+        }
+        if (InterlockedExchange(&g_creepAsked, 0) && eng.key[0] && eng.gearbox[0])
+        {
+            EngineMore m = kNoMore;
+            m.creep = g_creepBits & 1 ? 1 : 0, m.creepManual = g_creepBits & 2 ? 1 : 0;
+            if (EngineMoreTake(eng, m)) Log(L"engine: every %S has its own engine settings from now on, kept in Gauges\\trucks\\%s.ini", eng.key, SetupFileName(Wide(eng.key)).c_str());
+            EngineApply(eng, watch);
+            gearHoldLogAt = GetTickCount64() + 1000;
+        }
         // the engine's profile from the tab: to the level by EngineTake's rules, whole, in force at once; or the class's
         // curve at the level it came from (BRIEF_engine_profile_per_truck.md)
         const LONG engineAsk = InterlockedExchange(&g_engineAsked, 0);
@@ -11237,6 +11436,12 @@ static DWORD WINAPI Run(void *)
         v.engSetKindSet = eng.kindOwn || eng.kindKept;
         v.engSetLevel = eng.key[0] ? EngineLevel(eng) : kEngLevelNone;
         v.engTorqueFrom = eng.torqueFrom, v.engHoldFrom = eng.holdFrom;
+        // Engine braking and the creep (167): the figures in force, their level, and whether their rows set this truck's
+        v.engBrakeBy = eng.key[0] && eng.engine[0] && !strcmp(eng.engine, watch.profileFor);
+        v.creepBy = eng.key[0] && eng.gearbox[0] && !strcmp(eng.gearbox, watch.gearboxKey);
+        v.engBrake = EngineBrakeOf(watch.more, s), v.engCreep = CreepOf(watch.more, s), v.engCreepManual = CreepManualOf(watch.more, s);
+        v.engBrakeFrom = v.engBrakeBy ? eng.brakeFrom : kEngLevelNone, v.engCreepFrom = v.creepBy ? eng.creepFrom : kEngLevelNone;
+        v.creepNoHook = v.creepBy && v.engCreep && !CreepHooked();
         v.engProfileFrom = eng.key[0] && eng.engine[0] ? eng.profileFrom : watch.profile.own ? kEngLevelDefault : kEngLevelNone;
         // the suspension's figures as the driven truck's file has them, front (wheel 0) and rear (the last wheel)
         // the display's figures, the bars' lamp and each axle's rest place (build B)
@@ -13754,6 +13959,106 @@ static void PartRest()
             Check(noEngine && noBox && GetFileAttributesW(truckFile(kind5).c_str()) == INVALID_FILE_ATTRIBUTES,
                   "engine: an edit with the engine's or the gearbox's name not known yet writes nothing and ticks no set");
         }
+        // Engine braking by the engine and the creep by the gearbox, on the same chain (BRIEF_jobs_1114.md, 167)
+        {
+            const char *ka = "eng_more_a", *kb = "eng_more_b", *ex = "e_more_x", *ey = "e_more_y", *gx = "g_more_x", *gy = "g_more_y";
+            auto cleanM = [&]() {
+                for (const char *k : { ka, kb }) DeleteFileW(truckFile(k).c_str());
+                for (const char *n : { ex, ey }) DeleteFileW(SetupFile(kSetupEngine, n).c_str());
+                for (const char *n : { gx, gy }) DeleteFileW(SetupFile(kSetupGearbox, n).c_str());
+            };
+            cleanM();
+            const std::wstring kf = truckFile(ka);
+            auto has = [&](const std::wstring &sec, const wchar_t *name) { wchar_t b[16] = {}; return GetPrivateProfileStringW(sec.c_str(), name, L"", b, 16, kf.c_str()) > 0; };
+            GaugeSettings g = {};
+            SettingsDefaults(g);
+            g.engineBrake = 22.0f, g.creep = false, g.creepManual = true;
+            EngineOwnMore w = {};
+            EngineState m = {};
+            // the last level: no key anywhere, nothing written by the read, and the pass reads the figures of Gauges.ini
+            EngineFor(m, ka, id1, ex, gx);
+            w = EngineMoreFor(m, ex, gx);
+            const bool last = m.brakeFrom == kEngLevelNone && m.creepFrom == kEngLevelNone && !w.brakeSet && !w.creepSet && EngineBrakeOf(w, g) == 22.0f && !CreepOf(w, g) &&
+                              CreepManualOf(w, g) && GetFileAttributesW(kf.c_str()) == INVALID_FILE_ATTRIBUTES && !CreepFileHas(gx);
+            // the default's level: the engine's file and the gearbox's
+            const EngineMore d = { 10.0f, 1, 0 };
+            EngineMoreDefaultWrite(ex, gx, d);
+            EngineFor(m, ka, id1, ex, gx);
+            w = EngineMoreFor(m, ex, gx);
+            const bool byDefault = m.brakeFrom == kEngLevelDefault && m.brake == 10.0f && m.creepFrom == kEngLevelDefault && m.creep && !m.creepManual && EngineBrakeOf(w, g) == 10.0f &&
+                                   CreepOf(w, g) && !CreepManualOf(w, g) && CreepFileHas(gx) && GetFileAttributesW(kf.c_str()) == INVALID_FILE_ATTRIBUTES;
+            // the first move of a row makes the kind's own, as an edit of Engine torque; the other part falls through
+            EngineMore one = kNoMore;
+            one.brake = 12.0f;
+            const bool madeKind = EngineMoreTake(m, one);
+            const bool byKind = madeKind && m.kindOwn && m.brakeFrom == kEngLevelKind && m.brake == 12.0f && m.creepFrom == kEngLevelDefault && has(kEngineSection, L"EngineBrake.e_more_x") &&
+                                !has(kEngineSection, L"Creep.g_more_x");
+            // This truck only: the figures in force go to the truck's level, and a move of the creep writes the two together
+            EngineLevelSet(m, true);
+            EngineMore two = kNoMore;
+            two.creep = 0, two.creepManual = 1;
+            EngineMoreTake(m, two);
+            w = EngineMoreFor(m, ex, gx);
+            const std::wstring mine = SectionOf(kEngineSection, id1);
+            const bool byTruck = m.truckOwn && m.brakeFrom == kEngLevelTruck && m.brake == 12.0f && m.creepFrom == kEngLevelTruck && !m.creep && m.creepManual && has(mine, L"Creep.g_more_x") &&
+                                 has(mine, L"CreepManual.g_more_x") && w.creepSet && !CreepOf(w, g) && EngineBrakeOf(w, g) == 12.0f;
+            // another truck of the kind keeps the kind's and the default's
+            EngineState o2 = {};
+            EngineFor(o2, ka, id2, ex, gx);
+            const bool otherTruck = o2.brakeFrom == kEngLevelKind && o2.brake == 12.0f && o2.creepFrom == kEngLevelDefault && o2.creep;
+            // an engine or a gearbox changed in the garage goes back to the next level: here none, so Gauges.ini's
+            EngineFor(o2, ka, id1, ey, gy);
+            const EngineOwnMore w2 = EngineMoreFor(o2, ey, gy), stale = EngineMoreFor(m, ey, gy); // stale: a state for another engine and gearbox (not caught up yet) puts nothing in
+            const bool garage = o2.brakeFrom == kEngLevelNone && o2.creepFrom == kEngLevelNone && !w2.brakeSet && !w2.creepSet && EngineBrakeOf(w2, g) == 22.0f && !stale.brakeSet &&
+                                !stale.creepSet && m.brakeFrom == kEngLevelTruck;
+            // half a group is no group: CreepManual alone at a level is not read
+            WritePrivateProfileStringW(mine.c_str(), L"Creep.g_more_x", nullptr, kf.c_str());
+            EngineFor(o2, ka, id1, ex, gx);
+            const bool half = o2.creepFrom == kEngLevelDefault && o2.creep && !o2.creepManual;
+            EngineMoreTake(o2, two);
+            // must 1: the truck's creep on with Gauges.ini's off asks for no hook, which goes by Gauges.ini's alone
+            EngineMore creepOn = kNoMore;
+            creepOn.creep = 1, creepOn.creepManual = 0;
+            EngineMoreTake(m, creepOn);
+            w = EngineMoreFor(m, ex, gx);
+            const bool noHook = CreepOf(w, g) && !g.creep && !DriveHookWanted(g.creep, false, false, false, false, 0, false);
+            // the take-over carries the three
+            TakeOverBoth(ka, id1, id3);
+            EngineFor(o2, ka, id3, ex, gx);
+            const bool carried = o2.truckOwn && o2.brakeFrom == kEngLevelTruck && o2.brake == 12.0f && o2.creepFrom == kEngLevelTruck && o2.creep && !o2.creepManual;
+            // the box off: an edit goes to the default's files; the button and Defaults
+            EngineFor(m, kb, id1, ex, gx);
+            one.brake = 5.0f;
+            EngineMoreTake(m, one);
+            EngineOwnSet(m, false);
+            one.brake = 7.0f;
+            EngineMoreTake(m, one);
+            const bool kept = m.kindKept && m.brakeFrom == kEngLevelDefault && m.brake == 7.0f && GetPrivateProfileIntW(kEngineSection, L"EngineBrake.e_more_x", 0, truckFile(kb).c_str()) == 5;
+            EngineOwnSet(m, true);
+            EngineMoreTake(m, creepOn);
+            EngineToDefault(m);
+            const EngineMore dn = EngineMoreDefaultRead(ex, gx);
+            const bool toFiles = dn.brake == 5.0f && dn.creep == 1 && dn.creepManual == 0 && m.brakeFrom == kEngLevelKind;
+            EngineDefaults(m);
+            const EngineMore dz = EngineMoreDefaultRead(ex, gx);
+            const bool backPlain = m.brakeFrom == kEngLevelNone && m.creepFrom == kEngLevelNone && m.kindKept && dz.brake < 0.0f && dz.creep < 0;
+            // figures read into their range, and text that is no figure is none
+            WritePrivateProfileStringW(kEngineSection, L"EngineBrake.e_more_x", L"99", truckFile(kb).c_str());
+            WritePrivateProfileStringW(kEngineSection, L"Creep.g_more_x", L"yes", truckFile(kb).c_str());
+            EngineOwnSet(m, true);
+            const bool ranged = m.brakeFrom == kEngLevelKind && m.brake == 30.0f && m.creepFrom == kEngLevelNone;
+            WritePrivateProfileStringW(kEngineSection, L"EngineBrake.e_more_x", L"lots", truckFile(kb).c_str());
+            EngineFromFiles(m);
+            const bool noFigure = m.brakeFrom == kEngLevelNone;
+            cleanM();
+            const bool all = last && byDefault && byKind && byTruck && otherTruck && garage && half && noHook && carried && kept && toFiles && backPlain && ranged && noFigure;
+            if (!all)
+                printf("     last %d byDefault %d byKind %d byTruck %d otherTruck %d garage %d half %d noHook %d carried %d kept %d button %d defaults %d ranged %d noFigure %d\n", last, byDefault,
+                       byKind, byTruck, otherTruck, garage, half, noHook, carried, kept, toFiles, backPlain, ranged, noFigure);
+            Check(all, "engine: Engine braking by the engine and the creep by the gearbox at each of the four levels, Gauges.ini's the last and no key written by a read; a row's first move makes the "
+                       "kind's own, This truck only and the take-over carry them, a changed engine or gearbox goes back to the next level, the creep's two keys are one group, a truck's creep "
+                       "asks for no hook, the box off edits the default, the button and Defaults");
+        }
         // the engine's profile by truck and kind (BRIEF_engine_profile_per_truck.md and its addendum)
         {
             const char *ka = "eng_prof_a", *kb = "eng_prof_b", *kc = "eng_prof_c", *kd = "eng_prof_d", *ep = "e_prof_engine_3";
@@ -15377,7 +15682,7 @@ static void PartProfiles()
         drive(kind, id1, "prof_eng_a", "prof_gb_b");
         run(kProfAskImportTruck, "prof_kind - First.ini");
         ReadTruckEngine(kind, id1, "prof_eng_a", "prof_gb_b", torque, hold, p, curve);
-        const bool holdLeft = torque == 80 && p.own && hold == 0.0f && says("Made with another gearbox: its gear hold was left.") && !EngineProfileRead("prof_eng_a", dp) && !list.row[0].sameGearbox;
+        const bool holdLeft = torque == 80 && p.own && hold == 0.0f && says("Made with another gearbox: its gearbox settings were left.") && !EngineProfileRead("prof_eng_a", dp) && !list.row[0].sameGearbox;
         fresh();
         drive(kind, id1, "prof_eng_a", "prof_gb_a");
         run(kProfAskImportTruck, "prof_kind - First.ini", "", false, false, true);
@@ -15385,6 +15690,59 @@ static void PartProfiles()
         const bool ticked = EngineProfileRead("prof_eng_a", dp) && dp.peakRpm == 1400.0f && EngineTorqueRead("prof_eng_a") == 80 && says("the default of the engine") && !GearHoldRead("prof_gb_a", dh);
         Check(engineLeft && holdLeft && ticked,
               "profiles: a profile made with another engine leaves its engine settings, one made with another gearbox its gear hold, each said; the engine's own default is written only with the tick and the gearbox's never");
+    }
+
+    // Engine braking and the creep ride in the profile (BRIEF_jobs_1114.md, 167, must 6)
+    {
+        fresh();
+        drive(kind, id1, "prof_eng_a", "prof_gb_a");
+        const std::wstring bare = folder + L"\\prof_kind - bare167.ini", full = folder + L"\\prof_kind - full167.ini";
+        // no level has them: the file holds none of the three keys
+        run(kProfAskExport, "bare167");
+        const bool lacks = key(bare, L"Engine", L"EngineBrake").empty() && key(bare, L"Engine", L"Creep").empty() && key(bare, L"Engine", L"CreepManual").empty();
+        // the truck's own: plain names, from the level in force
+        const EngineMore m = { 8.0f, 1, 1 };
+        WriteTruckEngine(kind, id1, true, "prof_eng_a", 0, "prof_gb_a", 0.0f, nullptr, nullptr, &m);
+        drive(kind, id1, "prof_eng_a", "prof_gb_a");
+        run(kProfAskExport, "full167");
+        const bool holds = key(full, L"Engine", L"EngineBrake") == L"8" && key(full, L"Engine", L"Creep") == L"1" && key(full, L"Engine", L"CreepManual") == L"1";
+        // Import onto a truck whose level had none: taken, said, no unknown key; the backup says the level had none
+        fresh();
+        drive(kind, id1, "prof_eng_a", "prof_gb_a");
+        wipe(backups);
+        run(kProfAskImportTruck, "prof_kind - full167.ini");
+        const bool took = e.truckOwn && e.brakeFrom == kEngLevelTruck && e.brake == 8.0f && e.creepFrom == kEngLevelTruck && e.creep && e.creepManual && says("Engine braking") && says("Creep") &&
+                          !says("unknown");
+        char backFile[200] = "";
+        for (int i = 0; i < list.count; i++)
+            if (list.row[i].backup) strncpy_s(backFile, list.row[i].file, _TRUNCATE);
+        const std::wstring backup = backups + L"\\" + Wide(backFile);
+        const bool backHeld = backFile[0] && key(backup, L"Engine", L"EngineOwn") == L"0" && key(backup, L"Engine", L"EngineBrake").empty() && key(backup, L"Engine", L"Creep").empty();
+        // the backup's way back: the level has none again
+        run(kProfAskImportTruck, backFile, "", false, true);
+        const bool wayBack = e.brakeFrom == kEngLevelNone && e.creepFrom == kEngLevelNone && !e.truckOwn;
+        // a profile without them changes nothing
+        WriteTruckEngine(kind, id1, true, "prof_eng_a", 0, "prof_gb_a", 0.0f, nullptr, nullptr, &m);
+        drive(kind, id1, "prof_eng_a", "prof_gb_a");
+        run(kProfAskImportTruck, "prof_kind - bare167.ini");
+        const bool unchanged = e.brakeFrom == kEngLevelTruck && e.brake == 8.0f && e.creepFrom == kEngLevelTruck && e.creep && e.creepManual;
+        // made with another gearbox: the creep is left, engine braking taken; the second button writes the kind's level
+        fresh();
+        drive(kind, id1, "prof_eng_a", "prof_gb_b");
+        run(kProfAskImportKind, "prof_kind - full167.ini");
+        const bool otherBox = e.kindOwn && e.brakeFrom == kEngLevelKind && e.brake == 8.0f && e.creepFrom == kEngLevelNone && says("Made with another gearbox: its gearbox settings were left.");
+        // with the tick the engine's own default takes Engine braking, and the gearbox's file is never written
+        fresh();
+        drive(kind, id1, "prof_eng_a", "prof_gb_a");
+        run(kProfAskImportTruck, "prof_kind - full167.ini", "", false, false, true);
+        const EngineMore dm = EngineMoreDefaultRead("prof_eng_a", "prof_gb_a");
+        const bool ticked = dm.brake == 8.0f && dm.creep < 0;
+        DeleteFileW(bare.c_str()), DeleteFileW(full.c_str());
+        const bool all = lacks && holds && took && backHeld && wayBack && unchanged && otherBox && ticked;
+        if (!all) printf("     lacks %d holds %d took %d backHeld %d wayBack %d unchanged %d otherBox %d ticked %d | %s\n", lacks, holds, took, backHeld, wayBack, unchanged, otherBox, ticked, list.say);
+        Check(all, "profiles: Engine braking and the creep go into [Engine] by plain names from the level in force and none where no level has them; an Import takes them at the button's level and "
+                   "says so, the backup gives back a level that had none, a profile without them changes nothing, another gearbox leaves the creep, the tick writes the engine's default only");
+        fresh();
     }
 
     // a stranger's file: unknown keys counted and left, figures into their ranges, the plain scales' word, a large file, another kind, a path
