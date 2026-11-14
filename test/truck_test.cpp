@@ -5163,6 +5163,16 @@ static void TruckTestsFour()
         Check(!TruckTypeDue(false, 0x10, 0x20, 0, 0) && TruckTypeDue(true, 0x10, 0x20, 0, 0) && !TruckTypeDue(true, 0x10, 0x20, 0x10, 0x20) &&
                   TruckTypeDue(true, 0x11, 0x20, 0x10, 0x20) && TruckTypeDue(true, 0x10, 0x21, 0x10, 0x20) && !TruckTypeDue(false, 0x11, 0x21, 0x10, 0x20),
               "truck type: a truck's type is looked up only once the list has been looked for, and then once for each vehicle and model");
+        {
+            // the code could not be copied: the list counts as looked for, the look is due and fails with its reason, the weight gives the class
+            TruckTypePlace nothing = {};
+            TruckTypeRead read = {};
+            const bool due = TruckTypeDue(TruckTypeLooked(false, false), 0x10, 0x20, 0, 0);
+            const bool failed = !TruckTypeLook(TruckMemory{}, nothing, 0x20, read) && !strcmp(read.why, "the list of truck records was not found in this game version");
+            Check(due && failed && !TruckTypeLooked(true, false) && TruckTypeLooked(true, true) && ClassByType(read.text, 9000.0f, kClassTruck) == ClassByMass(9000.0f, kClassTruck) &&
+                      ClassByType(read.text, 1500.0f, kClassTruck) == ClassByMass(1500.0f, kClassTruck),
+                  "truck type: with no code to look through the list counts as looked for, so the type's look is due, fails with its reason and the weight gives the class");
+        }
         // the drawn wire's sag, the probe (winch_out.h; BRIEF_jobs_1114.md part 164). The check alone (the addendum's S1):
         // a rope of 32 links of 0.25 m, 8 m, under a limit of 9.6 m
         {

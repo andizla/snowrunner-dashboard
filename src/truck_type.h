@@ -77,6 +77,14 @@ inline bool TruckTypeRecordIs(const TruckMemory &m, uint64_t at, const char *nam
     return !memcmp(own, name, length);
 }
 
+// Whether the list has been looked for, as the look through the game's code ends. Where the code could not be copied
+// at all nothing will ever find the list, so "not found" is true then as well: the type's look fails with its reason
+// and the weight gives the class, as it did before the type was read.
+inline bool TruckTypeLooked(bool codeCopied, bool listSought)
+{
+    return !codeCopied || listSought;
+}
+
 // Whether a truck's type is to be looked up now: only once the game's code has been looked through for the list
 // (before that "the list was not found" is not true yet, and a truck read then would keep the weight's class for good),
 // and then once for each vehicle and model.

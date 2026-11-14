@@ -5249,6 +5249,7 @@ static void GameCodeLook(const GaugeSettings &s)
     if (!CodeCopy(code, from, to))
     {
         Log(L"gearbox code: the exe has no code section to look in");
+        g_typePlaceLooked = TruckTypeLooked(false, false); // no list will be found: a truck's class goes by its weight
         return;
     }
     const ULONGLONG started = GetTickCount64();
@@ -5320,7 +5321,7 @@ static void GameCodeLook(const GaugeSettings &s)
         else Log(L"quick winch: %S, so the quick winch stays as the game has it and the setting is greyed", quick.why);
     }
     {
-        g_typePlaceLooked = true;
+        g_typePlaceLooked = TruckTypeLooked(true, true);
         if (TruckTypePlaceFind(code.data(), from, to, g_typePlace))
             Log(L"truck type: the game's list of truck records at +%zx, a record of 0x%x bytes with its TruckType at + 0x%x; SCOUT there makes a truck a scout whatever it weighs",
                 g_typePlace.list, g_typePlace.size, g_typePlace.text);
