@@ -1133,6 +1133,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             PageLabel("Drive display", labelX);
             changed(ImGui::Checkbox("##drivedisplay", &s.driveDisplay));
             PageTip("Each wheel: its spin against the truck speed and its share of the drive.");
+            // drawn as off where the types do not act (BRIEF_tester_1114.md, part 192): by the drive's own test (DiffTypesAct)
+            ImGui::BeginDisabled(!view.diffActs);
             PageLabel("Diff", labelX);
             ImGui::SetNextItemWidth(w);
             {
@@ -1189,6 +1191,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 if (lockedOne && differ && (s.diffLockBite <= 0 || !view.diffBiteActs)) ImGui::TextDisabled("Locked on one axle needs Diff lock bite above 0.");
                 if (view.diffNoPairs) ImGui::TextDisabled("The axles of this truck are not read as pairs.");
             }
+            ImGui::EndDisabled();
+            if (!view.diffActs) ImGui::TextDisabled("Not in force now. The types act with the mod gearbox (Gearbox=2) in a held gear.");
             // a locked differential limits the steering (BRIEF_lock_steering.md, M7): the share of the steering that is left
             PageLabel("Steering with front lock", labelX);
             ImGui::SetNextItemWidth(w);

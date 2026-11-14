@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- **The Diff rows say where they act.** At Gearbox 0 and 1, and in A without Mod engine in A, the diff types do nothing. The Diff and Axle rows on the Power tab are now drawn as off there, with a line under them that says so.
 - **No stall in the first gear or the low range with the clutch let up.** In the mod's own gearbox, in a position you pick, the engine used to stall in L-, L, L+ and the first gear under a load it could not pull. Now it holds idle there and the clutch slips and heats, so the clutch burns before the engine dies. From the second gear up the engine stalls as before. A shift into gear without the clutch still stalls it.
 - **In A the engine no longer stays over the red zone with your foot off.** With the wheels spinning free in the air or in deep mud the needle could stay at the top of the tachometer for many seconds after you let go. The engine now runs down as a real engine does, in about a second, while the wheels spin on. With the wheels on the ground nothing changes.
 - **A truck with a wheel the mod cannot pair now has its Axle rows.** Until now one wheel with no partner took away the Axle rows of the whole truck, and the truck went by Diff alone. Such a wheel is now an axle of its own with a row of its own. The wheels of a tandem on two beams, one each side, are paired across the truck, so such a 6x6 has three rows. Gauges.log names each wheel left alone.

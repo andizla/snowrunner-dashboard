@@ -1406,6 +1406,11 @@ inline CapStepOut DiffOpenStep(const float *pre, const float *even, const float 
     o.kept = k;
     return o;
 }
+// Whether the diff types act now (BRIEF_tester_1114.md, part 192): by the drive's own test, the torque cut's slot
+// published for the driven truck (the hook's cutHere is that slot fresh for its action), which the pass publishes
+// exactly while the cut acts. With no truck driven nothing is published, so the tab goes by whether the cut can act at
+// this level: the mod's gearbox (Gearbox=2), or the automatic with CutInA (part A).
+inline bool DiffTypesAct(bool driving, bool cutActs, bool canAct) { return driving ? cutActs : canAct; }
 // ---- Open by axle (BRIEF_open_by_axle.md with the Reviewer's addendum) ----
 // Open is an open differential in each axle. The evening and the limit above run over the two wheels of one axle. What
 // an axle's limit took from the drive is handed to the other axles (DiffOpenAxles, the tied shaft between the axles): the

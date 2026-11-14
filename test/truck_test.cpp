@@ -5217,6 +5217,9 @@ static void TruckTestsFour()
               "winch out: with it off or no truck the job rests whatever the key does; a fault in the set or the read ends the calls; the truck update is asked "
               "for with the action bound alone, at any Gearbox and with no Probe, and not while it is not bound");
 
+        // part 192: the Diff rows are drawn as on only where the types act: driven, by the cut's own state; with no truck, by the level
+        Check(DiffTypesAct(true, true, false) && !DiffTypesAct(true, false, true) && DiffTypesAct(false, false, true) && !DiffTypesAct(false, true, false),
+              "diff rows: drawn as on while the torque cut acts for the driven truck, off where it does not (Gearbox=1, A without the box); with no truck by whether the cut can act");
         // part 177, the start line: a truck's type is looked up only once the game's code was looked through for the list
         Check(!TruckTypeDue(false, 0x10, 0x20, 0, 0) && TruckTypeDue(true, 0x10, 0x20, 0, 0) && !TruckTypeDue(true, 0x10, 0x20, 0x10, 0x20) &&
                   TruckTypeDue(true, 0x11, 0x20, 0x10, 0x20) && TruckTypeDue(true, 0x10, 0x21, 0x10, 0x20) && !TruckTypeDue(false, 0x11, 0x21, 0x10, 0x20),

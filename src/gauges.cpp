@@ -11730,6 +11730,7 @@ static DWORD WINAPI Run(void *)
             v.diffRows = 0;
             v.diffNoPairs = driving && watch.axleRowsFor == watch.refs.vehicle && watch.axleRows.axles == 0 && watch.axleRowsLooks >= 3;
             v.diffBiteActs = LockPublishes(g_lockPattern, watch.diffKindRead, watch.diffKind);
+            v.diffActs = DiffTypesAct(driving, watch.cutActs, TorqueCutWanted(s));
             // the steering left while a lock limits it (lock_steer.h): on the tab under the two rows and in the Drive display's line
             v.steerPercent = driving && watch.steer.known ? LockSteerPercent(watch.steer.share) : 0;
             v.steerNoRoute = !g_steerPattern;
