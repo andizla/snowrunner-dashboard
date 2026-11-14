@@ -2453,6 +2453,38 @@ int main(int argc, char **argv)
                 const TorqueOrders again = TorqueHandStep(rested, true, 0x5000, 0x4000, 0.9f, 2.0f);
                 Check(Near(liftedFirst.factor, 1.8f, 0.001f) && restWrites == 1 && Near(restLast, 0.9f, 0.001f) && again.write && Near(again.factor, 0.9f, 0.001f),
                       "torque hand under the cut: not wanted for 10 000 passes it gives the game's share back once and writes nothing more; taken again, its first write is the game's own share, no jump");
+                // the review of 162 part A, S2: the flag is down wherever the cut is given up, whatever stood there, and
+                // the cut's own block sets it to what the pass found. The shift rules then rest for no truck the cut has left:
+                // a step with the flag down is the step as it always was
+                Check(!CutInAFlag(true, true) && !CutInAFlag(true, false) && CutInAFlag(false, true) && !CutInAFlag(false, false),
+                      "torque cut in A: the acting in A flag is down wherever the cut is given up and is the pass's own find inside the cut's block");
+                // the floor's compare (162 part A: "at or under" where it was "under"): at the bracket's own number the
+                // answer is the same number, the same torque and the same stand-in as with no floor at all, which is what
+                // "under" gave there; the flag alone is new. Under the floor it lifts as before, above it nothing
+                {
+                    TorqueCutSlot fl = {};
+                    fl.vehicle = 1, fl.mode = kCutScalar, fl.share = 1.0f, fl.pedal = 1.0f;
+                    const CutSpeeds still = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, true };
+                    const float at[3] = { 0.12f, 0.3f, 0.07f };
+                    bool floorSame = true;
+                    for (int i = 0; i < 3; i++)
+                    {
+                        fl.scalar = at[i];
+                        fl.floor = 0.0f;
+                        const TorqueCutAnswer bare = TorqueCutAnswerOf(fl, 257000.0f, 0.0f, 2.54f, 10.08f, 1.0f, 1.0f, still);
+                        fl.floor = at[i];
+                        const TorqueCutAnswer atFloor = TorqueCutAnswerOf(fl, 257000.0f, 0.0f, 2.54f, 10.08f, 1.0f, 1.0f, still);
+                        floorSame = floorSame && bare.bracket == at[i] && !bare.floored && atFloor.floored && !memcmp(&atFloor.bracket, &bare.bracket, 4) &&
+                                    !memcmp(&atFloor.used, &bare.used, 4) && !memcmp(&atFloor.torque, &bare.torque, 4) && !memcmp(&atFloor.standIn, &bare.standIn, 4);
+                    }
+                    fl.scalar = 0.05f, fl.floor = 0.12f;
+                    const TorqueCutAnswer lifted12 = TorqueCutAnswerOf(fl, 257000.0f, 0.0f, 2.54f, 10.08f, 1.0f, 1.0f, still);
+                    fl.scalar = 0.5f;
+                    const TorqueCutAnswer above12 = TorqueCutAnswerOf(fl, 257000.0f, 0.0f, 2.54f, 10.08f, 1.0f, 1.0f, still);
+                    Check(floorSame && lifted12.bracket == 0.12f && lifted12.floored && above12.bracket == 0.5f && !above12.floored,
+                          "torque cut, the floor: at the bracket's own number the answer is bit for bit the one with no floor, so at or under answers as under did; under the "
+                          "floor it is lifted to it, above it left");
+                }
                 Check(OverRevCounts(kCutMap, true, false) && !OverRevCounts(kCutMap, true, true) && !OverRevCounts(kCutScalar, true, false) && !OverRevCounts(kCutMap, false, false),
                       "over-rev: its share counts where the map went out and the drive answered, and never in A");
             }

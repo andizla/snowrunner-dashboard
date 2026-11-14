@@ -8226,7 +8226,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         LockGive(0, 0, 0, 0);
         DriveShowGive(0, 0);
         TorqueCutPublish(nullptr);
-        w.cutInA = false; // the two shift rules rest only while the cut has the truck in A (the review of 162 part A, S2)
+        w.cutInA = CutInAFlag(true, w.cutInA); // the two shift rules rest only while the cut has the truck in A (the review of 162 part A, S2)
         w.cutActs = false;
         w.creeping = false;
         w.creep = CreepModel{};
@@ -8308,7 +8308,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         CreepGive(0, 0.0f);
         EngineSpeedPublish(nullptr, 0.0f);
         TorqueCutPublish(nullptr); // the torque cut's too: every call of the gear torque passes until the truck is driven again
-        w.cutInA = false;
+        w.cutInA = CutInAFlag(true, w.cutInA);
         w.cutActs = false;
         w.creeping = false;
         w.creep = CreepModel{};
@@ -9366,7 +9366,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 else Log(L"torque cut: off, %s; the game's own torque again", TorqueCutWhyNot(s, want, cutHeld || cutA, cutHooks, raw.gearEngaged, gearTop, cutAgrees));
             }
             w.cutActs = cutActs;
-            w.cutInA = inA;
+            w.cutInA = CutInAFlag(false, inA);
             // no gear top is learned under the cut (GearTopStep rests: it reads the game's pull at nothing, which the cut
             // holds at 1). With A under the cut that is every position, so once a truck the log says what it goes by
             if (inA && w.topsSaidFor != w.refs.vehicle)

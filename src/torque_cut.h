@@ -166,6 +166,11 @@ inline float OverRevShare(float mean, float truck, float top)
     return v / top;
 }
 
+// The watch's "the cut acted in A on the last pass" flag (the review of 162 part A, S2): the cut's own block sets it to
+// what the pass found; wherever the cut is given up outside that block (the truck no longer read, not driven or held,
+// the Powertrain off) it is down, whatever stood there. The automatic's two shift rules rest only while it is up.
+inline bool CutInAFlag(bool givenUp, bool inA) { return !givenUp && inA; }
+
 // 3u^2 - 2u^3 on u held to 0 to 1.
 inline float CutSmooth(float u)
 {
