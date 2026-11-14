@@ -5123,6 +5123,7 @@ static void QuickWinchPass(const GaugeSettings &s, uint64_t vehicle, float speed
     }
 }
 
+static bool g_typePlaceLooked = false; // the game's code has been looked through for the list: before that "not found" is not true yet
 static TruckTypePlace g_typePlace = { false, 0, 0, 0, "" }; // the game's list of truck records, found at the code look (BRIEF_scout_by_truck_type.md)
 static bool g_steerPattern = false; // the steering's product found once at the code look: the most angle is at wheel + 0xB8 (BRIEF_lock_steering.md, M1)
 
@@ -5317,6 +5318,7 @@ static void GameCodeLook(const GaugeSettings &s)
         else Log(L"quick winch: %S, so the quick winch stays as the game has it and the setting is greyed", quick.why);
     }
     {
+        g_typePlaceLooked = true;
         if (TruckTypePlaceFind(code.data(), from, to, g_typePlace))
             Log(L"truck type: the game's list of truck records at +%zx, a record of 0x%x bytes with its TruckType at + 0x%x; SCOUT there makes a truck a scout whatever it weighs",
                 g_typePlace.list, g_typePlace.size, g_typePlace.text);
@@ -6844,7 +6846,7 @@ static void ClassLook(TruckWatch &w, const TruckMemory &m)
         else Log(L"truck: its mass by its files was not read (%.0f)", mass);
     }
     // the game's own TruckType, once a truck: again only for another vehicle or another model (BRIEF_scout_by_truck_type.md, M2)
-    if (w.refs.vehicle != w.typeVehicle || w.refs.model != w.typeModel)
+    if (TruckTypeDue(g_typePlaceLooked, w.refs.vehicle, w.refs.model, w.typeVehicle, w.typeModel))
     {
         w.typeVehicle = w.refs.vehicle;
         w.typeModel = w.refs.model;
@@ -8513,7 +8515,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         // game's own pull; an engine held back (Torque) sets off as a weaker one
         const float launch = w.engine.torque > 0.0f && w.mass > 0.0f && w.engineVehicle == w.refs.vehicle
                                  ? w.engine.torque / w.mass * (w.profile.torque > 0.0f ? w.profile.torque : 1.0f) : 0.0f;
-        const EngineHand hand{ w.hand.on, &curve, scale.redline > 0.0f ? scale.max / scale.redline : 1.0f, s.engineShare / 100.0f, launch,
+        // "the mod's engine drives": the hand is on, or the cut acted in A on the last pass (part 177)
+        const bool modEngine = ModEngineDrives(w.hand.on, w.cutInA);
+        const EngineHand hand{ modEngine, &curve, scale.redline > 0.0f ? scale.max / scale.redline : 1.0f, s.engineShare / 100.0f, launch,
                                GearHoldOf(w, autoClass), EngineLightFloor(curve, scale.redline), s.input, TorqueRoof(autoClass) };
         const int huntsWere = w.gearbox.hunts, topUpsWere = w.gearbox.topUps, taperUpsWere = w.gearbox.taperUps, taperWatchesWere = w.gearbox.taperWatches;
         GearboxModelPass(w.gearbox, w.take.driving, w.pos, raw, scale, foot, w.power.power, dt, hand, w.cutInA); // the cut in A holds the game's pull at 1: the two rules that read it rest (M2)
@@ -8787,7 +8791,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         if (w.take.driving && !testing)
         {
             const GearboxOptions options{ s.requireClutch, s.requireGearHeld, s.skipNeutral, s.downStaysForward, s.walkSkipsLow };
-            const int autoGear = TakeoverAutoGear(raw, w.gearbox.gear, GearboxLowestFit(w.gearbox, raw, scale, w.hand.on));
+            const int autoGear = TakeoverAutoGear(raw, w.gearbox.gear, GearboxLowestFit(w.gearbox, raw, scale, ModEngineDrives(w.hand.on, w.cutInA)));
             if (!own || w.pos.pos == kPosA) GearboxFollowFloor(w.gearbox, autoGear); // in A the model's gear goes where the floor lifts the game's
             const int posWas = w.pos.pos;
             GearboxActions acts = w.actions;
@@ -9184,7 +9188,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             if (probe)
             {
                 // the nose within kPullPitch, as before: the probe's shape by x takes no grade out
-                const bool measuring = clean && w.tilt.running && fabsf(w.tilt.pitchDeg) <= kPullPitch && !w.hand.on && pedalNow >= kBaseLearnPedal;
+                const bool measuring = clean && w.tilt.running && fabsf(w.tilt.pitchDeg) <= kPullPitch && !ModEngineDrives(w.hand.on, w.cutActs || w.cutInA) && pedalNow >= kBaseLearnPedal; // under the cut the pull is not the game's own either (part 177)
                 if (g != w.pull.gear || (measuring && groundX >= kPullDoneAt))
                 {
                     float most = 0.0f, mostX = 0.0f, fall = 0.0f;

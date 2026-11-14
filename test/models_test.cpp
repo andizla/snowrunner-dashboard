@@ -2796,6 +2796,60 @@ int main(int argc, char **argv)
                 }
                 last = qb.gear;
             }
+            // part 177: the torque cut acting in A. The hand is given back there, so the pass builds the automatic's hand
+            // from ModEngineDrives. A gearbox whose first four tops lie close (13, 13.8, 14.8 and 15.8 rad/s, then 23 and
+            // 29), floored from a standstill on a gripping truck, the wheels gaining 6 rad/s each second up to 0.95 of the
+            // gear's top: with a hold of 2.0 s and of 3.0 s no two shifts up are nearer than the hold and none skips a gear.
+            // With the hand's flag as it was (the hand's own, off under the cut) the same run goes up several gears at once
+            {
+                const bool term = ModEngineDrives(true, false) && ModEngineDrives(false, true) && ModEngineDrives(true, true) && !ModEngineDrives(false, false);
+                static const float closeSpeeds[8] = { 3.0f, 4.0f, 4.4f, 4.9f, 5.4f, 9.0f, 12.0f, 9.0f };
+                struct UpRun { float shortest; int skips, shifts, last; bool byEngine; };
+                auto upRun = [&](bool handOn, bool cutInA, float hold, float toShare) {
+                    EngineHand runHand = whole;
+                    runHand.on = ModEngineDrives(handOn, cutInA);
+                    runHand.hold = hold;
+                    TruckRaw ct = sd;
+                    ct.gearSpeeds = 8;
+                    memcpy(ct.gearSpeed, closeSpeeds, sizeof closeSpeeds);
+                    GearboxModel cb = {};
+                    cb.running = true, cb.gear = 1, cb.grip = 2.0f;
+                    UpRun r = { 100.0f, 0, 0, 0, false };
+                    float runSpin = 0.0f, runSince = 0.0f;
+                    for (float at = 0.0f; at < 30.0f; at += kDt)
+                    {
+                        for (int i = 0; i < ct.wheels; i++) ct.spin[i] = runSpin;
+                        ct.speed = runSpin / 2.0f;
+                        const int was = cb.gear;
+                        GearboxStep(cb, ct, dk, 1.0f, 1.0f, kDt, runHand, false, cutInA);
+                        runSince += kDt;
+                        if (cb.gear > was)
+                        {
+                            r.shortest = fminf(r.shortest, runSince);
+                            r.skips += cb.gear - was - 1;
+                            r.shifts++;
+                            runSince = 0.0f;
+                        }
+                        runSpin = fminf(runSpin + 6.0f * kDt, toShare * TruckGearTop(ct, cb.gear));
+                    }
+                    r.last = cb.gear, r.byEngine = cb.byEngine;
+                    return r;
+                };
+                const UpRun two = upRun(false, true, 2.0f, 0.95f), three = upRun(false, true, 3.0f, 0.95f), handTwo = upRun(true, false, 2.0f, 0.95f);
+                const UpRun asWas = upRun(false, false, 2.0f, 0.95f);
+                // the limiter's exception, kept: with the wheels run to the gear's top the gear goes up after kLimiterHold, one gear at a time
+                const UpRun limiter = upRun(false, true, 3.0f, 1.0f);
+                printf("     automatic under the cut in A, close gears: a hold of 2.0 s: %d shifts, the shortest %.2f s apart, %d gears skipped, to gear %d; of 3.0 s: %d, %.2f s, %d, gear %d; "
+                       "the hand's own flag as before: %d shifts, %.2f s, %d skipped; run to the top (the limiter): %d shifts, %.2f s, %d skipped\n",
+                       two.shifts, two.shortest, two.skips, two.last, three.shifts, three.shortest, three.skips, three.last, asWas.shifts, asWas.shortest, asWas.skips, limiter.shifts,
+                       limiter.shortest, limiter.skips);
+                Check(term && two.shifts >= 4 && two.shortest >= 2.0f - kDt && !two.skips && two.byEngine && three.shifts >= 4 && three.shortest >= 3.0f - kDt && !three.skips &&
+                          handTwo.shifts == two.shifts && handTwo.shortest == two.shortest && !handTwo.skips && (asWas.shortest < 2.0f - kDt || asWas.skips > 0) && !asWas.byEngine &&
+                          limiter.shifts >= 4 && !limiter.skips && limiter.shortest >= kLimiterHold - kDt && limiter.shortest < 3.0f - kDt,
+                      "automatic, the torque cut acting in A: the mod's engine drives where the hand is on or the cut acted in A; floored from a standstill through four close gears "
+                      "no two shifts up are nearer than the hold of 2.0 s or of 3.0 s and none skips a gear, as with the hand on; told the game's engine, as before, the same run "
+                      "breaks the hold or skips; run to the gear's top the limiter's rule sends it up after its own shorter hold, one gear at a time");
+            }
             EngineHand scoutWhole = whole, scoutHalf = half;
             scoutWhole.roof = scoutHalf.roof = TorqueRoof(kClassScout);
             printf("     engine handed over, the next gear 43/27 taller: floored shift up at %.3f of the gear's top at EngineShare 100, %.3f at 50 (a truck's roof); "

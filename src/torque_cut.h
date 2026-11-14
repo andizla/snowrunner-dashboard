@@ -220,6 +220,14 @@ inline float OverRevShare(float mean, float truck, float top)
 // the Powertrain off) it is down, whatever stood there. The automatic's two shift rules rest only while it is up.
 inline bool CutInAFlag(bool givenUp, bool inA) { return !givenUp && inA; }
 
+// Whether the mod's engine drives this truck, for the automatic (BRIEF_drive_1114_findings.md, part 177): the mod's
+// torque factor is handed to the game, or the torque cut acted in A on the last pass. Under the cut the hand is given
+// back, as it must be, and the automatic was then told that the game's engine drives: it shifted by that engine's whole
+// schedule, with no gear hold, several gears at once. Both flags are the last pass's where the automatic steps: in the
+// pass the cut takes A the hand is still on, and in the pass it lets go the cut's flag is still up, so in neither is
+// the automatic told "the game's engine". With CutInA off the cut's flag is never up and this is the hand's own.
+inline bool ModEngineDrives(bool handOn, bool cutInA) { return handOn || cutInA; }
+
 // 3u^2 - 2u^3 on u held to 0 to 1.
 inline float CutSmooth(float u)
 {

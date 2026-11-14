@@ -1499,6 +1499,7 @@ struct GearboxModel
     float stuck;       // seconds the truck has been stuck floored (kStuckShare): the crawling gears are let in
     float moving;      // seconds in the gear with the truck moving: 0 at a shift and while it stands
     bool holdUp;       // the gear came by a shift up or from a standstill: with the mod's engine it is held kEngineGearHold
+    bool byEngine;     // the last step shifted by the mod's engine's schedule (the hand's flag as the step got it), for the probe
     int shifts;        // shifts since the model began
     int upFrom;        // the gear the last shift up with the foot on came from, while kHuntWindow lasts; 0 for none
     float sinceUp;     // seconds since that shift up
@@ -2696,6 +2697,7 @@ inline void GearboxStep(GearboxModel &m, const TruckRaw &t, const GaugeScale &k,
     }
     else m.moving += dt;
     // with the mod's engine, a gear come by a shift up or from a standstill is held kEngineGearHold
+    m.byEngine = engine;
     const bool held = engine && m.holdUp && m.moving < (hand.hold > 0.0f ? hand.hold : kEngineGearHold);
     // the hunt guard (kHuntWindow): a shift up that held past the window clears the wait; a lift of the foot or a stop
     // lets go. Kept, no shift up past the gear kept, the limiter's neither, but halfway into the red zone (rolling faster
@@ -2967,9 +2969,9 @@ inline void GearboxProbeText(const TruckRaw &t, const GearboxModel &m, bool driv
                      "kickdown armed %.1f s (window %.1f), cruise %.1f s, lift %.1f s, stuck %.1f s, start gear %d, the wheels at %.2f of the model's gear's top",
               m.feel, m.upAt, m.downAt, m.lockAt, m.unlockAt, fmaxf(m.pause, 0.0f), m.wanted, m.heldNow ? "held" : "not held", m.moving, m.shortFor, fmaxf(m.kick, 0.0f),
               m.cruise, m.liftFor, m.stuck, m.startGear, ownX);
-    snprintf(out, size, "automatic (%s): gear %d of %d (the game's %d), %s, input %.0f rpm, engine %.0f rpm, torque x%.2f, to the wheels %.2f | wheels %.2f rad/s for each m/s%s | "
+    snprintf(out, size, "automatic (%s, shifting by %s): gear %d of %d (the game's %d), %s, input %.0f rpm, engine %.0f rpm, torque x%.2f, to the wheels %.2f | wheels %.2f rad/s for each m/s%s | "
                          "gaining %.2f rad/s each second, the wheels at %.2f of the game's gear's top (its pull %.2f) | %s%s%s%d shifts, %d taken back%s",
-              driving ? "the mod's, setting the game's gears" : "not handed to the game", m.gear, TruckTopGear(t), t.gearEngaged, m.locked ? "locked up" : "converter slipping",
+              driving ? "the mod's, setting the game's gears" : "not handed to the game", m.byEngine ? "the mod's engine" : "the game's engine", m.gear, TruckTopGear(t), t.gearEngaged, m.locked ? "locked up" : "converter slipping",
               m.input, m.rpm, m.ratio, m.drive, m.grip, m.grip > 0.0f ? "" : " (not learned yet)", m.trend, x, GamePull(x), m.climb > 0.0f ? "climbing, " : "",
               m.spinning ? "wheels spinning, going by the ground, " : "", kept, m.shifts, m.hunts, rules);
 }

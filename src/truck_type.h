@@ -77,6 +77,14 @@ inline bool TruckTypeRecordIs(const TruckMemory &m, uint64_t at, const char *nam
     return !memcmp(own, name, length);
 }
 
+// Whether a truck's type is to be looked up now: only once the game's code has been looked through for the list
+// (before that "the list was not found" is not true yet, and a truck read then would keep the weight's class for good),
+// and then once for each vehicle and model.
+inline bool TruckTypeDue(bool looked, uint64_t vehicle, uint64_t model, uint64_t typeVehicle, uint64_t typeModel)
+{
+    return looked && (vehicle != typeVehicle || model != typeModel);
+}
+
 // The TruckType text of the truck whose model is at `model`. False with a reason in out.why where any step failed.
 inline bool TruckTypeLook(const TruckMemory &m, const TruckTypePlace &place, uint64_t model, TruckTypeRead &out)
 {

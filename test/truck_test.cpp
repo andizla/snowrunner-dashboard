@@ -5159,6 +5159,10 @@ static void TruckTestsFour()
               "winch out: with it off or no truck the job rests whatever the key does; a fault in the set or the read ends the calls; the truck update is asked "
               "for with the action bound alone, at any Gearbox and with no Probe, and not while it is not bound");
 
+        // part 177, the start line: a truck's type is looked up only once the game's code was looked through for the list
+        Check(!TruckTypeDue(false, 0x10, 0x20, 0, 0) && TruckTypeDue(true, 0x10, 0x20, 0, 0) && !TruckTypeDue(true, 0x10, 0x20, 0x10, 0x20) &&
+                  TruckTypeDue(true, 0x11, 0x20, 0x10, 0x20) && TruckTypeDue(true, 0x10, 0x21, 0x10, 0x20) && !TruckTypeDue(false, 0x11, 0x21, 0x10, 0x20),
+              "truck type: a truck's type is looked up only once the list has been looked for, and then once for each vehicle and model");
         // the drawn wire's sag, the probe (winch_out.h; BRIEF_jobs_1114.md part 164). The check alone (the addendum's S1):
         // a rope of 32 links of 0.25 m, 8 m, under a limit of 9.6 m
         {
