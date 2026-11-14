@@ -1629,6 +1629,11 @@ int main()
     Check(GearboxOwnOrders(kPosA, 3, true) && GearboxOwnOrders(kPosA, 0, false) && !GearboxOwnOrders(kPosA, 0, true) && !GearboxOwnOrders(kPosA, -1, true) &&
               !GearboxOwnOrders(kPosN, 0, true) && !GearboxOwnOrders(kPosR, -1, true) && !GearboxOwnOrders(kPosLowMinus, 1, false),
           "gearbox (0.18.2): at Gearbox 0 and 1 the mod's orders only in A, its shifts only into a forward gear");
+    // the positions that never stall (BRIEF_tester_1114.md, part 189): the first gear and L-, L and L+; the second gear up,
+    // A, N, R and H as today
+    Check(StallSpared(kPosGear, 1) && !StallSpared(kPosGear, 2) && !StallSpared(kPosGear, 5) && StallSpared(kPosLowMinus, 1) && StallSpared(kPosLow, 1) &&
+              StallSpared(kPosLowPlus, 1) && !StallSpared(kPosA, 1) && !StallSpared(kPosN, 0) && !StallSpared(kPosR, -1) && !StallSpared(kPosH, 1),
+          "gearbox: the first gear and the low range never stall, the second gear and up, A, N, R and H as before");
 
     printf(g_failed ? "GEARBOX TEST FAILED: %d\n" : "GEARBOX TEST OK\n", g_failed);
     return g_failed ? 1 : 0;

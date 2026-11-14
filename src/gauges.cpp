@@ -8580,7 +8580,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             const bool onAxis = w.actions.clutchTravel >= 0.0f;
             // one stall a lug: none of the clutch model's once the creep has stalled the engine (and the creep has no grip
             // to stall by once the clutch model's engine is dead)
-            if (ClutchStep(w.clutch, raw, scale, curve, w.pos.travel, w.power.pedal, w.power.cold * w.power.boost, !onAxis, dt, w.tach.rpm) && !w.creep.stalled)
+            if (ClutchStep(w.clutch, raw, scale, curve, w.pos.travel, w.power.pedal, w.power.cold * w.power.boost, !onAxis, dt, w.tach.rpm, StallSpared(w.pos.pos, w.pos.gear)) &&
+                !w.creep.stalled)
             {
                 w.clutchStall = onAxis;
                 Log(L"clutch: the engine stalled, the clutch let up at %.0f rpm on the gearbox's input in gear %d; the game's engine stalls with it", w.clutch.input,
@@ -9669,7 +9670,8 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             const float holdMost = w.hand.on ? 1.0f : TorqueAt(curve, scale.redline > 0.0f ? scale.idle / scale.redline : 0.0f, tachTop);
             // the stalls only as a manual gearbox's: the mod's own gearbox in a position picked by hand (the author's drive
             // of BF57872B); on the automatic and the game's shifter the governor pushes and the engine idles on
-            const bool mayStall = s.gearbox == kGearboxOwn && manual && autoPicks; // a hand gear creeps only with CreepManual
+            // and never in the first gear or the low range (BRIEF_tester_1114.md, part 189): the clutch slips and heats there
+            const bool mayStall = s.gearbox == kGearboxOwn && manual && autoPicks && !StallSpared(w.pos.pos, w.pos.gear); // a hand gear creeps only with CreepManual
             // a pass that shifts gives nothing and leaves the model as it was: the gear it reads is the one before the
             // shift, and the next pass sees the change and keeps kCreepQuiet (round 3 of the crash hotfix)
             // and nothing from a shift asked until kCreepQuiet after it engaged (the shift's state): the model keeps the

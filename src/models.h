@@ -3233,7 +3233,20 @@ struct ClutchModel
     bool lugging;      // it does, locked at kAutoLockKmh or more with the engine held under its idle speed in gear: the
                        // game's stall seconds rise (gauges.cpp), so the game's own notice shows and it dies by its rule
     int stalls;        // stalls since the model began
+    bool idleHeld;     // the clutch is let up in a gear that does not stall (ClutchIdleHold): the engine held at idle, the clutch slipping
 };
+
+// A let-up clutch slipping (part 189, must 1): the engine held at its idle speed against the gearbox's lower input, the
+// clutch passing on what the engine gives there, its curve's torque less its drag, at most what the clutch holds. The
+// slip is idle against the input, so ClutchHeatStep heats by that slip and that torque. Not locked, not dead.
+inline void ClutchIdleHold(ClutchModel &m, const GaugeScale &k, float full, float drag, float hold)
+{
+    m.rpm = k.idle;
+    m.locked = false;
+    m.torque = full;
+    m.carried = SettingsRange(full - drag, 0.0f, hold);
+    m.idleHeld = true;
+}
 
 // One step of dt seconds of the engine behind a clutch, for a manual gearbox with a clutch pedal (the mod's own
 // gearbox in a position of the player's; gearbox_model.h). c: the engine's torque curve; travel: the clutch pedal, 0 let up to 1 pressed;
@@ -3250,8 +3263,10 @@ struct ClutchModel
 // seed: the needle's rpm as the model begins (a change from A to a position of the player's own), so its engine goes on
 // from where the needle stands and not from idle (BRIEF_drive_1114_findings.md, part 175, point 1); under idle or
 // none, idle.
+// spared: the gear never stalls (StallSpared): with a pedal's clutch gripping, an engine the gearbox would drag under its
+// idle speed is held there and the clutch slips (ClutchIdleHold), where it would have been dragged down to the stall.
 inline bool ClutchStep(ClutchModel &m, const TruckRaw &t, const GaugeScale &k, const TorqueCurve &c, float travel, float pedal, float factor, bool automatic, float dt,
-                       float seed = 0.0f)
+                       float seed = 0.0f, bool spared = false)
 {
     if (!m.running)
     {
@@ -3264,6 +3279,7 @@ inline bool ClutchStep(ClutchModel &m, const TruckRaw &t, const GaugeScale &k, c
     m.connected = top > 0.0f && isfinite(spin);
     m.input = m.connected ? spin / top * k.redline : 0.0f;
     m.automatic = automatic;
+    m.idleHeld = false;
     m.grip = m.connected ? ClutchGrip(SettingsRange(travel, 0.0f, 1.0f)) : 0.0f;
     if (!TruckEngineOn(t) || !(range > 0.0f))
     {
@@ -3357,6 +3373,11 @@ inline bool ClutchStep(ClutchModel &m, const TruckRaw &t, const GaugeScale &k, c
             m.locked = hold >= fabsf(m.torque - drag);
         }
         m.rpm = next;
+    }
+    if (spared && !automatic && m.connected && hold > 0.0f && !m.locked && m.rpm < k.idle && m.input < k.idle)
+    {
+        ClutchIdleHold(m, k, full, drag, hold);
+        return false;
     }
     if (automatic && m.rpm < k.idle * kClutchStall) m.rpm = k.idle * kClutchStall; // let go before it could stall
     else if (m.rpm < k.idle * kClutchStall)

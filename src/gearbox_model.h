@@ -259,6 +259,15 @@ struct GearboxPosModel
 // the low range until the next shift (heldFromLow). gauges.cpp feeds both by it, as the tests do.
 inline bool GearboxPosHeld(const GearboxPosModel &m) { return m.byShifter || m.heldFromLow; }
 
+// The positions that never stall (BRIEF_tester_1114.md, part 189, the lead's rule): the first gear and the low range's
+// L-, L and L+. With the clutch let up there the engine creeps, and under a load it cannot pull it holds idle while the
+// clutch slips and heats ("the clutch should burn rather"): ClutchStep's spared, and no creep or holding stall. A stall
+// there comes only from RequireClutch. From the second gear up the stalls stay as they are.
+inline bool StallSpared(int pos, int gear)
+{
+    return pos == kPosLowMinus || pos == kPosLow || pos == kPosLowPlus || (pos == kPosGear && gear == 1);
+}
+
 struct GearboxPosOrders
 {
     bool setGear;

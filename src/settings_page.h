@@ -1031,7 +1031,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             PageLabel("Clutch burns", labelX);
             changed(ImGui::Checkbox("##clutchburn", &s.clutchBurn));
             ImGui::EndDisabled();
-            PageTip("A clutch slipping under load heats up and costs the gearbox. Needs Damage. On by default.");
+            PageTip("A clutch slipping under load heats up and costs the gearbox. Off, it slips at no cost. Needs Damage. On by default.");
             PageLabel("Clutch heat", labelX);
             ImGui::SetNextItemWidth(w);
             ImGui::BeginDisabled(!s.damage || !s.clutchBurn);
