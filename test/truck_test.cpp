@@ -8554,12 +8554,13 @@ static void TruckTestsNine()
               "a place is given up only once its object holds nothing the mod wrote; with every place holding the mod's word a new wheel is neither kept nor written");
     }
 
-    // the take-over's check (BRIEF_takeover_other_truck.md, then BRIEF_tester_1114.md, part 198): the old truck counts
-    // as there when its vehicle reads its id and kind, whatever its body, world or mass; gone with another id or kind,
-    // or where the game reused it for the new truck; a read that faults is no take-over
+    // the take-over's check (BRIEF_takeover_other_truck.md, then BRIEF_tester_1114.md, part 198, its review and the
+    // addendum of 21:46): the old truck is there when its vehicle is one of the game's list of live vehicles and reads its
+    // id and kind, whatever its world; gone when it is not one (a destroyed truck whose memory still reads its id), with
+    // another id or kind, or reused by the game for the new truck; a list or an id that does not read is no take-over
     {
         const uint64_t base = 0x9000000, v1 = base, m1 = base + 0x1000, b1 = base + 0x1800, i1 = base + 0x1C00, v2 = base + 0x2000, m2 = base + 0x3000,
-                       b2 = base + 0x3800, vt = kExe + 0x1234560, world = 0x9100000;
+                       b2 = base + 0x3800, list = base + 0x3C00, entries = base + 0x3D00, vt = kExe + 0x1234560, world = 0x9100000;
         g_game.push_back(Region{ base, std::vector<uint8_t>(0x4000, 0) });
         const char *oldId = "{11111111-2222-3333-4444-555555555555}";
         for (int i = 0; i <= 38; i++) Put(i1 + i, oldId[i]);
@@ -8576,54 +8577,104 @@ static void TruckTestsNine()
         Put(b2, vt);
         Put(b2 + 0x22C, 1.0f / 3500.0f);
         Put(b2 + 0x10, world);
+        // the list: three vehicles, the old one among them
+        auto listOf = [&](int n, bool withOld) {
+            Put(list, entries);
+            Put(list + 8, entries + (uint64_t)n * 8);
+            Put(list + 0x10, entries + 32 * 8);
+            for (int i = 0; i < n; i++) Put(entries + (uint64_t)i * 8, i == 1 && withOld ? v1 : i == 0 ? v2 : base + 0x100 * (uint64_t)(i + 1));
+        };
+        listOf(3, true);
         TruckIdentity old = {};
         strncpy_s(old.key, "test_kind", _TRUNCATE);
         strncpy_s(old.id, oldId, _TRUNCATE);
         old.named = true;
         TruckThere o = {};
-        const bool there = TruckStillThere(kMemory, v1, old, v2, o) && o.body == b1 && o.world == world && o.newWorld == world && !strcmp(o.id, oldId) &&
-                           !strcmp(o.kind, "test_kind") && o.vtable == vt && o.newVtable == vt && fabsf(o.mass - 3000.0f) < 1.0f &&
-                           truckid::ThereWords(o, oldId, "test_kind") ==
-                               L"reads its id, its kind, the chassis vtables the same, 3000 kg, the worlds the same, the bodies different: there";
+        TruckListSeen seen = {};
+        const bool there = TruckStillThere(kMemory, v1, old, v2, list, o, &seen) && seen.list == kListIn && seen.count == 3 && !seen.unread && o.body == b1 && !strcmp(o.id, oldId) &&
+                           TruckThereWords(o, seen, oldId, "test_kind") ==
+                               L"reads its id, its kind, the chassis vtables the same, 3000 kg, the worlds the same, the bodies different: there; the game's list of vehicles: 3 entries, it is one of them";
         Put(i1 + 1, '9');
-        const bool otherId = !TruckStillThere(kMemory, v1, old, v2, o) && o.id[1] == '9';
+        const bool otherId = !TruckStillThere(kMemory, v1, old, v2, list, o) && o.id[1] == '9';
         Put(i1 + 1, '1');
-        // a vehicle whose memory does not read: no take-over, said so
-        bool unreadSaid = false;
-        const bool unread = TruckStillThere(kMemory, 0x9800000, old, v2, o, &unreadSaid) && unreadSaid && !o.id[0] && !o.body &&
-                            TruckThereWords(o, unreadSaid, oldId, "test_kind").find(L"not readable: no take-over") != std::wstring::npos;
-        // out of the physics (no world, another world, no chassis read, another body class): still there by its id and kind
-        bool readSaid = true;
+        PutText(m1 + 0x588, "test_other", 0);
+        const bool otherKind = !TruckStillThere(kMemory, v1, old, v2, list, o);
+        PutText(m1 + 0x588, "test_kind", 0);
+        // parked far away: out of the physics (no world, another world, no chassis read) but one of the list: there
         Put(b1 + 0x10, (uint64_t)0);
-        const bool outOfWorld = TruckStillThere(kMemory, v1, old, v2, o, &readSaid) && !readSaid && !strcmp(o.id, oldId);
+        const bool parked = TruckStillThere(kMemory, v1, old, v2, list, o, &seen) && seen.list == kListIn;
         Put(b1 + 0x10, world + 0x1000);
-        const bool otherWorld = TruckStillThere(kMemory, v1, old, v2, o);
+        const bool otherWorld = TruckStillThere(kMemory, v1, old, v2, list, o);
         Put(b1 + 0x10, world);
         Put(m1 + 0x230, (uint64_t)0);
-        const bool noChassis = TruckStillThere(kMemory, v1, old, v2, o) && !o.body;
+        const bool noChassis = TruckStillThere(kMemory, v1, old, v2, list, o) && !o.body;
         Put(m1 + 0x230, b1);
-        Put(b1, vt + 8);
-        const bool otherClass = TruckStillThere(kMemory, v1, old, v2, o) && truckid::ThereWords(o, oldId, "test_kind").find(L"vtables different") != std::wstring::npos &&
-                                truckid::ThereWords(o, oldId, "test_kind").find(L": there") != std::wstring::npos;
-        Put(b1, vt);
-        PutText(m1 + 0x588, "test_other", 0);
-        const bool otherKind = !TruckStillThere(kMemory, v1, old, v2, o);
-        PutText(m1 + 0x588, "test_kind", 0);
-        // freed: the block cleared, its id pointer 0
-        Put(v1 + 0x48, (uint64_t)0);
-        const bool freedGone = !TruckStillThere(kMemory, v1, old, v2, o, &readSaid) && !readSaid;
+        // destroyed: out of the list though its memory still reads its id and kind (the garage): gone, and the words say so
+        listOf(2, false);
+        const bool destroyed = !TruckStillThere(kMemory, v1, old, v2, list, o, &seen) && seen.list == kListGone && !seen.unread && !strcmp(o.id, oldId) &&
+                               TruckThereWords(o, seen, oldId, "test_kind").find(L"2 entries, it is not one of them") != std::wstring::npos;
+        // there at first, gone a pass later (the garage builds the new vehicle first): asked again, then taken over
+        listOf(3, true);
+        const bool first = TruckStillThere(kMemory, v1, old, v2, list, o, &seen) && ThereAskAgain(seen, true, 1000, 3000) && !ThereAskAgain(seen, true, 1000, 1000 + kThereAskMs) &&
+                           !ThereAskAgain(seen, false, 1000, 3000);
+        listOf(2, false);
+        int count = 0;
+        const bool later = first && TruckInList(kMemory, list, v1, count) == kListGone && count == 2;
+        listOf(3, true);
+        // a list not read (not found, its place not readable, too long, not whole entries, the end under the begin): no take-over, said so
+        const bool noList = TruckStillThere(kMemory, v1, old, v2, 0, o, &seen) && seen.unread && seen.list == kListUnread &&
+                            TruckThereWords(o, seen, oldId, "test_kind").find(L"not read: no take-over") != std::wstring::npos;
+        const bool unreadPlace = TruckStillThere(kMemory, v1, old, v2, 0x9800000, o, &seen) && seen.unread;
+        Put(list + 8, entries + (kVehicleListMost + 1) * 8);
+        const bool tooLong = TruckStillThere(kMemory, v1, old, v2, list, o, &seen) && seen.unread && !ThereAskAgain(seen, true, 0, 3000);
+        Put(list + 8, entries + 12);
+        const bool notWhole = TruckInList(kMemory, list, v1, count) == kListUnread;
+        Put(list + 8, entries - 8);
+        const bool under = TruckInList(kMemory, list, v1, count) == kListUnread;
+        listOf(3, true);
+        // one of the list but its id does not read: no take-over
+        Put(v1 + 0x48, (uint64_t)0x9800000);
+        const bool idUnread = TruckStillThere(kMemory, v1, old, v2, list, o, &seen) && seen.unread && seen.list == kListIn;
         Put(v1 + 0x48, i1);
         // reused by the game for the new truck: the same vehicle, or the same chassis body
-        const bool sameVehicle = !TruckStillThere(kMemory, v1, old, v1, o);
+        const bool sameVehicle = !TruckStillThere(kMemory, v1, old, v1, list, o);
         Put(m2 + 0x230, b1);
-        const bool sameBody = !TruckStillThere(kMemory, v1, old, v2, o);
+        const bool sameBody = !TruckStillThere(kMemory, v1, old, v2, list, o);
         Put(m2 + 0x230, b2);
-        const bool again = TruckStillThere(kMemory, v1, old, v2, o);
+        // a kind not named is never there
+        TruckIdentity unnamed = old;
+        unnamed.named = false;
+        const bool notNamed = !TruckStillThere(kMemory, v1, unnamed, v2, list, o);
         g_game.pop_back();
-        Check(there && otherId && unread && outOfWorld && otherWorld && noChassis && otherClass && otherKind && freedGone && sameVehicle && sameBody && again,
-              "take-over check: the old truck is there with its id and kind, also out of the world (0), in another, with no chassis read or another body "
-              "class; another id, another kind, a cleared block, the same vehicle or the same chassis as the new truck is gone; a vehicle that does not read is "
-              "no take-over and says so; its reads in the match line's words");
+        const bool all = there && otherId && otherKind && parked && otherWorld && noChassis && destroyed && first && later && noList && unreadPlace && tooLong && notWhole && under &&
+                         idUnread && sameVehicle && sameBody && notNamed;
+        if (!all)
+            printf("     there %d otherId %d otherKind %d parked %d otherWorld %d noChassis %d destroyed %d first %d later %d noList %d unreadPlace %d tooLong %d notWhole %d under %d "
+                   "idUnread %d sameVehicle %d sameBody %d notNamed %d\n", there, otherId, otherKind, parked, otherWorld, noChassis, destroyed, first, later, noList, unreadPlace, tooLong,
+                   notWhole, under, idUnread, sameVehicle, sameBody, notNamed);
+        Check(all, "take-over check: the old truck is there as one of the game's list of vehicles with its id and kind, also out of the world or with no chassis "
+                   "read (parked far away); gone when it is not one (destroyed, its memory still read), with another id or kind, or reused for the new truck; "
+                   "there at first and gone a pass later is asked again and taken; a list not read, too long or not whole, or an id that does not read is no take-over "
+                   "and says so; a kind not named is never there");
+    }
+    // the game's list of live vehicles found by its push: the three displacements agree, or it is not found
+    {
+        std::vector<uint8_t> code(0x200, 0xCC);
+        const uint8_t push[] = { 0x48, 0x8B, 0x15, 0, 0, 0, 0, 0x48, 0x39, 0x15, 0, 0, 0, 0, 0x74, 0x10, 0x48, 0x89, 0x32, 0x48, 0x83, 0x05, 0, 0, 0, 0, 0x08 };
+        const size_t at = 0x40;
+        memcpy(code.data() + at, push, sizeof push);
+        const int32_t endRva = 0x180, endDisp = endRva - (int32_t)(at + 7), capDisp = endRva + 8 - (int32_t)(at + 14), addDisp = endRva - (int32_t)(at + 27);
+        memcpy(code.data() + at + 3, &endDisp, 4);
+        memcpy(code.data() + at + 10, &capDisp, 4);
+        memcpy(code.data() + at + 22, &addDisp, 4);
+        const bool found = VehicleListFind(code.data(), 0, code.size()) == (uint64_t)(endRva - 8);
+        const int32_t wrong = capDisp + 8;
+        memcpy(code.data() + at + 10, &wrong, 4);
+        const bool disagree = VehicleListFind(code.data(), 0, code.size()) == 0;
+        memcpy(code.data() + at + 10, &capDisp, 4);
+        memcpy(code.data() + 0x100, code.data() + at, sizeof push);
+        const bool twice = VehicleListFind(code.data(), 0, code.size()) == 0;
+        Check(found && disagree && twice, "vehicle list: found by its push, the begin 8 before the end; three displacements that do not agree, or the push twice, find nothing");
     }
     // Probe=1 with no truck read: the game's words with the garage pointer's raw value, one line at each change (the
     // Reviewer's S2 on the drive of 2026-11-09)

@@ -5278,6 +5278,7 @@ static DrivePlace g_drive = {}; // the game's wheels' drive, for the creep (g_dr
 static TruckInputPlace g_input = {}; // Truck.GetTruckInput and its handle helper, for the engine sound (g_input.input 0: not found)
 static EngineSpeedPlace g_speed = {}; // the game's engine speed and its fuel's and stall's calls (g_speed.speed 0: not found)
 static GearTorquePlace g_torque = {}; // the game's gear torque and the drive's call of it, for the torque cut (g_torque.torque 0: not found)
+static uint64_t g_vehicleList = 0;    // the game's list of live vehicles, its begin's address (game_globals.h VehicleListFind; 0: not found)
 
 // The game's gearbox functions in its code (game_code.h), looked for once a truck is driven, so a manual transmission
 // mod has hooked its own by then: where each one is, or that another mod holds it. Without SMT in the game, the places
@@ -5302,6 +5303,11 @@ static void GameCodeLook(const GaugeSettings &s)
     for (const auto &f : finds) held += f.state == kFnHeld;
     Log(L"gearbox code (%.1f s, nothing written yet): %S", (GetTickCount64() - started) / 1000.0, line);
     if (held) Log(L"gearbox code: another mod holds %d of the game's gearbox functions; its hooks pass the game's shifts on", held);
+    // the game's list of live vehicles, for the take-over's check (part 198): read only
+    const uint64_t vehicleList = VehicleListFind(code.data(), from, to);
+    g_vehicleList = vehicleList ? g_base + vehicleList : 0;
+    if (vehicleList) Log(L"vehicles: the game's list of live vehicles at +%llx (read only, for the take-over's check)", (unsigned long long)vehicleList);
+    else Log(L"vehicles: the game's list of live vehicles not found, so no truck takes over another's settings on another vehicle");
     // the wheels' drive, for the creep: hooked by the creep's step (CreepHookStep) at any level of Gearbox
     // the game's gear display (game_script.h): the class registry, the string pool and the engine's allocate
     if (SslPlacesFind(code.data(), from, to, g_ssl))
@@ -10616,9 +10622,11 @@ static DWORD WINAPI Run(void *)
     // the truck that went last, and the one handed to the match of the truck taken now (the Reviewer's M2); the
     // still-there reads of this match, each once, for its line (M3)
     truckid::Last lastGone = {}, lastForMatch = {};
-    struct GoneRead { char id[40]; TruckThere o; bool gone, unread; };
+    struct GoneRead { char id[40]; TruckThere o; bool gone; TruckListSeen seen; };
     std::vector<GoneRead> goneReads;
-    struct IdPending { bool on; ULONGLONG since; int line; char fromId[40]; const wchar_t *rule; const wchar_t *why; unsigned long long lastSeen; } idPending = {};
+    struct IdPending { bool on; ULONGLONG since, askAt; int line; char fromId[40]; const wchar_t *rule; const wchar_t *why; unsigned long long lastSeen; } idPending = {};
+    // the take-over asked again while the old truck is still one of the game's vehicles (part 198, the addendum's point 5)
+    struct TakeAsk { bool on; char key[kMaxText], oldId[40], newId[40]; uint64_t oldVehicle; unsigned loads; ULONGLONG since, at; } takeAsk = {};
     wchar_t idWords[96] = L"";   // what the tabs say of the id (the match or why none)
     std::wstring partsWritten;   // the parts look's key last looked at (PartsLook)
     ULONGLONG partsLookAt = 0;
@@ -10678,7 +10686,7 @@ static DWORD WINAPI Run(void *)
         old.named = true;
         GoneRead g = {};
         strncpy_s(g.id, id, _TRUNCATE);
-        g.gone = !TruckStillThere(memory, d->vehicle, old, watch.idVehicle, g.o, &g.unread);
+        g.gone = !TruckStillThere(memory, d->vehicle, old, watch.idVehicle, g_vehicleList, g.o, &g.seen);
         if (goneReads.size() < 64) goneReads.push_back(g);
         return g.gone;
     };
@@ -10721,7 +10729,8 @@ static DWORD WINAPI Run(void *)
     };
     // the match waiting for the engine's and the gearbox's names (they come a pass or more after the truck), decided:
     // exactly one waiting truck of the kind with the same parts gives its sections, copied and marked How=warehouse
-    auto idResolve = [&]() {
+    // final: decide now (another truck is taken); else a "there" by the list is asked again (part 198, point 5)
+    auto idResolve = [&](bool final) {
         idPending.on = false;
         goneReads.clear();
         const bool known = !strcmp(eng.key, truck.key) && !strcmp(eng.id, truck.id) && eng.engine[0] && eng.gearbox[0];
@@ -10747,6 +10756,16 @@ static DWORD WINAPI Run(void *)
         const DrivenId *lastDriven = lastForMatch.on ? drivenOf(lastForMatch.id) : nullptr;
         const int lastWhy = truckid::LastFind(ini, TruckIdAllPrefixes(), lastForMatch, truck.key, truck.id, parts, truck.named,
                                               lastDriven && lastDriven->loads != watch.loads, [&]() { return !lastDriven || !idDrivenGone(lastForMatch.id); }, same);
+        // the truck that went last still one of the game's vehicles: asked again a second later, up to kThereAskMs after the
+        // new truck came, as the garage may build the new vehicle before it destroys the old one
+        if (!final && lastWhy == truckid::kLastThere)
+            for (const auto &g : goneReads)
+                if (!strcmp(g.id, lastForMatch.id) && ThereAskAgain(g.seen, !g.gone, idPending.since, GetTickCount64()))
+                {
+                    idPending.on = true;
+                    idPending.askAt = GetTickCount64();
+                    return;
+                }
         enum { kTookNone, kTookLast, kTookTier1, kTookTier2 };
         int took = kTookNone;
         char takenId[40] = "";
@@ -10780,7 +10799,7 @@ static DWORD WINAPI Run(void *)
                 {
                     idDrivenGone(lastForMatch.id);
                     for (const auto &g : goneReads)
-                        if (!strcmp(g.id, lastForMatch.id)) line += L", its vehicle " + TruckThereWords(g.o, g.unread, lastForMatch.id, truck.key);
+                        if (!strcmp(g.id, lastForMatch.id)) line += L", its vehicle " + TruckThereWords(g.o, g.seen, lastForMatch.id, truck.key);
                 }
             }
             if (looks.empty()) line += L"; no other id of the kind";
@@ -10809,7 +10828,7 @@ static DWORD WINAPI Run(void *)
                 }
                 const bool waiting = !l.listed || l.seen < idStart || idDrivenGone(l.idText);
                 for (const auto &g : goneReads)
-                    if (!strcmp(g.id, l.idText)) line += L", its vehicle " + TruckThereWords(g.o, g.unread, l.idText, truck.key);
+                    if (!strcmp(g.id, l.idText)) line += L", its vehicle " + TruckThereWords(g.o, g.seen, l.idText, truck.key);
                 const bool candidate = truckid::LookCandidate(l, kIdSettingsBits) || (!(l.sections & kIdSettingsBits) && truckid::LookCandidate(l, kIdOdoBits));
                 line += !strcmp(l.idText, takenId) ? L": taken" : !waiting ? L": not waiting" : candidate ? L": a candidate" : L": no candidate";
             }
@@ -11545,7 +11564,7 @@ static DWORD WINAPI Run(void *)
             const ULONGLONG goneAt = suspWatch.goneAt;
             bool byVehicle = false, checked = false;
             TruckThere there = {};
-            bool thereUnread = false;
+            TruckListSeen thereSeen = {};
             uint64_t thereVehicle = 0;
             char thereId[40] = {};
             const bool takeOver = SuspTrackWith(suspWatch, truck, now, GetTickCount64(), oldId, truckVehicle, watch.idVehicle, watch.loads, &byVehicle,
@@ -11553,13 +11572,28 @@ static DWORD WINAPI Run(void *)
                                                     checked = true;
                                                     thereVehicle = goneVehicle;
                                                     strncpy_s(thereId, gone.id, _TRUNCATE);
-                                                    return TruckStillThere(memory, goneVehicle, gone, watch.idVehicle, there, &thereUnread);
+                                                    return TruckStillThere(memory, goneVehicle, gone, watch.idVehicle, g_vehicleList, there, &thereSeen);
                                                 });
             if (checked)
-                Log(L"suspension: the take-over check: the old truck %S's vehicle %p reads %S (kind %S), its chassis body %p in world %p (the new truck's %p): %s",
-                    thereId, (void *)thereVehicle, there.id[0] ? there.id : "no id", there.kind[0] ? there.kind : "none", (void *)there.body, (void *)there.world,
-                    (void *)there.newWorld, thereUnread ? L"its vehicle not readable, not taken over" : there.there ? L"another truck, not taken over" : L"gone, taken over");
-            if (idPending.on) idResolve();
+            {
+                wchar_t listWords[96];
+                if (thereSeen.list == kListUnread) _snwprintf_s(listWords, _TRUNCATE, L"the game's list of vehicles not read");
+                else _snwprintf_s(listWords, _TRUNCATE, L"%s of the game's %d vehicles", thereSeen.list == kListIn ? L"one" : L"not one", thereSeen.count);
+                Log(L"suspension: the take-over check: the old truck %S's vehicle %p reads %S (kind %S), %s, its chassis body %p in world %p (the new truck's %p): %s",
+                    thereId, (void *)thereVehicle, there.id[0] ? there.id : "no id", there.kind[0] ? there.kind : "none", listWords, (void *)there.body, (void *)there.world,
+                    (void *)there.newWorld, thereSeen.unread ? L"not read, not taken over" : there.there ? L"another truck, not taken over; asked again for 15 s" : L"gone, taken over");
+            }
+            // still one of the game's vehicles: the take-over is asked again (point 5); another truck taken ends it
+            takeAsk = {};
+            if (checked && !takeOver && ThereAskAgain(thereSeen, there.there, 0, 0))
+            {
+                takeAsk.on = true;
+                strncpy_s(takeAsk.key, now.key, _TRUNCATE);
+                strncpy_s(takeAsk.oldId, thereId, _TRUNCATE);
+                strncpy_s(takeAsk.newId, now.id, _TRUNCATE);
+                takeAsk.oldVehicle = thereVehicle, takeAsk.loads = watch.loads, takeAsk.since = GetTickCount64();
+            }
+            if (idPending.on) idResolve(true);
             if (OdoOwed(odo) || airOwed()) odoWrite(L"another truck driven");
             OdoChange(odo);
             idLeaves();
@@ -11615,7 +11649,8 @@ static DWORD WINAPI Run(void *)
             char oldId[40];
             strncpy_s(oldId, truck.id, _TRUNCATE);
             const uint64_t oldVehicle = truckVehicle;
-            if (idPending.on) idResolve();
+            takeAsk = {};
+            if (idPending.on) idResolve(true);
             if (OdoOwed(odo) || airOwed()) odoWrite(L"a new id");
             OdoChange(odo);
             idLeaves();
@@ -11638,10 +11673,48 @@ static DWORD WINAPI Run(void *)
             DiffLevelLog(set);
             idChanged(taken, sameTruck, oldId, L"a new id on the same vehicle while driven");
         }
-        // the match once the engine's and the gearbox's names are this truck's, or after 10 s without them
-        if (idPending.on && truck.key[0] &&
+        // the take-over asked again: once the old truck's vehicle has left the game's list, the new one takes over
+        if (takeAsk.on)
+        {
+            const ULONGLONG at = GetTickCount64();
+            if (strcmp(truck.key, takeAsk.key) || strcmp(truck.id, takeAsk.newId) || watch.loads != takeAsk.loads) takeAsk = {};
+            else if (at - takeAsk.since >= kThereAskFrom && at - takeAsk.at >= kThereAskEvery)
+            {
+                takeAsk.at = at;
+                int entries = 0;
+                const int in = TruckInList(memory, g_vehicleList, takeAsk.oldVehicle, entries);
+                if (in == kListGone)
+                {
+                    takeAsk.on = false;
+                    strncpy_s(set.key, truck.key, _TRUNCATE);
+                    const int taken = TakeOverBoth(truck.key, takeAsk.oldId, truck.id);
+                    if (taken)
+                    {
+                        SettingsFor(set, truck.key, truck.id);
+                        SettingsPublish(set.s);
+                    }
+                    Log(L"suspension: the take-over asked again %.0f s after the new truck came: the old truck %S's vehicle %p has left the game's list of vehicles (%d entries); %s%s",
+                        (at - takeAsk.since) / 1000.0, takeAsk.oldId, (void *)takeAsk.oldVehicle, entries, taken ? L"taken over: " : L"nothing taken over (the new id has a set of its own)",
+                        taken ? TakenWords(taken) : L"");
+                    if (taken && idPending.on)
+                    {
+                        idPending.on = false;
+                        idDecided(truckid::kLineTaken, takeAsk.oldId, L"the old truck gone a few seconds later", L"", idPending.lastSeen);
+                    }
+                }
+                else if (at - takeAsk.since >= kThereAskMs)
+                {
+                    takeAsk.on = false;
+                    Log(L"suspension: the take-over asked again for %.0f s: the old truck %S's vehicle %p is %s, so it is another truck and nothing is taken over", kThereAskMs / 1000.0,
+                        takeAsk.oldId, (void *)takeAsk.oldVehicle, in == kListIn ? L"still one of the game's vehicles" : L"not read in the game's list");
+                }
+            }
+        }
+        // the match once the engine's and the gearbox's names are this truck's, or after 10 s without them; a "there" by
+        // the list asked again once a second
+        if (idPending.on && truck.key[0] && GetTickCount64() - idPending.askAt >= kThereAskEvery &&
             ((!strcmp(eng.key, truck.key) && !strcmp(eng.id, truck.id) && eng.engine[0] && eng.gearbox[0]) || GetTickCount64() - idPending.since > 10000))
-            idResolve();
+            idResolve(false);
         // the parts into the driven truck's own sections where it has some: at its first drive, at a change of engine
         // or gearbox, and once a set of its own is made (looked at every 2 s)
         if (!idPending.on && truck.id[0] && GetTickCount64() - partsLookAt >= 2000 && !strcmp(eng.key, truck.key) && !strcmp(eng.id, truck.id) && eng.engine[0] &&

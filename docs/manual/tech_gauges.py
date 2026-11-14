@@ -1361,7 +1361,18 @@ new kind is taken after 2 passes.</li>
 or private), its allocation base, and whether that region holds one of the mod's hook trampolines. They also give the faulting
 thread's start as module + RVA. A fault on another thread after the game has called ExitProcess is written as <code>at the quit:
 after ExitProcess on thread ...</code>, not as a crash: the game is ending, and the line is still passed on to the game's handler
-(part 196).</li></ul>
+(part 196).</li>
+<li>Whether a truck that went is still in the game, for the take-over and the match: the game keeps every live vehicle object in
+one static vector of pointers, found by its push (<code>VehicleListFind</code>; the log's <code>vehicles: the game's list of live vehicles at +</code>,
+or <code>vehicles: the game's list of live vehicles not</code> found, and then no take-over on another vehicle). A vehicle adds itself
+at its constructor's end and takes itself out at its destructor's start. The old truck is there when its vehicle is an entry and reads
+its own id and kind, whatever its body, world or mass: a truck parked far away is out of the physics but still an entry, and a
+destroyed one is no entry though its memory may still read its id. A vehicle the game reused for the new truck (the same vehicle or the
+same chassis body) is gone. A list that will not read (or is over 4096 entries), or an entry whose id will not read, is no take-over.
+A "there" is asked again once a second from 2 s to 15 s after the new truck came, since the garage may build the new vehicle before it
+destroys the old one; once the old vehicle leaves the list the take-over is made then (<code>suspension: the take-over asked again</code>
+... has left the game's list), and at 15 s it is another truck (<code>suspension: the take-over asked again for</code> 15 s). A "gone" is final. The match line and the
+suspension's check line give the entries and whether the old vehicle is one (part 198).</li></ul>
 <h3>What it writes and calls</h3>
 <ul><li>With <code>Damage</code> on, the driven truck's engine damage, and with the record its effect and torque factor.</li>
 <li>With <code>Gearbox=1</code>, the automatic flag (truck action +0x3C), and it calls the game's <code>ShiftGear(vehicle, gear)</code>. That

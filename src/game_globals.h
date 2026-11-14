@@ -157,6 +157,27 @@ inline bool GlobalPatternFind(const uint8_t *code, size_t from, size_t to, const
     return length > 0 && PatternFind(code, from, to, bytes, mask, length, at, count);
 }
 
+// The game's list of live vehicles (BRIEF_tester_1114.md, part 198, the Reviewer's addendum of 21:46; the Researcher's
+// research\vehicle_list.md): a static vector of vehicle pointers, begin, end at + 8 and the capacity at + 0x10. A
+// vehicle adds itself at its constructor's end and takes itself out at its destructor's start, so an entry is a vehicle
+// not destroyed. Found by its push, which stands once in the code: mov rdx, [end]; cmp [capacity], rdx; je; mov [rdx],
+// rsi; add [end], 8. The three displacements must agree (the capacity 8 past the end, the add's end the same). The
+// begin's place from the exe's base, 0 where it is not found.
+static const char *const kSigVehicleListPush = "48 8B 15 ? ? ? ? 48 39 15 ? ? ? ? 74 ? 48 89 32 48 83 05 ? ? ? ? 08";
+inline uint64_t VehicleListFind(const uint8_t *code, size_t from, size_t to)
+{
+    size_t at = 0;
+    int count = 0;
+    if (!GlobalPatternFind(code, from, to, kSigVehicleListPush, at, count) || count != 1) return 0;
+    int32_t endDisp = 0, capDisp = 0, addDisp = 0;
+    memcpy(&endDisp, code + at + 3, 4);
+    memcpy(&capDisp, code + at + 10, 4);
+    memcpy(&addDisp, code + at + 22, 4);
+    const int64_t end = (int64_t)at + 7 + endDisp, cap = (int64_t)at + 14 + capDisp, added = (int64_t)at + 27 + addDisp;
+    if (end < 8 || cap != end + 8 || added != end) return 0;
+    return (uint64_t)(end - 8);
+}
+
 // The nearest object start before rva, at most kGlobalBaseSpan before it and before rva + below: a place a lea in
 // code[from, to) takes the address of. How far before rva it stands (below 0), 0 where there is none.
 inline int GlobalBaseBelow(const uint8_t *code, size_t from, size_t to, uint64_t rva, int below)

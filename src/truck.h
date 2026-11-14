@@ -419,34 +419,87 @@ inline void TruckKey(const TruckMemory &m, const TruckRefs &r, const TruckRaw &t
 
 // The chassis body, its vtable, inverse mass and world, and the take-over's check on another vehicle: truck_id.h
 // ChassisWorld and StillThere (BRIEF_truck_id_part2.md) read through m, with Gameplay's rule on top of it
-// (BRIEF_tester_1114.md, part 198, the Reviewer's musts): the old truck is there when its vehicle reads its own id and
-// its kind, whatever its body, world or mass, for a truck left far away or asleep is out of the physics but still in
-// the game. It is gone only where the vehicle reads another id or kind (freed, or another truck's), or where the game
-// reused it for the new truck (the same vehicle, or the same chassis body). A read that faults (the vehicle's id not
-// readable) is no take-over either: unread says so, and the truck counts as there. The old truck is never there where
-// its kind's name was not read (its key is the build's).
+// (BRIEF_tester_1114.md, part 198, its review and the Reviewer's addendum of 21:46): the old truck is there when its
+// vehicle is an entry of the game's list of live vehicles (game_globals.h VehicleListFind) and reads its own id and
+// kind, whatever its body, world or mass: a truck parked far away is out of the physics but not destroyed, and a
+// destroyed one is out of the list though its memory may still read its id. Gone: not an entry, an entry that reads
+// another id or kind, or a vehicle the game reused for the new truck (the same vehicle, or the same chassis body). A
+// list not read, or an entry whose id will not read, is no take-over: seen says so. The old truck is never there
+// where its kind's name was not read (its key is the build's).
 inline bool TruckChassisWorld(const TruckMemory &m, uint64_t vehicle, uint64_t &body, uint64_t &vtable, float &inverseMass, uint64_t &world)
 {
     return truckid::ChassisWorld([&m](uint64_t at, void *out, size_t size) { return m.peek(at, out, size); }, vehicle, body, vtable, inverseMass, world);
 }
 typedef truckid::There TruckThere;
-inline bool TruckStillThere(const TruckMemory &m, uint64_t oldVehicle, const TruckIdentity &old, uint64_t newVehicle, TruckThere &o, bool *unread = nullptr)
+// The game's list of live vehicles at list (the begin's address; 0 not found) and whether vehicle is one of its
+// entries. Read once a check: begin and end, then the entries in blocks through m.peek. The game may move the vector
+// while it is read: a read that fails, an end under the begin, a size that is not whole entries or over
+// kVehicleListMost is not read, never "not an entry". count: the entries (a count of vehicles, trailers among them).
+enum { kListGone, kListIn, kListUnread };
+static const uint64_t kVehicleListMost = 4096;
+inline int TruckInList(const TruckMemory &m, uint64_t list, uint64_t vehicle, int &count)
+{
+    count = -1;
+    uint64_t begin = 0, end = 0;
+    if (!list || !m.get(list, begin) || !m.get(list + 8, end) || end < begin || (end - begin) % 8 || (end - begin) / 8 > kVehicleListMost) return kListUnread;
+    const uint64_t n = (end - begin) / 8;
+    if (n && begin < 0x10000) return kListUnread;
+    uint64_t block[256];
+    bool in = false;
+    for (uint64_t i = 0; i < n; i += 256)
+    {
+        const uint64_t k = n - i < 256 ? n - i : 256;
+        if (!m.peek(begin + i * 8, block, (size_t)(k * 8))) return kListUnread;
+        for (uint64_t j = 0; j < k; j++) in = in || (vehicle && block[j] == vehicle);
+    }
+    count = (int)n;
+    return in ? kListIn : kListGone;
+}
+// What the check saw beside StillThere's reads: the list (kList...), its entries (-1 not read), and whether it is no
+// take-over for a read that did not go through (the list, or the entry's id).
+struct TruckListSeen
+{
+    int list, count;
+    bool unread;
+};
+inline bool TruckStillThere(const TruckMemory &m, uint64_t oldVehicle, const TruckIdentity &old, uint64_t newVehicle, uint64_t list, TruckThere &o,
+                            TruckListSeen *seen = nullptr)
 {
     truckid::StillThere([&m](uint64_t at, void *out, size_t size) { return m.peek(at, out, size); }, oldVehicle, old.key, old.id, newVehicle, o);
+    TruckListSeen s = {};
+    s.list = TruckInList(m, list, oldVehicle, s.count);
     // the id's read itself: the vehicle's pointer to its text and the text; a pointer of 0 (a cleared block) is read
     uint64_t chars = 0;
     char text[39];
     const bool faulted = !oldVehicle || !m.get(oldVehicle + 0x48, chars) || (chars >= 0x10000 && !m.peek(chars, text, sizeof text));
     const bool reused = oldVehicle == newVehicle || (o.body && o.body == o.newBody);
     const bool reads = old.id[0] && !strcmp(o.id, old.id) && old.key[0] && !strcmp(o.kind, old.key);
-    if (unread) *unread = faulted && old.named;
-    o.there = old.named && (faulted || (reads && !reused));
-    return o.there;
+    bool there = false;
+    if (!old.named) there = false;
+    else if (s.list == kListUnread) there = s.unread = true;
+    else if (s.list == kListGone || reused) there = false;
+    else if (faulted) there = s.unread = true;
+    else there = reads;
+    o.there = there;
+    if (seen) *seen = s;
+    return there;
 }
-// ThereWords with Gameplay's rule said: where the read faulted, that it is no take-over.
-inline std::wstring TruckThereWords(const TruckThere &o, bool unread, const char *oldId, const char *oldKind)
+// ThereWords with the list's words: its entries and whether the old vehicle is one, and where it is no take-over.
+inline std::wstring TruckThereWords(const TruckThere &o, const TruckListSeen &s, const char *oldId, const char *oldKind)
 {
-    return truckid::ThereWords(o, oldId, oldKind) + (unread ? L" (its vehicle not readable: no take-over)" : L"");
+    wchar_t t[160];
+    if (s.list == kListUnread) _snwprintf_s(t, _TRUNCATE, L"; the game's list of vehicles not read: no take-over");
+    else _snwprintf_s(t, _TRUNCATE, L"; the game's list of vehicles: %d entries, %s%s", s.count, s.list == kListIn ? L"it is one of them" : L"it is not one of them",
+                      s.unread ? L"; its id not readable: no take-over" : L"");
+    return truckid::ThereWords(o, oldId, oldKind) + t;
+}
+// How long a "there" by the list is asked again (BRIEF_tester_1114.md, part 198, the addendum's point 5): the garage's
+// order is not known, so the new vehicle may be built before the old one is destroyed. From kThereAskFrom after the new
+// truck came, once a second, until kThereAskMs: taken over once the old vehicle has left the list. A "gone" is final.
+static const unsigned long long kThereAskFrom = 2000, kThereAskMs = 15000, kThereAskEvery = 1000;
+inline bool ThereAskAgain(const TruckListSeen &s, bool there, unsigned long long since, unsigned long long now)
+{
+    return there && s.list == kListIn && !s.unread && now - since < kThereAskMs;
 }
 
 // The driven truck from pass to pass. taken is the truck the mod goes by, its key "" while none is read. Another
