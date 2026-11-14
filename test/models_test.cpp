@@ -4222,8 +4222,17 @@ int main(int argc, char **argv)
         p.torqueFactor = 1.0f;
         DamageProbeText(p, record, wear, set, line, sizeof line);
         const bool notAsRead = strstr(line, "(NOT as read)") != nullptr;
+        // no damage and the mod's factor of 0.95 handed: the factor read carries it, so as read; not given the factor, not (part 195.1)
+        TruckRaw fresh = p;
+        fresh.damage = 0;
+        TruckEngineEffect(fresh.damage, fresh.damageCapacity, record, fresh.damageEffect, fresh.torqueFactor);
+        fresh.torqueFactor *= 0.95f;
+        DamageProbeText(fresh, record, wear, set, line, sizeof line, 0.95f);
+        const bool handedOk = strstr(line, "(as read)") != nullptr;
+        DamageProbeText(fresh, record, wear, set, line, sizeof line);
+        const bool handedNot = strstr(line, "(NOT as read)") != nullptr;
         DamageProbeText(p, EngineRecord{}, wear, shown, line, sizeof line);
-        Check(asRead && notAsRead && strstr(line, "looked up once the truck is driven") && strstr(line, "Damage off"),
+        Check(asRead && notAsRead && handedOk && handedNot && strstr(line, "looked up once the truck is driven") && strstr(line, "Damage off"),
               "damage: the probe's line carries the engine's damage, what the game's rule makes of it, the record and the model's rates");
     }
 

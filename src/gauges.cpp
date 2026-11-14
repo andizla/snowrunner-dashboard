@@ -5612,12 +5612,8 @@ static void LogSettings(const GaugeSettings &s)
             s.lockSteerFront, s.lockSteerRear, LockSteerOn(s.powertrain, s.lockSteerFront, s.lockSteerRear) ? L"" : L" (off now)");
         Log(L"settings: quick winch %d (QuickWinch; 0 as the game has it, 1 only while the truck stands, 2 never from its key)%s", s.quickWinch,
             QuickWinchSaid(g_quickWinchFound, g_quickWinchLooked));
-        // an ini from a build before All gears became the default holds the old 0 or 1, and no row changes it now
-        // (part 170, the Reviewer's answer): kept, and said at every start
-        static bool slipSaid = false;
-        if (!slipSaid && s.heldGearSlip != kSlipAllGears)
-            Log(L"held gear slip: Gauges.ini has HeldGearSlip=%d from an earlier build. All gears is 2. There is no row for it any more: change the key or take it out", s.heldGearSlip);
-        slipSaid = true;
+        // HeldGearSlip as the ini holds it, whatever it is (BRIEF_tester_1114.md, part 195.3, the Reviewer's rule): with no
+        // row for it, only the tool and a hand edit set it, and both are a player's choice; no "from an earlier build"
         Log(L"settings: held gear slip %d, %S (HeldGearSlip; 0 a numbered gear held by hand has the governor, 1 the cap of L+ in the gears near it, 2 the wheel cap in every gear)", s.heldGearSlip,
             HeldSlipName(s.heldGearSlip));
         Log(L"settings: air brakes %s (AirBrakes of the truck file: %d; -1 no choice: every truck but a scout has them, by the class the automatic goes by for the truck); "
@@ -5634,6 +5630,13 @@ static void LogSettings(const GaugeSettings &s)
     Log(L"settings: toggle key %S, pad %S, demo values %s, probe %d", key, s.padToggle, s.demo ? L"on" : L"off", s.probe);
 }
 
+// Whether the id is in its kind's [Seen] lines, from an earlier start or this one (part 195.4): such an id is not new
+// to the mod, though the take-over and the match may still decide whose settings it has.
+static bool IdListed(const char *key, const char *id)
+{
+    unsigned long long seen = 0;
+    return key && key[0] && id && id[0] && truckid::SeenGet(SetupFile(kSetupTruck, key), id, seen);
+}
 // The suspension level in force for the driven truck, in the log.
 static void SuspLevelLog(const SettingsState &st, bool newToMod)
 {
@@ -9886,7 +9889,9 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
         TiltProbeText(raw, w.tilt, fourth, sizeof fourth);
         TempProbeText(raw, w.temp, s, fifth, sizeof fifth);
         // the record is the last driven truck's: a truck that is read and not driven yet has none
-        DamageProbeText(raw, w.engineVehicle == w.refs.vehicle ? w.engine : EngineRecord{}, w.damage, s, sixth, sizeof sixth);
+        // the factor the mod handed this truck, over the game's own: the factor read carries it (part 195.1)
+        const float handed = w.hand.on && w.hand.vehicle == w.refs.vehicle && w.hand.game > 0.0f && isfinite(w.hand.written) ? w.hand.written / w.hand.game : 1.0f;
+        DamageProbeText(raw, w.engineVehicle == w.refs.vehicle ? w.engine : EngineRecord{}, w.damage, s, sixth, sizeof sixth, handed);
         Log(L"probe: %S", third);
         Log(L"probe: %S", fourth);
         Log(L"probe: %S", fifth);
@@ -10820,7 +10825,8 @@ static DWORD WINAPI Run(void *)
         const std::wstring ini = SetupFile(kSetupTruck, truck.key);
         unsigned long long seen = 0;
         const bool listed = truckid::SeenGet(ini, truck.id, seen);
-        const unsigned long long lastSeen = listed && seen < idStart ? seen : 0;
+        // listed in this run too (part 195.4): a truck first driven earlier in this start is no truck "not listed as driven before"
+        const unsigned long long lastSeen = listed ? seen : 0;
         bool inForce = false;
         const bool sections = TruckIdSections(truck.key, truck.id, &inForce);
         if (taken) idDecided(truckid::kLineTaken, oldId, rule, L"", lastSeen);
@@ -11541,7 +11547,7 @@ static DWORD WINAPI Run(void *)
             if (taken)
                 Log(L"suspension: the take-over: %S under its new id %S (vehicle %p) takes over %s of %S (back %.0f s after it went%s)", truck.key, truck.id,
                     (void *)truckVehicle, TakenWords(taken), oldId, (GetTickCount64() - goneAt) / 1000.0, byVehicle ? L", on the same vehicle" : L"");
-            if (truck.key[0]) SuspLevelLog(set, truck.id[0] && !set.truckOwn && !set.truckKept && !taken && !takeOver);
+            if (truck.key[0]) SuspLevelLog(set, truck.id[0] && !set.truckOwn && !set.truckKept && !taken && !takeOver && !IdListed(truck.key, truck.id));
             DiffLevelLog(set);
             idChanged(taken, takeOver, oldId, byVehicle ? L"the same vehicle after more than 20 s" : L"back within 20 s");
         }
@@ -11574,7 +11580,7 @@ static DWORD WINAPI Run(void *)
             if (taken)
                 Log(L"suspension: the take-over: %S under its new id %S (vehicle %p) takes over %s of %S (while driven, the same vehicle)", truck.key, truck.id,
                     (void *)truckVehicle, TakenWords(taken), oldId);
-            SuspLevelLog(set, !set.truckOwn && !set.truckKept && !taken && truck.id[0]);
+            SuspLevelLog(set, !set.truckOwn && !set.truckKept && !taken && truck.id[0] && !IdListed(truck.key, truck.id));
             DiffLevelLog(set);
             idChanged(taken, sameTruck, oldId, L"a new id on the same vehicle while driven");
         }

@@ -1472,8 +1472,8 @@ takes it at its next pass (the count, the value, the count again), held to the r
 <code>SettingsPut</code> with the turn it read the settings at. That is the road an edit on the tab takes: in force on that pass,
 saved a second after the last change. <code>HeldGearSlip</code> is a figure of the tool alone: test builds had it as the row Held
 gear slip on the Power tab, and the row is gone. Its default is 2, All gears: a numbered gear held by hand has the wheel cap in
-every gear. An ini of a test build that holds 0 or 1 keeps it, and the log says so at every start (<code>held gear slip:
-Gauges.ini has HeldGearSlip=</code>). <code>EngineSoundTop</code> (40 to 100) and <code>EngineSoundCurve</code> (100 to 300) are
+every gear. An ini that holds 0 or 1 keeps it, whether a test build or the tool wrote it: both are a player's choice, so no
+warning comes (part 195.3); the settings line says the figure in force. <code>EngineSoundTop</code> (40 to 100) and <code>EngineSoundCurve</code> (100 to 300) are
 two more figures of the tool alone, for the engine sound. The mod's thread takes the engine speed share through the pedal's curve
 with the exponent <code>EngineSoundCurve</code> / 100, then times <code>EngineSoundTop</code> / 100, and hands the result to the
 sound's hook beside the share. The share the game's fuel and stall read is never changed by them. At 100 and 100 the sound is as

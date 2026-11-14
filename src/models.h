@@ -4276,8 +4276,11 @@ inline bool DamageLamp(bool steady, bool adding, unsigned long long ms) { return
 
 // The engine's damage in a line of text for the probe log: what the game holds, what its own rule makes of that
 // with the engine's record (truck.h), and what the model is adding. Without a record the rule's numbers are a
-// guess and are marked as one.
-inline void DamageProbeText(const TruckRaw &t, const EngineRecord &e, const DamageModel &m, const GaugeSettings &s, char *out, size_t size)
+// guess and are marked as one. handed: the factor the mod handed on this pass over the game's own (TorqueHand's
+// written over game; 1 where it writes none): the factor read carries it, so the check is the rule's torque times it
+// (BRIEF_tester_1114.md, part 195.1). Before, the rule alone was compared and an undamaged engine with the mod's x0.95
+// read "NOT as read" on nearly every line.
+inline void DamageProbeText(const TruckRaw &t, const EngineRecord &e, const DamageModel &m, const GaugeSettings &s, char *out, size_t size, float handed = 1.0f)
 {
     if (!t.damageKnown)
     {
@@ -4286,7 +4289,8 @@ inline void DamageProbeText(const TruckRaw &t, const EngineRecord &e, const Dama
     }
     float effect = 0.0f, torque = 1.0f;
     TruckEngineEffect(t.damage, t.damageCapacity, e, effect, torque);
-    const bool same = fabsf(effect - t.damageEffect) < 0.0005f && fabsf(torque - t.torqueFactor) < 0.0005f;
+    const float by = isfinite(handed) && handed > 0.0f ? handed : 1.0f;
+    const bool same = fabsf(effect - t.damageEffect) < 0.0005f && fabsf(torque * by - t.torqueFactor) < 0.0005f;
     char record[256];
     if (e.found) _snprintf_s(record, _TRUNCATE, "record %.80s: takes %d, the torque falls past %.2f of it, from x%.2f to x%.2f", e.name, e.capacity, e.threshold, e.torqueMin, e.torqueMax);
     else if (!e.name[0]) _snprintf_s(record, _TRUNCATE, "the engine's record is looked up once the truck is driven");
