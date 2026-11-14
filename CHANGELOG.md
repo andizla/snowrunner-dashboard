@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- **The brake air no longer drains in seconds from a flickering brake.** A press of the brake now costs what refills the brake chambers. They let their air out over half a second after you let go. So a quick flicker costs a share of a press, and slow pumping costs what it did. A handbrake the mod holds on for the spring brakes no longer costs air each time it is let go.
 - **The Diff rows say where they act.** At Gearbox 0 and 1, and in A without Mod engine in A, the diff types do nothing. The Diff and Axle rows on the Power tab are now drawn as off there, with a line under them that says so.
 - **No stall in the first gear or the low range with the clutch let up.** In the mod's own gearbox, in a position you pick, the engine used to stall in L-, L, L+ and the first gear under a load it could not pull. Now it holds idle there and the clutch slips and heats, so the clutch burns before the engine dies. From the second gear up the engine stalls as before. A shift into gear without the clutch still stalls it.
 - **In A the engine no longer stays over the red zone with your foot off.** With the wheels spinning free in the air or in deep mud the needle could stay at the top of the tachometer for many seconds after you let go. The engine now runs down as a real engine does, in about a second, while the wheels spin on. With the wheels on the ground nothing changes.

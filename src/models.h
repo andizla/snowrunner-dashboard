@@ -3975,6 +3975,7 @@ static const float kBrakeAir = 0.35f;        // bar a full brake application tak
 static const float kSpringAir = 0.4f;        // bar the spring brakes take to be held off when the handbrake is let go
 static const float kAirLeak = 0.1f / 60.0f;  // bar each second the system loses through its fittings
 static const float kAirLeakBraking = 0.25f / 60.0f; // and on top of that while the brake is held
+static const float kChamberRelease = 2.0f;   // the brake chambers' share of a full application let out each second after a release: empty in half a second
 
 // The air in the brakes' tanks of a truck, scouts aside (they brake by hydraulics; the dial is not drawn for them).
 // The engine drives the compressor, which gives more air the faster the engine turns and less as the tank fills; the
@@ -3989,27 +3990,33 @@ struct AirModel
     bool running;      // the model has a truck
     float bar;         // the tank's pressure
     bool pumping;      // the governor runs the compressor
-    float brake;       // the brake as held on the last step, 0 to 1
+    float brake;       // the brake chambers' fill, 0 to 1: up with the brake at once, down after it at kChamberRelease
     bool handbrake;    // the handbrake was on on the last step
     int cutOuts;       // times the governor stopped the compressor: the air dryer's purge
 };
 
 // One step of dt seconds. speed: the engine speed over the red zone's (TachSpeed). A new truck starts with a full
 // tank. Returns true on the step the governor stops the compressor, when a truck's air dryer purges with a hiss.
-inline bool AirStep(AirModel &m, const TruckRaw &t, float speed, float dt)
+// A press costs what refills the brake chambers (BRIEF_tester_1114.md, part 193): they let their air out over half a
+// second after a release, not at once, so a brake read flickering five times a second costs a share of a full press
+// and slow pumping costs what it did. springsHeld: the mod holds the spring brakes on (SpringHeldStep): a release the
+// mod undoes costs no air, since the springs never came off.
+inline bool AirStep(AirModel &m, const TruckRaw &t, float speed, float dt, bool springsHeld = false)
 {
     const float brake = TruckBrake(t);
-    const bool handbrake = t.handbrake != 0;
+    const bool handbrake = t.handbrake != 0 || springsHeld;
     if (!m.running)
     {
         m = AirModel{ true, kAirCutOut };
         m.brake = brake;
         m.handbrake = handbrake;
     }
-    // what the brakes take: a press by how much further it goes down, the spring brakes when the handbrake goes off
-    float used = fmaxf(brake - m.brake, 0.0f) * kBrakeAir + (m.handbrake && !handbrake ? kSpringAir : 0.0f);
+    // what the brakes take: a press by how far it fills the chambers again, the spring brakes when the handbrake goes off
+    // (the chambers follow a brake held or let down; only what goes in past their fill costs air)
+    const float chamber = brake >= m.brake ? m.brake : fmaxf(brake, m.brake - kChamberRelease * fmaxf(dt, 0.0f));
+    float used = fmaxf(brake - chamber, 0.0f) * kBrakeAir + (m.handbrake && !handbrake ? kSpringAir : 0.0f);
     used += (kAirLeak + (brake > 0.05f ? kAirLeakBraking : 0.0f)) * dt;
-    m.brake = brake;
+    m.brake = fmaxf(chamber, brake);
     m.handbrake = handbrake;
     // the compressor, by the governor
     bool cutOut = false;
@@ -4029,14 +4036,59 @@ inline bool AirStep(AirModel &m, const TruckRaw &t, float speed, float dt)
 
 // The model for a truck with or without air brakes (BRIEF_spring_brakes.md, M5). Off: it does not run and holds no
 // pressure, so there is no purge, no warning and no hold. Switched on, the tanks start full, as on a new truck.
-inline bool AirStepFor(AirModel &m, bool on, const TruckRaw &t, float speed, float dt)
+inline bool AirStepFor(AirModel &m, bool on, const TruckRaw &t, float speed, float dt, bool springsHeld = false)
 {
     if (!on)
     {
         m = AirModel{};
         return false;
     }
-    return AirStep(m, t, speed, dt);
+    return AirStep(m, t, speed, dt, springsHeld);
+}
+
+// What flickers (part 193, must 3): the brake as the game reads it, watched for rises and falls through kFlickerAt.
+// More than kFlickerMost of them within a second starts a record of the next second's samples, said in one line; again
+// at the most once a minute. Step returns true on the pass the record is full.
+static const float kFlickerAt = 0.05f;
+static const int kFlickerMost = 3, kFlickerKeep = 128;
+struct BrakeFlicker
+{
+    bool up;           // the brake over kFlickerAt on the last sample
+    float window;      // seconds of the present second
+    int turns;         // rises and falls in it
+    int seen;          // the turns of the second that started the record
+    bool recording;
+    float recFor;      // seconds recorded
+    int n;
+    float sample[kFlickerKeep];
+    float quiet;       // seconds until another record may start
+};
+inline bool BrakeFlickerStep(BrakeFlicker &f, float brake, float dt)
+{
+    if (!isfinite(brake) || !(dt > 0.0f)) return false;
+    f.quiet = fmaxf(f.quiet - dt, 0.0f);
+    if (f.recording)
+    {
+        if (f.n < kFlickerKeep) f.sample[f.n++] = brake;
+        f.recFor += dt;
+        if (f.recFor < 1.0f && f.n < kFlickerKeep) return false;
+        f.recording = false;
+        f.quiet = 60.0f;
+        return true;
+    }
+    const bool up = brake > kFlickerAt;
+    if (up != f.up) f.turns++;
+    f.up = up;
+    f.window += dt;
+    if (f.turns > kFlickerMost && f.quiet <= 0.0f)
+    {
+        f.recording = true;
+        f.seen = f.turns, f.n = 0, f.recFor = 0.0f;
+        f.turns = 0, f.window = 0.0f;
+        return false;
+    }
+    if (f.window >= 1.0f) f.turns = 0, f.window = 0.0f;
+    return false;
 }
 
 // ---- the spring brakes (BRIEF_spring_brakes.md, M2) ----

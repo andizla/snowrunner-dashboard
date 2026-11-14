@@ -6065,6 +6065,7 @@ struct TruckWatch
     // counts: the mod's writes, the passes where the game had cleared the byte, the seconds a held truck has rolled; the
     // vehicles the cleared byte and the rolling were said for; the next probe line
     bool springHeld;
+    BrakeFlicker brakeFlicker; // the brake read watched for a flicker (part 193)
     LockHold springHold;
     // the steering with a lock in (lock_steer.h): the record of the truck's wheels, the last pass's time, what was said
     LockSteerRec steer;
@@ -8518,7 +8519,16 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 }
             }
         }
-        if (AirStepFor(w.air, w.airOn, raw, TachSpeed(w.tach, scale), dt) && TruckEngineOn(raw)) SoundPlay(kSoundPurge, 0.8f * OilBeepGain(s.soundVolume), 1.0f);
+        if (AirStepFor(w.air, w.airOn, raw, TachSpeed(w.tach, scale), dt, w.springHeld) && TruckEngineOn(raw)) SoundPlay(kSoundPurge, 0.8f * OilBeepGain(s.soundVolume), 1.0f);
+        // the brake read that flickers (BRIEF_tester_1114.md, part 193, must 3): a second of its samples in one line
+        if (w.airOn && BrakeFlickerStep(w.brakeFlicker, TruckBrake(raw), dt))
+        {
+            wchar_t line[1400];
+            int len = FmtCut(line, _countof(line), L"brake air: the brake as the game reads it rose and fell %d times in a second; the next second's %d samples:", w.brakeFlicker.seen,
+                             w.brakeFlicker.n);
+            for (int i = 0; i < w.brakeFlicker.n && len < 1380; i++) len += FmtCut(line + len, _countof(line) - len, L" %.2f", w.brakeFlicker.sample[i]);
+            Log(L"%s", line);
+        }
         // the air the truck was left with, or empty tanks by the box, once: at its first step after its id decided
         if (AirStartStep(w.air, w.airPending, w.airDecided, w.airOn, w.airStart, kAirCutIn))
             Log(L"brake air: %S, id %S: %.2f bar, %s", w.who.taken.key, w.who.taken.id[0] ? truckid::Short(w.who.taken.id).c_str() : "not read", w.air.bar, AirFromWords(w.airCame));

@@ -1061,8 +1061,14 @@ numbers are not read. <code>ShowFuelUse=0</code> leaves it out.</p>
 <p>The engine drives a compressor that fills the tanks; a governor runs it from 6.9 bar up to 8.2 and lets it rest in between
 (<code>AirStep</code>, <code>models.h:2092-2160</code>):</p>
 {eq('gives = 0.23 · speed(rpm) · max(1 − bar/12, 0) · Δ<i>t</i>   while it runs', 36)}
-{eq('used = 0.35 · max(<i>b</i> − <i>b</i><sub>last</sub>, 0) + 0.4 (handbrake let go) + (0.1 + 0.25 while braking) / 60 · Δ<i>t</i>', 37)}
-<p class="where">A full brake application takes 0.35 bar, letting the handbrake go 0.4 (the air that holds the spring brakes off), and
+{eq('used = 0.35 · max(<i>b</i> − <i>c</i>, 0) + 0.4 (handbrake let go) + (0.1 + 0.25 while braking) / 60 · Δ<i>t</i>', 37)}
+<p class="where"><i>c</i> is the brake chambers' fill: up with the brake at once, and after a release down toward it at 2 a second, so the
+chambers are empty half a second after the foot comes off (BRIEF_tester_1114.md, part 193). A press costs what fills them again: a
+brake read flickering five times a second costs about a third of a full press each time, slow pumping the full press. While the mod
+holds the spring brakes on, a release of the handbrake that it undoes costs nothing (<code>AirStep</code>'s springsHeld). Where the
+brake read rises and falls more than three times in a second, Gauges.log has one line with the next second's samples, "brake air: the
+brake as the game reads it rose and fell N times in a second", at most once a minute.
+A full brake application takes 0.35 bar, letting the handbrake go 0.4 (the air that holds the spring brakes off), and
 the system leaks 0.1 bar a minute, 0.35 with the brake held. From empty the tank fills in {t_red:.0f} s at the red zone and about 3
 minutes at idle; eight full applications with the engine off take a full tank to {8.2 - 8 * 0.35:.1f} bar, the red zone's edge
 (5.5).</p>

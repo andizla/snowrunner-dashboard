@@ -3688,7 +3688,7 @@ int main(int argc, char **argv)
             stopped.throttle = how;
             AirStep(fan, stopped, 0.0f, kDt);
             stopped.throttle = 0.0f;
-            AirStep(fan, stopped, 0.0f, kDt);
+            for (float at = 0.0f; at < 1.0f; at += kDt) AirStep(fan, stopped, 0.0f, kDt); // let go for a second: the chambers empty
         };
         for (int i = 0; i < 7; i++) press(1.0f);
         const float afterSeven = fan.bar;
@@ -3704,6 +3704,59 @@ int main(int argc, char **argv)
         const float released = charged - spring.bar;
         for (float at = 0.0f; at < 600.0f; at += kDt) AirStep(spring, stopped, 0.0f, kDt);
         Check(Near(released, kSpringAir, 0.01f) && Near(charged - released - spring.bar, 1.0f, 0.02f), "brake air: letting the handbrake go takes the spring brakes' air, and it leaks a bar in ten minutes standing");
+        // the chambers in the cost (BRIEF_tester_1114.md, part 193): five seconds of each pattern from a full tank, the
+        // engine off. A flicker of 0.6 on every other sample, one at five a second, a slow pump of one press a second and
+        // one long press
+        {
+            auto run = [&](float period, float on) {
+                AirModel a = {};
+                TruckRaw r = stopped;
+                r.throttle = 0.0f;
+                AirStep(a, r, 0.0f, kDt);
+                const float from = a.bar;
+                float t = 0.0f;
+                for (int i = 0; i < (int)(5.0f / kDt + 0.5f); i++, t += kDt)
+                {
+                    r.throttle = fmodf(t, period) < on ? 0.6f : 0.0f;
+                    AirStep(a, r, 0.0f, kDt);
+                }
+                return from - a.bar;
+            };
+            const float leak5 = (kAirLeak + kAirLeakBraking) * 5.0f;
+            const float everyOther = run(2.0f * kDt, 0.5f * kDt), fiveHz = run(0.2f, 0.1f), slow = run(1.0f, 0.3f), longPress = run(10.0f, 10.0f);
+            const float full = 0.6f * kBrakeAir;
+            // before, each rise on every other sample (50 in five seconds at the tests' 20 steps a second) cost a full press, and
+            // each of the 25 at five a second too
+            const float rises = 5.0f / (2.0f * kDt);
+            const bool flickerOk = everyOther < 0.2f * rises * full, fiveOk = fiveHz < 0.4f * 25.0f * full;
+            const bool slowOk = Near(slow, 5.0f * full, 5.0f * full * 0.05f + leak5), longOk = Near(longPress, full, 0.01f + leak5);
+            // a release the mod undoes, the springs held: no spring air; the same release with the springs not held: kSpringAir
+            AirModel heldOn = {}, notHeld = {};
+            TruckRaw h = stopped;
+            h.throttle = 0.0f;
+            h.handbrake = 1;
+            AirStep(heldOn, h, 0.0f, kDt, true), AirStep(notHeld, h, 0.0f, kDt, false);
+            const float b0 = heldOn.bar, b1 = notHeld.bar;
+            h.handbrake = 0;
+            AirStep(heldOn, h, 0.0f, kDt, true), AirStep(notHeld, h, 0.0f, kDt, false);
+            const bool springOk = b0 - heldOn.bar < 0.01f && Near(b1 - notHeld.bar, kSpringAir, 0.01f);
+            // the flicker's record: five a second for a second starts it, the next second's samples are kept, one record a minute
+            BrakeFlicker f = {};
+            int records = 0;
+            float t2 = 0.0f;
+            for (int i = 0; i < (int)(70.0f / kDt); i++, t2 += kDt) records += BrakeFlickerStep(f, fmodf(t2, 0.2f) < 0.1f ? 0.6f : 0.0f, kDt) ? 1 : 0;
+            BrakeFlicker calm = {};
+            int calmRecords = 0;
+            float t3 = 0.0f;
+            for (int i = 0; i < (int)(30.0f / kDt); i++, t3 += kDt) calmRecords += BrakeFlickerStep(calm, fmodf(t3, 1.0f) < 0.3f ? 0.6f : 0.0f, kDt) ? 1 : 0;
+            const bool recordOk = records == 2 && f.seen > kFlickerMost && calmRecords == 0;
+            printf("     brake air in five seconds: a flicker on every other sample %.3f bar, five a second %.3f, a press a second %.3f, one long press %.3f; spring air held %.3f, not held %.3f; "
+                   "records of a flicker in 70 s %d (%d turns), of a slow pump %d\n",
+                   everyOther, fiveHz, slow, longPress, b0 - heldOn.bar, b1 - notHeld.bar, records, f.seen, calmRecords);
+            Check(flickerOk && fiveOk && slowOk && longOk && springOk && recordOk,
+                  "brake air: a press costs what refills the chambers: a flicker costs a share of a full press, a slow pump and one long press what they did; a release the mod "
+                  "undoes costs no spring air; a flicker of five a second is recorded once a minute, a slow pump never");
+        }
         // the engine sound's curve and top (BRIEF_jobs_1114.md, part 171): the pedal's function with the exponent as
         // an argument, and the sound's share from it
         {
@@ -3849,7 +3902,7 @@ int main(int argc, char **argv)
                 stopped.throttle = 1.0f;
                 AirStepFor(fresh, true, stopped, 0.0f, kDt);
                 stopped.throttle = 0.0f;
-                AirStepFor(fresh, true, stopped, 0.0f, kDt);
+                for (int q = 0; q < 10; q++) AirStepFor(fresh, true, stopped, 0.0f, kDt); // let go for half a second: the chambers empty (part 193)
                 held15 = SpringHeldStep(held15, true, fresh.running, fresh.bar);
                 if (held15 && !heldAt) heldAt = i;
             }
