@@ -6159,6 +6159,7 @@ int main(int argc, char **argv)
                     load8[i] = i == 1 ? 0.2f : 1.0f, radius8[i] = 0.5f, ok8[i] = true;
                 }
                 post8[1] = 4.0f;
+                pre8[1] = 1.5f; // the two wheels apart before the drive, so the mean C goes by the mass (part 197: R itself is one speed)
                 const DiffAxlesOut x8 = DiffAxlesStep(pre8, post8, gain8, load8, radius8, ok8, axle8, type8, 8, 0.5f, mass, 0.0f, true);
                 const LockStepOut own = LockStepHeld(pre8, post8, gain8, load8, radius8, ok8, 2, 0.5f, mass * 2.0f / 8.0f), whole = LockStepHeld(pre8, post8, gain8, load8, radius8, ok8, 2, 0.5f, mass);
                 share = x8.work[0] == own.final[0] && x8.work[1] == own.final[1] && (own.final[0] != whole.final[0] || own.final[1] != whole.final[1]) && x8.r.axles == 4 && x8.tied == 1 &&
@@ -7418,8 +7419,9 @@ int main(int argc, char **argv)
         const float pre1[6] = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.02f }, load1[6] = { 1.0f, 1.0f, 0.1f, 0.1f, 0.1f, 0.1f };
         both(pre1, nine, load1, 1.0f, b0, a0, p);
         const BSeen s1b = seen(b0, p), s1 = seen(a0, p);
+        // (since part 197 the lock itself leaves the six at one speed, 9.00, so the bounds need move none)
         const bool case1 = !s1b.rules && s1b.most > 20.5f && s1b.most < 21.5f && s1b.least > 2.5f && s1b.least < 3.5f && s1.rules && s1.most <= 9.02f + 1e-4f && s1.least >= 0.0f &&
-                           a0.wrote && a0.bounded > 0 && a0.under == 0 && a0.j > 0.0f;
+                           s1.most - s1.least < 1e-3f && a0.wrote && a0.under == 0 && a0.j > 0.0f;
         // in L: a ceiling just over the drive's 9 cuts two wheels of the lock's before and none of them now
         const CapStepOut cap1b = CapStep(pre1, b0.final, bGain, bOk, 6, 9.05f, true), cap1 = CapStep(pre1, a0.final, bGain, bOk, 6, 9.05f, true), cap1d = CapStep(pre1, p, bGain, bOk, 6, 9.05f, true);
         const bool inL = cap1b.clamps == 2 && cap1.clamps == 0 && cap1d.clamps == 0;
@@ -7442,11 +7444,12 @@ int main(int argc, char **argv)
         both(pre4, two, load1, 1.0f, b0, a0, p);
         const BSeen s4b = seen(b0, p), s4 = seen(a0, p);
         const bool case4 = s4b.lowered && !s4.lowered && s4.rules;
-        // the engine braking (the drive's impulse not over 0): the law as it was, to the float
+        // the engine braking (the drive's impulse not over 0): no bound moves a wheel; since part 197 the loaded wheels
+        // leave it at one speed, as a locked shaft slows, where the law of before slowed the two carrying the truck the most
         const float less[6] = { -1.0f, -1.0f, -0.5f, -0.5f, -0.5f, -0.5f }, pre5[6] = { 6.0f, 6.0f, 7.0f, 7.0f, 7.0f, 7.0f };
         both(pre5, less, load1, 1.0f, b0, a0, p);
-        bool braking = a0.wrote && a0.bounded == 0 && a0.j < 0.0f;
-        for (int i = 0; i < 6; i++) braking = braking && a0.final[i] == b0.final[i];
+        bool braking = a0.wrote && a0.bounded == 0 && a0.j < 0.0f && b0.final[0] < b0.final[2] - 0.5f;
+        for (int i = 1; i < 6; i++) braking = braking && Near(a0.final[i], a0.final[0], 1e-3f);
         // every wheel in the air, one turning back: no wheel on the ground: the mean of post as it was, and with one wheel turning back fast no other wheel is taken under 0
         const float pre6[6] = { 9.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f }, one6[6] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f }, air6[6] = {};
         const float pre7[6] = { -30.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
@@ -7467,6 +7470,45 @@ int main(int argc, char **argv)
             printf("     bounds: case1 %d, inL %d (%d %d %d, %.3f %.3f %.3f), case2 %d, case3 %d, case4 %d, braking %d, in air %d\n", case1, inL, cap1b.clamps, cap1.clamps, cap1d.clamps,
                    cap1b.excess, cap1.excess, cap1d.excess, case2, case3, case4, braking, inAir6);
         Check(case1 && inL && case2 && case3 && case4 && braking && inAir6, bLine);
+        // the lock's hand-on as one change of speed (BRIEF_tester_1114.md, parts 188 and 197), on two steps of a tester's
+        // 6x6 of 8269 kg (the probe's by-wheel lines): 13:02:45, both front wheels written to 8.21 and the rear to 4.93 to
+        // 6.59 by the law of before; 17:05:13, a front wheel in the air and the spread 3.23 after the drive, 6.37 after the lock
+        {
+            const float kGain[6] = { 0.02486f, 0.02486f, 0.01420f, 0.01420f, 0.01420f, 0.01420f };
+            const float preA[6] = { 2.44f, 1.08f, 5.04f, 5.92f, 5.93f, 4.38f }, postA[6] = { 2.69f, 25.97f, 4.42f, 5.15f, 5.16f, 4.29f };
+            const float loadA[6] = { 1.0f, 1.0f, 0.56f, 1.0f, 1.0f, 0.23f }, radA[6] = { 0.564f, 0.571f, 0.567f, 0.571f, 0.567f, 0.567f };
+            const float preB[6] = { 0.0f, -1.60f, -1.07f, -1.00f, -1.04f, -0.86f }, postB[6] = { 6.37f, 5.79f, 3.16f, 3.23f, 3.19f, 3.36f };
+            const float loadB[6] = { 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f }, radB[6] = { 0.564f, 0.549f, 0.539f, 0.549f, 0.529f, 0.539f };
+            const LockStepOut nowA = LockStepHeld(preA, postA, kGain, loadA, radA, bOk, 6, 1.0f, 8269.0f), oldA = LockStepHeld(preA, postA, kGain, loadA, radA, bOk, 6, 1.0f, 8269.0f, false);
+            const LockStepOut nowB = LockStepHeld(preB, postB, kGain, loadB, radB, bOk, 6, 1.0f, 8269.0f), oldB = LockStepHeld(preB, postB, kGain, loadB, radB, bOk, 6, 1.0f, 8269.0f, false);
+            // the impulse handed on to the loaded wheels, the ones that push the ground (a wheel in the air: the bound
+            // lifts it from C + a under 0 to 0, which the law of before without the bounds does not)
+            auto handed = [&](const LockStepOut &o, const float *post, const float *load) {
+                float s = 0.0f;
+                for (int i = 0; i < 6; i++)
+                    if (load[i] > kLockLoaded) s += (o.final[i] - post[i]) / kGain[i];
+                return s;
+            };
+            float loLoadedB = 1e9f, hiLoadedB = -1e9f;
+            for (int i = 1; i < 6; i++) loLoadedB = fminf(loLoadedB, nowB.final[i]), hiLoadedB = fmaxf(hiLoadedB, nowB.final[i]);
+            const float hA = handed(nowA, postA, loadA), hOldA = handed(oldA, postA, loadA), hB = handed(nowB, postB, loadB), hOldB = handed(oldB, postB, loadB);
+            // the law of before reproduces the log's figures (8.21 on the fronts, 6.59 and 4.93 on the rear)
+            const bool logged = Near(oldA.final[0], 8.21f, 0.02f) && Near(oldA.final[1], 8.21f, 0.02f) && Near(oldA.final[3], 6.59f, 0.02f) && Near(oldA.final[5], 4.93f, 0.02f);
+            const bool spreadA = nowA.spreadAfter <= nowA.spreadBefore && nowA.spreadAfter < 0.01f;
+            // 17:05:13: the loaded five at one speed and the spread under the law of before's; the wheel in the air takes none of R
+            const bool spreadB = hiLoadedB - loLoadedB < 0.01f && nowB.spreadAfter < oldB.spreadAfter && nowB.final[0] < loLoadedB && nowB.final[0] >= 0.0f;
+            const bool pull = fabsf(hA - hOldA) <= 0.01f * fabsf(hOldA) + 0.01f && fabsf(hB - hOldB) <= 0.01f * fabsf(hOldB) + 0.01f;
+            char oneLine[700];
+            snprintf(oneLine, sizeof oneLine,
+                     "locked differential, one change of speed: 13:02:45 the spread %.2f after the drive, %.2f after the lock (%.2f by the law of before), the six at %.2f to %.2f; "
+                     "17:05:13 %.2f after the drive, %.2f after the lock (%.2f before), the loaded five at %.2f to %.2f, the wheel in the air at %.2f; "
+                     "the impulse handed on to the loaded wheels %.1f and %.1f (%.1f and %.1f by the law of before)",
+                     nowA.spreadBefore, nowA.spreadAfter, oldA.spreadAfter, nowA.final[5], nowA.final[0], nowB.spreadBefore, nowB.spreadAfter, oldB.spreadAfter, loLoadedB, hiLoadedB,
+                     nowB.final[0], hA, hB, hOldA, hOldB);
+            printf("     %s\n", oneLine);
+            if (!(logged && spreadA && spreadB && pull)) printf("     one speed: logged %d spreadA %d spreadB %d pull %d\n", logged, spreadA, spreadB, pull);
+            Check(logged && spreadA && spreadB && pull, oneLine);
+        }
         // the new count (BRIEF_low_range_pull.md): a wheel written under 0 and under what the drive left it while the
         // drive's impulse is over 0. 0 over every case above with the bounds; the law of before breaks it. The engine
         // braking with wheels turning back is counted as under 0 (the old count) and is no breach

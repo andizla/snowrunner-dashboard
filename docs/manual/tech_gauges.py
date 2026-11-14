@@ -481,6 +481,11 @@ again with one line in the log. A truck left with the mod's byte set keeps it, a
 cleared once the type no longer acts (the last four such trucks are remembered). With the bite above 0
 the lock's step weighs each wheel by what it has behind it (<code>LockStepHeld</code>): W = I + load &times; mass / n &times; r&sup2;, the
 load the contact share at wheel + 0x128, so a wheel in the air no longer pulls the mean up; with every load 0 it is <code>LockStep</code>.
+C is the mean of pre by W, a = J / the sum of W the speed the drive gives wheels and truck together, and R = J &minus; a &times; the sum of
+I what is left for the ground. Each loaded wheel (a contact share over 0.05) is written to C + a + R / the loaded wheels' inertia, one
+change of speed for all of them, so they leave the lock at one speed as a locked shaft turns; a wheel in the air takes none of R and
+stays at C + a (part 197). Before, R went to each wheel by its gain times its load, and a light loaded front wheel was written far over
+the rear ones (8.21 against 4.93 to 6.59 rad/s on a 6x6). The impulse handed to the loaded wheels is the same R in total.
 While the drive's impulse J = the sum of I &times; (post &minus; pre) is over 0, three rules bound what is written (<code>LockBound</code>, on the
 blended speed, so below bite 100 too): final is at least min(post, 0); final is at most the fastest post; the sum of I &times; final is at most
 that of I &times; post, the surplus taken from the wheels by their room above the floor. What the rules do not let through is dropped and

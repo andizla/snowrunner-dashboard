@@ -1104,6 +1104,8 @@ inline float LockK(int p, float dt)
 // Under this spread (the fastest minus the slowest, rad/s) nothing is written, so a standing truck is never written and
 // no resting body is woken (the Reviewer's R5).
 static const float kLockSpreadMin = 0.01f;
+// The contact share over which a wheel counts as loaded for the lock's hand-on (BRIEF_tester_1114.md, part 197).
+static const float kLockLoaded = 0.05f;
 struct LockStepOut
 {
     float final[kCapWheels];
@@ -1208,8 +1210,9 @@ inline LockStepOut LockStep(const float *post, const float *gain, const bool *ok
 // the loads (the last term left out with the loads under 0.001), and final = post + k x (locked - post). With every
 // load 0 it is LockStep itself. Fewer than two wheels, no k, both spreads (pre's and post's) under kLockSpreadMin or a
 // value that is no number: final is post. A wheel on the ground that slips counts as loaded and is not held. With the
-// drive's impulse J over 0 LockBound's three rules hold on final (bound false: the law without them, for the tests'
-// figures of before).
+// drive's impulse J over 0 LockBound's three rules hold on final. Since part 197 R goes to the loaded wheels (a share
+// over kLockLoaded) as one change of speed, R over their inertia; bound false is the law of before, by gain x R x load
+// over the sum of the loads and without the rules, for the tests' figures of before.
 inline LockStepOut LockStepHeld(const float *pre, const float *post, const float *gain, const float *load, const float *radius, const bool *ok, int n, float k, float mass,
                                 bool bound = true)
 {
@@ -1286,11 +1289,23 @@ inline LockStepOut LockStepHeld(const float *pre, const float *post, const float
     }
     if (!(sumW > 0.0f) || !isfinite(sumW) || !isfinite(sumWpre) || !isfinite(j) || !isfinite(sumI)) return o;
     const float c = sumWpre / sumW, a = j / sumW, rest = j - a * sumI, kk = CutClamp01(k);
+    float sumIloaded = 0.0f;
+    for (int i = 0; i < n; i++)
+        if (use[i] && ld[i] > kLockLoaded) sumIloaded += 1.0f / gain[i];
+    const float setRise = sumLoad >= 0.001f && sumIloaded > 0.0f ? rest / sumIloaded : 0.0f;
     float final[kCapWheels];
     for (int i = 0; i < n; i++)
     {
         if (!use[i]) continue;
-        const float locked = c + a + (sumLoad >= 0.001f ? gain[i] * rest * ld[i] / sumLoad : 0.0f);
+        // what is left for the ground goes to every loaded wheel as one change of speed, R over the loaded wheels'
+        // inertia (BRIEF_tester_1114.md, parts 188 and 197): they leave the lock at one speed, as a locked shaft turns, and
+        // the solver shares the push by the ground's own grip. The law of before (bound false, for the tests' figures)
+        // handed R by gain x load, so a light, loaded wheel got the most and was pushed away from the others (the front
+        // wheels at 8.21 and the rear at 4.93 to 6.59 at 13:02:45). A wheel in the air (a share up to kLockLoaded) takes
+        // none of R and stays at C + a, as before
+        float locked = c + a;
+        if (!bound) locked += sumLoad >= 0.001f ? gain[i] * rest * ld[i] / sumLoad : 0.0f;
+        else if (ld[i] > kLockLoaded) locked += setRise;
         final[i] = kk >= 1.0f ? locked : post[i] + kk * (locked - post[i]);
         if (!isfinite(final[i])) return o;
     }
