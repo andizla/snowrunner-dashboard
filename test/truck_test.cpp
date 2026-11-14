@@ -8554,8 +8554,9 @@ static void TruckTestsNine()
               "a place is given up only once its object holds nothing the mod wrote; with every place holding the mod's word a new wheel is neither kept nor written");
     }
 
-    // the take-over's check (BRIEF_takeover_other_truck.md): the old truck counts as there only with its id and kind,
-    // a chassis body of the new one's class and a truck's mass, in the new truck's world (not 0)
+    // the take-over's check (BRIEF_takeover_other_truck.md, then BRIEF_tester_1114.md, part 198): the old truck counts
+    // as there when its vehicle reads its id and kind, whatever its body, world or mass; gone with another id or kind,
+    // or where the game reused it for the new truck; a read that faults is no take-over
     {
         const uint64_t base = 0x9000000, v1 = base, m1 = base + 0x1000, b1 = base + 0x1800, i1 = base + 0x1C00, v2 = base + 0x2000, m2 = base + 0x3000,
                        b2 = base + 0x3800, vt = kExe + 0x1234560, world = 0x9100000;
@@ -8587,24 +8588,42 @@ static void TruckTestsNine()
         Put(i1 + 1, '9');
         const bool otherId = !TruckStillThere(kMemory, v1, old, v2, o) && o.id[1] == '9';
         Put(i1 + 1, '1');
-        const bool unread = !TruckStillThere(kMemory, 0x9800000, old, v2, o) && !o.id[0] && !o.body;
+        // a vehicle whose memory does not read: no take-over, said so
+        bool unreadSaid = false;
+        const bool unread = TruckStillThere(kMemory, 0x9800000, old, v2, o, &unreadSaid) && unreadSaid && !o.id[0] && !o.body &&
+                            TruckThereWords(o, unreadSaid, oldId, "test_kind").find(L"not readable: no take-over") != std::wstring::npos;
+        // out of the physics (no world, another world, no chassis read, another body class): still there by its id and kind
+        bool readSaid = true;
         Put(b1 + 0x10, (uint64_t)0);
-        const bool outOfWorld = !TruckStillThere(kMemory, v1, old, v2, o) && !strcmp(o.id, oldId);
+        const bool outOfWorld = TruckStillThere(kMemory, v1, old, v2, o, &readSaid) && !readSaid && !strcmp(o.id, oldId);
         Put(b1 + 0x10, world + 0x1000);
-        const bool otherWorld = !TruckStillThere(kMemory, v1, old, v2, o);
+        const bool otherWorld = TruckStillThere(kMemory, v1, old, v2, o);
         Put(b1 + 0x10, world);
+        Put(m1 + 0x230, (uint64_t)0);
+        const bool noChassis = TruckStillThere(kMemory, v1, old, v2, o) && !o.body;
+        Put(m1 + 0x230, b1);
+        Put(b1, vt + 8);
+        const bool otherClass = TruckStillThere(kMemory, v1, old, v2, o) && truckid::ThereWords(o, oldId, "test_kind").find(L"vtables different") != std::wstring::npos &&
+                                truckid::ThereWords(o, oldId, "test_kind").find(L": there") != std::wstring::npos;
+        Put(b1, vt);
         PutText(m1 + 0x588, "test_other", 0);
         const bool otherKind = !TruckStillThere(kMemory, v1, old, v2, o);
         PutText(m1 + 0x588, "test_kind", 0);
-        Put(b1, vt + 8);
-        const bool otherClass = !TruckStillThere(kMemory, v1, old, v2, o) && truckid::ThereWords(o, oldId, "test_kind").find(L"vtables different") != std::wstring::npos &&
-                                truckid::ThereWords(o, oldId, "test_kind").find(L": gone") != std::wstring::npos;
-        Put(b1, vt);
+        // freed: the block cleared, its id pointer 0
+        Put(v1 + 0x48, (uint64_t)0);
+        const bool freedGone = !TruckStillThere(kMemory, v1, old, v2, o, &readSaid) && !readSaid;
+        Put(v1 + 0x48, i1);
+        // reused by the game for the new truck: the same vehicle, or the same chassis body
+        const bool sameVehicle = !TruckStillThere(kMemory, v1, old, v1, o);
+        Put(m2 + 0x230, b1);
+        const bool sameBody = !TruckStillThere(kMemory, v1, old, v2, o);
+        Put(m2 + 0x230, b2);
         const bool again = TruckStillThere(kMemory, v1, old, v2, o);
         g_game.pop_back();
-        Check(there && otherId && unread && outOfWorld && otherWorld && otherKind && otherClass && again,
-              "take-over check: the old truck is there with its id and kind and its chassis in the new truck's world; another id, no vehicle, a body out of "
-              "the world (0) or in another, another kind or another body class is gone; its reads in the match line's words");
+        Check(there && otherId && unread && outOfWorld && otherWorld && noChassis && otherClass && otherKind && freedGone && sameVehicle && sameBody && again,
+              "take-over check: the old truck is there with its id and kind, also out of the world (0), in another, with no chassis read or another body "
+              "class; another id, another kind, a cleared block, the same vehicle or the same chassis as the new truck is gone; a vehicle that does not read is "
+              "no take-over and says so; its reads in the match line's words");
     }
     // Probe=1 with no truck read: the game's words with the garage pointer's raw value, one line at each change (the
     // Reviewer's S2 on the drive of 2026-11-09)

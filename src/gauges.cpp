@@ -10616,7 +10616,7 @@ static DWORD WINAPI Run(void *)
     // the truck that went last, and the one handed to the match of the truck taken now (the Reviewer's M2); the
     // still-there reads of this match, each once, for its line (M3)
     truckid::Last lastGone = {}, lastForMatch = {};
-    struct GoneRead { char id[40]; TruckThere o; bool gone; };
+    struct GoneRead { char id[40]; TruckThere o; bool gone, unread; };
     std::vector<GoneRead> goneReads;
     struct IdPending { bool on; ULONGLONG since; int line; char fromId[40]; const wchar_t *rule; const wchar_t *why; unsigned long long lastSeen; } idPending = {};
     wchar_t idWords[96] = L"";   // what the tabs say of the id (the match or why none)
@@ -10678,7 +10678,7 @@ static DWORD WINAPI Run(void *)
         old.named = true;
         GoneRead g = {};
         strncpy_s(g.id, id, _TRUNCATE);
-        g.gone = !TruckStillThere(memory, d->vehicle, old, watch.idVehicle, g.o);
+        g.gone = !TruckStillThere(memory, d->vehicle, old, watch.idVehicle, g.o, &g.unread);
         if (goneReads.size() < 64) goneReads.push_back(g);
         return g.gone;
     };
@@ -10771,6 +10771,18 @@ static DWORD WINAPI Run(void *)
             const std::wstring lastText = lastForMatch.on ? Wide(truckid::Short(lastForMatch.id).c_str()) + L" " : std::wstring();
             std::wstring line = L"match: " + Wide(truck.key) + L", id " + Wide(truckid::Short(truck.id).c_str()) + L": the truck that went last " + lastText +
                                 (took == kTookLast ? std::wstring(L"taken") : std::wstring(L"not taken (") + truckid::LastWords(lastWhy) + L")");
+            // its still-there words always, taken or not, whatever the gap (part 198, must 3)
+            if (lastForMatch.on && lastForMatch.id[0])
+            {
+                if (!lastDriven) line += L", its vehicle not known in this start";
+                else if (lastDriven->loads != watch.loads) line += L", a load since, its vehicle not read";
+                else
+                {
+                    idDrivenGone(lastForMatch.id);
+                    for (const auto &g : goneReads)
+                        if (!strcmp(g.id, lastForMatch.id)) line += L", its vehicle " + TruckThereWords(g.o, g.unread, lastForMatch.id, truck.key);
+                }
+            }
             if (looks.empty()) line += L"; no other id of the kind";
             for (const auto &l : looks)
             {
@@ -10797,7 +10809,7 @@ static DWORD WINAPI Run(void *)
                 }
                 const bool waiting = !l.listed || l.seen < idStart || idDrivenGone(l.idText);
                 for (const auto &g : goneReads)
-                    if (!strcmp(g.id, l.idText)) line += L", its vehicle " + truckid::ThereWords(g.o, l.idText, truck.key);
+                    if (!strcmp(g.id, l.idText)) line += L", its vehicle " + TruckThereWords(g.o, g.unread, l.idText, truck.key);
                 const bool candidate = truckid::LookCandidate(l, kIdSettingsBits) || (!(l.sections & kIdSettingsBits) && truckid::LookCandidate(l, kIdOdoBits));
                 line += !strcmp(l.idText, takenId) ? L": taken" : !waiting ? L": not waiting" : candidate ? L": a candidate" : L": no candidate";
             }
@@ -11533,6 +11545,7 @@ static DWORD WINAPI Run(void *)
             const ULONGLONG goneAt = suspWatch.goneAt;
             bool byVehicle = false, checked = false;
             TruckThere there = {};
+            bool thereUnread = false;
             uint64_t thereVehicle = 0;
             char thereId[40] = {};
             const bool takeOver = SuspTrackWith(suspWatch, truck, now, GetTickCount64(), oldId, truckVehicle, watch.idVehicle, watch.loads, &byVehicle,
@@ -11540,12 +11553,12 @@ static DWORD WINAPI Run(void *)
                                                     checked = true;
                                                     thereVehicle = goneVehicle;
                                                     strncpy_s(thereId, gone.id, _TRUNCATE);
-                                                    return TruckStillThere(memory, goneVehicle, gone, watch.idVehicle, there);
+                                                    return TruckStillThere(memory, goneVehicle, gone, watch.idVehicle, there, &thereUnread);
                                                 });
             if (checked)
                 Log(L"suspension: the take-over check: the old truck %S's vehicle %p reads %S (kind %S), its chassis body %p in world %p (the new truck's %p): %s",
                     thereId, (void *)thereVehicle, there.id[0] ? there.id : "no id", there.kind[0] ? there.kind : "none", (void *)there.body, (void *)there.world,
-                    (void *)there.newWorld, there.there ? L"another truck, not taken over" : L"gone, taken over");
+                    (void *)there.newWorld, thereUnread ? L"its vehicle not readable, not taken over" : there.there ? L"another truck, not taken over" : L"gone, taken over");
             if (idPending.on) idResolve();
             if (OdoOwed(odo) || airOwed()) odoWrite(L"another truck driven");
             OdoChange(odo);

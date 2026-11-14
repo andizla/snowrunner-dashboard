@@ -417,19 +417,36 @@ inline void TruckKey(const TruckMemory &m, const TruckRefs &r, const TruckRaw &t
     if (m.get(r.vehicle + 0x48, chars) && chars >= 0x10000 && m.peek(chars, text, sizeof text) && !text[38] && TruckIdText(text, 38)) memcpy(id.id, text, sizeof text);
 }
 
-// The chassis body, its vtable, inverse mass and world, and the take-over's check on another vehicle within 20 s:
-// truck_id.h ChassisWorld and StillThere (BRIEF_truck_id_part2.md), read through m. The old truck is never there where
+// The chassis body, its vtable, inverse mass and world, and the take-over's check on another vehicle: truck_id.h
+// ChassisWorld and StillThere (BRIEF_truck_id_part2.md) read through m, with Gameplay's rule on top of it
+// (BRIEF_tester_1114.md, part 198, the Reviewer's musts): the old truck is there when its vehicle reads its own id and
+// its kind, whatever its body, world or mass, for a truck left far away or asleep is out of the physics but still in
+// the game. It is gone only where the vehicle reads another id or kind (freed, or another truck's), or where the game
+// reused it for the new truck (the same vehicle, or the same chassis body). A read that faults (the vehicle's id not
+// readable) is no take-over either: unread says so, and the truck counts as there. The old truck is never there where
 // its kind's name was not read (its key is the build's).
 inline bool TruckChassisWorld(const TruckMemory &m, uint64_t vehicle, uint64_t &body, uint64_t &vtable, float &inverseMass, uint64_t &world)
 {
     return truckid::ChassisWorld([&m](uint64_t at, void *out, size_t size) { return m.peek(at, out, size); }, vehicle, body, vtable, inverseMass, world);
 }
 typedef truckid::There TruckThere;
-inline bool TruckStillThere(const TruckMemory &m, uint64_t oldVehicle, const TruckIdentity &old, uint64_t newVehicle, TruckThere &o)
+inline bool TruckStillThere(const TruckMemory &m, uint64_t oldVehicle, const TruckIdentity &old, uint64_t newVehicle, TruckThere &o, bool *unread = nullptr)
 {
     truckid::StillThere([&m](uint64_t at, void *out, size_t size) { return m.peek(at, out, size); }, oldVehicle, old.key, old.id, newVehicle, o);
-    o.there = o.there && old.named;
+    // the id's read itself: the vehicle's pointer to its text and the text; a pointer of 0 (a cleared block) is read
+    uint64_t chars = 0;
+    char text[39];
+    const bool faulted = !oldVehicle || !m.get(oldVehicle + 0x48, chars) || (chars >= 0x10000 && !m.peek(chars, text, sizeof text));
+    const bool reused = oldVehicle == newVehicle || (o.body && o.body == o.newBody);
+    const bool reads = old.id[0] && !strcmp(o.id, old.id) && old.key[0] && !strcmp(o.kind, old.key);
+    if (unread) *unread = faulted && old.named;
+    o.there = old.named && (faulted || (reads && !reused));
     return o.there;
+}
+// ThereWords with Gameplay's rule said: where the read faulted, that it is no take-over.
+inline std::wstring TruckThereWords(const TruckThere &o, bool unread, const char *oldId, const char *oldKind)
+{
+    return truckid::ThereWords(o, oldId, oldKind) + (unread ? L" (its vehicle not readable: no take-over)" : L"");
 }
 
 // The driven truck from pass to pass. taken is the truck the mod goes by, its key "" while none is read. Another
