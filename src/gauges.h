@@ -228,6 +228,14 @@ struct GaugeSettings
     int keepLogs;            // KeepLogs: how many of the last starts' logs Gauges\logs keeps, at most 500 MB of them; 0 keeps all
 };
 
+// Mod engine in A can act by the settings alone (BRIEF_release_answers_1115.md, 203, the Reviewer's addendum point 1):
+// the mod automatic or the mod gearbox, Real engine (Powertrain), Mod engine speed and an engine share above 0. The
+// Gearbox tab greys its box by this, and TorqueCutWanted goes by it in A, so the two cannot disagree.
+inline bool CutInAMet(const GaugeSettings &s)
+{
+    return (s.gearbox == kGearboxModel || s.gearbox == kGearboxOwn) && s.powertrain && s.modEngineSpeed && s.engineShare > 0;
+}
+
 inline void SettingsDefaults(GaugeSettings &s)
 {
     s = GaugeSettings{};

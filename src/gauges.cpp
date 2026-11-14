@@ -1378,7 +1378,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; AirEmptyAtStart=1: a truck with air brakes first driven after the game starts has empty tanks and stands on its spring brakes until they fill. A truck keeps its air between drives (AirBar in its [Odometer:<id>]).\n"
                         L"; AirBrakes in a truck file (the Air brakes box of the Engine tab): 1 the truck has brake air and spring brakes, 0 it has none. No key: every truck but a scout has them, by the class the mod automatic goes by for it.\n"
                         L"; ModEngineSpeed=1 (with Powertrain, on by default): the game tachometer, sound and effects follow the mod engine; its fuel burn and stall check keep the game's own.\n"
-                        L"; CutInA=1 (on by default; the Mod work tab's Mod engine in A): in A the truck pulls with the mod engine alone through the converter, as a held gear does, at Gearbox=1 and 2.\n"
+                        L"; CutInA=1 (on by default; the Gearbox tab's Mod engine in A): in A the truck pulls with the mod engine alone through the converter, as a held gear does, at Gearbox=1 and 2.\n"
                         L";   EngineSpeedTop: the mod engine speed the game reads as its top, as a share of the redline, 0.5 to 1.5 (1: the redline; idle is its 0).\n"
                         L";   Base1.<engine>, Base2.<engine> ... in a truck's file: each gear's acceleration at the game's own pull, floored, learned.\n"
                         L"; Creep=1: an idling truck on an automatic moves to walking pace; the brake holds it. By default only where an automatic picks the gear.\n"
@@ -4681,7 +4681,7 @@ static void GearboxModelPass(GearboxModel &m, bool driving, const GearboxPosMode
 // as well, so it is wanted from the mod's automatic up. A held gear still needs the mod's own gearbox (TorqueCutActs).
 static bool TorqueCutWanted(const GaugeSettings &s)
 {
-    return s.powertrain && s.modEngineSpeed && (s.gearbox == kGearboxOwn || (s.cutInA && s.gearbox >= kGearboxModel)) && s.engineShare > 0;
+    return (s.gearbox == kGearboxOwn && s.powertrain && s.modEngineSpeed && s.engineShare > 0) || (s.cutInA && CutInAMet(s)); // in A by the tab's own test (203)
 }
 // The gear ratio pull's share for the slot (161, must 3), by the position and not by "the cut acts": the tool's figure
 // over 100 in a numbered gear, the low range and R held by hand; 0 in A (inA), in N and in H.
@@ -12535,6 +12535,26 @@ static void PartIni()
         cs.engineShare = 0;
         const bool offShare = !TorqueCutWanted(cs);
         Check(on && offSpeed && offShare, "torque cut: wanted with Powertrain, Gearbox=2, EngineShare above 0 and ModEngineSpeed=1; not with ModEngineSpeed=0 (said so) or EngineShare 0");
+        // the Gearbox tab's grey (BRIEF_release_answers_1115.md, 203): CutInAMet, which TorqueCutWanted goes by in A, gives
+        // the same as the rule before at every level, input and setting, and is true exactly where the box can act
+        {
+            bool same = true, greyRight = true;
+            for (int level = 0; level < kGearboxCount; level++)
+                for (int input = 0; input < kInputCount; input++)
+                    for (int bits = 0; bits < 16; bits++)
+                    {
+                        GaugeSettings g = cs;
+                        g.gearbox = level, g.input = input;
+                        g.powertrain = (bits & 1) != 0, g.modEngineSpeed = (bits & 2) != 0, g.engineShare = (bits & 4) ? 50 : 0, g.cutInA = (bits & 8) != 0;
+                        const bool before = g.powertrain && g.modEngineSpeed && (g.gearbox == kGearboxOwn || (g.cutInA && g.gearbox >= kGearboxModel)) && g.engineShare > 0;
+                        same = same && TorqueCutWanted(g) == before;
+                        GaugeSettings withA = g;
+                        withA.cutInA = true;
+                        const bool acts = withA.powertrain && withA.modEngineSpeed && withA.gearbox >= kGearboxModel && withA.engineShare > 0;
+                        greyRight = greyRight && CutInAMet(g) == acts;
+                    }
+            Check(same && greyRight, "Mod engine in A on the Gearbox tab: the torque cut is wanted as before at every level, input and setting, and the box is greyed exactly where it cannot act");
+        }
         // the gate with A (BRIEF_drivetrain_3_a_on_our_chain.md, part A; M5, M6). CutInA off: at every level and every
         // input the rule as it was before the job, A or not. On: A acts at Gearbox=1 and 2, a held gear only at 2
         cs.engineShare = 100;

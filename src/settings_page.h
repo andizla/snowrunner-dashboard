@@ -963,6 +963,17 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         PageTip("The mod automatic shifts while the game shifter is in A, shown as D: a torque converter, later shifts the further the pedal is down and a kickdown floored. A gear picked on the game shifter takes over until A again. The reverse the game puts in on the brake while standing is refused.");
         changed(ImGui::RadioButton("Mod gearbox", &s.gearbox, kGearboxOwn));
         PageTip("The mod takes the shifter: D, the gears, N, R, H and the low range on the bindings of the Controls tab, with a clutch and the options below. Driven with a pad or the keyboard the game shifter picks too.");
+        // the automatic on the mod drivetrain, part A, on its own tab (BRIEF_release_answers_1115.md, 203): at every level,
+        // drawn as off where the settings do not let it act (CutInAMet, the same test as the drive's)
+        {
+            const bool met = CutInAMet(s);
+            ImGui::BeginDisabled(!met);
+            PageLabel("Mod engine in A", labelX);
+            changed(ImGui::Checkbox("##cutina", &s.cutInA));
+            PageTip("In A the truck pulls with the mod engine alone, through the converter, as a held gear already does. The Diff rows then act in A too. On by default.");
+            ImGui::EndDisabled();
+            if (!met) ImGui::TextDisabled("Not in force now. It acts with the mod automatic or the mod gearbox, Real engine, Mod engine speed and an engine share above 0.");
+        }
         PageLabel("Game gear display", labelX);
         {
             static const char *const displays[3] = { "As in the game", "Off at Mod gearbox", "Off always" };
@@ -1772,10 +1783,6 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
             else if (view.rateNow == 120 && view.rateWinch == kRateWinchIn) ImGui::TextDisabled("Winch pull: right at 120.");
             else if (view.rateNow == 120 && view.rateWinch == kRateWinchRefused) ImGui::TextDisabled("Winch pull: too fast at 120 (not corrected, see the log).");
         }
-        // the automatic on the mod drivetrain, part A: on by default from 0.19.0 (200), switched at once
-        PageLabel("Mod engine in A", labelX);
-        changed(ImGui::Checkbox("##cutina", &s.cutInA));
-        PageTip("In A the truck pulls with the mod engine alone, through the converter, as a held gear already does. The Diff rows then act in A too. Needs Real engine, Mod engine speed and the mod automatic or the mod gearbox. On by default.");
 
         ImGui::Separator();
         if (ImGui::Button("Defaults"))

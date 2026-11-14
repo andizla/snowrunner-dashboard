@@ -80,6 +80,7 @@ The Gameplay tab of the NEXT GEN menu edits every setting while you play, in eig
 | The oil: minutes it takes from 15 C to 85 C when the engine is driven as usual, from 1 to 60 and at least a minute after the coolant, and the temperature in C from which it is too hot, from 100 to 150 | Engine: Oil warm-up, Oil warning | `OilWarmUpMinutes`, `OilWarnC` | 5, 120 |
 | Heat and a cold engine worked hard cost the engine (and stalls and the clutch the gearbox) | Engine: Damage | `Damage` 0 or 1 | on |
 | The game's own gearbox, the mod's automatic, or the mod's own gearbox (see below) | Gearbox: Game's gearbox, Mod automatic, Mod gearbox | `Gearbox` 0, 1 or 2 | 0 |
+| In A the truck pulls with the mod engine alone, through the converter, as a held gear does. With the mod automatic or the mod gearbox, Real engine, Mod engine speed and an engine share above 0 | Gearbox: Mod engine in A | `CutInA` 0 or 1 | on |
 | A shift into a gear without the clutch: at speed it stays out, standing or crawling it stalls the engine | Gearbox: Require clutch | `RequireClutch` 0 or 1 | off |
 | Neutral while no gear key is held, for an H shifter | Gearbox: H shifter | `RequireGearHeld` 0 or 1 | off |
 | From the lowest forward place to reverse and back without stopping in neutral | Gearbox: Skip neutral | `SkipNeutral` 0 or 1 | off |

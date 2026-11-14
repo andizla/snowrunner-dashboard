@@ -1547,8 +1547,8 @@ The tab's sliders cover narrower ranges than the ini for some keys (Scale 0.5 to
 def s_rate():
     return '''
 <h2>The physics rate</h2>
-<p><b>The automatic on the mod drivetrain, part A</b> (BRIEF_drivetrain_3_a_on_our_chain.md; <code>CutInA</code>, the Mod work tab's
-"Mod engine in A", on by default from 0.19.0). The torque cut answers in A too, at Gearbox=1 and 2, wherever the mod's automatic has the truck
+<p><b>The automatic on the mod drivetrain, part A</b> (BRIEF_drivetrain_3_a_on_our_chain.md; <code>CutInA</code>, the Gearbox tab's
+"Mod engine in A", on by default from 0.19.0; greyed where <code>CutInAMet</code> is false, the test <code>TorqueCutWanted</code> goes by in A). The torque cut answers in A too, at Gearbox=1 and 2, wherever the mod's automatic has the truck
 in A (TorqueCutInA, TorqueCutActs); a held gear still needs Gearbox=2, and the game's gear agrees with the position by its sign
 alone. Locked, the slot is the map of a held gear, with its engine braking and the governor by the truck's own speed. A shift made
 locked reads locked on its own pass too (ConverterLockedForCut), so no scalar goes out between two maps. Open, the slot is the scalar
