@@ -340,7 +340,7 @@ From the version of that mod that publishes its own state, the cluster has a ten
 
 ## Next Gen Tuning
 
-`NextGenTuning.asi`, the tuning tool, version 1.0.0, comes in this zip. Copy it into `Sources\Bin` beside `Gauges.asi`. It needs nothing else. F1 opens the NEXT GEN menu on its Tuning tab, where the figures this mod and Next Gen Tire Inflation publish are sliders that act at once. A moved slider is saved in the mod's own ini, `Gauges.ini` for this mod. The key is saved in `NextGenTuning.ini`. Its own README and changelog are in the zip with it.
+`NextGenTuning.asi`, the tuning tool, version 1.0.0, comes in this zip. Copy it into `Sources\Bin` beside `Gauges.asi`. It needs nothing else. F1 opens the NEXT GEN menu on its Tuning tab, where the figures this mod and Next Gen Tire Inflation publish are sliders that act at once. A moved slider is saved in the mod's own ini, `Gauges.ini` for this mod. The key is saved in `NextGenTuning.ini`. Its own README and changelog are in the zip with it, and its source is in `tuning\` in this repo.
 
 ## Remove
 

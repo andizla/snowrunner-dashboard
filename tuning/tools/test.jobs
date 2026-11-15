@@ -1,0 +1,5 @@
+# What test.bat runs, a job a line, for tools\run_jobs.py (its head says how a line reads). tune_test writes two ini files
+# of its own in the temp folder and removes them; the other writes none.
+tune_test :: out\test\tune_test.exe
+# the player texts carry no apostrophe: the tab's lines, labels and tips
+player_texts :: python -I test\player_texts.py src\tune_page.h src\tuning.cpp ..\src\ng_overlay.cpp
