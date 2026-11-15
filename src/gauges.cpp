@@ -61,6 +61,7 @@ int NgMenuKeyFromIni(); // the menu's key, which a capture never binds
 #include "lock_steer.h"
 #include "truck_type.h"
 #include "quick_winch.h"
+#include "lock_marker.h"
 
 static HMODULE g_self = nullptr;
 static std::wstring g_dir; // the game's folder, with the last backslash
@@ -6151,6 +6152,10 @@ struct TruckWatch
     // truck and wheel list they were made for, when and how often they were looked at; what is in force on each
     // (AxlePlanOf); diffMixed: the axles driven now differ; the two levers; the line last logged
     AxleRows axleRows;
+    float axleRowAt[kDdWheels]; // each wheel's place along the main body as AxleRowsStep read it, for the axle mark's rows (lock_marker.h)
+    bool axleRowOk[kDdWheels];
+    uint32_t markSaid; // the rows the axle mark's line last named
+    bool markUnread;
     uint64_t axleRowsFor, axleRowsWheel[kDdWheels], axleRowsBody[kDdWheels]; // axleRowsBody: each wheel's parent body, for the log of the wheels alone
     int axleRowsN, axleRowsLooks;
     unsigned long long axleRowsAt;
@@ -6538,6 +6543,7 @@ static void AxleRowsStep(TruckWatch &w, const TruckMemory &m, const TruckRaw &ra
     if (w.axleRowsLooks < 1000) w.axleRowsLooks++;
     for (int i = 0; i < n && i < kDdWheels; i++) w.axleRowsWheel[i] = w.refs.wheel[i];
     w.axleRows = AxleRows{};
+    for (int i = 0; i < kDdWheels; i++) w.axleRowOk[i] = false;
     if (n < 2 || n > kDdWheels || raw.wheels != n) return;
     uint64_t body[kDdWheels], model = 0, mainBody = 0;
     float along[kDdWheels], side[kDdWheels], rowAt[kDdWheels], mainSide[kDdWheels], ma[3], mf[3], ml[3];
@@ -6553,8 +6559,49 @@ static void AxleRowsStep(TruckWatch &w, const TruckMemory &m, const TruckRaw &ra
         rowAt[i] = along[i];
         if (ok[i] && mainOk && !AxlePlace(c, ma, mf, ml, rowAt[i], mainSide[i])) rowAt[i] = along[i], mainSide[i] = NAN;
     }
-    for (int i = 0; i < n; i++) w.axleRowsBody[i] = body[i];
+    for (int i = 0; i < n; i++) w.axleRowsBody[i] = body[i], w.axleRowAt[i] = rowAt[i], w.axleRowOk[i] = ok[i];
     w.axleRows = AxleRowsMake(body, along, side, rowAt, ok, drive, n, mainOk ? mainSide : nullptr);
+}
+// The axle mark's table (lock_marker.h; part 206): the drawer's rows of the driven truck, each 1 where a wheel in it
+// is on an axle the mod holds Locked and drives now while the diff types act, written a byte at a time; all 0 with no
+// truck, no rows, a wheel not read or the patch not in. One line when what is marked changes.
+static volatile uint8_t g_markRows[kMarkRowsMost + 1]; // the rows the mod locks, and at [kMarkRowsMost] any of them: the mod's thread writes, the drawer's stubs read
+static bool g_markOn = false;                          // both places are patched (MarkStart)
+static void MarkPass(TruckWatch &w, const TruckRaw &raw, bool driving)
+{
+    if (!g_markOn) return;
+    uint8_t table[kMarkRowsMost] = {};
+    int rows = 0;
+    bool any = false;
+    const bool rowsHere = driving && w.refs.vehicle && w.axleRows.axles > 0 && w.axleRowsFor == w.refs.vehicle && w.axleRowsN == raw.wheels && raw.wheels <= kDdWheels;
+    if (rowsHere && w.cutActs)
+    {
+        int drive[kDdWheels], rowOf[kDdWheels];
+        bool locked[kDdWheels];
+        for (int i = 0; i < raw.wheels; i++)
+        {
+            const int a = w.axleRows.ofWheel[i];
+            drive[i] = raw.drive[i];
+            locked[i] = a >= 0 && a < kAxleRowsMost && w.axlePlan.type[a] == kDiffLocked && w.axlePlan.now[a];
+        }
+        rows = MarkRowsOf(drive, w.axleRowAt, w.axleRowOk, raw.wheels, raw.awd != 0, rowOf);
+        if (rows > 0) any = MarkTable(rowOf, locked, raw.wheels, table);
+    }
+    for (int r = 0; r < kMarkRowsMost; r++)
+        if (g_markRows[r] != table[r]) g_markRows[r] = table[r];
+    if (g_markRows[kMarkRowsMost] != (uint8_t)any) g_markRows[kMarkRowsMost] = (uint8_t)any;
+    uint32_t said = 0;
+    for (int r = 0; r < kMarkRowsMost; r++) said |= (uint32_t)table[r] << r;
+    if (said != w.markSaid || (rows < 0) != w.markUnread)
+    {
+        w.markSaid = said, w.markUnread = rows < 0;
+        char list[80] = "";
+        for (int r = 0; r < kMarkRowsMost; r++)
+            if (table[r]) snprintf(list + strlen(list), sizeof list - strlen(list), " %d", r + 1);
+        if (rows < 0) Log(L"axle mark: a driven wheel's place was not read, so no row is marked by the mod");
+        else if (said) Log(L"axle mark: the X on rows%S of the %d the game draws, numbered in the wheel list's order", list, rows);
+        else Log(L"axle mark: no row locked by the mod");
+    }
 }
 static void DiffPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s, bool driving, const TruckRaw &raw)
 {
@@ -6573,6 +6620,7 @@ static void DiffPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &s
     w.axlePlan = AxlePlanOf(w.axleRows, s.diffAxle, s.diffType, w.diffKindRead, kind, driving && raw.awd != 0, leversHere && w.levers.front, leversHere && w.levers.rear);
     w.diffMixed = w.axleRows.axles > 0 && w.axlePlan.common < 0;
     w.diffType = w.axleRows.axles > 0 && !w.diffMixed ? w.axlePlan.common : DiffTypeOf(s.diffType, w.diffKindRead, kind);
+    MarkPass(w, raw, driving);
     if (!driving || !w.refs.vehicle) return;
     // one line a truck, and again when a row, a lever, all wheel drive or the read changes
     {
@@ -10178,6 +10226,88 @@ static bool RateCodeWrite(size_t at, uint32_t value)
     FlushInstructionCache(GetCurrentProcess(), place, 4);
     return ok;
 }
+// ---- the axle mark (lock_marker.h; BRIEF_drive_1115_findings.md, part 206) ----
+// n bytes into the exe's code, read back: the protection changed and put back, the instruction cache flushed.
+static bool MarkCodeWrite(size_t at, const uint8_t *bytes, int n)
+{
+    void *const place = (void *)(uintptr_t)(g_base + at);
+    DWORD old = 0, again = 0;
+    if (!VirtualProtect(place, (SIZE_T)n, PAGE_EXECUTE_READWRITE, &old)) return false;
+    bool ok = false;
+    __try
+    {
+        memcpy(place, bytes, (size_t)n);
+        ok = memcmp(place, bytes, (size_t)n) == 0;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        ok = false;
+    }
+    VirtualProtect(place, (SIZE_T)n, old, &again);
+    FlushInstructionCache(GetCurrentProcess(), place, (SIZE_T)n);
+    return ok;
+}
+// Once at the start, after the places are found and before a truck is driven: both places found on a copy of the
+// code, the same bytes in memory, the stubs on a page within 2 GB of the exe made execute and read only, then the
+// fade's jump and the pick's last. Anything missing: no write, one line, the game's marks as they were.
+static void MarkStart()
+{
+    std::vector<uint8_t> code;
+    size_t from = 0, to = 0;
+    MarkPlan p = {};
+    const bool copied = CodeCopy(code, from, to);
+    if (!copied || !MarkPlanMake(code.data(), from, to, p))
+    {
+        Log(L"axle mark: %S: the game's X stays with the game's own lock alone, nothing is written", copied ? p.why : "the exe's code could not be copied");
+        return;
+    }
+    uint8_t pickNow[kMarkPickLength], fadeNow[kMarkFadeLength];
+    if (!PeekGame(g_base + p.pick, pickNow, sizeof pickNow) || memcmp(pickNow, p.pickBytes, sizeof pickNow) || !PeekGame(g_base + p.fade, fadeNow, sizeof fadeNow) ||
+        memcmp(fadeNow, p.fadeBytes, sizeof fadeNow))
+    {
+        Log(L"axle mark: the drawer's bytes in memory are not those of the copy (another mod may have changed them): nothing is written");
+        return;
+    }
+    const uint64_t page = RatePageMake();
+    if (!page)
+    {
+        Log(L"axle mark: no free page within 2 GB of the exe for the stubs: nothing is written");
+        return;
+    }
+    uint8_t stubs[kMarkFadeAt + kMarkFadeStub];
+    memset(stubs, 0xCC, sizeof stubs);
+    uint8_t pickJump[kMarkPickLength], fadeJump[kMarkFadeLength];
+    const bool built = MarkPickStub(stubs, page, g_base + p.pick + kMarkPickLength, (uint64_t)(uintptr_t)g_markRows) &&
+                       MarkFadeStub(stubs + kMarkFadeAt, page + kMarkFadeAt, g_base + p.fade + kMarkFadeLength, (uint64_t)(uintptr_t)&g_markRows[kMarkRowsMost], g_base + p.last,
+                                    g_base + p.time, g_base + p.clock) &&
+                       MarkJump(pickJump, kMarkPickLength, g_base + p.pick, page) && MarkJump(fadeJump, kMarkFadeLength, g_base + p.fade, page + kMarkFadeAt);
+    memcpy((void *)(uintptr_t)page, stubs, sizeof stubs);
+    DWORD old = 0;
+    const bool sealed = built && VirtualProtect((void *)(uintptr_t)page, 0x1000, PAGE_EXECUTE_READ, &old) != 0;
+    if (!sealed)
+    {
+        VirtualFree((void *)(uintptr_t)page, 0, MEM_RELEASE);
+        Log(L"axle mark: the stubs %S: nothing is written", built ? "could not be made execute and read only" : "could not be built within reach of the exe");
+        return;
+    }
+    FlushInstructionCache(GetCurrentProcess(), (void *)(uintptr_t)page, sizeof stubs);
+    if (!MarkCodeWrite(p.fade, fadeJump, kMarkFadeLength))
+    {
+        const bool back = MarkCodeWrite(p.fade, p.fadeBytes, kMarkFadeLength);
+        Log(L"axle mark: the fade's jump did not hold when read back; %s", back ? L"the game's bytes are back, nothing else is written" : L"its bytes could NOT be put back: start the game again");
+        return;
+    }
+    if (!MarkCodeWrite(p.pick, pickJump, kMarkPickLength))
+    {
+        const bool back = MarkCodeWrite(p.pick, p.pickBytes, kMarkPickLength) && MarkCodeWrite(p.fade, p.fadeBytes, kMarkFadeLength);
+        Log(L"axle mark: the pick's jump did not hold when read back; %s", back ? L"the game's bytes are back at both places" : L"the bytes could NOT all be put back: start the game again");
+        return;
+    }
+    g_markOn = true;
+    Log(L"axle mark: the X of the game's drive schematic marks the axles the mod locks too (the row pick at exe + %zx, the fade at + %zx, the stubs at %llx)", p.pick, p.fade,
+        (unsigned long long)page);
+}
+
 // foreign: the step's own float is another mod's, so the game does not step as it does without the mod and the line's
 // tail is left off (the review of 129, S3).
 static void RateOffSay(const char *why, bool foreign = false)
@@ -10588,6 +10718,7 @@ static DWORD WINAPI Run(void *)
         InterlockedExchange(&g_modOff, 1);
         return 0;
     }
+    MarkStart(); // the axle mark: once, before a truck is driven (part 206)
     // the settings: what [Gauges] holds, and with it what is in force (s), which has the driven truck's own scales
     // in the place of the plain ones where the truck has some. truck is the truck they are for.
     SettingsState set = {};

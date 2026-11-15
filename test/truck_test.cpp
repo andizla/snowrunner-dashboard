@@ -37,6 +37,7 @@
 #include "gearbox_positions.h"
 #include "shifter_read.h"
 #include "checkers.h"
+#include "lock_marker.h"
 
 // The hooks' attach and detach (gearbox_hooks.h) on a function of the test's own: the hook counts and calls through.
 static volatile int g_hookSaw = 0;
@@ -9395,6 +9396,199 @@ static void TruckProfileTest()
           "profiles: a typed name is known as a file of the list whatever its case, a backup is not; the line of an Import names what was taken and what was left, fits its buffer with everything in it and has no apostrophe");
 }
 
+// The X of a locked axle for the mod's locks (lock_marker.h; BRIEF_drive_1115_findings.md, part 206): the rows as the
+// drawer numbers them, both stubs run on a page of their own from a harness that sets the registers the drawer has,
+// and the patterns refused on a wrong byte or found twice.
+static int g_markClockCalls = 0;
+static double LockMarkerClockNow()
+{
+    g_markClockCalls++;
+    return 41.5;
+}
+static void LockMarkerTest()
+{
+    // the rows: a 4x4 with the front driven with all wheel drive, off and on; a 6x6 with two rear axles 1.4 m apart;
+    // a twin-wheeled axle (four wheels within 0.3 m: one row); a wheel list that is not front to back
+    {
+        int rowOf[8];
+        const bool ok4[4] = { true, true, true, true };
+        const int drive4[4] = { 2, 2, 1, 1 };
+        const float along4[4] = { 1.3f, 1.3f, -2.1f, -2.1f };
+        const int off = MarkRowsOf(drive4, along4, ok4, 4, false, rowOf);
+        const bool awdOff = off == 1 && rowOf[0] == -1 && rowOf[1] == -1 && rowOf[2] == 0 && rowOf[3] == 0;
+        const int on = MarkRowsOf(drive4, along4, ok4, 4, true, rowOf);
+        const bool awdOn = on == 2 && rowOf[0] == 0 && rowOf[1] == 0 && rowOf[2] == 1 && rowOf[3] == 1;
+        const bool ok6[6] = { true, true, true, true, true, true };
+        const int drive6[6] = { 2, 2, 1, 1, 1, 1 };
+        const float along6[6] = { 1.26f, 1.26f, -4.75f, -4.74f, -6.13f, -6.14f };
+        const bool six = MarkRowsOf(drive6, along6, ok6, 6, true, rowOf) == 3 && rowOf[1] == 0 && rowOf[2] == 1 && rowOf[3] == 1 && rowOf[4] == 2 && rowOf[5] == 2;
+        const int driveTwin[6] = { 1, 1, 1, 1, 1, 1 };
+        const float alongTwin[6] = { 2.0f, 2.0f, -3.0f, -3.2f, -2.9f, -3.1f };
+        const bool twin = MarkRowsOf(driveTwin, alongTwin, ok6, 6, false, rowOf) == 2 && rowOf[0] == 0 && rowOf[2] == 1 && rowOf[3] == 1 && rowOf[4] == 1 && rowOf[5] == 1;
+        const float alongBack[6] = { -6.1f, -6.1f, 1.3f, 1.3f, -4.7f, -4.7f };
+        const bool back = MarkRowsOf(driveTwin, alongBack, ok6, 6, false, rowOf) == 3 && rowOf[0] == 0 && rowOf[2] == 1 && rowOf[4] == 2;
+        const int notDriven[4] = { 0, 0, 1, 1 };
+        const bool none = MarkRowsOf(notDriven, along4, ok4, 4, true, rowOf) == 1 && rowOf[0] == -1 && rowOf[2] == 0;
+        bool okMissing[4] = { false, true, true, true };
+        const bool unread = MarkRowsOf(drive4, along4, okMissing, 4, true, rowOf) == -1 && MarkRowsOf(drive4, along4, okMissing, 4, false, rowOf) == 1;
+        // the table: the front row locked alone (the mod's front lock with AWD on), a 6x6's rear rows
+        uint8_t table[kMarkRowsMost];
+        MarkRowsOf(drive6, along6, ok6, 6, true, rowOf);
+        const bool front[6] = { true, true, false, false, false, false }, rear[6] = { false, false, true, true, true, true }, nothing[6] = {};
+        const bool tFront = MarkTable(rowOf, front, 6, table) && table[0] == 1 && table[1] == 0 && table[2] == 0;
+        const bool tRear = MarkTable(rowOf, rear, 6, table) && table[0] == 0 && table[1] == 1 && table[2] == 1;
+        const bool tNone = !MarkTable(rowOf, nothing, 6, table) && !table[0] && !table[1] && !table[2];
+        char line[240];
+        snprintf(line, sizeof line, "axle mark rows: a 4x4 %d row with AWD off and %d on, a 6x6 3, a twin axle one row, a list rear first numbered as listed; a wheel not read numbers nothing; "
+                 "the table marks the rows locked", off, on);
+        Check(awdOff && awdOn && six && twin && back && none && unread && tFront && tRear && tNone, line);
+    }
+    // the stubs, run: a harness saves rbx, rsi, r13 to r15, sets esi to the row (rcx), r13 to the action's + 0x38 (rdx),
+    // r14 to 1 (off) and r15 to 2 (on), makes the shadow space and jumps to the stub; at the stub's way back it keeps the
+    // flags at r13 + 0x20 and hands rbx back
+    {
+        uint8_t *page = (uint8_t *)VirtualAlloc(nullptr, 0x1000, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+        if (!page)
+        {
+            Check(false, "axle mark stubs: no page to run them on");
+            return;
+        }
+        const uint64_t at = (uint64_t)(uintptr_t)page;
+        static uint8_t rows[kMarkRowsMost + 1];
+        static uint8_t action[0x40];
+        static uint8_t last;
+        static double stamp;
+        // the harness at 0x000: the way in to the pick's stub (0x200) and to the fade's (0x280), the way back at 0x100
+        auto harness = [&](uint8_t *h, uint64_t hAt, uint64_t stub) {
+            static const uint8_t in[] = { 0x53, 0x56, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x8B, 0xF1, 0x4C, 0x8B, 0xEA, 0x49, 0xC7, 0xC6, 0x01, 0x00, 0x00, 0x00,
+                                          0x49, 0xC7, 0xC7, 0x02, 0x00, 0x00, 0x00, 0x48, 0x83, 0xEC, 0x20, 0xE9 };
+            memcpy(h, in, sizeof in);
+            MarkPutRel(h + sizeof in, hAt + sizeof in + 4, stub);
+        };
+        static const uint8_t out[] = { 0x9C, 0x41, 0x8F, 0x45, 0x20, 0x48, 0x83, 0xC4, 0x20, 0x48, 0x8B, 0xC3, 0x41, 0x5F, 0x41, 0x5E, 0x41, 0x5D, 0x5E, 0x5B, 0xC3 };
+        memcpy(page + 0x100, out, sizeof out);
+        harness(page, at, at + 0x200);
+        harness(page + 0x40, at + 0x40, at + 0x280);
+        const bool built = MarkPickStub(page + 0x200, at + 0x200, at + 0x100, (uint64_t)(uintptr_t)rows) &&
+                           MarkFadeStub(page + 0x280, at + 0x280, at + 0x100, (uint64_t)(uintptr_t)&rows[kMarkRowsMost], (uint64_t)(uintptr_t)&last, (uint64_t)(uintptr_t)&stamp,
+                                        (uint64_t)(uintptr_t)&LockMarkerClockNow);
+        FlushInstructionCache(GetCurrentProcess(), page, 0x1000);
+        typedef uint64_t (*Run)(uint64_t row, uint8_t *r13);
+        const Run pick = (Run)(void *)page, fade = (Run)(void *)(page + 0x40);
+        auto zf = [&]() { uint64_t f; memcpy(&f, action + 0x20, 8); return (f & 0x40) != 0; };
+        bool pickOk = built;
+        char wrong[200] = "";
+        for (int game = 0; game < 2; game++)
+            for (int locked = 0; locked < 2; locked++)
+                for (uint64_t row = 0; row < 20; row++)
+                {
+                    memset(rows, 0, sizeof rows);
+                    if (row < kMarkRowsMost) rows[row] = (uint8_t)locked;
+                    rows[(row + 1) % kMarkRowsMost] = 1; // another row locked tells nothing of this one
+                    action[0x12] = (uint8_t)game;
+                    const uint64_t got = pick(row, action);
+                    const uint64_t want = game || (locked && row < kMarkRowsMost) ? 2 : 1;
+                    if (got != want || zf() != !game)
+                    {
+                        pickOk = false;
+                        if (!wrong[0]) snprintf(wrong, sizeof wrong, " (row %llu, the game's byte %d, the mod's %d: %llu, ZF %d)", (unsigned long long)row, game, locked, (unsigned long long)got, zf());
+                    }
+                }
+        // the fade: the game's byte or the mod's, against the last seen; a change stamps on the clock, none does not
+        bool fadeOk = built;
+        struct Step { uint8_t game, mod, lastWas, lastNow; bool stamped; } steps[] = {
+            { 0, 0, 0, 0, false }, { 0, 1, 0, 1, true }, { 0, 1, 1, 1, false }, { 1, 1, 1, 1, false }, { 1, 0, 1, 1, false }, { 0, 0, 1, 0, true }, { 1, 0, 0, 1, true },
+        };
+        for (const Step &k : steps)
+        {
+            action[0x12] = k.game, rows[kMarkRowsMost] = k.mod, last = k.lastWas, stamp = 0.0;
+            const int before = g_markClockCalls;
+            fade(0, action);
+            const bool stampedNow = g_markClockCalls != before;
+            if (last != k.lastNow || stampedNow != k.stamped || (k.stamped && stamp != 41.5)) fadeOk = false;
+        }
+        // the jumps: E9 to the stub, int3 to the place's end
+        uint8_t j[kMarkFadeLength];
+        const bool jump = MarkJump(j, kMarkPickLength, 0x140000000ull + 0xa6d7a9, 0x140000000ull - 0x10000) && j[0] == 0xE9 && MarkRel(j + 1) == (int32_t)(-0x10000 - 0xa6d7a9 - 5) &&
+                          j[5] == 0xCC && j[11] == 0xCC && !MarkJump(j, kMarkPickLength, 0x140000000ull, 0x140000000ull + 0x90000000ull);
+        VirtualFree(page, 0, MEM_RELEASE);
+        char line[400];
+        snprintf(line, sizeof line, "axle mark stubs, run: the row pick answers on for a row the mod locks and by the game's byte else, past row 16 by the game's byte alone, rbx alone changed "
+                 "and the flags as the game's cmp%s; the fade stamps once on a change of the game's byte or the mod's and stores the two together; the jump", wrong);
+        Check(pickOk && fadeOk && jump, line);
+    }
+    // the patterns: both found once in a made up code; a wrong byte at the pick or in the fade refuses; twice refuses
+    {
+        std::vector<uint8_t> code(0x3000, 0x90);
+        uint8_t bytes[64], mask[64];
+        const int pl = PatternParse(kMarkPickPattern, bytes, mask);
+        memcpy(code.data() + 0x1000, bytes, pl);
+        static const uint8_t fade[] = { 0x41, 0x0F, 0xB6, 0x45, 0x12, 0x38, 0x05, 0x00, 0x01, 0x00, 0x00, 0x74, 0x12, 0xE8, 0x00, 0xF0, 0xFF, 0xFF, 0xF2, 0x0F, 0x11, 0x05,
+                                        0xE3, 0x00, 0x00, 0x00, 0x41, 0x0F, 0xB6, 0x45, 0x12, 0x88, 0x05, 0xE6, 0x00, 0x00, 0x00 };
+        memcpy(code.data() + 0x2000, fade, sizeof fade);
+        MarkPlan p;
+        const bool found = MarkPlanMake(code.data(), 0x100, 0x2f00, p) && p.pick == 0x1005 && p.fade == 0x2000 && p.last == 0x210b && p.time == 0x2000 + 26 + 0xE3 &&
+                           p.clock == 0x2000 + 18 - 0x1000 && p.pickBytes[0] == 0x49 && p.fadeBytes[36] == 0x00;
+        code[0x1000 + 10] = 0x7C; // cmp byte [r12+12h]
+        const bool pickWrong = !MarkPlanMake(code.data(), 0x100, 0x2f00, p) && strstr(p.why, "row pick is not found");
+        code[0x1000 + 10] = 0x7D;
+        code[0x2000 + 34] = 0x01; // the store to another byte than the compare's
+        const bool fadeOther = !MarkPlanMake(code.data(), 0x100, 0x2f00, p) && strstr(p.why, "compares one byte and stores another");
+        code[0x2000 + 34] = 0x00;
+        code[0x2000 + 12] = 0x13;
+        const bool fadeWrong = !MarkPlanMake(code.data(), 0x100, 0x2f00, p) && strstr(p.why, "fade stamp is not found");
+        code[0x2000 + 12] = 0x12;
+        memcpy(code.data() + 0x1800, bytes, pl);
+        const bool twice = !MarkPlanMake(code.data(), 0x100, 0x2f00, p) && strstr(p.why, "more than once");
+        Check(found && pickWrong && fadeOther && fadeWrong && twice, "axle mark places: both found once with the drawer's statics; a wrong byte at the pick or the fade, a store to another byte, or the pick twice: no plan");
+    }
+}
+
+// The two places on a real image of the game's exe (SR_IMAGE): found once, at the places and with the statics the
+// Researcher read on the three builds (review/research_diff_lock_marker.md).
+static void LockMarkerImageTest()
+{
+    char file[MAX_PATH] = "";
+    GetEnvironmentVariableA("SR_IMAGE", file, MAX_PATH);
+    if (!*file)
+    {
+        printf("     axle mark on a real image: no SR_IMAGE names one, not tested\n");
+        return;
+    }
+    std::vector<uint8_t> image;
+    FILE *f = nullptr;
+    if (fopen_s(&f, file, "rb") == 0 && f)
+    {
+        fseek(f, 0, SEEK_END);
+        const long n = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        image.resize(n > 0 ? (size_t)n : 0);
+        if (!image.empty() && fread(image.data(), 1, image.size(), f) != image.size()) image.clear();
+        fclose(f);
+    }
+    uint32_t stamp = 0, lfanew = 0;
+    if (image.size() > 0x1000) memcpy(&lfanew, image.data() + 0x3C, 4);
+    if (lfanew && lfanew + 0x58 < 0x1000) memcpy(&stamp, image.data() + lfanew + 8, 4);
+    size_t from = 0, to = 0;
+    if (!stamp || !CodeRangeOf(image.data(), 0x1000, from, to))
+    {
+        Check(false, "axle mark on a real image: SR_IMAGE is not an image of an exe as it lies in memory");
+        return;
+    }
+    struct Known { uint32_t stamp; size_t pick, fade, last, time, clock; };
+    static const Known kKnown[] = { { 0x6a607c05, 0xa6bf89, 0xa6b79c, 0x2a90711, 0x2a90708, 0x1151ef0 }, { 0x6ab52f5d, 0xa6d839, 0xa6d04c, 0x2a949d1, 0x2a949c8, 0x1153c50 },
+                                    { 0x6adb8627, 0xa6d7a9, 0xa6cfbc, 0x2a95791, 0x2a95788, 0x1153c80 } };
+    MarkPlan p;
+    const bool made = MarkPlanMake(image.data(), from, to, p);
+    const Known *k = nullptr;
+    for (const Known &x : kKnown)
+        if (x.stamp == stamp) k = &x;
+    char line[300];
+    snprintf(line, sizeof line, "axle mark on a real image (exe stamp %08x): the pick at %zx, the fade at %zx, last %zx, time %zx, the clock %zx%s", stamp, p.pick, p.fade, p.last, p.time, p.clock,
+             k ? ", as read on that build" : ", a build not read: found only");
+    Check(made && (!k || (p.pick == k->pick && p.fade == k->fade && p.last == k->last && p.time == k->time && p.clock == k->clock)), made ? line : p.why);
+}
+
 int main()
 {
     TruckRefs r;
@@ -9419,6 +9613,8 @@ int main()
     PhysicsRateB2Test();
     PhysicsRateWinchTest();
     RealImageTest();
+    LockMarkerTest();
+    LockMarkerImageTest();
     GearDisplayTest();
     TruckProfileTest();
 

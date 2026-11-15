@@ -521,6 +521,20 @@ a Locked axle gets <code>LockStepHeld</code> over its own wheels with the truck'
 In a gear with a cap each axle is then held against the same ceiling and what the limit took goes to the other axles by <code>DiffOpenAxles</code>' rule.
 The mod holds the lock byte only where every driven axle is Locked. The two levers are kept with the truck's watch by vehicle and never written.
 Gauges.log has "differential by axle: ..." for the axles read and for a lever's press, and with Probe=1 "probe: differential by axle: ..." a second while the axles differ.</p>
+<p><b>The X on the axles the mod locks</b> (<code>lock_marker.h</code>). The game's drive schematic draws one row a driven axle and picks
+each row's mark by one byte, the whole truck's lock, so a lock of the mod's own showed no X. Once at the start, after the places are found,
+two places of the drawer are found by pattern on a copy of the code, checked again in memory and given a jump to a stub on a page within
+2 GB of the exe (execute and read only). The row's pick (<code>mov rbx, r14; cmp byte [r13+12h], 0; cmovne rbx, r15</code>, 12 bytes)
+answers on for a row the mod's table marks, else by the game's byte as before; it reads the row from esi, the drawer's row counter, and
+changes rbx alone, with the game's own compare last. The fade's stamp (37 bytes) compares and stores "the game's byte or any mod lock" in
+place of the game's byte alone, so the marks fade in and out as the game's do; it calls the game's clock where the drawer did. The mod's
+thread fills the table (<code>MarkRowsOf</code>, <code>MarkTable</code>): the wheels in the list's order, the ones driven with all wheel
+drive only while it is on, each in the first row whose first wheel stands within 0.5 m of it along the main body. A row is marked where one of
+its wheels is on an axle held Locked and driven now while the diff types act. At most 16 rows; a row past them goes by the game's byte.
+The front row shows only with all wheel drive on, as the game has it, and the line colour stays the game's. A place not found, or bytes that
+are not the game's, mean no write and one line ("axle mark: ... nothing is written", "axle mark: the drawer's bytes in memory are not those of the copy ...", "axle mark: no free page within 2 GB of the exe ...", "axle mark: the stubs ...", "axle mark: the fade's jump did not hold when read back ...", "axle mark: the pick's jump did not hold when read back ..."); in force, "axle mark: the X of the game's drive
+schematic marks the axles the mod locks too ...". On a change Gauges.log says "axle mark: the X on rows ... of the ... the game draws",
+"axle mark: no row locked by the mod" or "axle mark: a driven wheel's place was not read, ...".</p>
 <h3>The torque cut (a gear held by hand)</h3>
 <p>The game's torque per gear is one function, <code>bool(vehicle, int gear, float* torque, float* start, float* a, float* top, float* gearSpeed)</code>, found by
 its first bytes once (<code>kGearTorquePattern</code>), and the drive's call of it is the first call in the wheels' drive that lands there (<code>GearTorqueFind</code>,
