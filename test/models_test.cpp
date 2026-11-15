@@ -7895,7 +7895,7 @@ int main(int argc, char **argv)
     }
 
     // road load (the game pull and road load brief, part 2): the air's drag only, nothing standing and none rolling;
-    // four times at twice the speed; the F350 at 3515 kg and 100 km/h about 0.15 m/s2 (0.51 kN); CdA by the mass read;
+    // four times at twice the speed; a pickup at 3515 kg and 100 km/h about 0.15 m/s2 (0.51 kN); CdA by the mass read;
     // nothing with a gear's pull not learned or the foot off; taken off before the fall's make-up, so near a gear's top
     // the lift stays bounded (under the roof, at least the least) and a load past the pull leaves the least; a gear's
     // pull learned from a synthetic run within 5 %

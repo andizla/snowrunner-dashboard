@@ -6778,18 +6778,18 @@ static void TruckTestsSeven()
                                                        "counts the block's truck's looks and is back at 0 after each, another truck's call and an empty slot uncounted");
     }
 
-    // which body a wheel rides on: the F350's front wheel fits the chassis by its constraint's attach point (0.02 m
+    // which body a wheel rides on: a pickup's front wheel fits the chassis by its constraint's attach point (0.02 m
     // along, 0.27 m inboard); the Arocs' front wheel 3.2 m behind its attach point does not (review 14)
     {
         float chassis[16] = {};
         chassis[0] = 1.0f, chassis[5] = 1.0f, chassis[10] = 1.0f;     // forward x, up y, left z, at the origin
-        const float f350Attach[3] = { 2.2820f, -0.1350f, 0.6950f }, f350Wheel[3] = { 2.2622f, 0.0057f, 0.9650f };
+        const float pickupAttach[3] = { 2.2820f, -0.1350f, 0.6950f }, pickupWheel[3] = { 2.2622f, 0.0057f, 0.9650f };
         const float arocsAttach[3] = { -0.4021f, -1.2123f, 0.864f }, arocsWheel[3] = { 2.7850f, 0.6288f, 1.1157f };
         float cab[16];
         memcpy(cab, chassis, sizeof cab);
         cab[12] = 3.19f, cab[13] = 1.84f;                              // a body 3.19 m ahead and 1.84 m up
-        Check(SuspBodyFits(chassis, f350Attach, f350Wheel) && !SuspBodyFits(chassis, arocsAttach, arocsWheel) && SuspBodyFits(cab, arocsAttach, arocsWheel),
-              "step bodies: the F350's front wheel fits the chassis by its attach point, the Arocs' front wheel does not, and fits a body where its attach point is");
+        Check(SuspBodyFits(chassis, pickupAttach, pickupWheel) && !SuspBodyFits(chassis, arocsAttach, arocsWheel) && SuspBodyFits(cab, arocsAttach, arocsWheel),
+              "step bodies: a pickup's front wheel fits the chassis by its attach point, the Arocs' front wheel does not, and fits a body where its attach point is");
     }
 
     // SuspStepTest's report on a made-up trace at 128 steps a second: the first step that reads the new value, the steps
@@ -7179,7 +7179,7 @@ static void TruckTestsSeven()
         b.generation = 1;
         b.vtable = vtable;
         b.constraint[0] = (uint64_t)(uintptr_t)constraint;
-        b.attachUp[0] = -0.135f, b.axisUp[0] = -1.0f, b.travel[0] = 0.36f;   // the F350's front, x = -0.135 - h
+        b.attachUp[0] = -0.135f, b.axisUp[0] = -1.0f, b.travel[0] = 0.36f;   // a pickup's front, x = -0.135 - h
         b.spring = SpringSet{ 1, 3.0f, 0.5f, false, 0.08f, 4.0f, 2.0f, false, 0.7f, 1.5f, 0.1f, 0.6f };
         static SuspStepBlock slots[2];
         static SuspStepBlock *volatile slot = nullptr;
