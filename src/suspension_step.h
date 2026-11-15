@@ -63,7 +63,7 @@ inline float DamperG(const DamperSet &d, float v)
 
 // ---- the spring's features and the damping by position (BRIEF_suspension_extras.md, build A) ----
 // x is a wheel's place along its constraint's axis, from its attach point, where the spring is at zero: compression is
-// negative (halving the spring raised the F350's wheel from 150 to 249 mm against the chassis, test 1 of 31 October),
+// negative (halving the spring raised the test truck's wheel from 150 to 249 mm against the chassis, test 1 of 31 October),
 // and SuspensionMin (+ 0xB4) is the compression end. L is the compression travel |SuspensionMin| as tuned, and
 // u = -x / L, held to 0 to 1, how far into it the wheel is. Havok's spring force is the strength times x, so a
 // feature is given as a rate r(u), the slope dF/dx as a factor of the stock, and written as its secant
@@ -1199,7 +1199,7 @@ inline int SuspStepDrain(const SuspStepState &s, LONG &tail, SuspStepTraceEntry 
 
 // A body fits a wheel when the constraint's attach point, in that body's frame (frame: + 0x170 forward, + 0x180 up,
 // + 0x190 left, + 0x1A0 position, four floats each), lies within 0.5 m of the wheel's centre along the body's forward
-// axis and 1 m across. On the F350 the attach point is 0.02 m from its wheel along and 0.27 m inboard; on the Arocs'
+// axis and 1 m across. On a pickup the attach point is 0.02 m from its wheel along and 0.27 m inboard; on the Arocs'
 // front wheels it is 3.2 m off against the chassis (review 14), so they ride on another body.
 inline bool SuspBodyFits(const float frame[16], const float attach[3], const float wheel[3])
 {

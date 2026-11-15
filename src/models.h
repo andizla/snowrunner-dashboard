@@ -1572,7 +1572,7 @@ inline float GamePull(float x) { return isfinite(x) ? SettingsRange(fminf(kGameP
 // game's own: the fall would be divided by nothing there. Under half the top the game's curve is left as it is: there
 // it reads low only as the engine picks up. The roof is 6 for every engine: near a gear's top the lift divides by the
 // fitted fall, and where the fit is off a higher roof turns it into a kick (a d110 with a roof of 24 leapt at the top
-// of 2nd to 5th gear, and a tester's RLM trucks at the roof of 6, 2026-10-25). An engine with several times a stock
+// of 2nd to 5th gear, and a modded engine with several times a stock torque at the roof of 6, 2026-10-25). An engine with several times a stock
 // engine's torque is held back with its Torque instead.
 // The roof is the truck's class's (kTorqueRoof: a scout's 3, a truck's and a heavy truck's 6) and it fades over a gear's
 // last three tenths (LiftRoof): flat up to kLiftFadeFrom of the top, then in a straight line down to 1 at the top, so

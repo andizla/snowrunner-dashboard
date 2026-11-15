@@ -33,7 +33,7 @@ static const uint32_t kFrameHingeAxis = 0x30, kFrameHingeMotor = 0xC8, kFrameHin
 static const uint32_t kFrameMotorType = 0x10, kFrameMotorSpring = 0x20, kFrameMotorDamping = 0x24;
 static const uint8_t kFrameSpringDamper = 3;
 static const int kFrameListMost = 64; // constraints read of one body's two lists
-// The widest twist a slider may give, by the class of the joint, from the widest absolute limit in RLM's spread (the
+// The widest twist a slider may give, by the class of the joint, from the widest limit seen in modded trucks (the
 // user's word allows the range; review F1 of part 2): 22 degrees on a frame, 175 on an articulated truck's roll
 // hinge, which rolls nearly free. A file's own wider limit is never cut.
 static const float kFrameLimitFrame = 22.0f * 3.14159265f / 180.0f, kFrameLimitArticulated = 175.0f * 3.14159265f / 180.0f;
