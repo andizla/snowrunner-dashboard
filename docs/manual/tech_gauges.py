@@ -180,7 +180,7 @@ def s_intro():
 <p class="intro">This part is for readers who want the workings. The game keeps no engine speed, no temperatures, no boost, no
 brake air and no range, so most of the cluster is models: this part gives each one as the code has it, with its formulas, every
 constant, and where a number comes from when the code says so; then how the mod finds the truck in the game's memory, what it
-reads and writes there, and what it cannot do. The numbers are those of version 0.19.0; file and line references
+reads and writes there, and what it cannot do. The numbers are those of version 0.19.1; file and line references
 (<code>models.h:153</code>) point into its source. "The Steam build" is the game build of 22 July 2026 (time stamp
 <code>6a607c05</code>); an RVA is an offset from the start of <code>SnowRunner.exe</code> in memory, in that build. The charts are
 the models re-run with their default settings.</p>
@@ -1510,6 +1510,16 @@ return without the call, so nothing is raised and nothing is pending. The mod's 
 setting once a pass; the hook reads only those. It refuses under Off, and under Standing only at 0.5 m/s and above, for the driven
 truck alone and only while the last pass is no older than 250 ms. Each refusal is one line, at most one a second
 (<code>quick winch: refused</code>). The settings line is <code>settings: quick winch</code>.</p>
+<p><b>Checkers.</b> <code>checkers.h</code> holds the rules of Russian draughts, the opponent and the state of the window, with no
+game memory and no drawing in it; <code>checkers_board.h</code> draws the board. The row Checkers on the Mod work tab has the binding
+BindCheckers with BindCheckers2 (none by default, two slots as every action has) and an Open button. Either opens the board in place of the body of
+the tab. Opened from the game with the menu closed, the board opens the NEXT GEN menu on the Gameplay tab, so the menu holds the keys
+and the mouse by its own take (<code>NgMenuShowTab</code>), and the board gives them back when it closes. It closes by B, Escape,
+the binding again, its Close button, the key of the menu, a truck change or the window of the game losing the front. The pad is only read (XInput): the
+game hears it too. The opponent looks two moves ahead with the captures played out, 1500 positions a move at the most, with a seed
+of its own from the clock at the first opening, and it waits half a second before it moves. With the board closed and not asked
+for, a frame runs nothing of it past its first line (<code>CkFrameRuns</code>). It reads nothing from the game and writes nothing
+to it. An ini of 0.19.0 may hold <code>Checkers=1</code>: it is read with no fault and dropped at the next save.</p>
 <p><b>A lock limits the steering.</b> <code>lock_steer.h</code>. The game steers a wheel to its most angle times the stick, and
 keeps that most angle as a float at wheel + 0xB8. One pattern of the game's code proves the place, found once
 (<code>steering: the game's steering product at +</code>); where it is not found nothing is ever written. While an axle is locked
@@ -1835,6 +1845,8 @@ the revs over the red zone: no engine braking from it and no over-rev damage. Lu
 game's own stall seconds; whether the game's stalling notice shows for it is unconfirmed. The low range's L- and L+ power factors are
 taken as 0.2 and 1.0 until a truck with them is driven at Gearbox=0; L is 0.45 as driven. On Windows 10 the NEXT GEN menu may not draw
 while ReShade loads the .asi files as add-ons: turn that off in ReShade's Add-ons tab (one player's report, under investigation).</li></ul>
+<h3>Changed in 0.19.1</h3>
+<ul><li>Checkers is now on the Mod work tab. Open starts a game.</li></ul>
 <h3>Changed in 0.19.0</h3>
 <ul><li><b>The defaults are the figures the mod was tuned with.</b> Gear ratio pull, Engine inertia and Driveline inertia 100, Engine sound curve 239, Air drag strength 300, Wheel cap 110, Diff lock bite 100, Low range slip 0 and Held gear slip 0 (Engine held). An ini from an earlier build takes them once at the first start, and the log names each key that changed. What you set after that stays. Each one is still a slider in the tuning tool.</li>
 <li><b>Gear ratio pull.</b> A low gear held by hand pulls harder, as a real gearbox multiplies the engine torque, and its engine braking grows with it. The fuel use does not. A slider in the tuning tool, 0 to 100, 100 by default, 0 as the game (<code>GearRatioPull</code>).</li>

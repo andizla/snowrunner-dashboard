@@ -1022,7 +1022,7 @@ static void WriteIni(const GaugeSettings &s)
     whole(L"DefaultsMoved", kDefaultsMoved); // the defaults of 0.19.0 are in this file (IniDefaultsMoved)
     whole(L"Demo", s.demo ? 1 : 0);
     whole(L"Probe", s.probe);
-    if (s.checkers) whole(L"Checkers", 1); // in no ini until the board was opened once
+    WritePrivateProfileStringW(kIniSection, L"Checkers", nullptr, ini.c_str()); // the board's old flag (0.19.0) goes at the first save
     whole(L"KeepLogs", s.keepLogs);
 }
 
@@ -1376,6 +1376,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; [Gearbox] Bind<Action> and Bind<Action>2 (Gear1's second: BindGear1Second): two bindings each for Gear1 to Gear16, GearH, GearL-, GearL, GearL+, GearN,\n"
                         L"; GearR, GearA, GearUp, GearDown, Clutch, RangeHigh, RangeLow, and at every Gearbox level DiffLock and Awd (the\n"
                         L"; differential lock and all-wheel drive flipped, on every truck, the upgrade fitted or not; none by default).\n"
+                        L"; BindCheckers opens and closes the checkers board, from the menu or from the game (none by default).\n"
                         L"; A binding is Key <name or code>, Pad <buttons with +, a stick's direction LSUp to RSRight among them>,\n"
                         L"; Wheel <n> Button <n>, Wheel <n> POV [<n>] Up/Right/Down/Left, Wheel <n> Axis <n> [inverted] (the clutch), or None.\n"
                         L"; The Controls tab binds them by a press. Without a key in the ini the defaults below hold:\n"
@@ -1615,7 +1616,6 @@ static void ReadIni(GaugeSettings &s)
     if (defaultsMoved) s.physicsRate = IniInt(L"PhysicsRate", s.physicsRate, ini); // as CutInA above
     s.demo = IniBool(L"Demo", s.demo, ini);
     s.probe = IniInt(L"Probe", s.probe, ini);
-    s.checkers = IniBool(L"Checkers", s.checkers, ini);
     s.keepLogs = IniInt(L"KeepLogs", s.keepLogs, ini);
     SettingsClamp(s);
 }
@@ -4195,7 +4195,7 @@ static bool ProfilesStep(SettingsState &st, EngineState &e, const char *gearsNow
 // alone) and the usual mods leave alone.
 static_assert(kActCount <= kViewActions, "the view holds the bindings of every action");
 static_assert(kActWinchOut == kViewActions - 2, "the Controls tab's last row is Winch out, with its speed under it");
-static_assert(kActCheckers == kViewActions - 1, "the last action is the board's, its row on the Mod work tab once the board was opened");
+static_assert(kActCheckers == kViewActions - 1, "the last action is the board's, its row on the Mod work tab");
 static_assert(kActDiffLock == kViewShifts && kActAwd == kViewShifts + 1, "the tab's rows of the locks follow the shifter's");
 static const wchar_t *const kBindSection = L"Gearbox";
 
@@ -4254,9 +4254,7 @@ static void BindingWriteOne(const std::wstring &ini, const GearBindings &b, int 
     char text[96];
     BindingKey(a, slot, key, 48);
     BindingText(b.slot[a][slot], text, sizeof text);
-    // the board's key is in the ini only while it is bound; Winch out is written as every other row (163, must 6)
-    const bool none = a == kActCheckers && b.slot[a][slot].kind == kBindNone;
-    WritePrivateProfileStringW(kBindSection, key, none ? nullptr : Wide(text).c_str(), ini.c_str());
+    WritePrivateProfileStringW(kBindSection, key, Wide(text).c_str(), ini.c_str());
 }
 
 static void BindingsWrite(const std::wstring &ini, const GearBindings &b)
@@ -11305,9 +11303,7 @@ static DWORD WINAPI Run(void *)
             // the tab's defaults button
             EngineDefaults(eng);
             EngineApply(eng, watch);
-            const bool board = set.s.checkers; // no setting of the tabs: the board's row stays once it is there
             SettingsToDefaults(set);
-            set.s.checkers = board;
             SettingsPublish(s);
             Log(L"settings: back to the defaults");
             saveAt = GetTickCount64() + 1000;
@@ -11451,7 +11447,7 @@ static DWORD WINAPI Run(void *)
             if (locksHeard && states[kActLockRear].pressed) AxleLeverPress(watch, false);
             // Winch out (winch_out.h): every pass, so a hold ends wherever the keys are not heard
             // the board's binding (checkers.h): heard with the menu open too, since the board shows there and the same press closes it
-            if (s.checkers && !bindCapture.active && states[kActCheckers].pressed) CheckersAsk();
+            if (!bindCapture.active && states[kActCheckers].pressed) CheckersAsk();
             g_winchBound = binds.slot[kActWinchOut][0].kind != kBindNone || binds.slot[kActWinchOut][1].kind != kBindNone;
             WinchOutPass(s, watch.found ? watch.refs.vehicle : 0, locksHeard && states[kActWinchOut].held, locksHeard && states[kActWinchOut].pressed);
             if (locksHeard && states[kActSway].pressed)
@@ -12430,7 +12426,7 @@ static bool SameSettings(const GaugeSettings &a, const GaugeSettings &b)
            a.warmUpMinutes == b.warmUpMinutes && a.overheatMinutes == b.overheatMinutes && a.coolDownMinutes == b.coolDownMinutes && a.ambientC == b.ambientC &&
            a.ambientByMap == b.ambientByMap && a.airFullKmh == b.airFullKmh && a.damage == b.damage && a.hotDamage == b.hotDamage && a.hotDamageFrom == b.hotDamageFrom && a.coldDamage == b.coldDamage && a.overRevDamage == b.overRevDamage && a.stallDamage == b.stallDamage && a.clutchBurn == b.clutchBurn && a.clutchHeat == b.clutchHeat &&
            a.springFront == b.springFront && a.dampingFront == b.dampingFront && a.extraTravel == b.extraTravel && a.frameFlex == b.frameFlex && a.twistRange == b.twistRange &&
-           !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.checkers == b.checkers && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.hiddenWarnings == b.hiddenWarnings && a.warnFuel == b.warnFuel && a.warnEngine == b.warnEngine && a.warnGearbox == b.warnGearbox && a.warnCoolant == b.warnCoolant && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
+           !strcmp(a.padToggle, b.padToggle) && a.demo == b.demo && a.probe == b.probe && a.keepLogs == b.keepLogs && a.soundVolume == b.soundVolume && a.hiddenWarnings == b.hiddenWarnings && a.warnFuel == b.warnFuel && a.warnEngine == b.warnEngine && a.warnGearbox == b.warnGearbox && a.warnCoolant == b.warnCoolant && a.soundsOnly == b.soundsOnly && a.dieselFlutter == b.dieselFlutter &&
            a.oilGauge == b.oilGauge && a.cutInA == b.cutInA && a.gearRatioPull == b.gearRatioPull && a.engineInertia == b.engineInertia && a.drivelineInertia == b.drivelineInertia && a.winchSag == b.winchSag && a.boostProfile == b.boostProfile && a.oilWarmUpMinutes == b.oilWarmUpMinutes && a.oilWarnC == b.oilWarnC && a.gearbox == b.gearbox && a.requireClutch == b.requireClutch && a.requireGearHeld == b.requireGearHeld && a.skipNeutral == b.skipNeutral && a.downStaysForward == b.downStaysForward && a.walkSkipsLow == b.walkSkipsLow && a.positionsByGearbox == b.positionsByGearbox && a.ignoreShifter == b.ignoreShifter && a.backToA == b.backToA && a.gameGearDisplay == b.gameGearDisplay && a.input == b.input && a.powertrain == b.powertrain && a.roadLoad == b.roadLoad && a.wheelCap == b.wheelCap && a.pushShare == b.pushShare && a.diffLockBite == b.diffLockBite && a.quickWinch == b.quickWinch && a.lockSteerFront == b.lockSteerFront && a.lockSteerRear == b.lockSteerRear && a.engineSoundTop == b.engineSoundTop && a.engineSoundCurve == b.engineSoundCurve && a.heldGearSlip == b.heldGearSlip && a.lowRangeSlip == b.lowRangeSlip && a.diffType == b.diffType && a.physicsRate == b.physicsRate && a.engineBrake == b.engineBrake && a.winchOutRate == b.winchOutRate && a.modEngineSpeed == b.modEngineSpeed && a.engineSpeedTop == b.engineSpeedTop && a.roadCdA == b.roadCdA && a.airDrag == b.airDrag && a.engineShare == b.engineShare && a.creep == b.creep && a.creepManual == b.creepManual && a.airSync == b.airSync &&
            a.camberGainFront == b.camberGainFront && a.camberGainRear == b.camberGainRear && a.camberRestFront == b.camberRestFront && a.camberRestRear == b.camberRestRear &&
            !memcmp(a.diffAxle, b.diffAxle, sizeof a.diffAxle) && a.airBrakes == b.airBrakes;
@@ -12747,30 +12743,40 @@ static void PartIni()
               "settings: WinchOutRate is in the ini without Probe=1, 0.5 by default and 0.75 read back; WinchOutStep is in no ini, with Probe=1 neither, and one in the file is not read; 9 is "
               "held to 2.0 and -1 to 0; the WinchOut binding has no default and its key is written as the other rows' are, bound or not");
         {
-            // the board's key and its binding (BRIEF_checkers.md, M5): in no ini until the board was opened once
-            wchar_t boardKept[16] = L"", boardBind[32] = L"", boardOn[16] = L"", boardKey[48];
+            // the board's binding and the old flag (BRIEF_checkers.md, "Shown, not hidden", the Reviewer's points 2 and 3):
+            // BindCheckers is written None as every other action's binding; an old Checkers=1 is read with no fault and goes
+            // at the next save, the rest of the file as it was
+            wchar_t boardKept[16] = L"", boardBind[32] = L"", boardBind2[32] = L"", boardOld[16] = L"", boardAfter[16] = L"", boardKey[48], boardKey2[48];
             BindingKey(kActCheckers, 0, boardKey, 48);
+            BindingKey(kActCheckers, 1, boardKey2, 48);
+            WriteIni(plain);
             GetPrivateProfileStringW(kIniSection, L"Checkers", L"none", boardKept, 16, ini.c_str());
             GetPrivateProfileStringW(kBindSection, boardKey, L"none", boardBind, 32, ini.c_str());
-            GaugeSettings opened = plain;
-            opened.checkers = true;
-            WriteIni(opened);
-            GetPrivateProfileStringW(kIniSection, L"Checkers", L"none", boardOn, 16, ini.c_str());
-            GaugeSettings openedBack;
-            SettingsDefaults(openedBack);
-            ReadIni(openedBack);
-            GearBindings boardBound = {}, boardBack = {};
+            GetPrivateProfileStringW(kBindSection, boardKey2, L"none", boardBind2, 32, ini.c_str());
+            static wchar_t sectionBefore[32768], sectionAfter[32768];
+            const DWORD lenBefore = GetPrivateProfileSectionW(kIniSection, sectionBefore, 32768, ini.c_str());
+            WritePrivateProfileStringW(kIniSection, L"Checkers", L"1", ini.c_str());
+            GetPrivateProfileStringW(kIniSection, L"Checkers", L"none", boardOld, 16, ini.c_str());
+            GaugeSettings oldBack;
+            SettingsDefaults(oldBack);
+            ReadIni(oldBack);
+            SettingsClamp(oldBack);
+            WriteIni(oldBack);
+            GetPrivateProfileStringW(kIniSection, L"Checkers", L"none", boardAfter, 16, ini.c_str());
+            const DWORD lenAfter = GetPrivateProfileSectionW(kIniSection, sectionAfter, 32768, ini.c_str());
+            const bool sameFile = lenBefore > 0 && lenBefore == lenAfter && !memcmp(sectionBefore, sectionAfter, lenBefore * sizeof(wchar_t));
+            GearBindings boardBound = {}, boardBack = {}, boardFresh = {};
             boardBound.slot[kActCheckers][0].kind = kBindKey, boardBound.slot[kActCheckers][0].code = 'J';
             BindingsWrite(ini, boardBound);
             BindingsRead(ini, boardBack, false);
             BindingsWrite(ini, none);
-            wchar_t boardBindAfter[32] = L"";
-            GetPrivateProfileStringW(kBindSection, boardKey, L"none", boardBindAfter, 32, ini.c_str());
-            Check(!plain.checkers && !wcscmp(boardKept, L"none") && !wcscmp(boardBind, L"none") && !wcscmp(boardOn, L"1") && openedBack.checkers && !SameSettings(plain, opened) &&
-                  boardBack.slot[kActCheckers][0].kind == kBindKey && boardBack.slot[kActCheckers][0].code == 'J' && !wcscmp(boardBindAfter, L"none") &&
-                  !wcscmp(boardKey, L"BindCheckers") && kActCheckers == kActCount - 1,
-                  "settings: a fresh ini has no Checkers key and no binding of it; once on it is written as 1 and read back; its binding's key is there only while bound");
-            WritePrivateProfileStringW(kIniSection, L"Checkers", nullptr, ini.c_str());
+            BindingsDefault(boardFresh);
+            Check(!wcscmp(boardKept, L"none") && !_wcsicmp(boardBind, L"None") && !_wcsicmp(boardBind2, L"None") && !wcscmp(boardOld, L"1") && !wcscmp(boardAfter, L"none") &&
+                      sameFile && SameSettings(plain, oldBack) && boardBack.slot[kActCheckers][0].kind == kBindKey && boardBack.slot[kActCheckers][0].code == 'J' &&
+                      boardFresh.slot[kActCheckers][0].kind == kBindNone && boardFresh.slot[kActCheckers][1].kind == kBindNone && !wcscmp(boardKey, L"BindCheckers") &&
+                      !wcscmp(boardKey2, L"BindCheckers2") && kActCheckers == kActCount - 1,
+                  "settings: a fresh ini has BindCheckers=None and BindCheckers2=None and no Checkers key; an old Checkers=1 loads with no fault and is gone after one save, the rest "
+                  "of the section as before; a bound key is read back; the defaults leave the board unbound");
         }
         WritePrivateProfileStringW(kIniSection, L"WinchOutRate", nullptr, ini.c_str());
         WritePrivateProfileStringW(kIniSection, L"WinchOutStep", nullptr, ini.c_str());
@@ -12999,7 +13005,6 @@ static void PartIni()
     c.engineShare = 80;
     c.creep = false;
     c.creepManual = true;
-    c.checkers = true;
     c.oilWarmUpMinutes = 12.5f;
     c.oilWarnC = 132.0f;
     const bool allChanged = c.layout != d.layout && c.swapDials != d.swapDials && c.style != d.style && c.faceOpacity != d.faceOpacity && c.offsetX != d.offsetX && c.offsetY != d.offsetY &&
@@ -13010,7 +13015,7 @@ static void PartIni()
                             c.pitchDangerDeg != d.pitchDangerDeg && c.warmUpMinutes != d.warmUpMinutes && c.overheatMinutes != d.overheatMinutes &&
                             c.coolDownMinutes != d.coolDownMinutes && c.ambientC != d.ambientC && c.ambientByMap != d.ambientByMap && c.airFullKmh != d.airFullKmh && c.damage != d.damage &&
                             c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.overRevDamage != d.overRevDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springFront != d.springFront && c.dampingFront != d.dampingFront && c.extraTravel != d.extraTravel && c.frameFlex != d.frameFlex && c.twistRange != d.twistRange && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
-                            c.demo != d.demo && c.checkers != d.checkers && c.probe != d.probe && c.keepLogs != d.keepLogs && c.soundVolume != d.soundVolume && c.hiddenWarnings != d.hiddenWarnings && c.warnFuel != d.warnFuel && c.warnEngine != d.warnEngine && c.warnGearbox != d.warnGearbox && c.warnCoolant != d.warnCoolant && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
+                            c.demo != d.demo && c.probe != d.probe && c.keepLogs != d.keepLogs && c.soundVolume != d.soundVolume && c.hiddenWarnings != d.hiddenWarnings && c.warnFuel != d.warnFuel && c.warnEngine != d.warnEngine && c.warnGearbox != d.warnGearbox && c.warnCoolant != d.warnCoolant && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
                             c.gearbox != d.gearbox && c.cutInA != d.cutInA && d.cutInA && c.physicsRate != d.physicsRate && c.gearRatioPull != d.gearRatioPull && d.gearRatioPull == 100 && c.engineInertia != d.engineInertia && c.drivelineInertia != d.drivelineInertia && d.engineInertia == 100 && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.diffLockBite != d.diffLockBite && c.quickWinch != d.quickWinch && c.lockSteerFront != d.lockSteerFront && c.lockSteerRear != d.lockSteerRear && c.engineSoundTop != d.engineSoundTop && c.engineSoundCurve != d.engineSoundCurve && c.heldGearSlip != d.heldGearSlip && c.lowRangeSlip != d.lowRangeSlip && c.diffType != d.diffType && c.physicsRate != d.physicsRate && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.airDrag != d.airDrag && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
     WriteIni(c);
@@ -13033,7 +13038,7 @@ static void PartIni()
         fclose(f);
     }
     Check(!wcscmp(later, L"7") && !wcscmp(other, L"yes"), "ini: keys the mod does not know survive a write");
-    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 173, "ini: the help text survives a write (173 comment lines)");
+    Check(!wcsncmp(first, L"; Gauges:", 9) && comments == 174, "ini: the help text survives a write (174 comment lines)");
     // the Gameplay tab's open tab: read and written on its own, kept through a write of the settings and of the defaults
     {
         char none[32] = "x", tab[32] = {}, kept[32] = {};

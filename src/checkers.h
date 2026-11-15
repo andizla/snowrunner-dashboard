@@ -405,22 +405,7 @@ inline void CkPickTargets(const CkGame &g, const CkPick &p, bool to[64])
         if (CkPickFits(mv.m[i], p) && mv.m[i].n > p.n) to[mv.m[i].path[p.n]] = true;
 }
 
-// ---- the board's window: the hidden opening, the controls and what opening and closing ask of the menu ----
-
-// Five clicks within three seconds.
-struct CkClicks { int n; double at[5]; };
-inline bool CkClick(CkClicks &c, double now)
-{
-    if (c.n == 5)
-    {
-        memmove(c.at, c.at + 1, 4 * sizeof(double));
-        c.n = 4;
-    }
-    c.at[c.n++] = now;
-    if (c.n < 5 || now - c.at[0] > 3.0 || now < c.at[0]) return false;
-    c.n = 0;
-    return true;
-}
+// ---- the board's window: the controls and what opening and closing ask of the menu ----
 
 // The controls, from the pad and from the keys alike. A direction held repeats after 0.4 s, every 0.15 s. Pick and back
 // count once a press.
@@ -467,6 +452,9 @@ inline unsigned CkControlsStep(CkControls &c, unsigned now, float dt)
 // leaves the menu as it found it. So after every way of closing, the keys are held or free as before the opening.
 struct CkWindow { bool open, openedMenu; };
 enum { kCkMenuLeave, kCkMenuShow, kCkMenuClose };
+// Whether a frame has anything of the board to do: it is open, or its binding or its Open button asked. Else the frame's
+// first line is the board's last.
+inline bool CkFrameRuns(const CkWindow &w, long asked) { return w.open || asked != 0; }
 
 inline int CkWindowOpen(CkWindow &w, bool menuOpen)
 {

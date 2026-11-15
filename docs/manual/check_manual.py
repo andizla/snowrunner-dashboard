@@ -25,15 +25,14 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 SKIP = ('docs/manual/', 'test/', 'out/', 'deps/')
-# The names of the hidden extra, which is in no manual on purpose (BRIEF_checkers.md): its ini key, its binding, its row and its one
-# log line. They are left out of the lists. Nothing else is: a name not here is listed as before.
-HIDDEN_NAMES = {('Checkers', 'key'), ('BindCheckers', 'key'), ('Checkers', 'tab'),
-                # the drawn winch wire's sag, a probe (BRIEF_jobs_1114.md, 164, must 7): in no tab and in no manual
+# The names that are in no manual on purpose. They are left out of the lists. Nothing else is: a name not here is listed
+# as before.
+HIDDEN_NAMES = {# the drawn winch wire's sag, a probe (BRIEF_jobs_1114.md, 164, must 7): in no tab and in no manual
                 ('WinchSag', 'key'),
                 # Gear ratio pull, Engine inertia and Driveline inertia have their defaults since 211 and are in the manuals'
                 # tuning tool section
                 }
-HIDDEN_LOG = ('checkers: ', 'gear ratio pull:', 'probe: gear ratio pull:', 'winch sag:', 'WINCH SAG:', 'engine inertia:', 'probe: engine inertia:', 'driveline inertia:', 'probe: driveline inertia:')
+HIDDEN_LOG = ('gear ratio pull:', 'probe: gear ratio pull:', 'winch sag:', 'WINCH SAG:', 'engine inertia:', 'probe: engine inertia:', 'driveline inertia:', 'probe: driveline inertia:')
 
 
 def hidden(name, kind):
@@ -136,15 +135,15 @@ def paragraphs():
                 yield name, number, plain(line)
 
 
-# The list of hidden names leaves out its three and no fourth: made-up lines with the three and one more key.
+# The list leaves out its names and no others: made-up lines with names on it (the winch sag's key and log line) and a
+# made-up key, label and log line that are not.
 def selftest():
-    lines = ['    if (s.checkers) whole(L"Checkers", 1);', '            PageLabel("Checkers", labelX);', '            !wcscmp(boardKey, L"BindCheckers")',
-             '            GaugeLog(L"checkers: the board was opened for the first time");', '    whole(L"CheckersTwo", 1);',
-             '            PageLabel("Checkers board", labelX);', '            Log(L"chess: the board was opened for the first time");']
+    lines = ['    whole(L"WinchSag", 1);', '            Log(L"winch sag: the wire was drawn slack");', '    whole(L"WinchSagTwo", 1);',
+             '            PageLabel("Winch sag board", labelX);', '            Log(L"winch slack: the wire was drawn slack");']
     names, _ = names_of(lines, [])
-    want = [('CheckersTwo', 'key'), ('Checkers board', 'tab'), ('chess: the board was opened for the first time', 'log')]
+    want = [('WinchSagTwo', 'key'), ('Winch sag board', 'tab'), ('winch slack: the wire was drawn slack', 'log')]
     ok = sorted(names) == sorted(want)
-    print('%s manual check: the hidden extra is left out by its four names, and a fourth key, another label and another log line are listed' % ('ok  ' if ok else 'FAIL'))
+    print('%s manual check: the names on the list are left out, and a made-up key, label and log line beside them are listed' % ('ok  ' if ok else 'FAIL'))
     if not ok: print('     listed: %r' % (names,))
     sys.exit(0 if ok else 1)
 

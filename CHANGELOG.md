@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.19.1]
+
+- Checkers is now on the Mod work tab. Open starts a game.
+
 ## [0.19.0]
 
 - **The defaults are the figures the mod was tuned with.** Gear ratio pull, Engine inertia and Driveline inertia 100, Engine sound curve 239, Air drag strength 300, Wheel cap 110, Diff lock bite 100, Low range slip 0 and Held gear slip 0 (Engine held). An ini from an earlier build takes them once at the first start, and the log names each key that changed. What you set after that stays. Each one is still a slider in the tuning tool.

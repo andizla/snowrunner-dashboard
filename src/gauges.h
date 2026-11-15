@@ -11,7 +11,7 @@
 #include <string.h>
 #include "truck_profile.h" // the list of profile files and what the tab asks of the pass
 #include "drive_display.h" // DdShown, the drive display's record (it reads no game memory)
-#define GAUGES_VERSION "0.19.0"
+#define GAUGES_VERSION "0.19.1"
 
 // The exe the addresses in this mod were taken from (SnowRunner on Steam, the build of 22 July 2026). On any other build
 // the mod finds them by the code that uses them (game_globals.h, game_code.h), and stands down where it cannot.
@@ -132,7 +132,6 @@ struct GaugeSettings
     bool downStaysForward;   // DownStaysForward: Gear down stops at the lowest forward place; wins over SkipNeutral
     bool walkSkipsLow;       // WalkSkipsLow: Gear up and Gear down walk R, N, 1, 2 and on; the low range only on its own keys
     bool positionsByGearbox; // PositionsByGearbox: at Gearbox=2, L-, L, L+ and H only where the fitted gearbox has them in the game
-    bool checkers;           // Checkers: the board was opened once, so its row with a binding is on the Mod work tab. In the ini only once true, and Defaults leaves it
     bool ignoreShifter;      // IgnoreShifter: at Gearbox=2 a position picked on the game's shifter does nothing
     int backToA;             // BackToA: at Gearbox=2, seconds after a shift by hand until the gearbox goes back to A by itself; 0 never, else 3 to 30
     int gameGearDisplay;     // GameGearDisplay: the game's gear display at the bottom right; 0 the game's, 1 off with the mod's gearbox, 2 off always
@@ -333,7 +332,6 @@ inline void SettingsDefaults(GaugeSettings &s)
     strncpy_s(s.padToggle, "None", _TRUNCATE);
     s.physicsRate = 120; // from 0.19.0 (199); 60 turns it off
     s.demo = false;
-    s.checkers = false;
     s.probe = 0;
     s.keepLogs = 20;
     s.shiftOnGameThread = 1;

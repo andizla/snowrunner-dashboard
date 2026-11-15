@@ -3731,10 +3731,18 @@ static void TruckTestsTwo(TruckRefs &r, TruckRaw &t)
                "so the bound of %d would be %.2f ms\n", calls, calls ? sumMs / calls : 0.0, slowestMs, slowestLooked, costliestUs, kCkSearchMax, costliestUs * kCkSearchMax / 1000.0);
         Check(ended == 200 && !illegal && worst > 0 && worst <= kCkSearchMax && same && noMove && takes,
               "checkers, the opponent: 200 games against itself from 200 seeds all end, every move legal, the positions looked at within the bound; the same seed gives the same move; it takes a man offered");
-        // the hidden opening: five clicks within three seconds, counted over the last five
-        CkClicks clicks = {};
-        bool five = !CkClick(clicks, 0.0) && !CkClick(clicks, 1.0) && !CkClick(clicks, 2.0) && !CkClick(clicks, 3.5) && !CkClick(clicks, 3.6) && CkClick(clicks, 3.7) && clicks.n == 0;
-        five = five && !CkClick(clicks, 10.0) && !CkClick(clicks, 10.1) && !CkClick(clicks, 10.2) && !CkClick(clicks, 10.3) && CkClick(clicks, 10.4);
+        // the frame's gate: with the board closed and nothing asked, the frame's first line is the board's last; open or
+        // asked (the binding, the Open button), it runs
+        CkWindow shut = {}, shown = {};
+        shown.open = true;
+        const bool gate = !CkFrameRuns(shut, 0) && CkFrameRuns(shut, 1) && CkFrameRuns(shown, 0);
+        // opened by Open with the pick held (A or Enter pressed Open): no square is picked until it is let go and pressed again
+        CkBoard held = {};
+        CkBoardOpened(held, 3);
+        bool heldPick = true;
+        for (int i = 0; i < 3; i++) heldPick = heldPick && !CkBoardStep(held, CkControlsStep(held.controls, kCkPickKey, 0.016f), -1, 0.016f) && held.pick.n == 0;
+        heldPick = heldPick && !CkBoardStep(held, CkControlsStep(held.controls, 0, 0.016f), -1, 0.016f) && held.pick.n == 0;
+        heldPick = heldPick && !CkBoardStep(held, CkControlsStep(held.controls, kCkPickKey, 0.016f), -1, 0.016f) && held.pick.n == 1;
         // the controls: what is held at the opening is no press; pick and back once a press; a direction repeats after 0.4 s, every 0.15 s
         CkControls controls = {};
         bool keys = CkControlsStep(controls, kCkPickKey | kCkLeft, 0.016f) == 0 && CkControlsStep(controls, kCkPickKey | kCkLeft, 0.016f) == 0 && CkControlsStep(controls, 0, 0.016f) == 0 &&
@@ -3752,7 +3760,7 @@ static void TruckTestsTwo(TruckRefs &r, TruckRaw &t)
         window = window && CkWindowOpen(win, false) == kCkMenuShow && CkWindowFrame(win, true, false, true) == kCkMenuClose && !win.open && !win.openedMenu; // the game's window not in front
         window = window && CkWindowOpen(win, false) == kCkMenuShow && CkWindowFrame(win, true, true, false) == kCkMenuClose && !win.open && !win.openedMenu; // another truck
         window = window && CkWindowOpen(win, true) == kCkMenuShow && CkWindowFrame(win, true, true, false) == kCkMenuLeave && !win.open;                      // another truck, in a menu that was open
-        Check(five && keys && window, "checkers, the window: five clicks within three seconds open it; what is held at the opening is no press and a direction repeats; every way of closing leaves the menu "
+        Check(gate && heldPick && keys && window, "checkers, the window: no frame of it runs closed and unasked; opened with the pick held, no square is picked until a new press; what is held at the opening is no press and a direction repeats; every way of closing leaves the menu "
                                       "as it was before the opening, and the board is never open with the menu closed, so the mod's bindings rest under it");
         // the board: the cursor, the pick, back, the buttons and the opponent's wait
         CkBoard board = {};

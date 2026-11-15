@@ -165,8 +165,8 @@ static void UpdateFontTexture(float u)
     }
 }
 
-// ---- the checkers board (BRIEF_checkers.md with the Reviewer's addendum): hidden, and no line of it runs until its
-// binding or the five clicks ask. It shows only with the NEXT GEN menu open on the mod's tab, in place of the tab's body.
+// ---- the checkers board (BRIEF_checkers.md with the Reviewer's addendums): no line of it runs until its binding or its
+// Open button on the Mod work tab asks. It shows only with the NEXT GEN menu open on the mod's tab, in place of the tab's body.
 static CkBoard g_ck = {};
 static CkWindow g_ckWin = {};
 static volatile LONG g_ckAsk = 0;
@@ -191,10 +191,10 @@ static void CheckersOpen(const GaugeView &view)
 
 // Every frame, and nothing where the board is closed and not asked for: the binding's press, and what closes the board
 // besides the player (the menu gone, the game's window not in front, another truck).
-static void CheckersFrame(const GaugeSettings &s, const GaugeView &view)
+static void CheckersFrame(const GaugeView &view)
 {
-    if (!g_ckWin.open && !g_ckAsk) return;
-    if (InterlockedExchange(&g_ckAsk, 0) && s.checkers)
+    if (!CkFrameRuns(g_ckWin, g_ckAsk)) return;
+    if (InterlockedExchange(&g_ckAsk, 0))
     {
         if (g_ckWin.open) CkMenuDo(CkWindowClose(g_ckWin));
         else CheckersOpen(view);
@@ -233,7 +233,7 @@ static void OnFrame()
     GaugeView view;
     SettingsGet(s);
     ViewGet(view);
-    CheckersFrame(s, view);
+    CheckersFrame(view);
     // Off is no place (BRIEF_dials_off_option.md): the font keeps the strip's unit there, and the cluster's own part
     // below is left before anything places it
     const bool off = s.layout == kLayoutOff;
@@ -361,16 +361,7 @@ static void OnPage()
         st.profLooked = true;
         ProfileAskPut(st.profAsk);
     }
-    if (act & kPageCheckers)
-    {
-        if (!s.checkers)
-        {
-            s.checkers = true;
-            act |= kPageChanged;
-            GaugeLog(L"checkers: the board was opened for the first time; its row with a binding is on the Mod work tab from now on");
-        }
-        CheckersOpen(view);
-    }
+    if (act & kPageCheckers) CheckersOpen(view);
     if (act & kPageTab) PageTabWrite(kPageTabIds[st.tab]);
     if (act & kPageChanged) SettingsPut(s, turn);
     if (act & kPageTruckDrop) SettingsTruckDrop();

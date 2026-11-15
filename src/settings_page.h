@@ -29,7 +29,6 @@ struct PageState
     double odoValue = 0.0;        // Set's figure: metres, or seconds with hours
     char odoText[24] = "";        // Set's field as typed, and the word under it where it was refused
     const char *odoWord = "";
-    CkClicks ckClicks = {};       // the clicks on the foot line of the Mod work tab (kPageCheckers)
     ProfileList prof = {};        // the Engine tab's Profiles: the list the pass made (the host copies it in before the page)
     ProfileAsk profAsk = {};      // ... and what a press asks of the pass (kPageProfile)
     char profName[kProfileNameMost + 8] = "", profNotes[kProfileNotesMost + 8] = ""; // Export's fields as typed
@@ -1652,8 +1651,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
 
         // the bindings: two slots an action; a click binds the next key, pad chord, button or pedal moved, x clears (the
         // order is input_bindings.h's GearAction). The shifter's at Gearbox=2, the locks' at every level
-        // the last name, Checkers, is not a row of this tab: its row is drawn on the Mod work tab alone, once the board
-        // was opened. No loop here runs over the whole list
+        // the last name, Checkers, is not a row of this tab: its row is drawn on the Mod work tab alone. No loop here runs
+        // over the whole list
         static const char *actions[kViewActions] = { "Gear 1", "Gear 2", "Gear 3", "Gear 4", "Gear 5", "Gear 6", "Gear 7", "Gear 8", "Gear 9", "Gear 10",
                                                      "Gear 11", "Gear 12", "Gear 13", "Gear 14", "Gear 15", "Gear 16", "H", "L-", "L", "L+", "Neutral", "Reverse", "Gear up", "Gear down", "Clutch",
                                                      "Range high", "Range low", "D", "Diff lock", "AWD", "Sway bars", "Ride up", "Ride down", "Lock front axle", "Lock rear axles", "Winch out", "Checkers" };
@@ -1794,9 +1793,8 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
         ImGui::SameLine();
         if (ImGui::Button("Reload ini")) act |= kPageReload;
         PageTip("Reads Gauges.ini again, after an edit by hand.");
-        if (s.checkers)
         {
-            // the board's own row, the last action (input_bindings.h, kActCheckers): there once the board was opened
+            // the board's own row, the last action (input_bindings.h, kActCheckers): its two slots, then Open
             const int a = kViewActions - 1;
             ImGui::PushID(1000 + a);
             PageLabel("Checkers", labelX);
@@ -1812,12 +1810,14 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
                 if (ImGui::SmallButton("x")) BindingAsk(kBindAskClear, a, slot);
                 ImGui::PopID();
             }
-            ImGui::PopID();
             PageTip("Opens and closes the board. The game still hears the pad.");
+            // the board stands in place of this tab's body while it is open, so Open is drawn only where it is closed
+            ImGui::SameLine();
+            if (ImGui::Button("Open###ckopen")) act |= kPageCheckers;
+            PageTip("Opens the board. The truck goes on rolling. The game still hears the pad.");
+            ImGui::PopID();
         }
         ImGui::TextDisabled("Changes count at once and go into Gauges.ini, and the settings of a truck or a gearbox into its file in Gauges. Version " GAUGES_VERSION ".");
-        // five clicks on that line within three seconds (checkers.h): no hover, no cursor, no tip
-        if (ImGui::IsItemClicked() && CkClick(st.ckClicks, ImGui::GetTime())) act |= kPageCheckers;
     }
     ImGui::EndChild();
     InterlockedExchange(&g_pageCapturing, st.capture >= 1 ? (LONG)GetTickCount() : 0);
