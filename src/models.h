@@ -2094,6 +2094,38 @@ inline int BaseFold(const float base[kMaxGears], const float top[kMaxGears], int
     return learned;
 }
 
+// The air drag in every gear (BRIEF_drive_1115_findings.md, part 205, the Reviewer's point 1): a gear BaseFold left
+// with no pull gets the nearest learned gear by top (the ratio of the tops nearest 1) times its top over this gear's,
+// whatever the spread, for the drag only. The drag scales a little with a wrong figure and cannot make anything swing.
+// use: BaseFold's, filled in where it is 0. from: per gear, the gear its pull is its own (g), lent by (another gear),
+// kDragFromMean for BaseFold's mean, 0 none (no gear learned, or no top). Returns the gears with a pull now.
+static const int kDragFromMean = -1;
+inline int DragBase(const float base[kMaxGears], const float top[kMaxGears], int gears, float use[kMaxGears], int from[kMaxGears])
+{
+    int have = 0;
+    for (int g = 0; g < kMaxGears; g++) from[g] = 0;
+    for (int g = 1; g <= gears && g < kMaxGears; g++)
+    {
+        if (base[g] > 0.0f) { from[g] = g, have++; continue; }
+        if (use[g] > 0.0f) { from[g] = kDragFromMean, have++; continue; }
+        if (!(top[g] > 0.0f)) continue;
+        int best = 0;
+        float bestAway = 0.0f;
+        for (int n = 1; n <= gears && n < kMaxGears; n++)
+        {
+            if (!(base[n] > 0.0f) || !(top[n] > 0.0f)) continue;
+            const float away = fabsf(logf(top[n] / top[g]));
+            if (!best || away < bestAway) best = n, bestAway = away;
+        }
+        if (!best) continue;
+        use[g] = base[best] * top[best] / top[g];
+        from[g] = best, have++;
+    }
+    return have;
+}
+// The drag's area with AirDrag (part 205, point 3): RoadCdA's area (by mass or set) times the factor in percent.
+inline float DragCdA(float mass, float own, int percent) { return RoadCdA(mass, own) * (float)(percent < 0 ? 0 : percent > 300 ? 300 : percent) / 100.0f; }
+
 // ---- the game's own pull measured (part 1's probe) ----
 // With Probe=1 and the game's own pull (Powertrain off), floored in a numbered gear, the grip known and the wheels not
 // spinning, no brake, the nose within 1°: the truck's acceleration by the wheels' share of the gear's top, in bins of

@@ -604,8 +604,14 @@ taken from and stays bounded near a gear's top:</p>
 {eq('<i>a</i><sub>load</sub> = ½ ρ CdA <i>v</i>² / <i>m</i>,    lift = (curve · ratio · min(1, cold · boost / <i>p</i>) − <i>a</i><sub>load</sub> / (<i>p</i> · <i>a</i><sub>base</sub>(<i>g</i>))) / GameFall(<i>x</i>),    ρ = 1.2', 15)}
 <p class="where">The roof, its fade and the least come after it, as without the load. <i>m</i> is the truck's mass by its files, without
 cargo or a trailer, so a loaded truck's air part is overstated and a trailer's own drag is missing. CdA by that mass, 1.1 m² under 4 t,
-3.5 under 10 t, else 6, unless <code>RoadCdA</code> sets it in <code>[Gauges]</code> or a truck's file. Nothing standing, in reverse,
-with the foot off (the game's coasting stays) or before <i>a</i><sub>base</sub>(<i>g</i>) is learned. Only the air: Gameplay reads no
+3.5 under 10 t, else 6, unless <code>RoadCdA</code> sets it in <code>[Gauges]</code> or a truck's file. <code>AirDrag</code>, the tuning
+tool's Air drag strength, multiplies that area by 0 to 300 percent (100; <code>DragCdA</code>) and acts at the next pass. Nothing standing,
+in reverse or with the foot off (the game's coasting stays). The drag acts in every gear: a gear with no <i>a</i><sub>base</sub> of its own
+and none from the learned gears' mean is lent the nearest learned gear's by top, <i>a</i><sub>base</sub>(<i>n</i>) · top(<i>n</i>) / top(<i>g</i>)
+(<code>DragBase</code>), whatever the spread. With no gear learned there is none, and one line a truck says so ("road load: no gear's pull learned yet with
+..."). The drag at most takes the drive to 0: the lift stops at its least and the torque cut's drive at 0. Gauges.log names the first pass
+with the drag in each gear ("road load: the air drag acts in gear 9 at 84.3 km/h: ..."), with the speed, the drag and where its pull came
+from: learned, the learned gears' mean or lent by a gear. Only the air: Gameplay reads no
 surface, and the game has its own rolling resistance. <i>a</i><sub>base</sub>(<i>g</i>) is learned in ordinary driving
 (<code>BaseLearnStep</code>): floored (0.9), the grade by the truck's path within 3° and taken out (<i>a</i> + <i>g</i> sin θ; the path's rise
 over its way in the last second, <code>GradeStep</code>, as the chassis squats nose up under power), the grip known and the wheels not

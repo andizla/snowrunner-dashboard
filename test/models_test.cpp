@@ -4933,6 +4933,17 @@ int main(int argc, char **argv)
         const bool overBrake = brake115 < brake100 && brake130 < brake115 && Near(brake130, -0.15f * (2600.0f - 800.0f) / 1200.0f, 1e-5f) && brake160 == brake130 &&
                                TorqueCutF(cm, 12.0f) == 0.0f && TorqueCutF(cm, 16.0f) == 0.0f;
         Check(overBrake, "torque cut: the engine braking keeps rising above the redline to its value at 1.3 of the top (1.5 x at the redline here), flat above; the pull 0 above the governor's end");
+        // the air drag never pushes (BRIEF_drive_1115_findings.md, part 205, point 2): at a light foot a load far over the
+        // pull takes the drive to 0 and no further, in the map's law and through the open converter
+        {
+            TorqueCutMap light = cm;
+            light.pedal = 0.2f, light.brake = 0.0f, light.load = 50.0f;
+            const float mapF = TorqueCutF(light, 7.0f), openF = ConverterOpenF(light, 0.0f, 1600.0f, 2.0f, kStallRatio);
+            const float lift = TorqueLift(0.3f, 1.0f, 0.2f, 1.0f, 0.5f, TorqueRoof(kClassTruck), 50.0f);
+            char line[200];
+            snprintf(line, sizeof line, "air drag at a light foot: the map's drive %.3f, the open converter's %.3f, the factor %.3f (least %.2f): never under 0", mapF, openF, lift, kTorqueFactorLeast);
+            Check(mapF == 0.0f && openF == 0.0f && lift == kTorqueFactorLeast, line);
+        }
         // the open converter's F (BRIEF_drivetrain_3_a_on_our_chain.md, M1 and M3): the map's law with the engine ahead of
         // the input. Floored at the stall (the curve whole at 1600 rpm) the ratio doubles it and the bound is the stall's
         // ratio; at the coupling point it is the map's own drive part; the cold limit, the load, the engine held back
@@ -8192,6 +8203,43 @@ int main(int argc, char **argv)
         snprintf(line, sizeof line, "air drag saved: passes 10 %% below a kept 2.0 write %d times (the last on pass %d), the file then %.3f with the kept %.3f; "
                  "within 2 %% nothing; none in the file writes on the first pass", writes, lastWrite + 1, file, kept);
         Check(rule && writes == 4 && lastWrite == 8 && fabsf(file - kept) <= 0.02f * file && within && firstPass, line);
+    }
+    // the air drag in every gear (BRIEF_drive_1115_findings.md, part 205): gears 2 to 7 learned and spread over 15 %, so
+    // BaseFold fills nothing; gear 10 is lent gear 7's pull at the ratio of the tops, gear 1 gear 2's; with none learned
+    // no gear gets one; folded, BaseFold's mean stays; AirDrag 0 gives no drag and 200 doubles it
+    {
+        float base[kMaxGears] = {}, top[kMaxGears] = {}, use[kMaxGears] = {};
+        int from[kMaxGears] = {};
+        for (int g = 1; g <= 10; g++) top[g] = 2.0f * g;
+        for (int g = 2; g <= 7; g++) base[g] = 30.0f / top[g] * (1.0f + 0.05f * g); // the products 33 to 40.5: 20 % apart
+        float dragK = 0.0f, spread = 0.0f;
+        bool folded = false;
+        const int learned = BaseFold(base, top, 10, use, dragK, spread, folded);
+        const bool unfolded = learned == 6 && !folded && use[10] == 0.0f && use[1] == 0.0f;
+        const int have = DragBase(base, top, 10, use, from);
+        const bool lent = have == 10 && from[10] == 7 && Near(use[10], base[7] * top[7] / top[10], 1e-6f) && from[8] == 7 && from[1] == 2 &&
+                          Near(use[1], base[2] * top[2] / top[1], 1e-6f) && from[4] == 4 && use[4] == base[4];
+        const float mass = 3104.0f, v = 25.7f; // the drive's truck at 92.4 km/h
+        const float a100 = RoadLoadAccel(DragCdA(mass, 0.0f, 100), v, mass), a0 = RoadLoadAccel(DragCdA(mass, 0.0f, 0), v, mass),
+                    a200 = RoadLoadAccel(DragCdA(mass, 0.0f, 200), v, mass);
+        const float share10 = RoadLoadShare(a100, 1.0f, use[10]), share7at = RoadLoadShare(a100, 1.0f, base[7]);
+        const bool scaled = Near(DragCdA(mass, 0.0f, 100), RoadCdA(mass, 0.0f), 1e-6f) && a0 == 0.0f && RoadLoadShare(a0, 1.0f, use[10]) == 0.0f && Near(a200, 2.0f * a100, 1e-6f) &&
+                            Near(share10, share7at * top[10] / top[7], 1e-5f) && share10 > 0.0f && Near(DragCdA(mass, 2.0f, 150), 3.0f, 1e-6f) && Near(DragCdA(mass, 0.0f, 900), 3.0f * RoadCdA(mass, 0.0f), 1e-5f);
+        float noBase[kMaxGears] = {}, noUse[kMaxGears] = {};
+        int noFrom[kMaxGears] = {};
+        BaseFold(noBase, top, 10, noUse, dragK, spread, folded);
+        bool none = DragBase(noBase, top, 10, noUse, noFrom) == 0;
+        for (int g = 0; g < kMaxGears; g++) none = none && noUse[g] == 0.0f && noFrom[g] == 0;
+        float even[kMaxGears] = {}, evenUse[kMaxGears] = {};
+        int evenFrom[kMaxGears] = {};
+        even[4] = 1.5f, even[5] = 1.2f; // 12 and 12: folded
+        BaseFold(even, top, 10, evenUse, dragK, spread, folded);
+        DragBase(even, top, 10, evenUse, evenFrom);
+        const bool mean = folded && evenFrom[10] == kDragFromMean && Near(evenUse[10], 12.0f / 20.0f, 1e-6f) && evenFrom[4] == 4;
+        char line[300];
+        snprintf(line, sizeof line, "air drag in every gear: gear 10 lent gear %d's pull %.3f (share %.3f at 92.4 km/h), gear 1 lent gear %d's; none learned: none; folded: the mean; "
+                 "AirDrag 0: %.3f m/s2, 100: %.3f, 200: %.3f", from[10], use[10], share10, from[1], a0, a100, a200);
+        Check(unfolded && lent && scaled && none && mean, line);
     }
     // one figure per truck: two gears learned with equal a_base × top give an unlearned gear K / top; spread 20 % by
     // gear only; one gear learned alone fills nothing

@@ -16,7 +16,7 @@
 #include "ng_tune.h"
 #include "gearbox_model.h"
 
-enum { kGtBite, kGtCap, kGtPush, kGtLowSlip, kGtHeldSlip, kGtSteerFront, kGtSteerRear, kGtSoundTop, kGtSoundCurve, kGtRatioPull, kGtEngineInertia, kGtDrivelineInertia, kGtCount }; // the figures; after them the lines to read
+enum { kGtBite, kGtCap, kGtPush, kGtLowSlip, kGtHeldSlip, kGtSteerFront, kGtSteerRear, kGtSoundTop, kGtSoundCurve, kGtRatioPull, kGtEngineInertia, kGtDrivelineInertia, kGtAirDrag, kGtCount }; // the figures; after them the lines to read
 enum { kGtHeldLine = kGtCount, kGtSteerLine, kGtItems };
 struct GtInfo { const char *key, *name, *tip; float least, most, def; };
 static const char kGtGroup[] = "Powertrain";
@@ -34,11 +34,12 @@ static const GtInfo kGt[kGtCount] = {
     { "GearRatioPull", "Gear ratio pull", "More pull in the low gears held by hand. 0 is the game. The engine braking of a low gear grows with it. The fuel does not.", 0.0f, 100.0f, 0.0f },
     { "EngineInertia", "Engine inertia", "How long spinning wheels run on after the foot comes off, as an engine and driveline keep them turning. 0 is the game.", 0.0f, 100.0f, 0.0f },
     { "DrivelineInertia", "Driveline inertia", "The weight of the engine and driveline on the wheels: they speed up slower, most in low gears. 0 is the game.", 0.0f, 100.0f, 0.0f },
+    { "AirDrag", "Air drag strength", "How strong the air drag is, in percent of the area the truck has. 0 takes none off. Acts with Air drag on.", 0.0f, 300.0f, 100.0f },
 };
 inline int *GtField(GaugeSettings &s, int i)
 {
     return i == kGtBite ? &s.diffLockBite : i == kGtCap ? &s.wheelCap : i == kGtPush ? &s.pushShare : i == kGtHeldSlip ? &s.heldGearSlip : i == kGtSteerFront ? &s.lockSteerFront :
-           i == kGtSteerRear ? &s.lockSteerRear : i == kGtSoundTop ? &s.engineSoundTop : i == kGtSoundCurve ? &s.engineSoundCurve : i == kGtRatioPull ? &s.gearRatioPull : i == kGtEngineInertia ? &s.engineInertia : i == kGtDrivelineInertia ? &s.drivelineInertia : &s.lowRangeSlip;
+           i == kGtSteerRear ? &s.lockSteerRear : i == kGtSoundTop ? &s.engineSoundTop : i == kGtSoundCurve ? &s.engineSoundCurve : i == kGtRatioPull ? &s.gearRatioPull : i == kGtEngineInertia ? &s.engineInertia : i == kGtDrivelineInertia ? &s.drivelineInertia : i == kGtAirDrag ? &s.airDrag : &s.lowRangeSlip;
 }
 
 inline int GtItems(NgTuneItem *items)
