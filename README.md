@@ -22,7 +22,7 @@ This is version 0.19.0. It reads the truck's own values for the speedometer, the
 
 On Linux (Proton, the Steam Deck) set SnowRunner's launch options in Steam (right click, Properties, General) to `WINEDLLOVERRIDES="version=n,b" %command%`. Then the game takes this `version.dll` instead of Wine's own. The mod there is not yet tested by a player.
 
-Already using ReShade? Choose Skip for `dxgi.dll` and `ReShade.ini` when Windows asks, and yours stays. The mods draw without ReShade too. It is in the zip for RivaTuner users, whose game does not boot without it. With Spotter installed, the overlay draws through Spotter's frame hook; `NextGen.ini` `[Overlay] Spotter=0` turns it off.
+Already using ReShade? Choose Skip for `dxgi.dll` and `ReShade.ini` when Windows asks, and yours stays. The mods draw without ReShade too. It is in the zip for RivaTuner users, whose game does not boot without it. With Spotter installed, the overlay draws through Spotter's frame hook; `NextGen.ini` `[Overlay] Spotter=0` turns it off. With Spotter, install this zip with Add mod in Spotter: its card places only the mod files. Copying by hand, leave out `dxgi.dll` and `ReShade.ini`.
 
 To update, copy the new file over the old one. A `Gauges.addon64` from a test build was loaded by ReShade: delete it when you install `Gauges.asi`. With two files of the mod in the folder only one runs, and the log says which. `Gauges.ini` keeps working.
 
