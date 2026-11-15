@@ -1486,8 +1486,8 @@ share in force goes on from figure over stock, so a rebuilt truck is never lower
 <code>settings: the steering left with a lock in:</code>, and with <code>Probe=1</code> a line a second
 (<code>probe: steering: the target</code>) gives the target, the share in force and the first wheel's figures.</p>
 <p><b>The tuning block.</b> A second block, <code>Local&#92;NextGen.Tune.&lt;process id&gt;.&lt;n&gt;</code> (<code>ng_tune.h</code>,
-the same file in every Next Gen mod; <code>tune_figures.h</code>), holds figures of the Powertrain for a tuning tool that is
-not part of a release: <code>DiffLockBite</code>, <code>WheelCap</code>, <code>PushShare</code>, <code>LowRangeSlip</code>,
+the same file in every Next Gen mod; <code>tune_figures.h</code>), holds figures of the Powertrain for the tuning tool, Next Gen
+Tuning, which comes in the Gameplay zip: <code>DiffLockBite</code>, <code>WheelCap</code>, <code>PushShare</code>, <code>LowRangeSlip</code>,
 <code>HeldGearSlip</code>, <code>LockSteerFront</code> and <code>LockSteerRear</code>, each
 with its name, tip, range, default and the value the tab shows. The tool writes a wanted value with a count. The mod's thread
 takes it at its next pass (the count, the value, the count again), held to the range and to whole percent, and hands it in by
