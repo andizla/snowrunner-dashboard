@@ -619,11 +619,11 @@ taken from and stays bounded near a gear's top:</p>
 <p class="where">The roof, its fade and the least come after it, as without the load. <i>m</i> is the truck's mass by its files, without
 cargo or a trailer, so a loaded truck's air part is overstated and a trailer's own drag is missing. CdA by that mass, 1.1 m² under 4 t,
 3.5 under 10 t, else 6, unless <code>RoadCdA</code> sets it in <code>[Gauges]</code> or a truck's file. <code>AirDrag</code>, the tuning
-tool's Air drag strength, multiplies that area by 0 to 300 percent (100; <code>DragCdA</code>) and acts at the next pass. Nothing standing,
+tool's Air drag strength, multiplies that area by 0 to 300 percent (300 by default; <code>DragCdA</code>) and acts at the next pass. Nothing standing,
 in reverse or with the foot off (the game's coasting stays). The drag acts in every gear: a gear with no <i>a</i><sub>base</sub> of its own
 and none from the learned gears' mean is lent the nearest learned gear's by top, <i>a</i><sub>base</sub>(<i>n</i>) · top(<i>n</i>) / top(<i>g</i>)
-(<code>DragBase</code>), whatever the spread. With no gear learned there is none, and one line a truck says so ("road load: no gear's pull learned yet with
-..."). The drag at most takes the drive to 0: the lift stops at its least and the torque cut's drive at 0. Gauges.log names the first pass
+(<code>DragBase</code>), whatever the spread. With no gear learned there is none, and one line a truck says so ("road load: no gear's pull learned yet for
+the truck's key with its engine, ...", or the key alone while the engine's name is not read, or "this truck"; the other road load lines name the engine the same way). The drag at most takes the drive to 0: the lift stops at its least and the torque cut's drive at 0. Gauges.log names the first pass
 with the drag in each gear ("road load: the air drag acts in gear 9 at 84.3 km/h: ..."), with the speed, the drag and where its pull came
 from: learned, the learned gears' mean or lent by a gear. Only the air: Gameplay reads no
 surface, and the game has its own rolling resistance. <i>a</i><sub>base</sub>(<i>g</i>) is learned in ordinary driving

@@ -1360,7 +1360,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; EngineShare: how much of the mod's engine the game gets, 0 to 100 percent (50: half way between the two).\n"
                         L"; RoadLoad=1 (with Powertrain, on by default): the air's drag taken off, once each gear's pull is learned floored on flat ground with the wheels' drag left out.\n"
                         L";   RoadCdA: the drag's area in m2, 0 by the truck's mass (1.1 under 4 t, 3.5 under 10 t, else 6); a truck's file may set it.\n"
-                        L";   AirDrag: a factor on that area in percent, 0 to 300 (100); the tuning tool's Air drag strength.\n"
+                        L";   AirDrag: a factor on that area in percent, 0 to 300 (300); the tuning tool's Air drag strength.\n"
                         L"; EngineBrake (with Powertrain at Gearbox=2): in a gear held by hand the truck pulls with the mod engine alone, no cut at the gear's top;\n"
                         L";   with the foot off the engine holds it back by this share of the gear's torque at the redline, in percent, 0 to 30 (15; 0 lets it roll).\n"
                         L"; WheelCap (with that, in L-, L, L+ and R): no driven wheel turns faster than this percent of the gear's top, 110 to 200 (150; no box).\n"
@@ -9312,10 +9312,10 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 w.dragSaid = 0;
                 int dropped = 0;
                 const int bases = GearBaseLoad(baseTruck, baseEngine, w.gearBase, w.gearBaseFile, &dropped);
-                if (bases) Log(L"road load: %d of this truck's gears' pull with %S learned before (its file in Gauges\\trucks)", bases, baseEngine);
+                if (bases) Log(L"road load: %d of this truck's gears' pull with %S learned before (its file in Gauges\\trucks)", bases, BaseEngineName(baseEngine, baseTruck));
                 if (dropped)
                     Log(L"road load: %d of this truck's gears' pull with %S were learned with the wheels' drag in them: dropped, to be learned again (BaseDamp.%S=1 now marks the new ones)",
-                        dropped, baseEngine, baseEngine);
+                        dropped, BaseEngineName(baseEngine, baseTruck), BaseEngineName(baseEngine, baseTruck));
                 fold = true;
             }
             float learned = 0.0f, added = 0.0f, dampMean = 0.0f;
@@ -9348,7 +9348,7 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 else wcsncpy_s(fileText, L"none in the file", _TRUNCATE);
                 // every learned gear (the Reviewer's point 6), so a drive shows the wheels' drag beside each figure
                 Log(L"road load: gear %d's pull at the game's own torque with %S, floored: learned %.3f m/s2 with the wheels' drag %.3f m/s2 added back, kept %.3f (from %.3f), %s: %s; its last passes by %s",
-                    done, baseEngine, learned, dampMean, w.gearBase[done], was, fileText,
+                    done, BaseEngineName(baseEngine, baseTruck), learned, dampMean, w.gearBase[done], was, fileText,
                     written ? L"written (the truck's file in Gauges\\trucks)" : L"within 2 % of the file's, not written",
                     w.baseByCut[done] ? L"the bracket the torque cut used" : L"the game's curve");
                 fold = true;
@@ -9366,7 +9366,11 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
                 // the air drag in every gear (part 205): a gear BaseFold left with none borrows the nearest learned gear's
                 DragBase(w.gearBase, tops, gears, w.baseUse, w.dragFrom);
                 if (!learnedGears)
-                    Log(L"road load: no gear's pull learned yet with %S, so no air drag until one is (a gear learns at full pedal on flat ground)", baseEngine);
+                {
+                    char none[300];
+                    DragNoneLine(baseTruck, baseEngine, none, sizeof none);
+                    Log(L"%S", none);
+                }
                 if (learnedGears >= 2)
                 {
                     char row[400] = "";
@@ -12435,7 +12439,7 @@ static void PartIni()
     Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.hotDamageFrom == kTempRed && d.coldDamage == 5.0f && d.overRevDamage == 10.0f && d.stallDamage == 5.0f && d.clutchBurn && d.clutchHeat == 60.0f &&
               d.springFront == 1.0f && d.dampingFront == 1.0f && d.extraTravel == 0.0f && d.frameFlex == 1.0f && d.twistRange == 1.0f,
           "defaults: the radiator's full airflow from 30 km/h, engine damage on from the red zone, 10 percent a minute for the heat and 5 for the cold");
-    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.walkSkipsLow && d.positionsByGearbox && !d.ignoreShifter && d.backToA == 0 && d.gameGearDisplay == kGameGearOffOwn && d.input == kInputWheel && !d.powertrain && d.roadLoad && d.wheelCap == 150 && d.pushShare == 0 && d.diffLockBite == 0 && d.lockSteerFront == 60 && d.lockSteerRear == 85 && d.lowRangeSlip == 100 && d.diffType == 0 && d.physicsRate == 120 && d.cutInA && d.engineBrake == 15.0f && d.modEngineSpeed && d.engineSpeedTop == 1.0f && d.roadCdA == 0.0f && d.airDrag == 100 && d.engineShare == 50 && d.creep && !d.creepManual && !d.dieselFlutter,
+    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.walkSkipsLow && d.positionsByGearbox && !d.ignoreShifter && d.backToA == 0 && d.gameGearDisplay == kGameGearOffOwn && d.input == kInputWheel && !d.powertrain && d.roadLoad && d.wheelCap == 150 && d.pushShare == 0 && d.diffLockBite == 0 && d.lockSteerFront == 60 && d.lockSteerRear == 85 && d.lowRangeSlip == 100 && d.diffType == 0 && d.physicsRate == 120 && d.cutInA && d.engineBrake == 15.0f && d.modEngineSpeed && d.engineSpeedTop == 1.0f && d.roadCdA == 0.0f && d.airDrag == 300 && d.engineShare == 50 && d.creep && !d.creepManual && !d.dieselFlutter,
           "defaults: the oil as a second needle, warm after 5 minutes, too hot from 120 C; the standard turbo, a diesel's lift without the flutter; the creep on; the physics at 120 and "
           "the mod engine in A on");
 
@@ -12454,6 +12458,22 @@ static void PartIni()
         SettingsDefaults(back);
         Check(missing.roadLoad && !zero.roadLoad && back.roadLoad, "defaults: Air drag on with the key missing, an explicit RoadLoad=0 stays off, and the defaults give it on");
         WriteIni(back); // the ini as the tests below find it, with its help text
+    }
+    // Air drag strength 300 by default (part 210): a missing key gives 300, an ini with AirDrag=100 keeps 100, the tool's
+    // figure has the same default
+    {
+        GaugeSettings r;
+        SettingsDefaults(r);
+        WriteIni(r);
+        WritePrivateProfileStringW(kIniSection, L"AirDrag", nullptr, ini.c_str());
+        GaugeSettings missing;
+        ReadIni(missing);
+        WritePrivateProfileStringW(kIniSection, L"AirDrag", L"100", ini.c_str());
+        GaugeSettings hundred;
+        ReadIni(hundred);
+        Check(r.airDrag == 300 && missing.airDrag == 300 && hundred.airDrag == 100 && kGt[kGtAirDrag].def == 300.0f && kGt[kGtAirDrag].most == 300.0f,
+              "defaults: Air drag strength 300 with the key missing and in the tool's figure, an ini with AirDrag=100 keeps 100");
+        WriteIni(r);
     }
     // the defaults of 0.19.0 (BRIEF_release_answers_1115.md, 199 and 200; the Reviewer's addendum of 00:34): an ini
     // without DefaultsMoved reads PhysicsRate and CutInA as 120 and on and holds the three keys after the read; with
@@ -15506,10 +15526,11 @@ static void PartRest()
         // a wanted value: on the tab's settings, flagged for the pass as a tab's edit is (taken and saved from there), and shown
         want(kGtBite, 62.4f);
         want(kGtCap, 500.0f);
+        want(kGtAirDrag, 50.0f); // and the Reset below gives 300 again (part 210)
         TunePass(block, 1050);
         const bool flagged = InterlockedExchange(&g_setDirty, 0) == 1;
         SettingsGet(got);
-        const bool taken = flagged && got.diffLockBite == 62 && got.wheelCap == 200 && shown(kGtBite) == 62.0f && shown(kGtCap) == 200.0f && got.lowRangeSlip == 100 && got.opacity == d.opacity;
+        const bool taken = flagged && got.airDrag == 50 && got.diffLockBite == 62 && got.wheelCap == 200 && shown(kGtBite) == 62.0f && shown(kGtCap) == 200.0f && got.lowRangeSlip == 100 && got.opacity == d.opacity;
         // no number: nothing changes and nothing is flagged
         want(kGtPush, nanf(""));
         TunePass(block, 1100);
@@ -15520,7 +15541,7 @@ static void PartRest()
         TunePass(block, 1150);
         InterlockedExchange(&g_setDirty, 0);
         SettingsGet(got);
-        const bool reset = got.diffLockBite == d.diffLockBite && got.wheelCap == d.wheelCap && got.pushShare == d.pushShare && got.lowRangeSlip == d.lowRangeSlip && got.powertrain &&
+        const bool reset = got.airDrag == 300 && got.diffLockBite == d.diffLockBite && got.wheelCap == d.wheelCap && got.pushShare == d.pushShare && got.lowRangeSlip == d.lowRangeSlip && got.powertrain &&
                            got.engineShare == d.engineShare && got.opacity == d.opacity;
         // Real engine off: greyed with why, and nothing is taken
         d.powertrain = false;

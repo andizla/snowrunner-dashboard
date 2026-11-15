@@ -160,7 +160,7 @@ struct GaugeSettings
     float engineBrake;       // EngineBrake: with Powertrain in a gear held by hand at Gearbox=2 (the torque cut), the share of the gear's torque in percent the engine holds the truck back with at the redline with the foot off, 0 to 30 (torque_cut.h)
     int winchSag;       // WinchSag (winch_out.h, the probe of BRIEF_jobs_1114.md part 164; ini only, with Probe=1, on game build 6adb8627): 0 off, 1 the drawn wire's link length written after each call of Winch out, 2 its length too
     float winchOutRate; // WinchOutRate (winch_out.h): metres a second while Winch out is held, 0.1 to 2.0. The step mode of the test builds (WinchOutStep) is dropped: the key is not read
-    int airDrag;             // AirDrag: a figure of the tuning tool, 0 to 300 percent (BRIEF_drive_1115_findings.md, part 205): a factor on the drag's area, RoadCdA's or the one by mass; 100 the area as it is
+    int airDrag;             // AirDrag: a figure of the tuning tool, 0 to 300 percent (BRIEF_drive_1115_findings.md, part 205): a factor on the drag's area, RoadCdA's or the one by mass; 300 by default (part 210), 100 the area as it is
     float roadCdA;           // RoadCdA: the drag's area in m², 0 by the truck's mass (1.1 under 4 t, 3.5 under 10 t, else 6); a truck's file may set its own
     int engineShare;         // EngineShare: how much of the mod's engine the game gets with it, in percent: 0 the game's own pull, 100 the mod's
     bool creepManual;        // CreepManual: the creep in a gear picked by hand too (off: only where an automatic picks the gear)
@@ -285,7 +285,7 @@ inline void SettingsDefaults(GaugeSettings &s)
     for (int a = 0; a < kAxleRowsMost; a++) s.diffAxle[a] = -1;
     s.engineSpeedTop = 1.0f;
     s.roadCdA = 0.0f;
-    s.airDrag = 100; // the area as it was (part 205)
+    s.airDrag = 300; // three times the area (the user, part 210)
     s.creep = true;
     s.creepManual = false;
     s.rollWarnDeg = 15.0f;

@@ -34,7 +34,7 @@ static const GtInfo kGt[kGtCount] = {
     { "GearRatioPull", "Gear ratio pull", "More pull in the low gears held by hand. 0 is the game. The engine braking of a low gear grows with it. The fuel does not.", 0.0f, 100.0f, 0.0f },
     { "EngineInertia", "Engine inertia", "How long spinning wheels run on after the foot comes off, as an engine and driveline keep them turning. 0 is the game.", 0.0f, 100.0f, 0.0f },
     { "DrivelineInertia", "Driveline inertia", "The weight of the engine and driveline on the wheels: they speed up slower, most in low gears. 0 is the game.", 0.0f, 100.0f, 0.0f },
-    { "AirDrag", "Air drag strength", "How strong the air drag is, in percent of the area the truck has. 0 takes none off. Acts with Air drag on.", 0.0f, 300.0f, 100.0f },
+    { "AirDrag", "Air drag strength", "How strong the air drag is, in percent of the area the truck has. 300 is the default. 0 takes none off. Acts with Air drag on.", 0.0f, 300.0f, 300.0f },
 };
 inline int *GtField(GaugeSettings &s, int i)
 {

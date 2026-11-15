@@ -8240,6 +8240,15 @@ int main(int argc, char **argv)
         snprintf(line, sizeof line, "air drag in every gear: gear 10 lent gear %d's pull %.3f (share %.3f at 92.4 km/h), gear 1 lent gear %d's; none learned: none; folded: the mean; "
                  "AirDrag 0: %.3f m/s2, 100: %.3f, 200: %.3f", from[10], use[10], share10, from[1], a0, a100, a200);
         Check(unfolded && lent && scaled && none && mean, line);
+        // the line with no gear learned: never an empty name (the lead, 2026-11-15)
+        char both[300], kindOnly[300], neither[300];
+        DragNoneLine("chevrolet_ck1500", "us_scout_old_engine", both, sizeof both);
+        DragNoneLine("chevrolet_ck1500", "", kindOnly, sizeof kindOnly);
+        DragNoneLine(nullptr, "", neither, sizeof neither);
+        Check(strstr(both, "yet for chevrolet_ck1500 with us_scout_old_engine, so") && strstr(kindOnly, "yet for chevrolet_ck1500, so") && !strstr(kindOnly, " with ") &&
+                  strstr(neither, "learned yet for this truck, so no air drag") && !strstr(neither, " with ") && !strcmp(BaseEngineName("", "ck"), "ck") &&
+                  !strcmp(BaseEngineName(nullptr, ""), "this truck") && !strcmp(BaseEngineName("e1", "ck"), "e1"),
+              neither);
     }
     // one figure per truck: two gears learned with equal a_base × top give an unlearned gear K / top; spread 20 % by
     // gear only; one gear learned alone fills nothing

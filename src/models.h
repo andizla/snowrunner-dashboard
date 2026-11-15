@@ -2123,6 +2123,20 @@ inline int DragBase(const float base[kMaxGears], const float top[kMaxGears], int
     }
     return have;
 }
+// The name a road load line gives the engine (part 210, point 3): its own, else the truck's key while the engine's name
+// is not read yet (it comes some passes after the truck), else "this truck"; never an empty name.
+inline const char *BaseEngineName(const char *engine, const char *truck)
+{
+    return engine && engine[0] ? engine : truck && truck[0] ? truck : "this truck";
+}
+// The line with no gear learned: "for" the truck's key and "with" its engine where both are known, else the one name
+// BaseEngineName gives.
+inline void DragNoneLine(const char *truck, const char *engine, char *out, size_t n)
+{
+    const bool t = truck && truck[0], e = engine && engine[0];
+    if (t && e) snprintf(out, n, "road load: no gear's pull learned yet for %s with %s, so no air drag until one is (a gear learns at full pedal on flat ground)", truck, engine);
+    else snprintf(out, n, "road load: no gear's pull learned yet for %s, so no air drag until one is (a gear learns at full pedal on flat ground)", BaseEngineName(engine, truck));
+}
 // The drag's area with AirDrag (part 205, point 3): RoadCdA's area (by mass or set) times the factor in percent.
 inline float DragCdA(float mass, float own, int percent) { return RoadCdA(mass, own) * (float)(percent < 0 ? 0 : percent > 300 ? 300 : percent) / 100.0f; }
 
