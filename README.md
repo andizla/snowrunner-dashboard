@@ -4,7 +4,7 @@ A gauge cluster for the truck you drive in SnowRunner: analogue dials in the sty
 
 The cluster has a speedometer, a tachometer with the gear, fuel with the range and the fuel used a minute, coolant and oil temperature, boost pressure, brake air pressure, a clock with the game's time of day and the outside temperature, and nine lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage, cold engine, tilt and oil temperature.
 
-This is version 0.18.4. It reads the truck's own values for the speedometer, the gear, the fuel gauge and seven of the lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage and tilt. The game has no engine speed, no range, no coolant or oil temperature, no boost pressure and no brake air, so the mod works those out from what the truck does, and lights the cold and oil lamps by the temperatures. The temperature also costs the engine: overheating it, or working it hard while cold, adds to the game's own engine damage. `Damage=0` switches that off. The scales of the tachometer and the speedometer and the turbo's boost and character can be set for each kind of truck. The brake air comes from the engine's compressor, which fills the tanks up to 8.2 bar and starts again at 6.9, and each press of the brake and letting the handbrake go draw from them; scouts brake by hydraulics, so the air dial is hidden on scout scales (`TachClass=1`, or a truck file that sets it). The outside temperature goes by the map you are on, which the mod reads from the game's save. With `Gearbox=1` an automatic of the mod's own, with a torque converter, picks the gears while the game's shifter is in A, and with `Powertrain=1` the truck pulls with the mod's engine and converter in place of the game's own.
+This is version 0.19.0. It reads the truck's own values for the speedometer, the gear, the fuel gauge and seven of the lamps: handbrake, headlights, all wheel drive, differential lock, low gear, engine damage and tilt. The game has no engine speed, no range, no coolant or oil temperature, no boost pressure and no brake air, so the mod works those out from what the truck does, and lights the cold and oil lamps by the temperatures. The temperature also costs the engine: overheating it, or working it hard while cold, adds to the game's own engine damage. `Damage=0` switches that off. The scales of the tachometer and the speedometer and the turbo's boost and character can be set for each kind of truck. The brake air comes from the engine's compressor, which fills the tanks up to 8.2 bar and starts again at 6.9, and each press of the brake and letting the handbrake go draw from them; scouts brake by hydraulics, so the air dial is hidden on scout scales (`TachClass=1`, or a truck file that sets it). The outside temperature goes by the map you are on, which the mod reads from the game's save. With `Gearbox=1` an automatic of the mod's own, with a torque converter, picks the gears while the game's shifter is in A, and with `Powertrain=1` the truck pulls with the mod's engine and converter in place of the game's own.
 
 ## What you need
 
@@ -79,7 +79,7 @@ The Gameplay tab of the NEXT GEN menu edits every setting while you play, in eig
 | The speed in km/h from which the radiator gets all the air that driving gives it, from 10 to 80 | Engine: Full airflow | `AirFullKmh` | 30 |
 | The oil: minutes it takes from 15 C to 85 C when the engine is driven as usual, from 1 to 60 and at least a minute after the coolant, and the temperature in C from which it is too hot, from 100 to 150 | Engine: Oil warm-up, Oil warning | `OilWarmUpMinutes`, `OilWarnC` | 5, 120 |
 | Heat and a cold engine worked hard cost the engine (and stalls and the clutch the gearbox) | Engine: Damage | `Damage` 0 or 1 | on |
-| The game's own gearbox, the mod's automatic, or the mod's own gearbox (see below) | Gearbox: Game's gearbox, Mod automatic, Mod gearbox | `Gearbox` 0, 1 or 2 | 0 |
+| The game's own gearbox, the mod's automatic, or the mod's own gearbox (see below) | Gearbox: Game gearbox, Mod automatic, Mod gearbox | `Gearbox` 0, 1 or 2 | 0 |
 | In A the truck pulls with the mod engine alone, through the converter, as a held gear does. With the mod automatic or the mod gearbox, Real engine, Mod engine speed and an engine share above 0 | Gearbox: Mod engine in A | `CutInA` 0 or 1 | on |
 | A shift into a gear without the clutch: at speed it stays out, standing or crawling it stalls the engine | Gearbox: Require clutch | `RequireClutch` 0 or 1 | off |
 | Neutral while no gear key is held, for an H shifter | Gearbox: H shifter | `RequireGearHeld` 0 or 1 | off |
@@ -89,7 +89,7 @@ The Gameplay tab of the NEXT GEN menu edits every setting while you play, in eig
 | L-, L, L+ and H only where the fitted gearbox has them in the game | Gearbox: Positions by gearbox | `PositionsByGearbox` 0 or 1 | on |
 | A position picked on the game's shifter does nothing | Gearbox: Ignore shifter | `IgnoreShifter` 0 or 1 | off |
 | Seconds after a shift by hand until the gearbox goes back to D by itself, 3 to 30 | Gearbox: Back to D | `BackToA` | 0 (never) |
-| The game's gear display at the bottom right: as the game has it, off while Gearbox=2 drives, or off always | Gearbox: Game's gear display | `GameGearDisplay` 0, 1 or 2 | 1 |
+| The game's gear display at the bottom right: as the game has it, off while Gearbox=2 drives, or off always | Gearbox: Game gear display | `GameGearDisplay` 0, 1 or 2 | 1 |
 | Percent of the gearbox a shift without the clutch costs, 0 to 25, with `Damage` on | Gearbox: Stall damage | `StallDamagePercent` | 5 |
 | A slipping clutch under load burns and costs the gearbox, with `Damage` on | Gearbox: Clutch burns | `ClutchBurn` 0 or 1 | on |
 | How fast a slipping clutch heats up, percent of the model's own pace, 10 to 300 | Gearbox: Clutch heat | `ClutchHeatPercent` | 60 |
@@ -358,17 +358,16 @@ Delete `Gauges.asi`, `Gauges.ini`, `Gauges.log` and the folder `Gauges` (the set
 
 ## Planned
 
+- Clearer names for the settings.
 - Hide the cluster while a game window is open.
 - H pulls like a numbered gear with its speed.
-- Odometer per vehicle, and hours for special machinery.
+- Hours for special machinery.
 - Warm-up at idle and a penalty for driving off cold.
 - Each sound on its own in the Sounds tab, and a low fuel warning.
 - Proper turbo sounds.
-- Engine sound that follows engine speed.
 - Brakes that fade after long braking and hold on low air.
-- Winch changes: stays attached when the engine stalls, overheats, can be reeled out.
+- Winch changes: stays attached when the engine stalls, overheats.
 - A shifter of our own, replacing the game's, with a splitter and low range as a modifier.
-- Sharing truck, gearbox and engine setups.
 
 ## Build
 

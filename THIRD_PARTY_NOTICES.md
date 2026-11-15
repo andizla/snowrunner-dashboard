@@ -1,6 +1,6 @@
 # Third party notices
 
-Next Gen Gameplay is licensed under the GNU General Public License v3.0 (GPL-3.0-only, see `LICENSE`). It is built with the following third-party work.
+Next Gen Gameplay is licensed under the GNU General Public License v3.0 (GPL-3.0-only, see `LICENSE`). It is built with the following third-party work. The same notices cover Next Gen Tuning (`NextGenTuning.asi`), which comes in the same zip and is built with the same Dear ImGui and ReShade headers.
 
 ## ReShade add-on API
 
