@@ -22,18 +22,18 @@ struct GtInfo { const char *key, *name, *tip; float least, most, def; };
 static const char kGtGroup[] = "Powertrain";
 static const char kGtWhyOff[] = "Real engine is off.";
 static const GtInfo kGt[kGtCount] = {
-    { "DiffLockBite", "Diff lock bite", "How firmly the diff lock ties the driven wheels together. 0 leaves the game lock as it is. 100 turns them as one shaft.", 0.0f, 100.0f, 0.0f },
-    { "WheelCap", "Wheel cap", "In L-, L, L+ and R no driven wheel runs faster than this percent of the top speed of its gear. Needs the mod gearbox.", 110.0f, 200.0f, 150.0f },
+    { "DiffLockBite", "Diff lock bite", "How firmly the diff lock ties the driven wheels together. 0 leaves the game lock as it is. 100 turns them as one shaft.", 0.0f, 100.0f, 100.0f },
+    { "WheelCap", "Wheel cap", "In L-, L, L+ and R no driven wheel runs faster than this percent of the top speed of its gear. Needs the mod gearbox.", 110.0f, 200.0f, 110.0f },
     { "PushShare", "Push share", "How much of the extra push the game gives the chassis at speed is left in, in percent. 0 takes all of it back.", 0.0f, 100.0f, 0.0f },
-    { "LowRangeSlip", "Low range slip", "How much wheel slip L-, L and R may use. 100 gives them the same room as L+. 0 holds each wheel near the top of its gear.", 0.0f, 100.0f, 100.0f },
-    { "HeldGearSlip", "Held gear slip", "Wheel spin in a numbered gear held by hand. 0 Engine held: to the engine limit. 1 Low gears: as L+. 2 All gears: by Wheel cap.", 0.0f, 2.0f, 2.0f },
+    { "LowRangeSlip", "Low range slip", "How much wheel slip L-, L and R may use. 100 gives them the same room as L+. 0 holds each wheel near the top of its gear.", 0.0f, 100.0f, 0.0f },
+    { "HeldGearSlip", "Held gear slip", "Spin in a gear held by hand. 0 Engine held, the default: to the engine limit. 1 Low gears: as L+. 2 All gears: by Wheel cap.", 0.0f, 2.0f, 0.0f },
     { "LockSteerFront", "Steering with front lock", "Steering left while an axle that steers is locked. 100 leaves it all. A truck whose lock is always on has this all the time.", 30.0f, 100.0f, 60.0f },
     { "LockSteerRear", "Steering with rear lock", "Steering left while another driven axle is locked. 100 leaves it all. With both locked the smaller figure counts.", 30.0f, 100.0f, 85.0f },
     { "EngineSoundTop", "Engine sound top", "How high the engine sound is at the start of the red zone, in percent of its top note. Lower it if it sounds too fast.", 40.0f, 100.0f, 100.0f },
-    { "EngineSoundCurve", "Engine sound curve", "How the engine sound rises with the revs. 100 is straight. 180 bends as the pedal does: slow at first, fast near the top.", 100.0f, 300.0f, 100.0f },
-    { "GearRatioPull", "Gear ratio pull", "More pull in the low gears held by hand. 0 is the game. The engine braking of a low gear grows with it. The fuel does not.", 0.0f, 100.0f, 0.0f },
-    { "EngineInertia", "Engine inertia", "How long spinning wheels run on after the foot comes off, as an engine and driveline keep them turning. 0 is the game.", 0.0f, 100.0f, 0.0f },
-    { "DrivelineInertia", "Driveline inertia", "The weight of the engine and driveline on the wheels: they speed up slower, most in low gears. 0 is the game.", 0.0f, 100.0f, 0.0f },
+    { "EngineSoundCurve", "Engine sound curve", "How the engine sound rises with the revs. 100 is straight. 180 bends as the pedal does: slow at first, fast near the top.", 100.0f, 300.0f, 239.0f },
+    { "GearRatioPull", "Gear ratio pull", "More pull in the low gears held by hand. 0 is the game. The engine braking of a low gear grows with it. The fuel does not.", 0.0f, 100.0f, 100.0f },
+    { "EngineInertia", "Engine inertia", "How long spinning wheels run on after the foot comes off, as an engine and driveline keep them turning. 0 is the game.", 0.0f, 100.0f, 100.0f },
+    { "DrivelineInertia", "Driveline inertia", "The weight of the engine and driveline on the wheels: they speed up slower, most in low gears. 0 is the game.", 0.0f, 100.0f, 100.0f },
     { "AirDrag", "Air drag strength", "How strong the air drag is, in percent of the area the truck has. 300 is the default. 0 takes none off. Acts with Air drag on.", 0.0f, 300.0f, 300.0f },
 };
 inline int *GtField(GaugeSettings &s, int i)

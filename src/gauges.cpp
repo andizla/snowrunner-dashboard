@@ -665,21 +665,60 @@ static float IniFloat(const wchar_t *key, float def, const std::wstring &ini) { 
 static bool g_oldPlainClass = false; // Gauges.ini holds a TachClass of an older build: said once a run (LogSettings)
 static int IniInt(const wchar_t *key, int def, const std::wstring &ini) { return (int)GetPrivateProfileIntW(kIniSection, key, def, ini.c_str()); }
 static bool IniBool(const wchar_t *key, bool def, const std::wstring &ini) { return IniInt(key, def ? 1 : 0, ini) != 0; }
-// [Gauges] DefaultsMoved (BRIEF_release_answers_1115.md, 199 and 200, the Reviewer's addendum of 00:34): a whole number,
-// the moves of defaults the ini has had. Every save before 0.19.0 wrote PhysicsRate=60 and CutInA=0 whether chosen or
-// not, so an ini under 1 reads neither key: both take the new defaults (120 and on), and the move is written once
-// (DefaultsMoveWrite). Each save writes the mark, so what a player sets after it holds. RateStart and the load both go
-// by this one function. A later move of a default writes 2 with its own list and reads "under 2".
-static const int kDefaultsMoved = 1;
-static bool IniDefaultsMoved(const std::wstring &ini) { return IniInt(L"DefaultsMoved", 0, ini) >= kDefaultsMoved; }
+// [Gauges] DefaultsMoved (BRIEF_release_answers_1115.md, 199 and 200; BRIEF_drive_1115_findings.md, 211; the
+// Reviewer's addenda of 00:34 and 04:05): a whole number, the moves of defaults the ini has had, by level. Every save
+// wrote each key whether chosen or not, so an ini under a level reads none of that level's keys: they take the new
+// defaults, and the move is written once (DefaultsMoveWrite), the mark last. Each save writes the mark, so what a
+// player sets after it holds. Level 1 (0.19.0): PhysicsRate and CutInA. Level 2 (the user's figures of 2026-11-15):
+// the nine of kDefaultsMoves. RateStart and the load both go by IniMovedLevel.
+static const int kDefaultsMoved = 2;
+static int IniMovedLevel(const std::wstring &ini) { return IniInt(L"DefaultsMoved", 0, ini); }
+static bool IniDefaultsMoved(const std::wstring &ini) { return IniMovedLevel(ini) >= 1; } // level 1's keys read as written
 // PhysicsRate as the start and the load both take it: as written where the mark is, else 120 (a key missing reads 120 too)
 static int RateAsked(const std::wstring &ini) { return IniDefaultsMoved(ini) ? IniInt(L"PhysicsRate", kRateFast, ini) : kRateFast; }
-// The move's words: the keys that changed, "" none. rateWas and cutWas: what the file held.
-static void DefaultsMoveWords(int rateWas, bool cutWas, wchar_t *what, size_t n)
+// The moves: the level, the key, what a save before it wrote by default (what a key missing read), and the new
+// default, which is SettingsDefaults' own (one number a figure).
+struct DefaultsMove
 {
+    int level;
+    const wchar_t *key;
+    int was;
+    int (*now)(const GaugeSettings &);
+};
+static const DefaultsMove kDefaultsMoves[] = {
+    { 1, L"PhysicsRate", kRateStock, [](const GaugeSettings &d) { return d.physicsRate; } },
+    { 1, L"CutInA", 0, [](const GaugeSettings &d) { return d.cutInA ? 1 : 0; } },
+    { 2, L"GearRatioPull", 0, [](const GaugeSettings &d) { return d.gearRatioPull; } },
+    { 2, L"EngineInertia", 0, [](const GaugeSettings &d) { return d.engineInertia; } },
+    { 2, L"DrivelineInertia", 0, [](const GaugeSettings &d) { return d.drivelineInertia; } },
+    { 2, L"EngineSoundCurve", 100, [](const GaugeSettings &d) { return d.engineSoundCurve; } },
+    { 2, L"AirDrag", 100, [](const GaugeSettings &d) { return d.airDrag; } },
+    { 2, L"WheelCap", 150, [](const GaugeSettings &d) { return d.wheelCap; } },
+    { 2, L"DiffLockBite", 0, [](const GaugeSettings &d) { return d.diffLockBite; } },
+    { 2, L"LowRangeSlip", 100, [](const GaugeSettings &d) { return d.lowRangeSlip; } },
+    { 2, L"HeldGearSlip", 2, [](const GaugeSettings &d) { return d.heldGearSlip; } },
+};
+static const int kDefaultsMovesCount = (int)(sizeof kDefaultsMoves / sizeof kDefaultsMoves[0]);
+// The move's words for an ini at level mark: each key of a level over it whose figure in the file (or its old default
+// where the file has none) is not the new one, "Key was to now", the last after "and"; "" none.
+static void DefaultsMoveWords(const std::wstring &ini, int mark, wchar_t *what, size_t n)
+{
+    GaugeSettings d;
+    SettingsDefaults(d);
     *what = 0;
-    if (rateWas != kRateFast) _snwprintf_s(what, n, _TRUNCATE, L"PhysicsRate %d to 120", rateWas);
-    if (!cutWas) wcsncat_s(what, n, *what ? L" and CutInA 0 to 1" : L"CutInA 0 to 1", _TRUNCATE);
+    wchar_t items[kDefaultsMovesCount][64];
+    int count = 0;
+    for (const DefaultsMove &m : kDefaultsMoves)
+    {
+        if (m.level <= mark) continue;
+        const int was = IniInt(m.key, m.was, ini), now = m.now(d);
+        if (was != now) _snwprintf_s(items[count++], _TRUNCATE, L"%s %d to %d", m.key, was, now);
+    }
+    for (int i = 0; i < count; i++)
+    {
+        if (i) wcsncat_s(what, n, i + 1 == count ? L" and " : L", ", _TRUNCATE);
+        wcsncat_s(what, n, items[i], _TRUNCATE);
+    }
 }
 
 // Text as UTF-8 (the game's names, such as Grüntal Hollow), or byte by byte where it is not valid UTF-8.
@@ -1136,19 +1175,28 @@ static bool IniHas(const std::vector<std::wstring> &sections, const std::wstring
     return false;
 }
 
-// An ini without the mark (IniDefaultsMoved): the three keys into the file at once, so the file and the tab agree from
-// the first start and a hand edit after it holds; one line that names the keys that changed. A file that cannot be
-// written moves again at the next start, and the line says so.
+// An ini under kDefaultsMoved (IniMovedLevel): the keys of each level over its mark into the file at once, the mark
+// last, so the file and the tab agree from the first start, a hand edit after it holds and a part write moves again;
+// one line that names the keys that changed. A file that cannot be written moves again at the next start, and the line
+// says so.
 static void DefaultsMoveWrite(const std::wstring &ini)
 {
-    const int rateWas = IniInt(L"PhysicsRate", kRateStock, ini);
-    const bool cutWas = IniBool(L"CutInA", false, ini);
+    const int level = IniMovedLevel(ini);
+    wchar_t what[600];
+    DefaultsMoveWords(ini, level, what, 600);
+    GaugeSettings d;
+    SettingsDefaults(d);
+    bool put = true;
+    for (const DefaultsMove &m : kDefaultsMoves)
+    {
+        if (m.level <= level) continue;
+        wchar_t v[16];
+        _snwprintf_s(v, _TRUNCATE, L"%d", m.now(d));
+        put = WritePrivateProfileStringW(kIniSection, m.key, v, ini.c_str()) && put;
+    }
     wchar_t mark[16];
     _snwprintf_s(mark, _TRUNCATE, L"%d", kDefaultsMoved);
-    const bool put = WritePrivateProfileStringW(kIniSection, L"PhysicsRate", L"120", ini.c_str()) && WritePrivateProfileStringW(kIniSection, L"CutInA", L"1", ini.c_str()) &&
-                     WritePrivateProfileStringW(kIniSection, L"DefaultsMoved", mark, ini.c_str());
-    wchar_t what[96];
-    DefaultsMoveWords(rateWas, cutWas, what, 96);
+    put = put && WritePrivateProfileStringW(kIniSection, L"DefaultsMoved", mark, ini.c_str());
     Log(L"settings: an ini from before 0.19.0: %s, once (DefaultsMoved=%d)%s", *what ? what : L"nothing to move", kDefaultsMoved,
         put ? L"" : L"; Gauges.ini could not be written, so the move acts again at the next start");
 }
@@ -1363,10 +1411,10 @@ static void ReadIni(GaugeSettings &s)
                         L";   AirDrag: a factor on that area in percent, 0 to 300 (300); the tuning tool's Air drag strength.\n"
                         L"; EngineBrake (with Powertrain at Gearbox=2): in a gear held by hand the truck pulls with the mod engine alone, no cut at the gear's top;\n"
                         L";   with the foot off the engine holds it back by this share of the gear's torque at the redline, in percent, 0 to 30 (15; 0 lets it roll).\n"
-                        L"; WheelCap (with that, in L-, L, L+ and R): no driven wheel turns faster than this percent of the gear's top, 110 to 200 (150; no box).\n"
-                        L"; LowRangeSlip (with that): how much wheel slip L-, L and R may use, 0 to 100 (100: the same room as L+; 0: each wheel near the top speed of its gear).\n"
+                        L"; WheelCap (with that, in L-, L, L+ and R): no driven wheel turns faster than this percent of the gear's top, 110 to 200 (110; no box).\n"
+                        L"; LowRangeSlip (with that): how much wheel slip L-, L and R may use, 0 to 100 (0: each wheel near the top speed of its gear; 100: the same room as L+).\n"
                         L"; PushShare (with Powertrain): the percent of the surge at speed the game's chassis push may carry over the mod's pull, 0 to 100 (0; 100 as before; no box).\n"
-                        L"; DiffLockBite (with Powertrain): how firmly the diff lock ties the driven wheels together, 0 to 100 (0: the game lock; 100: one shaft).\n"
+                        L"; DiffLockBite (with Powertrain): how firmly the diff lock ties the driven wheels together, 0 to 100 (100: one shaft; 0: the game lock).\n"
                         L";   It acts on a truck whose diff lock is always on too. Such a truck then scrubs in every turn on hard ground.\n"
                         L"; QuickWinch: the quick winch of the game on its key: 0 as the game has it, 1 only while the truck stands (the default), 2 never from that key.\n"
                         L"; WinchOutRate: how fast the winch wire is let out while the Winch out key is held, 0.1 to 2.0 metres a second (0.5 by default). The key has no binding until one is set on the Controls tab.\n"
@@ -1376,8 +1424,8 @@ static void ReadIni(GaugeSettings &s)
                         L";   A truck file may hold its own DiffType; the tab writes it there for the driven truck.\n"
                         L";   DiffAxle1 to DiffAxle8 in a truck file: one axle its own type, front to back, the same four choices. An axle with no key goes by DiffType.\n"
                         L";   BindLockFrontAxle and BindLockRearAxles hold those axles Locked until pressed again. While the diff lock of the truck is on, every axle is locked.\n"
-                        L"; EngineSoundTop and EngineSoundCurve are figures of the tuning tool for the engine sound: 100 and 100 leave it as it was. Top 40 to 100, curve 100 to 300.\n"
-                        L"; HeldGearSlip is a figure of the tuning tool, not of the tab: 2, a numbered gear held by hand has the wheel cap in every gear. 0 and 1 are the older ways.\n"
+                        L"; EngineSoundTop and EngineSoundCurve are figures of the tuning tool for the engine sound: top 100 and curve 239 by default, 100 and 100 the sound as it was. Top 40 to 100, curve 100 to 300.\n"
+                        L"; HeldGearSlip is a figure of the tuning tool, not of the tab: 0 (Engine held), a numbered gear held by hand spins to the engine limit; 1 as L+ in the low gears; 2 the wheel cap in every gear.\n"
                         L"; AirEmptyAtStart=1: a truck with air brakes first driven after the game starts has empty tanks and stands on its spring brakes until they fill. A truck keeps its air between drives (AirBar in its [Odometer:<id>]).\n"
                         L"; AirBrakes in a truck file (the Air brakes box of the Engine tab): 1 the truck has brake air and spring brakes, 0 it has none. No key: every truck but a scout has them, by the class the mod automatic goes by for it.\n"
                         L"; ModEngineSpeed=1 (with Powertrain, on by default): the game tachometer, sound and effects follow the mod engine; its fuel burn and stall check keep the game's own.\n"
@@ -1394,7 +1442,7 @@ static void ReadIni(GaugeSettings &s)
                         L"; Mod work: Demo=1 draws demo values whenever no truck is driven, Probe=1 logs the values read from the game.\n"
                         L"; PhysicsRate: 60 or 120 (120). 120 steps the physics 120 times a second, 60 as the game does. 120 is for single player:\n"
                         L";   for co-op set 60 on every machine and start the game again. Read once at the start.\n"
-                        L"; DefaultsMoved: written by the mod. An ini without it is from before 0.19.0 and takes PhysicsRate=120 and CutInA=1 once.\n"
+                        L"; DefaultsMoved: written by the mod. An ini under 2 takes the defaults of 0.19.0 once: under 1 PhysicsRate and CutInA, under 2 the nine tuning figures.\n"
                         L";   PhysicsIterations (with 120, no box): 0 the mod choice (2), 2 or 4 solver iterations a step. Add the key by hand.\n"
                         L"; KeepLogs: how many of the last starts' logs Gauges\\logs keeps (20; at most 500 MB of them; 0 keeps all).\n");
             fclose(f);
@@ -1404,8 +1452,9 @@ static void ReadIni(GaugeSettings &s)
         return;
     }
     MapDefaultsWrite();
-    const bool defaultsMoved = IniDefaultsMoved(ini); // read before the move writes the mark
-    if (!defaultsMoved) DefaultsMoveWrite(ini);
+    const int movedLevel = IniMovedLevel(ini); // read before the move writes the mark
+    const bool defaultsMoved = movedLevel >= 1, tuningMoved = movedLevel >= 2;
+    if (movedLevel < kDefaultsMoved) DefaultsMoveWrite(ini);
     int moved[kSetupKinds];
     SetupsMove(moved);
     if (moved[kSetupTruck] || moved[kSetupGearbox])
@@ -1458,19 +1507,20 @@ static void ReadIni(GaugeSettings &s)
     s.input = IniInt(L"Input", s.input, ini);
     s.powertrain = IniBool(L"Powertrain", s.powertrain, ini);
     s.roadLoad = IniBool(L"RoadLoad", s.roadLoad, ini);
-    s.wheelCap = IniInt(L"WheelCap", s.wheelCap, ini);
-    s.lowRangeSlip = IniInt(L"LowRangeSlip", s.lowRangeSlip, ini);
-    s.heldGearSlip = IniInt(L"HeldGearSlip", s.heldGearSlip, ini);
+    // level 2's keys read as written where the ini has had that move, else their defaults (as CutInA below)
+    if (tuningMoved) s.wheelCap = IniInt(L"WheelCap", s.wheelCap, ini);
+    if (tuningMoved) s.lowRangeSlip = IniInt(L"LowRangeSlip", s.lowRangeSlip, ini);
+    if (tuningMoved) s.heldGearSlip = IniInt(L"HeldGearSlip", s.heldGearSlip, ini);
     s.pushShare = IniInt(L"PushShare", s.pushShare, ini);
-    s.diffLockBite = IniInt(L"DiffLockBite", s.diffLockBite, ini);
+    if (tuningMoved) s.diffLockBite = IniInt(L"DiffLockBite", s.diffLockBite, ini);
     s.quickWinch = IniInt(L"QuickWinch", s.quickWinch, ini);
     s.lockSteerFront = IniInt(L"LockSteerFront", s.lockSteerFront, ini);
     s.lockSteerRear = IniInt(L"LockSteerRear", s.lockSteerRear, ini);
     s.engineSoundTop = IniInt(L"EngineSoundTop", s.engineSoundTop, ini);
-    s.gearRatioPull = IniInt(L"GearRatioPull", s.gearRatioPull, ini);
-    s.engineInertia = IniInt(L"EngineInertia", s.engineInertia, ini);
-    s.drivelineInertia = IniInt(L"DrivelineInertia", s.drivelineInertia, ini);
-    s.engineSoundCurve = IniInt(L"EngineSoundCurve", s.engineSoundCurve, ini);
+    if (tuningMoved) s.gearRatioPull = IniInt(L"GearRatioPull", s.gearRatioPull, ini);
+    if (tuningMoved) s.engineInertia = IniInt(L"EngineInertia", s.engineInertia, ini);
+    if (tuningMoved) s.drivelineInertia = IniInt(L"DrivelineInertia", s.drivelineInertia, ini);
+    if (tuningMoved) s.engineSoundCurve = IniInt(L"EngineSoundCurve", s.engineSoundCurve, ini);
     s.diffType = IniInt(L"DiffType", s.diffType, ini);
     s.engineBrake = IniFloat(L"EngineBrake", s.engineBrake, ini); // CrawlHold= is read no more: the torque cut took its place
     s.winchOutRate = IniFloat(L"WinchOutRate", s.winchOutRate, ini);
@@ -1479,7 +1529,7 @@ static void ReadIni(GaugeSettings &s)
     if (defaultsMoved) s.cutInA = IniBool(L"CutInA", s.cutInA, ini); // without the mark the default of 0.19.0 (IniDefaultsMoved)
     s.engineSpeedTop = IniFloat(L"EngineSpeedTop", s.engineSpeedTop, ini);
     s.roadCdA = IniFloat(L"RoadCdA", s.roadCdA, ini);
-    s.airDrag = IniInt(L"AirDrag", s.airDrag, ini);
+    if (tuningMoved) s.airDrag = IniInt(L"AirDrag", s.airDrag, ini);
     s.engineShare = IniInt(L"EngineShare", s.engineShare, ini);
     s.creep = IniBool(L"Creep", s.creep, ini);
     g_spinCalmKey = IniInt(L"SpinCalm", -1, ini); // read no more (BRIEF_low_gear_sway.md): said once in the settings lines, for a release
@@ -12439,7 +12489,7 @@ static void PartIni()
     Check(d.airFullKmh == 30.0f && d.damage && d.hotDamage == 10.0f && d.hotDamageFrom == kTempRed && d.coldDamage == 5.0f && d.overRevDamage == 10.0f && d.stallDamage == 5.0f && d.clutchBurn && d.clutchHeat == 60.0f &&
               d.springFront == 1.0f && d.dampingFront == 1.0f && d.extraTravel == 0.0f && d.frameFlex == 1.0f && d.twistRange == 1.0f,
           "defaults: the radiator's full airflow from 30 km/h, engine damage on from the red zone, 10 percent a minute for the heat and 5 for the cold");
-    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.walkSkipsLow && d.positionsByGearbox && !d.ignoreShifter && d.backToA == 0 && d.gameGearDisplay == kGameGearOffOwn && d.input == kInputWheel && !d.powertrain && d.roadLoad && d.wheelCap == 150 && d.pushShare == 0 && d.diffLockBite == 0 && d.lockSteerFront == 60 && d.lockSteerRear == 85 && d.lowRangeSlip == 100 && d.diffType == 0 && d.physicsRate == 120 && d.cutInA && d.engineBrake == 15.0f && d.modEngineSpeed && d.engineSpeedTop == 1.0f && d.roadCdA == 0.0f && d.airDrag == 300 && d.engineShare == 50 && d.creep && !d.creepManual && !d.dieselFlutter,
+    Check(d.oilGauge == kOilNeedle && d.oilWarmUpMinutes == 5.0f && d.oilWarnC == 120.0f && d.boostProfile == kSpoolStandard && d.gearbox == kGearboxGame && !d.requireClutch && !d.requireGearHeld && !d.skipNeutral && !d.downStaysForward && !d.walkSkipsLow && d.positionsByGearbox && !d.ignoreShifter && d.backToA == 0 && d.gameGearDisplay == kGameGearOffOwn && d.input == kInputWheel && !d.powertrain && d.roadLoad && d.wheelCap == 110 && d.pushShare == 0 && d.diffLockBite == 100 && d.lockSteerFront == 60 && d.lockSteerRear == 85 && d.lowRangeSlip == 0 && d.diffType == 0 && d.physicsRate == 120 && d.cutInA && d.engineBrake == 15.0f && d.modEngineSpeed && d.engineSpeedTop == 1.0f && d.roadCdA == 0.0f && d.airDrag == 300 && d.engineShare == 50 && d.creep && !d.creepManual && !d.dieselFlutter,
           "defaults: the oil as a second needle, warm after 5 minutes, too hot from 120 C; the standard turbo, a diesel's lift without the flutter; the creep on; the physics at 120 and "
           "the mod engine in A on");
 
@@ -12492,7 +12542,7 @@ static void PartIni()
         GaugeSettings old;
         ReadIni(old);
         const bool oldMoved = startOld == 120 && old.physicsRate == 120 && old.cutInA && IniInt(L"PhysicsRate", 0, ini) == 120 && IniInt(L"CutInA", 0, ini) == 1 &&
-                              IniInt(L"DefaultsMoved", 0, ini) == 1 && RateAsked(ini) == 120;
+                              IniInt(L"DefaultsMoved", 0, ini) == 2 && RateAsked(ini) == 120;
         oldIni(L"60", true);
         GaugeSettings marked;
         ReadIni(marked);
@@ -12500,10 +12550,18 @@ static void PartIni()
         oldIni(L"120", false);
         GaugeSettings at120;
         ReadIni(at120);
-        wchar_t both[96], cutOnly[96], none[96];
-        DefaultsMoveWords(60, false, both, 96);
-        DefaultsMoveWords(120, false, cutOnly, 96);
-        DefaultsMoveWords(120, true, none, 96);
+        // the words of level 1 alone: an ini at 0 whose level 2 keys hold the new defaults already
+        wchar_t both[600], cutOnly[600], none[600];
+        auto levelOne = [&](const wchar_t *rate, const wchar_t *cut, wchar_t *out) {
+            WriteIni(r);
+            WritePrivateProfileStringW(kIniSection, L"DefaultsMoved", nullptr, ini.c_str());
+            WritePrivateProfileStringW(kIniSection, L"PhysicsRate", rate, ini.c_str());
+            WritePrivateProfileStringW(kIniSection, L"CutInA", cut, ini.c_str());
+            DefaultsMoveWords(ini, 0, out, 600);
+        };
+        levelOne(L"60", L"0", both);
+        levelOne(L"120", L"0", cutOnly);
+        levelOne(L"120", L"1", none);
         const bool words = at120.physicsRate == 120 && at120.cutInA && !wcscmp(both, L"PhysicsRate 60 to 120 and CutInA 0 to 1") && !wcscmp(cutOnly, L"CutInA 0 to 1") && !*none;
         // a choice of 60 and the box off after the move, saved and read
         GaugeSettings chose = old;
@@ -12511,7 +12569,7 @@ static void PartIni()
         WriteIni(chose);
         GaugeSettings back;
         ReadIni(back);
-        const bool choiceHolds = back.physicsRate == 60 && !back.cutInA && RateAsked(ini) == 60 && IniInt(L"DefaultsMoved", 0, ini) == 1;
+        const bool choiceHolds = back.physicsRate == 60 && !back.cutInA && RateAsked(ini) == 60 && IniInt(L"DefaultsMoved", 0, ini) == 2;
         // a hand edit of 90 with the mark: 60, in the load and at the start
         WritePrivateProfileStringW(kIniSection, L"PhysicsRate", L"90", ini.c_str());
         GaugeSettings odd;
@@ -12523,13 +12581,66 @@ static void PartIni()
         const int startNone = RateAsked(ini);
         GaugeSettings fresh;
         ReadIni(fresh);
-        const bool noIni = startNone == 120 && fresh.physicsRate == 120 && fresh.cutInA && IniInt(L"DefaultsMoved", 0, ini) == 1 && RateAsked(ini) == 120;
+        const bool noIni = startNone == 120 && fresh.physicsRate == 120 && fresh.cutInA && IniInt(L"DefaultsMoved", 0, ini) == 2 && RateAsked(ini) == 120;
         if (!(oldMoved && markKept && words && choiceHolds && oddSixty && noIni))
             printf("     defaults moved: old %d marked %d words %d (%ls / %ls) choice %d odd %d none %d\n", oldMoved, markKept, words, both, cutOnly, choiceHolds, oddSixty, noIni);
         Check(oldMoved && markKept && words && choiceHolds && oddSixty && noIni,
               "defaults of 0.19.0: an ini without DefaultsMoved reads 120 and Mod engine in A on and holds them and the mark after the start; with the mark 60 and off stay; the line names "
               "only the keys that changed; a choice of 60 saved holds; a hand edit of 90 reads 60; no ini is 120 and gets the mark; the start and the load agree");
         WriteIni(r); // the ini as the tests below find it
+    }
+    // the user's figures as the defaults (BRIEF_drive_1115_findings.md, 211; the Reviewer's addendum of 04:05): level 2.
+    // An ini at 1 holding the old defaults moves once to the new ones and writes 2, its line naming the nine; one at 1
+    // holding the user's figures says nothing to move; one at 0 takes both levels; one at 2 keeps WheelCap 150; each
+    // default is the tool's figure's
+    {
+        GaugeSettings r;
+        SettingsDefaults(r);
+        const bool table = r.gearRatioPull == 100 && r.engineInertia == 100 && r.drivelineInertia == 100 && r.engineSoundCurve == 239 && r.airDrag == 300 && r.wheelCap == 110 &&
+                           r.diffLockBite == 100 && r.lowRangeSlip == 0 && r.heldGearSlip == kSlipEngineHeld && r.pushShare == 0 && r.lockSteerFront == 60 && r.lockSteerRear == 85 &&
+                           r.engineSoundTop == 100;
+        bool same = true;
+        for (int i = 0; i < kGtCount; i++) same = same && kGt[i].def == (float)*GtField(r, i);
+        auto at = [&](const wchar_t *mark, bool oldFigures) {
+            WriteIni(r);
+            WritePrivateProfileStringW(kIniSection, L"DefaultsMoved", mark, ini.c_str());
+            if (oldFigures)
+                for (const DefaultsMove &m : kDefaultsMoves)
+                {
+                    if (m.level != 2) continue;
+                    wchar_t v[16];
+                    _snwprintf_s(v, _TRUNCATE, L"%d", m.was);
+                    WritePrivateProfileStringW(kIniSection, m.key, v, ini.c_str());
+                }
+        };
+        at(L"1", true);
+        wchar_t words[600];
+        DefaultsMoveWords(ini, 1, words, 600);
+        GaugeSettings moved;
+        ReadIni(moved);
+        const bool oldMoves = !wcscmp(words, L"GearRatioPull 0 to 100, EngineInertia 0 to 100, DrivelineInertia 0 to 100, EngineSoundCurve 100 to 239, AirDrag 100 to 300, WheelCap 150 to 110, "
+                                             L"DiffLockBite 0 to 100, LowRangeSlip 100 to 0 and HeldGearSlip 2 to 0") &&
+                              moved.wheelCap == 110 && moved.heldGearSlip == kSlipEngineHeld && moved.engineSoundCurve == 239 && IniInt(L"WheelCap", 0, ini) == 110 &&
+                              IniInt(L"LowRangeSlip", 9, ini) == 0 && IniInt(L"DefaultsMoved", 0, ini) == 2;
+        at(L"1", false);
+        wchar_t userWords[600];
+        DefaultsMoveWords(ini, 1, userWords, 600);
+        const bool userNothing = !*userWords;
+        at(nullptr, true);
+        WritePrivateProfileStringW(kIniSection, L"PhysicsRate", L"60", ini.c_str());
+        GaugeSettings fromZero;
+        ReadIni(fromZero);
+        const bool zeroBoth = fromZero.physicsRate == 120 && fromZero.diffLockBite == 100 && fromZero.airDrag == 300 && IniInt(L"DefaultsMoved", 0, ini) == 2;
+        at(L"2", false);
+        WritePrivateProfileStringW(kIniSection, L"WheelCap", L"150", ini.c_str());
+        GaugeSettings kept;
+        ReadIni(kept);
+        const bool choice = kept.wheelCap == 150 && IniInt(L"WheelCap", 0, ini) == 150 && IniInt(L"DefaultsMoved", 0, ini) == 2;
+        if (!(table && same && oldMoves && userNothing && zeroBoth && choice)) printf("     defaults of 211: table %d same %d old %d (%ls) user %d zero %d choice %d\n", table, same, oldMoves, words, userNothing, zeroBoth, choice);
+        Check(table && same && oldMoves && userNothing && zeroBoth && choice,
+              "defaults of 211: the user's figures, each the tool's own default; an ini at 1 with the old ones moves once to them and writes 2, the line naming the nine; at 1 with the "
+              "user's figures nothing to move; at 0 both levels; at 2 a WheelCap of 150 holds");
+        WriteIni(r);
     }
     // the Crawl hold went with the torque cut (BRIEF_drivetrain_2_torque_cut.md): an old CrawlHold= is read as nothing and
     // dropped at the next write; EngineBrake round trips and is held to 0 to 30
@@ -12901,7 +13012,7 @@ static void PartIni()
                             c.hotDamage != d.hotDamage && c.hotDamageFrom != d.hotDamageFrom && c.coldDamage != d.coldDamage && c.overRevDamage != d.overRevDamage && c.stallDamage != d.stallDamage && c.clutchBurn != d.clutchBurn && c.clutchHeat != d.clutchHeat && c.springFront != d.springFront && c.dampingFront != d.dampingFront && c.extraTravel != d.extraTravel && c.frameFlex != d.frameFlex && c.twistRange != d.twistRange && c.toggleKey != d.toggleKey && strcmp(c.padToggle, d.padToggle) &&
                             c.demo != d.demo && c.checkers != d.checkers && c.probe != d.probe && c.keepLogs != d.keepLogs && c.soundVolume != d.soundVolume && c.hiddenWarnings != d.hiddenWarnings && c.warnFuel != d.warnFuel && c.warnEngine != d.warnEngine && c.warnGearbox != d.warnGearbox && c.warnCoolant != d.warnCoolant && c.soundsOnly != d.soundsOnly && c.dieselFlutter != d.dieselFlutter &&
                             c.oilGauge != d.oilGauge && c.boostProfile != d.boostProfile && c.oilWarmUpMinutes != d.oilWarmUpMinutes && c.oilWarnC != d.oilWarnC &&
-                            c.gearbox != d.gearbox && c.cutInA != d.cutInA && d.cutInA && c.physicsRate != d.physicsRate && c.gearRatioPull != d.gearRatioPull && d.gearRatioPull == 0 && c.engineInertia != d.engineInertia && c.drivelineInertia != d.drivelineInertia && d.engineInertia == 0 && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.diffLockBite != d.diffLockBite && c.quickWinch != d.quickWinch && c.lockSteerFront != d.lockSteerFront && c.lockSteerRear != d.lockSteerRear && c.engineSoundTop != d.engineSoundTop && c.engineSoundCurve != d.engineSoundCurve && c.heldGearSlip != d.heldGearSlip && c.lowRangeSlip != d.lowRangeSlip && c.diffType != d.diffType && c.physicsRate != d.physicsRate && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.airDrag != d.airDrag && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
+                            c.gearbox != d.gearbox && c.cutInA != d.cutInA && d.cutInA && c.physicsRate != d.physicsRate && c.gearRatioPull != d.gearRatioPull && d.gearRatioPull == 100 && c.engineInertia != d.engineInertia && c.drivelineInertia != d.drivelineInertia && d.engineInertia == 100 && c.requireClutch != d.requireClutch && c.requireGearHeld != d.requireGearHeld && c.skipNeutral != d.skipNeutral && c.downStaysForward != d.downStaysForward && c.walkSkipsLow != d.walkSkipsLow && c.positionsByGearbox != d.positionsByGearbox && c.ignoreShifter != d.ignoreShifter && c.backToA != d.backToA && c.gameGearDisplay != d.gameGearDisplay && c.input != d.input && c.powertrain != d.powertrain && c.roadLoad != d.roadLoad && c.wheelCap != d.wheelCap && c.pushShare != d.pushShare && c.diffLockBite != d.diffLockBite && c.quickWinch != d.quickWinch && c.lockSteerFront != d.lockSteerFront && c.lockSteerRear != d.lockSteerRear && c.engineSoundTop != d.engineSoundTop && c.engineSoundCurve != d.engineSoundCurve && c.heldGearSlip != d.heldGearSlip && c.lowRangeSlip != d.lowRangeSlip && c.diffType != d.diffType && c.physicsRate != d.physicsRate && c.engineBrake != d.engineBrake && c.modEngineSpeed != d.modEngineSpeed && c.engineSpeedTop != d.engineSpeedTop && c.roadCdA != d.roadCdA && c.airDrag != d.airDrag && c.engineShare != d.engineShare && c.creep != d.creep && c.creepManual != d.creepManual;
     WriteIni(c);
     ReadIni(b);
     Check(allChanged, "ini: the test changes every setting from its default");
@@ -13011,19 +13122,19 @@ static void PartIni()
             WriteIni(c);
         }
         {
-            // HeldGearSlip: All gears (2) by default; a kept 0 and 1 read back as 0 and 1; a number that is no choice is 2.
-            // Text is 0, as every number of the ini read from text is
+            // HeldGearSlip: Engine held (0) by default (part 211); a kept 1 and 2 read back as 1 and 2; a number that is no
+            // choice is 0. Text is 0, as every number of the ini read from text is
             GaugeSettings k;
-            bool slipKey = d.heldGearSlip == kSlipAllGears;
+            bool slipKey = d.heldGearSlip == kSlipEngineHeld;
             static const wchar_t *texts[6] = { L"0", L"1", L"2", L"3", L"-1", L"x" };
-            static const int reads[6] = { 0, 1, 2, 2, 2, 0 };
+            static const int reads[6] = { 0, 1, 2, 0, 0, 0 };
             for (int i = 0; i < 6; i++)
             {
                 WritePrivateProfileStringW(kIniSection, L"HeldGearSlip", texts[i], ini.c_str());
                 ReadIni(k);
                 slipKey = slipKey && k.heldGearSlip == reads[i];
             }
-            Check(slipKey, "ini: HeldGearSlip is 2 by default (All gears), a kept 0 and 1 are read as they are, a number out of range is 2");
+            Check(slipKey, "ini: HeldGearSlip is 0 by default (Engine held), a kept 1 and 2 are read as they are, a number out of range is 0");
             WriteIni(c);
         }
         Check(names && toggles && hidden, "the Off layout: the log has a name for every layout number; the toggle pressed twice in Off flips nothing and the strip picked after it shows; "
@@ -15504,7 +15615,7 @@ static void PartRest()
         const int count = GtItems(items);
         bool listed = count == 15 && NgTuneSetUp(block, sizeof block, "Gameplay", 1, items, count) && NgTuneRead(block, sizeof block, seen) && seen.count == 15 &&
                       !strcmp(seen.mod, "Gameplay") && !strcmp(seen.e[kGtCap].name, "Wheel cap") && seen.e[kGtCap].least == 110.0f && seen.e[kGtCap].most == 200.0f &&
-                      seen.e[kGtCap].def == 150.0f && seen.e[kGtLowSlip].def == 100.0f && seen.e[kGtBite].def == 0.0f && seen.e[kGtPush].most == 100.0f &&
+                      seen.e[kGtCap].def == 110.0f && seen.e[kGtLowSlip].def == 0.0f && seen.e[kGtBite].def == 100.0f && seen.e[kGtPush].most == 100.0f &&
                       !strcmp(seen.e[0].group, "Powertrain");
         GaugeSettings d, got;
         SettingsDefaults(d);
@@ -15530,7 +15641,7 @@ static void PartRest()
         TunePass(block, 1050);
         const bool flagged = InterlockedExchange(&g_setDirty, 0) == 1;
         SettingsGet(got);
-        const bool taken = flagged && got.airDrag == 50 && got.diffLockBite == 62 && got.wheelCap == 200 && shown(kGtBite) == 62.0f && shown(kGtCap) == 200.0f && got.lowRangeSlip == 100 && got.opacity == d.opacity;
+        const bool taken = flagged && got.airDrag == 50 && got.diffLockBite == 62 && got.wheelCap == 200 && shown(kGtBite) == 62.0f && shown(kGtCap) == 200.0f && got.lowRangeSlip == 0 && got.opacity == d.opacity;
         // no number: nothing changes and nothing is flagged
         want(kGtPush, nanf(""));
         TunePass(block, 1100);
@@ -15550,14 +15661,14 @@ static void PartRest()
         want(kGtLowSlip, 10.0f);
         TunePass(block, 1250);
         SettingsGet(got);
-        const bool off = greyed(0) && greyed(kGtLowSlip) && !strcmp(NgTuneAt(block, 0)->text, "Real engine is off.") && !g_setDirty && got.lowRangeSlip == 100;
+        const bool off = greyed(0) && greyed(kGtLowSlip) && !strcmp(NgTuneAt(block, 0)->text, "Real engine is off.") && !g_setDirty && got.lowRangeSlip == 0;
         // the held gear slip (BRIEF_held_gear_slip.md, M4): a slider of 0 to 2 in whole steps and a line under it. 1.4 asked is 1, 7 is 2
         d.powertrain = true;
         SettingsPublish(d);
         TunePass(block, 1260);
         NgTuneRead(block, sizeof block, seen);
         bool slipEntry = seen.e[kGtHeldSlip].kind == kNgTuneSlider && !strcmp(seen.e[kGtHeldSlip].name, "Held gear slip") && seen.e[kGtHeldSlip].least == 0.0f && seen.e[kGtHeldSlip].most == 2.0f &&
-                         seen.e[kGtHeldSlip].def == 2.0f && seen.e[kGtHeldLine].kind == kNgTuneLine && !strcmp(seen.e[kGtHeldLine].group, "Powertrain") && shown(kGtHeldSlip) == 2.0f && d.heldGearSlip == kSlipAllGears &&
+                         seen.e[kGtHeldSlip].def == 0.0f && seen.e[kGtHeldLine].kind == kNgTuneLine && !strcmp(seen.e[kGtHeldLine].group, "Powertrain") && shown(kGtHeldSlip) == 0.0f && d.heldGearSlip == kSlipEngineHeld &&
                          !strcmp(NgTuneAt(block, kGtHeldLine)->text, "no gear held") && strlen(items[kGtHeldLine].tip) < 128 && !strchr(items[kGtHeldLine].tip, '\'');
         want(kGtHeldSlip, 1.4f);
         TunePass(block, 1270);
@@ -15601,11 +15712,11 @@ static void PartRest()
         TunePass(block, 1295);
         slipEntry = slipEntry && greyed(kGtHeldSlip) && greyed(kGtHeldLine);
         steerEntry = steerEntry && greyed(kGtSteerFront) && greyed(kGtSteerRear) && greyed(kGtSteerLine);
-        // the engine sound's two figures (BRIEF_jobs_1114.md, part 171, must 6): sliders of 40 to 100 and of 100 to 300, both at 100 by default
+        // the engine sound's two figures (BRIEF_jobs_1114.md, part 171, must 6): sliders of 40 to 100 and of 100 to 300, at 100 and 239 by default (part 211)
         {
             bool soundEntry = seen.e[kGtSoundTop].kind == kNgTuneSlider && !strcmp(seen.e[kGtSoundTop].name, "Engine sound top") && seen.e[kGtSoundTop].least == 40.0f &&
                               seen.e[kGtSoundTop].most == 100.0f && seen.e[kGtSoundTop].def == 100.0f && !strcmp(seen.e[kGtSoundCurve].name, "Engine sound curve") &&
-                              seen.e[kGtSoundCurve].least == 100.0f && seen.e[kGtSoundCurve].most == 300.0f && seen.e[kGtSoundCurve].def == 100.0f &&
+                              seen.e[kGtSoundCurve].least == 100.0f && seen.e[kGtSoundCurve].most == 300.0f && seen.e[kGtSoundCurve].def == 239.0f &&
                               strlen(kGt[kGtSoundTop].tip) < 128 && strlen(kGt[kGtSoundCurve].tip) < 128 && !strchr(kGt[kGtSoundTop].tip, '\'') && !strchr(kGt[kGtSoundCurve].tip, '\'');
             d.powertrain = true;
             SettingsPublish(d);
@@ -15619,16 +15730,16 @@ static void PartRest()
             want(kGtSoundCurve, kGt[kGtSoundCurve].def);
             TunePass(block, 1298);
             SettingsGet(got);
-            soundEntry = soundEntry && got.engineSoundTop == 100 && got.engineSoundCurve == 100;
+            soundEntry = soundEntry && got.engineSoundTop == 100 && got.engineSoundCurve == 239;
             InterlockedExchange(&g_setDirty, 0);
             d.powertrain = false;
             SettingsPublish(d);
             TunePass(block, 1299);
             soundEntry = soundEntry && greyed(kGtSoundTop) && greyed(kGtSoundCurve);
-            Check(soundEntry, "tuning block: Engine sound top is a slider of 40 to 100 and Engine sound curve one of 100 to 300, both 100 by default; 12 asked is 40 and 180.4 is 180; a reset gives 100 and 100; greyed with Real engine off");
+            Check(soundEntry, "tuning block: Engine sound top is a slider of 40 to 100 and Engine sound curve one of 100 to 300, 100 and 239 by default; 12 asked is 40 and 180.4 is 180; a reset gives 100 and 239; greyed with Real engine off");
         }
         Check(steerEntry, "tuning block: Steering with front lock and with rear lock are sliders of 30 to 100 with 60 and 85, 12 asked is 30 and 70.4 is 70; the line says the share in force; greyed with Real engine off");
-        Check(slipEntry, "tuning block: Held gear slip is a slider of 0 to 2 in whole steps with a line under it, at 2 (All gears) by default and at a reset; 1.4 asked is 1 and 7 is 2; the line says the choice and the cap and fits; greyed with Real engine off");
+        Check(slipEntry, "tuning block: Held gear slip is a slider of 0 to 2 in whole steps with a line under it, at 0 (Engine held) by default and at a reset; 1.4 asked is 1 and 7 is 2; the line says the choice and the cap and fits; greyed with Real engine off");
         TunePass(nullptr, 1300); // no block: the pass does nothing
         if (!(listed && published && taken && nothing && reset && off)) printf("     listed %d published %d taken %d nothing %d reset %d off %d\n", listed, published, taken, nothing, reset, off);
         Check(listed && published && taken && nothing && reset && off,

@@ -1107,7 +1107,7 @@ static int SettingsPage(GaugeSettings &s, const GaugeView &view, PageState &st, 
     {
         PageLabel("Real engine", labelX);
         changed(ImGui::Checkbox("##powertrain", &s.powertrain));
-        PageTip("The truck pulls with the mod engine: its torque curve at the engine speed shown, and the mod automatic shifts by it. In a gear held by hand the truck pulls with the mod engine alone: no cut at the top, engine braking with the foot off. The engine holds the truck at the top speed of the gear. In L+ no driven wheel runs more than half again past it. L-, L and R get the room of L+ (Low range slip). The pedal is the fuel, as the game has it. Off by default.");
+        PageTip("The truck pulls with the mod engine: its torque curve at the engine speed shown, and the mod automatic shifts by it. In a gear held by hand the truck pulls with the mod engine alone: no cut at the top, engine braking with the foot off. The engine holds the truck at the top speed of the gear. In L+ no driven wheel runs more than a tenth past it (Wheel cap). L-, L and R stay near their own top (Low range slip at 0). The pedal is the fuel, as the game has it. Off by default.");
         if (s.powertrain)
         {
             PageLabel("Engine share", labelX);

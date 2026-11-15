@@ -28,14 +28,11 @@ SKIP = ('docs/manual/', 'test/', 'out/', 'deps/')
 # The names of the hidden extra, which is in no manual on purpose (BRIEF_checkers.md): its ini key, its binding, its row and its one
 # log line. They are left out of the lists. Nothing else is: a name not here is listed as before.
 HIDDEN_NAMES = {('Checkers', 'key'), ('BindCheckers', 'key'), ('Checkers', 'tab'),
-                # the tuning tool's Gear ratio pull (BRIEF_jobs_1114.md, 161, must 6): in no tab and in no manual until its default is set
-                ('GearRatioPull', 'key'),
                 # the drawn winch wire's sag, a probe (BRIEF_jobs_1114.md, 164, must 7): in no tab and in no manual
                 ('WinchSag', 'key'),
-                # the tuning tool's Engine inertia (BRIEF_drive_1114_findings.md, 180): in no tab and in no manual until its default is set
-                ('EngineInertia', 'key'),
-                # the tuning tool's Driveline inertia (BRIEF_drive_1114_findings.md, 185): the same, until its default is set
-                ('DrivelineInertia', 'key')}
+                # Gear ratio pull, Engine inertia and Driveline inertia have their defaults since 211 and are in the manuals'
+                # tuning tool section
+                }
 HIDDEN_LOG = ('checkers: ', 'gear ratio pull:', 'probe: gear ratio pull:', 'winch sag:', 'WINCH SAG:', 'engine inertia:', 'probe: engine inertia:', 'driveline inertia:', 'probe: driveline inertia:')
 
 

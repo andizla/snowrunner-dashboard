@@ -268,16 +268,16 @@ inline void SettingsDefaults(GaugeSettings &s)
     s.winchOutRate = 0.5f; // kWinchRateDefault (winch_out.h)
     s.cutInA = true; // on from 0.19.0 (200); it acts only with Gearbox 1 or 2, the Powertrain and an engine share above 0
     s.modEngineSpeed = true; // on by default (BRIEF_drivetrain_1_engine_speed.md); an explicit 0 stays 0
-    s.heldGearSlip = kSlipAllGears; // the user, 2026-11-14: All gears is how a held gear behaves; no row on the tab, a figure of the tuning tool (BRIEF_jobs_1114.md, part 170)
-    s.wheelCap = 150; // kCapDefault (BRIEF_drivetrain_2c_wheel_cap.md with M5)
+    s.heldGearSlip = kSlipEngineHeld; // the user, 2026-11-15 (part 211, over 170's All gears): Engine held; no row on the tab, a figure of the tuning tool
+    s.wheelCap = 110; // the user, 2026-11-15 (part 211); its least
     s.pushShare = 0; // the surplus taken back (BRIEF_chassis_push.md)
-    s.lowRangeSlip = 100; // L- and L with the slip room of L+ (BRIEF_low_range_pull.md, the lead)
-    s.diffLockBite = 0; // the game's own lock until the drive picks a default (BRIEF_diff_lock_bite.md)
+    s.lowRangeSlip = 0; // each wheel near the top of its gear, the user, 2026-11-15 (part 211)
+    s.diffLockBite = 100; // one shaft, the user, 2026-11-15 (part 211)
     s.quickWinch = 1; // kQuickWinchStanding (BRIEF_quick_winch.md)
-    s.engineInertia = 0; // the game's own, until the figure is set after a drive
-    s.drivelineInertia = 0; // the game's own (part 185)
-    s.gearRatioPull = 0; // the game's own, until the figure is set after a drive
-    s.engineSoundTop = 100, s.engineSoundCurve = 100; // today's sound, until the figures are set by ear
+    s.engineInertia = 100; // the user, 2026-11-15 (part 211)
+    s.drivelineInertia = 100; // the user, 2026-11-15 (part 211)
+    s.gearRatioPull = 100; // the user, 2026-11-15 (part 211)
+    s.engineSoundTop = 100, s.engineSoundCurve = 239; // set by ear, the user, 2026-11-15 (part 211)
     s.lockSteerFront = 60, s.lockSteerRear = 85; // kLockSteerFrontDefault, kLockSteerRearDefault (BRIEF_lock_steering.md, M7)
     s.diffType = 0; // Auto (BRIEF_diff_types.md)
     s.airBrakes = -1; // by the class
@@ -439,7 +439,7 @@ inline void SettingsClamp(GaugeSettings &s)
     s.winchSag = s.winchSag == 1 || s.winchSag == 2 ? s.winchSag : 0;
     s.winchOutRate = isfinite(s.winchOutRate) ? SettingsRange(s.winchOutRate, 0.1f, 2.0f) : 0.5f; // kWinchRateRange
     s.wheelCap = s.wheelCap < 110 ? 110 : s.wheelCap > 200 ? 200 : s.wheelCap;
-    s.heldGearSlip = s.heldGearSlip < 0 || s.heldGearSlip > 2 ? kSlipAllGears : s.heldGearSlip;
+    s.heldGearSlip = s.heldGearSlip < 0 || s.heldGearSlip > 2 ? kSlipEngineHeld : s.heldGearSlip;
     s.pushShare = s.pushShare < 0 ? 0 : s.pushShare > 100 ? 100 : s.pushShare;
     s.lowRangeSlip = s.lowRangeSlip < 0 ? 0 : s.lowRangeSlip > 100 ? 100 : s.lowRangeSlip;
     s.diffLockBite = s.diffLockBite < 0 ? 0 : s.diffLockBite > 100 ? 100 : s.diffLockBite;
