@@ -9153,12 +9153,131 @@ int main(int argc, char **argv)
             LoopState zs;
             LoopDrive(zetros, zs, hc, 0.0f, 20.0f, false, false);
             printf("     creep, stuck in first by hand: the pull built at %.2f s, the engine stalled at %.2f s; with the clutch held no stall (%.2f); a slow truck "
-                   "pulling away at %.2f m/s after 20 s, no stall (%.2f); at the gear's idle speed none (%.2f)\n",
-                   builtAt, ss.stallAt, cl.stallAt, zs.v, zs.stallAt, hs.stallAt);
+                   "pulling away at %.2f m/s after 20 s, no stall (%.2f), its rise over the lead at most %.3f of the idle speed (the look-ahead's weight from 0.05); at the gear's "
+                   "idle speed none (%.2f)\n",
+                   builtAt, ss.stallAt, cl.stallAt, zs.v, zs.stallAt, zs.creep.riseMost, hs.stallAt);
             Check(builtAt > 0.0f && ss.stallAt > builtAt + 0.5f && ss.stallAt < builtAt + 2.0f && cl.stallAt < 0.0f && zs.stallAt < 0.0f && zs.v > 0.5f * idleMs &&
                       hs.stallAt < 0.0f && as.stallAt < 0.0f,
                   "creep: stuck in a gear picked by hand the engine stalls about a second after the game's pull has built; not with the clutch held, in A, "
                   "at the gear's idle speed or for a slow truck pulling away");
+            // the creep holds, it does not switch (BRIEF_drive_1115_findings.md, 204, the Reviewer's addendum of 02:30). The
+            // plant: the truck's wheel speed v rises by the game's pull times a full-share acceleration against a steady
+            // resistance; the game's pull follows the share through a first-order lag; the wheels the creep reads carry
+            // white noise of 1.5 rad/s from end to end on an idle wheel speed of 0.93 rad/s (L), at 60 and at 120 passes
+            // a second. The old law (the pass's own speed, the governor's 0.6 s look-ahead unheld, its fall at once, the
+            // converter at once) is run beside it in the same plant and relays; the new one holds.
+            {
+                TruckRaw lt = Truck();
+                Drive(lt, 1, false, 0.0f, 0.0f);
+                GaugeScale lk = ck;
+                lk.idle = lk.redline * 0.93f / TruckGearTop(lt, 1); // the idle wheel speed of L in the drive's log
+                const float idleL = CreepIdleSpin(lt, lk);
+                struct Run { float relays, worstSwing, worstSpeed, backIn, held, mean; bool fastDrop; };
+                auto run = [&](int rate, bool converter, bool old, float stepAt) {
+                    const float dt = 1.0f / (float)rate, full = 1.0f * idleL, resist = 0.25f * full, lag = 0.3f;
+                    CreepModel cm = {};
+                    float v = 0.0f, pull = 0.0f, oldShare = 0.0f, oldRate = 0.0f, oldWas = -1.0f, lastHigh = -10.0f, winLo = 1.0f, winHi = 0.0f, vLo = 1e9f, vHi = -1e9f, winAt = 0.0f;
+                    float heldSum = 0.0f;
+                    int heldN = 0;
+                    unsigned seed = 12345u;
+                    Run out = { 0.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f, false };
+                    float meanSum = 0.0f;
+                    int meanN = 0;
+                    bool high = false;
+                    const float most = converter ? kCreepShare : kIdleShare * 1.0f, pass = 0.05f; // the mod's thread: 20 passes a second
+                    float share = 0.0f, nextPass = 0.0f;
+                    for (int i = 0; i < rate * 16; i++)
+                    {
+                        const float at = (float)i * dt;
+                        if (at + 1e-5f >= nextPass)
+                        {
+                        nextPass += pass;
+                        seed = seed * 1664525u + 1013904223u;
+                        const float noise = ((float)(seed >> 8) / 16777216.0f - 0.5f) * 1.5f;
+                        for (int w = 0; w < lt.wheels; w++) lt.spin[w] = v + noise;
+                        lt.speed = v * 0.45f;
+                        if (old)
+                        {
+                            // the old law, as 9084d63 had it
+                            const float raw = TruckDrivenSpin(lt);
+                            if (oldWas >= 0.0f) oldRate += ((raw - oldWas) / pass - oldRate) * (1.0f - expf(-pass / kIdleRateLag));
+                            oldWas = raw;
+                            const float target = CreepShare(lt, lk, converter, 1.0f, nullptr, oldRate * 0.6f, false);
+                            oldShare = converter || target <= oldShare ? target : fminf(target, oldShare + 0.3f * pass);
+                            share = oldShare;
+                        }
+                        else
+                        {
+                            bool stall = false;
+                            share = CreepStep(cm, lt, lk, converter, 1.0f, pass, nullptr, stall, 0.0f, false);
+                        }
+                        }
+                        // the plant
+                        pull += (share / most - pull) * (1.0f - expf(-dt / lag));
+                        const float load = resist + (stepAt > 0.0f && at >= stepAt ? 0.05f * full : 0.0f);
+                        v = fmaxf(0.0f, v + (pull * full - load) * dt);
+                        // the measures, from 3 s
+                        // a relay: from over half its most to under a tenth of it (the second answer, 02:49), counted after 3 s
+                        if (share > 0.5f * most) lastHigh = at, high = true;
+                        if (share < 0.1f * most && high)
+                        {
+                            if (at >= 3.0f) out.relays += 1.0f;
+                            high = false;
+                            if (at - lastHigh < 0.5f && at >= 3.0f) out.fastDrop = true;
+                        }
+                        if (at >= 3.0f && (stepAt <= 0.0f || at < stepAt)) meanSum += v, meanN++;
+                        if (at >= 3.0f && (stepAt <= 0.0f || at < stepAt))
+                        {
+                            winLo = fminf(winLo, share), winHi = fmaxf(winHi, share), vLo = fminf(vLo, v), vHi = fmaxf(vHi, v);
+                            if (at - winAt >= 1.0f)
+                            {
+                                out.worstSwing = fmaxf(out.worstSwing, winHi - winLo), out.worstSpeed = fmaxf(out.worstSpeed, vHi - vLo);
+                                winLo = 1.0f, winHi = 0.0f, vLo = 1e9f, vHi = -1e9f, winAt = at;
+                            }
+                            if (at >= stepAt - 2.0f) heldSum += v, heldN++;
+                        }
+                        else if (at < 3.0f) winAt = at;
+                        if (stepAt > 0.0f && at >= stepAt && out.backIn < 0.0f && heldN > 0)
+                        {
+                            const float held = heldSum / (float)heldN;
+                            out.held = held;
+                            if (at > stepAt + 0.2f && fabsf(v - held) <= 0.2f * held) out.backIn = at - stepAt;
+                        }
+                    }
+                    out.relays /= 13.0f; // a second, from 3 s to the end
+                    out.mean = meanN ? meanSum / (float)meanN / idleL : 0.0f;
+                    out.worstSwing /= most;
+                    out.worstSpeed /= idleL;
+                    return out;
+                };
+                bool holds = true, oldFails = true;
+                char creepLine[900] = "";
+                int at = 0;
+                for (int rate : { 60, 120 })
+                    for (bool converter : { false, true })
+                    {
+                        const Run now = run(rate, converter, false, 0.0f), was = run(rate, converter, true, 0.0f), grade = run(rate, converter, false, 12.0f);
+                        holds = holds && now.mean >= 0.5f && now.relays <= 1.0f && now.worstSpeed < 0.3f && grade.backIn >= 0.0f && grade.backIn <= 1.5f; // the share's swing printed
+                        oldFails = oldFails && (was.mean < 0.5f || was.relays > 1.0f);
+                        at += snprintf(creepLine + at, sizeof creepLine - (size_t)at, "%s%d %s: mean %.2f of idle, %.2f relays a second, swing %.2f, share swing %.2f, grade back in %.2f s (old: mean %.2f, %.1f relays, swing %.2f)",
+                                       at ? "; " : "", rate, converter ? "converter" : "governor", now.mean, now.relays, now.worstSpeed, now.worstSwing, grade.backIn, was.mean, was.relays, was.worstSpeed);
+                        if (at >= (int)sizeof creepLine) at = (int)sizeof creepLine - 1;
+                    }
+                // a brake past kCreepBrake gives 0 on the same pass
+                CreepModel bm = {};
+                bool bs = false;
+                for (int w = 0; w < lt.wheels; w++) lt.spin[w] = 0.0f;
+                lt.speed = 0.0f;
+                for (int i = 0; i < 40; i++) CreepStep(bm, lt, lk, true, 1.0f, 0.05f, nullptr, bs, 0.0f, false);
+                const float givenBefore = bm.given;
+                lt.throttle = 0.5f; // the brake (TruckBrake: a throttle over 0 in a forward gear)
+                const float brakedNow = CreepStep(bm, lt, lk, true, 1.0f, 0.05f, nullptr, bs, 0.0f, false);
+                lt.throttle = 0.0f;
+                printf("     creep on noisy wheels: %s; braked %.3f from %.3f\n", creepLine, brakedNow, givenBefore);
+                Check(holds && oldFails && brakedNow == 0.0f && givenBefore > 0.0f,
+                      "creep holds on wheels with 1.5 rad/s of noise on 0.93 rad/s idle, at 60 and at 120, both branches: the truck creeps at half the idle speed or more, at most one relay "
+                      "a second, its speed within 0.3 of the idle speed each second, back within 20 percent 1.5 s after a grade; the old law stands or relays; the brake gives 0 at once");
+            }
             // the stall in the model: once, the creep off until the engine is off
             {
                 CreepModel cm = {};

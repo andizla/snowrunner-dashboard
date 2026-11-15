@@ -767,9 +767,28 @@ ahead and the paced rise keep it from outrunning the game's pull, which answers 
 truck. 0.15 is a first figure, for the test build's logs to set. On the models test's heavy truck (the game's pull at a standstill
 taken as 0.3 of its curve's) the creep holds 1.08 m/s in A and 1.49 m/s in first by hand, the gear's idle speed 1.49 m/s (the holding part below), the
 needle at idle both times. In L- with the game's pull half a second late it settles at 1.00 of the idle speed, and with the wheels
-free to spin at 1.00, without an overshoot (without the look ahead 2.1 times the idle speed, cycling). Gauges.log has a line a quarter second after each creep begins and one as it ends, four a second with
+free to spin at 1.00, without an overshoot (without the look ahead 2.1 times the idle speed, cycling). Gauges.log has a line a second after each creep begins and one as it ends, one a second with
 Probe=1: the share and what it went by, the stub's calls for the truck and in all, the game's pull, the factor, its engine speed
-value (0.19 at idle) and its fuel rate.</p>
+value (0.19 at idle) and its fuel rate, then "over the second" the share's least and most since the last line and the wheels smoothed beside the pass's own.</p>
+<p><b>The creep holds, it does not switch</b> (BRIEF_drive_1115_findings.md, 204, with the Reviewer's answers of 02:30 to 03:06). In a low gear the idle wheel
+speed (0.93 rad/s in L) is narrower than the pass-to-pass spread of the driven wheels (1 to 1.5 rad/s), and the share went from the speed of that pass
+straight to full or nothing, on and off about four times a second. Now:</p>
+<ul><li><b>Two smoothed speeds</b>, each the driven mean through 1 − exp(−dt/T), the same in seconds at 60 and at 120: T 0.05 s
+(<code>kCreepSmoothLine</code>) for the line, the converter's ratio, the look ahead's rate and the fall; T 0.2 s (<code>kCreepSmooth</code>) for the
+stall's tests and the look ahead's weight. The holding part and its band read the pass's own speed, as before: their 2.5 s pace averages the noise.</li>
+<li><b>The pace:</b> the share moves at most its most over 0.5 s (<code>kCreepPace</code>), rising and falling, in both branches. At once, as before:
+the brake, the handbrake, the engine off or starting, the stall, the quiet after a shift and the pedal's factor.</li>
+<li><b>The fall at once:</b> where the line's smoothed speed with its own lag put back (+ its rate × 0.05 s) is over the gear's idle speed, the
+share goes to 0 on that pass.</li>
+<li><b>The look ahead:</b> 0.6 s of the rate, held to half the idle speed either way (<code>kIdleAheadMost</code>), times a weight: the larger of a
+fade by the 0.2 s speed (0 under 0.4 of the idle speed, whole over 0.8; <code>kAheadFrom</code>, <code>kAheadFull</code>) and a fade by the rise (0 where
+the rate over the lead is under 0.05 of the idle speed, whole over 0.15, a rise only; <code>kAheadRiseFrom</code>, <code>kAheadRiseFull</code>). So a heavy
+truck pulling away gets the whole line, and wheels free to spin get the look ahead from their first passes.</li></ul>
+<p>The models test's loop: wheels read with 1.5 rad/s of noise from end to end on 0.93 rad/s, the creep on the mod's 20 passes a second, at 60 and
+at 120. The truck creeps at 0.59 to 0.62 of the idle speed, at most 0.62 relays a second (from over half the most to under a tenth), its speed
+within 0.18 of the idle speed each second, back within 20 percent of a grade in 1.2 s. The law before it holds the governor's truck at 0.00 and
+the converter's relays 3.5 times a second. The low range free to spin is at most 1.21 of the idle speed. The share's own swing within a
+second stays near 0.9 of its most: the noise drives it, and the game's lag filters it out of the truck's speed.</p>
 <p>Stuck in a position of the mod's own gearbox picked by hand (Gearbox=2) the engine stalls (<code>CreepStep</code>), through the
 stall seconds' ramp of RequireClutch's stall. Never on the automatic (Gearbox 0 or 1, R and the low range on the game's shifter too)
 or in A, and at every level no stuck time counts within a second of a gear change (the author's drive of BF57872B: "on auto, the

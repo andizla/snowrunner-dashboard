@@ -6176,7 +6176,8 @@ struct TruckWatch
     bool kicksKnown;            // kicksSeen holds GearboxKicks as of a pass
     long kicksSeen;
     bool creeping;              // the creep's share was above 0 on the last pass (models.h, CreepShare)
-    float creepFor;             // seconds until its next line in the log
+    float creepFor;             // seconds until its next line in the log (one a second, 204)
+    float creepLeast, creepMost; // the share's least and most since the last line
     int creepLines;             // its lines since it began
     long creepHits, creepCalls; // the hook's counts at its last line
     CreepModel creep;           // the creep's paced share and its stall (CreepStep)
@@ -9822,19 +9823,24 @@ static bool TruckPass(TruckWatch &w, const TruckMemory &m, const GaugeSettings &
             CreepCounts(hits, calls);
             if (creeping && !w.creeping)
             {
-                w.creepFor = 0.25f;
+                w.creepFor = 1.0f;
                 w.creepLines = 0;
                 w.creepHits = hits;
                 w.creepCalls = calls;
+                w.creepLeast = w.creepMost = share;
             }
+            w.creepLeast = fminf(w.creepLeast, share), w.creepMost = fmaxf(w.creepMost, share);
             w.creepFor -= dt;
             const bool line = creeping ? w.creepFor <= 0.0f && (probe || w.creepLines == 0) : w.creeping;
             if (line)
             {
                 char text[512];
                 CreepProbeText(raw, share, creepCase, hits - w.creepHits, calls - w.creepCalls, text, sizeof text, &w.creep);
-                Log(L"%S%s", text, creeping ? L"" : L" (it ends)");
-                w.creepFor = 0.25f;
+                // the share's least and most over the second, and the smoothed wheels beside the pass's own (204)
+                Log(L"%S | over the second %.3f to %.3f, the wheels smoothed %.2f rad/s (this pass %.2f)%s", text, w.creepLeast, w.creepMost, w.creep.smooth, TruckDrivenSpin(raw),
+                    creeping ? L"" : L" (it ends)");
+                w.creepFor = 1.0f;
+                w.creepLeast = w.creepMost = share;
                 w.creepLines++;
                 w.creepHits = hits;
                 w.creepCalls = calls;

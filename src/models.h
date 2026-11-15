@@ -3441,9 +3441,27 @@ inline void ClutchProbeText(const ClutchModel &m, float travel, char *out, size_
 static const float kCreepShare = 0.15f; // the throttle through the converter at a standstill: a first figure, for the test build's logs to set
 static const float kIdleShare = 0.15f;  // the idle governor's most in a gear picked by hand, at a standstill in first
 static const float kCreepBrake = 0.02f; // a brake past this stands the truck
-static const float kIdleRise = 0.3f;    // the governor's share rises at most this much a second; it falls at once
+// The creep holds, it does not switch (BRIEF_drive_1115_findings.md, 204, the Reviewer's addendum of 02:30): in a low
+// gear the idle wheel speed (0.93 rad/s in L) is narrower than the pass-to-pass noise of the driven wheels (1 to 1.5
+// rad/s), and the share went from the speed of that pass straight to full or nothing, a relay a few times a second.
+// So the creep reads the driven mean through a first-order filter of kCreepSmooth seconds (1 - exp(-dt / T), the same
+// at 60 and at 120); its share moves at most its most over kCreepPace, falling as rising, in both branches; and the
+// governor looks kIdleLead ahead on the smoothed speed's rise, never more than half the idle speed either way. What
+// acts at once is as before: the brake, the handbrake, the engine off or starting, the stall, the quiet after a
+// shift and the pedal's factor.
+static const float kCreepSmooth = 0.2f;  // seconds: the driven mean's filter for the stall's tests
+static const float kCreepSmoothLine = 0.05f; // seconds: the same for the line, the converter's ratio and the fall (the third answer, 02:55, option 2); the look-ahead's rate too
+static const float kCreepPace = 0.5f;    // seconds: the share moves at most its most in this time, up or down
+static const float kIdleRise = kIdleShare / kCreepPace; // the governor's pace at its most in first, a second (0.3, as before)
 static const float kIdleLead = 0.6f;    // seconds ahead the governor looks at the wheels rising, as the game's pull answers late
 static const float kIdleRateLag = 0.2f; // seconds the wheels' rise is smoothed over for it
+static const float kIdleAheadMost = 0.5f; // of the gear's idle speed: the look-ahead is held to this either way
+// The look-ahead's weight by the 0.2 s smoothed speed (the Reviewer's fourth answer, 03:01): 0 under kAheadFrom of the
+// gear's idle speed, whole over kAheadFull, a straight line between, so a heavy truck pulling away gets the whole line
+static const float kAheadFrom = 0.4f, kAheadFull = 0.8f;
+// and by the rise (the fifth answer, 03:03): the larger of the two fades, the rise's 0 where its rate times kIdleLead
+// is under kAheadRiseFrom of the idle speed, whole over kAheadRiseFull, so free wheels spinning up get it at once
+static const float kAheadRiseFrom = 0.05f, kAheadRiseFull = 0.15f; // the sixth answer, 03:06
 
 // What the creep went by, for the probe.
 struct CreepCase
@@ -3461,12 +3479,18 @@ struct CreepCase
 // speed, where they will be by the time the game answers (CreepStep); calm: through the converter in R or the low
 // range on the game's shifter, where the converter's most goes by the gear's top over first's as the governor's does
 // (the game multiplies the throttle by a large gear torque there; the low range cycled on 28 October).
-inline float CreepShare(const TruckRaw &t, const GaugeScale &k, bool converter, float grip, CreepCase *out = nullptr, float ahead = 0.0f, bool calm = false)
+// spinIn: the driven wheels' speed to go by (CreepStep's smoothed one), no number: the pass's own (TruckDrivenSpin).
+// most, where given: the share's most in this case before the pedal (CreepStep paces by it), 0 where it gives none.
+// unpedalled, where given: the share before the pedal's factor, which acts at once.
+inline float CreepShare(const TruckRaw &t, const GaugeScale &k, bool converter, float grip, CreepCase *out = nullptr, float ahead = 0.0f, bool calm = false,
+                        float spinIn = NAN, float *most = nullptr, float *unpedalled = nullptr)
 {
     CreepCase c = { converter, false, 0.0f, 0.0f, converter ? 0.0f : grip, 1.0f };
     if (out) *out = c;
+    if (most) *most = 0.0f;
+    if (unpedalled) *unpedalled = 0.0f;
     const int gear = t.gearEngaged;
-    const float top = gear ? TruckGearTop(t, gear) : 0.0f, spin = TruckDrivenSpin(t), range = k.redline - k.idle;
+    const float top = gear ? TruckGearTop(t, gear) : 0.0f, spin = isfinite(spinIn) ? spinIn : TruckDrivenSpin(t), range = k.redline - k.idle;
     if (!TruckEngineOn(t) || (t.startTimer > 0.0f && !(t.flags & 2)) || !(top > 0.0f) || !isfinite(spin) || !(range > 0.0f)) return 0.0f;
     if (t.handbrake || TruckBrake(t) > kCreepBrake) return 0.0f;
     c.input = spin / top * k.redline;
@@ -3482,16 +3506,27 @@ inline float CreepShare(const TruckRaw &t, const GaugeScale &k, bool converter, 
         // the converter at idle as GearboxStep has it open: the engine at idle, or at its slip over the gearbox's input
         const float rpm = fmaxf(c.input * (1.0f + kConverterSlip), k.idle);
         c.ratio = c.input / rpm;
-        share = kCreepShare * (calm ? c.low : 1.0f) * (1.0f - SettingsRange(c.ratio / kCouplingPoint, 0.0f, 1.0f));
+        const float top2 = kCreepShare * (calm ? c.low : 1.0f);
+        if (most) *most = top2;
+        share = top2 * (1.0f - SettingsRange(c.ratio / kCouplingPoint, 0.0f, 1.0f));
     }
     else
     {
-        const float most = kIdleShare * c.low;
-        share = most * SettingsRange(1.0f - (spin + fmaxf(ahead, 0.0f)) / c.idleSpin, 0.0f, 1.0f) * SettingsRange(grip, 0.0f, 1.0f);
+        const float top2 = kIdleShare * c.low;
+        if (most) *most = top2;
+        share = top2 * SettingsRange(1.0f - (spin + fmaxf(ahead, 0.0f)) / c.idleSpin, 0.0f, 1.0f) * SettingsRange(grip, 0.0f, 1.0f);
     }
     if (out) *out = c;
+    if (unpedalled) *unpedalled = isfinite(share) ? SettingsRange(share, 0.0f, 1.0f) : 0.0f;
     share *= 1.0f - TruckPedal(t);
     return isfinite(share) ? SettingsRange(share, 0.0f, 1.0f) : 0.0f;
+}
+
+// The wheels' speed in rad/s at the engaged gear's idle speed, 0 where it does not read (CreepShare's idleSpin)
+inline float CreepIdleSpin(const TruckRaw &t, const GaugeScale &k)
+{
+    const float top = t.gearEngaged ? TruckGearTop(t, t.gearEngaged) : 0.0f, v = k.idle / k.redline * top;
+    return isfinite(v) && v > 0.0f ? v : 0.0f;
 }
 
 // A stuck truck in a gear picked by hand stalls, as a lugged engine dies in about a second (the author's drive, 28
@@ -3573,14 +3608,20 @@ inline bool ShiftStageStep(ShiftStage &s, int engaged, float dt)
 
 struct CreepModel
 {
-    float share;     // the line's share on the last pass, paced on the way up
+    float share;     // the line's share on the last pass before the pedal's factor, paced both ways (kCreepPace)
+    float smooth;    // the driven wheels' speed through kCreepSmooth, rad/s; what the stall's tests go by
+    float smoothLine; // the same through kCreepSmoothLine; what the line goes by
+    bool smoothHave; // smooth holds a pass's
+    float riseMost;  // the most the rise reached over kIdleLead, of the idle speed (for the tests and the probe)
     float hold;      // the holding part, 0 to its most
     float holdMost;  // its most on the last pass, the low range's share in it
     bool armed;      // the holding part is armed: the truck rolls in this gear
     int gear;        // the gear it armed in
     float given;     // what went to the hook on the last pass
     float spinWas;   // the driven wheels' speed on the last pass, below 0 none yet
-    float rate;      // how fast they rise, rad/s a second, smoothed over kIdleRateLag
+    float rate;      // how fast the smoothed speed rises, rad/s a second, smoothed over kIdleRateLag
+    float rateOwn;   // the same of the pass's own speed, for the holding part (as before 204)
+    float rawWas;    // the pass's own speed on the last pass, below 0 none yet
     float pullRef;   // the game's pull at the start of the window
     float spinRef;   // the driven wheels' speed at the start of the window
     float window;    // seconds into the window
@@ -3598,8 +3639,8 @@ struct CreepModel
     bool mayStall;   // a stall may come here (CreepStep's mayStall on the last pass)
 };
 
-// One pass of dt seconds: the share to hand the hook, the line's rise paced by kIdleRise, and the governor going by
-// where the wheels will be kIdleLead ahead while they rise: on soft ground they spin up freely past the idle speed
+// One pass of dt seconds: the share to hand the hook, the line paced both ways by kCreepPace on the smoothed speed
+// (204), and the governor going by where the wheels will be kIdleLead ahead while they rise: on soft ground they spin up freely past the idle speed
 // within the game's lag and drop back. holdMost: the holding part's most, the engine's full fuel at idle (1 with the
 // engine handed to the game, else its curve's torque at idle). mayStall: a stall may come here (the mod's own gearbox
 // in a position picked by hand); where not, no stuck time counts. calm: through the converter in R or the low range
@@ -3627,14 +3668,41 @@ inline float CreepStep(CreepModel &m, const TruckRaw &t, const GaugeScale &k, bo
     }
     else m.sinceShift += dt;
     m.mayStall = mayStall;
-    const float spin = TruckDrivenSpin(t);
-    if (dt > 0.0f && isfinite(spin))
+    const float raw = TruckDrivenSpin(t);
+    if (isfinite(raw))
     {
-        if (m.spinWas > 0.0f || m.rate != 0.0f) m.rate += ((spin - m.spinWas) / dt - m.rate) * (1.0f - expf(-dt / kIdleRateLag));
-        m.spinWas = spin;
+        // the smoothed speeds (204): kCreepSmoothLine for the line, the converter's ratio, the look-ahead's rate and
+        // the fall; kCreepSmooth for the stall's tests; the holding part reads the pass's own (own, below)
+        if (!m.smoothHave) m.smooth = m.smoothLine = raw, m.smoothHave = true;
+        else if (dt > 0.0f)
+        {
+            m.smooth += (raw - m.smooth) * (1.0f - expf(-dt / kCreepSmooth));
+            m.smoothLine += (raw - m.smoothLine) * (1.0f - expf(-dt / kCreepSmoothLine));
+        }
+    }
+    const float spin = m.smoothHave ? m.smooth : raw, lineSpin = m.smoothHave ? m.smoothLine : raw;
+    // the look-ahead's rate from the line's smoothed speed (kCreepSmoothLine), with its 0.2 s on top
+    if (dt > 0.0f && isfinite(lineSpin))
+    {
+        if (m.spinWas > 0.0f || m.rate != 0.0f) m.rate += ((lineSpin - m.spinWas) / dt - m.rate) * (1.0f - expf(-dt / kIdleRateLag));
+        m.spinWas = lineSpin;
+    }
+    if (dt > 0.0f && isfinite(raw))
+    {
+        if (m.rawWas > 0.0f || m.rateOwn != 0.0f) m.rateOwn += ((raw - m.rawWas) / dt - m.rateOwn) * (1.0f - expf(-dt / kIdleRateLag));
+        m.rawWas = raw;
     }
     CreepCase c;
-    const float target = CreepShare(t, k, converter, grip, &c, m.rate * kIdleLead, calm);
+    // the look-ahead held to half the idle speed either way, so no reading of the rate alone takes the share from full to 0
+    const float idleGuess = CreepIdleSpin(t, k);
+    const float bySpeed = idleGuess > 0.0f ? SettingsRange((spin / idleGuess - kAheadFrom) / (kAheadFull - kAheadFrom), 0.0f, 1.0f) : 0.0f;
+    const float byRise = idleGuess > 0.0f ? SettingsRange((fmaxf(m.rate, 0.0f) * kIdleLead / idleGuess - kAheadRiseFrom) / (kAheadRiseFull - kAheadRiseFrom), 0.0f, 1.0f) : 0.0f;
+    const float aheadWeight = fmaxf(bySpeed, byRise);
+    if (idleGuess > 0.0f) m.riseMost = fmaxf(m.riseMost, fmaxf(m.rate, 0.0f) * kIdleLead / idleGuess);
+    const float aheadLine = idleGuess > 0.0f ? aheadWeight * SettingsRange(m.rate * kIdleLead, -kIdleAheadMost * idleGuess, kIdleAheadMost * idleGuess) : 0.0f;
+    float most = 0.0f, line = 0.0f;
+    const float target = CreepShare(t, k, converter, grip, &c, aheadLine, calm, lineSpin, &most, &line);
+    (void)target;
     if (out) *out = c;
     if (m.stalled)
     {
@@ -3650,25 +3718,38 @@ inline float CreepStep(CreepModel &m, const TruckRaw &t, const GaugeScale &k, bo
         m.armed = false;
         return 0.0f;
     }
-    m.share = (converter && !calm) || target <= m.share ? target : fminf(target, m.share + kIdleRise * dt);
+    // paced both ways at its most over kCreepPace (204); off the brake, the engine running and in gear (live), else at once
+    if (!c.live) m.share = 0.0f;
+    else
+    {
+        const float step = most / kCreepPace * dt;
+        // where the line's smoothed speed with its own lag put back (+ its rate x kCreepSmoothLine; no look-ahead) is
+        // over the gear's idle speed the share goes at once (the Reviewer's answers of 02:49 and 02:55)
+        const bool overIdle = c.idleSpin > 0.0f && lineSpin + m.rate * kCreepSmoothLine > c.idleSpin;
+        m.share = overIdle ? 0.0f : line > m.share ? fminf(line, m.share + step) : fmaxf(line, m.share - step);
+    }
+    const float pedalled = m.share * (1.0f - TruckPedal(t)); // the pedal's factor at once
     // the holding part: armed while the truck rolls in this gear by hand with the clutch let up, empty otherwise
     const bool byHand = !converter && c.live && grip >= kGripUp;
     m.holdMost = SettingsRange(holdMost, 0.0f, 1.0f) * c.low * (1.0f - TruckPedal(t));
     // (a truck lugged down through a quarter of the idle speed keeps its case once the stall's second has begun)
-    if (!byHand || t.gearEngaged != m.gear || (spin < kCreepStuck * c.idleSpin && !(m.armed && m.stuck > 0.0f)) || !(m.holdMost > 0.0f))
+    // the holding part and its band read the pass's own speed, as before (204, the Reviewer's answer of 02:46): their
+    // 2.5 s pace averages the noise, and they arm only over kHoldArm of the idle speed
+    const float own = isfinite(raw) ? raw : spin;
+    if (!byHand || t.gearEngaged != m.gear || (own < kCreepStuck * c.idleSpin && !(m.armed && m.stuck > 0.0f)) || !(m.holdMost > 0.0f))
     {
         m.armed = false;
         m.hold = 0.0f;
     }
     // armed only between kHoldArm and the band over the idle speed, and empty over it: it never pushes a truck that
     // rolls faster than its gear idles (it held 0.12 to 0.18 at 7 times L-'s idle speed, the engine at 6121 rpm)
-    const bool over = spin > (1.0f + kHoldBand) * c.idleSpin;
+    const bool over = own > (1.0f + kHoldBand) * c.idleSpin;
     if (over)
     {
         m.armed = false;
         m.hold = 0.0f;
     }
-    if (byHand && !m.armed && m.holdMost > 0.0f && spin >= kHoldArm * c.idleSpin && !over) m.armed = true;
+    if (byHand && !m.armed && m.holdMost > 0.0f && own >= kHoldArm * c.idleSpin && !over) m.armed = true;
     m.gear = t.gearEngaged;
     if (m.armed)
     {
@@ -3679,14 +3760,14 @@ inline float CreepStep(CreepModel &m, const TruckRaw &t, const GaugeScale &k, bo
         // idle speed with the band first gear's in wheel speed)
         // Within kHoldStill of the idle speed it trims at a tenth of its pace (at the whole pace there it hunts about the
         // idle speed through the game's lags; still there, the speed drifts across the band and back over half a minute)
-        const float ahead = spin + m.rate * kHoldLead, low = fmaxf(c.low, 0.1f), off = (c.idleSpin - ahead) / c.idleSpin;
+        const float ahead = own + m.rateOwn * kHoldLead, low = fmaxf(c.low, 0.1f), off = (c.idleSpin - ahead) / c.idleSpin;
         const float beyond = off > kHoldStill ? off - kHoldStill : off < -kHoldStill ? off + kHoldStill : 0.0f;
         const float pull = SettingsRange((beyond / kHoldBand + 0.1f * SettingsRange(off / kHoldStill, -1.0f, 1.0f)) * low * low, -1.0f, 1.0f);
         m.hold = SettingsRange(m.hold + pull * m.holdMost / kHoldTime * dt, 0.0f, m.holdMost);
     }
-    m.given = m.armed ? fminf(m.holdMost, m.share + m.hold) : m.share;
+    m.given = m.armed ? fminf(m.holdMost, pedalled + m.hold) : pedalled;
     const bool holdFull = m.armed && m.hold >= 0.99f * m.holdMost;
-    const bool governing = !converter && grip >= kGripUp && (target > 0.0f || m.armed);
+    const bool governing = !converter && grip >= kGripUp && (m.share > 0.0f || m.armed);
     const float pull = byGiven ? m.given : t.actionB4;
     if (!governing)
     {
