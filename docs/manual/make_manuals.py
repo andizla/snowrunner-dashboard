@@ -107,7 +107,7 @@ GAUGES = f'''
 <ul><li><code>Gauges.log</code> in <code>Sources\\Bin</code> says what the mod found and did. The newest 20 earlier starts' logs are kept in <code>Gauges\\logs</code> (<code>KeepLogs</code>).</li>
 <li>When another program holds the game's swap chain in a way the mod cannot draw on, <code>Gauges.log</code> names that program.</li>
 <li>The game crashes without ReShade with the RivaTuner or Discord overlay or with multiple monitors: put ReShade in from the release (Install, step 2). With ReShade the same PCs ran fine.</li>
-<li>Support, discussion and ideas: the author's channel on EnthusiastRunner's Discord, <a href="https://discord.com/invite/MssDb2Pvcj" target="_blank" rel="noopener noreferrer">discord.com/invite/MssDb2Pvcj</a>, or an issue on GitHub for a bug report; <code>GrabDumps.bat</code> from the zip gathers the logs, the ini files and the crash dump into one zip for it.</li>
+<li>Support, discussion and ideas: the Next Gen Discord, <a href="https://discord.gg/ARVYnkdpzK" target="_blank" rel="noopener noreferrer">discord.gg/ARVYnkdpzK</a>, or an issue on GitHub for a bug report; <code>GrabDumps.bat</code> from the zip gathers the logs, the ini files and the crash dump into one zip for it.</li>
 <li>To remove the mod, delete <code>Gauges.asi</code>, <code>Gauges.ini</code>, <code>Gauges.log</code> and the <code>Gauges</code> folder from <code>Sources\\Bin</code>. <code>NextGen.ini</code> and <code>version.dll</code> go too when no other Next Gen mod is left. ReShade from the release goes the same way when nothing else uses it: <code>dxgi.dll</code>, <code>ReShade.ini</code> and <code>ReShade.log</code>.</li>
 <li>Leave <code>Damage</code> off in co-op; it has not been tried there.</li></ul>
 

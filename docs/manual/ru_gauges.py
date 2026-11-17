@@ -207,7 +207,7 @@ def part1():
 <li>Если другая программа держит цепочку буферов (swap chain) игры так, что мод не может на ней рисовать, <code>Gauges.log</code>
 называет эту программу.</li>
 <li>Без ReShade игра вылетает с оверлеем RivaTuner или Discord или с несколькими мониторами: поставьте ReShade из комплекта (шаг 2 установки). С ReShade на тех же ПК всё работало.</li>
-<li>Поддержка, обсуждение и идеи: канал автора на Discord-сервере EnthusiastRunner, <a href="https://discord.com/invite/MssDb2Pvcj" target="_blank" rel="noopener noreferrer">discord.com/invite/MssDb2Pvcj</a>, или issue на GitHub для сообщения об ошибке; <code>GrabDumps.bat</code> из архива собирает логи, ini-файлы и дамп вылета в один архив для него.</li>
+<li>Поддержка, обсуждение и идеи: Discord Next Gen, <a href="https://discord.gg/ARVYnkdpzK" target="_blank" rel="noopener noreferrer">discord.gg/ARVYnkdpzK</a>, или issue на GitHub для сообщения об ошибке; <code>GrabDumps.bat</code> из архива собирает логи, ini-файлы и дамп вылета в один архив для него.</li>
 <li>Чтобы удалить мод, удалите <code>Gauges.asi</code>, <code>Gauges.ini</code>, <code>Gauges.log</code> и папку <code>Gauges</code>
 из <code>Sources\\Bin</code>. <code>NextGen.ini</code> и <code>version.dll</code> тоже удалите, если других модов Next Gen не
 осталось. ReShade из комплекта удаляется так же, если он больше никому не нужен: <code>dxgi.dll</code>, <code>ReShade.ini</code> и
